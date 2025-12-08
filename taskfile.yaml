@@ -1,0 +1,435 @@
+version: "3"
+
+vars:
+  NAME: "scafctl"
+  DESCRIPTION: "A configuration discovery and scaffolding tool written in go"
+  OUTPUT_FILE: "{{.NAME}}{{exeExt}}"
+  GIT_EVENT: "{{ .GIT_EVENT | default `pull_request` }}"
+  GIT_REF: "{{ .GIT_REF | default `main` }}"
+  BUILD_VERSION:
+    sh: |
+      GIT_EVENT={{.GIT_EVENT}}
+      GIT_REF={{.GIT_REF}}
+      if [[ "${GIT_EVENT}" == "push" && "${GIT_REF}" =~ ^refs/tags/ ]]; then
+          # If this is a push event and a tag, aka a release in the pipeline, then use the tag from the event, stripped of the 'vV' prefix
+          tag="${GIT_REF#refs/tags/}"
+
+          if [[ ! "${tag}" =~ ^v ]]; then
+              echo "ERROR: Build version tag '${tag}' does not start with 'v' or 'V'" >&2
+              exit 1
+          fi
+
+          BUILD_VERSION="${tag#[vV]}"
+      else
+          git fetch --tags --quiet || true
+
+          # Get latest semver-style tag.  The grep command filters out pre-release (-beta, -rc, etc.) tags, so we don't end up with v0.0.1-beta.5-alpha20251119
+          LATEST_TAG="$(git tag -l "v[0-9]*.[0-9]*.[0-9]*" --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 | sed 's/^[vV]//')"
+
+          # Fallback to 0.0.1 if no valid tags found.  This can happen in new repos with no tags yet.
+          if [ -z "$LATEST_TAG" ]; then
+              LATEST_TAG="0.0.1"
+          fi
+
+          # PR or local build, use alpha and date versioning.  Example 0.81.0-alpha20251119
+          BUILD_VERSION="${LATEST_TAG}-alpha$(date +%Y%m%d)"
+      fi
+      echo "${BUILD_VERSION}"
+  BUILD_TAG:
+    sh: |
+      printf "%s" "{{.BUILD_VERSION}}" | sed -E 's/^v//'
+  GO_VERSION:
+    sh: |
+      if [ -f go.mod ]; then
+        v="$(awk '/^toolchain[[:space:]]+go/ {print $2}' go.mod | tr -d '\r' | sed 's/^go//')"
+        if [ -n "$v" ]; then
+          echo "$v"
+        else
+          awk '/^go[[:space:]]+/ {print $2; exit}' go.mod | tr -d '\r'
+        fi
+      else
+        echo "1.25"
+      fi
+  GOTOOLCHAIN: "go{{.GO_VERSION}}"
+  BUILD_COMMIT:
+    sh: git rev-parse HEAD || echo "nightly"
+  GIT_URL:
+    sh: git remote get-url origin || echo "https://github.com"
+  IS_SHALLOW:
+    sh: git rev-parse --is-shallow-repository 2>/dev/null || echo "false"
+  CONTAINER_REGISTRY: '{{ .CONTAINER_REGISTRY | default `????` }}'
+  CONTAINER_REGISTRY_NAMESPACE: '{{ .CONTAINER_REGISTRY_NAMESPACE | default `cloud-platform` }}'
+  BASE_CONTAINER_IMAGE: "registry.access.redhat.com/ubi10/ubi-minimal:10.0-1758699349@sha256:649f7ce8082531148ac5e45b61612046a21e36648ab096a77e6ba0c94428cf60"
+  BUILD_DATE: '{{ now | date "2006-01-02T15:04:05Z07:00" }}'
+  SERVER_CONFIG_FILE: "{{.ROOT_DIR | toSlash}}/tests/files/serverConfig.json"
+  DIST: "{{.ROOT_DIR | toSlash }}/dist"
+  FIX_PATH: "{{ if eq OS `windows` }}PATH='C:/tools/git/usr/bin;C:/Program Files/Git/usr/bin/;{{ env `path` }}'{{ else }}:{{ end }}"
+  PREPROD_URL: "https://?????"
+  PROD_URL: "https://?????"
+  FIXED_ROOT:
+    sh: |
+      echo "{{.ROOT_DIR | toSlash}}"
+  GOOS:
+    sh: |
+      go env -C / GOOS
+  GOARCH:
+    sh: |
+      go env -C / GOARCH
+  BUILD_PATH_VER: "{{ if eq .GOARCH `amd64` }}v1{{ else }}v8.0{{ end }}"
+  SCAFCTL_DIST_PATH: "dist/scafctl_{{ .GOOS }}_{{ .GOARCH }}_{{ .BUILD_PATH_VER }}/scafctl"
+  LDFLAGS: '-ldflags "-s -w -X main.BuildTime={{.BUILD_DATE}} -X main.BuildVersion={{.BUILD_VERSION}} -X main.Commit={{.BUILD_COMMIT}}"'
+  GIT_BRANCH:
+    sh: git rev-parse --abbrev-ref HEAD || echo "unknown"
+
+env:
+  CGO_ENABLED: "0"
+  TASK_USE_BASH: "true"
+  GOTOOLCHAIN: "{{.GOTOOLCHAIN}}"
+
+tasks:
+  clean:
+    desc: "Clean build artifacts, caches, and temporary files"
+    cmds:
+      - |
+        echo "🧹 Cleaning build artifacts and caches..."
+
+        echo "  📦 Cleaning Go caches..."
+        go clean -cache -modcache -testcache -fuzzcache
+
+        echo "  🏗️  Cleaning build artifacts..."
+        rm -rf dist/
+        rm -rf build/
+        rm -rf bin/
+
+        echo "  📋 Cleaning task cache..."
+        rm -rf .task/
+
+        echo "  🗑️  Cleaning files..."
+        find ./ -name "*.tmp" -type f -delete
+        find ./ -name "*.temp" -type f -delete
+        find ./ -name ".DS_Store" -type f -delete
+        find ./ -name "Thumbs.db" -type f -delete
+        find ./ -name "coverage.*" -type f -delete
+
+  default:
+    aliases:
+      - info
+    silent: true
+    desc: Display scafctl build and environment information
+    cmds:
+      - |
+        echo "------------------------------------------------------------"
+        echo "scafctl Taskfile Information"
+        echo "------------------------------------------------------------"
+        echo "Purpose:"
+        echo "  scafctl is a command-line interface (CLI) tool for configuration"
+        echo "  discovery and scaffolding"
+        echo
+        echo "Usage:"
+        echo "  task           # Prints this info section"
+        echo "  task test      # Tests the code"
+        echo "  task build     # Builds the code"
+        echo
+        echo "Variables and Values:"
+        echo "  NAME:                         {{ .NAME }}"
+        echo "  DESCRIPTION:                  {{ .DESCRIPTION }}"
+        echo "  GIT_EVENT:                    {{ .GIT_EVENT }}"
+        echo "  GIT_REF:                      {{ .GIT_REF }}"
+        echo "  BUILD_VERSION:                {{ .BUILD_VERSION }}"
+        echo "  GO_VERSION:                   {{ .GO_VERSION }}"
+        echo "  GOTOOLCHAIN:                  {{ .GOTOOLCHAIN }}"
+        echo "  BUILD_TAG:                    {{ .BUILD_TAG }}"
+        echo "  OUTPUT_FILE:                  {{ .OUTPUT_FILE }}"
+        echo "  BUILD_COMMIT:                 {{ .BUILD_COMMIT }}"
+        echo "  GIT_URL:                      {{ .GIT_URL }}"
+        echo "  IS_SHALLOW:                   {{ .IS_SHALLOW }}"
+        echo "  CONTAINER_REGISTRY:           {{ .CONTAINER_REGISTRY }}"
+        echo "  CONTAINER_REGISTRY_NAMESPACE: {{ .CONTAINER_REGISTRY_NAMESPACE }}"
+        echo "  BASE_CONTAINER_IMAGE:         {{ .BASE_CONTAINER_IMAGE }}"
+        echo "  BUILD_DATE:                   {{ .BUILD_DATE }}"
+        echo "  SERVER_CONFIG_FILE:           {{ .SERVER_CONFIG_FILE }}"
+        echo "  DIST:                         {{ .DIST }}"
+        echo "  PREPROD_URL:                  {{ .PREPROD_URL }}"
+        echo "  PROD_URL:                     {{ .PROD_URL }}"
+        echo "  FIXED_ROOT:                   {{ .FIXED_ROOT }}"
+        echo "  GOOS:                         {{ .GOOS }}"
+        echo "  GOARCH:                       {{ .GOARCH }}"
+        echo "  BUILD_PATH_VER:               {{ .BUILD_PATH_VER }}"
+        echo "  SCAFCTL_DIST_PATH:             {{ .SCAFCTL_DIST_PATH }}"
+        echo "  LDFLAGS:                      {{ .LDFLAGS }}"
+        echo "------------------------------------------------------------"
+
+  git-unshallow-clone:
+    desc: Checks if the repository is shallow and unshallow if needed
+    run: once
+    cmds:
+      - |
+        if [ "{{ .IS_SHALLOW }}" = "true" ]; then
+          echo "Repository is shallow. Attempting to unshallow..."
+          git fetch --unshallow
+        else
+          echo "Repository is not shallow. No action needed."
+        fi
+    silent: true
+    requires:
+      vars: [IS_SHALLOW]
+
+  mod:
+    desc: Downloads and tidy Go modules (only if needed)
+    sources:
+      - go.mod
+      - go.sum
+    cmds:
+      - go mod tidy
+      - go mod download
+
+  lint:
+    desc: Runs golangci-lint
+    aliases: [l]
+    sources:
+      - "./**/*.go"
+      - .golangci.yml
+    cmds:
+      - |
+        go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+        golangci-lint run --timeout 10m0s
+
+  lint:fix:
+    desc: Runs golangci-lint and fixes any issues
+    sources:
+      - "./**/*.go"
+      - .golangci.yml
+    cmds:
+      - |
+        golangci-lint run --fix
+
+  update-tools:
+    desc: "Update Go tooling dependencies (e.g., linters, generators)"
+    cmds:
+      - "go install github.com/go-delve/delve/cmd/dlv@latest"
+      - "go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest"
+      - "go install golang.org/x/tools/gopls@latest"
+      - "go install github.com/google/go-containerregistry/cmd/crane@latest"
+      - "go install golang.org/dl/go{{.GO_VERSION}}@latest"
+
+  build:
+    deps: [mod, git-unshallow-clone]
+    desc: "Build the CLI"
+    sources:
+      - "**/*.go"
+      - pkg/cmd/scafctl/update/updater/updater.ps1
+      - go.mod
+      - go.sum
+    cmds:
+      - |
+        GOOS={{.GOOS}} GOARCH={{.GOARCH}} go build {{.LDFLAGS}} -v -o {{.DIST}}/{{.OUTPUT_FILE}} ./cmd/scafctl/scafctl.go
+
+  build-container-image:
+    deps: [mod, git-unshallow-clone]
+    desc: "Build the CLI"
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+    exclude:
+      - "**/*_test.go"
+      - .task/build-args.txt    # captures vars that should bust cache (see first cmd)
+    vars:
+      CGO_ENABLED: "0"
+      GOOS: "linux"
+      GOARCH: "amd64"
+      OUTPUT_FILE: "{{.NAME}}"
+    cmds:
+      - mkdir -p {{.DIST}}/home/default
+      - GOOS={{.GOOS}} GOARCH={{.GOARCH}} go build {{.LDFLAGS}} -v -o {{.DIST}}/home/default/{{.OUTPUT_FILE}} ./cmd/scafctl/scafctl.go
+      - cd {{.DIST}}
+      - |
+        {{ if eq OS `windows` }}
+          ## tar --owner=0 --group=0 --mode=0775 -C {{.DIST}}/ -cvf {{.DIST}}/{{.OUTPUT_FILE}}.tar home/default --force-local
+          tar -c -v -f "{{.DIST}}/{{.OUTPUT_FILE}}.tar"
+        {{ else }}#
+          tar --owner=0 --group=0 --mode=0775 -C {{.DIST}}/ -cvf {{.DIST}}/{{.OUTPUT_FILE}}.tar home/default
+        {{ end }}#
+        echo "{{.BUILD_TAG }}" > {{.DIST}}/tag.txt
+
+  push-container-image:
+    desc: "Push container image"
+    deps: [build-container-image]
+    sources:
+      - "{{.DIST}}/{{.OUTPUT_FILE}}.tar"
+      - "{{.DIST}}/tag.txt"
+    cmds:
+      - |
+        crane mutate \
+        --append {{.DIST}}/{{.NAME}}.tar {{.BASE_CONTAINER_IMAGE}} \
+        --label org.opencontainers.image.version="{{.BUILD_TAG}}" \
+        --label org.opencontainers.image.title="{{.NAME}}" \
+        --label org.opencontainers.image.description="{{.DESCRIPTION}}" \
+        --label org.opencontainers.image.url="https://{{.CONTAINER_REGISTRY}}/{{.CONTAINER_REGISTRY_NAMESPACE}}/{{.NAME}}" \
+        --label org.opencontainers.image.documentation="{{.GIT_URL}}" \
+        --label org.opencontainers.image.source="{{.GIT_URL}}" \
+        --label org.opencontainers.image.revision="{{.BUILD_VERSION}}" \
+        --label org.opencontainers.image.created="{{.BUILD_DATE}}" \
+        --label quay.expires-after="12w" \
+        --env HOME=/home/default \
+        --workdir /home/default \
+        --entrypoint /home/default/{{.NAME}} \
+        --user 1001 \
+        --tag {{.CONTAINER_REGISTRY}}/{{.CONTAINER_REGISTRY_NAMESPACE}}/{{.NAME}}:{{.BUILD_TAG}}
+
+  run:
+    deps: [build]
+    desc: "Run the API server"
+    cmds:
+      - |
+        "{{.DIST}}/{{.OUTPUT_FILE}} run server -c {{.SERVER_CONFIG_FILE}}"
+
+  test:
+    desc: Runs test suite
+    aliases: [t]
+    cmds:
+      - |
+        go test ./...
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+
+  test-cover:
+    desc: "Run unit tests"
+    cmds:
+      - |
+        go test ./... -cover
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+
+  test:e2e:
+    deps: [info, git-unshallow-clone, lint]
+    desc: "Run end-to-end tests"
+    cmds:
+      - task: test-cover
+      - task: integration
+
+  release:
+    desc: "Release the product"
+    deps: [git-unshallow-clone]
+    cmds:
+      - |
+        echo "Releasing Product..."
+        if [[ -n "$GPG_FINGERPRINT" ]]; then
+          goreleaser release --clean
+        else
+          goreleaser release --clean --skip sign
+        fi
+      - defer:
+          task: publish-docs
+      - defer:
+          task: publish-datasource
+    silent: true
+
+  tag:
+    # deps: [lint]
+    desc: "Create a signed version tag and push only that tag (use DRYRUN=true to simulate)."
+    silent: true
+    vars:
+      DRYRUN: '{{.DRYRUN | default "false"}}'
+    cmds:
+      - |
+        {{ .FIX_PATH }}
+
+        current_branch="{{ .GIT_BRANCH }}"
+        version="{{ .CLI_ARGS }}"
+        dryrun="{{ .DRYRUN }}"
+
+        # Require a version arg
+        if [ -z "$version" ]; then
+          echo "Missing version. Usage: task tag -- v1.2.3 or v1.2.3-beta.1"
+          exit 1
+        fi
+
+        # Normalize: allow with or without leading v
+        if [[ "$version" =~ ^v ]]; then
+          version="${version:1}"
+        fi
+
+        # Identify beta vs release by presence of "-beta.<n>"
+        if [[ "$version" == *-beta.* ]]; then
+          is_beta="true"
+        else
+          is_beta="false"
+        fi
+
+        # Strict semver regexes
+        release_regex='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+        beta_regex='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-beta\.(0|[1-9][0-9]*)$'
+
+        # Validate and enforce branch policy
+        if [ "$is_beta" = "true" ]; then
+          if [[ ! "$version" =~ $beta_regex ]]; then
+            echo "Invalid beta tag: '$version'"
+            echo "Format must be: vMAJOR.MINOR.PATCH-beta.NUM (example: v1.0.0-beta.44)"
+            exit 1
+          fi
+          if [ "$current_branch" = "main" ]; then
+            echo "Beta tags are not allowed on 'main'. Current branch: '$current_branch'"
+            exit 1
+          fi
+        else
+          if [[ ! "$version" =~ $release_regex ]]; then
+            echo "Invalid release tag: '$version'"
+            echo "Format must be: vMAJOR.MINOR.PATCH (example: v1.2.3)"
+            exit 1
+          fi
+          if [ "$current_branch" != "main" ]; then
+            echo "Release tags must be created on 'main'. Current branch: '$current_branch'"
+            exit 1
+          fi
+        fi
+
+        tag_name="v$version"
+
+        # Prevent accidental retag
+        if git rev-parse "$tag_name" >/dev/null 2>&1; then
+          echo "Tag '$tag_name' already exists. Aborting."
+          exit 1
+        fi
+
+        releaseMessage="Release $tag_name on branch $current_branch"
+
+        if [ "$dryrun" = "true" ]; then
+          echo "[DRYRUN] Would create signed tag '$tag_name' with message: $releaseMessage"
+          echo "[DRYRUN] Would push only this tag to origin"
+          exit 0
+        fi
+
+        # Preflight for signing (helpful error if not configured)
+        # if ! git tag -s -m "signature check" --local-user "$(git config user.signingkey)" --dry-run "$tag_name" 2>/dev/null; then
+        #   echo "GPG signing appears not configured for git."
+        #   echo "Set user.signingkey and ensure your key is available, or configure commit/tag signing."
+        #   exit 1
+        # fi
+
+        # Create a signed annotated tag
+        git tag -s "$tag_name" -m "$releaseMessage"
+        if [ $? -ne 0 ]; then
+          echo "Failed to create a signed tag. Check your GPG setup."
+          exit 1
+        fi
+
+        # Push only this specific tag (not all tags)
+        git push origin "$tag_name"
+        if [ $? -ne 0 ]; then
+          echo "Failed to push tag '$tag_name' to origin."
+          exit 1
+        fi
+
+        echo "Tagged and pushed '$tag_name' successfully."
+
+  integration:
+    deps: [build]
+    desc: "Integration tests"
+    run: once
+    cmds:
+      - '{{.DIST}}/{{.OUTPUT_FILE}} test functional --tests-path "{{.FIXED_ROOT}}/tests/integration/solutions" --no-color -q'

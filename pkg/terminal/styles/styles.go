@@ -1,0 +1,27 @@
+package styles
+
+import "github.com/charmbracelet/lipgloss"
+
+var (
+	SuccessStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#00FF00")). // Green
+			Bold(true).
+			PaddingLeft(1).
+			PaddingRight(1)
+
+	WarningStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FFFF00")). // Yellow
+			PaddingLeft(1).
+			PaddingRight(1)
+
+	ErrorStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FF0000")). // Red
+			Bold(true).
+			PaddingLeft(1).
+			PaddingRight(1)
+
+	InfoStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#00FFFF")). // Cyan
+			PaddingLeft(1).
+			PaddingRight(1)
+)
