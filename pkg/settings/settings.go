@@ -1,7 +1,25 @@
 package settings
 
+import "fmt"
+
 const (
 	CliBinaryName = "scafctl"
+)
+
+var (
+	RootSolutionFolders = []string{
+		CliBinaryName,
+		fmt.Sprintf(".%s", CliBinaryName),
+		"",
+	}
+	SolutionFileNames = []string{
+		"solution.yaml",
+		"solution.yml",
+		fmt.Sprintf("%s.yaml", CliBinaryName),
+		fmt.Sprintf("%s.yml", CliBinaryName),
+		"solution.json",
+		fmt.Sprintf("%s.json", CliBinaryName),
+	}
 )
 
 var VersionInformation = VersionInfo{
