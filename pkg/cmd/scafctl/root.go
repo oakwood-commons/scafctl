@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/kcloutie/scafctl/pkg/cmd/scafctl/get"
 	"github.com/kcloutie/scafctl/pkg/cmd/scafctl/version"
 	"github.com/kcloutie/scafctl/pkg/logger"
 	"github.com/kcloutie/scafctl/pkg/profiler"
@@ -96,5 +97,6 @@ func Root() *cobra.Command {
 		return nil
 	}
 	cCmd.AddCommand(version.CommandVersion(cliParams, ioStreams, settings.CliBinaryName))
+	cCmd.AddCommand(get.CommandGet(cliParams, ioStreams, settings.CliBinaryName))
 	return cCmd
 }
