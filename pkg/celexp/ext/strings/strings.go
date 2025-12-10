@@ -29,12 +29,20 @@ func titleString(s string) string {
 func CleanFunc() celexp.ExtFunction {
 	funcName := "strings.clean"
 	return celexp.ExtFunction{
-		Name:        funcName,
-		Description: "Cleans a string by converting it to lowercase and removing hyphens, underscores, and spaces",
-		FunctionNames: []string{
-			funcName,
+		Name:          funcName,
+		Description:   "Cleans a string by converting it to lowercase and removing hyphens, underscores, and spaces",
+		FunctionNames: []string{funcName},
+		Custom:        true,
+		Examples: []celexp.Example{
+			{
+				Description: "Clean a string with mixed separators",
+				Expression:  `strings.clean("My-String_Name Test")`,
+			},
+			{
+				Description: "Clean an uppercase string with hyphens",
+				Expression:  `strings.clean("HELLO-WORLD")`,
+			},
 		},
-		Custom: true,
 		EnvOptions: []cel.EnvOption{
 			cel.Function(funcName,
 				cel.Overload(strings.ReplaceAll(funcName, ".", "_"),
@@ -56,12 +64,20 @@ func CleanFunc() celexp.ExtFunction {
 func TitleFunc() celexp.ExtFunction {
 	funcName := "strings.title"
 	return celexp.ExtFunction{
-		Name:        funcName,
-		Description: "Converts a string to title case using English language rules",
-		FunctionNames: []string{
-			funcName,
+		Name:          funcName,
+		Description:   "Converts a string to title case using English language rules",
+		FunctionNames: []string{funcName},
+		Custom:        true,
+		Examples: []celexp.Example{
+			{
+				Description: "Convert a lowercase string to title case",
+				Expression:  `strings.title("hello world")`,
+			},
+			{
+				Description: "Convert uppercase to proper title case",
+				Expression:  `strings.title("HELLO WORLD")`,
+			},
 		},
-		Custom: true,
 		EnvOptions: []cel.EnvOption{
 			cel.Function(funcName,
 				cel.Overload(strings.ReplaceAll(funcName, ".", "_"),

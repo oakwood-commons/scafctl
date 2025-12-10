@@ -24,12 +24,24 @@ func DebugOutFunc(ioStreams *terminal.IOStreams) celexp.ExtFunction {
 	}
 
 	return celexp.ExtFunction{
-		Name:        funcName,
-		Description: "Outputs a debug message to the console and returns the value for inline debugging. Use debug.out(message) to print and return a message, or debug.out(message, value) to print a message and return a different value",
-		FunctionNames: []string{
-			funcName,
+		Name:          funcName,
+		Description:   "Outputs a debug message to the console and returns the value for inline debugging. Use debug.out(message) to print and return a message, or debug.out(message, value) to print a message and return a different value",
+		FunctionNames: []string{funcName},
+		Custom:        true,
+		Examples: []celexp.Example{
+			{
+				Description: "Debug a single value",
+				Expression:  `debug.out("Current value: " + myVar)`,
+			},
+			{
+				Description: "Debug while returning a different value",
+				Expression:  `debug.out("Processing item", item.name)`,
+			},
+			{
+				Description: "Debug in a list operation",
+				Expression:  `items.map(x, debug.out(x))`,
+			},
 		},
-		Custom: true,
 		EnvOptions: []cel.EnvOption{
 			cel.Function(funcName,
 				cel.Overload(strings.ReplaceAll(funcName, ".", "_"),
@@ -62,12 +74,20 @@ func DebugThrowFunc() celexp.ExtFunction {
 	funcName := "debug.throw"
 
 	return celexp.ExtFunction{
-		Name:        funcName,
-		Description: "Throws an error with the provided message, immediately halting CEL expression evaluation. Use debug.throw(message) to stop execution and return an error with the specified message",
-		FunctionNames: []string{
-			funcName,
+		Name:          funcName,
+		Description:   "Throws an error with the provided message, immediately halting CEL expression evaluation. Use debug.throw(message) to stop execution and return an error with the specified message",
+		FunctionNames: []string{funcName},
+		Custom:        true,
+		Examples: []celexp.Example{
+			{
+				Description: "Throw an error unconditionally",
+				Expression:  `debug.throw("Configuration is invalid")`,
+			},
+			{
+				Description: "Throw an error conditionally",
+				Expression:  `value < 0 ? debug.throw("Value must be positive") : value * 2`,
+			},
 		},
-		Custom: true,
 		EnvOptions: []cel.EnvOption{
 			cel.Function(funcName,
 				cel.Overload(strings.ReplaceAll(funcName, ".", "_"),
@@ -88,12 +108,24 @@ func DebugSleepFunc() celexp.ExtFunction {
 	funcName := "debug.sleep"
 
 	return celexp.ExtFunction{
-		Name:        funcName,
-		Description: "Pauses execution for the specified duration in milliseconds and returns the value for inline debugging. Use debug.sleep(duration) to sleep and return the duration value, or debug.sleep(duration, value) to sleep and return a different value",
-		FunctionNames: []string{
-			funcName,
+		Name:          funcName,
+		Description:   "Pauses execution for the specified duration in milliseconds and returns the value for inline debugging. Use debug.sleep(duration) to sleep and return the duration value, or debug.sleep(duration, value) to sleep and return a different value",
+		FunctionNames: []string{funcName},
+		Custom:        true,
+		Examples: []celexp.Example{
+			{
+				Description: "Sleep for 1 second (1000ms)",
+				Expression:  `debug.sleep(1000)`,
+			},
+			{
+				Description: "Sleep and return a specific value",
+				Expression:  `debug.sleep(500, "Ready")`,
+			},
+			{
+				Description: "Use in expression for timing",
+				Expression:  `debug.sleep(100) + 5`,
+			},
 		},
-		Custom: true,
 		EnvOptions: []cel.EnvOption{
 			cel.Function(funcName,
 				cel.Overload(strings.ReplaceAll(funcName, ".", "_"),

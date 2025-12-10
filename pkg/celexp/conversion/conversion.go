@@ -80,3 +80,47 @@ func ListToObjectSlice(listVal ref.Val) ([]map[string]any, error) {
 
 	return result, nil
 }
+
+// CelValueToGo recursively converts a CEL ref.Val to a native Go value.
+// This handles maps, lists, and primitive types.
+func CelValueToGo(val ref.Val) any {
+	// Get the underlying Go value
+	goVal := val.Value()
+
+	// Handle maps
+	if mapper, ok := val.(traits.Mapper); ok {
+		result := make(map[string]any)
+		iterator := mapper.Iterator()
+		for iterator.HasNext() == types.True {
+			key := iterator.Next()
+			keyStr, ok := key.Value().(string)
+			if !ok {
+				// If key is not a string, skip it
+				continue
+			}
+			value := mapper.Get(key)
+			result[keyStr] = CelValueToGo(value)
+		}
+		return result
+	}
+
+	// Handle lists
+	if lister, ok := val.(traits.Lister); ok {
+		result := make([]any, 0)
+		iterator := lister.Iterator()
+		for iterator.HasNext() == types.True {
+			item := iterator.Next()
+			result = append(result, CelValueToGo(item))
+		}
+		return result
+	}
+
+	// Return the primitive value as-is
+	return goVal
+}
+
+// GoToCelValue converts a native Go value to a CEL ref.Val.
+// This uses the default type adapter to ensure proper conversion.
+func GoToCelValue(val any) ref.Val {
+	return types.DefaultTypeAdapter.NativeToValue(val)
+}

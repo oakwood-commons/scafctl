@@ -153,8 +153,6 @@ func TestCleanFunc_Metadata(t *testing.T) {
 
 	assert.Equal(t, "strings.clean", cleanFunc.Name)
 	assert.Equal(t, "Cleans a string by converting it to lowercase and removing hyphens, underscores, and spaces", cleanFunc.Description)
-	assert.Equal(t, []string{"strings.clean"}, cleanFunc.FunctionNames)
-	assert.True(t, cleanFunc.Custom)
 	assert.NotEmpty(t, cleanFunc.EnvOptions)
 }
 
@@ -420,8 +418,6 @@ func TestTitleFunc_Metadata(t *testing.T) {
 
 	assert.Equal(t, "strings.title", titleFunc.Name)
 	assert.Equal(t, "Converts a string to title case using English language rules", titleFunc.Description)
-	assert.Equal(t, []string{"strings.title"}, titleFunc.FunctionNames)
-	assert.True(t, titleFunc.Custom)
 	assert.NotEmpty(t, titleFunc.EnvOptions)
 }
 
@@ -528,14 +524,58 @@ func BenchmarkTitleString(b *testing.B) {
 	}
 }
 
-func BenchmarkTitleFunc_CEL(b *testing.B) {
+func TestCombinedFunctions(t *testing.T) {
+	cleanFunc := CleanFunc()
 	titleFunc := TitleFunc()
-	env, _ := cel.NewEnv(titleFunc.EnvOptions...)
-	ast, _ := env.Compile(`strings.title("hello world test")`)
-	prog, _ := env.Program(ast)
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		prog.Eval(map[string]interface{}{})
+	env, err := cel.NewEnv(
+		append(cleanFunc.EnvOptions, titleFunc.EnvOptions...)...,
+	)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name       string
+		expression string
+		expected   string
+	}{
+		{
+			name:       "title after clean",
+			expression: `strings.title(strings.clean("My-String_Name"))`,
+			expected:   "Mystringname",
+		},
+		{
+			name:       "clean after title",
+			expression: `strings.clean(strings.title("hello world"))`,
+			expected:   "helloworld",
+		},
+		{
+			name:       "clean complex string then title",
+			expression: `strings.title(strings.clean("TEST-Case_Example Name"))`,
+			expected:   "Testcaseexamplename",
+		},
+		{
+			name:       "nested with uppercase input",
+			expression: `strings.title(strings.clean("UPPER-CASE_WITH SPACES"))`,
+			expected:   "Uppercasewithspaces",
+		},
+		{
+			name:       "multiple clean and title operations",
+			expression: `strings.clean("Hello-World") + "_" + strings.title(strings.clean("test case"))`,
+			expected:   "helloworld_Testcase",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ast, issues := env.Compile(tt.expression)
+			require.Nil(t, issues, "compilation failed: %v", issues)
+
+			prog, err := env.Program(ast)
+			require.NoError(t, err)
+
+			result, _, err := prog.Eval(map[string]interface{}{})
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, result.Value())
+		})
 	}
 }

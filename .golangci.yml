@@ -38,12 +38,6 @@ linters:
   # disable:
   # # disabling temporarily and will be enabled back after fixing issues
   #   - staticcheck
-  #   - revive
-  #   - forbidigo
-  #   - forcetypeassert
-  #   - gocritic
-  #   - gosec
-  #   - noctx
   settings:
     gocritic:
       disabled-checks:
@@ -69,6 +63,14 @@ linters:
           - gosec
           - forcetypeassert
           - revive
+          - gocritic
+      # Exclude dupl from CEL extension files with similar function registration patterns
+      - path: pkg/celexp/ext/marshalling/marshalling\.go
+        linters:
+          - dupl
+      - path: pkg/celexp/ext/sort/sort\.go
+        linters:
+          - dupl
 formatters:
   enable:
     - gofumpt

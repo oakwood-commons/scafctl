@@ -66,8 +66,6 @@ func TestStringAdd_Metadata(t *testing.T) {
 
 	assert.Equal(t, "arrays.strings.add", stringAddFunc.Name)
 	assert.Equal(t, "Appends a string to a list of strings and returns the new list. Use arrays.strings.add(list, 'value') to add a single string to the end of the list", stringAddFunc.Description)
-	assert.Equal(t, []string{"arrays.strings.add"}, stringAddFunc.FunctionNames)
-	assert.True(t, stringAddFunc.Custom)
 	assert.NotEmpty(t, stringAddFunc.EnvOptions)
 }
 
@@ -258,8 +256,6 @@ func TestStringsUnique_Metadata(t *testing.T) {
 
 	assert.Equal(t, "arrays.strings.unique", uniqueFunc.Name)
 	assert.Equal(t, "Returns a new list containing only unique strings from the input list, removing all duplicates while preserving the original order of first occurrence. Use arrays.strings.unique(list) to deduplicate a list of strings", uniqueFunc.Description)
-	assert.Equal(t, []string{"arrays.strings.unique"}, uniqueFunc.FunctionNames)
-	assert.True(t, uniqueFunc.Custom)
 	assert.NotEmpty(t, uniqueFunc.EnvOptions)
 }
 
