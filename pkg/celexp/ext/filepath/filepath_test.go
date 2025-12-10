@@ -15,8 +15,6 @@ func TestDirFunc_Metadata(t *testing.T) {
 
 	assert.Equal(t, "filepath.dir", dirFunc.Name)
 	assert.Equal(t, "Returns the directory component of a path, removing the final element. Use filepath.dir(path) to get the parent directory of a file or directory path", dirFunc.Description)
-	assert.Equal(t, []string{"filepath.dir"}, dirFunc.FunctionNames)
-	assert.True(t, dirFunc.Custom)
 	assert.NotEmpty(t, dirFunc.EnvOptions)
 }
 
@@ -161,8 +159,6 @@ func TestNormalizeFunc_Metadata(t *testing.T) {
 
 	assert.Equal(t, "filepath.normalize", normalizeFunc.Name)
 	assert.Equal(t, "Normalizes a path by cleaning redundant separators and resolving . and .. elements. Use filepath.normalize(path) to convert a path to its shortest equivalent form with clean separators", normalizeFunc.Description)
-	assert.Equal(t, []string{"filepath.normalize"}, normalizeFunc.FunctionNames)
-	assert.True(t, normalizeFunc.Custom)
 	assert.NotEmpty(t, normalizeFunc.EnvOptions)
 }
 
@@ -312,8 +308,6 @@ func TestExistsFunc_Metadata(t *testing.T) {
 
 	assert.Equal(t, "filepath.exists", existsFunc.Name)
 	assert.Equal(t, "Checks if a file or directory exists at the specified path. Use filepath.exists(path) to return true if the path exists, false otherwise", existsFunc.Description)
-	assert.Equal(t, []string{"filepath.exists"}, existsFunc.FunctionNames)
-	assert.True(t, existsFunc.Custom)
 	assert.NotEmpty(t, existsFunc.EnvOptions)
 }
 
@@ -555,6 +549,198 @@ func BenchmarkExistsFunc_CEL(b *testing.B) {
 	existsFunc := ExistsFunc()
 	env, _ := cel.NewEnv(existsFunc.EnvOptions...)
 	ast, _ := env.Compile(`filepath.exists(".")`)
+	prog, _ := env.Program(ast)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		prog.Eval(map[string]interface{}{})
+	}
+}
+
+// TestJoinFunc_Metadata tests the metadata of the JoinFunc
+func TestJoinFunc_Metadata(t *testing.T) {
+	joinFunc := JoinFunc()
+
+	assert.Equal(t, "filepath.join", joinFunc.Name)
+	assert.Equal(t, "Joins any number of path elements into a single path, separating them with the OS-specific path separator. Use filepath.join(path1, path2, ...) to combine path segments", joinFunc.Description)
+	assert.NotEmpty(t, joinFunc.EnvOptions)
+	assert.NotEmpty(t, joinFunc.Examples)
+	assert.Len(t, joinFunc.Examples, 3)
+}
+
+func TestJoinFunc_CELIntegration(t *testing.T) {
+	joinFunc := JoinFunc()
+
+	env, err := cel.NewEnv(joinFunc.EnvOptions...)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name       string
+		expression string
+		expected   string
+	}{
+		{
+			name:       "join two paths",
+			expression: `filepath.join("/home/user", "documents")`,
+			expected:   "/home/user/documents",
+		},
+		{
+			name:       "join three paths",
+			expression: `filepath.join("/var", "log", "app.log")`,
+			expected:   "/var/log/app.log",
+		},
+		{
+			name:       "join four paths",
+			expression: `filepath.join("/home", "user", "documents", "file.txt")`,
+			expected:   "/home/user/documents/file.txt",
+		},
+		{
+			name:       "join five paths",
+			expression: `filepath.join("/a", "b", "c", "d", "e")`,
+			expected:   "/a/b/c/d/e",
+		},
+		{
+			name:       "join six paths",
+			expression: `filepath.join("/a", "b", "c", "d", "e", "f")`,
+			expected:   "/a/b/c/d/e/f",
+		},
+		{
+			name:       "join seven paths",
+			expression: `filepath.join("/a", "b", "c", "d", "e", "f", "g")`,
+			expected:   "/a/b/c/d/e/f/g",
+		},
+		{
+			name:       "join eight paths",
+			expression: `filepath.join("/a", "b", "c", "d", "e", "f", "g", "h")`,
+			expected:   "/a/b/c/d/e/f/g/h",
+		},
+		{
+			name:       "join nine paths",
+			expression: `filepath.join("/a", "b", "c", "d", "e", "f", "g", "h", "i")`,
+			expected:   "/a/b/c/d/e/f/g/h/i",
+		},
+		{
+			name:       "join ten paths",
+			expression: `filepath.join("/a", "b", "c", "d", "e", "f", "g", "h", "i", "j")`,
+			expected:   "/a/b/c/d/e/f/g/h/i/j",
+		},
+		{
+			name:       "join with relative paths",
+			expression: `filepath.join(".", "config", "app.json")`,
+			expected:   "config/app.json",
+		},
+		{
+			name:       "join with empty strings",
+			expression: `filepath.join("/home", "", "user")`,
+			expected:   "/home/user",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ast, issues := env.Compile(tt.expression)
+			require.NoError(t, issues.Err())
+
+			prog, err := env.Program(ast)
+			require.NoError(t, err)
+
+			result, _, err := prog.Eval(map[string]interface{}{})
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, result.Value())
+		})
+	}
+}
+
+func TestJoinFunc_WithVariables(t *testing.T) {
+	joinFunc := JoinFunc()
+
+	env, err := cel.NewEnv(
+		joinFunc.EnvOptions[0],
+		cel.Variable("base", cel.StringType),
+		cel.Variable("dir", cel.StringType),
+		cel.Variable("file", cel.StringType),
+	)
+	require.NoError(t, err)
+
+	ast, issues := env.Compile(`filepath.join(base, dir, file)`)
+	require.NoError(t, issues.Err())
+
+	prog, err := env.Program(ast)
+	require.NoError(t, err)
+
+	result, _, err := prog.Eval(map[string]interface{}{
+		"base": "/home/user",
+		"dir":  "documents",
+		"file": "readme.txt",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "/home/user/documents/readme.txt", result.Value())
+}
+
+func TestJoinFunc_TypeError(t *testing.T) {
+	joinFunc := JoinFunc()
+
+	env, err := cel.NewEnv(
+		joinFunc.EnvOptions[0],
+		cel.Variable("num", cel.IntType),
+	)
+	require.NoError(t, err)
+
+	// CEL will catch type errors at compile time
+	_, issues := env.Compile(`filepath.join("/home", num)`)
+	require.Error(t, issues.Err())
+	assert.Contains(t, issues.Err().Error(), "found no matching overload")
+}
+
+func TestJoinFunc_ChainedOperations(t *testing.T) {
+	joinFunc := JoinFunc()
+	dirFunc := DirFunc()
+
+	env, err := cel.NewEnv(
+		joinFunc.EnvOptions[0],
+		dirFunc.EnvOptions[0],
+	)
+	require.NoError(t, err)
+
+	ast, issues := env.Compile(`filepath.dir(filepath.join("/home", "user", "documents", "file.txt"))`)
+	require.NoError(t, issues.Err())
+
+	prog, err := env.Program(ast)
+	require.NoError(t, err)
+
+	result, _, err := prog.Eval(map[string]interface{}{})
+	require.NoError(t, err)
+	assert.Equal(t, "/home/user/documents", result.Value())
+}
+
+func BenchmarkJoinFunc_CEL_TwoParams(b *testing.B) {
+	joinFunc := JoinFunc()
+	env, _ := cel.NewEnv(joinFunc.EnvOptions...)
+	ast, _ := env.Compile(`filepath.join("/home/user", "documents")`)
+	prog, _ := env.Program(ast)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		prog.Eval(map[string]interface{}{})
+	}
+}
+
+func BenchmarkJoinFunc_CEL_FiveParams(b *testing.B) {
+	joinFunc := JoinFunc()
+	env, _ := cel.NewEnv(joinFunc.EnvOptions...)
+	ast, _ := env.Compile(`filepath.join("/a", "b", "c", "d", "e")`)
+	prog, _ := env.Program(ast)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		prog.Eval(map[string]interface{}{})
+	}
+}
+
+func BenchmarkJoinFunc_CEL_TenParams(b *testing.B) {
+	joinFunc := JoinFunc()
+	env, _ := cel.NewEnv(joinFunc.EnvOptions...)
+	ast, _ := env.Compile(`filepath.join("/a", "b", "c", "d", "e", "f", "g", "h", "i", "j")`)
 	prog, _ := env.Program(ast)
 
 	b.ResetTimer()
