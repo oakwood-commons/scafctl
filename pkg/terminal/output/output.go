@@ -84,6 +84,29 @@ func InfoMessage(msg string, noColor bool) string {
 	return styles.InfoStyle.Render("💡") + msg
 }
 
+// DebugMessage formats a debug message for terminal output.
+// If noColor is true, the message is returned without styling.
+// Otherwise, it prepends a debug icon and applies magenta bold styling.
+func DebugMessage(msg string, noColor bool) string {
+	if noColor {
+		return msg
+	}
+	return styles.DebugStyle.Render("🐛") + msg
+}
+
+// WriteDebug writes a debug message to the output stream.
+// The message is formatted with a debug icon and styled in magenta if color is enabled.
+// A newline is appended to the message by default.
+//
+// Parameters:
+//
+//	ioStreams - Pointer to terminal.IOStreams for output operations.
+//	msg       - The debug message to write.
+//	noColor   - If true, disables colored output and icon.
+func WriteDebug(ioStreams *terminal.IOStreams, msg string, noColor bool) {
+	fmt.Fprintf(ioStreams.Out, "%s\n", DebugMessage(msg, noColor))
+}
+
 // NewWriteMessageOptions creates and returns a new WriteMessageOptions instance with the provided configuration.
 // It sets up the IOStreams, message type, color usage, and error handling behavior.
 //

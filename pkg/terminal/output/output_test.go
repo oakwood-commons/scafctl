@@ -222,6 +222,94 @@ func TestInfoMessage(t *testing.T) {
 	}
 }
 
+func TestDebugMessage(t *testing.T) {
+	tests := []struct {
+		name     string
+		msg      string
+		noColor  bool
+		expected string
+	}{
+		{
+			name:     "noColor true returns plain message",
+			msg:      "Debug information",
+			noColor:  true,
+			expected: "Debug information",
+		},
+		{
+			name:     "noColor false returns styled message",
+			msg:      "Debug information",
+			noColor:  false,
+			expected: " 🐛 Debug information", // styles.DebugStyle.Render("🐛") returns "🐛" in tests
+		},
+		{
+			name:     "empty message with noColor true",
+			msg:      "",
+			noColor:  true,
+			expected: "",
+		},
+		{
+			name:     "empty message with noColor false",
+			msg:      "",
+			noColor:  false,
+			expected: " 🐛 ", // styles.DebugStyle.Render("🐛") returns "🐛" in tests
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := DebugMessage(tt.msg, tt.noColor)
+			if got != tt.expected {
+				t.Errorf("DebugMessage(%q, %v) = %q; want %q", tt.msg, tt.noColor, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestWriteDebug(t *testing.T) {
+	tests := []struct {
+		name     string
+		msg      string
+		noColor  bool
+		expected string
+	}{
+		{
+			name:     "noColor true returns plain message",
+			msg:      "Debug output",
+			noColor:  true,
+			expected: "Debug output\n",
+		},
+		{
+			name:     "noColor false returns styled message",
+			msg:      "Debug output",
+			noColor:  false,
+			expected: " 🐛 Debug output\n",
+		},
+		{
+			name:     "empty message with noColor true",
+			msg:      "",
+			noColor:  true,
+			expected: "\n",
+		},
+		{
+			name:     "empty message with noColor false",
+			msg:      "",
+			noColor:  false,
+			expected: " 🐛 \n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+			WriteDebug(ioStreams, tt.msg, tt.noColor)
+			got := outBuf.String()
+			if got != tt.expected {
+				t.Errorf("WriteDebug(%q, %v) wrote %q; want %q", tt.msg, tt.noColor, got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestWriteMessageOptions_WriteMessage(t *testing.T) {
 	tests := []struct {
 		name string // description of this test case
