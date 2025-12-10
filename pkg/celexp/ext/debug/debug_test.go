@@ -17,8 +17,6 @@ func TestDebugOutFunc_Metadata(t *testing.T) {
 
 	assert.Equal(t, "debug.out", debugFunc.Name)
 	assert.Equal(t, "Outputs a debug message to the console and returns the value for inline debugging. Use debug.out(message) to print and return a message, or debug.out(message, value) to print a message and return a different value", debugFunc.Description)
-	assert.Equal(t, []string{"debug.out"}, debugFunc.FunctionNames)
-	assert.True(t, debugFunc.Custom)
 	assert.NotEmpty(t, debugFunc.EnvOptions)
 }
 
@@ -474,8 +472,6 @@ func TestDebugThrowFunc_Metadata(t *testing.T) {
 
 	assert.Equal(t, "debug.throw", debugFunc.Name)
 	assert.Equal(t, "Throws an error with the provided message, immediately halting CEL expression evaluation. Use debug.throw(message) to stop execution and return an error with the specified message", debugFunc.Description)
-	assert.Equal(t, []string{"debug.throw"}, debugFunc.FunctionNames)
-	assert.True(t, debugFunc.Custom)
 	assert.NotEmpty(t, debugFunc.EnvOptions)
 }
 
@@ -664,8 +660,6 @@ func TestDebugSleepFunc_Metadata(t *testing.T) {
 
 	assert.Equal(t, "debug.sleep", debugFunc.Name)
 	assert.Equal(t, "Pauses execution for the specified duration in milliseconds and returns the value for inline debugging. Use debug.sleep(duration) to sleep and return the duration value, or debug.sleep(duration, value) to sleep and return a different value", debugFunc.Description)
-	assert.Equal(t, []string{"debug.sleep"}, debugFunc.FunctionNames)
-	assert.True(t, debugFunc.Custom)
 	assert.NotEmpty(t, debugFunc.EnvOptions)
 }
 

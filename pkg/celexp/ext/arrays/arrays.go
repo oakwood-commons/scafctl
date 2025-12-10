@@ -14,12 +14,20 @@ import (
 func StringAddFunc() celexp.ExtFunction {
 	funcName := "arrays.strings.add"
 	return celexp.ExtFunction{
-		Name:        funcName,
-		Description: "Appends a string to a list of strings and returns the new list. Use arrays.strings.add(list, 'value') to add a single string to the end of the list",
-		FunctionNames: []string{
-			funcName,
+		Name:          funcName,
+		Description:   "Appends a string to a list of strings and returns the new list. Use arrays.strings.add(list, 'value') to add a single string to the end of the list",
+		FunctionNames: []string{funcName},
+		Custom:        true,
+		Examples: []celexp.Example{
+			{
+				Description: "Add a single string to an existing list",
+				Expression:  `arrays.strings.add(["apple", "banana"], "cherry")`,
+			},
+			{
+				Description: "Chain multiple add operations",
+				Expression:  `arrays.strings.add(arrays.strings.add(["a"], "b"), "c")`,
+			},
 		},
-		Custom: true,
 		EnvOptions: []cel.EnvOption{
 			cel.Function(funcName,
 				cel.Overload(strings.ReplaceAll(funcName, ".", "_"),
@@ -53,12 +61,20 @@ func StringAddFunc() celexp.ExtFunction {
 func StringsUniqueFunc() celexp.ExtFunction {
 	funcName := "arrays.strings.unique"
 	return celexp.ExtFunction{
-		Name:        funcName,
-		Description: "Returns a new list containing only unique strings from the input list, removing all duplicates while preserving the original order of first occurrence. Use arrays.strings.unique(list) to deduplicate a list of strings",
-		FunctionNames: []string{
-			funcName,
+		Name:          funcName,
+		Description:   "Returns a new list containing only unique strings from the input list, removing all duplicates while preserving the original order of first occurrence. Use arrays.strings.unique(list) to deduplicate a list of strings",
+		FunctionNames: []string{funcName},
+		Custom:        true,
+		Examples: []celexp.Example{
+			{
+				Description: "Remove duplicates from a list of strings",
+				Expression:  `arrays.strings.unique(["apple", "banana", "apple", "cherry", "banana"])`,
+			},
+			{
+				Description: "Returns the same list if all elements are unique",
+				Expression:  `arrays.strings.unique(["one", "two", "three"])`,
+			},
 		},
-		Custom: true,
 		EnvOptions: []cel.EnvOption{
 			cel.Function(funcName,
 				cel.Overload(strings.ReplaceAll(funcName, ".", "_"),
