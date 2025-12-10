@@ -24,4 +24,10 @@ var (
 			Foreground(lipgloss.Color("#00FFFF")). // Cyan
 			PaddingLeft(1).
 			PaddingRight(1)
+
+	DebugStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FF00FF")). // Magenta
+			Bold(true).
+			PaddingLeft(1).
+			PaddingRight(1)
 )
