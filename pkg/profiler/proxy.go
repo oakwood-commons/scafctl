@@ -3,14 +3,13 @@ package profiler
 import (
 	"fmt"
 	"os"
-	"path"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/google/pprof/profile"
 
 	"github.com/go-logr/logr"
-	"github.com/kcloutie/scafctl/pkg/filepath"
 	"github.com/kcloutie/scafctl/pkg/logger"
 )
 
@@ -93,9 +92,8 @@ func (p *Proxy) writeMergedProfile(profile *profile.Profile) error {
 		return fmt.Errorf("no profile data to write")
 	}
 
-	// Construct the file path
-	filePath := path.Join(p.path, fmt.Sprintf("%s.prof", p.profileType))
-	filePath = filepath.NormalizeFilePath(filePath)
+	// Construct the file path using OS-aware path joining
+	filePath := filepath.Join(p.path, fmt.Sprintf("%s.prof", p.profileType))
 
 	// Create the file
 	f, err := os.Create(filePath)

@@ -25,17 +25,18 @@ func TestNewFileCache(t *testing.T) {
 }
 
 func TestNewFileCache_HomeDirExpansion(t *testing.T) {
-	// Use a subdirectory in temp to avoid polluting actual home
-	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
-
-	cache, err := NewFileCache("~/test-cache", 5*time.Minute)
+	// This test verifies that tilde expansion works
+	// We can't easily mock os.UserHomeDir(), so we just verify it expands correctly
+	cache, err := NewFileCache("~/test-cache-scafctl", 5*time.Minute)
 	require.NoError(t, err)
 	require.NotNil(t, cache)
+	defer os.RemoveAll(cache.dir) // Clean up
 
-	expectedDir := filepath.Join(tmpDir, "test-cache")
+	// Get the actual home directory for comparison
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	expectedDir := filepath.Join(homeDir, "test-cache-scafctl")
 	assert.Equal(t, expectedDir, cache.dir)
 
 	// Verify directory was created
