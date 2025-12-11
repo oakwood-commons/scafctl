@@ -37,11 +37,12 @@ func TestGetProfiler(t *testing.T) {
 		// Reset the singleton instance for testing
 		instance = nil
 
-		profiler, err := GetProfiler("memory", "/tmp", lgr)
+		tmpDir := t.TempDir()
+		profiler, err := GetProfiler("memory", tmpDir, lgr)
 		assert.NoError(t, err, "Expected no error for valid profiler type")
 		assert.NotNil(t, profiler, "Expected a valid profilerProxy instance")
 		assert.Equal(t, "memory", profiler.profileType, "Expected profiler type to be 'memory'")
-		assert.Equal(t, "/tmp", profiler.path, "Expected path to be '/tmp'")
+		assert.Equal(t, tmpDir, profiler.path, "Expected path to be tmpDir")
 		resetProfilerSingleton()
 	})
 
@@ -60,18 +61,20 @@ func TestGetProfiler(t *testing.T) {
 		// Reset the singleton instance for testing
 		instance = nil
 
-		profiler1, err := GetProfiler("cpu", "/tmp", lgr)
+		tmpDir1 := t.TempDir()
+		tmpDir2 := t.TempDir()
+		profiler1, err := GetProfiler("cpu", tmpDir1, lgr)
 		assert.NoError(t, err, "Expected no error for valid profiler type")
 		assert.NotNil(t, profiler1, "Expected a valid profilerProxy instance")
 
-		profiler2, err := GetProfiler("memory", "/another-path", lgr)
+		profiler2, err := GetProfiler("memory", tmpDir2, lgr)
 		assert.NoError(t, err, "Expected no error for valid profiler type")
 		assert.NotNil(t, profiler2, "Expected a valid profilerProxy instance")
 
 		// Ensure the singleton instance is reused
 		assert.Equal(t, profiler1, profiler2, "Expected the same singleton instance to be returned")
 		assert.Equal(t, "cpu", profiler2.profileType, "Expected the singleton instance to retain the first initialized profiler type")
-		assert.Equal(t, "/tmp", profiler2.path, "Expected the singleton instance to retain the first initialized path")
+		assert.Equal(t, tmpDir1, profiler2.path, "Expected the singleton instance to retain the first initialized path")
 		resetProfilerSingleton()
 	})
 }
