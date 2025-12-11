@@ -609,12 +609,13 @@ func SetFunctionNames(funcs celexp.ExtFunctionList) error {
 	baseFuncs := baseEnv.Functions()
 
 	for i := range funcs {
-		if len(funcs[i].EnvOptions) == 0 {
+		fn := &funcs[i]
+		if len(fn.EnvOptions) == 0 {
 			continue
 		}
 
 		// Create an environment with the specific EnvOptions
-		extEnv, err := cel.NewEnv(funcs[i].EnvOptions...)
+		extEnv, err := cel.NewEnv(fn.EnvOptions...)
 		if err != nil {
 			return err
 		}
@@ -641,7 +642,7 @@ func SetFunctionNames(funcs celexp.ExtFunctionList) error {
 			}
 		}
 
-		funcs[i].FunctionNames = funcNames
+		fn.FunctionNames = funcNames
 	}
 	return nil
 }

@@ -2,9 +2,11 @@ package filepath
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/google/cel-go/cel"
+	pkgfilepath "github.com/kcloutie/scafctl/pkg/filepath"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -86,7 +88,10 @@ func TestDirFunc_CELIntegration(t *testing.T) {
 
 			result, _, err := prog.Eval(map[string]interface{}{})
 			require.NoError(t, err)
-			assert.Equal(t, tt.expected, result.Value())
+			// Normalize both paths for cross-platform comparison
+			expectedNormalized := pkgfilepath.NormalizeFilePath(tt.expected)
+			resultNormalized := pkgfilepath.NormalizeFilePath(result.Value().(string))
+			assert.Equal(t, expectedNormalized, resultNormalized)
 		})
 	}
 }
@@ -120,7 +125,10 @@ func TestDirFunc_WithVariables(t *testing.T) {
 			"path": tc.path,
 		})
 		require.NoError(t, err)
-		assert.Equal(t, tc.expected, result.Value())
+		// Normalize both paths for cross-platform comparison
+		expectedNormalized := pkgfilepath.NormalizeFilePath(tc.expected)
+		resultNormalized := pkgfilepath.NormalizeFilePath(result.Value().(string))
+		assert.Equal(t, expectedNormalized, resultNormalized)
 	}
 }
 
@@ -235,7 +243,10 @@ func TestNormalizeFunc_CELIntegration(t *testing.T) {
 
 			result, _, err := prog.Eval(map[string]interface{}{})
 			require.NoError(t, err)
-			assert.Equal(t, tt.expected, result.Value())
+			// Normalize both paths for cross-platform comparison
+			expectedNormalized := pkgfilepath.NormalizeFilePath(tt.expected)
+			resultNormalized := pkgfilepath.NormalizeFilePath(result.Value().(string))
+			assert.Equal(t, expectedNormalized, resultNormalized)
 		})
 	}
 }
@@ -269,7 +280,10 @@ func TestNormalizeFunc_WithVariables(t *testing.T) {
 			"path": tc.path,
 		})
 		require.NoError(t, err)
-		assert.Equal(t, tc.expected, result.Value())
+		// Normalize both paths for cross-platform comparison
+		expectedNormalized := pkgfilepath.NormalizeFilePath(tc.expected)
+		resultNormalized := pkgfilepath.NormalizeFilePath(result.Value().(string))
+		assert.Equal(t, expectedNormalized, resultNormalized)
 	}
 }
 
@@ -381,7 +395,10 @@ func TestExistsFunc_CELIntegration(t *testing.T) {
 				defer tt.cleanupFunc(path)
 			}
 
-			expression := `filepath.exists("` + path + `")`
+			// Escape backslashes for CEL expression (backslashes are escape chars in CEL)
+			// Replace \ with / which works on all operating systems including Windows
+			celPath := strings.ReplaceAll(path, "\\", "/")
+			expression := `filepath.exists("` + celPath + `")`
 			ast, issues := env.Compile(expression)
 			require.NoError(t, issues.Err())
 
@@ -486,7 +503,10 @@ func TestFilepath_CombinedFunctions(t *testing.T) {
 			name:       "normalize then get directory",
 			expression: `filepath.dir(filepath.normalize("/usr//local//bin/file.txt"))`,
 			checkFunc: func(t *testing.T, result interface{}) {
-				assert.Equal(t, "/usr/local/bin", result)
+				// Normalize both paths for cross-platform comparison
+				expected := pkgfilepath.NormalizeFilePath("/usr/local/bin")
+				actual := pkgfilepath.NormalizeFilePath(result.(string))
+				assert.Equal(t, expected, actual)
 			},
 		},
 		{
@@ -646,7 +666,10 @@ func TestJoinFunc_CELIntegration(t *testing.T) {
 
 			result, _, err := prog.Eval(map[string]interface{}{})
 			require.NoError(t, err)
-			assert.Equal(t, tt.expected, result.Value())
+			// Normalize both paths for cross-platform comparison
+			expectedNormalized := pkgfilepath.NormalizeFilePath(tt.expected)
+			resultNormalized := pkgfilepath.NormalizeFilePath(result.Value().(string))
+			assert.Equal(t, expectedNormalized, resultNormalized)
 		})
 	}
 }
@@ -674,7 +697,10 @@ func TestJoinFunc_WithVariables(t *testing.T) {
 		"file": "readme.txt",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "/home/user/documents/readme.txt", result.Value())
+	// Normalize both paths for cross-platform comparison
+	expected := pkgfilepath.NormalizeFilePath("/home/user/documents/readme.txt")
+	actual := pkgfilepath.NormalizeFilePath(result.Value().(string))
+	assert.Equal(t, expected, actual)
 }
 
 func TestJoinFunc_TypeError(t *testing.T) {
@@ -710,7 +736,10 @@ func TestJoinFunc_ChainedOperations(t *testing.T) {
 
 	result, _, err := prog.Eval(map[string]interface{}{})
 	require.NoError(t, err)
-	assert.Equal(t, "/home/user/documents", result.Value())
+	// Normalize both paths for cross-platform comparison
+	expected := pkgfilepath.NormalizeFilePath("/home/user/documents")
+	actual := pkgfilepath.NormalizeFilePath(result.Value().(string))
+	assert.Equal(t, expected, actual)
 }
 
 func BenchmarkJoinFunc_CEL_TwoParams(b *testing.B) {
