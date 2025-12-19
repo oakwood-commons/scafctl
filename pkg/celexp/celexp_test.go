@@ -55,13 +55,16 @@ func TestCompile(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			prog, err := Compile(tt.expression, tt.opts...)
+			expr := Expression(tt.expression)
+			result, err := expr.Compile(tt.opts...)
 			if tt.wantErr {
 				assert.Error(t, err)
-				assert.Nil(t, prog)
+				assert.Nil(t, result)
 			} else {
 				assert.NoError(t, err)
-				assert.NotNil(t, prog)
+				assert.NotNil(t, result)
+				assert.NotNil(t, result.Program)
+				assert.Equal(t, expr, result.Expression)
 			}
 		})
 	}
@@ -102,9 +105,11 @@ func TestCompile_ComplexExpressions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			prog, err := Compile(tt.expression, tt.opts...)
+			expr := Expression(tt.expression)
+			result, err := expr.Compile(tt.opts...)
 			require.NoError(t, err)
-			require.NotNil(t, prog)
+			require.NotNil(t, result)
+			require.NotNil(t, result.Program)
 		})
 	}
 }
@@ -170,10 +175,11 @@ func TestEval(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			prog, err := Compile(tt.expression, tt.opts...)
+			expr := Expression(tt.expression)
+			compiled, err := expr.Compile(tt.opts...)
 			require.NoError(t, err)
 
-			result, err := Eval(prog, tt.vars)
+			result, err := compiled.Eval(tt.vars)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -231,10 +237,11 @@ func TestEval_ComplexTypes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			prog, err := Compile(tt.expression, tt.opts...)
+			expr := Expression(tt.expression)
+			compiled, err := expr.Compile(tt.opts...)
 			require.NoError(t, err)
 
-			result, err := Eval(prog, tt.vars)
+			result, err := compiled.Eval(tt.vars)
 			require.NoError(t, err)
 			assert.NotNil(t, result, "result should not be nil")
 		})
@@ -243,7 +250,8 @@ func TestEval_ComplexTypes(t *testing.T) {
 
 func TestCompileAndEval_Integration(t *testing.T) {
 	// Test that we can compile once and evaluate multiple times
-	prog, err := Compile("x * multiplier", cel.Variable("x", cel.IntType), cel.Variable("multiplier", cel.IntType))
+	expr := Expression("x * multiplier")
+	compiled, err := expr.Compile(cel.Variable("x", cel.IntType), cel.Variable("multiplier", cel.IntType))
 	require.NoError(t, err)
 
 	testCases := []struct {
@@ -258,21 +266,23 @@ func TestCompileAndEval_Integration(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		result, err := Eval(prog, map[string]any{"x": tc.x, "multiplier": tc.multiplier})
+		result, err := compiled.Eval(map[string]any{"x": tc.x, "multiplier": tc.multiplier})
 		require.NoError(t, err)
 		assert.Equal(t, tc.want, result)
 	}
 }
 
-func TestEval_NilProgram(t *testing.T) {
-	// Test that passing nil program doesn't panic
-	result, err := Eval(nil, map[string]any{})
+func TestEval_NilResult(t *testing.T) {
+	// Test that passing nil result doesn't panic
+	var result *CompileResult
+	value, err := result.Eval(map[string]any{})
 	assert.Error(t, err)
-	assert.Nil(t, result)
+	assert.Nil(t, value)
+	assert.Contains(t, err.Error(), "compile result or program is nil")
 }
 
 func BenchmarkCompile(b *testing.B) {
-	expression := "x * 2 + y * 3"
+	expr := Expression("x * 2 + y * 3")
 	opts := []cel.EnvOption{
 		cel.Variable("x", cel.IntType),
 		cel.Variable("y", cel.IntType),
@@ -280,27 +290,27 @@ func BenchmarkCompile(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = Compile(expression, opts...)
+		_, _ = expr.Compile(opts...)
 	}
 }
 
 func BenchmarkEval(b *testing.B) {
-	expression := "x * 2 + y * 3"
+	expr := Expression("x * 2 + y * 3")
 	opts := []cel.EnvOption{
 		cel.Variable("x", cel.IntType),
 		cel.Variable("y", cel.IntType),
 	}
-	prog, _ := Compile(expression, opts...)
+	compiled, _ := expr.Compile(opts...)
 	vars := map[string]any{"x": int64(5), "y": int64(10)}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = Eval(prog, vars)
+		_, _ = compiled.Eval(vars)
 	}
 }
 
 func BenchmarkCompileAndEval(b *testing.B) {
-	expression := "x * 2 + y * 3"
+	expr := Expression("x * 2 + y * 3")
 	opts := []cel.EnvOption{
 		cel.Variable("x", cel.IntType),
 		cel.Variable("y", cel.IntType),
@@ -309,7 +319,7 @@ func BenchmarkCompileAndEval(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		prog, _ := Compile(expression, opts...)
-		_, _ = Eval(prog, vars)
+		compiled, _ := expr.Compile(opts...)
+		_, _ = compiled.Eval(vars)
 	}
 }
