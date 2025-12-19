@@ -7,18 +7,20 @@ import (
 	exprpb "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
 )
 
-// GetVariablesWithPrefix parses a CEL expression and returns all variable references
+// GetVariablesWithPrefix parses the CEL expression and returns all variable references
 // that start with the specified prefix. The returned variable names do not include the prefix.
 // It returns a deduplicated list of variable names. If prefix is empty, it defaults to "_."
 //
 // Example:
 //
-//	vars, err := GetVariablesWithPrefix("_.user.name + _.config.value", "_.")
+//	expr := celexp.CelExpression("_.user.name + _.config.value")
+//	vars, err := expr.GetVariablesWithPrefix("_.")
 //	// Returns: []string{"user", "config"}, nil
 //
-//	vars, err := GetVariablesWithPrefix("ctx.user.name + ctx.config.value", "ctx.")
+//	expr := celexp.CelExpression("ctx.user.name + ctx.config.value")
+//	vars, err := expr.GetVariablesWithPrefix("ctx.")
 //	// Returns: []string{"user", "config"}, nil
-func GetVariablesWithPrefix(expression, prefix string) ([]string, error) {
+func (e Expression) GetVariablesWithPrefix(prefix string) ([]string, error) {
 	// Default prefix to _. if empty
 	if prefix == "" {
 		prefix = "_."
@@ -31,7 +33,7 @@ func GetVariablesWithPrefix(expression, prefix string) ([]string, error) {
 	}
 
 	// Parse the expression to get the AST
-	parsed, issues := env.Parse(expression)
+	parsed, issues := env.Parse(string(e))
 	if issues != nil && issues.Err() != nil {
 		return nil, fmt.Errorf("failed to parse CEL expression: %w", issues.Err())
 	}
@@ -55,11 +57,15 @@ func GetVariablesWithPrefix(expression, prefix string) ([]string, error) {
 	return result, nil
 }
 
-// GetUnderscoreVariables is a convenience function that calls GetVariablesWithPrefix with "_." prefix.
+// GetUnderscoreVariables is a convenience method that calls GetVariablesWithPrefix with "_." prefix.
 //
-// Deprecated: Use GetVariablesWithPrefix instead for more flexibility.
-func GetUnderscoreVariables(expression string) ([]string, error) {
-	return GetVariablesWithPrefix(expression, "_.")
+// Example:
+//
+//	expr := celexp.CelExpression("_.user.name + _.config.value")
+//	vars, err := expr.GetUnderscoreVariables()
+//	// Returns: []string{"user", "config"}, nil
+func (e Expression) GetUnderscoreVariables() ([]string, error) {
+	return e.GetVariablesWithPrefix("_.")
 }
 
 // extractVariablesWithPrefix recursively walks the AST and collects variable names starting with the given prefix

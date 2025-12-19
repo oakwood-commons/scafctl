@@ -129,7 +129,8 @@ func TestGetUnderscoreVariables(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := GetUnderscoreVariables(tt.expression)
+			expr := Expression(tt.expression)
+			result, err := expr.GetUnderscoreVariables()
 
 			if tt.wantError {
 				require.Error(t, err)
@@ -180,7 +181,8 @@ func TestGetUnderscoreVariables_ComplexExpressions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := GetUnderscoreVariables(tt.expression)
+			expr := Expression(tt.expression)
+			result, err := expr.GetUnderscoreVariables()
 			require.NoError(t, err)
 
 			// Sort for comparison
@@ -238,7 +240,8 @@ func TestGetUnderscoreVariables_EdgeCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := GetUnderscoreVariables(tt.expression)
+			expr := Expression(tt.expression)
+			result, err := expr.GetUnderscoreVariables()
 
 			if tt.wantError {
 				require.Error(t, err)
@@ -257,18 +260,18 @@ func TestGetUnderscoreVariables_EdgeCases(t *testing.T) {
 }
 
 func BenchmarkGetUnderscoreVariables_Simple(b *testing.B) {
-	expr := "_.user.name + _.config.value"
+	expr := Expression("_.user.name + _.config.value")
 	b.ResetTimer()
 	for b.Loop() {
-		_, _ = GetUnderscoreVariables(expr)
+		_, _ = expr.GetUnderscoreVariables()
 	}
 }
 
 func BenchmarkGetUnderscoreVariables_Complex(b *testing.B) {
-	expr := `_.config.enabled && _.data.users.exists(u, u.role == _.requiredRole) && _.items.filter(i, i.active).size() > _.threshold`
+	expr := Expression(`_.config.enabled && _.data.users.exists(u, u.role == _.requiredRole) && _.items.filter(i, i.active).size() > _.threshold`)
 	b.ResetTimer()
 	for b.Loop() {
-		_, _ = GetUnderscoreVariables(expr)
+		_, _ = expr.GetUnderscoreVariables()
 	}
 }
 
@@ -368,7 +371,8 @@ func TestGetVariablesWithPrefix(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			vars, err := GetVariablesWithPrefix(tt.expression, tt.prefix)
+			expr := Expression(tt.expression)
+			vars, err := expr.GetVariablesWithPrefix(tt.prefix)
 
 			if tt.wantError {
 				require.Error(t, err)
@@ -389,25 +393,25 @@ func TestGetVariablesWithPrefix(t *testing.T) {
 }
 
 func BenchmarkGetVariablesWithPrefix_DefaultPrefix(b *testing.B) {
-	expr := "_.user.name + _.config.value"
+	expr := Expression("_.user.name + _.config.value")
 
 	for b.Loop() {
-		_, _ = GetVariablesWithPrefix(expr, "")
+		_, _ = expr.GetVariablesWithPrefix("")
 	}
 }
 
 func BenchmarkGetVariablesWithPrefix_CustomPrefix(b *testing.B) {
-	expr := "ctx.user.name + ctx.config.value"
+	expr := Expression("ctx.user.name + ctx.config.value")
 	b.ResetTimer()
 	for b.Loop() {
-		_, _ = GetVariablesWithPrefix(expr, "ctx.")
+		_, _ = expr.GetVariablesWithPrefix("ctx.")
 	}
 }
 
 func BenchmarkGetVariablesWithPrefix_ComplexCustomPrefix(b *testing.B) {
-	expr := "env.config.enabled && env.data.users.exists(u, u.role == env.requiredRole) && env.items.filter(i, i.active).size() > env.threshold"
+	expr := Expression("env.config.enabled && env.data.users.exists(u, u.role == env.requiredRole) && env.items.filter(i, i.active).size() > env.threshold")
 	b.ResetTimer()
 	for b.Loop() {
-		_, _ = GetVariablesWithPrefix(expr, "env.")
+		_, _ = expr.GetVariablesWithPrefix("env.")
 	}
 }
