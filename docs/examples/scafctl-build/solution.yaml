@@ -1,0 +1,186 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: scafctl-build
+  version: 1.0.0
+  displayName: Build scafctl CLI
+  description: |
+    Use scafctl actions to lint, test, and build the scafctl Go CLI.
+    Demonstrates how scafctl can replace a Taskfile-driven workflow.
+  category: automation
+  tags:
+    - golang
+    - build
+    - cli
+  maintainers:
+    - name: scafctl maintainers
+      email: team@example.com
+
+spec:
+
+  providers:
+    - name: shell
+      type: sh
+      description: Execute shell commands inside the project repository
+
+  resolvers:
+
+    projectRoot:
+      description: Filesystem path to the scafctl repository
+      resolve:
+        from:
+          - provider: cli
+            key: projectRoot
+          - provider: env
+            key: SCAFCTL_PROJECT_ROOT
+          - provider: static
+            value: "."
+
+    goBinary:
+      description: Go binary to use for build steps
+      resolve:
+        from:
+          - provider: cli
+            key: goBin
+          - provider: env
+            key: GO
+          - provider: static
+            value: go
+
+    buildOutput:
+      description: Directory to place compiled binaries
+      resolve:
+        from:
+          - provider: cli
+            key: output
+          - provider: env
+            key: BUILD_OUTPUT
+          - provider: static
+            value: ./bin
+
+    version:
+      description: Version string to embed in the binary
+      resolve:
+        from:
+          - provider: cli
+            key: version
+          - provider: env
+            key: SCAFCTL_VERSION
+          - provider: git
+            field: tag
+          - provider: static
+            value: 0.0.0-dev
+
+    modulePath:
+      description: Entry point for the scafctl CLI binary
+      resolve:
+        from:
+          - provider: static
+            value: ./cmd/scafctl
+
+    ldFlags:
+      description: Linker flags injected during go build
+      resolve:
+        from:
+          - provider: expression
+            expr: "-s -w -X example.com/scafctl-sample/internal/version.buildVersion=" + _.version
+
+  actions:
+
+    tidy:
+      description: Ensure go.mod and go.sum are up to date
+      provider: shell
+      inputs:
+        dir: {{ _.projectRoot }}
+        cmd:
+          - echo "Running go mod tidy"
+          - {{ _.goBinary }} mod tidy
+
+    fmt:
+      description: Format Go source files
+      provider: shell
+      dependsOn:
+        - tidy
+      inputs:
+        dir: {{ _.projectRoot }}
+        cmd:
+          - echo "Formatting Go files"
+          - {{ _.goBinary }} fmt ./...
+
+    lint:
+      description: Run golangci-lint using project configuration
+      provider: shell
+      dependsOn:
+        - fmt
+      inputs:
+        dir: {{ _.projectRoot }}
+        cmd:
+          - echo "Running golangci-lint"
+          - golangci-lint run --config {{ _.projectRoot }}/.golangci.yml
+
+    vet:
+      description: Run go vet for static analysis
+      provider: shell
+      dependsOn:
+        - lint
+      inputs:
+        dir: {{ _.projectRoot }}
+        cmd:
+          - echo "Running go vet"
+          - {{ _.goBinary }} vet ./...
+
+    test:
+      description: Run unit tests
+      provider: shell
+      dependsOn:
+        - vet
+      inputs:
+        dir: {{ _.projectRoot }}
+        cmd:
+          - echo "Running go test"
+          - {{ _.goBinary }} test ./...
+
+    build:
+      description: Compile the scafctl binary
+      provider: shell
+      dependsOn:
+        - test
+      inputs:
+        dir: {{ _.projectRoot }}
+        cmd:
+          - echo "Building scafctl {{ _.version }}"
+          - {{ _.goBinary }} build -ldflags "{{ _.ldFlags }}" -o {{ _.buildOutput }}/scafctl {{ _.modulePath }}
+
+    clean:
+      description: Remove build output directory
+      provider: shell
+      inputs:
+        dir: {{ _.projectRoot }}
+        cmd:
+          - echo "Cleaning {{ _.buildOutput }}"
+          - rm -rf {{ _.buildOutput }}
+
+catalog:
+  visibility: private
+  beta: true
+  disabled: true
+
+testing:
+  tests:
+    - name: dry-run-build
+      type: cli
+      synopsis: Verify build action plan with defaults
+      command: [run, solution:scafctl-build]
+      parameters: [--dry-run, --action, build]
+      want:
+        status: pass
+
+    - name: dry-run-clean
+      type: cli
+      synopsis: Verify clean action plan
+      command: [run, solution:scafctl-build]
+      parameters: [--dry-run, --action, clean]
+      want:
+        status: pass
+

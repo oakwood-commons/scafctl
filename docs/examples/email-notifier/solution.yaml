@@ -1,0 +1,186 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: email-notifier
+  version: 1.0.0
+  displayName: Email Notifier
+  description: |
+    Send templated emails to a list of recipients via API.
+    Demonstrates template rendering, foreach iteration over complex objects, and API actions.
+  category: automation
+  tags:
+    - email
+    - notification
+    - api
+  maintainers:
+    - name: scafctl team
+      email: team@example.com
+
+spec:
+
+  # Providers define reusable execution primitives
+  providers:
+    - name: email-api
+      type: api
+      description: Send email via HTTP API
+      config:
+        endpoint: https://api.sendgrid.com/v3/mail/send
+        method: POST
+        auth:
+          type: bearer
+          tokenEnv: SENDGRID_API_KEY
+        headers:
+          Content-Type: application/json
+
+    - name: template-engine
+      type: go-template
+      description: Render email templates with context
+
+  # Resolvers produce data deterministically
+  resolvers:
+
+    recipients:
+      description: List of email recipients with name and email
+      resolve:
+        from:
+          - provider: cli
+            key: recipients
+          - provider: static
+            value:
+              - name: "Alice"
+                email: "alice@example.com"
+              - name: "Bob"
+                email: "bob@example.com"
+      validate:
+        regex: "^[a-zA-Z0-9@.\\s,\"{}:\\[\\]\\-]*$"
+        errorMessage: "Recipients must be valid JSON array of objects with name and email"
+
+    subject:
+      description: Email subject line
+      resolve:
+        from:
+          - provider: cli
+            key: subject
+          - provider: env
+            key: EMAIL_SUBJECT
+          - provider: static
+            value: "Hello from scafctl"
+
+    messageBody:
+      description: Email message body template
+      resolve:
+        from:
+          - provider: cli
+            key: messageBody
+          - provider: static
+            value: |
+              This is an automated message from scafctl.
+
+              Thank you!
+
+    senderEmail:
+      description: Email sender address
+      resolve:
+        from:
+          - provider: cli
+            key: senderEmail
+          - provider: env
+            key: SENDER_EMAIL
+          - provider: static
+            value: "noreply@scafctl.example.com"
+
+    senderName:
+      description: Email sender display name
+      resolve:
+        from:
+          - provider: cli
+            key: senderName
+          - provider: static
+            value: "scafctl"
+
+  # Actions perform side effects
+  actions:
+
+    send-emails:
+      description: Send email to each recipient
+      provider: email-api
+      when: _.recipients != null && _.recipients.size() > 0
+      foreach:
+        over: _.recipients
+        as: recipient
+      inputs:
+        method: POST
+        endpoint: "https://api.sendgrid.com/v3/mail/send"
+        payload:
+          personalizations:
+            - to:
+                - email: "{{ _.recipient.email }}"
+                  name: "{{ _.recipient.name }}"
+              subject: "{{ _.subject }}"
+          from:
+            email: "{{ _.senderEmail }}"
+            name: "{{ _.senderName }}"
+          content:
+            - type: "text/html"
+              value: |
+                <html>
+                  <body>
+                    <p>Hi {{ _.recipient.name }},</p>
+                    <div>{{ _.messageBody }}</div>
+                    <p>Best regards,<br/>{{ _.senderName }}</p>
+                  </body>
+                </html>
+      outputs:
+        emailsSent:
+          expr: _.recipients.size()
+        lastRecipient:
+          expr: _.recipient.email
+
+catalog:
+  visibility: public
+  beta: false
+  disabled: false
+
+testing:
+  tests:
+
+    - name: resolve-defaults
+      type: engine
+      synopsis: Validate resolver defaults without user input
+      want:
+        resolvers:
+          subject: "Hello from scafctl"
+          senderEmail: "noreply@scafctl.example.com"
+          senderName: "scafctl"
+          recipients:
+            - name: "Alice"
+              email: "alice@example.com"
+            - name: "Bob"
+              email: "bob@example.com"
+
+    - name: custom-recipients-and-subject
+      type: engine
+      synopsis: Validate resolvers with custom recipients and subject
+      parameters:
+        - -r
+        - recipients='[{"name":"Carol","email":"carol@example.com"}]'
+        - -r
+        - subject="Welcome to Our Service"
+      want:
+        resolvers:
+          subject: "Welcome to Our Service"
+          recipients:
+            - name: "Carol"
+              email: "carol@example.com"
+
+    - name: dry-run-email-send
+      type: cli
+      synopsis: Verify email payload generation without sending
+      command: [run, solution:email-notifier]
+      parameters:
+        - -r
+        - "recipients=[{\"name\":\"Test User\",\"email\":\"test@example.com\"}]"
+        - --dry-run
+      want:
+        status: pass
