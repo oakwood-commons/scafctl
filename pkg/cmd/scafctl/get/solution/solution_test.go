@@ -19,7 +19,11 @@ func TestCmdOptionsVersion_GetSolutionWithGetter(t *testing.T) {
 	t.Run("successful get from local file with json output", func(t *testing.T) {
 		mockGetter := &solutionget.MockGetter{}
 		expectedSolution := &solutionpkg.Solution{
-			Name: "test-solution",
+			APIVersion: "scafctl.io/v1",
+			Kind:       "Solution",
+			Metadata: solutionpkg.Metadata{
+				Name: "test-solution",
+			},
 		}
 
 		mockGetter.On("Get", mock.Anything, "/path/to/solution.yaml").
@@ -52,7 +56,11 @@ func TestCmdOptionsVersion_GetSolutionWithGetter(t *testing.T) {
 	t.Run("successful get from URL with yaml output", func(t *testing.T) {
 		mockGetter := &solutionget.MockGetter{}
 		expectedSolution := &solutionpkg.Solution{
-			Name: "url-solution",
+			APIVersion: "scafctl.io/v1",
+			Kind:       "Solution",
+			Metadata: solutionpkg.Metadata{
+				Name: "url-solution",
+			},
 		}
 
 		mockGetter.On("Get", mock.Anything, "https://example.com/solution.yaml").
@@ -85,7 +93,11 @@ func TestCmdOptionsVersion_GetSolutionWithGetter(t *testing.T) {
 	t.Run("empty path uses auto-discovery", func(t *testing.T) {
 		mockGetter := &solutionget.MockGetter{}
 		expectedSolution := &solutionpkg.Solution{
-			Name: "auto-discovered-solution",
+			APIVersion: "scafctl.io/v1",
+			Kind:       "Solution",
+			Metadata: solutionpkg.Metadata{
+				Name: "auto-discovered-solution",
+			},
 		}
 
 		mockGetter.On("Get", mock.Anything, "").
@@ -149,7 +161,11 @@ func TestCmdOptionsVersion_GetSolutionWithGetter(t *testing.T) {
 	t.Run("json output format explicitly", func(t *testing.T) {
 		mockGetter := &solutionget.MockGetter{}
 		expectedSolution := &solutionpkg.Solution{
-			Name: "json-output-solution",
+			APIVersion: "scafctl.io/v1",
+			Kind:       "Solution",
+			Metadata: solutionpkg.Metadata{
+				Name: "json-output-solution",
+			},
 		}
 
 		mockGetter.On("Get", mock.Anything, "/path/to/solution.yaml").
@@ -184,7 +200,11 @@ func TestCmdOptionsVersion_GetSolutionWithGetter(t *testing.T) {
 	t.Run("context with values", func(t *testing.T) {
 		mockGetter := &solutionget.MockGetter{}
 		expectedSolution := &solutionpkg.Solution{
-			Name: "context-solution",
+			APIVersion: "scafctl.io/v1",
+			Kind:       "Solution",
+			Metadata: solutionpkg.Metadata{
+				Name: "context-solution",
+			},
 		}
 
 		cliParams := &settings.Run{
@@ -220,8 +240,12 @@ func TestCmdOptionsVersion_GetSolutionWithGetter(t *testing.T) {
 	t.Run("solution with complex data", func(t *testing.T) {
 		mockGetter := &solutionget.MockGetter{}
 		expectedSolution := &solutionpkg.Solution{
-			Name:        "complex-solution",
-			Description: "A solution with detailed metadata",
+			APIVersion: "scafctl.io/v1",
+			Kind:       "Solution",
+			Metadata: solutionpkg.Metadata{
+				Name:        "complex-solution",
+				Description: "A solution with detailed metadata",
+			},
 		}
 
 		mockGetter.On("Get", mock.Anything, "/path/to/complex.yaml").

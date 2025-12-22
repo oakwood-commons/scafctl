@@ -9,34 +9,102 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Solution represents the metadata and configuration for a solution scaffold.
-// It includes versioning, identification, categorization, maintainers, and related links.
-// Fields are annotated for JSON/YAML serialization and validation constraints.
-// - SchemaVersion: The schema version of the solution.
-// - Name: The unique name of the solution.
-// - DisplayName: The human-readable name of the solution.
-// - Description: A description of the solution's purpose.
-// - Category: The category under which the solution falls.
-// - Version: The version of the solution.
-// - ScafctlVersion: Minimum required version of 'scafctl' for compatibility.
-// - Tags: A list of tags describing the solution.
-// - Labels: Key-value labels for the solution.
-// - Maintainers: Contacts for maintainers of the solution.
-// - Links: Related content links.
-// - path: Internal field for the file path where the solution was loaded from.
+const (
+	// DefaultAPIVersion is the default API version for Solution resources
+	DefaultAPIVersion = "scafctl.io/v1"
+
+	// SolutionKind is the Kind identifier for Solution resources
+	SolutionKind = "Solution"
+)
+
+// Solution represents a Kubernetes-style declarative unit of behavior in scafctl.
+// It follows the apiVersion/kind pattern and separates concerns into metadata, spec, and catalog sections.
+//
+// A solution combines:
+//   - resolvers (data resolution)
+//   - templates (data to files or artifacts)
+//   - actions (explicit side effects)
+//
+// The solution is a data model that scafctl executes deterministically, not a script or pipeline.
+//
+// Example:
+//
+//	apiVersion: scafctl.io/v1
+//	kind: Solution
+//	metadata:
+//	  name: gcp-basic
+//	  version: 1.0.1
+//	  displayName: Basic GCP Solution
+//	catalog:
+//	  visibility: public
+//	  beta: false
 type Solution struct {
-	SchemaVersion  *semver.Version   `json:"schemaVersion,omitempty" yaml:"schemaVersion,omitempty" doc:"The schema version of the solution" pattern:"^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$"`
-	Name           string            `json:"name,omitempty" yaml:"name,omitempty" doc:"The name of the solution" minLength:"3" maxLength:"60" example:"gcp-basic" pattern:"^[^\\s]+(\\w|\\-|\\_)+$"`
-	DisplayName    string            `json:"displayName,omitempty" yaml:"displayName,omitempty" doc:"The name of the display name of the solution" minLength:"3" maxLength:"80" example:"Basic GCP Solution" pattern:"^(.)+$"`
-	Description    string            `json:"description,omitempty" yaml:"description,omitempty" doc:"The description of the solution" minLength:"3" maxLength:"5000" example:"This solution scaffolds terraform code to create a simple GCP bucket" pattern:"^(.|\\n|\\r)*" required:"false"`
-	Category       string            `json:"category,omitempty" yaml:"category,omitempty" doc:"The category of the solution" minLength:"3" maxLength:"30" example:"application" pattern:"^(\\w|\\ |\\d|-)+$"`
-	Version        *semver.Version   `json:"version,omitempty" yaml:"version,omitempty" doc:"The version of the solution" minLength:"3" maxLength:"30" example:"1.0.0" pattern:"^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$"`
-	ScafctlVersion string            `json:"scafctlVersion,omitempty" yaml:"scafctlVersion,omitempty" doc:"Specifies the minimum required version of 'scafctl' for this solution. You can provide an exact version (e.g., '1.0.0') or use version constraints (e.g., '>= 1.0, < 1.4'). For more information on version constraints, refer to the [Masterminds semver documentation](https://github.com/Masterminds/semver?tab=readme-ov-file#basic-comparisons)" minLength:"3" maxLength:"200" example:"1.0.0" pattern:"^(\\w|\\-|\\_|\\ |\\.|\\<|\\>|=|,|\\~|\\!)+$" required:"false"`
-	Tags           []string          `json:"tags,omitempty" yaml:"tags,omitempty" maxItems:"100" doc:"A list of tags for the solution" required:"false"`
-	Labels         map[string]string `json:"labels,omitempty" yaml:"labels,omitempty" doc:"The labels of the solution" maxItems:"12" required:"false"`
-	Maintainers    []Contact         `json:"maintainers,omitempty" yaml:"maintainers,omitempty" doc:"The maintainers of the solution" minItems:"1" maxItems:"10" required:"false"`
-	Links          []Link            `json:"links,omitempty" yaml:"links,omitempty" doc:"Links to content related to the solution" maxItems:"10" required:"false"`
-	path           string            `json:"-" yaml:"-" doc:"The of where the solution file was loaded from. This is internally set" required:"false"`
+	// APIVersion defines the versioned schema of this representation of a Solution.
+	// Default: "scafctl.io/v1"
+	APIVersion string `json:"apiVersion" yaml:"apiVersion" doc:"The API version of the solution" example:"scafctl.io/v1" pattern:"^[a-z0-9]+\\.io/v[0-9]+(alpha[0-9]+|beta[0-9]+)?$"`
+
+	// Kind is a string value representing the REST resource this object represents.
+	// Must be "Solution".
+	Kind string `json:"kind" yaml:"kind" doc:"The kind of resource" example:"Solution" pattern:"^Solution$"`
+
+	// Metadata describes the solution as a product. It is immutable per version
+	// and is indexed in the catalog. Metadata does not affect execution.
+	Metadata Metadata `json:"metadata" yaml:"metadata" doc:"Metadata about the solution"`
+
+	// Catalog controls distribution and visibility, not execution.
+	// Published artifacts are JSON-only, and solutions are version-addressable (e.g., solution:gcp-basic@1.0.1).
+	Catalog Catalog `json:"catalog,omitempty" yaml:"catalog,omitempty" doc:"Catalog metadata for distribution" required:"false"`
+
+	// path is an internal field for the file path where the solution was loaded from
+	path string `json:"-" yaml:"-"`
+}
+
+// Metadata contains the descriptive information about a solution.
+// Metadata is immutable per version and does not affect execution.
+type Metadata struct {
+	// Name is the unique identifier for the solution (e.g., "gcp-basic")
+	Name string `json:"name" yaml:"name" doc:"The unique name of the solution" minLength:"3" maxLength:"60" example:"gcp-basic" pattern:"^[a-z0-9]([a-z0-9-]+[a-z0-9])?$"`
+
+	// Version is the semantic version of the solution
+	Version *semver.Version `json:"version" yaml:"version" doc:"The version of the solution" example:"1.0.0" pattern:"^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$"`
+
+	// DisplayName is the human-readable name of the solution
+	DisplayName string `json:"displayName,omitempty" yaml:"displayName,omitempty" doc:"The display name of the solution" minLength:"3" maxLength:"80" example:"Basic GCP Solution" pattern:"^(.)+$" required:"false"`
+
+	// Description provides details about the solution's purpose
+	Description string `json:"description,omitempty" yaml:"description,omitempty" doc:"The description of the solution" minLength:"3" maxLength:"5000" example:"This solution scaffolds terraform code to create a simple GCP bucket" pattern:"^(.|\\n|\\r)*" required:"false"`
+
+	// Category classifies the solution (e.g., "application", "infrastructure")
+	Category string `json:"category,omitempty" yaml:"category,omitempty" doc:"The category of the solution" minLength:"3" maxLength:"30" example:"application" pattern:"^[a-z0-9]([a-z0-9-]+[a-z0-9]|[a-z0-9]{1,})$" required:"false"`
+
+	// Tags are searchable keywords associated with the solution
+	Tags []string `json:"tags,omitempty" yaml:"tags,omitempty" maxItems:"100" doc:"A list of tags for the solution" required:"false"`
+
+	// Maintainers lists the people or teams responsible for the solution
+	Maintainers []Contact `json:"maintainers,omitempty" yaml:"maintainers,omitempty" doc:"The maintainers of the solution" minItems:"1" maxItems:"10" required:"false"`
+
+	// Links provides references to related documentation or resources
+	Links []Link `json:"links,omitempty" yaml:"links,omitempty" doc:"Links to content related to the solution" maxItems:"10" required:"false"`
+
+	// Icon is a URL or path to an icon image for the solution
+	Icon string `json:"icon,omitempty" yaml:"icon,omitempty" doc:"URL or path to the solution icon" maxLength:"500" pattern:"^((http|https|file):\\/\\/.+|[a-zA-Z0-9_-]+\\.(png|jpg|jpeg|svg|gif))$" required:"false"`
+
+	// Banner is a URL or path to a banner image for the solution
+	Banner string `json:"banner,omitempty" yaml:"banner,omitempty" doc:"URL or path to the solution banner" maxLength:"500" pattern:"^((http|https|file):\\/\\/.+|[a-zA-Z0-9_-]+\\.(png|jpg|jpeg|svg|gif))$" required:"false"`
+}
+
+// Catalog controls distribution and visibility of the solution.
+// Catalog metadata does not affect execution behavior.
+type Catalog struct {
+	// Visibility controls who can discover and use the solution.
+	// Valid values: "public", "private", "internal"
+	Visibility string `json:"visibility,omitempty" yaml:"visibility,omitempty" doc:"The visibility of the solution in the catalog" example:"public" pattern:"^(public|private|internal)$" required:"false"`
+
+	// Beta indicates if the solution is in beta/preview status
+	Beta bool `json:"beta,omitempty" yaml:"beta,omitempty" doc:"Indicates if the solution is in beta" required:"false"`
+
+	// Disabled marks the solution as unavailable (but keeps it in the catalog)
+	Disabled bool `json:"disabled,omitempty" yaml:"disabled,omitempty" doc:"Indicates if the solution is disabled" required:"false"`
 }
 
 // Contact represents the maintainer's contact information, including their name and email address.

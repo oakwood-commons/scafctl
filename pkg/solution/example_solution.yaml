@@ -1,0 +1,28 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: gcp-basic
+  version: 1.0.1
+  displayName: Basic GCP Solution
+  description: Deploys a basic GCP application scaffold with Terraform
+  category: application
+  tags:
+    - gcp
+    - terraform
+    - infrastructure
+  maintainers:
+    - name: Aeron Baker
+      email: abaker9@company.com
+  links:
+    - name: Documentation
+      url: https://docs.example.com/gcp-basic
+    - name: Source Code
+      url: https://github.com/example/gcp-basic
+  icon: https://example.com/icons/gcp-basic.png
+  banner: https://example.com/banners/gcp-basic.jpg
+
+catalog:
+  visibility: public
+  beta: false
+  disabled: false
