@@ -80,7 +80,7 @@ go mod download                  # Download dependencies
       env, _ := cel.NewEnv(funcObj.EnvOptions...)
       ast, issues := env.Compile(`expression`)
       prog, _ := env.Program(ast)
-      result, _, _ := prog.Eval(map[string]interface{}{})
+      result, _, _ := prog.Eval(map[string]any{})
       assert.Equal(t, expected, result.Value())
   }
   ```
