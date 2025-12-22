@@ -1,0 +1,238 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: terraform-multi-env
+  version: 1.0.0
+  displayName: Terraform Multi-Environment Infrastructure
+  description: |
+    Scaffold Terraform module directories for multiple environments (dev, qa, prod).
+    Demonstrates template rendering, foreach iteration, and filesystem actions.
+  category: infrastructure
+  tags:
+    - terraform
+    - gcp
+    - infrastructure-as-code
+  maintainers:
+    - name: scafctl team
+      email: team@example.com
+
+spec:
+
+  # Providers for different action types
+  providers:
+    - name: filesystem
+      type: filesystem
+      description: Write files to disk
+
+    - name: archive
+      type: sh
+      description: Create archives from files
+
+    - name: github
+      type: api
+      description: Push files to GitHub via API
+
+    - name: email-service
+      type: api
+      description: Send files via email API
+
+  # Resolvers produce configuration data
+  resolvers:
+
+    projectId:
+      description: GCP project ID
+      resolve:
+        from:
+          - provider: cli
+            key: projectId
+          - provider: env
+            key: GCP_PROJECT_ID
+          - provider: static
+            value: my-project
+
+    environments:
+      description: List of environments to scaffold
+      resolve:
+        from:
+          - provider: cli
+            key: environments
+          - provider: static
+            value: [dev, qa, prod]
+      validate:
+        regex: "^[a-z,]+$"
+        errorMessage: "Environments must be lowercase, comma-separated"
+
+    region:
+      description: Default GCP region
+      resolve:
+        from:
+          - provider: cli
+            key: region
+          - provider: env
+            key: GCP_REGION
+          - provider: static
+            value: us-central1
+
+    stateBucket:
+      description: GCS bucket for Terraform state
+      resolve:
+        from:
+          - provider: cli
+            key: stateBucket
+          - provider: expression
+            expr: _.projectId + "-terraform-state"
+
+    createArchive:
+      description: Whether to create archive of terraform configs
+      resolve:
+        from:
+          - provider: cli
+            key: createArchive
+          - provider: static
+            value: false
+
+    pushToGithub:
+      description: Whether to push configs to GitHub
+      resolve:
+        from:
+          - provider: cli
+            key: pushToGithub
+          - provider: static
+            value: false
+
+    emailConfigs:
+      description: Whether to email configs to team
+      resolve:
+        from:
+          - provider: cli
+            key: emailConfigs
+          - provider: static
+            value: false
+
+    githubRepo:
+      description: GitHub repository for pushing configs
+      resolve:
+        from:
+          - provider: cli
+            key: githubRepo
+          - provider: static
+            value: "my-org/infrastructure"
+
+    teamEmail:
+      description: Team email for sending configs
+      resolve:
+        from:
+          - provider: cli
+            key: teamEmail
+          - provider: static
+            value: "infrastructure@example.com"
+
+    terraformFiles:
+      description: Reference to rendered terraform template files
+      resolve:
+        from:
+          - provider: template
+            name: terraform-backend
+
+  # Templates render configuration files using resolver context
+  templates:
+    terraform-backend:
+      description: Terraform backend configuration
+      resolvers:
+        - projectId
+        - region
+        - stateBucket
+        - env
+      source:
+        type: filesystem
+        path: templates/terraform
+      foreach:
+        over: _.environments
+        as: __env
+      when: _.environments != null && _.environments.size() > 0
+      outputs:
+        path: ./terraform/{{ __env }}
+
+  # Actions perform side effects - write rendered templates to disk
+  actions:
+
+    write-terraform-configs:
+      description: Write terraform configurations to disk
+      provider: filesystem
+      inputs:
+        source: "{{ _.terraformFiles }}"
+
+    archive-terraform-configs:
+      description: Create archive of terraform configurations
+      provider: archive
+      when: _.createArchive == true
+      inputs:
+        source: "{{ _.terraformFiles }}"
+        archiveName: "terraform-configs.tar.gz"
+        destinationPath: ./archives
+
+    push-to-github:
+      description: Push terraform configs to GitHub
+      provider: github
+      templates:
+        - terraform-backend
+      when: _.pushToGithub == true
+      inputs:
+        sourceTemplate: terraform-backend
+        repository: "{{ _.githubRepo }}"
+        branch: "terraform/configs"
+        message: "Generated terraform configs for environments: {{ _.environments }}"
+
+    email-terraform-configs:
+      description: Email terraform configurations to team
+      provider: email-service
+      templates:
+        - terraform-backend
+      when: _.emailConfigs == true
+      inputs:
+        sourceTemplate: terraform-backend
+        recipients: "{{ _.teamEmail }}"
+        subject: "Terraform Configurations - {{ _.projectId }}"
+        body: "Generated terraform configs for {{ _.environments }}"
+
+catalog:
+  visibility: public
+  beta: false
+  disabled: false
+
+testing:
+  tests:
+
+    - name: resolve-defaults
+      type: engine
+      synopsis: Validate resolver defaults without user input
+      want:
+        resolvers:
+          projectId: my-project
+          region: us-central1
+          environments: [dev, qa, prod]
+          stateBucket: "my-project-terraform-state"
+
+    - name: resolve-custom-project
+      type: engine
+      synopsis: Validate resolvers with custom project ID
+      parameters:
+        - -r
+        - projectId=acme-corp
+        - -r
+        - environments='["staging","prod"]'
+      want:
+        resolvers:
+          projectId: acme-corp
+          region: us-central1
+          environments: [staging, prod]
+          stateBucket: "acme-corp-terraform-state"
+
+    - name: dry-run-scaffold
+      type: cli
+      synopsis: Verify terraform scaffold action plan
+      command: [run, solution:terraform-multi-env]
+      parameters: [--dry-run]
+      want:
+        status: pass
