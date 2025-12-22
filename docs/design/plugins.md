@@ -82,7 +82,8 @@ Providers live under the scafctl cache directory (default `~/.scafctl/providers`
   },
   "capabilities": {
     "resolvers": true,
-    "actions": true
+    "actions": true,
+    "auth": false
   }
 }
 ```
@@ -90,6 +91,9 @@ Providers live under the scafctl cache directory (default `~/.scafctl/providers`
 - `protocol_version` must match the Terraform plugin handshake utilized by scafctl.
 - `schema` defines the inputs accepted by resolver/action calls.
 - `capabilities` toggles which scafctl phases can call the provider.
+  - `resolvers`: Provider can be used in resolver `from:` sources
+  - `actions`: Provider can be used in action execution
+  - `auth`: Provider can handle authentication/authorization
 
 ## Example: Shell Provider Plugin
 
@@ -102,13 +106,14 @@ Providers live under the scafctl cache directory (default `~/.scafctl/providers`
 **Solution usage**
 
 ```yaml
-actions:
-  run-tests:
-    provider: scafctl/shell
-    inputs:
-      dir: {{ _.projectRoot }}
-      cmd:
-        - go test ./...
+spec:
+  actions:
+    run-tests:
+      provider: scafctl/shell
+      inputs:
+        dir: {{ _.projectRoot }}
+        cmd:
+          - go test ./...
 ```
 
 At runtime scafctl marshals `inputs` into the Terraform RPC request for the shell provider, ensuring validation via the descriptor.
@@ -145,7 +150,8 @@ Descriptor (simplified):
   },
   "capabilities": {
     "resolvers": false,
-    "actions": true
+    "actions": true,
+    "auth": false
   }
 }
 ```
@@ -153,18 +159,60 @@ Descriptor (simplified):
 **Solution usage**
 
 ```yaml
-actions:
-  deploy:
-    provider: scafctl/api
-    inputs:
-      endpoint: https://api.example.com/deploy
-      method: POST
-      headers:
-        Authorization: "Bearer {{ _.token }}"
-      body: '{"version": "{{ _.version }}"}'
+spec:
+  actions:
+    deploy:
+      provider: scafctl/api
+      inputs:
+        endpoint: https://api.example.com/deploy
+        method: POST
+        headers:
+          Authorization: "Bearer {{ _.token }}"
+        body: '{"version": "{{ _.version }}"}'
 ```
 
 The API provider emits HTTP requests and returns status metadata which scafctl records in action outputs.
+
+## Example: Auth Provider Plugin
+
+Auth providers handle authentication workflows (login, logout, token refresh). They must set `"auth": true` in capabilities.
+
+**Descriptor** `~/.scafctl/providers/registry.example.com/scafctl/entra/1.0.0/provider.json`
+
+```json
+{
+  "protocol_version": 6,
+  "name": "entra",
+  "namespace": "scafctl",
+  "version": "1.0.0",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "tenant": { "type": "string" },
+      "clientId": { "type": "string" },
+      "scopes": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "noBrowser": { "type": "boolean", "default": false }
+    },
+    "required": ["tenant", "clientId"],
+    "additionalProperties": false
+  },
+  "capabilities": {
+    "resolvers": false,
+    "actions": false,
+    "auth": true
+  }
+}
+```
+
+**CLI usage**:
+```bash
+scafctl auth login entra --tenant contoso.com --client-id abc123
+```
+
+The provider handles OAuth flows, token storage, and refresh logic. Auth providers are invoked via `scafctl auth` commands, not through resolvers or actions.
 
 ## Lifecycle
 

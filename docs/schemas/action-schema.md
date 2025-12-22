@@ -136,9 +136,9 @@ actions:
 
 Execution order: `lint` → `test` → `build`
 
-### DAG Execution
+### Phase-Based Concurrent Execution
 
-Independent actions run in parallel:
+Actions form a **DAG** based on `dependsOn`. scafctl executes them in **phases**, with actions in each phase running **concurrently**:
 
 ```yaml
 actions:
@@ -159,9 +159,12 @@ actions:
       cmd: [go, test]
 ```
 
-Execution:
-1. `lint` and `format-check` run **in parallel**
-2. `test` runs when **both complete**
+**Execution model:**
+1. **Phase 1**: `lint` and `format-check` execute **concurrently** (no dependencies)
+2. Wait for Phase 1 to complete
+3. **Phase 2**: `test` executes (dependencies satisfied)
+
+This phase-based concurrent execution maximizes parallelism while respecting dependencies. If one action in a phase fails, all actions in that phase are stopped.
 
 ### Multiple Dependencies
 
