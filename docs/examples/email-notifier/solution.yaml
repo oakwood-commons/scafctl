@@ -108,15 +108,15 @@ spec:
       when: _.recipients != null && _.recipients.size() > 0
       foreach:
         over: _.recipients
-        as: recipient
+        as: __recipient
       inputs:
         method: POST
         endpoint: "https://api.sendgrid.com/v3/mail/send"
         payload:
           personalizations:
             - to:
-                - email: "{{ _.recipient.email }}"
-                  name: "{{ _.recipient.name }}"
+                - email: "{{ __recipient.email }}"
+                  name: "{{ __recipient.name }}"
               subject: "{{ _.subject }}"
           from:
             email: "{{ _.senderEmail }}"
@@ -126,7 +126,7 @@ spec:
               value: |
                 <html>
                   <body>
-                    <p>Hi {{ _.recipient.name }},</p>
+                    <p>Hi {{ __recipient.name }},</p>
                     <div>{{ _.messageBody }}</div>
                     <p>Best regards,<br/>{{ _.senderName }}</p>
                   </body>
@@ -135,7 +135,7 @@ spec:
         emailsSent:
           expr: _.recipients.size()
         lastRecipient:
-          expr: _.recipient.email
+          expr: __recipient.email
 
 catalog:
   visibility: public

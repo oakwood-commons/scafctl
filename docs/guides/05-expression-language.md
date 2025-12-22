@@ -170,7 +170,7 @@ expr: _.name + "-" + _.version
 # Array iteration (always CEL)
 foreach:
   over: _.environments      # Always CEL
-  as: item
+  as: __item
 
 # Validation (always CEL)
 validate:
@@ -331,14 +331,14 @@ actions:
     # CEL foreach (iteration)
     forEach:
       over: _.deploymentTargets
-      as: target
+      as: __target
 
     # Templating in command (text rendering)
     provider: shell
     inputs:
       cmd:
-        - "echo Deploying to {{ __item.region }}"
-        - "deploy-service --name {{ _.serviceName }} --region {{ __item.region }}"
+        - "echo Deploying to {{ __target.region }}"
+        - "deploy-service --name {{ _.serviceName }} --region {{ __target.region }}"
 ```
 
 ## Common Mistakes
@@ -452,7 +452,7 @@ validate:
   - expr: __self.matches("^[a-z]+$")
 ```
 
-### `__item` - Foreach Item
+### `__item` and Custom Foreach Aliases
 
 In foreach iteration:
 
@@ -461,12 +461,15 @@ actions:
   deploy:
     forEach:
       over: _.regions
-      as: region
+      as: __region
     inputs:
       cmd:
-        - "deploy-to-{{ __item }}"
-        - "verify-deployment-{{ __item }}"
+        - "deploy-to-{{ __region }}"
+        - "verify-deployment-{{ __region }}"
 ```
+
+- Omit `as:` to use the default `__item` alias.
+- Provide an alias starting with `__` (for example `__region`) when you need a clearer name.
 
 ## Best Practices
 

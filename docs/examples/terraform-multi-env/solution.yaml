@@ -149,10 +149,10 @@ spec:
         path: templates/terraform
       foreach:
         over: _.environments
-        as: env
+        as: __env
       when: _.environments != null && _.environments.size() > 0
       outputs:
-        path: ./terraform/{{ _.env }}
+        path: ./terraform/{{ __env }}
 
   # Actions perform side effects - write rendered templates to disk
   actions:

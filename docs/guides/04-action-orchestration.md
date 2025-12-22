@@ -21,9 +21,9 @@ actions:
     inputs:
       cmd:
         - "echo Building {{ _.projectName }}"
-        - "go build -o bin/{{ _.projectName }}"
+        as: __env                 # Foreach alias must start with "__"
 ```
-
+        endpoint: https://deploy.example.com/{{ __env }}
 ## Providers
 
 Actions use **providers** to execute operations. Common providers:
@@ -32,7 +32,8 @@ Actions use **providers** to execute operations. Common providers:
 |----------|---------|---------|
 | `shell` (sh) | Execute shell commands | `go build`, `docker build` |
 | `api` | Make HTTP requests | Webhooks, REST APIs |
-| `filesystem` | File operations | Create, copy, delete files |
+  - `__item` - Default name when no alias is provided
+  - Custom alias (e.g., `__env`) - Available when `as:` sets a name starting with `__`
 | `git` | Git operations | Clone, commit, push |
 | `go-template` | Render Go templates | Generate files |
 | `cel` | Execute CEL expressions | Compute values |
@@ -182,9 +183,9 @@ actions:
     provider: api
     foreach:
       over: _.environments      # Array resolver
-      as: env                   # Available as __item
+      as: __env                 # Foreach alias must start with "__"
     inputs:
-      endpoint: https://deploy.example.com/{{ __item }}
+      endpoint: https://deploy.example.com/{{ __env }}
       method: POST
       body: '{"service": "{{ _.serviceName }}"}'
 ```
@@ -194,7 +195,8 @@ With `environments: ["dev", "staging", "prod"]`, this deploys 3 times.
 ### Foreach Context
 
 In foreach iterations:
-- `__item` - Current item from the array
+- `__item` - Default name when `as:` is omitted
+- Custom alias (e.g., `__env`) - Set via `as:` and must start with "__"
 - `_` - All resolvers (unchanged)
 
 ```yaml
@@ -203,14 +205,14 @@ actions:
     provider: api
     foreach:
       over: _.recipients
-      as: recipient
+      as: __recipient
     inputs:
       endpoint: https://notify.example.com/send
       method: POST
       body: |
         {
-          "to": "{{ __item.email }}",
-          "message": "Deployed {{ _.version }} to {{ __item.region }}"
+          "to": "{{ __recipient.email }}",
+          "message": "Deployed {{ _.version }} to {{ __recipient.region }}"
         }
 ```
 
@@ -225,9 +227,9 @@ actions:
     when: _.deployEnabled == true
     foreach:
       over: _.environments
-      as: env
+      as: __env
     inputs:
-      endpoint: https://deploy.example.com/{{ __item }}
+      endpoint: https://deploy.example.com/{{ __env }}
       method: POST
 ```
 
@@ -243,15 +245,15 @@ actions:
     provider: shell
     foreach:
       over: _.regions
-      as: region
+      as: __region
     inputs:
       cmd:
         # Only deploy non-dev regions in production
         - |
-          if [[ "{{ _.environment }}" == "prod" && "{{ __item }}" == "dev" ]]; then
+          if [[ "{{ _.environment }}" == "prod" && "{{ __region }}" == "dev" ]]; then
             echo "Skipping dev region in prod"
           else
-            deploy-to-{{ __item }}
+            deploy-to-{{ __region }}
           fi
 ```
 
@@ -279,9 +281,9 @@ actions:
     when: _.pushImages == true
     foreach:
       over: _.registries
-      as: registry
+      as: __registry
     inputs:
-      endpoint: https://{{ __item }}/push
+      endpoint: https://{{ __registry }}/push
       method: POST
       body: '{"image": "myapp:latest"}'
 
@@ -377,15 +379,15 @@ actions:
     dependsOn: [build]
     foreach:
       over: _.deploymentTargets
-      as: target
+      as: __target
     inputs:
-      endpoint: https://deploy.example.com/environments/{{ __item.name }}
+      endpoint: https://deploy.example.com/environments/{{ __target.name }}
       method: POST
       body: |
         {
           "image": "myapp:latest",
-          "replicas": {{ __item.replicas }},
-          "resources": {{ __item.resources | toJson }}
+          "replicas": {{ __target.replicas }},
+          "resources": {{ __target.resources | toJson }}
         }
 ```
 
@@ -600,10 +602,10 @@ actions:
   deploy:
     foreach:
       over: _.environments  # Must be array
-      as: env
+      as: __env
     inputs:
       cmd:
-        - deploy-to-{{ __item }}
+        - deploy-to-{{ __env }}
 ```
 
 ## Examples in Repository

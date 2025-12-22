@@ -63,7 +63,7 @@ spec:
       when: condition
       foreach:
         over: _.arrayResolver
-        as: item
+        as: __item
       dependsOn:
         - other-action
       inputs: {}

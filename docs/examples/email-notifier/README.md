@@ -21,7 +21,7 @@ The solution sends personalized emails to a list of recipients by:
 ### Actions with Foreach and API Provider
 
 - **Foreach iteration**: Action iterates over each recipient in the array
-- **Item binding**: `foreach: {over: _.recipients, as: recipient}` makes `_.recipient` available for current item
+- **Item binding**: `foreach: {over: _.recipients, as: __recipient}` makes `__recipient` available for the current item (aliases must start with `__`)
 - **API payload**: Constructs SendGrid API payload with personalized recipient
 - **Inline HTML**: Email body inlined in action (no separate template needed for API payloads)
 - **Outputs**: Returns count of emails sent and last recipient processed
@@ -83,8 +83,8 @@ scafctl run solution:email-notifier \
 
 1. **Complex CLI Input**: JSON arrays with nested objects passed via `-r` flag
 2. **Resolver Validation**: CEL expressions validate object structure before action runs
-3. **Foreach Pattern**: Same action runs once per recipient with `{{ __item }}` binding
-4. **Template Context**: Templates receive both resolver context (`_.senderName`) and foreach item (`__item.name`)
+3. **Foreach Pattern**: Same action runs once per recipient with `{{ __recipient }}` binding
+4. **Template Context**: Templates receive both resolver context (`_.senderName`) and foreach alias (`__recipient.name`)
 5. **API Integration**: Provider configuration references environment variables (`SENDGRID_API_KEY`)
 6. **Conditional Actions**: `when` clause prevents unnecessary API calls with empty recipient list
 

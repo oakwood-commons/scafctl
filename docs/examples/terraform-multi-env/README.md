@@ -34,8 +34,8 @@ terraform/
 
 - **Resolver dependencies**: Template declares `resolvers: [projectId, region, stateBucket, env]`
 - **Dependency resolution**: Engine resolves declared dependencies from `_` context
-- **Foreach binding**: `as: env` makes `_.env` available for current iteration
-- **Output mapping**: Template declares output path via `outputs: {path: ./terraform/{{ _.env }}}`
+- **Foreach binding**: `as: __env` makes `__env` available for the current iteration (aliases must start with `__`)
+- **Output mapping**: Template declares output path via `outputs: {path: ./terraform/{{ __env }}}`
 - **Multi-file generation**: Filesystem template produces multiple files per environment
 - **Conditional rendering**: Template skips rendering if `when` condition is false
 
@@ -120,7 +120,7 @@ The solution follows the standard scafctl lifecycle:
 3. **No Template Declarations in Actions**: Actions don't reference templates—they consume resolver context `_`
 4. **Single Data Flow**: Everything flows through the resolver model
 5. **Output Mapping**: Templates declare output paths via `outputs:` field
-6. **Foreach Binding**: Template `foreach: {over: _.environments, as: env}` makes `_.env` available during rendering
+6. **Foreach Binding**: Template `foreach: {over: _.environments, as: __env}` exposes the current value as `__env`
 7. **Conditional Rendering**: `when:` in templates skips rendering if condition is false
 8. **Conditional Execution**: `when:` in actions skips execution if condition is false
 

@@ -26,7 +26,7 @@ actions:
     # Optional: Iterate over array
     forEach:
       over: _.arrayResolver
-      as: itemName
+      as: __itemName
 
     # Inputs passed to provider
     inputs:
@@ -190,7 +190,7 @@ Run action multiple times over a collection:
 ```yaml
 forEach:
   over: _.environments      # Array resolver to iterate
-  as: env                   # Available as __item in inputs
+  as: __env                 # Foreach alias must start with "__"
 ```
 
 ```yaml
@@ -200,28 +200,29 @@ actions:
     provider: api
     forEach:
       over: _.deployTargets
-      as: target
+      as: __target
     inputs:
-      endpoint: https://deploy.example.com/{{ __item.name }}
+      endpoint: https://deploy.example.com/{{ __target.name }}
       method: POST
-      body: '{"replicas": {{ __item.replicas }}}'
+      body: '{"replicas": {{ __target.replicas }}}'
 ```
 
 ### Foreach Context
 
 Inside foreach:
-- `__item` - Current item from the array
+- `__item` - Default alias when `as:` is omitted
+- Custom alias (e.g., `__region`) - Set via `as:` and must begin with "__"
 - `_` - All resolvers (unchanged)
 
 ```yaml
 forEach:
   over: _.regions
-  as: region
+  as: __region
 
 inputs:
   cmd:
-    - "echo Deploying to {{ __item }}"
-    - "deploy-to-{{ __item }}"
+    - "echo Deploying to {{ __region }}"
+    - "deploy-to-{{ __region }}"
 ```
 
 ### Foreach with When
@@ -234,11 +235,11 @@ actions:
     when: _.deployEnabled == true
     forEach:
       over: _.environments
-      as: env
+      as: __env
     provider: shell
     inputs:
       cmd:
-        - "deploy-to-{{ __item }}"
+        - "deploy-to-{{ __env }}"
 ```
 
 If `when:` is false, entire foreach is skipped.
@@ -423,15 +424,15 @@ actions:
     dependsOn: [build]
     forEach:
       over: _.regions
-      as: region
+      as: __region
     provider: api
     inputs:
-      endpoint: https://deploy.{{ __item }}.example.com/trigger
+      endpoint: https://deploy.{{ __region }}.example.com/trigger
       method: POST
       body: |
         {
           "image": "myapp:{{ _.version }}",
-          "replicas": {{ __item.replicas }}
+          "replicas": {{ __region.replicas }}
         }
 ```
 

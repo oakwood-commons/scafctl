@@ -314,9 +314,9 @@ actions:
     provider: api
     forEach:
       over: _.regions
-      as: region
+      as: __region
     inputs:
-      endpoint: https://{{ __item.api }}/deploy
+      endpoint: https://{{ __region.api }}/deploy
       method: POST
       headers:
         Authorization: Bearer {{ _.apiToken }}
@@ -324,7 +324,7 @@ actions:
         {
           "service": "{{ _.serviceName }}",
           "version": "{{ _.version }}",
-          "replicas": {{ __item.replicas }}
+          "replicas": {{ __region.replicas }}
         }
 
   verify:
@@ -332,11 +332,11 @@ actions:
     dependsOn: [deploy]
     forEach:
       over: _.regions
-      as: region
+      as: __region
     inputs:
       cmd:
-        - "curl -f https://{{ __item.hostname }}/health"
-        - "echo 'Deployment verified in {{ __item.name }}'"
+        - "curl -f https://{{ __region.hostname }}/health"
+        - "echo 'Deployment verified in {{ __region.name }}'"
 ```
 
 ### Pattern 4: Notification

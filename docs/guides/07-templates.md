@@ -265,7 +265,7 @@ templates:
             environment: {{ _.environment }}
     foreach:
       over: _.regions
-      as: region
+      as: __region
 ```
 
 With `regions: ["us-east", "us-west", "eu-central"]`, generates:
