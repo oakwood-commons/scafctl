@@ -42,14 +42,15 @@ transform:
     - expr: __self.toLowerCase()
 
 # At action level
-actions:
-  deploy:
-    when: _.environment == "prod" && _.approved == true
-    provider: api
-    inputs:
-      endpoint: https://deploy.example.com/trigger
-      method: POST
-
+spec:
+  actions:
+    deploy:
+      when: _.environment == "prod" && _.approved == true
+      provider: api
+      inputs:
+        endpoint: https://deploy.example.com/trigger
+        method: POST
+  
 # At item level
 transform:
   into:
@@ -89,13 +90,14 @@ transform:
 Use CEL for action dependencies:
 
 ```yaml
-actions:
-  deploy:
-    dependsOn: [build, test, validate]
-    provider: api
-    inputs:
-      endpoint: https://deploy.example.com
-      method: POST
+spec:
+  actions:
+    deploy:
+      dependsOn: [build, test, validate]
+      provider: api
+      inputs:
+        endpoint: https://deploy.example.com
+        method: POST
 ```
 
 ## When to Use Templating
@@ -105,13 +107,14 @@ actions:
 Use templating in shell commands:
 
 ```yaml
-actions:
-  build:
-    provider: shell
-    inputs:
-      cmd:
-        - "echo Building {{ _.projectName }}"
-        - "go build -o bin/{{ _.projectName }} ./cmd/main.go"
+spec:
+  actions:
+    build:
+      provider: shell
+      inputs:
+        cmd:
+          - "echo Building {{ _.projectName }}"
+          - "go build -o bin/{{ _.projectName }} ./cmd/main.go"
 ```
 
 ### 2. Paths
@@ -323,22 +326,23 @@ branch: "{{ lower _.feature }}-{{ .version }}"
 Often you need both:
 
 ```yaml
-actions:
-  deploy:
-    # CEL condition (logic)
-    when: _.deployEnabled == true && _.version != "0.0.0-dev"
-
-    # CEL foreach (iteration)
-    forEach:
-      over: _.deploymentTargets
-      as: __target
-
-    # Templating in command (text rendering)
-    provider: shell
-    inputs:
-      cmd:
-        - "echo Deploying to {{ __target.region }}"
-        - "deploy-service --name {{ _.serviceName }} --region {{ __target.region }}"
+spec:
+  actions:
+    deploy:
+      # CEL condition (logic)
+      when: _.deployEnabled == true && _.version != "0.0.0-dev"
+  
+      # CEL foreach (iteration)
+      forEach:
+        over: _.deploymentTargets
+        as: __target
+  
+      # Templating in command (text rendering)
+      provider: shell
+      inputs:
+        cmd:
+          - "echo Deploying to {{ __target.region }}"
+          - "deploy-service --name {{ _.serviceName }} --region {{ __target.region }}"
 ```
 
 ## Common Mistakes
@@ -352,17 +356,19 @@ path: ./config/{{ _.environment == "prod" ? "prod" : "dev" }}/settings.yaml
 
 ✅ **Correct**: Use CEL computed value
 ```yaml
-resolvers:
-  configDir:
-    resolve:
-      from:
-        - provider: expression
-          expr: _.environment == "prod" ? "prod" : "dev"
-
-actions:
-  setup:
-    inputs:
-      path: ./config/{{ _.configDir }}/settings.yaml
+spec:
+  resolvers:
+    configDir:
+      resolve:
+        from:
+          - provider: expression
+            expr: _.environment == "prod" ? "prod" : "dev"
+  
+spec:
+  actions:
+    setup:
+      inputs:
+        path: ./config/{{ _.configDir }}/settings.yaml
 ```
 
 ### Mistake 2: Templating in Expression
@@ -405,18 +411,20 @@ message: |
 
 ✅ **Correct**: Use CEL-computed resolver
 ```yaml
-resolvers:
-  isReadyForProd:
-    resolve:
-      from:
-        - provider: expression
-          expr: _.environment == "prod" && _.version > "1.0"
-
-actions:
-  deploy:
-    when: _.isReadyForProd == true
-    inputs:
-      cmd: [deploy-to-prod]
+spec:
+  resolvers:
+    isReadyForProd:
+      resolve:
+        from:
+          - provider: expression
+            expr: _.environment == "prod" && _.version > "1.0"
+  
+spec:
+  actions:
+    deploy:
+      when: _.isReadyForProd == true
+      inputs:
+        cmd: [deploy-to-prod]
 ```
 
 ## Context Variables
@@ -457,15 +465,16 @@ validate:
 In foreach iteration:
 
 ```yaml
-actions:
-  deploy:
-    forEach:
-      over: _.regions
-      as: __region
-    inputs:
-      cmd:
-        - "deploy-to-{{ __region }}"
-        - "verify-deployment-{{ __region }}"
+spec:
+  actions:
+    deploy:
+      forEach:
+        over: _.regions
+        as: __region
+      inputs:
+        cmd:
+          - "deploy-to-{{ __region }}"
+          - "verify-deployment-{{ __region }}"
 ```
 
 - Omit `as:` to use the default `__item` alias.

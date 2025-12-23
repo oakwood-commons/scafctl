@@ -9,42 +9,45 @@ Each resolver follows the same structure, regardless of complexity.
 ## Full Schema
 
 ```yaml
-resolvers:
-  resolverName:
-    description: What this resolver produces
-
-    # Phase 1: Resolve - Gather data
-    resolve:
-      from:
-        - provider: cli
-          key: keyName
-        - provider: env
-          key: ENV_VAR
-        - provider: git
-          field: branch
-        - provider: state
-          key: previousResolver
-        - provider: expression
-          expr: _.other + "-value"
-        - provider: static
-          value: fallback-default
-
-    # Phase 2: Transform - Process data
-    transform:
-      when: _.condition == true
-      until: __self != ""
-      into:
-        - expr: __self.toLowerCase()
-        - expr: __self.replace('_', '-')
-          when: _.environment == "prod"
-        - expr: __self + "-final"
-
-    # Phase 3: Validate - Enforce constraints
-    validate:
-      - expr: __self.matches("^[a-z0-9-]+$")
-        message: "Must be lowercase alphanumeric with hyphens"
-      - expr: size(__self) >= 2 && size(__self) <= 50
-        message: "Must be 2-50 characters"
+spec:
+  resolvers:
+    resolverName:
+      description: What this resolver produces
+  
+      # Phase 1: Resolve - Gather data
+      resolve:
+        from:
+          - provider: cli
+            key: keyName
+          - provider: env
+            key: ENV_VAR
+            when: _.environment != "local"
+          - provider: git
+            field: branch
+          - provider: state
+            key: previousResolver
+          - provider: expression
+            expr: _.other + "-value"
+          - provider: static
+            value: fallback-default
+        until: __self != ""
+  
+      # Phase 2: Transform - Process data
+      transform:
+        when: _.condition == true
+        until: __self != ""
+        into:
+          - expr: __self.toLowerCase()
+          - expr: __self.replace('_', '-')
+            when: _.environment == "prod"
+          - expr: __self + "-final"
+  
+      # Phase 3: Validate - Enforce constraints
+      validate:
+        - expr: __self.matches("^[a-z0-9-]+$")
+          message: "Must be lowercase alphanumeric with hyphens"
+        - expr: size(__self) >= 2 && size(__self) <= 50
+          message: "Must be 2-50 characters"
 ```
 
 ## Phase 1: Resolve
@@ -62,7 +65,7 @@ resolve:
 
 #### CLI Input
 
-Highest priority - user input from command line.
+User input from command line.
 
 ```yaml
 - provider: cli
@@ -139,16 +142,13 @@ For complex values:
     key2: value2
 ```
 
-### Source Priority
+### Source Evaluation Order
 
-Sources evaluated in order; first non-null wins:
+Sources are tried **in the order they appear in the `from:` array**. First non-null wins by default (or use `until:` for custom logic):
 
-1. CLI input (highest)
-2. Environment variables
-3. Git metadata
-4. State
-5. Expression
-6. Static (lowest)
+- Order determined by your YAML, not by provider type
+- Try sources sequentially until one returns non-null
+- Use `until:` condition to customize what "wins"
 
 ## Phase 2: Transform
 
@@ -253,6 +253,7 @@ validate:
     message: error message
   - expr: another-condition
     message: another error
+    when: conditional-gate  # Optional: only validate if true
 ```
 
 ### Context
@@ -296,6 +297,37 @@ validate:
     message: "Must be dev, staging, or prod"
 ```
 
+#### Conditional Validation
+
+```yaml
+validate:
+  - expr: __self.startsWith('https://')
+    message: "Production URLs must use HTTPS"
+    when: _.environment == 'production'
+  - expr: size(__self) <= 100
+    message: "URL length must be 100 characters or less"
+    when: _.environment != 'development'
+```
+
+The `when` condition is evaluated first. If it returns `false`, the validation rule is skipped.
+
+#### Dynamic Error Messages
+
+Messages support Go templates for context-aware errors:
+
+```yaml
+validate:
+  - expr: size(__self) >= 2 && size(__self) <= 50
+    message: "Name '{{ __self }}' must be 2-50 characters (got {{ size __self }})"
+  - expr: __self.matches("^[a-z0-9-]+$")
+    message: "Invalid name '{{ __self }}' for environment {{ _.environment }}"
+```
+
+Available in message templates:
+- `{{ __self }}` - Current value
+- `{{ _.resolverName }}` - Any resolver value
+- Go template functions (e.g., `{{ size __self }}`)
+
 ### Shorthand: Regex Validation
 
 ```yaml
@@ -310,6 +342,88 @@ validate:
   - expr: __self.matches("^[a-z0-9-]+$")
     message: "Must be lowercase alphanumeric"
 ```
+
+## Conditional Resolution Patterns
+
+### Source-Level Conditionals with `when`
+
+Skip sources based on runtime context:
+
+```yaml
+resolve:
+  from:
+    - provider: vault
+      when: _.environment == 'production'
+      inputs:
+        path: "secret/prod/api-key"
+    - provider: env
+      when: _.environment != 'production'
+      inputs:
+        key: API_KEY
+    - provider: static
+      inputs:
+        value: "dev-api-key"
+```
+
+Each source's `when` condition is evaluated with access to all resolved values via `_`.
+
+### Phase-Level Early Exit with `until`
+
+Stop trying sources when a condition is met:
+
+```yaml
+resolve:
+  from:
+    - provider: cli
+      inputs:
+        key: config
+    - provider: env
+      inputs:
+        key: CONFIG_PATH
+    - provider: git
+      inputs:
+        field: config
+    - provider: static
+      inputs:
+        value: "./config.yaml"
+  until: __self != ""
+```
+
+The `until` condition is checked after each successful source. When it evaluates to `true`, no further sources are tried.
+
+Common patterns:
+- `until: __self != ""` - Stop at first non-empty value
+- `until: __self.startsWith("http")` - Stop at first URL
+- `until: size(__self) > 0` - Stop at first non-empty collection
+
+### Combined Conditionals
+
+```yaml
+resolve:
+  from:
+    - provider: vault
+      when: _.useVault == true && _.environment == 'production'
+      inputs:
+        path: "secret/database"
+    - provider: api
+      when: _.environment != 'local'
+      inputs:
+        endpoint: "https://config-service/db"
+    - provider: env
+      inputs:
+        key: DATABASE_URL
+    - provider: static
+      inputs:
+        value: "postgresql://localhost:5432/dev"
+  until: __self.startsWith("postgresql://")
+```
+
+This resolver:
+1. Uses Vault only in production when enabled (source-level `when`)
+2. Uses API in non-local environments (source-level `when`)
+3. Always tries environment variables (no `when`)
+4. Falls back to local default (no `when`)
+5. Stops as soon as a valid PostgreSQL URL is found (phase-level `until`)
 
 ## Phase 4: Emit
 
@@ -400,30 +514,31 @@ config:
 ### Derived Resolver
 
 ```yaml
-resolvers:
-  org:
-    resolve:
-      from:
-        - provider: cli
-          key: org
-
-  repo:
-    resolve:
-      from:
-        - provider: cli
-          key: repo
-
-  repoUrl:
-    description: Derived from org and repo
-    resolve:
-      from:
-        - provider: expression
-          expr: "https://github.com/" + _.org + "/" + _.repo + ".git"
+spec:
+  resolvers:
+    org:
+      resolve:
+        from:
+          - provider: cli
+            key: org
+  
+    repo:
+      resolve:
+        from:
+          - provider: cli
+            key: repo
+  
+    repoUrl:
+      description: Derived from org and repo
+      resolve:
+        from:
+          - provider: expression
+            expr: "https://github.com/" + _.org + "/" + _.repo + ".git"
 ```
 
 ## Best Practices
 
-1. **Start with CLI input** - User choice is highest priority
+1. **Order sources intentionally** - First source in `from:` array is tried first
 2. **Use environment variables for secrets** - Don't hardcode
 3. **Use expressions for computed values** - Avoid duplication
 4. **Keep transforms simple** - Multiple small steps > one complex step
@@ -440,15 +555,18 @@ resolvers:
 |-------|------|----------|-------------|
 | `description` | string | Yes | What this resolver produces |
 | `resolve.from` | array | Yes | List of resolution sources |
+| `resolve.from[].when` | CEL expr | No | Skip this source if false |
+| `resolve.until` | CEL expr | No | Stop trying sources when true |
 | `transform.when` | CEL expr | No | Skip transform if false |
 | `transform.until` | CEL expr | No | Stop remaining items when true |
 | `transform.into` | array | No | Array of transform expressions |
 | `transform.into[].expr` | CEL expr | Yes | Expression to execute |
 | `transform.into[].when` | CEL expr | No | Skip item if false |
 | `validate[]` | array | No | Array of validation rules |
-| `validate[].expr` | CEL expr | Yes | Condition that must be true |
-| `validate[].message` | string | Yes | Error message if false |
+| `validate[].expr` | CEL expr | Yes* | Condition that must be true (required if regex not provided) |
+| `validate[].message` | string/template | Yes | Error message (supports Go templates with `{{ __self }}` and `{{ _.key }}`) |
 | `validate[].regex` | pattern | No | Shorthand for regex pattern |
+| `validate[].when` | CEL expr | No | Skip validation rule if false |
 
 ## Next Steps
 

@@ -49,21 +49,22 @@ transform:
 Access to all resolved resolver values:
 
 ```yaml
-resolvers:
-  version:
-    resolve:
-      from: [...]
+spec:
+  resolvers:
+    version:
+      resolve:
+        from: [...]
 
-  imageName:
-    resolve:
-      from:
-        - provider: static
-          value: "app"
+    imageName:
+      resolve:
+        from:
+          - provider: static
+            value: "app"
 
-    transform:
-      into:
-        - expr: __self + ":" + _.version  # Access _.version
-        - expr: __self + "_" + _.hash     # Access _.hash
+      transform:
+        into:
+          - expr: __self + ":" + _.version  # Access _.version
+          - expr: __self + "_" + _.hash     # Access _.hash
 ```
 
 ## Conditional Transforms
@@ -163,110 +164,123 @@ Handles both formats correctly.
 ### Pattern 1: Normalization Chain
 
 ```yaml
-resolvers:
-  projectName:
-    resolve:
-      from:
-        - provider: cli
-          key: name
+spec:
+  resolvers:
+    projectName:
+      resolve:
+        from:
+          - provider: cli
+            inputs:
+              key: name
 
-    transform:
-      into:
-        - expr: __self.toLowerCase()
-        - expr: __self.replace('_', '-')
-        - expr: __self.replace(' ', '-')
+      transform:
+        into:
+          - expr: __self.toLowerCase()
+          - expr: __self.replace('_', '-')
+          - expr: __self.replace(' ', '-')
 ```
 
 ### Pattern 2: Fallback with Until
 
 ```yaml
-resolvers:
-  branch:
-    resolve:
-      from:
-        - provider: cli
-          key: branch
-        - provider: static
-          value: ""
+spec:
+  resolvers:
+    branch:
+      resolve:
+        from:
+          - provider: cli
+            inputs:
+              key: branch
+          - provider: static
+            inputs:
+              value: ""
 
-    transform:
-      until: __self != ""
-      into:
-        - expr: _.userBranch != "" ? _.userBranch : __self
-        - expr: _.gitBranch != "" ? _.gitBranch : __self
-        - expr: "main"
+      transform:
+        until: __self != ""
+        into:
+          - expr: _.userBranch != "" ? _.userBranch : __self
+          - expr: _.gitBranch != "" ? _.gitBranch : __self
+          - expr: "main"
 ```
 
 ### Pattern 3: Type-Based Processing
 
 ```yaml
-resolvers:
-  config:
-    resolve:
-      from:
-        - provider: cli
-          key: config
+spec:
+  resolvers:
+    config:
+      resolve:
+        from:
+          - provider: cli
+            inputs:
+              key: config
 
-    transform:
-      into:
-        # Try parsing as JSON
-        - expr: |
-            type(__self) == "string" ?
-              (try(parseJson(__self)) catch __self) : __self
+      transform:
+        into:
+          # Try parsing as JSON
+          - expr: |
+              type(__self) == "string" ?
+                (try(parseJson(__self)) catch __self) : __self
 
-        # If it's an object, ensure required fields
-        - expr: |
-            type(__self) == "object" ?
-              __self + {validated: true} : __self
+          # If it's an object, ensure required fields
+          - expr: |
+              type(__self) == "object" ?
+                __self + {validated: true} : __self
 ```
 
 ### Pattern 4: Environment-Specific Transform
 
 ```yaml
-resolvers:
-  deploymentPath:
-    resolve:
-      from:
-        - provider: cli
-          key: path
+spec:
+  resolvers:
+    deploymentPath:
+      resolve:
+        from:
+          - provider: cli
+            inputs:
+              key: path
 
-    transform:
-      into:
-        # Add environment directory
-        - expr: __self + "/" + _.environment
+      transform:
+        into:
+          # Add environment directory
+          - expr: __self + "/" + _.environment
 
-        # Only uppercase in production
-        - expr: |
-            _.environment == "prod" ?
-              __self.toUpperCase() : __self
-          when: _.environment != "dev"
+          # Only uppercase in production
+          - expr: |
+              _.environment == "prod" ?
+                __self.toUpperCase() : __self
+            when: _.environment != "dev"
 ```
 
 ### Pattern 5: Derived Values from Multiple Resolvers
 
 ```yaml
-resolvers:
-  org:
-    resolve:
-      from:
-        - provider: cli
-          key: org
+spec:
+  resolvers:
+    org:
+      resolve:
+        from:
+          - provider: cli
+            inputs:
+              key: org
 
-  repo:
-    resolve:
-      from:
-        - provider: cli
-          key: repo
+    repo:
+      resolve:
+        from:
+          - provider: cli
+            inputs:
+              key: repo
 
-  repoUrl:
-    resolve:
-      from:
-        - provider: expression
-          expr: "https://github.com/" + _.org + "/" + _.repo
+    repoUrl:
+      resolve:
+        from:
+          - provider: expression
+            inputs:
+              expr: "https://github.com/" + _.org + "/" + _.repo
 
-    transform:
-      into:
-        - expr: __self + ".git"
+      transform:
+        into:
+          - expr: __self + ".git"
 ```
 
 ## Advanced Techniques
@@ -307,26 +321,29 @@ transform:
 ### Retry Logic with Transform
 
 ```yaml
-resolvers:
-  data:
-    resolve:
-      from:
-        - provider: api
-          endpoint: https://api.example.com/data
+spec:
+  resolvers:
+    data:
+      resolve:
+        from:
+          - provider: api
+            inputs:
+              endpoint: https://api.example.com/data
+              method: GET
 
-    transform:
-      until: __self != null && type(__self) == "object"
-      into:
-        # First attempt: fetch as-is
-        - expr: __self
+      transform:
+        until: __self != null && type(__self) == "object"
+        into:
+          # First attempt: fetch as-is
+          - expr: __self
 
-        # Retry: parse if string
-        - expr: |
-            type(__self) == "string" ?
-              parseJson(__self) : __self
+          # Retry: parse if string
+          - expr: |
+              type(__self) == "string" ?
+                parseJson(__self) : __self
 
-        # Fallback: return empty object
-        - expr: __self || {}
+          # Fallback: return empty object
+          - expr: __self || {}
 ```
 
 ## Performance Considerations
