@@ -36,6 +36,8 @@ Examples:
 ```
   -r <name>=<value>        Provide input to a resolver (repeatable)
   -e, --expression <cel>   Project data from the resolver context (repeatable, defaults to -e _)
+      --action <name>      Execute specific action(s) with minimal resolvers (repeatable)
+      --resolve-all        Execute all resolvers even when using --action
       --dry-run            Resolve and render without executing side effects
       --no-cache           Ignore internal caches and recompute resolver values
       --interactive        Prompt for missing resolver values when possible
@@ -44,13 +46,40 @@ Examples:
       --debug              Emit debug logs to stderr
 ```
 
+## Minimal Resolver Execution
+
+When you use `--action` to target specific actions, scafctl automatically executes **only the resolvers those actions need**:
+
+```bash
+# Execute only 'deploy' action and its required resolvers
+scafctl run solution:myapp --action deploy
+
+# Execute multiple actions with their combined required resolvers
+scafctl run solution:myapp --action build --action test
+
+# Force execution of all resolvers (disable optimization)
+scafctl run solution:myapp --action deploy --resolve-all
+```
+
+**How it works:**
+- Dependency analysis identifies which resolvers each action references (inputs, conditions, foreach)
+- Transitive dependencies are included (if A needs B, B needs C → all three execute)
+- Action `dependsOn` chains are followed automatically
+- Result: Fast execution by skipping unnecessary resolvers
+
+**Example:**
+
+If your solution has 100 resolvers but `deploy` action only needs 5 of them, scafctl executes only those 5 (plus their dependencies). This significantly improves performance for large solutions.
+
 ## Resource Behavior
 
-- **solution** — Resolves all resolvers, renders templates only if referenced, executes actions only when selected and not in `--dry-run`.
+- **solution** — Without `--action`: Resolves all resolvers, renders templates only if referenced, executes all actions. With `--action`: Resolves only required resolvers, executes specified action(s).
 - **resolver** — Resolves a single resolver without running templates or actions.
 - **provider** — Executes a provider standalone for inspection or ad-hoc usage.
 - **template** — Renders a template without writing files (combine with actions to persist output).
 - **action** — Executes a single action (can be previewed with `--dry-run`).
+
+**Note on minimal execution:** When using `--action`, only the resolvers needed by the specified action(s) are executed. Use `--resolve-all` to disable this optimization.
 
 ## Examples
 

@@ -28,26 +28,30 @@ Each phase serves a specific purpose:
 Example:
 
 ```yaml
-resolvers:
-  projectName:
-    resolve:
-      from:
-        - provider: cli          # User input (highest priority)
-          key: name
-        - provider: env          # Environment variable
-          key: PROJECT_NAME
-        - provider: static       # Default (lowest priority)
-          value: "my-app"
+spec:
+  resolvers:
+    projectName:
+      resolve:
+        from:
+          - provider: cli          # 1st: Try CLI input
+            inputs:
+              key: name
+          - provider: env          # 2nd: Try environment variable
+            inputs:
+              key: PROJECT_NAME
+          - provider: static       # 3rd: Use default
+            inputs:
+              value: "my-app"
 
-    transform:
-      into:
-        - expr: __self.toLowerCase()
+      transform:
+        into:
+          - expr: __self.toLowerCase()
 
-    validate:
-      - expr: __self.matches("^[a-z0-9-]+$")
-        message: "Must be lowercase alphanumeric with hyphens"
+      validate:
+        - expr: __self.matches("^[a-z0-9-]+$")
+          message: "Must be lowercase alphanumeric with hyphens"
 
-    # Result emitted as _.projectName
+      # Result emitted as _.projectName
 ```
 
 ### Actions: Side Effects on Demand
@@ -55,15 +59,16 @@ resolvers:
 Actions execute side effects only when explicitly invoked:
 
 ```yaml
-actions:
-  build:
-    description: Build the application
-    provider: shell
-    when: _.version != "0.0.0-dev"  # Skip if dev version
-    inputs:
-      cmd:
-        - "echo Building {{ _.projectName }}"
-        - "go build -o bin/{{ _.projectName }}"
+spec:
+  actions:
+    build:
+      description: Build the application
+      provider: shell
+      when: _.version != "0.0.0-dev"  # Skip if dev version
+      inputs:
+        cmd:
+          - "echo Building {{ _.projectName }}"
+          - "go build -o bin/{{ _.projectName }}"
 ```
 
 Use `when:` to make actions conditional, `dependsOn:` to express dependencies, and `foreach:` to iterate.
@@ -111,9 +116,11 @@ spec:
       resolve:
         from:
           - provider: cli
-            key: greeting
+            inputs:
+              key: greeting
           - provider: static
-            value: "Hello, World!"
+            inputs:
+              value: "Hello, World!"
 
   # Actions execute when requested
   actions:
@@ -134,9 +141,26 @@ scafctl run solution:hello-world
 # Use custom input
 scafctl run solution:hello-world -r greeting="Hello, scafctl!"
 
+# Execute only the 'greet' action (minimal resolver execution)
+scafctl run solution:hello-world --action greet
+
 # See what would happen without executing
 scafctl run solution:hello-world --dry-run
 ```
+
+### Minimal Resolver Execution
+
+When you target specific actions with `--action`, scafctl automatically executes **only the resolvers those actions need**:
+
+```bash
+# Execute only 'deploy' action and its required resolvers
+scafctl run solution:myapp --action deploy
+
+# Execute multiple actions with combined minimal resolvers
+scafctl run solution:myapp --action build --action test
+```
+
+This optimization is automatic and improves performance for solutions with many resolvers. Use `--resolve-all` to disable it.
 
 ### Force a Fresh Run
 
@@ -266,21 +290,22 @@ message: "Deployed {{ _.service }} version {{ _.version }}"
 Use transform with `until:` to implement fallback logic:
 
 ```yaml
-resolvers:
-  branchName:
-    resolve:
-      from:
-        - provider: cli
-          key: branch
-        - provider: static
-          value: ""
+spec:
+  resolvers:
+    branchName:
+      resolve:
+        from:
+          - provider: cli
+            key: branch
+          - provider: static
+            value: ""
 
-    transform:
-      until: __self != ""
-      into:
-        - expr: _.userBranch
-        - expr: _.gitBranch
-        - expr: "main"
+      transform:
+        until: __self != ""
+        into:
+          - expr: _.userBranch
+          - expr: _.gitBranch
+          - expr: "main"
 ```
 
 ### Type-Based Processing
@@ -300,27 +325,28 @@ transform:
 Use `when:` and `dependsOn:` to build DAGs:
 
 ```yaml
-actions:
-  test:
-    provider: shell
-    inputs:
-      cmd: [go, test, ./...]
+spec:
+  actions:
+    test:
+      provider: shell
+      inputs:
+        cmd: [go, test, ./...]
 
-  build:
-    provider: shell
-    dependsOn: [test]
-    when: _.buildEnabled == true
-    inputs:
-      cmd: [go, build, -o, bin/app]
+    build:
+      provider: shell
+      dependsOn: [test]
+      when: _.buildEnabled == true
+      inputs:
+        cmd: [go, build, -o, bin/app]
 
-  deploy:
-    provider: api
-    dependsOn: [build]
-    when: _.environment == "prod"
-    inputs:
-      endpoint: https://api.example.com/deploy
-      method: POST
-      body: '{"image": "{{ _.imageName }}"}'
+    deploy:
+      provider: api
+      dependsOn: [build]
+      when: _.environment == "prod"
+      inputs:
+        endpoint: https://api.example.com/deploy
+        method: POST
+        body: '{"image": "{{ _.imageName }}"}'
 ```
 
 ## Next Steps

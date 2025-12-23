@@ -123,14 +123,15 @@ See [CLI Auth Command](../cli/commands/auth.md). Summary:
 ### Resolver Fetching Token
 
 ```yaml
-resolvers:
-  graphAuth:
-    description: Microsoft Graph access token
-    resolve:
-      from:
-        - provider: auth
-          type: entra
-          scope: https://graph.microsoft.com/.default
+spec:
+  resolvers:
+    graphAuth:
+      description: Microsoft Graph access token
+      resolve:
+        from:
+          - provider: auth
+            type: entra
+            scope: https://graph.microsoft.com/.default
 ```
 
 The `auth` resolver provider calls the token broker. The returned session is projected to `_.graphAuth`.
@@ -138,15 +139,16 @@ The `auth` resolver provider calls the token broker. The returned session is pro
 ### Action Using Token
 
 ```yaml
-actions:
-  notify-graph:
-    provider: api
-    when: _.graphAuth.accessToken != ""
-    inputs:
-      endpoint: https://graph.microsoft.com/v1.0/users
-      method: GET
-      headers:
-        Authorization: "Bearer {{ _.graphAuth.accessToken }}"
+spec:
+  actions:
+    notify-graph:
+      provider: api
+      when: _.graphAuth.accessToken != ""
+      inputs:
+        endpoint: https://graph.microsoft.com/v1.0/users
+        method: GET
+        headers:
+          Authorization: "Bearer {{ _.graphAuth.accessToken }}"
 ```
 
 The API provider can also inspect `_.graphAuth.headers` to reuse provider-supplied headers.

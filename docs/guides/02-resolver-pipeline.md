@@ -12,30 +12,80 @@ This deterministic flow ensures data is gathered, normalized, validated, and mad
 
 ## Phase 1: Resolve
 
-The **resolve phase** gathers data from multiple sources. Sources are evaluated in priority order; the first non-null value wins.
+The **resolve phase** gathers data from multiple sources. Sources are evaluated in the order they appear in the `from:` array. By default, the first non-null value wins. You can customize this behavior with the `until:` condition.
 
-### Source Priority Order
+### Provider Inputs and Go Templates
+
+All provider inputs support **Go templating** via the `{{ }}` syntax. This allows you to reference other resolved values dynamically:
 
 ```yaml
-resolve:
-  from:
-    - provider: cli              # 1. User input (highest priority)
-    - provider: env              # 2. Environment variables
-    - provider: git              # 3. Git repository metadata
-    - provider: state            # 4. Previously resolved values
-    - provider: expression       # 5. CEL expression over other resolvers
-    - provider: static           # 6. Static default (lowest priority)
+spec:
+  resolvers:
+    apiToken:
+      resolve:
+        from:
+          - provider: env
+            inputs:
+              key: API_TOKEN
+
+    config:
+      resolve:
+        from:
+          - provider: api
+            inputs:
+              endpoint: "https://api.example.com/{{ _.environment }}/config"
+              method: GET
+              headers:
+                Authorization: "Bearer {{ _.apiToken }}"
 ```
 
-### CLI Input: Highest Priority
+Template expressions can access:
+- `{{ _.resolverName }}` - Other resolved values
+- Standard Go template functions (see `pkg/gotmpl` for details)
+
+### Source Evaluation Order
+
+Sources are tried **in the exact order you define them**. There is no implicit priority by provider type:
 
 ```yaml
-resolvers:
-  environment:
-    resolve:
-      from:
-        - provider: cli
-          key: env
+spec:
+  resolvers:
+    exampleResolver:
+      resolve:
+        from:
+          - provider: cli              # 1st: Try CLI input first
+            inputs:
+              key: value_key
+          - provider: env              # 2nd: Then environment variable
+            inputs:
+              key: ENV_VAR_NAME
+          - provider: git              # 3rd: Then Git metadata
+            inputs:
+              field: branch
+          - provider: state            # 4th: Then previous state
+            inputs:
+              key: state_key
+          - provider: expression       # 5th: Then CEL expression
+            inputs:
+              expr: _.someResolver + ".suffix"
+          - provider: static           # 6th: Finally static default
+            inputs:
+              value: default_value
+```
+
+You control the order! Rearrange sources to change which is tried first.
+
+### CLI Input Example
+
+```yaml
+spec:
+  resolvers:
+    environment:
+      resolve:
+        from:
+          - provider: cli
+            inputs:
+              key: env
 ```
 
 Run with:
@@ -46,12 +96,14 @@ scafctl run solution:myapp -r env=production
 ### Environment Variables
 
 ```yaml
-resolvers:
-  apiKey:
-    resolve:
-      from:
-        - provider: env
-          key: API_KEY
+spec:
+  resolvers:
+    apiKey:
+      resolve:
+        from:
+          - provider: env
+            inputs:
+              key: API_KEY
 ```
 
 Set before running:
@@ -63,24 +115,28 @@ scafctl run solution:myapp
 ### Git Metadata
 
 ```yaml
-resolvers:
-  gitBranch:
-    resolve:
-      from:
-        - provider: git
-          field: branch
+spec:
+  resolvers:
+    gitBranch:
+      resolve:
+        from:
+          - provider: git
+            inputs:
+              field: branch
 
-  gitTag:
-    resolve:
-      from:
-        - provider: git
-          field: tag
+    gitTag:
+      resolve:
+        from:
+          - provider: git
+            inputs:
+              field: tag
 
-  gitCommit:
-    resolve:
-      from:
-        - provider: git
-          field: commit
+    gitCommit:
+      resolve:
+        from:
+          - provider: git
+            inputs:
+              field: commit
 ```
 
 ### Expressions: Computed Values
@@ -88,44 +144,139 @@ resolvers:
 Use CEL to derive values from other resolvers:
 
 ```yaml
-resolvers:
-  projectName:
-    resolve:
-      from:
-        - provider: cli
-          key: project
+spec:
+  resolvers:
+    projectName:
+      resolve:
+        from:
+          - provider: cli
+            inputs:
+              key: project
 
-  version:
-    resolve:
-      from:
-        - provider: cli
-          key: version
+    version:
+      resolve:
+        from:
+          - provider: cli
+            inputs:
+              key: version
 
-  imageName:
-    resolve:
-      from:
-        - provider: expression
-          expr: _.projectName + ":" + _.version
+    imageName:
+      resolve:
+        from:
+          - provider: expression
+            inputs:
+              expr: _.projectName + ":" + _.version
 ```
 
 The expression runs **after** its dependencies are resolved. Use `_` to access all resolved values.
 
-### Static Defaults: Lowest Priority
+### Static Defaults (Fallback Pattern)
 
 ```yaml
-resolvers:
-  environment:
-    resolve:
-      from:
-        - provider: cli
-          key: env
-        - provider: env
-          key: ENVIRONMENT
-        - provider: static
-          value: development
+spec:
+  resolvers:
+    environment:
+      resolve:
+        from:
+          - provider: cli
+            inputs:
+              key: env
+          - provider: env
+            inputs:
+              key: ENVIRONMENT
+          - provider: static
+            inputs:
+              value: development
 ```
 
-Defaults are fallbacks; they're only used if all higher-priority sources are unavailable.
+This pattern tries CLI first, then environment variable, then falls back to static default. Defaults only run if all previous sources fail or return null.
+
+### Conditional Source Resolution
+
+Use **`when:`** conditions to skip sources based on context, and **`until:`** to stop trying sources early:
+
+#### Skip Sources with `when:`
+
+```yaml
+spec:
+  resolvers:
+    apiEndpoint:
+      resolve:
+        from:
+          - provider: api
+            when: _.environment == 'production'
+            inputs:
+              endpoint: "https://prod-api.example.com/config"
+              
+          - provider: api
+            when: _.environment == 'staging'
+            inputs:
+              endpoint: "https://staging-api.example.com/config"
+              
+          - provider: static
+            inputs:
+              value: "http://localhost:8080"
+```
+
+Only the source matching the current environment will execute.
+
+#### Early Exit with `until:`
+
+```yaml
+spec:
+  resolvers:
+    config:
+      resolve:
+        from:
+          - provider: cli
+            inputs:
+              key: config
+          - provider: env
+            inputs:
+              key: CONFIG_PATH
+          - provider: git
+            inputs:
+              field: config
+          - provider: static
+            inputs:
+              value: "./default-config.yaml"
+        until: __self != ""
+```
+
+The `until:` condition stops trying sources as soon as a non-empty value is found. This is useful for:
+- Performance optimization (skip expensive sources)
+- First-valid-value patterns
+- Custom resolution logic beyond "first non-null"
+
+#### Combined Conditionals
+
+```yaml
+spec:
+  resolvers:
+    databaseUrl:
+      resolve:
+        from:
+          - provider: vault
+            when: _.environment == 'production' && _.useVault == true
+            inputs:
+              path: "secret/prod/database"
+              
+          - provider: env
+            when: _.environment != 'local'
+            inputs:
+              key: DATABASE_URL
+              
+          - provider: static
+            inputs:
+              value: "postgresql://localhost:5432/dev"
+        until: __self.startsWith("postgresql://")
+```
+
+This setup:
+1. Uses Vault only in production when enabled
+2. Uses environment variables in non-local environments
+3. Falls back to local default
+4. Stops as soon as a valid PostgreSQL URL is found
 
 ## Phase 2: Transform
 
@@ -134,16 +285,17 @@ The **transform phase** processes the resolved value. Transforms run sequentiall
 ### Basic Transform
 
 ```yaml
-resolvers:
-  projectName:
-    resolve:
-      from:
-        - provider: cli
-          key: name
+spec:
+  resolvers:
+    projectName:
+      resolve:
+        from:
+          - provider: cli
+            key: name
 
-    transform:
-      into:
-        - expr: __self.toLowerCase()
+      transform:
+        into:
+          - expr: __self.toLowerCase()
 ```
 
 Input: `"MyProject"` → Output: `"myproject"`
@@ -167,22 +319,23 @@ Each step has access to:
 ### Context: Accessing Other Resolvers
 
 ```yaml
-resolvers:
-  version:
-    resolve:
-      from:
-        - provider: static
-          value: "1.2.3"
+spec:
+  resolvers:
+    version:
+      resolve:
+        from:
+          - provider: static
+            value: "1.2.3"
 
-  imageName:
-    resolve:
-      from:
-        - provider: static
-          value: "myapp"
+    imageName:
+      resolve:
+        from:
+          - provider: static
+            value: "myapp"
 
-    transform:
-      into:
-        - expr: __self + ":" + _.version
+      transform:
+        into:
+          - expr: __self + ":" + _.version
 ```
 
 Output: `"myapp:1.2.3"`
@@ -290,6 +443,22 @@ validate:
 
 Equivalent to: `expr: __self.matches("^[a-z0-9-]+$")`
 
+### Conditional Validation
+
+Validation rules can be conditionally applied using `when:`:
+
+```yaml
+validate:
+  - expr: __self.startsWith('https://')
+    message: "Production URLs must use HTTPS"
+    when: _.environment == 'production'
+  - expr: size(__self) <= 100
+    message: "URL must be 100 characters or less"
+    when: _.environment != 'development'
+```
+
+The `when` condition is evaluated first. If it returns `false`, the validation rule is skipped.
+
 ### Complex Validation
 
 ```yaml
@@ -302,6 +471,27 @@ validate:
     message: "Cannot use localhost URLs"
 ```
 
+### Dynamic Error Messages
+
+Validation messages support Go templating for dynamic, context-aware error messages:
+
+```yaml
+validate:
+  - expr: size(__self) >= 2 && size(__self) <= 50
+    message: "Name '{{ __self }}' must be 2-50 characters (got {{ size __self }})"
+  - expr: __self.matches("^[a-z0-9-]+$")
+    message: "Name '{{ __self }}' contains invalid characters (environment: {{ _.environment }})"
+  - expr: !__self.contains(_.blockedWord)
+    message: "Cannot use blocked word '{{ _.blockedWord }}' in '{{ __self }}'"
+```
+
+The message template has access to:
+- `{{ __self }}` - The value being validated
+- `{{ _.resolverName }}` - Any resolved resolver values
+- Standard Go template functions
+
+This enables precise, contextual error messages that help users understand exactly what went wrong.
+
 ## Phase 4: Emit
 
 Once a resolver is resolved, transformed, and validated, its value is **emitted**. It becomes available to:
@@ -312,40 +502,98 @@ Once a resolver is resolved, transformed, and validated, its value is **emitted*
 
 ```yaml
 # Resolvers can depend on other resolvers
-resolvers:
-  projectName: {...}
-  version: {...}
+spec:
+  resolvers:
+    projectName: {...}
+    version: {...}
 
-  imageName:
-    resolve:
-      from:
-        - provider: expression
-          expr: _.projectName + ":" + _.version  # Uses emitted values
+    imageName:
+      resolve:
+        from:
+          - provider: expression
+            expr: _.projectName + ":" + _.version  # Uses emitted values
 ```
 
 ## Execution Order
 
-Resolvers form a **Directed Acyclic Graph (DAG)** based on dependencies. They execute in topological order:
+Resolvers form a **Directed Acyclic Graph (DAG)** based on dependencies. They execute in **phases**, with resolvers in each phase running **concurrently**:
 
 ```yaml
-resolvers:
-  name:
-    resolve:
-      from: [...]
+spec:
+  resolvers:
+    # Phase 1: No dependencies - run concurrently
+    name:
+      resolve:
+        from: [...]
 
-  org:
-    resolve:
-      from: [...]
+    org:
+      resolve:
+        from: [...]
 
-  # Depends on both name and org
-  imageName:
-    resolve:
-      from:
-        - provider: expression
-          expr: _.org + "/" + _.name
+    # Phase 2: Depends on both name and org - runs after Phase 1 completes
+    imageName:
+      resolve:
+        from:
+          - provider: expression
+            expr: _.org + "/" + _.name
 ```
 
-Execution: `name` and `org` can run in parallel, then `imageName` runs after both complete.
+**Execution model:**
+1. **Phase 1**: `name` and `org` execute **concurrently** (no dependencies)
+2. Wait for Phase 1 to complete
+3. **Phase 2**: `imageName` executes (dependencies satisfied)
+
+This phase-based concurrent execution maximizes parallelism while respecting dependencies. Resolvers with the same dependency depth execute together, improving performance for solutions with many independent resolvers.
+
+### Minimal Resolver Execution
+
+When you target specific actions with `--action`, scafctl analyzes dependencies and executes **only the resolvers those actions need**:
+
+```bash
+# Execute only resolvers needed by 'deploy' action
+scafctl run solution:myapp --action deploy
+
+# Execute resolvers needed by multiple actions
+scafctl run solution:myapp --action build --action test
+```
+
+**How it works:**
+- Static analysis identifies all resolver references in action inputs, conditions, and foreach expressions
+- Transitive dependencies are included (if action needs C, C needs B, B needs A → all three execute)
+- Action `dependsOn` chains are followed automatically
+- Resolvers not needed by target actions are skipped
+
+**Example:**
+
+```yaml
+spec:
+  resolvers:
+    environment:    # Needed by apiUrl
+      resolve: [...]
+    
+    apiUrl:         # Needed by deploy
+      resolve:
+        from:
+          - provider: expression
+            inputs:
+              expr: _.environment == 'prod' ? 'api.prod.com' : 'api.dev.com'
+    
+    databaseUrl:    # NOT needed by deploy
+      resolve: [...]
+
+  actions:
+    deploy:
+      provider: api
+      inputs:
+        endpoint: "https://{{ _.apiUrl }}/deploy"
+```
+
+Running `--action deploy` executes only `environment` and `apiUrl`, skipping `databaseUrl`. This significantly improves performance for large solutions.
+
+**Force all resolvers:**
+```bash
+scafctl run solution:myapp --action deploy --resolve-all
+```
 
 ## Examples
 
@@ -358,9 +606,11 @@ repoName:
   resolve:
     from:
       - provider: cli
-        key: repo
+        inputs:
+          key: repo
       - provider: expression
-        expr: _.repoUrl.split('/').last()  # Extract from URL
+        inputs:
+          expr: _.repoUrl.split('/').last()  # Extract from URL
 
   transform:
     into:
@@ -380,11 +630,14 @@ environment:
   resolve:
     from:
       - provider: cli
-        key: env
+        inputs:
+          key: env
       - provider: env
-        key: TARGET_ENV
+        inputs:
+          key: TARGET_ENV
       - provider: git
-        field: branch
+        inputs:
+          field: branch
 
   transform:
     into:
@@ -402,11 +655,14 @@ version:
   resolve:
     from:
       - provider: cli
-        key: version
+        inputs:
+          key: version
       - provider: git
-        field: tag
+        inputs:
+          field: tag
       - provider: static
-        value: "0.0.0-dev"
+        inputs:
+          value: "0.0.0-dev"
 
   transform:
     into:
