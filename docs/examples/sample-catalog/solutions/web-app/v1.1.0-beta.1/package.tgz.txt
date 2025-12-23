@@ -1,0 +1,5 @@
+This file represents a packaged solution artifact (beta version).
+In a real catalog, this would be a .tgz file containing:
+- solution.yaml (manifest)
+- templates/ (template files)
+- assets/ (static files, configs, etc.)

@@ -1,0 +1,49 @@
+{
+  "apiVersion": "catalog.scafctl.dev/v1",
+  "kind": "solution",
+  "name": "web-app",
+  "versions": {
+    "1.0.0": {
+      "createdAt": "2025-11-15T12:00:00Z",
+      "digest": "sha256:a1b2c3d4e5f6789012345678901234567890123456789012345678901234567890",
+      "size": 245680,
+      "path": "v1.0.0/package.tgz",
+      "signatures": [
+        {
+          "type": "cosign",
+          "path": "v1.0.0/signature"
+        }
+      ],
+      "metadata": {
+        "license": "Apache-2.0",
+        "tags": ["web", "kubernetes", "production"],
+        "maintainers": [
+          {
+            "name": "Platform Team",
+            "email": "platform@example.com"
+          }
+        ],
+        "requires": [
+          {
+            "kind": "provider",
+            "name": "git",
+            "constraint": ">=0.2.0 <1.0.0"
+          }
+        ],
+        "description": "Production-ready web application scaffold with K8s manifests"
+      }
+    },
+    "1.1.0-beta.1": {
+      "createdAt": "2025-12-10T14:30:00Z",
+      "digest": "sha256:b2c3d4e5f6789012345678901234567890123456789012345678901234567890ab",
+      "size": 267890,
+      "path": "v1.1.0-beta.1/package.tgz",
+      "metadata": {
+        "license": "Apache-2.0",
+        "tags": ["web", "kubernetes", "beta"],
+        "channel": "beta",
+        "description": "Beta release with improved observability features"
+      }
+    }
+  }
+}

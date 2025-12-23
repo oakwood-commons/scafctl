@@ -1,0 +1,7 @@
+This file represents the Linux AMD64 (musl) release binary.
+In a real catalog, this would be a .tar.gz file containing:
+- cli-tool (Linux binary statically compiled with musl libc)
+- LICENSE
+- README.md
+
+Note: musl builds are typically smaller and more portable across Linux distributions.

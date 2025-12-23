@@ -1,0 +1,112 @@
+{
+  "apiVersion": "catalog.scafctl.dev/v1",
+  "kind": "release",
+  "name": "cli-tool",
+  "versions": {
+    "2.1.0": {
+      "createdAt": "2025-12-20T16:00:00Z",
+      "artifacts": [
+        {
+          "os": "windows",
+          "arch": "amd64",
+          "ext": "zip",
+          "path": "v2.1.0/cli-tool_2.1.0_windows_amd64.zip",
+          "digest": "sha256:e5f6789012345678901234567890123456789012345678901234567890abcdef12",
+          "size": 8388608
+        },
+        {
+          "os": "linux",
+          "arch": "amd64",
+          "libc": "gnu",
+          "ext": "tar.gz",
+          "path": "v2.1.0/cli-tool_2.1.0_linux_amd64_gnu.tar.gz",
+          "digest": "sha256:f6789012345678901234567890123456789012345678901234567890abcdef1234",
+          "size": 7340032
+        },
+        {
+          "os": "linux",
+          "arch": "amd64",
+          "libc": "musl",
+          "ext": "tar.gz",
+          "path": "v2.1.0/cli-tool_2.1.0_linux_amd64_musl.tar.gz",
+          "digest": "sha256:67890123456789012345678901234567890123456789012345678abcdef123456",
+          "size": 6815744
+        },
+        {
+          "os": "darwin",
+          "arch": "arm64",
+          "ext": "tar.gz",
+          "path": "v2.1.0/cli-tool_2.1.0_darwin_arm64.tar.gz",
+          "digest": "sha256:7890123456789012345678901234567890123456789012345678abcdef1234567",
+          "size": 7864320
+        },
+        {
+          "os": "darwin",
+          "arch": "amd64",
+          "ext": "tar.gz",
+          "path": "v2.1.0/cli-tool_2.1.0_darwin_amd64.tar.gz",
+          "digest": "sha256:890123456789012345678901234567890123456789012345678abcdef12345678",
+          "size": 8126464
+        },
+        {
+          "os": "linux",
+          "arch": "arm64",
+          "libc": "gnu",
+          "ext": "tar.gz",
+          "path": "v2.1.0/cli-tool_2.1.0_linux_arm64_gnu.tar.gz",
+          "digest": "sha256:90123456789012345678901234567890123456789012345678abcdef123456789",
+          "size": 6979584
+        }
+      ],
+      "checksums": "v2.1.0/checksums.txt",
+      "signatures": [
+        {
+          "type": "cosign",
+          "path": "v2.1.0/signature"
+        }
+      ],
+      "metadata": {
+        "license": "MIT",
+        "tags": ["cli", "tooling"],
+        "releaseNotes": "https://github.com/example/cli-tool/releases/tag/v2.1.0",
+        "description": "CLI tool for infrastructure automation"
+      }
+    },
+    "2.0.3": {
+      "createdAt": "2025-11-28T10:30:00Z",
+      "artifacts": [
+        {
+          "os": "windows",
+          "arch": "amd64",
+          "ext": "zip",
+          "path": "v2.0.3/cli-tool_2.0.3_windows_amd64.zip",
+          "digest": "sha256:0123456789012345678901234567890123456789012345678abcdef1234567890",
+          "size": 8126464
+        },
+        {
+          "os": "linux",
+          "arch": "amd64",
+          "libc": "gnu",
+          "ext": "tar.gz",
+          "path": "v2.0.3/cli-tool_2.0.3_linux_amd64_gnu.tar.gz",
+          "digest": "sha256:123456789012345678901234567890123456789012345678abcdef12345678901",
+          "size": 7077888
+        },
+        {
+          "os": "darwin",
+          "arch": "arm64",
+          "ext": "tar.gz",
+          "path": "v2.0.3/cli-tool_2.0.3_darwin_arm64.tar.gz",
+          "digest": "sha256:23456789012345678901234567890123456789012345678abcdef123456789012",
+          "size": 7602176
+        }
+      ],
+      "checksums": "v2.0.3/checksums.txt",
+      "metadata": {
+        "license": "MIT",
+        "tags": ["cli", "tooling"],
+        "description": "Previous stable release"
+      }
+    }
+  }
+}

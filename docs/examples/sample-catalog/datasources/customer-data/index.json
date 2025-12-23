@@ -1,0 +1,32 @@
+{
+  "apiVersion": "catalog.scafctl.dev/v1",
+  "kind": "datasource",
+  "name": "customer-data",
+  "versions": {
+    "0.2.0": {
+      "createdAt": "2025-12-01T09:00:00Z",
+      "digest": "sha256:c3d4e5f6789012345678901234567890123456789012345678901234567890abcd",
+      "size": 1048576,
+      "path": "v0.2.0/data.tgz",
+      "metadata": {
+        "license": "Proprietary",
+        "tags": ["customer", "reference-data"],
+        "description": "Customer reference data snapshot for December 2025",
+        "recordCount": 15000,
+        "format": "json-lines"
+      }
+    },
+    "0.1.0": {
+      "createdAt": "2025-11-01T09:00:00Z",
+      "digest": "sha256:d4e5f6789012345678901234567890123456789012345678901234567890abcdef",
+      "size": 987654,
+      "path": "v0.1.0/data.tgz",
+      "metadata": {
+        "license": "Proprietary",
+        "tags": ["customer", "reference-data"],
+        "description": "Customer reference data snapshot for November 2025",
+        "recordCount": 14500
+      }
+    }
+  }
+}
