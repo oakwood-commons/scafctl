@@ -12,7 +12,7 @@ This folder contains comprehensive documentation for scafctl - a schema-first ex
 Step-by-step tutorials and conceptual explanations.
 
 - **[Getting Started](./guides/01-getting-started.md)** - Introduction to scafctl concepts
-- **[Resolver Pipeline](./guides/02-resolver-pipeline.md)** - Deep dive into resolve → transform → validate → emit
+- **[Resolver Chain](./guides/02-resolver-pipeline.md)** - Deep dive into resolve → transform → validate → emit
 - **[Transform Phase](./guides/03-transform-phase.md)** - Mastering `into:`, `when:`, `until:` patterns
 - **[Action Orchestration](./guides/04-action-orchestration.md)** - Dependencies, conditional execution, foreach
 - **[Expression Language](./guides/05-expression-language.md)** - CEL vs templating, reserved keywords
@@ -48,7 +48,7 @@ Markdown proposal for auto-generated CLI help.
 ## Quick Links
 
 - **Want to learn scafctl?** → Start with [Getting Started](./guides/01-getting-started.md)
-- **Need to understand how resolvers work?** → Read [Resolver Pipeline](./guides/02-resolver-pipeline.md)
+- **Need to understand how resolvers work?** → Read [Resolver Chain](./guides/02-resolver-pipeline.md)
 - **Building complex transforms?** → Check [Transform Phase](./guides/03-transform-phase.md)
 - **Generating configuration or code?** → See [Templates Guide](./guides/07-templates.md)
 - **Looking up a provider?** → Find it in [Provider Reference](./reference/providers.md)
@@ -61,7 +61,7 @@ Markdown proposal for auto-generated CLI help.
 ### Five Pillars of scafctl
 
 1. **Resolvers** - Produce named values deterministically
-   - Four-phase pipeline: resolve → transform → validate → emit
+   - Four-phase resolver chain: resolve → transform → validate → emit
    - Multiple resolve sources, first non-null wins
    - Transform array with conditional stopping via `until:`
 

@@ -12,7 +12,7 @@ Instead of implicit defaults and magic behavior, scafctl is explicit and determi
 
 ### Resolvers: Data With Purpose
 
-Resolvers produce named values through a **four-phase pipeline**:
+Resolvers produce named values through a **four-phase resolver chain**:
 
 ```
 resolve → transform → validate → emit
@@ -172,7 +172,7 @@ scafctl run solution:hello-world --no-cache
 
 This flag applies to every command, including `run`, `test`, and `build`.
 
-## Resolver Pipeline Deep Dive
+## Resolver Chain Deep Dive
 
 ### Resolve Phase
 
@@ -351,7 +351,7 @@ spec:
 
 ## Next Steps
 
-- **Deep dive into resolvers** → [Resolver Pipeline](./02-resolver-pipeline.md)
+- **Deep dive into resolvers** → [Resolver Chain](./02-resolver-pipeline.md)
 - **Master transforms** → [Transform Phase](./03-transform-phase.md)
 - **Build complex workflows** → [Action Orchestration](./04-action-orchestration.md)
 - **Understand expressions** → [Expression Language](./05-expression-language.md)
