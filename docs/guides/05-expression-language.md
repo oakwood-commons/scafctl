@@ -363,8 +363,7 @@ spec:
         from:
           - provider: expression
             expr: _.environment == "prod" ? "prod" : "dev"
-  
-spec:
+
   actions:
     setup:
       inputs:
