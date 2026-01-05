@@ -7,8 +7,8 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
-	"github.com/kcloutie/scafctl/pkg/celexp"
-	"github.com/kcloutie/scafctl/pkg/celexp/conversion"
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/celexp/conversion"
 )
 
 // AddFunc adds a key-value pair to a map and returns a new map.

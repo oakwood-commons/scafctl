@@ -6,11 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/kcloutie/scafctl/pkg/logger"
-	"github.com/kcloutie/scafctl/pkg/settings"
-	"github.com/kcloutie/scafctl/pkg/solution/get"
-	"github.com/kcloutie/scafctl/pkg/terminal"
-	"github.com/kcloutie/scafctl/pkg/terminal/output"
+	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
 	"github.com/spf13/cobra"
 )
 

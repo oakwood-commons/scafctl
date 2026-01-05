@@ -3,17 +3,17 @@ package ext
 import (
 	"github.com/google/cel-go/cel"
 	celext "github.com/google/cel-go/ext"
-	"github.com/kcloutie/scafctl/pkg/celexp"
-	"github.com/kcloutie/scafctl/pkg/celexp/ext/arrays"
-	"github.com/kcloutie/scafctl/pkg/celexp/ext/debug"
-	"github.com/kcloutie/scafctl/pkg/celexp/ext/filepath"
-	"github.com/kcloutie/scafctl/pkg/celexp/ext/guid"
-	celmap "github.com/kcloutie/scafctl/pkg/celexp/ext/map"
-	"github.com/kcloutie/scafctl/pkg/celexp/ext/marshalling"
-	"github.com/kcloutie/scafctl/pkg/celexp/ext/out"
-	celsort "github.com/kcloutie/scafctl/pkg/celexp/ext/sort"
-	celstrings "github.com/kcloutie/scafctl/pkg/celexp/ext/strings"
-	celtime "github.com/kcloutie/scafctl/pkg/celexp/ext/time"
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/celexp/ext/arrays"
+	"github.com/oakwood-commons/scafctl/pkg/celexp/ext/debug"
+	"github.com/oakwood-commons/scafctl/pkg/celexp/ext/filepath"
+	"github.com/oakwood-commons/scafctl/pkg/celexp/ext/guid"
+	celmap "github.com/oakwood-commons/scafctl/pkg/celexp/ext/map"
+	"github.com/oakwood-commons/scafctl/pkg/celexp/ext/marshalling"
+	"github.com/oakwood-commons/scafctl/pkg/celexp/ext/out"
+	celsort "github.com/oakwood-commons/scafctl/pkg/celexp/ext/sort"
+	celstrings "github.com/oakwood-commons/scafctl/pkg/celexp/ext/strings"
+	celtime "github.com/oakwood-commons/scafctl/pkg/celexp/ext/time"
 )
 
 // BuiltIn returns a list of built-in CEL extension functions provided by the

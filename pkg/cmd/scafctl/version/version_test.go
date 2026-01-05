@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kcloutie/scafctl/pkg/settings"
-	"github.com/kcloutie/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/terminal"
 )
 
 func TestVersionCmdOptions_PrintVersion(t *testing.T) {

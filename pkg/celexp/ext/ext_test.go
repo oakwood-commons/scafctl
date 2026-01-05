@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/google/cel-go/cel"
-	"github.com/kcloutie/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

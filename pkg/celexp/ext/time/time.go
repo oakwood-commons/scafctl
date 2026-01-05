@@ -7,7 +7,7 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
-	"github.com/kcloutie/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
 )
 
 // NowFunc returns the current time as a CEL timestamp.

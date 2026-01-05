@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/kcloutie/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -6,7 +6,7 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
-	"github.com/kcloutie/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 )

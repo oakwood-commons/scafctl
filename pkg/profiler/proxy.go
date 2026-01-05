@@ -10,7 +10,7 @@ import (
 	"github.com/google/pprof/profile"
 
 	"github.com/go-logr/logr"
-	"github.com/kcloutie/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/logger"
 )
 
 var (

@@ -16,7 +16,7 @@ The `gotmpl` package provides a service-oriented wrapper around Go's standard `t
 ## Installation
 
 ```go
-import "github.com/kcloutie/scafctl/pkg/gotmpl"
+import "github.com/oakwood-commons/scafctl/pkg/gotmpl"
 ```
 
 ## Quick Start
@@ -345,7 +345,7 @@ result, err := svc.Execute(ctx, gotmpl.TemplateOptions{
 
 ## Logging
 
-The package integrates with the `github.com/kcloutie/scafctl/pkg/logger` package for structured logging:
+The package integrates with the `github.com/oakwood-commons/scafctl/pkg/logger` package for structured logging:
 
 - **V(1)**: High-level operations (template execution start/complete)
 - **V(2)**: Detailed steps (parsing, replacements, function registration)
@@ -353,7 +353,7 @@ The package integrates with the `github.com/kcloutie/scafctl/pkg/logger` package
 Enable verbose logging to debug template issues:
 
 ```go
-import "github.com/kcloutie/scafctl/pkg/logger"
+import "github.com/oakwood-commons/scafctl/pkg/logger"
 
 // Create a logger with verbosity level 2
 lgr := logger.Get(2)
@@ -515,8 +515,8 @@ For high-performance scenarios:
 
 - **text/template**: Standard Go template engine (underlying implementation)
 - **text/template/parse**: Template AST parsing (used for reference extraction)
-- **github.com/kcloutie/scafctl/pkg/logger**: Structured logging integration
-- **github.com/kcloutie/scafctl/pkg/celexp**: CEL expression evaluation (complementary templating)
+- **github.com/oakwood-commons/scafctl/pkg/logger**: Structured logging integration
+- **github.com/oakwood-commons/scafctl/pkg/celexp**: CEL expression evaluation (complementary templating)
 
 ## License
 

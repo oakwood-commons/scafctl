@@ -7,8 +7,8 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/kcloutie/scafctl/pkg/gotmpl"
-	"github.com/kcloutie/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
+	"github.com/oakwood-commons/scafctl/pkg/logger"
 )
 
 // ExampleExecute demonstrates basic template execution

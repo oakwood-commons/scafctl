@@ -9,9 +9,9 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
-	"github.com/kcloutie/scafctl/pkg/celexp"
-	"github.com/kcloutie/scafctl/pkg/terminal"
-	"github.com/kcloutie/scafctl/pkg/terminal/output"
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
 )
 
 //nolint:revive // DebugOutFunc is descriptive and matches the pattern of other Func names in the codebase

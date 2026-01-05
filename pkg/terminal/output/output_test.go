@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/kcloutie/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal"
 )
 
 func TestValidateCommands(t *testing.T) {

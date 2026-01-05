@@ -10,7 +10,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/hashicorp/go-retryablehttp"
-	"github.com/kcloutie/scafctl/pkg/metrics"
+	"github.com/oakwood-commons/scafctl/pkg/metrics"
 	"ivan.dev/httpcache"
 )
 

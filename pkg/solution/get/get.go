@@ -8,12 +8,12 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	"github.com/kcloutie/scafctl/pkg/filepath"
-	"github.com/kcloutie/scafctl/pkg/fs"
-	"github.com/kcloutie/scafctl/pkg/httpc"
-	"github.com/kcloutie/scafctl/pkg/metrics"
-	"github.com/kcloutie/scafctl/pkg/settings"
-	"github.com/kcloutie/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/filepath"
+	"github.com/oakwood-commons/scafctl/pkg/fs"
+	"github.com/oakwood-commons/scafctl/pkg/httpc"
+	"github.com/oakwood-commons/scafctl/pkg/metrics"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
 )
 
 type Getter struct {

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"text/template/parse"
 
-	"github.com/kcloutie/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/logger"
 )
 
 // TemplateReference represents a reference to data in a template

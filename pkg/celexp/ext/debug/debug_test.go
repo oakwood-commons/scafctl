@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/google/cel-go/cel"
-	"github.com/kcloutie/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

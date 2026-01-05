@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/kcloutie/scafctl/pkg/cmd/scafctl"
-	"github.com/kcloutie/scafctl/pkg/profiler"
-	"github.com/kcloutie/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl"
+	"github.com/oakwood-commons/scafctl/pkg/profiler"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
 var (

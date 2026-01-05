@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/kcloutie/scafctl/pkg/fs"
+	"github.com/oakwood-commons/scafctl/pkg/fs"
 )
 
 // NormalizeFilePath normalizes a file path by removing any prefix before a colon (':'),
