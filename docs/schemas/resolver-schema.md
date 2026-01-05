@@ -18,18 +18,24 @@ spec:
       resolve:
         from:
           - provider: cli
-            key: keyName
+            inputs:
+              key: keyName
           - provider: env
-            key: ENV_VAR
+            inputs:
+              key: ENV_VAR
             when: _.environment != "local"
           - provider: git
-            field: branch
+            inputs:
+              field: branch
           - provider: state
-            key: previousResolver
+            inputs:
+              key: previousResolver
           - provider: expression
-            expr: _.other + "-value"
+            inputs:
+              expr: _.other + "-value"
           - provider: static
-            value: fallback-default
+            inputs:
+              value: fallback-default
         until: __self != ""
   
       # Phase 2: Transform - Process data
@@ -444,9 +450,11 @@ projectName:
   resolve:
     from:
       - provider: cli
-        key: project
+        inputs:
+          key: project
       - provider: static
-        value: my-app
+        inputs:
+          value: my-app
 ```
 
 ### Resolver with Transform
@@ -520,20 +528,23 @@ spec:
       resolve:
         from:
           - provider: cli
-            key: org
+            inputs:
+              key: org
   
     repo:
       resolve:
         from:
           - provider: cli
-            key: repo
+            inputs:
+              key: repo
   
     repoUrl:
       description: Derived from org and repo
       resolve:
         from:
           - provider: expression
-            expr: "https://github.com/" + _.org + "/" + _.repo + ".git"
+            inputs:
+              expr: "https://github.com/" + _.org + "/" + _.repo + ".git"
 ```
 
 ## Best Practices

@@ -677,8 +677,7 @@ spec:
             key: envs
           - provider: static
             value: ["dev", "prod"]
-  
-spec:
+
   actions:
     deploy:
       foreach:

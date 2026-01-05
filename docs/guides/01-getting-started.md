@@ -296,9 +296,11 @@ spec:
       resolve:
         from:
           - provider: cli
-            key: branch
+            inputs:
+              key: branch
           - provider: static
-            value: ""
+            inputs:
+              value: ""
 
       transform:
         until: __self != ""
