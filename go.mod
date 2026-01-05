@@ -1,4 +1,4 @@
-module github.com/kcloutie/scafctl
+module github.com/oakwood-commons/scafctl
 
 go 1.25.4
 
@@ -19,6 +19,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	go.uber.org/zap v1.27.1
 	golang.org/x/text v0.27.0
+	google.golang.org/genproto/googleapis/api v0.0.0-20251202230838-ff82c1b0f217
 	gopkg.in/yaml.v3 v3.0.1
 	ivan.dev/httpcache v0.1.1
 	k8s.io/apimachinery v0.34.2
@@ -87,7 +88,6 @@ require (
 	golang.org/x/sync v0.16.0 // indirect
 	golang.org/x/sys v0.35.0 // indirect
 	golang.org/x/tools v0.34.0 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20251202230838-ff82c1b0f217 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 )

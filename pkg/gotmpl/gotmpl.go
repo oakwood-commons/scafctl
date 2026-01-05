@@ -8,7 +8,7 @@ import (
 	"text/template"
 
 	"github.com/google/uuid"
-	"github.com/kcloutie/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/logger"
 )
 
 const (

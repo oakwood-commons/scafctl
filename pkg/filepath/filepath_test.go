@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kcloutie/scafctl/pkg/filepath"
-	"github.com/kcloutie/scafctl/pkg/fs"
+	"github.com/oakwood-commons/scafctl/pkg/filepath"
+	"github.com/oakwood-commons/scafctl/pkg/fs"
 )
 
 func TestNormalizeFilePath(t *testing.T) {

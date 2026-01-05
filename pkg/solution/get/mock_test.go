@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/kcloutie/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"

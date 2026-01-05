@@ -9,11 +9,11 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 
-	"github.com/kcloutie/scafctl/pkg/logger"
-	"github.com/kcloutie/scafctl/pkg/settings"
-	"github.com/kcloutie/scafctl/pkg/terminal"
-	"github.com/kcloutie/scafctl/pkg/terminal/output"
-	"github.com/kcloutie/scafctl/pkg/terminal/styles"
+	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/styles"
 	"github.com/spf13/cobra"
 )
 

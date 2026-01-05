@@ -8,8 +8,8 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
-	"github.com/kcloutie/scafctl/pkg/celexp"
-	pkgfilepath "github.com/kcloutie/scafctl/pkg/filepath"
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	pkgfilepath "github.com/oakwood-commons/scafctl/pkg/filepath"
 )
 
 // DirFunc returns the directory component of a path.

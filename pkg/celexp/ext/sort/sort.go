@@ -6,9 +6,9 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
-	"github.com/kcloutie/scafctl/pkg/celexp"
-	"github.com/kcloutie/scafctl/pkg/celexp/conversion"
-	"github.com/kcloutie/scafctl/pkg/compare"
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/celexp/conversion"
+	"github.com/oakwood-commons/scafctl/pkg/compare"
 )
 
 // sortObjects is a helper function that sorts objects by a property in the specified order.
