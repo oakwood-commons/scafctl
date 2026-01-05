@@ -9,7 +9,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/go-logr/zapr"
-	"github.com/kcloutie/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )

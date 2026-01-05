@@ -6,9 +6,9 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
-	pkgarrays "github.com/kcloutie/scafctl/pkg/arrays"
-	"github.com/kcloutie/scafctl/pkg/celexp"
-	"github.com/kcloutie/scafctl/pkg/celexp/conversion"
+	pkgarrays "github.com/oakwood-commons/scafctl/pkg/arrays"
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/celexp/conversion"
 )
 
 func StringAddFunc() celexp.ExtFunction {

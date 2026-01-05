@@ -7,7 +7,7 @@ import (
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/uuid"
-	"github.com/kcloutie/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
 )
 
 // NewFunc generates a new UUID (GUID).

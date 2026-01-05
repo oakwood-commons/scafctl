@@ -14,7 +14,7 @@ A robust HTTP client for Go with built-in support for retries, timeouts, and cac
 ## Installation
 
 ```bash
-go get github.com/kcloutie/scafctl/pkg/httpc
+go get github.com/oakwood-commons/scafctl/pkg/httpc
 ```
 
 ## Quick Start
@@ -29,7 +29,7 @@ import (
     "fmt"
     "io"
     
-    "github.com/kcloutie/scafctl/pkg/httpc"
+    "github.com/oakwood-commons/scafctl/pkg/httpc"
 )
 
 func main() {
@@ -281,7 +281,7 @@ import (
     "io"
     "log"
     
-    "github.com/kcloutie/scafctl/pkg/httpc"
+    "github.com/oakwood-commons/scafctl/pkg/httpc"
     "github.com/go-logr/logr"
 )
 
@@ -317,7 +317,7 @@ import (
     "log"
     "time"
     
-    "github.com/kcloutie/scafctl/pkg/httpc"
+    "github.com/oakwood-commons/scafctl/pkg/httpc"
     "github.com/go-logr/logr"
 )
 
@@ -355,7 +355,7 @@ import (
     "fmt"
     "time"
     
-    "github.com/kcloutie/scafctl/pkg/httpc"
+    "github.com/oakwood-commons/scafctl/pkg/httpc"
 )
 
 func main() {
@@ -391,7 +391,7 @@ import (
     "log"
     "time"
     
-    "github.com/kcloutie/scafctl/pkg/httpc"
+    "github.com/oakwood-commons/scafctl/pkg/httpc"
 )
 
 func main() {
@@ -431,7 +431,7 @@ import (
     "fmt"
     "net/http"
     
-    "github.com/kcloutie/scafctl/pkg/httpc"
+    "github.com/oakwood-commons/scafctl/pkg/httpc"
 )
 
 func main() {
@@ -476,7 +476,7 @@ import (
     "fmt"
     "log"
     
-    "github.com/kcloutie/scafctl/pkg/httpc"
+    "github.com/oakwood-commons/scafctl/pkg/httpc"
 )
 
 func main() {
@@ -507,7 +507,7 @@ import (
     "log"
     "strings"
     
-    "github.com/kcloutie/scafctl/pkg/httpc"
+    "github.com/oakwood-commons/scafctl/pkg/httpc"
 )
 
 func main() {
@@ -536,7 +536,7 @@ import (
     "log"
     "time"
     
-    "github.com/kcloutie/scafctl/pkg/httpc"
+    "github.com/oakwood-commons/scafctl/pkg/httpc"
 )
 
 func main() {
@@ -579,7 +579,7 @@ import (
     "log"
     "time"
     
-    "github.com/kcloutie/scafctl/pkg/httpc"
+    "github.com/oakwood-commons/scafctl/pkg/httpc"
 )
 
 func main() {

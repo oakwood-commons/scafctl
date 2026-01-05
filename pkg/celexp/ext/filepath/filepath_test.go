@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/google/cel-go/cel"
-	pkgfilepath "github.com/kcloutie/scafctl/pkg/filepath"
+	pkgfilepath "github.com/oakwood-commons/scafctl/pkg/filepath"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

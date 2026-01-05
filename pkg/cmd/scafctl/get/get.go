@@ -3,9 +3,9 @@ package get
 import (
 	"fmt"
 
-	"github.com/kcloutie/scafctl/pkg/cmd/scafctl/get/solution"
-	"github.com/kcloutie/scafctl/pkg/settings"
-	"github.com/kcloutie/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get/solution"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
 )
 

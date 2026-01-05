@@ -4,7 +4,7 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
-	"github.com/kcloutie/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
 )
 
 // NilFunc returns a CEL function that takes any value and returns nil.

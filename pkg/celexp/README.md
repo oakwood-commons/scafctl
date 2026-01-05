@@ -33,7 +33,7 @@ This package provides a simple API for working with CEL expressions in Go:
 import (
     "fmt"
     "github.com/google/cel-go/cel"
-    "github.com/kcloutie/scafctl/pkg/celexp"
+    "github.com/oakwood-commons/scafctl/pkg/celexp"
 )
 
 func main() {
@@ -98,7 +98,7 @@ These operations can take **~40-50 microseconds** per compilation. For applicati
 ```go
 import (
     "github.com/google/cel-go/cel"
-    "github.com/kcloutie/scafctl/pkg/celexp"
+    "github.com/oakwood-commons/scafctl/pkg/celexp"
 )
 
 func main() {

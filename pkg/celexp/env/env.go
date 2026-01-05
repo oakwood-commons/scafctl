@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/google/cel-go/cel"
-	"github.com/kcloutie/scafctl/pkg/celexp/ext"
+	"github.com/oakwood-commons/scafctl/pkg/celexp/ext"
 )
 
 // New creates a new CEL environment with the provided declarations and all

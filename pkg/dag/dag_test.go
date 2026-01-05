@@ -10,7 +10,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 
-	"github.com/kcloutie/scafctl/pkg/dag"
+	"github.com/oakwood-commons/scafctl/pkg/dag"
 	"k8s.io/apimachinery/pkg/util/sets"
 )
 
