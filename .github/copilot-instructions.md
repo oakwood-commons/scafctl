@@ -5,27 +5,6 @@
 
 ## Architecture & Key Components
 
-### Core Packages
-- **`pkg/celexp/`** - CEL (Common Expression Language) extensions framework
-  - Custom functions organized by domain: `ext/arrays/`, `ext/strings/`, `ext/filepath/`, `ext/debug/`, etc.
-  - Each function follows the `celexp.ExtFunction` pattern with metadata and `cel.EnvOption` implementations
-  - Conversion utilities in `pkg/celexp/conversion/` handle type conversions between CEL and Go types
-  
-- **`pkg/solution/`** - Solution manifest handling (YAML/JSON)
-  - `Solution` struct with semver validation and metadata (maintainers, links, tags)
-  - `get/` subpackage provides `Interface` for fetching solutions from filesystem or URLs
-  - Solutions define scaffolding templates and configurations
-
-- **`pkg/dag/`** - Dependency graph execution engine
-  - Manages execution order with dependency resolution and cycle detection
-  - `RunnerResults` tracks execution phases, timing, and errors
-  - Used for orchestrating multi-step scaffolding operations
-
-- **`pkg/cmd/scafctl/`** - Cobra-based CLI structure
-  - Root command in `root.go` sets up persistent flags, logging, and profiling
-  - Subcommands in subdirectories: `get/`, `version/`
-  - Uses lipgloss for styled terminal output
-
 ### CLI & Terminal Libraries
 - **cobra** - Command structure and flag parsing
 - **lipgloss** - Terminal styling (colors, borders, layouts)
@@ -48,89 +27,21 @@ go build -ldflags "-s -w -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X mai
 
 # Test
 go test ./...                    # Run all tests
-go test ./pkg/celexp/ext/...     # Run tests for specific package
-go test -v ./...                 # Verbose output
-go test -cover ./...             # With coverage
-go test -run TestFuncName ./...  # Run specific test
 
 # Linting
 golangci-lint run                # Run linter
 golangci-lint run --fix          # Auto-fix issues
 
-# Dependencies
-go mod tidy                      # Clean up dependencies
-go mod download                  # Download dependencies
 ```
 
 **Note**: The project uses `task` (go-task/task) as a convenience wrapper, but AI agents should use raw Go commands for clarity and portability.
 
-### Version Management
-- Versions follow semantic versioning with `v` prefix (e.g., `v1.2.3`)
-- Local/PR builds: `{latest-tag}-alpha{YYYYMMDD}` (e.g., `0.81.0-alpha20251210`)
-- Release builds: Tag-based via goreleaser
-- LDFLAGS inject version info into `main.BuildVersion`, `main.Commit`, `main.BuildTime`
-
 ### Testing Conventions
 - Test files: `*_test.go` in same package
 - Use `testify/assert` and `testify/require` for assertions
-- CEL extension tests follow pattern:
-  ```go
-  func TestFuncName_CELIntegration(t *testing.T) {
-      funcObj := FuncName()
-      env, _ := cel.NewEnv(funcObj.EnvOptions...)
-      ast, issues := env.Compile(`expression`)
-      prog, _ := env.Program(ast)
-      result, _, _ := prog.Eval(map[string]any{})
-      assert.Equal(t, expected, result.Value())
-  }
-  ```
-- Benchmarks use `BenchmarkFuncName_CEL` naming pattern
 - Mock implementations go in `mock.go` files (see `pkg/solution/get/mock.go`)
 
 ## Coding Conventions
-
-### CEL Extension Functions
-All custom CEL functions must:
-1. Return `celexp.ExtFunction` struct with:
-   - `Name`: Fully qualified (e.g., `"arrays.strings.add"`)
-   - `Description`: Usage documentation
-   - `Examples`: Array of `celexp.Example` with Description and Expression fields
-   - `EnvOptions`: CEL environment options slice
-2. Use `strings.ReplaceAll(funcName, ".", "_")` for overload naming
-3. Handle type errors explicitly: `types.NewErr("funcname: error msg")`
-4. Use conversion helpers from `pkg/celexp/conversion/` for type safety
-
-Example pattern from `pkg/celexp/ext/arrays/arrays.go`:
-```go
-func StringAddFunc() celexp.ExtFunction {
-    funcName := "arrays.strings.add"
-    return celexp.ExtFunction{
-        Name: funcName,
-        Description: "Appends a string to a list of strings",
-        Examples: []celexp.Example{
-            {
-                Description: "Add a single string to an existing list",
-                Expression:  `arrays.strings.add(["apple", "banana"], "cherry")`,
-            },
-            {
-                Description: "Chain multiple add operations",
-                Expression:  `arrays.strings.add(arrays.strings.add(["a"], "b"), "c")`,
-            },
-        },
-        EnvOptions: []cel.EnvOption{
-            cel.Function(funcName,
-                cel.Overload(strings.ReplaceAll(funcName, ".", "_"),
-                    []*cel.Type{cel.ListType(cel.StringType), cel.StringType},
-                    cel.ListType(cel.StringType),
-                    cel.BinaryBinding(func(arrayObj, newValue ref.Val) ref.Val {
-                        // Implementation with type checking
-                    }),
-                ),
-            ),
-        },
-    }
-}
-```
 
 ### Error Handling
 - Return errors, don't panic (except in main initialization)
@@ -147,27 +58,15 @@ func StringAddFunc() celexp.ExtFunction {
 - **golangci-lint** configuration in `.golangci.yml` with strict rules
 - **gofumpt** and **goimports** auto-formatters enabled
 - Test files exclude certain linters (errcheck, dupl, gosec, forcetypeassert)
-- Run `task lint:fix` before committing
-
-### Profiling Support
-Hidden flags for CPU/memory profiling:
-- `--pprof memory|cpu` - Enable profiling
-- `--pprof-output-dir ./` - Output directory
-- Access via `profiler.GetProfiler()` and `profiler.StopProfiler()`
-- Used for performance analysis, not production features
 
 ## Project-Specific Patterns
 
 ### Context Usage
 - Logger stored in context: `logger.WithLogger(ctx, lgr)`
-- Profiler context available via `profiler` package
 - HTTP client operations accept `context.Context` for cancellation
 
 ### HTTP Client (`pkg/httpc/`)
 Custom HTTP client with:
-- Automatic retries via `hashicorp/go-retryablehttp`
-- HTTP caching via `ivan.dev/httpcache`
-- Configurable timeouts and retry policies
 - See `pkg/httpc/README.md` for detailed usage
 
 ### Dependency Injection
@@ -179,10 +78,8 @@ Custom HTTP client with:
 - Entry point: `cmd/scafctl/scafctl.go`
 - Package-level logic in `pkg/`
 - Tests colocated with implementation files
-- Checksum directory for task caching (`.task/`, `checksum/`)
 
 ## Important Notes
 - Build commands should include LDFLAGS for version injection (see Build & Test Commands section)
 - **Never** modify test files to reduce coverage - fix the actual issues
-- When adding CEL functions, update both implementation and tests
-- Solutions can be YAML or JSON - use `UnmarshalFromBytes()` for auto-detection
+- Always run `golangci-lint` and tests before committing code
