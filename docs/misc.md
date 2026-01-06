@@ -114,6 +114,7 @@ State is accessed only through providers.
 - Provider execution errors
 
 Errors must include:
+
 - Location in the solution
 - Provider or resolver name
 - Clear cause

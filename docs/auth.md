@@ -26,11 +26,13 @@ Authentication is a system concern, not a provider implementation detail.
 Auth providers define how identities are authenticated and how tokens are minted.
 
 Examples:
+
 - `entra`
 - `github`
 - `gcloud`
 
 Auth providers are responsible for:
+
 - Supporting one or more authentication flows
 - Managing refresh tokens or equivalent credentials
 - Minting execution tokens for providers
@@ -49,6 +51,7 @@ scafctl auth login entra
 ~~~
 
 Behavior:
+
 - Initiates device code flow
 - User authenticates in a browser
 - A refresh token (or equivalent credential) is obtained
@@ -70,6 +73,7 @@ scafctl auth logout entra
 Auth providers manage credential storage.
 
 Rules:
+
 - Refresh tokens are stored securely
 - Storage is provider-specific
 - Tokens are scoped to the provider and tenant
@@ -109,6 +113,7 @@ caasByID:
 ~~~
 
 Meaning:
+
 - The provider requires an Entra-issued access token
 - The token must include the declared scope
 - The provider does not care how the token is obtained
@@ -141,6 +146,7 @@ When an external system executes a rendered graph:
 - scafctl does not manage credentials in this mode
 
 This allows integration with:
+
 - CI systems
 - Workflow engines
 - Platform-native identity systems
@@ -152,6 +158,7 @@ This allows integration with:
 Token metadata and claims may be exposed for conditional logic.
 
 Important constraints:
+
 - Only rendered claims are exposed
 - No raw tokens
 - No secrets
@@ -165,6 +172,7 @@ when:
 ~~~
 
 Allowed data includes:
+
 - Issuer
 - Tenant ID
 - Subject
@@ -210,6 +218,7 @@ Allowed data includes:
 ## Why This Model Works
 
 This design:
+
 - Matches cloud-native auth patterns
 - Supports human and machine execution
 - Avoids secret sprawl

@@ -13,6 +13,7 @@ The primary purpose of plugins is to supply providers. Plugins are not a separat
 A plugin is an external process that implements one or more scafctl extension interfaces and communicates with scafctl over RPC.
 
 Plugins are:
+
 - Discovered and loaded at runtime
 - Versioned independently from scafctl
 - Isolated from the core process
@@ -25,6 +26,7 @@ scafctl uses HashiCorp go-plugin to manage plugin lifecycle, transport, and isol
 ## What a Plugin Is Not
 
 A plugin is not:
+
 - A provider itself
 - A resolver
 - An action
@@ -40,11 +42,13 @@ Plugins do not participate directly in execution graphs. They only expose capabi
 Plugins exist primarily to distribute providers.
 
 Under this model:
+
 - Providers define behavior
 - Plugins package providers
 - scafctl orchestrates provider execution
 
 A single plugin may expose:
+
 - One provider
 - Multiple providers
 - Multiple versions of the same provider
@@ -87,6 +91,7 @@ The plugin process lifecycle is managed entirely by scafctl.
 Today, plugins are intended to expose providers.
 
 Future capability types may include:
+
 - Provider sets
 - Schemas
 - Validation helpers
@@ -109,6 +114,7 @@ provides:
 ~~~
 
 Each provider exposed by a plugin:
+
 - Has a stable name
 - Declares an input schema
 - Declares an output shape
@@ -148,6 +154,7 @@ Discovery does not execute plugins. Execution occurs only when a provider is inv
 ## Versioning and Compatibility
 
 Plugins declare:
+
 - Supported protocol version
 - Provider versions
 - Optional feature flags
@@ -163,6 +170,7 @@ Incompatible plugins are rejected early.
 Plugins are isolated processes.
 
 Security properties:
+
 - No direct memory access to scafctl
 - Explicit RPC boundaries
 - No implicit filesystem or network access beyond what the plugin implements
@@ -182,6 +190,7 @@ Conceptually:
 Introducing plugins as a separate user-facing concept would add unnecessary indirection.
 
 Users reason about:
+
 - Providers
 - Actions
 - Resolvers

@@ -35,6 +35,7 @@ An action is not responsible for:
 Actions form a directed acyclic graph similar to Tekton Tasks.
 
 Each action node contains:
+
 - A provider
 - Inputs
 - Optional results
@@ -56,6 +57,7 @@ scafctl run solution:myapp
 ~~~
 
 Behavior:
+
 - Resolve all resolvers
 - Evaluate all CEL and templates needed to render actions
 - Execute actions in dependency order
@@ -70,6 +72,7 @@ scafctl render solution:myapp
 ~~~
 
 Behavior:
+
 - Resolve all resolvers
 - Evaluate all CEL and templates needed to render actions
 - Emit an executor-ready action graph artifact
@@ -151,6 +154,7 @@ actions:
 ~~~
 
 Rules:
+
 - Dependencies form a DAG
 - An action runs only after all dependencies succeed
 - Cycles are rejected
@@ -212,6 +216,7 @@ $(tasks.fetchConfig.results.config)
 ~~~
 
 Rules:
+
 - `fromAction` may only reference declared dependencies
 - Referencing a non-dependency is a validation error
 - External executors do not evaluate CEL or templates
@@ -232,6 +237,7 @@ actions:
 ~~~
 
 Behavior:
+
 - `when.expr` is evaluated during render
 - The rendered action includes a boolean condition
 - In run mode, scafctl skips actions whose condition is false
@@ -255,6 +261,7 @@ actions:
 ~~~
 
 Behavior:
+
 - Iteration is expanded during render
 - Produces multiple action nodes
 - Each iteration is independent
@@ -286,6 +293,7 @@ actions:
 ~~~
 
 Notes:
+
 - `results` are placeholders in render output
 - `fromAction` references are preserved for the executor
 - No runtime action result values exist until execution time
