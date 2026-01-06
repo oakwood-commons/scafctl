@@ -1,0 +1,100 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: email-notifier
+  description: Send notification emails using provider-backed actions. Designed for local execution and pipeline rendering.
+
+spec:
+  resolvers:
+    environment:
+      description: Deployment environment
+      resolve:
+        from:
+          - provider: env
+            inputs:
+              key: ENV
+          - provider: static
+            inputs:
+              value: dev
+      transform:
+        into:
+          - provider: expression
+            expr: __self.toLowerCase()
+      validate:
+        - expr: __self in ["dev", "stage", "prod"]
+          message: "Invalid environment"
+
+    emailFrom:
+      description: Sender email address
+      resolve:
+        from:
+          - provider: env
+            inputs:
+              key: EMAIL_FROM
+      validate:
+        - expr: __self.contains("@")
+          message: "EMAIL_FROM must be a valid email"
+
+    emailTo:
+      description: Recipient email address
+      resolve:
+        from:
+          - provider: env
+            inputs:
+              key: EMAIL_TO
+      validate:
+        - expr: __self.contains("@")
+          message: "EMAIL_TO must be a valid email"
+
+    subject:
+      description: Email subject
+      resolve:
+        from:
+          - provider: env
+            inputs:
+              key: EMAIL_SUBJECT
+          - provider: static
+            inputs:
+              value: "Notification"
+
+    body:
+      description: Email body content
+      resolve:
+        from:
+          - provider: env
+            inputs:
+              key: EMAIL_BODY
+          - provider: static
+            inputs:
+              value: "Hello from scafctl"
+
+  actions:
+    sendEmail:
+      description: Send an email using an external provider
+      provider: email
+      when:
+        expr: _.environment != "dev" or _._.params.dryRun == false
+      inputs:
+        auth:
+          provider: entra
+          scopes:
+            - api://mail.send/.default
+        message:
+          from: _.emailFrom
+          to: _.emailTo
+          subject: _.subject
+          body: _.body
+
+    renderPreview:
+      description: Render email payload without sending
+      provider: static
+      when:
+        expr: _._.params.dryRun == true
+      inputs:
+        value:
+          from: _.emailFrom
+          to: _.emailTo
+          subject: _.subject
+          body: _.body
+
