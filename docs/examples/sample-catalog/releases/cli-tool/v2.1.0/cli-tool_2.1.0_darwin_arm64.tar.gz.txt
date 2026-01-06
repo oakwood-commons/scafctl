@@ -1,5 +1,0 @@
-This file represents the macOS ARM64 (Apple Silicon) release binary.
-In a real catalog, this would be a .tar.gz file containing:
-- cli-tool (macOS binary for M1/M2/M3 chips)
-- LICENSE
-- README.md

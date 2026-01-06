@@ -1,0 +1,91 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: terraform-scaffold
+  description: Scaffold Terraform environments using resolvers, templates, and filesystem actions
+
+spec:
+  resolvers:
+    app:
+      description: Application name
+      resolve:
+        from:
+          - provider: parameter
+            inputs:
+              key: app
+          - provider: static
+            inputs:
+              value: my-app
+
+    environments:
+      description: Target environments
+      resolve:
+        from:
+          - provider: parameter
+            inputs:
+              key: environments
+          - provider: static
+            inputs:
+              value: "dev,qa,prod"
+
+      transform:
+        into:
+          - provider: expression
+            expr: __self.split(",").map(e, e.trim())
+
+      validate:
+        - expr: __self.size() > 0
+          message: "At least one environment must be specified"
+
+    mainTfTemplate:
+      description: main.tf template
+      resolve:
+        from:
+          - provider: filesystem
+            inputs:
+              path: templates/main.tf.tmpl
+
+    tfvarsTemplate:
+      description: auto.tfvars template
+      resolve:
+        from:
+          - provider: filesystem
+            inputs:
+              path: templates/auto.tfvars.tmpl
+
+  actions:
+    scaffold:
+      description: Generate Terraform files per environment
+      provider: filesystem
+
+      foreach:
+        item: env
+        in: _.environments
+
+      inputs:
+        operations:
+          - action: mkdir
+            path: "./{{ __item }}"
+
+          - action: writeMain
+            path: "./{{ __item }}/main.tf"
+            content:
+              provider: template
+              inputs:
+                engine: go
+                content: _.mainTfTemplate
+                context:
+                  app: _.app
+                  env: __item
+
+          - action: writeTFvars
+            path: "./{{ __item }}/auto.tfvars"
+            content:
+              provider: template
+              inputs:
+                engine: go
+                content: _.tfvarsTemplate
+                context:
+                  app: _.app
+                  env: __item

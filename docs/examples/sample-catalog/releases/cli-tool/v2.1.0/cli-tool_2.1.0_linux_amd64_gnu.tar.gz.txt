@@ -1,5 +1,0 @@
-This file represents the Linux AMD64 (glibc) release binary.
-In a real catalog, this would be a .tar.gz file containing:
-- cli-tool (Linux binary compiled with glibc)
-- LICENSE
-- README.md

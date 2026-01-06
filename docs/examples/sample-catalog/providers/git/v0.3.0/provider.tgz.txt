@@ -1,5 +1,0 @@
-This file represents a provider plugin artifact.
-In a real catalog, this would be a .tgz file containing:
-- provider binary or plugin
-- manifest.yaml (capabilities, config schema)
-- README.md (usage documentation)

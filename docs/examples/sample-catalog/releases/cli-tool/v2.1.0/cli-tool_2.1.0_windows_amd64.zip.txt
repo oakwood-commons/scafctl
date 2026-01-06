@@ -1,5 +1,0 @@
-This file represents the Windows AMD64 release binary.
-In a real catalog, this would be a .zip file containing:
-- cli-tool.exe (Windows executable)
-- LICENSE
-- README.md

@@ -1,0 +1,86 @@
+spec:
+  resolvers:
+    repo:
+      resolve:
+        from:
+          - provider: static
+            inputs:
+              value: scafctl
+
+    version:
+      description: Version to build and release
+      resolve:
+        from:
+          - provider: env
+            inputs:
+              key: VERSION
+          - provider: git
+            inputs:
+              field: tag
+          - provider: static
+            inputs:
+              value: dev
+
+    goos:
+      resolve:
+        from:
+          - provider: env
+            inputs:
+              key: GOOS
+          - provider: static
+            inputs:
+              value: linux
+
+    goarch:
+      resolve:
+        from:
+          - provider: env
+            inputs:
+              key: GOARCH
+          - provider: static
+            inputs:
+              value: amd64
+
+    buildDir:
+      resolve:
+        from:
+          - provider: static
+            inputs:
+              value: dist
+
+  actions:
+    clean:
+      provider: shell
+      inputs:
+        cmd:
+          - rm -rf {{ _.buildDir }}
+
+    test:
+      provider: shell
+      dependsOn: [clean]
+      inputs:
+        cmd:
+          - go test ./...
+
+    build:
+      provider: shell
+      dependsOn: [test]
+      inputs:
+        env:
+          GOOS: _.goos
+          GOARCH: _.goarch
+        cmd:
+          - mkdir -p {{ _.buildDir }}
+          - go build -o {{ _.buildDir }}/{{ _.repo }} ./cmd/scafctl
+
+    release:
+      provider: github
+      dependsOn: [build]
+      when:
+        expr: _.version != "dev"
+      inputs:
+        repo: ford-cloud/scafctl
+        tag: _.version
+        name: "Release {{ _.version }}"
+        assets:
+          - path: "{{ _.buildDir }}/{{ _.repo }}"

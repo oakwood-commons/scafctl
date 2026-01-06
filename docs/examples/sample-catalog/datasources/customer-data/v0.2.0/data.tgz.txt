@@ -1,4 +1,0 @@
-This file represents a datasource artifact.
-In a real catalog, this would be a .tgz file containing:
-- data files (JSON, CSV, Parquet, etc.)
-- metadata.json (schema, record count, etc.)
