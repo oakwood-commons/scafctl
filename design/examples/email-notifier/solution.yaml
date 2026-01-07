@@ -7,6 +7,16 @@ metadata:
 
 spec:
   resolvers:
+    isDryRun:
+      description: Is this a dry run
+      resolve:
+        from:
+          - provider: internal
+      transform:
+        into:
+          - provider: cel
+            expr: __self.parameters.containsKey("--dry-run") || __self.parameters.containsKey("-d") 
+
     environment:
       description: Deployment environment
       resolve:
@@ -19,7 +29,7 @@ spec:
               value: dev
       transform:
         into:
-          - provider: expression
+          - provider: cel
             expr: __self.toLowerCase()
       validate:
         - expr: __self in ["dev", "stage", "prod"]
@@ -73,28 +83,32 @@ spec:
     sendEmail:
       description: Send an email using an external provider
       provider: email
-      when:
-        expr: _.environment != "dev" or _._.params.dryRun == false
+      when: _.isDryRun
       inputs:
         auth:
           provider: entra
           scopes:
             - api://mail.send/.default
         message:
-          from: _.emailFrom
-          to: _.emailTo
-          subject: _.subject
-          body: _.body
+          from: "someone@somewhere.com"
+          to:
+            resolver: emailTo
+          subject: 
+            resolver: subject
+          body: 
+            resolver: body
 
     renderPreview:
       description: Render email payload without sending
       provider: static
-      when:
-        expr: _._.params.dryRun == true
+      when: _.isDryRun == true
       inputs:
         value:
-          from: _.emailFrom
-          to: _.emailTo
-          subject: _.subject
-          body: _.body
-
+          from:
+            resolver: emailFrom
+          to:
+            resolver: emailTo
+          subject:
+            resolver: subject
+          body:
+            resolver: body

@@ -28,6 +28,21 @@ A resolver is not responsible for:
 
 ---
 
+## Resolver Context
+
+Resolvers evaluate expressions against a single context object named `_`.
+
+Nothing appears in `_` unless it is emitted by a resolver.
+
+- `_` contains only resolver outputs
+- If a solution needs metadata, it must define a resolver (for example `meta`) and populate it using a provider
+
+Special symbol:
+
+- `__self` refers to the current value being transformed or validated
+
+---
+
 ## Resolver Model
 
 ### Conceptual Flow
@@ -78,8 +93,36 @@ Key properties:
 
 Optional controls:
 
-- `when:` to conditionally skip a source
+- `when:` to conditionally skip the resolve phase or a source
 - `until:` to stop evaluation early
+
+### `when:` Rule
+
+`when:` in `resolve` (and per-source `when:`) may reference only previously emitted resolvers.
+
+Example:
+
+~~~yaml
+resolvers:
+  foo:
+    resolve:
+      from:
+        - provider: static
+          inputs:
+            value: hello
+
+  name:
+    resolve:
+      from:
+        - provider: env
+          when:
+            expr: _.foo == "hello"
+          inputs:
+            key: PROJECT_NAME
+        - provider: static
+          inputs:
+            value: my-app
+~~~
 
 The resolve phase answers: where does the value come from?
 
@@ -117,20 +160,23 @@ transform:
         operation: read
         path: ./templates/base-name.txt
 
-    - provider: expression
-      expr: __self.trim()
+    - provider: cel
+      inputs:
+        expr: __self.trim()
 
-    - provider: expression
-      expr: __self.toLowerCase()
+    - provider: cel
+      inputs:
+        expr: __self.toLowerCase()
 
-    - provider: expression
-      expr: __self.replace("_", "-")
+    - provider: cel
+      inputs:
+        expr: __self.replace("_", "-")
 ~~~
 
 In this example:
 
 - The filesystem provider supplies a value derived from local state
-- Subsequent expression providers normalize and shape that value
+- Subsequent providers normalize and shape that value
 - Each step receives the previous value as `__self`
 
 Transform providers must be deterministic and free of externally visible side effects.
@@ -149,19 +195,63 @@ The transform phase answers: how should this value be shaped?
 
 The validate phase enforces constraints on the transformed value.
 
-~~~yaml
-validate:
-  - expr: __self.matches("^[a-z0-9-]+$")
-    message: "Must be lowercase alphanumeric with hyphens"
-~~~
+Validation is provider-backed. Any provider that emits a boolean may be used for validation.
 
-Validation rules are provider-backed and always use the expression provider.
+scafctl provides a built-in provider named `validation` that supports `match`, `notMatch`, and `expr`.
 
 Rules:
 
 - All validations must pass
 - Validation failures stop execution
 - Validation does not mutate data
+
+### Examples
+
+Regex match:
+
+~~~yaml
+validate:
+  from:
+    - provider: validation
+      inputs:
+        match: "^[a-z0-9-]+$"
+      message: "Must be lowercase alphanumeric with hyphens"
+~~~
+
+Regex not match:
+
+~~~yaml
+validate:
+  from:
+    - provider: validation
+      inputs:
+        notMatch: "^fff$"
+      message: "Must not be fff"
+~~~
+
+Match and notMatch:
+
+~~~yaml
+validate:
+  from:
+    - provider: validation
+      inputs:
+        match: "^[a-z0-9-]+$"
+        notMatch: "^fff$"
+      message: "Must be lowercase alphanumeric and not fff"
+~~~
+
+CEL:
+
+~~~yaml
+validate:
+  from:
+    - provider: validation
+      inputs:
+        match:
+          expr: __self in ["dev", "staging", "prod"]
+      message: "Invalid environment"
+~~~
 
 ---
 
@@ -192,16 +282,17 @@ inputs:
   image: nginx:1.27
 ~~~
 
-#### 2. Direct Resolver Binding
+#### 2. Direct Resolver Binding (Canonical)
 
 Copies the resolver value directly, preserving its type.
 
 ~~~yaml
 inputs:
-  image: _.image
+  image:
+    resolver: image
 ~~~
 
-#### 3. Expression-Based Value
+#### 3. Expression-Based Value (Explicit CEL)
 
 Evaluated using CEL before provider execution.
 
@@ -220,39 +311,61 @@ inputs:
   image: "{{ _.org }}/{{ _.repo }}:{{ _.version }}"
 ~~~
 
+### Exclusivity Rule
+
+For a single input field, it is an error to specify more than one of:
+
+- literal
+- `resolver`
+- `expr`
+- `tmpl`
+
 ---
 
 ### Go Representation (Custom Unmarshalling)
 
 ~~~go
-type StringValue struct {
-  Literal *string
-  Expr    *string
+type ValueRef struct {
+  Literal  any
+  Resolver *string
+  Expr     *string
 }
 
-func (s *StringValue) UnmarshalYAML(value *yaml.Node) error {
-  switch value.Kind {
-
-  case yaml.ScalarNode:
-    var v string
-    if err := value.Decode(&v); err != nil {
-      return err
-    }
-    s.Literal = &v
-    return nil
+func (v *ValueRef) UnmarshalYAML(node *yaml.Node) error {
+  switch node.Kind {
 
   case yaml.MappingNode:
     var raw struct {
-      Expr string `yaml:"expr"`
+      Resolver *string `yaml:"resolver"`
+      Expr     *string `yaml:"expr"`
     }
-    if err := value.Decode(&raw); err != nil {
+    if err := node.Decode(&raw); err != nil {
       return err
     }
-    s.Expr = &raw.Expr
+
+    count := 0
+    if raw.Resolver != nil {
+      count++
+    }
+    if raw.Expr != nil {
+      count++
+    }
+
+    if count != 1 {
+      return fmt.Errorf("invalid value ref: expected exactly one of resolver or expr")
+    }
+
+    v.Resolver = raw.Resolver
+    v.Expr = raw.Expr
     return nil
 
   default:
-    return fmt.Errorf("invalid input type")
+    var anyVal any
+    if err := node.Decode(&anyVal); err != nil {
+      return err
+    }
+    v.Literal = anyVal
+    return nil
   }
 }
 ~~~
@@ -265,14 +378,9 @@ All inputs are resolved into concrete values before provider execution. Provider
 
 ### Purpose
 
-Resolvers may receive values directly from the CLI using resolver parameters. This allows users, pipelines, and external executors to override resolver inputs without modifying solution files.
+Resolvers may receive values directly from the CLI using resolver parameters.
 
-Resolver parameters:
-
-- Override the resolve phase
-- Preserve transform and validate phases
-- Support rich data types
-- Work identically in run and render modes
+Resolver parameters are consumed by the `parameter` provider and participate in normal `resolve.from` ordering. They do not bypass the resolve phase.
 
 ---
 
@@ -292,19 +400,7 @@ scafctl run solution:example \
   -r regions=us-east1,us-west1
 ~~~
 
-Each `-r` maps directly to a resolver name.
-
----
-
-## Resolver Parameter Semantics
-
-When a resolver parameter is supplied:
-
-- The resolver `resolve.from` block is skipped
-- The supplied value becomes the resolver input
-- `transform` still executes
-- `validate` still executes
-- The value is emitted normally
+Each `-r` maps to a parameter key that may be read by the `parameter` provider.
 
 ---
 
@@ -361,15 +457,6 @@ cat config.json | scafctl run solution:example -r config=-
 -r data=https://example.com/data.json
 ~~~
 
-### Explicit Type Prefixes (Optional)
-
-~~~bash
--r environments=json:["dev","qa","prod"]
--r count=int:3
--r enabled=bool:true
--r raw=string:00123
-~~~
-
 ---
 
 ## Interaction with Cobra
@@ -409,8 +496,9 @@ resolvers:
   image:
     resolve:
       from:
-        - provider: expression
-          expr: _.name + ":latest"
+        - provider: cel
+          inputs:
+            expr: _.name + ":latest"
 ~~~
 
 Rules:
@@ -457,11 +545,17 @@ spec:
 
       transform:
         into:
-          - expr: __self.toLowerCase()
+          - provider: cel
+            inputs:
+              expr: __self.toLowerCase()
 
       validate:
-        - expr: __self in ["dev", "staging", "prod"]
-          message: "Invalid environment"
+        from:
+          - provider: validation
+            inputs:
+              match:
+                expr: __self in ["dev", "staging", "prod"]            
+            message: "Invalid environment"
 ~~~
 
 ---
@@ -470,7 +564,7 @@ spec:
 
 - Resolve uses providers to select values
 - Transform uses providers to derive values
-- Validate uses providers to enforce constraints
+- Validate uses boolean-emitting providers
 - Resolver values are fed into providers via typed input binding
 - All resolver phases are provider-backed
 - Resolvers must remain pure and deterministic
@@ -479,4 +573,4 @@ spec:
 
 ## Summary
 
-Resolvers define how data is sourced, derived, checked, and shared in scafctl. Resolve chooses data, transform shapes data, validate enforces correctness, and emit publishes results. Resolver parameters allow explicit runtime input while preserving the resolver lifecycle. Custom unmarshalling ensures resolver values are safely consumed by providers without leaking evaluation logic into provider implementations.
+Resolvers define how data is sourced, derived, checked, and shared in scafctl. Resolve chooses data, transform shapes data, validate enforces correctness, and emit publishes results. Resolver parameters feed the `parameter` provider and coexist with Cobra by keeping Cobra responsible only for raw flag collection while scafctl core owns parsing and typing.

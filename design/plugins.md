@@ -19,7 +19,7 @@ Plugins are:
 - Isolated from the core process
 - Capable of exposing multiple providers
 
-scafctl uses HashiCorp go-plugin to manage plugin lifecycle, transport, and isolation.
+scafctl uses [hashicorp/go-plugin](https://github.com/hashicorp/go-plugin) to manage plugin lifecycle, transport, and isolation.
 
 ---
 
@@ -50,8 +50,6 @@ Under this model:
 A single plugin may expose:
 
 - One provider
-- Multiple providers
-- Multiple versions of the same provider
 
 ---
 
@@ -63,7 +61,7 @@ Plugins exist to:
 - Enable third-party and internal extensions
 - Allow providers to evolve independently
 - Isolate failures and crashes
-- Support multiple languages via RPC boundaries
+- Support multiple languages via gRPC boundaries
 - Keep the core binary small and stable
 
 This mirrors patterns used by Terraform, Vault, Nomad, and Packer.
@@ -72,7 +70,7 @@ This mirrors patterns used by Terraform, Vault, Nomad, and Packer.
 
 ## Plugin Architecture
 
-scafctl uses go-plugin with an RPC-based handshake.
+scafctl uses go-plugin with an gRPC-based handshake.
 
 Conceptually:
 
@@ -80,7 +78,7 @@ Conceptually:
 - scafctl negotiates protocol version
 - Plugin advertises capabilities
 - scafctl registers providers exposed by the plugin
-- Providers are invoked through RPC
+- Providers are invoked through gRPC
 
 The plugin process lifecycle is managed entirely by scafctl.
 

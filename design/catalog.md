@@ -67,7 +67,7 @@ Artifacts are referenced using a canonical identifier.
 
 ### Reference Format
 
-type:name@version-or-constraint
+type:name@version # or constraint
 
 Examples:
 

@@ -2,14 +2,16 @@
 
 ## Purpose
 
-Providers are stateless execution primitives. They exist to perform a single, well-defined operation given validated inputs and return either a result or an error. Providers do not own orchestration, control flow, transformation, or validation logic. This separation keeps solutions deterministic, testable, and provider-agnostic.
+Providers are stateless execution primitives. They perform a single, well-defined operation given validated inputs and return either a result or an error.
+
+Providers do not own orchestration, control flow, dependency resolution, or lifecycle decisions. This separation keeps solutions deterministic, testable, and explicit.
 
 Providers are used by:
 
-- Resolvers during the resolve phase
-- Actions during execution
+- Resolvers (during resolve, transform, and validate phases)
+- Actions (during execution or render)
 
-Providers are never invoked implicitly. A provider only runs when explicitly referenced by a resolver source or an action.
+Providers are never invoked implicitly. A provider runs only when explicitly referenced.
 
 ---
 
@@ -19,7 +21,8 @@ A provider is responsible for:
 
 - Declaring its identity and capabilities
 - Defining an explicit input schema
-- Decoding validated input into a strongly typed structure
+- Validating inputs against that schema
+- Decoding validated input into strongly typed structures
 - Executing its operation
 - Returning output data or an error
 
@@ -27,9 +30,31 @@ A provider is not responsible for:
 
 - Deciding when it runs
 - Resolving dependencies
-- Transforming or validating data beyond schema enforcement
-- Owning orchestration or control flow
-- Reading global configuration directly
+- Performing orchestration or control flow
+- Mutating shared execution state
+- Reading undeclared global state
+
+---
+
+## Execution Context
+
+Providers are invoked with a resolved execution context.
+
+For resolver execution:
+
+- `_` contains only resolver outputs
+- Nothing exists in `_` unless emitted by a resolver
+
+For action execution:
+
+- Providers may receive additional action-local data, but this does not affect resolver semantics
+
+Special symbols passed by the caller:
+
+- `__self` when used in resolver transform or validate
+- `__item` when used in action foreach
+
+Providers do not evaluate expressions or templates themselves. All inputs are fully resolved before invocation.
 
 ---
 
@@ -43,23 +68,20 @@ A provider is not responsible for:
   - execute operation
   - output or error
 
-Providers behave as pure execution units with side effects limited strictly to the operation they encapsulate.
+Providers behave as isolated execution units with no implicit coupling to other providers.
 
 ---
 
-## Provider Interface
-
-Providers expose a descriptor and an execution function.
+## Provider Interface (Conceptual)
 
 ~~~go
 type Provider interface {
   Descriptor() ProviderDescriptor
-  Execute(ctx Context, input any, dataCtx map[string]any) (any, error)
+  Execute(ctx context.Context, input any) (any, error)
 }
 
 type ProviderDescriptor struct {
   Name   string
-  Kind   string
   Schema SchemaDefinition
   Decode func(map[string]any) (any, error)
 }
@@ -70,260 +92,176 @@ type SchemaDefinition struct {
 
 type ParameterDefinition struct {
   Type        string
-  Description string
   Required    bool
-  Default     any
+  Description string
 }
 ~~~
 
----
-
-## Why Schema-First
-
-Providers are schema-first so that:
-
-- Invalid configurations fail before execution
-- Solutions can be statically validated
-- CLI help can be generated deterministically
-- Errors are precise and actionable
-- Providers remain self-describing and discoverable
-
-Schema validation always occurs before Decode and Execute.
+This interface is illustrative. The exact implementation may evolve, but the contract remains schema-first and explicit.
 
 ---
 
-## Execution Context
+## Input Resolution
 
-The Execute function receives:
+Provider inputs are resolved by scafctl before execution.
 
-- `ctx`: execution context for cancellation and timeouts
-- `input`: decoded, strongly typed provider input
-- `dataCtx`: resolved data context equivalent to `_` in expressions
+Each input field supports exactly one of the following forms:
 
-The data context allows providers to consume resolved values without re-resolving them.
+### 1. Literal Value
 
----
-
-## Built-in Provider Example: shell
-
-### Descriptor
-
-~~~go
-type ShellInputs struct {
-  Cmd []string `json:"cmd"`
-  Dir string   `json:"dir"`
-  Env []string `json:"env"`
-}
-
-func (p shellProvider) Descriptor() ProviderDescriptor {
-  return ProviderDescriptor{
-    Name: "shell",
-    Kind: "sh",
-    Schema: SchemaDefinition{
-      Parameters: map[string]ParameterDefinition{
-        "cmd": {
-          Type: "array",
-          Required: true,
-          Description: "Command and arguments to execute",
-        },
-        "dir": {
-          Type: "string",
-          Required: false,
-          Description: "Working directory",
-        },
-        "env": {
-          Type: "array",
-          Required: false,
-          Description: "Environment variables in KEY=VALUE format",
-        },
-      },
-    },
-    Decode: func(raw map[string]any) (any, error) {
-      var in ShellInputs
-      err := mapstructure.Decode(raw, &in)
-      return in, err
-    },
-  }
-}
-~~~
-
-### Action Usage
+Passed as-is with no evaluation.
 
 ~~~yaml
-spec:
-  actions:
-    build:
-      provider: shell
+inputs:
+  image: nginx:1.27
+~~~
+
+### 2. Resolver Binding (Canonical)
+
+Copies the value emitted by a resolver, preserving its type.
+
+~~~yaml
+inputs:
+  image:
+    resolver: image
+~~~
+
+### 3. Explicit CEL Expression
+
+Evaluated using CEL before provider execution.
+
+~~~yaml
+inputs:
+  image:
+    expr: _.org + "/" + _.repo + ":" + _.version
+~~~
+
+### 4. Template String
+
+Rendered using Go templating. Always produces a string.
+
+~~~yaml
+inputs:
+  path:
+    tmpl: "./{{ _.environment }}/main.tf"
+~~~
+
+### Exclusivity Rule
+
+For a single input field, it is an error to specify more than one of:
+
+- literal
+- `resolver`
+- `expr`
+- `tmpl`
+
+---
+
+## Providers in Resolvers
+
+Resolvers invoke providers to obtain, transform, or validate values.
+
+~~~yaml
+resolve:
+  from:
+    - provider: env
       inputs:
-        dir: {{ _.projectRoot }}
-        cmd:
-          - go build ./...
-~~~
-
----
-
-## Provider Invocation from Resolvers
-
-Resolvers invoke providers during the resolve phase.
-
-~~~yaml
-spec:
-  resolvers:
-    gitBranch:
-      resolve:
-        from:
-          - provider: git
-            inputs:
-              field: branch
+        key: PROJECT_NAME
 ~~~
 
 Resolver execution flow:
 
 1. Provider is selected
-2. Inputs are validated against the provider schema
-3. Inputs are decoded into a typed structure
-4. Provider executes
-5. Result is emitted
+2. Inputs are resolved and validated
+3. Provider executes
+4. Result is returned to the resolver
+5. Resolver emits the value after transform and validate
+
+Providers used in resolvers must be pure and deterministic.
 
 ---
 
-## Provider Invocation from Actions
+## Providers in Transform
 
-Actions invoke providers to perform side effects.
+Transform steps are provider executions applied sequentially to a single value.
 
 ~~~yaml
-spec:
-  actions:
-    deploy:
-      provider: api
+transform:
+  into:
+    - provider: cel
       inputs:
-        endpoint: https://api.example.com/deploy
-        method: POST
-        body: '{"version":"{{ _.version }}"}'
+        expr: __self.toLowerCase()
 ~~~
 
-Action orchestration, dependencies, conditions, and iteration are handled entirely outside the provider.
+Each step receives the previous value as `__self`.
 
 ---
 
-## Outputs
+## Providers in Validation
 
-Providers may return structured output. Action outputs can be projected and referenced by subsequent actions.
+Validation is provider-backed.
+
+Any provider that returns a boolean may be used as a validation provider.
+
+### Built-in Provider: validation
+
+The built-in `validation` provider supports:
+
+- `match` (regex match)
+- `notMatch` (regex must not match)
+- `notMatch.expr` (CEL expression returning boolean)
+- `match.expr` (CEL expression returning boolean)
+
+Rules:
+
+- `match` and `notMatch` may be combined
+- The provider returns a single boolean result
+
+Example:
 
 ~~~yaml
-spec:
-  actions:
-    fetchConfig:
-      provider: api
+validate:
+  from:
+    - provider: validation
       inputs:
-        endpoint: https://api.example.com/config
-      outputs:
-        config: .data
+        match: "^[a-z0-9-]+$"
+        notMatch: "^fff$"
+      message: "Invalid value"
 ~~~
-
-Output projection is expression-based and provider-agnostic.
 
 ---
 
-## Provider Configuration and Reuse
+## Providers in Actions
 
-Providers may be configured once and reused across actions.
+Actions invoke providers to perform side effects or generate artifacts.
 
 ~~~yaml
-spec:
-  providers:
-    github:
-      type: api
-      config:
-        baseUrl: https://api.github.com
-        defaultHeaders:
-          Authorization: Bearer {{ _.githubToken }}
-
-  actions:
-    createRelease:
-      provider: github
-      inputs:
-        endpoint: /repos/{{ _.org }}/{{ _.repo }}/releases
-        method: POST
+actions:
+  build:
+    provider: shell
+    inputs:
+      cmd:
+        - go
+        - build
+        - ./...
 ~~~
 
-Configuration is merged with action inputs before schema validation.
+Action orchestration, dependencies, iteration, and conditional execution are handled outside the provider.
 
 ---
 
-## Plugin Providers
-
-External providers are loaded dynamically as plugins.
-
-### Registration
-
-~~~go
-func RegisterProvider(p Provider) {
-  registry[p.Descriptor().Name] = p
-}
-~~~
-
-Plugin providers must expose a factory that returns a Provider instance. Once registered, plugin providers behave identically to built-in providers.
-
----
-
-## CLI Interaction
-
-### List Providers
-
-~~~bash
-scafctl providers list
-~~~
-
-### Describe Provider
-
-~~~bash
-scafctl providers describe shell
-~~~
-
-The description includes:
-
-- Provider name and kind
-- Input parameters
-- Required fields
-- Defaults and descriptions
-
----
-
-## Design Constraints
-
-- Providers must be stateless
-- Providers must declare all inputs explicitly
-- Providers must fail fast on invalid input
-- Providers must not depend on execution order
-- Providers must not own orchestration or control flow
-
----
-
-Below is a non-exhaustive list of possible providers and an example of how each would be invoked in a resolver `resolve.from` section. The intent is to make it obvious that all data enters the system through explicit provider calls.
-
-The `cli` provider is renamed to `parameter` to better reflect its role.
-
----
-
-## Common Providers
+## Built-in Providers (Non-Exhaustive)
 
 ### parameter
 
-Reads a value passed explicitly at invocation time.
-
-Typical sources:
-
-- CLI flags
-- Action-scoped parameters
-- Runtime overrides
+Reads a value supplied at invocation time.
 
 ~~~yaml
 resolve:
   from:
     - provider: parameter
       inputs:
-        key: name
+        key: env
 ~~~
 
 ---
@@ -383,13 +321,6 @@ resolve:
         field: branch
 ~~~
 
-Possible fields include:
-
-- branch
-- commit
-- tag
-- remoteUrl
-
 ---
 
 ### api
@@ -407,52 +338,30 @@ resolve:
 
 ---
 
-### cel (built-in)
+### cel
 
-Derives a value using common expression language
+Derives a value using CEL.
 
 ~~~yaml
 resolve:
   from:
     - provider: cel
-      expr: _.org + "/" + _.repo
+      inputs:
+        expr: _.org + "/" + _.repo
 ~~~
 
 ---
 
-### catalog
+## Design Constraints
 
-Resolves an entry from the scafctl catalog.
-
-~~~yaml
-resolve:
-  from:
-    - provider: catalog
-      inputs:
-        ref: solution:base-service
-        field: version
-~~~
+- Providers must be stateless
+- Providers must declare all inputs explicitly
+- Providers must fail fast on invalid input
+- Providers must not depend on execution order
+- Providers must not introduce hidden data into resolver context
 
 ---
-
-### parameter with fallback example
-
-Demonstrates ordered resolution and fallback semantics.
-
-~~~yaml
-resolve:
-  from:
-    - provider: parameter
-      inputs:
-        key: env
-    - provider: env
-      inputs:
-        key: ENVIRONMENT
-    - provider: static
-      inputs:
-        value: dev
-~~~
 
 ## Summary
 
-Providers form the execution boundary of scafctl. They are schema-first, stateless, and explicitly invoked. By isolating execution behind providers, scafctl preserves declarative solutions, strong validation, and predictable behavior.
+Providers are explicit, schema-driven execution units. scafctl resolves all inputs before invoking a provider, ensuring that providers operate only on concrete, validated data. This keeps resolver behavior deterministic and action execution predictable.

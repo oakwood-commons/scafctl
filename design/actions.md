@@ -117,7 +117,8 @@ inputs:
 
 ~~~yaml
 inputs:
-  image: _.image
+  image:
+    resolver: image
 ~~~
 
 ### Expression
@@ -132,7 +133,8 @@ inputs:
 
 ~~~yaml
 inputs:
-  path: "./config/{{ _.environment }}/app.yaml"
+  path:
+    tmpl: "./config/{{ _.environment }}/app.yaml"
 ~~~
 
 Providers never see CEL, templates, or resolver references. Providers receive concrete values.
@@ -195,29 +197,18 @@ actions:
     provider: api
     inputs:
       endpoint: https://api.example.com/config
-    results:
-      config:
-        from: result.data
 
   deploy:
     dependsOn: [fetchConfig]
     provider: api
     inputs:
       body:
-        fromAction:
-          name: fetchConfig
-          result: config
-~~~
-
-Tekton equivalent reference:
-
-~~~text
-$(tasks.fetchConfig.results.config)
+        tmpl: {{ .__actions.fetchConfig.results }}      
 ~~~
 
 Rules:
 
-- `fromAction` may only reference declared dependencies
+- `.__actions.fetchConfig.results` may only reference declared dependencies
 - Referencing a non-dependency is a validation error
 - External executors do not evaluate CEL or templates
 - The graph encodes action-to-action data flow explicitly
@@ -253,11 +244,12 @@ Actions may be expanded declaratively using `forEach`.
 actions:
   deploy:
     forEach:
-      over: _.regions
-      as: region
+      item: region
+      in: _.regions
     provider: api
     inputs:
-      endpoint: "https://{{ region.api }}/deploy"
+      endpoint:
+        tmpl: "https://{{ .region.api }}/deploy"
 ~~~
 
 Behavior:
