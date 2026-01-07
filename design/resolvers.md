@@ -41,6 +41,7 @@ Special symbol:
 
 - `__self` refers to the current value being transformed or validated
 
+> Note: resolvers cannot be prefixed with __ because this is reserved for internal use
 ---
 
 ## Resolver Model
@@ -93,8 +94,8 @@ Key properties:
 
 Optional controls:
 
-- `when:` to conditionally skip the resolve phase or a source
-- `until:` to stop evaluation early
+- `when:` to conditionally skip the resolve phase or a source (must be a boolean)
+- `until:` to stop evaluation early (must be a boolean)
 
 ### `when:` Rule
 
@@ -197,17 +198,20 @@ The validate phase enforces constraints on the transformed value.
 
 Validation is provider-backed. Any provider that emits a boolean may be used for validation.
 
-scafctl provides a built-in provider named `validation` that supports `match`, `notMatch`, and `expr`.
+Validation providers must return a boolean.
+
+scafctl provides a built-in provider named `validation` that supports `match`, `notMatch`.
 
 Rules:
 
 - All validations must pass
 - Validation failures stop execution
 - Validation does not mutate data
+- `match` and `notMatch` support all four input forms (literal, rslv, expr, tmpl)
 
 ### Examples
 
-Regex match:
+Literal regex match:
 
 ~~~yaml
 validate:
@@ -229,7 +233,7 @@ validate:
       message: "Must not be fff"
 ~~~
 
-Match and notMatch:
+Combining match and notMatch:
 
 ~~~yaml
 validate:
@@ -241,7 +245,7 @@ validate:
       message: "Must be lowercase alphanumeric and not fff"
 ~~~
 
-CEL:
+Dynamic pattern using expression:
 
 ~~~yaml
 validate:
@@ -249,7 +253,30 @@ validate:
     - provider: validation
       inputs:
         match:
-          expr: __self in ["dev", "staging", "prod"]
+          expr: "\"^\" + _.allowedPrefix + \"-[a-z0-9]+$\""
+      message: "Must match allowed prefix pattern"
+~~~
+
+Pattern from resolver:
+
+~~~yaml
+validate:
+  from:
+    - provider: validation
+      inputs:
+        match:
+          rslv: namePattern
+      message: "Must match naming convention"
+~~~
+
+CEL expression validation:
+
+~~~yaml
+validate:
+  from:
+    - provider: validation
+      inputs:
+        expression: "__self in [\"dev\", \"staging\", \"prod\"]"
       message: "Invalid environment"
 ~~~
 
@@ -308,7 +335,8 @@ Rendered using Go templating. Always produces a string.
 
 ~~~yaml
 inputs:
-  image: "{{ _.org }}/{{ _.repo }}:{{ _.version }}"
+  image:
+    tmpl: "{{ _.org }}/{{ _.repo }}:{{ _.version }}"
 ~~~
 
 ### Exclusivity Rule
@@ -389,13 +417,13 @@ Resolver parameters are consumed by the `parameter` provider and participate in 
 Resolver parameters are supplied using the `-r` or `--resolver` flag.
 
 ~~~bash
-scafctl run solution:example -r key=value
+scafctl run solution example -r key=value
 ~~~
 
 Multiple resolver parameters may be supplied:
 
 ~~~bash
-scafctl run solution:example \
+scafctl run solution example \
   -r env=prod \
   -r regions=us-east1,us-west1
 ~~~
@@ -442,7 +470,7 @@ Resolver parameters support multiple input forms.
 ### Stdin Input
 
 ~~~bash
-cat config.json | scafctl run solution:example -r config=-
+cat config.json | scafctl run solution example -r config=-
 ~~~
 
 ### File References
@@ -515,13 +543,13 @@ Rules:
 Resolvers run only when required.
 
 ~~~bash
-scafctl run solution:myapp --action deploy
+scafctl run solution myapp --action deploy
 ~~~
 
 Force all resolvers with:
 
 ~~~bash
-scafctl run solution:myapp --resolve-all
+scafctl run solution myapp --resolve-all
 ~~~
 
 ---
@@ -553,8 +581,7 @@ spec:
         from:
           - provider: validation
             inputs:
-              match:
-                expr: __self in ["dev", "staging", "prod"]            
+              expression: "__self in [\"dev\", \"staging\", \"prod\"]"
             message: "Invalid environment"
 ~~~
 

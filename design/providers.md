@@ -60,6 +60,10 @@ Providers do not evaluate expressions or templates themselves. All inputs are fu
 
 ## Provider Model
 
+### Notes
+
+- Should providers support mocking so they can be dry run?
+
 ### Conceptual Flow
 
 - inputs (map)
@@ -105,55 +109,71 @@ This interface is illustrative. The exact implementation may evolve, but the con
 
 Provider inputs are resolved by scafctl before execution.
 
-Each input field supports exactly one of the following forms:
+Each input field supports exactly one of the following forms. Choose the most appropriate form based on your use case.
 
 ### 1. Literal Value
 
-Passed as-is with no evaluation.
+Set a property directly as a literal. The value is passed as-is with no evaluation.
 
 ~~~yaml
 inputs:
   image: nginx:1.27
+  retries: 3
+  enabled: true
 ~~~
 
-### 2. Resolver Binding (Canonical)
+### 2. Resolver Binding
 
-Copies the value emitted by a resolver, preserving its type.
+Reference a resolver directly using `rslv`. The value emitted by the resolver is copied, preserving its type.
 
 ~~~yaml
 inputs:
   image:
-    resolver: image
+    rslv: imageResolver
+  environment:
+    rslv: deploymentEnv
 ~~~
 
-### 3. Explicit CEL Expression
+This is the canonical form for passing resolver outputs to providers.
 
-Evaluated using CEL before provider execution.
+### 3. Expression
+
+Evaluate a CEL expression using `expr`. The expression is evaluated using the resolver context (`_`).
 
 ~~~yaml
 inputs:
   image:
     expr: _.org + "/" + _.repo + ":" + _.version
+  tags:
+    expr: _.environments.map(e, e.toUpperCase())
 ~~~
+
+Expressions are computed on-the-fly and may combine multiple resolver values.
 
 ### 4. Template String
 
-Rendered using Go templating. Always produces a string.
+Render a Go template using `tmpl`. Always produces a string.
 
 ~~~yaml
 inputs:
   path:
-    tmpl: "./{{ _.environment }}/main.tf"
+    tmpl: "./{{ .environment }}/main.tf"
+  message:
+    tmpl: "Deploying {{ .app }} to {{ .region }}"
 ~~~
+
+Templates are useful for constructing formatted strings from resolver values.
 
 ### Exclusivity Rule
 
-For a single input field, it is an error to specify more than one of:
+For a single input field, you must specify exactly one of:
 
-- literal
-- `resolver`
-- `expr`
-- `tmpl`
+- A literal value
+- `rslv: resolverName`
+- `expr: celExpression`
+- `tmpl: "templateString"`
+
+It is an error to specify more than one form for the same field.
 
 ---
 
@@ -190,7 +210,7 @@ transform:
   into:
     - provider: cel
       inputs:
-        expr: __self.toLowerCase()
+        expression: __self.toLowerCase()
 ~~~
 
 Each step receives the previous value as `__self`.
@@ -207,17 +227,20 @@ Any provider that returns a boolean may be used as a validation provider.
 
 The built-in `validation` provider supports:
 
-- `match` (regex match)
-- `notMatch` (regex must not match)
-- `notMatch.expr` (CEL expression returning boolean)
-- `match.expr` (CEL expression returning boolean)
+- `match` - regex pattern that must match (supports all input forms)
+- `notMatch` - regex pattern that must not match (supports all input forms)
+- `expression` - CEL expression returning boolean
 
 Rules:
 
 - `match` and `notMatch` may be combined
+- `match` and `notMatch` support all four input forms (literal, rslv, expr, tmpl)
+- `expression` is for CEL-based validation
 - The provider returns a single boolean result
 
-Example:
+Examples:
+
+Literal regex patterns:
 
 ~~~yaml
 validate:
@@ -227,6 +250,53 @@ validate:
         match: "^[a-z0-9-]+$"
         notMatch: "^fff$"
       message: "Invalid value"
+~~~
+
+Using expression for computed regex:
+
+~~~yaml
+validate:
+  from:
+    - provider: validation
+      inputs:
+        match:
+          expr: "\"^\" + _.prefix + \"[a-z]+$\""
+      message: "Must match prefix pattern"
+~~~
+
+Using resolver for dynamic pattern:
+
+~~~yaml
+validate:
+  from:
+    - provider: validation
+      inputs:
+        match:
+          rslv: validationPattern
+      message: "Must match validation pattern"
+~~~
+
+Using template for pattern:
+
+~~~yaml
+validate:
+  from:
+    - provider: validation
+      inputs:
+        match:
+          tmpl: "^{{ .allowedPrefix }}-[a-z0-9]+$"
+      message: "Must match allowed prefix"
+~~~
+
+Using CEL expression for validation logic:
+
+~~~yaml
+validate:
+  from:
+    - provider: validation
+      inputs:
+        expression: "__self in [\"dev\", \"staging\", \"prod\"]"
+      message: "Invalid environment"
 ~~~
 
 ---
@@ -347,7 +417,7 @@ resolve:
   from:
     - provider: cel
       inputs:
-        expr: _.org + "/" + _.repo
+        expression: _.org + "/" + _.repo
 ~~~
 
 ---

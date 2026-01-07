@@ -104,8 +104,8 @@ Providers never see refresh tokens.
 
 ~~~yaml
 caasByID:
-  authenticationType: entra
-  scope: "{{ .platform.scope }}"
+  authProvider: entra
+  authScope: "{{ .platform.scope }}"
   headers:
     Accept: application/json, application/problem+json
   method: GET
@@ -125,7 +125,7 @@ Meaning:
 When running in render mode:
 
 ~~~bash
-scafctl render solution:myapp
+scafctl render solution myapp
 ~~~
 
 - No authentication flows are initiated

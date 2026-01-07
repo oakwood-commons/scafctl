@@ -1,0 +1,615 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: comprehensive-example
+  description: |
+    Comprehensive solution demonstrating all scafctl features:
+    - All four input forms (literal, rslv, expr, tmpl)
+    - Multiple provider types in resolvers
+    - Transform and validation patterns
+    - Actions with dependencies and conditions
+    - forEach iteration
+    - Result consumption between actions
+  version: 1.0.0
+  maintainers:
+    - name: Platform Team
+      email: platform@example.com
+
+spec:
+  # ============================================================================
+  # RESOLVERS: Data gathering, transformation, and validation
+  # ============================================================================
+  resolvers:
+    # -------------------------------------------------------------------------
+    # Example 1: Parameter with static fallback
+    # Uses: parameter provider, static provider
+    # -------------------------------------------------------------------------
+    environment:
+      description: Target deployment environment
+      resolve:
+        from:
+          # Try parameter first (from CLI: -r environment=prod)
+          - provider: parameter
+            inputs:
+              key: environment
+          # Fall back to environment variable
+          - provider: env
+            inputs:
+              key: DEPLOY_ENV
+          # Final fallback to literal default
+          - provider: static
+            inputs:
+              value: dev
+      # Transform: normalize to lowercase
+      transform:
+        into:
+          - provider: cel
+            inputs:
+              expression: "__self.toLowerCase()"
+      # Validate: must be one of approved environments
+      validate:
+        from:
+          - provider: validation
+            inputs:
+              expression: "__self in [\"dev\", \"staging\", \"prod\"]"
+            message: "Environment must be dev, staging, or prod"
+
+    # -------------------------------------------------------------------------
+    # Example 2: Reading from filesystem
+    # Uses: filesystem provider, cel provider for transform
+    # -------------------------------------------------------------------------
+    appName:
+      description: Application name from file or parameter
+      resolve:
+        from:
+          - provider: parameter
+            inputs:
+              key: app
+          - provider: filesystem
+            inputs:
+              operation: read
+              path: ./app-name.txt
+          - provider: static
+            inputs:
+              value: my-app
+      transform:
+        into:
+          # Trim whitespace
+          - provider: cel
+            inputs:
+              expression: "__self.trim()"
+          # Convert to lowercase
+          - provider: cel
+            inputs:
+              expression: "__self.toLowerCase()"
+          # Replace underscores with hyphens
+          - provider: cel
+            inputs:
+              expression: "__self.replace(\"_\", \"-\")"
+      validate:
+        from:
+          - provider: validation
+            inputs:
+              match: "^[a-z0-9-]+$"
+              notMatch: "^-|-$"
+            message: "App name must be lowercase alphanumeric with hyphens, not starting or ending with hyphen"
+
+    # -------------------------------------------------------------------------
+    # Example 3: Git provider for version information
+    # Uses: git provider
+    # -------------------------------------------------------------------------
+    gitBranch:
+      description: Current git branch
+      resolve:
+        from:
+          - provider: git
+            inputs:
+              field: branch
+
+    gitCommit:
+      description: Current git commit SHA
+      resolve:
+        from:
+          - provider: git
+            inputs:
+              field: commit
+      transform:
+        into:
+          # Take first 7 characters for short SHA
+          - provider: cel
+            inputs:
+              expression: "__self.substring(0, 7)"
+
+    # -------------------------------------------------------------------------
+    # Example 4: CEL expression to derive value from other resolvers
+    # Uses: cel provider with expressions referencing other resolvers
+    # -------------------------------------------------------------------------
+    version:
+      description: Computed version from git or parameter
+      resolve:
+        from:
+          - provider: parameter
+            inputs:
+              key: version
+          - provider: cel
+            inputs:
+              # Expression using other resolver values
+              expression: "_.gitBranch == \"main\" ? \"1.0.0-\" + _.gitCommit : \"0.0.0-\" + _.gitCommit"
+
+    # -------------------------------------------------------------------------
+    # Example 5: API call to fetch data
+    # Uses: api provider
+    # -------------------------------------------------------------------------
+    configFromAPI:
+      description: Configuration fetched from remote API
+      resolve:
+        from:
+          - provider: api
+            inputs:
+              endpoint: https://api.example.com/config
+              method: GET
+              headers:
+                Accept: application/json
+      validate:
+        from:
+          - provider: validation
+            inputs:
+              expression: "has(__self.data) && __self.data.size() > 0"
+            message: "API response must contain data"
+
+    # -------------------------------------------------------------------------
+    # Example 6: Complex list processing
+    # Uses: parameter with CSV, cel for transformation
+    # -------------------------------------------------------------------------
+    regions:
+      description: Deployment regions as list
+      resolve:
+        from:
+          - provider: parameter
+            inputs:
+              key: regions
+          - provider: static
+            inputs:
+              value: "us-east-1,us-west-2"
+      transform:
+        into:
+          # Split CSV into array
+          - provider: cel
+            inputs:
+              expression: "__self.split(\",\").map(r, r.trim())"
+          # Filter out empty strings
+          - provider: cel
+            inputs:
+              expression: "__self.filter(r, r.size() > 0)"
+      validate:
+        from:
+          - provider: validation
+            inputs:
+              expression: "__self.size() > 0 && __self.size() <= 5"
+            message: "Must specify 1-5 regions"
+
+    # -------------------------------------------------------------------------
+    # Example 7: Template content for later use
+    # Uses: filesystem provider to load template files
+    # -------------------------------------------------------------------------
+    deploymentTemplate:
+      description: Kubernetes deployment template
+      resolve:
+        from:
+          - provider: filesystem
+            inputs:
+              operation: read
+              path: ./templates/deployment.yaml.tmpl
+
+    serviceTemplate:
+      description: Kubernetes service template
+      resolve:
+        from:
+          - provider: filesystem
+            inputs:
+              operation: read
+              path: ./templates/service.yaml.tmpl
+
+    # -------------------------------------------------------------------------
+    # Example 8: Boolean flags
+    # -------------------------------------------------------------------------
+    dryRun:
+      description: Whether to run in dry-run mode
+      resolve:
+        from:
+          - provider: parameter
+            inputs:
+              key: dryRun
+          - provider: static
+            inputs:
+              value: false
+      validate:
+        from:
+          - provider: validation
+            inputs:
+              expression: "type(__self) == bool"
+            message: "dryRun must be a boolean"
+
+    # -------------------------------------------------------------------------
+    # Example 9: Numeric values with constraints
+    # -------------------------------------------------------------------------
+    replicas:
+      description: Number of replicas to deploy
+      resolve:
+        from:
+          - provider: parameter
+            inputs:
+              key: replicas
+          - provider: static
+            inputs:
+              value: 3
+      validate:
+        from:
+          - provider: validation
+            inputs:
+              expression: "__self >= 1 && __self <= 10"
+            message: "Replicas must be between 1 and 10"
+
+    # -------------------------------------------------------------------------
+    # Example 10: Computed value using multiple resolvers
+    # Demonstrates expr input form in action inputs
+    # -------------------------------------------------------------------------
+    imageTag:
+      description: Docker image tag combining app name and version
+      resolve:
+        from:
+          - provider: cel
+            inputs:
+              expression: "_.appName + \":\" + _.version"
+
+  # ============================================================================
+  # ACTIONS: Side effects and orchestration
+  # ============================================================================
+  actions:
+    # -------------------------------------------------------------------------
+    # Action 1: Simple action with literal inputs
+    # Demonstrates: literal input values
+    # -------------------------------------------------------------------------
+    createOutputDirectory:
+      description: Create output directory for artifacts
+      provider: shell
+      inputs:
+        # Literal array input
+        cmd:
+          - mkdir
+          - -p
+          - ./output
+
+    # -------------------------------------------------------------------------
+    # Action 2: Action using resolver binding (rslv)
+    # Demonstrates: rslv input form
+    # -------------------------------------------------------------------------
+    validateEnvironment:
+      description: Log the target environment
+      provider: shell
+      dependsOn: [createOutputDirectory]
+      inputs:
+        cmd:
+          - echo
+          - "Deploying to environment:"
+        # Direct resolver binding - passes the value as-is
+        env:
+          ENVIRONMENT:
+            rslv: environment
+          APP_NAME:
+            rslv: appName
+          VERSION:
+            rslv: version
+
+    # -------------------------------------------------------------------------
+    # Action 3: Action with expression inputs (expr)
+    # Demonstrates: expr input form
+    # -------------------------------------------------------------------------
+    buildDockerImage:
+      description: Build Docker image with computed tag
+      provider: shell
+      dependsOn: [validateEnvironment]
+      when:
+        # Conditional execution using expr
+        expr: "!_.dryRun && _.environment != \"dev\""
+      inputs:
+        cmd:
+          - docker
+          - build
+          - -t
+          # Expression input combining multiple values
+        env:
+          IMAGE_TAG:
+            expr: "\"myregistry.io/\" + _.appName + \":\" + _.version"
+          BUILD_TIME:
+            expr: "string(now())"
+          GIT_COMMIT:
+            rslv: gitCommit
+
+    # -------------------------------------------------------------------------
+    # Action 4: Action with template inputs (tmpl)
+    # Demonstrates: tmpl input form
+    # -------------------------------------------------------------------------
+    generateManifests:
+      description: Generate Kubernetes manifests for each region
+      provider: filesystem
+      dependsOn: [validateEnvironment]
+
+      # Iterate over regions
+      forEach:
+        item: __region # using __item to avoid name clash
+        in: _.regions
+
+      inputs:
+        operations:
+          # Create region directory
+          - name: createRegionDir
+            action: mkdir
+            path:
+              # Template string using __item (forEach variable)
+              tmpl: "./output/{{ .__region }}"
+
+          # Write deployment manifest
+          - name: writeDeployment
+            action: write
+            path:
+              tmpl: "./output/{{ .__region }}/deployment.yaml"
+            content:
+              # Resolver binding to template content
+              rslv: deploymentTemplate
+            # Template context for rendering
+            context:
+              appName:
+                rslv: appName
+              version:
+                rslv: version
+              replicas:
+                rslv: replicas
+              environment:
+                rslv: environment
+              region:
+                expr: "_.__region"
+
+          # Write service manifest
+          - name: writeService
+            action: write
+            path:
+              tmpl: "./output/{{ .__region }}/service.yaml"
+            content:
+              rslv: serviceTemplate
+            context:
+              appName:
+                rslv: appName
+              environment:
+                rslv: environment
+              region:
+                expr: "__item"
+
+    # -------------------------------------------------------------------------
+    # Action 5: API call action with mixed input forms
+    # Demonstrates: multiple input forms in same action
+    # -------------------------------------------------------------------------
+    notifyDeployment:
+      description: Send deployment notification to webhook
+      provider: api
+      dependsOn: [generateManifests]
+      when:
+        expr: "!_.dryRun"
+      inputs:
+        authProvider: entra # comes from the entra auth provider
+        authScope: https://hooks.example.com/.default
+        # Literal string
+        endpoint: https://hooks.example.com/deployments
+        method: POST
+        headers:
+          # Literal value
+          Content-Type: application/json
+          # Template value
+        # Expression creating JSON body
+        body:
+          app:
+            rslv: appName
+          version:
+            rslv: version
+          environment:
+            rslv: environment
+          regions:
+            rslv: regions
+          timestamp:
+            expr: "string(now())"
+          commit:
+            rslv: gitCommit
+          branch:
+            rslv: gitBranch
+          message:
+            tmpl: "Deployed {{ .appName }} version {{ .version }} to {{ .environment }}"
+
+    # -------------------------------------------------------------------------
+    # Action 6: Action with results for downstream consumption
+    # Demonstrates: action results and fromAction references
+    # -------------------------------------------------------------------------
+    deployToCluster:
+      description: Deploy manifests to Kubernetes cluster
+      provider: shell
+      dependsOn: [generateManifests, buildDockerImage]
+      when:
+        expr: "!_.dryRun"
+
+      forEach:
+        item: __region
+        in: _.regions
+
+      inputs:
+        cmd:
+          - kubectl
+          - apply
+          - -f
+        args:
+          path:
+            tmpl: "./output/{{ .__region }}/"
+          namespace:
+            rslv: environment
+          context:
+            tmpl: "cluster-{{ .__region }}"
+      # Define results that can be consumed by later actions
+      results:
+        deploymentStatus:
+          from: result.exitCode
+        deploymentOutput:
+          from: result.stdout
+
+    # -------------------------------------------------------------------------
+    # Action 7: Retry pattern with until condition
+    # Demonstrates: until for retry logic
+    # -------------------------------------------------------------------------
+    waitForDeployment:
+      description: Wait for deployment to be ready
+      provider: shell
+      dependsOn: [deployToCluster]
+      when:
+        expr: "!_.dryRun"
+      # Retry until deployment is ready (max attempts/timeout in provider config)
+      until:
+        expr: '_.__actions.deployToCluster.results.exitCode == 0 && _.__actions.deployToCluster.results.stdout.contains(\"Running\")'
+      inputs:
+        cmd:
+          - kubectl
+          - get
+          - pods
+          - -n
+        args:
+          namespace:
+            rslv: environment
+          selector:
+            tmpl: "app={{ .appName }}"
+
+    # -------------------------------------------------------------------------
+    # Action 8: Consuming results from previous action
+    # Demonstrates: using action results via __actions reference
+    # -------------------------------------------------------------------------
+    verifyDeployment:
+      description: Verify deployment succeeded
+      provider: shell
+      dependsOn: [waitForDeployment]
+      when:
+        expr: "!_.dryRun"
+      inputs:
+        cmd:
+          - echo
+          - "Verifying deployment status"
+        # Access results from deployToCluster action
+        validate:
+          statusCheck:
+            expr: "__actions.deployToCluster.results.deploymentStatus == 0"
+
+    # -------------------------------------------------------------------------
+    # Action 9: Conditional action based on environment
+    # Demonstrates: complex when conditions
+    # -------------------------------------------------------------------------
+    runSmokeTests:
+      description: Run smoke tests in non-production environments
+      provider: shell
+      dependsOn: [verifyDeployment]
+      when:
+        expr: "_.environment == \"staging\" || _.environment == \"dev\""
+      inputs:
+        cmd:
+          - npm
+          - run
+          - smoke-test
+        env:
+          TEST_ENV:
+            rslv: environment
+          TEST_URL:
+            tmpl: "https://{{ .appName }}.{{ .environment }}.example.com"
+
+    # -------------------------------------------------------------------------
+    # Action 10: Summary report combining all inputs
+    # Demonstrates: all four input forms in a single action
+    # -------------------------------------------------------------------------
+    generateReport:
+      description: Generate deployment report
+      provider: filesystem
+      dependsOn: [notifyDeployment, verifyDeployment]
+      inputs:
+        operations:
+          - name: writeReport
+            action: write
+            path: ./output/deployment-report.json
+            # Expression creating complex JSON structure
+            content:
+              expr: |
+                {
+                  "deployment": {
+                    "app": _.appName,
+                    "version": _.version,
+                    "environment": _.environment,
+                    "regions": _.regions,
+                    "replicas": _.replicas,
+                    "dryRun": _.dryRun
+                  },
+                  "git": {
+                    "branch": _.gitBranch,
+                    "commit": _.gitCommit
+                  },
+                  "timestamp": string(now()),
+                  "status": "completed"
+                }
+
+          - name: writeMarkdown
+            action: write
+            path: ./output/deployment-report.md
+            # Template for human-readable report
+            content:
+              tmpl: |
+                # Deployment Report
+
+                **Application**: {{ .appName }}
+                **Version**: {{ .version }}
+                **Environment**: {{ .environment }}
+                **Regions**: {{ .regions | join ", " }}
+                **Replicas**: {{ .replicas }}
+                **Dry Run**: {{ .dryRun }}
+
+                ## Git Information
+                - Branch: {{ .gitBranch }}
+                - Commit: {{ .gitCommit }}
+
+                ## Status
+                Deployment completed successfully at {{ .timestamp }}
+            context:
+              appName:
+                rslv: appName
+              version:
+                rslv: version
+              environment:
+                rslv: environment
+              regions:
+                rslv: regions
+              replicas:
+                rslv: replicas
+              dryRun:
+                rslv: dryRun
+              gitBranch:
+                rslv: gitBranch
+              gitCommit:
+                rslv: gitCommit
+              timestamp:
+                expr: "string(now())"
+
+    # -------------------------------------------------------------------------
+    # Action 11: Cleanup action that always runs
+    # Demonstrates: no dependencies, cleanup pattern
+    # -------------------------------------------------------------------------
+    cleanup:
+      description: Clean up temporary files
+      provider: shell
+      # No dependsOn - can run independently
+      inputs:
+        cmd:
+          - rm
+          - -rf
+          - ./temp
+        # Literal boolean flag
+        continueOnError: true

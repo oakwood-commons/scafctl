@@ -3,6 +3,7 @@ kind: Solution
 
 metadata:
   name: terraform-scaffold
+  version: 1.0.0
   description: Scaffold Terraform environments using resolvers, templates, and filesystem actions
 
 spec:
@@ -17,9 +18,15 @@ spec:
           - provider: static
             inputs:
               value: my-app
+      validate:
+        from:
+          - provider: validation
+            inputs:
+              match: "^[a-z0-9-]+$"
+            message: "App name must be lowercase alphanumeric or hyphens"
 
     environments:
-      description: Target environments
+      description: Target deployment environments
       resolve:
         from:
           - provider: parameter
@@ -31,15 +38,19 @@ spec:
 
       transform:
         into:
-          - provider: expression
-            expr: __self.split(",").map(e, e.trim())
+          - provider: cel
+            inputs:
+              expression: "__self.split(\",\").map(e, e.trim())"
 
       validate:
-        - expr: __self.size() > 0
-          message: "At least one environment must be specified"
+        from:
+          - provider: validation
+            inputs:
+              expression: "__self.size() > 0"
+            message: "At least one environment must be specified"
 
     mainTfTemplate:
-      description: main.tf template
+      description: main.tf template content
       resolve:
         from:
           - provider: filesystem
@@ -47,7 +58,7 @@ spec:
               path: templates/main.tf.tmpl
 
     tfvarsTemplate:
-      description: auto.tfvars template
+      description: auto.tfvars template content
       resolve:
         from:
           - provider: filesystem
@@ -55,37 +66,31 @@ spec:
               path: templates/auto.tfvars.tmpl
 
   actions:
-    scaffold:
-      description: Generate Terraform files per environment
+    createEnvironment:
+      description: Generate Terraform configuration files for each environment
       provider: filesystem
 
-      foreach:
+      forEach:
         item: env
         in: _.environments
 
       inputs:
         operations:
-          - action: mkdir
-            path: "./{{ __item }}"
+          - name: createDirectory
+            action: mkdir
+            path:
+              tmpl: "./{{ .env }}"
 
-          - action: writeMain
-            path: "./{{ __item }}/main.tf"
+          - name: writeMainTf
+            action: write
+            path:
+              tmpl: "./{{ .env }}/main.tf"
             content:
-              provider: template
-              inputs:
-                engine: go
-                content: _.mainTfTemplate
-                context:
-                  app: _.app
-                  env: __item
+              rslv: mainTfTemplate
 
-          - action: writeTFvars
-            path: "./{{ __item }}/auto.tfvars"
+          - name: writeTFvars
+            action: write
+            path:
+              tmpl: "./{{ .env }}/auto.tfvars"
             content:
-              provider: template
-              inputs:
-                engine: go
-                content: _.tfvarsTemplate
-                context:
-                  app: _.app
-                  env: __item
+              rslv: tfvarsTemplate

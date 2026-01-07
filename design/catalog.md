@@ -212,8 +212,8 @@ Supported queries:
 Example commands:
 
 scafctl catalog list solutions
-scafctl catalog versions solution:gcp-projects
-scafctl catalog inspect solution:gcp-projects@1.7.0
+scafctl catalog versions solution gcp-projects
+scafctl catalog inspect solution gcp-projects@1.7.0
 
 All queries operate on local metadata and cached manifests.
 
@@ -225,9 +225,8 @@ Publishing is explicit and simple.
 
 Example:
 
-scafctl catalog publish solution.yaml \
-  --name gcp-projects \
-  --version 1.7.0
+scafctl catalog publish solution gcp-projects@1.7.0 \
+  --file solution.yaml
 
 Behavior:
 
@@ -245,7 +244,7 @@ Publishing does not require a database or service.
 
 When running a solution:
 
-scafctl run solution:gcp-projects@1.7.0
+scafctl run solution gcp-projects@1.7.0
 
 Flow:
 
@@ -264,7 +263,7 @@ Catalog resolution is a read-only operation.
 
 In render mode:
 
-scafctl render solution:gcp-projects@1.7.0
+scafctl render solution gcp-projects@1.7.0
 
 Behavior:
 

@@ -3,67 +3,77 @@ kind: Solution
 
 metadata:
   name: email-notifier
+  version: 1.0.0
   description: Send notification emails using provider-backed actions. Designed for local execution and pipeline rendering.
 
 spec:
   resolvers:
-    isDryRun:
-      description: Is this a dry run
-      resolve:
-        from:
-          - provider: internal
-      transform:
-        into:
-          - provider: cel
-            expr: __self.parameters.containsKey("--dry-run") || __self.parameters.containsKey("-d") 
-
     environment:
       description: Deployment environment
       resolve:
         from:
+          - provider: parameter
+            inputs:
+              key: environment
           - provider: env
             inputs:
-              key: ENV
+              key: SCAFCTL_ENV
           - provider: static
             inputs:
               value: dev
       transform:
         into:
           - provider: cel
-            expr: __self.toLowerCase()
+            inputs:
+              expression: "__self.toLowerCase()"
       validate:
-        - expr: __self in ["dev", "stage", "prod"]
-          message: "Invalid environment"
+        from:
+          - provider: validation
+            inputs:
+              expression: "__self in [\"dev\", \"stage\", \"prod\"]"
+            message: "Invalid environment: must be dev, stage, or prod"
 
     emailFrom:
       description: Sender email address
       resolve:
         from:
+          - provider: parameter
+            inputs:
+              key: emailFrom
           - provider: env
             inputs:
               key: EMAIL_FROM
       validate:
-        - expr: __self.contains("@")
-          message: "EMAIL_FROM must be a valid email"
+        from:
+          - provider: validation
+            inputs:
+              match: "^[^@]+@[^@]+\\.[^@]+$"
+            message: "EMAIL_FROM must be a valid email address"
 
     emailTo:
       description: Recipient email address
       resolve:
         from:
+          - provider: parameter
+            inputs:
+              key: emailTo
           - provider: env
             inputs:
               key: EMAIL_TO
       validate:
-        - expr: __self.contains("@")
-          message: "EMAIL_TO must be a valid email"
+        from:
+          - provider: validation
+            inputs:
+              match: "^[^@]+@[^@]+\\.[^@]+$"
+            message: "EMAIL_TO must be a valid email address"
 
     subject:
-      description: Email subject
+      description: Email subject line
       resolve:
         from:
-          - provider: env
+          - provider: parameter
             inputs:
-              key: EMAIL_SUBJECT
+              key: subject
           - provider: static
             inputs:
               value: "Notification"
@@ -72,43 +82,41 @@ spec:
       description: Email body content
       resolve:
         from:
-          - provider: env
+          - provider: parameter
             inputs:
-              key: EMAIL_BODY
+              key: body
           - provider: static
             inputs:
               value: "Hello from scafctl"
 
   actions:
     sendEmail:
-      description: Send an email using an external provider
+      description: Send an email notification
       provider: email
-      when: _.isDryRun
+      when:
+        expr: "_.environment != \"dev\""
       inputs:
-        auth:
-          provider: entra
-          scopes:
-            - api://mail.send/.default
-        message:
-          from: "someone@somewhere.com"
-          to:
-            resolver: emailTo
-          subject: 
-            resolver: subject
-          body: 
-            resolver: body
+        from:
+          rslv: emailFrom
+        to:
+          rslv: emailTo
+        subject:
+          rslv: subject
+        body:
+          rslv: body
 
     renderPreview:
       description: Render email payload without sending
       provider: static
-      when: _.isDryRun == true
+      when:
+        expr: "_.isDryRun == true"
       inputs:
         value:
           from:
-            resolver: emailFrom
+            rslv: emailFrom
           to:
-            resolver: emailTo
+            rslv: emailTo
           subject:
-            resolver: subject
+            rslv: subject
           body:
-            resolver: body
+            rslv: body

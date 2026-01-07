@@ -53,7 +53,7 @@ Actions support two top-level commands.
 Executes the action graph directly.
 
 ~~~bash
-scafctl run solution:myapp
+scafctl run solution myapp
 ~~~
 
 Behavior:
@@ -68,7 +68,7 @@ Behavior:
 Renders a fully resolved action graph without executing any action providers.
 
 ~~~bash
-scafctl render solution:myapp
+scafctl render solution myapp
 ~~~
 
 Behavior:
@@ -118,7 +118,7 @@ inputs:
 ~~~yaml
 inputs:
   image:
-    resolver: image
+    rslv: image
 ~~~
 
 ### Expression
@@ -173,17 +173,7 @@ actions:
     provider: api
     inputs:
       endpoint: https://api.example.com/config
-    results:
-      config:
-        from: result.data
 ~~~
-
-### Result semantics
-
-- `result` refers to the provider execution result for the current action
-- `results` are named, immutable projections of `result`
-- Results are available only after the action executes
-- In render mode, results are declared but not populated
 
 ---
 
@@ -203,7 +193,7 @@ actions:
     provider: api
     inputs:
       body:
-        tmpl: {{ .__actions.fetchConfig.results }}      
+        tmpl: {{ .__actions.fetchConfig.results }}
 ~~~
 
 Rules:

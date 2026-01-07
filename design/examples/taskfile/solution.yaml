@@ -1,6 +1,15 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: taskfile-build
+  version: 1.0.0
+  description: Build and release workflow using taskfile patterns
+
 spec:
   resolvers:
     repo:
+      description: Repository name
       resolve:
         from:
           - provider: static
@@ -11,37 +20,55 @@ spec:
       description: Version to build and release
       resolve:
         from:
-          - provider: env
+          - provider: parameter
             inputs:
-              key: VERSION
-          - provider: git
-            inputs:
-              field: tag
+              key: version
           - provider: static
             inputs:
               value: dev
+      validate:
+        from:
+          - provider: validation
+            inputs:
+              match: "^(dev|\\d+\\.\\d+\\.\\d+.*)$"
+            message: "Invalid version format"
 
     goos:
+      description: Target operating system
       resolve:
         from:
-          - provider: env
+          - provider: parameter
             inputs:
-              key: GOOS
+              key: goos
           - provider: static
             inputs:
               value: linux
+      validate:
+        from:
+          - provider: validation
+            inputs:
+              expression: "__self in [\"linux\", \"darwin\", \"windows\"]"
+            message: "Invalid OS: must be linux, darwin, or windows"
 
     goarch:
+      description: Target architecture
       resolve:
         from:
-          - provider: env
+          - provider: parameter
             inputs:
-              key: GOARCH
+              key: goarch
           - provider: static
             inputs:
               value: amd64
+      validate:
+        from:
+          - provider: validation
+            inputs:
+              expression: "__self in [\"amd64\", \"arm64\"]"
+            message: "Invalid architecture: must be amd64 or arm64"
 
     buildDir:
+      description: Build output directory
       resolve:
         from:
           - provider: static
@@ -50,37 +77,70 @@ spec:
 
   actions:
     clean:
+      description: Clean build directory
       provider: shell
       inputs:
         cmd:
-          - rm -rf {{ _.buildDir }}
+          - rm
+          - -rf
+        args:
+          directory:
+            rslv: buildDir
 
     test:
+      description: Run tests
       provider: shell
       dependsOn: [clean]
       inputs:
         cmd:
-          - go test ./...
+          - go
+          - test
+          - ./...
 
     build:
+      description: Build binary
       provider: shell
       dependsOn: [test]
       inputs:
         env:
-          GOOS: _.goos
-          GOARCH: _.goarch
+          GOOS:
+            rslv: goos
+          GOARCH:
+            rslv: goarch
         cmd:
-          - mkdir -p {{ _.buildDir }}
-          - go build -o {{ _.buildDir }}/{{ _.repo }} ./cmd/scafctl
+          - go
+          - build
+          - -o
+        args:
+          output:
+            tmpl: "{{ .buildDir }}/{{ .repo }}"
+          source: ./cmd/scafctl
+        context:
+          buildDir:
+            rslv: buildDir
+          repo:
+            rslv: repo
 
     release:
-      provider: github
+      description: Create GitHub release
+      provider: api
       dependsOn: [build]
       when:
-        expr: _.version != "dev"
+        expr: "_.version != \"dev\""
       inputs:
-        repo: ford-cloud/scafctl
-        tag: _.version
-        name: "Release {{ _.version }}"
-        assets:
-          - path: "{{ _.buildDir }}/{{ _.repo }}"
+        endpoint: https://api.github.com/repos/oakwood-commons/scafctl/releases
+        method: POST
+        headers:
+          Authorization:
+            tmpl: "Bearer {{ .github_token }}"
+        body:
+          tag_name:
+            rslv: version
+          name:
+            tmpl: "Release {{ .version }}"
+          draft: false
+          prerelease:
+            expr: "_.version.contains(\"alpha\") || _.version.contains(\"beta\")"
+        context:
+          version:
+            rslv: version

@@ -75,11 +75,16 @@ resolvers:
 
     transform:
       into:
-        - expr: __self.toLowerCase()
+        - provider: cel
+          inputs:
+            expression: "__self.toLowerCase()"
 
     validate:
-      - expr: __self in ["dev", "staging", "prod"]
-        message: "Invalid environment"
+      from:
+        - provider: validation
+          inputs:
+            expression: "__self in [\"dev\", \"staging\", \"prod\"]"
+          message: "Invalid environment"
 ~~~
 
 Test cases:
@@ -105,13 +110,21 @@ Resolver tests:
 
 ### Scope
 
-Provider tests validate individual provider behavior given concrete inputs.
-
 Providers are tested independently of:
 
 - resolvers
 - actions
 - CLI parsing
+
+#### Unit
+
+Providers have unit tests defined in their own code base
+
+#### Integration
+
+Provider tests validate individual provider behavior given concrete inputs.
+
+Should be testable in a solution. Does this require mocks? For example an api provider would be hard to test if you don't have auth.
 
 ---
 
@@ -183,7 +196,7 @@ Render mode does not:
 ### Example
 
 ~~~bash
-scafctl render solution:terraform-scaffold \
+scafctl render solution terraform-scaffold \
   -r environments=dev,prod
 ~~~
 
@@ -225,7 +238,7 @@ These concerns belong to providers and execution environments, not solution logi
 
 ## CI Usage
 
-In CI pipelines, testing typically consists of:
+In publish pipelines, testing typically consists of:
 
 1. Render the solution
 2. Validate resolver outputs
@@ -240,7 +253,6 @@ No side effects are required.
 
 Compared to imperative task runners:
 
-- no mocks are required
 - no shell simulation is required
 - no environment guessing is required
 
