@@ -415,3 +415,214 @@ func BenchmarkGetVariablesWithPrefix_ComplexCustomPrefix(b *testing.B) {
 		_, _ = expr.GetVariablesWithPrefix("env.")
 	}
 }
+
+func TestRequiredVariables(t *testing.T) {
+	tests := []struct {
+		name       string
+		expression string
+		expected   []string
+		wantError  bool
+	}{
+		{
+			name:       "simple arithmetic expression",
+			expression: "x + y",
+			expected:   []string{"x", "y"},
+		},
+		{
+			name:       "single variable",
+			expression: "count",
+			expected:   []string{"count"},
+		},
+		{
+			name:       "property access",
+			expression: "user.name",
+			expected:   []string{"user"},
+		},
+		{
+			name:       "multiple variables with properties",
+			expression: "user.name + config.value",
+			expected:   []string{"config", "user"},
+		},
+		{
+			name:       "nested property access",
+			expression: "user.profile.address.city",
+			expected:   []string{"user"},
+		},
+		{
+			name:       "variable in function call",
+			expression: "size(items)",
+			expected:   []string{"items"},
+		},
+		{
+			name:       "multiple variables in function",
+			expression: "max(x, y, z)",
+			expected:   []string{"x", "y", "z"},
+		},
+		{
+			name:       "variables in conditional",
+			expression: "enabled ? data : fallback",
+			expected:   []string{"data", "enabled", "fallback"},
+		},
+		{
+			name:       "variables in list",
+			expression: "[item1, item2, item3]",
+			expected:   []string{"item1", "item2", "item3"},
+		},
+		{
+			name:       "variables in map",
+			expression: `{"key": value, "other": anotherValue}`,
+			expected:   []string{"anotherValue", "value"},
+		},
+		{
+			name:       "variable as map key",
+			expression: `{key: "value"}`,
+			expected:   []string{"key"},
+		},
+		{
+			name:       "duplicate variables",
+			expression: "user + user.name + user.email",
+			expected:   []string{"user"},
+		},
+		{
+			name:       "complex expression",
+			expression: "config.enabled && data.items[0].name == expected && count > threshold",
+			expected:   []string{"config", "count", "data", "expected", "threshold"},
+		},
+		{
+			name:       "comprehension - filter excludes iteration variable",
+			expression: "[1, 2, 3].filter(x, x > 1)",
+			expected:   []string{},
+		},
+		{
+			name:       "comprehension with external variable",
+			expression: "items.filter(x, x > threshold)",
+			expected:   []string{"items", "threshold"},
+		},
+		{
+			name:       "comprehension - map",
+			expression: "items.map(item, item * multiplier)",
+			expected:   []string{"items", "multiplier"},
+		},
+		{
+			name:       "comprehension - exists",
+			expression: "users.exists(u, u.role == requiredRole)",
+			expected:   []string{"requiredRole", "users"},
+		},
+		{
+			name:       "comprehension - all",
+			expression: "scores.all(s, s >= minScore)",
+			expected:   []string{"minScore", "scores"},
+		},
+		{
+			name:       "nested comprehensions",
+			expression: "matrix.map(row, row.filter(val, val > threshold))",
+			expected:   []string{"matrix", "threshold"},
+		},
+		{
+			name:       "method chaining",
+			expression: "text.toLowerCase().contains(searchTerm)",
+			expected:   []string{"searchTerm", "text"},
+		},
+		{
+			name:       "logical operators",
+			expression: "a && b || c && !d",
+			expected:   []string{"a", "b", "c", "d"},
+		},
+		{
+			name:       "comparison operators",
+			expression: "x == y && a != b && c < d && e > f",
+			expected:   []string{"a", "b", "c", "d", "e", "f", "x", "y"},
+		},
+		{
+			name:       "mixed with underscore prefix (should capture all)",
+			expression: "_.user.name + normalVar",
+			expected:   []string{"_", "normalVar"},
+		},
+		{
+			name:       "no variables - only literals",
+			expression: `"hello" + 123 + true`,
+			expected:   []string{},
+		},
+		{
+			name:       "no variables - empty list",
+			expression: "[]",
+			expected:   []string{},
+		},
+		{
+			name:       "no variables - empty map",
+			expression: "{}",
+			expected:   []string{},
+		},
+		{
+			name:       "variable in index expression",
+			expression: "arr[index]",
+			expected:   []string{"arr", "index"},
+		},
+		{
+			name:       "optional chaining with has()",
+			expression: "has(user.profile) ? user.profile.name : defaultName",
+			expected:   []string{"defaultName", "user"},
+		},
+		{
+			name:       "type casting",
+			expression: "int(stringValue) + 10",
+			expected:   []string{"stringValue"},
+		},
+		{
+			name:       "string interpolation",
+			expression: `"Hello, " + name + "!"`,
+			expected:   []string{"name"},
+		},
+		{
+			name:       "empty expression",
+			expression: "",
+			wantError:  true,
+		},
+		{
+			name:       "invalid syntax",
+			expression: "x +",
+			wantError:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			expr := Expression(tt.expression)
+			vars, err := expr.RequiredVariables()
+
+			if tt.wantError {
+				assert.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+
+			// Results are already sorted by the implementation
+			assert.Equal(t, tt.expected, vars)
+		})
+	}
+}
+
+func BenchmarkRequiredVariables_Simple(b *testing.B) {
+	expr := Expression("x + y + z")
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = expr.RequiredVariables()
+	}
+}
+
+func BenchmarkRequiredVariables_Complex(b *testing.B) {
+	expr := Expression("config.enabled && data.users.exists(u, u.role == requiredRole) && items.filter(i, i.active).size() > threshold")
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = expr.RequiredVariables()
+	}
+}
+
+func BenchmarkRequiredVariables_WithComprehensions(b *testing.B) {
+	expr := Expression("matrix.map(row, row.filter(val, val > threshold).map(v, v * multiplier))")
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = expr.RequiredVariables()
+	}
+}

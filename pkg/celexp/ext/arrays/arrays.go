@@ -37,7 +37,7 @@ func StringAddFunc() celexp.ExtFunction {
 						// Type check the string value
 						value, ok := newValue.Value().(string)
 						if !ok {
-							return types.NewErr("arrays.strings.add: expected string argument, got %s", newValue.Type())
+							return types.NewErr("arrays.strings.add: expected string argument, got %s", newValue.Type().TypeName())
 						}
 
 						// Convert list to string slice using conversion helper

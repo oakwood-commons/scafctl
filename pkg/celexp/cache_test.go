@@ -1,6 +1,7 @@
 package celexp
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -35,7 +36,7 @@ func TestProgramCache_GetPut(t *testing.T) {
 
 	// Compile a simple program
 	expr := Expression("1 + 2")
-	compiled, err := expr.Compile()
+	compiled, err := expr.Compile([]cel.EnvOption{})
 	require.NoError(t, err)
 
 	key := "test-key"
@@ -45,7 +46,7 @@ func TestProgramCache_GetPut(t *testing.T) {
 	assert.False(t, found)
 
 	// Put program
-	cache.Put(key, compiled.Program)
+	cache.Put(key, compiled.Program, string(expr))
 
 	// Should exist now
 	retrieved, found := cache.Get(key)
@@ -67,9 +68,9 @@ func TestProgramCache_LRUEviction(t *testing.T) {
 	// Add 3 programs
 	for i := 0; i < 3; i++ {
 		expr := Expression("1 + 2")
-		compiled, err := expr.Compile()
+		compiled, err := expr.Compile([]cel.EnvOption{})
 		require.NoError(t, err)
-		cache.Put(string(rune('a'+i)), compiled.Program)
+		cache.Put(string(rune('a'+i)), compiled.Program, string(expr))
 	}
 
 	stats := cache.Stats()
@@ -78,9 +79,9 @@ func TestProgramCache_LRUEviction(t *testing.T) {
 
 	// Add one more - should evict the oldest (a)
 	expr := Expression("1 + 2")
-	compiled, err := expr.Compile()
+	compiled, err := expr.Compile([]cel.EnvOption{})
 	require.NoError(t, err)
-	cache.Put("d", compiled.Program)
+	cache.Put("d", compiled.Program, string(expr))
 
 	stats = cache.Stats()
 	assert.Equal(t, 3, stats.Size)
@@ -105,9 +106,9 @@ func TestProgramCache_LRUOrdering(t *testing.T) {
 	// Add 3 programs: a, b, c
 	for _, key := range []string{"a", "b", "c"} {
 		expr := Expression("1 + 2")
-		compiled, err := expr.Compile()
+		compiled, err := expr.Compile([]cel.EnvOption{})
 		require.NoError(t, err)
-		cache.Put(key, compiled.Program)
+		cache.Put(key, compiled.Program, string(expr))
 	}
 
 	// Access 'a' to make it most recently used
@@ -117,9 +118,9 @@ func TestProgramCache_LRUOrdering(t *testing.T) {
 
 	// Add 'd' - should evict 'b' (oldest)
 	expr := Expression("1 + 2")
-	compiled, err := expr.Compile()
+	compiled, err := expr.Compile([]cel.EnvOption{})
 	require.NoError(t, err)
-	cache.Put("d", compiled.Program)
+	cache.Put("d", compiled.Program, string(expr))
 
 	// 'b' should be evicted
 	_, found = cache.Get("b")
@@ -140,9 +141,9 @@ func TestProgramCache_Clear(t *testing.T) {
 	// Add some programs
 	for i := 0; i < 5; i++ {
 		expr := Expression("1 + 2")
-		compiled, err := expr.Compile()
+		compiled, err := expr.Compile([]cel.EnvOption{})
 		require.NoError(t, err)
-		cache.Put(string(rune('a'+i)), compiled.Program)
+		cache.Put(string(rune('a'+i)), compiled.Program, string(expr))
 	}
 
 	// Generate some hits and misses
@@ -154,8 +155,8 @@ func TestProgramCache_Clear(t *testing.T) {
 	assert.Greater(t, stats.Hits, uint64(0))
 	assert.Greater(t, stats.Misses, uint64(0))
 
-	// Clear cache
-	cache.Clear()
+	// Clear cache with stats
+	cache.ClearWithStats()
 
 	stats = cache.Stats()
 	assert.Equal(t, 0, stats.Size)
@@ -166,6 +167,24 @@ func TestProgramCache_Clear(t *testing.T) {
 	// Nothing should exist
 	_, found := cache.Get("a")
 	assert.False(t, found)
+
+	// Test that Clear() preserves stats
+	cache2 := NewProgramCache(10)
+	for i := 0; i < 3; i++ {
+		expr := Expression(fmt.Sprintf("%d + 1", i))
+		compiled, _ := expr.Compile([]cel.EnvOption{})
+		cache2.Put(string(rune('a'+i)), compiled.Program, string(expr))
+	}
+	cache2.Get("a") // Hit
+	cache2.Get("z") // Miss
+	statsBefore := cache2.Stats()
+
+	cache2.Clear() // Should clear entries but preserve stats
+
+	statsAfter := cache2.Stats()
+	assert.Equal(t, 0, statsAfter.Size, "size should be 0 after Clear")
+	assert.Equal(t, statsBefore.Hits, statsAfter.Hits, "hits should be preserved")
+	assert.Equal(t, statsBefore.Misses, statsAfter.Misses, "misses should be preserved")
 }
 
 func TestProgramCache_Stats(t *testing.T) {
@@ -174,9 +193,9 @@ func TestProgramCache_Stats(t *testing.T) {
 	// Add programs
 	for i := 0; i < 3; i++ {
 		expr := Expression("1 + 2")
-		compiled, err := expr.Compile()
+		compiled, err := expr.Compile([]cel.EnvOption{})
 		require.NoError(t, err)
-		cache.Put(string(rune('a'+i)), compiled.Program)
+		cache.Put(string(rune('a'+i)), compiled.Program, string(expr))
 	}
 
 	// Generate hits
@@ -206,9 +225,9 @@ func TestProgramCache_HitRate(t *testing.T) {
 
 	// Add a program
 	expr := Expression("1 + 2")
-	compiled, err := expr.Compile()
+	compiled, err := expr.Compile([]cel.EnvOption{})
 	require.NoError(t, err)
-	cache.Put("a", compiled.Program)
+	cache.Put("a", compiled.Program, string(expr))
 
 	// 2 hits, 1 miss = 66.67% hit rate
 	cache.Get("a")
@@ -219,17 +238,19 @@ func TestProgramCache_HitRate(t *testing.T) {
 	assert.InDelta(t, 66.67, stats.HitRate, 0.1)
 }
 
-func TestGenerateCacheKey(t *testing.T) {
+func TestGenerateCacheKeyWithAST(t *testing.T) {
+	cache := NewProgramCache(10) // Create a cache for testing
+
 	t.Run("same expression and options produce same key", func(t *testing.T) {
 		opts := []cel.EnvOption{
 			cel.Variable("x", cel.IntType),
 			cel.Variable("y", cel.IntType),
 		}
 
-		key1 := generateCacheKey("x + y", opts)
-		key2 := generateCacheKey("x + y", opts)
+		key1 := generateCacheKeyWithAST(cache, "x + y", opts, GetDefaultCostLimit())
+		key2 := generateCacheKeyWithAST(cache, "x + y", opts, GetDefaultCostLimit())
 
-		assert.Equal(t, key1, key2)
+		assert.Equal(t, key1.key, key2.key)
 	})
 
 	t.Run("different expressions produce different keys", func(t *testing.T) {
@@ -237,10 +258,10 @@ func TestGenerateCacheKey(t *testing.T) {
 			cel.Variable("x", cel.IntType),
 		}
 
-		key1 := generateCacheKey("x + 1", opts)
-		key2 := generateCacheKey("x + 2", opts)
+		key1 := generateCacheKeyWithAST(cache, "x + 1", opts, GetDefaultCostLimit())
+		key2 := generateCacheKeyWithAST(cache, "x + 2", opts, GetDefaultCostLimit())
 
-		assert.NotEqual(t, key1, key2)
+		assert.NotEqual(t, key1.key, key2.key)
 	})
 
 	t.Run("different options produce different keys", func(t *testing.T) {
@@ -251,34 +272,68 @@ func TestGenerateCacheKey(t *testing.T) {
 			cel.Variable("y", cel.IntType),
 		}
 
-		key1 := generateCacheKey("x + 1", opts1)
-		key2 := generateCacheKey("x + 1", opts2)
+		key1 := generateCacheKeyWithAST(cache, "x + 1", opts1, GetDefaultCostLimit())
+		key2 := generateCacheKeyWithAST(cache, "x + 1", opts2, GetDefaultCostLimit())
 
 		// Note: These might be equal if the option pointers happen to be the same
 		// In practice, they would be different in a real scenario
-		assert.NotEmpty(t, key1)
-		assert.NotEmpty(t, key2)
+		assert.NotEmpty(t, key1.key)
+		assert.NotEmpty(t, key2.key)
 	})
 
 	t.Run("empty options", func(t *testing.T) {
-		key := generateCacheKey("1 + 2", nil)
-		assert.NotEmpty(t, key)
+		key := generateCacheKeyWithAST(cache, "1 + 2", nil, GetDefaultCostLimit())
+		assert.NotEmpty(t, key.key)
+	})
+
+	t.Run("semantically identical options produce same key", func(t *testing.T) {
+		// This test validates the fix for issue #1:
+		// Creating new cel.EnvOption instances with the same semantic content
+		// should produce the same cache key (content-based hashing)
+
+		// First call - create options
+		opts1 := []cel.EnvOption{
+			cel.Variable("x", cel.IntType),
+			cel.Variable("y", cel.IntType),
+		}
+		key1 := generateCacheKeyWithAST(cache, "x + y", opts1, GetDefaultCostLimit())
+
+		// Second call - create NEW option instances with same content
+		opts2 := []cel.EnvOption{
+			cel.Variable("x", cel.IntType),
+			cel.Variable("y", cel.IntType),
+		}
+		key2 := generateCacheKeyWithAST(cache, "x + y", opts2, GetDefaultCostLimit())
+
+		// Keys should be EQUAL because semantic content is the same
+		// (Before the fix, these would be different due to pointer address hashing)
+		assert.Equal(t, key1.key, key2.key, "semantically identical options should produce the same cache key")
+	})
+
+	t.Run("different cost limits produce different keys", func(t *testing.T) {
+		// This test validates the fix for issue #4:
+		// Different cost limits should produce different cache keys
+		opts := []cel.EnvOption{
+			cel.Variable("x", cel.IntType),
+		}
+
+		key1 := generateCacheKeyWithAST(cache, "x + 1", opts, 1000)
+		key2 := generateCacheKeyWithAST(cache, "x + 1", opts, 5000)
+		key3 := generateCacheKeyWithAST(cache, "x + 1", opts, 0) // No cost limit
+
+		// All keys should be different
+		assert.NotEqual(t, key1.key, key2.key, "different cost limits should produce different keys")
+		assert.NotEqual(t, key1.key, key3.key, "cost limit vs no limit should produce different keys")
+		assert.NotEqual(t, key2.key, key3.key, "different cost limits should produce different keys")
 	})
 }
 
-func TestCompileWithCache(t *testing.T) {
-	t.Run("nil cache returns error", func(t *testing.T) {
-		expr := Expression("1 + 2")
-		_, err := CompileWithCache(nil, expr)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "cache cannot be nil")
-	})
-
+func TestCompile_withCache(t *testing.T) {
 	t.Run("cache miss compiles and caches", func(t *testing.T) {
 		cache := NewProgramCache(10)
 
 		expr := Expression("1 + 2")
-		result, err := CompileWithCache(cache, expr)
+		result, err := expr.Compile([]cel.EnvOption{}, WithCache(cache))
 		require.NoError(t, err)
 		require.NotNil(t, result)
 
@@ -303,11 +358,11 @@ func TestCompileWithCache(t *testing.T) {
 
 		expr := Expression("x + y")
 		// First call - cache miss
-		result1, err := CompileWithCache(cache, expr, opts...)
+		result1, err := expr.Compile(opts, WithCache(cache))
 		require.NoError(t, err)
 
 		// Second call - cache hit
-		result2, err := CompileWithCache(cache, expr, opts...)
+		result2, err := expr.Compile(opts, WithCache(cache))
 		require.NoError(t, err)
 
 		stats := cache.Stats()
@@ -330,7 +385,7 @@ func TestCompileWithCache(t *testing.T) {
 
 		// Invalid expression
 		expr := Expression("x +")
-		_, err := CompileWithCache(cache, expr, cel.Variable("x", cel.IntType))
+		_, err := expr.Compile([]cel.EnvOption{cel.Variable("x", cel.IntType)}, WithCache(cache))
 		assert.Error(t, err)
 
 		// Cache should be empty
@@ -349,7 +404,7 @@ func TestCompileWithCache(t *testing.T) {
 		}
 
 		for _, expr := range expressions {
-			_, err := CompileWithCache(cache, expr)
+			_, err := expr.Compile([]cel.EnvOption{}, WithCache(cache))
 			require.NoError(t, err)
 		}
 
@@ -360,7 +415,7 @@ func TestCompileWithCache(t *testing.T) {
 
 		// Call again - should all be hits
 		for _, expr := range expressions {
-			_, err := CompileWithCache(cache, expr)
+			_, err := expr.Compile([]cel.EnvOption{}, WithCache(cache))
 			require.NoError(t, err)
 		}
 
@@ -369,6 +424,62 @@ func TestCompileWithCache(t *testing.T) {
 		assert.Equal(t, uint64(4), stats.Hits)
 		assert.Equal(t, uint64(4), stats.Misses)
 		assert.Equal(t, 50.0, stats.HitRate)
+	})
+
+	t.Run("cache hits with recreated options (validates fix for issue #1)", func(t *testing.T) {
+		cache := NewProgramCache(10)
+		expr := Expression("x + y")
+
+		// First call with new options
+		result1, err := expr.Compile([]cel.EnvOption{
+			cel.Variable("x", cel.IntType),
+			cel.Variable("y", cel.IntType),
+		}, WithCache(cache))
+		require.NoError(t, err)
+		require.NotNil(t, result1)
+
+		stats := cache.Stats()
+		assert.Equal(t, 1, stats.Size)
+		assert.Equal(t, uint64(0), stats.Hits)
+		assert.Equal(t, uint64(1), stats.Misses)
+
+		// Second call with NEW option instances (same semantic content)
+		// Before the fix, this would be a cache miss due to pointer-based hashing
+		// After the fix, this should be a cache hit due to content-based hashing
+		result2, err := expr.Compile(
+			[]cel.EnvOption{
+				cel.Variable("x", cel.IntType),
+				cel.Variable("y", cel.IntType),
+			},
+			WithCache(cache),
+			WithContext(context.Background()),
+			WithCostLimit(GetDefaultCostLimit()),
+		)
+		require.NoError(t, err)
+		require.NotNil(t, result2)
+
+		stats = cache.Stats()
+		assert.Equal(t, 1, stats.Size, "should still be 1 cached entry")
+		assert.Equal(t, uint64(1), stats.Hits, "should be a cache HIT, not a miss")
+		assert.Equal(t, uint64(1), stats.Misses)
+		assert.Equal(t, 50.0, stats.HitRate)
+
+		// Third call to confirm continued hits
+		result3, err := expr.Compile(
+			[]cel.EnvOption{
+				cel.Variable("x", cel.IntType),
+				cel.Variable("y", cel.IntType),
+			},
+			WithCache(cache),
+			WithContext(context.Background()),
+			WithCostLimit(GetDefaultCostLimit()),
+		)
+		require.NoError(t, err)
+		require.NotNil(t, result3)
+
+		stats = cache.Stats()
+		assert.Equal(t, uint64(2), stats.Hits, "third call should also be a cache hit")
+		assert.InDelta(t, 66.67, stats.HitRate, 0.1)
 	})
 }
 
@@ -389,7 +500,7 @@ func TestCompileWithCache_Concurrent(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < numIterations; j++ {
-				compiled, err := CompileWithCache(cache, expr, opts...)
+				compiled, err := expr.Compile(opts, WithCache(cache), WithContext(context.Background()), WithCostLimit(GetDefaultCostLimit()))
 				require.NoError(t, err)
 				require.NotNil(t, compiled)
 
@@ -424,9 +535,9 @@ func TestProgramCache_ConcurrentAccess(t *testing.T) {
 		go func(index int) {
 			defer wg.Done()
 			expr := Expression("1 + 2")
-			compiled, err := expr.Compile()
+			compiled, err := expr.Compile([]cel.EnvOption{})
 			require.NoError(t, err)
-			cache.Put(string(rune('a'+index%26)), compiled.Program)
+			cache.Put(string(rune('a'+index%26)), compiled.Program, string(expr))
 		}(i)
 	}
 
@@ -464,12 +575,12 @@ func BenchmarkCompileWithCache_Hit(b *testing.B) {
 	}
 
 	// Prime the cache
-	_, err := CompileWithCache(cache, expr, opts...)
+	_, err := expr.Compile(opts, WithCache(cache), WithContext(context.Background()), WithCostLimit(GetDefaultCostLimit()))
 	require.NoError(b, err)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = CompileWithCache(cache, expr, opts...)
+		_, _ = expr.Compile(opts, WithCache(cache), WithContext(context.Background()), WithCostLimit(GetDefaultCostLimit()))
 	}
 }
 
@@ -483,8 +594,100 @@ func BenchmarkCompileWithCache_Miss(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		// Each iteration uses a different expression (cache miss)
 		expr := Expression(fmt.Sprintf("x + %d", i))
-		_, _ = CompileWithCache(cache, expr, opts...)
+		_, _ = expr.Compile(opts, WithCache(cache), WithContext(context.Background()), WithCostLimit(GetDefaultCostLimit()))
 	}
+}
+
+func TestCompile_withASTBasedCaching(t *testing.T) {
+	t.Run("structurally identical expressions share cache with AST keys", func(t *testing.T) {
+		// Create cache with AST-based caching enabled
+		cache := NewProgramCache(10, WithASTBasedCaching(true))
+
+		// Two expressions with same structure but different variable names
+		expr1 := Expression("x + y")
+		opts1 := []cel.EnvOption{
+			cel.Variable("x", cel.IntType),
+			cel.Variable("y", cel.IntType),
+		}
+		result1, err := expr1.Compile(opts1, WithCache(cache))
+		require.NoError(t, err)
+		require.NotNil(t, result1)
+
+		// First expression should be a cache miss
+		stats := cache.Stats()
+		assert.Equal(t, uint64(1), stats.Misses, "First compilation should miss cache")
+		assert.Equal(t, uint64(0), stats.Hits, "First compilation should have no hits")
+
+		// Second expression with different variable names but same structure
+		expr2 := Expression("a + b")
+		opts2 := []cel.EnvOption{
+			cel.Variable("a", cel.IntType),
+			cel.Variable("b", cel.IntType),
+		}
+		result2, err := expr2.Compile(opts2, WithCache(cache))
+		require.NoError(t, err)
+		require.NotNil(t, result2)
+
+		// Second expression SHOULD hit cache with AST-based caching
+		stats = cache.Stats()
+		assert.Equal(t, uint64(1), stats.Hits, "Second compilation should hit cache")
+		assert.Equal(t, uint64(1), stats.Misses, "Should still have only one miss")
+	})
+
+	t.Run("different types produce different cache keys", func(t *testing.T) {
+		// Create cache with AST-based caching enabled
+		cache := NewProgramCache(10, WithASTBasedCaching(true))
+
+		// Int addition
+		expr1 := Expression("x + y")
+		opts1 := []cel.EnvOption{
+			cel.Variable("x", cel.IntType),
+			cel.Variable("y", cel.IntType),
+		}
+		_, err := expr1.Compile(opts1, WithCache(cache))
+		require.NoError(t, err)
+
+		// String concatenation (different type, should NOT share cache)
+		expr2 := Expression("a + b")
+		opts2 := []cel.EnvOption{
+			cel.Variable("a", cel.StringType),
+			cel.Variable("b", cel.StringType),
+		}
+		_, err = expr2.Compile(opts2, WithCache(cache))
+		require.NoError(t, err)
+
+		// Both should be cache misses (different types)
+		stats := cache.Stats()
+		assert.Equal(t, uint64(0), stats.Hits, "Different types should not share cache")
+		assert.Equal(t, uint64(2), stats.Misses, "Both should be cache misses")
+	})
+
+	t.Run("traditional caching without AST keys", func(t *testing.T) {
+		// Create cache WITHOUT AST-based caching (default behavior)
+		cache := NewProgramCache(10)
+
+		// Two expressions with same structure but different variable names
+		expr1 := Expression("x + y")
+		opts1 := []cel.EnvOption{
+			cel.Variable("x", cel.IntType),
+			cel.Variable("y", cel.IntType),
+		}
+		_, err := expr1.Compile(opts1, WithCache(cache))
+		require.NoError(t, err)
+
+		expr2 := Expression("a + b")
+		opts2 := []cel.EnvOption{
+			cel.Variable("a", cel.IntType),
+			cel.Variable("b", cel.IntType),
+		}
+		_, err = expr2.Compile(opts2, WithCache(cache))
+		require.NoError(t, err)
+
+		// Without AST caching, both should be cache misses
+		stats := cache.Stats()
+		assert.Equal(t, uint64(0), stats.Hits, "Without AST caching, should not share cache")
+		assert.Equal(t, uint64(2), stats.Misses, "Both should be cache misses")
+	})
 }
 
 func BenchmarkCompile_NoCache(b *testing.B) {
@@ -496,6 +699,6 @@ func BenchmarkCompile_NoCache(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = expr.Compile(opts...)
+		_, _ = expr.Compile(opts)
 	}
 }

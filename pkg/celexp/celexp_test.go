@@ -56,7 +56,7 @@ func TestCompile(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			expr := Expression(tt.expression)
-			result, err := expr.Compile(tt.opts...)
+			result, err := expr.Compile(tt.opts)
 			if tt.wantErr {
 				assert.Error(t, err)
 				assert.Nil(t, result)
@@ -106,7 +106,7 @@ func TestCompile_ComplexExpressions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			expr := Expression(tt.expression)
-			result, err := expr.Compile(tt.opts...)
+			result, err := expr.Compile(tt.opts)
 			require.NoError(t, err)
 			require.NotNil(t, result)
 			require.NotNil(t, result.Program)
@@ -176,7 +176,7 @@ func TestEval(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			expr := Expression(tt.expression)
-			compiled, err := expr.Compile(tt.opts...)
+			compiled, err := expr.Compile(tt.opts)
 			require.NoError(t, err)
 
 			result, err := compiled.Eval(tt.vars)
@@ -238,7 +238,7 @@ func TestEval_ComplexTypes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			expr := Expression(tt.expression)
-			compiled, err := expr.Compile(tt.opts...)
+			compiled, err := expr.Compile(tt.opts)
 			require.NoError(t, err)
 
 			result, err := compiled.Eval(tt.vars)
@@ -251,7 +251,7 @@ func TestEval_ComplexTypes(t *testing.T) {
 func TestCompileAndEval_Integration(t *testing.T) {
 	// Test that we can compile once and evaluate multiple times
 	expr := Expression("x * multiplier")
-	compiled, err := expr.Compile(cel.Variable("x", cel.IntType), cel.Variable("multiplier", cel.IntType))
+	compiled, err := expr.Compile([]cel.EnvOption{cel.Variable("x", cel.IntType), cel.Variable("multiplier", cel.IntType)})
 	require.NoError(t, err)
 
 	testCases := []struct {
@@ -290,7 +290,7 @@ func BenchmarkCompile(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = expr.Compile(opts...)
+		_, _ = expr.Compile(opts)
 	}
 }
 
@@ -300,7 +300,7 @@ func BenchmarkEval(b *testing.B) {
 		cel.Variable("x", cel.IntType),
 		cel.Variable("y", cel.IntType),
 	}
-	compiled, _ := expr.Compile(opts...)
+	compiled, _ := expr.Compile(opts)
 	vars := map[string]any{"x": int64(5), "y": int64(10)}
 
 	b.ResetTimer()
@@ -319,7 +319,7 @@ func BenchmarkCompileAndEval(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		compiled, _ := expr.Compile(opts...)
+		compiled, _ := expr.Compile(opts)
 		_, _ = compiled.Eval(vars)
 	}
 }
