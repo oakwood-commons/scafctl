@@ -70,7 +70,7 @@ This mirrors patterns used by Terraform, Vault, Nomad, and Packer.
 
 ## Plugin Architecture
 
-scafctl uses go-plugin with an gRPC-based handshake.
+scafctl uses go-plugin with gRPC-based handshake.
 
 Conceptually:
 
