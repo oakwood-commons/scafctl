@@ -397,7 +397,9 @@ spec:
       when:
         expr: "!_.dryRun"
       inputs:
-        authProvider: entra # comes from the entra auth provider
+        # Authentication configuration: use the "entra" auth provider to obtain
+        # an access token for the specified authScope when calling this webhook.
+        authProvider: entra
         authScope: https://hooks.example.com/.default
         # Literal string
         endpoint: https://hooks.example.com/deployments
