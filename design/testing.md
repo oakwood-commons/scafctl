@@ -124,7 +124,7 @@ Providers have unit tests defined in their own code base
 
 Provider tests validate individual provider behavior given concrete inputs.
 
-Should be testable in a solution. Does this require mocks? For example an api provider would be hard to test if you don't have auth.
+Provider behavior should also be testable when used within a solution. External dependencies (such as HTTP APIs or authentication systems) must be isolated using mocks, fakes, or test fixtures so that provider tests run deterministically without requiring real network access or credentials.
 
 ---
 
