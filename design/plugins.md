@@ -47,10 +47,7 @@ Under this model:
 - Plugins package providers
 - scafctl orchestrates provider execution
 
-A single plugin may expose:
-
-- One provider
-
+A plugin may expose one or more providers.
 ---
 
 ## Why Plugins Exist (Instead of Built-ins Only)
