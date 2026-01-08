@@ -316,7 +316,7 @@ Copies the resolver value directly, preserving its type.
 ~~~yaml
 inputs:
   image:
-    resolver: image
+    rslv: image
 ~~~
 
 #### 3. Expression-Based Value (Explicit CEL)
