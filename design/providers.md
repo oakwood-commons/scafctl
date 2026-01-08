@@ -62,7 +62,7 @@ Providers do not evaluate expressions or templates themselves. All inputs are fu
 
 ### Notes
 
-- Should providers support mocking so they can be dry run?
+- Providers support mocking to enable dry-run execution for testing, planning, and verification without performing real side effects.
 
 ### Conceptual Flow
 
