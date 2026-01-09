@@ -1,0 +1,130 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: email-notifier
+  version: 1.0.0
+  description: Send notification emails using provider-backed actions. Designed for local execution and pipeline rendering.
+
+spec:
+  resolvers:
+    isDryRun:
+      description: A dry run
+      resolve:
+        from:
+          - provider: parameter
+            inputs:
+              key: dry-run
+
+    environment:
+      description: Deployment environment
+      resolve:
+        from:
+          - provider: parameter
+            inputs:
+              key: environment
+          - provider: env
+            inputs:
+              key: SCAFCTL_ENV
+          - provider: static
+            inputs:
+              value: dev
+      transform:
+        into:
+          - provider: cel
+            inputs:
+              expression: "__self.toLowerCase()"
+      validate:
+        from:
+          - provider: validation
+            inputs:
+              expression: "__self in [\"dev\", \"stage\", \"prod\"]"
+            message: "Invalid environment: must be dev, stage, or prod"
+
+    emailFrom:
+      description: Sender email address
+      resolve:
+        from:
+          - provider: parameter
+            inputs:
+              key: emailFrom
+          - provider: env
+            inputs:
+              key: EMAIL_FROM
+      validate:
+        from:
+          - provider: validation
+            inputs:
+              match: "^[^@]+@[^@]+\\.[^@]+$"
+            message: "EMAIL_FROM must be a valid email address"
+
+    emailTo:
+      description: Recipient email address
+      resolve:
+        from:
+          - provider: parameter
+            inputs:
+              key: emailTo
+          - provider: env
+            inputs:
+              key: EMAIL_TO
+      validate:
+        from:
+          - provider: validation
+            inputs:
+              match: "^[^@]+@[^@]+\\.[^@]+$"
+            message: "EMAIL_TO must be a valid email address"
+
+    subject:
+      description: Email subject line
+      resolve:
+        from:
+          - provider: parameter
+            inputs:
+              key: subject
+          - provider: static
+            inputs:
+              value: "Notification"
+
+    body:
+      description: Email body content
+      resolve:
+        from:
+          - provider: parameter
+            inputs:
+              key: body
+          - provider: static
+            inputs:
+              value: "Hello from scafctl"
+
+  actions:
+    sendEmail:
+      description: Send an email notification
+      provider: email
+      when:
+        expr: "_.environment != \"dev\""
+      inputs:
+        from:
+          rslvr: emailFrom
+        to:
+          rslvr: emailTo
+        subject:
+          rslvr: subject
+        body:
+          rslvr: body
+
+    renderPreview:
+      description: Render email payload without sending
+      provider: static
+      when:
+        expr: "_.isDryRun == true"
+      inputs:
+        value:
+          from:
+            rslvr: emailFrom
+          to:
+            rslvr: emailTo
+          subject:
+            rslvr: subject
+          body:
+            rslvr: body
