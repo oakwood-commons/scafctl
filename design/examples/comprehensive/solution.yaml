@@ -384,7 +384,7 @@ spec:
               environment:
                 rslv: environment
               region:
-                expr: "__item"
+                expr: "_.__region"
 
     # -------------------------------------------------------------------------
     # Action 5: API call action with mixed input forms
