@@ -1,250 +1,292 @@
-# Catalog Architecture (Draft)
+# Catalog
 
-> **Goal:** Collapse scafctl's catalog into a single hierarchical store that supports solutions, data sources, providers, and future raw artifacts while remaining usable over local folders or remote object storage.
+## Purpose
 
-## Requirements Recap
+The catalog is the distribution, versioning, and discovery mechanism for scafctl artifacts. It provides a local-first way to store, retrieve, and version solutions, providers, and related metadata without requiring a database or centralized service.
 
-- **Single logical catalog** – one bucket (remote) or one directory (local) instead of per-type buckets.
-- **Pluggable backends** – local filesystem, Google Cloud Storage, S3, etc. with the same layout.
-- **Multiple catalogs** – users may declare an ordered list of catalog endpoints (local + remote mirrors).
-- **Versioned artifacts** – solutions, datasources, provider plugins, and generic raw artifacts should share the same publishing model.
-- **Incremental metadata** – `scafctl build` produces leaf metadata; `scafctl publish` uploads artifacts and rolls up indexes above them.
-- **Offline friendly** – everything is plain files; no database is required.
+The catalog answers:
 
-## Directory Layout
+- What artifacts exist?
+- What versions are available?
+- How do I retrieve an immutable artifact?
+- How do I publish a new version?
 
-```
-<catalog-root>/
-  catalog.json              # root manifest
-  solutions/
-    <solution-id>/
-      index.json            # version manifest
-      1.0.0/
-        build.json          # build metadata (created by scafctl build)
-        solution.yaml       # normalized solution object
-        files/...           # optional rendered files or templates
-  datasources/
-    <datasource-id>/...
-  releases/
-    <release-id>/...
-  providers/
-    <provider-id>/...
-  artifacts/
-    <artifact-id>/...
-```
+The catalog does not execute logic, resolve data, or orchestrate workflows.
 
-- `<catalog-root>` can be a filesystem directory or an object storage prefix (`gs://bucket/catalog/`).
-- IDs remain Kubernetes-style (`group/name`). Nested directories mirror the ID components for readability: `solutions/example.app/frontend`.
-- Version directories are immutable once published. `scafctl publish` must refuse to overwrite existing versions unless `--force` is supplied.
+---
 
-## Metadata Files
+## Core Principles
 
-### `catalog.json`
+- Local-first
+- Offline-capable
+- Immutable artifacts
+- Content-addressed
+- Versioned with semantic versioning
+- No database requirement
+- Client-side resolution
+- Compatible with external tooling
 
-Root level manifest summarizing available types.
+---
 
-```json
-{
-  "schemaVersion": "1.0",
-  "generatedAt": "2025-12-20T18:45:00Z",
-  "types": {
-    "solutions": {
-      "path": "solutions/",
-      "count": 18,
-      "latest": [
-        { "id": "example.app/frontend", "version": "2.3.1" },
-        { "id": "platform.tf/bootstrap", "version": "1.5.0" }
-      ]
-    },
-    "datasources": { "path": "datasources/", "count": 6 },
-    "providers":   { "path": "providers/", "count": 4 },
-    "artifacts":   { "path": "artifacts/", "count": 2 }
-  }
-}
-```
+## Artifact Types
 
-- Allows fast discovery without scanning the entire tree.
-- `generatedAt` keeps downstream caches honest.
+The catalog stores artifacts, not raw files.
 
-### `<type>/<id>/index.json`
+### Supported Artifact Types
 
-Per-artifact manifest enumerating versions.
+- Solutions
+- Provider plugins
+- Metadata bundles
+- Releases (tags over immutable artifacts)
 
-```json
-{
-  "id": "example.app/frontend",
-  "type": "solution",
-  "description": "Example frontend scaffold",
-  "tags": ["frontend", "go"],
-  "versions": [
-    {
-      "version": "2.3.1",
-      "artifactPath": "solutions/example.app/frontend/2.3.1/",
-      "meta": "solutions/example.app/frontend/2.3.1/build.json",
-      "createdAt": "2025-12-18T12:03:09Z",
-      "digest": "sha256:..."
-    },
-    {
-      "version": "2.2.0",
-      "artifactPath": "solutions/example.app/frontend/2.2.0/",
-      "meta": "solutions/example.app/frontend/2.2.0/build.json",
-      "createdAt": "2025-10-07T09:44:21Z",
-      "digest": "sha256:..."
-    }
-  ]
-}
-```
+Each artifact type has a well-defined structure and identity.
 
-- Always sorted newest first.
-- `digest` allows integrity checks before downloading full artifacts.
+---
 
-### `<type>/<id>/<version>/build.json`
+## OCI as the Storage Format
 
-Leaf manifest created by `scafctl build`.
+The catalog is implemented using OCI artifacts, not container images.
 
-```json
-{
-  "schemaVersion": "1.0",
-  "type": "solution",
-  "id": "example.app/frontend",
-  "version": "2.3.1",
-  "createdAt": "2025-12-18T12:03:09Z",
-  "builtBy": {
-    "scafctl": "0.18.0",
-    "gitSHA": "3acb1e8",
-    "builder": "ci@company.com"
-  },
-  "inputs": {
-    "source": "./solutions/frontend",
-    "commit": "main@3acb1e8"
-  },
-  "primaryArtifact": "solution.yaml",
-  "artifacts": [
-    {
-      "name": "solution.yaml",
-      "path": "solution.yaml",
-      "mediaType": "application/x-yaml",
-      "digest": "sha256:..."
-    },
-    {
-      "name": "templates.tar.gz",
-      "path": "files/templates.tar.gz",
-    - `primaryArtifact` points at the default payload for consumers. Its value can change per type (`solution.yaml`, `datasource.json`, `plugin.tar.gz`, etc.).
+Using OCI provides:
 
-    ## Heterogeneous Artifacts
+- Content-addressable storage
+- Immutable digests
+- Tag-based versioning
+- Existing registry support
+- Existing tooling
+- Local and remote transport
+- No runtime services
 
-    - Each top-level directory under `<catalog-root>` represents an artifact type that can be listed in `catalog.json`. Adding a new type (for example `releases/`) is a matter of provisioning the directory and teaching the CLI about the schema it expects.
-    - Version folders may contain any file set required by that type. For a CLI release the tree might look like:
+Artifacts are simple compressed payloads stored and transported using the OCI specification.
 
-      ```
-      releases/scafctl/0.86.0/
-        build.json
-        datasource.json          # primary artifact (referenced by build.json.primaryArtifact)
-        scafctl-banner.svg
-        scafctl-icon.svg
-      ```
-    - Consumers rely on `build.json` metadata rather than hard-coded filenames, which lets legacy catalogs that stored `solution.json` or `datasource.json` keep their naming.
-      "mediaType": "application/gzip",
-      "digest": "sha256:..."
-    }
-  ],
-  "metadata": {
-    "displayName": "Example Frontend",
-    "maintainers": [
-      { "name": "Example Team", "email": "eng@example.com" }
-    ],
-    "tags": ["frontend", "go"],
-    "dependsOn": ["datasource:platform/identity"]
-  }
-}
-```
+---
 
-- `scafctl build` writes this file alongside the serialized solution/datasource/provider files.
-- Additional files (rendered templates, provider binaries, etc.) live under the same version folder.
+## Artifact Identity
 
-## Catalog Backends
+Artifacts are referenced using a canonical identifier.
 
-The catalog layout works for any object store. scafctl resolves URIs using a single abstraction:
+### Reference Format
 
-- `file://` or bare paths → local filesystem
-- `gs://bucket/path` → Google Cloud Storage (stackdriver signers)
-- `s3://bucket/path` → AWS S3 (future)
+type:name@version # or constraint
 
-Configuration example (`~/.config/scafctl/config.yaml`):
+Examples:
 
-```yaml
-catalogs:
-  - name: local-dev
-    uri: "./.scafctl/catalog"
-    writable: true
-  - name: staging
-    uri: "gs://scafctl-catalog-staging"
-    writable: true
-  - name: public
-    uri: "gs://scafctl-catalog-prod"
-    writable: false
-```
+solution gcp-projects@1.7.0
+solution gcp-projects@^1.7
+provider api@2.3.1
 
-- Catalogs are searched in order for reads. The first `writable: true` entry becomes the default publish target unless overridden with `--catalog`.
-- Local catalogs can be version controlled (e.g., committing build metadata).
+At execution time, all references are resolved to an immutable digest.
 
-## CLI Workflow
+---
 
-### Build
+## Solution Artifacts
 
-```
-scafctl build solution ./solutions/frontend \
-  --id example.app/frontend \
-  --version 2.3.1 \
-  --out ./dist/catalog
-```
+Solution artifacts contain:
 
-- Creates `./dist/catalog/solutions/example.app/frontend/2.3.1/` with the normalized solution, templates, and `build.json`.
-- Updates nothing outside the version folder.
+- One or more solution YAML files
+- Required metadata
+- Optional documentation
 
-### Publish
+Example logical reference:
 
-```
-scafctl publish solutions example.app/frontend@2.3.1 --catalog staging
-```
+solution gcp-projects@1.7.0
 
-Steps:
+Example OCI layout:
 
-1. Upload the version folder to the remote catalog (skip files already present via checksum).
-2. Update `<type>/<id>/index.json` by merging the new version entry.
-3. Update root `catalog.json` aggregates (counts, latest pointers).
-4. Optionally invalidate CDN caches if configured.
+oci://registry/solutions/gcp-projects:1.7.0
 
-`scafctl publish` will refuse to publish if `index.json` already contains the same version unless `--force` is provided.
+Payload:
 
-### Sync
+- tar.gz archive
+- solution.yaml
+- metadata.yaml or metadata.json
 
-For offline users, `scafctl sync catalog public` downloads manifests (and optionally artifacts) into a local cache.
+---
 
-## Supporting Raw Artifacts
+## Provider Artifacts
 
-- `artifacts/` (and other custom types like `releases/`) are first-class directories for payloads that are not solutions.
-- Each entry in `build.json.artifacts` records a `mediaType`, digest, and optional `platform` stanza (`{ "platform": { "os": "linux", "arch": "amd64" } }`).
-- Solutions, providers, or datasources can declare dependencies on `artifact:` or `release:` IDs; scafctl ensures required payloads are present locally before execution.
+Provider artifacts deliver plugin binaries and schemas.
 
-## Migration Plan
+They may include:
 
-1. Provision a new bucket `gs://scafctl-catalog-prod/`.
-2. Export existing per-type buckets (`legacy-solutions_prod`, `legacy-datasources_prod`) into the new layout using a migration script:
-   - Map buckets to type directories.
-   - Generate `build.json` from existing metadata (CLI will provide helpers).
-   - Generate missing `index.json` and `catalog.json`.
-3. Update scafctl configuration to point at the unified catalog.
-4. Deprecate legacy buckets once consumers have switched.
+- Plugin binaries (platform-specific)
+- Provider schemas
+- Capability metadata
 
-## Open Questions
+Example reference:
 
-- Should `scafctl publish` lock the catalog (e.g., via object-level leases) to avoid concurrent index edits? (GCS supports object preconditions.)
-- Do we need delta indexes (per namespace) to keep `index.json` small for high-churn artifacts?
-- How much of the metadata should be duplicated between `build.json` and `index.json` vs. referenced indirectly?
+provider api@2.3.1
 
-## References
+Providers are discovered from the catalog and loaded via the plugin system.
 
-- [docs/design/plugins.md](./plugins.md) — provider packaging relies on catalog distribution.
-- [docs/design/providers.md](./providers.md) — provider descriptors referenced by `build.json`.
-- Future RFCs: build metadata schema, publish command UX, catalog locking strategy.
+---
+
+## Releases and Tags
+
+Releases are modeled as OCI tags.
+
+Properties:
+
+- Tags point to immutable digests
+- Multiple tags may reference the same digest
+- Tags may be mutable
+- Digests are immutable
+
+Examples:
+
+- 1.7.0
+- 1.7
+- latest
+
+Execution always resolves to a digest.
+
+---
+
+## Local Catalog
+
+The catalog works locally without any remote dependency.
+
+Example local layout:
+
+~/.scafctl/catalog/
+  oci/
+    blobs/
+    index/
+
+This directory is an OCI content store.
+
+Behavior:
+
+- Artifacts are cached locally
+- Previously fetched artifacts can be reused offline
+- Local-only catalogs are supported
+
+---
+
+## Remote Catalogs
+
+Remote catalogs are standard OCI registries.
+
+Supported backends:
+
+- OCI registries
+- Local filesystem stores
+- Private registries
+- Air-gapped mirrors
+
+scafctl does not require a specific registry implementation.
+
+---
+
+## Version Resolution
+
+Version resolution is performed client-side.
+
+When resolving a reference:
+
+solution gcp-projects@^1.7
+
+scafctl:
+
+1. Lists available versions
+2. Applies semantic version constraints
+3. Selects the highest compatible version
+4. Resolves to a digest
+5. Fetches the artifact if needed
+
+No server-side logic is required.
+
+---
+
+## Querying the Catalog
+
+Catalog queries are intentionally limited and deterministic.
+
+Supported queries:
+
+- List artifact names
+- List versions for an artifact
+- Inspect artifact metadata
+- Resolve references
+
+Example commands:
+
+scafctl catalog list solutions
+scafctl catalog versions solution gcp-projects
+scafctl catalog inspect solution gcp-projects@1.7.0
+
+All queries operate on local metadata and cached manifests.
+
+---
+
+## Publishing Artifacts
+
+Publishing is explicit and simple.
+
+Example:
+
+scafctl catalog publish solution gcp-projects@1.7.0 \
+  --file solution.yaml
+
+Behavior:
+
+- Validate artifact
+- Package files into OCI format
+- Push to configured catalog
+- Tag with version
+- Update local cache
+
+Publishing does not require a database or service.
+
+---
+
+## Execution Flow with Catalog
+
+When running a solution:
+
+scafctl run solution gcp-projects@1.7.0
+
+Flow:
+
+1. Parse reference
+2. Resolve version and digest
+3. Fetch artifact if not cached
+4. Load solution YAML
+5. Resolve resolvers
+6. Render or execute actions
+
+Catalog resolution is a read-only operation.
+
+---
+
+## Render Mode and the Catalog
+
+In render mode:
+
+scafctl render solution gcp-projects@1.7.0
+
+Behavior:
+
+- Artifact is resolved and fetched
+- Solution is rendered
+- No providers are executed
+- Output is a declarative action graph
+
+The catalog remains unchanged.
+
+---
+
+## Design Constraints
+
+- The catalog must not require a database
+- Artifacts must be immutable by digest
+- Version constraints are resolved client-side
+- The catalog must work offline
+- Artifacts must be transport-agnostic
+- Execution must never mutate catalog contents
+
+---
+
+## Summary
+
+The catalog is the packaging and distribution layer of scafctl. By leveraging OCI artifacts, it provides local-first, immutable, versioned storage for solutions and providers without requiring a database or centralized service. The catalog enables reproducible execution, offline workflows, and simple publishing while integrating cleanly with existing container tooling and registries.
