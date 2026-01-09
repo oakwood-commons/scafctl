@@ -1,234 +1,209 @@
-# Provider Plugin System
+# Plugins
 
-> **Goal:** Document how scafctl discovers, loads, and communicates with external provider executables modeled after the Terraform provider protocol.
+## Purpose
 
-## Architecture Overview
+Plugins are the extension mechanism for scafctl. They allow external binaries to contribute functionality to the system in a controlled, versioned, and discoverable way.
 
-- Providers are compiled as standalone executables that implement the Terraform plugin gRPC transport (handshake + gRPC framing).
-- scafctl acts as the host: it spawns provider binaries, performs the Terraform-style handshake, and manages RPC traffic through a thin adapter layered with scafctl semantics.
-- Each provider declares its interface through a JSON descriptor co-located with the binary.
-- Resolvers and actions reference providers by `<namespace>/<name>`; scafctl resolves that reference to a cached binary + descriptor before execution.
+The primary purpose of plugins is to supply providers. Plugins are not a separate execution concept from providers. They are the delivery and isolation mechanism used to obtain providers.
 
-## Design Choices
+---
 
-- **Terraform transport, scafctl semantics** — We intentionally reuse the Terraform plugin handshake to avoid re-inventing process lifecycle, logging, and RPC framing. Above that transport we expose scafctl-native concepts (resolvers, templates, actions) instead of Terraform resources. See `docs/design/providers.md` for the input-contract shape.
-- **Taskfile replacement** — Providers may implement iterative action graphs (e.g., `foreach`, conditional execution) so scafctl solutions can drive build/test flows the way `Taskfile.yml` would, without Terraform's plan/apply lifecycle. Related design notes live in `actions.md` and `templates.md`.
-- **Deterministic discovery** — Resolver providers run once per execution graph and must be side-effect free, aligning with the pipeline described in `resolvers.md`. Actions are opt-in side effects declared in solutions (`solution.md`).
-- **Scripting vs state management** — By avoiding Terraform resource semantics we keep executions stateless and deterministic, matching configuration discovery + scaffolding use cases rather than infrastructure reconciliation.
-- **More background** — Rationale for the plugin vs. provider separation and catalog packaging is captured in `catalog.md` (distribution model) and `notes.md` (decision history).
-- **CLI ergonomics** — Day-to-day usage stays centered on `scafctl run solution:<id>`. For ad-hoc provider testing we support the sugar `scafctl run provider:<namespace/name>` which dispatches through the same resolver/action engine, while administrative verbs remain grouped under `scafctl provider <subcommand>` (install, list, update).
+## What a Plugin Is
 
-## Cache & Layout
+A plugin is an external process that implements one or more scafctl extension interfaces and communicates with scafctl over RPC.
 
-Providers live under the scafctl cache directory (default `~/.scafctl/providers`). The folder layout mirrors Terraform:
+Plugins are:
 
-```
-~/.scafctl/providers/
-  registry.example.com/
-    scafctl/
-      shell/
-        1.0.0/
-          provider.json
-          terraform-provider-shell
-      api/
-        1.0.0/
-          provider.json
-          terraform-provider-api
-```
+- Discovered and loaded at runtime
+- Versioned independently from scafctl
+- Isolated from the core process
+- Capable of exposing multiple providers
 
-- `provider.json` contains descriptor metadata (name, version, schema, capabilities).
-- Binary names follow Terraform conventions (`terraform-provider-<name>`), allowing reuse of existing Terraform tooling.
-- Versions are semver; multiple versions can coexist.
+scafctl uses [hashicorp/go-plugin](https://github.com/hashicorp/go-plugin) to manage plugin lifecycle, transport, and isolation.
 
-## Installation Flow
+---
 
-1. **Discovery** — `scafctl provider install scafctl/shell` fetches metadata from a registry endpoint (compatible with Terraform provider registry API).
-2. **Download** — The binary and `provider.json` are downloaded to the cache directory.
-3. **Verification** — Checksums/signatures (if provided) are verified before caching.
-4. **Registration** — scafctl updates its internal registry map with the provider descriptor from `provider.json`.
+## What a Plugin Is Not
 
-## Runtime Handshake
+A plugin is not:
 
-1. scafctl resolves a provider reference in a solution.
-2. Host reads `provider.json` to confirm API compatibility (matching protocol version and features).
-3. Host spawns the provider executable with Terraform handshake environment variables (`TF_REATTACH_PROVIDERS`, plugin protocol version).
-4. The provider responds with capabilities; scafctl maps Terraform RPC methods to scafctl provider operations (resolve, execute).
-5. Inputs validated via JSON schema from the descriptor are sent through the RPC channel.
+- A provider itself
+- A resolver
+- An action
+- A workflow engine
+- A scripting environment
 
-## Descriptor Format (`provider.json`)
+Plugins do not participate directly in execution graphs. They only expose capabilities that scafctl invokes.
 
-```json
-{
-  "name": "shell",
-  "namespace": "scafctl",
-  "version": "1.0.0",
-  "protocol_version": 6,
-  "schema": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
-    "type": "object",
-    "properties": {
-      "dir": { "type": "string" },
-      "cmd": {
-        "type": "array",
-        "items": { "type": "string" }
-      },
-      "env": {
-        "type": "array",
-        "items": { "type": "string" }
-      }
-    },
-    "required": ["cmd"],
-    "additionalProperties": false
-  },
-  "capabilities": {
-    "resolvers": true,
-    "actions": true,
-    "auth": false
-  }
-}
-```
+---
 
-- `protocol_version` must match the Terraform plugin handshake utilized by scafctl.
-- `schema` defines the inputs accepted by resolver/action calls.
-- `capabilities` toggles which scafctl phases can call the provider.
-  - `resolvers`: Provider can be used in resolver `from:` sources
-  - `actions`: Provider can be used in action execution
-  - `auth`: Provider can handle authentication/authorization
+## Primary Use: Provider Distribution
 
-## Example: Shell Provider Plugin
+Plugins exist primarily to distribute providers.
 
-**Folder** `~/.scafctl/providers/registry.example.com/scafctl/shell/1.0.0/`
+Under this model:
 
-- `terraform-provider-shell` implements Terraform RPC.
-- Executes shell commands for actions and resolves command output when used in resolvers.
-- Uses the descriptor JSON above.
+- Providers define behavior
+- Plugins package providers
+- scafctl orchestrates provider execution
 
-**Solution usage**
+A plugin may expose one or more providers.
+---
 
-```yaml
-spec:
-  actions:
-    run-tests:
-      provider: scafctl/shell
-      inputs:
-        dir: {{ _.projectRoot }}
-        cmd:
-          - go test ./...
-```
+## Why Plugins Exist (Instead of Built-ins Only)
 
-At runtime scafctl marshals `inputs` into the Terraform RPC request for the shell provider, ensuring validation via the descriptor.
+Plugins exist to:
 
-## Example: API Provider Plugin
+- Avoid baking all providers into scafctl
+- Enable third-party and internal extensions
+- Allow providers to evolve independently
+- Isolate failures and crashes
+- Support multiple languages via gRPC boundaries
+- Keep the core binary small and stable
 
-**Folder** `~/.scafctl/providers/registry.example.com/scafctl/api/1.0.0/`
+This mirrors patterns used by Terraform, Vault, Nomad, and Packer.
 
-Descriptor (simplified):
+---
 
-```json
-{
-  "name": "api",
-  "namespace": "scafctl",
-  "version": "1.0.0",
-  "protocol_version": 6,
-  "schema": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
-    "type": "object",
-    "properties": {
-      "endpoint": { "type": "string", "format": "uri" },
-      "method": {
-        "type": "string",
-        "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]
-      },
-      "headers": {
-        "type": "object",
-        "additionalProperties": { "type": "string" }
-      },
-      "body": { "type": "string" }
-    },
-    "required": ["endpoint", "method"],
-    "additionalProperties": false
-  },
-  "capabilities": {
-    "resolvers": false,
-    "actions": true,
-    "auth": false
-  }
-}
-```
+## Plugin Architecture
 
-**Solution usage**
+scafctl uses go-plugin with gRPC-based handshake.
 
-```yaml
-spec:
-  actions:
-    deploy:
-      provider: scafctl/api
-      inputs:
-        endpoint: https://api.example.com/deploy
-        method: POST
-        headers:
-          Authorization: "Bearer {{ _.token }}"
-        body: '{"version": "{{ _.version }}"}'
-```
+Conceptually:
 
-The API provider emits HTTP requests and returns status metadata which scafctl records in action outputs.
+- scafctl discovers a plugin binary
+- scafctl negotiates protocol version
+- Plugin advertises capabilities
+- scafctl registers providers exposed by the plugin
+- Providers are invoked through gRPC
 
-## Example: Auth Provider Plugin
+The plugin process lifecycle is managed entirely by scafctl.
 
-Auth providers handle authentication workflows (login, logout, token refresh). They must set `"auth": true` in capabilities.
+---
 
-**Descriptor** `~/.scafctl/providers/registry.example.com/scafctl/entra/1.0.0/provider.json`
+## Plugin Capabilities
 
-```json
-{
-  "protocol_version": 6,
-  "name": "entra",
-  "namespace": "scafctl",
-  "version": "1.0.0",
-  "schema": {
-    "type": "object",
-    "properties": {
-      "tenant": { "type": "string" },
-      "clientId": { "type": "string" },
-      "scopes": {
-        "type": "array",
-        "items": { "type": "string" }
-      },
-      "noBrowser": { "type": "boolean", "default": false }
-    },
-    "required": ["tenant", "clientId"],
-    "additionalProperties": false
-  },
-  "capabilities": {
-    "resolvers": false,
-    "actions": false,
-    "auth": true
-  }
-}
-```
+Today, plugins are intended to expose providers.
 
-**CLI usage**:
-```bash
-scafctl auth login entra --tenant contoso.com --client-id abc123
-```
+Future capability types may include:
 
-The provider handles OAuth flows, token storage, and refresh logic. Auth providers are invoked via `scafctl auth` commands, not through resolvers or actions.
+- Provider sets
+- Schemas
+- Validation helpers
 
-## Lifecycle
+However, plugins should not become a generic execution environment. Any new capability must align with scafctl core concepts.
 
-- **Initialization** — scafctl lazily launches providers only when referenced in the current execution graph.
-- **Concurrency** — Each provider process can handle multiple RPC streams; scafctl multiplexes requests per provider instance.
-- **Shutdown** — After run completion, scafctl sends the Terraform close message and terminates idle processes.
+---
 
-## Future Extensions
+## Provider Exposure Model
 
-- Integrate Terraform registry discovery endpoints for version constraints (`~> 1.0`).
-- Support signed provider manifests to enforce supply-chain integrity.
-- Add optional WASM providers that reuse the same `provider.json` descriptor but load in-process.
-- Publish design deep dives alongside these docs once RFCs for resolver/action plugins land.
+A plugin declares the providers it implements.
 
-## Catalog Integration
+Conceptual example:
 
-- Provider plugins live under the unified catalog layout described in `catalog.md`: `providers/<namespace>/<name>/index.json` enumerates versions, while each version folder hosts a `build.json` plus the published binaries/descriptor. `catalog.json.types.providers` advertises the top-level collection for discovery.
-- Solutions reference providers via catalog IDs (`provider: scafctl/shell@1.0.0`). The CLI resolves those IDs to cached binaries and ensures version ranges declared in `spec.providers` are satisfied.
-- Provider metadata follows the same JSON-only contract as other catalog assets to keep air-gapped replication simple. `build.json.primaryArtifact` points to the descriptor (`provider.json`) so consumers know which file to hydrate first. See `catalog.md` for the publishing workflow and `testing.md` for catalog validation steps.
+~~~text
+plugin: scafctl-provider-api
+provides:
+  - provider: api
+  - provider: http
+~~~
+
+Each provider exposed by a plugin:
+
+- Has a stable name
+- Declares an input schema
+- Declares an output shape
+- Is invoked deterministically
+
+scafctl treats built-in providers and plugin-provided providers identically.
+
+---
+
+## Invocation Flow
+
+When a provider is used:
+
+1. scafctl resolves all inputs
+2. scafctl validates inputs against the provider schema
+3. scafctl invokes the provider via gRPC
+4. The plugin executes provider logic
+5. Results are returned to scafctl
+6. scafctl continues orchestration
+
+Providers never see unresolved CEL, templates, or resolver references.
+
+---
+
+## Plugin Discovery
+
+Plugins are discovered via configured locations, such as:
+
+- A plugin directory on disk
+- Explicit configuration
+- Environment-based paths
+
+Discovery does not execute plugins. Execution occurs only when a provider is invoked.
+
+---
+
+## Versioning and Compatibility
+
+Plugins declare:
+
+- Supported protocol version
+- Provider versions
+- Optional feature flags
+
+scafctl enforces compatibility at load time.
+
+Incompatible plugins are rejected early.
+
+---
+
+## Security Model
+
+Plugins are isolated processes.
+
+Security properties:
+
+- No direct memory access to scafctl
+- Explicit gRPC boundaries
+- No implicit filesystem or network access beyond what the plugin implements
+- Providers are the only exposed surface
+
+Plugin execution is explicit and auditable.
+
+---
+
+## Why Plugins Are Not a Separate Concept from Providers
+
+Conceptually:
+
+- Providers define behavior
+- Plugins deliver providers
+
+Introducing plugins as a separate user-facing concept would add unnecessary indirection.
+
+Users reason about:
+
+- Providers
+- Actions
+- Resolvers
+
+Plugins are an implementation detail that enables extensibility.
+
+---
+
+## Design Constraints
+
+- Plugins must not orchestrate execution
+- Plugins must not resolve data
+- Plugins must not mutate scafctl state
+- Plugins may only expose declared capabilities
+- Providers remain the sole execution primitive
+
+---
+
+## Summary
+
+Plugins are the extensibility layer of scafctl. They exist to supply providers in an isolated, versioned, and scalable way using go-plugin. Plugins are not a new execution model or abstraction. They are the mechanism by which providers are distributed and invoked, keeping the core system small, stable, and extensible.

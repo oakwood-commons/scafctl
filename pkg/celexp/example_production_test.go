@@ -284,8 +284,9 @@ func Example_production_ruleEngine() {
 
 	// Check if all rules passed
 	allPassed := true
-	for name, passed := range results {
-		fmt.Printf("Rule '%s': %v\n", name, passed)
+	for _, rule := range rules {
+		passed := results[rule.name]
+		fmt.Printf("Rule '%s': %v\n", rule.name, passed)
 		if !passed {
 			allPassed = false
 		}

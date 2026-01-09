@@ -249,7 +249,7 @@ func (o *Getter) FindSolution() string {
 // each root solution folder with each solution file name defined in the settings.
 // It constructs the full path for each combination and aggregates them into a list.
 func PossibleSolutionPaths() []string {
-	paths := []string{}
+	paths := make([]string, 0, len(settings.RootSolutionFolders)*len(settings.SolutionFileNames))
 
 	for _, folder := range settings.RootSolutionFolders {
 		for _, filename := range settings.SolutionFileNames {

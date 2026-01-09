@@ -1,209 +1,437 @@
-# Provider Interface & Input Contracts
+# Providers
 
-> **Goal:** Explain how pluggable providers can expose strongly typed schemas while solutions remain provider-agnostic.
+## Purpose
 
-## Overview
+Providers are stateless execution primitives. They perform a single, well-defined operation given validated inputs and return either a result or an error.
 
-Providers are the execution primitives behind resolvers and actions. Each provider implementation supplies two key pieces:
+Providers do not own orchestration, control flow, dependency resolution, or lifecycle decisions. This separation keeps solutions deterministic, testable, and explicit.
 
-1. **Descriptor metadata** — name, type, documentation, version
-2. **Input contract** — schema describing accepted options, decoded into a Go struct
+Providers are used by:
 
-When a solution references `provider: shell`, the engine looks up the provider descriptor, validates the `inputs:` map against the provider’s schema, decodes it into a strongly typed struct, and then executes the provider.
+- Resolvers (during resolve, transform, and validate phases)
+- Actions (during execution or render)
 
-## Registrations in Go
+Providers are never invoked implicitly. A provider runs only when explicitly referenced.
 
-```go
-// Provider interface implemented by built-in and plugin providers.
+---
+
+## Responsibilities
+
+A provider is responsible for:
+
+- Declaring its identity and capabilities
+- Defining an explicit input schema
+- Validating inputs against that schema
+- Decoding validated input into strongly typed structures
+- Executing its operation
+- Returning output data or an error
+
+A provider is not responsible for:
+
+- Deciding when it runs
+- Resolving dependencies
+- Performing orchestration or control flow
+- Mutating shared execution state
+- Reading undeclared global state
+
+---
+
+## Execution Context
+
+Providers are invoked with a resolved execution context.
+
+For resolver execution:
+
+- `_` contains only resolver outputs
+- Nothing exists in `_` unless emitted by a resolver
+
+For action execution:
+
+- Providers may receive additional action-local data, but this does not affect resolver semantics
+
+Special symbols passed by the caller:
+
+- `__self` when used in resolver transform or validate
+- `__item` when used in action foreach
+
+Providers do not evaluate expressions or templates themselves. All inputs are fully resolved before invocation.
+
+---
+
+## Provider Model
+
+### Notes
+
+- Providers support mocking to enable dry-run execution for testing, planning, and verification without performing real side effects.
+
+### Conceptual Flow
+
+- inputs (map)
+  - schema validation
+  - decode to typed input
+  - execute operation
+  - output or error
+
+Providers behave as isolated execution units with no implicit coupling to other providers.
+
+---
+
+## Provider Interface (Conceptual)
+
+~~~go
 type Provider interface {
-    Descriptor() ProviderDescriptor
-    Execute(ctx Context, input any, dataCtx map[string]any) (any, error)
+  Descriptor() ProviderDescriptor
+  Execute(ctx context.Context, input any) (any, error)
 }
 
 type ProviderDescriptor struct {
-    Name    string
-    Kind    string              // e.g. "sh", "api", "filesystem"
-    Schema  SchemaDefinition    // Parameter definitions for validation
-    Decode  func(map[string]any) (any, error)
+  Name   string
+  Schema SchemaDefinition
+  Decode func(map[string]any) (any, error)
 }
 
 type SchemaDefinition struct {
-    Parameters map[string]ParameterDefinition
+  Parameters map[string]ParameterDefinition
 }
 
 type ParameterDefinition struct {
-    Type        string // "string", "array", "object", "boolean", "number", "integer"
-    Description string // Human-readable description
-    Required    bool   // Whether parameter is mandatory
-    Default     any    // Optional default value
+  Type        string
+  Required    bool
+  Description string
 }
-```
+~~~
 
-- `Execute` receives three parameters:
-  - `ctx` - Go context for cancellation and timeout
-  - `input` - Decoded, strongly-typed input struct specific to the provider
-  - `dataCtx` - Data context containing resolved values from resolvers and previous actions (accessible as `_` in expressions)
-- `Schema` captures the provider-specific parameter definitions (`dir`, `cmd`, … for shell; `endpoint`, `method`, … for API).
-- `Decode` turns the untyped `map[string]any` from YAML into a typed struct. If decoding fails, validation error bubbles back to the user before execution.
+This interface is illustrative. The exact implementation may evolve, but the contract remains schema-first and explicit.
 
-## Shell Provider Example
+---
 
-```go
-// ShellInputs describes the schema for shell provider actions.
-type ShellInputs struct {
-    Dir string   `json:"dir"`
-    Cmd []string `json:"cmd"`
-    Env []string `json:"env"`
-}
+## Input Resolution
 
-func (shellProvider) Descriptor() ProviderDescriptor {
-    return ProviderDescriptor{
-        Name: "shell",
-        Kind: "sh",
-        Schema: SchemaDefinition{
-            Parameters: map[string]ParameterDefinition{
-                "cmd": {
-                    Type:        "array",
-                    Description: "Command and arguments to execute",
-                    Required:    true,
-                },
-                "dir": {
-                    Type:        "string",
-                    Description: "Working directory for command execution",
-                    Required:    false,
-                },
-                "env": {
-                    Type:        "array",
-                    Description: "Environment variables in KEY=VALUE format",
-                    Required:    false,
-                },
-            },
-        },
-        Decode: func(raw map[string]any) (any, error) {
-            var input ShellInputs
-            if err := mapstructure.Decode(raw, &input); err != nil {
-                return nil, err
-            }
-            return input, nil
-        },
-    }
-}
+Provider inputs are resolved by scafctl before execution.
 
-func (shellProvider) Execute(ctx Context, input any, dataCtx map[string]any) (any, error) {
-    in := input.(ShellInputs)
-    // run commands in in.Dir with in.Cmd, etc.
-    // dataCtx contains resolved values from resolvers (e.g., dataCtx["projectRoot"], dataCtx["goBinary"])
-    return nil, nil
-}
-```
+Each input field supports exactly one of the following forms. Choose the most appropriate form based on your use case.
 
-The solution author simply writes:
+### 1. Literal Value
 
-```yaml
-spec:
-  actions:
-    test:
-      provider: shell
+Set a property directly as a literal. The value is passed as-is with no evaluation.
+
+~~~yaml
+inputs:
+  image: nginx:1.27
+  retries: 3
+  enabled: true
+~~~
+
+### 2. Resolver Binding
+
+Reference a resolver directly using `rslvr`. The value emitted by the resolver is copied, preserving its type.
+
+~~~yaml
+inputs:
+  image:
+    rslvr: imageResolver
+  environment:
+    rslvr: deploymentEnv
+~~~
+
+This is the canonical form for passing resolver outputs to providers.
+
+### 3. Expression
+
+Evaluate a CEL expression using `expr`. The expression is evaluated using the resolver context (`_`).
+
+~~~yaml
+inputs:
+  image:
+    expr: _.org + "/" + _.repo + ":" + _.version
+  tags:
+    expr: _.environments.map(e, e.toUpperCase())
+~~~
+
+Expressions are computed on-the-fly and may combine multiple resolver values.
+
+### 4. Template String
+
+Render a Go template using `tmpl`. Always produces a string.
+
+~~~yaml
+inputs:
+  path:
+    tmpl: "./{{ .environment }}/main.tf"
+  message:
+    tmpl: "Deploying {{ .app }} to {{ .region }}"
+~~~
+
+Templates are useful for constructing formatted strings from resolver values.
+
+### Exclusivity Rule
+
+For a single input field, you must specify exactly one of:
+
+- A literal value
+- `rslvr: resolverName`
+- `expr: celExpression`
+- `tmpl: "templateString"`
+
+It is an error to specify more than one form for the same field.
+
+---
+
+## Providers in Resolvers
+
+Resolvers invoke providers to obtain, transform, or validate values.
+
+~~~yaml
+resolve:
+  from:
+    - provider: env
       inputs:
-        dir: {{ _.projectRoot }}
-        cmd:
-          - echo "Running go test"
-          - {{ _.goBinary }} test ./...
-```
+        key: PROJECT_NAME
+~~~
 
-The engine ensures the `inputs` block conforms to `ShellInputs` before `Execute` runs. If the user enters `endpoint:` by mistake, validation fails with a user-friendly error.
+Resolver execution flow:
 
-## API Provider Sketch
+1. Provider is selected
+2. Inputs are resolved and validated
+3. Provider executes
+4. Result is returned to the resolver
+5. Resolver emits the value after transform and validate
 
-```go
-type APIInputs struct {
-    Endpoint string            `json:"endpoint"`
-    Method   string            `json:"method"`
-    Headers  map[string]string `json:"headers"`
-    Body     string            `json:"body"`
-}
+Providers used in resolvers must be pure and deterministic.
 
-func (apiProvider) Descriptor() ProviderDescriptor {
-    return ProviderDescriptor{
-        Name: "api",
-        Kind: "http",
-        Schema: SchemaDefinition{
-            Parameters: map[string]ParameterDefinition{
-                "endpoint": {
-                    Type:        "string",
-                    Description: "API endpoint URL",
-                    Required:    true,
-                },
-                "method": {
-                    Type:        "string",
-                    Description: "HTTP method",
-                    Required:    false,
-                    Default:     "GET",
-                },
-                "headers": {
-                    Type:        "object",
-                    Description: "HTTP headers to include in request",
-                    Required:    false,
-                },
-                "body": {
-                    Type:        "string",
-                    Description: "Request body content",
-                    Required:    false,
-                },
-            },
-        },
-        Decode: func(raw map[string]any) (any, error) {
-            var input APIInputs
-            if err := mapstructure.Decode(raw, &input); err != nil {
-                return nil, err
-            }
-            return input, nil
-        },
-    }
-}
-```
+---
 
-Each provider defines its own struct. Solutions stay consistent:
+## Providers in Transform
 
-```yaml
-spec:
-  actions:
-    deploy:
-      provider: api
+Transform steps are provider executions applied sequentially to a single value.
+
+~~~yaml
+transform:
+  into:
+    - provider: cel
       inputs:
-        endpoint: https://api.example.com/deploy
-        method: POST
-        headers:
-          Authorization: "Bearer {{ _.token }}"
-        body: '{"version": "{{ _.version }}"}'
-```
+        expression: __self.toLowerCase()
+~~~
 
-## Validation Pipeline
+Each step receives the previous value as `__self`.
 
-1. Solution YAML is loaded into `Action.Inputs` as `map[string]any`.
-2. Engine resolves the provider descriptor.
-3. `Schema.Parameters` is used to validate the inputs:
-   - Check required parameters are present
-   - Validate parameter types match definitions
-4. `Decode` converts the validated map into the typed struct.
-5. The provider `Execute` receives the typed struct along with the data context containing resolver values and previous action outputs.
+---
 
-This keeps Go strongly typed while preserving YAML flexibility. The data context (`dataCtx`) allows providers to access resolved values that were referenced in input expressions (like `{{ _.projectRoot }}`), enabling dynamic behavior based on the current execution state.
+## Providers in Validation
 
-## Provider Plugins
+Validation is provider-backed.
 
-Third-party providers register descriptors at runtime:
+Any provider that returns a boolean may be used as a validation provider.
 
-```go
-func RegisterProvider(p Provider) {
-    registry[p.Descriptor().Name] = p
-}
-```
+### Built-in Provider: validation
 
-Plugins must expose a symbol like `func Provider() Provider` so the host can load descriptors dynamically.
+The built-in `validation` provider supports:
 
-## Related Docs
+- `match` - regex pattern that must match (supports all input forms)
+- `notMatch` - regex pattern that must not match (supports all input forms)
+- `expression` - CEL expression returning boolean
 
-- [Provider Schema](../schemas/provider-schema.md) — user-facing schema fields
-- [Authentication Reference](../reference/auth.md) — example of pluggable providers for auth
-- [CLI Providers Guide](../guides/06-providers.md)
+Rules:
+
+- `match` and `notMatch` may be combined
+- `match` and `notMatch` support all four input forms (literal, rslvr, expr, tmpl)
+- `expression` is for CEL-based validation
+- The provider returns a single boolean result
+
+Examples:
+
+Literal regex patterns:
+
+~~~yaml
+validate:
+  from:
+    - provider: validation
+      inputs:
+        match: "^[a-z0-9-]+$"
+        notMatch: "^fff$"
+      message: "Invalid value"
+~~~
+
+Using expression for computed regex:
+
+~~~yaml
+validate:
+  from:
+    - provider: validation
+      inputs:
+        match:
+          expr: "\"^\" + _.prefix + \"[a-z]+$\""
+      message: "Must match prefix pattern"
+~~~
+
+Using resolver for dynamic pattern:
+
+~~~yaml
+validate:
+  from:
+    - provider: validation
+      inputs:
+        match:
+          rslvr: validationPattern
+      message: "Must match validation pattern"
+~~~
+
+Using template for pattern:
+
+~~~yaml
+validate:
+  from:
+    - provider: validation
+      inputs:
+        match:
+          tmpl: "^{{ .allowedPrefix }}-[a-z0-9]+$"
+      message: "Must match allowed prefix"
+~~~
+
+Using CEL expression for validation logic:
+
+~~~yaml
+validate:
+  from:
+    - provider: validation
+      inputs:
+        expression: "__self in [\"dev\", \"staging\", \"prod\"]"
+      message: "Invalid environment"
+~~~
+
+---
+
+## Providers in Actions
+
+Actions invoke providers to perform side effects or generate artifacts.
+
+~~~yaml
+actions:
+  build:
+    provider: shell
+    inputs:
+      cmd:
+        - go
+        - build
+        - ./...
+~~~
+
+Action orchestration, dependencies, iteration, and conditional execution are handled outside the provider.
+
+---
+
+## Built-in Providers (Non-Exhaustive)
+
+### parameter
+
+Reads a value supplied at invocation time.
+
+~~~yaml
+resolve:
+  from:
+    - provider: parameter
+      inputs:
+        key: env
+~~~
+
+---
+
+### env
+
+Reads from the process environment.
+
+~~~yaml
+resolve:
+  from:
+    - provider: env
+      inputs:
+        key: PROJECT_NAME
+~~~
+
+---
+
+### static
+
+Supplies a literal value.
+
+~~~yaml
+resolve:
+  from:
+    - provider: static
+      inputs:
+        value: my-app
+~~~
+
+---
+
+### filesystem
+
+Reads data from the local filesystem.
+
+~~~yaml
+resolve:
+  from:
+    - provider: filesystem
+      inputs:
+        operation: read
+        path: ./config/name.txt
+~~~
+
+---
+
+### git
+
+Reads data from a git repository or working tree.
+
+~~~yaml
+resolve:
+  from:
+    - provider: git
+      inputs:
+        field: branch
+~~~
+
+---
+
+### api
+
+Fetches data from an HTTP endpoint.
+
+~~~yaml
+resolve:
+  from:
+    - provider: api
+      inputs:
+        endpoint: https://api.example.com/project
+        method: GET
+~~~
+
+---
+
+### cel
+
+Derives a value using CEL.
+
+~~~yaml
+resolve:
+  from:
+    - provider: cel
+      inputs:
+        expression: _.org + "/" + _.repo
+~~~
+
+---
+
+## Design Constraints
+
+- Providers must be stateless
+- Providers must declare all inputs explicitly
+- Providers must fail fast on invalid input
+- Providers must not depend on execution order
+- Providers must not introduce hidden data into resolver context
+
+---
+
+## Summary
+
+Providers are explicit, schema-driven execution units. scafctl resolves all inputs before invoking a provider, ensuring that providers operate only on concrete, validated data. This keeps resolver behavior deterministic and action execution predictable.

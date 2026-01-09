@@ -510,7 +510,7 @@ func serializeAST(expr ast.Expr, checkedAST *ast.AST) string {
 		}
 
 		// Serialize arguments
-		args := []string{}
+		args := make([]string, 0, len(call.Args()))
 		for _, arg := range call.Args() {
 			args = append(args, serializeAST(arg, checkedAST))
 		}
@@ -520,7 +520,7 @@ func serializeAST(expr ast.Expr, checkedAST *ast.AST) string {
 	case ast.ListKind:
 		// Lists: serialize all elements
 		list := expr.AsList()
-		elemStrs := []string{}
+		elemStrs := make([]string, 0, len(list.Elements()))
 		for _, elem := range list.Elements() {
 			elemStrs = append(elemStrs, serializeAST(elem, checkedAST))
 		}

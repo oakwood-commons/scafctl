@@ -458,7 +458,7 @@ func BuildChildToParentsMap(nodes map[string]*Node) (childToParents map[string]C
 				Parents: []string{},
 			}
 		}
-		parents := []string{}
+		parents := make([]string, 0, len(node.Prev))
 		for _, prev := range node.Prev {
 			if _, ok := childToParents[prev.Key]; !ok {
 				childToParents[prev.Key] = ChildToParents{
