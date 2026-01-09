@@ -89,7 +89,7 @@ Solution artifacts contain:
 
 Example logical reference:
 
-solution:gcp-projects@1.7.0
+solution gcp-projects@1.7.0
 
 Example OCI layout:
 
@@ -115,7 +115,7 @@ They may include:
 
 Example reference:
 
-provider:api@2.3.1
+provider api@2.3.1
 
 Providers are discovered from the catalog and loaded via the plugin system.
 

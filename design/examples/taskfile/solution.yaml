@@ -30,7 +30,7 @@ spec:
         from:
           - provider: validation
             inputs:
-              match: "^(dev|\\d+\\.\\d+\\.\\d+.*)$"
+              match: '^(dev|\d+\.\d+\.\d+.*)$'
             message: "Invalid version format"
 
     goos:

@@ -454,12 +454,6 @@ spec:
             rslvr: environment
           context:
             tmpl: "cluster-{{ .__region }}"
-      # Define results that can be consumed by later actions
-      results:
-        deploymentStatus:
-          from: result.exitCode
-        deploymentOutput:
-          from: result.stdout
 
     # -------------------------------------------------------------------------
     # Action 7: Retry pattern with until condition
@@ -503,7 +497,7 @@ spec:
         # Access results from deployToCluster action
         validate:
           statusCheck:
-            expr: "__actions.deployToCluster.results.deploymentStatus == 0"
+            expr: "__actions.deployToCluster.results.value.deploymentStatus == 0"
 
     # -------------------------------------------------------------------------
     # Action 9: Conditional action based on environment

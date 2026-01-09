@@ -8,6 +8,14 @@ metadata:
 
 spec:
   resolvers:
+    isDryRun:
+      description: A dry run
+      resolve:
+        from:
+          - provider: parameter
+            inputs:
+              key: dry-run
+
     environment:
       description: Deployment environment
       resolve:

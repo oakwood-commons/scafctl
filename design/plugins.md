@@ -125,7 +125,7 @@ When a provider is used:
 
 1. scafctl resolves all inputs
 2. scafctl validates inputs against the provider schema
-3. scafctl invokes the provider via RPC
+3. scafctl invokes the provider via gRPC
 4. The plugin executes provider logic
 5. Results are returned to scafctl
 6. scafctl continues orchestration
@@ -167,7 +167,7 @@ Plugins are isolated processes.
 Security properties:
 
 - No direct memory access to scafctl
-- Explicit RPC boundaries
+- Explicit gRPC boundaries
 - No implicit filesystem or network access beyond what the plugin implements
 - Providers are the only exposed surface
 
