@@ -124,14 +124,14 @@ inputs:
 
 ### 2. Resolver Binding
 
-Reference a resolver directly using `rslv`. The value emitted by the resolver is copied, preserving its type.
+Reference a resolver directly using `rslvr`. The value emitted by the resolver is copied, preserving its type.
 
 ~~~yaml
 inputs:
   image:
-    rslv: imageResolver
+    rslvr: imageResolver
   environment:
-    rslv: deploymentEnv
+    rslvr: deploymentEnv
 ~~~
 
 This is the canonical form for passing resolver outputs to providers.
@@ -169,7 +169,7 @@ Templates are useful for constructing formatted strings from resolver values.
 For a single input field, you must specify exactly one of:
 
 - A literal value
-- `rslv: resolverName`
+- `rslvr: resolverName`
 - `expr: celExpression`
 - `tmpl: "templateString"`
 
@@ -234,7 +234,7 @@ The built-in `validation` provider supports:
 Rules:
 
 - `match` and `notMatch` may be combined
-- `match` and `notMatch` support all four input forms (literal, rslv, expr, tmpl)
+- `match` and `notMatch` support all four input forms (literal, rslvr, expr, tmpl)
 - `expression` is for CEL-based validation
 - The provider returns a single boolean result
 
@@ -272,7 +272,7 @@ validate:
     - provider: validation
       inputs:
         match:
-          rslv: validationPattern
+          rslvr: validationPattern
       message: "Must match validation pattern"
 ~~~
 

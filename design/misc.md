@@ -41,6 +41,7 @@ Each provider must declare:
 - Supported operations (if applicable)
 - Determinism expectations
 - Side-effect behavior
+- A way to mock so solutions can be tested
 
 Providers are treated as black boxes with explicit contracts.
 

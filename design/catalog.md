@@ -71,9 +71,9 @@ type:name@version # or constraint
 
 Examples:
 
-solution:gcp-projects@1.7.0
-solution:gcp-projects@^1.7
-provider:api@2.3.1
+solution gcp-projects@1.7.0
+solution gcp-projects@^1.7
+provider api@2.3.1
 
 At execution time, all references are resolved to an immutable digest.
 
@@ -184,7 +184,7 @@ Version resolution is performed client-side.
 
 When resolving a reference:
 
-solution:gcp-projects@^1.7
+solution gcp-projects@^1.7
 
 scafctl:
 

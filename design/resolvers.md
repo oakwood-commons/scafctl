@@ -207,7 +207,7 @@ Rules:
 - All validations must pass
 - Validation failures stop execution
 - Validation does not mutate data
-- `match` and `notMatch` support all four input forms (literal, rslv, expr, tmpl)
+- `match` and `notMatch` support all four input forms (literal, rslvr, expr, tmpl)
 
 ### Examples
 
@@ -265,7 +265,7 @@ validate:
     - provider: validation
       inputs:
         match:
-          rslv: namePattern
+          rslvr: namePattern
       message: "Must match naming convention"
 ~~~
 
@@ -316,7 +316,7 @@ Copies the resolver value directly, preserving its type.
 ~~~yaml
 inputs:
   image:
-    rslv: image
+    rslvr: image
 ~~~
 
 #### 3. Expression-Based Value (Explicit CEL)

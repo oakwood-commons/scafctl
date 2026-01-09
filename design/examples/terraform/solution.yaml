@@ -86,11 +86,11 @@ spec:
             path:
               tmpl: "./{{ .env }}/main.tf"
             content:
-              rslv: mainTfTemplate
+              rslvr: mainTfTemplate
 
           - name: writeTFvars
             action: write
             path:
               tmpl: "./{{ .env }}/auto.tfvars"
             content:
-              rslv: tfvarsTemplate
+              rslvr: tfvarsTemplate

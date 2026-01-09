@@ -85,7 +85,7 @@ spec:
           - -rf
         args:
           directory:
-            rslv: buildDir
+            rslvr: buildDir
 
     test:
       description: Run tests
@@ -104,9 +104,9 @@ spec:
       inputs:
         env:
           GOOS:
-            rslv: goos
+            rslvr: goos
           GOARCH:
-            rslv: goarch
+            rslvr: goarch
         cmd:
           - go
           - build
@@ -117,9 +117,9 @@ spec:
           source: ./cmd/scafctl
         context:
           buildDir:
-            rslv: buildDir
+            rslvr: buildDir
           repo:
-            rslv: repo
+            rslvr: repo
 
     release:
       description: Create GitHub release
@@ -135,7 +135,7 @@ spec:
             tmpl: "Bearer {{ .github_token }}"
         body:
           tag_name:
-            rslv: version
+            rslvr: version
           name:
             tmpl: "Release {{ .version }}"
           draft: false
@@ -143,4 +143,4 @@ spec:
             expr: "_.version.contains(\"alpha\") || _.version.contains(\"beta\")"
         context:
           version:
-            rslv: version
+            rslvr: version

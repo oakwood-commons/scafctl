@@ -118,7 +118,7 @@ inputs:
 ~~~yaml
 inputs:
   image:
-    rslv: image
+    rslvr: image
 ~~~
 
 ### Expression
@@ -165,7 +165,7 @@ Rules:
 
 ## Results (Tekton-style)
 
-Actions may expose named results, similar to Tekton task results.
+Actions may expose results, similar to Tekton task results.
 
 ~~~yaml
 actions:

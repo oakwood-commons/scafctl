@@ -128,9 +128,9 @@ actions:
       method: POST
       body:
         image:
-          rslv: image
+          rslvr: image
         environment:
-          rslv: environment
+          rslvr: environment
 ~~~
 
 Properties:
@@ -332,7 +332,7 @@ spec:
         method: POST
         body:
           environment:
-            rslv: environment
+            rslvr: environment
 ~~~
 
 ---
@@ -390,11 +390,11 @@ spec:
       when:                           # Optional: conditional execution
         expr: string
         tmpl: string
-        rslv: resolverName
+        rslvr: resolverName
       until:                          # Optional: retry condition
         expr: string
         tmpl: string
-        rslv: resolverName
+        rslvr: resolverName
       forEach:                        # Optional: iteration
         item: itemName                # Variable name for current item
         in: _.resolverName            # Array to iterate over
@@ -428,8 +428,8 @@ spec:
 
 - `description` (optional) - Purpose of this action
 - `provider` (required) - Provider name to execute
-- `when` (optional) - Conditional execution (supports expr, tmpl, rslv)
-- `until` (optional) - Retry condition (supports expr, tmpl, rslv)
+- `when` (optional) - Conditional execution (supports expr, tmpl, rslvr)
+- `until` (optional) - Retry condition (supports expr, tmpl, rslvr)
 - `forEach` (optional) - Iteration over array values
 - `dependsOn` (optional) - Array of action names to execute first
 - `inputs` (required) - Provider-specific input map
@@ -440,7 +440,7 @@ spec:
 All action inputs and many provider inputs support four forms:
 
 1. **Literal**: `key: value`
-2. **Resolver binding**: `key: { rslv: resolverName }`
+2. **Resolver binding**: `key: { rslvr: resolverName }`
 3. **Expression**: `key: { expr: "celExpression" }`
 4. **Template**: `key: { tmpl: "{{ .template }}" }`
 

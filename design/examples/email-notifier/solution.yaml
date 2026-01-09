@@ -97,13 +97,13 @@ spec:
         expr: "_.environment != \"dev\""
       inputs:
         from:
-          rslv: emailFrom
+          rslvr: emailFrom
         to:
-          rslv: emailTo
+          rslvr: emailTo
         subject:
-          rslv: subject
+          rslvr: subject
         body:
-          rslv: body
+          rslvr: body
 
     renderPreview:
       description: Render email payload without sending
@@ -113,10 +113,10 @@ spec:
       inputs:
         value:
           from:
-            rslv: emailFrom
+            rslvr: emailFrom
           to:
-            rslv: emailTo
+            rslvr: emailTo
           subject:
-            rslv: subject
+            rslvr: subject
           body:
-            rslv: body
+            rslvr: body

@@ -283,7 +283,7 @@ spec:
 
     # -------------------------------------------------------------------------
     # Action 2: Action using resolver binding (rslv)
-    # Demonstrates: rslv input form
+    # Demonstrates: rslvr input form
     # -------------------------------------------------------------------------
     validateEnvironment:
       description: Log the target environment
@@ -296,11 +296,11 @@ spec:
         # Direct resolver binding - passes the value as-is
         env:
           ENVIRONMENT:
-            rslv: environment
+            rslvr: environment
           APP_NAME:
-            rslv: appName
+            rslvr: appName
           VERSION:
-            rslv: version
+            rslvr: version
 
     # -------------------------------------------------------------------------
     # Action 3: Action with expression inputs (expr)
@@ -325,7 +325,7 @@ spec:
           BUILD_TIME:
             expr: "string(now())"
           GIT_COMMIT:
-            rslv: gitCommit
+            rslvr: gitCommit
 
     # -------------------------------------------------------------------------
     # Action 4: Action with template inputs (tmpl)
@@ -357,17 +357,17 @@ spec:
               tmpl: "./output/{{ .__region }}/deployment.yaml"
             content:
               # Resolver binding to template content
-              rslv: deploymentTemplate
+              rslvr: deploymentTemplate
             # Template context for rendering
             context:
               appName:
-                rslv: appName
+                rslvr: appName
               version:
-                rslv: version
+                rslvr: version
               replicas:
-                rslv: replicas
+                rslvr: replicas
               environment:
-                rslv: environment
+                rslvr: environment
               region:
                 expr: "_.__region"
 
@@ -377,12 +377,12 @@ spec:
             path:
               tmpl: "./output/{{ .__region }}/service.yaml"
             content:
-              rslv: serviceTemplate
+              rslvr: serviceTemplate
             context:
               appName:
-                rslv: appName
+                rslvr: appName
               environment:
-                rslv: environment
+                rslvr: environment
               region:
                 expr: "_.__region"
 
@@ -411,19 +411,19 @@ spec:
         # Expression creating JSON body
         body:
           app:
-            rslv: appName
+            rslvr: appName
           version:
-            rslv: version
+            rslvr: version
           environment:
-            rslv: environment
+            rslvr: environment
           regions:
-            rslv: regions
+            rslvr: regions
           timestamp:
             expr: "string(now())"
           commit:
-            rslv: gitCommit
+            rslvr: gitCommit
           branch:
-            rslv: gitBranch
+            rslvr: gitBranch
           message:
             tmpl: "Deployed {{ .appName }} version {{ .version }} to {{ .environment }}"
 
@@ -451,7 +451,7 @@ spec:
           path:
             tmpl: "./output/{{ .__region }}/"
           namespace:
-            rslv: environment
+            rslvr: environment
           context:
             tmpl: "cluster-{{ .__region }}"
       # Define results that can be consumed by later actions
@@ -482,7 +482,7 @@ spec:
           - -n
         args:
           namespace:
-            rslv: environment
+            rslvr: environment
           selector:
             tmpl: "app={{ .appName }}"
 
@@ -522,7 +522,7 @@ spec:
           - smoke-test
         env:
           TEST_ENV:
-            rslv: environment
+            rslvr: environment
           TEST_URL:
             tmpl: "https://{{ .appName }}.{{ .environment }}.example.com"
 
@@ -582,21 +582,21 @@ spec:
                 Deployment completed successfully at {{ .timestamp }}
             context:
               appName:
-                rslv: appName
+                rslvr: appName
               version:
-                rslv: version
+                rslvr: version
               environment:
-                rslv: environment
+                rslvr: environment
               regions:
-                rslv: regions
+                rslvr: regions
               replicas:
-                rslv: replicas
+                rslvr: replicas
               dryRun:
-                rslv: dryRun
+                rslvr: dryRun
               gitBranch:
-                rslv: gitBranch
+                rslvr: gitBranch
               gitCommit:
-                rslv: gitCommit
+                rslvr: gitCommit
               timestamp:
                 expr: "string(now())"
 
