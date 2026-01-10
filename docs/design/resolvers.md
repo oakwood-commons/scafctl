@@ -90,7 +90,7 @@ Key properties:
 - Uses providers explicitly
 - Sources are evaluated in order
 - First non-null value wins by default
-- Providers return raw, unprocessed data
+- Providers return data via `ProviderOutput` structure (containing data, optional warnings, and metadata)
 
 Optional controls:
 
@@ -198,7 +198,7 @@ The validate phase enforces constraints on the transformed value.
 
 Validation is provider-backed. Any provider that emits a boolean may be used for validation.
 
-Validation providers must return a boolean.
+Validation providers must return `ProviderOutput` with `Data` containing a boolean value indicating success (true) or failure (false).
 
 scafctl provides a built-in provider named `validation` that supports `match`, `notMatch`.
 
