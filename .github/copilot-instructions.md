@@ -39,6 +39,7 @@ golangci-lint run --fix          # Auto-fix issues
 ### Testing Conventions
 - Test files: `*_test.go` in same package
 - Use `testify/assert` and `testify/require` for assertions
+- Mock implementations go in `mock.go` files (see `pkg/solution/get/mock.go`)
 
 ## Coding Conventions
 
