@@ -354,20 +354,20 @@ type ParameterDefinition struct {
 
 // Contact represents the maintainer's contact information, including their name and email address.
 type Contact struct {
-  Name  string `json:"name,omitempty" yaml:"name,omitempty" doc:"The name of the maintainer" minLength:"3" maxLength:"60" example:"John Doe" pattern:"^[\\w \\-.'(),&]+$"`
-  Email string `json:"email,omitempty" yaml:"email,omitempty" doc:"The email of the maintainer" minLength:"5" maxLength:"100" example:"john.doe@example.com" pattern:"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,3}"`
+  Name  string `json:"name,omitempty" yaml:"name,omitempty" doc:"The name of the maintainer" minLength:"3" maxLength:"60" example:"John Doe" pattern:"^[\\w \\-.'(),&]+$" patternDescription:"Allows letters, numbers, spaces, and punctuation characters - . ' ( ) , &"`
+  Email string `json:"email,omitempty" yaml:"email,omitempty" doc:"The email of the maintainer" minLength:"5" maxLength:"100" example:"john.doe@example.com" pattern:"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,3}" patternDescription:"Standard email address format local@domain.tld with a 2–3 letter top-level domain"`
 }
 
 // Link represents a named hyperlink with validation constraints.
 type Link struct {
-  Name string `json:"name,omitempty" yaml:"name,omitempty" doc:"The name of the link" minLength:"3" maxLength:"30" example:"Documentation" pattern:"^(\\w|\\-|\\_|\\ )+$"`
-  URL  string `json:"url,omitempty" yaml:"url,omitempty" doc:"The URL of the link" minLength:"12" maxLength:"500" example:"https://google.com" format:"uri" pattern:"^(http|https):\\/\\/.+"`
+  Name string `json:"name,omitempty" yaml:"name,omitempty" doc:"The name of the link" minLength:"3" maxLength:"30" example:"Documentation" pattern:"^(\\w|\\-|\\_|\\ )+$" patternDescription:"Alphanumeric characters, spaces, underscores, and hyphens only"`
+  URL  string `json:"url,omitempty" yaml:"url,omitempty" doc:"The URL of the link" minLength:"12" maxLength:"500" example:"https://google.com" format:"uri" pattern:"^(http|https):\\/\\/.+" patternDescription:"HTTP or HTTPS URL starting with http:// or https://"`
 }
 
 // ProviderExample represents a usage example demonstrating how to invoke the provider.
 // Examples help with documentation generation, catalog display, and IDE support.
 type ProviderExample struct {
-  Name        string `json:"name,omitempty" yaml:"name,omitempty" doc:"Name of the example use case" minLength:"3" maxLength:"50" example:"Basic usage" pattern:"^[\\w \\-.'()]+$"`
+  Name        string `json:"name,omitempty" yaml:"name,omitempty" doc:"Name of the example use case" minLength:"3" maxLength:"50" example:"Basic usage" pattern:"^[\\w \\-.'()]+$" patternDescription:"Letters, numbers, spaces, and punctuation characters - . ' ( ) only"`
   Description string `json:"description,omitempty" yaml:"description,omitempty" doc:"Description of what the example demonstrates" minLength:"10" maxLength:"300" example:"Reads environment variable and transforms to uppercase"`
   YAML        string `json:"yaml" yaml:"yaml" doc:"YAML example showing provider usage in resolver or action context" minLength:"10" maxLength:"2000" required:"true"`
 }
