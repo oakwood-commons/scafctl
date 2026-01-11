@@ -179,7 +179,7 @@ Providers declare their supported execution contexts through capabilities. Capab
 **`validation`** - Provider can be used in the `validate.from` section of resolvers:
 
 - Examples: `validation` (built-in), custom validation providers
-- Must return a boolean indicating validation success (true) or failure (false)
+- Must return a `ProviderOutput` whose `Data` field is a boolean indicating validation success (true) or failure (false)
 - Should provide meaningful error context when validation fails
 
 **`authentication`** - Provider supports authentication mechanisms:
