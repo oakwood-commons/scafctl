@@ -279,6 +279,7 @@ type ProviderDescriptor struct {
   Name        string          `json:"name" yaml:"name" doc:"The unique name of the provider" minLength:"2" maxLength:"100" example:"shell" pattern:"^[a-z][a-z0-9-]*$" required:"true"`
   DisplayName string          `json:"displayName,omitempty" yaml:"displayName,omitempty" doc:"Human-readable name for UI/catalog" minLength:"3" maxLength:"100" example:"Shell Command Executor"`
   APIVersion  string          `json:"apiVersion,omitempty" yaml:"apiVersion,omitempty" doc:"Provider API version for compatibility" example:"v1" pattern:"^v[0-9]+$"`
+  // Version uses github.com/Masterminds/semver/v3 for semantic versioning.
   Version     *semver.Version `json:"version,omitempty" yaml:"version,omitempty" doc:"Semantic version of the provider" example:"1.2.3"`
   Description string          `json:"description,omitempty" yaml:"description,omitempty" doc:"Brief description of provider purpose" minLength:"10" maxLength:"500" example:"Executes shell commands in the local environment"`
   
