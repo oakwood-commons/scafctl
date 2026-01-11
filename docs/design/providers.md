@@ -342,8 +342,8 @@ const (
 //   - WithExecutionMode(ctx context.Context, mode ProviderCapability) context.Context
 //   - WithDryRun(ctx context.Context, dryRun bool) context.Context
 // Provider implementations should treat these as read-only and access them only
-// via the accessor functions below.
-// Context value accessors for provider implementations
+// via the accessor functions below, which provide context value accessors for
+// provider implementations.
 func ExecutionModeFromContext(ctx context.Context) (ProviderCapability, bool) {
   mode, ok := ctx.Value(executionModeKey).(ProviderCapability)
   return mode, ok
@@ -373,45 +373,6 @@ type ProviderDescriptor struct {
   // Execution behavior
   MockBehavior string                `json:"mockBehavior,omitempty" yaml:"mockBehavior,omitempty" doc:"Description of mock execution behavior for dry-run mode (all providers must support dry-run)" minLength:"10" maxLength:"500" example:"Returns sample output without executing command"`
   Capabilities []ProviderCapability `json:"capabilities" yaml:"capabilities" doc:"Execution contexts this provider supports (from, transform, validation, authentication, action)" minItems:"1" maxItems:"10" required:"true"`
-
-// MockBehavior Guidance:
-//
-// The MockBehavior field documents what the provider returns during dry-run mode.
-// Mock implementations must be deterministic, predictable, and schema-compliant.
-//
-// Examples by capability:
-//
-// CapabilityFrom (data fetching):
-//   "Returns sample user object with id='mock-user-123', name='Mock User', email='mock@example.com'"
-//   "Returns empty array [] when no mock data is configured"
-//   "Returns last known cached value if available, otherwise returns placeholder data"
-//
-// CapabilityTransform (data transformation):
-//   "Applies transformation logic to __self using the same code path as real execution"
-//   "Returns __self unchanged to simulate identity transformation"
-//   "Returns deterministic output based on input pattern (e.g., uppercased __self)"
-//
-// CapabilityValidation (validation logic):
-//   "Returns true (valid) for all inputs in mock mode"
-//   "Returns validation result based on input patterns without external checks"
-//   "Performs local validation logic but skips remote API verification"
-//
-// CapabilityAuthentication (authentication flows):
-//   "Returns mock JWT token 'mock.jwt.token' with standard claims"
-//   "Returns success response without contacting authentication service"
-//   "Returns cached credentials if available, otherwise returns placeholder token"
-//
-// CapabilityAction (side-effect operations):
-//   "Returns success status without executing shell command"
-//   "Returns simulated API response without making HTTP request"
-//   "Logs intended operation and returns mock success result"
-//
-// Best Practices:
-// - Mock output must match OutputSchema exactly (same types and structure)
-// - Use consistent, recognizable mock values (e.g., 'mock-' prefix for IDs)
-// - Document what happens with different input variations
-// - For transformations, prefer real logic over stubs when side-effect-free
-// - For validations, document whether mocks return true, false, or conditional results
   
   // Catalog and distribution metadata
   Category   string            `json:"category,omitempty" yaml:"category,omitempty" doc:"Provider category for classification" minLength:"3" maxLength:"50" example:"infrastructure"`
@@ -518,6 +479,44 @@ type ProviderExample struct {
 ~~~
 
 This interface is illustrative. The exact implementation may evolve, but the contract remains schema-first and explicit.
+
+### MockBehavior Field Guidance
+
+The `MockBehavior` field in `ProviderDescriptor` documents what the provider returns during dry-run mode. Mock implementations must be deterministic, predictable, and schema-compliant.
+
+**Examples by capability:**
+
+**CapabilityFrom** (data fetching):
+- `"Returns sample user object with id='mock-user-123', name='Mock User', email='mock@example.com'"`
+- `"Returns empty array [] when no mock data is configured"`
+- `"Returns last known cached value if available, otherwise returns placeholder data"`
+
+**CapabilityTransform** (data transformation):
+- `"Applies transformation logic to __self using the same code path as real execution"`
+- `"Returns __self unchanged to simulate identity transformation"`
+- `"Returns deterministic output based on input pattern (e.g., uppercased __self)"`
+
+**CapabilityValidation** (validation logic):
+- `"Returns true (valid) for all inputs in mock mode"`
+- `"Returns validation result based on input patterns without external checks"`
+- `"Performs local validation logic but skips remote API verification"`
+
+**CapabilityAuthentication** (authentication flows):
+- `"Returns mock JWT token 'mock.jwt.token' with standard claims"`
+- `"Returns success response without contacting authentication service"`
+- `"Returns cached credentials if available, otherwise returns placeholder token"`
+
+**CapabilityAction** (side-effect operations):
+- `"Returns success status without executing shell command"`
+- `"Returns simulated API response without making HTTP request"`
+- `"Logs intended operation and returns mock success result"`
+
+**Best Practices:**
+- Mock output must match `OutputSchema` exactly (same types and structure)
+- Use consistent, recognizable mock values (e.g., 'mock-' prefix for IDs)
+- Document what happens with different input variations
+- For transformations, prefer real logic over stubs when side-effect-free
+- For validations, document whether mocks return true, false, or conditional results
 
 ---
 
