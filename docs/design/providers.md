@@ -76,23 +76,23 @@ Providers behave as isolated execution units with no implicit coupling to other 
 
 ### Context-Based Execution Control
 
-Providers receive execution control information through the context parameter, including which capability mode they're being invoked in and whether dry-run is enabled.
+Providers receive execution control information through the context parameter, including which provider capability (execution mode) they're being invoked with and whether dry-run is enabled.
 
 **Context Keys:**
 
 scafctl uses typed context keys to prevent collisions and provide type safety:
 
-- `executionModeKey` (unexported) - The capability being invoked (from, transform, validation, action, authentication) as `ProviderCapability`
+- `executionModeKey` (unexported) - The provider capability (execution mode) being invoked (from, transform, validation, action, authentication) as `ProviderCapability`
   - Access via: `ExecutionModeFromContext(ctx)`
 - `dryRunKey` (unexported) - Boolean indicating whether this is a dry-run execution
   - Access via: `DryRunFromContext(ctx)`
 
 Typed keys ensure external packages cannot accidentally use the same context keys, preventing subtle bugs.
 
-**Execution Mode:**
+**Execution Mode (Capability):**
 
-- scafctl passes the execution mode to indicate which capability is being invoked
-- The execution mode must match one of the provider's declared capabilities
+- scafctl passes the provider capability via the execution mode context value to indicate how the provider is being invoked
+- The capability must match one of the provider's declared capabilities
 - Providers can use this to adjust behavior based on context (e.g., read-only vs mutation)
 - This enables providers to support multiple capabilities with context-aware behavior
 
