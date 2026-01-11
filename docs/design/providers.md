@@ -263,6 +263,12 @@ const (
   dryRunKey                           // Key for boolean dry-run flag
 )
 
+// NOTE: These keys are intentionally unexported. scafctl's orchestration layer
+// sets them using internal helpers such as:
+//   - WithExecutionMode(ctx context.Context, mode ProviderCapability) context.Context
+//   - WithDryRun(ctx context.Context, dryRun bool) context.Context
+// Provider implementations should treat these as read-only and access them only
+// via the accessor functions below.
 // Context value accessors for provider implementations
 func ExecutionModeFromContext(ctx context.Context) (ProviderCapability, bool) {
   mode, ok := ctx.Value(executionModeKey).(ProviderCapability)
