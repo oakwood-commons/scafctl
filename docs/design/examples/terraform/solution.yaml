@@ -11,7 +11,7 @@ spec:
     app:
       description: Application name
       resolve:
-        from:
+        with:
           - provider: parameter
             inputs:
               key: app
@@ -19,7 +19,7 @@ spec:
             inputs:
               value: my-app
       validate:
-        from:
+        with:
           - provider: validation
             inputs:
               match: "^[a-z0-9-]+$"
@@ -28,7 +28,7 @@ spec:
     environments:
       description: Target deployment environments
       resolve:
-        from:
+        with:
           - provider: parameter
             inputs:
               key: environments
@@ -37,13 +37,13 @@ spec:
               value: "dev,qa,prod"
 
       transform:
-        into:
+        with:
           - provider: cel
             inputs:
               expression: "__self.split(\",\").map(e, e.trim())"
 
       validate:
-        from:
+        with:
           - provider: validation
             inputs:
               expression: "__self.size() > 0"
@@ -52,7 +52,7 @@ spec:
     mainTfTemplate:
       description: main.tf template content
       resolve:
-        from:
+        with:
           - provider: filesystem
             inputs:
               path: templates/main.tf.tmpl
@@ -60,7 +60,7 @@ spec:
     tfvarsTemplate:
       description: auto.tfvars template content
       resolve:
-        from:
+        with:
           - provider: filesystem
             inputs:
               path: templates/auto.tfvars.tmpl

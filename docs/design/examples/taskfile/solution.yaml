@@ -11,7 +11,7 @@ spec:
     repo:
       description: Repository name
       resolve:
-        from:
+        with:
           - provider: static
             inputs:
               value: scafctl
@@ -19,7 +19,7 @@ spec:
     version:
       description: Version to build and release
       resolve:
-        from:
+        with:
           - provider: parameter
             inputs:
               key: version
@@ -27,7 +27,7 @@ spec:
             inputs:
               value: dev
       validate:
-        from:
+        with:
           - provider: validation
             inputs:
               match: '^(dev|\d+\.\d+\.\d+.*)$'
@@ -36,7 +36,7 @@ spec:
     goos:
       description: Target operating system
       resolve:
-        from:
+        with:
           - provider: parameter
             inputs:
               key: goos
@@ -44,7 +44,7 @@ spec:
             inputs:
               value: linux
       validate:
-        from:
+        with:
           - provider: validation
             inputs:
               expression: "__self in [\"linux\", \"darwin\", \"windows\"]"
@@ -53,7 +53,7 @@ spec:
     goarch:
       description: Target architecture
       resolve:
-        from:
+        with:
           - provider: parameter
             inputs:
               key: goarch
@@ -61,7 +61,7 @@ spec:
             inputs:
               value: amd64
       validate:
-        from:
+        with:
           - provider: validation
             inputs:
               expression: "__self in [\"amd64\", \"arm64\"]"
@@ -70,7 +70,7 @@ spec:
     buildDir:
       description: Build output directory
       resolve:
-        from:
+        with:
           - provider: static
             inputs:
               value: dist
