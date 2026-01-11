@@ -83,7 +83,7 @@ Custom HTTP client with:
 
 Struct tags should always be added to all structs for JSON and YAML serialization, even if not immediately needed
 
-Use https://huma.rocks/features/request-validation/#validation-tags for additional struct tags. Minimally include `doc` for all fields. For string fields, also include `maxLength`, `example`, `pattern` and `patternDescription`. For integer fields, include `maximum`, and `example`. For array/slice fields, include `maxItems`. Do not supply the `example` tag to objects, arrays or maps. If any other tags are applicable, include those as well.
+Use https://huma.rocks/features/request-validation/#validation-tags for additional struct tags. Minimally include `doc` for all fields. For scalar fields (strings, integers, booleans), include appropriate validation tags such as `example` where helpful. For string fields, also include `maxLength`, `example`, `pattern` and `patternDescription`. For integer fields, include `maximum` and `example`. For array/slice fields, include `maxItems` but do not supply the `example` tag. Do not supply the `example` tag to objects, arrays or maps. If any other tags are applicable, include those as well.
 
 ## Important Fields
 

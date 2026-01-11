@@ -58,6 +58,55 @@ Providers do not evaluate expressions or templates themselves. All inputs are fu
 
 ---
 
+## Execution Lifecycle
+
+Providers follow a strict execution pipeline to ensure consistent behavior and validation:
+
+```
+Provider Invocation Request
+        |
+        v
+[1. Schema Validation]
+   (validate inputs against ProviderDescriptor.Schema)
+        |
+        v
+[2. Decode] (optional)
+   (convert map[string]any to strongly-typed struct)
+        |
+        v
+[3. Execute]
+   (provider-specific logic based on execution mode and dry-run flag)
+        |
+        v
+[4. Output Schema Validation] (if OutputSchema defined)
+   (validate ProviderOutput.Data against ProviderDescriptor.OutputSchema)
+        |
+        v
+[5. Return ProviderOutput]
+   (Data, Warnings, Metadata)
+```
+
+**Lifecycle Phases:**
+
+1. **Schema Validation** - scafctl validates all input values against the provider's declared `Schema` before invocation. Invalid inputs result in an error before `Execute()` is called.
+
+2. **Decode** - If the provider defines a `Decode` function in its descriptor, scafctl calls it to convert the validated `map[string]any` into a strongly-typed structure. This step is optional; providers can work directly with maps.
+
+3. **Execute** - The provider's `Execute(ctx, input)` method runs with the validated (and optionally decoded) inputs. The provider performs its operation based on the execution mode and dry-run flag from the context.
+
+4. **Output Schema Validation** - If the provider defines an `OutputSchema`, scafctl validates the `ProviderOutput.Data` field against this schema after execution. This ensures both real and mock outputs conform to the declared structure.
+
+5. **Return** - The validated `ProviderOutput` (containing `Data`, optional `Warnings`, and optional `Metadata`) is returned to the caller (resolver or action orchestrator).
+
+**Error Handling:**
+
+- Errors during schema validation (phase 1) or output schema validation (phase 4) are structural errors indicating misconfiguration
+- Errors during decode (phase 2) indicate type conversion failures
+- Errors during execute (phase 3) are provider-specific operational errors
+- All errors prevent the provider output from being used in subsequent resolution steps
+
+---
+
 ## Provider Model
 
 ### Notes
@@ -106,6 +155,14 @@ Typed keys ensure external packages cannot accidentally use the same context key
 
 ~~~go
 // Provider implementation checks context for execution mode and dry-run
+// Note: This example uses helper methods that represent implementation-specific logic.
+// Real providers would implement these based on their specific needs:
+//   - mockExecute: Returns mock ProviderOutput for dry-run based on execution mode
+//   - executeGET: Performs read-only operations (e.g., HTTP GET), returns ProviderOutput with fetched data
+//   - executeTransform: Transforms __self value, returns ProviderOutput with transformed result
+//   - executeValidation: Validates input/state, returns ProviderOutput with boolean in Data field
+//   - executeAuth: Handles authentication (token generation, validation), returns ProviderOutput with auth data
+//   - executeMutation: Performs side-effect operations (e.g., HTTP POST/PUT/DELETE), returns ProviderOutput with result
 func (p *APIProvider) Execute(ctx context.Context, input any) (ProviderOutput, error) {
   // Extract execution mode using typed accessor
   execMode, ok := ExecutionModeFromContext(ctx)
@@ -114,7 +171,15 @@ func (p *APIProvider) Execute(ctx context.Context, input any) (ProviderOutput, e
   }
   
   // Validate execution mode matches declared capabilities
-  if !p.supportsCapability(execMode) {
+  descriptor := p.Descriptor()
+  supported := false
+  for _, cap := range descriptor.Capabilities {
+    if cap == execMode {
+      supported = true
+      break
+    }
+  }
+  if !supported {
     return ProviderOutput{}, fmt.Errorf("provider does not support capability: %s", execMode)
   }
   
@@ -124,22 +189,28 @@ func (p *APIProvider) Execute(ctx context.Context, input any) (ProviderOutput, e
   if isDryRun {
     // In dry-run mode, providers must avoid side effects and return a deterministic
     // ProviderOutput that represents what *would* happen. The mockExecute helper
-    // typically uses the provider's MockBehavior configuration (not shown here) to
-    // construct an appropriate mock response for the given execution mode.
+    // typically uses the provider's MockBehavior configuration to construct an
+    // appropriate mock response for the given execution mode.
     return p.mockExecute(execMode, input)
   }
   
   // Adjust behavior based on execution mode
   switch execMode {
   case CapabilityFrom:
-    // Read-only operation for resolver context
+    // Read-only operation for resolver context (fetch/read data)
     return p.executeGET(input)
-  case CapabilityAction:
-    // Allow mutations for action context
-    return p.executeMutation(input)
+  case CapabilityTransform:
+    // Transform operation receives input with __self and returns transformed result
+    return p.executeTransform(input)
   case CapabilityValidation:
-    // Return boolean validation result
+    // Return boolean validation result in ProviderOutput.Data
     return p.executeValidation(input)
+  case CapabilityAuthentication:
+    // Handle authentication flows (token generation, credential validation, etc.)
+    return p.executeAuth(input)
+  case CapabilityAction:
+    // Allow mutations for action context (write/update/delete operations)
+    return p.executeMutation(input)
   default:
     return ProviderOutput{}, fmt.Errorf("unsupported execution mode: %s", execMode)
   }
@@ -247,7 +318,7 @@ const (
 )
 
 // IsValid checks if the capability is a known, recognized capability.
-// This allows forward compatibility with unknown capabilities while validating known ones.
+// Returns false for unknown capabilities to ensure only declared capability types are used.
 func (c ProviderCapability) IsValid() bool {
   switch c {
   case CapabilityFrom, CapabilityTransform, CapabilityValidation, CapabilityAuthentication, CapabilityAction:
@@ -293,13 +364,54 @@ type ProviderDescriptor struct {
   Description string          `json:"description,omitempty" yaml:"description,omitempty" doc:"Brief description of provider purpose" minLength:"10" maxLength:"500" example:"Executes shell commands in the local environment"`
   
   // Schema definitions
-  Schema       SchemaDefinition `json:"schema" yaml:"schema" doc:"Input parameter schema definition" required:"true"`
-  OutputSchema SchemaDefinition `json:"outputSchema,omitempty" yaml:"outputSchema,omitempty" doc:"Expected output structure schema for type-safe validation"`
+  Schema       SchemaDefinition `json:"schema" yaml:"schema" doc:"Input properties schema definition" required:"true"`
+  OutputSchema SchemaDefinition `json:"outputSchema,omitempty" yaml:"outputSchema,omitempty" doc:"Expected output structure schema for type-safe validation of ProviderOutput.Data"`
+  // Decode converts validated map[string]any inputs into strongly-typed structs for internal use.
+  // Called after schema validation but before Execute(). Optional - providers can work with map[string]any directly.
   Decode       func(map[string]any) (any, error) `json:"-" yaml:"-"`
   
   // Execution behavior
   MockBehavior string                `json:"mockBehavior,omitempty" yaml:"mockBehavior,omitempty" doc:"Description of mock execution behavior for dry-run mode (all providers must support dry-run)" minLength:"10" maxLength:"500" example:"Returns sample output without executing command"`
   Capabilities []ProviderCapability `json:"capabilities" yaml:"capabilities" doc:"Execution contexts this provider supports (from, transform, validation, authentication, action)" minItems:"1" maxItems:"10" required:"true"`
+
+// MockBehavior Guidance:
+//
+// The MockBehavior field documents what the provider returns during dry-run mode.
+// Mock implementations must be deterministic, predictable, and schema-compliant.
+//
+// Examples by capability:
+//
+// CapabilityFrom (data fetching):
+//   "Returns sample user object with id='mock-user-123', name='Mock User', email='mock@example.com'"
+//   "Returns empty array [] when no mock data is configured"
+//   "Returns last known cached value if available, otherwise returns placeholder data"
+//
+// CapabilityTransform (data transformation):
+//   "Applies transformation logic to __self using the same code path as real execution"
+//   "Returns __self unchanged to simulate identity transformation"
+//   "Returns deterministic output based on input pattern (e.g., uppercased __self)"
+//
+// CapabilityValidation (validation logic):
+//   "Returns true (valid) for all inputs in mock mode"
+//   "Returns validation result based on input patterns without external checks"
+//   "Performs local validation logic but skips remote API verification"
+//
+// CapabilityAuthentication (authentication flows):
+//   "Returns mock JWT token 'mock.jwt.token' with standard claims"
+//   "Returns success response without contacting authentication service"
+//   "Returns cached credentials if available, otherwise returns placeholder token"
+//
+// CapabilityAction (side-effect operations):
+//   "Returns success status without executing shell command"
+//   "Returns simulated API response without making HTTP request"
+//   "Logs intended operation and returns mock success result"
+//
+// Best Practices:
+// - Mock output must match OutputSchema exactly (same types and structure)
+// - Use consistent, recognizable mock values (e.g., 'mock-' prefix for IDs)
+// - Document what happens with different input variations
+// - For transformations, prefer real logic over stubs when side-effect-free
+// - For validations, document whether mocks return true, false, or conditional results
   
   // Catalog and distribution metadata
   Category   string            `json:"category,omitempty" yaml:"category,omitempty" doc:"Provider category for classification" minLength:"3" maxLength:"50" example:"infrastructure"`
@@ -314,52 +426,75 @@ type ProviderDescriptor struct {
   Maintainers []Contact `json:"maintainers,omitempty" yaml:"maintainers,omitempty" doc:"People or teams responsible for the provider" minItems:"1" maxItems:"10"`
 }
 
+// SchemaDefinition defines the structure of inputs or outputs for a provider.
+// Used for both input schema (ProviderDescriptor.Schema) and output schema (ProviderDescriptor.OutputSchema).
+// Note: When used as OutputSchema, the Required field in PropertyDefinition is typically not meaningful
+// since outputs are generated by the provider rather than validated as required inputs.
 type SchemaDefinition struct {
-  Parameters map[string]ParameterDefinition `json:"parameters,omitempty" yaml:"parameters,omitempty" doc:"Map of parameter names to their definitions"`
+  Properties map[string]PropertyDefinition `json:"properties,omitempty" yaml:"properties,omitempty" doc:"Map of property names to their definitions"`
 }
 
-// ParameterType represents the data type of a provider parameter.
+// PropertyType represents the data type of a provider property (input or output).
 // This type provides compile-time type safety while still serializing as strings in YAML/JSON.
-type ParameterType string
+type PropertyType string
 
 const (
-  ParameterTypeString ParameterType = "string" // String values
-  ParameterTypeInt    ParameterType = "int"    // Integer values
-  ParameterTypeFloat  ParameterType = "float"  // Floating-point values
-  ParameterTypeBool   ParameterType = "bool"   // Boolean values
-  ParameterTypeMap    ParameterType = "map"    // Map/object values
-  ParameterTypeArray  ParameterType = "array"  // Array/slice values
-  ParameterTypeAny    ParameterType = "any"    // Any type (use sparingly)
+  PropertyTypeString PropertyType = "string" // String values
+  PropertyTypeInt    PropertyType = "int"    // Integer values
+  PropertyTypeFloat  PropertyType = "float"  // Floating-point values
+  PropertyTypeBool   PropertyType = "bool"   // Boolean values
+  PropertyTypeMap    PropertyType = "map"    // Map/object values
+  PropertyTypeArray  PropertyType = "array"  // Array/slice values
+  PropertyTypeAny    PropertyType = "any"    // Any type (use sparingly)
 )
 
-// IsValid checks if the parameter type is a known, recognized type.
-// This allows forward compatibility with unknown types while validating known ones.
-func (t ParameterType) IsValid() bool {
+// IsValid checks if the property type is a known, recognized type.
+// Returns false for unknown types to ensure only declared property types are used.
+func (t PropertyType) IsValid() bool {
   switch t {
-  case ParameterTypeString, ParameterTypeInt, ParameterTypeFloat, ParameterTypeBool, ParameterTypeMap, ParameterTypeArray, ParameterTypeAny:
+  case PropertyTypeString, PropertyTypeInt, PropertyTypeFloat, PropertyTypeBool, PropertyTypeMap, PropertyTypeArray, PropertyTypeAny:
     return true
   default:
     return false
   }
 }
 
-type ParameterDefinition struct {
-  Type        ParameterType `json:"type" yaml:"type" doc:"Parameter data type (string, int, float, bool, map, array, any)" example:"string" required:"true"`
-  Required    bool   `json:"required,omitempty" yaml:"required,omitempty" doc:"Whether parameter is required" example:"true"`
-  Description string `json:"description,omitempty" yaml:"description,omitempty" doc:"Human-readable description of the parameter" minLength:"5" maxLength:"500" example:"The name of the resource to create"`
-  Default     any    `json:"default,omitempty" yaml:"default,omitempty" doc:"Default value for optional parameters" example:"default-value"`
+type PropertyDefinition struct {
+  Type        PropertyType `json:"type" yaml:"type" doc:"Property data type (string, int, float, bool, map, array, any)" example:"string" required:"true"`
+  Required    bool   `json:"required,omitempty" yaml:"required,omitempty" doc:"Whether property is required" example:"true"`
+  Description string `json:"description,omitempty" yaml:"description,omitempty" doc:"Human-readable description of the property" minLength:"5" maxLength:"500" example:"The name of the resource to create"`
+  Default     any    `json:"default,omitempty" yaml:"default,omitempty" doc:"Default value for optional properties" example:"default-value"`
   Example     any    `json:"example,omitempty" yaml:"example,omitempty" doc:"Example value for documentation" example:"my-resource"`
   
-  // Validation constraints
-  MinLength int      `json:"minLength,omitempty" yaml:"minLength,omitempty" doc:"Minimum string length constraint" example:"3"`
-  MaxLength int      `json:"maxLength,omitempty" yaml:"maxLength,omitempty" doc:"Maximum string length constraint" example:"100"`
-  Pattern   string   `json:"pattern,omitempty" yaml:"pattern,omitempty" doc:"Regex pattern for validation" example:"^[a-z0-9-]+$"`
-  Enum      []any    `json:"enum,omitempty" yaml:"enum,omitempty" doc:"Allowed values enumeration"`
-  Format    string   `json:"format,omitempty" yaml:"format,omitempty" doc:"Type hint (uri, email, date, etc.)" example:"uri"`
+  // Validation constraints for strings
+  // Pointers are used to distinguish between "not set" and "set to zero"
+  MinLength *int      `json:"minLength,omitempty" yaml:"minLength,omitempty" doc:"Minimum string length constraint (applies to string type)"`
+  MaxLength *int      `json:"maxLength,omitempty" yaml:"maxLength,omitempty" doc:"Maximum string length constraint (applies to string type)"`
+  Pattern   string   `json:"pattern,omitempty" yaml:"pattern,omitempty" doc:"Regex pattern for validation (applies to string type)" example:"^[a-z0-9-]+$"`
   
-  Deprecated bool `json:"deprecated,omitempty" yaml:"deprecated,omitempty" doc:"Whether parameter is deprecated" example:"false"`
-  IsSecret   bool `json:"isSecret,omitempty" yaml:"isSecret,omitempty" doc:"Whether parameter contains sensitive data (for render-mode redaction and security handling)" example:"false"`
+  // Validation constraints for numbers (int, float)
+  // Pointers are used to distinguish between "not set" and "set to zero"
+  Minimum *float64 `json:"minimum,omitempty" yaml:"minimum,omitempty" doc:"Minimum numeric value constraint (applies to int and float types)"`
+  Maximum *float64 `json:"maximum,omitempty" yaml:"maximum,omitempty" doc:"Maximum numeric value constraint (applies to int and float types)"`
+  
+  // Validation constraints for arrays
+  // Pointers are used to distinguish between "not set" and "set to zero"
+  MinItems *int `json:"minItems,omitempty" yaml:"minItems,omitempty" doc:"Minimum array length constraint (applies to array type)"`
+  MaxItems *int `json:"maxItems,omitempty" yaml:"maxItems,omitempty" doc:"Maximum array length constraint (applies to array type)"`
+  
+  // General validation
+  Enum      []any    `json:"enum,omitempty" yaml:"enum,omitempty" doc:"Allowed values enumeration (applies to any type)"`
+  Format    string   `json:"format,omitempty" yaml:"format,omitempty" doc:"Type hint for specialized validation (uri, email, date, uuid, etc.)" example:"uri"`
+  
+  Deprecated bool `json:"deprecated,omitempty" yaml:"deprecated,omitempty" doc:"Whether property is deprecated" example:"false"`
+  IsSecret   bool `json:"isSecret,omitempty" yaml:"isSecret,omitempty" doc:"Whether property contains sensitive data (for render-mode redaction and security handling)" example:"false"`
 }
+
+// Validation Behavior:
+// - Constraints that don't match the property type are silently ignored during validation
+//   (e.g., MinLength on an int property, Minimum on a string property)
+// - This allows flexible schema definitions without strict constraint-type coupling
+// - Only constraints matching the property type are enforced
 
 // Contact represents the maintainer's contact information, including their name and email address.
 type Contact struct {
@@ -445,6 +580,16 @@ inputs:
 
 Templates are useful for constructing formatted strings from resolver values.
 
+**Type Coercion:**
+
+Templates always produce string output. When a template is used for a non-string input property:
+- For `int` and `float` properties: The string is parsed using standard conversion (e.g., "42" → 42, "3.14" → 3.14)
+- For `bool` properties: The string is parsed as boolean ("true"/"false", case-insensitive)
+- For `map` and `array` properties: The string is parsed as JSON
+- For `any` properties: The string value is passed as-is
+
+Parsing errors result in schema validation failure before the provider executes. This validation occurs during the input resolution phase, not within the provider itself.
+
 ### Exclusivity Rule
 
 For a single input field, you must specify exactly one of:
@@ -503,6 +648,14 @@ Each step receives the previous value as `__self`.
 Validation is provider-backed.
 
 Any provider that returns a boolean may be used as a validation provider.
+
+**Return Value Requirement:**
+
+Validation providers must return a `ProviderOutput` whose `Data` field contains a boolean value:
+- `true` indicates validation succeeded
+- `false` indicates validation failed
+
+The `ProviderOutput.Warnings` field may be used to provide additional context, and error messages are typically provided through the resolver's `message` field rather than the provider output.
 
 ### Built-in Provider: validation
 
@@ -699,6 +852,174 @@ resolve:
     - provider: cel
       inputs:
         expression: _.org + "/" + _.repo
+~~~
+
+---
+
+## Security Considerations
+
+Providers handle sensitive data through structured security mechanisms:
+
+### Secret Handling
+
+**`IsSecret` Flag:**
+
+Provider input properties marked with `IsSecret: true` receive special handling:
+
+- **Logging Redaction**: Secret values are redacted in logs, displaying `***REDACTED***` instead of actual values
+- **Render Mode**: When solutions are rendered (dry-run or plan mode), secret fields show `<secret>` placeholders
+- **Audit Trails**: Secret access is logged (without values) for security auditing
+- **Memory Handling**: scafctl makes best-effort attempts to zero sensitive memory after use
+
+**Example:**
+
+~~~go
+type PropertyDefinition struct {
+  // ...
+  IsSecret bool `json:"isSecret,omitempty" doc:"Whether property contains sensitive data"`
+}
+~~~
+
+### Provider Responsibilities
+
+Providers that handle sensitive data must:
+
+1. **Declare Secret Inputs**: Mark all sensitive input properties with `IsSecret: true`
+2. **Avoid Logging Secrets**: Never log secret values, even at debug verbosity levels
+3. **Secure Transmission**: Use TLS/HTTPS for transmitting secrets over networks
+4. **Memory Management**: Clear sensitive data from memory when no longer needed
+5. **Error Messages**: Ensure error messages don't leak secret values
+
+### Built-in Protections
+
+scafctl provides automatic protections:
+
+- Secret values are excluded from context dumps and debug output
+- Provider descriptors with `IsSecret` inputs trigger additional validation
+- The execution framework redacts secrets in trace logs
+- Mock outputs for secret fields use placeholder values
+
+### Authentication Providers
+
+Providers with `CapabilityAuthentication` have additional requirements:
+
+- All credential inputs should be marked `IsSecret: true`
+- Token refresh operations must not log credential values
+- Failed authentication must not expose credential details in error messages
+- Mock authentication must return realistic-looking but non-functional credentials
+
+### Guidelines
+
+- **Principle of Least Exposure**: Only mark truly sensitive fields as secrets (not every string)
+- **Input Validation**: Validate secret format without logging the value
+- **Output Security**: Authentication tokens and API keys in outputs should also be treated as secrets
+- **Documentation**: Document which inputs/outputs contain sensitive data in provider examples
+
+---
+
+## Context Propagation
+
+Providers receive and should respect standard Go context patterns:
+
+### Execution Control Context
+
+**Required Context Values** (read-only for providers):
+
+- **Execution Mode** (`executionModeKey`): The provider capability being invoked (from, transform, validation, authentication, action)
+  - Access via: `ExecutionModeFromContext(ctx)`
+  - Providers must validate this matches their declared capabilities
+  - Used to determine behavior (e.g., read-only vs mutation)
+
+- **Dry-Run Flag** (`dryRunKey`): Boolean indicating mock execution
+  - Access via: `DryRunFromContext(ctx)`
+  - When true, providers must avoid side effects and return mock data
+  - All providers must support dry-run mode
+
+### Standard Context Patterns
+
+**Cancellation and Timeouts:**
+
+Providers should respect context cancellation:
+
+~~~go
+func (p *HTTPProvider) Execute(ctx context.Context, input any) (ProviderOutput, error) {
+  req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+  if err != nil {
+    return ProviderOutput{}, err
+  }
+  
+  resp, err := p.client.Do(req)
+  if err != nil {
+    // Context cancellation will be reflected here
+    return ProviderOutput{}, fmt.Errorf("request failed: %w", err)
+  }
+  // ...
+}
+~~~
+
+**Logging Context:**
+
+Providers should use the logger from context when available:
+
+~~~go
+func (p *ShellProvider) Execute(ctx context.Context, input any) (ProviderOutput, error) {
+  lgr := logger.FromContext(ctx)
+  lgr.V(1).Info("executing shell command", "cmd", cmd)
+  // ...
+}
+~~~
+
+**Tracing Context:**
+
+When tracing is enabled, providers should propagate context through external calls:
+
+- HTTP clients should use `http.NewRequestWithContext(ctx, ...)`
+- Database calls should accept context: `db.QueryContext(ctx, ...)`
+- Long-running operations should check `ctx.Done()` periodically
+
+### Context Best Practices
+
+1. **Always Accept Context**: The first parameter to `Execute()` is `context.Context`
+2. **Check Cancellation**: For long operations, periodically check `ctx.Done()`
+3. **Propagate Context**: Pass context to all downstream operations (HTTP, DB, subprocesses)
+4. **Don't Store Context**: Never store context in struct fields; always pass as parameter
+5. **Respect Timeouts**: Operations should abort when context deadline expires
+
+### Example: Context-Aware Provider
+
+~~~go
+func (p *APIProvider) Execute(ctx context.Context, input any) (ProviderOutput, error) {
+  // Extract execution control
+  execMode, ok := ExecutionModeFromContext(ctx)
+  if !ok {
+    return ProviderOutput{}, fmt.Errorf("execution mode not in context")
+  }
+  
+  isDryRun := DryRunFromContext(ctx)
+  if isDryRun {
+    return p.mockExecute(execMode, input)
+  }
+  
+  // Use logger from context
+  lgr := logger.FromContext(ctx)
+  lgr.V(1).Info("executing API call", "endpoint", p.endpoint)
+  
+  // Propagate context to HTTP request for cancellation/tracing
+  req, err := http.NewRequestWithContext(ctx, "GET", p.endpoint, nil)
+  if err != nil {
+    return ProviderOutput{}, err
+  }
+  
+  // Check for cancellation before expensive operation
+  select {
+  case <-ctx.Done():
+    return ProviderOutput{}, ctx.Err()
+  default:
+  }
+  
+  resp, err := p.client.Do(req)
+  // ...
+}
 ~~~
 
 ---
