@@ -276,7 +276,7 @@ func DryRunFromContext(ctx context.Context) bool {
 
 type ProviderDescriptor struct {
   // Identity and versioning
-  Name        string          `json:"name" yaml:"name" doc:"The unique name of the provider" minLength:"2" maxLength:"100" example:"shell" pattern:"^[a-z][a-z0-9-]*$" required:"true"`
+  Name        string          `json:"name" yaml:"name" doc:"The unique name of the provider" minLength:"2" maxLength:"100" example:"shell" pattern:"^[a-z][a-z0-9-]*[a-z0-9]$" required:"true"`
   DisplayName string          `json:"displayName,omitempty" yaml:"displayName,omitempty" doc:"Human-readable name for UI/catalog" minLength:"3" maxLength:"100" example:"Shell Command Executor"`
   APIVersion  string          `json:"apiVersion,omitempty" yaml:"apiVersion,omitempty" doc:"Provider API version for compatibility" example:"v1" pattern:"^v[0-9]+$"`
   // Version uses github.com/Masterminds/semver/v3 for semantic versioning.
