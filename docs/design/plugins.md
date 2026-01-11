@@ -110,12 +110,14 @@ provides:
 
 Each provider exposed by a plugin:
 
-- Has a stable name
-- Declares an input schema
-- Declares an output shape
+- Has a stable name and version
+- Declares capabilities (from, transform, validation, authentication, action)
+- Declares an input schema (with typed parameters)
+- Declares an output schema for the `Data` property within `ProviderOutput`
+- Provides catalog metadata (description, category, tags, examples, maintainers)
 - Is invoked deterministically
 
-scafctl treats built-in providers and plugin-provided providers identically.
+scafctl treats built-in providers and plugin-provided providers identically. All providers expose a `ProviderDescriptor` that includes identity, versioning, schemas, capabilities, and catalog information.
 
 ---
 
@@ -127,10 +129,11 @@ When a provider is used:
 2. scafctl validates inputs against the provider schema
 3. scafctl invokes the provider via gRPC
 4. The plugin executes provider logic
-5. Results are returned to scafctl
-6. scafctl continues orchestration
+5. Provider returns `ProviderOutput` containing data, warnings, and metadata
+6. scafctl validates output against the provider's output schema
+7. scafctl continues orchestration
 
-Providers never see unresolved CEL, templates, or resolver references.
+Providers never see unresolved CEL, templates, or resolver references. All provider responses use the standardized `ProviderOutput` structure.
 
 ---
 

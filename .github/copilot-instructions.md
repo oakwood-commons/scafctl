@@ -47,7 +47,6 @@ golangci-lint run --fix          # Auto-fix issues
 - Return errors, don't panic (except in main initialization)
 - Use `fmt.Errorf("context: %w", err)` for error wrapping
 - CLI errors write to stderr and exit non-zero
-- Profiler shutdown errors are logged but non-fatal (see `cmd/scafctl/scafctl.go`)
 
 ### Go Style Preferences
 - Use `any` instead of `interface{}` (Go 1.18+ modern style)
@@ -61,12 +60,8 @@ golangci-lint run --fix          # Auto-fix issues
 
 ## Project-Specific Patterns
 
-### Context Usage
-- Logger stored in context: `logger.WithLogger(ctx, lgr)`
-- HTTP client operations accept `context.Context` for cancellation
-
 ### HTTP Client (`pkg/httpc/`)
-Custom HTTP client with:
+Custom HTTP client.
 - See `pkg/httpc/README.md` for detailed usage
 
 ### Dependency Injection
@@ -83,3 +78,19 @@ Custom HTTP client with:
 - Build commands should include LDFLAGS for version injection (see Build & Test Commands section)
 - **Never** modify test files to reduce coverage - fix the actual issues
 - Always run `golangci-lint` and tests before committing code
+
+## Struct Tags
+
+Struct tags should always be added to all structs for JSON and YAML serialization, even if not immediately needed
+
+Use https://huma.rocks/features/request-validation/#validation-tags for additional struct tags. Minimally include `doc` for all fields. For scalar fields (strings, integers, booleans), include appropriate validation tags such as `example` where helpful. For string fields, also include `maxLength`, `example`, `pattern` and `patternDescription`. For integer fields, include `maximum` and `example`. For array/slice fields, include `maxItems` but do not supply the `example` tag. Do not supply the `example` tag to objects, arrays or maps. If any other tags are applicable, include those as well.
+
+## Important Fields
+
+### expr
+
+The `expr` field in structs represents a CEL (Common Expression Language) expression. This should always be of type `Expression` from the `github.com/oakwood-commons/scafctl/pkg/celexp` package. This ensures that the expression is properly parsed and validated according to the project's CEL extensions. 
+
+### tmpl
+
+The `tmpl` field in structs represents a go templating expression. This should always be of type `GoTemplatingContent` from the `github.com/oakwood-commons/scafctl/pkg/gotmpl` package. This ensures that the templating content is properly handled according to the project's templating processing logic.
