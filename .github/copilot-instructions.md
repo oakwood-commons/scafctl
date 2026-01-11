@@ -61,7 +61,7 @@ golangci-lint run --fix          # Auto-fix issues
 ## Project-Specific Patterns
 
 ### HTTP Client (`pkg/httpc/`)
-Custom HTTP client with:
+Custom HTTP client.
 - See `pkg/httpc/README.md` for detailed usage
 
 ### Dependency Injection
