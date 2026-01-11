@@ -122,7 +122,10 @@ func (p *APIProvider) Execute(ctx context.Context, input any) (ProviderOutput, e
   isDryRun := DryRunFromContext(ctx)
   
   if isDryRun {
-    // Return mock output based on execution mode
+    // In dry-run mode, providers must avoid side effects and return a deterministic
+    // ProviderOutput that represents what *would* happen. The mockExecute helper
+    // typically uses the provider's MockBehavior configuration (not shown here) to
+    // construct an appropriate mock response for the given execution mode.
     return p.mockExecute(execMode, input)
   }
   
