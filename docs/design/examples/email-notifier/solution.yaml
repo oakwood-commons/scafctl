@@ -11,7 +11,7 @@ spec:
     isDryRun:
       description: A dry run
       resolve:
-        from:
+        with:
           - provider: parameter
             inputs:
               key: dry-run
@@ -19,7 +19,7 @@ spec:
     environment:
       description: Deployment environment
       resolve:
-        from:
+        with:
           - provider: parameter
             inputs:
               key: environment
@@ -30,12 +30,12 @@ spec:
             inputs:
               value: dev
       transform:
-        into:
+        with:
           - provider: cel
             inputs:
               expression: "__self.toLowerCase()"
       validate:
-        from:
+        with:
           - provider: validation
             inputs:
               expression: "__self in [\"dev\", \"stage\", \"prod\"]"
@@ -44,7 +44,7 @@ spec:
     emailFrom:
       description: Sender email address
       resolve:
-        from:
+        with:
           - provider: parameter
             inputs:
               key: emailFrom
@@ -52,7 +52,7 @@ spec:
             inputs:
               key: EMAIL_FROM
       validate:
-        from:
+        with:
           - provider: validation
             inputs:
               match: "^[^@]+@[^@]+\\.[^@]+$"
@@ -61,7 +61,7 @@ spec:
     emailTo:
       description: Recipient email address
       resolve:
-        from:
+        with:
           - provider: parameter
             inputs:
               key: emailTo
@@ -69,7 +69,7 @@ spec:
             inputs:
               key: EMAIL_TO
       validate:
-        from:
+        with:
           - provider: validation
             inputs:
               match: "^[^@]+@[^@]+\\.[^@]+$"
@@ -78,7 +78,7 @@ spec:
     subject:
       description: Email subject line
       resolve:
-        from:
+        with:
           - provider: parameter
             inputs:
               key: subject
@@ -89,7 +89,7 @@ spec:
     body:
       description: Email body content
       resolve:
-        from:
+        with:
           - provider: parameter
             inputs:
               key: body

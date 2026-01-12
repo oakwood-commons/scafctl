@@ -86,7 +86,7 @@ resolvers:
   image:
     description: Container image to deploy
     resolve:
-      from:
+      with:
         - provider: parameter
           inputs:
             key: image
@@ -94,7 +94,7 @@ resolvers:
           inputs:
             value: nginx:1.27
     validate:
-      from:
+      with:
         - provider: validation
           inputs:
             match: "^[a-z0-9.-]+:[a-z0-9.-]+$"
@@ -302,7 +302,7 @@ spec:
     environment:
       description: Target deployment environment
       resolve:
-        from:
+        with:
           - provider: parameter
             inputs:
               key: env
@@ -310,12 +310,12 @@ spec:
             inputs:
               value: dev
       transform:
-        into:
+        with:
           - provider: cel
             inputs:
               expression: "__self.toLowerCase()"
       validate:
-        from:
+        with:
           - provider: validation
             inputs:
               expression: "__self in [\"dev\", \"staging\", \"prod\"]"
@@ -366,16 +366,16 @@ spec:
     resolverName:
       description: string             # Optional: resolver purpose
       resolve:
-        from:                         # Required: provider list
+        with:                         # Required: provider list
           - provider: provider-name
             inputs: {}
       transform:                      # Optional: transformation pipeline
-        into:
+        with:
           - provider: cel
             inputs:
               expression: string
       validate:                       # Optional: validation rules
-        from:
+        with:
           - provider: validation
             inputs:
               expression: string

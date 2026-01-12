@@ -65,7 +65,7 @@ Given this resolver:
 resolvers:
   environment:
     resolve:
-      from:
+      with:
         - provider: parameter
           inputs:
             key: env
@@ -74,13 +74,13 @@ resolvers:
             value: dev
 
     transform:
-      into:
+      with:
         - provider: cel
           inputs:
             expression: "__self.toLowerCase()"
 
     validate:
-      from:
+      with:
         - provider: validation
           inputs:
             expression: "__self in [\"dev\", \"staging\", \"prod\"]"

@@ -40,21 +40,26 @@ A provider is not responsible for:
 
 Providers are invoked with a resolved execution context.
 
-For resolver execution:
+**Resolver Context in Go Context:**
 
-- `_` contains only resolver outputs
-- Nothing exists in `_` unless emitted by a resolver
+The resolver context (the `_` map containing all emitted resolver values) is stored in the Go `context.Context` as a `sync.Map`:
 
-For action execution:
+- Access via: `ResolverContextFromContext(ctx)` returns `map[string]any`
+- In resolver execution, contains all previously emitted resolver values
+- In action execution, may contain additional action-local variables
+- Providers access resolver values via the returned map: `data["resolverName"]`
 
-- Providers may receive additional action-local data, but this does not affect resolver semantics
+**Special symbols in resolver context:**
 
-Special symbols passed by the caller:
+- `__self` - The current value being transformed or validated (available in transform and validate phases)
+- `__item` - The current item in a foreach loop (available in action iterations)
 
-- `__self` will be the current value of the resolver
-- `__item` will be the current item in the foreach loop
+**Key principles:**
 
-Providers do not evaluate expressions or templates themselves. All inputs are fully resolved before invocation.
+- Resolver context contains only resolver outputs (nothing exists unless emitted by a resolver)
+- Providers do not evaluate expressions or templates themselves—all inputs are fully resolved before invocation
+- The resolver context map is read-only; providers should not mutate it
+- Access to the resolver context is optional—providers that don't need it don't have to retrieve it
 
 ---
 
@@ -92,7 +97,7 @@ Provider Invocation Request
 
 2. **Decode** - If the provider defines a `Decode` function in its descriptor, scafctl calls it to convert the validated `map[string]any` into a strongly-typed structure. This step is optional; providers can work directly with maps.
 
-3. **Execute** - The provider's `Execute(ctx, input)` method runs with the validated (and optionally decoded) inputs. The provider performs its operation based on the execution mode and dry-run flag from the context.
+3. **Execute** - The provider's `Execute(ctx, input)` method runs with the validated (and optionally decoded) inputs. The provider performs its operation based on the execution mode and dry-run flag from the context. Providers that need access to resolver values retrieve them via `ResolverContextFromContext(ctx)`.
 
 4. **Output Schema Validation** - If the provider defines an `OutputSchema`, scafctl validates the `ProviderOutput.Data` field against this schema after execution. This ensures both real and mock outputs conform to the declared structure.
 
@@ -135,6 +140,8 @@ scafctl uses typed context keys to prevent collisions and provide type safety:
   - Access via: `ExecutionModeFromContext(ctx)`
 - `dryRunKey` (unexported) - Boolean indicating whether this is a dry-run execution
   - Access via: `DryRunFromContext(ctx)`
+- `resolverContextKey` (unexported) - The resolver context map containing all emitted resolver values
+  - Access via: `ResolverContextFromContext(ctx)` returns `map[string]any`
 
 Typed keys ensure external packages cannot accidentally use the same context keys, preventing subtle bugs.
 
@@ -333,14 +340,16 @@ func (c ProviderCapability) IsValid() bool {
 type contextKey int
 
 const (
-  executionModeKey contextKey = iota // Key for ProviderCapability execution mode
-  dryRunKey                           // Key for boolean dry-run flag
+  executionModeKey   contextKey = iota // Key for ProviderCapability execution mode
+  dryRunKey                            // Key for boolean dry-run flag
+  resolverContextKey                   // Key for resolver context map
 )
 
 // NOTE: These keys are intentionally unexported. scafctl's orchestration layer
 // sets them using internal helpers such as:
 //   - WithExecutionMode(ctx context.Context, mode ProviderCapability) context.Context
 //   - WithDryRun(ctx context.Context, dryRun bool) context.Context
+//   - WithResolverContext(ctx context.Context, data map[string]any) context.Context
 // Provider implementations should treat these as read-only and access them only
 // via the accessor functions below, which provide context value accessors for
 // provider implementations.
@@ -352,6 +361,11 @@ func ExecutionModeFromContext(ctx context.Context) (ProviderCapability, bool) {
 func DryRunFromContext(ctx context.Context) bool {
   dryRun, _ := ctx.Value(dryRunKey).(bool)
   return dryRun
+}
+
+func ResolverContextFromContext(ctx context.Context) map[string]any {
+  data, _ := ctx.Value(resolverContextKey).(map[string]any)
+  return data // Returns nil map if not set, which is safe to read from
 }
 
 type ProviderDescriptor struct {
@@ -608,7 +622,7 @@ Resolvers invoke providers to obtain, transform, or validate values.
 
 ~~~yaml
 resolve:
-  from:
+  with:
     - provider: env
       inputs:
         key: PROJECT_NAME
@@ -632,7 +646,7 @@ Transform steps are provider executions applied sequentially to a single value.
 
 ~~~yaml
 transform:
-  into:
+  with:
     - provider: cel
       inputs:
         expression: __self.toLowerCase()
@@ -677,7 +691,7 @@ Literal regex patterns:
 
 ~~~yaml
 validate:
-  from:
+  with:
     - provider: validation
       inputs:
         match: "^[a-z0-9-]+$"
@@ -701,7 +715,7 @@ Using resolver for dynamic pattern:
 
 ~~~yaml
 validate:
-  from:
+  with:
     - provider: validation
       inputs:
         match:
@@ -713,7 +727,7 @@ Using template for pattern:
 
 ~~~yaml
 validate:
-  from:
+  with:
     - provider: validation
       inputs:
         match:
@@ -725,7 +739,7 @@ Using CEL expression for validation logic:
 
 ~~~yaml
 validate:
-  from:
+  with:
     - provider: validation
       inputs:
         expression: "__self in [\"dev\", \"staging\", \"prod\"]"
@@ -761,7 +775,7 @@ Reads a value supplied at invocation time.
 
 ~~~yaml
 resolve:
-  from:
+  with:
     - provider: parameter
       inputs:
         key: env
@@ -775,7 +789,7 @@ Reads from the process environment.
 
 ~~~yaml
 resolve:
-  from:
+  with:
     - provider: env
       inputs:
         key: PROJECT_NAME
@@ -789,7 +803,7 @@ Supplies a literal value.
 
 ~~~yaml
 resolve:
-  from:
+  with:
     - provider: static
       inputs:
         value: my-app
@@ -803,7 +817,7 @@ Reads data from the local filesystem.
 
 ~~~yaml
 resolve:
-  from:
+  with:
     - provider: filesystem
       inputs:
         operation: read
@@ -818,7 +832,7 @@ Reads data from a git repository or working tree.
 
 ~~~yaml
 resolve:
-  from:
+  with:
     - provider: git
       inputs:
         field: branch
@@ -832,7 +846,7 @@ Fetches data from an HTTP endpoint.
 
 ~~~yaml
 resolve:
-  from:
+  with:
     - provider: api
       inputs:
         endpoint: https://api.example.com/project
@@ -847,7 +861,7 @@ Derives a value using CEL.
 
 ~~~yaml
 resolve:
-  from:
+  with:
     - provider: cel
       inputs:
         expression: _.org + "/" + _.repo
@@ -993,6 +1007,42 @@ func (p *APIProvider) Execute(ctx context.Context, input any) (ProviderOutput, e
   if !ok {
     return ProviderOutput{}, fmt.Errorf("execution mode not in context")
   }
+  
+  isDryRun := DryRunFromContext(ctx)
+  
+  // Extract timeout
+  deadline, hasDeadline := ctx.Deadline()
+  if hasDeadline {
+    timeout := time.Until(deadline)
+    // Adjust operation based on available time
+  }
+  
+  // Extract logger
+  lgr := logger.FromContext(ctx)
+  lgr.V(1).Info("executing provider", "mode", execMode, "dryRun", isDryRun)
+  
+  // Access resolver context if needed
+  // For example, in a CEL provider that needs to evaluate expressions:
+  data := ResolverContextFromContext(ctx)
+  
+  if execMode == CapabilityTransform || execMode == CapabilityValidation {
+    selfValue := data["__self"] // Current value in transform/validate
+    // Use selfValue in transformation or validation logic
+  }
+  
+  // Access other resolver values
+  if environment, ok := data["environment"].(string); ok {
+    lgr.V(1).Info("using environment", "env", environment)
+  }
+  
+  // Execute based on mode and dry-run flag
+  if isDryRun {
+    return p.mockExecute(execMode, input)
+  }
+  
+  return p.realExecute(ctx, execMode, input)
+}
+~~~
   
   isDryRun := DryRunFromContext(ctx)
   if isDryRun {
