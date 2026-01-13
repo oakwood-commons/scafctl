@@ -40,8 +40,12 @@ golangci-lint run --fix          # Auto-fix issues
 - Test files: `*_test.go` in same package
 - Use `testify/assert` and `testify/require` for assertions
 - Mock implementations go in `mock.go` files (see `pkg/solution/get/mock.go`)
+- Use httptest to mock HTTP servers in tests
 
 ## Coding Conventions
+
+### Commit Messages
+- Use conventional commits https://www.conventionalcommits.org/en/v1.0.0/#specification when creating a commit message
 
 ### Error Handling
 - Return errors, don't panic (except in main initialization)

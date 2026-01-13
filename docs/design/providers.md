@@ -72,7 +72,7 @@ Provider Invocation Request
         |
         v
 [1. Schema Validation]
-   (validate inputs against ProviderDescriptor.Schema)
+   (validate inputs against Descriptor.Schema)
         |
         v
 [2. Decode] (optional)
@@ -84,10 +84,10 @@ Provider Invocation Request
         |
         v
 [4. Output Schema Validation] (if OutputSchema defined)
-   (validate ProviderOutput.Data against ProviderDescriptor.OutputSchema)
+   (validate Output.Data against Descriptor.OutputSchema)
         |
         v
-[5. Return ProviderOutput]
+[5. Return Output]
    (Data, Warnings, Metadata)
 ```
 
@@ -99,9 +99,9 @@ Provider Invocation Request
 
 3. **Execute** - The provider's `Execute(ctx, input)` method runs with the validated (and optionally decoded) inputs. The provider performs its operation based on the execution mode and dry-run flag from the context. Providers that need access to resolver values retrieve them via `ResolverContextFromContext(ctx)`.
 
-4. **Output Schema Validation** - If the provider defines an `OutputSchema`, scafctl validates the `ProviderOutput.Data` field against this schema after execution. This ensures both real and mock outputs conform to the declared structure.
+4. **Output Schema Validation** - If the provider defines an `OutputSchema`, scafctl validates the `Output.Data` field against this schema after execution. This ensures both real and mock outputs conform to the declared structure.
 
-5. **Return** - The validated `ProviderOutput` (containing `Data`, optional `Warnings`, and optional `Metadata`) is returned to the caller (resolver or action orchestrator).
+5. **Return** - The validated `Output` (containing `Data`, optional `Warnings`, and optional `Metadata`) is returned to the caller (resolver or action orchestrator).
 
 **Error Handling:**
 
@@ -136,7 +136,7 @@ Providers receive execution control information through the context parameter, i
 
 scafctl uses typed context keys to prevent collisions and provide type safety:
 
-- `executionModeKey` (unexported) - The provider capability (execution mode) being invoked (from, transform, validation, action, authentication) as `ProviderCapability`
+- `executionModeKey` (unexported) - The provider capability (execution mode) being invoked (from, transform, validation, action, authentication) as `Capability`
   - Access via: `ExecutionModeFromContext(ctx)`
 - `dryRunKey` (unexported) - Boolean indicating whether this is a dry-run execution
   - Access via: `DryRunFromContext(ctx)`
@@ -164,17 +164,17 @@ Typed keys ensure external packages cannot accidentally use the same context key
 // Provider implementation checks context for execution mode and dry-run
 // Note: This example uses helper methods that represent implementation-specific logic.
 // Real providers would implement these based on their specific needs:
-//   - mockExecute: Returns mock ProviderOutput for dry-run based on execution mode
-//   - executeGET: Performs read-only operations (e.g., HTTP GET), returns ProviderOutput with fetched data
-//   - executeTransform: Transforms __self value, returns ProviderOutput with transformed result
-//   - executeValidation: Validates input/state, returns ProviderOutput with boolean in Data field
-//   - executeAuth: Handles authentication (token generation, validation), returns ProviderOutput with auth data
-//   - executeMutation: Performs side-effect operations (e.g., HTTP POST/PUT/DELETE), returns ProviderOutput with result
-func (p *APIProvider) Execute(ctx context.Context, input any) (ProviderOutput, error) {
+//   - mockExecute: Returns mock Output for dry-run based on execution mode
+//   - executeGET: Performs read-only operations (e.g., HTTP GET), returns Output with fetched data
+//   - executeTransform: Transforms __self value, returns Output with transformed result
+//   - executeValidation: Validates input/state, returns Output with boolean in Data field
+//   - executeAuth: Handles authentication (token generation, validation), returns Output with auth data
+//   - executeMutation: Performs side-effect operations (e.g., HTTP POST/PUT/DELETE), returns Output with result
+func (p *APIProvider) Execute(ctx context.Context, input any) (Output, error) {
   // Extract execution mode using typed accessor
   execMode, ok := ExecutionModeFromContext(ctx)
   if !ok {
-    return ProviderOutput{}, fmt.Errorf("execution mode not provided in context")
+    return Output{}, fmt.Errorf("execution mode not provided in context")
   }
   
   // Validate execution mode matches declared capabilities
@@ -187,7 +187,7 @@ func (p *APIProvider) Execute(ctx context.Context, input any) (ProviderOutput, e
     }
   }
   if !supported {
-    return ProviderOutput{}, fmt.Errorf("provider does not support capability: %s", execMode)
+    return Output{}, fmt.Errorf("provider does not support capability: %s", execMode)
   }
   
   // Check if dry-run mode is enabled using typed accessor
@@ -195,7 +195,7 @@ func (p *APIProvider) Execute(ctx context.Context, input any) (ProviderOutput, e
   
   if isDryRun {
     // In dry-run mode, providers must avoid side effects and return a deterministic
-    // ProviderOutput that represents what *would* happen. The mockExecute helper
+    // Output that represents what *would* happen. The mockExecute helper
     // typically uses the provider's MockBehavior configuration to construct an
     // appropriate mock response for the given execution mode.
     return p.mockExecute(execMode, input)
@@ -210,7 +210,7 @@ func (p *APIProvider) Execute(ctx context.Context, input any) (ProviderOutput, e
     // Transform operation receives input with __self and returns transformed result
     return p.executeTransform(input)
   case CapabilityValidation:
-    // Return boolean validation result in ProviderOutput.Data
+    // Return boolean validation result in Output.Data
     return p.executeValidation(input)
   case CapabilityAuthentication:
     // Handle authentication flows (token generation, credential validation, etc.)
@@ -219,12 +219,12 @@ func (p *APIProvider) Execute(ctx context.Context, input any) (ProviderOutput, e
     // Allow mutations for action context (write/update/delete operations)
     return p.executeMutation(input)
   default:
-    return ProviderOutput{}, fmt.Errorf("unsupported execution mode: %s", execMode)
+    return Output{}, fmt.Errorf("unsupported execution mode: %s", execMode)
   }
 }
 ~~~
 
-**ProviderDescriptor Declaration:**
+**Descriptor Declaration:**
 
 - `MockBehavior` - Documents what the provider returns during dry-run mode (required for all providers since dry-run support is mandatory)
 
@@ -232,7 +232,7 @@ func (p *APIProvider) Execute(ctx context.Context, input any) (ProviderOutput, e
 
 - Providers must validate the execution mode matches one of their declared capabilities
 - Execution mode determines provider behavior (e.g., read-only vs mutation, data vs boolean return)
-- Mock output (in `ProviderOutput.Data`) must conform to the same schema as real output (validated by `OutputSchema`)
+- Mock output (in `Output.Data`) must conform to the same schema as real output (validated by `OutputSchema`)
 - Mock execution must be deterministic and predictable
 - Providers that cannot meaningfully mock (e.g., read-only queries) should return representative sample data
 - Side-effect providers must not perform any operations in dry-run mode
@@ -260,7 +260,7 @@ Providers declare their supported execution contexts through capabilities. Capab
 **`validation`** - Provider can be used in the `validate.from` section of resolvers:
 
 - Examples: `validation` (built-in), custom validation providers
-- Must return a `ProviderOutput` whose `Data` field is a boolean indicating validation success (true) or failure (false)
+- Must return an `Output` whose `Data` field is a boolean indicating validation success (true) or failure (false)
 - Should provide meaningful error context when validation fails
 
 **`authentication`** - Provider supports authentication mechanisms:
@@ -300,33 +300,33 @@ The capability model is designed for extension. Future capabilities may include:
 
 ~~~go
 type Provider interface {
-  Descriptor() ProviderDescriptor
-  Execute(ctx context.Context, input any) (ProviderOutput, error)
+  Descriptor() *Descriptor
+  Execute(ctx context.Context, input any) (*Output, error)
 }
 
-// ProviderOutput is the standardized return structure for all provider executions.
+// Output is the standardized return structure for all provider executions.
 // It wraps the actual data along with optional warnings and metadata.
-type ProviderOutput struct {
+type Output struct {
   Data     any            `json:"data" doc:"The actual output data from provider execution (validated against OutputSchema)"`
   Warnings []string       `json:"warnings,omitempty" doc:"Non-fatal warnings generated during execution" maxItems:"50"`
   Metadata map[string]any `json:"metadata,omitempty" doc:"Optional execution metadata (timing, resource usage, etc.)"`
 }
 
-// ProviderCapability represents an execution context a provider can participate in.
+// Capability represents an execution context a provider can participate in.
 // This type provides compile-time type safety while still serializing as strings in YAML/JSON.
-type ProviderCapability string
+type Capability string
 
 const (
-  CapabilityFrom           ProviderCapability = "from"           // Provider can be used in resolver 'from' section
-  CapabilityTransform      ProviderCapability = "transform"      // Provider can be used in resolver 'transform' section
-  CapabilityValidation     ProviderCapability = "validation"     // Provider can be used in resolver 'validate' section
-  CapabilityAuthentication ProviderCapability = "authentication" // Provider handles authentication
-  CapabilityAction         ProviderCapability = "action"         // Provider can be invoked as an action
+  CapabilityFrom           Capability = "from"           // Provider can be used in resolver 'from' section
+  CapabilityTransform      Capability = "transform"      // Provider can be used in resolver 'transform' section
+  CapabilityValidation     Capability = "validation"     // Provider can be used in resolver 'validate' section
+  CapabilityAuthentication Capability = "authentication" // Provider handles authentication
+  CapabilityAction         Capability = "action"         // Provider can be invoked as an action
 )
 
 // IsValid checks if the capability is a known, recognized capability.
 // Returns false for unknown capabilities to ensure only declared capability types are used.
-func (c ProviderCapability) IsValid() bool {
+func (c Capability) IsValid() bool {
   switch c {
   case CapabilityFrom, CapabilityTransform, CapabilityValidation, CapabilityAuthentication, CapabilityAction:
     return true
@@ -340,21 +340,21 @@ func (c ProviderCapability) IsValid() bool {
 type contextKey int
 
 const (
-  executionModeKey   contextKey = iota // Key for ProviderCapability execution mode
+  executionModeKey   contextKey = iota // Key for Capability execution mode
   dryRunKey                            // Key for boolean dry-run flag
   resolverContextKey                   // Key for resolver context map
 )
 
 // NOTE: These keys are intentionally unexported. scafctl's orchestration layer
 // sets them using internal helpers such as:
-//   - WithExecutionMode(ctx context.Context, mode ProviderCapability) context.Context
+//   - WithExecutionMode(ctx context.Context, mode Capability) context.Context
 //   - WithDryRun(ctx context.Context, dryRun bool) context.Context
 //   - WithResolverContext(ctx context.Context, data map[string]any) context.Context
 // Provider implementations should treat these as read-only and access them only
 // via the accessor functions below, which provide context value accessors for
 // provider implementations.
-func ExecutionModeFromContext(ctx context.Context) (ProviderCapability, bool) {
-  mode, ok := ctx.Value(executionModeKey).(ProviderCapability)
+func ExecutionModeFromContext(ctx context.Context) (Capability, bool) {
+  mode, ok := ctx.Value(executionModeKey).(Capability)
   return mode, ok
 }
 
@@ -368,7 +368,7 @@ func ResolverContextFromContext(ctx context.Context) map[string]any {
   return data // Returns nil map if not set, which is safe to read from
 }
 
-type ProviderDescriptor struct {
+type Descriptor struct {
   // Identity and versioning
   Name        string          `json:"name" yaml:"name" doc:"The unique name of the provider" minLength:"2" maxLength:"100" example:"shell" pattern:"^[a-z][a-z0-9-]*[a-z0-9]$" required:"true"`
   DisplayName string          `json:"displayName,omitempty" yaml:"displayName,omitempty" doc:"Human-readable name for UI/catalog" minLength:"3" maxLength:"100" example:"Shell Command Executor"`
@@ -379,21 +379,21 @@ type ProviderDescriptor struct {
   
   // Schema definitions
   Schema       SchemaDefinition `json:"schema" yaml:"schema" doc:"Input properties schema definition" required:"true"`
-  OutputSchema SchemaDefinition `json:"outputSchema,omitempty" yaml:"outputSchema,omitempty" doc:"Expected output structure schema for type-safe validation of ProviderOutput.Data"`
+  OutputSchema SchemaDefinition `json:"outputSchema,omitempty" yaml:"outputSchema,omitempty" doc:"Expected output structure schema for type-safe validation of Output.Data"`
   // Decode converts validated map[string]any inputs into strongly-typed structs for internal use.
   // Called after schema validation but before Execute(). Optional - providers can work with map[string]any directly.
   Decode       func(map[string]any) (any, error) `json:"-" yaml:"-"`
   
   // Execution behavior
-  MockBehavior string                `json:"mockBehavior,omitempty" yaml:"mockBehavior,omitempty" doc:"Description of mock execution behavior for dry-run mode (all providers must support dry-run)" minLength:"10" maxLength:"500" example:"Returns sample output without executing command"`
-  Capabilities []ProviderCapability `json:"capabilities" yaml:"capabilities" doc:"Execution contexts this provider supports (from, transform, validation, authentication, action)" minItems:"1" maxItems:"10" required:"true"`
+  MockBehavior string       `json:"mockBehavior,omitempty" yaml:"mockBehavior,omitempty" doc:"Description of mock execution behavior for dry-run mode (all providers must support dry-run)" minLength:"10" maxLength:"500" example:"Returns sample output without executing command"`
+  Capabilities []Capability `json:"capabilities" yaml:"capabilities" doc:"Execution contexts this provider supports (from, transform, validation, authentication, action)" minItems:"1" maxItems:"10" required:"true"`
   
   // Catalog and distribution metadata
   Category   string            `json:"category,omitempty" yaml:"category,omitempty" doc:"Provider category for classification" minLength:"3" maxLength:"50" example:"infrastructure"`
   Tags       []string          `json:"tags,omitempty" yaml:"tags,omitempty" doc:"Searchable keywords for discovery" minItems:"0" maxItems:"20"`
-  Icon       string            `json:"icon,omitempty" yaml:"icon,omitempty" doc:"URL or path to provider icon for catalog display" maxLength:"500" format:"uri" example:"https://example.com/icon.png"`
-  Links      []Link            `json:"links,omitempty" yaml:"links,omitempty" doc:"External documentation and reference links" maxItems:"10"`
-  Examples   []ProviderExample `json:"examples,omitempty" yaml:"examples,omitempty" doc:"Usage examples demonstrating provider invocation patterns" minItems:"1" maxItems:"5"`
+  Icon       string    `json:"icon,omitempty" yaml:"icon,omitempty" doc:"URL or path to provider icon for catalog display" maxLength:"500" format:"uri" example:"https://example.com/icon.png"`
+  Links      []Link    `json:"links,omitempty" yaml:"links,omitempty" doc:"External documentation and reference links" maxItems:"10"`
+  Examples   []Example `json:"examples,omitempty" yaml:"examples,omitempty" doc:"Usage examples demonstrating provider invocation patterns" minItems:"1" maxItems:"5"`
   Deprecated bool              `json:"deprecated,omitempty" yaml:"deprecated,omitempty" doc:"Whether provider is deprecated" example:"false"`
   Beta       bool              `json:"beta,omitempty" yaml:"beta,omitempty" doc:"Whether provider is in beta/preview status" example:"false"`
   
@@ -402,7 +402,7 @@ type ProviderDescriptor struct {
 }
 
 // SchemaDefinition defines the structure of inputs or outputs for a provider.
-// Used for both input schema (ProviderDescriptor.Schema) and output schema (ProviderDescriptor.OutputSchema).
+// Used for both input schema (Descriptor.Schema) and output schema (Descriptor.OutputSchema).
 // Note: When used as OutputSchema, the Required field in PropertyDefinition is typically not meaningful
 // since outputs are generated by the provider rather than validated as required inputs.
 type SchemaDefinition struct {
@@ -418,16 +418,15 @@ const (
   PropertyTypeInt    PropertyType = "int"    // Integer values
   PropertyTypeFloat  PropertyType = "float"  // Floating-point values
   PropertyTypeBool   PropertyType = "bool"   // Boolean values
-  PropertyTypeMap    PropertyType = "map"    // Map/object values
   PropertyTypeArray  PropertyType = "array"  // Array/slice values
-  PropertyTypeAny    PropertyType = "any"    // Any type (use sparingly)
+  PropertyTypeAny    PropertyType = "any"    // Any type (use sparingly for maps and mixed types)
 )
 
 // IsValid checks if the property type is a known, recognized type.
 // Returns false for unknown types to ensure only declared property types are used.
 func (t PropertyType) IsValid() bool {
   switch t {
-  case PropertyTypeString, PropertyTypeInt, PropertyTypeFloat, PropertyTypeBool, PropertyTypeMap, PropertyTypeArray, PropertyTypeAny:
+  case PropertyTypeString, PropertyTypeInt, PropertyTypeFloat, PropertyTypeBool, PropertyTypeArray, PropertyTypeAny:
     return true
   default:
     return false
@@ -435,7 +434,7 @@ func (t PropertyType) IsValid() bool {
 }
 
 type PropertyDefinition struct {
-  Type        PropertyType `json:"type" yaml:"type" doc:"Property data type (string, int, float, bool, map, array, any)" example:"string" required:"true"`
+  Type        PropertyType `json:"type" yaml:"type" doc:"Property data type (string, int, float, bool, array, any)" example:"string" required:"true"`
   Required    bool   `json:"required,omitempty" yaml:"required,omitempty" doc:"Whether property is required" example:"true"`
   Description string `json:"description,omitempty" yaml:"description,omitempty" doc:"Human-readable description of the property" minLength:"5" maxLength:"500" example:"The name of the resource to create"`
   Default     any    `json:"default,omitempty" yaml:"default,omitempty" doc:"Default value for optional properties" example:"default-value"`
@@ -483,9 +482,9 @@ type Link struct {
   URL  string `json:"url,omitempty" yaml:"url,omitempty" doc:"The URL of the link" minLength:"12" maxLength:"500" example:"https://google.com" format:"uri" pattern:"^(http|https):\\/\\/.+" patternDescription:"HTTP or HTTPS URL starting with http:// or https://"`
 }
 
-// ProviderExample represents a usage example demonstrating how to invoke the provider.
+// Example represents a usage example demonstrating how to invoke the provider.
 // Examples help with documentation generation, catalog display, and IDE support.
-type ProviderExample struct {
+type Example struct {
   Name        string `json:"name,omitempty" yaml:"name,omitempty" doc:"Name of the example use case" minLength:"3" maxLength:"50" example:"Basic usage" pattern:"^[\\w \\-.'()]+$" patternDescription:"Letters, numbers, spaces, and punctuation characters - . ' ( ) only"`
   Description string `json:"description,omitempty" yaml:"description,omitempty" doc:"Description of what the example demonstrates" minLength:"10" maxLength:"300" example:"Reads environment variable and transforms to uppercase"`
   YAML        string `json:"yaml" yaml:"yaml" doc:"YAML example showing provider usage in resolver or action context" minLength:"10" maxLength:"2000" required:"true"`
@@ -496,7 +495,7 @@ This interface is illustrative. The exact implementation may evolve, but the con
 
 ### MockBehavior Field Guidance
 
-The `MockBehavior` field in `ProviderDescriptor` documents what the provider returns during dry-run mode. Mock implementations must be deterministic, predictable, and schema-compliant.
+The `MockBehavior` field in `Descriptor` documents what the provider returns during dry-run mode. Mock implementations must be deterministic, predictable, and schema-compliant.
 
 **Examples by capability:**
 
@@ -664,11 +663,11 @@ Any provider that returns a boolean may be used as a validation provider.
 
 **Return Value Requirement:**
 
-Validation providers must return a `ProviderOutput` whose `Data` field contains a boolean value:
+Validation providers must return an `Output` whose `Data` field contains a boolean value:
 - `true` indicates validation succeeded
 - `false` indicates validation failed
 
-The `ProviderOutput.Warnings` field may be used to provide additional context, and error messages are typically provided through the resolver's `message` field rather than the provider output.
+The `Output.Warnings` field may be used to provide additional context, and error messages are typically provided through the resolver's `message` field rather than the provider output.
 
 ### Built-in Provider: validation
 
@@ -955,16 +954,16 @@ Providers receive and should respect standard Go context patterns:
 Providers should respect context cancellation:
 
 ~~~go
-func (p *HTTPProvider) Execute(ctx context.Context, input any) (ProviderOutput, error) {
+func (p *HTTPProvider) Execute(ctx context.Context, input any) (*Output, error) {
   req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
   if err != nil {
-    return ProviderOutput{}, err
+    return nil, err
   }
   
   resp, err := p.client.Do(req)
   if err != nil {
     // Context cancellation will be reflected here
-    return ProviderOutput{}, fmt.Errorf("request failed: %w", err)
+    return nil, fmt.Errorf("request failed: %w", err)
   }
   // ...
 }
@@ -975,7 +974,7 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (ProviderOutput, 
 Providers should use the logger from context when available:
 
 ~~~go
-func (p *ShellProvider) Execute(ctx context.Context, input any) (ProviderOutput, error) {
+func (p *ShellProvider) Execute(ctx context.Context, input any) (*Output, error) {
   lgr := logger.FromContext(ctx)
   lgr.V(1).Info("executing shell command", "cmd", cmd)
   // ...
@@ -1001,11 +1000,11 @@ When tracing is enabled, providers should propagate context through external cal
 ### Example: Context-Aware Provider
 
 ~~~go
-func (p *APIProvider) Execute(ctx context.Context, input any) (ProviderOutput, error) {
+func (p *APIProvider) Execute(ctx context.Context, input any) (*Output, error) {
   // Extract execution control
   execMode, ok := ExecutionModeFromContext(ctx)
   if !ok {
-    return ProviderOutput{}, fmt.Errorf("execution mode not in context")
+    return nil, fmt.Errorf("execution mode not in context")
   }
   
   isDryRun := DryRunFromContext(ctx)
@@ -1056,13 +1055,13 @@ func (p *APIProvider) Execute(ctx context.Context, input any) (ProviderOutput, e
   // Propagate context to HTTP request for cancellation/tracing
   req, err := http.NewRequestWithContext(ctx, "GET", p.endpoint, nil)
   if err != nil {
-    return ProviderOutput{}, err
+    return nil, err
   }
   
   // Check for cancellation before expensive operation
   select {
   case <-ctx.Done():
-    return ProviderOutput{}, ctx.Err()
+    return nil, ctx.Err()
   default:
   }
   

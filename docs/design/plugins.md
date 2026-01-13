@@ -67,7 +67,74 @@ This mirrors patterns used by Terraform, Vault, Nomad, and Packer.
 
 ## Plugin Architecture
 
+### Dependencies
+
+- **External**: hashicorp/go-plugin (gRPC-based plugin system)
+- **External**: google.golang.org/grpc (gRPC for plugin communication)
+- **External**: google.golang.org/protobuf (Protocol buffers)
+
 scafctl uses go-plugin with gRPC-based handshake.
+
+Protocol buffer definition for plugin communication.
+
+```protobuf
+syntax = "proto3";
+package plugin;
+option go_package = "github.com/kcloutie/scafctl/pkg/plugin/proto";
+
+// PluginService is the main plugin service
+service PluginService {
+  // GetProviders returns all providers exposed by this plugin
+  rpc GetProviders(GetProvidersRequest) returns (GetProvidersResponse);
+  
+  // GetProviderDescriptor returns metadata for a specific provider
+  rpc GetProviderDescriptor(GetProviderDescriptorRequest) returns (GetProviderDescriptorResponse);
+  
+  // ExecuteProvider executes a provider
+  rpc ExecuteProvider(ExecuteProviderRequest) returns (ExecuteProviderResponse);
+}
+
+message GetProvidersRequest {}
+
+message GetProvidersResponse {
+  repeated string provider_names = 1;
+}
+
+message GetProviderDescriptorRequest {
+  string provider_name = 1;
+}
+
+message GetProviderDescriptorResponse {
+  ProviderDescriptor descriptor = 1;
+}
+
+message ProviderDescriptor {
+  string name = 1;
+  string description = 2;
+  Schema schema = 3;
+}
+
+message Schema {
+  map<string, Parameter> parameters = 1;
+}
+
+message Parameter {
+  string type = 1;
+  bool required = 2;
+  string description = 3;
+  bytes default_value = 4; // JSON-encoded
+}
+
+message ExecuteProviderRequest {
+  string provider_name = 1;
+  bytes input = 2; // JSON-encoded input map
+}
+
+message ExecuteProviderResponse {
+  bytes output = 1; // JSON-encoded output
+  string error = 2;  // Empty if no error
+}
+```
 
 Conceptually:
 
@@ -173,6 +240,9 @@ Security properties:
 - Explicit gRPC boundaries
 - No implicit filesystem or network access beyond what the plugin implements
 - Providers are the only exposed surface
+- All inputs validated before sending to plugin
+- Schema validation at scafctl boundary
+- Type checking for all parameters
 
 Plugin execution is explicit and auditable.
 
@@ -204,6 +274,17 @@ Plugins are an implementation detail that enables extensibility.
 - Plugins must not mutate scafctl state
 - Plugins may only expose declared capabilities
 - Providers remain the sole execution primitive
+
+## Notes
+
+- Plugins use hashicorp/go-plugin (same as Terraform, Vault, Packer)
+- gRPC communication provides language flexibility (Go, Python, Rust, etc.)
+- Plugin providers and built-in providers are indistinguishable to users
+- Plugins are the primary extensibility mechanism
+- Plugin crashes are handled gracefully
+- Plugin directory is configurable
+- Plugins may expose multiple providers
+- Provider names must be unique across built-ins and plugins
 
 ---
 
