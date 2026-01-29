@@ -12,7 +12,7 @@ func BenchmarkExecutor_Execute_Literal(b *testing.B) {
 	executor := NewExecutor()
 	provider := newMockExecutableProvider("test-provider", nil)
 
-	ctx := context.Background()
+	ctx := WithExecutionMode(context.Background(), CapabilityFrom)
 	inputs := map[string]any{
 		"input1": "test-value",
 		"input2": 42,
@@ -26,7 +26,7 @@ func BenchmarkExecutor_Execute_Literal(b *testing.B) {
 
 func BenchmarkExecutor_Execute_DryRun(b *testing.B) {
 	executor := NewExecutor()
-	provider := newMockExecutableProvider("test-provider", func(ctx context.Context, _ map[string]any) (*Output, error) {
+	provider := newMockExecutableProvider("test-provider", func(ctx context.Context, _ any) (*Output, error) {
 		if DryRunFromContext(ctx) {
 			return &Output{
 				Data: map[string]any{
@@ -38,7 +38,8 @@ func BenchmarkExecutor_Execute_DryRun(b *testing.B) {
 		return &Output{Data: map[string]any{"result": "success"}}, nil
 	})
 
-	ctx := WithDryRun(context.Background(), true)
+	ctx := WithExecutionMode(context.Background(), CapabilityFrom)
+	ctx = WithDryRun(ctx, true)
 	inputs := map[string]any{
 		"input1": "test-value",
 	}
@@ -61,7 +62,8 @@ func BenchmarkExecutor_Execute_Rslvr(b *testing.B) {
 		},
 	}
 
-	ctx := WithResolverContext(context.Background(), resolverCtx)
+	ctx := WithExecutionMode(context.Background(), CapabilityFrom)
+	ctx = WithResolverContext(ctx, resolverCtx)
 	inputs := map[string]any{
 		"input1": InputValue{
 			Rslvr: "config.database.host",
@@ -83,7 +85,8 @@ func BenchmarkExecutor_Execute_CEL(b *testing.B) {
 		"value2": 20,
 	}
 
-	ctx := WithResolverContext(context.Background(), resolverCtx)
+	ctx := WithExecutionMode(context.Background(), CapabilityFrom)
+	ctx = WithResolverContext(ctx, resolverCtx)
 	inputs := map[string]any{
 		"input1": InputValue{
 			Expr: "string(value1 + value2)",
@@ -105,7 +108,8 @@ func BenchmarkExecutor_Execute_Template(b *testing.B) {
 		"host": "localhost",
 	}
 
-	ctx := WithResolverContext(context.Background(), resolverCtx)
+	ctx := WithExecutionMode(context.Background(), CapabilityFrom)
+	ctx = WithResolverContext(ctx, resolverCtx)
 	inputs := map[string]any{
 		"input1": InputValue{
 			Tmpl: "{{.user}}@{{.host}}",
@@ -125,7 +129,10 @@ func BenchmarkExecutor_Execute_MixedInputs(b *testing.B) {
 	provider := &mockExecutableProvider{
 		descriptor: &Descriptor{
 			Name:         "test-provider",
+			APIVersion:   "v1",
 			Version:      version,
+			Description:  "Test provider for benchmarking mixed inputs",
+			MockBehavior: "Returns mock output for benchmarking",
 			Capabilities: []Capability{CapabilityFrom},
 			Schema: SchemaDefinition{
 				Properties: map[string]PropertyDefinition{
@@ -135,13 +142,15 @@ func BenchmarkExecutor_Execute_MixedInputs(b *testing.B) {
 					"template": {Type: PropertyTypeString, Required: true},
 				},
 			},
-			OutputSchema: SchemaDefinition{
-				Properties: map[string]PropertyDefinition{
-					"result": {Type: PropertyTypeString},
+			OutputSchemas: map[Capability]SchemaDefinition{
+				CapabilityFrom: {
+					Properties: map[string]PropertyDefinition{
+						"result": {Type: PropertyTypeString},
+					},
 				},
 			},
 		},
-		executeFunc: func(_ context.Context, _ map[string]any) (*Output, error) {
+		executeFunc: func(_ context.Context, _ any) (*Output, error) {
 			return &Output{Data: map[string]any{"result": "success"}}, nil
 		},
 	}
@@ -154,7 +163,8 @@ func BenchmarkExecutor_Execute_MixedInputs(b *testing.B) {
 		"username": "admin",
 	}
 
-	ctx := WithResolverContext(context.Background(), resolverCtx)
+	ctx := WithExecutionMode(context.Background(), CapabilityFrom)
+	ctx = WithResolverContext(ctx, resolverCtx)
 	inputs := map[string]any{
 		"literal": "static-value",
 		"rslvr": InputValue{
@@ -185,7 +195,7 @@ func BenchmarkExecutor_ExecuteByName(b *testing.B) {
 	// Register provider
 	_ = Register(provider)
 
-	ctx := context.Background()
+	ctx := WithExecutionMode(context.Background(), CapabilityFrom)
 	inputs := map[string]any{
 		"input1": "test-value",
 	}
@@ -199,7 +209,7 @@ func BenchmarkExecutor_ExecuteByName(b *testing.B) {
 func BenchmarkGlobalExecutor_Execute(b *testing.B) {
 	provider := newMockExecutableProvider("test-provider", nil)
 
-	ctx := context.Background()
+	ctx := WithExecutionMode(context.Background(), CapabilityFrom)
 	inputs := map[string]any{
 		"input1": "test-value",
 	}
@@ -220,7 +230,7 @@ func BenchmarkGlobalExecutor_ExecuteByName(b *testing.B) {
 	// Register provider
 	_ = Register(provider)
 
-	ctx := context.Background()
+	ctx := WithExecutionMode(context.Background(), CapabilityFrom)
 	inputs := map[string]any{
 		"input1": "test-value",
 	}
@@ -238,7 +248,10 @@ func BenchmarkExecutor_Execute_ComplexSchema(b *testing.B) {
 	provider := &mockExecutableProvider{
 		descriptor: &Descriptor{
 			Name:         "complex-provider",
+			APIVersion:   "v1",
 			Version:      version,
+			Description:  "Complex provider for benchmarking",
+			MockBehavior: "Returns mock output for benchmarking",
 			Capabilities: []Capability{CapabilityFrom, CapabilityTransform},
 			Schema: SchemaDefinition{
 				Properties: map[string]PropertyDefinition{
@@ -253,15 +266,17 @@ func BenchmarkExecutor_Execute_ComplexSchema(b *testing.B) {
 					"optional": {Type: PropertyTypeString, Required: false},
 				},
 			},
-			OutputSchema: SchemaDefinition{
-				Properties: map[string]PropertyDefinition{
-					"result":  {Type: PropertyTypeString},
-					"count":   {Type: PropertyTypeInt},
-					"success": {Type: PropertyTypeBool},
+			OutputSchemas: map[Capability]SchemaDefinition{
+				CapabilityFrom: {
+					Properties: map[string]PropertyDefinition{
+						"result":  {Type: PropertyTypeString},
+						"count":   {Type: PropertyTypeInt},
+						"success": {Type: PropertyTypeBool},
+					},
 				},
 			},
 		},
-		executeFunc: func(_ context.Context, _ map[string]any) (*Output, error) {
+		executeFunc: func(_ context.Context, _ any) (*Output, error) {
 			return &Output{Data: map[string]any{
 				"result":  "success",
 				"count":   42,
@@ -270,7 +285,7 @@ func BenchmarkExecutor_Execute_ComplexSchema(b *testing.B) {
 		},
 	}
 
-	ctx := context.Background()
+	ctx := WithExecutionMode(context.Background(), CapabilityFrom)
 	inputs := map[string]any{
 		"string1": "value1",
 		"string2": "value2",
@@ -292,7 +307,7 @@ func BenchmarkExecutor_Execute_ValidationError(b *testing.B) {
 	executor := NewExecutor()
 	provider := newMockExecutableProvider("test-provider", nil)
 
-	ctx := context.Background()
+	ctx := WithExecutionMode(context.Background(), CapabilityFrom)
 	// Wrong type for input2
 	inputs := map[string]any{
 		"input1": "test-value",
@@ -325,7 +340,7 @@ func BenchmarkExecutor_NewExecutor_WithOptions(b *testing.B) {
 func BenchmarkProviderExecution(b *testing.B) {
 	provider := newMockExecutableProvider("test-provider", nil)
 
-	ctx := context.Background()
+	ctx := WithExecutionMode(context.Background(), CapabilityFrom)
 	inputs := map[string]any{
 		"input1": "test-value",
 	}
@@ -340,8 +355,15 @@ func BenchmarkExecutionResult_Creation(b *testing.B) {
 	version, _ := semver.NewVersion("1.0.0")
 	provider := &mockExecutableProvider{
 		descriptor: &Descriptor{
-			Name:    "test",
-			Version: version,
+			Name:         "test",
+			APIVersion:   "v1",
+			Version:      version,
+			Description:  "Test provider for benchmarking result creation",
+			MockBehavior: "Returns mock output for benchmarking",
+			Capabilities: []Capability{CapabilityFrom},
+			Schema: SchemaDefinition{
+				Properties: map[string]PropertyDefinition{},
+			},
 		},
 	}
 
@@ -368,7 +390,7 @@ func BenchmarkExecutor_Execute_Parallel(b *testing.B) {
 	executor := NewExecutor()
 	provider := newMockExecutableProvider("test-provider", nil)
 
-	ctx := context.Background()
+	ctx := WithExecutionMode(context.Background(), CapabilityFrom)
 	inputs := map[string]any{
 		"input1": "test-value",
 	}
@@ -393,7 +415,7 @@ func BenchmarkExecutor_ExecuteByName_Parallel(b *testing.B) {
 		_ = Register(providers[i])
 	}
 
-	ctx := context.Background()
+	ctx := WithExecutionMode(context.Background(), CapabilityFrom)
 	inputs := map[string]any{
 		"input1": "test-value",
 	}

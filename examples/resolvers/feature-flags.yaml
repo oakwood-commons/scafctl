@@ -1,0 +1,101 @@
+# Feature Flags Example
+# Demonstrates feature toggles with remote fallback to local defaults.
+#
+# Run: scafctl run solution -f feature-flags.yaml
+#
+# This example shows:
+# - Fetching flags from remote API with fallback
+# - Computing derived configuration from flags
+# - Conditional resolver execution based on flags
+
+name: feature-flags
+version: "1.0.0"
+description: Feature toggle pattern with fallbacks
+
+spec:
+  resolvers:
+    # Fetch feature flags with fallback to defaults
+    feature_flags:
+      description: Feature flags from remote or defaults
+      type: any
+      resolve:
+        with:
+          # Try remote feature flag service first
+          # (This will fail in the example, demonstrating fallback)
+          - provider: http
+            error_behavior: continue
+            inputs:
+              url: https://features.example.com/api/v1/flags
+              method: GET
+              timeout: 5s
+          # Fall back to static defaults
+          - provider: static
+            inputs:
+              value:
+                new_dashboard: true
+                dark_mode: true
+                beta_features: false
+                analytics: true
+                experimental_api: false
+    
+    # Compute UI configuration from flags
+    ui_config:
+      description: UI configuration derived from feature flags
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression:
+                expr: |
+                  {
+                    'theme': _.feature_flags.dark_mode ? 'dark' : 'light',
+                    'dashboard': _.feature_flags.new_dashboard ? 'v2' : 'v1',
+                    'showBetaBadge': _.feature_flags.beta_features
+                  }
+    
+    # Only resolve if analytics is enabled
+    analytics_config:
+      description: Analytics configuration (only if enabled)
+      when:
+        expr: "_.feature_flags.analytics == true"
+      type: any
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                provider: google-analytics
+                trackingId: UA-XXXXX-Y
+                anonymizeIp: true
+                sampleRate: 100
+    
+    # Only resolve if experimental API is enabled
+    experimental_endpoints:
+      description: Experimental API endpoints (only if enabled)
+      when:
+        expr: "_.feature_flags.experimental_api == true"
+      type: array
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - /api/v2/predictions
+                - /api/v2/recommendations
+                - /api/v2/insights
+    
+    # Complete feature configuration
+    config:
+      description: Complete feature configuration
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression:
+                expr: |
+                  {
+                    'flags': _.feature_flags,
+                    'ui': _.ui_config
+                  }

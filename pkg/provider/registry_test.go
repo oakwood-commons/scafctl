@@ -20,7 +20,7 @@ func (m *mockProvider) Descriptor() *Descriptor {
 	return m.descriptor
 }
 
-func (m *mockProvider) Execute(_ context.Context, _ map[string]any) (*Output, error) {
+func (m *mockProvider) Execute(_ context.Context, _ any) (*Output, error) {
 	return &Output{Data: "mock"}, nil
 }
 
@@ -31,13 +31,48 @@ func newMockProvider(name, version string, capabilities ...Capability) Provider 
 		capabilities = []Capability{CapabilityFrom}
 	}
 
+	// Build output schemas for each capability with required fields
+	outputSchemas := make(map[Capability]SchemaDefinition)
+	for _, cap := range capabilities {
+		switch cap {
+		case CapabilityValidation:
+			outputSchemas[cap] = SchemaDefinition{
+				Properties: map[string]PropertyDefinition{
+					"valid":  {Type: PropertyTypeBool},
+					"errors": {Type: PropertyTypeArray},
+				},
+			}
+		case CapabilityAuthentication:
+			outputSchemas[cap] = SchemaDefinition{
+				Properties: map[string]PropertyDefinition{
+					"authenticated": {Type: PropertyTypeBool},
+					"token":         {Type: PropertyTypeString},
+				},
+			}
+		case CapabilityAction:
+			outputSchemas[cap] = SchemaDefinition{
+				Properties: map[string]PropertyDefinition{
+					"success": {Type: PropertyTypeBool},
+				},
+			}
+		case CapabilityFrom, CapabilityTransform:
+			outputSchemas[cap] = SchemaDefinition{
+				Properties: map[string]PropertyDefinition{
+					"result": {Type: PropertyTypeString},
+				},
+			}
+		}
+	}
+
 	return &mockProvider{
 		descriptor: &Descriptor{
-			Name:         name,
-			APIVersion:   "v1",
-			Version:      ver,
-			Description:  "Mock provider for testing",
-			Capabilities: capabilities,
+			Name:          name,
+			APIVersion:    "v1",
+			Version:       ver,
+			Description:   "Mock provider for testing",
+			MockBehavior:  "Returns mock output for testing purposes",
+			Capabilities:  capabilities,
+			OutputSchemas: outputSchemas,
 			Schema: SchemaDefinition{
 				Properties: map[string]PropertyDefinition{
 					"test": {Type: PropertyTypeString},
@@ -116,6 +151,9 @@ func TestRegistry_Register(t *testing.T) {
 			provide: &mockProvider{
 				descriptor: &Descriptor{
 					Name:         "test",
+					APIVersion:   "v1",
+					Description:  "A test provider",
+					MockBehavior: "Returns mock output",
 					Capabilities: []Capability{CapabilityFrom},
 					Schema:       SchemaDefinition{Properties: map[string]PropertyDefinition{}},
 				},
@@ -127,9 +165,12 @@ func TestRegistry_Register(t *testing.T) {
 			name: "invalid descriptor - no capabilities",
 			provide: &mockProvider{
 				descriptor: &Descriptor{
-					Name:    "test",
-					Version: semver.MustParse("1.0.0"),
-					Schema:  SchemaDefinition{Properties: map[string]PropertyDefinition{}},
+					Name:         "test",
+					APIVersion:   "v1",
+					Version:      semver.MustParse("1.0.0"),
+					Description:  "A test provider",
+					MockBehavior: "Returns mock output",
+					Schema:       SchemaDefinition{Properties: map[string]PropertyDefinition{}},
 				},
 			},
 			wantErr: true,
@@ -140,7 +181,10 @@ func TestRegistry_Register(t *testing.T) {
 			provide: &mockProvider{
 				descriptor: &Descriptor{
 					Name:         "test",
+					APIVersion:   "v1",
 					Version:      semver.MustParse("1.0.0"),
+					Description:  "A test provider",
+					MockBehavior: "Returns mock output",
 					Capabilities: []Capability{"invalid"},
 					Schema:       SchemaDefinition{Properties: map[string]PropertyDefinition{}},
 				},
@@ -542,11 +586,21 @@ func TestValidateDescriptor(t *testing.T) {
 			name: "valid descriptor",
 			desc: &Descriptor{
 				Name:         "test",
+				APIVersion:   "v1",
 				Version:      semver.MustParse("1.0.0"),
+				Description:  "A test provider",
+				MockBehavior: "Returns mock output",
 				Capabilities: []Capability{CapabilityFrom},
 				Schema: SchemaDefinition{
 					Properties: map[string]PropertyDefinition{
 						"test": {Type: PropertyTypeString},
+					},
+				},
+				OutputSchemas: map[Capability]SchemaDefinition{
+					CapabilityFrom: {
+						Properties: map[string]PropertyDefinition{
+							"result": {Type: PropertyTypeString},
+						},
 					},
 				},
 			},
@@ -566,6 +620,9 @@ func TestValidateDescriptor(t *testing.T) {
 			name: "nil version",
 			desc: &Descriptor{
 				Name:         "test",
+				APIVersion:   "v1",
+				Description:  "A test provider",
+				MockBehavior: "Returns mock output",
 				Capabilities: []Capability{CapabilityFrom},
 				Schema:       SchemaDefinition{Properties: map[string]PropertyDefinition{}},
 			},
@@ -575,18 +632,63 @@ func TestValidateDescriptor(t *testing.T) {
 		{
 			name: "no capabilities",
 			desc: &Descriptor{
-				Name:    "test",
-				Version: semver.MustParse("1.0.0"),
-				Schema:  SchemaDefinition{Properties: map[string]PropertyDefinition{}},
+				Name:         "test",
+				APIVersion:   "v1",
+				Version:      semver.MustParse("1.0.0"),
+				Description:  "A test provider",
+				MockBehavior: "Returns mock output",
+				Schema:       SchemaDefinition{Properties: map[string]PropertyDefinition{}},
 			},
 			wantErr: true,
 			errMsg:  "at least one capability",
 		},
 		{
-			name: "invalid property type",
+			name: "empty APIVersion",
 			desc: &Descriptor{
 				Name:         "test",
 				Version:      semver.MustParse("1.0.0"),
+				Description:  "A test provider",
+				MockBehavior: "Returns mock output",
+				Capabilities: []Capability{CapabilityFrom},
+				Schema:       SchemaDefinition{Properties: map[string]PropertyDefinition{}},
+			},
+			wantErr: true,
+			errMsg:  "APIVersion cannot be empty",
+		},
+		{
+			name: "empty Description",
+			desc: &Descriptor{
+				Name:         "test",
+				APIVersion:   "v1",
+				Version:      semver.MustParse("1.0.0"),
+				MockBehavior: "Returns mock output",
+				Capabilities: []Capability{CapabilityFrom},
+				Schema:       SchemaDefinition{Properties: map[string]PropertyDefinition{}},
+			},
+			wantErr: true,
+			errMsg:  "description cannot be empty",
+		},
+		{
+			name: "empty MockBehavior",
+			desc: &Descriptor{
+				Name:         "test",
+				APIVersion:   "v1",
+				Version:      semver.MustParse("1.0.0"),
+				Description:  "A test provider",
+				Capabilities: []Capability{CapabilityFrom},
+				Schema:       SchemaDefinition{Properties: map[string]PropertyDefinition{}},
+			},
+			wantErr: true,
+			errMsg:  "MockBehavior cannot be empty",
+		},
+		{
+			name: "invalid property type",
+			desc: &Descriptor{
+				Name:         "test",
+				APIVersion:   "v1",
+				Version:      semver.MustParse("1.0.0"),
+				Description:  "A test provider",
+				MockBehavior: "Returns mock output",
 				Capabilities: []Capability{CapabilityFrom},
 				Schema: SchemaDefinition{
 					Properties: map[string]PropertyDefinition{

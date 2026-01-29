@@ -416,3 +416,299 @@ func TestHTTPProvider_Execute_EmptyBody(t *testing.T) {
 	data := output.Data.(map[string]any)
 	assert.Equal(t, 200, data["statusCode"])
 }
+
+func TestHTTPProvider_Execute_RetryOnServerError(t *testing.T) {
+	attemptCount := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attemptCount++
+		if attemptCount < 3 {
+			// Return 500 for first 2 attempts
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte("Server Error"))
+			return
+		}
+		// Return 200 on 3rd attempt
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("Success"))
+	}))
+	defer server.Close()
+
+	p := NewHTTPProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"url":    server.URL,
+		"method": "GET",
+		"retry": map[string]any{
+			"maxAttempts": 3,
+			"backoff":     "none",
+			"retryOn":     []any{500},
+			"initialWait": "10ms",
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	// Verify 3 attempts were made
+	assert.Equal(t, 3, attemptCount)
+
+	data := output.Data.(map[string]any)
+	assert.Equal(t, 200, data["statusCode"])
+	assert.Equal(t, "Success", data["body"])
+}
+
+func TestHTTPProvider_Execute_RetryExhausted(t *testing.T) {
+	attemptCount := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attemptCount++
+		// Always return 503
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte("Service Unavailable"))
+	}))
+	defer server.Close()
+
+	p := NewHTTPProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"url":    server.URL,
+		"method": "GET",
+		"retry": map[string]any{
+			"maxAttempts": 3,
+			"backoff":     "none",
+			"retryOn":     []any{503},
+			"initialWait": "10ms",
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	// After all retries exhausted, the provider returns the last response
+	// (not an error) because the HTTP request itself succeeded
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	// Verify all 3 attempts were made
+	assert.Equal(t, 3, attemptCount)
+
+	// The final response should be 503
+	data := output.Data.(map[string]any)
+	assert.Equal(t, 503, data["statusCode"])
+	assert.Equal(t, "Service Unavailable", data["body"])
+}
+
+func TestHTTPProvider_Execute_RetryLinearBackoff(t *testing.T) {
+	attemptTimes := []time.Time{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attemptTimes = append(attemptTimes, time.Now())
+		if len(attemptTimes) < 3 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
+	}))
+	defer server.Close()
+
+	p := NewHTTPProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"url":    server.URL,
+		"method": "GET",
+		"retry": map[string]any{
+			"maxAttempts": 3,
+			"backoff":     "linear",
+			"retryOn":     []any{500},
+			"initialWait": "50ms",
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	// Verify 3 attempts
+	assert.Len(t, attemptTimes, 3)
+
+	// Linear backoff: first wait = 50ms, second wait = 100ms
+	// Be lenient with timing checks due to test flakiness
+	if len(attemptTimes) >= 2 {
+		firstGap := attemptTimes[1].Sub(attemptTimes[0])
+		assert.GreaterOrEqual(t, firstGap.Milliseconds(), int64(40), "First gap should be ~50ms")
+	}
+	if len(attemptTimes) >= 3 {
+		secondGap := attemptTimes[2].Sub(attemptTimes[1])
+		assert.GreaterOrEqual(t, secondGap.Milliseconds(), int64(80), "Second gap should be ~100ms")
+	}
+}
+
+func TestHTTPProvider_Execute_RetryExponentialBackoff(t *testing.T) {
+	attemptTimes := []time.Time{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attemptTimes = append(attemptTimes, time.Now())
+		if len(attemptTimes) < 3 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
+	}))
+	defer server.Close()
+
+	p := NewHTTPProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"url":    server.URL,
+		"method": "GET",
+		"retry": map[string]any{
+			"maxAttempts": 3,
+			"backoff":     "exponential",
+			"retryOn":     []any{500},
+			"initialWait": "25ms",
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	// Verify 3 attempts
+	assert.Len(t, attemptTimes, 3)
+
+	// Exponential backoff: first wait = 25ms (2^0), second wait = 50ms (2^1)
+	if len(attemptTimes) >= 2 {
+		firstGap := attemptTimes[1].Sub(attemptTimes[0])
+		assert.GreaterOrEqual(t, firstGap.Milliseconds(), int64(15), "First gap should be ~25ms")
+	}
+	if len(attemptTimes) >= 3 {
+		secondGap := attemptTimes[2].Sub(attemptTimes[1])
+		assert.GreaterOrEqual(t, secondGap.Milliseconds(), int64(35), "Second gap should be ~50ms")
+	}
+}
+
+func TestHTTPProvider_Execute_RetryContextCancellation(t *testing.T) {
+	attemptCount := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attemptCount++
+		// Always return 500 to trigger retry
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	p := NewHTTPProvider()
+	ctx, cancel := context.WithCancel(context.Background())
+
+	inputs := map[string]any{
+		"url":    server.URL,
+		"method": "GET",
+		"retry": map[string]any{
+			"maxAttempts": 5,
+			"backoff":     "none",
+			"retryOn":     []any{500},
+			"initialWait": "100ms",
+		},
+	}
+
+	// Cancel after a short delay
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	output, err := p.Execute(ctx, inputs)
+
+	assert.Error(t, err)
+	assert.Nil(t, output)
+	assert.Contains(t, err.Error(), "cancelled")
+
+	// Should have made at least 1 attempt but not all 5
+	assert.GreaterOrEqual(t, attemptCount, 1)
+	assert.Less(t, attemptCount, 5)
+}
+
+func TestHTTPProvider_Execute_NoRetryOnNonRetryableStatus(t *testing.T) {
+	attemptCount := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attemptCount++
+		// Return 400 which is not in the default retryOn list
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte("Bad Request"))
+	}))
+	defer server.Close()
+
+	p := NewHTTPProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"url":    server.URL,
+		"method": "GET",
+		"retry": map[string]any{
+			"maxAttempts": 3,
+			"backoff":     "none",
+			"retryOn":     []any{500, 502, 503}, // 400 not in list
+			"initialWait": "10ms",
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	// Should succeed (no error) but with 400 status
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	// Only 1 attempt because 400 is not retryable
+	assert.Equal(t, 1, attemptCount)
+
+	data := output.Data.(map[string]any)
+	assert.Equal(t, 400, data["statusCode"])
+}
+
+func TestHTTPProvider_Execute_RetryOnRateLimited(t *testing.T) {
+	attemptCount := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attemptCount++
+		if attemptCount < 2 {
+			// Return 429 Too Many Requests
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte("Rate limited"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
+	}))
+	defer server.Close()
+
+	p := NewHTTPProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"url":    server.URL,
+		"method": "GET",
+		"retry": map[string]any{
+			"maxAttempts": 3,
+			"backoff":     "none",
+			"retryOn":     []any{429}, // Rate limit status code
+			"initialWait": "10ms",
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	assert.Equal(t, 2, attemptCount)
+
+	data := output.Data.(map[string]any)
+	assert.Equal(t, 200, data["statusCode"])
+}

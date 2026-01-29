@@ -208,6 +208,21 @@ func (r *Registry) ListByCategory(category string) []Provider {
 	return result
 }
 
+// DescriptorLookup returns a function that looks up provider descriptors by name.
+// This is used for dependency extraction during resolver phase building.
+// The returned function returns nil if the provider is not found.
+func (r *Registry) DescriptorLookup() func(name string) *Descriptor {
+	return func(name string) *Descriptor {
+		r.mu.RLock()
+		defer r.mu.RUnlock()
+
+		if p, exists := r.providers[name]; exists {
+			return p.Descriptor()
+		}
+		return nil
+	}
+}
+
 // Unregister removes a provider from the registry.
 // Returns true if the provider was removed, false if it didn't exist.
 // This is primarily for testing purposes.
@@ -247,9 +262,24 @@ func (r *Registry) validateDescriptor(desc *Descriptor) error {
 		return fmt.Errorf("provider name cannot be empty")
 	}
 
+	// APIVersion is required
+	if desc.APIVersion == "" {
+		return fmt.Errorf("provider APIVersion cannot be empty")
+	}
+
 	// Version is required
 	if desc.Version == nil {
 		return fmt.Errorf("provider version cannot be nil")
+	}
+
+	// Description is required
+	if desc.Description == "" {
+		return fmt.Errorf("provider description cannot be empty")
+	}
+
+	// MockBehavior is required (all providers must support dry-run)
+	if desc.MockBehavior == "" {
+		return fmt.Errorf("provider MockBehavior cannot be empty (all providers must support dry-run)")
 	}
 
 	// At least one capability is required
@@ -264,9 +294,10 @@ func (r *Registry) validateDescriptor(desc *Descriptor) error {
 		}
 	}
 
-	// Schema is required
+	// Schema Properties must be explicitly initialized
+	// Providers with no inputs should use an empty map: map[string]PropertyDefinition{}
 	if desc.Schema.Properties == nil {
-		return fmt.Errorf("provider schema cannot be nil")
+		return fmt.Errorf("provider Schema.Properties must be initialized (use empty map for providers with no inputs)")
 	}
 
 	// Validate property types
@@ -276,13 +307,9 @@ func (r *Registry) validateDescriptor(desc *Descriptor) error {
 		}
 	}
 
-	// Validate output schema if present
-	if desc.OutputSchema.Properties != nil {
-		for propName, propDef := range desc.OutputSchema.Properties {
-			if !propDef.Type.IsValid() {
-				return fmt.Errorf("output property %q has invalid type %q", propName, propDef.Type)
-			}
-		}
+	// Validate output schemas using the centralized validation function
+	if err := ValidateDescriptor(desc); err != nil {
+		return fmt.Errorf("output schema validation failed: %w", err)
 	}
 
 	return nil

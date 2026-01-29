@@ -1,6 +1,8 @@
 package ext
 
 import (
+	"sync"
+
 	"github.com/google/cel-go/cel"
 	celext "github.com/google/cel-go/ext"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
@@ -15,6 +17,40 @@ import (
 	celstrings "github.com/oakwood-commons/scafctl/pkg/celexp/ext/strings"
 	celtime "github.com/oakwood-commons/scafctl/pkg/celexp/ext/time"
 )
+
+var (
+	// homogeneousAggregateLiteralsMu protects access to the feature flag
+	homogeneousAggregateLiteralsMu sync.RWMutex
+	// homogeneousAggregateLiteralsEnabled controls whether CEL enforces homogeneous
+	// types in list and map literals. Disabled by default for better UX with dynamic
+	// configuration data. When enabled, all values in a map literal must be the same type.
+	homogeneousAggregateLiteralsEnabled = false
+)
+
+// SetHomogeneousAggregateLiterals enables or disables the HomogeneousAggregateLiterals
+// CEL option. When enabled, CEL enforces that all elements in list literals and all
+// values in map literals must be the same type at compile time.
+//
+// This is disabled by default because configuration data is inherently heterogeneous
+// (maps naturally have mixed-type values like strings, numbers, booleans), and dynamic
+// variables (forEach aliases, resolver references) produce 'dyn' types that conflict
+// with concrete types like 'string' when used in the same map literal.
+//
+// Enable this if you want stricter type checking and are willing to wrap values in
+// dyn() to ensure type homogeneity.
+func SetHomogeneousAggregateLiterals(enabled bool) {
+	homogeneousAggregateLiteralsMu.Lock()
+	defer homogeneousAggregateLiteralsMu.Unlock()
+	homogeneousAggregateLiteralsEnabled = enabled
+}
+
+// HomogeneousAggregateLiteralsEnabled returns whether the HomogeneousAggregateLiterals
+// CEL option is currently enabled.
+func HomogeneousAggregateLiteralsEnabled() bool {
+	homogeneousAggregateLiteralsMu.RLock()
+	defer homogeneousAggregateLiteralsMu.RUnlock()
+	return homogeneousAggregateLiteralsEnabled
+}
 
 // BuiltIn returns a list of built-in CEL extension functions provided by the
 // google/cel-go library. These include extensions for strings, lists, bindings,
@@ -371,55 +407,8 @@ func BuiltIn() celexp.ExtFunctionList {
 			},
 			EnvOptions: []cel.EnvOption{celext.Sets(celext.SetsVersion(1))},
 		},
-		{
-			Name:        "homogeneousAggregateLiterals",
-			Links:       []string{"https://github.com/google/cel-go/blob/e2bc9c90751b39e3b8401b6394e5f4dab2d48808/cel/options.go#L179-L186"},
-			Description: "HomogeneousAggregateLiterals disables mixed type list and map literal values. Note: heterogeneous aggregates are still possible when provided as variables, via conversion of well-known dynamic types, or with unchecked expressions",
-			Custom:      false,
-			Examples: []celexp.Example{
-				{
-					Description: "Valid homogeneous list of integers",
-					Expression:  `[1, 2, 3, 4, 5]`,
-				},
-				{
-					Description: "Valid homogeneous list of strings",
-					Expression:  `["apple", "banana", "cherry"]`,
-				},
-				{
-					Description: "Valid homogeneous list of doubles",
-					Expression:  `[1.0, 2.5, 3.14]`,
-				},
-				{
-					Description: "Valid homogeneous map with string keys and int values",
-					Expression:  `{"a": 1, "b": 2, "c": 3}`,
-				},
-				{
-					Description: "Valid homogeneous map with string keys and string values",
-					Expression:  `{"name": "John", "city": "NYC", "country": "USA"}`,
-				},
-				{
-					Description: "Valid nested homogeneous lists",
-					Expression:  `[[1, 2], [3, 4], [5, 6]]`,
-				},
-				{
-					Description: "Invalid: mixed integer and string types (would fail with this option)",
-					Expression:  `// [1, "two", 3] would be rejected at type-check time`,
-				},
-				{
-					Description: "Invalid: mixed numeric types in list (would fail with this option)",
-					Expression:  `// [1, 2.0, 3] would be rejected (int and double mixed)`,
-				},
-				{
-					Description: "Invalid: mixed value types in map (would fail with this option)",
-					Expression:  `// {"a": 1, "b": "two"} would be rejected`,
-				},
-				{
-					Description: "Note: heterogeneous aggregates are still allowed when from variables",
-					Expression:  `// Variables containing mixed types are not affected by this validation`,
-				},
-			},
-			EnvOptions: []cel.EnvOption{cel.HomogeneousAggregateLiterals()},
-		},
+		// HomogeneousAggregateLiterals is conditionally included based on the feature flag.
+		// It is disabled by default for better UX with dynamic configuration data.
 		{
 			Name:        "eagerlyValidateDeclarations",
 			Links:       []string{"https://github.com/google/cel-go/blob/e2bc9c90751b39e3b8401b6394e5f4dab2d48808/cel/options.go#L167C4-L177"},
@@ -558,7 +547,7 @@ func BuiltIn() celexp.ExtFunctionList {
 		{
 			Name:        "astValidators",
 			Links:       []string{"https://github.com/google/cel-go/blob/master/cel/validator.go"},
-			Description: "ASTValidators enable various AST validation options. The available validators are: ValidateDurationLiterals, ValidateTimestampLiterals, ValidateRegexLiterals, ValidateHomogeneousAggregateLiterals",
+			Description: "ASTValidators enable various AST validation options. The available validators are: ValidateDurationLiterals, ValidateTimestampLiterals, ValidateRegexLiterals, and optionally ValidateHomogeneousAggregateLiterals (controlled by feature flag)",
 			Custom:      false,
 			Examples: []celexp.Example{
 				{
@@ -578,10 +567,46 @@ func BuiltIn() celexp.ExtFunctionList {
 				cel.ValidateDurationLiterals(),
 				cel.ValidateTimestampLiterals(),
 				cel.ValidateRegexLiterals(),
-				cel.ValidateHomogeneousAggregateLiterals(),
+				// Note: ValidateHomogeneousAggregateLiterals is conditionally added below
 			)},
 		},
 	}
+
+	// Conditionally add HomogeneousAggregateLiterals if enabled
+	if HomogeneousAggregateLiteralsEnabled() {
+		// Add the standalone option
+		funcs = append(funcs, celexp.ExtFunction{
+			Name:        "homogeneousAggregateLiterals",
+			Links:       []string{"https://github.com/google/cel-go/blob/e2bc9c90751b39e3b8401b6394e5f4dab2d48808/cel/options.go#L179-L186"},
+			Description: "HomogeneousAggregateLiterals disables mixed type list and map literal values. Note: heterogeneous aggregates are still possible when provided as variables, via conversion of well-known dynamic types, or with unchecked expressions. This option is DISABLED by default - enable with ext.SetHomogeneousAggregateLiterals(true)",
+			Custom:      false,
+			Examples: []celexp.Example{
+				{
+					Description: "Valid homogeneous list of integers",
+					Expression:  `[1, 2, 3, 4, 5]`,
+				},
+				{
+					Description: "Valid homogeneous map with string keys and int values",
+					Expression:  `{"a": 1, "b": 2, "c": 3}`,
+				},
+				{
+					Description: "Use dyn() to mix types in map literals",
+					Expression:  `{"name": dynVar.name, "url": dyn("https://" + host)}`,
+				},
+			},
+			EnvOptions: []cel.EnvOption{cel.HomogeneousAggregateLiterals()},
+		})
+
+		// Also add the AST validator version
+		funcs = append(funcs, celexp.ExtFunction{
+			Name:        "astValidatorHomogeneousAggregateLiterals",
+			Links:       []string{"https://github.com/google/cel-go/blob/master/cel/validator.go"},
+			Description: "AST validator for HomogeneousAggregateLiterals (only included when feature flag is enabled)",
+			Custom:      false,
+			EnvOptions:  []cel.EnvOption{cel.ASTValidators(cel.ValidateHomogeneousAggregateLiterals())},
+		})
+	}
+
 	return funcs
 }
 

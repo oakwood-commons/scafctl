@@ -1,0 +1,74 @@
+# Parameters Example
+# Demonstrates using CLI parameters with default values and type coercion.
+#
+# Run: scafctl run solution -f parameters.yaml
+# Run: scafctl run solution -f parameters.yaml -r name=Alice -r count=5
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: parameters-example
+  version: 1.0.0
+  description: Using CLI parameters with defaults
+
+spec:
+  resolvers:
+    # String parameter with default
+    name:
+      description: User name from CLI or default
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              name: name
+              default: "World"
+    
+    # Integer parameter with default
+    count:
+      description: Repetition count
+      type: int
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              name: count
+              default: 3
+    
+    # Boolean parameter
+    uppercase:
+      description: Whether to uppercase the output
+      type: bool
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              name: uppercase
+              default: false
+    
+    # Computed greeting using parameters
+    greeting:
+      description: Final greeting message
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression:
+                expr: |
+                  _.uppercase 
+                    ? ('Hello, ' + _.name + '!').upperAscii()
+                    : 'Hello, ' + _.name + '!'
+    
+    # Array output using count
+    greetings:
+      description: Multiple greetings based on count
+      type: array
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression:
+                # Create array of greetings
+                expr: |
+                  range(0, _.count).map(i, _.greeting + ' (#' + string(i + 1) + ')')

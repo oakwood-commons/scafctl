@@ -11,6 +11,9 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/ptrs"
 )
 
+// ProviderName is the name of this provider used in error messages and logging.
+const ProviderName = "sleep"
+
 // SleepProvider provides sleep/delay functionality for workflow control.
 type SleepProvider struct {
 	descriptor *provider.Descriptor
@@ -19,13 +22,29 @@ type SleepProvider struct {
 // NewSleepProvider creates a new sleep provider instance.
 func NewSleepProvider() *SleepProvider {
 	version, _ := semver.NewVersion("1.0.0")
+
+	// Common output schema for capabilities without required fields
+	commonOutputSchema := provider.SchemaDefinition{
+		Properties: map[string]provider.PropertyDefinition{
+			"duration": {
+				Type:        provider.PropertyTypeString,
+				Description: "The duration that was slept",
+			},
+			"elapsed": {
+				Type:        provider.PropertyTypeString,
+				Description: "The actual elapsed time (should match duration in most cases)",
+			},
+		},
+	}
+
 	return &SleepProvider{
 		descriptor: &provider.Descriptor{
-			Name:        "sleep",
-			DisplayName: "Sleep Provider",
-			APIVersion:  "v1",
-			Version:     version,
-			Description: "Provides sleep/delay functionality for workflow control. Useful for rate limiting, waiting for external systems, or pacing workflow execution.",
+			Name:         "sleep",
+			DisplayName:  "Sleep Provider",
+			APIVersion:   "v1",
+			Version:      version,
+			Description:  "Provides sleep/delay functionality for workflow control. Useful for rate limiting, waiting for external systems, or pacing workflow execution.",
+			MockBehavior: "Returns immediately without actual delay in dry-run mode",
 			Capabilities: []provider.Capability{
 				provider.CapabilityFrom,
 				provider.CapabilityTransform,
@@ -45,19 +64,63 @@ func NewSleepProvider() *SleepProvider {
 					},
 				},
 			},
-			OutputSchema: provider.SchemaDefinition{
-				Properties: map[string]provider.PropertyDefinition{
-					"success": {
-						Type:        provider.PropertyTypeBool,
-						Description: "Whether the sleep operation completed successfully",
+			OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
+				provider.CapabilityFrom:      commonOutputSchema,
+				provider.CapabilityTransform: commonOutputSchema,
+				provider.CapabilityValidation: {
+					Properties: map[string]provider.PropertyDefinition{
+						"valid": {
+							Type:        provider.PropertyTypeBool,
+							Description: "Whether the sleep operation completed successfully (always true if no error)",
+						},
+						"errors": {
+							Type:        provider.PropertyTypeArray,
+							Description: "Validation errors (empty if valid)",
+						},
+						"duration": {
+							Type:        provider.PropertyTypeString,
+							Description: "The duration that was slept",
+						},
+						"elapsed": {
+							Type:        provider.PropertyTypeString,
+							Description: "The actual elapsed time",
+						},
 					},
-					"duration": {
-						Type:        provider.PropertyTypeString,
-						Description: "The duration that was slept",
+				},
+				provider.CapabilityAuthentication: {
+					Properties: map[string]provider.PropertyDefinition{
+						"authenticated": {
+							Type:        provider.PropertyTypeBool,
+							Description: "Whether authentication succeeded (always true for sleep)",
+						},
+						"token": {
+							Type:        provider.PropertyTypeString,
+							Description: "The authentication token (empty for sleep provider)",
+						},
+						"duration": {
+							Type:        provider.PropertyTypeString,
+							Description: "The duration that was slept",
+						},
+						"elapsed": {
+							Type:        provider.PropertyTypeString,
+							Description: "The actual elapsed time",
+						},
 					},
-					"elapsed": {
-						Type:        provider.PropertyTypeString,
-						Description: "The actual elapsed time (should match duration in most cases)",
+				},
+				provider.CapabilityAction: {
+					Properties: map[string]provider.PropertyDefinition{
+						"success": {
+							Type:        provider.PropertyTypeBool,
+							Description: "Whether the sleep operation completed successfully",
+						},
+						"duration": {
+							Type:        provider.PropertyTypeString,
+							Description: "The duration that was slept",
+						},
+						"elapsed": {
+							Type:        provider.PropertyTypeString,
+							Description: "The actual elapsed time",
+						},
 					},
 				},
 			},
@@ -105,7 +168,11 @@ func (p *SleepProvider) Descriptor() *provider.Descriptor {
 }
 
 // Execute performs the sleep operation.
-func (p *SleepProvider) Execute(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
+func (p *SleepProvider) Execute(ctx context.Context, input any) (*provider.Output, error) {
+	inputs, ok := input.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%s: expected map[string]any, got %T", ProviderName, input)
+	}
 	lgr := logger.FromContext(ctx)
 
 	// Check for dry-run mode
@@ -116,16 +183,16 @@ func (p *SleepProvider) Execute(ctx context.Context, inputs map[string]any) (*pr
 	// Validate and parse duration
 	durationStr, ok := inputs["duration"].(string)
 	if !ok || durationStr == "" {
-		return nil, fmt.Errorf("duration is required and must be a string")
+		return nil, fmt.Errorf("%s: duration is required and must be a string", ProviderName)
 	}
 
 	duration, err := time.ParseDuration(durationStr)
 	if err != nil {
-		return nil, fmt.Errorf("invalid duration format: %w (expected format like '1s', '500ms', '2m')", err)
+		return nil, fmt.Errorf("%s: invalid duration format: %w (expected format like '1s', '500ms', '2m')", ProviderName, err)
 	}
 
 	if duration < 0 {
-		return nil, fmt.Errorf("duration cannot be negative: %s", durationStr)
+		return nil, fmt.Errorf("%s: duration cannot be negative: %s", ProviderName, durationStr)
 	}
 
 	lgr.V(1).Info("Starting sleep", "duration", durationStr)
@@ -155,7 +222,7 @@ func (p *SleepProvider) Execute(ctx context.Context, inputs map[string]any) (*pr
 		// Context was cancelled
 		elapsed := time.Since(start)
 		lgr.V(1).Info("Sleep interrupted by context cancellation", "duration", durationStr, "elapsed", elapsed)
-		return nil, fmt.Errorf("sleep interrupted: %w", ctx.Err())
+		return nil, fmt.Errorf("%s: sleep interrupted: %w", ProviderName, ctx.Err())
 	}
 }
 
@@ -166,7 +233,7 @@ func (p *SleepProvider) executeDryRun(inputs map[string]any) (*provider.Output, 
 	// Validate duration format even in dry-run
 	if durationStr != "" {
 		if _, err := time.ParseDuration(durationStr); err != nil {
-			return nil, fmt.Errorf("invalid duration format: %w (expected format like '1s', '500ms', '2m')", err)
+			return nil, fmt.Errorf("%s: invalid duration format: %w (expected format like '1s', '500ms', '2m')", ProviderName, err)
 		}
 	}
 

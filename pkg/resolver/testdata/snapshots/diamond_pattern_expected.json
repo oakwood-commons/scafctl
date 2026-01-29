@@ -1,0 +1,42 @@
+{
+  "metadata": {
+    "solution": "diamond-pattern-snapshot",
+    "version": "1.0.0",
+    "scafctlVersion": "test",
+    "timestamp": "2024-01-01T00:00:00Z",
+    "status": "success",
+    "totalDuration": "150ms"
+  },
+  "resolvers": {
+    "top": {
+      "status": "success",
+      "value": "root",
+      "duration": "10ms",
+      "phase": 1,
+      "providerCalls": 1
+    },
+    "left": {
+      "status": "success",
+      "value": "root-left",
+      "duration": "15ms",
+      "phase": 2,
+      "providerCalls": 1
+    },
+    "right": {
+      "status": "success",
+      "value": "root-right",
+      "duration": "15ms",
+      "phase": 2,
+      "providerCalls": 1
+    },
+    "bottom": {
+      "status": "success",
+      "value": "root-left:root-right",
+      "duration": "20ms",
+      "phase": 3,
+      "providerCalls": 1
+    }
+  },
+  "parameters": {},
+  "phases": []
+}

@@ -1,0 +1,73 @@
+# Resolver Demo
+# A comprehensive example showing resolver features.
+#
+# Run: scafctl run solution -f resolver-demo.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: resolver-demo
+  version: 1.0.0
+  description: Comprehensive resolver demonstration
+
+spec:
+  resolvers:
+    environment:
+      description: Target deployment environment
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: production
+
+    region:
+      description: Deployment region
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: us-west-2
+
+    port:
+      description: Application port
+      type: int
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: 8080
+
+    exposedPort:
+      description: Externally exposed port
+      type: int
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.port + 1000"
+
+    hostname:
+      description: Generated hostname
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.environment + '-server-' + _.region"
+
+    config:
+      description: Complete configuration object
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: |
+                {
+                  'host': dyn(_.hostname),
+                  'port': dyn(_.exposedPort),
+                  'ssl': dyn(_.environment == 'production'),
+                  'region': dyn(_.region)
+                }

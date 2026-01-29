@@ -205,6 +205,66 @@ func TestSolution_ToJSON(t *testing.T) {
 	}
 }
 
+func TestSolution_ApplyDefaults(t *testing.T) {
+	s := &Solution{}
+
+	s.ApplyDefaults()
+
+	require.Equal(t, DefaultAPIVersion, s.APIVersion)
+	require.Equal(t, SolutionKind, s.Kind)
+	require.Equal(t, "private", s.Catalog.Visibility)
+}
+
+func TestSolution_Validate(t *testing.T) {
+	t.Run("valid", func(t *testing.T) {
+		s := &Solution{
+			APIVersion: DefaultAPIVersion,
+			Kind:       SolutionKind,
+			Metadata: Metadata{
+				Name:    "valid",
+				Version: semver.MustParse("1.0.0"),
+			},
+			Catalog: Catalog{Visibility: "public"},
+		}
+		assert.NoError(t, s.Validate())
+	})
+
+	t.Run("invalid apiversion", func(t *testing.T) {
+		s := &Solution{APIVersion: "bad", Kind: SolutionKind, Metadata: Metadata{Name: "x", Version: semver.MustParse("1.0.0")}}
+		err := s.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "apiVersion")
+	})
+
+	t.Run("invalid kind", func(t *testing.T) {
+		s := &Solution{APIVersion: DefaultAPIVersion, Kind: "Other", Metadata: Metadata{Name: "x", Version: semver.MustParse("1.0.0")}}
+		err := s.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "kind")
+	})
+
+	t.Run("missing name", func(t *testing.T) {
+		s := &Solution{APIVersion: DefaultAPIVersion, Kind: SolutionKind, Metadata: Metadata{Version: semver.MustParse("1.0.0")}}
+		err := s.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "metadata.name")
+	})
+
+	t.Run("missing version", func(t *testing.T) {
+		s := &Solution{APIVersion: DefaultAPIVersion, Kind: SolutionKind, Metadata: Metadata{Name: "x"}}
+		err := s.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "metadata.version")
+	})
+
+	t.Run("invalid visibility", func(t *testing.T) {
+		s := &Solution{APIVersion: DefaultAPIVersion, Kind: SolutionKind, Metadata: Metadata{Name: "x", Version: semver.MustParse("1.0.0")}, Catalog: Catalog{Visibility: "weird"}}
+		err := s.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "catalog.visibility")
+	})
+}
+
 func TestSolution_ToYAML(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -295,4 +355,32 @@ func TestSolution_GetSetPath(t *testing.T) {
 
 	s.SetPath(path)
 	assert.Equal(t, path, s.GetPath())
+}
+
+func TestSolution_LoadFromBytes(t *testing.T) {
+	t.Run("applies defaults and validates", func(t *testing.T) {
+		data := []byte(`metadata:
+  name: my-solution
+  version: 1.0.0
+`)
+		var s Solution
+		require.NoError(t, s.LoadFromBytes(data))
+		assert.Equal(t, DefaultAPIVersion, s.APIVersion)
+		assert.Equal(t, SolutionKind, s.Kind)
+		assert.Equal(t, "my-solution", s.Metadata.Name)
+		assert.NotNil(t, s.Metadata.Version)
+		assert.Equal(t, "private", s.Catalog.Visibility)
+	})
+
+	t.Run("fails on invalid bytes", func(t *testing.T) {
+		var s Solution
+		err := s.LoadFromBytes([]byte("nope"))
+		require.Error(t, err)
+	})
+
+	t.Run("nil receiver", func(t *testing.T) {
+		var s *Solution
+		err := s.LoadFromBytes([]byte("{}"))
+		require.Error(t, err)
+	})
 }

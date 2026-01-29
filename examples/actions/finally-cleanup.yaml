@@ -1,0 +1,121 @@
+# Finally Cleanup Example
+# Demonstrates the finally section for cleanup actions that always run.
+#
+# Run: scafctl run workflow -f examples/actions/finally-cleanup.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: finally-cleanup
+  version: 1.0.0
+  description: Finally section for cleanup actions
+
+spec:
+  resolvers:
+    test_database:
+      description: Test database name
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "test_db_12345"
+    
+    temp_resources:
+      description: Temporary resources to clean up
+      type: array
+      items:
+        type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - "/tmp/test-artifacts"
+                - "/tmp/build-cache"
+                - "/tmp/coverage-reports"
+
+  workflow:
+    # Main actions section
+    actions:
+      # Create test resources
+      create-test-db:
+        description: Create temporary test database
+        displayName: Create Test DB
+        provider: exec
+        inputs:
+          shell: true
+          database:
+            expr: "_.test_database"
+          command:
+            expr: "'echo Creating test database: ' + _.test_database"
+
+      # Run tests (might fail)
+      run-tests:
+        description: Run test suite
+        displayName: Run Tests
+        provider: exec
+        dependsOn:
+          - create-test-db
+        inputs:
+          shell: true
+          command: "echo 'Running tests against test database...'"
+
+      # Generate reports
+      generate-reports:
+        description: Generate test reports
+        displayName: Reports
+        provider: exec
+        dependsOn:
+          - run-tests
+        inputs:
+          shell: true
+          command: "echo 'Generating test reports...'"
+
+    # Finally section - ALWAYS runs, even if main actions fail
+    finally:
+      # Clean up test database
+      cleanup-db:
+        description: Drop test database
+        displayName: Cleanup DB
+        provider: exec
+        inputs:
+          shell: true
+          database:
+            expr: "_.test_database"
+          command:
+            expr: "'echo Dropping test database: ' + _.test_database"
+
+      # Clean up temporary files
+      cleanup-temp:
+        description: Remove temporary files
+        displayName: Cleanup Temp
+        provider: exec
+        inputs:
+          shell: true
+          resources:
+            expr: "_.temp_resources"
+          command:
+            expr: "'echo Cleaning up ' + string(size(_.temp_resources)) + ' temp resources'"
+
+      # Notification action - runs in finally section
+      notify-complete:
+        description: Send completion notification
+        displayName: Notify
+        provider: exec
+        # Finally actions can depend on other finally actions
+        dependsOn:
+          - cleanup-db
+          - cleanup-temp
+        inputs:
+          shell: true
+          command: "echo 'Workflow completed, all cleanup finished'"
+
+      # Upload logs regardless of test outcome
+      upload-logs:
+        description: Upload execution logs
+        displayName: Upload Logs
+        provider: exec
+        inputs:
+          shell: true
+          command: "echo 'Uploading execution logs...'"

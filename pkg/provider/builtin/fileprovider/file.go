@@ -7,8 +7,12 @@ import (
 	"path/filepath"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 )
+
+// ProviderName is the name of this provider.
+const ProviderName = "file"
 
 // FileProvider provides filesystem operations.
 type FileProvider struct {
@@ -23,12 +27,13 @@ func NewFileProvider() *FileProvider {
 
 	return &FileProvider{
 		descriptor: &provider.Descriptor{
-			Name:        "file",
-			DisplayName: "File Provider",
-			Description: "Provider for filesystem operations (read, write, exists, delete)",
-			APIVersion:  "v1",
-			Version:     version,
-			Category:    "filesystem",
+			Name:         "file",
+			DisplayName:  "File Provider",
+			Description:  "Provider for filesystem operations (read, write, exists, delete)",
+			APIVersion:   "v1",
+			Version:      version,
+			Category:     "filesystem",
+			MockBehavior: "Returns mock file content without reading actual filesystem",
 			Capabilities: []provider.Capability{
 				provider.CapabilityFrom,      // read, exists operations
 				provider.CapabilityAction,    // write, delete operations
@@ -74,27 +79,53 @@ func NewFileProvider() *FileProvider {
 					},
 				},
 			},
-			OutputSchema: provider.SchemaDefinition{
-				Properties: map[string]provider.PropertyDefinition{
-					"content": {
-						Type:        provider.PropertyTypeString,
-						Description: "File content (for read operation)",
+			OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
+				provider.CapabilityFrom: {
+					Properties: map[string]provider.PropertyDefinition{
+						"content": {
+							Type:        provider.PropertyTypeString,
+							Description: "File content (for read operation)",
+						},
+						"exists": {
+							Type:        provider.PropertyTypeBool,
+							Description: "Whether the file exists (for exists operation)",
+						},
+						"path": {
+							Type:        provider.PropertyTypeString,
+							Description: "Absolute path to the file",
+						},
+						"size": {
+							Type:        provider.PropertyTypeInt,
+							Description: "File size in bytes (for read operation)",
+						},
 					},
-					"exists": {
-						Type:        provider.PropertyTypeBool,
-						Description: "Whether the file exists (for exists operation)",
+				},
+				provider.CapabilityTransform: {
+					Properties: map[string]provider.PropertyDefinition{
+						"content": {
+							Type:        provider.PropertyTypeString,
+							Description: "File content (for read operation)",
+						},
+						"path": {
+							Type:        provider.PropertyTypeString,
+							Description: "Absolute path to the file",
+						},
+						"size": {
+							Type:        provider.PropertyTypeInt,
+							Description: "File size in bytes",
+						},
 					},
-					"path": {
-						Type:        provider.PropertyTypeString,
-						Description: "Absolute path to the file",
-					},
-					"size": {
-						Type:        provider.PropertyTypeInt,
-						Description: "File size in bytes (for read operation)",
-					},
-					"success": {
-						Type:        provider.PropertyTypeBool,
-						Description: "Whether the operation succeeded (for write/delete operations)",
+				},
+				provider.CapabilityAction: {
+					Properties: map[string]provider.PropertyDefinition{
+						"success": {
+							Type:        provider.PropertyTypeBool,
+							Description: "Whether the operation succeeded (for write/delete operations)",
+						},
+						"path": {
+							Type:        provider.PropertyTypeString,
+							Description: "Absolute path to the file",
+						},
 					},
 				},
 			},
@@ -148,40 +179,61 @@ func (p *FileProvider) Descriptor() *provider.Descriptor {
 }
 
 // Execute performs the filesystem operation.
-func (p *FileProvider) Execute(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
+func (p *FileProvider) Execute(ctx context.Context, input any) (*provider.Output, error) {
+	lgr := logger.FromContext(ctx)
+
+	inputs, ok := input.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%s: expected map[string]any, got %T", ProviderName, input)
+	}
 	operation, ok := inputs["operation"].(string)
 	if !ok {
-		return nil, fmt.Errorf("operation is required and must be a string")
+		return nil, fmt.Errorf("%s: operation is required and must be a string", ProviderName)
 	}
 
 	path, ok := inputs["path"].(string)
 	if !ok {
-		return nil, fmt.Errorf("path is required and must be a string")
+		return nil, fmt.Errorf("%s: path is required and must be a string", ProviderName)
 	}
+
+	lgr.V(1).Info("executing provider", "provider", ProviderName, "operation", operation, "path", path)
 
 	// Convert to absolute path
 	absPath, err := filepath.Abs(path)
 	if err != nil {
-		return nil, fmt.Errorf("invalid path: %w", err)
+		return nil, fmt.Errorf("%s: invalid path: %w", ProviderName, err)
 	}
 
 	// Check for dry-run mode
 	if dryRun := provider.DryRunFromContext(ctx); dryRun {
-		return p.executeDryRun(operation, absPath, inputs)
+		result, err := p.executeDryRun(operation, absPath, inputs)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", ProviderName, err)
+		}
+		lgr.V(1).Info("provider completed (dry-run)", "provider", ProviderName, "operation", operation)
+		return result, nil
 	}
 
+	var result *provider.Output
 	switch operation {
 	case "read":
-		return p.executeRead(absPath)
+		result, err = p.executeRead(absPath)
 	case "write":
-		return p.executeWrite(absPath, inputs)
+		result, err = p.executeWrite(absPath, inputs)
 	case "exists":
-		return p.executeExists(absPath)
+		result, err = p.executeExists(absPath)
 	case "delete":
-		return p.executeDelete(absPath)
+		result, err = p.executeDelete(absPath)
 	default:
-		return nil, fmt.Errorf("unsupported operation: %s", operation)
+		return nil, fmt.Errorf("%s: unsupported operation: %s", ProviderName, operation)
 	}
+
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", ProviderName, err)
+	}
+
+	lgr.V(1).Info("provider completed", "provider", ProviderName, "operation", operation)
+	return result, nil
 }
 
 func (p *FileProvider) executeRead(absPath string) (*provider.Output, error) {
@@ -243,6 +295,7 @@ func (p *FileProvider) executeWrite(absPath string, inputs map[string]any) (*pro
 	}, nil
 }
 
+//nolint:unparam // Error return kept for consistent interface - may return errors in future
 func (p *FileProvider) executeExists(absPath string) (*provider.Output, error) {
 	_, err := os.Stat(absPath)
 	exists := err == nil

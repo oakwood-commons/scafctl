@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/httpc"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -137,8 +138,12 @@ func TestNewGetter_WithLogger(t *testing.T) {
 
 func TestFromUrl(t *testing.T) {
 	validSolutionJSON := `{
-		"name": "test-solution",
-		"version": "1.0.0"
+		"apiVersion": "scafctl.io/v1",
+		"kind": "Solution",
+		"metadata": {
+			"name": "test-solution",
+			"version": "1.0.0"
+		}
 	}`
 
 	t.Run("successful fetch", func(t *testing.T) {
@@ -269,12 +274,34 @@ func TestFromUrl(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, sol)
 	})
+
+	t.Run("validation failure", func(t *testing.T) {
+		invalidSolutionJSON := `{"apiVersion":"scafctl.io/v1","kind":"Solution","metadata":{"name":"x"}}`
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(invalidSolutionJSON))
+		}))
+		defer server.Close()
+
+		getter := NewGetter()
+		ctx := context.Background()
+
+		sol, err := getter.FromURL(ctx, server.URL)
+		require.Error(t, err)
+		assert.Nil(t, sol)
+		assert.Contains(t, err.Error(), "validation")
+	})
 }
 
 func TestFromLocalFileSystem(t *testing.T) {
 	validSolutionJSON := `{
-		"name": "test-solution",
-		"version": "1.0.0"
+		"apiVersion": "scafctl.io/v1",
+		"kind": "Solution",
+		"metadata": {
+			"name": "test-solution",
+			"version": "1.0.0"
+		}
 	}`
 
 	t.Run("successful read", func(t *testing.T) {
@@ -288,6 +315,23 @@ func TestFromLocalFileSystem(t *testing.T) {
 		sol, err := getter.FromLocalFileSystem(ctx, "test.json")
 		require.NoError(t, err)
 		require.NotNil(t, sol)
+		assert.Equal(t, solution.DefaultAPIVersion, sol.APIVersion)
+		assert.Equal(t, solution.SolutionKind, sol.Kind)
+		assert.Equal(t, "private", sol.Catalog.Visibility)
+	})
+
+	t.Run("validation failure", func(t *testing.T) {
+		customReadFile := func(name string) ([]byte, error) {
+			return []byte(`{"apiVersion":"scafctl.io/v1","kind":"Solution","metadata":{"name":"x"}}`), nil
+		}
+
+		getter := NewGetter(WithReadFile(customReadFile))
+		ctx := context.Background()
+
+		sol, err := getter.FromLocalFileSystem(ctx, "invalid.json")
+		require.Error(t, err)
+		require.NotNil(t, sol)
+		assert.Contains(t, err.Error(), "validation")
 	})
 
 	t.Run("file read error", func(t *testing.T) {
@@ -355,8 +399,12 @@ func TestWithStatFunc(t *testing.T) {
 
 func TestGet(t *testing.T) {
 	validSolutionJSON := `{
-		"name": "test-solution",
-		"version": "1.0.0"
+		"apiVersion": "scafctl.io/v1",
+		"kind": "Solution",
+		"metadata": {
+			"name": "test-solution",
+			"version": "1.0.0"
+		}
 	}`
 
 	t.Run("with explicit URL path", func(t *testing.T) {

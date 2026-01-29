@@ -1,0 +1,83 @@
+# Dependencies Example
+# Shows how resolvers can depend on each other and execute in phases.
+#
+# Run: scafctl run solution -f dependencies.yaml --progress
+#
+# Execution order:
+#   Phase 1: environment, region (no dependencies, run in parallel)
+#   Phase 2: port, hostname (depend on phase 1)
+#   Phase 3: config (depends on phase 1 and 2)
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: dependencies-example
+  version: 1.0.0
+  description: Resolver dependencies and execution phases
+
+spec:
+  resolvers:
+    # Phase 1: No dependencies
+    environment:
+      description: Target deployment environment
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              name: env
+              default: development
+    
+    region:
+      description: Deployment region
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              name: region
+              default: us-west-2
+    
+    # Phase 2: Depends on phase 1
+    port:
+      description: Application port (varies by environment)
+      type: int
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression:
+                # Production uses standard port, others use development port
+                expr: "_.environment == 'production' ? 443 : 8080"
+    
+    hostname:
+      description: Server hostname based on environment and region
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression:
+                expr: |
+                  _.environment + '-server-' + _.region + '.example.com'
+    
+    # Phase 3: Depends on phases 1 and 2
+    config:
+      description: Complete configuration object
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression:
+                expr: |
+                  {
+                    'environment': _.environment,
+                    'region': _.region,
+                    'hostname': _.hostname,
+                    'port': _.port,
+                    'url': 'https://' + _.hostname + ':' + string(_.port),
+                    'ssl': _.environment == 'production',
+                    'debug': _.environment != 'production',
+                    'logLevel': _.environment == 'production' ? 'warn' : 'debug'
+                  }

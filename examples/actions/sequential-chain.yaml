@@ -1,0 +1,72 @@
+# Sequential Chain Example
+# Demonstrates a linear action dependency chain (A → B → C).
+#
+# Run: scafctl run workflow -f examples/actions/sequential-chain.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: sequential-chain
+  version: 1.0.0
+  description: Linear action dependency chain example
+
+spec:
+  resolvers:
+    project:
+      description: Project name
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "my-app"
+
+  workflow:
+    actions:
+      # Step 1: Checkout code
+      checkout:
+        description: Checkout source code
+        displayName: Checkout
+        provider: exec
+        inputs:
+          shell: true
+          command:
+            expr: "'echo Checking out ' + _.project + ' code...'"
+
+      # Step 2: Build (depends on checkout)
+      build:
+        description: Build the project
+        displayName: Build
+        provider: exec
+        dependsOn:
+          - checkout
+        inputs:
+          shell: true
+          command:
+            expr: "'echo Building ' + _.project + '...'"
+        timeout: 10m
+
+      # Step 3: Test (depends on build)
+      test:
+        description: Run tests
+        displayName: Test
+        provider: exec
+        dependsOn:
+          - build
+        inputs:
+          shell: true
+          command:
+            expr: "'echo Testing ' + _.project + '...'"
+        timeout: 5m
+
+      # Step 4: Package (depends on test)
+      package:
+        description: Package artifacts
+        displayName: Package
+        provider: exec
+        dependsOn:
+          - test
+        inputs:
+          shell: true
+          command:
+            expr: "'echo Packaging ' + _.project + '...'"

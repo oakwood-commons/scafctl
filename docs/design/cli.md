@@ -136,10 +136,139 @@ Multiple parameters:
 ~~~bash
 scafctl run solution example \
   -r env=prod \
-  -r regions=us-east1,us-west1
+  -r region=us-east1
 ~~~
 
 Parameters participate in normal resolver resolution via the `parameter` provider.
+
+### Key-Value Format
+
+Resolver parameters (and other similar flags) use a `key=value` format where:
+
+- **Key**: Simple string identifier (no spaces or newlines allowed)
+- **Value**: Supports ALL characters including newlines, special characters, quotes, etc.
+
+#### Basic Usage
+
+The flag can be repeated for each key-value pair:
+
+~~~bash
+scafctl run solution example \
+  -r someKey=sk_live_abc123 \
+  -r config='{"nested": "json"}' \
+  -r script="line1
+line2
+line3"
+~~~
+
+#### CSV Support
+
+**New**: You can also pass multiple comma-separated `key=value` pairs in a single flag:
+
+~~~bash
+# Multiple pairs in one flag
+scafctl run solution example \
+  -r "env=prod,region=us-east1,region=us-west1"
+~~~
+
+To include commas in values, use quotes:
+
+~~~bash
+# Quoted values preserve commas as literal characters
+scafctl run solution example \
+  -r "msg=\"Hello, world\"" \
+  -r "data='item1,item2,item3'"
+~~~
+
+Escaped quotes are supported within quoted values:
+
+~~~bash
+scafctl run solution example \
+  -r "json=\"{\\\"key\\\":\\\"value\\\"}\""
+~~~
+
+#### Multiple Values for Same Key
+
+Values for the same key are automatically combined, whether using CSV or repeated flags:
+
+~~~bash
+# Using repeated flags
+scafctl run solution example \
+  -r region=us-east1 \
+  -r region=us-west1 \
+  -r region=eu-west1
+
+# Using CSV in one flag
+scafctl run solution example \
+  -r "region=us-east1,region=us-west1,region=eu-west1"
+
+# Combining both approaches
+scafctl run solution example \
+  -r "region=us-east1,region=us-west1" \
+  -r region=eu-west1
+
+# All three produce: region = [us-east1, us-west1, eu-west1]
+~~~
+
+#### Usage Patterns
+
+**Separate flags (traditional):**
+~~~bash
+scafctl run solution example \
+  -r key1=value1 \
+  -r key2=value2
+~~~
+
+**CSV in single flag (convenient for multiple pairs):**
+~~~bash
+scafctl run solution example \
+  -r "key1=value1,key2=value2"
+~~~
+
+**Mixed approach:**
+~~~bash
+scafctl run solution example \
+  -r "env=prod,region=us-east1" \
+  -r region=us-west1 \
+  -r apiKey=secret
+~~~
+
+**Technical Note**: The CLI uses `StringArrayVarP` with custom CSV parsing (via `pkg/flags.ParseKeyValueCSV`) to avoid Cobra's built-in CSV issues while still supporting comma-separated values with proper quote handling
+
+#### URI Scheme Support
+
+To simplify passing complex data like JSON or YAML without escaping, use URI scheme prefixes:
+
+**Supported schemes**: `json://`, `yaml://`, `base64://`, `http://`, `https://`, `file://`
+
+~~~bash
+# JSON without quote escaping
+scafctl run solution example \
+  -r "config=json://{\"key\":\"value\",\"count\":42}"
+
+# JSON with commas in CSV context
+scafctl run solution example \
+  -r "env=prod,data=json://[1,2,3],region=us-east1"
+
+# YAML configuration
+scafctl run solution example \
+  -r "config=yaml://items: [a, b, c]"
+
+# Base64 encoded data
+scafctl run solution example \
+  -r "token=base64://SGVsbG8sIFdvcmxkIQ=="
+~~~
+
+**Important**: The scheme prefix is preserved and should be processed by your solution logic.
+
+**Validation**: Values with URI schemes are automatically validated:
+- `json://` - Validated as well-formed JSON
+- `yaml://` - Validated as well-formed YAML
+- `base64://` - Validated as proper base64 encoding
+- `file://` - Verified that file exists and is not a directory
+- `http://`, `https://` - Validated as properly formatted URLs
+
+Validation errors are reported immediately with helpful messages.
 
 ---
 

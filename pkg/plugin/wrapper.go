@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 )
 
@@ -39,8 +40,23 @@ func (w *ProviderWrapper) Descriptor() *provider.Descriptor {
 }
 
 // Execute executes the provider
-func (w *ProviderWrapper) Execute(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
-	return w.client.ExecuteProvider(ctx, w.providerName, inputs)
+func (w *ProviderWrapper) Execute(ctx context.Context, input any) (*provider.Output, error) {
+	lgr := logger.FromContext(ctx)
+
+	inputs, ok := input.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%s: expected map[string]any, got %T", w.descriptor.Name, input)
+	}
+
+	lgr.V(1).Info("executing plugin provider", "provider", w.descriptor.Name)
+
+	result, err := w.client.ExecuteProvider(ctx, w.providerName, inputs)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", w.descriptor.Name, err)
+	}
+
+	lgr.V(1).Info("plugin provider completed", "provider", w.descriptor.Name)
+	return result, nil
 }
 
 // Client returns the underlying plugin client

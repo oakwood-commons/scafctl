@@ -1,0 +1,88 @@
+# Parallel with Dependencies Example
+# Demonstrates the diamond dependency pattern with parallel execution.
+#
+#      init
+#      /  \
+#   build  test  (parallel)
+#      \  /
+#    deploy
+#
+# Run: scafctl run workflow -f examples/actions/parallel-with-deps.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: parallel-with-deps
+  version: 1.0.0
+  description: Diamond dependency pattern with parallel execution
+
+spec:
+  resolvers:
+    project:
+      description: Project name
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "my-service"
+    
+    environment:
+      description: Target environment
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "staging"
+
+  workflow:
+    actions:
+      # Phase 0: Initialize
+      init:
+        description: Initialize build environment
+        displayName: Initialize
+        provider: exec
+        inputs:
+          shell: true
+          command: "echo 'Initializing build environment...'"
+
+      # Phase 1: Build (depends on init)
+      build:
+        description: Build the application
+        displayName: Build
+        provider: exec
+        dependsOn:
+          - init
+        inputs:
+          shell: true
+          command:
+            expr: "'echo Building ' + _.project + '...'"
+        timeout: 15m
+
+      # Phase 1: Test (depends on init, runs in parallel with build)
+      test:
+        description: Run test suite
+        displayName: Test
+        provider: exec
+        dependsOn:
+          - init
+        inputs:
+          shell: true
+          command:
+            expr: "'echo Testing ' + _.project + '...'"
+        timeout: 10m
+
+      # Phase 2: Deploy (depends on BOTH build and test)
+      deploy:
+        description: Deploy to target environment
+        displayName: Deploy
+        provider: exec
+        dependsOn:
+          - build
+          - test
+        inputs:
+          shell: true
+          command:
+            expr: "'echo Deploying ' + _.project + ' to ' + _.environment + '...'"
+        timeout: 5m

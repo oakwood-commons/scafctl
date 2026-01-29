@@ -105,7 +105,7 @@ func main() {
     // Define the expression and variables
     expr := celexp.Expression("user.age >= 18 && user.country == 'US'")
     
-    // Compile the expression
+    // Compile the expression (automatically uses global cache if registered)
     compiled, err := expr.Compile([]cel.EnvOption{
         cel.Variable("user", cel.MapType(cel.StringType, cel.DynType)),
     })
@@ -127,6 +127,8 @@ func main() {
     fmt.Println(result) // true
 }
 ```
+
+**Note**: After calling `celexp.SetCacheFactory(env.GlobalCache)` at application startup, the global cache is automatically used. No need to explicitly pass `WithCache()`!
 
 ### With Options
 
