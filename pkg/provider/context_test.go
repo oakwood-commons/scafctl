@@ -203,6 +203,37 @@ func BenchmarkResolverContextFromContext(b *testing.B) {
 	}
 }
 
+func TestWithParameters_AndFromContext(t *testing.T) {
+	ctx := context.Background()
+
+	params := map[string]any{
+		"env":     "prod",
+		"regions": []string{"us-east1", "us-west1"},
+		"count":   int64(42),
+	}
+
+	ctx = WithParameters(ctx, params)
+	retrieved, ok := ParametersFromContext(ctx)
+	assert.True(t, ok)
+	assert.Equal(t, params, retrieved)
+}
+
+func TestParametersFromContext_NotSet(t *testing.T) {
+	ctx := context.Background()
+	params, ok := ParametersFromContext(ctx)
+	assert.False(t, ok)
+	assert.Nil(t, params)
+}
+
+func TestParametersFromContext_WrongType(t *testing.T) {
+	ctx := context.Background()
+	ctx = context.WithValue(ctx, parametersKey, "not-a-map")
+
+	params, ok := ParametersFromContext(ctx)
+	assert.False(t, ok)
+	assert.Nil(t, params)
+}
+
 func BenchmarkContextChaining(b *testing.B) {
 	ctx := context.Background()
 	resolverCtx := map[string]any{"env": "prod"}

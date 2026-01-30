@@ -61,10 +61,8 @@ func TestSetFunctionNames(t *testing.T) {
 			shouldHaveFuncs:  true,
 			minFunctionCount: 1, // optional.of, optional.none, hasValue, value, or, orValue, etc.
 		},
-		{
-			name:            "homogeneousAggregateLiterals",
-			shouldHaveFuncs: false, // This is a validation option, not a function library
-		},
+		// NOTE: homogeneousAggregateLiterals is not included here because it's behind a feature flag
+		// (disabled by default). See TestBuiltIn_WithHomogeneousAggregateLiteralsEnabled for testing with it enabled.
 		{
 			name:            "eagerlyValidateDeclarations",
 			shouldHaveFuncs: false, // This is an env option, not a function library
@@ -222,8 +220,8 @@ func TestSetFunctionNames_PrintExample(t *testing.T) {
 func TestBuiltIn(t *testing.T) {
 	funcs := BuiltIn()
 
-	// Should have exactly 13 built-in extensions
-	assert.Len(t, funcs, 13, "Should have 13 built-in extensions")
+	// Should have exactly 12 built-in extensions when HomogeneousAggregateLiterals is disabled (default)
+	assert.Len(t, funcs, 12, "Should have 12 built-in extensions (HomogeneousAggregateLiterals disabled by default)")
 
 	// All should have Custom=false
 	for _, f := range funcs {
@@ -232,10 +230,10 @@ func TestBuiltIn(t *testing.T) {
 		assert.NotEmpty(t, f.Description, "Built-in function %s should have a description", f.Name)
 	}
 
-	// Check for expected built-in extensions
+	// Check for expected built-in extensions (homogeneousAggregateLiterals excluded - disabled by default)
 	expectedNames := []string{
 		"strings", "lists", "bindings", "encoders", "math", "protos", "sets",
-		"homogeneousAggregateLiterals", "eagerlyValidateDeclarations",
+		"eagerlyValidateDeclarations",
 		"defaultUTCTimeZone", "crossTypeNumericComparisons", "optionalTypes",
 		"astValidators",
 	}
@@ -250,6 +248,28 @@ func TestBuiltIn(t *testing.T) {
 		}
 		assert.True(t, found, "Should contain built-in extension %s", expectedName)
 	}
+}
+
+func TestBuiltIn_WithHomogeneousAggregateLiteralsEnabled(t *testing.T) {
+	// Enable the feature flag for this test
+	SetHomogeneousAggregateLiterals(true)
+	defer SetHomogeneousAggregateLiterals(false) // Reset after test
+
+	funcs := BuiltIn()
+
+	// Should have 14 built-in extensions when HomogeneousAggregateLiterals is enabled
+	// (12 base + homogeneousAggregateLiterals + astValidatorHomogeneousAggregateLiterals)
+	assert.Len(t, funcs, 14, "Should have 14 built-in extensions when HomogeneousAggregateLiterals is enabled")
+
+	// Check that homogeneousAggregateLiterals is included
+	var found bool
+	for _, f := range funcs {
+		if f.Name == "homogeneousAggregateLiterals" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "Should contain homogeneousAggregateLiterals when feature flag is enabled")
 }
 
 func TestCustom(t *testing.T) {

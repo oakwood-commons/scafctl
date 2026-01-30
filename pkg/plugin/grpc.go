@@ -237,28 +237,35 @@ func descriptorToProto(desc *provider.Descriptor) *proto.ProviderDescriptor {
 		}
 	}
 
-	// Convert output schema
-	if len(desc.OutputSchema.Properties) > 0 {
-		protoDesc.OutputSchema = &proto.Schema{
-			Parameters: make(map[string]*proto.Parameter),
-		}
-		for name, prop := range desc.OutputSchema.Properties {
-			defaultValue, _ := json.Marshal(prop.Default)
-			example, _ := json.Marshal(prop.Example)
-			maxLen := int32(0)
-			if prop.MaxLength != nil {
-				//nolint:gosec // MaxLength is user-defined, overflow is acceptable behavior
-				maxLen = int32(*prop.MaxLength)
+	// Convert output schemas
+	if len(desc.OutputSchemas) > 0 {
+		protoDesc.OutputSchemas = make(map[string]*proto.Schema)
+		for cap, schema := range desc.OutputSchemas {
+			if len(schema.Properties) == 0 {
+				continue
 			}
-			protoDesc.OutputSchema.Parameters[name] = &proto.Parameter{
-				Type:         string(prop.Type),
-				Required:     prop.Required,
-				Description:  prop.Description,
-				DefaultValue: defaultValue,
-				Example:      string(example),
-				MaxLength:    maxLen,
-				Pattern:      prop.Pattern,
+			protoSchema := &proto.Schema{
+				Parameters: make(map[string]*proto.Parameter),
 			}
+			for name, prop := range schema.Properties {
+				defaultValue, _ := json.Marshal(prop.Default)
+				example, _ := json.Marshal(prop.Example)
+				maxLen := int32(0)
+				if prop.MaxLength != nil {
+					//nolint:gosec // MaxLength is user-defined, overflow is acceptable behavior
+					maxLen = int32(*prop.MaxLength)
+				}
+				protoSchema.Parameters[name] = &proto.Parameter{
+					Type:         string(prop.Type),
+					Required:     prop.Required,
+					Description:  prop.Description,
+					DefaultValue: defaultValue,
+					Example:      string(example),
+					MaxLength:    maxLen,
+					Pattern:      prop.Pattern,
+				}
+			}
+			protoDesc.OutputSchemas[string(cap)] = protoSchema
 		}
 	}
 
@@ -317,34 +324,41 @@ func protoToDescriptor(protoDesc *proto.ProviderDescriptor) *provider.Descriptor
 		}
 	}
 
-	// Convert output schema
-	if protoDesc.OutputSchema != nil {
-		desc.OutputSchema = provider.SchemaDefinition{
-			Properties: make(map[string]provider.PropertyDefinition),
-		}
-		for name, param := range protoDesc.OutputSchema.Parameters {
-			var defaultValue any
-			if len(param.DefaultValue) > 0 {
-				_ = json.Unmarshal(param.DefaultValue, &defaultValue)
+	// Convert output schemas
+	if len(protoDesc.OutputSchemas) > 0 {
+		desc.OutputSchemas = make(map[provider.Capability]provider.SchemaDefinition)
+		for capStr, protoSchema := range protoDesc.OutputSchemas {
+			if protoSchema == nil {
+				continue
 			}
-			var example any
-			if param.Example != "" {
-				_ = json.Unmarshal([]byte(param.Example), &example)
+			schema := provider.SchemaDefinition{
+				Properties: make(map[string]provider.PropertyDefinition),
 			}
-			var maxLen *int
-			if param.MaxLength > 0 {
-				ml := int(param.MaxLength)
-				maxLen = &ml
+			for name, param := range protoSchema.Parameters {
+				var defaultValue any
+				if len(param.DefaultValue) > 0 {
+					_ = json.Unmarshal(param.DefaultValue, &defaultValue)
+				}
+				var example any
+				if param.Example != "" {
+					_ = json.Unmarshal([]byte(param.Example), &example)
+				}
+				var maxLen *int
+				if param.MaxLength > 0 {
+					ml := int(param.MaxLength)
+					maxLen = &ml
+				}
+				schema.Properties[name] = provider.PropertyDefinition{
+					Type:        provider.PropertyType(param.Type),
+					Required:    param.Required,
+					Description: param.Description,
+					Default:     defaultValue,
+					Example:     example,
+					MaxLength:   maxLen,
+					Pattern:     param.Pattern,
+				}
 			}
-			desc.OutputSchema.Properties[name] = provider.PropertyDefinition{
-				Type:        provider.PropertyType(param.Type),
-				Required:    param.Required,
-				Description: param.Description,
-				Default:     defaultValue,
-				Example:     example,
-				MaxLength:   maxLen,
-				Pattern:     param.Pattern,
-			}
+			desc.OutputSchemas[provider.Capability(capStr)] = schema
 		}
 	}
 

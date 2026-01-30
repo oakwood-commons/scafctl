@@ -180,7 +180,7 @@ Each provider exposed by a plugin:
 - Has a stable name and version
 - Declares capabilities (from, transform, validation, authentication, action)
 - Declares an input schema (with typed parameters)
-- Declares an output schema for the `Data` property within `ProviderOutput`
+- Declares output schemas per capability for the `Data` property within `ProviderOutput`
 - Provides catalog metadata (description, category, tags, examples, maintainers)
 - Is invoked deterministically
 
@@ -197,7 +197,7 @@ When a provider is used:
 3. scafctl invokes the provider via gRPC
 4. The plugin executes provider logic
 5. Provider returns `ProviderOutput` containing data, warnings, and metadata
-6. scafctl validates output against the provider's output schema
+6. scafctl validates output against the provider's output schema for the current capability
 7. scafctl continues orchestration
 
 Providers never see unresolved CEL, templates, or resolver references. All provider responses use the standardized `ProviderOutput` structure.

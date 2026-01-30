@@ -1,0 +1,37 @@
+# Test fixture: Error handling with onError:continue
+# Tests that partial success is captured in snapshots
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: error-handling-snapshot
+  version: 1.0.0
+spec:
+  resolvers:
+    success:
+      description: "This resolver succeeds"
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "success-value"
+
+    fails:
+      description: "This resolver fails but continues"
+      type: string
+      resolve:
+        onError: continue
+        with:
+          - provider: static
+            inputs:
+              value:
+                expr: 'invalid_function()'
+
+    after_failure:
+      description: "This still runs after the failure"
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "ran-after-failure"

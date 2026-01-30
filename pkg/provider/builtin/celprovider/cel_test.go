@@ -20,8 +20,8 @@ func TestNewCelProvider(t *testing.T) {
 	assert.Contains(t, desc.Capabilities, provider.CapabilityTransform)
 	assert.NotNil(t, desc.Schema)
 	assert.NotEmpty(t, desc.Schema.Properties)
-	assert.NotNil(t, desc.OutputSchema)
-	assert.NotEmpty(t, desc.OutputSchema.Properties)
+	assert.NotNil(t, desc.OutputSchemas[provider.CapabilityTransform])
+	assert.NotEmpty(t, desc.OutputSchemas[provider.CapabilityTransform].Properties)
 }
 
 func TestCelProvider_Execute_StringTransform(t *testing.T) {
@@ -31,16 +31,14 @@ func TestCelProvider_Execute_StringTransform(t *testing.T) {
 	})
 
 	inputs := map[string]any{
-		"expression": "input.upperAscii()",
+		"expression": "_.input.upperAscii()",
 	}
 
 	output, err := p.Execute(ctx, inputs)
 	require.NoError(t, err)
 	require.NotNil(t, output)
 
-	data := output.Data.(map[string]any)
-	assert.Equal(t, "HELLO WORLD", data["result"])
-	assert.Equal(t, "input.upperAscii()", data["expression"])
+	assert.Equal(t, "HELLO WORLD", output.Data)
 }
 
 func TestCelProvider_Execute_Concatenation(t *testing.T) {
@@ -50,15 +48,14 @@ func TestCelProvider_Execute_Concatenation(t *testing.T) {
 	})
 
 	inputs := map[string]any{
-		"expression": "input + ' - transformed'",
+		"expression": "_.input + ' - transformed'",
 	}
 
 	output, err := p.Execute(ctx, inputs)
 	require.NoError(t, err)
 	require.NotNil(t, output)
 
-	data := output.Data.(map[string]any)
-	assert.Equal(t, "original - transformed", data["result"])
+	assert.Equal(t, "original - transformed", output.Data)
 }
 
 func TestCelProvider_Execute_NumberTransform(t *testing.T) {
@@ -68,15 +65,14 @@ func TestCelProvider_Execute_NumberTransform(t *testing.T) {
 	})
 
 	inputs := map[string]any{
-		"expression": "input * 2 + 10",
+		"expression": "_.input * 2 + 10",
 	}
 
 	output, err := p.Execute(ctx, inputs)
 	require.NoError(t, err)
 	require.NotNil(t, output)
 
-	data := output.Data.(map[string]any)
-	assert.Equal(t, int64(20), data["result"])
+	assert.Equal(t, int64(20), output.Data)
 }
 
 func TestCelProvider_Execute_BooleanLogic(t *testing.T) {
@@ -86,15 +82,14 @@ func TestCelProvider_Execute_BooleanLogic(t *testing.T) {
 	})
 
 	inputs := map[string]any{
-		"expression": "input > 10 && input < 100",
+		"expression": "_.input > 10 && _.input < 100",
 	}
 
 	output, err := p.Execute(ctx, inputs)
 	require.NoError(t, err)
 	require.NotNil(t, output)
 
-	data := output.Data.(map[string]any)
-	assert.Equal(t, true, data["result"])
+	assert.Equal(t, true, output.Data)
 }
 
 func TestCelProvider_Execute_MapAccess(t *testing.T) {
@@ -107,15 +102,14 @@ func TestCelProvider_Execute_MapAccess(t *testing.T) {
 	})
 
 	inputs := map[string]any{
-		"expression": "input.name + ' is ' + string(input.age) + ' years old'",
+		"expression": "_.input.name + ' is ' + string(_.input.age) + ' years old'",
 	}
 
 	output, err := p.Execute(ctx, inputs)
 	require.NoError(t, err)
 	require.NotNil(t, output)
 
-	data := output.Data.(map[string]any)
-	assert.Equal(t, "Alice is 30 years old", data["result"])
+	assert.Equal(t, "Alice is 30 years old", output.Data)
 }
 
 func TestCelProvider_Execute_ArrayTransform(t *testing.T) {
@@ -125,16 +119,15 @@ func TestCelProvider_Execute_ArrayTransform(t *testing.T) {
 	})
 
 	inputs := map[string]any{
-		"expression": "input.map(x, x * 2)",
+		"expression": "_.input.map(x, x * 2)",
 	}
 
 	output, err := p.Execute(ctx, inputs)
 	require.NoError(t, err)
 	require.NotNil(t, output)
 
-	data := output.Data.(map[string]any)
 	// CEL returns arrays that need to be asserted carefully
-	assert.ElementsMatch(t, []any{int64(2), int64(4), int64(6), int64(8), int64(10)}, data["result"])
+	assert.ElementsMatch(t, []any{int64(2), int64(4), int64(6), int64(8), int64(10)}, output.Data)
 }
 
 func TestCelProvider_Execute_ArrayFilter(t *testing.T) {
@@ -144,15 +137,14 @@ func TestCelProvider_Execute_ArrayFilter(t *testing.T) {
 	})
 
 	inputs := map[string]any{
-		"expression": "input.filter(x, x > 5)",
+		"expression": "_.input.filter(x, x > 5)",
 	}
 
 	output, err := p.Execute(ctx, inputs)
 	require.NoError(t, err)
 	require.NotNil(t, output)
 
-	data := output.Data.(map[string]any)
-	assert.ElementsMatch(t, []any{int64(6), int64(8), int64(10)}, data["result"])
+	assert.ElementsMatch(t, []any{int64(6), int64(8), int64(10)}, output.Data)
 }
 
 func TestCelProvider_Execute_WithVariables(t *testing.T) {
@@ -162,7 +154,7 @@ func TestCelProvider_Execute_WithVariables(t *testing.T) {
 	})
 
 	inputs := map[string]any{
-		"expression": "prefix + ' ' + input + ' ' + suffix",
+		"expression": "prefix + ' ' + _.input + ' ' + suffix",
 		"variables": map[string]any{
 			"prefix": "Mr.",
 			"suffix": "Jr.",
@@ -173,8 +165,7 @@ func TestCelProvider_Execute_WithVariables(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, output)
 
-	data := output.Data.(map[string]any)
-	assert.Equal(t, "Mr. Smith Jr.", data["result"])
+	assert.Equal(t, "Mr. Smith Jr.", output.Data)
 }
 
 func TestCelProvider_Execute_ComplexExpression(t *testing.T) {
@@ -188,15 +179,14 @@ func TestCelProvider_Execute_ComplexExpression(t *testing.T) {
 	})
 
 	inputs := map[string]any{
-		"expression": "input.filter(x, x.active).map(x, x.name.upperAscii())",
+		"expression": "_.input.filter(x, x.active).map(x, x.name.upperAscii())",
 	}
 
 	output, err := p.Execute(ctx, inputs)
 	require.NoError(t, err)
 	require.NotNil(t, output)
 
-	data := output.Data.(map[string]any)
-	assert.ElementsMatch(t, []any{"ALICE", "CHARLIE"}, data["result"])
+	assert.ElementsMatch(t, []any{"ALICE", "CHARLIE"}, output.Data)
 }
 
 func TestCelProvider_Execute_Conditional(t *testing.T) {
@@ -206,15 +196,14 @@ func TestCelProvider_Execute_Conditional(t *testing.T) {
 	})
 
 	inputs := map[string]any{
-		"expression": "input > 18 ? 'adult' : 'minor'",
+		"expression": "_.input > 18 ? 'adult' : 'minor'",
 	}
 
 	output, err := p.Execute(ctx, inputs)
 	require.NoError(t, err)
 	require.NotNil(t, output)
 
-	data := output.Data.(map[string]any)
-	assert.Equal(t, "adult", data["result"])
+	assert.Equal(t, "adult", output.Data)
 }
 
 func TestCelProvider_Execute_StringManipulation(t *testing.T) {
@@ -224,15 +213,14 @@ func TestCelProvider_Execute_StringManipulation(t *testing.T) {
 	})
 
 	inputs := map[string]any{
-		"expression": "input.split(' ').map(x, x.upperAscii()).join('-')",
+		"expression": "_.input.split(' ').map(x, x.upperAscii()).join('-')",
 	}
 
 	output, err := p.Execute(ctx, inputs)
 	require.NoError(t, err)
 	require.NotNil(t, output)
 
-	data := output.Data.(map[string]any)
-	assert.Equal(t, "HELLO-WORLD-FROM-CEL", data["result"])
+	assert.Equal(t, "HELLO-WORLD-FROM-CEL", output.Data)
 }
 
 func TestCelProvider_Execute_TypeConversion(t *testing.T) {
@@ -242,15 +230,14 @@ func TestCelProvider_Execute_TypeConversion(t *testing.T) {
 	})
 
 	inputs := map[string]any{
-		"expression": "int(input)",
+		"expression": "int(_.input)",
 	}
 
 	output, err := p.Execute(ctx, inputs)
 	require.NoError(t, err)
 	require.NotNil(t, output)
 
-	data := output.Data.(map[string]any)
-	assert.Equal(t, int64(42), data["result"])
+	assert.Equal(t, int64(42), output.Data)
 }
 
 func TestCelProvider_Execute_DryRun(t *testing.T) {
@@ -261,16 +248,14 @@ func TestCelProvider_Execute_DryRun(t *testing.T) {
 	})
 
 	inputs := map[string]any{
-		"expression": "input.upperAscii()",
+		"expression": "_.input.upperAscii()",
 	}
 
 	output, err := p.Execute(ctx, inputs)
 	require.NoError(t, err)
 	require.NotNil(t, output)
 
-	data := output.Data.(map[string]any)
-	assert.Contains(t, data["result"], "DRY-RUN")
-	assert.Equal(t, "input.upperAscii()", data["expression"])
+	assert.Contains(t, output.Data, "DRY-RUN")
 
 	assert.NotNil(t, output.Metadata)
 	assert.Equal(t, true, output.Metadata["dryRun"])
@@ -295,10 +280,10 @@ func TestCelProvider_Execute_NoResolverData(t *testing.T) {
 	ctx := context.Background()
 
 	inputs := map[string]any{
-		"expression": "input.upperAscii()",
+		"expression": "_.input.upperAscii()",
 	}
 
-	// Should not error even without resolver data, just won't have 'input' variable
+	// Should error because 'input' variable is undeclared (caught at compile time)
 	_, err := p.Execute(ctx, inputs)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to compile expression")
@@ -327,11 +312,106 @@ func TestCelProvider_Execute_RuntimeError(t *testing.T) {
 	})
 
 	inputs := map[string]any{
-		"expression": "input.nonExistentMethod()",
+		"expression": "_.input.nonExistentMethod()",
 	}
 
 	output, err := p.Execute(ctx, inputs)
 	require.Error(t, err)
 	assert.Nil(t, output)
 	assert.Contains(t, err.Error(), "failed to compile expression")
+}
+
+func TestCelProvider_Execute_ForEachWithCustomAliases(t *testing.T) {
+	p := NewCelProvider()
+
+	// Simulate the context set up by the executor during forEach iteration
+	resolverData := map[string]any{
+		"environment": "production",
+		"__self":      []any{"a", "b", "c"},
+		"__item":      map[string]any{"name": "api-service", "host": "localhost", "port": int64(8080)},
+		"__index":     2,
+		"svc":         map[string]any{"name": "api-service", "host": "localhost", "port": int64(8080)}, // custom item alias
+		"idx":         2,                                                                               // custom index alias
+	}
+	ctx := provider.WithResolverContext(context.Background(), resolverData)
+
+	// Add iteration context with alias information
+	iterCtx := &provider.IterationContext{
+		Item:       map[string]any{"name": "api-service", "host": "localhost", "port": int64(8080)},
+		Index:      2,
+		ItemAlias:  "svc",
+		IndexAlias: "idx",
+	}
+	ctx = provider.WithIterationContext(ctx, iterCtx)
+
+	// Expression uses custom aliases instead of __item and __index
+	// Note: Use simple concatenation that works with CEL's type system
+	inputs := map[string]any{
+		"expression": `{
+			'name': svc.name,
+			'host': svc.host,
+			'port': svc.port,
+			'order': idx,
+			'environment': _.environment
+		}`,
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	result, ok := output.Data.(map[string]any)
+	require.True(t, ok, "expected map[string]any, got %T", output.Data)
+
+	assert.Equal(t, "api-service", result["name"])
+	assert.Equal(t, "localhost", result["host"])
+	assert.Equal(t, int64(8080), result["port"])
+	assert.Equal(t, int64(2), result["order"])
+	assert.Equal(t, "production", result["environment"])
+}
+
+func TestCelProvider_Execute_ForEachWithDefaultVariables(t *testing.T) {
+	p := NewCelProvider()
+
+	// Simulate the context set up by the executor during forEach iteration (no custom aliases)
+	resolverData := map[string]any{
+		"environment": "staging",
+		"__self":      []any{"x", "y", "z"},
+		"__item":      "current-item",
+		"__index":     1,
+	}
+	ctx := provider.WithResolverContext(context.Background(), resolverData)
+
+	// Expression uses default __item and __index variables
+	inputs := map[string]any{
+		"expression": `'Item: ' + __item + ', Index: ' + string(__index) + ', Env: ' + _.environment`,
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	assert.Equal(t, "Item: current-item, Index: 1, Env: staging", output.Data)
+}
+
+func TestCelProvider_Execute_SelfVariable(t *testing.T) {
+	p := NewCelProvider()
+
+	// Simulate context with __self for transform phase
+	resolverData := map[string]any{
+		"environment": "dev",
+		"__self":      map[string]any{"value": 42, "label": "test"},
+	}
+	ctx := provider.WithResolverContext(context.Background(), resolverData)
+
+	// Expression uses __self
+	inputs := map[string]any{
+		"expression": `__self.label + ': ' + string(__self.value)`,
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	assert.Equal(t, "test: 42", output.Data)
 }

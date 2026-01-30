@@ -1,0 +1,308 @@
+# Complex Workflow Example
+# A full CI/CD-style workflow demonstrating all features.
+#
+# Features demonstrated:
+# - Sequential and parallel dependencies
+# - ForEach expansion
+# - Conditional execution
+# - Error handling
+# - Retry with backoff
+# - Timeouts
+# - Finally cleanup section
+# - Action result data flow (__actions references)
+#
+# Run: scafctl run workflow -f examples/actions/complex-workflow.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: complex-workflow
+  version: 1.0.0
+  description: Full CI/CD workflow demonstrating all action features
+
+spec:
+  resolvers:
+    # Project configuration
+    project:
+      description: Project name
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "my-service"
+    
+    # Environment configuration
+    environment:
+      description: Target environment
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "staging"
+    
+    # Deployment targets
+    targets:
+      description: Deployment targets
+      type: array
+      items:
+        type: any
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - name: us-east-1
+                  region: us-east-1
+                  replicas: 3
+                - name: us-west-2
+                  region: us-west-2
+                  replicas: 2
+                - name: eu-west-1
+                  region: eu-west-1
+                  replicas: 2
+    
+    # Feature flags
+    features:
+      description: Feature flags
+      type: any
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                run_e2e_tests: true
+                run_security_scan: true
+                enable_canary: false
+                notify_slack: true
+    
+    # Slack webhook for notifications
+    slack_webhook:
+      description: Slack webhook URL
+      type: string
+      sensitive: true
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXX"
+
+  workflow:
+    actions:
+      # =========================================
+      # Phase 0: Initialization
+      # =========================================
+      init:
+        description: Initialize build environment
+        displayName: Initialize
+        provider: exec
+        timeout: 2m
+        inputs:
+          shell: true
+          command:
+            expr: "'echo Initializing CI/CD for ' + _.project"
+
+      # =========================================
+      # Phase 1: Build and Test (Parallel)
+      # =========================================
+      build:
+        description: Build application
+        displayName: Build
+        provider: exec
+        dependsOn:
+          - init
+        timeout: 15m
+        retry:
+          maxAttempts: 2
+          backoff: fixed
+          initialDelay: 5s
+        inputs:
+          shell: true
+          project:
+            expr: "_.project"
+          command:
+            expr: "'echo Building ' + _.project + '...'"
+
+      unit-tests:
+        description: Run unit tests
+        displayName: Unit Tests
+        provider: exec
+        dependsOn:
+          - init
+        timeout: 10m
+        inputs:
+          shell: true
+          command: "echo 'Running unit tests...'"
+
+      lint:
+        description: Run linters
+        displayName: Lint
+        provider: exec
+        dependsOn:
+          - init
+        timeout: 5m
+        # Linting issues shouldn't block deployment
+        onError: continue
+        inputs:
+          shell: true
+          command: "echo 'Running linters...'"
+
+      # =========================================
+      # Phase 2: Integration Tests (after build)
+      # =========================================
+      integration-tests:
+        description: Run integration tests
+        displayName: Integration Tests
+        provider: exec
+        dependsOn:
+          - build
+          - unit-tests
+        timeout: 20m
+        inputs:
+          shell: true
+          command: "echo 'Running integration tests...'"
+
+      # Conditional: E2E tests (only if enabled)
+      e2e-tests:
+        description: Run end-to-end tests
+        displayName: E2E Tests
+        provider: exec
+        dependsOn:
+          - build
+          - unit-tests
+        timeout: 30m
+        when:
+          expr: "_.features.run_e2e_tests == true"
+        inputs:
+          shell: true
+          command: "echo 'Running E2E tests...'"
+
+      # =========================================
+      # Phase 3: Security Scan (parallel with tests)
+      # =========================================
+      security-scan:
+        description: Run security vulnerability scan
+        displayName: Security Scan
+        provider: exec
+        dependsOn:
+          - build
+        timeout: 15m
+        when:
+          expr: "_.features.run_security_scan"
+        retry:
+          maxAttempts: 3
+          backoff: exponential
+          initialDelay: 2s
+          maxDelay: 30s
+        inputs:
+          shell: true
+          command: "echo 'Running security scan...'"
+
+      # =========================================
+      # Phase 4: Deploy (after all tests pass)
+      # =========================================
+      deploy:
+        description: Deploy to target region
+        displayName: Deploy
+        provider: exec
+        dependsOn:
+          - integration-tests
+          - security-scan
+        # ForEach: deploy to multiple regions
+        forEach:
+          in:
+            expr: "_.targets"
+          concurrency: 2
+          onError: continue
+        timeout: 10m
+        retry:
+          maxAttempts: 3
+          backoff: exponential
+          initialDelay: 5s
+          maxDelay: 60s
+        inputs:
+          shell: true
+          region:
+            expr: "__item.region"
+          replicas:
+            expr: "__item.replicas"
+          environment:
+            expr: "_.environment"
+          command:
+            expr: "'echo Deploying to ' + __item.name + ' (' + __item.region + ')'"
+
+      # =========================================
+      # Phase 5: Verify Deployment
+      # =========================================
+      verify:
+        description: Verify deployment health
+        displayName: Verify
+        provider: exec
+        dependsOn:
+          - deploy
+        timeout: 5m
+        inputs:
+          shell: true
+          targets:
+            expr: "_.targets"
+          command:
+            expr: "'echo Verifying ' + string(size(_.targets)) + ' deployments...'"
+
+      # =========================================
+      # Conditional: Canary deployment
+      # =========================================
+      canary:
+        description: Run canary deployment
+        displayName: Canary
+        provider: exec
+        dependsOn:
+          - verify
+        when:
+          expr: "_.features.enable_canary"
+        timeout: 15m
+        inputs:
+          shell: true
+          command: "echo 'Running canary deployment...'"
+
+    # =========================================
+    # Finally: Cleanup and Notifications
+    # =========================================
+    finally:
+      # Cleanup any temporary resources
+      cleanup:
+        description: Clean up temporary resources
+        displayName: Cleanup
+        provider: exec
+        timeout: 5m
+        inputs:
+          shell: true
+          command: "echo 'Cleaning up temporary resources...'"
+
+      # Send Slack notification
+      notify-slack:
+        description: Send Slack notification
+        displayName: Notify Slack
+        provider: exec
+        dependsOn:
+          - cleanup
+        inputs:
+          shell: true
+          webhook:
+            expr: "_.slack_webhook"
+          project:
+            expr: "_.project"
+          environment:
+            expr: "_.environment"
+          command:
+            expr: "'echo Sending notification for ' + _.project + ' to ' + _.environment"
+
+      # Upload artifacts and logs
+      upload-artifacts:
+        description: Upload build artifacts and logs
+        displayName: Upload Artifacts
+        provider: exec
+        timeout: 10m
+        inputs:
+          shell: true
+          command: "echo 'Uploading artifacts and logs...'"

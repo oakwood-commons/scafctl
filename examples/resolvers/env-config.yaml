@@ -1,0 +1,118 @@
+# Environment-Based Configuration
+# Shows how to build configuration that varies by deployment environment.
+#
+# Run: scafctl run solution -f env-config.yaml
+# Run: scafctl run solution -f env-config.yaml -r env=production
+# Run: scafctl run solution -f env-config.yaml -r env=staging
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: env-config
+  version: 1.0.0
+  description: Environment-based configuration pattern
+
+spec:
+  resolvers:
+    environment:
+      description: Target deployment environment
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              name: env
+              default: development
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression:
+                expr: "__self in ['development', 'staging', 'production']"
+              message: "Environment must be development, staging, or production"
+    
+    # Environment-specific database configuration
+    database:
+      description: Database connection settings
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression:
+                expr: |
+                  _.environment == 'production' ? {
+                    'host': 'db.prod.example.com',
+                    'port': 5432,
+                    'name': 'app_production',
+                    'poolSize': 20,
+                    'ssl': true
+                  } : _.environment == 'staging' ? {
+                    'host': 'db.staging.example.com',
+                    'port': 5432,
+                    'name': 'app_staging',
+                    'poolSize': 10,
+                    'ssl': true
+                  } : {
+                    'host': 'localhost',
+                    'port': 5432,
+                    'name': 'app_development',
+                    'poolSize': 5,
+                    'ssl': false
+                  }
+    
+    # Environment-specific logging
+    logging:
+      description: Logging configuration
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression:
+                expr: |
+                  {
+                    'level': _.environment == 'production' ? 'warn' : 'debug',
+                    'format': _.environment == 'production' ? 'json' : 'text',
+                    'output': _.environment == 'production' ? 'stdout' : 'stderr',
+                    'includeStackTrace': _.environment != 'production'
+                  }
+    
+    # Environment-specific feature flags
+    features:
+      description: Feature flags by environment
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression:
+                expr: |
+                  {
+                    'debugToolbar': _.environment == 'development',
+                    'apiDocs': _.environment != 'production',
+                    'rateLimiting': _.environment == 'production',
+                    'caching': _.environment in ['staging', 'production'],
+                    'metrics': _.environment in ['staging', 'production']
+                  }
+    
+    # Complete configuration
+    config:
+      description: Complete application configuration
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression:
+                expr: |
+                  {
+                    'environment': _.environment,
+                    'database': _.database,
+                    'logging': _.logging,
+                    'features': _.features,
+                    'metadata': {
+                      'generatedAt': now(),
+                      'version': '1.0.0'
+                    }
+                  }

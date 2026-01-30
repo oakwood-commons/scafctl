@@ -1,0 +1,100 @@
+# Retry with Backoff Example
+# Demonstrates retry configuration with exponential backoff.
+#
+# Run: scafctl run workflow -f examples/actions/retry-backoff.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: retry-backoff
+  version: 1.0.0
+  description: Retry with exponential backoff for flaky operations
+
+spec:
+  resolvers:
+    api_url:
+      description: API endpoint URL
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "https://api.example.com/webhook"
+    
+    max_retries:
+      description: Maximum retry attempts
+      type: integer
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: 5
+
+  workflow:
+    actions:
+      # Demonstrate fixed backoff (constant delay between retries)
+      fixed-retry:
+        description: Operation with fixed retry delay
+        displayName: Fixed Retry
+        provider: exec
+        retry:
+          maxAttempts: 3
+          backoff: fixed
+          initialDelay: 2s
+        inputs:
+          shell: true
+          command: "echo 'Attempting fixed-retry operation...'"
+
+      # Demonstrate linear backoff (delay increases linearly)
+      linear-retry:
+        description: Operation with linear backoff
+        displayName: Linear Retry
+        provider: exec
+        dependsOn:
+          - fixed-retry
+        retry:
+          maxAttempts: 4
+          backoff: linear
+          initialDelay: 1s
+          maxDelay: 10s
+        inputs:
+          shell: true
+          command: "echo 'Attempting linear-retry operation...'"
+
+      # Demonstrate exponential backoff (delay doubles each retry)
+      # This is ideal for external API calls
+      exponential-retry:
+        description: API call with exponential backoff
+        displayName: API Call
+        provider: exec
+        dependsOn:
+          - linear-retry
+        retry:
+          # Using resolver value for maxAttempts
+          maxAttempts: 5
+          backoff: exponential
+          initialDelay: 500ms
+          maxDelay: 30s
+        inputs:
+          shell: true
+          url:
+            expr: "_.api_url"
+          command:
+            expr: "'echo Calling API at ' + _.api_url + '...'"
+
+      # Combine retry with timeout
+      retry-with-timeout:
+        description: Operation with both retry and timeout
+        displayName: Retry + Timeout
+        provider: exec
+        dependsOn:
+          - exponential-retry
+        timeout: 30s
+        retry:
+          maxAttempts: 3
+          backoff: exponential
+          initialDelay: 1s
+          maxDelay: 5s
+        inputs:
+          shell: true
+          command: "echo 'Operation with retry and 30s timeout...'"

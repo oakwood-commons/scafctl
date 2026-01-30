@@ -1,0 +1,43 @@
+# Test fixture: Simple chain resolution
+# Tests a basic chain of resolvers where each depends on the previous
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: simple-chain-snapshot
+  version: 1.0.0
+spec:
+  resolvers:
+    base:
+      description: "Base value resolver"
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+
+    transform:
+      description: "Transforms the base value"
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                rslvr: base
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression:
+                expr: '_.transform + "-world"'
+
+    final:
+      description: "Final concatenation"
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression:
+                expr: '_.base + " " + _.transform + "!"'

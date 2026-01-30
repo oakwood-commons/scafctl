@@ -1,0 +1,178 @@
+# Validation Example
+# Demonstrates input validation with multiple rules and aggregated errors.
+#
+# Run: scafctl run solution -f validation.yaml
+# Run: scafctl run solution -f validation.yaml -r email=test@example.com -r port=8080 -r password=MyP@ss123
+#
+# Try invalid values to see validation errors:
+# Run: scafctl run solution -f validation.yaml -r email=invalid -r port=99999 -r password=weak
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: validation-example
+  version: 1.0.0
+  description: Input validation patterns
+
+spec:
+  resolvers:
+    # Email validation with regex
+    email:
+      description: User email address
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              name: email
+              default: "user@example.com"
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              pattern: "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$"
+              message: "Invalid email format"
+          - provider: validation
+            inputs:
+              expression:
+                expr: "!__self.endsWith('.test')"
+              message: "Test domain emails are not allowed"
+          - provider: validation
+            inputs:
+              expression:
+                expr: "size(__self) <= 254"
+              message: "Email address too long (max 254 characters)"
+    
+    # Port number validation with range check
+    port:
+      description: Server port number
+      type: int
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              name: port
+              default: 8080
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression:
+                expr: "__self >= 1 && __self <= 65535"
+              message: "Port must be between 1 and 65535"
+          - provider: validation
+            inputs:
+              expression:
+                expr: "__self >= 1024"
+              message: "Ports below 1024 require root privileges"
+    
+    # Password validation with multiple rules
+    password:
+      description: User password
+      type: string
+      sensitive: true
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              name: password
+              default: "DefaultP@ss1"
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression:
+                expr: "size(__self) >= 8"
+              message: "Password must be at least 8 characters"
+          - provider: validation
+            inputs:
+              expression:
+                expr: "size(__self) <= 128"
+              message: "Password must not exceed 128 characters"
+          - provider: validation
+            inputs:
+              pattern: "[A-Z]"
+              message: "Password must contain at least one uppercase letter"
+          - provider: validation
+            inputs:
+              pattern: "[a-z]"
+              message: "Password must contain at least one lowercase letter"
+          - provider: validation
+            inputs:
+              pattern: "[0-9]"
+              message: "Password must contain at least one digit"
+          - provider: validation
+            inputs:
+              pattern: "[!@#$%^&*(),.?\":{}|<>]"
+              message: "Password must contain at least one special character"
+    
+    # URL validation
+    api_url:
+      description: API endpoint URL
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              name: url
+              default: "https://api.example.com/v1"
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              pattern: "^https?://"
+              message: "URL must start with http:// or https://"
+          - provider: validation
+            inputs:
+              expression:
+                expr: "size(__self) <= 2048"
+              message: "URL too long (max 2048 characters)"
+    
+    # Array validation
+    tags:
+      description: Resource tags
+      type: array
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              name: tags
+              default:
+                - production
+                - web
+                - api
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression:
+                expr: "size(__self) >= 1"
+              message: "At least one tag is required"
+          - provider: validation
+            inputs:
+              expression:
+                expr: "size(__self) <= 10"
+              message: "Maximum 10 tags allowed"
+          - provider: validation
+            inputs:
+              expression:
+                expr: "__self.all(t, size(t) <= 50)"
+              message: "Each tag must be 50 characters or less"
+    
+    # Validated configuration output
+    validated_config:
+      description: Configuration with all validated values
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression:
+                expr: |
+                  {
+                    'email': _.email,
+                    'port': _.port,
+                    'apiUrl': _.api_url,
+                    'tags': _.tags,
+                    'passwordSet': size(_.password) > 0
+                  }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/Masterminds/semver/v3"
 	"gopkg.in/yaml.v3"
@@ -52,8 +53,12 @@ type Solution struct {
 	Metadata Metadata `json:"metadata" yaml:"metadata" doc:"Metadata about the solution"`
 
 	// Catalog controls distribution and visibility, not execution.
-	// Published artifacts are JSON-only, and solutions are version-addressable (e.g., solution:gcp-basic@1.0.1).
+	// Published artifacts are JSON-only, and solutions are version-addressable (e.g., gcp-basic@1.0.1).
 	Catalog Catalog `json:"catalog,omitempty" yaml:"catalog,omitempty" doc:"Catalog metadata for distribution" required:"false"`
+
+	// Spec defines the execution specification containing resolvers, templates, and actions.
+	// This is where the actual work of the solution is defined.
+	Spec Spec `json:"spec,omitempty" yaml:"spec,omitempty" doc:"Execution specification"`
 
 	// path is an internal field for the file path where the solution was loaded from
 	path string `json:"-" yaml:"-"`
@@ -170,6 +175,21 @@ func (s *Solution) UnmarshalFromBytes(bytes []byte) error {
 	return nil
 }
 
+// LoadFromBytes unmarshals the provided bytes, applies defaults, and validates the solution.
+// It is a convenience helper to ensure envelope normalization happens consistently.
+func (s *Solution) LoadFromBytes(bytes []byte) error {
+	if s == nil {
+		return errors.New("solution is nil")
+	}
+
+	if err := s.UnmarshalFromBytes(bytes); err != nil {
+		return err
+	}
+
+	s.ApplyDefaults()
+	return s.Validate()
+}
+
 // GetPath returns the file system path associated with the Solution.
 func (s *Solution) GetPath() string {
 	return s.path
@@ -179,4 +199,63 @@ func (s *Solution) GetPath() string {
 // It updates the internal path field with the provided value.
 func (s *Solution) SetPath(path string) {
 	s.path = path
+}
+
+// ApplyDefaults populates default values for optional top-level fields.
+// It is safe to call on a nil receiver.
+func (s *Solution) ApplyDefaults() {
+	if s == nil {
+		return
+	}
+	if s.APIVersion == "" {
+		s.APIVersion = DefaultAPIVersion
+	}
+	if s.Kind == "" {
+		s.Kind = SolutionKind
+	}
+	if s.Catalog.Visibility == "" {
+		s.Catalog.Visibility = "private"
+	}
+}
+
+// Validate performs lightweight runtime validation on the Solution envelope.
+// It enforces apiVersion/kind, required metadata, and catalog enums.
+func (s *Solution) Validate() error {
+	if s == nil {
+		return errors.New("solution is nil")
+	}
+
+	var problems []string
+
+	if s.APIVersion != DefaultAPIVersion {
+		problems = append(problems, fmt.Sprintf("apiVersion must be %s", DefaultAPIVersion))
+	}
+	if s.Kind != SolutionKind {
+		problems = append(problems, fmt.Sprintf("kind must be %s", SolutionKind))
+	}
+	if s.Metadata.Name == "" {
+		problems = append(problems, "metadata.name is required")
+	}
+	if s.Metadata.Version == nil {
+		problems = append(problems, "metadata.version is required")
+	}
+
+	if vis := s.Catalog.Visibility; vis != "" {
+		switch vis {
+		case "public", "private", "internal":
+		default:
+			problems = append(problems, "catalog.visibility must be public, private, or internal when set")
+		}
+	}
+
+	if len(problems) > 0 {
+		return fmt.Errorf("solution validation failed: %s", strings.Join(problems, "; "))
+	}
+
+	// Validate spec section (resolvers, templates, actions)
+	if err := s.ValidateSpec(); err != nil {
+		return err
+	}
+
+	return nil
 }

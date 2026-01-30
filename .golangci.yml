@@ -27,7 +27,6 @@ linters:
     - tparallel
     - unparam
     - whitespace
-
     - staticcheck
     - revive
     - forbidigo

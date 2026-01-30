@@ -140,16 +140,27 @@ func TestDescriptorConversion(t *testing.T) {
 			},
 		},
 		{
-			name: "descriptor with output schema",
+			name: "descriptor with output schemas",
 			descriptor: &provider.Descriptor{
-				Name:       "test",
-				APIVersion: "v1",
-				Version:    semver.MustParse("1.0.0"),
-				OutputSchema: provider.SchemaDefinition{
-					Properties: map[string]provider.PropertyDefinition{
-						"result": {
-							Type:        provider.PropertyTypeString,
-							Description: "Result",
+				Name:         "test",
+				APIVersion:   "v1",
+				Version:      semver.MustParse("1.0.0"),
+				Capabilities: []provider.Capability{provider.CapabilityFrom, provider.CapabilityAction},
+				OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
+					provider.CapabilityFrom: {
+						Properties: map[string]provider.PropertyDefinition{
+							"result": {
+								Type:        provider.PropertyTypeString,
+								Description: "Result",
+							},
+						},
+					},
+					provider.CapabilityAction: {
+						Properties: map[string]provider.PropertyDefinition{
+							"success": {
+								Type:        provider.PropertyTypeBool,
+								Description: "Whether action succeeded",
+							},
 						},
 					},
 				},
@@ -189,9 +200,14 @@ func TestDescriptorConversion(t *testing.T) {
 				}
 			}
 
-			// Compare output schema
-			if len(tt.descriptor.OutputSchema.Properties) > 0 {
-				assert.Equal(t, len(tt.descriptor.OutputSchema.Properties), len(converted.OutputSchema.Properties))
+			// Compare output schemas
+			if len(tt.descriptor.OutputSchemas) > 0 {
+				assert.Equal(t, len(tt.descriptor.OutputSchemas), len(converted.OutputSchemas))
+				for cap, schema := range tt.descriptor.OutputSchemas {
+					convertedSchema, ok := converted.OutputSchemas[cap]
+					require.True(t, ok, "output schema for capability %s not found", cap)
+					assert.Equal(t, len(schema.Properties), len(convertedSchema.Properties))
+				}
 			}
 		})
 	}

@@ -10,8 +10,12 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 )
+
+// ProviderName is the name of the exec provider.
+const ProviderName = "exec"
 
 // ExecProvider provides shell command execution operations.
 type ExecProvider struct {
@@ -23,11 +27,12 @@ func NewExecProvider() *ExecProvider {
 	version, _ := semver.NewVersion("1.0.0")
 	return &ExecProvider{
 		descriptor: &provider.Descriptor{
-			Name:        "exec",
-			DisplayName: "Exec Provider",
-			APIVersion:  "v1",
-			Version:     version,
-			Description: "Executes shell commands in the local environment",
+			Name:         "exec",
+			DisplayName:  "Exec Provider",
+			APIVersion:   "v1",
+			Version:      version,
+			Description:  "Executes shell commands in the local environment",
+			MockBehavior: "Returns mock command output without executing actual shell command",
 			Capabilities: []provider.Capability{
 				provider.CapabilityAction, // Side effects (command execution)
 				provider.CapabilityFrom,   // Read-only commands
@@ -81,27 +86,69 @@ func NewExecProvider() *ExecProvider {
 					},
 				},
 			},
-			OutputSchema: provider.SchemaDefinition{
-				Properties: map[string]provider.PropertyDefinition{
-					"stdout": {
-						Type:        provider.PropertyTypeString,
-						Description: "Standard output from the command",
+			OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
+				provider.CapabilityFrom: {
+					Properties: map[string]provider.PropertyDefinition{
+						"stdout": {
+							Type:        provider.PropertyTypeString,
+							Description: "Standard output from the command",
+						},
+						"stderr": {
+							Type:        provider.PropertyTypeString,
+							Description: "Standard error output from the command",
+						},
+						"exitCode": {
+							Type:        provider.PropertyTypeInt,
+							Description: "Command exit code",
+						},
+						"command": {
+							Type:        provider.PropertyTypeString,
+							Description: "The full command that was executed",
+						},
 					},
-					"stderr": {
-						Type:        provider.PropertyTypeString,
-						Description: "Standard error output from the command",
+				},
+				provider.CapabilityTransform: {
+					Properties: map[string]provider.PropertyDefinition{
+						"stdout": {
+							Type:        provider.PropertyTypeString,
+							Description: "Standard output from the command",
+						},
+						"stderr": {
+							Type:        provider.PropertyTypeString,
+							Description: "Standard error output from the command",
+						},
+						"exitCode": {
+							Type:        provider.PropertyTypeInt,
+							Description: "Command exit code",
+						},
+						"command": {
+							Type:        provider.PropertyTypeString,
+							Description: "The full command that was executed",
+						},
 					},
-					"exitCode": {
-						Type:        provider.PropertyTypeInt,
-						Description: "Command exit code",
-					},
-					"success": {
-						Type:        provider.PropertyTypeBool,
-						Description: "Whether the command succeeded (exit code 0)",
-					},
-					"command": {
-						Type:        provider.PropertyTypeString,
-						Description: "The full command that was executed",
+				},
+				provider.CapabilityAction: {
+					Properties: map[string]provider.PropertyDefinition{
+						"success": {
+							Type:        provider.PropertyTypeBool,
+							Description: "Whether the command succeeded (exit code 0)",
+						},
+						"stdout": {
+							Type:        provider.PropertyTypeString,
+							Description: "Standard output from the command",
+						},
+						"stderr": {
+							Type:        provider.PropertyTypeString,
+							Description: "Standard error output from the command",
+						},
+						"exitCode": {
+							Type:        provider.PropertyTypeInt,
+							Description: "Command exit code",
+						},
+						"command": {
+							Type:        provider.PropertyTypeString,
+							Description: "The full command that was executed",
+						},
 					},
 				},
 			},
@@ -169,20 +216,36 @@ func (p *ExecProvider) Descriptor() *provider.Descriptor {
 }
 
 // Execute performs the command execution.
-//
-//nolint:revive // ctx required by Provider interface
-func (p *ExecProvider) Execute(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
+func (p *ExecProvider) Execute(ctx context.Context, input any) (*provider.Output, error) {
+	lgr := logger.FromContext(ctx)
+
+	inputs, ok := input.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%s: expected map[string]any, got %T", ProviderName, input)
+	}
 	command, ok := inputs["command"].(string)
 	if !ok || command == "" {
-		return nil, fmt.Errorf("command is required and must be a non-empty string")
+		return nil, fmt.Errorf("%s: command is required and must be a non-empty string", ProviderName)
 	}
+
+	lgr.V(1).Info("executing provider", "provider", ProviderName, "command", command)
 
 	// Check for dry-run mode
 	if dryRun := provider.DryRunFromContext(ctx); dryRun {
-		return p.executeDryRun(command, inputs)
+		output, err := p.executeDryRun(command, inputs)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", ProviderName, err)
+		}
+		lgr.V(1).Info("provider completed (dry-run)", "provider", ProviderName)
+		return output, nil
 	}
 
-	return p.executeCommand(ctx, command, inputs)
+	output, err := p.executeCommand(ctx, command, inputs)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", ProviderName, err)
+	}
+	lgr.V(1).Info("provider completed", "provider", ProviderName)
+	return output, nil
 }
 
 func (p *ExecProvider) executeCommand(ctx context.Context, command string, inputs map[string]any) (*provider.Output, error) {
@@ -309,6 +372,7 @@ func (p *ExecProvider) executeCommand(ctx context.Context, command string, input
 	}, nil
 }
 
+//nolint:unparam // Error return kept for consistent interface - may return errors in future
 func (p *ExecProvider) executeDryRun(command string, inputs map[string]any) (*provider.Output, error) {
 	// Build full command string
 	fullCmd := command

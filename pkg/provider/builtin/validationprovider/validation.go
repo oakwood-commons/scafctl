@@ -6,10 +6,13 @@ import (
 	"regexp"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/google/cel-go/cel"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 )
+
+// ProviderName is the name of this provider.
+const ProviderName = "validation"
 
 // ValidationProvider provides validation operations using regex patterns and CEL expressions.
 type ValidationProvider struct {
@@ -23,12 +26,13 @@ func NewValidationProvider() *ValidationProvider {
 
 	return &ValidationProvider{
 		descriptor: &provider.Descriptor{
-			Name:        "validation",
-			DisplayName: "Validation Provider",
-			Description: "Provider for validation using regex patterns (match/notMatch) and CEL expressions",
-			APIVersion:  "v1",
-			Version:     version,
-			Category:    "validation",
+			Name:         "validation",
+			DisplayName:  "Validation Provider",
+			Description:  "Provider for validation using regex patterns (match/notMatch) and CEL expressions",
+			APIVersion:   "v1",
+			Version:      version,
+			Category:     "validation",
+			MockBehavior: "Returns validation result (same behavior in dry-run as validation is side-effect free)",
 			Capabilities: []provider.Capability{
 				provider.CapabilityValidation,
 				provider.CapabilityTransform,
@@ -58,21 +62,46 @@ func NewValidationProvider() *ValidationProvider {
 					"expression": {
 						Type:        provider.PropertyTypeString,
 						Required:    false,
-						Description: "CEL expression that must evaluate to true (has access to __self)",
-						Example:     "__self in [\"dev\", \"staging\", \"prod\"]",
+						Description: "CEL expression that must evaluate to true (has access to __self for the value being validated and _ for resolver data)",
+						Example:     "__self in _.allowedEnvironments",
+						MaxLength:   &maxPatternLength,
+					},
+					"message": {
+						Type:        provider.PropertyTypeString,
+						Required:    false,
+						Description: "Custom error message to display when validation fails",
+						Example:     "Value must be a valid email address",
 						MaxLength:   &maxPatternLength,
 					},
 				},
 			},
-			OutputSchema: provider.SchemaDefinition{
-				Properties: map[string]provider.PropertyDefinition{
-					"valid": {
-						Type:        provider.PropertyTypeBool,
-						Description: "Whether the value passed validation",
+			OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
+				provider.CapabilityValidation: {
+					Properties: map[string]provider.PropertyDefinition{
+						"valid": {
+							Type:        provider.PropertyTypeBool,
+							Description: "Whether the value passed validation",
+						},
+						"errors": {
+							Type:        provider.PropertyTypeArray,
+							Description: "Validation error messages",
+						},
+						"details": {
+							Type:        provider.PropertyTypeString,
+							Description: "Details about validation failure (if any)",
+						},
 					},
-					"details": {
-						Type:        provider.PropertyTypeString,
-						Description: "Details about validation failure (if any)",
+				},
+				provider.CapabilityTransform: {
+					Properties: map[string]provider.PropertyDefinition{
+						"valid": {
+							Type:        provider.PropertyTypeBool,
+							Description: "Whether the value passed validation",
+						},
+						"details": {
+							Type:        provider.PropertyTypeString,
+							Description: "Details about validation failure (if any)",
+						},
 					},
 				},
 			},
@@ -134,22 +163,47 @@ func (p *ValidationProvider) Descriptor() *provider.Descriptor {
 }
 
 // Execute performs validation.
-//
-//nolint:revive // ctx required by Provider interface
-func (p *ValidationProvider) Execute(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
-	// Get the value to validate
-	value, ok := inputs["value"].(string)
+func (p *ValidationProvider) Execute(ctx context.Context, input any) (*provider.Output, error) {
+	lgr := logger.FromContext(ctx)
+
+	inputs, ok := input.(map[string]any)
 	if !ok {
-		// Check for __self (from transform context)
-		if selfVal, exists := inputs["__self"]; exists {
-			if selfStr, ok := selfVal.(string); ok {
-				value = selfStr
-			} else {
-				return nil, fmt.Errorf("__self must be a string, got %T", selfVal)
-			}
-		} else {
-			return nil, fmt.Errorf("either 'value' or '__self' is required")
+		return nil, fmt.Errorf("%s: expected map[string]any, got %T", ProviderName, input)
+	}
+
+	lgr.V(1).Info("executing provider", "provider", ProviderName)
+
+	// Get resolver data from context
+	resolverData, _ := provider.ResolverContextFromContext(ctx)
+
+	// Get the value to validate - can be any type for expression validation
+	var valueAny any
+	var valueStr string
+	haveStringValue := false
+
+	// First check for explicit value input
+	if v, exists := inputs["value"]; exists {
+		valueAny = v
+		if s, ok := v.(string); ok {
+			valueStr = s
+			haveStringValue = true
 		}
+	} else if v, exists := inputs["__self"]; exists {
+		// Check for __self in inputs
+		valueAny = v
+		if s, ok := v.(string); ok {
+			valueStr = s
+			haveStringValue = true
+		}
+	} else if v, exists := resolverData["__self"]; exists {
+		// Check resolver context for __self (set by executor during validate phase)
+		valueAny = v
+		if s, ok := v.(string); ok {
+			valueStr = s
+			haveStringValue = true
+		}
+	} else {
+		return nil, fmt.Errorf("%s: either 'value' or '__self' is required", ProviderName)
 	}
 
 	// Get validation criteria
@@ -159,95 +213,79 @@ func (p *ValidationProvider) Execute(ctx context.Context, inputs map[string]any)
 
 	// At least one validation criterion is required
 	if matchPattern == "" && notMatchPattern == "" && expression == "" {
-		return nil, fmt.Errorf("at least one of 'match', 'notMatch', or 'expression' is required")
+		return nil, fmt.Errorf("%s: at least one of 'match', 'notMatch', or 'expression' is required", ProviderName)
 	}
 
-	// Validate with match pattern
+	// Validate with match pattern (requires string value)
 	if matchPattern != "" {
-		matched, err := regexp.MatchString(matchPattern, value)
+		if !haveStringValue {
+			return nil, fmt.Errorf("%s: 'match' pattern requires a string value, got %T", ProviderName, valueAny)
+		}
+		matched, err := regexp.MatchString(matchPattern, valueStr)
 		if err != nil {
-			return nil, fmt.Errorf("invalid match pattern: %w", err)
+			return nil, fmt.Errorf("%s: invalid match pattern: %w", ProviderName, err)
 		}
 		if !matched {
-			return &provider.Output{
-				Data: map[string]any{
-					"valid":   false,
-					"details": fmt.Sprintf("value does not match pattern: %s", matchPattern),
-				},
-			}, nil
+			// Get custom message from inputs if provided
+			message := fmt.Sprintf("value does not match pattern: %s", matchPattern)
+			if customMsg, ok := inputs["message"].(string); ok && customMsg != "" {
+				message = customMsg
+			}
+			return nil, fmt.Errorf("%s: %s", ProviderName, message)
 		}
 	}
 
-	// Validate with notMatch pattern
+	// Validate with notMatch pattern (requires string value)
 	if notMatchPattern != "" {
-		matched, err := regexp.MatchString(notMatchPattern, value)
+		if !haveStringValue {
+			return nil, fmt.Errorf("%s: 'notMatch' pattern requires a string value, got %T", ProviderName, valueAny)
+		}
+		matched, err := regexp.MatchString(notMatchPattern, valueStr)
 		if err != nil {
-			return nil, fmt.Errorf("invalid notMatch pattern: %w", err)
+			return nil, fmt.Errorf("%s: invalid notMatch pattern: %w", ProviderName, err)
 		}
 		if matched {
-			return &provider.Output{
-				Data: map[string]any{
-					"valid":   false,
-					"details": fmt.Sprintf("value matches forbidden pattern: %s", notMatchPattern),
-				},
-			}, nil
+			// Get custom message from inputs if provided
+			message := fmt.Sprintf("value matches forbidden pattern: %s", notMatchPattern)
+			if customMsg, ok := inputs["message"].(string); ok && customMsg != "" {
+				message = customMsg
+			}
+			return nil, fmt.Errorf("%s: %s", ProviderName, message)
 		}
 	}
 
-	// Validate with CEL expression
+	// Validate with CEL expression (works with any type)
 	if expression != "" {
-		valid, err := p.evaluateExpression(expression, value)
+		// Use EvaluateExpression with resolver data under _ and value as __self
+		result, err := celexp.EvaluateExpression(ctx, expression, resolverData, map[string]any{
+			celexp.VarSelf: valueAny,
+		})
 		if err != nil {
-			return nil, fmt.Errorf("expression evaluation failed: %w", err)
+			return nil, fmt.Errorf("%s: expression evaluation failed: %w", ProviderName, err)
 		}
+
+		// Check result type
+		valid, ok := result.(bool)
+		if !ok {
+			return nil, fmt.Errorf("%s: expression must return boolean, got %T", ProviderName, result)
+		}
+
 		if !valid {
-			return &provider.Output{
-				Data: map[string]any{
-					"valid":   false,
-					"details": fmt.Sprintf("expression evaluated to false: %s", expression),
-				},
-			}, nil
+			// Get custom message from inputs if provided
+			message := fmt.Sprintf("expression evaluated to false: %s", expression)
+			if customMsg, ok := inputs["message"].(string); ok && customMsg != "" {
+				message = customMsg
+			}
+			return nil, fmt.Errorf("%s: %s", ProviderName, message)
 		}
 	}
 
 	// All validations passed
+	lgr.V(1).Info("provider completed", "provider", ProviderName, "valid", true)
 	return &provider.Output{
 		Data: map[string]any{
 			"valid":   true,
 			"details": "all validations passed",
 		},
 	}, nil
-}
-
-func (p *ValidationProvider) evaluateExpression(expression, value string) (bool, error) {
-	// Create context with __self
-	variables := map[string]any{
-		"__self": value,
-	}
-
-	// Create environment options
-	envOpts := []cel.EnvOption{
-		cel.Variable("__self", cel.StringType),
-	}
-
-	// Compile the expression
-	expr := celexp.Expression(expression)
-	compiled, err := expr.Compile(envOpts)
-	if err != nil {
-		return false, fmt.Errorf("failed to compile expression: %w", err)
-	}
-
-	// Evaluate
-	result, err := compiled.Eval(variables)
-	if err != nil {
-		return false, fmt.Errorf("failed to evaluate expression: %w", err)
-	}
-
-	// Check result type
-	boolResult, ok := result.(bool)
-	if !ok {
-		return false, fmt.Errorf("expression must return boolean, got %T", result)
-	}
-
-	return boolResult, nil
 }

@@ -5,11 +5,6 @@
 
 ## Architecture & Key Components
 
-### CLI & Terminal Libraries
-- **cobra** - Command structure and flag parsing
-- **lipgloss** - Terminal styling (colors, borders, layouts)
-- **bubbletea** - Interactive TUI components (planned for forms/menus)
-
 ### Logging Pattern
 Uses **logr** interface with **zapr** (zap adapter) for structured logging:
 - `logger.Get(verbosity)` creates loggers with verbosity levels (negative numbers, e.g., `-1` for debug)
@@ -44,12 +39,14 @@ golangci-lint run --fix          # Auto-fix issues
 
 ## Coding Conventions
 
+**Note**: This application is not in production, large or breaking changes are fine. Please make a note when doing so.
+
 ### Commit Messages
 - Use conventional commits https://www.conventionalcommits.org/en/v1.0.0/#specification when creating a commit message
 
 ### Error Handling
 - Return errors, don't panic (except in main initialization)
-- Use `fmt.Errorf("context: %w", err)` for error wrapping
+- Use `fmt.Errorf("context: %w", err)` for error wrapping or `errors.New("message")` for new errors
 - CLI errors write to stderr and exit non-zero
 
 ### Go Style Preferences
@@ -67,6 +64,12 @@ golangci-lint run --fix          # Auto-fix issues
 ### HTTP Client (`pkg/httpc/`)
 Custom HTTP client.
 - See `pkg/httpc/README.md` for detailed usage
+
+### Parsing Key-Value Flags (`pkg/flags/`)
+
+- Use `flags.ParseKeyValueCSV([]string)` to parse key-value pairs with CSV support
+- Supports URI schemes: `json://`, `yaml://`, `base64://`, `http://`, `https://`, `file://`
+- See `pkg/flags/README.md` for detailed documentation
 
 ### Dependency Injection
 - Use functional options pattern for constructors (e.g., `NewGetter(...Option)`)
@@ -88,6 +91,15 @@ Custom HTTP client.
 Struct tags should always be added to all structs for JSON and YAML serialization, even if not immediately needed
 
 Use https://huma.rocks/features/request-validation/#validation-tags for additional struct tags. Minimally include `doc` for all fields. For scalar fields (strings, integers, booleans), include appropriate validation tags such as `example` where helpful. For string fields, also include `maxLength`, `example`, `pattern` and `patternDescription`. For integer fields, include `maximum` and `example`. For array/slice fields, include `maxItems` but do not supply the `example` tag. Do not supply the `example` tag to objects, arrays or maps. If any other tags are applicable, include those as well.
+
+## CEL
+
+- Use the `EvaluateExpression` function in `pkg/celexp/context.go` to evaluate CEL expressions
+
+### CEL provider
+
+- When providing a CEL expression to the CEL provider, always use the literal struct field for the `expression` property. The CEL provider supports both `expression` and `expr` properties, but best practice is to use `expression` directly. if `expr` is used it will need to result in a valid CEL expression string.
+
 
 ## Important Fields
 

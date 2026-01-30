@@ -3,7 +3,9 @@ package execprovider
 import (
 	"context"
 	"runtime"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/stretchr/testify/assert"
@@ -36,12 +38,12 @@ func TestNewExecProvider(t *testing.T) {
 	assert.Equal(t, provider.PropertyTypeBool, desc.Schema.Properties["shell"].Type)
 
 	// Verify output schema
-	assert.NotNil(t, desc.OutputSchema.Properties)
-	assert.Equal(t, provider.PropertyTypeString, desc.OutputSchema.Properties["stdout"].Type)
-	assert.Equal(t, provider.PropertyTypeString, desc.OutputSchema.Properties["stderr"].Type)
-	assert.Equal(t, provider.PropertyTypeInt, desc.OutputSchema.Properties["exitCode"].Type)
-	assert.Equal(t, provider.PropertyTypeBool, desc.OutputSchema.Properties["success"].Type)
-	assert.Equal(t, provider.PropertyTypeString, desc.OutputSchema.Properties["command"].Type)
+	assert.NotNil(t, desc.OutputSchemas[provider.CapabilityAction].Properties)
+	assert.Equal(t, provider.PropertyTypeString, desc.OutputSchemas[provider.CapabilityAction].Properties["stdout"].Type)
+	assert.Equal(t, provider.PropertyTypeString, desc.OutputSchemas[provider.CapabilityAction].Properties["stderr"].Type)
+	assert.Equal(t, provider.PropertyTypeInt, desc.OutputSchemas[provider.CapabilityAction].Properties["exitCode"].Type)
+	assert.Equal(t, provider.PropertyTypeBool, desc.OutputSchemas[provider.CapabilityAction].Properties["success"].Type)
+	assert.Equal(t, provider.PropertyTypeString, desc.OutputSchemas[provider.CapabilityAction].Properties["command"].Type)
 }
 
 func TestExecProvider_Execute_SimpleCommand(t *testing.T) {
@@ -409,4 +411,63 @@ func TestExecProvider_Execute_ArgsWithStrings(t *testing.T) {
 	assert.Equal(t, "hello world\n", data["stdout"])
 	assert.Equal(t, 0, data["exitCode"])
 	assert.Equal(t, true, data["success"])
+}
+
+func TestExecProvider_Execute_ContextCancellation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping context cancellation test on Windows")
+	}
+
+	p := NewExecProvider()
+
+	// Use a context with timeout as a safety net, plus manual cancel
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// Use direct sleep command (not via sh -c) for more reliable signal handling.
+	// When using sh -c, the sleep process is a child of sh, and killing sh
+	// doesn't always immediately propagate to the sleep child on all systems.
+	inputs := map[string]any{
+		"command": "sleep",
+		"args":    []any{"30"}, // Long sleep, but we'll cancel quickly
+	}
+
+	// Cancel after a short delay
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	output, err := p.Execute(ctx, inputs)
+	elapsed := time.Since(start)
+
+	// When context is cancelled, exec.CommandContext kills the process
+	// This results in either:
+	// 1. An error containing "context" (canceled or deadline exceeded)
+	// 2. An error containing "signal: killed"
+	// 3. A non-zero exit code with success=false
+	if err != nil {
+		// Direct error (expected for context cancellation)
+		errStr := err.Error()
+		assert.True(t, strings.Contains(errStr, "context") || strings.Contains(errStr, "signal"),
+			"Expected context or signal error, got: %s", errStr)
+		assert.Nil(t, output)
+	} else {
+		// Process was killed by signal, returned exit info
+		require.NotNil(t, output)
+		data, ok := output.Data.(map[string]any)
+		require.True(t, ok)
+		// Should have non-zero exit code or success=false
+		exitCode := data["exitCode"].(int)
+		success := data["success"].(bool)
+		// Either the exit code is non-zero (killed) or success is false
+		if exitCode == 0 {
+			assert.False(t, success, "Expected success=false when process was killed")
+		}
+	}
+
+	// Verify command was killed quickly - use a generous timeout for CI environments
+	// which can have variable performance. The key is that it's much less than 30s.
+	assert.Less(t, elapsed, 10*time.Second, "Context cancellation should kill the process promptly")
 }

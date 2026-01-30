@@ -10,9 +10,13 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/ptrs"
 )
+
+// ProviderName is the name of this provider.
+const ProviderName = "git"
 
 // GitProvider provides Git repository operations.
 type GitProvider struct {
@@ -24,11 +28,12 @@ func NewGitProvider() *GitProvider {
 	version, _ := semver.NewVersion("1.0.0")
 	return &GitProvider{
 		descriptor: &provider.Descriptor{
-			Name:        "git",
-			DisplayName: "Git Provider",
-			APIVersion:  "v1",
-			Version:     version,
-			Description: "Performs Git version control operations on local and remote repositories using the local git executable",
+			Name:         "git",
+			DisplayName:  "Git Provider",
+			APIVersion:   "v1",
+			Version:      version,
+			Description:  "Performs Git version control operations on local and remote repositories using the local git executable",
+			MockBehavior: "Returns mock git information without accessing actual git repository",
 			Capabilities: []provider.Capability{
 				provider.CapabilityAction,
 				provider.CapabilityFrom,
@@ -123,27 +128,45 @@ func NewGitProvider() *GitProvider {
 					},
 				},
 			},
-			OutputSchema: provider.SchemaDefinition{
-				Properties: map[string]provider.PropertyDefinition{
-					"success": {
-						Type:        provider.PropertyTypeBool,
-						Description: "Whether the operation succeeded",
+			OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
+				provider.CapabilityFrom: {
+					Properties: map[string]provider.PropertyDefinition{
+						"output": {
+							Type:        provider.PropertyTypeString,
+							Description: "Command output",
+						},
+						"operation": {
+							Type:        provider.PropertyTypeString,
+							Description: "The operation that was performed",
+						},
+						"path": {
+							Type:        provider.PropertyTypeString,
+							Description: "Repository path used",
+						},
 					},
-					"output": {
-						Type:        provider.PropertyTypeString,
-						Description: "Command output",
-					},
-					"error": {
-						Type:        provider.PropertyTypeString,
-						Description: "Error message if operation failed",
-					},
-					"operation": {
-						Type:        provider.PropertyTypeString,
-						Description: "The operation that was performed",
-					},
-					"path": {
-						Type:        provider.PropertyTypeString,
-						Description: "Repository path used",
+				},
+				provider.CapabilityAction: {
+					Properties: map[string]provider.PropertyDefinition{
+						"success": {
+							Type:        provider.PropertyTypeBool,
+							Description: "Whether the operation succeeded",
+						},
+						"output": {
+							Type:        provider.PropertyTypeString,
+							Description: "Command output",
+						},
+						"error": {
+							Type:        provider.PropertyTypeString,
+							Description: "Error message if operation failed",
+						},
+						"operation": {
+							Type:        provider.PropertyTypeString,
+							Description: "The operation that was performed",
+						},
+						"path": {
+							Type:        provider.PropertyTypeString,
+							Description: "Repository path used",
+						},
 					},
 				},
 			},
@@ -216,19 +239,36 @@ func (p *GitProvider) Descriptor() *provider.Descriptor {
 }
 
 // Execute performs the Git operation.
-//
-//nolint:revive // ctx required by Provider interface
-func (p *GitProvider) Execute(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
+func (p *GitProvider) Execute(ctx context.Context, input any) (*provider.Output, error) {
+	lgr := logger.FromContext(ctx)
+
+	inputs, ok := input.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%s: expected map[string]any, got %T", ProviderName, input)
+	}
 	operation, ok := inputs["operation"].(string)
 	if !ok || operation == "" {
-		return nil, fmt.Errorf("operation is required and must be a non-empty string")
+		return nil, fmt.Errorf("%s: operation is required and must be a non-empty string", ProviderName)
 	}
+
+	lgr.V(1).Info("executing provider", "provider", ProviderName, "operation", operation)
 
 	if dryRun := provider.DryRunFromContext(ctx); dryRun {
-		return p.executeDryRun(operation, inputs)
+		result, err := p.executeDryRun(operation, inputs)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", ProviderName, err)
+		}
+		lgr.V(1).Info("provider completed", "provider", ProviderName)
+		return result, nil
 	}
 
-	return p.executeGitOperation(ctx, operation, inputs)
+	result, err := p.executeGitOperation(ctx, operation, inputs)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", ProviderName, err)
+	}
+
+	lgr.V(1).Info("provider completed", "provider", ProviderName)
+	return result, nil
 }
 
 func (p *GitProvider) executeGitOperation(ctx context.Context, operation string, inputs map[string]any) (*provider.Output, error) {
@@ -512,6 +552,7 @@ func (p *GitProvider) runGitCommand(ctx context.Context, workDir string, args []
 	}, nil
 }
 
+//nolint:unparam // Error return kept for consistent interface - may return errors in future
 func (p *GitProvider) executeDryRun(operation string, inputs map[string]any) (*provider.Output, error) {
 	message := fmt.Sprintf("Would execute git %s", operation)
 

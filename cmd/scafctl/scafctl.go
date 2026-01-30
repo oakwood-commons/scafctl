@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/celexp/env"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl"
 	"github.com/oakwood-commons/scafctl/pkg/profiler"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -30,6 +32,14 @@ func main() {
 }
 
 func run() error {
+	// Register env.New as the environment factory for celexp package.
+	// This allows celexp to use environments with all extensions without circular dependency.
+	celexp.SetEnvFactory(env.New)
+
+	// Register env.GlobalCache as the cache factory for celexp package.
+	// This allows celexp to automatically use the global cache when no cache is specified.
+	celexp.SetCacheFactory(env.GlobalCache)
+
 	cli := scafctl.Root()
 	defer func() {
 		// Profiler shutdown errors are logged but not treated as fatal,

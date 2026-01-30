@@ -1,0 +1,36 @@
+{
+  "metadata": {
+    "solution": "error-handling-snapshot",
+    "version": "1.0.0",
+    "scafctlVersion": "test",
+    "timestamp": "2024-01-01T00:00:00Z",
+    "status": "failed",
+    "totalDuration": "50ms"
+  },
+  "resolvers": {
+    "success": {
+      "status": "success",
+      "value": "success-value",
+      "duration": "10ms",
+      "phase": 1,
+      "providerCalls": 1
+    },
+    "fails": {
+      "status": "failed",
+      "value": null,
+      "error": "expression evaluation failed",
+      "duration": "5ms",
+      "phase": 1,
+      "providerCalls": 1
+    },
+    "after_failure": {
+      "status": "success",
+      "value": "ran-after-failure",
+      "duration": "10ms",
+      "phase": 1,
+      "providerCalls": 1
+    }
+  },
+  "parameters": {},
+  "phases": []
+}

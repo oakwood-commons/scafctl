@@ -1,0 +1,145 @@
+# Conditional Execution Example
+# Demonstrates when conditions for conditional action execution.
+#
+# Run with different environments:
+#   scafctl run workflow -f examples/actions/conditional-execution.yaml --set environment=prod
+#   scafctl run workflow -f examples/actions/conditional-execution.yaml --set environment=staging
+#
+# Run: scafctl run workflow -f examples/actions/conditional-execution.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: conditional-execution
+  version: 1.0.0
+  description: When conditions for conditional action execution
+
+spec:
+  resolvers:
+    environment:
+      description: Target environment
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "staging"
+    
+    feature_flags:
+      description: Feature flags configuration
+      type: any
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                enable_canary: true
+                enable_blue_green: false
+                debug_mode: true
+    
+    approval_required:
+      description: Whether deployment requires approval
+      type: boolean
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: true
+
+  workflow:
+    actions:
+      # Always runs
+      setup:
+        description: Common setup
+        displayName: Setup
+        provider: exec
+        inputs:
+          shell: true
+          command:
+            expr: "'echo Setting up for ' + _.environment + ' environment'"
+
+      # Only runs in production
+      prod-approval:
+        description: Request production approval
+        displayName: Production Approval
+        provider: exec
+        dependsOn:
+          - setup
+        # Condition: only run if environment is prod AND approval is required
+        when:
+          expr: "_.environment == 'prod' && _.approval_required"
+        inputs:
+          shell: true
+          command: "echo 'Requesting production deployment approval...'"
+
+      # Only runs in staging
+      staging-deploy:
+        description: Deploy to staging
+        displayName: Staging Deploy
+        provider: exec
+        dependsOn:
+          - setup
+        # Condition: only run if environment is staging
+        when:
+          expr: "_.environment == 'staging'"
+        inputs:
+          shell: true
+          command: "echo 'Deploying to staging environment...'"
+
+      # Only runs when canary is enabled
+      canary-deploy:
+        description: Deploy canary version
+        displayName: Canary Deploy
+        provider: exec
+        dependsOn:
+          - setup
+        # Condition: canary feature flag is enabled
+        when:
+          expr: "_.feature_flags.enable_canary"
+        inputs:
+          shell: true
+          command: "echo 'Deploying canary version...'"
+
+      # Only runs when blue-green is enabled
+      blue-green-deploy:
+        description: Blue-green deployment
+        displayName: Blue-Green Deploy
+        provider: exec
+        dependsOn:
+          - setup
+        # Condition: blue-green feature flag is enabled
+        when:
+          expr: "_.feature_flags.enable_blue_green"
+        inputs:
+          shell: true
+          command: "echo 'Performing blue-green deployment...'"
+
+      # Only runs in debug mode
+      debug-logs:
+        description: Enable verbose debug logging
+        displayName: Debug Logs
+        provider: exec
+        dependsOn:
+          - setup
+        # Condition: debug mode is enabled
+        when:
+          expr: "_.feature_flags.debug_mode == true"
+        inputs:
+          shell: true
+          command: "echo 'Debug logging enabled...'"
+
+      # Complex condition with multiple checks
+      full-deploy:
+        description: Full production deployment
+        displayName: Full Deploy
+        provider: exec
+        dependsOn:
+          - setup
+          - prod-approval
+        # Complex condition: prod env, approval not required, or staging
+        when:
+          expr: "_.environment == 'prod' || _.environment == 'staging'"
+        inputs:
+          shell: true
+          command:
+            expr: "'echo Full deployment to ' + _.environment"

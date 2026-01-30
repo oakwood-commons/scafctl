@@ -36,7 +36,7 @@ message ProviderDescriptor {
   string category = 5;
   repeated string capabilities = 6;
   Schema schema = 7;
-  Schema output_schema = 8;
+  map<string, Schema> output_schemas = 8;  // key is capability string (from, transform, validation, authentication, action)
 }
 
 message Schema {

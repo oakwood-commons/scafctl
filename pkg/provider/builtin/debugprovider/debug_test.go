@@ -59,7 +59,7 @@ func TestDebugProvider_Execute_WithExpression(t *testing.T) {
 	ctx = provider.WithResolverContext(ctx, resolverData)
 
 	inputs := map[string]any{
-		"expression": "user.name",
+		"expression": "_.user.name",
 	}
 
 	output, err := p.Execute(ctx, inputs)
@@ -106,7 +106,7 @@ func TestDebugProvider_Execute_DryRun(t *testing.T) {
 	ctx = provider.WithDryRun(ctx, true)
 
 	inputs := map[string]any{
-		"expression": "user.name",
+		"expression": "_.user.name",
 	}
 
 	output, err := p.Execute(ctx, inputs)

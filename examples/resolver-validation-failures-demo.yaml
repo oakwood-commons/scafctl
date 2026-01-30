@@ -1,0 +1,361 @@
+# Resolver Validation Failures Demo
+# Demonstrates various validation failure scenarios for testing and learning.
+#
+# Run: scafctl run solution -f resolver-validation-failures-demo.yaml
+#
+# This demo intentionally produces validation errors to show how scafctl
+# reports different types of validation failures.
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: resolver-validation-failures-demo
+  version: 1.0.0
+  description: Demo showing various validation failure scenarios
+
+spec:
+  resolvers:
+    # ============================================================================
+    # REGEX PATTERN VALIDATION FAILURES
+    # ============================================================================
+
+    # 1. Invalid email format
+    invalid_email:
+      description: Email address that doesn't match the required pattern
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "not-a-valid-email"
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              match: "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$"
+              message: "Invalid email format - must be a valid email address"
+
+    # 2. Invalid URL format
+    invalid_url:
+      description: URL that doesn't match the required pattern
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "ftp://invalid-protocol.com"
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              match: "^https?://"
+              message: "URL must start with http:// or https://"
+
+    # 3. Invalid version format
+    invalid_version:
+      description: Version string that doesn't follow semver
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "1.2.3.4.5"
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              match: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+              message: "Version must follow semantic versioning (X.Y.Z)"
+
+    # 4. Invalid environment value
+    invalid_environment:
+      description: Environment value not in allowed list
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "testing"
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              match: "^(development|staging|production)$"
+              message: "Environment must be development, staging, or production"
+
+    # ============================================================================
+    # CEL EXPRESSION VALIDATION FAILURES
+    # ============================================================================
+
+    # 5. Port number out of range
+    invalid_port:
+      description: Port number outside valid range
+      type: int
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: 70000
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: "__self >= 1 && __self <= 65535"
+              message: "Port must be between 1 and 65535"
+
+    # 6. Replica count too high
+    invalid_replica_count:
+      description: Replica count exceeding maximum
+      type: int
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: 500
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: "__self >= 1 && __self <= 100"
+              message: "Replica count must be between 1 and 100"
+
+    # 7. Negative timeout
+    negative_timeout:
+      description: Timeout value that is negative
+      type: int
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: -30
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: "__self > 0"
+              message: "Timeout must be a positive number"
+
+    # 8. String too long
+    string_too_long:
+      description: String exceeding maximum length
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "this-is-a-very-long-hostname-that-exceeds-the-maximum-allowed-length-for-dns-names-which-is-sixty-three-characters-per-label-and-two-hundred-fifty-three-total"
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: "size(__self) <= 63"
+              message: "Hostname label must not exceed 63 characters"
+
+    # 9. Empty string not allowed
+    empty_string:
+      description: Empty string when value is required
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: ""
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: "size(__self) > 0"
+              message: "Value cannot be empty"
+
+    # 10. Array too small
+    array_too_small:
+      description: Array with fewer elements than required
+      type: any
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - "item1"
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: "size(__self) >= 3"
+              message: "At least 3 items are required"
+
+    # ============================================================================
+    # COMPLEX VALIDATION FAILURES
+    # ============================================================================
+
+    # 11. Invalid IP address format
+    invalid_ip:
+      description: IP address with invalid octets
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "192.168.1.256"
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              match: "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+              message: "Invalid IPv4 address format"
+
+    # 12. Invalid CIDR notation
+    invalid_cidr:
+      description: CIDR with invalid prefix length
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "10.0.0.0/33"
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              match: "^([0-9]{1,3}\\.){3}[0-9]{1,3}/([0-9]|[1-2][0-9]|3[0-2])$"
+              message: "Invalid CIDR notation - prefix must be between 0 and 32"
+
+    # 13. Invalid Kubernetes resource name
+    invalid_k8s_name:
+      description: Kubernetes resource name with invalid characters
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "My_Invalid_Name"
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              match: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+              message: "Kubernetes resource name must be lowercase alphanumeric with hyphens, starting and ending with alphanumeric"
+
+    # 14. Memory limit below minimum
+    memory_below_minimum:
+      description: Memory allocation below required minimum
+      type: int
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: 64
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: "__self >= 256"
+              message: "Memory allocation must be at least 256 MB"
+
+    # 15. CPU limit exceeds maximum
+    cpu_exceeds_maximum:
+      description: CPU allocation exceeding maximum allowed
+      type: int
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: 32
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: "__self <= 16"
+              message: "CPU allocation cannot exceed 16 cores"
+
+    # ============================================================================
+    # BOOLEAN AND CONDITIONAL FAILURES
+    # ============================================================================
+
+    # 16. Required feature disabled
+    required_feature_disabled:
+      description: A required feature flag that must be enabled
+      type: bool
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: false
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: "__self == true"
+              message: "This feature must be enabled for production deployments"
+
+    # 17. Mutually exclusive options conflict
+    conflicting_options:
+      description: Configuration with conflicting options
+      type: any
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                enableSSL: true
+                enablePlaintext: true
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: "!(__self.enableSSL && __self.enablePlaintext)"
+              message: "Cannot enable both SSL and plaintext modes simultaneously"
+
+    # 18. Missing required field in object
+    missing_required_field:
+      description: Object missing a required field
+      type: any
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                name: "my-service"
+                # Missing 'port' field
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: "has(__self.name) && has(__self.port)"
+              message: "Both 'name' and 'port' fields are required"
+
+    # ============================================================================
+    # DATE/TIME VALIDATION FAILURES
+    # ============================================================================
+
+    # 19. Invalid date format
+    invalid_date_format:
+      description: Date string not in ISO 8601 format
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "01/27/2026"
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              match: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+              message: "Date must be in ISO 8601 format (YYYY-MM-DD)"
+
+    # 20. Expired timestamp
+    expired_timestamp:
+      description: Timestamp that has already passed
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "2020-01-01T00:00:00Z"
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: "__self > '2026-01-01T00:00:00Z'"
+              message: "Timestamp must be in the future (after 2026-01-01)"

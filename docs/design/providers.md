@@ -83,8 +83,8 @@ Provider Invocation Request
    (provider-specific logic based on execution mode and dry-run flag)
         |
         v
-[4. Output Schema Validation] (if OutputSchema defined)
-   (validate Output.Data against Descriptor.OutputSchema)
+[4. Output Schema Validation]
+   (validate Output.Data against Descriptor.OutputSchemas[capability])
         |
         v
 [5. Return Output]
@@ -99,7 +99,7 @@ Provider Invocation Request
 
 3. **Execute** - The provider's `Execute(ctx, input)` method runs with the validated (and optionally decoded) inputs. The provider performs its operation based on the execution mode and dry-run flag from the context. Providers that need access to resolver values retrieve them via `ResolverContextFromContext(ctx)`.
 
-4. **Output Schema Validation** - If the provider defines an `OutputSchema`, scafctl validates the `Output.Data` field against this schema after execution. This ensures both real and mock outputs conform to the declared structure.
+4. **Output Schema Validation** - scafctl validates the `Output.Data` field against the provider's `OutputSchemas` for the current capability. Each capability can define different required output fields. This ensures both real and mock outputs conform to the declared structure for the specific execution context.
 
 5. **Return** - The validated `Output` (containing `Data`, optional `Warnings`, and optional `Metadata`) is returned to the caller (resolver or action orchestrator).
 
@@ -109,6 +109,82 @@ Provider Invocation Request
 - Errors during decode (phase 2) indicate type conversion failures
 - Errors during execute (phase 3) are provider-specific operational errors
 - All errors prevent the provider output from being used in subsequent resolution steps
+
+### Execution Mode Validation
+
+The `Executor` validates execution mode before invoking providers:
+
+1. **Presence Check**: Execution mode must be set in the context via `WithExecutionMode()`
+2. **Capability Check**: The execution mode must match one of the provider's declared capabilities
+
+This validation happens in the `Executor`, not in individual providers. Providers can trust that:
+- The execution mode is valid and matches their capabilities
+- They can retrieve it via `ExecutionModeFromContext(ctx)` if needed for behavior branching
+
+**Error Examples:**
+- `"execution mode not provided in context"` - Caller forgot to set execution mode
+- `"provider 'http' does not support capability 'authentication'"` - Mode doesn't match declared capabilities
+
+**Validation Mode:** Strict (always enforced, not configurable)
+
+---
+
+## Observability & Metrics
+
+Provider execution is instrumented for observability at two levels:
+
+### In-Memory Metrics (CLI Output)
+
+When running with `--show-metrics`, scafctl collects per-provider execution statistics:
+
+```
+Provider Execution Metrics:
+--------------------------------------------------------------------------------
+Provider                    Total  Success  Failure  Avg Duration    Success %
+--------------------------------------------------------------------------------
+cel                             5        5        0          1ms       100.0%
+http                            3        2        1         250ms       66.7%
+static                          2        2        0          0ms       100.0%
+--------------------------------------------------------------------------------
+```
+
+**Tracked metrics per provider:**
+- `ExecutionCount` - Total number of invocations
+- `SuccessCount` - Number of successful executions
+- `FailureCount` - Number of failed executions
+- `TotalDurationNs` - Cumulative execution time
+- `LastExecutionNs` - Timestamp of most recent execution
+
+**Usage:**
+```bash
+scafctl run solution -f solution.yaml --show-metrics
+```
+
+### Prometheus Metrics (Observability)
+
+Provider metrics are also exported as Prometheus metrics for integration with monitoring systems:
+
+**`scafctl_provider_execution_duration_seconds`** (Histogram)
+- Labels: `provider_name`, `status` (success/failure)
+- Tracks execution duration distribution per provider
+
+**`scafctl_provider_execution_total`** (Counter)
+- Labels: `provider_name`, `status` (success/failure)
+- Tracks total invocation count per provider
+
+These metrics are recorded automatically when Prometheus metrics are enabled via `metrics.RegisterMetrics()`.
+
+### Logging
+
+All providers implement structured logging via logr:
+- Execution start/completion logged at V(1) verbosity
+- Error details logged at V(0) verbosity
+- Provider name included in all log messages
+
+**Usage:**
+```bash
+scafctl run solution -f solution.yaml --log-level 1
+```
 
 ---
 
@@ -232,7 +308,7 @@ func (p *APIProvider) Execute(ctx context.Context, input any) (Output, error) {
 
 - Providers must validate the execution mode matches one of their declared capabilities
 - Execution mode determines provider behavior (e.g., read-only vs mutation, data vs boolean return)
-- Mock output (in `Output.Data`) must conform to the same schema as real output (validated by `OutputSchema`)
+- Mock output (in `Output.Data`) must conform to the same schema as real output (validated by `OutputSchemas` for the current capability)
 - Mock execution must be deterministic and predictable
 - Providers that cannot meaningfully mock (e.g., read-only queries) should return representative sample data
 - Side-effect providers must not perform any operations in dry-run mode
@@ -300,14 +376,22 @@ The capability model is designed for extension. Future capabilities may include:
 
 ~~~go
 type Provider interface {
+  // Descriptor returns the provider's metadata, schema, and capabilities.
   Descriptor() *Descriptor
+  
+  // Execute runs the provider logic with resolved inputs.
+  // The input parameter is either:
+  //   - map[string]any if Descriptor().Decode is nil
+  //   - The decoded type if Descriptor().Decode is set and returns a typed struct
+  // Resolver values can be accessed via ResolverContextFromContext(ctx).
+  // Execution mode and dry-run flag are available via ExecutionModeFromContext(ctx) and DryRunFromContext(ctx).
   Execute(ctx context.Context, input any) (*Output, error)
 }
 
 // Output is the standardized return structure for all provider executions.
 // It wraps the actual data along with optional warnings and metadata.
 type Output struct {
-  Data     any            `json:"data" doc:"The actual output data from provider execution (validated against OutputSchema)"`
+  Data     any            `json:"data" doc:"The actual output data from provider execution (validated against OutputSchemas for current capability)"`
   Warnings []string       `json:"warnings,omitempty" doc:"Non-fatal warnings generated during execution" maxItems:"50"`
   Metadata map[string]any `json:"metadata,omitempty" doc:"Optional execution metadata (timing, resource usage, etc.)"`
 }
@@ -335,14 +419,15 @@ func (c Capability) IsValid() bool {
   }
 }
 
-// contextKey is an unexported type for context keys to prevent collisions.
+// Context keys use string type for better debugging and traceability in logs.
 // Using a custom type ensures external packages cannot accidentally use the same key.
-type contextKey int
+type contextKey string
 
 const (
-  executionModeKey   contextKey = iota // Key for Capability execution mode
-  dryRunKey                            // Key for boolean dry-run flag
-  resolverContextKey                   // Key for resolver context map
+  executionModeKey   contextKey = "scafctl.provider.executionMode"   // Key for Capability execution mode
+  dryRunKey          contextKey = "scafctl.provider.dryRun"          // Key for boolean dry-run flag
+  resolverContextKey contextKey = "scafctl.provider.resolverContext" // Key for resolver context map
+  parametersKey      contextKey = "scafctl.provider.parameters"      // Key for CLI parameters map
 )
 
 // NOTE: These keys are intentionally unexported. scafctl's orchestration layer
@@ -350,6 +435,7 @@ const (
 //   - WithExecutionMode(ctx context.Context, mode Capability) context.Context
 //   - WithDryRun(ctx context.Context, dryRun bool) context.Context
 //   - WithResolverContext(ctx context.Context, data map[string]any) context.Context
+//   - WithParameters(ctx context.Context, parameters map[string]any) context.Context
 // Provider implementations should treat these as read-only and access them only
 // via the accessor functions below, which provide context value accessors for
 // provider implementations.
@@ -363,51 +449,91 @@ func DryRunFromContext(ctx context.Context) bool {
   return dryRun
 }
 
-func ResolverContextFromContext(ctx context.Context) map[string]any {
-  data, _ := ctx.Value(resolverContextKey).(map[string]any)
-  return data // Returns nil map if not set, which is safe to read from
+// ResolverContextFromContext retrieves the resolver context map from the context.
+// Returns the resolver context map and true if found, nil and false otherwise.
+func ResolverContextFromContext(ctx context.Context) (map[string]any, bool) {
+  resolverCtx, ok := ctx.Value(resolverContextKey).(map[string]any)
+  return resolverCtx, ok
+}
+
+// WithParameters returns a new context with the CLI parameters map.
+// Parameters are parsed from -r/--resolver flags and stored for retrieval by the parameter provider.
+func WithParameters(ctx context.Context, parameters map[string]any) context.Context {
+  return context.WithValue(ctx, parametersKey, parameters)
+}
+
+// ParametersFromContext retrieves the CLI parameters map from the context.
+// Returns the parameters map and true if found, nil and false otherwise.
+func ParametersFromContext(ctx context.Context) (map[string]any, bool) {
+  params, ok := ctx.Value(parametersKey).(map[string]any)
+  return params, ok
 }
 
 type Descriptor struct {
   // Identity and versioning
-  Name        string          `json:"name" yaml:"name" doc:"The unique name of the provider" minLength:"2" maxLength:"100" example:"shell" pattern:"^[a-z][a-z0-9-]*[a-z0-9]$" required:"true"`
-  DisplayName string          `json:"displayName,omitempty" yaml:"displayName,omitempty" doc:"Human-readable name for UI/catalog" minLength:"3" maxLength:"100" example:"Shell Command Executor"`
-  APIVersion  string          `json:"apiVersion,omitempty" yaml:"apiVersion,omitempty" doc:"Provider API version for compatibility" example:"v1" pattern:"^v[0-9]+$"`
+  Name        string          `json:"name" yaml:"name" doc:"Unique provider identifier" minLength:"2" maxLength:"100" example:"http" pattern:"^[a-z][a-z0-9-]*$" required:"true"`
+  DisplayName string          `json:"displayName,omitempty" yaml:"displayName,omitempty" doc:"Human-readable display name" maxLength:"100" example:"HTTP Client"`
+  APIVersion  string          `json:"apiVersion" yaml:"apiVersion" doc:"Provider API version" example:"v1" pattern:"^v[0-9]+$" required:"true"`
   // Version uses github.com/Masterminds/semver/v3 for semantic versioning.
-  Version     *semver.Version `json:"version,omitempty" yaml:"version,omitempty" doc:"Semantic version of the provider" example:"1.2.3"`
-  Description string          `json:"description,omitempty" yaml:"description,omitempty" doc:"Brief description of provider purpose" minLength:"10" maxLength:"500" example:"Executes shell commands in the local environment"`
+  Version     *semver.Version `json:"version" yaml:"version" doc:"Semantic version" required:"true"`
+  Description string          `json:"description" yaml:"description" doc:"Provider description" minLength:"10" maxLength:"500" required:"true"`
   
   // Schema definitions
-  Schema       SchemaDefinition `json:"schema" yaml:"schema" doc:"Input properties schema definition" required:"true"`
-  OutputSchema SchemaDefinition `json:"outputSchema,omitempty" yaml:"outputSchema,omitempty" doc:"Expected output structure schema for type-safe validation of Output.Data"`
+  Schema        SchemaDefinition                    `json:"schema" yaml:"schema" doc:"Input schema" required:"true"`
+  OutputSchemas map[Capability]SchemaDefinition     `json:"outputSchemas" yaml:"outputSchemas" doc:"Output schemas per capability" required:"true"`
   // Decode converts validated map[string]any inputs into strongly-typed structs for internal use.
   // Called after schema validation but before Execute(). Optional - providers can work with map[string]any directly.
-  Decode       func(map[string]any) (any, error) `json:"-" yaml:"-"`
+  // When Decode is set, the Executor calls it and passes the result directly to Execute().
+  Decode        func(map[string]any) (any, error) `json:"-" yaml:"-"`
+  
+  // ExtractDependencies extracts resolver references from provider-specific input formats.
+  // Called during dependency graph construction to determine resolver execution order.
+  // Optional - if nil, the generic extraction logic is used which handles:
+  // - ValueRef.Resolver references
+  // - CEL expressions (_.resolverName patterns)
+  // - Go templates ({{._.resolverName}} patterns with default delimiters)
+  // Providers should implement this when they have custom input formats that may
+  // contain resolver references, such as templates with custom delimiters.
+  // The function receives the raw inputs map and returns resolver names that this input depends on.
+  ExtractDependencies func(inputs map[string]any) []string `json:"-" yaml:"-"`
   
   // Execution behavior
-  MockBehavior string       `json:"mockBehavior,omitempty" yaml:"mockBehavior,omitempty" doc:"Description of mock execution behavior for dry-run mode (all providers must support dry-run)" minLength:"10" maxLength:"500" example:"Returns sample output without executing command"`
-  Capabilities []Capability `json:"capabilities" yaml:"capabilities" doc:"Execution contexts this provider supports (from, transform, validation, authentication, action)" minItems:"1" maxItems:"10" required:"true"`
+  MockBehavior string       `json:"mockBehavior" yaml:"mockBehavior" doc:"Dry-run behavior description" minLength:"10" maxLength:"500" required:"true"`
+  Capabilities []Capability `json:"capabilities" yaml:"capabilities" doc:"Supported execution contexts" minItems:"1" required:"true"`
   
   // Catalog and distribution metadata
-  Category   string            `json:"category,omitempty" yaml:"category,omitempty" doc:"Provider category for classification" minLength:"3" maxLength:"50" example:"infrastructure"`
-  Tags       []string          `json:"tags,omitempty" yaml:"tags,omitempty" doc:"Searchable keywords for discovery" minItems:"0" maxItems:"20"`
-  Icon       string    `json:"icon,omitempty" yaml:"icon,omitempty" doc:"URL or path to provider icon for catalog display" maxLength:"500" format:"uri" example:"https://example.com/icon.png"`
-  Links      []Link    `json:"links,omitempty" yaml:"links,omitempty" doc:"External documentation and reference links" maxItems:"10"`
-  Examples   []Example `json:"examples,omitempty" yaml:"examples,omitempty" doc:"Usage examples demonstrating provider invocation patterns" minItems:"1" maxItems:"5"`
-  Deprecated bool              `json:"deprecated,omitempty" yaml:"deprecated,omitempty" doc:"Whether provider is deprecated" example:"false"`
-  Beta       bool              `json:"beta,omitempty" yaml:"beta,omitempty" doc:"Whether provider is in beta/preview status" example:"false"`
+  Category   string    `json:"category,omitempty" yaml:"category,omitempty" doc:"Classification category" maxLength:"50" example:"network"`
+  Tags       []string  `json:"tags,omitempty" yaml:"tags,omitempty" doc:"Searchable keywords" maxItems:"20"`
+  Icon       string    `json:"icon,omitempty" yaml:"icon,omitempty" doc:"Icon URL" format:"uri" maxLength:"500"`
+  Links      []Link    `json:"links,omitempty" yaml:"links,omitempty" doc:"Related links" maxItems:"10"`
+  Examples   []Example `json:"examples,omitempty" yaml:"examples,omitempty" doc:"Usage examples" maxItems:"10"`
+  Deprecated bool      `json:"deprecated,omitempty" yaml:"deprecated,omitempty" doc:"Deprecation status"`
+  Beta       bool      `json:"beta,omitempty" yaml:"beta,omitempty" doc:"Beta status"`
   
   // Maintainer information
-  Maintainers []Contact `json:"maintainers,omitempty" yaml:"maintainers,omitempty" doc:"People or teams responsible for the provider" minItems:"1" maxItems:"10"`
+  Maintainers []Contact `json:"maintainers,omitempty" yaml:"maintainers,omitempty" doc:"Maintainer contacts" maxItems:"10"`
 }
 
 // SchemaDefinition defines the structure of inputs or outputs for a provider.
-// Used for both input schema (Descriptor.Schema) and output schema (Descriptor.OutputSchema).
-// Note: When used as OutputSchema, the Required field in PropertyDefinition is typically not meaningful
+// Used for both input schema (Descriptor.Schema) and output schemas (Descriptor.OutputSchemas).
+// Note: When used in OutputSchemas, the Required field in PropertyDefinition is typically not meaningful
 // since outputs are generated by the provider rather than validated as required inputs.
 type SchemaDefinition struct {
   Properties map[string]PropertyDefinition `json:"properties,omitempty" yaml:"properties,omitempty" doc:"Map of property names to their definitions"`
 }
+
+// Required Output Fields by Capability:
+//
+// Certain capabilities mandate specific fields in their output schemas:
+//
+//   validation:      must include "valid" (bool) and "errors" ([]string)
+//   authentication:  must include "authenticated" (bool) and "token" (string)
+//   action:          must include "success" (bool)
+//   from:            no required fields
+//   transform:       no required fields
+//
+// These requirements are enforced at provider registration time.
+// Providers can add additional fields beyond the required minimums.
 
 // PropertyType represents the data type of a provider property (input or output).
 // This type provides compile-time type safety while still serializing as strings in YAML/JSON.
@@ -432,6 +558,15 @@ func (t PropertyType) IsValid() bool {
     return false
   }
 }
+
+// Type Usage Notes:
+//
+// - PropertyTypeAny should be used for:
+//   - Map/object types (map[string]any)
+//   - Mixed-type fields that can accept multiple types
+//   - Complex nested structures
+// - There is no explicit "map" type; use PropertyTypeAny for map properties
+// - Use PropertyTypeArray for slices/arrays; the element type is inferred at runtime
 
 type PropertyDefinition struct {
   Type        PropertyType `json:"type" yaml:"type" doc:"Property data type (string, int, float, bool, array, any)" example:"string" required:"true"`
@@ -472,22 +607,22 @@ type PropertyDefinition struct {
 
 // Contact represents the maintainer's contact information, including their name and email address.
 type Contact struct {
-  Name  string `json:"name,omitempty" yaml:"name,omitempty" doc:"The name of the maintainer" minLength:"3" maxLength:"60" example:"John Doe" pattern:"^[\\w \\-.'(),&]+$" patternDescription:"Allows letters, numbers, spaces, and punctuation characters - . ' ( ) , &"`
-  Email string `json:"email,omitempty" yaml:"email,omitempty" doc:"The email of the maintainer" minLength:"5" maxLength:"100" example:"john.doe@example.com" pattern:"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,3}" patternDescription:"Standard email address format local@domain.tld with a 2–3 letter top-level domain"`
+  Name  string `json:"name,omitempty" yaml:"name,omitempty" doc:"Maintainer name" maxLength:"60" example:"Jane Doe"`
+  Email string `json:"email,omitempty" yaml:"email,omitempty" doc:"Maintainer email" format:"email" maxLength:"100"`
 }
 
 // Link represents a named hyperlink with validation constraints.
 type Link struct {
-  Name string `json:"name,omitempty" yaml:"name,omitempty" doc:"The name of the link" minLength:"3" maxLength:"30" example:"Documentation" pattern:"^(\\w|\\-|\\_|\\ )+$" patternDescription:"Alphanumeric characters, spaces, underscores, and hyphens only"`
-  URL  string `json:"url,omitempty" yaml:"url,omitempty" doc:"The URL of the link" minLength:"12" maxLength:"500" example:"https://google.com" format:"uri" pattern:"^(http|https):\\/\\/.+" patternDescription:"HTTP or HTTPS URL starting with http:// or https://"`
+  Name string `json:"name,omitempty" yaml:"name,omitempty" doc:"Link name" maxLength:"30" example:"Documentation"`
+  URL  string `json:"url,omitempty" yaml:"url,omitempty" doc:"Link URL" format:"uri" maxLength:"500"`
 }
 
 // Example represents a usage example demonstrating how to invoke the provider.
 // Examples help with documentation generation, catalog display, and IDE support.
 type Example struct {
-  Name        string `json:"name,omitempty" yaml:"name,omitempty" doc:"Name of the example use case" minLength:"3" maxLength:"50" example:"Basic usage" pattern:"^[\\w \\-.'()]+$" patternDescription:"Letters, numbers, spaces, and punctuation characters - . ' ( ) only"`
-  Description string `json:"description,omitempty" yaml:"description,omitempty" doc:"Description of what the example demonstrates" minLength:"10" maxLength:"300" example:"Reads environment variable and transforms to uppercase"`
-  YAML        string `json:"yaml" yaml:"yaml" doc:"YAML example showing provider usage in resolver or action context" minLength:"10" maxLength:"2000" required:"true"`
+  Name        string `json:"name,omitempty" yaml:"name,omitempty" doc:"Example name" maxLength:"50" example:"Basic usage"`
+  Description string `json:"description,omitempty" yaml:"description,omitempty" doc:"Example description" maxLength:"300"`
+  YAML        string `json:"yaml" yaml:"yaml" doc:"YAML example" minLength:"10" maxLength:"2000" required:"true"`
 }
 ~~~
 
@@ -525,7 +660,7 @@ The `MockBehavior` field in `Descriptor` documents what the provider returns dur
 - `"Logs intended operation and returns mock success result"`
 
 **Best Practices:**
-- Mock output must match `OutputSchema` exactly (same types and structure)
+- Mock output must match `OutputSchemas` for the current capability exactly (same types and structure)
 - Use consistent, recognizable mock values (e.g., 'mock-' prefix for IDs)
 - Document what happens with different input variations
 - For transformations, prefer real logic over stubs when side-effect-free
@@ -659,15 +794,31 @@ Each step receives the previous value as `__self`.
 
 Validation is provider-backed.
 
-Any provider that returns a boolean may be used as a validation provider.
+**Return Value Structure:**
 
-**Return Value Requirement:**
+Validation providers follow a simple pattern:
 
-Validation providers must return an `Output` whose `Data` field contains a boolean value:
-- `true` indicates validation succeeded
-- `false` indicates validation failed
+~~~go
+// Success - return the validated value directly (useful in transform chains)
+return &Output{
+  Data: valueBeingValidated,
+  Metadata: map[string]any{
+    "matchedPatterns": matchedPatterns, // optional context
+  },
+}, nil
 
-The `Output.Warnings` field may be used to provide additional context, and error messages are typically provided through the resolver's `message` field rather than the provider output.
+// Failure - return an error
+return nil, fmt.Errorf("validation failed: %s", message)
+~~~
+
+**Key points:**
+- On success, `Data` contains the validated value (not a wrapper map)
+- This enables validation to be used in transform chains where the value flows through
+- Validation failures always return an error (not `Data.valid = false`)
+- Optional metadata can provide context about which validations passed
+- This approach distinguishes "validation ran and failed" (error) from "validation couldn't run" (different error)
+
+The `Output.Warnings` field may be used to provide additional context for non-fatal issues, and error messages are typically provided through the resolver's `message` field rather than the provider output.
 
 ### Built-in Provider: validation
 
@@ -682,7 +833,8 @@ Rules:
 - `match` and `notMatch` may be combined
 - `match` and `notMatch` support all four input forms (literal, rslvr, expr, tmpl)
 - `expression` is for CEL-based validation
-- The provider returns a single boolean result
+- On success, the provider returns the validated value in `Output.Data`
+- On failure, the provider returns an error
 
 Examples:
 
@@ -754,7 +906,7 @@ Actions invoke providers to perform side effects or generate artifacts.
 ~~~yaml
 actions:
   build:
-    provider: shell
+    provider: exec
     inputs:
       cmd:
         - go
@@ -770,7 +922,7 @@ Action orchestration, dependencies, iteration, and conditional execution are han
 
 ### parameter
 
-Reads a value supplied at invocation time.
+Reads a value supplied at invocation time via CLI flags.
 
 ~~~yaml
 resolve:
@@ -810,14 +962,16 @@ resolve:
 
 ---
 
-### filesystem
+### file
 
 Reads data from the local filesystem.
+
+> **Note:** Previously documented as `filesystem`.
 
 ~~~yaml
 resolve:
   with:
-    - provider: filesystem
+    - provider: file
       inputs:
         operation: read
         path: ./config/name.txt
@@ -839,16 +993,18 @@ resolve:
 
 ---
 
-### api
+### http
 
-Fetches data from an HTTP endpoint.
+Fetches data from an HTTP endpoint or makes HTTP requests.
+
+> **Note:** Previously documented as `api`.
 
 ~~~yaml
 resolve:
   with:
-    - provider: api
+    - provider: http
       inputs:
-        endpoint: https://api.example.com/project
+        url: https://api.example.com/project
         method: GET
 ~~~
 
@@ -856,7 +1012,7 @@ resolve:
 
 ### cel
 
-Derives a value using CEL.
+Derives a value using CEL expressions.
 
 ~~~yaml
 resolve:
@@ -865,6 +1021,87 @@ resolve:
       inputs:
         expression: _.org + "/" + _.repo
 ~~~
+
+---
+
+### validation
+
+Validates values using regex patterns and CEL expressions.
+
+~~~yaml
+validate:
+  with:
+    - provider: validation
+      inputs:
+        match: "^[a-z0-9-]+$"
+      message: "Invalid value"
+~~~
+
+---
+
+### exec
+
+Executes shell commands.
+
+~~~yaml
+actions:
+  build:
+    provider: exec
+    inputs:
+      command: go build ./...
+~~~
+
+---
+
+### debug
+
+Provides debugging utilities for development and troubleshooting.
+
+~~~yaml
+resolve:
+  with:
+    - provider: debug
+      inputs:
+        message: "Current value"
+        value:
+          rslvr: someResolver
+~~~
+
+---
+
+### sleep
+
+Introduces delays for testing and rate-limiting scenarios.
+
+~~~yaml
+resolve:
+  with:
+    - provider: sleep
+      inputs:
+        duration: 1s
+~~~
+
+---
+
+### go-template
+
+Renders Go text/template content with resolver data as the template context.
+
+~~~yaml
+resolve:
+  with:
+    - provider: go-template
+      inputs:
+        name: greeting-template
+        template: "Hello, {{.name}}!"
+~~~
+
+**Inputs:**
+- `name` (required): Name for the template, used in error messages and logging
+- `template` (required): Go template content to render
+- `missingKey`: Behavior when a map key is missing: `default`, `zero`, or `error`
+- `leftDelim`, `rightDelim`: Custom delimiters (default: `{{` and `}}`)
+- `data`: Additional data to merge with resolver context
 
 ---
 

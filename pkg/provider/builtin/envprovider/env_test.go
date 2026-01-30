@@ -20,8 +20,8 @@ func TestNewEnvProvider(t *testing.T) {
 	assert.Contains(t, desc.Capabilities, provider.CapabilityFrom)
 	assert.NotNil(t, desc.Schema)
 	assert.NotEmpty(t, desc.Schema.Properties)
-	assert.NotNil(t, desc.OutputSchema)
-	assert.NotEmpty(t, desc.OutputSchema.Properties)
+	assert.NotNil(t, desc.OutputSchemas)
+	assert.NotEmpty(t, desc.OutputSchemas[provider.CapabilityFrom].Properties)
 }
 
 func TestEnvProvider_Execute_Get(t *testing.T) {

@@ -2,6 +2,7 @@ package celexp
 
 import (
 	"container/list"
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"sort"
@@ -367,7 +368,15 @@ func generateCacheKeyWithAST(cache *ProgramCache, expression string, opts []cel.
 
 	// Create a temporary environment to extract declarations
 	if len(opts) > 0 {
-		tempEnv, err := cel.NewEnv(opts...)
+		// Use the environment factory if available (includes all custom extensions)
+		var tempEnv *cel.Env
+		var err error
+		factory := getEnvFactory()
+		if factory != nil {
+			tempEnv, err = factory(context.Background(), opts...)
+		} else {
+			tempEnv, err = cel.NewEnv(opts...)
+		}
 		if err != nil {
 			// If we can't create the environment, use a simple hash
 			// This is better than nothing and ensures uniqueness

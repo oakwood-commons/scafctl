@@ -1,0 +1,91 @@
+# ForEach Deploy Example
+# Demonstrates forEach expansion for deploying to multiple targets.
+#
+# The deploy action will be expanded into:
+#   deploy[0] (server1)
+#   deploy[1] (server2)
+#   deploy[2] (server3)
+#
+# Run: scafctl run workflow -f examples/actions/foreach-deploy.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: foreach-deploy
+  version: 1.0.0
+  description: ForEach expansion for multi-target deployment
+
+spec:
+  resolvers:
+    targets:
+      description: Deployment targets
+      type: array
+      items:
+        type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - server1.example.com
+                - server2.example.com
+                - server3.example.com
+    
+    version:
+      description: Version to deploy
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "v1.2.3"
+
+  workflow:
+    actions:
+      # Build happens once
+      build:
+        description: Build deployment artifact
+        displayName: Build
+        provider: exec
+        inputs:
+          shell: true
+          command:
+            expr: "'echo Building version ' + _.version + '...'"
+
+      # Deploy to each target (forEach expansion)
+      deploy:
+        description: Deploy to target server
+        displayName: Deploy
+        provider: exec
+        dependsOn:
+          - build
+        # ForEach iterates over the targets array
+        forEach:
+          in:
+            expr: "_.targets"
+          # Optional: limit concurrent deployments
+          concurrency: 2
+          # Optional: continue deploying to remaining targets if one fails
+          onError: continue
+        inputs:
+          shell: true
+          target:
+            # __item is the current array element
+            expr: "__item"
+          version:
+            expr: "_.version"
+          command:
+            # Access both the current item and other resolver data
+            expr: "'echo Deploying ' + _.version + ' to ' + __item"
+
+      # Verify runs after ALL deploy iterations complete
+      verify:
+        description: Verify all deployments
+        displayName: Verify
+        provider: exec
+        dependsOn:
+          - deploy
+        inputs:
+          shell: true
+          command:
+            expr: "'echo Verifying ' + string(size(_.targets)) + ' deployments...'"

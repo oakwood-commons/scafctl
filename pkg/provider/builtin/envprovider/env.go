@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/ptrs"
 )
@@ -70,11 +71,13 @@ func NewEnvProvider(opts ...Option) *EnvProvider {
 
 	p := &EnvProvider{
 		descriptor: &provider.Descriptor{
-			Name:        ProviderName,
-			DisplayName: "Environment Variables",
-			Description: "Provider for reading and setting environment variables",
-			Version:     version,
-			Category:    "system",
+			Name:         ProviderName,
+			DisplayName:  "Environment Variables",
+			APIVersion:   "v1",
+			Description:  "Provider for reading and setting environment variables",
+			Version:      version,
+			Category:     "system",
+			MockBehavior: "Returns mock environment variable value without accessing actual environment",
 			Capabilities: []provider.Capability{
 				provider.CapabilityFrom,
 			},
@@ -115,37 +118,39 @@ func NewEnvProvider(opts ...Option) *EnvProvider {
 					},
 				},
 			},
-			OutputSchema: provider.SchemaDefinition{
-				Properties: map[string]provider.PropertyDefinition{
-					"operation": {
-						Type:        provider.PropertyTypeString,
-						Description: "Operation that was performed",
-						Example:     "get",
-					},
-					"name": {
-						Type:        provider.PropertyTypeString,
-						Description: "Name of the environment variable (for get, set, unset operations)",
-						Example:     "HOME",
-					},
-					"value": {
-						Type:        provider.PropertyTypeString,
-						Description: "Value of the environment variable (for get operation)",
-						Example:     "/home/user",
-					},
-					"exists": {
-						Type:        provider.PropertyTypeBool,
-						Description: "Whether the variable exists (for get operation)",
-						Example:     true,
-					},
-					"variables": {
-						Type:        provider.PropertyTypeAny,
-						Description: "Map of environment variables (for list operation)",
-						Example:     map[string]string{"HOME": "/home/user", "PATH": "/usr/bin"},
-					},
-					"count": {
-						Type:        provider.PropertyTypeInt,
-						Description: "Number of variables (for list operation)",
-						Example:     10,
+			OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
+				provider.CapabilityFrom: {
+					Properties: map[string]provider.PropertyDefinition{
+						"operation": {
+							Type:        provider.PropertyTypeString,
+							Description: "Operation that was performed",
+							Example:     "get",
+						},
+						"name": {
+							Type:        provider.PropertyTypeString,
+							Description: "Name of the environment variable (for get, set, unset operations)",
+							Example:     "HOME",
+						},
+						"value": {
+							Type:        provider.PropertyTypeString,
+							Description: "Value of the environment variable (for get operation)",
+							Example:     "/home/user",
+						},
+						"exists": {
+							Type:        provider.PropertyTypeBool,
+							Description: "Whether the variable exists (for get operation)",
+							Example:     true,
+						},
+						"variables": {
+							Type:        provider.PropertyTypeAny,
+							Description: "Map of environment variables (for list operation)",
+							Example:     map[string]string{"HOME": "/home/user", "PATH": "/usr/bin"},
+						},
+						"count": {
+							Type:        provider.PropertyTypeInt,
+							Description: "Number of variables (for list operation)",
+							Example:     10,
+						},
 					},
 				},
 			},
@@ -207,29 +212,48 @@ func (p *EnvProvider) Descriptor() *provider.Descriptor {
 }
 
 // Execute performs the environment variable operation
-func (p *EnvProvider) Execute(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
+func (p *EnvProvider) Execute(ctx context.Context, input any) (*provider.Output, error) {
+	lgr := logger.FromContext(ctx)
+
+	inputs, ok := input.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%s: expected map[string]any, got %T", ProviderName, input)
+	}
 	operation, ok := inputs["operation"].(string)
 	if !ok {
-		return nil, fmt.Errorf("operation is required and must be a string")
+		return nil, fmt.Errorf("%s: operation is required and must be a string", ProviderName)
 	}
+
+	lgr.V(1).Info("executing provider", "provider", ProviderName, "operation", operation)
 
 	// Check for dry-run mode
 	if dryRun := provider.DryRunFromContext(ctx); dryRun {
 		return p.executeDryRun(operation, inputs)
 	}
 
+	var result *provider.Output
+	var err error
+
 	switch operation {
 	case "get":
-		return p.executeGet(inputs)
+		result, err = p.executeGet(inputs)
 	case "set":
-		return p.executeSet(inputs)
+		result, err = p.executeSet(inputs)
 	case "list":
-		return p.executeList(inputs)
+		result, err = p.executeList(inputs)
 	case "unset":
-		return p.executeUnset(inputs)
+		result, err = p.executeUnset(inputs)
 	default:
-		return nil, fmt.Errorf("unsupported operation: %s", operation)
+		return nil, fmt.Errorf("%s: unsupported operation: %s", ProviderName, operation)
 	}
+
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", ProviderName, err)
+	}
+
+	lgr.V(1).Info("provider execution completed", "provider", ProviderName, "operation", operation)
+
+	return result, nil
 }
 
 func (p *EnvProvider) executeGet(inputs map[string]any) (*provider.Output, error) {
@@ -283,6 +307,7 @@ func (p *EnvProvider) executeSet(inputs map[string]any) (*provider.Output, error
 	}, nil
 }
 
+//nolint:unparam // Error return kept for consistent interface - may return errors in future
 func (p *EnvProvider) executeList(inputs map[string]any) (*provider.Output, error) {
 	envVars := make(map[string]string)
 	prefix, _ := inputs["prefix"].(string)

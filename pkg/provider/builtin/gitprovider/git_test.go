@@ -30,10 +30,10 @@ func TestNewGitProvider(t *testing.T) {
 	assert.Equal(t, provider.PropertyTypeString, desc.Schema.Properties["operation"].Type)
 	assert.NotEmpty(t, desc.Schema.Properties["operation"].Enum)
 
-	assert.NotNil(t, desc.OutputSchema.Properties)
-	assert.Equal(t, provider.PropertyTypeBool, desc.OutputSchema.Properties["success"].Type)
-	assert.Equal(t, provider.PropertyTypeString, desc.OutputSchema.Properties["output"].Type)
-	assert.Equal(t, provider.PropertyTypeString, desc.OutputSchema.Properties["error"].Type)
+	assert.NotNil(t, desc.OutputSchemas[provider.CapabilityAction].Properties)
+	assert.Equal(t, provider.PropertyTypeBool, desc.OutputSchemas[provider.CapabilityAction].Properties["success"].Type)
+	assert.Equal(t, provider.PropertyTypeString, desc.OutputSchemas[provider.CapabilityAction].Properties["output"].Type)
+	assert.Equal(t, provider.PropertyTypeString, desc.OutputSchemas[provider.CapabilityAction].Properties["error"].Type)
 }
 
 func setupTestRepo(t *testing.T) string {

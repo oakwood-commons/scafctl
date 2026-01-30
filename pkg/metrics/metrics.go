@@ -19,6 +19,8 @@ const (
 	errorTypeLabel    = "error_type"
 	LabelHost         = "host"
 	LabelPathTemplate = "path_template"
+	providerNameLabel = "provider_name"
+	statusLabel       = "status"
 )
 
 var (
@@ -118,6 +120,21 @@ var (
 		Help:    "Histogram of the time it takes to get a solution in seconds",
 		Buckets: requestTimesBuckets,
 	}, []string{pathLabel})
+
+	// ProviderExecutionDuration is a Prometheus histogram vector that records the duration of provider executions in seconds.
+	// It is labeled by provider name and status (success/failure) for observability into provider performance.
+	ProviderExecutionDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    fmt.Sprintf("%s_provider_execution_duration_seconds", settings.CliBinaryName),
+		Help:    "Provider execution duration in seconds",
+		Buckets: requestTimesBuckets,
+	}, []string{providerNameLabel, statusLabel})
+
+	// ProviderExecutionTotal is a Prometheus counter vector that tracks the total number of provider executions.
+	// It is labeled by provider name and status (success/failure).
+	ProviderExecutionTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: fmt.Sprintf("%s_provider_execution_total", settings.CliBinaryName),
+		Help: "Total number of provider executions",
+	}, []string{providerNameLabel, statusLabel})
 )
 
 // Handler returns an HTTP handler that exposes Prometheus metrics.
@@ -142,6 +159,8 @@ func RegisterMetrics() {
 	prometheus.MustRegister(HTTPClientConcurrentRequests)
 	prometheus.MustRegister(HTTPClientCircuitBreakerState)
 	prometheus.MustRegister(GetSolutionTimeHistogram)
+	prometheus.MustRegister(ProviderExecutionDuration)
+	prometheus.MustRegister(ProviderExecutionTotal)
 	http.Handle("/metrics", Handler())
 }
 
@@ -154,4 +173,16 @@ func PrometheusMiddleware() gin.HandlerFunc {
 		statusCode := strconv.Itoa(c.Writer.Status())
 		httpRequestsTotal.With(prometheus.Labels{pathLabel: c.Request.URL.Path, statusCodeLabel: statusCode}).Inc()
 	}
+}
+
+// RecordProviderExecution records provider execution metrics to Prometheus.
+// This should be called after each provider execution with the provider name,
+// execution duration, and whether the execution was successful.
+func RecordProviderExecution(providerName string, duration float64, success bool) {
+	status := "success"
+	if !success {
+		status = "failure"
+	}
+	ProviderExecutionDuration.WithLabelValues(providerName, status).Observe(duration)
+	ProviderExecutionTotal.WithLabelValues(providerName, status).Inc()
 }

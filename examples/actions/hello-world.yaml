@@ -1,0 +1,35 @@
+# Hello World Action Example
+# The simplest possible workflow with a single action.
+#
+# Run: scafctl run workflow -f examples/actions/hello-world.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: hello-world-action
+  version: 1.0.0
+  description: The simplest possible action workflow example
+
+spec:
+  # Resolvers provide input data for actions
+  resolvers:
+    greeting:
+      description: A greeting message
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "Hello from Actions!"
+
+  # Workflow defines the action execution
+  workflow:
+    actions:
+      greet:
+        description: Display a greeting message
+        displayName: Greeting Action
+        provider: exec
+        inputs:
+          shell: true
+          command:
+            expr: "'echo ' + _.greeting"

@@ -32,7 +32,7 @@ func TestValidationProvider_Descriptor(t *testing.T) {
 	assert.Contains(t, desc.Schema.Properties, "match")
 	assert.Contains(t, desc.Schema.Properties, "notMatch")
 	assert.Contains(t, desc.Schema.Properties, "expression")
-	assert.NotNil(t, desc.OutputSchema.Properties)
+	assert.NotNil(t, desc.OutputSchemas[provider.CapabilityValidation].Properties)
 }
 
 func TestValidationProvider_Execute_Match_Success(t *testing.T) {
@@ -64,11 +64,9 @@ func TestValidationProvider_Execute_Match_Failure(t *testing.T) {
 
 	result, err := p.Execute(ctx, inputs)
 
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	data := result.Data.(map[string]any)
-	assert.False(t, data["valid"].(bool))
-	assert.Contains(t, data["details"], "does not match pattern")
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "does not match pattern")
 }
 
 func TestValidationProvider_Execute_NotMatch_Success(t *testing.T) {
@@ -100,11 +98,9 @@ func TestValidationProvider_Execute_NotMatch_Failure(t *testing.T) {
 
 	result, err := p.Execute(ctx, inputs)
 
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	data := result.Data.(map[string]any)
-	assert.False(t, data["valid"].(bool))
-	assert.Contains(t, data["details"], "matches forbidden pattern")
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "matches forbidden pattern")
 }
 
 func TestValidationProvider_Execute_MatchAndNotMatch_Success(t *testing.T) {
@@ -153,11 +149,9 @@ func TestValidationProvider_Execute_Expression_Failure(t *testing.T) {
 
 	result, err := p.Execute(ctx, inputs)
 
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	data := result.Data.(map[string]any)
-	assert.False(t, data["valid"].(bool))
-	assert.Contains(t, data["details"], "expression evaluated to false")
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "expression evaluated to false")
 }
 
 func TestValidationProvider_Execute_WithSelf(t *testing.T) {

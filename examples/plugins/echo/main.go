@@ -56,11 +56,13 @@ func (p *EchoPlugin) GetProviderDescriptor(ctx context.Context, providerName str
 				},
 			},
 		},
-		OutputSchema: provider.SchemaDefinition{
-			Properties: map[string]provider.PropertyDefinition{
-				"echoed": {
-					Type:        provider.PropertyTypeString,
-					Description: "The echoed message",
+		OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
+			provider.CapabilityTransform: {
+				Properties: map[string]provider.PropertyDefinition{
+					"echoed": {
+						Type:        provider.PropertyTypeString,
+						Description: "The echoed message",
+					},
 				},
 			},
 		},

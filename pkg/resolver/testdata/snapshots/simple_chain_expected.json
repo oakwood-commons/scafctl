@@ -1,0 +1,35 @@
+{
+  "metadata": {
+    "solution": "simple-chain-snapshot",
+    "version": "1.0.0",
+    "scafctlVersion": "test",
+    "timestamp": "2024-01-01T00:00:00Z",
+    "status": "success",
+    "totalDuration": "100ms"
+  },
+  "resolvers": {
+    "base": {
+      "status": "success",
+      "value": "hello",
+      "duration": "10ms",
+      "phase": 1,
+      "providerCalls": 1
+    },
+    "transform": {
+      "status": "success",
+      "value": "hello-world",
+      "duration": "20ms",
+      "phase": 2,
+      "providerCalls": 2
+    },
+    "final": {
+      "status": "success",
+      "value": "hello hello-world!",
+      "duration": "30ms",
+      "phase": 3,
+      "providerCalls": 1
+    }
+  },
+  "parameters": {},
+  "phases": []
+}

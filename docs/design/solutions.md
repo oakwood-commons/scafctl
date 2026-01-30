@@ -67,11 +67,16 @@ Top-level sections:
 - `apiVersion` - API version (scafctl.io/v1)
 - `kind` - Resource type (Solution)
 - `metadata` - Name, version, description, maintainers, tags
+- `catalog` - Publishing metadata (visibility, beta flag, disabled flag)
 - `spec` - Execution specification
   - `resolvers` - pure data derivation
   - `actions` - side-effect execution graph
 
 Execution semantics are driven by the `spec` section.
+
+Expressions use CEL (`celexp.Expression`), and templates use Go templating (`gotmpl.GoTemplatingContent`).
+
+The default `apiVersion` is scafctl.io/v1; breaking schema changes follow semver.
 
 ---
 
@@ -205,6 +210,8 @@ scafctl render solution myapp
 - Emit the rendered action graph
 - Do not execute providers
 - Produce an executor-ready artifact
+
+Execution stops on the first failed action; dependent actions are skipped.
 
 ---
 
@@ -361,6 +368,11 @@ metadata:
     - name: Documentation
       url: https://docs.example.com
 
+catalog:                              # Optional: publishing metadata (no execution impact)
+  visibility: private                 # Optional: public|private|internal (default: private)
+  beta: false                         # Optional: beta flag (default: false)
+  disabled: false                     # Optional: availability flag (default: false)
+
 spec:
   resolvers:                          # Required: data resolution
     resolverName:
@@ -403,7 +415,7 @@ spec:
       inputs: {}                      # Required: provider-specific inputs
       results:                        # Optional: output definitions
         resultName:
-          from: string                # CEL expression
+          from: string                # CEL expression; reference via .__actions.<action>.results from declared dependencies
 ~~~
 
 ### Metadata Fields
@@ -420,9 +432,9 @@ spec:
 ### Resolver Fields
 
 - `description` (optional) - Purpose of this resolver
-- `resolve.from` (required) - Array of providers to try in order
-- `transform.into` (optional) - Array of transformation providers
-- `validate.from` (optional) - Array of validation providers
+- `resolve.with` (required) - Array of providers to try in order
+- `transform.with` (optional) - Array of transformation providers
+- `validate.with` (optional) - Array of validation providers
 
 ### Action Fields
 
@@ -433,7 +445,7 @@ spec:
 - `forEach` (optional) - Iteration over array values
 - `dependsOn` (optional) - Array of action names to execute first
 - `inputs` (required) - Provider-specific input map
-- `results` (optional) - Output value definitions
+- `results` (optional) - Output value definitions; consumers must reference declared dependencies via .__actions.<action>.results
 
 ### Input Forms
 
@@ -443,6 +455,8 @@ All action inputs and many provider inputs support four forms:
 2. **Resolver binding**: `key: { rslvr: resolverName }`
 3. **Expression**: `key: { expr: "celExpression" }`
 4. **Template**: `key: { tmpl: "{{ .template }}" }`
+
+Inputs may bind to resolver outputs and, when dependency rules allow, to prior action results. Providers always receive fully materialized values; CEL, templates, and bindings are resolved before provider execution or render emission.
 
 See [Providers](providers.md) for detailed documentation.
 

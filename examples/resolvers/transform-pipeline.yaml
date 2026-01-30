@@ -1,0 +1,145 @@
+# Transform Pipeline Example
+# Shows multi-step data transformation with filtering and mapping.
+#
+# Run: scafctl run solution -f transform-pipeline.yaml
+#
+# This example demonstrates:
+# - Multi-step transformation
+# - Using __self to reference the current value
+# - Filtering and mapping data
+# - Aggregation
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: transform-pipeline
+  version: 1.0.0
+  description: Multi-step data transformation pipeline
+
+spec:
+  resolvers:
+    # Raw input data (simulating API response)
+    raw_users:
+      description: Raw user data from source
+      type: array
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - id: 1
+                  name: "Alice Smith"
+                  email: "alice@example.com"
+                  role: admin
+                  active: true
+                  lastLogin: "2024-01-15T10:30:00Z"
+                - id: 2
+                  name: "Bob Johnson"
+                  email: "bob@example.com"
+                  role: user
+                  active: true
+                  lastLogin: "2024-01-14T08:15:00Z"
+                - id: 3
+                  name: "Charlie Brown"
+                  email: "charlie@example.com"
+                  role: user
+                  active: false
+                  lastLogin: "2023-12-01T14:20:00Z"
+                - id: 4
+                  name: "Diana Prince"
+                  email: "diana@example.com"
+                  role: admin
+                  active: true
+                  lastLogin: "2024-01-16T09:00:00Z"
+                - id: 5
+                  name: "Eve Wilson"
+                  email: "eve@test.com"
+                  role: user
+                  active: true
+                  lastLogin: "2024-01-10T16:45:00Z"
+    
+    # Transform: Filter -> Map -> Sort
+    processed_users:
+      description: Processed user data
+      type: array
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression:
+                expr: "_.raw_users"
+      transform:
+        with:
+          # Step 1: Filter only active users
+          - provider: cel
+            inputs:
+              expression:
+                expr: "__self.filter(u, u.active == true)"
+          
+          # Step 2: Map to simplified structure
+          - provider: cel
+            inputs:
+              expression:
+                expr: |
+                  __self.map(u, {
+                    'id': u.id,
+                    'displayName': u.name,
+                    'email': u.email,
+                    'isAdmin': u.role == 'admin'
+                  })
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression:
+                expr: "size(__self) > 0"
+              message: "No active users found after filtering"
+    
+    # Aggregate statistics
+    user_stats:
+      description: Aggregated user statistics
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression:
+                expr: |
+                  {
+                    'total': size(_.raw_users),
+                    'active': size(_.raw_users.filter(u, u.active)),
+                    'inactive': size(_.raw_users.filter(u, !u.active)),
+                    'admins': size(_.raw_users.filter(u, u.role == 'admin')),
+                    'regularUsers': size(_.raw_users.filter(u, u.role == 'user'))
+                  }
+    
+    # Extract admin emails
+    admin_emails:
+      description: List of admin email addresses
+      type: array
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression:
+                expr: |
+                  _.raw_users
+                    .filter(u, u.role == 'admin' && u.active)
+                    .map(u, u.email)
+    
+    # Final output combining everything
+    report:
+      description: Complete user report
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression:
+                expr: |
+                  {
+                    'generatedAt': now(),
+                    'statistics': _.user_stats,
+                    'activeUsers': _.processed_users,
+                    'adminContacts': _.admin_emails
+                  }

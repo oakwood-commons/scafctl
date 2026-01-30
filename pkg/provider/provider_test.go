@@ -133,18 +133,20 @@ func TestDescriptor_Complete(t *testing.T) {
 				},
 			},
 		},
-		OutputSchema: SchemaDefinition{
-			Properties: map[string]PropertyDefinition{
-				"id": {
-					Type:        PropertyTypeString,
-					Description: "Resource ID",
-					Example:     "res-123",
-				},
-				"status": {
-					Type:        PropertyTypeString,
-					Description: "Resource status",
-					Enum:        []any{"pending", "active", "deleted"},
-					Example:     "active",
+		OutputSchemas: map[Capability]SchemaDefinition{
+			CapabilityFrom: {
+				Properties: map[string]PropertyDefinition{
+					"id": {
+						Type:        PropertyTypeString,
+						Description: "Resource ID",
+						Example:     "res-123",
+					},
+					"status": {
+						Type:        PropertyTypeString,
+						Description: "Resource status",
+						Enum:        []any{"pending", "active", "deleted"},
+						Example:     "active",
+					},
 				},
 			},
 		},

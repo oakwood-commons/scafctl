@@ -78,7 +78,7 @@ spec:
   actions:
     clean:
       description: Clean build directory
-      provider: shell
+      provider: exec
       inputs:
         cmd:
           - rm
@@ -89,7 +89,7 @@ spec:
 
     test:
       description: Run tests
-      provider: shell
+      provider: exec
       dependsOn: [clean]
       inputs:
         cmd:
@@ -99,7 +99,7 @@ spec:
 
     build:
       description: Build binary
-      provider: shell
+      provider: exec
       dependsOn: [test]
       inputs:
         env:
