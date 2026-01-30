@@ -1,6 +1,7 @@
 package celexp
 
 import (
+	"context"
 	"fmt"
 	"sort"
 
@@ -28,7 +29,15 @@ func (e Expression) GetVariablesWithPrefix(prefix string) ([]string, error) {
 	}
 
 	// Create a CEL environment for parsing
-	env, err := cel.NewEnv()
+	// Use the environment factory if available to include custom extensions
+	var env *cel.Env
+	var err error
+	factory := getEnvFactory()
+	if factory != nil {
+		env, err = factory(context.Background())
+	} else {
+		env, err = cel.NewEnv()
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to create CEL environment: %w", err)
 	}
@@ -98,7 +107,15 @@ func (e Expression) GetUnderscoreVariables() ([]string, error) {
 //	// Returns: []string{}, nil (x is a comprehension variable, not external)
 func (e Expression) RequiredVariables() ([]string, error) {
 	// Create a CEL environment for parsing
-	env, err := cel.NewEnv()
+	// Use the environment factory if available to include custom extensions
+	var env *cel.Env
+	var err error
+	factory := getEnvFactory()
+	if factory != nil {
+		env, err = factory(context.Background())
+	} else {
+		env, err = cel.NewEnv()
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to create CEL environment: %w", err)
 	}

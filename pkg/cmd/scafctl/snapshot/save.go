@@ -1,0 +1,201 @@
+package snapshot
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/resolver"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
+)
+
+// SaveOptions holds options for the save command
+type SaveOptions struct {
+	ConfigFile string
+	OutputFile string
+	Redact     bool
+	Parameters []string
+}
+
+// CommandSave creates the snapshot save command
+func CommandSave(_ *settings.Run, ioStreams terminal.IOStreams, binaryName string) *cobra.Command {
+	opts := &SaveOptions{}
+
+	cmd := &cobra.Command{
+		Use:   "save [config-file]",
+		Short: "Execute resolvers and save snapshot",
+		Long: heredoc.Doc(`
+			Execute resolvers from a configuration file and save the execution state
+			to a snapshot file.
+			
+			The snapshot includes:
+			  - All resolver values and status
+			  - Execution timing and metrics
+			  - Failed attempts and errors
+			  - Input parameters used
+			  - Phase-level information
+			
+			Snapshots can be used for debugging, testing, comparison, and audit trails.
+		`),
+		Example: heredoc.Docf(`
+			# Save execution snapshot
+			$ %s snapshot save config.yaml --output snapshot.json
+			
+			# Save with parameters
+			$ %s snapshot save config.yaml -o snapshot.json -r env=prod -r region=us-west-2
+			
+			# Save with sensitive data redacted
+			$ %s snapshot save config.yaml -o snapshot.json --redact
+		`, binaryName, binaryName, binaryName),
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			opts.ConfigFile = args[0]
+			return runSave(cmd.Context(), opts, ioStreams)
+		},
+	}
+
+	cmd.Flags().StringVarP(&opts.OutputFile, "output", "o", "", "Output snapshot file (required)")
+	cmd.Flags().BoolVar(&opts.Redact, "redact", false, "Redact sensitive values in snapshot")
+	cmd.Flags().StringArrayVarP(&opts.Parameters, "resolver", "r", []string{}, "Resolver parameters (key=value)")
+
+	if err := cmd.MarkFlagRequired("output"); err != nil {
+		panic(fmt.Sprintf("failed to mark output flag as required: %v", err))
+	}
+
+	return cmd
+}
+
+func runSave(ctx context.Context, opts *SaveOptions, ioStreams terminal.IOStreams) error {
+	lgr := logger.FromContext(ctx)
+
+	// Read and parse config file
+	lgr.V(-1).Info("reading config file", "file", opts.ConfigFile)
+	data, err := os.ReadFile(opts.ConfigFile)
+	if err != nil {
+		return fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	// Parse configuration
+	var config struct {
+		Solution  string               `yaml:"solution" json:"solution"`
+		Version   string               `yaml:"version" json:"version"`
+		Resolvers []*resolver.Resolver `yaml:"resolvers" json:"resolvers"`
+	}
+
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return fmt.Errorf("failed to parse config file: %w", err)
+	}
+
+	if len(config.Resolvers) == 0 {
+		return fmt.Errorf("no resolvers found in config file")
+	}
+
+	// Parse parameters
+	params := make(map[string]any)
+	for _, param := range opts.Parameters {
+		// Simple key=value parsing (could be enhanced with flags.ParseKeyValueCSV)
+		var key, value string
+		if _, err := fmt.Sscanf(param, "%[^=]=%s", &key, &value); err != nil {
+			return fmt.Errorf("invalid parameter format '%s': expected key=value", param)
+		}
+		params[key] = value
+	}
+
+	lgr.V(-1).Info("executing resolvers",
+		"count", len(config.Resolvers),
+		"parameters", len(params))
+
+	// Execute resolvers
+	providerRegistry := provider.NewRegistry()
+	// Create adapter for registry
+	registryAdapter := &registryAdapter{registry: providerRegistry}
+	executor := resolver.NewExecutor(registryAdapter)
+	start := time.Now()
+	execCtx, err := executor.Execute(ctx, config.Resolvers, params)
+	duration := time.Since(start)
+	status := resolver.ExecutionStatusSuccess
+	if err != nil {
+		lgr.V(1).Info("resolver execution completed with errors", "error", err)
+		status = resolver.ExecutionStatusFailed
+		// Continue to capture snapshot even with errors
+	}
+
+	// Capture snapshot
+	lgr.V(-1).Info("capturing snapshot")
+	snapshot, err := resolver.CaptureSnapshot(
+		execCtx,
+		config.Solution,
+		config.Version,
+		settings.VersionInformation.BuildVersion,
+		params,
+		duration,
+		status,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to capture snapshot: %w", err)
+	}
+
+	// Redact sensitive values if requested
+	if opts.Redact {
+		lgr.V(-1).Info("redacting sensitive values")
+		// Manually redact based on resolver Sensitive flag
+		sensitiveMap := make(map[string]bool)
+		for _, r := range config.Resolvers {
+			if r.Sensitive {
+				sensitiveMap[r.Name] = true
+			}
+		}
+		for name, sr := range snapshot.Resolvers {
+			if sensitiveMap[name] {
+				sr.Value = "<redacted>"
+				sr.Sensitive = true
+			}
+		}
+	}
+
+	// Save snapshot
+	lgr.V(-1).Info("saving snapshot", "output", opts.OutputFile)
+	if err := resolver.SaveSnapshot(snapshot, opts.OutputFile); err != nil {
+		return fmt.Errorf("failed to save snapshot: %w", err)
+	}
+
+	fmt.Fprintf(ioStreams.Out, "Snapshot saved to %s\n", opts.OutputFile)
+	fmt.Fprintf(ioStreams.Out, "  Solution: %s (v%s)\n", snapshot.Metadata.Solution, snapshot.Metadata.Version)
+	fmt.Fprintf(ioStreams.Out, "  Resolvers: %d\n", len(snapshot.Resolvers))
+	fmt.Fprintf(ioStreams.Out, "  Duration: %s\n", snapshot.Metadata.TotalDuration)
+	fmt.Fprintf(ioStreams.Out, "  Status: %s\n", snapshot.Metadata.Status)
+
+	return nil
+}
+
+// registryAdapter adapts provider.Registry to resolver.RegistryInterface
+type registryAdapter struct {
+	registry *provider.Registry
+}
+
+func (r *registryAdapter) Register(p provider.Provider) error {
+	return r.registry.Register(p)
+}
+
+func (r *registryAdapter) Get(name string) (provider.Provider, error) {
+	p, ok := r.registry.Get(name)
+	if !ok {
+		return nil, fmt.Errorf("provider %s not found", name)
+	}
+	return p, nil
+}
+
+func (r *registryAdapter) List() []provider.Provider {
+	return r.registry.ListProviders()
+}
+
+func (r *registryAdapter) DescriptorLookup() resolver.DescriptorLookup {
+	return r.registry.DescriptorLookup()
+}

@@ -18,12 +18,27 @@ var (
 	defaultCacheMu   sync.RWMutex // Protects cache replacement for testing
 
 	// DefaultCacheSize is the default size for the package-level cache
-	DefaultCacheSize = 1000
+	// Aligned with global cache size for consistency
+	DefaultCacheSize = 10000
 
 	// defaultCostLimit is the default cost limit for CEL expression evaluation
 	// Set to 0 to disable cost limiting
 	// Use GetDefaultCostLimit() and SetDefaultCostLimit() for thread-safe access
 	defaultCostLimit atomic.Uint64
+
+	// envFactory is a function that creates CEL environments with all extensions loaded.
+	// This is set by the env package to avoid circular dependencies.
+	// If nil, cel.NewEnv() is used as fallback (without custom extensions).
+	envFactory     func(context.Context, ...cel.EnvOption) (*cel.Env, error)
+	envFactoryOnce sync.Once
+	envFactoryMu   sync.RWMutex
+
+	// cacheFactory is a function that returns the global program cache.
+	// This is set by the env package to avoid circular dependencies.
+	// If nil, GetDefaultCache() creates a local cache.
+	cacheFactory     func() *ProgramCache
+	cacheFactoryOnce sync.Once
+	cacheFactoryMu   sync.RWMutex
 )
 
 // init initializes the default cost limit
@@ -49,6 +64,52 @@ func GetDefaultCostLimit() uint64 {
 //	celexp.SetDefaultCostLimit(0)       // Disable cost limiting
 func SetDefaultCostLimit(limit uint64) {
 	defaultCostLimit.Store(limit)
+}
+
+// SetEnvFactory sets the factory function used to create CEL environments.
+// This should be called once during application initialization by the env package.
+// It allows celexp to use environments with all custom extensions without circular dependencies.
+//
+// This function is thread-safe and uses sync.Once to ensure it's only set once.
+func SetEnvFactory(factory func(context.Context, ...cel.EnvOption) (*cel.Env, error)) {
+	envFactoryOnce.Do(func() {
+		envFactoryMu.Lock()
+		defer envFactoryMu.Unlock()
+		envFactory = factory
+	})
+}
+
+// getEnvFactory returns the current environment factory function.
+// If no factory has been set, returns nil and the caller should use cel.NewEnv() as fallback.
+func getEnvFactory() func(context.Context, ...cel.EnvOption) (*cel.Env, error) {
+	envFactoryMu.RLock()
+	defer envFactoryMu.RUnlock()
+	return envFactory
+}
+
+// SetCacheFactory sets the factory function used to get the global program cache.
+// This should be called once during application initialization by the env package.
+// It allows celexp to use the global cache without circular dependencies.
+//
+// This function is thread-safe and uses sync.Once to ensure it's only set once.
+//
+// Example (called by env package during initialization):
+//
+//	celexp.SetCacheFactory(env.GlobalCache)
+func SetCacheFactory(factory func() *ProgramCache) {
+	cacheFactoryOnce.Do(func() {
+		cacheFactoryMu.Lock()
+		defer cacheFactoryMu.Unlock()
+		cacheFactory = factory
+	})
+}
+
+// getCacheFactory returns the current cache factory function.
+// If no factory has been set, returns nil and the caller should use GetDefaultCache().
+func getCacheFactory() func() *ProgramCache {
+	cacheFactoryMu.RLock()
+	defer cacheFactoryMu.RUnlock()
+	return cacheFactory
 }
 
 type (
@@ -149,7 +210,7 @@ func WithNoCostLimit() Option {
 }
 
 // GetDefaultCache returns the package-level cache instance used by Expression.Compile().
-// The cache is lazily initialized on first access with DefaultCacheSize entries.
+// The cache is lazily initialized on first access with DefaultCacheSize entries (10,000).
 // All calls return the same cache instance (singleton pattern).
 //
 // Use this when you need to access cache statistics:
@@ -285,7 +346,12 @@ func (e Expression) Compile(envOpts []cel.EnvOption, opts ...Option) (*CompileRe
 
 	// Set defaults
 	if config.cache == nil {
-		config.cache = GetDefaultCache()
+		// Try to use global cache factory first, fall back to local default cache
+		if factory := getCacheFactory(); factory != nil {
+			config.cache = factory()
+		} else {
+			config.cache = GetDefaultCache()
+		}
 	}
 	if config.costLimit == nil {
 		defaultLimit := GetDefaultCostLimit()
@@ -310,7 +376,7 @@ func (e Expression) Compile(envOpts []cel.EnvOption, opts ...Option) (*CompileRe
 		return &CompileResult{
 			Program:      prog,
 			Expression:   e,
-			declaredVars: extractVarDeclarations(envOpts),
+			declaredVars: nil, // Use CompileWithVarDecls() for variable type tracking
 			envOpts:      envOpts,
 		}, nil
 	}
@@ -335,9 +401,16 @@ func (e Expression) Compile(envOpts []cel.EnvOption, opts ...Option) (*CompileRe
 		prog, err = keyResult.env.Program(keyResult.ast, progOpts...)
 	} else {
 		// Fallback: compile from scratch if AST not available
-		celEnv, envErr := cel.NewEnv(envOpts...)
-		if envErr != nil {
-			return nil, fmt.Errorf("failed to create CEL environment: %w", envErr)
+		// Use the environment factory if available (includes all custom extensions)
+		var celEnv *cel.Env
+		factory := getEnvFactory()
+		if factory != nil {
+			celEnv, err = factory(config.ctx, envOpts...)
+		} else {
+			celEnv, err = cel.NewEnv(envOpts...)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to create CEL environment: %w", err)
 		}
 
 		ast, issues := celEnv.Compile(string(e))
@@ -358,7 +431,7 @@ func (e Expression) Compile(envOpts []cel.EnvOption, opts ...Option) (*CompileRe
 	return &CompileResult{
 		Program:      prog,
 		Expression:   e,
-		declaredVars: extractVarDeclarations(envOpts),
+		declaredVars: nil, // Use CompileWithVarDecls() for variable type tracking
 		envOpts:      envOpts,
 	}, nil
 }
@@ -559,47 +632,6 @@ func EvalAsWithContext[T any](ctx context.Context, r *CompileResult, vars map[st
 	}
 
 	return typedResult, nil
-}
-
-// extractVarDeclarations extracts variable declarations from CEL environment options.
-// This function inspects the environment after it's created to determine what variables
-// were declared and their types. This enables automatic validation without requiring
-// CompileWithVarDecls().
-//
-// The function creates a temporary CEL environment from the options and uses CEL's
-// internal type checking to determine variable declarations.
-//
-//nolint:unparam // Returns nil for now, full implementation planned for Phase 2
-func extractVarDeclarations(envOpts []cel.EnvOption) map[string]*cel.Type {
-	if len(envOpts) == 0 {
-		return nil
-	}
-
-	// Create a temporary environment to inspect declarations
-	tempEnv, err := cel.NewEnv(envOpts...)
-	if err != nil {
-		// If environment creation fails, we can't extract declarations
-		return nil
-	}
-
-	// Use a test expression to trigger type checking and extract variable info
-	// We compile a simple expression that references a variable that doesn't exist
-	// This forces CEL to report all declared variables in the error message
-	// However, there's no direct API to get variable declarations, so we need
-	// to be creative.
-
-	// Alternative approach: Try to compile expressions for each potential variable
-	// and see which ones type-check successfully. This is expensive but works.
-
-	// For now, return nil and rely on CompileWithVarDecls for explicit tracking.
-	// In Phase 2, we can enhance this with reflection or CEL internals if needed.
-
-	// TODO: Implement proper variable extraction using CEL environment introspection
-	// For now, this is a placeholder that returns nil, which means validation
-	// will be skipped for expressions compiled with Compile() instead of
-	// CompileWithVarDecls().
-	_ = tempEnv
-	return nil
 }
 
 // GetDeclaredVars returns information about all variables declared during compilation.

@@ -243,9 +243,11 @@ func BenchmarkValidateDescriptor(b *testing.B) {
 				"input3": {Type: PropertyTypeBool},
 			},
 		},
-		OutputSchema: SchemaDefinition{
-			Properties: map[string]PropertyDefinition{
-				"output": {Type: PropertyTypeString},
+		OutputSchemas: map[Capability]SchemaDefinition{
+			CapabilityFrom: {
+				Properties: map[string]PropertyDefinition{
+					"output": {Type: PropertyTypeString},
+				},
 			},
 		},
 	}

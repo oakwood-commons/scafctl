@@ -1,0 +1,47 @@
+# Test fixture: Diamond dependency pattern
+# Tests complex dependency resolution with a diamond pattern: A -> B,C -> D
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: diamond-pattern-snapshot
+  version: 1.0.0
+spec:
+  resolvers:
+    top:
+      description: "Top of the diamond"
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "root"
+
+    left:
+      description: "Left branch"
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression:
+                expr: '_.top + "-left"'
+
+    right:
+      description: "Right branch"
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression:
+                expr: '_.top + "-right"'
+
+    bottom:
+      description: "Bottom of the diamond - depends on both branches"
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression:
+                expr: '_.left + ":" + _.right'

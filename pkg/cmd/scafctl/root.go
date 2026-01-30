@@ -7,6 +7,10 @@ import (
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/render"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/resolver"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/run"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/snapshot"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/version"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/profiler"
@@ -36,15 +40,18 @@ func Root() *cobra.Command {
 			cCmd.SetContext(logger.WithLogger(context.Background(), lgr))
 			ioStreams := terminal.NewIOStreams(os.Stdin, os.Stdout, os.Stderr, true)
 
-			err := output.ValidateCommands(args)
-			if err != nil {
-				output.NewWriteMessageOptions(
-					ioStreams,
-					output.MessageTypeError,
-					cliParams.NoColor,
-					cliParams.ExitOnError,
-				).WriteMessage(err.Error())
-				return
+			// Only validate args for the root command itself, not subcommands
+			if cCmd.Use == "scafctl" {
+				err := output.ValidateCommands(args)
+				if err != nil {
+					output.NewWriteMessageOptions(
+						ioStreams,
+						output.MessageTypeError,
+						cliParams.NoColor,
+						cliParams.ExitOnError,
+					).WriteMessage(err.Error())
+					return
+				}
 			}
 
 			if cCmd.Flags().Changed("pprof") {
@@ -98,5 +105,9 @@ func Root() *cobra.Command {
 	}
 	cCmd.AddCommand(version.CommandVersion(cliParams, ioStreams, settings.CliBinaryName))
 	cCmd.AddCommand(get.CommandGet(cliParams, ioStreams, settings.CliBinaryName))
+	cCmd.AddCommand(run.CommandRun(cliParams, ioStreams, settings.CliBinaryName))
+	cCmd.AddCommand(render.CommandRender(cliParams, ioStreams, settings.CliBinaryName))
+	cCmd.AddCommand(resolver.CommandResolver(cliParams, *ioStreams, settings.CliBinaryName))
+	cCmd.AddCommand(snapshot.CommandSnapshot(cliParams, *ioStreams, settings.CliBinaryName))
 	return cCmd
 }

@@ -273,7 +273,7 @@ spec:
     # -------------------------------------------------------------------------
     createOutputDirectory:
       description: Create output directory for artifacts
-      provider: shell
+      provider: exec
       inputs:
         # Literal array input
         cmd:
@@ -287,7 +287,7 @@ spec:
     # -------------------------------------------------------------------------
     validateEnvironment:
       description: Log the target environment
-      provider: shell
+      provider: exec
       dependsOn: [createOutputDirectory]
       inputs:
         cmd:
@@ -308,7 +308,7 @@ spec:
     # -------------------------------------------------------------------------
     buildDockerImage:
       description: Build Docker image with computed tag
-      provider: shell
+      provider: exec
       dependsOn: [validateEnvironment]
       when:
         # Conditional execution using expr
@@ -433,7 +433,7 @@ spec:
     # -------------------------------------------------------------------------
     deployToCluster:
       description: Deploy manifests to Kubernetes cluster
-      provider: shell
+      provider: exec
       dependsOn: [generateManifests, buildDockerImage]
       when:
         expr: "!_.dryRun"
@@ -461,7 +461,7 @@ spec:
     # -------------------------------------------------------------------------
     waitForDeployment:
       description: Wait for deployment to be ready
-      provider: shell
+      provider: exec
       dependsOn: [deployToCluster]
       when:
         expr: "!_.dryRun"
@@ -486,7 +486,7 @@ spec:
     # -------------------------------------------------------------------------
     verifyDeployment:
       description: Verify deployment succeeded
-      provider: shell
+      provider: exec
       dependsOn: [waitForDeployment]
       when:
         expr: "!_.dryRun"
@@ -505,7 +505,7 @@ spec:
     # -------------------------------------------------------------------------
     runSmokeTests:
       description: Run smoke tests in non-production environments
-      provider: shell
+      provider: exec
       dependsOn: [verifyDeployment]
       when:
         expr: "_.environment == \"staging\" || _.environment == \"dev\""
@@ -600,7 +600,7 @@ spec:
     # -------------------------------------------------------------------------
     cleanup:
       description: Clean up temporary files
-      provider: shell
+      provider: exec
       # No dependsOn - can run independently
       inputs:
         cmd:

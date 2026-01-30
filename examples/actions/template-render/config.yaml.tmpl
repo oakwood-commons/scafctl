@@ -1,0 +1,38 @@
+# Generated Configuration File
+# Application: {{.app_name}}
+# Environment: {{.environment}}
+# Generated at: {{.timestamp}}
+
+server:
+  host: {{.server.host}}
+  port: {{.server.port}}
+  {{- if .server.tls_enabled}}
+  tls:
+    enabled: true
+    cert_file: /etc/ssl/certs/{{.app_name}}.crt
+    key_file: /etc/ssl/private/{{.app_name}}.key
+  {{- end}}
+
+database:
+  host: {{.database.host}}
+  port: {{.database.port}}
+  name: {{.database.name}}
+  {{- if eq .environment "production"}}
+  pool_size: 20
+  {{- else}}
+  pool_size: 5
+  {{- end}}
+
+logging:
+  level: {{if eq .environment "production"}}info{{else}}debug{{end}}
+  format: json
+  {{- if .features.enable_metrics}}
+  metrics:
+    enabled: true
+    endpoint: /metrics
+  {{- end}}
+
+features:
+{{- range $key, $value := .features}}
+  {{$key}}: {{$value}}
+{{- end}}

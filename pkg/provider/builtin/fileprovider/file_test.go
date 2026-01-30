@@ -35,7 +35,7 @@ func TestFileProvider_Descriptor(t *testing.T) {
 	assert.Contains(t, desc.Schema.Properties, "operation")
 	assert.Contains(t, desc.Schema.Properties, "path")
 	assert.Contains(t, desc.Schema.Properties, "content")
-	assert.NotNil(t, desc.OutputSchema.Properties)
+	assert.NotNil(t, desc.OutputSchemas[provider.CapabilityFrom].Properties)
 }
 
 func TestFileProvider_Execute_Read_Success(t *testing.T) {

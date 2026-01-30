@@ -8,15 +8,15 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/google/cel-go/cel"
-	celext "github.com/google/cel-go/ext"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
-	"github.com/oakwood-commons/scafctl/pkg/celexp/conversion"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/ptrs"
 	"gopkg.in/yaml.v3"
 )
+
+// ProviderName is the name of this provider used for error wrapping and identification.
+const ProviderName = "debug"
 
 // DebugProvider provides debugging capabilities for inspecting data during workflow execution.
 type DebugProvider struct {
@@ -28,11 +28,12 @@ func NewDebugProvider() *DebugProvider {
 	version, _ := semver.NewVersion("1.0.0")
 	return &DebugProvider{
 		descriptor: &provider.Descriptor{
-			Name:        "debug",
-			DisplayName: "Debug Provider",
-			APIVersion:  "v1",
-			Version:     version,
-			Description: "Provides debugging capabilities for inspecting resolver data during workflow execution. Outputs formatted data to stdout, stderr, or file. Supports optional CEL expressions to filter or transform data before output.",
+			Name:         "debug",
+			DisplayName:  "Debug Provider",
+			APIVersion:   "v1",
+			Version:      version,
+			Description:  "Provides debugging capabilities for inspecting resolver data during workflow execution. Outputs formatted data to stdout, stderr, or file. Supports optional CEL expressions to filter or transform data before output.",
+			MockBehavior: "Returns debug output (same behavior in dry-run as debug is side-effect free)",
 			Capabilities: []provider.Capability{
 				provider.CapabilityFrom,
 				provider.CapabilityTransform,
@@ -45,8 +46,8 @@ func NewDebugProvider() *DebugProvider {
 					"expression": {
 						Type:        provider.PropertyTypeString,
 						Required:    false,
-						Description: "Optional CEL expression to filter or transform resolver data before output. If not provided, outputs all resolver data. Resolver data from context is available as variables in the expression.",
-						Example:     "user.name",
+						Description: "Optional CEL expression to filter or transform resolver data before output. If not provided, outputs all resolver data. Resolver data is available under the '_' variable (e.g., _.user.name).",
+						Example:     "_.user.name",
 						MaxLength:   ptrs.IntPtr(8192),
 					},
 					"label": {
@@ -90,23 +91,105 @@ func NewDebugProvider() *DebugProvider {
 					},
 				},
 			},
-			OutputSchema: provider.SchemaDefinition{
-				Properties: map[string]provider.PropertyDefinition{
-					"success": {
-						Type:        provider.PropertyTypeBool,
-						Description: "Whether the debug operation succeeded. Always true if no errors occurred",
+			OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
+				provider.CapabilityFrom: {
+					Properties: map[string]provider.PropertyDefinition{
+						"result": {
+							Type:        provider.PropertyTypeAny,
+							Description: "The filtered or transformed resolver data (if expression provided) or all resolver data (if no expression)",
+						},
+						"output": {
+							Type:        provider.PropertyTypeString,
+							Description: "The formatted debug output containing the formatted representation of the result",
+						},
+						"destination": {
+							Type:        provider.PropertyTypeString,
+							Description: "Where the output was written (stdout, stderr, or file path)",
+						},
 					},
-					"result": {
-						Type:        provider.PropertyTypeAny,
-						Description: "The filtered or transformed resolver data (if expression provided) or all resolver data (if no expression)",
+				},
+				provider.CapabilityTransform: {
+					Properties: map[string]provider.PropertyDefinition{
+						"result": {
+							Type:        provider.PropertyTypeAny,
+							Description: "The filtered or transformed resolver data (if expression provided) or all resolver data (if no expression)",
+						},
+						"output": {
+							Type:        provider.PropertyTypeString,
+							Description: "The formatted debug output containing the formatted representation of the result",
+						},
+						"destination": {
+							Type:        provider.PropertyTypeString,
+							Description: "Where the output was written (stdout, stderr, or file path)",
+						},
 					},
-					"output": {
-						Type:        provider.PropertyTypeString,
-						Description: "The formatted debug output containing the formatted representation of the result",
+				},
+				provider.CapabilityValidation: {
+					Properties: map[string]provider.PropertyDefinition{
+						"valid": {
+							Type:        provider.PropertyTypeBool,
+							Description: "Whether the debug operation succeeded (always true if no errors occurred)",
+						},
+						"errors": {
+							Type:        provider.PropertyTypeArray,
+							Description: "Validation errors (empty if valid)",
+						},
+						"result": {
+							Type:        provider.PropertyTypeAny,
+							Description: "The filtered or transformed resolver data",
+						},
+						"output": {
+							Type:        provider.PropertyTypeString,
+							Description: "The formatted debug output",
+						},
+						"destination": {
+							Type:        provider.PropertyTypeString,
+							Description: "Where the output was written",
+						},
 					},
-					"destination": {
-						Type:        provider.PropertyTypeString,
-						Description: "Where the output was written (stdout, stderr, or file path)",
+				},
+				provider.CapabilityAuthentication: {
+					Properties: map[string]provider.PropertyDefinition{
+						"authenticated": {
+							Type:        provider.PropertyTypeBool,
+							Description: "Whether authentication succeeded (always true for debug)",
+						},
+						"token": {
+							Type:        provider.PropertyTypeString,
+							Description: "The authentication token (empty for debug provider)",
+						},
+						"result": {
+							Type:        provider.PropertyTypeAny,
+							Description: "The filtered or transformed resolver data",
+						},
+						"output": {
+							Type:        provider.PropertyTypeString,
+							Description: "The formatted debug output",
+						},
+						"destination": {
+							Type:        provider.PropertyTypeString,
+							Description: "Where the output was written",
+						},
+					},
+				},
+				provider.CapabilityAction: {
+					Properties: map[string]provider.PropertyDefinition{
+						"success": {
+							Type:        provider.PropertyTypeBool,
+							Description: "Whether the debug operation succeeded. Always true if no errors occurred",
+						},
+						"result": {
+							Type:        provider.PropertyTypeAny,
+							Description: "The filtered or transformed resolver data (if expression provided) or all resolver data (if no expression)",
+						},
+						"output": {
+							Type:        provider.PropertyTypeString,
+							Description: "The formatted debug output containing the formatted representation of the result",
+						},
+						"destination": {
+							Type:        provider.PropertyTypeString,
+							Description: "Where the output was written (stdout, stderr, or file path)",
+						},
 					},
 				},
 			},
@@ -126,7 +209,7 @@ inputs:
 					YAML: `name: debug-user-name
 provider: debug
 inputs:
-  expression: "user.name"
+  expression: "_.user.name"
   label: "User name after processing"
   format: yaml`,
 				},
@@ -151,7 +234,11 @@ func (p *DebugProvider) Descriptor() *provider.Descriptor {
 }
 
 // Execute performs the debug operation.
-func (p *DebugProvider) Execute(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
+func (p *DebugProvider) Execute(ctx context.Context, input any) (*provider.Output, error) {
+	inputs, ok := input.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%s: expected map[string]any, got %T", ProviderName, input)
+	}
 	lgr := logger.FromContext(ctx)
 
 	// Check for dry-run mode
@@ -168,10 +255,11 @@ func (p *DebugProvider) Execute(ctx context.Context, inputs map[string]any) (*pr
 
 	if hasExpr && exprStr != "" {
 		// Evaluate CEL expression to filter/transform data
+		// Resolver data is available under the '_' variable (e.g., _.user.name)
 		var err error
-		data, err = p.evaluateExpression(ctx, exprStr, resolverData)
+		data, err = celexp.EvaluateExpression(ctx, exprStr, resolverData, nil)
 		if err != nil {
-			return nil, fmt.Errorf("failed to evaluate expression: %w", err)
+			return nil, fmt.Errorf("%s: failed to evaluate expression: %w", ProviderName, err)
 		}
 	} else {
 		// Use all resolver data
@@ -193,13 +281,13 @@ func (p *DebugProvider) Execute(ctx context.Context, inputs map[string]any) (*pr
 
 	// Validate file path if destination is file
 	if destination == "file" && filePath == "" {
-		return nil, fmt.Errorf("file path is required when destination is 'file'")
+		return nil, fmt.Errorf("%s: file path is required when destination is 'file'", ProviderName)
 	}
 
 	// Format the data
 	formatted, err := p.formatData(data, format, colorize)
 	if err != nil {
-		return nil, fmt.Errorf("failed to format data: %w", err)
+		return nil, fmt.Errorf("%s: failed to format data: %w", ProviderName, err)
 	}
 
 	// Add label if provided
@@ -211,7 +299,7 @@ func (p *DebugProvider) Execute(ctx context.Context, inputs map[string]any) (*pr
 	// Write to destination
 	destStr := destination
 	if err := p.writeOutput(ctx, output, destination, filePath); err != nil {
-		return nil, fmt.Errorf("failed to write output: %w", err)
+		return nil, fmt.Errorf("%s: failed to write output: %w", ProviderName, err)
 	}
 
 	if destination == "file" {
@@ -229,41 +317,6 @@ func (p *DebugProvider) Execute(ctx context.Context, inputs map[string]any) (*pr
 			"destination": destStr,
 		},
 	}, nil
-}
-
-// evaluateExpression evaluates a CEL expression with resolver data.
-func (p *DebugProvider) evaluateExpression(_ context.Context, exprStr string, resolverData map[string]any) (any, error) {
-	// Build CEL variables from resolver data
-	celVars := make(map[string]any)
-	for k, v := range resolverData {
-		celVars[k] = v
-	}
-
-	// Create environment options with string extensions
-	envOpts := make([]cel.EnvOption, 0, 1+len(celVars))
-	envOpts = append(envOpts, celext.Strings())
-
-	// Add resolver data variables to environment
-	for k := range celVars {
-		envOpts = append(envOpts, cel.Variable(k, cel.DynType))
-	}
-
-	// Compile the expression
-	expr := celexp.Expression(exprStr)
-	compiled, err := expr.Compile(envOpts)
-	if err != nil {
-		return nil, fmt.Errorf("failed to compile expression: %w", err)
-	}
-
-	// Evaluate the CEL expression
-	result, err := compiled.Eval(celVars)
-	if err != nil {
-		return nil, fmt.Errorf("failed to evaluate expression: %w", err)
-	}
-
-	// Convert CEL types to Go types (handles ref.Val arrays, maps, etc.)
-	goResult := conversion.GoToCelValue(result)
-	return conversion.CelValueToGo(goResult), nil
 }
 
 // formatData formats the data according to the specified format.

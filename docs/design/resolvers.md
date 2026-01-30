@@ -520,6 +520,177 @@ In this example:
 
 Transform providers must be deterministic and free of externally visible side effects.
 
+---
+
+### forEach: Iterating Over Arrays
+
+The `forEach` clause enables parallel iteration over array values during the transform phase. Each element is processed independently by the specified provider, and results are collected back into an array preserving the original order.
+
+#### Basic Syntax
+
+~~~yaml
+transform:
+  with:
+    - provider: cel
+      forEach:
+        item: user    # Variable name for current element (optional, defaults to __item)
+        index: i      # Variable name for current index (optional, defaults to __index)
+      inputs:
+        expression: |
+          {
+            "name": user.name.toUpperCase(),
+            "index": i
+          }
+~~~
+
+#### Iteration Variables
+
+Within a forEach iteration, you have access to:
+
+- `__item` - The current array element (built-in)
+- `__index` - The current array index (built-in)
+- Custom aliases via `item` and `index` fields in `forEach` clause
+
+Both the built-in names and custom aliases are available simultaneously:
+
+~~~yaml
+forEach:
+  item: user     # Access element as 'user' or '__item'
+  index: idx     # Access index as 'idx' or '__index'
+~~~
+
+#### Custom Iteration Source
+
+By default, forEach iterates over `__self` (the current resolver value). Use the `in` field to specify a different source:
+
+~~~yaml
+transform:
+  with:
+    - provider: http
+      forEach:
+        item: endpoint
+        in:
+          rslvr: endpoints  # Iterate over another resolver's value
+      inputs:
+        url:
+          expr: endpoint.url
+        method: GET
+~~~
+
+The `in` field accepts all ValueRef forms:
+
+- `rslvr:` - Reference another resolver
+- `expr:` - CEL expression
+- `tmpl:` - Go template
+- Literal array value
+
+#### Concurrency Control
+
+By default, forEach executes iterations in parallel without limits. Use `concurrency` to limit parallel executions:
+
+~~~yaml
+transform:
+  with:
+    - provider: http
+      forEach:
+        item: url
+        concurrency: 5  # Max 5 concurrent HTTP requests
+      inputs:
+        url:
+          expr: url
+~~~
+
+Setting `concurrency: 1` forces sequential execution.
+
+#### Conditional Iteration with `when`
+
+Use the `when` clause to conditionally execute iterations. The condition has access to iteration variables:
+
+~~~yaml
+transform:
+  with:
+    - provider: cel
+      forEach:
+        item: num
+      when:
+        expr: "num % 2 == 0"  # Only process even numbers
+      inputs:
+        expression: "num * 2"
+~~~
+
+When a `when` condition evaluates to `false`, the result for that index is `nil`, preserving the array length and index positions.
+
+#### Error Handling with `onError`
+
+Control error behavior during iteration:
+
+- `onError: stop` (default) - Stop on first error, propagate error
+- `onError: continue` - Continue processing remaining items, collect results with error metadata
+
+With `onError: continue`, each result is wrapped in a `ForEachIterationResult`:
+
+~~~yaml
+transform:
+  with:
+    - provider: http
+      forEach:
+        item: url
+      onError: continue
+      inputs:
+        url:
+          expr: url
+~~~
+
+Result structure with `onError: continue`:
+
+~~~json
+[
+  {"data": {"status": 200}, "error": ""},
+  {"data": null, "error": "connection timeout"},
+  {"data": {"status": 200}, "error": ""}
+]
+~~~
+
+#### Chaining forEach Steps
+
+Multiple forEach steps can be chained. Each step receives the previous step's output array:
+
+~~~yaml
+transform:
+  with:
+    # Step 1: Double each number
+    - provider: cel
+      forEach: {}
+      inputs:
+        expression: "__item * 2"
+    
+    # Step 2: Add 1 to each result
+    - provider: cel
+      forEach: {}
+      inputs:
+        expression: "__item + 1"
+~~~
+
+Input `[1, 2, 3]` → Step 1 → `[2, 4, 6]` → Step 2 → `[3, 5, 7]`
+
+#### Empty Array Handling
+
+If the input array is empty, forEach returns an empty array `[]` without executing the provider.
+
+#### Non-Array Input Error
+
+If the input is not an array/slice, forEach returns a `ForEachTypeError`. Ensure your resolve phase produces an array when using forEach.
+
+#### Order Preservation
+
+Results are always returned in the same order as the input array, regardless of the order in which parallel iterations complete.
+
+---
+
+> **Future Enhancement**: A `filter` property may be added to automatically remove `nil` results from the output array when using `when` conditions. This would provide a more ergonomic way to filter arrays without needing a separate transform step.
+
+---
+
 #### Complex Provider Chaining Examples
 
 **Example 1: HTTP → JSON Parse → CEL → Base64**
@@ -1071,6 +1242,7 @@ When multiple formats are ambiguous, scafctl applies the following parsing order
 - `-r url="https://example.com"` → Literal string (quotes override protocol detection)
 - `-r count=42` → Integer (rule 6)
 - `-r items=a,b,c` → Array `["a", "b", "c"]` (rule 7)
+- `-r items=a -r items=b -r items=c` → Array `["a", "b", "c"]` (rule 7)
 - `-r flag=true` → Boolean `true` (rule 5)
 - `-r config={"key":"value"}` → JSON object (rule 4)
 
@@ -1204,9 +1376,49 @@ spec:
 Rules:
 
 - Dependencies are inferred from `_` references in the dependency graph
+- Explicit dependencies can be declared with `dependsOn` (merged with auto-extracted)
 - Execution order is computed automatically from the dependency graph
 - Independent resolvers (no dependencies on each other) execute concurrently
 - Cycles in the dependency graph are rejected
+
+### Explicit Dependencies (dependsOn)
+
+When dependencies cannot be auto-extracted (e.g., templates loaded from files), use `dependsOn`:
+
+~~~yaml
+spec:
+  resolvers:
+    config:
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: config
+
+    formatted-output:
+      dependsOn:
+        - config
+        - credentials
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              path: "/path/to/template.tmpl"
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              name: output-template
+              template:
+                rslvr: formatted-output
+~~~
+
+The `dependsOn` field:
+- Accepts a list of resolver names that this resolver depends on
+- Is merged with auto-extracted dependencies (not a replacement)
+- Validates that referenced resolvers exist
+- Cannot reference itself (self-dependency is an error)
+- Participates in circular dependency detection
 
 ### Circular Dependency Detection
 

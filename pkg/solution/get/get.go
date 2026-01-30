@@ -166,7 +166,7 @@ func (o *Getter) FromLocalFileSystem(_ context.Context, path string) (*solution.
 	o.logger.V(1).Info("Unmarshalling solution data", "path", path, "size", len(data))
 
 	sol := solution.Solution{}
-	err = sol.UnmarshalFromBytes(data)
+	err = sol.LoadFromBytes(data)
 	if err != nil {
 		o.logger.Error(err, "Failed to unmarshal solution", "path", path)
 		return &solution.Solution{}, fmt.Errorf("unable to get the solution. Failed unmarshalling data from file '%s': %w", path, err)
@@ -219,7 +219,7 @@ func (o *Getter) FromURL(ctx context.Context, url string) (*solution.Solution, e
 	o.logger.V(1).Info("Unmarshalling solution data", "url", url, "size", len(data))
 
 	sol := solution.Solution{}
-	err = sol.UnmarshalFromBytes(data)
+	err = sol.LoadFromBytes(data)
 	if err != nil {
 		o.logger.Error(err, "Failed to unmarshal solution", "url", url)
 		return nil, fmt.Errorf("unable to get the solution. Failed unmarshalling data from URL '%s': %w", url, err)

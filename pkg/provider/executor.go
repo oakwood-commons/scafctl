@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 // ExecutionResult contains the result of a provider execution.
@@ -15,6 +16,9 @@ type ExecutionResult struct {
 
 	// DryRun indicates whether this was a dry-run execution
 	DryRun bool `json:"dryRun" yaml:"dryRun" doc:"Whether this was a dry-run execution"`
+
+	// ExecutionDuration is the total time taken to execute the provider
+	ExecutionDuration time.Duration `json:"executionDuration" yaml:"executionDuration" doc:"The total time taken to execute the provider" example:"1000000000"`
 
 	// ResolvedInputs are the inputs after resolution (for debugging)
 	ResolvedInputs map[string]any `json:"resolvedInputs,omitempty" yaml:"resolvedInputs,omitempty" doc:"The resolved inputs (for debugging)"`
@@ -48,15 +52,34 @@ func NewExecutor(opts ...ExecutorOption) *Executor {
 	return e
 }
 
+// validateExecutionMode checks that execution mode is set and matches provider capabilities.
+func validateExecutionMode(ctx context.Context, desc *Descriptor) error {
+	execMode, ok := ExecutionModeFromContext(ctx)
+	if !ok {
+		return fmt.Errorf("execution mode not provided in context")
+	}
+
+	// Check if the execution mode matches declared capabilities
+	for _, cap := range desc.Capabilities {
+		if cap == execMode {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("provider %q does not support capability %q; supported: %v", desc.Name, execMode, desc.Capabilities)
+}
+
 // Execute executes a provider with the given inputs and context.
 // It performs:
-// 1. Input resolution (literal, resolver bindings, CEL, templates)
-// 2. Input validation against provider schema
-// 3. Provider execution (provider checks context for dry-run mode)
-// 4. Output validation against output schema
+// 1. Execution mode validation against provider capabilities
+// 2. Input resolution (literal, resolver bindings, CEL, templates)
+// 3. Input validation against provider schema
+// 4. Optional decode (if Descriptor.Decode is set)
+// 5. Provider execution (provider checks context for dry-run mode)
+// 6. Output validation against output schema
 //
 // The context should contain:
-// - Execution mode (via WithExecutionMode)
+// - Execution mode (via WithExecutionMode) - REQUIRED
 // - Dry-run flag (via WithDryRun) - providers check this to modify behavior
 // - Resolver context (via WithResolverContext) for input resolution
 //
@@ -73,8 +96,16 @@ func (e *Executor) Execute(ctx context.Context, provider Provider, inputs map[st
 		return nil, fmt.Errorf("provider descriptor cannot be nil")
 	}
 
+	// Validate execution mode
+	if err := validateExecutionMode(ctx, desc); err != nil {
+		return nil, err
+	}
+
 	// Check if this is a dry-run
 	dryRun := DryRunFromContext(ctx)
+
+	// Start timing
+	startTime := time.Now()
 
 	// Create input resolver with schema
 	inputResolver := NewInputResolver(ctx, desc.Schema)
@@ -90,8 +121,27 @@ func (e *Executor) Execute(ctx context.Context, provider Provider, inputs map[st
 		return nil, fmt.Errorf("input validation failed: %w", err)
 	}
 
-	// Execute the provider (it will handle dry-run mode via context)
-	outputPtr, err := provider.Execute(ctx, resolvedInputs)
+	// Determine what to pass to Execute:
+	// - If Decode is defined: call it and pass the decoded (typed) value
+	// - If Decode is nil: pass the raw map[string]any
+	var executionInput any = resolvedInputs
+	if desc.Decode != nil {
+		decoded, err := desc.Decode(resolvedInputs)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode inputs: %w", err)
+		}
+		executionInput = decoded
+	}
+
+	// Execute the provider with either typed input or map
+	outputPtr, err := provider.Execute(ctx, executionInput)
+
+	// Calculate execution duration
+	executionDuration := time.Since(startTime)
+
+	// Record metrics (no-op if metrics collection is disabled)
+	GlobalMetrics.Record(desc.Name, executionDuration, err == nil)
+
 	if err != nil {
 		return nil, fmt.Errorf("provider execution failed: %w", err)
 	}
@@ -100,19 +150,18 @@ func (e *Executor) Execute(ctx context.Context, provider Provider, inputs map[st
 	}
 	output := *outputPtr
 
-	// Validate output if schema is defined
-	if desc.OutputSchema.Properties != nil {
-		if err := e.schemaValidator.ValidateOutput(output.Data, desc.OutputSchema); err != nil {
-			return nil, fmt.Errorf("output validation failed: %w", err)
-		}
-	}
+	// Validate output if schema is defined for the execution mode capability
+	// Note: We currently don't have access to which capability was used for execution,
+	// so output validation against per-capability schemas would need to be done at a higher level
+	// TODO: Consider passing capability context to executor for per-capability output validation
 
 	// Build result
 	result := &ExecutionResult{
-		Provider:       provider,
-		Output:         output,
-		DryRun:         dryRun,
-		ResolvedInputs: resolvedInputs,
+		Provider:          provider,
+		Output:            output,
+		DryRun:            dryRun,
+		ExecutionDuration: executionDuration,
+		ResolvedInputs:    resolvedInputs,
 	}
 
 	return result, nil

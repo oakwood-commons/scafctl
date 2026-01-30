@@ -1,0 +1,86 @@
+# Error Handling Example
+# Demonstrates error handling with onError: continue.
+#
+# Run: scafctl run workflow -f examples/actions/error-handling.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: error-handling
+  version: 1.0.0
+  description: Error handling with onError continue
+
+spec:
+  resolvers:
+    checks:
+      description: List of health checks to run
+      type: array
+      items:
+        type: any
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - name: database
+                  url: "http://localhost:5432/health"
+                - name: cache
+                  url: "http://localhost:6379/health"
+                - name: api
+                  url: "http://localhost:8080/health"
+
+  workflow:
+    actions:
+      # This action fails but workflow continues
+      optional-cleanup:
+        description: Optional cleanup that might fail
+        displayName: Optional Cleanup
+        provider: exec
+        # Continue workflow even if this fails
+        onError: continue
+        inputs:
+          shell: true
+          # This command will fail (exit code 1)
+          command: "echo 'Attempting optional cleanup...' && exit 1"
+
+      # This action runs even though optional-cleanup failed
+      required-setup:
+        description: Required setup step
+        displayName: Setup
+        provider: exec
+        # No dependency on optional-cleanup, runs in same phase
+        inputs:
+          shell: true
+          command: "echo 'Running required setup...'"
+
+      # Demonstrate forEach with onError: continue
+      health-checks:
+        description: Run health checks
+        displayName: Health Checks
+        provider: exec
+        dependsOn:
+          - required-setup
+        forEach:
+          in:
+            expr: "_.checks"
+          # Continue checking other services if one fails
+          onError: continue
+        inputs:
+          shell: true
+          name:
+            expr: "__item.name"
+          command:
+            # Some checks might fail, but we continue with others
+            expr: "'echo Checking ' + __item.name + ' at ' + __item.url"
+
+      # Runs after all health checks, regardless of individual failures
+      report:
+        description: Generate health report
+        displayName: Report
+        provider: exec
+        dependsOn:
+          - health-checks
+        inputs:
+          shell: true
+          command:
+            expr: "'echo Health check report for ' + string(size(_.checks)) + ' services'"
