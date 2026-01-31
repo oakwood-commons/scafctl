@@ -24,9 +24,12 @@ spec:
       resolve:
         with:
           - provider: parameter
+            onError: continue
             inputs:
-              name: env
-              default: development
+              key: env
+          - provider: static
+            inputs:
+              value: development
     
     region:
       description: Deployment region
@@ -34,9 +37,12 @@ spec:
       resolve:
         with:
           - provider: parameter
+            onError: continue
             inputs:
-              name: region
-              default: us-west-2
+              key: region
+          - provider: static
+            inputs:
+              value: us-west-2
     
     # Phase 2: Depends on phase 1
     port:
@@ -46,9 +52,8 @@ spec:
         with:
           - provider: cel
             inputs:
-              expression:
-                # Production uses standard port, others use development port
-                expr: "_.environment == 'production' ? 443 : 8080"
+              # Production uses standard port, others use development port
+              expression: "_.environment == 'production' ? 443 : 8080"
     
     hostname:
       description: Server hostname based on environment and region
@@ -57,9 +62,7 @@ spec:
         with:
           - provider: cel
             inputs:
-              expression:
-                expr: |
-                  _.environment + '-server-' + _.region + '.example.com'
+              expression: "_.environment + '-server-' + _.region + '.example.com'"
     
     # Phase 3: Depends on phases 1 and 2
     config:
@@ -69,15 +72,14 @@ spec:
         with:
           - provider: cel
             inputs:
-              expression:
-                expr: |
-                  {
-                    'environment': _.environment,
-                    'region': _.region,
-                    'hostname': _.hostname,
-                    'port': _.port,
-                    'url': 'https://' + _.hostname + ':' + string(_.port),
-                    'ssl': _.environment == 'production',
-                    'debug': _.environment != 'production',
-                    'logLevel': _.environment == 'production' ? 'warn' : 'debug'
-                  }
+              expression: |
+                {
+                  'environment': _.environment,
+                  'region': _.region,
+                  'hostname': _.hostname,
+                  'port': _.port,
+                  'url': 'https://' + _.hostname + ':' + string(_.port),
+                  'ssl': _.environment == 'production',
+                  'debug': _.environment != 'production',
+                  'logLevel': _.environment == 'production' ? 'warn' : 'debug'
+                }

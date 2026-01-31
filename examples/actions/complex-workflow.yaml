@@ -11,7 +11,7 @@
 # - Finally cleanup section
 # - Action result data flow (__actions references)
 #
-# Run: scafctl run workflow -f examples/actions/complex-workflow.yaml
+# Run: scafctl run solution -f examples/actions/complex-workflow.yaml
 
 apiVersion: scafctl.io/v1
 kind: Solution

@@ -11,30 +11,29 @@ import (
 func CommandResolver(cliParams *settings.Run, ioStreams terminal.IOStreams, binaryName string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "resolver",
-		Short: "Resolver operations",
+		Short: "Resolver operations (deprecated - use render solution)",
 		Long: heredoc.Doc(`
-			Manage and visualize resolver configurations.
+			NOTE: Most resolver commands have been moved to the render command:
 			
-			Resolvers are the core abstraction for discovering and transforming configuration values.
-			This command provides tools for visualizing dependencies, analyzing execution plans,
-			and validating resolver definitions.
+			  scafctl render solution --graph           # View dependency graph
+			  scafctl render solution --snapshot        # Save execution snapshot
+			
+			This command will be removed in a future version.
 		`),
 		Example: heredoc.Docf(`
-			# Visualize resolver dependencies as ASCII art
-			$ %s resolver graph config.yaml --format ascii
+			# View dependency graph (new way)
+			$ %s render solution -f config.yaml --graph
 			
-			# Generate DOT format for Graphviz
-			$ %s resolver graph config.yaml --format dot | dot -Tpng > graph.png
-			
-			# Generate Mermaid diagram
-			$ %s resolver graph config.yaml --format mermaid
-			
-			# Export as JSON for programmatic analysis
-			$ %s resolver graph config.yaml --format json
-		`, binaryName, binaryName, binaryName, binaryName),
+			# Generate Graphviz DOT format (new way)  
+			$ %s render solution -f config.yaml --graph --graph-format=dot | dot -Tpng > graph.png
+		`, binaryName, binaryName),
+		Deprecated: "use 'render solution --graph' instead",
 	}
 
-	cmd.AddCommand(CommandGraph(cliParams, ioStreams, binaryName))
+	// Keep the graph subcommand for backward compatibility but mark as deprecated
+	graphCmd := CommandGraph(cliParams, ioStreams, binaryName)
+	graphCmd.Deprecated = "use 'render solution --graph' instead"
+	cmd.AddCommand(graphCmd)
 
 	return cmd
 }

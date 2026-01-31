@@ -6,7 +6,31 @@ These concerns apply across resolvers, actions, providers, plugins, and solution
 
 ---
 
+## Implementation Status
+
+| Concern | Status | Notes |
+|---------|--------|-------|
+| Schema and Typing Model | ✅ Implemented | Provider `Descriptor` with `Schema` and `OutputSchemas` |
+| Provider Contracts | ✅ Implemented | Full descriptor with input/output schemas, capabilities |
+| Provider Capabilities | ✅ Implemented | `from`, `transform`, `validation`, `authentication`, `action` |
+| Secrets and Sensitive Data | ✅ Implemented | `pkg/secrets` with AES-256-GCM, keychain integration |
+| Secret Redaction | ✅ Implemented | `RedactedError`, `--redact` flag on snapshots |
+| Stateless Core | ✅ Implemented | Providers are stateless, no persistent state |
+| Error Model | ✅ Implemented | Rich error types with location, cause, context |
+| Determinism Rules | ✅ Implemented | Resolver purity enforced, `MockBehavior` declared |
+| Resolver DAG Visualization | ✅ Implemented | ASCII, DOT, Mermaid, JSON formats |
+| Action DAG Visualization | ⚠️ Partial | JSON/YAML render, no ASCII/DOT/Mermaid yet |
+| Validation | ✅ Implemented | Schema, dependency, type validation |
+| Linting | 📋 Planned | Unused resolvers, unreachable actions, anti-patterns |
+| Extensibility (Providers/Plugins) | ✅ Implemented | Plugin system for external providers |
+| Render vs Run Separation | ✅ Implemented | `scafctl render` vs `scafctl run` |
+| Dry-run Mode | ✅ Implemented | `--dry-run` flag, `DryRunFromContext()` |
+
+---
+
 ## Schema and Typing Model
+
+> **Status**: ✅ Implemented in `pkg/provider/provider.go`
 
 ### Purpose
 
@@ -32,27 +56,30 @@ Schemas are used for validation only. They do not imply runtime coercion.
 
 ## Provider Contracts and Capabilities
 
+> **Status**: ✅ Implemented - See `pkg/provider/provider.go` `Descriptor` struct
+
 ### Provider Contracts
 
 Each provider must declare:
 
-- Input schema
-- Output shape
-- Supported operations (if applicable)
-- Determinism expectations
-- Side-effect behavior
-- A way to mock so solutions can be tested
+- Input schema ✅ (`Schema` field)
+- Output shape ✅ (`OutputSchemas` field)
+- Supported operations (if applicable) ✅ (`Capabilities` field)
+- Determinism expectations ✅ (`MockBehavior` field)
+- Side-effect behavior ✅ (capability determines this)
+- A way to mock so solutions can be tested ✅ (`MockBehavior` field)
 
 Providers are treated as black boxes with explicit contracts.
 
 ### Capabilities
 
-Providers may declare capabilities such as:
+Providers declare capabilities that determine where they can be used:
 
-- Requires network access
-- Requires filesystem access
-- Supports render-only mode
-- Supports dry-run or plan mode
+- `from` - Provider can be used in resolver `resolve.with` section ✅
+- `transform` - Provider can be used in resolver `transform.with` section ✅
+- `validation` - Provider can be used in resolver `validate.with` section ✅
+- `authentication` - Provider handles authentication ✅
+- `action` - Provider can be invoked as an action (side effects) ✅
 
 Capabilities allow scafctl and external executors to reason about safety and execution constraints.
 
@@ -60,24 +87,37 @@ Capabilities allow scafctl and external executors to reason about safety and exe
 
 ## Secrets and Sensitive Data
 
+> **Status**: ✅ Implemented in `pkg/secrets/`
+
 ### Design Goals
 
-- Prevent accidental leakage
-- Avoid rendering secrets into artifacts
-- Keep secrets out of logs and plans
+- Prevent accidental leakage ✅
+- Avoid rendering secrets into artifacts ✅ (`--redact` flag)
+- Keep secrets out of logs and plans ✅ (`RedactedError` type)
 
 ### Rules
 
-- Secrets may be resolved by resolvers
-- Secrets may be passed to actions
-- Secrets must not be rendered in cleartext during render mode
-- Providers must explicitly declare secret-handling behavior
+- Secrets may be resolved by resolvers ✅ (`secret` provider)
+- Secrets may be passed to actions ✅
+- Secrets must not be rendered in cleartext during render mode ✅ (`--redact`)
+- Providers must explicitly declare secret-handling behavior ✅
 
-Render mode must support secret redaction or placeholder substitution.
+Render mode supports secret redaction via `--redact` flag on snapshots.
+
+### Implementation Details
+
+- **Storage**: AES-256-GCM encryption with OS keychain for master key
+- **CLI**: `scafctl secrets list/get/set/delete/exists/export/import/rotate`
+- **Platform paths** (XDG Base Directory Specification):
+  - Linux: `~/.local/share/scafctl/secrets/`
+  - macOS: `~/Library/Application Support/scafctl/secrets/`
+  - Windows: `%LOCALAPPDATA%\scafctl\secrets\`
 
 ---
 
 ## Lifecycle and State
+
+> **Status**: ✅ Implemented - Core is stateless by design
 
 ### Stateless Core
 
@@ -101,39 +141,44 @@ State is accessed only through providers.
 
 ## Error Model
 
+> **Status**: ✅ Implemented in `pkg/resolver/errors.go`, `pkg/action/errors.go`
+
 ### Principles
 
-- Fail fast
-- Fail early
-- Fail explicitly
+- Fail fast ✅
+- Fail early ✅
+- Fail explicitly ✅
 
 ### Error Categories
 
-- Schema validation errors
-- Resolver evaluation errors
-- Render-time errors
-- Provider execution errors
+- Schema validation errors ✅
+- Resolver evaluation errors ✅ (`ExecutionError`)
+- Render-time errors ✅
+- Provider execution errors ✅
 
-Errors must include:
+Errors include:
 
-- Location in the solution
-- Provider or resolver name
-- Clear cause
-- Suggested remediation where possible
+- Location in the solution ✅ (resolver name, phase, step)
+- Provider or resolver name ✅
+- Clear cause ✅
+- Suggested remediation where possible ✅ (validation messages)
 
 ---
 
 ## Determinism and Reproducibility
 
+> **Status**: ✅ Implemented
+
 ### Determinism Rules
 
-- Resolvers must be pure
-- Render mode must be deterministic
-- Action graphs must be reproducible given the same inputs
+- Resolvers must be pure ✅ (enforced by design - no side effects)
+- Render mode must be deterministic ✅
+- Action graphs must be reproducible given the same inputs ✅
 
 ### Non-Determinism
 
-If a provider is non-deterministic, it must declare this explicitly.
+If a provider is non-deterministic, it must declare this via `MockBehavior`.
+Providers like `exec` that have side effects are restricted to `CapabilityAction`.
 
 ---
 
@@ -141,14 +186,18 @@ If a provider is non-deterministic, it must declare this explicitly.
 
 ### Validation
 
-scafctl should support:
+> **Status**: ✅ Implemented
 
-- Schema validation
-- Dependency validation
-- Type validation
-- Capability validation
+scafctl supports:
+
+- Schema validation ✅ (provider inputs, config files)
+- Dependency validation ✅ (cycle detection in DAG)
+- Type validation ✅ (CEL type checking)
+- Capability validation ✅ (providers checked for required capabilities)
 
 ### Linting
+
+> **Status**: 📋 Planned
 
 Linting may include:
 
@@ -163,64 +212,91 @@ Linting is advisory, not blocking.
 
 ## Visualization and Introspection
 
+> **Status**: ✅ Mostly Implemented
+
 ### Goals
 
-- Make execution graphs understandable
-- Make data flow visible
-- Aid debugging and review
+- Make execution graphs understandable ✅
+- Make data flow visible ✅
+- Aid debugging and review ✅
 
 ### Outputs
 
-- Resolver DAG visualization
-- Action DAG visualization
-- Rendered action graph inspection
-- Dependency summaries
+- Resolver DAG visualization ✅ (`--graph` with ASCII, DOT, Mermaid, JSON)
+- Action DAG visualization ⚠️ (JSON/YAML render only, ASCII/DOT/Mermaid planned)
+- Rendered action graph inspection ✅ (`scafctl render solution`)
+- Dependency summaries ✅ (`scafctl explain solution`)
 
 Visualization operates on rendered graphs, not runtime execution.
+
+### CLI Commands
+
+```bash
+# Resolver graph visualization
+scafctl render solution -f solution.yaml --graph
+scafctl render solution -f solution.yaml --graph --graph-format=dot
+scafctl render solution -f solution.yaml --graph --graph-format=mermaid
+
+# Standalone resolver graph
+scafctl resolver graph -f solution.yaml --format=mermaid
+```
 
 ---
 
 ## Extensibility Boundaries
 
+> **Status**: ✅ Implemented
+
 ### What Can Be Extended
 
-- Providers (via plugins)
-- Schemas
-- Validation rules
+- Providers (via plugins) ✅
+- Schemas ✅
+- Validation rules ✅
 
 ### What Must Remain Fixed
 
-- Resolver purity
-- Action side-effect boundaries
-- Render vs run separation
-- Dependency rules
+- Resolver purity ✅ (enforced)
+- Action side-effect boundaries ✅ (enforced via capabilities)
+- Render vs run separation ✅ (enforced)
+- Dependency rules ✅ (DAG prevents cycles)
 
-Extensibility must not compromise determinism or analyzability.
+Extensibility does not compromise determinism or analyzability.
 
 ---
 
 ## UX and Command-Line Experience
 
+> **Status**: ✅ Implemented
+
 ### Expectations
 
-- Clear error messages
-- Predictable commands
-- Explicit modes (run vs render)
-- No hidden behavior
+- Clear error messages ✅
+- Predictable commands ✅ (kubectl-style verb-kind-name)
+- Explicit modes (run vs render) ✅
+- No hidden behavior ✅
 
-Commands should be composable and script-friendly.
+Commands are composable and script-friendly.
+
+### Additional UX Features Implemented
+
+- `--quiet` / `--no-color` flags for CI/CD
+- `-o json/yaml/table` output formats
+- `--interactive` mode for TUI
+- Progress callbacks during execution
 
 ---
 
 ## Design Guardrails
 
-The following must always hold true:
+> **Status**: ✅ All guardrails enforced
 
-- Resolvers never perform side effects
-- Actions never feed resolvers
-- Providers are the only execution mechanism
-- Rendering never executes providers
-- Execution never mutates resolver outputs
+The following always hold true:
+
+- Resolvers never perform side effects ✅ (enforced by capability system)
+- Actions never feed resolvers ✅ (separate execution phases)
+- Providers are the only execution mechanism ✅
+- Rendering never executes providers ✅ (`scafctl render` is safe)
+- Execution never mutates resolver outputs ✅ (immutable context)
 
 Violating these rules breaks the mental model.
 

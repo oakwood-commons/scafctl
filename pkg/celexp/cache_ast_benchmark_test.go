@@ -1,6 +1,7 @@
 package celexp
 
 import (
+	"context"
 	"testing"
 
 	"github.com/google/cel-go/cel"
@@ -17,10 +18,11 @@ func BenchmarkCurrentCacheKeyGeneration(b *testing.B) {
 
 	// Use cache with AST mode disabled (traditional approach)
 	cache := NewProgramCache(10)
+	ctx := context.Background()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = generateCacheKeyWithAST(cache, expr, opts, 0)
+		_ = generateCacheKeyWithAST(ctx, cache, expr, opts, 0)
 	}
 }
 
@@ -71,6 +73,7 @@ func BenchmarkCacheKeyComparison(b *testing.B) {
 
 	b.Run("Current", func(b *testing.B) {
 		cache := NewProgramCache(10)
+		ctx := context.Background()
 		for i := 0; i < b.N; i++ {
 			for _, expr := range expressions {
 				opts := []cel.EnvOption{
@@ -83,7 +86,7 @@ func BenchmarkCacheKeyComparison(b *testing.B) {
 					cel.Variable("items", cel.ListType(cel.IntType)),
 					cel.Variable("enabled", cel.BoolType),
 				}
-				_ = generateCacheKeyWithAST(cache, expr, opts, 0)
+				_ = generateCacheKeyWithAST(ctx, cache, expr, opts, 0)
 			}
 		}
 	})
@@ -129,6 +132,7 @@ func BenchmarkCacheHitScenario(b *testing.B) {
 	b.Run("Current-NoSharing", func(b *testing.B) {
 		// Current approach: each expression is compiled separately
 		cache := NewProgramCache(10)
+		ctx := context.Background()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			expr := commonStructure[i%len(commonStructure)]
@@ -142,7 +146,7 @@ func BenchmarkCacheHitScenario(b *testing.B) {
 				cel.Variable("val1", cel.IntType),
 				cel.Variable("val2", cel.IntType),
 			}
-			result := generateCacheKeyWithAST(cache, expr, opts, 0)
+			result := generateCacheKeyWithAST(ctx, cache, expr, opts, 0)
 			if result.err == nil && result.ast != nil {
 				_, _ = result.env.Program(result.ast)
 			}

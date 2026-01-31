@@ -10,6 +10,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/ptrs"
@@ -200,6 +201,20 @@ func NewHTTPProvider() *HTTPProvider {
 						Description: "Retry configuration for transient failures",
 						Required:    false,
 					},
+					"authProvider": {
+						Type:        provider.PropertyTypeString,
+						Description: "Authentication provider to use for this request (e.g., 'entra'). When set, the provider will automatically obtain and inject an access token.",
+						Required:    false,
+						Example:     "entra",
+						MaxLength:   ptrs.IntPtr(50),
+					},
+					"scope": {
+						Type:        provider.PropertyTypeString,
+						Description: "OAuth scope for authentication (required when authProvider is set). The token will be valid for the request timeout plus a 60-second buffer.",
+						Required:    false,
+						Example:     "https://graph.microsoft.com/.default",
+						MaxLength:   ptrs.IntPtr(500),
+					},
 				},
 			},
 			OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
@@ -302,6 +317,17 @@ inputs:
   method: GET
   timeout: 5`,
 				},
+				{
+					Name:        "Request with Entra authentication",
+					Description: "Make an authenticated request using Microsoft Entra ID (formerly Azure AD). The provider automatically obtains and injects an access token.",
+					YAML: `name: fetch-azure-data
+provider: http
+inputs:
+  url: "https://graph.microsoft.com/v1.0/me"
+  method: GET
+  authProvider: entra
+  scope: "https://graph.microsoft.com/.default"`,
+				},
 			},
 		},
 		client: &http.Client{
@@ -338,41 +364,85 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 	}
 
 	// Extract inputs
-	url, _ := inputs["url"].(string)
+	urlStr, _ := inputs["url"].(string)
 	method, _ := inputs["method"].(string)
 	if method == "" {
 		method = "GET"
 	}
 	method = strings.ToUpper(method)
 
-	// Get timeout
+	// Get timeout (handle both int and float64 from JSON/YAML unmarshaling)
 	timeout := 30
 	if t, ok := inputs["timeout"].(int); ok && t > 0 {
 		timeout = t
 	}
+	if t, ok := inputs["timeout"].(float64); ok && t > 0 {
+		timeout = int(t)
+	}
+	timeoutDuration := time.Duration(timeout) * time.Second
 
 	// Get body content for potential retries
 	bodyContent, _ := inputs["body"].(string)
 
-	// Get headers
-	var headers map[string]any
+	// Get headers (make a copy to avoid modifying input)
+	headers := make(map[string]any)
 	if h, ok := inputs["headers"].(map[string]any); ok {
-		headers = h
+		for k, v := range h {
+			headers[k] = v
+		}
+	}
+
+	// Handle authentication
+	authProvider, _ := inputs["authProvider"].(string)
+	scope, _ := inputs["scope"].(string)
+
+	if authProvider != "" {
+		if scope == "" {
+			return nil, fmt.Errorf("%s: scope is required when authProvider is set", ProviderName)
+		}
+
+		// Get auth handler from context
+		handler, err := auth.GetHandler(ctx, authProvider)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", ProviderName, err)
+		}
+
+		// Calculate minimum token validity: request timeout + 60 second buffer
+		minValidFor := timeoutDuration + 60*time.Second
+
+		// Get token with sufficient validity
+		token, err := handler.GetToken(ctx, auth.TokenOptions{
+			Scope:       scope,
+			MinValidFor: minValidFor,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("%s: failed to get auth token: %w", ProviderName, err)
+		}
+
+		// Inject authorization header
+		headers["Authorization"] = fmt.Sprintf("%s %s", token.TokenType, token.AccessToken)
+		lgr.V(1).Info("injected auth header",
+			"authProvider", authProvider,
+			"scope", scope,
+			"tokenExpiresAt", token.ExpiresAt,
+			"minValidFor", minValidFor,
+		)
 	}
 
 	// Create client with timeout
 	client := &http.Client{
-		Timeout: time.Duration(timeout) * time.Second,
+		Timeout: timeoutDuration,
 	}
 
 	// Parse retry configuration
 	retryCfg := parseRetryConfig(inputs)
 
 	// Execute request (with or without retry)
-	return p.executeWithRetry(ctx, lgr, client, method, url, bodyContent, headers, retryCfg)
+	return p.executeWithRetry(ctx, lgr, client, method, urlStr, bodyContent, headers, retryCfg, authProvider, scope)
 }
 
 // executeWithRetry performs an HTTP request with optional retry logic.
+// Supports automatic token refresh on 401 responses when authProvider is set.
 func (p *HTTPProvider) executeWithRetry(
 	ctx context.Context,
 	lgr *logr.Logger,
@@ -380,6 +450,7 @@ func (p *HTTPProvider) executeWithRetry(
 	method, url, bodyContent string,
 	headers map[string]any,
 	retryCfg *retryConfig,
+	authProvider, scope string,
 ) (*provider.Output, error) {
 	maxAttempts := 1
 	if retryCfg != nil {
@@ -388,6 +459,7 @@ func (p *HTTPProvider) executeWithRetry(
 
 	var lastErr error
 	var lastStatusCode int
+	authRetried := false // Track if we've already retried with fresh token
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		// Check context cancellation
@@ -442,6 +514,38 @@ func (p *HTTPProvider) executeWithRetry(
 		}
 
 		lastStatusCode = resp.StatusCode
+
+		// Handle 401 Unauthorized with automatic token refresh
+		if resp.StatusCode == http.StatusUnauthorized && authProvider != "" && !authRetried {
+			lgr.V(1).Info("received 401, attempting token refresh", "provider", ProviderName, "authProvider", authProvider)
+			authRetried = true
+
+			// Get fresh token with ForceRefresh
+			handler, err := auth.GetHandler(ctx, authProvider)
+			if err != nil {
+				lgr.V(1).Info("failed to get auth handler for retry", "error", err)
+			} else {
+				minValidFor := client.Timeout + 60*time.Second
+				token, err := handler.GetToken(ctx, auth.TokenOptions{
+					Scope:        scope,
+					MinValidFor:  minValidFor,
+					ForceRefresh: true,
+				})
+				if err != nil {
+					lgr.V(1).Info("failed to refresh token", "error", err)
+				} else {
+					// Update authorization header and retry
+					headers["Authorization"] = fmt.Sprintf("%s %s", token.TokenType, token.AccessToken)
+					lgr.V(1).Info("token refreshed, retrying request",
+						"authProvider", authProvider,
+						"tokenExpiresAt", token.ExpiresAt,
+					)
+					// Don't count this as a regular retry attempt
+					attempt--
+					continue
+				}
+			}
+		}
 
 		// Check if we should retry based on status code
 		if retryCfg != nil && shouldRetry(resp.StatusCode, retryCfg.RetryOn) && attempt < maxAttempts-1 {

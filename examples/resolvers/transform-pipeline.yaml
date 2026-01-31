@@ -66,33 +66,29 @@ spec:
         with:
           - provider: cel
             inputs:
-              expression:
-                expr: "_.raw_users"
+              expression: "_.raw_users"
       transform:
         with:
           # Step 1: Filter only active users
           - provider: cel
             inputs:
-              expression:
-                expr: "__self.filter(u, u.active == true)"
+              expression: "__self.filter(u, u.active == true)"
           
           # Step 2: Map to simplified structure
           - provider: cel
             inputs:
-              expression:
-                expr: |
-                  __self.map(u, {
-                    'id': u.id,
-                    'displayName': u.name,
-                    'email': u.email,
-                    'isAdmin': u.role == 'admin'
-                  })
+              expression: |
+                __self.map(u, {
+                  'id': u.id,
+                  'displayName': u.name,
+                  'email': u.email,
+                  'isAdmin': u.role == 'admin'
+                })
       validate:
         with:
           - provider: validation
             inputs:
-              expression:
-                expr: "size(__self) > 0"
+              expression: "size(__self) > 0"
               message: "No active users found after filtering"
     
     # Aggregate statistics
@@ -103,15 +99,14 @@ spec:
         with:
           - provider: cel
             inputs:
-              expression:
-                expr: |
-                  {
-                    'total': size(_.raw_users),
-                    'active': size(_.raw_users.filter(u, u.active)),
-                    'inactive': size(_.raw_users.filter(u, !u.active)),
-                    'admins': size(_.raw_users.filter(u, u.role == 'admin')),
-                    'regularUsers': size(_.raw_users.filter(u, u.role == 'user'))
-                  }
+              expression: |
+                {
+                  'total': size(_.raw_users),
+                  'active': size(_.raw_users.filter(u, u.active)),
+                  'inactive': size(_.raw_users.filter(u, !u.active)),
+                  'admins': size(_.raw_users.filter(u, u.role == 'admin')),
+                  'regularUsers': size(_.raw_users.filter(u, u.role == 'user'))
+                }
     
     # Extract admin emails
     admin_emails:
@@ -121,11 +116,10 @@ spec:
         with:
           - provider: cel
             inputs:
-              expression:
-                expr: |
-                  _.raw_users
-                    .filter(u, u.role == 'admin' && u.active)
-                    .map(u, u.email)
+              expression: |
+                _.raw_users
+                  .filter(u, u.role == 'admin' && u.active)
+                  .map(u, u.email)
     
     # Final output combining everything
     report:
@@ -135,11 +129,10 @@ spec:
         with:
           - provider: cel
             inputs:
-              expression:
-                expr: |
-                  {
-                    'generatedAt': now(),
-                    'statistics': _.user_stats,
-                    'activeUsers': _.processed_users,
-                    'adminContacts': _.admin_emails
-                  }
+              expression: |
+                {
+                  'generatedAt': time.now(),
+                  'statistics': _.user_stats,
+                  'activeUsers': _.processed_users,
+                  'adminContacts': _.admin_emails
+                }

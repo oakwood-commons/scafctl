@@ -1,7 +1,7 @@
 # Finally Cleanup Example
 # Demonstrates the finally section for cleanup actions that always run.
 #
-# Run: scafctl run workflow -f examples/actions/finally-cleanup.yaml
+# Run: scafctl run solution -f examples/actions/finally-cleanup.yaml
 
 apiVersion: scafctl.io/v1
 kind: Solution

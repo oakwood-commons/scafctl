@@ -33,6 +33,7 @@ This directory contains practical examples demonstrating various resolver patter
 |---------|-------------|
 | [http-api.yaml](http-api.yaml) | Fetching data from HTTP APIs |
 | [secrets.yaml](secrets.yaml) | Secure handling of sensitive values |
+| [identity.yaml](identity.yaml) | Accessing authentication identity info |
 
 ## Running Examples
 

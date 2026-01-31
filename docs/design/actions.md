@@ -528,7 +528,7 @@ actions:
 | Field | Description | Default |
 |-------|-------------|---------|
 | `maxAttempts` | Maximum number of attempts (including initial) | 1 (no retry) |
-| `backoff` | Backoff strategy: `fixed`, `linear`, `exponential` | `exponential` |
+| `backoff` | Backoff strategy: `fixed`, `linear`, `exponential` | `fixed` |
 | `initialDelay` | Delay before first retry | `1s` |
 | `maxDelay` | Maximum delay between retries | `30s` |
 ### Retry and Timeout Interaction
@@ -837,6 +837,10 @@ Action execution supports progress callbacks for real-time feedback during execu
 | `OnActionCancelled` | Fired when an action is cancelled |
 | `OnRetryAttempt` | Fired before a retry attempt (includes attempt number) |
 | `OnForEachProgress` | Fired as forEach iterations complete (includes completed/total counts) |
+| `OnPhaseStart` | Fired when a new execution phase begins |
+| `OnPhaseComplete` | Fired when an execution phase completes |
+| `OnFinallyStart` | Fired when the finally section begins |
+| `OnFinallyComplete` | Fired when the finally section completes |
 
 ### Callback Interface
 
@@ -851,6 +855,10 @@ type ProgressCallback interface {
     OnActionCancelled(actionName string)
     OnRetryAttempt(actionName string, attempt int, maxAttempts int, err error)
     OnForEachProgress(actionName string, completed int, total int)
+    OnPhaseStart(phase int, actionNames []string)
+    OnPhaseComplete(phase int)
+    OnFinallyStart()
+    OnFinallyComplete()
 }
 ~~~
 
@@ -864,12 +872,14 @@ After rendering, scafctl emits a graph that contains only concrete inputs and ex
 
 ~~~json
 {
-  "apiVersion": "scafctl.io/v1",
+  "apiVersion": "scafctl.oakwood-commons.github.io/v1alpha1",
   "kind": "ActionGraph",
   "executionOrder": [
     ["fetchConfig"],
     ["deploy"],
-    ["deploy-regions[0]", "deploy-regions[1]"],
+    ["deploy-regions[0]", "deploy-regions[1]"]
+  ],
+  "finallyOrder": [
     ["cleanup"]
   ],
   "actions": {
@@ -935,12 +945,13 @@ After rendering, scafctl emits a graph that contains only concrete inputs and ex
 The same graph in YAML format (`--output=yaml`):
 
 ~~~yaml
-apiVersion: scafctl.io/v1
+apiVersion: scafctl.oakwood-commons.github.io/v1alpha1
 kind: ActionGraph
 executionOrder:
   - [fetchConfig]
   - [deploy]
   - [deploy-regions[0], deploy-regions[1]]
+finallyOrder:
   - [cleanup]
 actions:
   fetchConfig:
@@ -1000,8 +1011,8 @@ actions:
 - External executors must be CEL-capable to evaluate deferred expressions
 - No runtime action result values exist until execution time
 - `executionOrder` is an array of phases, where each phase is an array of action names that can execute concurrently
+- `finallyOrder` is a separate array of phases for finally actions
 - Finally actions include `"section": "finally"` in the rendered output
-- Finally actions appear in the last phase(s) of `executionOrder`
 
 ---
 

@@ -283,10 +283,10 @@ func TestCelProvider_Execute_NoResolverData(t *testing.T) {
 		"expression": "_.input.upperAscii()",
 	}
 
-	// Should error because 'input' variable is undeclared (caught at compile time)
+	// Should error because 'input' key doesn't exist (caught at runtime with DynType)
 	_, err := p.Execute(ctx, inputs)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to compile expression")
+	assert.Contains(t, err.Error(), "no such key: input")
 }
 
 func TestCelProvider_Execute_InvalidExpression(t *testing.T) {

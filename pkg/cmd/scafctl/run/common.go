@@ -9,11 +9,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
 
@@ -28,7 +31,6 @@ type runCommandConfig struct {
 	ioStreams     *terminal.IOStreams
 	path          string
 	runner        runCommandRunner
-	writeErrorFn  func(msg string)
 	getOutputFn   func() string
 	setIOStreamFn func(ios *terminal.IOStreams, cli *settings.Run)
 }
@@ -44,18 +46,35 @@ func makeRunEFunc(cfg runCommandConfig, cmdUse string) func(*cobra.Command, []st
 			ctx = logger.WithLogger(ctx, lgr)
 		}
 
+		// Transfer config from parent context
+		if appCfg := config.FromContext(cCmd.Context()); appCfg != nil {
+			ctx = config.WithConfig(ctx, appCfg)
+		}
+
+		// Transfer auth registry from parent context
+		if authRegistry := auth.RegistryFromContext(cCmd.Context()); authRegistry != nil {
+			ctx = auth.WithRegistry(ctx, authRegistry)
+		}
+
+		// Get writer from parent context or create new one
+		w := writer.FromContext(cCmd.Context())
+		if w == nil {
+			w = writer.New(cfg.ioStreams, cfg.cliParams)
+		}
+		ctx = writer.WithWriter(ctx, w)
+
 		cfg.setIOStreamFn(cfg.ioStreams, cfg.cliParams)
 
 		err := output.ValidateCommands(args)
 		if err != nil {
-			cfg.writeErrorFn(err.Error())
+			w.Error(err.Error())
 			return err
 		}
 
 		if currentOutput := cfg.getOutputFn(); currentOutput != "" && currentOutput != "quiet" {
 			err = output.ValidateOutputType(currentOutput, ValidOutputTypes[:2])
 			if err != nil {
-				cfg.writeErrorFn(err.Error())
+				w.Error(err.Error())
 				return err
 			}
 		}

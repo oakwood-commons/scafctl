@@ -6,7 +6,7 @@
 #   deploy[1] (server2)
 #   deploy[2] (server3)
 #
-# Run: scafctl run workflow -f examples/actions/foreach-deploy.yaml
+# Run: scafctl run solution -f examples/actions/foreach-deploy.yaml
 
 apiVersion: scafctl.io/v1
 kind: Solution

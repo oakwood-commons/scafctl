@@ -1,7 +1,7 @@
 # Retry with Backoff Example
 # Demonstrates retry configuration with exponential backoff.
 #
-# Run: scafctl run workflow -f examples/actions/retry-backoff.yaml
+# Run: scafctl run solution -f examples/actions/retry-backoff.yaml
 
 apiVersion: scafctl.io/v1
 kind: Solution

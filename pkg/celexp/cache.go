@@ -363,7 +363,10 @@ type cacheKeyResult struct {
 // PERFORMANCE OPTIMIZATION: This function compiles the expression once and returns
 // both the cache key AND the compiled AST. The caller can reuse the AST to avoid
 // double compilation.
-func generateCacheKeyWithAST(cache *ProgramCache, expression string, opts []cel.EnvOption, costLimit uint64) cacheKeyResult {
+//
+// The ctx parameter is used for context cancellation and is passed to the environment
+// factory when creating CEL environments with custom extensions.
+func generateCacheKeyWithAST(ctx context.Context, cache *ProgramCache, expression string, opts []cel.EnvOption, costLimit uint64) cacheKeyResult {
 	h := sha256.New()
 
 	// Create a temporary environment to extract declarations
@@ -373,7 +376,7 @@ func generateCacheKeyWithAST(cache *ProgramCache, expression string, opts []cel.
 		var err error
 		factory := getEnvFactory()
 		if factory != nil {
-			tempEnv, err = factory(context.Background(), opts...)
+			tempEnv, err = factory(ctx, opts...)
 		} else {
 			tempEnv, err = cel.NewEnv(opts...)
 		}

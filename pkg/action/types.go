@@ -5,6 +5,7 @@ package action
 import (
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 )
 
@@ -71,6 +72,12 @@ type Action struct {
 	// ForEach enables iteration, executing the action once per array element.
 	// Only allowed in workflow.actions, not workflow.finally.
 	ForEach *spec.ForEachClause `json:"forEach,omitempty" yaml:"forEach,omitempty" doc:"Iteration configuration (not allowed in finally)"`
+
+	// ResultSchema defines the expected structure of the action's output using JSON Schema.
+	// If provided, the provider's output is validated against this schema at runtime.
+	// Supports full JSON Schema 2020-12 specification including $ref, allOf, anyOf, oneOf, etc.
+	// This enables self-documenting actions and catches mismatches early.
+	ResultSchema *jsonschema.Schema `json:"resultSchema,omitempty" yaml:"resultSchema,omitempty" doc:"JSON Schema for result validation"`
 }
 
 // Duration is a wrapper around time.Duration that supports YAML/JSON marshaling.

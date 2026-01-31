@@ -1,5 +1,21 @@
 # Solutions
 
+## Implementation Status
+
+| Feature | Status | Notes |
+| ------- | ------ | ----- |
+| Solution structure (apiVersion/kind/metadata/spec) | ✅ Implemented | `pkg/solution/solution.go` |
+| Metadata fields | ✅ Implemented | Includes icon/banner beyond original design |
+| Catalog fields | ✅ Implemented | visibility, beta, disabled |
+| Spec with resolvers | ✅ Implemented | `pkg/solution/spec.go` |
+| Workflow with actions/finally | ✅ Implemented | Uses `workflow.actions` and `workflow.finally` |
+| Dependencies (plugins) | ⏳ Planned | Not yet implemented |
+| Validation | ✅ Implemented | `pkg/solution/spec_validation.go` |
+| Run command | ✅ Implemented | `scafctl run solution` |
+| Render command | ✅ Implemented | `scafctl render solution` |
+
+---
+
 ## Purpose
 
 A solution is the top-level unit of configuration in scafctl. It defines *what exists*, *how data is obtained*, and *what actions should occur*.
@@ -57,6 +73,13 @@ metadata:
     - name: Person Name
       email: person@example.com
 
+# dependencies:                    # ⏳ Planned - not yet implemented
+#   plugins:
+#     - name: aws-provider
+#       version: ^1.5.0
+#     - name: custom-provider
+#       version: 2.1.0
+
 spec:
   resolvers: {}
   actions: {}
@@ -67,16 +90,45 @@ Top-level sections:
 - `apiVersion` - API version (scafctl.io/v1)
 - `kind` - Resource type (Solution)
 - `metadata` - Name, version, description, maintainers, tags
+- `dependencies` - Required plugins and their version constraints (⏳ planned)
 - `catalog` - Publishing metadata (visibility, beta flag, disabled flag)
 - `spec` - Execution specification
   - `resolvers` - pure data derivation
-  - `actions` - side-effect execution graph
+  - `workflow` - action execution specification
+    - `actions` - side-effect execution graph
+    - `finally` - cleanup actions that run after all regular actions
 
 Execution semantics are driven by the `spec` section.
 
 Expressions use CEL (`celexp.Expression`), and templates use Go templating (`gotmpl.GoTemplatingContent`).
 
 The default `apiVersion` is scafctl.io/v1; breaking schema changes follow semver.
+
+---
+
+## Dependencies
+
+> ⏳ **Planned Feature**: Plugin dependencies are not yet implemented.
+
+Solutions will be able to declare dependencies on plugins that provide custom providers.
+
+~~~yaml
+# dependencies:                    # ⏳ Not yet implemented
+#   plugins:
+#     - name: aws-provider
+#       version: ^1.5.0
+#     - name: gcp-provider
+#       version: ">=2.0.0 <3.0.0"
+~~~
+
+Planned behavior:
+
+1. scafctl checks if required plugins exist in the local catalog
+2. Missing plugins are pulled from configured remote catalogs
+3. Version constraints are validated
+4. Plugins are dynamically loaded to make their providers available
+
+This will enable solutions to use providers from external plugins without bundling them.
 
 ---
 
@@ -122,20 +174,36 @@ Resolver outputs are available under `_`.
 Actions define side effects as a declarative execution graph.
 
 ~~~yaml
-actions:
-  deploy:
-    description: Deploy container to production
-    provider: api
-    when:
-      expr: "_.environment == \"prod\""
-    inputs:
-      endpoint: https://api.example.com/deploy
-      method: POST
-      body:
-        image:
-          rslvr: image
-        environment:
-          rslvr: environment
+workflow:
+  actions:
+    deploy:
+      description: Deploy container to production
+      displayName: Deploy to Production
+      provider: api
+      when:
+        expr: "_.environment == \"prod\""
+      onError: fail                   # fail, continue, ignore
+      timeout: 5m                     # action timeout
+      retry:                          # retry configuration
+        maxAttempts: 3
+        backoff: exponential
+        initialDelay: 1s
+        maxDelay: 30s
+      inputs:
+        endpoint: https://api.example.com/deploy
+        method: POST
+        body:
+          image:
+            rslvr: image
+          environment:
+            rslvr: environment
+
+  finally:                            # Cleanup actions
+    cleanup:
+      description: Cleanup temporary resources
+      provider: shell
+      inputs:
+        command: rm -rf /tmp/deploy-*
 ~~~
 
 Properties:
@@ -144,6 +212,7 @@ Properties:
 - Executed after resolvers
 - Form a DAG
 - May depend on other actions
+- `finally` actions run after all regular actions complete
 
 Actions may be executed or rendered.
 
@@ -328,18 +397,24 @@ spec:
               expression: "__self in [\"dev\", \"staging\", \"prod\"]"
             message: "Environment must be dev, staging, or prod"
 
-  actions:
-    deploy:
-      description: Deploy to target environment
-      provider: api
-      when:
-        expr: "_.environment == \"prod\""
-      inputs:
-        endpoint: https://api.example.com/deploy
-        method: POST
-        body:
-          environment:
-            rslvr: environment
+  workflow:
+    actions:
+      deploy:
+        description: Deploy to target environment
+        provider: api
+        when:
+          expr: "_.environment == \"prod\""
+        timeout: 5m
+        retry:
+          maxAttempts: 3
+          backoff: exponential
+          initialDelay: 1s
+        inputs:
+          endpoint: https://api.example.com/deploy
+          method: POST
+          body:
+            environment:
+              rslvr: environment
 ~~~
 
 ---
@@ -374,7 +449,7 @@ catalog:                              # Optional: publishing metadata (no execut
   disabled: false                     # Optional: availability flag (default: false)
 
 spec:
-  resolvers:                          # Required: data resolution
+  resolvers:                          # Optional: data resolution
     resolverName:
       description: string             # Optional: resolver purpose
       resolve:
@@ -395,39 +470,51 @@ spec:
               notMatch: string
             message: string
 
-  actions:                            # Optional: side effects
-    actionName:
-      description: string             # Optional: action purpose
-      provider: provider-name         # Required: execution provider
-      when:                           # Optional: conditional execution
-        expr: string
-        tmpl: string
-        rslvr: resolverName
-      until:                          # Optional: retry condition
-        expr: string
-        tmpl: string
-        rslvr: resolverName
-      forEach:                        # Optional: iteration
-        item: itemName                # Variable name for current item
-        in: _.resolverName            # Array to iterate over
-      dependsOn:                      # Optional: action dependencies
-        - actionName
-      inputs: {}                      # Required: provider-specific inputs
-      results:                        # Optional: output definitions
-        resultName:
-          from: string                # CEL expression; reference via .__actions.<action>.results from declared dependencies
+  workflow:                           # Optional: action execution
+    actions:                          # Optional: side effects
+      actionName:
+        description: string           # Optional: action purpose
+        displayName: string           # Optional: human-friendly name
+        sensitive: bool               # Optional: mask in logs
+        provider: provider-name       # Required: execution provider
+        when:                         # Optional: conditional execution
+          expr: string
+          tmpl: string
+          rslvr: resolverName
+        onError: fail|continue|ignore # Optional: error handling
+        timeout: duration             # Optional: max execution time
+        retry:                        # Optional: retry configuration
+          maxAttempts: int
+          backoff: fixed|linear|exponential
+          initialDelay: duration
+          maxDelay: duration
+        forEach:                      # Optional: iteration
+          item: itemName              # Variable name for current item
+          in: _.resolverName          # Array to iterate over
+        dependsOn:                    # Optional: action dependencies
+          - actionName
+        inputs: {}                    # Optional: provider-specific inputs
+
+    finally:                          # Optional: cleanup actions
+      actionName:
+        # Same fields as actions, except:
+        # - No forEach allowed
+        # - Cannot dependsOn regular actions
+        # - Has implicit dependency on all regular actions
 ~~~
 
 ### Metadata Fields
 
 - `name` (required) - Unique identifier for the solution
 - `version` (required) - Semantic version (e.g., 1.0.0)
-- `description` (required) - Brief description of purpose
+- `description` (optional) - Brief description of purpose
 - `displayName` (optional) - Human-friendly display name
 - `category` (optional) - Classification category
 - `tags` (optional) - Array of searchable tags
 - `maintainers` (optional) - Contact information
 - `links` (optional) - External documentation references
+- `icon` (optional) - URL or path to solution icon image
+- `banner` (optional) - URL or path to solution banner image
 
 ### Resolver Fields
 
@@ -438,14 +525,36 @@ spec:
 
 ### Action Fields
 
+- `name` (set from map key) - Action identifier
 - `description` (optional) - Purpose of this action
+- `displayName` (optional) - Human-friendly display name
+- `sensitive` (optional) - If true, inputs/outputs are masked in logs
 - `provider` (required) - Provider name to execute
 - `when` (optional) - Conditional execution (supports expr, tmpl, rslvr)
-- `until` (optional) - Retry condition (supports expr, tmpl, rslvr)
-- `forEach` (optional) - Iteration over array values
+- `onError` (optional) - Error handling: `fail` (default), `continue`, `ignore`
+- `timeout` (optional) - Maximum execution duration (e.g., `30s`, `5m`)
+- `retry` (optional) - Retry configuration:
+  - `maxAttempts` - Total execution attempts (min: 1)
+  - `backoff` - Strategy: `fixed` (default), `linear`, `exponential`
+  - `initialDelay` - Delay before first retry
+  - `maxDelay` - Maximum delay between retries
+- `forEach` (optional) - Iteration over array values (not allowed in `finally`)
 - `dependsOn` (optional) - Array of action names to execute first
-- `inputs` (required) - Provider-specific input map
-- `results` (optional) - Output value definitions; consumers must reference declared dependencies via .__actions.<action>.results
+- `inputs` (optional) - Provider-specific input map
+
+### Action Results
+
+Action results are available to dependent actions via `__actions.<name>`:
+
+- `inputs` - Resolved inputs passed to provider
+- `results` - Provider output data
+- `status` - Execution status: `pending`, `running`, `succeeded`, `failed`, `skipped`, `timeout`, `cancelled`
+- `skipReason` - Why skipped: `condition` or `dependency-failed`
+- `startTime` - Execution start time
+- `endTime` - Execution end time
+- `error` - Error message if failed
+
+For `forEach` actions, results include iteration details with index and per-iteration status.
 
 ### Input Forms
 

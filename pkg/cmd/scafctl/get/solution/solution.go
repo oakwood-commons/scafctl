@@ -29,7 +29,7 @@ func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 	options := &CmdOptionsVersion{}
 	cCmd := &cobra.Command{
 		Use:     "solution",
-		Aliases: []string{"sol", "SOL", "Solution"},
+		Aliases: []string{"sol", "SOL", "Solution", "solutions"},
 		Short:   fmt.Sprintf("Gets %s solutions", settings.CliBinaryName),
 		RunE: func(cCmd *cobra.Command, args []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)

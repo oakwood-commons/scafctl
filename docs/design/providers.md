@@ -15,6 +15,27 @@ Providers are never invoked implicitly. A provider runs only when explicitly ref
 
 ---
 
+## Implementation Status
+
+| Feature | Status | Location |
+|---------|--------|----------|
+| Provider Interface | ✅ Implemented | `pkg/provider/provider.go` |
+| Descriptor with schemas | ✅ Implemented | `pkg/provider/provider.go` |
+| All 5 Capabilities | ✅ Implemented | `from`, `transform`, `validation`, `authentication`, `action` |
+| Execution Context | ✅ Implemented | `pkg/provider/context.go` |
+| Input Resolution (literal, rslvr, expr, tmpl) | ✅ Implemented | `pkg/provider/inputs.go` |
+| Schema Validation | ✅ Implemented | `pkg/provider/validation.go` |
+| Executor Lifecycle | ✅ Implemented | `pkg/provider/executor.go` |
+| In-Memory Metrics (`--show-metrics`) | ✅ Implemented | `pkg/provider/metrics.go` |
+| Prometheus Metrics | ✅ Implemented | `pkg/metrics/metrics.go` |
+| Registry with versioning | ✅ Implemented | `pkg/provider/registry.go` |
+| Built-in Providers | ✅ Implemented | `pkg/provider/builtin/` |
+| Capability-required output fields | ✅ Implemented | `CapabilityRequiredOutputFields` |
+| Secret handling (`IsSecret`) | ✅ Implemented | Redaction via `SecretMask` |
+| Iteration Context | ✅ Implemented | `__item`, `__index`, aliases |
+
+---
+
 ## Responsibilities
 
 A provider is responsible for:
@@ -38,6 +59,8 @@ A provider is not responsible for:
 
 ## Execution Context
 
+> **Status**: ✅ Implemented in `pkg/provider/context.go`
+
 Providers are invoked with a resolved execution context.
 
 **Resolver Context in Go Context:**
@@ -53,6 +76,16 @@ The resolver context (the `_` map containing all emitted resolver values) is sto
 
 - `__self` - The current value being transformed or validated (available in transform and validate phases)
 - `__item` - The current item in a foreach loop (available in action iterations)
+- `__index` - The current zero-based index in a foreach loop (available in action iterations)
+- `__actions` - Map of completed action results (available during action execution)
+
+**Iteration aliases:**
+
+Actions with `forEach` can define custom aliases for iteration variables:
+- `itemAlias` - Custom variable name for `__item` (e.g., `service` instead of `__item`)
+- `indexAlias` - Custom variable name for `__index` (e.g., `i` instead of `__index`)
+
+Both default names and aliases are available simultaneously in the context.
 
 **Key principles:**
 
@@ -64,6 +97,8 @@ The resolver context (the `_` map containing all emitted resolver values) is sto
 ---
 
 ## Execution Lifecycle
+
+> **Status**: ✅ Implemented in `pkg/provider/executor.go`
 
 Providers follow a strict execution pipeline to ensure consistent behavior and validation:
 
@@ -131,9 +166,13 @@ This validation happens in the `Executor`, not in individual providers. Provider
 
 ## Observability & Metrics
 
+> **Status**: ✅ Implemented
+
 Provider execution is instrumented for observability at two levels:
 
 ### In-Memory Metrics (CLI Output)
+
+> **Status**: ✅ Implemented in `pkg/provider/metrics.go`
 
 When running with `--show-metrics`, scafctl collects per-provider execution statistics:
 
@@ -162,17 +201,21 @@ scafctl run solution -f solution.yaml --show-metrics
 
 ### Prometheus Metrics (Observability)
 
+> **Status**: ✅ Implemented in `pkg/metrics/metrics.go`
+
 Provider metrics are also exported as Prometheus metrics for integration with monitoring systems:
 
 **`scafctl_provider_execution_duration_seconds`** (Histogram)
 - Labels: `provider_name`, `status` (success/failure)
 - Tracks execution duration distribution per provider
+- Recorded via `metrics.RecordProviderExecution()`
 
 **`scafctl_provider_execution_total`** (Counter)
 - Labels: `provider_name`, `status` (success/failure)
 - Tracks total invocation count per provider
+- Recorded via `metrics.RecordProviderExecution()`
 
-These metrics are recorded automatically when Prometheus metrics are enabled via `metrics.RegisterMetrics()`.
+These metrics are recorded automatically when Prometheus metrics are enabled via `metrics.RegisterMetrics()`. The provider executor calls `GlobalMetrics.Record()` which dispatches to both in-memory and Prometheus collectors.
 
 ### Logging
 
@@ -318,6 +361,8 @@ func (p *APIProvider) Execute(ctx context.Context, input any) (Output, error) {
 
 ## Provider Capabilities
 
+> **Status**: ✅ Implemented - All 5 capability types active
+
 Providers declare their supported execution contexts through capabilities. Capabilities indicate which parts of the scafctl execution model a provider can participate in.
 
 ### Capability Types
@@ -424,10 +469,11 @@ func (c Capability) IsValid() bool {
 type contextKey string
 
 const (
-  executionModeKey   contextKey = "scafctl.provider.executionMode"   // Key for Capability execution mode
-  dryRunKey          contextKey = "scafctl.provider.dryRun"          // Key for boolean dry-run flag
-  resolverContextKey contextKey = "scafctl.provider.resolverContext" // Key for resolver context map
-  parametersKey      contextKey = "scafctl.provider.parameters"      // Key for CLI parameters map
+  executionModeKey    contextKey = "scafctl.provider.executionMode"    // Key for Capability execution mode
+  dryRunKey           contextKey = "scafctl.provider.dryRun"           // Key for boolean dry-run flag
+  resolverContextKey  contextKey = "scafctl.provider.resolverContext"  // Key for resolver context map
+  parametersKey       contextKey = "scafctl.provider.parameters"       // Key for CLI parameters map
+  iterationContextKey contextKey = "scafctl.provider.iterationContext" // Key for forEach iteration context
 )
 
 // NOTE: These keys are intentionally unexported. scafctl's orchestration layer
@@ -669,6 +715,8 @@ The `MockBehavior` field in `Descriptor` documents what the provider returns dur
 ---
 
 ## Input Resolution
+
+> **Status**: ✅ Implemented in `pkg/provider/inputs.go`
 
 Provider inputs are resolved by scafctl before execution.
 
@@ -1105,7 +1153,94 @@ resolve:
 
 ---
 
+### secret
+
+Retrieves encrypted secrets from the scafctl secrets store.
+
+~~~yaml
+resolve:
+  with:
+    - provider: secret
+      inputs:
+        operation: get
+        name: api-key
+~~~
+
+**Operations:**
+- `get` - Retrieve a secret by name
+- `list` - List available secrets (optionally filtered by pattern)
+
+**Inputs:**
+- `operation` (required): One of `get` or `list`
+- `name`: Secret name (required for `get` operation)
+- `pattern`: Regex pattern for filtering secrets in `list` operation
+- `required`: Whether the secret must exist (default: `true`)
+- `fallback`: Fallback value if secret doesn't exist and `required: false`
+
+**Output (get operation):**
+~~~yaml
+value: "the-secret-value"
+name: "api-key"
+~~~
+
+**Security:** Secrets are stored with AES-256-GCM encryption and master keys are managed via OS keychain integration.
+- `missingKey`: Behavior when a map key is missing: `default`, `zero`, or `error`
+- `leftDelim`, `rightDelim`: Custom delimiters (default: `{{` and `}}`)
+- `data`: Additional data to merge with resolver context
+
+---
+
+### identity
+
+Provides authentication identity information from auth handlers without exposing tokens or secrets.
+
+~~~yaml
+resolve:
+  with:
+    - provider: identity
+      inputs:
+        operation: claims
+~~~
+
+**Operations:**
+- `status` - Get authentication status (authenticated, identity type, expiry info)
+- `claims` - Get identity claims (name, email, subject, issuer, etc.)
+- `list` - List all available auth handlers with their status
+
+**Inputs:**
+- `operation` (required): One of `status`, `claims`, or `list`
+- `handler`: Name of the auth handler to query (e.g., `entra`). If not specified, uses the first authenticated handler.
+
+**Output (claims operation):**
+~~~yaml
+authenticated: true
+handler: entra
+identityType: user
+claims:
+  email: user@example.com
+  name: John Doe
+  subject: abc123
+  tenantId: 12345-...
+  displayIdentity: user@example.com
+~~~
+
+**Output (status operation):**
+~~~yaml
+authenticated: true
+handler: entra
+identityType: user
+tenantId: 12345-...
+expiresAt: "2024-01-15T10:30:00Z"
+expiresIn: "55m30s"
+~~~
+
+**Security:** This provider never exposes access tokens, refresh tokens, or any sensitive credentials. It only provides identity metadata suitable for logging, auditing, and conditional logic.
+
+---
+
 ## Security Considerations
+
+> **Status**: ✅ Implemented
 
 Providers handle sensitive data through structured security mechanisms:
 
@@ -1167,6 +1302,8 @@ Providers with `CapabilityAuthentication` have additional requirements:
 ---
 
 ## Context Propagation
+
+> **Status**: ✅ Implemented in `pkg/provider/context.go`
 
 Providers receive and should respect standard Go context patterns:
 

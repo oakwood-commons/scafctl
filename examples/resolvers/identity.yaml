@@ -1,0 +1,134 @@
+# Identity Provider Examples
+#
+# Prerequisites:
+#   - Run `scafctl auth login entra` to authenticate first
+#
+# Run: scafctl run solution -f identity.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: identity-example
+  version: 1.0.0
+  description: Identity provider examples - access authentication info without exposing tokens
+
+spec:
+  resolvers:
+    # Example 1: Get identity claims from authenticated user
+    user_claims:
+      description: Get claims (name, email, etc.) from authenticated user
+      type: any
+      resolve:
+        with:
+          - provider: identity
+            inputs:
+              operation: claims
+
+    # Example 2: Get authentication status
+    auth_status:
+      description: Check authentication status and expiry info
+      type: any
+      resolve:
+        with:
+          - provider: identity
+            inputs:
+              operation: status
+
+    # Example 3: Get status from specific handler
+    entra_status:
+      description: Get status from Entra handler specifically
+      type: any
+      resolve:
+        with:
+          - provider: identity
+            inputs:
+              operation: status
+              handler: entra
+
+    # Example 4: List all available auth handlers
+    available_handlers:
+      description: List all registered auth handlers
+      type: any
+      resolve:
+        with:
+          - provider: identity
+            inputs:
+              operation: list
+
+    # Example 5: Extract user email for use in other resolvers
+    user_email:
+      description: Extract user email from claims
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: |
+                has(_.user_claims.claims) && has(_.user_claims.claims.email)
+                  ? _.user_claims.claims.email
+                  : "unknown@example.com"
+
+    # Example 6: Check if user is authenticated
+    is_authenticated:
+      description: Boolean check if user is logged in
+      type: bool
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: _.auth_status.authenticated
+
+    # Example 7: Get display identity for logging
+    display_identity:
+      description: Get best available identity string for display
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: |
+                has(_.user_claims.claims) && has(_.user_claims.claims.displayIdentity)
+                  ? _.user_claims.claims.displayIdentity
+                  : "anonymous"
+
+    # Example 8: Get token expiry info
+    token_expiry:
+      description: Human-readable time until token expires
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: |
+                has(_.auth_status.expiresIn)
+                  ? _.auth_status.expiresIn
+                  : "unknown"
+
+    # Example 9: Conditional logic based on identity type
+    identity_type:
+      description: Get the type of authenticated identity
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: |
+                has(_.auth_status.identityType)
+                  ? _.auth_status.identityType
+                  : "none"
+
+    # Example 10: Build audit info combining identity data
+    audit_info:
+      description: Structured audit information from identity
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: |
+                {
+                  "user": _.display_identity,
+                  "authenticated": _.is_authenticated,
+                  "identityType": _.identity_type,
+                  "expiresIn": _.token_expiry
+                }

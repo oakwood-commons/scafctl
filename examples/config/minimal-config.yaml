@@ -1,0 +1,59 @@
+# scafctl Minimal Configuration
+# ==============================
+#
+# A minimal configuration to get started with scafctl.
+#
+# Config locations (XDG Base Directory Specification):
+#   Linux:   ~/.config/scafctl/config.yaml
+#   macOS:   ~/Library/Application Support/scafctl/config.yaml
+#   Windows: %LOCALAPPDATA%\scafctl\config.yaml
+#
+# For all available options, see: examples/config/full-config.yaml
+# Or generate with: scafctl config init --full
+#
+# Documentation: https://github.com/oakwood-commons/scafctl
+
+version: 1
+
+# Application settings
+settings:
+  # Disable colored output if needed
+  # noColor: true
+
+  # Suppress warnings and info messages
+  # quiet: true
+
+# Logging configuration
+logging:
+  # Use "text" format for human-readable output during development
+  # format: "text"
+
+  # Increase verbosity for debugging (-1 = debug, 0 = info, 1 = warn, 2 = error)
+  # level: -1
+
+# Add your catalogs below
+# Use: scafctl config add-catalog to add interactively
+#
+# Default catalog location (XDG data directory):
+#   Linux:   ~/.local/share/scafctl/catalog/
+#   macOS:   ~/Library/Application Support/scafctl/catalog/
+#   Windows: %LOCALAPPDATA%\scafctl\catalog\
+catalogs:
+  - name: local
+    type: filesystem
+    # This path is expanded relative to your home directory
+    path: ~/scafctl-catalog/
+
+# Additional catalog examples:
+#
+# catalogs:
+#   - name: local
+#     type: filesystem
+#     path: ~/my-solutions
+#
+#   - name: company
+#     type: http
+#     url: https://catalog.company.com/v1
+#     auth:
+#       type: token
+#       tokenEnvVar: COMPANY_TOKEN

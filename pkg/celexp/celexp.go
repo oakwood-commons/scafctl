@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/cel-go/cel"
 	"github.com/oakwood-commons/scafctl/pkg/celexp/conversion"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
 var (
@@ -19,7 +20,7 @@ var (
 
 	// DefaultCacheSize is the default size for the package-level cache
 	// Aligned with global cache size for consistency
-	DefaultCacheSize = 10000
+	DefaultCacheSize = settings.DefaultCELCacheSize
 
 	// defaultCostLimit is the default cost limit for CEL expression evaluation
 	// Set to 0 to disable cost limiting
@@ -45,7 +46,7 @@ var (
 //
 //nolint:gochecknoinits // Required to initialize atomic.Uint64 default value
 func init() {
-	defaultCostLimit.Store(1000000)
+	defaultCostLimit.Store(settings.DefaultCELCostLimit)
 }
 
 // GetDefaultCostLimit returns the current default cost limit.
@@ -364,7 +365,7 @@ func (e Expression) Compile(envOpts []cel.EnvOption, opts ...Option) (*CompileRe
 	}
 
 	// Generate cache key WITH compiled AST - this avoids double compilation
-	keyResult := generateCacheKeyWithAST(config.cache, string(e), envOpts, *config.costLimit)
+	keyResult := generateCacheKeyWithAST(config.ctx, config.cache, string(e), envOpts, *config.costLimit)
 
 	// Check for compilation errors during key generation
 	if keyResult.err != nil {
