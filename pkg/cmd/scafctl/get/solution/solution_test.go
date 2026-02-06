@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	solutionpkg "github.com/oakwood-commons/scafctl/pkg/solution"
 	solutionget "github.com/oakwood-commons/scafctl/pkg/solution/get"
@@ -152,10 +153,12 @@ func TestCmdOptionsVersion_GetSolutionWithGetter(t *testing.T) {
 
 		err := options.GetSolutionWithGetter(context.Background(), mockGetter)
 		require.Error(t, err)
-		assert.Equal(t, expectedError, err)
+		assert.True(t, errors.Is(err, expectedError), "error should wrap the original error")
+		assert.Equal(t, exitcode.FileNotFound, exitcode.GetCode(err), "should return FileNotFound exit code")
 		mockGetter.AssertExpectations(t)
 
 		assert.Empty(t, outBuf.String())
+		assert.Contains(t, errBuf.String(), "failed to get solution", "error should be written to stderr")
 	})
 
 	t.Run("json output format explicitly", func(t *testing.T) {

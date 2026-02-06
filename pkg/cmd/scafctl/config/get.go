@@ -8,6 +8,7 @@ import (
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	appconfig "github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -86,15 +87,20 @@ func CommandGet(cliParams *settings.Run, ioStreams *terminal.IOStreams, path str
 
 // Run executes the config get command.
 func (o *GetOptions) Run(ctx context.Context) error {
+	w := writer.MustFromContext(ctx)
+
 	mgr := appconfig.NewManager(o.ConfigPath)
 	_, err := mgr.Load()
 	if err != nil {
-		return err
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.ConfigError)
 	}
 
 	value := mgr.Get(o.Key)
 	if value == nil {
-		return fmt.Errorf("key %q not found in configuration", o.Key)
+		err := fmt.Errorf("key %q not found in configuration", o.Key)
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
 	return o.writeOutput(ctx, value)

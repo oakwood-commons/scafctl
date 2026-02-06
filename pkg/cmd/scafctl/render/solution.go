@@ -164,7 +164,7 @@ Examples:
 			err := output.ValidateCommands(args)
 			if err != nil {
 				writeSolutionError(options, err.Error())
-				return err
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
 			// Validate mutually exclusive modes
@@ -181,14 +181,14 @@ Examples:
 			if modeCount > 1 {
 				err := fmt.Errorf("--graph, --action-graph, and --snapshot are mutually exclusive")
 				writeSolutionError(options, err.Error())
-				return err
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
 			// Validate snapshot file requirement
 			if options.Snapshot && options.SnapshotFile == "" {
 				err := fmt.Errorf("--snapshot-file is required when using --snapshot")
 				writeSolutionError(options, err.Error())
-				return err
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
 			// Validate output format
@@ -196,7 +196,7 @@ Examples:
 				err = output.ValidateOutputType(options.Output, ValidOutputTypes)
 				if err != nil {
 					writeSolutionError(options, err.Error())
-					return err
+					return exitcode.WithCode(err, exitcode.InvalidInput)
 				}
 			}
 
@@ -703,9 +703,9 @@ func (o *SolutionOptions) writeToFile(data []byte) error {
 }
 
 // exitWithCode returns the error with appropriate exit handling
-func (o *SolutionOptions) exitWithCode(err error, _ int) error {
+func (o *SolutionOptions) exitWithCode(err error, code int) error {
 	writeSolutionError(o, err.Error())
-	return err
+	return exitcode.WithCode(err, code)
 }
 
 // writeSolutionError writes an error message

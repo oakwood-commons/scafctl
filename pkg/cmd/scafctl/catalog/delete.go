@@ -2,10 +2,10 @@ package catalog
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -57,25 +57,30 @@ func runDelete(ctx context.Context, opts *DeleteOptions) error {
 	// Parse reference - require version
 	ref, err := catalog.ParseReference(catalog.ArtifactKindSolution, opts.Reference)
 	if err != nil {
-		return fmt.Errorf("invalid reference %q: %w", opts.Reference, err)
+		w.Errorf("invalid reference %q: %v", opts.Reference, err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
 	if !ref.HasVersion() {
-		return fmt.Errorf("version required: use format 'name@version' (e.g., 'my-solution@1.0.0')")
+		w.Error("version required: use format 'name@version' (e.g., 'my-solution@1.0.0')")
+		return exitcode.Errorf("version required")
 	}
 
 	// Create local catalog
 	localCatalog, err := catalog.NewLocalCatalog(*lgr)
 	if err != nil {
-		return fmt.Errorf("failed to open catalog: %w", err)
+		w.Errorf("failed to open catalog: %v", err)
+		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
 	// Delete artifact
 	if err := localCatalog.Delete(ctx, ref); err != nil {
 		if catalog.IsNotFound(err) {
-			return fmt.Errorf("artifact %q not found in catalog", opts.Reference)
+			w.Errorf("artifact %q not found in catalog", opts.Reference)
+			return exitcode.WithCode(err, exitcode.FileNotFound)
 		}
-		return fmt.Errorf("failed to delete artifact: %w", err)
+		w.Errorf("failed to delete artifact: %v", err)
+		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
 	w.Successf("Deleted %s", ref.String())

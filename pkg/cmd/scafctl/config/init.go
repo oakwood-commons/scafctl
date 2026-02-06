@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -112,7 +113,9 @@ func (o *InitOptions) Run(ctx context.Context) error {
 			var err error
 			outputPath, err = paths.ConfigFile()
 			if err != nil {
-				return fmt.Errorf("failed to determine config path: %w", err)
+				err = fmt.Errorf("failed to determine config path: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.ConfigError)
 			}
 		}
 	}
@@ -120,7 +123,9 @@ func (o *InitOptions) Run(ctx context.Context) error {
 	// Check if file exists (unless dry-run or force)
 	if !o.DryRun && !o.Force {
 		if _, err := os.Stat(outputPath); err == nil {
-			return fmt.Errorf("config file already exists: %s\nUse --force to overwrite or --output to specify a different location", outputPath)
+			err := fmt.Errorf("config file already exists: %s\nUse --force to overwrite or --output to specify a different location", outputPath)
+			w.Errorf("%v", err)
+			return exitcode.WithCode(err, exitcode.ConfigError)
 		}
 	}
 
@@ -132,7 +137,9 @@ func (o *InitOptions) Run(ctx context.Context) error {
 
 	content, err := configTemplates.ReadFile(templateName)
 	if err != nil {
-		return fmt.Errorf("failed to read config template: %w", err)
+		err = fmt.Errorf("failed to read config template: %w", err)
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
 	// Dry run - just print
@@ -145,12 +152,16 @@ func (o *InitOptions) Run(ctx context.Context) error {
 	// Ensure directory exists
 	configDir := filepath.Dir(outputPath)
 	if err := os.MkdirAll(configDir, 0o700); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
+		err = fmt.Errorf("failed to create config directory: %w", err)
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.ConfigError)
 	}
 
 	// Write file
 	if err := os.WriteFile(outputPath, content, 0o600); err != nil {
-		return fmt.Errorf("failed to write config file: %w", err)
+		err = fmt.Errorf("failed to write config file: %w", err)
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.ConfigError)
 	}
 
 	w.Successf("Created config file: %s\n", outputPath)

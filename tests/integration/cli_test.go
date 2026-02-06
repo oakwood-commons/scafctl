@@ -570,8 +570,8 @@ func TestIntegration_Lint_ValidSolution(t *testing.T) {
 
 	// The demo may have some issues but should lint successfully
 	assert.Contains(t, stdout, "findings")
-	// Exit code 0 = no errors, 1 = errors found (both are valid lint results)
-	assert.True(t, exitCode == 0 || exitCode == 1)
+	// Exit code 0 = no errors, 1 = general error, 2 = validation failed (errors found)
+	assert.True(t, exitCode == 0 || exitCode == 1 || exitCode == 2)
 }
 
 func TestIntegration_Lint_SeverityFilter(t *testing.T) {
@@ -590,7 +590,8 @@ func TestIntegration_Lint_QuietMode(t *testing.T) {
 
 	// In quiet mode, stdout should be empty (only exit code matters)
 	assert.Empty(t, stdout)
-	assert.True(t, exitCode == 0 || exitCode == 1)
+	// Exit code 0 = no errors, 1 = general error, 2 = validation failed (errors found)
+	assert.True(t, exitCode == 0 || exitCode == 1 || exitCode == 2)
 }
 
 func TestIntegration_Lint_JSONOutput(t *testing.T) {
@@ -624,7 +625,8 @@ func TestIntegration_Lint_Alias(t *testing.T) {
 	// Test the 'l' alias works
 	stdout, _, exitCode := runScafctl(t, "l", "-f", "examples/resolver-demo.yaml", "-o", "json")
 
-	assert.True(t, exitCode == 0 || exitCode == 1)
+	// Exit code 0 = no errors, 1 = general error, 2 = validation failed (errors found)
+	assert.True(t, exitCode == 0 || exitCode == 1 || exitCode == 2)
 	assert.Contains(t, stdout, "findings")
 }
 
@@ -632,7 +634,8 @@ func TestIntegration_Lint_CheckAlias(t *testing.T) {
 	// Test the 'check' alias works
 	stdout, _, exitCode := runScafctl(t, "check", "-f", "examples/resolver-demo.yaml", "-o", "json")
 
-	assert.True(t, exitCode == 0 || exitCode == 1)
+	// Exit code 0 = no errors, 1 = general error, 2 = validation failed (errors found)
+	assert.True(t, exitCode == 0 || exitCode == 1 || exitCode == 2)
 	assert.Contains(t, stdout, "findings")
 }
 
@@ -649,8 +652,8 @@ func TestIntegration_Lint_ActionSolution(t *testing.T) {
 	// Test linting a solution with actions
 	stdout, _, exitCode := runScafctl(t, "lint", "-f", "examples/actions/hello-world.yaml", "-o", "json")
 
-	// Should complete successfully (exit code 0 or 1 depending on findings)
-	assert.True(t, exitCode == 0 || exitCode == 1)
+	// Should complete successfully (exit code 0 = no errors, 1 = general error, 2 = validation failed)
+	assert.True(t, exitCode == 0 || exitCode == 1 || exitCode == 2)
 	assert.Contains(t, stdout, "findings")
 }
 
@@ -659,7 +662,8 @@ func TestIntegration_Lint_ComplexSolution(t *testing.T) {
 	stdout, _, exitCode := runScafctl(t, "lint", "-f", "examples/solutions/comprehensive/solution.yaml", "-o", "json")
 
 	// Should complete and report findings
-	assert.True(t, exitCode == 0 || exitCode == 1)
+	// Exit code 0 = no errors, 1 = general error, 2 = validation failed (errors found)
+	assert.True(t, exitCode == 0 || exitCode == 1 || exitCode == 2)
 	assert.Contains(t, stdout, "findings")
 	assert.Contains(t, stdout, "errorCount")
 }
@@ -668,7 +672,8 @@ func TestIntegration_Lint_TableOutput(t *testing.T) {
 	// Test default table output (explicit)
 	stdout, _, exitCode := runScafctl(t, "lint", "-f", "examples/resolver-demo.yaml", "-o", "table")
 
-	assert.True(t, exitCode == 0 || exitCode == 1)
+	// Exit code 0 = no errors, 1 = general error, 2 = validation failed (errors found)
+	assert.True(t, exitCode == 0 || exitCode == 1 || exitCode == 2)
 	// Table output should produce some text
 	assert.NotEmpty(t, stdout)
 }
@@ -1021,8 +1026,8 @@ func TestIntegration_RunSolution_FromCatalog_NotFound(t *testing.T) {
 	// Try to run a solution that doesn't exist in catalog
 	_, stderr, exitCode := runScafctl(t, "run", "solution", "nonexistent-solution", "--skip-actions")
 	assert.NotEqual(t, 0, exitCode)
-	// Falls back to file system which reports file not found
-	assert.Contains(t, stderr, "no such file or directory")
+	// Reports artifact not found in catalog and file system
+	assert.Contains(t, stderr, "not found")
 }
 
 func TestIntegration_RunSolution_FromCatalog_ByName(t *testing.T) {

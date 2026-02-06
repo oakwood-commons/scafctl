@@ -9,6 +9,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -93,7 +94,9 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	getter := get.NewGetter(getterOpts...)
 	sol, err := getter.Get(ctx, o.Path)
 	if err != nil {
-		return fmt.Errorf("failed to load solution: %w", err)
+		err = fmt.Errorf("failed to load solution: %w", err)
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.FileNotFound)
 	}
 
 	o.printSolutionExplanation(w, sol)

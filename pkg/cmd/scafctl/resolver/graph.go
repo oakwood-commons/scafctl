@@ -7,10 +7,12 @@ import (
 	"os"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -78,12 +80,22 @@ func CommandGraph(_ *settings.Run, ioStreams terminal.IOStreams, binaryName stri
 
 func runGraph(ctx context.Context, opts *GraphOptions, ioStreams terminal.IOStreams) error {
 	lgr := logger.FromContext(ctx)
+	w := writer.FromContext(ctx)
+
+	// Helper to write error
+	writeErr := func(err error) {
+		if w != nil {
+			w.Errorf("%v", err)
+		}
+	}
 
 	// Read and parse config file
 	lgr.V(-1).Info("reading config file", "file", opts.ConfigFile)
 	data, err := os.ReadFile(opts.ConfigFile)
 	if err != nil {
-		return fmt.Errorf("failed to read config file: %w", err)
+		err = fmt.Errorf("failed to read config file: %w", err)
+		writeErr(err)
+		return exitcode.WithCode(err, exitcode.FileNotFound)
 	}
 
 	// Parse resolver configuration
@@ -92,11 +104,15 @@ func runGraph(ctx context.Context, opts *GraphOptions, ioStreams terminal.IOStre
 	}
 
 	if err := yaml.Unmarshal(data, &config); err != nil {
-		return fmt.Errorf("failed to parse config file: %w", err)
+		err = fmt.Errorf("failed to parse config file: %w", err)
+		writeErr(err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
 	if len(config.Resolvers) == 0 {
-		return fmt.Errorf("no resolvers found in config file")
+		err := fmt.Errorf("no resolvers found in config file")
+		writeErr(err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
 	lgr.V(-1).Info("building dependency graph", "resolvers", len(config.Resolvers))
@@ -104,7 +120,9 @@ func runGraph(ctx context.Context, opts *GraphOptions, ioStreams terminal.IOStre
 	// Build dependency graph (nil lookup since we don't have registry access for visualization)
 	graph, err := resolver.BuildGraph(config.Resolvers, nil)
 	if err != nil {
-		return fmt.Errorf("failed to build dependency graph: %w", err)
+		err = fmt.Errorf("failed to build dependency graph: %w", err)
+		writeErr(err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
 	lgr.V(-1).Info("graph built successfully",
@@ -116,28 +134,38 @@ func runGraph(ctx context.Context, opts *GraphOptions, ioStreams terminal.IOStre
 	switch opts.Format {
 	case "ascii":
 		if err := graph.RenderASCII(ioStreams.Out); err != nil {
-			return fmt.Errorf("failed to render ASCII graph: %w", err)
+			err = fmt.Errorf("failed to render ASCII graph: %w", err)
+			writeErr(err)
+			return exitcode.WithCode(err, exitcode.RenderFailed)
 		}
 
 	case "dot":
 		if err := graph.RenderDOT(ioStreams.Out); err != nil {
-			return fmt.Errorf("failed to render DOT graph: %w", err)
+			err = fmt.Errorf("failed to render DOT graph: %w", err)
+			writeErr(err)
+			return exitcode.WithCode(err, exitcode.RenderFailed)
 		}
 
 	case "mermaid":
 		if err := graph.RenderMermaid(ioStreams.Out); err != nil {
-			return fmt.Errorf("failed to render Mermaid graph: %w", err)
+			err = fmt.Errorf("failed to render Mermaid graph: %w", err)
+			writeErr(err)
+			return exitcode.WithCode(err, exitcode.RenderFailed)
 		}
 
 	case "json":
 		encoder := json.NewEncoder(ioStreams.Out)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(graph); err != nil {
-			return fmt.Errorf("failed to encode JSON: %w", err)
+			err = fmt.Errorf("failed to encode JSON: %w", err)
+			writeErr(err)
+			return exitcode.WithCode(err, exitcode.GeneralError)
 		}
 
 	default:
-		return fmt.Errorf("unsupported format: %s (supported: ascii, dot, mermaid, json)", opts.Format)
+		err := fmt.Errorf("unsupported format: %s (supported: ascii, dot, mermaid, json)", opts.Format)
+		writeErr(err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
 	// Show stats if requested (for non-ASCII formats)

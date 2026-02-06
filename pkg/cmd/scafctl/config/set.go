@@ -8,6 +8,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc/v2"
 	appconfig "github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -91,7 +92,8 @@ func (o *SetOptions) Run(ctx context.Context) error {
 	mgr := appconfig.NewManager(o.ConfigPath)
 	_, err := mgr.Load()
 	if err != nil {
-		return err
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.ConfigError)
 	}
 
 	// Parse value to appropriate type
@@ -100,7 +102,8 @@ func (o *SetOptions) Run(ctx context.Context) error {
 	mgr.Set(o.Key, value)
 
 	if err := mgr.Save(); err != nil {
-		return err
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.ConfigError)
 	}
 
 	w.Successf("Set %s = %v", o.Key, value)

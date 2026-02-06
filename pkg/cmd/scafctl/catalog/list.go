@@ -2,16 +2,17 @@ package catalog
 
 import (
 	"context"
-	"fmt"
 	"sort"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
 
@@ -79,26 +80,30 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 
 func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptions) error {
 	lgr := logger.FromContext(ctx)
+	w := writer.FromContext(ctx)
 
 	// Parse kind filter
 	var kind catalog.ArtifactKind
 	if opts.Kind != "" {
 		kind = catalog.ArtifactKind(opts.Kind)
 		if kind != catalog.ArtifactKindSolution && kind != catalog.ArtifactKindPlugin {
-			return fmt.Errorf("invalid kind %q: must be 'solution' or 'plugin'", opts.Kind)
+			w.Errorf("invalid kind %q: must be 'solution' or 'plugin'", opts.Kind)
+			return exitcode.Errorf("invalid kind")
 		}
 	}
 
 	// Create local catalog
 	localCatalog, err := catalog.NewLocalCatalog(*lgr)
 	if err != nil {
-		return fmt.Errorf("failed to open catalog: %w", err)
+		w.Errorf("failed to open catalog: %v", err)
+		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
 	// List artifacts
 	artifacts, err := localCatalog.List(ctx, kind, opts.Name)
 	if err != nil {
-		return fmt.Errorf("failed to list artifacts: %w", err)
+		w.Errorf("failed to list artifacts: %v", err)
+		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
 	// Sort by name, then version descending

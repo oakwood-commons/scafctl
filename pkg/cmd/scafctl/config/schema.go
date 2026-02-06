@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/schema"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -88,7 +89,8 @@ func (o *SchemaOptions) Run(ctx context.Context) error {
 		schemaBytes, err = schema.GenerateConfigSchema()
 	}
 	if err != nil {
-		return err
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
 	w.Plainln(string(schemaBytes))

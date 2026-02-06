@@ -8,6 +8,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc/v2"
 	appconfig "github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -99,14 +100,18 @@ func (o *ValidateOptions) Run(ctx context.Context) error {
 			var err error
 			filePath, err = paths.ConfigFile()
 			if err != nil {
-				return fmt.Errorf("failed to determine config path: %w", err)
+				err = fmt.Errorf("failed to determine config path: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.ConfigError)
 			}
 		}
 	}
 
 	// Check if file exists
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		return fmt.Errorf("config file not found: %s", filePath)
+		err := fmt.Errorf("config file not found: %s", filePath)
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.FileNotFound)
 	}
 
 	if lgr != nil {
@@ -118,13 +123,14 @@ func (o *ValidateOptions) Run(ctx context.Context) error {
 	cfg, err := mgr.Load()
 	if err != nil {
 		w.Errorf("Validation failed: %s\n", filePath)
-		return err
+		return exitcode.WithCode(err, exitcode.ConfigError)
 	}
 
 	// Run additional validation
 	if err := cfg.Validate(); err != nil {
 		w.Errorf("Validation failed: %s\n", filePath)
-		return fmt.Errorf("validation error: %w", err)
+		err = fmt.Errorf("validation error: %w", err)
+		return exitcode.WithCode(err, exitcode.ValidationFailed)
 	}
 
 	w.Successf("Valid: %s\n", filePath)

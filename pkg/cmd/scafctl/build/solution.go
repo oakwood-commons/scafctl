@@ -2,7 +2,6 @@ package build
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +9,7 @@ import (
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/Masterminds/semver/v3"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
@@ -80,13 +80,15 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 	// Read solution file
 	content, err := os.ReadFile(opts.File)
 	if err != nil {
-		return fmt.Errorf("failed to read solution file: %w", err)
+		w.Errorf("failed to read solution file: %v", err)
+		return exitcode.WithCode(err, exitcode.FileNotFound)
 	}
 
 	// Parse solution to extract metadata
 	var sol solution.Solution
 	if err := sol.LoadFromBytes(content); err != nil {
-		return fmt.Errorf("failed to parse solution: %w", err)
+		w.Errorf("failed to parse solution: %v", err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
 	// Determine artifact name (priority: --name flag > metadata.name > filename)
@@ -105,7 +107,8 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 
 	// Validate name format
 	if !catalog.IsValidName(name) {
-		return fmt.Errorf("invalid name %q: must be lowercase alphanumeric with hyphens (e.g., 'my-solution')", name)
+		w.Errorf("invalid name %q: must be lowercase alphanumeric with hyphens (e.g., 'my-solution')", name)
+		return exitcode.Errorf("invalid name")
 	}
 
 	// Determine version (priority: --version flag > metadata.version)
@@ -115,7 +118,8 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 		// User provided --version flag
 		version, err = semver.NewVersion(opts.Version)
 		if err != nil {
-			return fmt.Errorf("invalid version %q: %w", opts.Version, err)
+			w.Errorf("invalid version %q: %v", opts.Version, err)
+			return exitcode.WithCode(err, exitcode.InvalidInput)
 		}
 
 		// Warn if overriding metadata version
@@ -128,7 +132,8 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 		lgr.V(1).Info("using version from solution metadata", "version", version.String())
 	default:
 		// No version available
-		return fmt.Errorf("solution has no version in metadata; use --version to specify one")
+		w.Error("solution has no version in metadata; use --version to specify one")
+		return exitcode.Errorf("no version")
 	}
 
 	// Create reference
@@ -141,7 +146,8 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 	// Create local catalog
 	localCatalog, err := catalog.NewLocalCatalog(*lgr)
 	if err != nil {
-		return fmt.Errorf("failed to open catalog: %w", err)
+		w.Errorf("failed to open catalog: %v", err)
+		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
 	// Build annotations
@@ -153,9 +159,11 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 	info, err := localCatalog.Store(ctx, ref, content, annotations, opts.Force)
 	if err != nil {
 		if catalog.IsExists(err) {
-			return fmt.Errorf("%w\nUse --force to overwrite", err)
+			w.Errorf("%v\nUse --force to overwrite", err)
+			return exitcode.WithCode(err, exitcode.CatalogError)
 		}
-		return fmt.Errorf("failed to store solution: %w", err)
+		w.Errorf("failed to store solution: %v", err)
+		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
 	lgr.V(1).Info("built solution",

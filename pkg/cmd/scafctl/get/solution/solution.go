@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
@@ -51,7 +52,7 @@ func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 					options.CliParams.ExitOnError,
 				).WriteMessage(err.Error())
 
-				return err
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
 			err = output.ValidateOutputType(options.Output, ValidOutputTypes)
@@ -63,7 +64,7 @@ func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 					options.CliParams.ExitOnError,
 				).WriteMessage(err.Error())
 
-				return err
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 			return options.GetSolution(ctx)
 		},
@@ -97,12 +98,14 @@ func (o *CmdOptionsVersion) GetSolution(ctx context.Context) error {
 func (o *CmdOptionsVersion) GetSolutionWithGetter(ctx context.Context, getter get.Interface) error {
 	sol, err := getter.Get(ctx, o.Path)
 	if err != nil {
-		return err
+		fmt.Fprintf(o.IOStreams.ErrOut, " ❌ %v\n", err)
+		return exitcode.WithCode(err, exitcode.FileNotFound)
 	}
 
 	err = output.WriteOutput(o.IOStreams, o.Output, sol, nil)
 	if err != nil {
-		return err
+		fmt.Fprintf(o.IOStreams.ErrOut, " ❌ %v\n", err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 	return nil
 }

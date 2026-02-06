@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -31,12 +32,16 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 
 			store, err := secrets.New()
 			if err != nil {
-				return fmt.Errorf("failed to initialize secrets store: %w", err)
+				err := fmt.Errorf("failed to initialize secrets store: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.ConfigError)
 			}
 
 			names, err := store.List(ctx)
 			if err != nil {
-				return fmt.Errorf("failed to list secrets: %w", err)
+				err := fmt.Errorf("failed to list secrets: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
 			// Filter out internal secrets

@@ -2,6 +2,11 @@
 // All commands should import this package to ensure consistent exit codes.
 package exitcode
 
+import (
+	"errors"
+	"fmt"
+)
+
 // Standard exit codes for CLI commands.
 // These follow common Unix conventions where possible.
 const (
@@ -67,4 +72,58 @@ func Description(code int) string {
 	default:
 		return "unknown error"
 	}
+}
+
+// ExitError wraps an error with an exit code.
+// Commands can return this to indicate a specific exit code should be used.
+// The error message should already be printed by the command before returning.
+type ExitError struct {
+	Err  error
+	Code int
+}
+
+// Error implements the error interface.
+func (e *ExitError) Error() string {
+	if e.Err == nil {
+		return ""
+	}
+	return e.Err.Error()
+}
+
+// Unwrap returns the underlying error for errors.Is/As support.
+func (e *ExitError) Unwrap() error {
+	return e.Err
+}
+
+// WithCode wraps an error with an exit code.
+// Use this when a command needs to return a specific exit code.
+// The command should print its own error message before calling this.
+func WithCode(err error, code int) *ExitError {
+	return &ExitError{Err: err, Code: code}
+}
+
+// AsError creates an ExitError with GeneralError (1) exit code.
+// This is a convenience for commands that just need to signal failure
+// after printing their own error message.
+func AsError(err error) *ExitError {
+	return WithCode(err, GeneralError)
+}
+
+// Errorf creates an ExitError with GeneralError (1) exit code from a formatted string.
+func Errorf(format string, args ...any) *ExitError {
+	return WithCode(fmt.Errorf(format, args...), GeneralError)
+}
+
+// GetCode extracts the exit code from an error.
+// Returns GeneralError (1) if the error is not an ExitError.
+// Returns Success (0) if err is nil.
+func GetCode(err error) int {
+	if err == nil {
+		return Success
+	}
+	var exitErr *ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.Code
+	}
+	return GeneralError
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
@@ -151,7 +152,7 @@ func runLint(ctx context.Context, opts *Options) error {
 	sol, err := getter.Get(ctx, opts.File)
 	if err != nil {
 		writeError(opts, fmt.Sprintf("failed to load solution: %v", err))
-		return err
+		return exitcode.WithCode(err, exitcode.FileNotFound)
 	}
 
 	lgr.V(1).Info("linting solution", "file", opts.File, "name", sol.Metadata.Name)
@@ -162,7 +163,7 @@ func runLint(ctx context.Context, opts *Options) error {
 
 	if opts.Output == "quiet" {
 		if result.ErrorCount > 0 {
-			return fmt.Errorf("found %d errors", result.ErrorCount)
+			return exitcode.WithCode(fmt.Errorf("found %d errors", result.ErrorCount), exitcode.ValidationFailed)
 		}
 		return nil
 	}
@@ -179,11 +180,11 @@ func runLint(ctx context.Context, opts *Options) error {
 
 	if err := kvxOpts.Write(result); err != nil {
 		writeError(opts, fmt.Sprintf("failed to write output: %v", err))
-		return err
+		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
 	if result.ErrorCount > 0 {
-		return fmt.Errorf("found %d errors", result.ErrorCount)
+		return exitcode.WithCode(fmt.Errorf("found %d errors", result.ErrorCount), exitcode.ValidationFailed)
 	}
 
 	return nil

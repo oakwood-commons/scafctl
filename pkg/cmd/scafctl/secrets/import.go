@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -48,13 +49,17 @@ Use --overwrite to replace existing secrets.`,
 
 			store, err := secrets.New()
 			if err != nil {
-				return fmt.Errorf("failed to initialize secrets store: %w", err)
+				err := fmt.Errorf("failed to initialize secrets store: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.ConfigError)
 			}
 
 			// Read file
 			fileData, err := os.ReadFile(inputFile)
 			if err != nil {
-				return fmt.Errorf("failed to read file '%s': %w", inputFile, err)
+				err := fmt.Errorf("failed to read file '%s': %w", inputFile, err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.FileNotFound)
 			}
 
 			// Detect format and decrypt if needed
@@ -64,27 +69,35 @@ Use --overwrite to replace existing secrets.`,
 				fmt.Fprint(ioStreams.ErrOut, "Enter decryption password: ")
 				passwordBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
 				if err != nil {
-					return fmt.Errorf("failed to read password: %w", err)
+					err := fmt.Errorf("failed to read password: %w", err)
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.GeneralError)
 				}
 				password := string(passwordBytes)
 				fmt.Fprintln(ioStreams.ErrOut)
 
 				decrypted, err := decryptExport(fileData, password)
 				if err != nil {
-					return fmt.Errorf("failed to decrypt: %w", err)
+					err := fmt.Errorf("failed to decrypt: %w", err)
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.GeneralError)
 				}
 
 				// Try JSON first, then YAML
 				if err := json.Unmarshal(decrypted, &importData); err != nil {
 					if err := yaml.Unmarshal(decrypted, &importData); err != nil {
-						return fmt.Errorf("failed to parse decrypted data: %w", err)
+						err := fmt.Errorf("failed to parse decrypted data: %w", err)
+						w.Errorf("%v", err)
+						return exitcode.WithCode(err, exitcode.InvalidInput)
 					}
 				}
 			} else {
 				// Plaintext format - try JSON first, then YAML
 				if err := json.Unmarshal(fileData, &importData); err != nil {
 					if err := yaml.Unmarshal(fileData, &importData); err != nil {
-						return fmt.Errorf("failed to parse file (unsupported format): %w", err)
+						err := fmt.Errorf("failed to parse file (unsupported format): %w", err)
+						w.Errorf("%v", err)
+						return exitcode.WithCode(err, exitcode.InvalidInput)
 					}
 				}
 			}

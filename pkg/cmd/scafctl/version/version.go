@@ -9,6 +9,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -55,13 +56,13 @@ func CommandVersion(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 			err := output.ValidateCommands(args)
 			if err != nil {
 				w.Error(err.Error())
-				return err
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
 			err = output.ValidateOutputType(options.Output, ValidOutputTypes)
 			if err != nil {
 				w.Error(err.Error())
-				return err
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 			return options.PrintVersion(ctx)
 		},
@@ -105,7 +106,10 @@ func (options *CmdOptionsVersion) PrintVersion(ctx context.Context) error {
 	verDetails := newVersionDetails(latestVersion)
 	err = output.WriteOutput(options.IOStreams, options.Output, verDetails, customOutput)
 	if err != nil {
-		return err
+		if w != nil {
+			w.Errorf("%v", err)
+		}
+		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
 	return nil

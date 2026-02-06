@@ -6,6 +6,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc/v2"
 	appconfig "github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -81,19 +82,22 @@ func (o *UseCatalogOptions) Run(ctx context.Context) error {
 	mgr := appconfig.NewManager(o.ConfigPath)
 	cfg, err := mgr.Load()
 	if err != nil {
-		return err
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.ConfigError)
 	}
 
 	// Validate catalog exists (unless clearing)
 	if err := cfg.SetDefaultCatalog(o.Name); err != nil {
-		return err
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
 	// Update viper and save
 	mgr.Set("settings.defaultCatalog", o.Name)
 
 	if err := mgr.Save(); err != nil {
-		return err
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.ConfigError)
 	}
 
 	if o.Name == "" {

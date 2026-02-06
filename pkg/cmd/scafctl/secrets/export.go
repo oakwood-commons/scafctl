@@ -12,6 +12,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -70,18 +71,24 @@ Internal secrets (scafctl.*) are automatically excluded.`,
 			w := writer.MustFromContext(ctx)
 
 			if outputFile == "" {
-				return fmt.Errorf("output file is required (use --output or -o)")
+				err := fmt.Errorf("output file is required (use --output or -o)")
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
 			store, err := secrets.New()
 			if err != nil {
-				return fmt.Errorf("failed to initialize secrets store: %w", err)
+				err := fmt.Errorf("failed to initialize secrets store: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.ConfigError)
 			}
 
 			// List all secrets
 			names, err := store.List(ctx)
 			if err != nil {
-				return fmt.Errorf("failed to list secrets: %w", err)
+				err := fmt.Errorf("failed to list secrets: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
 			// Filter out internal secrets
@@ -122,15 +129,21 @@ Internal secrets (scafctl.*) are automatically excluded.`,
 			case "json":
 				exportBytes, err = json.Marshal(exportData)
 				if err != nil {
-					return fmt.Errorf("failed to encode as JSON: %w", err)
+					err := fmt.Errorf("failed to encode as JSON: %w", err)
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.GeneralError)
 				}
 			case "yaml":
 				exportBytes, err = yaml.Marshal(exportData)
 				if err != nil {
-					return fmt.Errorf("failed to encode as YAML: %w", err)
+					err := fmt.Errorf("failed to encode as YAML: %w", err)
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.GeneralError)
 				}
 			default:
-				return fmt.Errorf("unsupported format: %s (use yaml or json)", formatFlag)
+				err := fmt.Errorf("unsupported format: %s (use yaml or json)", formatFlag)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
 			// Encrypt if requested
@@ -141,12 +154,16 @@ Internal secrets (scafctl.*) are automatically excluded.`,
 					WithConfirmation(true).
 					WithMinLength(1))
 				if err != nil {
-					return fmt.Errorf("failed to read password: %w", err)
+					err := fmt.Errorf("failed to read password: %w", err)
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.GeneralError)
 				}
 
 				exportBytes, err = encryptExport(exportBytes, password)
 				if err != nil {
-					return fmt.Errorf("failed to encrypt export: %w", err)
+					err := fmt.Errorf("failed to encrypt export: %w", err)
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.GeneralError)
 				}
 			} else {
 				// Show scary warning for plaintext export
@@ -159,7 +176,9 @@ Internal secrets (scafctl.*) are automatically excluded.`,
 					WithDefault(false).
 					WithSkipCondition(cliParams.IsQuiet))
 				if err != nil {
-					return fmt.Errorf("failed to read confirmation: %w", err)
+					err := fmt.Errorf("failed to read confirmation: %w", err)
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.GeneralError)
 				}
 				if !confirmed {
 					w.Info("Export cancelled")
@@ -169,7 +188,9 @@ Internal secrets (scafctl.*) are automatically excluded.`,
 
 			// Write to file
 			if err := os.WriteFile(outputFile, exportBytes, 0o600); err != nil {
-				return fmt.Errorf("failed to write export file: %w", err)
+				err := fmt.Errorf("failed to write export file: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
 			if encryptFlag {

@@ -23,6 +23,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"gopkg.in/yaml.v3"
@@ -334,7 +335,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// Load the solution
 	sol, err := o.loadSolution(ctx)
 	if err != nil {
-		return o.exitWithCode(err, exitcode.FileNotFound)
+		return o.exitWithCode(ctx, err, exitcode.FileNotFound)
 	}
 
 	lgr.V(1).Info("loaded solution",
@@ -350,14 +351,14 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// Validate the workflow if present and not skipping actions
 	if sol.Spec.HasWorkflow() && !o.SkipActions {
 		if err := action.ValidateWorkflow(sol.Spec.Workflow, actionAdapter); err != nil {
-			return o.exitWithCode(fmt.Errorf("workflow validation failed: %w", err), exitcode.ValidationFailed)
+			return o.exitWithCode(ctx, fmt.Errorf("workflow validation failed: %w", err), exitcode.ValidationFailed)
 		}
 	}
 
 	// Parse resolver parameters
 	params, err := ParseResolverFlags(o.ResolverParams)
 	if err != nil {
-		return o.exitWithCode(fmt.Errorf("failed to parse resolver parameters: %w", err), exitcode.ValidationFailed)
+		return o.exitWithCode(ctx, fmt.Errorf("failed to parse resolver parameters: %w", err), exitcode.ValidationFailed)
 	}
 
 	lgr.V(1).Info("parsed parameters", "count", len(params))
@@ -417,7 +418,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 				if progress != nil {
 					progress.Wait()
 				}
-				return o.exitWithCode(fmt.Errorf("resolver execution failed: %w", err), exitcode.GeneralError)
+				return o.exitWithCode(ctx, fmt.Errorf("resolver execution failed: %w", err), exitcode.GeneralError)
 			}
 
 			// Get resolver context with results
@@ -427,7 +428,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 				if progress != nil {
 					progress.Wait()
 				}
-				return o.exitWithCode(fmt.Errorf("failed to retrieve resolver results"), exitcode.GeneralError)
+				return o.exitWithCode(ctx, fmt.Errorf("failed to retrieve resolver results"), exitcode.GeneralError)
 			}
 
 			// Build resolver data map for actions
@@ -451,7 +452,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	if o.SkipActions || !sol.Spec.HasWorkflow() {
 		results := o.buildResolverOutputMap(resolverData, sol)
 		if err := o.checkValueSizes(results, *lgr); err != nil {
-			return o.exitWithCode(err, exitcode.ValidationFailed)
+			return o.exitWithCode(ctx, err, exitcode.ValidationFailed)
 		}
 		return o.writeOutput(ctx, results)
 	}
@@ -459,7 +460,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// Build action graph
 	graph, err := action.BuildGraph(ctx, sol.Spec.Workflow, resolverData, nil)
 	if err != nil {
-		return o.exitWithCode(fmt.Errorf("failed to build action graph: %w", err), exitcode.InvalidInput)
+		return o.exitWithCode(ctx, fmt.Errorf("failed to build action graph: %w", err), exitcode.InvalidInput)
 	}
 
 	lgr.V(1).Info("action graph built",
@@ -494,7 +495,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 
 	result, err := actionExecutor.Execute(ctx, sol.Spec.Workflow)
 	if err != nil && result != nil && result.FinalStatus != action.ExecutionPartialSuccess {
-		return o.exitWithCode(fmt.Errorf("action execution failed: %w", err), exitcode.ActionFailed)
+		return o.exitWithCode(ctx, fmt.Errorf("action execution failed: %w", err), exitcode.ActionFailed)
 	}
 
 	// Build and write output
@@ -720,9 +721,16 @@ func (o *SolutionOptions) writeOutput(ctx context.Context, results map[string]an
 	return kvxOpts.Write(results)
 }
 
-// exitWithCode returns the error with appropriate exit handling
-func (o *SolutionOptions) exitWithCode(err error, _ int) error {
-	return err
+// exitWithCode prints the error message and returns an ExitError with the appropriate code
+func (o *SolutionOptions) exitWithCode(ctx context.Context, err error, code int) error {
+	// Print styled error message using writer
+	if w := writer.FromContext(ctx); w != nil {
+		w.Errorf("%v", err)
+	} else {
+		// Fallback if writer not in context (e.g., tests)
+		fmt.Fprintf(o.IOStreams.ErrOut, " ❌ %v\n", err)
+	}
+	return exitcode.WithCode(err, code)
 }
 
 // registryAdapter adapts provider.Registry to resolver.RegistryInterface

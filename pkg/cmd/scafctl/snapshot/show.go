@@ -6,10 +6,12 @@ import (
 	"fmt"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
 
@@ -60,12 +62,22 @@ func CommandShow(_ *settings.Run, ioStreams terminal.IOStreams, binaryName strin
 
 func runShow(ctx context.Context, opts *ShowOptions, ioStreams terminal.IOStreams) error {
 	lgr := logger.FromContext(ctx)
+	w := writer.FromContext(ctx)
+
+	// Helper to write error
+	writeErr := func(err error) {
+		if w != nil {
+			w.Errorf("%v", err)
+		}
+	}
 
 	// Load snapshot
 	lgr.V(-1).Info("loading snapshot", "file", opts.SnapshotFile)
 	snapshot, err := resolver.LoadSnapshot(opts.SnapshotFile)
 	if err != nil {
-		return fmt.Errorf("failed to load snapshot: %w", err)
+		err = fmt.Errorf("failed to load snapshot: %w", err)
+		writeErr(err)
+		return exitcode.WithCode(err, exitcode.FileNotFound)
 	}
 
 	switch opts.Format {
@@ -76,14 +88,18 @@ func runShow(ctx context.Context, opts *ShowOptions, ioStreams terminal.IOStream
 		encoder := json.NewEncoder(ioStreams.Out)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(snapshot); err != nil {
-			return fmt.Errorf("failed to encode JSON: %w", err)
+			err = fmt.Errorf("failed to encode JSON: %w", err)
+			writeErr(err)
+			return exitcode.WithCode(err, exitcode.GeneralError)
 		}
 
 	case "resolvers":
 		return showResolvers(snapshot, opts, ioStreams)
 
 	default:
-		return fmt.Errorf("unsupported format: %s (supported: summary, json, resolvers)", opts.Format)
+		err := fmt.Errorf("unsupported format: %s (supported: summary, json, resolvers)", opts.Format)
+		writeErr(err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
 	return nil

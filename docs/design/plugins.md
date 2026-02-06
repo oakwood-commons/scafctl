@@ -80,7 +80,7 @@ Protocol buffer definition for plugin communication.
 ```protobuf
 syntax = "proto3";
 package plugin;
-option go_package = "github.com/kcloutie/scafctl/pkg/plugin/proto";
+option go_package = "github.com/oakwood-commons/scafctl/pkg/plugin/proto";
 
 // PluginService is the main plugin service
 service PluginService {

@@ -6,6 +6,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc/v2"
 	appconfig "github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -79,11 +80,13 @@ func (o *RemoveCatalogOptions) Run(ctx context.Context) error {
 	mgr := appconfig.NewManager(o.ConfigPath)
 	cfg, err := mgr.Load()
 	if err != nil {
-		return err
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.ConfigError)
 	}
 
 	if err := cfg.RemoveCatalog(o.Name); err != nil {
-		return err
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
 	// Clear default if it was the removed catalog
@@ -97,7 +100,8 @@ func (o *RemoveCatalogOptions) Run(ctx context.Context) error {
 	mgr.Set("settings", cfg.Settings)
 
 	if err := mgr.Save(); err != nil {
-		return err
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.ConfigError)
 	}
 
 	w.Successf("Removed catalog %q", o.Name)

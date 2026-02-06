@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
 
@@ -19,21 +21,27 @@ func CommandExists(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
+			w := writer.MustFromContext(ctx)
 			name := args[0]
 
 			// Validate name
 			if err := ValidateUserSecretName(name); err != nil {
-				return err
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
 			store, err := secrets.New()
 			if err != nil {
-				return fmt.Errorf("failed to initialize secrets store: %w", err)
+				err := fmt.Errorf("failed to initialize secrets store: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.ConfigError)
 			}
 
 			exists, err := store.Exists(ctx, name)
 			if err != nil {
-				return fmt.Errorf("failed to check if secret exists: %w", err)
+				err := fmt.Errorf("failed to check if secret exists: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
 			// Print result

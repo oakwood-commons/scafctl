@@ -11,6 +11,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -71,14 +72,14 @@ func makeRunEFunc(cfg runCommandConfig, cmdUse string) func(*cobra.Command, []st
 		if cCmd.Args == nil {
 			if err := output.ValidateCommands(args); err != nil {
 				w.Error(err.Error())
-				return err
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 		}
 
 		if currentOutput := cfg.getOutputFn(); currentOutput != "" && currentOutput != "quiet" {
 			if err := output.ValidateOutputType(currentOutput, ValidOutputTypes[:2]); err != nil {
 				w.Error(err.Error())
-				return err
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 		}
 

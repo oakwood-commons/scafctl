@@ -3,6 +3,7 @@ package secrets
 import (
 	"fmt"
 
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -28,18 +29,23 @@ func CommandDelete(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *co
 
 			// Validate name
 			if err := ValidateUserSecretName(name); err != nil {
-				return err
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
 			store, err := secrets.New()
 			if err != nil {
-				return fmt.Errorf("failed to initialize secrets store: %w", err)
+				err := fmt.Errorf("failed to initialize secrets store: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.ConfigError)
 			}
 
 			// Check if secret exists
 			exists, err := store.Exists(ctx, name)
 			if err != nil {
-				return fmt.Errorf("failed to check if secret exists: %w", err)
+				err := fmt.Errorf("failed to check if secret exists: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
 			if !exists {
@@ -55,7 +61,9 @@ func CommandDelete(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *co
 				WithDefault(skipConfirmation). // Default to true when skipping
 				WithSkipCondition(skipConfirmation))
 			if err != nil {
-				return fmt.Errorf("failed to read confirmation: %w", err)
+				err := fmt.Errorf("failed to read confirmation: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 			if !confirmed {
 				w.Info("Deletion cancelled")
@@ -64,7 +72,9 @@ func CommandDelete(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *co
 
 			// Delete the secret
 			if err := store.Delete(ctx, name); err != nil {
-				return fmt.Errorf("failed to delete secret '%s': %w", name, err)
+				err := fmt.Errorf("failed to delete secret '%s': %w", name, err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
 			w.Successf("Deleted secret '%s'\n", name)

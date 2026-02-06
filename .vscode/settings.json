@@ -28,6 +28,7 @@
     "Errorf",
     "errorlint",
     "execprovider",
+    "exitcode",
     "Fatalf",
     "fileprovider",
     "forbidigo",

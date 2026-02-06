@@ -3,6 +3,7 @@ package render
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"testing"
@@ -357,7 +358,10 @@ func TestSolutionOptions_exitWithCode(t *testing.T) {
 		originalErr := fmt.Errorf("test error")
 		err := options.exitWithCode(originalErr, exitcode.ValidationFailed)
 
-		assert.Equal(t, originalErr, err)
+		// Error should wrap the original error
+		assert.True(t, errors.Is(err, originalErr))
+		// Exit code should be extracted correctly
+		assert.Equal(t, exitcode.ValidationFailed, exitcode.GetCode(err))
 	})
 }
 

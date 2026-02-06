@@ -1,15 +1,16 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/celexp/env"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/profiler"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
-	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
 )
 
 var (
@@ -27,8 +28,18 @@ func main() {
 	settings.VersionInformation = verInfo
 
 	if err := run(); err != nil {
-		os.Stderr.WriteString(output.ErrorMessage(err.Error(), false) + "\n")
-		os.Exit(1)
+		code := exitcode.GetCode(err)
+		// If GetCode returns GeneralError (1), it means no ExitError was wrapped.
+		// This typically happens for Cobra errors (unknown command, missing flags, etc.)
+		// that bypassed our command handlers. Print these to stderr.
+		if code == exitcode.GeneralError {
+			var exitErr *exitcode.ExitError
+			if !errors.As(err, &exitErr) {
+				// Not an ExitError, so it's an unhandled Cobra error - print it
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			}
+		}
+		os.Exit(code)
 	}
 }
 

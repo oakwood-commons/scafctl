@@ -7,6 +7,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc/v2"
 	appconfig "github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -82,12 +83,15 @@ func (o *UnsetOptions) Run(ctx context.Context) error {
 	mgr := appconfig.NewManager(o.ConfigPath)
 	_, err := mgr.Load()
 	if err != nil {
-		return err
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.ConfigError)
 	}
 
 	// Check if key exists
 	if !mgr.IsSet(o.Key) {
-		return fmt.Errorf("key %q is not set in configuration", o.Key)
+		err := fmt.Errorf("key %q is not set in configuration", o.Key)
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
 	// Get default value based on key
@@ -95,7 +99,8 @@ func (o *UnsetOptions) Run(ctx context.Context) error {
 	mgr.Set(o.Key, defaultValue)
 
 	if err := mgr.Save(); err != nil {
-		return err
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.ConfigError)
 	}
 
 	w.Successf("Unset %s (reset to default: %v)", o.Key, defaultValue)

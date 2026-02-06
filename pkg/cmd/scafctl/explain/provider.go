@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -74,7 +75,9 @@ func (o *ProviderOptions) Run(_ context.Context, name string) error {
 	reg := o.getRegistry()
 	p, ok := reg.Get(name)
 	if !ok {
-		return fmt.Errorf("provider %q not found", name)
+		err := fmt.Errorf("provider %q not found", name)
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.FileNotFound)
 	}
 
 	desc := p.Descriptor()

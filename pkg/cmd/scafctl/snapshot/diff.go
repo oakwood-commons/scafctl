@@ -6,10 +6,12 @@ import (
 	"os"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
 
@@ -81,19 +83,31 @@ func CommandDiff(_ *settings.Run, ioStreams terminal.IOStreams, binaryName strin
 
 func runDiff(ctx context.Context, opts *DiffOptions, ioStreams terminal.IOStreams) error {
 	lgr := logger.FromContext(ctx)
+	w := writer.FromContext(ctx)
+
+	// Helper to write error
+	writeErr := func(err error) {
+		if w != nil {
+			w.Errorf("%v", err)
+		}
+	}
 
 	// Load before snapshot
 	lgr.V(-1).Info("loading before snapshot", "file", opts.BeforeFile)
 	before, err := resolver.LoadSnapshot(opts.BeforeFile)
 	if err != nil {
-		return fmt.Errorf("failed to load before snapshot: %w", err)
+		err = fmt.Errorf("failed to load before snapshot: %w", err)
+		writeErr(err)
+		return exitcode.WithCode(err, exitcode.FileNotFound)
 	}
 
 	// Load after snapshot
 	lgr.V(-1).Info("loading after snapshot", "file", opts.AfterFile)
 	after, err := resolver.LoadSnapshot(opts.AfterFile)
 	if err != nil {
-		return fmt.Errorf("failed to load after snapshot: %w", err)
+		err = fmt.Errorf("failed to load after snapshot: %w", err)
+		writeErr(err)
+		return exitcode.WithCode(err, exitcode.FileNotFound)
 	}
 
 	// Prepare diff options
@@ -111,7 +125,9 @@ func runDiff(ctx context.Context, opts *DiffOptions, ioStreams terminal.IOStream
 	if opts.Output != "" {
 		file, err := os.Create(opts.Output)
 		if err != nil {
-			return fmt.Errorf("failed to create output file: %w", err)
+			err = fmt.Errorf("failed to create output file: %w", err)
+			writeErr(err)
+			return exitcode.WithCode(err, exitcode.GeneralError)
 		}
 		defer file.Close()
 		out = file
@@ -126,7 +142,9 @@ func runDiff(ctx context.Context, opts *DiffOptions, ioStreams terminal.IOStream
 	case "json":
 		jsonOutput, err := resolver.FormatDiffJSON(diff)
 		if err != nil {
-			return fmt.Errorf("failed to format JSON: %w", err)
+			err = fmt.Errorf("failed to format JSON: %w", err)
+			writeErr(err)
+			return exitcode.WithCode(err, exitcode.GeneralError)
 		}
 		output = jsonOutput
 
@@ -134,11 +152,15 @@ func runDiff(ctx context.Context, opts *DiffOptions, ioStreams terminal.IOStream
 		output = resolver.FormatDiffUnified(diff)
 
 	default:
-		return fmt.Errorf("unsupported format: %s (supported: human, json, unified)", opts.Format)
+		err := fmt.Errorf("unsupported format: %s (supported: human, json, unified)", opts.Format)
+		writeErr(err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
 	if _, err := fmt.Fprint(out, output); err != nil {
-		return fmt.Errorf("failed to write output: %w", err)
+		err = fmt.Errorf("failed to write output: %w", err)
+		writeErr(err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
 	// Print summary to stderr if output is redirected

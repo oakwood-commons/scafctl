@@ -7,6 +7,7 @@ import (
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -73,13 +74,15 @@ func runPrune(ctx context.Context, _ *PruneOptions, outputOpts *kvx.OutputOption
 	// Create local catalog
 	localCatalog, err := catalog.NewLocalCatalog(*lgr)
 	if err != nil {
-		return fmt.Errorf("failed to open catalog: %w", err)
+		w.Errorf("failed to open catalog: %v", err)
+		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
 	// Run prune
 	result, err := localCatalog.Prune(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to prune catalog: %w", err)
+		w.Errorf("failed to prune catalog: %v", err)
+		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
 	// Format output

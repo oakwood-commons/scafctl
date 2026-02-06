@@ -7,6 +7,7 @@ import (
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
@@ -57,16 +58,22 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 
 			// Validate handler name
 			if !IsSupportedHandler(handlerName) {
-				return fmt.Errorf("unknown auth handler: %s (supported: %v)", handlerName, SupportedHandlers())
+				err := fmt.Errorf("unknown auth handler: %s (supported: %v)", handlerName, SupportedHandlers())
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
 			if scope == "" {
-				return fmt.Errorf("--scope is required")
+				err := fmt.Errorf("--scope is required")
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
 			handler, err := getEntraHandler(ctx)
 			if err != nil {
-				return fmt.Errorf("failed to initialize auth handler: %w", err)
+				err = fmt.Errorf("failed to initialize auth handler: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
 			token, err := handler.GetToken(ctx, auth.TokenOptions{
@@ -74,7 +81,9 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 				MinValidFor: minValidFor,
 			})
 			if err != nil {
-				return fmt.Errorf("failed to get token: %w", err)
+				err = fmt.Errorf("failed to get token: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
 			result := map[string]any{

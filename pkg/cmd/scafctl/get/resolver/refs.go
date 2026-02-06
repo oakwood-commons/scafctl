@@ -11,10 +11,12 @@ import (
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -103,6 +105,14 @@ func CommandRefs(_ *settings.Run, ioStreams *terminal.IOStreams, binaryName stri
 
 func runRefs(ctx context.Context, opts *RefsOptions, ioStreams *terminal.IOStreams) error {
 	lgr := logger.FromContext(ctx)
+	w := writer.FromContext(ctx)
+
+	// Helper to write error
+	writeErr := func(err error) {
+		if w != nil {
+			w.Errorf("%v", err)
+		}
+	}
 
 	// Validate that exactly one input source is provided
 	inputCount := 0
@@ -117,10 +127,14 @@ func runRefs(ctx context.Context, opts *RefsOptions, ioStreams *terminal.IOStrea
 	}
 
 	if inputCount == 0 {
-		return fmt.Errorf("one of --template-file, --template, or --expr is required")
+		err := fmt.Errorf("one of --template-file, --template, or --expr is required")
+		writeErr(err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 	if inputCount > 1 {
-		return fmt.Errorf("only one of --template-file, --template, or --expr can be specified")
+		err := fmt.Errorf("only one of --template-file, --template, or --expr can be specified")
+		writeErr(err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
 	var refs []string
@@ -139,7 +153,8 @@ func runRefs(ctx context.Context, opts *RefsOptions, ioStreams *terminal.IOStrea
 			sourceType = "template-stdin"
 			opts.Template, err = readStdin(ioStreams.In)
 			if err != nil {
-				return err
+				writeErr(err)
+				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 		}
 		source = opts.Template
@@ -151,7 +166,8 @@ func runRefs(ctx context.Context, opts *RefsOptions, ioStreams *terminal.IOStrea
 			sourceType = "cel-expression-stdin"
 			opts.Expr, err = readStdin(ioStreams.In)
 			if err != nil {
-				return err
+				writeErr(err)
+				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 		}
 		source = opts.Expr
@@ -159,7 +175,8 @@ func runRefs(ctx context.Context, opts *RefsOptions, ioStreams *terminal.IOStrea
 	}
 
 	if err != nil {
-		return err
+		writeErr(err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
 	lgr.V(1).Info("extracted resolver references", "count", len(refs), "sourceType", sourceType)
@@ -279,6 +296,6 @@ func writeOutput(ioStreams *terminal.IOStreams, format string, output RefsOutput
 		return nil
 
 	default:
-		return fmt.Errorf("unknown output format: %s (supported: text, json, yaml)", format)
+		return exitcode.WithCode(fmt.Errorf("unknown output format: %s (supported: text, json, yaml)", format), exitcode.InvalidInput)
 	}
 }

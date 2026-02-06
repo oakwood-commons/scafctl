@@ -7,11 +7,13 @@ import (
 	"time"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -74,12 +76,22 @@ func CommandSave(_ *settings.Run, ioStreams terminal.IOStreams, binaryName strin
 
 func runSave(ctx context.Context, opts *SaveOptions, ioStreams terminal.IOStreams) error {
 	lgr := logger.FromContext(ctx)
+	w := writer.FromContext(ctx)
+
+	// Helper to write error
+	writeErr := func(err error) {
+		if w != nil {
+			w.Errorf("%v", err)
+		}
+	}
 
 	// Read and parse config file
 	lgr.V(-1).Info("reading config file", "file", opts.ConfigFile)
 	data, err := os.ReadFile(opts.ConfigFile)
 	if err != nil {
-		return fmt.Errorf("failed to read config file: %w", err)
+		err = fmt.Errorf("failed to read config file: %w", err)
+		writeErr(err)
+		return exitcode.WithCode(err, exitcode.FileNotFound)
 	}
 
 	// Parse configuration
@@ -90,11 +102,15 @@ func runSave(ctx context.Context, opts *SaveOptions, ioStreams terminal.IOStream
 	}
 
 	if err := yaml.Unmarshal(data, &config); err != nil {
-		return fmt.Errorf("failed to parse config file: %w", err)
+		err = fmt.Errorf("failed to parse config file: %w", err)
+		writeErr(err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
 	if len(config.Resolvers) == 0 {
-		return fmt.Errorf("no resolvers found in config file")
+		err := fmt.Errorf("no resolvers found in config file")
+		writeErr(err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
 	// Parse parameters
@@ -103,7 +119,9 @@ func runSave(ctx context.Context, opts *SaveOptions, ioStreams terminal.IOStream
 		// Simple key=value parsing (could be enhanced with flags.ParseKeyValueCSV)
 		var key, value string
 		if _, err := fmt.Sscanf(param, "%[^=]=%s", &key, &value); err != nil {
-			return fmt.Errorf("invalid parameter format '%s': expected key=value", param)
+			err := fmt.Errorf("invalid parameter format '%s': expected key=value", param)
+			writeErr(err)
+			return exitcode.WithCode(err, exitcode.InvalidInput)
 		}
 		params[key] = value
 	}
@@ -139,7 +157,9 @@ func runSave(ctx context.Context, opts *SaveOptions, ioStreams terminal.IOStream
 		status,
 	)
 	if err != nil {
-		return fmt.Errorf("failed to capture snapshot: %w", err)
+		err = fmt.Errorf("failed to capture snapshot: %w", err)
+		writeErr(err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
 	// Redact sensitive values if requested
@@ -163,7 +183,9 @@ func runSave(ctx context.Context, opts *SaveOptions, ioStreams terminal.IOStream
 	// Save snapshot
 	lgr.V(-1).Info("saving snapshot", "output", opts.OutputFile)
 	if err := resolver.SaveSnapshot(snapshot, opts.OutputFile); err != nil {
-		return fmt.Errorf("failed to save snapshot: %w", err)
+		err = fmt.Errorf("failed to save snapshot: %w", err)
+		writeErr(err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
 	fmt.Fprintf(ioStreams.Out, "Snapshot saved to %s\n", opts.OutputFile)

@@ -8,11 +8,13 @@ import (
 	"strings"
 
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -129,7 +131,11 @@ func (o *Options) RunListProviders(ctx context.Context) error {
 	// Interactive mode (-i): launch custom TUI
 	if o.Interactive {
 		if !kvx.IsTerminal(o.IOStreams.Out) {
-			return fmt.Errorf("interactive mode requires a terminal")
+			err := fmt.Errorf("interactive mode requires a terminal")
+			if w := writer.FromContext(ctx); w != nil {
+				w.Errorf("%v", err)
+			}
+			return exitcode.WithCode(err, exitcode.InvalidInput)
 		}
 		return RunTUI(filtered, o.IOStreams.Out)
 	}
@@ -163,7 +169,11 @@ func (o *Options) RunGetProvider(ctx context.Context, name string) error {
 	reg := o.getRegistry()
 	p, ok := reg.Get(name)
 	if !ok {
-		return fmt.Errorf("provider %q not found", name)
+		err := fmt.Errorf("provider %q not found", name)
+		if w := writer.FromContext(ctx); w != nil {
+			w.Errorf("%v", err)
+		}
+		return exitcode.WithCode(err, exitcode.FileNotFound)
 	}
 
 	desc := p.Descriptor()
