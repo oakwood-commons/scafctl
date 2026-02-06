@@ -362,3 +362,208 @@ func TestLocalCatalog_Delete(t *testing.T) {
 		assert.True(t, IsNotFound(err))
 	})
 }
+
+func TestLocalCatalog_Save(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("saves artifact to tar archive", func(t *testing.T) {
+		catalog := newTestCatalog(t)
+
+		// Store an artifact first
+		ref := Reference{
+			Kind:    ArtifactKindSolution,
+			Name:    "my-solution",
+			Version: semver.MustParse("1.0.0"),
+		}
+		content := []byte("name: my-solution\nversion: 1.0.0")
+		_, err := catalog.Store(ctx, ref, content, nil, false)
+		require.NoError(t, err)
+
+		// Save to tar
+		outputPath := t.TempDir() + "/output.tar"
+		result, err := catalog.Save(ctx, "my-solution", "", outputPath)
+		require.NoError(t, err)
+
+		assert.Equal(t, "my-solution", result.Reference.Name)
+		assert.Equal(t, "1.0.0", result.Reference.Version.String())
+		assert.Equal(t, outputPath, result.OutputPath)
+		assert.Greater(t, result.Size, int64(0))
+		assert.NotEmpty(t, result.Digest)
+
+		// Verify file exists
+		info, err := os.Stat(outputPath)
+		require.NoError(t, err)
+		assert.Greater(t, info.Size(), int64(0))
+	})
+
+	t.Run("saves specific version", func(t *testing.T) {
+		catalog := newTestCatalog(t)
+
+		// Store multiple versions
+		for _, ver := range []string{"1.0.0", "2.0.0"} {
+			ref := Reference{
+				Kind:    ArtifactKindSolution,
+				Name:    "my-solution",
+				Version: semver.MustParse(ver),
+			}
+			_, err := catalog.Store(ctx, ref, []byte("version: "+ver), nil, false)
+			require.NoError(t, err)
+		}
+
+		// Save specific version
+		outputPath := t.TempDir() + "/output.tar"
+		result, err := catalog.Save(ctx, "my-solution", "1.0.0", outputPath)
+		require.NoError(t, err)
+
+		assert.Equal(t, "1.0.0", result.Reference.Version.String())
+	})
+
+	t.Run("returns error for non-existent artifact", func(t *testing.T) {
+		catalog := newTestCatalog(t)
+
+		outputPath := t.TempDir() + "/output.tar"
+		_, err := catalog.Save(ctx, "non-existent", "", outputPath)
+		require.Error(t, err)
+		assert.True(t, IsNotFound(err))
+	})
+}
+
+func TestLocalCatalog_Load(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("loads artifact from tar archive", func(t *testing.T) {
+		// Create source catalog and store artifact
+		srcCatalog := newTestCatalog(t)
+		ref := Reference{
+			Kind:    ArtifactKindSolution,
+			Name:    "my-solution",
+			Version: semver.MustParse("1.0.0"),
+		}
+		content := []byte("name: my-solution\nversion: 1.0.0")
+		_, err := srcCatalog.Store(ctx, ref, content, nil, false)
+		require.NoError(t, err)
+
+		// Save to tar
+		tarPath := t.TempDir() + "/artifact.tar"
+		_, err = srcCatalog.Save(ctx, "my-solution", "", tarPath)
+		require.NoError(t, err)
+
+		// Create destination catalog and load
+		dstCatalog := newTestCatalog(t)
+		result, err := dstCatalog.Load(ctx, tarPath, false)
+		require.NoError(t, err)
+
+		assert.Equal(t, "my-solution", result.Reference.Name)
+		assert.Equal(t, "1.0.0", result.Reference.Version.String())
+		assert.NotEmpty(t, result.Digest)
+
+		// Verify artifact exists in destination
+		exists, err := dstCatalog.Exists(ctx, ref)
+		require.NoError(t, err)
+		assert.True(t, exists)
+
+		// Verify content matches
+		fetchedContent, _, err := dstCatalog.Fetch(ctx, ref)
+		require.NoError(t, err)
+		assert.Equal(t, content, fetchedContent)
+	})
+
+	t.Run("returns error when artifact already exists", func(t *testing.T) {
+		srcCatalog := newTestCatalog(t)
+		ref := Reference{
+			Kind:    ArtifactKindSolution,
+			Name:    "my-solution",
+			Version: semver.MustParse("1.0.0"),
+		}
+		_, err := srcCatalog.Store(ctx, ref, []byte("content"), nil, false)
+		require.NoError(t, err)
+
+		tarPath := t.TempDir() + "/artifact.tar"
+		_, err = srcCatalog.Save(ctx, "my-solution", "", tarPath)
+		require.NoError(t, err)
+
+		// Load into same catalog should fail
+		_, err = srcCatalog.Load(ctx, tarPath, false)
+		require.Error(t, err)
+		assert.True(t, IsExists(err))
+	})
+
+	t.Run("overwrites with force", func(t *testing.T) {
+		srcCatalog := newTestCatalog(t)
+		ref := Reference{
+			Kind:    ArtifactKindSolution,
+			Name:    "my-solution",
+			Version: semver.MustParse("1.0.0"),
+		}
+		_, err := srcCatalog.Store(ctx, ref, []byte("content"), nil, false)
+		require.NoError(t, err)
+
+		tarPath := t.TempDir() + "/artifact.tar"
+		_, err = srcCatalog.Save(ctx, "my-solution", "", tarPath)
+		require.NoError(t, err)
+
+		// Load with force should succeed
+		result, err := srcCatalog.Load(ctx, tarPath, true)
+		require.NoError(t, err)
+		assert.Equal(t, "my-solution", result.Reference.Name)
+	})
+
+	t.Run("returns error for invalid archive", func(t *testing.T) {
+		catalog := newTestCatalog(t)
+
+		// Create an invalid tar file
+		invalidPath := t.TempDir() + "/invalid.tar"
+		err := os.WriteFile(invalidPath, []byte("not a tar file"), 0o644)
+		require.NoError(t, err)
+
+		_, err = catalog.Load(ctx, invalidPath, false)
+		require.Error(t, err)
+	})
+}
+
+func TestLocalCatalog_SaveLoad_RoundTrip(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("full round-trip preserves content", func(t *testing.T) {
+		// Create source catalog
+		srcCatalog := newTestCatalog(t)
+
+		// Store an artifact
+		ref := Reference{
+			Kind:    ArtifactKindSolution,
+			Name:    "round-trip-test",
+			Version: semver.MustParse("2.5.0"),
+		}
+		originalContent := []byte("name: round-trip-test\nversion: 2.5.0\nkey: value")
+		annotations := map[string]string{
+			"custom-key": "custom-value",
+		}
+		_, err := srcCatalog.Store(ctx, ref, originalContent, annotations, false)
+		require.NoError(t, err)
+
+		// Save to tar
+		tarPath := t.TempDir() + "/round-trip.tar"
+		saveResult, err := srcCatalog.Save(ctx, "round-trip-test", "2.5.0", tarPath)
+		require.NoError(t, err)
+
+		// Create destination catalog
+		dstCatalog := newTestCatalog(t)
+
+		// Load from tar
+		loadResult, err := dstCatalog.Load(ctx, tarPath, false)
+		require.NoError(t, err)
+
+		// Verify metadata matches
+		assert.Equal(t, saveResult.Reference.Name, loadResult.Reference.Name)
+		assert.Equal(t, saveResult.Reference.Version.String(), loadResult.Reference.Version.String())
+		assert.Equal(t, saveResult.Digest, loadResult.Digest)
+
+		// Verify content matches
+		fetchedContent, info, err := dstCatalog.Fetch(ctx, ref)
+		require.NoError(t, err)
+		assert.Equal(t, originalContent, fetchedContent)
+
+		// Verify annotations are preserved
+		assert.Equal(t, "custom-value", info.Annotations["custom-key"])
+	})
+}

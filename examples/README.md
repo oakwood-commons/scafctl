@@ -136,3 +136,48 @@ scafctl run solution -f examples/resolvers/parameters.yaml \
   -r count=5 \
   -r uppercase=true
 ```
+
+---
+
+## Catalog Workflows
+
+### Build and Run from Catalog
+```bash
+# Build a solution into the catalog
+scafctl build solution examples/resolver-demo.yaml --version 1.0.0
+
+# Run by name (no file path needed)
+scafctl run solution resolver-demo
+
+# List catalog contents
+scafctl catalog list
+```
+
+### Export and Import (Air-Gapped Transfer)
+```bash
+# Build and export a solution
+scafctl build solution examples/resolver-demo.yaml --version 1.0.0
+scafctl catalog save resolver-demo -o resolver-demo.tar
+
+# Transfer the tar file to another machine, then import
+scafctl catalog load --input resolver-demo.tar
+
+# Run the imported solution
+scafctl run solution resolver-demo
+```
+
+### Version Management
+```bash
+# Build multiple versions
+scafctl build solution examples/resolver-demo.yaml --version 1.0.0
+scafctl build solution examples/resolver-demo.yaml --version 2.0.0
+
+# Export specific version
+scafctl catalog save resolver-demo@1.0.0 -o resolver-demo-v1.tar
+
+# Delete old versions
+scafctl catalog delete resolver-demo@1.0.0
+
+# Clean up orphaned blobs
+scafctl catalog prune
+```

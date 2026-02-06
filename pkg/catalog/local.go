@@ -570,6 +570,264 @@ func (c *LocalCatalog) Prune(ctx context.Context) (PruneResult, error) {
 	return result, nil
 }
 
+// SaveResult contains information about the save operation.
+type SaveResult struct {
+	// Reference is the artifact that was saved.
+	Reference Reference `json:"reference" yaml:"reference"`
+	// OutputPath is the path to the created archive.
+	OutputPath string `json:"outputPath" yaml:"outputPath"`
+	// Size is the size of the archive in bytes.
+	Size int64 `json:"size" yaml:"size"`
+	// Digest is the manifest digest.
+	Digest string `json:"digest" yaml:"digest"`
+}
+
+// Save exports an artifact to an OCI Image Layout tar archive.
+// If version is empty, exports the latest version.
+func (c *LocalCatalog) Save(ctx context.Context, name, version, outputPath string) (SaveResult, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	// Build reference (kind is inferred from catalog lookup)
+	ref := Reference{
+		Kind: ArtifactKindSolution, // Default to solution
+		Name: name,
+	}
+	if version != "" {
+		v, err := semver.NewVersion(version)
+		if err != nil {
+			return SaveResult{}, fmt.Errorf("invalid version %q: %w", version, err)
+		}
+		ref.Version = v
+	}
+
+	// Resolve the artifact (finds latest if no version specified)
+	info, err := c.resolveLocked(ctx, ref)
+	if err != nil {
+		return SaveResult{}, err
+	}
+	ref = info.Reference // Update with resolved version
+
+	// Get manifest descriptor
+	tag := c.tagForRef(ref)
+	manifestDesc, err := c.store.Resolve(ctx, tag)
+	if err != nil {
+		return SaveResult{}, &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
+	}
+
+	// Create output file
+	outFile, err := os.Create(outputPath)
+	if err != nil {
+		return SaveResult{}, fmt.Errorf("failed to create output file: %w", err)
+	}
+	defer outFile.Close()
+
+	// Create a tar writer
+	tw := NewOCITarWriter(outFile)
+	defer tw.Close()
+
+	// Write OCI layout file
+	if err := tw.WriteOCILayout(); err != nil {
+		return SaveResult{}, fmt.Errorf("failed to write oci-layout: %w", err)
+	}
+
+	// Collect all blobs to export (manifest + config + layers)
+	blobs := make(map[string]ocispec.Descriptor)
+	if err := c.collectBlobsForExport(ctx, manifestDesc, blobs); err != nil {
+		return SaveResult{}, fmt.Errorf("failed to collect blobs: %w", err)
+	}
+
+	// Write all blobs
+	for _, desc := range blobs {
+		data, err := c.fetchBlob(ctx, desc)
+		if err != nil {
+			return SaveResult{}, fmt.Errorf("failed to fetch blob %s: %w", desc.Digest, err)
+		}
+		if err := tw.WriteBlob(desc.Digest.String(), data); err != nil {
+			return SaveResult{}, fmt.Errorf("failed to write blob %s: %w", desc.Digest, err)
+		}
+	}
+
+	// Write index.json with the manifest
+	index := ocispec.Index{
+		Versioned: specs.Versioned{
+			SchemaVersion: 2,
+		},
+		MediaType: ocispec.MediaTypeImageIndex,
+		Manifests: []ocispec.Descriptor{
+			{
+				MediaType:   manifestDesc.MediaType,
+				Digest:      manifestDesc.Digest,
+				Size:        manifestDesc.Size,
+				Annotations: info.Annotations,
+			},
+		},
+	}
+	if err := tw.WriteIndex(index); err != nil {
+		return SaveResult{}, fmt.Errorf("failed to write index: %w", err)
+	}
+
+	// Get file size
+	fileInfo, err := outFile.Stat()
+	if err != nil {
+		return SaveResult{}, fmt.Errorf("failed to stat output file: %w", err)
+	}
+
+	c.logger.V(1).Info("saved artifact to archive",
+		"name", ref.Name,
+		"version", ref.Version.String(),
+		"output", outputPath,
+		"size", fileInfo.Size())
+
+	return SaveResult{
+		Reference:  ref,
+		OutputPath: outputPath,
+		Size:       fileInfo.Size(),
+		Digest:     manifestDesc.Digest.String(),
+	}, nil
+}
+
+// collectBlobsForExport recursively collects all blobs referenced by a manifest.
+func (c *LocalCatalog) collectBlobsForExport(ctx context.Context, desc ocispec.Descriptor, blobs map[string]ocispec.Descriptor) error {
+	// Add this blob
+	blobs[desc.Digest.String()] = desc
+
+	// If it's a manifest, also collect config and layers
+	if desc.MediaType == ocispec.MediaTypeImageManifest {
+		data, err := c.fetchBlob(ctx, desc)
+		if err != nil {
+			return err
+		}
+
+		var manifest ocispec.Manifest
+		if err := json.Unmarshal(data, &manifest); err != nil {
+			return err
+		}
+
+		// Add config
+		blobs[manifest.Config.Digest.String()] = manifest.Config
+
+		// Add layers
+		for _, layer := range manifest.Layers {
+			blobs[layer.Digest.String()] = layer
+		}
+	}
+
+	return nil
+}
+
+// LoadResult contains information about the load operation.
+type LoadResult struct {
+	// Reference is the artifact that was loaded.
+	Reference Reference `json:"reference" yaml:"reference"`
+	// Digest is the manifest digest.
+	Digest string `json:"digest" yaml:"digest"`
+	// Size is the artifact content size in bytes.
+	Size int64 `json:"size" yaml:"size"`
+	// CreatedAt is when the artifact was originally created.
+	CreatedAt time.Time `json:"createdAt" yaml:"createdAt"`
+}
+
+// Load imports an artifact from an OCI Image Layout tar archive.
+// Returns ErrArtifactExists if artifact already exists and force is false.
+func (c *LocalCatalog) Load(ctx context.Context, inputPath string, force bool) (LoadResult, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Open and parse the tar archive
+	file, err := os.Open(inputPath)
+	if err != nil {
+		return LoadResult{}, fmt.Errorf("failed to open archive: %w", err)
+	}
+	defer file.Close()
+
+	// Read the archive
+	reader, err := NewOCITarReader(file)
+	if err != nil {
+		return LoadResult{}, fmt.Errorf("failed to read archive: %w", err)
+	}
+
+	// Validate OCI layout
+	if !reader.HasValidLayout() {
+		return LoadResult{}, fmt.Errorf("invalid archive: missing oci-layout file")
+	}
+
+	// Get the index
+	index, err := reader.Index()
+	if err != nil {
+		return LoadResult{}, fmt.Errorf("failed to read index: %w", err)
+	}
+
+	if len(index.Manifests) == 0 {
+		return LoadResult{}, fmt.Errorf("archive contains no artifacts")
+	}
+
+	// Get first manifest descriptor
+	manifestDesc := index.Manifests[0]
+
+	// Extract artifact info from annotations
+	annotations := manifestDesc.Annotations
+	if annotations == nil {
+		return LoadResult{}, fmt.Errorf("manifest has no annotations")
+	}
+
+	ref, err := c.refFromAnnotations(annotations)
+	if err != nil {
+		return LoadResult{}, fmt.Errorf("failed to parse artifact reference: %w", err)
+	}
+
+	// Check if artifact already exists
+	if c.existsLocked(ctx, ref) && !force {
+		return LoadResult{}, &ArtifactExistsError{Reference: ref, Catalog: LocalCatalogName}
+	}
+
+	// Push all blobs to the store
+	for digestStr, data := range reader.Blobs() {
+		d, err := digest.Parse(digestStr)
+		if err != nil {
+			return LoadResult{}, fmt.Errorf("invalid digest %q: %w", digestStr, err)
+		}
+
+		desc := ocispec.Descriptor{
+			Digest: d,
+			Size:   int64(len(data)),
+		}
+
+		if err := c.store.Push(ctx, desc, bytes.NewReader(data)); err != nil {
+			if !errors.Is(err, errdef.ErrAlreadyExists) {
+				return LoadResult{}, fmt.Errorf("failed to push blob %s: %w", digestStr, err)
+			}
+		}
+	}
+
+	// Tag the manifest
+	tag := c.tagForRef(ref)
+	if err := c.store.Tag(ctx, manifestDesc, tag); err != nil {
+		return LoadResult{}, fmt.Errorf("failed to tag artifact: %w", err)
+	}
+
+	// Parse created time from annotations
+	var createdAt time.Time
+	if created := annotations[AnnotationCreated]; created != "" {
+		if t, err := time.Parse(time.RFC3339, created); err == nil {
+			createdAt = t
+		}
+	}
+
+	c.logger.V(1).Info("loaded artifact from archive",
+		"name", ref.Name,
+		"version", ref.Version.String(),
+		"digest", manifestDesc.Digest.String(),
+		"input", inputPath)
+
+	return LoadResult{
+		Reference: ref,
+		Digest:    manifestDesc.Digest.String(),
+		Size:      manifestDesc.Size,
+		CreatedAt: createdAt,
+	}, nil
+}
+
 // markReferencedBlobs recursively marks all blobs referenced by a manifest.
 func (c *LocalCatalog) markReferencedBlobs(ctx context.Context, desc ocispec.Descriptor, refs map[string]bool) error {
 	// Fetch the manifest content

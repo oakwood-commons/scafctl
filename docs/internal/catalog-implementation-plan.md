@@ -660,3 +660,281 @@ scafctl get solution  # shows catalog + local files
 - Multi-platform plugin binaries
 - Plugin discovery and loading from catalog
 - Solution → plugin dependency resolution
+---
+
+## Phase 2a: Save/Load Implementation
+
+This section details the implementation of `scafctl catalog save` and `scafctl catalog load` commands for offline artifact distribution.
+
+### Overview
+
+| Command | Description |
+|---------|-------------|
+| `scafctl catalog save <name[@version]> -o <file.tar>` | Export artifact to OCI Image Layout tar archive |
+| `scafctl catalog load -i <file.tar> [--force]` | Import artifact from tar archive into local catalog |
+
+### Design Decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Command placement | `scafctl catalog save/load` | Groups with other catalog operations |
+| Archive format | OCI Image Layout tar | Standard format, compatible with `oras`, `skopeo`, etc. |
+| Version handling | Latest if unspecified | Intuitive UX, consistent with other commands |
+| Kind handling | Infer from catalog | Catalog knows artifact kinds, simpler UX |
+| Conflict on load | Error by default, `--force` to overwrite | Safe default, explicit override |
+| File extension | `.tar` | Simple, tool-agnostic |
+| Dependency bundling | Single artifact only (v1) | Simpler, future `--include-deps` flag |
+
+### Use Cases
+
+1. **Air-gapped deployment** - Export solutions on connected machine, import on isolated machine
+2. **Sharing solutions** - Email/Slack/file transfer between teams
+3. **Backup/restore** - Archive catalog artifacts for safekeeping
+4. **CI/CD artifact passing** - Pass solutions between pipeline stages
+
+### Package Changes
+
+#### `pkg/catalog/local.go` - New Methods
+
+```go
+// Save exports an artifact to an OCI Image Layout tar archive.
+// If version is empty, exports the latest version.
+func (c *LocalCatalog) Save(ctx context.Context, name, version, outputPath string) error
+
+// Load imports an artifact from an OCI Image Layout tar archive.
+// Returns ErrArtifactExists if artifact already exists and force is false.
+func (c *LocalCatalog) Load(ctx context.Context, inputPath string, force bool) (*ArtifactInfo, error)
+```
+
+#### `pkg/catalog/catalog.go` - Interface Extension
+
+```go
+// Catalog interface additions
+type Catalog interface {
+    // ... existing methods ...
+    
+    // Save exports an artifact to a tar archive
+    Save(ctx context.Context, name, version, outputPath string) error
+    
+    // Load imports an artifact from a tar archive
+    Load(ctx context.Context, inputPath string, force bool) (*ArtifactInfo, error)
+}
+```
+
+### CLI Commands
+
+#### `pkg/cmd/scafctl/catalog/save.go`
+
+```go
+// CommandSave creates the catalog save command
+func CommandSave(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command
+
+// Usage:
+//   scafctl catalog save <name[@version]> -o <file.tar>
+//
+// Flags:
+//   -o, --output string   Output file path (required)
+//
+// Examples:
+//   scafctl catalog save my-solution -o my-solution.tar
+//   scafctl catalog save my-solution@1.2.3 -o my-solution-v1.2.3.tar
+```
+
+#### `pkg/cmd/scafctl/catalog/load.go`
+
+```go
+// CommandLoad creates the catalog load command
+func CommandLoad(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command
+
+// Usage:
+//   scafctl catalog load -i <file.tar>
+//
+// Flags:
+//   -i, --input string    Input file path (required)
+//   -f, --force           Overwrite existing artifact
+//   -o, --output string   Output format (table, json, yaml)
+//
+// Examples:
+//   scafctl catalog load -i my-solution.tar
+//   scafctl catalog load -i my-solution.tar --force
+//   scafctl catalog load -i my-solution.tar -o json
+```
+
+### Implementation Details
+
+#### Save Implementation
+
+```go
+func (c *LocalCatalog) Save(ctx context.Context, name, version, outputPath string) error {
+    // 1. Resolve the artifact reference (use latest if version empty)
+    ref, err := c.resolveReference(ctx, name, version)
+    if err != nil {
+        return fmt.Errorf("failed to resolve artifact: %w", err)
+    }
+    
+    // 2. Create output file
+    file, err := os.Create(outputPath)
+    if err != nil {
+        return fmt.Errorf("failed to create output file: %w", err)
+    }
+    defer file.Close()
+    
+    // 3. Use oras-go to copy from local OCI store to tar
+    // The oras-go library supports copying to tar archives natively
+    tarStore, err := oci.NewFromTar(ctx, outputPath)
+    if err != nil {
+        return fmt.Errorf("failed to create tar store: %w", err)
+    }
+    
+    // 4. Copy manifest and all referenced blobs
+    desc, err := c.store.Resolve(ctx, ref.String())
+    if err != nil {
+        return fmt.Errorf("failed to resolve manifest: %w", err)
+    }
+    
+    err = oras.Copy(ctx, c.store, ref.String(), tarStore, ref.String(), oras.DefaultCopyOptions)
+    if err != nil {
+        return fmt.Errorf("failed to export artifact: %w", err)
+    }
+    
+    return nil
+}
+```
+
+#### Load Implementation
+
+```go
+func (c *LocalCatalog) Load(ctx context.Context, inputPath string, force bool) (*ArtifactInfo, error) {
+    // 1. Open the tar archive as OCI store
+    tarStore, err := oci.NewFromTar(ctx, inputPath)
+    if err != nil {
+        return nil, fmt.Errorf("failed to open tar archive: %w", err)
+    }
+    
+    // 2. Read the index to find the artifact reference
+    index, err := tarStore.Index()
+    if err != nil {
+        return nil, fmt.Errorf("failed to read archive index: %w", err)
+    }
+    
+    if len(index.Manifests) == 0 {
+        return nil, fmt.Errorf("archive contains no artifacts")
+    }
+    
+    // 3. Extract artifact metadata from annotations
+    manifest := index.Manifests[0]
+    name := manifest.Annotations[AnnotationArtifactName]
+    version := manifest.Annotations[AnnotationArtifactVersion]
+    kind := manifest.Annotations[AnnotationArtifactKind]
+    
+    // 4. Check if artifact already exists
+    ref := Reference{Kind: ArtifactKind(kind), Name: name, Version: version}
+    exists, err := c.Exists(ctx, ref)
+    if err != nil {
+        return nil, fmt.Errorf("failed to check existing artifact: %w", err)
+    }
+    if exists && !force {
+        return nil, ErrArtifactExists
+    }
+    
+    // 5. Copy from tar to local store
+    err = oras.Copy(ctx, tarStore, manifest.Digest.String(), c.store, ref.String(), oras.DefaultCopyOptions)
+    if err != nil {
+        return nil, fmt.Errorf("failed to import artifact: %w", err)
+    }
+    
+    // 6. Tag with version reference
+    err = c.store.Tag(ctx, manifest, ref.String())
+    if err != nil {
+        return nil, fmt.Errorf("failed to tag artifact: %w", err)
+    }
+    
+    // 7. Return artifact info
+    return c.Resolve(ctx, ref)
+}
+```
+
+### Error Handling
+
+| Error | Exit Code | Message |
+|-------|-----------|---------|
+| Artifact not found | `CatalogError (8)` | `artifact "name" not found in catalog` |
+| Output file exists | `FileNotFound (4)` | `output file already exists: path` |
+| Invalid tar archive | `InvalidInput (3)` | `invalid archive format: reason` |
+| Artifact already exists | `CatalogError (8)` | `artifact "name@version" already exists (use --force to overwrite)` |
+| Permission denied | `PermissionDenied (10)` | `permission denied: path` |
+
+### Output Formats
+
+#### Save Output (default)
+```
+✓ Saved my-solution@1.2.3 to my-solution.tar (15.2 KB)
+```
+
+#### Load Output (table - default)
+```
+✓ Loaded artifact from my-solution.tar
+
+NAME          VERSION   KIND       DIGEST
+my-solution   1.2.3     solution   sha256:abc123...
+```
+
+#### Load Output (json)
+```json
+{
+  "name": "my-solution",
+  "version": "1.2.3",
+  "kind": "solution",
+  "digest": "sha256:abc123...",
+  "createdAt": "2026-02-06T10:30:00Z",
+  "size": 15234
+}
+```
+
+### Integration Tests
+
+Add to `tests/integration/cli_test.go`:
+
+```go
+func TestIntegration_CatalogSaveHelp(t *testing.T)
+func TestIntegration_CatalogSave_RequiresOutput(t *testing.T)
+func TestIntegration_CatalogSave_NotFound(t *testing.T)
+func TestIntegration_CatalogSave_Success(t *testing.T)
+func TestIntegration_CatalogSave_WithVersion(t *testing.T)
+
+func TestIntegration_CatalogLoadHelp(t *testing.T)
+func TestIntegration_CatalogLoad_RequiresInput(t *testing.T)
+func TestIntegration_CatalogLoad_InvalidArchive(t *testing.T)
+func TestIntegration_CatalogLoad_Success(t *testing.T)
+func TestIntegration_CatalogLoad_AlreadyExists(t *testing.T)
+func TestIntegration_CatalogLoad_Force(t *testing.T)
+func TestIntegration_CatalogLoad_JSONOutput(t *testing.T)
+
+func TestIntegration_CatalogSaveLoad_RoundTrip(t *testing.T)
+```
+
+### Implementation Tasks
+
+| # | Task | Estimated Effort |
+|---|------|------------------|
+| 1 | Add `Save()` method to `pkg/catalog/local.go` | 1 hour |
+| 2 | Add `Load()` method to `pkg/catalog/local.go` | 1.5 hours |
+| 3 | Add unit tests for `Save()`/`Load()` in `pkg/catalog/local_test.go` | 1 hour |
+| 4 | Create `pkg/cmd/scafctl/catalog/save.go` | 1 hour |
+| 5 | Create `pkg/cmd/scafctl/catalog/load.go` | 1 hour |
+| 6 | Update `pkg/cmd/scafctl/catalog/catalog.go` to add subcommands | 15 min |
+| 7 | Add integration tests | 1 hour |
+| 8 | Update TODO.md | 15 min |
+| **Total** | | **~7 hours** |
+
+### Success Criteria
+
+1. ✅ `scafctl catalog save my-solution -o out.tar` exports artifact
+2. ✅ `scafctl catalog save my-solution@1.2.3 -o out.tar` exports specific version
+3. ✅ `scafctl catalog load -i out.tar` imports artifact
+4. ✅ `scafctl catalog load -i out.tar --force` overwrites existing
+5. ✅ `scafctl catalog load -i out.tar -o json` outputs JSON
+6. ✅ Round-trip test: build → save → delete → load → run succeeds
+7. ✅ Archive is valid OCI Image Layout (compatible with `oras`)
+8. ✅ Error messages are helpful and styled
+9. ✅ All existing tests still pass

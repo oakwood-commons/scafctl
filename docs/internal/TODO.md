@@ -111,17 +111,17 @@ This document tracks remaining implementation tasks for scafctl.
   - Visualize resolver dependency graph
   - Support output formats (ascii, dot, mermaid, json)
 
-- [ ] **`scafctl delete solution <name[@version]>`**
-  - Remove solution from catalog
-  - Support `--catalog` flag for target
+- [x] **`scafctl delete solution <name[@version]>`**
+  - Remove solution from catalog via `scafctl catalog delete`
+  - Support `--version` flag for specific version
+  - Implemented in `pkg/cmd/scafctl/catalog/delete.go`
 
-- [ ] **`scafctl build [solution|plugin]`**
+- [x] **`scafctl build solution`**
   - Validate artifact schema and structure
-  - Resolve and fetch remote dependencies
-  - Verify dependency compatibility
-  - Detect circular dependencies
   - Package as OCI artifact
   - Store in local catalog with annotations
+  - Implemented in `pkg/cmd/scafctl/build/solution.go`
+  - Note: `scafctl build plugin` not yet implemented
 
 - [ ] **`scafctl push [solution|plugin] <name[@version]>`**
   - Push artifact from local to remote catalog
@@ -132,20 +132,36 @@ This document tracks remaining implementation tasks for scafctl.
   - Download artifact from remote to local catalog
   - Cache locally for offline use
 
-- [ ] **`scafctl inspect [solution|plugin] <name[@version]>`**
-  - Display artifact metadata and dependencies
-  - Show available providers (for plugins)
-  - Show platform requirements
+- [x] **`scafctl catalog inspect <name[@version]>`**
+  - Display artifact metadata and annotations
+  - Show digest, created time, version
+  - Support `-o` output formats (table, json, yaml)
+  - Implemented in `pkg/cmd/scafctl/catalog/inspect.go`
+
+- [x] **`scafctl catalog list`**
+  - List all artifacts in local catalog
+  - Support `--kind` filter
+  - Support `-o` output formats
+  - Implemented in `pkg/cmd/scafctl/catalog/list.go`
+
+- [x] **`scafctl catalog prune`**
+  - Remove orphaned blobs from catalog storage
+  - Implemented in `pkg/cmd/scafctl/catalog/prune.go`
 
 - [ ] **`scafctl tag [solution|plugin] <source> <target>`**
   - Create version aliases (e.g., latest, stable)
 
-- [ ] **`scafctl save [solution|plugin] <name[@version]> -o <file>`**
-  - Export artifact and dependencies as tar archive
+- [x] **`scafctl catalog save <name[@version]> -o <file>`**
+  - Export artifact and dependencies as OCI Image Layout tar archive
   - Support air-gapped environments
+  - Infer artifact kind automatically
+  - Default to latest version if not specified
+  - Implemented in `pkg/cmd/scafctl/catalog/save.go`
 
-- [ ] **`scafctl load -i <file>`**
-  - Import artifact from tar archive
+- [x] **`scafctl catalog load --input <file>`**
+  - Import artifact from OCI Image Layout tar archive
+  - Support `--force` flag to overwrite existing artifacts
+  - Implemented in `pkg/cmd/scafctl/catalog/load.go`
 
 - [ ] **`scafctl cache` subcommands**
   - `cache clear` - clear all cached artifacts
@@ -159,18 +175,20 @@ This document tracks remaining implementation tasks for scafctl.
   - Support both YAML and JSON formats
   - Implemented via `FindSolution()` in `pkg/solution/get/get.go`
 
-- [ ] **Catalog-first resolution**
+- [x] **Catalog-first resolution**
   - Query catalog for named artifacts
-  - Apply version constraints
-  - Download and cache artifacts
-  - Fallback behavior when catalog unavailable
+  - Apply version constraints (supports `name@version` syntax)
+  - Fallback to file system when not found in catalog
+  - Implemented via `SolutionResolver` in `pkg/catalog/resolver.go`
 
 ## Catalog Integration
 
-- [ ] **Local catalog implementation**
-  - OCI content store at `~/.scafctl/catalog/`
-  - Store solutions and plugins as OCI artifacts
-  - Support content-addressed blobs and index
+- [x] **Local catalog implementation**
+  - OCI content store at `~/.scafctl/catalog/` (via XDG data dir)
+  - Store solutions as OCI artifacts
+  - Content-addressed blobs with OCI manifest/index
+  - Implemented in `pkg/catalog/local.go`
+  - Uses oras-go for OCI operations
 
 - [ ] **Remote catalog support**
   - Standard OCI registry integration
@@ -414,6 +432,10 @@ This document tracks remaining implementation tasks for scafctl.
 - [x] Prometheus metrics (pkg/metrics)
 - [x] Example solutions (20+ in examples/)
 - [x] `scafctl lint` command with severity filtering and multiple output formats
+- [x] `scafctl build solution` command with OCI packaging
+- [x] Local catalog implementation (pkg/catalog) with OCI storage
+- [x] Catalog-first resolution via SolutionResolver
+- [x] `scafctl catalog` commands (list, inspect, delete, prune)
 
 ## Future Enhancements
 

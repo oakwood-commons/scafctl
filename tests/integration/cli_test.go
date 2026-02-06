@@ -1169,3 +1169,201 @@ func TestIntegration_GetSolution_FromCatalog_ByName(t *testing.T) {
 	assert.Contains(t, stdout, "resolver-demo")
 	assert.Contains(t, stdout, "apiVersion")
 }
+
+// =============================================================================
+// Catalog Save Tests
+// =============================================================================
+
+func TestIntegration_CatalogSaveHelp(t *testing.T) {
+	stdout, _, _ := runScafctl(t, "catalog", "save", "--help")
+	assert.Contains(t, stdout, "save")
+	assert.Contains(t, stdout, "output")
+}
+
+func TestIntegration_CatalogSave_RequiresOutput(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Build an artifact first
+	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+
+	// Try to save without output flag
+	_, stderr, exitCode := runScafctl(t, "catalog", "save", "resolver-demo")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "required")
+}
+
+func TestIntegration_CatalogSave_NotFound(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	outputPath := tmpDir + "/nonexistent.tar"
+	_, stderr, exitCode := runScafctl(t, "catalog", "save", "nonexistent", "-o", outputPath)
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "not found")
+}
+
+func TestIntegration_CatalogSave_Success(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Build an artifact
+	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+
+	// Save to tar
+	outputPath := tmpDir + "/export.tar"
+	stdout, _, exitCode := runScafctl(t, "catalog", "save", "resolver-demo", "-o", outputPath)
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "resolver-demo")
+	assert.Contains(t, stdout, "1.0.0")
+
+	// Verify file was created
+	info, err := os.Stat(outputPath)
+	require.NoError(t, err)
+	assert.Greater(t, info.Size(), int64(0))
+}
+
+func TestIntegration_CatalogSave_SpecificVersion(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Build multiple versions
+	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+	_, _, exitCode = runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "2.0.0")
+	require.Equal(t, 0, exitCode)
+
+	// Save specific version
+	outputPath := tmpDir + "/v1.tar"
+	stdout, _, exitCode := runScafctl(t, "catalog", "save", "resolver-demo@1.0.0", "-o", outputPath)
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "1.0.0")
+}
+
+// =============================================================================
+// Catalog Load Tests
+// =============================================================================
+
+func TestIntegration_CatalogLoadHelp(t *testing.T) {
+	stdout, _, _ := runScafctl(t, "catalog", "load", "--help")
+	assert.Contains(t, stdout, "load")
+	assert.Contains(t, stdout, "input")
+	assert.Contains(t, stdout, "force")
+}
+
+func TestIntegration_CatalogLoad_RequiresInput(t *testing.T) {
+	_, stderr, exitCode := runScafctl(t, "catalog", "load")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "required")
+}
+
+func TestIntegration_CatalogLoad_FileNotFound(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	_, stderr, exitCode := runScafctl(t, "catalog", "load", "--input", "/nonexistent/path.tar")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "no such file")
+}
+
+func TestIntegration_CatalogLoad_Success(t *testing.T) {
+	// Create source catalog
+	srcDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", srcDir)
+
+	// Build and save an artifact
+	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+
+	tarPath := srcDir + "/export.tar"
+	_, _, exitCode = runScafctl(t, "catalog", "save", "resolver-demo", "-o", tarPath)
+	require.Equal(t, 0, exitCode)
+
+	// Switch to destination catalog
+	dstDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dstDir)
+
+	// Load the artifact
+	stdout, _, exitCode := runScafctl(t, "catalog", "load", "--input", tarPath)
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "resolver-demo")
+	assert.Contains(t, stdout, "1.0.0")
+
+	// Verify artifact is in catalog
+	stdout, _, exitCode = runScafctl(t, "catalog", "list")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "resolver-demo")
+}
+
+func TestIntegration_CatalogLoad_AlreadyExists(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Build an artifact
+	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+
+	// Save it
+	tarPath := tmpDir + "/export.tar"
+	_, _, exitCode = runScafctl(t, "catalog", "save", "resolver-demo", "-o", tarPath)
+	require.Equal(t, 0, exitCode)
+
+	// Try to load into same catalog (should fail)
+	_, stderr, exitCode := runScafctl(t, "catalog", "load", "--input", tarPath)
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "already exists")
+}
+
+func TestIntegration_CatalogLoad_ForceOverwrite(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Build an artifact
+	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+
+	// Save it
+	tarPath := tmpDir + "/export.tar"
+	_, _, exitCode = runScafctl(t, "catalog", "save", "resolver-demo", "-o", tarPath)
+	require.Equal(t, 0, exitCode)
+
+	// Load with force (should succeed)
+	stdout, _, exitCode := runScafctl(t, "catalog", "load", "--input", tarPath, "--force")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "resolver-demo")
+}
+
+// =============================================================================
+// Catalog Save/Load Round Trip Tests
+// =============================================================================
+
+func TestIntegration_CatalogSaveLoad_RoundTrip(t *testing.T) {
+	// Create source catalog
+	srcDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", srcDir)
+
+	// Build an artifact
+	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+
+	// Save to tar
+	tarPath := srcDir + "/export.tar"
+	_, _, exitCode = runScafctl(t, "catalog", "save", "resolver-demo", "-o", tarPath)
+	require.Equal(t, 0, exitCode)
+
+	// Switch to destination catalog
+	dstDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dstDir)
+
+	// Load from tar
+	_, _, exitCode = runScafctl(t, "catalog", "load", "--input", tarPath)
+	require.Equal(t, 0, exitCode)
+
+	// Verify the solution can be run
+	stdout, _, exitCode := runScafctl(t, "run", "solution", "resolver-demo", "--skip-actions", "-o", "json")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "environment")
+	assert.Contains(t, stdout, "production")
+}

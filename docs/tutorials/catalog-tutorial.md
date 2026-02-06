@@ -31,10 +31,10 @@ Take any solution file and build it into the catalog:
 
 ```bash
 # Build with explicit version
-scafctl build solution -f my-solution.yaml --version 1.0.0
+scafctl build solution my-solution.yaml --version 1.0.0
 
 # Build using version from metadata.version field
-scafctl build solution -f my-solution.yaml
+scafctl build solution my-solution.yaml
 ```
 
 Output:
@@ -89,13 +89,13 @@ scafctl catalog list --name my-solution
 
 ```bash
 # Build v1.0.0
-scafctl build solution -f solution-v1.yaml --version 1.0.0
+scafctl build solution solution-v1.yaml --version 1.0.0
 
 # Build v1.1.0 (different file, same solution name)
-scafctl build solution -f solution-v1.1.yaml --version 1.1.0
+scafctl build solution solution-v1.1.yaml --version 1.1.0
 
 # Build v2.0.0-beta
-scafctl build solution -f solution-v2.yaml --version 2.0.0-beta.1
+scafctl build solution solution-v2.yaml --version 2.0.0-beta.1
 ```
 
 ### Version Resolution
@@ -113,14 +113,14 @@ scafctl run solution my-solution@1.1.0  # Runs exactly 1.1.0
 By default, building an existing version fails:
 
 ```bash
-scafctl build solution -f updated.yaml --version 1.0.0
+scafctl build solution updated.yaml --version 1.0.0
 # Error: artifact my-solution@1.0.0 already exists in catalog "local"
 ```
 
 Use `--force` to overwrite:
 
 ```bash
-scafctl build solution -f updated.yaml --version 1.0.0 --force
+scafctl build solution updated.yaml --version 1.0.0 --force
 ```
 
 ## Inspecting Solutions
@@ -194,6 +194,104 @@ Output:
  💡   Space Reclaimed: 4.2 KB
 ```
 
+## Exporting and Importing (Air-Gapped Environments)
+
+The `save` and `load` commands let you transfer catalog artifacts between machines without network access.
+
+### Saving an Artifact
+
+Export a solution to a tar archive:
+
+```bash
+# Save latest version
+scafctl catalog save my-solution -o my-solution.tar
+
+# Save specific version
+scafctl catalog save my-solution@1.0.0 -o my-solution-v1.tar
+```
+
+Output:
+```
+ ✅ Saved my-solution@1.0.0
+ 💡   Output: my-solution.tar
+ 💡   Size: 2.4 KB
+ 💡   Digest: sha256:abc123...
+```
+
+The archive uses the standard **OCI Image Layout** format, making it compatible with other OCI tools.
+
+### Loading an Artifact
+
+Import an artifact from a tar archive:
+
+```bash
+scafctl catalog load --input my-solution.tar
+```
+
+Output:
+```
+ARTIFACT        VERSION   DIGEST
+my-solution     1.0.0     sha256:abc123...
+```
+
+If the artifact already exists in your catalog, loading fails:
+
+```bash
+scafctl catalog load --input my-solution.tar
+# Error: artifact "my-solution@1.0.0" already exists in catalog
+```
+
+Use `--force` to overwrite:
+
+```bash
+scafctl catalog load --input my-solution.tar --force
+```
+
+### Air-Gapped Transfer Workflow
+
+Here's a complete workflow for transferring solutions to a machine without internet:
+
+```bash
+# On the connected machine:
+# 1. Build the solution
+scafctl build solution deploy.yaml --version 1.0.0
+
+# 2. Export to tar
+scafctl catalog save deploy@1.0.0 -o deploy-v1.0.0.tar
+
+# 3. Copy to USB drive or other media
+cp deploy-v1.0.0.tar /Volumes/USB/
+
+# --- Transfer to air-gapped machine ---
+
+# On the air-gapped machine:
+# 4. Load from tar
+scafctl catalog load --input /Volumes/USB/deploy-v1.0.0.tar
+
+# 5. Run the solution
+scafctl run solution deploy -r target=server1
+```
+
+### Archive Format
+
+The exported tar file contains an OCI Image Layout:
+
+```
+my-solution.tar
+├── oci-layout           # OCI layout version file
+├── index.json           # Image index with manifest reference
+└── blobs/
+    └── sha256/
+        ├── <manifest>   # Artifact manifest
+        ├── <config>     # Configuration blob
+        └── <content>    # Solution YAML content
+```
+
+This format is:
+- **Self-contained** - includes all layers and metadata
+- **Verifiable** - content-addressable by digest
+- **Standard** - compatible with OCI registry tools
+
 ## Name Resolution Priority
 
 When you run a solution, scafctl checks sources in this order:
@@ -228,13 +326,13 @@ scafctl run solution -f ./deploy.yaml --dry-run
 scafctl run solution -f ./deploy.yaml -r env=dev
 
 # 3. Build to catalog with version
-scafctl build solution -f ./deploy.yaml --version 1.0.0
+scafctl build solution ./deploy.yaml --version 1.0.0
 
 # 4. Now run from anywhere by name
 scafctl run solution deploy -r env=staging
 
 # 5. Make improvements, build new version
-scafctl build solution -f ./deploy.yaml --version 1.1.0
+scafctl build solution ./deploy.yaml --version 1.1.0
 
 # 6. Run latest version
 scafctl run solution deploy -r env=prod
@@ -248,11 +346,13 @@ scafctl catalog prune
 
 | Command | Description |
 |---------|-------------|
-| `scafctl build solution -f FILE` | Build solution to catalog |
+| `scafctl build solution FILE` | Build solution to catalog |
 | `scafctl catalog list` | List all solutions |
 | `scafctl catalog inspect NAME[@VERSION]` | Show solution details |
 | `scafctl catalog delete NAME@VERSION` | Remove a solution version |
 | `scafctl catalog prune` | Clean up orphaned data |
+| `scafctl catalog save NAME[@VERSION] -o FILE` | Export to tar archive |
+| `scafctl catalog load --input FILE` | Import from tar archive |
 | `scafctl run solution NAME[@VERSION]` | Run from catalog |
 
 ## Next Steps
