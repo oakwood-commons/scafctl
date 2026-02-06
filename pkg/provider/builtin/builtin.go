@@ -12,10 +12,13 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/gitprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/gotmplprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/httpprovider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/identityprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/parameterprovider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/secretprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/sleepprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/staticprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/validationprovider"
+	"github.com/oakwood-commons/scafctl/pkg/secrets"
 )
 
 var (
@@ -54,6 +57,12 @@ func RegisterAll() error {
 
 // registerAllToRegistry registers all built-in providers to the given registry.
 func registerAllToRegistry(reg *provider.Registry) error {
+	// Initialize secrets store for the secret provider
+	secretStore, err := secrets.New()
+	if err != nil {
+		return err
+	}
+
 	providers := []provider.Provider{
 		httpprovider.NewHTTPProvider(),
 		envprovider.NewEnvProvider(),
@@ -67,6 +76,8 @@ func registerAllToRegistry(reg *provider.Registry) error {
 		parameterprovider.NewParameterProvider(),
 		staticprovider.New(),
 		gotmplprovider.NewGoTemplateProvider(),
+		secretprovider.NewSecretProvider(secretprovider.WithSecretStore(secretStore)),
+		identityprovider.NewIdentityProvider(),
 	}
 
 	for _, p := range providers {
@@ -94,5 +105,7 @@ func ProviderNames() []string {
 		"parameter",
 		"static",
 		"go-template",
+		"secret",
+		"identity",
 	}
 }

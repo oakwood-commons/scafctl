@@ -18,23 +18,21 @@ func CommandSnapshot(cliParams *settings.Run, ioStreams terminal.IOStreams, bina
 			Snapshots capture the complete state of resolver execution including values,
 			status, timing, errors, and metadata. They can be saved to files for later
 			analysis, used in golden file testing, or compared to detect configuration drift.
+			
+			To create a snapshot, use: scafctl render solution --snapshot --snapshot-file=snapshot.json
 		`),
 		Example: heredoc.Docf(`
-			# Capture and save execution snapshot
-			$ %s snapshot save config.yaml --output snapshot.json
+			# Create a snapshot (via render solution)
+			$ %s render solution -f config.yaml --snapshot --snapshot-file=snapshot.json
 			
 			# Load and display a snapshot
 			$ %s snapshot show snapshot.json
 			
 			# Compare two snapshots
 			$ %s snapshot diff before.json after.json
-			
-			# Save with sensitive data redaction
-			$ %s snapshot save config.yaml --output snapshot.json --redact
-		`, binaryName, binaryName, binaryName, binaryName),
+		`, binaryName, binaryName, binaryName),
 	}
 
-	cmd.AddCommand(CommandSave(cliParams, ioStreams, binaryName))
 	cmd.AddCommand(CommandShow(cliParams, ioStreams, binaryName))
 	cmd.AddCommand(CommandDiff(cliParams, ioStreams, binaryName))
 

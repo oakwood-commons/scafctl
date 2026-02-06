@@ -13,16 +13,19 @@ metadata:
 
 spec:
   resolvers:
-    # String parameter with default
+    # String parameter with default (using fallback chain)
     name:
       description: User name from CLI or default
       type: string
       resolve:
         with:
           - provider: parameter
+            onError: continue
             inputs:
-              name: name
-              default: "World"
+              key: name
+          - provider: static
+            inputs:
+              value: "World"
     
     # Integer parameter with default
     count:
@@ -31,9 +34,12 @@ spec:
       resolve:
         with:
           - provider: parameter
+            onError: continue
             inputs:
-              name: count
-              default: 3
+              key: count
+          - provider: static
+            inputs:
+              value: 3
     
     # Boolean parameter
     uppercase:
@@ -42,9 +48,12 @@ spec:
       resolve:
         with:
           - provider: parameter
+            onError: continue
             inputs:
-              name: uppercase
-              default: false
+              key: uppercase
+          - provider: static
+            inputs:
+              value: false
     
     # Computed greeting using parameters
     greeting:
@@ -54,11 +63,10 @@ spec:
         with:
           - provider: cel
             inputs:
-              expression:
-                expr: |
-                  _.uppercase 
-                    ? ('Hello, ' + _.name + '!').upperAscii()
-                    : 'Hello, ' + _.name + '!'
+              expression: |
+                _.uppercase 
+                  ? ('Hello, ' + _.name + '!').upperAscii()
+                  : 'Hello, ' + _.name + '!'
     
     # Array output using count
     greetings:
@@ -68,7 +76,6 @@ spec:
         with:
           - provider: cel
             inputs:
-              expression:
-                # Create array of greetings
-                expr: |
-                  range(0, _.count).map(i, _.greeting + ' (#' + string(i + 1) + ')')
+              # Create array of greetings
+              expression: |
+                lists.range(_.count).map(i, _.greeting + ' (#' + string(i + 1) + ')')

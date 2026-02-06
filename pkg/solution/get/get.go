@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/filepath"
 	"github.com/oakwood-commons/scafctl/pkg/fs"
 	"github.com/oakwood-commons/scafctl/pkg/httpc"
@@ -59,6 +60,16 @@ func WithHTTPClient(client *httpc.Client) Option {
 // It allows customizing the logging behavior by providing a logr.Logger instance.
 func WithLogger(logger logr.Logger) Option {
 	return func(g *Getter) {
+		g.logger = logger
+	}
+}
+
+// WithAppConfig returns an Option that configures the HTTP client using the application configuration.
+// It creates an HTTP client with settings from the provided config.HTTPClientConfig.
+// The logger is used for HTTP client logging.
+func WithAppConfig(cfg *config.HTTPClientConfig, logger logr.Logger) Option {
+	return func(g *Getter) {
+		g.httpClient = httpc.NewClientFromAppConfig(cfg, logger)
 		g.logger = logger
 	}
 }

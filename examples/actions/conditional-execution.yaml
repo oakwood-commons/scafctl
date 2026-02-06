@@ -2,10 +2,10 @@
 # Demonstrates when conditions for conditional action execution.
 #
 # Run with different environments:
-#   scafctl run workflow -f examples/actions/conditional-execution.yaml --set environment=prod
-#   scafctl run workflow -f examples/actions/conditional-execution.yaml --set environment=staging
+#   scafctl run solution -f examples/actions/conditional-execution.yaml -r environment=prod
+#   scafctl run solution -f examples/actions/conditional-execution.yaml -r environment=staging
 #
-# Run: scafctl run workflow -f examples/actions/conditional-execution.yaml
+# Run: scafctl run solution -f examples/actions/conditional-execution.yaml
 
 apiVersion: scafctl.io/v1
 kind: Solution

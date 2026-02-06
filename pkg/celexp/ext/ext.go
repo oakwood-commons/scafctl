@@ -677,6 +677,10 @@ func SetFunctionNames(funcs celexp.ExtFunctionList) error {
 // project-specific functionality like arrays, strings, filepath, guid, map,
 // marshalling, debugging, sorting, and time operations.
 //
+// Note: debug.DebugOutFunc is NOT included here because it requires a Writer
+// parameter for output. Use debug.DebugOutFunc(w) separately when building
+// environments that need debug.out functionality.
+//
 // Example usage:
 //
 //	funcs := ext.Custom()
@@ -689,7 +693,7 @@ func Custom() celexp.ExtFunctionList {
 		arrays.StringAddFunc(),
 		arrays.StringsUniqueFunc(),
 
-		// Debug functions
+		// Debug functions (debug.DebugOutFunc excluded - requires Writer, add separately)
 		debug.DebugThrowFunc(),
 		debug.DebugSleepFunc(),
 
@@ -737,6 +741,10 @@ func Custom() celexp.ExtFunctionList {
 // All returns a combined list of all CEL extension functions, including both
 // built-in extensions from google/cel-go and custom extensions implemented in
 // this project.
+//
+// Note: debug.DebugOutFunc is NOT included here because it requires a Writer
+// parameter for output. Use debug.DebugOutFunc(w) separately when building
+// environments that need debug.out functionality.
 //
 // Example usage:
 //

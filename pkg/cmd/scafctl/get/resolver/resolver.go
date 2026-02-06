@@ -10,8 +10,9 @@ import (
 // CommandResolver creates the get resolver command
 func CommandResolver(cliParams *settings.Run, ioStreams *terminal.IOStreams, binaryName string) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "resolver",
-		Short: "Get resolver information",
+		Use:     "resolver",
+		Aliases: []string{"resolvers", "res"},
+		Short:   "Get resolver information",
 		Long: heredoc.Doc(`
 			Get information about resolvers.
 

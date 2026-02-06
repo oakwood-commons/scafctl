@@ -1,7 +1,7 @@
 # Sequential Chain Example
 # Demonstrates a linear action dependency chain (A → B → C).
 #
-# Run: scafctl run workflow -f examples/actions/sequential-chain.yaml
+# Run: scafctl run solution -f examples/actions/sequential-chain.yaml
 
 apiVersion: scafctl.io/v1
 kind: Solution

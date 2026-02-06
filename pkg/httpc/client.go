@@ -10,7 +10,9 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/hashicorp/go-retryablehttp"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/metrics"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"ivan.dev/httpcache"
 )
 
@@ -89,17 +91,17 @@ type ClientConfig struct {
 // DefaultConfig returns a ClientConfig with sensible defaults
 func DefaultConfig() *ClientConfig {
 	return &ClientConfig{
-		Timeout:              30 * time.Second,
-		RetryMax:             3,
-		RetryWaitMin:         1 * time.Second,
-		RetryWaitMax:         30 * time.Second,
+		Timeout:              settings.DefaultHTTPTimeout,
+		RetryMax:             settings.DefaultHTTPRetryMax,
+		RetryWaitMin:         settings.DefaultHTTPRetryWaitMinimum,
+		RetryWaitMax:         settings.DefaultHTTPRetryWaitMaximum,
 		EnableCache:          true,
 		CacheType:            CacheTypeFilesystem,
-		CacheDir:             "~/.scafctl/http-cache",
-		CacheTTL:             10 * time.Minute,
-		CacheKeyPrefix:       "scafctl:",
-		MaxCacheFileSize:     10 * 1024 * 1024, // 10MB default
-		MemoryCacheSize:      1000,
+		CacheDir:             settings.DefaultHTTPCacheDir(),
+		CacheTTL:             settings.DefaultHTTPCacheTTL,
+		CacheKeyPrefix:       settings.DefaultHTTPCacheKeyPrefix,
+		MaxCacheFileSize:     settings.DefaultMaxCacheFileSize,
+		MemoryCacheSize:      settings.DefaultMemoryCacheSize,
 		Logger:               logr.Discard(),
 		EnableCircuitBreaker: false,
 		CircuitBreakerConfig: DefaultCircuitBreakerConfig(),
@@ -543,4 +545,146 @@ func (l *retryableLogger) Debug(msg string, keysAndValues ...interface{}) {
 
 func (l *retryableLogger) Warn(msg string, keysAndValues ...interface{}) {
 	l.logger.V(0).Info(msg, keysAndValues...)
+}
+
+// NewClientFromAppConfig creates a new HTTP client using the application configuration.
+// The cfg parameter can be nil, in which case defaults are used.
+// Duration strings must be pre-validated (config.Validate should be called first).
+func NewClientFromAppConfig(cfg *config.HTTPClientConfig, logger logr.Logger) *Client {
+	clientCfg := DefaultConfig()
+	clientCfg.Logger = logger
+
+	if cfg == nil {
+		return NewClient(clientCfg)
+	}
+
+	// Apply timeout (already validated)
+	if cfg.Timeout != "" {
+		clientCfg.Timeout, _ = time.ParseDuration(cfg.Timeout)
+	}
+
+	// Apply retry settings
+	if cfg.RetryMax > 0 {
+		clientCfg.RetryMax = cfg.RetryMax
+	}
+	if cfg.RetryWaitMin != "" {
+		clientCfg.RetryWaitMin, _ = time.ParseDuration(cfg.RetryWaitMin)
+	}
+	if cfg.RetryWaitMax != "" {
+		clientCfg.RetryWaitMax, _ = time.ParseDuration(cfg.RetryWaitMax)
+	}
+
+	// Apply cache settings
+	if cfg.EnableCache != nil {
+		clientCfg.EnableCache = *cfg.EnableCache
+	}
+	if cfg.CacheType != "" {
+		clientCfg.CacheType = CacheType(cfg.CacheType)
+	}
+	if cfg.CacheDir != "" {
+		clientCfg.CacheDir = cfg.CacheDir
+	}
+	if cfg.CacheTTL != "" {
+		clientCfg.CacheTTL, _ = time.ParseDuration(cfg.CacheTTL)
+	}
+	if cfg.CacheKeyPrefix != "" {
+		clientCfg.CacheKeyPrefix = cfg.CacheKeyPrefix
+	}
+	if cfg.MaxCacheFileSize > 0 {
+		clientCfg.MaxCacheFileSize = cfg.MaxCacheFileSize
+	}
+	if cfg.MemoryCacheSize > 0 {
+		clientCfg.MemoryCacheSize = cfg.MemoryCacheSize
+	}
+
+	// Apply circuit breaker settings
+	if cfg.EnableCircuitBreaker != nil {
+		clientCfg.EnableCircuitBreaker = *cfg.EnableCircuitBreaker
+	}
+	if cfg.CircuitBreakerMaxFailures > 0 || cfg.CircuitBreakerOpenTimeout != "" || cfg.CircuitBreakerHalfOpenMaxRequests > 0 {
+		clientCfg.CircuitBreakerConfig = DefaultCircuitBreakerConfig()
+		if cfg.CircuitBreakerMaxFailures > 0 {
+			clientCfg.CircuitBreakerConfig.MaxFailures = cfg.CircuitBreakerMaxFailures
+		}
+		if cfg.CircuitBreakerOpenTimeout != "" {
+			clientCfg.CircuitBreakerConfig.OpenTimeout, _ = time.ParseDuration(cfg.CircuitBreakerOpenTimeout)
+		}
+		if cfg.CircuitBreakerHalfOpenMaxRequests > 0 {
+			clientCfg.CircuitBreakerConfig.HalfOpenMaxRequests = cfg.CircuitBreakerHalfOpenMaxRequests
+		}
+	}
+
+	// Apply compression setting
+	if cfg.EnableCompression != nil {
+		clientCfg.EnableCompression = *cfg.EnableCompression
+	}
+
+	return NewClient(clientCfg)
+}
+
+// MergeHTTPClientConfig merges a per-catalog config with the global config.
+// Per-catalog values override global values when set.
+// Returns the global config if perCatalog is nil.
+func MergeHTTPClientConfig(global, perCatalog *config.HTTPClientConfig) *config.HTTPClientConfig {
+	if perCatalog == nil {
+		return global
+	}
+	if global == nil {
+		return perCatalog
+	}
+
+	// Start with a copy of global
+	merged := *global
+
+	// Override with per-catalog values if set
+	if perCatalog.Timeout != "" {
+		merged.Timeout = perCatalog.Timeout
+	}
+	if perCatalog.RetryMax > 0 {
+		merged.RetryMax = perCatalog.RetryMax
+	}
+	if perCatalog.RetryWaitMin != "" {
+		merged.RetryWaitMin = perCatalog.RetryWaitMin
+	}
+	if perCatalog.RetryWaitMax != "" {
+		merged.RetryWaitMax = perCatalog.RetryWaitMax
+	}
+	if perCatalog.EnableCache != nil {
+		merged.EnableCache = perCatalog.EnableCache
+	}
+	if perCatalog.CacheType != "" {
+		merged.CacheType = perCatalog.CacheType
+	}
+	if perCatalog.CacheDir != "" {
+		merged.CacheDir = perCatalog.CacheDir
+	}
+	if perCatalog.CacheTTL != "" {
+		merged.CacheTTL = perCatalog.CacheTTL
+	}
+	if perCatalog.CacheKeyPrefix != "" {
+		merged.CacheKeyPrefix = perCatalog.CacheKeyPrefix
+	}
+	if perCatalog.MaxCacheFileSize > 0 {
+		merged.MaxCacheFileSize = perCatalog.MaxCacheFileSize
+	}
+	if perCatalog.MemoryCacheSize > 0 {
+		merged.MemoryCacheSize = perCatalog.MemoryCacheSize
+	}
+	if perCatalog.EnableCircuitBreaker != nil {
+		merged.EnableCircuitBreaker = perCatalog.EnableCircuitBreaker
+	}
+	if perCatalog.CircuitBreakerMaxFailures > 0 {
+		merged.CircuitBreakerMaxFailures = perCatalog.CircuitBreakerMaxFailures
+	}
+	if perCatalog.CircuitBreakerOpenTimeout != "" {
+		merged.CircuitBreakerOpenTimeout = perCatalog.CircuitBreakerOpenTimeout
+	}
+	if perCatalog.CircuitBreakerHalfOpenMaxRequests > 0 {
+		merged.CircuitBreakerHalfOpenMaxRequests = perCatalog.CircuitBreakerHalfOpenMaxRequests
+	}
+	if perCatalog.EnableCompression != nil {
+		merged.EnableCompression = perCatalog.EnableCompression
+	}
+
+	return &merged
 }

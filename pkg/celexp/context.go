@@ -33,7 +33,7 @@ const (
 // This is a common pattern used throughout scafctl for setting up CEL execution contexts.
 //
 // Variable placement:
-//   - resolverData: Placed under the "_" variable as map[string]any
+//   - rootData: Placed under the "_" variable (can be any type)
 //   - additionalVars: Top-level variables (e.g., __self, __item, __index, custom aliases)
 //
 // Use the Var* constants (VarSelf, VarItem, VarIndex) for standard variable names:
@@ -46,14 +46,14 @@ const (
 //
 // Example usage:
 //
-//	// Basic resolver context with just resolver data
-//	envOpts, vars := celexp.BuildCELContext(resolverData, nil)
+//	// Basic resolver context with just root data
+//	envOpts, vars := celexp.BuildCELContext(rootData, nil)
 //
 //	// Transform context with __self
-//	envOpts, vars := celexp.BuildCELContext(resolverData, map[string]any{celexp.VarSelf: currentValue})
+//	envOpts, vars := celexp.BuildCELContext(rootData, map[string]any{celexp.VarSelf: currentValue})
 //
 //	// ForEach context with __self, __item, __index, and custom aliases
-//	envOpts, vars := celexp.BuildCELContext(resolverData, map[string]any{
+//	envOpts, vars := celexp.BuildCELContext(rootData, map[string]any{
 //	    celexp.VarSelf:  currentValue,
 //	    celexp.VarItem:  item,
 //	    celexp.VarIndex: index,
@@ -65,16 +65,16 @@ const (
 //	compiled, _ := expr.Compile(envOpts, celexp.WithContext(ctx))
 //	result, _ := compiled.Eval(vars)
 func BuildCELContext(
-	resolverData map[string]any,
+	rootData any,
 	additionalVars map[string]any,
 ) (envOpts []cel.EnvOption, vars map[string]any) {
 	vars = make(map[string]any)
 	envOpts = []cel.EnvOption{}
 
-	// Add resolver data under "_" variable
-	if resolverData != nil {
-		vars["_"] = resolverData
-		envOpts = append(envOpts, cel.Variable("_", cel.MapType(cel.StringType, cel.DynType)))
+	// Add root data under "_" variable
+	if rootData != nil {
+		vars["_"] = rootData
+		envOpts = append(envOpts, cel.Variable("_", cel.DynType))
 	}
 
 	// Add additional top-level variables (includes __self, __item, __index, and any custom vars)
@@ -93,7 +93,7 @@ func BuildCELContext(
 // Parameters:
 //   - ctx: Context for compilation (used for caching and cancellation)
 //   - exprStr: The CEL expression string to evaluate
-//   - resolverData: Data available under the "_" variable (e.g., _.name)
+//   - rootData: Data available under the "_" variable (e.g., _.name)
 //   - additionalVars: Top-level variables (use Var* constants for __self, __item, __index)
 //   - opts: Additional compile options to pass to expr.Compile()
 //
@@ -103,8 +103,8 @@ func BuildCELContext(
 //
 // Example usage:
 //
-//	// Simple evaluation with resolver data
-//	result, err := celexp.EvaluateExpression(ctx, "_.name.upperAscii()", resolverData, nil)
+//	// Simple evaluation with root data
+//	result, err := celexp.EvaluateExpression(ctx, "_.name.upperAscii()", rootData, nil)
 //
 //	// With __self for transforms
 //	result, err := celexp.EvaluateExpression(ctx, "__self * 2", nil, map[string]any{
@@ -118,19 +118,19 @@ func BuildCELContext(
 //	})
 //
 //	// With custom variables
-//	result, err := celexp.EvaluateExpression(ctx, "prefix + ' ' + _.name", resolverData, map[string]any{
+//	result, err := celexp.EvaluateExpression(ctx, "prefix + ' ' + _.name", rootData, map[string]any{
 //	    "prefix": "Hello",
 //	})
 func EvaluateExpression(
 	ctx context.Context,
 	exprStr string,
-	resolverData map[string]any,
+	rootData any,
 	additionalVars map[string]any,
 	opts ...Option,
 ) (any, error) {
-	// Build CEL context with resolver data under "_" variable
+	// Build CEL context with root data under "_" variable
 	// and additional variables at top level
-	envOpts, celVars := BuildCELContext(resolverData, additionalVars)
+	envOpts, celVars := BuildCELContext(rootData, additionalVars)
 
 	// Create expression and add WithContext to the compile options
 	expr := Expression(exprStr)

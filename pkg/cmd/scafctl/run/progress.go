@@ -14,11 +14,15 @@ import (
 // It provides visual feedback during resolver execution by displaying
 // progress bars for each resolver in the current phase.
 type ProgressReporter struct {
-	progress  *mpb.Progress
-	bars      map[string]*mpb.Bar
-	total     int
-	startTime time.Time
-	mu        sync.Mutex
+	progress   *mpb.Progress
+	bars       map[string]*mpb.Bar
+	barStarts  map[string]time.Time
+	barPhases  map[string]int
+	barElapsed map[string]time.Duration // Store calculated elapsed time on completion
+	total      int
+	startTime  time.Time
+	writer     io.Writer
+	mu         sync.Mutex
 }
 
 // NewProgressReporter creates a new progress reporter writing to the given output.
@@ -26,15 +30,18 @@ type ProgressReporter struct {
 func NewProgressReporter(writer io.Writer, total int) *ProgressReporter {
 	p := mpb.New(
 		mpb.WithOutput(writer),
-		mpb.WithWidth(60),
+		mpb.WithWidth(40),
 		mpb.WithRefreshRate(100*time.Millisecond),
-		mpb.WithAutoRefresh(), // Force refresh even when not connected to a TTY
 	)
 	return &ProgressReporter{
-		progress:  p,
-		bars:      make(map[string]*mpb.Bar),
-		total:     total,
-		startTime: time.Now(),
+		progress:   p,
+		bars:       make(map[string]*mpb.Bar),
+		barStarts:  make(map[string]time.Time),
+		barPhases:  make(map[string]int),
+		barElapsed: make(map[string]time.Duration),
+		total:      total,
+		startTime:  time.Now(),
+		writer:     writer,
 	}
 }
 
@@ -45,23 +52,52 @@ func (p *ProgressReporter) StartPhase(phaseNum int, resolverNames []string) {
 	defer p.mu.Unlock()
 
 	for _, name := range resolverNames {
+		p.barStarts[name] = time.Now()
+		p.barPhases[name] = phaseNum
+
+		// Create a decorator that shows elapsed time on completion (reads from barElapsed map)
+		resolverName := name // Capture for closure
+		elapsedOnComplete := decor.Any(func(s decor.Statistics) string {
+			if s.Completed {
+				if elapsed, ok := p.barElapsed[resolverName]; ok {
+					return formatDuration(elapsed)
+				}
+			}
+			return "" // Show nothing while in progress
+		})
+
 		bar := p.progress.AddBar(1,
 			mpb.PrependDecorators(
 				decor.Name(fmt.Sprintf("[%d] %s", phaseNum, name), decor.WCSyncSpaceR),
 				decor.OnComplete(decor.Spinner([]string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}, decor.WCSyncSpace), "✓ "),
 			),
-			mpb.AppendDecorators(
-				decor.OnComplete(decor.Elapsed(decor.ET_STYLE_GO), ""),
-			),
+			mpb.AppendDecorators(elapsedOnComplete),
+			mpb.BarFillerClearOnComplete(),
 		)
 		p.bars[name] = bar
 	}
+}
+
+// formatDuration formats a duration showing milliseconds for sub-second durations
+func formatDuration(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	// Show seconds and milliseconds for longer durations
+	secs := d / time.Second
+	ms := (d % time.Second) / time.Millisecond
+	return fmt.Sprintf("%ds %dms", secs, ms)
 }
 
 // Complete marks a resolver as successfully completed.
 func (p *ProgressReporter) Complete(resolverName string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	// Calculate and store elapsed time at the moment of completion
+	if startTime, ok := p.barStarts[resolverName]; ok {
+		p.barElapsed[resolverName] = time.Since(startTime)
+	}
 
 	if bar, ok := p.bars[resolverName]; ok {
 		bar.Increment()
@@ -74,7 +110,7 @@ func (p *ProgressReporter) Failed(resolverName string, _ error) {
 	defer p.mu.Unlock()
 
 	if bar, ok := p.bars[resolverName]; ok {
-		bar.Abort(false) // Don't clear the bar, show failure state
+		bar.Abort(false)
 	}
 }
 
@@ -84,7 +120,7 @@ func (p *ProgressReporter) Skipped(resolverName string) {
 	defer p.mu.Unlock()
 
 	if bar, ok := p.bars[resolverName]; ok {
-		bar.SetTotal(0, true) // Mark as complete with zero work
+		bar.SetTotal(0, true)
 	}
 }
 

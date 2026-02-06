@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 )
 
@@ -85,8 +86,8 @@ func WithDefaultTimeout(d time.Duration) ExecutorOption {
 func NewExecutor(opts ...ExecutorOption) *Executor {
 	e := &Executor{
 		actionContext:  NewContext(),
-		gracePeriod:    30 * time.Second,
-		defaultTimeout: 5 * time.Minute,
+		gracePeriod:    settings.DefaultGracePeriod,
+		defaultTimeout: settings.DefaultActionTimeout,
 	}
 
 	for _, opt := range opts {
@@ -94,6 +95,45 @@ func NewExecutor(opts ...ExecutorOption) *Executor {
 	}
 
 	return e
+}
+
+// ConfigInput holds the configuration values for action executor initialization.
+// This mirrors config.ActionConfig but avoids circular dependencies.
+type ConfigInput struct {
+	// DefaultTimeout is the default timeout per action execution
+	DefaultTimeout time.Duration
+	// GracePeriod is the cancellation grace period
+	GracePeriod time.Duration
+	// MaxConcurrency is the max concurrent actions (0 = unlimited)
+	MaxConcurrency int
+}
+
+// OptionsFromAppConfig creates executor options from app configuration.
+// CLI flags can override these defaults using the returned executor options.
+//
+// Example:
+//
+//	cfg := action.ActionConfigInput{
+//	    DefaultTimeout: 5 * time.Minute,
+//	    GracePeriod:    30 * time.Second,
+//	    MaxConcurrency: 0,
+//	}
+//	opts := action.OptionsFromAppConfig(cfg)
+//	executor := action.NewExecutor(opts...)
+func OptionsFromAppConfig(cfg ConfigInput) []ExecutorOption {
+	var opts []ExecutorOption
+
+	if cfg.DefaultTimeout > 0 {
+		opts = append(opts, WithDefaultTimeout(cfg.DefaultTimeout))
+	}
+	if cfg.GracePeriod > 0 {
+		opts = append(opts, WithGracePeriod(cfg.GracePeriod))
+	}
+	if cfg.MaxConcurrency > 0 {
+		opts = append(opts, WithMaxConcurrency(cfg.MaxConcurrency))
+	}
+
+	return opts
 }
 
 // ProgressCallback receives execution events for progress reporting.
@@ -497,6 +537,21 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 	if output != nil {
 		results = output.Data
 	}
+
+	// Validate result against schema if defined
+	if action.ResultSchema != nil {
+		if validationErr := ValidateResult(results, action.ResultSchema); validationErr != nil {
+			e.actionContext.MarkFailed(actionName, validationErr.Error())
+			if e.progressCallback != nil {
+				e.progressCallback.OnActionFailed(actionName, validationErr)
+			}
+			if action.OnError.OrDefault() == spec.OnErrorContinue {
+				return nil
+			}
+			return fmt.Errorf("result schema validation failed: %w", validationErr)
+		}
+	}
+
 	e.actionContext.MarkSucceeded(actionName, results)
 	if e.progressCallback != nil {
 		e.progressCallback.OnActionComplete(actionName, results)

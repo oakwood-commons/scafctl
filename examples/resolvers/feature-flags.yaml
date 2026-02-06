@@ -8,9 +8,12 @@
 # - Computing derived configuration from flags
 # - Conditional resolver execution based on flags
 
-name: feature-flags
-version: "1.0.0"
-description: Feature toggle pattern with fallbacks
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: feature-flags
+  version: 1.0.0
+  description: Feature toggle pattern with fallbacks
 
 spec:
   resolvers:
@@ -23,7 +26,7 @@ spec:
           # Try remote feature flag service first
           # (This will fail in the example, demonstrating fallback)
           - provider: http
-            error_behavior: continue
+            onError: continue
             inputs:
               url: https://features.example.com/api/v1/flags
               method: GET
@@ -46,13 +49,12 @@ spec:
         with:
           - provider: cel
             inputs:
-              expression:
-                expr: |
-                  {
-                    'theme': _.feature_flags.dark_mode ? 'dark' : 'light',
-                    'dashboard': _.feature_flags.new_dashboard ? 'v2' : 'v1',
-                    'showBetaBadge': _.feature_flags.beta_features
-                  }
+              expression: |
+                {
+                  'theme': _.feature_flags.dark_mode ? 'dark' : 'light',
+                  'dashboard': _.feature_flags.new_dashboard ? 'v2' : 'v1',
+                  'showBetaBadge': _.feature_flags.beta_features
+                }
     
     # Only resolve if analytics is enabled
     analytics_config:
@@ -93,9 +95,8 @@ spec:
         with:
           - provider: cel
             inputs:
-              expression:
-                expr: |
-                  {
-                    'flags': _.feature_flags,
-                    'ui': _.ui_config
-                  }
+              expression: |
+                {
+                  'flags': _.feature_flags,
+                  'ui': _.ui_config
+                }

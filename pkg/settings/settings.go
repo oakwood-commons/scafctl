@@ -1,9 +1,97 @@
 package settings
 
-import "fmt"
+import (
+	"fmt"
+	"path/filepath"
+	"time"
+
+	"github.com/adrg/xdg"
+)
 
 const (
 	CliBinaryName = "scafctl"
+)
+
+// Timeout defaults
+const (
+	// DefaultResolverTimeout is the default timeout for individual resolver execution.
+	DefaultResolverTimeout = 30 * time.Second
+
+	// DefaultPhaseTimeout is the default timeout for resolver phase execution.
+	DefaultPhaseTimeout = 5 * time.Minute
+
+	// DefaultActionTimeout is the default timeout for action execution.
+	DefaultActionTimeout = 5 * time.Minute
+
+	// DefaultGracePeriod is the default grace period for action cancellation.
+	DefaultGracePeriod = 30 * time.Second
+)
+
+// HTTP client defaults
+const (
+	// DefaultHTTPTimeout is the default timeout for HTTP requests.
+	DefaultHTTPTimeout = 30 * time.Second
+
+	// DefaultHTTPRetryMax is the default maximum number of HTTP retries.
+	DefaultHTTPRetryMax = 3
+
+	// DefaultHTTPRetryWaitMinimum is the minimum wait time between HTTP retries.
+	DefaultHTTPRetryWaitMinimum = 1 * time.Second
+
+	// DefaultHTTPRetryWaitMaximum is the maximum wait time between HTTP retries.
+	DefaultHTTPRetryWaitMaximum = 30 * time.Second
+
+	// DefaultHTTPCacheTTL is the default TTL for HTTP cache entries.
+	DefaultHTTPCacheTTL = 10 * time.Minute
+
+	// DefaultHTTPCacheKeyPrefix is the default prefix for HTTP cache keys.
+	DefaultHTTPCacheKeyPrefix = "scafctl:"
+)
+
+// DefaultHTTPCacheDir returns the default directory for HTTP cache.
+// Uses XDG Base Directory Specification:
+//   - Linux: ~/.cache/scafctl/http-cache/
+//   - macOS: ~/Library/Caches/scafctl/http-cache/
+//   - Windows: %LOCALAPPDATA%\cache\scafctl\http-cache\
+func DefaultHTTPCacheDir() string {
+	return filepath.Join(xdg.CacheHome, "scafctl", "http-cache")
+}
+
+// Size limits
+const (
+	// DefaultMaxCacheFileSize is the maximum size for a single cached file (10MB).
+	DefaultMaxCacheFileSize = 10 * 1024 * 1024
+
+	// DefaultMemoryCacheSize is the maximum number of entries in memory caches.
+	DefaultMemoryCacheSize = 1000
+
+	// DefaultWarnValueSize is the threshold for warning about large resolver values (1MB).
+	DefaultWarnValueSize = 1024 * 1024
+
+	// DefaultMaxValueSize is the maximum allowed resolver value size (10MB).
+	DefaultMaxValueSize = 10 * 1024 * 1024
+)
+
+// CEL defaults
+const (
+	// DefaultCELCacheSize is the default size for the CEL program cache.
+	DefaultCELCacheSize = 10000
+
+	// DefaultCELCostLimit is the default cost limit for CEL expression evaluation.
+	// Set to 0 to disable cost limiting.
+	DefaultCELCostLimit = 1000000
+)
+
+// Circuit breaker defaults
+const (
+	// DefaultCircuitBreakerMaxFailures is the number of consecutive failures before opening the circuit.
+	DefaultCircuitBreakerMaxFailures = 5
+
+	// DefaultCircuitBreakerOpenTimeout is how long to wait before transitioning from Open to HalfOpen.
+	DefaultCircuitBreakerOpenTimeout = 30 * time.Second
+
+	// DefaultCircuitBreakerHalfOpenRequests is the number of successful requests in HalfOpen before closing.
+	DefaultCircuitBreakerHalfOpenRequests = 1
 )
 
 var (

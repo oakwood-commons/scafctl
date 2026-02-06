@@ -1,0 +1,270 @@
+# scafctl Configuration Reference
+# ================================
+#
+# This is a complete configuration file showing all available options.
+#
+# Config locations (XDG Base Directory Specification):
+#   Linux:   ~/.config/scafctl/config.yaml
+#   macOS:   ~/Library/Application Support/scafctl/config.yaml
+#   Windows: %LOCALAPPDATA%\scafctl\config.yaml
+#
+# Most options have sensible defaults - you only need to specify
+# values that differ from the defaults shown below.
+#
+# Environment variables with SCAFCTL_ prefix override config values.
+# For nested keys, use underscores: SCAFCTL_SETTINGS_NOCOLOR=true
+#
+# Generate this file: scafctl config init --full
+# Generate minimal:   scafctl config init
+#
+# Documentation: https://github.com/oakwood-commons/scafctl
+
+# Config file version (do not change)
+version: 1
+
+# =============================================================================
+# Settings - General application behavior
+# =============================================================================
+settings:
+  # Default catalog name to use when --catalog is not specified
+  # Default: "local"
+  defaultCatalog: "local"
+
+  # Disable colored terminal output
+  # Default: false
+  noColor: false
+
+  # Suppress non-essential output (warnings, info messages)
+  # Default: false
+  quiet: false
+
+# =============================================================================
+# Logging - Control log output format and verbosity
+# =============================================================================
+logging:
+  # Log level determines verbosity:
+  #   -1 = Debug (most verbose, includes trace information)
+  #    0 = Info (default, normal operation messages)
+  #    1 = Warn (warnings and errors only)
+  #    2 = Error (errors only)
+  # Default: 0
+  level: 0
+
+  # Output format for log messages:
+  #   "json" - Structured JSON, ideal for log aggregation (default)
+  #   "text" - Human-readable colored output for development
+  # Default: "json"
+  format: "json"
+
+  # Include timestamps in log output
+  # Default: true
+  timestamps: true
+
+  # Enable CPU/memory profiling support (advanced)
+  # When true, unhides the --pprof and --pprof-output-dir flags
+  # Used for performance analysis and debugging
+  # Default: false
+  # enableProfiling: true
+
+# =============================================================================
+# HTTP Client - Global HTTP behavior for all network operations
+# =============================================================================
+httpClient:
+  # Request timeout (e.g., "30s", "2m", "1h")
+  # Default: "30s"
+  timeout: "30s"
+
+  # --- Retry Configuration ---
+
+  # Maximum number of retry attempts for failed requests
+  # Set to 0 to disable retries
+  # Default: 3
+  retryMax: 3
+
+  # Minimum wait time between retries (exponential backoff starts here)
+  # Default: "1s"
+  retryWaitMin: "1s"
+
+  # Maximum wait time between retries (caps exponential backoff)
+  # Default: "30s"
+  retryWaitMax: "30s"
+
+  # --- Response Caching ---
+
+  # Enable HTTP response caching to reduce redundant network requests
+  # Default: true
+  enableCache: true
+
+  # Cache storage type:
+  #   "filesystem" - Persist to disk (survives restarts) (default)
+  #   "memory"     - In-memory only (faster, cleared on exit)
+  # Default: "filesystem"
+  cacheType: "filesystem"
+
+  # Directory for filesystem cache storage
+  # XDG cache directory defaults:
+  #   Linux:   ~/.cache/scafctl/http-cache/
+  #   macOS:   ~/Library/Caches/scafctl/http-cache/
+  #   Windows: %LOCALAPPDATA%\cache\scafctl\http-cache\
+  # Leave commented to use the XDG default
+  # cacheDir: "~/.cache/scafctl/http-cache"
+
+  # Time-to-live for cached responses
+  # Cached items older than this are refreshed
+  # Default: "10m"
+  cacheTTL: "10m"
+
+  # Prefix for cache keys (useful if sharing cache directory)
+  # Default: "scafctl:"
+  cacheKeyPrefix: "scafctl:"
+
+  # Maximum size in bytes for a single cached response
+  # Responses larger than this won't be cached
+  # Default: 10485760 (10 MB)
+  maxCacheFileSize: 10485760
+
+  # Maximum number of entries in memory cache
+  # Only applies when cacheType is "memory"
+  # Default: 1000
+  memoryCacheSize: 1000
+
+  # --- Circuit Breaker (advanced) ---
+  # Prevents cascading failures by stopping requests to failing services
+
+  # Enable circuit breaker pattern
+  # Default: false
+  # enableCircuitBreaker: true
+
+  # Number of consecutive failures before opening circuit
+  # Default: 5
+  # circuitBreakerMaxFailures: 5
+
+  # Wait time in open state before trying half-open
+  # Default: "30s"
+  # circuitBreakerOpenTimeout: "30s"
+
+  # Successful requests needed in half-open to close circuit
+  # Default: 1
+  # circuitBreakerHalfOpenMaxRequests: 1
+
+  # --- Compression ---
+
+  # Enable automatic gzip compression for requests
+  # Default: true
+  enableCompression: true
+
+# =============================================================================
+# CEL - Common Expression Language engine configuration
+# =============================================================================
+cel:
+  # Maximum number of compiled CEL programs to cache
+  # Higher values use more memory but improve performance for repeated expressions
+  # Default: 10000
+  cacheSize: 10000
+
+  # Cost limit for expression evaluation (0 = disabled)
+  # Prevents runaway expressions from consuming excessive CPU
+  # Typical expressions cost < 1000; complex ones may need more
+  # Default: 1000000
+  costLimit: 1000000
+
+  # Enable AST-based cache key generation (advanced)
+  # Expressions with same structure share cache entries
+  # May improve hit rates for templated expressions
+  # Default: false
+  # useASTBasedCaching: true
+
+  # Enable expression metrics collection
+  # Tracks evaluation counts, cache hits, and timing
+  # Default: true
+  enableMetrics: true
+
+# =============================================================================
+# Resolver - Configuration for resolver execution
+# =============================================================================
+resolver:
+  # Default timeout for individual resolver execution
+  # Can be overridden per-resolver in spec files
+  # Default: "30s"
+  timeout: "30s"
+
+  # Maximum time for each resolution phase
+  # Phases contain resolvers that can run in parallel
+  # Default: "5m"
+  phaseTimeout: "5m"
+
+  # Maximum concurrent resolvers per phase (0 = unlimited)
+  # Limit this to reduce resource usage on constrained systems
+  # Default: 0
+  maxConcurrency: 0
+
+  # Warn when resolved values exceed this size in bytes
+  # Helps identify unexpectedly large data
+  # Default: 1048576 (1 MB)
+  warnValueSize: 1048576
+
+  # Maximum allowed resolved value size in bytes (0 = disabled)
+  # Resolvers returning larger values will fail
+  # Default: 10485760 (10 MB)
+  maxValueSize: 10485760
+
+  # Collect all validation errors instead of stopping at first
+  # Useful for debugging resolver specs
+  # Default: false
+  # validateAll: true
+
+# =============================================================================
+# Action - Configuration for action execution
+# =============================================================================
+action:
+  # Default timeout for individual action execution
+  # Can be overridden per-action in spec files
+  # Default: "5m"
+  defaultTimeout: "5m"
+
+  # Grace period for cancellation cleanup
+  # Time given to actions to clean up after cancellation before force-kill
+  # Default: "30s"
+  gracePeriod: "30s"
+
+  # Maximum concurrent actions (0 = unlimited)
+  # Limit this to reduce resource usage or API rate limiting
+  # Default: 0
+  maxConcurrency: 0
+
+# =============================================================================
+# Catalogs - Registered solution catalogs
+# =============================================================================
+# Catalogs are sources for solutions, resolvers, and actions.
+# Add catalogs here or use: scafctl config add-catalog
+#
+# Default catalog location (XDG data directory):
+#   Linux:   ~/.local/share/scafctl/catalog/
+#   macOS:   ~/Library/Application Support/scafctl/catalog/
+#   Windows: %LOCALAPPDATA%\scafctl\catalog\
+
+catalogs:
+  # Default local catalog (filesystem-based)
+  - name: local
+    type: filesystem
+    # This path is expanded relative to your home directory
+    path: ~/scafctl-catalog/
+
+# Additional catalog examples (uncomment and customize):
+#
+#   - name: company-internal
+#     type: http
+#     url: https://catalog.company.com/v1
+#     auth:
+#       type: token
+#       tokenEnvVar: COMPANY_CATALOG_TOKEN
+#     httpClient:
+#       timeout: "60s"
+#       retryMax: 5
+#
+#   - name: oci-registry
+#     type: oci
+#     url: oci://registry.example.com/catalogs/solutions:latest
+#     metadata:
+#       team: platform
+#       environment: production

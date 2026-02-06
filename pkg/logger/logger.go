@@ -47,25 +47,81 @@ var (
 	defaultNoopLogger logr.Logger = logr.Discard()
 )
 
-// Get initializes the global Zap and Logr loggers.
+// LogFormat represents the output format for logs.
+type LogFormat string
+
+const (
+	// FormatJSON outputs logs in JSON format.
+	FormatJSON LogFormat = "json"
+	// FormatText outputs logs in human-readable text format.
+	FormatText LogFormat = "text"
+)
+
+// Options configures the logger behavior.
+type Options struct {
+	// Level is the minimum log level (-1=Debug, 0=Info, 1=Warn, 2=Error).
+	Level int8
+	// Format is the output format (json or text).
+	Format LogFormat
+	// Timestamps controls whether timestamps are included in log output.
+	Timestamps bool
+}
+
+// DefaultOptions returns the default logger options.
+func DefaultOptions() Options {
+	return Options{
+		Level:      0,
+		Format:     FormatJSON,
+		Timestamps: true,
+	}
+}
+
+// Get initializes the global Zap and Logr loggers with default options.
 // It can only be called once. Subsequent calls will have no effect.
-// debug: If true, sets the minimum logging level to Debug; otherwise, Info.
+// logLevel: The minimum logging level (-1=Debug, 0=Info, 1=Warn, 2=Error).
 // This function must be called before using FromContext or any logging operations.
 func Get(logLevel int8) *logr.Logger {
+	return GetWithOptions(Options{
+		Level:      logLevel,
+		Format:     FormatJSON,
+		Timestamps: true,
+	})
+}
+
+// GetWithOptions initializes the global Zap and Logr loggers with custom options.
+// It can only be called once. Subsequent calls will have no effect.
+// This function must be called before using FromContext or any logging operations.
+func GetWithOptions(opts Options) *logr.Logger {
 	once.Do(func() {
-		// Encoder Configuration: How log entries are formatted (JSON in this case)
+		// Encoder Configuration: How log entries are formatted
 		encoderCfg := zap.NewProductionEncoderConfig()
-		encoderCfg.EncodeTime = zapcore.ISO8601TimeEncoder
-		encoderCfg.TimeKey = TimeStampKey
 		encoderCfg.MessageKey = MessageKey
 
+		// Configure timestamps
+		if opts.Timestamps {
+			encoderCfg.EncodeTime = zapcore.ISO8601TimeEncoder
+			encoderCfg.TimeKey = TimeStampKey
+		} else {
+			encoderCfg.TimeKey = "" // Disable timestamps
+		}
+
 		// Determine the minimum log level
-		minimumLogLevel := zapcore.Level(logLevel)
+		minimumLogLevel := zapcore.Level(opts.Level)
 
 		buildInfo, _ := debug.ReadBuildInfo()
+
+		// Create encoder based on format
+		var encoder zapcore.Encoder
+		if opts.Format == FormatText {
+			encoderCfg.EncodeLevel = zapcore.CapitalColorLevelEncoder
+			encoder = zapcore.NewConsoleEncoder(encoderCfg)
+		} else {
+			encoder = zapcore.NewJSONEncoder(encoderCfg)
+		}
+
 		// Create a Zap Core: Combines encoder, sink (output destination), and level
 		core := zapcore.NewCore(
-			zapcore.NewJSONEncoder(encoderCfg),    // Use JSON encoder
+			encoder,
 			zapcore.Lock(os.Stderr),               // Output to standard error, safely (thread-safe)
 			zap.NewAtomicLevelAt(minimumLogLevel), // Set the logging level
 		).With(

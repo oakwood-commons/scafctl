@@ -48,6 +48,12 @@ scafctl.exe~
 **/key.pem
 **/cert.pem
 **.log.gz
+
+# Hugo
+/public/
+/resources/_gen/
+.hugo_build.lock
+.venv/
 .DS_Store
 __debug*
 refs/

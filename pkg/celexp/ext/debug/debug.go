@@ -1,8 +1,6 @@
 package debug
 
 import (
-	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -10,47 +8,43 @@ import (
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
-	"github.com/oakwood-commons/scafctl/pkg/terminal"
-	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 )
 
 //nolint:revive // DebugOutFunc is descriptive and matches the pattern of other Func names in the codebase
-func DebugOutFunc(ioStreams *terminal.IOStreams) celexp.ExtFunction {
+func DebugOutFunc(w *writer.Writer) celexp.ExtFunction {
 	funcName := "debug.out"
-
-	// Default to os streams if nil
-	if ioStreams == nil {
-		ioStreams = terminal.NewIOStreams(os.Stdin, os.Stdout, os.Stderr, true)
-	}
 
 	return celexp.ExtFunction{
 		Name:          funcName,
-		Description:   "Outputs a debug message to the console and returns the value for inline debugging. Use debug.out(message) to print and return a message, or debug.out(message, value) to print a message and return a different value",
+		Description:   "Outputs a debug message to the console. Use debug.out(message) to print a message (returns null), or debug.out(message, value) to print a message and return a value for inline debugging",
 		FunctionNames: []string{funcName},
 		Custom:        true,
 		Examples: []celexp.Example{
 			{
-				Description: "Debug a single value",
-				Expression:  `debug.out("Current value: " + myVar)`,
+				Description: "Print a debug message (returns null)",
+				Expression:  `debug.out("Checkpoint reached")`,
 			},
 			{
-				Description: "Debug while returning a different value",
+				Description: "Debug while returning a value for inline use",
 				Expression:  `debug.out("Processing item", item.name)`,
 			},
 			{
-				Description: "Debug in a list operation",
-				Expression:  `items.map(x, debug.out(x))`,
+				Description: "Debug in a list operation with passthrough",
+				Expression:  `items.map(x, debug.out("item", x))`,
 			},
 		},
 		EnvOptions: []cel.EnvOption{
 			cel.Function(funcName,
 				cel.Overload(strings.ReplaceAll(funcName, ".", "_"),
 					[]*cel.Type{cel.AnyType},
-					cel.AnyType,
+					cel.NullType,
 					cel.FunctionBinding(func(args ...ref.Val) ref.Val {
-						output.WriteDebug(ioStreams, fmt.Sprintf("CEL DEBUG OUTPUT: %v", args[0].Value()), !ioStreams.ColorEnabled)
-						// Return the message for single argument version
-						return args[0]
+						if w != nil {
+							w.DebugOutf("CEL DEBUG OUTPUT: %v", args[0].Value())
+						}
+						// Single argument version returns null (side effect only)
+						return types.NullValue
 					},
 					),
 				),
@@ -58,7 +52,9 @@ func DebugOutFunc(ioStreams *terminal.IOStreams) celexp.ExtFunction {
 					[]*cel.Type{cel.AnyType, cel.AnyType},
 					cel.AnyType,
 					cel.FunctionBinding(func(args ...ref.Val) ref.Val {
-						output.WriteDebug(ioStreams, fmt.Sprintf("CEL DEBUG OUTPUT: %v", args[0].Value()), !ioStreams.ColorEnabled)
+						if w != nil {
+							w.DebugOutf("CEL DEBUG OUTPUT: %v", args[0].Value())
+						}
 						// Return the value (second argument) for two argument version
 						return args[1]
 					},

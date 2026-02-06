@@ -7,7 +7,7 @@
 #      \  /
 #    deploy
 #
-# Run: scafctl run workflow -f examples/actions/parallel-with-deps.yaml
+# Run: scafctl run solution -f examples/actions/parallel-with-deps.yaml
 
 apiVersion: scafctl.io/v1
 kind: Solution
