@@ -672,3 +672,495 @@ func TestIntegration_Lint_TableOutput(t *testing.T) {
 	// Table output should produce some text
 	assert.NotEmpty(t, stdout)
 }
+
+// ============================================================================
+// Build Command Tests
+// ============================================================================
+
+func TestIntegration_BuildHelp(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "build", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "build")
+	assert.Contains(t, stdout, "solution")
+}
+
+func TestIntegration_BuildSolutionHelp(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "build", "solution", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Build a solution")
+	assert.Contains(t, stdout, "--version")
+	assert.Contains(t, stdout, "--name")
+	assert.Contains(t, stdout, "--force")
+}
+
+func TestIntegration_BuildSolution_UsesMetadataVersion(t *testing.T) {
+	// Create a temp directory for the catalog
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Build without --version flag - should use metadata version (1.0.0)
+	stdout, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml")
+
+	assert.Equal(t, 0, exitCode)
+	// Should report the version from metadata
+	assert.Contains(t, stdout, "1.0.0")
+}
+
+func TestIntegration_BuildSolution_VersionOverrideWarning(t *testing.T) {
+	// Create a temp directory for the catalog
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Build with different version than metadata - should warn
+	stdout, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "9.9.9")
+
+	assert.Equal(t, 0, exitCode)
+	// Should warn about overriding metadata version
+	assert.Contains(t, stdout, "overrides metadata version")
+	assert.Contains(t, stdout, "9.9.9")
+}
+
+func TestIntegration_BuildSolution_FileNotFound(t *testing.T) {
+	_, stderr, exitCode := runScafctl(t, "build", "solution", "nonexistent.yaml", "--version", "1.0.0")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "failed to read")
+}
+
+func TestIntegration_BuildSolution_Success(t *testing.T) {
+	// Create a temp directory for the catalog
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	stdout, stderr, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+
+	if exitCode != 0 {
+		t.Logf("stdout: %s", stdout)
+		t.Logf("stderr: %s", stderr)
+	}
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Built")
+	assert.Contains(t, stdout, "resolver-demo")
+}
+
+func TestIntegration_BuildSolution_WithName(t *testing.T) {
+	// Create a temp directory for the catalog
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	stdout, stderr, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0", "--name", "my-custom-name")
+
+	if exitCode != 0 {
+		t.Logf("stdout: %s", stdout)
+		t.Logf("stderr: %s", stderr)
+	}
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "my-custom-name")
+}
+
+func TestIntegration_BuildSolution_ForceOverwrite(t *testing.T) {
+	// Create a temp directory for the catalog
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// First build
+	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+
+	// Second build without force should fail
+	_, stderr, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "exists")
+
+	// Third build with force should succeed
+	stdout, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0", "--force")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Built")
+}
+
+// ============================================================================
+// Catalog Command Tests
+// ============================================================================
+
+func TestIntegration_CatalogHelp(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "catalog", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "catalog")
+	assert.Contains(t, stdout, "list")
+	assert.Contains(t, stdout, "inspect")
+	assert.Contains(t, stdout, "delete")
+}
+
+func TestIntegration_CatalogListHelp(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "catalog", "list", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "List all artifacts")
+	assert.Contains(t, stdout, "--kind")
+	assert.Contains(t, stdout, "--name")
+	assert.Contains(t, stdout, "--output")
+}
+
+func TestIntegration_CatalogList_Empty(t *testing.T) {
+	// Create a temp directory for the catalog
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	stdout, _, exitCode := runScafctl(t, "catalog", "list", "-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+	// Empty list should return empty JSON array or null
+	assert.True(t, strings.Contains(stdout, "[]") || strings.Contains(stdout, "null"))
+}
+
+func TestIntegration_CatalogList_WithArtifacts(t *testing.T) {
+	// Create a temp directory for the catalog
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Build an artifact first
+	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+
+	// List should show the artifact
+	stdout, _, exitCode := runScafctl(t, "catalog", "list", "-o", "json")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "resolver-demo")
+	assert.Contains(t, stdout, "1.0.0")
+}
+
+func TestIntegration_CatalogList_FilterByKind(t *testing.T) {
+	// Create a temp directory for the catalog
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Build an artifact first
+	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+
+	// List with filter should work
+	stdout, _, exitCode := runScafctl(t, "catalog", "list", "--kind", "solution", "-o", "json")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "resolver-demo")
+}
+
+func TestIntegration_CatalogInspectHelp(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "catalog", "inspect", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Show detailed information")
+	assert.Contains(t, stdout, "--output")
+}
+
+func TestIntegration_CatalogInspect_NotFound(t *testing.T) {
+	// Create a temp directory for the catalog
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	_, stderr, exitCode := runScafctl(t, "catalog", "inspect", "nonexistent")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "not found")
+}
+
+func TestIntegration_CatalogInspect_Success(t *testing.T) {
+	// Create a temp directory for the catalog
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Build an artifact first
+	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+
+	// Inspect the artifact
+	stdout, _, exitCode := runScafctl(t, "catalog", "inspect", "resolver-demo", "-o", "json")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "resolver-demo")
+	assert.Contains(t, stdout, "1.0.0")
+	assert.Contains(t, stdout, "digest")
+}
+
+func TestIntegration_CatalogInspect_SpecificVersion(t *testing.T) {
+	// Create a temp directory for the catalog
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Build multiple versions
+	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+	_, _, exitCode = runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "2.0.0")
+	require.Equal(t, 0, exitCode)
+
+	// Inspect specific version
+	stdout, _, exitCode := runScafctl(t, "catalog", "inspect", "resolver-demo@1.0.0", "-o", "json")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "1.0.0")
+}
+
+func TestIntegration_CatalogDeleteHelp(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "catalog", "delete", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Delete an artifact")
+}
+
+func TestIntegration_CatalogDelete_RequiresVersion(t *testing.T) {
+	// Create a temp directory for the catalog
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Build an artifact first
+	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+
+	// Delete without version should fail
+	_, stderr, exitCode := runScafctl(t, "catalog", "delete", "resolver-demo")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "version required")
+}
+
+func TestIntegration_CatalogDelete_NotFound(t *testing.T) {
+	// Create a temp directory for the catalog
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	_, stderr, exitCode := runScafctl(t, "catalog", "delete", "nonexistent@1.0.0")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "not found")
+}
+
+func TestIntegration_CatalogDelete_Success(t *testing.T) {
+	// Create a temp directory for the catalog
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Build an artifact first
+	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+
+	// Delete the artifact
+	stdout, _, exitCode := runScafctl(t, "catalog", "delete", "resolver-demo@1.0.0")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Deleted")
+
+	// Verify it's gone
+	_, stderr, exitCode := runScafctl(t, "catalog", "inspect", "resolver-demo@1.0.0")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "not found")
+}
+
+// ============================================================================
+// Catalog Prune Command Tests
+// ============================================================================
+
+func TestIntegration_CatalogPruneHelp(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "catalog", "prune", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Remove orphaned blobs")
+	assert.Contains(t, stdout, "--output")
+}
+
+func TestIntegration_CatalogPrune_EmptyCatalog(t *testing.T) {
+	// Create a temp directory for the catalog
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	stdout, _, exitCode := runScafctl(t, "catalog", "prune")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "No orphaned content")
+}
+
+func TestIntegration_CatalogPrune_JSON(t *testing.T) {
+	// Create a temp directory for the catalog
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	stdout, _, exitCode := runScafctl(t, "catalog", "prune", "-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "removedManifests")
+	assert.Contains(t, stdout, "removedBlobs")
+	assert.Contains(t, stdout, "reclaimedBytes")
+}
+
+func TestIntegration_CatalogPrune_AfterDelete(t *testing.T) {
+	// Create a temp directory for the catalog
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Build an artifact
+	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+
+	// Delete the artifact (leaves orphaned blobs)
+	_, _, exitCode = runScafctl(t, "catalog", "delete", "resolver-demo@1.0.0")
+	require.Equal(t, 0, exitCode)
+
+	// Prune should clean up
+	stdout, _, exitCode := runScafctl(t, "catalog", "prune", "-o", "json")
+	assert.Equal(t, 0, exitCode)
+	// Should have pruned something
+	assert.Contains(t, stdout, "removedBlobs")
+}
+
+// =============================================================================
+// Run Solution from Catalog Tests
+// =============================================================================
+
+func TestIntegration_RunSolution_FromCatalog_NotFound(t *testing.T) {
+	// Create a temp directory for the catalog
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Try to run a solution that doesn't exist in catalog
+	_, stderr, exitCode := runScafctl(t, "run", "solution", "nonexistent-solution", "--skip-actions")
+	assert.NotEqual(t, 0, exitCode)
+	// Falls back to file system which reports file not found
+	assert.Contains(t, stderr, "no such file or directory")
+}
+
+func TestIntegration_RunSolution_FromCatalog_ByName(t *testing.T) {
+	// Create a temp directory for the catalog
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Build a solution into the catalog
+	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+
+	// Run the solution from catalog by name (should pick latest version)
+	stdout, _, exitCode := runScafctl(t, "run", "solution", "resolver-demo", "--skip-actions", "-o", "json")
+	assert.Equal(t, 0, exitCode)
+	// Should have resolver output
+	assert.Contains(t, stdout, "environment")
+	assert.Contains(t, stdout, "production")
+}
+
+func TestIntegration_RunSolution_FromCatalog_ByNameVersion(t *testing.T) {
+	// Create a temp directory for the catalog
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Build two versions
+	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+	_, _, exitCode = runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "2.0.0")
+	require.Equal(t, 0, exitCode)
+
+	// Run the solution from catalog by name@version
+	stdout, _, exitCode := runScafctl(t, "run", "solution", "resolver-demo@1.0.0", "--skip-actions", "-o", "json")
+	assert.Equal(t, 0, exitCode)
+	// Should have resolver output
+	assert.Contains(t, stdout, "environment")
+	assert.Contains(t, stdout, "production")
+}
+
+func TestIntegration_RunSolution_FromCatalog_FallbackToFile(t *testing.T) {
+	// Create a temp directory for the catalog (empty)
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Run a solution by file path (not bare name) - should use file
+	stdout, _, exitCode := runScafctl(t, "run", "solution", "-f", "examples/resolver-demo.yaml", "--skip-actions", "-o", "json")
+	assert.Equal(t, 0, exitCode)
+	// Should have resolver output from file
+	assert.Contains(t, stdout, "environment")
+	assert.Contains(t, stdout, "production")
+}
+
+func TestIntegration_RunSolution_FromCatalog_PathNotBareName(t *testing.T) {
+	// Create a temp directory for the catalog (empty)
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// A path with a separator should not be treated as a bare name
+	// This should try to open a file, not lookup in catalog
+	_, stderr, exitCode := runScafctl(t, "run", "solution", "./nonexistent.yaml", "--skip-actions")
+	assert.NotEqual(t, 0, exitCode)
+	// Should report file not found, not catalog not found
+	assert.Contains(t, stderr, "Failed reading file")
+}
+
+// Render Solution from Catalog Tests
+// =============================================================================
+
+func TestIntegration_RenderSolution_FromCatalog_ByName(t *testing.T) {
+	// Create a temp directory for the catalog
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Build a solution into the catalog
+	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+
+	// Render the solution graph from catalog by name (using --graph flag since resolver-demo has no workflow)
+	stdout, _, exitCode := runScafctl(t, "render", "solution", "-f", "resolver-demo", "--graph")
+	assert.Equal(t, 0, exitCode)
+	// Should have graph output with resolver info
+	assert.Contains(t, stdout, "environment")
+	assert.Contains(t, stdout, "Phase")
+}
+
+// Explain Solution from Catalog Tests
+// =============================================================================
+
+func TestIntegration_ExplainSolution_FromCatalog_ByName(t *testing.T) {
+	// Create a temp directory for the catalog
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Build a solution into the catalog
+	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+
+	// Explain the solution from catalog by name
+	stdout, _, exitCode := runScafctl(t, "explain", "solution", "resolver-demo")
+	assert.Equal(t, 0, exitCode)
+	// Should have solution metadata
+	assert.Contains(t, stdout, "resolver-demo")
+}
+
+// Lint Solution from Catalog Tests
+// =============================================================================
+
+func TestIntegration_Lint_FromCatalog_ByName(t *testing.T) {
+	// Create a temp directory for the catalog
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Build a solution into the catalog
+	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+
+	// Lint the solution from catalog by name
+	stdout, _, exitCode := runScafctl(t, "lint", "-f", "resolver-demo", "-o", "json")
+	assert.Equal(t, 0, exitCode)
+	// Should have lint output
+	assert.Contains(t, stdout, "findings")
+}
+
+// Get Solution from Catalog Tests
+// =============================================================================
+
+func TestIntegration_GetSolution_FromCatalog_ByName(t *testing.T) {
+	// Create a temp directory for the catalog
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Build a solution into the catalog
+	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+
+	// Get the solution from catalog by name
+	stdout, _, exitCode := runScafctl(t, "get", "solution", "-p", "resolver-demo", "-o", "yaml")
+	assert.Equal(t, 0, exitCode)
+	// Should have solution YAML
+	assert.Contains(t, stdout, "resolver-demo")
+	assert.Contains(t, stdout, "apiVersion")
+}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/action"
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -84,10 +85,16 @@ func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 	}
 
 	cCmd := &cobra.Command{
-		Use:     "solution",
+		Use:     "solution [name[@version]]",
 		Aliases: []string{"sol", "s", "solutions"},
 		Short:   "Run a solution by executing resolvers and actions",
-		Long: `Execute a solution file by running resolvers and then actions in dependency order.
+		Long: `Execute a solution by running resolvers and then actions in dependency order.
+
+Solutions can be loaded from:
+- Local catalog: Use the solution name (e.g., "my-app" or "my-app@1.2.3")
+- Local file: Use -f flag or provide a path with separators (e.g., "./solution.yaml")
+- URL: Use -f flag with an HTTP(S) URL
+- Auto-discovery: If no source is specified, searches for solution.yaml in current directory
 
 The execution proceeds in two phases:
 1. RESOLVER PHASE: All resolvers execute in dependency order (concurrent within phases)
@@ -134,7 +141,13 @@ EXIT CODES:
   6  Action/workflow execution failed
 
 Examples:
-  # Run solution (resolvers + actions)
+  # Run solution from catalog by name (latest version)
+  scafctl run solution my-app
+
+  # Run specific version from catalog
+  scafctl run solution my-app@1.2.3
+
+  # Run solution from file
   scafctl run solution -f ./my-solution.yaml
 
   # Run with parameters
@@ -157,19 +170,25 @@ Examples:
 
   # Show progress during execution
   scafctl run solution --progress`,
-		PreRun: func(cCmd *cobra.Command, _ []string) {
+		Args: cobra.MaximumNArgs(1),
+		PreRun: func(cCmd *cobra.Command, args []string) {
 			// Track which flags were explicitly set by the user
 			options.flagsChanged = make(map[string]bool)
 			cCmd.Flags().Visit(func(f *pflag.Flag) {
 				options.flagsChanged[f.Name] = true
 			})
+			// If a positional argument is provided (solution name), use it as the file
+			// unless -f/--file was explicitly set
+			if len(args) > 0 && options.File == "" {
+				options.File = args[0]
+			}
 		},
 		RunE:         makeRunEFunc(cfg, "solution"),
 		SilenceUsage: true,
 	}
 
 	// Flags
-	cCmd.Flags().StringVarP(&options.File, "file", "f", "", "Solution file path (auto-discovered if not provided, use '-' for stdin)")
+	cCmd.Flags().StringVarP(&options.File, "file", "f", "", "Solution file path or catalog name (auto-discovered if not provided, use '-' for stdin)")
 	cCmd.Flags().StringArrayVarP(&options.ResolverParams, "resolver", "r", nil, "Resolver parameters (key=value or @file.yaml)")
 	// Add shared kvx output flags (-o, -i, -e)
 	flags.AddKvxOutputFlagsToStruct(cCmd, &options.KvxOutputFlags)
@@ -482,11 +501,27 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	return o.writeActionOutput(ctx, result)
 }
 
-// loadSolution loads the solution from file, stdin, or auto-discovery
+// loadSolution loads the solution from file, stdin, catalog, or auto-discovery
 func (o *SolutionOptions) loadSolution(ctx context.Context) (*solution.Solution, error) {
 	getter := o.getter
 	if getter == nil {
-		getter = get.NewGetter()
+		lgr := logger.FromContext(ctx)
+
+		// Set up getter options
+		getterOpts := []get.Option{
+			get.WithLogger(*lgr),
+		}
+
+		// Try to set up catalog resolver for bare name resolution
+		localCatalog, err := catalog.NewLocalCatalog(*lgr)
+		if err == nil {
+			resolver := catalog.NewSolutionResolver(localCatalog, *lgr)
+			getterOpts = append(getterOpts, get.WithCatalogResolver(resolver))
+		} else {
+			lgr.V(1).Info("catalog not available for solution resolution", "error", err)
+		}
+
+		getter = get.NewGetter(getterOpts...)
 	}
 
 	// Handle stdin
@@ -503,7 +538,7 @@ func (o *SolutionOptions) loadSolution(ctx context.Context) (*solution.Solution,
 		return &sol, nil
 	}
 
-	// Use getter for file or auto-discovery
+	// Use getter for file, catalog, or auto-discovery
 	return getter.Get(ctx, o.File)
 }
 

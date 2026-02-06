@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/action"
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/run"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -618,11 +619,27 @@ func (o *SolutionOptions) runSnapshot(ctx context.Context, lgr logr.Logger) erro
 	return nil
 }
 
-// loadSolution loads the solution from file, stdin, or auto-discovery
+// loadSolution loads the solution from file, stdin, catalog, or auto-discovery
 func (o *SolutionOptions) loadSolution(ctx context.Context) (*solution.Solution, error) {
 	getter := o.getter
 	if getter == nil {
-		getter = get.NewGetter()
+		lgr := logger.FromContext(ctx)
+
+		// Set up getter options
+		getterOpts := []get.Option{
+			get.WithLogger(*lgr),
+		}
+
+		// Try to set up catalog resolver for bare name resolution
+		localCatalog, err := catalog.NewLocalCatalog(*lgr)
+		if err == nil {
+			resolver := catalog.NewSolutionResolver(localCatalog, *lgr)
+			getterOpts = append(getterOpts, get.WithCatalogResolver(resolver))
+		} else {
+			lgr.V(1).Info("catalog not available for solution resolution", "error", err)
+		}
+
+		getter = get.NewGetter(getterOpts...)
 	}
 
 	// Handle stdin
@@ -639,7 +656,7 @@ func (o *SolutionOptions) loadSolution(ctx context.Context) (*solution.Solution,
 		return &sol, nil
 	}
 
-	// Use getter for file or auto-discovery
+	// Use getter for file, catalog, or auto-discovery
 	return getter.Get(ctx, o.File)
 }
 

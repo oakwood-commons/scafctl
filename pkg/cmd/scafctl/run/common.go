@@ -65,15 +65,18 @@ func makeRunEFunc(cfg runCommandConfig, cmdUse string) func(*cobra.Command, []st
 
 		cfg.setIOStreamFn(cfg.ioStreams, cfg.cliParams)
 
-		err := output.ValidateCommands(args)
-		if err != nil {
-			w.Error(err.Error())
-			return err
+		// Only validate that there are no unexpected args if the command doesn't
+		// explicitly accept positional arguments (via Args field).
+		// Commands with Args: cobra.MaximumNArgs(N) handle arg validation themselves.
+		if cCmd.Args == nil {
+			if err := output.ValidateCommands(args); err != nil {
+				w.Error(err.Error())
+				return err
+			}
 		}
 
 		if currentOutput := cfg.getOutputFn(); currentOutput != "" && currentOutput != "quiet" {
-			err = output.ValidateOutputType(currentOutput, ValidOutputTypes[:2])
-			if err != nil {
+			if err := output.ValidateOutputType(currentOutput, ValidOutputTypes[:2]); err != nil {
 				w.Error(err.Error())
 				return err
 			}

@@ -22,6 +22,8 @@ require (
 	github.com/hashicorp/go-plugin v1.7.0
 	github.com/hashicorp/go-retryablehttp v0.7.8
 	github.com/oakwood-commons/kvx v0.1.5
+	github.com/opencontainers/go-digest v1.0.0
+	github.com/opencontainers/image-spec v1.1.1
 	github.com/prometheus/client_golang v1.23.2
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
@@ -39,6 +41,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 	ivan.dev/httpcache v0.1.1
 	k8s.io/apimachinery v0.35.0
+	oras.land/oras-go/v2 v2.6.0
 )
 
 require (

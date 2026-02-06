@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/oakwood-commons/scafctl/pkg/action"
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
@@ -75,9 +77,20 @@ Examples:
 // Run executes the explain solution command
 func (o *SolutionOptions) Run(ctx context.Context) error {
 	w := writer.New(o.IOStreams, o.CliParams)
+	lgr := logger.FromContext(ctx)
+
+	// Set up getter with catalog resolver for bare name resolution
+	var getterOpts []get.Option
+	localCatalog, err := catalog.NewLocalCatalog(*lgr)
+	if err == nil {
+		resolver := catalog.NewSolutionResolver(localCatalog, *lgr)
+		getterOpts = append(getterOpts, get.WithCatalogResolver(resolver))
+	} else {
+		lgr.V(1).Info("catalog not available for solution resolution", "error", err)
+	}
 
 	// Load the solution
-	getter := get.NewGetter()
+	getter := get.NewGetter(getterOpts...)
 	sol, err := getter.Get(ctx, o.Path)
 	if err != nil {
 		return fmt.Errorf("failed to load solution: %w", err)

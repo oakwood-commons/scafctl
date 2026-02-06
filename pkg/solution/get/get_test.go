@@ -556,3 +556,274 @@ func TestGetPossibleSolutionPaths(t *testing.T) {
 		}
 	})
 }
+
+// mockCatalogResolver implements CatalogResolver for testing
+type mockCatalogResolver struct {
+	solutions map[string][]byte
+	err       error
+}
+
+func (m *mockCatalogResolver) FetchSolution(_ context.Context, nameWithVersion string) ([]byte, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	if content, ok := m.solutions[nameWithVersion]; ok {
+		return content, nil
+	}
+	return nil, fmt.Errorf("solution not found: %s", nameWithVersion)
+}
+
+func TestWithCatalogResolver(t *testing.T) {
+	mock := &mockCatalogResolver{
+		solutions: map[string][]byte{"test": []byte("content")},
+	}
+
+	option := WithCatalogResolver(mock)
+	require.NotNil(t, option)
+
+	getter := &Getter{}
+	option(getter)
+
+	assert.Equal(t, mock, getter.catalogResolver)
+}
+
+func TestGetter_isBareName(t *testing.T) {
+	getter := NewGetter()
+
+	tests := []struct {
+		name     string
+		path     string
+		expected bool
+	}{
+		{
+			name:     "simple name is bare",
+			path:     "my-solution",
+			expected: true,
+		},
+		{
+			name:     "name with version is bare",
+			path:     "my-solution@1.0.0",
+			expected: true,
+		},
+		{
+			name:     "path with slash is not bare",
+			path:     "./my-solution.yaml",
+			expected: false,
+		},
+		{
+			name:     "path with directory is not bare",
+			path:     "examples/solution.yaml",
+			expected: false,
+		},
+		{
+			name:     "absolute path is not bare",
+			path:     "/home/user/solution.yaml",
+			expected: false,
+		},
+		{
+			name:     "yaml extension is not bare",
+			path:     "solution.yaml",
+			expected: false,
+		},
+		{
+			name:     "yml extension is not bare",
+			path:     "solution.yml",
+			expected: false,
+		},
+		{
+			name:     "json extension is not bare",
+			path:     "solution.json",
+			expected: false,
+		},
+		{
+			name:     "URL is not bare",
+			path:     "https://example.com/solution.yaml",
+			expected: false,
+		},
+		{
+			name:     "http URL is not bare",
+			path:     "http://localhost:8080/solution.yaml",
+			expected: false,
+		},
+		{
+			name:     "windows path is not bare",
+			path:     "C:\\Users\\solution.yaml",
+			expected: false,
+		},
+		{
+			name:     "name with hyphen is bare",
+			path:     "my-complex-solution-name",
+			expected: true,
+		},
+		{
+			name:     "name with numbers is bare",
+			path:     "solution123",
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := getter.isBareName(tt.path)
+			assert.Equal(t, tt.expected, result, "isBareName(%q) = %v, want %v", tt.path, result, tt.expected)
+		})
+	}
+}
+
+func TestGetter_fromCatalog(t *testing.T) {
+	validSolutionYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test-solution
+  version: 1.0.0
+spec:
+  resolvers: {}
+`
+
+	t.Run("successfully fetches from catalog", func(t *testing.T) {
+		mock := &mockCatalogResolver{
+			solutions: map[string][]byte{
+				"test-solution@1.0.0": []byte(validSolutionYAML),
+			},
+		}
+
+		getter := NewGetter(WithCatalogResolver(mock))
+		sol, err := getter.fromCatalog(context.Background(), "test-solution@1.0.0")
+
+		require.NoError(t, err)
+		assert.NotNil(t, sol)
+		assert.Equal(t, "test-solution", sol.Metadata.Name)
+		assert.Equal(t, "catalog:test-solution@1.0.0", sol.GetPath())
+	})
+
+	t.Run("returns error when catalog returns error", func(t *testing.T) {
+		mock := &mockCatalogResolver{
+			err: fmt.Errorf("catalog error"),
+		}
+
+		getter := NewGetter(WithCatalogResolver(mock))
+		_, err := getter.fromCatalog(context.Background(), "test-solution")
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "catalog error")
+	})
+
+	t.Run("returns error for invalid solution content", func(t *testing.T) {
+		mock := &mockCatalogResolver{
+			solutions: map[string][]byte{
+				"bad-solution": []byte("not valid yaml: {{{"),
+			},
+		}
+
+		getter := NewGetter(WithCatalogResolver(mock))
+		_, err := getter.fromCatalog(context.Background(), "bad-solution")
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to parse solution from catalog")
+	})
+}
+
+func TestGetter_Get_WithCatalogResolver(t *testing.T) {
+	validSolutionYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: catalog-solution
+  version: 1.0.0
+spec:
+  resolvers: {}
+`
+
+	t.Run("resolves bare name from catalog", func(t *testing.T) {
+		mock := &mockCatalogResolver{
+			solutions: map[string][]byte{
+				"catalog-solution": []byte(validSolutionYAML),
+			},
+		}
+
+		getter := NewGetter(WithCatalogResolver(mock))
+		sol, err := getter.Get(context.Background(), "catalog-solution")
+
+		require.NoError(t, err)
+		assert.NotNil(t, sol)
+		assert.Equal(t, "catalog-solution", sol.Metadata.Name)
+		assert.Equal(t, "catalog:catalog-solution", sol.GetPath())
+	})
+
+	t.Run("falls back to file when catalog miss", func(t *testing.T) {
+		mock := &mockCatalogResolver{
+			solutions: map[string][]byte{}, // empty - nothing in catalog
+		}
+
+		// Create a temp file
+		tmpFile, err := os.CreateTemp("", "solution-*.yaml")
+		require.NoError(t, err)
+		defer os.Remove(tmpFile.Name())
+
+		fileSolutionYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: file-solution
+  version: 1.0.0
+spec:
+  resolvers: {}
+`
+		_, err = tmpFile.WriteString(fileSolutionYAML)
+		require.NoError(t, err)
+		tmpFile.Close()
+
+		getter := NewGetter(WithCatalogResolver(mock))
+		// Use the file path which is not a bare name (has slashes)
+		sol, err := getter.Get(context.Background(), tmpFile.Name())
+
+		require.NoError(t, err)
+		assert.NotNil(t, sol)
+		assert.Equal(t, "file-solution", sol.Metadata.Name)
+	})
+
+	t.Run("does not try catalog for paths with slashes", func(t *testing.T) {
+		// This mock would return an error if called
+		mock := &mockCatalogResolver{
+			err: fmt.Errorf("should not be called"),
+		}
+
+		// Create a temp file
+		tmpFile, err := os.CreateTemp("", "solution-*.yaml")
+		require.NoError(t, err)
+		defer os.Remove(tmpFile.Name())
+
+		fileSolutionYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: file-solution
+  version: 1.0.0
+spec:
+  resolvers: {}
+`
+		_, err = tmpFile.WriteString(fileSolutionYAML)
+		require.NoError(t, err)
+		tmpFile.Close()
+
+		getter := NewGetter(WithCatalogResolver(mock))
+		// File path has slashes, should not try catalog
+		sol, err := getter.Get(context.Background(), tmpFile.Name())
+
+		require.NoError(t, err)
+		assert.NotNil(t, sol)
+		assert.Equal(t, "file-solution", sol.Metadata.Name)
+	})
+
+	t.Run("does not try catalog for .yaml files", func(t *testing.T) {
+		// This mock would fail if called
+		mock := &mockCatalogResolver{
+			err: fmt.Errorf("should not be called"),
+		}
+
+		getter := NewGetter(WithCatalogResolver(mock))
+		// Even without slashes, .yaml extension means it's a file
+		_, err := getter.Get(context.Background(), "solution.yaml")
+
+		// Should try to read as file and fail (file doesn't exist)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "Failed reading file")
+	})
+}

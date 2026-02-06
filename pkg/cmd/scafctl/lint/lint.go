@@ -15,6 +15,7 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/action"
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -136,7 +137,17 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 func runLint(ctx context.Context, opts *Options) error {
 	lgr := logger.FromContext(ctx)
 
-	getter := get.NewGetter()
+	// Set up getter with catalog resolver for bare name resolution
+	var getterOpts []get.Option
+	localCatalog, err := catalog.NewLocalCatalog(*lgr)
+	if err == nil {
+		resolver := catalog.NewSolutionResolver(localCatalog, *lgr)
+		getterOpts = append(getterOpts, get.WithCatalogResolver(resolver))
+	} else {
+		lgr.V(1).Info("catalog not available for solution resolution", "error", err)
+	}
+
+	getter := get.NewGetter(getterOpts...)
 	sol, err := getter.Get(ctx, opts.File)
 	if err != nil {
 		writeError(opts, fmt.Sprintf("failed to load solution: %v", err))

@@ -35,7 +35,7 @@ func TestCommandSolution(t *testing.T) {
 
 	cmd := CommandSolution(cliParams, streams, "")
 
-	assert.Equal(t, "solution", cmd.Use)
+	assert.Equal(t, "solution [name[@version]]", cmd.Use)
 	assert.NotEmpty(t, cmd.Short)
 
 	// Verify flags exist

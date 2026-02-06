@@ -17,6 +17,7 @@ Step-by-step guides for learning scafctl features.
 - [Resolver Tutorial](resolver-tutorial.md) — Master dynamic value resolution
 - [Actions Tutorial](actions-tutorial.md) — Learn how to use actions for workflow automation
 - [Authentication Tutorial](auth-tutorial.md) — Set up authentication for your workflows
+- [Catalog Tutorial](catalog-tutorial.md) — Store and manage solutions in your local catalog
 
 ## Reference
 

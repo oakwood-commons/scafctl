@@ -1,0 +1,611 @@
+package catalog
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sort"
+	"sync"
+	"time"
+
+	"github.com/Masterminds/semver/v3"
+	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/paths"
+	"github.com/opencontainers/go-digest"
+	"github.com/opencontainers/image-spec/specs-go"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"oras.land/oras-go/v2/content/oci"
+	"oras.land/oras-go/v2/errdef"
+)
+
+const (
+	// LocalCatalogName is the name of the built-in local catalog.
+	LocalCatalogName = "local"
+)
+
+// LocalCatalog implements Catalog using a local OCI layout store.
+type LocalCatalog struct {
+	store  *oci.Store
+	path   string
+	logger logr.Logger
+	mu     sync.RWMutex
+}
+
+// NewLocalCatalog creates a catalog at the XDG data path.
+// The path is determined by paths.CatalogDir().
+func NewLocalCatalog(logger logr.Logger) (*LocalCatalog, error) {
+	catalogPath := paths.CatalogDir()
+	return NewLocalCatalogAt(catalogPath, logger)
+}
+
+// NewLocalCatalogAt creates a catalog at a custom path.
+// Use this for testing or custom installations.
+func NewLocalCatalogAt(path string, logger logr.Logger) (*LocalCatalog, error) {
+	// Ensure directory exists
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return nil, fmt.Errorf("failed to create catalog directory: %w", err)
+	}
+
+	// Create OCI store
+	store, err := oci.New(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create OCI store: %w", err)
+	}
+
+	return &LocalCatalog{
+		store:  store,
+		path:   path,
+		logger: logger.WithName("catalog").WithValues("catalog", LocalCatalogName),
+	}, nil
+}
+
+// Name returns "local".
+func (c *LocalCatalog) Name() string {
+	return LocalCatalogName
+}
+
+// Path returns the catalog directory path.
+func (c *LocalCatalog) Path() string {
+	return c.path
+}
+
+// Store saves an artifact to the catalog.
+func (c *LocalCatalog) Store(ctx context.Context, ref Reference, content []byte, annotations map[string]string, force bool) (ArtifactInfo, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Check if artifact already exists (unless force is set)
+	if !force {
+		if c.existsLocked(ctx, ref) {
+			return ArtifactInfo{}, &ArtifactExistsError{Reference: ref, Catalog: LocalCatalogName}
+		}
+	}
+
+	// Create the OCI artifact
+	now := time.Now().UTC()
+
+	// Merge annotations with required fields
+	if annotations == nil {
+		annotations = make(map[string]string)
+	}
+	annotations[AnnotationArtifactType] = ref.Kind.String()
+	annotations[AnnotationArtifactName] = ref.Name
+	if ref.Version != nil {
+		annotations[AnnotationVersion] = ref.Version.String()
+	}
+	annotations[AnnotationCreated] = now.Format(time.RFC3339)
+
+	// Create content layer
+	contentDesc, err := c.pushBlob(ctx, MediaTypeForKind(ref.Kind), content)
+	if err != nil {
+		return ArtifactInfo{}, fmt.Errorf("failed to push content blob: %w", err)
+	}
+
+	// Create config blob with metadata
+	configData, err := json.Marshal(map[string]any{
+		"kind":        ref.Kind.String(),
+		"name":        ref.Name,
+		"version":     ref.Version.String(),
+		"createdAt":   now.Format(time.RFC3339),
+		"annotations": annotations,
+	})
+	if err != nil {
+		return ArtifactInfo{}, fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	configDesc, err := c.pushBlob(ctx, ConfigMediaTypeForKind(ref.Kind), configData)
+	if err != nil {
+		return ArtifactInfo{}, fmt.Errorf("failed to push config blob: %w", err)
+	}
+
+	// Create manifest
+	manifest := ocispec.Manifest{
+		Versioned: specs.Versioned{
+			SchemaVersion: 2,
+		},
+		MediaType:   ocispec.MediaTypeImageManifest,
+		Config:      configDesc,
+		Layers:      []ocispec.Descriptor{contentDesc},
+		Annotations: annotations,
+	}
+
+	manifestData, err := json.Marshal(manifest)
+	if err != nil {
+		return ArtifactInfo{}, fmt.Errorf("failed to marshal manifest: %w", err)
+	}
+
+	manifestDesc, err := c.pushBlob(ctx, ocispec.MediaTypeImageManifest, manifestData)
+	if err != nil {
+		return ArtifactInfo{}, fmt.Errorf("failed to push manifest: %w", err)
+	}
+
+	// Tag the manifest
+	tag := c.tagForRef(ref)
+	manifestDesc.Annotations = annotations
+	if err := c.store.Tag(ctx, manifestDesc, tag); err != nil {
+		return ArtifactInfo{}, fmt.Errorf("failed to tag manifest: %w", err)
+	}
+
+	c.logger.V(1).Info("stored artifact",
+		"name", ref.Name,
+		"version", ref.Version.String(),
+		"digest", manifestDesc.Digest.String(),
+		"size", manifestDesc.Size)
+
+	return ArtifactInfo{
+		Reference:   ref,
+		Digest:      manifestDesc.Digest.String(),
+		CreatedAt:   now,
+		Size:        int64(len(content)),
+		Annotations: annotations,
+		Catalog:     LocalCatalogName,
+	}, nil
+}
+
+// Fetch retrieves an artifact from the catalog.
+func (c *LocalCatalog) Fetch(ctx context.Context, ref Reference) ([]byte, ArtifactInfo, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	// Resolve to get the manifest descriptor
+	info, err := c.resolveLocked(ctx, ref)
+	if err != nil {
+		return nil, ArtifactInfo{}, err
+	}
+
+	// Get the manifest
+	tag := c.tagForRef(info.Reference)
+	manifestDesc, err := c.store.Resolve(ctx, tag)
+	if err != nil {
+		return nil, ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
+	}
+
+	manifestData, err := c.fetchBlob(ctx, manifestDesc)
+	if err != nil {
+		return nil, ArtifactInfo{}, fmt.Errorf("failed to fetch manifest: %w", err)
+	}
+
+	var manifest ocispec.Manifest
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		return nil, ArtifactInfo{}, fmt.Errorf("failed to unmarshal manifest: %w", err)
+	}
+
+	if len(manifest.Layers) == 0 {
+		return nil, ArtifactInfo{}, fmt.Errorf("manifest has no content layers")
+	}
+
+	// Fetch content from first layer
+	content, err := c.fetchBlob(ctx, manifest.Layers[0])
+	if err != nil {
+		return nil, ArtifactInfo{}, fmt.Errorf("failed to fetch content: %w", err)
+	}
+
+	return content, info, nil
+}
+
+// Resolve finds the best matching version for a reference.
+func (c *LocalCatalog) Resolve(ctx context.Context, ref Reference) (ArtifactInfo, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.resolveLocked(ctx, ref)
+}
+
+func (c *LocalCatalog) resolveLocked(ctx context.Context, ref Reference) (ArtifactInfo, error) {
+	// If version is specified, look for exact match
+	if ref.HasVersion() || ref.HasDigest() {
+		tag := c.tagForRef(ref)
+		desc, err := c.store.Resolve(ctx, tag)
+		if err != nil {
+			return ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
+		}
+
+		annotations, err := c.getManifestAnnotations(ctx, desc)
+		if err != nil {
+			return ArtifactInfo{}, err
+		}
+
+		return c.infoFromAnnotations(ref, desc, annotations), nil
+	}
+
+	// No version specified - find highest semver
+	artifacts, err := c.listLocked(ctx, ref.Kind, ref.Name)
+	if err != nil {
+		return ArtifactInfo{}, err
+	}
+
+	if len(artifacts) == 0 {
+		return ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
+	}
+
+	// Sort by version descending and return highest
+	sort.Slice(artifacts, func(i, j int) bool {
+		vi := artifacts[i].Reference.Version
+		vj := artifacts[j].Reference.Version
+		if vi == nil {
+			return false
+		}
+		if vj == nil {
+			return true
+		}
+		return vi.GreaterThan(vj)
+	})
+
+	return artifacts[0], nil
+}
+
+// List returns all artifacts matching the criteria.
+func (c *LocalCatalog) List(ctx context.Context, kind ArtifactKind, name string) ([]ArtifactInfo, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.listLocked(ctx, kind, name)
+}
+
+func (c *LocalCatalog) listLocked(ctx context.Context, kind ArtifactKind, name string) ([]ArtifactInfo, error) {
+	var results []ArtifactInfo
+
+	// Iterate through all tags
+	err := c.store.Tags(ctx, "", func(tags []string) error {
+		for _, tag := range tags {
+			desc, err := c.store.Resolve(ctx, tag)
+			if err != nil {
+				c.logger.V(2).Info("failed to resolve tag", "tag", tag, "error", err)
+				continue
+			}
+
+			annotations, err := c.getManifestAnnotations(ctx, desc)
+			if err != nil {
+				c.logger.V(2).Info("failed to get annotations", "tag", tag, "error", err)
+				continue
+			}
+
+			// Filter by kind
+			artifactType := annotations[AnnotationArtifactType]
+			if kind != "" && artifactType != kind.String() {
+				continue
+			}
+
+			// Filter by name
+			artifactName := annotations[AnnotationArtifactName]
+			if name != "" && artifactName != name {
+				continue
+			}
+
+			// Parse reference
+			ref, err := c.refFromAnnotations(annotations)
+			if err != nil {
+				c.logger.V(2).Info("failed to parse reference from annotations", "tag", tag, "error", err)
+				continue
+			}
+
+			results = append(results, c.infoFromAnnotations(ref, desc, annotations))
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list tags: %w", err)
+	}
+
+	return results, nil
+}
+
+// Exists checks if an artifact exists in the catalog.
+func (c *LocalCatalog) Exists(ctx context.Context, ref Reference) (bool, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.existsLocked(ctx, ref), nil
+}
+
+func (c *LocalCatalog) existsLocked(ctx context.Context, ref Reference) bool {
+	tag := c.tagForRef(ref)
+	_, err := c.store.Resolve(ctx, tag)
+	return err == nil
+}
+
+// Delete removes an artifact from the catalog.
+func (c *LocalCatalog) Delete(ctx context.Context, ref Reference) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	tag := c.tagForRef(ref)
+	desc, err := c.store.Resolve(ctx, tag)
+	if err != nil {
+		return &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
+	}
+
+	// Delete the tag (blobs are orphaned but not deleted - would need GC)
+	if err := c.store.Untag(ctx, tag); err != nil {
+		return fmt.Errorf("failed to delete artifact: %w", err)
+	}
+
+	c.logger.V(1).Info("deleted artifact",
+		"name", ref.Name,
+		"version", ref.Version.String(),
+		"digest", desc.Digest.String())
+
+	return nil
+}
+
+// Helper methods
+
+func (c *LocalCatalog) tagForRef(ref Reference) string {
+	// Format: kind/name:version or kind/name@digest
+	if ref.HasDigest() {
+		return fmt.Sprintf("%s/%s@%s", ref.Kind, ref.Name, ref.Digest)
+	}
+	if ref.HasVersion() {
+		return fmt.Sprintf("%s/%s:%s", ref.Kind, ref.Name, ref.Version.String())
+	}
+	return fmt.Sprintf("%s/%s", ref.Kind, ref.Name)
+}
+
+func (c *LocalCatalog) pushBlob(ctx context.Context, mediaType string, content []byte) (ocispec.Descriptor, error) {
+	desc := ocispec.Descriptor{
+		MediaType: mediaType,
+		Digest:    digest.FromBytes(content),
+		Size:      int64(len(content)),
+	}
+
+	if err := c.store.Push(ctx, desc, bytes.NewReader(content)); err != nil {
+		// Check if blob already exists (expected for content-addressable storage)
+		if !errors.Is(err, errdef.ErrAlreadyExists) {
+			return ocispec.Descriptor{}, err
+		}
+	}
+
+	return desc, nil
+}
+
+func (c *LocalCatalog) fetchBlob(ctx context.Context, desc ocispec.Descriptor) ([]byte, error) {
+	rc, err := c.store.Fetch(ctx, desc)
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+
+	buf := new(bytes.Buffer)
+	if _, err := buf.ReadFrom(rc); err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
+}
+
+func (c *LocalCatalog) getManifestAnnotations(ctx context.Context, desc ocispec.Descriptor) (map[string]string, error) {
+	data, err := c.fetchBlob(ctx, desc)
+	if err != nil {
+		return nil, err
+	}
+
+	var manifest ocispec.Manifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return nil, err
+	}
+
+	return manifest.Annotations, nil
+}
+
+func (c *LocalCatalog) refFromAnnotations(annotations map[string]string) (Reference, error) {
+	kind := ArtifactKind(annotations[AnnotationArtifactType])
+	name := annotations[AnnotationArtifactName]
+	versionStr := annotations[AnnotationVersion]
+
+	if name == "" {
+		return Reference{}, fmt.Errorf("missing artifact name annotation")
+	}
+
+	ref := Reference{
+		Kind: kind,
+		Name: name,
+	}
+
+	if versionStr != "" {
+		v, err := semver.NewVersion(versionStr)
+		if err != nil {
+			return Reference{}, fmt.Errorf("invalid version annotation: %w", err)
+		}
+		ref.Version = v
+	}
+
+	return ref, nil
+}
+
+func (c *LocalCatalog) infoFromAnnotations(ref Reference, desc ocispec.Descriptor, annotations map[string]string) ArtifactInfo {
+	var createdAt time.Time
+	if created := annotations[AnnotationCreated]; created != "" {
+		if t, err := time.Parse(time.RFC3339, created); err == nil {
+			createdAt = t
+		}
+	}
+
+	return ArtifactInfo{
+		Reference:   ref,
+		Digest:      desc.Digest.String(),
+		CreatedAt:   createdAt,
+		Size:        desc.Size,
+		Annotations: annotations,
+		Catalog:     LocalCatalogName,
+	}
+}
+
+// PruneResult contains statistics from a prune operation.
+type PruneResult struct {
+	// RemovedManifests is the number of orphaned manifests removed
+	RemovedManifests int `json:"removedManifests" yaml:"removedManifests"`
+	// RemovedBlobs is the number of orphaned blobs removed
+	RemovedBlobs int `json:"removedBlobs" yaml:"removedBlobs"`
+	// ReclaimedBytes is the total bytes freed
+	ReclaimedBytes int64 `json:"reclaimedBytes" yaml:"reclaimedBytes"`
+}
+
+// Prune removes orphaned blobs and manifests from the catalog.
+// Orphaned content is any blob or manifest not referenced by a tagged artifact.
+func (c *LocalCatalog) Prune(ctx context.Context) (PruneResult, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	result := PruneResult{}
+
+	// Step 1: Collect all digests referenced by tags
+	referencedDigests := make(map[string]bool)
+
+	err := c.store.Tags(ctx, "", func(tags []string) error {
+		for _, tag := range tags {
+			desc, err := c.store.Resolve(ctx, tag)
+			if err != nil {
+				c.logger.V(2).Info("failed to resolve tag during prune", "tag", tag, "error", err)
+				continue
+			}
+			// Mark the manifest as referenced
+			referencedDigests[desc.Digest.String()] = true
+
+			// Also mark all blobs referenced by this manifest
+			if err := c.markReferencedBlobs(ctx, desc, referencedDigests); err != nil {
+				c.logger.V(2).Info("failed to collect blob references", "digest", desc.Digest.String(), "error", err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return result, fmt.Errorf("failed to enumerate tags: %w", err)
+	}
+
+	// Step 2: Read the index.json to find all manifests
+	indexPath := filepath.Join(c.path, "index.json")
+	indexData, err := os.ReadFile(indexPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// No index = nothing to prune
+			return result, nil
+		}
+		return result, fmt.Errorf("failed to read index.json: %w", err)
+	}
+
+	var index ocispec.Index
+	if err := json.Unmarshal(indexData, &index); err != nil {
+		return result, fmt.Errorf("failed to parse index.json: %w", err)
+	}
+
+	// Step 3: Filter manifests to keep only referenced ones
+	var keptManifests []ocispec.Descriptor
+	for _, manifest := range index.Manifests {
+		if referencedDigests[manifest.Digest.String()] {
+			keptManifests = append(keptManifests, manifest)
+		} else {
+			result.RemovedManifests++
+			result.ReclaimedBytes += manifest.Size
+			c.logger.V(1).Info("pruning orphaned manifest",
+				"digest", manifest.Digest.String(),
+				"name", manifest.Annotations[AnnotationArtifactName],
+				"version", manifest.Annotations[AnnotationVersion])
+		}
+	}
+
+	// Step 4: Write updated index if we removed anything
+	if result.RemovedManifests > 0 {
+		index.Manifests = keptManifests
+		updatedIndex, err := json.MarshalIndent(index, "", "  ")
+		if err != nil {
+			return result, fmt.Errorf("failed to marshal updated index: %w", err)
+		}
+		if err := os.WriteFile(indexPath, updatedIndex, 0o600); err != nil {
+			return result, fmt.Errorf("failed to write updated index: %w", err)
+		}
+	}
+
+	// Step 5: Clean up orphaned blobs in blobs/sha256/
+	blobsDir := filepath.Join(c.path, "blobs", "sha256")
+	entries, err := os.ReadDir(blobsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return result, nil
+		}
+		return result, fmt.Errorf("failed to read blobs directory: %w", err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		digest := "sha256:" + entry.Name()
+		if !referencedDigests[digest] {
+			blobPath := filepath.Join(blobsDir, entry.Name())
+			info, err := entry.Info()
+			if err == nil {
+				result.ReclaimedBytes += info.Size()
+			}
+			if err := os.Remove(blobPath); err != nil {
+				c.logger.V(2).Info("failed to remove orphaned blob", "digest", digest, "error", err)
+				continue
+			}
+			result.RemovedBlobs++
+			c.logger.V(1).Info("pruned orphaned blob", "digest", digest)
+		}
+	}
+
+	return result, nil
+}
+
+// markReferencedBlobs recursively marks all blobs referenced by a manifest.
+func (c *LocalCatalog) markReferencedBlobs(ctx context.Context, desc ocispec.Descriptor, refs map[string]bool) error {
+	// Fetch the manifest content
+	rc, err := c.store.Fetch(ctx, desc)
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+
+	manifestData, err := io.ReadAll(rc)
+	if err != nil {
+		return err
+	}
+
+	// Mark the manifest blob itself
+	refs[desc.Digest.String()] = true
+
+	// Parse as OCI manifest to get config and layers
+	var manifest ocispec.Manifest
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		// Not a valid manifest, just mark the blob
+		return nil
+	}
+
+	// Mark config blob
+	if manifest.Config.Digest != "" {
+		refs[manifest.Config.Digest.String()] = true
+	}
+
+	// Mark layer blobs
+	for _, layer := range manifest.Layers {
+		refs[layer.Digest.String()] = true
+	}
+
+	return nil
+}
+
+// Ensure LocalCatalog implements Catalog.
+var _ Catalog = (*LocalCatalog)(nil)

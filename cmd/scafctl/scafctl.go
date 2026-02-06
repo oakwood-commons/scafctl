@@ -9,6 +9,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl"
 	"github.com/oakwood-commons/scafctl/pkg/profiler"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
 )
 
 var (
@@ -26,7 +27,7 @@ func main() {
 	settings.VersionInformation = verInfo
 
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Stderr.WriteString(output.ErrorMessage(err.Error(), false) + "\n")
 		os.Exit(1)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
@@ -74,7 +75,19 @@ func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 }
 
 func (o *CmdOptionsVersion) GetSolution(ctx context.Context) error {
-	getter := get.NewGetter()
+	lgr := logger.FromContext(ctx)
+
+	// Set up getter with catalog resolver for bare name resolution
+	var getterOpts []get.Option
+	localCatalog, err := catalog.NewLocalCatalog(*lgr)
+	if err == nil {
+		resolver := catalog.NewSolutionResolver(localCatalog, *lgr)
+		getterOpts = append(getterOpts, get.WithCatalogResolver(resolver))
+	} else {
+		lgr.V(1).Info("catalog not available for solution resolution", "error", err)
+	}
+
+	getter := get.NewGetter(getterOpts...)
 	return o.GetSolutionWithGetter(ctx, getter)
 }
 

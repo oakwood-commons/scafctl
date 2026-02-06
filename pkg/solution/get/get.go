@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -17,11 +18,20 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 )
 
+// CatalogResolver is an interface for fetching solutions from a catalog.
+// This avoids a circular dependency with the catalog package.
+type CatalogResolver interface {
+	// FetchSolution retrieves a solution from the catalog by name[@version].
+	// Returns the solution content bytes and any error.
+	FetchSolution(ctx context.Context, nameWithVersion string) ([]byte, error)
+}
+
 type Getter struct {
-	readFile   fs.ReadFileFunc
-	statFunc   fs.StatFunc
-	httpClient *httpc.Client
-	logger     logr.Logger
+	readFile        fs.ReadFileFunc
+	statFunc        fs.StatFunc
+	httpClient      *httpc.Client
+	logger          logr.Logger
+	catalogResolver CatalogResolver
 }
 
 // Option defines a function type that modifies a Getter instance.
@@ -61,6 +71,15 @@ func WithHTTPClient(client *httpc.Client) Option {
 func WithLogger(logger logr.Logger) Option {
 	return func(g *Getter) {
 		g.logger = logger
+	}
+}
+
+// WithCatalogResolver returns an Option that sets the catalog resolver for the Getter.
+// When a catalog resolver is set, the Getter will attempt to resolve bare names
+// (names without path separators or URL schemes) from the catalog first.
+func WithCatalogResolver(resolver CatalogResolver) Option {
+	return func(g *Getter) {
+		g.catalogResolver = resolver
 	}
 }
 
@@ -139,10 +158,79 @@ func (o *Getter) Get(ctx context.Context, path string) (*solution.Solution, erro
 	if path == "" {
 		return nil, fmt.Errorf("no solution path provided and no solution file found in default locations")
 	}
+
+	// Check if this is a bare name that should be resolved from catalog.
+	// A bare name has no path separators and is not a URL.
+	var catalogErr error
+	if o.catalogResolver != nil && o.isBareName(path) {
+		o.logger.V(1).Info("attempting to resolve from catalog", "name", path)
+		sol, err := o.fromCatalog(ctx, path)
+		if err == nil {
+			o.logger.V(1).Info("resolved solution from catalog", "name", path)
+			return sol, nil
+		}
+
+		// If the path contains @, user explicitly requested a version from catalog.
+		// Don't fall back to file resolution - return the catalog error directly.
+		if strings.Contains(path, "@") {
+			return nil, err
+		}
+
+		// Save catalog error for combined error message if file resolution also fails
+		catalogErr = err
+		o.logger.V(1).Info("solution not found in catalog, falling back to file resolution", "name", path, "error", err)
+	}
+
 	if filepath.IsURL(path) {
 		return o.FromURL(ctx, path)
 	}
-	return o.FromLocalFileSystem(ctx, path)
+
+	sol, fileErr := o.FromLocalFileSystem(ctx, path)
+	if fileErr == nil {
+		return sol, nil
+	}
+
+	// If we tried catalog and it failed, provide a combined error message
+	if catalogErr != nil {
+		return nil, fmt.Errorf("%w; also not found on file system", catalogErr)
+	}
+
+	return nil, fileErr
+}
+
+// isBareName returns true if the path is a bare name suitable for catalog lookup.
+// A bare name has no path separators (/, \) and is not a URL.
+func (o *Getter) isBareName(path string) bool {
+	// Not a bare name if it contains path separators
+	if strings.Contains(path, "/") || strings.Contains(path, "\\") {
+		return false
+	}
+	// Not a bare name if it's a URL
+	if filepath.IsURL(path) {
+		return false
+	}
+	// Not a bare name if it has a file extension (likely a file)
+	if strings.Contains(path, ".yaml") || strings.Contains(path, ".yml") || strings.Contains(path, ".json") {
+		return false
+	}
+	return true
+}
+
+// fromCatalog retrieves a solution from the catalog by name[@version].
+func (o *Getter) fromCatalog(ctx context.Context, nameWithVersion string) (*solution.Solution, error) {
+	content, err := o.catalogResolver.FetchSolution(ctx, nameWithVersion)
+	if err != nil {
+		return nil, err
+	}
+
+	sol := solution.Solution{}
+	if err := sol.LoadFromBytes(content); err != nil {
+		return nil, fmt.Errorf("failed to parse solution from catalog: %w", err)
+	}
+
+	// Mark the solution as coming from catalog
+	sol.SetPath(fmt.Sprintf("catalog:%s", nameWithVersion))
+	return &sol, nil
 }
 
 // FromLocalFileSystem reads a solution from the local filesystem at the specified path.
@@ -170,7 +258,7 @@ func (o *Getter) FromLocalFileSystem(_ context.Context, path string) (*solution.
 
 	data, err := o.readFile(path)
 	if err != nil {
-		o.logger.Error(err, "Failed to read file", "path", path)
+		o.logger.V(1).Info("Failed to read file", "path", path, "error", err)
 		return &solution.Solution{}, fmt.Errorf("unable to get the solution. Failed reading file '%s': %w", path, err)
 	}
 
@@ -183,7 +271,7 @@ func (o *Getter) FromLocalFileSystem(_ context.Context, path string) (*solution.
 		return &solution.Solution{}, fmt.Errorf("unable to get the solution. Failed unmarshalling data from file '%s': %w", path, err)
 	}
 
-	o.logger.Info("Successfully loaded solution from local filesystem", "path", path)
+	o.logger.V(1).Info("Successfully loaded solution from local filesystem", "path", path)
 	sol.SetPath(path)
 	return &sol, nil
 }
