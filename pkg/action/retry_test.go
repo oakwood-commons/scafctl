@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -262,17 +263,23 @@ func TestRetryExecutor_ShouldRetry(t *testing.T) {
 
 	t.Run("nil error returns false", func(t *testing.T) {
 		executor := NewRetryExecutor(config)
-		assert.False(t, executor.ShouldRetry(context.Background(), nil, 1))
+		shouldRetry, err := executor.ShouldRetry(context.Background(), nil, 1)
+		require.NoError(t, err)
+		assert.False(t, shouldRetry)
 	})
 
 	t.Run("nil config returns false", func(t *testing.T) {
 		executor := NewRetryExecutor(nil)
-		assert.False(t, executor.ShouldRetry(context.Background(), errors.New("error"), 1))
+		shouldRetry, err := executor.ShouldRetry(context.Background(), errors.New("error"), 1)
+		require.NoError(t, err)
+		assert.False(t, shouldRetry)
 	})
 
 	t.Run("max attempts reached returns false", func(t *testing.T) {
 		executor := NewRetryExecutor(config)
-		assert.False(t, executor.ShouldRetry(context.Background(), errors.New("error"), 3))
+		shouldRetry, err := executor.ShouldRetry(context.Background(), errors.New("error"), 3)
+		require.NoError(t, err)
+		assert.False(t, shouldRetry)
 	})
 
 	t.Run("cancelled context returns false", func(t *testing.T) {
@@ -280,13 +287,19 @@ func TestRetryExecutor_ShouldRetry(t *testing.T) {
 		cancel()
 
 		executor := NewRetryExecutor(config)
-		assert.False(t, executor.ShouldRetry(ctx, errors.New("error"), 1))
+		shouldRetry, err := executor.ShouldRetry(ctx, errors.New("error"), 1)
+		require.NoError(t, err)
+		assert.False(t, shouldRetry)
 	})
 
 	t.Run("should retry on error before max attempts", func(t *testing.T) {
 		executor := NewRetryExecutor(config)
-		assert.True(t, executor.ShouldRetry(context.Background(), errors.New("error"), 1))
-		assert.True(t, executor.ShouldRetry(context.Background(), errors.New("error"), 2))
+		shouldRetry1, err := executor.ShouldRetry(context.Background(), errors.New("error"), 1)
+		require.NoError(t, err)
+		assert.True(t, shouldRetry1)
+		shouldRetry2, err := executor.ShouldRetry(context.Background(), errors.New("error"), 2)
+		require.NoError(t, err)
+		assert.True(t, shouldRetry2)
 	})
 }
 
@@ -357,7 +370,7 @@ func TestRetryExecutor_ExecuteWithRetry(t *testing.T) {
 		require.Error(t, err)
 		assert.Nil(t, output)
 		assert.Equal(t, 3, calls)
-		assert.Contains(t, err.Error(), "failed after 3 attempts")
+		assert.Contains(t, err.Error(), "failed after 3 attempt(s)")
 		assert.Contains(t, err.Error(), "persistent error")
 	})
 
@@ -615,5 +628,203 @@ func TestRetryExecutor_BackoffStrategies(t *testing.T) {
 		assert.Equal(t, 4*time.Second, executor.CalculateDelay(4))
 		assert.Equal(t, 8*time.Second, executor.CalculateDelay(5))
 		assert.Equal(t, 16*time.Second, executor.CalculateDelay(6))
+	})
+}
+
+func TestRetryExecutor_ShouldRetry_WithRetryIf(t *testing.T) {
+	t.Run("retryIf true allows retry", func(t *testing.T) {
+		retryIfExpr := celexp.Expression("__error.statusCode == 429")
+		config := &RetryConfig{
+			MaxAttempts: 3,
+			RetryIf:     &retryIfExpr,
+		}
+		executor := NewRetryExecutor(config)
+
+		// HTTP 429 error should retry
+		shouldRetry, err := executor.ShouldRetry(context.Background(), &HTTPError{StatusCode: 429, Message: "rate limited"}, 1)
+		require.NoError(t, err)
+		assert.True(t, shouldRetry)
+	})
+
+	t.Run("retryIf false prevents retry", func(t *testing.T) {
+		retryIfExpr := celexp.Expression("__error.statusCode == 429 || __error.statusCode >= 500")
+		config := &RetryConfig{
+			MaxAttempts: 3,
+			RetryIf:     &retryIfExpr,
+		}
+		executor := NewRetryExecutor(config)
+
+		// HTTP 401 error should not retry
+		shouldRetry, err := executor.ShouldRetry(context.Background(), &HTTPError{StatusCode: 401, Message: "unauthorized"}, 1)
+		require.NoError(t, err)
+		assert.False(t, shouldRetry)
+	})
+
+	t.Run("retryIf with exit code", func(t *testing.T) {
+		retryIfExpr := celexp.Expression("__error.exitCode == 1")
+		config := &RetryConfig{
+			MaxAttempts: 3,
+			RetryIf:     &retryIfExpr,
+		}
+		executor := NewRetryExecutor(config)
+
+		// Generic error with exit code 0 should not retry
+		shouldRetry, err := executor.ShouldRetry(context.Background(), errors.New("some error"), 1)
+		require.NoError(t, err)
+		assert.False(t, shouldRetry)
+	})
+
+	t.Run("retryIf with error type", func(t *testing.T) {
+		retryIfExpr := celexp.Expression("__error.type == \"timeout\"")
+		config := &RetryConfig{
+			MaxAttempts: 3,
+			RetryIf:     &retryIfExpr,
+		}
+		executor := NewRetryExecutor(config)
+
+		// Timeout error should retry
+		shouldRetry, err := executor.ShouldRetry(context.Background(), context.DeadlineExceeded, 1)
+		require.NoError(t, err)
+		assert.True(t, shouldRetry)
+
+		// Other errors should not retry
+		shouldRetry, err = executor.ShouldRetry(context.Background(), errors.New("some error"), 1)
+		require.NoError(t, err)
+		assert.False(t, shouldRetry)
+	})
+
+	t.Run("retryIf with attempt number", func(t *testing.T) {
+		// Only retry first 2 attempts
+		retryIfExpr := celexp.Expression("__error.attempt <= 2")
+		config := &RetryConfig{
+			MaxAttempts: 5,
+			RetryIf:     &retryIfExpr,
+		}
+		executor := NewRetryExecutor(config)
+
+		shouldRetry1, err := executor.ShouldRetry(context.Background(), errors.New("error"), 1)
+		require.NoError(t, err)
+		assert.True(t, shouldRetry1)
+
+		shouldRetry2, err := executor.ShouldRetry(context.Background(), errors.New("error"), 2)
+		require.NoError(t, err)
+		assert.True(t, shouldRetry2)
+
+		shouldRetry3, err := executor.ShouldRetry(context.Background(), errors.New("error"), 3)
+		require.NoError(t, err)
+		assert.False(t, shouldRetry3)
+	})
+
+	t.Run("retryIf invalid expression returns error", func(t *testing.T) {
+		retryIfExpr := celexp.Expression("__error.nonexistentField")
+		config := &RetryConfig{
+			MaxAttempts: 3,
+			RetryIf:     &retryIfExpr,
+		}
+		executor := NewRetryExecutor(config)
+
+		_, err := executor.ShouldRetry(context.Background(), errors.New("error"), 1)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "retryIf")
+	})
+
+	t.Run("retryIf non-boolean result returns error", func(t *testing.T) {
+		retryIfExpr := celexp.Expression("__error.message")
+		config := &RetryConfig{
+			MaxAttempts: 3,
+			RetryIf:     &retryIfExpr,
+		}
+		executor := NewRetryExecutor(config)
+
+		_, err := executor.ShouldRetry(context.Background(), errors.New("error"), 1)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "boolean")
+	})
+
+	t.Run("retryIf complex condition", func(t *testing.T) {
+		// Retry rate limits up to 5 attempts, server errors up to 3 attempts
+		retryIfExpr := celexp.Expression("(__error.statusCode == 429 && __error.attempt <= 5) || (__error.statusCode >= 500 && __error.attempt <= 3)")
+		config := &RetryConfig{
+			MaxAttempts: 10,
+			RetryIf:     &retryIfExpr,
+		}
+		executor := NewRetryExecutor(config)
+
+		// Rate limit on attempt 4 should retry
+		shouldRetry, err := executor.ShouldRetry(context.Background(), &HTTPError{StatusCode: 429, Message: "rate limited"}, 4)
+		require.NoError(t, err)
+		assert.True(t, shouldRetry)
+
+		// Rate limit on attempt 6 should not retry
+		shouldRetry, err = executor.ShouldRetry(context.Background(), &HTTPError{StatusCode: 429, Message: "rate limited"}, 6)
+		require.NoError(t, err)
+		assert.False(t, shouldRetry)
+
+		// Server error on attempt 2 should retry
+		shouldRetry, err = executor.ShouldRetry(context.Background(), &HTTPError{StatusCode: 503, Message: "service unavailable"}, 2)
+		require.NoError(t, err)
+		assert.True(t, shouldRetry)
+
+		// Server error on attempt 4 should not retry
+		shouldRetry, err = executor.ShouldRetry(context.Background(), &HTTPError{StatusCode: 503, Message: "service unavailable"}, 4)
+		require.NoError(t, err)
+		assert.False(t, shouldRetry)
+	})
+}
+
+func TestRetryExecutor_ExecuteWithRetry_WithRetryIf(t *testing.T) {
+	t.Run("stops retrying when retryIf returns false", func(t *testing.T) {
+		retryIfExpr := celexp.Expression("__error.statusCode >= 500")
+		tenMillis := Duration(10 * time.Millisecond)
+		config := &RetryConfig{
+			MaxAttempts:  5,
+			RetryIf:      &retryIfExpr,
+			InitialDelay: &tenMillis,
+		}
+		executor := NewRetryExecutor(config)
+
+		calls := 0
+		_, err := executor.ExecuteWithRetry(
+			context.Background(),
+			"test-action",
+			func(_ context.Context) (*provider.Output, error) {
+				calls++
+				// Return 401 which should not retry
+				return nil, &HTTPError{StatusCode: 401, Message: "unauthorized"}
+			},
+			nil,
+		)
+
+		require.Error(t, err)
+		assert.Equal(t, 1, calls) // Should only try once, no retries
+	})
+
+	t.Run("retries when retryIf returns true then succeeds", func(t *testing.T) {
+		retryIfExpr := celexp.Expression("__error.statusCode == 503")
+		tenMillis := Duration(10 * time.Millisecond)
+		config := &RetryConfig{
+			MaxAttempts:  5,
+			RetryIf:      &retryIfExpr,
+			InitialDelay: &tenMillis,
+		}
+		executor := NewRetryExecutor(config)
+
+		calls := 0
+		output, err := executor.ExecuteWithRetry(
+			context.Background(),
+			"test-action",
+			func(_ context.Context) (*provider.Output, error) {
+				calls++
+				if calls < 3 {
+					return nil, &HTTPError{StatusCode: 503, Message: "service unavailable"}
+				}
+				return &provider.Output{Data: "success"}, nil
+			},
+			nil,
+		)
+
+		require.NoError(t, err)
+		assert.Equal(t, "success", output.Data)
+		assert.Equal(t, 3, calls) // 2 failures + 1 success
 	})
 }

@@ -484,9 +484,10 @@ These are planned features from design docs for future implementation:
   - Benefits: standard format, full JSON Schema power, single validation library
   - Breaking change: provider input/output schema format will change
 
-### Conditional Retry
+### ~~Conditional Retry~~ ✅
 
-- [ ] **`retryIf` expression for actions**
+- [x] **`retryIf` expression for actions**
   - Retry only on specific error types
   - Expression-based condition: `__error.statusCode == 429`
   - Avoid wasting retries on non-transient failures
+  - **Implemented:** `retryIf` field in `RetryConfig`, `__error` context with message, type, statusCode, exitCode, attempt, maxAttempts

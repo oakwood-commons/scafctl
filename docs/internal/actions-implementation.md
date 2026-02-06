@@ -1403,12 +1403,199 @@ for i, item := range items {
 
 ---
 
+## Phase 14: Conditional Retry (`retryIf`)
+
+**Status:** Planned
+
+**Goal:** Allow actions to specify a CEL expression that determines whether a failed action should be retried, enabling smarter retry behavior that avoids wasting attempts on non-transient errors.
+
+### Overview
+
+Currently, failed actions retry unconditionally up to `maxAttempts`. With `retryIf`, users can specify conditions like:
+- Only retry on HTTP 429 (rate limit) or 5xx errors
+- Only retry on specific exit codes
+- Only retry on timeout errors
+- Skip retries on authentication failures (401/403)
+
+### Design Decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Field name | `retryIf` | Reads naturally: "retry if this condition is true" |
+| Error context variable | `__error` | Consistent with `__actions` namespace pattern |
+| Default behavior | Always retry (when `retryIf` not specified) | Backward compatible with existing solutions |
+| Expression failure | Fail the action | Clear error message, don't silently skip retries |
+| Evaluation timing | Before each retry attempt | Stop early if condition is false |
+
+### Error Context Object
+
+The `__error` object exposed to CEL expressions:
+
+```go
+// ErrorContext provides error information for retryIf expressions.
+type ErrorContext struct {
+    // Message is the error message string.
+    Message string `json:"message"`
+    
+    // Type categorizes the error source.
+    // Values: "http", "exec", "timeout", "validation", "provider", "unknown"
+    Type string `json:"type"`
+    
+    // StatusCode is the HTTP status code (0 if not an HTTP error).
+    StatusCode int `json:"statusCode"`
+    
+    // ExitCode is the process exit code (0 if not an exec error).
+    ExitCode int `json:"exitCode"`
+    
+    // Attempt is the current attempt number (1-based).
+    // First attempt is 1, first retry is 2, etc.
+    Attempt int `json:"attempt"`
+    
+    // MaxAttempts is the maximum attempts configured.
+    MaxAttempts int `json:"maxAttempts"`
+}
+```
+
+### Example Usage
+
+```yaml
+actions:
+  - name: call-api
+    provider: http
+    with:
+      url: https://api.example.com/data
+    retry:
+      maxAttempts: 5
+      backoff: exponential
+      initialDelay: 1s
+      # Only retry on rate limits or server errors
+      retryIf: ${ __error.statusCode == 429 || __error.statusCode >= 500 }
+
+  - name: deploy-script
+    provider: exec
+    with:
+      command: ./deploy.sh
+    retry:
+      maxAttempts: 3
+      # Only retry on exit code 1 (transient failure)
+      retryIf: ${ __error.exitCode == 1 }
+
+  - name: fetch-config
+    provider: http
+    with:
+      url: https://config.example.com
+    retry:
+      maxAttempts: 3
+      # Retry on timeouts or rate limits, not auth failures
+      retryIf: ${ __error.type == "timeout" || __error.statusCode == 429 }
+
+  - name: complex-retry
+    provider: http
+    with:
+      url: https://api.example.com
+    retry:
+      maxAttempts: 10
+      # Retry rate limits more aggressively, server errors less so
+      retryIf: |
+        ${ 
+          (__error.statusCode == 429 && __error.attempt <= 8) ||
+          (__error.statusCode >= 500 && __error.attempt <= 3)
+        }
+```
+
+### Implementation Tasks
+
+#### Task 1: Add `retryIf` field to `RetryConfig`
+
+**File:** `pkg/action/types.go`
+
+Add `RetryIf` field to the existing `RetryConfig` struct.
+
+#### Task 2: Create `ErrorContext` type
+
+**File:** `pkg/action/error_context.go` (new file)
+
+Create `ErrorContext` struct and `NewErrorContext()` factory that extracts error type, status code, exit code from various error types.
+
+#### Task 3: Update retry logic to evaluate `retryIf`
+
+**File:** `pkg/action/retry.go`
+
+Update `ShouldRetry()` method to evaluate the `retryIf` CEL expression with `__error` context. Return error if expression evaluation fails.
+
+#### Task 4: Add unit tests
+
+**Files:** `pkg/action/error_context_test.go`, `pkg/action/retry_test.go`
+
+Test error context creation for various error types and `retryIf` expression evaluation.
+
+#### Task 5: Add integration test
+
+**File:** `tests/integration/cli_test.go`
+
+Test that `retryIf` correctly skips retries when condition is false.
+
+#### Task 6: Add example solution
+
+**File:** `examples/actions/conditional-retry.yaml` (new file)
+
+Demonstrate `retryIf` usage patterns.
+
+#### Task 7: Update documentation
+
+**File:** `docs/tutorials/actions-tutorial.md`
+
+Document `retryIf` and the `__error` context object.
+
+#### Task 8: Update TODO.md
+
+Mark the `retryIf` feature as complete.
+
+### Files Changed Summary
+
+| File | Change |
+|------|--------|
+| `pkg/action/types.go` | Add `RetryIf` field to `RetryConfig` |
+| `pkg/action/error_context.go` | New file - `ErrorContext` type and factory |
+| `pkg/action/error_context_test.go` | New file - unit tests |
+| `pkg/action/retry.go` | Update retry logic to evaluate `retryIf` |
+| `pkg/action/retry_test.go` | Add `retryIf` tests |
+| `examples/actions/conditional-retry.yaml` | New example |
+| `docs/tutorials/actions-tutorial.md` | Document `retryIf` |
+| `docs/internal/TODO.md` | Mark complete |
+| `tests/integration/cli_test.go` | Integration tests |
+
+### Success Criteria
+
+1. `retryIf` expression evaluated before each retry
+2. Retry skipped when expression returns false
+3. Retry proceeds when expression returns true
+4. Expression evaluation failure fails the action with clear error
+5. Default behavior unchanged when `retryIf` not specified
+6. `__error` context correctly populated for HTTP, exec, timeout errors
+7. All existing retry tests still pass
+8. Example solution demonstrates feature
+
+### Estimated Effort
+
+| Task | Effort |
+|------|--------|
+| Add `retryIf` field | 30 min |
+| Create `ErrorContext` | 30 min |
+| Update retry logic | 1 hour |
+| Unit tests | 1.5 hours |
+| Integration tests | 30 min |
+| Example solution | 30 min |
+| Documentation | 30 min |
+| **Total** | **~5 hours** |
+
+---
+
 ## Future Enhancements (Deferred)
 
 These features are documented in the design but deferred from initial implementation:
 
 - Result Schema Validation
-- Conditional Retry (`retryIf` expression)
 - Matrix Strategy (multi-dimensional expansion)
 - Action Alias
 - Exclusive Actions (mutual exclusion)

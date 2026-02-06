@@ -12,6 +12,7 @@ This directory contains example action configurations demonstrating the Actions 
 | [foreach-deploy.yaml](foreach-deploy.yaml) | ForEach expansion for deploying to multiple targets |
 | [error-handling.yaml](error-handling.yaml) | Error handling with onError: continue |
 | [retry-backoff.yaml](retry-backoff.yaml) | Retry with exponential backoff |
+| [conditional-retry.yaml](conditional-retry.yaml) | Conditional retry with retryIf expressions |
 | [conditional-execution.yaml](conditional-execution.yaml) | When conditions for conditional execution |
 | [finally-cleanup.yaml](finally-cleanup.yaml) | Finally section for cleanup actions |
 | [complex-workflow.yaml](complex-workflow.yaml) | Full CI/CD-style workflow with all features |

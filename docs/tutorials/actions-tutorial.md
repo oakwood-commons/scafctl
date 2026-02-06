@@ -320,6 +320,59 @@ actions:
 - `linear` - Delay increases linearly (1s, 2s, 3s, ...)
 - `exponential` - Delay doubles (1s, 2s, 4s, 8s, ...)
 
+### Conditional Retry (retryIf)
+
+Use a CEL expression to control when retries occur:
+
+```yaml
+actions:
+  api-call:
+    provider: http
+    retry:
+      maxAttempts: 5
+      backoff: exponential
+      initialDelay: 1s
+      # Only retry on rate limits (429) or server errors (5xx)
+      retryIf: "__error.statusCode == 429 || __error.statusCode >= 500"
+    inputs:
+      url: "https://api.example.com/resource"
+```
+
+The `__error` context variable provides:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `__error.message` | string | The error message |
+| `__error.type` | string | Error category: `http`, `exec`, `timeout`, `validation`, `unknown` |
+| `__error.statusCode` | int | HTTP status code (0 for non-HTTP errors) |
+| `__error.exitCode` | int | Process exit code (0 for non-exec errors) |
+| `__error.attempt` | int | Current attempt number (1-based) |
+| `__error.maxAttempts` | int | Maximum retry attempts configured |
+
+**Example conditions:**
+
+```yaml
+# Only retry on timeout errors
+retryIf: "__error.type == 'timeout'"
+
+# Retry up to 3 times maximum (even if maxAttempts is higher)
+retryIf: "__error.attempt < 4"
+
+# Retry on specific HTTP errors
+retryIf: "__error.statusCode == 429 || __error.statusCode == 503"
+
+# Retry on exec errors except exit code 2 (permanent failure)
+retryIf: "__error.type == 'exec' && __error.exitCode != 2"
+
+# Complex condition
+retryIf: "(__error.type == 'http' && __error.statusCode >= 500) || __error.type == 'timeout'"
+
+# Never retry (disables retry even with retry config)
+retryIf: "false"
+```
+
+> **Note:** The exec provider does not return errors for non-zero exit codes - it reports exit codes in the output data. The `retryIf` feature works best with HTTP errors, timeouts, and exec failures like "command not found".
+
 ### Timeout
 
 Limit action execution time:
@@ -525,6 +578,7 @@ See the [examples/actions/](../examples/actions/) directory for complete working
 - `foreach-deploy.yaml` - Multi-target deployment
 - `error-handling.yaml` - OnError continue
 - `retry-backoff.yaml` - Retry strategies
+- `conditional-retry.yaml` - Conditional retry with retryIf
 - `conditional-execution.yaml` - When conditions
 - `finally-cleanup.yaml` - Cleanup actions
 - `complex-workflow.yaml` - Full CI/CD example

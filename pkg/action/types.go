@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 )
 
@@ -141,6 +142,19 @@ type RetryConfig struct {
 	// MaxDelay caps the maximum delay between retries.
 	// Only meaningful for linear and exponential backoff.
 	MaxDelay *Duration `json:"maxDelay,omitempty" yaml:"maxDelay,omitempty" doc:"Maximum delay between retries" example:"30s"`
+
+	// RetryIf is a CEL expression that determines whether a retry should occur.
+	// The expression has access to __error context with error details:
+	//   - __error.message: Error message string
+	//   - __error.type: Error type ("http", "exec", "timeout", "validation", "unknown")
+	//   - __error.statusCode: HTTP status code (0 if not HTTP)
+	//   - __error.exitCode: Process exit code (0 if not exec)
+	//   - __error.attempt: Current attempt number (1-based)
+	//   - __error.maxAttempts: Maximum configured attempts
+	// If not specified, all errors are retried (default behavior).
+	// If specified and evaluates to false, no retry occurs.
+	// Example: "${ __error.statusCode == 429 || __error.statusCode >= 500 }"
+	RetryIf *celexp.Expression `json:"retryIf,omitempty" yaml:"retryIf,omitempty" doc:"CEL expression to determine if retry should occur"`
 }
 
 // BackoffType defines the backoff strategy for retries.

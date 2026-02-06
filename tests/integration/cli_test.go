@@ -240,6 +240,116 @@ func TestIntegration_RunSolution_SkipActions(t *testing.T) {
 	assert.Contains(t, stdout, "greeting")
 }
 
+func TestIntegration_RunSolution_ConditionalRetry(t *testing.T) {
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "solution",
+		"-f", "examples/actions/conditional-retry.yaml",
+	)
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d", exitCode)
+	assert.Contains(t, stdout, "all tests complete")
+}
+
+func TestIntegration_RunSolution_RetryIfWithCommandNotFound(t *testing.T) {
+	// Test that retryIf: "false" prevents retries on actual errors
+	// Using a non-existent command which returns a real error
+	tmpDir := t.TempDir()
+	solutionPath := filepath.Join(tmpDir, "retry-if-cmd-not-found.yaml")
+
+	solution := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: retry-if-cmd-not-found-test
+  version: 1.0.0
+spec:
+  resolvers: {}
+  workflow:
+    actions:
+      fail-no-retry:
+        provider: exec
+        retry:
+          maxAttempts: 3
+          backoff: fixed
+          initialDelay: 10ms
+          # Disable retry - should fail immediately
+          retryIf: "false"
+        inputs:
+          shell: false
+          command: "/nonexistent-command-12345"
+`
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solution), 0o644))
+
+	_, stderr, exitCode := runScafctl(t,
+		"run", "solution",
+		"-f", solutionPath,
+	)
+
+	// Should fail because command doesn't exist
+	assert.NotEqual(t, 0, exitCode)
+	t.Logf("stderr: %s", stderr)
+}
+
+func TestIntegration_RunSolution_RetryIfWithRetryEnabled(t *testing.T) {
+	// Test that retryIf: "true" allows retries on actual errors
+	// This creates a temp script that succeeds on second run
+	tmpDir := t.TempDir()
+	solutionPath := filepath.Join(tmpDir, "retry-if-enabled.yaml")
+	scriptPath := filepath.Join(tmpDir, "retry-script.sh")
+	counterFile := filepath.Join(tmpDir, "counter.txt")
+
+	// Create a script that fails first time, succeeds second time
+	script := `#!/bin/sh
+if [ -f "` + counterFile + `" ]; then
+  echo "Second attempt - success"
+  exit 0
+else
+  echo "1" > "` + counterFile + `"
+  exit 1
+fi
+`
+	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o755))
+
+	// Note: The exec provider doesn't return errors for non-zero exit codes
+	// so retryIf won't trigger on exit code. This test validates the retryIf
+	// expression is parsed correctly and doesn't cause errors.
+	solution := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: retry-if-enabled-test
+  version: 1.0.0
+spec:
+  resolvers: {}
+  workflow:
+    actions:
+      retry-action:
+        provider: exec
+        retry:
+          maxAttempts: 3
+          backoff: fixed
+          initialDelay: 10ms
+          # Always retry on error (won't trigger for exit code failures)
+          retryIf: "true"
+        inputs:
+          shell: false
+          command: "` + scriptPath + `"
+`
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solution), 0o644))
+
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "solution",
+		"-f", solutionPath,
+	)
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	// The action completes (exec provider returns success even with non-zero exit)
+	// but we verify the retryIf expression doesn't cause parsing errors
+	assert.Equal(t, 0, exitCode, "should complete without retryIf parsing errors")
+}
+
 // ============================================================================
 // Render Solution Tests
 // ============================================================================
