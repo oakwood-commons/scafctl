@@ -21,6 +21,10 @@ type Workflow struct {
 	// Finally actions cannot use dependsOn to reference regular actions, but can
 	// access all regular action results. They have an implicit dependency on all regular actions.
 	Finally map[string]*Action `json:"finally,omitempty" yaml:"finally,omitempty" doc:"Cleanup/finalization actions that run after all regular actions"`
+
+	// ResultSchemaMode sets the default validation behavior for resultSchema across all actions.
+	// Individual actions can override this setting. Default is "error".
+	ResultSchemaMode ResultSchemaMode `json:"resultSchemaMode,omitempty" yaml:"resultSchemaMode,omitempty" doc:"Default result schema validation mode" example:"error" default:"error"`
 }
 
 // Action represents a single action definition.
@@ -77,11 +81,48 @@ type Action struct {
 	// If provided, the provider's output is validated against this schema at runtime.
 	// Supports full JSON Schema 2020-12 specification including $ref, allOf, anyOf, oneOf, etc.
 	// This enables self-documenting actions and catches mismatches early.
+	// Use ResultSchemaMode to control validation behavior (error, warn, ignore).
 	ResultSchema *jsonschema.Schema `json:"resultSchema,omitempty" yaml:"resultSchema,omitempty" doc:"JSON Schema for result validation"`
+
+	// ResultSchemaMode controls behavior when result schema validation fails.
+	// Overrides the workflow-level default. Options: "error" (fail action), "warn" (log and continue), "ignore" (skip validation).
+	ResultSchemaMode ResultSchemaMode `json:"resultSchemaMode,omitempty" yaml:"resultSchemaMode,omitempty" doc:"Result schema validation mode" example:"error"`
 }
 
 // Duration is a wrapper around time.Duration that supports YAML/JSON marshaling.
 type Duration time.Duration
+
+// ResultSchemaMode defines the validation behavior when result schema validation fails.
+type ResultSchemaMode string
+
+const (
+	// ResultSchemaModeError fails the action when schema validation fails (default).
+	ResultSchemaModeError ResultSchemaMode = "error"
+
+	// ResultSchemaModeWarn logs a warning and continues execution.
+	ResultSchemaModeWarn ResultSchemaMode = "warn"
+
+	// ResultSchemaModeIgnore skips schema validation entirely.
+	ResultSchemaModeIgnore ResultSchemaMode = "ignore"
+)
+
+// IsValid returns true if the result schema mode is valid.
+func (m ResultSchemaMode) IsValid() bool {
+	switch m {
+	case ResultSchemaModeError, ResultSchemaModeWarn, ResultSchemaModeIgnore, "":
+		return true
+	default:
+		return false
+	}
+}
+
+// OrDefault returns the mode or the default (ResultSchemaModeError) if empty.
+func (m ResultSchemaMode) OrDefault() ResultSchemaMode {
+	if m == "" {
+		return ResultSchemaModeError
+	}
+	return m
+}
 
 // RetryConfig defines automatic retry behavior for failed actions.
 type RetryConfig struct {

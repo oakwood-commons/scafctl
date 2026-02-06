@@ -118,6 +118,14 @@ func ValidateWorkflow(w *Workflow, registry RegistryInterface) error {
 
 	errs := &AggregatedValidationError{}
 
+	// Validate workflow-level resultSchemaMode
+	if w.ResultSchemaMode != "" && !w.ResultSchemaMode.IsValid() {
+		errs.AddError(&ValidationError{
+			Field:   "resultSchemaMode",
+			Message: fmt.Sprintf("resultSchemaMode must be 'error', 'warn', or 'ignore', got %q", w.ResultSchemaMode),
+		})
+	}
+
 	// Collect all action names across sections for uniqueness check
 	allNames := make(map[string]string) // name -> section
 
@@ -257,6 +265,16 @@ func validateAction(
 			ActionName: action.Name,
 			Field:      "onError",
 			Message:    fmt.Sprintf("onError must be 'fail' or 'continue', got %q", action.OnError),
+		})
+	}
+
+	// Validate resultSchemaMode
+	if action.ResultSchemaMode != "" && !action.ResultSchemaMode.IsValid() {
+		errs.AddError(&ValidationError{
+			Section:    section,
+			ActionName: action.Name,
+			Field:      "resultSchemaMode",
+			Message:    fmt.Sprintf("resultSchemaMode must be 'error', 'warn', or 'ignore', got %q", action.ResultSchemaMode),
 		})
 	}
 }

@@ -58,6 +58,7 @@
     "httpcache",
     "httpprovider",
     "importas",
+    "jsonschema",
     "kcloutie",
     "LDFLAGS",
     "lipgloss",
