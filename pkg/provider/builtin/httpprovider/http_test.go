@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -711,4 +712,301 @@ func TestHTTPProvider_Execute_RetryOnRateLimited(t *testing.T) {
 
 	data := output.Data.(map[string]any)
 	assert.Equal(t, 200, data["statusCode"])
+}
+
+// ============================================================================
+// Auth Integration Tests
+// ============================================================================
+
+func TestHTTPProvider_Execute_AuthProvider_Success(t *testing.T) {
+	var receivedAuthHeader string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuthHeader = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"authenticated": true}`))
+	}))
+	defer server.Close()
+
+	// Set up mock auth handler
+	mockHandler := auth.NewMockHandler("entra")
+	mockHandler.SetToken(&auth.Token{
+		AccessToken: "test-access-token-12345",
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(1 * time.Hour),
+		Scope:       "https://graph.microsoft.com/.default",
+	})
+
+	// Create registry and register mock handler
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(mockHandler))
+
+	// Create context with registry
+	ctx := auth.WithRegistry(context.Background(), registry)
+
+	p := NewHTTPProvider()
+	inputs := map[string]any{
+		"url":          server.URL,
+		"method":       "GET",
+		"authProvider": "entra",
+		"scope":        "https://graph.microsoft.com/.default",
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "Bearer test-access-token-12345", receivedAuthHeader)
+
+	data := output.Data.(map[string]any)
+	assert.Equal(t, 200, data["statusCode"])
+
+	// Verify GetToken was called with correct options
+	require.Len(t, mockHandler.GetTokenCalls, 1)
+	assert.Equal(t, "https://graph.microsoft.com/.default", mockHandler.GetTokenCalls[0].Scope)
+	// MinValidFor should be timeout (30s) + 60s buffer = 90s
+	assert.True(t, mockHandler.GetTokenCalls[0].MinValidFor >= 90*time.Second)
+}
+
+func TestHTTPProvider_Execute_AuthProvider_MissingScope(t *testing.T) {
+	p := NewHTTPProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"url":          "https://example.com/api",
+		"method":       "GET",
+		"authProvider": "entra",
+		// scope is missing
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	require.Error(t, err)
+	assert.Nil(t, output)
+	assert.Contains(t, err.Error(), "scope is required when authProvider is set")
+}
+
+func TestHTTPProvider_Execute_AuthProvider_MissingRegistry(t *testing.T) {
+	p := NewHTTPProvider()
+	// Context without auth registry
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"url":          "https://example.com/api",
+		"method":       "GET",
+		"authProvider": "entra",
+		"scope":        "https://graph.microsoft.com/.default",
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	require.Error(t, err)
+	assert.Nil(t, output)
+	assert.Contains(t, err.Error(), "auth handler not found")
+}
+
+func TestHTTPProvider_Execute_AuthProvider_UnknownHandler(t *testing.T) {
+	// Create empty registry
+	registry := auth.NewRegistry()
+	ctx := auth.WithRegistry(context.Background(), registry)
+
+	p := NewHTTPProvider()
+	inputs := map[string]any{
+		"url":          "https://example.com/api",
+		"method":       "GET",
+		"authProvider": "unknown-handler",
+		"scope":        "https://graph.microsoft.com/.default",
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	require.Error(t, err)
+	assert.Nil(t, output)
+	assert.Contains(t, err.Error(), "auth handler not found")
+}
+
+func TestHTTPProvider_Execute_AuthProvider_TokenError(t *testing.T) {
+	// Set up mock auth handler that returns error
+	mockHandler := auth.NewMockHandler("entra")
+	mockHandler.SetTokenError(auth.ErrNotAuthenticated)
+
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(mockHandler))
+	ctx := auth.WithRegistry(context.Background(), registry)
+
+	p := NewHTTPProvider()
+	inputs := map[string]any{
+		"url":          "https://example.com/api",
+		"method":       "GET",
+		"authProvider": "entra",
+		"scope":        "https://graph.microsoft.com/.default",
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	require.Error(t, err)
+	assert.Nil(t, output)
+	assert.Contains(t, err.Error(), "failed to get auth token")
+}
+
+func TestHTTPProvider_Execute_AuthProvider_401Retry(t *testing.T) {
+	attemptCount := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attemptCount++
+
+		if attemptCount == 1 {
+			// First request: return 401
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error": "unauthorized"}`))
+			return
+		}
+
+		// Second request: success
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success": true}`))
+	}))
+	defer server.Close()
+
+	// Set up mock handler
+	mockHandler := auth.NewMockHandler("entra")
+	mockHandler.SetToken(&auth.Token{
+		AccessToken: "test-token",
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(1 * time.Hour),
+	})
+
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(mockHandler))
+	ctx := auth.WithRegistry(context.Background(), registry)
+
+	p := NewHTTPProvider()
+	inputs := map[string]any{
+		"url":          server.URL,
+		"method":       "GET",
+		"authProvider": "entra",
+		"scope":        "https://graph.microsoft.com/.default",
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	// Should have made 2 requests (initial + retry after 401)
+	assert.Equal(t, 2, attemptCount)
+
+	// Should have called GetToken twice (once for initial, once with ForceRefresh)
+	require.Len(t, mockHandler.GetTokenCalls, 2)
+	assert.False(t, mockHandler.GetTokenCalls[0].ForceRefresh)
+	assert.True(t, mockHandler.GetTokenCalls[1].ForceRefresh)
+
+	data := output.Data.(map[string]any)
+	assert.Equal(t, 200, data["statusCode"])
+}
+
+func TestHTTPProvider_Execute_AuthProvider_401RetryOnlyOnce(t *testing.T) {
+	attemptCount := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attemptCount++
+		// Always return 401
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error": "unauthorized"}`))
+	}))
+	defer server.Close()
+
+	mockHandler := auth.NewMockHandler("entra")
+	mockHandler.SetToken(&auth.Token{
+		AccessToken: "test-token",
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(1 * time.Hour),
+	})
+
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(mockHandler))
+	ctx := auth.WithRegistry(context.Background(), registry)
+
+	p := NewHTTPProvider()
+	inputs := map[string]any{
+		"url":          server.URL,
+		"method":       "GET",
+		"authProvider": "entra",
+		"scope":        "https://graph.microsoft.com/.default",
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err) // Returns 401 as result, not error
+	require.NotNil(t, output)
+
+	// Should have made exactly 2 requests (initial + 1 retry)
+	assert.Equal(t, 2, attemptCount)
+
+	data := output.Data.(map[string]any)
+	assert.Equal(t, 401, data["statusCode"])
+}
+
+func TestHTTPProvider_Execute_FloatTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
+	}))
+	defer server.Close()
+
+	p := NewHTTPProvider()
+	ctx := context.Background()
+
+	// Timeout as float64 (from JSON/YAML unmarshaling)
+	inputs := map[string]any{
+		"url":     server.URL,
+		"method":  "GET",
+		"timeout": float64(10),
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	data := output.Data.(map[string]any)
+	assert.Equal(t, 200, data["statusCode"])
+}
+
+func TestHTTPProvider_Execute_HeadersCopy(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	p := NewHTTPProvider()
+	mockHandler := auth.NewMockHandler("entra")
+	mockHandler.SetToken(&auth.Token{
+		AccessToken: "test-token",
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(1 * time.Hour),
+	})
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(mockHandler))
+	ctx := auth.WithRegistry(context.Background(), registry)
+
+	// Original headers
+	originalHeaders := map[string]any{
+		"X-Custom-Header": "custom-value",
+	}
+
+	inputs := map[string]any{
+		"url":          server.URL,
+		"method":       "GET",
+		"headers":      originalHeaders,
+		"authProvider": "entra",
+		"scope":        "https://graph.microsoft.com/.default",
+	}
+
+	_, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	// Original headers should NOT have Authorization (we made a copy)
+	_, hasAuth := originalHeaders["Authorization"]
+	assert.False(t, hasAuth, "Original headers should not be modified")
 }

@@ -9,6 +9,10 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/action"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
+	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
@@ -17,22 +21,14 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
-	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"gopkg.in/yaml.v3"
 )
 
-// Exit codes for the run command
-const (
-	ExitSuccess          = 0 // Successful execution
-	ExitResolverFailed   = 1 // Resolver execution failed
-	ExitValidationFailed = 2 // Validation failed
-	ExitInvalidSolution  = 3 // Circular dependency / invalid solution
-	ExitFileNotFound     = 4 // File not found / parse error
-)
-
 // ValidOutputTypes defines the supported output formats
-var ValidOutputTypes = []string{"json", "yaml", "quiet"}
+var ValidOutputTypes = kvx.BaseOutputFormats()
 
 // SolutionOptions holds configuration for the run solution command
 type SolutionOptions struct {
@@ -52,6 +48,18 @@ type SolutionOptions struct {
 	ResolverTimeout time.Duration
 	PhaseTimeout    time.Duration
 
+	// Action execution options
+	ActionTimeout        time.Duration
+	MaxActionConcurrency int
+	DryRun               bool
+	SkipActions          bool
+
+	// kvx output integration (shared flags)
+	flags.KvxOutputFlags
+
+	// Track which flags were explicitly set by user
+	flagsChanged map[string]bool
+
 	// For dependency injection in tests
 	getter   get.Interface
 	registry *provider.Registry
@@ -66,9 +74,6 @@ func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 		ioStreams: ioStreams,
 		path:      path,
 		runner:    options,
-		writeErrorFn: func(msg string) {
-			writeError(options, msg)
-		},
 		getOutputFn: func() string {
 			return options.Output
 		},
@@ -80,13 +85,13 @@ func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 
 	cCmd := &cobra.Command{
 		Use:     "solution",
-		Aliases: []string{"sol", "s"},
-		Short:   "Run a solution by executing all resolvers",
-		Long: `Execute a solution file by running all defined resolvers in dependency order.
+		Aliases: []string{"sol", "s", "solutions"},
+		Short:   "Run a solution by executing resolvers and actions",
+		Long: `Execute a solution file by running resolvers and then actions in dependency order.
 
-Resolvers are organized into phases based on their dependencies. Resolvers within 
-the same phase execute concurrently. The command outputs resolved values in the 
-specified format (JSON by default).
+The execution proceeds in two phases:
+1. RESOLVER PHASE: All resolvers execute in dependency order (concurrent within phases)
+2. ACTION PHASE: Actions execute using resolved data (if workflow defined)
 
 RESOLVER PARAMETERS:
   Parameters can be passed using -r/--resolver flag in several formats:
@@ -96,14 +101,29 @@ RESOLVER PARAMETERS:
     key=val1,val2     Multiple values become an array
 
 EXECUTION ORDER:
-  1. Dependencies are analyzed and resolvers grouped into phases
-  2. Resolvers in each phase execute concurrently
-  3. Each resolver runs: resolve → transform → validate
+  1. Parse and validate solution
+  2. Execute resolvers in dependency phases (concurrent within phases)
+  3. If workflow defined: build action graph and execute actions
+  4. Finally section actions always execute (even if main actions fail)
 
 OUTPUT FORMATS:
-  json    JSON output (default)
-  yaml    YAML output
-  quiet   Suppress output (exit code only)
+  table    Bordered table view (default when terminal)
+  json     JSON output (for piping/scripting)
+  yaml     YAML output (for piping/scripting)
+  quiet    Suppress output (exit code only)
+
+INTERACTIVE MODE:
+  Use -i/--interactive to launch a TUI for exploring results:
+  - Navigate with arrow keys
+  - Search across keys and values
+  - Filter with CEL expressions
+  - Copy values and paths
+
+CEL EXPRESSIONS:
+  Use -e/--expression to filter or transform the output:
+    -e '_.database'                    Select specific resolver result
+    -e '_.items.filter(x, x.enabled)'  Filter arrays
+    -e 'size(_.results)'               Compute values
 
 EXIT CODES:
   0  Success
@@ -111,31 +131,39 @@ EXIT CODES:
   2  Validation failed
   3  Invalid solution (cycle/parse error)
   4  File not found
+  6  Action/workflow execution failed
 
 Examples:
-  # Run solution with auto-discovery
-  scafctl run solution
-
-  # Run solution from specific file
+  # Run solution (resolvers + actions)
   scafctl run solution -f ./my-solution.yaml
 
-  # Read solution from stdin
-  cat solution.yaml | scafctl run solution -f -
-
-  # Run with inline parameters
+  # Run with parameters
   scafctl run solution -r env=prod -r region=us-east1
 
-  # Run with parameters from file
-  scafctl run solution -r @params.yaml
+  # Dry run (validate and show what would execute)
+  scafctl run solution -f ./my-solution.yaml --dry-run
 
-  # Run only a specific resolver and its dependencies
-  scafctl run solution --only database-config
+  # Run resolvers only (skip actions)
+  scafctl run solution -f ./my-solution.yaml --skip-actions
+
+  # Explore resolver results interactively
+  scafctl run solution -f ./my-solution.yaml --skip-actions -i
+
+  # JSON output for piping
+  scafctl run solution -f ./my-solution.yaml -o json | jq .
+
+  # Limit concurrent actions
+  scafctl run solution --max-action-concurrency=2
 
   # Show progress during execution
-  scafctl run solution --progress
-
-  # Output as YAML
-  scafctl run solution -o yaml`,
+  scafctl run solution --progress`,
+		PreRun: func(cCmd *cobra.Command, _ []string) {
+			// Track which flags were explicitly set by the user
+			options.flagsChanged = make(map[string]bool)
+			cCmd.Flags().Visit(func(f *pflag.Flag) {
+				options.flagsChanged[f.Name] = true
+			})
+		},
 		RunE:         makeRunEFunc(cfg, "solution"),
 		SilenceUsage: true,
 	}
@@ -143,19 +171,126 @@ Examples:
 	// Flags
 	cCmd.Flags().StringVarP(&options.File, "file", "f", "", "Solution file path (auto-discovered if not provided, use '-' for stdin)")
 	cCmd.Flags().StringArrayVarP(&options.ResolverParams, "resolver", "r", nil, "Resolver parameters (key=value or @file.yaml)")
-	cCmd.Flags().StringVarP(&options.Output, "output", "o", "json", fmt.Sprintf("Output format: %s", strings.Join(ValidOutputTypes, ", ")))
+	// Add shared kvx output flags (-o, -i, -e)
+	flags.AddKvxOutputFlagsToStruct(cCmd, &options.KvxOutputFlags)
+
+	// Command-specific flags
 	cCmd.Flags().StringVar(&options.Only, "only", "", "Execute only this resolver and its dependencies")
 	cCmd.Flags().BoolVar(&options.ResolveAll, "resolve-all", false, "Execute all resolvers regardless of action requirements")
 	cCmd.Flags().BoolVar(&options.Progress, "progress", false, "Show execution progress (output to stderr)")
 	cCmd.Flags().BoolVar(&options.ValidateAll, "validate-all", false, "Continue execution and show all validation/resolver errors")
 	cCmd.Flags().BoolVar(&options.SkipValidation, "skip-validation", false, "Skip the validation phase of all resolvers")
 	cCmd.Flags().BoolVar(&options.ShowMetrics, "show-metrics", false, "Show provider execution metrics after completion (output to stderr)")
-	cCmd.Flags().Int64Var(&options.WarnValueSize, "warn-value-size", 1024*1024, "Warn when value exceeds this size in bytes (default: 1MB)")
-	cCmd.Flags().Int64Var(&options.MaxValueSize, "max-value-size", 10*1024*1024, "Fail when value exceeds this size in bytes (default: 10MB)")
-	cCmd.Flags().DurationVar(&options.ResolverTimeout, "resolver-timeout", 30*time.Second, "Timeout per resolver")
-	cCmd.Flags().DurationVar(&options.PhaseTimeout, "phase-timeout", 5*time.Minute, "Timeout per phase")
+	cCmd.Flags().Int64Var(&options.WarnValueSize, "warn-value-size", settings.DefaultWarnValueSize, "Warn when value exceeds this size in bytes (default: 1MB)")
+	cCmd.Flags().Int64Var(&options.MaxValueSize, "max-value-size", settings.DefaultMaxValueSize, "Fail when value exceeds this size in bytes (default: 10MB)")
+	cCmd.Flags().DurationVar(&options.ResolverTimeout, "resolver-timeout", settings.DefaultResolverTimeout, "Timeout per resolver")
+	cCmd.Flags().DurationVar(&options.PhaseTimeout, "phase-timeout", settings.DefaultPhaseTimeout, "Timeout per resolver phase")
+
+	// Action execution flags
+	cCmd.Flags().DurationVar(&options.ActionTimeout, "action-timeout", settings.DefaultActionTimeout, "Default timeout per action")
+	cCmd.Flags().IntVar(&options.MaxActionConcurrency, "max-action-concurrency", 0, "Maximum concurrent actions (0=unlimited)")
+	cCmd.Flags().BoolVar(&options.DryRun, "dry-run", false, "Validate and show what would be executed without running")
+	cCmd.Flags().BoolVar(&options.SkipActions, "skip-actions", false, "Execute resolvers only, skip actions")
 
 	return cCmd
+}
+
+// getEffectiveResolverConfig returns resolver config values, using app config
+// as defaults when CLI flags weren't explicitly set.
+func (o *SolutionOptions) getEffectiveResolverConfig(ctx context.Context) config.ResolverConfigValues {
+	// Start with CLI flag values (which already have settings package defaults)
+	result := config.ResolverConfigValues{
+		Timeout:        o.ResolverTimeout,
+		PhaseTimeout:   o.PhaseTimeout,
+		MaxConcurrency: 0, // Not currently a CLI flag, use config if available
+		WarnValueSize:  o.WarnValueSize,
+		MaxValueSize:   o.MaxValueSize,
+		ValidateAll:    o.ValidateAll,
+	}
+
+	// If config is available, use its values for non-changed flags
+	cfg := config.FromContext(ctx)
+	if cfg == nil {
+		return result
+	}
+
+	// Parse config values
+	configValues, err := cfg.Resolver.ToResolverValues()
+	if err != nil {
+		// If config parsing fails, log and use CLI defaults
+		lgr := logger.FromContext(ctx)
+		lgr.V(1).Info("failed to parse resolver config, using CLI defaults", "error", err)
+		return result
+	}
+
+	// Override with config values for flags that weren't explicitly set.
+	// Only apply overrides when flagsChanged is set (i.e., we're in command execution flow).
+	// When flagsChanged is nil (e.g., in tests), respect the values set on the options struct.
+	if o.flagsChanged != nil {
+		if !o.flagsChanged["resolver-timeout"] {
+			result.Timeout = configValues.Timeout
+		}
+		if !o.flagsChanged["phase-timeout"] {
+			result.PhaseTimeout = configValues.PhaseTimeout
+		}
+		if !o.flagsChanged["warn-value-size"] {
+			result.WarnValueSize = configValues.WarnValueSize
+		}
+		if !o.flagsChanged["max-value-size"] {
+			result.MaxValueSize = configValues.MaxValueSize
+		}
+		if !o.flagsChanged["validate-all"] {
+			result.ValidateAll = configValues.ValidateAll
+		}
+	}
+
+	// MaxConcurrency always comes from config (no CLI flag for resolver concurrency)
+	result.MaxConcurrency = configValues.MaxConcurrency
+
+	return result
+}
+
+// getEffectiveActionConfig returns action config values, using app config
+// as defaults when CLI flags weren't explicitly set.
+func (o *SolutionOptions) getEffectiveActionConfig(ctx context.Context) config.ActionConfigValues {
+	// Start with CLI flag values
+	result := config.ActionConfigValues{
+		DefaultTimeout: o.ActionTimeout,
+		GracePeriod:    settings.DefaultGracePeriod, // Not a CLI flag
+		MaxConcurrency: o.MaxActionConcurrency,
+	}
+
+	// If config is available, use its values for non-changed flags
+	cfg := config.FromContext(ctx)
+	if cfg == nil {
+		return result
+	}
+
+	// Parse config values
+	configValues, err := cfg.Action.ToActionValues()
+	if err != nil {
+		// If config parsing fails, log and use CLI defaults
+		lgr := logger.FromContext(ctx)
+		lgr.V(1).Info("failed to parse action config, using CLI defaults", "error", err)
+		return result
+	}
+
+	// Override with config values for flags that weren't explicitly set.
+	// Only apply overrides when flagsChanged is set (i.e., we're in command execution flow).
+	// When flagsChanged is nil (e.g., in tests), respect the values set on the options struct.
+	if o.flagsChanged != nil {
+		if !o.flagsChanged["action-timeout"] {
+			result.DefaultTimeout = configValues.DefaultTimeout
+		}
+		if !o.flagsChanged["max-action-concurrency"] {
+			result.MaxConcurrency = configValues.MaxConcurrency
+		}
+	}
+
+	// GracePeriod always comes from config (no CLI flag)
+	result.GracePeriod = configValues.GracePeriod
+
+	return result
 }
 
 // Run executes the solution
@@ -167,6 +302,8 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		"only", o.Only,
 		"resolveAll", o.ResolveAll,
 		"progress", o.Progress,
+		"dryRun", o.DryRun,
+		"skipActions", o.SkipActions,
 		"showMetrics", o.ShowMetrics)
 
 	// Enable metrics collection if requested
@@ -178,85 +315,171 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// Load the solution
 	sol, err := o.loadSolution(ctx)
 	if err != nil {
-		return o.exitWithCode(err, ExitFileNotFound)
+		return o.exitWithCode(err, exitcode.FileNotFound)
 	}
 
 	lgr.V(1).Info("loaded solution",
 		"name", sol.Metadata.Name,
 		"version", sol.Metadata.Version,
-		"resolvers", len(sol.Spec.Resolvers))
+		"hasResolvers", sol.Spec.HasResolvers(),
+		"hasWorkflow", sol.Spec.HasWorkflow())
 
-	// Check if there are resolvers to execute
-	if !sol.Spec.HasResolvers() {
-		lgr.V(0).Info("no resolvers defined in solution")
-		return o.writeOutput(ctx, map[string]any{})
+	// Set up provider registry
+	reg := o.getRegistry()
+	actionAdapter := &actionRegistryAdapter{registry: reg}
+
+	// Validate the workflow if present and not skipping actions
+	if sol.Spec.HasWorkflow() && !o.SkipActions {
+		if err := action.ValidateWorkflow(sol.Spec.Workflow, actionAdapter); err != nil {
+			return o.exitWithCode(fmt.Errorf("workflow validation failed: %w", err), exitcode.ValidationFailed)
+		}
 	}
 
 	// Parse resolver parameters
 	params, err := ParseResolverFlags(o.ResolverParams)
 	if err != nil {
-		return o.exitWithCode(fmt.Errorf("failed to parse resolver parameters: %w", err), ExitValidationFailed)
+		return o.exitWithCode(fmt.Errorf("failed to parse resolver parameters: %w", err), exitcode.ValidationFailed)
 	}
 
 	lgr.V(1).Info("parsed parameters", "count", len(params))
 
-	// Get resolvers to execute
-	resolvers := o.getResolversToExecute(sol)
-	if len(resolvers) == 0 {
-		lgr.V(0).Info("no resolvers to execute")
-		return o.writeOutput(ctx, map[string]any{})
+	// Build resolver data map
+	resolverData := make(map[string]any)
+
+	// Execute resolvers if present
+	if sol.Spec.HasResolvers() {
+		// Get resolvers to execute
+		resolvers := o.getResolversToExecute(sol)
+		if len(resolvers) == 0 {
+			lgr.V(0).Info("no resolvers to execute")
+		} else {
+			resolverAdapter := &registryAdapter{registry: reg}
+
+			// Set up progress reporter if enabled
+			var progress *ProgressReporter
+			var progressCallback *ProgressCallback
+			if o.Progress {
+				progress = NewProgressReporter(o.IOStreams.ErrOut, len(resolvers))
+				progressCallback = NewProgressCallback(progress)
+			}
+
+			// Get effective resolver config (CLI flags override app config)
+			resolverCfg := o.getEffectiveResolverConfig(ctx)
+
+			// Create executor with options
+			executorOpts := []resolver.ExecutorOption{
+				resolver.WithDefaultTimeout(resolverCfg.Timeout),
+				resolver.WithPhaseTimeout(resolverCfg.PhaseTimeout),
+			}
+			if resolverCfg.MaxConcurrency > 0 {
+				executorOpts = append(executorOpts, resolver.WithMaxConcurrency(resolverCfg.MaxConcurrency))
+			}
+			if resolverCfg.WarnValueSize > 0 {
+				executorOpts = append(executorOpts, resolver.WithWarnValueSize(resolverCfg.WarnValueSize))
+			}
+			if resolverCfg.MaxValueSize > 0 {
+				executorOpts = append(executorOpts, resolver.WithMaxValueSize(resolverCfg.MaxValueSize))
+			}
+			if progressCallback != nil {
+				executorOpts = append(executorOpts, resolver.WithProgressCallback(progressCallback))
+			}
+			if resolverCfg.ValidateAll {
+				executorOpts = append(executorOpts, resolver.WithValidateAll(true))
+			}
+			if o.SkipValidation {
+				executorOpts = append(executorOpts, resolver.WithSkipValidation(true))
+			}
+			executor := resolver.NewExecutor(resolverAdapter, executorOpts...)
+
+			// Execute resolvers
+			resultCtx, err := executor.Execute(ctx, resolvers, params)
+			if err != nil {
+				// Wait for progress to complete before returning error
+				if progress != nil {
+					progress.Wait()
+				}
+				return o.exitWithCode(fmt.Errorf("resolver execution failed: %w", err), exitcode.GeneralError)
+			}
+
+			// Get resolver context with results
+			resolverCtx, ok := resolver.FromContext(resultCtx)
+			if !ok {
+				// Wait for progress to complete before returning error
+				if progress != nil {
+					progress.Wait()
+				}
+				return o.exitWithCode(fmt.Errorf("failed to retrieve resolver results"), exitcode.GeneralError)
+			}
+
+			// Build resolver data map for actions
+			for name := range sol.Spec.Resolvers {
+				result, ok := resolverCtx.GetResult(name)
+				if ok && result.Status == resolver.ExecutionStatusSuccess {
+					resolverData[name] = result.Value
+				}
+			}
+
+			// Wait for progress bars to complete
+			if progress != nil {
+				progress.Wait()
+			}
+
+			lgr.V(1).Info("resolver execution complete", "resolvedCount", len(resolverData))
+		}
 	}
 
-	// Set up provider registry
-	reg := o.getRegistry()
-	adapter := &registryAdapter{registry: reg}
-
-	// Set up progress reporter if enabled
-	var progress *ProgressReporter
-	var progressCallback *ProgressCallback
-	if o.Progress {
-		progress = NewProgressReporter(o.IOStreams.ErrOut, len(resolvers))
-		progressCallback = NewProgressCallback(progress)
-		defer progress.Wait()
+	// If skipping actions or no workflow, output resolver results
+	if o.SkipActions || !sol.Spec.HasWorkflow() {
+		results := o.buildResolverOutputMap(resolverData, sol)
+		if err := o.checkValueSizes(results, *lgr); err != nil {
+			return o.exitWithCode(err, exitcode.ValidationFailed)
+		}
+		return o.writeOutput(ctx, results)
 	}
 
-	// Create executor with options
-	executorOpts := []resolver.ExecutorOption{
-		resolver.WithDefaultTimeout(o.ResolverTimeout),
-		resolver.WithPhaseTimeout(o.PhaseTimeout),
-	}
-	if progressCallback != nil {
-		executorOpts = append(executorOpts, resolver.WithProgressCallback(progressCallback))
-	}
-	if o.ValidateAll {
-		executorOpts = append(executorOpts, resolver.WithValidateAll(true))
-	}
-	if o.SkipValidation {
-		executorOpts = append(executorOpts, resolver.WithSkipValidation(true))
-	}
-	executor := resolver.NewExecutor(adapter, executorOpts...)
-
-	// Execute resolvers
-	resultCtx, err := executor.Execute(ctx, resolvers, params)
+	// Build action graph
+	graph, err := action.BuildGraph(ctx, sol.Spec.Workflow, resolverData, nil)
 	if err != nil {
-		return o.exitWithCode(fmt.Errorf("resolver execution failed: %w", err), ExitResolverFailed)
+		return o.exitWithCode(fmt.Errorf("failed to build action graph: %w", err), exitcode.InvalidInput)
 	}
 
-	// Get resolver context with results
-	resolverCtx, ok := resolver.FromContext(resultCtx)
-	if !ok {
-		return o.exitWithCode(fmt.Errorf("failed to retrieve resolver results"), ExitResolverFailed)
+	lgr.V(1).Info("action graph built",
+		"totalActions", len(graph.Actions),
+		"mainPhases", len(graph.ExecutionOrder),
+		"finallyPhases", len(graph.FinallyOrder))
+
+	// Dry run - just show what would be executed
+	if o.DryRun {
+		o.showDryRun(graph)
+		return nil
 	}
 
-	// Build output map
-	results := o.buildOutputMap(resolverCtx, sol)
-
-	// Check value sizes
-	if err := o.checkValueSizes(results, *lgr); err != nil {
-		return o.exitWithCode(err, ExitValidationFailed)
+	// Set up action progress callback if enabled
+	var actionProgressCallback action.ProgressCallback
+	if o.Progress {
+		actionProgressCallback = NewActionProgressCallback(o.IOStreams.ErrOut)
 	}
 
-	return o.writeOutput(ctx, results)
+	// Get effective action config (CLI flags override app config)
+	actionCfg := o.getEffectiveActionConfig(ctx)
+
+	// Execute actions
+	actionExecutor := action.NewExecutor(
+		action.WithRegistry(actionAdapter),
+		action.WithResolverData(resolverData),
+		action.WithProgressCallback(actionProgressCallback),
+		action.WithDefaultTimeout(actionCfg.DefaultTimeout),
+		action.WithGracePeriod(actionCfg.GracePeriod),
+		action.WithMaxConcurrency(actionCfg.MaxConcurrency),
+	)
+
+	result, err := actionExecutor.Execute(ctx, sol.Spec.Workflow)
+	if err != nil && result != nil && result.FinalStatus != action.ExecutionPartialSuccess {
+		return o.exitWithCode(fmt.Errorf("action execution failed: %w", err), exitcode.ActionFailed)
+	}
+
+	// Build and write output
+	return o.writeActionOutput(ctx, result)
 }
 
 // loadSolution loads the solution from file, stdin, or auto-discovery
@@ -410,32 +633,6 @@ func (o *SolutionOptions) getRegistry() *provider.Registry {
 	return reg
 }
 
-// buildOutputMap builds the output map from resolver results
-func (o *SolutionOptions) buildOutputMap(resolverCtx *resolver.Context, sol *solution.Solution) map[string]any {
-	results := make(map[string]any)
-
-	for name, r := range sol.Spec.Resolvers {
-		result, ok := resolverCtx.GetResult(name)
-		if !ok {
-			continue
-		}
-
-		// Skip if resolver was skipped and we're not in resolve-all mode
-		if result.Status == resolver.ExecutionStatusSkipped && !o.ResolveAll {
-			continue
-		}
-
-		// Redact sensitive values
-		if r.Sensitive {
-			results[name] = "[REDACTED]"
-		} else {
-			results[name] = result.Value
-		}
-	}
-
-	return results
-}
-
 // checkValueSizes checks if any values exceed size limits
 func (o *SolutionOptions) checkValueSizes(results map[string]any, lgr logr.Logger) error {
 	for name, value := range results {
@@ -465,48 +662,32 @@ func calculateValueSize(value any) int64 {
 	return int64(len(data))
 }
 
-// writeOutput writes the results in the specified format
-func (o *SolutionOptions) writeOutput(_ context.Context, results map[string]any) error {
-	if o.Output == "quiet" {
-		return nil
-	}
+// writeOutput writes the results in the specified format using the shared kvx output handler.
+func (o *SolutionOptions) writeOutput(ctx context.Context, results map[string]any) error {
+	// Use the shared kvx output infrastructure
+	kvxOpts := flags.NewKvxOutputOptionsFromFlags(
+		o.Output,
+		o.Interactive,
+		o.Expression,
+		kvx.WithOutputContext(ctx),
+		kvx.WithOutputNoColor(o.CliParams.NoColor),
+		kvx.WithOutputAppName("scafctl run solution"),
+		kvx.WithOutputHelp("scafctl run solution", []string{
+			"Resolver Results Viewer",
+			"",
+			"Navigate: ↑↓ arrows | Back: ← | Enter: →",
+			"Search: / or F3 | Expression: F6",
+			"Copy path: F5 | Quit: q or F10",
+		}),
+	)
+	kvxOpts.IOStreams = o.IOStreams
 
-	var data []byte
-	var err error
-
-	switch o.Output {
-	case "yaml":
-		data, err = yaml.Marshal(results)
-	case "json", "":
-		data, err = json.MarshalIndent(results, "", "  ")
-	default:
-		return fmt.Errorf("unsupported output format: %s", o.Output)
-	}
-
-	if err != nil {
-		return fmt.Errorf("failed to marshal output: %w", err)
-	}
-
-	fmt.Fprintln(o.IOStreams.Out, string(data))
-	return nil
+	return kvxOpts.Write(results)
 }
 
 // exitWithCode returns the error with appropriate exit handling
 func (o *SolutionOptions) exitWithCode(err error, _ int) error {
-	writeError(o, err.Error())
-	// The exit code is handled by the caller based on the error type
-	// For now, we just return the error
 	return err
-}
-
-// writeError writes an error message using the output package
-func writeError(o *SolutionOptions, msg string) {
-	output.NewWriteMessageOptions(
-		o.IOStreams,
-		output.MessageTypeError,
-		o.CliParams.NoColor,
-		o.CliParams.ExitOnError,
-	).WriteMessage(msg)
 }
 
 // registryAdapter adapts provider.Registry to resolver.RegistryInterface
@@ -537,4 +718,190 @@ func (r *registryAdapter) DescriptorLookup() resolver.DescriptorLookup {
 // writeMetricsSolution outputs provider execution metrics to stderr
 func (o *SolutionOptions) writeMetricsSolution() {
 	writeMetrics(o.IOStreams.ErrOut)
+}
+
+// buildResolverOutputMap builds the output map from resolver data with redaction for sensitive values
+func (o *SolutionOptions) buildResolverOutputMap(resolverData map[string]any, sol *solution.Solution) map[string]any {
+	results := make(map[string]any)
+
+	for name, value := range resolverData {
+		// Check if resolver is marked as sensitive
+		if r, ok := sol.Spec.Resolvers[name]; ok && r.Sensitive {
+			results[name] = "[REDACTED]"
+		} else {
+			results[name] = value
+		}
+	}
+
+	return results
+}
+
+// showDryRun displays what would be executed without actually running
+func (o *SolutionOptions) showDryRun(graph *action.Graph) {
+	fmt.Fprintln(o.IOStreams.Out, "=== DRY RUN ===")
+	fmt.Fprintln(o.IOStreams.Out, "")
+	fmt.Fprintf(o.IOStreams.Out, "Total actions: %d\n", len(graph.Actions))
+	fmt.Fprintf(o.IOStreams.Out, "Main phases: %d\n", len(graph.ExecutionOrder))
+	fmt.Fprintf(o.IOStreams.Out, "Finally phases: %d\n", len(graph.FinallyOrder))
+	fmt.Fprintln(o.IOStreams.Out, "")
+
+	fmt.Fprintln(o.IOStreams.Out, "EXECUTION ORDER:")
+	for i, phase := range graph.ExecutionOrder {
+		fmt.Fprintf(o.IOStreams.Out, "  Phase %d: %s\n", i, strings.Join(phase, ", "))
+	}
+
+	if len(graph.FinallyOrder) > 0 {
+		fmt.Fprintln(o.IOStreams.Out, "")
+		fmt.Fprintln(o.IOStreams.Out, "FINALLY ORDER:")
+		for i, phase := range graph.FinallyOrder {
+			fmt.Fprintf(o.IOStreams.Out, "  Phase %d: %s\n", i, strings.Join(phase, ", "))
+		}
+	}
+
+	fmt.Fprintln(o.IOStreams.Out, "")
+	fmt.Fprintln(o.IOStreams.Out, "ACTIONS:")
+	for name, act := range graph.Actions {
+		fmt.Fprintf(o.IOStreams.Out, "  %s:\n", name)
+		fmt.Fprintf(o.IOStreams.Out, "    provider: %s\n", act.Provider)
+		if len(act.Dependencies) > 0 {
+			fmt.Fprintf(o.IOStreams.Out, "    dependencies: %s\n", strings.Join(act.Dependencies, ", "))
+		}
+		if act.ForEachMetadata != nil {
+			fmt.Fprintf(o.IOStreams.Out, "    forEach: expanded from %s[%d]\n", act.ForEachMetadata.ExpandedFrom, act.ForEachMetadata.Index)
+		}
+	}
+}
+
+// writeActionOutput writes the action execution results
+func (o *SolutionOptions) writeActionOutput(_ context.Context, result *action.ExecutionResult) error {
+	if o.Output == "quiet" {
+		return nil
+	}
+
+	// Build output structure
+	output := map[string]any{
+		"status":    string(result.FinalStatus),
+		"startTime": result.StartTime.Format(time.RFC3339),
+		"endTime":   result.EndTime.Format(time.RFC3339),
+		"duration":  result.Duration().String(),
+	}
+
+	// Add action results
+	actions := make(map[string]any)
+	for name, ar := range result.Actions {
+		actionOutput := map[string]any{
+			"status": string(ar.Status),
+		}
+		if ar.Results != nil {
+			actionOutput["results"] = ar.Results
+		}
+		if ar.Error != "" {
+			actionOutput["error"] = ar.Error
+		}
+		if ar.SkipReason != "" {
+			actionOutput["skipReason"] = string(ar.SkipReason)
+		}
+		actions[name] = actionOutput
+	}
+	output["actions"] = actions
+
+	if len(result.FailedActions) > 0 {
+		output["failedActions"] = result.FailedActions
+	}
+	if len(result.SkippedActions) > 0 {
+		output["skippedActions"] = result.SkippedActions
+	}
+
+	var data []byte
+	var err error
+
+	switch o.Output {
+	case "yaml":
+		data, err = yaml.Marshal(output)
+	case "json", "":
+		data, err = json.MarshalIndent(output, "", "  ")
+	default:
+		return fmt.Errorf("unsupported output format: %s", o.Output)
+	}
+
+	if err != nil {
+		return fmt.Errorf("failed to marshal output: %w", err)
+	}
+
+	fmt.Fprintln(o.IOStreams.Out, string(data))
+	return nil
+}
+
+// actionRegistryAdapter adapts provider.Registry to action.RegistryInterface
+type actionRegistryAdapter struct {
+	registry *provider.Registry
+}
+
+// Get returns a provider by name (for action.RegistryInterface - returns bool)
+func (r *actionRegistryAdapter) Get(name string) (provider.Provider, bool) {
+	return r.registry.Get(name)
+}
+
+// Has checks if a provider exists (for action.RegistryInterface)
+func (r *actionRegistryAdapter) Has(name string) bool {
+	_, ok := r.registry.Get(name)
+	return ok
+}
+
+// ActionProgressCallback implements action.ProgressCallback for CLI output
+type ActionProgressCallback struct {
+	out io.Writer
+}
+
+// NewActionProgressCallback creates a new action progress callback
+func NewActionProgressCallback(out io.Writer) *ActionProgressCallback {
+	return &ActionProgressCallback{out: out}
+}
+
+func (a *ActionProgressCallback) OnActionStart(actionName string) {
+	fmt.Fprintf(a.out, "[ACTION] Starting: %s\n", actionName)
+}
+
+func (a *ActionProgressCallback) OnActionComplete(actionName string, _ any) {
+	fmt.Fprintf(a.out, "[ACTION] Completed: %s ✓\n", actionName)
+}
+
+func (a *ActionProgressCallback) OnActionFailed(actionName string, err error) {
+	fmt.Fprintf(a.out, "[ACTION] Failed: %s ✗ (%v)\n", actionName, err)
+}
+
+func (a *ActionProgressCallback) OnActionSkipped(actionName, reason string) {
+	fmt.Fprintf(a.out, "[ACTION] Skipped: %s (%s)\n", actionName, reason)
+}
+
+func (a *ActionProgressCallback) OnActionTimeout(actionName string, timeout time.Duration) {
+	fmt.Fprintf(a.out, "[ACTION] Timeout: %s (after %v)\n", actionName, timeout)
+}
+
+func (a *ActionProgressCallback) OnActionCancelled(actionName string) {
+	fmt.Fprintf(a.out, "[ACTION] Cancelled: %s\n", actionName)
+}
+
+func (a *ActionProgressCallback) OnRetryAttempt(actionName string, attempt, maxAttempts int, err error) {
+	fmt.Fprintf(a.out, "[ACTION] Retry %d/%d for %s: %v\n", attempt, maxAttempts, actionName, err)
+}
+
+func (a *ActionProgressCallback) OnForEachProgress(actionName string, completed, total int) {
+	fmt.Fprintf(a.out, "[ACTION] %s: %d/%d iterations complete\n", actionName, completed, total)
+}
+
+func (a *ActionProgressCallback) OnPhaseStart(phase int, actionNames []string) {
+	fmt.Fprintf(a.out, "[PHASE] Starting phase %d: %s\n", phase, strings.Join(actionNames, ", "))
+}
+
+func (a *ActionProgressCallback) OnPhaseComplete(phase int) {
+	fmt.Fprintf(a.out, "[PHASE] Completed phase %d\n", phase)
+}
+
+func (a *ActionProgressCallback) OnFinallyStart() {
+	fmt.Fprintf(a.out, "[FINALLY] Starting finally section\n")
+}
+
+func (a *ActionProgressCallback) OnFinallyComplete() {
+	fmt.Fprintf(a.out, "[FINALLY] Completed finally section\n")
 }

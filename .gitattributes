@@ -1,0 +1,27 @@
+# Detect text files automatically
+* text=auto eol=lf
+
+# Force LF line ending on these files
+*.sh text eol=lf
+*.json text eol=lf
+*.xml text eol=lf
+*.md text eol=lf
+
+ks.cfg text eol=lf
+preseed.cfg text eol=lf
+
+# Force CRLF line ending on these files
+*.bat text eol=crlf
+*.ps1 text eol=lf
+
+# Force binary on these files
+*.cer binary
+*.jpg binary
+*.png binary
+*.exe binary
+
+# Detect yaml files automatically
+*.yml linguist-detectable=true
+*.yml linguist-language=YAML
+*.yaml linguist-detectable=true
+*.yaml linguist-language=YAML

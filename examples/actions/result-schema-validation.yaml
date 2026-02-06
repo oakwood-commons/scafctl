@@ -1,0 +1,162 @@
+# Result Schema Validation Example
+# Demonstrates using resultSchema to validate action outputs using JSON Schema.
+# This feature enables self-documenting actions and catches
+# result mismatches early at runtime.
+#
+# Uses JSON Schema 2020-12 for validation.
+# See: https://json-schema.org/
+#
+# Run: scafctl run solution -f examples/actions/result-schema-validation.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: result-schema-validation
+  version: 1.0.0
+  description: Example demonstrating result schema validation for actions
+
+spec:
+  resolvers:
+    user-id:
+      description: The user ID to look up
+      type: int
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: 42
+
+  workflow:
+    actions:
+      # Example 1: Basic result schema with required properties
+      fetch-user:
+        description: Fetch user details with validated result schema
+        displayName: Fetch User
+        provider: exec
+        inputs:
+          shell: true
+          command: |
+            echo '{"id": 42, "name": "John Doe", "email": "john@example.com", "active": true}'
+          output: json
+        # Result schema using standard JSON Schema
+        resultSchema:
+          type: object
+          description: User profile data
+          required:
+            - id
+            - name
+          properties:
+            id:
+              type: integer
+              description: Unique user identifier
+            name:
+              type: string
+              description: User's full name
+              minLength: 1
+              maxLength: 100
+            email:
+              type: string
+              description: User's email address
+              pattern: "^[^@]+@[^@]+\\.[^@]+$"
+            active:
+              type: boolean
+              description: Whether the user is active
+
+      # Example 2: Array result with item validation
+      list-tags:
+        description: List tags with array schema validation
+        provider: exec
+        inputs:
+          shell: true
+          command: |
+            echo '["go", "cli", "tools", "automation"]'
+          output: json
+        resultSchema:
+          type: array
+          description: List of tags
+          minItems: 1
+          maxItems: 10
+          items:
+            type: string
+            description: Tag name
+
+      # Example 3: Nested object validation
+      get-deployment-info:
+        description: Get deployment status with nested schema
+        provider: exec
+        inputs:
+          shell: true
+          command: |
+            echo '{"status": "healthy", "replicas": 3, "metadata": {"version": "1.2.3", "environment": "production"}}'
+          output: json
+        resultSchema:
+          type: object
+          required:
+            - status
+          properties:
+            status:
+              type: string
+              description: Deployment health status
+              enum:
+                - healthy
+                - degraded
+                - failed
+            replicas:
+              type: integer
+              description: Number of running replicas
+              minimum: 0
+              maximum: 100
+            metadata:
+              type: object
+              description: Additional deployment metadata
+              properties:
+                version:
+                  type: string
+                  description: Deployed version
+                  pattern: "^\\d+\\.\\d+\\.\\d+$"
+                environment:
+                  type: string
+                  description: Deployment environment
+                  enum:
+                    - development
+                    - staging
+                    - production
+
+      # Example 4: additionalProperties: false rejects unexpected properties
+      strict-config:
+        description: Configuration with strict schema (no extra properties allowed)
+        provider: exec
+        inputs:
+          shell: true
+          command: |
+            echo '{"port": 8080, "host": "localhost"}'
+          output: json
+        resultSchema:
+          type: object
+          additionalProperties: false
+          required:
+            - port
+            - host
+          properties:
+            port:
+              type: integer
+              minimum: 1
+              maximum: 65535
+            host:
+              type: string
+
+      # Example 5: Using results from validated actions
+      summary:
+        description: Create summary using validated action results
+        provider: exec
+        dependsOn:
+          - fetch-user
+          - list-tags
+          - get-deployment-info
+        inputs:
+          shell: true
+          command:
+            tmpl: |
+              echo "User: {{ index .__actions.fetch-user.results "name" }}"
+              echo "Tags: {{ len .__actions.list-tags.results }} items"
+              echo "Deployment: {{ index .__actions.get-deployment-info.results "status" }}"

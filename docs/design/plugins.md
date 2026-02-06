@@ -206,11 +206,28 @@ Providers never see unresolved CEL, templates, or resolver references. All provi
 
 ## Plugin Discovery
 
-Plugins are discovered via configured locations, such as:
+Plugins are discovered via multiple mechanisms:
 
-- A plugin directory on disk
+- The local catalog (built or pulled plugins)
+- Configured plugin directories on disk
 - Explicit configuration
 - Environment-based paths
+- Solution dependencies (automatically fetched from remote catalogs)
+
+When a solution declares plugin dependencies:
+
+```yaml
+dependencies:
+  plugins:
+    - name: aws-provider
+      version: ^1.5.0
+```
+
+scafctl will:
+1. Check if the plugin exists in the local catalog
+2. Pull missing plugins from configured remote catalogs
+3. Validate version constraints are met
+4. Load the plugin binary
 
 Discovery does not execute plugins. Execution occurs only when a provider is invoked.
 
@@ -291,3 +308,9 @@ Plugins are an implementation detail that enables extensibility.
 ## Summary
 
 Plugins are the extensibility layer of scafctl. They exist to supply providers in an isolated, versioned, and scalable way using go-plugin. Plugins are not a new execution model or abstraction. They are the mechanism by which providers are distributed and invoked, keeping the core system small, stable, and extensible.
+
+Plugins are distributed through the catalog system as OCI artifacts, enabling:
+- Versioned plugin releases with semantic versioning
+- Multi-platform support (linux/amd64, darwin/arm64, etc.)
+- Offline distribution via `scafctl save/load`
+- Automatic dependency resolution when solutions declare required plugins

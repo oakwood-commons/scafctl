@@ -14,19 +14,18 @@ func CommandRun(cliParams *settings.Run, ioStreams *terminal.IOStreams, path str
 		Use:     "run",
 		Aliases: []string{"r"},
 		Short:   fmt.Sprintf("Runs %s solutions", settings.CliBinaryName),
-		Long: `Run executes solutions by resolving all defined resolvers in dependency order.
+		Long: `Run executes solutions by resolving all defined resolvers in dependency order,
+then executing actions if a workflow is defined.
 
 Resolvers within the same dependency phase execute concurrently for optimal performance.
-The command outputs the resolved values in JSON format by default.
+Actions are executed in dependency phases after resolvers complete.
 
 SUBCOMMANDS:
-  solution  Run a solution's resolvers (default)
-  workflow  Run a solution's complete workflow (resolvers + actions)`,
+  solution  Run a solution (resolvers + actions)`,
 		SilenceUsage: true,
 	}
 
 	cCmd.AddCommand(CommandSolution(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
-	cCmd.AddCommand(CommandWorkflow(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
 
 	return cCmd
 }

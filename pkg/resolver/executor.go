@@ -11,6 +11,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
 // RegistryInterface defines the interface for provider registries
@@ -120,9 +121,9 @@ func WithSkipValidation(enabled bool) ExecutorOption {
 func NewExecutor(registry RegistryInterface, opts ...ExecutorOption) *Executor {
 	executor := &Executor{
 		registry:       registry,
-		timeout:        30 * time.Second, // 30 second default per resolver
-		maxConcurrency: 0,                // unlimited by default
-		phaseTimeout:   5 * time.Minute,  // 5 minute default per phase
+		timeout:        settings.DefaultResolverTimeout,
+		maxConcurrency: 0, // unlimited by default
+		phaseTimeout:   settings.DefaultPhaseTimeout,
 	}
 
 	for _, opt := range opts {
@@ -130,6 +131,60 @@ func NewExecutor(registry RegistryInterface, opts ...ExecutorOption) *Executor {
 	}
 
 	return executor
+}
+
+// ConfigInput holds the configuration values for resolver executor initialization.
+// This mirrors config.ResolverConfig but avoids circular dependencies.
+type ConfigInput struct {
+	// Timeout is the default timeout per resolver execution
+	Timeout time.Duration
+	// PhaseTimeout is the maximum time for each resolution phase
+	PhaseTimeout time.Duration
+	// MaxConcurrency is the maximum concurrent resolvers per phase (0 = unlimited)
+	MaxConcurrency int
+	// WarnValueSize is the warn threshold in bytes (0 = disabled)
+	WarnValueSize int64
+	// MaxValueSize is the max value size in bytes (0 = disabled)
+	MaxValueSize int64
+	// ValidateAll enables collecting all errors instead of stopping at first
+	ValidateAll bool
+}
+
+// NewExecutorFromAppConfig creates a new resolver executor using app configuration.
+// CLI flags can override these defaults using the returned executor options.
+//
+// Example:
+//
+//	cfg := resolver.ResolverConfigInput{
+//	    Timeout:        30 * time.Second,
+//	    PhaseTimeout:   5 * time.Minute,
+//	    MaxConcurrency: 0,
+//	}
+//	opts := resolver.OptionsFromAppConfig(cfg)
+//	executor := resolver.NewExecutor(registry, opts...)
+func OptionsFromAppConfig(cfg ConfigInput) []ExecutorOption {
+	var opts []ExecutorOption
+
+	if cfg.Timeout > 0 {
+		opts = append(opts, WithDefaultTimeout(cfg.Timeout))
+	}
+	if cfg.PhaseTimeout > 0 {
+		opts = append(opts, WithPhaseTimeout(cfg.PhaseTimeout))
+	}
+	if cfg.MaxConcurrency > 0 {
+		opts = append(opts, WithMaxConcurrency(cfg.MaxConcurrency))
+	}
+	if cfg.WarnValueSize > 0 {
+		opts = append(opts, WithWarnValueSize(cfg.WarnValueSize))
+	}
+	if cfg.MaxValueSize > 0 {
+		opts = append(opts, WithMaxValueSize(cfg.MaxValueSize))
+	}
+	if cfg.ValidateAll {
+		opts = append(opts, WithValidateAll(true))
+	}
+
+	return opts
 }
 
 // Execute runs all resolvers in phases and returns the enriched context.

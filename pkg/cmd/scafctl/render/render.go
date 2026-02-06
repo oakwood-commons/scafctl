@@ -12,7 +12,7 @@ import (
 func CommandRender(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
 	cCmd := &cobra.Command{
 		Use:     "render",
-		Aliases: []string{"r"},
+		Aliases: []string{"rn"},
 		Short:   fmt.Sprintf("Renders %s artifacts for external execution", settings.CliBinaryName),
 		Long: `Render produces executor-ready artifacts from solutions.
 
@@ -21,9 +21,8 @@ by external execution engines. This enables decoupled architecture where
 scafctl handles resolution and graph building while external systems handle
 actual execution.
 
-OUTPUT FORMATS:
-  json    JSON output (default) - compact, machine-readable
-  yaml    YAML output - human-readable
+SUBCOMMANDS:
+  solution  Render a solution's action graph, dependency graph, or snapshot
 
 The rendered artifact includes:
   - Action definitions with materialized inputs
@@ -34,7 +33,7 @@ The rendered artifact includes:
 		SilenceUsage: true,
 	}
 
-	cCmd.AddCommand(CommandWorkflow(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
+	cCmd.AddCommand(CommandSolution(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
 
 	return cCmd
 }

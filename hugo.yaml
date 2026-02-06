@@ -1,0 +1,60 @@
+# Hugo Configuration for scafctl
+# Documentation: https://gohugo.io/getting-started/configuration/
+
+baseURL: "https://oakwood-commons.github.io/scafctl/"
+languageCode: "en-us"
+title: "scafctl"
+
+# Use Hugo Modules for theme (no git submodule needed)
+module:
+  imports:
+    - path: github.com/alex-shpak/hugo-book
+
+# Repository information
+params:
+  description: "CLI tool using CEL for dynamic configuration evaluation and template processing"
+  github_repo: "https://github.com/oakwood-commons/scafctl"
+  github_project_repo: "https://github.com/oakwood-commons/scafctl"
+
+  # Book theme specific
+  BookMenuBundle: /menu
+  BookSection: docs
+  BookRepo: "https://github.com/oakwood-commons/scafctl"
+  BookEditPath: "edit/main/docs/"
+  BookDateFormat: "January 2, 2006"
+  BookSearch: true
+  BookComments: false
+  BookToC: true
+
+# Enable syntax highlighting
+markup:
+  highlight:
+    style: github-dark
+    lineNos: false
+    codeFences: true
+    guessSyntax: true
+  goldmark:
+    renderer:
+      unsafe: true
+
+# Menu structure
+menu:
+  before: []
+  after:
+    - name: "GitHub"
+      url: "https://github.com/oakwood-commons/scafctl"
+      weight: 10
+
+# Output formats
+outputs:
+  home:
+    - HTML
+    - RSS
+    - JSON
+
+# Enable JSON for search
+outputFormats:
+  JSON:
+    mediaType: application/json
+    baseName: search
+    isPlainText: true

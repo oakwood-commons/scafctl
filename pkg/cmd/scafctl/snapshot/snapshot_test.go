@@ -21,18 +21,15 @@ func TestCommandSnapshot(t *testing.T) {
 	assert.NotEmpty(t, cmd.Long)
 	assert.NotEmpty(t, cmd.Example)
 
-	// Verify subcommands are added
+	// Verify subcommands are added (save was moved to render solution --snapshot)
 	subcommands := cmd.Commands()
-	assert.Len(t, subcommands, 3, "should have 3 subcommands")
+	assert.Len(t, subcommands, 2, "should have 2 subcommands (show, diff)")
 
-	foundSave := false
 	foundShow := false
 	foundDiff := false
 
 	for _, sub := range subcommands {
 		switch sub.Name() {
-		case "save":
-			foundSave = true
 		case "show":
 			foundShow = true
 		case "diff":
@@ -40,7 +37,6 @@ func TestCommandSnapshot(t *testing.T) {
 		}
 	}
 
-	assert.True(t, foundSave, "save subcommand should be present")
 	assert.True(t, foundShow, "show subcommand should be present")
 	assert.True(t, foundDiff, "diff subcommand should be present")
 }

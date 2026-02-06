@@ -10,6 +10,36 @@ Resolvers do not cause side effects. They only compute values.
 
 ---
 
+## Implementation Status
+
+| Feature | Status | Location |
+|---------|--------|----------|
+| Resolver struct (Name, Description, Type, When, etc.) | ✅ Implemented | `pkg/resolver/resolver.go` |
+| Resolver Context (`sync.Map`, thread-safe) | ✅ Implemented | `pkg/resolver/context.go` |
+| ValueRef (Literal, Resolver, Expr, Tmpl) | ✅ Implemented | `pkg/spec/valueref.go` |
+| Phase-based execution (DAG ordering) | ✅ Implemented | `pkg/resolver/phase.go` |
+| Dependency extraction (CEL, templates, `dependsOn`) | ✅ Implemented | `pkg/resolver/graph.go` |
+| Cycle detection | ✅ Implemented | Uses `pkg/dag` |
+| Type coercion (string, int, float, bool, array, any) | ✅ Implemented | `pkg/spec/types.go` |
+| Additional types: `time`, `duration` | ✅ Implemented | `pkg/spec/types.go` |
+| Special symbols (`__self`, `__item`, `__index`) | ✅ Implemented | `pkg/resolver/executor.go` |
+| Iteration aliases (`item`, `index` in forEach) | ✅ Implemented | `pkg/spec/foreach.go` |
+| Error handling (ExecutionError, AggregatedValidationError) | ✅ Implemented | `pkg/resolver/errors.go` |
+| Redaction for sensitive values | ✅ Implemented | `RedactedError`, snapshots |
+| Timeout configuration (resolver, phase, default) | ✅ Implemented | `ExecutorOption` functions |
+| Concurrency control (`maxConcurrency`) | ✅ Implemented | `WithMaxConcurrency()` |
+| Progress callbacks | ✅ Implemented | `ProgressCallback` interface |
+| Snapshots | ✅ Implemented | `pkg/resolver/snapshot.go` |
+| Graph visualization (DOT, Mermaid, ASCII, JSON) | ✅ Implemented | `pkg/resolver/graph.go` |
+| Prometheus metrics | ✅ Implemented | `pkg/resolver/metrics.go` |
+| forEach in transform | ✅ Implemented | `ForEachClause` |
+| `onError` behavior | ✅ Implemented | `ErrorBehavior` type |
+| ValidateAll mode (`--validate-all`) | ✅ Implemented | `WithValidateAll()` |
+| SkipValidation mode (`--skip-validation`) | ✅ Implemented | `WithSkipValidation()` |
+| Value size limits | ✅ Implemented | `WarnValueSize`, `MaxValueSize` |
+
+---
+
 ## Responsibilities
 
 A resolver is responsible for:
@@ -41,6 +71,8 @@ Resolvers evaluate expressions against a single resolver context object named `_
 **Special symbols:**
 
 - `__self` refers to the current value being transformed or validated
+- `__item` refers to the current element in a forEach iteration
+- `__index` refers to the current zero-based index in a forEach iteration
 - In the resolve phase, `__self` represents the value from the previous source (available in `until:` conditions)
 - In the transform phase, `__self` is the value from the previous transform step
 - In the validate phase, `__self` is the final transformed value
@@ -81,7 +113,18 @@ Resolvers support optional type declarations for validation and automatic type c
 - `float` - Floating-point numbers
 - `bool` - Boolean true/false
 - `array` - Ordered lists (coerces single values to single-element arrays)
+- `time` - Time values (parses ISO 8601 strings like `2026-01-14T12:00:00Z`)
+- `duration` - Duration values (parses Go duration strings like `5m`, `1h30m`, `500ms`)
 - `any` - No type constraint (default, use for maps/objects with dynamic structure)
+
+### Type Aliases
+
+For convenience, the following aliases are supported:
+
+- `timestamp`, `datetime` → `time`
+- `integer` → `int`
+- `number` → `float`
+- `boolean` → `bool`
 
 ### Type Declaration
 
@@ -127,6 +170,9 @@ When a type is explicitly declared, scafctl will attempt to coerce the resolved 
 - `123` → `[123]` (single value to array)
 - `["a", "b"]` → `["a", "b"]` (array unchanged)
 - `[[1, 2]]` → `[[1, 2]]` (already an array, passes through)
+- `"2026-01-14T12:00:00Z"` → `time.Time` (string to time)
+- `"5m30s"` → `time.Duration` (string to duration)
+- `"-1h"` → `time.Duration` (negative duration)
 
 **Coercion rules:**
 
@@ -302,6 +348,8 @@ spec:
 **Reserved names:**
 
 - `__self` - Used for current value in transform/validate contexts
+- `__item` - Used for current element in forEach iterations
+- `__index` - Used for current index in forEach iterations
 - Any name starting with `__` is reserved for future internal use
 
 ---
@@ -1708,6 +1756,40 @@ In this example:
 
 Retry logic is a provider concern, not a resolver concern. Providers may implement their own retry mechanisms.
 
+### Validate-All Mode
+
+> **Status**: ✅ Implemented via `--validate-all` flag
+
+By default, resolver execution stops at the first error. Use `--validate-all` to collect all errors:
+
+~~~bash
+scafctl run solution myapp --validate-all
+~~~
+
+**Behavior in validate-all mode:**
+
+- Execution continues even when resolvers fail
+- Resolvers that depend on failed resolvers are skipped (marked as dependency-skipped)
+- All errors are collected into an `AggregatedExecutionError`
+- The final error contains all failure details for comprehensive reporting
+
+This mode is useful for:
+- CI/CD pipelines that need to report all validation failures at once
+- IDE integrations that show all problems
+- Debugging complex resolver graphs
+
+### Skip Validation Mode
+
+> **Status**: ✅ Implemented via `--skip-validation` flag
+
+Skip the validation phase for all resolvers:
+
+~~~bash
+scafctl run solution myapp --skip-validation
+~~~
+
+This is useful during development when validation rules are being refined.
+
 ### Context Cancellation
 
 Resolver execution respects context cancellation for graceful shutdown.
@@ -1797,6 +1879,17 @@ Resolver values are stored in memory for the duration of solution execution. Con
 - Avoid emitting very large values (multi-MB) from resolvers
 - Large datasets should be processed incrementally rather than loaded entirely into resolver context
 - The `sync.Map` storing resolver values is held in memory until solution execution completes
+
+**Value size limits:**
+
+> **Status**: ✅ Implemented via executor options
+
+scafctl supports configurable value size limits:
+
+- **Warn threshold** (`WarnValueSize`): Log a warning when a resolver value exceeds this size
+- **Max threshold** (`MaxValueSize`): Fail the resolver when value exceeds this size
+
+These can be configured via app configuration or executor options.
 
 **Best practices for large data:**
 
@@ -2325,6 +2418,39 @@ spec:
               expression: "__self in [\"dev\", \"staging\", \"prod\"]"
             message: "Invalid environment"
 ~~~
+
+---
+
+## Observability & Metrics
+
+> **Status**: ✅ Implemented in `pkg/resolver/metrics.go`
+
+Resolver execution is instrumented for observability via Prometheus metrics:
+
+**`scafctl_resolver_execution_duration_seconds`** (Histogram)
+- Labels: `resolver_name`, `status` (success/failed/skipped)
+- Tracks total resolver execution time
+
+**`scafctl_resolver_phase_duration_seconds`** (Histogram)
+- Labels: `resolver_name`, `phase` (resolve/transform/validate)
+- Tracks per-phase execution time
+
+**`scafctl_resolver_executions_total`** (Counter)
+- Labels: `resolver_name`, `status`
+- Tracks total resolver execution count
+
+**`scafctl_resolver_provider_calls_total`** (Counter)
+- Labels: `resolver_name`, `provider`, `phase`
+- Tracks provider invocations per resolver
+
+**`scafctl_resolver_value_size_bytes`** (Histogram)
+- Labels: `resolver_name`
+- Tracks resolver value sizes
+
+**`scafctl_resolver_concurrent_executions`** (Gauge)
+- Tracks current number of concurrent resolver executions
+
+Metrics are registered via `RegisterResolverMetrics()` and recorded automatically during execution.
 
 ---
 

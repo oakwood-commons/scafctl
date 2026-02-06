@@ -82,6 +82,92 @@ config := &httpc.ClientConfig{
 client := httpc.NewClient(config)
 ```
 
+### From Application Config
+
+The HTTP client can be initialized directly from the application configuration file (`~/.scafctl/config.yaml`):
+
+```go
+import (
+    "github.com/oakwood-commons/scafctl/pkg/config"
+    "github.com/oakwood-commons/scafctl/pkg/httpc"
+)
+
+// Load application config
+mgr := config.NewManager("")
+cfg, err := mgr.Load()
+if err != nil {
+    // handle error
+}
+
+// Create HTTP client from config
+client := httpc.NewClientFromAppConfig(&cfg.HTTPClient, logger)
+```
+
+**Config file example** (`~/.scafctl/config.yaml`):
+
+```yaml
+version: 1
+
+httpClient:
+  timeout: "60s"
+  retryMax: 5
+  retryWaitMin: "2s"
+  retryWaitMax: "60s"
+  enableCache: true
+  cacheType: "filesystem"
+  cacheDir: "~/.scafctl/http-cache"
+  cacheTTL: "30m"
+  enableCircuitBreaker: true
+  circuitBreakerMaxFailures: 3
+  circuitBreakerOpenTimeout: "1m"
+  circuitBreakerHalfOpenMaxRequests: 2
+  enableCompression: true
+```
+
+All config values can be overridden via environment variables with the `SCAFCTL_` prefix:
+
+```bash
+export SCAFCTL_HTTPCLIENT_TIMEOUT=120s
+export SCAFCTL_HTTPCLIENT_RETRYMAX=10
+```
+
+### Per-Catalog Configuration
+
+For catalogs that require different HTTP settings, you can use `MergeHTTPClientConfig`:
+
+```go
+// Get global config
+globalHTTPConfig := &cfg.HTTPClient
+
+// Get per-catalog config (may be nil)
+catalog, _ := cfg.GetCatalog("slow-api")
+perCatalogConfig := catalog.HTTPClient
+
+// Merge: per-catalog values override global values
+mergedConfig := httpc.MergeHTTPClientConfig(globalHTTPConfig, perCatalogConfig)
+
+// Create client with merged config
+client := httpc.NewClientFromAppConfig(mergedConfig, logger)
+```
+
+**Config file example with per-catalog overrides**:
+
+```yaml
+version: 1
+
+httpClient:
+  timeout: "30s"
+  retryMax: 3
+
+catalogs:
+  - name: slow-api
+    type: http
+    url: https://slow-api.example.com
+    httpClient:
+      timeout: "120s"  # Override for this catalog only
+      retryMax: 10
+```
+
 ## Configuration Options
 
 ### ClientConfig Fields

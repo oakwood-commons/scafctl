@@ -1,7 +1,7 @@
 # Hello World Action Example
 # The simplest possible workflow with a single action.
 #
-# Run: scafctl run workflow -f examples/actions/hello-world.yaml
+# Run: scafctl run solution -f examples/actions/hello-world.yaml
 
 apiVersion: scafctl.io/v1
 kind: Solution

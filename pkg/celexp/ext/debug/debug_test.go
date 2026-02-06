@@ -1,28 +1,45 @@
 package debug
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/google/cel-go/cel"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
+// newTestWriter creates a Writer for testing that writes to the provided buffer.
+// Returns the Writer and the error output buffer (where DebugOut writes).
+func newTestWriter() (*writer.Writer, *bytes.Buffer) {
+	ioStreams, _, errBuf := terminal.NewTestIOStreams()
+	cliParams := &settings.Run{
+		NoColor:     true,
+		IsQuiet:     false,
+		MinLogLevel: -1, // Enable debug output
+	}
+	w := writer.New(ioStreams, cliParams)
+	return w, errBuf
+}
+
 func TestDebugOutFunc_Metadata(t *testing.T) {
-	ioStreams, _, _ := terminal.NewTestIOStreams()
-	debugFunc := DebugOutFunc(ioStreams)
+	w, _ := newTestWriter()
+	debugFunc := DebugOutFunc(w)
 
 	assert.Equal(t, "debug.out", debugFunc.Name)
-	assert.Equal(t, "Outputs a debug message to the console and returns the value for inline debugging. Use debug.out(message) to print and return a message, or debug.out(message, value) to print a message and return a different value", debugFunc.Description)
+	assert.Equal(t, "Outputs a debug message to the console. Use debug.out(message) to print a message (returns null), or debug.out(message, value) to print a message and return a value for inline debugging", debugFunc.Description)
 	assert.NotEmpty(t, debugFunc.EnvOptions)
 }
 
 func TestDebugOutFunc_OutputCapture(t *testing.T) {
-	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
-	debugFunc := DebugOutFunc(ioStreams)
+	w, outBuf := newTestWriter()
+	debugFunc := DebugOutFunc(w)
 
 	env, err := cel.NewEnv(debugFunc.EnvOptions...)
 	require.NoError(t, err)
@@ -69,8 +86,8 @@ func TestDebugOutFunc_OutputCapture(t *testing.T) {
 }
 
 func TestDebugOutFunc_TwoArgumentOverload(t *testing.T) {
-	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
-	debugFunc := DebugOutFunc(ioStreams)
+	w, outBuf := newTestWriter()
+	debugFunc := DebugOutFunc(w)
 
 	env, err := cel.NewEnv(debugFunc.EnvOptions...)
 	require.NoError(t, err)
@@ -134,8 +151,8 @@ func TestDebugOutFunc_TwoArgumentOverload(t *testing.T) {
 }
 
 func TestDebugOutFunc_CELIntegration(t *testing.T) {
-	ioStreams, _, _ := terminal.NewTestIOStreams()
-	debugFunc := DebugOutFunc(ioStreams)
+	w, _ := newTestWriter()
+	debugFunc := DebugOutFunc(w)
 
 	env, err := cel.NewEnv(debugFunc.EnvOptions...)
 	require.NoError(t, err)
@@ -143,51 +160,30 @@ func TestDebugOutFunc_CELIntegration(t *testing.T) {
 	tests := []struct {
 		name       string
 		expression string
-		checkValue func(t *testing.T, val interface{})
 	}{
 		{
-			name:       "debug string value",
+			name:       "debug string value returns null",
 			expression: `debug.out("test value")`,
-			checkValue: func(t *testing.T, val interface{}) {
-				assert.Equal(t, "test value", val)
-			},
 		},
 		{
-			name:       "debug integer value",
+			name:       "debug integer value returns null",
 			expression: `debug.out(42)`,
-			checkValue: func(t *testing.T, val interface{}) {
-				assert.Equal(t, int64(42), val)
-			},
 		},
 		{
-			name:       "debug boolean value",
+			name:       "debug boolean value returns null",
 			expression: `debug.out(true)`,
-			checkValue: func(t *testing.T, val interface{}) {
-				assert.Equal(t, true, val)
-			},
 		},
 		{
-			name:       "debug list value",
+			name:       "debug list value returns null",
 			expression: `debug.out(["a", "b", "c"])`,
-			checkValue: func(t *testing.T, val interface{}) {
-				// CEL returns lists as []ref.Val, just verify it's not nil
-				assert.NotNil(t, val)
-			},
 		},
 		{
-			name:       "debug map value",
+			name:       "debug map value returns null",
 			expression: `debug.out({"key": "value"})`,
-			checkValue: func(t *testing.T, val interface{}) {
-				// CEL returns maps with ref.Val keys/values, just verify it's not nil
-				assert.NotNil(t, val)
-			},
 		},
 		{
-			name:       "debug empty string",
+			name:       "debug empty string returns null",
 			expression: `debug.out("")`,
-			checkValue: func(t *testing.T, val interface{}) {
-				assert.Equal(t, "", val)
-			},
 		},
 	}
 
@@ -201,14 +197,15 @@ func TestDebugOutFunc_CELIntegration(t *testing.T) {
 
 			result, _, err := prog.Eval(map[string]interface{}{})
 			require.NoError(t, err)
-			tt.checkValue(t, result.Value())
+			// Single-arg debug.out returns structpb.NullValue(0), not Go nil
+			assert.Equal(t, int(0), int(result.Value().(structpb.NullValue)))
 		})
 	}
 }
 
 func TestDebugOutFunc_InlineUsage(t *testing.T) {
-	ioStreams, _, _ := terminal.NewTestIOStreams()
-	debugFunc := DebugOutFunc(ioStreams)
+	w, _ := newTestWriter()
+	debugFunc := DebugOutFunc(w)
 
 	env, err := cel.NewEnv(debugFunc.EnvOptions...)
 	require.NoError(t, err)
@@ -219,29 +216,29 @@ func TestDebugOutFunc_InlineUsage(t *testing.T) {
 		expectedValue interface{}
 	}{
 		{
-			name:          "debug and use string length",
-			expression:    `debug.out("hello").size()`,
+			name:          "debug and use string length with two-arg",
+			expression:    `debug.out("checking", "hello").size()`,
 			expectedValue: int64(5),
 		},
 		{
-			name:          "debug and use string concatenation",
-			expression:    `debug.out("hello") + " world"`,
+			name:          "debug and use string concatenation with two-arg",
+			expression:    `debug.out("value", "hello") + " world"`,
 			expectedValue: "hello world",
 		},
 		{
-			name:          "debug and perform arithmetic",
-			expression:    `debug.out(10) + 5`,
+			name:          "debug and perform arithmetic with two-arg",
+			expression:    `debug.out("num", 10) + 5`,
 			expectedValue: int64(15),
 		},
 		{
-			name:          "debug in conditional",
-			expression:    `debug.out(true) ? "yes" : "no"`,
+			name:          "debug in conditional with two-arg",
+			expression:    `debug.out("flag", true) ? "yes" : "no"`,
 			expectedValue: "yes",
 		},
 		{
-			name:          "chained debug calls",
-			expression:    `debug.out(debug.out("nested"))`,
-			expectedValue: "nested",
+			name:          "single-arg returns null",
+			expression:    `debug.out("test") == null`,
+			expectedValue: true,
 		},
 	}
 
@@ -261,8 +258,8 @@ func TestDebugOutFunc_InlineUsage(t *testing.T) {
 }
 
 func TestDebugOutFunc_WithVariables(t *testing.T) {
-	ioStreams, _, _ := terminal.NewTestIOStreams()
-	debugFunc := DebugOutFunc(ioStreams)
+	w, _ := newTestWriter()
+	debugFunc := DebugOutFunc(w)
 
 	env, err := cel.NewEnv(debugFunc.EnvOptions...)
 	require.NoError(t, err)
@@ -272,6 +269,7 @@ func TestDebugOutFunc_WithVariables(t *testing.T) {
 	)
 	require.NoError(t, err)
 
+	// Single-arg returns null
 	ast, issues := env.Compile(`debug.out(myValue)`)
 	if issues != nil {
 		t.Logf("Compilation issues: %v", issues)
@@ -282,13 +280,12 @@ func TestDebugOutFunc_WithVariables(t *testing.T) {
 	require.NoError(t, err)
 
 	testCases := []struct {
-		value    interface{}
-		expected interface{}
+		value interface{}
 	}{
-		{"test string", "test string"},
-		{int64(123), int64(123)},
-		{true, true},
-		{[]string{"a", "b"}, []string{"a", "b"}},
+		{"test string"},
+		{int64(123)},
+		{true},
+		{[]string{"a", "b"}},
 	}
 
 	for _, tc := range testCases {
@@ -296,13 +293,14 @@ func TestDebugOutFunc_WithVariables(t *testing.T) {
 			"myValue": tc.value,
 		})
 		require.NoError(t, err)
-		assert.Equal(t, tc.expected, result.Value())
+		// Single-arg debug.out returns structpb.NullValue(0), not Go nil
+		assert.Equal(t, int(0), int(result.Value().(structpb.NullValue)))
 	}
 }
 
 func TestDebugOutFunc_OutputFormat(t *testing.T) {
-	ioStreams, _, _ := terminal.NewTestIOStreams()
-	debugFunc := DebugOutFunc(ioStreams)
+	w, _ := newTestWriter()
+	debugFunc := DebugOutFunc(w)
 
 	env, err := cel.NewEnv(debugFunc.EnvOptions...)
 	require.NoError(t, err)
@@ -321,8 +319,8 @@ func TestDebugOutFunc_OutputFormat(t *testing.T) {
 }
 
 func TestDebugOutFunc_ComplexExpressions(t *testing.T) {
-	ioStreams, _, _ := terminal.NewTestIOStreams()
-	debugFunc := DebugOutFunc(ioStreams)
+	w, _ := newTestWriter()
+	debugFunc := DebugOutFunc(w)
 
 	env, err := cel.NewEnv(debugFunc.EnvOptions...)
 	require.NoError(t, err)
@@ -335,29 +333,29 @@ func TestDebugOutFunc_ComplexExpressions(t *testing.T) {
 	}{
 		{
 			name:       "debug in list operation",
-			expression: `["a", "b", "c"].map(x, debug.out(x))`,
+			expression: `["a", "b", "c"].map(x, debug.out("item", x))`,
 			checkValue: func(t *testing.T, val interface{}) {
 				// CEL map returns a list, just verify it's not nil
 				assert.NotNil(t, val)
 			},
-			description: "debug each element in list",
+			description: "debug each element in list using two-arg form",
 		},
 		{
 			name:       "debug in filter",
-			expression: `[1, 2, 3, 4, 5].filter(x, debug.out(x) > 2)`,
+			expression: `[1, 2, 3, 4, 5].filter(x, debug.out("checking", x) > 2)`,
 			checkValue: func(t *testing.T, val interface{}) {
 				// CEL filter returns a list, just verify it's not nil
 				assert.NotNil(t, val)
 			},
-			description: "debug during filtering",
+			description: "debug during filtering using two-arg form",
 		},
 		{
 			name:       "debug intermediate calculation",
-			expression: `debug.out(5 * 5) + 10`,
+			expression: `debug.out("result", 5 * 5) + 10`,
 			checkValue: func(t *testing.T, val interface{}) {
 				assert.Equal(t, int64(35), val)
 			},
-			description: "debug intermediate value in calculation",
+			description: "debug intermediate value in calculation using two-arg form",
 		},
 	}
 
@@ -377,8 +375,8 @@ func TestDebugOutFunc_ComplexExpressions(t *testing.T) {
 }
 
 func TestDebugOutFunc_EdgeCases(t *testing.T) {
-	ioStreams, _, _ := terminal.NewTestIOStreams()
-	debugFunc := DebugOutFunc(ioStreams)
+	w, _ := newTestWriter()
+	debugFunc := DebugOutFunc(w)
 
 	env, err := cel.NewEnv(debugFunc.EnvOptions...)
 	require.NoError(t, err)
@@ -392,46 +390,48 @@ func TestDebugOutFunc_EdgeCases(t *testing.T) {
 			name:       "debug null value",
 			expression: `debug.out(null)`,
 			checkValue: func(t *testing.T, val interface{}) {
-				// CEL null values have various representations, just verify no error occurred
-				// The actual value doesn't matter as much as the function executing successfully
-				_ = val
+				// Single-arg returns null
+				assert.Equal(t, int(0), int(val.(structpb.NullValue)))
 			},
 		},
 		{
 			name:       "debug empty list",
 			expression: `debug.out([])`,
 			checkValue: func(t *testing.T, val interface{}) {
-				// Just verify it's not nil - CEL returns []ref.Val
-				assert.NotNil(t, val)
+				// Single-arg returns null
+				assert.Equal(t, int(0), int(val.(structpb.NullValue)))
 			},
 		},
 		{
 			name:       "debug empty map",
 			expression: `debug.out({})`,
 			checkValue: func(t *testing.T, val interface{}) {
-				// Just verify it's not nil - CEL returns map[ref.Val]ref.Val
-				assert.NotNil(t, val)
+				// Single-arg returns null
+				assert.Equal(t, int(0), int(val.(structpb.NullValue)))
 			},
 		},
 		{
 			name:       "debug zero",
 			expression: `debug.out(0)`,
 			checkValue: func(t *testing.T, val interface{}) {
-				assert.Equal(t, int64(0), val)
+				// Single-arg returns null
+				assert.Equal(t, int(0), int(val.(structpb.NullValue)))
 			},
 		},
 		{
 			name:       "debug negative number",
 			expression: `debug.out(-42)`,
 			checkValue: func(t *testing.T, val interface{}) {
-				assert.Equal(t, int64(-42), val)
+				// Single-arg returns null
+				assert.Equal(t, int(0), int(val.(structpb.NullValue)))
 			},
 		},
 		{
 			name:       "debug special characters",
 			expression: `debug.out("hello\nworld\t!")`,
 			checkValue: func(t *testing.T, val interface{}) {
-				assert.Equal(t, "hello\nworld\t!", val)
+				// Single-arg returns null
+				assert.Equal(t, int(0), int(val.(structpb.NullValue)))
 			},
 		},
 	}
@@ -453,8 +453,8 @@ func TestDebugOutFunc_EdgeCases(t *testing.T) {
 }
 
 func BenchmarkDebugOutFunc_CEL(b *testing.B) {
-	ioStreams, _, _ := terminal.NewTestIOStreams()
-	debugFunc := DebugOutFunc(ioStreams)
+	w, _ := newTestWriter()
+	debugFunc := DebugOutFunc(w)
 	env, _ := cel.NewEnv(debugFunc.EnvOptions...)
 	ast, _ := env.Compile(`debug.out("benchmark test")`)
 	prog, _ := env.Program(ast)

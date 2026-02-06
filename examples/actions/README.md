@@ -23,29 +23,35 @@ This directory contains example action configurations demonstrating the Actions 
 
 ```bash
 # Render to JSON (default)
-scafctl render workflow -f examples/actions/hello-world.yaml
+scafctl render solution -f examples/actions/hello-world.yaml
 
 # Render to YAML
-scafctl render workflow -f examples/actions/hello-world.yaml --output=yaml
+scafctl render solution -f examples/actions/hello-world.yaml -o yaml
 
 # Render to file
-scafctl render workflow -f examples/actions/hello-world.yaml --output-file=output.json
+scafctl render solution -f examples/actions/hello-world.yaml -o json > output.json
 ```
 
 ### Run Mode (Direct Execution)
 
 ```bash
-# Run the workflow (shows progress by default)
-scafctl run workflow -f examples/actions/hello-world.yaml
+# Run the solution (shows progress with --progress flag)
+scafctl run solution -f examples/actions/hello-world.yaml
 
-# Run without progress output (for scripts/pipelines)
-scafctl run workflow -f examples/actions/hello-world.yaml --no-progress -o json
+# Run with progress output
+scafctl run solution -f examples/actions/hello-world.yaml --progress
+
+# Run with JSON output (for scripts/pipelines)
+scafctl run solution -f examples/actions/hello-world.yaml -o json
 
 # Dry-run (show what would execute)
-scafctl run workflow -f examples/actions/hello-world.yaml --dry-run
+scafctl run solution -f examples/actions/hello-world.yaml --dry-run
 
 # Override resolver values
-scafctl run workflow -f examples/actions/foreach-deploy.yaml -r targets='["server1","server2"]'
+scafctl run solution -f examples/actions/foreach-deploy.yaml -r targets='["server1","server2"]'
+
+# Run resolvers only (skip actions)
+scafctl run solution -f examples/actions/hello-world.yaml --skip-actions
 ```
 
 ## Concepts Demonstrated

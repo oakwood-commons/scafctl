@@ -14,6 +14,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/styles"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
 
@@ -44,27 +45,22 @@ func CommandVersion(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 			options.IOStreams = ioStreams
 			options.CliParams = cliParams
 
+			// Get writer from parent context or create new one
+			w := writer.FromContext(cCmd.Context())
+			if w == nil {
+				w = writer.New(ioStreams, cliParams)
+			}
+			ctx = writer.WithWriter(ctx, w)
+
 			err := output.ValidateCommands(args)
 			if err != nil {
-				output.NewWriteMessageOptions(
-					options.IOStreams,
-					output.MessageTypeError,
-					options.CliParams.NoColor,
-					options.CliParams.ExitOnError,
-				).WriteMessage(err.Error())
-
+				w.Error(err.Error())
 				return err
 			}
 
 			err = output.ValidateOutputType(options.Output, ValidOutputTypes)
 			if err != nil {
-				output.NewWriteMessageOptions(
-					options.IOStreams,
-					output.MessageTypeError,
-					options.CliParams.NoColor,
-					options.CliParams.ExitOnError,
-				).WriteMessage(err.Error())
-
+				w.Error(err.Error())
 				return err
 			}
 			return options.PrintVersion(ctx)
@@ -77,18 +73,15 @@ func CommandVersion(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 
 func (options *CmdOptionsVersion) PrintVersion(ctx context.Context) error {
 	lgr := logger.FromContext(ctx)
+	w := writer.FromContext(ctx)
 	if options.GetLatestVersion == nil {
 		options.GetLatestVersion = GetLatestVersion
 	}
 	latestVersion, err := options.GetLatestVersion(ctx)
 	if err != nil {
-		output.NewWriteMessageOptions(
-			options.IOStreams,
-			output.MessageTypeWarning,
-			options.CliParams.NoColor,
-			options.CliParams.ExitOnError,
-		).WriteMessage(err.Error())
-
+		if w != nil {
+			w.Warning(err.Error())
+		}
 		latestVersion = "<unable to determine>"
 	}
 	lgr = logger.WithValues(lgr, "latest_version", latestVersion, "current_version", settings.VersionInformation.BuildVersion)

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/metrics"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
 // ErrCircuitBreakerOpen is returned when the circuit breaker is open and prevents requests
@@ -36,9 +37,9 @@ type CircuitBreakerConfig struct {
 // DefaultCircuitBreakerConfig returns default circuit breaker configuration
 func DefaultCircuitBreakerConfig() *CircuitBreakerConfig {
 	return &CircuitBreakerConfig{
-		MaxFailures:         5,
-		OpenTimeout:         30 * time.Second,
-		HalfOpenMaxRequests: 1,
+		MaxFailures:         settings.DefaultCircuitBreakerMaxFailures,
+		OpenTimeout:         settings.DefaultCircuitBreakerOpenTimeout,
+		HalfOpenMaxRequests: settings.DefaultCircuitBreakerHalfOpenRequests,
 	}
 }
 

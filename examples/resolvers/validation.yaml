@@ -23,24 +23,25 @@ spec:
       resolve:
         with:
           - provider: parameter
+            onError: continue
             inputs:
-              name: email
-              default: "user@example.com"
+              key: email
+          - provider: static
+            inputs:
+              value: "user@example.com"
       validate:
         with:
           - provider: validation
             inputs:
-              pattern: "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$"
+              match: "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$"
               message: "Invalid email format"
           - provider: validation
             inputs:
-              expression:
-                expr: "!__self.endsWith('.test')"
+              expression: "!__self.endsWith('.test')"
               message: "Test domain emails are not allowed"
           - provider: validation
             inputs:
-              expression:
-                expr: "size(__self) <= 254"
+              expression: "size(__self) <= 254"
               message: "Email address too long (max 254 characters)"
     
     # Port number validation with range check
@@ -50,20 +51,21 @@ spec:
       resolve:
         with:
           - provider: parameter
+            onError: continue
             inputs:
-              name: port
-              default: 8080
+              key: port
+          - provider: static
+            inputs:
+              value: 8080
       validate:
         with:
           - provider: validation
             inputs:
-              expression:
-                expr: "__self >= 1 && __self <= 65535"
+              expression: "__self >= 1 && __self <= 65535"
               message: "Port must be between 1 and 65535"
           - provider: validation
             inputs:
-              expression:
-                expr: "__self >= 1024"
+              expression: "__self >= 1024"
               message: "Ports below 1024 require root privileges"
     
     # Password validation with multiple rules
@@ -74,36 +76,37 @@ spec:
       resolve:
         with:
           - provider: parameter
+            onError: continue
             inputs:
-              name: password
-              default: "DefaultP@ss1"
+              key: password
+          - provider: static
+            inputs:
+              value: "DefaultP@ss1"
       validate:
         with:
           - provider: validation
             inputs:
-              expression:
-                expr: "size(__self) >= 8"
+              expression: "size(__self) >= 8"
               message: "Password must be at least 8 characters"
           - provider: validation
             inputs:
-              expression:
-                expr: "size(__self) <= 128"
+              expression: "size(__self) <= 128"
               message: "Password must not exceed 128 characters"
           - provider: validation
             inputs:
-              pattern: "[A-Z]"
+              match: "[A-Z]"
               message: "Password must contain at least one uppercase letter"
           - provider: validation
             inputs:
-              pattern: "[a-z]"
+              match: "[a-z]"
               message: "Password must contain at least one lowercase letter"
           - provider: validation
             inputs:
-              pattern: "[0-9]"
+              match: "[0-9]"
               message: "Password must contain at least one digit"
           - provider: validation
             inputs:
-              pattern: "[!@#$%^&*(),.?\":{}|<>]"
+              match: '[!@#$%^&*(),.?":{}|<>]'
               message: "Password must contain at least one special character"
     
     # URL validation
@@ -113,19 +116,21 @@ spec:
       resolve:
         with:
           - provider: parameter
+            onError: continue
             inputs:
-              name: url
-              default: "https://api.example.com/v1"
+              key: url
+          - provider: static
+            inputs:
+              value: "https://api.example.com/v1"
       validate:
         with:
           - provider: validation
             inputs:
-              pattern: "^https?://"
+              match: "^https?://"
               message: "URL must start with http:// or https://"
           - provider: validation
             inputs:
-              expression:
-                expr: "size(__self) <= 2048"
+              expression: "size(__self) <= 2048"
               message: "URL too long (max 2048 characters)"
     
     # Array validation
@@ -135,9 +140,12 @@ spec:
       resolve:
         with:
           - provider: parameter
+            onError: continue
             inputs:
-              name: tags
-              default:
+              key: tags
+          - provider: static
+            inputs:
+              value:
                 - production
                 - web
                 - api
@@ -145,18 +153,15 @@ spec:
         with:
           - provider: validation
             inputs:
-              expression:
-                expr: "size(__self) >= 1"
+              expression: "size(__self) >= 1"
               message: "At least one tag is required"
           - provider: validation
             inputs:
-              expression:
-                expr: "size(__self) <= 10"
+              expression: "size(__self) <= 10"
               message: "Maximum 10 tags allowed"
           - provider: validation
             inputs:
-              expression:
-                expr: "__self.all(t, size(t) <= 50)"
+              expression: "__self.all(t, size(t) <= 50)"
               message: "Each tag must be 50 characters or less"
     
     # Validated configuration output
@@ -167,12 +172,11 @@ spec:
         with:
           - provider: cel
             inputs:
-              expression:
-                expr: |
-                  {
-                    'email': _.email,
-                    'port': _.port,
-                    'apiUrl': _.api_url,
-                    'tags': _.tags,
-                    'passwordSet': size(_.password) > 0
-                  }
+              expression: |
+                {
+                  'email': _.email,
+                  'port': _.port,
+                  'apiUrl': _.api_url,
+                  'tags': _.tags,
+                  'passwordSet': size(_.password) > 0
+                }

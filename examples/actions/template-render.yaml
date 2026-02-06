@@ -9,7 +9,7 @@
 # - Chaining resolvers with dependencies
 # - Using CEL expressions to build dynamic paths
 #
-# Run: scafctl run workflow -f examples/actions/template-render.yaml
+# Run: scafctl run solution -f examples/actions/template-render.yaml
 #
 # After running, check the output:
 #   cat /tmp/scafctl-demo/config.yaml

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -545,4 +546,137 @@ func TestClient_DeleteCacheEntry_NoCacheConfigured(t *testing.T) {
 	// Should not error when cache is not configured
 	err := client.DeleteCacheEntry(ctx, "http://example.com")
 	require.NoError(t, err)
+}
+
+func TestNewClientFromAppConfig_Nil(t *testing.T) {
+	client := NewClientFromAppConfig(nil, logr.Discard())
+	require.NotNil(t, client)
+	// Should use defaults
+	assert.Equal(t, 30*time.Second, client.config.Timeout)
+}
+
+func TestNewClientFromAppConfig_FullConfig(t *testing.T) {
+	enableCache := true
+	enableCircuitBreaker := true
+	enableCompression := false
+
+	cfg := &config.HTTPClientConfig{
+		Timeout:                           "60s",
+		RetryMax:                          5,
+		RetryWaitMin:                      "2s",
+		RetryWaitMax:                      "1m",
+		EnableCache:                       &enableCache,
+		CacheType:                         "memory",
+		CacheTTL:                          "30m",
+		CacheKeyPrefix:                    "test:",
+		MaxCacheFileSize:                  1024,
+		MemoryCacheSize:                   500,
+		EnableCircuitBreaker:              &enableCircuitBreaker,
+		CircuitBreakerMaxFailures:         10,
+		CircuitBreakerOpenTimeout:         "1m",
+		CircuitBreakerHalfOpenMaxRequests: 3,
+		EnableCompression:                 &enableCompression,
+	}
+
+	client := NewClientFromAppConfig(cfg, logr.Discard())
+	require.NotNil(t, client)
+
+	assert.Equal(t, 60*time.Second, client.config.Timeout)
+	assert.Equal(t, 5, client.config.RetryMax)
+	assert.Equal(t, 2*time.Second, client.config.RetryWaitMin)
+	assert.Equal(t, 1*time.Minute, client.config.RetryWaitMax)
+	assert.True(t, client.config.EnableCache)
+	assert.Equal(t, CacheTypeMemory, client.config.CacheType)
+	assert.Equal(t, 30*time.Minute, client.config.CacheTTL)
+	assert.Equal(t, "test:", client.config.CacheKeyPrefix)
+	assert.Equal(t, int64(1024), client.config.MaxCacheFileSize)
+	assert.Equal(t, 500, client.config.MemoryCacheSize)
+	assert.True(t, client.config.EnableCircuitBreaker)
+	assert.Equal(t, 10, client.config.CircuitBreakerConfig.MaxFailures)
+	assert.Equal(t, 1*time.Minute, client.config.CircuitBreakerConfig.OpenTimeout)
+	assert.Equal(t, 3, client.config.CircuitBreakerConfig.HalfOpenMaxRequests)
+	assert.False(t, client.config.EnableCompression)
+}
+
+func TestNewClientFromAppConfig_PartialConfig(t *testing.T) {
+	cfg := &config.HTTPClientConfig{
+		Timeout:  "45s",
+		RetryMax: 7,
+		// Leave other fields empty to use defaults
+	}
+
+	client := NewClientFromAppConfig(cfg, logr.Discard())
+	require.NotNil(t, client)
+
+	assert.Equal(t, 45*time.Second, client.config.Timeout)
+	assert.Equal(t, 7, client.config.RetryMax)
+	// Verify defaults are used for unset fields
+	assert.Equal(t, 1*time.Second, client.config.RetryWaitMin)
+	assert.True(t, client.config.EnableCache)
+}
+
+func TestMergeHTTPClientConfig_NilPerCatalog(t *testing.T) {
+	global := &config.HTTPClientConfig{
+		Timeout:  "30s",
+		RetryMax: 3,
+	}
+
+	merged := MergeHTTPClientConfig(global, nil)
+	assert.Equal(t, global, merged)
+}
+
+func TestMergeHTTPClientConfig_NilGlobal(t *testing.T) {
+	perCatalog := &config.HTTPClientConfig{
+		Timeout:  "60s",
+		RetryMax: 5,
+	}
+
+	merged := MergeHTTPClientConfig(nil, perCatalog)
+	assert.Equal(t, perCatalog, merged)
+}
+
+func TestMergeHTTPClientConfig_Override(t *testing.T) {
+	enableCache := false
+
+	global := &config.HTTPClientConfig{
+		Timeout:         "30s",
+		RetryMax:        3,
+		RetryWaitMin:    "1s",
+		CacheType:       "filesystem",
+		MemoryCacheSize: 1000,
+	}
+
+	perCatalog := &config.HTTPClientConfig{
+		Timeout:     "120s", // Override
+		RetryMax:    10,     // Override
+		EnableCache: &enableCache,
+		// RetryWaitMin not set, should keep global value
+	}
+
+	merged := MergeHTTPClientConfig(global, perCatalog)
+
+	assert.Equal(t, "120s", merged.Timeout)
+	assert.Equal(t, 10, merged.RetryMax)
+	assert.Equal(t, "1s", merged.RetryWaitMin) // From global
+	assert.Equal(t, "filesystem", merged.CacheType)
+	assert.Equal(t, 1000, merged.MemoryCacheSize)
+	require.NotNil(t, merged.EnableCache)
+	assert.False(t, *merged.EnableCache)
+}
+
+func TestMergeHTTPClientConfig_CircuitBreakerOverride(t *testing.T) {
+	global := &config.HTTPClientConfig{
+		CircuitBreakerMaxFailures: 5,
+		CircuitBreakerOpenTimeout: "30s",
+	}
+
+	perCatalog := &config.HTTPClientConfig{
+		CircuitBreakerMaxFailures: 10, // Override
+		// CircuitBreakerOpenTimeout not set, should keep global value
+	}
+
+	merged := MergeHTTPClientConfig(global, perCatalog)
+
+	assert.Equal(t, 10, merged.CircuitBreakerMaxFailures)
+	assert.Equal(t, "30s", merged.CircuitBreakerOpenTimeout) // From global
 }

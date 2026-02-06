@@ -362,7 +362,7 @@ func TestEvaluateExpression_NilResolverData(t *testing.T) {
 
 func TestEvaluateExpression_TypeConversion(t *testing.T) {
 	ctx := context.Background()
-	resolverData := map[string]any{
+	rootData := map[string]any{
 		"data": map[string]any{
 			"nested": map[string]any{
 				"value": int64(100),
@@ -370,11 +370,151 @@ func TestEvaluateExpression_TypeConversion(t *testing.T) {
 		},
 	}
 
-	result, err := EvaluateExpression(ctx, "_.data.nested", resolverData, nil)
+	result, err := EvaluateExpression(ctx, "_.data.nested", rootData, nil)
 	require.NoError(t, err)
 
 	// Verify the nested map was properly converted
 	resultMap, ok := result.(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, int64(100), resultMap["value"])
+}
+
+// Tests for non-map root data types (DynType support)
+
+func TestBuildCELContext_SliceRootData(t *testing.T) {
+	rootData := []any{"a", "b", "c"}
+	envOpts, vars := BuildCELContext(rootData, nil)
+
+	require.Contains(t, vars, "_")
+	assert.Equal(t, rootData, vars["_"])
+	assert.Len(t, vars, 1)
+
+	// Verify CEL can work with slice
+	expr := Expression("size(_)")
+	compiled, err := expr.Compile(envOpts)
+	require.NoError(t, err)
+
+	result, err := compiled.Eval(vars)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), result)
+}
+
+func TestBuildCELContext_SliceIndexAccess(t *testing.T) {
+	rootData := []any{"first", "second", "third"}
+	envOpts, vars := BuildCELContext(rootData, nil)
+
+	expr := Expression("_[0]")
+	compiled, err := expr.Compile(envOpts)
+	require.NoError(t, err)
+
+	result, err := compiled.Eval(vars)
+	require.NoError(t, err)
+	assert.Equal(t, "first", result)
+}
+
+func TestBuildCELContext_StringRootData(t *testing.T) {
+	rootData := "hello world"
+	envOpts, vars := BuildCELContext(rootData, nil)
+
+	require.Contains(t, vars, "_")
+	assert.Equal(t, rootData, vars["_"])
+
+	// Verify CEL can work with string (use size() which is a base CEL function)
+	expr := Expression("size(_)")
+	compiled, err := expr.Compile(envOpts)
+	require.NoError(t, err)
+
+	result, err := compiled.Eval(vars)
+	require.NoError(t, err)
+	assert.Equal(t, int64(11), result) // "hello world" has 11 characters
+}
+
+func TestBuildCELContext_IntRootData(t *testing.T) {
+	rootData := int64(42)
+	envOpts, vars := BuildCELContext(rootData, nil)
+
+	require.Contains(t, vars, "_")
+	assert.Equal(t, rootData, vars["_"])
+
+	// Verify CEL can work with int
+	expr := Expression("_ * 2")
+	compiled, err := expr.Compile(envOpts)
+	require.NoError(t, err)
+
+	result, err := compiled.Eval(vars)
+	require.NoError(t, err)
+	assert.Equal(t, int64(84), result)
+}
+
+func TestBuildCELContext_BoolRootData(t *testing.T) {
+	rootData := true
+	envOpts, vars := BuildCELContext(rootData, nil)
+
+	require.Contains(t, vars, "_")
+	assert.Equal(t, rootData, vars["_"])
+
+	// Verify CEL can work with bool
+	expr := Expression("_ == true")
+	compiled, err := expr.Compile(envOpts)
+	require.NoError(t, err)
+
+	result, err := compiled.Eval(vars)
+	require.NoError(t, err)
+	assert.Equal(t, true, result)
+}
+
+func TestEvaluateExpression_SliceRootData(t *testing.T) {
+	ctx := context.Background()
+	rootData := []any{
+		map[string]any{"name": "item1"},
+		map[string]any{"name": "item2"},
+	}
+
+	// Test identity expression returns raw value
+	result, err := EvaluateExpression(ctx, "_", rootData, nil)
+	require.NoError(t, err)
+
+	resultSlice, ok := result.([]any)
+	require.True(t, ok, "expected []any, got %T", result)
+	assert.Len(t, resultSlice, 2)
+}
+
+func TestEvaluateExpression_SliceOperations(t *testing.T) {
+	ctx := context.Background()
+	rootData := []any{int64(1), int64(2), int64(3), int64(4), int64(5)}
+
+	// Test size
+	result, err := EvaluateExpression(ctx, "size(_)", rootData, nil)
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), result)
+
+	// Test index access
+	result, err = EvaluateExpression(ctx, "_[2]", rootData, nil)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), result)
+
+	// Test filter (if supported)
+	result, err = EvaluateExpression(ctx, "_.filter(x, x > 2)", rootData, nil)
+	require.NoError(t, err)
+	resultSlice, ok := result.([]any)
+	require.True(t, ok)
+	assert.Len(t, resultSlice, 3) // 3, 4, 5
+}
+
+func TestEvaluateExpression_StringRootData(t *testing.T) {
+	ctx := context.Background()
+	rootData := "hello"
+
+	result, err := EvaluateExpression(ctx, "_ + ' world'", rootData, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "hello world", result)
+}
+
+func TestEvaluateExpression_IntRootData(t *testing.T) {
+	ctx := context.Background()
+	rootData := int64(100)
+
+	result, err := EvaluateExpression(ctx, "_ / 4", rootData, nil)
+	require.NoError(t, err)
+	assert.Equal(t, int64(25), result)
 }

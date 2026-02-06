@@ -20,15 +20,17 @@ spec:
       resolve:
         with:
           - provider: parameter
+            onError: continue
             inputs:
-              name: env
-              default: development
+              key: env
+          - provider: static
+            inputs:
+              value: development
       validate:
         with:
           - provider: validation
             inputs:
-              expression:
-                expr: "__self in ['development', 'staging', 'production']"
+              expression: "__self in ['development', 'staging', 'production']"
               message: "Environment must be development, staging, or production"
     
     # Environment-specific database configuration
@@ -39,27 +41,26 @@ spec:
         with:
           - provider: cel
             inputs:
-              expression:
-                expr: |
-                  _.environment == 'production' ? {
-                    'host': 'db.prod.example.com',
-                    'port': 5432,
-                    'name': 'app_production',
-                    'poolSize': 20,
-                    'ssl': true
-                  } : _.environment == 'staging' ? {
-                    'host': 'db.staging.example.com',
-                    'port': 5432,
-                    'name': 'app_staging',
-                    'poolSize': 10,
-                    'ssl': true
-                  } : {
-                    'host': 'localhost',
-                    'port': 5432,
-                    'name': 'app_development',
-                    'poolSize': 5,
-                    'ssl': false
-                  }
+              expression: |
+                _.environment == 'production' ? {
+                  'host': 'db.prod.example.com',
+                  'port': 5432,
+                  'name': 'app_production',
+                  'poolSize': 20,
+                  'ssl': true
+                } : _.environment == 'staging' ? {
+                  'host': 'db.staging.example.com',
+                  'port': 5432,
+                  'name': 'app_staging',
+                  'poolSize': 10,
+                  'ssl': true
+                } : {
+                  'host': 'localhost',
+                  'port': 5432,
+                  'name': 'app_development',
+                  'poolSize': 5,
+                  'ssl': false
+                }
     
     # Environment-specific logging
     logging:
@@ -69,14 +70,13 @@ spec:
         with:
           - provider: cel
             inputs:
-              expression:
-                expr: |
-                  {
-                    'level': _.environment == 'production' ? 'warn' : 'debug',
-                    'format': _.environment == 'production' ? 'json' : 'text',
-                    'output': _.environment == 'production' ? 'stdout' : 'stderr',
-                    'includeStackTrace': _.environment != 'production'
-                  }
+              expression: |
+                {
+                  'level': _.environment == 'production' ? 'warn' : 'debug',
+                  'format': _.environment == 'production' ? 'json' : 'text',
+                  'output': _.environment == 'production' ? 'stdout' : 'stderr',
+                  'includeStackTrace': _.environment != 'production'
+                }
     
     # Environment-specific feature flags
     features:
@@ -86,15 +86,14 @@ spec:
         with:
           - provider: cel
             inputs:
-              expression:
-                expr: |
-                  {
-                    'debugToolbar': _.environment == 'development',
-                    'apiDocs': _.environment != 'production',
-                    'rateLimiting': _.environment == 'production',
-                    'caching': _.environment in ['staging', 'production'],
-                    'metrics': _.environment in ['staging', 'production']
-                  }
+              expression: |
+                {
+                  'debugToolbar': _.environment == 'development',
+                  'apiDocs': _.environment != 'production',
+                  'rateLimiting': _.environment == 'production',
+                  'caching': _.environment in ['staging', 'production'],
+                  'metrics': _.environment in ['staging', 'production']
+                }
     
     # Complete configuration
     config:
@@ -104,15 +103,14 @@ spec:
         with:
           - provider: cel
             inputs:
-              expression:
-                expr: |
-                  {
-                    'environment': _.environment,
-                    'database': _.database,
-                    'logging': _.logging,
-                    'features': _.features,
-                    'metadata': {
-                      'generatedAt': now(),
-                      'version': '1.0.0'
-                    }
+              expression: |
+                {
+                  'environment': _.environment,
+                  'database': _.database,
+                  'logging': _.logging,
+                  'features': _.features,
+                  'metadata': {
+                    'generatedAt': time.now(),
+                    'version': '1.0.0'
                   }
+                }

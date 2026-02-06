@@ -1,7 +1,7 @@
 # Error Handling Example
 # Demonstrates error handling with onError: continue.
 #
-# Run: scafctl run workflow -f examples/actions/error-handling.yaml
+# Run: scafctl run solution -f examples/actions/error-handling.yaml
 
 apiVersion: scafctl.io/v1
 kind: Solution

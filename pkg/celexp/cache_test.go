@@ -240,6 +240,7 @@ func TestProgramCache_HitRate(t *testing.T) {
 
 func TestGenerateCacheKeyWithAST(t *testing.T) {
 	cache := NewProgramCache(10) // Create a cache for testing
+	ctx := context.Background()
 
 	t.Run("same expression and options produce same key", func(t *testing.T) {
 		opts := []cel.EnvOption{
@@ -247,8 +248,8 @@ func TestGenerateCacheKeyWithAST(t *testing.T) {
 			cel.Variable("y", cel.IntType),
 		}
 
-		key1 := generateCacheKeyWithAST(cache, "x + y", opts, GetDefaultCostLimit())
-		key2 := generateCacheKeyWithAST(cache, "x + y", opts, GetDefaultCostLimit())
+		key1 := generateCacheKeyWithAST(ctx, cache, "x + y", opts, GetDefaultCostLimit())
+		key2 := generateCacheKeyWithAST(ctx, cache, "x + y", opts, GetDefaultCostLimit())
 
 		assert.Equal(t, key1.key, key2.key)
 	})
@@ -258,8 +259,8 @@ func TestGenerateCacheKeyWithAST(t *testing.T) {
 			cel.Variable("x", cel.IntType),
 		}
 
-		key1 := generateCacheKeyWithAST(cache, "x + 1", opts, GetDefaultCostLimit())
-		key2 := generateCacheKeyWithAST(cache, "x + 2", opts, GetDefaultCostLimit())
+		key1 := generateCacheKeyWithAST(ctx, cache, "x + 1", opts, GetDefaultCostLimit())
+		key2 := generateCacheKeyWithAST(ctx, cache, "x + 2", opts, GetDefaultCostLimit())
 
 		assert.NotEqual(t, key1.key, key2.key)
 	})
@@ -272,8 +273,8 @@ func TestGenerateCacheKeyWithAST(t *testing.T) {
 			cel.Variable("y", cel.IntType),
 		}
 
-		key1 := generateCacheKeyWithAST(cache, "x + 1", opts1, GetDefaultCostLimit())
-		key2 := generateCacheKeyWithAST(cache, "x + 1", opts2, GetDefaultCostLimit())
+		key1 := generateCacheKeyWithAST(ctx, cache, "x + 1", opts1, GetDefaultCostLimit())
+		key2 := generateCacheKeyWithAST(ctx, cache, "x + 1", opts2, GetDefaultCostLimit())
 
 		// Note: These might be equal if the option pointers happen to be the same
 		// In practice, they would be different in a real scenario
@@ -282,7 +283,7 @@ func TestGenerateCacheKeyWithAST(t *testing.T) {
 	})
 
 	t.Run("empty options", func(t *testing.T) {
-		key := generateCacheKeyWithAST(cache, "1 + 2", nil, GetDefaultCostLimit())
+		key := generateCacheKeyWithAST(ctx, cache, "1 + 2", nil, GetDefaultCostLimit())
 		assert.NotEmpty(t, key.key)
 	})
 
@@ -296,14 +297,14 @@ func TestGenerateCacheKeyWithAST(t *testing.T) {
 			cel.Variable("x", cel.IntType),
 			cel.Variable("y", cel.IntType),
 		}
-		key1 := generateCacheKeyWithAST(cache, "x + y", opts1, GetDefaultCostLimit())
+		key1 := generateCacheKeyWithAST(ctx, cache, "x + y", opts1, GetDefaultCostLimit())
 
 		// Second call - create NEW option instances with same content
 		opts2 := []cel.EnvOption{
 			cel.Variable("x", cel.IntType),
 			cel.Variable("y", cel.IntType),
 		}
-		key2 := generateCacheKeyWithAST(cache, "x + y", opts2, GetDefaultCostLimit())
+		key2 := generateCacheKeyWithAST(ctx, cache, "x + y", opts2, GetDefaultCostLimit())
 
 		// Keys should be EQUAL because semantic content is the same
 		// (Before the fix, these would be different due to pointer address hashing)
@@ -317,9 +318,9 @@ func TestGenerateCacheKeyWithAST(t *testing.T) {
 			cel.Variable("x", cel.IntType),
 		}
 
-		key1 := generateCacheKeyWithAST(cache, "x + 1", opts, 1000)
-		key2 := generateCacheKeyWithAST(cache, "x + 1", opts, 5000)
-		key3 := generateCacheKeyWithAST(cache, "x + 1", opts, 0) // No cost limit
+		key1 := generateCacheKeyWithAST(ctx, cache, "x + 1", opts, 1000)
+		key2 := generateCacheKeyWithAST(ctx, cache, "x + 1", opts, 5000)
+		key3 := generateCacheKeyWithAST(ctx, cache, "x + 1", opts, 0) // No cost limit
 
 		// All keys should be different
 		assert.NotEqual(t, key1.key, key2.key, "different cost limits should produce different keys")
