@@ -150,8 +150,12 @@ This document tracks remaining implementation tasks for scafctl.
   - Remove orphaned blobs from catalog storage
   - Implemented in `pkg/cmd/scafctl/catalog/prune.go`
 
-- [ ] **`scafctl tag [solution|plugin] <source> <target>`**
+- [x] **`scafctl catalog tag <name@version> <alias>`**
   - Create version aliases (e.g., latest, stable)
+  - Auto-infers artifact kind from local catalog
+  - Supports `--catalog` flag for remote registry tagging
+  - Validates alias is not a semver version
+  - Implemented in `pkg/cmd/scafctl/catalog/tag.go`
 
 - [x] **`scafctl catalog save <name[@version]> -o <file>`**
   - Export artifact and dependencies as OCI Image Layout tar archive
@@ -194,10 +198,11 @@ This document tracks remaining implementation tasks for scafctl.
   - Implemented in `pkg/catalog/local.go`
   - Uses oras-go for OCI operations
 
-- [ ] **Remote catalog support**
-  - Standard OCI registry integration
-  - Support private registries
-  - GUI frontend discovery integration
+- [x] **Remote catalog support**
+  - Standard OCI registry integration via `RemoteCatalog` in `pkg/catalog/remote.go`
+  - Support private registries with credential helpers
+  - Push/pull via `catalog push` and `catalog pull` commands
+  - Copy operations between local and remote catalogs (`CopyTo`, `CopyFrom`)
 
 - [x] **Configuration file support**
   - Parse `~/.scafctl/config.yaml`
@@ -209,19 +214,23 @@ This document tracks remaining implementation tasks for scafctl.
   - `SCAFCTL_` prefix for all config values
   - Automatic env var binding via Viper
 
-- [ ] **Command-line catalog override**
-  - `--catalog <url>` flag support
-  - Override config and env vars
+- [x] **Command-line catalog override**
+  - `--catalog <url|name>` flag on push and delete commands
+  - Resolution order: direct URL → config name lookup → default catalog from config
+  - Implemented in `pkg/cmd/scafctl/catalog/resolve.go`
 
-- [ ] **OCI authentication**
-  - Read credentials from `~/.docker/config.json`
-  - Support docker credential helpers
-  - Handle authentication errors
+- [x] **OCI authentication**
+  - Read credentials from `~/.docker/config.json` and podman auth configs
+  - Support docker credential helpers (`docker-credential-*`)
+  - Support `SCAFCTL_REGISTRY_USERNAME`/`SCAFCTL_REGISTRY_PASSWORD` env vars
+  - Handle Docker Hub hostname normalization
+  - Implemented in `pkg/catalog/auth.go`
 
-- [ ] **Artifact identification**
-  - Media types: `application/vnd.scafctl.solution.v1+yaml`, `application/vnd.scafctl.plugin.v1+binary`
-  - OCI annotations for artifact metadata
-  - Repository structure for solutions and plugins
+- [x] **Artifact identification**
+  - Media types: `application/vnd.scafctl.solution.v1+yaml`, `application/vnd.scafctl.provider.v1+binary`, `application/vnd.scafctl.auth-handler.v1+binary`
+  - OCI annotations for artifact metadata (`pkg/catalog/annotations.go`)
+  - Repository structure: `<registry>/<repo>/<kind-plural>/<name>` (e.g., `ghcr.io/myorg/scafctl/solutions/my-solution`)
+  - Implemented in `pkg/catalog/media_types.go`, `pkg/catalog/annotations.go`, `pkg/catalog/reference.go`
 
 - [ ] **Dependency resolution**
   - Recursive dependency resolution during build
@@ -402,6 +411,7 @@ This document tracks remaining implementation tasks for scafctl.
 
 ## Completed
 
+- [x] `scafctl catalog tag` — create version aliases for catalog artifacts
 - [x] Parameter provider implementation
 - [x] Provider context helpers (WithParameters, ParametersFromContext)
 - [x] Parameter parsing precedence rules
@@ -442,6 +452,12 @@ This document tracks remaining implementation tasks for scafctl.
 - [x] Catalog-first resolution via SolutionResolver
 - [x] `scafctl catalog` commands (list, inspect, delete, prune)
 - [x] `scafctl cache` commands (clear, info) with kind and name filters
+- [x] Remote catalog support (pkg/catalog/remote.go) with push/pull
+- [x] OCI authentication via docker/podman credential stores (pkg/catalog/auth.go)
+- [x] `--catalog` flag with URL/name/default resolution (pkg/cmd/scafctl/catalog/resolve.go)
+- [x] Artifact media types for solution, provider, and auth-handler kinds
+- [x] `scafctl catalog push` and `scafctl catalog pull` commands
+- [x] `ArtifactKindProvider` and `ArtifactKindAuthHandler` artifact kinds
 
 ## Future Enhancements
 

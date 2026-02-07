@@ -440,6 +440,33 @@ func (c *RemoteCatalog) Delete(ctx context.Context, ref Reference) error {
 	return nil
 }
 
+// Tag creates an alias tag for an existing artifact in the remote registry.
+func (c *RemoteCatalog) Tag(ctx context.Context, ref Reference, alias string) error {
+	repo, err := c.getRepository(ref)
+	if err != nil {
+		return err
+	}
+
+	// Resolve the source artifact
+	tag := c.tagForRef(ref)
+	desc, err := repo.Resolve(ctx, tag)
+	if err != nil {
+		return &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
+	}
+
+	// Tag with alias
+	if err := repo.Tag(ctx, desc, alias); err != nil {
+		return fmt.Errorf("failed to tag artifact: %w", err)
+	}
+
+	c.logger.V(1).Info("tagged artifact",
+		"name", ref.Name,
+		"source", tag,
+		"alias", alias)
+
+	return nil
+}
+
 // tagForRef returns the tag string for a reference.
 func (c *RemoteCatalog) tagForRef(ref Reference) string {
 	if ref.HasDigest() {

@@ -1559,6 +1559,83 @@ func TestIntegration_CatalogDelete_RemoteDetection(t *testing.T) {
 }
 
 // =============================================================================
+// Catalog Tag Tests
+// =============================================================================
+
+func TestIntegration_CatalogTagHelp(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "catalog", "tag", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Create an alias tag")
+	assert.Contains(t, stdout, "--catalog")
+	assert.Contains(t, stdout, "--kind")
+	assert.Contains(t, stdout, "stable")
+}
+
+func TestIntegration_CatalogTag_RequiresVersion(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	_, stderr, exitCode := runScafctl(t, "catalog", "tag", "my-solution", "stable")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "version required")
+}
+
+func TestIntegration_CatalogTag_RejectsSemverAlias(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	_, stderr, exitCode := runScafctl(t, "catalog", "tag", "my-solution@1.0.0", "2.0.0")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "semver version")
+}
+
+func TestIntegration_CatalogTag_ArtifactNotFound(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	_, stderr, exitCode := runScafctl(t, "catalog", "tag", "nonexistent@1.0.0", "stable", "--kind", "solution")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "not found")
+}
+
+func TestIntegration_CatalogTag_Success(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Build an artifact first
+	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+
+	// Tag it
+	stdout, _, exitCode := runScafctl(t, "catalog", "tag", "resolver-demo@1.0.0", "stable")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Tagged")
+	assert.Contains(t, stdout, "stable")
+}
+
+func TestIntegration_CatalogTag_MoveAlias(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Build two versions
+	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+	_, _, exitCode = runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "2.0.0", "--force")
+	require.Equal(t, 0, exitCode)
+
+	// Tag v1 as stable
+	stdout, _, exitCode := runScafctl(t, "catalog", "tag", "resolver-demo@1.0.0", "stable")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "1.0.0")
+
+	// Move stable to v2
+	stdout, _, exitCode = runScafctl(t, "catalog", "tag", "resolver-demo@2.0.0", "stable")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "2.0.0")
+}
+
+// =============================================================================
 // Cache Command Tests
 // =============================================================================
 

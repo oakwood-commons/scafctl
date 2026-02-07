@@ -363,6 +363,129 @@ func TestLocalCatalog_Delete(t *testing.T) {
 	})
 }
 
+func TestLocalCatalog_Tag(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("tags artifact with alias", func(t *testing.T) {
+		cat := newTestCatalog(t)
+
+		ref := Reference{
+			Kind:    ArtifactKindSolution,
+			Name:    "my-solution",
+			Version: semver.MustParse("1.0.0"),
+		}
+		_, err := cat.Store(ctx, ref, []byte("content"), nil, false)
+		require.NoError(t, err)
+
+		// Tag as stable
+		err = cat.Tag(ctx, ref, "stable")
+		require.NoError(t, err)
+
+		// The alias should resolve to the same digest as the original
+		origTag := "solution/my-solution:1.0.0"
+		aliasTag := "solution/my-solution:stable"
+		origDesc, err := cat.store.Resolve(ctx, origTag)
+		require.NoError(t, err)
+		aliasDesc, err := cat.store.Resolve(ctx, aliasTag)
+		require.NoError(t, err)
+		assert.Equal(t, origDesc.Digest, aliasDesc.Digest)
+	})
+
+	t.Run("tags with multiple aliases", func(t *testing.T) {
+		cat := newTestCatalog(t)
+
+		ref := Reference{
+			Kind:    ArtifactKindSolution,
+			Name:    "my-solution",
+			Version: semver.MustParse("2.0.0"),
+		}
+		_, err := cat.Store(ctx, ref, []byte("content-v2"), nil, false)
+		require.NoError(t, err)
+
+		// Tag with multiple aliases
+		require.NoError(t, cat.Tag(ctx, ref, "latest"))
+		require.NoError(t, cat.Tag(ctx, ref, "production"))
+
+		// Both should resolve
+		latestDesc, err := cat.store.Resolve(ctx, "solution/my-solution:latest")
+		require.NoError(t, err)
+		prodDesc, err := cat.store.Resolve(ctx, "solution/my-solution:production")
+		require.NoError(t, err)
+		assert.Equal(t, latestDesc.Digest, prodDesc.Digest)
+	})
+
+	t.Run("moves alias to new version", func(t *testing.T) {
+		cat := newTestCatalog(t)
+
+		// Store v1.0.0
+		ref1 := Reference{
+			Kind:    ArtifactKindSolution,
+			Name:    "my-solution",
+			Version: semver.MustParse("1.0.0"),
+		}
+		_, err := cat.Store(ctx, ref1, []byte("v1-content"), nil, false)
+		require.NoError(t, err)
+		err = cat.Tag(ctx, ref1, "stable")
+		require.NoError(t, err)
+
+		// Store v2.0.0
+		ref2 := Reference{
+			Kind:    ArtifactKindSolution,
+			Name:    "my-solution",
+			Version: semver.MustParse("2.0.0"),
+		}
+		_, err = cat.Store(ctx, ref2, []byte("v2-content"), nil, false)
+		require.NoError(t, err)
+
+		// Re-tag stable to v2
+		err = cat.Tag(ctx, ref2, "stable")
+		require.NoError(t, err)
+
+		// Stable should now point to v2's digest
+		v2Desc, err := cat.store.Resolve(ctx, "solution/my-solution:2.0.0")
+		require.NoError(t, err)
+		stableDesc, err := cat.store.Resolve(ctx, "solution/my-solution:stable")
+		require.NoError(t, err)
+		assert.Equal(t, v2Desc.Digest, stableDesc.Digest)
+	})
+
+	t.Run("returns error for non-existent artifact", func(t *testing.T) {
+		cat := newTestCatalog(t)
+
+		ref := Reference{
+			Kind:    ArtifactKindSolution,
+			Name:    "non-existent",
+			Version: semver.MustParse("1.0.0"),
+		}
+
+		err := cat.Tag(ctx, ref, "stable")
+		require.Error(t, err)
+		assert.True(t, IsNotFound(err))
+	})
+
+	t.Run("tags provider artifact", func(t *testing.T) {
+		cat := newTestCatalog(t)
+
+		ref := Reference{
+			Kind:    ArtifactKindProvider,
+			Name:    "echo",
+			Version: semver.MustParse("1.0.0"),
+		}
+		_, err := cat.Store(ctx, ref, []byte("binary"), nil, false)
+		require.NoError(t, err)
+
+		err = cat.Tag(ctx, ref, "stable")
+		require.NoError(t, err)
+
+		// Verify
+		aliasDesc, err := cat.store.Resolve(ctx, "provider/echo:stable")
+		require.NoError(t, err)
+		origDesc, err := cat.store.Resolve(ctx, "provider/echo:1.0.0")
+		require.NoError(t, err)
+		assert.Equal(t, origDesc.Digest, aliasDesc.Digest)
+	})
+}
+
 func TestLocalCatalog_Save(t *testing.T) {
 	ctx := context.Background()
 

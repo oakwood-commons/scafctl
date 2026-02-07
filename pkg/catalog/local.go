@@ -452,6 +452,35 @@ func (c *LocalCatalog) infoFromAnnotations(ref Reference, desc ocispec.Descripto
 	}
 }
 
+// Tag creates an alias tag for an existing artifact.
+// The source reference must have a version or digest to resolve.
+// The alias is a freeform string (e.g., "latest", "stable", "production").
+func (c *LocalCatalog) Tag(ctx context.Context, ref Reference, alias string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Resolve the source artifact to get its descriptor
+	tag := c.tagForRef(ref)
+	desc, err := c.store.Resolve(ctx, tag)
+	if err != nil {
+		return &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
+	}
+
+	// Build alias tag in the same format: kind/name:alias
+	aliasTag := fmt.Sprintf("%s/%s:%s", ref.Kind, ref.Name, alias)
+
+	if err := c.store.Tag(ctx, desc, aliasTag); err != nil {
+		return fmt.Errorf("failed to tag artifact: %w", err)
+	}
+
+	c.logger.V(1).Info("tagged artifact",
+		"name", ref.Name,
+		"source", tag,
+		"alias", alias)
+
+	return nil
+}
+
 // PruneResult contains statistics from a prune operation.
 type PruneResult struct {
 	// RemovedManifests is the number of orphaned manifests removed
