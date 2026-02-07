@@ -138,4 +138,5 @@ replace (
 	charm.land/bubbles/v2 => github.com/charmbracelet/bubbles/v2 v2.0.0-rc.1
 	charm.land/bubbletea/v2 => github.com/charmbracelet/bubbletea/v2 v2.0.0-rc.2
 	charm.land/lipgloss/v2 => github.com/charmbracelet/lipgloss/v2 v2.0.0-beta.3.0.20251106192539-4b304240aab7
+	github.com/charmbracelet/ultraviolet => github.com/charmbracelet/ultraviolet v0.0.0-20251116181749-377898bcce38
 )
