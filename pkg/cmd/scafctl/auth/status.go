@@ -39,7 +39,8 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 			  # Output as JSON
 			  scafctl auth status -o json
 		`),
-		Args: cobra.MaximumNArgs(1),
+		SilenceUsage: true,
+		Args:         cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			w := writer.MustFromContext(ctx)

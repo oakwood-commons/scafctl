@@ -30,8 +30,9 @@ func CommandGraph(_ *settings.Run, ioStreams terminal.IOStreams, binaryName stri
 	opts := &GraphOptions{}
 
 	cmd := &cobra.Command{
-		Use:   "graph [config-file]",
-		Short: "Visualize resolver dependency graph",
+		Use:          "graph [config-file]",
+		Short:        "Visualize resolver dependency graph",
+		SilenceUsage: true,
 		Long: heredoc.Doc(`
 			Visualize the dependency graph of resolvers in a configuration file.
 			

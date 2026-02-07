@@ -242,13 +242,13 @@ func TestLocalCatalog_List(t *testing.T) {
 		_, err := catalog.Store(ctx, solRef, []byte("solution"), nil, false)
 		require.NoError(t, err)
 
-		// Store plugin
-		pluginRef := Reference{
-			Kind:    ArtifactKindPlugin,
-			Name:    "my-plugin",
+		// Store provider
+		providerRef := Reference{
+			Kind:    ArtifactKindProvider,
+			Name:    "my-provider",
 			Version: semver.MustParse("1.0.0"),
 		}
-		_, err = catalog.Store(ctx, pluginRef, []byte("plugin"), nil, false)
+		_, err = catalog.Store(ctx, providerRef, []byte("provider"), nil, false)
 		require.NoError(t, err)
 
 		// List only solutions

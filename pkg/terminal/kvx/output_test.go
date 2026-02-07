@@ -242,7 +242,6 @@ func TestOutputOptions_Functional_Options(t *testing.T) {
 	WithOutputAppName("test-app")(opts)
 	WithOutputHelp("Test Help", []string{"Line 1", "Line 2"})(opts)
 	WithOutputTheme("dark")(opts)
-	WithOutputSortKeys(false)(opts)
 	WithOutputPrettyPrint(false)(opts)
 
 	assert.Equal(t, OutputFormatJSON, opts.Format)
@@ -253,7 +252,6 @@ func TestOutputOptions_Functional_Options(t *testing.T) {
 	assert.Equal(t, "Test Help", opts.HelpTitle)
 	assert.Equal(t, []string{"Line 1", "Line 2"}, opts.HelpLines)
 	assert.Equal(t, "dark", opts.Theme)
-	assert.False(t, opts.SortKeys)
 	assert.False(t, opts.PrettyPrint)
 }
 
@@ -288,7 +286,6 @@ func TestNewOutputOptions_Defaults(t *testing.T) {
 	opts := NewOutputOptions(ioStreams)
 
 	assert.Equal(t, OutputFormatTable, opts.Format)
-	assert.True(t, opts.SortKeys)
 	assert.True(t, opts.PrettyPrint)
 	assert.False(t, opts.Interactive)
 	assert.Empty(t, opts.Expression)

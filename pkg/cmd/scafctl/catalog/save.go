@@ -30,8 +30,9 @@ func CommandSave(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 	}
 
 	cmd := &cobra.Command{
-		Use:   "save <name[@version]> -o <file.tar>",
-		Short: "Export an artifact to a tar archive",
+		Use:          "save <name[@version]> -o <file.tar>",
+		Short:        "Export an artifact to a tar archive",
+		SilenceUsage: true,
 		Long: heredoc.Doc(`
 			Export a catalog artifact to an OCI Image Layout tar archive.
 

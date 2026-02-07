@@ -14,8 +14,11 @@ const (
 	// ArtifactKindSolution represents a solution artifact.
 	ArtifactKindSolution ArtifactKind = "solution"
 
-	// ArtifactKindPlugin represents a plugin artifact.
-	ArtifactKindPlugin ArtifactKind = "plugin"
+	// ArtifactKindProvider represents a provider artifact (go-plugin binary exposing providers).
+	ArtifactKindProvider ArtifactKind = "provider"
+
+	// ArtifactKindAuthHandler represents an auth handler artifact (go-plugin binary exposing auth handlers).
+	ArtifactKindAuthHandler ArtifactKind = "auth-handler"
 )
 
 // String returns the string representation of the artifact kind.
@@ -26,16 +29,52 @@ func (k ArtifactKind) String() string {
 // IsValid returns true if the artifact kind is valid.
 func (k ArtifactKind) IsValid() bool {
 	switch k {
-	case ArtifactKindSolution, ArtifactKindPlugin:
+	case ArtifactKindSolution, ArtifactKindProvider, ArtifactKindAuthHandler:
 		return true
 	default:
 		return false
 	}
 }
 
+// Plural returns the pluralized form of the artifact kind (for repository paths).
+func (k ArtifactKind) Plural() string {
+	switch k {
+	case ArtifactKindSolution:
+		return "solutions"
+	case ArtifactKindProvider:
+		return "providers"
+	case ArtifactKindAuthHandler:
+		return "auth-handlers"
+	default:
+		return string(k) + "s"
+	}
+}
+
+// ParseArtifactKind parses a string into an ArtifactKind.
+// Returns empty string and false if the input is not a valid kind.
+func ParseArtifactKind(s string) (ArtifactKind, bool) {
+	kind := ArtifactKind(s)
+	return kind, kind.IsValid()
+}
+
+// ParseArtifactKindFromPlural parses a pluralized path segment into an ArtifactKind.
+// E.g., "solutions" -> ArtifactKindSolution, "providers" -> ArtifactKindProvider
+func ParseArtifactKindFromPlural(s string) (ArtifactKind, bool) {
+	switch s {
+	case "solutions":
+		return ArtifactKindSolution, true
+	case "providers":
+		return ArtifactKindProvider, true
+	case "auth-handlers":
+		return ArtifactKindAuthHandler, true
+	default:
+		return "", false
+	}
+}
+
 // Reference uniquely identifies an artifact in the catalog.
 type Reference struct {
-	// Kind is the type of artifact (solution or plugin).
+	// Kind is the type of artifact (solution, provider, or auth-handler).
 	Kind ArtifactKind `json:"kind" yaml:"kind" doc:"Artifact type"`
 
 	// Name is the artifact identifier (e.g., "my-solution").

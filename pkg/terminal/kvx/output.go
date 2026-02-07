@@ -112,9 +112,6 @@ type OutputOptions struct {
 	// Theme is the color theme for interactive mode (dark, warm, cool, midnight)
 	Theme string `json:"theme,omitempty" yaml:"theme,omitempty" doc:"Color theme for TUI" example:"dark" maxLength:"20"`
 
-	// SortKeys enables alphabetical sorting of map keys
-	SortKeys bool `json:"sortKeys,omitempty" yaml:"sortKeys,omitempty" doc:"Sort map keys alphabetically"`
-
 	// PrettyPrint enables indented JSON output
 	PrettyPrint bool `json:"prettyPrint,omitempty" yaml:"prettyPrint,omitempty" doc:"Enable indented JSON output"`
 }
@@ -124,7 +121,6 @@ func NewOutputOptions(ioStreams *terminal.IOStreams) *OutputOptions {
 	return &OutputOptions{
 		IOStreams:   ioStreams,
 		Format:      OutputFormatTable,
-		SortKeys:    true,
 		PrettyPrint: true,
 	}
 }
@@ -179,11 +175,6 @@ func WithOutputTheme(theme string) OutputOption {
 	return func(o *OutputOptions) { o.Theme = theme }
 }
 
-// WithOutputSortKeys enables or disables alphabetical sorting of map keys.
-func WithOutputSortKeys(sort bool) OutputOption {
-	return func(o *OutputOptions) { o.SortKeys = sort }
-}
-
 // WithOutputPrettyPrint enables or disables indented JSON output.
 func WithOutputPrettyPrint(pretty bool) OutputOption {
 	return func(o *OutputOptions) { o.PrettyPrint = pretty }
@@ -228,8 +219,21 @@ func (o *OutputOptions) writeKvx(data any) error {
 		if o.Interactive {
 			return fmt.Errorf("interactive mode requires a terminal; use -o json or -o yaml for piped output")
 		}
-		// Silently fall back to JSON for non-interactive piped output
-		return o.writeJSON(data)
+		// Silently fall back to JSON for non-interactive piped output.
+		// Apply CEL expression filter if provided (same as structured output path).
+		outputData := data
+		if o.Expression != "" {
+			ctx := o.Ctx
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			var err error
+			outputData, err = EvaluateExpression(ctx, o.Expression, data)
+			if err != nil {
+				return fmt.Errorf("expression evaluation failed: %w", err)
+			}
+		}
+		return o.writeJSON(outputData)
 	}
 
 	// Build kvx options
@@ -237,7 +241,6 @@ func (o *OutputOptions) writeKvx(data any) error {
 		WithNoColor(o.NoColor),
 		WithIO(o.IOStreams.In, o.IOStreams.Out),
 		WithInteractive(o.Interactive),
-		WithSortKeys(o.SortKeys),
 	}
 
 	// Pass context for CEL expression evaluation (enables debug.out, etc.)

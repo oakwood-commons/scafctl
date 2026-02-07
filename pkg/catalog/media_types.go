@@ -11,14 +11,23 @@ const (
 	// MediaTypeSolutionConfig is the config blob media type for solution metadata.
 	MediaTypeSolutionConfig = "application/vnd.scafctl.solution.config.v1+json"
 
-	// MediaTypePluginManifest is the manifest media type for plugin artifacts.
-	MediaTypePluginManifest = "application/vnd.oci.image.manifest.v1+json"
+	// MediaTypeProviderManifest is the manifest media type for provider artifacts.
+	MediaTypeProviderManifest = "application/vnd.oci.image.manifest.v1+json"
 
-	// MediaTypePluginBinary is the content layer media type for plugin binaries.
-	MediaTypePluginBinary = "application/vnd.scafctl.plugin.v1+binary"
+	// MediaTypeProviderBinary is the content layer media type for provider binaries.
+	MediaTypeProviderBinary = "application/vnd.scafctl.provider.v1+binary"
 
-	// MediaTypePluginConfig is the config blob media type for plugin metadata.
-	MediaTypePluginConfig = "application/vnd.scafctl.plugin.config.v1+json"
+	// MediaTypeProviderConfig is the config blob media type for provider metadata.
+	MediaTypeProviderConfig = "application/vnd.scafctl.provider.config.v1+json"
+
+	// MediaTypeAuthHandlerManifest is the manifest media type for auth handler artifacts.
+	MediaTypeAuthHandlerManifest = "application/vnd.oci.image.manifest.v1+json"
+
+	// MediaTypeAuthHandlerBinary is the content layer media type for auth handler binaries.
+	MediaTypeAuthHandlerBinary = "application/vnd.scafctl.auth-handler.v1+binary"
+
+	// MediaTypeAuthHandlerConfig is the config blob media type for auth handler metadata.
+	MediaTypeAuthHandlerConfig = "application/vnd.scafctl.auth-handler.config.v1+json"
 )
 
 // MediaTypeForKind returns the content media type for an artifact kind.
@@ -26,8 +35,10 @@ func MediaTypeForKind(kind ArtifactKind) string {
 	switch kind {
 	case ArtifactKindSolution:
 		return MediaTypeSolutionContent
-	case ArtifactKindPlugin:
-		return MediaTypePluginBinary
+	case ArtifactKindProvider:
+		return MediaTypeProviderBinary
+	case ArtifactKindAuthHandler:
+		return MediaTypeAuthHandlerBinary
 	default:
 		return "application/octet-stream"
 	}
@@ -38,8 +49,10 @@ func ConfigMediaTypeForKind(kind ArtifactKind) string {
 	switch kind {
 	case ArtifactKindSolution:
 		return MediaTypeSolutionConfig
-	case ArtifactKindPlugin:
-		return MediaTypePluginConfig
+	case ArtifactKindProvider:
+		return MediaTypeProviderConfig
+	case ArtifactKindAuthHandler:
+		return MediaTypeAuthHandlerConfig
 	default:
 		return "application/vnd.oci.image.config.v1+json"
 	}

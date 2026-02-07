@@ -9,9 +9,10 @@ The catalog is a local OCI-based artifact store that lets you:
 - **Build** solutions into versioned artifacts
 - **Run** solutions by name instead of file path
 - **Manage** multiple versions of the same solution
-- **Share** solutions (remote registries coming in Phase 2)
+- **Share** solutions via remote OCI registries (ghcr.io, Docker Hub, ACR, etc.)
+- **Export/Import** solutions for air-gapped environments
 
-Think of it like a local package manager for your scafctl solutions.
+Think of it like a package manager for your scafctl solutions.
 
 ## Where is the Catalog Stored?
 
@@ -353,10 +354,239 @@ scafctl catalog prune
 | `scafctl catalog prune` | Clean up orphaned data |
 | `scafctl catalog save NAME[@VERSION] -o FILE` | Export to tar archive |
 | `scafctl catalog load --input FILE` | Import from tar archive |
+| `scafctl catalog push NAME[@VERSION]` | Push to remote registry |
+| `scafctl catalog pull REGISTRY/REPO/KIND/NAME[@VERSION]` | Pull from remote registry |
 | `scafctl run solution NAME[@VERSION]` | Run from catalog |
+
+## Remote Registry Support
+
+scafctl supports pushing and pulling artifacts to/from OCI-compliant container registries like GitHub Container Registry (ghcr.io), Docker Hub, Azure Container Registry, and others.
+
+### Setting Up Authentication
+
+scafctl reads container credentials from the same locations as Docker and Podman:
+
+| Priority | Location | Description |
+|----------|----------|-------------|
+| 1 | `$DOCKER_CONFIG/config.json` | Docker config env var |
+| 2 | `~/.docker/config.json` | Docker default |
+| 3 | `$XDG_RUNTIME_DIR/containers/auth.json` | Podman rootless |
+| 4 | `~/.config/containers/auth.json` | Podman default |
+
+You can also use environment variables:
+- `SCAFCTL_REGISTRY_USERNAME`
+- `SCAFCTL_REGISTRY_PASSWORD`
+
+### Authenticating to GitHub Container Registry (ghcr.io)
+
+GitHub Container Registry requires a Personal Access Token (PAT) with the `write:packages` scope.
+
+#### Option 1: Using GitHub CLI (Recommended)
+
+If you have the [GitHub CLI](https://cli.github.com/) installed, this is the easiest method:
+
+```bash
+# Login with the required scopes (interactive)
+gh auth login -s write:packages -s read:packages -s delete:packages
+
+# Then login to the container registry using the gh token
+gh auth token | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+
+# Or with Podman
+gh auth token | podman login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+```
+
+#### Option 2: Create a Personal Access Token Manually
+
+1. Go to [GitHub Settings → Developer settings → Personal access tokens → Tokens (classic)](https://github.com/settings/tokens)
+2. Click **Generate new token (classic)**
+3. Give it a descriptive name (e.g., "scafctl registry access")
+4. Select scopes:
+   - `write:packages` - Upload packages
+   - `read:packages` - Download packages
+   - `delete:packages` - (Optional) Delete packages
+5. Click **Generate token** and copy the token
+
+Then authenticate:
+
+**Using Docker:**
+
+```bash
+echo "YOUR_GITHUB_TOKEN" | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+```
+
+**Using Podman:**
+
+```bash
+echo "YOUR_GITHUB_TOKEN" | podman login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+```
+
+This saves credentials to your Docker/Podman config file, which scafctl will automatically use.
+
+#### Step 3: Verify Authentication
+
+Check that you can access the registry:
+
+```bash
+# Docker
+docker pull ghcr.io/YOUR_ORG/ANY_PUBLIC_IMAGE:latest
+
+# Or test with scafctl (will fail if no artifacts exist, but auth should work)
+scafctl catalog push my-solution@1.0.0 --catalog ghcr.io/YOUR_ORG --log-level -1
+```
+
+### Pushing to a Remote Registry
+
+Push an artifact from your local catalog to a remote registry:
+
+```bash
+# Push to GitHub Container Registry
+scafctl catalog push my-solution@1.0.0 --catalog ghcr.io/myorg/scafctl
+
+# Push with a different name
+scafctl catalog push my-solution@1.0.0 --as production-solution --catalog ghcr.io/myorg/scafctl
+
+# Force overwrite existing artifact
+scafctl catalog push my-solution@1.0.0 --force --catalog ghcr.io/myorg/scafctl
+```
+
+Output:
+```
+ 💡 Pushing my-solution@1.0.0 to ghcr.io/myorg/scafctl...
+ ✅ Pushed my-solution@1.0.0 (1.2 KB)
+```
+
+**Repository Path Structure:**
+
+The artifact is pushed to: `ghcr.io/myorg/scafctl/solutions/my-solution:1.0.0`
+
+The full path is: `<registry>/<repository>/solutions/<name>:<version>`
+
+### Pulling from a Remote Registry
+
+Pull an artifact from a remote registry to your local catalog:
+
+```bash
+# Pull a solution
+scafctl catalog pull ghcr.io/myorg/scafctl/solutions/my-solution@1.0.0
+
+# Pull without specifying version (gets latest)
+scafctl catalog pull ghcr.io/myorg/scafctl/solutions/my-solution
+
+# Pull with a different local name
+scafctl catalog pull ghcr.io/myorg/scafctl/solutions/my-solution@1.0.0 --as local-solution
+
+# Force overwrite if already exists locally
+scafctl catalog pull ghcr.io/myorg/scafctl/solutions/my-solution@1.0.0 --force
+```
+
+Output:
+```
+ 💡 Pulling ghcr.io/myorg/scafctl/solutions/my-solution@1.0.0...
+ ✅ Pulled my-solution@1.0.0 (1.2 KB)
+```
+
+### Deleting from a Remote Registry
+
+Delete an artifact from a remote registry using the full reference:
+
+```bash
+# Delete from remote registry
+scafctl catalog delete ghcr.io/myorg/scafctl/solutions/my-solution@1.0.0
+```
+
+**Note:** Not all registries support deletion via the OCI API. GitHub Container Registry (ghcr.io) requires you to delete packages through the GitHub web interface at:
+`https://github.com/orgs/YOUR_ORG/packages`
+
+Registries that support OCI DELETE:
+- Docker Hub ✅
+- Azure Container Registry ✅
+- Harbor ✅
+- Amazon ECR ✅
+
+Registries that require web UI deletion:
+- GitHub Container Registry (ghcr.io) ❌
+
+### Complete Remote Workflow Example
+
+Here's a typical workflow for sharing solutions via a remote registry:
+
+```bash
+# === Developer A (publishing) ===
+
+# 1. Build the solution locally
+scafctl build solution deploy.yaml --version 1.0.0
+
+# 2. Push to remote registry
+scafctl catalog push deploy@1.0.0 --catalog ghcr.io/myorg/scafctl
+
+# === Developer B (consuming) ===
+
+# 3. Pull from remote registry
+scafctl catalog pull ghcr.io/myorg/scafctl/solutions/deploy@1.0.0
+
+# 4. Run the solution
+scafctl run solution deploy -r target=production
+```
+
+### Troubleshooting
+
+#### Authentication Errors (403 Forbidden)
+
+If you get a 403 error:
+
+```
+❌ failed to push artifact: ... response status code 403: denied
+```
+
+**Check:**
+1. Your token has `write:packages` scope for pushing
+2. You're logged in: `docker login ghcr.io` or `podman login ghcr.io`
+3. The org/repo exists and you have access
+4. Use `--log-level -1` to see which auth config file is being used
+
+```bash
+scafctl catalog push my-solution@1.0.0 --catalog ghcr.io/myorg --log-level -1
+```
+
+#### Config File Not Found
+
+If scafctl isn't finding your credentials, check where they're stored:
+
+```bash
+# Docker
+cat ~/.docker/config.json
+
+# Podman
+cat ~/.config/containers/auth.json
+```
+
+#### Insecure Registries (HTTP)
+
+For local testing with registries that don't use HTTPS:
+
+```bash
+scafctl catalog push my-solution@1.0.0 --catalog localhost:5000 --insecure
+scafctl catalog pull localhost:5000/solutions/my-solution@1.0.0 --insecure
+```
+
+### Supported Registries
+
+scafctl works with any OCI-compliant registry:
+
+| Registry | URL Format |
+|----------|------------|
+| GitHub Container Registry | `ghcr.io/OWNER` |
+| Docker Hub | `docker.io/NAMESPACE` |
+| Azure Container Registry | `REGISTRY.azurecr.io` |
+| Amazon ECR | `ACCOUNT.dkr.ecr.REGION.amazonaws.com` |
+| Google Artifact Registry | `REGION-docker.pkg.dev/PROJECT` |
+| Harbor | `harbor.example.com/PROJECT` |
+| Local Registry | `localhost:5000` |
 
 ## Next Steps
 
 - [Getting Started](getting-started.md) - Basic scafctl usage
 - [Actions Tutorial](actions-tutorial.md) - Building workflows
 - [Resolver Tutorial](resolver-tutorial.md) - Data resolution patterns
+

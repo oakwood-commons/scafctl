@@ -29,7 +29,8 @@ func CommandLogout(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comm
 			  # Logout from Entra ID
 			  scafctl auth logout entra
 		`),
-		Args: cobra.ExactArgs(1),
+		SilenceUsage: true,
+		Args:         cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			w := writer.MustFromContext(ctx)

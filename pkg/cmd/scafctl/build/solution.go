@@ -36,9 +36,10 @@ func CommandBuildSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams
 	}
 
 	cmd := &cobra.Command{
-		Use:     "solution [file]",
-		Aliases: []string{"sol", "s"},
-		Short:   "Build a solution into the local catalog",
+		Use:          "solution [file]",
+		Aliases:      []string{"sol", "s"},
+		Short:        "Build a solution into the local catalog",
+		SilenceUsage: true,
 		Long: heredoc.Doc(`
 			Build a solution file into the local catalog.
 

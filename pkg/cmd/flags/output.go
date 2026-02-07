@@ -72,7 +72,6 @@ func ToKvxOutputOptions(flags *KvxOutputFlags, opts ...kvx.OutputOption) *kvx.Ou
 	kvxOpts := &kvx.OutputOptions{
 		Interactive: flags.Interactive,
 		Expression:  flags.Expression,
-		SortKeys:    true,
 		PrettyPrint: true,
 	}
 

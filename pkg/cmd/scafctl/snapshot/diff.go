@@ -30,8 +30,9 @@ func CommandDiff(_ *settings.Run, ioStreams terminal.IOStreams, binaryName strin
 	opts := &DiffOptions{}
 
 	cmd := &cobra.Command{
-		Use:   "diff [before-snapshot] [after-snapshot]",
-		Short: "Compare two snapshots",
+		Use:          "diff [before-snapshot] [after-snapshot]",
+		Short:        "Compare two snapshots",
+		SilenceUsage: true,
 		Long: heredoc.Doc(`
 			Compare two resolver execution snapshots and show differences.
 			

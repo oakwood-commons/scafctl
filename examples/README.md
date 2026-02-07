@@ -25,7 +25,16 @@ scafctl run solution -f examples/actions/hello-world.yaml -v
 | [resolvers/](resolvers/) | Dynamic value resolution patterns |
 | [solutions/](solutions/) | Complete end-to-end solution examples |
 | [config/](config/) | Configuration file examples |
-| [plugins/](plugins/) | Custom plugin examples |
+| [plugins/](plugins/) | go-plugin source code examples (see note below) |
+
+> **Terminology Note**: The `plugins/` directory contains go-plugin source code for developing custom providers. When distributing via the catalog, these are pushed as **provider** or **auth-handler** artifacts:
+> ```bash
+> # Build and push a provider to the catalog
+> scafctl build provider ./my-provider --version 1.0.0
+> scafctl catalog push my-provider@1.0.0 --catalog ghcr.io/myorg
+> 
+> # The artifact is stored at: ghcr.io/myorg/providers/my-provider:1.0.0
+> ```
 
 ---
 

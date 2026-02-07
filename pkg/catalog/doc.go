@@ -1,6 +1,6 @@
 // Package catalog provides artifact storage and retrieval for scafctl.
 //
-// The catalog system manages solutions and plugins as OCI artifacts, enabling
+// The catalog system manages solutions, providers, and auth handlers as OCI artifacts, enabling
 // versioned storage, distribution, and dependency management.
 //
 // # Catalog Types
@@ -8,7 +8,7 @@
 // There are two types of catalogs:
 //
 //   - Local catalog: Built-in catalog stored at XDG data path, always available
-//   - Remote catalog: OCI registry-based catalog for distribution (future)
+//   - Remote catalog: OCI registry-based catalog for distribution
 //
 // # Built-in Local Catalog
 //
@@ -36,7 +36,8 @@
 // Currently supported artifact types:
 //
 //   - Solutions: YAML configuration files (application/vnd.scafctl.solution.v1+yaml)
-//   - Plugins: Binary executables (application/vnd.scafctl.plugin.v1+binary) [future]
+//   - Providers: go-plugin binaries exposing providers (application/vnd.scafctl.provider.v1+binary)
+//   - Auth Handlers: go-plugin binaries exposing auth handlers (application/vnd.scafctl.auth-handler.v1+binary)
 //
 // # Example Usage
 //

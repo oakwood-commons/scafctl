@@ -18,6 +18,7 @@ Step-by-step guides for learning scafctl features.
 - [Actions Tutorial](actions-tutorial.md) — Learn how to use actions for workflow automation
 - [Authentication Tutorial](auth-tutorial.md) — Set up authentication for your workflows
 - [Catalog Tutorial](catalog-tutorial.md) — Store and manage solutions in your local catalog
+- [Cache Tutorial](cache-tutorial.md) — Manage cached data and reclaim disk space
 
 ## Reference
 

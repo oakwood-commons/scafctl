@@ -39,9 +39,10 @@ func CommandPrune(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 	}
 
 	cmd := &cobra.Command{
-		Use:     "prune",
-		Aliases: []string{"gc", "clean"},
-		Short:   "Remove orphaned blobs from the catalog",
+		Use:          "prune",
+		Aliases:      []string{"gc", "clean"},
+		Short:        "Remove orphaned blobs from the catalog",
+		SilenceUsage: true,
 		Long: heredoc.Doc(`
 			Remove orphaned blobs and manifests from the local catalog.
 

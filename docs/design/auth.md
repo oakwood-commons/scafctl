@@ -15,6 +15,34 @@ Authentication is a system concern, not a provider implementation detail.
 - **Auth Handler**: A component that implements the `auth.Handler` interface and manages identity verification, credential storage, and token acquisition for a specific identity provider (e.g., Entra, GitHub). Auth handlers are registered in the auth registry.
 - **Auth Provider** (in provider inputs): The `authProvider` field in HTTP provider inputs that specifies which auth handler to use for a request.
 - **Provider**: Action/resolver providers that perform work (e.g., HTTP, shell, file). Distinct from auth handlers.
+- **Auth Handler Artifact**: A go-plugin binary distributed via the catalog that exposes one or more auth handlers.
+
+---
+
+## Built-in vs External Auth Handlers
+
+scafctl provides built-in auth handlers for common identity providers:
+
+| Handler | Status | Description |
+|---------|--------|-------------|
+| `entra` | ✅ Implemented | Microsoft Entra ID (Azure AD) |
+| `github` | 🔜 Planned | GitHub OAuth |
+| `gcp` | 🔜 Planned | Google Cloud Platform |
+
+**External Auth Handlers** can be distributed via the catalog for custom identity providers:
+
+```bash
+# Push an auth handler to the catalog
+scafctl catalog push okta-handler@1.0.0 --catalog ghcr.io/myorg
+
+# Pull an auth handler
+scafctl catalog pull ghcr.io/myorg/auth-handlers/okta-handler@1.0.0
+
+# The handler is then available for use
+scafctl auth login okta
+```
+
+External auth handlers use the same go-plugin mechanism as providers. See [Plugins](plugins.md) for architecture details.
 
 ---
 
@@ -29,9 +57,9 @@ Authentication is a system concern, not a provider implementation detail.
 
 ---
 
-## Auth Providers
+## Auth Handlers
 
-Auth providers define how identities are authenticated and how tokens are minted.
+Auth handlers define how identities are authenticated and how tokens are minted.
 
 Examples:
 
@@ -39,14 +67,14 @@ Examples:
 - `github`
 - `gcloud`
 
-Auth providers are responsible for:
+Auth handlers are responsible for:
 
 - Supporting one or more authentication flows
 - Managing refresh tokens or equivalent credentials
 - Minting execution tokens for providers
 - Normalizing token metadata and claims
 
-Auth providers are not action providers and do not perform side effects outside authentication.
+Auth handlers are not action providers and do not perform side effects outside authentication.
 
 ---
 

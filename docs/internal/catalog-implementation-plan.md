@@ -134,8 +134,9 @@ pkg/
 type ArtifactKind string
 
 const (
-    ArtifactKindSolution ArtifactKind = "solution"
-    ArtifactKindPlugin   ArtifactKind = "plugin"
+    ArtifactKindSolution    ArtifactKind = "solution"
+    ArtifactKindProvider    ArtifactKind = "provider"
+    ArtifactKindAuthHandler ArtifactKind = "auth-handler"
 )
 
 // Reference uniquely identifies an artifact

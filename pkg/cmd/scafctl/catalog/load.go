@@ -43,8 +43,9 @@ func CommandLoad(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 	}
 
 	cmd := &cobra.Command{
-		Use:   "load --input <file.tar>",
-		Short: "Import an artifact from a tar archive",
+		Use:          "load --input <file.tar>",
+		Short:        "Import an artifact from a tar archive",
+		SilenceUsage: true,
 		Long: heredoc.Doc(`
 			Import a catalog artifact from an OCI Image Layout tar archive.
 

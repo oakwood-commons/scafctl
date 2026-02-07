@@ -50,7 +50,8 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			  # Output as JSON (includes full token)
 			  scafctl auth token entra --scope "https://management.azure.com/.default" -o json
 		`),
-		Args: cobra.ExactArgs(1),
+		SilenceUsage: true,
+		Args:         cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			w := writer.MustFromContext(ctx)

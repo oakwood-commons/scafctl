@@ -31,8 +31,9 @@ func CommandSave(_ *settings.Run, ioStreams terminal.IOStreams, binaryName strin
 	opts := &SaveOptions{}
 
 	cmd := &cobra.Command{
-		Use:   "save [config-file]",
-		Short: "Execute resolvers and save snapshot",
+		Use:          "save [config-file]",
+		Short:        "Execute resolvers and save snapshot",
+		SilenceUsage: true,
 		Long: heredoc.Doc(`
 			Execute resolvers from a configuration file and save the execution state
 			to a snapshot file.

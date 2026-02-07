@@ -123,14 +123,16 @@ This document tracks remaining implementation tasks for scafctl.
   - Implemented in `pkg/cmd/scafctl/build/solution.go`
   - Note: `scafctl build plugin` not yet implemented
 
-- [ ] **`scafctl push [solution|plugin] <name[@version]>`**
+- [x] **`scafctl catalog push <name[@version]>`**
   - Push artifact from local to remote catalog
-  - Handle OCI authentication
-  - Support `--catalog` flag for target
+  - Handle OCI authentication via docker config
+  - Support `--catalog` flag for target registry
+  - Implemented in `pkg/cmd/scafctl/catalog/push.go`
 
-- [ ] **`scafctl pull [solution|plugin] <name[@version]>`**
+- [x] **`scafctl catalog pull <registry/repository/kind/name[@version]>`**
   - Download artifact from remote to local catalog
   - Cache locally for offline use
+  - Implemented in `pkg/cmd/scafctl/catalog/pull.go`
 
 - [x] **`scafctl catalog inspect <name[@version]>`**
   - Display artifact metadata and annotations
@@ -163,10 +165,12 @@ This document tracks remaining implementation tasks for scafctl.
   - Support `--force` flag to overwrite existing artifacts
   - Implemented in `pkg/cmd/scafctl/catalog/load.go`
 
-- [ ] **`scafctl cache` subcommands**
-  - `cache clear` - clear all cached artifacts
-  - `cache clear --kind <kind>` - clear specific kind
-  - `cache clear --name <name>` - clear specific artifact
+- [x] **`scafctl cache` subcommands**
+  - `cache clear` - clear all cached content
+  - `cache clear --kind <kind>` - clear specific kind (http, all)
+  - `cache clear --name <name>` - clear cache entries matching pattern
+  - `cache info` - show cache information and size
+  - Implemented in `pkg/cmd/scafctl/cache/`
 
 ## File Resolution
 
@@ -349,6 +353,7 @@ This document tracks remaining implementation tasks for scafctl.
   - Resolver tutorial (`docs/tutorials/resolver-tutorial.md`)
   - Actions tutorial (`docs/tutorials/actions-tutorial.md`)
   - Auth tutorial (`docs/tutorials/auth-tutorial.md`)
+  - Cache tutorial (`docs/tutorials/cache-tutorial.md`)
 
 - [x] **Developer guide**
   - Plugin development guide (`docs/tutorials/plugin-development.md`)
@@ -436,6 +441,7 @@ This document tracks remaining implementation tasks for scafctl.
 - [x] Local catalog implementation (pkg/catalog) with OCI storage
 - [x] Catalog-first resolution via SolutionResolver
 - [x] `scafctl catalog` commands (list, inspect, delete, prune)
+- [x] `scafctl cache` commands (clear, info) with kind and name filters
 
 ## Future Enhancements
 

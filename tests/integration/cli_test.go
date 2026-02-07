@@ -1477,3 +1477,167 @@ func TestIntegration_CatalogSaveLoad_RoundTrip(t *testing.T) {
 	assert.Contains(t, stdout, "environment")
 	assert.Contains(t, stdout, "production")
 }
+
+// =============================================================================
+// Catalog Push Tests
+// =============================================================================
+
+func TestIntegration_CatalogPushHelp(t *testing.T) {
+	stdout, _, _ := runScafctl(t, "catalog", "push", "--help")
+	assert.Contains(t, stdout, "Push a catalog artifact to a remote OCI registry")
+	assert.Contains(t, stdout, "--catalog")
+	assert.Contains(t, stdout, "--as")
+	assert.Contains(t, stdout, "--force")
+	assert.Contains(t, stdout, "configured catalog name")
+}
+
+func TestIntegration_CatalogPush_NoCatalog(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+	// Push without --catalog and no default configured should error.
+	// Since artifact also doesn't exist locally, kind inference fails first.
+	_, stderr, exitCode := runScafctl(t, "catalog", "push", "my-solution@1.0.0")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "not found")
+}
+
+func TestIntegration_CatalogPush_ArtifactNotFound(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Push a nonexistent artifact
+	_, stderr, exitCode := runScafctl(t, "catalog", "push", "nonexistent@1.0.0", "--catalog", "ghcr.io/test/scafctl")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "not found")
+}
+
+// =============================================================================
+// Catalog Pull Tests
+// =============================================================================
+
+func TestIntegration_CatalogPullHelp(t *testing.T) {
+	stdout, _, _ := runScafctl(t, "catalog", "pull", "--help")
+	assert.Contains(t, stdout, "Pull a catalog artifact from a remote OCI registry")
+	assert.Contains(t, stdout, "--as")
+	assert.Contains(t, stdout, "--force")
+}
+
+func TestIntegration_CatalogPull_InvalidReference(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Pull with invalid reference (no registry)
+	_, stderr, exitCode := runScafctl(t, "catalog", "pull", "just-a-name")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "invalid")
+}
+
+// =============================================================================
+// Catalog Delete Remote Tests
+// =============================================================================
+
+func TestIntegration_CatalogDeleteRemoteHelp(t *testing.T) {
+	stdout, _, _ := runScafctl(t, "catalog", "delete", "--help")
+	assert.Contains(t, stdout, "Delete an artifact from the local or remote catalog")
+	assert.Contains(t, stdout, "ghcr.io/myorg/scafctl/solutions/my-solution")
+	assert.Contains(t, stdout, "--insecure")
+	assert.Contains(t, stdout, "--catalog")
+}
+
+func TestIntegration_CatalogDelete_RemoteDetection(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Try to delete from a fake remote - should detect it as remote
+	// and fail with auth/network error (not "invalid reference")
+	_, stderr, exitCode := runScafctl(t, "catalog", "delete", "fake.registry.io/myorg/solutions/test@1.0.0")
+	assert.NotEqual(t, 0, exitCode)
+	// Should not say "invalid reference" since it was detected as remote
+	assert.NotContains(t, stderr, "invalid reference")
+}
+
+// =============================================================================
+// Cache Command Tests
+// =============================================================================
+
+func TestIntegration_CacheHelp(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "cache", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "cache")
+	assert.Contains(t, stdout, "clear")
+	assert.Contains(t, stdout, "info")
+}
+
+func TestIntegration_CacheClearHelp(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "cache", "clear", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Clear cached content")
+	assert.Contains(t, stdout, "--kind")
+	assert.Contains(t, stdout, "--name")
+	assert.Contains(t, stdout, "--force")
+}
+
+func TestIntegration_CacheInfoHelp(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "cache", "info", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Show cache information")
+	assert.Contains(t, stdout, "--output")
+}
+
+func TestIntegration_CacheInfo_Empty(t *testing.T) {
+	// Create a temp directory for the cache
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+
+	stdout, _, exitCode := runScafctl(t, "cache", "info", "-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "totalSize")
+	assert.Contains(t, stdout, "totalFiles")
+}
+
+func TestIntegration_CacheClear_Empty(t *testing.T) {
+	// Create a temp directory for the cache
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+
+	stdout, _, exitCode := runScafctl(t, "cache", "clear", "--force")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "No cached content found")
+}
+
+func TestIntegration_CacheClear_InvalidKind(t *testing.T) {
+	_, stderr, exitCode := runScafctl(t, "cache", "clear", "--kind", "invalid", "--force")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "invalid cache kind")
+}
+
+func TestIntegration_CacheClear_JSON(t *testing.T) {
+	// Create a temp directory for the cache
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+
+	stdout, _, exitCode := runScafctl(t, "cache", "clear", "--force", "-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "removedFiles")
+	assert.Contains(t, stdout, "removedBytes")
+}
+
+func TestIntegration_CacheClear_HTTPKind(t *testing.T) {
+	// Create a temp directory for the cache
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+
+	stdout, _, exitCode := runScafctl(t, "cache", "clear", "--kind", "http", "--force")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "No cached content found")
+}

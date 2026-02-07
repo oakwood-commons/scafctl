@@ -33,7 +33,7 @@ const (
 
 	// scafctl-specific annotations
 
-	// AnnotationArtifactType is the scafctl artifact type ("solution" or "plugin").
+	// AnnotationArtifactType is the scafctl artifact type ("solution", "provider", or "auth-handler").
 	AnnotationArtifactType = "dev.scafctl.artifact.type"
 
 	// AnnotationArtifactName is the artifact name.
@@ -54,10 +54,10 @@ const (
 	// AnnotationDisplayName is the human-friendly display name.
 	AnnotationDisplayName = "dev.scafctl.solution.displayName"
 
-	// AnnotationProviders is a comma-separated list of provider names (plugins only).
+	// AnnotationProviders is a comma-separated list of provider names (provider artifacts only).
 	AnnotationProviders = "dev.scafctl.plugin.providers"
 
-	// AnnotationPlatform is the target platform (plugins only, e.g., "linux/amd64").
+	// AnnotationPlatform is the target platform (provider/auth-handler artifacts only, e.g., "linux/amd64").
 	AnnotationPlatform = "dev.scafctl.plugin.platform"
 )
 

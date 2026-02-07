@@ -12,6 +12,8 @@ This guide explains how to create external plugins for scafctl. Plugins extend s
 - Distribute providers independently
 - Add third-party integrations
 
+> **Terminology Note**: "Plugin" refers to the go-plugin binary implementation. When distributing via the catalog, provider plugins are pushed as **provider** artifacts and auth handler plugins as **auth-handler** artifacts. Users interact with these as catalog artifact kinds, not as "plugins". See [Publishing to the Catalog](#publishing-to-the-catalog) for details.
+
 ## Architecture Overview
 
 ```
@@ -604,6 +606,44 @@ RUN go build -o plugin .
 FROM alpine:latest
 COPY --from=builder /app/plugin /plugin
 ENTRYPOINT ["/plugin"]
+```
+
+## Publishing to the Catalog
+
+Once your plugin is built, you can distribute it via the scafctl catalog as a **provider** or **auth-handler** artifact.
+
+### Build and Push a Provider
+
+```bash
+# Build the provider artifact into the local catalog
+scafctl build provider ./my-provider --version 1.0.0
+
+# Push to a remote registry
+scafctl catalog push my-provider@1.0.0 --catalog ghcr.io/myorg
+
+# The artifact is stored at: ghcr.io/myorg/providers/my-provider:1.0.0
+```
+
+### Build and Push an Auth Handler
+
+```bash
+# Build the auth handler artifact
+scafctl build auth-handler ./my-auth-handler --version 1.0.0
+
+# Push to a remote registry
+scafctl catalog push my-auth-handler@1.0.0 --catalog ghcr.io/myorg
+
+# The artifact is stored at: ghcr.io/myorg/auth-handlers/my-auth-handler:1.0.0
+```
+
+### Pull and Use
+
+```bash
+# Pull a provider from a remote registry
+scafctl catalog pull ghcr.io/myorg/providers/my-provider@1.0.0
+
+# The provider is now available locally
+scafctl catalog list --kind provider
 ```
 
 ## Next Steps

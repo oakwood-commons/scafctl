@@ -43,9 +43,10 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 	}
 
 	cmd := &cobra.Command{
-		Use:     "list",
-		Aliases: []string{"ls"},
-		Short:   "List artifacts in the catalog",
+		Use:          "list",
+		Aliases:      []string{"ls"},
+		Short:        "List artifacts in the catalog",
+		SilenceUsage: true,
 		Long: heredoc.Doc(`
 			List all artifacts stored in the local catalog.
 
@@ -70,7 +71,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 		},
 	}
 
-	cmd.Flags().StringVar(&options.Kind, "kind", "", "Filter by artifact kind (solution, plugin)")
+	cmd.Flags().StringVar(&options.Kind, "kind", "", "Filter by artifact kind (solution, provider, auth-handler)")
 	cmd.Flags().StringVar(&options.Name, "name", "", "Filter by artifact name")
 
 	flags.AddKvxOutputFlagsToStruct(cmd, &options.KvxOutputFlags)
@@ -86,8 +87,8 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 	var kind catalog.ArtifactKind
 	if opts.Kind != "" {
 		kind = catalog.ArtifactKind(opts.Kind)
-		if kind != catalog.ArtifactKindSolution && kind != catalog.ArtifactKindPlugin {
-			w.Errorf("invalid kind %q: must be 'solution' or 'plugin'", opts.Kind)
+		if !kind.IsValid() {
+			w.Errorf("invalid kind %q: must be 'solution', 'provider', or 'auth-handler'", opts.Kind)
 			return exitcode.Errorf("invalid kind")
 		}
 	}

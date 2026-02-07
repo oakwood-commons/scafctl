@@ -11,9 +11,10 @@ import (
 // CommandBuild creates the build command group.
 func CommandBuild(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "build",
-		Aliases: []string{"b", "package"},
-		Short:   "Build and package artifacts into the local catalog",
+		Use:          "build",
+		Aliases:      []string{"b", "package"},
+		Short:        "Build and package artifacts into the local catalog",
+		SilenceUsage: true,
 		Long: heredoc.Doc(`
 			Build and package artifacts into the local catalog.
 

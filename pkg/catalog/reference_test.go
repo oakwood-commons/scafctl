@@ -41,7 +41,7 @@ func TestParseReference(t *testing.T) {
 		},
 		{
 			name:     "name with prerelease",
-			kind:     ArtifactKindPlugin,
+			kind:     ArtifactKindProvider,
 			input:    "echo@1.0.0-alpha.1",
 			wantName: "echo",
 			wantVer:  "1.0.0-alpha.1",
@@ -146,7 +146,7 @@ func TestReference_String(t *testing.T) {
 		{
 			name: "without version",
 			ref: Reference{
-				Kind: ArtifactKindPlugin,
+				Kind: ArtifactKindProvider,
 				Name: "echo",
 			},
 			want: "echo",
@@ -260,6 +260,189 @@ func TestIsValidDigest(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			assert.False(t, IsValidDigest(digest))
+		})
+	}
+}
+
+func TestParseRemoteReference(t *testing.T) {
+	tests := []struct {
+		name           string
+		input          string
+		wantRegistry   string
+		wantRepository string
+		wantKind       ArtifactKind
+		wantName       string
+		wantTag        string
+		wantErr        bool
+		errMsg         string
+	}{
+		{
+			name:           "full path with solutions",
+			input:          "ghcr.io/myorg/scafctl/solutions/my-solution@1.0.0",
+			wantRegistry:   "ghcr.io",
+			wantRepository: "myorg/scafctl",
+			wantKind:       ArtifactKindSolution,
+			wantName:       "my-solution",
+			wantTag:        "1.0.0",
+		},
+		{
+			name:           "full path with providers",
+			input:          "ghcr.io/myorg/scafctl/providers/echo@2.0.0",
+			wantRegistry:   "ghcr.io",
+			wantRepository: "myorg/scafctl",
+			wantKind:       ArtifactKindProvider,
+			wantName:       "echo",
+			wantTag:        "2.0.0",
+		},
+		{
+			name:           "with oci:// prefix",
+			input:          "oci://ghcr.io/myorg/scafctl/solutions/my-solution@1.0.0",
+			wantRegistry:   "ghcr.io",
+			wantRepository: "myorg/scafctl",
+			wantKind:       ArtifactKindSolution,
+			wantName:       "my-solution",
+			wantTag:        "1.0.0",
+		},
+		{
+			name:           "without version tag",
+			input:          "ghcr.io/myorg/scafctl/solutions/my-solution",
+			wantRegistry:   "ghcr.io",
+			wantRepository: "myorg/scafctl",
+			wantKind:       ArtifactKindSolution,
+			wantName:       "my-solution",
+			wantTag:        "",
+		},
+		{
+			name:           "simple repository path",
+			input:          "ghcr.io/myorg/my-solution@1.0.0",
+			wantRegistry:   "ghcr.io",
+			wantRepository: "myorg",
+			wantKind:       "",
+			wantName:       "my-solution",
+			wantTag:        "1.0.0",
+		},
+		{
+			name:           "localhost registry with port",
+			input:          "localhost:5000/scafctl/solutions/test@1.0.0",
+			wantRegistry:   "localhost:5000",
+			wantRepository: "scafctl",
+			wantKind:       ArtifactKindSolution,
+			wantName:       "test",
+			wantTag:        "1.0.0",
+		},
+		{
+			name:           "Docker Hub style with colon tag",
+			input:          "docker.io/myorg/myimage:1.0.0",
+			wantRegistry:   "docker.io",
+			wantRepository: "myorg",
+			wantKind:       "",
+			wantName:       "myimage",
+			wantTag:        "1.0.0",
+		},
+		{
+			name:    "empty string",
+			input:   "",
+			wantErr: true,
+			errMsg:  "cannot be empty",
+		},
+		{
+			name:    "registry only",
+			input:   "ghcr.io",
+			wantErr: true,
+			errMsg:  "must include registry and repository",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ref, err := ParseRemoteReference(tt.input)
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantRegistry, ref.Registry)
+			assert.Equal(t, tt.wantRepository, ref.Repository)
+			assert.Equal(t, tt.wantKind, ref.Kind)
+			assert.Equal(t, tt.wantName, ref.Name)
+			assert.Equal(t, tt.wantTag, ref.Tag)
+		})
+	}
+}
+
+func TestRemoteReference_ToReference(t *testing.T) {
+	tests := []struct {
+		name       string
+		remote     RemoteReference
+		wantKind   ArtifactKind
+		wantName   string
+		wantVer    string
+		wantDigest string
+		wantErr    bool
+	}{
+		{
+			name: "with version tag",
+			remote: RemoteReference{
+				Kind: ArtifactKindSolution,
+				Name: "my-solution",
+				Tag:  "1.0.0",
+			},
+			wantKind: ArtifactKindSolution,
+			wantName: "my-solution",
+			wantVer:  "1.0.0",
+		},
+		{
+			name: "without tag",
+			remote: RemoteReference{
+				Kind: ArtifactKindProvider,
+				Name: "echo",
+			},
+			wantKind: ArtifactKindProvider,
+			wantName: "echo",
+		},
+		{
+			name: "with digest tag",
+			remote: RemoteReference{
+				Kind: ArtifactKindSolution,
+				Name: "my-solution",
+				Tag:  "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+			},
+			wantKind:   ArtifactKindSolution,
+			wantName:   "my-solution",
+			wantDigest: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+		},
+		{
+			name: "invalid version tag",
+			remote: RemoteReference{
+				Kind: ArtifactKindSolution,
+				Name: "my-solution",
+				Tag:  "invalid",
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ref, err := tt.remote.ToReference()
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantKind, ref.Kind)
+			assert.Equal(t, tt.wantName, ref.Name)
+			if tt.wantVer != "" {
+				assert.Equal(t, tt.wantVer, ref.Version.String())
+			}
+			if tt.wantDigest != "" {
+				assert.Equal(t, tt.wantDigest, ref.Digest)
+			}
 		})
 	}
 }

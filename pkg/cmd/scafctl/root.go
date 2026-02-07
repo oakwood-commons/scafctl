@@ -9,6 +9,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/auth/entra"
 	authcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/auth"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/build"
+	cachecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/cache"
 	catalogcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/catalog"
 	configcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/config"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/explain"
@@ -199,5 +200,6 @@ func Root() *cobra.Command {
 	cCmd.AddCommand(lint.CommandLint(cliParams, ioStreams, settings.CliBinaryName))
 	cCmd.AddCommand(build.CommandBuild(cliParams, ioStreams, settings.CliBinaryName))
 	cCmd.AddCommand(catalogcmd.CommandCatalog(cliParams, ioStreams, settings.CliBinaryName))
+	cCmd.AddCommand(cachecmd.CommandCache(cliParams, ioStreams, settings.CliBinaryName))
 	return cCmd
 }

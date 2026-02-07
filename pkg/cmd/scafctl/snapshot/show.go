@@ -27,8 +27,9 @@ func CommandShow(_ *settings.Run, ioStreams terminal.IOStreams, binaryName strin
 	opts := &ShowOptions{}
 
 	cmd := &cobra.Command{
-		Use:   "show [snapshot-file]",
-		Short: "Display snapshot contents",
+		Use:          "show [snapshot-file]",
+		Short:        "Display snapshot contents",
+		SilenceUsage: true,
 		Long: heredoc.Doc(`
 			Load and display the contents of a snapshot file.
 			

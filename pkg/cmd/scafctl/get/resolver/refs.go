@@ -44,8 +44,9 @@ func CommandRefs(_ *settings.Run, ioStreams *terminal.IOStreams, binaryName stri
 	opts := &RefsOptions{}
 
 	cmd := &cobra.Command{
-		Use:   "refs",
-		Short: "Extract resolver references from templates or expressions",
+		Use:          "refs",
+		Short:        "Extract resolver references from templates or expressions",
+		SilenceUsage: true,
 		Long: heredoc.Doc(`
 			Extract resolver references from Go templates or CEL expressions.
 			

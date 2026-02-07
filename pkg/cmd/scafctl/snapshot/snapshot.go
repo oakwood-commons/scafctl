@@ -10,8 +10,9 @@ import (
 // CommandSnapshot creates the snapshot command
 func CommandSnapshot(cliParams *settings.Run, ioStreams terminal.IOStreams, binaryName string) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "snapshot",
-		Short: "Manage resolver execution snapshots",
+		Use:          "snapshot",
+		Short:        "Manage resolver execution snapshots",
+		SilenceUsage: true,
 		Long: heredoc.Doc(`
 			Manage resolver execution snapshots for debugging, testing, and comparison.
 			

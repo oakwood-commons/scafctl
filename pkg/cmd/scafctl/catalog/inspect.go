@@ -43,9 +43,10 @@ func CommandInspect(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ st
 	}
 
 	cmd := &cobra.Command{
-		Use:     "inspect <name[@version]>",
-		Aliases: []string{"info", "show"},
-		Short:   "Show detailed information about an artifact",
+		Use:          "inspect <name[@version]>",
+		Aliases:      []string{"info", "show"},
+		Short:        "Show detailed information about an artifact",
+		SilenceUsage: true,
 		Long: heredoc.Doc(`
 			Show detailed information about a catalog artifact.
 
