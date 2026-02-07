@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os/exec"
@@ -294,14 +295,23 @@ func (m providerModel) renderDetail(desc *provider.Descriptor) string {
 	}
 
 	// Schema properties
-	if len(desc.Schema.Properties) > 0 {
+	if desc.Schema != nil && len(desc.Schema.Properties) > 0 {
+		// Build required set
+		requiredSet := make(map[string]bool, len(desc.Schema.Required))
+		for _, name := range desc.Schema.Required {
+			requiredSet[name] = true
+		}
 		b.WriteString("\n" + detailKeyStyle.Render("Schema Properties:\n"))
 		for name, prop := range desc.Schema.Properties {
 			required := ""
-			if prop.Required {
+			if requiredSet[name] {
 				required = " *"
 			}
-			b.WriteString(fmt.Sprintf("  %s (%s)%s\n", name, prop.Type, required))
+			typeStr := prop.Type
+			if typeStr == "" {
+				typeStr = "any"
+			}
+			b.WriteString(fmt.Sprintf("  %s (%s)%s\n", name, typeStr, required))
 			if prop.Description != "" {
 				b.WriteString(fmt.Sprintf("    %s\n", prop.Description))
 			}
@@ -392,15 +402,21 @@ func buildExampleYAML(desc *provider.Descriptor) string {
 	}
 
 	// Add example properties from schema
-	if len(desc.Schema.Properties) > 0 {
+	if desc.Schema != nil && len(desc.Schema.Properties) > 0 {
 		for name, prop := range desc.Schema.Properties {
 			switch {
-			case prop.Example != nil:
-				example[name] = prop.Example
+			case len(prop.Examples) > 0:
+				example[name] = prop.Examples[0]
 			case prop.Default != nil:
-				example[name] = prop.Default
+				var def any
+				_ = json.Unmarshal(prop.Default, &def)
+				example[name] = def
 			default:
-				example[name] = fmt.Sprintf("<%s>", prop.Type)
+				typeStr := prop.Type
+				if typeStr == "" {
+					typeStr = "any"
+				}
+				example[name] = fmt.Sprintf("<%s>", typeStr)
 			}
 		}
 	}

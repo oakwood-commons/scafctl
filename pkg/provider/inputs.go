@@ -2,12 +2,14 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strconv"
 	"strings"
 
 	"github.com/google/cel-go/cel"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 )
@@ -28,8 +30,11 @@ type InputValue struct {
 
 // InputResolver resolves provider inputs from various forms into concrete values.
 type InputResolver struct {
-	// schema defines the expected input structure and constraints
-	schema SchemaDefinition
+	// schema defines the expected input structure and constraints (JSON Schema)
+	schema *jsonschema.Schema
+
+	// sensitiveFields lists property names that contain sensitive data
+	sensitiveFields map[string]bool
 
 	// resolverContext contains all emitted resolver values from context
 	resolverContext map[string]any
@@ -39,14 +44,21 @@ type InputResolver struct {
 }
 
 // NewInputResolver creates a new input resolver for the given schema and context.
-func NewInputResolver(ctx context.Context, schema SchemaDefinition) *InputResolver {
+// The sensitiveFields parameter lists field names that should be redacted in errors.
+func NewInputResolver(ctx context.Context, schema *jsonschema.Schema, sensitiveFields []string) *InputResolver {
 	resolverCtx, ok := ResolverContextFromContext(ctx)
 	if !ok || resolverCtx == nil {
 		resolverCtx = make(map[string]any)
 	}
 
+	sf := make(map[string]bool, len(sensitiveFields))
+	for _, f := range sensitiveFields {
+		sf[f] = true
+	}
+
 	return &InputResolver{
 		schema:          schema,
+		sensitiveFields: sf,
 		resolverContext: resolverCtx,
 		ctx:             ctx,
 	}
@@ -71,21 +83,50 @@ func (r *InputResolver) ResolveInputs(rawInputs any) (map[string]any, error) {
 
 	resolved := make(map[string]any)
 
-	// Resolve each property
-	for propName, propDef := range r.schema.Properties {
+	if r.schema == nil || r.schema.Properties == nil {
+		// No schema properties — pass through any literal inputs
+		for propName, inputValue := range inputMap {
+			value, err := r.resolveValue(propName, inputValue, false)
+			if err != nil {
+				return nil, fmt.Errorf("failed to resolve property %q: %w", propName, err)
+			}
+			resolved[propName] = value
+		}
+		return resolved, nil
+	}
+
+	// Build required fields set from schema
+	requiredSet := make(map[string]bool, len(r.schema.Required))
+	for _, req := range r.schema.Required {
+		requiredSet[req] = true
+	}
+
+	// Resolve each property defined in the schema
+	for propName, propSchema := range r.schema.Properties {
 		inputValue, exists := inputMap[propName]
+		isRequired := requiredSet[propName]
+		isSecret := r.sensitiveFields[propName]
 
 		// Check if property is required
 		if !exists {
-			if propDef.Required {
-				if propDef.Default != nil {
-					// Use default value
-					resolved[propName] = propDef.Default
-					continue
+			if isRequired {
+				// Try to use default value from schema
+				if propSchema != nil && propSchema.Default != nil {
+					var defaultVal any
+					if err := json.Unmarshal(propSchema.Default, &defaultVal); err == nil {
+						resolved[propName] = defaultVal
+						continue
+					}
 				}
 				return nil, fmt.Errorf("required property %q is missing", propName)
 			}
-			// Optional property not provided
+			// Optional property not provided — check for default
+			if propSchema != nil && propSchema.Default != nil {
+				var defaultVal any
+				if err := json.Unmarshal(propSchema.Default, &defaultVal); err == nil {
+					resolved[propName] = defaultVal
+				}
+			}
 			continue
 		}
 
@@ -95,21 +136,22 @@ func (r *InputResolver) ResolveInputs(rawInputs any) (map[string]any, error) {
 		}
 
 		// Resolve the value based on its form
-		value, err := r.resolveValue(propName, inputValue, propDef)
+		value, err := r.resolveValue(propName, inputValue, isSecret)
 		if err != nil {
-			// For secret properties, the error from resolveValue already contains masking
-			// Just wrap it without additional masking
 			return nil, fmt.Errorf("failed to resolve property %q: %w", propName, err)
 		}
 
-		// Apply type coercion
-		coerced, err := r.coerceType(propName, value, propDef.Type)
+		// Apply type coercion based on JSON Schema type
+		targetType := ""
+		if propSchema != nil {
+			targetType = propSchema.Type
+		}
+		coerced, err := r.coerceType(propName, value, targetType)
 		if err != nil {
-			// For secret properties, redact the value in error messages
-			if propDef.IsSecret {
-				return nil, fmt.Errorf("failed to coerce property %q to type %s: coercion failed for secret value", propName, propDef.Type)
+			if isSecret {
+				return nil, fmt.Errorf("failed to coerce property %q to type %s: coercion failed for secret value", propName, targetType)
 			}
-			return nil, fmt.Errorf("failed to coerce property %q to type %s: %w", propName, propDef.Type, err)
+			return nil, fmt.Errorf("failed to coerce property %q to type %s: %w", propName, targetType, err)
 		}
 
 		resolved[propName] = coerced
@@ -212,7 +254,7 @@ func (r *InputResolver) validateExclusivity(propName string, input InputValue) e
 }
 
 // resolveValue resolves an InputValue to a concrete value based on its form.
-func (r *InputResolver) resolveValue(propName string, input InputValue, propDef PropertyDefinition) (any, error) {
+func (r *InputResolver) resolveValue(propName string, input InputValue, isSecret bool) (any, error) {
 	// Literal form - return as-is
 	if input.Literal != nil {
 		return input.Literal, nil
@@ -220,24 +262,24 @@ func (r *InputResolver) resolveValue(propName string, input InputValue, propDef 
 
 	// Resolver binding form - lookup in resolver context
 	if input.Rslvr != "" {
-		return r.resolveRslvr(propName, input.Rslvr, propDef)
+		return r.resolveRslvr(propName, input.Rslvr, isSecret)
 	}
 
 	// CEL expression form - evaluate expression
 	if input.Expr != "" {
-		return r.resolveCEL(propName, input.Expr, propDef)
+		return r.resolveCEL(propName, input.Expr, isSecret)
 	}
 
 	// Go template form - render template
 	if input.Tmpl != "" {
-		return r.resolveTemplate(propName, input.Tmpl, propDef)
+		return r.resolveTemplate(propName, input.Tmpl, isSecret)
 	}
 
 	return nil, fmt.Errorf("property %q: no input form provided", propName)
 }
 
 // resolveRslvr resolves a resolver binding (e.g., "environment" or "config.namespace").
-func (r *InputResolver) resolveRslvr(_, binding string, propDef PropertyDefinition) (any, error) {
+func (r *InputResolver) resolveRslvr(_, binding string, isSecret bool) (any, error) {
 	// Split on dots for nested access
 	parts := strings.Split(binding, ".")
 
@@ -250,7 +292,7 @@ func (r *InputResolver) resolveRslvr(_, binding string, propDef PropertyDefiniti
 		if m, ok := current.(map[string]any); ok {
 			value, exists := m[part]
 			if !exists {
-				if propDef.IsSecret {
+				if isSecret {
 					return nil, fmt.Errorf("resolver binding %s: path not found", SecretMask)
 				}
 				return nil, fmt.Errorf("resolver binding %q not found at part %q", binding, part)
@@ -261,7 +303,7 @@ func (r *InputResolver) resolveRslvr(_, binding string, propDef PropertyDefiniti
 
 		// Not a map and not the last part - error
 		if i < len(parts)-1 {
-			if propDef.IsSecret {
+			if isSecret {
 				return nil, fmt.Errorf("cannot access nested property %s: path invalid", SecretMask)
 			}
 			return nil, fmt.Errorf("cannot access nested property: %q is not a map at part %q", binding, part)
@@ -272,7 +314,7 @@ func (r *InputResolver) resolveRslvr(_, binding string, propDef PropertyDefiniti
 }
 
 // resolveCEL evaluates a CEL expression against the resolver context.
-func (r *InputResolver) resolveCEL(_ string, expr celexp.Expression, propDef PropertyDefinition) (any, error) {
+func (r *InputResolver) resolveCEL(_ string, expr celexp.Expression, isSecret bool) (any, error) {
 	// Build variable declarations for all keys in resolver context
 	envOpts := make([]cel.EnvOption, 0, len(r.resolverContext))
 	for key := range r.resolverContext {
@@ -283,7 +325,7 @@ func (r *InputResolver) resolveCEL(_ string, expr celexp.Expression, propDef Pro
 	// Compile the expression with context
 	result, err := expr.Compile(envOpts, celexp.WithContext(r.ctx))
 	if err != nil {
-		if propDef.IsSecret {
+		if isSecret {
 			return nil, fmt.Errorf("failed to compile CEL expression: %w", maskError(err))
 		}
 		return nil, fmt.Errorf("failed to compile CEL expression: %w", err)
@@ -292,7 +334,7 @@ func (r *InputResolver) resolveCEL(_ string, expr celexp.Expression, propDef Pro
 	// Evaluate with resolver context as variables
 	value, err := result.EvalWithContext(r.ctx, r.resolverContext)
 	if err != nil {
-		if propDef.IsSecret {
+		if isSecret {
 			return nil, fmt.Errorf("failed to evaluate CEL expression: %w", maskError(err))
 		}
 		return nil, fmt.Errorf("failed to evaluate CEL expression: %w", err)
@@ -302,7 +344,7 @@ func (r *InputResolver) resolveCEL(_ string, expr celexp.Expression, propDef Pro
 }
 
 // resolveTemplate renders a Go template with the resolver context as data.
-func (r *InputResolver) resolveTemplate(propName string, tmpl gotmpl.GoTemplatingContent, propDef PropertyDefinition) (any, error) {
+func (r *InputResolver) resolveTemplate(propName string, tmpl gotmpl.GoTemplatingContent, isSecret bool) (any, error) {
 	// Create template service
 	svc := gotmpl.NewService(nil)
 
@@ -313,7 +355,7 @@ func (r *InputResolver) resolveTemplate(propName string, tmpl gotmpl.GoTemplatin
 		Data:    r.resolverContext,
 	})
 	if err != nil {
-		if propDef.IsSecret {
+		if isSecret {
 			return nil, fmt.Errorf("failed to render template: %w", maskError(err))
 		}
 		return nil, fmt.Errorf("failed to render template: %w", err)
@@ -323,14 +365,14 @@ func (r *InputResolver) resolveTemplate(propName string, tmpl gotmpl.GoTemplatin
 	return result.Output, nil
 }
 
-// coerceType converts a value to the target PropertyType.
-func (r *InputResolver) coerceType(_ string, value any, targetType PropertyType) (any, error) {
+// coerceType converts a value to the target JSON Schema type.
+func (r *InputResolver) coerceType(_ string, value any, targetType string) (any, error) {
 	if value == nil {
 		return nil, nil
 	}
 
-	// If target type is "any", no coercion needed
-	if targetType == PropertyTypeAny {
+	// If no target type or empty, no coercion needed
+	if targetType == "" {
 		return value, nil
 	}
 
@@ -339,76 +381,64 @@ func (r *InputResolver) coerceType(_ string, value any, targetType PropertyType)
 	actualKind := actualType.Kind()
 
 	switch targetType {
-	case PropertyTypeString:
-		// Already a string?
+	case "string":
 		if actualKind == reflect.String {
 			return value, nil
 		}
-		// Convert to string
 		return fmt.Sprintf("%v", value), nil
 
-	case PropertyTypeInt:
-		// Already an int?
+	case "integer":
 		if actualKind == reflect.Int || actualKind == reflect.Int64 || actualKind == reflect.Int32 {
 			return value, nil
 		}
-		// Try converting from string
 		if s, ok := value.(string); ok {
 			i, err := strconv.ParseInt(s, 10, 64)
 			if err != nil {
-				return nil, fmt.Errorf("cannot convert %q to int: %w", s, err)
+				return nil, fmt.Errorf("cannot convert %q to integer: %w", s, err)
 			}
 			return int(i), nil
 		}
-		// Try converting from float
 		if f, ok := value.(float64); ok {
 			return int(f), nil
 		}
-		return nil, fmt.Errorf("cannot convert %T to int", value)
+		return nil, fmt.Errorf("cannot convert %T to integer", value)
 
-	case PropertyTypeFloat:
-		// Already a float?
+	case "number":
 		if actualKind == reflect.Float64 || actualKind == reflect.Float32 {
 			return value, nil
 		}
-		// Try converting from string
 		if s, ok := value.(string); ok {
 			f, err := strconv.ParseFloat(s, 64)
 			if err != nil {
-				return nil, fmt.Errorf("cannot convert %q to float: %w", s, err)
+				return nil, fmt.Errorf("cannot convert %q to number: %w", s, err)
 			}
 			return f, nil
 		}
-		// Try converting from int
 		if i, ok := value.(int); ok {
 			return float64(i), nil
 		}
 		if i, ok := value.(int64); ok {
 			return float64(i), nil
 		}
-		return nil, fmt.Errorf("cannot convert %T to float", value)
+		return nil, fmt.Errorf("cannot convert %T to number", value)
 
-	case PropertyTypeBool:
-		// Already a bool?
+	case "boolean":
 		if actualKind == reflect.Bool {
 			return value, nil
 		}
-		// Try converting from string
 		if s, ok := value.(string); ok {
 			b, err := strconv.ParseBool(s)
 			if err != nil {
-				return nil, fmt.Errorf("cannot convert %q to bool: %w", s, err)
+				return nil, fmt.Errorf("cannot convert %q to boolean: %w", s, err)
 			}
 			return b, nil
 		}
-		return nil, fmt.Errorf("cannot convert %T to bool", value)
+		return nil, fmt.Errorf("cannot convert %T to boolean", value)
 
-	case PropertyTypeArray:
-		// Already a slice/array?
+	case "array":
 		if actualKind == reflect.Slice || actualKind == reflect.Array {
 			return value, nil
 		}
-		// Try converting from string (comma-separated)
 		if s, ok := value.(string); ok {
 			if s == "" {
 				return []string{}, nil
@@ -422,12 +452,13 @@ func (r *InputResolver) coerceType(_ string, value any, targetType PropertyType)
 		}
 		return nil, fmt.Errorf("cannot convert %T to array", value)
 
-	case PropertyTypeAny:
-		// No coercion needed (should be handled above, but included for exhaustive)
+	case "object":
+		// No coercion needed for objects
 		return value, nil
 
 	default:
-		return nil, fmt.Errorf("unknown target type: %s", targetType)
+		// Unknown type, no coercion
+		return value, nil
 	}
 }
 

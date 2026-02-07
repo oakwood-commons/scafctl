@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 )
 
 // ProviderName is the name of the exec provider.
@@ -38,119 +40,44 @@ func NewExecProvider() *ExecProvider {
 				provider.CapabilityFrom,   // Read-only commands
 				provider.CapabilityTransform,
 			},
-			Schema: provider.SchemaDefinition{
-				Properties: map[string]provider.PropertyDefinition{
-					"command": {
-						Type:        provider.PropertyTypeString,
-						Required:    true,
-						Description: "Command to execute",
-						Example:     "echo",
-						MaxLength:   ptrs(1000),
-					},
-					"args": {
-						Type:        provider.PropertyTypeArray,
-						Required:    false,
-						Description: "Command arguments",
-						MaxItems:    ptrs(100),
-					},
-					"stdin": {
-						Type:        provider.PropertyTypeString,
-						Required:    false,
-						Description: "Standard input to provide to the command",
-						MaxLength:   ptrs(1000000),
-					},
-					"workingDir": {
-						Type:        provider.PropertyTypeString,
-						Required:    false,
-						Description: "Working directory for command execution",
-						Example:     "/tmp",
-						MaxLength:   ptrs(500),
-					},
-					"env": {
-						Type:        provider.PropertyTypeAny,
-						Required:    false,
-						Description: "Environment variables to set (key-value pairs)",
-					},
-					"timeout": {
-						Type:        provider.PropertyTypeInt,
-						Required:    false,
-						Description: "Timeout in seconds (0 or omit for no timeout)",
-						Example:     "30",
-						Maximum:     ptrsFloat(3600.0), // Max 1 hour
-					},
-					"shell": {
-						Type:        provider.PropertyTypeBool,
-						Required:    false,
-						Description: "Execute through /bin/sh shell. When false (default), runs command directly (secure, fast, no shell features). When true, enables shell features like pipes, redirections, wildcards, and variable expansion (slower, use with caution)",
-						Example:     "false",
-					},
-				},
-			},
-			OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
-				provider.CapabilityFrom: {
-					Properties: map[string]provider.PropertyDefinition{
-						"stdout": {
-							Type:        provider.PropertyTypeString,
-							Description: "Standard output from the command",
-						},
-						"stderr": {
-							Type:        provider.PropertyTypeString,
-							Description: "Standard error output from the command",
-						},
-						"exitCode": {
-							Type:        provider.PropertyTypeInt,
-							Description: "Command exit code",
-						},
-						"command": {
-							Type:        provider.PropertyTypeString,
-							Description: "The full command that was executed",
-						},
-					},
-				},
-				provider.CapabilityTransform: {
-					Properties: map[string]provider.PropertyDefinition{
-						"stdout": {
-							Type:        provider.PropertyTypeString,
-							Description: "Standard output from the command",
-						},
-						"stderr": {
-							Type:        provider.PropertyTypeString,
-							Description: "Standard error output from the command",
-						},
-						"exitCode": {
-							Type:        provider.PropertyTypeInt,
-							Description: "Command exit code",
-						},
-						"command": {
-							Type:        provider.PropertyTypeString,
-							Description: "The full command that was executed",
-						},
-					},
-				},
-				provider.CapabilityAction: {
-					Properties: map[string]provider.PropertyDefinition{
-						"success": {
-							Type:        provider.PropertyTypeBool,
-							Description: "Whether the command succeeded (exit code 0)",
-						},
-						"stdout": {
-							Type:        provider.PropertyTypeString,
-							Description: "Standard output from the command",
-						},
-						"stderr": {
-							Type:        provider.PropertyTypeString,
-							Description: "Standard error output from the command",
-						},
-						"exitCode": {
-							Type:        provider.PropertyTypeInt,
-							Description: "Command exit code",
-						},
-						"command": {
-							Type:        provider.PropertyTypeString,
-							Description: "The full command that was executed",
-						},
-					},
-				},
+			Schema: schemahelper.ObjectSchema([]string{"command"}, map[string]*jsonschema.Schema{
+				"command": schemahelper.StringProp("Command to execute",
+					schemahelper.WithExample("echo"),
+					schemahelper.WithMaxLength(1000)),
+				"args": schemahelper.ArrayProp("Command arguments",
+					schemahelper.WithMaxItems(100)),
+				"stdin": schemahelper.StringProp("Standard input to provide to the command",
+					schemahelper.WithMaxLength(1000000)),
+				"workingDir": schemahelper.StringProp("Working directory for command execution",
+					schemahelper.WithExample("/tmp"),
+					schemahelper.WithMaxLength(500)),
+				"env": schemahelper.AnyProp("Environment variables to set (key-value pairs)"),
+				"timeout": schemahelper.IntProp("Timeout in seconds (0 or omit for no timeout)",
+					schemahelper.WithExample("30"),
+					schemahelper.WithMaximum(3600.0)),
+				"shell": schemahelper.BoolProp("Execute through /bin/sh shell. When false (default), runs command directly (secure, fast, no shell features). When true, enables shell features like pipes, redirections, wildcards, and variable expansion (slower, use with caution)",
+					schemahelper.WithExample("false")),
+			}),
+			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"stdout":   schemahelper.StringProp("Standard output from the command"),
+					"stderr":   schemahelper.StringProp("Standard error output from the command"),
+					"exitCode": schemahelper.IntProp("Command exit code"),
+					"command":  schemahelper.StringProp("The full command that was executed"),
+				}),
+				provider.CapabilityTransform: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"stdout":   schemahelper.StringProp("Standard output from the command"),
+					"stderr":   schemahelper.StringProp("Standard error output from the command"),
+					"exitCode": schemahelper.IntProp("Command exit code"),
+					"command":  schemahelper.StringProp("The full command that was executed"),
+				}),
+				provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"success":  schemahelper.BoolProp("Whether the command succeeded (exit code 0)"),
+					"stdout":   schemahelper.StringProp("Standard output from the command"),
+					"stderr":   schemahelper.StringProp("Standard error output from the command"),
+					"exitCode": schemahelper.IntProp("Command exit code"),
+					"command":  schemahelper.StringProp("The full command that was executed"),
+				}),
 			},
 			Examples: []provider.Example{
 				{
@@ -200,14 +127,6 @@ inputs:
 			},
 		},
 	}
-}
-
-func ptrs(i int) *int {
-	return &i
-}
-
-func ptrsFloat(f float64) *float64 {
-	return &f
 }
 
 // Descriptor returns the provider's descriptor.

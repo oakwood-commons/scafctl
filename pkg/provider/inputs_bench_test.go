@@ -4,19 +4,19 @@ import (
 	"context"
 	"testing"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
+	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 )
 
 func BenchmarkInputResolver_Literal(b *testing.B) {
 	ctx := context.Background()
-	schema := SchemaDefinition{
-		Properties: map[string]PropertyDefinition{
-			"name":    {Type: PropertyTypeString, Required: true},
-			"count":   {Type: PropertyTypeInt, Required: true},
-			"enabled": {Type: PropertyTypeBool, Required: true},
-		},
-	}
+	schema := schemahelper.ObjectSchema([]string{"name", "count", "enabled"}, map[string]*jsonschema.Schema{
+		"name":    schemahelper.StringProp(""),
+		"count":   schemahelper.IntProp(""),
+		"enabled": schemahelper.BoolProp(""),
+	})
 
 	inputs := map[string]any{
 		"name":    InputValue{Literal: "test-name"},
@@ -26,7 +26,7 @@ func BenchmarkInputResolver_Literal(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		resolver := NewInputResolver(ctx, schema)
+		resolver := NewInputResolver(ctx, schema, nil)
 		_, err := resolver.ResolveInputs(inputs)
 		if err != nil {
 			b.Fatal(err)
@@ -42,13 +42,11 @@ func BenchmarkInputResolver_Rslvr(b *testing.B) {
 	}
 	ctx := WithResolverContext(context.Background(), resolverCtx)
 
-	schema := SchemaDefinition{
-		Properties: map[string]PropertyDefinition{
-			"env":    {Type: PropertyTypeString, Required: true},
-			"region": {Type: PropertyTypeString, Required: true},
-			"count":  {Type: PropertyTypeInt, Required: true},
-		},
-	}
+	schema := schemahelper.ObjectSchema([]string{"env", "region", "count"}, map[string]*jsonschema.Schema{
+		"env":    schemahelper.StringProp(""),
+		"region": schemahelper.StringProp(""),
+		"count":  schemahelper.IntProp(""),
+	})
 
 	inputs := map[string]any{
 		"env":    InputValue{Rslvr: "environment"},
@@ -58,7 +56,7 @@ func BenchmarkInputResolver_Rslvr(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		resolver := NewInputResolver(ctx, schema)
+		resolver := NewInputResolver(ctx, schema, nil)
 		_, err := resolver.ResolveInputs(inputs)
 		if err != nil {
 			b.Fatal(err)
@@ -77,12 +75,10 @@ func BenchmarkInputResolver_RslvrNested(b *testing.B) {
 	}
 	ctx := WithResolverContext(context.Background(), resolverCtx)
 
-	schema := SchemaDefinition{
-		Properties: map[string]PropertyDefinition{
-			"host": {Type: PropertyTypeString, Required: true},
-			"port": {Type: PropertyTypeInt, Required: true},
-		},
-	}
+	schema := schemahelper.ObjectSchema([]string{"host", "port"}, map[string]*jsonschema.Schema{
+		"host": schemahelper.StringProp(""),
+		"port": schemahelper.IntProp(""),
+	})
 
 	inputs := map[string]any{
 		"host": InputValue{Rslvr: "config.database.host"},
@@ -91,7 +87,7 @@ func BenchmarkInputResolver_RslvrNested(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		resolver := NewInputResolver(ctx, schema)
+		resolver := NewInputResolver(ctx, schema, nil)
 		_, err := resolver.ResolveInputs(inputs)
 		if err != nil {
 			b.Fatal(err)
@@ -106,12 +102,10 @@ func BenchmarkInputResolver_CEL(b *testing.B) {
 	}
 	ctx := WithResolverContext(context.Background(), resolverCtx)
 
-	schema := SchemaDefinition{
-		Properties: map[string]PropertyDefinition{
-			"cluster": {Type: PropertyTypeString, Required: true},
-			"scaled":  {Type: PropertyTypeInt, Required: true},
-		},
-	}
+	schema := schemahelper.ObjectSchema([]string{"cluster", "scaled"}, map[string]*jsonschema.Schema{
+		"cluster": schemahelper.StringProp(""),
+		"scaled":  schemahelper.IntProp(""),
+	})
 
 	inputs := map[string]any{
 		"cluster": InputValue{Expr: celexp.Expression(`environment + "-cluster"`)},
@@ -120,7 +114,7 @@ func BenchmarkInputResolver_CEL(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		resolver := NewInputResolver(ctx, schema)
+		resolver := NewInputResolver(ctx, schema, nil)
 		_, err := resolver.ResolveInputs(inputs)
 		if err != nil {
 			b.Fatal(err)
@@ -135,11 +129,9 @@ func BenchmarkInputResolver_Template(b *testing.B) {
 	}
 	ctx := WithResolverContext(context.Background(), resolverCtx)
 
-	schema := SchemaDefinition{
-		Properties: map[string]PropertyDefinition{
-			"url": {Type: PropertyTypeString, Required: true},
-		},
-	}
+	schema := schemahelper.ObjectSchema([]string{"url"}, map[string]*jsonschema.Schema{
+		"url": schemahelper.StringProp(""),
+	})
 
 	inputs := map[string]any{
 		"url": InputValue{Tmpl: gotmpl.GoTemplatingContent("https://{{.environment}}.{{.region}}.example.com")},
@@ -147,7 +139,7 @@ func BenchmarkInputResolver_Template(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		resolver := NewInputResolver(ctx, schema)
+		resolver := NewInputResolver(ctx, schema, nil)
 		_, err := resolver.ResolveInputs(inputs)
 		if err != nil {
 			b.Fatal(err)
@@ -159,51 +151,43 @@ func BenchmarkInputResolver_TypeCoercion(b *testing.B) {
 	tests := []struct {
 		name   string
 		inputs map[string]any
-		schema SchemaDefinition
+		schema *jsonschema.Schema
 	}{
 		{
 			name: "string to int",
 			inputs: map[string]any{
 				"count": InputValue{Literal: "42"},
 			},
-			schema: SchemaDefinition{
-				Properties: map[string]PropertyDefinition{
-					"count": {Type: PropertyTypeInt, Required: true},
-				},
-			},
+			schema: schemahelper.ObjectSchema([]string{"count"}, map[string]*jsonschema.Schema{
+				"count": schemahelper.IntProp(""),
+			}),
 		},
 		{
 			name: "string to bool",
 			inputs: map[string]any{
 				"enabled": InputValue{Literal: "true"},
 			},
-			schema: SchemaDefinition{
-				Properties: map[string]PropertyDefinition{
-					"enabled": {Type: PropertyTypeBool, Required: true},
-				},
-			},
+			schema: schemahelper.ObjectSchema([]string{"enabled"}, map[string]*jsonschema.Schema{
+				"enabled": schemahelper.BoolProp(""),
+			}),
 		},
 		{
 			name: "string to array",
 			inputs: map[string]any{
 				"tags": InputValue{Literal: "tag1,tag2,tag3"},
 			},
-			schema: SchemaDefinition{
-				Properties: map[string]PropertyDefinition{
-					"tags": {Type: PropertyTypeArray, Required: true},
-				},
-			},
+			schema: schemahelper.ObjectSchema([]string{"tags"}, map[string]*jsonschema.Schema{
+				"tags": schemahelper.ArrayProp(""),
+			}),
 		},
 		{
 			name: "int to string",
 			inputs: map[string]any{
 				"id": InputValue{Literal: 42},
 			},
-			schema: SchemaDefinition{
-				Properties: map[string]PropertyDefinition{
-					"id": {Type: PropertyTypeString, Required: true},
-				},
-			},
+			schema: schemahelper.ObjectSchema([]string{"id"}, map[string]*jsonschema.Schema{
+				"id": schemahelper.StringProp(""),
+			}),
 		},
 	}
 
@@ -212,7 +196,7 @@ func BenchmarkInputResolver_TypeCoercion(b *testing.B) {
 			ctx := context.Background()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				resolver := NewInputResolver(ctx, tt.schema)
+				resolver := NewInputResolver(ctx, tt.schema, nil)
 				_, err := resolver.ResolveInputs(tt.inputs)
 				if err != nil {
 					b.Fatal(err)
@@ -236,20 +220,18 @@ func BenchmarkInputResolver_ComplexSchema(b *testing.B) {
 	}
 	ctx := WithResolverContext(context.Background(), resolverCtx)
 
-	schema := SchemaDefinition{
-		Properties: map[string]PropertyDefinition{
-			"name":        {Type: PropertyTypeString, Required: true},
-			"env":         {Type: PropertyTypeString, Required: true},
-			"region":      {Type: PropertyTypeString, Required: true},
-			"dbHost":      {Type: PropertyTypeString, Required: true},
-			"dbPort":      {Type: PropertyTypeInt, Required: true},
-			"url":         {Type: PropertyTypeString, Required: true},
-			"count":       {Type: PropertyTypeInt, Required: true},
-			"scaledCount": {Type: PropertyTypeInt, Required: true},
-			"enabled":     {Type: PropertyTypeBool, Required: true},
-			"tags":        {Type: PropertyTypeArray, Required: true},
-		},
-	}
+	schema := schemahelper.ObjectSchema([]string{"name", "env", "region", "dbHost", "dbPort", "url", "count", "scaledCount", "enabled", "tags"}, map[string]*jsonschema.Schema{
+		"name":        schemahelper.StringProp(""),
+		"env":         schemahelper.StringProp(""),
+		"region":      schemahelper.StringProp(""),
+		"dbHost":      schemahelper.StringProp(""),
+		"dbPort":      schemahelper.IntProp(""),
+		"url":         schemahelper.StringProp(""),
+		"count":       schemahelper.IntProp(""),
+		"scaledCount": schemahelper.IntProp(""),
+		"enabled":     schemahelper.BoolProp(""),
+		"tags":        schemahelper.ArrayProp(""),
+	})
 
 	inputs := map[string]any{
 		"name":        InputValue{Literal: "my-app"},
@@ -266,7 +248,7 @@ func BenchmarkInputResolver_ComplexSchema(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		resolver := NewInputResolver(ctx, schema)
+		resolver := NewInputResolver(ctx, schema, nil)
 		_, err := resolver.ResolveInputs(inputs)
 		if err != nil {
 			b.Fatal(err)
@@ -276,12 +258,10 @@ func BenchmarkInputResolver_ComplexSchema(b *testing.B) {
 
 func BenchmarkInputResolver_SecretMasking(b *testing.B) {
 	ctx := context.Background()
-	schema := SchemaDefinition{
-		Properties: map[string]PropertyDefinition{
-			"apiKey": {Type: PropertyTypeString, Required: true, IsSecret: true},
-			"name":   {Type: PropertyTypeString, Required: true},
-		},
-	}
+	schema := schemahelper.ObjectSchema([]string{"apiKey", "name"}, map[string]*jsonschema.Schema{
+		"apiKey": schemahelper.StringProp(""),
+		"name":   schemahelper.StringProp(""),
+	})
 
 	inputs := map[string]any{
 		"apiKey": InputValue{Literal: "secret-api-key-12345"},
@@ -290,7 +270,7 @@ func BenchmarkInputResolver_SecretMasking(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		resolver := NewInputResolver(ctx, schema)
+		resolver := NewInputResolver(ctx, schema, []string{"apiKey"})
 		_, err := resolver.ResolveInputs(inputs)
 		if err != nil {
 			b.Fatal(err)
@@ -337,32 +317,32 @@ func BenchmarkCoerceType(b *testing.B) {
 	tests := []struct {
 		name       string
 		value      any
-		targetType PropertyType
+		targetType string
 	}{
 		{
 			name:       "string to int",
 			value:      "42",
-			targetType: PropertyTypeInt,
+			targetType: "integer",
 		},
 		{
 			name:       "int to string",
 			value:      42,
-			targetType: PropertyTypeString,
+			targetType: "string",
 		},
 		{
 			name:       "string to bool",
 			value:      "true",
-			targetType: PropertyTypeBool,
+			targetType: "boolean",
 		},
 		{
 			name:       "string to array",
 			value:      "a,b,c,d,e",
-			targetType: PropertyTypeArray,
+			targetType: "array",
 		},
 		{
 			name:       "no coercion needed",
 			value:      map[string]any{"key": "value"},
-			targetType: PropertyTypeAny,
+			targetType: "",
 		},
 	}
 

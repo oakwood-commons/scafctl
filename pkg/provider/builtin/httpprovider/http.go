@@ -10,9 +10,11 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/ptrs"
 )
 
@@ -161,118 +163,45 @@ func NewHTTPProvider() *HTTPProvider {
 				provider.CapabilityAction,
 				provider.CapabilityTransform,
 			},
-			Schema: provider.SchemaDefinition{
-				Properties: map[string]provider.PropertyDefinition{
-					"url": {
-						Type:        provider.PropertyTypeString,
-						Description: "The URL to request",
-						Required:    true,
-						Example:     "https://api.example.com/users",
-						MaxLength:   ptrs.IntPtr(2048),
-						Pattern:     `^https?://.*`,
-					},
-					"method": {
-						Type:        provider.PropertyTypeString,
-						Description: "HTTP method",
-						Required:    false,
-						Example:     "GET",
-						MaxLength:   ptrs.IntPtr(10),
-					},
-					"headers": {
-						Type:        provider.PropertyTypeAny,
-						Description: "HTTP headers as key-value pairs",
-						Required:    false,
-					},
-					"body": {
-						Type:        provider.PropertyTypeString,
-						Description: "Request body for POST/PUT/PATCH requests",
-						Required:    false,
-						MaxLength:   ptrs.IntPtr(1048576),
-					},
-					"timeout": {
-						Type:        provider.PropertyTypeInt,
-						Description: "Request timeout in seconds",
-						Required:    false,
-						Example:     30,
-						Maximum:     ptrs.Float64Ptr(300.0),
-					},
-					"retry": {
-						Type:        provider.PropertyTypeAny,
-						Description: "Retry configuration for transient failures",
-						Required:    false,
-					},
-					"authProvider": {
-						Type:        provider.PropertyTypeString,
-						Description: "Authentication provider to use for this request (e.g., 'entra'). When set, the provider will automatically obtain and inject an access token.",
-						Required:    false,
-						Example:     "entra",
-						MaxLength:   ptrs.IntPtr(50),
-					},
-					"scope": {
-						Type:        provider.PropertyTypeString,
-						Description: "OAuth scope for authentication (required when authProvider is set). The token will be valid for the request timeout plus a 60-second buffer.",
-						Required:    false,
-						Example:     "https://graph.microsoft.com/.default",
-						MaxLength:   ptrs.IntPtr(500),
-					},
-				},
-			},
-			OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
-				provider.CapabilityFrom: {
-					Properties: map[string]provider.PropertyDefinition{
-						"statusCode": {
-							Type:        provider.PropertyTypeInt,
-							Description: "HTTP response status code",
-							Example:     200,
-						},
-						"body": {
-							Type:        provider.PropertyTypeString,
-							Description: "Response body as string",
-						},
-						"headers": {
-							Type:        provider.PropertyTypeAny,
-							Description: "Response headers",
-						},
-					},
-				},
-				provider.CapabilityTransform: {
-					Properties: map[string]provider.PropertyDefinition{
-						"statusCode": {
-							Type:        provider.PropertyTypeInt,
-							Description: "HTTP response status code",
-							Example:     200,
-						},
-						"body": {
-							Type:        provider.PropertyTypeString,
-							Description: "Response body as string",
-						},
-						"headers": {
-							Type:        provider.PropertyTypeAny,
-							Description: "Response headers",
-						},
-					},
-				},
-				provider.CapabilityAction: {
-					Properties: map[string]provider.PropertyDefinition{
-						"success": {
-							Type:        provider.PropertyTypeBool,
-							Description: "Whether the HTTP request completed successfully (2xx status)",
-						},
-						"statusCode": {
-							Type:        provider.PropertyTypeInt,
-							Description: "HTTP response status code",
-							Example:     200,
-						},
-						"body": {
-							Type:        provider.PropertyTypeString,
-							Description: "Response body as string",
-						},
-						"headers": {
-							Type:        provider.PropertyTypeAny,
-							Description: "Response headers",
-						},
-					},
-				},
+			Schema: schemahelper.ObjectSchema([]string{"url"}, map[string]*jsonschema.Schema{
+				"url": schemahelper.StringProp("The URL to request",
+					schemahelper.WithExample("https://api.example.com/users"),
+					schemahelper.WithMaxLength(*ptrs.IntPtr(2048)),
+					schemahelper.WithPattern(`^https?://.*`)),
+				"method": schemahelper.StringProp("HTTP method",
+					schemahelper.WithExample("GET"),
+					schemahelper.WithMaxLength(*ptrs.IntPtr(10))),
+				"headers": schemahelper.AnyProp("HTTP headers as key-value pairs"),
+				"body": schemahelper.StringProp("Request body for POST/PUT/PATCH requests",
+					schemahelper.WithMaxLength(*ptrs.IntPtr(1048576))),
+				"timeout": schemahelper.IntProp("Request timeout in seconds",
+					schemahelper.WithExample(30),
+					schemahelper.WithMaximum(*ptrs.Float64Ptr(300.0))),
+				"retry": schemahelper.AnyProp("Retry configuration for transient failures"),
+				"authProvider": schemahelper.StringProp("Authentication provider to use for this request (e.g., 'entra'). When set, the provider will automatically obtain and inject an access token.",
+					schemahelper.WithExample("entra"),
+					schemahelper.WithMaxLength(*ptrs.IntPtr(50))),
+				"scope": schemahelper.StringProp("OAuth scope for authentication (required when authProvider is set). The token will be valid for the request timeout plus a 60-second buffer.",
+					schemahelper.WithExample("https://graph.microsoft.com/.default"),
+					schemahelper.WithMaxLength(*ptrs.IntPtr(500))),
+			}),
+			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"statusCode": schemahelper.IntProp("HTTP response status code", schemahelper.WithExample(200)),
+					"body":       schemahelper.StringProp("Response body as string"),
+					"headers":    schemahelper.AnyProp("Response headers"),
+				}),
+				provider.CapabilityTransform: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"statusCode": schemahelper.IntProp("HTTP response status code", schemahelper.WithExample(200)),
+					"body":       schemahelper.StringProp("Response body as string"),
+					"headers":    schemahelper.AnyProp("Response headers"),
+				}),
+				provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"success":    schemahelper.BoolProp("Whether the HTTP request completed successfully (2xx status)"),
+					"statusCode": schemahelper.IntProp("HTTP response status code", schemahelper.WithExample(200)),
+					"body":       schemahelper.StringProp("Response body as string"),
+					"headers":    schemahelper.AnyProp("Response headers"),
+				}),
 			},
 			Examples: []provider.Example{
 				{

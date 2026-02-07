@@ -8,9 +8,11 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/ptrs"
 	"gopkg.in/yaml.v3"
 )
@@ -41,157 +43,61 @@ func NewDebugProvider() *DebugProvider {
 				provider.CapabilityAuthentication,
 				provider.CapabilityAction,
 			},
-			Schema: provider.SchemaDefinition{
-				Properties: map[string]provider.PropertyDefinition{
-					"expression": {
-						Type:        provider.PropertyTypeString,
-						Required:    false,
-						Description: "Optional CEL expression to filter or transform resolver data before output. If not provided, outputs all resolver data. Resolver data is available under the '_' variable (e.g., _.user.name).",
-						Example:     "_.user.name",
-						MaxLength:   ptrs.IntPtr(8192),
-					},
-					"label": {
-						Type:        provider.PropertyTypeString,
-						Required:    false,
-						Description: "Optional label or message to add context to the debug output",
-						Example:     "User data after transformation",
-						MaxLength:   ptrs.IntPtr(500),
-					},
-					"format": {
-						Type:        provider.PropertyTypeString,
-						Required:    false,
-						Description: "Output format for the debug data",
-						Example:     "json",
-						Enum:        []any{"json", "yaml", "pretty"},
-						Default:     "json",
-						MaxLength:   ptrs.IntPtr(10),
-					},
-					"destination": {
-						Type:        provider.PropertyTypeString,
-						Required:    false,
-						Description: "Where to output the debug data",
-						Example:     "stdout",
-						Enum:        []any{"stdout", "stderr", "file"},
-						Default:     "stdout",
-						MaxLength:   ptrs.IntPtr(10),
-					},
-					"file": {
-						Type:        provider.PropertyTypeString,
-						Required:    false,
-						Description: "File path when destination is 'file'",
-						Example:     "/tmp/debug.log",
-						MaxLength:   ptrs.IntPtr(500),
-					},
-					"colorize": {
-						Type:        provider.PropertyTypeBool,
-						Required:    false,
-						Description: "Whether to colorize the output (only applies to terminal output)",
-						Example:     "false",
-						Default:     false,
-					},
-				},
-			},
-			OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
-				provider.CapabilityFrom: {
-					Properties: map[string]provider.PropertyDefinition{
-						"result": {
-							Type:        provider.PropertyTypeAny,
-							Description: "The filtered or transformed resolver data (if expression provided) or all resolver data (if no expression)",
-						},
-						"output": {
-							Type:        provider.PropertyTypeString,
-							Description: "The formatted debug output containing the formatted representation of the result",
-						},
-						"destination": {
-							Type:        provider.PropertyTypeString,
-							Description: "Where the output was written (stdout, stderr, or file path)",
-						},
-					},
-				},
-				provider.CapabilityTransform: {
-					Properties: map[string]provider.PropertyDefinition{
-						"result": {
-							Type:        provider.PropertyTypeAny,
-							Description: "The filtered or transformed resolver data (if expression provided) or all resolver data (if no expression)",
-						},
-						"output": {
-							Type:        provider.PropertyTypeString,
-							Description: "The formatted debug output containing the formatted representation of the result",
-						},
-						"destination": {
-							Type:        provider.PropertyTypeString,
-							Description: "Where the output was written (stdout, stderr, or file path)",
-						},
-					},
-				},
-				provider.CapabilityValidation: {
-					Properties: map[string]provider.PropertyDefinition{
-						"valid": {
-							Type:        provider.PropertyTypeBool,
-							Description: "Whether the debug operation succeeded (always true if no errors occurred)",
-						},
-						"errors": {
-							Type:        provider.PropertyTypeArray,
-							Description: "Validation errors (empty if valid)",
-						},
-						"result": {
-							Type:        provider.PropertyTypeAny,
-							Description: "The filtered or transformed resolver data",
-						},
-						"output": {
-							Type:        provider.PropertyTypeString,
-							Description: "The formatted debug output",
-						},
-						"destination": {
-							Type:        provider.PropertyTypeString,
-							Description: "Where the output was written",
-						},
-					},
-				},
-				provider.CapabilityAuthentication: {
-					Properties: map[string]provider.PropertyDefinition{
-						"authenticated": {
-							Type:        provider.PropertyTypeBool,
-							Description: "Whether authentication succeeded (always true for debug)",
-						},
-						"token": {
-							Type:        provider.PropertyTypeString,
-							Description: "The authentication token (empty for debug provider)",
-						},
-						"result": {
-							Type:        provider.PropertyTypeAny,
-							Description: "The filtered or transformed resolver data",
-						},
-						"output": {
-							Type:        provider.PropertyTypeString,
-							Description: "The formatted debug output",
-						},
-						"destination": {
-							Type:        provider.PropertyTypeString,
-							Description: "Where the output was written",
-						},
-					},
-				},
-				provider.CapabilityAction: {
-					Properties: map[string]provider.PropertyDefinition{
-						"success": {
-							Type:        provider.PropertyTypeBool,
-							Description: "Whether the debug operation succeeded. Always true if no errors occurred",
-						},
-						"result": {
-							Type:        provider.PropertyTypeAny,
-							Description: "The filtered or transformed resolver data (if expression provided) or all resolver data (if no expression)",
-						},
-						"output": {
-							Type:        provider.PropertyTypeString,
-							Description: "The formatted debug output containing the formatted representation of the result",
-						},
-						"destination": {
-							Type:        provider.PropertyTypeString,
-							Description: "Where the output was written (stdout, stderr, or file path)",
-						},
-					},
-				},
+			Schema: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+				"expression": schemahelper.StringProp("Optional CEL expression to filter or transform resolver data before output. If not provided, outputs all resolver data. Resolver data is available under the '_' variable (e.g., _.user.name).",
+					schemahelper.WithExample("_.user.name"),
+					schemahelper.WithMaxLength(*ptrs.IntPtr(8192))),
+				"label": schemahelper.StringProp("Optional label or message to add context to the debug output",
+					schemahelper.WithExample("User data after transformation"),
+					schemahelper.WithMaxLength(*ptrs.IntPtr(500))),
+				"format": schemahelper.StringProp("Output format for the debug data",
+					schemahelper.WithExample("json"),
+					schemahelper.WithEnum("json", "yaml", "pretty"),
+					schemahelper.WithDefault("json"),
+					schemahelper.WithMaxLength(*ptrs.IntPtr(10))),
+				"destination": schemahelper.StringProp("Where to output the debug data",
+					schemahelper.WithExample("stdout"),
+					schemahelper.WithEnum("stdout", "stderr", "file"),
+					schemahelper.WithDefault("stdout"),
+					schemahelper.WithMaxLength(*ptrs.IntPtr(10))),
+				"file": schemahelper.StringProp("File path when destination is 'file'",
+					schemahelper.WithExample("/tmp/debug.log"),
+					schemahelper.WithMaxLength(*ptrs.IntPtr(500))),
+				"colorize": schemahelper.BoolProp("Whether to colorize the output (only applies to terminal output)",
+					schemahelper.WithExample("false"),
+					schemahelper.WithDefault(false)),
+			}),
+			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"result":      schemahelper.AnyProp("The filtered or transformed resolver data (if expression provided) or all resolver data (if no expression)"),
+					"output":      schemahelper.StringProp("The formatted debug output containing the formatted representation of the result"),
+					"destination": schemahelper.StringProp("Where the output was written (stdout, stderr, or file path)"),
+				}),
+				provider.CapabilityTransform: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"result":      schemahelper.AnyProp("The filtered or transformed resolver data (if expression provided) or all resolver data (if no expression)"),
+					"output":      schemahelper.StringProp("The formatted debug output containing the formatted representation of the result"),
+					"destination": schemahelper.StringProp("Where the output was written (stdout, stderr, or file path)"),
+				}),
+				provider.CapabilityValidation: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"valid":       schemahelper.BoolProp("Whether the debug operation succeeded (always true if no errors occurred)"),
+					"errors":      schemahelper.ArrayProp("Validation errors (empty if valid)"),
+					"result":      schemahelper.AnyProp("The filtered or transformed resolver data"),
+					"output":      schemahelper.StringProp("The formatted debug output"),
+					"destination": schemahelper.StringProp("Where the output was written"),
+				}),
+				provider.CapabilityAuthentication: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"authenticated": schemahelper.BoolProp("Whether authentication succeeded (always true for debug)"),
+					"token":         schemahelper.StringProp("The authentication token (empty for debug provider)"),
+					"result":        schemahelper.AnyProp("The filtered or transformed resolver data"),
+					"output":        schemahelper.StringProp("The formatted debug output"),
+					"destination":   schemahelper.StringProp("Where the output was written"),
+				}),
+				provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"success":     schemahelper.BoolProp("Whether the debug operation succeeded. Always true if no errors occurred"),
+					"result":      schemahelper.AnyProp("The filtered or transformed resolver data (if expression provided) or all resolver data (if no expression)"),
+					"output":      schemahelper.StringProp("The formatted debug output containing the formatted representation of the result"),
+					"destination": schemahelper.StringProp("Where the output was written (stdout, stderr, or file path)"),
+				}),
 			},
 			Examples: []provider.Example{
 				{

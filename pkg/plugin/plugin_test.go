@@ -9,8 +9,10 @@ import (
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/plugin/proto"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -44,15 +46,9 @@ func (m *MockProviderPlugin) GetProviderDescriptor(ctx context.Context, provider
 			APIVersion:  "v1",
 			Version:     semver.MustParse("1.0.0"),
 			Category:    "test",
-			Schema: provider.SchemaDefinition{
-				Properties: map[string]provider.PropertyDefinition{
-					"input": {
-						Type:        provider.PropertyTypeString,
-						Required:    true,
-						Description: "Test input",
-					},
-				},
-			},
+			Schema: schemahelper.ObjectSchema([]string{"input"}, map[string]*jsonschema.Schema{
+				"input": schemahelper.StringProp("Test input"),
+			}),
 		}, nil
 	}
 	return nil, fmt.Errorf("unknown provider: %s", providerName)
@@ -120,23 +116,13 @@ func TestDescriptorConversion(t *testing.T) {
 				Name:       "test",
 				APIVersion: "v1",
 				Version:    semver.MustParse("1.0.0"),
-				Schema: provider.SchemaDefinition{
-					Properties: map[string]provider.PropertyDefinition{
-						"param1": {
-							Type:        provider.PropertyTypeString,
-							Required:    true,
-							Description: "Parameter 1",
-							Example:     "example",
-							MaxLength:   &maxLen,
-						},
-						"param2": {
-							Type:        provider.PropertyTypeInt,
-							Required:    false,
-							Description: "Parameter 2",
-							Default:     42,
-						},
-					},
-				},
+				Schema: schemahelper.ObjectSchema([]string{"param1"}, map[string]*jsonschema.Schema{
+					"param1": schemahelper.StringProp("Parameter 1",
+						schemahelper.WithExample("example"),
+						schemahelper.WithMaxLength(maxLen)),
+					"param2": schemahelper.IntProp("Parameter 2",
+						schemahelper.WithDefault(42)),
+				}),
 			},
 		},
 		{
@@ -146,23 +132,13 @@ func TestDescriptorConversion(t *testing.T) {
 				APIVersion:   "v1",
 				Version:      semver.MustParse("1.0.0"),
 				Capabilities: []provider.Capability{provider.CapabilityFrom, provider.CapabilityAction},
-				OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
-					provider.CapabilityFrom: {
-						Properties: map[string]provider.PropertyDefinition{
-							"result": {
-								Type:        provider.PropertyTypeString,
-								Description: "Result",
-							},
-						},
-					},
-					provider.CapabilityAction: {
-						Properties: map[string]provider.PropertyDefinition{
-							"success": {
-								Type:        provider.PropertyTypeBool,
-								Description: "Whether action succeeded",
-							},
-						},
-					},
+				OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+					provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+						"result": schemahelper.StringProp("Result"),
+					}),
+					provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+						"success": schemahelper.BoolProp("Whether action succeeded"),
+					}),
 				},
 			},
 		},
@@ -189,13 +165,13 @@ func TestDescriptorConversion(t *testing.T) {
 			assert.Equal(t, len(tt.descriptor.Capabilities), len(converted.Capabilities))
 
 			// Compare schema
-			if len(tt.descriptor.Schema.Properties) > 0 {
+			if tt.descriptor.Schema != nil && len(tt.descriptor.Schema.Properties) > 0 {
+				require.NotNil(t, converted.Schema)
 				assert.Equal(t, len(tt.descriptor.Schema.Properties), len(converted.Schema.Properties))
 				for name, prop := range tt.descriptor.Schema.Properties {
 					convertedProp, ok := converted.Schema.Properties[name]
 					require.True(t, ok, "property %s not found", name)
 					assert.Equal(t, prop.Type, convertedProp.Type)
-					assert.Equal(t, prop.Required, convertedProp.Required)
 					assert.Equal(t, prop.Description, convertedProp.Description)
 				}
 			}
@@ -206,7 +182,9 @@ func TestDescriptorConversion(t *testing.T) {
 				for cap, schema := range tt.descriptor.OutputSchemas {
 					convertedSchema, ok := converted.OutputSchemas[cap]
 					require.True(t, ok, "output schema for capability %s not found", cap)
-					assert.Equal(t, len(schema.Properties), len(convertedSchema.Properties))
+					if schema != nil && convertedSchema != nil {
+						assert.Equal(t, len(schema.Properties), len(convertedSchema.Properties))
+					}
 				}
 			}
 		})

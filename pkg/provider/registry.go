@@ -294,16 +294,17 @@ func (r *Registry) validateDescriptor(desc *Descriptor) error {
 		}
 	}
 
-	// Schema Properties must be explicitly initialized
-	// Providers with no inputs should use an empty map: map[string]PropertyDefinition{}
-	if desc.Schema.Properties == nil {
-		return fmt.Errorf("provider Schema.Properties must be initialized (use empty map for providers with no inputs)")
-	}
-
-	// Validate property types
-	for propName, propDef := range desc.Schema.Properties {
-		if !propDef.Type.IsValid() {
-			return fmt.Errorf("property %q has invalid type %q", propName, propDef.Type)
+	// Validate schema property types if schema is defined
+	if desc.Schema != nil {
+		validTypes := map[string]bool{
+			"string": true, "integer": true, "number": true,
+			"boolean": true, "array": true, "object": true,
+			"": true, // empty type means "any"
+		}
+		for propName, propDef := range desc.Schema.Properties {
+			if !validTypes[propDef.Type] {
+				return fmt.Errorf("property %q has invalid type %q", propName, propDef.Type)
+			}
 		}
 	}
 

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -61,9 +62,9 @@ func mockActionProvider(name string) *mockProvider {
 			Description:  "Mock provider for testing",
 			MockBehavior: "Returns mock data",
 			Capabilities: []provider.Capability{provider.CapabilityAction},
-			Schema:       provider.SchemaDefinition{},
-			OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
-				provider.CapabilityAction: {},
+			Schema:       &jsonschema.Schema{Type: "object"},
+			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+				provider.CapabilityAction: {Type: "object"},
 			},
 		},
 	}
@@ -79,9 +80,9 @@ func mockNonActionProvider(name string) *mockProvider {
 			Description:  "Mock provider for testing",
 			MockBehavior: "Returns mock data",
 			Capabilities: []provider.Capability{provider.CapabilityFrom},
-			Schema:       provider.SchemaDefinition{},
-			OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
-				provider.CapabilityFrom: {},
+			Schema:       &jsonschema.Schema{Type: "object"},
+			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+				provider.CapabilityFrom: {Type: "object"},
 			},
 		},
 	}

@@ -10,7 +10,9 @@ import (
 	"regexp"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 )
 
@@ -116,53 +118,30 @@ func (p *SecretProvider) Descriptor() *provider.Descriptor {
 }
 
 // buildSchema constructs the input schema for the secret provider
-func (p *SecretProvider) buildSchema() provider.SchemaDefinition {
-	return provider.SchemaDefinition{
-		Properties: map[string]provider.PropertyDefinition{
-			FieldOperation: {
-				Type:        provider.PropertyTypeString,
-				Description: "Operation to perform: 'get' (retrieve single secret) or 'list' (list all secrets)",
-				Required:    true,
-				Enum:        []any{OpGet, OpList},
-				Example:     OpGet,
-			},
-			FieldName: {
-				Type:        provider.PropertyTypeString,
-				Description: "Secret name (for 'get' operation). Required if pattern not specified.",
-				Example:     "api-token",
-				Pattern:     "^[a-zA-Z0-9._-]+$",
-			},
-			FieldPattern: {
-				Type:        provider.PropertyTypeString,
-				Description: "Regular expression pattern to match secret names (for 'get' operation). Returns first match.",
-				Example:     "^prod-.+$",
-			},
-			FieldRequired: {
-				Type:        provider.PropertyTypeBool,
-				Description: "If true, error when secret not found. If false, return fallback or empty string.",
-				Example:     true,
-			},
-			FieldFallback: {
-				Type:        provider.PropertyTypeString,
-				Description: "Value to return when secret not found and required=false",
-				Example:     "default-value",
-			},
-		},
-	}
+func (p *SecretProvider) buildSchema() *jsonschema.Schema {
+	return schemahelper.ObjectSchema([]string{FieldOperation}, map[string]*jsonschema.Schema{
+		FieldOperation: schemahelper.StringProp("Operation to perform: 'get' (retrieve single secret) or 'list' (list all secrets)",
+			schemahelper.WithEnum(OpGet, OpList),
+			schemahelper.WithExample(OpGet)),
+		FieldName: schemahelper.StringProp("Secret name (for 'get' operation). Required if pattern not specified.",
+			schemahelper.WithExample("api-token"),
+			schemahelper.WithPattern("^[a-zA-Z0-9._-]+$")),
+		FieldPattern: schemahelper.StringProp("Regular expression pattern to match secret names (for 'get' operation). Returns first match.",
+			schemahelper.WithExample("^prod-.+$")),
+		FieldRequired: schemahelper.BoolProp("If true, error when secret not found. If false, return fallback or empty string.",
+			schemahelper.WithExample(true)),
+		FieldFallback: schemahelper.StringProp("Value to return when secret not found and required=false",
+			schemahelper.WithExample("default-value")),
+	})
 }
 
 // buildOutputSchemas documents the output format for each operation
-func (p *SecretProvider) buildOutputSchemas() map[provider.Capability]provider.SchemaDefinition {
-	return map[provider.Capability]provider.SchemaDefinition{
-		provider.CapabilityFrom: {
-			Properties: map[string]provider.PropertyDefinition{
-				"_result": {
-					Type:        provider.PropertyTypeAny,
-					Description: "For 'get' operation: the secret value as a string. For 'list' operation: array of secret names.",
-					Example:     "my-secret-value",
-				},
-			},
-		},
+func (p *SecretProvider) buildOutputSchemas() map[provider.Capability]*jsonschema.Schema {
+	return map[provider.Capability]*jsonschema.Schema{
+		provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+			"_result": schemahelper.AnyProp("For 'get' operation: the secret value as a string. For 'list' operation: array of secret names.",
+				schemahelper.WithExample("my-secret-value")),
+		}),
 	}
 }
 

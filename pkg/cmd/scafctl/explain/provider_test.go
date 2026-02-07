@@ -6,7 +6,9 @@ import (
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/stretchr/testify/assert"
@@ -84,27 +86,17 @@ func TestProviderOptions_Run(t *testing.T) {
 				},
 				Tags:         []string{"test", "mock"},
 				MockBehavior: "Returns test data",
-				Schema: provider.SchemaDefinition{
-					Properties: map[string]provider.PropertyDefinition{
-						"input": {
-							Type:        provider.PropertyTypeString,
-							Description: "Input value",
-							Required:    true,
-							Example:     "example-value",
-						},
-					},
-				},
-				OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
-					provider.CapabilityFrom: {
-						Properties: map[string]provider.PropertyDefinition{
-							"data": {Type: provider.PropertyTypeAny},
-						},
-					},
-					provider.CapabilityTransform: {
-						Properties: map[string]provider.PropertyDefinition{
-							"data": {Type: provider.PropertyTypeAny},
-						},
-					},
+				Schema: schemahelper.ObjectSchema([]string{"input"}, map[string]*jsonschema.Schema{
+					"input": schemahelper.StringProp("Input value",
+						schemahelper.WithExample("example-value")),
+				}),
+				OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+					provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+						"data": schemahelper.AnyProp(""),
+					}),
+					provider.CapabilityTransform: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+						"data": schemahelper.AnyProp(""),
+					}),
 				},
 				Examples: []provider.Example{
 					{
@@ -188,15 +180,11 @@ func TestProviderOptions_Run(t *testing.T) {
 				Version:      version,
 				Capabilities: []provider.Capability{provider.CapabilityFrom},
 				MockBehavior: "Returns nothing",
-				Schema: provider.SchemaDefinition{
-					Properties: map[string]provider.PropertyDefinition{},
-				},
-				OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
-					provider.CapabilityFrom: {
-						Properties: map[string]provider.PropertyDefinition{
-							"data": {Type: provider.PropertyTypeAny},
-						},
-					},
+				Schema:       &jsonschema.Schema{Type: "object"},
+				OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+					provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+						"data": schemahelper.AnyProp(""),
+					}),
 				},
 				Deprecated: true,
 			},
@@ -235,15 +223,11 @@ func TestProviderOptions_Run(t *testing.T) {
 				Version:      version,
 				Capabilities: []provider.Capability{provider.CapabilityFrom},
 				MockBehavior: "Returns nothing",
-				Schema: provider.SchemaDefinition{
-					Properties: map[string]provider.PropertyDefinition{},
-				},
-				OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
-					provider.CapabilityFrom: {
-						Properties: map[string]provider.PropertyDefinition{
-							"data": {Type: provider.PropertyTypeAny},
-						},
-					},
+				Schema:       &jsonschema.Schema{Type: "object"},
+				OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+					provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+						"data": schemahelper.AnyProp(""),
+					}),
 				},
 				Beta: true,
 			},

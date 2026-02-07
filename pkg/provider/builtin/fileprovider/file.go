@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 )
 
 // ProviderName is the name of this provider.
@@ -21,8 +23,6 @@ type FileProvider struct {
 
 // NewFileProvider creates a new file provider instance.
 func NewFileProvider() *FileProvider {
-	maxPathLength := 4096
-	maxContentSize := 10485760 // 10MB
 	version := semver.MustParse("1.0.0")
 
 	return &FileProvider{
@@ -39,95 +39,40 @@ func NewFileProvider() *FileProvider {
 				provider.CapabilityAction,    // write, delete operations
 				provider.CapabilityTransform, // transform operations on file content
 			},
-			Schema: provider.SchemaDefinition{
-				Properties: map[string]provider.PropertyDefinition{
-					"operation": {
-						Type:        provider.PropertyTypeString,
-						Required:    true,
-						Description: "Operation to perform",
-						Example:     "read",
-						Enum:        []any{"read", "write", "exists", "delete"},
-					},
-					"path": {
-						Type:        provider.PropertyTypeString,
-						Required:    true,
-						Description: "File path (absolute or relative)",
-						Example:     "./config.yaml",
-						MaxLength:   &maxPathLength,
-					},
-					"content": {
-						Type:        provider.PropertyTypeString,
-						Required:    false,
-						Description: "Content to write (required for write operation)",
-						Example:     "data: value",
-						MaxLength:   &maxContentSize,
-					},
-					"createDirs": {
-						Type:        provider.PropertyTypeBool,
-						Required:    false,
-						Description: "Create parent directories if they don't exist (for write operation)",
-						Example:     true,
-						Default:     false,
-					},
-					"encoding": {
-						Type:        provider.PropertyTypeString,
-						Required:    false,
-						Description: "File encoding for read/write operations",
-						Example:     "utf-8",
-						Default:     "utf-8",
-						Enum:        []any{"utf-8", "binary"},
-					},
-				},
-			},
-			OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
-				provider.CapabilityFrom: {
-					Properties: map[string]provider.PropertyDefinition{
-						"content": {
-							Type:        provider.PropertyTypeString,
-							Description: "File content (for read operation)",
-						},
-						"exists": {
-							Type:        provider.PropertyTypeBool,
-							Description: "Whether the file exists (for exists operation)",
-						},
-						"path": {
-							Type:        provider.PropertyTypeString,
-							Description: "Absolute path to the file",
-						},
-						"size": {
-							Type:        provider.PropertyTypeInt,
-							Description: "File size in bytes (for read operation)",
-						},
-					},
-				},
-				provider.CapabilityTransform: {
-					Properties: map[string]provider.PropertyDefinition{
-						"content": {
-							Type:        provider.PropertyTypeString,
-							Description: "File content (for read operation)",
-						},
-						"path": {
-							Type:        provider.PropertyTypeString,
-							Description: "Absolute path to the file",
-						},
-						"size": {
-							Type:        provider.PropertyTypeInt,
-							Description: "File size in bytes",
-						},
-					},
-				},
-				provider.CapabilityAction: {
-					Properties: map[string]provider.PropertyDefinition{
-						"success": {
-							Type:        provider.PropertyTypeBool,
-							Description: "Whether the operation succeeded (for write/delete operations)",
-						},
-						"path": {
-							Type:        provider.PropertyTypeString,
-							Description: "Absolute path to the file",
-						},
-					},
-				},
+			Schema: schemahelper.ObjectSchema([]string{"operation", "path"}, map[string]*jsonschema.Schema{
+				"operation": schemahelper.StringProp("Operation to perform",
+					schemahelper.WithExample("read"),
+					schemahelper.WithEnum("read", "write", "exists", "delete")),
+				"path": schemahelper.StringProp("File path (absolute or relative)",
+					schemahelper.WithExample("./config.yaml"),
+					schemahelper.WithMaxLength(4096)),
+				"content": schemahelper.StringProp("Content to write (required for write operation)",
+					schemahelper.WithExample("data: value"),
+					schemahelper.WithMaxLength(10485760)),
+				"createDirs": schemahelper.BoolProp("Create parent directories if they don't exist (for write operation)",
+					schemahelper.WithExample(true),
+					schemahelper.WithDefault(false)),
+				"encoding": schemahelper.StringProp("File encoding for read/write operations",
+					schemahelper.WithExample("utf-8"),
+					schemahelper.WithDefault("utf-8"),
+					schemahelper.WithEnum("utf-8", "binary")),
+			}),
+			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"content": schemahelper.StringProp("File content (for read operation)"),
+					"exists":  schemahelper.BoolProp("Whether the file exists (for exists operation)"),
+					"path":    schemahelper.StringProp("Absolute path to the file"),
+					"size":    schemahelper.IntProp("File size in bytes (for read operation)"),
+				}),
+				provider.CapabilityTransform: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"content": schemahelper.StringProp("File content (for read operation)"),
+					"path":    schemahelper.StringProp("Absolute path to the file"),
+					"size":    schemahelper.IntProp("File size in bytes"),
+				}),
+				provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"success": schemahelper.BoolProp("Whether the operation succeeded (for write/delete operations)"),
+					"path":    schemahelper.StringProp("Absolute path to the file"),
+				}),
 			},
 			Examples: []provider.Example{
 				{

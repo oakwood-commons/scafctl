@@ -25,15 +25,17 @@ func TestNewGitProvider(t *testing.T) {
 	assert.Contains(t, desc.Capabilities, provider.CapabilityAction)
 	assert.Contains(t, desc.Capabilities, provider.CapabilityFrom)
 
+	assert.NotNil(t, desc.Schema)
 	assert.NotNil(t, desc.Schema.Properties)
-	assert.True(t, desc.Schema.Properties["operation"].Required)
-	assert.Equal(t, provider.PropertyTypeString, desc.Schema.Properties["operation"].Type)
+	assert.Contains(t, desc.Schema.Required, "operation")
+	assert.Equal(t, "string", desc.Schema.Properties["operation"].Type)
 	assert.NotEmpty(t, desc.Schema.Properties["operation"].Enum)
 
+	assert.NotNil(t, desc.OutputSchemas[provider.CapabilityAction])
 	assert.NotNil(t, desc.OutputSchemas[provider.CapabilityAction].Properties)
-	assert.Equal(t, provider.PropertyTypeBool, desc.OutputSchemas[provider.CapabilityAction].Properties["success"].Type)
-	assert.Equal(t, provider.PropertyTypeString, desc.OutputSchemas[provider.CapabilityAction].Properties["output"].Type)
-	assert.Equal(t, provider.PropertyTypeString, desc.OutputSchemas[provider.CapabilityAction].Properties["error"].Type)
+	assert.Equal(t, "boolean", desc.OutputSchemas[provider.CapabilityAction].Properties["success"].Type)
+	assert.Equal(t, "string", desc.OutputSchemas[provider.CapabilityAction].Properties["output"].Type)
+	assert.Equal(t, "string", desc.OutputSchemas[provider.CapabilityAction].Properties["error"].Type)
 }
 
 func setupTestRepo(t *testing.T) string {

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
@@ -130,7 +131,7 @@ func (o *ProviderOptions) printProviderExplanation(w *writer.Writer, desc *provi
 	}
 
 	// Input schema
-	if len(desc.Schema.Properties) > 0 {
+	if desc.Schema != nil && len(desc.Schema.Properties) > 0 {
 		w.Infof("Input Schema")
 		o.printSchemaProperties(w, desc.Schema, "")
 		w.Plainln("")
@@ -206,7 +207,17 @@ func (o *ProviderOptions) printProviderExplanation(w *writer.Writer, desc *provi
 }
 
 // printSchemaProperties prints schema properties with formatting
-func (o *ProviderOptions) printSchemaProperties(w *writer.Writer, schema provider.SchemaDefinition, indent string) {
+func (o *ProviderOptions) printSchemaProperties(w *writer.Writer, schema *jsonschema.Schema, indent string) {
+	if schema == nil || len(schema.Properties) == 0 {
+		return
+	}
+
+	// Build required set
+	requiredSet := make(map[string]bool, len(schema.Required))
+	for _, name := range schema.Required {
+		requiredSet[name] = true
+	}
+
 	// Sort properties for consistent output
 	props := make([]string, 0, len(schema.Properties))
 	for name := range schema.Properties {
@@ -217,12 +228,15 @@ func (o *ProviderOptions) printSchemaProperties(w *writer.Writer, schema provide
 	for _, name := range props {
 		prop := schema.Properties[name]
 		reqMarker := ""
-		if prop.Required {
+		if requiredSet[name] {
 			reqMarker = " (required)"
 		}
 
 		// Build type string
-		typeStr := string(prop.Type)
+		typeStr := prop.Type
+		if typeStr == "" {
+			typeStr = "any"
+		}
 		if len(prop.Enum) > 0 {
 			enumStrs := make([]string, len(prop.Enum))
 			for i, e := range prop.Enum {
@@ -238,11 +252,11 @@ func (o *ProviderOptions) printSchemaProperties(w *writer.Writer, schema provide
 		}
 
 		if prop.Default != nil {
-			w.Plainlnf("%s      Default: %v", indent, prop.Default)
+			w.Plainlnf("%s      Default: %s", indent, string(prop.Default))
 		}
 
-		if prop.Example != nil {
-			w.Plainlnf("%s      Example: %v", indent, prop.Example)
+		if len(prop.Examples) > 0 {
+			w.Plainlnf("%s      Example: %v", indent, prop.Examples[0])
 		}
 	}
 }

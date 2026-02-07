@@ -6,8 +6,10 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/ptrs"
 )
 
@@ -24,18 +26,10 @@ func NewSleepProvider() *SleepProvider {
 	version, _ := semver.NewVersion("1.0.0")
 
 	// Common output schema for capabilities without required fields
-	commonOutputSchema := provider.SchemaDefinition{
-		Properties: map[string]provider.PropertyDefinition{
-			"duration": {
-				Type:        provider.PropertyTypeString,
-				Description: "The duration that was slept",
-			},
-			"elapsed": {
-				Type:        provider.PropertyTypeString,
-				Description: "The actual elapsed time (should match duration in most cases)",
-			},
-		},
-	}
+	commonOutputSchema := schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+		"duration": schemahelper.StringProp("The duration that was slept"),
+		"elapsed":  schemahelper.StringProp("The actual elapsed time (should match duration in most cases)"),
+	})
 
 	return &SleepProvider{
 		descriptor: &provider.Descriptor{
@@ -52,77 +46,32 @@ func NewSleepProvider() *SleepProvider {
 				provider.CapabilityAuthentication,
 				provider.CapabilityAction,
 			},
-			Schema: provider.SchemaDefinition{
-				Properties: map[string]provider.PropertyDefinition{
-					"duration": {
-						Type:        provider.PropertyTypeString,
-						Required:    true,
-						Description: "Duration to sleep. Accepts Go duration format (e.g., '1s', '500ms', '2m', '1h30m'). Valid time units are 'ns', 'us' (or 'µs'), 'ms', 's', 'm', 'h'.",
-						Example:     "5s",
-						MaxLength:   ptrs.IntPtr(50),
-						Pattern:     `^(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+$`,
-					},
-				},
-			},
-			OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
+			Schema: schemahelper.ObjectSchema([]string{"duration"}, map[string]*jsonschema.Schema{
+				"duration": schemahelper.StringProp("Duration to sleep. Accepts Go duration format (e.g., '1s', '500ms', '2m', '1h30m'). Valid time units are 'ns', 'us' (or 'µs'), 'ms', 's', 'm', 'h'.",
+					schemahelper.WithExample("5s"),
+					schemahelper.WithMaxLength(*ptrs.IntPtr(50)),
+					schemahelper.WithPattern(`^(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+$`)),
+			}),
+			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 				provider.CapabilityFrom:      commonOutputSchema,
 				provider.CapabilityTransform: commonOutputSchema,
-				provider.CapabilityValidation: {
-					Properties: map[string]provider.PropertyDefinition{
-						"valid": {
-							Type:        provider.PropertyTypeBool,
-							Description: "Whether the sleep operation completed successfully (always true if no error)",
-						},
-						"errors": {
-							Type:        provider.PropertyTypeArray,
-							Description: "Validation errors (empty if valid)",
-						},
-						"duration": {
-							Type:        provider.PropertyTypeString,
-							Description: "The duration that was slept",
-						},
-						"elapsed": {
-							Type:        provider.PropertyTypeString,
-							Description: "The actual elapsed time",
-						},
-					},
-				},
-				provider.CapabilityAuthentication: {
-					Properties: map[string]provider.PropertyDefinition{
-						"authenticated": {
-							Type:        provider.PropertyTypeBool,
-							Description: "Whether authentication succeeded (always true for sleep)",
-						},
-						"token": {
-							Type:        provider.PropertyTypeString,
-							Description: "The authentication token (empty for sleep provider)",
-						},
-						"duration": {
-							Type:        provider.PropertyTypeString,
-							Description: "The duration that was slept",
-						},
-						"elapsed": {
-							Type:        provider.PropertyTypeString,
-							Description: "The actual elapsed time",
-						},
-					},
-				},
-				provider.CapabilityAction: {
-					Properties: map[string]provider.PropertyDefinition{
-						"success": {
-							Type:        provider.PropertyTypeBool,
-							Description: "Whether the sleep operation completed successfully",
-						},
-						"duration": {
-							Type:        provider.PropertyTypeString,
-							Description: "The duration that was slept",
-						},
-						"elapsed": {
-							Type:        provider.PropertyTypeString,
-							Description: "The actual elapsed time",
-						},
-					},
-				},
+				provider.CapabilityValidation: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"valid":    schemahelper.BoolProp("Whether the sleep operation completed successfully (always true if no error)"),
+					"errors":   schemahelper.ArrayProp("Validation errors (empty if valid)"),
+					"duration": schemahelper.StringProp("The duration that was slept"),
+					"elapsed":  schemahelper.StringProp("The actual elapsed time"),
+				}),
+				provider.CapabilityAuthentication: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"authenticated": schemahelper.BoolProp("Whether authentication succeeded (always true for sleep)"),
+					"token":         schemahelper.StringProp("The authentication token (empty for sleep provider)"),
+					"duration":      schemahelper.StringProp("The duration that was slept"),
+					"elapsed":       schemahelper.StringProp("The actual elapsed time"),
+				}),
+				provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"success":  schemahelper.BoolProp("Whether the sleep operation completed successfully"),
+					"duration": schemahelper.StringProp("The duration that was slept"),
+					"elapsed":  schemahelper.StringProp("The actual elapsed time"),
+				}),
 			},
 			Examples: []provider.Example{
 				{

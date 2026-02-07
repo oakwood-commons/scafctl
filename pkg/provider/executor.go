@@ -108,7 +108,7 @@ func (e *Executor) Execute(ctx context.Context, provider Provider, inputs map[st
 	startTime := time.Now()
 
 	// Create input resolver with schema
-	inputResolver := NewInputResolver(ctx, desc.Schema)
+	inputResolver := NewInputResolver(ctx, desc.Schema, desc.SensitiveFields)
 
 	// Resolve inputs
 	resolvedInputs, err := inputResolver.ResolveInputs(inputs)

@@ -9,9 +9,11 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -66,55 +68,19 @@ func (p *mockProvider) Descriptor() *provider.Descriptor {
 		Version:      semver.MustParse("1.0.0"),
 		Description:  "Mock provider for integration testing",
 		MockBehavior: "Returns configured response",
-		Schema: provider.SchemaDefinition{
-			Properties: map[string]provider.PropertyDefinition{
-				"name": {
-					Type:        provider.PropertyTypeString,
-					Required:    false,
-					Description: "Test input name",
-				},
-				"value": {
-					Type:        provider.PropertyTypeAny,
-					Required:    false,
-					Description: "Generic value input",
-				},
-				"fail": {
-					Type:        provider.PropertyTypeBool,
-					Required:    false,
-					Description: "Whether to fail",
-				},
-				"isFinally": {
-					Type:        provider.PropertyTypeBool,
-					Required:    false,
-					Description: "Whether this is a finally action",
-				},
-				"env": {
-					Type:        provider.PropertyTypeString,
-					Required:    false,
-					Description: "Environment name",
-				},
-				"server": {
-					Type:        provider.PropertyTypeString,
-					Required:    false,
-					Description: "Server name",
-				},
-				"item": {
-					Type:        provider.PropertyTypeAny,
-					Required:    false,
-					Description: "ForEach item value",
-				},
-			},
-		},
-		OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
-			provider.CapabilityAction: {
-				Properties: map[string]provider.PropertyDefinition{
-					"success": {
-						Type:        provider.PropertyTypeBool,
-						Required:    true,
-						Description: "Whether action succeeded",
-					},
-				},
-			},
+		Schema: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+			"name":      schemahelper.StringProp("Test input name"),
+			"value":     schemahelper.AnyProp("Generic value input"),
+			"fail":      schemahelper.BoolProp("Whether to fail"),
+			"isFinally": schemahelper.BoolProp("Whether this is a finally action"),
+			"env":       schemahelper.StringProp("Environment name"),
+			"server":    schemahelper.StringProp("Server name"),
+			"item":      schemahelper.AnyProp("ForEach item value"),
+		}),
+		OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+			provider.CapabilityAction: schemahelper.ObjectSchema([]string{"success"}, map[string]*jsonschema.Schema{
+				"success": schemahelper.BoolProp("Whether action succeeded"),
+			}),
 		},
 		Capabilities: []provider.Capability{provider.CapabilityAction},
 	}

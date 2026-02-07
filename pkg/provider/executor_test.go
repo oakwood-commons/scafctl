@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -40,18 +42,14 @@ func newMockExecutableProvider(name string, executeFunc func(ctx context.Context
 			Description:  "Mock provider for testing",
 			MockBehavior: "Returns mock output for testing purposes",
 			Capabilities: []Capability{CapabilityFrom},
-			Schema: SchemaDefinition{
-				Properties: map[string]PropertyDefinition{
-					"input1": {Type: PropertyTypeString, Required: true},
-					"input2": {Type: PropertyTypeInt, Required: false},
-				},
-			},
-			OutputSchemas: map[Capability]SchemaDefinition{
-				CapabilityFrom: {
-					Properties: map[string]PropertyDefinition{
-						"result": {Type: PropertyTypeString},
-					},
-				},
+			Schema: schemahelper.ObjectSchema([]string{"input1"}, map[string]*jsonschema.Schema{
+				"input1": schemahelper.StringProp(""),
+				"input2": schemahelper.IntProp(""),
+			}),
+			OutputSchemas: map[Capability]*jsonschema.Schema{
+				CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"result": schemahelper.StringProp(""),
+				}),
 			},
 		},
 		executeFunc: executeFunc,
@@ -257,17 +255,13 @@ func TestExecutor_Execute_WithResolverContext(t *testing.T) {
 			Name:         "test-provider",
 			Version:      version,
 			Capabilities: []Capability{CapabilityFrom},
-			Schema: SchemaDefinition{
-				Properties: map[string]PropertyDefinition{
-					"input1": {Type: PropertyTypeString, Required: true},
-				},
-			},
-			OutputSchemas: map[Capability]SchemaDefinition{
-				CapabilityFrom: {
-					Properties: map[string]PropertyDefinition{
-						"result": {Type: PropertyTypeString},
-					},
-				},
+			Schema: schemahelper.ObjectSchema([]string{"input1"}, map[string]*jsonschema.Schema{
+				"input1": schemahelper.StringProp(""),
+			}),
+			OutputSchemas: map[Capability]*jsonschema.Schema{
+				CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"result": schemahelper.StringProp(""),
+				}),
 			},
 		},
 		executeFunc: func(_ context.Context, input any) (*Output, error) {
@@ -518,7 +512,8 @@ func TestResetGlobalExecutor(t *testing.T) {
 	newExecutor := GetGlobalExecutor()
 
 	assert.NotNil(t, newExecutor)
-	assert.NotEqual(t, oldExecutor, newExecutor)
+	// Compare pointers to verify a new instance was created
+	assert.True(t, oldExecutor != newExecutor, "ResetGlobalExecutor should create a new executor instance")
 }
 
 func TestExecutionResult_Structure(t *testing.T) {
@@ -569,18 +564,14 @@ func TestExecutor_Execute_WithDecode(t *testing.T) {
 			Description:  "Test provider with decode function",
 			MockBehavior: "Returns mock output for testing",
 			Capabilities: []Capability{CapabilityFrom},
-			Schema: SchemaDefinition{
-				Properties: map[string]PropertyDefinition{
-					"name":  {Type: PropertyTypeString, Required: true},
-					"count": {Type: PropertyTypeInt, Required: true},
-				},
-			},
-			OutputSchemas: map[Capability]SchemaDefinition{
-				CapabilityFrom: {
-					Properties: map[string]PropertyDefinition{
-						"result": {Type: PropertyTypeString},
-					},
-				},
+			Schema: schemahelper.ObjectSchema([]string{"name", "count"}, map[string]*jsonschema.Schema{
+				"name":  schemahelper.StringProp(""),
+				"count": schemahelper.IntProp(""),
+			}),
+			OutputSchemas: map[Capability]*jsonschema.Schema{
+				CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"result": schemahelper.StringProp(""),
+				}),
 			},
 			// Define Decode function to convert map to typed struct
 			Decode: func(inputs map[string]any) (any, error) {
@@ -637,11 +628,9 @@ func TestExecutor_Execute_WithDecodeError(t *testing.T) {
 			Description:  "Test provider with failing decode",
 			MockBehavior: "Returns mock output for testing",
 			Capabilities: []Capability{CapabilityFrom},
-			Schema: SchemaDefinition{
-				Properties: map[string]PropertyDefinition{
-					"name": {Type: PropertyTypeString, Required: true},
-				},
-			},
+			Schema: schemahelper.ObjectSchema([]string{"name"}, map[string]*jsonschema.Schema{
+				"name": schemahelper.StringProp(""),
+			}),
 			// Decode function that always fails
 			Decode: func(_ map[string]any) (any, error) {
 				return nil, fmt.Errorf("decode error: invalid input format")
@@ -680,17 +669,13 @@ func TestExecutor_Execute_WithoutDecode(t *testing.T) {
 			Description:  "Test provider without decode function",
 			MockBehavior: "Returns mock output for testing",
 			Capabilities: []Capability{CapabilityFrom},
-			Schema: SchemaDefinition{
-				Properties: map[string]PropertyDefinition{
-					"value": {Type: PropertyTypeString, Required: true},
-				},
-			},
-			OutputSchemas: map[Capability]SchemaDefinition{
-				CapabilityFrom: {
-					Properties: map[string]PropertyDefinition{
-						"result": {Type: PropertyTypeString},
-					},
-				},
+			Schema: schemahelper.ObjectSchema([]string{"value"}, map[string]*jsonschema.Schema{
+				"value": schemahelper.StringProp(""),
+			}),
+			OutputSchemas: map[Capability]*jsonschema.Schema{
+				CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"result": schemahelper.StringProp(""),
+				}),
 			},
 			// No Decode function - should receive map[string]any
 		},
@@ -740,11 +725,9 @@ func TestExecutor_Execute_ContextCancellation(t *testing.T) {
 			Description:  "Test provider that blocks",
 			MockBehavior: "Returns mock output for testing",
 			Capabilities: []Capability{CapabilityFrom},
-			Schema: SchemaDefinition{
-				Properties: map[string]PropertyDefinition{
-					"input": {Type: PropertyTypeString, Required: true},
-				},
-			},
+			Schema: schemahelper.ObjectSchema([]string{"input"}, map[string]*jsonschema.Schema{
+				"input": schemahelper.StringProp(""),
+			}),
 		},
 		executeFunc: func(ctx context.Context, _ any) (*Output, error) {
 			close(executionStarted)

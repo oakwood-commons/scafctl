@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 )
 
 // EchoPlugin implements a simple echo plugin that returns its input
@@ -39,32 +42,27 @@ func (p *EchoPlugin) GetProviderDescriptor(ctx context.Context, providerName str
 		Capabilities: []provider.Capability{
 			provider.CapabilityTransform,
 		},
-		Schema: provider.SchemaDefinition{
-			Properties: map[string]provider.PropertyDefinition{
-				"message": {
-					Type:        provider.PropertyTypeString,
-					Required:    true,
-					Description: "The message to echo",
-					Example:     "Hello, World!",
-					MaxLength:   &maxLen,
-				},
-				"uppercase": {
-					Type:        provider.PropertyTypeBool,
-					Required:    false,
-					Description: "Whether to convert the message to uppercase",
-					Default:     false,
-				},
+		Schema: schemahelper.ObjectSchema(
+			[]string{"message"},
+			map[string]*jsonschema.Schema{
+				"message": schemahelper.StringProp(
+					"The message to echo",
+					schemahelper.WithExample("Hello, World!"),
+					schemahelper.WithMaxLength(maxLen),
+				),
+				"uppercase": schemahelper.BoolProp(
+					"Whether to convert the message to uppercase",
+					schemahelper.WithDefault(json.RawMessage("false")),
+				),
 			},
-		},
-		OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
-			provider.CapabilityTransform: {
-				Properties: map[string]provider.PropertyDefinition{
-					"echoed": {
-						Type:        provider.PropertyTypeString,
-						Description: "The echoed message",
-					},
+		),
+		OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+			provider.CapabilityTransform: schemahelper.ObjectSchema(
+				nil,
+				map[string]*jsonschema.Schema{
+					"echoed": schemahelper.StringProp("The echoed message"),
 				},
-			},
+			),
 		},
 	}, nil
 }

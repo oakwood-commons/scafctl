@@ -430,10 +430,10 @@ func TestGoTemplateProvider_Descriptor_Schema(t *testing.T) {
 	require.Contains(t, props, "data")
 
 	// Check required fields
-	assert.True(t, props["template"].Required)
-	assert.True(t, props["name"].Required)
+	assert.Contains(t, desc.Schema.Required, "template")
+	assert.Contains(t, desc.Schema.Required, "name")
 
 	// Check optional fields are not required
-	assert.False(t, props["missingKey"].Required)
-	assert.False(t, props["data"].Required)
+	assert.NotContains(t, desc.Schema.Required, "missingKey")
+	assert.NotContains(t, desc.Schema.Required, "data")
 }

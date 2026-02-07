@@ -366,5 +366,5 @@ func TestParameterProvider_Descriptor(t *testing.T) {
 
 	// Check schema
 	assert.Contains(t, desc.Schema.Properties, "key")
-	assert.True(t, desc.Schema.Properties["key"].Required)
+	assert.Contains(t, desc.Schema.Required, "key")
 }

@@ -11,8 +11,10 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/ptrs"
 )
 
@@ -95,38 +97,18 @@ func NewParameterProvider(opts ...Option) *ParameterProvider {
 			Capabilities: []provider.Capability{
 				provider.CapabilityFrom,
 			},
-			Schema: provider.SchemaDefinition{
-				Properties: map[string]provider.PropertyDefinition{
-					"key": {
-						Type:        provider.PropertyTypeString,
-						Description: "Name of the parameter to retrieve (exact match)",
-						Required:    true,
-						MaxLength:   ptrs.IntPtr(256),
-						Pattern:     `^[A-Za-z_][A-Za-z0-9_.\-]*$`,
-						Example:     "env",
-					},
-				},
-			},
-			OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
-				provider.CapabilityFrom: {
-					Properties: map[string]provider.PropertyDefinition{
-						"value": {
-							Type:        provider.PropertyTypeAny,
-							Description: "The parameter value (typed based on parsing rules)",
-							Example:     "prod",
-						},
-						"exists": {
-							Type:        provider.PropertyTypeBool,
-							Description: "Whether the parameter was provided via CLI",
-							Example:     true,
-						},
-						"type": {
-							Type:        provider.PropertyTypeString,
-							Description: "Detected type of the value",
-							Example:     "string",
-						},
-					},
-				},
+			Schema: schemahelper.ObjectSchema([]string{"key"}, map[string]*jsonschema.Schema{
+				"key": schemahelper.StringProp("Name of the parameter to retrieve (exact match)",
+					schemahelper.WithMaxLength(*ptrs.IntPtr(256)),
+					schemahelper.WithPattern(`^[A-Za-z_][A-Za-z0-9_.\-]*$`),
+					schemahelper.WithExample("env")),
+			}),
+			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"value":  schemahelper.AnyProp("The parameter value (typed based on parsing rules)", schemahelper.WithExample("prod")),
+					"exists": schemahelper.BoolProp("Whether the parameter was provided via CLI", schemahelper.WithExample(true)),
+					"type":   schemahelper.StringProp("Detected type of the value", schemahelper.WithExample("string")),
+				}),
 			},
 			Examples: []provider.Example{
 				{

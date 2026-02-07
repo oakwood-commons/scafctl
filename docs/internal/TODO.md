@@ -498,13 +498,12 @@ These are planned features from design docs for future implementation:
 
 ### Migrate Provider Schemas to JSON Schema
 
-- [ ] **Replace custom SchemaDefinition with jsonschema.Schema**
-  - Migrate `pkg/provider.SchemaDefinition` to use `jsonschema.Schema`
-  - Migrate `pkg/provider.PropertyDefinition` to use `jsonschema.Schema`
-  - Migrate `pkg/provider.OutputSchemas` to use `jsonschema.Schema`
-  - Update all builtin providers to use JSON Schema format
-  - Benefits: standard format, full JSON Schema power, single validation library
-  - Breaking change: provider input/output schema format will change
+- [x] **Replace custom SchemaDefinition with jsonschema.Schema**
+  - Migrated `pkg/provider.SchemaDefinition` to use `jsonschema.Schema`
+  - Migrated `pkg/provider.PropertyDefinition` to use `jsonschema.Schema`
+  - Migrated `pkg/provider.OutputSchemas` to use `jsonschema.Schema`
+  - Updated all builtin providers to use JSON Schema format
+  - Added `pkg/provider/schemahelper` package for ergonomic schema construction
 
 ### ~~Conditional Retry~~ ✅
 

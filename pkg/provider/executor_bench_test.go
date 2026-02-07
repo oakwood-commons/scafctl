@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 )
 
 func BenchmarkExecutor_Execute_Literal(b *testing.B) {
@@ -134,20 +136,16 @@ func BenchmarkExecutor_Execute_MixedInputs(b *testing.B) {
 			Description:  "Test provider for benchmarking mixed inputs",
 			MockBehavior: "Returns mock output for benchmarking",
 			Capabilities: []Capability{CapabilityFrom},
-			Schema: SchemaDefinition{
-				Properties: map[string]PropertyDefinition{
-					"literal":  {Type: PropertyTypeString, Required: true},
-					"rslvr":    {Type: PropertyTypeString, Required: true},
-					"expr":     {Type: PropertyTypeInt, Required: true},
-					"template": {Type: PropertyTypeString, Required: true},
-				},
-			},
-			OutputSchemas: map[Capability]SchemaDefinition{
-				CapabilityFrom: {
-					Properties: map[string]PropertyDefinition{
-						"result": {Type: PropertyTypeString},
-					},
-				},
+			Schema: schemahelper.ObjectSchema([]string{"literal", "rslvr", "expr", "template"}, map[string]*jsonschema.Schema{
+				"literal":  schemahelper.StringProp(""),
+				"rslvr":    schemahelper.StringProp(""),
+				"expr":     schemahelper.IntProp(""),
+				"template": schemahelper.StringProp(""),
+			}),
+			OutputSchemas: map[Capability]*jsonschema.Schema{
+				CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"result": schemahelper.StringProp(""),
+				}),
 			},
 		},
 		executeFunc: func(_ context.Context, _ any) (*Output, error) {
@@ -253,27 +251,23 @@ func BenchmarkExecutor_Execute_ComplexSchema(b *testing.B) {
 			Description:  "Complex provider for benchmarking",
 			MockBehavior: "Returns mock output for benchmarking",
 			Capabilities: []Capability{CapabilityFrom, CapabilityTransform},
-			Schema: SchemaDefinition{
-				Properties: map[string]PropertyDefinition{
-					"string1":  {Type: PropertyTypeString, Required: true},
-					"string2":  {Type: PropertyTypeString, Required: true},
-					"int1":     {Type: PropertyTypeInt, Required: true},
-					"int2":     {Type: PropertyTypeInt, Required: false},
-					"bool1":    {Type: PropertyTypeBool, Required: true},
-					"bool2":    {Type: PropertyTypeBool, Required: false},
-					"float1":   {Type: PropertyTypeFloat, Required: true},
-					"array1":   {Type: PropertyTypeArray, Required: false},
-					"optional": {Type: PropertyTypeString, Required: false},
-				},
-			},
-			OutputSchemas: map[Capability]SchemaDefinition{
-				CapabilityFrom: {
-					Properties: map[string]PropertyDefinition{
-						"result":  {Type: PropertyTypeString},
-						"count":   {Type: PropertyTypeInt},
-						"success": {Type: PropertyTypeBool},
-					},
-				},
+			Schema: schemahelper.ObjectSchema([]string{"string1", "string2", "int1", "bool1", "float1"}, map[string]*jsonschema.Schema{
+				"string1":  schemahelper.StringProp(""),
+				"string2":  schemahelper.StringProp(""),
+				"int1":     schemahelper.IntProp(""),
+				"int2":     schemahelper.IntProp(""),
+				"bool1":    schemahelper.BoolProp(""),
+				"bool2":    schemahelper.BoolProp(""),
+				"float1":   schemahelper.NumberProp(""),
+				"array1":   schemahelper.ArrayProp(""),
+				"optional": schemahelper.StringProp(""),
+			}),
+			OutputSchemas: map[Capability]*jsonschema.Schema{
+				CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"result":  schemahelper.StringProp(""),
+					"count":   schemahelper.IntProp(""),
+					"success": schemahelper.BoolProp(""),
+				}),
 			},
 		},
 		executeFunc: func(_ context.Context, _ any) (*Output, error) {
@@ -361,9 +355,7 @@ func BenchmarkExecutionResult_Creation(b *testing.B) {
 			Description:  "Test provider for benchmarking result creation",
 			MockBehavior: "Returns mock output for benchmarking",
 			Capabilities: []Capability{CapabilityFrom},
-			Schema: SchemaDefinition{
-				Properties: map[string]PropertyDefinition{},
-			},
+			Schema:       schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{}),
 		},
 	}
 

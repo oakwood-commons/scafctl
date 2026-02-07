@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/google/jsonschema-go/jsonschema"
 )
 
 // Provider is the core interface that all providers must implement.
@@ -45,19 +46,23 @@ type Descriptor struct {
 	// Displayed in catalogs, help text, and documentation.
 	Description string `json:"description" yaml:"description" doc:"Provider description" minLength:"10" maxLength:"500" required:"true"`
 
-	// Schema defines the structure and validation rules for provider inputs.
+	// Schema defines the structure and validation rules for provider inputs using JSON Schema.
 	// Used for input validation, documentation generation, and UI form building.
-	Schema SchemaDefinition `json:"schema" yaml:"schema" doc:"Input schema" required:"true"`
+	Schema *jsonschema.Schema `json:"schema" yaml:"schema" doc:"Input schema (JSON Schema)" required:"true"`
 
-	// OutputSchemas defines the output structure for each supported capability.
+	// OutputSchemas defines the output structure for each supported capability using JSON Schema.
 	// Each capability can produce different output shapes. Required for all declared capabilities.
 	// Certain capabilities have required minimum fields:
-	//   - validation: must include "valid" (bool) and "errors" ([]string)
-	//   - authentication: must include "authenticated" (bool) and "token" (string)
-	//   - action: must include "success" (bool)
+	//   - validation: must include "valid" (boolean) and "errors" (array)
+	//   - authentication: must include "authenticated" (boolean) and "token" (string)
+	//   - action: must include "success" (boolean)
 	//   - from: no required fields
 	//   - transform: no required fields
-	OutputSchemas map[Capability]SchemaDefinition `json:"outputSchemas" yaml:"outputSchemas" doc:"Output schemas per capability" required:"true"`
+	OutputSchemas map[Capability]*jsonschema.Schema `json:"outputSchemas" yaml:"outputSchemas" doc:"Output schemas per capability (JSON Schema)" required:"true"`
+
+	// SensitiveFields lists property names that contain sensitive data and should be redacted
+	// in logs, errors, and snapshot output. Replaces the old per-property IsSecret flag.
+	SensitiveFields []string `json:"sensitiveFields,omitempty" yaml:"sensitiveFields,omitempty" doc:"Property names containing sensitive data" maxItems:"50"`
 
 	// Decode converts validated map[string]any inputs into strongly-typed structs for internal use.
 	// Called after schema validation but before Execute(). Optional - providers can work with map[string]any directly.
@@ -120,56 +125,14 @@ type Output struct {
 	Metadata map[string]any `json:"metadata,omitempty" yaml:"metadata,omitempty" doc:"Execution metadata"`
 }
 
-// SchemaDefinition defines the structure of inputs or outputs for a provider.
-type SchemaDefinition struct {
-	Properties map[string]PropertyDefinition `json:"properties,omitempty" yaml:"properties,omitempty" doc:"Property definitions"`
-}
-
-// PropertyType represents the data type of a provider property.
-type PropertyType string
-
-const (
-	PropertyTypeString PropertyType = "string"
-	PropertyTypeInt    PropertyType = "int"
-	PropertyTypeFloat  PropertyType = "float"
-	PropertyTypeBool   PropertyType = "bool"
-	PropertyTypeArray  PropertyType = "array"
-	PropertyTypeAny    PropertyType = "any"
-)
-
-// IsValid checks if the property type is valid.
-func (t PropertyType) IsValid() bool {
-	switch t {
-	case PropertyTypeString, PropertyTypeInt, PropertyTypeFloat, PropertyTypeBool, PropertyTypeArray, PropertyTypeAny:
-		return true
-	default:
-		return false
+// IsSensitiveField checks whether a field name is marked as sensitive in the descriptor.
+func (d *Descriptor) IsSensitiveField(name string) bool {
+	for _, f := range d.SensitiveFields {
+		if f == name {
+			return true
+		}
 	}
-}
-
-// String returns the string representation.
-func (t PropertyType) String() string {
-	return string(t)
-}
-
-// PropertyDefinition describes a single property for a provider.
-type PropertyDefinition struct {
-	Type        PropertyType `json:"type" yaml:"type" doc:"Property data type" required:"true"`
-	Required    bool         `json:"required,omitempty" yaml:"required,omitempty" doc:"Whether required"`
-	Description string       `json:"description,omitempty" yaml:"description,omitempty" doc:"Property description" minLength:"5" maxLength:"500"`
-	Default     any          `json:"default,omitempty" yaml:"default,omitempty" doc:"Default value"`
-	Example     any          `json:"example,omitempty" yaml:"example,omitempty" doc:"Example value"`
-	MinLength   *int         `json:"minLength,omitempty" yaml:"minLength,omitempty" doc:"Minimum string length"`
-	MaxLength   *int         `json:"maxLength,omitempty" yaml:"maxLength,omitempty" doc:"Maximum string length"`
-	Pattern     string       `json:"pattern,omitempty" yaml:"pattern,omitempty" doc:"Regex pattern for validation"`
-	Minimum     *float64     `json:"minimum,omitempty" yaml:"minimum,omitempty" doc:"Minimum numeric value"`
-	Maximum     *float64     `json:"maximum,omitempty" yaml:"maximum,omitempty" doc:"Maximum numeric value"`
-	MinItems    *int         `json:"minItems,omitempty" yaml:"minItems,omitempty" doc:"Minimum array length"`
-	MaxItems    *int         `json:"maxItems,omitempty" yaml:"maxItems,omitempty" doc:"Maximum array length"`
-	Enum        []any        `json:"enum,omitempty" yaml:"enum,omitempty" doc:"Allowed values"`
-	Format      string       `json:"format,omitempty" yaml:"format,omitempty" doc:"Format hint (uri, email, date, uuid, etc.)"`
-	Deprecated  bool         `json:"deprecated,omitempty" yaml:"deprecated,omitempty" doc:"Whether deprecated"`
-	IsSecret    bool         `json:"isSecret,omitempty" yaml:"isSecret,omitempty" doc:"Whether contains sensitive data"`
+	return false
 }
 
 // Capability represents the types of operations a provider can perform.
@@ -217,27 +180,20 @@ type Example struct {
 	YAML        string `json:"yaml" yaml:"yaml" doc:"YAML example" minLength:"10" maxLength:"2000" required:"true"`
 }
 
-// RequiredOutputField defines a required field for a capability's output schema.
-type RequiredOutputField struct {
-	Name string
-	Type PropertyType
-}
-
-// CapabilityRequiredOutputFields maps capabilities to their required output fields.
-// Providers must include these minimum fields in their OutputSchemas for each capability.
-var CapabilityRequiredOutputFields = map[Capability][]RequiredOutputField{
-	CapabilityFrom:      {}, // No required fields
-	CapabilityTransform: {}, // No required fields
+// capabilityRequiredFields maps capabilities to their required output fields and expected JSON Schema types.
+var capabilityRequiredFields = map[Capability]map[string]string{
+	CapabilityFrom:      {},
+	CapabilityTransform: {},
 	CapabilityValidation: {
-		{Name: "valid", Type: PropertyTypeBool},
-		{Name: "errors", Type: PropertyTypeArray},
+		"valid":  "boolean",
+		"errors": "array",
 	},
 	CapabilityAuthentication: {
-		{Name: "authenticated", Type: PropertyTypeBool},
-		{Name: "token", Type: PropertyTypeString},
+		"authenticated": "boolean",
+		"token":         "string",
 	},
 	CapabilityAction: {
-		{Name: "success", Type: PropertyTypeBool},
+		"success": "boolean",
 	},
 }
 
@@ -245,7 +201,7 @@ var CapabilityRequiredOutputFields = map[Capability][]RequiredOutputField{
 // Returns an error if:
 //   - OutputSchemas is missing for any declared capability
 //   - Required fields are missing for capabilities that mandate them
-//   - Field types don't match the expected types
+//   - Field types don't match the expected JSON Schema types
 func ValidateDescriptor(desc *Descriptor) error {
 	if desc == nil {
 		return errors.New("descriptor is nil")
@@ -268,15 +224,19 @@ func ValidateDescriptor(desc *Descriptor) error {
 			continue
 		}
 
-		requiredFields := CapabilityRequiredOutputFields[cap]
-		for _, req := range requiredFields {
-			prop, found := schema.Properties[req.Name]
-			if !found {
-				errs = append(errs, fmt.Errorf("capability %q requires output field %q", cap, req.Name))
+		requiredFields := capabilityRequiredFields[cap]
+		for fieldName, expectedType := range requiredFields {
+			if schema == nil || schema.Properties == nil {
+				errs = append(errs, fmt.Errorf("capability %q requires output field %q", cap, fieldName))
 				continue
 			}
-			if prop.Type != req.Type {
-				errs = append(errs, fmt.Errorf("capability %q field %q must be type %q, got %q", cap, req.Name, req.Type, prop.Type))
+			prop, found := schema.Properties[fieldName]
+			if !found {
+				errs = append(errs, fmt.Errorf("capability %q requires output field %q", cap, fieldName))
+				continue
+			}
+			if prop.Type != expectedType {
+				errs = append(errs, fmt.Errorf("capability %q field %q must be type %q, got %q", cap, fieldName, expectedType, prop.Type))
 			}
 		}
 	}
