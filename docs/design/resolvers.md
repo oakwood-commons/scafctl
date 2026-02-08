@@ -449,6 +449,7 @@ Key properties:
 - Sources are evaluated in order
 - **Default behavior** (when `until:` is not specified): All sources are evaluated until the first non-null value is found
 - Providers return data via `ProviderOutput` structure (containing data, optional warnings, and metadata)
+- **Error handling**: When a source fails, the next source is tried automatically (fallback chain semantics). Set `onError: fail` on a source to stop the chain on failure.
 
 Optional controls:
 

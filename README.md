@@ -7,6 +7,8 @@
 
 > **Alpha** — scafctl is under active development. APIs and CLI commands may
 > change between releases. Breaking changes are documented in release notes.
+> Questions? Open an issue or start a
+> [Discussion](https://github.com/oakwood-commons/scafctl/discussions).
 
 A configuration discovery and scaffolding tool built in Go.
 
@@ -26,18 +28,45 @@ tar xzf scafctl_*.tar.gz
 sudo mv scafctl /usr/local/bin/
 ```
 
+#### Windows
+
+Download the `.zip` archive for your architecture from
+[GitHub Releases](https://github.com/oakwood-commons/scafctl/releases),
+extract it, and add the directory to your `PATH`.
+
 #### From Source
 
 ```bash
 go install github.com/oakwood-commons/scafctl/cmd/scafctl@latest
 ```
 
+### Shell Completion
+
+Generate completions for your shell and add them to your profile:
+
+```bash
+# Bash
+scafctl completion bash > /usr/local/etc/bash_completion.d/scafctl
+
+# Zsh
+scafctl completion zsh > "${fpath[1]}/_scafctl"
+
+# Fish
+scafctl completion fish > ~/.config/fish/completions/scafctl.fish
+
+# PowerShell
+scafctl completion powershell | Out-String | Invoke-Expression
+```
+
+Restart your shell (or `source` the file) for completions to take effect.
+Zsh users must have `compinit` loaded before the completion file is sourced.
+
 ## Features
 
 - **Resolvers**: Gather and transform configuration data from multiple sources
 - **Actions**: Execute side-effect operations as a declarative action graph
 - **CEL Integration**: Use Common Expression Language for dynamic evaluation
-- **Providers**: Extensible provider system (HTTP, shell, file, git, etc.)
+- **Providers**: Extensible provider system (HTTP, exec, file, git, etc.)
 
 ## Quick Start
 
@@ -90,13 +119,14 @@ spec:
   workflow:
     actions:
       deploy:
-        provider: shell
+        provider: exec
         forEach:
           in:
             expr: "_.targets"
         inputs:
           command:
             expr: "'deploy.sh ' + __item"
+          shell: true
 ```
 
 Run: `scafctl run solution -f deploy.yaml`
@@ -153,7 +183,7 @@ spec:
               scope: "https://graph.microsoft.com/.default"
 ```
 
-See the [Authentication Tutorial](docs/auth-tutorial.md) for more details.
+See the [Authentication Tutorial](docs/tutorials/auth-tutorial.md) for more details.
 
 ## Actions Overview
 
@@ -176,18 +206,20 @@ The Actions system enables executing operations as a declarative dependency grap
 workflow:
   actions:
     build:
-      provider: shell
+      provider: exec
       inputs:
         command: "go build ./..."
+        shell: true
 
     test:
-      provider: shell
+      provider: exec
       dependsOn: [build]
       inputs:
         command: "go test ./..."
+        shell: true
 
     deploy:
-      provider: shell
+      provider: exec
       dependsOn: [test]
       forEach:
         in:
@@ -196,6 +228,7 @@ workflow:
       inputs:
         command:
           expr: "'deploy.sh ' + __item"
+        shell: true
 
   finally:
     notify:
@@ -234,6 +267,8 @@ Contributions are welcome! Please see:
 - [CONTRIBUTING.md](CONTRIBUTING.md) — Development setup, coding standards, and contribution workflow
 - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — Community guidelines
 - [SECURITY.md](.github/SECURITY.md) — Reporting security vulnerabilities
+
+Have a question? Start a [GitHub Discussion](https://github.com/oakwood-commons/scafctl/discussions).
 
 ## License
 

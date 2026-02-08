@@ -761,11 +761,12 @@ func (e *Executor) executeResolvePhase(ctx context.Context, phase *ResolvePhase)
 					"source", i+1,
 					"provider", source.Provider,
 					"error", err)
-				if source.OnError == ErrorBehaviorContinue {
-					lastErr = err
-					continue
+				if source.OnError == ErrorBehaviorFail {
+					return nil, providerCallCount, fmt.Errorf("source %d: when condition evaluation failed: %w", i+1, err)
 				}
-				return nil, providerCallCount, fmt.Errorf("source %d: when condition evaluation failed: %w", i+1, err)
+				// Default: continue to next source (resolve phase is a fallback chain)
+				lastErr = err
+				continue
 			}
 			if !shouldExecute {
 				lgr.V(1).Info("skipping source due to when condition",
@@ -793,12 +794,12 @@ func (e *Executor) executeResolvePhase(ctx context.Context, phase *ResolvePhase)
 
 			lastErr = err
 
-			// Handle error behavior
-			if source.OnError == ErrorBehaviorContinue {
-				continue // Try next source
+			// Handle error behavior: resolve phase defaults to continue (fallback chain)
+			if source.OnError == ErrorBehaviorFail {
+				return nil, providerCallCount, fmt.Errorf("source %d (%s) failed: %w", i+1, source.Provider, err)
 			}
 
-			return nil, providerCallCount, fmt.Errorf("source %d (%s) failed: %w", i+1, source.Provider, err)
+			continue // Default: try next source
 		}
 
 		// Success - check until condition with __self set to current value

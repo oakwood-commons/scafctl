@@ -25,6 +25,20 @@ If you forget, amend the last commit:
 git commit --amend -s --no-edit
 ```
 
+### Getting Help and Support Expectations
+
+scafctl is maintained on a best-effort, community-driven basis. We aim to:
+
+- **Triage new issues** within 1-2 weeks
+- **Review pull requests** within 2 weeks
+- **Respond to security reports** within 48 hours (see [SECURITY.md](.github/SECURITY.md))
+
+For questions and discussions, use
+[GitHub Discussions](https://github.com/oakwood-commons/scafctl/discussions)
+or open an issue.
+
+We appreciate your patience and contributions!
+
 ### Prerequisites
 
 - Go 1.25.4+
@@ -215,6 +229,13 @@ func TestMyFunction_Cases(t *testing.T) {
     }
 }
 ```
+
+### Integration Tests and External Services
+
+Integration tests in [tests/integration/](tests/integration/) and
+package-level integration tests are designed to run locally without
+external registry access. If registry-backed tests are added in the future,
+we will document required credentials and how to provide them.
 
 ### Mocks
 

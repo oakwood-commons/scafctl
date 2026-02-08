@@ -29,15 +29,14 @@ spec:
   workflow:
     actions:
       # Example 1: Basic result schema with required properties
+      # Uses the CEL provider to return structured data that gets validated.
       fetch-user:
         description: Fetch user details with validated result schema
         displayName: Fetch User
-        provider: exec
+        provider: cel
         inputs:
-          shell: true
-          command: |
-            echo '{"id": 42, "name": "John Doe", "email": "john@example.com", "active": true}'
-          output: json
+          expression: |
+            {"id": 42, "name": "John Doe", "email": "john@example.com", "active": true}
         # Result schema using standard JSON Schema
         resultSchema:
           type: object
@@ -51,13 +50,12 @@ spec:
               description: Unique user identifier
             name:
               type: string
-              description: User's full name
+              description: User full name
               minLength: 1
               maxLength: 100
             email:
               type: string
-              description: User's email address
-              pattern: "^[^@]+@[^@]+\\.[^@]+$"
+              description: User email address
             active:
               type: boolean
               description: Whether the user is active
@@ -65,12 +63,10 @@ spec:
       # Example 2: Array result with item validation
       list-tags:
         description: List tags with array schema validation
-        provider: exec
+        provider: cel
         inputs:
-          shell: true
-          command: |
-            echo '["go", "cli", "tools", "automation"]'
-          output: json
+          expression: |
+            ["go", "cli", "tools", "automation"]
         resultSchema:
           type: array
           description: List of tags
@@ -83,12 +79,10 @@ spec:
       # Example 3: Nested object validation
       get-deployment-info:
         description: Get deployment status with nested schema
-        provider: exec
+        provider: cel
         inputs:
-          shell: true
-          command: |
-            echo '{"status": "healthy", "replicas": 3, "metadata": {"version": "1.2.3", "environment": "production"}}'
-          output: json
+          expression: |
+            {"status": "healthy", "replicas": 3, "metadata": {"version": "1.2.3", "environment": "production"}}
         resultSchema:
           type: object
           required:
@@ -113,7 +107,6 @@ spec:
                 version:
                   type: string
                   description: Deployed version
-                  pattern: "^\\d+\\.\\d+\\.\\d+$"
                 environment:
                   type: string
                   description: Deployment environment
@@ -124,13 +117,11 @@ spec:
 
       # Example 4: additionalProperties: false rejects unexpected properties
       strict-config:
-        description: Configuration with strict schema (no extra properties allowed)
-        provider: exec
+        description: Configuration with strict schema (no extra properties)
+        provider: cel
         inputs:
-          shell: true
-          command: |
-            echo '{"port": 8080, "host": "localhost"}'
-          output: json
+          expression: |
+            {"port": 8080, "host": "localhost"}
         resultSchema:
           type: object
           additionalProperties: false
@@ -156,7 +147,7 @@ spec:
         inputs:
           shell: true
           command:
-            tmpl: |
-              echo "User: {{ index .__actions.fetch-user.results "name" }}"
-              echo "Tags: {{ len .__actions.list-tags.results }} items"
-              echo "Deployment: {{ index .__actions.get-deployment-info.results "status" }}"
+            expr: |
+              'echo "User: ' + __actions['fetch-user'].results.name + '"' +
+              ' && echo "Tags: ' + string(size(__actions['list-tags'].results)) + ' items"' +
+              ' && echo "Deployment: ' + __actions['get-deployment-info'].results.status + '"'

@@ -107,7 +107,7 @@ type ProviderSource struct {
 	Provider string               `json:"provider" yaml:"provider" doc:"Provider name" example:"parameter" maxLength:"100" pattern:"^[a-zA-Z][a-zA-Z0-9_-]*$" patternDescription:"Must start with a letter, followed by letters, numbers, underscores, or hyphens"`
 	Inputs   map[string]*ValueRef `json:"inputs" yaml:"inputs" doc:"Provider inputs"`
 	When     *Condition           `json:"when,omitempty" yaml:"when,omitempty" doc:"Source-level condition"`
-	OnError  ErrorBehavior        `json:"onError,omitempty" yaml:"onError,omitempty" doc:"Behavior when provider fails (continue, fail)" example:"fail" default:"fail"`
+	OnError  ErrorBehavior        `json:"onError,omitempty" yaml:"onError,omitempty" doc:"Behavior when provider fails (continue, fail). Defaults to continue (fallback chain semantics). Use fail to stop on first error." example:"continue" default:"continue"`
 }
 
 // ProviderTransform represents a single transform step
