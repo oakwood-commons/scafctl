@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 // Package identityprovider provides authentication identity information from auth handlers.
 // It exposes non-sensitive identity data like claims, authentication status, and identity type.
 // It never exposes tokens or other secrets.

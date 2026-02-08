@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 // Package resolve provides resolution and fetching of key-value flag values based on URI scheme prefixes.
 // It validates schemes, fetches data, and returns parsed/decoded content.
 //

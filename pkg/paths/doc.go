@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 // Package paths provides centralized path resolution for scafctl using the
 // XDG Base Directory Specification (https://specifications.freedesktop.org/basedir/latest/).
 //

@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 //go:build integration
 
 // Package entra provides live integration tests for the Entra ID auth handler.

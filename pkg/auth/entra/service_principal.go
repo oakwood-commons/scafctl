@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 // Package entra provides Microsoft Entra ID authentication for scafctl.
 // This file implements the service principal (client credentials) flow.
 package entra

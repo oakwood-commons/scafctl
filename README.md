@@ -1,6 +1,36 @@
 # scafctl
 
+[![Go Report Card](https://goreportcard.com/badge/github.com/oakwood-commons/scafctl)](https://goreportcard.com/report/github.com/oakwood-commons/scafctl)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/oakwood-commons/scafctl)](https://github.com/oakwood-commons/scafctl/releases)
+[![CI](https://github.com/oakwood-commons/scafctl/actions/workflows/pr-checks.yml/badge.svg)](https://github.com/oakwood-commons/scafctl/actions/workflows/pr-checks.yml)
+
+> **Alpha** — scafctl is under active development. APIs and CLI commands may
+> change between releases. Breaking changes are documented in release notes.
+
 A configuration discovery and scaffolding tool built in Go.
+
+## Installation
+
+### From Release Binaries (Recommended)
+
+Download the latest binary for your platform from the
+[GitHub Releases](https://github.com/oakwood-commons/scafctl/releases) page.
+
+#### macOS / Linux
+
+```bash
+# Download (replace VERSION and OS/ARCH as needed)
+curl -LO https://github.com/oakwood-commons/scafctl/releases/latest/download/scafctl_VERSION_OS_ARCH.tar.gz
+tar xzf scafctl_*.tar.gz
+sudo mv scafctl /usr/local/bin/
+```
+
+#### From Source
+
+```bash
+go install github.com/oakwood-commons/scafctl/cmd/scafctl@latest
+```
 
 ## Features
 
@@ -73,9 +103,9 @@ Run: `scafctl run solution -f deploy.yaml`
 
 ## Documentation
 
-- [Resolver Tutorial](docs/resolver-tutorial.md) - Getting started with resolvers
-- [Actions Tutorial](docs/actions-tutorial.md) - Getting started with actions
-- [Authentication Tutorial](docs/auth-tutorial.md) - Setting up and using authentication
+- [Resolver Tutorial](docs/tutorials/resolver-tutorial.md) - Getting started with resolvers
+- [Actions Tutorial](docs/tutorials/actions-tutorial.md) - Getting started with actions
+- [Authentication Tutorial](docs/tutorials/auth-tutorial.md) - Setting up and using authentication
 - [Examples: Resolvers](examples/resolvers/) - Resolver examples
 - [Examples: Actions](examples/actions/) - Action examples
 
@@ -196,4 +226,16 @@ scafctl run solution -f config.yaml --skip-actions
 scafctl render solution -f config.yaml -o json
 scafctl render solution -f config.yaml -o yaml
 ```
+
+## Contributing
+
+Contributions are welcome! Please see:
+
+- [CONTRIBUTING.md](CONTRIBUTING.md) — Development setup, coding standards, and contribution workflow
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — Community guidelines
+- [SECURITY.md](.github/SECURITY.md) — Reporting security vulnerabilities
+
+## License
+
+This project is licensed under the Apache License 2.0 — see the [LICENSE](LICENSE) file for details.
 

@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 // Package catalog provides commands for inspecting and managing the local catalog.
 package catalog
 

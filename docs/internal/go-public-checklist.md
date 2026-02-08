@@ -18,129 +18,24 @@ Comprehensive checklist for making the scafctl repository public and ready for c
 
 ### Security & Secrets Audit
 
-- [ ] **Scan full git history for leaked secrets and credentials**
-  - Run a secrets scanner against the full history:
-    ```bash
-    # Option 1: trufflehog (recommended)
-    brew install trufflehog
-    trufflehog git file://. --since-commit HEAD~1000 --only-verified
-
-    # Option 2: gitleaks
-    brew install gitleaks
-    gitleaks detect --source . -v
-    ```
-  - Manually grep for internal domains, API keys, tokens:
-    ```bash
-    git log --all -p | grep -iE 'secret|password|token|api[_-]?key|private[_-]?key|AZURE_CLIENT_SECRET' | head -50
-    ```
-  - Check for any hardcoded internal URLs (e.g., internal registries, Slack webhooks, corp domains)
-  - If anything is found: rotate the credential immediately, then either rewrite history with `git filter-repo` or squash to a clean init commit
-  - **Decision needed**: Squash to single init commit vs. keep history. If secrets are found, squash. If history is clean, keeping it builds trust with contributors.
+- [x] **Scan full git history for leaked secrets and credentials** *(Done — gitleaks found 19 hits, all false positives: test fixture JWTs, example placeholder keys in docs, and a UUID tenant ID. No real secrets. History is clean.)*
 
 ### SECURITY.md
 
-- [ ] **Create `.github/SECURITY.md`**
-  - GitHub surfaces this in the Security tab of the repo
-  - Content:
-
-    ```markdown
-    # Security Policy
-
-    ## Supported Versions
-
-    | Version | Supported |
-    |---------|-----------|
-    | latest  | Yes       |
-
-    ## Reporting a Vulnerability
-
-    **Do NOT open a public GitHub issue for security vulnerabilities.**
-
-    Please report security vulnerabilities by emailing [SECURITY_EMAIL].
-
-    Include:
-    - Description of the vulnerability
-    - Steps to reproduce
-    - Impact assessment
-    - Any suggested fixes (optional)
-
-    ### Response Timeline
-
-    - **Acknowledgment**: Within 48 hours
-    - **Initial assessment**: Within 1 week
-    - **Fix timeline**: Communicated after assessment
-
-    We will coordinate disclosure with you and credit you in the advisory
-    (unless you prefer to remain anonymous).
-    ```
-
-  - Replace `[SECURITY_EMAIL]` with a real contact
+- [x] **Create `.github/SECURITY.md`** *(Done — uses GitHub Security Advisories for reporting instead of email)*
 
 ### License Review
 
-- [ ] **Add copyright notice to LICENSE file**
-  - The Apache 2.0 LICENSE file should have a copyright line. Add to the top or appendix:
-    ```
-    Copyright 2025-2026 Oakwood Commons
-    ```
-  - Decide whether to add the Apache 2.0 boilerplate header to source files. Recommendation: add a short header to `.go` files (can be automated with `addlicense` tool):
-    ```go
-    // Copyright 2025-2026 Oakwood Commons
-    // SPDX-License-Identifier: Apache-2.0
-    ```
-    ```bash
-    # Automate with:
-    go install github.com/google/addlicense@latest
-    addlicense -c "Oakwood Commons" -l apache -s only .
-    ```
+- [x] **Add copyright notice to LICENSE file** *(Done — added "Copyright 2025-2026 Oakwood Commons" to top of LICENSE, and SPDX headers to all 451 .go files)*
 
 ### README Overhaul
 
-- [ ] **Add installation instructions** (most important section for newcomers)
-
-  ```markdown
-  ## Installation
-
-  ### From Release Binaries (Recommended)
-
-  Download the latest binary for your platform from the
-  [GitHub Releases](https://github.com/oakwood-commons/scafctl/releases) page.
-
-  #### macOS / Linux
-
-  ```bash
-  # Download (replace VERSION and OS/ARCH as needed)
-  curl -LO https://github.com/oakwood-commons/scafctl/releases/latest/download/scafctl_VERSION_OS_ARCH.tar.gz
-  tar xzf scafctl_*.tar.gz
-  sudo mv scafctl /usr/local/bin/
-  ```
-
-  #### From Source
-
-  ```bash
-  go install github.com/oakwood-commons/scafctl/cmd/scafctl@latest
-  ```
-  ```
-
-- [ ] **Add project maturity notice at the top of the README**
-
-  ```markdown
-  > **Alpha** — scafctl is under active development. APIs and CLI commands may
-  > change between releases. Breaking changes are documented in release notes.
-  ```
-
-- [ ] **Add badges**
-
-  ```markdown
-  [![Go Report Card](https://goreportcard.com/badge/github.com/oakwood-commons/scafctl)](https://goreportcard.com/report/github.com/oakwood-commons/scafctl)
-  [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-  [![Release](https://img.shields.io/github/v/release/oakwood-commons/scafctl)](https://github.com/oakwood-commons/scafctl/releases)
-  [![CI](https://github.com/oakwood-commons/scafctl/actions/workflows/pr-checks.yml/badge.svg)](https://github.com/oakwood-commons/scafctl/actions/workflows/pr-checks.yml)
-  ```
-
-- [ ] **Add link to CONTRIBUTING.md**
-- [ ] **Add link to CODE_OF_CONDUCT.md** (once created)
-- [ ] **Review all documentation links** — make sure tutorial/doc links in the README resolve correctly
+- [x] **Add installation instructions** *(Done — added binary download and `go install` sections)*
+- [x] **Add project maturity notice at the top of the README** *(Done — Alpha notice added)*
+- [x] **Add badges** *(Done — Go Report Card, License, Release, CI)*
+- [x] **Add link to CONTRIBUTING.md** *(Done)*
+- [x] **Add link to CODE_OF_CONDUCT.md** *(Done)*
+- [x] **Review all documentation links** *(Done — fixed tutorial links to point to `docs/tutorials/`)*
 
 ### CLI Polish
 
@@ -150,7 +45,7 @@ Comprehensive checklist for making the scafctl repository public and ready for c
   - Verify error messages are user-friendly (no stack traces, no internal paths)
   - Check that `--quiet`, `--no-color`, `-o json`, `-o yaml`, `-o table` all work consistently
 - [ ] **Distribute to team members for feedback** using pre-built binaries + tutorials
-- [ ] **Verify `scafctl version`** shows correct info and the TODO for "latest version check" either works or is gracefully skipped
+- [x] **Verify `scafctl version`** shows correct info and the TODO for "latest version check" either works or is gracefully skipped *(Done — implemented `GetLatestVersion` using GitHub Releases API)*
 
 ### Repo Cleanup
 
@@ -158,17 +53,14 @@ Comprehensive checklist for making the scafctl repository public and ready for c
   - `going-public.md` and this checklist: **remove or move** before going public (internal planning docs)
   - `TODO.md`: convert remaining items to GitHub Issues, then remove the file
   - Implementation plans / decision records: generally fine to keep public (shows project maturity)
-- [ ] **Resolve or convert TODOs in code to GitHub Issues**
-  - `pkg/celexp/validation.go:236` — "Could check element type..."
-  - `pkg/celexp/validation.go:244` — "Could check key/value types..."
-  - `pkg/provider/executor.go:156` — "Consider passing capability context..."
-  - `pkg/solution/get/get.go:126` — "This will need to support the scafctl repository"
-  - `pkg/cmd/scafctl/version/version.go:119` — "Need to implement getting the latest version"
-- [ ] **Remove placeholder values in taskfile.yaml**
-  - `CONTAINER_REGISTRY` defaults to `????`
-  - `PREPROD_URL` and `PROD_URL` are `https://?????`
-  - Either set real values, remove them, or add comments explaining they're optional/environment-specific
-- [ ] **Review `.goreleaser.yaml`** — the GCS blob upload (`scafctl-assets` bucket) may be internal. Decide if you want GitHub Releases only (remove the `blobs` section) or keep GCS
+- [x] **Resolve or convert TODOs in code to GitHub Issues**
+  - ~~`pkg/celexp/validation.go:236` — "Could check element type..."~~ *(Deleted — speculative, current code handles parameterized types)*
+  - ~~`pkg/celexp/validation.go:244` — "Could check key/value types..."~~ *(Deleted — same reason)*
+  - `pkg/provider/executor.go:156` — "Consider passing capability context..." *(Kept as-is — valid architectural note)*
+  - ~~`pkg/solution/get/get.go:126` — "This will need to support the scafctl repository"~~ *(Removed — issue to be filed on GitHub)*
+  - ~~`pkg/cmd/scafctl/version/version.go:119` — "Need to implement getting the latest version"~~ *(Implemented)*
+- [x] **Remove placeholder values in taskfile.yaml** *(Done — replaced `????` with empty defaults and added descriptive comments)*
+- [x] **Review `.goreleaser.yaml`** *(Done — removed GCS `blobs` section, added grouped changelog with conventional commits)*
 - [ ] **Review AI config** — `.github/copilot-instructions.md` is fine to keep (many public repos have this). It helps contributors using Copilot
 
 ### Builtin Actions & Providers Review
@@ -183,14 +75,11 @@ Comprehensive checklist for making the scafctl repository public and ready for c
 
 ### CODE_OF_CONDUCT.md
 
-- [ ] **Create `CODE_OF_CONDUCT.md` using the Contributor Covenant v2.1**
-  - The industry standard: https://www.contributor-covenant.org/version/2/1/code_of_conduct/
-  - Replace placeholder contact info with a real enforcement email
-  - GitHub provides a wizard: Settings > Code and automation > Community standards
+- [x] **Create `CODE_OF_CONDUCT.md` using the Contributor Covenant v2.1** *(Done — full Contributor Covenant v2.1 with GitHub Security Advisories for enforcement contact)*
 
 ### GitHub Issue & PR Templates
 
-- [ ] **Create `.github/ISSUE_TEMPLATE/bug_report.md`**
+- [x] **Create `.github/ISSUE_TEMPLATE/bug_report.md`** *(Done)*
 
   ```markdown
   ---
@@ -228,7 +117,7 @@ Comprehensive checklist for making the scafctl repository public and ready for c
   Any other context, screenshots, or log output.
   ```
 
-- [ ] **Create `.github/ISSUE_TEMPLATE/feature_request.md`**
+- [x] **Create `.github/ISSUE_TEMPLATE/feature_request.md`** *(Done)*
 
   ```markdown
   ---
@@ -254,7 +143,7 @@ Comprehensive checklist for making the scafctl repository public and ready for c
   Any other context, examples, or mockups.
   ```
 
-- [ ] **Create `.github/PULL_REQUEST_TEMPLATE.md`**
+- [x] **Create `.github/PULL_REQUEST_TEMPLATE.md`** *(Done)*
 
   ```markdown
   ## Description
@@ -285,7 +174,7 @@ Comprehensive checklist for making the scafctl repository public and ready for c
 
 ### DCO (Developer Certificate of Origin)
 
-- [ ] **Add DCO requirement to CONTRIBUTING.md**
+- [x] **Add DCO requirement to CONTRIBUTING.md** *(Done)*
   - Add a section explaining the sign-off requirement:
 
     ```markdown
@@ -318,7 +207,7 @@ Comprehensive checklist for making the scafctl repository public and ready for c
 
 ### CONTRIBUTING.md Updates
 
-- [ ] **Add DCO section** (see above)
+- [x] **Add DCO section** *(Done)*
 - [ ] **Add support expectations section**
 
   ```markdown
@@ -337,9 +226,9 @@ Comprehensive checklist for making the scafctl repository public and ready for c
   We appreciate your patience and contributions!
   ```
 
-- [ ] **Review Go version prerequisite** — currently says "Go 1.21+" but `go.mod` requires `go 1.25.4`. Update to match.
-- [ ] **Add link to Code of Conduct** (once created)
-- [ ] **Add link to Security Policy** (once created)
+- [x] **Review Go version prerequisite** *(Done — updated to Go 1.25.4+)*
+- [x] **Add link to Code of Conduct** *(Done)*
+- [x] **Add link to Security Policy** *(Done)*
 
 ### GitHub Org & Repo Settings
 
@@ -365,7 +254,7 @@ Comprehensive checklist for making the scafctl repository public and ready for c
 
 ### CODEOWNERS
 
-- [ ] **Create `.github/CODEOWNERS`**
+- [x] **Create `.github/CODEOWNERS`** *(Done)*
 
   ```
   # Default owners for everything
@@ -401,10 +290,10 @@ Comprehensive checklist for making the scafctl repository public and ready for c
 
 ### GoReleaser Cleanup
 
-- [ ] **Review GCS blob config** — remove `blobs` section if not needed for public releases
+- [x] **Review GCS blob config** *(Done — removed `blobs` section)*
 - [ ] **Add GitHub release notes generation** to goreleaser if not present
 - [ ] **Verify GPG signing works** or remove signing config if not desired for initial release
-- [ ] **Consider adding a `changelog` section** using conventional commits:
+- [x] **Consider adding a `changelog` section** using conventional commits: *(Done — added grouped changelog)*
   ```yaml
   changelog:
     use: github
@@ -424,7 +313,7 @@ Comprehensive checklist for making the scafctl repository public and ready for c
 
 ### CI Enhancements
 
-- [ ] **Add CodeQL / security scanning** workflow
+- [x] **Add CodeQL / security scanning** workflow *(Done — `.github/workflows/codeql.yml` created)*
   ```yaml
   # .github/workflows/codeql.yml
   name: CodeQL

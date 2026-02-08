@@ -57,15 +57,17 @@ vars:
     sh: git remote get-url origin || echo "https://github.com"
   IS_SHALLOW:
     sh: git rev-parse --is-shallow-repository 2>/dev/null || echo "false"
-  CONTAINER_REGISTRY: '{{ .CONTAINER_REGISTRY | default `????` }}'
+  # Set CONTAINER_REGISTRY env var to your OCI registry (e.g., ghcr.io/oakwood-commons)
+  CONTAINER_REGISTRY: '{{ .CONTAINER_REGISTRY | default "" }}'
   CONTAINER_REGISTRY_NAMESPACE: '{{ .CONTAINER_REGISTRY_NAMESPACE | default `cloud-platform` }}'
   BASE_CONTAINER_IMAGE: "registry.access.redhat.com/ubi10/ubi-minimal:10.0-1758699349@sha256:649f7ce8082531148ac5e45b61612046a21e36648ab096a77e6ba0c94428cf60"
   BUILD_DATE: '{{ now | date "2006-01-02T15:04:05Z07:00" }}'
   SERVER_CONFIG_FILE: "{{.ROOT_DIR | toSlash}}/tests/files/serverConfig.json"
   DIST: "{{.ROOT_DIR | toSlash }}/dist"
   FIX_PATH: "{{ if eq OS `windows` }}PATH='C:/tools/git/usr/bin;C:/Program Files/Git/usr/bin/;{{ env `path` }}'{{ else }}:{{ end }}"
-  PREPROD_URL: "https://?????"
-  PROD_URL: "https://?????"
+  # Set these env vars for deployment targets (optional, not needed for local development)
+  PREPROD_URL: '{{ .PREPROD_URL | default "" }}'
+  PROD_URL: '{{ .PROD_URL | default "" }}'
   FIXED_ROOT:
     sh: |
       echo "{{.ROOT_DIR | toSlash}}"

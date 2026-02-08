@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 // Package catalog provides artifact storage and retrieval for scafctl.
 //
 // The catalog system manages solutions, providers, and auth handlers as OCI artifacts, enabling

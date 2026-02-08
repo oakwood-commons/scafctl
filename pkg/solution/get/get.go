@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package get
 
 import (
@@ -122,8 +125,6 @@ func NewGetter(opts ...Option) *Getter {
 //   - FromUrl: Loads a Solution from a specified remote URL.
 //   - Get: Loads a Solution from a path (local or URL) with auto-discovery support.
 //   - FindSolution: Searches for a solution file in default locations.
-//
-// TODO: This will need to support the scafctl repository
 type Interface interface {
 	FromLocalFileSystem(ctx context.Context, path string) (*solution.Solution, error)
 	FromURL(ctx context.Context, url string) (*solution.Solution, error)

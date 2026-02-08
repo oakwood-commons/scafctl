@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 // Package action provides types and execution logic for the Actions system.
 // Actions consume resolved data from resolvers and perform side-effect operations.
 package action

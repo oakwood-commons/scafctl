@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 // Package exitcode provides centralized exit codes for CLI commands.
 // All commands should import this package to ensure consistent exit codes.
 package exitcode

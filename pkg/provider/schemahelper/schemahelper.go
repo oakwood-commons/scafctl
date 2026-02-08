@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 // Package schemahelper provides ergonomic builder functions for constructing
 // jsonschema.Schema objects used in provider descriptors. These helpers reduce
 // the verbosity of creating JSON Schema definitions in Go code and ensure

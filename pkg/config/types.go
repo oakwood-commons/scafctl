@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 // Package config provides application configuration management using Viper.
 // It supports configuration files, environment variables, and CLI flag overrides.
 package config

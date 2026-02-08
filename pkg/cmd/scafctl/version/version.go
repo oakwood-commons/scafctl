@@ -1,11 +1,16 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package version
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 
@@ -115,9 +120,36 @@ func (options *CmdOptionsVersion) PrintVersion(ctx context.Context) error {
 	return nil
 }
 
-func GetLatestVersion(_ context.Context) (string, error) {
-	// TODO Need to implement getting the latest version
-	return "", errors.New("unable to get the latest version, not implemented yet")
+func GetLatestVersion(ctx context.Context) (string, error) {
+	const url = "https://api.github.com/repos/oakwood-commons/scafctl/releases/latest"
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("fetching latest release: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
+	}
+
+	var release struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		return "", fmt.Errorf("decoding response: %w", err)
+	}
+
+	return strings.TrimPrefix(release.TagName, "v"), nil
 }
 
 func customOutput(ioStreams *terminal.IOStreams, data map[string]any) error {

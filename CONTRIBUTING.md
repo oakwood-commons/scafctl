@@ -4,13 +4,30 @@ Thank you for your interest in contributing to scafctl! This document provides g
 
 ## Code of Conduct
 
-Be respectful and inclusive. We welcome contributors of all backgrounds and experience levels.
+See our [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Getting Started
 
+### Developer Certificate of Origin (DCO)
+
+All contributions must be signed off per the [Developer Certificate of Origin](https://developercertificate.org/).
+This certifies you have the right to submit the contribution under the project's license.
+
+Sign commits with `-s`:
+
+```bash
+git commit -s -m "feat(provider): add new provider"
+```
+
+If you forget, amend the last commit:
+
+```bash
+git commit --amend -s --no-edit
+```
+
 ### Prerequisites
 
-- Go 1.21+
+- Go 1.25.4+
 - golangci-lint
 - Git
 
@@ -319,6 +336,7 @@ git push origin v0.2.0
 - Open an issue for bugs or feature requests
 - Check existing issues and discussions
 - Review design docs in `docs/design/`
+- For security reports, see [SECURITY.md](.github/SECURITY.md)
 
 ## Recognition
 

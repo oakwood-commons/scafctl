@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 // Package kvx provides integration with the kvx data viewer library for scafctl.
 // It offers both non-interactive table output and interactive TUI modes for exploring
 // structured data like resolver results and action graphs.

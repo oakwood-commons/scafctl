@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 // Package secretprovider implements a resolver provider for accessing encrypted secrets.
 // Secrets are retrieved from the scafctl secrets store which uses AES-256-GCM encryption
 // with OS keychain integration for master key management.
