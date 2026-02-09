@@ -28,6 +28,7 @@ Artifacts are distinguished using OCI media types and annotations:
 
 **Media Types**:
 - Solutions: `application/vnd.scafctl.solution.v1+yaml`
+- Solution bundles: `application/vnd.scafctl.solution.bundle.v1+tar` (bundled files, templates, vendored dependencies)
 - Providers: `application/vnd.scafctl.provider.v1+binary`
 - Auth Handlers: `application/vnd.scafctl.auth-handler.v1+binary`
 
@@ -69,11 +70,16 @@ registry.example.com/
 
 **Solution build process**:
 1. Validates solution schema and structure
-2. Resolves and fetches all remote dependencies (solutions and required providers)
-3. Verifies dependency compatibility and detects circular dependencies
-4. Caches resolved dependencies for faster subsequent builds
-5. Packages the solution as an [OCI artifact](https://github.com/opencontainers/image-spec/blob/main/spec.md)
-6. Stores the artifact in the local catalog with version metadata and annotations
+2. Merges composed partial YAML files (`compose`) into a single solution
+3. Performs static analysis to discover local file references and catalog dependencies
+4. Expands `bundle.include` glob patterns and filters via `.scafctlignore`
+5. Validates `bundle.plugins` entries (name, kind, version constraints)
+6. Vendors catalog dependencies into `.scafctl/vendor/` within the bundle
+7. Generates or replays `solution.lock` for reproducible builds
+8. Packages the solution YAML as layer 0 and bundled files as layer 1 in a multi-layer [OCI artifact](https://github.com/opencontainers/image-spec/blob/main/spec.md)
+9. Stores the artifact in the local catalog with version metadata and annotations
+
+See [catalog-build-bundling.md](catalog-build-bundling.md) for the full design.
 
 **Provider/Auth Handler build process**:
 1. Compiles the binary with hashicorp/go-plugin integration
@@ -193,7 +199,7 @@ Cache behavior follows content-based invalidation strategies using artifact dige
 
 ### Provider Integration
 
-Providers are automatically discovered and loaded when solutions declare them as dependencies:
+Providers are automatically discovered and loaded when solutions declare them in `bundle.plugins`:
 
 ```yaml
 # Solution YAML
@@ -202,23 +208,32 @@ kind: Solution
 metadata:
   name: my-solution
   version: 1.0.0
-dependencies:
-  providers:
+bundle:
+  plugins:
     - name: aws-provider
-      version: ^1.5.0
+      kind: provider
+      version: "^1.5.0"
+      defaults:
+        region: us-east-1
     - name: custom-provider
-      version: 2.1.0
+      kind: provider
+      version: "2.1.0"
 spec:
   resolvers:
     # Can now use providers from installed plugins
+    # Plugin defaults (e.g., region) are shallow-merged beneath inline inputs
 ```
 
 During execution, scafctl:
-1. Checks if required plugins are available in local catalog
-2. Downloads missing plugins from configured catalogs
-3. Validates plugin versions meet dependency constraints
-4. Dynamically loads plugin binaries
-5. Bridges plugin providers to the execution context
+1. Reads plugin declarations from the solution's `bundle.plugins`
+2. Checks if required plugins are available in local catalog
+3. Downloads missing plugins from configured catalogs
+4. Validates plugin versions meet dependency constraints
+5. Dynamically loads plugin binaries
+6. Merges plugin defaults beneath inline provider inputs
+7. Bridges plugin providers to the execution context
+
+See [catalog-build-bundling.md](catalog-build-bundling.md) for the full design of plugin dependencies, defaults, and lock file integration.
 
 ---
 

@@ -9,7 +9,7 @@
 | Catalog fields | ✅ Implemented | visibility, beta, disabled |
 | Spec with resolvers | ✅ Implemented | `pkg/solution/spec.go` |
 | Workflow with actions/finally | ✅ Implemented | Uses `workflow.actions` and `workflow.finally` |
-| Dependencies (plugins) | ⏳ Planned | Not yet implemented |
+| Dependencies (plugins) | ⏳ Planned | Declared under `bundle.plugins` — see [catalog-build-bundling.md](catalog-build-bundling.md) |
 | Validation | ✅ Implemented | `pkg/solution/spec_validation.go` |
 | Run command | ✅ Implemented | `scafctl run solution` |
 | Render command | ✅ Implemented | `scafctl render solution` |
@@ -73,12 +73,19 @@ metadata:
     - name: Person Name
       email: person@example.com
 
-# dependencies:                    # ⏳ Planned - not yet implemented
-#   plugins:
-#     - name: aws-provider
-#       version: ^1.5.0
-#     - name: custom-provider
-#       version: 2.1.0
+compose:                             # ⏳ Planned — merge partial YAML files into this solution
+  - resolvers.yaml
+  - workflow.yaml
+
+bundle:                              # ⏳ Planned — build-time packaging metadata
+  include:                           # Glob patterns for files to bundle
+    - templates/**/*.tmpl
+  plugins:                           # External plugin dependencies
+    - name: aws-provider
+      kind: provider
+      version: "^1.5.0"
+      defaults:
+        region: us-east-1
 
 spec:
   resolvers: {}
@@ -90,7 +97,8 @@ Top-level sections:
 - `apiVersion` - API version (scafctl.io/v1)
 - `kind` - Resource type (Solution)
 - `metadata` - Name, version, description, maintainers, tags
-- `dependencies` - Required plugins and their version constraints (⏳ planned)
+- `compose` - Relative paths to partial YAML files merged into this solution (⏳ planned)
+- `bundle` - Build-time packaging: files to include and plugin dependencies (⏳ planned). See [catalog-build-bundling.md](catalog-build-bundling.md)
 - `catalog` - Publishing metadata (visibility, beta flag, disabled flag)
 - `spec` - Execution specification
   - `resolvers` - pure data derivation
@@ -108,18 +116,28 @@ The default `apiVersion` is scafctl.io/v1; breaking schema changes follow semver
 
 ## Dependencies
 
-> ⏳ **Planned Feature**: Plugin dependencies are not yet implemented.
+> ⏳ **Planned Feature**: Plugin dependencies are not yet implemented. See [catalog-build-bundling.md](catalog-build-bundling.md) for the full design.
 
-Solutions will be able to declare dependencies on plugins that provide custom providers.
+Solutions declare plugin dependencies under `bundle.plugins`, not as a separate top-level `dependencies` section. This keeps all packaging-and-distribution metadata together under `bundle`.
 
 ~~~yaml
-# dependencies:                    # ⏳ Not yet implemented
-#   plugins:
-#     - name: aws-provider
-#       version: ^1.5.0
-#     - name: gcp-provider
-#       version: ">=2.0.0 <3.0.0"
+bundle:
+  plugins:
+    - name: aws-provider
+      kind: provider
+      version: "^1.5.0"
+      defaults:
+        region: us-east-1
+    - name: gcp-provider
+      kind: provider
+      version: ">=2.0.0"
 ~~~
+
+Each plugin entry declares:
+- `name` — catalog reference for the plugin
+- `kind` — plugin type (`provider` or `auth-handler`)
+- `version` — semver constraint
+- `defaults` (optional) — default input values (supports full `ValueRef`: literal, `expr:`, `tmpl:`, `rslvr:`) shallow-merged beneath inline inputs
 
 Planned behavior:
 
@@ -127,6 +145,7 @@ Planned behavior:
 2. Missing plugins are pulled from configured remote catalogs
 3. Version constraints are validated
 4. Plugins are dynamically loaded to make their providers available
+5. Plugin defaults are shallow-merged beneath inline provider inputs (inline always wins)
 
 This will enable solutions to use providers from external plugins without bundling them.
 
@@ -447,6 +466,20 @@ catalog:                              # Optional: publishing metadata (no execut
   visibility: private                 # Optional: public|private|internal (default: private)
   beta: false                         # Optional: beta flag (default: false)
   disabled: false                     # Optional: availability flag (default: false)
+
+compose:                              # Optional: partial YAML files merged into this solution
+  - resolvers.yaml
+  - workflow.yaml
+
+bundle:                               # Optional: build-time packaging metadata
+  include:                            # Optional: glob patterns for files to bundle
+    - templates/**/*.tmpl
+  plugins:                            # Optional: external plugin dependencies
+    - name: aws-provider
+      kind: provider                  # provider | auth-handler
+      version: "^1.5.0"
+      defaults:                       # Optional: default input values (supports ValueRef)
+        region: us-east-1
 
 spec:
   resolvers:                          # Optional: data resolution

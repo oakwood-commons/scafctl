@@ -46,17 +46,23 @@ A dedicated provider to expose authentication claims (tenant ID, subject, scopes
 
 ## Catalog Build Bundling
 
-Source: [catalog-build-bundle.md](catalog-build-bundle.md)
+Source: [catalog-build-bundling.md](catalog-build-bundling.md)
 
-All of the following are planned for the bundle system:
+The bundling design is now fully specified. Key features:
 
-- **Dependency scanning at build time** — Scan for `provider: solution` with local file sources
-- **File bundling as OCI layers** — Additional content layers in the OCI manifest
-- **Folder bundling** — Recursive inclusion of directories
-- **Explicit `include` field in metadata** — Declare additional files/folders to bundle
-- **Runtime bundle resolution** — Check bundle before filesystem fallback
-- **`scafctl catalog inspect` bundle view** — Show bundled files and sizes
+- **Multi-file composition (`compose`)** — Split solutions across YAML files, merged at build time
+- **Static analysis + explicit `bundle.include`** — Auto-discover literal file paths; declare globs for dynamic paths
+- **File bundling as OCI layers** — Multi-layer OCI artifacts (solution YAML + bundle tar)
+- **Catalog vendoring** — Remote catalog dependencies fetched and embedded at build time for offline execution
+- **`solution.lock`** — Lock file for reproducible builds (catalog deps + plugin versions)
+- **Plugin dependencies (`bundle.plugins`)** — Declare plugins with `kind`, version constraints, and ValueRef-aware defaults
+- **`.scafctlignore`** — Purpose-specific file exclusion (independent of `.gitignore`)
 - **Nested bundle support** — Bundled sub-solutions can themselves contain bundles
+
+Future enhancements tracked in the bundling design doc:
+- `scafctl bundle verify` — validate built artifacts
+- Bundle diffing between versions
+- Per-provider defaults within a plugin
 
 ---
 
@@ -70,9 +76,9 @@ Additional artifact types beyond solutions, providers, and auth handlers — TBD
 
 ### Catalog Lock File
 
-Source: [solution-provider.md](solution-provider.md)
+Source: [catalog-build-bundling.md](catalog-build-bundling.md)
 
-A catalog-level lock file mechanism (similar to `go.sum` or `package-lock.json`) to automatically record resolved versions on first use and replay them on subsequent runs. Benefits all catalog consumers — CLI `run`, the solution provider, and any future catalog-aware tooling.
+The `solution.lock` file is now part of the bundling design. It records resolved versions and digests for both vendored catalog dependencies and plugin dependencies. Generated during `scafctl build solution`, replayed on subsequent builds for reproducibility. Use `--update-lock` to re-resolve.
 
 ---
 

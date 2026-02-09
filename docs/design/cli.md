@@ -393,7 +393,26 @@ scafctl build solution ./solution.yaml
 scafctl build solution ./solution.yaml --version 1.0.0 --force
 ~~~
 
-The build process validates, resolves dependencies, and packages artifacts into the local catalog.
+The build process validates, resolves dependencies, bundles local files, vendors catalog dependencies, and packages artifacts into the local catalog. See [catalog-build-bundling.md](../design/catalog-build-bundling.md) for the full bundling design.
+
+Additional build flags:
+
+~~~bash
+# Dry-run: show what would be bundled without building
+scafctl build solution ./solution.yaml --dry-run
+
+# Skip file bundling (legacy single-layer artifact)
+scafctl build solution ./solution.yaml --no-bundle
+
+# Skip vendoring catalog dependencies
+scafctl build solution ./solution.yaml --no-vendor
+
+# Set max bundle size
+scafctl build solution ./solution.yaml --bundle-max-size 100MB
+
+# Re-resolve and update the lock file
+scafctl build solution ./solution.yaml --update-lock
+~~~
 
 ### Publishing Artifacts
 

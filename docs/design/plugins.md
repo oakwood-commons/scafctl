@@ -251,13 +251,16 @@ Plugins are discovered via multiple mechanisms:
 - Environment-based paths
 - Solution dependencies (automatically fetched from remote catalogs)
 
-When a solution declares plugin dependencies:
+When a solution declares plugin dependencies (under `bundle.plugins`):
 
 ```yaml
-dependencies:
+bundle:
   plugins:
     - name: aws-provider
-      version: ^1.5.0
+      kind: provider
+      version: "^1.5.0"
+      defaults:
+        region: us-east-1
 ```
 
 scafctl will:
@@ -265,6 +268,9 @@ scafctl will:
 2. Pull missing plugins from configured remote catalogs
 3. Validate version constraints are met
 4. Load the plugin binary
+5. Apply plugin defaults (shallow-merged beneath inline inputs)
+
+See [catalog-build-bundling.md](catalog-build-bundling.md) for the full design of `bundle.plugins`, including the `kind` field, ValueRef-aware defaults, and lock file integration.
 
 Discovery does not execute plugins. Execution occurs only when a provider is invoked.
 
