@@ -187,13 +187,16 @@ func (r *InputResolver) normalizeInputMap(rawInputs any) (map[string]InputValue,
 		// Check if it's a map that can be converted to InputValue
 		if valueMap, ok := value.(map[string]any); ok {
 			iv := InputValue{}
+			formKeyFound := false
 
 			if literal, exists := valueMap["literal"]; exists {
 				iv.Literal = literal
+				formKeyFound = true
 			}
 			if rslvr, exists := valueMap["rslvr"]; exists {
 				if s, ok := rslvr.(string); ok {
 					iv.Rslvr = s
+					formKeyFound = true
 				} else {
 					return nil, fmt.Errorf("property %q: rslvr must be a string, got %T", key, rslvr)
 				}
@@ -201,8 +204,10 @@ func (r *InputResolver) normalizeInputMap(rawInputs any) (map[string]InputValue,
 			if expr, exists := valueMap["expr"]; exists {
 				if s, ok := expr.(string); ok {
 					iv.Expr = celexp.Expression(s)
+					formKeyFound = true
 				} else if e, ok := expr.(celexp.Expression); ok {
 					iv.Expr = e
+					formKeyFound = true
 				} else {
 					return nil, fmt.Errorf("property %q: expr must be a string or Expression, got %T", key, expr)
 				}
@@ -210,14 +215,21 @@ func (r *InputResolver) normalizeInputMap(rawInputs any) (map[string]InputValue,
 			if tmpl, exists := valueMap["tmpl"]; exists {
 				if s, ok := tmpl.(string); ok {
 					iv.Tmpl = gotmpl.GoTemplatingContent(s)
+					formKeyFound = true
 				} else if t, ok := tmpl.(gotmpl.GoTemplatingContent); ok {
 					iv.Tmpl = t
+					formKeyFound = true
 				} else {
 					return nil, fmt.Errorf("property %q: tmpl must be a string or GoTemplatingContent, got %T", key, tmpl)
 				}
 			}
 
-			result[key] = iv
+			// If no form keys found, treat the entire map as a literal value
+			if !formKeyFound {
+				result[key] = InputValue{Literal: value}
+			} else {
+				result[key] = iv
+			}
 			continue
 		}
 

@@ -1,0 +1,14 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: circular-a
+  version: 1.0.0
+spec:
+  resolvers:
+    data:
+      type: any
+      resolve:
+        with:
+          - provider: solution
+            inputs:
+              source: "tests/integration/testdata/solution-provider/circular-b.yaml"

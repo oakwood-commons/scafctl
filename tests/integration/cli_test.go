@@ -1721,3 +1721,286 @@ func TestIntegration_CacheClear_HTTPKind(t *testing.T) {
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "No cached content found")
 }
+
+// ============================================================================
+// Solution Provider Tests
+// ============================================================================
+
+func TestIntegration_SolutionProvider_ResolverComposition(t *testing.T) {
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "solution",
+		"-f", "tests/integration/testdata/solution-provider/parent-resolver.yaml",
+		"-o", "json",
+	)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d", exitCode)
+	assert.Contains(t, stdout, "hello from child")
+	assert.Contains(t, stdout, "passed from parent")
+}
+
+func TestIntegration_SolutionProvider_WorkflowComposition(t *testing.T) {
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "solution",
+		"-f", "tests/integration/testdata/solution-provider/parent-action.yaml",
+	)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d", exitCode)
+	assert.Contains(t, stdout, "succeeded")
+}
+
+func TestIntegration_SolutionProvider_CircularReference(t *testing.T) {
+	_, stderr, exitCode := runScafctl(t,
+		"run", "solution",
+		"-f", "tests/integration/testdata/solution-provider/circular-a.yaml",
+	)
+	t.Logf("stderr: %s", stderr)
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "circular reference detected")
+}
+
+func TestIntegration_SolutionProvider_DryRun(t *testing.T) {
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "solution",
+		"-f", "tests/integration/testdata/solution-provider/parent-action.yaml",
+		"--dry-run",
+	)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d", exitCode)
+	// Dry-run displays the execution plan without running actions
+	assert.Contains(t, stdout, "DRY RUN")
+	assert.Contains(t, stdout, "run-child")
+}
+
+func TestIntegration_SolutionProvider_PropagateErrorsFalse(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a child solution that will fail (references a nonexistent provider)
+	childSolution := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: failing-child
+  version: 1.0.0
+spec:
+  resolvers:
+    data:
+      type: string
+      resolve:
+        with:
+          - provider: nonexistent-provider
+            inputs:
+              value: "will fail"
+`
+	childPath := filepath.Join(tmpDir, "failing-child.yaml")
+	require.NoError(t, os.WriteFile(childPath, []byte(childSolution), 0o644))
+
+	// Create a parent that uses propagateErrors: false
+	parentSolution := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: parent-no-propagate
+  version: 1.0.0
+spec:
+  resolvers:
+    child-result:
+      type: any
+      resolve:
+        with:
+          - provider: solution
+            inputs:
+              source: "` + childPath + `"
+              propagateErrors: false
+`
+	parentPath := filepath.Join(tmpDir, "parent.yaml")
+	require.NoError(t, os.WriteFile(parentPath, []byte(parentSolution), 0o644))
+
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "solution",
+		"-f", parentPath,
+		"-o", "json",
+	)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	// With propagateErrors: false, the parent solution should succeed
+	// and return an envelope with status "failed" for the child
+	assert.Equal(t, 0, exitCode, "expected exit code 0 with propagateErrors=false, got %d", exitCode)
+	assert.Contains(t, stdout, "failed")
+}
+
+func TestIntegration_SolutionProvider_MaxDepthExceeded(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a self-referencing solution with maxDepth: 1
+	selfRef := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: self-ref
+  version: 1.0.0
+spec:
+  resolvers:
+    data:
+      type: any
+      resolve:
+        with:
+          - provider: solution
+            inputs:
+              source: "` + filepath.Join(tmpDir, "self.yaml") + `"
+              maxDepth: 1
+`
+	selfPath := filepath.Join(tmpDir, "self.yaml")
+	require.NoError(t, os.WriteFile(selfPath, []byte(selfRef), 0o644))
+
+	_, stderr, exitCode := runScafctl(t,
+		"run", "solution",
+		"-f", selfPath,
+	)
+	t.Logf("stderr: %s", stderr)
+	assert.NotEqual(t, 0, exitCode)
+	// Should hit either circular reference or max depth
+	assert.True(t,
+		strings.Contains(stderr, "circular reference detected") || strings.Contains(stderr, "max nesting depth"),
+		"expected circular reference or max depth error, got: %s", stderr)
+}
+
+func TestIntegration_SolutionProvider_ChildNotFound(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	parentSolution := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: parent-missing-child
+  version: 1.0.0
+spec:
+  resolvers:
+    data:
+      type: any
+      resolve:
+        with:
+          - provider: solution
+            inputs:
+              source: "./nonexistent.yaml"
+`
+	parentPath := filepath.Join(tmpDir, "parent.yaml")
+	require.NoError(t, os.WriteFile(parentPath, []byte(parentSolution), 0o644))
+
+	_, stderr, exitCode := runScafctl(t,
+		"run", "solution",
+		"-f", parentPath,
+	)
+	t.Logf("stderr: %s", stderr)
+	assert.NotEqual(t, 0, exitCode)
+	assert.True(t,
+		strings.Contains(stderr, "failed to load") || strings.Contains(stderr, "not found") || strings.Contains(stderr, "no such file"),
+		"expected load error, got: %s", stderr)
+}
+
+func TestIntegration_SolutionProvider_ResolverFilter(t *testing.T) {
+	// Parent requests only the "greeting" resolver from the child.
+	// The child has two resolvers: greeting (static) and echo-param (parameter).
+	// Since we only request "greeting", echo-param should not run and its absence
+	// should not cause a failure (no parameter is provided).
+	tmpDir := t.TempDir()
+
+	parentSolution := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: resolver-filter-test
+  version: 1.0.0
+spec:
+  resolvers:
+    child-data:
+      type: any
+      resolve:
+        with:
+          - provider: solution
+            inputs:
+              source: "tests/integration/testdata/solution-provider/child.yaml"
+              resolvers:
+                - greeting
+`
+	parentPath := filepath.Join(tmpDir, "parent.yaml")
+	require.NoError(t, os.WriteFile(parentPath, []byte(parentSolution), 0o644))
+
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "solution",
+		"-f", parentPath,
+	)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d", exitCode)
+	assert.Contains(t, stdout, "hello from child")
+	// echo-param should NOT be present since we only requested "greeting"
+	assert.NotContains(t, stdout, "echo-param")
+}
+
+func TestIntegration_SolutionProvider_ResolverFilterNotFound(t *testing.T) {
+	// Request a resolver that does not exist in the child solution.
+	tmpDir := t.TempDir()
+
+	parentSolution := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: resolver-filter-notfound
+  version: 1.0.0
+spec:
+  resolvers:
+    child-data:
+      type: any
+      resolve:
+        with:
+          - provider: solution
+            inputs:
+              source: "tests/integration/testdata/solution-provider/child.yaml"
+              resolvers:
+                - does-not-exist
+`
+	parentPath := filepath.Join(tmpDir, "parent.yaml")
+	require.NoError(t, os.WriteFile(parentPath, []byte(parentSolution), 0o644))
+
+	_, stderr, exitCode := runScafctl(t,
+		"run", "solution",
+		"-f", parentPath,
+	)
+	t.Logf("stderr: %s", stderr)
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "does not exist")
+}
+
+func TestIntegration_SolutionProvider_Timeout(t *testing.T) {
+	// Use a very short timeout with a normal child solution.
+	// The child should still succeed because the timeout is generous enough.
+	tmpDir := t.TempDir()
+
+	parentSolution := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: timeout-test
+  version: 1.0.0
+spec:
+  resolvers:
+    child-data:
+      type: any
+      resolve:
+        with:
+          - provider: solution
+            inputs:
+              source: "tests/integration/testdata/solution-provider/child.yaml"
+              inputs:
+                message: "with timeout"
+              timeout: "30s"
+`
+	parentPath := filepath.Join(tmpDir, "parent.yaml")
+	require.NoError(t, os.WriteFile(parentPath, []byte(parentSolution), 0o644))
+
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "solution",
+		"-f", parentPath,
+	)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d", exitCode)
+	assert.Contains(t, stdout, "hello from child")
+	assert.Contains(t, stdout, "with timeout")
+}

@@ -703,6 +703,24 @@ func TestInputResolver_NormalizeInputMap(t *testing.T) {
 			rawInputs: "not a map",
 			wantErr:   true,
 		},
+		{
+			name: "map without form keys treated as literal",
+			rawInputs: map[string]any{
+				"prop1": map[string]any{"message": "hello", "count": 42},
+			},
+			expected: map[string]InputValue{
+				"prop1": {Literal: map[string]any{"message": "hello", "count": 42}},
+			},
+		},
+		{
+			name: "nested map without form keys treated as literal",
+			rawInputs: map[string]any{
+				"prop1": map[string]any{"nested": map[string]any{"key": "value"}},
+			},
+			expected: map[string]InputValue{
+				"prop1": {Literal: map[string]any{"nested": map[string]any{"key": "value"}}},
+			},
+		},
 	}
 
 	for _, tt := range tests {

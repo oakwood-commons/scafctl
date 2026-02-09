@@ -20,6 +20,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/solutionprovider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
@@ -349,6 +350,21 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 
 	// Set up provider registry
 	reg := o.getRegistry()
+
+	// Register the solution provider (needs getter + registry, cannot be in builtin.go).
+	// Use Has() guard because DefaultRegistry() is a singleton — repeated calls
+	// (e.g. in tests) must not fail with "already registered".
+	if !reg.Has(solutionprovider.ProviderName) {
+		solGetter := o.getOrCreateGetter(ctx)
+		solProvider := solutionprovider.New(
+			solutionprovider.WithLoader(solGetter),
+			solutionprovider.WithRegistry(reg),
+		)
+		if err := reg.Register(solProvider); err != nil {
+			return o.exitWithCode(ctx, fmt.Errorf("registering solution provider: %w", err), exitcode.GeneralError)
+		}
+	}
+
 	actionAdapter := &actionRegistryAdapter{registry: reg}
 
 	// Validate the workflow if present and not skipping actions
@@ -505,28 +521,33 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	return o.writeActionOutput(ctx, result)
 }
 
+// getOrCreateGetter returns the injected getter or creates a default one, caching the result.
+func (o *SolutionOptions) getOrCreateGetter(ctx context.Context) get.Interface {
+	if o.getter != nil {
+		return o.getter
+	}
+
+	lgr := logger.FromContext(ctx)
+
+	getterOpts := []get.Option{
+		get.WithLogger(*lgr),
+	}
+
+	localCatalog, err := catalog.NewLocalCatalog(*lgr)
+	if err == nil {
+		resolver := catalog.NewSolutionResolver(localCatalog, *lgr)
+		getterOpts = append(getterOpts, get.WithCatalogResolver(resolver))
+	} else {
+		lgr.V(1).Info("catalog not available for solution resolution", "error", err)
+	}
+
+	o.getter = get.NewGetter(getterOpts...)
+	return o.getter
+}
+
 // loadSolution loads the solution from file, stdin, catalog, or auto-discovery
 func (o *SolutionOptions) loadSolution(ctx context.Context) (*solution.Solution, error) {
-	getter := o.getter
-	if getter == nil {
-		lgr := logger.FromContext(ctx)
-
-		// Set up getter options
-		getterOpts := []get.Option{
-			get.WithLogger(*lgr),
-		}
-
-		// Try to set up catalog resolver for bare name resolution
-		localCatalog, err := catalog.NewLocalCatalog(*lgr)
-		if err == nil {
-			resolver := catalog.NewSolutionResolver(localCatalog, *lgr)
-			getterOpts = append(getterOpts, get.WithCatalogResolver(resolver))
-		} else {
-			lgr.V(1).Info("catalog not available for solution resolution", "error", err)
-		}
-
-		getter = get.NewGetter(getterOpts...)
-	}
+	getter := o.getOrCreateGetter(ctx)
 
 	// Handle stdin
 	if o.File == "-" {
