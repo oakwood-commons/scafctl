@@ -6,6 +6,7 @@ package solutionprovider
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
@@ -474,6 +475,7 @@ func decodeInput(m map[string]any) (any, error) {
 // --- Dependency Extraction ---
 
 // extractDependencies scans the raw input map for resolver references.
+// The returned slice is sorted for deterministic output.
 func extractDependencies(inputs map[string]any) []string {
 	var deps []string
 
@@ -482,8 +484,13 @@ func extractDependencies(inputs map[string]any) []string {
 	}
 
 	if subInputs, ok := inputs["inputs"].(map[string]any); ok {
-		for _, v := range subInputs {
-			deps = append(deps, extractRefsFromValue(v)...)
+		keys := make([]string, 0, len(subInputs))
+		for k := range subInputs {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			deps = append(deps, extractRefsFromValue(subInputs[k])...)
 		}
 	}
 

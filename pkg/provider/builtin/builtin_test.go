@@ -21,6 +21,10 @@ func TestDefaultRegistry(t *testing.T) {
 		// Verify all expected providers are registered
 		expectedProviders := ProviderNames()
 		for _, name := range expectedProviders {
+			// Secret provider may not be available if keyring/env var is missing
+			if name == "secret" && !SecretStoreAvailable() {
+				continue
+			}
 			p, found := reg.Get(name)
 			assert.True(t, found, "provider %q should be registered", name)
 			assert.NotNil(t, p, "provider %q should not be nil", name)
@@ -167,6 +171,8 @@ func TestAllProvidersRegistered(t *testing.T) {
 	reg, err := DefaultRegistry()
 	require.NoError(t, err)
 
+	secretAvailable := SecretStoreAvailable()
+
 	// All expected built-in providers
 	expectedProviders := []struct {
 		name        string
@@ -190,6 +196,11 @@ func TestAllProvidersRegistered(t *testing.T) {
 
 	for _, expected := range expectedProviders {
 		t.Run(expected.name, func(t *testing.T) {
+			// Secret provider may not be available if keyring/env var is missing
+			if expected.name == "secret" && !secretAvailable {
+				t.Skip("secret store not available")
+			}
+
 			p, found := reg.Get(expected.name)
 			require.True(t, found, "provider %q must be registered", expected.name)
 			require.NotNil(t, p, "provider %q must not be nil", expected.name)
@@ -202,7 +213,11 @@ func TestAllProvidersRegistered(t *testing.T) {
 		})
 	}
 
-	// Verify count matches expected
-	names := ProviderNames()
-	assert.Len(t, names, len(expectedProviders), "provider count must match expected")
+	// Verify count matches expected (accounting for missing secret provider)
+	expectedCount := len(expectedProviders)
+	if !secretAvailable {
+		expectedCount--
+	}
+	registeredCount := len(reg.ListProviders())
+	assert.Equal(t, expectedCount, registeredCount, "registered provider count must match expected")
 }

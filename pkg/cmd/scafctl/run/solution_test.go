@@ -416,6 +416,7 @@ spec:
 		File:      solutionPath,
 		Output:    "json",
 		Only:      "nonexistent", // This resolver doesn't exist
+		registry:  testRegistry(),
 	}
 
 	lgr := logger.Get(0)
