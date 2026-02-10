@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   packages: write
+  id-token: write  # Required for cosign keyless signing via OIDC
 
 jobs:
   release:
@@ -37,19 +38,12 @@ jobs:
         with:
           install-only: true
       
-      - name: Import GPG key
-        uses: crazy-max/ghaction-import-gpg@v6
-        if: env.GPG_PRIVATE_KEY != ''
-        with:
-          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
-          passphrase: ${{ secrets.GPG_PASSPHRASE }}
-        env:
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
       
       - name: Run GoReleaser
         run: task release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GPG_FINGERPRINT: ${{ secrets.GPG_FINGERPRINT }}
           GIT_EVENT: push
           GIT_REF: ${{ github.ref }}

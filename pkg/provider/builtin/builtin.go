@@ -4,8 +4,10 @@
 package builtin
 
 import (
+	"fmt"
 	"sync"
 
+	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/celprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/debugprovider"
@@ -59,13 +61,10 @@ func RegisterAll() error {
 }
 
 // registerAllToRegistry registers all built-in providers to the given registry.
+// If the secrets store cannot be initialized (e.g., no OS keyring in CI),
+// all other providers are still registered and the error is returned as a
+// non-fatal warning alongside a nil-error return.
 func registerAllToRegistry(reg *provider.Registry) error {
-	// Initialize secrets store for the secret provider
-	secretStore, err := secrets.New()
-	if err != nil {
-		return err
-	}
-
 	providers := []provider.Provider{
 		httpprovider.NewHTTPProvider(),
 		envprovider.NewEnvProvider(),
@@ -79,14 +78,28 @@ func registerAllToRegistry(reg *provider.Registry) error {
 		parameterprovider.NewParameterProvider(),
 		staticprovider.New(),
 		gotmplprovider.NewGoTemplateProvider(),
-		secretprovider.NewSecretProvider(secretprovider.WithSecretStore(secretStore)),
 		identityprovider.NewIdentityProvider(),
 	}
 
+	// Initialize secrets store for the secret provider.
+	// If the keyring is unavailable (e.g., CI without SCAFCTL_SECRET_KEY),
+	// skip the secret provider but register everything else.
+	secretStore, err := secrets.New()
+	if err == nil {
+		providers = append(providers, secretprovider.NewSecretProvider(secretprovider.WithSecretStore(secretStore)))
+	} else {
+		logger.GetGlobalLogger().Info("secret provider unavailable: secrets store failed to initialize, set SCAFCTL_SECRET_KEY to enable", "error", err)
+	}
+
+	var errs []error
 	for _, p := range providers {
-		if err := reg.Register(p); err != nil {
-			return err
+		if regErr := reg.Register(p); regErr != nil {
+			errs = append(errs, regErr)
 		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("failed to register %d provider(s): %w", len(errs), errs[0])
 	}
 
 	return nil
@@ -111,4 +124,11 @@ func ProviderNames() []string {
 		"secret",
 		"identity",
 	}
+}
+
+// SecretStoreAvailable returns true if the secrets store can be initialized.
+// This is useful for tests to determine whether the secret provider will be registered.
+func SecretStoreAvailable() bool {
+	_, err := secrets.New()
+	return err == nil
 }
