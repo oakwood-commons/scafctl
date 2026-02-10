@@ -45,18 +45,17 @@ signs:
       - "--output-certificate=${certificate}"
       - "--output-signature=${signature}"
       - "--yes"
-brews:
+homebrew_casks:
   - name: scafctl
     repository:
       owner: oakwood-commons
       name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: "https://github.com/oakwood-commons/scafctl"
     description: "A configuration discovery and scaffolding tool using CEL for dynamic evaluation"
     license: "Apache-2.0"
-    install: |
-      bin.install "scafctl"
-    test: |
-      system "#{bin}/scafctl", "version"
+    binaries:
+      - "scafctl"
 release:
   draft: false
   prerelease: auto
