@@ -140,12 +140,20 @@ type Catalog interface {
 	Name() string
 
 	// Store saves an artifact to the catalog.
+	// For solutions with bundled files, bundleData contains the tar archive.
+	// If bundleData is nil, only the primary content layer is stored.
 	// Returns ErrArtifactExists if the version already exists (use force to overwrite).
-	Store(ctx context.Context, ref Reference, content []byte, annotations map[string]string, force bool) (ArtifactInfo, error)
+	Store(ctx context.Context, ref Reference, content, bundleData []byte, annotations map[string]string, force bool) (ArtifactInfo, error)
 
-	// Fetch retrieves an artifact from the catalog.
+	// Fetch retrieves an artifact's primary content from the catalog.
 	// Returns ErrArtifactNotFound if the artifact doesn't exist.
 	Fetch(ctx context.Context, ref Reference) ([]byte, ArtifactInfo, error)
+
+	// FetchWithBundle retrieves an artifact's primary content and bundle layer.
+	// The bundle layer contains bundled files as a tar archive.
+	// If the artifact has no bundle layer, bundleData is nil.
+	// Returns ErrArtifactNotFound if the artifact doesn't exist.
+	FetchWithBundle(ctx context.Context, ref Reference) (content, bundleData []byte, info ArtifactInfo, err error)
 
 	// Resolve finds the best matching version for a reference.
 	// If no version is specified, returns the highest semver version.

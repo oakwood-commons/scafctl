@@ -4,6 +4,7 @@
 package catalog
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -78,7 +79,9 @@ func (c *LocalCatalog) Path() string {
 }
 
 // Store saves an artifact to the catalog.
-func (c *LocalCatalog) Store(ctx context.Context, ref Reference, content []byte, annotations map[string]string, force bool) (ArtifactInfo, error) {
+// For solutions with bundled files, bundleData contains the tar archive.
+// If bundleData is nil, only the primary content layer is stored.
+func (c *LocalCatalog) Store(ctx context.Context, ref Reference, content, bundleData []byte, annotations map[string]string, force bool) (ArtifactInfo, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -126,6 +129,18 @@ func (c *LocalCatalog) Store(ctx context.Context, ref Reference, content []byte,
 		return ArtifactInfo{}, fmt.Errorf("failed to push config blob: %w", err)
 	}
 
+	// Create manifest layers
+	layers := []ocispec.Descriptor{contentDesc}
+
+	// Add bundle layer if present
+	if len(bundleData) > 0 {
+		bundleDesc, err := c.pushBlob(ctx, MediaTypeSolutionBundle, bundleData)
+		if err != nil {
+			return ArtifactInfo{}, fmt.Errorf("failed to push bundle blob: %w", err)
+		}
+		layers = append(layers, bundleDesc)
+	}
+
 	// Create manifest
 	manifest := ocispec.Manifest{
 		Versioned: specs.Versioned{
@@ -133,7 +148,7 @@ func (c *LocalCatalog) Store(ctx context.Context, ref Reference, content []byte,
 		},
 		MediaType:   ocispec.MediaTypeImageManifest,
 		Config:      configDesc,
-		Layers:      []ocispec.Descriptor{contentDesc},
+		Layers:      layers,
 		Annotations: annotations,
 	}
 
@@ -209,6 +224,197 @@ func (c *LocalCatalog) Fetch(ctx context.Context, ref Reference) ([]byte, Artifa
 	}
 
 	return content, info, nil
+}
+
+// FetchWithBundle retrieves an artifact's primary content and bundle layer.
+// If the artifact has no bundle layer, bundleData is nil.
+func (c *LocalCatalog) FetchWithBundle(ctx context.Context, ref Reference) ([]byte, []byte, ArtifactInfo, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	// Resolve to get the manifest descriptor
+	info, err := c.resolveLocked(ctx, ref)
+	if err != nil {
+		return nil, nil, ArtifactInfo{}, err
+	}
+
+	// Get the manifest
+	tag := c.tagForRef(info.Reference)
+	manifestDesc, err := c.store.Resolve(ctx, tag)
+	if err != nil {
+		return nil, nil, ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
+	}
+
+	manifestData, err := c.fetchBlob(ctx, manifestDesc)
+	if err != nil {
+		return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to fetch manifest: %w", err)
+	}
+
+	var manifest ocispec.Manifest
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to unmarshal manifest: %w", err)
+	}
+
+	if len(manifest.Layers) == 0 {
+		return nil, nil, ArtifactInfo{}, fmt.Errorf("manifest has no content layers")
+	}
+
+	// Fetch content from first layer
+	content, err := c.fetchBlob(ctx, manifest.Layers[0])
+	if err != nil {
+		return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to fetch content: %w", err)
+	}
+
+	// Fetch bundle from second layer if present
+	var bundleData []byte
+	if len(manifest.Layers) > 1 {
+		switch manifest.Layers[1].MediaType {
+		case MediaTypeSolutionBundle:
+			// Version 1: single tar layer
+			bundleData, err = c.fetchBlob(ctx, manifest.Layers[1])
+			if err != nil {
+				return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to fetch bundle: %w", err)
+			}
+		case MediaTypeSolutionBundleManifest:
+			// Version 2: deduplicated — reassemble into a v1-compatible tar
+			// for backward-compatible consumers that use FetchWithBundle.
+			bundleData, err = c.reassembleDedup(ctx, manifest)
+			if err != nil {
+				return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to reassemble dedup bundle: %w", err)
+			}
+		}
+	}
+
+	return content, bundleData, info, nil
+}
+
+// reassembleDedup fetches all layers of a v2 deduplicated bundle and
+// reassembles them into a single v1-compatible tar with embedded manifest.
+func (c *LocalCatalog) reassembleDedup(ctx context.Context, ociManifest ocispec.Manifest) ([]byte, error) {
+	if len(ociManifest.Layers) < 2 {
+		return nil, fmt.Errorf("insufficient layers for dedup bundle")
+	}
+
+	// Read the bundle manifest from layer 1
+	manifestJSON, err := c.fetchBlob(ctx, ociManifest.Layers[1])
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch bundle manifest: %w", err)
+	}
+
+	var bundleManifest struct {
+		Version int    `json:"version"`
+		Root    string `json:"root"`
+		Files   []struct {
+			Path   string `json:"path"`
+			Size   int64  `json:"size"`
+			Digest string `json:"digest"`
+			Layer  int    `json:"layer"`
+		} `json:"files"`
+		Plugins []struct {
+			Name    string `json:"name"`
+			Kind    string `json:"kind"`
+			Version string `json:"version"`
+		} `json:"plugins,omitempty"`
+	}
+	if err := json.Unmarshal(manifestJSON, &bundleManifest); err != nil {
+		return nil, fmt.Errorf("failed to parse bundle manifest: %w", err)
+	}
+
+	// Build a v1-compatible tar containing all files
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+
+	// Write the manifest as a v1-compatible manifest (downgrade version)
+	v1Manifest := bundleManifest
+	v1Manifest.Version = 1
+	// Zero out layer fields for v1
+	for i := range v1Manifest.Files {
+		v1Manifest.Files[i].Layer = 0
+	}
+	v1ManifestJSON, err := json.MarshalIndent(v1Manifest, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal v1 manifest: %w", err)
+	}
+	if err := writeTarEntry(tw, ".scafctl/bundle-manifest.json", v1ManifestJSON); err != nil {
+		return nil, err
+	}
+
+	// Cache fetched layers to avoid re-fetching for duplicate layer references
+	layerCache := make(map[int][]byte)
+
+	for _, f := range bundleManifest.Files {
+		layerData, ok := layerCache[f.Layer]
+		if !ok {
+			if f.Layer < 0 || f.Layer >= len(ociManifest.Layers) {
+				return nil, fmt.Errorf("layer index %d out of range", f.Layer)
+			}
+			data, err := c.fetchBlob(ctx, ociManifest.Layers[f.Layer])
+			if err != nil {
+				return nil, fmt.Errorf("failed to fetch layer %d: %w", f.Layer, err)
+			}
+			layerCache[f.Layer] = data
+			layerData = data
+		}
+
+		// If the layer is a tar (small files), extract just this file from it
+		if isTarMediaType(ociManifest.Layers[f.Layer].MediaType) {
+			fileContent, err := extractFileFromTar(layerData, f.Path)
+			if err != nil {
+				return nil, fmt.Errorf("failed to extract %s from tar layer: %w", f.Path, err)
+			}
+			if err := writeTarEntry(tw, f.Path, fileContent); err != nil {
+				return nil, err
+			}
+		} else {
+			// Raw blob — write directly
+			if err := writeTarEntry(tw, f.Path, layerData); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	if err := tw.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close tar: %w", err)
+	}
+
+	return buf.Bytes(), nil
+}
+
+// writeTarEntry writes a single entry to a tar writer.
+func writeTarEntry(tw *tar.Writer, name string, content []byte) error {
+	if err := tw.WriteHeader(&tar.Header{
+		Name: name,
+		Size: int64(len(content)),
+		Mode: 0o644,
+	}); err != nil {
+		return fmt.Errorf("failed to write tar header for %s: %w", name, err)
+	}
+	if _, err := tw.Write(content); err != nil {
+		return fmt.Errorf("failed to write tar content for %s: %w", name, err)
+	}
+	return nil
+}
+
+// isTarMediaType returns true if the media type indicates a tar layer.
+func isTarMediaType(mediaType string) bool {
+	return mediaType == MediaTypeSolutionBundle || mediaType == MediaTypeSolutionBundleSmallTar
+}
+
+// extractFileFromTar finds and returns a single file's content from a tar archive.
+func extractFileFromTar(tarData []byte, filePath string) ([]byte, error) {
+	tr := tar.NewReader(bytes.NewReader(tarData))
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			return nil, fmt.Errorf("file %s not found in tar", filePath)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if filepath.ToSlash(filepath.Clean(header.Name)) == filepath.ToSlash(filepath.Clean(filePath)) {
+			return io.ReadAll(tr)
+		}
+	}
 }
 
 // Resolve finds the best matching version for a reference.
@@ -899,3 +1105,172 @@ func (c *LocalCatalog) markReferencedBlobs(ctx context.Context, desc ocispec.Des
 
 // Ensure LocalCatalog implements Catalog.
 var _ Catalog = (*LocalCatalog)(nil)
+
+// StoreDedup saves a solution with content-addressable deduplicated layers.
+// manifestJSON is the bundle manifest (v2), smallTar is grouped small files,
+// and blobLayers are individual large file blobs with their media types.
+func (c *LocalCatalog) StoreDedup(ctx context.Context, ref Reference, solutionYAML, manifestJSON, smallTar []byte, blobLayers [][]byte, annotations map[string]string, force bool) (ArtifactInfo, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if !force {
+		if c.existsLocked(ctx, ref) {
+			return ArtifactInfo{}, &ArtifactExistsError{Reference: ref, Catalog: LocalCatalogName}
+		}
+	}
+
+	now := time.Now().UTC()
+	if annotations == nil {
+		annotations = make(map[string]string)
+	}
+	annotations[AnnotationArtifactType] = ref.Kind.String()
+	annotations[AnnotationArtifactName] = ref.Name
+	if ref.Version != nil {
+		annotations[AnnotationVersion] = ref.Version.String()
+	}
+	annotations[AnnotationCreated] = now.Format(time.RFC3339)
+
+	// Layer 0: solution YAML
+	contentDesc, err := c.pushBlob(ctx, MediaTypeSolutionContent, solutionYAML)
+	if err != nil {
+		return ArtifactInfo{}, fmt.Errorf("failed to push solution content: %w", err)
+	}
+
+	// Config blob
+	configData, err := json.Marshal(map[string]any{
+		"kind":        ref.Kind.String(),
+		"name":        ref.Name,
+		"version":     ref.Version.String(),
+		"createdAt":   now.Format(time.RFC3339),
+		"annotations": annotations,
+	})
+	if err != nil {
+		return ArtifactInfo{}, fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	configDesc, err := c.pushBlob(ctx, ConfigMediaTypeForKind(ref.Kind), configData)
+	if err != nil {
+		return ArtifactInfo{}, fmt.Errorf("failed to push config: %w", err)
+	}
+
+	layers := []ocispec.Descriptor{contentDesc}
+
+	// Layer 1: bundle manifest JSON
+	manifestDesc, err := c.pushBlob(ctx, MediaTypeSolutionBundleManifest, manifestJSON)
+	if err != nil {
+		return ArtifactInfo{}, fmt.Errorf("failed to push bundle manifest: %w", err)
+	}
+	layers = append(layers, manifestDesc)
+
+	// Layer 2 (optional): small files tar
+	if len(smallTar) > 0 {
+		smallDesc, err := c.pushBlob(ctx, MediaTypeSolutionBundleSmallTar, smallTar)
+		if err != nil {
+			return ArtifactInfo{}, fmt.Errorf("failed to push small files tar: %w", err)
+		}
+		layers = append(layers, smallDesc)
+	}
+
+	// Layer 3+: individual file blobs (content-addressable — duplicates are automatically deduped by digest)
+	for _, blob := range blobLayers {
+		blobDesc, err := c.pushBlob(ctx, MediaTypeSolutionBundleBlob, blob)
+		if err != nil {
+			return ArtifactInfo{}, fmt.Errorf("failed to push bundle blob: %w", err)
+		}
+		layers = append(layers, blobDesc)
+	}
+
+	// Create OCI manifest
+	ociManifest := ocispec.Manifest{
+		Versioned: specs.Versioned{
+			SchemaVersion: 2,
+		},
+		MediaType:   ocispec.MediaTypeImageManifest,
+		Config:      configDesc,
+		Layers:      layers,
+		Annotations: annotations,
+	}
+
+	ociManifestData, err := json.Marshal(ociManifest)
+	if err != nil {
+		return ArtifactInfo{}, fmt.Errorf("failed to marshal manifest: %w", err)
+	}
+
+	ociManifestDesc, err := c.pushBlob(ctx, ocispec.MediaTypeImageManifest, ociManifestData)
+	if err != nil {
+		return ArtifactInfo{}, fmt.Errorf("failed to push OCI manifest: %w", err)
+	}
+
+	tag := c.tagForRef(ref)
+	ociManifestDesc.Annotations = annotations
+	if err := c.store.Tag(ctx, ociManifestDesc, tag); err != nil {
+		return ArtifactInfo{}, fmt.Errorf("failed to tag manifest: %w", err)
+	}
+
+	return ArtifactInfo{
+		Reference:   ref,
+		Digest:      ociManifestDesc.Digest.String(),
+		CreatedAt:   now,
+		Size:        int64(len(solutionYAML)),
+		Annotations: annotations,
+		Catalog:     LocalCatalogName,
+	}, nil
+}
+
+// FetchDedup retrieves a deduplicated (v2) bundle by fetching all layers.
+// Returns the solution YAML, bundle manifest JSON, and a layer fetcher
+// that can retrieve individual layers by index.
+func (c *LocalCatalog) FetchDedup(ctx context.Context, ref Reference) (solutionYAML, manifestJSON []byte, layerFetcher func(layer int) ([]byte, error), info ArtifactInfo, err error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	info, err = c.resolveLocked(ctx, ref)
+	if err != nil {
+		return nil, nil, nil, ArtifactInfo{}, err
+	}
+
+	tag := c.tagForRef(info.Reference)
+	manifestDesc, err := c.store.Resolve(ctx, tag)
+	if err != nil {
+		return nil, nil, nil, ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
+	}
+
+	manifestData, err := c.fetchBlob(ctx, manifestDesc)
+	if err != nil {
+		return nil, nil, nil, ArtifactInfo{}, fmt.Errorf("failed to fetch manifest: %w", err)
+	}
+
+	var ociManifest ocispec.Manifest
+	if err := json.Unmarshal(manifestData, &ociManifest); err != nil {
+		return nil, nil, nil, ArtifactInfo{}, fmt.Errorf("failed to unmarshal OCI manifest: %w", err)
+	}
+
+	if len(ociManifest.Layers) < 2 {
+		return nil, nil, nil, ArtifactInfo{}, fmt.Errorf("manifest has insufficient layers for dedup bundle")
+	}
+
+	// Layer 0: solution YAML
+	solutionYAML, err = c.fetchBlob(ctx, ociManifest.Layers[0])
+	if err != nil {
+		return nil, nil, nil, ArtifactInfo{}, fmt.Errorf("failed to fetch solution YAML: %w", err)
+	}
+
+	// Layer 1: bundle manifest
+	manifestJSON, err = c.fetchBlob(ctx, ociManifest.Layers[1])
+	if err != nil {
+		return nil, nil, nil, ArtifactInfo{}, fmt.Errorf("failed to fetch bundle manifest: %w", err)
+	}
+
+	// Capture layers for the fetcher closure
+	allLayers := ociManifest.Layers
+	store := c
+
+	layerFetcher = func(layer int) ([]byte, error) {
+		if layer < 0 || layer >= len(allLayers) {
+			return nil, fmt.Errorf("layer index %d out of range (0-%d)", layer, len(allLayers)-1)
+		}
+		return store.fetchBlob(ctx, allLayers[layer])
+	}
+
+	return solutionYAML, manifestJSON, layerFetcher, info, nil
+}

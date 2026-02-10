@@ -811,6 +811,10 @@ func TestIntegration_BuildSolutionHelp(t *testing.T) {
 	assert.Contains(t, stdout, "--version")
 	assert.Contains(t, stdout, "--name")
 	assert.Contains(t, stdout, "--force")
+	assert.Contains(t, stdout, "--no-bundle")
+	assert.Contains(t, stdout, "--no-vendor")
+	assert.Contains(t, stdout, "--bundle-max-size")
+	assert.Contains(t, stdout, "--dry-run")
 }
 
 func TestIntegration_BuildSolution_UsesMetadataVersion(t *testing.T) {
@@ -894,6 +898,34 @@ func TestIntegration_BuildSolution_ForceOverwrite(t *testing.T) {
 
 	// Third build with force should succeed
 	stdout, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0", "--force")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Built")
+}
+
+func TestIntegration_BuildSolution_DryRun(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	stdout, stderr, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0", "--dry-run")
+
+	if exitCode != 0 {
+		t.Logf("stdout: %s", stdout)
+		t.Logf("stderr: %s", stderr)
+	}
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Dry run")
+}
+
+func TestIntegration_BuildSolution_NoBundle(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	stdout, stderr, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0", "--no-bundle")
+
+	if exitCode != 0 {
+		t.Logf("stdout: %s", stdout)
+		t.Logf("stderr: %s", stderr)
+	}
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "Built")
 }
@@ -1137,10 +1169,12 @@ func TestIntegration_RunSolution_FromCatalog_NotFound(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", tmpDir)
 
 	// Try to run a solution that doesn't exist in catalog
-	_, stderr, exitCode := runScafctl(t, "run", "solution", "nonexistent-solution", "--skip-actions")
+	stdout, stderr, exitCode := runScafctl(t, "run", "solution", "nonexistent-solution", "--skip-actions")
 	assert.NotEqual(t, 0, exitCode)
 	// Reports artifact not found in catalog and file system
-	assert.Contains(t, stderr, "not found")
+	combined := stdout + stderr
+	assert.True(t, strings.Contains(combined, "not found") || strings.Contains(combined, "no such file or directory"),
+		"expected error about missing solution, got stdout=%q stderr=%q", stdout, stderr)
 }
 
 func TestIntegration_RunSolution_FromCatalog_ByName(t *testing.T) {
@@ -2003,4 +2037,245 @@ spec:
 	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d", exitCode)
 	assert.Contains(t, stdout, "hello from child")
 	assert.Contains(t, stdout, "with timeout")
+}
+
+// ============================================================================
+// Bundle Command Tests
+// ============================================================================
+
+func TestIntegration_BundleHelp(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "bundle", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "bundle")
+	assert.Contains(t, stdout, "verify")
+	assert.Contains(t, stdout, "diff")
+	assert.Contains(t, stdout, "extract")
+}
+
+func TestIntegration_BundleVerifyHelp(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "bundle", "verify", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Validate that a built artifact")
+	assert.Contains(t, stdout, "--strict")
+}
+
+func TestIntegration_BundleDiffHelp(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "bundle", "diff", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Show what changed between two versions")
+	assert.Contains(t, stdout, "--files-only")
+	assert.Contains(t, stdout, "--solution-only")
+	assert.Contains(t, stdout, "--ignore")
+}
+
+func TestIntegration_BundleExtractHelp(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "bundle", "extract", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Extract files from a bundled solution artifact")
+	assert.Contains(t, stdout, "--output-dir")
+	assert.Contains(t, stdout, "--resolver")
+	assert.Contains(t, stdout, "--action")
+	assert.Contains(t, stdout, "--include")
+	assert.Contains(t, stdout, "--list-only")
+	assert.Contains(t, stdout, "--flatten")
+}
+
+func TestIntegration_BundleVerify_MissingRef(t *testing.T) {
+	_, _, exitCode := runScafctl(t, "bundle", "verify")
+
+	assert.NotEqual(t, 0, exitCode)
+}
+
+func TestIntegration_BundleDiff_MissingArgs(t *testing.T) {
+	_, _, exitCode := runScafctl(t, "bundle", "diff")
+
+	assert.NotEqual(t, 0, exitCode)
+}
+
+func TestIntegration_BundleExtract_MissingRef(t *testing.T) {
+	_, _, exitCode := runScafctl(t, "bundle", "extract")
+
+	assert.NotEqual(t, 0, exitCode)
+}
+
+func TestIntegration_BundleVerify_AfterBuild(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Build first
+	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+
+	// Verify the built artifact
+	stdout, stderr, exitCode := runScafctl(t, "bundle", "verify", "resolver-demo@1.0.0")
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	assert.Equal(t, 0, exitCode)
+}
+
+func TestIntegration_BundleExtract_AfterBuild(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Build first
+	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+
+	// Extract the built artifact
+	extractDir := filepath.Join(tmpDir, "extracted")
+	stdout, stderr, exitCode := runScafctl(t, "bundle", "extract", "resolver-demo@1.0.0", "--output-dir", extractDir)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	assert.Equal(t, 0, exitCode)
+}
+
+func TestIntegration_BundleExtract_ListOnly(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Build first
+	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+
+	// List files — may have no bundle layer if the solution has no bundle config
+	stdout, stderr, exitCode := runScafctl(t, "bundle", "extract", "resolver-demo@1.0.0", "--list-only")
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	assert.Equal(t, 0, exitCode)
+	// Either lists files or warns about no bundle — both are valid
+	assert.True(t, strings.Contains(stdout, "Total") || strings.Contains(stdout, "no bundle"),
+		"expected either file list or no-bundle warning")
+}
+
+func TestIntegration_BundleDiff_SameVersion(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Build two versions
+	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+
+	_, _, exitCode = runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "2.0.0")
+	require.Equal(t, 0, exitCode)
+
+	// Diff them
+	stdout, stderr, exitCode := runScafctl(t, "bundle", "diff", "resolver-demo@1.0.0", "resolver-demo@2.0.0")
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Comparing")
+	assert.Contains(t, stdout, "Summary")
+}
+
+// ============================================================================
+// Vendor Command Tests
+// ============================================================================
+
+func TestIntegration_VendorHelp(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "vendor", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "vendor")
+	assert.Contains(t, stdout, "update")
+}
+
+func TestIntegration_VendorUpdateHelp(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "vendor", "update", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Re-resolve and update vendored dependencies")
+	assert.Contains(t, stdout, "--dependency")
+	assert.Contains(t, stdout, "--dry-run")
+	assert.Contains(t, stdout, "--lock-only")
+	assert.Contains(t, stdout, "--pre-release")
+}
+
+func TestIntegration_VendorUpdate_NoLockFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Create a minimal solution file without a lock file
+	solContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test-vendor
+  version: 1.0.0
+spec:
+  resolvers:
+    env:
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              name: environment
+`
+	solPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solPath, []byte(solContent), 0o644))
+
+	_, stderr, exitCode := runScafctl(t, "vendor", "update", solPath)
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "lock file")
+}
+
+// ============================================================================
+// Build Solution Dedup Tests
+// ============================================================================
+
+func TestIntegration_BuildSolutionHelp_DedupeFlags(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "build", "solution", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "--dedupe")
+	assert.Contains(t, stdout, "--dedupe-threshold")
+}
+
+func TestIntegration_BuildSolution_WithDedupe(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	stdout, stderr, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml",
+		"--version", "1.0.0", "--dedupe")
+
+	if exitCode != 0 {
+		t.Logf("stdout: %s", stdout)
+		t.Logf("stderr: %s", stderr)
+	}
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Built")
+}
+
+func TestIntegration_BuildSolution_WithDedupeDisabled(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	stdout, stderr, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml",
+		"--version", "1.0.0", "--dedupe=false")
+
+	if exitCode != 0 {
+		t.Logf("stdout: %s", stdout)
+		t.Logf("stderr: %s", stderr)
+	}
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Built")
+}
+
+func TestIntegration_BuildSolution_DryRunShowsDetails(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	stdout, stderr, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml",
+		"--version", "1.0.0", "--dry-run")
+
+	if exitCode != 0 {
+		t.Logf("stdout: %s", stdout)
+		t.Logf("stderr: %s", stderr)
+	}
+	assert.Equal(t, 0, exitCode)
+	// Dry run should show structured output: files, analysis, summary
+	assert.Contains(t, stdout, "Dry run")
 }

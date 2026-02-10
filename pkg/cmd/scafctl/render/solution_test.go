@@ -174,6 +174,13 @@ func (m *mockGetter) FromURL(_ context.Context, _ string) (*solution.Solution, e
 	return m.Get(context.Background(), "")
 }
 
+func (m *mockGetter) GetWithBundle(_ context.Context, _ string) (*solution.Solution, []byte, error) {
+	if m.err != nil {
+		return nil, nil, m.err
+	}
+	return m.sol, nil, nil
+}
+
 func (m *mockGetter) FindSolution() string {
 	return ""
 }

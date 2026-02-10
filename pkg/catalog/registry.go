@@ -133,6 +133,40 @@ func (r *Registry) Fetch(ctx context.Context, ref Reference) ([]byte, ArtifactIn
 	return nil, ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: "registry"}
 }
 
+// FetchWithBundle retrieves an artifact with its bundle layer from the first catalog that has it.
+func (r *Registry) FetchWithBundle(ctx context.Context, ref Reference) ([]byte, []byte, ArtifactInfo, error) {
+	r.mu.RLock()
+	catalogs := r.catalogs
+	r.mu.RUnlock()
+
+	var lastErr error
+	for _, cat := range catalogs {
+		content, bundleData, info, err := cat.FetchWithBundle(ctx, ref)
+		if err == nil {
+			r.logger.V(1).Info("fetched artifact with bundle",
+				"name", ref.Name,
+				"version", info.Reference.Version.String(),
+				"catalog", cat.Name(),
+				"hasBundle", len(bundleData) > 0)
+			return content, bundleData, info, nil
+		}
+
+		if IsArtifactNotFoundError(err) {
+			lastErr = err
+			continue
+		}
+
+		// Non-not-found error - return immediately
+		return nil, nil, ArtifactInfo{}, err
+	}
+
+	if lastErr != nil {
+		return nil, nil, ArtifactInfo{}, lastErr
+	}
+
+	return nil, nil, ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: "registry"}
+}
+
 // List returns all artifacts matching the criteria from all catalogs.
 func (r *Registry) List(ctx context.Context, kind ArtifactKind, name string) ([]ArtifactInfo, error) {
 	r.mu.RLock()

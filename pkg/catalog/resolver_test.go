@@ -93,7 +93,7 @@ spec:
   resolvers: {}
 `)
 		ref := MustParseReference(ArtifactKindSolution, "test-solution@1.0.0")
-		_, err = catalog.Store(context.Background(), ref, content, nil, false)
+		_, err = catalog.Store(context.Background(), ref, content, nil, nil, false)
 		require.NoError(t, err)
 
 		// Fetch via resolver
@@ -127,9 +127,9 @@ spec:
 `)
 		ref1 := MustParseReference(ArtifactKindSolution, "multi-version@1.0.0")
 		ref2 := MustParseReference(ArtifactKindSolution, "multi-version@2.0.0")
-		_, err = catalog.Store(context.Background(), ref1, content1, nil, false)
+		_, err = catalog.Store(context.Background(), ref1, content1, nil, nil, false)
 		require.NoError(t, err)
-		_, err = catalog.Store(context.Background(), ref2, content2, nil, false)
+		_, err = catalog.Store(context.Background(), ref2, content2, nil, nil, false)
 		require.NoError(t, err)
 
 		// Fetch without version should get latest (2.0.0)

@@ -63,6 +63,44 @@ func (r *SolutionResolver) FetchSolution(ctx context.Context, nameWithVersion st
 	return content, nil
 }
 
+// FetchSolutionWithBundle retrieves a solution and its bundle from the catalog by name[@version].
+// The input format is "name" or "name@version" (e.g., "my-solution" or "my-solution@1.2.3").
+// Returns the solution content bytes, bundle tar bytes (nil if no bundle), and any error.
+func (r *SolutionResolver) FetchSolutionWithBundle(ctx context.Context, nameWithVersion string) ([]byte, []byte, error) {
+	// Parse the name[@version] format
+	name, version := parseNameVersion(nameWithVersion)
+
+	// Build the reference string for parsing
+	refStr := name
+	if version != "" {
+		refStr = name + "@" + version
+	}
+
+	ref, err := ParseReference(ArtifactKindSolution, refStr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid solution reference %q: %w", nameWithVersion, err)
+	}
+
+	r.logger.V(1).Info("fetching solution with bundle from catalog",
+		"name", name,
+		"version", version,
+		"catalog", r.catalog.Name())
+
+	content, bundleData, info, err := r.catalog.FetchWithBundle(ctx, ref)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	r.logger.V(1).Info("fetched solution with bundle from catalog",
+		"name", info.Reference.Name,
+		"version", info.Reference.Version,
+		"digest", info.Digest,
+		"hasBundle", len(bundleData) > 0,
+		"catalog", r.catalog.Name())
+
+	return content, bundleData, nil
+}
+
 // parseNameVersion splits "name@version" into (name, version).
 // If no @ is present, returns (input, "").
 func parseNameVersion(input string) (string, string) {

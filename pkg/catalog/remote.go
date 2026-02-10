@@ -132,7 +132,9 @@ func (c *RemoteCatalog) buildRepositoryPath(ref Reference) string {
 }
 
 // Store saves an artifact to the remote catalog.
-func (c *RemoteCatalog) Store(ctx context.Context, ref Reference, content []byte, annotations map[string]string, force bool) (ArtifactInfo, error) {
+// For solutions with bundled files, bundleData contains the tar archive.
+// If bundleData is nil, only the primary content layer is stored.
+func (c *RemoteCatalog) Store(ctx context.Context, ref Reference, content, bundleData []byte, annotations map[string]string, force bool) (ArtifactInfo, error) {
 	repo, err := c.getRepository(ref)
 	if err != nil {
 		return ArtifactInfo{}, err
@@ -196,6 +198,24 @@ func (c *RemoteCatalog) Store(ctx context.Context, ref Reference, content []byte
 		return ArtifactInfo{}, fmt.Errorf("failed to push config blob: %w", err)
 	}
 
+	// Create manifest layers
+	layers := []ocispec.Descriptor{contentDesc}
+
+	// Add bundle layer if present
+	if len(bundleData) > 0 {
+		bundleDesc := ocispec.Descriptor{
+			MediaType: MediaTypeSolutionBundle,
+			Digest:    digest.FromBytes(bundleData),
+			Size:      int64(len(bundleData)),
+		}
+
+		if err := repo.Push(ctx, bundleDesc, bytes.NewReader(bundleData)); err != nil {
+			return ArtifactInfo{}, fmt.Errorf("failed to push bundle blob: %w", err)
+		}
+
+		layers = append(layers, bundleDesc)
+	}
+
 	// Create manifest
 	manifest := ocispec.Manifest{
 		Versioned: specs.Versioned{
@@ -203,7 +223,7 @@ func (c *RemoteCatalog) Store(ctx context.Context, ref Reference, content []byte
 		},
 		MediaType:   ocispec.MediaTypeImageManifest,
 		Config:      configDesc,
-		Layers:      []ocispec.Descriptor{contentDesc},
+		Layers:      layers,
 		Annotations: annotations,
 	}
 
@@ -309,6 +329,90 @@ func (c *RemoteCatalog) Fetch(ctx context.Context, ref Reference) ([]byte, Artif
 	}
 
 	return contentData, info, nil
+}
+
+// FetchWithBundle retrieves an artifact's primary content and bundle layer.
+// If the artifact has no bundle layer, bundleData is nil.
+func (c *RemoteCatalog) FetchWithBundle(ctx context.Context, ref Reference) ([]byte, []byte, ArtifactInfo, error) {
+	repo, err := c.getRepository(ref)
+	if err != nil {
+		return nil, nil, ArtifactInfo{}, err
+	}
+
+	// Resolve to get the manifest descriptor
+	tag := c.tagForRef(ref)
+	manifestDesc, err := repo.Resolve(ctx, tag)
+	if err != nil {
+		return nil, nil, ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
+	}
+
+	// Fetch manifest
+	manifestReader, err := repo.Fetch(ctx, manifestDesc)
+	if err != nil {
+		return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to fetch manifest: %w", err)
+	}
+	defer manifestReader.Close()
+
+	manifestData, err := io.ReadAll(manifestReader)
+	if err != nil {
+		return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to read manifest: %w", err)
+	}
+
+	var manifest ocispec.Manifest
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to unmarshal manifest: %w", err)
+	}
+
+	if len(manifest.Layers) == 0 {
+		return nil, nil, ArtifactInfo{}, fmt.Errorf("manifest has no content layers")
+	}
+
+	// Fetch content layer
+	contentDesc := manifest.Layers[0]
+	contentReader, err := repo.Fetch(ctx, contentDesc)
+	if err != nil {
+		return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to fetch content: %w", err)
+	}
+	defer contentReader.Close()
+
+	contentData, err := io.ReadAll(contentReader)
+	if err != nil {
+		return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to read content: %w", err)
+	}
+
+	// Fetch bundle layer if present
+	var bundleData []byte
+	if len(manifest.Layers) > 1 && manifest.Layers[1].MediaType == MediaTypeSolutionBundle {
+		bundleReader, err := repo.Fetch(ctx, manifest.Layers[1])
+		if err != nil {
+			return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to fetch bundle: %w", err)
+		}
+		defer bundleReader.Close()
+
+		bundleData, err = io.ReadAll(bundleReader)
+		if err != nil {
+			return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to read bundle: %w", err)
+		}
+	}
+
+	// Parse annotations for metadata
+	createdAt := time.Now()
+	if created, ok := manifest.Annotations[AnnotationCreated]; ok {
+		if t, err := time.Parse(time.RFC3339, created); err == nil {
+			createdAt = t
+		}
+	}
+
+	info := ArtifactInfo{
+		Reference:   ref,
+		Digest:      manifestDesc.Digest.String(),
+		CreatedAt:   createdAt,
+		Size:        int64(len(contentData)),
+		Annotations: manifest.Annotations,
+		Catalog:     c.name,
+	}
+
+	return contentData, bundleData, info, nil
 }
 
 // Resolve finds the best matching version for a reference.

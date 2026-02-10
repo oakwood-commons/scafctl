@@ -56,7 +56,7 @@
 //	    Name:    "my-solution",
 //	    Version: semver.MustParse("1.0.0"),
 //	}
-//	info, err := reg.Local().Store(ctx, ref, content, annotations, false)
+//	info, err := reg.Local().Store(ctx, ref, content, nil, annotations, false)
 //
 //	// Resolve an artifact (checks local first, then configured catalogs)
 //	content, info, err := reg.Fetch(ctx, ref)

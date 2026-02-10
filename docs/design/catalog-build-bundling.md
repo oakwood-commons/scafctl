@@ -851,15 +851,439 @@ Require the author to list every file, even those with literal paths. Safest but
 
 ---
 
+## Bundle Verification (`scafctl bundle verify`)
+
+Validate that a built artifact contains all files needed for execution by performing a dry-run resolve against the bundled files.
+
+### Command Specification
+
+```bash
+scafctl bundle verify <artifact-ref>
+```
+
+| Argument | Description |
+|----------|-------------|
+| `<artifact-ref>` | Catalog reference (e.g., `my-solution@1.0.0`) or path to a local `.tar` bundle |
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--params` | `{}` | JSON object of parameter values to use during verification |
+| `--params-file` | — | Path to a YAML/JSON file containing parameter values |
+| `--strict` | `false` | Fail on warnings (e.g., unreachable dynamic paths) |
+
+### Verification Steps
+
+1. **Extract bundle** to a temporary directory.
+2. **Parse** the solution YAML and construct the resolver/action DAG.
+3. **Static path check:** For every literal `path` or `source` in the solution, verify the file exists in the extracted bundle.
+4. **Glob coverage check:** For every `bundle.include` pattern, verify at least one matching file exists.
+5. **Vendored dependency check:** For every catalog reference rewritten to a vendored path, verify the vendored file exists.
+6. **Plugin availability check:** For every `bundle.plugins` entry, verify the plugin can be resolved (local cache or registry).
+7. **Dry-run resolve (optional with `--params`):** Execute resolvers in dry-run mode to catch runtime path errors that depend on parameter values.
+
+### Output
+
+```bash
+$ scafctl bundle verify my-solution@1.0.0 --params '{"env": "prod"}'
+
+Verifying my-solution@1.0.0...
+
+  Static paths:
+    ✓ templates/main.tf.tmpl
+    ✓ child.yaml
+    ✓ configs/base.yaml
+
+  Dynamic paths (with --params):
+    ✓ configs/prod.yaml (from expr: 'configs/' + _.env + '.yaml')
+
+  Vendored dependencies:
+    ✓ .scafctl/vendor/deploy-to-k8s@2.0.0.yaml
+
+  Plugins:
+    ✓ aws-provider@1.5.3 (provider)
+    ✓ vault-auth@1.2.4 (auth-handler)
+
+Verification passed: 6 files, 1 vendored dependency, 2 plugins
+```
+
+### Error Example
+
+```bash
+$ scafctl bundle verify broken-solution@1.0.0
+
+Verifying broken-solution@1.0.0...
+
+  Static paths:
+    ✓ templates/main.tf.tmpl
+    ✗ templates/missing.tf.tmpl — not found in bundle
+
+  Vendored dependencies:
+    ✗ .scafctl/vendor/old-dep@0.5.0.yaml — not found in bundle
+
+Verification failed: 2 errors
+```
+
+### Implementation Notes
+
+- Reuses the static analysis walker from `pkg/solution/bundler`.
+- Dry-run resolve leverages the existing resolver execution engine with a `--dry-run` context flag that skips side effects.
+- Exit code 0 on success, 1 on verification failure.
+
+---
+
+## Bundle Diffing (`scafctl bundle diff`)
+
+Show what changed between two versions of a bundled artifact, enabling informed upgrade decisions and change auditing.
+
+### Command Specification
+
+```bash
+scafctl bundle diff <ref-a> <ref-b>
+```
+
+| Argument | Description |
+|----------|-------------|
+| `<ref-a>` | First artifact reference (e.g., `my-solution@1.0.0`) |
+| `<ref-b>` | Second artifact reference (e.g., `my-solution@2.0.0`) |
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--output` | `text` | Output format: `text`, `json`, `yaml` |
+| `--files-only` | `false` | Show only file changes, skip solution YAML diff |
+| `--solution-only` | `false` | Show only solution YAML diff, skip file changes |
+| `--ignore` | — | Glob patterns to exclude from diff (repeatable) |
+
+### Diff Categories
+
+1. **Solution YAML diff:** Structural comparison of the merged solution (resolvers added/removed/modified, actions changed, metadata updates).
+2. **Bundled files diff:** Files added, removed, or modified between versions.
+3. **Vendored dependencies diff:** Catalog dependencies added, removed, or version-changed.
+4. **Plugin dependencies diff:** Plugin version constraint or default value changes.
+
+### Output
+
+```bash
+$ scafctl bundle diff my-solution@1.0.0 my-solution@2.0.0
+
+Comparing my-solution@1.0.0 → my-solution@2.0.0
+
+Solution YAML:
+  resolvers:
+    + newResolver              (added)
+    ~ mainTfTemplate           (modified: provider inputs changed)
+    - legacyResolver           (removed)
+  workflow.actions:
+    ~ deploy                   (modified: command changed)
+
+Bundled files:
+    + templates/new.tf.tmpl                    (added, 1.2 KB)
+    ~ templates/main.tf.tmpl                   (modified, +15 -3 lines)
+    - templates/old.tf.tmpl                    (removed)
+
+Vendored dependencies:
+    ~ deploy-to-k8s@2.0.0 → deploy-to-k8s@2.1.0   (upgraded)
+    + logging-sidecar@1.0.0                        (added)
+
+Plugins:
+    ~ aws-provider: ^1.5.0 → ^1.6.0            (constraint changed)
+      defaults.region: us-east-1 → us-west-2   (default changed)
+
+Summary: 2 resolvers changed, 3 files changed, 1 dependency upgraded, 1 plugin updated
+```
+
+### JSON Output Structure
+
+```json
+{
+  "refA": "my-solution@1.0.0",
+  "refB": "my-solution@2.0.0",
+  "solution": {
+    "resolvers": {
+      "added": ["newResolver"],
+      "removed": ["legacyResolver"],
+      "modified": ["mainTfTemplate"]
+    },
+    "actions": {
+      "modified": ["deploy"]
+    }
+  },
+  "files": {
+    "added": [{"path": "templates/new.tf.tmpl", "size": 1234}],
+    "removed": [{"path": "templates/old.tf.tmpl"}],
+    "modified": [{"path": "templates/main.tf.tmpl", "linesAdded": 15, "linesRemoved": 3}]
+  },
+  "vendoredDependencies": {
+    "upgraded": [{"name": "deploy-to-k8s", "from": "2.0.0", "to": "2.1.0"}],
+    "added": [{"name": "logging-sidecar", "version": "1.0.0"}]
+  },
+  "plugins": {
+    "modified": [{
+      "name": "aws-provider",
+      "versionFrom": "^1.5.0",
+      "versionTo": "^1.6.0",
+      "defaultsChanged": {"region": {"from": "us-east-1", "to": "us-west-2"}}
+    }]
+  }
+}
+```
+
+### Implementation Notes
+
+- Extracts both bundles to temporary directories.
+- Solution YAML diff uses deep structural comparison (not line-by-line text diff) to produce semantic differences.
+- File content diff uses standard unified diff format internally; summary shows line counts.
+- Vendored dependency comparison uses digest matching — same digest = unchanged regardless of filename.
+
+---
+
+## Selective Extraction (`scafctl bundle extract`)
+
+Extract only the files needed for a specific resolver or action, enabling partial bundle inspection and reduced extraction for large bundles.
+
+### Command Specification
+
+```bash
+scafctl bundle extract <artifact-ref> [--output-dir <dir>]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--output-dir` | `.` | Directory to extract files into |
+| `--resolver` | — | Extract only files needed by this resolver (repeatable) |
+| `--action` | — | Extract only files needed by this action (repeatable) |
+| `--include` | — | Additional glob patterns to extract (repeatable) |
+| `--list-only` | `false` | List files that would be extracted without extracting |
+| `--flatten` | `false` | Extract all files to a flat directory (no subdirectories) |
+
+### Behavior
+
+1. **No filters:** Extract all bundled files (equivalent to full extraction).
+2. **With `--resolver` or `--action`:** Perform static analysis to determine which files are referenced by the specified resolver(s) or action(s), including transitive dependencies (e.g., if resolver A depends on sub-solution B, include B's files).
+3. **With `--include`:** Add files matching the glob patterns to the extraction set.
+
+### Output
+
+```bash
+$ scafctl bundle extract my-solution@1.0.0 --resolver mainTfTemplate --list-only
+
+Files needed for resolver 'mainTfTemplate':
+  templates/main.tf.tmpl       (1.2 KB)
+  templates/auto.tfvars.tmpl   (0.4 KB)
+
+Total: 2 files, 1.6 KB
+
+$ scafctl bundle extract my-solution@1.0.0 --resolver mainTfTemplate --output-dir ./extracted
+
+Extracted 2 files (1.6 KB) to ./extracted/
+```
+
+### Use Cases
+
+- **Debugging:** Extract only the files used by a failing resolver to inspect them.
+- **Auditing:** Review templates used by a specific action before approving a solution.
+- **Partial deployment:** Extract configuration files for a specific environment without pulling the entire bundle.
+
+### Implementation Notes
+
+- Builds on the static analysis walker; each resolver/action's file dependencies are traced through the DAG.
+- Resolver dependencies (via `rslvr:` bindings) are followed transitively.
+- Dynamic paths (`expr:`, `tmpl:`) cannot be traced without parameter values; `--resolver` extraction for dynamic paths emits a warning and skips those files unless `--include` explicitly adds them.
+
+---
+
+## Content-Addressable Deduplication
+
+When multiple solutions share the same template files, store them once in the OCI registry using content-addressable layers, reducing storage costs and push/pull times.
+
+### Concept
+
+Instead of embedding all files in a single tar layer, split the bundle into multiple layers:
+
+| Layer | Content |
+|-------|---------|
+| 0 | Solution YAML |
+| 1 | Bundle manifest (JSON) |
+| 2+ | Individual files or file groups, each as a separate blob |
+
+Each file blob is stored by its content digest. When two solutions include the same file (e.g., a shared `terraform-module.tf.tmpl`), the registry stores one blob referenced by both manifests.
+
+### OCI Artifact Structure (Deduplicated)
+
+```
+Manifest (my-solution@1.0.0)
+├── Config: solution metadata JSON
+├── Layer 0: solution.yaml
+├── Layer 1: bundle-manifest.json
+├── Layer 2: sha256:abc123... (templates/main.tf.tmpl)
+├── Layer 3: sha256:def456... (templates/shared-module.tf.tmpl)  ← shared
+└── Layer 4: sha256:789abc... (child.yaml)
+
+Manifest (other-solution@2.0.0)
+├── Config: solution metadata JSON
+├── Layer 0: solution.yaml
+├── Layer 1: bundle-manifest.json
+├── Layer 2: sha256:def456... (templates/shared-module.tf.tmpl)  ← same blob
+└── Layer 3: sha256:fedcba... (config.yaml)
+```
+
+### Bundle Manifest (Deduplicated Format)
+
+```json
+{
+  "version": 2,
+  "root": ".",
+  "files": [
+    { "path": "templates/main.tf.tmpl", "digest": "sha256:abc123...", "layer": 2 },
+    { "path": "templates/shared-module.tf.tmpl", "digest": "sha256:def456...", "layer": 3 },
+    { "path": "child.yaml", "digest": "sha256:789abc...", "layer": 4 }
+  ]
+}
+```
+
+### Build Behavior
+
+1. **Compute digests** for all files to be bundled.
+2. **Check registry** for existing blobs matching each digest (using OCI blob existence check).
+3. **Skip upload** for blobs that already exist; only push new content.
+4. **Construct manifest** referencing all layers (existing and new).
+
+### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--dedupe` | `true` | Enable content-addressable deduplication |
+| `--dedupe-threshold` | `4KB` | Minimum file size for individual layer extraction (smaller files are tarred together) |
+
+Files below `--dedupe-threshold` are grouped into a single tar layer to avoid excessive layer counts for many small files.
+
+### Benefits
+
+- **Storage efficiency:** Shared files stored once across the registry.
+- **Faster pushes:** Only new/changed files are uploaded.
+- **Faster pulls:** Layer caching means unchanged files aren't re-downloaded.
+
+### Implementation Notes
+
+- Requires manifest version bump (`"version": 2`) to distinguish from tar-based bundles.
+- Backward compatible: older scafctl versions that don't understand version 2 fall back to full extraction (or fail gracefully with a version error).
+- Registry must support OCI blob mount/cross-repository mounting for full deduplication benefit.
+
+---
+
+## Vendor Update (`scafctl vendor update`)
+
+Re-resolve and update vendored dependencies without a full rebuild, enabling quick dependency updates without modifying source files.
+
+### Command Specification
+
+```bash
+scafctl vendor update [solution-path]
+```
+
+| Argument | Description |
+|----------|-------------|
+| `[solution-path]` | Path to solution YAML (default: `./solution.yaml`) |
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--dependency` | — | Update only this dependency (repeatable); if omitted, update all |
+| `--dry-run` | `false` | Show what would be updated without making changes |
+| `--lock-only` | `false` | Update `solution.lock` without re-vendoring files |
+| `--pre-release` | `false` | Include pre-release versions when resolving |
+
+### Behavior
+
+1. **Parse** the solution YAML and `solution.lock` file.
+2. **Re-resolve** catalog references against current registry state, respecting version constraints.
+3. **Compare** resolved versions against locked versions.
+4. **Fetch** updated dependencies and write to `.scafctl/vendor/`.
+5. **Update** `solution.lock` with new digests and versions.
+
+### Output
+
+```bash
+$ scafctl vendor update --dry-run
+
+Checking vendored dependencies for ./solution.yaml...
+
+  deploy-to-k8s:
+    locked:   2.0.0 (sha256:abc123...)
+    latest:   2.1.0 (sha256:def456...)
+    action:   would update
+
+  logging-sidecar:
+    locked:   1.0.0 (sha256:789abc...)
+    latest:   1.0.0 (sha256:789abc...)
+    action:   up to date
+
+  aws-provider (plugin):
+    locked:   1.5.3 (sha256:aaa111...)
+    latest:   1.5.5 (sha256:bbb222...)
+    action:   would update
+
+Summary: 2 dependencies would be updated
+
+$ scafctl vendor update
+
+Updating vendored dependencies...
+
+  ✓ deploy-to-k8s: 2.0.0 → 2.1.0
+  ✓ aws-provider: 1.5.3 → 1.5.5
+  • logging-sidecar: up to date
+
+Updated solution.lock
+```
+
+### Selective Update
+
+```bash
+$ scafctl vendor update --dependency deploy-to-k8s
+
+Updating deploy-to-k8s...
+  ✓ 2.0.0 → 2.1.0
+
+Updated solution.lock
+```
+
+### Lock File Changes
+
+After `vendor update`, the `solution.lock` file reflects new resolved versions:
+
+```yaml
+version: 1
+dependencies:
+  - ref: deploy-to-k8s@2.1.0           # ← updated
+    digest: sha256:def456...            # ← new digest
+    resolvedFrom: registry.example.com/solutions/deploy-to-k8s
+    vendoredAt: .scafctl/vendor/deploy-to-k8s@2.1.0.yaml
+plugins:
+  - name: aws-provider
+    kind: provider
+    version: "^1.5.0"
+    resolved: 1.5.5                     # ← updated
+    digest: sha256:bbb222...            # ← new digest
+    resolvedFrom: registry.example.com/plugins/aws-provider
+```
+
+### Use Cases
+
+- **Security patches:** Update a dependency to pick up a security fix without rebuilding.
+- **Dependency hygiene:** Regularly update vendored dependencies to latest compatible versions.
+- **Pre-flight check:** Use `--dry-run` before a release to see available updates.
+
+### Implementation Notes
+
+- Reuses catalog resolution logic from `scafctl build`.
+- Version constraint evaluation uses existing semver library.
+- Lock file update is atomic — written to a temp file, then renamed.
+- If `--dependency` specifies a dependency not in the lock file, exit with an error.
+
+---
+
 ## Future Enhancements
 
-1. **`scafctl bundle verify`** — Validate that a built artifact contains all files needed for execution (by doing a dry-run resolve against the bundled files).
-2. **Bundle diffing** — Show what changed between two versions of a bundled artifact.
-3. **Selective extraction** — Extract only the files needed for a specific resolver or action.
-4. **Content-addressable deduplication** — When multiple solutions share the same template files, store them once in the OCI registry using content-addressable layers.
-5. **`scafctl vendor update`** — Re-resolve and update vendored dependencies without a full rebuild.
-6. **`scafctl plugins install`** — Pre-fetch plugins declared in `bundle.plugins` for offline execution.
-7. **Per-provider defaults within a plugin** — If a single plugin exposes multiple providers with different default needs, allow scoping defaults to individual provider names.
+1. **`scafctl plugins install`** — Pre-fetch plugins declared in `bundle.plugins` for offline execution.
+2. **Per-provider defaults within a plugin** — If a single plugin exposes multiple providers with different default needs, allow scoping defaults to individual provider names.
 
 ---
 
@@ -906,14 +1330,52 @@ Require the author to list every file, even those with literal paths. Safest but
 - ValueRef defaults merge implementation (shallow merge beneath inline inputs, DAG-aware)
 - CLI integration tests for plugin declaration and resolution
 
-### Phase 7: Polish
+### Phase 7: Bundle Verification
+- Implement `scafctl bundle verify` command
+- Static path, glob coverage, and vendored dependency checks
+- Plugin availability check
+- Dry-run resolve with `--params` support
+- CLI integration tests
+
+### Phase 8: Bundle Diffing
+- Implement `scafctl bundle diff` command
+- Structural solution YAML comparison (resolvers, actions, metadata)
+- Bundled file diff with line-count summaries
+- Vendored dependency and plugin diff
+- `text`, `json`, `yaml` output formats
+- CLI integration tests
+
+### Phase 9: Selective Extraction
+- Implement `scafctl bundle extract` command
+- DAG-based file dependency tracing per resolver/action
+- Transitive dependency following for sub-solutions
+- `--list-only`, `--flatten`, `--include` flag support
+- CLI integration tests
+
+### Phase 10: Content-Addressable Deduplication
+- Bundle manifest version 2 schema
+- Per-file digest computation and OCI blob existence check
+- Multi-layer artifact construction with individual file blobs
+- `--dedupe-threshold` for small-file grouping
+- Backward compatibility handling for version 1 manifests
+- CLI integration tests
+
+### Phase 11: Vendor Update
+- Implement `scafctl vendor update` command
+- Lock file parsing and comparison against registry state
+- Selective update with `--dependency` flag
+- Atomic lock file writes
+- `--dry-run`, `--lock-only`, `--pre-release` flag support
+- CLI integration tests
+
+### Phase 12: Polish
 - Warning diagnostics for unresolvable dynamic paths
 - Dry-run output formatting
-- CLI integration tests
+- End-to-end integration tests
 - Documentation and examples
 
 ---
 
 ## Summary
 
-Solution file bundling makes solutions portable by collecting all dependencies into the OCI artifact at build time. Multi-file composition lets developers split large solutions across files while producing a single merged YAML in the artifact. Static analysis handles the common case for local files automatically, while `bundle.include` gives explicit control over dynamically referenced files. Catalog reference vendoring embeds remote dependencies for offline, reproducible execution. Plugin dependencies declared in `bundle.plugins` ensure external providers and auth handlers are versioned, recorded in the lock file, and resolvable at runtime — with ValueRef-aware defaults reducing repetition across provider usages. The design preserves backward compatibility, requires no changes to existing providers, and follows OCI conventions by using multi-layer manifests.
+Solution file bundling makes solutions portable by collecting all dependencies into the OCI artifact at build time. Multi-file composition lets developers split large solutions across files while producing a single merged YAML in the artifact. Static analysis handles the common case for local files automatically, while `bundle.include` gives explicit control over dynamically referenced files. Catalog reference vendoring embeds remote dependencies for offline, reproducible execution. Plugin dependencies declared in `bundle.plugins` ensure external providers and auth handlers are versioned, recorded in the lock file, and resolvable at runtime — with ValueRef-aware defaults reducing repetition across provider usages. Bundle verification (`scafctl bundle verify`) validates artifact completeness, bundle diffing (`scafctl bundle diff`) enables change auditing between versions, and selective extraction (`scafctl bundle extract`) supports targeted file inspection. Content-addressable deduplication reduces registry storage by sharing identical files across solutions, and `scafctl vendor update` enables dependency management without full rebuilds. The design preserves backward compatibility, requires no changes to existing providers, and follows OCI conventions by using multi-layer manifests.

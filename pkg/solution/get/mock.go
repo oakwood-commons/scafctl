@@ -117,6 +117,28 @@ func (m *MockGetter) Get(ctx context.Context, path string) (*solution.Solution, 
 	return sol, args.Error(1)
 }
 
+// GetWithBundle mocks the GetWithBundle method which retrieves a solution and its bundle.
+func (m *MockGetter) GetWithBundle(ctx context.Context, path string) (*solution.Solution, []byte, error) {
+	args := m.Called(ctx, path)
+	var sol *solution.Solution
+	if args.Get(0) != nil {
+		var ok bool
+		sol, ok = args.Get(0).(*solution.Solution)
+		if !ok {
+			return nil, nil, args.Error(2)
+		}
+	}
+	var bundleData []byte
+	if args.Get(1) != nil {
+		var ok bool
+		bundleData, ok = args.Get(1).([]byte)
+		if !ok {
+			return nil, nil, args.Error(2)
+		}
+	}
+	return sol, bundleData, args.Error(2)
+}
+
 // FindSolution mocks the FindSolution method which searches for a solution file
 // in default locations. It returns the configured mock response.
 //

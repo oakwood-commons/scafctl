@@ -1,0 +1,12 @@
+# This file is excluded from the bundle by bundle.exclude pattern
+# Test configuration - should NOT appear in built artifacts
+name: test-app
+namespace: test
+environment: test
+replicas: 1
+image: my-app:test
+port: 8080
+logLevel: debug
+resources:
+  cpu: "50m"
+  memory: "64Mi"

@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -24,6 +26,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
@@ -336,10 +339,25 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		defer o.writeMetricsSolution()
 	}
 
-	// Load the solution
-	sol, err := o.loadSolution(ctx)
+	// Load the solution (with bundle if available)
+	sol, bundleDir, err := o.loadSolutionWithBundle(ctx)
 	if err != nil {
 		return o.exitWithCode(ctx, err, exitcode.FileNotFound)
+	}
+
+	// Clean up bundle extraction directory when done
+	if bundleDir != "" {
+		defer os.RemoveAll(bundleDir)
+		// Change to the bundle directory so providers resolve relative paths correctly
+		originalDir, wdErr := os.Getwd()
+		if wdErr != nil {
+			return o.exitWithCode(ctx, fmt.Errorf("failed to get working directory: %w", wdErr), exitcode.GeneralError)
+		}
+		if chErr := os.Chdir(bundleDir); chErr != nil {
+			return o.exitWithCode(ctx, fmt.Errorf("failed to change to bundle directory: %w", chErr), exitcode.GeneralError)
+		}
+		defer func() { _ = os.Chdir(originalDir) }()
+		lgr.V(1).Info("using bundle extraction directory as working directory", "dir", bundleDir)
 	}
 
 	lgr.V(1).Info("loaded solution",
@@ -347,6 +365,12 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		"version", sol.Metadata.Version,
 		"hasResolvers", sol.Spec.HasResolvers(),
 		"hasWorkflow", sol.Spec.HasWorkflow())
+
+	// Merge plugin defaults into provider inputs before DAG construction
+	if len(sol.Bundle.Plugins) > 0 {
+		bundler.MergePluginDefaults(sol)
+		lgr.V(1).Info("merged plugin defaults", "pluginCount", len(sol.Bundle.Plugins))
+	}
 
 	// Set up provider registry
 	reg := o.getRegistry()
@@ -545,26 +569,67 @@ func (o *SolutionOptions) getOrCreateGetter(ctx context.Context) get.Interface {
 	return o.getter
 }
 
-// loadSolution loads the solution from file, stdin, catalog, or auto-discovery
-func (o *SolutionOptions) loadSolution(ctx context.Context) (*solution.Solution, error) {
+// loadSolutionWithBundle loads a solution and extracts its bundle if present.
+// Returns the solution, the path to the extracted bundle directory (empty if no bundle),
+// and any error. The caller is responsible for cleaning up the bundle directory.
+func (o *SolutionOptions) loadSolutionWithBundle(ctx context.Context) (*solution.Solution, string, error) {
+	lgr := logger.FromContext(ctx)
 	getter := o.getOrCreateGetter(ctx)
 
 	// Handle stdin
 	if o.File == "-" {
 		data, err := io.ReadAll(o.IOStreams.In)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read from stdin: %w", err)
+			return nil, "", fmt.Errorf("failed to read from stdin: %w", err)
 		}
 
 		var sol solution.Solution
 		if err := sol.LoadFromBytes(data); err != nil {
-			return nil, fmt.Errorf("failed to parse solution from stdin: %w", err)
+			return nil, "", fmt.Errorf("failed to parse solution from stdin: %w", err)
 		}
-		return &sol, nil
+		return &sol, "", nil
 	}
 
-	// Use getter for file, catalog, or auto-discovery
-	return getter.Get(ctx, o.File)
+	// Use GetWithBundle for catalog solutions to extract bundle
+	sol, bundleData, err := getter.GetWithBundle(ctx, o.File)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// If there's bundle data, extract it to a temp directory
+	if len(bundleData) > 0 {
+		lgr.V(1).Info("extracting solution bundle", "size", len(bundleData))
+		tmpDir, err := os.MkdirTemp("", "scafctl-bundle-*")
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to create temp directory for bundle: %w", err)
+		}
+
+		// Write the solution YAML to the temp dir so relative paths work
+		solYAML, err := sol.ToYAML()
+		if err != nil {
+			os.RemoveAll(tmpDir)
+			return nil, "", fmt.Errorf("failed to serialize solution: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(tmpDir, "solution.yaml"), solYAML, 0o600); err != nil {
+			os.RemoveAll(tmpDir)
+			return nil, "", fmt.Errorf("failed to write solution to temp dir: %w", err)
+		}
+
+		// Extract bundle tar
+		manifest, err := bundler.ExtractBundleTar(bundleData, tmpDir)
+		if err != nil {
+			os.RemoveAll(tmpDir)
+			return nil, "", fmt.Errorf("failed to extract bundle: %w", err)
+		}
+
+		lgr.V(1).Info("extracted bundle",
+			"files", len(manifest.Files),
+			"dir", tmpDir)
+
+		return sol, tmpDir, nil
+	}
+
+	return sol, "", nil
 }
 
 // getResolversToExecute returns the resolvers to execute based on options

@@ -583,7 +583,281 @@ scafctl works with any OCI-compliant registry:
 | Google Artifact Registry | `REGION-docker.pkg.dev/PROJECT` |
 | Harbor | `harbor.example.com/PROJECT` |
 | Local Registry | `localhost:5000` |
+---
 
+## Advanced Bundling
+
+When you build a solution, scafctl creates a **bundle** — a self-contained archive containing your solution YAML plus all local files and vendored catalog dependencies it needs at runtime.
+
+### How Bundling Works
+
+The build process:
+1. **Discovers files** — scans your solution for `file` provider references
+2. **Vendors catalog refs** — copies nested solutions from the catalog into the bundle
+3. **Applies include/exclude patterns** — filters files based on `bundle.include` and `bundle.exclude`
+4. **Creates a lock file** — records exact versions and digests for reproducibility
+5. **Packages everything** — produces a single artifact stored in the catalog
+
+### Bundle Configuration
+
+Control what gets bundled using the `bundle` section in your solution:
+
+```yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: my-app
+  version: 1.0.0
+bundle:
+  # Explicit file patterns to include (glob syntax)
+  include:
+    - "templates/**/*.yaml"
+    - "configs/*.json"
+    - "scripts/deploy.sh"
+  
+  # Patterns to exclude (applied after include)
+  exclude:
+    - "**/*_test.yaml"
+    - "**/temp/**"
+```
+
+**Pattern Behavior:**
+- Patterns use [doublestar](https://github.com/bmatcuk/doublestar) glob syntax
+- `**` matches any number of directories
+- Paths are relative to the solution file's directory
+- Exclude patterns override include patterns
+
+**When to Use Explicit Includes:**
+
+Use `bundle.include` when:
+- Files aren't discovered automatically (e.g., loaded via dynamic CEL expressions)
+- You want to bundle extra files not referenced in resolvers/actions
+- Auto-discovery includes unwanted files
+
+### Catalog Dependencies (Vendoring)
+
+When your solution references another solution from the catalog, that dependency is **vendored** into your bundle:
+
+```yaml
+spec:
+  resolvers:
+    base-config:
+      resolve:
+        with:
+          - provider: solution
+            inputs:
+              source: "catalog:shared-config@2.0.0"
+```
+
+During build:
+1. scafctl fetches `shared-config@2.0.0` from your local catalog
+2. Copies it into `.scafctl/vendor/shared-config@2.0.0.yaml`
+3. Records the exact digest in `.scafctl.lock.yaml`
+
+The resulting bundle is **fully self-contained** — it doesn't require the referenced solution to exist in the target environment's catalog.
+
+### The Lock File
+
+After building, a `.scafctl.lock.yaml` file is created alongside your solution:
+
+```yaml
+# .scafctl.lock.yaml
+version: 1
+dependencies:
+  - ref: shared-config@2.0.0
+    digest: sha256:a1b2c3d4...
+    resolvedFrom: local
+    vendoredAt: 2026-02-09T10:30:00Z
+plugins: []
+```
+
+**Why it matters:**
+- **Reproducibility** — rebuilds use the exact same dependency versions
+- **Auditability** — you can see what was bundled and when
+- **Verification** — `scafctl bundle verify` checks bundle integrity against the lock file
+
+**Commit the lock file** to source control alongside your solution.
+
+### Updating Vendored Dependencies
+
+When upstream catalog solutions change, update your vendored copies:
+
+```bash
+# Preview what would be updated (no changes made)
+scafctl vendor update --dry-run
+
+# Update all vendored dependencies
+scafctl vendor update
+
+# Update a specific dependency only
+scafctl vendor update --dependency shared-config@2.0.0
+
+# Update lock file without re-vendoring files
+scafctl vendor update --lock-only
+
+# Include pre-release versions when resolving
+scafctl vendor update --pre-release
+```
+
+Output:
+```
+Checking vendored dependencies for ./solution.yaml...
+
+  shared-config@2.0.0:
+    locked:   2.0.0 (sha256:a1b2c3d4...)
+    latest:   2.0.1 (sha256:e5f6g7h8...)
+    action:   would update
+
+Summary: 1 dependency(ies) would be updated
+```
+
+### Build Flags
+
+#### Dry Run
+
+Preview what a build would produce without writing anything:
+
+```bash
+scafctl build solution my-solution.yaml --dry-run
+```
+
+Output shows:
+- Composed files (from `compose` section)
+- Discovered files (auto-detected from resolvers/actions)
+- Explicit includes (from `bundle.include`)
+- Catalog references (to be vendored)
+- Plugins
+- Dynamic path warnings (paths that can't be statically analyzed)
+- Size summary
+
+#### Deduplication (Storage Optimization)
+
+Large bundles can optimize storage using content-addressable deduplication:
+
+```bash
+# Default: dedupe enabled with 4KB threshold
+scafctl build solution my-solution.yaml
+
+# Disable deduplication
+scafctl build solution my-solution.yaml --dedupe=false
+
+# Custom threshold (files >= this size get individual layers)
+scafctl build solution my-solution.yaml --dedupe-threshold=8KB
+```
+
+With deduplication:
+- Large files become individual OCI blob layers
+- Files with identical content share the same blob
+- Small files are grouped into a single tar layer
+- Pulling a solution only fetches changed layers
+
+### Dynamic Path Warnings
+
+During build, scafctl warns about file paths that can't be statically analyzed:
+
+```
+⚠ Dynamic path warnings:
+  resolver 'template' (file provider): expr: 'configs/' + environment + '.yaml'
+  action 'deploy' (file provider): tmpl: {{ .target }}/deploy.yaml
+```
+
+**What this means:**
+- These paths are computed at runtime using CEL expressions, Go templates, or resolver bindings
+- scafctl cannot automatically discover these files during build
+- The files may be missing from your bundle
+
+**How to fix:**
+Add explicit patterns to `bundle.include`:
+
+```yaml
+bundle:
+  include:
+    - "configs/**/*.yaml"   # Cover all config environments
+    - "**/deploy.yaml"       # Cover all deploy files
+```
+
+### Bundle Verification
+
+Verify a built solution matches its lock file:
+
+```bash
+scafctl bundle verify my-solution@1.0.0
+```
+
+This checks:
+- All files in the manifest exist with correct digests
+- All vendored dependencies match their locked digests
+- No unexpected files were added
+
+### Extracting Bundle Contents
+
+Inspect what's inside a bundled solution:
+
+```bash
+# List files without extracting
+scafctl bundle extract my-solution@1.0.0 --list
+
+# Extract to a directory
+scafctl bundle extract my-solution@1.0.0 --output ./extracted/
+```
+
+### Comparing Bundle Versions
+
+See what changed between two versions:
+
+```bash
+scafctl bundle diff my-solution@1.0.0 my-solution@1.1.0
+```
+
+Output:
+```
+Comparing my-solution@1.0.0 → my-solution@1.1.0
+
+Added:
+  + templates/new-feature.yaml (1.2 KB)
+
+Modified:
+  ~ solution.yaml (2.1 KB → 2.3 KB)
+  ~ configs/prod.json (256 B → 312 B)
+
+Removed:
+  - templates/deprecated.yaml (890 B)
+
+Summary: 1 added, 2 modified, 1 removed
+```
+
+### Example: Complete Bundling Workflow
+
+```bash
+# 1. Build with dry-run to see what will be bundled
+scafctl build solution deploy.yaml --dry-run
+
+# 2. Add any missing files to bundle.include in deploy.yaml
+#    (if dynamic path warnings appear)
+
+# 3. Build the solution
+scafctl build solution deploy.yaml --version 1.0.0
+
+# 4. Verify the bundle
+scafctl bundle verify deploy@1.0.0
+
+# 5. Check what's inside
+scafctl bundle extract deploy@1.0.0 --list
+
+# 6. Later, update dependencies
+scafctl vendor update --dry-run
+scafctl vendor update
+
+# 7. Rebuild with updated deps
+scafctl build solution deploy.yaml --version 1.0.1 --force
+
+# 8. See what changed
+scafctl bundle diff deploy@1.0.0 deploy@1.0.1
+```
+
+See [examples/catalog/bundling-example/](../../examples/catalog/bundling-example/) for a working example with bundle configuration.
+
+---
 ## Next Steps
 
 - [Getting Started](getting-started.md) - Basic scafctl usage

@@ -179,6 +179,7 @@ spec:
 		CliParams: cliParams,
 		File:      solutionPath,
 		Output:    "json",
+		registry:  testRegistry(),
 	}
 
 	lgr := logger.Get(0)

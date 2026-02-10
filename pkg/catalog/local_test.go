@@ -60,7 +60,7 @@ func TestLocalCatalog_Store(t *testing.T) {
 			"description": "Test solution",
 		}
 
-		info, err := catalog.Store(ctx, ref, content, annotations, false)
+		info, err := catalog.Store(ctx, ref, content, nil, annotations, false)
 		require.NoError(t, err)
 		assert.Equal(t, ref.Name, info.Reference.Name)
 		assert.Equal(t, ref.Version.String(), info.Reference.Version.String())
@@ -80,11 +80,11 @@ func TestLocalCatalog_Store(t *testing.T) {
 		content := []byte("content")
 
 		// Store first time
-		_, err := catalog.Store(ctx, ref, content, nil, false)
+		_, err := catalog.Store(ctx, ref, content, nil, nil, false)
 		require.NoError(t, err)
 
 		// Store again without force should fail
-		_, err = catalog.Store(ctx, ref, content, nil, false)
+		_, err = catalog.Store(ctx, ref, content, nil, nil, false)
 		require.Error(t, err)
 		assert.True(t, IsExists(err))
 	})
@@ -101,11 +101,11 @@ func TestLocalCatalog_Store(t *testing.T) {
 		content2 := []byte("content v2")
 
 		// Store first time
-		_, err := catalog.Store(ctx, ref, content1, nil, false)
+		_, err := catalog.Store(ctx, ref, content1, nil, nil, false)
 		require.NoError(t, err)
 
 		// Store again with force should succeed
-		info, err := catalog.Store(ctx, ref, content2, nil, true)
+		info, err := catalog.Store(ctx, ref, content2, nil, nil, true)
 		require.NoError(t, err)
 		assert.NotEmpty(t, info.Digest)
 
@@ -129,7 +129,7 @@ func TestLocalCatalog_Fetch(t *testing.T) {
 		}
 		content := []byte("name: my-solution")
 
-		_, err := catalog.Store(ctx, ref, content, nil, false)
+		_, err := catalog.Store(ctx, ref, content, nil, nil, false)
 		require.NoError(t, err)
 
 		fetched, info, err := catalog.Fetch(ctx, ref)
@@ -164,7 +164,7 @@ func TestLocalCatalog_Resolve(t *testing.T) {
 			Name:    "my-solution",
 			Version: semver.MustParse("1.0.0"),
 		}
-		_, err := catalog.Store(ctx, ref, []byte("v1.0.0"), nil, false)
+		_, err := catalog.Store(ctx, ref, []byte("v1.0.0"), nil, nil, false)
 		require.NoError(t, err)
 
 		info, err := catalog.Resolve(ctx, ref)
@@ -183,7 +183,7 @@ func TestLocalCatalog_Resolve(t *testing.T) {
 				Name:    "my-solution",
 				Version: semver.MustParse(v),
 			}
-			_, err := catalog.Store(ctx, ref, []byte("version "+v), nil, false)
+			_, err := catalog.Store(ctx, ref, []byte("version "+v), nil, nil, false)
 			require.NoError(t, err)
 		}
 
@@ -224,7 +224,7 @@ func TestLocalCatalog_List(t *testing.T) {
 				Name:    name,
 				Version: semver.MustParse("1.0.0"),
 			}
-			_, err := catalog.Store(ctx, ref, []byte("content"), nil, false)
+			_, err := catalog.Store(ctx, ref, []byte("content"), nil, nil, false)
 			require.NoError(t, err)
 		}
 
@@ -242,7 +242,7 @@ func TestLocalCatalog_List(t *testing.T) {
 			Name:    "my-solution",
 			Version: semver.MustParse("1.0.0"),
 		}
-		_, err := catalog.Store(ctx, solRef, []byte("solution"), nil, false)
+		_, err := catalog.Store(ctx, solRef, []byte("solution"), nil, nil, false)
 		require.NoError(t, err)
 
 		// Store provider
@@ -251,7 +251,7 @@ func TestLocalCatalog_List(t *testing.T) {
 			Name:    "my-provider",
 			Version: semver.MustParse("1.0.0"),
 		}
-		_, err = catalog.Store(ctx, providerRef, []byte("provider"), nil, false)
+		_, err = catalog.Store(ctx, providerRef, []byte("provider"), nil, nil, false)
 		require.NoError(t, err)
 
 		// List only solutions
@@ -271,7 +271,7 @@ func TestLocalCatalog_List(t *testing.T) {
 				Name:    "my-solution",
 				Version: semver.MustParse(v),
 			}
-			_, err := catalog.Store(ctx, ref, []byte("content"), nil, false)
+			_, err := catalog.Store(ctx, ref, []byte("content"), nil, nil, false)
 			require.NoError(t, err)
 		}
 
@@ -281,7 +281,7 @@ func TestLocalCatalog_List(t *testing.T) {
 			Name:    "other-solution",
 			Version: semver.MustParse("1.0.0"),
 		}
-		_, err := catalog.Store(ctx, otherRef, []byte("content"), nil, false)
+		_, err := catalog.Store(ctx, otherRef, []byte("content"), nil, nil, false)
 		require.NoError(t, err)
 
 		// List only my-solution
@@ -305,7 +305,7 @@ func TestLocalCatalog_Exists(t *testing.T) {
 			Name:    "my-solution",
 			Version: semver.MustParse("1.0.0"),
 		}
-		_, err := catalog.Store(ctx, ref, []byte("content"), nil, false)
+		_, err := catalog.Store(ctx, ref, []byte("content"), nil, nil, false)
 		require.NoError(t, err)
 
 		exists, err := catalog.Exists(ctx, ref)
@@ -339,7 +339,7 @@ func TestLocalCatalog_Delete(t *testing.T) {
 			Name:    "my-solution",
 			Version: semver.MustParse("1.0.0"),
 		}
-		_, err := catalog.Store(ctx, ref, []byte("content"), nil, false)
+		_, err := catalog.Store(ctx, ref, []byte("content"), nil, nil, false)
 		require.NoError(t, err)
 
 		err = catalog.Delete(ctx, ref)
@@ -377,7 +377,7 @@ func TestLocalCatalog_Tag(t *testing.T) {
 			Name:    "my-solution",
 			Version: semver.MustParse("1.0.0"),
 		}
-		_, err := cat.Store(ctx, ref, []byte("content"), nil, false)
+		_, err := cat.Store(ctx, ref, []byte("content"), nil, nil, false)
 		require.NoError(t, err)
 
 		// Tag as stable
@@ -402,7 +402,7 @@ func TestLocalCatalog_Tag(t *testing.T) {
 			Name:    "my-solution",
 			Version: semver.MustParse("2.0.0"),
 		}
-		_, err := cat.Store(ctx, ref, []byte("content-v2"), nil, false)
+		_, err := cat.Store(ctx, ref, []byte("content-v2"), nil, nil, false)
 		require.NoError(t, err)
 
 		// Tag with multiple aliases
@@ -426,7 +426,7 @@ func TestLocalCatalog_Tag(t *testing.T) {
 			Name:    "my-solution",
 			Version: semver.MustParse("1.0.0"),
 		}
-		_, err := cat.Store(ctx, ref1, []byte("v1-content"), nil, false)
+		_, err := cat.Store(ctx, ref1, []byte("v1-content"), nil, nil, false)
 		require.NoError(t, err)
 		err = cat.Tag(ctx, ref1, "stable")
 		require.NoError(t, err)
@@ -437,7 +437,7 @@ func TestLocalCatalog_Tag(t *testing.T) {
 			Name:    "my-solution",
 			Version: semver.MustParse("2.0.0"),
 		}
-		_, err = cat.Store(ctx, ref2, []byte("v2-content"), nil, false)
+		_, err = cat.Store(ctx, ref2, []byte("v2-content"), nil, nil, false)
 		require.NoError(t, err)
 
 		// Re-tag stable to v2
@@ -474,7 +474,7 @@ func TestLocalCatalog_Tag(t *testing.T) {
 			Name:    "echo",
 			Version: semver.MustParse("1.0.0"),
 		}
-		_, err := cat.Store(ctx, ref, []byte("binary"), nil, false)
+		_, err := cat.Store(ctx, ref, []byte("binary"), nil, nil, false)
 		require.NoError(t, err)
 
 		err = cat.Tag(ctx, ref, "stable")
@@ -502,7 +502,7 @@ func TestLocalCatalog_Save(t *testing.T) {
 			Version: semver.MustParse("1.0.0"),
 		}
 		content := []byte("name: my-solution\nversion: 1.0.0")
-		_, err := catalog.Store(ctx, ref, content, nil, false)
+		_, err := catalog.Store(ctx, ref, content, nil, nil, false)
 		require.NoError(t, err)
 
 		// Save to tar
@@ -532,7 +532,7 @@ func TestLocalCatalog_Save(t *testing.T) {
 				Name:    "my-solution",
 				Version: semver.MustParse(ver),
 			}
-			_, err := catalog.Store(ctx, ref, []byte("version: "+ver), nil, false)
+			_, err := catalog.Store(ctx, ref, []byte("version: "+ver), nil, nil, false)
 			require.NoError(t, err)
 		}
 
@@ -566,7 +566,7 @@ func TestLocalCatalog_Load(t *testing.T) {
 			Version: semver.MustParse("1.0.0"),
 		}
 		content := []byte("name: my-solution\nversion: 1.0.0")
-		_, err := srcCatalog.Store(ctx, ref, content, nil, false)
+		_, err := srcCatalog.Store(ctx, ref, content, nil, nil, false)
 		require.NoError(t, err)
 
 		// Save to tar
@@ -601,7 +601,7 @@ func TestLocalCatalog_Load(t *testing.T) {
 			Name:    "my-solution",
 			Version: semver.MustParse("1.0.0"),
 		}
-		_, err := srcCatalog.Store(ctx, ref, []byte("content"), nil, false)
+		_, err := srcCatalog.Store(ctx, ref, []byte("content"), nil, nil, false)
 		require.NoError(t, err)
 
 		tarPath := t.TempDir() + "/artifact.tar"
@@ -621,7 +621,7 @@ func TestLocalCatalog_Load(t *testing.T) {
 			Name:    "my-solution",
 			Version: semver.MustParse("1.0.0"),
 		}
-		_, err := srcCatalog.Store(ctx, ref, []byte("content"), nil, false)
+		_, err := srcCatalog.Store(ctx, ref, []byte("content"), nil, nil, false)
 		require.NoError(t, err)
 
 		tarPath := t.TempDir() + "/artifact.tar"
@@ -664,7 +664,7 @@ func TestLocalCatalog_SaveLoad_RoundTrip(t *testing.T) {
 		annotations := map[string]string{
 			"custom-key": "custom-value",
 		}
-		_, err := srcCatalog.Store(ctx, ref, originalContent, annotations, false)
+		_, err := srcCatalog.Store(ctx, ref, originalContent, nil, annotations, false)
 		require.NoError(t, err)
 
 		// Save to tar
