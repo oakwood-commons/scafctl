@@ -1,6 +1,6 @@
 ---
 title: "Snapshots Tutorial"
-weight: 45
+weight: 80
 ---
 
 # Snapshots Tutorial

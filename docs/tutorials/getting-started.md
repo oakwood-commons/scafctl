@@ -1,3 +1,8 @@
+---
+title: "Getting Started"
+weight: 10
+---
+
 # Getting Started with scafctl
 
 This guide will help you get up and running with scafctl in under 10 minutes.

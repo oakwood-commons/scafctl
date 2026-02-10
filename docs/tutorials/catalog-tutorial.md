@@ -1,3 +1,8 @@
+---
+title: "Catalog Tutorial"
+weight: 70
+---
+
 # Working with the Local Catalog
 
 This tutorial covers how to use scafctl's local catalog to store, manage, and run solutions without needing file paths.

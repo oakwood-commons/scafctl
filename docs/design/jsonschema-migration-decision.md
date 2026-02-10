@@ -1,3 +1,8 @@
+---
+title: "JSON Schema Migration Decision"
+weight: 17
+---
+
 # Provider Schema Migration: Custom SchemaDefinition → JSON Schema
 
 **Status:** Proposed  

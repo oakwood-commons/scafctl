@@ -1,3 +1,8 @@
+---
+title: "Cache Tutorial"
+weight: 100
+---
+
 # Managing the Cache
 
 This tutorial covers how to use scafctl's cache management commands to view and clear cached data.

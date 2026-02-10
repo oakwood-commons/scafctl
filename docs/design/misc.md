@@ -1,3 +1,8 @@
+---
+title: "Miscellaneous"
+weight: 11
+---
+
 # Miscellaneous Design Considerations
 
 This document captures cross-cutting concepts that are intentionally not core primitives, but are required to make scafctl safe, predictable, and operable at scale.

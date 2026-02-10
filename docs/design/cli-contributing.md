@@ -1,3 +1,8 @@
+---
+title: "CLI Contributing"
+weight: 12
+---
+
 # CLI Implementation Guide
 
 This document describes how to implement CLI commands in scafctl. It provides patterns, code examples, and best practices based on the existing codebase.

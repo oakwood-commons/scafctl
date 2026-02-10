@@ -1,6 +1,6 @@
 ---
 title: "Configuration Management"
-weight: 55
+weight: 90
 ---
 
 # Configuration Management Tutorial

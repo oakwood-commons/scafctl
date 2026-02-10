@@ -1,3 +1,8 @@
+---
+title: "CEL Integration"
+weight: 6
+---
+
 # CEL Integration Architecture
 
 ## Overview

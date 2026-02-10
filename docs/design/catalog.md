@@ -1,3 +1,8 @@
+---
+title: "Catalog"
+weight: 7
+---
+
 # scafctl Catalog System
 
 ## Overview

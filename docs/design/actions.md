@@ -1,3 +1,8 @@
+---
+title: "Actions"
+weight: 4
+---
+
 # Actions
 
 ## Purpose

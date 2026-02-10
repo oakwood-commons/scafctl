@@ -1,3 +1,8 @@
+---
+title: "Actions Tutorial"
+weight: 30
+---
+
 # Actions Tutorial
 
 This tutorial introduces the Actions feature in scafctl, which enables executing side-effect operations as a declarative action graph.

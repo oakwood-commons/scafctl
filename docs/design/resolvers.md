@@ -1,3 +1,8 @@
+---
+title: "Resolvers"
+weight: 2
+---
+
 # Resolvers
 
 ## Purpose

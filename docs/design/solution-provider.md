@@ -1,3 +1,8 @@
+---
+title: "Solution Provider"
+weight: 14
+---
+
 # Solution Provider
 
 **Date:** February 9, 2026

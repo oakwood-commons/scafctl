@@ -1,6 +1,6 @@
 ---
 title: "Plugin Development Guide"
-weight: 70
+weight: 130
 ---
 
 # Plugin Development Guide

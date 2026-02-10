@@ -429,6 +429,16 @@ tasks:
 
         echo "Tagged and pushed '$tag_name' successfully."
 
+  generate-index:
+    desc: "Generate index.html from README.md and dist/ archives"
+    cmds:
+      - cd scripts && go build -o {{.DIST}}/generate_index generate_index.go
+      - '{{.DIST}}/generate_index {{.DIST}}'
+      - rm -f {{.DIST}}/generate_index
+    sources:
+      - README.md
+      - scripts/generate_index.go
+
   integration:
     deps: [build]
     desc: "Integration tests"

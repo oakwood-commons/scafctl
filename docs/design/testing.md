@@ -1,3 +1,8 @@
+---
+title: "Testing"
+weight: 10
+---
+
 # Testing
 
 ## Purpose
