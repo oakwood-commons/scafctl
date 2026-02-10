@@ -75,6 +75,8 @@ Resolvers demonstrate dynamic value computation, validation, and transformation.
 | [feature-flags.yaml](resolvers/feature-flags.yaml) | Feature flag patterns | `scafctl run solution -f examples/resolvers/feature-flags.yaml` |
 | [secrets.yaml](resolvers/secrets.yaml) | Secret management (requires secret store) | `scafctl run solution -f examples/resolvers/secrets.yaml` |
 | [identity.yaml](resolvers/identity.yaml) | Authentication identity info (requires auth) | `scafctl run solution -f examples/resolvers/identity.yaml` |
+| [cel-extensions.yaml](resolvers/cel-extensions.yaml) | All custom CEL extension functions | `scafctl run solution -f examples/resolvers/cel-extensions.yaml -o json` |
+| [cel-transforms.yaml](resolvers/cel-transforms.yaml) | Data transformation patterns with CEL | `scafctl run solution -f examples/resolvers/cel-transforms.yaml -o yaml` |
 
 ---
 

@@ -1,0 +1,383 @@
+# CEL Extension Functions Example
+# Demonstrates all custom CEL extension functions provided by scafctl.
+# Each resolver showcases a different extension category.
+#
+# Run: scafctl run solution -f examples/resolvers/cel-extensions.yaml -o json
+# Run: scafctl run solution -f examples/resolvers/cel-extensions.yaml -o yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: cel-extensions-showcase
+  version: 1.0.0
+  description: Demonstrates all custom CEL extension functions
+
+spec:
+  resolvers:
+    # ─────────────────────────────────────────────
+    # ARRAYS - String list manipulation
+    # ─────────────────────────────────────────────
+
+    array_add:
+      description: "arrays.strings.add - Append a string to a list"
+      type: array
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'arrays.strings.add(["apple", "banana"], "cherry")'
+
+    array_unique:
+      description: "arrays.strings.unique - Deduplicate a string list"
+      type: array
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'arrays.strings.unique(["apple", "banana", "apple", "cherry", "banana"])'
+
+    array_chained:
+      description: "Chaining array operations together"
+      type: array
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                arrays.strings.unique(
+                  arrays.strings.add(
+                    arrays.strings.add(["dev", "staging"], "prod"),
+                    "dev"
+                  )
+                )
+
+    # ─────────────────────────────────────────────
+    # MAP - Map creation and transformation
+    # ─────────────────────────────────────────────
+
+    map_add:
+      description: "map.add - Add a key-value pair to a map"
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'map.add({"name": "Alice"}, "role", "admin")'
+
+    map_add_if_missing:
+      description: "map.addIfMissing - Add only if key doesn't exist"
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'map.addIfMissing({"name": "Alice"}, "name", "Bob")'
+
+    map_select:
+      description: "map.select - Keep only specified keys"
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'map.select({"name": "Alice", "age": 30, "email": "a@b.com", "password": "secret"}, ["name", "email"])'
+
+    map_omit:
+      description: "map.omit - Remove specified keys"
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'map.omit({"name": "Alice", "age": 30, "password": "secret", "internal_id": "x"}, ["password", "internal_id"])'
+
+    map_merge:
+      description: "map.merge - Merge two maps (second wins on conflict)"
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                map.merge(
+                  {"host": "localhost", "port": 3000, "debug": true},
+                  {"port": 8080, "tls": true}
+                )
+
+    # ─────────────────────────────────────────────
+    # STRINGS - String manipulation
+    # ─────────────────────────────────────────────
+
+    string_clean:
+      description: "strings.clean - Lowercase and remove separators"
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'strings.clean("My-Service_Name Test")'
+
+    string_title:
+      description: "strings.title - Convert to title case"
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'strings.title("hello world from scafctl")'
+
+    # ─────────────────────────────────────────────
+    # FILEPATH - Path operations
+    # ─────────────────────────────────────────────
+
+    filepath_dir:
+      description: "filepath.dir - Get parent directory"
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'filepath.dir("/home/user/documents/config.yaml")'
+
+    filepath_normalize:
+      description: "filepath.normalize - Clean path separators and resolve . / .."
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'filepath.normalize("/home//user/../user/./documents/")'
+
+    filepath_join:
+      description: "filepath.join - Join path segments"
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'filepath.join("/var", "log", "app", "errors.log")'
+
+    filepath_exists:
+      description: "filepath.exists - Check if path exists on disk"
+      type: boolean
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'filepath.exists("/etc/hosts")'
+
+    # ─────────────────────────────────────────────
+    # GUID - UUID generation
+    # ─────────────────────────────────────────────
+
+    guid_new:
+      description: "guid.new - Generate a random UUID v4"
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'guid.new()'
+
+    guid_prefixed:
+      description: "guid.new with prefix"
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '"deploy-" + guid.new()'
+
+    # ─────────────────────────────────────────────
+    # SORT - Sort objects by property
+    # ─────────────────────────────────────────────
+
+    sort_ascending:
+      description: "sort.objects - Sort objects ascending by property"
+      type: array
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                sort.objects(
+                  [
+                    {"name": "Charlie", "priority": 3},
+                    {"name": "Alice", "priority": 1},
+                    {"name": "Bob", "priority": 2}
+                  ],
+                  "priority"
+                )
+
+    sort_descending:
+      description: "sort.objectsDescending - Sort objects descending"
+      type: array
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                sort.objectsDescending(
+                  [
+                    {"name": "Alice", "score": 85},
+                    {"name": "Bob", "score": 92},
+                    {"name": "Charlie", "score": 78}
+                  ],
+                  "score"
+                )
+
+    # ─────────────────────────────────────────────
+    # TIME - Timestamps and formatting
+    # ─────────────────────────────────────────────
+
+    time_now:
+      description: "time.now - Current timestamp"
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'time.now()'
+
+    time_formatted:
+      description: "time.nowFmt - Current time with custom format"
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'time.nowFmt("2006-01-02T15:04:05Z")'
+
+    time_human:
+      description: "time.nowFmt - Human-readable date"
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'time.nowFmt("January 2, 2006")'
+
+    # ─────────────────────────────────────────────
+    # MARSHALLING - JSON and YAML serialization
+    # ─────────────────────────────────────────────
+
+    json_marshal:
+      description: "json.marshal - Serialize to compact JSON"
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'json.marshal({"name": "Alice", "roles": ["admin", "user"]})'
+
+    json_pretty:
+      description: "json.marshalPretty - Serialize to pretty JSON"
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'json.marshalPretty({"name": "Alice", "roles": ["admin", "user"]})'
+
+    json_roundtrip:
+      description: "json.unmarshal + field access - Parse and query JSON"
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'json.unmarshal("{\"user\": {\"name\": \"Alice\"}}").user.name'
+
+    yaml_marshal:
+      description: "yaml.marshal - Serialize to YAML"
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'yaml.marshal({"app": "myservice", "port": 8080})'
+
+    # ─────────────────────────────────────────────
+    # BUILT-IN EXTENSIONS - google/cel-go
+    # ─────────────────────────────────────────────
+
+    builtin_base64:
+      description: "base64.encode / base64.decode"
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'base64.decode(base64.encode("Hello, World!"))'
+
+    builtin_math:
+      description: "math functions"
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                {
+                  "abs": math.abs(-42),
+                  "ceil": math.ceil(3.2),
+                  "floor": math.floor(3.8),
+                  "round": math.round(3.5),
+                  "sqrt": math.sqrt(144),
+                  "min": math.least(10, 3, 7),
+                  "max": math.greatest(10, 3, 7)
+                }
+
+    builtin_sets:
+      description: "sets functions"
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                {
+                  "contains": sets.contains([1, 2, 3, 4], [2, 3]),
+                  "equivalent": sets.equivalent([1, 2, 3], [3, 2, 1]),
+                  "intersects": sets.intersects([1, 2, 3], [3, 4, 5])
+                }
+
+    builtin_lists:
+      description: "list extensions - distinct, sort, flatten, slice, range"
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                {
+                  "distinct": [1, 2, 2, 3, 3].distinct(),
+                  "sorted": [3, 1, 4, 1, 5].sort(),
+                  "flattened": [1, [2, 3], [4, 5]].flatten(),
+                  "sliced": [10, 20, 30, 40, 50].slice(1, 4),
+                  "reversed": [1, 2, 3].reverse(),
+                  "range": lists.range(5)
+                }
+
+    builtin_string_format:
+      description: "string.format - Printf-style string formatting"
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '"Hello %s, you are %d years old and %.1f meters tall".format(["Alice", 30, 1.75])'
+
+    builtin_binding:
+      description: "cel.bind - Local variable bindings"
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                cel.bind(greeting, "Hello",
+                  cel.bind(target, "World",
+                    greeting + ", " + target + "!"
+                  )
+                )
