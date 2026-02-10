@@ -45,5 +45,6 @@ jobs:
         run: task release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           GIT_EVENT: push
           GIT_REF: ${{ github.ref }}
