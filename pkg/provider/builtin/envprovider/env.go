@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package envprovider
 
 import (
@@ -6,8 +9,10 @@ import (
 	"os"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/ptrs"
 )
 
@@ -81,78 +86,34 @@ func NewEnvProvider(opts ...Option) *EnvProvider {
 			Capabilities: []provider.Capability{
 				provider.CapabilityFrom,
 			},
-			Schema: provider.SchemaDefinition{
-				Properties: map[string]provider.PropertyDefinition{
-					"operation": {
-						Type:        provider.PropertyTypeString,
-						Description: "Operation to perform: 'get' to read a variable, 'set' to set a variable, 'list' to list all variables, 'unset' to remove a variable",
-						Required:    true,
-						Enum:        []any{"get", "set", "list", "unset"},
-						Example:     "get",
-						MaxLength:   ptrs.IntPtr(10),
-					},
-					"name": {
-						Type:        provider.PropertyTypeString,
-						Description: "Name of the environment variable (required for get, set, unset operations)",
-						MaxLength:   ptrs.IntPtr(256),
-						Pattern:     `^[A-Za-z_][A-Za-z0-9_]*$`,
-						Example:     "HOME",
-					},
-					"value": {
-						Type:        provider.PropertyTypeString,
-						Description: "Value to set (required for set operation)",
-						MaxLength:   ptrs.IntPtr(4096),
-						Example:     "/home/user",
-					},
-					"default": {
-						Type:        provider.PropertyTypeString,
-						Description: "Default value to return if variable is not set (only for get operation)",
-						MaxLength:   ptrs.IntPtr(4096),
-						Example:     "default-value",
-					},
-					"prefix": {
-						Type:        provider.PropertyTypeString,
-						Description: "Filter environment variables by prefix (only for list operation)",
-						MaxLength:   ptrs.IntPtr(256),
-						Example:     "AWS_",
-					},
-				},
-			},
-			OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
-				provider.CapabilityFrom: {
-					Properties: map[string]provider.PropertyDefinition{
-						"operation": {
-							Type:        provider.PropertyTypeString,
-							Description: "Operation that was performed",
-							Example:     "get",
-						},
-						"name": {
-							Type:        provider.PropertyTypeString,
-							Description: "Name of the environment variable (for get, set, unset operations)",
-							Example:     "HOME",
-						},
-						"value": {
-							Type:        provider.PropertyTypeString,
-							Description: "Value of the environment variable (for get operation)",
-							Example:     "/home/user",
-						},
-						"exists": {
-							Type:        provider.PropertyTypeBool,
-							Description: "Whether the variable exists (for get operation)",
-							Example:     true,
-						},
-						"variables": {
-							Type:        provider.PropertyTypeAny,
-							Description: "Map of environment variables (for list operation)",
-							Example:     map[string]string{"HOME": "/home/user", "PATH": "/usr/bin"},
-						},
-						"count": {
-							Type:        provider.PropertyTypeInt,
-							Description: "Number of variables (for list operation)",
-							Example:     10,
-						},
-					},
-				},
+			Schema: schemahelper.ObjectSchema([]string{"operation"}, map[string]*jsonschema.Schema{
+				"operation": schemahelper.StringProp("Operation to perform: 'get' to read a variable, 'set' to set a variable, 'list' to list all variables, 'unset' to remove a variable",
+					schemahelper.WithEnum("get", "set", "list", "unset"),
+					schemahelper.WithExample("get"),
+					schemahelper.WithMaxLength(*ptrs.IntPtr(10))),
+				"name": schemahelper.StringProp("Name of the environment variable (required for get, set, unset operations)",
+					schemahelper.WithMaxLength(*ptrs.IntPtr(256)),
+					schemahelper.WithPattern(`^[A-Za-z_][A-Za-z0-9_]*$`),
+					schemahelper.WithExample("HOME")),
+				"value": schemahelper.StringProp("Value to set (required for set operation)",
+					schemahelper.WithMaxLength(*ptrs.IntPtr(4096)),
+					schemahelper.WithExample("/home/user")),
+				"default": schemahelper.StringProp("Default value to return if variable is not set (only for get operation)",
+					schemahelper.WithMaxLength(*ptrs.IntPtr(4096)),
+					schemahelper.WithExample("default-value")),
+				"prefix": schemahelper.StringProp("Filter environment variables by prefix (only for list operation)",
+					schemahelper.WithMaxLength(*ptrs.IntPtr(256)),
+					schemahelper.WithExample("AWS_")),
+			}),
+			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"operation": schemahelper.StringProp("Operation that was performed", schemahelper.WithExample("get")),
+					"name":      schemahelper.StringProp("Name of the environment variable (for get, set, unset operations)", schemahelper.WithExample("HOME")),
+					"value":     schemahelper.StringProp("Value of the environment variable (for get operation)", schemahelper.WithExample("/home/user")),
+					"exists":    schemahelper.BoolProp("Whether the variable exists (for get operation)", schemahelper.WithExample(true)),
+					"variables": schemahelper.AnyProp("Map of environment variables (for list operation)", schemahelper.WithExample(map[string]string{"HOME": "/home/user", "PATH": "/usr/bin"})),
+					"count":     schemahelper.IntProp("Number of variables (for list operation)", schemahelper.WithExample(10)),
+				}),
 			},
 			Examples: []provider.Example{
 				{

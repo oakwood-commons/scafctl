@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package auth
 
 import (
@@ -11,6 +14,7 @@ import (
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/auth/entra"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -59,7 +63,7 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 			  scafctl auth login entra
 
 			  # Login with a specific tenant
-			  scafctl auth login entra --tenant c990bb7a-51f4-439b-bd36-9c07fb1041c0
+			  scafctl auth login entra --tenant 08e70e8e-d05c-4449-a2c2-67bd0a9c4e79
 
 			  # Login with service principal (requires env vars)
 			  scafctl auth login entra --flow service-principal
@@ -73,7 +77,8 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 			  # Login with a custom timeout (device code only)
 			  scafctl auth login entra --timeout 10m
 		`),
-		Args: cobra.ExactArgs(1),
+		SilenceUsage: true,
+		Args:         cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			w := writer.MustFromContext(ctx)
@@ -81,19 +86,24 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 
 			// Validate handler name
 			if !IsSupportedHandler(handlerName) {
-				return fmt.Errorf("unknown auth handler: %s (supported: %v)", handlerName, SupportedHandlers())
+				err := fmt.Errorf("unknown auth handler: %s (supported: %v)", handlerName, SupportedHandlers())
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
 			// Parse flow
 			flow, err := parseFlow(flowStr)
 			if err != nil {
-				return err
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
 			// If --federated-token is provided, set the env var for workload identity
 			if federatedToken != "" {
 				if err := os.Setenv(entra.EnvAzureFederatedToken, federatedToken); err != nil {
-					return fmt.Errorf("failed to set federated token: %w", err)
+					err = fmt.Errorf("failed to set federated token: %w", err)
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.GeneralError)
 				}
 				// Auto-select workload identity flow if not explicitly set
 				if flowStr == "" {
@@ -114,14 +124,18 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 			// Get or create handler
 			handler, err := getEntraHandlerWithTenant(ctx, tenantID)
 			if err != nil {
-				return fmt.Errorf("failed to initialize auth handler: %w", err)
+				err = fmt.Errorf("failed to initialize auth handler: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
 			// Check if already authenticated (skip for service principal)
 			if flow != auth.FlowServicePrincipal {
 				status, err := handler.Status(ctx)
 				if err != nil {
-					return fmt.Errorf("failed to check auth status: %w", err)
+					err = fmt.Errorf("failed to check auth status: %w", err)
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.GeneralError)
 				}
 
 				if status.Authenticated {
@@ -171,9 +185,11 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 			result, err := handler.Login(ctx, loginOpts)
 			if err != nil {
 				if ctx.Err() != nil {
-					return auth.ErrUserCancelled
+					return exitcode.WithCode(auth.ErrUserCancelled, exitcode.GeneralError)
 				}
-				return fmt.Errorf("authentication failed: %w", err)
+				err = fmt.Errorf("authentication failed: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
 			w.Info("")

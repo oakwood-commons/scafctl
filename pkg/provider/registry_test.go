@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package provider
 
 import (
@@ -7,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -32,33 +36,37 @@ func newMockProvider(name, version string, capabilities ...Capability) Provider 
 	}
 
 	// Build output schemas for each capability with required fields
-	outputSchemas := make(map[Capability]SchemaDefinition)
+	outputSchemas := make(map[Capability]*jsonschema.Schema)
 	for _, cap := range capabilities {
 		switch cap {
 		case CapabilityValidation:
-			outputSchemas[cap] = SchemaDefinition{
-				Properties: map[string]PropertyDefinition{
-					"valid":  {Type: PropertyTypeBool},
-					"errors": {Type: PropertyTypeArray},
+			outputSchemas[cap] = &jsonschema.Schema{
+				Type: "object",
+				Properties: map[string]*jsonschema.Schema{
+					"valid":  {Type: "boolean"},
+					"errors": {Type: "array"},
 				},
 			}
 		case CapabilityAuthentication:
-			outputSchemas[cap] = SchemaDefinition{
-				Properties: map[string]PropertyDefinition{
-					"authenticated": {Type: PropertyTypeBool},
-					"token":         {Type: PropertyTypeString},
+			outputSchemas[cap] = &jsonschema.Schema{
+				Type: "object",
+				Properties: map[string]*jsonschema.Schema{
+					"authenticated": {Type: "boolean"},
+					"token":         {Type: "string"},
 				},
 			}
 		case CapabilityAction:
-			outputSchemas[cap] = SchemaDefinition{
-				Properties: map[string]PropertyDefinition{
-					"success": {Type: PropertyTypeBool},
+			outputSchemas[cap] = &jsonschema.Schema{
+				Type: "object",
+				Properties: map[string]*jsonschema.Schema{
+					"success": {Type: "boolean"},
 				},
 			}
 		case CapabilityFrom, CapabilityTransform:
-			outputSchemas[cap] = SchemaDefinition{
-				Properties: map[string]PropertyDefinition{
-					"result": {Type: PropertyTypeString},
+			outputSchemas[cap] = &jsonschema.Schema{
+				Type: "object",
+				Properties: map[string]*jsonschema.Schema{
+					"result": {Type: "string"},
 				},
 			}
 		}
@@ -73,9 +81,10 @@ func newMockProvider(name, version string, capabilities ...Capability) Provider 
 			MockBehavior:  "Returns mock output for testing purposes",
 			Capabilities:  capabilities,
 			OutputSchemas: outputSchemas,
-			Schema: SchemaDefinition{
-				Properties: map[string]PropertyDefinition{
-					"test": {Type: PropertyTypeString},
+			Schema: &jsonschema.Schema{
+				Type: "object",
+				Properties: map[string]*jsonschema.Schema{
+					"test": {Type: "string"},
 				},
 			},
 		},
@@ -140,7 +149,6 @@ func TestRegistry_Register(t *testing.T) {
 				descriptor: &Descriptor{
 					Version:      semver.MustParse("1.0.0"),
 					Capabilities: []Capability{CapabilityFrom},
-					Schema:       SchemaDefinition{Properties: map[string]PropertyDefinition{}},
 				},
 			},
 			wantErr: true,
@@ -155,7 +163,6 @@ func TestRegistry_Register(t *testing.T) {
 					Description:  "A test provider",
 					MockBehavior: "Returns mock output",
 					Capabilities: []Capability{CapabilityFrom},
-					Schema:       SchemaDefinition{Properties: map[string]PropertyDefinition{}},
 				},
 			},
 			wantErr: true,
@@ -170,7 +177,6 @@ func TestRegistry_Register(t *testing.T) {
 					Version:      semver.MustParse("1.0.0"),
 					Description:  "A test provider",
 					MockBehavior: "Returns mock output",
-					Schema:       SchemaDefinition{Properties: map[string]PropertyDefinition{}},
 				},
 			},
 			wantErr: true,
@@ -186,7 +192,6 @@ func TestRegistry_Register(t *testing.T) {
 					Description:  "A test provider",
 					MockBehavior: "Returns mock output",
 					Capabilities: []Capability{"invalid"},
-					Schema:       SchemaDefinition{Properties: map[string]PropertyDefinition{}},
 				},
 			},
 			wantErr: true,
@@ -591,15 +596,17 @@ func TestValidateDescriptor(t *testing.T) {
 				Description:  "A test provider",
 				MockBehavior: "Returns mock output",
 				Capabilities: []Capability{CapabilityFrom},
-				Schema: SchemaDefinition{
-					Properties: map[string]PropertyDefinition{
-						"test": {Type: PropertyTypeString},
+				Schema: &jsonschema.Schema{
+					Type: "object",
+					Properties: map[string]*jsonschema.Schema{
+						"test": {Type: "string"},
 					},
 				},
-				OutputSchemas: map[Capability]SchemaDefinition{
+				OutputSchemas: map[Capability]*jsonschema.Schema{
 					CapabilityFrom: {
-						Properties: map[string]PropertyDefinition{
-							"result": {Type: PropertyTypeString},
+						Type: "object",
+						Properties: map[string]*jsonschema.Schema{
+							"result": {Type: "string"},
 						},
 					},
 				},
@@ -611,7 +618,6 @@ func TestValidateDescriptor(t *testing.T) {
 			desc: &Descriptor{
 				Version:      semver.MustParse("1.0.0"),
 				Capabilities: []Capability{CapabilityFrom},
-				Schema:       SchemaDefinition{Properties: map[string]PropertyDefinition{}},
 			},
 			wantErr: true,
 			errMsg:  "name cannot be empty",
@@ -624,7 +630,6 @@ func TestValidateDescriptor(t *testing.T) {
 				Description:  "A test provider",
 				MockBehavior: "Returns mock output",
 				Capabilities: []Capability{CapabilityFrom},
-				Schema:       SchemaDefinition{Properties: map[string]PropertyDefinition{}},
 			},
 			wantErr: true,
 			errMsg:  "version cannot be nil",
@@ -637,7 +642,6 @@ func TestValidateDescriptor(t *testing.T) {
 				Version:      semver.MustParse("1.0.0"),
 				Description:  "A test provider",
 				MockBehavior: "Returns mock output",
-				Schema:       SchemaDefinition{Properties: map[string]PropertyDefinition{}},
 			},
 			wantErr: true,
 			errMsg:  "at least one capability",
@@ -650,7 +654,6 @@ func TestValidateDescriptor(t *testing.T) {
 				Description:  "A test provider",
 				MockBehavior: "Returns mock output",
 				Capabilities: []Capability{CapabilityFrom},
-				Schema:       SchemaDefinition{Properties: map[string]PropertyDefinition{}},
 			},
 			wantErr: true,
 			errMsg:  "APIVersion cannot be empty",
@@ -663,7 +666,6 @@ func TestValidateDescriptor(t *testing.T) {
 				Version:      semver.MustParse("1.0.0"),
 				MockBehavior: "Returns mock output",
 				Capabilities: []Capability{CapabilityFrom},
-				Schema:       SchemaDefinition{Properties: map[string]PropertyDefinition{}},
 			},
 			wantErr: true,
 			errMsg:  "description cannot be empty",
@@ -676,7 +678,6 @@ func TestValidateDescriptor(t *testing.T) {
 				Version:      semver.MustParse("1.0.0"),
 				Description:  "A test provider",
 				Capabilities: []Capability{CapabilityFrom},
-				Schema:       SchemaDefinition{Properties: map[string]PropertyDefinition{}},
 			},
 			wantErr: true,
 			errMsg:  "MockBehavior cannot be empty",
@@ -690,8 +691,9 @@ func TestValidateDescriptor(t *testing.T) {
 				Description:  "A test provider",
 				MockBehavior: "Returns mock output",
 				Capabilities: []Capability{CapabilityFrom},
-				Schema: SchemaDefinition{
-					Properties: map[string]PropertyDefinition{
+				Schema: &jsonschema.Schema{
+					Type: "object",
+					Properties: map[string]*jsonschema.Schema{
 						"test": {Type: "invalid"},
 					},
 				},

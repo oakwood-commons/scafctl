@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package explain
 
 import (
@@ -27,9 +30,10 @@ func TestCommandExplain(t *testing.T) {
 		assert.NotEmpty(t, cmd.Short)
 		assert.NotEmpty(t, cmd.Long)
 
-		// No subcommands - schema browser is the only mode
+		// Has solution subcommand for explaining specific solution instances
 		subCmds := cmd.Commands()
-		assert.Empty(t, subCmds)
+		assert.Len(t, subCmds, 1)
+		assert.Equal(t, "solution [path]", subCmds[0].Use)
 	})
 
 	t.Run("explain command requires kind argument", func(t *testing.T) {

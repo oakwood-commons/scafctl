@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package run
 
 import (
@@ -5,23 +8,29 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/action"
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/solutionprovider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"gopkg.in/yaml.v3"
@@ -84,10 +93,16 @@ func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 	}
 
 	cCmd := &cobra.Command{
-		Use:     "solution",
+		Use:     "solution [name[@version]]",
 		Aliases: []string{"sol", "s", "solutions"},
 		Short:   "Run a solution by executing resolvers and actions",
-		Long: `Execute a solution file by running resolvers and then actions in dependency order.
+		Long: `Execute a solution by running resolvers and then actions in dependency order.
+
+Solutions can be loaded from:
+- Local catalog: Use the solution name (e.g., "my-app" or "my-app@1.2.3")
+- Local file: Use -f flag or provide a path with separators (e.g., "./solution.yaml")
+- URL: Use -f flag with an HTTP(S) URL
+- Auto-discovery: If no source is specified, searches for solution.yaml in current directory
 
 The execution proceeds in two phases:
 1. RESOLVER PHASE: All resolvers execute in dependency order (concurrent within phases)
@@ -134,7 +149,13 @@ EXIT CODES:
   6  Action/workflow execution failed
 
 Examples:
-  # Run solution (resolvers + actions)
+  # Run solution from catalog by name (latest version)
+  scafctl run solution my-app
+
+  # Run specific version from catalog
+  scafctl run solution my-app@1.2.3
+
+  # Run solution from file
   scafctl run solution -f ./my-solution.yaml
 
   # Run with parameters
@@ -157,19 +178,25 @@ Examples:
 
   # Show progress during execution
   scafctl run solution --progress`,
-		PreRun: func(cCmd *cobra.Command, _ []string) {
+		Args: cobra.MaximumNArgs(1),
+		PreRun: func(cCmd *cobra.Command, args []string) {
 			// Track which flags were explicitly set by the user
 			options.flagsChanged = make(map[string]bool)
 			cCmd.Flags().Visit(func(f *pflag.Flag) {
 				options.flagsChanged[f.Name] = true
 			})
+			// If a positional argument is provided (solution name), use it as the file
+			// unless -f/--file was explicitly set
+			if len(args) > 0 && options.File == "" {
+				options.File = args[0]
+			}
 		},
 		RunE:         makeRunEFunc(cfg, "solution"),
 		SilenceUsage: true,
 	}
 
 	// Flags
-	cCmd.Flags().StringVarP(&options.File, "file", "f", "", "Solution file path (auto-discovered if not provided, use '-' for stdin)")
+	cCmd.Flags().StringVarP(&options.File, "file", "f", "", "Solution file path or catalog name (auto-discovered if not provided, use '-' for stdin)")
 	cCmd.Flags().StringArrayVarP(&options.ResolverParams, "resolver", "r", nil, "Resolver parameters (key=value or @file.yaml)")
 	// Add shared kvx output flags (-o, -i, -e)
 	flags.AddKvxOutputFlagsToStruct(cCmd, &options.KvxOutputFlags)
@@ -312,10 +339,25 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		defer o.writeMetricsSolution()
 	}
 
-	// Load the solution
-	sol, err := o.loadSolution(ctx)
+	// Load the solution (with bundle if available)
+	sol, bundleDir, err := o.loadSolutionWithBundle(ctx)
 	if err != nil {
-		return o.exitWithCode(err, exitcode.FileNotFound)
+		return o.exitWithCode(ctx, err, exitcode.FileNotFound)
+	}
+
+	// Clean up bundle extraction directory when done
+	if bundleDir != "" {
+		defer os.RemoveAll(bundleDir)
+		// Change to the bundle directory so providers resolve relative paths correctly
+		originalDir, wdErr := os.Getwd()
+		if wdErr != nil {
+			return o.exitWithCode(ctx, fmt.Errorf("failed to get working directory: %w", wdErr), exitcode.GeneralError)
+		}
+		if chErr := os.Chdir(bundleDir); chErr != nil {
+			return o.exitWithCode(ctx, fmt.Errorf("failed to change to bundle directory: %w", chErr), exitcode.GeneralError)
+		}
+		defer func() { _ = os.Chdir(originalDir) }()
+		lgr.V(1).Info("using bundle extraction directory as working directory", "dir", bundleDir)
 	}
 
 	lgr.V(1).Info("loaded solution",
@@ -324,21 +366,42 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		"hasResolvers", sol.Spec.HasResolvers(),
 		"hasWorkflow", sol.Spec.HasWorkflow())
 
+	// Merge plugin defaults into provider inputs before DAG construction
+	if len(sol.Bundle.Plugins) > 0 {
+		bundler.MergePluginDefaults(sol)
+		lgr.V(1).Info("merged plugin defaults", "pluginCount", len(sol.Bundle.Plugins))
+	}
+
 	// Set up provider registry
 	reg := o.getRegistry()
+
+	// Register the solution provider (needs getter + registry, cannot be in builtin.go).
+	// Use Has() guard because DefaultRegistry() is a singleton — repeated calls
+	// (e.g. in tests) must not fail with "already registered".
+	if !reg.Has(solutionprovider.ProviderName) {
+		solGetter := o.getOrCreateGetter(ctx)
+		solProvider := solutionprovider.New(
+			solutionprovider.WithLoader(solGetter),
+			solutionprovider.WithRegistry(reg),
+		)
+		if err := reg.Register(solProvider); err != nil {
+			return o.exitWithCode(ctx, fmt.Errorf("registering solution provider: %w", err), exitcode.GeneralError)
+		}
+	}
+
 	actionAdapter := &actionRegistryAdapter{registry: reg}
 
 	// Validate the workflow if present and not skipping actions
 	if sol.Spec.HasWorkflow() && !o.SkipActions {
 		if err := action.ValidateWorkflow(sol.Spec.Workflow, actionAdapter); err != nil {
-			return o.exitWithCode(fmt.Errorf("workflow validation failed: %w", err), exitcode.ValidationFailed)
+			return o.exitWithCode(ctx, fmt.Errorf("workflow validation failed: %w", err), exitcode.ValidationFailed)
 		}
 	}
 
 	// Parse resolver parameters
 	params, err := ParseResolverFlags(o.ResolverParams)
 	if err != nil {
-		return o.exitWithCode(fmt.Errorf("failed to parse resolver parameters: %w", err), exitcode.ValidationFailed)
+		return o.exitWithCode(ctx, fmt.Errorf("failed to parse resolver parameters: %w", err), exitcode.ValidationFailed)
 	}
 
 	lgr.V(1).Info("parsed parameters", "count", len(params))
@@ -398,7 +461,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 				if progress != nil {
 					progress.Wait()
 				}
-				return o.exitWithCode(fmt.Errorf("resolver execution failed: %w", err), exitcode.GeneralError)
+				return o.exitWithCode(ctx, fmt.Errorf("resolver execution failed: %w", err), exitcode.GeneralError)
 			}
 
 			// Get resolver context with results
@@ -408,7 +471,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 				if progress != nil {
 					progress.Wait()
 				}
-				return o.exitWithCode(fmt.Errorf("failed to retrieve resolver results"), exitcode.GeneralError)
+				return o.exitWithCode(ctx, fmt.Errorf("failed to retrieve resolver results"), exitcode.GeneralError)
 			}
 
 			// Build resolver data map for actions
@@ -432,7 +495,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	if o.SkipActions || !sol.Spec.HasWorkflow() {
 		results := o.buildResolverOutputMap(resolverData, sol)
 		if err := o.checkValueSizes(results, *lgr); err != nil {
-			return o.exitWithCode(err, exitcode.ValidationFailed)
+			return o.exitWithCode(ctx, err, exitcode.ValidationFailed)
 		}
 		return o.writeOutput(ctx, results)
 	}
@@ -440,7 +503,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// Build action graph
 	graph, err := action.BuildGraph(ctx, sol.Spec.Workflow, resolverData, nil)
 	if err != nil {
-		return o.exitWithCode(fmt.Errorf("failed to build action graph: %w", err), exitcode.InvalidInput)
+		return o.exitWithCode(ctx, fmt.Errorf("failed to build action graph: %w", err), exitcode.InvalidInput)
 	}
 
 	lgr.V(1).Info("action graph built",
@@ -475,36 +538,98 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 
 	result, err := actionExecutor.Execute(ctx, sol.Spec.Workflow)
 	if err != nil && result != nil && result.FinalStatus != action.ExecutionPartialSuccess {
-		return o.exitWithCode(fmt.Errorf("action execution failed: %w", err), exitcode.ActionFailed)
+		return o.exitWithCode(ctx, fmt.Errorf("action execution failed: %w", err), exitcode.ActionFailed)
 	}
 
 	// Build and write output
 	return o.writeActionOutput(ctx, result)
 }
 
-// loadSolution loads the solution from file, stdin, or auto-discovery
-func (o *SolutionOptions) loadSolution(ctx context.Context) (*solution.Solution, error) {
-	getter := o.getter
-	if getter == nil {
-		getter = get.NewGetter()
+// getOrCreateGetter returns the injected getter or creates a default one, caching the result.
+func (o *SolutionOptions) getOrCreateGetter(ctx context.Context) get.Interface {
+	if o.getter != nil {
+		return o.getter
 	}
+
+	lgr := logger.FromContext(ctx)
+
+	getterOpts := []get.Option{
+		get.WithLogger(*lgr),
+	}
+
+	localCatalog, err := catalog.NewLocalCatalog(*lgr)
+	if err == nil {
+		resolver := catalog.NewSolutionResolver(localCatalog, *lgr)
+		getterOpts = append(getterOpts, get.WithCatalogResolver(resolver))
+	} else {
+		lgr.V(1).Info("catalog not available for solution resolution", "error", err)
+	}
+
+	o.getter = get.NewGetter(getterOpts...)
+	return o.getter
+}
+
+// loadSolutionWithBundle loads a solution and extracts its bundle if present.
+// Returns the solution, the path to the extracted bundle directory (empty if no bundle),
+// and any error. The caller is responsible for cleaning up the bundle directory.
+func (o *SolutionOptions) loadSolutionWithBundle(ctx context.Context) (*solution.Solution, string, error) {
+	lgr := logger.FromContext(ctx)
+	getter := o.getOrCreateGetter(ctx)
 
 	// Handle stdin
 	if o.File == "-" {
 		data, err := io.ReadAll(o.IOStreams.In)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read from stdin: %w", err)
+			return nil, "", fmt.Errorf("failed to read from stdin: %w", err)
 		}
 
 		var sol solution.Solution
 		if err := sol.LoadFromBytes(data); err != nil {
-			return nil, fmt.Errorf("failed to parse solution from stdin: %w", err)
+			return nil, "", fmt.Errorf("failed to parse solution from stdin: %w", err)
 		}
-		return &sol, nil
+		return &sol, "", nil
 	}
 
-	// Use getter for file or auto-discovery
-	return getter.Get(ctx, o.File)
+	// Use GetWithBundle for catalog solutions to extract bundle
+	sol, bundleData, err := getter.GetWithBundle(ctx, o.File)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// If there's bundle data, extract it to a temp directory
+	if len(bundleData) > 0 {
+		lgr.V(1).Info("extracting solution bundle", "size", len(bundleData))
+		tmpDir, err := os.MkdirTemp("", "scafctl-bundle-*")
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to create temp directory for bundle: %w", err)
+		}
+
+		// Write the solution YAML to the temp dir so relative paths work
+		solYAML, err := sol.ToYAML()
+		if err != nil {
+			os.RemoveAll(tmpDir)
+			return nil, "", fmt.Errorf("failed to serialize solution: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(tmpDir, "solution.yaml"), solYAML, 0o600); err != nil {
+			os.RemoveAll(tmpDir)
+			return nil, "", fmt.Errorf("failed to write solution to temp dir: %w", err)
+		}
+
+		// Extract bundle tar
+		manifest, err := bundler.ExtractBundleTar(bundleData, tmpDir)
+		if err != nil {
+			os.RemoveAll(tmpDir)
+			return nil, "", fmt.Errorf("failed to extract bundle: %w", err)
+		}
+
+		lgr.V(1).Info("extracted bundle",
+			"files", len(manifest.Files),
+			"dir", tmpDir)
+
+		return sol, tmpDir, nil
+	}
+
+	return sol, "", nil
 }
 
 // getResolversToExecute returns the resolvers to execute based on options
@@ -685,9 +810,16 @@ func (o *SolutionOptions) writeOutput(ctx context.Context, results map[string]an
 	return kvxOpts.Write(results)
 }
 
-// exitWithCode returns the error with appropriate exit handling
-func (o *SolutionOptions) exitWithCode(err error, _ int) error {
-	return err
+// exitWithCode prints the error message and returns an ExitError with the appropriate code
+func (o *SolutionOptions) exitWithCode(ctx context.Context, err error, code int) error {
+	// Print styled error message using writer
+	if w := writer.FromContext(ctx); w != nil {
+		w.Errorf("%v", err)
+	} else {
+		// Fallback if writer not in context (e.g., tests)
+		fmt.Fprintf(o.IOStreams.ErrOut, " ❌ %v\n", err)
+	}
+	return exitcode.WithCode(err, code)
 }
 
 // registryAdapter adapts provider.Registry to resolver.RegistryInterface

@@ -230,7 +230,7 @@ spec:
           environment:
             expr: "_.environment"
           command:
-            expr: "'echo Deploying to ' + __item.name + ' (' + __item.region + ')'"
+            expr: "'echo '+''+'Deploying to ' + __item.name + ' - ' + __item.region + ''"
 
       # =========================================
       # Phase 5: Verify Deployment

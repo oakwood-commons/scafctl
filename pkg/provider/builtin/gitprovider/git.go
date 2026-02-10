@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package gitprovider
 
 import (
@@ -10,8 +13,10 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/ptrs"
 )
 
@@ -38,137 +43,60 @@ func NewGitProvider() *GitProvider {
 				provider.CapabilityAction,
 				provider.CapabilityFrom,
 			},
-			Schema: provider.SchemaDefinition{
-				Properties: map[string]provider.PropertyDefinition{
-					"operation": {
-						Type:        provider.PropertyTypeString,
-						Required:    true,
-						Description: "Git operation to perform",
-						Example:     "clone",
-						Enum:        []any{"clone", "pull", "status", "add", "commit", "push", "checkout", "branch", "log", "tag"},
-						MaxLength:   ptrs.IntPtr(50),
-					},
-					"repository": {
-						Type:        provider.PropertyTypeString,
-						Required:    false,
-						Description: "Repository URL for clone operation",
-						Example:     "https://github.com/user/repo.git",
-						MaxLength:   ptrs.IntPtr(1000),
-					},
-					"path": {
-						Type:        provider.PropertyTypeString,
-						Required:    false,
-						Description: "Local path for repository",
-						Example:     "/tmp/repo",
-						MaxLength:   ptrs.IntPtr(500),
-					},
-					"branch": {
-						Type:        provider.PropertyTypeString,
-						Required:    false,
-						Description: "Branch name",
-						Example:     "main",
-						MaxLength:   ptrs.IntPtr(200),
-					},
-					"message": {
-						Type:        provider.PropertyTypeString,
-						Required:    false,
-						Description: "Commit message",
-						Example:     "Update configuration",
-						MaxLength:   ptrs.IntPtr(1000),
-					},
-					"files": {
-						Type:        provider.PropertyTypeArray,
-						Required:    false,
-						Description: "Files to add",
-						MaxItems:    ptrs.IntPtr(100),
-					},
-					"tag": {
-						Type:        provider.PropertyTypeString,
-						Required:    false,
-						Description: "Tag name",
-						Example:     "v1.0.0",
-						MaxLength:   ptrs.IntPtr(200),
-					},
-					"remote": {
-						Type:        provider.PropertyTypeString,
-						Required:    false,
-						Description: "Remote name",
-						Example:     "origin",
-						Default:     "origin",
-						MaxLength:   ptrs.IntPtr(100),
-					},
-					"depth": {
-						Type:        provider.PropertyTypeInt,
-						Required:    false,
-						Description: "Clone depth for shallow clone",
-						Example:     "1",
-						Maximum:     ptrs.Float64Ptr(10000.0),
-					},
-					"username": {
-						Type:        provider.PropertyTypeString,
-						Required:    false,
-						Description: "Username for authentication",
-						Example:     "user",
-						MaxLength:   ptrs.IntPtr(200),
-					},
-					"password": {
-						Type:        provider.PropertyTypeString,
-						Required:    false,
-						Description: "Password or token for authentication",
-						Example:     "ghp_token",
-						IsSecret:    true,
-						MaxLength:   ptrs.IntPtr(500),
-					},
-					"force": {
-						Type:        provider.PropertyTypeBool,
-						Required:    false,
-						Description: "Force the operation",
-						Example:     "false",
-						Default:     false,
-					},
-				},
-			},
-			OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
-				provider.CapabilityFrom: {
-					Properties: map[string]provider.PropertyDefinition{
-						"output": {
-							Type:        provider.PropertyTypeString,
-							Description: "Command output",
-						},
-						"operation": {
-							Type:        provider.PropertyTypeString,
-							Description: "The operation that was performed",
-						},
-						"path": {
-							Type:        provider.PropertyTypeString,
-							Description: "Repository path used",
-						},
-					},
-				},
-				provider.CapabilityAction: {
-					Properties: map[string]provider.PropertyDefinition{
-						"success": {
-							Type:        provider.PropertyTypeBool,
-							Description: "Whether the operation succeeded",
-						},
-						"output": {
-							Type:        provider.PropertyTypeString,
-							Description: "Command output",
-						},
-						"error": {
-							Type:        provider.PropertyTypeString,
-							Description: "Error message if operation failed",
-						},
-						"operation": {
-							Type:        provider.PropertyTypeString,
-							Description: "The operation that was performed",
-						},
-						"path": {
-							Type:        provider.PropertyTypeString,
-							Description: "Repository path used",
-						},
-					},
-				},
+			SensitiveFields: []string{"password"},
+			Schema: schemahelper.ObjectSchema([]string{"operation"}, map[string]*jsonschema.Schema{
+				"operation": schemahelper.StringProp("Git operation to perform",
+					schemahelper.WithExample("clone"),
+					schemahelper.WithEnum("clone", "pull", "status", "add", "commit", "push", "checkout", "branch", "log", "tag"),
+					schemahelper.WithMaxLength(*ptrs.IntPtr(50))),
+				"repository": schemahelper.StringProp("Repository URL for clone operation",
+					schemahelper.WithExample("https://github.com/user/repo.git"),
+					schemahelper.WithMaxLength(*ptrs.IntPtr(1000))),
+				"path": schemahelper.StringProp("Local path for repository",
+					schemahelper.WithExample("/tmp/repo"),
+					schemahelper.WithMaxLength(*ptrs.IntPtr(500))),
+				"branch": schemahelper.StringProp("Branch name",
+					schemahelper.WithExample("main"),
+					schemahelper.WithMaxLength(*ptrs.IntPtr(200))),
+				"message": schemahelper.StringProp("Commit message",
+					schemahelper.WithExample("Update configuration"),
+					schemahelper.WithMaxLength(*ptrs.IntPtr(1000))),
+				"files": schemahelper.ArrayProp("Files to add",
+					schemahelper.WithMaxItems(*ptrs.IntPtr(100))),
+				"tag": schemahelper.StringProp("Tag name",
+					schemahelper.WithExample("v1.0.0"),
+					schemahelper.WithMaxLength(*ptrs.IntPtr(200))),
+				"remote": schemahelper.StringProp("Remote name",
+					schemahelper.WithExample("origin"),
+					schemahelper.WithDefault("origin"),
+					schemahelper.WithMaxLength(*ptrs.IntPtr(100))),
+				"depth": schemahelper.IntProp("Clone depth for shallow clone",
+					schemahelper.WithExample("1"),
+					schemahelper.WithMaximum(*ptrs.Float64Ptr(10000.0))),
+				"username": schemahelper.StringProp("Username for authentication",
+					schemahelper.WithExample("user"),
+					schemahelper.WithMaxLength(*ptrs.IntPtr(200))),
+				"password": schemahelper.StringProp("Password or token for authentication",
+					schemahelper.WithExample("ghp_token"),
+					schemahelper.WithWriteOnly(),
+					schemahelper.WithMaxLength(*ptrs.IntPtr(500))),
+				"force": schemahelper.BoolProp("Force the operation",
+					schemahelper.WithExample("false"),
+					schemahelper.WithDefault(false)),
+			}),
+			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"output":    schemahelper.StringProp("Command output"),
+					"operation": schemahelper.StringProp("The operation that was performed"),
+					"path":      schemahelper.StringProp("Repository path used"),
+				}),
+				provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"success":   schemahelper.BoolProp("Whether the operation succeeded"),
+					"output":    schemahelper.StringProp("Command output"),
+					"error":     schemahelper.StringProp("Error message if operation failed"),
+					"operation": schemahelper.StringProp("The operation that was performed"),
+					"path":      schemahelper.StringProp("Repository path used"),
+				}),
 			},
 			Examples: []provider.Example{
 				{

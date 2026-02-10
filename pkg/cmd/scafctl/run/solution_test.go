@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package run
 
 import (
@@ -35,7 +38,7 @@ func TestCommandSolution(t *testing.T) {
 
 	cmd := CommandSolution(cliParams, streams, "")
 
-	assert.Equal(t, "solution", cmd.Use)
+	assert.Equal(t, "solution [name[@version]]", cmd.Use)
 	assert.NotEmpty(t, cmd.Short)
 
 	// Verify flags exist
@@ -176,6 +179,7 @@ spec:
 		CliParams: cliParams,
 		File:      solutionPath,
 		Output:    "json",
+		registry:  testRegistry(),
 	}
 
 	lgr := logger.Get(0)

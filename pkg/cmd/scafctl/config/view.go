@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package config
 
 import (
@@ -7,6 +10,7 @@ import (
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	appconfig "github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -82,10 +86,13 @@ func CommandView(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 
 // Run executes the config view command.
 func (o *ViewOptions) Run(ctx context.Context) error {
+	w := writer.MustFromContext(ctx)
+
 	mgr := appconfig.NewManager(o.ConfigPath)
 	cfg, err := mgr.Load()
 	if err != nil {
-		return err
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.ConfigError)
 	}
 
 	// Include config file path in output

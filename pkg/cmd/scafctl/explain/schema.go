@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package explain
 
 import (
@@ -7,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/schema"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -125,8 +129,10 @@ func (o *SchemaOptions) Run(_ context.Context, args []string) error {
 	// Look up the kind
 	kindDef, ok := schema.GetKind(kindName)
 	if !ok {
-		return fmt.Errorf("unknown kind %q. Available kinds: %s",
+		err := fmt.Errorf("unknown kind %q. Available kinds: %s",
 			kindName, strings.Join(schema.GetGlobalRegistry().Names(), ", "))
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
 	// If there are additional args, treat them as path components
@@ -155,7 +161,9 @@ func (o *SchemaOptions) Run(_ context.Context, args []string) error {
 	// Drill into specific field
 	fieldInfo, err := schema.IntrospectField(kindDef.TypeInstance, fieldPath)
 	if err != nil {
-		return fmt.Errorf("cannot find field %q in %s: %w", fieldPath, kindDef.Name, err)
+		err = fmt.Errorf("cannot find field %q in %s: %w", fieldPath, kindDef.Name, err)
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
 	formatter.FormatField(fieldInfo)

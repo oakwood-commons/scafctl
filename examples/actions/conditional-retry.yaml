@@ -1,0 +1,110 @@
+# Conditional Retry Example
+# Demonstrates the retryIf expression for conditional retry logic.
+#
+# The retryIf field accepts a CEL expression that determines whether to retry
+# based on the error context. The __error variable provides:
+#   - __error.message: The error message
+#   - __error.type: Error type ("http", "exec", "timeout", "validation", "unknown")
+#   - __error.statusCode: HTTP status code (0 for non-HTTP errors)
+#   - __error.exitCode: Command exit code (0 for non-exec errors)
+#   - __error.attempt: Current attempt number (1-based)
+#   - __error.maxAttempts: Maximum retry attempts configured
+#
+# Run: scafctl run solution -f examples/actions/conditional-retry.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: conditional-retry
+  version: 1.0.0
+  description: Conditional retry with retryIf expressions
+
+spec:
+  resolvers: {}
+
+  workflow:
+    actions:
+      # Retry only on specific exit codes (e.g., temporary failures)
+      retry-on-exit-code:
+        description: Retry only when exit code indicates a temporary failure
+        displayName: Exit Code Retry
+        provider: exec
+        retry:
+          maxAttempts: 3
+          backoff: fixed
+          initialDelay: 100ms
+          # Retry on exit codes 1 or 2 (temporary failures), but not 3 (permanent)
+          retryIf: "__error.exitCode == 1 || __error.exitCode == 2"
+        inputs:
+          shell: true
+          # This succeeds on first try
+          command: "echo 'Conditional retry test passed'"
+
+      # Retry based on attempt number (fail fast after 2 attempts)
+      limited-retries:
+        description: Stop retrying after a certain number of attempts
+        displayName: Limited Retries
+        provider: exec
+        dependsOn:
+          - retry-on-exit-code
+        retry:
+          maxAttempts: 5
+          backoff: fixed
+          initialDelay: 100ms
+          # Only retry if we haven't tried more than 2 times
+          retryIf: "__error.attempt < 3"
+        inputs:
+          shell: true
+          command: "echo 'Limited retry test passed'"
+
+      # Combine multiple conditions
+      complex-retry-condition:
+        description: Retry with complex conditions
+        displayName: Complex Conditions
+        provider: exec
+        dependsOn:
+          - limited-retries
+        retry:
+          maxAttempts: 3
+          backoff: exponential
+          initialDelay: 100ms
+          maxDelay: 1s
+          # Retry on exec errors with exit code 1, or any timeout
+          retryIf: "(__error.type == 'exec' && __error.exitCode == 1) || __error.type == 'timeout'"
+        inputs:
+          shell: true
+          command: "echo 'Complex retry condition test passed'"
+
+      # Always retry (equivalent to no retryIf)
+      always-retry:
+        description: Always retry on any failure
+        displayName: Always Retry
+        provider: exec
+        dependsOn:
+          - complex-retry-condition
+        retry:
+          maxAttempts: 3
+          backoff: fixed
+          initialDelay: 100ms
+          # Explicit always-retry condition
+          retryIf: "true"
+        inputs:
+          shell: true
+          command: "echo 'Always retry test passed'"
+
+      # Never retry (disable retry with condition)
+      never-retry:
+        description: Never retry, even with retry config
+        displayName: Never Retry
+        provider: exec
+        dependsOn:
+          - always-retry
+        retry:
+          maxAttempts: 3
+          backoff: fixed
+          initialDelay: 100ms
+          # Disable retry completely
+          retryIf: "false"
+        inputs:
+          shell: true
+          command: "echo 'Never retry test passed - all tests complete!'"

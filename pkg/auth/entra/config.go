@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 // Package entra provides Microsoft Entra ID (formerly Azure AD) authentication
 // for scafctl using the OAuth 2.0 device authorization flow.
 package entra

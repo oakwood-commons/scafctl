@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 // Package main provides an example of using pkg/flags for key-value parsing with validation.
 //
 //nolint:forbidigo,revive,unparam // Example code demonstrates usage patterns

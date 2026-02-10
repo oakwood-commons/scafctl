@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package plugin
 
 import (
@@ -6,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/hashicorp/go-plugin"
 	"github.com/oakwood-commons/scafctl/pkg/plugin/proto"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -213,24 +217,33 @@ func descriptorToProto(desc *provider.Descriptor) *proto.ProviderDescriptor {
 	}
 
 	// Convert schema
-	if len(desc.Schema.Properties) > 0 {
+	if desc.Schema != nil && len(desc.Schema.Properties) > 0 {
 		protoDesc.Schema = &proto.Schema{
 			Parameters: make(map[string]*proto.Parameter),
 		}
+		// Build required set
+		requiredSet := make(map[string]bool, len(desc.Schema.Required))
+		for _, name := range desc.Schema.Required {
+			requiredSet[name] = true
+		}
 		for name, prop := range desc.Schema.Properties {
 			defaultValue, _ := json.Marshal(prop.Default)
-			example, _ := json.Marshal(prop.Example)
+			exampleStr := ""
+			if len(prop.Examples) > 0 {
+				exampleBytes, _ := json.Marshal(prop.Examples[0])
+				exampleStr = string(exampleBytes)
+			}
 			maxLen := int32(0)
 			if prop.MaxLength != nil {
 				//nolint:gosec // MaxLength is user-defined, overflow is acceptable behavior
 				maxLen = int32(*prop.MaxLength)
 			}
 			protoDesc.Schema.Parameters[name] = &proto.Parameter{
-				Type:         string(prop.Type),
-				Required:     prop.Required,
+				Type:         prop.Type,
+				Required:     requiredSet[name],
 				Description:  prop.Description,
 				DefaultValue: defaultValue,
-				Example:      string(example),
+				Example:      exampleStr,
 				MaxLength:    maxLen,
 				Pattern:      prop.Pattern,
 			}
@@ -241,26 +254,35 @@ func descriptorToProto(desc *provider.Descriptor) *proto.ProviderDescriptor {
 	if len(desc.OutputSchemas) > 0 {
 		protoDesc.OutputSchemas = make(map[string]*proto.Schema)
 		for cap, schema := range desc.OutputSchemas {
-			if len(schema.Properties) == 0 {
+			if schema == nil || len(schema.Properties) == 0 {
 				continue
 			}
 			protoSchema := &proto.Schema{
 				Parameters: make(map[string]*proto.Parameter),
 			}
+			// Build required set
+			requiredSet := make(map[string]bool, len(schema.Required))
+			for _, name := range schema.Required {
+				requiredSet[name] = true
+			}
 			for name, prop := range schema.Properties {
 				defaultValue, _ := json.Marshal(prop.Default)
-				example, _ := json.Marshal(prop.Example)
+				exampleStr := ""
+				if len(prop.Examples) > 0 {
+					exampleBytes, _ := json.Marshal(prop.Examples[0])
+					exampleStr = string(exampleBytes)
+				}
 				maxLen := int32(0)
 				if prop.MaxLength != nil {
 					//nolint:gosec // MaxLength is user-defined, overflow is acceptable behavior
 					maxLen = int32(*prop.MaxLength)
 				}
 				protoSchema.Parameters[name] = &proto.Parameter{
-					Type:         string(prop.Type),
-					Required:     prop.Required,
+					Type:         prop.Type,
+					Required:     requiredSet[name],
 					Description:  prop.Description,
 					DefaultValue: defaultValue,
-					Example:      string(example),
+					Example:      exampleStr,
 					MaxLength:    maxLen,
 					Pattern:      prop.Pattern,
 				}
@@ -295,69 +317,73 @@ func protoToDescriptor(protoDesc *proto.ProviderDescriptor) *provider.Descriptor
 
 	// Convert schema
 	if protoDesc.Schema != nil {
-		desc.Schema = provider.SchemaDefinition{
-			Properties: make(map[string]provider.PropertyDefinition),
+		desc.Schema = &jsonschema.Schema{
+			Type:       "object",
+			Properties: make(map[string]*jsonschema.Schema),
 		}
+		var required []string
 		for name, param := range protoDesc.Schema.Parameters {
-			var defaultValue any
-			if len(param.DefaultValue) > 0 {
-				_ = json.Unmarshal(param.DefaultValue, &defaultValue)
-			}
-			var example any
-			if param.Example != "" {
-				_ = json.Unmarshal([]byte(param.Example), &example)
-			}
-			var maxLen *int
-			if param.MaxLength > 0 {
-				ml := int(param.MaxLength)
-				maxLen = &ml
-			}
-			desc.Schema.Properties[name] = provider.PropertyDefinition{
-				Type:        provider.PropertyType(param.Type),
-				Required:    param.Required,
+			prop := &jsonschema.Schema{
+				Type:        param.Type,
 				Description: param.Description,
-				Default:     defaultValue,
-				Example:     example,
-				MaxLength:   maxLen,
 				Pattern:     param.Pattern,
 			}
+			if len(param.DefaultValue) > 0 {
+				prop.Default = json.RawMessage(param.DefaultValue)
+			}
+			if param.Example != "" {
+				var example any
+				_ = json.Unmarshal([]byte(param.Example), &example)
+				prop.Examples = []any{example}
+			}
+			if param.MaxLength > 0 {
+				ml := int(param.MaxLength)
+				prop.MaxLength = &ml
+			}
+			if param.Required {
+				required = append(required, name)
+			}
+			desc.Schema.Properties[name] = prop
 		}
+		desc.Schema.Required = required
 	}
 
 	// Convert output schemas
 	if len(protoDesc.OutputSchemas) > 0 {
-		desc.OutputSchemas = make(map[provider.Capability]provider.SchemaDefinition)
+		desc.OutputSchemas = make(map[provider.Capability]*jsonschema.Schema)
 		for capStr, protoSchema := range protoDesc.OutputSchemas {
 			if protoSchema == nil {
 				continue
 			}
-			schema := provider.SchemaDefinition{
-				Properties: make(map[string]provider.PropertyDefinition),
+			schema := &jsonschema.Schema{
+				Type:       "object",
+				Properties: make(map[string]*jsonschema.Schema),
 			}
+			var required []string
 			for name, param := range protoSchema.Parameters {
-				var defaultValue any
-				if len(param.DefaultValue) > 0 {
-					_ = json.Unmarshal(param.DefaultValue, &defaultValue)
-				}
-				var example any
-				if param.Example != "" {
-					_ = json.Unmarshal([]byte(param.Example), &example)
-				}
-				var maxLen *int
-				if param.MaxLength > 0 {
-					ml := int(param.MaxLength)
-					maxLen = &ml
-				}
-				schema.Properties[name] = provider.PropertyDefinition{
-					Type:        provider.PropertyType(param.Type),
-					Required:    param.Required,
+				prop := &jsonschema.Schema{
+					Type:        param.Type,
 					Description: param.Description,
-					Default:     defaultValue,
-					Example:     example,
-					MaxLength:   maxLen,
 					Pattern:     param.Pattern,
 				}
+				if len(param.DefaultValue) > 0 {
+					prop.Default = json.RawMessage(param.DefaultValue)
+				}
+				if param.Example != "" {
+					var example any
+					_ = json.Unmarshal([]byte(param.Example), &example)
+					prop.Examples = []any{example}
+				}
+				if param.MaxLength > 0 {
+					ml := int(param.MaxLength)
+					prop.MaxLength = &ml
+				}
+				if param.Required {
+					required = append(required, name)
+				}
+				schema.Properties[name] = prop
 			}
+			schema.Required = required
 			desc.OutputSchemas[provider.Capability(capStr)] = schema
 		}
 	}

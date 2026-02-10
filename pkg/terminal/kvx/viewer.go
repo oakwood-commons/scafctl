@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 // Package kvx provides integration with the kvx data viewer library for scafctl.
 // It offers both non-interactive table output and interactive TUI modes for exploring
 // structured data like resolver results and action graphs.
@@ -60,18 +63,14 @@ type ViewerOptions struct {
 
 	// InitialExpr is an initial expression to evaluate when launching TUI
 	InitialExpr string `json:"initialExpr,omitempty" yaml:"initialExpr,omitempty" doc:"Initial CEL expression to evaluate in TUI" maxLength:"4096"`
-
-	// SortKeys enables alphabetical sorting of map keys
-	SortKeys bool `json:"sortKeys,omitempty" yaml:"sortKeys,omitempty" doc:"Sort map keys alphabetically in output"`
 }
 
 // DefaultViewerOptions returns sensible defaults for scafctl
 func DefaultViewerOptions() *ViewerOptions {
 	return &ViewerOptions{
-		AppName:  "scafctl",
-		In:       os.Stdin,
-		Out:      os.Stdout,
-		SortKeys: true,
+		AppName: "scafctl",
+		In:      os.Stdin,
+		Out:     os.Stdout,
 	}
 }
 
@@ -132,11 +131,6 @@ func WithInitialExpr(expr string) Option {
 	return func(o *ViewerOptions) { o.InitialExpr = expr }
 }
 
-// WithSortKeys enables alphabetical sorting of map keys
-func WithSortKeys(sort bool) Option {
-	return func(o *ViewerOptions) { o.SortKeys = sort }
-}
-
 // WithContext sets the context for CEL expression evaluation.
 // This enables context-dependent features like debug.out when Writer is in context.
 func WithContext(ctx context.Context) Option {
@@ -184,64 +178,16 @@ func View(data any, opts ...Option) error {
 }
 
 // renderTable outputs data as a bordered table (non-interactive).
-// For scalar values (string, number, bool), it outputs the value directly instead of a table.
-//
-// WORKAROUND: This scalar detection logic should ideally be handled in kvx's RenderTable
-// function itself. This is documented as a recommendation for the kvx developer.
-// See: docs/design/kvx-integration-plan.md (Recommendations Log)
 func renderTable(root any, options *ViewerOptions) error {
-	// WORKAROUND: Check if the data is a scalar value - output directly without table formatting
-	// This should be handled by kvx's RenderTable instead of requiring consumers to implement it.
-	if isScalarValue(root) {
-		fmt.Fprintln(options.Out, formatScalar(root))
-		return nil
-	}
-
-	// Configure sort order
-	sortOrder := core.SortNone
-	if options.SortKeys {
-		sortOrder = core.SortAscending
-	}
-
-	engine, err := core.New(core.WithSortOrder(sortOrder))
-	if err != nil {
-		return fmt.Errorf("failed to create engine: %w", err)
-	}
-
-	// Auto-detect terminal width or use provided
-	keyWidth, valueWidth := 30, 50
-	if options.Width > 0 {
-		keyWidth = options.Width / 3
-		valueWidth = options.Width - keyWidth - 10
-	}
-
-	output := engine.RenderTable(root, options.NoColor, keyWidth, valueWidth)
-	fmt.Fprintln(options.Out, output)
+	output := tui.RenderTable(root, tui.TableOptions{
+		AppName:  options.AppName,
+		Path:     "_",
+		Bordered: true,
+		Width:    options.Width,
+		NoColor:  options.NoColor,
+	})
+	fmt.Fprint(options.Out, output)
 	return nil
-}
-
-// isScalarValue returns true if the value is a simple scalar (string, number, bool, nil)
-func isScalarValue(v any) bool {
-	if v == nil {
-		return true
-	}
-	switch v.(type) {
-	case string, bool,
-		int, int8, int16, int32, int64,
-		uint, uint8, uint16, uint32, uint64,
-		float32, float64:
-		return true
-	default:
-		return false
-	}
-}
-
-// formatScalar formats a scalar value for direct output
-func formatScalar(v any) string {
-	if v == nil {
-		return "null"
-	}
-	return fmt.Sprintf("%v", v)
 }
 
 // runInteractive launches the kvx TUI
@@ -295,16 +241,11 @@ func IsTerminal(out io.Writer) bool {
 
 // RenderTable renders data as a non-interactive table string.
 // This is useful when you need the table output as a string rather than writing to a stream.
-func RenderTable(data any, noColor bool, keyWidth, valueWidth int) (string, error) {
+func RenderTable(data any, opts tui.TableOptions) (string, error) {
 	root, err := core.LoadObject(data)
 	if err != nil {
 		return "", fmt.Errorf("failed to load data: %w", err)
 	}
 
-	engine, err := core.New(core.WithSortOrder(core.SortAscending))
-	if err != nil {
-		return "", fmt.Errorf("failed to create engine: %w", err)
-	}
-
-	return engine.RenderTable(root, noColor, keyWidth, valueWidth), nil
+	return tui.RenderTable(root, opts), nil
 }

@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 // Package flags provides shared flag helpers for scafctl commands.
 package flags
 
@@ -72,7 +75,6 @@ func ToKvxOutputOptions(flags *KvxOutputFlags, opts ...kvx.OutputOption) *kvx.Ou
 	kvxOpts := &kvx.OutputOptions{
 		Interactive: flags.Interactive,
 		Expression:  flags.Expression,
-		SortKeys:    true,
 		PrettyPrint: true,
 	}
 

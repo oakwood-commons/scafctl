@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package celexp
 
 import (
@@ -233,7 +236,6 @@ func isCompatibleType(goType reflect.Type, celType *cel.Type) (bool, string) {
 		if goType.Kind() != reflect.Slice && goType.Kind() != reflect.Array {
 			return false, " (expected slice/array for list type)"
 		}
-		// TODO: Could check element type if cel.Type has that info
 		return true, ""
 
 	case "map":
@@ -241,7 +243,6 @@ func isCompatibleType(goType reflect.Type, celType *cel.Type) (bool, string) {
 		if goType.Kind() != reflect.Map {
 			return false, " (expected map)"
 		}
-		// TODO: Could check key/value types if cel.Type has that info
 		return true, ""
 
 	default:

@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package run
 
 import (
@@ -11,6 +14,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -65,17 +69,20 @@ func makeRunEFunc(cfg runCommandConfig, cmdUse string) func(*cobra.Command, []st
 
 		cfg.setIOStreamFn(cfg.ioStreams, cfg.cliParams)
 
-		err := output.ValidateCommands(args)
-		if err != nil {
-			w.Error(err.Error())
-			return err
+		// Only validate that there are no unexpected args if the command doesn't
+		// explicitly accept positional arguments (via Args field).
+		// Commands with Args: cobra.MaximumNArgs(N) handle arg validation themselves.
+		if cCmd.Args == nil {
+			if err := output.ValidateCommands(args); err != nil {
+				w.Error(err.Error())
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
 		}
 
 		if currentOutput := cfg.getOutputFn(); currentOutput != "" && currentOutput != "quiet" {
-			err = output.ValidateOutputType(currentOutput, ValidOutputTypes[:2])
-			if err != nil {
+			if err := output.ValidateOutputType(currentOutput, ValidOutputTypes[:2]); err != nil {
 				w.Error(err.Error())
-				return err
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 		}
 

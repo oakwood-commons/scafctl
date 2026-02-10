@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package execprovider
 
 import (
@@ -27,23 +30,25 @@ func TestNewExecProvider(t *testing.T) {
 	assert.Contains(t, desc.Capabilities, provider.CapabilityFrom)
 
 	// Verify schema
+	assert.NotNil(t, desc.Schema)
 	assert.NotNil(t, desc.Schema.Properties)
-	assert.True(t, desc.Schema.Properties["command"].Required)
-	assert.Equal(t, provider.PropertyTypeString, desc.Schema.Properties["command"].Type)
-	assert.Equal(t, provider.PropertyTypeArray, desc.Schema.Properties["args"].Type)
-	assert.Equal(t, provider.PropertyTypeString, desc.Schema.Properties["stdin"].Type)
-	assert.Equal(t, provider.PropertyTypeString, desc.Schema.Properties["workingDir"].Type)
-	assert.Equal(t, provider.PropertyTypeAny, desc.Schema.Properties["env"].Type)
-	assert.Equal(t, provider.PropertyTypeInt, desc.Schema.Properties["timeout"].Type)
-	assert.Equal(t, provider.PropertyTypeBool, desc.Schema.Properties["shell"].Type)
+	assert.Contains(t, desc.Schema.Required, "command")
+	assert.Equal(t, "string", desc.Schema.Properties["command"].Type)
+	assert.Equal(t, "array", desc.Schema.Properties["args"].Type)
+	assert.Equal(t, "string", desc.Schema.Properties["stdin"].Type)
+	assert.Equal(t, "string", desc.Schema.Properties["workingDir"].Type)
+	assert.Equal(t, "", desc.Schema.Properties["env"].Type)
+	assert.Equal(t, "integer", desc.Schema.Properties["timeout"].Type)
+	assert.Equal(t, "boolean", desc.Schema.Properties["shell"].Type)
 
 	// Verify output schema
+	assert.NotNil(t, desc.OutputSchemas[provider.CapabilityAction])
 	assert.NotNil(t, desc.OutputSchemas[provider.CapabilityAction].Properties)
-	assert.Equal(t, provider.PropertyTypeString, desc.OutputSchemas[provider.CapabilityAction].Properties["stdout"].Type)
-	assert.Equal(t, provider.PropertyTypeString, desc.OutputSchemas[provider.CapabilityAction].Properties["stderr"].Type)
-	assert.Equal(t, provider.PropertyTypeInt, desc.OutputSchemas[provider.CapabilityAction].Properties["exitCode"].Type)
-	assert.Equal(t, provider.PropertyTypeBool, desc.OutputSchemas[provider.CapabilityAction].Properties["success"].Type)
-	assert.Equal(t, provider.PropertyTypeString, desc.OutputSchemas[provider.CapabilityAction].Properties["command"].Type)
+	assert.Equal(t, "string", desc.OutputSchemas[provider.CapabilityAction].Properties["stdout"].Type)
+	assert.Equal(t, "string", desc.OutputSchemas[provider.CapabilityAction].Properties["stderr"].Type)
+	assert.Equal(t, "integer", desc.OutputSchemas[provider.CapabilityAction].Properties["exitCode"].Type)
+	assert.Equal(t, "boolean", desc.OutputSchemas[provider.CapabilityAction].Properties["success"].Type)
+	assert.Equal(t, "string", desc.OutputSchemas[provider.CapabilityAction].Properties["command"].Type)
 }
 
 func TestExecProvider_Execute_SimpleCommand(t *testing.T) {

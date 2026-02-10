@@ -4,7 +4,15 @@
 
 Plugins are the extension mechanism for scafctl. They allow external binaries to contribute functionality to the system in a controlled, versioned, and discoverable way.
 
-The primary purpose of plugins is to supply providers. Plugins are not a separate execution concept from providers. They are the delivery and isolation mechanism used to obtain providers.
+The primary purpose of plugins is to supply providers and auth handlers. "Plugin" is an internal implementation term - users interact with "providers" and "auth handlers" as catalog artifact kinds.
+
+---
+
+## Terminology
+
+- **Plugin**: Internal term for a go-plugin binary. Not exposed to users.
+- **Provider Artifact**: A plugin binary distributed via the catalog that exposes one or more providers. Users push/pull "providers" not "plugins".
+- **Auth Handler Artifact**: A plugin binary distributed via the catalog that exposes one or more auth handlers.
 
 ---
 
@@ -17,7 +25,7 @@ Plugins are:
 - Discovered and loaded at runtime
 - Versioned independently from scafctl
 - Isolated from the core process
-- Capable of exposing multiple providers
+- Capable of exposing multiple providers or auth handlers
 
 scafctl uses [hashicorp/go-plugin](https://github.com/hashicorp/go-plugin) to manage plugin lifecycle, transport, and isolation.
 
@@ -37,17 +45,46 @@ Plugins do not participate directly in execution graphs. They only expose capabi
 
 ---
 
-## Primary Use: Provider Distribution
+## Primary Use: Provider and Auth Handler Distribution
 
-Plugins exist primarily to distribute providers.
+Plugins exist primarily to distribute providers and auth handlers.
 
 Under this model:
 
-- Providers define behavior
-- Plugins package providers
-- scafctl orchestrates provider execution
+- Providers define behavior (data fetching, transformations, actions)
+- Auth handlers define authentication flows (Entra, GitHub, custom identity providers)
+- Plugin binaries package these capabilities
+- scafctl orchestrates execution
 
-A plugin may expose one or more providers.
+A plugin may expose one or more providers OR one or more auth handlers (not both).
+
+---
+
+## Catalog Artifact Kinds
+
+When distributed via the catalog, plugins are categorized by their purpose:
+
+| Artifact Kind | Description | Repository Path |
+|--------------|-------------|-----------------|
+| `provider` | go-plugin binary exposing providers | `/providers/` |
+| `auth-handler` | go-plugin binary exposing auth handlers | `/auth-handlers/` |
+
+Users interact with these as distinct artifact kinds:
+
+```bash
+# Push a provider artifact
+scafctl catalog push aws-provider@1.0.0 --catalog ghcr.io/myorg
+
+# Pull a provider artifact  
+scafctl catalog pull ghcr.io/myorg/providers/aws-provider@1.0.0
+
+# Push an auth handler artifact
+scafctl catalog push okta-handler@1.0.0 --catalog ghcr.io/myorg
+
+# Pull an auth handler artifact
+scafctl catalog pull ghcr.io/myorg/auth-handlers/okta-handler@1.0.0
+```
+
 ---
 
 ## Why Plugins Exist (Instead of Built-ins Only)
@@ -56,7 +93,7 @@ Plugins exist to:
 
 - Avoid baking all providers into scafctl
 - Enable third-party and internal extensions
-- Allow providers to evolve independently
+- Allow providers and auth handlers to evolve independently
 - Isolate failures and crashes
 - Support multiple languages via gRPC boundaries
 - Keep the core binary small and stable
@@ -80,7 +117,7 @@ Protocol buffer definition for plugin communication.
 ```protobuf
 syntax = "proto3";
 package plugin;
-option go_package = "github.com/kcloutie/scafctl/pkg/plugin/proto";
+option go_package = "github.com/oakwood-commons/scafctl/pkg/plugin/proto";
 
 // PluginService is the main plugin service
 service PluginService {
@@ -214,13 +251,16 @@ Plugins are discovered via multiple mechanisms:
 - Environment-based paths
 - Solution dependencies (automatically fetched from remote catalogs)
 
-When a solution declares plugin dependencies:
+When a solution declares plugin dependencies (under `bundle.plugins`):
 
 ```yaml
-dependencies:
+bundle:
   plugins:
     - name: aws-provider
-      version: ^1.5.0
+      kind: provider
+      version: "^1.5.0"
+      defaults:
+        region: us-east-1
 ```
 
 scafctl will:
@@ -228,6 +268,9 @@ scafctl will:
 2. Pull missing plugins from configured remote catalogs
 3. Validate version constraints are met
 4. Load the plugin binary
+5. Apply plugin defaults (shallow-merged beneath inline inputs)
+
+See [catalog-build-bundling.md](catalog-build-bundling.md) for the full design of `bundle.plugins`, including the `kind` field, ValueRef-aware defaults, and lock file integration.
 
 Discovery does not execute plugins. Execution occurs only when a provider is invoked.
 

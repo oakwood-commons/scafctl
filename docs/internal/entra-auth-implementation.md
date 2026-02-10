@@ -1534,7 +1534,7 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
               scafctl auth login entra
 
               # Login with a specific tenant
-              scafctl auth login entra --tenant c990bb7a-51f4-439b-bd36-9c07fb1041c0
+              scafctl auth login entra --tenant 08e70e8e-d05c-4449-a2c2-67bd0a9c4e79
         `),
         Args: cobra.ExactArgs(1),
         RunE: func(cmd *cobra.Command, args []string) error {
@@ -1964,7 +1964,7 @@ type Config struct {
 auth:
   entra:
     # Use a specific tenant instead of "common"
-    tenantId: "c990bb7a-51f4-439b-bd36-9c07fb1041c0"
+    tenantId: "08e70e8e-d05c-4449-a2c2-67bd0a9c4e79"
     # Optional: use a custom client ID (must be registered in Azure)
     # clientId: "your-client-id"
     # Optional: default scopes for login

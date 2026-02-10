@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package flags
 
 import (
@@ -90,7 +93,6 @@ func TestToKvxOutputOptions(t *testing.T) {
 	assert.Equal(t, kvx.OutputFormatJSON, opts.Format)
 	assert.True(t, opts.Interactive)
 	assert.Equal(t, "_.items", opts.Expression)
-	assert.True(t, opts.SortKeys)    // Default
 	assert.True(t, opts.PrettyPrint) // Default
 }
 
@@ -104,14 +106,12 @@ func TestToKvxOutputOptions_WithOptions(t *testing.T) {
 	opts := ToKvxOutputOptions(flags,
 		kvx.WithOutputNoColor(true),
 		kvx.WithOutputAppName("test-app"),
-		kvx.WithOutputSortKeys(false),
 	)
 
 	assert.Equal(t, kvx.OutputFormatYAML, opts.Format)
 	assert.False(t, opts.Interactive)
 	assert.True(t, opts.NoColor)
 	assert.Equal(t, "test-app", opts.AppName)
-	assert.False(t, opts.SortKeys)
 }
 
 func TestToKvxOutputOptions_InvalidFormat(t *testing.T) {
@@ -139,7 +139,6 @@ func TestNewKvxOutputOptionsFromFlags(t *testing.T) {
 	assert.Equal(t, "_.name", opts.Expression)
 	assert.True(t, opts.NoColor)
 	assert.Equal(t, "my-app", opts.AppName)
-	assert.True(t, opts.SortKeys)    // Default
 	assert.True(t, opts.PrettyPrint) // Default
 }
 

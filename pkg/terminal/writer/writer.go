@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 // Package writer provides a centralized CLI output writer for scafctl.
 // It handles message formatting, respects global flags like --quiet and --no-color,
 // and provides a consistent interface for all CLI commands to write output.

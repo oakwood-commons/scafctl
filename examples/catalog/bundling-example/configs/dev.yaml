@@ -1,0 +1,11 @@
+# Development environment configuration
+name: my-app
+namespace: dev
+environment: dev
+replicas: 1
+image: my-app:latest
+port: 8080
+logLevel: debug
+resources:
+  cpu: "100m"
+  memory: "128Mi"

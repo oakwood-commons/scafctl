@@ -1,11 +1,16 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package provider
 
 import (
 	"context"
 	"testing"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
+	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -42,13 +47,11 @@ func TestInputValue_Literal(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
-			schema := SchemaDefinition{
-				Properties: map[string]PropertyDefinition{
-					"testProp": {Type: PropertyTypeAny, Required: true},
-				},
-			}
+			schema := schemahelper.ObjectSchema([]string{"testProp"}, map[string]*jsonschema.Schema{
+				"testProp": schemahelper.AnyProp(""),
+			})
 
-			resolver := NewInputResolver(ctx, schema)
+			resolver := NewInputResolver(ctx, schema, nil)
 			inputs := map[string]any{"testProp": tt.input}
 
 			resolved, err := resolver.ResolveInputs(inputs)
@@ -106,13 +109,11 @@ func TestInputValue_Rslvr(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := WithResolverContext(context.Background(), tt.context)
-			schema := SchemaDefinition{
-				Properties: map[string]PropertyDefinition{
-					"testProp": {Type: PropertyTypeAny, Required: true},
-				},
-			}
+			schema := schemahelper.ObjectSchema([]string{"testProp"}, map[string]*jsonschema.Schema{
+				"testProp": schemahelper.AnyProp(""),
+			})
 
-			resolver := NewInputResolver(ctx, schema)
+			resolver := NewInputResolver(ctx, schema, nil)
 			inputs := map[string]any{
 				"testProp": InputValue{Rslvr: tt.binding},
 			}
@@ -178,13 +179,11 @@ func TestInputValue_CEL(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := WithResolverContext(context.Background(), tt.context)
-			schema := SchemaDefinition{
-				Properties: map[string]PropertyDefinition{
-					"testProp": {Type: PropertyTypeAny, Required: true},
-				},
-			}
+			schema := schemahelper.ObjectSchema([]string{"testProp"}, map[string]*jsonschema.Schema{
+				"testProp": schemahelper.AnyProp(""),
+			})
 
-			resolver := NewInputResolver(ctx, schema)
+			resolver := NewInputResolver(ctx, schema, nil)
 			inputs := map[string]any{
 				"testProp": InputValue{Expr: tt.expression},
 			}
@@ -238,13 +237,11 @@ func TestInputValue_Template(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := WithResolverContext(context.Background(), tt.context)
-			schema := SchemaDefinition{
-				Properties: map[string]PropertyDefinition{
-					"testProp": {Type: PropertyTypeString, Required: true},
-				},
-			}
+			schema := schemahelper.ObjectSchema([]string{"testProp"}, map[string]*jsonschema.Schema{
+				"testProp": schemahelper.StringProp(""),
+			})
 
-			resolver := NewInputResolver(ctx, schema)
+			resolver := NewInputResolver(ctx, schema, nil)
 			inputs := map[string]any{
 				"testProp": InputValue{Tmpl: tt.template},
 			}
@@ -303,13 +300,11 @@ func TestInputResolver_Exclusivity(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
-			schema := SchemaDefinition{
-				Properties: map[string]PropertyDefinition{
-					"testProp": {Type: PropertyTypeAny, Required: true},
-				},
-			}
+			schema := schemahelper.ObjectSchema([]string{"testProp"}, map[string]*jsonschema.Schema{
+				"testProp": schemahelper.AnyProp(""),
+			})
 
-			resolver := NewInputResolver(ctx, schema)
+			resolver := NewInputResolver(ctx, schema, nil)
 			inputs := map[string]any{"testProp": tt.input}
 
 			_, err := resolver.ResolveInputs(inputs)
@@ -327,7 +322,7 @@ func TestInputResolver_TypeCoercion(t *testing.T) {
 	tests := []struct {
 		name       string
 		value      any
-		targetType PropertyType
+		targetType string
 		expected   any
 		wantErr    bool
 	}{
@@ -335,19 +330,19 @@ func TestInputResolver_TypeCoercion(t *testing.T) {
 		{
 			name:       "string to string",
 			value:      "test",
-			targetType: PropertyTypeString,
+			targetType: "string",
 			expected:   "test",
 		},
 		{
 			name:       "int to string",
 			value:      42,
-			targetType: PropertyTypeString,
+			targetType: "string",
 			expected:   "42",
 		},
 		{
 			name:       "bool to string",
 			value:      true,
-			targetType: PropertyTypeString,
+			targetType: "string",
 			expected:   "true",
 		},
 
@@ -355,25 +350,25 @@ func TestInputResolver_TypeCoercion(t *testing.T) {
 		{
 			name:       "int to int",
 			value:      42,
-			targetType: PropertyTypeInt,
+			targetType: "integer",
 			expected:   42,
 		},
 		{
 			name:       "string to int",
 			value:      "42",
-			targetType: PropertyTypeInt,
+			targetType: "integer",
 			expected:   42,
 		},
 		{
 			name:       "float to int",
 			value:      42.5,
-			targetType: PropertyTypeInt,
+			targetType: "integer",
 			expected:   42,
 		},
 		{
 			name:       "invalid string to int",
 			value:      "not-a-number",
-			targetType: PropertyTypeInt,
+			targetType: "integer",
 			wantErr:    true,
 		},
 
@@ -381,25 +376,25 @@ func TestInputResolver_TypeCoercion(t *testing.T) {
 		{
 			name:       "float to float",
 			value:      42.5,
-			targetType: PropertyTypeFloat,
+			targetType: "number",
 			expected:   42.5,
 		},
 		{
 			name:       "string to float",
 			value:      "42.5",
-			targetType: PropertyTypeFloat,
+			targetType: "number",
 			expected:   42.5,
 		},
 		{
 			name:       "int to float",
 			value:      42,
-			targetType: PropertyTypeFloat,
+			targetType: "number",
 			expected:   42.0,
 		},
 		{
 			name:       "invalid string to float",
 			value:      "not-a-number",
-			targetType: PropertyTypeFloat,
+			targetType: "number",
 			wantErr:    true,
 		},
 
@@ -407,31 +402,31 @@ func TestInputResolver_TypeCoercion(t *testing.T) {
 		{
 			name:       "bool to bool",
 			value:      true,
-			targetType: PropertyTypeBool,
+			targetType: "boolean",
 			expected:   true,
 		},
 		{
 			name:       "string 'true' to bool",
 			value:      "true",
-			targetType: PropertyTypeBool,
+			targetType: "boolean",
 			expected:   true,
 		},
 		{
 			name:       "string 'false' to bool",
 			value:      "false",
-			targetType: PropertyTypeBool,
+			targetType: "boolean",
 			expected:   false,
 		},
 		{
 			name:       "string '1' to bool",
 			value:      "1",
-			targetType: PropertyTypeBool,
+			targetType: "boolean",
 			expected:   true,
 		},
 		{
 			name:       "invalid string to bool",
 			value:      "not-a-bool",
-			targetType: PropertyTypeBool,
+			targetType: "boolean",
 			wantErr:    true,
 		},
 
@@ -439,25 +434,25 @@ func TestInputResolver_TypeCoercion(t *testing.T) {
 		{
 			name:       "slice to array",
 			value:      []string{"a", "b", "c"},
-			targetType: PropertyTypeArray,
+			targetType: "array",
 			expected:   []string{"a", "b", "c"},
 		},
 		{
 			name:       "comma-separated string to array",
 			value:      "a,b,c",
-			targetType: PropertyTypeArray,
+			targetType: "array",
 			expected:   []string{"a", "b", "c"},
 		},
 		{
 			name:       "empty string to array",
 			value:      "",
-			targetType: PropertyTypeArray,
+			targetType: "array",
 			expected:   []string{},
 		},
 		{
 			name:       "string with spaces to array",
 			value:      "a, b, c",
-			targetType: PropertyTypeArray,
+			targetType: "array",
 			expected:   []string{"a", "b", "c"},
 		},
 
@@ -465,7 +460,7 @@ func TestInputResolver_TypeCoercion(t *testing.T) {
 		{
 			name:       "any type preserves value",
 			value:      map[string]any{"key": "value"},
-			targetType: PropertyTypeAny,
+			targetType: "",
 			expected:   map[string]any{"key": "value"},
 		},
 	}
@@ -489,49 +484,41 @@ func TestInputResolver_TypeCoercion(t *testing.T) {
 func TestInputResolver_RequiredProperties(t *testing.T) {
 	tests := []struct {
 		name    string
-		schema  SchemaDefinition
+		schema  *jsonschema.Schema
 		inputs  map[string]any
 		wantErr bool
 		errMsg  string
 	}{
 		{
 			name: "required property provided",
-			schema: SchemaDefinition{
-				Properties: map[string]PropertyDefinition{
-					"name": {Type: PropertyTypeString, Required: true},
-				},
-			},
+			schema: schemahelper.ObjectSchema([]string{"name"}, map[string]*jsonschema.Schema{
+				"name": schemahelper.StringProp(""),
+			}),
 			inputs:  map[string]any{"name": InputValue{Literal: "test"}},
 			wantErr: false,
 		},
 		{
 			name: "required property missing",
-			schema: SchemaDefinition{
-				Properties: map[string]PropertyDefinition{
-					"name": {Type: PropertyTypeString, Required: true},
-				},
-			},
+			schema: schemahelper.ObjectSchema([]string{"name"}, map[string]*jsonschema.Schema{
+				"name": schemahelper.StringProp(""),
+			}),
 			inputs:  map[string]any{},
 			wantErr: true,
 			errMsg:  "required property \"name\" is missing",
 		},
 		{
 			name: "required property with default",
-			schema: SchemaDefinition{
-				Properties: map[string]PropertyDefinition{
-					"name": {Type: PropertyTypeString, Required: true, Default: "default-name"},
-				},
-			},
+			schema: schemahelper.ObjectSchema([]string{"name"}, map[string]*jsonschema.Schema{
+				"name": schemahelper.StringProp("", schemahelper.WithDefault("default-name")),
+			}),
 			inputs:  map[string]any{},
 			wantErr: false,
 		},
 		{
 			name: "optional property missing",
-			schema: SchemaDefinition{
-				Properties: map[string]PropertyDefinition{
-					"name": {Type: PropertyTypeString, Required: false},
-				},
-			},
+			schema: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+				"name": schemahelper.StringProp(""),
+			}),
 			inputs:  map[string]any{},
 			wantErr: false,
 		},
@@ -540,7 +527,7 @@ func TestInputResolver_RequiredProperties(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
-			resolver := NewInputResolver(ctx, tt.schema)
+			resolver := NewInputResolver(ctx, tt.schema, nil)
 
 			_, err := resolver.ResolveInputs(tt.inputs)
 			if tt.wantErr {
@@ -555,43 +542,37 @@ func TestInputResolver_RequiredProperties(t *testing.T) {
 
 func TestInputResolver_SecretRedaction(t *testing.T) {
 	tests := []struct {
-		name     string
-		propDef  PropertyDefinition
-		input    InputValue
-		wantMask bool
+		name            string
+		schema          *jsonschema.Schema
+		sensitiveFields []string
+		input           InputValue
+		wantMask        bool
 	}{
 		{
 			name: "secret property with invalid rslvr",
-			propDef: PropertyDefinition{
-				Type:     PropertyTypeString,
-				Required: true,
-				IsSecret: true,
-			},
-			input:    InputValue{Rslvr: "nonexistent"},
-			wantMask: true,
+			schema: schemahelper.ObjectSchema([]string{"testProp"}, map[string]*jsonschema.Schema{
+				"testProp": schemahelper.StringProp(""),
+			}),
+			sensitiveFields: []string{"testProp"},
+			input:           InputValue{Rslvr: "nonexistent"},
+			wantMask:        true,
 		},
 		{
 			name: "non-secret property with invalid rslvr",
-			propDef: PropertyDefinition{
-				Type:     PropertyTypeString,
-				Required: true,
-				IsSecret: false,
-			},
-			input:    InputValue{Rslvr: "nonexistent"},
-			wantMask: false,
+			schema: schemahelper.ObjectSchema([]string{"testProp"}, map[string]*jsonschema.Schema{
+				"testProp": schemahelper.StringProp(""),
+			}),
+			sensitiveFields: nil,
+			input:           InputValue{Rslvr: "nonexistent"},
+			wantMask:        false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
-			schema := SchemaDefinition{
-				Properties: map[string]PropertyDefinition{
-					"testProp": tt.propDef,
-				},
-			}
 
-			resolver := NewInputResolver(ctx, schema)
+			resolver := NewInputResolver(ctx, tt.schema, tt.sensitiveFields)
 			inputs := map[string]any{"testProp": tt.input}
 
 			_, err := resolver.ResolveInputs(inputs)
@@ -721,6 +702,24 @@ func TestInputResolver_NormalizeInputMap(t *testing.T) {
 			name:      "invalid input type",
 			rawInputs: "not a map",
 			wantErr:   true,
+		},
+		{
+			name: "map without form keys treated as literal",
+			rawInputs: map[string]any{
+				"prop1": map[string]any{"message": "hello", "count": 42},
+			},
+			expected: map[string]InputValue{
+				"prop1": {Literal: map[string]any{"message": "hello", "count": 42}},
+			},
+		},
+		{
+			name: "nested map without form keys treated as literal",
+			rawInputs: map[string]any{
+				"prop1": map[string]any{"nested": map[string]any{"key": "value"}},
+			},
+			expected: map[string]InputValue{
+				"prop1": {Literal: map[string]any{"nested": map[string]any{"key": "value"}}},
+			},
 		},
 	}
 

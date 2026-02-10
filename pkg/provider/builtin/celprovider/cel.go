@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package celprovider
 
 import (
@@ -6,9 +9,11 @@ import (
 	"maps"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/ptrs"
 )
 
@@ -41,46 +46,21 @@ func NewCelProvider() *CelProvider {
 				provider.CapabilityTransform,
 				provider.CapabilityAction,
 			},
-			Schema: provider.SchemaDefinition{
-				Properties: map[string]provider.PropertyDefinition{
-					"expression": {
-						Type:        provider.PropertyTypeString,
-						Description: "CEL expression to evaluate. Resolver data is available under the '_' variable (e.g., _.name).",
-						Required:    true,
-						Example:     "_.name.upperAscii()",
-						MaxLength:   ptrs.IntPtr(8192),
-					},
-					"variables": {
-						Type:        provider.PropertyTypeAny,
-						Description: "Additional variables to make available in the CEL expression context",
-						Required:    false,
-						Example:     map[string]any{"prefix": "Mr.", "suffix": "Jr."},
-					},
-				},
-			},
-			OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
-				provider.CapabilityTransform: {
-					Properties: map[string]provider.PropertyDefinition{
-						"result": {
-							Type:        provider.PropertyTypeAny,
-							Description: "The evaluation result",
-							Example:     "HELLO WORLD",
-						},
-					},
-				},
-				provider.CapabilityAction: {
-					Properties: map[string]provider.PropertyDefinition{
-						"success": {
-							Type:        provider.PropertyTypeBool,
-							Description: "Whether the CEL expression evaluated successfully",
-						},
-						"result": {
-							Type:        provider.PropertyTypeAny,
-							Description: "The evaluation result",
-							Example:     "HELLO WORLD",
-						},
-					},
-				},
+			Schema: schemahelper.ObjectSchema([]string{"expression"}, map[string]*jsonschema.Schema{
+				"expression": schemahelper.StringProp("CEL expression to evaluate. Resolver data is available under the '_' variable (e.g., _.name).",
+					schemahelper.WithExample("_.name.upperAscii()"),
+					schemahelper.WithMaxLength(*ptrs.IntPtr(8192))),
+				"variables": schemahelper.AnyProp("Additional variables to make available in the CEL expression context",
+					schemahelper.WithExample(map[string]any{"prefix": "Mr.", "suffix": "Jr."})),
+			}),
+			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+				provider.CapabilityTransform: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"result": schemahelper.AnyProp("The evaluation result", schemahelper.WithExample("HELLO WORLD")),
+				}),
+				provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"success": schemahelper.BoolProp("Whether the CEL expression evaluated successfully"),
+					"result":  schemahelper.AnyProp("The evaluation result", schemahelper.WithExample("HELLO WORLD")),
+				}),
 			},
 			Examples: []provider.Example{
 				{

@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package gotmplprovider
 
 import (
@@ -7,9 +10,11 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/ptrs"
 )
 
@@ -44,76 +49,35 @@ func NewGoTemplateProvider() *GoTemplateProvider {
 				provider.CapabilityTransform,
 				provider.CapabilityAction,
 			},
-			Schema: provider.SchemaDefinition{
-				Properties: map[string]provider.PropertyDefinition{
-					"template": {
-						Type:        provider.PropertyTypeString,
-						Description: "Go template content to render. Resolver data is available as the root context (e.g., .name, .config.host). Use {{.fieldName}} to access values.",
-						Required:    true,
-						Example:     "Hello, {{.name}}!",
-						MaxLength:   ptrs.IntPtr(65536),
-					},
-					"name": {
-						Type:        provider.PropertyTypeString,
-						Description: "Name for the template, used in error messages and logging",
-						Required:    true,
-						Example:     "greeting-template",
-						MaxLength:   ptrs.IntPtr(255),
-					},
-					"missingKey": {
-						Type:        provider.PropertyTypeString,
-						Description: "Behavior when a map key is missing: 'default' (prints <no value>), 'zero' (returns zero value), 'error' (stops with error)",
-						Required:    false,
-						Default:     "default",
-						Example:     "error",
-						Enum:        []any{"default", "zero", "error"},
-					},
-					"leftDelim": {
-						Type:        provider.PropertyTypeString,
-						Description: "Left action delimiter (default: '{{'). Change this if your template content contains literal {{",
-						Required:    false,
-						Default:     "{{",
-						Example:     "<%",
-						MaxLength:   ptrs.IntPtr(10),
-					},
-					"rightDelim": {
-						Type:        provider.PropertyTypeString,
-						Description: "Right action delimiter (default: '}}'). Change this if your template content contains literal }}",
-						Required:    false,
-						Default:     "}}",
-						Example:     "%>",
-						MaxLength:   ptrs.IntPtr(10),
-					},
-					"data": {
-						Type:        provider.PropertyTypeAny,
-						Description: "Additional data to merge with resolver context. These values are accessible alongside resolver data in the template.",
-						Required:    false,
-					},
-				},
-			},
-			OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
-				provider.CapabilityTransform: {
-					Properties: map[string]provider.PropertyDefinition{
-						"result": {
-							Type:        provider.PropertyTypeString,
-							Description: "The rendered template output",
-							Example:     "Hello, World!",
-						},
-					},
-				},
-				provider.CapabilityAction: {
-					Properties: map[string]provider.PropertyDefinition{
-						"success": {
-							Type:        provider.PropertyTypeBool,
-							Description: "Whether the template rendered successfully",
-						},
-						"result": {
-							Type:        provider.PropertyTypeString,
-							Description: "The rendered template output",
-							Example:     "Hello, World!",
-						},
-					},
-				},
+			Schema: schemahelper.ObjectSchema([]string{"template", "name"}, map[string]*jsonschema.Schema{
+				"template": schemahelper.StringProp("Go template content to render. Resolver data is available as the root context (e.g., .name, .config.host). Use {{.fieldName}} to access values.",
+					schemahelper.WithExample("Hello, {{.name}}!"),
+					schemahelper.WithMaxLength(*ptrs.IntPtr(65536))),
+				"name": schemahelper.StringProp("Name for the template, used in error messages and logging",
+					schemahelper.WithExample("greeting-template"),
+					schemahelper.WithMaxLength(*ptrs.IntPtr(255))),
+				"missingKey": schemahelper.StringProp("Behavior when a map key is missing: 'default' (prints <no value>), 'zero' (returns zero value), 'error' (stops with error)",
+					schemahelper.WithDefault("default"),
+					schemahelper.WithExample("error"),
+					schemahelper.WithEnum("default", "zero", "error")),
+				"leftDelim": schemahelper.StringProp("Left action delimiter (default: '{{'). Change this if your template content contains literal {{",
+					schemahelper.WithDefault("{{"),
+					schemahelper.WithExample("<%"),
+					schemahelper.WithMaxLength(*ptrs.IntPtr(10))),
+				"rightDelim": schemahelper.StringProp("Right action delimiter (default: '}}'). Change this if your template content contains literal }}",
+					schemahelper.WithDefault("}}"),
+					schemahelper.WithExample("%>"),
+					schemahelper.WithMaxLength(*ptrs.IntPtr(10))),
+				"data": schemahelper.AnyProp("Additional data to merge with resolver context. These values are accessible alongside resolver data in the template."),
+			}),
+			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+				provider.CapabilityTransform: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"result": schemahelper.StringProp("The rendered template output", schemahelper.WithExample("Hello, World!")),
+				}),
+				provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"success": schemahelper.BoolProp("Whether the template rendered successfully"),
+					"result":  schemahelper.StringProp("The rendered template output", schemahelper.WithExample("Hello, World!")),
+				}),
 			},
 			Tags: []string{"template", "go-template", "text/template", "transform", "render"},
 			// ExtractDependencies extracts resolver references from the template input,

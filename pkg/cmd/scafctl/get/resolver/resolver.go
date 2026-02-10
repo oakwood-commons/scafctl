@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package resolver
 
 import (
@@ -10,9 +13,10 @@ import (
 // CommandResolver creates the get resolver command
 func CommandResolver(cliParams *settings.Run, ioStreams *terminal.IOStreams, binaryName string) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "resolver",
-		Aliases: []string{"resolvers", "res"},
-		Short:   "Get resolver information",
+		Use:          "resolver",
+		Aliases:      []string{"resolvers", "res"},
+		Short:        "Get resolver information",
+		SilenceUsage: true,
 		Long: heredoc.Doc(`
 			Get information about resolvers.
 

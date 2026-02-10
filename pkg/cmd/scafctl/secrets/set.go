@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package secrets
 
 import (
@@ -6,6 +9,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -39,22 +43,29 @@ If the secret already exists, use --overwrite to replace it.`,
 
 			// Validate name
 			if err := ValidateUserSecretName(name); err != nil {
-				return err
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
 			store, err := secrets.New()
 			if err != nil {
-				return fmt.Errorf("failed to initialize secrets store: %w", err)
+				err := fmt.Errorf("failed to initialize secrets store: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.ConfigError)
 			}
 
 			// Check if secret exists
 			exists, err := store.Exists(ctx, name)
 			if err != nil {
-				return fmt.Errorf("failed to check if secret exists: %w", err)
+				err := fmt.Errorf("failed to check if secret exists: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
 			if exists && !overwriteFlag {
-				return fmt.Errorf("secret '%s' already exists. Use --overwrite to replace it", name)
+				err := fmt.Errorf("secret '%s' already exists. Use --overwrite to replace it", name)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
 			// Determine value source
@@ -77,7 +88,9 @@ If the secret already exists, use --overwrite to replace it.`,
 			if fileFlag != "" {
 				fileData, err := os.ReadFile(fileFlag)
 				if err != nil {
-					return fmt.Errorf("failed to read file '%s': %w", fileFlag, err)
+					err := fmt.Errorf("failed to read file '%s': %w", fileFlag, err)
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.FileNotFound)
 				}
 				value = fileData
 				sourceCount++
@@ -93,7 +106,9 @@ If the secret already exists, use --overwrite to replace it.`,
 						reader := bufio.NewReader(ioStreams.In)
 						stdinData, err := io.ReadAll(reader)
 						if err != nil {
-							return fmt.Errorf("failed to read from stdin: %w", err)
+							err := fmt.Errorf("failed to read from stdin: %w", err)
+							w.Errorf("%v", err)
+							return exitcode.WithCode(err, exitcode.GeneralError)
 						}
 						value = stdinData
 						sourceCount++
@@ -102,16 +117,22 @@ If the secret already exists, use --overwrite to replace it.`,
 			}
 
 			if sourceCount == 0 {
-				return fmt.Errorf("no value provided. Use argument, --value, --file, or pipe to stdin")
+				err := fmt.Errorf("no value provided. Use argument, --value, --file, or pipe to stdin")
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
 			if sourceCount > 1 {
-				return fmt.Errorf("multiple value sources provided. Use only one of: argument, --value, --file, or stdin")
+				err := fmt.Errorf("multiple value sources provided. Use only one of: argument, --value, --file, or stdin")
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
 			// Store the secret
 			if err := store.Set(ctx, name, value); err != nil {
-				return fmt.Errorf("failed to set secret '%s': %w", name, err)
+				err := fmt.Errorf("failed to set secret '%s': %w", name, err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
 			if exists {

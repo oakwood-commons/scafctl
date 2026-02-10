@@ -28,13 +28,12 @@ scafctl <verb> <kind> <name[@version(or constraint)]> [flags]
 | `secrets *` | ✅ Implemented | list, get, set, delete, exists, export, import, rotate |
 | `auth *` | ✅ Implemented | login, logout, status, token |
 | `resolver graph` | ✅ Implemented | Standalone graph visualization |
-| `build solution/plugin` | 📋 Planned | Catalog feature |
-| `push solution/plugin` | 📋 Planned | Catalog feature |
-| `pull solution/plugin` | 📋 Planned | Catalog feature |
-| `inspect solution/plugin` | 📋 Planned | Catalog feature |
+| `build solution` | ✅ Implemented | Catalog feature |
+| `catalog list/inspect/delete/prune` | ✅ Implemented | Catalog management |
+| `catalog save/load` | ✅ Implemented | Offline distribution |
+| `push solution/plugin` | 📋 Planned | Remote catalog feature |
+| `pull solution/plugin` | 📋 Planned | Remote catalog feature |
 | `tag solution/plugin` | 📋 Planned | Catalog feature |
-| `save/load` | 📋 Planned | Offline distribution |
-| `delete solution` | 📋 Planned | Catalog feature |
 | `--catalog` flag | 📋 Planned | Catalog feature |
 | Version constraints (`@^1.2`) | 📋 Planned | Requires catalog |
 
@@ -368,10 +367,10 @@ scafctl snapshot diff before.json after.json
 
 ## Working With the Catalog
 
-> **Status**: 📋 Planned - Catalog functionality is not yet implemented.
-> Currently, solutions are loaded from local files using `-f/--file`.
+> **Status**: ✅ Implemented - Local catalog with build, list, inspect, delete, prune, save, and load.
+> Remote push/pull planned for Phase 2.
 
-Run a solution directly from a catalog:
+Run a solution directly from the catalog:
 
 ~~~bash
 scafctl run solution example@1.7.0
@@ -379,19 +378,41 @@ scafctl run solution example@1.7.0
 
 ### Building Artifacts
 
-> **Status**: 📋 Planned
+> **Status**: ✅ Implemented
 
-Build a solution or plugin for the local catalog (analogous to `docker build`):
+Build a solution for the local catalog (analogous to `docker build`):
 
 ~~~bash
 # Build a solution from file
-scafctl build solution -f ./solution.yaml
+scafctl build solution ./solution.yaml --version 1.0.0
 
-# Build a plugin
-scafctl build plugin -f ./plugin-config.yaml
+# Build using version from metadata
+scafctl build solution ./solution.yaml
+
+# Overwrite existing version
+scafctl build solution ./solution.yaml --version 1.0.0 --force
 ~~~
 
-The build process validates, resolves dependencies, and packages artifacts into the local catalog.
+The build process validates, resolves dependencies, bundles local files, vendors catalog dependencies, and packages artifacts into the local catalog. See [catalog-build-bundling.md](../design/catalog-build-bundling.md) for the full bundling design.
+
+Additional build flags:
+
+~~~bash
+# Dry-run: show what would be bundled without building
+scafctl build solution ./solution.yaml --dry-run
+
+# Skip file bundling (legacy single-layer artifact)
+scafctl build solution ./solution.yaml --no-bundle
+
+# Skip vendoring catalog dependencies
+scafctl build solution ./solution.yaml --no-vendor
+
+# Set max bundle size
+scafctl build solution ./solution.yaml --bundle-max-size 100MB
+
+# Re-resolve and update the lock file
+scafctl build solution ./solution.yaml --update-lock
+~~~
 
 ### Publishing Artifacts
 
@@ -426,16 +447,19 @@ scafctl pull plugin aws-provider@1.5.0
 
 ### Inspecting Artifacts
 
-> **Status**: 📋 Planned
+> **Status**: ✅ Implemented
 
 View artifact metadata, dependencies, and structure:
 
 ~~~bash
-# Inspect a solution
-scafctl inspect solution example@1.7.0
+# Inspect a solution (latest version)
+scafctl catalog inspect example
 
-# Inspect a plugin (shows available providers)
-scafctl inspect plugin aws-provider@1.5.0
+# Inspect specific version
+scafctl catalog inspect example@1.7.0
+
+# JSON output
+scafctl catalog inspect example -o json
 ~~~
 
 ### Tagging Artifacts
@@ -454,34 +478,38 @@ scafctl tag plugin aws-provider@1.5.0 aws-provider:stable
 
 ### Offline Distribution
 
-> **Status**: 📋 Planned
+> **Status**: ✅ Implemented
 
 Export and import artifacts for air-gapped environments (analogous to `docker save/load`):
 
 ~~~bash
-# Save a solution with dependencies
-scafctl save solution my-solution@1.2.3 -o solution.tar
+# Save a solution (exports latest version by default)
+scafctl catalog save my-solution -o solution.tar
 
-# Save a plugin
-scafctl save plugin aws-provider@1.5.0 -o plugin.tar
+# Save specific version
+scafctl catalog save my-solution@1.2.3 -o solution.tar
 
 # Load from archive
-scafctl load -i solution.tar
-scafctl load -i plugin.tar
+scafctl catalog load --input solution.tar
+
+# Force overwrite if artifact already exists
+scafctl catalog load --input solution.tar --force
 ~~~
 
-### Deleting Solutions
+The archive uses OCI Image Layout format, making it compatible with OCI registry tools.
 
-> **Status**: 📋 Planned
+### Deleting Artifacts
 
-Remove a solution from a catalog:
+> **Status**: ✅ Implemented
+
+Remove an artifact from the local catalog:
 
 ~~~bash
-# Delete specific version
-scafctl delete solution example@1.7.0
+# Delete specific version (version required)
+scafctl catalog delete example@1.7.0
 
-# Delete from specific catalog
-scafctl delete solution example@1.7.0 --catalog=staging
+# Prune orphaned blobs after deletion
+scafctl catalog prune
 ~~~
 
 ### Catalog Resolution

@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package config
 
 import (
@@ -10,6 +13,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -124,7 +128,9 @@ func (o *PathsOptions) Run(ctx context.Context) error {
 
 		// Validate platform
 		if !slices.Contains(supportedPlatforms, targetPlatform) {
-			return fmt.Errorf("unsupported platform %q; supported platforms: linux, darwin (or macos), windows", o.Platform)
+			err := fmt.Errorf("unsupported platform %q; supported platforms: linux, darwin (or macos), windows", o.Platform)
+			w.Errorf("%v", err)
+			return exitcode.WithCode(err, exitcode.InvalidInput)
 		}
 
 		// Check if it's different from current platform

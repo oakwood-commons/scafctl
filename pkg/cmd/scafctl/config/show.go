@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package config
 
 import (
@@ -9,6 +12,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc/v2"
 	appconfig "github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -90,7 +94,8 @@ func (o *ShowOptions) Run(ctx context.Context) error {
 	mgr := appconfig.NewManager(o.ConfigPath)
 	cfg, err := mgr.Load()
 	if err != nil {
-		return err
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.ConfigError)
 	}
 
 	// Determine config file path
@@ -99,7 +104,9 @@ func (o *ShowOptions) Run(ctx context.Context) error {
 		var err error
 		configPath, err = paths.ConfigFile()
 		if err != nil {
-			return fmt.Errorf("failed to determine config path: %w", err)
+			err = fmt.Errorf("failed to determine config path: %w", err)
+			w.Errorf("%v", err)
+			return exitcode.WithCode(err, exitcode.ConfigError)
 		}
 	}
 
@@ -134,7 +141,9 @@ func (o *ShowOptions) Run(ctx context.Context) error {
 	// Marshal and print config
 	output, err := yaml.Marshal(cfg)
 	if err != nil {
-		return fmt.Errorf("failed to marshal config: %w", err)
+		err = fmt.Errorf("failed to marshal config: %w", err)
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
 	w.Plainf("%s", string(output))

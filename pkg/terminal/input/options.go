@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package input
 
 // ConfirmOptions configures the behavior of Confirm prompts.

@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package provider
 
 import (
@@ -7,12 +10,15 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -129,7 +135,11 @@ func (o *Options) RunListProviders(ctx context.Context) error {
 	// Interactive mode (-i): launch custom TUI
 	if o.Interactive {
 		if !kvx.IsTerminal(o.IOStreams.Out) {
-			return fmt.Errorf("interactive mode requires a terminal")
+			err := fmt.Errorf("interactive mode requires a terminal")
+			if w := writer.FromContext(ctx); w != nil {
+				w.Errorf("%v", err)
+			}
+			return exitcode.WithCode(err, exitcode.InvalidInput)
 		}
 		return RunTUI(filtered, o.IOStreams.Out)
 	}
@@ -163,7 +173,11 @@ func (o *Options) RunGetProvider(ctx context.Context, name string) error {
 	reg := o.getRegistry()
 	p, ok := reg.Get(name)
 	if !ok {
-		return fmt.Errorf("provider %q not found", name)
+		err := fmt.Errorf("provider %q not found", name)
+		if w := writer.FromContext(ctx); w != nil {
+			w.Errorf("%v", err)
+		}
+		return exitcode.WithCode(err, exitcode.FileNotFound)
 	}
 
 	desc := p.Descriptor()
@@ -264,20 +278,29 @@ func (o *Options) printProviderDetail(desc *provider.Descriptor) error {
 	}
 
 	// Schema properties
-	if len(desc.Schema.Properties) > 0 {
+	if desc.Schema != nil && len(desc.Schema.Properties) > 0 {
+		// Build required set
+		requiredSet := make(map[string]bool, len(desc.Schema.Required))
+		for _, name := range desc.Schema.Required {
+			requiredSet[name] = true
+		}
 		fmt.Fprintln(out)
 		fmt.Fprintf(out, "%s\n", keyStyle("Schema Properties:"))
 		for name, prop := range desc.Schema.Properties {
 			required := ""
-			if prop.Required {
+			if requiredSet[name] {
 				required = warnStyle(" *")
 			}
-			fmt.Fprintf(out, "  %s %s%s\n", keyStyle(name), dimStyle("("+string(prop.Type)+")"), required)
+			typeStr := prop.Type
+			if typeStr == "" {
+				typeStr = "any"
+			}
+			fmt.Fprintf(out, "  %s %s%s\n", keyStyle(name), dimStyle("("+typeStr+")"), required)
 			if prop.Description != "" {
 				fmt.Fprintf(out, "    %s\n", dimStyle(prop.Description))
 			}
 			if prop.Default != nil {
-				fmt.Fprintf(out, "    %s %v\n", dimStyle("Default:"), prop.Default)
+				fmt.Fprintf(out, "    %s %s\n", dimStyle("Default:"), string(prop.Default))
 			}
 			if len(prop.Enum) > 0 {
 				enumStrs := make([]string, len(prop.Enum))
@@ -295,10 +318,16 @@ func (o *Options) printProviderDetail(desc *provider.Descriptor) error {
 		fmt.Fprintf(out, "%s\n", keyStyle("Output Schemas:"))
 		for cap, schema := range desc.OutputSchemas {
 			fmt.Fprintf(out, "  %s\n", capStyle(string(cap)))
-			for name, prop := range schema.Properties {
-				fmt.Fprintf(out, "    %s %s\n", name, dimStyle("("+string(prop.Type)+")"))
-				if prop.Description != "" {
-					fmt.Fprintf(out, "      %s\n", dimStyle(prop.Description))
+			if schema != nil {
+				for name, prop := range schema.Properties {
+					typeStr := prop.Type
+					if typeStr == "" {
+						typeStr = "any"
+					}
+					fmt.Fprintf(out, "    %s %s\n", name, dimStyle("("+typeStr+")"))
+					if prop.Description != "" {
+						fmt.Fprintf(out, "      %s\n", dimStyle(prop.Description))
+					}
 				}
 			}
 		}
@@ -411,7 +440,7 @@ func buildProviderDetail(desc provider.Descriptor) map[string]any {
 	}
 
 	// Add schema information
-	if len(desc.Schema.Properties) > 0 {
+	if desc.Schema != nil && len(desc.Schema.Properties) > 0 {
 		output["schema"] = buildSchemaOutput(desc.Schema)
 	}
 
@@ -464,28 +493,36 @@ func buildProviderDetail(desc provider.Descriptor) map[string]any {
 	return output
 }
 
-// buildSchemaOutput converts SchemaDefinition to a map for output
-func buildSchemaOutput(schema provider.SchemaDefinition) map[string]any {
-	if len(schema.Properties) == 0 {
+// buildSchemaOutput converts a JSON Schema to a map for output
+func buildSchemaOutput(schema *jsonschema.Schema) map[string]any {
+	if schema == nil || len(schema.Properties) == 0 {
 		return nil
+	}
+
+	// Build required set
+	requiredSet := make(map[string]bool, len(schema.Required))
+	for _, name := range schema.Required {
+		requiredSet[name] = true
 	}
 
 	properties := make(map[string]any)
 	for name, prop := range schema.Properties {
 		propMap := map[string]any{
-			"type": string(prop.Type),
+			"type": prop.Type,
 		}
 		if prop.Description != "" {
 			propMap["description"] = prop.Description
 		}
-		if prop.Required {
+		if requiredSet[name] {
 			propMap["required"] = true
 		}
 		if prop.Default != nil {
-			propMap["default"] = prop.Default
+			var def any
+			_ = json.Unmarshal(prop.Default, &def)
+			propMap["default"] = def
 		}
-		if prop.Example != nil {
-			propMap["example"] = prop.Example
+		if len(prop.Examples) > 0 {
+			propMap["example"] = prop.Examples[0]
 		}
 		if len(prop.Enum) > 0 {
 			propMap["enum"] = prop.Enum

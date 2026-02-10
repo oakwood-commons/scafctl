@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package schema
 
 import (
@@ -5,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
@@ -202,13 +206,13 @@ and optionally a workflow that defines actions to execute.`,
 		TypeInstance: (*solution.Spec)(nil),
 	})
 
-	// PropertyDefinition (provider schema property)
+	// Schema (JSON Schema for provider properties)
 	_ = RegisterKind(&KindDefinition{
-		Name:    "property",
-		Aliases: []string{"properties", "prop"},
-		Description: `PropertyDefinition describes a single property for a provider.
-It defines the property's type, validation rules, and documentation.`,
-		TypeInstance: (*provider.PropertyDefinition)(nil),
+		Name:    "schema",
+		Aliases: []string{"properties", "property", "prop"},
+		Description: `Schema defines the JSON Schema for provider input and output properties.
+It uses the standard JSON Schema specification to define types, validation rules, and documentation.`,
+		TypeInstance: (*jsonschema.Schema)(nil),
 	})
 
 	// RetryConfig
