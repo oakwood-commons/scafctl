@@ -12,8 +12,8 @@ CLI tool using CEL (Common Expression Language) for dynamic configuration evalua
 Explore the documentation:
 
 - **[Tutorials](tutorials/)** — Step-by-step guides for learning scafctl features
-- **[Design](design/)** — Architecture and design documentation
-- **[Development](internal/)** — Contributor documentation and implementation details
+- **[Design](design/)** — Architecture, design, and contributor documentation
+- **[Hugo Guide](hugo-guide.md)** — How to work on the documentation site
 
 ## Examples
 

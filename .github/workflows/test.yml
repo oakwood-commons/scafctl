@@ -47,10 +47,14 @@ jobs:
       
       - name: Run tests
         run: task test
+        env:
+          SCAFCTL_SECRET_KEY: dGVzdC1zZWNyZXQta2V5LWZvci1jaS0xMjM0NTY3OA==
       
       - name: Run tests with coverage
         run: task test-cover
         if: matrix.os == 'ubuntu-latest'
+        env:
+          SCAFCTL_SECRET_KEY: dGVzdC1zZWNyZXQta2V5LWZvci1jaS0xMjM0NTY3OA==
       
       - name: Upload coverage
         uses: codecov/codecov-action@v4
