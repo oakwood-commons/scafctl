@@ -15,6 +15,9 @@ spec:
           - provider: parameter
             inputs:
               key: dry-run
+          - provider: static
+            inputs:
+              value: false
 
     environment:
       description: Deployment environment
@@ -23,9 +26,6 @@ spec:
           - provider: parameter
             inputs:
               key: environment
-          - provider: env
-            inputs:
-              key: SCAFCTL_ENV
           - provider: static
             inputs:
               value: dev
@@ -33,7 +33,7 @@ spec:
         with:
           - provider: cel
             inputs:
-              expression: "__self.toLowerCase()"
+              expression: "__self.lowerAscii()"
       validate:
         with:
           - provider: validation
@@ -48,9 +48,9 @@ spec:
           - provider: parameter
             inputs:
               key: emailFrom
-          - provider: env
+          - provider: static
             inputs:
-              key: EMAIL_FROM
+              value: noreply@example.com
       validate:
         with:
           - provider: validation
@@ -65,9 +65,9 @@ spec:
           - provider: parameter
             inputs:
               key: emailTo
-          - provider: env
+          - provider: static
             inputs:
-              key: EMAIL_TO
+              value: team@example.com
       validate:
         with:
           - provider: validation
@@ -99,19 +99,13 @@ spec:
 
   actions:
     sendEmail:
-      description: Send an email notification
-      provider: email
+      description: Send an email notification (simulated with echo)
+      provider: exec
       when:
         expr: "_.environment != \"dev\""
       inputs:
-        from:
-          rslvr: emailFrom
-        to:
-          rslvr: emailTo
-        subject:
-          rslvr: subject
-        body:
-          rslvr: body
+        cmd:
+          expr: "'echo Sending email from ' + _.emailFrom + ' to ' + _.emailTo + ' subject: ' + _.subject"
 
     renderPreview:
       description: Render email payload without sending

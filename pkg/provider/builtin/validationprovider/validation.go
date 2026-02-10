@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package validationprovider
 
 import (
@@ -6,9 +9,11 @@ import (
 	"regexp"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 )
 
 // ProviderName is the name of this provider.
@@ -21,7 +26,6 @@ type ValidationProvider struct {
 
 // NewValidationProvider creates a new validation provider instance.
 func NewValidationProvider() *ValidationProvider {
-	maxPatternLength := 1000
 	version := semver.MustParse("1.0.0")
 
 	return &ValidationProvider{
@@ -37,73 +41,32 @@ func NewValidationProvider() *ValidationProvider {
 				provider.CapabilityValidation,
 				provider.CapabilityTransform,
 			},
-			Schema: provider.SchemaDefinition{
-				Properties: map[string]provider.PropertyDefinition{
-					"value": {
-						Type:        provider.PropertyTypeString,
-						Required:    false,
-						Description: "Value to validate (if not using __self from transform context)",
-						Example:     "my-value",
-					},
-					"match": {
-						Type:        provider.PropertyTypeString,
-						Required:    false,
-						Description: "Regex pattern that must match the value",
-						Example:     "^[a-z0-9-]+$",
-						MaxLength:   &maxPatternLength,
-					},
-					"notMatch": {
-						Type:        provider.PropertyTypeString,
-						Required:    false,
-						Description: "Regex pattern that must NOT match the value",
-						Example:     "^test-",
-						MaxLength:   &maxPatternLength,
-					},
-					"expression": {
-						Type:        provider.PropertyTypeString,
-						Required:    false,
-						Description: "CEL expression that must evaluate to true (has access to __self for the value being validated and _ for resolver data)",
-						Example:     "__self in _.allowedEnvironments",
-						MaxLength:   &maxPatternLength,
-					},
-					"message": {
-						Type:        provider.PropertyTypeString,
-						Required:    false,
-						Description: "Custom error message to display when validation fails",
-						Example:     "Value must be a valid email address",
-						MaxLength:   &maxPatternLength,
-					},
-				},
-			},
-			OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
-				provider.CapabilityValidation: {
-					Properties: map[string]provider.PropertyDefinition{
-						"valid": {
-							Type:        provider.PropertyTypeBool,
-							Description: "Whether the value passed validation",
-						},
-						"errors": {
-							Type:        provider.PropertyTypeArray,
-							Description: "Validation error messages",
-						},
-						"details": {
-							Type:        provider.PropertyTypeString,
-							Description: "Details about validation failure (if any)",
-						},
-					},
-				},
-				provider.CapabilityTransform: {
-					Properties: map[string]provider.PropertyDefinition{
-						"valid": {
-							Type:        provider.PropertyTypeBool,
-							Description: "Whether the value passed validation",
-						},
-						"details": {
-							Type:        provider.PropertyTypeString,
-							Description: "Details about validation failure (if any)",
-						},
-					},
-				},
+			Schema: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+				"value": schemahelper.StringProp("Value to validate (if not using __self from transform context)",
+					schemahelper.WithExample("my-value")),
+				"match": schemahelper.StringProp("Regex pattern that must match the value",
+					schemahelper.WithExample("^[a-z0-9-]+$"),
+					schemahelper.WithMaxLength(1000)),
+				"notMatch": schemahelper.StringProp("Regex pattern that must NOT match the value",
+					schemahelper.WithExample("^test-"),
+					schemahelper.WithMaxLength(1000)),
+				"expression": schemahelper.StringProp("CEL expression that must evaluate to true (has access to __self for the value being validated and _ for resolver data)",
+					schemahelper.WithExample("__self in _.allowedEnvironments"),
+					schemahelper.WithMaxLength(1000)),
+				"message": schemahelper.StringProp("Custom error message to display when validation fails",
+					schemahelper.WithExample("Value must be a valid email address"),
+					schemahelper.WithMaxLength(1000)),
+			}),
+			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+				provider.CapabilityValidation: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"valid":   schemahelper.BoolProp("Whether the value passed validation"),
+					"errors":  schemahelper.ArrayProp("Validation error messages"),
+					"details": schemahelper.StringProp("Details about validation failure (if any)"),
+				}),
+				provider.CapabilityTransform: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"valid":   schemahelper.BoolProp("Whether the value passed validation"),
+					"details": schemahelper.StringProp("Details about validation failure (if any)"),
+				}),
 			},
 			Examples: []provider.Example{
 				{

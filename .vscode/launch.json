@@ -17,7 +17,8 @@
       "args": [
         // "version", "ddd", "--sss"
         // "run", "solution", "-f", "examples/resolver-demo.yaml", "-e", "debug.out(\"DUDE\")"
-        "auth", "status"
+        // "auth", "status"
+        "catalog", "list", "-i"
       ],
     }
   ]

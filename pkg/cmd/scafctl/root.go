@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package scafctl
 
 import (
@@ -8,6 +11,10 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/auth/entra"
 	authcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/auth"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/build"
+	bundlecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/bundle"
+	cachecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/cache"
+	catalogcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/catalog"
 	configcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/config"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/explain"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get"
@@ -17,6 +24,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/run"
 	secretscmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/snapshot"
+	vendorcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/vendor"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/version"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
@@ -195,5 +203,10 @@ func Root() *cobra.Command {
 	cCmd.AddCommand(secretscmd.CommandSecrets(cliParams, ioStreams, settings.CliBinaryName))
 	cCmd.AddCommand(authcmd.CommandAuth(cliParams, ioStreams, settings.CliBinaryName))
 	cCmd.AddCommand(lint.CommandLint(cliParams, ioStreams, settings.CliBinaryName))
+	cCmd.AddCommand(build.CommandBuild(cliParams, ioStreams, settings.CliBinaryName))
+	cCmd.AddCommand(catalogcmd.CommandCatalog(cliParams, ioStreams, settings.CliBinaryName))
+	cCmd.AddCommand(cachecmd.CommandCache(cliParams, ioStreams, settings.CliBinaryName))
+	cCmd.AddCommand(bundlecmd.CommandBundle(cliParams, ioStreams, settings.CliBinaryName))
+	cCmd.AddCommand(vendorcmd.CommandVendor(cliParams, ioStreams, settings.CliBinaryName))
 	return cCmd
 }

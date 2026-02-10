@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 // Package validate provides validation for key-value flag values based on URI scheme prefixes.
 //
 //nolint:revive // Package name validate with Validate* functions is intentional for clarity

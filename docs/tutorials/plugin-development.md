@@ -12,6 +12,8 @@ This guide explains how to create external plugins for scafctl. Plugins extend s
 - Distribute providers independently
 - Add third-party integrations
 
+> **Terminology Note**: "Plugin" refers to the go-plugin binary implementation. When distributing via the catalog, provider plugins are pushed as **provider** artifacts and auth handler plugins as **auth-handler** artifacts. Users interact with these as catalog artifact kinds, not as "plugins". See [Publishing to the Catalog](#publishing-to-the-catalog) for details.
+
 ## Architecture Overview
 
 ```
@@ -48,8 +50,10 @@ import (
     "fmt"
 
     "github.com/Masterminds/semver/v3"
+    "github.com/google/jsonschema-go/jsonschema"
     "github.com/oakwood-commons/scafctl/pkg/plugin"
     "github.com/oakwood-commons/scafctl/pkg/provider"
+    "github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 )
 
 type MyPlugin struct{}
@@ -73,32 +77,16 @@ func (p *MyPlugin) GetProviderDescriptor(ctx context.Context, name string) (*pro
                 provider.CapabilityFrom,
                 provider.CapabilityTransform,
             },
-            Schema: provider.SchemaDefinition{
-                Properties: map[string]provider.PropertyDefinition{
-                    "input": {
-                        Type:        provider.PropertyTypeString,
-                        Required:    true,
-                        Description: "The input value to process",
-                    },
-                },
-            },
-            OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
-                provider.CapabilityFrom: {
-                    Properties: map[string]provider.PropertyDefinition{
-                        "output": {
-                            Type:        provider.PropertyTypeString,
-                            Description: "The processed output",
-                        },
-                    },
-                },
-                provider.CapabilityTransform: {
-                    Properties: map[string]provider.PropertyDefinition{
-                        "output": {
-                            Type:        provider.PropertyTypeString,
-                            Description: "The transformed output",
-                        },
-                    },
-                },
+            Schema: schemahelper.ObjectSchema([]string{"input"}, map[string]*jsonschema.Schema{
+                "input": schemahelper.StringProp("The input value to process"),
+            }),
+            OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+                provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+                    "output": schemahelper.StringProp("The processed output"),
+                }),
+                provider.CapabilityTransform: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+                    "output": schemahelper.StringProp("The transformed output"),
+                }),
             },
             Category:     "custom",
             Tags:         []string{"custom", "example"},
@@ -287,8 +275,10 @@ import (
     "net/http"
 
     "github.com/Masterminds/semver/v3"
+    "github.com/google/jsonschema-go/jsonschema"
     "github.com/oakwood-commons/scafctl/pkg/plugin"
     "github.com/oakwood-commons/scafctl/pkg/provider"
+    "github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 )
 
 type SlackPlugin struct{}
@@ -313,55 +303,30 @@ func (p *SlackPlugin) GetProviderDescriptor(ctx context.Context, name string) (*
         Capabilities: []provider.Capability{
             provider.CapabilityAction,
         },
-        Schema: provider.SchemaDefinition{
-            Properties: map[string]provider.PropertyDefinition{
-                "webhookUrl": {
-                    Type:        provider.PropertyTypeString,
-                    Required:    true,
-                    Description: "Slack incoming webhook URL",
-                    Format:      "uri",
-                    IsSecret:    true,
-                },
-                "channel": {
-                    Type:        provider.PropertyTypeString,
-                    Required:    false,
-                    Description: "Channel to post to (overrides webhook default)",
-                    Example:     "#deployments",
-                },
-                "message": {
-                    Type:        provider.PropertyTypeString,
-                    Required:    true,
-                    Description: "Message text to send",
-                    MaxLength:   ptrInt(40000),
-                },
-                "username": {
-                    Type:        provider.PropertyTypeString,
-                    Required:    false,
-                    Description: "Bot username to display",
-                    Default:     "scafctl",
-                },
-                "iconEmoji": {
-                    Type:        provider.PropertyTypeString,
-                    Required:    false,
-                    Description: "Emoji to use as bot icon",
-                    Default:     ":robot_face:",
-                },
-            },
-        },
-        OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
-            provider.CapabilityAction: {
-                Properties: map[string]provider.PropertyDefinition{
-                    "success": {
-                        Type:        provider.PropertyTypeBool,
-                        Required:    true,
-                        Description: "Whether message was sent successfully",
-                    },
-                    "timestamp": {
-                        Type:        provider.PropertyTypeString,
-                        Description: "Message timestamp from Slack",
-                    },
-                },
-            },
+        SensitiveFields: []string{"webhookUrl"},
+        Schema: schemahelper.ObjectSchema([]string{"webhookUrl", "message"}, map[string]*jsonschema.Schema{
+            "webhookUrl": schemahelper.StringProp("Slack incoming webhook URL",
+                schemahelper.WithFormat("uri"),
+                schemahelper.WithWriteOnly(),
+            ),
+            "channel": schemahelper.StringProp("Channel to post to (overrides webhook default)",
+                schemahelper.WithExample("#deployments"),
+            ),
+            "message": schemahelper.StringProp("Message text to send",
+                schemahelper.WithMaxLength(40000),
+            ),
+            "username": schemahelper.StringProp("Bot username to display",
+                schemahelper.WithDefault(json.RawMessage(`"scafctl"`)),
+            ),
+            "iconEmoji": schemahelper.StringProp("Emoji to use as bot icon",
+                schemahelper.WithDefault(json.RawMessage(`":robot_face:"`)),
+            ),
+        }),
+        OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+            provider.CapabilityAction: schemahelper.ObjectSchema([]string{"success"}, map[string]*jsonschema.Schema{
+                "success":   schemahelper.BoolProp("Whether message was sent successfully"),
+                "timestamp": schemahelper.StringProp("Message timestamp from Slack"),
+            }),
         },
         MockBehavior: "Logs the message that would be sent without calling Slack API",
         Examples: []provider.Example{
@@ -422,8 +387,6 @@ func (p *SlackPlugin) ExecuteProvider(ctx context.Context, name string, input ma
         },
     }, nil
 }
-
-func ptrInt(v int) *int { return &v }
 
 func main() {
     plugin.Serve(&SlackPlugin{})
@@ -542,7 +505,7 @@ my-company-plugin         # Custom company plugin
 ## Security Considerations
 
 1. **Process isolation**: Plugins run in separate processes
-2. **Credential handling**: Use `IsSecret: true` for sensitive inputs
+2. **Credential handling**: Use `SensitiveFields: []string{"fieldName"}` on the Descriptor and `schemahelper.WithWriteOnly()` on the property for sensitive inputs
 3. **Input validation**: Always validate inputs even after schema validation
 4. **Network access**: Plugins can make network calls; review plugin sources
 5. **Handshake validation**: Plugin protocol includes version handshake
@@ -604,6 +567,44 @@ RUN go build -o plugin .
 FROM alpine:latest
 COPY --from=builder /app/plugin /plugin
 ENTRYPOINT ["/plugin"]
+```
+
+## Publishing to the Catalog
+
+Once your plugin is built, you can distribute it via the scafctl catalog as a **provider** or **auth-handler** artifact.
+
+### Build and Push a Provider
+
+```bash
+# Build the provider artifact into the local catalog
+scafctl build provider ./my-provider --version 1.0.0
+
+# Push to a remote registry
+scafctl catalog push my-provider@1.0.0 --catalog ghcr.io/myorg
+
+# The artifact is stored at: ghcr.io/myorg/providers/my-provider:1.0.0
+```
+
+### Build and Push an Auth Handler
+
+```bash
+# Build the auth handler artifact
+scafctl build auth-handler ./my-auth-handler --version 1.0.0
+
+# Push to a remote registry
+scafctl catalog push my-auth-handler@1.0.0 --catalog ghcr.io/myorg
+
+# The artifact is stored at: ghcr.io/myorg/auth-handlers/my-auth-handler:1.0.0
+```
+
+### Pull and Use
+
+```bash
+# Pull a provider from a remote registry
+scafctl catalog pull ghcr.io/myorg/providers/my-provider@1.0.0
+
+# The provider is now available locally
+scafctl catalog list --kind provider
 ```
 
 ## Next Steps

@@ -23,6 +23,10 @@ Commands returning structured data should use **kvx** with `OutputOptions`:
 ### HTTP Client
 See `pkg/httpc/README.md`
 
+### Paths
+
+- Use xdg paths via the pkg/paths package
+
 ### Configuration
 
 - Use `pkg/settings` for storing defaults and managing settings.

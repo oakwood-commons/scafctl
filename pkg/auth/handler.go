@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 // Package auth provides authentication handler interfaces and utilities for scafctl.
 // Auth handlers manage identity verification, credential storage, and token acquisition.
 // They are separate from providers - providers are stateless execution primitives,

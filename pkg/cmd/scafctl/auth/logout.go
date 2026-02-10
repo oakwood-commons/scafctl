@@ -1,9 +1,13 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package auth
 
 import (
 	"fmt"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -28,7 +32,8 @@ func CommandLogout(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comm
 			  # Logout from Entra ID
 			  scafctl auth logout entra
 		`),
-		Args: cobra.ExactArgs(1),
+		SilenceUsage: true,
+		Args:         cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			w := writer.MustFromContext(ctx)
@@ -36,18 +41,24 @@ func CommandLogout(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comm
 
 			// Validate handler name
 			if !IsSupportedHandler(handlerName) {
-				return fmt.Errorf("unknown auth handler: %s (supported: %v)", handlerName, SupportedHandlers())
+				err := fmt.Errorf("unknown auth handler: %s (supported: %v)", handlerName, SupportedHandlers())
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
 			handler, err := getEntraHandler(ctx)
 			if err != nil {
-				return fmt.Errorf("failed to initialize auth handler: %w", err)
+				err = fmt.Errorf("failed to initialize auth handler: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
 			// Check if authenticated first
 			status, err := handler.Status(ctx)
 			if err != nil {
-				return fmt.Errorf("failed to check auth status: %w", err)
+				err = fmt.Errorf("failed to check auth status: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
 			if !status.Authenticated {
@@ -56,7 +67,9 @@ func CommandLogout(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comm
 			}
 
 			if err := handler.Logout(ctx); err != nil {
-				return fmt.Errorf("logout failed: %w", err)
+				err = fmt.Errorf("logout failed: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
 			w.Success("Successfully logged out from Entra ID.")

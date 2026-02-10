@@ -24,8 +24,19 @@ scafctl run solution -f examples/actions/hello-world.yaml -v
 | [actions/](actions/) | Workflow automation with actions |
 | [resolvers/](resolvers/) | Dynamic value resolution patterns |
 | [solutions/](solutions/) | Complete end-to-end solution examples |
+| [snapshots/](snapshots/) | Execution snapshot capture and comparison |
+| [catalog/](catalog/) | Catalog bundling and registry examples |
 | [config/](config/) | Configuration file examples |
-| [plugins/](plugins/) | Custom plugin examples |
+| [plugins/](plugins/) | go-plugin source code examples (see note below) |
+
+> **Terminology Note**: The `plugins/` directory contains go-plugin source code for developing custom providers. When distributing via the catalog, these are pushed as **provider** or **auth-handler** artifacts:
+> ```bash
+> # Build and push a provider to the catalog
+> scafctl build provider ./my-provider --version 1.0.0
+> scafctl catalog push my-provider@1.0.0 --catalog ghcr.io/myorg
+> 
+> # The artifact is stored at: ghcr.io/myorg/providers/my-provider:1.0.0
+> ```
 
 ---
 
@@ -44,6 +55,7 @@ Action workflows demonstrate executing tasks with dependencies, parallelism, and
 | [error-handling.yaml](actions/error-handling.yaml) | Handle errors gracefully | `scafctl run solution -f examples/actions/error-handling.yaml` |
 | [finally-cleanup.yaml](actions/finally-cleanup.yaml) | Cleanup actions that always run | `scafctl run solution -f examples/actions/finally-cleanup.yaml` |
 | [template-render.yaml](actions/template-render.yaml) | Render files from templates | `scafctl run solution -f examples/actions/template-render.yaml` |
+| [go-template-inline.yaml](actions/go-template-inline.yaml) | Inline Go templates with loops/conditionals | `scafctl run solution -f examples/actions/go-template-inline.yaml` |
 | [complex-workflow.yaml](actions/complex-workflow.yaml) | Full CI/CD-style workflow | `scafctl run solution -f examples/actions/complex-workflow.yaml` |
 
 ---
@@ -63,6 +75,8 @@ Resolvers demonstrate dynamic value computation, validation, and transformation.
 | [feature-flags.yaml](resolvers/feature-flags.yaml) | Feature flag patterns | `scafctl run solution -f examples/resolvers/feature-flags.yaml` |
 | [secrets.yaml](resolvers/secrets.yaml) | Secret management (requires secret store) | `scafctl run solution -f examples/resolvers/secrets.yaml` |
 | [identity.yaml](resolvers/identity.yaml) | Authentication identity info (requires auth) | `scafctl run solution -f examples/resolvers/identity.yaml` |
+| [cel-extensions.yaml](resolvers/cel-extensions.yaml) | All custom CEL extension functions | `scafctl run solution -f examples/resolvers/cel-extensions.yaml -o json` |
+| [cel-transforms.yaml](resolvers/cel-transforms.yaml) | Data transformation patterns with CEL | `scafctl run solution -f examples/resolvers/cel-transforms.yaml -o yaml` |
 
 ---
 
@@ -76,6 +90,29 @@ Complete solutions demonstrating real-world use cases.
 | [terraform/](solutions/terraform/) | Terraform project scaffolding |
 | [taskfile/](solutions/taskfile/) | Taskfile.yaml generation |
 | [email-notifier/](solutions/email-notifier/) | Email notification workflow |
+
+---
+
+## Snapshot Examples
+
+Snapshots capture resolver execution state for debugging, testing, and comparison.
+
+| Example | Description | Run |
+|---------|-------------|-----|
+| [basic-snapshot.yaml](snapshots/basic-snapshot.yaml) | Capture and inspect a snapshot | `scafctl render solution -f examples/snapshots/basic-snapshot.yaml --snapshot --snapshot-file=/tmp/snapshot.json` |
+| [snapshot-diff.yaml](snapshots/snapshot-diff.yaml) | Compare snapshots across environments | See example header for commands |
+| [redacted-snapshot.yaml](snapshots/redacted-snapshot.yaml) | Redact sensitive values in snapshots | `scafctl render solution -f examples/snapshots/redacted-snapshot.yaml --snapshot --snapshot-file=/tmp/redacted.json --redact` |
+
+---
+
+## Catalog Examples
+
+Catalog build and distribution examples.
+
+| Example | Description |
+|---------|-------------|
+| [bundling-example/](catalog/bundling-example/) | Solution bundling with local file dependencies |
+| [remote-registry-workflow.md](catalog/remote-registry-workflow.md) | Guide for remote OCI registry workflows |
 
 ---
 
@@ -135,4 +172,74 @@ scafctl run solution -f examples/resolvers/parameters.yaml \
   -r name=Bob \
   -r count=5 \
   -r uppercase=true
+```
+
+### Interactive Mode
+```bash
+# Explore output in a TUI (navigate, search, filter)
+scafctl run solution -f examples/resolvers/dependencies.yaml -i
+```
+
+### Filter with CEL Expressions
+```bash
+# Extract specific values from output
+scafctl run solution -f examples/resolvers/dependencies.yaml -e '_.fullName'
+```
+
+### Snapshots
+```bash
+# Capture a snapshot during render
+scafctl render solution -f examples/snapshots/basic-snapshot.yaml \
+  --snapshot --snapshot-file=/tmp/snapshot.json
+
+# View the snapshot
+scafctl snapshot show /tmp/snapshot.json
+
+# Compare two snapshots
+scafctl snapshot diff /tmp/snap-a.json /tmp/snap-b.json
+```
+
+---
+
+## Catalog Workflows
+
+### Build and Run from Catalog
+```bash
+# Build a solution into the catalog
+scafctl build solution examples/resolver-demo.yaml --version 1.0.0
+
+# Run by name (no file path needed)
+scafctl run solution resolver-demo
+
+# List catalog contents
+scafctl catalog list
+```
+
+### Export and Import (Air-Gapped Transfer)
+```bash
+# Build and export a solution
+scafctl build solution examples/resolver-demo.yaml --version 1.0.0
+scafctl catalog save resolver-demo -o resolver-demo.tar
+
+# Transfer the tar file to another machine, then import
+scafctl catalog load --input resolver-demo.tar
+
+# Run the imported solution
+scafctl run solution resolver-demo
+```
+
+### Version Management
+```bash
+# Build multiple versions
+scafctl build solution examples/resolver-demo.yaml --version 1.0.0
+scafctl build solution examples/resolver-demo.yaml --version 2.0.0
+
+# Export specific version
+scafctl catalog save resolver-demo@1.0.0 -o resolver-demo-v1.tar
+
+# Delete old versions
+scafctl catalog delete resolver-demo@1.0.0
+
+# Clean up orphaned blobs
+scafctl catalog prune
 ```

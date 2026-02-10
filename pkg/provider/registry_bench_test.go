@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package provider
 
 import (
@@ -5,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 )
 
 func BenchmarkRegistry_Register(b *testing.B) {
@@ -236,19 +241,15 @@ func BenchmarkValidateDescriptor(b *testing.B) {
 		Name:         "test",
 		Version:      MustParseVersion("1.0.0"),
 		Capabilities: []Capability{CapabilityFrom, CapabilityTransform},
-		Schema: SchemaDefinition{
-			Properties: map[string]PropertyDefinition{
-				"input1": {Type: PropertyTypeString, Required: true},
-				"input2": {Type: PropertyTypeInt, Required: false},
-				"input3": {Type: PropertyTypeBool},
-			},
-		},
-		OutputSchemas: map[Capability]SchemaDefinition{
-			CapabilityFrom: {
-				Properties: map[string]PropertyDefinition{
-					"output": {Type: PropertyTypeString},
-				},
-			},
+		Schema: schemahelper.ObjectSchema([]string{"input1"}, map[string]*jsonschema.Schema{
+			"input1": schemahelper.StringProp(""),
+			"input2": schemahelper.IntProp(""),
+			"input3": schemahelper.BoolProp(""),
+		}),
+		OutputSchemas: map[Capability]*jsonschema.Schema{
+			CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+				"output": schemahelper.StringProp(""),
+			}),
 		},
 	}
 

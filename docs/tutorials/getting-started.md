@@ -228,8 +228,17 @@ See [Provider Reference](provider-reference.md) for full documentation.
 ## Common Commands
 
 ```bash
-# Run a solution
+# Run a solution from file
 scafctl run solution -f solution.yaml
+
+# Run a solution from catalog (by name)
+scafctl run solution my-solution
+
+# Build a solution to local catalog
+scafctl build solution solution.yaml --version 1.0.0
+
+# List cataloged solutions
+scafctl catalog list
 
 # Dry-run (show what would happen)
 scafctl run solution -f solution.yaml --dry-run
@@ -258,6 +267,7 @@ scafctl render solution -f solution.yaml -o json
 
 ## Next Steps
 
+- [Catalog Tutorial](catalog-tutorial.md) - Store and run solutions by name
 - [Resolver Tutorial](resolver-tutorial.md) - Deep dive into resolvers
 - [Actions Tutorial](actions-tutorial.md) - Learn about workflows
 - [Provider Reference](provider-reference.md) - All providers documented

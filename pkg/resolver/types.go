@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 // Package resolver provides type coercion utilities.
 //
 // Type coercion functions have been moved to pkg/spec/types.go.

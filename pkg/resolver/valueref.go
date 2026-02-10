@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 // Package resolver provides types for defining and executing data resolvers.
 //
 // This file re-exports types from pkg/spec for backward compatibility.

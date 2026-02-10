@@ -1093,7 +1093,7 @@ actions:
 - When `results.schema` is defined, `Output.Data` from the provider is validated against it
 - Schema validation errors cause the action to fail (unless `onError: continue`)
 - Schema is optional—actions without it pass through `Output.Data` unchanged
-- The schema uses the same `SchemaDefinition` format as provider input schemas
+- The schema uses standard JSON Schema format (`*jsonschema.Schema`), the same as provider input schemas
 
 ---
 

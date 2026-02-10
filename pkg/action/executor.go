@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package action
 
 import (
@@ -6,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
@@ -34,6 +38,9 @@ type Executor struct {
 
 	// defaultTimeout is the default timeout for actions without a specific timeout
 	defaultTimeout time.Duration
+
+	// workflowResultSchemaMode is the workflow-level default for result schema validation
+	workflowResultSchemaMode ResultSchemaMode
 }
 
 // ExecutorOption configures the executor.
@@ -224,6 +231,9 @@ func (e *Executor) Execute(ctx context.Context, w *Workflow) (*ExecutionResult, 
 	if w == nil {
 		return nil, fmt.Errorf("workflow cannot be nil")
 	}
+
+	// Store workflow-level result schema mode for use during action execution
+	e.workflowResultSchemaMode = w.ResultSchemaMode
 
 	result := &ExecutionResult{
 		Actions:   make(map[string]*ActionResult),
@@ -540,15 +550,34 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 
 	// Validate result against schema if defined
 	if action.ResultSchema != nil {
-		if validationErr := ValidateResult(results, action.ResultSchema); validationErr != nil {
-			e.actionContext.MarkFailed(actionName, validationErr.Error())
-			if e.progressCallback != nil {
-				e.progressCallback.OnActionFailed(actionName, validationErr)
+		// Determine effective mode: action-level overrides workflow-level
+		mode := action.ResultSchemaMode
+		if mode == "" {
+			mode = e.workflowResultSchemaMode
+		}
+		mode = mode.OrDefault()
+
+		if mode != ResultSchemaModeIgnore {
+			if validationErr := ValidateResult(results, action.ResultSchema); validationErr != nil {
+				switch mode {
+				case ResultSchemaModeError:
+					e.actionContext.MarkFailed(actionName, validationErr.Error())
+					if e.progressCallback != nil {
+						e.progressCallback.OnActionFailed(actionName, validationErr)
+					}
+					if action.OnError.OrDefault() == spec.OnErrorContinue {
+						return nil
+					}
+					return fmt.Errorf("result schema validation failed: %w", validationErr)
+				case ResultSchemaModeWarn:
+					logger.FromContext(ctx).V(0).Info("result schema validation warning",
+						"action", actionName,
+						"error", validationErr.Error())
+					// Continue execution - don't fail
+				case ResultSchemaModeIgnore:
+					// Already handled above, but included for exhaustive switch
+				}
 			}
-			if action.OnError.OrDefault() == spec.OnErrorContinue {
-				return nil
-			}
-			return fmt.Errorf("result schema validation failed: %w", validationErr)
 		}
 	}
 

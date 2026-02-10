@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package spec
 
 // OnErrorBehavior defines how to handle errors during execution.
@@ -5,11 +8,14 @@ package spec
 type OnErrorBehavior string
 
 const (
-	// OnErrorFail stops execution and returns the error (default behavior).
+	// OnErrorFail stops execution and returns the error.
+	// This is the default for transform and action phases.
+	// In the resolve phase, the default is OnErrorContinue (fallback chain semantics).
 	OnErrorFail OnErrorBehavior = "fail"
 
 	// OnErrorContinue continues execution despite errors.
-	// For resolvers: tries the next source/step.
+	// For resolve phase: tries the next source (this is the default).
+	// For transform phase: skips the failed step, keeps current value.
 	// For actions: continues with remaining iterations or actions.
 	OnErrorContinue OnErrorBehavior = "continue"
 )

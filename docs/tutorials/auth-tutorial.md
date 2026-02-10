@@ -76,7 +76,7 @@ By default, scafctl uses the "organizations" tenant (any work/school account). T
 
 ```bash
 # Use a specific tenant ID
-scafctl auth login entra --tenant c990bb7a-51f4-439b-bd36-9c07fb1041c0
+scafctl auth login entra --tenant 08e70e8e-d05c-4449-a2c2-67bd0a9c4e79
 
 # Use a tenant domain
 scafctl auth login entra --tenant contoso.onmicrosoft.com
@@ -573,7 +573,7 @@ You can configure authentication defaults in your config file (`~/.config/scafct
 auth:
   entra:
     # Default tenant (use "organizations" for any work/school account)
-    tenantId: "c990bb7a-51f4-439b-bd36-9c07fb1041c0"
+    tenantId: "08e70e8e-d05c-4449-a2c2-67bd0a9c4e79"
     
     # Custom application ID (optional - uses scafctl's public client by default)
     clientId: "your-app-client-id"

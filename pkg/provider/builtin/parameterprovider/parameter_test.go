@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package parameterprovider
 
 import (
@@ -366,5 +369,5 @@ func TestParameterProvider_Descriptor(t *testing.T) {
 
 	// Check schema
 	assert.Contains(t, desc.Schema.Properties, "key")
-	assert.True(t, desc.Schema.Properties["key"].Required)
+	assert.Contains(t, desc.Schema.Required, "key")
 }

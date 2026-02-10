@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package config
 
 import (
@@ -8,6 +11,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc/v2"
 	appconfig "github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -109,25 +113,32 @@ func (o *AddCatalogOptions) Run(ctx context.Context) error {
 		}
 	}
 	if !validType {
-		return fmt.Errorf("invalid catalog type %q, must be one of: %s",
+		err := fmt.Errorf("invalid catalog type %q, must be one of: %s",
 			o.Type, strings.Join(appconfig.ValidCatalogTypes(), ", "))
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
 	// Validate path/url based on type
 	if o.Type == appconfig.CatalogTypeFilesystem {
 		if o.Path == "" {
-			return fmt.Errorf("--path is required for filesystem catalogs")
+			err := fmt.Errorf("--path is required for filesystem catalogs")
+			w.Errorf("%v", err)
+			return exitcode.WithCode(err, exitcode.InvalidInput)
 		}
 	} else {
 		if o.URL == "" {
-			return fmt.Errorf("--url is required for %s catalogs", o.Type)
+			err := fmt.Errorf("--url is required for %s catalogs", o.Type)
+			w.Errorf("%v", err)
+			return exitcode.WithCode(err, exitcode.InvalidInput)
 		}
 	}
 
 	mgr := appconfig.NewManager(o.ConfigPath)
 	cfg, err := mgr.Load()
 	if err != nil {
-		return err
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.ConfigError)
 	}
 
 	catalog := appconfig.CatalogConfig{
@@ -138,7 +149,8 @@ func (o *AddCatalogOptions) Run(ctx context.Context) error {
 	}
 
 	if err := cfg.AddCatalog(catalog); err != nil {
-		return err
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
 	if o.SetDefault {
@@ -150,7 +162,8 @@ func (o *AddCatalogOptions) Run(ctx context.Context) error {
 	mgr.Set("settings", cfg.Settings)
 
 	if err := mgr.Save(); err != nil {
-		return err
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.ConfigError)
 	}
 
 	w.Successf("Added catalog %q", o.Name)

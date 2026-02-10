@@ -1,0 +1,7 @@
+# Default owners for everything
+* @oakwood-commons/scafctl-maintainers
+
+# Specific areas (adjust as team grows)
+/pkg/provider/   @oakwood-commons/scafctl-maintainers
+/pkg/celexp/     @oakwood-commons/scafctl-maintainers
+/docs/           @oakwood-commons/scafctl-maintainers

@@ -111,46 +111,70 @@ This document tracks remaining implementation tasks for scafctl.
   - Visualize resolver dependency graph
   - Support output formats (ascii, dot, mermaid, json)
 
-- [ ] **`scafctl delete solution <name[@version]>`**
-  - Remove solution from catalog
-  - Support `--catalog` flag for target
+- [x] **`scafctl delete solution <name[@version]>`**
+  - Remove solution from catalog via `scafctl catalog delete`
+  - Support `--version` flag for specific version
+  - Implemented in `pkg/cmd/scafctl/catalog/delete.go`
 
-- [ ] **`scafctl build [solution|plugin]`**
+- [x] **`scafctl build solution`**
   - Validate artifact schema and structure
-  - Resolve and fetch remote dependencies
-  - Verify dependency compatibility
-  - Detect circular dependencies
   - Package as OCI artifact
   - Store in local catalog with annotations
+  - Implemented in `pkg/cmd/scafctl/build/solution.go`
+  - Note: `scafctl build plugin` not yet implemented
 
-- [ ] **`scafctl push [solution|plugin] <name[@version]>`**
+- [x] **`scafctl catalog push <name[@version]>`**
   - Push artifact from local to remote catalog
-  - Handle OCI authentication
-  - Support `--catalog` flag for target
+  - Handle OCI authentication via docker config
+  - Support `--catalog` flag for target registry
+  - Implemented in `pkg/cmd/scafctl/catalog/push.go`
 
-- [ ] **`scafctl pull [solution|plugin] <name[@version]>`**
+- [x] **`scafctl catalog pull <registry/repository/kind/name[@version]>`**
   - Download artifact from remote to local catalog
   - Cache locally for offline use
+  - Implemented in `pkg/cmd/scafctl/catalog/pull.go`
 
-- [ ] **`scafctl inspect [solution|plugin] <name[@version]>`**
-  - Display artifact metadata and dependencies
-  - Show available providers (for plugins)
-  - Show platform requirements
+- [x] **`scafctl catalog inspect <name[@version]>`**
+  - Display artifact metadata and annotations
+  - Show digest, created time, version
+  - Support `-o` output formats (table, json, yaml)
+  - Implemented in `pkg/cmd/scafctl/catalog/inspect.go`
 
-- [ ] **`scafctl tag [solution|plugin] <source> <target>`**
+- [x] **`scafctl catalog list`**
+  - List all artifacts in local catalog
+  - Support `--kind` filter
+  - Support `-o` output formats
+  - Implemented in `pkg/cmd/scafctl/catalog/list.go`
+
+- [x] **`scafctl catalog prune`**
+  - Remove orphaned blobs from catalog storage
+  - Implemented in `pkg/cmd/scafctl/catalog/prune.go`
+
+- [x] **`scafctl catalog tag <name@version> <alias>`**
   - Create version aliases (e.g., latest, stable)
+  - Auto-infers artifact kind from local catalog
+  - Supports `--catalog` flag for remote registry tagging
+  - Validates alias is not a semver version
+  - Implemented in `pkg/cmd/scafctl/catalog/tag.go`
 
-- [ ] **`scafctl save [solution|plugin] <name[@version]> -o <file>`**
-  - Export artifact and dependencies as tar archive
+- [x] **`scafctl catalog save <name[@version]> -o <file>`**
+  - Export artifact and dependencies as OCI Image Layout tar archive
   - Support air-gapped environments
+  - Infer artifact kind automatically
+  - Default to latest version if not specified
+  - Implemented in `pkg/cmd/scafctl/catalog/save.go`
 
-- [ ] **`scafctl load -i <file>`**
-  - Import artifact from tar archive
+- [x] **`scafctl catalog load --input <file>`**
+  - Import artifact from OCI Image Layout tar archive
+  - Support `--force` flag to overwrite existing artifacts
+  - Implemented in `pkg/cmd/scafctl/catalog/load.go`
 
-- [ ] **`scafctl cache` subcommands**
-  - `cache clear` - clear all cached artifacts
-  - `cache clear --kind <kind>` - clear specific kind
-  - `cache clear --name <name>` - clear specific artifact
+- [x] **`scafctl cache` subcommands**
+  - `cache clear` - clear all cached content
+  - `cache clear --kind <kind>` - clear specific kind (http, all)
+  - `cache clear --name <name>` - clear cache entries matching pattern
+  - `cache info` - show cache information and size
+  - Implemented in `pkg/cmd/scafctl/cache/`
 
 ## File Resolution
 
@@ -159,23 +183,26 @@ This document tracks remaining implementation tasks for scafctl.
   - Support both YAML and JSON formats
   - Implemented via `FindSolution()` in `pkg/solution/get/get.go`
 
-- [ ] **Catalog-first resolution**
+- [x] **Catalog-first resolution**
   - Query catalog for named artifacts
-  - Apply version constraints
-  - Download and cache artifacts
-  - Fallback behavior when catalog unavailable
+  - Apply version constraints (supports `name@version` syntax)
+  - Fallback to file system when not found in catalog
+  - Implemented via `SolutionResolver` in `pkg/catalog/resolver.go`
 
 ## Catalog Integration
 
-- [ ] **Local catalog implementation**
-  - OCI content store at `~/.scafctl/catalog/`
-  - Store solutions and plugins as OCI artifacts
-  - Support content-addressed blobs and index
+- [x] **Local catalog implementation**
+  - OCI content store at `~/.scafctl/catalog/` (via XDG data dir)
+  - Store solutions as OCI artifacts
+  - Content-addressed blobs with OCI manifest/index
+  - Implemented in `pkg/catalog/local.go`
+  - Uses oras-go for OCI operations
 
-- [ ] **Remote catalog support**
-  - Standard OCI registry integration
-  - Support private registries
-  - GUI frontend discovery integration
+- [x] **Remote catalog support**
+  - Standard OCI registry integration via `RemoteCatalog` in `pkg/catalog/remote.go`
+  - Support private registries with credential helpers
+  - Push/pull via `catalog push` and `catalog pull` commands
+  - Copy operations between local and remote catalogs (`CopyTo`, `CopyFrom`)
 
 - [x] **Configuration file support**
   - Parse `~/.scafctl/config.yaml`
@@ -187,19 +214,23 @@ This document tracks remaining implementation tasks for scafctl.
   - `SCAFCTL_` prefix for all config values
   - Automatic env var binding via Viper
 
-- [ ] **Command-line catalog override**
-  - `--catalog <url>` flag support
-  - Override config and env vars
+- [x] **Command-line catalog override**
+  - `--catalog <url|name>` flag on push and delete commands
+  - Resolution order: direct URL → config name lookup → default catalog from config
+  - Implemented in `pkg/cmd/scafctl/catalog/resolve.go`
 
-- [ ] **OCI authentication**
-  - Read credentials from `~/.docker/config.json`
-  - Support docker credential helpers
-  - Handle authentication errors
+- [x] **OCI authentication**
+  - Read credentials from `~/.docker/config.json` and podman auth configs
+  - Support docker credential helpers (`docker-credential-*`)
+  - Support `SCAFCTL_REGISTRY_USERNAME`/`SCAFCTL_REGISTRY_PASSWORD` env vars
+  - Handle Docker Hub hostname normalization
+  - Implemented in `pkg/catalog/auth.go`
 
-- [ ] **Artifact identification**
-  - Media types: `application/vnd.scafctl.solution.v1+yaml`, `application/vnd.scafctl.plugin.v1+binary`
-  - OCI annotations for artifact metadata
-  - Repository structure for solutions and plugins
+- [x] **Artifact identification**
+  - Media types: `application/vnd.scafctl.solution.v1+yaml`, `application/vnd.scafctl.provider.v1+binary`, `application/vnd.scafctl.auth-handler.v1+binary`
+  - OCI annotations for artifact metadata (`pkg/catalog/annotations.go`)
+  - Repository structure: `<registry>/<repo>/<kind-plural>/<name>` (e.g., `ghcr.io/myorg/scafctl/solutions/my-solution`)
+  - Implemented in `pkg/catalog/media_types.go`, `pkg/catalog/annotations.go`, `pkg/catalog/reference.go`
 
 - [ ] **Dependency resolution**
   - Recursive dependency resolution during build
@@ -331,6 +362,7 @@ This document tracks remaining implementation tasks for scafctl.
   - Resolver tutorial (`docs/tutorials/resolver-tutorial.md`)
   - Actions tutorial (`docs/tutorials/actions-tutorial.md`)
   - Auth tutorial (`docs/tutorials/auth-tutorial.md`)
+  - Cache tutorial (`docs/tutorials/cache-tutorial.md`)
 
 - [x] **Developer guide**
   - Plugin development guide (`docs/tutorials/plugin-development.md`)
@@ -379,6 +411,7 @@ This document tracks remaining implementation tasks for scafctl.
 
 ## Completed
 
+- [x] `scafctl catalog tag` — create version aliases for catalog artifacts
 - [x] Parameter provider implementation
 - [x] Provider context helpers (WithParameters, ParametersFromContext)
 - [x] Parameter parsing precedence rules
@@ -414,6 +447,17 @@ This document tracks remaining implementation tasks for scafctl.
 - [x] Prometheus metrics (pkg/metrics)
 - [x] Example solutions (20+ in examples/)
 - [x] `scafctl lint` command with severity filtering and multiple output formats
+- [x] `scafctl build solution` command with OCI packaging
+- [x] Local catalog implementation (pkg/catalog) with OCI storage
+- [x] Catalog-first resolution via SolutionResolver
+- [x] `scafctl catalog` commands (list, inspect, delete, prune)
+- [x] `scafctl cache` commands (clear, info) with kind and name filters
+- [x] Remote catalog support (pkg/catalog/remote.go) with push/pull
+- [x] OCI authentication via docker/podman credential stores (pkg/catalog/auth.go)
+- [x] `--catalog` flag with URL/name/default resolution (pkg/cmd/scafctl/catalog/resolve.go)
+- [x] Artifact media types for solution, provider, and auth-handler kinds
+- [x] `scafctl catalog push` and `scafctl catalog pull` commands
+- [x] `ArtifactKindProvider` and `ArtifactKindAuthHandler` artifact kinds
 
 ## Future Enhancements
 
@@ -454,17 +498,17 @@ These are planned features from design docs for future implementation:
 
 ### Migrate Provider Schemas to JSON Schema
 
-- [ ] **Replace custom SchemaDefinition with jsonschema.Schema**
-  - Migrate `pkg/provider.SchemaDefinition` to use `jsonschema.Schema`
-  - Migrate `pkg/provider.PropertyDefinition` to use `jsonschema.Schema`
-  - Migrate `pkg/provider.OutputSchemas` to use `jsonschema.Schema`
-  - Update all builtin providers to use JSON Schema format
-  - Benefits: standard format, full JSON Schema power, single validation library
-  - Breaking change: provider input/output schema format will change
+- [x] **Replace custom SchemaDefinition with jsonschema.Schema**
+  - Migrated `pkg/provider.SchemaDefinition` to use `jsonschema.Schema`
+  - Migrated `pkg/provider.PropertyDefinition` to use `jsonschema.Schema`
+  - Migrated `pkg/provider.OutputSchemas` to use `jsonschema.Schema`
+  - Updated all builtin providers to use JSON Schema format
+  - Added `pkg/provider/schemahelper` package for ergonomic schema construction
 
-### Conditional Retry
+### ~~Conditional Retry~~ ✅
 
-- [ ] **`retryIf` expression for actions**
+- [x] **`retryIf` expression for actions**
   - Retry only on specific error types
   - Expression-based condition: `__error.statusCode == 429`
   - Avoid wasting retries on non-transient failures
+  - **Implemented:** `retryIf` field in `RetryConfig`, `__error` context with message, type, statusCode, exitCode, attempt, maxAttempts

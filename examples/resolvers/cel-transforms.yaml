@@ -1,0 +1,318 @@
+# CEL Data Transformation Patterns
+# Demonstrates real-world data transformation patterns using CEL expressions.
+# Each resolver shows a practical pattern you can reuse in your solutions.
+#
+# Run: scafctl run solution -f examples/resolvers/cel-transforms.yaml -o yaml
+# Run: scafctl run solution -f examples/resolvers/cel-transforms.yaml -o json
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: cel-transform-patterns
+  version: 1.0.0
+  description: Real-world CEL data transformation patterns
+
+spec:
+  resolvers:
+    # ─────────────────────────────────────────────
+    # Pattern: Build from static data then transform
+    # ─────────────────────────────────────────────
+
+    services:
+      description: "Source data - list of services for transformation examples"
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                [
+                  {"name": "api-gateway",  "env": "prod", "port": 8080, "replicas": 3, "healthy": true},
+                  {"name": "auth-service", "env": "prod", "port": 8081, "replicas": 2, "healthy": true},
+                  {"name": "web-frontend","env": "staging", "port": 3000, "replicas": 1, "healthy": false},
+                  {"name": "worker",      "env": "dev",  "port": 9090, "replicas": 1, "healthy": true},
+                  {"name": "data-pipeline","env": "staging", "port": 5555, "replicas": 2, "healthy": true}
+                ]
+
+    # ─────────────────────────────────────────────
+    # Pattern: Filtering lists
+    # ─────────────────────────────────────────────
+
+    filter_by_env:
+      description: "Filter services by environment"
+      type: array
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.services.filter(s, s.env == "prod")'
+
+    filter_unhealthy:
+      description: "Find unhealthy services"
+      type: array
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.services.filter(s, !s.healthy).map(s, s.name)'
+
+    filter_multi_condition:
+      description: "Complex filter - prod services with more than 2 replicas"
+      type: array
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.services.filter(s, s.env == "prod" && s.replicas > 2)'
+
+    # ─────────────────────────────────────────────
+    # Pattern: Mapping / projecting fields
+    # ─────────────────────────────────────────────
+
+    extract_names:
+      description: "Extract just service names"
+      type: array
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.services.map(s, s.name)'
+
+    extract_sorted:
+      description: "Extract and sort names"
+      type: array
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.services.map(s, s.name).sort()'
+
+    project_subset:
+      description: "Project subset of fields using map.select"
+      type: array
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.services.map(s, map.select(s, ["name", "env"]))'
+
+    enrich_data:
+      description: "Add computed fields to each item"
+      type: array
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                _.services.map(s,
+                  map.add(
+                    map.add(s, "url", "http://localhost:" + string(s.port)),
+                    "id", strings.clean(s.name)
+                  )
+                )
+
+    # ─────────────────────────────────────────────
+    # Pattern: Aggregation
+    # ─────────────────────────────────────────────
+
+    count_by_env:
+      description: "Count services per environment"
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                {
+                  "prod":    _.services.filter(s, s.env == "prod").size(),
+                  "staging": _.services.filter(s, s.env == "staging").size(),
+                  "dev":     _.services.filter(s, s.env == "dev").size()
+                }
+
+    total_replicas:
+      description: "Aggregate - sum all replicas"
+      type: int
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.services.map(s, s.replicas).sum()'
+
+    has_unhealthy:
+      description: "Check if any service is unhealthy with exists()"
+      type: boolean
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.services.exists(s, !s.healthy)'
+
+    all_healthy:
+      description: "Check if all services are healthy with all()"
+      type: boolean
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.services.all(s, s.healthy)'
+
+    # ─────────────────────────────────────────────
+    # Pattern: Conditional logic
+    # ─────────────────────────────────────────────
+
+    conditional_value:
+      description: "Ternary expressions for dynamic values"
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                _.services.size() > 3
+                  ? "Large deployment (" + string(_.services.size()) + " services)"
+                  : "Small deployment"
+
+    conditional_config:
+      description: "Build config object conditionally"
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                _.services.map(s, {
+                  "name": s.name,
+                  "scale_action": s.replicas < 2 ? "scale-up" : "stable",
+                  "alert": !s.healthy ? "CRITICAL" : "ok"
+                })
+
+    # ─────────────────────────────────────────────
+    # Pattern: String interpolation and formatting
+    # ─────────────────────────────────────────────
+
+    generate_urls:
+      description: "Generate URLs from service data"
+      type: array
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                _.services.map(s,
+                  "https://" + s.name + ".example.com:" + string(s.port) + "/healthz"
+                )
+
+    render_report:
+      description: "Build a formatted report string"
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                cel.bind(healthy, _.services.filter(s, s.healthy).size(),
+                cel.bind(total, _.services.size(),
+                  "Service Health Report\n" +
+                  "Total: " + string(total) + "\n" +
+                  "Healthy: " + string(healthy) + "\n" +
+                  "Unhealthy: " + string(total - healthy) + "\n" +
+                  "Status: " + (healthy == total ? "ALL OK" : "DEGRADED")
+                ))
+
+    # ─────────────────────────────────────────────
+    # Pattern: Config merging and defaults
+    # ─────────────────────────────────────────────
+
+    merge_defaults:
+      description: "Merge user config over defaults"
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                map.merge(
+                  {
+                    "log_level": "info",
+                    "timeout": 30,
+                    "retries": 3,
+                    "tls": false,
+                    "port": 8080
+                  },
+                  {
+                    "log_level": "debug",
+                    "tls": true,
+                    "custom_header": "X-Request-Id"
+                  }
+                )
+
+    build_env_config:
+      description: "Build environment-specific config with merging"
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                cel.bind(
+                  base, {"region": "us-east-1", "log_level": "warn", "replicas": 1},
+                  {
+                    "dev":     map.merge(base, {"log_level": "debug",  "replicas": 1}),
+                    "staging": map.merge(base, {"region": "us-west-2", "replicas": 2}),
+                    "prod":    map.merge(base, {"replicas": 5, "log_level": "error"})
+                  }
+                )
+
+    # ─────────────────────────────────────────────
+    # Pattern: Unique IDs and metadata
+    # ─────────────────────────────────────────────
+
+    tagged_services:
+      description: "Tag each service with unique IDs and timestamps"
+      type: array
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                _.services.map(s,
+                  map.merge(s, {
+                    "id": guid.new(),
+                    "deployed_at": time.nowFmt("2006-01-02T15:04:05Z"),
+                    "slug": strings.clean(s.name)
+                  })
+                )
+
+    # ─────────────────────────────────────────────
+    # Pattern: Serialization for output
+    # ─────────────────────────────────────────────
+
+    serialize_to_json:
+      description: "Convert data to JSON string (useful for API payloads)"
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                json.marshalPretty(
+                  map.select(_.services[0], ["name", "port", "env"])
+                )
+
+    serialize_to_yaml:
+      description: "Convert data to YAML string (useful for config files)"
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                yaml.marshal({
+                  "apiVersion": "v1",
+                  "kind": "ConfigMap",
+                  "metadata": {"name": "service-ports"},
+                  "data": {
+                    "api_port": "8080",
+                    "web_port": "3000"
+                  }
+                })

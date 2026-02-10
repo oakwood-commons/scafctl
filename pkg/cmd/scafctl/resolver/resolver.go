@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package resolver
 
 import (
@@ -10,8 +13,9 @@ import (
 // CommandResolver creates the resolver command
 func CommandResolver(cliParams *settings.Run, ioStreams terminal.IOStreams, binaryName string) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "resolver",
-		Short: "Resolver operations (deprecated - use render solution)",
+		Use:          "resolver",
+		Short:        "Resolver operations (deprecated - use render solution)",
+		SilenceUsage: true,
 		Long: heredoc.Doc(`
 			NOTE: Most resolver commands have been moved to the render command:
 			

@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package auth
 
 import (
@@ -6,6 +9,7 @@ import (
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
@@ -38,7 +42,8 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 			  # Output as JSON
 			  scafctl auth status -o json
 		`),
-		Args: cobra.MaximumNArgs(1),
+		SilenceUsage: true,
+		Args:         cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			w := writer.MustFromContext(ctx)
@@ -47,7 +52,9 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 			if len(args) > 0 {
 				handlerName := args[0]
 				if !IsSupportedHandler(handlerName) {
-					return fmt.Errorf("unknown auth handler: %s (supported: %v)", handlerName, SupportedHandlers())
+					err := fmt.Errorf("unknown auth handler: %s (supported: %v)", handlerName, SupportedHandlers())
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.InvalidInput)
 				}
 				handlers = []string{handlerName}
 			}
@@ -116,7 +123,9 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 			}
 
 			if len(results) == 0 {
-				return fmt.Errorf("no auth handlers found")
+				err := fmt.Errorf("no auth handlers found")
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
 			outputOpts := flags.NewKvxOutputOptionsFromFlags(

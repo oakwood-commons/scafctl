@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package action
 
 import (
@@ -6,6 +9,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 )
 
@@ -108,25 +112,60 @@ func (r *RetryExecutor) MaxAttempts() int {
 }
 
 // ShouldRetry determines if an execution should be retried based on the error and attempt number.
+// Returns (shouldRetry, error). The error is non-nil if retryIf expression evaluation fails.
 // Returns false if:
 // - No retry config is set
 // - Max attempts reached
 // - Context was cancelled
 // - The error is nil (success)
-func (r *RetryExecutor) ShouldRetry(ctx context.Context, err error, attempt int) bool {
+// - retryIf expression evaluates to false
+func (r *RetryExecutor) ShouldRetry(ctx context.Context, err error, attempt int) (bool, error) {
 	if err == nil {
-		return false
+		return false, nil
 	}
 	if r.config == nil {
-		return false
+		return false, nil
 	}
 	if attempt >= r.MaxAttempts() {
-		return false
+		return false, nil
 	}
 	if ctx.Err() != nil {
-		return false
+		// Context cancelled - don't retry but this is not an error in the retry logic itself
+		return false, nil //nolint:nilerr // Intentionally returning nil error - ctx cancellation is handled by caller
 	}
-	return true
+
+	// If retryIf is configured, evaluate it
+	if r.config.RetryIf != nil {
+		return r.evaluateRetryCondition(ctx, err, attempt)
+	}
+
+	// Default: retry all errors
+	return true, nil
+}
+
+// evaluateRetryCondition evaluates the retryIf CEL expression.
+// Returns (shouldRetry, error). The error is non-nil if expression evaluation fails.
+func (r *RetryExecutor) evaluateRetryCondition(ctx context.Context, err error, attempt int) (bool, error) {
+	errCtx := NewErrorContext(err, attempt, r.MaxAttempts())
+
+	// Build additional variables with __error context
+	additionalVars := map[string]any{
+		"__error": errCtx.ToMap(),
+	}
+
+	// Evaluate the expression
+	result, evalErr := celexp.EvaluateExpression(ctx, string(*r.config.RetryIf), nil, additionalVars)
+	if evalErr != nil {
+		return false, fmt.Errorf("failed to evaluate retryIf expression: %w", evalErr)
+	}
+
+	// Ensure result is boolean
+	shouldRetry, ok := result.(bool)
+	if !ok {
+		return false, fmt.Errorf("retryIf expression must return boolean, got %T", result)
+	}
+
+	return shouldRetry, nil
 }
 
 // ExecuteFunc is the function signature for action execution.
@@ -196,12 +235,18 @@ func (r *RetryExecutor) ExecuteWithRetry(
 		lastErr = err
 
 		// Check if we should retry
-		if !r.ShouldRetry(ctx, err, attempt) {
-			break
+		shouldRetry, retryErr := r.ShouldRetry(ctx, err, attempt)
+		if retryErr != nil {
+			// Expression evaluation failed - fail the action with both errors
+			return nil, fmt.Errorf("action failed and retryIf evaluation failed: %w (original error: %w)", retryErr, err)
+		}
+		if !shouldRetry {
+			// Return actual attempt count, not maxAttempts
+			return nil, fmt.Errorf("action failed after %d attempt(s): %w", attempt, lastErr)
 		}
 	}
 
-	return nil, fmt.Errorf("action failed after %d attempts: %w", maxAttempts, lastErr)
+	return nil, fmt.Errorf("action failed after %d attempt(s): %w", maxAttempts, lastErr)
 }
 
 // RetryResult contains information about a retry execution.
@@ -284,7 +329,13 @@ func (r *RetryExecutor) ExecuteWithRetryDetailed(
 		result.FinalError = err
 
 		// Check if we should retry
-		if !r.ShouldRetry(ctx, err, attempt) {
+		shouldRetry, retryErr := r.ShouldRetry(ctx, err, attempt)
+		if retryErr != nil {
+			// Expression evaluation failed - fail with both errors
+			result.FinalError = fmt.Errorf("action failed and retryIf evaluation failed: %w (original error: %w)", retryErr, err)
+			return result
+		}
+		if !shouldRetry {
 			break
 		}
 	}

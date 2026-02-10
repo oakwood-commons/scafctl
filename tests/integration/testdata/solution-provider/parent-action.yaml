@@ -1,0 +1,22 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: parent-action
+  version: 1.0.0
+spec:
+  resolvers:
+    msg:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "from parent"
+  workflow:
+    actions:
+      run-child:
+        provider: solution
+        inputs:
+          source: "tests/integration/testdata/solution-provider/child.yaml"
+          inputs:
+            expr: '{"message": _.msg}'

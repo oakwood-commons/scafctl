@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 // Package output provides output formatting utilities for scafctl commands.
 // It includes support for message formatting, JSON/YAML output, and validation utilities.
 //

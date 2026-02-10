@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package solution
 
 import (
@@ -7,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"gopkg.in/yaml.v3"
 )
 
@@ -55,6 +59,14 @@ type Solution struct {
 	// Catalog controls distribution and visibility, not execution.
 	// Published artifacts are JSON-only, and solutions are version-addressable (e.g., gcp-basic@1.0.1).
 	Catalog Catalog `json:"catalog,omitempty" yaml:"catalog,omitempty" doc:"Catalog metadata for distribution" required:"false"`
+
+	// Compose lists relative paths to partial YAML files merged into this solution at build/load time.
+	// Each path must be relative to the directory containing this solution YAML file.
+	Compose []string `json:"compose,omitempty" yaml:"compose,omitempty" doc:"Relative paths to partial YAML files merged into this solution" maxItems:"100"`
+
+	// Bundle defines files and plugins to include when building a solution into a catalog artifact.
+	// This section is build-time metadata only and does not affect execution.
+	Bundle Bundle `json:"bundle,omitempty" yaml:"bundle,omitempty" doc:"Build-time bundling configuration"`
 
 	// Spec defines the execution specification containing resolvers, templates, and actions.
 	// This is where the actual work of the solution is defined.
@@ -118,6 +130,59 @@ type Catalog struct {
 type Contact struct {
 	Name  string `json:"name,omitempty" yaml:"name,omitempty" doc:"The name of the maintainer" minLength:"3" maxLength:"60" example:"John Doe" pattern:"^[\\w \\-.'(),&]+$"`
 	Email string `json:"email,omitempty" yaml:"email,omitempty" doc:"The email of the maintainer" minLength:"5" maxLength:"100" example:"john.doe@example.com" pattern:"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,3}"`
+}
+
+// Bundle defines files and plugins to include when building a solution into a catalog artifact.
+// This section is build-time metadata only and does not affect execution.
+type Bundle struct {
+	// Include is a list of glob patterns or explicit file paths to bundle.
+	// Paths are relative to the directory containing the solution YAML file.
+	Include []string `json:"include,omitempty" yaml:"include,omitempty" doc:"Glob patterns or file paths to include in the bundle" maxItems:"1000"`
+
+	// Plugins declares external plugins required by this solution.
+	Plugins []PluginDependency `json:"plugins,omitempty" yaml:"plugins,omitempty" doc:"External plugins required by this solution" maxItems:"50"`
+}
+
+// IsEmpty returns true if the bundle has no includes and no plugins.
+func (b Bundle) IsEmpty() bool {
+	return len(b.Include) == 0 && len(b.Plugins) == 0
+}
+
+// PluginDependency declares an external plugin required by a solution.
+type PluginDependency struct {
+	// Name is the plugin's catalog reference (e.g., "aws-provider").
+	Name string `json:"name" yaml:"name" doc:"Plugin catalog reference" example:"aws-provider" maxLength:"100" pattern:"^[a-z0-9]([a-z0-9-]+[a-z0-9])?$" patternDescription:"lowercase alphanumeric with hyphens"`
+
+	// Kind is the plugin type.
+	Kind PluginKind `json:"kind" yaml:"kind" doc:"Plugin type" example:"provider"`
+
+	// Version is a semver constraint (e.g., "^1.5.0", ">=2.0.0", "3.1.2").
+	Version string `json:"version" yaml:"version" doc:"Semver version constraint" example:"^1.5.0" maxLength:"50" pattern:"^[~^>=<]*[0-9]" patternDescription:"semver constraint"`
+
+	// Defaults provides default values for plugin inputs.
+	// These are shallow-merged beneath inline provider inputs (inline always wins).
+	Defaults map[string]*spec.ValueRef `json:"defaults,omitempty" yaml:"defaults,omitempty" doc:"Default input values for this plugin (supports ValueRef)"`
+}
+
+// PluginKind is the type of plugin (provider, auth-handler).
+type PluginKind string
+
+const (
+	// PluginKindProvider represents a provider plugin.
+	PluginKindProvider PluginKind = "provider"
+
+	// PluginKindAuthHandler represents an auth handler plugin.
+	PluginKindAuthHandler PluginKind = "auth-handler"
+)
+
+// IsValid returns true if the plugin kind is a recognized value.
+func (k PluginKind) IsValid() bool {
+	switch k {
+	case PluginKindProvider, PluginKindAuthHandler:
+		return true
+	default:
+		return false
+	}
 }
 
 // Link represents a named hyperlink with validation constraints on its fields.

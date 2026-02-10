@@ -30,8 +30,11 @@ package myprovider
 
 import (
     "context"
+
     "github.com/Masterminds/semver/v3"
+    "github.com/google/jsonschema-go/jsonschema"
     "github.com/oakwood-commons/scafctl/pkg/provider"
+    "github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 )
 
 type MyProvider struct{}
@@ -47,24 +50,13 @@ func (p *MyProvider) Descriptor() *provider.Descriptor {
         APIVersion:  "v1",
         Version:     semver.MustParse("1.0.0"),
         Description: "Does something useful for resolvers and actions",
-        Schema: provider.SchemaDefinition{
-            Properties: map[string]provider.PropertyDefinition{
-                "input": {
-                    Type:        provider.PropertyTypeString,
-                    Required:    true,
-                    Description: "The input value to process",
-                },
-            },
-        },
-        OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
-            provider.CapabilityFrom: {
-                Properties: map[string]provider.PropertyDefinition{
-                    "result": {
-                        Type:        provider.PropertyTypeString,
-                        Description: "The processed result",
-                    },
-                },
-            },
+        Schema: schemahelper.ObjectSchema([]string{"input"}, map[string]*jsonschema.Schema{
+            "input": schemahelper.StringProp("The input value to process"),
+        }),
+        OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+            provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+                "result": schemahelper.StringProp("The processed result"),
+            }),
         },
         Capabilities: []provider.Capability{provider.CapabilityFrom},
         Category:     "utility",
@@ -96,8 +88,8 @@ The `Descriptor` defines everything about your provider:
 | `APIVersion` | API contract version (e.g., `"v1"`) |
 | `Version` | Semantic version of implementation |
 | `Description` | What the provider does (10-500 chars) |
-| `Schema` | Input property definitions |
-| `OutputSchemas` | Output schemas per capability |
+| `Schema` | Input schema (`*jsonschema.Schema`) |
+| `OutputSchemas` | Output schemas per capability (`map[Capability]*jsonschema.Schema`) |
 | `Capabilities` | What operations the provider supports |
 | `MockBehavior` | Description of dry-run behavior |
 
@@ -115,66 +107,79 @@ Providers declare which contexts they can operate in:
 
 ### Schema Definition
 
-Define input properties with validation:
+Define input properties with validation using the `schemahelper` package:
 
 ```go
-Schema: provider.SchemaDefinition{
-    Properties: map[string]provider.PropertyDefinition{
-        "url": {
-            Type:        provider.PropertyTypeString,
-            Required:    true,
-            Description: "The URL to fetch",
-            Format:      "uri",
-            Example:     "https://api.example.com/data",
-        },
-        "timeout": {
-            Type:        provider.PropertyTypeInt,
-            Required:    false,
-            Description: "Request timeout in seconds",
-            Default:     30,
-            Minimum:     ptrFloat(1),
-            Maximum:     ptrFloat(300),
-        },
-        "headers": {
-            Type:        provider.PropertyTypeAny,
-            Required:    false,
-            Description: "HTTP headers as key-value pairs",
-        },
-    },
-},
+import (
+    "encoding/json"
+
+    "github.com/google/jsonschema-go/jsonschema"
+    "github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
+)
+
+Schema: schemahelper.ObjectSchema([]string{"url"}, map[string]*jsonschema.Schema{
+    "url": schemahelper.StringProp("The URL to fetch",
+        schemahelper.WithFormat("uri"),
+        schemahelper.WithExample("https://api.example.com/data"),
+    ),
+    "timeout": schemahelper.IntProp("Request timeout in seconds",
+        schemahelper.WithDefault(json.RawMessage(`30`)),
+        schemahelper.WithMinimum(1),
+        schemahelper.WithMaximum(300),
+    ),
+    "headers": schemahelper.AnyProp("HTTP headers as key-value pairs"),
+}),
 ```
 
 ### Property Types
 
-| Type | Go Equivalent | Description |
-|------|--------------|-------------|
-| `string` | `string` | Text values |
-| `int` | `int64` | Integer numbers |
-| `float` | `float64` | Decimal numbers |
-| `bool` | `bool` | Boolean values |
-| `array` | `[]any` | List of values |
-| `any` | `any` | Any type (object, nested, etc.) |
+| JSON Schema Type | Helper | Go Equivalent | Description |
+|------------------|--------|--------------|-------------|
+| `"string"` | `schemahelper.StringProp` | `string` | Text values |
+| `"integer"` | `schemahelper.IntProp` | `int64` | Integer numbers |
+| `"number"` | `schemahelper.NumberProp` | `float64` | Decimal numbers |
+| `"boolean"` | `schemahelper.BoolProp` | `bool` | Boolean values |
+| `"array"` | `schemahelper.ArrayProp` | `[]any` | List of values |
+| (omitted) | `schemahelper.AnyProp` | `any` | Any type (object, nested, etc.) |
 
 ### Property Constraints
 
+Constraints are applied via option functions on the schema helpers:
+
 ```go
-PropertyDefinition{
-    Type:        provider.PropertyTypeString,
-    Required:    true,           // Must be provided
-    Default:     "default",      // Default if not provided
-    MinLength:   ptrInt(1),      // Minimum string length
-    MaxLength:   ptrInt(100),    // Maximum string length
-    Pattern:     "^[a-z]+$",     // Regex pattern
-    Minimum:     ptrFloat(0),    // Minimum number
-    Maximum:     ptrFloat(100),  // Maximum number
-    MinItems:    ptrInt(1),      // Minimum array items
-    MaxItems:    ptrInt(10),     // Maximum array items
-    Enum:        []any{"a","b"}, // Allowed values
-    Format:      "uri",          // Format hint (uri, email, uuid)
-    IsSecret:    true,           // Mask in logs
-    Deprecated:  false,          // Mark as deprecated
-}
+// String property with constraints
+schemahelper.StringProp("Description of the field",
+    schemahelper.WithDefault(json.RawMessage(`"default"`)), // Default if not provided
+    schemahelper.WithMinLength(1),                          // Minimum string length
+    schemahelper.WithMaxLength(100),                        // Maximum string length
+    schemahelper.WithPattern("^[a-z]+$"),                   // Regex pattern
+    schemahelper.WithEnum("a", "b"),                        // Allowed values
+    schemahelper.WithFormat("uri"),                         // Format hint (uri, email, uuid)
+    schemahelper.WithExample("example-value"),              // Example value
+    schemahelper.WithDeprecated(),                          // Mark as deprecated
+)
+
+// Integer property with constraints
+schemahelper.IntProp("Numeric field",
+    schemahelper.WithMinimum(0),    // Minimum number
+    schemahelper.WithMaximum(100),  // Maximum number
+)
+
+// Array property with constraints
+schemahelper.ArrayProp("List field",
+    schemahelper.WithMinItems(1),   // Minimum array items
+    schemahelper.WithMaxItems(10),  // Maximum array items
+)
 ```
+
+Required fields are declared on the parent object schema, not per-property:
+
+```go
+// "url" is required, "timeout" and "headers" are optional
+schemahelper.ObjectSchema([]string{"url"}, map[string]*jsonschema.Schema{ ... })
+```
+
+Sensitive fields are declared on the Descriptor (see [Mark Sensitive Data](#4-mark-sensitive-data)).
 
 ## Execute Method
 
@@ -345,36 +350,21 @@ Certain capabilities require specific output fields:
 ### Validation Capability
 
 ```go
-OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
-    provider.CapabilityValidation: {
-        Properties: map[string]provider.PropertyDefinition{
-            "valid": {
-                Type:        provider.PropertyTypeBool,
-                Required:    true,
-                Description: "Whether validation passed",
-            },
-            "errors": {
-                Type:        provider.PropertyTypeArray,
-                Description: "Validation error messages",
-            },
-        },
-    },
+OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+    provider.CapabilityValidation: schemahelper.ObjectSchema([]string{"valid"}, map[string]*jsonschema.Schema{
+        "valid":  schemahelper.BoolProp("Whether validation passed"),
+        "errors": schemahelper.ArrayProp("Validation error messages"),
+    }),
 },
 ```
 
 ### Action Capability
 
 ```go
-OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
-    provider.CapabilityAction: {
-        Properties: map[string]provider.PropertyDefinition{
-            "success": {
-                Type:        provider.PropertyTypeBool,
-                Required:    true,
-                Description: "Whether action succeeded",
-            },
-        },
-    },
+OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+    provider.CapabilityAction: schemahelper.ObjectSchema([]string{"success"}, map[string]*jsonschema.Schema{
+        "success": schemahelper.BoolProp("Whether action succeeded"),
+    }),
 },
 ```
 
@@ -417,10 +407,14 @@ lgr.Error(err, "request failed")                    // Error
 
 ### 4. Mark Sensitive Data
 
+Use `SensitiveFields` on the Descriptor to indicate which input fields should be masked in logs:
+
 ```go
-PropertyDefinition{
-    Type:     provider.PropertyTypeString,
-    IsSecret: true,  // Will be masked in logs
+func (p *MyProvider) Descriptor() *provider.Descriptor {
+    return &provider.Descriptor{
+        // ... other fields ...
+        SensitiveFields: []string{"password", "token"},  // These fields will be masked in logs
+    }
 }
 ```
 
@@ -462,8 +456,10 @@ import (
     "time"
 
     "github.com/Masterminds/semver/v3"
+    "github.com/google/jsonschema-go/jsonschema"
     "github.com/oakwood-commons/scafctl/pkg/logger"
     "github.com/oakwood-commons/scafctl/pkg/provider"
+    "github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 )
 
 type RateLimitProvider struct {
@@ -485,36 +481,19 @@ func (p *RateLimitProvider) Descriptor() *provider.Descriptor {
         Description: "Enforces rate limits on resolver execution. Use as a transform step.",
         Category:    "utility",
         Tags:        []string{"rate-limit", "throttle", "control"},
-        Schema: provider.SchemaDefinition{
-            Properties: map[string]provider.PropertyDefinition{
-                "value": {
-                    Type:        provider.PropertyTypeAny,
-                    Required:    true,
-                    Description: "The value to pass through",
-                },
-                "maxPerMinute": {
-                    Type:        provider.PropertyTypeInt,
-                    Required:    true,
-                    Description: "Maximum calls per minute",
-                    Minimum:     ptrFloat(1),
-                    Maximum:     ptrFloat(1000),
-                    Example:     60,
-                },
-            },
-        },
-        OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
-            provider.CapabilityTransform: {
-                Properties: map[string]provider.PropertyDefinition{
-                    "value": {
-                        Type:        provider.PropertyTypeAny,
-                        Description: "The passed-through value",
-                    },
-                    "remaining": {
-                        Type:        provider.PropertyTypeInt,
-                        Description: "Remaining calls in current window",
-                    },
-                },
-            },
+        Schema: schemahelper.ObjectSchema([]string{"value", "maxPerMinute"}, map[string]*jsonschema.Schema{
+            "value":        schemahelper.AnyProp("The value to pass through"),
+            "maxPerMinute": schemahelper.IntProp("Maximum calls per minute",
+                schemahelper.WithMinimum(1),
+                schemahelper.WithMaximum(1000),
+                schemahelper.WithExample(60),
+            ),
+        }),
+        OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+            provider.CapabilityTransform: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+                "value":     schemahelper.AnyProp("The passed-through value"),
+                "remaining": schemahelper.IntProp("Remaining calls in current window"),
+            }),
         },
         Capabilities: []provider.Capability{provider.CapabilityTransform},
         MockBehavior: "Returns the value without enforcing rate limit",
@@ -563,7 +542,6 @@ func (p *RateLimitProvider) Execute(ctx context.Context, input any) (*provider.O
     }, nil
 }
 
-func ptrFloat(v float64) *float64 { return &v }
 ```
 
 ## Next Steps

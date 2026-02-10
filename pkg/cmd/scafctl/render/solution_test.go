@@ -1,8 +1,12 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package render
 
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"testing"
@@ -168,6 +172,13 @@ func (m *mockGetter) FromLocalFileSystem(_ context.Context, _ string) (*solution
 
 func (m *mockGetter) FromURL(_ context.Context, _ string) (*solution.Solution, error) {
 	return m.Get(context.Background(), "")
+}
+
+func (m *mockGetter) GetWithBundle(_ context.Context, _ string) (*solution.Solution, []byte, error) {
+	if m.err != nil {
+		return nil, nil, m.err
+	}
+	return m.sol, nil, nil
 }
 
 func (m *mockGetter) FindSolution() string {
@@ -357,7 +368,10 @@ func TestSolutionOptions_exitWithCode(t *testing.T) {
 		originalErr := fmt.Errorf("test error")
 		err := options.exitWithCode(originalErr, exitcode.ValidationFailed)
 
-		assert.Equal(t, originalErr, err)
+		// Error should wrap the original error
+		assert.True(t, errors.Is(err, originalErr))
+		// Exit code should be extracted correctly
+		assert.Equal(t, exitcode.ValidationFailed, exitcode.GetCode(err))
 	})
 }
 

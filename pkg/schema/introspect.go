@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 // Package schema provides reflection-based struct introspection for generating
 // kubectl explain-style documentation from Go struct tags.
 package schema

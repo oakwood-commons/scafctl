@@ -33,10 +33,6 @@ spec:
           - provider: parameter
             inputs:
               key: environment
-          # Fall back to environment variable
-          - provider: env
-            inputs:
-              key: DEPLOY_ENV
           # Final fallback to literal default
           - provider: static
             inputs:
@@ -46,7 +42,7 @@ spec:
         with:
           - provider: cel
             inputs:
-              expression: "__self.toLowerCase()"
+              expression: "__self.lowerAscii()"
       # Validate: must be one of approved environments
       validate:
         with:
@@ -66,7 +62,7 @@ spec:
           - provider: parameter
             inputs:
               key: app
-          - provider: filesystem
+          - provider: file
             inputs:
               operation: read
               path: ./app-name.txt
@@ -82,7 +78,7 @@ spec:
           # Convert to lowercase
           - provider: cel
             inputs:
-              expression: "__self.toLowerCase()"
+              expression: "__self.lowerAscii()"
           # Replace underscores with hyphens
           - provider: cel
             inputs:
@@ -96,30 +92,48 @@ spec:
             message: "App name must be lowercase alphanumeric with hyphens, not starting or ending with hyphen"
 
     # -------------------------------------------------------------------------
-    # Example 3: Git provider for version information
-    # Uses: git provider
+    # Example 3: Git info via exec provider
+    # Uses: exec provider with CEL transform to extract stdout
     # -------------------------------------------------------------------------
     gitBranch:
       description: Current git branch
       resolve:
         with:
-          - provider: git
+          - provider: exec
             inputs:
-              field: branch
-
-    gitCommit:
-      description: Current git commit SHA
-      resolve:
-        with:
-          - provider: git
+              command: git
+              args:
+                - rev-parse
+                - --abbrev-ref
+                - HEAD
+          - provider: static
             inputs:
-              field: commit
+              value: main
       transform:
         with:
-          # Take first 7 characters for short SHA
           - provider: cel
             inputs:
-              expression: "__self.substring(0, 7)"
+              expression: "has(__self.stdout) ? __self.stdout.trim() : string(__self)"
+
+    gitCommit:
+      description: Current git commit SHA (short)
+      resolve:
+        with:
+          - provider: exec
+            inputs:
+              command: git
+              args:
+                - rev-parse
+                - --short
+                - HEAD
+          - provider: static
+            inputs:
+              value: "0000000"
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "has(__self.stdout) ? __self.stdout.trim() : string(__self)"
 
     # -------------------------------------------------------------------------
     # Example 4: CEL expression to derive value from other resolvers
@@ -145,12 +159,17 @@ spec:
       description: Configuration fetched from remote API
       resolve:
         with:
-          - provider: api
+          - provider: http
             inputs:
-              endpoint: https://api.example.com/config
+              url: https://api.example.com/config
               method: GET
-              headers:
-                Accept: application/json
+          # Fallback when API is unavailable
+          - provider: static
+            inputs:
+              value:
+                data:
+                  - endpoint: "https://api.example.com"
+                    timeout: 30
       validate:
         with:
           - provider: validation
@@ -197,19 +216,25 @@ spec:
       description: Kubernetes deployment template
       resolve:
         with:
-          - provider: filesystem
+          - provider: file
             inputs:
               operation: read
               path: ./templates/deployment.yaml.tmpl
+          - provider: static
+            inputs:
+              value: "# Auto-generated deployment manifest"
 
     serviceTemplate:
       description: Kubernetes service template
       resolve:
         with:
-          - provider: filesystem
+          - provider: file
             inputs:
               operation: read
               path: ./templates/service.yaml.tmpl
+          - provider: static
+            inputs:
+              value: "# Auto-generated service manifest"
 
     # -------------------------------------------------------------------------
     # Example 8: Boolean flags
@@ -333,7 +358,7 @@ spec:
     # -------------------------------------------------------------------------
     generateManifests:
       description: Generate Kubernetes manifests for each region
-      provider: filesystem
+      provider: file
       dependsOn: [validateEnvironment]
 
       # Iterate over regions
@@ -392,17 +417,12 @@ spec:
     # -------------------------------------------------------------------------
     notifyDeployment:
       description: Send deployment notification to webhook
-      provider: api
+      provider: http
       dependsOn: [generateManifests]
       when:
         expr: "!_.dryRun"
       inputs:
-        # Authentication configuration: use the "entra" auth provider to obtain
-        # an access token for the specified authScope when calling this webhook.
-        authProvider: entra
-        authScope: https://hooks.example.com/.default
-        # Literal string
-        endpoint: https://hooks.example.com/deployments
+        url: https://hooks.example.com/deployments
         method: POST
         headers:
           # Literal value
@@ -526,7 +546,7 @@ spec:
     # -------------------------------------------------------------------------
     generateReport:
       description: Generate deployment report
-      provider: filesystem
+      provider: file
       dependsOn: [notifyDeployment, verifyDeployment]
       inputs:
         operations:

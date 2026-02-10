@@ -61,7 +61,7 @@ Given the collaborative relationship with the kvx developer:
 
 | Recommendation | Description | Status | kvx Issue # |
 |----------------|-------------|--------|-------------|
-| Scalar value output | `RenderTable` should detect scalar values (string, number, bool) and output them directly without table formatting. Currently consumers must implement this check themselves. See workaround in `pkg/terminal/kvx/viewer.go`. | 🔵 Open | - |
+| Scalar value output | `RenderTable` should detect scalar values (string, number, bool) and output them directly without table formatting. Currently consumers must implement this check themselves. | ✅ Resolved | - |
 | _TBD_ | _Recommendations will be logged here as they arise during implementation_ | - | - |
 
 ---
@@ -261,20 +261,14 @@ func View(data any, opts ...Option) error {
 
 // renderTable outputs data as a bordered table (non-interactive)
 func renderTable(root any, options *ViewerOptions) error {
-	engine, err := core.New(core.WithSortOrder(core.SortAscending))
-	if err != nil {
-		return fmt.Errorf("failed to create engine: %w", err)
-	}
-
-	// Auto-detect terminal width or use provided
-	keyWidth, valueWidth := 30, 50
-	if options.Width > 0 {
-		keyWidth = options.Width / 3
-		valueWidth = options.Width - keyWidth - 10
-	}
-
-	output := engine.RenderTable(root, options.NoColor, keyWidth, valueWidth)
-	fmt.Fprintln(options.Out, output)
+	output := tui.RenderTable(root, tui.TableOptions{
+		AppName:  options.AppName,
+		Path:     "_",
+		Bordered: true,
+		Width:    options.Width,
+		NoColor:  options.NoColor,
+	})
+	fmt.Fprint(options.Out, output)
 	return nil
 }
 

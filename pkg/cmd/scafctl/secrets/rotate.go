@@ -1,8 +1,12 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package secrets
 
 import (
 	"fmt"
 
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -39,13 +43,17 @@ This is useful for:
 
 			store, err := secrets.New()
 			if err != nil {
-				return fmt.Errorf("failed to initialize secrets store: %w", err)
+				err := fmt.Errorf("failed to initialize secrets store: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.ConfigError)
 			}
 
 			// List secrets first to show what will be rotated
 			names, err := store.List(ctx)
 			if err != nil {
-				return fmt.Errorf("failed to list secrets: %w", err)
+				err := fmt.Errorf("failed to list secrets: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
 			// Confirm rotation
@@ -64,7 +72,9 @@ This is useful for:
 				WithDefault(false).
 				WithSkipCondition(cliParams.IsQuiet))
 			if err != nil {
-				return fmt.Errorf("failed to read confirmation: %w", err)
+				err := fmt.Errorf("failed to read confirmation: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 			if !confirmed {
 				w.Info("Rotation cancelled")
@@ -75,7 +85,9 @@ This is useful for:
 
 			// Perform rotation
 			if err := store.Rotate(ctx); err != nil {
-				return fmt.Errorf("rotation failed: %w", err)
+				err := fmt.Errorf("rotation failed: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
 			w.Successf("Master key rotated successfully (%d secret(s) re-encrypted)\n", len(names))

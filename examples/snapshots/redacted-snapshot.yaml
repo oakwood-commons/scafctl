@@ -1,0 +1,65 @@
+# Redacted Snapshot Example
+# Demonstrates creating snapshots with sensitive values redacted.
+# Useful for sharing snapshots without exposing secrets.
+#
+# Usage:
+#   # Create a snapshot with sensitive values redacted
+#   scafctl render solution -f examples/snapshots/redacted-snapshot.yaml \
+#     --snapshot --snapshot-file=/tmp/redacted.json --redact
+#
+#   # Compare redacted vs non-redacted
+#   scafctl render solution -f examples/snapshots/redacted-snapshot.yaml \
+#     --snapshot --snapshot-file=/tmp/full.json
+#
+#   scafctl snapshot show /tmp/redacted.json
+#   scafctl snapshot show /tmp/full.json
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: redacted-snapshot-demo
+  version: 1.0.0
+  description: Demonstrates snapshot redaction for sensitive data
+
+spec:
+  resolvers:
+    app_name:
+      description: Application name (non-sensitive)
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "my-secure-app"
+
+    api_key:
+      description: API key (sensitive - will be redacted)
+      type: string
+      sensitive: true
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "sk_live_abc123def456"
+
+    db_password:
+      description: Database password (sensitive - will be redacted)
+      type: string
+      sensitive: true
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "super-secret-password"
+
+    connection_string:
+      description: Full connection string with embedded secrets
+      type: string
+      sensitive: true
+      dependsOn:
+        - db_password
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "'postgres://admin:' + _.db_password + '@db.example.com:5432/mydb'"

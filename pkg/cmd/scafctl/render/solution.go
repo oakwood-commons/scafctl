@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package render
 
 import (
@@ -12,6 +15,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/action"
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/run"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -163,7 +167,7 @@ Examples:
 			err := output.ValidateCommands(args)
 			if err != nil {
 				writeSolutionError(options, err.Error())
-				return err
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
 			// Validate mutually exclusive modes
@@ -180,14 +184,14 @@ Examples:
 			if modeCount > 1 {
 				err := fmt.Errorf("--graph, --action-graph, and --snapshot are mutually exclusive")
 				writeSolutionError(options, err.Error())
-				return err
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
 			// Validate snapshot file requirement
 			if options.Snapshot && options.SnapshotFile == "" {
 				err := fmt.Errorf("--snapshot-file is required when using --snapshot")
 				writeSolutionError(options, err.Error())
-				return err
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
 			// Validate output format
@@ -195,7 +199,7 @@ Examples:
 				err = output.ValidateOutputType(options.Output, ValidOutputTypes)
 				if err != nil {
 					writeSolutionError(options, err.Error())
-					return err
+					return exitcode.WithCode(err, exitcode.InvalidInput)
 				}
 			}
 
@@ -618,11 +622,27 @@ func (o *SolutionOptions) runSnapshot(ctx context.Context, lgr logr.Logger) erro
 	return nil
 }
 
-// loadSolution loads the solution from file, stdin, or auto-discovery
+// loadSolution loads the solution from file, stdin, catalog, or auto-discovery
 func (o *SolutionOptions) loadSolution(ctx context.Context) (*solution.Solution, error) {
 	getter := o.getter
 	if getter == nil {
-		getter = get.NewGetter()
+		lgr := logger.FromContext(ctx)
+
+		// Set up getter options
+		getterOpts := []get.Option{
+			get.WithLogger(*lgr),
+		}
+
+		// Try to set up catalog resolver for bare name resolution
+		localCatalog, err := catalog.NewLocalCatalog(*lgr)
+		if err == nil {
+			resolver := catalog.NewSolutionResolver(localCatalog, *lgr)
+			getterOpts = append(getterOpts, get.WithCatalogResolver(resolver))
+		} else {
+			lgr.V(1).Info("catalog not available for solution resolution", "error", err)
+		}
+
+		getter = get.NewGetter(getterOpts...)
 	}
 
 	// Handle stdin
@@ -639,7 +659,7 @@ func (o *SolutionOptions) loadSolution(ctx context.Context) (*solution.Solution,
 		return &sol, nil
 	}
 
-	// Use getter for file or auto-discovery
+	// Use getter for file, catalog, or auto-discovery
 	return getter.Get(ctx, o.File)
 }
 
@@ -686,9 +706,9 @@ func (o *SolutionOptions) writeToFile(data []byte) error {
 }
 
 // exitWithCode returns the error with appropriate exit handling
-func (o *SolutionOptions) exitWithCode(err error, _ int) error {
+func (o *SolutionOptions) exitWithCode(err error, code int) error {
 	writeSolutionError(o, err.Error())
-	return err
+	return exitcode.WithCode(err, code)
 }
 
 // writeSolutionError writes an error message

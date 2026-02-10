@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 // Package identityprovider provides authentication identity information from auth handlers.
 // It exposes non-sensitive identity data like claims, authentication status, and identity type.
 // It never exposes tokens or other secrets.
@@ -9,9 +12,11 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/ptrs"
 )
 
@@ -45,73 +50,28 @@ func NewIdentityProvider() *IdentityProvider {
 				provider.CapabilityFrom,
 			},
 			Tags: []string{"auth", "identity", "claims", "security"},
-			Schema: provider.SchemaDefinition{
-				Properties: map[string]provider.PropertyDefinition{
-					"operation": {
-						Type:        provider.PropertyTypeString,
-						Description: "Operation to perform: 'status' to get auth status, 'claims' to get identity claims, 'list' to list available handlers",
-						Required:    true,
-						Enum:        []any{"status", "claims", "list"},
-						Example:     "claims",
-						MaxLength:   ptrs.IntPtr(10),
-					},
-					"handler": {
-						Type:        provider.PropertyTypeString,
-						Description: "Name of the auth handler to query (e.g., 'entra'). If not specified, uses the first available authenticated handler.",
-						MaxLength:   ptrs.IntPtr(50),
-						Pattern:     `^[a-z][a-z0-9-]*$`,
-						Example:     "entra",
-					},
-				},
-			},
-			OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
-				provider.CapabilityFrom: {
-					Properties: map[string]provider.PropertyDefinition{
-						"operation": {
-							Type:        provider.PropertyTypeString,
-							Description: "Operation that was performed",
-							Example:     "claims",
-						},
-						"handler": {
-							Type:        provider.PropertyTypeString,
-							Description: "Name of the auth handler queried",
-							Example:     "entra",
-						},
-						"authenticated": {
-							Type:        provider.PropertyTypeBool,
-							Description: "Whether the user is authenticated",
-							Example:     true,
-						},
-						"identityType": {
-							Type:        provider.PropertyTypeString,
-							Description: "Type of identity: 'user', 'service-principal', or 'workload-identity'",
-							Example:     "user",
-						},
-						"claims": {
-							Type:        provider.PropertyTypeAny,
-							Description: "Identity claims (name, email, subject, etc.)",
-						},
-						"tenantId": {
-							Type:        provider.PropertyTypeString,
-							Description: "Tenant ID for the authenticated identity",
-							Example:     "12345678-1234-1234-1234-123456789012",
-						},
-						"expiresAt": {
-							Type:        provider.PropertyTypeString,
-							Description: "Token expiration time in RFC3339 format",
-							Example:     "2024-01-15T10:30:00Z",
-						},
-						"expiresIn": {
-							Type:        provider.PropertyTypeString,
-							Description: "Human-readable duration until token expires",
-							Example:     "55m30s",
-						},
-						"handlers": {
-							Type:        provider.PropertyTypeArray,
-							Description: "List of available auth handler names (for 'list' operation)",
-						},
-					},
-				},
+			Schema: schemahelper.ObjectSchema([]string{"operation"}, map[string]*jsonschema.Schema{
+				"operation": schemahelper.StringProp("Operation to perform: 'status' to get auth status, 'claims' to get identity claims, 'list' to list available handlers",
+					schemahelper.WithEnum("status", "claims", "list"),
+					schemahelper.WithExample("claims"),
+					schemahelper.WithMaxLength(*ptrs.IntPtr(10))),
+				"handler": schemahelper.StringProp("Name of the auth handler to query (e.g., 'entra'). If not specified, uses the first available authenticated handler.",
+					schemahelper.WithMaxLength(*ptrs.IntPtr(50)),
+					schemahelper.WithPattern(`^[a-z][a-z0-9-]*$`),
+					schemahelper.WithExample("entra")),
+			}),
+			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"operation":     schemahelper.StringProp("Operation that was performed", schemahelper.WithExample("claims")),
+					"handler":       schemahelper.StringProp("Name of the auth handler queried", schemahelper.WithExample("entra")),
+					"authenticated": schemahelper.BoolProp("Whether the user is authenticated", schemahelper.WithExample(true)),
+					"identityType":  schemahelper.StringProp("Type of identity: 'user', 'service-principal', or 'workload-identity'", schemahelper.WithExample("user")),
+					"claims":        schemahelper.AnyProp("Identity claims (name, email, subject, etc.)"),
+					"tenantId":      schemahelper.StringProp("Tenant ID for the authenticated identity", schemahelper.WithExample("12345678-1234-1234-1234-123456789012")),
+					"expiresAt":     schemahelper.StringProp("Token expiration time in RFC3339 format", schemahelper.WithExample("2024-01-15T10:30:00Z")),
+					"expiresIn":     schemahelper.StringProp("Human-readable duration until token expires", schemahelper.WithExample("55m30s")),
+					"handlers":      schemahelper.ArrayProp("List of available auth handler names (for 'list' operation)"),
+				}),
 			},
 			Examples: []provider.Example{
 				{

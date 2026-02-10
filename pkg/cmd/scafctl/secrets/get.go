@@ -1,12 +1,17 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package secrets
 
 import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -25,21 +30,27 @@ func CommandGet(_ *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
+			w := writer.MustFromContext(ctx)
 			name := args[0]
 
 			// Validate name
 			if err := ValidateUserSecretName(name); err != nil {
-				return err
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
 			store, err := secrets.New()
 			if err != nil {
-				return fmt.Errorf("failed to initialize secrets store: %w", err)
+				err := fmt.Errorf("failed to initialize secrets store: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.ConfigError)
 			}
 
 			value, err := store.Get(ctx, name)
 			if err != nil {
-				return fmt.Errorf("failed to get secret '%s': %w", name, err)
+				err := fmt.Errorf("failed to get secret '%s': %w", name, err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.FileNotFound)
 			}
 
 			// Handle different output formats
@@ -51,13 +62,19 @@ func CommandGet(_ *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra
 				}
 				jsonBytes, err := json.Marshal(data)
 				if err != nil {
-					return fmt.Errorf("failed to encode as JSON: %w", err)
+					err := fmt.Errorf("failed to encode as JSON: %w", err)
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.GeneralError)
 				}
 				if _, err := ioStreams.Out.Write(jsonBytes); err != nil {
-					return fmt.Errorf("failed to write JSON: %w", err)
+					err := fmt.Errorf("failed to write JSON: %w", err)
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.GeneralError)
 				}
 				if _, err := fmt.Fprintln(ioStreams.Out); err != nil {
-					return fmt.Errorf("failed to write newline: %w", err)
+					err := fmt.Errorf("failed to write newline: %w", err)
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.GeneralError)
 				}
 			case "yaml":
 				data := map[string]interface{}{
@@ -67,16 +84,22 @@ func CommandGet(_ *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra
 				encoder := yaml.NewEncoder(ioStreams.Out)
 				encoder.SetIndent(2)
 				if err := encoder.Encode(data); err != nil {
-					return fmt.Errorf("failed to encode as YAML: %w", err)
+					err := fmt.Errorf("failed to encode as YAML: %w", err)
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.GeneralError)
 				}
 			default:
 				// Raw output
 				if _, err := ioStreams.Out.Write(value); err != nil {
-					return fmt.Errorf("failed to write value: %w", err)
+					err := fmt.Errorf("failed to write value: %w", err)
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.GeneralError)
 				}
 				if !noNewline {
 					if _, err := fmt.Fprintln(ioStreams.Out); err != nil {
-						return fmt.Errorf("failed to write newline: %w", err)
+						err := fmt.Errorf("failed to write newline: %w", err)
+						w.Errorf("%v", err)
+						return exitcode.WithCode(err, exitcode.GeneralError)
 					}
 				}
 			}

@@ -45,14 +45,21 @@ signs:
       - "${signature}"
       - "--detach-sign"
       - "${artifact}"
-blobs:
-
-  - provider: gs
-    bucket: scafctl-assets
-    directory: "cli/{{.Version}}"
-
 release:
   draft: false
   prerelease: auto
 changelog:
   disable: false
+  use: github
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+    - title: Bug Fixes
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+    - title: Documentation
+      regexp: '^.*?docs(\([[:word:]]+\))??!?:.+$'
+    - title: Others
+      order: 999
+  filters:
+    exclude:
+      - '^chore:'

@@ -459,13 +459,11 @@ spec:
         with:
           # Try remote config first
           - provider: http
-            onError: continue
             inputs:
               url: https://config.example.com/settings
               timeout: 5s
           # Fall back to local file
           - provider: file
-            onError: continue
             inputs:
               path: ./config.json
           # Last resort: default values
@@ -476,9 +474,9 @@ spec:
                 timeout: 30
 ```
 
-**onError Options**:
-- `fail` (default): Stop execution and return error
-- `continue`: Try the next source in the list
+**onError Options** (resolve phase):
+- `continue` (default): Try the next source in the list. The resolve phase acts as an implicit fallback chain.
+- `fail`: Stop execution immediately and return the error without trying remaining sources.
 
 ---
 

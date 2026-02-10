@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package get
 
 import (
@@ -5,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	pathlib "path/filepath"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -15,13 +20,31 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/metrics"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 )
 
+// CatalogResolver is an interface for fetching solutions from a catalog.
+// This avoids a circular dependency with the catalog package.
+type CatalogResolver interface {
+	// FetchSolution retrieves a solution from the catalog by name[@version].
+	// Returns the solution content bytes and any error.
+	FetchSolution(ctx context.Context, nameWithVersion string) ([]byte, error)
+}
+
+// BundleAwareCatalogResolver extends CatalogResolver with bundle fetching.
+type BundleAwareCatalogResolver interface {
+	CatalogResolver
+	// FetchSolutionWithBundle retrieves a solution and its bundle from the catalog.
+	// Returns the solution content bytes, bundle tar bytes (nil if no bundle), and any error.
+	FetchSolutionWithBundle(ctx context.Context, nameWithVersion string) (content, bundleData []byte, err error)
+}
+
 type Getter struct {
-	readFile   fs.ReadFileFunc
-	statFunc   fs.StatFunc
-	httpClient *httpc.Client
-	logger     logr.Logger
+	readFile        fs.ReadFileFunc
+	statFunc        fs.StatFunc
+	httpClient      *httpc.Client
+	logger          logr.Logger
+	catalogResolver CatalogResolver
 }
 
 // Option defines a function type that modifies a Getter instance.
@@ -64,6 +87,15 @@ func WithLogger(logger logr.Logger) Option {
 	}
 }
 
+// WithCatalogResolver returns an Option that sets the catalog resolver for the Getter.
+// When a catalog resolver is set, the Getter will attempt to resolve bare names
+// (names without path separators or URL schemes) from the catalog first.
+func WithCatalogResolver(resolver CatalogResolver) Option {
+	return func(g *Getter) {
+		g.catalogResolver = resolver
+	}
+}
+
 // WithAppConfig returns an Option that configures the HTTP client using the application configuration.
 // It creates an HTTP client with settings from the provided config.HTTPClientConfig.
 // The logger is used for HTTP client logging.
@@ -103,12 +135,13 @@ func NewGetter(opts ...Option) *Getter {
 //   - FromUrl: Loads a Solution from a specified remote URL.
 //   - Get: Loads a Solution from a path (local or URL) with auto-discovery support.
 //   - FindSolution: Searches for a solution file in default locations.
-//
-// TODO: This will need to support the scafctl repository
 type Interface interface {
 	FromLocalFileSystem(ctx context.Context, path string) (*solution.Solution, error)
 	FromURL(ctx context.Context, url string) (*solution.Solution, error)
 	Get(ctx context.Context, path string) (*solution.Solution, error)
+	// GetWithBundle retrieves a Solution and its bundle tar data (if any).
+	// bundleData is nil when the solution has no bundle or comes from a local file.
+	GetWithBundle(ctx context.Context, path string) (sol *solution.Solution, bundleData []byte, err error)
 	FindSolution() string
 }
 
@@ -139,10 +172,155 @@ func (o *Getter) Get(ctx context.Context, path string) (*solution.Solution, erro
 	if path == "" {
 		return nil, fmt.Errorf("no solution path provided and no solution file found in default locations")
 	}
+
+	// Check if this is a bare name that should be resolved from catalog.
+	// A bare name has no path separators and is not a URL.
+	var catalogErr error
+	if o.catalogResolver != nil && o.isBareName(path) {
+		o.logger.V(1).Info("attempting to resolve from catalog", "name", path)
+		sol, err := o.fromCatalog(ctx, path)
+		if err == nil {
+			o.logger.V(1).Info("resolved solution from catalog", "name", path)
+			return sol, nil
+		}
+
+		// If the path contains @, user explicitly requested a version from catalog.
+		// Don't fall back to file resolution - return the catalog error directly.
+		if strings.Contains(path, "@") {
+			return nil, err
+		}
+
+		// Save catalog error for combined error message if file resolution also fails
+		catalogErr = err
+		o.logger.V(1).Info("solution not found in catalog, falling back to file resolution", "name", path, "error", err)
+	}
+
 	if filepath.IsURL(path) {
 		return o.FromURL(ctx, path)
 	}
-	return o.FromLocalFileSystem(ctx, path)
+
+	sol, fileErr := o.FromLocalFileSystem(ctx, path)
+	if fileErr == nil {
+		return sol, nil
+	}
+
+	// If we tried catalog and it failed, provide a combined error message
+	if catalogErr != nil {
+		return nil, fmt.Errorf("%w; also not found on file system", catalogErr)
+	}
+
+	return nil, fileErr
+}
+
+// GetWithBundle retrieves a Solution and its bundle tar data from the specified path.
+// bundleData is nil when the solution has no bundle or comes from a local file/URL.
+func (o *Getter) GetWithBundle(ctx context.Context, path string) (*solution.Solution, []byte, error) {
+	start := time.Now()
+	if path == "" {
+		path = o.FindSolution()
+	}
+
+	defer func() {
+		metrics.GetSolutionTimeHistogram.WithLabelValues(path).Observe(time.Since(start).Seconds())
+	}()
+
+	if path == "" {
+		return nil, nil, fmt.Errorf("no solution path provided and no solution file found in default locations")
+	}
+
+	// Check if this is a bare name that should be resolved from catalog
+	if o.catalogResolver != nil && o.isBareName(path) {
+		o.logger.V(1).Info("attempting to resolve with bundle from catalog", "name", path)
+		sol, bundleData, err := o.fromCatalogWithBundle(ctx, path)
+		if err == nil {
+			o.logger.V(1).Info("resolved solution with bundle from catalog", "name", path, "hasBundle", len(bundleData) > 0)
+			return sol, bundleData, nil
+		}
+
+		// If the path contains @, user explicitly requested a version from catalog
+		if strings.Contains(path, "@") {
+			return nil, nil, err
+		}
+
+		o.logger.V(1).Info("solution not found in catalog, falling back to file resolution", "name", path, "error", err)
+	}
+
+	// For local files and URLs, bundle data is nil (files are already on disk)
+	if filepath.IsURL(path) {
+		sol, err := o.FromURL(ctx, path)
+		return sol, nil, err
+	}
+
+	sol, err := o.FromLocalFileSystem(ctx, path)
+	return sol, nil, err
+}
+
+// fromCatalogWithBundle retrieves a solution and its bundle from the catalog.
+func (o *Getter) fromCatalogWithBundle(ctx context.Context, nameWithVersion string) (*solution.Solution, []byte, error) {
+	// Try bundle-aware resolver first
+	if bundleResolver, ok := o.catalogResolver.(BundleAwareCatalogResolver); ok {
+		content, bundleData, err := bundleResolver.FetchSolutionWithBundle(ctx, nameWithVersion)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		sol := solution.Solution{}
+		if err := sol.LoadFromBytes(content); err != nil {
+			return nil, nil, fmt.Errorf("failed to parse solution from catalog: %w", err)
+		}
+
+		sol.SetPath(fmt.Sprintf("catalog:%s", nameWithVersion))
+		return &sol, bundleData, nil
+	}
+
+	// Fall back to basic resolver (no bundle)
+	content, err := o.catalogResolver.FetchSolution(ctx, nameWithVersion)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	sol := solution.Solution{}
+	if err := sol.LoadFromBytes(content); err != nil {
+		return nil, nil, fmt.Errorf("failed to parse solution from catalog: %w", err)
+	}
+
+	sol.SetPath(fmt.Sprintf("catalog:%s", nameWithVersion))
+	return &sol, nil, nil
+}
+
+// isBareName returns true if the path is a bare name suitable for catalog lookup.
+// A bare name has no path separators (/, \) and is not a URL.
+func (o *Getter) isBareName(path string) bool {
+	// Not a bare name if it contains path separators
+	if strings.Contains(path, "/") || strings.Contains(path, "\\") {
+		return false
+	}
+	// Not a bare name if it's a URL
+	if filepath.IsURL(path) {
+		return false
+	}
+	// Not a bare name if it has a file extension (likely a file)
+	if strings.Contains(path, ".yaml") || strings.Contains(path, ".yml") || strings.Contains(path, ".json") {
+		return false
+	}
+	return true
+}
+
+// fromCatalog retrieves a solution from the catalog by name[@version].
+func (o *Getter) fromCatalog(ctx context.Context, nameWithVersion string) (*solution.Solution, error) {
+	content, err := o.catalogResolver.FetchSolution(ctx, nameWithVersion)
+	if err != nil {
+		return nil, err
+	}
+
+	sol := solution.Solution{}
+	if err := sol.LoadFromBytes(content); err != nil {
+		return nil, fmt.Errorf("failed to parse solution from catalog: %w", err)
+	}
+
+	// Mark the solution as coming from catalog
+	sol.SetPath(fmt.Sprintf("catalog:%s", nameWithVersion))
+	return &sol, nil
 }
 
 // FromLocalFileSystem reads a solution from the local filesystem at the specified path.
@@ -170,7 +348,7 @@ func (o *Getter) FromLocalFileSystem(_ context.Context, path string) (*solution.
 
 	data, err := o.readFile(path)
 	if err != nil {
-		o.logger.Error(err, "Failed to read file", "path", path)
+		o.logger.V(1).Info("Failed to read file", "path", path, "error", err)
 		return &solution.Solution{}, fmt.Errorf("unable to get the solution. Failed reading file '%s': %w", path, err)
 	}
 
@@ -183,8 +361,22 @@ func (o *Getter) FromLocalFileSystem(_ context.Context, path string) (*solution.
 		return &solution.Solution{}, fmt.Errorf("unable to get the solution. Failed unmarshalling data from file '%s': %w", path, err)
 	}
 
-	o.logger.Info("Successfully loaded solution from local filesystem", "path", path)
+	o.logger.V(1).Info("Successfully loaded solution from local filesystem", "path", path)
 	sol.SetPath(path)
+
+	// Apply compose if the solution references composed files
+	if len(sol.Compose) > 0 {
+		bundleRoot := pathlib.Dir(path)
+		composed, err := bundler.Compose(&sol, bundleRoot, bundler.WithReadFileFunc(o.readFile))
+		if err != nil {
+			o.logger.Error(err, "Failed to compose solution", "path", path)
+			return &solution.Solution{}, fmt.Errorf("unable to compose solution from '%s': %w", path, err)
+		}
+		composed.SetPath(path)
+		o.logger.V(1).Info("Successfully composed solution", "path", path, "composeFiles", len(sol.Compose))
+		return composed, nil
+	}
+
 	return &sol, nil
 }
 

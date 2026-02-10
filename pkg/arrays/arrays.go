@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package arrays
 
 // UniqueStrings returns a slice of unique strings from the input slice,

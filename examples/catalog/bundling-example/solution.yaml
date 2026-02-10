@@ -1,0 +1,86 @@
+# Bundling Example Solution
+#
+# This solution demonstrates advanced bundle configuration:
+# - Explicit include patterns for dynamically-loaded files
+# - Exclude patterns to filter out test files
+# - Static file references (auto-discovered)
+# - Dynamic file paths (require explicit includes)
+#
+# Usage:
+#   scafctl build solution examples/catalog/bundling-example/solution.yaml --dry-run
+#   scafctl build solution examples/catalog/bundling-example/solution.yaml --version 1.0.0
+#   scafctl run solution bundling-example -r environment=dev
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: bundling-example
+  version: 1.0.0
+  description: Demonstrates bundle configuration with include/exclude patterns
+
+# Bundle configuration controls what files are packaged
+bundle:
+  # Explicit patterns for files that can't be auto-discovered
+  # (e.g., files loaded via dynamic CEL expressions)
+  include:
+    - "configs/**/*.yaml"
+  
+  # Exclude test files from the bundle
+  exclude:
+    - "**/*_test.yaml"
+
+spec:
+  resolvers:
+    # User provides the target environment
+    environment:
+      type: string
+      description: "Target environment (dev, staging, prod)"
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              name: environment
+              default: dev
+
+    # STATIC PATH: This file reference is auto-discovered during build
+    # No bundle.include needed - scafctl finds it automatically
+    deployment-template:
+      type: string
+      description: "Kubernetes deployment template"
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              path: "templates/deployment.yaml"
+
+    # DYNAMIC PATH: This path is computed at runtime using CEL
+    # Requires bundle.include pattern because scafctl can't analyze it
+    # The dry-run output will show a "dynamic path warning" for this
+    config-file:
+      type: any
+      description: "Environment-specific configuration"
+      dependsOn:
+        - environment
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              path:
+                expr: "'configs/' + _.environment + '.yaml'"
+              format: yaml
+
+    # Combine template with config values
+    rendered-deployment:
+      type: string
+      description: "Rendered deployment manifest"
+      dependsOn:
+        - deployment-template
+        - config-file
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              template:
+                rslvr: deployment-template
+              data:
+                rslvr: config-file

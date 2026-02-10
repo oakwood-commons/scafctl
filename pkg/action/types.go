@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 // Package action provides types and execution logic for the Actions system.
 // Actions consume resolved data from resolvers and perform side-effect operations.
 package action
@@ -6,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 )
 
@@ -21,6 +25,10 @@ type Workflow struct {
 	// Finally actions cannot use dependsOn to reference regular actions, but can
 	// access all regular action results. They have an implicit dependency on all regular actions.
 	Finally map[string]*Action `json:"finally,omitempty" yaml:"finally,omitempty" doc:"Cleanup/finalization actions that run after all regular actions"`
+
+	// ResultSchemaMode sets the default validation behavior for resultSchema across all actions.
+	// Individual actions can override this setting. Default is "error".
+	ResultSchemaMode ResultSchemaMode `json:"resultSchemaMode,omitempty" yaml:"resultSchemaMode,omitempty" doc:"Default result schema validation mode" example:"error" default:"error"`
 }
 
 // Action represents a single action definition.
@@ -77,11 +85,48 @@ type Action struct {
 	// If provided, the provider's output is validated against this schema at runtime.
 	// Supports full JSON Schema 2020-12 specification including $ref, allOf, anyOf, oneOf, etc.
 	// This enables self-documenting actions and catches mismatches early.
+	// Use ResultSchemaMode to control validation behavior (error, warn, ignore).
 	ResultSchema *jsonschema.Schema `json:"resultSchema,omitempty" yaml:"resultSchema,omitempty" doc:"JSON Schema for result validation"`
+
+	// ResultSchemaMode controls behavior when result schema validation fails.
+	// Overrides the workflow-level default. Options: "error" (fail action), "warn" (log and continue), "ignore" (skip validation).
+	ResultSchemaMode ResultSchemaMode `json:"resultSchemaMode,omitempty" yaml:"resultSchemaMode,omitempty" doc:"Result schema validation mode" example:"error"`
 }
 
 // Duration is a wrapper around time.Duration that supports YAML/JSON marshaling.
 type Duration time.Duration
+
+// ResultSchemaMode defines the validation behavior when result schema validation fails.
+type ResultSchemaMode string
+
+const (
+	// ResultSchemaModeError fails the action when schema validation fails (default).
+	ResultSchemaModeError ResultSchemaMode = "error"
+
+	// ResultSchemaModeWarn logs a warning and continues execution.
+	ResultSchemaModeWarn ResultSchemaMode = "warn"
+
+	// ResultSchemaModeIgnore skips schema validation entirely.
+	ResultSchemaModeIgnore ResultSchemaMode = "ignore"
+)
+
+// IsValid returns true if the result schema mode is valid.
+func (m ResultSchemaMode) IsValid() bool {
+	switch m {
+	case ResultSchemaModeError, ResultSchemaModeWarn, ResultSchemaModeIgnore, "":
+		return true
+	default:
+		return false
+	}
+}
+
+// OrDefault returns the mode or the default (ResultSchemaModeError) if empty.
+func (m ResultSchemaMode) OrDefault() ResultSchemaMode {
+	if m == "" {
+		return ResultSchemaModeError
+	}
+	return m
+}
 
 // RetryConfig defines automatic retry behavior for failed actions.
 type RetryConfig struct {
@@ -100,6 +145,19 @@ type RetryConfig struct {
 	// MaxDelay caps the maximum delay between retries.
 	// Only meaningful for linear and exponential backoff.
 	MaxDelay *Duration `json:"maxDelay,omitempty" yaml:"maxDelay,omitempty" doc:"Maximum delay between retries" example:"30s"`
+
+	// RetryIf is a CEL expression that determines whether a retry should occur.
+	// The expression has access to __error context with error details:
+	//   - __error.message: Error message string
+	//   - __error.type: Error type ("http", "exec", "timeout", "validation", "unknown")
+	//   - __error.statusCode: HTTP status code (0 if not HTTP)
+	//   - __error.exitCode: Process exit code (0 if not exec)
+	//   - __error.attempt: Current attempt number (1-based)
+	//   - __error.maxAttempts: Maximum configured attempts
+	// If not specified, all errors are retried (default behavior).
+	// If specified and evaluates to false, no retry occurs.
+	// Example: "${ __error.statusCode == 429 || __error.statusCode >= 500 }"
+	RetryIf *celexp.Expression `json:"retryIf,omitempty" yaml:"retryIf,omitempty" doc:"CEL expression to determine if retry should occur"`
 }
 
 // BackoffType defines the backoff strategy for retries.

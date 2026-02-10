@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 // Package secrets provides secure secret storage operations using AES-256-GCM encryption
 // with OS keychain integration for master key management.
 //

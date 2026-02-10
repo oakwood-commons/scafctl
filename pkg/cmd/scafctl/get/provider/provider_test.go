@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package provider
 
 import (
@@ -6,8 +9,10 @@ import (
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/stretchr/testify/assert"
@@ -38,23 +43,13 @@ func newMockProvider(name, description string, caps []provider.Capability) *mock
 			Version:      semver.MustParse("1.0.0"),
 			Capabilities: caps,
 			MockBehavior: "Returns mock data for testing",
-			Schema: provider.SchemaDefinition{
-				Properties: map[string]provider.PropertyDefinition{
-					"input": {
-						Type:        provider.PropertyTypeString,
-						Description: "Test input",
-					},
-				},
-			},
-			OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
-				caps[0]: {
-					Properties: map[string]provider.PropertyDefinition{
-						"output": {
-							Type:        provider.PropertyTypeString,
-							Description: "Test output",
-						},
-					},
-				},
+			Schema: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+				"input": schemahelper.StringProp("Test input"),
+			}),
+			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+				caps[0]: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"output": schemahelper.StringProp("Test output"),
+				}),
 			},
 		},
 	}
@@ -75,38 +70,19 @@ func newMockProviderFull() *mockProvider {
 			Icon:         "🌐",
 			MockBehavior: "Returns mock network data",
 			Beta:         true,
-			Schema: provider.SchemaDefinition{
-				Properties: map[string]provider.PropertyDefinition{
-					"url": {
-						Type:        provider.PropertyTypeString,
-						Description: "The URL to fetch",
-						Required:    true,
-						Example:     "https://api.example.com",
-					},
-					"timeout": {
-						Type:        provider.PropertyTypeInt,
-						Description: "Timeout in seconds",
-						Default:     30,
-					},
-				},
-			},
-			OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
-				provider.CapabilityFrom: {
-					Properties: map[string]provider.PropertyDefinition{
-						"body": {
-							Type:        provider.PropertyTypeString,
-							Description: "Response body",
-						},
-					},
-				},
-				provider.CapabilityTransform: {
-					Properties: map[string]provider.PropertyDefinition{
-						"data": {
-							Type:        provider.PropertyTypeAny,
-							Description: "Transformed data",
-						},
-					},
-				},
+			Schema: schemahelper.ObjectSchema([]string{"url"}, map[string]*jsonschema.Schema{
+				"url": schemahelper.StringProp("The URL to fetch",
+					schemahelper.WithExample("https://api.example.com")),
+				"timeout": schemahelper.IntProp("Timeout in seconds",
+					schemahelper.WithDefault(30)),
+			}),
+			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"body": schemahelper.StringProp("Response body"),
+				}),
+				provider.CapabilityTransform: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"data": schemahelper.AnyProp("Transformed data"),
+				}),
 			},
 			Links: []provider.Link{
 				{Name: "Documentation", URL: "https://docs.example.com"},
@@ -578,15 +554,9 @@ func TestBuildProviderDetail(t *testing.T) {
 				Description:  "Has schema",
 				Capabilities: []provider.Capability{provider.CapabilityFrom},
 				MockBehavior: "Test mock behavior",
-				Schema: provider.SchemaDefinition{
-					Properties: map[string]provider.PropertyDefinition{
-						"url": {
-							Type:        provider.PropertyTypeString,
-							Description: "The URL",
-							Required:    true,
-						},
-					},
-				},
+				Schema: schemahelper.ObjectSchema([]string{"url"}, map[string]*jsonschema.Schema{
+					"url": schemahelper.StringProp("The URL"),
+				}),
 			},
 			checkKeys: []string{"schema"},
 		},
@@ -600,12 +570,10 @@ func TestBuildProviderDetail(t *testing.T) {
 				Description:  "Has output schemas",
 				Capabilities: []provider.Capability{provider.CapabilityFrom},
 				MockBehavior: "Test mock behavior",
-				OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
-					provider.CapabilityFrom: {
-						Properties: map[string]provider.PropertyDefinition{
-							"result": {Type: provider.PropertyTypeString},
-						},
-					},
+				OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+					provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+						"result": schemahelper.StringProp(""),
+					}),
 				},
 			},
 			checkKeys: []string{"outputSchemas"},
@@ -677,26 +645,26 @@ func TestBuildProviderDetail(t *testing.T) {
 func TestBuildSchemaOutput(t *testing.T) {
 	tests := []struct {
 		name   string
-		schema provider.SchemaDefinition
+		schema *jsonschema.Schema
 		want   map[string]any
 	}{
 		{
+			name:   "nil_schema_returns_nil",
+			schema: nil,
+			want:   nil,
+		},
+		{
 			name: "empty_schema_returns_nil",
-			schema: provider.SchemaDefinition{
-				Properties: map[string]provider.PropertyDefinition{},
+			schema: &jsonschema.Schema{
+				Properties: map[string]*jsonschema.Schema{},
 			},
 			want: nil,
 		},
 		{
 			name: "basic_property",
-			schema: provider.SchemaDefinition{
-				Properties: map[string]provider.PropertyDefinition{
-					"url": {
-						Type:        provider.PropertyTypeString,
-						Description: "The URL",
-					},
-				},
-			},
+			schema: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+				"url": schemahelper.StringProp("The URL"),
+			}),
 			want: map[string]any{
 				"properties": map[string]any{
 					"url": map[string]any{
@@ -708,25 +676,19 @@ func TestBuildSchemaOutput(t *testing.T) {
 		},
 		{
 			name: "property_with_all_fields",
-			schema: provider.SchemaDefinition{
-				Properties: map[string]provider.PropertyDefinition{
-					"count": {
-						Type:        provider.PropertyTypeInt,
-						Description: "Count value",
-						Required:    true,
-						Default:     10,
-						Example:     5,
-						Enum:        []any{1, 5, 10},
-					},
-				},
-			},
+			schema: schemahelper.ObjectSchema([]string{"count"}, map[string]*jsonschema.Schema{
+				"count": schemahelper.IntProp("Count value",
+					schemahelper.WithDefault(10),
+					schemahelper.WithExample(5),
+					schemahelper.WithEnum(1, 5, 10)),
+			}),
 			want: map[string]any{
 				"properties": map[string]any{
 					"count": map[string]any{
-						"type":        "int",
+						"type":        "integer",
 						"description": "Count value",
 						"required":    true,
-						"default":     10,
+						"default":     float64(10),
 						"example":     5,
 						"enum":        []any{1, 5, 10},
 					},

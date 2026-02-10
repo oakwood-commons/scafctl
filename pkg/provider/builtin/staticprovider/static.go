@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package staticprovider
 
 import (
@@ -5,8 +8,10 @@ import (
 	"fmt"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 )
 
 // ProviderName is the name of this provider.
@@ -29,35 +34,16 @@ func (p *StaticProvider) Descriptor() *provider.Descriptor {
 		APIVersion:  "v1",
 		Version:     semver.MustParse("1.0.0"),
 		Description: "Returns a static value without performing any operations. Useful for constants, defaults, and testing.",
-		Schema: provider.SchemaDefinition{
-			Properties: map[string]provider.PropertyDefinition{
-				"value": {
-					Type:        provider.PropertyTypeAny,
-					Required:    true,
-					Description: "The static value to return (can be any type: string, number, boolean, object, array)",
-					Example:     "example-value",
-				},
-			},
-		},
-		OutputSchemas: map[provider.Capability]provider.SchemaDefinition{
-			provider.CapabilityFrom: {
-				Properties: map[string]provider.PropertyDefinition{
-					"value": {
-						Type:        provider.PropertyTypeAny,
-						Description: "The static value that was provided (returned directly)",
-						Example:     "example-value",
-					},
-				},
-			},
-			provider.CapabilityTransform: {
-				Properties: map[string]provider.PropertyDefinition{
-					"value": {
-						Type:        provider.PropertyTypeAny,
-						Description: "The static value that was provided (returned directly)",
-						Example:     "example-value",
-					},
-				},
-			},
+		Schema: schemahelper.ObjectSchema([]string{"value"}, map[string]*jsonschema.Schema{
+			"value": schemahelper.AnyProp("The static value to return (can be any type: string, number, boolean, object, array)", schemahelper.WithExample("example-value")),
+		}),
+		OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+			provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+				"value": schemahelper.AnyProp("The static value that was provided (returned directly)", schemahelper.WithExample("example-value")),
+			}),
+			provider.CapabilityTransform: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+				"value": schemahelper.AnyProp("The static value that was provided (returned directly)", schemahelper.WithExample("example-value")),
+			}),
 		},
 		Capabilities: []provider.Capability{
 			provider.CapabilityFrom,

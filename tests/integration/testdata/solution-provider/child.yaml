@@ -1,0 +1,21 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: child-solution
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "hello from child"
+    echo-param:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: message

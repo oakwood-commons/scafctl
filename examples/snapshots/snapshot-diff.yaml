@@ -1,0 +1,104 @@
+# Snapshot Diff Example
+# Shows how to compare two snapshots to detect changes between runs.
+# Useful for regression testing and before/after verification.
+#
+# Usage:
+#   # Create baseline snapshot
+#   scafctl render solution -f examples/snapshots/snapshot-diff.yaml \
+#     -r env=staging --snapshot --snapshot-file=/tmp/snap-staging.json
+#
+#   # Create comparison snapshot with different parameters
+#   scafctl render solution -f examples/snapshots/snapshot-diff.yaml \
+#     -r env=production --snapshot --snapshot-file=/tmp/snap-prod.json
+#
+#   # Compare the two snapshots
+#   scafctl snapshot diff /tmp/snap-staging.json /tmp/snap-prod.json
+#
+#   # Ignore timing differences
+#   scafctl snapshot diff /tmp/snap-staging.json /tmp/snap-prod.json \
+#     --ignore-fields duration,providerCalls
+#
+#   # Show only changed resolvers
+#   scafctl snapshot diff /tmp/snap-staging.json /tmp/snap-prod.json \
+#     --ignore-unchanged
+#
+#   # Output as JSON for CI pipelines
+#   scafctl snapshot diff /tmp/snap-staging.json /tmp/snap-prod.json \
+#     --format json
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: snapshot-diff-demo
+  version: 1.0.0
+  description: Demonstrates snapshot comparison for detecting changes
+
+spec:
+  resolvers:
+    env:
+      description: Target environment
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: env
+          - provider: static
+            inputs:
+              value: "staging"
+
+    replicas:
+      description: Number of replicas (varies by environment)
+      type: integer
+      dependsOn:
+        - env
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.env == 'production' ? 5 : 2"
+
+    log_level:
+      description: Logging level
+      type: string
+      dependsOn:
+        - env
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.env == 'production' ? 'warn' : 'debug'"
+
+    db_host:
+      description: Database hostname by environment
+      type: string
+      dependsOn:
+        - env
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.env == 'production' ? 'db.prod.internal' : 'db.staging.internal'"
+
+    config_summary:
+      description: Full configuration summary
+      type: any
+      dependsOn:
+        - env
+        - replicas
+        - log_level
+        - db_host
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: {}
+          - provider: cel
+            inputs:
+              expression: >
+                {
+                  "environment": _.env,
+                  "replicas": _.replicas,
+                  "logLevel": _.log_level,
+                  "database": _.db_host
+                }
