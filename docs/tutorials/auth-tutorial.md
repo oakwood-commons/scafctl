@@ -1,3 +1,8 @@
+---
+title: "Authentication Tutorial"
+weight: 40
+---
+
 # Authentication Tutorial
 
 This tutorial walks you through setting up and using authentication in scafctl. You'll learn how to authenticate with Microsoft Entra ID, manage credentials, and use authenticated HTTP requests in your solutions.

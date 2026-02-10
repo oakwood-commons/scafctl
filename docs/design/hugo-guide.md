@@ -1,6 +1,6 @@
 ---
 title: "Hugo Guide"
-weight: 10
+weight: 20
 ---
 
 # Hugo Guide for scafctl

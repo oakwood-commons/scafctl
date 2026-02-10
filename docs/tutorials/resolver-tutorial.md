@@ -1,3 +1,8 @@
+---
+title: "Resolver Tutorial"
+weight: 20
+---
+
 # Resolver Tutorial
 
 This tutorial walks you through using scafctl resolvers to dynamically resolve configuration values. You'll learn how to define resolvers, use different providers, handle dependencies, and implement common patterns.

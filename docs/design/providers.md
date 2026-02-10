@@ -1,3 +1,8 @@
+---
+title: "Providers"
+weight: 3
+---
+
 # Providers
 
 ## Purpose
@@ -102,29 +107,14 @@ Both default names and aliases are available simultaneously in the context.
 
 Providers follow a strict execution pipeline to ensure consistent behavior and validation:
 
-```
-Provider Invocation Request
-        |
-        v
-[1. Schema Validation]
-   (validate inputs against Descriptor.Schema)
-        |
-        v
-[2. Decode] (optional)
-   (convert map[string]any to strongly-typed struct)
-        |
-        v
-[3. Execute]
-   (provider-specific logic based on execution mode and dry-run flag)
-        |
-        v
-[4. Output Schema Validation]
-   (validate Output.Data against Descriptor.OutputSchemas[capability])
-        |
-        v
-[5. Return Output]
-   (Data, Warnings, Metadata)
-```
+{{< mermaid >}}
+flowchart TD
+    A[Provider Invocation Request] --> B["1. Schema Validation<br/>Validate inputs against Descriptor.Schema"]
+    B --> C["2. Decode (optional)<br/>Convert map to strongly-typed struct"]
+    C --> D["3. Execute<br/>Provider-specific logic"]
+    D --> E["4. Output Schema Validation<br/>Validate Output.Data against OutputSchemas"]
+    E --> F["5. Return Output<br/>Data, Warnings, Metadata"]
+{{< /mermaid >}}
 
 **Lifecycle Phases:**
 

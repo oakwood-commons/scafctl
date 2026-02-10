@@ -1,3 +1,8 @@
+---
+title: "Authentication"
+weight: 5
+---
+
 # Authentication and Authorization
 
 ## Purpose

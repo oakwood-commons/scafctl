@@ -1,6 +1,6 @@
 ---
 title: "Go Templates Tutorial"
-weight: 35
+weight: 60
 ---
 
 # Go Templates Tutorial

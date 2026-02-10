@@ -4,17 +4,33 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/oakwood-commons/scafctl)](https://github.com/oakwood-commons/scafctl/releases)
 [![CI](https://github.com/oakwood-commons/scafctl/actions/workflows/pr-checks.yml/badge.svg)](https://github.com/oakwood-commons/scafctl/actions/workflows/pr-checks.yml)
+[![codecov](https://codecov.io/gh/oakwood-commons/scafctl/graph/badge.svg)](https://codecov.io/gh/oakwood-commons/scafctl)
 
 > **Alpha** — scafctl is under active development. APIs and CLI commands may
 > change between releases. Breaking changes are documented in release notes.
 > Questions? Open an issue or start a
 > [Discussion](https://github.com/oakwood-commons/scafctl/discussions).
 
-A configuration discovery and scaffolding tool built in Go.
+Define, discover, and deliver configuration as code using CEL-powered solutions.
+
+scafctl is a CLI tool that lets you declaratively gather data from any source (APIs, files, environment, Git, and more), transform it with [CEL](https://cel.dev/) expressions, and execute side-effect workflows — all defined in a single **Solution** file.
+
+### Core Concepts
+
+- **Solution** — A YAML file that declares what data to gather and what work to do. Solutions are versionable, composable, and shareable via OCI registries.
+- **Resolver** — A named unit that gathers or computes a value using one or more providers. Resolvers can depend on each other and execute in parallel when possible.
+- **Action** — A side-effect operation (run a command, call an API, write a file) organized into a dependency graph with support for parallelism, retries, conditions, and forEach loops.
+- **Provider** — A pluggable backend that does the actual work (e.g. `http`, `exec`, `file`, `cel`). scafctl ships with 15 built-in providers and supports external plugins.
 
 ## Installation
 
-### From Release Binaries (Recommended)
+### Homebrew (macOS / Linux)
+
+```bash
+brew install oakwood-commons/tap/scafctl
+```
+
+### From Release Binaries
 
 Download the latest binary for your platform from the
 [GitHub Releases](https://github.com/oakwood-commons/scafctl/releases) page.
@@ -66,7 +82,12 @@ Zsh users must have `compinit` loaded before the completion file is sourced.
 - **Resolvers**: Gather and transform configuration data from multiple sources
 - **Actions**: Execute side-effect operations as a declarative action graph
 - **CEL Integration**: Use Common Expression Language for dynamic evaluation
-- **Providers**: Extensible provider system (HTTP, exec, file, git, etc.)
+- **Providers**: 15 built-in providers (HTTP, exec, file, git, CEL, and more)
+- **Catalog**: Publish, version, and share reusable solutions via OCI registries
+- **Secrets**: Encrypted secrets management with OS keyring integration
+- **Plugins**: Extend scafctl with custom providers via a plugin system
+- **Snapshots**: Capture and diff resolver output over time
+- **Linting**: Validate solution files for correctness before execution
 
 ## Quick Start
 
@@ -131,13 +152,57 @@ spec:
 
 Run: `scafctl run solution -f deploy.yaml`
 
+## Built-in Providers
+
+scafctl ships with 15 providers. Use `scafctl explain provider <name>` to see full schema and examples.
+
+| Provider | Description |
+| ---------- | ------------- |
+| `cel` | Evaluate CEL expressions |
+| `debug` | Log debug information during execution |
+| `env` | Read environment variables |
+| `exec` | Execute shell commands |
+| `file` | Read and write files |
+| `git` | Query Git repository metadata |
+| `go-template` | Render Go templates |
+| `http` | Make HTTP requests |
+| `identity` | Pass input through unchanged |
+| `parameter` | Access CLI-provided parameters |
+| `secret` | Read encrypted secrets |
+| `sleep` | Pause execution for a duration |
+| `solution` | Compose sub-solutions recursively |
+| `static` | Return static values |
+| `validation` | Validate values against rules |
+
+See the [Provider Reference](docs/tutorials/provider-reference.md) and [Provider Development](docs/tutorials/provider-development.md) tutorials.
+
 ## Documentation
 
-- [Resolver Tutorial](docs/tutorials/resolver-tutorial.md) - Getting started with resolvers
-- [Actions Tutorial](docs/tutorials/actions-tutorial.md) - Getting started with actions
-- [Authentication Tutorial](docs/tutorials/auth-tutorial.md) - Setting up and using authentication
-- [Examples: Resolvers](examples/resolvers/) - Resolver examples
-- [Examples: Actions](examples/actions/) - Action examples
+### Tutorials
+
+- [Getting Started](docs/tutorials/getting-started.md) — First steps with scafctl
+- [Resolvers](docs/tutorials/resolver-tutorial.md) — Gathering and transforming data
+- [Actions](docs/tutorials/actions-tutorial.md) — Executing operations
+- [Authentication](docs/tutorials/auth-tutorial.md) — Entra ID and service principals
+- [Catalog](docs/tutorials/catalog-tutorial.md) — Publishing and sharing solutions
+- [CEL Expressions](docs/tutorials/cel-tutorial.md) — Dynamic evaluation with CEL
+- [Go Templates](docs/tutorials/go-templates-tutorial.md) — Templating with Go templates
+- [Configuration](docs/tutorials/config-tutorial.md) — Managing application settings
+- [Caching](docs/tutorials/cache-tutorial.md) — Provider result caching
+- [Snapshots](docs/tutorials/snapshots-tutorial.md) — Capturing and diffing output
+- [Plugin Development](docs/tutorials/plugin-development.md) — Building custom providers
+- [Provider Development](docs/tutorials/provider-development.md) — Contributing providers
+
+### Design Documents
+
+Architecture and design decisions are documented in [docs/design/](docs/design/).
+
+### Examples
+
+- [Resolver examples](examples/resolvers/)
+- [Action examples](examples/actions/)
+- [Catalog examples](examples/catalog/)
+- [Solution examples](examples/solutions/)
 
 ## Authentication
 
@@ -145,7 +210,7 @@ scafctl supports secure authentication for accessing protected APIs. Currently s
 
 - **Microsoft Entra ID** (Azure AD) - Device code flow and Service Principal
 
-### Quick Start
+### Quick Auth Setup
 
 ```bash
 # Interactive: Authenticate with Entra ID (device code)
@@ -184,6 +249,91 @@ spec:
 ```
 
 See the [Authentication Tutorial](docs/tutorials/auth-tutorial.md) for more details.
+
+## Catalog
+
+The catalog system lets you publish, version, and share solutions using OCI-compatible registries:
+
+```bash
+# Build a solution into an OCI artifact
+scafctl build solution -f solution.yaml
+
+# Push to a registry
+scafctl catalog push my-solution@1.0.0 --registry ghcr.io/myorg
+
+# Pull and inspect
+scafctl catalog pull my-solution@1.0.0
+scafctl catalog inspect my-solution@1.0.0
+
+# List local catalog entries
+scafctl catalog list
+```
+
+See the [Catalog Tutorial](docs/tutorials/catalog-tutorial.md) and [Catalog Design](docs/design/catalog.md).
+
+## Configuration
+
+scafctl stores its configuration in XDG-compliant paths. Use the `config` command to manage settings:
+
+```bash
+# Initialize default config
+scafctl config init
+
+# View current config
+scafctl config show
+
+# Set / get / unset values
+scafctl config set defaultOutput json
+scafctl config get defaultOutput
+scafctl config unset defaultOutput
+
+# Manage catalog registries
+scafctl config add-catalog my-registry --url ghcr.io/myorg
+scafctl config remove-catalog my-registry
+```
+
+See the [Configuration Tutorial](docs/tutorials/config-tutorial.md).
+
+## Secrets
+
+scafctl provides encrypted secrets management backed by the OS keyring or the `SCAFCTL_SECRET_KEY` environment variable:
+
+```bash
+# Store a secret
+scafctl secrets set my-api-key
+
+# Retrieve / check / list
+scafctl secrets get my-api-key
+scafctl secrets exists my-api-key
+scafctl secrets list
+
+# Rotate encryption key
+scafctl secrets rotate
+
+# Import / export for migration
+scafctl secrets export --file secrets.enc
+scafctl secrets import --file secrets.enc
+```
+
+Use the `secret` provider to access secrets in solutions:
+
+```yaml
+spec:
+  resolvers:
+    api_key:
+      type: string
+      resolve:
+        with:
+          - provider: secret
+            inputs:
+              name: my-api-key
+```
+
+## Plugins
+
+scafctl supports external plugins that extend the provider system. Plugins are standalone executables that communicate via a defined protocol.
+
+See the [Plugin Design](docs/design/plugins.md) and [Plugin Development Tutorial](docs/tutorials/plugin-development.md).
 
 ## Actions Overview
 
@@ -239,25 +389,68 @@ workflow:
 
 ## CLI Commands
 
+scafctl is organized into command groups. Run `scafctl <command> --help` for details on any command.
+
 ```bash
 # Run a solution (resolvers + actions)
 scafctl run solution -f config.yaml
+scafctl run solution -f config.yaml -o json      # JSON output
+scafctl run solution -f config.yaml --dry-run     # Dry run
+scafctl run solution -f config.yaml --skip-actions # Resolvers only
+scafctl run solution -f config.yaml --progress    # Progress output
 
-# Run with progress output
-scafctl run solution -f config.yaml --progress
-
-# Run with JSON output for scripts/pipelines
-scafctl run solution -f config.yaml -o json
-
-# Dry run (show what would execute)
-scafctl run solution -f config.yaml --dry-run
-
-# Run resolvers only (skip actions)
-scafctl run solution -f config.yaml --skip-actions
-
-# Render solution to artifact
+# Render solution to structured output
 scafctl render solution -f config.yaml -o json
 scafctl render solution -f config.yaml -o yaml
+
+# Build and bundle solutions
+scafctl build solution -f solution.yaml
+
+# Catalog operations
+scafctl catalog list
+scafctl catalog push my-solution@1.0.0
+scafctl catalog pull my-solution@1.0.0
+scafctl catalog inspect my-solution@1.0.0
+
+# Bundle verification and diffing
+scafctl bundle verify my-solution@1.0.0
+scafctl bundle diff my-solution@1.0.0 my-solution@2.0.0
+scafctl bundle extract my-solution@1.0.0
+
+# Inspect providers and solutions
+scafctl explain provider http
+scafctl explain solution -f solution.yaml
+scafctl get provider
+scafctl get resolver -f solution.yaml
+
+# Lint and validate
+scafctl lint -f solution.yaml
+
+# Snapshots
+scafctl snapshot save -f solution.yaml --name baseline
+scafctl snapshot show --name baseline
+scafctl snapshot diff --from baseline --to current
+
+# Resolver dependency graph
+scafctl resolver graph -f solution.yaml
+
+# Configuration and secrets
+scafctl config show
+scafctl secrets list
+
+# Authentication
+scafctl auth login entra
+scafctl auth status
+
+# Dependency vendoring
+scafctl vendor update -f solution.yaml
+
+# Cache management
+scafctl cache info
+scafctl cache clear
+
+# Version
+scafctl version
 ```
 
 ## Contributing

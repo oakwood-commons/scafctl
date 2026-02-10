@@ -1,6 +1,6 @@
 ---
 title: "Provider Development Guide"
-weight: 60
+weight: 120
 ---
 
 # Provider Development Guide

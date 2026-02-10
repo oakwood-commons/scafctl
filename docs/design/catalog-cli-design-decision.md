@@ -1,3 +1,8 @@
+---
+title: "Catalog CLI Design Decision"
+weight: 16
+---
+
 # Catalog CLI Design Decision: Push/Pull Reference Patterns
 
 **Status:** Decided — Option B  

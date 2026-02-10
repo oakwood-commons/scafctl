@@ -47,3 +47,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GIT_EVENT: push
           GIT_REF: ${{ github.ref }}
+
+      - name: Generate index.html
+        run: task generate-index
+
+      - name: Upload index.html to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          gh release upload "$tag" dist/index.html --clobber
