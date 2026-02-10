@@ -24,6 +24,8 @@ scafctl run solution -f examples/actions/hello-world.yaml -v
 | [actions/](actions/) | Workflow automation with actions |
 | [resolvers/](resolvers/) | Dynamic value resolution patterns |
 | [solutions/](solutions/) | Complete end-to-end solution examples |
+| [snapshots/](snapshots/) | Execution snapshot capture and comparison |
+| [catalog/](catalog/) | Catalog bundling and registry examples |
 | [config/](config/) | Configuration file examples |
 | [plugins/](plugins/) | go-plugin source code examples (see note below) |
 
@@ -53,6 +55,7 @@ Action workflows demonstrate executing tasks with dependencies, parallelism, and
 | [error-handling.yaml](actions/error-handling.yaml) | Handle errors gracefully | `scafctl run solution -f examples/actions/error-handling.yaml` |
 | [finally-cleanup.yaml](actions/finally-cleanup.yaml) | Cleanup actions that always run | `scafctl run solution -f examples/actions/finally-cleanup.yaml` |
 | [template-render.yaml](actions/template-render.yaml) | Render files from templates | `scafctl run solution -f examples/actions/template-render.yaml` |
+| [go-template-inline.yaml](actions/go-template-inline.yaml) | Inline Go templates with loops/conditionals | `scafctl run solution -f examples/actions/go-template-inline.yaml` |
 | [complex-workflow.yaml](actions/complex-workflow.yaml) | Full CI/CD-style workflow | `scafctl run solution -f examples/actions/complex-workflow.yaml` |
 
 ---
@@ -85,6 +88,29 @@ Complete solutions demonstrating real-world use cases.
 | [terraform/](solutions/terraform/) | Terraform project scaffolding |
 | [taskfile/](solutions/taskfile/) | Taskfile.yaml generation |
 | [email-notifier/](solutions/email-notifier/) | Email notification workflow |
+
+---
+
+## Snapshot Examples
+
+Snapshots capture resolver execution state for debugging, testing, and comparison.
+
+| Example | Description | Run |
+|---------|-------------|-----|
+| [basic-snapshot.yaml](snapshots/basic-snapshot.yaml) | Capture and inspect a snapshot | `scafctl render solution -f examples/snapshots/basic-snapshot.yaml --snapshot --snapshot-file=/tmp/snapshot.json` |
+| [snapshot-diff.yaml](snapshots/snapshot-diff.yaml) | Compare snapshots across environments | See example header for commands |
+| [redacted-snapshot.yaml](snapshots/redacted-snapshot.yaml) | Redact sensitive values in snapshots | `scafctl render solution -f examples/snapshots/redacted-snapshot.yaml --snapshot --snapshot-file=/tmp/redacted.json --redact` |
+
+---
+
+## Catalog Examples
+
+Catalog build and distribution examples.
+
+| Example | Description |
+|---------|-------------|
+| [bundling-example/](catalog/bundling-example/) | Solution bundling with local file dependencies |
+| [remote-registry-workflow.md](catalog/remote-registry-workflow.md) | Guide for remote OCI registry workflows |
 
 ---
 
@@ -144,6 +170,31 @@ scafctl run solution -f examples/resolvers/parameters.yaml \
   -r name=Bob \
   -r count=5 \
   -r uppercase=true
+```
+
+### Interactive Mode
+```bash
+# Explore output in a TUI (navigate, search, filter)
+scafctl run solution -f examples/resolvers/dependencies.yaml -i
+```
+
+### Filter with CEL Expressions
+```bash
+# Extract specific values from output
+scafctl run solution -f examples/resolvers/dependencies.yaml -e '_.fullName'
+```
+
+### Snapshots
+```bash
+# Capture a snapshot during render
+scafctl render solution -f examples/snapshots/basic-snapshot.yaml \
+  --snapshot --snapshot-file=/tmp/snapshot.json
+
+# View the snapshot
+scafctl snapshot show /tmp/snapshot.json
+
+# Compare two snapshots
+scafctl snapshot diff /tmp/snap-a.json /tmp/snap-b.json
 ```
 
 ---
