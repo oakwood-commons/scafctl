@@ -1,3 +1,8 @@
+---
+title: "Future Enhancements"
+weight: 13
+---
+
 # Future Enhancements
 
 Consolidated index of planned features and future enhancements across all design docs. Each entry links back to the source design doc for full context.

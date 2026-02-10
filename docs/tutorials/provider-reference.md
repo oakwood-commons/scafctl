@@ -1,3 +1,8 @@
+---
+title: "Provider Reference"
+weight: 110
+---
+
 # Provider Reference
 
 This document provides a reference for all built-in providers in scafctl.

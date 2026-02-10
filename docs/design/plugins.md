@@ -1,3 +1,8 @@
+---
+title: "Plugins"
+weight: 9
+---
+
 # Plugins
 
 ## Purpose

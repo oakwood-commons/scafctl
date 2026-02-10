@@ -4,11 +4,15 @@
 baseURL: "https://oakwood-commons.github.io/scafctl/"
 languageCode: "en-us"
 title: "scafctl"
+enableRobotsTXT: true
 
 # Use Hugo Modules for theme (no git submodule needed)
 module:
   imports:
     - path: github.com/alex-shpak/hugo-book
+  mounts:
+    - source: docs
+      target: content/docs
 
 # Repository information
 params:
@@ -20,7 +24,7 @@ params:
   BookMenuBundle: /menu
   BookSection: docs
   BookRepo: "https://github.com/oakwood-commons/scafctl"
-  BookEditPath: "edit/main/docs/"
+  BookEditLink: "https://github.com/oakwood-commons/scafctl/edit/main/{{ .Path }}"
   BookDateFormat: "January 2, 2006"
   BookSearch: true
   BookComments: false

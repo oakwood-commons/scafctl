@@ -1,6 +1,6 @@
 ---
 title: "CEL Expressions Tutorial"
-weight: 25
+weight: 50
 ---
 
 # CEL Expressions Tutorial

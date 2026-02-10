@@ -1,3 +1,8 @@
+---
+title: "Catalog Build Bundling"
+weight: 15
+---
+
 # Solution File Bundling
 
 **Date:** February 9, 2026

@@ -1,3 +1,8 @@
+---
+title: "CLI"
+weight: 8
+---
+
 # CLI Usage
 
 This document describes how to invoke scafctl from the command line. The CLI follows a kubectl-style structure where verbs, kinds, and names are explicit and positional.
