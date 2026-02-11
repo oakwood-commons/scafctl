@@ -1,0 +1,75 @@
+# Cross-Platform Patterns Example
+# Demonstrates patterns that work across Linux, macOS, and Windows
+# using the embedded POSIX shell. No external shell required.
+#
+# Run: scafctl run solution -f examples/exec/cross-platform.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: exec-cross-platform
+  version: 1.0.0
+  description: Patterns that work on all platforms using the embedded shell
+
+spec:
+  resolvers:
+    project-name:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "my-project"
+
+  workflow:
+    actions:
+      # The embedded shell provides coreutils on Windows via Go-native implementations.
+      # These commands work identically on all platforms:
+      create-structure:
+        description: Create a directory structure (mkdir works on all platforms)
+        provider: exec
+        inputs:
+          command: |
+            mkdir -p /tmp/scafctl-demo/src
+            mkdir -p /tmp/scafctl-demo/docs
+            echo "Created project structure"
+
+      # Write files using echo/cat — works on all platforms
+      write-files:
+        description: Create files with content
+        provider: exec
+        dependsOn: [create-structure]
+        inputs:
+          command: |
+            echo '{"name": "demo", "version": "1.0.0"}' > /tmp/scafctl-demo/package.json
+            echo '# Demo Project' > /tmp/scafctl-demo/docs/README.md
+            echo "Files created"
+
+      # Read and process files
+      read-files:
+        description: Read and display file contents
+        provider: exec
+        dependsOn: [write-files]
+        inputs:
+          command: |
+            echo "=== package.json ==="
+            cat /tmp/scafctl-demo/package.json
+            echo ""
+            echo "=== README.md ==="
+            cat /tmp/scafctl-demo/docs/README.md
+
+      # List files — ls and find work on all platforms
+      list-files:
+        description: List directory contents
+        provider: exec
+        dependsOn: [read-files]
+        inputs:
+          command: "ls -la /tmp/scafctl-demo/"
+
+      # Cleanup
+      cleanup:
+        description: Remove temporary files
+        provider: exec
+        dependsOn: [list-files]
+        inputs:
+          command: "rm -rf /tmp/scafctl-demo && echo 'Cleaned up'"

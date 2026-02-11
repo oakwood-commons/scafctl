@@ -29,7 +29,6 @@ spec:
         displayName: Checkout
         provider: exec
         inputs:
-          shell: true
           command:
             expr: "'echo Checking out ' + _.project + ' code...'"
 
@@ -41,7 +40,6 @@ spec:
         dependsOn:
           - checkout
         inputs:
-          shell: true
           command:
             expr: "'echo Building ' + _.project + '...'"
         timeout: 10m
@@ -54,7 +52,6 @@ spec:
         dependsOn:
           - build
         inputs:
-          shell: true
           command:
             expr: "'echo Testing ' + _.project + '...'"
         timeout: 5m
@@ -67,6 +64,5 @@ spec:
         dependsOn:
           - test
         inputs:
-          shell: true
           command:
             expr: "'echo Packaging ' + _.project + '...'"

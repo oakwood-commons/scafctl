@@ -99,7 +99,6 @@ spec:
         provider: exec
         timeout: 2m
         inputs:
-          shell: true
           command:
             expr: "'echo Initializing CI/CD for ' + _.project"
 
@@ -118,7 +117,6 @@ spec:
           backoff: fixed
           initialDelay: 5s
         inputs:
-          shell: true
           project:
             expr: "_.project"
           command:
@@ -132,7 +130,6 @@ spec:
           - init
         timeout: 10m
         inputs:
-          shell: true
           command: "echo 'Running unit tests...'"
 
       lint:
@@ -145,7 +142,6 @@ spec:
         # Linting issues shouldn't block deployment
         onError: continue
         inputs:
-          shell: true
           command: "echo 'Running linters...'"
 
       # =========================================
@@ -160,7 +156,6 @@ spec:
           - unit-tests
         timeout: 20m
         inputs:
-          shell: true
           command: "echo 'Running integration tests...'"
 
       # Conditional: E2E tests (only if enabled)
@@ -175,7 +170,6 @@ spec:
         when:
           expr: "_.features.run_e2e_tests == true"
         inputs:
-          shell: true
           command: "echo 'Running E2E tests...'"
 
       # =========================================
@@ -196,7 +190,6 @@ spec:
           initialDelay: 2s
           maxDelay: 30s
         inputs:
-          shell: true
           command: "echo 'Running security scan...'"
 
       # =========================================
@@ -222,7 +215,6 @@ spec:
           initialDelay: 5s
           maxDelay: 60s
         inputs:
-          shell: true
           region:
             expr: "__item.region"
           replicas:
@@ -243,7 +235,6 @@ spec:
           - deploy
         timeout: 5m
         inputs:
-          shell: true
           targets:
             expr: "_.targets"
           command:
@@ -262,7 +253,6 @@ spec:
           expr: "_.features.enable_canary"
         timeout: 15m
         inputs:
-          shell: true
           command: "echo 'Running canary deployment...'"
 
     # =========================================
@@ -276,7 +266,6 @@ spec:
         provider: exec
         timeout: 5m
         inputs:
-          shell: true
           command: "echo 'Cleaning up temporary resources...'"
 
       # Send Slack notification
@@ -287,7 +276,6 @@ spec:
         dependsOn:
           - cleanup
         inputs:
-          shell: true
           webhook:
             expr: "_.slack_webhook"
           project:
@@ -304,5 +292,4 @@ spec:
         provider: exec
         timeout: 10m
         inputs:
-          shell: true
           command: "echo 'Uploading artifacts and logs...'"

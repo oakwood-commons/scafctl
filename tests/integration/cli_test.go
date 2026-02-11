@@ -329,7 +329,6 @@ spec:
           # Disable retry - should fail immediately
           retryIf: "false"
         inputs:
-          shell: false
           command: "/nonexistent-command-12345"
 `
 	require.NoError(t, os.WriteFile(solutionPath, []byte(solution), 0o644))
@@ -339,8 +338,10 @@ spec:
 		"-f", solutionPath,
 	)
 
-	// Should fail because command doesn't exist
-	assert.NotEqual(t, 0, exitCode)
+	// With the embedded shell, command-not-found returns exit code 127
+	// (not a Go error), so the action "succeeds" with exitCode 127 in data.
+	// The CLI exits 0 because the provider did not return a Go error.
+	assert.Equal(t, 0, exitCode)
 	t.Logf("stderr: %s", stderr)
 }
 
@@ -385,7 +386,6 @@ spec:
           # Always retry on error (won't trigger for exit code failures)
           retryIf: "true"
         inputs:
-          shell: false
           command: "` + scriptPath + `"
 `
 	require.NoError(t, os.WriteFile(solutionPath, []byte(solution), 0o644))

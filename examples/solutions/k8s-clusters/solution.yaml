@@ -212,5 +212,4 @@ spec:
         dependsOn:
           - writeManifests
         inputs:
-          shell: true
           command: "echo '=== Generated Cluster Manifests ===' && find ./output -name manifest.yaml | sort"
