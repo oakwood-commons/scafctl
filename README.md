@@ -20,7 +20,7 @@ scafctl is a CLI tool that lets you declaratively gather data from any source (A
 - **Solution** — A YAML file that declares what data to gather and what work to do. Solutions are versionable, composable, and shareable via OCI registries.
 - **Resolver** — A named unit that gathers or computes a value using one or more providers. Resolvers can depend on each other and execute in parallel when possible.
 - **Action** — A side-effect operation (run a command, call an API, write a file) organized into a dependency graph with support for parallelism, retries, conditions, and forEach loops.
-- **Provider** — A pluggable backend that does the actual work (e.g. `http`, `exec`, `file`, `cel`). scafctl ships with 15 built-in providers and supports external plugins.
+- **Provider** — A pluggable backend that does the actual work (e.g. `http`, `exec`, `file`, `cel`). scafctl ships with 16 built-in providers and supports external plugins.
 
 ## Installation
 
@@ -87,7 +87,7 @@ Zsh users must have `compinit` loaded before the completion file is sourced.
 - **Resolvers**: Gather and transform configuration data from multiple sources
 - **Actions**: Execute side-effect operations as a declarative action graph
 - **CEL Integration**: Use Common Expression Language for dynamic evaluation
-- **Providers**: 15 built-in providers (HTTP, exec, file, git, CEL, and more)
+- **Providers**: 16 built-in providers (HTTP, exec, file, directory, git, CEL, and more)
 - **Catalog**: Publish, version, and share reusable solutions via OCI registries
 - **Secrets**: Encrypted secrets management with OS keyring integration
 - **Plugins**: Extend scafctl with custom providers via a plugin system
@@ -159,12 +159,13 @@ Run: `scafctl run solution -f deploy.yaml`
 
 ## Built-in Providers
 
-scafctl ships with 15 providers. Use `scafctl explain provider <name>` to see full schema and examples.
+scafctl ships with 16 providers. Use `scafctl explain provider <name>` to see full schema and examples.
 
 | Provider | Description |
 | ---------- | ------------- |
 | `cel` | Evaluate CEL expressions |
 | `debug` | Log debug information during execution |
+| `directory` | List, create, remove, and copy directories |
 | `env` | Read environment variables |
 | `exec` | Execute shell commands |
 | `file` | Read and write files |
@@ -194,6 +195,7 @@ See the [Provider Reference](docs/tutorials/provider-reference.md) and [Provider
 - [Go Templates](docs/tutorials/go-templates-tutorial.md) — Templating with Go templates
 - [Configuration](docs/tutorials/config-tutorial.md) — Managing application settings
 - [Caching](docs/tutorials/cache-tutorial.md) — Provider result caching
+- [Directory Provider](docs/tutorials/directory-provider-tutorial.md) — Listing, scanning, and managing directories
 - [Snapshots](docs/tutorials/snapshots-tutorial.md) — Capturing and diffing output
 - [Plugin Development](docs/tutorials/plugin-development.md) — Building custom providers
 - [Provider Development](docs/tutorials/provider-development.md) — Contributing providers

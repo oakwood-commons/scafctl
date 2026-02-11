@@ -70,6 +70,35 @@ linters:
       - path: pkg/celexp/ext/sort/sort\.go
         linters:
           - dupl
+      # Exclude var-naming for packages that intentionally shadow standard library names
+      - path: pkg/filepath/filepath\.go
+        linters:
+          - revive
+        text: "var-naming: avoid package names"
+      - path: pkg/fs/fs\.go
+        linters:
+          - revive
+        text: "var-naming: avoid package names"
+      - path: pkg/metrics/metrics\.go
+        linters:
+          - revive
+        text: "var-naming: avoid package names"
+      - path: pkg/celexp/ext/debug/debug\.go
+        linters:
+          - revive
+        text: "var-naming: avoid package names"
+      - path: pkg/cmd/scafctl/build/solution\.go
+        linters:
+          - revive
+        text: "var-naming: avoid package names"
+      - path: pkg/plugin/server\.go
+        linters:
+          - revive
+        text: "var-naming: avoid package names"
+      - path: pkg/plugin/.*\.go
+        linters:
+          - revive
+        text: "var-naming: avoid package names"
 formatters:
   enable:
     - gofumpt

@@ -70,6 +70,37 @@ func TestDefaultRegistry(t *testing.T) {
 	})
 }
 
+func TestProviderNames(t *testing.T) {
+	names := ProviderNames()
+
+	// Should have all built-in providers
+	expectedCount := 15 // http, env, cel, file, directory, validation, exec, git, debug, sleep, parameter, static, go-template, secret, identity
+	assert.Len(t, names, expectedCount, "should have %d built-in providers", expectedCount)
+
+	// Verify expected names are present
+	expectedNames := []string{
+		"http",
+		"env",
+		"cel",
+		"file",
+		"directory",
+		"validation",
+		"exec",
+		"git",
+		"debug",
+		"sleep",
+		"parameter",
+		"static",
+		"go-template",
+		"secret",
+		"identity",
+	}
+
+	for _, expected := range expectedNames {
+		assert.Contains(t, names, expected, "should contain provider %q", expected)
+	}
+}
+
 func TestDefaultRegistry_ProviderFunctionality(t *testing.T) {
 	ctx := context.Background()
 	reg, err := DefaultRegistry(ctx)
@@ -127,6 +158,7 @@ func TestAllProvidersRegistered(t *testing.T) {
 		{"env", "environment"},
 		{"cel", "CEL"},
 		{"file", "file"},
+		{"directory", "director"},
 		{"validation", "validat"},
 		{"exec", "execut"},
 		{"git", "git"},
