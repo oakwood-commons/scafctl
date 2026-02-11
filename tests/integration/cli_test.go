@@ -147,6 +147,7 @@ func TestIntegration_GetProvider(t *testing.T) {
 	assert.Contains(t, stdout, "http")
 	assert.Contains(t, stdout, "exec")
 	assert.Contains(t, stdout, "cel")
+	assert.Contains(t, stdout, "directory")
 }
 
 func TestIntegration_GetProviderJSON(t *testing.T) {
@@ -2278,4 +2279,55 @@ func TestIntegration_BuildSolution_DryRunShowsDetails(t *testing.T) {
 	assert.Equal(t, 0, exitCode)
 	// Dry run should show structured output: files, analysis, summary
 	assert.Contains(t, stdout, "Dry run")
+}
+
+// ============================================================================
+// Directory Provider Integration Tests
+// ============================================================================
+
+func TestIntegration_RunSolution_DirectoryProvider(t *testing.T) {
+	// Create a temp directory with test files
+	tmpDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "hello.txt"), []byte("world"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "sub"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "sub", "nested.go"), []byte("package sub"), 0o644))
+
+	// Create a solution YAML that uses the directory provider
+	solutionFile := filepath.Join(tmpDir, "dir-solution.yaml")
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: dir-test
+  version: 1.0.0
+  description: Directory provider integration test
+
+spec:
+  resolvers:
+    listing:
+      description: List temp directory
+      type: any
+      resolve:
+        with:
+          - provider: directory
+            inputs:
+              operation: list
+              path: "` + tmpDir + `"
+              recursive: true
+`
+	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
+
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "solution",
+		"-f", solutionFile,
+		"--skip-actions",
+		"-o", "json",
+	)
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d", exitCode)
+	assert.Contains(t, stdout, "hello.txt")
+	assert.Contains(t, stdout, "nested.go")
+	assert.Contains(t, stdout, "totalCount")
 }

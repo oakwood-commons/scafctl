@@ -1026,6 +1026,23 @@ resolve:
 
 ---
 
+### directory
+
+Lists, creates, removes, and copies directories with support for recursive traversal, glob/regex filtering, content reading, and checksums.
+
+~~~yaml
+resolve:
+  with:
+    - provider: directory
+      inputs:
+        operation: list
+        path: ./src
+        recursive: true
+        filterGlob: "*.go"
+~~~
+
+---
+
 ### git
 
 Reads data from a git repository or working tree.
