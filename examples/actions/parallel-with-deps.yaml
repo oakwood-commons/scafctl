@@ -44,7 +44,6 @@ spec:
         displayName: Initialize
         provider: exec
         inputs:
-          shell: true
           command: "echo 'Initializing build environment...'"
 
       # Phase 1: Build (depends on init)
@@ -55,7 +54,6 @@ spec:
         dependsOn:
           - init
         inputs:
-          shell: true
           command:
             expr: "'echo Building ' + _.project + '...'"
         timeout: 15m
@@ -68,7 +66,6 @@ spec:
         dependsOn:
           - init
         inputs:
-          shell: true
           command:
             expr: "'echo Testing ' + _.project + '...'"
         timeout: 10m
@@ -82,7 +79,6 @@ spec:
           - build
           - test
         inputs:
-          shell: true
           command:
             expr: "'echo Deploying ' + _.project + ' to ' + _.environment + '...'"
         timeout: 5m

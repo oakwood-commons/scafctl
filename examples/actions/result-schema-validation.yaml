@@ -145,7 +145,6 @@ spec:
           - list-tags
           - get-deployment-info
         inputs:
-          shell: true
           command:
             expr: |
               'echo "User: ' + __actions['fetch-user'].results.name + '"' +

@@ -730,6 +730,7 @@ func Custom() celexp.ExtFunctionList {
 
 		// Sort functions
 		celsort.ObjectsFunc(),
+		celsort.ObjectsDescendingFunc(),
 
 		// String functions
 		celstrings.CleanFunc(),

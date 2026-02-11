@@ -1,0 +1,79 @@
+# Environment, Stdin, and Timeout Example
+# Demonstrates environment variables, stdin piping, and timeout handling.
+#
+# Run: scafctl run solution -f examples/exec/environment-and-io.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: exec-environment-io
+  version: 1.0.0
+  description: Environment variables, stdin, and timeout handling
+
+spec:
+  resolvers:
+    app-name:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "my-application"
+
+  workflow:
+    actions:
+      # Environment variables are merged with the parent process environment
+      custom-env:
+        description: Set custom environment variables
+        provider: exec
+        inputs:
+          command: |
+            echo "App: $APP_NAME"
+            echo "Env: $DEPLOY_ENV"
+            echo "Region: $REGION"
+            echo "Home still works: $HOME"
+          env:
+            APP_NAME: "my-service"
+            DEPLOY_ENV: "staging"
+            REGION: "us-east-1"
+
+      # Stdin piping
+      stdin-input:
+        description: Pipe content to stdin
+        provider: exec
+        dependsOn: [custom-env]
+        inputs:
+          command: "cat | tr a-z A-Z"
+          stdin: "this text will be uppercased"
+
+      # Stdin with a multi-line script
+      stdin-multiline:
+        description: Process multi-line stdin
+        provider: exec
+        dependsOn: [stdin-input]
+        inputs:
+          command: "wc -l"
+          stdin: |
+            line one
+            line two
+            line three
+
+      # Timeout — command is killed if it exceeds the limit
+      timeout-example:
+        description: Run a command with a timeout (will succeed within the limit)
+        provider: exec
+        dependsOn: [stdin-multiline]
+        inputs:
+          command: "echo 'Starting...'; sleep 1; echo 'Done!'"
+          timeout: 5
+
+      # Combining env with resolved values
+      resolved-env:
+        description: Use resolved values in environment variables
+        provider: exec
+        dependsOn: [timeout-example]
+        inputs:
+          command: "echo \"Deploying $APP_NAME\""
+          env:
+            APP_NAME:
+              expr: "_.app_name"

@@ -142,7 +142,6 @@ spec:
         displayName: Create Output Directory
         provider: exec
         inputs:
-          shell: true
           command:
             expr: "'mkdir -p ' + _.output_dir"
       
@@ -169,7 +168,6 @@ spec:
         dependsOn:
           - write-config
         inputs:
-          shell: true
           command:
             expr: "'echo \"=== Generated Config ===\"; cat ' + _.output_dir + '/config.yaml'"
     
@@ -180,6 +178,5 @@ spec:
     #     displayName: Cleanup
     #     provider: exec
     #     inputs:
-    #       shell: true
     #       command:
     #         expr: "'rm -rf ' + _.output_dir"

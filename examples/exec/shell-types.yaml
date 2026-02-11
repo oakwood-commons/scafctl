@@ -1,0 +1,83 @@
+# Shell Types Example
+# Demonstrates using different shell interpreters with the exec provider.
+#
+# Shell types:
+#   auto (default) — Embedded POSIX shell, works on all platforms without external binaries
+#   sh             — Alias for auto
+#   bash           — External bash from PATH  (Linux/macOS, or Windows with bash installed)
+#   pwsh           — External PowerShell Core  (all platforms where pwsh is installed)
+#   cmd            — External cmd.exe          (Windows only)
+#
+# Run: scafctl run solution -f examples/exec/shell-types.yaml
+#
+# Note: The bash and pwsh examples require those shells to be installed.
+#       The cmd example only works on Windows.
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: exec-shell-types
+  version: 1.0.0
+  description: Using different shell interpreters
+
+spec:
+  resolvers: {}
+
+  workflow:
+    actions:
+      # Default: embedded POSIX shell (auto)
+      # Works on Linux, macOS, and Windows without requiring /bin/sh or any external shell.
+      embedded-default:
+        description: "Embedded shell (auto) — cross-platform, no external dependencies"
+        provider: exec
+        inputs:
+          command: "echo 'Running in embedded POSIX shell' | tr a-z A-Z"
+
+      # Explicit 'auto' — same as default
+      embedded-explicit:
+        description: "Explicitly request the embedded shell"
+        provider: exec
+        dependsOn: [embedded-default]
+        inputs:
+          command: "echo 'Explicitly using auto shell'"
+          shell: auto
+
+      # 'sh' is an alias for 'auto'
+      embedded-sh:
+        description: "'sh' is an alias for the embedded shell"
+        provider: exec
+        dependsOn: [embedded-explicit]
+        inputs:
+          command: "echo 'sh is an alias for auto'"
+          shell: sh
+
+      # External bash — for bash-specific features like arrays, globstar, etc.
+      # Requires bash to be installed and in PATH.
+      external-bash:
+        description: "External bash for bash-specific features"
+        provider: exec
+        dependsOn: [embedded-sh]
+        inputs:
+          command: |
+            # Bash-specific features that the embedded POSIX shell doesn't support
+            shopt -s nullglob 2>/dev/null
+            arr=(one two three)
+            echo "Array has ${#arr[@]} elements: ${arr[*]}"
+          shell: bash
+
+      # External PowerShell Core (pwsh) — for PowerShell cmdlets
+      # Requires pwsh to be installed and in PATH.
+      # Great for Windows administration, Azure, and cross-platform PowerShell scripts.
+      external-pwsh:
+        description: "PowerShell Core for cmdlet-based operations"
+        provider: exec
+        dependsOn: [external-bash]
+        inputs:
+          command: |
+            $info = @{
+              Shell = "PowerShell Core"
+              Version = $PSVersionTable.PSVersion.ToString()
+              OS = $PSVersionTable.OS
+            }
+            $info | Format-Table -AutoSize
+          shell: pwsh

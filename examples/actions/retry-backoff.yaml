@@ -42,7 +42,6 @@ spec:
           backoff: fixed
           initialDelay: 2s
         inputs:
-          shell: true
           command: "echo 'Attempting fixed-retry operation...'"
 
       # Demonstrate linear backoff (delay increases linearly)
@@ -58,7 +57,6 @@ spec:
           initialDelay: 1s
           maxDelay: 10s
         inputs:
-          shell: true
           command: "echo 'Attempting linear-retry operation...'"
 
       # Demonstrate exponential backoff (delay doubles each retry)
@@ -76,7 +74,6 @@ spec:
           initialDelay: 500ms
           maxDelay: 30s
         inputs:
-          shell: true
           url:
             expr: "_.api_url"
           command:
@@ -96,5 +93,4 @@ spec:
           initialDelay: 1s
           maxDelay: 5s
         inputs:
-          shell: true
           command: "echo 'Operation with retry and 30s timeout...'"

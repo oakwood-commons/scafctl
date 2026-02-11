@@ -25,6 +25,7 @@ scafctl run solution -f examples/actions/hello-world.yaml --log-level info --log
 | Directory | Description |
 |-----------|-------------|
 | [actions/](actions/) | Workflow automation with actions |
+| [exec/](exec/) | Exec provider shell execution patterns |
 | [resolvers/](resolvers/) | Dynamic value resolution patterns |
 | [solutions/](solutions/) | Complete end-to-end solution examples |
 | [snapshots/](snapshots/) | Execution snapshot capture and comparison |
@@ -60,6 +61,20 @@ Action workflows demonstrate executing tasks with dependencies, parallelism, and
 | [template-render.yaml](actions/template-render.yaml) | Render files from templates | `scafctl run solution -f examples/actions/template-render.yaml` |
 | [go-template-inline.yaml](actions/go-template-inline.yaml) | Inline Go templates with loops/conditionals | `scafctl run solution -f examples/actions/go-template-inline.yaml` |
 | [complex-workflow.yaml](actions/complex-workflow.yaml) | Full CI/CD-style workflow | `scafctl run solution -f examples/actions/complex-workflow.yaml` |
+
+---
+
+## Exec Provider Examples
+
+Demonstrate the exec provider's embedded POSIX shell, shell types, and cross-platform patterns.
+
+| Example | Description | Run |
+|---------|-------------|-----|
+| [simple.yaml](exec/simple.yaml) | Basic commands, arguments, working directory | `scafctl run solution -f examples/exec/simple.yaml` |
+| [shell-features.yaml](exec/shell-features.yaml) | Pipes, variables, conditionals, loops | `scafctl run solution -f examples/exec/shell-features.yaml` |
+| [shell-types.yaml](exec/shell-types.yaml) | Embedded, bash, and PowerShell shells | `scafctl run solution -f examples/exec/shell-types.yaml` |
+| [environment-and-io.yaml](exec/environment-and-io.yaml) | Environment vars, stdin, timeouts | `scafctl run solution -f examples/exec/environment-and-io.yaml` |
+| [cross-platform.yaml](exec/cross-platform.yaml) | Patterns that work on all platforms | `scafctl run solution -f examples/exec/cross-platform.yaml` |
 
 ---
 

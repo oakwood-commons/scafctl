@@ -153,7 +153,6 @@ spec:
         inputs:
           command:
             expr: "'deploy.sh ' + __item"
-          shell: true
 ```
 
 Run: `scafctl run solution -f deploy.yaml`
@@ -413,14 +412,12 @@ workflow:
       provider: exec
       inputs:
         command: "go build ./..."
-        shell: true
 
     test:
       provider: exec
       dependsOn: [build]
       inputs:
         command: "go test ./..."
-        shell: true
 
     deploy:
       provider: exec
@@ -432,7 +429,6 @@ workflow:
       inputs:
         command:
           expr: "'deploy.sh ' + __item"
-        shell: true
 
   finally:
     notify:

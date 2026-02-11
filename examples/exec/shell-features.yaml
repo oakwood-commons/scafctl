@@ -1,0 +1,90 @@
+# Shell Features Example
+# Demonstrates pipes, redirections, variable expansion, command substitution,
+# and conditionals — all powered by the embedded POSIX shell. These work
+# identically on Linux, macOS, and Windows.
+#
+# Run: scafctl run solution -f examples/exec/shell-features.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: exec-shell-features
+  version: 1.0.0
+  description: Pipes, redirections, and shell features that work cross-platform
+
+spec:
+  resolvers: {}
+
+  workflow:
+    actions:
+      # Pipes work by default — no shell flag needed
+      pipeline:
+        description: Pipe output between commands
+        provider: exec
+        inputs:
+          command: "echo 'hello world' | tr a-z A-Z"
+
+      # Variable expansion
+      variables:
+        description: Use shell variables and expansion
+        provider: exec
+        dependsOn: [pipeline]
+        inputs:
+          command: |
+            NAME="scafctl"
+            VERSION="2.0"
+            echo "Running $NAME version $VERSION"
+          env:
+            GREETING: "Hello from env"
+
+      # Command substitution
+      command-sub:
+        description: Use command substitution with $(...)
+        provider: exec
+        dependsOn: [variables]
+        inputs:
+          command: "echo \"Today is $(date +%Y-%m-%d)\""
+
+      # Conditionals
+      conditional:
+        description: Use if/then/else in commands
+        provider: exec
+        dependsOn: [command-sub]
+        inputs:
+          command: |
+            if [ -d /tmp ]; then
+              echo "The /tmp directory exists"
+            else
+              echo "No /tmp directory found"
+            fi
+
+      # For loops
+      loop:
+        description: Use for loops
+        provider: exec
+        dependsOn: [conditional]
+        inputs:
+          command: |
+            for item in alpha beta gamma; do
+              echo "Processing: $item"
+            done
+
+      # Stderr redirection
+      stderr-redirect:
+        description: Redirect to stderr
+        provider: exec
+        dependsOn: [loop]
+        inputs:
+          command: "echo 'This goes to stdout' && echo 'This goes to stderr' >&2"
+
+      # Multiline script
+      multiline:
+        description: Run a multi-step script
+        provider: exec
+        dependsOn: [stderr-redirect]
+        inputs:
+          command: |
+            echo "=== Step 1: Gather info ==="
+            echo "User: $(whoami)"
+            echo "Directory: $(pwd)"
+            echo "=== Step 2: Done ==="
