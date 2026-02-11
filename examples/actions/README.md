@@ -51,8 +51,8 @@ scafctl run solution -f examples/actions/hello-world.yaml --dry-run
 # Override resolver values
 scafctl run solution -f examples/actions/foreach-deploy.yaml -r targets='["server1","server2"]'
 
-# Run resolvers only (skip actions)
-scafctl run solution -f examples/actions/hello-world.yaml --skip-actions
+# Run resolvers only (for debugging)
+scafctl run resolver -f examples/actions/hello-world.yaml
 ```
 
 ## Concepts Demonstrated

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -46,7 +47,6 @@ func TestCommandSolution(t *testing.T) {
 	assert.NotNil(t, flags.Lookup("file"))
 	assert.NotNil(t, flags.Lookup("resolver"))
 	assert.NotNil(t, flags.Lookup("output"))
-	assert.NotNil(t, flags.Lookup("only"))
 	assert.NotNil(t, flags.Lookup("resolve-all"))
 	assert.NotNil(t, flags.Lookup("progress"))
 	assert.NotNil(t, flags.Lookup("warn-value-size"))
@@ -111,9 +111,11 @@ func TestSolutionOptions_Run_NoFile(t *testing.T) {
 	cliParams.ExitOnError = false // Don't exit on error in tests
 
 	opts := &SolutionOptions{
-		IOStreams: streams,
-		CliParams: cliParams,
-		File:      "", // No file specified
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams: streams,
+			CliParams: cliParams,
+			File:      "", // No file specified
+		},
 	}
 
 	lgr := logger.Get(0)
@@ -136,9 +138,11 @@ func TestSolutionOptions_Run_FileNotFound(t *testing.T) {
 	cliParams.ExitOnError = false // Don't exit on error in tests
 
 	opts := &SolutionOptions{
-		IOStreams: streams,
-		CliParams: cliParams,
-		File:      "/nonexistent/solution.yaml",
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams: streams,
+			CliParams: cliParams,
+			File:      "/nonexistent/solution.yaml",
+		},
 	}
 
 	lgr := logger.Get(0)
@@ -175,11 +179,13 @@ spec:
 	cliParams.ExitOnError = false // Don't exit on error in tests
 
 	opts := &SolutionOptions{
-		IOStreams: streams,
-		CliParams: cliParams,
-		File:      solutionPath,
-		Output:    "json",
-		registry:  testRegistry(),
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams:      streams,
+			CliParams:      cliParams,
+			File:           solutionPath,
+			KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
+			registry:       testRegistry(),
+		},
 	}
 
 	lgr := logger.Get(0)
@@ -292,13 +298,15 @@ spec:
 	cliParams.ExitOnError = false
 
 	opts := &SolutionOptions{
-		IOStreams:       streams,
-		CliParams:       cliParams,
-		File:            "-", // stdin indicator
-		Output:          "json",
-		ResolverTimeout: 30 * time.Second,
-		PhaseTimeout:    5 * time.Minute,
-		registry:        testRegistry(),
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams:       streams,
+			CliParams:       cliParams,
+			File:            "-", // stdin indicator
+			KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
+			ResolverTimeout: 30 * time.Second,
+			PhaseTimeout:    5 * time.Minute,
+			registry:        testRegistry(),
+		},
 	}
 
 	lgr := logger.Get(0)
@@ -308,125 +316,6 @@ spec:
 	require.NoError(t, err)
 
 	assert.Contains(t, stdout.String(), "hello-from-stdin")
-}
-
-func TestSolutionOptions_Run_OnlyFlag(t *testing.T) {
-	t.Parallel()
-
-	// Create a solution with multiple resolvers
-	tmpDir := t.TempDir()
-	solutionPath := filepath.Join(tmpDir, "solution.yaml")
-	solutionContent := `apiVersion: scafctl.io/v1
-kind: Solution
-metadata:
-  name: only-flag-test
-  version: 1.0.0
-spec:
-  resolvers:
-    base:
-      resolve:
-        with:
-          - provider: static
-            inputs:
-              value: base-value
-    dependent:
-      resolve:
-        with:
-          - provider: static
-            inputs:
-              value:
-                rslvr: base
-    independent:
-      resolve:
-        with:
-          - provider: static
-            inputs:
-              value: independent-value
-`
-	err := os.WriteFile(solutionPath, []byte(solutionContent), 0o600)
-	require.NoError(t, err)
-
-	var stdout, stderr bytes.Buffer
-	streams := &terminal.IOStreams{
-		In:     nil,
-		Out:    &stdout,
-		ErrOut: &stderr,
-	}
-	cliParams := settings.NewCliParams()
-	cliParams.ExitOnError = false
-
-	opts := &SolutionOptions{
-		IOStreams:       streams,
-		CliParams:       cliParams,
-		File:            solutionPath,
-		Output:          "json",
-		Only:            "dependent", // Only dependent and its dependency (base)
-		ResolverTimeout: 30 * time.Second,
-		PhaseTimeout:    5 * time.Minute,
-		registry:        testRegistry(),
-	}
-
-	lgr := logger.Get(0)
-	ctx := logger.WithLogger(context.Background(), lgr)
-
-	err = opts.Run(ctx)
-	require.NoError(t, err)
-
-	// Should have base (dependency) and dependent, but not independent
-	output := stdout.String()
-	assert.Contains(t, output, "base")
-	assert.Contains(t, output, "dependent")
-	assert.NotContains(t, output, "independent-value")
-}
-
-func TestSolutionOptions_Run_OnlyNonexistent(t *testing.T) {
-	t.Parallel()
-
-	tmpDir := t.TempDir()
-	solutionPath := filepath.Join(tmpDir, "solution.yaml")
-	solutionContent := `apiVersion: scafctl.io/v1
-kind: Solution
-metadata:
-  name: only-nonexistent-test
-  version: 1.0.0
-spec:
-  resolvers:
-    existing:
-      resolve:
-        with:
-          - provider: static
-            inputs:
-              value: existing-value
-`
-	err := os.WriteFile(solutionPath, []byte(solutionContent), 0o600)
-	require.NoError(t, err)
-
-	var stdout, stderr bytes.Buffer
-	streams := &terminal.IOStreams{
-		In:     nil,
-		Out:    &stdout,
-		ErrOut: &stderr,
-	}
-	cliParams := settings.NewCliParams()
-	cliParams.ExitOnError = false
-
-	opts := &SolutionOptions{
-		IOStreams: streams,
-		CliParams: cliParams,
-		File:      solutionPath,
-		Output:    "json",
-		Only:      "nonexistent", // This resolver doesn't exist
-		registry:  testRegistry(),
-	}
-
-	lgr := logger.Get(0)
-	ctx := logger.WithLogger(context.Background(), lgr)
-
-	err = opts.Run(ctx)
-	require.NoError(t, err)
-
-	// Should output empty object since resolver not found
-	assert.Contains(t, stdout.String(), "{}")
 }
 
 func TestSolutionOptions_Run_YAMLOutput(t *testing.T) {
@@ -461,13 +350,15 @@ spec:
 	cliParams.ExitOnError = false
 
 	opts := &SolutionOptions{
-		IOStreams:       streams,
-		CliParams:       cliParams,
-		File:            solutionPath,
-		Output:          "yaml",
-		ResolverTimeout: 30 * time.Second,
-		PhaseTimeout:    5 * time.Minute,
-		registry:        testRegistry(),
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams:       streams,
+			CliParams:       cliParams,
+			File:            solutionPath,
+			KvxOutputFlags:  flags.KvxOutputFlags{Output: "yaml"},
+			ResolverTimeout: 30 * time.Second,
+			PhaseTimeout:    5 * time.Minute,
+			registry:        testRegistry(),
+		},
 	}
 
 	lgr := logger.Get(0)
@@ -514,13 +405,15 @@ spec:
 	cliParams.ExitOnError = false
 
 	opts := &SolutionOptions{
-		IOStreams:       streams,
-		CliParams:       cliParams,
-		File:            solutionPath,
-		Output:          "quiet",
-		ResolverTimeout: 30 * time.Second,
-		PhaseTimeout:    5 * time.Minute,
-		registry:        testRegistry(),
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams:       streams,
+			CliParams:       cliParams,
+			File:            solutionPath,
+			KvxOutputFlags:  flags.KvxOutputFlags{Output: "quiet"},
+			ResolverTimeout: 30 * time.Second,
+			PhaseTimeout:    5 * time.Minute,
+			registry:        testRegistry(),
+		},
 	}
 
 	lgr := logger.Get(0)
@@ -589,14 +482,16 @@ spec:
 	cliParams.ExitOnError = false
 
 	opts := &SolutionOptions{
-		IOStreams:       streams,
-		CliParams:       cliParams,
-		File:            solutionPath,
-		Output:          "json",
-		ResolverParams:  []string{"@" + paramsPath},
-		ResolverTimeout: 30 * time.Second,
-		PhaseTimeout:    5 * time.Minute,
-		registry:        testRegistryWithParameters(),
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams:       streams,
+			CliParams:       cliParams,
+			File:            solutionPath,
+			KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
+			ResolverParams:  []string{"@" + paramsPath},
+			ResolverTimeout: 30 * time.Second,
+			PhaseTimeout:    5 * time.Minute,
+			registry:        testRegistryWithParameters(),
+		},
 	}
 
 	lgr := logger.Get(0)
@@ -642,14 +537,16 @@ spec:
 	cliParams.ExitOnError = false
 
 	opts := &SolutionOptions{
-		IOStreams:       streams,
-		CliParams:       cliParams,
-		File:            solutionPath,
-		Output:          "json",
-		ResolverParams:  []string{"app_name=my-application"},
-		ResolverTimeout: 30 * time.Second,
-		PhaseTimeout:    5 * time.Minute,
-		registry:        testRegistryWithParameters(),
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams:       streams,
+			CliParams:       cliParams,
+			File:            solutionPath,
+			KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
+			ResolverParams:  []string{"app_name=my-application"},
+			ResolverTimeout: 30 * time.Second,
+			PhaseTimeout:    5 * time.Minute,
+			registry:        testRegistryWithParameters(),
+		},
 	}
 
 	lgr := logger.Get(0)
@@ -700,13 +597,15 @@ spec:
 	cliParams.ExitOnError = false
 
 	opts := &SolutionOptions{
-		IOStreams:       streams,
-		CliParams:       cliParams,
-		File:            solutionPath,
-		Output:          "json",
-		ResolverTimeout: 30 * time.Second,
-		PhaseTimeout:    5 * time.Minute,
-		registry:        testRegistry(),
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams:       streams,
+			CliParams:       cliParams,
+			File:            solutionPath,
+			KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
+			ResolverTimeout: 30 * time.Second,
+			PhaseTimeout:    5 * time.Minute,
+			registry:        testRegistry(),
+		},
 	}
 
 	lgr := logger.Get(0)
@@ -755,14 +654,16 @@ spec:
 	cliParams.ExitOnError = false
 
 	opts := &SolutionOptions{
-		IOStreams:       streams,
-		CliParams:       cliParams,
-		File:            solutionPath,
-		Output:          "json",
-		MaxValueSize:    10, // Very small limit to trigger error
-		ResolverTimeout: 30 * time.Second,
-		PhaseTimeout:    5 * time.Minute,
-		registry:        testRegistry(),
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams:       streams,
+			CliParams:       cliParams,
+			File:            solutionPath,
+			KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
+			MaxValueSize:    10, // Very small limit to trigger error
+			ResolverTimeout: 30 * time.Second,
+			PhaseTimeout:    5 * time.Minute,
+			registry:        testRegistry(),
+		},
 	}
 
 	lgr := logger.Get(0)
@@ -789,18 +690,15 @@ spec:
 	err := os.WriteFile(solutionPath, []byte(solutionContent), 0o600)
 	require.NoError(t, err)
 
-	streams, out, _ := terminal.NewTestIOStreams()
+	streams, _, _ := terminal.NewTestIOStreams()
 	cliParams := settings.NewCliParams()
 	cliParams.ExitOnError = false
 
 	cmd := CommandSolution(cliParams, streams, "")
 	cmd.SetArgs([]string{"-f", solutionPath, "-o", "invalid"})
 
-	// With the shared kvx output handler, invalid formats default to table
-	// which falls back to JSON when output is not a TTY.
-	// This is better UX than failing on an invalid format.
+	// Invalid output format should produce an error
 	err = cmd.Execute()
-	require.NoError(t, err)
-	// Should produce valid JSON output (fallback from table in non-TTY)
-	assert.Contains(t, out.String(), "{")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid")
 }

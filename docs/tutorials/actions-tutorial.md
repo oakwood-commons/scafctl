@@ -452,8 +452,11 @@ scafctl run solution -f my-solution.yaml --max-action-concurrency=4
 # Dry-run (show plan without executing)
 scafctl run solution -f my-solution.yaml --dry-run
 
-# Run resolvers only (skip actions)
-scafctl run solution -f my-solution.yaml --skip-actions
+# Run resolvers only (skip actions, for debugging)
+scafctl run resolver -f my-solution.yaml
+
+# Run specific resolvers for inspection
+scafctl run resolver db config -f my-solution.yaml --verbose
 ```
 
 ### Render Mode

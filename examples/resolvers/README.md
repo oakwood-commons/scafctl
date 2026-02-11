@@ -38,17 +38,23 @@ This directory contains practical examples demonstrating various resolver patter
 ## Running Examples
 
 ```bash
-# Run an example
-scafctl run solution -f examples/resolvers/hello-world.yaml
+# Run resolvers only (for debugging and inspection)
+scafctl run resolver -f examples/resolvers/hello-world.yaml
+
+# Run specific resolvers with verbose output
+scafctl run resolver greeting --verbose -f examples/resolvers/dependencies.yaml
 
 # Run with parameters
-scafctl run solution -f examples/resolvers/parameters.yaml -r name=Alice
+scafctl run resolver -f examples/resolvers/parameters.yaml -r name=Alice
 
 # Show execution progress
-scafctl run solution -f examples/resolvers/dependencies.yaml --progress
+scafctl run resolver -f examples/resolvers/dependencies.yaml --progress
 
 # Output as YAML
-scafctl run solution -f examples/resolvers/env-config.yaml -o yaml
+scafctl run resolver -f examples/resolvers/env-config.yaml -o yaml
+
+# Run full solution (resolvers + actions)
+scafctl run solution -f examples/resolvers/hello-world.yaml
 ```
 
 ## Creating Your Own

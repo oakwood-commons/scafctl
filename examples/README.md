@@ -5,8 +5,14 @@ This directory contains runnable examples demonstrating scafctl features. Each e
 ## Quick Start
 
 ```bash
-# Run any example
+# Run any example (full solution with actions)
 scafctl run solution -f examples/<path-to-example>.yaml
+
+# Run resolvers only (debugging/inspection)
+scafctl run resolver -f examples/resolver-demo.yaml
+
+# Run specific resolvers with verbose output
+scafctl run resolver environment region -f examples/resolver-demo.yaml --verbose
 
 # Run with parameters
 scafctl run solution -f examples/resolvers/parameters.yaml -r name=Alice

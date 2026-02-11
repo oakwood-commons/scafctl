@@ -42,6 +42,7 @@ Resolvers do not cause side effects. They only compute values.
 | ValidateAll mode (`--validate-all`) | ✅ Implemented | `WithValidateAll()` |
 | SkipValidation mode (`--skip-validation`) | ✅ Implemented | `WithSkipValidation()` |
 | Value size limits | ✅ Implemented | `WarnValueSize`, `MaxValueSize` |
+| Run resolver command | ✅ Implemented | `pkg/cmd/scafctl/run/resolver.go` |
 
 ---
 
@@ -1210,6 +1211,9 @@ Resolver parameters are supplied using the `-r` or `--resolver` flag.
 
 ~~~bash
 scafctl run solution example -r key=value
+
+# Or with run resolver for debugging
+scafctl run resolver -f example.yaml -r key=value
 ~~~
 
 Multiple resolver parameters may be supplied:
@@ -1218,6 +1222,11 @@ Multiple resolver parameters may be supplied:
 scafctl run solution example \
   -r env=prod \
   -r regions=us-east1,us-west1
+
+# Run specific resolvers only (with dependencies)
+scafctl run resolver env region \
+  -f example.yaml \
+  -r env=prod
 ~~~
 
 Each `-r` maps to a parameter key that may be read by the `parameter` provider.
