@@ -318,7 +318,7 @@ func (o *SolutionOptions) runActionGraph(ctx context.Context, lgr logr.Logger) e
 	}
 
 	// Validate the workflow
-	reg := o.getRegistry()
+	reg := o.getRegistry(ctx)
 	adapter := &solutionRegistryAdapter{registry: reg}
 	if err := action.ValidateWorkflow(sol.Spec.Workflow, adapter); err != nil {
 		return o.exitWithCode(fmt.Errorf("workflow validation failed: %w", err), exitcode.ValidationFailed)
@@ -446,7 +446,7 @@ func (o *SolutionOptions) runActionGraphVisualization(ctx context.Context, lgr l
 	}
 
 	// Validate the workflow
-	reg := o.getRegistry()
+	reg := o.getRegistry(ctx)
 	adapter := &solutionRegistryAdapter{registry: reg}
 	if err := action.ValidateWorkflow(sol.Spec.Workflow, adapter); err != nil {
 		return o.exitWithCode(fmt.Errorf("workflow validation failed: %w", err), exitcode.ValidationFailed)
@@ -544,7 +544,7 @@ func (o *SolutionOptions) runSnapshot(ctx context.Context, lgr logr.Logger) erro
 		"parameters", len(params))
 
 	// Execute resolvers
-	reg := o.getRegistry()
+	reg := o.getRegistry(ctx)
 	adapter := &solutionRegistryAdapter{registry: reg}
 	resolverAdapter := &solutionResolverRegistryAdapter{solutionRegistryAdapter: adapter}
 
@@ -664,12 +664,12 @@ func (o *SolutionOptions) loadSolution(ctx context.Context) (*solution.Solution,
 }
 
 // getRegistry returns the provider registry
-func (o *SolutionOptions) getRegistry() *provider.Registry {
+func (o *SolutionOptions) getRegistry(ctx context.Context) *provider.Registry {
 	if o.registry != nil {
 		return o.registry
 	}
 
-	reg, err := builtin.DefaultRegistry()
+	reg, err := builtin.DefaultRegistry(ctx)
 	if err != nil {
 		lgr := logger.Get(0)
 		lgr.V(0).Info("warning: failed to register some providers", "error", err)

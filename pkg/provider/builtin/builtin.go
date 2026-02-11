@@ -4,10 +4,10 @@
 package builtin
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
-	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/celprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/debugprovider"
@@ -24,6 +24,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/staticprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/validationprovider"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 )
 
 var (
@@ -35,36 +36,23 @@ var (
 // DefaultRegistry returns a shared registry with all built-in providers pre-registered.
 // Thread-safe and initialized only once using sync.Once.
 // This is the recommended way to get a provider registry for resolver execution.
-func DefaultRegistry() (*provider.Registry, error) {
+//
+// The ctx is used on the first call to extract a Writer for user-facing warnings
+// (e.g., when the secret store falls back to a less secure backend).
+// Subsequent calls ignore ctx since the registry is already initialized.
+func DefaultRegistry(ctx context.Context) (*provider.Registry, error) {
 	defaultRegistryOnce.Do(func() {
 		defaultRegistry = provider.NewRegistry()
-		registrationErr = registerAllToRegistry(defaultRegistry)
+		registrationErr = registerAllToRegistry(ctx, defaultRegistry)
 	})
 	return defaultRegistry, registrationErr
 }
 
-// MustDefaultRegistry returns the default registry, panicking if registration fails.
-// Use this only when you're certain provider registration will succeed.
-func MustDefaultRegistry() *provider.Registry {
-	reg, err := DefaultRegistry()
-	if err != nil {
-		panic("failed to initialize default provider registry: " + err.Error())
-	}
-	return reg
-}
-
-// RegisterAll registers all built-in providers in the global registry.
-//
-// Deprecated: Use DefaultRegistry() instead for better encapsulation.
-func RegisterAll() error {
-	return registerAllToRegistry(provider.GetGlobalRegistry())
-}
-
 // registerAllToRegistry registers all built-in providers to the given registry.
-// If the secrets store cannot be initialized (e.g., no OS keyring in CI),
-// all other providers are still registered and the error is returned as a
-// non-fatal warning alongside a nil-error return.
-func registerAllToRegistry(reg *provider.Registry) error {
+// If the secrets store cannot be initialized (e.g., no OS keyring, no env var, no writable data dir),
+// all other providers are still registered and the error is surfaced as a
+// user-facing warning (not a structured log).
+func registerAllToRegistry(ctx context.Context, reg *provider.Registry) error {
 	providers := []provider.Provider{
 		httpprovider.NewHTTPProvider(),
 		envprovider.NewEnvProvider(),
@@ -82,13 +70,19 @@ func registerAllToRegistry(reg *provider.Registry) error {
 	}
 
 	// Initialize secrets store for the secret provider.
-	// If the keyring is unavailable (e.g., CI without SCAFCTL_SECRET_KEY),
-	// skip the secret provider but register everything else.
+	// The keyring chain tries: OS keyring → SCAFCTL_SECRET_KEY env var → file-based key.
+	// If all backends fail, skip the secret provider but register everything else.
 	secretStore, err := secrets.New()
 	if err == nil {
 		providers = append(providers, secretprovider.NewSecretProvider(secretprovider.WithSecretStore(secretStore)))
+
+		// Warn the user if we fell back to a less-secure backend
+		backend := secretStore.KeyringBackend()
+		if backend == secrets.KeyringBackendFile {
+			warnUser(ctx, " Secret store using file-based key storage. For better security, configure an OS keyring or set SCAFCTL_SECRET_KEY.")
+		}
 	} else {
-		logger.GetGlobalLogger().Info("secret provider unavailable: secrets store failed to initialize, set SCAFCTL_SECRET_KEY to enable", "error", err)
+		warnUser(ctx, fmt.Sprintf(" Secret provider unavailable: %v. Secret features will be disabled. Set SCAFCTL_SECRET_KEY to enable.", err))
 	}
 
 	var errs []error
@@ -103,6 +97,15 @@ func registerAllToRegistry(reg *provider.Registry) error {
 	}
 
 	return nil
+}
+
+// warnUser emits a user-facing warning message via the Writer in ctx.
+// If no Writer is available in ctx, the warning is silently dropped
+// (it would only be visible at debug log level via structured logging).
+func warnUser(ctx context.Context, msg string) {
+	if w := writer.FromContext(ctx); w != nil {
+		w.Warning(msg)
+	}
 }
 
 // ProviderNames returns the names of all built-in providers.

@@ -14,11 +14,12 @@ import (
 
 // store implements the Store interface.
 type store struct {
-	secretsDir string
-	keyring    Keyring
-	masterKey  []byte
-	logger     logr.Logger
-	mu         sync.RWMutex
+	secretsDir     string
+	keyring        Keyring
+	masterKey      []byte
+	logger         logr.Logger
+	keyringBackend string
+	mu             sync.RWMutex
 }
 
 // newStore creates a new store with the given options.
@@ -58,6 +59,11 @@ func newStore(opts ...Option) (*store, error) {
 	// Initialize master key
 	if err := s.initMasterKey(); err != nil {
 		return nil, fmt.Errorf("initializing master key: %w", err)
+	}
+
+	// Capture which keyring backend was used
+	if ck, ok := keyring.(*chainKeyring); ok {
+		s.keyringBackend = ck.Backend()
 	}
 
 	return s, nil
@@ -114,6 +120,11 @@ func (s *store) initMasterKey() error {
 	s.logger.V(1).Info("generated and stored new master key")
 
 	return nil
+}
+
+// KeyringBackend returns the identifier of the keyring backend used.
+func (s *store) KeyringBackend() string {
+	return s.keyringBackend
 }
 
 // Get retrieves a secret by name.

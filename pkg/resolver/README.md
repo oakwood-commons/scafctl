@@ -108,7 +108,7 @@ func main() {
     ctx := context.Background()
 
     // Get the default provider registry
-    registry, err := builtin.DefaultRegistry()
+    registry, err := builtin.DefaultRegistry(ctx)
     if err != nil {
         panic(err)
     }

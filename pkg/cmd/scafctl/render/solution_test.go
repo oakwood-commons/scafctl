@@ -289,14 +289,14 @@ func TestSolutionOptions_getRegistry(t *testing.T) {
 			registry: injectedReg,
 		}
 
-		result := options.getRegistry()
+		result := options.getRegistry(context.Background())
 		assert.Same(t, injectedReg, result)
 	})
 
 	t.Run("returns_registry_when_not_set", func(t *testing.T) {
 		options := &SolutionOptions{}
 
-		result := options.getRegistry()
+		result := options.getRegistry(context.Background())
 		assert.NotNil(t, result)
 	})
 }
