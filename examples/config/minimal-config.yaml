@@ -25,11 +25,12 @@ settings:
 
 # Logging configuration
 logging:
-  # Use "text" format for human-readable output during development
-  # format: "text"
+  # Logs are suppressed by default (level: "none").
+  # Set to "debug" for troubleshooting or "info" for normal operation.
+  # level: "debug"
 
-  # Increase verbosity for debugging (-1 = debug, 0 = info, 1 = warn, 2 = error)
-  # level: -1
+  # Format: "console" (default, colored), "json" (structured)
+  # format: "json"
 
 # Add your catalogs below
 # Use: scafctl config add-catalog to add interactively

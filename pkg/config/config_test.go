@@ -29,7 +29,7 @@ func TestManager_Load_NoFile(t *testing.T) {
 	assert.Equal(t, "local", cfg.Catalogs[0].Name)
 	assert.Equal(t, CatalogTypeFilesystem, cfg.Catalogs[0].Type)
 	assert.Equal(t, paths.CatalogDir(), cfg.Catalogs[0].Path)
-	assert.Equal(t, 0, cfg.Logging.Level)
+	assert.Equal(t, "none", cfg.Logging.Level)
 	assert.Equal(t, "local", cfg.Settings.DefaultCatalog)
 	assert.False(t, cfg.Settings.NoColor)
 	assert.False(t, cfg.Settings.Quiet)
@@ -49,7 +49,7 @@ catalogs:
 settings:
   defaultCatalog: test
 logging:
-  level: 1
+  level: warn
 `
 	err := os.WriteFile(configPath, []byte(configContent), 0o600)
 	require.NoError(t, err)
@@ -63,7 +63,7 @@ logging:
 	assert.Equal(t, "filesystem", cfg.Catalogs[0].Type)
 	assert.Equal(t, "./test", cfg.Catalogs[0].Path)
 	assert.Equal(t, "test", cfg.Settings.DefaultCatalog)
-	assert.Equal(t, 1, cfg.Logging.Level)
+	assert.Equal(t, "warn", cfg.Logging.Level)
 }
 
 func TestManager_Load_WithFullConfig(t *testing.T) {
@@ -90,7 +90,7 @@ settings:
   noColor: true
   quiet: false
 logging:
-  level: -1
+  level: debug
 `
 	err := os.WriteFile(configPath, []byte(configContent), 0o600)
 	require.NoError(t, err)
@@ -119,7 +119,7 @@ logging:
 	assert.Equal(t, "local", cfg.Settings.DefaultCatalog)
 	assert.True(t, cfg.Settings.NoColor)
 	assert.False(t, cfg.Settings.Quiet)
-	assert.Equal(t, -1, cfg.Logging.Level)
+	assert.Equal(t, "debug", cfg.Logging.Level)
 }
 
 func TestManager_Load_InvalidYAML(t *testing.T) {
@@ -160,7 +160,7 @@ func TestManager_Save(t *testing.T) {
 		Type: CatalogTypeFilesystem,
 		Path: "./new",
 	})
-	cfg.Logging.Level = 2
+	cfg.Logging.Level = "error"
 
 	// Save
 	err = mgr.Save()
@@ -175,7 +175,7 @@ func TestManager_Save(t *testing.T) {
 	assert.Len(t, cfg2.Catalogs, 2)
 	assert.Equal(t, "local", cfg2.Catalogs[0].Name)
 	assert.Equal(t, "new-catalog", cfg2.Catalogs[1].Name)
-	assert.Equal(t, 2, cfg2.Logging.Level)
+	assert.Equal(t, "error", cfg2.Logging.Level)
 }
 
 func TestManager_SaveAs(t *testing.T) {
@@ -223,8 +223,8 @@ func TestManager_GetSet(t *testing.T) {
 	require.NoError(t, err)
 
 	// Set and get
-	mgr.Set("logging.level", 3)
-	assert.Equal(t, 3, mgr.Get("logging.level"))
+	mgr.Set("logging.level", "3")
+	assert.Equal(t, "3", mgr.Get("logging.level"))
 
 	mgr.Set("settings.noColor", true)
 	assert.Equal(t, true, mgr.Get("settings.noColor"))

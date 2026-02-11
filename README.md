@@ -93,6 +93,7 @@ Zsh users must have `compinit` loaded before the completion file is sourced.
 - **Plugins**: Extend scafctl with custom providers via a plugin system
 - **Snapshots**: Capture and diff resolver output over time
 - **Linting**: Validate solution files for correctness before execution
+- **Logging**: Quiet by default with user-controlled verbosity, format, and file output
 
 ## Quick Start
 
@@ -194,6 +195,7 @@ See the [Provider Reference](docs/tutorials/provider-reference.md) and [Provider
 - [CEL Expressions](docs/tutorials/cel-tutorial.md) — Dynamic evaluation with CEL
 - [Go Templates](docs/tutorials/go-templates-tutorial.md) — Templating with Go templates
 - [Configuration](docs/tutorials/config-tutorial.md) — Managing application settings
+- [Logging](docs/tutorials/logging-tutorial.md) — Controlling log output, formats, and destinations
 - [Caching](docs/tutorials/cache-tutorial.md) — Provider result caching
 - [Directory Provider](docs/tutorials/directory-provider-tutorial.md) — Listing, scanning, and managing directories
 - [Snapshots](docs/tutorials/snapshots-tutorial.md) — Capturing and diffing output
@@ -300,6 +302,51 @@ scafctl config remove-catalog my-registry
 ```
 
 See the [Configuration Tutorial](docs/tutorials/config-tutorial.md).
+
+## Logging
+
+By default, scafctl produces **no structured log output** — only styled user messages (errors, warnings, success). This keeps the CLI clean for human users and pipe-friendly for scripts.
+
+### Quick Reference
+
+```bash
+# Default: no logs, just styled errors/warnings
+scafctl run solution -f solution.yaml
+
+# Enable debug logging (human-readable console format)
+scafctl run solution -f solution.yaml --debug
+scafctl run solution -f solution.yaml --log-level debug
+
+# JSON structured logs (for log aggregation / piping)
+scafctl run solution -f solution.yaml --log-level info --log-format json
+
+# Write logs to a file instead of stderr
+scafctl run solution -f solution.yaml --debug --log-file /tmp/scafctl.log
+
+# Environment variables (useful for CI/CD)
+export SCAFCTL_DEBUG=1             # Enable debug logging
+export SCAFCTL_LOG_LEVEL=info      # Set specific level
+export SCAFCTL_LOG_FORMAT=json     # Set format
+export SCAFCTL_LOG_PATH=/tmp/scafctl.log  # Log to file
+```
+
+### Log Levels
+
+| Level | Description |
+|-------|-------------|
+| `none` | No log output (default) |
+| `error` | Errors only |
+| `warn` | Warnings and errors |
+| `info` | Informational messages |
+| `debug` | Verbose debugging (V-level 1) |
+| `trace` | Very verbose (V-level 2) |
+| `1`-`3` | Numeric V-levels for fine-grained control |
+
+### Precedence
+
+Flag (`--log-level`) > `--debug` > environment variable > config file > default (`none`)
+
+See the [Logging Tutorial](docs/tutorials/logging-tutorial.md) for detailed examples.
 
 ## Secrets
 

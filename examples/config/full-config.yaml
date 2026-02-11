@@ -42,19 +42,26 @@ settings:
 # Logging - Control log output format and verbosity
 # =============================================================================
 logging:
-  # Log level determines verbosity:
-  #   -1 = Debug (most verbose, includes trace information)
-  #    0 = Info (default, normal operation messages)
-  #    1 = Warn (warnings and errors only)
-  #    2 = Error (errors only)
-  # Default: 0
-  level: 0
+  # Log level determines verbosity. Named levels (recommended):
+  #   "none"  - Suppress all log output (default, CLI-first UX)
+  #   "error" - Errors only
+  #   "warn"  - Warnings and errors
+  #   "info"  - Normal operation messages
+  #   "debug" - Verbose, includes trace information (alias for V-level 1)
+  #   "trace" - Very verbose (alias for V-level 2)
+  #
+  # Numeric V-levels are also supported for fine-grained control:
+  #   "1" = debug, "2" = trace, "3" = ultra-verbose
+  #
+  # Default: "none"
+  level: "none"
 
   # Output format for log messages:
-  #   "json" - Structured JSON, ideal for log aggregation (default)
-  #   "text" - Human-readable colored output for development
-  # Default: "json"
-  format: "json"
+  #   "console" - Human-readable colored output (default)
+  #   "json"    - Structured JSON, ideal for log aggregation and piping
+  #   "text"    - Alias for "console"
+  # Default: "console"
+  format: "console"
 
   # Include timestamps in log output
   # Default: true

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"runtime/debug"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/go-logr/logr"
@@ -56,36 +58,108 @@ type LogFormat string
 const (
 	// FormatJSON outputs logs in JSON format.
 	FormatJSON LogFormat = "json"
-	// FormatText outputs logs in human-readable text format.
+	// FormatConsole outputs logs in human-readable text format.
+	FormatConsole LogFormat = "console"
+	// FormatText is an alias for FormatConsole for backward compatibility with config files.
 	FormatText LogFormat = "text"
 )
 
+// Named log level constants used in config and CLI flags.
+const (
+	// LevelNone disables all structured log output.
+	LevelNone = "none"
+	// LevelError shows only error-level logs.
+	LevelError = "error"
+	// LevelWarn shows warning and error logs.
+	LevelWarn = "warn"
+	// LevelInfo shows info, warning, and error logs.
+	LevelInfo = "info"
+	// LevelDebug shows debug (V(1)) and above logs.
+	LevelDebug = "debug"
+	// LevelTrace shows trace (V(2)) and above logs.
+	LevelTrace = "trace"
+)
+
+// LogLevelNone is the sentinel zap level value that silences all log output.
+// It is set above FatalLevel so no log entry can reach it.
+const LogLevelNone = zapcore.FatalLevel + 1
+
+// ParseLogLevel converts a named or numeric log level string to a zapcore.Level.
+// Named levels: none, error, warn, info, debug, trace.
+// Numeric levels: any integer string (e.g., "3", "5") is treated as a logr V-level
+// and negated to produce the corresponding zap level (user's 3 → zap -3 → V(3) visible).
+func ParseLogLevel(s string) (zapcore.Level, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case LevelNone, "":
+		return LogLevelNone, nil
+	case LevelError:
+		return zapcore.ErrorLevel, nil
+	case LevelWarn:
+		return zapcore.WarnLevel, nil
+	case LevelInfo:
+		return zapcore.InfoLevel, nil
+	case LevelDebug:
+		return zapcore.Level(-1), nil // V(1)
+	case LevelTrace:
+		return zapcore.Level(-2), nil // V(2)
+	default:
+		// Try numeric V-level
+		n, err := strconv.Atoi(s)
+		if err != nil {
+			return zapcore.InfoLevel, fmt.Errorf("invalid log level %q: must be one of none, error, warn, info, debug, trace, or a numeric V-level", s)
+		}
+		// Numeric values are treated as V-levels: user provides positive number,
+		// we negate to get the zap level (e.g., 3 → -3 → V(3) visible).
+		if n < 0 {
+			// Already negative means the user is specifying a raw zap level directly
+			return zapcore.Level(n), nil //nolint:gosec // intentional int→int8 for raw zap level
+		}
+		return zapcore.Level(-n), nil //nolint:gosec // intentional negation
+	}
+}
+
+// IsDebugLevel returns true if the given log level string resolves to debug or deeper.
+// This is used by the writer package to gate debug output.
+func IsDebugLevel(level string) bool {
+	l, err := ParseLogLevel(level)
+	if err != nil {
+		return false
+	}
+	return l <= zapcore.Level(-1)
+}
+
 // Options configures the logger behavior.
 type Options struct {
-	// Level is the minimum log level (-1=Debug, 0=Info, 1=Warn, 2=Error).
-	Level int8
-	// Format is the output format (json or text).
+	// Level is the minimum zap log level.
+	Level zapcore.Level
+	// Format is the output format (json, console, or text).
 	Format LogFormat
 	// Timestamps controls whether timestamps are included in log output.
 	Timestamps bool
+	// FilePath is an optional file path to write logs to. When set, logs are
+	// written to this file. If empty, logs go to stderr.
+	FilePath string
+	// AlsoStderr controls whether logs are also written to stderr when FilePath
+	// is set. When FilePath is empty, this has no effect (stderr is always used).
+	AlsoStderr bool
 }
 
 // DefaultOptions returns the default logger options.
 func DefaultOptions() Options {
 	return Options{
-		Level:      0,
-		Format:     FormatJSON,
+		Level:      LogLevelNone,
+		Format:     FormatConsole,
 		Timestamps: true,
 	}
 }
 
 // Get initializes the global Zap and Logr loggers with default options.
 // It can only be called once. Subsequent calls will have no effect.
-// logLevel: The minimum logging level (-1=Debug, 0=Info, 1=Warn, 2=Error).
+// logLevel: The minimum zap logging level (e.g., -1=Debug/V(1), 0=Info, 1=Warn, 2=Error).
 // This function must be called before using FromContext or any logging operations.
 func Get(logLevel int8) *logr.Logger {
 	return GetWithOptions(Options{
-		Level:      logLevel,
+		Level:      zapcore.Level(logLevel),
 		Format:     FormatJSON,
 		Timestamps: true,
 	})
@@ -96,6 +170,13 @@ func Get(logLevel int8) *logr.Logger {
 // This function must be called before using FromContext or any logging operations.
 func GetWithOptions(opts Options) *logr.Logger {
 	once.Do(func() {
+		// If level is set to LogLevelNone, return a noop logger
+		if opts.Level >= LogLevelNone {
+			gl := logr.Discard()
+			globalLogrLogger = &gl
+			return
+		}
+
 		// Encoder Configuration: How log entries are formatted
 		encoderCfg := zap.NewProductionEncoderConfig()
 		encoderCfg.MessageKey = MessageKey
@@ -109,23 +190,44 @@ func GetWithOptions(opts Options) *logr.Logger {
 		}
 
 		// Determine the minimum log level
-		minimumLogLevel := zapcore.Level(opts.Level)
+		minimumLogLevel := opts.Level
 
 		buildInfo, _ := debug.ReadBuildInfo()
 
 		// Create encoder based on format
 		var encoder zapcore.Encoder
-		if opts.Format == FormatText {
+		if opts.Format == FormatText || opts.Format == FormatConsole {
 			encoderCfg.EncodeLevel = zapcore.CapitalColorLevelEncoder
 			encoder = zapcore.NewConsoleEncoder(encoderCfg)
 		} else {
 			encoder = zapcore.NewJSONEncoder(encoderCfg)
 		}
 
+		// Determine output destination(s)
+		var writeSyncer zapcore.WriteSyncer
+		switch {
+		case opts.FilePath != "":
+			f, err := os.OpenFile(opts.FilePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+			switch {
+			case err != nil:
+				fmt.Fprintf(os.Stderr, "WARNING: failed to open log file %q: %v, falling back to stderr\n", opts.FilePath, err)
+				writeSyncer = zapcore.Lock(os.Stderr)
+			case opts.AlsoStderr:
+				writeSyncer = zapcore.NewMultiWriteSyncer(
+					zapcore.Lock(os.Stderr),
+					zapcore.AddSync(f),
+				)
+			default:
+				writeSyncer = zapcore.AddSync(f)
+			}
+		default:
+			writeSyncer = zapcore.Lock(os.Stderr)
+		}
+
 		// Create a Zap Core: Combines encoder, sink (output destination), and level
 		core := zapcore.NewCore(
 			encoder,
-			zapcore.Lock(os.Stderr),               // Output to standard error, safely (thread-safe)
+			writeSyncer,
 			zap.NewAtomicLevelAt(minimumLogLevel), // Set the logging level
 		).With(
 			[]zapcore.Field{

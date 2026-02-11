@@ -216,6 +216,10 @@ All providers implement structured logging via logr:
 
 **Usage:**
 ```bash
+# Logs are suppressed by default. Enable debug to see provider execution:
+scafctl run solution -f solution.yaml --debug
+
+# Or use a specific V-level:
 scafctl run solution -f solution.yaml --log-level 1
 ```
 

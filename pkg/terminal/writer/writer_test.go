@@ -196,7 +196,7 @@ func TestInfo_Quiet(t *testing.T) {
 
 func TestDebug(t *testing.T) {
 	w, outBuf, _ := newTestWriter()
-	w.cliParams.MinLogLevel = -1 // Enable debug
+	w.cliParams.MinLogLevel = "debug" // Enable debug
 
 	w.Debug("Debug information")
 	assert.Contains(t, outBuf.String(), "Debug information")
@@ -205,7 +205,7 @@ func TestDebug(t *testing.T) {
 
 func TestDebugf(t *testing.T) {
 	w, outBuf, _ := newTestWriter()
-	w.cliParams.MinLogLevel = -1 // Enable debug
+	w.cliParams.MinLogLevel = "debug" // Enable debug
 	w.cliParams.NoColor = true
 
 	w.Debugf("Variable x = %d", 42)
@@ -214,7 +214,7 @@ func TestDebugf(t *testing.T) {
 
 func TestDebug_NotEnabled(t *testing.T) {
 	w, outBuf, _ := newTestWriter()
-	w.cliParams.MinLogLevel = 0 // Info level, debug disabled
+	w.cliParams.MinLogLevel = "none" // Logs disabled, debug not enabled
 
 	w.Debug("Debug information")
 	assert.Empty(t, outBuf.String())
@@ -222,7 +222,7 @@ func TestDebug_NotEnabled(t *testing.T) {
 
 func TestDebug_Quiet(t *testing.T) {
 	w, outBuf, _ := newTestWriter()
-	w.cliParams.MinLogLevel = -1 // Enable debug
+	w.cliParams.MinLogLevel = "debug" // Enable debug
 	w.cliParams.IsQuiet = true
 
 	w.Debug("Debug information")

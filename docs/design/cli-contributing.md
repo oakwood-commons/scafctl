@@ -1529,7 +1529,10 @@ These flags should be available on the root command and inherited by all subcomm
 | `--quiet` | `-q` | bool | `false` | Suppress non-essential output |
 | `--no-color` | | bool | `false` | Disable colored output |
 | `--config` | | string | `~/.scafctl/config.yaml` | Path to config file |
-| `--log-level` | | int | `0` | Log level (-1=Debug, 0=Info, 1=Warn, 2=Error) |
+| `--log-level` | | string | `none` | Log level: none, error, warn, info, debug, trace, or numeric V-level |
+| `--debug` | `-d` | bool | `false` | Enable debug logging (shorthand for --log-level debug) |
+| `--log-format` | | string | `console` | Log format: console (colored) or json (structured) |
+| `--log-file` | | string | `""` | Write logs to a file path |
 
 ### Adding Global Flags
 

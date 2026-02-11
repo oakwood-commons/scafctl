@@ -49,7 +49,7 @@ Copy an example configuration:
 General application behavior: default catalog, colored output, quiet mode.
 
 ### `logging`
-Log level (-1=debug, 0=info, 1=warn, 2=error), format (json/text), timestamps.
+Log level (none/error/warn/info/debug/trace or numeric V-level), format (console/json), timestamps.
 
 ### `httpClient`
 Global HTTP settings: timeouts, retries, caching, circuit breaker.
@@ -73,8 +73,13 @@ All config values can be overridden via environment variables:
 ```bash
 # Use SCAFCTL_ prefix with underscores for nested keys
 export SCAFCTL_SETTINGS_NOCOLOR=true
-export SCAFCTL_LOGGING_LEVEL=-1
 export SCAFCTL_HTTPCLIENT_TIMEOUT=60s
+
+# Logging-specific env vars (override config and flags)
+export SCAFCTL_LOG_LEVEL=debug      # Set log level
+export SCAFCTL_LOG_FORMAT=json       # Set log format
+export SCAFCTL_LOG_PATH=/tmp/scafctl.log  # Write logs to file
+export SCAFCTL_DEBUG=1               # Shortcut: enable debug logging
 ```
 
 ## See Also

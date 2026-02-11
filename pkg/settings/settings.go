@@ -139,7 +139,7 @@ type VersionInfo struct {
 // It includes options for logging, entry point configuration, output formatting,
 // and error handling behavior.
 type Run struct {
-	MinLogLevel        int8
+	MinLogLevel        string
 	EntryPointSettings EntryPointSettings
 	IsQuiet            bool
 	NoColor            bool
@@ -147,11 +147,11 @@ type Run struct {
 }
 
 // NewCliParams initializes and returns a pointer to a Run struct with default CLI parameters.
-// It sets logging level to 0, configures entry point settings for CLI usage, and sets
-// default flags for quiet mode, color output, and error handling.
+// It sets logging level to "none" (no structured logs by default), configures entry point
+// settings for CLI usage, and sets default flags for quiet mode, color output, and error handling.
 func NewCliParams() *Run {
 	return &Run{
-		MinLogLevel: 0,
+		MinLogLevel: "none",
 		EntryPointSettings: EntryPointSettings{
 			FromAPI: false,
 			FromCli: true,

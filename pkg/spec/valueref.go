@@ -58,7 +58,17 @@ func (v *ValueRef) UnmarshalYAML(node *yaml.Node) error {
 		}
 
 		if count != 1 {
-			return fmt.Errorf("invalid value ref: expected exactly one of rslvr, expr, or tmpl")
+			var found []string
+			if raw.Resolver != nil {
+				found = append(found, "rslvr")
+			}
+			if raw.Expr != nil {
+				found = append(found, "expr")
+			}
+			if raw.Tmpl != nil {
+				found = append(found, "tmpl")
+			}
+			return fmt.Errorf("invalid value ref at line %d, column %d: expected exactly one of rslvr, expr, or tmpl, but found [%s]", node.Line, node.Column, strings.Join(found, ", "))
 		}
 
 		v.Resolver = raw.Resolver

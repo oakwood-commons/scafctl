@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
@@ -126,9 +127,9 @@ func (w *Writer) Infof(format string, args ...any) {
 
 // Debug writes a debug message to stdout.
 // Respects --quiet and --no-color flags.
-// Only writes if log level indicates debug output is enabled (MinLogLevel <= -1).
+// Only writes if log level indicates debug output is enabled (debug, trace, or numeric V-level).
 func (w *Writer) Debug(msg string) {
-	if w.cliParams.IsQuiet || w.cliParams.MinLogLevel > -1 {
+	if w.cliParams.IsQuiet || !logger.IsDebugLevel(w.cliParams.MinLogLevel) {
 		return
 	}
 	fmt.Fprintln(w.ioStreams.Out, output.DebugMessage(msg, w.cliParams.NoColor))
@@ -136,7 +137,7 @@ func (w *Writer) Debug(msg string) {
 
 // Debugf writes a formatted debug message to stdout.
 // Respects --quiet and --no-color flags.
-// Only writes if log level indicates debug output is enabled (MinLogLevel <= -1).
+// Only writes if log level indicates debug output is enabled (debug, trace, or numeric V-level).
 func (w *Writer) Debugf(format string, args ...any) {
 	w.Debug(fmt.Sprintf(format, args...))
 }

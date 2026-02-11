@@ -224,20 +224,24 @@ func (s *Solution) FromYAML(data []byte) error {
 }
 
 // UnmarshalFromBytes attempts to unmarshal the provided byte slice into the Solution struct.
-// It first tries to unmarshal using YAML format. If that fails, it attempts to unmarshal using JSON format.
-// Returns an error if unmarshalling fails for both formats.
+// It first tries to unmarshal using YAML format. If that fails and the content looks like JSON,
+// it attempts to unmarshal using JSON format. Returns only the relevant error for clarity.
 func (s *Solution) UnmarshalFromBytes(bytes []byte) error {
 	if len(bytes) == 0 {
 		return errors.New("no data provided to unmarshal solution")
 	}
 	yamlErr := s.FromYAML(bytes)
-	if yamlErr != nil {
-		err := s.FromJSON(bytes)
-		if err != nil {
-			return fmt.Errorf("failed to unmarshal solution using yaml and json bytes: YAML error: %w, JSON error: %w", yamlErr, err)
+	if yamlErr == nil {
+		return nil
+	}
+	// Only try JSON if the content looks like JSON (starts with { or [)
+	trimmed := strings.TrimSpace(string(bytes))
+	if len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[') {
+		if jsonErr := s.FromJSON(bytes); jsonErr == nil {
+			return nil
 		}
 	}
-	return nil
+	return yamlErr
 }
 
 // LoadFromBytes unmarshals the provided bytes, applies defaults, and validates the solution.

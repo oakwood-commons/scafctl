@@ -22,6 +22,7 @@ Step-by-step guides for learning scafctl features.
 - [Catalog Tutorial](catalog-tutorial.md) — Store and manage solutions in your local catalog
 - [Snapshots Tutorial](snapshots-tutorial.md) — Capture and compare execution snapshots
 - [Configuration Tutorial](config-tutorial.md) — Manage application configuration
+- [Logging & Debugging Tutorial](logging-tutorial.md) — Control log verbosity, format, and output
 - [Cache Tutorial](cache-tutorial.md) — Manage cached data and reclaim disk space
 
 ## Reference

@@ -15,7 +15,7 @@ func TestNewCliParams(t *testing.T) {
 		{
 			name: "default CLI params",
 			want: &Run{
-				MinLogLevel: 0,
+				MinLogLevel: "none",
 				EntryPointSettings: EntryPointSettings{
 					FromAPI: false,
 					FromCli: true,

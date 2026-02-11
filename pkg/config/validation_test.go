@@ -157,7 +157,7 @@ func TestConfig_Validate_ValidConfig(t *testing.T) {
 		Version:  1,
 		Settings: Settings{},
 		Logging: LoggingConfig{
-			Level: 0,
+			Level: "info",
 		},
 		HTTPClient: HTTPClientConfig{
 			Timeout:   "30s",
@@ -309,7 +309,7 @@ func TestLoggingConfig_Validate(t *testing.T) {
 		{
 			name: "valid default config",
 			cfg: LoggingConfig{
-				Level:      0,
+				Level:      "info",
 				Format:     LoggingFormatJSON,
 				Timestamps: true,
 			},
@@ -318,7 +318,7 @@ func TestLoggingConfig_Validate(t *testing.T) {
 		{
 			name: "valid debug level",
 			cfg: LoggingConfig{
-				Level:  -1,
+				Level:  "debug",
 				Format: LoggingFormatText,
 			},
 			wantErr: false,
@@ -326,38 +326,59 @@ func TestLoggingConfig_Validate(t *testing.T) {
 		{
 			name: "valid error level",
 			cfg: LoggingConfig{
-				Level: 2,
+				Level: "error",
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid trace level",
+			cfg: LoggingConfig{
+				Level: "trace",
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid numeric V-level",
+			cfg: LoggingConfig{
+				Level: "3",
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid none level",
+			cfg: LoggingConfig{
+				Level: "none",
 			},
 			wantErr: false,
 		},
 		{
 			name: "empty format is valid",
 			cfg: LoggingConfig{
-				Level:  0,
+				Level:  "info",
 				Format: "",
 			},
 			wantErr: false,
 		},
 		{
-			name: "invalid level too low",
+			name: "invalid level string",
 			cfg: LoggingConfig{
-				Level: -2,
+				Level: "verbose",
 			},
 			wantErr: true,
-			errMsg:  "level: must be between -1 (Debug) and 2 (Error)",
+			errMsg:  "level: invalid log level",
 		},
 		{
-			name: "invalid level too high",
+			name: "valid console format",
 			cfg: LoggingConfig{
-				Level: 3,
+				Level:  "info",
+				Format: LoggingFormatConsole,
 			},
-			wantErr: true,
-			errMsg:  "level: must be between -1 (Debug) and 2 (Error)",
+			wantErr: false,
 		},
 		{
 			name: "invalid format",
 			cfg: LoggingConfig{
-				Level:  0,
+				Level:  "info",
 				Format: "xml",
 			},
 			wantErr: true,

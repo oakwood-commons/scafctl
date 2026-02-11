@@ -185,7 +185,7 @@ func TestSetOptions_Run(t *testing.T) {
 	mgr := appconfig.NewManager(configPath)
 	cfg, err := mgr.Load()
 	require.NoError(t, err)
-	assert.Equal(t, 2, cfg.Logging.Level)
+	assert.Equal(t, "2", cfg.Logging.Level)
 }
 
 func TestSetOptions_parseValue(t *testing.T) {
@@ -221,7 +221,7 @@ func TestUnsetOptions_Run(t *testing.T) {
 
 	configContent := `
 logging:
-  level: 2
+  level: "2"
 settings:
   noColor: true
 `
@@ -249,7 +249,7 @@ settings:
 	mgr := appconfig.NewManager(configPath)
 	cfg, err := mgr.Load()
 	require.NoError(t, err)
-	assert.Equal(t, 0, cfg.Logging.Level)
+	assert.Equal(t, "none", cfg.Logging.Level)
 }
 
 func TestAddCatalogOptions_Run(t *testing.T) {

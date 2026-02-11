@@ -11,8 +11,11 @@ scafctl run solution -f examples/<path-to-example>.yaml
 # Run with parameters
 scafctl run solution -f examples/resolvers/parameters.yaml -r name=Alice
 
-# Run with verbose output
-scafctl run solution -f examples/actions/hello-world.yaml -v
+# Run with debug logging (see what scafctl is doing)
+scafctl run solution -f examples/actions/hello-world.yaml --debug
+
+# Run with JSON logs for troubleshooting
+scafctl run solution -f examples/actions/hello-world.yaml --log-level info --log-format json
 ```
 
 ---
@@ -91,6 +94,7 @@ Complete solutions demonstrating real-world use cases.
 | [taskfile/](solutions/taskfile/) | Taskfile.yaml generation |
 | [email-notifier/](solutions/email-notifier/) | Email notification workflow |
 | [k8s-clusters/](solutions/k8s-clusters/) | Read a Go template file, iterate 10 K8s clusters, render and write unique manifests |
+| [bad-solution-yaml/](solutions/bad-solution-yaml/) | Invalid solution demonstrating error handling for conflicting ValueRef keys |
 
 ---
 
