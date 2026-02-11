@@ -44,6 +44,11 @@ tar xzf scafctl_*.tar.gz
 sudo mv scafctl /usr/local/bin/
 ```
 
+> **macOS note:** You may need to remove the quarantine attribute before running:
+> ```bash
+> xattr -dr 'com.apple.quarantine' /usr/local/bin/scafctl
+> ```
+
 #### Windows
 
 Download the `.zip` archive for your architecture from

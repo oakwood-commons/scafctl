@@ -126,7 +126,7 @@ Examples:
 
 // RunListProviders lists all providers
 func (o *Options) RunListProviders(ctx context.Context) error {
-	reg := o.getRegistry()
+	reg := o.getRegistry(ctx)
 	providers := reg.ListProviders()
 
 	// Apply filters
@@ -170,7 +170,7 @@ func (o *Options) RunListProviders(ctx context.Context) error {
 
 // RunGetProvider gets details about a specific provider
 func (o *Options) RunGetProvider(ctx context.Context, name string) error {
-	reg := o.getRegistry()
+	reg := o.getRegistry(ctx)
 	p, ok := reg.Get(name)
 	if !ok {
 		err := fmt.Errorf("provider %q not found", name)
@@ -543,12 +543,12 @@ func capabilitiesToStrings(caps []provider.Capability) []string {
 }
 
 // getRegistry returns the provider registry
-func (o *Options) getRegistry() *provider.Registry {
+func (o *Options) getRegistry(ctx context.Context) *provider.Registry {
 	if o.registry != nil {
 		return o.registry
 	}
 
-	reg, err := builtin.DefaultRegistry()
+	reg, err := builtin.DefaultRegistry(ctx)
 	if err != nil {
 		return provider.GetGlobalRegistry()
 	}

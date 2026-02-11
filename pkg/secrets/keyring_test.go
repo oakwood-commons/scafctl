@@ -6,6 +6,8 @@ package secrets
 import (
 	"encoding/base64"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -370,4 +372,287 @@ func TestKeyringConstants(t *testing.T) {
 	assert.Equal(t, "scafctl", KeyringService)
 	assert.Equal(t, "master-key", KeyringMasterKeyAccount)
 	assert.Equal(t, "SCAFCTL_SECRET_KEY", EnvSecretKey)
+}
+
+func TestFileKeyring_Get(t *testing.T) {
+	t.Run("returns key from file", func(t *testing.T) {
+		dir := t.TempDir()
+		kr := newFileKeyring(dir)
+
+		// Write a key file
+		err := os.WriteFile(filepath.Join(dir, masterKeyFileName), []byte("my-secret-key"), 0o600)
+		require.NoError(t, err)
+
+		val, err := kr.Get(KeyringService, KeyringMasterKeyAccount)
+		require.NoError(t, err)
+		assert.Equal(t, "my-secret-key", val)
+	})
+
+	t.Run("returns ErrKeyNotFound when file missing", func(t *testing.T) {
+		dir := t.TempDir()
+		kr := newFileKeyring(dir)
+
+		_, err := kr.Get(KeyringService, KeyringMasterKeyAccount)
+		assert.ErrorIs(t, err, ErrKeyNotFound)
+	})
+
+	t.Run("returns ErrKeyNotFound for wrong service", func(t *testing.T) {
+		dir := t.TempDir()
+		kr := newFileKeyring(dir)
+
+		_, err := kr.Get("other-service", KeyringMasterKeyAccount)
+		assert.ErrorIs(t, err, ErrKeyNotFound)
+	})
+
+	t.Run("returns ErrKeyNotFound for wrong account", func(t *testing.T) {
+		dir := t.TempDir()
+		kr := newFileKeyring(dir)
+
+		_, err := kr.Get(KeyringService, "other-account")
+		assert.ErrorIs(t, err, ErrKeyNotFound)
+	})
+
+	t.Run("returns ErrKeyNotFound for empty file", func(t *testing.T) {
+		dir := t.TempDir()
+		kr := newFileKeyring(dir)
+
+		err := os.WriteFile(filepath.Join(dir, masterKeyFileName), []byte(""), 0o600)
+		require.NoError(t, err)
+
+		_, err = kr.Get(KeyringService, KeyringMasterKeyAccount)
+		assert.ErrorIs(t, err, ErrKeyNotFound)
+	})
+}
+
+func TestFileKeyring_Set(t *testing.T) {
+	t.Run("writes key to file with correct permissions", func(t *testing.T) {
+		dir := t.TempDir()
+		kr := newFileKeyring(dir)
+
+		err := kr.Set(KeyringService, KeyringMasterKeyAccount, "my-secret-value")
+		require.NoError(t, err)
+
+		// Verify file contents
+		data, err := os.ReadFile(filepath.Join(dir, masterKeyFileName))
+		require.NoError(t, err)
+		assert.Equal(t, "my-secret-value", string(data))
+
+		// Verify permissions
+		info, err := os.Stat(filepath.Join(dir, masterKeyFileName))
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	})
+
+	t.Run("creates directory if missing", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "nested", "dir")
+		kr := newFileKeyring(dir)
+
+		err := kr.Set(KeyringService, KeyringMasterKeyAccount, "my-secret-value")
+		require.NoError(t, err)
+
+		data, err := os.ReadFile(filepath.Join(dir, masterKeyFileName))
+		require.NoError(t, err)
+		assert.Equal(t, "my-secret-value", string(data))
+	})
+
+	t.Run("rejects non-master-key accounts", func(t *testing.T) {
+		dir := t.TempDir()
+		kr := newFileKeyring(dir)
+
+		err := kr.Set("other-service", "other-account", "value")
+		assert.Error(t, err)
+		assert.True(t, errors.Is(err, ErrKeyringAccess))
+	})
+
+	t.Run("overwrites existing key", func(t *testing.T) {
+		dir := t.TempDir()
+		kr := newFileKeyring(dir)
+
+		err := kr.Set(KeyringService, KeyringMasterKeyAccount, "first-value")
+		require.NoError(t, err)
+
+		err = kr.Set(KeyringService, KeyringMasterKeyAccount, "second-value")
+		require.NoError(t, err)
+
+		data, err := os.ReadFile(filepath.Join(dir, masterKeyFileName))
+		require.NoError(t, err)
+		assert.Equal(t, "second-value", string(data))
+	})
+}
+
+func TestFileKeyring_Delete(t *testing.T) {
+	t.Run("removes key file", func(t *testing.T) {
+		dir := t.TempDir()
+		kr := newFileKeyring(dir)
+
+		err := os.WriteFile(filepath.Join(dir, masterKeyFileName), []byte("value"), 0o600)
+		require.NoError(t, err)
+
+		err = kr.Delete(KeyringService, KeyringMasterKeyAccount)
+		require.NoError(t, err)
+
+		_, err = os.Stat(filepath.Join(dir, masterKeyFileName))
+		assert.True(t, os.IsNotExist(err))
+	})
+
+	t.Run("idempotent delete", func(t *testing.T) {
+		dir := t.TempDir()
+		kr := newFileKeyring(dir)
+
+		err := kr.Delete(KeyringService, KeyringMasterKeyAccount)
+		require.NoError(t, err)
+	})
+}
+
+func TestFileKeyring_RoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	kr := newFileKeyring(dir)
+
+	// Set
+	err := kr.Set(KeyringService, KeyringMasterKeyAccount, "round-trip-value")
+	require.NoError(t, err)
+
+	// Get
+	val, err := kr.Get(KeyringService, KeyringMasterKeyAccount)
+	require.NoError(t, err)
+	assert.Equal(t, "round-trip-value", val)
+
+	// Delete
+	err = kr.Delete(KeyringService, KeyringMasterKeyAccount)
+	require.NoError(t, err)
+
+	// Get after delete
+	_, err = kr.Get(KeyringService, KeyringMasterKeyAccount)
+	assert.ErrorIs(t, err, ErrKeyNotFound)
+}
+
+func TestChainKeyring_Get(t *testing.T) {
+	t.Run("returns from first keyring that succeeds", func(t *testing.T) {
+		kr1 := newMockKeyringForTest()
+		kr2 := newMockKeyringForTest()
+		kr3 := newMockKeyringForTest()
+
+		_ = kr2.Set("service", "account", "from-second")
+		_ = kr3.Set("service", "account", "from-third")
+
+		chain := newChainKeyring(
+			keyringEntry{keyring: kr1, backend: "first"},
+			keyringEntry{keyring: kr2, backend: "second"},
+			keyringEntry{keyring: kr3, backend: "third"},
+		)
+
+		val, err := chain.Get("service", "account")
+		require.NoError(t, err)
+		assert.Equal(t, "from-second", val)
+		assert.Equal(t, "second", chain.Backend())
+	})
+
+	t.Run("returns from primary when available", func(t *testing.T) {
+		kr1 := newMockKeyringForTest()
+		kr2 := newMockKeyringForTest()
+
+		_ = kr1.Set("service", "account", "primary-value")
+		_ = kr2.Set("service", "account", "fallback-value")
+
+		chain := newChainKeyring(
+			keyringEntry{keyring: kr1, backend: KeyringBackendOS},
+			keyringEntry{keyring: kr2, backend: KeyringBackendEnv},
+		)
+
+		val, err := chain.Get("service", "account")
+		require.NoError(t, err)
+		assert.Equal(t, "primary-value", val)
+		assert.Equal(t, KeyringBackendOS, chain.Backend())
+	})
+
+	t.Run("returns first error when all fail", func(t *testing.T) {
+		kr1 := newMockKeyringForTest()
+		kr1.getErr = NewKeyringError("get", errors.New("os keyring error"))
+		kr2 := newMockKeyringForTest()
+
+		chain := newChainKeyring(
+			keyringEntry{keyring: kr1, backend: KeyringBackendOS},
+			keyringEntry{keyring: kr2, backend: KeyringBackendEnv},
+		)
+
+		_, err := chain.Get("service", "account")
+		assert.Error(t, err)
+		assert.True(t, errors.Is(err, ErrKeyringAccess))
+	})
+
+	t.Run("tracks backend correctly", func(t *testing.T) {
+		kr1 := newMockKeyringForTest()
+		kr1.getErr = NewKeyringError("get", errors.New("os keyring unavailable"))
+		kr2 := newMockKeyringForTest()
+		kr3 := newMockKeyringForTest()
+
+		_ = kr3.Set("service", "account", "file-value")
+
+		chain := newChainKeyring(
+			keyringEntry{keyring: kr1, backend: KeyringBackendOS},
+			keyringEntry{keyring: kr2, backend: KeyringBackendEnv},
+			keyringEntry{keyring: kr3, backend: KeyringBackendFile},
+		)
+
+		val, err := chain.Get("service", "account")
+		require.NoError(t, err)
+		assert.Equal(t, "file-value", val)
+		assert.Equal(t, KeyringBackendFile, chain.Backend())
+	})
+
+	t.Run("empty backend before Get", func(t *testing.T) {
+		chain := newChainKeyring()
+		assert.Equal(t, "", chain.Backend())
+	})
+}
+
+func TestChainKeyring_Set(t *testing.T) {
+	t.Run("sets in first keyring that accepts", func(t *testing.T) {
+		kr1 := newMockKeyringForTest()
+		kr2 := newMockKeyringForTest()
+
+		chain := newChainKeyring(
+			keyringEntry{keyring: kr1, backend: KeyringBackendOS},
+			keyringEntry{keyring: kr2, backend: KeyringBackendEnv},
+		)
+
+		err := chain.Set("service", "account", "value")
+		require.NoError(t, err)
+
+		val, err := kr1.Get("service", "account")
+		require.NoError(t, err)
+		assert.Equal(t, "value", val)
+	})
+}
+
+func TestChainKeyring_Delete(t *testing.T) {
+	t.Run("deletes from all keyrings", func(t *testing.T) {
+		kr1 := newMockKeyringForTest()
+		kr2 := newMockKeyringForTest()
+
+		_ = kr1.Set("service", "account", "val1")
+		_ = kr2.Set("service", "account", "val2")
+
+		chain := newChainKeyring(
+			keyringEntry{keyring: kr1, backend: KeyringBackendOS},
+			keyringEntry{keyring: kr2, backend: KeyringBackendEnv},
+		)
+
+		err := chain.Delete("service", "account")
+		require.NoError(t, err)
+
+		_, err = kr1.Get("service", "account")
+		assert.ErrorIs(t, err, ErrKeyNotFound)
+
+		_, err = kr2.Get("service", "account")
+		assert.ErrorIs(t, err, ErrKeyNotFound)
+	})
+}
+
+func TestNewDefaultKeyring(t *testing.T) {
+	t.Run("returns a chainKeyring", func(t *testing.T) {
+		kr := NewDefaultKeyring()
+		_, ok := kr.(*chainKeyring)
+		assert.True(t, ok, "NewDefaultKeyring should return a *chainKeyring")
+	})
 }

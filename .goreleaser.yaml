@@ -54,8 +54,6 @@ homebrew_casks:
     homepage: "https://github.com/oakwood-commons/scafctl"
     description: "A configuration discovery and scaffolding tool using CEL for dynamic evaluation"
     license: "Apache-2.0"
-    binaries:
-      - "scafctl"
 release:
   draft: false
   prerelease: auto

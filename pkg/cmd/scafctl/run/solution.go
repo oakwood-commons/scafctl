@@ -373,7 +373,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	}
 
 	// Set up provider registry
-	reg := o.getRegistry()
+	reg := o.getRegistry(ctx)
 
 	// Register the solution provider (needs getter + registry, cannot be in builtin.go).
 	// Use Has() guard because DefaultRegistry() is a singleton — repeated calls
@@ -740,13 +740,13 @@ func extractResolverDependencies(r *resolver.Resolver) []string {
 }
 
 // getRegistry returns the provider registry (creates default if not injected)
-func (o *SolutionOptions) getRegistry() *provider.Registry {
+func (o *SolutionOptions) getRegistry(ctx context.Context) *provider.Registry {
 	if o.registry != nil {
 		return o.registry
 	}
 
 	// Use DefaultRegistry which handles lazy initialization with sync.Once
-	reg, err := builtin.DefaultRegistry()
+	reg, err := builtin.DefaultRegistry(ctx)
 	if err != nil {
 		// Log warning but continue - some providers may already be registered
 		lgr := logger.Get(0)

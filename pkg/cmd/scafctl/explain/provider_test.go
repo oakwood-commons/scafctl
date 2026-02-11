@@ -267,14 +267,14 @@ func TestProviderOptions_getRegistry(t *testing.T) {
 			registry: customReg,
 		}
 
-		result := options.getRegistry()
+		result := options.getRegistry(context.Background())
 		assert.Equal(t, customReg, result)
 	})
 
 	t.Run("returns default registry when not set", func(t *testing.T) {
 		options := &ProviderOptions{}
 
-		result := options.getRegistry()
+		result := options.getRegistry(context.Background())
 		assert.NotNil(t, result)
 	})
 }

@@ -63,6 +63,10 @@ type Store interface {
 	// with the original key. The new key is generated, all secrets are
 	// re-encrypted, and the keyring is updated.
 	Rotate(ctx context.Context) error
+
+	// KeyringBackend returns the identifier of the keyring backend used for
+	// master key storage. Possible values: "os", "env", "file", or "" if unknown.
+	KeyringBackend() string
 }
 
 // New creates a new Store with the given options.

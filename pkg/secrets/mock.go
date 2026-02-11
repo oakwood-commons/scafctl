@@ -157,6 +157,11 @@ func (m *MockStore) Rotate(_ context.Context) error {
 	return nil
 }
 
+// KeyringBackend returns an empty string for mock stores.
+func (m *MockStore) KeyringBackend() string {
+	return ""
+}
+
 // Reset clears all data and call tracking.
 func (m *MockStore) Reset() {
 	m.mu.Lock()

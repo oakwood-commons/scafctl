@@ -4,6 +4,7 @@
 package builtin
 
 import (
+	"context"
 	"strings"
 	"sync"
 	"testing"
@@ -14,7 +15,8 @@ import (
 
 func TestDefaultRegistry(t *testing.T) {
 	t.Run("returns registry with all providers", func(t *testing.T) {
-		reg, err := DefaultRegistry()
+		ctx := context.Background()
+		reg, err := DefaultRegistry(ctx)
 		require.NoError(t, err)
 		require.NotNil(t, reg)
 
@@ -32,10 +34,11 @@ func TestDefaultRegistry(t *testing.T) {
 	})
 
 	t.Run("returns same registry on multiple calls", func(t *testing.T) {
-		reg1, err1 := DefaultRegistry()
+		ctx := context.Background()
+		reg1, err1 := DefaultRegistry(ctx)
 		require.NoError(t, err1)
 
-		reg2, err2 := DefaultRegistry()
+		reg2, err2 := DefaultRegistry(ctx)
 		require.NoError(t, err2)
 
 		// Should return the same instance
@@ -43,13 +46,14 @@ func TestDefaultRegistry(t *testing.T) {
 	})
 
 	t.Run("is thread-safe", func(t *testing.T) {
+		ctx := context.Background()
 		var wg sync.WaitGroup
 
 		for i := 0; i < 100; i++ {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				reg, err := DefaultRegistry()
+				reg, err := DefaultRegistry(ctx)
 				require.NoError(t, err)
 				require.NotNil(t, reg)
 			}()
@@ -58,77 +62,17 @@ func TestDefaultRegistry(t *testing.T) {
 		wg.Wait()
 
 		// All should be the same instance
-		first, _ := DefaultRegistry()
+		first, _ := DefaultRegistry(ctx)
 		for i := 0; i < 10; i++ {
-			reg, _ := DefaultRegistry()
+			reg, _ := DefaultRegistry(ctx)
 			assert.Same(t, first, reg)
 		}
 	})
 }
 
-func TestMustDefaultRegistry(t *testing.T) {
-	t.Run("returns registry without panic", func(t *testing.T) {
-		assert.NotPanics(t, func() {
-			reg := MustDefaultRegistry()
-			assert.NotNil(t, reg)
-		})
-	})
-
-	t.Run("returns same as DefaultRegistry", func(t *testing.T) {
-		reg1, err := DefaultRegistry()
-		require.NoError(t, err)
-
-		reg2 := MustDefaultRegistry()
-
-		assert.Same(t, reg1, reg2)
-	})
-}
-
-func TestProviderNames(t *testing.T) {
-	names := ProviderNames()
-
-	// Should have all built-in providers
-	expectedCount := 14 // http, env, cel, file, validation, exec, git, debug, sleep, parameter, static, go-template, secret, identity
-	assert.Len(t, names, expectedCount, "should have %d built-in providers", expectedCount)
-
-	// Verify expected names are present
-	expectedNames := []string{
-		"http",
-		"env",
-		"cel",
-		"file",
-		"validation",
-		"exec",
-		"git",
-		"debug",
-		"sleep",
-		"parameter",
-		"static",
-		"go-template",
-		"secret",
-		"identity",
-	}
-
-	for _, expected := range expectedNames {
-		assert.Contains(t, names, expected, "should contain provider %q", expected)
-	}
-}
-
-func TestRegisterAll(t *testing.T) {
-	// Note: RegisterAll is deprecated but we still test it for backward compatibility
-	t.Run("registers to global registry", func(t *testing.T) {
-		// This test may fail if other tests have already registered providers
-		// In practice, RegisterAll handles duplicates gracefully
-		err := RegisterAll()
-		// May return an error if providers are already registered, which is fine
-		if err != nil {
-			t.Logf("RegisterAll returned error (expected if providers already registered): %v", err)
-		}
-	})
-}
-
 func TestDefaultRegistry_ProviderFunctionality(t *testing.T) {
-	reg, err := DefaultRegistry()
+	ctx := context.Background()
+	reg, err := DefaultRegistry(ctx)
 	require.NoError(t, err)
 
 	t.Run("http provider is functional", func(t *testing.T) {
@@ -168,7 +112,8 @@ func TestDefaultRegistry_ProviderFunctionality(t *testing.T) {
 // TestAllProvidersRegistered explicitly verifies that every built-in provider
 // is registered in the default registry and has a valid descriptor.
 func TestAllProvidersRegistered(t *testing.T) {
-	reg, err := DefaultRegistry()
+	ctx := context.Background()
+	reg, err := DefaultRegistry(ctx)
 	require.NoError(t, err)
 
 	secretAvailable := SecretStoreAvailable()

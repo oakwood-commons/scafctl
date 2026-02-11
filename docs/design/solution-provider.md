@@ -691,7 +691,10 @@ Registration happens in the CLI run command:
 // In pkg/cmd/scafctl/run/solution.go, inside Run():
 
 getter := get.NewGetter(...)
-registry := builtin.MustDefaultRegistry()
+registry, err := builtin.DefaultRegistry(ctx)
+if err != nil {
+    return err
+}
 
 solutionProv := solutionprovider.New(
     solutionprovider.WithLoader(getter),

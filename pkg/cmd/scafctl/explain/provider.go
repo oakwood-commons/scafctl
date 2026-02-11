@@ -73,10 +73,11 @@ Examples:
 }
 
 // Run executes the explain provider command
-func (o *ProviderOptions) Run(_ context.Context, name string) error {
+func (o *ProviderOptions) Run(ctx context.Context, name string) error {
 	w := writer.New(o.IOStreams, o.CliParams)
+	ctx = writer.WithWriter(ctx, w)
 
-	reg := o.getRegistry()
+	reg := o.getRegistry(ctx)
 	p, ok := reg.Get(name)
 	if !ok {
 		err := fmt.Errorf("provider %q not found", name)
@@ -265,12 +266,12 @@ func (o *ProviderOptions) printSchemaProperties(w *writer.Writer, schema *jsonsc
 }
 
 // getRegistry returns the provider registry
-func (o *ProviderOptions) getRegistry() *provider.Registry {
+func (o *ProviderOptions) getRegistry(ctx context.Context) *provider.Registry {
 	if o.registry != nil {
 		return o.registry
 	}
 
-	reg, err := builtin.DefaultRegistry()
+	reg, err := builtin.DefaultRegistry(ctx)
 	if err != nil {
 		return provider.GetGlobalRegistry()
 	}
