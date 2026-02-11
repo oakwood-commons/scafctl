@@ -10,7 +10,8 @@
       "request": "launch",
       "mode": "auto",
       "program": "${workspaceRoot}/cmd/scafctl/scafctl.go",
-      "cwd": "${workspaceRoot}",
+      // "cwd": "${workspaceRoot}",
+      "cwd": "/Users/kcloutie/src/HomeLab",
       "buildFlags": "-ldflags '-X main.BuildVersion=v9.5.0 -X main.Commit=123456789 -X main.BuildTime=12/08/2025'",
       "env": {
       },
@@ -18,7 +19,8 @@
         // "version", "ddd", "--sss"
         // "run", "solution", "-f", "examples/resolver-demo.yaml", "-e", "debug.out(\"DUDE\")"
         // "auth", "status"
-        "catalog", "list", "-i"
+        // "catalog", "list", "-i"
+        "run", "solution", "-f", ".scafctl/solution.yaml", "--skip-actions"
       ],
     }
   ]

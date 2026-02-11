@@ -1,0 +1,216 @@
+# Kubernetes Clusters Example
+# Reads a Go template from a file, iterates over 10 Kubernetes cluster
+# definitions, renders a unique manifest per cluster, and writes each to disk.
+#
+# This demonstrates:
+# - Reading a template from an external file (file provider)
+# - Resolver-level forEach transform to render a template per array item
+# - Using go-template provider with __item data in forEach transforms
+# - forEach iteration over an array of objects in actions
+# - Writing unique files per iteration with the file provider
+# - CEL expressions for dynamic path construction and array indexing
+#
+# Run: scafctl run solution -f examples/solutions/k8s-clusters/solution.yaml
+#
+# After running, check the output:
+#   ls ./output/
+#   cat ./output/us-east-prod/manifest.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: k8s-clusters
+  version: 1.0.0
+  description: Generate Kubernetes manifests for multiple clusters from a shared template
+
+spec:
+  resolvers:
+    # 10 Kubernetes cluster definitions spanning regions, environments, and tiers
+    clusters:
+      description: Array of Kubernetes cluster configurations
+      type: any
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - name: us-east-prod
+                  region: us-east-1
+                  version: "1.29"
+                  nodeCount: 12
+                  environment: prod
+                  tier: production
+                  cidr: "10.10.0.0/16"
+                  owner: platform-team
+                  maxPods: 500
+                  storageClass: gp3
+
+                - name: us-east-dev
+                  region: us-east-1
+                  version: "1.30"
+                  nodeCount: 3
+                  environment: dev
+                  tier: development
+                  cidr: "10.20.0.0/16"
+                  owner: dev-team
+                  maxPods: 100
+                  storageClass: gp2
+
+                - name: eu-west-prod
+                  region: eu-west-1
+                  version: "1.29"
+                  nodeCount: 8
+                  environment: prod
+                  tier: production
+                  cidr: "10.30.0.0/16"
+                  owner: platform-team
+                  maxPods: 400
+                  storageClass: io2
+
+                - name: eu-west-staging
+                  region: eu-west-1
+                  version: "1.30"
+                  nodeCount: 4
+                  environment: staging
+                  tier: staging
+                  cidr: "10.40.0.0/16"
+                  owner: qa-team
+                  maxPods: 200
+                  storageClass: gp3
+
+                - name: ap-south-dev
+                  region: ap-south-1
+                  version: "1.31"
+                  nodeCount: 2
+                  environment: dev
+                  tier: development
+                  cidr: "10.50.0.0/16"
+                  owner: dev-team
+                  maxPods: 80
+                  storageClass: gp2
+
+                - name: ap-south-qa
+                  region: ap-south-1
+                  version: "1.29"
+                  nodeCount: 3
+                  environment: qa
+                  tier: staging
+                  cidr: "10.60.0.0/16"
+                  owner: qa-team
+                  maxPods: 150
+                  storageClass: gp3
+
+                - name: us-central-prod
+                  region: us-central-1
+                  version: "1.28"
+                  nodeCount: 15
+                  environment: prod
+                  tier: production
+                  cidr: "10.70.0.0/16"
+                  owner: sre-team
+                  maxPods: 600
+                  storageClass: io2
+
+                - name: us-central-dev
+                  region: us-central-1
+                  version: "1.31"
+                  nodeCount: 2
+                  environment: dev
+                  tier: development
+                  cidr: "10.80.0.0/16"
+                  owner: dev-team
+                  maxPods: 80
+                  storageClass: standard
+
+                - name: eu-north-staging
+                  region: eu-north-1
+                  version: "1.30"
+                  nodeCount: 5
+                  environment: staging
+                  tier: staging
+                  cidr: "10.90.0.0/16"
+                  owner: qa-team
+                  maxPods: 250
+                  storageClass: gp3
+
+                - name: ap-east-prod
+                  region: ap-east-1
+                  version: "1.29"
+                  nodeCount: 10
+                  environment: prod
+                  tier: production
+                  cidr: "10.100.0.0/16"
+                  owner: platform-team
+                  maxPods: 450
+                  storageClass: io2
+
+    # Read the shared template from a file
+    templateContent:
+      description: Go template content read from external file
+      type: any
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              operation: read
+              path: examples/solutions/k8s-clusters/cluster-manifest.yaml.tmpl
+
+    # Render the template once per cluster using a forEach transform.
+    # The go-template provider receives __item (the current cluster object)
+    # as template data, producing an array of rendered manifest strings.
+    renderedManifests:
+      description: Array of rendered manifest strings, one per cluster
+      type: any
+      dependsOn:
+        - clusters
+        - templateContent
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            forEach:
+              item: cluster
+              in:
+                expr: "_.clusters"
+            inputs:
+              template:
+                expr: "_.templateContent.content"
+              name: "cluster-manifest"
+              data:
+                expr: "__item"
+
+  workflow:
+    actions:
+      # Write each rendered manifest to its own directory.
+      # The forEach iterates over the clusters array, and the matching
+      # rendered content is accessed from the renderedManifests array by index.
+      writeManifests:
+        description: Write rendered manifests to per-cluster directories
+        displayName: Write Manifests
+        provider: file
+        forEach:
+          item: cluster
+          in:
+            expr: "_.clusters"
+        inputs:
+          operation: write
+          path:
+            expr: "'./output/' + __item.name + '/manifest.yaml'"
+          content:
+            expr: "_.renderedManifests[__index]"
+          createDirs: true
+
+      # Summary: list the generated files
+      summary:
+        description: List generated manifest files
+        displayName: Summary
+        provider: exec
+        dependsOn:
+          - writeManifests
+        inputs:
+          shell: true
+          command: "echo '=== Generated Cluster Manifests ===' && find ./output -name manifest.yaml | sort"
