@@ -5,7 +5,6 @@ package execprovider
 
 import (
 	"context"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +27,7 @@ func TestNewExecProvider(t *testing.T) {
 	assert.NotNil(t, desc.Version)
 	assert.Contains(t, desc.Capabilities, provider.CapabilityAction)
 	assert.Contains(t, desc.Capabilities, provider.CapabilityFrom)
+	assert.Contains(t, desc.Capabilities, provider.CapabilityTransform)
 
 	// Verify schema
 	assert.NotNil(t, desc.Schema)
@@ -39,16 +39,22 @@ func TestNewExecProvider(t *testing.T) {
 	assert.Equal(t, "string", desc.Schema.Properties["workingDir"].Type)
 	assert.Equal(t, "", desc.Schema.Properties["env"].Type)
 	assert.Equal(t, "integer", desc.Schema.Properties["timeout"].Type)
-	assert.Equal(t, "boolean", desc.Schema.Properties["shell"].Type)
+	assert.Equal(t, "string", desc.Schema.Properties["shell"].Type)
+	assert.NotEmpty(t, desc.Schema.Properties["shell"].Enum, "shell should have an enum constraint")
 
-	// Verify output schema
-	assert.NotNil(t, desc.OutputSchemas[provider.CapabilityAction])
-	assert.NotNil(t, desc.OutputSchemas[provider.CapabilityAction].Properties)
-	assert.Equal(t, "string", desc.OutputSchemas[provider.CapabilityAction].Properties["stdout"].Type)
-	assert.Equal(t, "string", desc.OutputSchemas[provider.CapabilityAction].Properties["stderr"].Type)
-	assert.Equal(t, "integer", desc.OutputSchemas[provider.CapabilityAction].Properties["exitCode"].Type)
+	// Verify output schemas
+	for _, cap := range []provider.Capability{provider.CapabilityAction, provider.CapabilityFrom, provider.CapabilityTransform} {
+		schema := desc.OutputSchemas[cap]
+		require.NotNil(t, schema, "output schema for %s", cap)
+		require.NotNil(t, schema.Properties)
+		assert.Equal(t, "string", schema.Properties["stdout"].Type)
+		assert.Equal(t, "string", schema.Properties["stderr"].Type)
+		assert.Equal(t, "integer", schema.Properties["exitCode"].Type)
+		assert.Equal(t, "string", schema.Properties["command"].Type)
+		assert.Equal(t, "string", schema.Properties["shell"].Type)
+	}
+	// Action capability additionally has 'success'
 	assert.Equal(t, "boolean", desc.OutputSchemas[provider.CapabilityAction].Properties["success"].Type)
-	assert.Equal(t, "string", desc.OutputSchemas[provider.CapabilityAction].Properties["command"].Type)
 }
 
 func TestExecProvider_Execute_SimpleCommand(t *testing.T) {
@@ -71,7 +77,8 @@ func TestExecProvider_Execute_SimpleCommand(t *testing.T) {
 	assert.Equal(t, "", data["stderr"])
 	assert.Equal(t, 0, data["exitCode"])
 	assert.Equal(t, true, data["success"])
-	assert.Equal(t, "echo hello world", data["command"])
+	assert.Equal(t, "echo 'hello' 'world'", data["command"])
+	assert.NotEmpty(t, data["shell"])
 }
 
 func TestExecProvider_Execute_NoArgs(t *testing.T) {
@@ -94,6 +101,7 @@ func TestExecProvider_Execute_NoArgs(t *testing.T) {
 	assert.Equal(t, 0, data["exitCode"])
 	assert.Equal(t, true, data["success"])
 	assert.Equal(t, "pwd", data["command"])
+	assert.NotEmpty(t, data["shell"])
 }
 
 func TestExecProvider_Execute_WithStdin(t *testing.T) {
@@ -116,6 +124,7 @@ func TestExecProvider_Execute_WithStdin(t *testing.T) {
 	assert.Equal(t, "", data["stderr"])
 	assert.Equal(t, 0, data["exitCode"])
 	assert.Equal(t, true, data["success"])
+	assert.NotEmpty(t, data["shell"])
 }
 
 func TestExecProvider_Execute_WithWorkingDir(t *testing.T) {
@@ -137,15 +146,16 @@ func TestExecProvider_Execute_WithWorkingDir(t *testing.T) {
 	assert.Contains(t, data["stdout"], "/tmp")
 	assert.Equal(t, 0, data["exitCode"])
 	assert.Equal(t, true, data["success"])
+	assert.NotEmpty(t, data["shell"])
 }
 
 func TestExecProvider_Execute_WithEnv(t *testing.T) {
 	p := NewExecProvider()
 	ctx := context.Background()
 
+	// The embedded shell supports variable expansion directly.
 	inputs := map[string]any{
-		"command": "sh",
-		"args":    []any{"-c", "echo $TEST_VAR"},
+		"command": "echo $TEST_VAR",
 		"env": map[string]any{
 			"TEST_VAR": "test_value",
 		},
@@ -161,15 +171,16 @@ func TestExecProvider_Execute_WithEnv(t *testing.T) {
 	assert.Equal(t, "test_value\n", data["stdout"])
 	assert.Equal(t, 0, data["exitCode"])
 	assert.Equal(t, true, data["success"])
+	assert.NotEmpty(t, data["shell"])
 }
 
 func TestExecProvider_Execute_NonZeroExitCode(t *testing.T) {
 	p := NewExecProvider()
 	ctx := context.Background()
 
+	// The embedded shell handles 'exit' as a builtin.
 	inputs := map[string]any{
-		"command": "sh",
-		"args":    []any{"-c", "exit 42"},
+		"command": "exit 42",
 	}
 
 	output, err := p.Execute(ctx, inputs)
@@ -181,15 +192,16 @@ func TestExecProvider_Execute_NonZeroExitCode(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, 42, data["exitCode"])
 	assert.Equal(t, false, data["success"])
+	assert.NotEmpty(t, data["shell"])
 }
 
 func TestExecProvider_Execute_StderrOutput(t *testing.T) {
 	p := NewExecProvider()
 	ctx := context.Background()
 
+	// The embedded shell supports redirections.
 	inputs := map[string]any{
-		"command": "sh",
-		"args":    []any{"-c", "echo error message >&2"},
+		"command": "echo error message >&2",
 	}
 
 	output, err := p.Execute(ctx, inputs)
@@ -203,16 +215,16 @@ func TestExecProvider_Execute_StderrOutput(t *testing.T) {
 	assert.Equal(t, "", data["stdout"])
 	assert.Equal(t, 0, data["exitCode"])
 	assert.Equal(t, true, data["success"])
+	assert.NotEmpty(t, data["shell"])
 }
 
-func TestExecProvider_Execute_WithShellFlag(t *testing.T) {
+func TestExecProvider_Execute_WithShellAuto(t *testing.T) {
 	p := NewExecProvider()
 	ctx := context.Background()
 
 	inputs := map[string]any{
-		"command": "echo",
-		"args":    []any{"hello"},
-		"shell":   true,
+		"command": "echo hello",
+		"shell":   "auto",
 	}
 
 	output, err := p.Execute(ctx, inputs)
@@ -225,36 +237,108 @@ func TestExecProvider_Execute_WithShellFlag(t *testing.T) {
 	assert.Equal(t, "hello\n", data["stdout"])
 	assert.Equal(t, 0, data["exitCode"])
 	assert.Equal(t, true, data["success"])
+	assert.Equal(t, "auto", data["shell"])
 }
 
-func TestExecProvider_Execute_WithTimeout(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Skipping timeout test on Windows")
-	}
-
+func TestExecProvider_Execute_WithShellSh(t *testing.T) {
 	p := NewExecProvider()
 	ctx := context.Background()
 
 	inputs := map[string]any{
-		"command": "sh",
-		"args":    []any{"-c", "for i in 1 2 3 4 5 6 7 8 9 10; do echo $i; sleep 1; done"},
+		"command": "echo hello",
+		"shell":   "sh",
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	data, ok := output.Data.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "hello\n", data["stdout"])
+	assert.Equal(t, 0, data["exitCode"])
+	assert.Equal(t, true, data["success"])
+	// 'sh' is an alias for 'auto', both use the embedded shell
+	assert.Equal(t, "sh", data["shell"])
+}
+
+func TestExecProvider_Execute_InvalidShellType(t *testing.T) {
+	p := NewExecProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"command": "echo hello",
+		"shell":   "zsh",
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	require.Error(t, err)
+	assert.Nil(t, output)
+	assert.Contains(t, err.Error(), "unsupported shell type")
+}
+
+func TestExecProvider_Execute_ShellNotString(t *testing.T) {
+	p := NewExecProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"command": "echo hello",
+		"shell":   true,
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	require.Error(t, err)
+	assert.Nil(t, output)
+	assert.Contains(t, err.Error(), "shell must be a string")
+}
+
+func TestExecProvider_Execute_Pipeline(t *testing.T) {
+	p := NewExecProvider()
+	ctx := context.Background()
+
+	// Pipes are handled natively by the embedded shell.
+	inputs := map[string]any{
+		"command": "echo 'hello world' | tr a-z A-Z",
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	data, ok := output.Data.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "HELLO WORLD\n", data["stdout"])
+	assert.Equal(t, 0, data["exitCode"])
+	assert.Equal(t, true, data["success"])
+	assert.NotEmpty(t, data["shell"])
+}
+
+func TestExecProvider_Execute_WithTimeout(t *testing.T) {
+	p := NewExecProvider()
+	ctx := context.Background()
+
+	// The embedded shell runs this POSIX script cross-platform.
+	inputs := map[string]any{
+		"command": "for i in 1 2 3 4 5 6 7 8 9 10; do echo $i; sleep 1; done",
 		"timeout": 2,
 	}
 
 	output, err := p.Execute(ctx, inputs)
 
-	// The command should either error due to timeout or exit with non-zero due to signal
+	// The command should error due to timeout (context deadline exceeded).
 	if err != nil {
-		// Direct timeout error
 		t.Logf("Got error as expected: %v", err)
 		assert.Nil(t, output)
 	} else {
-		// Command was killed by signal, check exit code
+		// Command was killed by signal, check exit code is non-zero.
 		require.NotNil(t, output)
 		data, ok := output.Data.(map[string]any)
 		require.True(t, ok)
 		exitCode := data["exitCode"].(int)
-		// Killed processes typically have non-zero exit codes (often 127+ for signals)
 		assert.NotEqual(t, 0, exitCode, "Expected non-zero exit code from killed process")
 		t.Logf("Command killed with exit code: %v", exitCode)
 	}
@@ -270,9 +354,16 @@ func TestExecProvider_Execute_CommandNotFound(t *testing.T) {
 
 	output, err := p.Execute(ctx, inputs)
 
-	require.Error(t, err)
-	assert.Nil(t, output)
-	assert.Contains(t, err.Error(), "failed to execute command")
+	// The embedded shell returns exit code 127 for "command not found"
+	// rather than returning a Go error.
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	data, ok := output.Data.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, 127, data["exitCode"])
+	assert.Equal(t, false, data["success"])
+	assert.NotEmpty(t, data["shell"])
 }
 
 func TestExecProvider_Execute_MissingCommand(t *testing.T) {
@@ -371,9 +462,10 @@ func TestExecProvider_Execute_DryRun(t *testing.T) {
 	assert.Equal(t, "", data["stderr"])
 	assert.Equal(t, 0, data["exitCode"])
 	assert.Equal(t, true, data["success"])
-	assert.Equal(t, "echo hello", data["command"])
+	assert.Equal(t, "echo 'hello'", data["command"])
 	assert.Equal(t, true, data["_dryRun"])
-	assert.Contains(t, data["_message"], "Would execute command: echo hello")
+	assert.Contains(t, data["_message"], "Would execute via auto shell: echo 'hello'")
+	assert.Equal(t, "auto", data["shell"])
 }
 
 func TestExecProvider_Execute_DryRun_WithWorkingDir(t *testing.T) {
@@ -393,8 +485,9 @@ func TestExecProvider_Execute_DryRun_WithWorkingDir(t *testing.T) {
 	data, ok := output.Data.(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, true, data["_dryRun"])
-	assert.Contains(t, data["_message"], "Would execute command: pwd")
+	assert.Contains(t, data["_message"], "Would execute via auto shell: pwd")
 	assert.Contains(t, data["_message"], "in directory: /tmp")
+	assert.Equal(t, "auto", data["shell"])
 }
 
 func TestExecProvider_Execute_ArgsWithStrings(t *testing.T) {
@@ -416,28 +509,22 @@ func TestExecProvider_Execute_ArgsWithStrings(t *testing.T) {
 	assert.Equal(t, "hello world\n", data["stdout"])
 	assert.Equal(t, 0, data["exitCode"])
 	assert.Equal(t, true, data["success"])
+	assert.NotEmpty(t, data["shell"])
 }
 
 func TestExecProvider_Execute_ContextCancellation(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Skipping context cancellation test on Windows")
-	}
-
 	p := NewExecProvider()
 
-	// Use a context with timeout as a safety net, plus manual cancel
+	// Use a context with timeout as a safety net, plus manual cancel.
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	// Use direct sleep command (not via sh -c) for more reliable signal handling.
-	// When using sh -c, the sleep process is a child of sh, and killing sh
-	// doesn't always immediately propagate to the sleep child on all systems.
+	// The embedded shell runs sleep cross-platform.
 	inputs := map[string]any{
-		"command": "sleep",
-		"args":    []any{"30"}, // Long sleep, but we'll cancel quickly
+		"command": "sleep 30",
 	}
 
-	// Cancel after a short delay
+	// Cancel after a short delay.
 	go func() {
 		time.Sleep(200 * time.Millisecond)
 		cancel()
@@ -447,32 +534,93 @@ func TestExecProvider_Execute_ContextCancellation(t *testing.T) {
 	output, err := p.Execute(ctx, inputs)
 	elapsed := time.Since(start)
 
-	// When context is cancelled, exec.CommandContext kills the process
-	// This results in either:
-	// 1. An error containing "context" (canceled or deadline exceeded)
-	// 2. An error containing "signal: killed"
-	// 3. A non-zero exit code with success=false
+	// When context is cancelled, the embedded shell returns a context error.
 	if err != nil {
-		// Direct error (expected for context cancellation)
 		errStr := err.Error()
 		assert.True(t, strings.Contains(errStr, "context") || strings.Contains(errStr, "signal"),
 			"Expected context or signal error, got: %s", errStr)
 		assert.Nil(t, output)
 	} else {
-		// Process was killed by signal, returned exit info
+		// Process was killed by signal, returned exit info.
 		require.NotNil(t, output)
 		data, ok := output.Data.(map[string]any)
 		require.True(t, ok)
-		// Should have non-zero exit code or success=false
 		exitCode := data["exitCode"].(int)
 		success := data["success"].(bool)
-		// Either the exit code is non-zero (killed) or success is false
 		if exitCode == 0 {
 			assert.False(t, success, "Expected success=false when process was killed")
 		}
 	}
 
-	// Verify command was killed quickly - use a generous timeout for CI environments
-	// which can have variable performance. The key is that it's much less than 30s.
+	// Verify command was killed quickly — much less than 30s.
 	assert.Less(t, elapsed, 10*time.Second, "Context cancellation should kill the process promptly")
+}
+
+func TestExecProvider_Execute_InvalidInputType(t *testing.T) {
+	p := NewExecProvider()
+	ctx := context.Background()
+
+	output, err := p.Execute(ctx, "not a map")
+
+	require.Error(t, err)
+	assert.Nil(t, output)
+	assert.Contains(t, err.Error(), "expected map[string]any")
+}
+
+func TestExecProvider_Execute_CommandSubstitution(t *testing.T) {
+	p := NewExecProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"command": "echo $(echo nested)",
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	data, ok := output.Data.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "nested\n", data["stdout"])
+	assert.Equal(t, 0, data["exitCode"])
+	assert.Equal(t, true, data["success"])
+}
+
+func TestExecProvider_Execute_Conditionals(t *testing.T) {
+	p := NewExecProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"command": "if true; then echo yes; else echo no; fi",
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	data, ok := output.Data.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "yes\n", data["stdout"])
+	assert.Equal(t, 0, data["exitCode"])
+}
+
+func TestExecProvider_Execute_MultilineCommand(t *testing.T) {
+	p := NewExecProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"command": "echo line1\necho line2",
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	data, ok := output.Data.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "line1\nline2\n", data["stdout"])
+	assert.Equal(t, 0, data["exitCode"])
 }

@@ -28,6 +28,7 @@ Step-by-step guides for learning scafctl features.
 ## Reference
 
 - [Provider Reference](provider-reference.md) — Complete documentation for all built-in providers
+- [Exec Provider Tutorial](exec-provider-tutorial.md) — Cross-platform shell execution with embedded and external shells
 - [Directory Provider Tutorial](directory-provider-tutorial.md) — Listing, scanning, and managing directories
 - [Provider Development Guide](provider-development.md) — Build custom providers
 - [Plugin Development Guide](plugin-development.md) — Extend scafctl with plugins

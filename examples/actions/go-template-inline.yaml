@@ -55,13 +55,13 @@ spec:
           - provider: static
             inputs:
               value:
-                - name: "REST API"
+                - title: "REST API"
                   enabled: true
-                - name: "GraphQL"
+                - title: "GraphQL"
                   enabled: false
-                - name: "WebSocket"
+                - title: "WebSocket"
                   enabled: true
-                - name: "gRPC"
+                - title: "gRPC"
                   enabled: true
 
     contributors:
@@ -99,14 +99,14 @@ spec:
 
                 | Feature | Status |
                 |---------|--------|
-                {{- range .features }}
-                | {{ .name }} | {{ if .enabled }}✅ Enabled{{ else }}❌ Disabled{{ end }} |
+                {{- range $item := .features }}
+                | {{ $item.title }} | {{ if $item.enabled }}✅ Enabled{{ else }}❌ Disabled{{ end }} |
                 {{- end }}
 
                 ## Contributors
 
-                {{- range .contributors }}
-                - {{ . }}
+                {{- range $c := .contributors }}
+                - {{ $c }}
                 {{- end }}
 
                 ---
@@ -132,5 +132,4 @@ spec:
         dependsOn:
           - write-readme
         inputs:
-          shell: true
           command: "cat /tmp/scafctl-demo/readme.md"

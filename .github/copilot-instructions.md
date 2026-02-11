@@ -23,6 +23,13 @@ Commands returning structured data should use **kvx** with `OutputOptions`:
 ### HTTP Client
 See `pkg/httpc/README.md`
 
+### Docs, Examples, and Tutorials
+
+- Use `pkg/docs/` for generating and managing documentation and tutorials.
+- Use `pkg/examples/` for storing example configurations and usage scenarios.
+- Always create documentation, tutorials, and examples for new features, providers and commands.
+- Always update documentation, tutorials, and examples when features, providers or commands change.
+
 ### Paths
 
 - Use xdg paths via the pkg/paths package

@@ -130,13 +130,13 @@ spec:
                 }
 
     total_replicas:
-      description: "Aggregate - sum all replicas"
+      description: "Aggregate - count high-availability services (2+ replicas)"
       type: int
       resolve:
         with:
           - provider: cel
             inputs:
-              expression: '_.services.map(s, s.replicas).sum()'
+              expression: '_.services.filter(s, s.replicas >= 2).size()'
 
     has_unhealthy:
       description: "Check if any service is unhealthy with exists()"

@@ -1,0 +1,62 @@
+# Simple Exec Example
+# Demonstrates basic command execution using the embedded POSIX shell.
+# Commands work identically on Linux, macOS, and Windows.
+#
+# Run: scafctl run solution -f examples/exec/simple.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: exec-simple
+  version: 1.0.0
+  description: Basic exec provider usage — commands run through embedded POSIX shell by default
+
+spec:
+  resolvers:
+    greeting:
+      description: Greeting message to display
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "Hello from the embedded shell!"
+
+  workflow:
+    actions:
+      # Simple echo command
+      echo-hello:
+        description: Run a simple echo command
+        provider: exec
+        inputs:
+          command: "echo 'Hello, World!'"
+
+      # Command with explicit arguments (auto-quoted for safety)
+      echo-args:
+        description: Pass arguments separately — they are shell-quoted automatically
+        provider: exec
+        dependsOn: [echo-hello]
+        inputs:
+          command: echo
+          args:
+            - "Hello"
+            - "World"
+            - "from args"
+
+      # Using resolved values in commands via CEL expressions
+      echo-resolved:
+        description: Use a resolved value in a command
+        provider: exec
+        dependsOn: [echo-args]
+        inputs:
+          command:
+            expr: "'echo ' + _.greeting"
+
+      # Working directory
+      list-tmp:
+        description: Run a command in a specific directory
+        provider: exec
+        dependsOn: [echo-resolved]
+        inputs:
+          command: "pwd && ls -la"
+          workingDir: /tmp

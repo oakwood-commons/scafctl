@@ -44,7 +44,6 @@ spec:
         displayName: Create Test DB
         provider: exec
         inputs:
-          shell: true
           database:
             expr: "_.test_database"
           command:
@@ -58,7 +57,6 @@ spec:
         dependsOn:
           - create-test-db
         inputs:
-          shell: true
           command: "echo 'Running tests against test database...'"
 
       # Generate reports
@@ -69,7 +67,6 @@ spec:
         dependsOn:
           - run-tests
         inputs:
-          shell: true
           command: "echo 'Generating test reports...'"
 
     # Finally section - ALWAYS runs, even if main actions fail
@@ -80,7 +77,6 @@ spec:
         displayName: Cleanup DB
         provider: exec
         inputs:
-          shell: true
           database:
             expr: "_.test_database"
           command:
@@ -92,7 +88,6 @@ spec:
         displayName: Cleanup Temp
         provider: exec
         inputs:
-          shell: true
           resources:
             expr: "_.temp_resources"
           command:
@@ -108,7 +103,6 @@ spec:
           - cleanup-db
           - cleanup-temp
         inputs:
-          shell: true
           command: "echo 'Workflow completed, all cleanup finished'"
 
       # Upload logs regardless of test outcome
@@ -117,5 +111,4 @@ spec:
         displayName: Upload Logs
         provider: exec
         inputs:
-          shell: true
           command: "echo 'Uploading execution logs...'"

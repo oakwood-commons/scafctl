@@ -36,7 +36,6 @@ spec:
           # Retry on exit codes 1 or 2 (temporary failures), but not 3 (permanent)
           retryIf: "__error.exitCode == 1 || __error.exitCode == 2"
         inputs:
-          shell: true
           # This succeeds on first try
           command: "echo 'Conditional retry test passed'"
 
@@ -54,7 +53,6 @@ spec:
           # Only retry if we haven't tried more than 2 times
           retryIf: "__error.attempt < 3"
         inputs:
-          shell: true
           command: "echo 'Limited retry test passed'"
 
       # Combine multiple conditions
@@ -72,7 +70,6 @@ spec:
           # Retry on exec errors with exit code 1, or any timeout
           retryIf: "(__error.type == 'exec' && __error.exitCode == 1) || __error.type == 'timeout'"
         inputs:
-          shell: true
           command: "echo 'Complex retry condition test passed'"
 
       # Always retry (equivalent to no retryIf)
@@ -89,7 +86,6 @@ spec:
           # Explicit always-retry condition
           retryIf: "true"
         inputs:
-          shell: true
           command: "echo 'Always retry test passed'"
 
       # Never retry (disable retry with condition)
@@ -106,5 +102,4 @@ spec:
           # Disable retry completely
           retryIf: "false"
         inputs:
-          shell: true
           command: "echo 'Never retry test passed - all tests complete!'"

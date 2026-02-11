@@ -286,7 +286,7 @@ resolve:
 
 ## exec
 
-Execute shell commands.
+Execute shell commands using an embedded cross-platform POSIX shell interpreter. Commands work identically on Linux, macOS, and Windows without requiring external shell binaries. Supports pipes, redirections, variable expansion, command substitution, and common coreutils on all platforms. Optionally use external shells (bash, pwsh, cmd) for platform-specific features.
 
 ### Capabilities
 
@@ -294,15 +294,15 @@ Execute shell commands.
 
 ### Inputs
 
-| Field | Type | Required | Description |
-|-------|------|:--------:|-------------|
-| `command` | string | ✅ | Command to execute |
-| `args` | array | ❌ | Command arguments |
-| `stdin` | string | ❌ | Standard input to provide |
-| `dir` | string | ❌ | Working directory |
-| `env` | object | ❌ | Environment variables |
-| `timeout` | int | ❌ | Timeout in seconds (max 3600) |
-| `shell` | bool | ❌ | Execute through shell for pipes/redirections |
+| Field | Type | Required | Default | Description |
+|-------|------|:--------:|:-------:|-------------|
+| `command` | string | ✅ | — | Command to execute. Supports POSIX shell syntax including pipes, redirections, variable expansion, and command substitution by default |
+| `args` | array | ❌ | — | Additional arguments appended to the command. Arguments are automatically shell-quoted for safety |
+| `stdin` | string | ❌ | — | Standard input to provide to the command |
+| `workingDir` | string | ❌ | — | Working directory for command execution |
+| `env` | object | ❌ | — | Environment variables to set (key-value pairs). Merged with the parent process environment |
+| `timeout` | int | ❌ | — | Timeout in seconds (0 or omit for no timeout, max 3600) |
+| `shell` | string | ❌ | `auto` | Shell interpreter to use: `auto` (embedded POSIX shell — works on all platforms), `sh` (alias for auto), `bash` (external bash), `pwsh` (external PowerShell Core), `cmd` (external cmd.exe — Windows only) |
 
 ### Output
 
@@ -311,31 +311,59 @@ Execute shell commands.
 | `stdout` | string | Standard output |
 | `stderr` | string | Standard error |
 | `exitCode` | int | Exit code |
-| `success` | bool | Whether command succeeded (action only) |
+| `success` | bool | Whether command succeeded (exit code 0) — action capability only |
+| `command` | string | The full command that was executed |
+| `shell` | string | The shell interpreter that was used |
+
+### Shell Modes
+
+| Value | Description | Platform |
+|-------|-------------|----------|
+| `auto` | Embedded POSIX shell (default). Pure Go — no external shell binary required. Supports pipes, redirections, variable expansion, command substitution, and Go-native coreutils on Windows. | All |
+| `sh` | Alias for `auto` | All |
+| `bash` | External bash binary from `$PATH`. Use for bash-specific features (globstar, arrays, etc.) | Linux, macOS |
+| `pwsh` | External PowerShell Core from `$PATH`. Use for PowerShell cmdlets and Windows administration | All (where pwsh is installed) |
+| `cmd` | External cmd.exe. Use for Windows batch commands | Windows |
 
 ### Examples
 
 ```yaml
-# Simple command
+# Simple command — pipes and shell features work by default
+provider: exec
+inputs:
+  command: "echo 'Hello, World!'"
+
+# Command with arguments (automatically shell-quoted)
 provider: exec
 inputs:
   command: "echo"
   args: ["Hello", "World"]
 
-# Shell pipeline
+# Shell pipeline — works on all platforms
 provider: exec
 inputs:
-  command: "cat /etc/hosts | grep localhost"
-  shell: true
+  command: "echo 'hello world' | tr a-z A-Z"
 
-# With environment variables
+# With environment variables and working directory
 provider: exec
 inputs:
   command: "./deploy.sh"
-  dir: "/opt/app"
+  workingDir: "/opt/app"
   env:
     ENVIRONMENT: production
   timeout: 300
+
+# PowerShell command
+provider: exec
+inputs:
+  command: "Get-ChildItem | Select-Object Name"
+  shell: pwsh
+
+# External bash for bash-specific features
+provider: exec
+inputs:
+  command: "shopt -s globstar; echo **/*.go"
+  shell: bash
 ```
 
 ---

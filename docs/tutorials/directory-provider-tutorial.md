@@ -373,7 +373,6 @@ workflow:
       dependsOn: [create-workspace]
       inputs:
         command: "make build"
-        shell: true
 
     archive-output:
       provider: directory

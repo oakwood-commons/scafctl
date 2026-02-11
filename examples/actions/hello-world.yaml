@@ -30,6 +30,5 @@ spec:
         displayName: Greeting Action
         provider: exec
         inputs:
-          shell: true
           command:
             expr: "'echo ' + _.greeting"

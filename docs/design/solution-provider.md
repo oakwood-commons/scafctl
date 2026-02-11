@@ -570,7 +570,6 @@ spec:
       setup:
         provider: exec
         inputs:
-          shell: true
           command: "echo 'Preparing...'"
 
       deploy-infra:
@@ -589,7 +588,6 @@ spec:
         dependsOn:
           - deploy-infra
         inputs:
-          shell: true
           command:
             expr: "'Deploy status: ' + string(__actions['deploy-infra'].results.workflow.finalStatus)"
 ~~~

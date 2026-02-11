@@ -39,7 +39,6 @@ spec:
         # Continue workflow even if this fails
         onError: continue
         inputs:
-          shell: true
           # This command will fail (exit code 1)
           command: "echo 'Attempting optional cleanup...' && exit 1"
 
@@ -50,7 +49,6 @@ spec:
         provider: exec
         # No dependency on optional-cleanup, runs in same phase
         inputs:
-          shell: true
           command: "echo 'Running required setup...'"
 
       # Demonstrate forEach with onError: continue
@@ -66,7 +64,6 @@ spec:
           # Continue checking other services if one fails
           onError: continue
         inputs:
-          shell: true
           name:
             expr: "__item.name"
           command:
@@ -81,6 +78,5 @@ spec:
         dependsOn:
           - health-checks
         inputs:
-          shell: true
           command:
             expr: "'echo Health check report for ' + string(size(_.checks)) + ' services'"

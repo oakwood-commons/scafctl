@@ -308,7 +308,7 @@ spec:
         with:
           - provider: cel
             inputs:
-              expression: 'base64.decode(base64.encode("Hello, World!"))'
+              expression: 'string(base64.decode(base64.encode(b"Hello, World!")))'
 
     builtin_math:
       description: "math functions"

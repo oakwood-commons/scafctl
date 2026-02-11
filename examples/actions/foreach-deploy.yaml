@@ -48,7 +48,6 @@ spec:
         displayName: Build
         provider: exec
         inputs:
-          shell: true
           command:
             expr: "'echo Building version ' + _.version + '...'"
 
@@ -68,7 +67,6 @@ spec:
           # Optional: continue deploying to remaining targets if one fails
           onError: continue
         inputs:
-          shell: true
           target:
             # __item is the current array element
             expr: "__item"
@@ -86,6 +84,5 @@ spec:
         dependsOn:
           - deploy
         inputs:
-          shell: true
           command:
             expr: "'echo Verifying ' + string(size(_.targets)) + ' deployments...'"

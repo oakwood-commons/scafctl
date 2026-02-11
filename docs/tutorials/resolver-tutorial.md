@@ -298,11 +298,11 @@ spec:
           # Add timestamp
           - provider: cel
             inputs:
-              expression: "__self.merge({'timestamp': now()})"
+              expression: "map.merge(__self, {'timestamp': time.now()})"
           # Add environment-specific settings
           - provider: cel
             inputs:
-              expression: "__self.merge({'debug': true, 'logLevel': 'info'})"
+              expression: "map.merge(__self, {'debug': true, 'logLevel': 'info'})"
 ```
 
 ---
@@ -357,13 +357,17 @@ spec:
       resolve:
         with:
           - provider: parameter
+            onError: continue
             inputs:
               key: email
+          - provider: static
+            inputs:
+              value: "user@example.com"
       validate:
         with:
           - provider: validation
             inputs:
-              pattern: "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$"
+              match: "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$"
               message: "Invalid email format"
           - provider: validation
             inputs:
@@ -433,12 +437,12 @@ spec:
               value:
                 enable_transform: true
       transform:
-        when:
-          expr: "_.feature_flags.enable_transform == true"
         with:
           - provider: cel
+            when:
+              expr: "__self.enable_transform == true"
             inputs:
-              expression: "__self.merge({'transformed': true})"
+              expression: "map.merge(__self, {'transformed': true})"
 ```
 
 ---
@@ -644,8 +648,14 @@ spec:
               name: DB_PASSWORD
           # Fall back to file-based secret
           - provider: file
+            onError: continue
             inputs:
+              operation: read
               path: /run/secrets/db_password
+          # Fall back to generated password
+          - provider: static
+            inputs:
+              value: "default-dev-password"
     
     connection_string:
       sensitive: true
