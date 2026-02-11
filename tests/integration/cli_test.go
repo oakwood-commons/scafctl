@@ -221,9 +221,8 @@ func TestIntegration_RunSolution_InvalidYAML(t *testing.T) {
 
 func TestIntegration_RunSolution_BadSolutionYAML(t *testing.T) {
 	_, stderr, exitCode := runScafctl(t,
-		"run", "solution",
+		"run", "resolver",
 		"-f", "examples/solutions/bad-solution-yaml/solution.yaml",
-		"--skip-actions",
 	)
 
 	assert.NotEqual(t, 0, exitCode)
@@ -243,17 +242,77 @@ func TestIntegration_RunSolution_DryRun(t *testing.T) {
 	t.Logf("dry-run output: %s", stdout)
 }
 
-func TestIntegration_RunSolution_SkipActions(t *testing.T) {
+func TestIntegration_RunResolver_Basic(t *testing.T) {
 	stdout, _, exitCode := runScafctl(t,
-		"run", "solution",
+		"run", "resolver",
 		"-f", "examples/actions/hello-world.yaml",
-		"--skip-actions",
 		"-o", "json",
 	)
 
 	assert.Equal(t, 0, exitCode)
 	// Should resolve but not execute actions
 	assert.Contains(t, stdout, "greeting")
+}
+
+func TestIntegration_RunResolver_Help(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "run", "resolver", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Execute resolvers from a solution without running actions")
+	assert.Contains(t, stdout, "--verbose")
+	assert.Contains(t, stdout, "--file")
+}
+
+func TestIntegration_RunResolver_Alias(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t,
+		"run", "res",
+		"-f", "examples/resolver-demo.yaml",
+		"-o", "json",
+	)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "environment")
+}
+
+func TestIntegration_RunResolver_NamedResolver(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"environment",
+		"-o", "json",
+	)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "environment")
+	assert.Contains(t, stdout, "production")
+}
+
+func TestIntegration_RunResolver_UnknownName(t *testing.T) {
+	_, stderr, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"nonexistent",
+	)
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "unknown resolver(s): nonexistent")
+}
+
+func TestIntegration_RunResolver_Verbose(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"--verbose",
+		"-o", "json",
+	)
+
+	assert.Equal(t, 0, exitCode)
+	// Verbose metadata is now in the structured output, not stderr
+	assert.Contains(t, stdout, "__execution")
+	assert.Contains(t, stdout, "resolvers")
+	assert.Contains(t, stdout, "summary")
+	assert.Contains(t, stdout, "totalDuration")
+	assert.Contains(t, stdout, "phaseCount")
 }
 
 func TestIntegration_RunSolution_ConditionalRetry(t *testing.T) {
@@ -407,11 +466,10 @@ spec:
 // ============================================================================
 
 func TestIntegration_RenderSolution(t *testing.T) {
-	// Use run solution with --skip-actions to get resolver outputs
+	// Use run resolver to get resolver outputs
 	stdout, _, exitCode := runScafctl(t,
-		"run", "solution",
+		"run", "resolver",
 		"-f", "examples/resolver-demo.yaml",
-		"--skip-actions",
 	)
 
 	assert.Equal(t, 0, exitCode)
@@ -422,9 +480,8 @@ func TestIntegration_RenderSolution(t *testing.T) {
 
 func TestIntegration_RenderSolutionJSON(t *testing.T) {
 	stdout, _, exitCode := runScafctl(t,
-		"run", "solution",
+		"run", "resolver",
 		"-f", "examples/resolver-demo.yaml",
-		"--skip-actions",
 		"-o", "json",
 	)
 
@@ -435,9 +492,8 @@ func TestIntegration_RenderSolutionJSON(t *testing.T) {
 
 func TestIntegration_RenderSolutionYAML(t *testing.T) {
 	stdout, _, exitCode := runScafctl(t,
-		"run", "solution",
+		"run", "resolver",
 		"-f", "examples/resolver-demo.yaml",
-		"--skip-actions",
 		"-o", "yaml",
 	)
 
@@ -693,9 +749,8 @@ func TestIntegration_OutputFormats(t *testing.T) {
 	for _, format := range formats {
 		t.Run(format, func(t *testing.T) {
 			stdout, _, exitCode := runScafctl(t,
-				"run", "solution",
+				"run", "resolver",
 				"-f", "examples/resolver-demo.yaml",
-				"--skip-actions",
 				"-o", format,
 			)
 
@@ -1218,7 +1273,7 @@ func TestIntegration_RunSolution_FromCatalog_NotFound(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", tmpDir)
 
 	// Try to run a solution that doesn't exist in catalog
-	stdout, stderr, exitCode := runScafctl(t, "run", "solution", "nonexistent-solution", "--skip-actions")
+	stdout, stderr, exitCode := runScafctl(t, "run", "solution", "nonexistent-solution")
 	assert.NotEqual(t, 0, exitCode)
 	// Reports artifact not found in catalog and file system
 	combined := stdout + stderr
@@ -1236,7 +1291,7 @@ func TestIntegration_RunSolution_FromCatalog_ByName(t *testing.T) {
 	require.Equal(t, 0, exitCode)
 
 	// Run the solution from catalog by name (should pick latest version)
-	stdout, _, exitCode := runScafctl(t, "run", "solution", "resolver-demo", "--skip-actions", "-o", "json")
+	stdout, _, exitCode := runScafctl(t, "run", "solution", "resolver-demo", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 	// Should have resolver output
 	assert.Contains(t, stdout, "environment")
@@ -1255,7 +1310,7 @@ func TestIntegration_RunSolution_FromCatalog_ByNameVersion(t *testing.T) {
 	require.Equal(t, 0, exitCode)
 
 	// Run the solution from catalog by name@version
-	stdout, _, exitCode := runScafctl(t, "run", "solution", "resolver-demo@1.0.0", "--skip-actions", "-o", "json")
+	stdout, _, exitCode := runScafctl(t, "run", "solution", "resolver-demo@1.0.0", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 	// Should have resolver output
 	assert.Contains(t, stdout, "environment")
@@ -1268,7 +1323,7 @@ func TestIntegration_RunSolution_FromCatalog_FallbackToFile(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", tmpDir)
 
 	// Run a solution by file path (not bare name) - should use file
-	stdout, _, exitCode := runScafctl(t, "run", "solution", "-f", "examples/resolver-demo.yaml", "--skip-actions", "-o", "json")
+	stdout, _, exitCode := runScafctl(t, "run", "solution", "-f", "examples/resolver-demo.yaml", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 	// Should have resolver output from file
 	assert.Contains(t, stdout, "environment")
@@ -1282,7 +1337,7 @@ func TestIntegration_RunSolution_FromCatalog_PathNotBareName(t *testing.T) {
 
 	// A path with a separator should not be treated as a bare name
 	// This should try to open a file, not lookup in catalog
-	_, stderr, exitCode := runScafctl(t, "run", "solution", "./nonexistent.yaml", "--skip-actions")
+	_, stderr, exitCode := runScafctl(t, "run", "solution", "./nonexistent.yaml")
 	assert.NotEqual(t, 0, exitCode)
 	// Should report file not found, not catalog not found
 	assert.Contains(t, stderr, "Failed reading file")
@@ -1558,7 +1613,7 @@ func TestIntegration_CatalogSaveLoad_RoundTrip(t *testing.T) {
 	require.Equal(t, 0, exitCode)
 
 	// Verify the solution can be run
-	stdout, _, exitCode := runScafctl(t, "run", "solution", "resolver-demo", "--skip-actions", "-o", "json")
+	stdout, _, exitCode := runScafctl(t, "run", "solution", "resolver-demo", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "environment")
 	assert.Contains(t, stdout, "production")
@@ -2365,9 +2420,8 @@ spec:
 	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
 
 	stdout, stderr, exitCode := runScafctl(t,
-		"run", "solution",
+		"run", "resolver",
 		"-f", solutionFile,
-		"--skip-actions",
 		"-o", "json",
 	)
 

@@ -25,6 +25,7 @@ scafctl <verb> <kind> <name[@version(or constraint)]> [flags]
 | Command | Status | Notes |
 |---------|--------|-------|
 | `run solution` | ✅ Implemented | Full support with actions |
+| `run resolver` | ✅ Implemented | Resolver-only execution for debugging and inspection |
 | `render solution` | ✅ Implemented | Includes graph and snapshot modes |
 | `get solution/provider/resolver` | ✅ Implemented | |
 | `explain solution/provider` | ✅ Implemented | |
@@ -738,6 +739,29 @@ scafctl resolver graph -f solution.yaml --format=dot
 scafctl resolver graph -f solution.yaml --format=mermaid
 scafctl resolver graph -f solution.yaml --format=json
 ~~~
+
+### Running Resolvers
+
+The `run resolver` command executes resolvers from a solution without running actions. This is designed for debugging and inspecting resolver execution.
+
+~~~bash
+# Run all resolvers
+scafctl run resolver -f solution.yaml
+
+# Run specific resolvers (with their transitive dependencies)
+scafctl run resolver db config -f solution.yaml
+
+# Verbose mode includes __execution metadata (phases, timing, providers) in output
+scafctl run resolver --verbose -f solution.yaml
+
+# JSON output for scripting
+scafctl run resolver -f solution.yaml -o json
+
+# Interactive TUI for exploring results
+scafctl run resolver -f solution.yaml -i
+~~~
+
+Aliases: `res`, `resolvers`
 
 ---
 

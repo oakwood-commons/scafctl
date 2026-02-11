@@ -20,7 +20,7 @@
         // "run", "solution", "-f", "examples/resolver-demo.yaml", "-e", "debug.out(\"DUDE\")"
         // "auth", "status"
         // "catalog", "list", "-i"
-        "run", "solution", "-f", ".scafctl/solution.yaml", "--skip-actions"
+        "run", "resolver", "-f", ".scafctl/solution.yaml"
       ],
     }
   ]

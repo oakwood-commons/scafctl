@@ -18,10 +18,14 @@ import (
 // extracting dependencies from their inputs.
 type DescriptorLookup func(providerName string) *provider.Descriptor
 
-// extractDependencies extracts all resolver references from a resolver definition.
+// ExtractDependencies extracts all resolver references from a resolver definition.
 // If lookup is provided, it will use provider-specific ExtractDependencies functions
 // when available. If lookup is nil, only generic extraction is performed.
 // Explicit dependencies from DependsOn are always included and merged with auto-extracted dependencies.
+func ExtractDependencies(r *Resolver, lookup DescriptorLookup) []string {
+	return extractDependencies(r, lookup)
+}
+
 func extractDependencies(r *Resolver, lookup DescriptorLookup) []string {
 	deps := make(map[string]bool) // Use map to deduplicate
 

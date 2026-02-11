@@ -15,6 +15,7 @@ Step-by-step guides for learning scafctl features.
 ## Core Tutorials
 
 - [Resolver Tutorial](resolver-tutorial.md) — Master dynamic value resolution
+- [Run Resolver Tutorial](run-resolver-tutorial.md) — Debug and inspect resolver execution
 - [Actions Tutorial](actions-tutorial.md) — Learn how to use actions for workflow automation
 - [Authentication Tutorial](auth-tutorial.md) — Set up authentication for your workflows
 - [CEL Expressions Tutorial](cel-tutorial.md) — Master CEL expressions and extension functions
