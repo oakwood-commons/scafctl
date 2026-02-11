@@ -257,6 +257,42 @@ func TestIntegration_RunSolution_ConditionalRetry(t *testing.T) {
 	assert.Contains(t, stdout, "all tests complete")
 }
 
+func TestIntegration_RunSolution_K8sClusters(t *testing.T) {
+	// Clean up output directory before and after (relative to project root where scafctl runs)
+	projectRoot := findProjectRoot()
+	outputDir := filepath.Join(projectRoot, "output")
+	os.RemoveAll(outputDir)
+	t.Cleanup(func() { os.RemoveAll(outputDir) })
+
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "solution",
+		"-f", "examples/solutions/k8s-clusters/solution.yaml",
+	)
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d", exitCode)
+
+	// Verify all 10 cluster manifests were generated
+	expectedClusters := []string{
+		"us-east-prod", "us-east-dev", "eu-west-prod", "eu-west-staging",
+		"ap-south-dev", "ap-south-qa", "us-central-prod", "us-central-dev",
+		"eu-north-staging", "ap-east-prod",
+	}
+	for _, cluster := range expectedClusters {
+		manifestPath := filepath.Join(outputDir, cluster, "manifest.yaml")
+		assert.FileExists(t, manifestPath, "expected manifest for cluster %s", cluster)
+
+		content, err := os.ReadFile(manifestPath)
+		if assert.NoError(t, err) {
+			assert.Contains(t, string(content), "name: "+cluster, "manifest should contain cluster name")
+			assert.Contains(t, string(content), "kind: Namespace", "manifest should contain Namespace")
+			assert.Contains(t, string(content), "kind: ResourceQuota", "manifest should contain ResourceQuota")
+		}
+	}
+}
+
 func TestIntegration_RunSolution_RetryIfWithCommandNotFound(t *testing.T) {
 	// Test that retryIf: "false" prevents retries on actual errors
 	// Using a non-existent command which returns a real error
