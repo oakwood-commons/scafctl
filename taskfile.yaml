@@ -173,6 +173,8 @@ tasks:
           echo "Repository is not shallow. No action needed."
         fi
     silent: true
+    sources:
+      - "./.git/*"
     requires:
       vars: [IS_SHALLOW]
 
@@ -438,6 +440,70 @@ tasks:
     sources:
       - README.md
       - scripts/generate_index.go
+    generates:
+      - '{{.DIST}}/index.html'
+
+  upload-release:
+    desc: "Upload dist/ release artifacts (index.html, archives, SHA256SUMS) to a GCS bucket"
+    vars:
+      GCS_BUCKET: '{{ .GCS_BUCKET | default (env "GCS_BUCKET") | default "" }}'
+      GCS_PREFIX: '{{ .GCS_PREFIX | default (env "GCS_PREFIX") | default "" }}'
+    env:
+      GCS_BUCKET: '{{.GCS_BUCKET}}'
+      GCS_PREFIX: '{{.GCS_PREFIX}}'
+      UPLOAD_DIST_DIR: '{{.DIST}}'
+    cmds:
+      - cd scripts && go run upload_release.go
+    preconditions:
+      - sh: 'test -f {{.DIST}}/index.html'
+        msg: "dist/index.html not found. Run 'task generate-index' first."
+      - sh: 'test -n "{{.GCS_BUCKET}}"'
+        msg: "GCS_BUCKET is required. Set via env var or: task upload-release GCS_BUCKET=my-bucket"
+
+  release-local:
+    desc: "Build a local snapshot release with goreleaser and generate index.html (does not publish)"
+    vars:
+      RELEASE_VERSION:
+        sh: |
+          git fetch --tags --quiet 2>/dev/null || true
+          tag="$(git describe --tags --abbrev=0 2>/dev/null || echo "")"
+          if [ -z "$tag" ]; then
+            commit="$(git rev-parse --short HEAD)"
+            echo "0.1.0-SNAPSHOT-${commit}"
+          else
+            echo "${tag#v}"
+          fi
+    cmds:
+      - |
+        echo "Building local snapshot release {{.RELEASE_VERSION}}..."
+        goreleaser release --snapshot --clean --skip=sign
+      - |
+        echo ""
+        echo "Release artifacts in dist/:"
+        ls -la dist/*.tar.gz dist/*.zip 2>/dev/null || echo "  (no archives found)"
+        echo ""
+        ls -la dist/*SHA256* 2>/dev/null || true
+      - task: generate-index
+      - |
+        echo ""
+        echo "Generated dist/index.html"
+        echo ""
+        echo "To publish for real, push a tag:"
+        echo "  task tag -- v1.2.3"
+
+  release-dry-run:
+    desc: "Validate goreleaser config and preview release build without creating artifacts"
+    cmds:
+      - |
+        echo "Checking .goreleaser.yaml..."
+        goreleaser check
+      - |
+        echo ""
+        echo "Running snapshot build (skip publish)..."
+        goreleaser release --snapshot --clean --skip=publish
+      - |
+        echo ""
+        echo "Dry run complete. Config is valid."
 
   integration:
     deps: [build]

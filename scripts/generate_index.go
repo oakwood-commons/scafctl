@@ -1,9 +1,12 @@
+//go:build ignore
+
 package main
 
 import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -64,24 +67,29 @@ func main() {
 
 // detectVersionFromDist finds the version string from files like
 // scafctl_0.1.0_Darwin_arm64.tar.gz
+// Falls back to git describe if no archives are found.
 func detectVersionFromDist(distDir string) string {
 	files, err := os.ReadDir(distDir)
-	if err != nil {
-		return "unknown"
-	}
-
-	re := regexp.MustCompile(`^scafctl_([^_]+(?:-[^_]+)*)_(?:Darwin|Linux|Windows)_(?:arm64|x86_64)\.(?:tar\.gz|zip)$`)
-
-	for _, file := range files {
-		if file.IsDir() {
-			continue
-		}
-		matches := re.FindStringSubmatch(file.Name())
-		if len(matches) >= 2 {
-			return matches[1]
+	if err == nil {
+		re := regexp.MustCompile(`^scafctl_([^_]+(?:-[^_]+)*)_(?:Darwin|Linux|Windows)_(?:arm64|x86_64)\.(?:tar\.gz|zip)$`)
+		for _, file := range files {
+			if file.IsDir() {
+				continue
+			}
+			matches := re.FindStringSubmatch(file.Name())
+			if len(matches) >= 2 {
+				return matches[1]
+			}
 		}
 	}
-	return "unknown"
+
+	// Fallback: try git describe
+	if out, err := exec.Command("git", "describe", "--tags", "--abbrev=0").Output(); err == nil {
+		tag := strings.TrimSpace(string(out))
+		return strings.TrimPrefix(tag, "v")
+	}
+
+	return "dev"
 }
 
 // generateDownloadsHTMLFlat generates download links for flat dist/ directory structure.
@@ -234,6 +242,10 @@ sudo mv scafctl /usr/local/bin/
 # Windows
 # Extract the .zip file and add scafctl.exe to your PATH
 </code></pre>
+
+<blockquote><p><strong>macOS note:</strong> You may need to remove the quarantine attribute before running:</p>
+<pre><code class="language-bash">xattr -dr 'com.apple.quarantine' /usr/local/bin/scafctl
+</code></pre></blockquote>
 
 <h3>From Source</h3>
 <pre><code class="language-bash">go install github.com/oakwood-commons/scafctl/cmd/scafctl@latest

@@ -160,7 +160,7 @@ func runLint(ctx context.Context, opts *Options) error {
 
 	lgr.V(1).Info("linting solution", "file", opts.File, "name", sol.Metadata.Name)
 
-	registry := getRegistry()
+	registry := getRegistry(ctx)
 	result := lintSolution(sol, opts.File, registry)
 	result = filterBySeverity(result, opts.Severity)
 
@@ -193,8 +193,8 @@ func runLint(ctx context.Context, opts *Options) error {
 	return nil
 }
 
-func getRegistry() *provider.Registry {
-	reg, err := builtin.DefaultRegistry()
+func getRegistry(ctx context.Context) *provider.Registry {
+	reg, err := builtin.DefaultRegistry(ctx)
 	if err != nil {
 		return provider.GetGlobalRegistry()
 	}
