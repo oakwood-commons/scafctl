@@ -224,7 +224,7 @@ func TestFromUrl(t *testing.T) {
 		sol, err := getter.FromURL(ctx, server.URL)
 		require.Error(t, err)
 		assert.Nil(t, sol)
-		assert.Contains(t, err.Error(), "Failed unmarshalling data")
+		assert.Contains(t, err.Error(), "failed to load solution from")
 	})
 
 	t.Run("with custom HTTP client", func(t *testing.T) {
@@ -362,7 +362,7 @@ func TestFromLocalFileSystem(t *testing.T) {
 		sol, err := getter.FromLocalFileSystem(ctx, "invalid.json")
 		require.Error(t, err)
 		require.NotNil(t, sol) // Returns empty solution on error
-		assert.Contains(t, err.Error(), "Failed unmarshalling data")
+		assert.Contains(t, err.Error(), "failed to load solution from")
 	})
 
 	t.Run("with custom logger", func(t *testing.T) {

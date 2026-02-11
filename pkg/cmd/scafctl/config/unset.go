@@ -116,8 +116,8 @@ func (o *UnsetOptions) getDefaultValue(key string) any {
 		"settings.defaultCatalog": "local",
 		"settings.noColor":        false,
 		"settings.quiet":          false,
-		"logging.level":           0,
-		"logging.format":          "json",
+		"logging.level":           "none",
+		"logging.format":          "console",
 		"logging.timestamps":      true,
 		"logging.enableProfiling": false,
 	}

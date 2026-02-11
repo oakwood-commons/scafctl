@@ -576,7 +576,10 @@ These flags are available on most commands:
 | `--quiet` | `-q` | Suppress non-essential output | ✅ Implemented |
 | `--no-color` | | Disable colored output | ✅ Implemented |
 | `--config` | | Path to config file (default: `~/.scafctl/config.yaml`) | ✅ Implemented |
-| `--log-level` | | Set log level (-1=Debug, 0=Info, 1=Warn, 2=Error) | ✅ Implemented |
+| `--log-level` | | Set log level (none, error, warn, info, debug, trace, or numeric V-level) | ✅ Implemented |
+| `--debug` | `-d` | Enable debug logging (shorthand for --log-level debug) | ✅ Implemented |
+| `--log-format` | | Log format: console (default) or json | ✅ Implemented |
+| `--log-file` | | Write logs to a file path | ✅ Implemented |
 | `--catalog` | | Target a specific configured catalog | 📋 Planned |
 
 **Note**: The `-o/--output` flag is available per-command (not global) on commands that support structured output.

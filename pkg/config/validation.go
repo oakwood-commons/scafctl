@@ -6,6 +6,8 @@ package config
 import (
 	"fmt"
 	"time"
+
+	"github.com/oakwood-commons/scafctl/pkg/logger"
 )
 
 // Validate validates the entire configuration.
@@ -181,14 +183,16 @@ func (a *ActionConfig) Validate() error {
 // Validate validates the logging configuration.
 // Returns an error if any value is invalid.
 func (l *LoggingConfig) Validate() error {
-	// Validate log level range
-	if l.Level < -1 || l.Level > 2 {
-		return fmt.Errorf("level: must be between -1 (Debug) and 2 (Error), got %d", l.Level)
+	// Validate log level (must be a recognized named level or numeric V-level)
+	if l.Level != "" {
+		if _, err := logger.ParseLogLevel(l.Level); err != nil {
+			return fmt.Errorf("level: %w", err)
+		}
 	}
 
 	// Validate format
-	if l.Format != "" && l.Format != LoggingFormatJSON && l.Format != LoggingFormatText {
-		return fmt.Errorf("format: must be %q or %q, got %q", LoggingFormatJSON, LoggingFormatText, l.Format)
+	if l.Format != "" && l.Format != LoggingFormatJSON && l.Format != LoggingFormatText && l.Format != LoggingFormatConsole {
+		return fmt.Errorf("format: must be %q, %q, or %q, got %q", LoggingFormatConsole, LoggingFormatJSON, LoggingFormatText, l.Format)
 	}
 
 	return nil

@@ -192,7 +192,8 @@ State:    ~/Library/Application Support/scafctl/state/
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `logging.level` | string | `info` | Log level: `debug`, `info`, `warn`, `error` |
+| `logging.level` | string | `none` | Log level: `none`, `error`, `warn`, `info`, `debug`, `trace`, or numeric V-level |
+| `logging.format` | string | `console` | Log format: `console` (colored), `json` (structured) |
 | `settings.defaultCatalog` | string | `local` | Default catalog name |
 | `httpClient.timeout` | duration | `30s` | HTTP request timeout |
 | `httpClient.retry.maxRetries` | int | `3` | Max HTTP retries |
@@ -229,7 +230,7 @@ version: 1
 settings:
   defaultCatalog: "local"
 logging:
-  level: "info"
+  level: "none"
 catalogs:
   - name: local
     type: filesystem
@@ -267,11 +268,11 @@ scafctl config set logging.level debug
 
 # After debugging, reset
 scafctl config unset logging.level
-scafctl config use-catalog production
 ```
 
 ## Next Steps
 
+- [Logging & Debugging Tutorial](logging-tutorial.md) — Control log verbosity, format, and output destination
 - [Catalog Tutorial](catalog-tutorial.md) — Build and manage solutions in the catalog
 - [Cache Tutorial](cache-tutorial.md) — Manage cached data
 - [Getting Started](getting-started.md) — Run your first solution

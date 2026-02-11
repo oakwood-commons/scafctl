@@ -219,6 +219,18 @@ func TestIntegration_RunSolution_InvalidYAML(t *testing.T) {
 	t.Logf("stderr: %s", stderr)
 }
 
+func TestIntegration_RunSolution_BadSolutionYAML(t *testing.T) {
+	_, stderr, exitCode := runScafctl(t,
+		"run", "solution",
+		"-f", "examples/solutions/bad-solution-yaml/solution.yaml",
+		"--skip-actions",
+	)
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "expected exactly one of rslvr, expr, or tmpl, but found")
+	assert.Contains(t, stderr, "line")
+}
+
 func TestIntegration_RunSolution_DryRun(t *testing.T) {
 	stdout, _, exitCode := runScafctl(t,
 		"run", "solution",
