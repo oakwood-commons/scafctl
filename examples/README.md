@@ -90,6 +90,7 @@ Complete solutions demonstrating real-world use cases.
 | [terraform/](solutions/terraform/) | Terraform project scaffolding |
 | [taskfile/](solutions/taskfile/) | Taskfile.yaml generation |
 | [email-notifier/](solutions/email-notifier/) | Email notification workflow |
+| [k8s-clusters/](solutions/k8s-clusters/) | Read a Go template file, iterate 10 K8s clusters, render and write unique manifests |
 
 ---
 
