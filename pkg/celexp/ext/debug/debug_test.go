@@ -25,7 +25,7 @@ func newTestWriter() (*writer.Writer, *bytes.Buffer) {
 	cliParams := &settings.Run{
 		NoColor:     true,
 		IsQuiet:     false,
-		MinLogLevel: -1, // Enable debug output
+		MinLogLevel: "debug", // Enable debug output
 	}
 	w := writer.New(ioStreams, cliParams)
 	return w, errBuf

@@ -49,8 +49,8 @@ type Settings struct {
 
 // LoggingConfig holds logging configuration.
 type LoggingConfig struct {
-	Level           int    `json:"level,omitempty" yaml:"level,omitempty" mapstructure:"level" doc:"Log level (-1=Debug, 0=Info, 1=Warn, 2=Error)" example:"0" maximum:"3"`
-	Format          string `json:"format,omitempty" yaml:"format,omitempty" mapstructure:"format" doc:"Output format (json, text)" example:"json" maxLength:"10"`
+	Level           string `json:"level,omitempty" yaml:"level,omitempty" mapstructure:"level" doc:"Log level (none, error, warn, info, debug, trace, or a numeric V-level)" example:"none" maxLength:"10"`
+	Format          string `json:"format,omitempty" yaml:"format,omitempty" mapstructure:"format" doc:"Output format (console, json, text)" example:"console" maxLength:"10"`
 	Timestamps      bool   `json:"timestamps,omitempty" yaml:"timestamps,omitempty" mapstructure:"timestamps" doc:"Include timestamps in logs"`
 	EnableProfiling bool   `json:"enableProfiling,omitempty" yaml:"enableProfiling,omitempty" mapstructure:"enableProfiling" doc:"Enable profiling (unhides --pprof flag)"`
 }
@@ -58,8 +58,11 @@ type LoggingConfig struct {
 // LoggingFormatJSON is the JSON log format.
 const LoggingFormatJSON = "json"
 
-// LoggingFormatText is the text log format.
+// LoggingFormatText is the text log format (alias for console).
 const LoggingFormatText = "text"
+
+// LoggingFormatConsole is the human-readable console log format.
+const LoggingFormatConsole = "console"
 
 // CatalogType constants define the supported catalog types.
 const (

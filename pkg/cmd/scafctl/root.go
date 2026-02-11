@@ -42,6 +42,9 @@ var (
 	cliParams  = settings.NewCliParams()
 	configPath string
 	appConfig  *config.Config
+	debugFlag  bool
+	logFormat  string
+	logFile    string
 )
 
 // AppConfig returns the loaded application configuration.
@@ -82,25 +85,68 @@ func Root() *cobra.Command {
 			if !cCmd.Flags().Changed("quiet") {
 				cliParams.IsQuiet = cfg.Settings.Quiet
 			}
+
+			// Resolve log level with precedence: flag > --debug > env > config > default ("none")
+			resolvedLogLevel := cliParams.MinLogLevel // flag value or default
 			if !cCmd.Flags().Changed("log-level") {
-				// Safe conversion with bounds check
-				logLevel := cfg.Logging.Level
-				if logLevel > 127 {
-					logLevel = 127
-				} else if logLevel < -128 {
-					logLevel = -128
+				// Flag not explicitly set — check env vars, then config
+				if envLevel := os.Getenv("SCAFCTL_LOG_LEVEL"); envLevel != "" {
+					resolvedLogLevel = envLevel
+				} else if envDebug := os.Getenv("SCAFCTL_DEBUG"); envDebug != "" && envDebug != "0" && envDebug != "false" {
+					resolvedLogLevel = logger.LevelDebug
+				} else if cfg.Logging.Level != "" {
+					resolvedLogLevel = cfg.Logging.Level
 				}
-				cliParams.MinLogLevel = int8(logLevel) //nolint:gosec // bounds checked above
+			}
+			// --debug flag always wins (it's an explicit override)
+			if debugFlag {
+				resolvedLogLevel = logger.LevelDebug
+			}
+			cliParams.MinLogLevel = resolvedLogLevel
+
+			// Resolve log format with precedence: flag > env > config > default ("console")
+			resolvedFormat := logFormat // flag value or default
+			if !cCmd.Flags().Changed("log-format") {
+				if envFormat := os.Getenv("SCAFCTL_LOG_FORMAT"); envFormat != "" {
+					resolvedFormat = envFormat
+				} else if cfg.Logging.Format != "" {
+					resolvedFormat = cfg.Logging.Format
+				}
 			}
 
-			// Build logger options from config
-			logOpts := logger.Options{
-				Level:      cliParams.MinLogLevel * -1,
-				Timestamps: cfg.Logging.Timestamps,
-				Format:     logger.FormatJSON,
+			// Resolve log file with precedence: flag > env > default (empty = stderr)
+			resolvedLogFile := logFile
+			if !cCmd.Flags().Changed("log-file") {
+				if envPath := os.Getenv("SCAFCTL_LOG_PATH"); envPath != "" {
+					resolvedLogFile = envPath
+				}
 			}
-			if cfg.Logging.Format == config.LoggingFormatText {
-				logOpts.Format = logger.FormatText
+
+			// Parse the resolved log level string to a zap level
+			zapLevel, parseErr := logger.ParseLogLevel(resolvedLogLevel)
+			if parseErr != nil {
+				_, _ = os.Stderr.WriteString("Warning: " + parseErr.Error() + ", defaulting to 'none'\n")
+				zapLevel = logger.LogLevelNone
+			}
+
+			// Map format string to logger.LogFormat
+			var logFmt logger.LogFormat
+			switch resolvedFormat {
+			case config.LoggingFormatJSON:
+				logFmt = logger.FormatJSON
+			case config.LoggingFormatText, config.LoggingFormatConsole:
+				logFmt = logger.FormatConsole
+			default:
+				logFmt = logger.FormatConsole
+			}
+
+			// Build logger options
+			logOpts := logger.Options{
+				Level:      zapLevel,
+				Timestamps: cfg.Logging.Timestamps,
+				Format:     logFmt,
+				FilePath:   resolvedLogFile,
+				AlsoStderr: resolvedLogFile != "" && debugFlag,
 			}
 
 			lgr := logger.GetWithOptions(logOpts)
@@ -179,7 +225,10 @@ func Root() *cobra.Command {
 
 	ioStreams := terminal.NewIOStreams(os.Stdin, os.Stdout, os.Stderr, true)
 
-	cCmd.PersistentFlags().Int8Var(&cliParams.MinLogLevel, "log-level", 0, "Set the minimum log level (-1=Debug, 0=Info, 1=Warn, 2=Error)")
+	cCmd.PersistentFlags().StringVar(&cliParams.MinLogLevel, "log-level", "none", "Set the log level (none, error, warn, info, debug, trace, or a numeric V-level)")
+	cCmd.PersistentFlags().BoolVarP(&debugFlag, "debug", "d", false, "Enable debug logging (shorthand for --log-level debug)")
+	cCmd.PersistentFlags().StringVar(&logFormat, "log-format", "console", "Set the log output format (console, json)")
+	cCmd.PersistentFlags().StringVar(&logFile, "log-file", "", "Write logs to a file instead of stderr")
 	cCmd.PersistentFlags().BoolVarP(&cliParams.IsQuiet, "quiet", "q", false, "Do not print additional information")
 	cCmd.PersistentFlags().BoolVar(&cliParams.NoColor, "no-color", false, "Disable color output")
 	cCmd.PersistentFlags().StringVar(&configPath, "config", "", "Path to config file (default: ~/.scafctl/config.yaml)")

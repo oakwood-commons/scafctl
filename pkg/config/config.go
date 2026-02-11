@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -113,8 +114,8 @@ func (m *Manager) setDefaults() {
 	})
 
 	// Logging defaults
-	m.v.SetDefault("logging.level", 0)
-	m.v.SetDefault("logging.format", LoggingFormatJSON)
+	m.v.SetDefault("logging.level", "none")
+	m.v.SetDefault("logging.format", LoggingFormatConsole)
 	m.v.SetDefault("logging.timestamps", true)
 	m.v.SetDefault("logging.enableProfiling", false)
 
@@ -237,8 +238,11 @@ func (m *Manager) Set(key string, value any) {
 	if m.config != nil {
 		switch key {
 		case "logging.level":
-			if v, ok := value.(int); ok {
+			switch v := value.(type) {
+			case string:
 				m.config.Logging.Level = v
+			case int:
+				m.config.Logging.Level = strconv.Itoa(v)
 			}
 		case "logging.format":
 			if v, ok := value.(string); ok {

@@ -138,7 +138,7 @@ tmpl: "{{ .name }}"`,
 			var vr ValueRef
 			err := yaml.Unmarshal([]byte(tt.yaml), &vr)
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), "expected exactly one of rslvr, expr, or tmpl")
+			assert.Contains(t, err.Error(), "expected exactly one of rslvr, expr, or tmpl, but found")
 		})
 	}
 }

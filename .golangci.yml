@@ -99,6 +99,18 @@ linters:
         linters:
           - revive
         text: "var-naming: avoid package names"
+      - path: pkg/celexp/ext/filepath/filepath\.go
+        linters:
+          - revive
+        text: "var-naming: avoid package names"
+      - path: pkg/celexp/ext/strings/strings\.go
+        linters:
+          - revive
+        text: "var-naming: avoid package names"
+      - path: pkg/cmd/scafctl/build/build\.go
+        linters:
+          - revive
+        text: "var-naming: avoid package names"
 formatters:
   enable:
     - gofumpt
