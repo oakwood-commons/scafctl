@@ -66,6 +66,8 @@ Output:
 }
 ```
 
+> **Tip**: To run resolvers without executing actions (for debugging), use `scafctl run resolver -f hello.yaml`. See the [Run Resolver Tutorial](run-resolver-tutorial.md) for details.
+
 ### Understanding the Structure
 
 - **apiVersion/kind**: Identifies this as a scafctl Solution

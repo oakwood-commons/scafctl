@@ -1128,7 +1128,8 @@ This section tracks which commands from the design are implemented and what work
 | `get providers` | ❌ | List all registered providers (use plural alias) |
 | `get catalog` | ❌ | Show catalog configuration |
 | `get catalogs` | ❌ | List configured catalogs (use plural alias) |
-| `run solution` | ✅ | Executes resolvers AND actions. Use `--skip-actions` for resolvers only. |
+| `run solution` | ✅ | Executes resolvers AND actions. |
+| `run resolver` | ✅ | Executes resolvers only (for debugging and inspection). Supports named resolvers. |
 | `render solution` | ⚠️ | Add `--graph` and `--snapshot` flags |
 | `publish solution` | ❌ | Publish to catalog |
 | `delete solution` | ❌ | Delete solution from catalog |
@@ -1164,14 +1165,14 @@ This section tracks which commands from the design are implemented and what work
 **Changes made**:
 - Removed `pkg/cmd/scafctl/run/workflow.go` (merged into solution.go)
 - Updated `run/solution.go` to execute actions after resolvers complete
-- Added `--skip-actions` flag to run resolvers only (old behavior)
+- Added `run resolver` command for resolver-only execution (debugging/inspection)
 - Added `--dry-run` flag to show what would execute
 - Added `--action-timeout` and `--max-action-concurrency` flags
 - Actions run using the action executor with resolver results in context
 
 ```go
 // After resolver execution succeeds:
-if sol.Spec.HasWorkflow() && !o.SkipActions {
+if sol.Spec.HasWorkflow() {
     actionExecutor := action.NewExecutor(...)
     result, err := actionExecutor.Execute(ctx, sol.Spec.Workflow)
     // ...

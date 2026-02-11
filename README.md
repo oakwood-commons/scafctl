@@ -446,8 +446,12 @@ scafctl is organized into command groups. Run `scafctl <command> --help` for det
 scafctl run solution -f config.yaml
 scafctl run solution -f config.yaml -o json      # JSON output
 scafctl run solution -f config.yaml --dry-run     # Dry run
-scafctl run solution -f config.yaml --skip-actions # Resolvers only
 scafctl run solution -f config.yaml --progress    # Progress output
+
+# Run resolvers only (debugging and inspection)
+scafctl run resolver -f config.yaml
+scafctl run resolver db config -f config.yaml     # Specific resolvers
+scafctl run resolver --verbose -f config.yaml     # Verbose mode
 
 # Render solution to structured output
 scafctl render solution -f config.yaml -o json
