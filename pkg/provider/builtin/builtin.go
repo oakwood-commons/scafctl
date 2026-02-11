@@ -11,6 +11,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/celprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/debugprovider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/directoryprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/envprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/execprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/fileprovider"
@@ -58,6 +59,7 @@ func registerAllToRegistry(ctx context.Context, reg *provider.Registry) error {
 		envprovider.NewEnvProvider(),
 		celprovider.NewCelProvider(),
 		fileprovider.NewFileProvider(),
+		directoryprovider.NewDirectoryProvider(),
 		validationprovider.NewValidationProvider(),
 		execprovider.NewExecProvider(),
 		gitprovider.NewGitProvider(),
@@ -116,6 +118,7 @@ func ProviderNames() []string {
 		"env",
 		"cel",
 		"file",
+		"directory",
 		"validation",
 		"exec",
 		"git",

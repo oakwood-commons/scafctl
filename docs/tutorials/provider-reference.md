@@ -25,6 +25,7 @@ Providers are execution primitives used by resolvers and actions. Each provider 
 |----------|:----:|:---------:|:----------:|:------:|
 | [cel](#cel) | ❌ | ✅ | ❌ | ✅ |
 | [debug](#debug) | ✅ | ✅ | ✅ | ✅ |
+| [directory](#directory) | ✅ | ❌ | ❌ | ✅ |
 | [env](#env) | ✅ | ❌ | ❌ | ❌ |
 | [exec](#exec) | ✅ | ✅ | ❌ | ✅ |
 | [file](#file) | ✅ | ✅ | ❌ | ✅ |
@@ -113,6 +114,124 @@ transform:
       inputs:
         expression: "_.config"
         format: json
+```
+
+---
+
+## directory
+
+Directory operations: listing contents with filtering, creating, removing, and copying directories.
+
+### Capabilities
+
+`from`, `action`
+
+### Inputs
+
+| Field | Type | Required | Description |
+|-------|------|:--------:|-------------|
+| `operation` | string | ✅ | Operation: `list`, `mkdir`, `rmdir`, `copy` |
+| `path` | string | ✅ | Target directory path (absolute or relative) |
+| `recursive` | bool | ❌ | Enable recursive directory traversal (default: `false`) |
+| `maxDepth` | int | ❌ | Maximum recursion depth, 1–50 (default: `10`) |
+| `includeContent` | bool | ❌ | Read and include file contents in output (default: `false`) |
+| `maxFileSize` | int | ❌ | Maximum file size in bytes for content reading (default: `1048576`) |
+| `filterGlob` | string | ❌ | Glob pattern to filter entries (e.g., `*.go`). Mutually exclusive with `filterRegex` |
+| `filterRegex` | string | ❌ | Regex to filter entry names. Mutually exclusive with `filterGlob` |
+| `excludeHidden` | bool | ❌ | Exclude hidden files/directories (names starting with `.`) |
+| `checksum` | string | ❌ | Compute checksum for files: `md5`, `sha256`, `sha512` (requires `includeContent`) |
+| `createDirs` | bool | ❌ | Create parent directories for `mkdir` (like `mkdir -p`) |
+| `destination` | string | ❌ | Destination path for `copy` operation |
+| `force` | bool | ❌ | Force removal of non-empty directories for `rmdir` |
+
+### Output (list)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `entries` | array | List of directory entries |
+| `entries[].path` | string | Relative path from the listed directory |
+| `entries[].absolutePath` | string | Absolute filesystem path |
+| `entries[].name` | string | File or directory name |
+| `entries[].extension` | string | File extension including dot (e.g., `.go`) |
+| `entries[].size` | int | Size in bytes |
+| `entries[].isDir` | bool | Whether entry is a directory |
+| `entries[].type` | string | Entry type: `file` or `dir` |
+| `entries[].mode` | string | File permission mode (e.g., `0644`) |
+| `entries[].modTime` | string | Last modification time (RFC3339) |
+| `entries[].mimeType` | string | MIME type based on extension |
+| `entries[].content` | string | File content (when `includeContent` is true) |
+| `entries[].contentEncoding` | string | `text` or `base64` |
+| `entries[].checksum` | string | File checksum (when `checksum` is specified) |
+| `entries[].checksumAlgorithm` | string | Algorithm used |
+| `totalCount` | int | Total number of entries |
+| `dirCount` | int | Number of directories |
+| `fileCount` | int | Number of files |
+| `totalSize` | int | Total size of all files in bytes |
+| `basePath` | string | Absolute path of the listed directory |
+
+### Output (mkdir, rmdir, copy)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `success` | bool | Whether the operation succeeded |
+| `operation` | string | Operation that was performed |
+| `path` | string | Absolute path of the target directory |
+
+### Examples
+
+```yaml
+# List directory contents
+resolve:
+  with:
+    - provider: directory
+      inputs:
+        operation: list
+        path: ./src
+
+# Recursively find all Go files
+resolve:
+  with:
+    - provider: directory
+      inputs:
+        operation: list
+        path: ./pkg
+        recursive: true
+        filterGlob: "*.go"
+        excludeHidden: true
+
+# List with file contents and checksums
+resolve:
+  with:
+    - provider: directory
+      inputs:
+        operation: list
+        path: ./config
+        recursive: true
+        includeContent: true
+        filterGlob: "*.yaml"
+        checksum: sha256
+        maxFileSize: 524288
+
+# Create nested directory structure
+provider: directory
+inputs:
+  operation: mkdir
+  path: ./output/reports/2026
+  createDirs: true
+
+# Force-remove a directory
+provider: directory
+inputs:
+  operation: rmdir
+  path: ./tmp/build-output
+  force: true
+
+# Copy a directory tree
+provider: directory
+inputs:
+  operation: copy
+  path: ./config
+  destination: ./config-backup
 ```
 
 ---

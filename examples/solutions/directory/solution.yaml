@@ -1,0 +1,138 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: directory-provider-example
+  description: |
+    Demonstrates the directory provider capabilities:
+    - Listing directory contents with filtering
+    - Recursive traversal with glob patterns
+    - Reading file contents with checksums
+    - Creating, removing, and copying directories
+  version: 1.0.0
+
+spec:
+  # ============================================================================
+  # RESOLVERS: Directory listing and scanning
+  # ============================================================================
+  resolvers:
+    # -------------------------------------------------------------------------
+    # Example 1: Simple flat directory listing
+    # -------------------------------------------------------------------------
+    project-files:
+      description: List files in the current directory
+      type: any
+      resolve:
+        with:
+          - provider: directory
+            inputs:
+              operation: list
+              path: .
+
+    # -------------------------------------------------------------------------
+    # Example 2: Recursive listing with glob filter
+    # -------------------------------------------------------------------------
+    go-source-files:
+      description: Find all Go source files recursively
+      type: any
+      resolve:
+        with:
+          - provider: directory
+            inputs:
+              operation: list
+              path: .
+              recursive: true
+              filterGlob: "*.go"
+              excludeHidden: true
+
+    # -------------------------------------------------------------------------
+    # Example 3: Find config files with content and checksums
+    # -------------------------------------------------------------------------
+    config-files:
+      description: Read all YAML config files with integrity checksums
+      type: any
+      resolve:
+        with:
+          - provider: directory
+            inputs:
+              operation: list
+              path: .
+              recursive: true
+              filterGlob: "*.yaml"
+              includeContent: true
+              checksum: sha256
+              maxFileSize: 524288
+
+    # -------------------------------------------------------------------------
+    # Example 4: Filter with regex
+    # -------------------------------------------------------------------------
+    test-files:
+      description: Find all test files using regex
+      type: any
+      resolve:
+        with:
+          - provider: directory
+            inputs:
+              operation: list
+              path: .
+              recursive: true
+              filterRegex: "_test\\.go$"
+              excludeHidden: true
+
+    # -------------------------------------------------------------------------
+    # Example 5: Count files using CEL transform
+    # -------------------------------------------------------------------------
+    file-summary:
+      description: Summarize directory contents
+      type: any
+      dependsOn:
+        - go-source-files
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: |
+                {
+                  "totalFiles": _["go-source-files"].fileCount,
+                  "totalSize": _["go-source-files"].totalSize,
+                  "files": _["go-source-files"].entries.map(e, e.name)
+                }
+
+  # ============================================================================
+  # ACTIONS: Directory mutations
+  # ============================================================================
+  workflow:
+    actions:
+      # -----------------------------------------------------------------------
+      # Create output directory structure
+      # -----------------------------------------------------------------------
+      create-output-dirs:
+        provider: directory
+        inputs:
+          operation: mkdir
+          path: ./output/reports
+          createDirs: true
+
+      # -----------------------------------------------------------------------
+      # Copy config to backup location
+      # -----------------------------------------------------------------------
+      backup-configs:
+        provider: directory
+        dependsOn: [create-output-dirs]
+        inputs:
+          operation: copy
+          path: ./config
+          destination: ./output/config-backup
+
+      # -----------------------------------------------------------------------
+      # Clean up temporary build artifacts
+      # -----------------------------------------------------------------------
+      cleanup-temp:
+        provider: directory
+        dependsOn: [backup-configs]
+        condition:
+          expr: "false"  # Disabled by default — set to true to enable cleanup
+        inputs:
+          operation: rmdir
+          path: ./tmp
+          force: true
