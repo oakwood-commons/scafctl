@@ -38,10 +38,11 @@ func NewRegistryWithLocal(local *LocalCatalog, logger logr.Logger) *Registry {
 // Registry manages multiple catalogs and provides unified access.
 // The local catalog is always first in resolution order.
 type Registry struct {
-	local    *LocalCatalog
-	catalogs []Catalog
-	logger   logr.Logger
-	mu       sync.RWMutex
+	local                *LocalCatalog
+	catalogs             []Catalog
+	logger               logr.Logger
+	mu                   sync.RWMutex
+	cacheRemoteArtifacts bool
 }
 
 // Local returns the built-in local catalog.
@@ -55,6 +56,31 @@ func (r *Registry) AddCatalog(catalog Catalog) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.catalogs = append(r.catalogs, catalog)
+}
+
+// SetCacheRemoteArtifacts enables or disables auto-caching of remote catalog
+// fetches into the local catalog. When enabled, artifacts fetched from remote
+// catalogs are automatically stored locally so subsequent fetches are served
+// from the local catalog without network access.
+func (r *Registry) SetCacheRemoteArtifacts(enabled bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.cacheRemoteArtifacts = enabled
+}
+
+// isRemoteCatalog returns true if the catalog is not the local catalog.
+// Compares by path to handle cases where multiple LocalCatalog instances
+// might share the same name but point to different directories.
+func (r *Registry) isRemoteCatalog(cat Catalog) bool {
+	type pather interface {
+		Path() string
+	}
+	lp, lok := interface{}(r.local).(pather)
+	cp, cok := cat.(pather)
+	if lok && cok {
+		return lp.Path() != cp.Path()
+	}
+	return cat.Name() != r.local.Name()
 }
 
 // Catalogs returns all registered catalogs.
@@ -101,9 +127,12 @@ func (r *Registry) Resolve(ctx context.Context, ref Reference) (ArtifactInfo, er
 }
 
 // Fetch retrieves an artifact from the first catalog that has it.
+// If cacheRemoteArtifacts is enabled, artifacts fetched from remote catalogs
+// are automatically stored in the local catalog for subsequent offline access.
 func (r *Registry) Fetch(ctx context.Context, ref Reference) ([]byte, ArtifactInfo, error) {
 	r.mu.RLock()
 	catalogs := r.catalogs
+	cacheEnabled := r.cacheRemoteArtifacts
 	r.mu.RUnlock()
 
 	var lastErr error
@@ -114,6 +143,12 @@ func (r *Registry) Fetch(ctx context.Context, ref Reference) ([]byte, ArtifactIn
 				"name", ref.Name,
 				"version", info.Reference.Version.String(),
 				"catalog", catalog.Name())
+
+			// Auto-cache remote fetches into local catalog
+			if cacheEnabled && r.isRemoteCatalog(catalog) {
+				r.cacheArtifact(ctx, info.Reference, content, nil)
+			}
+
 			return content, info, nil
 		}
 
@@ -134,9 +169,12 @@ func (r *Registry) Fetch(ctx context.Context, ref Reference) ([]byte, ArtifactIn
 }
 
 // FetchWithBundle retrieves an artifact with its bundle layer from the first catalog that has it.
+// If cacheRemoteArtifacts is enabled, artifacts fetched from remote catalogs
+// are automatically stored in the local catalog for subsequent offline access.
 func (r *Registry) FetchWithBundle(ctx context.Context, ref Reference) ([]byte, []byte, ArtifactInfo, error) {
 	r.mu.RLock()
 	catalogs := r.catalogs
+	cacheEnabled := r.cacheRemoteArtifacts
 	r.mu.RUnlock()
 
 	var lastErr error
@@ -148,6 +186,12 @@ func (r *Registry) FetchWithBundle(ctx context.Context, ref Reference) ([]byte, 
 				"version", info.Reference.Version.String(),
 				"catalog", cat.Name(),
 				"hasBundle", len(bundleData) > 0)
+
+			// Auto-cache remote fetches into local catalog
+			if cacheEnabled && r.isRemoteCatalog(cat) {
+				r.cacheArtifact(ctx, info.Reference, content, bundleData)
+			}
+
 			return content, bundleData, info, nil
 		}
 
@@ -165,6 +209,27 @@ func (r *Registry) FetchWithBundle(ctx context.Context, ref Reference) ([]byte, 
 	}
 
 	return nil, nil, ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: "registry"}
+}
+
+// cacheArtifact stores a remotely-fetched artifact into the local catalog.
+// Errors are logged but do not fail the fetch — caching is best-effort.
+func (r *Registry) cacheArtifact(ctx context.Context, ref Reference, content, bundleData []byte) {
+	annotations := NewAnnotationBuilder().
+		Set(AnnotationSource, "auto-cached").
+		Build()
+
+	// Use force=true to update if a stale version already exists locally
+	_, err := r.local.Store(ctx, ref, content, bundleData, annotations, true)
+	if err != nil {
+		r.logger.V(1).Info("failed to cache remote artifact locally (non-fatal)",
+			"name", ref.Name,
+			"error", err)
+		return
+	}
+
+	r.logger.V(1).Info("cached remote artifact locally",
+		"name", ref.Name,
+		"version", ref.Version.String())
 }
 
 // List returns all artifacts matching the criteria from all catalogs.

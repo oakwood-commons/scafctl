@@ -21,6 +21,7 @@ type Config struct {
 	Resolver   ResolverConfig   `json:"resolver,omitempty" yaml:"resolver,omitempty" mapstructure:"resolver" doc:"Resolver executor configuration"`
 	Action     ActionConfig     `json:"action,omitempty" yaml:"action,omitempty" mapstructure:"action" doc:"Action executor configuration"`
 	Auth       GlobalAuthConfig `json:"auth,omitempty" yaml:"auth,omitempty" mapstructure:"auth" doc:"Authentication handler configuration"`
+	Build      BuildConfig      `json:"build,omitempty" yaml:"build,omitempty" mapstructure:"build" doc:"Build command configuration"`
 }
 
 // CatalogConfig represents a single catalog configuration.
@@ -258,4 +259,35 @@ type EntraAuthConfig struct {
 
 	// DefaultScopes are requested during login if not specified on command line.
 	DefaultScopes []string `json:"defaultScopes,omitempty" yaml:"defaultScopes,omitempty" mapstructure:"defaultScopes" doc:"Default OAuth scopes" maxItems:"20"`
+}
+
+// BuildConfig holds build command configuration.
+type BuildConfig struct {
+	// EnableCache enables build-level caching to skip redundant builds.
+	EnableCache *bool `json:"enableCache,omitempty" yaml:"enableCache,omitempty" mapstructure:"enableCache" doc:"Enable build-level caching"`
+
+	// CacheDir is the directory for storing build cache entries.
+	CacheDir string `json:"cacheDir,omitempty" yaml:"cacheDir,omitempty" mapstructure:"cacheDir" doc:"Build cache directory" maxLength:"4096"`
+
+	// AutoCacheRemoteArtifacts automatically caches remote catalog fetches into the local catalog.
+	AutoCacheRemoteArtifacts *bool `json:"autoCacheRemoteArtifacts,omitempty" yaml:"autoCacheRemoteArtifacts,omitempty" mapstructure:"autoCacheRemoteArtifacts" doc:"Auto-cache remote catalog fetches locally"`
+
+	// PluginCacheDir is the directory for cached plugin binaries.
+	PluginCacheDir string `json:"pluginCacheDir,omitempty" yaml:"pluginCacheDir,omitempty" mapstructure:"pluginCacheDir" doc:"Plugin binary cache directory" maxLength:"4096"`
+}
+
+// IsCacheEnabled returns whether build caching is enabled (defaults to true).
+func (b *BuildConfig) IsCacheEnabled() bool {
+	if b.EnableCache == nil {
+		return true
+	}
+	return *b.EnableCache
+}
+
+// IsAutoCacheRemoteArtifacts returns whether remote artifacts are auto-cached (defaults to true).
+func (b *BuildConfig) IsAutoCacheRemoteArtifacts() bool {
+	if b.AutoCacheRemoteArtifacts == nil {
+		return true
+	}
+	return *b.AutoCacheRemoteArtifacts
 }

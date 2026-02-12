@@ -97,6 +97,24 @@ const (
 	DefaultCircuitBreakerHalfOpenRequests = 1
 )
 
+// DefaultBuildCacheDir returns the default directory for build cache.
+// Uses XDG Base Directory Specification:
+//   - Linux: ~/.cache/scafctl/build-cache/
+//   - macOS: ~/.cache/scafctl/build-cache/
+//   - Windows: %LOCALAPPDATA%\cache\scafctl\build-cache\
+func DefaultBuildCacheDir() string {
+	return filepath.Join(xdg.CacheHome, "scafctl", "build-cache")
+}
+
+// DefaultPluginCacheDir returns the default directory for cached plugin binaries.
+// Uses XDG Base Directory Specification:
+//   - Linux: ~/.cache/scafctl/plugins/
+//   - macOS: ~/.cache/scafctl/plugins/
+//   - Windows: %LOCALAPPDATA%\cache\scafctl\plugins\
+func DefaultPluginCacheDir() string {
+	return filepath.Join(xdg.CacheHome, "scafctl", "plugins")
+}
+
 var (
 	RootSolutionFolders = []string{
 		CliBinaryName,

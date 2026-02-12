@@ -5,10 +5,12 @@ package build
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/Masterminds/semver/v3"
@@ -31,12 +33,17 @@ type SolutionOptions struct {
 	Force           bool
 	NoBundle        bool
 	NoVendor        bool
+	NoCache         bool
 	BundleMaxSize   string
 	DryRun          bool
 	Dedupe          bool
 	DedupeThreshold string
 	CliParams       *settings.Run
 	IOStreams       *terminal.IOStreams
+
+	// resolvedPlugins holds plugin lock entries from VendorPlugins,
+	// to be merged into the lock file during Step 4.
+	resolvedPlugins []bundler.LockPlugin
 }
 
 // bundleResult holds the output of the bundle pipeline.
@@ -46,6 +53,17 @@ type bundleResult struct {
 	tarData []byte
 	// dedup is the content-addressable dedup result (v2).
 	dedup *bundler.DedupeResult
+	// cacheHit indicates the build was served from the build cache.
+	// When true, the artifact already exists in the catalog and no store is needed.
+	cacheHit bool
+	// cacheEntry contains the cache metadata when cacheHit is true.
+	cacheEntry *bundler.BuildCacheEntry
+	// buildFingerprint is the computed fingerprint for cache write after a successful build.
+	buildFingerprint string
+	// buildCacheDir is the directory where build cache entries are stored.
+	buildCacheDir string
+	// inputFileCount is the number of input files that contributed to the fingerprint.
+	inputFileCount int
 }
 
 // CommandBuildSolution creates the build solution command.
@@ -113,6 +131,7 @@ func CommandBuildSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams
 	cmd.Flags().BoolVar(&options.DryRun, "dry-run", false, "Show what would be bundled without storing")
 	cmd.Flags().BoolVar(&options.Dedupe, "dedupe", true, "Enable content-addressable deduplication")
 	cmd.Flags().StringVar(&options.DedupeThreshold, "dedupe-threshold", "4KB", "Minimum file size for individual layer extraction (smaller files are tarred together)")
+	cmd.Flags().BoolVar(&options.NoCache, "no-cache", false, "Skip build cache and force a full rebuild")
 
 	return cmd
 }
@@ -192,10 +211,18 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 	var br *bundleResult
 
 	if !opts.NoBundle {
-		br, err = buildBundle(ctx, &sol, bundleRoot, opts, w)
+		br, err = buildBundle(ctx, &sol, content, bundleRoot, opts, w)
 		if err != nil {
 			return err
 		}
+	}
+
+	// Handle build cache hit — artifact already exists in catalog
+	if br != nil && br.cacheHit {
+		w.Successf("Build cache hit: %s@%s (unchanged)", br.cacheEntry.ArtifactName, br.cacheEntry.ArtifactVersion)
+		w.Infof("  Digest: %s", br.cacheEntry.ArtifactDigest)
+		w.Infof("  Use --no-cache to force a full rebuild")
+		return nil
 	}
 
 	// Dry-run: show what would be built but don't store
@@ -264,6 +291,23 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 		"version", info.Reference.Version.String(),
 		"digest", info.Digest)
 
+	// Write build cache entry after successful store
+	if br != nil && br.buildFingerprint != "" && br.buildCacheDir != "" {
+		cacheEntry := &bundler.BuildCacheEntry{
+			Fingerprint:     br.buildFingerprint,
+			ArtifactName:    info.Reference.Name,
+			ArtifactVersion: info.Reference.Version.String(),
+			ArtifactDigest:  info.Digest,
+			CreatedAt:       time.Now(),
+			InputFiles:      br.inputFileCount,
+		}
+		if cacheErr := bundler.WriteBuildCache(br.buildCacheDir, br.buildFingerprint, cacheEntry); cacheErr != nil {
+			lgr.V(1).Info("failed to write build cache (non-fatal)", "error", cacheErr)
+		} else {
+			lgr.V(1).Info("wrote build cache entry", "fingerprint", br.buildFingerprint)
+		}
+	}
+
 	w.Successf("Built %s@%s", info.Reference.Name, info.Reference.Version.String())
 	w.Infof("  Digest: %s", info.Digest)
 	w.Infof("  Catalog: %s", localCatalog.Path())
@@ -272,7 +316,7 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 }
 
 // buildBundle runs the compose → discover → vendor → tar/dedup pipeline.
-func buildBundle(ctx context.Context, sol *solution.Solution, bundleRoot string, opts *SolutionOptions, w *writer.Writer) (*bundleResult, error) {
+func buildBundle(ctx context.Context, sol *solution.Solution, solutionContent []byte, bundleRoot string, opts *SolutionOptions, w *writer.Writer) (*bundleResult, error) {
 	lgr := logger.FromContext(ctx)
 
 	// Parse max bundle size
@@ -324,21 +368,67 @@ func buildBundle(ctx context.Context, sol *solution.Solution, bundleRoot string,
 		bundler.MergePluginDefaults(sol)
 	}
 
+	// Step 3.6: Vendor plugin dependencies (resolve versions and pin in lock file)
+	lockPath := filepath.Join(bundleRoot, "solution.lock")
+
+	// Create catalog registry for dependency and plugin resolution.
+	// This is used by both plugin vendoring (Step 3.6) and catalog dependency vendoring (Step 4).
+	localCat, catErr := catalog.NewLocalCatalog(*lgr)
+	if catErr != nil {
+		w.Errorf("failed to open catalog: %v", catErr)
+		return nil, exitcode.WithCode(catErr, exitcode.CatalogError)
+	}
+	registry := catalog.NewRegistryWithLocal(localCat, *lgr)
+	registry.SetCacheRemoteArtifacts(true)
+
+	if !opts.NoVendor && len(sol.Bundle.Plugins) > 0 {
+		lgr.V(1).Info("vendoring plugin dependencies", "count", len(sol.Bundle.Plugins))
+
+		// Load existing lock for plugin replay
+		existingLock, _ := bundler.LoadLockFile(lockPath)
+
+		// Create a plugin resolver from the catalog registry
+		pluginResolver := &catalogPluginResolver{catalog: localCat}
+
+		pluginResult, pluginErr := bundler.VendorPlugins(ctx, sol.Bundle.Plugins, existingLock, bundler.VendorPluginsOptions{
+			PluginResolver: pluginResolver,
+		})
+		if pluginErr != nil {
+			// Plugin resolution failure is a warning, not a hard error —
+			// plugins may not be in the catalog yet (e.g., loaded from disk at runtime)
+			lgr.V(1).Info("plugin vendoring skipped (non-fatal)", "error", pluginErr)
+		} else if len(pluginResult.ResolvedPlugins) > 0 {
+			// Store plugin entries for the lock file — they'll be written
+			// together with dependency entries in Step 4
+			opts.resolvedPlugins = pluginResult.ResolvedPlugins
+			w.Infof("  Pinned %d plugin(s) in lock file", len(pluginResult.ResolvedPlugins))
+		}
+	}
+
 	// Step 4: Vendor catalog dependencies
 	if !opts.NoVendor && len(discovery.CatalogRefs) > 0 {
 		lgr.V(1).Info("vendoring catalog dependencies", "count", len(discovery.CatalogRefs))
 
-		lockPath := filepath.Join(bundleRoot, "solution.lock")
 		vendorDir := filepath.Join(bundleRoot, ".scafctl", "vendor")
 
 		vendorResult, err := bundler.VendorDependencies(ctx, sol, discovery.CatalogRefs, bundler.VendorOptions{
-			BundleRoot: bundleRoot,
-			VendorDir:  vendorDir,
-			LockPath:   lockPath,
+			BundleRoot:     bundleRoot,
+			VendorDir:      vendorDir,
+			LockPath:       lockPath,
+			CatalogFetcher: &registryFetcherAdapter{registry: registry},
 		})
 		if err != nil {
 			w.Errorf("failed to vendor catalog dependencies: %v", err)
 			return nil, exitcode.WithCode(err, exitcode.CatalogError)
+		}
+
+		// Append resolved plugins to the lock file
+		if vendorResult.Lock != nil && len(opts.resolvedPlugins) > 0 {
+			vendorResult.Lock.Plugins = append(vendorResult.Lock.Plugins, opts.resolvedPlugins...)
+			// Re-write the lock file with plugin entries included
+			if err := bundler.WriteLockFile(lockPath, vendorResult.Lock); err != nil {
+				lgr.V(1).Info("failed to update lock file with plugins (non-fatal)", "error", err)
+			}
 		}
 
 		// Add vendored files to the discovery result
@@ -350,6 +440,55 @@ func buildBundle(ctx context.Context, sol *solution.Solution, bundleRoot string,
 		}
 
 		w.Infof("  Vendored %d catalog dependency(ies)", len(vendorResult.VendoredFiles))
+	} else if len(opts.resolvedPlugins) > 0 {
+		// No catalog deps, but we have resolved plugins — write a plugin-only lock file
+		pluginLock := &bundler.LockFile{
+			Version: bundler.LockFileVersion,
+			Plugins: opts.resolvedPlugins,
+		}
+		if err := bundler.WriteLockFile(lockPath, pluginLock); err != nil {
+			lgr.V(1).Info("failed to write plugin lock file (non-fatal)", "error", err)
+		}
+	}
+
+	// Step 4.5: Build cache check
+	// Compute fingerprint from all build inputs and check if we have a cached result.
+	var buildCacheDir string
+	var buildFingerprint string
+	if !opts.NoCache && !opts.DryRun {
+		buildCacheDir = settings.DefaultBuildCacheDir()
+
+		// Collect plugin entries for fingerprinting
+		var fpPlugins []bundler.BundlePluginEntry
+		for _, p := range sol.Bundle.Plugins {
+			fpPlugins = append(fpPlugins, bundler.BundlePluginEntry{
+				Name:    p.Name,
+				Kind:    string(p.Kind),
+				Version: p.Version,
+			})
+		}
+
+		// Compute lock file digest for fingerprinting
+		lockDigest := ""
+		if lockData, lockErr := os.ReadFile(lockPath); lockErr == nil {
+			lockDigest = fmt.Sprintf("sha256:%x", sha256.Sum256(lockData))
+		}
+
+		fp, fpErr := bundler.ComputeBuildFingerprint(solutionContent, bundleRoot, discovery.LocalFiles, fpPlugins, lockDigest)
+		if fpErr != nil {
+			lgr.V(1).Info("failed to compute build fingerprint (non-fatal)", "error", fpErr)
+		} else {
+			buildFingerprint = fp
+			cacheEntry, hit := bundler.CheckBuildCache(buildCacheDir, fp)
+			if hit {
+				lgr.V(1).Info("build cache hit",
+					"fingerprint", fp,
+					"artifact", cacheEntry.ArtifactName,
+					"version", cacheEntry.ArtifactVersion)
+				return &bundleResult{cacheHit: true, cacheEntry: cacheEntry}, nil
+			}
+			lgr.V(1).Info("build cache miss", "fingerprint", fp)
+		}
 	}
 
 	// Step 5: Dry-run output
@@ -358,9 +497,12 @@ func buildBundle(ctx context.Context, sol *solution.Solution, bundleRoot string,
 		return nil, nil
 	}
 
-	// Step 6: No files to bundle — skip tar creation
+	// Step 6: No files to bundle — return fingerprint info for cache but no tar data
 	if len(discovery.LocalFiles) == 0 {
 		lgr.V(1).Info("no files to bundle")
+		if buildFingerprint != "" {
+			return &bundleResult{buildFingerprint: buildFingerprint, buildCacheDir: buildCacheDir, inputFileCount: 0}, nil
+		}
 		return nil, nil
 	}
 
@@ -395,7 +537,7 @@ func buildBundle(ctx context.Context, sol *solution.Solution, bundleRoot string,
 			formatByteSize(dedupeResult.TotalSize),
 			len(dedupeResult.LargeBlobs)+1) // +1 for small files tar if present
 
-		return &bundleResult{dedup: dedupeResult}, nil
+		return &bundleResult{dedup: dedupeResult, buildFingerprint: buildFingerprint, buildCacheDir: buildCacheDir, inputFileCount: len(discovery.LocalFiles)}, nil
 	}
 
 	// Non-dedup path: create v1 tar
@@ -408,7 +550,7 @@ func buildBundle(ctx context.Context, sol *solution.Solution, bundleRoot string,
 
 	w.Infof("  Bundled %d file(s) (%s)", len(manifest.Files), formatByteSize(int64(len(tarData))))
 
-	return &bundleResult{tarData: tarData}, nil
+	return &bundleResult{tarData: tarData, buildFingerprint: buildFingerprint, buildCacheDir: buildCacheDir, inputFileCount: len(discovery.LocalFiles)}, nil
 }
 
 // parseByteSize parses a human-readable byte size string (e.g., "50MB", "100KB").
@@ -557,4 +699,44 @@ func printDryRunOutput(w *writer.Writer, discovery *bundler.DiscoveryResult, sol
 		w.Plainf("       + %d plugin(s)", pluginCount)
 	}
 	w.Plainf("")
+}
+
+// catalogPluginResolver adapts a catalog.Catalog to the bundler.PluginResolver interface.
+type catalogPluginResolver struct {
+	catalog catalog.Catalog
+}
+
+// ResolvePlugin resolves a plugin artifact from the catalog by name and kind.
+func (r *catalogPluginResolver) ResolvePlugin(ctx context.Context, name string, kind catalog.ArtifactKind, _ string) (catalog.ArtifactInfo, error) {
+	ref := catalog.Reference{
+		Kind: kind,
+		Name: name,
+	}
+	return r.catalog.Resolve(ctx, ref)
+}
+
+// registryFetcherAdapter adapts a catalog.Registry to the bundler.CatalogFetcher interface.
+// It supports both exact version fetches and listing all versions for constraint resolution.
+type registryFetcherAdapter struct {
+	registry *catalog.Registry
+}
+
+// FetchSolution retrieves a solution by name[@version] from the registry.
+func (a *registryFetcherAdapter) FetchSolution(ctx context.Context, nameWithVersion string) ([]byte, catalog.ArtifactInfo, error) {
+	ref, err := catalog.ParseReference(catalog.ArtifactKindSolution, nameWithVersion)
+	if err != nil {
+		return nil, catalog.ArtifactInfo{}, fmt.Errorf("invalid reference %q: %w", nameWithVersion, err)
+	}
+
+	content, info, err := a.registry.Fetch(ctx, ref)
+	if err != nil {
+		return nil, catalog.ArtifactInfo{}, err
+	}
+
+	return content, info, nil
+}
+
+// ListSolutions returns all available versions of a named solution artifact.
+func (a *registryFetcherAdapter) ListSolutions(ctx context.Context, name string) ([]catalog.ArtifactInfo, error) {
+	return a.registry.List(ctx, catalog.ArtifactKindSolution, name)
 }

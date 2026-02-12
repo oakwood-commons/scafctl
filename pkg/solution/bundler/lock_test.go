@@ -179,3 +179,97 @@ func TestWriteLockFile_SetsVersion(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, LockFileVersion, loaded.Version)
 }
+
+func TestRefName(t *testing.T) {
+	tests := []struct {
+		ref, expected string
+	}{
+		{"deploy-to-k8s@2.0.0", "deploy-to-k8s"},
+		{"deploy-to-k8s@^1.5.0", "deploy-to-k8s"},
+		{"deploy-to-k8s", "deploy-to-k8s"},
+		{"a@@2.0.0", "a@"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.ref, func(t *testing.T) {
+			assert.Equal(t, tt.expected, refName(tt.ref))
+		})
+	}
+}
+
+func TestFindDependency_NameFallback(t *testing.T) {
+	lf := &LockFile{
+		Version: 1,
+		Dependencies: []LockDependency{
+			{Ref: "deploy-to-k8s@^1.5.0", ResolvedVersion: "1.5.2", Constraint: "^1.5.0", Digest: "sha256:abc"},
+		},
+	}
+
+	// Exact match
+	dep := lf.FindDependency("deploy-to-k8s@^1.5.0")
+	require.NotNil(t, dep)
+	assert.Equal(t, "1.5.2", dep.ResolvedVersion)
+
+	// Name-based fallback: different constraint string, same artifact name
+	dep = lf.FindDependency("deploy-to-k8s@^1.6.0")
+	require.NotNil(t, dep)
+	assert.Equal(t, "1.5.2", dep.ResolvedVersion)
+
+	// Name-based fallback: exact version ref
+	dep = lf.FindDependency("deploy-to-k8s@2.0.0")
+	require.NotNil(t, dep)
+	assert.Equal(t, "1.5.2", dep.ResolvedVersion)
+}
+
+func TestFindDependencyByName(t *testing.T) {
+	lf := &LockFile{
+		Version: 1,
+		Dependencies: []LockDependency{
+			{Ref: "deploy-to-k8s@^1.5.0", ResolvedVersion: "1.5.2", Digest: "sha256:abc"},
+			{Ref: "setup-env@1.0.0", Digest: "sha256:def"},
+		},
+	}
+
+	dep := lf.FindDependencyByName("deploy-to-k8s")
+	require.NotNil(t, dep)
+	assert.Equal(t, "1.5.2", dep.ResolvedVersion)
+
+	dep = lf.FindDependencyByName("setup-env")
+	require.NotNil(t, dep)
+	assert.Equal(t, "sha256:def", dep.Digest)
+
+	dep = lf.FindDependencyByName("nonexistent")
+	assert.Nil(t, dep)
+
+	var nilLf *LockFile
+	dep = nilLf.FindDependencyByName("anything")
+	assert.Nil(t, dep)
+}
+
+func TestWriteAndLoadLockFile_WithConstraintFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "solution.lock")
+
+	original := &LockFile{
+		Version: 1,
+		Dependencies: []LockDependency{
+			{
+				Ref:             "deploy-to-k8s@^1.5.0",
+				ResolvedVersion: "1.5.2",
+				Constraint:      "^1.5.0",
+				Digest:          "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+				ResolvedFrom:    "company-catalog",
+				VendoredAt:      ".scafctl/vendor/deploy-to-k8s@1.5.2.yaml",
+			},
+		},
+	}
+
+	err := WriteLockFile(path, original)
+	require.NoError(t, err)
+
+	loaded, err := LoadLockFile(path)
+	require.NoError(t, err)
+	require.Len(t, loaded.Dependencies, 1)
+	assert.Equal(t, "deploy-to-k8s@^1.5.0", loaded.Dependencies[0].Ref)
+	assert.Equal(t, "1.5.2", loaded.Dependencies[0].ResolvedVersion)
+	assert.Equal(t, "^1.5.0", loaded.Dependencies[0].Constraint)
+}
