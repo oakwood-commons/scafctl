@@ -23,7 +23,7 @@ The cache uses XDG Base Directory paths:
 
 | Platform | Default Location |
 |----------|------------------|
-| macOS | `~/Library/Caches/scafctl/` |
+| macOS | `~/.cache/scafctl/` |
 | Linux | `~/.cache/scafctl/` |
 | Windows | `%LOCALAPPDATA%\cache\scafctl\` |
 
@@ -50,7 +50,7 @@ Cache Information
 Platform: darwin/arm64
 
 HTTP Cache:  2.4 MB (156 files)
-             ~/Library/Caches/scafctl/http-cache
+             ~/.cache/scafctl/http-cache
 
 Total: 2.4 MB (156 files)
 ```
@@ -69,7 +69,7 @@ Output:
   "caches": [
     {
       "name": "HTTP Cache",
-      "path": "/Users/me/Library/Caches/scafctl/http-cache",
+      "path": "/Users/me/.cache/scafctl/http-cache",
       "size": 2516582,
       "sizeHuman": "2.4 MB",
       "fileCount": 156,

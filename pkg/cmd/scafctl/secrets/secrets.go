@@ -24,7 +24,7 @@ func CommandSecrets(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 
 			Secrets are encrypted with AES-256-GCM and stored in XDG-compliant locations:
 			  - Linux:   ~/.local/share/scafctl/secrets/
-			  - macOS:   ~/Library/Application Support/scafctl/secrets/
+			  - macOS:   ~/.local/share/scafctl/secrets/
 			  - Windows: %LOCALAPPDATA%\scafctl\secrets\
 
 			The master encryption key is stored in your OS keychain for security.

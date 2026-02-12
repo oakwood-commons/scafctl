@@ -29,7 +29,7 @@ type Option func(*config)
 // WithSecretsDir overrides the default secrets directory.
 // If empty, the XDG-compliant default will be used:
 //   - Linux: ~/.local/share/scafctl/secrets/ (XDG_DATA_HOME)
-//   - macOS: ~/Library/Application Support/scafctl/secrets/
+//   - macOS: ~/.local/share/scafctl/secrets/
 //   - Windows: %LOCALAPPDATA%\scafctl\secrets\
 //
 // This can also be overridden by the SCAFCTL_SECRETS_DIR environment variable.

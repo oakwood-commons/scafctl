@@ -33,7 +33,7 @@ const (
 //
 // Platform defaults:
 //   - Linux: ~/.config/scafctl/config.yaml
-//   - macOS: ~/Library/Application Support/scafctl/config.yaml
+//   - macOS: ~/.config/scafctl/config.yaml
 //   - Windows: %LOCALAPPDATA%\scafctl\config.yaml
 func ConfigFile() (string, error) {
 	return xdg.ConfigFile(filepath.Join(AppName, ConfigFileName))
@@ -63,7 +63,7 @@ func ConfigDir() string {
 //
 // Platform defaults:
 //   - Linux: ~/.local/share/scafctl/secrets/
-//   - macOS: ~/Library/Application Support/scafctl/secrets/
+//   - macOS: ~/.local/share/scafctl/secrets/
 //   - Windows: %LOCALAPPDATA%\scafctl\secrets\
 //
 // Note: Secrets are stored in DATA_HOME (not CONFIG_HOME) because they are
@@ -106,7 +106,7 @@ func CacheDir() string {
 //
 // Platform defaults:
 //   - Linux: ~/.cache/scafctl/http-cache/
-//   - macOS: ~/Library/Caches/scafctl/http-cache/
+//   - macOS: ~/.cache/scafctl/http-cache/
 //   - Windows: %LOCALAPPDATA%\cache\scafctl\http-cache\
 func HTTPCacheDir() string {
 	return filepath.Join(xdg.CacheHome, AppName, HTTPCacheDirName)
@@ -118,7 +118,7 @@ func HTTPCacheDir() string {
 //
 // Platform defaults:
 //   - Linux: ~/.local/share/scafctl/catalog/
-//   - macOS: ~/Library/Application Support/scafctl/catalog/
+//   - macOS: ~/.local/share/scafctl/catalog/
 //   - Windows: %LOCALAPPDATA%\scafctl\catalog\
 func CatalogDir() string {
 	return filepath.Join(xdg.DataHome, AppName, CatalogDirName)
@@ -131,7 +131,7 @@ func CatalogDir() string {
 //
 // Platform defaults:
 //   - Linux: ~/.local/state/scafctl/
-//   - macOS: ~/Library/Application Support/scafctl/
+//   - macOS: ~/.local/state/scafctl/
 //   - Windows: %LOCALAPPDATA%\scafctl\
 func StateDir() string {
 	return filepath.Join(xdg.StateHome, AppName)

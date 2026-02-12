@@ -261,10 +261,10 @@ func getIllustrativePaths(platform string) []PathInfo {
 		cacheHome = "~/.cache"
 		stateHome = "~/.local/state"
 	case "darwin":
-		configHome = "~/Library/Application Support"
-		dataHome = "~/Library/Application Support"
-		cacheHome = "~/Library/Caches"
-		stateHome = "~/Library/Application Support"
+		configHome = "~/.config"
+		dataHome = "~/.local/share"
+		cacheHome = "~/.cache"
+		stateHome = "~/.local/state"
 	case "windows":
 		configHome = "%LOCALAPPDATA%"
 		dataHome = "%LOCALAPPDATA%"

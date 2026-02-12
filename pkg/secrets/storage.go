@@ -35,7 +35,7 @@ const (
 //  1. SCAFCTL_SECRETS_DIR environment variable (if set)
 //  2. XDG-compliant path via paths.SecretsDir():
 //     - Linux: ~/.local/share/scafctl/secrets/
-//     - macOS: ~/Library/Application Support/scafctl/secrets/
+//     - macOS: ~/.local/share/scafctl/secrets/
 //     - Windows: %LOCALAPPDATA%\scafctl\secrets\
 func getSecretsDir() (string, error) {
 	// Check environment variable override first
