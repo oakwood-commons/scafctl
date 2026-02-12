@@ -4,6 +4,7 @@
 package resolver
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"strings"
@@ -360,12 +361,20 @@ type GraphEdge struct {
 	Label string `json:"label" yaml:"label" doc:"Edge label"`
 }
 
+// GraphDiagrams contains pre-rendered diagram representations of the dependency graph.
+type GraphDiagrams struct {
+	ASCII   string `json:"ascii" yaml:"ascii" doc:"ASCII art representation of the graph"`
+	DOT     string `json:"dot" yaml:"dot" doc:"Graphviz DOT format representation"`
+	Mermaid string `json:"mermaid" yaml:"mermaid" doc:"Mermaid.js diagram representation"`
+}
+
 // Graph represents the complete resolver dependency graph
 type Graph struct {
-	Nodes  []*GraphNode `json:"nodes" yaml:"nodes" doc:"Graph nodes"`
-	Edges  []*GraphEdge `json:"edges" yaml:"edges" doc:"Graph edges"`
-	Phases []*PhaseInfo `json:"phases" yaml:"phases" doc:"Phase information"`
-	Stats  *GraphStats  `json:"stats" yaml:"stats" doc:"Graph statistics"`
+	Nodes    []*GraphNode   `json:"nodes" yaml:"nodes" doc:"Graph nodes"`
+	Edges    []*GraphEdge   `json:"edges" yaml:"edges" doc:"Graph edges"`
+	Phases   []*PhaseInfo   `json:"phases" yaml:"phases" doc:"Phase information"`
+	Stats    *GraphStats    `json:"stats" yaml:"stats" doc:"Graph statistics"`
+	Diagrams *GraphDiagrams `json:"diagrams" yaml:"diagrams" doc:"Pre-rendered diagram representations"`
 }
 
 // PhaseInfo contains information about a phase
@@ -377,10 +386,12 @@ type PhaseInfo struct {
 
 // GraphStats contains graph statistics
 type GraphStats struct {
-	TotalResolvers  int     `json:"totalResolvers" yaml:"totalResolvers" doc:"Total number of resolvers"`
-	TotalPhases     int     `json:"totalPhases" yaml:"totalPhases" doc:"Total number of execution phases"`
-	MaxParallelism  int     `json:"maxParallelism" yaml:"maxParallelism" doc:"Maximum parallelism across all phases"`
-	AvgDependencies float64 `json:"avgDependencies" yaml:"avgDependencies" doc:"Average number of dependencies per resolver"`
+	TotalResolvers  int      `json:"totalResolvers" yaml:"totalResolvers" doc:"Total number of resolvers"`
+	TotalPhases     int      `json:"totalPhases" yaml:"totalPhases" doc:"Total number of execution phases"`
+	MaxParallelism  int      `json:"maxParallelism" yaml:"maxParallelism" doc:"Maximum parallelism across all phases"`
+	AvgDependencies float64  `json:"avgDependencies" yaml:"avgDependencies" doc:"Average number of dependencies per resolver"`
+	CriticalPath    []string `json:"criticalPath" yaml:"criticalPath" doc:"Longest dependency chain in the graph"`
+	CriticalDepth   int      `json:"criticalDepth" yaml:"criticalDepth" doc:"Length of the critical path"`
 }
 
 // BuildGraph creates a Graph from resolvers.
@@ -447,7 +458,7 @@ func BuildGraph(resolvers []*Resolver, lookup DescriptorLookup) (*Graph, error) 
 	return graph, nil
 }
 
-// calculateGraphStats computes graph statistics
+// calculateGraphStats computes graph statistics including the critical path
 func calculateGraphStats(graph *Graph) *GraphStats {
 	totalDeps := 0
 	maxParallelism := 0
@@ -467,12 +478,92 @@ func calculateGraphStats(graph *Graph) *GraphStats {
 		avgDeps = float64(totalDeps) / float64(len(graph.Nodes))
 	}
 
+	criticalPath := computeCriticalPath(graph)
+
 	return &GraphStats{
 		TotalResolvers:  len(graph.Nodes),
 		TotalPhases:     len(graph.Phases),
 		MaxParallelism:  maxParallelism,
 		AvgDependencies: avgDeps,
+		CriticalPath:    criticalPath,
+		CriticalDepth:   len(criticalPath),
 	}
+}
+
+// computeCriticalPath finds the longest dependency chain in the graph.
+// It uses dynamic programming on the DAG to find the path with the most nodes.
+func computeCriticalPath(graph *Graph) []string {
+	if len(graph.Nodes) == 0 {
+		return nil
+	}
+
+	// Build adjacency list (node -> dependents that depend on it)
+	dependents := make(map[string][]string)
+	for _, edge := range graph.Edges {
+		// edge.From depends on edge.To, so edge.To feeds into edge.From
+		dependents[edge.To] = append(dependents[edge.To], edge.From)
+	}
+
+	// Build dependency set per node for quick lookup
+	depCount := make(map[string]int)
+	for _, node := range graph.Nodes {
+		depCount[node.Name] = len(node.Dependencies)
+	}
+
+	// DP: longest path ending at each node
+	longest := make(map[string]int)
+	parent := make(map[string]string)
+	var bestNode string
+	bestLen := 0
+
+	// Process nodes in phase order (phase 1 first = roots)
+	for _, phase := range graph.Phases {
+		for _, name := range phase.Resolvers {
+			node := graph.findNode(name)
+			if node == nil {
+				continue
+			}
+
+			myLen := 1
+			myParent := ""
+
+			// Check all dependencies (predecessors in the chain)
+			// Tie-break alphabetically for deterministic output when paths are equal length
+			for _, dep := range node.Dependencies {
+				if l, ok := longest[dep.Resolver]; ok && (l+1 > myLen || (l+1 == myLen && dep.Resolver < myParent)) {
+					myLen = l + 1
+					myParent = dep.Resolver
+				}
+			}
+
+			longest[name] = myLen
+			if myParent != "" {
+				parent[name] = myParent
+			}
+
+			if myLen > bestLen {
+				bestLen = myLen
+				bestNode = name
+			}
+		}
+	}
+
+	if bestLen == 0 {
+		return nil
+	}
+
+	// Reconstruct path from best node back to root
+	path := make([]string, 0, bestLen)
+	for node := bestNode; node != ""; node = parent[node] {
+		path = append(path, node)
+	}
+
+	// Reverse to get root -> leaf order
+	for i, j := 0, len(path)-1; i < j; i, j = i+1, j-1 {
+		path[i], path[j] = path[j], path[i]
+	}
+
+	return path
 }
 
 // findNode finds a node by name
@@ -617,6 +708,34 @@ func (g *Graph) RenderASCII(w io.Writer) error {
 	fmt.Fprintf(w, "  Total Phases: %d\n", g.Stats.TotalPhases)
 	fmt.Fprintf(w, "  Max Parallelism: %d\n", g.Stats.MaxParallelism)
 	fmt.Fprintf(w, "  Avg Dependencies: %.2f\n", g.Stats.AvgDependencies)
+
+	return nil
+}
+
+// RenderDiagrams pre-renders all diagram representations and stores them in
+// the Diagrams field. This allows diagram strings to appear in JSON/YAML
+// output without requiring an io.Writer at consumption time.
+func (g *Graph) RenderDiagrams() error {
+	g.Diagrams = &GraphDiagrams{}
+
+	var buf bytes.Buffer
+
+	if err := g.RenderASCII(&buf); err != nil {
+		return fmt.Errorf("rendering ASCII diagram: %w", err)
+	}
+	g.Diagrams.ASCII = buf.String()
+
+	buf.Reset()
+	if err := g.RenderDOT(&buf); err != nil {
+		return fmt.Errorf("rendering DOT diagram: %w", err)
+	}
+	g.Diagrams.DOT = buf.String()
+
+	buf.Reset()
+	if err := g.RenderMermaid(&buf); err != nil {
+		return fmt.Errorf("rendering Mermaid diagram: %w", err)
+	}
+	g.Diagrams.Mermaid = buf.String()
 
 	return nil
 }

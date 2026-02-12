@@ -35,6 +35,9 @@ type SolutionOptions struct {
 	ActionTimeout        time.Duration
 	MaxActionConcurrency int
 	DryRun               bool
+
+	// ShowExecution enables __execution metadata in output
+	ShowExecution bool
 }
 
 // CommandSolution creates the 'run solution' subcommand
@@ -140,7 +143,10 @@ Examples:
   scafctl run solution --max-action-concurrency=2
 
   # Show progress during execution
-  scafctl run solution --progress`,
+  scafctl run solution --progress
+
+  # Include resolver execution metadata in output
+  scafctl run solution --show-execution -f ./my-solution.yaml -o json`,
 		Args: cobra.MaximumNArgs(1),
 		PreRun: func(cCmd *cobra.Command, args []string) {
 			// Track which flags were explicitly set by the user
@@ -165,6 +171,7 @@ Examples:
 	cCmd.Flags().DurationVar(&options.ActionTimeout, "action-timeout", settings.DefaultActionTimeout, "Default timeout per action")
 	cCmd.Flags().IntVar(&options.MaxActionConcurrency, "max-action-concurrency", 0, "Maximum concurrent actions (0=unlimited)")
 	cCmd.Flags().BoolVar(&options.DryRun, "dry-run", false, "Validate and show what would be executed without running")
+	cCmd.Flags().BoolVar(&options.ShowExecution, "show-execution", false, "Include __execution metadata in output (phases, timing, dependencies, providers)")
 
 	return cCmd
 }
@@ -246,16 +253,25 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 
 	// Execute resolvers if present
 	resolvers := sol.Spec.ResolversToSlice()
-	resolverData, _, err := o.executeResolvers(ctx, sol, resolvers, params, reg)
+
+	// Track timing for execution metadata
+	start := time.Now()
+
+	resolverData, resolverCtx, err := o.executeResolvers(ctx, sol, resolvers, params, reg)
 	if err != nil {
 		return o.exitWithCode(ctx, err, exitcode.GeneralError)
 	}
+
+	resolverElapsed := time.Since(start)
 
 	// If no workflow, output resolver results
 	if !sol.Spec.HasWorkflow() {
 		results := o.buildResolverOutputMap(resolverData, sol)
 		if err := o.checkValueSizes(results, *lgr); err != nil {
 			return o.exitWithCode(ctx, err, exitcode.ValidationFailed)
+		}
+		if o.ShowExecution {
+			results["__execution"] = buildExecutionData(resolverCtx, resolvers, resolverElapsed)
 		}
 		return o.writeResolverOutput(ctx, results, "scafctl run solution")
 	}
@@ -302,7 +318,11 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	}
 
 	// Build and write output
-	return o.writeActionOutput(ctx, result)
+	var executionData map[string]any
+	if o.ShowExecution {
+		executionData = buildExecutionData(resolverCtx, resolvers, resolverElapsed)
+	}
+	return o.writeActionOutput(ctx, result, executionData)
 }
 
 // showDryRun displays what would be executed without actually running
@@ -342,7 +362,7 @@ func (o *SolutionOptions) showDryRun(graph *action.Graph) {
 }
 
 // writeActionOutput writes the action execution results
-func (o *SolutionOptions) writeActionOutput(_ context.Context, result *action.ExecutionResult) error {
+func (o *SolutionOptions) writeActionOutput(_ context.Context, result *action.ExecutionResult, executionData map[string]any) error {
 	if o.Output == "quiet" {
 		return nil
 	}
@@ -379,6 +399,11 @@ func (o *SolutionOptions) writeActionOutput(_ context.Context, result *action.Ex
 	}
 	if len(result.SkippedActions) > 0 {
 		output["skippedActions"] = result.SkippedActions
+	}
+
+	// Include execution metadata if requested
+	if executionData != nil {
+		output["__execution"] = executionData
 	}
 
 	var data []byte

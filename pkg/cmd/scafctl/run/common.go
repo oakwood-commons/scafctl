@@ -113,6 +113,7 @@ type sharedResolverOptions struct {
 	Progress        bool
 	ValidateAll     bool
 	SkipValidation  bool
+	SkipTransform   bool
 	ShowMetrics     bool
 	WarnValueSize   int64
 	MaxValueSize    int64
@@ -408,6 +409,9 @@ func (o *sharedResolverOptions) executeResolvers(
 	if o.SkipValidation {
 		executorOpts = append(executorOpts, resolver.WithSkipValidation(true))
 	}
+	if o.SkipTransform {
+		executorOpts = append(executorOpts, resolver.WithSkipTransform(true))
+	}
 	executor := resolver.NewExecutor(resolverAdapter, executorOpts...)
 
 	// Execute resolvers
@@ -447,7 +451,9 @@ func (o *sharedResolverOptions) executeResolvers(
 
 // filterResolversWithDependencies returns the specified resolvers and all their dependencies.
 // When targetNames is empty, all resolvers are returned.
-func filterResolversWithDependencies(resolvers []*resolver.Resolver, targetNames []string) []*resolver.Resolver {
+// Uses resolver.ExtractDependencies to detect dependencies from CEL expressions,
+// Go templates, explicit rslvr: references, and provider-specific extraction.
+func filterResolversWithDependencies(resolvers []*resolver.Resolver, targetNames []string, lookup resolver.DescriptorLookup) []*resolver.Resolver {
 	if len(targetNames) == 0 {
 		return resolvers
 	}
@@ -472,7 +478,7 @@ func filterResolversWithDependencies(resolvers []*resolver.Resolver, targetNames
 			return
 		}
 
-		deps := extractResolverDependencies(r)
+		deps := resolver.ExtractDependencies(r, lookup)
 		for _, dep := range deps {
 			collectDeps(dep)
 		}
@@ -634,54 +640,6 @@ func calculateValueSize(value any) int64 {
 	return int64(len(data))
 }
 
-// extractResolverDependencies extracts dependency names from a resolver
-func extractResolverDependencies(r *resolver.Resolver) []string {
-	var deps []string
-	seen := make(map[string]bool)
-
-	addDep := func(name string) {
-		if !seen[name] {
-			seen[name] = true
-			deps = append(deps, name)
-		}
-	}
-
-	// Check resolve phase
-	if r.Resolve != nil {
-		for _, src := range r.Resolve.With {
-			for _, vr := range src.Inputs {
-				if vr != nil && vr.Resolver != nil {
-					addDep(*vr.Resolver)
-				}
-			}
-		}
-	}
-
-	// Check transform phase
-	if r.Transform != nil {
-		for _, tr := range r.Transform.With {
-			for _, vr := range tr.Inputs {
-				if vr != nil && vr.Resolver != nil {
-					addDep(*vr.Resolver)
-				}
-			}
-		}
-	}
-
-	// Check validate phase
-	if r.Validate != nil {
-		for _, vl := range r.Validate.With {
-			for _, vr := range vl.Inputs {
-				if vr != nil && vr.Resolver != nil {
-					addDep(*vr.Resolver)
-				}
-			}
-		}
-	}
-
-	return deps
-}
-
 // registryAdapter adapts provider.Registry to resolver.RegistryInterface
 type registryAdapter struct {
 	registry *provider.Registry
@@ -701,6 +659,182 @@ func (r *registryAdapter) Get(name string) (provider.Provider, error) {
 
 func (r *registryAdapter) List() []provider.Provider {
 	return r.registry.ListProviders()
+}
+
+// buildExecutionData constructs structured execution metadata from resolver results.
+// The returned map is extensible — new top-level sections can be added without
+// breaking consumers (e.g. "diagrams", "timeline", "warnings").
+func buildExecutionData(
+	resolverCtx *resolver.Context,
+	resolvers []*resolver.Resolver,
+	totalElapsed time.Duration,
+) map[string]any {
+	allResults := resolverCtx.GetAllResults()
+
+	// Build per-resolver execution metadata
+	resolverMeta := make(map[string]any, len(resolvers))
+	for _, r := range resolvers {
+		deps := resolver.ExtractDependencies(r, nil)
+		entry := map[string]any{
+			"provider":     resolverProviderName(r),
+			"dependencies": deps,
+		}
+
+		if result, ok := allResults[r.Name]; ok {
+			entry["phase"] = result.Phase
+			entry["duration"] = result.TotalDuration.Round(time.Millisecond).String()
+			entry["status"] = string(result.Status)
+			entry["providerCallCount"] = result.ProviderCallCount
+			entry["valueSizeBytes"] = result.ValueSizeBytes
+			entry["dependencyCount"] = result.DependencyCount
+
+			// Per-phase breakdown (resolve, transform, validate)
+			if len(result.PhaseMetrics) > 0 {
+				metrics := make([]map[string]any, 0, len(result.PhaseMetrics))
+				for _, pm := range result.PhaseMetrics {
+					metrics = append(metrics, map[string]any{
+						"phase":    pm.Phase,
+						"duration": pm.Duration.Round(time.Millisecond).String(),
+					})
+				}
+				entry["phaseMetrics"] = metrics
+			}
+
+			// Include failed attempts for debugging
+			if len(result.FailedAttempts) > 0 {
+				attempts := make([]map[string]any, 0, len(result.FailedAttempts))
+				for _, fa := range result.FailedAttempts {
+					attempt := map[string]any{
+						"provider":   fa.Provider,
+						"phase":      fa.Phase,
+						"duration":   fa.Duration.Round(time.Millisecond).String(),
+						"sourceStep": fa.SourceStep,
+					}
+					if fa.Error != "" {
+						attempt["error"] = fa.Error
+					}
+					if fa.OnError != "" {
+						attempt["onError"] = fa.OnError
+					}
+					attempts = append(attempts, attempt)
+				}
+				entry["failedAttempts"] = attempts
+			}
+		} else {
+			entry["phase"] = 0
+			entry["duration"] = "0s"
+			entry["status"] = "unknown"
+		}
+
+		resolverMeta[r.Name] = entry
+	}
+
+	// Build summary
+	phaseCount := 0
+	for _, result := range allResults {
+		if result.Phase > phaseCount {
+			phaseCount = result.Phase
+		}
+	}
+
+	summary := map[string]any{
+		"totalDuration": totalElapsed.Round(time.Millisecond).String(),
+		"resolverCount": len(resolvers),
+		"phaseCount":    phaseCount,
+	}
+
+	return map[string]any{
+		"resolvers": resolverMeta,
+		"summary":   summary,
+	}
+}
+
+// buildProviderSummary aggregates per-provider usage statistics from resolver execution.
+func buildProviderSummary(
+	resolverCtx *resolver.Context,
+	resolvers []*resolver.Resolver,
+) map[string]any {
+	allResults := resolverCtx.GetAllResults()
+
+	type providerStats struct {
+		count         int
+		totalDuration time.Duration
+		callCount     int
+		successCount  int
+		failedCount   int
+	}
+
+	stats := make(map[string]*providerStats)
+
+	for _, r := range resolvers {
+		provName := resolverProviderName(r)
+		ps, ok := stats[provName]
+		if !ok {
+			ps = &providerStats{}
+			stats[provName] = ps
+		}
+		ps.count++
+
+		if result, ok := allResults[r.Name]; ok {
+			ps.totalDuration += result.TotalDuration
+			ps.callCount += result.ProviderCallCount
+			if result.Status == resolver.ExecutionStatusSuccess {
+				ps.successCount++
+			} else {
+				ps.failedCount++
+			}
+		}
+	}
+
+	summary := make(map[string]any, len(stats))
+	for name, ps := range stats {
+		entry := map[string]any{
+			"resolverCount": ps.count,
+			"totalDuration": ps.totalDuration.Round(time.Millisecond).String(),
+			"callCount":     ps.callCount,
+			"successCount":  ps.successCount,
+			"failedCount":   ps.failedCount,
+		}
+		if ps.count > 0 {
+			entry["avgDuration"] = (ps.totalDuration / time.Duration(ps.count)).Round(time.Millisecond).String()
+		}
+		summary[name] = entry
+	}
+
+	return summary
+}
+
+// renderGraph renders a graph in the specified format using the graphRenderer interface.
+func renderGraph(w io.Writer, graph graphRenderer, data any, format string) error {
+	switch format {
+	case "ascii":
+		return graph.RenderASCII(w)
+	case "dot":
+		return graph.RenderDOT(w)
+	case "mermaid":
+		return graph.RenderMermaid(w)
+	case "json":
+		encoder := json.NewEncoder(w)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(data)
+	default:
+		return fmt.Errorf("unsupported graph format: %s (supported: ascii, dot, mermaid, json)", format)
+	}
+}
+
+// graphRenderer defines the interface for types that can render as ASCII, DOT, and Mermaid.
+type graphRenderer interface {
+	RenderASCII(w io.Writer) error
+	RenderDOT(w io.Writer) error
+	RenderMermaid(w io.Writer) error
+}
+
+// resolverProviderName extracts the primary provider name from a resolver
+func resolverProviderName(r *resolver.Resolver) string {
+	if r.Resolve != nil && len(r.Resolve.With) > 0 {
+		return r.Resolve.With[0].Provider
+	}
+	return "unknown"
 }
 
 func (r *registryAdapter) DescriptorLookup() resolver.DescriptorLookup {

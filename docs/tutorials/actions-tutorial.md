@@ -456,7 +456,7 @@ scafctl run solution -f my-solution.yaml --dry-run
 scafctl run resolver -f my-solution.yaml
 
 # Run specific resolvers for inspection
-scafctl run resolver db config -f my-solution.yaml --verbose
+scafctl run resolver db config -f my-solution.yaml
 ```
 
 ### Render Mode
