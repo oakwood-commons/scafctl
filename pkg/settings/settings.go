@@ -54,7 +54,7 @@ const (
 // DefaultHTTPCacheDir returns the default directory for HTTP cache.
 // Uses XDG Base Directory Specification:
 //   - Linux: ~/.cache/scafctl/http-cache/
-//   - macOS: ~/Library/Caches/scafctl/http-cache/
+//   - macOS: ~/.cache/scafctl/http-cache/
 //   - Windows: %LOCALAPPDATA%\cache\scafctl\http-cache\
 func DefaultHTTPCacheDir() string {
 	return filepath.Join(xdg.CacheHome, "scafctl", "http-cache")

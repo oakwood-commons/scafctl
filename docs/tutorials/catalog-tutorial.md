@@ -25,7 +25,7 @@ The catalog uses XDG Base Directory paths:
 
 | Platform | Default Location |
 |----------|------------------|
-| macOS | `~/Library/Application Support/scafctl/catalog` |
+| macOS | `~/.local/share/scafctl/catalog` |
 | Linux | `~/.local/share/scafctl/catalog` |
 | Windows | `%LOCALAPPDATA%\scafctl\catalog` |
 

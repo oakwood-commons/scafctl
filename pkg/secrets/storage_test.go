@@ -41,7 +41,7 @@ func TestGetSecretsDir(t *testing.T) {
 		// Platform-specific checks
 		switch runtime.GOOS {
 		case "darwin":
-			assert.Contains(t, dir, "Library/Application Support")
+			assert.Contains(t, dir, ".local/share")
 		case "linux":
 			home, _ := os.UserHomeDir()
 			xdgData := os.Getenv("XDG_DATA_HOME")

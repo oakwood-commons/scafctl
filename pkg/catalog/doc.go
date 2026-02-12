@@ -19,7 +19,7 @@
 // It uses the XDG-compliant path from paths.CatalogDir():
 //
 //   - Linux: ~/.local/share/scafctl/catalog/
-//   - macOS: ~/Library/Application Support/scafctl/catalog/
+//   - macOS: ~/.local/share/scafctl/catalog/
 //   - Windows: %LOCALAPPDATA%\scafctl\catalog\
 //
 // The local catalog stores artifacts as OCI artifacts in OCI Image Layout format,

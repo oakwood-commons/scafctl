@@ -24,7 +24,7 @@ func CommandCache(cliParams *settings.Run, ioStreams *terminal.IOStreams, path s
 
 			The cache is stored at:
 			  - Linux: ~/.cache/scafctl/
-			  - macOS: ~/Library/Caches/scafctl/
+			  - macOS: ~/.cache/scafctl/
 			  - Windows: %LOCALAPPDATA%\cache\scafctl\
 		`),
 	}

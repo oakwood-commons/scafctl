@@ -115,7 +115,7 @@ Render mode supports secret redaction via `--redact` flag on snapshots.
 - **CLI**: `scafctl secrets list/get/set/delete/exists/export/import/rotate`
 - **Platform paths** (XDG Base Directory Specification):
   - Linux: `~/.local/share/scafctl/secrets/`
-  - macOS: `~/Library/Application Support/scafctl/secrets/`
+  - macOS: `~/.local/share/scafctl/secrets/`
   - Windows: `%LOCALAPPDATA%\scafctl\secrets\`
 
 ---

@@ -26,7 +26,7 @@ func CommandBuild(cliParams *settings.Run, ioStreams *terminal.IOStreams, path s
 
 			The local catalog is stored at:
 			  - Linux: ~/.local/share/scafctl/catalog/
-			  - macOS: ~/Library/Application Support/scafctl/catalog/
+			  - macOS: ~/.local/share/scafctl/catalog/
 			  - Windows: %LOCALAPPDATA%\scafctl\catalog\
 		`),
 	}

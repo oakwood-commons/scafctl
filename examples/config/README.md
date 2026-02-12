@@ -16,7 +16,7 @@ scafctl follows the [XDG Base Directory Specification](https://specifications.fr
 | Platform | Config Path |
 |----------|-------------|
 | Linux    | `~/.config/scafctl/config.yaml` |
-| macOS    | `~/Library/Application Support/scafctl/config.yaml` |
+| macOS    | `~/.config/scafctl/config.yaml` |
 | Windows  | `%LOCALAPPDATA%\scafctl\config.yaml` |
 
 ## Usage

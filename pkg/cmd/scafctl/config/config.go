@@ -24,7 +24,7 @@ func CommandConfig(cliParams *settings.Run, ioStreams *terminal.IOStreams, path 
 
 			Configuration follows the XDG Base Directory Specification:
 			  - Linux:   ~/.config/scafctl/config.yaml
-			  - macOS:   ~/Library/Application Support/scafctl/config.yaml
+			  - macOS:   ~/.config/scafctl/config.yaml
 			  - Windows: %LOCALAPPDATA%\scafctl\config.yaml
 
 			Use --config flag to specify an alternate location.
