@@ -107,7 +107,7 @@ store, err := secrets.New(
 | Platform | Default Secrets Directory |
 |----------|---------------------------|
 | Linux    | `~/.local/share/scafctl/secrets/` (or `$XDG_DATA_HOME/scafctl/secrets/`) |
-| macOS    | `~/Library/Application Support/scafctl/secrets/` |
+| macOS    | `~/.local/share/scafctl/secrets/` |
 | Windows  | `%LOCALAPPDATA%\scafctl\secrets\` |
 
 Override with the `SCAFCTL_SECRETS_DIR` environment variable.

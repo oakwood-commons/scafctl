@@ -5,7 +5,7 @@
 #
 # Config locations (XDG Base Directory Specification):
 #   Linux:   ~/.config/scafctl/config.yaml
-#   macOS:   ~/Library/Application Support/scafctl/config.yaml
+#   macOS:   ~/.config/scafctl/config.yaml
 #   Windows: %LOCALAPPDATA%\scafctl\config.yaml
 #
 # For all available options, see: examples/config/full-config.yaml
@@ -37,7 +37,7 @@ logging:
 #
 # Default catalog location (XDG data directory):
 #   Linux:   ~/.local/share/scafctl/catalog/
-#   macOS:   ~/Library/Application Support/scafctl/catalog/
+#   macOS:   ~/.local/share/scafctl/catalog/
 #   Windows: %LOCALAPPDATA%\scafctl\catalog\
 catalogs:
   - name: local

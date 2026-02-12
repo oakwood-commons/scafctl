@@ -5,7 +5,7 @@
 #
 # Config locations (XDG Base Directory Specification):
 #   Linux:   ~/.config/scafctl/config.yaml
-#   macOS:   ~/Library/Application Support/scafctl/config.yaml
+#   macOS:   ~/.config/scafctl/config.yaml
 #   Windows: %LOCALAPPDATA%\scafctl\config.yaml
 #
 # Most options have sensible defaults - you only need to specify
@@ -111,7 +111,7 @@ httpClient:
   # Directory for filesystem cache storage
   # XDG cache directory defaults:
   #   Linux:   ~/.cache/scafctl/http-cache/
-  #   macOS:   ~/Library/Caches/scafctl/http-cache/
+  #   macOS:   ~/.cache/scafctl/http-cache/
   #   Windows: %LOCALAPPDATA%\cache\scafctl\http-cache\
   # Leave commented to use the XDG default
   # cacheDir: "~/.cache/scafctl/http-cache"
@@ -247,7 +247,7 @@ action:
 #
 # Default catalog location (XDG data directory):
 #   Linux:   ~/.local/share/scafctl/catalog/
-#   macOS:   ~/Library/Application Support/scafctl/catalog/
+#   macOS:   ~/.local/share/scafctl/catalog/
 #   Windows: %LOCALAPPDATA%\scafctl\catalog\
 
 catalogs:

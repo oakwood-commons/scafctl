@@ -259,13 +259,14 @@ func TestPlatformDefaults(t *testing.T) {
 		t.Setenv(env, "")
 	}
 	xdg.Reload()
+	applyDefaults() // Reapply CLI conventions after xdg.Reload() resets to library defaults
 	defer xdg.Reload()
 
 	t.Run("config uses platform-appropriate path", func(t *testing.T) {
 		path := ConfigDir()
 		switch runtime.GOOS {
 		case "darwin":
-			assert.Contains(t, path, "Library/Application Support")
+			assert.Contains(t, path, ".config")
 		case "linux":
 			assert.Contains(t, path, ".config")
 		case "windows":
@@ -278,7 +279,7 @@ func TestPlatformDefaults(t *testing.T) {
 		path := CacheDir()
 		switch runtime.GOOS {
 		case "darwin":
-			assert.Contains(t, path, "Library/Caches")
+			assert.Contains(t, path, ".cache")
 		case "linux":
 			assert.Contains(t, path, ".cache")
 		case "windows":

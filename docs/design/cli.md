@@ -696,8 +696,8 @@ scafctl secrets rotate
 ~~~
 
 Secrets are encrypted with AES-256-GCM and stored in platform-specific locations:
-- **macOS**: `~/Library/Application Support/scafctl/secrets/`
-- **Linux**: `~/.config/scafctl/secrets/`
+- **macOS**: `~/.local/share/scafctl/secrets/`
+- **Linux**: `~/.local/share/scafctl/secrets/`
 - **Windows**: `%APPDATA%\scafctl\secrets\`
 
 ---

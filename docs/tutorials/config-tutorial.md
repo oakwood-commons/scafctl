@@ -180,10 +180,10 @@ Typical output:
 ```
 XDG Paths (darwin/arm64)
 
-Config:   ~/Library/Application Support/scafctl/config.yaml
-Data:     ~/Library/Application Support/scafctl/
-Cache:    ~/Library/Caches/scafctl/
-State:    ~/Library/Application Support/scafctl/state/
+Config:   ~/.config/scafctl/config.yaml
+Data:     ~/.local/share/scafctl/
+Cache:    ~/.cache/scafctl/
+State:    ~/.local/state/scafctl/
 ```
 
 ## Configuration Reference
@@ -209,7 +209,7 @@ The config file is located at the XDG config path:
 
 | Platform | Default Location |
 |----------|------------------|
-| macOS | `~/Library/Application Support/scafctl/config.yaml` |
+| macOS | `~/.config/scafctl/config.yaml` |
 | Linux | `~/.config/scafctl/config.yaml` |
 | Windows | `%APPDATA%\scafctl\config.yaml` |
 

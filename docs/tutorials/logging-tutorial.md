@@ -215,7 +215,7 @@ You can set logging defaults in your config file so you don't need flags every t
 
 ```yaml
 # ~/.config/scafctl/config.yaml (Linux)
-# ~/Library/Application Support/scafctl/config.yaml (macOS)
+# ~/.config/scafctl/config.yaml (macOS)
 logging:
   level: "info"       # Always show info-level logs
   format: "console"   # Human-readable (default)

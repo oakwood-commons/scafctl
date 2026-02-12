@@ -27,10 +27,10 @@
 //   - State: ~/.local/state/scafctl/
 //
 // macOS:
-//   - Config: ~/Library/Application Support/scafctl/
-//   - Data: ~/Library/Application Support/scafctl/
-//   - Cache: ~/Library/Caches/scafctl/
-//   - State: ~/Library/Application Support/scafctl/
+//   - Config: ~/.config/scafctl/
+//   - Data: ~/.local/share/scafctl/
+//   - Cache: ~/.cache/scafctl/
+//   - State: ~/.local/state/scafctl/
 //
 // Windows:
 //   - Config: %LOCALAPPDATA%\scafctl\
