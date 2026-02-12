@@ -6,6 +6,7 @@ package run
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -53,6 +54,7 @@ func TestCommandSolution(t *testing.T) {
 	assert.NotNil(t, flags.Lookup("max-value-size"))
 	assert.NotNil(t, flags.Lookup("resolver-timeout"))
 	assert.NotNil(t, flags.Lookup("phase-timeout"))
+	assert.NotNil(t, flags.Lookup("show-execution"))
 }
 
 func TestCommandSolution_FlagDefaults(t *testing.T) {
@@ -96,6 +98,10 @@ func TestCommandSolution_FlagDefaults(t *testing.T) {
 	phaseTimeout, err := flags.GetDuration("phase-timeout")
 	require.NoError(t, err)
 	assert.Equal(t, 5*time.Minute, phaseTimeout)
+
+	showExecution, err := flags.GetBool("show-execution")
+	require.NoError(t, err)
+	assert.False(t, showExecution)
 }
 
 func TestSolutionOptions_Run_NoFile(t *testing.T) {
@@ -701,4 +707,127 @@ spec:
 	err = cmd.Execute()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid")
+}
+
+func TestSolutionOptions_Run_ShowExecution(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: show-execution-test
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+`
+	err := os.WriteFile(solutionPath, []byte(solutionContent), 0o600)
+	require.NoError(t, err)
+
+	var stdout bytes.Buffer
+	streams := &terminal.IOStreams{
+		In:     nil,
+		Out:    &stdout,
+		ErrOut: &bytes.Buffer{},
+	}
+	cliParams := settings.NewCliParams()
+	cliParams.ExitOnError = false
+
+	opts := &SolutionOptions{
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams:       streams,
+			CliParams:       cliParams,
+			File:            solutionPath,
+			KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
+			ResolverTimeout: 30 * time.Second,
+			PhaseTimeout:    5 * time.Minute,
+			registry:        testRegistry(),
+		},
+		ShowExecution: true,
+	}
+
+	lgr := logger.Get(0)
+	ctx := logger.WithLogger(context.Background(), lgr)
+
+	err = opts.Run(ctx)
+	require.NoError(t, err)
+
+	output := stdout.String()
+	assert.Contains(t, output, "hello")
+	assert.Contains(t, output, "__execution")
+	assert.Contains(t, output, "resolvers")
+	assert.Contains(t, output, "summary")
+
+	// Parse and verify structure
+	var result map[string]any
+	err = json.Unmarshal([]byte(output), &result)
+	require.NoError(t, err)
+
+	execution, ok := result["__execution"].(map[string]any)
+	require.True(t, ok)
+	assert.Contains(t, execution, "resolvers")
+	assert.Contains(t, execution, "summary")
+}
+
+func TestSolutionOptions_Run_NoShowExecution(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: no-show-execution-test
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+`
+	err := os.WriteFile(solutionPath, []byte(solutionContent), 0o600)
+	require.NoError(t, err)
+
+	var stdout bytes.Buffer
+	streams := &terminal.IOStreams{
+		In:     nil,
+		Out:    &stdout,
+		ErrOut: &bytes.Buffer{},
+	}
+	cliParams := settings.NewCliParams()
+	cliParams.ExitOnError = false
+
+	opts := &SolutionOptions{
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams:       streams,
+			CliParams:       cliParams,
+			File:            solutionPath,
+			KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
+			ResolverTimeout: 30 * time.Second,
+			PhaseTimeout:    5 * time.Minute,
+			registry:        testRegistry(),
+		},
+		ShowExecution: false,
+	}
+
+	lgr := logger.Get(0)
+	ctx := logger.WithLogger(context.Background(), lgr)
+
+	err = opts.Run(ctx)
+	require.NoError(t, err)
+
+	output := stdout.String()
+	assert.Contains(t, output, "hello")
+	// Without --show-execution, __execution should NOT be present
+	assert.NotContains(t, output, "__execution")
 }

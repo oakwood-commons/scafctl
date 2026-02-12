@@ -5,7 +5,7 @@ weight: 25
 
 # Run Resolver Tutorial
 
-This tutorial covers the `scafctl run resolver` command — a debugging and inspection tool for executing resolvers without running actions. You'll learn how to run all resolvers, target specific resolvers, inspect execution phases, and use verbose mode for troubleshooting.
+This tutorial covers the `scafctl run resolver` command — a debugging and inspection tool for executing resolvers without running actions. You'll learn how to run all resolvers, target specific resolvers, inspect execution metadata, skip phases, and use dry-run for planning.
 
 ## Prerequisites
 
@@ -17,11 +17,15 @@ This tutorial covers the `scafctl run resolver` command — a debugging and insp
 
 1. [Run All Resolvers](#run-all-resolvers)
 2. [Run Specific Resolvers](#run-specific-resolvers)
-3. [Verbose Mode](#verbose-mode)
-4. [Output Formats](#output-formats)
-5. [Debugging Dependencies](#debugging-dependencies)
-6. [Working with Parameters](#working-with-parameters)
-7. [Common Workflows](#common-workflows)
+3. [Execution Metadata](#execution-metadata)
+4. [Skipping Phases](#skipping-phases)
+5. [Dry Run](#dry-run)
+6. [Dependency Graph](#dependency-graph)
+7. [Snapshots](#snapshots)
+8. [Output Formats](#output-formats)
+9. [Debugging Dependencies](#debugging-dependencies)
+10. [Working with Parameters](#working-with-parameters)
+11. [Common Workflows](#common-workflows)
 
 ---
 
@@ -181,22 +185,22 @@ Error: unknown resolver(s): nonexistent (available: environment, region, app_nam
 
 ---
 
-## Verbose Mode
+## Execution Metadata
 
-Use `--verbose` to include per-resolver execution metadata in the output. This is the primary debugging tool.
+The `run resolver` command is a debugging tool, so it always includes a `__execution` key in the output alongside the resolver values. The `__execution` key is a structured object with named sections, designed to be extensible for future additions (e.g. timeline).
 
 ```bash
-scafctl run resolver --verbose -f dep-demo.yaml -o json
+scafctl run resolver -f dep-demo.yaml -o json
 ```
-
-When `--verbose` is used, the output includes a `__execution` key alongside the resolver values. The `__execution` key is a structured object with named sections, designed to be extensible for future additions (e.g. diagrams, timeline).
 
 Current sections:
 
 - **`resolvers`**: Per-resolver metadata including phase, duration, status, provider, dependencies, and phase metrics (resolve/transform/validate breakdown)
 - **`summary`**: Aggregate stats — total duration, resolver count, phase count
+- **`dependencyGraph`**: Full dependency graph with nodes, edges, phases, stats, and pre-rendered **diagrams** (ASCII, DOT, Mermaid)
+- **`providerSummary`**: Per-provider usage statistics (resolver count, total duration, call count, success/failure counts, average duration)
 
-Example JSON output with `--verbose`:
+Example JSON output:
 
 ```json
 {
@@ -242,10 +246,221 @@ Example JSON output with `--verbose`:
 ### Combine with Named Resolvers
 
 ```bash
-scafctl run resolver endpoint --verbose -f dep-demo.yaml -o json
+scafctl run resolver endpoint -f dep-demo.yaml -o json
 ```
 
 The `__execution` section only includes metadata for the requested resolvers and their dependencies.
+
+> **Tip**: For `run solution`, execution metadata is opt-in via `--show-execution`.
+
+---
+
+## Skipping Phases
+
+Resolvers execute through three ordered phases: **resolve → transform → validate**. You can skip phases to inspect intermediate values.
+
+### Skip Validation
+
+Skip only the validation phase:
+
+```bash
+scafctl run resolver --skip-validation -f solution.yaml -o json
+```
+
+This runs resolve and transform, but skips validation rules. Useful when you want to see the final transformed value without validation errors blocking output.
+
+### Skip Transform (and Validation)
+
+Skip both transform and validation phases, returning raw resolved values:
+
+```bash
+scafctl run resolver --skip-transform -f solution.yaml -o json
+```
+
+This runs only the resolve phase. Useful for inspecting what providers return before any transformations are applied.
+
+> **Note**: `--skip-transform` implies `--skip-validation` because validating a pre-transform value is misleading — validation rules are written against the expected final shape.
+
+---
+
+## Dry Run
+
+Use `--dry-run` to show the execution plan without running any providers:
+
+```bash
+scafctl run resolver --dry-run -f dep-demo.yaml -o json
+```
+
+This displays:
+- DAG-based execution phases (which resolvers run in which order)
+- Per-resolver dependencies, provider types, and configured phases
+- Active and skipped phases based on flags
+
+Example output:
+
+```json
+{
+  "dryRun": true,
+  "executionPlan": {
+    "totalResolvers": 3,
+    "totalPhases": 2,
+    "activePhases": ["resolve", "transform", "validate"],
+    "skippedPhases": [],
+    "phases": [
+      { "phase": 1, "resolvers": ["base_url", "unrelated"] },
+      { "phase": 2, "resolvers": ["endpoint"] }
+    ]
+  },
+  "resolvers": {
+    "base_url": {
+      "provider": "static",
+      "dependencies": [],
+      "configuredPhases": ["resolve"]
+    },
+    "endpoint": {
+      "provider": "static",
+      "dependencies": ["base_url"],
+      "configuredPhases": ["resolve", "transform"]
+    }
+  }
+}
+```
+
+Combine with skip flags to see what would be active:
+
+```bash
+scafctl run resolver --dry-run --skip-transform -f dep-demo.yaml -o json
+```
+
+---
+
+## Dependency Graph
+
+The `--graph` flag renders the resolver dependency graph **without executing any providers**. This is useful for understanding the structure and execution order of your resolvers.
+
+### ASCII Graph (default)
+
+```bash
+scafctl run resolver --graph -f dep-demo.yaml
+```
+
+The ASCII output shows resolvers grouped by phase with dependency arrows.
+
+### Graphviz DOT Format
+
+Generate DOT output and pipe it to Graphviz for a visual diagram:
+
+```bash
+scafctl run resolver --graph --graph-format=dot -f dep-demo.yaml | dot -Tpng > graph.png
+```
+
+### Mermaid Format
+
+Generate a Mermaid diagram for embedding in Markdown or documentation:
+
+```bash
+scafctl run resolver --graph --graph-format=mermaid -f dep-demo.yaml
+```
+
+### JSON Format
+
+Get the graph as structured JSON for programmatic analysis:
+
+```bash
+scafctl run resolver --graph --graph-format=json -f dep-demo.yaml | jq .
+```
+
+The JSON output includes:
+- **nodes**: List of resolvers with name, type, phase, provider, and conditional flag
+- **edges**: Dependency relationships (`from` → `to` with dependency type)
+- **phases**: Phase groups showing which resolvers execute together
+- **stats**: Graph metrics including total resolvers, phases, edges, max depth, and **critical path**
+
+### Critical Path
+
+The graph stats include a **critical path** — the longest chain of dependencies that determines the minimum sequential execution depth. This helps identify bottlenecks:
+
+```bash
+scafctl run resolver --graph --graph-format=json -f dep-demo.yaml | jq '.stats.criticalPath'
+```
+
+### Graph in Execution Metadata
+
+When running resolvers normally, the dependency graph and a provider usage summary are automatically embedded in `__execution`:
+
+```bash
+scafctl run resolver -f dep-demo.yaml -o json | jq '.__execution.dependencyGraph'
+scafctl run resolver -f dep-demo.yaml -o json | jq '.__execution.providerSummary'
+```
+
+The **providerSummary** shows per-provider statistics: resolver count, total duration, call count, success/failure counts, and average duration.
+
+### Extracting Diagrams from Execution Metadata
+
+The `dependencyGraph` in `__execution` includes a `diagrams` field with pre-rendered ASCII, DOT, and Mermaid representations. Use the `-e` flag (CEL expression) to extract a specific diagram:
+
+```bash
+# Extract the Mermaid diagram
+scafctl run resolver -f dep-demo.yaml -o json -e '_.__execution.dependencyGraph.diagrams.mermaid'
+
+# Extract the DOT diagram and render with Graphviz
+scafctl run resolver -f dep-demo.yaml -o json -e '_.__execution.dependencyGraph.diagrams.dot' | dot -Tpng > graph.png
+
+# Extract the ASCII diagram
+scafctl run resolver -f dep-demo.yaml -o json -e '_.__execution.dependencyGraph.diagrams.ascii'
+```
+
+You can also extract diagrams when running only specific resolvers:
+
+```bash
+# Get the Mermaid diagram for just log_level and health_check_endpoints (and their deps)
+scafctl run resolver log_level health_check_endpoints -f solution.yaml -o json \
+  -e '_.__execution.dependencyGraph.diagrams.mermaid'
+```
+
+This is useful for generating focused dependency visualizations of a resolver subset without rendering the full solution graph.
+
+{{% hint info %}}
+`--graph` is mutually exclusive with `--dry-run` and `--snapshot`.
+{{% /hint %}}
+
+---
+
+## Snapshots
+
+The `--snapshot` flag executes resolvers and saves the complete execution state to a JSON file. This mirrors the snapshot functionality in `scafctl render solution --snapshot`.
+
+### Basic Snapshot
+
+```bash
+scafctl run resolver --snapshot --snapshot-file=snapshot.json -f demo.yaml
+```
+
+This creates a snapshot file containing:
+- **metadata**: Solution name, version, build version, timestamp, total duration, and execution status
+- **resolvers**: Complete execution state of each resolver including resolved values, durations, and provider information
+- **parameters**: Input parameters used during execution
+
+### Redacting Sensitive Values
+
+Use `--redact` to replace sensitive resolver values with `<redacted>`:
+
+```bash
+scafctl run resolver --snapshot --snapshot-file=snapshot.json --redact -f demo.yaml
+```
+
+Resolvers marked with `sensitive: true` will have their values replaced in the snapshot.
+
+### Snapshot Use Cases
+
+- **Debugging**: Capture a full execution trace for offline analysis
+- **Auditing**: Record resolver outputs for compliance
+- **Testing**: Compare snapshots between runs to detect regressions
+- **Support**: Redacted snapshots can be shared without exposing secrets
+
+{{% hint info %}}
+`--snapshot` requires `--snapshot-file` to be specified. It is mutually exclusive with `--dry-run` and `--graph`.
+{{% /hint %}}
 
 ---
 
@@ -285,10 +500,10 @@ A common debugging workflow is to inspect how resolver dependencies cascade.
 scafctl resolver graph -f dep-demo.yaml
 ```
 
-### Step 2: Run Target Resolver with Verbose
+### Step 2: Run Target Resolver
 
 ```bash
-scafctl run resolver endpoint --verbose -f dep-demo.yaml -o json
+scafctl run resolver endpoint -f dep-demo.yaml -o json
 ```
 
 ### Step 3: Inspect a Single Resolver's Value
@@ -370,7 +585,23 @@ echo "Exit code: $?"
 Isolate a failing resolver and its dependencies:
 
 ```bash
-scafctl run resolver failing-resolver --verbose -f solution.yaml -o json
+scafctl run resolver failing-resolver -f solution.yaml -o json
+```
+
+### Inspect Raw Resolved Values
+
+Skip transforms to see what providers actually return:
+
+```bash
+scafctl run resolver --skip-transform -f solution.yaml -o json
+```
+
+### Preview Execution Plan
+
+See what would happen without running anything:
+
+```bash
+scafctl run resolver --dry-run -f solution.yaml -o json
 ```
 
 ### Comparing Resolver Outputs
@@ -399,6 +630,7 @@ Metrics are displayed on stderr after execution completes.
 - [Resolver Tutorial](resolver-tutorial.md) — Learn resolver fundamentals
 - [Actions Tutorial](actions-tutorial.md) — Execute actions after resolvers
 - [CEL Tutorial](cel-tutorial.md) — Filter and transform resolver output
+- [Snapshots Tutorial](snapshots-tutorial.md) — Deeper dive into snapshot analysis
 
 ---
 
@@ -411,11 +643,28 @@ scafctl run resolver -f solution.yaml
 # Named resolvers (with dependencies)
 scafctl run resolver db config -f solution.yaml
 
-# Verbose debugging (includes __execution metadata in output)
-scafctl run resolver --verbose -f solution.yaml
-
-# JSON output
+# JSON output (always includes __execution metadata)
 scafctl run resolver -f solution.yaml -o json
+
+# Skip transform and validation phases
+scafctl run resolver --skip-transform -f solution.yaml
+
+# Show execution plan without running
+scafctl run resolver --dry-run -f solution.yaml
+
+# Dependency graph (ASCII)
+scafctl run resolver --graph -f solution.yaml
+
+# Dependency graph (DOT/Mermaid/JSON)
+scafctl run resolver --graph --graph-format=dot -f solution.yaml
+scafctl run resolver --graph --graph-format=mermaid -f solution.yaml
+scafctl run resolver --graph --graph-format=json -f solution.yaml
+
+# Snapshot execution state
+scafctl run resolver --snapshot --snapshot-file=out.json -f solution.yaml
+
+# Snapshot with sensitive value redaction
+scafctl run resolver --snapshot --snapshot-file=out.json --redact -f solution.yaml
 
 # With parameters
 scafctl run resolver -f solution.yaml -r key=value
