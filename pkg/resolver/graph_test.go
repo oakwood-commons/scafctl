@@ -766,6 +766,122 @@ func TestBuildGraph(t *testing.T) {
 	}
 }
 
+func TestCriticalPath(t *testing.T) {
+	tests := []struct {
+		name              string
+		resolvers         []*Resolver
+		wantCriticalPath  []string
+		wantCriticalDepth int
+	}{
+		{
+			name:              "empty graph",
+			resolvers:         []*Resolver{},
+			wantCriticalPath:  nil,
+			wantCriticalDepth: 0,
+		},
+		{
+			name: "single resolver",
+			resolvers: []*Resolver{
+				{
+					Name: "only",
+					Resolve: &ResolvePhase{
+						With: []ProviderSource{{Provider: "static", Inputs: map[string]*ValueRef{"value": {Literal: "x"}}}},
+					},
+				},
+			},
+			wantCriticalPath:  []string{"only"},
+			wantCriticalDepth: 1,
+		},
+		{
+			name: "linear chain a->b->c",
+			resolvers: []*Resolver{
+				{
+					Name: "a",
+					Resolve: &ResolvePhase{
+						With: []ProviderSource{{Provider: "static", Inputs: map[string]*ValueRef{"value": {Literal: "a"}}}},
+					},
+				},
+				{
+					Name: "b",
+					Resolve: &ResolvePhase{
+						With: []ProviderSource{{Provider: "cel", Inputs: map[string]*ValueRef{"value": {Resolver: stringPtr("a")}}}},
+					},
+				},
+				{
+					Name: "c",
+					Resolve: &ResolvePhase{
+						With: []ProviderSource{{Provider: "cel", Inputs: map[string]*ValueRef{"value": {Resolver: stringPtr("b")}}}},
+					},
+				},
+			},
+			wantCriticalPath:  []string{"a", "b", "c"},
+			wantCriticalDepth: 3,
+		},
+		{
+			name: "diamond: a->b, a->c, b->d, c->d - path length is 3",
+			resolvers: []*Resolver{
+				{
+					Name: "a",
+					Resolve: &ResolvePhase{
+						With: []ProviderSource{{Provider: "static", Inputs: map[string]*ValueRef{"value": {Literal: "a"}}}},
+					},
+				},
+				{
+					Name: "b",
+					Resolve: &ResolvePhase{
+						With: []ProviderSource{{Provider: "cel", Inputs: map[string]*ValueRef{"value": {Resolver: stringPtr("a")}}}},
+					},
+				},
+				{
+					Name: "c",
+					Resolve: &ResolvePhase{
+						With: []ProviderSource{{Provider: "cel", Inputs: map[string]*ValueRef{"value": {Resolver: stringPtr("a")}}}},
+					},
+				},
+				{
+					Name:      "d",
+					DependsOn: []string{"b", "c"},
+					Resolve: &ResolvePhase{
+						With: []ProviderSource{{Provider: "static", Inputs: map[string]*ValueRef{"value": {Literal: "d"}}}},
+					},
+				},
+			},
+			wantCriticalPath:  []string{"a", "b", "d"},
+			wantCriticalDepth: 3,
+		},
+		{
+			name: "parallel independent resolvers - critical path is 1",
+			resolvers: []*Resolver{
+				{
+					Name: "x",
+					Resolve: &ResolvePhase{
+						With: []ProviderSource{{Provider: "static", Inputs: map[string]*ValueRef{"value": {Literal: "x"}}}},
+					},
+				},
+				{
+					Name: "y",
+					Resolve: &ResolvePhase{
+						With: []ProviderSource{{Provider: "static", Inputs: map[string]*ValueRef{"value": {Literal: "y"}}}},
+					},
+				},
+			},
+			wantCriticalDepth: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			graph, err := BuildGraph(tt.resolvers, nil)
+			require.NoError(t, err)
+
+			if tt.wantCriticalPath != nil {
+				assert.Equal(t, tt.wantCriticalPath, graph.Stats.CriticalPath)
+			}
+			assert.Equal(t, tt.wantCriticalDepth, graph.Stats.CriticalDepth)
+		})
+	}
+}
+
 // Helper functions
 func stringPtr(s string) *string {
 	return &s

@@ -751,11 +751,22 @@ scafctl run resolver -f solution.yaml
 # Run specific resolvers (with their transitive dependencies)
 scafctl run resolver db config -f solution.yaml
 
-# Verbose mode includes __execution metadata (phases, timing, providers) in output
-scafctl run resolver --verbose -f solution.yaml
-
-# JSON output for scripting
+# JSON output (always includes __execution metadata)
 scafctl run resolver -f solution.yaml -o json
+
+# Skip transform and validation phases
+scafctl run resolver --skip-transform -f solution.yaml
+
+# Show execution plan without running
+scafctl run resolver --dry-run -f solution.yaml
+
+# Dependency graph (ASCII, DOT, Mermaid, or JSON)
+scafctl run resolver --graph -f solution.yaml
+scafctl run resolver --graph --graph-format=dot -f solution.yaml
+
+# Snapshot execution state
+scafctl run resolver --snapshot --snapshot-file=out.json -f solution.yaml
+scafctl run resolver --snapshot --snapshot-file=out.json --redact -f solution.yaml
 
 # Interactive TUI for exploring results
 scafctl run resolver -f solution.yaml -i

@@ -99,6 +99,7 @@ func runScafctl(t *testing.T, args ...string) (stdout, stderr string, exitCode i
 // ============================================================================
 
 func TestIntegration_Version(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "version")
 
 	assert.Equal(t, 0, exitCode)
@@ -106,6 +107,7 @@ func TestIntegration_Version(t *testing.T) {
 }
 
 func TestIntegration_VersionJSON(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "version", "-o", "json")
 
 	assert.Equal(t, 0, exitCode)
@@ -117,6 +119,7 @@ func TestIntegration_VersionJSON(t *testing.T) {
 // ============================================================================
 
 func TestIntegration_Help(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "--help")
 
 	assert.Equal(t, 0, exitCode)
@@ -127,6 +130,7 @@ func TestIntegration_Help(t *testing.T) {
 }
 
 func TestIntegration_RunHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "run", "--help")
 
 	assert.Equal(t, 0, exitCode)
@@ -138,6 +142,7 @@ func TestIntegration_RunHelp(t *testing.T) {
 // ============================================================================
 
 func TestIntegration_GetProvider(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "get", "provider")
 
 	assert.Equal(t, 0, exitCode)
@@ -151,6 +156,7 @@ func TestIntegration_GetProvider(t *testing.T) {
 }
 
 func TestIntegration_GetProviderJSON(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "get", "provider", "-o", "json")
 
 	assert.Equal(t, 0, exitCode)
@@ -163,6 +169,7 @@ func TestIntegration_GetProviderJSON(t *testing.T) {
 // ============================================================================
 
 func TestIntegration_ExplainProvider(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "explain", "provider")
 
 	assert.Equal(t, 0, exitCode)
@@ -171,6 +178,7 @@ func TestIntegration_ExplainProvider(t *testing.T) {
 }
 
 func TestIntegration_ExplainProviderNotFound(t *testing.T) {
+	t.Parallel()
 	_, stderr, exitCode := runScafctl(t, "explain", "nonexistentkind")
 
 	assert.NotEqual(t, 0, exitCode)
@@ -182,6 +190,7 @@ func TestIntegration_ExplainProviderNotFound(t *testing.T) {
 // ============================================================================
 
 func TestIntegration_RunSolution_HelloWorld(t *testing.T) {
+	t.Parallel()
 	stdout, stderr, exitCode := runScafctl(t,
 		"run", "solution",
 		"-f", "examples/actions/hello-world.yaml",
@@ -195,6 +204,7 @@ func TestIntegration_RunSolution_HelloWorld(t *testing.T) {
 }
 
 func TestIntegration_RunSolution_FileNotFound(t *testing.T) {
+	t.Parallel()
 	_, stderr, exitCode := runScafctl(t,
 		"run", "solution",
 		"-f", "/nonexistent/solution.yaml",
@@ -205,6 +215,7 @@ func TestIntegration_RunSolution_FileNotFound(t *testing.T) {
 }
 
 func TestIntegration_RunSolution_InvalidYAML(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	solutionPath := filepath.Join(tmpDir, "invalid.yaml")
 
@@ -220,6 +231,7 @@ func TestIntegration_RunSolution_InvalidYAML(t *testing.T) {
 }
 
 func TestIntegration_RunSolution_BadSolutionYAML(t *testing.T) {
+	t.Parallel()
 	_, stderr, exitCode := runScafctl(t,
 		"run", "resolver",
 		"-f", "examples/solutions/bad-solution-yaml/solution.yaml",
@@ -231,6 +243,7 @@ func TestIntegration_RunSolution_BadSolutionYAML(t *testing.T) {
 }
 
 func TestIntegration_RunSolution_DryRun(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t,
 		"run", "solution",
 		"-f", "examples/actions/hello-world.yaml",
@@ -243,6 +256,7 @@ func TestIntegration_RunSolution_DryRun(t *testing.T) {
 }
 
 func TestIntegration_RunResolver_Basic(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t,
 		"run", "resolver",
 		"-f", "examples/actions/hello-world.yaml",
@@ -255,15 +269,20 @@ func TestIntegration_RunResolver_Basic(t *testing.T) {
 }
 
 func TestIntegration_RunResolver_Help(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "run", "resolver", "--help")
 
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "Execute resolvers from a solution without running actions")
-	assert.Contains(t, stdout, "--verbose")
+	assert.Contains(t, stdout, "--skip-transform")
+	assert.Contains(t, stdout, "--dry-run")
+	assert.Contains(t, stdout, "--graph")
+	assert.Contains(t, stdout, "--snapshot")
 	assert.Contains(t, stdout, "--file")
 }
 
 func TestIntegration_RunResolver_Alias(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t,
 		"run", "res",
 		"-f", "examples/resolver-demo.yaml",
@@ -275,6 +294,7 @@ func TestIntegration_RunResolver_Alias(t *testing.T) {
 }
 
 func TestIntegration_RunResolver_NamedResolver(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t,
 		"run", "resolver",
 		"-f", "examples/resolver-demo.yaml",
@@ -287,7 +307,31 @@ func TestIntegration_RunResolver_NamedResolver(t *testing.T) {
 	assert.Contains(t, stdout, "production")
 }
 
+func TestIntegration_RunResolver_MultipleNamedResolvers(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"hostname", "port",
+		"-o", "json",
+	)
+
+	assert.Equal(t, 0, exitCode)
+
+	// hostname depends on environment and region (via CEL: _.environment + '-server-' + _.region)
+	// Both requested resolvers and their transitive deps should be present
+	assert.Contains(t, stdout, "\"hostname\"")
+	assert.Contains(t, stdout, "\"port\"")
+	assert.Contains(t, stdout, "\"environment\"")
+	assert.Contains(t, stdout, "\"region\"")
+
+	// exposedPort and config were not requested and are not dependencies
+	assert.NotContains(t, stdout, "\"exposedPort\"")
+	assert.NotContains(t, stdout, "\"config\"")
+}
+
 func TestIntegration_RunResolver_UnknownName(t *testing.T) {
+	t.Parallel()
 	_, stderr, exitCode := runScafctl(t,
 		"run", "resolver",
 		"-f", "examples/resolver-demo.yaml",
@@ -298,16 +342,16 @@ func TestIntegration_RunResolver_UnknownName(t *testing.T) {
 	assert.Contains(t, stderr, "unknown resolver(s): nonexistent")
 }
 
-func TestIntegration_RunResolver_Verbose(t *testing.T) {
+func TestIntegration_RunResolver_ExecutionMetadataAlwaysIncluded(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t,
 		"run", "resolver",
 		"-f", "examples/resolver-demo.yaml",
-		"--verbose",
 		"-o", "json",
 	)
 
 	assert.Equal(t, 0, exitCode)
-	// Verbose metadata is now in the structured output, not stderr
+	// __execution metadata is always included in run resolver output
 	assert.Contains(t, stdout, "__execution")
 	assert.Contains(t, stdout, "resolvers")
 	assert.Contains(t, stdout, "summary")
@@ -315,7 +359,184 @@ func TestIntegration_RunResolver_Verbose(t *testing.T) {
 	assert.Contains(t, stdout, "phaseCount")
 }
 
+func TestIntegration_RunResolver_SkipTransform(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"--skip-transform",
+		"-o", "json",
+	)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "__execution")
+}
+
+func TestIntegration_RunResolver_DryRun(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"--dry-run",
+		"-o", "json",
+	)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "dryRun")
+	assert.Contains(t, stdout, "executionPlan")
+	assert.Contains(t, stdout, "resolvers")
+}
+
+func TestIntegration_RunResolver_GraphASCII(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"--graph",
+	)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "environment")
+}
+
+func TestIntegration_RunResolver_GraphDot(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"--graph",
+		"--graph-format=dot",
+	)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "digraph")
+}
+
+func TestIntegration_RunResolver_GraphMermaid(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"--graph",
+		"--graph-format=mermaid",
+	)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "graph")
+}
+
+func TestIntegration_RunResolver_GraphJSON(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"--graph",
+		"--graph-format=json",
+	)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "nodes")
+	assert.Contains(t, stdout, "edges")
+	assert.Contains(t, stdout, "stats")
+	assert.Contains(t, stdout, "criticalPath")
+}
+
+func TestIntegration_RunResolver_ExecutionIncludesGraphAndProviderSummary(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"-o", "json",
+	)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "\"dependencyGraph\"")
+	assert.Contains(t, stdout, "\"providerSummary\"")
+	assert.Contains(t, stdout, "criticalPath")
+	assert.Contains(t, stdout, "criticalDepth")
+	assert.Contains(t, stdout, "\"diagrams\"")
+	assert.Contains(t, stdout, "\"ascii\"")
+	assert.Contains(t, stdout, "\"dot\"")
+	assert.Contains(t, stdout, "\"mermaid\"")
+}
+
+func TestIntegration_RunResolver_Snapshot(t *testing.T) {
+	t.Parallel()
+	snapshotFile := filepath.Join(t.TempDir(), "snapshot.json")
+	stdout, _, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"--snapshot",
+		"--snapshot-file="+snapshotFile,
+	)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Snapshot saved to")
+
+	// Verify snapshot file was created and is valid JSON
+	data, err := os.ReadFile(snapshotFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "metadata")
+	assert.Contains(t, string(data), "resolvers")
+}
+
+func TestIntegration_RunResolver_SnapshotRedact(t *testing.T) {
+	t.Parallel()
+	snapshotFile := filepath.Join(t.TempDir(), "snapshot-redact.json")
+	stdout, _, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"--snapshot",
+		"--snapshot-file="+snapshotFile,
+		"--redact",
+	)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Snapshot saved to")
+}
+
+func TestIntegration_RunResolver_MutualExclusive_DryRunGraph(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"--dry-run",
+		"--graph",
+	)
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "mutually exclusive")
+}
+
+func TestIntegration_RunResolver_SnapshotRequiresFile(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"--snapshot",
+	)
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "--snapshot-file")
+}
+
+func TestIntegration_RunSolution_ShowExecution(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t,
+		"run", "solution",
+		"-f", "examples/resolver-demo.yaml",
+		"--show-execution",
+		"-o", "json",
+	)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "__execution")
+	assert.Contains(t, stdout, "resolvers")
+	assert.Contains(t, stdout, "summary")
+}
+
 func TestIntegration_RunSolution_ConditionalRetry(t *testing.T) {
+	t.Parallel()
 	stdout, stderr, exitCode := runScafctl(t,
 		"run", "solution",
 		"-f", "examples/actions/conditional-retry.yaml",
@@ -365,6 +586,7 @@ func TestIntegration_RunSolution_K8sClusters(t *testing.T) {
 }
 
 func TestIntegration_RunSolution_RetryIfWithCommandNotFound(t *testing.T) {
+	t.Parallel()
 	// Test that retryIf: "false" prevents retries on actual errors
 	// Using a non-existent command which returns a real error
 	tmpDir := t.TempDir()
@@ -405,6 +627,7 @@ spec:
 }
 
 func TestIntegration_RunSolution_RetryIfWithRetryEnabled(t *testing.T) {
+	t.Parallel()
 	// Test that retryIf: "true" allows retries on actual errors
 	// This creates a temp script that succeeds on second run
 	tmpDir := t.TempDir()
@@ -466,6 +689,7 @@ spec:
 // ============================================================================
 
 func TestIntegration_RenderSolution(t *testing.T) {
+	t.Parallel()
 	// Use run resolver to get resolver outputs
 	stdout, _, exitCode := runScafctl(t,
 		"run", "resolver",
@@ -479,6 +703,7 @@ func TestIntegration_RenderSolution(t *testing.T) {
 }
 
 func TestIntegration_RenderSolutionJSON(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t,
 		"run", "resolver",
 		"-f", "examples/resolver-demo.yaml",
@@ -491,6 +716,7 @@ func TestIntegration_RenderSolutionJSON(t *testing.T) {
 }
 
 func TestIntegration_RenderSolutionYAML(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t,
 		"run", "resolver",
 		"-f", "examples/resolver-demo.yaml",
@@ -510,6 +736,7 @@ func TestIntegration_RenderSolutionYAML(t *testing.T) {
 // ============================================================================
 
 func TestIntegration_ResolverGraph(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t,
 		"render", "solution",
 		"-f", "examples/actions/hello-world.yaml",
@@ -523,6 +750,7 @@ func TestIntegration_ResolverGraph(t *testing.T) {
 }
 
 func TestIntegration_ResolverGraphMermaid(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t,
 		"render", "solution",
 		"-f", "examples/actions/hello-world.yaml",
@@ -535,6 +763,7 @@ func TestIntegration_ResolverGraphMermaid(t *testing.T) {
 }
 
 func TestIntegration_ResolverGraphJSON(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t,
 		"render", "solution",
 		"-f", "examples/actions/hello-world.yaml",
@@ -551,6 +780,7 @@ func TestIntegration_ResolverGraphJSON(t *testing.T) {
 // ============================================================================
 
 func TestIntegration_ActionGraph(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t,
 		"render", "solution",
 		"-f", "examples/actions/sequential-chain.yaml",
@@ -565,6 +795,7 @@ func TestIntegration_ActionGraph(t *testing.T) {
 }
 
 func TestIntegration_ActionGraphMermaid(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t,
 		"render", "solution",
 		"-f", "examples/actions/sequential-chain.yaml",
@@ -578,6 +809,7 @@ func TestIntegration_ActionGraphMermaid(t *testing.T) {
 }
 
 func TestIntegration_ActionGraphDOT(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t,
 		"render", "solution",
 		"-f", "examples/actions/sequential-chain.yaml",
@@ -591,6 +823,7 @@ func TestIntegration_ActionGraphDOT(t *testing.T) {
 }
 
 func TestIntegration_ActionGraphJSON(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t,
 		"render", "solution",
 		"-f", "examples/actions/sequential-chain.yaml",
@@ -608,6 +841,7 @@ func TestIntegration_ActionGraphJSON(t *testing.T) {
 // ============================================================================
 
 func TestIntegration_ConfigView(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "config", "view")
 
 	// May return non-zero if no config exists, but shouldn't crash
@@ -615,6 +849,7 @@ func TestIntegration_ConfigView(t *testing.T) {
 }
 
 func TestIntegration_ConfigSchema(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "config", "schema")
 
 	assert.Equal(t, 0, exitCode)
@@ -627,6 +862,7 @@ func TestIntegration_ConfigSchema(t *testing.T) {
 // ============================================================================
 
 func TestIntegration_SecretsList(t *testing.T) {
+	t.Parallel()
 	// This test just verifies the command doesn't crash
 	_, _, exitCode := runScafctl(t, "secrets", "list")
 
@@ -635,6 +871,7 @@ func TestIntegration_SecretsList(t *testing.T) {
 }
 
 func TestIntegration_SecretsHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "secrets", "--help")
 
 	assert.Equal(t, 0, exitCode)
@@ -649,6 +886,7 @@ func TestIntegration_SecretsHelp(t *testing.T) {
 // ============================================================================
 
 func TestIntegration_AuthStatus(t *testing.T) {
+	t.Parallel()
 	// This test just verifies the command doesn't crash
 	stdout, _, exitCode := runScafctl(t, "auth", "status")
 
@@ -656,6 +894,7 @@ func TestIntegration_AuthStatus(t *testing.T) {
 }
 
 func TestIntegration_AuthHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "auth", "--help")
 
 	assert.Equal(t, 0, exitCode)
@@ -669,6 +908,7 @@ func TestIntegration_AuthHelp(t *testing.T) {
 // ============================================================================
 
 func TestIntegration_InvalidCommand(t *testing.T) {
+	t.Parallel()
 	_, stderr, exitCode := runScafctl(t, "invalidcommand")
 
 	assert.NotEqual(t, 0, exitCode)
@@ -676,6 +916,7 @@ func TestIntegration_InvalidCommand(t *testing.T) {
 }
 
 func TestIntegration_MissingRequiredFlag(t *testing.T) {
+	t.Parallel()
 	_, _, exitCode := runScafctl(t, "run", "solution")
 
 	// Should fail due to missing -f flag
@@ -687,6 +928,7 @@ func TestIntegration_MissingRequiredFlag(t *testing.T) {
 // ============================================================================
 
 func TestIntegration_SequentialChain(t *testing.T) {
+	t.Parallel()
 	stdout, stderr, exitCode := runScafctl(t,
 		"run", "solution",
 		"-f", "examples/actions/sequential-chain.yaml",
@@ -699,6 +941,7 @@ func TestIntegration_SequentialChain(t *testing.T) {
 }
 
 func TestIntegration_ConditionalExecution(t *testing.T) {
+	t.Parallel()
 	stdout, stderr, exitCode := runScafctl(t,
 		"run", "solution",
 		"-f", "examples/actions/conditional-execution.yaml",
@@ -711,6 +954,7 @@ func TestIntegration_ConditionalExecution(t *testing.T) {
 }
 
 func TestIntegration_ParallelWithDeps(t *testing.T) {
+	t.Parallel()
 	stdout, stderr, exitCode := runScafctl(t,
 		"run", "solution",
 		"-f", "examples/actions/parallel-with-deps.yaml",
@@ -727,6 +971,7 @@ func TestIntegration_ParallelWithDeps(t *testing.T) {
 // ============================================================================
 
 func TestIntegration_QuietMode(t *testing.T) {
+	t.Parallel()
 	stdout, stderr, exitCode := runScafctl(t,
 		"--quiet",
 		"run", "solution",
@@ -744,10 +989,12 @@ func TestIntegration_QuietMode(t *testing.T) {
 // ============================================================================
 
 func TestIntegration_OutputFormats(t *testing.T) {
+	t.Parallel()
 	formats := []string{"json", "yaml", "table"}
 
 	for _, format := range formats {
 		t.Run(format, func(t *testing.T) {
+			t.Parallel()
 			stdout, _, exitCode := runScafctl(t,
 				"run", "resolver",
 				"-f", "examples/resolver-demo.yaml",
@@ -765,6 +1012,7 @@ func TestIntegration_OutputFormats(t *testing.T) {
 // ============================================================================
 
 func TestIntegration_Lint_Help(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "lint", "--help")
 
 	assert.Equal(t, 0, exitCode)
@@ -775,6 +1023,7 @@ func TestIntegration_Lint_Help(t *testing.T) {
 }
 
 func TestIntegration_Lint_RequiresFile(t *testing.T) {
+	t.Parallel()
 	_, stderr, exitCode := runScafctl(t, "lint")
 
 	assert.NotEqual(t, 0, exitCode)
@@ -782,6 +1031,7 @@ func TestIntegration_Lint_RequiresFile(t *testing.T) {
 }
 
 func TestIntegration_Lint_ValidSolution(t *testing.T) {
+	t.Parallel()
 	// Test with a simple solution file that should have minimal issues
 	stdout, _, exitCode := runScafctl(t, "lint", "-f", "examples/resolver-demo.yaml", "-o", "json")
 
@@ -792,6 +1042,7 @@ func TestIntegration_Lint_ValidSolution(t *testing.T) {
 }
 
 func TestIntegration_Lint_SeverityFilter(t *testing.T) {
+	t.Parallel()
 	// Test error-only filter
 	stdout, _, _ := runScafctl(t, "lint", "-f", "examples/resolver-demo.yaml", "--severity", "error", "-o", "json")
 
@@ -802,6 +1053,7 @@ func TestIntegration_Lint_SeverityFilter(t *testing.T) {
 }
 
 func TestIntegration_Lint_QuietMode(t *testing.T) {
+	t.Parallel()
 	// Quiet mode should produce no output on success
 	stdout, _, exitCode := runScafctl(t, "lint", "-f", "examples/resolver-demo.yaml", "-o", "quiet")
 
@@ -812,6 +1064,7 @@ func TestIntegration_Lint_QuietMode(t *testing.T) {
 }
 
 func TestIntegration_Lint_JSONOutput(t *testing.T) {
+	t.Parallel()
 	stdout, _, _ := runScafctl(t, "lint", "-f", "examples/resolver-demo.yaml", "-o", "json")
 
 	// Verify JSON structure
@@ -823,6 +1076,7 @@ func TestIntegration_Lint_JSONOutput(t *testing.T) {
 }
 
 func TestIntegration_Lint_InvalidFile(t *testing.T) {
+	t.Parallel()
 	_, stderr, exitCode := runScafctl(t, "lint", "-f", "nonexistent.yaml")
 
 	assert.NotEqual(t, 0, exitCode)
@@ -830,6 +1084,7 @@ func TestIntegration_Lint_InvalidFile(t *testing.T) {
 }
 
 func TestIntegration_Lint_YAMLOutput(t *testing.T) {
+	t.Parallel()
 	stdout, _, _ := runScafctl(t, "lint", "-f", "examples/resolver-demo.yaml", "-o", "yaml")
 
 	// Verify YAML structure
@@ -839,6 +1094,7 @@ func TestIntegration_Lint_YAMLOutput(t *testing.T) {
 }
 
 func TestIntegration_Lint_Alias(t *testing.T) {
+	t.Parallel()
 	// Test the 'l' alias works
 	stdout, _, exitCode := runScafctl(t, "l", "-f", "examples/resolver-demo.yaml", "-o", "json")
 
@@ -848,6 +1104,7 @@ func TestIntegration_Lint_Alias(t *testing.T) {
 }
 
 func TestIntegration_Lint_CheckAlias(t *testing.T) {
+	t.Parallel()
 	// Test the 'check' alias works
 	stdout, _, exitCode := runScafctl(t, "check", "-f", "examples/resolver-demo.yaml", "-o", "json")
 
@@ -857,6 +1114,7 @@ func TestIntegration_Lint_CheckAlias(t *testing.T) {
 }
 
 func TestIntegration_Lint_WarningSeverityFilter(t *testing.T) {
+	t.Parallel()
 	// Test warning filter includes warnings and errors but not info
 	stdout, _, _ := runScafctl(t, "lint", "-f", "examples/resolver-demo.yaml", "--severity", "warning", "-o", "json")
 
@@ -866,6 +1124,7 @@ func TestIntegration_Lint_WarningSeverityFilter(t *testing.T) {
 }
 
 func TestIntegration_Lint_ActionSolution(t *testing.T) {
+	t.Parallel()
 	// Test linting a solution with actions
 	stdout, _, exitCode := runScafctl(t, "lint", "-f", "examples/actions/hello-world.yaml", "-o", "json")
 
@@ -875,6 +1134,7 @@ func TestIntegration_Lint_ActionSolution(t *testing.T) {
 }
 
 func TestIntegration_Lint_ComplexSolution(t *testing.T) {
+	t.Parallel()
 	// Test linting a more complex solution
 	stdout, _, exitCode := runScafctl(t, "lint", "-f", "examples/solutions/comprehensive/solution.yaml", "-o", "json")
 
@@ -886,6 +1146,7 @@ func TestIntegration_Lint_ComplexSolution(t *testing.T) {
 }
 
 func TestIntegration_Lint_TableOutput(t *testing.T) {
+	t.Parallel()
 	// Test default table output (explicit)
 	stdout, _, exitCode := runScafctl(t, "lint", "-f", "examples/resolver-demo.yaml", "-o", "table")
 
@@ -900,6 +1161,7 @@ func TestIntegration_Lint_TableOutput(t *testing.T) {
 // ============================================================================
 
 func TestIntegration_BuildHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "build", "--help")
 
 	assert.Equal(t, 0, exitCode)
@@ -908,6 +1170,7 @@ func TestIntegration_BuildHelp(t *testing.T) {
 }
 
 func TestIntegration_BuildSolutionHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "build", "solution", "--help")
 
 	assert.Equal(t, 0, exitCode)
@@ -949,6 +1212,7 @@ func TestIntegration_BuildSolution_VersionOverrideWarning(t *testing.T) {
 }
 
 func TestIntegration_BuildSolution_FileNotFound(t *testing.T) {
+	t.Parallel()
 	_, stderr, exitCode := runScafctl(t, "build", "solution", "nonexistent.yaml", "--version", "1.0.0")
 
 	assert.NotEqual(t, 0, exitCode)
@@ -1039,6 +1303,7 @@ func TestIntegration_BuildSolution_NoBundle(t *testing.T) {
 // ============================================================================
 
 func TestIntegration_CatalogHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "catalog", "--help")
 
 	assert.Equal(t, 0, exitCode)
@@ -1049,6 +1314,7 @@ func TestIntegration_CatalogHelp(t *testing.T) {
 }
 
 func TestIntegration_CatalogListHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "catalog", "list", "--help")
 
 	assert.Equal(t, 0, exitCode)
@@ -1102,6 +1368,7 @@ func TestIntegration_CatalogList_FilterByKind(t *testing.T) {
 }
 
 func TestIntegration_CatalogInspectHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "catalog", "inspect", "--help")
 
 	assert.Equal(t, 0, exitCode)
@@ -1155,6 +1422,7 @@ func TestIntegration_CatalogInspect_SpecificVersion(t *testing.T) {
 }
 
 func TestIntegration_CatalogDeleteHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "catalog", "delete", "--help")
 
 	assert.Equal(t, 0, exitCode)
@@ -1212,6 +1480,7 @@ func TestIntegration_CatalogDelete_Success(t *testing.T) {
 // ============================================================================
 
 func TestIntegration_CatalogPruneHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "catalog", "prune", "--help")
 
 	assert.Equal(t, 0, exitCode)
@@ -1426,6 +1695,7 @@ func TestIntegration_GetSolution_FromCatalog_ByName(t *testing.T) {
 // =============================================================================
 
 func TestIntegration_CatalogSaveHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, _ := runScafctl(t, "catalog", "save", "--help")
 	assert.Contains(t, stdout, "save")
 	assert.Contains(t, stdout, "output")
@@ -1498,6 +1768,7 @@ func TestIntegration_CatalogSave_SpecificVersion(t *testing.T) {
 // =============================================================================
 
 func TestIntegration_CatalogLoadHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, _ := runScafctl(t, "catalog", "load", "--help")
 	assert.Contains(t, stdout, "load")
 	assert.Contains(t, stdout, "input")
@@ -1505,6 +1776,7 @@ func TestIntegration_CatalogLoadHelp(t *testing.T) {
 }
 
 func TestIntegration_CatalogLoad_RequiresInput(t *testing.T) {
+	t.Parallel()
 	_, stderr, exitCode := runScafctl(t, "catalog", "load")
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "required")
@@ -1624,6 +1896,7 @@ func TestIntegration_CatalogSaveLoad_RoundTrip(t *testing.T) {
 // =============================================================================
 
 func TestIntegration_CatalogPushHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, _ := runScafctl(t, "catalog", "push", "--help")
 	assert.Contains(t, stdout, "Push a catalog artifact to a remote OCI registry")
 	assert.Contains(t, stdout, "--catalog")
@@ -1659,6 +1932,7 @@ func TestIntegration_CatalogPush_ArtifactNotFound(t *testing.T) {
 // =============================================================================
 
 func TestIntegration_CatalogPullHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, _ := runScafctl(t, "catalog", "pull", "--help")
 	assert.Contains(t, stdout, "Pull a catalog artifact from a remote OCI registry")
 	assert.Contains(t, stdout, "--as")
@@ -1680,6 +1954,7 @@ func TestIntegration_CatalogPull_InvalidReference(t *testing.T) {
 // =============================================================================
 
 func TestIntegration_CatalogDeleteRemoteHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, _ := runScafctl(t, "catalog", "delete", "--help")
 	assert.Contains(t, stdout, "Delete an artifact from the local or remote catalog")
 	assert.Contains(t, stdout, "ghcr.io/myorg/scafctl/solutions/my-solution")
@@ -1704,6 +1979,7 @@ func TestIntegration_CatalogDelete_RemoteDetection(t *testing.T) {
 // =============================================================================
 
 func TestIntegration_CatalogTagHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "catalog", "tag", "--help")
 
 	assert.Equal(t, 0, exitCode)
@@ -1781,6 +2057,7 @@ func TestIntegration_CatalogTag_MoveAlias(t *testing.T) {
 // =============================================================================
 
 func TestIntegration_CacheHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "cache", "--help")
 
 	assert.Equal(t, 0, exitCode)
@@ -1790,6 +2067,7 @@ func TestIntegration_CacheHelp(t *testing.T) {
 }
 
 func TestIntegration_CacheClearHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "cache", "clear", "--help")
 
 	assert.Equal(t, 0, exitCode)
@@ -1800,6 +2078,7 @@ func TestIntegration_CacheClearHelp(t *testing.T) {
 }
 
 func TestIntegration_CacheInfoHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "cache", "info", "--help")
 
 	assert.Equal(t, 0, exitCode)
@@ -1831,6 +2110,7 @@ func TestIntegration_CacheClear_Empty(t *testing.T) {
 }
 
 func TestIntegration_CacheClear_InvalidKind(t *testing.T) {
+	t.Parallel()
 	_, stderr, exitCode := runScafctl(t, "cache", "clear", "--kind", "invalid", "--force")
 
 	assert.NotEqual(t, 0, exitCode)
@@ -1865,6 +2145,7 @@ func TestIntegration_CacheClear_HTTPKind(t *testing.T) {
 // ============================================================================
 
 func TestIntegration_SolutionProvider_ResolverComposition(t *testing.T) {
+	t.Parallel()
 	stdout, stderr, exitCode := runScafctl(t,
 		"run", "solution",
 		"-f", "tests/integration/testdata/solution-provider/parent-resolver.yaml",
@@ -1878,6 +2159,7 @@ func TestIntegration_SolutionProvider_ResolverComposition(t *testing.T) {
 }
 
 func TestIntegration_SolutionProvider_WorkflowComposition(t *testing.T) {
+	t.Parallel()
 	stdout, stderr, exitCode := runScafctl(t,
 		"run", "solution",
 		"-f", "tests/integration/testdata/solution-provider/parent-action.yaml",
@@ -1889,6 +2171,7 @@ func TestIntegration_SolutionProvider_WorkflowComposition(t *testing.T) {
 }
 
 func TestIntegration_SolutionProvider_CircularReference(t *testing.T) {
+	t.Parallel()
 	_, stderr, exitCode := runScafctl(t,
 		"run", "solution",
 		"-f", "tests/integration/testdata/solution-provider/circular-a.yaml",
@@ -1899,6 +2182,7 @@ func TestIntegration_SolutionProvider_CircularReference(t *testing.T) {
 }
 
 func TestIntegration_SolutionProvider_DryRun(t *testing.T) {
+	t.Parallel()
 	stdout, stderr, exitCode := runScafctl(t,
 		"run", "solution",
 		"-f", "tests/integration/testdata/solution-provider/parent-action.yaml",
@@ -1913,6 +2197,7 @@ func TestIntegration_SolutionProvider_DryRun(t *testing.T) {
 }
 
 func TestIntegration_SolutionProvider_PropagateErrorsFalse(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	// Create a child solution that will fail (references a nonexistent provider)
@@ -1968,6 +2253,7 @@ spec:
 }
 
 func TestIntegration_SolutionProvider_MaxDepthExceeded(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	// Create a self-referencing solution with maxDepth: 1
@@ -2003,6 +2289,7 @@ spec:
 }
 
 func TestIntegration_SolutionProvider_ChildNotFound(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	parentSolution := `apiVersion: scafctl.io/v1
@@ -2035,6 +2322,7 @@ spec:
 }
 
 func TestIntegration_SolutionProvider_ResolverFilter(t *testing.T) {
+	t.Parallel()
 	// Parent requests only the "greeting" resolver from the child.
 	// The child has two resolvers: greeting (static) and echo-param (parameter).
 	// Since we only request "greeting", echo-param should not run and its absence
@@ -2074,6 +2362,7 @@ spec:
 }
 
 func TestIntegration_SolutionProvider_ResolverFilterNotFound(t *testing.T) {
+	t.Parallel()
 	// Request a resolver that does not exist in the child solution.
 	tmpDir := t.TempDir()
 
@@ -2107,6 +2396,7 @@ spec:
 }
 
 func TestIntegration_SolutionProvider_Timeout(t *testing.T) {
+	t.Parallel()
 	// Use a very short timeout with a normal child solution.
 	// The child should still succeed because the timeout is generous enough.
 	tmpDir := t.TempDir()
@@ -2148,6 +2438,7 @@ spec:
 // ============================================================================
 
 func TestIntegration_BundleHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "bundle", "--help")
 
 	assert.Equal(t, 0, exitCode)
@@ -2158,6 +2449,7 @@ func TestIntegration_BundleHelp(t *testing.T) {
 }
 
 func TestIntegration_BundleVerifyHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "bundle", "verify", "--help")
 
 	assert.Equal(t, 0, exitCode)
@@ -2166,6 +2458,7 @@ func TestIntegration_BundleVerifyHelp(t *testing.T) {
 }
 
 func TestIntegration_BundleDiffHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "bundle", "diff", "--help")
 
 	assert.Equal(t, 0, exitCode)
@@ -2176,6 +2469,7 @@ func TestIntegration_BundleDiffHelp(t *testing.T) {
 }
 
 func TestIntegration_BundleExtractHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "bundle", "extract", "--help")
 
 	assert.Equal(t, 0, exitCode)
@@ -2189,18 +2483,21 @@ func TestIntegration_BundleExtractHelp(t *testing.T) {
 }
 
 func TestIntegration_BundleVerify_MissingRef(t *testing.T) {
+	t.Parallel()
 	_, _, exitCode := runScafctl(t, "bundle", "verify")
 
 	assert.NotEqual(t, 0, exitCode)
 }
 
 func TestIntegration_BundleDiff_MissingArgs(t *testing.T) {
+	t.Parallel()
 	_, _, exitCode := runScafctl(t, "bundle", "diff")
 
 	assert.NotEqual(t, 0, exitCode)
 }
 
 func TestIntegration_BundleExtract_MissingRef(t *testing.T) {
+	t.Parallel()
 	_, _, exitCode := runScafctl(t, "bundle", "extract")
 
 	assert.NotEqual(t, 0, exitCode)
@@ -2280,6 +2577,7 @@ func TestIntegration_BundleDiff_SameVersion(t *testing.T) {
 // ============================================================================
 
 func TestIntegration_VendorHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "vendor", "--help")
 
 	assert.Equal(t, 0, exitCode)
@@ -2288,6 +2586,7 @@ func TestIntegration_VendorHelp(t *testing.T) {
 }
 
 func TestIntegration_VendorUpdateHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "vendor", "update", "--help")
 
 	assert.Equal(t, 0, exitCode)
@@ -2331,6 +2630,7 @@ spec:
 // ============================================================================
 
 func TestIntegration_BuildSolutionHelp_DedupeFlags(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "build", "solution", "--help")
 
 	assert.Equal(t, 0, exitCode)
@@ -2389,6 +2689,7 @@ func TestIntegration_BuildSolution_DryRunShowsDetails(t *testing.T) {
 // ============================================================================
 
 func TestIntegration_RunSolution_DirectoryProvider(t *testing.T) {
+	t.Parallel()
 	// Create a temp directory with test files
 	tmpDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "hello.txt"), []byte("world"), 0o644))

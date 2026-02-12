@@ -51,6 +51,7 @@ type Executor struct {
 	progressCallback ProgressCallback // Optional callback for progress events
 	validateAll      bool             // Continue execution and collect all errors instead of stopping at first
 	skipValidation   bool             // Skip the validation phase of all resolvers
+	skipTransform    bool             // Skip the transform and validation phases of all resolvers
 }
 
 // ExecutorOption is a functional option for configuring the Executor
@@ -117,6 +118,15 @@ func WithValidateAll(enabled bool) ExecutorOption {
 func WithSkipValidation(enabled bool) ExecutorOption {
 	return func(e *Executor) {
 		e.skipValidation = enabled
+	}
+}
+
+// WithSkipTransform disables the transform and validation phases for all resolvers.
+// When enabled, resolvers will execute only the resolve phase, returning the raw
+// resolved value without any transformations or validations applied.
+func WithSkipTransform(enabled bool) ExecutorOption {
+	return func(e *Executor) {
+		e.skipTransform = enabled
 	}
 }
 
@@ -567,7 +577,8 @@ func (e *Executor) executeResolver(ctx context.Context, r *Resolver, phaseNum in
 	}
 
 	// Execute transform phase
-	if r.Transform != nil {
+	// Skip if transform is disabled via executor option (also skips validate)
+	if r.Transform != nil && !e.skipTransform {
 		phaseStart := time.Now()
 		transformed, providerCalls, err := e.executeTransformPhase(resolverContext, r.Transform, value)
 		providerCallCount += providerCalls
@@ -613,8 +624,8 @@ func (e *Executor) executeResolver(ctx context.Context, r *Resolver, phaseNum in
 	}
 
 	// Execute validate phase (runs all validations and aggregates failures)
-	// Skip if validation is disabled via executor option
-	if r.Validate != nil && !e.skipValidation {
+	// Skip if validation is disabled via executor option, or if transform is skipped (implies skip validation)
+	if r.Validate != nil && !e.skipValidation && !e.skipTransform {
 		phaseStart := time.Now()
 		providerCalls, validationErr := e.executeValidatePhase(resolverContext, r.Name, r.Sensitive, r.Validate, value)
 		providerCallCount += providerCalls

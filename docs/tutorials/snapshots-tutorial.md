@@ -35,6 +35,17 @@ scafctl render solution -f my-solution.yaml \
   --snapshot --snapshot-file=snapshot.json
 ```
 
+### From `run resolver`
+
+You can also capture snapshots when running resolvers only (without actions):
+
+```bash
+scafctl run resolver -f my-solution.yaml \
+  --snapshot --snapshot-file=snapshot.json
+```
+
+This is useful when you want to inspect resolver execution without triggering actions.
+
 ### From `snapshot save`
 
 Or use the dedicated save command:

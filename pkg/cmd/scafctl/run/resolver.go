@@ -5,14 +5,17 @@ package run
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -26,9 +29,27 @@ type ResolverOptions struct {
 	// If empty, all resolvers are executed.
 	Names []string
 
-	// Verbose enables additional output: execution phases, timing,
-	// dependency edges, and provider information.
-	Verbose bool
+	// SkipTransform skips the transform and validation phases,
+	// returning raw resolved values.
+	SkipTransform bool
+
+	// DryRun shows the execution plan without running providers.
+	DryRun bool
+
+	// Graph renders the resolver dependency graph instead of executing.
+	Graph bool
+
+	// GraphFormat controls the graph rendering format (ascii, dot, mermaid, json).
+	GraphFormat string
+
+	// Snapshot saves an execution snapshot to a file instead of normal output.
+	Snapshot bool
+
+	// SnapshotFile is the path to write the snapshot file.
+	SnapshotFile string
+
+	// Redact redacts sensitive values in the snapshot.
+	Redact bool
 }
 
 // CommandResolver creates the 'run resolver' subcommand
@@ -59,6 +80,10 @@ This command is designed for debugging and inspecting resolver execution.
 It loads a solution file and executes only the resolvers, skipping the
 action/workflow phase entirely.
 
+The output always includes a __execution key containing per-resolver execution
+metadata: phase numbers, timing, provider info, dependencies, the resolver
+dependency graph, provider usage summary, and an aggregate summary.
+
 RESOLVER SELECTION:
   Pass resolver names as positional arguments to execute only specific
   resolvers and their transitive dependencies. When no names are provided,
@@ -69,14 +94,32 @@ RESOLVER SELECTION:
     scafctl run resolver db config          Execute 'db', 'config', and their deps
     scafctl run resolver auth -f sol.yaml   Execute 'auth' and its deps
 
-VERBOSE MODE:
-  Use --verbose to include a __execution key in the output containing
-  per-resolver execution metadata:
-  - Execution phase number and status
-  - Per-resolver duration and phase metrics breakdown
-  - Provider type and dependency information
-  - Aggregate summary (total duration, resolver count, phase count)
-  The __execution key is extensible for future additions (e.g. diagrams).
+SKIPPING PHASES:
+  Use --skip-validation to skip the validation phase of all resolvers.
+  Use --skip-transform to skip both the transform and validation phases,
+  returning only the raw resolved values. This is useful for inspecting
+  what providers return before any transformation.
+
+DRY RUN:
+  Use --dry-run to show the execution plan without running any providers.
+  This displays the DAG-based execution phases, resolver dependencies,
+  provider types, and configured phases for each resolver.
+
+GRAPH MODE:
+  Use --graph to visualize the resolver dependency graph without executing
+  any providers. Shows execution phases, parallelization opportunities,
+  dependencies, and the critical path.
+
+  Supported formats (--graph-format):
+    ascii   - Human-readable ASCII art (default)
+    dot     - Graphviz DOT format (pipe to 'dot' command for PNG/SVG)
+    mermaid - Mermaid diagram syntax
+    json    - Machine-readable JSON format
+
+SNAPSHOT MODE:
+  Use --snapshot to save a full execution snapshot to a file. Snapshots
+  capture resolver values, timing, phases, parameters, and metadata for
+  debugging, testing, comparison, and audit trails.
 
 RESOLVER PARAMETERS:
   Parameters can be passed using -r/--resolver flag in several formats:
@@ -108,11 +151,29 @@ Examples:
   # Run with parameters
   scafctl run resolver -r env=prod -r region=us-east1
 
-  # Run with verbose output for debugging
-  scafctl run resolver --verbose -f ./my-solution.yaml
-
   # JSON output for scripting
   scafctl run resolver -f ./my-solution.yaml -o json | jq .
+
+  # Skip transform and validation phases (raw resolved values)
+  scafctl run resolver --skip-transform -f ./my-solution.yaml
+
+  # Show execution plan without running providers
+  scafctl run resolver --dry-run -f ./my-solution.yaml
+
+  # Show resolver dependency graph (ASCII)
+  scafctl run resolver --graph -f ./my-solution.yaml
+
+  # Generate PNG graph using Graphviz
+  scafctl run resolver --graph --graph-format=dot -f ./my-solution.yaml | dot -Tpng > graph.png
+
+  # Generate Mermaid diagram
+  scafctl run resolver --graph --graph-format=mermaid -f ./my-solution.yaml
+
+  # Save execution snapshot
+  scafctl run resolver --snapshot --snapshot-file=snapshot.json -f ./my-solution.yaml
+
+  # Save snapshot with sensitive data redacted
+  scafctl run resolver --snapshot --snapshot-file=snapshot.json --redact -f ./my-solution.yaml
 
   # Explore results interactively
   scafctl run resolver -f ./my-solution.yaml -i
@@ -140,7 +201,13 @@ Examples:
 	addSharedResolverFlags(cCmd, &options.sharedResolverOptions)
 
 	// Resolver-specific flags
-	cCmd.Flags().BoolVar(&options.Verbose, "verbose", false, "Include __execution metadata in output (phases, timing, dependencies, providers)")
+	cCmd.Flags().BoolVar(&options.SkipTransform, "skip-transform", false, "Skip transform and validation phases, returning raw resolved values")
+	cCmd.Flags().BoolVar(&options.DryRun, "dry-run", false, "Show execution plan without running providers")
+	cCmd.Flags().BoolVar(&options.Graph, "graph", false, "Show resolver dependency graph instead of executing")
+	cCmd.Flags().StringVar(&options.GraphFormat, "graph-format", "ascii", "Graph output format: ascii, dot, mermaid, json")
+	cCmd.Flags().BoolVar(&options.Snapshot, "snapshot", false, "Save execution snapshot instead of normal output")
+	cCmd.Flags().StringVar(&options.SnapshotFile, "snapshot-file", "", "Snapshot output file (required with --snapshot)")
+	cCmd.Flags().BoolVar(&options.Redact, "redact", false, "Redact sensitive values in snapshot")
 
 	return cCmd
 }
@@ -152,10 +219,37 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		"file", o.File,
 		"output", o.Output,
 		"names", o.Names,
-		"verbose", o.Verbose,
+		"skipTransform", o.SkipTransform,
+		"dryRun", o.DryRun,
+		"graph", o.Graph,
+		"snapshot", o.Snapshot,
 		"resolveAll", o.ResolveAll,
 		"progress", o.Progress,
 		"showMetrics", o.ShowMetrics)
+
+	// Validate mutually exclusive modes
+	modeCount := 0
+	if o.DryRun {
+		modeCount++
+	}
+	if o.Graph {
+		modeCount++
+	}
+	if o.Snapshot {
+		modeCount++
+	}
+	if modeCount > 1 {
+		return o.exitWithCode(ctx,
+			fmt.Errorf("--dry-run, --graph, and --snapshot are mutually exclusive"),
+			exitcode.InvalidInput)
+	}
+
+	// Validate snapshot requirements
+	if o.Snapshot && o.SnapshotFile == "" {
+		return o.exitWithCode(ctx,
+			fmt.Errorf("--snapshot-file is required when using --snapshot"),
+			exitcode.InvalidInput)
+	}
 
 	// Prepare solution: load, set up registry, handle bundles
 	sol, reg, cleanup, err := o.prepareSolutionForExecution(ctx)
@@ -174,7 +268,11 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 
 	// Get all resolvers, then filter by names if specified
 	allResolvers := sol.Spec.ResolversToSlice()
-	resolvers := filterResolversWithDependencies(allResolvers, o.Names)
+	var lookup resolver.DescriptorLookup
+	if reg != nil {
+		lookup = reg.DescriptorLookup()
+	}
+	resolvers := filterResolversWithDependencies(allResolvers, o.Names, lookup)
 
 	// Validate requested names exist
 	if len(o.Names) > 0 {
@@ -197,6 +295,26 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		}
 	}
 
+	// Graph mode: show dependency graph without executing providers
+	if o.Graph {
+		return o.showResolverGraph(ctx, resolvers, reg)
+	}
+
+	// Dry run: show execution plan without running providers
+	if o.DryRun {
+		return o.showResolverDryRun(ctx, resolvers, reg)
+	}
+
+	// Snapshot mode: execute resolvers and save snapshot
+	if o.Snapshot {
+		return o.showResolverSnapshot(ctx, sol, resolvers, params, reg)
+	}
+
+	// Wire skip-transform flag into shared options for executeResolvers
+	if o.SkipTransform {
+		o.sharedResolverOptions.SkipTransform = true
+	}
+
 	// Track timing
 	start := time.Now()
 
@@ -214,108 +332,213 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		return o.exitWithCode(ctx, err, exitcode.ValidationFailed)
 	}
 
-	// Verbose: include __execution metadata in output
-	if o.Verbose {
-		results["__execution"] = o.buildExecutionData(resolverCtx, resolvers, elapsed)
+	// Always include __execution metadata — this is a debugging command
+	executionData := buildExecutionData(resolverCtx, resolvers, elapsed)
+
+	// Build and embed the resolver dependency graph
+	graph, graphErr := resolver.BuildGraph(resolvers, lookup)
+	if graphErr == nil {
+		if err := graph.RenderDiagrams(); err != nil {
+			lgr.V(1).Info("failed to render dependency graph diagrams", "error", err)
+		}
+		// Convert to map[string]any so CEL expressions can traverse the graph
+		graphJSON, err := json.Marshal(graph)
+		if err == nil {
+			var graphMap map[string]any
+			if err := json.Unmarshal(graphJSON, &graphMap); err == nil {
+				executionData["dependencyGraph"] = graphMap
+			} else {
+				lgr.V(1).Info("failed to unmarshal dependency graph", "error", err)
+			}
+		} else {
+			lgr.V(1).Info("failed to marshal dependency graph", "error", err)
+		}
+	} else {
+		lgr.V(1).Info("failed to build dependency graph for __execution", "error", graphErr)
 	}
+
+	// Embed provider usage summary
+	executionData["providerSummary"] = buildProviderSummary(resolverCtx, resolvers)
+
+	results["__execution"] = executionData
 
 	return o.writeResolverOutput(ctx, results, "scafctl run resolver")
 }
 
-// buildExecutionData constructs structured execution metadata from resolver results.
-// The returned map is extensible — new top-level sections can be added without
-// breaking consumers (e.g. "diagrams", "timeline", "warnings").
-func (o *ResolverOptions) buildExecutionData(
-	resolverCtx *resolver.Context,
-	resolvers []*resolver.Resolver,
-	totalElapsed time.Duration,
-) map[string]any {
-	allResults := resolverCtx.GetAllResults()
+// showResolverDryRun displays the execution plan without running providers
+func (o *ResolverOptions) showResolverDryRun(ctx context.Context, resolvers []*resolver.Resolver, reg *provider.Registry) error {
+	// Build execution phases from the resolver DAG
+	var lookup resolver.DescriptorLookup
+	if reg != nil {
+		lookup = reg.DescriptorLookup()
+	}
+	phases, err := resolver.BuildPhases(resolvers, lookup)
+	if err != nil {
+		return o.exitWithCode(ctx, fmt.Errorf("failed to build execution plan: %w", err), exitcode.InvalidInput)
+	}
 
-	// Build per-resolver execution metadata
-	resolverMeta := make(map[string]any, len(resolvers))
+	// Build structured dry-run output
+	plan := buildDryRunPlan(phases, resolvers, o.SkipTransform, o.SkipValidation)
+
+	return o.writeResolverOutput(ctx, plan, "scafctl run resolver --dry-run")
+}
+
+// buildDryRunPlan constructs the structured execution plan for dry-run output
+func buildDryRunPlan(phases []*resolver.PhaseGroup, resolvers []*resolver.Resolver, skipTransform, skipValidation bool) map[string]any {
+	// Build phase list
+	phaseList := make([]map[string]any, 0, len(phases))
+	for _, pg := range phases {
+		resolverNames := make([]string, len(pg.Resolvers))
+		for i, r := range pg.Resolvers {
+			resolverNames[i] = r.Name
+		}
+		phaseList = append(phaseList, map[string]any{
+			"phase":     pg.Phase,
+			"resolvers": resolverNames,
+		})
+	}
+
+	// Determine active phases
+	activePhases := []string{"resolve"}
+	skippedPhases := []string{}
+	if !skipTransform {
+		activePhases = append(activePhases, "transform")
+	} else {
+		skippedPhases = append(skippedPhases, "transform", "validate")
+	}
+	if !skipValidation && !skipTransform {
+		activePhases = append(activePhases, "validate")
+	} else if skipValidation && !skipTransform {
+		skippedPhases = append(skippedPhases, "validate")
+	}
+
+	// Build per-resolver info
+	resolverInfo := make(map[string]any, len(resolvers))
 	for _, r := range resolvers {
 		deps := resolver.ExtractDependencies(r, nil)
-		entry := map[string]any{
-			"provider":     resolverProviderName(r),
-			"dependencies": deps,
+		configuredPhases := []string{"resolve"}
+		if r.Transform != nil {
+			configuredPhases = append(configuredPhases, "transform")
+		}
+		if r.Validate != nil {
+			configuredPhases = append(configuredPhases, "validate")
 		}
 
-		if result, ok := allResults[r.Name]; ok {
-			entry["phase"] = result.Phase
-			entry["duration"] = result.TotalDuration.Round(time.Millisecond).String()
-			entry["status"] = string(result.Status)
-			entry["providerCallCount"] = result.ProviderCallCount
-			entry["valueSizeBytes"] = result.ValueSizeBytes
-			entry["dependencyCount"] = result.DependencyCount
-
-			// Per-phase breakdown (resolve, transform, validate)
-			if len(result.PhaseMetrics) > 0 {
-				metrics := make([]map[string]any, 0, len(result.PhaseMetrics))
-				for _, pm := range result.PhaseMetrics {
-					metrics = append(metrics, map[string]any{
-						"phase":    pm.Phase,
-						"duration": pm.Duration.Round(time.Millisecond).String(),
-					})
-				}
-				entry["phaseMetrics"] = metrics
-			}
-
-			// Include failed attempts for debugging
-			if len(result.FailedAttempts) > 0 {
-				attempts := make([]map[string]any, 0, len(result.FailedAttempts))
-				for _, fa := range result.FailedAttempts {
-					attempt := map[string]any{
-						"provider":   fa.Provider,
-						"phase":      fa.Phase,
-						"duration":   fa.Duration.Round(time.Millisecond).String(),
-						"sourceStep": fa.SourceStep,
-					}
-					if fa.Error != "" {
-						attempt["error"] = fa.Error
-					}
-					if fa.OnError != "" {
-						attempt["onError"] = fa.OnError
-					}
-					attempts = append(attempts, attempt)
-				}
-				entry["failedAttempts"] = attempts
-			}
-		} else {
-			entry["phase"] = 0
-			entry["duration"] = "0s"
-			entry["status"] = "unknown"
+		resolverInfo[r.Name] = map[string]any{
+			"provider":         resolverProviderName(r),
+			"dependencies":     deps,
+			"configuredPhases": configuredPhases,
 		}
-
-		resolverMeta[r.Name] = entry
-	}
-
-	// Build summary
-	phaseCount := 0
-	for _, result := range allResults {
-		if result.Phase > phaseCount {
-			phaseCount = result.Phase
-		}
-	}
-
-	summary := map[string]any{
-		"totalDuration": totalElapsed.Round(time.Millisecond).String(),
-		"resolverCount": len(resolvers),
-		"phaseCount":    phaseCount,
 	}
 
 	return map[string]any{
-		"resolvers": resolverMeta,
-		"summary":   summary,
+		"dryRun": true,
+		"executionPlan": map[string]any{
+			"totalResolvers": len(resolvers),
+			"totalPhases":    len(phases),
+			"activePhases":   activePhases,
+			"skippedPhases":  skippedPhases,
+			"phases":         phaseList,
+		},
+		"resolvers": resolverInfo,
 	}
 }
 
-// resolverProviderName extracts the primary provider name from a resolver
-func resolverProviderName(r *resolver.Resolver) string {
-	if r.Resolve != nil && len(r.Resolve.With) > 0 {
-		return r.Resolve.With[0].Provider
+// showResolverGraph renders the resolver dependency graph without executing providers
+func (o *ResolverOptions) showResolverGraph(ctx context.Context, resolvers []*resolver.Resolver, reg *provider.Registry) error {
+	var lookup resolver.DescriptorLookup
+	if reg != nil {
+		lookup = reg.DescriptorLookup()
 	}
-	return "unknown"
+
+	graph, err := resolver.BuildGraph(resolvers, lookup)
+	if err != nil {
+		return o.exitWithCode(ctx, fmt.Errorf("failed to build dependency graph: %w", err), exitcode.InvalidInput)
+	}
+
+	if err := renderGraph(o.IOStreams.Out, graph, graph, o.GraphFormat); err != nil {
+		return o.exitWithCode(ctx, fmt.Errorf("failed to render graph: %w", err), exitcode.GeneralError)
+	}
+
+	return nil
+}
+
+// showResolverSnapshot executes resolvers and saves the execution state as a snapshot file
+func (o *ResolverOptions) showResolverSnapshot(
+	ctx context.Context,
+	sol *solution.Solution,
+	resolvers []*resolver.Resolver,
+	params map[string]any,
+	reg *provider.Registry,
+) error {
+	lgr := logger.FromContext(ctx)
+
+	// Wire skip-transform flag into shared options for executeResolvers
+	if o.SkipTransform {
+		o.sharedResolverOptions.SkipTransform = true
+	}
+
+	start := time.Now()
+
+	// Execute resolvers
+	_, resolverCtx, err := o.executeResolvers(ctx, sol, resolvers, params, reg)
+	elapsed := time.Since(start)
+
+	status := resolver.ExecutionStatusSuccess
+	if err != nil {
+		lgr.V(1).Info("resolver execution completed with errors", "error", err)
+		status = resolver.ExecutionStatusFailed
+		// Continue to capture snapshot even with errors
+	}
+
+	// Re-inject resolver context into context.Context for CaptureSnapshot
+	snapshotCtx := resolver.WithContext(ctx, resolverCtx)
+
+	versionStr := ""
+	if sol.Metadata.Version != nil {
+		versionStr = sol.Metadata.Version.String()
+	}
+
+	snapshot, err := resolver.CaptureSnapshot(
+		snapshotCtx,
+		sol.Metadata.Name,
+		versionStr,
+		settings.VersionInformation.BuildVersion,
+		params,
+		elapsed,
+		status,
+	)
+	if err != nil {
+		return o.exitWithCode(ctx, fmt.Errorf("failed to capture snapshot: %w", err), exitcode.GeneralError)
+	}
+
+	// Redact sensitive values if requested
+	if o.Redact {
+		lgr.V(1).Info("redacting sensitive values")
+		resolverLikes := make([]resolver.ResolverLike, 0, len(resolvers))
+		for _, r := range resolvers {
+			resolverLikes = append(resolverLikes, &resolverAdapter{name: r.Name, sensitive: r.Sensitive})
+		}
+		resolver.RedactSensitiveValues(snapshot, resolverLikes)
+	}
+
+	// Save snapshot
+	lgr.V(1).Info("saving snapshot", "output", o.SnapshotFile)
+	if err := resolver.SaveSnapshot(snapshot, o.SnapshotFile); err != nil {
+		return o.exitWithCode(ctx, fmt.Errorf("failed to save snapshot: %w", err), exitcode.GeneralError)
+	}
+
+	fmt.Fprintf(o.IOStreams.Out, "Snapshot saved to %s\n", o.SnapshotFile)
+	fmt.Fprintf(o.IOStreams.Out, "  Solution: %s", snapshot.Metadata.Solution)
+	if snapshot.Metadata.Version != "" {
+		fmt.Fprintf(o.IOStreams.Out, " (v%s)", snapshot.Metadata.Version)
+	}
+	fmt.Fprintln(o.IOStreams.Out)
+	fmt.Fprintf(o.IOStreams.Out, "  Resolvers: %d\n", len(snapshot.Resolvers))
+	fmt.Fprintf(o.IOStreams.Out, "  Duration: %s\n", snapshot.Metadata.TotalDuration)
+	fmt.Fprintf(o.IOStreams.Out, "  Status: %s\n", snapshot.Metadata.Status)
+
+	return nil
 }
 
 // resolverNamesString returns a comma-separated string of resolver names
@@ -326,3 +549,12 @@ func resolverNamesString(resolvers []*resolver.Resolver) string {
 	}
 	return strings.Join(names, ", ")
 }
+
+// resolverAdapter adapts a Resolver's fields to the ResolverLike interface
+type resolverAdapter struct {
+	name      string
+	sensitive bool
+}
+
+func (a *resolverAdapter) GetName() string    { return a.name }
+func (a *resolverAdapter) GetSensitive() bool { return a.sensitive }
