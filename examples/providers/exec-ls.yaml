@@ -1,0 +1,4 @@
+# Exec provider input - list current directory
+command: ls
+args:
+  - "-la"

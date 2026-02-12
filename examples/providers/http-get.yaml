@@ -1,0 +1,3 @@
+# HTTP provider input - simple GET request
+url: https://httpbin.org/get
+method: GET
