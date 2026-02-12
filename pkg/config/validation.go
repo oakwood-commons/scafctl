@@ -43,6 +43,11 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Validate build config
+	if err := c.Build.Validate(); err != nil {
+		return fmt.Errorf("build: %w", err)
+	}
+
 	return nil
 }
 
@@ -211,4 +216,11 @@ func (c *Config) CheckVersion() string {
 		return fmt.Sprintf("config file version %d is newer than supported version %d, some features may not work", c.Version, CurrentConfigVersion)
 	}
 	return ""
+}
+
+// Validate validates the build configuration.
+func (b *BuildConfig) Validate() error {
+	// CacheDir and PluginCacheDir are validated for length by struct tags;
+	// no additional semantic validation needed at this time.
+	return nil
 }

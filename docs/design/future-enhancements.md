@@ -63,6 +63,8 @@ The bundling design is now fully specified. Key features:
 - **Plugin dependencies (`bundle.plugins`)** — Declare plugins with `kind`, version constraints, and ValueRef-aware defaults
 - **`.scafctlignore`** — Purpose-specific file exclusion (independent of `.gitignore`)
 - **Nested bundle support** — Bundled sub-solutions can themselves contain bundles
+- **Semver constraint resolution** — Catalog refs support full semver constraints (`^`, `~`, `>=`, etc.) resolved at build time to the highest matching version
+- **Version conflict detection** — Conflicting transitive dependency versions are detected and rejected at build time
 
 Future enhancements tracked in the bundling design doc:
 - `scafctl bundle verify` — validate built artifacts

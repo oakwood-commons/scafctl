@@ -84,6 +84,7 @@ func runInfo(ctx context.Context, _ *InfoOptions, outputOpts *kvx.OutputOptions)
 	// Collect cache info
 	caches := []Info{
 		getCacheInfo("HTTP Cache", paths.HTTPCacheDir(), "HTTP response cache"),
+		getCacheInfo("Build Cache", paths.BuildCacheDir(), "Incremental build fingerprints"),
 	}
 
 	// Calculate totals

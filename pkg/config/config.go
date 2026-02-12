@@ -155,6 +155,12 @@ func (m *Manager) setDefaults() {
 	m.v.SetDefault("action.defaultTimeout", settings.DefaultActionTimeout.String())
 	m.v.SetDefault("action.gracePeriod", settings.DefaultGracePeriod.String())
 	m.v.SetDefault("action.maxConcurrency", 0)
+
+	// Build defaults - all values from settings package
+	m.v.SetDefault("build.enableCache", true)
+	m.v.SetDefault("build.cacheDir", settings.DefaultBuildCacheDir())
+	m.v.SetDefault("build.autoCacheRemoteArtifacts", true)
+	m.v.SetDefault("build.pluginCacheDir", settings.DefaultPluginCacheDir())
 }
 
 // Save saves the current configuration to file.
@@ -192,6 +198,7 @@ func (m *Manager) Save() error {
 	m.v.Set("resolver", m.config.Resolver)
 	m.v.Set("action", m.config.Action)
 	m.v.Set("auth", m.config.Auth)
+	m.v.Set("build", m.config.Build)
 
 	return m.v.WriteConfig()
 }
@@ -218,6 +225,7 @@ func (m *Manager) SaveAs(path string) error {
 	m.v.Set("resolver", m.config.Resolver)
 	m.v.Set("action", m.config.Action)
 	m.v.Set("auth", m.config.Auth)
+	m.v.Set("build", m.config.Build)
 
 	return m.v.WriteConfigAs(path)
 }

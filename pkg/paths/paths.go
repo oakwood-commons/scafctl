@@ -24,6 +24,12 @@ const (
 
 	// CatalogDirName is the name of the catalog subdirectory.
 	CatalogDirName = "catalog"
+
+	// BuildCacheDirName is the name of the build cache subdirectory.
+	BuildCacheDirName = "build-cache"
+
+	// PluginCacheDirName is the name of the plugin cache subdirectory.
+	PluginCacheDirName = "plugins"
 )
 
 // ConfigFile returns the path to the config file.
@@ -135,6 +141,30 @@ func CatalogDir() string {
 //   - Windows: %LOCALAPPDATA%\scafctl\
 func StateDir() string {
 	return filepath.Join(xdg.StateHome, AppName)
+}
+
+// BuildCacheDir returns the default path to the build cache directory.
+//
+// Returns: $XDG_CACHE_HOME/scafctl/build-cache/
+//
+// Platform defaults:
+//   - Linux: ~/.cache/scafctl/build-cache/
+//   - macOS: ~/.cache/scafctl/build-cache/
+//   - Windows: %LOCALAPPDATA%\cache\scafctl\build-cache\
+func BuildCacheDir() string {
+	return filepath.Join(xdg.CacheHome, AppName, BuildCacheDirName)
+}
+
+// PluginCacheDir returns the default path to the plugin cache directory.
+//
+// Returns: $XDG_CACHE_HOME/scafctl/plugins/
+//
+// Platform defaults:
+//   - Linux: ~/.cache/scafctl/plugins/
+//   - macOS: ~/.cache/scafctl/plugins/
+//   - Windows: %LOCALAPPDATA%\cache\scafctl\plugins\
+func PluginCacheDir() string {
+	return filepath.Join(xdg.CacheHome, AppName, PluginCacheDirName)
 }
 
 // RuntimeDir returns the path to the runtime directory.

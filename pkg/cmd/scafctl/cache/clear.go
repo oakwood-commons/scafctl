@@ -49,10 +49,12 @@ const (
 	KindAll Kind = "all"
 	// KindHTTP clears the HTTP response cache.
 	KindHTTP Kind = "http"
+	// KindBuild clears the build cache (incremental build fingerprints).
+	KindBuild Kind = "build"
 )
 
 // ValidKinds lists all valid cache kinds.
-var ValidKinds = []string{string(KindAll), string(KindHTTP)}
+var ValidKinds = []string{string(KindAll), string(KindHTTP), string(KindBuild)}
 
 // CommandClear creates the clear command.
 func CommandClear(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
@@ -75,6 +77,7 @@ func CommandClear(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			Cache kinds:
 			  all   - Clear all caches (default)
 			  http  - Clear HTTP response cache
+			  build - Clear build cache (incremental build fingerprints)
 
 			Examples:
 			  # Clear all caches
@@ -118,6 +121,8 @@ func runClear(ctx context.Context, options *ClearOptions, outputOpts *kvx.Output
 			kind = KindAll
 		case string(KindHTTP):
 			kind = KindHTTP
+		case string(KindBuild):
+			kind = KindBuild
 		default:
 			err := fmt.Errorf("invalid cache kind %q; valid kinds: %s", options.Kind, strings.Join(ValidKinds, ", "))
 			w.Errorf("%v", err)
@@ -171,6 +176,15 @@ func runClear(ctx context.Context, options *ClearOptions, outputOpts *kvx.Output
 		files, bytes, err := clearDirectory(paths.HTTPCacheDir(), options.Name)
 		if err != nil {
 			w.Errorf("failed to clear HTTP cache: %v", err)
+			return exitcode.WithCode(err, exitcode.GeneralError)
+		}
+		totalFiles += files
+		totalBytes += bytes
+
+	case KindBuild:
+		files, bytes, err := clearDirectory(paths.BuildCacheDir(), options.Name)
+		if err != nil {
+			w.Errorf("failed to clear build cache: %v", err)
 			return exitcode.WithCode(err, exitcode.GeneralError)
 		}
 		totalFiles += files

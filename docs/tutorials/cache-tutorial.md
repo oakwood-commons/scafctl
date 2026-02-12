@@ -14,8 +14,10 @@ scafctl caches certain data to improve performance:
 | Cache Type | Description | Use Case |
 |------------|-------------|----------|
 | **HTTP Cache** | Responses from HTTP provider requests | Avoid repeated network calls |
+| **Build Cache** | Incremental build fingerprints | Skip unchanged solution rebuilds |
+| **Remote Artifact Cache** | Auto-cached artifacts from remote catalogs | Offline access to previously fetched solutions |
 
-Caching reduces network latency and allows offline access to previously fetched resources.
+Caching reduces network latency, speeds up builds, and allows offline access to previously fetched resources.
 
 ## Where is the Cache Stored?
 
@@ -122,6 +124,9 @@ Clear only a specific type of cache using `--kind`:
 # Clear only HTTP cache
 scafctl cache clear --kind http
 
+# Clear only build cache
+scafctl cache clear --kind build
+
 # Clear all caches (default)
 scafctl cache clear --kind all
 ```
@@ -226,10 +231,55 @@ Clear cached content.
 
 | Flag | Short | Description |
 |------|-------|-------------|
-| `--kind` | `-k` | Cache type to clear: `all`, `http` |
+| `--kind` | `-k` | Cache type to clear: `all`, `http`, `build` |
 | `--name` | `-n` | Pattern to match cache entries |
 | `--force` | `-f` | Skip confirmation prompt |
 | `--output` | `-o` | Output format: `table`, `json`, `yaml` |
+
+## Build Cache
+
+The build cache enables incremental builds by fingerprinting all build inputs (solution content, bundled files, plugin versions, and lock file). When inputs haven't changed, subsequent `scafctl build solution` invocations skip the entire build pipeline and return the cached result.
+
+### How It Works
+
+1. During `scafctl build solution`, a SHA-256 fingerprint is computed from all build inputs
+2. If a matching fingerprint exists in the cache, the build returns immediately
+3. After a successful build, the fingerprint and artifact metadata are cached
+
+### Controlling Build Cache
+
+```bash
+# Build with cache (default)
+scafctl build solution my-solution.yaml
+
+# Force a full rebuild, bypassing cache
+scafctl build solution my-solution.yaml --no-cache
+
+# Clear build cache
+scafctl cache clear --kind build --force
+```
+
+### Configuration
+
+The build cache can be configured in the scafctl config file:
+
+```yaml
+build:
+  enableCache: true              # Enable/disable build caching (default: true)
+  cacheDir: ~/.cache/scafctl/build-cache  # Build cache directory
+  autoCacheRemoteArtifacts: true  # Auto-cache remote catalog fetches locally
+  pluginCacheDir: ~/.cache/scafctl/plugins  # Plugin cache directory
+```
+
+Set configuration via CLI:
+
+```bash
+# Disable build cache globally
+scafctl config set build.enableCache false
+
+# Disable remote artifact auto-caching
+scafctl config set build.autoCacheRemoteArtifacts false
+```
 
 ## See Also
 
