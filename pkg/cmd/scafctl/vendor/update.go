@@ -347,6 +347,11 @@ func (a *catalogFetcherAdapter) FetchSolution(ctx context.Context, nameWithVersi
 	return content, info, nil
 }
 
+// ListSolutions returns all available versions of a named solution artifact.
+func (a *catalogFetcherAdapter) ListSolutions(ctx context.Context, name string) ([]catalog.ArtifactInfo, error) {
+	return a.catalog.List(ctx, catalog.ArtifactKindSolution, name)
+}
+
 // checkPluginUpdates reports the locked state of plugin dependencies.
 // Plugin version resolution requires a plugin registry; for now we just
 // report the locked state since plugins are binary artifacts.

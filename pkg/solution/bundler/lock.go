@@ -6,6 +6,7 @@ package bundler
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -33,8 +34,17 @@ type LockFile struct {
 
 // LockDependency records metadata about a vendored catalog dependency.
 type LockDependency struct {
-	// Ref is the original catalog reference (e.g., "deploy-to-k8s@2.0.0").
+	// Ref is the original catalog reference (e.g., "deploy-to-k8s@2.0.0" or "deploy-to-k8s@^1.5.0").
 	Ref string `json:"ref" yaml:"ref" doc:"Original catalog reference" maxLength:"255" example:"deploy-to-k8s@2.0.0"`
+
+	// ResolvedVersion is the exact semver version that was resolved and vendored.
+	// For exact refs like "deploy-to-k8s@2.0.0" this equals the version in Ref.
+	// For constraint refs like "deploy-to-k8s@^1.5.0" this is the resolved version (e.g., "1.5.2").
+	ResolvedVersion string `json:"resolvedVersion,omitempty" yaml:"resolvedVersion,omitempty" doc:"Exact resolved version" maxLength:"50" example:"1.5.2"`
+
+	// Constraint is the original version constraint, if any (e.g., "^1.5.0", ">=2.0.0").
+	// Empty for exact version references.
+	Constraint string `json:"constraint,omitempty" yaml:"constraint,omitempty" doc:"Original version constraint" maxLength:"100" example:"^1.5.0"`
 
 	// Digest is the SHA-256 content digest of the vendored file.
 	Digest string `json:"digest" yaml:"digest" doc:"SHA-256 content digest" maxLength:"128" example:"sha256:abc123..."`
@@ -65,16 +75,50 @@ type LockPlugin struct {
 }
 
 // FindDependency returns the lock entry for the given ref, or nil if not found.
+// It first tries an exact Ref match, then falls back to matching by name
+// (the part before @) to support constraint-based refs where the constraint
+// string may differ between runs.
 func (lf *LockFile) FindDependency(ref string) *LockDependency {
 	if lf == nil {
 		return nil
 	}
+	// Exact match first
 	for i := range lf.Dependencies {
 		if lf.Dependencies[i].Ref == ref {
 			return &lf.Dependencies[i]
 		}
 	}
+	// Fall back to name-based match for constraint refs
+	name := refName(ref)
+	for i := range lf.Dependencies {
+		if refName(lf.Dependencies[i].Ref) == name {
+			return &lf.Dependencies[i]
+		}
+	}
 	return nil
+}
+
+// FindDependencyByName returns the lock entry matching the artifact name, or nil.
+func (lf *LockFile) FindDependencyByName(name string) *LockDependency {
+	if lf == nil {
+		return nil
+	}
+	for i := range lf.Dependencies {
+		if refName(lf.Dependencies[i].Ref) == name {
+			return &lf.Dependencies[i]
+		}
+	}
+	return nil
+}
+
+// refName extracts the artifact name from a catalog ref string.
+// For "deploy-to-k8s@2.0.0" or "deploy-to-k8s@^1.5.0", returns "deploy-to-k8s".
+// For bare names like "deploy-to-k8s", returns the name unchanged.
+func refName(ref string) string {
+	if idx := strings.LastIndex(ref, "@"); idx > 0 {
+		return ref[:idx]
+	}
+	return ref
 }
 
 // FindPlugin returns the lock entry for a plugin by name and kind, or nil if not found.

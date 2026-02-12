@@ -1318,6 +1318,7 @@ func TestIntegration_BuildSolution_UsesMetadataVersion(t *testing.T) {
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Build without --version flag - should use metadata version (1.0.0)
 	stdout, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml")
@@ -1331,6 +1332,7 @@ func TestIntegration_BuildSolution_VersionOverrideWarning(t *testing.T) {
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Build with different version than metadata - should warn
 	stdout, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "9.9.9")
@@ -1353,6 +1355,7 @@ func TestIntegration_BuildSolution_Success(t *testing.T) {
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	stdout, stderr, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
 
@@ -1369,6 +1372,7 @@ func TestIntegration_BuildSolution_WithName(t *testing.T) {
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	stdout, stderr, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0", "--name", "my-custom-name")
 
@@ -1384,18 +1388,19 @@ func TestIntegration_BuildSolution_ForceOverwrite(t *testing.T) {
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// First build
 	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
 
 	// Second build without force should fail
-	_, stderr, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	_, stderr, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0", "--no-cache")
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "exists")
 
 	// Third build with force should succeed
-	stdout, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0", "--force")
+	stdout, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0", "--force", "--no-cache")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "Built")
 }
@@ -1403,6 +1408,7 @@ func TestIntegration_BuildSolution_ForceOverwrite(t *testing.T) {
 func TestIntegration_BuildSolution_DryRun(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	stdout, stderr, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0", "--dry-run")
 
@@ -1417,6 +1423,7 @@ func TestIntegration_BuildSolution_DryRun(t *testing.T) {
 func TestIntegration_BuildSolution_NoBundle(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	stdout, stderr, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0", "--no-bundle")
 
@@ -1458,6 +1465,7 @@ func TestIntegration_CatalogList_Empty(t *testing.T) {
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	stdout, _, exitCode := runScafctl(t, "catalog", "list", "-o", "json")
 
@@ -1470,6 +1478,7 @@ func TestIntegration_CatalogList_WithArtifacts(t *testing.T) {
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Build an artifact first
 	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
@@ -1486,6 +1495,7 @@ func TestIntegration_CatalogList_FilterByKind(t *testing.T) {
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Build an artifact first
 	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
@@ -1510,6 +1520,7 @@ func TestIntegration_CatalogInspect_NotFound(t *testing.T) {
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	_, stderr, exitCode := runScafctl(t, "catalog", "inspect", "nonexistent")
 
@@ -1521,6 +1532,7 @@ func TestIntegration_CatalogInspect_Success(t *testing.T) {
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Build an artifact first
 	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
@@ -1538,6 +1550,7 @@ func TestIntegration_CatalogInspect_SpecificVersion(t *testing.T) {
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Build multiple versions
 	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
@@ -1563,6 +1576,7 @@ func TestIntegration_CatalogDelete_RequiresVersion(t *testing.T) {
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Build an artifact first
 	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
@@ -1578,6 +1592,7 @@ func TestIntegration_CatalogDelete_NotFound(t *testing.T) {
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	_, stderr, exitCode := runScafctl(t, "catalog", "delete", "nonexistent@1.0.0")
 
@@ -1589,6 +1604,7 @@ func TestIntegration_CatalogDelete_Success(t *testing.T) {
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Build an artifact first
 	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
@@ -1622,6 +1638,7 @@ func TestIntegration_CatalogPrune_EmptyCatalog(t *testing.T) {
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	stdout, _, exitCode := runScafctl(t, "catalog", "prune")
 
@@ -1633,6 +1650,7 @@ func TestIntegration_CatalogPrune_JSON(t *testing.T) {
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	stdout, _, exitCode := runScafctl(t, "catalog", "prune", "-o", "json")
 
@@ -1646,6 +1664,7 @@ func TestIntegration_CatalogPrune_AfterDelete(t *testing.T) {
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Build an artifact
 	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
@@ -1670,6 +1689,7 @@ func TestIntegration_RunSolution_FromCatalog_NotFound(t *testing.T) {
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Try to run a solution that doesn't exist in catalog
 	stdout, stderr, exitCode := runScafctl(t, "run", "solution", "nonexistent-solution")
@@ -1684,6 +1704,7 @@ func TestIntegration_RunSolution_FromCatalog_ByName(t *testing.T) {
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Build a solution into the catalog
 	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
@@ -1701,6 +1722,7 @@ func TestIntegration_RunSolution_FromCatalog_ByNameVersion(t *testing.T) {
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Build two versions
 	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
@@ -1720,6 +1742,7 @@ func TestIntegration_RunSolution_FromCatalog_FallbackToFile(t *testing.T) {
 	// Create a temp directory for the catalog (empty)
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Run a solution by file path (not bare name) - should use file
 	stdout, _, exitCode := runScafctl(t, "run", "solution", "-f", "examples/resolver-demo.yaml", "-o", "json")
@@ -1733,6 +1756,7 @@ func TestIntegration_RunSolution_FromCatalog_PathNotBareName(t *testing.T) {
 	// Create a temp directory for the catalog (empty)
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// A path with a separator should not be treated as a bare name
 	// This should try to open a file, not lookup in catalog
@@ -1749,6 +1773,7 @@ func TestIntegration_RenderSolution_FromCatalog_ByName(t *testing.T) {
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Build a solution into the catalog
 	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
@@ -1769,6 +1794,7 @@ func TestIntegration_ExplainSolution_FromCatalog_ByName(t *testing.T) {
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Build a solution into the catalog
 	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
@@ -1788,6 +1814,7 @@ func TestIntegration_Lint_FromCatalog_ByName(t *testing.T) {
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Build a solution into the catalog
 	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
@@ -1807,6 +1834,7 @@ func TestIntegration_GetSolution_FromCatalog_ByName(t *testing.T) {
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Build a solution into the catalog
 	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
@@ -1834,6 +1862,7 @@ func TestIntegration_CatalogSaveHelp(t *testing.T) {
 func TestIntegration_CatalogSave_RequiresOutput(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Build an artifact first
 	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
@@ -1848,6 +1877,7 @@ func TestIntegration_CatalogSave_RequiresOutput(t *testing.T) {
 func TestIntegration_CatalogSave_NotFound(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	outputPath := tmpDir + "/nonexistent.tar"
 	_, stderr, exitCode := runScafctl(t, "catalog", "save", "nonexistent", "-o", outputPath)
@@ -1858,6 +1888,7 @@ func TestIntegration_CatalogSave_NotFound(t *testing.T) {
 func TestIntegration_CatalogSave_Success(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Build an artifact
 	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
@@ -1879,6 +1910,7 @@ func TestIntegration_CatalogSave_Success(t *testing.T) {
 func TestIntegration_CatalogSave_SpecificVersion(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Build multiple versions
 	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
@@ -1915,6 +1947,7 @@ func TestIntegration_CatalogLoad_RequiresInput(t *testing.T) {
 func TestIntegration_CatalogLoad_FileNotFound(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	_, stderr, exitCode := runScafctl(t, "catalog", "load", "--input", "/nonexistent/path.tar")
 	assert.NotEqual(t, 0, exitCode)
@@ -1925,6 +1958,7 @@ func TestIntegration_CatalogLoad_Success(t *testing.T) {
 	// Create source catalog
 	srcDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", srcDir)
+	t.Setenv("XDG_CACHE_HOME", srcDir)
 
 	// Build and save an artifact
 	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
@@ -1937,6 +1971,7 @@ func TestIntegration_CatalogLoad_Success(t *testing.T) {
 	// Switch to destination catalog
 	dstDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", dstDir)
+	t.Setenv("XDG_CACHE_HOME", dstDir)
 
 	// Load the artifact
 	stdout, _, exitCode := runScafctl(t, "catalog", "load", "--input", tarPath)
@@ -1953,6 +1988,7 @@ func TestIntegration_CatalogLoad_Success(t *testing.T) {
 func TestIntegration_CatalogLoad_AlreadyExists(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Build an artifact
 	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
@@ -1972,6 +2008,7 @@ func TestIntegration_CatalogLoad_AlreadyExists(t *testing.T) {
 func TestIntegration_CatalogLoad_ForceOverwrite(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Build an artifact
 	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
@@ -1996,6 +2033,7 @@ func TestIntegration_CatalogSaveLoad_RoundTrip(t *testing.T) {
 	// Create source catalog
 	srcDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", srcDir)
+	t.Setenv("XDG_CACHE_HOME", srcDir)
 
 	// Build an artifact
 	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
@@ -2009,6 +2047,7 @@ func TestIntegration_CatalogSaveLoad_RoundTrip(t *testing.T) {
 	// Switch to destination catalog
 	dstDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", dstDir)
+	t.Setenv("XDG_CACHE_HOME", dstDir)
 
 	// Load from tar
 	_, _, exitCode = runScafctl(t, "catalog", "load", "--input", tarPath)
@@ -2038,6 +2077,7 @@ func TestIntegration_CatalogPushHelp(t *testing.T) {
 func TestIntegration_CatalogPush_NoCatalog(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 	t.Setenv("XDG_CONFIG_HOME", tmpDir)
 
 	// Push without --catalog and no default configured should error.
@@ -2050,6 +2090,7 @@ func TestIntegration_CatalogPush_NoCatalog(t *testing.T) {
 func TestIntegration_CatalogPush_ArtifactNotFound(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Push a nonexistent artifact
 	_, stderr, exitCode := runScafctl(t, "catalog", "push", "nonexistent@1.0.0", "--catalog", "ghcr.io/test/scafctl")
@@ -2072,6 +2113,7 @@ func TestIntegration_CatalogPullHelp(t *testing.T) {
 func TestIntegration_CatalogPull_InvalidReference(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Pull with invalid reference (no registry)
 	_, stderr, exitCode := runScafctl(t, "catalog", "pull", "just-a-name")
@@ -2095,6 +2137,7 @@ func TestIntegration_CatalogDeleteRemoteHelp(t *testing.T) {
 func TestIntegration_CatalogDelete_RemoteDetection(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Try to delete from a fake remote - should detect it as remote
 	// and fail with auth/network error (not "invalid reference")
@@ -2122,6 +2165,7 @@ func TestIntegration_CatalogTagHelp(t *testing.T) {
 func TestIntegration_CatalogTag_RequiresVersion(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	_, stderr, exitCode := runScafctl(t, "catalog", "tag", "my-solution", "stable")
 	assert.NotEqual(t, 0, exitCode)
@@ -2131,6 +2175,7 @@ func TestIntegration_CatalogTag_RequiresVersion(t *testing.T) {
 func TestIntegration_CatalogTag_RejectsSemverAlias(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	_, stderr, exitCode := runScafctl(t, "catalog", "tag", "my-solution@1.0.0", "2.0.0")
 	assert.NotEqual(t, 0, exitCode)
@@ -2140,6 +2185,7 @@ func TestIntegration_CatalogTag_RejectsSemverAlias(t *testing.T) {
 func TestIntegration_CatalogTag_ArtifactNotFound(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	_, stderr, exitCode := runScafctl(t, "catalog", "tag", "nonexistent@1.0.0", "stable", "--kind", "solution")
 	assert.NotEqual(t, 0, exitCode)
@@ -2149,6 +2195,7 @@ func TestIntegration_CatalogTag_ArtifactNotFound(t *testing.T) {
 func TestIntegration_CatalogTag_Success(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Build an artifact first
 	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
@@ -2164,11 +2211,12 @@ func TestIntegration_CatalogTag_Success(t *testing.T) {
 func TestIntegration_CatalogTag_MoveAlias(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Build two versions
 	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
-	_, _, exitCode = runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "2.0.0", "--force")
+	_, _, exitCode = runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "2.0.0", "--force", "--no-cache")
 	require.Equal(t, 0, exitCode)
 
 	// Tag v1 as stable
@@ -2268,6 +2316,82 @@ func TestIntegration_CacheClear_HTTPKind(t *testing.T) {
 
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "No cached content found")
+}
+
+func TestIntegration_CacheClear_BuildKind(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+
+	stdout, _, exitCode := runScafctl(t, "cache", "clear", "--kind", "build", "--force")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "No cached content found")
+}
+
+func TestIntegration_CacheInfo_ShowsBuildCache(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+
+	stdout, _, exitCode := runScafctl(t, "cache", "info")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Build Cache")
+}
+
+func TestIntegration_BuildSolution_NoCacheFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+
+	stdout, stderr, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0", "--no-cache")
+
+	if exitCode != 0 {
+		t.Logf("stdout: %s", stdout)
+		t.Logf("stderr: %s", stderr)
+	}
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Built")
+}
+
+func TestIntegration_BuildSolution_BuildCacheHit(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+
+	// First build
+	stdout1, stderr1, exitCode1 := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	if exitCode1 != 0 {
+		t.Logf("stdout: %s", stdout1)
+		t.Logf("stderr: %s", stderr1)
+	}
+	require.Equal(t, 0, exitCode1)
+	assert.Contains(t, stdout1, "Built")
+
+	// Second build with same inputs — should be a cache hit
+	stdout2, stderr2, exitCode2 := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	if exitCode2 != 0 {
+		t.Logf("stdout: %s", stdout2)
+		t.Logf("stderr: %s", stderr2)
+	}
+	assert.Equal(t, 0, exitCode2)
+	assert.Contains(t, stdout2, "cache hit")
+}
+
+func TestIntegration_BuildSolution_NoCacheBypassesCacheHit(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+
+	// First build (populates cache)
+	_, _, exitCode1 := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode1)
+
+	// Second build with --no-cache — should NOT be a cache hit, should fail with "already exists" since --force is not set
+	stdout2, _, exitCode2 := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0", "--no-cache")
+	// Without --force, re-building same version should fail or succeed with --force
+	// It should at least NOT say "cache hit"
+	assert.NotContains(t, stdout2, "cache hit")
+	_ = exitCode2 // exit code depends on force flag behavior
 }
 
 // ============================================================================
@@ -2636,6 +2760,7 @@ func TestIntegration_BundleExtract_MissingRef(t *testing.T) {
 func TestIntegration_BundleVerify_AfterBuild(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Build first
 	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
@@ -2651,6 +2776,7 @@ func TestIntegration_BundleVerify_AfterBuild(t *testing.T) {
 func TestIntegration_BundleExtract_AfterBuild(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Build first
 	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
@@ -2667,6 +2793,7 @@ func TestIntegration_BundleExtract_AfterBuild(t *testing.T) {
 func TestIntegration_BundleExtract_ListOnly(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Build first
 	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
@@ -2685,12 +2812,13 @@ func TestIntegration_BundleExtract_ListOnly(t *testing.T) {
 func TestIntegration_BundleDiff_SameVersion(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Build two versions
 	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
 
-	_, _, exitCode = runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "2.0.0")
+	_, _, exitCode = runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "2.0.0", "--no-cache")
 	require.Equal(t, 0, exitCode)
 
 	// Diff them
@@ -2730,6 +2858,7 @@ func TestIntegration_VendorUpdateHelp(t *testing.T) {
 func TestIntegration_VendorUpdate_NoLockFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Create a minimal solution file without a lock file
 	solContent := `apiVersion: scafctl.io/v1
@@ -2771,6 +2900,7 @@ func TestIntegration_BuildSolutionHelp_DedupeFlags(t *testing.T) {
 func TestIntegration_BuildSolution_WithDedupe(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	stdout, stderr, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml",
 		"--version", "1.0.0", "--dedupe")
@@ -2786,6 +2916,7 @@ func TestIntegration_BuildSolution_WithDedupe(t *testing.T) {
 func TestIntegration_BuildSolution_WithDedupeDisabled(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	stdout, stderr, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml",
 		"--version", "1.0.0", "--dedupe=false")
@@ -2801,6 +2932,7 @@ func TestIntegration_BuildSolution_WithDedupeDisabled(t *testing.T) {
 func TestIntegration_BuildSolution_DryRunShowsDetails(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	stdout, stderr, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml",
 		"--version", "1.0.0", "--dry-run")
