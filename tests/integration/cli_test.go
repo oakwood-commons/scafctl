@@ -186,6 +186,136 @@ func TestIntegration_ExplainProviderNotFound(t *testing.T) {
 }
 
 // ============================================================================
+// Run Provider Tests
+// ============================================================================
+
+func TestIntegration_RunProvider_Help(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "run", "provider", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "--input")
+	assert.Contains(t, stdout, "--capability")
+	assert.Contains(t, stdout, "--dry-run")
+	assert.Contains(t, stdout, "--plugin-dir")
+}
+
+func TestIntegration_RunProvider_Static(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "run", "provider", "static", "--input", "value=hello")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "hello")
+}
+
+func TestIntegration_RunProvider_StaticJSON(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "run", "provider", "static", "--input", "value=hello", "-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "\"data\"")
+	assert.Contains(t, stdout, "hello")
+}
+
+func TestIntegration_RunProvider_Env(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "run", "provider", "env", "--input", "operation=get", "--input", "name=PATH")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "data")
+	assert.NotEmpty(t, stdout)
+}
+
+func TestIntegration_RunProvider_InvalidProvider(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t, "run", "provider", "nonexistent-provider-xyz")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "not found")
+}
+
+func TestIntegration_RunProvider_MissingInput(t *testing.T) {
+	t.Parallel()
+	// env provider requires 'name' input
+	_, stderr, exitCode := runScafctl(t, "run", "provider", "env")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.NotEmpty(t, stderr)
+}
+
+func TestIntegration_RunProvider_Capability(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "run", "provider", "static", "--input", "value=test", "--capability", "from")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "test")
+}
+
+func TestIntegration_RunProvider_InvalidCapability(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t, "run", "provider", "static", "--input", "value=test", "--capability", "bogus")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "invalid capability")
+}
+
+func TestIntegration_RunProvider_DryRun(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "run", "provider", "static", "--input", "value=hello", "--dry-run")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "dryRun")
+}
+
+func TestIntegration_RunProvider_InputFile(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "run", "provider", "static", "--input", "@examples/providers/static-hello.yaml")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "data")
+}
+
+func TestIntegration_RunProvider_Alias(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "run", "prov", "static", "--input", "value=alias-test")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "alias-test")
+}
+
+func TestIntegration_RunProvider_ShowMetrics(t *testing.T) {
+	t.Parallel()
+	stdout, stderr, exitCode := runScafctl(t, "run", "provider", "static", "--input", "value=metrics-test", "--show-metrics")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "metrics-test")
+	assert.Contains(t, stderr, "Provider Execution Metrics")
+}
+
+// ============================================================================
+// Get Provider CLI Usage Tests
+// ============================================================================
+
+func TestIntegration_GetProvider_CLIUsage(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "provider", "http")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "CLI Usage:")
+	assert.Contains(t, stdout, "scafctl run provider http")
+	assert.Contains(t, stdout, "--input")
+}
+
+func TestIntegration_GetProvider_CLIUsageJSON(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "provider", "static", "-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "cliUsage")
+	assert.Contains(t, stdout, "scafctl run provider static")
+}
+
+// ============================================================================
 // Run Solution Tests
 // ============================================================================
 

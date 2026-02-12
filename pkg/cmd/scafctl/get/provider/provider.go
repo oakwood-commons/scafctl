@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -353,6 +354,16 @@ func (o *Options) printProviderDetail(desc *provider.Descriptor) error {
 		}
 	}
 
+	// CLI Usage examples (auto-generated from schema)
+	cliExamples := generateCLIExamples(desc)
+	if len(cliExamples) > 0 {
+		fmt.Fprintln(out)
+		fmt.Fprintf(out, "%s\n", keyStyle("CLI Usage:"))
+		for _, example := range cliExamples {
+			fmt.Fprintf(out, "  %s\n", dimStyle(example))
+		}
+	}
+
 	// Links
 	if len(desc.Links) > 0 {
 		fmt.Fprintln(out)
@@ -490,7 +501,106 @@ func buildProviderDetail(desc provider.Descriptor) map[string]any {
 		output["maintainers"] = maintainers
 	}
 
+	// Add CLI usage examples
+	cliExamples := generateCLIExamples(&desc)
+	if len(cliExamples) > 0 {
+		output["cliUsage"] = cliExamples
+	}
+
 	return output
+}
+
+// generateCLIExamples auto-generates CLI usage examples from the provider's schema.
+// It builds "scafctl run provider <name>" commands using required fields and
+// type-appropriate placeholder values.
+func generateCLIExamples(desc *provider.Descriptor) []string {
+	if desc.Schema == nil || len(desc.Schema.Properties) == 0 {
+		return nil
+	}
+
+	// Build required set
+	requiredSet := make(map[string]bool, len(desc.Schema.Required))
+	for _, name := range desc.Schema.Required {
+		requiredSet[name] = true
+	}
+
+	// Collect required fields with placeholder values, sorted for deterministic output
+	requiredNames := make([]string, 0)
+	for name := range desc.Schema.Properties {
+		if requiredSet[name] {
+			requiredNames = append(requiredNames, name)
+		}
+	}
+	slices.Sort(requiredNames)
+
+	// Build input flags for required fields
+	inputFlags := make([]string, 0, len(requiredNames))
+	for _, name := range requiredNames {
+		prop := desc.Schema.Properties[name]
+		placeholder := schemaPlaceholder(name, prop)
+		inputFlags = append(inputFlags, fmt.Sprintf("--input %s=%s", name, placeholder))
+	}
+
+	var examples []string
+
+	// Example with required fields only
+	if len(inputFlags) > 0 {
+		cmd := fmt.Sprintf("scafctl run provider %s %s", desc.Name, strings.Join(inputFlags, " "))
+		examples = append(examples, cmd)
+	} else {
+		// No required fields - show a minimal example
+		examples = append(examples, fmt.Sprintf("scafctl run provider %s", desc.Name))
+	}
+
+	// If multiple capabilities, show an example with --capability for non-first capabilities
+	if len(desc.Capabilities) > 1 {
+		for _, cap := range desc.Capabilities[1:] {
+			baseCmdParts := []string{fmt.Sprintf("scafctl run provider %s", desc.Name)}
+			if len(inputFlags) > 0 {
+				baseCmdParts = append(baseCmdParts, inputFlags...)
+			}
+			baseCmdParts = append(baseCmdParts, fmt.Sprintf("--capability %s", cap))
+			examples = append(examples, strings.Join(baseCmdParts, " "))
+		}
+	}
+
+	// Add file-based input example
+	examples = append(examples, fmt.Sprintf("scafctl run provider %s --input @inputs.yaml", desc.Name))
+
+	return examples
+}
+
+// schemaPlaceholder returns a reasonable placeholder value for a schema property.
+func schemaPlaceholder(name string, prop *jsonschema.Schema) string {
+	if prop == nil {
+		return "<value>"
+	}
+
+	// Use the first example if available
+	if len(prop.Examples) > 0 {
+		return fmt.Sprintf("%v", prop.Examples[0])
+	}
+
+	// Use the first enum value if available
+	if len(prop.Enum) > 0 {
+		return fmt.Sprintf("%v", prop.Enum[0])
+	}
+
+	// Type-based placeholder
+	switch prop.Type {
+	case "string":
+		return fmt.Sprintf("<%s>", name)
+	case "integer", "number":
+		return "0"
+	case "boolean":
+		return "true"
+	case "array":
+		return fmt.Sprintf("<%s1>,<%s2>", name, name)
+	case "object":
+		return fmt.Sprintf("@%s.yaml", name)
+	default:
+		return fmt.Sprintf("<%s>", name)
+	}
 }
 
 // buildSchemaOutput converts a JSON Schema to a map for output
