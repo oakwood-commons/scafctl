@@ -10,6 +10,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
+	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -504,4 +505,185 @@ func mustParseSemver(v string) *semver.Version {
 		panic(err)
 	}
 	return ver
+}
+
+func TestSpec_HasTests(t *testing.T) {
+	tests := []struct {
+		name     string
+		spec     *Spec
+		expected bool
+	}{
+		{"nil spec", nil, false},
+		{"empty spec", &Spec{}, false},
+		{"nil tests", &Spec{Tests: nil}, false},
+		{"empty tests map", &Spec{Tests: map[string]*soltesting.TestCase{}}, false},
+		{"has tests", &Spec{Tests: map[string]*soltesting.TestCase{
+			"test1": {Name: "test1"},
+		}}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.spec.HasTests())
+		})
+	}
+}
+
+func TestSpec_HasTestConfig(t *testing.T) {
+	tests := []struct {
+		name     string
+		spec     *Spec
+		expected bool
+	}{
+		{"nil spec", nil, false},
+		{"empty spec", &Spec{}, false},
+		{"nil testConfig", &Spec{TestConfig: nil}, false},
+		{"has testConfig", &Spec{TestConfig: &soltesting.TestConfig{}}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.spec.HasTestConfig())
+		})
+	}
+}
+
+func TestSolution_UnmarshalWithTests(t *testing.T) {
+	yamlContent := `
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: tested-solution
+  version: 1.0.0
+spec:
+  resolvers:
+    env:
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              name: "env"
+  tests:
+    render-test:
+      description: "Test rendering"
+      command:
+        - render
+        - solution
+      assertions:
+        - contains: "hello"
+      tags:
+        - smoke
+    _base-template:
+      description: "Base template"
+      command:
+        - render
+        - solution
+  testConfig:
+    skipBuiltins: false
+    env:
+      MY_VAR: "value"
+    setup:
+      - command: "echo setup"
+`
+	var sol Solution
+	err := sol.UnmarshalFromBytes([]byte(yamlContent))
+	require.NoError(t, err)
+
+	assert.True(t, sol.Spec.HasTests())
+	assert.True(t, sol.Spec.HasTestConfig())
+	require.Len(t, sol.Spec.Tests, 2)
+
+	renderTest := sol.Spec.Tests["render-test"]
+	require.NotNil(t, renderTest)
+	assert.Equal(t, "Test rendering", renderTest.Description)
+	assert.Equal(t, []string{"render", "solution"}, renderTest.Command)
+	assert.Len(t, renderTest.Assertions, 1)
+	assert.Equal(t, "hello", renderTest.Assertions[0].Contains)
+	assert.Equal(t, []string{"smoke"}, renderTest.Tags)
+
+	baseTemplate := sol.Spec.Tests["_base-template"]
+	require.NotNil(t, baseTemplate)
+	assert.Equal(t, "Base template", baseTemplate.Description)
+
+	require.NotNil(t, sol.Spec.TestConfig)
+	assert.False(t, sol.Spec.TestConfig.SkipBuiltins.All)
+	assert.Equal(t, "value", sol.Spec.TestConfig.Env["MY_VAR"])
+	require.Len(t, sol.Spec.TestConfig.Setup, 1)
+	assert.Equal(t, "echo setup", sol.Spec.TestConfig.Setup[0].Command)
+}
+
+func TestSolution_RoundTrip_WithTests(t *testing.T) {
+	yamlContent := `
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: roundtrip-test
+  version: 1.0.0
+spec:
+  resolvers:
+    env:
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              name: "env"
+  tests:
+    my-test:
+      description: "A test"
+      command:
+        - render
+        - solution
+      assertions:
+        - contains: "output"
+  testConfig:
+    skipBuiltins: true
+`
+	var sol Solution
+	err := sol.UnmarshalFromBytes([]byte(yamlContent))
+	require.NoError(t, err)
+
+	// Marshal back to YAML
+	data, err := sol.ToYAML()
+	require.NoError(t, err)
+
+	// Parse again
+	var sol2 Solution
+	err = sol2.UnmarshalFromBytes(data)
+	require.NoError(t, err)
+
+	// Verify tests survived round-trip
+	assert.True(t, sol2.Spec.HasTests())
+	require.Contains(t, sol2.Spec.Tests, "my-test")
+	assert.Equal(t, "A test", sol2.Spec.Tests["my-test"].Description)
+
+	// Verify testConfig survived round-trip (including SkipBuiltinsValue)
+	assert.True(t, sol2.Spec.HasTestConfig())
+	assert.True(t, sol2.Spec.TestConfig.SkipBuiltins.All)
+}
+
+func TestSolution_BackwardCompat_NoTests(t *testing.T) {
+	// Existing solutions without tests should still parse fine
+	yamlContent := `
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: no-tests
+  version: 1.0.0
+spec:
+  resolvers:
+    env:
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              name: "env"
+`
+	var sol Solution
+	err := sol.UnmarshalFromBytes([]byte(yamlContent))
+	require.NoError(t, err)
+
+	assert.False(t, sol.Spec.HasTests())
+	assert.False(t, sol.Spec.HasTestConfig())
+	assert.Nil(t, sol.Spec.Tests)
+	assert.Nil(t, sol.Spec.TestConfig)
 }

@@ -50,13 +50,13 @@ func (r *RetryExecutor) CalculateDelay(attempt int) time.Duration {
 	// Get initial delay (default to 1s if not set)
 	initialDelay := time.Second
 	if r.config.InitialDelay != nil {
-		initialDelay = time.Duration(*r.config.InitialDelay)
+		initialDelay = r.config.InitialDelay.Duration
 	}
 
 	// Get max delay (default to 5 minutes if not set)
 	maxDelay := 5 * time.Minute
 	if r.config.MaxDelay != nil {
-		maxDelay = time.Duration(*r.config.MaxDelay)
+		maxDelay = r.config.MaxDelay.Duration
 	}
 
 	backoff := r.config.Backoff.OrDefault()

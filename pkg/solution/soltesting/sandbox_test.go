@@ -1,0 +1,250 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
+package soltesting_test
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestNewSandbox_BasicCreationAndCleanup(t *testing.T) {
+	dir := setupSandboxDir(t)
+
+	sb, err := soltesting.NewSandbox(filepath.Join(dir, "solution.yaml"), nil, nil)
+	require.NoError(t, err)
+	defer sb.Cleanup()
+
+	_, err = os.Stat(sb.Path())
+	assert.NoError(t, err)
+
+	_, err = os.Stat(sb.SolutionPath())
+	assert.NoError(t, err)
+
+	content, err := os.ReadFile(sb.SolutionPath())
+	require.NoError(t, err)
+	assert.Equal(t, "apiVersion: scafctl.io/v1\n", string(content))
+
+	sb.Cleanup()
+	_, err = os.Stat(sb.Path())
+	assert.True(t, os.IsNotExist(err))
+}
+
+func TestNewSandbox_CopiesBundleAndTestFiles(t *testing.T) {
+	dir := setupSandboxDir(t)
+	writeSandboxFile(t, dir, "templates/main.tmpl", "template content")
+	writeSandboxFile(t, dir, "testdata/input.json", `{"key":"value"}`)
+
+	sb, err := soltesting.NewSandbox(
+		filepath.Join(dir, "solution.yaml"),
+		[]string{"templates/main.tmpl"},
+		[]string{"testdata/input.json"},
+	)
+	require.NoError(t, err)
+	defer sb.Cleanup()
+
+	content, err := os.ReadFile(filepath.Join(sb.Path(), "templates/main.tmpl"))
+	require.NoError(t, err)
+	assert.Equal(t, "template content", string(content))
+
+	content, err = os.ReadFile(filepath.Join(sb.Path(), "testdata/input.json"))
+	require.NoError(t, err)
+	assert.Equal(t, `{"key":"value"}`, string(content))
+}
+
+func TestSandbox_PrePostSnapshot_DetectsNewAndModifiedFiles(t *testing.T) {
+	dir := setupSandboxDir(t)
+
+	sb, err := soltesting.NewSandbox(filepath.Join(dir, "solution.yaml"), nil, nil)
+	require.NoError(t, err)
+	defer sb.Cleanup()
+
+	require.NoError(t, sb.PreSnapshot())
+
+	time.Sleep(50 * time.Millisecond)
+
+	writeSandboxFile(t, sb.Path(), "output/result.txt", "new content")
+	require.NoError(t, os.WriteFile(sb.SolutionPath(), []byte("modified"), 0o644))
+
+	files, err := sb.PostSnapshot()
+	require.NoError(t, err)
+
+	fi, ok := files["output/result.txt"]
+	assert.True(t, ok, "new file should be detected")
+	assert.True(t, fi.Exists)
+	assert.Equal(t, "new content", fi.Content)
+
+	fi, ok = files["solution.yaml"]
+	assert.True(t, ok, "modified file should be detected")
+	assert.Equal(t, "modified", fi.Content)
+}
+
+func TestSandbox_PrePostSnapshot_IgnoresUnchangedFiles(t *testing.T) {
+	dir := setupSandboxDir(t)
+
+	sb, err := soltesting.NewSandbox(filepath.Join(dir, "solution.yaml"), nil, nil)
+	require.NoError(t, err)
+	defer sb.Cleanup()
+
+	require.NoError(t, sb.PreSnapshot())
+
+	files, err := sb.PostSnapshot()
+	require.NoError(t, err)
+	assert.Empty(t, files, "no files should be detected when nothing changed")
+}
+
+func TestSandbox_PostSnapshot_SizeGuard(t *testing.T) {
+	dir := setupSandboxDir(t)
+
+	sb, err := soltesting.NewSandbox(filepath.Join(dir, "solution.yaml"), nil, nil)
+	require.NoError(t, err)
+	defer sb.Cleanup()
+
+	require.NoError(t, sb.PreSnapshot())
+
+	largeFile := filepath.Join(sb.Path(), "large.bin")
+	f, err := os.Create(largeFile)
+	require.NoError(t, err)
+	data := make([]byte, soltesting.MaxFileSize+1)
+	for i := range data {
+		data[i] = 'x'
+	}
+	_, err = f.Write(data)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	files, err := sb.PostSnapshot()
+	require.NoError(t, err)
+
+	fi, ok := files["large.bin"]
+	assert.True(t, ok)
+	assert.Equal(t, soltesting.FileTooLargePlaceholder, fi.Content)
+}
+
+func TestSandbox_PostSnapshot_BinaryGuard(t *testing.T) {
+	dir := setupSandboxDir(t)
+
+	sb, err := soltesting.NewSandbox(filepath.Join(dir, "solution.yaml"), nil, nil)
+	require.NoError(t, err)
+	defer sb.Cleanup()
+
+	require.NoError(t, sb.PreSnapshot())
+
+	binaryFile := filepath.Join(sb.Path(), "image.png")
+	require.NoError(t, os.WriteFile(binaryFile, []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00}, 0o644))
+
+	files, err := sb.PostSnapshot()
+	require.NoError(t, err)
+
+	fi, ok := files["image.png"]
+	assert.True(t, ok)
+	assert.Equal(t, soltesting.BinaryFilePlaceholder, fi.Content)
+}
+
+func TestNewSandbox_RejectsSymlinks(t *testing.T) {
+	dir := setupSandboxDir(t)
+
+	writeSandboxFile(t, dir, "real.txt", "real content")
+	require.NoError(t, os.Symlink(filepath.Join(dir, "real.txt"), filepath.Join(dir, "link.txt")))
+
+	_, err := soltesting.NewSandbox(
+		filepath.Join(dir, "solution.yaml"),
+		[]string{"link.txt"},
+		nil,
+	)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "symlink")
+}
+
+func TestNewSandbox_RejectsPathTraversal(t *testing.T) {
+	dir := setupSandboxDir(t)
+
+	_, err := soltesting.NewSandbox(
+		filepath.Join(dir, "solution.yaml"),
+		[]string{"../../../etc/passwd"},
+		nil,
+	)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "path traversal")
+}
+
+func TestNewSandbox_RejectsAbsolutePath(t *testing.T) {
+	dir := setupSandboxDir(t)
+
+	_, err := soltesting.NewSandbox(
+		filepath.Join(dir, "solution.yaml"),
+		[]string{"/etc/passwd"},
+		nil,
+	)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "path traversal")
+}
+
+func TestSandbox_PostSnapshot_RequiresPreSnapshot(t *testing.T) {
+	dir := setupSandboxDir(t)
+
+	sb, err := soltesting.NewSandbox(filepath.Join(dir, "solution.yaml"), nil, nil)
+	require.NoError(t, err)
+	defer sb.Cleanup()
+
+	_, err = sb.PostSnapshot()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "PreSnapshot")
+}
+
+func TestNewBaseSandbox_And_CopyForTest(t *testing.T) {
+	dir := setupSandboxDir(t)
+	writeSandboxFile(t, dir, "shared/config.yaml", "shared config")
+	writeSandboxFile(t, dir, "testdata/test1.json", "test1 data")
+
+	base, err := soltesting.NewBaseSandbox(
+		filepath.Join(dir, "solution.yaml"),
+		[]string{"shared/config.yaml"},
+	)
+	require.NoError(t, err)
+	defer base.Cleanup()
+
+	content, err := os.ReadFile(filepath.Join(base.Path(), "shared/config.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, "shared config", string(content))
+
+	child, err := base.CopyForTest(dir, []string{"testdata/test1.json"})
+	require.NoError(t, err)
+	defer child.Cleanup()
+
+	content, err = os.ReadFile(filepath.Join(child.Path(), "shared/config.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, "shared config", string(content))
+
+	content, err = os.ReadFile(filepath.Join(child.Path(), "testdata/test1.json"))
+	require.NoError(t, err)
+	assert.Equal(t, "test1 data", string(content))
+
+	_, err = os.Stat(child.SolutionPath())
+	assert.NoError(t, err)
+
+	require.NoError(t, os.WriteFile(filepath.Join(child.Path(), "shared/config.yaml"), []byte("modified"), 0o644))
+	content, err = os.ReadFile(filepath.Join(base.Path(), "shared/config.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, "shared config", string(content))
+}
+
+func setupSandboxDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	writeSandboxFile(t, dir, "solution.yaml", "apiVersion: scafctl.io/v1\n")
+	return dir
+}
+
+func writeSandboxFile(t *testing.T, baseDir, relPath, content string) {
+	t.Helper()
+	fullPath := filepath.Join(baseDir, relPath)
+	require.NoError(t, os.MkdirAll(filepath.Dir(fullPath), 0o755))
+	require.NoError(t, os.WriteFile(fullPath, []byte(content), 0o644))
+}

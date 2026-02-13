@@ -1,0 +1,289 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: tested-solution
+  description: |
+    Example solution demonstrating functional testing features.
+    Includes resolvers, a template action, and inline tests with
+    CEL assertions, substring checks, inheritance, snapshots, init/cleanup,
+    tags, expected failures, environment variables, conditional skips,
+    retries, and more.
+  version: 1.0.0
+
+spec:
+  resolvers:
+    projectName:
+      description: Name of the project to scaffold
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: projectName
+          - provider: static
+            inputs:
+              value: my-app
+
+    language:
+      description: Programming language for the project
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: language
+          - provider: static
+            inputs:
+              value: go
+
+    greeting:
+      description: Generated greeting message
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '"Hello from " + _.projectName + " (" + _.language + ")"'
+
+    environment:
+      description: Target environment
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: environment
+          - provider: static
+            inputs:
+              value: dev
+
+  # ---------------------------------------------------------------------------
+  # Test Configuration
+  # ---------------------------------------------------------------------------
+  testConfig:
+    skipBuiltins:
+      - resolve-defaults
+      - render-defaults
+      - lint
+    env:
+      TEST_MODE: "true"
+
+  # ---------------------------------------------------------------------------
+  # Tests
+  # ---------------------------------------------------------------------------
+  tests:
+    # =========================================================================
+    # Templates (not executed directly)
+    # =========================================================================
+
+    _render-base:
+      description: Base template for resolver render tests
+      command: [run, resolver]
+      args: ["-o", "json"]
+      tags: [render]
+      assertions:
+        - expression: __exitCode == 0
+
+    _resolver-base:
+      description: Base template for resolver tests
+      command: [run, resolver]
+      args: ["-o", "json"]
+      tags: [resolver]
+      assertions:
+        - expression: __exitCode == 0
+
+    # =========================================================================
+    # Basic Tests
+    # =========================================================================
+
+    # --- Rendering -----------------------------------------------------------
+
+    render-basic:
+      description: Verify solution renders with default parameters
+      extends: [_render-base]
+      tags: [smoke]
+      assertions:
+        - contains: projectName
+        - contains: language
+
+    render-json:
+      description: Verify JSON output contains all resolvers
+      extends: [_render-base]
+      args: ["-o", "json"]
+      assertions:
+        - expression: '"projectName" in __output'
+        - expression: '"language" in __output'
+        - expression: '"greeting" in __output'
+        - expression: '"environment" in __output'
+
+    # --- Resolvers -----------------------------------------------------------
+
+    resolver-output:
+      description: Verify resolvers produce expected values
+      extends: [_resolver-base]
+      tags: [smoke]
+      assertions:
+        - expression: __output.greeting == "Hello from my-app (go)"
+          message: "Greeting should combine projectName and language"
+        - expression: __output.language == "go"
+
+    resolver-with-params:
+      description: Verify resolver output with custom parameters
+      extends: [_resolver-base]
+      args: ["-r", "projectName=custom-project", "-r", "language=python"]
+      assertions:
+        - expression: __output.greeting == "Hello from custom-project (python)"
+        - expression: __output.projectName == "custom-project"
+
+    # --- Lint ----------------------------------------------------------------
+
+    lint-clean:
+      description: Verify solution has no lint errors
+      command: [lint]
+      tags: [lint, smoke]
+      assertions:
+        - expression: __exitCode == 0
+
+    # =========================================================================
+    # Assertion Varieties
+    # =========================================================================
+
+    assertion-contains:
+      description: Demonstrate contains assertion
+      extends: [_resolver-base]
+      assertions:
+        - contains: "my-app"
+
+    assertion-not-contains:
+      description: Demonstrate notContains assertion
+      extends: [_resolver-base]
+      assertions:
+        - notContains: "ERROR"
+        - notContains: "panic"
+
+    assertion-regex:
+      description: Demonstrate regex assertion
+      extends: [_resolver-base]
+      assertions:
+        - regex: '"greeting":\s*"Hello from'
+
+    assertion-not-regex:
+      description: Demonstrate notRegex assertion
+      extends: [_resolver-base]
+      assertions:
+        - notRegex: "(?i)\\bpanic\\b|\\bfatal\\b"
+
+    assertion-target-stderr:
+      description: Demonstrate target field for assertions
+      extends: [_resolver-base]
+      assertions:
+        - notContains: "ERROR"
+          target: stderr
+        - notContains: "panic"
+          target: combined
+
+    assertion-message:
+      description: Demonstrate custom failure messages
+      extends: [_resolver-base]
+      assertions:
+        - expression: __output.language == "go"
+          message: "Default language should be 'go'"
+        - contains: "greeting"
+          message: "Output must include the greeting resolver"
+
+    # =========================================================================
+    # Environment Variables
+    # =========================================================================
+
+    env-per-test:
+      description: Demonstrate per-test environment variables
+      command: [run, resolver]
+      args: ["-o", "json"]
+      tags: [env]
+      env:
+        CUSTOM_ENV_VAR: "test-value"
+      assertions:
+        - expression: __exitCode == 0
+
+    # =========================================================================
+    # Init and Cleanup
+    # =========================================================================
+
+    init-cleanup:
+      description: Demonstrate init and cleanup steps
+      command: [run, resolver]
+      args: ["-o", "json"]
+      tags: [lifecycle]
+      init:
+        - command: "echo 'Setting up test'"
+      cleanup:
+        - command: "echo 'Cleaning up'"
+      assertions:
+        - expression: __exitCode == 0
+        - expression: __output.projectName == "my-app"
+
+    # =========================================================================
+    # Expected Failures
+    # =========================================================================
+
+    expect-failure:
+      description: Demonstrate expectFailure for a command that fails
+      command: [run, resolver]
+      args: ["--resolver", "nonExistentResolver"]
+      expectFailure: true
+      tags: [negative]
+      assertions:
+        - notContains: "panic"
+
+    # =========================================================================
+    # Timeouts
+    # =========================================================================
+
+    timeout-test:
+      description: Demonstrate per-test timeout
+      extends: [_resolver-base]
+      timeout: "30s"
+      tags: [timeout]
+      assertions:
+        - expression: __output.projectName == "my-app"
+
+    # =========================================================================
+    # Skipping Tests
+    # =========================================================================
+
+    skip-static:
+      description: Demonstrate static skip
+      skip: true
+      skipReason: "Example of a statically skipped test"
+      command: [render, solution]
+      tags: [skip]
+      assertions:
+        - expression: __exitCode == 0
+
+    skip-conditional:
+      description: Demonstrate conditional skip (skips on Windows)
+      skipExpression: 'os == "windows"'
+      extends: [_resolver-base]
+      tags: [skip]
+      assertions:
+        - expression: __output.language == "go"
+
+    # =========================================================================
+    # Retries
+    # =========================================================================
+
+    retry-test:
+      description: Demonstrate retries
+      extends: [_resolver-base]
+      retries: 2
+      tags: [retry]
+      assertions:
+        - expression: __output.greeting == "Hello from my-app (go)"
+
+    # =========================================================================
+    # Tags
+    # =========================================================================
+
+    tagged-integration:
+      description: Demonstrate tag-based filtering
+      extends: [_resolver-base]
+      tags: [integration, slow]
+      assertions:
+        - expression: __output.projectName == "my-app"

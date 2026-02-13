@@ -6,6 +6,7 @@ package solution
 import (
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
+	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 )
 
 // Spec defines the execution specification for a solution.
@@ -20,6 +21,14 @@ type Spec struct {
 	// Actions consume resolved data from resolvers and perform side-effect operations.
 	// All resolvers are evaluated before any action execution begins.
 	Workflow *action.Workflow `json:"workflow,omitempty" yaml:"workflow,omitempty" doc:"Action workflow specification"`
+
+	// Tests is a map of functional test definitions keyed by test name.
+	// Test names must be unique and must match ^[a-zA-Z0-9][a-zA-Z0-9_-]*$.
+	// Names starting with _ are templates that are not executed directly.
+	Tests map[string]*soltesting.TestCase `json:"tests,omitempty" yaml:"tests,omitempty" doc:"Functional test definitions keyed by name"`
+
+	// TestConfig holds solution-level test configuration.
+	TestConfig *soltesting.TestConfig `json:"testConfig,omitempty" yaml:"testConfig,omitempty" doc:"Solution-level test configuration"`
 }
 
 // ResolversToSlice converts the Resolvers map to a slice for execution.
@@ -57,4 +66,14 @@ func (s *Spec) HasActions() bool {
 		return false
 	}
 	return len(s.Workflow.Actions) > 0 || len(s.Workflow.Finally) > 0
+}
+
+// HasTests returns true if the spec contains any test definitions.
+func (s *Spec) HasTests() bool {
+	return s != nil && len(s.Tests) > 0
+}
+
+// HasTestConfig returns true if the spec has test configuration.
+func (s *Spec) HasTestConfig() bool {
+	return s != nil && s.TestConfig != nil
 }

@@ -45,6 +45,9 @@ const (
 
 	// PermissionDenied indicates insufficient permissions.
 	PermissionDenied = 10
+
+	// TestFailed indicates one or more functional tests failed.
+	TestFailed = 11
 )
 
 // Description returns a human-readable description of an exit code.
@@ -72,6 +75,8 @@ func Description(code int) string {
 		return "timeout"
 	case PermissionDenied:
 		return "permission denied"
+	case TestFailed:
+		return "one or more tests failed"
 	default:
 		return "unknown error"
 	}

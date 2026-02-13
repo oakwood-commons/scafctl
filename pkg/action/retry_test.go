@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/duration"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -71,9 +72,9 @@ func TestRetryExecutor_MaxAttempts(t *testing.T) {
 }
 
 func TestRetryExecutor_CalculateDelay(t *testing.T) {
-	second := Duration(time.Second)
-	fiveSeconds := Duration(5 * time.Second)
-	thirtySeconds := Duration(30 * time.Second)
+	second := duration.New(time.Second)
+	fiveSeconds := duration.New(5 * time.Second)
+	thirtySeconds := duration.New(30 * time.Second)
 
 	tests := []struct {
 		name     string
@@ -244,7 +245,7 @@ func TestRetryExecutor_CalculateDelay(t *testing.T) {
 }
 
 func TestRetryExecutor_WithJitter(t *testing.T) {
-	second := Duration(time.Second)
+	second := duration.New(time.Second)
 	config := &RetryConfig{
 		MaxAttempts:  3,
 		Backoff:      BackoffFixed,
@@ -327,7 +328,7 @@ func TestRetryExecutor_ExecuteWithRetry(t *testing.T) {
 	})
 
 	t.Run("success on second attempt", func(t *testing.T) {
-		tenMillis := Duration(10 * time.Millisecond)
+		tenMillis := duration.New(10 * time.Millisecond)
 		executor := NewRetryExecutor(&RetryConfig{
 			MaxAttempts:  3,
 			InitialDelay: &tenMillis,
@@ -353,7 +354,7 @@ func TestRetryExecutor_ExecuteWithRetry(t *testing.T) {
 	})
 
 	t.Run("all attempts fail", func(t *testing.T) {
-		tenMillis := Duration(10 * time.Millisecond)
+		tenMillis := duration.New(10 * time.Millisecond)
 		executor := NewRetryExecutor(&RetryConfig{
 			MaxAttempts:  3,
 			InitialDelay: &tenMillis,
@@ -397,7 +398,7 @@ func TestRetryExecutor_ExecuteWithRetry(t *testing.T) {
 	})
 
 	t.Run("cancelled during retry delay", func(t *testing.T) {
-		hundredMillis := Duration(100 * time.Millisecond)
+		hundredMillis := duration.New(100 * time.Millisecond)
 		executor := NewRetryExecutor(&RetryConfig{
 			MaxAttempts:  3,
 			InitialDelay: &hundredMillis,
@@ -448,7 +449,7 @@ func TestRetryExecutor_ExecuteWithRetry(t *testing.T) {
 	})
 
 	t.Run("callback called on retry", func(t *testing.T) {
-		tenMillis := Duration(10 * time.Millisecond)
+		tenMillis := duration.New(10 * time.Millisecond)
 		executor := NewRetryExecutor(&RetryConfig{
 			MaxAttempts:  3,
 			InitialDelay: &tenMillis,
@@ -515,7 +516,7 @@ func TestRetryExecutor_ExecuteWithRetryDetailed(t *testing.T) {
 	})
 
 	t.Run("failed result with retries", func(t *testing.T) {
-		tenMillis := Duration(10 * time.Millisecond)
+		tenMillis := duration.New(10 * time.Millisecond)
 		executor := NewRetryExecutor(&RetryConfig{
 			MaxAttempts:  3,
 			InitialDelay: &tenMillis,
@@ -540,7 +541,7 @@ func TestRetryExecutor_ExecuteWithRetryDetailed(t *testing.T) {
 	})
 
 	t.Run("success after retries", func(t *testing.T) {
-		tenMillis := Duration(10 * time.Millisecond)
+		tenMillis := duration.New(10 * time.Millisecond)
 		executor := NewRetryExecutor(&RetryConfig{
 			MaxAttempts:  3,
 			InitialDelay: &tenMillis,
@@ -583,7 +584,7 @@ func TestRetryExecutor_BackoffStrategies(t *testing.T) {
 	// Verify the mathematical properties of backoff strategies
 
 	t.Run("fixed backoff is constant", func(t *testing.T) {
-		second := Duration(time.Second)
+		second := duration.New(time.Second)
 		executor := NewRetryExecutor(&RetryConfig{
 			MaxAttempts:  5,
 			Backoff:      BackoffFixed,
@@ -596,7 +597,7 @@ func TestRetryExecutor_BackoffStrategies(t *testing.T) {
 	})
 
 	t.Run("linear backoff increases linearly", func(t *testing.T) {
-		second := Duration(time.Second)
+		second := duration.New(time.Second)
 		executor := NewRetryExecutor(&RetryConfig{
 			MaxAttempts:  5,
 			Backoff:      BackoffLinear,
@@ -614,7 +615,7 @@ func TestRetryExecutor_BackoffStrategies(t *testing.T) {
 	})
 
 	t.Run("exponential backoff doubles", func(t *testing.T) {
-		second := Duration(time.Second)
+		second := duration.New(time.Second)
 		executor := NewRetryExecutor(&RetryConfig{
 			MaxAttempts:  6,
 			Backoff:      BackoffExponential,
@@ -778,7 +779,7 @@ func TestRetryExecutor_ShouldRetry_WithRetryIf(t *testing.T) {
 func TestRetryExecutor_ExecuteWithRetry_WithRetryIf(t *testing.T) {
 	t.Run("stops retrying when retryIf returns false", func(t *testing.T) {
 		retryIfExpr := celexp.Expression("__error.statusCode >= 500")
-		tenMillis := Duration(10 * time.Millisecond)
+		tenMillis := duration.New(10 * time.Millisecond)
 		config := &RetryConfig{
 			MaxAttempts:  5,
 			RetryIf:      &retryIfExpr,
@@ -804,7 +805,7 @@ func TestRetryExecutor_ExecuteWithRetry_WithRetryIf(t *testing.T) {
 
 	t.Run("retries when retryIf returns true then succeeds", func(t *testing.T) {
 		retryIfExpr := celexp.Expression("__error.statusCode == 503")
-		tenMillis := Duration(10 * time.Millisecond)
+		tenMillis := duration.New(10 * time.Millisecond)
 		config := &RetryConfig{
 			MaxAttempts:  5,
 			RetryIf:      &retryIfExpr,

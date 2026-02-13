@@ -24,6 +24,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/run"
 	secretscmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/snapshot"
+	testcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/test"
 	vendorcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/vendor"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/version"
 	"github.com/oakwood-commons/scafctl/pkg/config"
@@ -294,5 +295,11 @@ func Root(opts *RootOptions) *cobra.Command {
 	cCmd.AddCommand(cachecmd.CommandCache(cliParams, ioStreams, settings.CliBinaryName))
 	cCmd.AddCommand(bundlecmd.CommandBundle(cliParams, ioStreams, settings.CliBinaryName))
 	cCmd.AddCommand(vendorcmd.CommandVendor(cliParams, ioStreams, settings.CliBinaryName))
+	cCmd.AddCommand(testcmd.CommandTest(cliParams, ioStreams, settings.CliBinaryName, func(testIO *terminal.IOStreams, exitFunc func(code int)) *cobra.Command {
+		return Root(&RootOptions{
+			IOStreams: testIO,
+			ExitFunc:  exitFunc,
+		})
+	}))
 	return cCmd
 }

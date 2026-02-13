@@ -17,53 +17,53 @@ This is the primary mechanism for validating solutions in CI and during developm
 
 | Feature | Status | Notes |
 | ------- | ------ | ----- |
-| `test functional` CLI command | 📋 Planned | Not yet implemented |
-| `test list` CLI subcommand | 📋 Planned | List tests without running |
-| Test spec types | 📋 Planned | No Go types defined |
-| Builtin tests | 📋 Planned | Parse, resolve, render, lint |
-| Command-based test execution | 📋 Planned | Execute any scafctl subcommand |
-| CEL assertions | 📋 Planned | Infrastructure exists in `pkg/celexp/` |
-| Regex assertions | 📋 Planned | |
-| Contains assertions | 📋 Planned | |
-| Negation assertions | 📋 Planned | `notContains`, `notRegex` |
-| Golden file snapshots | 📋 Planned | New implementation; `pkg/resolver/diff.go` is resolver-specific and not reusable for golden file comparison |
-| Init scripts (exec provider) | 📋 Planned | |
-| Test file includes | 📋 Planned | Bundle integration required |
-| Temp directory sandbox | 📋 Planned | |
-| JUnit XML reporting | 📋 Planned | |
-| Compose support for tests | 📋 Planned | Compose merger needs extension |
-| Parallel test execution | 📋 Planned | |
-| CEL assertion diagnostics | 📋 Planned | Sub-expression evaluation for failures |
-| Suite-level setup | 📋 Planned | Shared init across tests |
-| Test tags and filtering | 📋 Planned | `--tag` flag, `tags` field on test cases |
-| Per-test environment variables | 📋 Planned | `env` field on test cases |
-| Cleanup steps | 📋 Planned | `cleanup` field, runs even on failure |
-| Test inheritance (extends) | 📋 Planned | Multi-extends with `_` prefix templates |
-| Assertion target (stderr) | 📋 Planned | `target` field: `stdout`, `stderr`, `combined` |
-| File assertions (`output.files`) | 📋 Planned | Diff-based sandbox file change detection |
-| Fail-fast (per-solution) | 📋 Planned | `--fail-fast` stops remaining tests per solution |
-| Test name validation | 📋 Planned | Must match `^[a-zA-Z0-9][a-zA-Z0-9_-]*$` |
-| Selective builtin skip | 📋 Planned | `skipBuiltins` accepts `bool` or `[]string` |
-| In-process command execution | 📋 Planned | Cobra tree invocation, custom `exitFunc` |
-| Concurrency control | 📋 Planned | `-j` flag, `--sequential` as sugar for `-j 1` |
-| Conditional skip (`skipExpression`) | 📋 Planned | CEL-based runtime skip evaluation |
-| Test retries | 📋 Planned | `retries` field for flaky test resilience |
-| Suite-level cleanup | 📋 Planned | `testConfig.cleanup` for teardown after all tests |
-| File size guard | 📋 Planned | Cap `files[].content` at 10MB to prevent OOM |
+| `test functional` CLI command | ✅ Done | `pkg/cmd/scafctl/test/functional.go` |
+| `test list` CLI subcommand | ✅ Done | `pkg/cmd/scafctl/test/list.go` |
+| Test spec types | ✅ Done | `pkg/solution/soltesting/types.go` |
+| Builtin tests | ✅ Done | Parse, resolve, render, lint in `builtins.go` |
+| Command-based test execution | ✅ Done | In-process cobra execution via `CommandBuilder` |
+| CEL assertions | ✅ Done | `pkg/solution/soltesting/assertions.go` |
+| Regex assertions | ✅ Done | |
+| Contains assertions | ✅ Done | |
+| Negation assertions | ✅ Done | `notContains`, `notRegex` |
+| Golden file snapshots | ✅ Done | `pkg/solution/soltesting/snapshot.go` |
+| Init scripts (exec provider) | ✅ Done | `InitStep` with exec provider schema |
+| Test file includes | ✅ Done | `TestInclude` discovery source in bundler |
+| Temp directory sandbox | ✅ Done | `pkg/solution/soltesting/sandbox.go` |
+| JUnit XML reporting | ✅ Done | `pkg/solution/soltesting/junit.go` |
+| Compose support for tests | ✅ Done | `mergeTests()` and `mergeTestConfig()` in compose |
+| Parallel test execution | ✅ Done | Semaphore-based concurrency control |
+| CEL assertion diagnostics | ✅ Done | `pkg/solution/soltesting/diagnostics.go` |
+| Suite-level setup | ✅ Done | `testConfig.setup` with base sandbox copy |
+| Test tags and filtering | ✅ Done | `--tag` flag, `tags` field on test cases |
+| Per-test environment variables | ✅ Done | `env` field on test cases |
+| Cleanup steps | ✅ Done | `cleanup` field, runs even on failure |
+| Test inheritance (extends) | ✅ Done | `pkg/solution/soltesting/inheritance.go` |
+| Assertion target (stderr) | ✅ Done | `target` field: `stdout`, `stderr`, `combined` |
+| File assertions (`__files`) | ✅ Done | Diff-based sandbox file change detection |
+| Fail-fast (per-solution) | ✅ Done | `--fail-fast` stops remaining tests per solution |
+| Test name validation | ✅ Done | Enforced in `TestCase.Validate()` |
+| Selective builtin skip | ✅ Done | `SkipBuiltinsValue` with custom unmarshal |
+| In-process command execution | ✅ Done | `Root()` with `*RootOptions`, `CommandBuilder` |
+| Concurrency control | ✅ Done | `-j` flag, `--sequential` as sugar for `-j 1` |
+| Conditional skip (`skipExpression`) | ✅ Done | CEL-based runtime skip evaluation |
+| Test retries | ✅ Done | `retries` field for flaky test resilience |
+| Suite-level cleanup | ✅ Done | `testConfig.cleanup` for teardown after all tests |
+| File size guard | ✅ Done | Cap `files[].content` at 10MB to prevent OOM |
 | In-process execution safety | ✅ Done | `Root()` accepts `*RootOptions`, no package-level state |
-| Unused template lint warning | 📋 Planned | Warn on templates never referenced via `extends` |
-| Solution filtering (`--solution`) | 📋 Planned | Glob-based solution name filtering for multi-solution runs |
-| `--filter` solution/test format | 📋 Planned | `--filter "solution/test-name"` glob support |
-| `--dry-run` flag | 📋 Planned | Validate test definitions without executing |
-| Suite-level `env` | 📋 Planned | `testConfig.env` shared across all tests |
-| Binary file content guard | 📋 Planned | Non-UTF-8 files get `content` set to `"<binary file>"` |
-| Test execution ordering | 📋 Planned | Alphabetical by name; builtins first |
-| Field max limits | 📋 Planned | `assertions: 100`, `files: 50`, `tags: 20`, extends depth: 10 |
-| Glob zero-match error | 📋 Planned | Test `files` globs matching zero files produce `error` |
-| Environment precedence chain | 📋 Planned | process → `testConfig.env` → `TestCase.env` → `InitStep.env` |
-| `TestCase.Validate()` | 📋 Planned | Comprehensive test case validation method |
-| Extends non-existent error | 📋 Planned | `extends` referencing non-existent test names is a parse-time error |
-| Tests per solution limit | 📋 Planned | Max 500 tests per solution |
+| Unused template lint warning | ✅ Done | `unused-template` lint rule |
+| Solution filtering (`--solution`) | ✅ Done | Glob-based solution name filtering |
+| `--filter` solution/test format | ✅ Done | `--filter "solution/test-name"` glob support |
+| `--dry-run` flag | ✅ Done | Validate test definitions without executing |
+| Suite-level `env` | ✅ Done | `testConfig.env` shared across all tests |
+| Binary file content guard | ✅ Done | Non-UTF-8 files get `content` set to `"<binary file>"` |
+| Test execution ordering | ✅ Done | Alphabetical by name; builtins first |
+| Field max limits | ✅ Done | `assertions: 100`, `files: 50`, `tags: 20`, extends depth: 10 |
+| Glob zero-match error | ✅ Done | Test `files` globs matching zero files produce `error` |
+| Environment precedence chain | ✅ Done | process → `testConfig.env` → `TestCase.env` → `InitStep.env` |
+| `TestCase.Validate()` | ✅ Done | Comprehensive test case validation method |
+| Extends non-existent error | ✅ Done | `extends` referencing non-existent test names is a parse-time error |
+| Tests per solution limit | ✅ Done | Max 500 tests per solution |
 
 ---
 
@@ -113,14 +113,14 @@ spec:
       description: "Base render test template"
       command: [render, solution]
       assertions:
-        - expression: 'size(output.actions) >= 1'
+        - expression: 'size(__output.actions) >= 1'
 
     renders-dev-defaults:
       description: "Default environment renders dev configuration"
       extends: [_base-render]
       tags: [smoke, render]
       assertions:
-        - expression: 'size(output.actions) == 1'
+        - expression: 'size(__output.actions) == 1'
           message: "Should produce exactly one action"
         - contains: "dev/main.tf"
 
@@ -130,7 +130,7 @@ spec:
       args: ["-r", "env=prod"]
       tags: [resolver]
       assertions:
-        - expression: 'output.environment == "prod"'
+        - expression: '__output.environment == "prod"'
         - regex: '"environment":\s*"prod"'
 
     render-prod-override:
@@ -139,7 +139,7 @@ spec:
       args: ["-r", "env=prod"]
       tags: [render]
       assertions:
-        - expression: 'output.actions["render-main"].inputs.output == "prod/main.tf"'
+        - expression: '__output.actions["render-main"].inputs.output == "prod/main.tf"'
 
     rejects-invalid-env:
       description: "Invalid environment fails validation"
@@ -158,7 +158,7 @@ spec:
       command: [lint]
       tags: [lint]
       assertions:
-        - expression: 'output.errorCount == 0'
+        - expression: '__output.errorCount == 0'
 
     snapshot-action-graph:
       description: "Action graph matches golden file"
@@ -177,8 +177,8 @@ spec:
       cleanup:
         - command: "echo 'cleanup complete'"
       assertions:
-        - expression: 'size(output.actions) >= 1'
-        - expression: 'output.files["dev/main.tf"].exists'
+        - expression: 'size(__output.actions) >= 1'
+        - expression: '__output.files["dev/main.tf"].exists'
 
     temporarily-disabled:
       description: "This test is skipped during development"
@@ -186,7 +186,7 @@ spec:
       skipReason: "Waiting on upstream provider fix"
       command: [render, solution]
       assertions:
-        - expression: 'size(output.actions) == 1'
+        - expression: 'size(__output.actions) == 1'
 ~~~
 
 ---
@@ -223,7 +223,7 @@ spec:
       command: [render, solution]
       tags: [smoke, render]
       assertions:
-        - expression: 'size(output.actions) == 1'
+        - expression: 'size(__output.actions) == 1'
 
     renders-prod-override:
       description: "Render with prod override produces correct paths"
@@ -231,7 +231,7 @@ spec:
       args: ["-r", "env=prod"]
       tags: [render]
       assertions:
-        - expression: 'output.actions["render-main"].inputs.output == "prod/main.tf"'
+        - expression: '__output.actions["render-main"].inputs.output == "prod/main.tf"'
 ~~~
 
 ~~~yaml
@@ -451,7 +451,7 @@ spec:
         - testdata/variables.json
       command: [render, solution]
       assertions:
-        - expression: 'size(output.actions) >= 1'
+        - expression: 'size(__output.actions) >= 1'
 
 bundle:
   include:
@@ -530,7 +530,7 @@ tests:
     command: [render, solution]
     tags: [render]
     assertions:
-      - expression: 'size(output.actions) >= 1'
+      - expression: 'size(__output.actions) >= 1'
 
   _base-prod:
     description: "Base prod test"
@@ -541,7 +541,7 @@ tests:
     description: "Render prod configuration"
     extends: [_base-render, _base-prod]
     assertions:
-      - expression: 'output.actions["render-main"].inputs.output == "prod/main.tf"'
+      - expression: '__output.actions["render-main"].inputs.output == "prod/main.tf"'
 ~~~
 
 The resolved `render-prod` test inherits:
@@ -567,7 +567,7 @@ tests:
     cleanup:
       - command: "echo 'cleanup complete'"
     assertions:
-      - expression: 'size(output.actions) >= 1'
+      - expression: 'size(__output.actions) >= 1'
 ~~~
 
 Cleanup steps:
@@ -589,7 +589,7 @@ tests:
     command: [render, solution]
     tags: [smoke, render, fast]
     assertions:
-      - expression: 'size(output.actions) >= 1'
+      - expression: 'size(__output.actions) >= 1'
 ~~~
 
 Filter tests by tag using the `--tag` flag:
@@ -679,10 +679,10 @@ assertions:
     target: combined
 
   # CEL expressions always have access to both via context variables
-  - expression: 'stderr.contains("warning") && stdout.contains("success")'
+  - expression: '__stderr.contains("warning") && __stdout.contains("success")'
 ~~~
 
-The `target` field has no effect on `expression` assertions — CEL expressions access `stdout`, `stderr`, `exitCode`, `output`, and `files` as separate context variables.
+The `target` field has no effect on `expression` assertions — CEL expressions access `__stdout`, `__stderr`, `__exitCode`, `__output`, and `__files` as separate context variables.
 
 ### Assertion Context
 
@@ -690,48 +690,49 @@ The `target` field has no effect on `expression` assertions — CEL expressions 
 
 When a test executes a scafctl command:
 
-1. The runner checks if the command supports `-o json` by calling `cmd.Flags().Lookup("output")` on the constructed cobra command after traversal. If the flag exists and the test's `args` don't already contain `-o` or `--output`, the runner appends `-o json`
-2. Both raw and structured output are available to assertions
+1. The runner captures stdout, stderr, and exit code
+2. If stdout is valid JSON, it is parsed into the `__output` variable. Otherwise `__output` is `nil`
+3. The tester is responsible for passing `-o json` in `args` when structured output is needed
 
 #### CEL Context Variables
 
 | Variable | Type | Always Available | Description |
 | -------- | ---- | ---------------- | ----------- |
-| `stdout` | `string` | Yes | Raw stdout text |
-| `stderr` | `string` | Yes | Raw stderr text |
-| `exitCode` | `int` | Yes | Process exit code |
-| `output` | `map[string, any]` | When `-o json` is supported | Parsed JSON output. **`nil` when the command doesn't support `-o json`**. CEL expressions referencing `output` when nil cause the test to report as `error` (not `fail`) with the diagnostic: *"variable 'output' is nil — this command does not support structured output"*. This is a configuration issue, not an assertion failure |
-| `files` | `map[string, FileInfo]` | Yes | Files created or modified in the sandbox during command execution. Key is relative path. Each `FileInfo` has `exists` (bool) and `content` (string) |
+| `__stdout` | `string` | Yes | Raw stdout text |
+| `__stderr` | `string` | Yes | Raw stderr text |
+| `__exitCode` | `int` | Yes | Process exit code |
+| `__output` | `map[string, any]` | When `-o json` is passed in `args` | Parsed JSON output. **`nil` when stdout is not valid JSON**. CEL expressions referencing `__output` when nil cause the test to report as `error` (not `fail`) with the diagnostic: *"variable '__output' is nil — this command does not support structured output or -o json was not specified"*. This is a configuration issue, not an assertion failure |
+| `__files` | `map[string, FileInfo]` | Yes | Files created or modified in the sandbox during command execution. Key is relative path. Each `FileInfo` has `exists` (bool) and `content` (string) |
 
 The `output` variable structure depends on the command:
 
-| Command | `output` structure |
-| ------- | ------------------ |
-| `render solution` | Action graph: `output.actions`, each with `provider`, `inputs`, `dependsOn`, `when` |
-| `run resolver` | Resolver map: `output.<resolverName>` = resolved value |
-| `run solution` | Execution result: `output.status`, `output.actions`, `output.duration` |
-| `lint` | Lint result: `output.findings`, `output.errorCount`, `output.warnCount` |
-| `snapshot diff` | Diff result: `output.added`, `output.removed`, `output.modified` |
+| Command | `__output` structure |
+| ------- | -------------------- |
+| `render solution` | Action graph: `__output.actions`, each with `provider`, `inputs`, `dependsOn`, `when` |
+| `run resolver` | Resolver map: `__output.<resolverName>` = resolved value |
+| `run solution` | Execution result: `__output.status`, `__output.actions`, `__output.duration` |
+| `lint` | Lint result: `__output.findings`, `__output.errorCount`, `__output.warnCount` |
+| `snapshot diff` | Diff result: `__output.added`, `__output.removed`, `__output.modified` |
 
 > **Note**: This table is non-exhaustive. For commands not listed, `output` follows the command's `-o json` schema. Use verbose mode (`-v`) to inspect the raw JSON structure for any command.
 
-#### File Assertions (`files` variable)
+#### File Assertions (`__files` variable)
 
-The `files` variable exposes files that were **created or modified** in the sandbox during command execution. The runner snapshots all file paths and modification times before the command runs, then diffs after execution. Only new or changed files appear in `files`.
+The `__files` variable exposes files that were **created or modified** in the sandbox during command execution. The runner snapshots all file paths and modification times before the command runs, then diffs after execution. Only new or changed files appear in `__files`.
 
 ~~~yaml
 assertions:
   # Check that a file was created
-  - expression: 'files["prod/main.tf"].exists'
+  - expression: '__files["prod/main.tf"].exists'
 
   # Check file content
-  - expression: 'files["prod/main.tf"].content.contains("resource")'
+  - expression: '__files["prod/main.tf"].content.contains("resource")'
 
   # Check number of generated files
-  - expression: 'size(files) == 3'
+  - expression: 'size(__files) == 3'
 ~~~
 
-Each entry in `files` is keyed by the relative path from the sandbox root and has:
+Each entry in `__files` is keyed by the relative path from the sandbox root and has:
 - `exists` (`bool`): always `true` for entries in the map (present for consistency)
 - `content` (`string`): the full file content as a string
 
@@ -753,14 +754,14 @@ Each entry in `files` is keyed by the relative path from the sandbox root and ha
 When a CEL assertion fails, the runner evaluates sub-expressions to provide actionable diagnostics rather than just "expected true, got false":
 
 ~~~
-✗ expression: size(output.actions) == 3
-  size(output.actions) = 5
+✗ expression: size(__output.actions) == 3
+  size(__output.actions) = 5
   Expected 3, got 5
 ~~~
 
 ~~~
-✗ expression: output.actions["render-main"].inputs.output == "prod/main.tf"
-  output.actions["render-main"].inputs.output = "dev/main.tf"
+✗ expression: __output.actions["render-main"].inputs.output == "prod/main.tf"
+  __output.actions["render-main"].inputs.output = "dev/main.tf"
   Expected "prod/main.tf", got "dev/main.tf"
 ~~~
 
@@ -855,11 +856,11 @@ Each test runs in an isolated temporary directory:
 
 1. Copy the solution file and its bundle files to a temp directory
 2. Copy test `files` into the sandbox (maintaining relative paths). Symlinks are rejected
-3. Snapshot all file paths and modification times (for `output.files` diff)
+3. Snapshot all file paths and modification times (for `__files` diff)
 4. Inject per-test `env` variables and `SCAFCTL_SANDBOX_DIR`
 5. Run init steps in the sandbox
 6. Execute the scafctl command in-process
-7. Diff sandbox files against snapshot to populate `output.files`
+7. Diff sandbox files against snapshot to populate `__files`
 8. Capture output and run assertions
 9. Run cleanup steps (even on failure)
 10. Clean up the temp directory (unless `--keep-sandbox` is set)
@@ -901,11 +902,11 @@ For each test case:
 6. Snapshot sandbox file list and modification times
 7. Run init steps sequentially; if any fails → status `error`, run cleanup, stop
 8. Build the command: construct cobra tree with `<command> <args...>`. If `injectFile` is `true` (default), prepend `-f <sandbox-solution>`
-9. If command supports `-o json` (detected via `cmd.Flags().Lookup("output")`) and test doesn't specify `-o` → append `-o json`
+9. If the test's `args` include `-o json` or `--output json`, the runner will pass them through. The tester is responsible for including `-o json` in `args` when structured output is needed
 10. Inject `SCAFCTL_SANDBOX_DIR` and per-test `env` environment variables
 11. Execute in-process with timeout; capture stdout, stderr, exit code via `RootOptions.ExitFunc`
-12. Diff sandbox files against snapshot → populate `files` context variable
-13. Parse JSON stdout if available → populate `output` context variable (nil if command doesn't support `-o json`)
+12. Diff sandbox files against snapshot → populate `__files` context variable
+13. Parse JSON stdout if available → populate `__output` context variable (nil if stdout is not valid JSON)
 14. Check exit code against `exitCode` or `expectFailure`
 15. If `snapshot` is set → run snapshot comparison (show unified diff on mismatch)
 16. Run **all** assertions (CEL against parsed output, regex/contains against target stream). All assertions always run regardless of prior failures
@@ -1068,8 +1069,8 @@ terraform-scaffold   renders-dev-defaults        PASS     12ms
 SOLUTION             TEST                        STATUS   DURATION
 terraform-scaffold   renders-dev-defaults        FAIL     14ms
 
-  ✗ expression: size(output.actions) == 1
-    size(output.actions) = 3
+  ✗ expression: size(__output.actions) == 1
+    size(__output.actions) = 3
     Expected 1, got 3
     Message: Should produce exactly one action
 
@@ -1102,8 +1103,8 @@ terraform-scaffold   renders-dev-defaults        FAIL (1/2)       14ms
 
   Exit code: 0
 
-  ✗ expression: size(output.actions) == 1
-    size(output.actions) = 3
+  ✗ expression: size(__output.actions) == 1
+    size(__output.actions) = 3
     Expected 1, got 3
     Message: Should produce exactly one action
 ~~~
@@ -1120,7 +1121,7 @@ terraform-scaffold   renders-dev-defaults        FAIL (1/2)       14ms
       "duration": "12ms",
       "command": "render solution",
       "assertions": [
-        { "type": "expression", "value": "size(output.actions) == 1", "passed": true },
+        { "type": "expression", "value": "size(__output.actions) == 1", "passed": true },
         { "type": "contains", "value": "dev/main.tf", "passed": true }
       ]
     },
@@ -1343,7 +1344,7 @@ const (
 | Create | `pkg/solution/testing/assertions.go` | CEL, regex, contains, negation assertion evaluation with `target` |
 | Create | `pkg/solution/testing/diagnostics.go` | CEL sub-expression evaluation for failure diagnostics |
 | Create | `pkg/solution/testing/builtins.go` | Builtin test definitions and execution |
-| Create | `pkg/solution/testing/sandbox.go` | Temp directory creation, file copying, file diff for `output.files` |
+| Create | `pkg/solution/testing/sandbox.go` | Temp directory creation, file copying, file diff for `__files` |
 | Create | `pkg/solution/testing/snapshot.go` | Golden file comparison, update, unified diff output |
 | Create | `pkg/solution/testing/inheritance.go` | `extends` resolution, merge logic, circular detection |
 | Create | `pkg/solution/testing/discovery.go` | Test discovery, `--filter`/`--tag` filtering, template exclusion |
@@ -1404,9 +1405,9 @@ renders-prod:
   command: [render, solution]
   args: ["-r", "env=prod"]
   assertions:
-    - expression: 'size(output.actions) == 3'
-    - expression: 'output.actions["render-main"].inputs.output == "prod/main.tf"'
-    - expression: 'output.actions["render-main"].provider == "template"'
+    - expression: 'size(__output.actions) == 3'
+    - expression: '__output.actions["render-main"].inputs.output == "prod/main.tf"'
+    - expression: '__output.actions["render-main"].provider == "template"'
   snapshot: "testdata/renders-prod.json"
 ~~~
 
@@ -1484,8 +1485,8 @@ The example solution at `examples/solutions/tested-solution/` should include:
 - **Five assertion types** (CEL, regex, contains, notRegex, notContains): CEL for structured assertions; text matching for quick checks; negation for safety
 - **Assertion `target` field**: `stdout` (default), `stderr`, or `combined` for text assertions. Cleaner than separate `stderrContains`/`stderrRegex` fields
 - **All assertions always evaluated**: failures don't short-circuit. User sees all problems at once
-- **Structured + raw output**: auto-inject `-o json` when supported, always provide raw stdout/stderr
-- **`output.files` via diff**: snapshot sandbox files before command, diff after, expose only new/modified files in CEL context as `map[string]FileInfo`
+- **Structured + raw output**: the tester is responsible for passing `-o json` in `args` when structured output is needed; the runner always provides raw `__stdout`/`__stderr`
+- **`__files` via diff**: snapshot sandbox files before command, diff after, expose only new/modified files in CEL context as `map[string]FileInfo`
 - **Environment variables** over Go templates: `SCAFCTL_SANDBOX_DIR` — no custom template engine, natural for shell commands
 - **Per-test `env`**: additional environment variables set for init, command, and cleanup
 - **Builtins on by default**: baseline correctness without boilerplate
@@ -1512,8 +1513,8 @@ The example solution at `examples/solutions/tested-solution/` should include:
 - **Exit codes**: new `TestFailed = 11` constant rather than reusing `ValidationFailed = 2`, which has different semantics
 - **`--tag`, `--filter`, and `--solution` as `[]string`**: registered via `StringArrayVar` per project convention (not `StringSliceVar` which uses CSV parsing). Multiple flags allowed; OR logic within each flag type, AND logic between them (test must match solution filter AND name filter AND tag filter)
 - **`--filter` glob library**: `doublestar.Match` — already a project dependency in `pkg/solution/bundler/discover.go`
-- **`-o json` auto-detection**: `cmd.Flags().Lookup("output")` cobra flag introspection — no command registry needed
-- **`output` nil when unsupported**: diagnostic error rather than empty map to prevent silent assertion failures
+- **No auto-inject `-o json`**: the tester is responsible for passing `-o json` in `args` when structured output is needed. The runner parses stdout as JSON when possible and populates `__output`
+- **`__output` nil when unsupported**: diagnostic error rather than empty map to prevent silent assertion failures
 - **Concurrency control**: `-j N` flag with `--sequential` as sugar for `-j 1` — standard test runner pattern
 - **File size guard**: 10MB cap on `files[].content` to prevent OOM without blocking tests
 - **Conditional skip via CEL**: `skipExpression` field evaluated at discovery time with `os`, `arch`, `env` context

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/google/cel-go/cel"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/action"
@@ -27,6 +28,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
@@ -92,10 +94,13 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 			    - missing-provider     Referenced provider not registered
 			    - invalid-expression   Invalid CEL expression syntax
 			    - invalid-template     Invalid Go template syntax
+			    - unbundled-test-file  Test file not covered by bundle.include
+			    - invalid-test-name    Test name does not match naming pattern
 
 			  Warnings (may cause problems):
 			    - empty-workflow       Workflow defined but no actions
 			    - finally-with-foreach forEach not allowed in finally actions
+			    - unused-template      Test template not referenced by any extends
 
 			  Info (suggestions):
 			    - missing-description  Action/resolver lacks description
@@ -225,6 +230,7 @@ func lintSolution(sol *solution.Solution, filePath string, registry *provider.Re
 
 	lintResolvers(sol, result, registry, referencedResolvers)
 	lintWorkflow(sol, result, registry)
+	lintTests(sol, result)
 
 	for _, f := range result.Findings {
 		switch f.Severity {
@@ -410,7 +416,7 @@ func lintAction(act *action.Action, location string, validDeps map[string]bool, 
 	}
 
 	if act.Timeout != nil {
-		timeout := act.Timeout.AsDuration()
+		timeout := act.Timeout.Duration
 		if timeout > 10*time.Minute {
 			result.addFinding(SeverityInfo, "performance", location,
 				fmt.Sprintf("timeout of %s exceeds recommended 10 minute maximum", act.Timeout.String()),
@@ -579,6 +585,80 @@ func scanExpressionForResolverRefs(expr string, pattern *regexp.Regexp, refs map
 			}
 		}
 	}
+}
+
+func lintTests(sol *solution.Solution, result *Result) {
+	if !sol.Spec.HasTests() {
+		return
+	}
+
+	// Test name validation regexes (same as soltesting package).
+	testNameRegex := soltesting.TestNamePattern()
+	templateNameRegex := soltesting.TemplateNamePattern()
+
+	// Collect all extends references to detect unused templates.
+	extendsRefs := make(map[string]bool)
+	for _, tc := range sol.Spec.Tests {
+		for _, ext := range tc.Extends {
+			extendsRefs[ext] = true
+		}
+	}
+
+	for name, tc := range sol.Spec.Tests {
+		location := fmt.Sprintf("tests.%s", name)
+
+		// Rule: invalid-test-name — validate naming pattern.
+		// Use the map key directly rather than tc.Name, which may not be set yet.
+		isTemplate := strings.HasPrefix(name, "_")
+		if isTemplate {
+			if !templateNameRegex.MatchString(name) {
+				result.addFinding(SeverityError, "naming", location,
+					fmt.Sprintf("template name %q does not match pattern %s", name, templateNameRegex.String()),
+					"Template names must start with _ followed by a letter or digit",
+					"invalid-test-name")
+			}
+		} else {
+			if !testNameRegex.MatchString(name) {
+				result.addFinding(SeverityError, "naming", location,
+					fmt.Sprintf("test name %q does not match pattern %s", name, testNameRegex.String()),
+					"Test names must start with a letter or digit and contain only letters, digits, hyphens, and underscores",
+					"invalid-test-name")
+			}
+		}
+
+		// Rule: unbundled-test-file — check files are covered by bundle.include.
+		if !sol.Bundle.IsEmpty() && len(tc.Files) > 0 {
+			for i, file := range tc.Files {
+				fileLoc := fmt.Sprintf("%s.files[%d]", location, i)
+				if !isCoveredByBundleInclude(file, sol.Bundle.Include) {
+					result.addFinding(SeverityError, "bundling", fileLoc,
+						fmt.Sprintf("test file %q is not covered by any bundle.include pattern", file),
+						"Add a matching glob pattern to bundle.include so the file is included in the bundle",
+						"unbundled-test-file")
+				}
+			}
+		}
+
+		// Rule: unused-template — templates not referenced by any extends.
+		if isTemplate && !extendsRefs[name] {
+			result.addFinding(SeverityWarning, "usage", location,
+				fmt.Sprintf("test template %q is defined but never referenced by any extends field", name),
+				"Remove the unused template or reference it via extends in another test",
+				"unused-template")
+		}
+	}
+}
+
+// isCoveredByBundleInclude checks if a file path matches any bundle.include glob pattern.
+func isCoveredByBundleInclude(file string, includes []string) bool {
+	for _, pattern := range includes {
+		// Use doublestar for ** glob support.
+		matched, err := doublestar.Match(pattern, file)
+		if err == nil && matched {
+			return true
+		}
+	}
+	return false
 }
 
 func filterBySeverity(result *Result, minSeverity string) *Result {

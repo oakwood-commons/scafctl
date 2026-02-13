@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/duration"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -166,104 +167,6 @@ func TestForEachIterationResult_Duration(t *testing.T) {
 	}
 }
 
-func TestDuration_JSONMarshalUnmarshal(t *testing.T) {
-	tests := []struct {
-		name     string
-		duration Duration
-		json     string
-	}{
-		{"1 second", Duration(time.Second), `"1s"`},
-		{"500ms", Duration(500 * time.Millisecond), `"500ms"`},
-		{"1h30m", Duration(90 * time.Minute), `"1h30m0s"`},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Marshal
-			data, err := json.Marshal(tt.duration)
-			require.NoError(t, err)
-			assert.Equal(t, tt.json, string(data))
-
-			// Unmarshal
-			var d Duration
-			err = json.Unmarshal(data, &d)
-			require.NoError(t, err)
-			assert.Equal(t, tt.duration, d)
-		})
-	}
-}
-
-func TestDuration_JSONUnmarshalNumeric(t *testing.T) {
-	// JSON can represent durations as numbers (nanoseconds)
-	var d Duration
-	err := json.Unmarshal([]byte("1000000000"), &d) // 1 second in nanoseconds
-	require.NoError(t, err)
-	assert.Equal(t, Duration(time.Second), d)
-}
-
-func TestDuration_JSONUnmarshalInvalid(t *testing.T) {
-	tests := []struct {
-		name string
-		json string
-	}{
-		{"invalid string", `"invalid"`},
-		{"boolean", `true`},
-		{"null", `null`},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var d Duration
-			err := json.Unmarshal([]byte(tt.json), &d)
-			assert.Error(t, err)
-		})
-	}
-}
-
-func TestDuration_YAMLMarshalUnmarshal(t *testing.T) {
-	tests := []struct {
-		name     string
-		duration Duration
-		yaml     string
-	}{
-		{"1 second", Duration(time.Second), "1s\n"},
-		{"500ms", Duration(500 * time.Millisecond), "500ms\n"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Marshal
-			data, err := yaml.Marshal(tt.duration)
-			require.NoError(t, err)
-			assert.Equal(t, tt.yaml, string(data))
-
-			// Unmarshal
-			var d Duration
-			err = yaml.Unmarshal(data, &d)
-			require.NoError(t, err)
-			assert.Equal(t, tt.duration, d)
-		})
-	}
-}
-
-func TestDuration_YAMLUnmarshalNumeric(t *testing.T) {
-	// YAML can represent durations as integer nanoseconds
-	var d Duration
-	err := yaml.Unmarshal([]byte("1000000000"), &d) // 1 second in nanoseconds
-	require.NoError(t, err)
-	assert.Equal(t, Duration(time.Second), d)
-}
-
-func TestDuration_String(t *testing.T) {
-	d := Duration(5 * time.Second)
-	assert.Equal(t, "5s", d.String())
-}
-
-func TestDuration_AsDuration(t *testing.T) {
-	d := Duration(5 * time.Second)
-	assert.Equal(t, 5*time.Second, d.AsDuration())
-}
-
 func TestWorkflow_YAMLUnmarshal(t *testing.T) {
 	yamlData := `
 actions:
@@ -319,7 +222,7 @@ dependsOn:
 	assert.Equal(t, "Test action description", a.Description)
 	assert.Equal(t, "shell", a.Provider)
 	assert.NotNil(t, a.Timeout)
-	assert.Equal(t, Duration(30*time.Second), *a.Timeout)
+	assert.Equal(t, duration.New(30*time.Second), *a.Timeout)
 	assert.Equal(t, "continue", string(a.OnError))
 	assert.NotNil(t, a.Retry)
 	assert.Equal(t, 3, a.Retry.MaxAttempts)
@@ -341,9 +244,9 @@ maxDelay: 1m
 	assert.Equal(t, 5, r.MaxAttempts)
 	assert.Equal(t, BackoffLinear, r.Backoff)
 	assert.NotNil(t, r.InitialDelay)
-	assert.Equal(t, Duration(2*time.Second), *r.InitialDelay)
+	assert.Equal(t, duration.New(2*time.Second), *r.InitialDelay)
 	assert.NotNil(t, r.MaxDelay)
-	assert.Equal(t, Duration(time.Minute), *r.MaxDelay)
+	assert.Equal(t, duration.New(time.Minute), *r.MaxDelay)
 }
 
 func TestActionResult_JSONRoundTrip(t *testing.T) {

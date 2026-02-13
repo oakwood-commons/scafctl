@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/duration"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -28,9 +29,8 @@ func rendererCondition(expr string) *spec.Condition {
 }
 
 // helper to create a Duration pointer
-func durationPtr(d time.Duration) *Duration {
-	dur := Duration(d)
-	return &dur
+func durationPtr(d time.Duration) *duration.Duration {
+	return duration.NewPtr(d)
 }
 
 func TestRender_NilGraph(t *testing.T) {

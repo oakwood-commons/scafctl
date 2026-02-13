@@ -275,3 +275,295 @@ spec:
 	assert.Len(t, result.Spec.Resolvers, originalResolverCount+1)
 	assert.Nil(t, result.Compose, "result compose should be cleared")
 }
+
+func TestCompose_MergesTests(t *testing.T) {
+	sol := baseSolution()
+	sol.Compose = []string{"tests.yaml"}
+	readFile := func(path string) ([]byte, error) {
+		if path == "/tmp/bundle/tests.yaml" {
+			return []byte(`
+spec:
+  tests:
+    render-test:
+      description: "Test rendering"
+      command:
+        - render
+        - solution
+      assertions:
+        - contains: "hello"
+`), nil
+		}
+		return nil, fmt.Errorf("file not found: %s", path)
+	}
+	result, err := Compose(sol, "/tmp/bundle", WithReadFileFunc(readFile))
+	require.NoError(t, err)
+	require.Contains(t, result.Spec.Tests, "render-test")
+	assert.Equal(t, "Test rendering", result.Spec.Tests["render-test"].Description)
+	assert.Equal(t, "render-test", result.Spec.Tests["render-test"].Name)
+}
+
+func TestCompose_MergesTestsFromMultipleFiles(t *testing.T) {
+	sol := baseSolution()
+	sol.Compose = []string{"tests-a.yaml", "tests-b.yaml"}
+	readFile := func(path string) ([]byte, error) {
+		switch path {
+		case "/tmp/bundle/tests-a.yaml":
+			return []byte(`
+spec:
+  tests:
+    test-a:
+      description: "Test A"
+      command: [render, solution]
+      assertions:
+        - contains: "a"
+`), nil
+		case "/tmp/bundle/tests-b.yaml":
+			return []byte(`
+spec:
+  tests:
+    test-b:
+      description: "Test B"
+      command: [render, solution]
+      assertions:
+        - contains: "b"
+`), nil
+		}
+		return nil, fmt.Errorf("file not found: %s", path)
+	}
+	result, err := Compose(sol, "/tmp/bundle", WithReadFileFunc(readFile))
+	require.NoError(t, err)
+	assert.Contains(t, result.Spec.Tests, "test-a")
+	assert.Contains(t, result.Spec.Tests, "test-b")
+}
+
+func TestCompose_RejectsDuplicateTests(t *testing.T) {
+	sol := baseSolution()
+	sol.Compose = []string{"tests-a.yaml", "tests-b.yaml"}
+	readFile := func(path string) ([]byte, error) {
+		switch path {
+		case "/tmp/bundle/tests-a.yaml":
+			return []byte(`
+spec:
+  tests:
+    same-test:
+      description: "First"
+      command: [render, solution]
+      assertions:
+        - contains: "a"
+`), nil
+		case "/tmp/bundle/tests-b.yaml":
+			return []byte(`
+spec:
+  tests:
+    same-test:
+      description: "Second"
+      command: [render, solution]
+      assertions:
+        - contains: "b"
+`), nil
+		}
+		return nil, fmt.Errorf("file not found: %s", path)
+	}
+	_, err := Compose(sol, "/tmp/bundle", WithReadFileFunc(readFile))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate test")
+	assert.Contains(t, err.Error(), "same-test")
+}
+
+func TestCompose_MergesTestConfig_SkipBuiltins_TrueWins(t *testing.T) {
+	sol := baseSolution()
+	sol.Compose = []string{"a.yaml", "b.yaml"}
+	readFile := func(path string) ([]byte, error) {
+		switch path {
+		case "/tmp/bundle/a.yaml":
+			return []byte(`
+spec:
+  testConfig:
+    skipBuiltins: false
+`), nil
+		case "/tmp/bundle/b.yaml":
+			return []byte(`
+spec:
+  testConfig:
+    skipBuiltins: true
+`), nil
+		}
+		return nil, fmt.Errorf("file not found: %s", path)
+	}
+	result, err := Compose(sol, "/tmp/bundle", WithReadFileFunc(readFile))
+	require.NoError(t, err)
+	require.NotNil(t, result.Spec.TestConfig)
+	assert.True(t, result.Spec.TestConfig.SkipBuiltins.All)
+}
+
+func TestCompose_MergesTestConfig_SkipBuiltins_UnionNames(t *testing.T) {
+	sol := baseSolution()
+	sol.Compose = []string{"a.yaml", "b.yaml"}
+	readFile := func(path string) ([]byte, error) {
+		switch path {
+		case "/tmp/bundle/a.yaml":
+			return []byte(`
+spec:
+  testConfig:
+    skipBuiltins:
+      - lint
+`), nil
+		case "/tmp/bundle/b.yaml":
+			return []byte(`
+spec:
+  testConfig:
+    skipBuiltins:
+      - parse
+      - lint
+`), nil
+		}
+		return nil, fmt.Errorf("file not found: %s", path)
+	}
+	result, err := Compose(sol, "/tmp/bundle", WithReadFileFunc(readFile))
+	require.NoError(t, err)
+	require.NotNil(t, result.Spec.TestConfig)
+	assert.False(t, result.Spec.TestConfig.SkipBuiltins.All)
+	assert.ElementsMatch(t, []string{"lint", "parse"}, result.Spec.TestConfig.SkipBuiltins.Names)
+}
+
+func TestCompose_MergesTestConfig_Setup_Appended(t *testing.T) {
+	sol := baseSolution()
+	sol.Compose = []string{"a.yaml", "b.yaml"}
+	readFile := func(path string) ([]byte, error) {
+		switch path {
+		case "/tmp/bundle/a.yaml":
+			return []byte(`
+spec:
+  testConfig:
+    setup:
+      - command: "echo first"
+`), nil
+		case "/tmp/bundle/b.yaml":
+			return []byte(`
+spec:
+  testConfig:
+    setup:
+      - command: "echo second"
+`), nil
+		}
+		return nil, fmt.Errorf("file not found: %s", path)
+	}
+	result, err := Compose(sol, "/tmp/bundle", WithReadFileFunc(readFile))
+	require.NoError(t, err)
+	require.NotNil(t, result.Spec.TestConfig)
+	require.Len(t, result.Spec.TestConfig.Setup, 2)
+	assert.Equal(t, "echo first", result.Spec.TestConfig.Setup[0].Command)
+	assert.Equal(t, "echo second", result.Spec.TestConfig.Setup[1].Command)
+}
+
+func TestCompose_MergesTestConfig_Cleanup_Appended(t *testing.T) {
+	sol := baseSolution()
+	sol.Compose = []string{"a.yaml", "b.yaml"}
+	readFile := func(path string) ([]byte, error) {
+		switch path {
+		case "/tmp/bundle/a.yaml":
+			return []byte(`
+spec:
+  testConfig:
+    cleanup:
+      - command: "echo cleanup-first"
+`), nil
+		case "/tmp/bundle/b.yaml":
+			return []byte(`
+spec:
+  testConfig:
+    cleanup:
+      - command: "echo cleanup-second"
+`), nil
+		}
+		return nil, fmt.Errorf("file not found: %s", path)
+	}
+	result, err := Compose(sol, "/tmp/bundle", WithReadFileFunc(readFile))
+	require.NoError(t, err)
+	require.NotNil(t, result.Spec.TestConfig)
+	require.Len(t, result.Spec.TestConfig.Cleanup, 2)
+	assert.Equal(t, "echo cleanup-first", result.Spec.TestConfig.Cleanup[0].Command)
+	assert.Equal(t, "echo cleanup-second", result.Spec.TestConfig.Cleanup[1].Command)
+}
+
+func TestCompose_MergesTestConfig_Env_LastWins(t *testing.T) {
+	sol := baseSolution()
+	sol.Compose = []string{"a.yaml", "b.yaml"}
+	readFile := func(path string) ([]byte, error) {
+		switch path {
+		case "/tmp/bundle/a.yaml":
+			return []byte(`
+spec:
+  testConfig:
+    env:
+      KEY1: "from-a"
+      SHARED: "from-a"
+`), nil
+		case "/tmp/bundle/b.yaml":
+			return []byte(`
+spec:
+  testConfig:
+    env:
+      KEY2: "from-b"
+      SHARED: "from-b"
+`), nil
+		}
+		return nil, fmt.Errorf("file not found: %s", path)
+	}
+	result, err := Compose(sol, "/tmp/bundle", WithReadFileFunc(readFile))
+	require.NoError(t, err)
+	require.NotNil(t, result.Spec.TestConfig)
+	assert.Equal(t, "from-a", result.Spec.TestConfig.Env["KEY1"])
+	assert.Equal(t, "from-b", result.Spec.TestConfig.Env["KEY2"])
+	assert.Equal(t, "from-b", result.Spec.TestConfig.Env["SHARED"])
+}
+
+func TestCompose_SolutionWithInlineTests_PreservedAfterCompose(t *testing.T) {
+	sol := baseSolution()
+	sol.Compose = []string{"extra.yaml"}
+	// Manually set some inline tests on the root solution
+	// This verifies backward compat — solutions without tests still work
+	readFile := func(path string) ([]byte, error) {
+		if path == "/tmp/bundle/extra.yaml" {
+			return []byte(`
+spec:
+  resolvers:
+    newResolver:
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "'value'"
+`), nil
+		}
+		return nil, fmt.Errorf("file not found: %s", path)
+	}
+	result, err := Compose(sol, "/tmp/bundle", WithReadFileFunc(readFile))
+	require.NoError(t, err)
+	// Tests should remain nil since nothing defined them
+	assert.Nil(t, result.Spec.Tests)
+	assert.Nil(t, result.Spec.TestConfig)
+}
+
+func TestCompose_TestConfigNil_WhenNoTestConfigDefined(t *testing.T) {
+	sol := baseSolution()
+	sol.Compose = []string{"resolvers.yaml"}
+	readFile := func(path string) ([]byte, error) {
+		if path == "/tmp/bundle/resolvers.yaml" {
+			return []byte(`
+spec:
+  resolvers:
+    newResolver:
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "'value'"
+`), nil
+		}
+		return nil, fmt.Errorf("file not found: %s", path)
+	}
+	result, err := Compose(sol, "/tmp/bundle", WithReadFileFunc(readFile))
+	require.NoError(t, err)
+	assert.Nil(t, result.Spec.TestConfig)
+}
