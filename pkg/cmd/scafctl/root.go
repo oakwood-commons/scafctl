@@ -38,26 +38,66 @@ import (
 	"go.uber.org/zap"
 )
 
-var (
-	cliParams  = settings.NewCliParams()
-	configPath string
-	appConfig  *config.Config
-	debugFlag  bool
-	logFormat  string
-	logFile    string
-)
+// RootOptions configures a Root() invocation. All fields are optional;
+// nil values use production defaults. Passing a non-nil RootOptions
+// enables fully parallel in-process execution because each call
+// to Root() creates its own isolated state.
+type RootOptions struct {
+	// IOStreams overrides the default os.Stdin/Stdout/Stderr streams.
+	// When nil, standard OS streams are used.
+	IOStreams *terminal.IOStreams
 
-// AppConfig returns the loaded application configuration.
-// Returns nil if configuration has not been loaded yet.
-func AppConfig() *config.Config {
-	return appConfig
+	// ExitFunc overrides os.Exit. When non-nil it is passed through
+	// writer.WithExitFunc so that ErrorWithCode/ErrorWithExit call
+	// this function instead of terminating the process. Useful for
+	// in-process test execution where panicking or returning an error
+	// is preferred over killing the process.
+	ExitFunc func(code int)
+
+	// ConfigPath overrides the --config flag default.
+	ConfigPath string
+}
+
+// NewRootOptions returns a RootOptions with production defaults
+// (nil IOStreams, nil ExitFunc, empty ConfigPath).
+func NewRootOptions() *RootOptions {
+	return &RootOptions{}
 }
 
 // Root creates and returns the root cobra.Command for the scafctl CLI tool.
 // It sets up persistent flags, configures logging, handles profiler options,
 // validates command arguments, and adds subcommands. The command provides
 // configuration discovery and scaffolding functionality.
-func Root() *cobra.Command {
+//
+// opts may be nil, in which case production defaults are used.
+// Each invocation creates its own isolated state so multiple Root()
+// calls can execute concurrently without data races.
+func Root(opts *RootOptions) *cobra.Command {
+	if opts == nil {
+		opts = NewRootOptions()
+	}
+
+	// Per-invocation state — no package-level mutable variables.
+	cliParams := settings.NewCliParams()
+	var (
+		configPath = opts.ConfigPath
+		debugFlag  bool
+		logFormat  = "console"
+		logFile    string
+	)
+
+	// Resolve IOStreams: use caller-provided or default to OS streams.
+	ioStreams := opts.IOStreams
+	if ioStreams == nil {
+		ioStreams = terminal.NewIOStreams(os.Stdin, os.Stdout, os.Stderr, true)
+	}
+
+	// Build writer options (e.g. custom exit function for in-process test execution).
+	var writerOpts []writer.Option
+	if opts.ExitFunc != nil {
+		writerOpts = append(writerOpts, writer.WithExitFunc(opts.ExitFunc))
+	}
+
 	cCmd := &cobra.Command{
 		Use:   "scafctl",
 		Short: "A configuration discovery and scaffolding tool",
@@ -72,11 +112,10 @@ func Root() *cobra.Command {
 			cfg, err := mgr.Load()
 			if err != nil {
 				// Use stderr directly since writer isn't set up yet
-				_, _ = os.Stderr.WriteString("Warning: failed to load config: " + err.Error() + "\n")
+				_, _ = ioStreams.ErrOut.Write([]byte("Warning: failed to load config: " + err.Error() + "\n"))
 				// Continue with defaults
 				cfg = &config.Config{}
 			}
-			appConfig = cfg
 
 			// Apply config settings to cliParams (CLI flags take precedence)
 			if !cCmd.Flags().Changed("no-color") {
@@ -125,7 +164,7 @@ func Root() *cobra.Command {
 			// Parse the resolved log level string to a zap level
 			zapLevel, parseErr := logger.ParseLogLevel(resolvedLogLevel)
 			if parseErr != nil {
-				_, _ = os.Stderr.WriteString("Warning: " + parseErr.Error() + ", defaulting to 'none'\n")
+				_, _ = ioStreams.ErrOut.Write([]byte("Warning: " + parseErr.Error() + ", defaulting to 'none'\n"))
 				zapLevel = logger.LogLevelNone
 			}
 
@@ -150,10 +189,10 @@ func Root() *cobra.Command {
 			}
 
 			lgr := logger.GetWithOptions(logOpts)
-			ioStreams := terminal.NewIOStreams(os.Stdin, os.Stdout, os.Stderr, true)
 
-			// Create centralized writer and input, then attach to context
-			w := writer.New(ioStreams, cliParams)
+			// Create centralized writer and input, then attach to context.
+			// Uses the same ioStreams instance passed to subcommand constructors.
+			w := writer.New(ioStreams, cliParams, writerOpts...)
 			in := input.New(ioStreams, cliParams)
 			ctx := context.Background()
 			ctx = logger.WithLogger(ctx, lgr)
@@ -222,8 +261,6 @@ func Root() *cobra.Command {
 			"commandType": "main",
 		},
 	}
-
-	ioStreams := terminal.NewIOStreams(os.Stdin, os.Stdout, os.Stderr, true)
 
 	cCmd.PersistentFlags().StringVar(&cliParams.MinLogLevel, "log-level", "none", "Set the log level (none, error, warn, info, debug, trace, or a numeric V-level)")
 	cCmd.PersistentFlags().BoolVarP(&debugFlag, "debug", "d", false, "Enable debug logging (shorthand for --log-level debug)")

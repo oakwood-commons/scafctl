@@ -50,8 +50,20 @@ This is the primary mechanism for validating solutions in CI and during developm
 | Test retries | 📋 Planned | `retries` field for flaky test resilience |
 | Suite-level cleanup | 📋 Planned | `testConfig.cleanup` for teardown after all tests |
 | File size guard | 📋 Planned | Cap `files[].content` at 10MB to prevent OOM |
-| In-process execution safety | 📋 Planned | Mutex serialization to avoid `Root()` data races |
+| In-process execution safety | ✅ Done | `Root()` accepts `*RootOptions`, no package-level state |
 | Unused template lint warning | 📋 Planned | Warn on templates never referenced via `extends` |
+| Solution filtering (`--solution`) | 📋 Planned | Glob-based solution name filtering for multi-solution runs |
+| `--filter` solution/test format | 📋 Planned | `--filter "solution/test-name"` glob support |
+| `--dry-run` flag | 📋 Planned | Validate test definitions without executing |
+| Suite-level `env` | 📋 Planned | `testConfig.env` shared across all tests |
+| Binary file content guard | 📋 Planned | Non-UTF-8 files get `content` set to `"<binary file>"` |
+| Test execution ordering | 📋 Planned | Alphabetical by name; builtins first |
+| Field max limits | 📋 Planned | `assertions: 100`, `files: 50`, `tags: 20`, extends depth: 10 |
+| Glob zero-match error | 📋 Planned | Test `files` globs matching zero files produce `error` |
+| Environment precedence chain | 📋 Planned | process → `testConfig.env` → `TestCase.env` → `InitStep.env` |
+| `TestCase.Validate()` | 📋 Planned | Comprehensive test case validation method |
+| Extends non-existent error | 📋 Planned | `extends` referencing non-existent test names is a parse-time error |
+| Tests per solution limit | 📋 Planned | Max 500 tests per solution |
 
 ---
 
@@ -259,12 +271,14 @@ tests:
     injectFile: <bool>
     expectFailure: <bool>
     exitCode: <int>
-    timeout: <duration>
+    timeout: <string>  # Go duration format, e.g., "30s", "2m"
     skip: <bool>
     skipReason: <string>
     skipExpression: <Expression>
     retries: <int>
 ~~~
+
+Each test case is a named entry under `spec.tests`. The maximum number of tests per solution is **500**.
 
 ### Field Details
 
@@ -274,17 +288,17 @@ tests:
 | `command` | `[]string` | No | `[render, solution]` | scafctl subcommand as an array (e.g., `[render, solution]`, `[run, resolver]`, `[lint]`). By default the runner auto-injects `-f <sandbox-path>` — set `injectFile: false` to disable |
 | `args` | `[]string` | No | `[]` | Additional CLI flags appended after the command. `-f` must never be included here — use `injectFile` to control file injection |
 | `extends` | `[]string` | No | `[]` | Names of test templates to inherit from. Applied left-to-right; this test's fields override inherited values. See [Test Inheritance](#test-inheritance) |
-| `tags` | `[]string` | No | `[]` | Tags for categorization and filtering. Use `--tag` to run only tests with matching tags |
-| `env` | `map[string]string` | No | `{}` | Environment variables set for this test's init, command, and cleanup steps. Merged with process environment |
-| `files` | `[]string` | No | `[]` | Relative paths or globs for files required by this test. Supports `**` recursive globs |
+| `tags` | `[]string` | No | `[]` | Tags for categorization and filtering. Use `--tag` to run only tests with matching tags. Max 20 tags per test |
+| `env` | `map[string]string` | No | `{}` | Environment variables set for this test's init, command, and cleanup steps. Merged with process environment. See [Environment Precedence](#environment-precedence) |
+| `files` | `[]string` | No | `[]` | Relative paths or globs for files required by this test. Supports `**` recursive globs. Globs are resolved at sandbox setup time; zero-match globs produce a test `error`. Max 50 entries |
 | `init` | `[]InitStep` | No | `[]` | Setup steps executed sequentially before the command |
 | `cleanup` | `[]InitStep` | No | `[]` | Teardown steps executed after the command, even on failure. See [Cleanup Steps](#cleanup-steps) |
-| `assertions` | `[]Assertion` | Conditional | — | Required unless `snapshot` is set. All assertions are evaluated regardless of prior failures |
+| `assertions` | `[]Assertion` | Conditional | — | Required unless `snapshot` is set. All assertions are evaluated regardless of prior failures. Max 100 assertions per test |
 | `snapshot` | `string` | No | — | Relative path to a golden file for normalized comparison |
 | `injectFile` | `bool` | No | `true` | When `true` (default), the runner auto-injects `-f <sandbox-solution-path>`. Set to `false` for commands that don't accept `-f` (e.g., `config get`, `auth status`) or for catalog solution tests that use `--catalog` instead. `-f` must never appear in `args` regardless of this setting |
 | `expectFailure` | `bool` | No | `false` | When `true`, the test passes if the command exits non-zero |
-| `exitCode` | `int` | No | — | Exact expected exit code. Takes precedence over `expectFailure` |
-| `timeout` | `duration` | No | `30s` | Per-test timeout |
+| `exitCode` | `int` | No | — | Exact expected exit code. **Mutually exclusive** with `expectFailure` — setting both is a validation error |
+| `timeout` | `string` | No | `"30s"` | Per-test timeout as a Go duration string (e.g., `"30s"`, `"2m"`, `"1m30s"`). Parsed via a custom `Duration` type with string-based YAML/JSON marshalling |
 | `skip` | `bool` | No | `false` | Skip this test |
 | `skipReason` | `string` | No | — | Human-readable reason for skipping. Shown in test output |
 | `skipExpression` | `Expression` | No | — | CEL expression evaluated at discovery time. If `true`, the test is skipped with the expression as the reason. Context variables: `os` (GOOS), `arch` (GOARCH), `env` (environment variables map). Example: `'os == "windows"'` |
@@ -300,6 +314,8 @@ Solution-level test configuration is defined under `spec.testConfig`:
 spec:
   testConfig:
     skipBuiltins: true
+    env:
+      SCAFCTL_CONFIG_DIR: "$SCAFCTL_SANDBOX_DIR"
     setup:
       - command: "scafctl config set defaults.environment staging"
       - command: "mkdir -p templates"
@@ -324,6 +340,7 @@ testConfig:
 | Field | Type | Default | Description |
 | ----- | ---- | ------- | ----------- |
 | `skipBuiltins` | `bool \| []string` | `false` | Disable builtin tests. `true` disables all; a list of names disables only those builtins (e.g., `["resolve-defaults"]`) |
+| `env` | `map[string]string` | `{}` | Suite-level environment variables applied to all tests. Merged with process environment. Individual test `env` fields override on key conflict. See [Environment Precedence](#environment-precedence) |
 | `setup` | `[]InitStep` | `[]` | Suite-level setup steps. Run once, then the resulting sandbox is copied per-test |
 | `cleanup` | `[]InitStep` | `[]` | Suite-level teardown steps. Run once after all tests for the solution complete, even on failure. Symmetric with `setup` |
 
@@ -348,6 +365,13 @@ When `testConfig` appears in multiple compose files:
 | `skipBuiltins` (list) | Unioned (deduplicated) across all compose files |
 | `setup` | Appended in compose-file order (first file's steps run first). This is a new merge strategy distinct from the existing reject-duplicates and union patterns |
 | `cleanup` | Appended in compose-file order (first file's steps run first) |
+| `env` | Merged map; last compose file wins on key conflict |
+
+Compose-file order affects `testConfig.setup`, `testConfig.cleanup`, and `testConfig.env` merge ordering but does **not** affect test execution order. Tests from all compose files are merged into a single map and executed alphabetically (see [Test Execution Ordering](#test-execution-ordering)).
+
+`spec.tests` entries are merged by name using the **reject-duplicates** strategy (same as resolvers and actions). If two compose files define a test with the same name, the compose merge fails with an error.
+
+> **`composePart` struct**: The `composePart` struct in `pkg/solution/bundler/compose.go` must be extended with `Tests map[string]*testing.TestCase` and `TestConfig *testing.TestConfig` fields to parse test-related sections from compose files.
 
 > **Note**: `SkipBuiltinsValue` requires both `UnmarshalYAML` and `MarshalYAML` implementations to survive the `deepCopySolution` YAML round-trip used in compose.
 
@@ -398,6 +422,19 @@ The test runner automatically injects the following environment variables into e
 
 These are standard process environment variables — no custom template syntax.
 
+### Environment Precedence
+
+Environment variables are resolved in the following precedence order (highest wins):
+
+| Priority | Source | Description |
+| -------- | ------ | ----------- |
+| 1 (lowest) | Process environment | Inherited from the parent process |
+| 2 | `testConfig.env` | Suite-level env applied to all tests |
+| 3 | `TestCase.env` | Per-test env overrides suite-level on key conflict |
+| 4 (highest) | `InitStep.env` | Per-step env overrides all others on key conflict |
+
+Each level merges with the previous — keys not overridden are preserved. The `SCAFCTL_SANDBOX_DIR` variable is always injected by the runner and cannot be overridden.
+
 ---
 
 ## Test Files
@@ -432,6 +469,15 @@ bundle:
 
 Files are copied into the sandbox maintaining their relative directory structure. Path traversal above the solution root (`..`) is rejected. Symlinks are not supported and are rejected.
 
+### Glob Resolution
+
+Globs in the `files` field (e.g., `testdata/**/*.json`) are resolved at **sandbox setup time** — after suite-level setup completes but before per-test init steps run. This means:
+
+- Globs are expanded against the solution source directory (or the suite-level base sandbox if `testConfig.setup` is defined)
+- **Zero-match globs produce a test `error`**, not a silent no-op. This catches typos and missing test data early
+- Glob patterns are validated at lint time — `scafctl lint` warns on syntactically invalid glob patterns
+- Resolved paths are logged in verbose output for debugging
+
 ---
 
 ## Test Inheritance
@@ -450,6 +496,8 @@ Test names starting with `_` are **templates** — they are not executed directl
 - The extending test's fields override inherited values
 - Circular extends chains are detected and rejected
 - Templates can extend other templates
+- **Extends chain depth is limited to 10 levels**. Chains deeper than 10 are rejected with a validation error
+- **Referencing a non-existent test name** in `extends` is a validation error at parse time. `scafctl lint` also reports this as an error
 
 ### Field Merge Strategy
 
@@ -552,9 +600,17 @@ scafctl test functional -f solution.yaml --tag smoke
 
 # Combine with name filter
 scafctl test functional -f solution.yaml --tag render --filter "*prod*"
+
+# Filter by solution and tag
+scafctl test functional --tests-path ./solutions/ --solution "terraform-*" --tag smoke
+
+# Filter with solution/test-name format
+scafctl test functional --tests-path ./solutions/ --filter "terraform-*/render-*"
 ~~~
 
 A test matches the `--tag` filter if it has **any** of the specified tags. Tags inherited via `extends` are included in the match.
+
+When `--tag`, `--filter`, and `--solution` are combined, they are **ANDed**: a test must match the solution filter AND the name filter AND have a matching tag.
 
 ---
 
@@ -644,7 +700,7 @@ When a test executes a scafctl command:
 | `stdout` | `string` | Yes | Raw stdout text |
 | `stderr` | `string` | Yes | Raw stderr text |
 | `exitCode` | `int` | Yes | Process exit code |
-| `output` | `map[string, any]` | When `-o json` is supported | Parsed JSON output. **`nil` when the command doesn't support `-o json`**. CEL expressions referencing `output` when nil receive a diagnostic error: *"variable 'output' is nil — this command does not support structured output"* rather than a raw CEL error |
+| `output` | `map[string, any]` | When `-o json` is supported | Parsed JSON output. **`nil` when the command doesn't support `-o json`**. CEL expressions referencing `output` when nil cause the test to report as `error` (not `fail`) with the diagnostic: *"variable 'output' is nil — this command does not support structured output"*. This is a configuration issue, not an assertion failure |
 | `files` | `map[string, FileInfo]` | Yes | Files created or modified in the sandbox during command execution. Key is relative path. Each `FileInfo` has `exists` (bool) and `content` (string) |
 
 The `output` variable structure depends on the command:
@@ -656,6 +712,8 @@ The `output` variable structure depends on the command:
 | `run solution` | Execution result: `output.status`, `output.actions`, `output.duration` |
 | `lint` | Lint result: `output.findings`, `output.errorCount`, `output.warnCount` |
 | `snapshot diff` | Diff result: `output.added`, `output.removed`, `output.modified` |
+
+> **Note**: This table is non-exhaustive. For commands not listed, `output` follows the command's `-o json` schema. Use verbose mode (`-v`) to inspect the raw JSON structure for any command.
 
 #### File Assertions (`files` variable)
 
@@ -678,6 +736,8 @@ Each entry in `files` is keyed by the relative path from the sandbox root and ha
 - `content` (`string`): the full file content as a string
 
 > **Size guard**: Files larger than 10MB have their `content` set to `"<file too large>"` and a warning is emitted in verbose output. This prevents OOM on solutions that generate large binary artifacts.
+
+> **Binary file guard**: Files with non-UTF-8 content (binary files) have their `content` set to `"<binary file>"` and a warning is emitted in verbose output. The `exists` field is still `true`. Use `exists` checks rather than `content` checks for binary outputs.
 
 #### Regex and Contains Context
 
@@ -725,6 +785,10 @@ When `snapshot` is set, the test runner:
 
 Snapshots can be used alongside other assertions — all must pass.
 
+### Snapshot with `expectFailure`
+
+When `snapshot` is combined with `expectFailure: true`, the snapshot captures stdout from the failing command. The snapshot comparison runs **after** the exit code check passes (i.e., after confirming the command did fail as expected). If the exit code check fails (command unexpectedly succeeds), the snapshot comparison is skipped and the test reports as `fail`.
+
 ### Snapshot Diff Output
 
 When a snapshot doesn't match, the failure output shows a unified diff:
@@ -763,20 +827,27 @@ scafctl test functional -f solution.yaml --update-snapshots --filter "snapshot-*
 
 The test runner executes scafctl commands **in-process** by invoking the cobra command tree directly, rather than shelling out to a scafctl binary. This is faster, avoids requiring a built binary on PATH, and simplifies output capture.
 
+`Root()` accepts a `*RootOptions` struct that enables isolated, concurrent invocations:
+
+~~~go
+opts := &scafctl.RootOptions{
+    IOStreams:   terminal.NewIOStreams(nil, &stdout, &stderr, false),
+    ExitFunc:    func(code int) { panic(&exitcode.ExitError{Code: code}) },
+    ConfigPath:  "",
+}
+cli := scafctl.Root(opts)
+cli.SetArgs([]string{"render", "solution", "-f", sandboxPath, "-o", "json"})
+err := cli.Execute()
+~~~
+
+Each call to `Root()` creates its own `cliParams`, flag bindings, and writer — no package-level mutable state. This means multiple test goroutines can construct and execute cobra trees fully in parallel without data races or mutex serialization.
+
 The runner:
-1. Constructs the cobra root command using the same `Root()` function from `pkg/cmd/scafctl/root.go`
+1. Constructs the cobra root command using `Root(opts)` with custom `IOStreams` (backed by `bytes.Buffer`) and a custom `ExitFunc`
 2. Sets the `command` array as args (e.g., `[render, solution]` → cobra traversal)
 3. Injects `-f <sandbox-solution-path>` by default. Set `injectFile: false` on the test case to disable (e.g., for catalog solution tests). The runner **always errors** if `-f` appears in the test's `args`, regardless of `injectFile`
-4. Redirects stdout/stderr to buffers for capture
-5. Uses `writer.WithExitFunc()` to intercept `os.Exit` calls and convert them to `*exitcode.ExitError` values, preventing the test runner from terminating
-
-### In-Process Execution Safety
-
-`Root()` in `pkg/cmd/scafctl/root.go` uses 6 **package-level mutable variables** (`cliParams`, `configPath`, `appConfig`, `debugFlag`, `logFormat`, `logFile`). Calling `Root()` concurrently from multiple goroutines causes data races.
-
-**Mitigation**: All in-process cobra invocations are serialized behind a `sync.Mutex`. Tests still run in parallel for sandbox setup, file copying, init steps, assertions, and cleanup — only the actual cobra command execution is serialized. Since commands themselves are fast (typically <100ms), this has minimal impact on total test duration.
-
-> **Future**: Refactor `Root()` to accept a struct of options and eliminate package-level state, enabling fully parallel in-process execution. This is a larger change that can be done incrementally.
+4. Stdout/stderr are captured via the `IOStreams` buffers passed in `RootOptions`
+5. Uses `RootOptions.ExitFunc` to intercept `os.Exit` calls and convert them to `*exitcode.ExitError` values, preventing the test runner from terminating
 
 ### Sandbox
 
@@ -794,6 +865,18 @@ Each test runs in an isolated temporary directory:
 10. Clean up the temp directory (unless `--keep-sandbox` is set)
 
 This ensures init scripts cannot modify source files.
+
+### Test Execution Ordering
+
+Tests execute in a deterministic order:
+
+1. **Builtin tests** run first, in alphabetical order (`builtin:lint`, `builtin:parse`, `builtin:render-defaults`, `builtin:resolve-defaults`)
+2. **User-defined tests** run next, in alphabetical order by test name
+3. **Template tests** (names starting with `_`) are never executed
+
+With `-j > 1` (default), tests run in parallel and may complete in any order, but **result reporting is always alphabetical**. With `--sequential` (`-j 1`), both execution and reporting follow alphabetical order.
+
+This is consistent with how the codebase handles action ordering within execution phases (`sort.Strings`). Tests should be independent — alphabetical ordering exposes hidden ordering dependencies.
 
 ### Discovery
 
@@ -820,7 +903,7 @@ For each test case:
 8. Build the command: construct cobra tree with `<command> <args...>`. If `injectFile` is `true` (default), prepend `-f <sandbox-solution>`
 9. If command supports `-o json` (detected via `cmd.Flags().Lookup("output")`) and test doesn't specify `-o` → append `-o json`
 10. Inject `SCAFCTL_SANDBOX_DIR` and per-test `env` environment variables
-11. Execute in-process with timeout (serialized behind mutex); capture stdout, stderr, exit code via `writer.WithExitFunc()`
+11. Execute in-process with timeout; capture stdout, stderr, exit code via `RootOptions.ExitFunc`
 12. Diff sandbox files against snapshot → populate `files` context variable
 13. Parse JSON stdout if available → populate `output` context variable (nil if command doesn't support `-o json`)
 14. Check exit code against `exitCode` or `expectFailure`
@@ -828,11 +911,11 @@ For each test case:
 16. Run **all** assertions (CEL against parsed output, regex/contains against target stream). All assertions always run regardless of prior failures
 17. Run cleanup steps (even on failure or error)
 18. All checks pass → `pass`; any check fails → `fail`
-19. If `fail` and `retries > 0` → re-run from step 5 up to `retries` times. If any retry passes → `pass (retry N/M)`. Retry attempts are shown in verbose output
+19. If `fail` and `retries > 0` → re-run from step 5 up to `retries` times. Each retry creates a **fresh sandbox** (re-copies solution + bundle files from the suite-level base sandbox if `testConfig.setup` is present, otherwise from source). Init steps re-run on each retry. If any retry passes → `pass (retry N/M)`. Retry attempts are shown in verbose output
 
 ### Parallelism
 
-Test cases run in parallel by default, limited by the `-j` / `--concurrency` flag (default: `runtime.NumCPU()`). Each test has its own sandbox, so there is no shared state. In-process cobra invocations are serialized behind a mutex (see [In-Process Execution Safety](#in-process-execution-safety)).
+Test cases run in parallel by default, limited by the `-j` / `--concurrency` flag (default: `runtime.NumCPU()`). Each test has its own sandbox and its own `Root()` invocation with isolated state — no shared mutable state, no mutex serialization needed.
 
 Use `--sequential` (sugar for `-j 1`) to disable parallel execution (useful for debugging).
 
@@ -872,12 +955,14 @@ scafctl test functional [flags]
 | `--report-file` | `string` | — | Write JUnit XML report to this path |
 | `--update-snapshots` | `bool` | `false` | Update golden files instead of comparing. Combine with `--filter` for selective updates |
 | `--sequential` | `bool` | `false` | Disable parallel test execution (sugar for `-j 1`) |
-| `-j`, `--concurrency` | `int` | `runtime.NumCPU()` | Maximum number of tests to run in parallel. In-process cobra invocations are always serialized regardless of this value |
+| `-j`, `--concurrency` | `int` | `runtime.NumCPU()` | Maximum number of tests to run in parallel |
 | `--skip-builtins` | `bool` | `false` | Skip builtin tests for all solutions |
 | `--test-timeout` | `duration` | `30s` | Per-test timeout |
 | `--timeout` | `duration` | `5m` | Global timeout for all tests |
-| `--filter` | `[]string` | — | Run only tests matching this name pattern (glob via `doublestar.Match`). Matches against the test name only (not `solution/test-name`). Builtin tests are matched with their full name including `builtin:` prefix. Multiple `--filter` flags allowed; a test runs if it matches any filter. Registered via `StringArrayVar` per project convention |
+| `--filter` | `[]string` | — | Run only tests matching this name pattern (glob via `doublestar.Match`). Supports two formats: (1) test name only (e.g., `"render-*"`) — matches against the test name, (2) `solution/test-name` format (e.g., `"terraform-*/render-*"`) — matches against both solution name and test name. When no `/` is present, matches test name only (backward-compatible). Builtin tests are matched with their full name including `builtin:` prefix. Multiple `--filter` flags allowed; a test runs if it matches any filter. Registered via `StringArrayVar` per project convention |
 | `--tag` | `[]string` | — | Run only tests with these tags. Multiple `--tag` flags allowed (e.g., `--tag smoke --tag render`). A test matches if it has **any** of the specified tags. Registered via `StringArrayVar` per project convention |
+| `--solution` | `[]string` | — | Run only tests from solutions matching this name pattern (glob via `doublestar.Match`). Multiple `--solution` flags allowed; a solution is included if it matches any pattern. When combined with `--filter` and `--tag`, all filters are ANDed: a test must match the solution filter AND the name filter AND have a matching tag |
+| `--dry-run` | `bool` | `false` | Validate test definitions, resolve extends chains, and report discovery results without executing any tests. Useful for CI preflight checks. Exits 0 if valid, `exitcode.InvalidInput` (3) if invalid |
 | `--fail-fast` | `bool` | `false` | Stop remaining tests for the current solution on first failure. Other solutions continue |
 | `-v`, `--verbose` | `bool` | `false` | Show full command, init output, and raw stdout/stderr |
 | `--keep-sandbox` | `bool` | `false` | Preserve sandbox directories for failed tests |
@@ -911,6 +996,8 @@ scafctl test list [flags]
 | `-o`, `--output` | `string` | `table` | Output format: `table`, `json`, `yaml`, `quiet` |
 | `--include-builtins` | `bool` | `false` | Include builtin tests in the listing |
 | `--tag` | `[]string` | — | Filter to tests with these tags. Multiple `--tag` flags allowed |
+| `--solution` | `[]string` | — | Filter to solutions matching this name pattern (glob). Multiple `--solution` flags allowed |
+| `--filter` | `[]string` | — | Filter to tests matching this name pattern (glob). Supports `solution/test-name` format. Multiple `--filter` flags allowed |
 
 #### Example Output
 
@@ -940,6 +1027,21 @@ terraform-scaffold   rejects-invalid-env         PASS     8ms
 terraform-scaffold   temporarily-disabled        SKIP     -
 
 7 passed, 0 failed, 0 errors, 1 skipped (121ms)
+~~~
+
+In verbose mode (`-v`), passing tests show assertion counts:
+
+~~~
+SOLUTION             TEST                        STATUS           DURATION
+terraform-scaffold   renders-dev-defaults        PASS (2/2)       12ms
+terraform-scaffold   renders-prod-override       PASS (3/3)       15ms
+terraform-scaffold   rejects-invalid-env         PASS (2/2)       8ms
+~~~
+
+Failing tests show which assertions failed:
+
+~~~
+terraform-scaffold   renders-dev-defaults        FAIL (1/3)       14ms
 ~~~
 
 ### Error Output
@@ -982,8 +1084,8 @@ terraform-scaffold   renders-prod-override       PASS     15ms
 ### Verbose Failure Output (`-v`)
 
 ~~~
-SOLUTION             TEST                        STATUS   DURATION
-terraform-scaffold   renders-dev-defaults        FAIL     14ms
+SOLUTION             TEST                        STATUS           DURATION
+terraform-scaffold   renders-dev-defaults        FAIL (1/2)       14ms
 
   Command: scafctl render solution -f /tmp/scafctl-test-abc123/solution.yaml -o json
   Sandbox: /tmp/scafctl-test-abc123/
@@ -1075,22 +1177,29 @@ type TestCase struct {
     Description   string            `json:"description" yaml:"description" doc:"Human-readable test description"`
     Command       []string          `json:"command,omitempty" yaml:"command,omitempty" doc:"scafctl subcommand as array" example:"[render, solution]"`
     Args          []string          `json:"args,omitempty" yaml:"args,omitempty" doc:"Additional CLI flags. -f is always auto-injected by the runner"`
-    Extends       []string          `json:"extends,omitempty" yaml:"extends,omitempty" doc:"Names of test templates to inherit from"`
-    Tags          []string          `json:"tags,omitempty" yaml:"tags,omitempty" doc:"Tags for categorization and --tag filtering"`
+    Extends       []string          `json:"extends,omitempty" yaml:"extends,omitempty" doc:"Names of test templates to inherit from" maxItems:"10"`
+    Tags          []string          `json:"tags,omitempty" yaml:"tags,omitempty" doc:"Tags for categorization and --tag filtering" maxItems:"20"`
     Env           map[string]string `json:"env,omitempty" yaml:"env,omitempty" doc:"Per-test environment variables"`
-    Files         []string          `json:"files,omitempty" yaml:"files,omitempty" doc:"Relative paths or globs for test files"`
+    Files         []string          `json:"files,omitempty" yaml:"files,omitempty" doc:"Relative paths or globs for test files" maxItems:"50"`
     Init          []InitStep        `json:"init,omitempty" yaml:"init,omitempty" doc:"Setup steps run before the command"`
     Cleanup       []InitStep        `json:"cleanup,omitempty" yaml:"cleanup,omitempty" doc:"Teardown steps run after the command, even on failure"`
-    Assertions    []Assertion       `json:"assertions,omitempty" yaml:"assertions,omitempty" doc:"Output assertions. All are evaluated regardless of prior failures"`
+    Assertions    []Assertion       `json:"assertions,omitempty" yaml:"assertions,omitempty" doc:"Output assertions. All are evaluated regardless of prior failures" maxItems:"100"`
     Snapshot      string            `json:"snapshot,omitempty" yaml:"snapshot,omitempty" doc:"Golden file path for normalized comparison"`
     InjectFile    *bool             `json:"injectFile,omitempty" yaml:"injectFile,omitempty" doc:"Auto-inject -f sandbox path. Default true. Set false for catalog tests"`
     ExpectFailure bool              `json:"expectFailure,omitempty" yaml:"expectFailure,omitempty" doc:"Pass if command exits non-zero"`
-    ExitCode      *int              `json:"exitCode,omitempty" yaml:"exitCode,omitempty" doc:"Exact expected exit code. Overrides expectFailure"`
-    Timeout       *time.Duration    `json:"timeout,omitempty" yaml:"timeout,omitempty" doc:"Per-test timeout"`
+    ExitCode      *int              `json:"exitCode,omitempty" yaml:"exitCode,omitempty" doc:"Exact expected exit code. Mutually exclusive with expectFailure"`
+    Timeout       *Duration         `json:"timeout,omitempty" yaml:"timeout,omitempty" doc:"Per-test timeout as Go duration string" example:"30s"`
     Skip          bool              `json:"skip,omitempty" yaml:"skip,omitempty" doc:"Skip this test"`
     SkipReason    string            `json:"skipReason,omitempty" yaml:"skipReason,omitempty" doc:"Human-readable skip reason"`
     SkipExpression celexp.Expression `json:"skipExpression,omitempty" yaml:"skipExpression,omitempty" doc:"CEL expression evaluated at discovery time. If true, test is skipped. Context: os, arch, env"`
     Retries       int               `json:"retries,omitempty" yaml:"retries,omitempty" doc:"Number of retry attempts for failing tests" maximum:"10"`
+}
+
+// Duration is a time.Duration with string-based YAML/JSON marshalling.
+// Supports Go duration strings like "30s", "2m", "1m30s".
+// Implements both UnmarshalYAML/MarshalYAML and UnmarshalJSON/MarshalJSON.
+type Duration struct {
+    time.Duration
 }
 
 // IsTemplate returns true if this test is a template (name starts with _).
@@ -1098,9 +1207,33 @@ func (tc *TestCase) IsTemplate() bool {
     return strings.HasPrefix(tc.Name, "_")
 }
 
+// Validate performs comprehensive validation of a TestCase.
+// Checks:
+//   - command is non-empty (unless template or inherited via extends)
+//   - exitCode and expectFailure are not both set (mutual exclusion)
+//   - snapshot or assertions — at least one must be present (unless template)
+//   - template names match ^_[a-zA-Z0-9][a-zA-Z0-9_-]*$
+//   - non-template names match ^[a-zA-Z0-9][a-zA-Z0-9_-]*$
+//   - args does not contain "-f" or "--file"
+//   - retries is 0–10
+//   - assertions count ≤ 100, files count ≤ 50, tags count ≤ 20
+//   - extends depth ≤ 10 (enforced during inheritance resolution)
+func (tc *TestCase) Validate() error { /* ... */ }
+
+// Max limits enforced by Validate().
+const (
+    MaxAssertionsPerTest = 100
+    MaxFilesPerTest      = 50
+    MaxTagsPerTest       = 20
+    MaxExtendsDepth      = 10
+    MaxTestsPerSolution  = 500
+    MaxRetries           = 10
+)
+
 // TestConfig holds solution-level test configuration.
 type TestConfig struct {
     SkipBuiltins SkipBuiltinsValue `json:"skipBuiltins,omitempty" yaml:"skipBuiltins,omitempty" doc:"Disable builtins: true for all, or list of specific names"`
+    Env          map[string]string `json:"env,omitempty" yaml:"env,omitempty" doc:"Suite-level environment variables applied to all tests"`
     Setup        []InitStep        `json:"setup,omitempty" yaml:"setup,omitempty" doc:"Suite-level setup steps. Run once, copied per-test"`
     Cleanup      []InitStep        `json:"cleanup,omitempty" yaml:"cleanup,omitempty" doc:"Suite-level teardown steps. Run once after all tests complete, even on failure"`
 }
@@ -1195,7 +1328,7 @@ const (
 ### Additions to Existing Types
 
 - `pkg/solution/spec.go`: Add `Tests map[string]*testing.TestCase` and `TestConfig *testing.TestConfig` fields to `Spec`. Add `HasTests() bool` and `HasTestConfig() bool` helper methods following the existing `Has*()` pattern
-- `pkg/solution/bundler/compose.go`: Extend compose to merge `spec.tests` (by name, reject duplicates) and `spec.testConfig` (`skipBuiltins`: true-wins for bool / union for lists; `setup`/`cleanup`: appended in compose-file order)
+- `pkg/solution/bundler/compose.go`: Extend `composePart` struct with `Tests map[string]*testing.TestCase` and `TestConfig *testing.TestConfig` fields. Extend compose to merge `spec.tests` (by name, reject duplicates) and `spec.testConfig` (`skipBuiltins`: true-wins for bool / union for lists; `env`: merged map, last-file-wins on conflict; `setup`/`cleanup`: appended in compose-file order)
 - `pkg/solution/bundler/discover.go`: Add `TestInclude` discovery source; scan `spec.tests[*].files` entries
 
 ---
@@ -1375,9 +1508,9 @@ The example solution at `examples/solutions/tested-solution/` should include:
 - **Skip + skipReason**: standard test framework feature for development workflow
 - **Lint error** (not warning) for unbundled test files: catalog regression testing requires bundled tests
 - **Lint warning** for unused templates: templates defined but never referenced via `extends` are likely dead code
-- **Root() data race mitigation**: mutex serialization of in-process cobra invocations. Commands are fast (<100ms), so serialization has minimal impact. Future: refactor `Root()` to eliminate package-level state
+- **Root() isolation via `RootOptions`**: `Root()` accepts a `*RootOptions` struct and creates all state locally — no package-level mutable variables. Each concurrent test invocation gets its own `cliParams`, flag bindings, `ioStreams`, and writer. This eliminates data races without requiring mutex serialization
 - **Exit codes**: new `TestFailed = 11` constant rather than reusing `ValidationFailed = 2`, which has different semantics
-- **`--tag` and `--filter` as `[]string`**: registered via `StringArrayVar` per project convention (not `StringSliceVar` which uses CSV parsing). Multiple flags allowed; OR logic
+- **`--tag`, `--filter`, and `--solution` as `[]string`**: registered via `StringArrayVar` per project convention (not `StringSliceVar` which uses CSV parsing). Multiple flags allowed; OR logic within each flag type, AND logic between them (test must match solution filter AND name filter AND tag filter)
 - **`--filter` glob library**: `doublestar.Match` — already a project dependency in `pkg/solution/bundler/discover.go`
 - **`-o json` auto-detection**: `cmd.Flags().Lookup("output")` cobra flag introspection — no command registry needed
 - **`output` nil when unsupported**: diagnostic error rather than empty map to prevent silent assertion failures
@@ -1389,3 +1522,22 @@ The example solution at `examples/solutions/tested-solution/` should include:
 - **Compose `testConfig` merge**: `setup`/`cleanup` steps appended in compose-file order (new merge strategy); `skipBuiltins` uses `true`-wins for bool, union for lists
 - **`SkipBuiltinsValue` round-trip**: requires both `UnmarshalYAML` and `MarshalYAML` for compose `deepCopySolution` compatibility
 - **Snapshot normalization pipeline**: fixed set of scrubbers (timestamps, UUIDs, sandbox paths, sorted keys). Custom scrubbers deferred to future enhancement
+- **Alphabetical test ordering** over YAML definition order: consistent with how actions use `sort.Strings` within execution phases. No new infrastructure (ordered maps) needed. Tests should be independent — alphabetical ordering exposes hidden ordering dependencies
+- **`--filter` supports `solution/test-name` format**: when filter contains `/`, match against `solution-name/test-name`. When no `/`, match test name only (backward-compatible). Enables scoping in multi-solution runs
+- **`--solution` flag** for solution-level filtering: glob-based, ANDed with `--filter` and `--tag`. Simpler than always using `solution/test-name` format when you only care about the solution
+- **`--dry-run` flag** over separate `test validate` subcommand: simpler, one less command. Validates definitions and reports discovery without executing
+- **Suite-level `env`** (`testConfig.env`): avoids repeating environment variables on every test case. Precedence: process → `testConfig.env` → `TestCase.env` → `InitStep.env`
+- **Fresh sandbox per retry**: each retry creates a new sandbox to ensure side-effect isolation. Init steps re-run on each attempt. Suite-level base sandbox is re-copied, not re-run
+- **Binary file content guard**: non-UTF-8 files get `content` set to `"<binary file>"`, parallel to the size guard. Prevents garbled CEL string comparisons
+- **`output` nil → test `error`** (not `fail`): referencing `output` when the command doesn't support `-o json` is a configuration issue, not an assertion failure
+- **Extends non-existent → validation error**: referencing a test name that doesn't exist in `extends` is caught at parse time, not silently ignored
+- **Extends chain depth limit of 10**: prevents stack overflow and extremely complex inheritance. Deep chains indicate a design problem
+- **Max field limits**: assertions (100), files (50), tags (20), tests per solution (500). Prevents accidentally expensive test suites while remaining generous for real-world use
+- **Glob zero-match → test `error`**: catches typos and missing test data early rather than silently proceeding without files
+- **Snapshot captures stdout even with `expectFailure`**: snapshot comparison runs after exit code check. Enables golden-file testing of error output
+- **`exitCode` and `expectFailure` mutual exclusion**: both set is a `Validate()` error. `exitCode` is strictly more expressive
+- **`TestCase.Validate()` method**: comprehensive validation covering name format, field limits, mutual exclusion, and `args` content. Catches errors early at parse time
+- **Assertion count in verbose output**: `PASS (4/4)` / `FAIL (2/4)` gives quick visibility into test thoroughness without requiring `-o json`
+- **Duration as string type**: `"30s"` YAML format with custom marshal/unmarshal. More human-readable than integer seconds and more explicit than Go's default nanosecond marshalling
+- **Environment precedence chain documented**: process → `testConfig.env` → `TestCase.env` → `InitStep.env`. Each level merges with previous; only conflicting keys are overridden
+- **Compose test ordering independent of file order**: tests from all compose files execute alphabetically, not in compose-file order. Only `testConfig.setup`/`cleanup`/`env` follow compose-file ordering
