@@ -55,7 +55,7 @@ func run() error {
 	// This allows celexp to automatically use the global cache when no cache is specified.
 	celexp.SetCacheFactory(env.GlobalCache)
 
-	cli := scafctl.Root()
+	cli := scafctl.Root(nil)
 	defer func() {
 		// Profiler shutdown errors are logged but not treated as fatal,
 		// as they do not affect the main application flow.
