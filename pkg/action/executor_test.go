@@ -12,6 +12,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/oakwood-commons/scafctl/pkg/duration"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
@@ -397,7 +398,7 @@ func TestExecutor_Execute_Timeout(t *testing.T) {
 		},
 	})
 
-	timeout := Duration(100 * time.Millisecond)
+	timeout := duration.New(100 * time.Millisecond)
 	executor := NewExecutor(
 		WithRegistry(registry),
 	)
@@ -629,7 +630,7 @@ func TestExecutor_Execute_Retry(t *testing.T) {
 		},
 	})
 
-	tenMillis := Duration(10 * time.Millisecond)
+	tenMillis := duration.New(10 * time.Millisecond)
 	executor := NewExecutor(
 		WithRegistry(registry),
 		WithDefaultTimeout(5*time.Second),

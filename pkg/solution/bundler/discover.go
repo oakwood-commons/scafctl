@@ -24,6 +24,8 @@ const (
 	StaticAnalysis DiscoverySource = iota
 	// ExplicitInclude means the file was declared in bundle.include.
 	ExplicitInclude
+	// TestInclude means the file was referenced in spec.tests[*].files.
+	TestInclude
 )
 
 // String returns a human-readable label for the discovery source.
@@ -33,6 +35,8 @@ func (d DiscoverySource) String() string {
 		return "static-analysis"
 	case ExplicitInclude:
 		return "explicit-include"
+	case TestInclude:
+		return "test-include"
 	default:
 		return "unknown"
 	}
@@ -150,6 +154,32 @@ func DiscoverFiles(sol *solution.Solution, bundleRoot string, opts ...DiscoverOp
 		for _, relPath := range expanded {
 			if err := addFileEntry(result, seen, cfg, bundleRoot, relPath, ExplicitInclude); err != nil {
 				return nil, fmt.Errorf("bundle.include: %w", err)
+			}
+		}
+	}
+
+	// Phase 3: Scan test file references from spec.tests[*].files
+	for _, tc := range sol.Spec.Tests {
+		if tc == nil {
+			continue
+		}
+		for _, fileRef := range tc.Files {
+			// Test file references may be globs — expand them
+			if strings.ContainsAny(fileRef, "*?[{") {
+				expanded, err := expandSingleGlob(bundleRoot, fileRef, cfg)
+				if err != nil {
+					// Log warning but don't fail — globs are validated at test time
+					continue
+				}
+				for _, relPath := range expanded {
+					if err := addFileEntry(result, seen, cfg, bundleRoot, relPath, TestInclude); err != nil {
+						continue // skip files that don't exist yet
+					}
+				}
+			} else {
+				if err := addFileEntry(result, seen, cfg, bundleRoot, fileRef, TestInclude); err != nil {
+					continue // skip files that don't exist yet
+				}
 			}
 		}
 	}

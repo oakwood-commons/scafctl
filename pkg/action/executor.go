@@ -498,7 +498,7 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 	// Set up timeout
 	timeout := e.defaultTimeout
 	if action.Timeout != nil {
-		timeout = time.Duration(*action.Timeout)
+		timeout = action.Timeout.Duration
 	}
 
 	actionCtx, cancel := context.WithTimeout(ctx, timeout)

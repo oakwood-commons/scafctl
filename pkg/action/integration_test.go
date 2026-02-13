@@ -15,6 +15,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/duration"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
@@ -657,7 +658,7 @@ func TestIntegration_RetryWithBackoff(t *testing.T) {
 	})
 
 	progress := newProgressRecorder()
-	initialDelay := action.Duration(10 * time.Millisecond)
+	initialDelay := duration.New(10 * time.Millisecond)
 	executor := action.NewExecutor(
 		action.WithRegistry(registry),
 		action.WithProgressCallback(progress),
@@ -718,7 +719,7 @@ func TestIntegration_TimeoutHandling(t *testing.T) {
 	})
 
 	progress := newProgressRecorder()
-	timeout := action.Duration(100 * time.Millisecond)
+	timeout := duration.New(100 * time.Millisecond)
 	executor := action.NewExecutor(
 		action.WithRegistry(registry),
 		action.WithProgressCallback(progress),

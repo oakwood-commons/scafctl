@@ -93,6 +93,32 @@ func TestWarning_Quiet(t *testing.T) {
 	assert.Empty(t, outBuf.String())
 }
 
+func TestWarnStderr(t *testing.T) {
+	w, outBuf, errBuf := newTestWriter()
+
+	w.WarnStderr("System diagnostic")
+	assert.Empty(t, outBuf.String(), "WarnStderr should not write to stdout")
+	assert.Contains(t, errBuf.String(), "System diagnostic")
+	assert.Contains(t, errBuf.String(), "⚠️")
+}
+
+func TestWarnStderrf(t *testing.T) {
+	w, outBuf, errBuf := newTestWriter()
+	w.cliParams.NoColor = true
+
+	w.WarnStderrf("Feature %s unavailable", "secrets")
+	assert.Empty(t, outBuf.String(), "WarnStderrf should not write to stdout")
+	assert.Contains(t, errBuf.String(), "Feature secrets unavailable")
+}
+
+func TestWarnStderr_Quiet(t *testing.T) {
+	w, _, errBuf := newTestWriter()
+	w.cliParams.IsQuiet = true
+
+	w.WarnStderr("System diagnostic")
+	assert.Empty(t, errBuf.String())
+}
+
 func TestError(t *testing.T) {
 	w, _, errBuf := newTestWriter()
 

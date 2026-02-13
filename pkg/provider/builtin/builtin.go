@@ -102,11 +102,13 @@ func registerAllToRegistry(ctx context.Context, reg *provider.Registry) error {
 }
 
 // warnUser emits a user-facing warning message via the Writer in ctx.
+// Writes to stderr (via w.WarnStderr) so that diagnostic messages do not
+// corrupt structured stdout output (e.g., -o json).
 // If no Writer is available in ctx, the warning is silently dropped
 // (it would only be visible at debug log level via structured logging).
 func warnUser(ctx context.Context, msg string) {
 	if w := writer.FromContext(ctx); w != nil {
-		w.Warning(msg)
+		w.WarnStderr(msg)
 	}
 }
 

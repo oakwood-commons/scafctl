@@ -1,0 +1,28 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: composed-test
+  version: 1.0.0
+  description: Solution with composed test files
+
+compose:
+  - tests/*.yaml
+
+spec:
+  resolvers:
+    message:
+      description: A simple message
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: composed-test-output
+
+  tests:
+    _base:
+      description: Base template for rendering tests
+      command: [run, resolver]
+      args: ["-o", "json"]
+      assertions:
+        - expression: __exitCode == 0

@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/duration"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 )
 
@@ -72,7 +73,7 @@ type Action struct {
 
 	// Timeout limits how long the action can run.
 	// If exceeded, the action fails with StatusTimeout.
-	Timeout *Duration `json:"timeout,omitempty" yaml:"timeout,omitempty" doc:"Maximum execution duration" example:"30s"`
+	Timeout *duration.Duration `json:"timeout,omitempty" yaml:"timeout,omitempty" doc:"Maximum execution duration" example:"30s"`
 
 	// Retry configures automatic retry on failure.
 	Retry *RetryConfig `json:"retry,omitempty" yaml:"retry,omitempty" doc:"Retry configuration for transient failures"`
@@ -92,9 +93,6 @@ type Action struct {
 	// Overrides the workflow-level default. Options: "error" (fail action), "warn" (log and continue), "ignore" (skip validation).
 	ResultSchemaMode ResultSchemaMode `json:"resultSchemaMode,omitempty" yaml:"resultSchemaMode,omitempty" doc:"Result schema validation mode" example:"error"`
 }
-
-// Duration is a wrapper around time.Duration that supports YAML/JSON marshaling.
-type Duration time.Duration
 
 // ResultSchemaMode defines the validation behavior when result schema validation fails.
 type ResultSchemaMode string
@@ -140,11 +138,11 @@ type RetryConfig struct {
 
 	// InitialDelay is the delay before the first retry.
 	// For exponential backoff, subsequent delays are multiplied by 2.
-	InitialDelay *Duration `json:"initialDelay,omitempty" yaml:"initialDelay,omitempty" doc:"Delay before first retry" example:"1s"`
+	InitialDelay *duration.Duration `json:"initialDelay,omitempty" yaml:"initialDelay,omitempty" doc:"Delay before first retry" example:"1s"`
 
 	// MaxDelay caps the maximum delay between retries.
 	// Only meaningful for linear and exponential backoff.
-	MaxDelay *Duration `json:"maxDelay,omitempty" yaml:"maxDelay,omitempty" doc:"Maximum delay between retries" example:"30s"`
+	MaxDelay *duration.Duration `json:"maxDelay,omitempty" yaml:"maxDelay,omitempty" doc:"Maximum delay between retries" example:"30s"`
 
 	// RetryIf is a CEL expression that determines whether a retry should occur.
 	// The expression has access to __error context with error details:
