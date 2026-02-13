@@ -67,6 +67,25 @@ func (w *Writer) Warningf(format string, args ...any) {
 	w.Warning(fmt.Sprintf(format, args...))
 }
 
+// WarnStderr writes a warning message to stderr instead of stdout.
+// Use this for system-level diagnostic warnings that must not corrupt
+// structured command output (e.g., -o json).
+// Respects --quiet and --no-color flags.
+func (w *Writer) WarnStderr(msg string) {
+	if w.cliParams.IsQuiet {
+		return
+	}
+	fmt.Fprintln(w.ioStreams.ErrOut, output.WarningMessage(msg, w.cliParams.NoColor))
+}
+
+// WarnStderrf writes a formatted warning message to stderr.
+// Use this for system-level diagnostic warnings that must not corrupt
+// structured command output (e.g., -o json).
+// Respects --quiet and --no-color flags.
+func (w *Writer) WarnStderrf(format string, args ...any) {
+	w.WarnStderr(fmt.Sprintf(format, args...))
+}
+
 // Error writes an error message to stderr.
 // Does NOT respect --quiet (errors should always be visible).
 // Respects --no-color flag.

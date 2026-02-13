@@ -620,13 +620,15 @@ func printDryRunOutput(w *writer.Writer, discovery *bundler.DiscoveryResult, sol
 	}
 
 	// Static analysis discovered files
-	var staticFiles, explicitFiles []bundler.FileEntry
+	var staticFiles, explicitFiles, testFiles []bundler.FileEntry
 	for _, f := range discovery.LocalFiles {
 		switch f.Source {
 		case bundler.StaticAnalysis:
 			staticFiles = append(staticFiles, f)
 		case bundler.ExplicitInclude:
 			explicitFiles = append(explicitFiles, f)
+		case bundler.TestInclude:
+			testFiles = append(testFiles, f)
 		}
 	}
 
@@ -642,6 +644,15 @@ func printDryRunOutput(w *writer.Writer, discovery *bundler.DiscoveryResult, sol
 	if len(explicitFiles) > 0 {
 		w.Plainf("  Explicit includes (bundle.include):")
 		for _, f := range explicitFiles {
+			w.Plainf("    %s", f.RelPath)
+		}
+		w.Plainf("")
+	}
+
+	// Test file includes
+	if len(testFiles) > 0 {
+		w.Plainf("  Test file includes:")
+		for _, f := range testFiles {
 			w.Plainf("    %s", f.RelPath)
 		}
 		w.Plainf("")

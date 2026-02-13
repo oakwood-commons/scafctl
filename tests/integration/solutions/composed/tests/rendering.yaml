@@ -1,0 +1,7 @@
+spec:
+  tests:
+    render-check:
+      description: Verify rendering works via compose
+      extends: [_base]
+      assertions:
+        - contains: message

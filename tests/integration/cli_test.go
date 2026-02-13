@@ -2996,3 +2996,387 @@ spec:
 	assert.Contains(t, stdout, "nested.go")
 	assert.Contains(t, stdout, "totalCount")
 }
+
+// ============================================================================
+// Test Command Tests
+// ============================================================================
+
+func TestIntegration_Test_Functional(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	solutionFile := filepath.Join(tmpDir, "solution.yaml")
+
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test-functional-pass
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      description: Static greeting
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+  tests:
+    basic-render:
+      description: Verify render works
+      command: [run, resolver]
+      args: ["-o", "json"]
+      assertions:
+        - expression: __exitCode == 0
+        - contains: greeting
+`
+	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
+
+	stdout, stderr, exitCode := runScafctl(t,
+		"test", "functional",
+		"-f", solutionFile,
+		"--skip-builtins",
+		"--no-color",
+	)
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstdout: %s\nstderr: %s", exitCode, stdout, stderr)
+}
+
+func TestIntegration_Test_Functional_Failure(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	solutionFile := filepath.Join(tmpDir, "solution.yaml")
+
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test-functional-fail
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      description: Static greeting
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+  tests:
+    fail-on-purpose:
+      description: This test should fail
+      command: [run, resolver]
+      args: ["-o", "json"]
+      assertions:
+        - contains: this-string-definitely-does-not-exist-in-output
+`
+	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
+
+	_, _, exitCode := runScafctl(t,
+		"test", "functional",
+		"-f", solutionFile,
+		"--skip-builtins",
+		"--no-color",
+	)
+
+	// Exit code 11 = TestFailed
+	assert.Equal(t, 11, exitCode, "expected exit code 11 for test failure")
+}
+
+func TestIntegration_Test_List(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	solutionFile := filepath.Join(tmpDir, "solution.yaml")
+
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test-list-example
+  version: 1.0.0
+spec:
+  resolvers:
+    msg:
+      description: A message
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hi
+  tests:
+    smoke-test:
+      description: Smoke test
+      command: [run, resolver]
+      args: ["-o", "json"]
+      tags: [smoke]
+      assertions:
+        - expression: __exitCode == 0
+    another-test:
+      description: Another test
+      command: [lint]
+      assertions:
+        - expression: __exitCode == 0
+`
+	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
+
+	stdout, stderr, exitCode := runScafctl(t,
+		"test", "list",
+		"-f", solutionFile,
+		"--no-color",
+	)
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0")
+	assert.Contains(t, stdout, "smoke-test")
+	assert.Contains(t, stdout, "another-test")
+}
+
+func TestIntegration_Test_Functional_JSON(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	solutionFile := filepath.Join(tmpDir, "solution.yaml")
+
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test-json-output
+  version: 1.0.0
+spec:
+  resolvers:
+    val:
+      description: Static value
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: data
+  tests:
+    json-test:
+      description: Test with JSON output
+      command: [run, resolver]
+      args: ["-o", "json"]
+      assertions:
+        - expression: __exitCode == 0
+`
+	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
+
+	stdout, stderr, exitCode := runScafctl(t,
+		"test", "functional",
+		"-f", solutionFile,
+		"--skip-builtins",
+		"-o", "json",
+		"--no-color",
+	)
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0")
+	// JSON output should parse as valid JSON containing test results
+	assert.Contains(t, stdout, "json-test")
+}
+
+func TestIntegration_Test_Functional_JUnit(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	solutionFile := filepath.Join(tmpDir, "solution.yaml")
+	reportFile := filepath.Join(tmpDir, "results.xml")
+
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test-junit-output
+  version: 1.0.0
+spec:
+  resolvers:
+    val:
+      description: Static value
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: data
+  tests:
+    junit-test:
+      description: Test for JUnit report
+      command: [run, resolver]
+      args: ["-o", "json"]
+      assertions:
+        - expression: __exitCode == 0
+`
+	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
+
+	stdout, stderr, exitCode := runScafctl(t,
+		"test", "functional",
+		"-f", solutionFile,
+		"--skip-builtins",
+		"--report-file", reportFile,
+		"--no-color",
+	)
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0")
+
+	// Verify JUnit XML file was written
+	_, err := os.Stat(reportFile)
+	assert.NoError(t, err, "JUnit report file should exist")
+
+	data, err := os.ReadFile(reportFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "<?xml")
+	assert.Contains(t, string(data), "testsuite")
+}
+
+func TestIntegration_Test_Functional_DryRun(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	solutionFile := filepath.Join(tmpDir, "solution.yaml")
+
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test-dry-run
+  version: 1.0.0
+spec:
+  resolvers:
+    val:
+      description: Static value
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: data
+  tests:
+    dry-test:
+      description: Dry run test
+      command: [run, resolver]
+      args: ["-o", "json"]
+      assertions:
+        - contains: impossible-string-that-would-fail
+`
+	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
+
+	stdout, stderr, exitCode := runScafctl(t,
+		"test", "functional",
+		"-f", solutionFile,
+		"--skip-builtins",
+		"--dry-run",
+		"--no-color",
+	)
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	// Dry run should succeed even when assertions would fail
+	assert.Equal(t, 0, exitCode, "dry-run should return exit code 0")
+}
+
+func TestIntegration_Test_Functional_Filter(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	solutionFile := filepath.Join(tmpDir, "solution.yaml")
+
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test-filter
+  version: 1.0.0
+spec:
+  resolvers:
+    val:
+      description: Static value
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: data
+  tests:
+    render-pass:
+      description: This test should run and pass
+      command: [run, resolver]
+      args: ["-o", "json"]
+      assertions:
+        - expression: __exitCode == 0
+    skipped-test:
+      description: This test should not run due to filter
+      command: [run, resolver]
+      args: ["-o", "json"]
+      assertions:
+        - contains: impossible-string-that-would-fail
+`
+	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
+
+	stdout, stderr, exitCode := runScafctl(t,
+		"test", "functional",
+		"-f", solutionFile,
+		"--skip-builtins",
+		"--filter", "render-*",
+		"--no-color",
+	)
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	// Should pass because only render-pass runs (skipped-test is filtered out)
+	assert.Equal(t, 0, exitCode, "expected exit code 0 when filtered")
+}
+
+func TestIntegration_Test_Functional_Compose(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	solutionFile := filepath.Join(tmpDir, "solution.yaml")
+	testsDir := filepath.Join(tmpDir, "tests")
+	require.NoError(t, os.MkdirAll(testsDir, 0o755))
+
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test-compose
+  version: 1.0.0
+compose:
+  - tests/*.yaml
+spec:
+  resolvers:
+    msg:
+      description: A simple message
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: composed-output
+  tests:
+    _base:
+      description: Base template
+      command: [run, resolver]
+      args: ["-o", "json"]
+      assertions:
+        - expression: __exitCode == 0
+`
+	testFileContent := `spec:
+  tests:
+    composed-test:
+      description: Test from composed file
+      extends: [_base]
+      assertions:
+        - expression: '"msg" in __output'
+`
+	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(testsDir, "smoke.yaml"), []byte(testFileContent), 0o644))
+
+	stdout, stderr, exitCode := runScafctl(t,
+		"test", "functional",
+		"-f", solutionFile,
+		"--skip-builtins",
+		"--no-color",
+	)
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0 for composed tests\nstdout: %s\nstderr: %s", stdout, stderr)
+	assert.Contains(t, stdout, "composed-test", "composed test should appear in output")
+}

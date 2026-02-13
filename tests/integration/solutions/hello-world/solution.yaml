@@ -1,0 +1,40 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: hello-world-test
+  version: 1.0.0
+  description: Minimal solution for functional test verification
+
+spec:
+  resolvers:
+    greeting:
+      description: Static greeting
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: Hello, World!
+
+  tests:
+    render-basic:
+      description: Verify solution renders successfully
+      command: [run, resolver]
+      args: ["-o", "json"]
+      assertions:
+        - expression: __exitCode == 0
+        - contains: greeting
+
+    resolver-output:
+      description: Verify resolver produces expected value
+      command: [run, resolver]
+      args: ["-o", "json"]
+      assertions:
+        - expression: __exitCode == 0
+        - contains: "Hello, World!"
+
+    expect-lint-clean:
+      description: Verify solution passes lint
+      command: [lint]
+      assertions:
+        - expression: __exitCode == 0
