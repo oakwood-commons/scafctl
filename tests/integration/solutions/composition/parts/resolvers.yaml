@@ -1,0 +1,17 @@
+spec:
+  resolvers:
+    composedResolver:
+      description: Resolver defined in a composed file
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: from-composed-file
+
+    derivedFromBase:
+      description: Resolver depending on a main-file resolver
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.baseMessage + "-and-composed"'

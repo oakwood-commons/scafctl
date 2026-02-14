@@ -1,0 +1,61 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-resolver-timeout
+  version: 1.0.0
+  description: |
+    Functional tests for resolver timeout enforcement.
+    Verifies that per-resolver timeouts are enforced and
+    that resolvers within timeout complete normally.
+
+spec:
+  resolvers:
+    fastResolver:
+      description: Fast resolver well within timeout
+      timeout: "10s"
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "fast-result"
+
+    timedSleep:
+      description: Short sleep within timeout
+      timeout: "10s"
+      resolve:
+        with:
+          - provider: sleep
+            inputs:
+              duration: "100ms"
+      transform:
+        with:
+          - provider: static
+            inputs:
+              value: "sleep-completed"
+
+  testConfig:
+    skipBuiltins: true
+
+  tests:
+    _base:
+      description: Base template for timeout tests
+      command: [run, resolver]
+      args: ["-o", "json"]
+      tags: [resolver, timeout]
+      assertions:
+        - expression: __exitCode == 0
+
+    fast-within-timeout:
+      description: Verify fast resolver completes within timeout
+      extends: [_base]
+      tags: [smoke]
+      assertions:
+        - expression: __output.fastResolver == "fast-result"
+
+    sleep-within-timeout:
+      description: Verify sleep completes within timeout
+      extends: [_base]
+      timeout: "15s"
+      assertions:
+        - expression: __output.timedSleep == "sleep-completed"

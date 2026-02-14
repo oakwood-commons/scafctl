@@ -1,0 +1,164 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-exec-provider
+  version: 1.0.0
+  description: |
+    Functional tests for the exec provider.
+    Verifies command execution, stdout/stderr capture, exit codes,
+    environment variable passthrough, and piped commands.
+
+spec:
+  resolvers:
+    echoSimple:
+      description: Simple echo command
+      resolve:
+        with:
+          - provider: exec
+            inputs:
+              command: "echo hello-from-exec"
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "has(__self.stdout) ? __self.stdout.trim() : string(__self)"
+
+    echoWithArgs:
+      description: Echo with arguments
+      resolve:
+        with:
+          - provider: exec
+            inputs:
+              command: echo
+              args: ["-n", "no-newline"]
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "has(__self.stdout) ? __self.stdout : string(__self)"
+
+    pipedCommand:
+      description: Piped command execution
+      resolve:
+        with:
+          - provider: exec
+            inputs:
+              command: "echo 'alpha bravo charlie' | tr ' ' '\\n' | sort | head -1"
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "has(__self.stdout) ? __self.stdout.trim() : string(__self)"
+
+    envPassthrough:
+      description: Environment variable passthrough
+      resolve:
+        with:
+          - provider: exec
+            inputs:
+              command: "echo $SCAFCTL_EXEC_TEST_VAR"
+              env:
+                SCAFCTL_EXEC_TEST_VAR: "exec-env-value"
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "has(__self.stdout) ? __self.stdout.trim() : string(__self)"
+
+    multilineOutput:
+      description: Multi-line output capture
+      resolve:
+        with:
+          - provider: exec
+            inputs:
+              command: "printf 'line1\\nline2\\nline3'"
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "has(__self.stdout) ? __self.stdout : string(__self)"
+
+    stdinInput:
+      description: Command with stdin
+      resolve:
+        with:
+          - provider: exec
+            inputs:
+              command: "cat"
+              stdin: "stdin-content"
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "has(__self.stdout) ? __self.stdout.trim() : string(__self)"
+
+    exitCodeCapture:
+      description: Capture exit code from exec
+      resolve:
+        with:
+          - provider: exec
+            inputs:
+              command: "true"
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "has(__self.exitCode) ? __self.exitCode : 0"
+
+  testConfig:
+    skipBuiltins: true
+
+  tests:
+    _base:
+      description: Base template for exec provider tests
+      command: [run, resolver]
+      args: ["-o", "json"]
+      tags: [provider, exec]
+      assertions:
+        - expression: __exitCode == 0
+
+    simple-echo:
+      description: Verify simple echo command
+      extends: [_base]
+      tags: [smoke]
+      assertions:
+        - expression: __output.echoSimple == "hello-from-exec"
+
+    echo-with-args:
+      description: Verify echo with args
+      extends: [_base]
+      assertions:
+        - expression: __output.echoWithArgs == "no-newline"
+
+    piped-command:
+      description: Verify piped command execution
+      extends: [_base]
+      assertions:
+        - expression: __output.pipedCommand == "alpha"
+          message: "Sorted first word should be alpha"
+
+    env-passthrough:
+      description: Verify environment variable passthrough to exec
+      extends: [_base]
+      assertions:
+        - expression: __output.envPassthrough == "exec-env-value"
+
+    multiline-output:
+      description: Verify multi-line output capture
+      extends: [_base]
+      assertions:
+        - expression: __output.multilineOutput.contains("line1")
+        - expression: __output.multilineOutput.contains("line3")
+
+    stdin-input:
+      description: Verify stdin is passed to command
+      extends: [_base]
+      assertions:
+        - expression: __output.stdinInput == "stdin-content"
+
+    exit-code-capture:
+      description: Verify exit code is captured
+      extends: [_base]
+      assertions:
+        - expression: __output.exitCodeCapture == 0

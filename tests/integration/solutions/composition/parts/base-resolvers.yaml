@@ -1,0 +1,9 @@
+spec:
+  resolvers:
+    baseMessage:
+      description: Base resolver originally from main solution
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: from-main

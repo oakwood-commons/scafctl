@@ -7,8 +7,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -27,6 +29,11 @@ type CommandBuilder func(ioStreams *terminal.IOStreams, exitFunc func(code int))
 
 // Runner is the main test execution engine for functional tests.
 type Runner struct {
+	// BinaryPath is the absolute path to the scafctl binary for subprocess
+	// execution. Each test's CLI command runs as an isolated child process,
+	// giving true parallelism and process-level env/state isolation.
+	// When empty, falls back to NewCommand (in-process, for unit tests only).
+	BinaryPath string
 	// Concurrency is the number of tests to run in parallel. 0 or 1 = sequential.
 	Concurrency int
 	// FailFast stops remaining tests for a solution on first failure.
@@ -48,8 +55,26 @@ type Runner struct {
 	// Filter contains filter options to apply.
 	Filter FilterOptions
 	// NewCommand builds a root cobra.Command for in-process execution.
-	// Must be set before calling Run(). Typically wraps scafctl.Root().
+	// Used only as a fallback when BinaryPath is empty (unit tests).
+	// Production code should always set BinaryPath instead.
 	NewCommand CommandBuilder
+	// Progress receives notifications as tests execute.
+	// When nil, no progress output is emitted.
+	Progress TestProgressCallback
+}
+
+// emitTestStart notifies the progress callback that a test is starting.
+func (r *Runner) emitTestStart(solution, test string) {
+	if r.Progress != nil {
+		r.Progress.OnTestStart(solution, test)
+	}
+}
+
+// emitTestComplete notifies the progress callback that a test has finished.
+func (r *Runner) emitTestComplete(result TestResult) {
+	if r.Progress != nil {
+		r.Progress.OnTestComplete(result)
+	}
 }
 
 // Run orchestrates functional test execution across all solutions.
@@ -77,12 +102,14 @@ func (r *Runner) Run(ctx context.Context, solutions []SolutionTests) ([]TestResu
 		if err := ResolveExtends(st.Tests); err != nil {
 			// All tests in this solution get error status
 			for name := range st.Tests {
-				allResults = append(allResults, TestResult{
+				result := TestResult{
 					Solution: st.SolutionName,
 					Test:     name,
 					Status:   StatusError,
 					Message:  fmt.Sprintf("extends resolution failed: %s", err),
-				})
+				}
+				r.emitTestComplete(result)
+				allResults = append(allResults, result)
 			}
 			continue
 		}
@@ -93,12 +120,14 @@ func (r *Runner) Run(ctx context.Context, solutions []SolutionTests) ([]TestResu
 				continue
 			}
 			if err := tc.Validate(); err != nil {
-				allResults = append(allResults, TestResult{
+				result := TestResult{
 					Solution: st.SolutionName,
 					Test:     name,
 					Status:   StatusError,
 					Message:  fmt.Sprintf("validation failed: %s", err),
-				})
+				}
+				r.emitTestComplete(result)
+				allResults = append(allResults, result)
 				delete(st.Tests, name)
 			}
 		}
@@ -119,12 +148,14 @@ func (r *Runner) Run(ctx context.Context, solutions []SolutionTests) ([]TestResu
 				if tc.IsTemplate() {
 					continue
 				}
-				allResults = append(allResults, TestResult{
+				result := TestResult{
 					Solution: st.SolutionName,
 					Test:     name,
 					Status:   StatusSkip,
 					Message:  "dry run",
-				})
+				}
+				r.emitTestComplete(result)
+				allResults = append(allResults, result)
 			}
 			continue
 		}
@@ -149,12 +180,14 @@ func (r *Runner) runSolution(ctx context.Context, st *SolutionTests, testNames [
 			// All tests become error status
 			results := make([]TestResult, 0, len(testNames))
 			for _, name := range testNames {
-				results = append(results, TestResult{
+				result := TestResult{
 					Solution: st.SolutionName,
 					Test:     name,
 					Status:   StatusError,
 					Message:  fmt.Sprintf("suite setup failed: %s", err),
-				})
+				}
+				r.emitTestComplete(result)
+				results = append(results, result)
 			}
 			return results, nil
 		}
@@ -180,26 +213,32 @@ func (r *Runner) runSolution(ctx context.Context, st *SolutionTests, testNames [
 		// Sequential execution
 		for _, name := range testNames {
 			if err := ctx.Err(); err != nil {
-				results = append(results, TestResult{
+				result := TestResult{
 					Solution: st.SolutionName,
 					Test:     name,
 					Status:   StatusError,
 					Message:  "context cancelled",
-				})
+				}
+				r.emitTestComplete(result)
+				results = append(results, result)
 				continue
 			}
 
 			if failFastTriggered {
-				results = append(results, TestResult{
+				result := TestResult{
 					Solution: st.SolutionName,
 					Test:     name,
 					Status:   StatusSkip,
 					Message:  "skipped due to --fail-fast",
-				})
+				}
+				r.emitTestComplete(result)
+				results = append(results, result)
 				continue
 			}
 
+			r.emitTestStart(st.SolutionName, name)
 			result := r.runTestWithRetries(ctx, st, name, solutionDir)
+			r.emitTestComplete(result)
 			results = append(results, result)
 
 			if r.FailFast && (result.Status == StatusFail || result.Status == StatusError) {
@@ -213,13 +252,15 @@ func (r *Runner) runSolution(ctx context.Context, st *SolutionTests, testNames [
 
 		for _, name := range testNames {
 			if err := ctx.Err(); err != nil {
-				mu.Lock()
-				results = append(results, TestResult{
+				result := TestResult{
 					Solution: st.SolutionName,
 					Test:     name,
 					Status:   StatusError,
 					Message:  "context cancelled",
-				})
+				}
+				r.emitTestComplete(result)
+				mu.Lock()
+				results = append(results, result)
 				mu.Unlock()
 				continue
 			}
@@ -228,13 +269,15 @@ func (r *Runner) runSolution(ctx context.Context, st *SolutionTests, testNames [
 			skip := failFastTriggered
 			mu.Unlock()
 			if skip {
-				mu.Lock()
-				results = append(results, TestResult{
+				result := TestResult{
 					Solution: st.SolutionName,
 					Test:     name,
 					Status:   StatusSkip,
 					Message:  "skipped due to --fail-fast",
-				})
+				}
+				r.emitTestComplete(result)
+				mu.Lock()
+				results = append(results, result)
 				mu.Unlock()
 				continue
 			}
@@ -245,7 +288,9 @@ func (r *Runner) runSolution(ctx context.Context, st *SolutionTests, testNames [
 				defer wg.Done()
 				defer func() { <-sem }()
 
+				r.emitTestStart(st.SolutionName, testName)
 				result := r.runTestWithRetries(ctx, st, testName, solutionDir)
+				r.emitTestComplete(result)
 
 				mu.Lock()
 				results = append(results, result)
@@ -471,6 +516,91 @@ func (r *Runner) executeTest(ctx context.Context, tc *TestCase, st *SolutionTest
 
 // executeCommand builds and runs a scafctl CLI command in-process.
 func (r *Runner) executeCommand(ctx context.Context, tc *TestCase, st *SolutionTests, sandbox *Sandbox) (*CommandOutput, error) {
+	if r.BinaryPath != "" {
+		return r.executeCommandSubprocess(ctx, tc, st, sandbox)
+	}
+	return r.executeCommandInProcess(ctx, tc, st, sandbox)
+}
+
+// executeCommandSubprocess runs a scafctl CLI command as an isolated child process.
+// Each invocation gets its own process environment, so concurrent tests cannot
+// interfere with each other's env vars or global state.
+func (r *Runner) executeCommandSubprocess(ctx context.Context, tc *TestCase, st *SolutionTests, sandbox *Sandbox) (*CommandOutput, error) {
+	timeout := r.TestTimeout
+	if tc.Timeout != nil {
+		timeout = tc.Timeout.Duration
+	}
+
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+
+	// Build command args
+	args := make([]string, 0, len(tc.Command)+len(tc.Args)+4)
+	args = append(args, tc.Command...)
+	args = append(args, tc.Args...)
+
+	// Auto-inject -f <sandbox-solution-path> unless injectFile is false
+	if tc.GetInjectFile() {
+		args = append(args, "-f", sandbox.SolutionPath())
+	}
+
+	// Disable color in subprocess output
+	args = append(args, "--no-color")
+
+	// Build the subprocess
+	cmd := exec.CommandContext(ctx, r.BinaryPath, args...) //nolint:gosec // binary path is set by the test runner
+	cmd.Dir = sandbox.Path()
+
+	// Capture stdout/stderr
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	// Build isolated environment: inherit parent env + overlay test env vars.
+	// Each subprocess gets its own copy, so no races.
+	envMap := r.buildEnvMap(tc, st.TestConfig, sandbox.Path())
+	cmd.Env = os.Environ()
+	for k, v := range envMap {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%v", k, v))
+	}
+
+	// Execute
+	cmdErr := cmd.Run()
+
+	// Determine exit code
+	exitCode := 0
+	if cmdErr != nil {
+		var exitErr *exec.ExitError
+		if ok := errors.As(cmdErr, &exitErr); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			// Non-exit error (e.g., binary not found, signal)
+			return nil, fmt.Errorf("subprocess execution failed: %w", cmdErr)
+		}
+	}
+
+	cmdOutput := &CommandOutput{
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
+		ExitCode: exitCode,
+	}
+
+	// Try to parse JSON from stdout
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(cmdOutput.Stdout), &parsed); err == nil {
+		cmdOutput.Output = parsed
+	}
+
+	return cmdOutput, nil
+}
+
+// executeCommandInProcess runs a scafctl CLI command in the current process.
+// This path is used only when BinaryPath is empty (unit tests with mock commands).
+// It is NOT safe for concurrent execution because os.Setenv is process-global.
+func (r *Runner) executeCommandInProcess(ctx context.Context, tc *TestCase, _ *SolutionTests, sandbox *Sandbox) (*CommandOutput, error) {
 	timeout := r.TestTimeout
 	if tc.Timeout != nil {
 		timeout = tc.Timeout.Duration
@@ -505,16 +635,6 @@ func (r *Runner) executeCommand(ctx context.Context, tc *TestCase, st *SolutionT
 	var capturedExitCode int
 	exitFunc := func(code int) {
 		capturedExitCode = code
-	}
-
-	// Build environment
-	envMap := r.buildEnvMap(tc, st.TestConfig, sandbox.Path())
-
-	// Set env vars for the command
-	for k, v := range envMap {
-		strVal := fmt.Sprintf("%v", v)
-		os.Setenv(k, strVal) //nolint:errcheck // env vars for test isolation
-		defer os.Unsetenv(k) //nolint:errcheck // cleanup env vars after test
 	}
 
 	// Create root command with isolated IOStreams

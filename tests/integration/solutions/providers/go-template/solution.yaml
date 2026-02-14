@@ -1,0 +1,139 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-go-template-provider
+  version: 1.0.0
+  description: |
+    Functional tests for the go-template provider.
+    Verifies template rendering with variable substitution,
+    conditionals, loops, and resolver data access.
+
+spec:
+  resolvers:
+    appName:
+      description: Application name for template tests
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: my-service
+
+    version:
+      description: Version for template tests
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "2.1.0"
+
+    features:
+      description: Feature list for template tests
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - logging
+                - metrics
+                - tracing
+
+    simpleTemplate:
+      description: Simple variable substitution
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              name: simple
+              template: "App: {{.appName}}, Version: {{.version}}"
+
+    conditionalTemplate:
+      description: Conditional template rendering
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              name: conditional
+              template: '{{if eq .appName "my-service"}}production-ready{{else}}development{{end}}'
+
+    loopTemplate:
+      description: Template with range loop
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              name: loop
+              template: "Features:{{range .features}} [{{.}}]{{end}}"
+
+    multilineTemplate:
+      description: Multiline template rendering
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              name: multiline
+              template: |
+                name: {{.appName}}
+                version: {{.version}}
+                featureCount: {{len .features}}
+
+  testConfig:
+    skipBuiltins: true
+
+  tests:
+    _base:
+      description: Base template for go-template provider tests
+      command: [run, resolver]
+      args: ["-o", "json"]
+      tags: [provider, go-template]
+      assertions:
+        - expression: __exitCode == 0
+
+    simple-substitution:
+      description: Verify simple variable substitution
+      extends: [_base]
+      tags: [smoke]
+      assertions:
+        - expression: __output.simpleTemplate == "App: my-service, Version: 2.1.0"
+
+    conditional-true:
+      description: Verify conditional template (true branch)
+      extends: [_base]
+      assertions:
+        - expression: __output.conditionalTemplate == "production-ready"
+
+    loop-rendering:
+      description: Verify range loop template
+      extends: [_base]
+      assertions:
+        - expression: __output.loopTemplate.contains("[logging]")
+        - expression: __output.loopTemplate.contains("[metrics]")
+        - expression: __output.loopTemplate.contains("[tracing]")
+
+    multiline-rendering:
+      description: Verify multiline template
+      extends: [_base]
+      assertions:
+        - expression: __output.multilineTemplate.contains("name: my-service")
+        - expression: __output.multilineTemplate.contains("version: 2.1.0")
+        - expression: __output.multilineTemplate.contains("featureCount: 3")

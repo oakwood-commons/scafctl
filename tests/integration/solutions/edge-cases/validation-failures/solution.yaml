@@ -1,0 +1,109 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-validation-failures
+  version: 1.0.0
+  description: Tests for validation failure behavior
+
+spec:
+  resolvers:
+    validValue:
+      description: A value that passes validation
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "good"
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              match: "^[a-z]+$"
+            message: "Must be lowercase letters"
+
+    invalidRegex:
+      description: A value that fails regex validation
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "BAD_VALUE!"
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              match: "^[a-z]+$"
+            message: "Must be lowercase letters only"
+
+    invalidExpression:
+      description: A value that fails CEL expression validation
+      type: int
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: 999
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: "__self >= 1 && __self <= 100"
+            message: "Value must be between 1 and 100"
+
+    invalidNotMatch:
+      description: A value that fails notMatch validation
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "has spaces in it"
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              notMatch: "\\s"
+            message: "Value must not contain spaces"
+
+  testConfig:
+    skipBuiltins: true
+
+  tests:
+    valid-passes:
+      description: Verify valid value passes validation
+      command: [run, resolver]
+      args: ["validValue", "-o", "json"]
+      tags: [edge-case, validation, smoke]
+      assertions:
+        - expression: __exitCode == 0
+        - expression: '__output.validValue == "good"'
+
+    regex-failure:
+      description: Verify regex validation failure
+      command: [run, resolver]
+      args: ["invalidRegex"]
+      tags: [edge-case, validation, negative]
+      expectFailure: true
+      assertions:
+        - expression: __exitCode != 0
+          message: "Should fail validation"
+
+    expression-failure:
+      description: Verify CEL expression validation failure
+      command: [run, resolver]
+      args: ["invalidExpression"]
+      tags: [edge-case, validation, negative]
+      expectFailure: true
+      assertions:
+        - expression: __exitCode != 0
+          message: "Should fail validation"
+
+    not-match-failure:
+      description: Verify notMatch validation failure
+      command: [run, resolver]
+      args: ["invalidNotMatch"]
+      tags: [edge-case, validation, negative]
+      expectFailure: true
+      assertions:
+        - expression: __exitCode != 0
+          message: "Should fail validation"

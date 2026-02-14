@@ -154,6 +154,28 @@ The capability model is designed for extension. Future capabilities may include:
 
 ---
 
+## Functional Testing
+
+Source: [functional-testing.md](functional-testing.md)
+
+### Auto-Generated Tests (`-o test`)
+
+A future output type for commands that support `-o`. When used, scafctl captures the command and its arguments, executes it, and generates a complete test definition with assertions derived from the actual output plus a snapshot golden file.
+
+### Catalog Regression Testing (`scafctl pipeline`)
+
+A future command that executes functional tests across solutions in a remote catalog, enabling validation that scafctl changes don't break existing solutions. Fetches matching solutions, extracts bundled test files, runs `test functional`, and reports aggregate results.
+
+### Test Scaffolding (`scafctl test init`)
+
+A future command that generates a starter test suite for an existing solution by analyzing its structure — parsing resolvers with defaults and outputting skeleton test YAML. Unlike `-o test` (which captures actual output), `test init` generates a starting point before running anything.
+
+### Watch Mode (`--watch`)
+
+A future flag for `scafctl test functional` that re-runs tests when solution files change. Monitors the solution file and its bundle/compose files for changes, then re-runs affected tests.
+
+---
+
 ## Resolvers
 
 Source: [resolvers.md](resolvers.md)

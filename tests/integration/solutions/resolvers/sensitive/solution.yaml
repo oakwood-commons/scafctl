@@ -1,0 +1,53 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-resolver-sensitive
+  version: 1.0.0
+  description: |
+    Functional tests for resolver sensitive field.
+    Verifies that sensitive resolvers have their values
+    masked in non-JSON output.
+
+spec:
+  resolvers:
+    secret:
+      description: A sensitive value
+      sensitive: true
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "super-secret-password"
+
+    normalValue:
+      description: A normal non-sensitive value
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "visible-value"
+
+  testConfig:
+    skipBuiltins: true
+
+  tests:
+    sensitive-in-json:
+      description: Verify sensitive value is accessible in JSON output
+      command: [run, resolver]
+      args: ["-o", "json"]
+      tags: [resolver, sensitive, smoke]
+      assertions:
+        - expression: __exitCode == 0
+        - expression: __output.normalValue == "visible-value"
+
+    sensitive-masked-table:
+      description: Verify sensitive value is masked in table output
+      command: [run, resolver]
+      tags: [resolver, sensitive]
+      assertions:
+        - expression: __exitCode == 0
+        - notContains: "super-secret-password"
+          message: "Sensitive value should be masked in table output"
+        - contains: "visible-value"
+          message: "Non-sensitive value should be visible"

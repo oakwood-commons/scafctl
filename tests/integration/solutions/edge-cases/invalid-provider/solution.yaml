@@ -1,0 +1,33 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-invalid-provider
+  version: 1.0.0
+  description: |
+    Functional tests for invalid provider error handling.
+    Verifies that unknown provider names produce clear errors.
+
+spec:
+  resolvers:
+    badProvider:
+      description: Resolver using a non-existent provider
+      resolve:
+        with:
+          - provider: does-not-exist
+            inputs:
+              value: "anything"
+
+  testConfig:
+    skipBuiltins: true
+
+  tests:
+    unknown-provider:
+      description: Verify unknown provider produces meaningful error
+      command: [run, resolver]
+      tags: [edge-case, negative]
+      expectFailure: true
+      assertions:
+        - notContains: "panic"
+          target: combined
+          message: "Should not panic on unknown provider"
