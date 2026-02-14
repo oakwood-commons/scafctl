@@ -6,6 +6,7 @@ package test
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -39,12 +40,11 @@ type FunctionalOptions struct {
 	FailFast        bool
 	Verbose         bool
 	KeepSandbox     bool
-	// commandBuilder creates a root cobra.Command for in-process execution.
-	commandBuilder soltesting.CommandBuilder
+	NoProgress      bool
 }
 
 // CommandFunctional creates the 'test functional' subcommand.
-func CommandFunctional(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string, cmdBuilder soltesting.CommandBuilder) *cobra.Command {
+func CommandFunctional(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
 	opts := &FunctionalOptions{}
 
 	cCmd := &cobra.Command{
@@ -85,7 +85,6 @@ Examples:
 
 			opts.IOStreams = ioStreams
 			opts.CliParams = cliParams
-			opts.commandBuilder = cmdBuilder
 
 			return runFunctional(ctx, opts)
 		},
@@ -109,6 +108,7 @@ Examples:
 	cCmd.Flags().BoolVar(&opts.FailFast, "fail-fast", false, "Stop remaining tests on first failure")
 	cCmd.Flags().BoolVarP(&opts.Verbose, "verbose", "v", false, "Enable verbose output (assertion counts, details)")
 	cCmd.Flags().BoolVar(&opts.KeepSandbox, "keep-sandbox", false, "Keep sandbox directories after test execution")
+	cCmd.Flags().BoolVar(&opts.NoProgress, "no-progress", false, "Disable live progress output during test execution")
 
 	return cCmd
 }
@@ -172,7 +172,18 @@ func runFunctional(ctx context.Context, opts *FunctionalOptions) error {
 		}
 	}
 
+	// Resolve the binary path for subprocess execution.
+	// Each test runs as a child process for true parallelism and env isolation.
+	binaryPath, err := os.Executable()
+	if err != nil {
+		if w != nil {
+			w.Errorf("failed to resolve executable path: %s", err)
+		}
+		return exitcode.WithCode(err, exitcode.GeneralError)
+	}
+
 	runner := &soltesting.Runner{
+		BinaryPath:      binaryPath,
 		Concurrency:     concurrency,
 		FailFast:        opts.FailFast,
 		UpdateSnapshots: opts.UpdateSnapshots,
@@ -187,11 +198,31 @@ func runFunctional(ctx context.Context, opts *FunctionalOptions) error {
 			Tags:             opts.Tag,
 			SolutionPatterns: opts.Solution,
 		},
-		NewCommand: opts.commandBuilder,
+	}
+
+	// Set up progress reporting unless explicitly disabled or output format
+	// is non-table (json/yaml/quiet — progress would corrupt structured output).
+	if !opts.NoProgress && !opts.DryRun {
+		format, _ := kvx.ParseOutputFormat(opts.Output)
+		if kvx.IsTableFormat(format) || opts.Output == "" {
+			if kvx.IsTerminal(opts.IOStreams.ErrOut) {
+				runner.Progress = NewMPBTestProgress(opts.IOStreams.ErrOut)
+			} else {
+				runner.Progress = NewLineTestProgress(opts.IOStreams.ErrOut)
+			}
+		}
 	}
 
 	// Execute tests
+	start := time.Now()
 	results, err := runner.Run(ctx, solutions)
+	elapsed := time.Since(start)
+
+	// Wait for progress output to flush before writing the report
+	if runner.Progress != nil {
+		runner.Progress.Wait()
+	}
+
 	if err != nil {
 		if w != nil {
 			w.Errorf("test execution failed: %s", err)
@@ -205,7 +236,7 @@ func runFunctional(ctx context.Context, opts *FunctionalOptions) error {
 	outputOpts.Format = format
 	outputOpts.Ctx = ctx
 
-	if err := soltesting.ReportResults(results, outputOpts, opts.Verbose); err != nil {
+	if err := soltesting.ReportResults(results, outputOpts, opts.Verbose, elapsed); err != nil {
 		if w != nil {
 			w.Errorf("reporting failed: %s", err)
 		}

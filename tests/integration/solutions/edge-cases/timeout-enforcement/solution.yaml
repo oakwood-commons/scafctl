@@ -1,0 +1,37 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-timeout-enforcement
+  version: 1.0.0
+  description: |
+    Functional tests for timeout enforcement.
+    Verifies that resolver-level timeouts are enforced
+    when a provider exceeds the allowed duration.
+
+spec:
+  resolvers:
+    # This resolver should timeout because sleep > timeout
+    slowResolver:
+      description: Resolver that exceeds its timeout
+      timeout: "500ms"
+      resolve:
+        with:
+          - provider: sleep
+            inputs:
+              duration: "5s"
+
+  testConfig:
+    skipBuiltins: true
+
+  tests:
+    timeout-exceeded:
+      description: Verify resolver timeout is enforced
+      command: [run, resolver]
+      args: ["--resolver", "slowResolver"]
+      tags: [edge-case, timeout, negative]
+      timeout: "15s"
+      expectFailure: true
+      assertions:
+        - notContains: "panic"
+          target: combined

@@ -1,0 +1,145 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-resolver-transform-chain
+  version: 1.0.0
+  description: |
+    Functional tests for resolver transform chains.
+    Verifies multi-step transformation pipelines using
+    different providers and __self access.
+
+spec:
+  resolvers:
+    # Multi-step string transform
+    cleanedInput:
+      description: Multi-step string cleaning
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "  Hello, WORLD!  "
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "__self.trim()"
+          - provider: cel
+            inputs:
+              expression: "__self.lowerAscii()"
+          - provider: cel
+            inputs:
+              expression: '__self.replace(",", "")'
+          - provider: cel
+            inputs:
+              expression: '__self.replace("!", "")'
+          - provider: cel
+            inputs:
+              expression: '__self.replace(" ", "-")'
+
+    # Transform with type change: string → list → filtered list → string
+    csvToList:
+      description: CSV string to filtered list
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "apple,banana,,cherry,,date"
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: '__self.split(",")'
+          - provider: cel
+            inputs:
+              expression: "__self.filter(item, item != '')"
+          - provider: cel
+            inputs:
+              expression: "__self.map(item, item.upperAscii())"
+
+    # Transform from exec output
+    execTransform:
+      description: Transform exec output through chain
+      resolve:
+        with:
+          - provider: exec
+            inputs:
+              command: "echo '  test-value  '"
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "has(__self.stdout) ? __self.stdout : string(__self)"
+          - provider: cel
+            inputs:
+              expression: "__self.trim()"
+
+    # Identity transform (no-op passthrough)
+    passthrough:
+      description: Value passes through without transforms
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "unchanged"
+
+    # Go-template transform step
+    templateTransform:
+      description: Transform using go-template provider
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "placeholder"
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              name: config
+              template: "app={{ .cleanedInput }}"
+
+  testConfig:
+    skipBuiltins: true
+
+  tests:
+    _base:
+      description: Base template for transform chain tests
+      command: [run, resolver]
+      args: ["-o", "json"]
+      tags: [resolver, transform]
+      assertions:
+        - expression: __exitCode == 0
+
+    multi-step-clean:
+      description: Verify multi-step string cleaning
+      extends: [_base]
+      tags: [smoke]
+      assertions:
+        - expression: __output.cleanedInput == "hello-world"
+          message: "Should trim, lowercase, remove punctuation, and hyphenate"
+
+    csv-to-filtered-list:
+      description: Verify CSV to filtered uppercase list
+      extends: [_base]
+      assertions:
+        - expression: size(__output.csvToList) == 4
+        - expression: __output.csvToList[0] == "APPLE"
+        - expression: __output.csvToList[3] == "DATE"
+
+    exec-output-transform:
+      description: Verify exec output is transformed through chain
+      extends: [_base]
+      assertions:
+        - expression: __output.execTransform == "test-value"
+
+    passthrough-no-transform:
+      description: Verify value passes through without transforms
+      extends: [_base]
+      assertions:
+        - expression: __output.passthrough == "unchanged"
+
+    template-transform:
+      description: Verify go-template transform step
+      extends: [_base]
+      assertions:
+        - expression: __output.templateTransform == "app=hello-world"

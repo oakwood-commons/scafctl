@@ -50,6 +50,11 @@ jobs:
         env:
           SCAFCTL_SECRET_KEY: dGVzdC1zZWNyZXQta2V5LWZvci1jaS0xMjM0NTY3OA==
       
+      - name: Run functional integration tests
+        run: task integration
+        env:
+          SCAFCTL_SECRET_KEY: dGVzdC1zZWNyZXQta2V5LWZvci1jaS0xMjM0NTY3OA==
+
       - name: Run tests with coverage
         run: task test-cover
         if: matrix.os == 'ubuntu-latest'

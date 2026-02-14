@@ -24,9 +24,9 @@ These concerns apply across resolvers, actions, providers, plugins, and solution
 | Error Model | ✅ Implemented | Rich error types with location, cause, context |
 | Determinism Rules | ✅ Implemented | Resolver purity enforced, `MockBehavior` declared |
 | Resolver DAG Visualization | ✅ Implemented | ASCII, DOT, Mermaid, JSON formats |
-| Action DAG Visualization | ⚠️ Partial | JSON/YAML render, no ASCII/DOT/Mermaid yet |
+| Action DAG Visualization | ✅ Implemented | ASCII, DOT, Mermaid, JSON formats via `--action-graph` |
 | Validation | ✅ Implemented | Schema, dependency, type validation |
-| Linting | 📋 Planned | Unused resolvers, unreachable actions, anti-patterns |
+| Linting | ✅ Implemented | `scafctl lint` with error/warning/info severities |
 | Extensibility (Providers/Plugins) | ✅ Implemented | Plugin system for external providers |
 | Render vs Run Separation | ✅ Implemented | `scafctl render` vs `scafctl run` |
 | Dry-run Mode | ✅ Implemented | `--dry-run` flag, `DryRunFromContext()` |
@@ -202,22 +202,23 @@ scafctl supports:
 
 ### Linting
 
-> **Status**: 📋 Planned
+> **Status**: ✅ Implemented in `pkg/cmd/scafctl/lint/lint.go`
 
-Linting may include:
+Linting rules include:
 
-- Unused resolvers
-- Unreachable actions
-- Missing dependencies
-- Anti-pattern detection
+**Errors**: empty solutions, reserved names, missing providers, invalid expressions/templates, invalid dependencies, finally-with-forEach, workflow validation, unbundled test files, invalid test names, undefined required properties, invalid result schemas
 
-Linting is advisory, not blocking.
+**Warnings**: unused resolvers, empty workflows, unused templates
+
+**Info**: missing descriptions, long timeouts, unused finally actions, permissive result schemas
+
+Linting is advisory, not blocking. Output supports table, JSON, YAML, and quiet formats via `-o` flag.
 
 ---
 
 ## Visualization and Introspection
 
-> **Status**: ✅ Mostly Implemented
+> **Status**: ✅ Implemented
 
 ### Goals
 
@@ -228,7 +229,7 @@ Linting is advisory, not blocking.
 ### Outputs
 
 - Resolver DAG visualization ✅ (`--graph` with ASCII, DOT, Mermaid, JSON)
-- Action DAG visualization ⚠️ (JSON/YAML render only, ASCII/DOT/Mermaid planned)
+- Action DAG visualization ✅ (`--action-graph` with ASCII, DOT, Mermaid, JSON)
 - Rendered action graph inspection ✅ (`scafctl render solution`)
 - Dependency summaries ✅ (`scafctl explain solution`)
 

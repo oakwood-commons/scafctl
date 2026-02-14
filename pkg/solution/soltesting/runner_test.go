@@ -666,7 +666,7 @@ func TestSummarize(t *testing.T) {
 
 func TestReportTableEmpty(t *testing.T) {
 	var buf strings.Builder
-	err := reportTable(nil, &buf, false)
+	err := reportTable(nil, &buf, false, 0)
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "No tests found")
 }
@@ -678,7 +678,7 @@ func TestReportTableBasic(t *testing.T) {
 	}
 
 	var buf strings.Builder
-	err := reportTable(results, &buf, false)
+	err := reportTable(results, &buf, false, 0)
 	require.NoError(t, err)
 
 	output := buf.String()
@@ -707,7 +707,7 @@ func TestReportTableVerbose(t *testing.T) {
 	}
 
 	var buf strings.Builder
-	err := reportTable(results, &buf, true)
+	err := reportTable(results, &buf, true, 0)
 	require.NoError(t, err)
 
 	output := buf.String()
@@ -859,7 +859,7 @@ func TestBuildReportData(t *testing.T) {
 		{Solution: "sol", Test: "t2", Status: StatusFail, Duration: 200 * time.Millisecond, Message: "failed"},
 	}
 
-	data := buildReportData(results)
+	data := buildReportData(results, 0)
 	assert.Len(t, data.Results, 2)
 	assert.Equal(t, 2, data.Summary.Total)
 	assert.Equal(t, 1, data.Summary.Passed)

@@ -1,0 +1,95 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-rendering
+  version: 1.0.0
+  description: Tests for resolver data availability and output
+
+spec:
+  resolvers:
+    projectName:
+      description: Project name
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: projectName
+          - provider: static
+            inputs:
+              value: test-project
+
+    language:
+      description: Language
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: language
+          - provider: static
+            inputs:
+              value: go
+
+    version:
+      description: Version
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "1.0.0"
+
+    features:
+      description: Feature list
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - api
+                - cli
+                - docs
+
+    computed:
+      description: Computed value from other resolvers
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.projectName + "-" + _.language + "-" + _.version'
+
+  testConfig:
+    skipBuiltins: true
+
+  tests:
+    _base:
+      description: Base for resolver tests
+      command: [run, resolver]
+      args: ["-o", "json"]
+      tags: [rendering]
+      assertions:
+        - expression: __exitCode == 0
+
+    resolver-data-available:
+      description: Verify all resolver data is available
+      extends: [_base]
+      tags: [smoke]
+      assertions:
+        - expression: '__output.projectName == "test-project"'
+        - expression: '__output.language == "go"'
+        - expression: '__output.version == "1.0.0"'
+        - expression: size(__output.features) == 3
+        - expression: '__output.computed == "test-project-go-1.0.0"'
+
+    render-json-output:
+      description: Verify JSON output contains all resolvers
+      extends: [_base]
+      assertions:
+        - expression: '"projectName" in __output'
+        - expression: '"features" in __output'
+
+    render-with-params:
+      description: Verify custom parameter overrides default
+      extends: [_base]
+      args: ["-o", "json", "-r", "projectName=custom-app"]
+      assertions:
+        - expression: '__output.projectName == "custom-app"'

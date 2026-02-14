@@ -295,11 +295,6 @@ func Root(opts *RootOptions) *cobra.Command {
 	cCmd.AddCommand(cachecmd.CommandCache(cliParams, ioStreams, settings.CliBinaryName))
 	cCmd.AddCommand(bundlecmd.CommandBundle(cliParams, ioStreams, settings.CliBinaryName))
 	cCmd.AddCommand(vendorcmd.CommandVendor(cliParams, ioStreams, settings.CliBinaryName))
-	cCmd.AddCommand(testcmd.CommandTest(cliParams, ioStreams, settings.CliBinaryName, func(testIO *terminal.IOStreams, exitFunc func(code int)) *cobra.Command {
-		return Root(&RootOptions{
-			IOStreams: testIO,
-			ExitFunc:  exitFunc,
-		})
-	}))
+	cCmd.AddCommand(testcmd.CommandTest(cliParams, ioStreams, settings.CliBinaryName))
 	return cCmd
 }

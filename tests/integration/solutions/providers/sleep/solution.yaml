@@ -1,0 +1,40 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-sleep-provider
+  version: 1.0.0
+  description: |
+    Functional tests for the sleep provider.
+    Verifies basic sleep execution and duration output.
+
+spec:
+  resolvers:
+    shortSleep:
+      description: A very short sleep
+      resolve:
+        with:
+          - provider: sleep
+            inputs:
+              duration: "100ms"
+
+  testConfig:
+    skipBuiltins: true
+
+  tests:
+    _base:
+      description: Base template for sleep provider tests
+      command: [run, resolver]
+      args: ["-o", "json"]
+      tags: [provider, sleep]
+      assertions:
+        - expression: __exitCode == 0
+
+    short-sleep:
+      description: Verify sleep provider completes successfully
+      extends: [_base]
+      tags: [smoke]
+      timeout: "10s"
+      assertions:
+        - contains: shortSleep
+          message: "Sleep resolver should appear in output"

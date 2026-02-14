@@ -1,0 +1,156 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-resolver-dag
+  version: 1.0.0
+  description: |
+    Functional tests for resolver DAG (dependency graph) execution.
+    Verifies implicit dependencies via _.ref, explicit dependsOn,
+    multi-level chains, and diamond dependency patterns.
+
+spec:
+  resolvers:
+    # Level 0: No dependencies
+    firstName:
+      description: First name (no deps)
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: John
+
+    lastName:
+      description: Last name (no deps)
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: Doe
+
+    # Level 1: Depends on level 0
+    fullName:
+      description: Full name (implicit dep on firstName + lastName)
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.firstName + " " + _.lastName'
+
+    # Level 1: Explicit dependsOn
+    greeting:
+      description: Greeting with explicit dependency
+      dependsOn: [firstName]
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '"Hello, " + _.firstName + "!"'
+
+    # Level 2: Depends on level 1 (multi-level chain)
+    formalGreeting:
+      description: Formal greeting (depends on fullName)
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '"Dear " + _.fullName + ","'
+
+    # Diamond: depends on both fullName and greeting (both depend on firstName)
+    summary:
+      description: Summary combining diamond dependencies
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.greeting + " Your full name is " + _.fullName + "."'
+
+    # Deep chain: 4 levels deep
+    chainA:
+      description: Chain level A
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "A"
+
+    chainB:
+      description: Chain level B
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.chainA + "B"'
+
+    chainC:
+      description: Chain level C
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.chainB + "C"'
+
+    chainD:
+      description: Chain level D
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.chainC + "D"'
+
+  testConfig:
+    skipBuiltins: true
+
+  tests:
+    _base:
+      description: Base template for DAG tests
+      command: [run, resolver]
+      args: ["-o", "json"]
+      tags: [resolver, dag]
+      assertions:
+        - expression: __exitCode == 0
+
+    implicit-deps:
+      description: Verify implicit dependencies via _.ref are resolved
+      extends: [_base]
+      tags: [smoke]
+      assertions:
+        - expression: __output.fullName == "John Doe"
+          message: "fullName should combine firstName and lastName"
+
+    explicit-depends-on:
+      description: Verify explicit dependsOn is honored
+      extends: [_base]
+      assertions:
+        - expression: __output.greeting == "Hello, John!"
+
+    multi-level-chain:
+      description: Verify multi-level dependency chain
+      extends: [_base]
+      assertions:
+        - expression: __output.formalGreeting == "Dear John Doe,"
+
+    diamond-dependency:
+      description: Verify diamond dependency pattern
+      extends: [_base]
+      assertions:
+        - expression: __output.summary == 'Hello, John! Your full name is John Doe.'
+
+    deep-chain:
+      description: Verify 4-level deep dependency chain
+      extends: [_base]
+      assertions:
+        - expression: __output.chainD == "ABCD"
+          message: "Each level should append its letter"
+
+    all-resolvers-present:
+      description: Verify all resolvers are in output
+      extends: [_base]
+      assertions:
+        - expression: '"firstName" in __output'
+        - expression: '"lastName" in __output'
+        - expression: '"fullName" in __output'
+        - expression: '"greeting" in __output'
+        - expression: '"formalGreeting" in __output'
+        - expression: '"summary" in __output'
+        - expression: '"chainD" in __output'

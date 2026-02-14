@@ -1,0 +1,3 @@
+# This file is intentionally left without tests.
+# All tests are defined in the main solution.yaml file.
+# Only resolvers are composed from external files.

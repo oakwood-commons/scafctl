@@ -1,0 +1,139 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-resolver-conditional
+  version: 1.0.0
+  description: |
+    Functional tests for resolver 'when' conditions.
+    Verifies conditional resolver execution based on
+    CEL expressions evaluating other resolver values.
+
+spec:
+  resolvers:
+    environment:
+      description: Target environment
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: env
+          - provider: static
+            inputs:
+              value: dev
+
+    enableDebug:
+      description: Debug flag
+      type: bool
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: debug
+          - provider: static
+            inputs:
+              value: false
+
+    # Conditional resolver: only runs when environment is "prod"
+    prodConfig:
+      description: Production-only configuration
+      when:
+        expr: '_.environment == "prod"'
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "production-settings"
+
+    # Conditional resolver: only runs when environment is "dev"
+    devConfig:
+      description: Development-only configuration
+      when:
+        expr: '_.environment == "dev"'
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "development-settings"
+
+    # Conditional based on boolean
+    debugInfo:
+      description: Debug info only when debug is enabled
+      when:
+        expr: "_.enableDebug == true"
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "debug-enabled"
+
+    # Always runs (no condition)
+    alwaysPresent:
+      description: Always resolves regardless of conditions
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "always-here"
+
+  testConfig:
+    skipBuiltins: true
+
+  tests:
+    _base:
+      description: Base template for conditional resolver tests
+      command: [run, resolver]
+      args: ["-o", "json"]
+      tags: [resolver, conditional]
+      assertions:
+        - expression: __exitCode == 0
+
+    dev-default:
+      description: Verify dev config resolves by default
+      extends: [_base]
+      tags: [smoke]
+      assertions:
+        - expression: __output.devConfig == "development-settings"
+          message: "devConfig should resolve when env=dev"
+        - expression: __output.alwaysPresent == "always-here"
+
+    dev-no-prod:
+      description: Verify prod config is skipped in dev
+      extends: [_base]
+      assertions:
+        - expression: '!("prodConfig" in __output) || __output.prodConfig == null'
+          message: "prodConfig should not resolve when env=dev"
+
+    prod-config:
+      description: Verify prod config resolves when env=prod
+      extends: [_base]
+      args: ["-r", "env=prod"]
+      assertions:
+        - expression: __output.prodConfig == "production-settings"
+
+    prod-no-dev:
+      description: Verify dev config is skipped in prod
+      extends: [_base]
+      args: ["-r", "env=prod"]
+      assertions:
+        - expression: '!("devConfig" in __output) || __output.devConfig == null'
+          message: "devConfig should not resolve when env=prod"
+
+    debug-disabled:
+      description: Verify debug info skipped when debug=false
+      extends: [_base]
+      assertions:
+        - expression: '!("debugInfo" in __output) || __output.debugInfo == null'
+
+    debug-enabled:
+      description: Verify debug info resolves when debug=true
+      extends: [_base]
+      args: ["-r", "debug=true"]
+      assertions:
+        - expression: __output.debugInfo == "debug-enabled"
+
+    always-present:
+      description: Verify unconditional resolver always resolves
+      extends: [_base]
+      assertions:
+        - expression: __output.alwaysPresent == "always-here"

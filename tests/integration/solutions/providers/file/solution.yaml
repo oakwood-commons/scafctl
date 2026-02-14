@@ -1,0 +1,106 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-file-provider
+  version: 1.0.0
+  description: Tests for the file provider
+
+spec:
+  resolvers:
+    readFixture:
+      description: Read a fixture file
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              operation: read
+              path: ./test-fixture.txt
+
+    fileExists:
+      description: Check if a file exists
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              operation: exists
+              path: ./test-fixture.txt
+
+    fileNotExists:
+      description: Check if a non-existent file exists
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              operation: exists
+              path: ./this-file-does-not-exist.txt
+
+    readJson:
+      description: Read a JSON fixture file
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              operation: read
+              path: ./test-data.json
+
+  testConfig:
+    skipBuiltins: true
+
+  tests:
+    _base:
+      description: Base template for file provider tests
+      command: [run, resolver]
+      args: ["-o", "json"]
+      tags: [provider, file]
+      assertions:
+        - expression: __exitCode == 0
+
+    read-fixture:
+      description: Verify reading a file
+      extends: [_base]
+      tags: [smoke]
+      init:
+        - command: "echo -n 'fixture-content' > test-fixture.txt"
+        - command: 'echo -n ''{"key":"value","count":42}'' > test-data.json'
+      cleanup:
+        - command: "rm -f test-fixture.txt test-data.json"
+      assertions:
+        - expression: '__output.readFixture.content == "fixture-content"'
+          message: "Should read the fixture file content"
+
+    file-exists:
+      description: Verify file exists check returns true
+      extends: [_base]
+      init:
+        - command: "echo -n 'exists' > test-fixture.txt"
+        - command: "echo -n '{}' > test-data.json"
+      cleanup:
+        - command: "rm -f test-fixture.txt test-data.json"
+      assertions:
+        - expression: __output.fileExists.exists == true
+          message: "Existing file should return true"
+
+    file-not-exists:
+      description: Verify file exists check returns false
+      extends: [_base]
+      init:
+        - command: "echo -n 'needed' > test-fixture.txt"
+        - command: "echo -n '{}' > test-data.json"
+      cleanup:
+        - command: "rm -f test-fixture.txt test-data.json"
+      assertions:
+        - expression: __output.fileNotExists.exists == false
+          message: "Non-existent file should return false"
+
+    read-json-content:
+      description: Verify reading JSON file content
+      extends: [_base]
+      init:
+        - command: "echo -n 'dummy' > test-fixture.txt"
+        - command: 'echo -n ''{"key":"value","count":42}'' > test-data.json'
+      cleanup:
+        - command: "rm -f test-fixture.txt test-data.json"
+      assertions:
+        - expression: '__output.readJson.content.contains("key")'
+        - expression: '__output.readJson.content.contains("value")'

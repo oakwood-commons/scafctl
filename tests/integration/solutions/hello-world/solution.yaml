@@ -16,6 +16,9 @@ spec:
             inputs:
               value: Hello, World!
 
+  testConfig:
+    skipBuiltins: true
+
   tests:
     render-basic:
       description: Verify solution renders successfully
