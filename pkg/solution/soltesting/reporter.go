@@ -14,12 +14,23 @@ import (
 
 // ResultSummary holds aggregated counts for reporting.
 type ResultSummary struct {
-	Passed   int           `json:"passed"`
-	Failed   int           `json:"failed"`
-	Errors   int           `json:"errors"`
-	Skipped  int           `json:"skipped"`
-	Total    int           `json:"total"`
-	Duration time.Duration `json:"duration"`
+	Passed       int           `json:"passed"`
+	Failed       int           `json:"failed"`
+	Errors       int           `json:"errors"`
+	Skipped      int           `json:"skipped"`
+	Total        int           `json:"total"`
+	Duration     time.Duration `json:"duration"`
+	WallDuration time.Duration `json:"wallDuration,omitempty"`
+}
+
+// ElapsedDuration returns WallDuration if set, otherwise falls back to
+// the summed individual Duration. Use this for summary display so that
+// parallel runs show wall-clock time instead of cumulative CPU time.
+func (s ResultSummary) ElapsedDuration() time.Duration {
+	if s.WallDuration > 0 {
+		return s.WallDuration
+	}
+	return s.Duration
 }
 
 // Summarize computes a ResultSummary from a slice of TestResults.
@@ -46,15 +57,17 @@ func Summarize(results []TestResult) ResultSummary {
 // For table format it writes a human-readable table with summary.
 // For JSON/YAML it delegates to kvx.OutputOptions.Write.
 // For quiet format it writes nothing.
-func ReportResults(results []TestResult, opts *kvx.OutputOptions, verbose bool) error {
+// The elapsed parameter, when > 0, overrides the summed individual durations
+// in the summary line with the actual wall-clock time.
+func ReportResults(results []TestResult, opts *kvx.OutputOptions, verbose bool, elapsed time.Duration) error {
 	switch {
 	case kvx.IsQuietFormat(opts.Format):
 		return nil
 	case kvx.IsTableFormat(opts.Format):
-		return reportTable(results, opts.IOStreams.Out, verbose)
+		return reportTable(results, opts.IOStreams.Out, verbose, elapsed)
 	default:
 		// JSON / YAML
-		return opts.Write(buildReportData(results))
+		return opts.Write(buildReportData(results, elapsed))
 	}
 }
 
@@ -84,8 +97,9 @@ type assertionOutput struct {
 	Message string `json:"message,omitempty"`
 }
 
-func buildReportData(results []TestResult) reportData {
+func buildReportData(results []TestResult, elapsed time.Duration) reportData {
 	summary := Summarize(results)
+	summary.WallDuration = elapsed
 	outputs := make([]testResultOutput, 0, len(results))
 	for _, r := range results {
 		out := testResultOutput{
@@ -114,7 +128,7 @@ func buildReportData(results []TestResult) reportData {
 }
 
 // reportTable writes a human-readable table to w.
-func reportTable(results []TestResult, w io.Writer, verbose bool) error {
+func reportTable(results []TestResult, w io.Writer, verbose bool, elapsed time.Duration) error {
 	if len(results) == 0 {
 		fmt.Fprintln(w, "No tests found.")
 		return nil
@@ -174,10 +188,11 @@ func reportTable(results []TestResult, w io.Writer, verbose bool) error {
 
 	// Summary
 	summary := Summarize(results)
+	summary.WallDuration = elapsed
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "%d passed, %d failed, %d errors, %d skipped (%s)\n",
 		summary.Passed, summary.Failed, summary.Errors, summary.Skipped,
-		formatDuration(summary.Duration))
+		formatDuration(summary.ElapsedDuration()))
 
 	return nil
 }

@@ -1,0 +1,228 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-cel-provider
+  version: 1.0.0
+  description: |
+    Functional tests for the cel provider.
+    Verifies CEL expression evaluation including string operations,
+    math, list/map manipulation, resolver namespace access, and type handling.
+
+spec:
+  resolvers:
+    # Base values for CEL expressions to reference
+    name:
+      description: A name value for CEL tests
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "Hello World"
+
+    items:
+      description: A list value for CEL tests
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - apple
+                - banana
+                - cherry
+
+    count:
+      description: A numeric value for CEL tests
+      type: int
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: 10
+
+    # CEL-computed resolvers
+    upperName:
+      description: Uppercase via CEL
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.name.upperAscii()"
+
+    lowerName:
+      description: Lowercase via CEL
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.name.lowerAscii()"
+
+    concatenated:
+      description: String concatenation via CEL
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '"prefix-" + _.name + "-suffix"'
+
+    listSize:
+      description: List size via CEL
+      type: int
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "size(_.items)"
+
+    filteredList:
+      description: Filtered list via CEL
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.items.filter(i, i.startsWith("b") || i.startsWith("c"))'
+
+    mappedList:
+      description: Mapped list via CEL
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.items.map(i, i.upperAscii())'
+
+    mathResult:
+      description: Math operations via CEL
+      type: int
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "(_.count * 3) + 5"
+
+    conditional:
+      description: Ternary conditional via CEL
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.count > 5 ? "large" : "small"'
+
+    containsCheck:
+      description: List contains check via CEL
+      type: bool
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '"banana" in _.items'
+
+    stringReplace:
+      description: String replace via CEL
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.name.replace(" ", "_")'
+
+    # Transform chain using CEL
+    transformed:
+      description: Multi-step CEL transform
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "  Mixed Case Input  "
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "__self.trim()"
+          - provider: cel
+            inputs:
+              expression: "__self.lowerAscii()"
+          - provider: cel
+            inputs:
+              expression: '__self.replace(" ", "-")'
+
+  testConfig:
+    skipBuiltins: true
+
+  tests:
+    _base:
+      description: Base template for CEL provider tests
+      command: [run, resolver]
+      args: ["-o", "json"]
+      tags: [provider, cel]
+      assertions:
+        - expression: __exitCode == 0
+
+    upper-ascii:
+      description: Verify upperAscii string function
+      extends: [_base]
+      tags: [smoke]
+      assertions:
+        - expression: __output.upperName == "HELLO WORLD"
+
+    lower-ascii:
+      description: Verify lowerAscii string function
+      extends: [_base]
+      assertions:
+        - expression: __output.lowerName == "hello world"
+
+    concatenation:
+      description: Verify string concatenation
+      extends: [_base]
+      assertions:
+        - expression: __output.concatenated == "prefix-Hello World-suffix"
+
+    list-size:
+      description: Verify size() function on lists
+      extends: [_base]
+      assertions:
+        - expression: __output.listSize == 3
+
+    list-filter:
+      description: Verify filter() on lists
+      extends: [_base]
+      assertions:
+        - expression: size(__output.filteredList) == 2
+        - expression: '"banana" in __output.filteredList'
+        - expression: '"cherry" in __output.filteredList'
+
+    list-map:
+      description: Verify map() on lists
+      extends: [_base]
+      assertions:
+        - expression: __output.mappedList[0] == "APPLE"
+        - expression: __output.mappedList[1] == "BANANA"
+
+    math-operations:
+      description: Verify arithmetic in CEL
+      extends: [_base]
+      assertions:
+        - expression: __output.mathResult == 35
+
+    ternary-conditional:
+      description: Verify ternary operator
+      extends: [_base]
+      assertions:
+        - expression: __output.conditional == "large"
+
+    contains-check:
+      description: Verify 'in' operator on lists
+      extends: [_base]
+      assertions:
+        - expression: __output.containsCheck == true
+
+    string-replace:
+      description: Verify replace() string function
+      extends: [_base]
+      assertions:
+        - expression: __output.stringReplace == "Hello_World"
+
+    transform-chain:
+      description: Verify multi-step CEL transform pipeline
+      extends: [_base]
+      assertions:
+        - expression: __output.transformed == "mixed-case-input"
+          message: "Chained transforms should trim, lowercase, and replace spaces"

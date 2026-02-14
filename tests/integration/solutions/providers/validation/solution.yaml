@@ -1,0 +1,127 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-validation-provider
+  version: 1.0.0
+  description: Tests for the validation provider (passing cases only)
+
+spec:
+  resolvers:
+    validName:
+      description: A valid lowercase name
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: my-valid-app
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              match: "^[a-z0-9-]+$"
+            message: "Name must be lowercase alphanumeric with hyphens"
+
+    validEmail:
+      description: A valid email format
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: user@example.com
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              match: "^[^@]+@[^@]+\\.[^@]+$"
+            message: "Must be a valid email format"
+
+    noSpaces:
+      description: A value validated with notMatch
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: no-spaces-here
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              notMatch: "\\s"
+            message: "Value must not contain spaces"
+
+    celValidation:
+      description: A value validated with CEL expression
+      type: int
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: 42
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: "__self >= 1 && __self <= 100"
+            message: "Value must be between 1 and 100"
+
+    multiValidation:
+      description: Value with multiple validation rules
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              match: "^[a-z]+$"
+            message: "Must be all lowercase letters"
+          - provider: validation
+            inputs:
+              expression: "size(__self) >= 3 && size(__self) <= 20"
+            message: "Must be between 3 and 20 characters"
+
+  testConfig:
+    skipBuiltins: true
+
+  tests:
+    _base:
+      description: Base template for validation provider tests
+      command: [run, resolver]
+      args: ["-o", "json"]
+      tags: [provider, validation]
+      assertions:
+        - expression: __exitCode == 0
+
+    valid-name:
+      description: Verify match validation passes
+      extends: [_base]
+      tags: [smoke]
+      assertions:
+        - expression: '__output.validName == "my-valid-app"'
+
+    valid-email:
+      description: Verify email pattern validation passes
+      extends: [_base]
+      assertions:
+        - expression: '__output.validEmail == "user@example.com"'
+
+    not-match-passes:
+      description: Verify notMatch validation passes
+      extends: [_base]
+      assertions:
+        - expression: '__output.noSpaces == "no-spaces-here"'
+
+    cel-expression-passes:
+      description: Verify CEL expression validation passes
+      extends: [_base]
+      assertions:
+        - expression: __output.celValidation == 42
+
+    multiple-validations:
+      description: Verify multiple validation rules all pass
+      extends: [_base]
+      assertions:
+        - expression: '__output.multiValidation == "hello"'

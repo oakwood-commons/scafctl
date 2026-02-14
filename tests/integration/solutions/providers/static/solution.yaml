@@ -1,0 +1,219 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-static-provider
+  version: 1.0.0
+  description: |
+    Functional tests for the static provider.
+    Verifies literal value resolution across all supported types:
+    strings, integers, booleans, floats, lists, maps, and null.
+
+spec:
+  resolvers:
+    stringValue:
+      description: Static string value
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello world
+
+    intValue:
+      description: Static integer value
+      type: int
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: 42
+
+    boolTrue:
+      description: Static boolean true
+      type: bool
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: true
+
+    boolFalse:
+      description: Static boolean false
+      type: bool
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: false
+
+    floatValue:
+      description: Static float value
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: 3.14
+
+    listValue:
+      description: Static list value
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - alpha
+                - bravo
+                - charlie
+
+    mapValue:
+      description: Static map value
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                host: localhost
+                port: 8080
+                enabled: true
+
+    nestedValue:
+      description: Static deeply nested value
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                database:
+                  primary:
+                    host: db.example.com
+                    port: 5432
+                  replicas:
+                    - host: replica1.example.com
+                    - host: replica2.example.com
+
+    emptyString:
+      description: Static empty string value
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: ""
+
+    emptyList:
+      description: Static empty list value
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: []
+
+    emptyMap:
+      description: Static empty map value
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: {}
+
+    multilineString:
+      description: Static multiline string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: |
+                line one
+                line two
+                line three
+
+  testConfig:
+    skipBuiltins: true
+
+  tests:
+    _base:
+      description: Base template for static provider tests
+      command: [run, resolver]
+      args: ["-o", "json"]
+      tags: [provider, static]
+      assertions:
+        - expression: __exitCode == 0
+
+    string-value:
+      description: Verify static string resolution
+      extends: [_base]
+      tags: [smoke]
+      assertions:
+        - expression: __output.stringValue == "hello world"
+
+    int-value:
+      description: Verify static integer resolution
+      extends: [_base]
+      assertions:
+        - expression: __output.intValue == 42
+
+    bool-true:
+      description: Verify static boolean true resolution
+      extends: [_base]
+      assertions:
+        - expression: __output.boolTrue == true
+
+    bool-false:
+      description: Verify static boolean false resolution
+      extends: [_base]
+      assertions:
+        - expression: __output.boolFalse == false
+
+    float-value:
+      description: Verify static float resolution
+      extends: [_base]
+      assertions:
+        - expression: __output.floatValue == 3.14
+
+    list-value:
+      description: Verify static list resolution
+      extends: [_base]
+      assertions:
+        - expression: size(__output.listValue) == 3
+        - expression: __output.listValue[0] == "alpha"
+        - expression: __output.listValue[2] == "charlie"
+
+    map-value:
+      description: Verify static map resolution
+      extends: [_base]
+      assertions:
+        - expression: __output.mapValue.host == "localhost"
+        - expression: __output.mapValue.port == 8080
+        - expression: __output.mapValue.enabled == true
+
+    nested-value:
+      description: Verify static nested structure resolution
+      extends: [_base]
+      assertions:
+        - expression: __output.nestedValue.database.primary.host == "db.example.com"
+        - expression: __output.nestedValue.database.primary.port == 5432
+        - expression: size(__output.nestedValue.database.replicas) == 2
+
+    empty-string:
+      description: Verify static empty string resolution
+      extends: [_base]
+      assertions:
+        - expression: __output.emptyString == ""
+
+    empty-list:
+      description: Verify static empty list resolution
+      extends: [_base]
+      assertions:
+        - expression: size(__output.emptyList) == 0
+
+    empty-map:
+      description: Verify static empty map resolution
+      extends: [_base]
+      assertions:
+        - expression: size(__output.emptyMap) == 0
+
+    multiline-string:
+      description: Verify static multiline string resolution
+      extends: [_base]
+      assertions:
+        - expression: __output.multilineString.contains("line one")
+        - expression: __output.multilineString.contains("line three")

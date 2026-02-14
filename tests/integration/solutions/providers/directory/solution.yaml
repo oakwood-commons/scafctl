@@ -1,0 +1,63 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-directory-provider
+  version: 1.0.0
+  description: Tests for the directory provider
+
+spec:
+  resolvers:
+    listCurrentDir:
+      description: List files in current directory
+      resolve:
+        with:
+          - provider: directory
+            inputs:
+              operation: list
+              path: .
+
+    listRecursive:
+      description: List files recursively
+      resolve:
+        with:
+          - provider: directory
+            inputs:
+              operation: list
+              path: .
+              recursive: true
+
+  testConfig:
+    skipBuiltins: true
+
+  tests:
+    _base:
+      description: Base template for directory provider tests
+      command: [run, resolver]
+      args: ["-o", "json"]
+      tags: [provider, directory]
+      assertions:
+        - expression: __exitCode == 0
+
+    list-current-dir:
+      description: Verify listing current directory
+      extends: [_base]
+      tags: [smoke]
+      init:
+        - command: "touch file-a.txt file-b.txt file-c.log"
+      cleanup:
+        - command: "rm -f file-a.txt file-b.txt file-c.log"
+      assertions:
+        - contains: "file-a.txt"
+        - contains: "file-b.txt"
+
+    list-recursive:
+      description: Verify recursive listing
+      extends: [_base]
+      init:
+        - command: "mkdir -p subdir && touch subdir/nested.txt top.txt"
+      cleanup:
+        - command: "rm -rf subdir top.txt"
+      assertions:
+        - contains: "nested.txt"
+        - contains: "top.txt"

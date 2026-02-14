@@ -1,7 +1,2 @@
-spec:
-  tests:
-    render-check:
-      description: Verify rendering works via compose
-      extends: [_base]
-      assertions:
-        - contains: message
+# Tests moved to main solution.yaml to avoid standalone discovery errors.
+# This file is kept as a placeholder for the compose path reference.

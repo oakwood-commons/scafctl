@@ -986,3 +986,90 @@ scafctl test l -f solution.yaml
 | `--tag` | | — | Filter by tag (repeatable) |
 | `--solution` | | — | Filter by solution name glob (repeatable) |
 | `--filter` | | — | Filter by test name glob (repeatable) |
+
+
+## Future Enhancements
+
+### Auto-Generated Tests (`-o test`)
+
+A future output type for commands that support `-o`. When used, scafctl captures the command and its arguments, executes it, and generates a complete test definition with assertions derived from the actual output.
+
+~~~bash
+scafctl render solution -f solution.yaml -r env=prod -o test
+~~~
+
+Would output:
+
+~~~yaml
+renders-prod:
+  description: "Auto-generated test for: render solution -r env=prod"
+  command: [render, solution]
+  args: ["-r", "env=prod"]
+  assertions:
+    - expression: 'size(output.actions) == 3'
+    - expression: 'output.actions["render-main"].inputs.output == "prod/main.tf"'
+    - expression: 'output.actions["render-main"].provider == "template"'
+  snapshot: "testdata/renders-prod.json"
+~~~
+
+The generator would execute the command, derive CEL assertions from the output shape, write a snapshot golden file, and emit the test YAML to stdout.
+
+---
+
+### Catalog Regression Testing (`scafctl pipeline`)
+
+A future command that executes functional tests across solutions in a remote catalog. This enables the scafctl team to validate that changes to scafctl don't break existing solutions.
+
+~~~bash
+scafctl pipeline test --catalog https://catalog.example.com --solutions "terraform-*"
+~~~
+
+Would fetch matching solutions, extract bundled test files, run `test functional` against each, and report aggregate results.
+
+This is the primary use case for requiring test files to be bundled and why `scafctl lint` errors on unbundled test files.
+
+---
+
+### Test Scaffolding (`scafctl test init`)
+
+A future command that generates a starter test suite for an existing solution by analyzing its structure:
+
+~~~bash
+scafctl test init -f solution.yaml
+~~~
+
+Would parse the solution, identify resolvers with defaults, and output skeleton test YAML. Unlike `-o test` (which captures actual output), `test init` generates a starting point before you run anything.
+
+---
+
+### Watch Mode (`--watch`)
+
+A future flag that re-runs tests when solution files change:
+
+~~~bash
+scafctl test functional -f solution.yaml --watch
+~~~
+
+Monitors the solution file and its bundle/compose files for changes, then re-runs affected tests.
+
+---
+
+### Tutorial Outline
+
+The planned tutorial at `docs/tutorials/functional-testing.md` should cover:
+
+1. **Writing your first test** — minimal solution with one test case, `scafctl test functional` invocation, reading output
+2. **Assertions deep dive** — CEL expressions vs regex/contains, `target` field, `output` variable structure per command, negation assertions
+3. **Test inheritance** — `_`-prefixed templates, `extends` chains, merge behavior for args/assertions/tags
+4. **Snapshots** — golden file workflow, `--update-snapshots`, normalization pipeline
+5. **CI integration** — JUnit XML reporting with `--report-file`, exit codes, `--fail-fast` patterns
+6. **Advanced features** — init/cleanup steps, test files, `skipExpression`, retries, suite-level setup
+
+The example solution at `examples/solutions/tested-solution/` should include:
+
+- A solution with 2-3 resolvers and a template action
+- 3-4 inline tests covering: CEL expression assertion, contains/regex assertion, `expectFailure` for validation, and a snapshot test
+- A `testdata/` directory with a golden file
+- A `bundle.include` covering the test files
+
+---
