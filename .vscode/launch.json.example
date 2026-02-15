@@ -1,0 +1,20 @@
+{
+  // Copy this file to launch.json and customize for your environment.
+  // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "scafctl",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/cmd/scafctl/scafctl.go",
+      "cwd": "${workspaceFolder}",
+      "buildFlags": "-ldflags '-X main.BuildVersion=dev -X main.Commit=local -X main.BuildTime=now'",
+      "env": {},
+      "args": [
+        "run", "resolver", "-f", "examples/resolver-demo.yaml"
+      ]
+    }
+  ]
+}
