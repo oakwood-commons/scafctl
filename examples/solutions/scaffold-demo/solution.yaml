@@ -1,0 +1,111 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: scaffold-demo
+  version: 1.0.0
+  description: Demonstrates test scaffolding with `scafctl test init`
+
+spec:
+  resolvers:
+    projectName:
+      description: Name of the project
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: projectName
+          - provider: static
+            inputs:
+              value: my-project
+
+    language:
+      description: Programming language
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: language
+          - provider: static
+            inputs:
+              value: go
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: '__self in ["go", "python", "typescript", "rust"]'
+            message: "Must be one of: go, python, typescript, rust"
+
+    version:
+      description: Project version
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: version
+          - provider: static
+            inputs:
+              value: "0.1.0"
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              match: '^\d+\.\d+\.\d+$'
+            message: "Version must follow semver (e.g., 1.2.3)"
+
+    outputDir:
+      description: Output directory
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: dist
+
+  workflow:
+    actions:
+      create-dir:
+        description: Create output directory
+        provider: exec
+        inputs:
+          cmd:
+            - mkdir
+            - -p
+          args:
+            dir:
+              rslvr: outputDir
+
+      generate:
+        description: Generate project files
+        provider: exec
+        dependsOn: [create-dir]
+        inputs:
+          cmd:
+            - echo
+          args:
+            msg:
+              tmpl: "Generating {{ .projectName }} ({{ .language }} v{{ .version }})"
+          context:
+            projectName:
+              rslvr: projectName
+            language:
+              rslvr: language
+            version:
+              rslvr: version
+
+      release:
+        description: Create a release
+        provider: exec
+        dependsOn: [generate]
+        when:
+          expr: '_.version != "0.1.0"'
+        inputs:
+          cmd:
+            - echo
+          args:
+            msg:
+              tmpl: "Releasing {{ .projectName }} v{{ .version }}"
+          context:
+            projectName:
+              rslvr: projectName
+            version:
+              rslvr: version

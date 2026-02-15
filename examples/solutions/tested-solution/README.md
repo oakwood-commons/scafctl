@@ -33,6 +33,12 @@ scafctl test functional -f solution.yaml
 # Run only smoke-tagged tests
 scafctl test functional -f solution.yaml --tag smoke
 
+# Watch mode - re-run tests on file changes
+scafctl test functional -f solution.yaml --watch
+
+# Watch with tag filter
+scafctl test functional -f solution.yaml --watch --tag smoke
+
 # List tests without running
 scafctl test list -f solution.yaml
 

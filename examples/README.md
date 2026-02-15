@@ -116,6 +116,8 @@ Complete solutions demonstrating real-world use cases.
 | [email-notifier/](solutions/email-notifier/) | Email notification workflow |
 | [k8s-clusters/](solutions/k8s-clusters/) | Read a Go template file, iterate 10 K8s clusters, render and write unique manifests |
 | [bad-solution-yaml/](solutions/bad-solution-yaml/) | Invalid solution demonstrating error handling for conflicting ValueRef keys |
+| [tested-solution/](solutions/tested-solution/) | Functional testing features: assertions, inheritance, tags, watch mode |
+| [scaffold-demo/](solutions/scaffold-demo/) | Test scaffolding with `scafctl test init` — generates starter test suites |
 
 ---
 

@@ -168,11 +168,11 @@ A future command that executes functional tests across solutions in a remote cat
 
 ### Test Scaffolding (`scafctl test init`)
 
-A future command that generates a starter test suite for an existing solution by analyzing its structure — parsing resolvers with defaults and outputting skeleton test YAML. Unlike `-o test` (which captures actual output), `test init` generates a starting point before running anything.
+✅ **Implemented.** Generates a starter test suite for an existing solution by analyzing its structure — parsing resolvers with defaults, validation rules, and workflow actions, then outputting skeleton test YAML. Unlike `-o test` (which captures actual output), `test init` generates a starting point before running anything. See `pkg/solution/soltesting/scaffold.go` and `pkg/cmd/scafctl/test/init.go`.
 
 ### Watch Mode (`--watch`)
 
-A future flag for `scafctl test functional` that re-runs tests when solution files change. Monitors the solution file and its bundle/compose files for changes, then re-runs affected tests.
+✅ **Implemented.** The `--watch` / `-w` flag for `scafctl test functional` monitors solution files for changes and automatically re-runs affected tests. Uses `fsnotify` with debounce. See `pkg/solution/soltesting/watch.go`.
 
 ---
 
