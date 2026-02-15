@@ -48,17 +48,21 @@ jobs:
       - name: Run tests
         run: task test
         env:
+          # Test-only key ("test-secret-key-for-ci-12345678") — not a real secret.
+          # Kept inline so CI works for fork PRs (secrets are unavailable to forks).
           SCAFCTL_SECRET_KEY: dGVzdC1zZWNyZXQta2V5LWZvci1jaS0xMjM0NTY3OA==
       
       - name: Run functional integration tests
         run: task integration
         env:
+          # Test-only key — see comment above.
           SCAFCTL_SECRET_KEY: dGVzdC1zZWNyZXQta2V5LWZvci1jaS0xMjM0NTY3OA==
 
       - name: Run tests with coverage
         run: task test-cover
         if: matrix.os == 'ubuntu-latest'
         env:
+          # Test-only key — see comment above.
           SCAFCTL_SECRET_KEY: dGVzdC1zZWNyZXQta2V5LWZvci1jaS0xMjM0NTY3OA==
       
       - name: Upload coverage
