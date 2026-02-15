@@ -7,7 +7,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -41,6 +43,7 @@ type FunctionalOptions struct {
 	Verbose         bool
 	KeepSandbox     bool
 	NoProgress      bool
+	Watch           bool
 }
 
 // CommandFunctional creates the 'test functional' subcommand.
@@ -77,7 +80,11 @@ Examples:
   scafctl test functional -f ./solution.yaml --report-file results.xml
 
   # Dry run (validate only)
-  scafctl test functional -f ./solution.yaml --dry-run`,
+  scafctl test functional -f ./solution.yaml --dry-run
+
+  # Watch mode - re-run on file changes
+  scafctl test functional -f ./solution.yaml --watch
+  scafctl test functional -f ./solution.yaml --watch --tag smoke`,
 		SilenceUsage: true,
 		RunE: func(cCmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
@@ -109,6 +116,7 @@ Examples:
 	cCmd.Flags().BoolVarP(&opts.Verbose, "verbose", "v", false, "Enable verbose output (assertion counts, details)")
 	cCmd.Flags().BoolVar(&opts.KeepSandbox, "keep-sandbox", false, "Keep sandbox directories after test execution")
 	cCmd.Flags().BoolVar(&opts.NoProgress, "no-progress", false, "Disable live progress output during test execution")
+	cCmd.Flags().BoolVarP(&opts.Watch, "watch", "w", false, "Watch solution files for changes and re-run affected tests")
 
 	return cCmd
 }
@@ -130,10 +138,15 @@ func runFunctional(ctx context.Context, opts *FunctionalOptions) error {
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
-	// Discover solutions
+	// Determine the path to discover solutions from.
 	testsPath := opts.TestsPath
 	if testsPath == "" {
 		testsPath = opts.File
+	}
+
+	// Watch mode — delegate to the watcher loop.
+	if opts.Watch {
+		return runWatchMode(ctx, opts, w, testsPath)
 	}
 
 	solutions, err := soltesting.DiscoverSolutions(testsPath)
@@ -263,4 +276,130 @@ func runFunctional(ctx context.Context, opts *FunctionalOptions) error {
 	}
 
 	return nil
+}
+
+// runWatchMode starts the file watcher and re-runs tests on changes.
+// It blocks until Ctrl-C (SIGINT/SIGTERM) is received.
+func runWatchMode(ctx context.Context, opts *FunctionalOptions, w *writer.Writer, testsPath string) error {
+	// Set up signal handling for clean shutdown.
+	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	concurrency := opts.Concurrency
+	if opts.Sequential {
+		concurrency = 1
+	}
+
+	skipBuiltins := soltesting.SkipBuiltinsValue{}
+	if opts.SkipBuiltins {
+		skipBuiltins.All = true
+	}
+
+	binaryPath, err := os.Executable()
+	if err != nil {
+		if w != nil {
+			w.Errorf("failed to resolve executable path: %s", err)
+		}
+		return exitcode.WithCode(err, exitcode.GeneralError)
+	}
+
+	runner := &soltesting.Runner{
+		BinaryPath:      binaryPath,
+		Concurrency:     concurrency,
+		FailFast:        opts.FailFast,
+		UpdateSnapshots: opts.UpdateSnapshots,
+		Verbose:         opts.Verbose,
+		KeepSandbox:     opts.KeepSandbox,
+		TestTimeout:     opts.TestTimeout,
+		GlobalTimeout:   opts.Timeout,
+		DryRun:          opts.DryRun,
+		IOStreams:       opts.IOStreams,
+		Filter: soltesting.FilterOptions{
+			NamePatterns:     opts.Filter,
+			Tags:             opts.Tag,
+			SolutionPatterns: opts.Solution,
+		},
+	}
+
+	// Unused in watch mode — skip builtins are applied per-run via
+	// the solution's TestConfig, which DiscoverSolutions populates.
+	_ = skipBuiltins
+
+	isTTY := kvx.IsTerminal(opts.IOStreams.ErrOut)
+
+	watcher := &soltesting.Watcher{
+		Runner:    runner,
+		TestsPath: testsPath,
+		Options: soltesting.WatchOptions{
+			OnRunStart: func(triggerFile string) {
+				// Set up progress for each run (mpb instances are single-use).
+				if !opts.NoProgress && !opts.DryRun {
+					format, _ := kvx.ParseOutputFormat(opts.Output)
+					if kvx.IsTableFormat(format) || opts.Output == "" {
+						if isTTY {
+							runner.Progress = NewMPBTestProgress(opts.IOStreams.ErrOut)
+						} else {
+							runner.Progress = NewLineTestProgress(opts.IOStreams.ErrOut)
+						}
+					}
+				}
+
+				if w != nil {
+					if isTTY {
+						// ANSI clear screen + cursor home for clean re-display.
+						fmt.Fprint(opts.IOStreams.ErrOut, "\033[2J\033[H")
+					}
+					w.Infof("[watch] %s — running tests...", triggerFile)
+				}
+			},
+			OnRunComplete: func(results []soltesting.TestResult, elapsed time.Duration, runErr error) {
+				if runErr != nil {
+					if w != nil {
+						w.Errorf("[watch] run error: %s", runErr)
+					}
+					return
+				}
+
+				if len(results) == 0 {
+					if w != nil {
+						w.Info("[watch] no tests found")
+					}
+					return
+				}
+
+				// Report results.
+				format, _ := kvx.ParseOutputFormat(opts.Output)
+				outputOpts := kvx.NewOutputOptions(opts.IOStreams)
+				outputOpts.Format = format
+				outputOpts.Ctx = ctx
+
+				if reportErr := soltesting.ReportResults(results, outputOpts, opts.Verbose, elapsed); reportErr != nil {
+					if w != nil {
+						w.Errorf("[watch] reporting failed: %s", reportErr)
+					}
+				}
+
+				summary := soltesting.Summarize(results)
+				if w != nil {
+					w.Infof("[watch] waiting for file changes... (Ctrl-C to exit)")
+					_ = summary // summary already printed by ReportResults
+				}
+			},
+		},
+	}
+
+	if w != nil {
+		w.Infof("[watch] watching %s for changes...", testsPath)
+	}
+
+	err = watcher.Watch(ctx)
+	if err != nil && ctx.Err() != nil {
+		// Context cancelled via signal — this is a clean exit.
+		if w != nil {
+			fmt.Fprintln(opts.IOStreams.ErrOut)
+			w.Info("[watch] stopped")
+		}
+		return nil
+	}
+	return err
 }

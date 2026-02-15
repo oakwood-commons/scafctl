@@ -974,6 +974,8 @@ scafctl test l -f solution.yaml
 | `--fail-fast` | | `false` | Stop remaining tests per solution on first failure |
 | `--verbose` | `-v` | `false` | Show full command, init output, and assertion counts |
 | `--keep-sandbox` | | `false` | Preserve sandbox directories after test execution |
+| `--no-progress` | | `false` | Disable live progress spinners during test execution |
+| `--watch` | `-w` | `false` | Watch solution files for changes and re-run tests |
 
 ### `scafctl test list`
 
@@ -987,6 +989,312 @@ scafctl test l -f solution.yaml
 | `--solution` | | — | Filter by solution name glob (repeatable) |
 | `--filter` | | — | Filter by test name glob (repeatable) |
 
+
+## Watch Mode
+
+Watch mode monitors your solution files for changes and automatically re-runs
+tests, giving you a tight feedback loop during development.
+
+### Basic Usage
+
+```bash
+scafctl test functional -f solution.yaml --watch
+```
+
+The `--watch` (or `-w`) flag:
+1. Runs all matched tests immediately
+2. Watches the solution file, compose files, and parent directories
+3. On file change, debounces rapid writes (300ms), then re-runs tests
+4. Clears the terminal before each re-run (on TTY terminals)
+5. Repeats until you press **Ctrl-C**
+
+### Scoped Watches
+
+Combine `--watch` with filters to focus on specific tests:
+
+```bash
+# Only re-run smoke tests
+scafctl test functional -f solution.yaml --watch --tag smoke
+
+# Only re-run tests matching a name pattern
+scafctl test functional -f solution.yaml --watch --filter "render-*"
+
+# Watch an entire directory of solutions
+scafctl test functional --tests-path ./solutions/ --watch
+```
+
+### What Gets Watched
+
+The watcher monitors:
+- The solution file itself (e.g., `solution.yaml`)
+- All compose files referenced by the solution's `compose` field
+- Parent directories of solution files (to detect new/renamed files)
+
+Only `.yaml` and `.yml` file changes trigger re-runs. Non-YAML files are ignored.
+
+### Debouncing
+
+When an editor saves a file, it often writes multiple times in quick succession
+(rename-write-rename, or write-then-format). The watcher collapses these into a
+single re-run by waiting 300ms after the last change event before triggering.
+
+### Example Session
+
+```
+$ scafctl test functional -f solution.yaml --watch --tag smoke
+[watch] watching solution.yaml for changes...
+[watch] (initial run) — running tests...
+SOLUTION            TEST              STATUS   DURATION
+tested-solution     builtin:parse     PASS     2ms
+tested-solution     render-basic      PASS     9ms
+
+2 passed, 0 failed, 0 errors, 0 skipped (11ms)
+[watch] waiting for file changes... (Ctrl-C to exit)
+
+# ...edit solution.yaml, save...
+
+[watch] solution.yaml — running tests...
+SOLUTION            TEST              STATUS   DURATION
+tested-solution     builtin:parse     PASS     1ms
+tested-solution     render-basic      PASS     8ms
+
+2 passed, 0 failed, 0 errors, 0 skipped (9ms)
+[watch] waiting for file changes... (Ctrl-C to exit)
+
+^C
+[watch] stopped
+```
+
+### Watch Mode with Compose Files
+
+When a solution uses `compose` to split tests across files, the watcher
+automatically monitors all referenced compose files:
+
+```yaml
+# solution.yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: my-solution
+compose:
+  - tests/*.yaml
+spec:
+  resolvers:
+    greeting:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: Hello
+```
+
+```bash
+# All compose files under tests/ are watched automatically
+scafctl test functional -f solution.yaml --watch
+```
+
+Editing any file under `tests/` triggers a re-run. Creating a new compose file
+in the directory also triggers re-discovery and a new run.
+
+### Tips
+
+- **Use with `--verbose`** to see full assertion counts on each re-run:
+  ```bash
+  scafctl test functional -f solution.yaml --watch -v
+  ```
+- **Combine with `--fail-fast`** to stop early when iterating on a broken test:
+  ```bash
+  scafctl test functional -f solution.yaml --watch --fail-fast
+  ```
+- **CI environments** should not use `--watch` — it's designed for interactive
+  development only.
+- **Progress output** is automatically re-created for each watch cycle on TTY
+  terminals. Use `--no-progress` if you find the spinners distracting:
+  ```bash
+  scafctl test functional -f solution.yaml --watch --no-progress
+  ```
+
+---
+
+## Test Scaffolding (`scafctl test init`)
+
+Writing tests from scratch can be tedious — especially for solutions with many resolvers and
+validation rules. The `test init` command generates a starter test suite by analyzing your
+solution's structure. No commands are executed; it performs structural analysis only.
+
+### Basic Usage
+
+```bash
+scafctl test init -f solution.yaml
+```
+
+This outputs YAML to stdout that you can paste into your solution's `spec.tests` section or
+redirect to a file:
+
+```bash
+# Save to a file
+scafctl test init -f solution.yaml > tests.yaml
+
+# Append to an existing compose test file
+scafctl test init -f solution.yaml >> solution-tests.yaml
+```
+
+### What Gets Generated
+
+The command analyzes your solution and generates:
+
+| Test Category | What It Creates |
+|---------------|-----------------|
+| **Smoke tests** | `resolve-defaults` — verifies all resolvers resolve with defaults |
+| | `render-defaults` — verifies the solution renders with defaults |
+| | `lint` — verifies the solution has no lint errors |
+| **Per-resolver tests** | `resolver-<name>` — verifies each resolver produces non-null output |
+| **Validation failure tests** | `resolver-<name>-invalid` — verifies resolvers with validation rules reject invalid input (`expectFailure: true`) |
+| **Per-action tests** | `action-<name>` — verifies each workflow action executes successfully |
+
+### Example
+
+Given this solution:
+
+```yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: my-app
+  version: 1.0.0
+spec:
+  resolvers:
+    repo:
+      description: Repository name
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: my-app
+
+    version:
+      description: Version to build
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: version
+          - provider: static
+            inputs:
+              value: dev
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              match: '^(dev|\d+\.\d+\.\d+.*)$'
+            message: "Invalid version format"
+```
+
+Running `scafctl test init -f solution.yaml` produces:
+
+```yaml
+# Generated test scaffold for solution.yaml
+# Paste this into your solution's spec section or a compose test file.
+# Customize assertions and parameters to match your expected behavior.
+
+tests:
+    lint:
+        description: Verify solution has no lint errors
+        command:
+            - lint
+        tags:
+            - smoke
+            - lint
+        exitCode: 0
+    render-defaults:
+        description: Verify solution renders with default values
+        command:
+            - render
+            - solution
+        tags:
+            - smoke
+            - render
+        exitCode: 0
+    resolve-defaults:
+        description: Verify all resolvers resolve with default values
+        command:
+            - run
+            - resolver
+        args:
+            - -o
+            - json
+        tags:
+            - smoke
+            - resolvers
+        exitCode: 0
+    resolver-repo:
+        description: Verify resolver "repo" produces expected output
+        command:
+            - run
+            - resolver
+        args:
+            - --resolver
+            - repo
+            - -o
+            - json
+        tags:
+            - resolvers
+        exitCode: 0
+        assertions:
+            - expression: __output.repo != null
+              message: Resolver "repo" should produce a non-null value
+    resolver-version:
+        description: Verify resolver "version" produces expected output
+        command:
+            - run
+            - resolver
+        args:
+            - --resolver
+            - version
+            - -o
+            - json
+        tags:
+            - resolvers
+        exitCode: 0
+        assertions:
+            - expression: __output.version != null
+              message: Resolver "version" should produce a non-null value
+    resolver-version-invalid:
+        description: Verify resolver "version" rejects values not matching pattern
+        command:
+            - run
+            - resolver
+        args:
+            - --resolver
+            - version
+            - --param
+            - version=___invalid___
+        tags:
+            - resolvers
+            - validation
+            - negative
+        expectFailure: true
+```
+
+### Customizing Generated Tests
+
+The scaffold is a starting point. After generating, you should:
+
+1. **Add specific assertions** — replace generic `__output.X != null` with checks matching your expected values
+2. **Tune validation failure inputs** — replace `___invalid___` with realistic bad inputs
+3. **Add tags** — organize tests with domain-specific tags like `smoke`, `integration`
+4. **Add test templates** — extract common command/assertion patterns into `_`-prefixed templates and use `extends`
+5. **Remove unnecessary tests** — if some resolvers don't need individual tests, remove them
+
+### Difference from `-o test`
+
+| Feature | `test init` | `-o test` (future) |
+|---------|------------|-------------------|
+| **Execution** | No commands run — structural analysis only | Executes the command and captures output |
+| **Output** | Skeleton tests with generic assertions | Complete tests with output-derived assertions + snapshots |
+| **Use case** | Bootstrapping a new test suite | Capturing known-good behavior |
+
+---
 
 ## Future Enhancements
 
@@ -1032,44 +1340,6 @@ This is the primary use case for requiring test files to be bundled and why `sca
 
 ### Test Scaffolding (`scafctl test init`)
 
-A future command that generates a starter test suite for an existing solution by analyzing its structure:
-
-~~~bash
-scafctl test init -f solution.yaml
-~~~
-
-Would parse the solution, identify resolvers with defaults, and output skeleton test YAML. Unlike `-o test` (which captures actual output), `test init` generates a starting point before you run anything.
-
----
-
-### Watch Mode (`--watch`)
-
-A future flag that re-runs tests when solution files change:
-
-~~~bash
-scafctl test functional -f solution.yaml --watch
-~~~
-
-Monitors the solution file and its bundle/compose files for changes, then re-runs affected tests.
-
----
-
-### Tutorial Outline
-
-The planned tutorial at `docs/tutorials/functional-testing.md` should cover:
-
-1. **Writing your first test** — minimal solution with one test case, `scafctl test functional` invocation, reading output
-2. **Assertions deep dive** — CEL expressions vs regex/contains, `target` field, `output` variable structure per command, negation assertions
-3. **Test inheritance** — `_`-prefixed templates, `extends` chains, merge behavior for args/assertions/tags
-4. **Snapshots** — golden file workflow, `--update-snapshots`, normalization pipeline
-5. **CI integration** — JUnit XML reporting with `--report-file`, exit codes, `--fail-fast` patterns
-6. **Advanced features** — init/cleanup steps, test files, `skipExpression`, retries, suite-level setup
-
-The example solution at `examples/solutions/tested-solution/` should include:
-
-- A solution with 2-3 resolvers and a template action
-- 3-4 inline tests covering: CEL expression assertion, contains/regex assertion, `expectFailure` for validation, and a snapshot test
-- A `testdata/` directory with a golden file
-- A `bundle.include` covering the test files
+✅ **Implemented.** See the [Test Scaffolding](#test-scaffolding-scafctl-test-init) section above.
 
 ---

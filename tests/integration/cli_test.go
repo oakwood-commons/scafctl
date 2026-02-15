@@ -3380,3 +3380,69 @@ spec:
 	assert.Equal(t, 0, exitCode, "expected exit code 0 for composed tests\nstdout: %s\nstderr: %s", stdout, stderr)
 	assert.Contains(t, stdout, "composed-test", "composed test should appear in output")
 }
+
+func TestIntegration_Test_Init(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	solutionFile := filepath.Join(tmpDir, "solution.yaml")
+
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test-init-example
+  version: 1.0.0
+spec:
+  resolvers:
+    repo:
+      description: Repository name
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: my-app
+    version:
+      description: Version
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "1.0.0"
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              match: '^\d+\.\d+\.\d+$'
+            message: "Invalid version format"
+`
+	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
+
+	stdout, stderr, exitCode := runScafctl(t,
+		"test", "init",
+		"-f", solutionFile,
+	)
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0")
+	assert.Contains(t, stdout, "tests:")
+	assert.Contains(t, stdout, "resolve-defaults")
+	assert.Contains(t, stdout, "render-defaults")
+	assert.Contains(t, stdout, "lint")
+	assert.Contains(t, stdout, "resolver-repo")
+	assert.Contains(t, stdout, "resolver-version")
+	assert.Contains(t, stdout, "resolver-version-invalid")
+	assert.Contains(t, stdout, "expectFailure: true")
+}
+
+func TestIntegration_Test_Init_MissingFile(t *testing.T) {
+	t.Parallel()
+
+	_, stderr, exitCode := runScafctl(t,
+		"test", "init",
+		"-f", "/nonexistent/solution.yaml",
+	)
+
+	assert.NotEqual(t, 0, exitCode, "expected non-zero exit code")
+	assert.Contains(t, stderr, "reading solution file")
+}

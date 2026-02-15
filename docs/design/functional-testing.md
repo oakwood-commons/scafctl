@@ -64,6 +64,7 @@ This is the primary mechanism for validating solutions in CI and during developm
 | `TestCase.Validate()` | ✅ Done | Comprehensive test case validation method |
 | Extends non-existent error | ✅ Done | `extends` referencing non-existent test names is a parse-time error |
 | Tests per solution limit | ✅ Done | Max 500 tests per solution |
+| Watch mode (`--watch`) | ✅ Done | `fsnotify`-based file watcher in `soltesting/watch.go` |
 
 ---
 
@@ -1431,25 +1432,41 @@ This is the primary use case for requiring test files to be bundled and why `sca
 
 ### Test Scaffolding (`scafctl test init`)
 
-A future command that generates a starter test suite for an existing solution by analyzing its structure:
+✅ **Implemented.** Generates a starter test suite for an existing solution by analyzing its structure:
 
 ~~~bash
 scafctl test init -f solution.yaml
 ~~~
 
-Would parse the solution, identify resolvers with defaults, and output skeleton test YAML. Unlike `-o test` (which captures actual output), `test init` generates a starting point before you run anything.
+Parses the solution, identifies resolvers with defaults, validation rules, and workflow actions,
+then outputs skeleton test YAML to stdout. Unlike `-o test` (which captures actual output),
+`test init` generates a starting point before you run anything.
+
+**Generated test categories:**
+- Smoke tests: `resolve-defaults`, `render-defaults`, `lint`
+- Per-resolver tests: `resolver-<name>` with non-null assertions
+- Validation failure tests: `resolver-<name>-invalid` with `expectFailure: true`
+- Per-action tests: `action-<name>` with provider tags
+
+**Implementation:**
+- `pkg/solution/soltesting/scaffold.go` — scaffolding logic (`Scaffold()`, `ScaffoldInput`, `ScaffoldToYAML()`)
+- `pkg/cmd/scafctl/test/init.go` — CLI subcommand
 
 ---
 
 ### Watch Mode (`--watch`)
 
-A future flag that re-runs tests when solution files change:
+Re-runs tests when solution files change:
 
 ~~~bash
 scafctl test functional -f solution.yaml --watch
 ~~~
 
-Monitors the solution file and its bundle/compose files for changes, then re-runs affected tests.
+Monitors the solution file, its compose files, and their parent directories for
+changes. Uses `fsnotify` with a 300ms debounce to collapse rapid successive
+writes into a single re-run. Clears the screen on TTY terminals before each
+re-run. Combines with `--tag` and `--filter` for scoped watch runs. Exit cleanly
+with Ctrl-C. Implementation in `pkg/solution/soltesting/watch.go`.
 
 ---
 
