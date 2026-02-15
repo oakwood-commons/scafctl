@@ -21,6 +21,7 @@ func CommandTest(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 
 SUBCOMMANDS:
   functional  Run functional tests against solutions
+  init        Generate a starter test suite from a solution
   list        List available tests without executing them
 
 Functional tests validate that solutions behave correctly by executing
@@ -32,6 +33,7 @@ under a tests/ directory.`, settings.CliBinaryName),
 
 	cmdPath := fmt.Sprintf("%s/%s", path, cCmd.Use)
 	cCmd.AddCommand(CommandFunctional(cliParams, ioStreams, cmdPath))
+	cCmd.AddCommand(CommandInit(cliParams, ioStreams, cmdPath))
 	cCmd.AddCommand(CommandList(cliParams, ioStreams, cmdPath))
 
 	return cCmd
