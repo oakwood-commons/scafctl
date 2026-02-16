@@ -113,6 +113,7 @@ Render mode supports secret redaction via `--redact` flag on snapshots.
 
 - **Storage**: AES-256-GCM encryption with OS keychain for master key
 - **CLI**: `scafctl secrets list/get/set/delete/exists/export/import/rotate`
+- **Internal secrets**: Auth tokens use `scafctl.*` prefix; visible via `--all` flag
 - **Platform paths** (XDG Base Directory Specification):
   - Linux: `~/.local/share/scafctl/secrets/`
   - macOS: `~/.local/share/scafctl/secrets/`

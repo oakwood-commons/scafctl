@@ -17,13 +17,16 @@ import (
 
 // CommandDelete creates the 'secrets delete' command.
 func CommandDelete(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Command {
-	var forceFlag bool
+	var (
+		forceFlag bool
+		allFlag   bool
+	)
 
 	cmd := &cobra.Command{
 		Use:     "delete <name>",
 		Aliases: []string{"rm", "remove"},
 		Short:   "Delete a secret",
-		Long:    "Delete a secret by name. Use --force to skip confirmation.",
+		Long:    "Delete a secret by name. Use --force to skip confirmation.\nUse --all to allow deleting internal secrets (e.g. auth tokens).",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -31,7 +34,7 @@ func CommandDelete(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *co
 			name := args[0]
 
 			// Validate name
-			if err := ValidateUserSecretName(name); err != nil {
+			if err := ValidateSecretName(name, allFlag); err != nil {
 				w.Errorf("%v", err)
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
@@ -54,6 +57,12 @@ func CommandDelete(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *co
 			if !exists {
 				w.Warningf("Secret '%s' does not exist\n", name)
 				return nil
+			}
+
+			// Warn about internal secret deletion
+			if IsInternalSecret(name) {
+				w.Warning("⚠️  WARNING: This is an internal secret managed by scafctl.")
+				w.Warning("   Deleting it may break authentication or other functionality.")
 			}
 
 			// Confirm deletion (skip in force mode, quiet handled by SkipCondition)
@@ -86,6 +95,7 @@ func CommandDelete(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *co
 	}
 
 	cmd.Flags().BoolVarP(&forceFlag, "force", "f", false, "Skip confirmation prompt")
+	cmd.Flags().BoolVarP(&allFlag, "all", "a", false, "Include internal secrets (e.g. auth tokens)")
 
 	return cmd
 }

@@ -38,5 +38,5 @@ func (c *DefaultHTTPClient) PostForm(ctx context.Context, endpoint string, data 
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	return c.client.Do(req)
+	return c.client.Do(req) //nolint:gosec // G704: URL is constructed from trusted config, not user input
 }

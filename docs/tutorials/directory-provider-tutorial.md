@@ -30,7 +30,7 @@ This tutorial walks you through using the `directory` provider to list, scan, cr
 
 ## Listing Directory Contents
 
-The simplest use of the directory provider is listing files and directories in a given path.
+The simplest use of the directory provider is listing files and directories in a given path. Create a file called `list-dir.yaml`:
 
 ```yaml
 apiVersion: scafctl.io/v1
@@ -54,10 +54,37 @@ spec:
 Run it:
 
 ```bash
-scafctl run solution -f list-dir.yaml
+scafctl run resolver -f list-dir.yaml -o json --hide-execution
 ```
 
-The output includes an `entries` array where each entry has:
+Output (entries will vary based on your directory contents):
+
+```json
+{
+  "project-files": {
+    "basePath": "/path/to/current/dir",
+    "dirCount": 1,
+    "entries": [
+      {
+        "absolutePath": "/path/to/current/dir/list-dir.yaml",
+        "extension": ".yaml",
+        "isDir": false,
+        "modTime": "2026-01-01T00:00:00Z",
+        "mode": "0644",
+        "name": "list-dir.yaml",
+        "path": "list-dir.yaml",
+        "size": 250,
+        "type": "file"
+      }
+    ],
+    "fileCount": 1,
+    "totalCount": 2,
+    "totalSize": 250
+  }
+}
+```
+
+The resolver output includes an `entries` array where each entry has:
 
 | Field | Description |
 |-------|-------------|
@@ -79,6 +106,8 @@ The output also provides summary fields: `totalCount`, `fileCount`, `dirCount`, 
 ## Recursive Traversal
 
 Enable `recursive: true` to traverse subdirectories. Control the depth with `maxDepth` (default: 10, maximum: 50).
+
+> **Note:** The YAML snippets in the remaining sections show only the `spec:` or `workflow:` portion. To run them, place each snippet inside a complete solution file with `apiVersion`, `kind`, and `metadata` sections — like the `list-dir.yaml` example above.
 
 ```yaml
 spec:
@@ -208,7 +237,7 @@ Each entry will include `checksum` and `checksumAlgorithm` fields.
 
 ## Creating Directories
 
-Use the `mkdir` operation to create directories. Set `createDirs: true` to create the full path (like `mkdir -p`).
+Use the `mkdir` operation to create directories. Set `createDirs: true` to create the full path (like `mkdir -p`). Create a file called `create-dirs.yaml`:
 
 ```yaml
 apiVersion: scafctl.io/v1
@@ -229,15 +258,25 @@ spec:
           createDirs: true
 ```
 
-The action returns `{ "success": true, "operation": "mkdir", "path": "<absolute-path>" }`.
+Run it:
 
-Without `createDirs: true`, the parent directory must already exist or the operation fails.
+```bash
+scafctl run solution -f create-dirs.yaml
+```
+
+The command completes silently on success. Verify the directory was created:
+
+```bash
+ls output/reports/2026
+```
+
+The action returns `{ "success": true, "operation": "mkdir", "path": "<absolute-path>" }`.
 
 ---
 
 ## Removing Directories
 
-The `rmdir` operation removes directories. By default it only removes empty directories. Use `force: true` to remove non-empty directories recursively.
+The `rmdir` operation removes directories. By default it only removes empty directories. Use `force: true` to remove non-empty directories recursively. Add this to your solution's `workflow.actions` section:
 
 ```yaml
 workflow:
@@ -256,7 +295,7 @@ workflow:
 
 ## Copying Directories
 
-The `copy` operation recursively copies a directory tree to a new location:
+The `copy` operation recursively copies a directory tree to a new location. Add this to your solution's `workflow.actions` section:
 
 ```yaml
 workflow:
@@ -395,6 +434,7 @@ workflow:
 
 ## Next Steps
 
-- See the [Provider Reference](../provider-reference/) for the complete directory provider input/output schema
-- Explore [Resolver Tutorial](../resolver-tutorial/) for combining providers with dependencies and transforms
-- Check the [Actions Tutorial](../actions-tutorial/) for building workflows with directory operations
+- [Logging & Debugging Tutorial](logging-tutorial.md) — Control log verbosity, format, and output
+- [Cache Tutorial](cache-tutorial.md) — Manage cached data and reclaim disk space
+- [Provider Reference](provider-reference.md) — Complete directory provider input/output schema
+- [Resolver Tutorial](resolver-tutorial.md) — Combining providers with dependencies and transforms

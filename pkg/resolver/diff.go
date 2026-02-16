@@ -212,24 +212,24 @@ func FormatDiffHuman(diff *SnapshotDiff) string {
 	sb.WriteString("===================\n\n")
 
 	// Metadata comparison
-	sb.WriteString(fmt.Sprintf("Before: %s (v%s) at %s\n",
+	fmt.Fprintf(&sb, "Before: %s (v%s) at %s\n",
 		diff.Before.Solution,
 		diff.Before.Version,
-		diff.Before.Timestamp.Format("2006-01-02 15:04:05")))
-	sb.WriteString(fmt.Sprintf("After:  %s (v%s) at %s\n\n",
+		diff.Before.Timestamp.Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(&sb, "After:  %s (v%s) at %s\n\n",
 		diff.After.Solution,
 		diff.After.Version,
-		diff.After.Timestamp.Format("2006-01-02 15:04:05")))
+		diff.After.Timestamp.Format("2006-01-02 15:04:05"))
 
 	// Summary
 	sb.WriteString("Summary\n")
 	sb.WriteString("-------\n")
-	sb.WriteString(fmt.Sprintf("Total: %d | Added: %d | Removed: %d | Modified: %d | Unchanged: %d\n\n",
+	fmt.Fprintf(&sb, "Total: %d | Added: %d | Removed: %d | Modified: %d | Unchanged: %d\n\n",
 		diff.Summary.TotalResolvers,
 		diff.Summary.Added,
 		diff.Summary.Removed,
 		diff.Summary.Modified,
-		diff.Summary.Unchanged))
+		diff.Summary.Unchanged)
 
 	// Get sorted resolver names
 	names := make([]string, 0, len(diff.Resolvers))
@@ -245,10 +245,10 @@ func FormatDiffHuman(diff *SnapshotDiff) string {
 		for _, name := range names {
 			rd := diff.Resolvers[name]
 			if rd.Type == DiffTypeAdded {
-				sb.WriteString(fmt.Sprintf("+ %s\n", name))
-				sb.WriteString(fmt.Sprintf("    Value:  %v\n", formatValue(rd.After.Value)))
-				sb.WriteString(fmt.Sprintf("    Status: %s\n", rd.After.Status))
-				sb.WriteString(fmt.Sprintf("    Phase:  %d\n", rd.After.Phase))
+				fmt.Fprintf(&sb, "+ %s\n", name)
+				fmt.Fprintf(&sb, "    Value:  %v\n", formatValue(rd.After.Value))
+				fmt.Fprintf(&sb, "    Status: %s\n", rd.After.Status)
+				fmt.Fprintf(&sb, "    Phase:  %d\n", rd.After.Phase)
 			}
 		}
 		sb.WriteString("\n")
@@ -261,10 +261,10 @@ func FormatDiffHuman(diff *SnapshotDiff) string {
 		for _, name := range names {
 			rd := diff.Resolvers[name]
 			if rd.Type == DiffTypeRemoved {
-				sb.WriteString(fmt.Sprintf("- %s\n", name))
-				sb.WriteString(fmt.Sprintf("    Value:  %v\n", formatValue(rd.Before.Value)))
-				sb.WriteString(fmt.Sprintf("    Status: %s\n", rd.Before.Status))
-				sb.WriteString(fmt.Sprintf("    Phase:  %d\n", rd.Before.Phase))
+				fmt.Fprintf(&sb, "- %s\n", name)
+				fmt.Fprintf(&sb, "    Value:  %v\n", formatValue(rd.Before.Value))
+				fmt.Fprintf(&sb, "    Status: %s\n", rd.Before.Status)
+				fmt.Fprintf(&sb, "    Phase:  %d\n", rd.Before.Phase)
 			}
 		}
 		sb.WriteString("\n")
@@ -277,11 +277,11 @@ func FormatDiffHuman(diff *SnapshotDiff) string {
 		for _, name := range names {
 			rd := diff.Resolvers[name]
 			if rd.Type == DiffTypeModified {
-				sb.WriteString(fmt.Sprintf("~ %s\n", name))
+				fmt.Fprintf(&sb, "~ %s\n", name)
 				for _, change := range rd.Changes {
-					sb.WriteString(fmt.Sprintf("    %s:\n", change.Field))
-					sb.WriteString(fmt.Sprintf("      - %v\n", formatValue(change.Before)))
-					sb.WriteString(fmt.Sprintf("      + %v\n", formatValue(change.After)))
+					fmt.Fprintf(&sb, "    %s:\n", change.Field)
+					fmt.Fprintf(&sb, "      - %v\n", formatValue(change.Before))
+					fmt.Fprintf(&sb, "      + %v\n", formatValue(change.After))
 				}
 			}
 		}
@@ -304,14 +304,14 @@ func FormatDiffUnified(diff *SnapshotDiff) string {
 	var sb strings.Builder
 
 	// Header
-	sb.WriteString(fmt.Sprintf("--- %s (v%s) %s\n",
+	fmt.Fprintf(&sb, "--- %s (v%s) %s\n",
 		diff.Before.Solution,
 		diff.Before.Version,
-		diff.Before.Timestamp.Format("2006-01-02 15:04:05")))
-	sb.WriteString(fmt.Sprintf("+++ %s (v%s) %s\n",
+		diff.Before.Timestamp.Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(&sb, "+++ %s (v%s) %s\n",
 		diff.After.Solution,
 		diff.After.Version,
-		diff.After.Timestamp.Format("2006-01-02 15:04:05")))
+		diff.After.Timestamp.Format("2006-01-02 15:04:05"))
 	sb.WriteString("\n")
 
 	// Get sorted resolver names
@@ -327,24 +327,24 @@ func FormatDiffUnified(diff *SnapshotDiff) string {
 
 		switch rd.Type {
 		case DiffTypeAdded:
-			sb.WriteString(fmt.Sprintf("@@ Resolver: %s (added) @@\n", name))
-			sb.WriteString(fmt.Sprintf("+  status: %s\n", rd.After.Status))
-			sb.WriteString(fmt.Sprintf("+  value: %v\n", formatValue(rd.After.Value)))
-			sb.WriteString(fmt.Sprintf("+  phase: %d\n", rd.After.Phase))
-			sb.WriteString(fmt.Sprintf("+  duration: %s\n\n", rd.After.Duration))
+			fmt.Fprintf(&sb, "@@ Resolver: %s (added) @@\n", name)
+			fmt.Fprintf(&sb, "+  status: %s\n", rd.After.Status)
+			fmt.Fprintf(&sb, "+  value: %v\n", formatValue(rd.After.Value))
+			fmt.Fprintf(&sb, "+  phase: %d\n", rd.After.Phase)
+			fmt.Fprintf(&sb, "+  duration: %s\n\n", rd.After.Duration)
 
 		case DiffTypeRemoved:
-			sb.WriteString(fmt.Sprintf("@@ Resolver: %s (removed) @@\n", name))
-			sb.WriteString(fmt.Sprintf("-  status: %s\n", rd.Before.Status))
-			sb.WriteString(fmt.Sprintf("-  value: %v\n", formatValue(rd.Before.Value)))
-			sb.WriteString(fmt.Sprintf("-  phase: %d\n", rd.Before.Phase))
-			sb.WriteString(fmt.Sprintf("-  duration: %s\n\n", rd.Before.Duration))
+			fmt.Fprintf(&sb, "@@ Resolver: %s (removed) @@\n", name)
+			fmt.Fprintf(&sb, "-  status: %s\n", rd.Before.Status)
+			fmt.Fprintf(&sb, "-  value: %v\n", formatValue(rd.Before.Value))
+			fmt.Fprintf(&sb, "-  phase: %d\n", rd.Before.Phase)
+			fmt.Fprintf(&sb, "-  duration: %s\n\n", rd.Before.Duration)
 
 		case DiffTypeModified:
-			sb.WriteString(fmt.Sprintf("@@ Resolver: %s (modified) @@\n", name))
+			fmt.Fprintf(&sb, "@@ Resolver: %s (modified) @@\n", name)
 			for _, change := range rd.Changes {
-				sb.WriteString(fmt.Sprintf("-  %s: %v\n", change.Field, formatValue(change.Before)))
-				sb.WriteString(fmt.Sprintf("+  %s: %v\n", change.Field, formatValue(change.After)))
+				fmt.Fprintf(&sb, "-  %s: %v\n", change.Field, formatValue(change.Before))
+				fmt.Fprintf(&sb, "+  %s: %v\n", change.Field, formatValue(change.After))
 			}
 			sb.WriteString("\n")
 

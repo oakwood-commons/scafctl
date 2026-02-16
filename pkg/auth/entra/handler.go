@@ -228,6 +228,8 @@ func (h *Handler) Status(ctx context.Context) (*auth.Status, error) {
 		LastRefresh:   metadata.LastRefresh,
 		TenantID:      metadata.TenantID,
 		IdentityType:  auth.IdentityTypeUser,
+		ClientID:      metadata.ClientID,
+		Scopes:        metadata.Scopes,
 	}, nil
 }
 

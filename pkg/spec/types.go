@@ -20,6 +20,7 @@ const (
 	TypeFloat    Type = "float" // float64
 	TypeBool     Type = "bool"
 	TypeArray    Type = "array"    // []any (heterogeneous)
+	TypeObject   Type = "object"   // map[string]any
 	TypeTime     Type = "time"     // time.Time
 	TypeDuration Type = "duration" // time.Duration
 	TypeAny      Type = "any"
@@ -52,6 +53,8 @@ func CoerceType(value any, targetType Type) (any, error) {
 		return coerceToBool(value)
 	case TypeArray:
 		return coerceToArray(value), nil
+	case TypeObject:
+		return coerceToObject(value)
 	case TypeTime:
 		return coerceToTime(value)
 	case TypeDuration:
@@ -74,6 +77,8 @@ func normalizeType(t Type) Type {
 		return TypeFloat
 	case "boolean":
 		return TypeBool
+	case "map":
+		return TypeObject
 	default:
 		return t
 	}
@@ -254,6 +259,26 @@ func coerceToBool(value any) (bool, error) {
 	default:
 		return false, fmt.Errorf("cannot coerce %T to bool", value)
 	}
+}
+
+// coerceToObject converts value to map[string]any.
+// Accepts map[string]any and map[string]interface{} directly.
+// Other map types with string keys are converted.
+func coerceToObject(value any) (map[string]any, error) {
+	v := reflect.ValueOf(value)
+
+	if v.Kind() == reflect.Map {
+		if v.Type().Key().Kind() != reflect.String {
+			return nil, fmt.Errorf("cannot coerce %T to object: map key must be string", value)
+		}
+		result := make(map[string]any, v.Len())
+		for _, key := range v.MapKeys() {
+			result[key.String()] = v.MapIndex(key).Interface()
+		}
+		return result, nil
+	}
+
+	return nil, fmt.Errorf("cannot coerce %T to object", value)
 }
 
 // coerceToArray converts value to array.

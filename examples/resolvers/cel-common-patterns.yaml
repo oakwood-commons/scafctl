@@ -1,0 +1,258 @@
+# CEL Common Patterns Example
+# Demonstrates real-world patterns: conditionals, string interpolation,
+# map building, default merging, list transforms, and resource generation.
+#
+# Run: scafctl run resolver -f examples/resolvers/cel-common-patterns.yaml -o json --hide-execution
+# Run: scafctl run resolver -f examples/resolvers/cel-common-patterns.yaml -o yaml --hide-execution
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: cel-common-patterns
+  version: 1.0.0
+  description: Common CEL patterns for real-world use cases
+
+spec:
+  resolvers:
+    # ─────────────────────────────────────────────
+    # Source data
+    # ─────────────────────────────────────────────
+
+    environment:
+      description: "Current environment (change to test conditionals)"
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "production"
+
+    appName:
+      description: "Application name"
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "my-service"
+
+    version:
+      description: "Application version"
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "2.1.0"
+
+    dbHost:
+      description: "Database host"
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "db.example.com"
+
+    dbPort:
+      description: "Database port"
+      type: integer
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "5432"
+
+    dbName:
+      description: "Database name"
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "myapp"
+
+    defaults:
+      description: "Default configuration"
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                {
+                  "log_level": "info",
+                  "timeout": 30,
+                  "retries": 3,
+                  "tls": false,
+                  "port": 8080
+                }
+
+    userConfig:
+      description: "User-supplied overrides"
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                {
+                  "log_level": "debug",
+                  "tls": true,
+                  "custom_header": "X-Request-Id"
+                }
+
+    services:
+      description: "List of services"
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                [
+                  {"name": "api-gateway",  "image": "api:latest",  "version": "1.2.0", "enabled": true,  "prodReplicas": 3},
+                  {"name": "auth-service", "image": "auth:latest", "version": "0.9.1", "enabled": true,  "prodReplicas": 2},
+                  {"name": "web-frontend", "image": "web:latest",  "version": "3.0.0", "enabled": false, "prodReplicas": 2},
+                  {"name": "worker",       "image": "work:latest", "version": "1.0.0", "enabled": true,  "prodReplicas": 1}
+                ]
+
+    # ─────────────────────────────────────────────
+    # Pattern: Conditional Configuration
+    # ─────────────────────────────────────────────
+
+    replicas:
+      description: "Choose replicas based on environment"
+      type: integer
+      dependsOn: [environment]
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                _.environment == "production" ? 5 :
+                _.environment == "staging" ? 2 : 1
+
+    # ─────────────────────────────────────────────
+    # Pattern: Build a Map Dynamically
+    # ─────────────────────────────────────────────
+
+    labels:
+      description: "Construct a labels map from resolver values"
+      type: any
+      dependsOn: [appName, version, environment]
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                {
+                  "app": _.appName,
+                  "version": _.version,
+                  "env": _.environment,
+                  "managed-by": "scafctl"
+                }
+
+    # ─────────────────────────────────────────────
+    # Pattern: Filter and Transform Lists
+    # ─────────────────────────────────────────────
+
+    enabledServices:
+      description: "Filter enabled services, extract and sort names"
+      type: array
+      dependsOn: [services]
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                _.services
+                  .filter(s, s.enabled)
+                  .map(s, s.name)
+                  .sort()
+
+    # ─────────────────────────────────────────────
+    # Pattern: String Interpolation with format
+    # ─────────────────────────────────────────────
+
+    connectionString:
+      description: "Build a connection string with format"
+      type: string
+      dependsOn: [dbHost, dbPort, dbName]
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                "postgres://%s:%d/%s".format([_.dbHost, _.dbPort, _.dbName])
+
+    # ─────────────────────────────────────────────
+    # Pattern: Merge Defaults with Overrides
+    # ─────────────────────────────────────────────
+
+    finalConfig:
+      description: "Merge defaults with user overrides and add a timestamp"
+      type: any
+      dependsOn: [defaults, userConfig]
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                map.merge(
+                  map.merge(_.defaults, _.userConfig),
+                  {"generatedAt": time.nowFmt("2006-01-02T15:04:05Z")}
+                )
+
+    # ─────────────────────────────────────────────
+    # Pattern: Generate a List of Resources
+    # ─────────────────────────────────────────────
+
+    deployments:
+      description: "Generate deployment objects from service list"
+      type: array
+      dependsOn: [services, environment]
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                _.services.map(svc, {
+                  "name": svc.name,
+                  "image": svc.image + ":" + svc.version,
+                  "replicas": _.environment == "production" ? svc.prodReplicas : 1,
+                  "id": guid.new()
+                })
+
+    # ─────────────────────────────────────────────
+    # Pattern: Optional Types (safe navigation)
+    # ─────────────────────────────────────────────
+
+    safeDbHost:
+      description: "Safe field access with orValue default"
+      type: string
+      dependsOn: [defaults]
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.defaults.?database.?host.orValue("localhost")'
+
+    # ─────────────────────────────────────────────
+    # Pattern: Bindings (local variables)
+    # ─────────────────────────────────────────────
+
+    apiUrl:
+      description: "Use cel.bind to build a URL without repeating subexpressions"
+      type: string
+      dependsOn: [dbHost, dbPort]
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                cel.bind(base, _.dbHost + ":" + string(_.dbPort),
+                  cel.bind(url, "https://" + base,
+                    url + "/api/v1"
+                  )
+                )

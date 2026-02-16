@@ -2,10 +2,10 @@
 # A comprehensive example with 58 resolvers across 4+ execution phases.
 # Demonstrates validation, long-running operations, transforms, and complex dependencies.
 #
-# Run: scafctl run solution -f resolver-stress-demo.yaml
-# Run with progress: scafctl run solution -f resolver-stress-demo.yaml --progress
-# Run with verbose logging: scafctl run solution -f resolver-stress-demo.yaml --log-level 1
-# Run with parameter: scafctl run solution -f resolver-stress-demo.yaml -r deployment_mode=canary
+# Run: scafctl run resolver -f resolver-stress-demo.yaml
+# Run with progress: scafctl run resolver -f resolver-stress-demo.yaml --progress
+# Run with verbose logging: scafctl run resolver -f resolver-stress-demo.yaml --log-level 1
+# Run with parameter: scafctl run resolver -f resolver-stress-demo.yaml -r deployment_mode=canary
 #
 # Execution phases:
 #   Phase 1: Base infrastructure (environment, regions, credentials) - 20 resolvers
@@ -392,7 +392,7 @@ spec:
                 Accept: "application/json"
 
     # 20. Parameter provider demo (demonstrates parameter provider - Bug 2 fix)
-    # Run with: scafctl run solution -f resolver-stress-demo.yaml -r deployment_mode=canary
+    # Run with: scafctl run resolver -f resolver-stress-demo.yaml -r deployment_mode=canary
     deployment_mode:
       description: Deployment mode from CLI parameter (defaults to 'rolling' if not provided)
       type: string

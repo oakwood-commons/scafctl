@@ -13,7 +13,7 @@ import (
 
 // TestCoerceType_NilValues tests that nil values pass through for all types
 func TestCoerceType_NilValues(t *testing.T) {
-	types := []Type{TypeString, TypeInt, TypeFloat, TypeBool, TypeArray, TypeTime, TypeDuration, TypeAny}
+	types := []Type{TypeString, TypeInt, TypeFloat, TypeBool, TypeArray, TypeObject, TypeTime, TypeDuration, TypeAny}
 
 	for _, targetType := range types {
 		t.Run(string(targetType), func(t *testing.T) {
@@ -293,6 +293,46 @@ func TestCoerceType_Duration(t *testing.T) {
 	}
 }
 
+// TestCoerceType_Object tests object coercion
+func TestCoerceType_Object(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    any
+		expected map[string]any
+		wantErr  bool
+	}{
+		{"map_string_any_passthrough", map[string]any{"key": "value"}, map[string]any{"key": "value"}, false},
+		{"map_string_interface_passthrough", map[string]interface{}{"a": 1, "b": "two"}, map[string]any{"a": 1, "b": "two"}, false},
+		{"nested_map", map[string]any{"outer": map[string]any{"inner": 42}}, map[string]any{"outer": map[string]any{"inner": 42}}, false},
+		{"empty_map", map[string]any{}, map[string]any{}, false},
+		{"string_value", "not a map", nil, true},
+		{"int_value", 42, nil, true},
+		{"bool_value", true, nil, true},
+		{"array_value", []any{1, 2, 3}, nil, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := CoerceType(tt.value, TypeObject)
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), "cannot coerce")
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.expected, result)
+			}
+		})
+	}
+}
+
+// TestCoerceType_Object_MapAlias tests that "map" alias resolves to object type
+func TestCoerceType_Object_MapAlias(t *testing.T) {
+	value := map[string]any{"key": "value"}
+	result, err := CoerceType(value, Type("map"))
+	require.NoError(t, err)
+	assert.Equal(t, value, result)
+}
+
 // TestCoerceType_TypeAliases tests type alias normalization
 func TestCoerceType_TypeAliases(t *testing.T) {
 	tests := []struct {
@@ -352,6 +392,7 @@ func TestType_Constants(t *testing.T) {
 	assert.Equal(t, Type("float"), TypeFloat)
 	assert.Equal(t, Type("bool"), TypeBool)
 	assert.Equal(t, Type("array"), TypeArray)
+	assert.Equal(t, Type("object"), TypeObject)
 	assert.Equal(t, Type("time"), TypeTime)
 	assert.Equal(t, Type("duration"), TypeDuration)
 	assert.Equal(t, Type("any"), TypeAny)

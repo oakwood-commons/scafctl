@@ -47,14 +47,12 @@ scafctl cache info
 
 Output:
 ```
-Cache Information
-
-Platform: darwin/arm64
-
+ 💡 Cache Information
 HTTP Cache:  2.4 MB (156 files)
              ~/.cache/scafctl/http-cache
-
-Total: 2.4 MB (156 files)
+Build Cache:  324 B (1 files)
+             ~/.cache/scafctl/build-cache
+Total: 2.4 MB (157 files)
 ```
 
 ### JSON Output
@@ -76,11 +74,19 @@ Output:
       "sizeHuman": "2.4 MB",
       "fileCount": 156,
       "description": "HTTP response cache"
+    },
+    {
+      "name": "Build Cache",
+      "path": "/Users/me/.cache/scafctl/build-cache",
+      "size": 324,
+      "sizeHuman": "324 B",
+      "fileCount": 1,
+      "description": "Incremental build fingerprints"
     }
   ],
-  "totalSize": 2516582,
+  "totalSize": 2516906,
   "totalHuman": "2.4 MB",
-  "totalFiles": 156
+  "totalFiles": 157
 }
 ```
 
@@ -102,8 +108,8 @@ You'll be prompted to confirm:
 Output after confirmation:
 ```
  ✅ Cleared cache
- ℹ️   Removed files: 156
- ℹ️   Reclaimed: 2.4 MB
+ 💡 Removed files: 156
+ 💡 Reclaimed: 2.4 MB
 ```
 
 ### Skip Confirmation
@@ -281,7 +287,9 @@ scafctl config set build.enableCache false
 scafctl config set build.autoCacheRemoteArtifacts false
 ```
 
-## See Also
+## Next Steps
 
-- [Configuration Paths](../design/cli.md) — Understanding scafctl directory structure
-- [HTTP Provider](provider-reference.md#http) — Configuring HTTP caching behavior
+- [Provider Reference](provider-reference.md) — Complete provider documentation
+- [Provider Development](provider-development.md) — Build custom providers
+- [Configuration Tutorial](config-tutorial.md) — Manage application configuration
+- [Logging & Debugging Tutorial](logging-tutorial.md) — Control log verbosity, format, and output

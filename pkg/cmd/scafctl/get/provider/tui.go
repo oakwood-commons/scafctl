@@ -314,9 +314,9 @@ func (m providerModel) renderDetail(desc *provider.Descriptor) string {
 			if typeStr == "" {
 				typeStr = "any"
 			}
-			b.WriteString(fmt.Sprintf("  %s (%s)%s\n", name, typeStr, required))
+			fmt.Fprintf(&b, "  %s (%s)%s\n", name, typeStr, required)
 			if prop.Description != "" {
-				b.WriteString(fmt.Sprintf("    %s\n", prop.Description))
+				fmt.Fprintf(&b, "    %s\n", prop.Description)
 			}
 		}
 	}
@@ -325,7 +325,7 @@ func (m providerModel) renderDetail(desc *provider.Descriptor) string {
 	if len(desc.Examples) > 0 {
 		b.WriteString("\n" + detailKeyStyle.Render("Examples:\n"))
 		for _, ex := range desc.Examples {
-			b.WriteString(fmt.Sprintf("  %s: %s\n", ex.Name, ex.Description))
+			fmt.Fprintf(&b, "  %s: %s\n", ex.Name, ex.Description)
 			if ex.YAML != "" {
 				b.WriteString("  ---\n")
 				for _, line := range strings.Split(ex.YAML, "\n") {
@@ -339,7 +339,7 @@ func (m providerModel) renderDetail(desc *provider.Descriptor) string {
 	if len(desc.Links) > 0 {
 		b.WriteString("\n" + detailKeyStyle.Render("Links:\n"))
 		for _, link := range desc.Links {
-			b.WriteString(fmt.Sprintf("  %s: %s\n", link.Name, link.URL))
+			fmt.Fprintf(&b, "  %s: %s\n", link.Name, link.URL)
 		}
 	}
 
@@ -347,7 +347,7 @@ func (m providerModel) renderDetail(desc *provider.Descriptor) string {
 	if len(desc.Maintainers) > 0 {
 		b.WriteString("\n" + detailKeyStyle.Render("Maintainers:\n"))
 		for _, maint := range desc.Maintainers {
-			b.WriteString(fmt.Sprintf("  %s <%s>\n", maint.Name, maint.Email))
+			fmt.Fprintf(&b, "  %s <%s>\n", maint.Name, maint.Email)
 		}
 	}
 

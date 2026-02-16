@@ -40,6 +40,13 @@ func TestErrorHelpers(t *testing.T) {
 	assert.False(t, IsNotAuthenticated(ErrTokenExpired))
 
 	assert.True(t, IsTokenExpired(ErrTokenExpired))
+	assert.True(t, IsTokenExpired(fmt.Errorf("AADSTS70008: %w", ErrTokenExpired)))
+	assert.False(t, IsTokenExpired(ErrConsentRequired))
+
+	assert.True(t, IsConsentRequired(ErrConsentRequired))
+	assert.True(t, IsConsentRequired(fmt.Errorf("scope required: %w", ErrConsentRequired)))
+	assert.False(t, IsConsentRequired(ErrTokenExpired))
+
 	assert.True(t, IsHandlerNotFound(ErrHandlerNotFound))
 	assert.True(t, IsTimeout(ErrTimeout))
 	assert.True(t, IsUserCancelled(ErrUserCancelled))

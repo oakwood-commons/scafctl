@@ -17,6 +17,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -524,6 +525,72 @@ spec:
 	assert.Equal(t, float64(1), summary["resolverCount"])
 }
 
+func TestResolverOptions_Run_HideExecution(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: hide-execution-test
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+`
+	err := os.WriteFile(solutionPath, []byte(solutionContent), 0o600)
+	require.NoError(t, err)
+
+	var stdout, stderr bytes.Buffer
+	streams := &terminal.IOStreams{
+		In:     nil,
+		Out:    &stdout,
+		ErrOut: &stderr,
+	}
+	cliParams := settings.NewCliParams()
+	cliParams.ExitOnError = false
+
+	opts := &ResolverOptions{
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams:       streams,
+			CliParams:       cliParams,
+			File:            solutionPath,
+			KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
+			ResolverTimeout: 30 * time.Second,
+			PhaseTimeout:    5 * time.Minute,
+			registry:        testRegistry(),
+		},
+		HideExecution: true,
+	}
+
+	lgr := logger.Get(0)
+	ctx := logger.WithLogger(context.Background(), lgr)
+
+	err = opts.Run(ctx)
+	require.NoError(t, err)
+
+	output := stdout.String()
+	assert.Contains(t, output, "hello")
+	assert.NotContains(t, output, "__execution", "__execution should not be present when --hide-execution is set")
+
+	// Parse JSON to validate structure
+	var result map[string]any
+	err = json.Unmarshal([]byte(output), &result)
+	require.NoError(t, err)
+
+	_, hasExecution := result["__execution"]
+	assert.False(t, hasExecution, "__execution key should not exist in output")
+
+	// Resolver values should still be present
+	assert.Equal(t, "hello", result["greeting"])
+}
+
 func TestResolverOptions_Run_EmptySolution(t *testing.T) {
 	t.Parallel()
 
@@ -568,7 +635,7 @@ spec:
 	assert.Contains(t, stdout.String(), "{}")
 }
 
-func TestResolverOptions_Run_SensitiveRedaction(t *testing.T) {
+func TestResolverOptions_Run_SensitiveRedaction_TableRedacts(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
@@ -577,6 +644,88 @@ func TestResolverOptions_Run_SensitiveRedaction(t *testing.T) {
 kind: Solution
 metadata:
   name: sensitive-resolver-test
+  version: 1.0.0
+spec:
+  resolvers:
+    secret:
+      sensitive: true
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: super-secret
+    public:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: public-data
+`
+	err := os.WriteFile(solutionPath, []byte(solutionContent), 0o600)
+	require.NoError(t, err)
+
+	// Table format should redact sensitive values (human-facing)
+	var stdout, stderr bytes.Buffer
+	streams := &terminal.IOStreams{
+		In:     nil,
+		Out:    &stdout,
+		ErrOut: &stderr,
+	}
+	cliParams := settings.NewCliParams()
+	cliParams.ExitOnError = false
+
+	opts := &ResolverOptions{
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams:       streams,
+			CliParams:       cliParams,
+			File:            solutionPath,
+			KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
+			ResolverTimeout: 30 * time.Second,
+			PhaseTimeout:    5 * time.Minute,
+			registry:        testRegistry(),
+		},
+		HideExecution: true,
+	}
+
+	lgr := logger.Get(0)
+	ctx := logger.WithLogger(context.Background(), lgr)
+
+	// Table output (using json since table requires TTY, but test the redaction logic directly)
+	// Test buildResolverOutputMap with table format
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"secret": {Name: "secret", Sensitive: true},
+		"public": {Name: "public", Sensitive: false},
+	}
+
+	tableOpts := &sharedResolverOptions{
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "table"},
+	}
+	results := tableOpts.buildResolverOutputMap(
+		map[string]any{"secret": "super-secret", "public": "public-data"},
+		sol,
+	)
+	assert.Equal(t, "[REDACTED]", results["secret"])
+	assert.Equal(t, "public-data", results["public"])
+
+	// Also verify full Run path with json format reveals values
+	err = opts.Run(ctx)
+	require.NoError(t, err)
+
+	output := stdout.String()
+	assert.Contains(t, output, "super-secret", "JSON output should reveal sensitive values")
+	assert.Contains(t, output, "public-data")
+}
+
+func TestResolverOptions_Run_SensitiveRedaction_JSONReveals(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: sensitive-json-test
   version: 1.0.0
 spec:
   resolvers:
@@ -616,6 +765,7 @@ spec:
 			PhaseTimeout:    5 * time.Minute,
 			registry:        testRegistry(),
 		},
+		HideExecution: true,
 	}
 
 	lgr := logger.Get(0)
@@ -625,9 +775,129 @@ spec:
 	require.NoError(t, err)
 
 	output := stdout.String()
-	assert.Contains(t, output, "[REDACTED]")
-	assert.NotContains(t, output, "super-secret")
+	// JSON output should reveal sensitive values (machine-facing, Terraform model)
+	assert.Contains(t, output, "super-secret", "JSON output should reveal sensitive values")
+	assert.NotContains(t, output, "[REDACTED]", "JSON output should not redact")
 	assert.Contains(t, output, "public-data")
+}
+
+func TestResolverOptions_Run_SensitiveRedaction_YAMLReveals(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: sensitive-yaml-test
+  version: 1.0.0
+spec:
+  resolvers:
+    secret:
+      sensitive: true
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: super-secret
+    public:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: public-data
+`
+	err := os.WriteFile(solutionPath, []byte(solutionContent), 0o600)
+	require.NoError(t, err)
+
+	var stdout, stderr bytes.Buffer
+	streams := &terminal.IOStreams{
+		In:     nil,
+		Out:    &stdout,
+		ErrOut: &stderr,
+	}
+	cliParams := settings.NewCliParams()
+	cliParams.ExitOnError = false
+
+	opts := &ResolverOptions{
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams:       streams,
+			CliParams:       cliParams,
+			File:            solutionPath,
+			KvxOutputFlags:  flags.KvxOutputFlags{Output: "yaml"},
+			ResolverTimeout: 30 * time.Second,
+			PhaseTimeout:    5 * time.Minute,
+			registry:        testRegistry(),
+		},
+		HideExecution: true,
+	}
+
+	lgr := logger.Get(0)
+	ctx := logger.WithLogger(context.Background(), lgr)
+
+	err = opts.Run(ctx)
+	require.NoError(t, err)
+
+	output := stdout.String()
+	// YAML output should also reveal sensitive values (machine-facing)
+	assert.Contains(t, output, "super-secret", "YAML output should reveal sensitive values")
+	assert.NotContains(t, output, "[REDACTED]", "YAML output should not redact")
+	assert.Contains(t, output, "public-data")
+}
+
+func TestResolverOptions_Run_SensitiveRedaction_ShowSensitiveFlag(t *testing.T) {
+	t.Parallel()
+
+	// Test that --show-sensitive reveals values even in table format
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"secret": {Name: "secret", Sensitive: true},
+		"public": {Name: "public", Sensitive: false},
+	}
+
+	resolverData := map[string]any{
+		"secret": "super-secret",
+		"public": "public-data",
+	}
+
+	// Table format with --show-sensitive should reveal values
+	opts := &sharedResolverOptions{
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "table"},
+		ShowSensitive:  true,
+	}
+	results := opts.buildResolverOutputMap(resolverData, sol)
+	assert.Equal(t, "super-secret", results["secret"], "--show-sensitive should reveal in table format")
+	assert.Equal(t, "public-data", results["public"])
+}
+
+func TestShouldRedactSensitive(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		format        string
+		showSensitive bool
+		wantRedact    bool
+	}{
+		{name: "table redacts", format: "table", showSensitive: false, wantRedact: true},
+		{name: "empty format redacts (defaults to table)", format: "", showSensitive: false, wantRedact: true},
+		{name: "json reveals", format: "json", showSensitive: false, wantRedact: false},
+		{name: "yaml reveals", format: "yaml", showSensitive: false, wantRedact: false},
+		{name: "quiet reveals", format: "quiet", showSensitive: false, wantRedact: false},
+		{name: "table with show-sensitive reveals", format: "table", showSensitive: true, wantRedact: false},
+		{name: "json with show-sensitive reveals", format: "json", showSensitive: true, wantRedact: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			opts := &sharedResolverOptions{
+				KvxOutputFlags: flags.KvxOutputFlags{Output: tt.format},
+				ShowSensitive:  tt.showSensitive,
+			}
+			assert.Equal(t, tt.wantRedact, opts.shouldRedactSensitive())
+		})
+	}
 }
 
 func TestResolverOptions_Run_MaxValueSizeExceeded(t *testing.T) {

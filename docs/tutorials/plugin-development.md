@@ -143,8 +143,10 @@ EOF
 
 ### 5. Use Your Provider
 
+Create a file called `my-solution.yaml`:
+
 ```yaml
-# solution.yaml
+# my-solution.yaml
 apiVersion: scafctl/v1
 kind: Solution
 metadata:
@@ -157,6 +159,12 @@ spec:
           provider: my-custom-provider
           inputs:
             input: "Hello World"
+```
+
+Run it:
+
+```bash
+scafctl run solution -f my-solution.yaml -o json
 ```
 
 ## Plugin Interface
@@ -609,6 +617,7 @@ scafctl catalog list --kind provider
 
 ## Next Steps
 
-- Review the [echo plugin example](../examples/plugins/echo/) for a working reference
-- See [Provider Development Guide](provider-development.md) for provider patterns
-- Check [Contributing Guidelines](../CONTRIBUTING.md) for submission process
+- [Provider Development Guide](provider-development.md) — Provider patterns
+- [Provider Reference](provider-reference.md) — All providers documented
+- [Getting Started](getting-started.md) — Run your first solution
+- [Contributing Guidelines](../CONTRIBUTING.md) — Submission process

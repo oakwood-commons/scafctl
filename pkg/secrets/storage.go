@@ -117,12 +117,12 @@ func writeSecret(dir, name string, data []byte) error {
 	}
 
 	// Set proper permissions
-	if err := os.Chmod(tempPath, filePermissions); err != nil {
+	if err := os.Chmod(tempPath, filePermissions); err != nil { //nolint:gosec // G703: tempPath is within managed secrets directory
 		return fmt.Errorf("setting file permissions: %w", err)
 	}
 
 	// Atomic rename
-	if err := os.Rename(tempPath, targetPath); err != nil {
+	if err := os.Rename(tempPath, targetPath); err != nil { //nolint:gosec // G703: paths are within managed secrets directory
 		return fmt.Errorf("renaming temp file: %w", err)
 	}
 

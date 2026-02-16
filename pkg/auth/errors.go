@@ -13,12 +13,14 @@ var (
 	ErrNotAuthenticated     = errors.New("not authenticated: please run 'scafctl auth login entra'")
 	ErrAuthenticationFailed = errors.New("authentication failed")
 	ErrTokenExpired         = errors.New("credentials expired: please run 'scafctl auth login entra'")
+	ErrConsentRequired      = errors.New("consent required: please login with the required scope, e.g. 'scafctl auth login entra --scope <scope>'")
 	ErrInvalidScope         = errors.New("invalid scope: scope cannot be empty")
 	ErrHandlerNotFound      = errors.New("auth handler not found")
 	ErrFlowNotSupported     = errors.New("authentication flow not supported")
 	ErrUserCancelled        = errors.New("authentication cancelled by user")
 	ErrTimeout              = errors.New("authentication timed out")
 	ErrAlreadyAuthenticated = errors.New("already authenticated")
+	ErrGrantInvalid         = errors.New("invalid grant: the refresh token is invalid or has been revoked, please re-authenticate with 'scafctl auth login entra'")
 )
 
 // Error wraps authentication errors with additional context.
@@ -64,6 +66,11 @@ func IsHandlerNotFound(err error) bool {
 // IsTimeout returns true if the error indicates a timeout occurred.
 func IsTimeout(err error) bool {
 	return errors.Is(err, ErrTimeout)
+}
+
+// IsConsentRequired returns true if the error indicates consent is required for the requested scope.
+func IsConsentRequired(err error) bool {
+	return errors.Is(err, ErrConsentRequired)
 }
 
 // IsUserCancelled returns true if the error indicates the user cancelled.

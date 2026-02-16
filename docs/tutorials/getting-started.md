@@ -71,91 +71,31 @@ Output:
 Hello, World!
 ```
 
-### 2. Using Parameters
+This solution has two parts:
 
-Pass values from the command line:
+- **Resolver** (`greeting`) — gathers a value using the `static` provider
+- **Action** (`say-hello`) — runs a shell command that references the resolver via `_.greeting`
+
+> **Want to go deeper with resolvers?** The [Resolver Tutorial](resolver-tutorial.md) covers parameters, dependencies, transforms, validation, and more.
+
+### 2. Action Dependencies
+
+Actions can depend on other actions and access their results. Create a new file called `action-deps.yaml`:
 
 ```yaml
 apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
-  name: greet-user
+  name: action-deps
   version: 1.0.0
 
-spec:
-  resolvers:
-    name:
-      type: string
-      resolve:
-        with:
-          - provider: parameter
-            inputs:
-              key: name
-          - provider: static
-            inputs:
-              value: "World"  # Default if no parameter
-
-  workflow:
-    actions:
-      greet:
-        provider: exec
-        inputs:
-          command:
-            expr: "'echo Hello, ' + _.name + '!'"
-```
-
-```bash
-scafctl run solution -f greet.yaml -r name=Alice
-# Output: Hello, Alice!
-
-scafctl run solution -f greet.yaml
-# Output: Hello, World!
-```
-
-### 3. Resolver Dependencies
-
-Resolvers can depend on each other using the `_` namespace:
-
-```yaml
-spec:
-  resolvers:
-    firstName:
-      type: string
-      resolve:
-        with:
-          - provider: parameter
-            inputs:
-              key: first
-
-    lastName:
-      type: string
-      resolve:
-        with:
-          - provider: parameter
-            inputs:
-              key: last
-
-    fullName:
-      type: string
-      resolve:
-        with:
-          - provider: cel
-            inputs:
-              expression: "_.firstName + ' ' + _.lastName"
-```
-
-### 4. Action Dependencies
-
-Actions can depend on other actions and access their results:
-
-```yaml
 spec:
   workflow:
     actions:
       fetch-data:
         provider: http
         inputs:
-          url: https://api.example.com/config
+          url: https://httpbin.org/get
 
       process:
         dependsOn: [fetch-data]
@@ -163,6 +103,20 @@ spec:
         inputs:
           command:
             expr: "'echo Got status: ' + string(__actions['fetch-data'].results.statusCode)"
+```
+
+The `process` action uses `dependsOn` to wait for `fetch-data` to complete, then accesses its results via the `__actions` namespace.
+
+Run it:
+
+```bash
+scafctl run solution -f action-deps.yaml
+```
+
+Output:
+
+```
+Got status: 200
 ```
 
 ## Key Concepts
@@ -272,8 +226,8 @@ scafctl render solution -f solution.yaml -o json
 
 ## Next Steps
 
-- [Catalog Tutorial](catalog-tutorial.md) - Store and run solutions by name
-- [Resolver Tutorial](resolver-tutorial.md) - Deep dive into resolvers
-- [Actions Tutorial](actions-tutorial.md) - Learn about workflows
-- [Provider Reference](provider-reference.md) - All providers documented
-- [Examples](https://github.com/oakwood-commons/scafctl/tree/main/examples) - Working examples
+- [Resolver Tutorial](resolver-tutorial.md) — Deep dive into resolvers
+- [Actions Tutorial](actions-tutorial.md) — Learn about workflows
+- [Catalog Tutorial](catalog-tutorial.md) — Store and run solutions by name
+- [Provider Reference](provider-reference.md) — All providers documented
+- [Examples](https://github.com/oakwood-commons/scafctl/tree/main/examples) — Working examples

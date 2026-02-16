@@ -53,15 +53,15 @@ func getEntraHandler(ctx context.Context) (auth.Handler, error) {
 	return entra.New(opts...)
 }
 
-// getEntraHandlerWithTenant creates an Entra handler with an optional tenant override.
-// The tenant flag takes precedence over config.
-func getEntraHandlerWithTenant(ctx context.Context, tenantOverride string) (auth.Handler, error) {
+// getEntraHandlerWithOverrides creates an Entra handler with optional tenant and client ID overrides.
+// The flags take precedence over config.
+func getEntraHandlerWithOverrides(ctx context.Context, tenantOverride, clientIDOverride string) (auth.Handler, error) {
 	// Check for test-injected handler
 	if h := handlerFromContext(ctx); h != nil {
 		return h, nil
 	}
 
-	// Build config from context and apply override
+	// Build config from context and apply overrides
 	entraCfg := &entra.Config{}
 	if cfg := config.FromContext(ctx); cfg != nil && cfg.Auth.Entra != nil {
 		entraCfg.ClientID = cfg.Auth.Entra.ClientID
@@ -69,9 +69,12 @@ func getEntraHandlerWithTenant(ctx context.Context, tenantOverride string) (auth
 		entraCfg.DefaultScopes = cfg.Auth.Entra.DefaultScopes
 	}
 
-	// Tenant flag overrides config
+	// Flags override config
 	if tenantOverride != "" {
 		entraCfg.TenantID = tenantOverride
+	}
+	if clientIDOverride != "" {
+		entraCfg.ClientID = clientIDOverride
 	}
 
 	var opts []entra.Option

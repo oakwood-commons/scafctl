@@ -121,7 +121,7 @@ spec:
         # Metadata
         description: "Human-readable description of what this action does"
         displayName: "Deploy Application"
-        sensitive: false  # Whether results should be redacted in logs
+        sensitive: false  # Whether results should be redacted in table output
 
         # Provider
         provider: api
@@ -566,7 +566,7 @@ Providers can declare `retryable: false` in their descriptor if retries are neve
 
 ## Sensitive Actions
 
-Actions can be marked as sensitive to redact results in logs.
+Actions can be marked as sensitive to control result visibility.
 
 ~~~yaml
 actions:
@@ -579,7 +579,9 @@ actions:
 
 When `sensitive: true`:
 
-- Results are redacted in logs and debug output
+- Results are redacted in table/interactive output (human-facing)
+- JSON and YAML output reveals values for machine consumption (Terraform model)
+- Use `--show-sensitive` to reveal values in all output formats
 - The value is still available to dependent actions
 - Error messages are sanitized to prevent leaking sensitive data (e.g., secrets in request bodies)
 - The `__actions.<name>.error` field contains a sanitized error message

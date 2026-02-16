@@ -132,7 +132,7 @@ func (i *Input) ReadLine(opts *LineOptions) (string, error) {
 
 func (i *Input) isTTY() bool {
 	if f, ok := i.ioStreams.In.(*os.File); ok {
-		return term.IsTerminal(int(f.Fd()))
+		return term.IsTerminal(int(f.Fd())) //nolint:gosec // G115: Fd() fits in int on all supported platforms
 	}
 	return false
 }
@@ -167,7 +167,7 @@ func (i *Input) readPassword() (string, error) {
 	if !ok {
 		return "", fmt.Errorf("stdin is not a file")
 	}
-	passwordBytes, err := term.ReadPassword(int(f.Fd()))
+	passwordBytes, err := term.ReadPassword(int(f.Fd())) //nolint:gosec // G115: Fd() fits in int on all supported platforms
 	if err != nil {
 		return "", err
 	}

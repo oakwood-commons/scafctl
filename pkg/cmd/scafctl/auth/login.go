@@ -25,9 +25,11 @@ import (
 func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Command {
 	var (
 		tenantID       string
+		clientID       string
 		timeout        time.Duration
 		flowStr        string
 		federatedToken string
+		scopes         []string
 	)
 
 	cmd := &cobra.Command{
@@ -55,6 +57,10 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 			  OR
 			- --federated-token flag: Pass token directly (for testing)
 
+			By default, the device code flow uses the Azure CLI's public client ID
+			(04b07795-8ddb-461a-bbee-02f9e1bf7b46). Use --client-id to specify a
+			custom application registration for enterprise scenarios.
+
 			Supported handlers:
 			- entra: Microsoft Entra ID
 
@@ -64,6 +70,9 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 
 			  # Login with a specific tenant
 			  scafctl auth login entra --tenant 08e70e8e-d05c-4449-a2c2-67bd0a9c4e79
+
+			  # Login with a custom client ID (enterprise/custom app registration)
+			  scafctl auth login entra --client-id 12345678-abcd-1234-abcd-123456789abc
 
 			  # Login with service principal (requires env vars)
 			  scafctl auth login entra --flow service-principal
@@ -76,6 +85,9 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 
 			  # Login with a custom timeout (device code only)
 			  scafctl auth login entra --timeout 10m
+
+			  # Login with specific scopes for API access
+			  scafctl auth login entra --scope https://graph.microsoft.com/User.Read
 		`),
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
@@ -122,7 +134,7 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 			}
 
 			// Get or create handler
-			handler, err := getEntraHandlerWithTenant(ctx, tenantID)
+			handler, err := getEntraHandlerWithOverrides(ctx, tenantID, clientID)
 			if err != nil {
 				err = fmt.Errorf("failed to initialize auth handler: %w", err)
 				w.Errorf("%v", err)
@@ -169,6 +181,7 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 			// Prepare login options
 			loginOpts := auth.LoginOptions{
 				TenantID: tenantID,
+				Scopes:   scopes,
 				Flow:     flow,
 				Timeout:  timeout,
 				DeviceCodeCallback: func(userCode, verificationURI, _ string) {
@@ -215,9 +228,11 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 	}
 
 	cmd.Flags().StringVar(&tenantID, "tenant", "", "Azure tenant ID (overrides config)")
+	cmd.Flags().StringVar(&clientID, "client-id", "", "Azure application (client) ID (overrides default Azure CLI client ID)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 5*time.Minute, "Timeout for authentication flow")
 	cmd.Flags().StringVar(&flowStr, "flow", "", "Authentication flow: 'device-code' (default), 'service-principal', or 'workload-identity'")
 	cmd.Flags().StringVar(&federatedToken, "federated-token", "", "Federated token for workload identity (for testing; sets AZURE_FEDERATED_TOKEN)")
+	cmd.Flags().StringSliceVar(&scopes, "scope", nil, "Additional OAuth scopes to request during login (e.g., https://graph.microsoft.com/User.Read)")
 
 	return cmd
 }

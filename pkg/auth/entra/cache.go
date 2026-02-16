@@ -25,7 +25,7 @@ type TokenCache struct {
 
 // CachedToken is the structure stored on disk for each cached token.
 type CachedToken struct {
-	AccessToken string    `json:"accessToken"`
+	AccessToken string    `json:"accessToken"` //nolint:gosec // G117: not a hardcoded credential, stores runtime token data
 	TokenType   string    `json:"tokenType"`
 	ExpiresAt   time.Time `json:"expiresAt"`
 	Scope       string    `json:"scope"`

@@ -15,7 +15,7 @@ scafctl run resolver -f examples/resolver-demo.yaml
 scafctl run resolver environment region -f examples/resolver-demo.yaml --verbose
 
 # Run with parameters
-scafctl run solution -f examples/resolvers/parameters.yaml -r name=Alice
+scafctl run resolver -f examples/resolvers/parameters.yaml -r name=Alice
 
 # Run with debug logging (see what scafctl is doing)
 scafctl run solution -f examples/actions/hello-world.yaml --debug
@@ -90,17 +90,17 @@ Resolvers demonstrate dynamic value computation, validation, and transformation.
 
 | Example | Description | Run |
 |---------|-------------|-----|
-| [hello-world.yaml](resolvers/hello-world.yaml) | Simplest resolver | `scafctl run solution -f examples/resolvers/hello-world.yaml` |
-| [parameters.yaml](resolvers/parameters.yaml) | CLI parameters with defaults | `scafctl run solution -f examples/resolvers/parameters.yaml -r name=Alice` |
-| [dependencies.yaml](resolvers/dependencies.yaml) | Resolver dependencies & phases | `scafctl run solution -f examples/resolvers/dependencies.yaml` |
-| [env-config.yaml](resolvers/env-config.yaml) | Environment-based configuration | `scafctl run solution -f examples/resolvers/env-config.yaml -r env=production` |
-| [validation.yaml](resolvers/validation.yaml) | Input validation patterns | `scafctl run solution -f examples/resolvers/validation.yaml` |
-| [transform-pipeline.yaml](resolvers/transform-pipeline.yaml) | Data transformation pipeline | `scafctl run solution -f examples/resolvers/transform-pipeline.yaml` |
-| [feature-flags.yaml](resolvers/feature-flags.yaml) | Feature flag patterns | `scafctl run solution -f examples/resolvers/feature-flags.yaml` |
-| [secrets.yaml](resolvers/secrets.yaml) | Secret management (requires secret store) | `scafctl run solution -f examples/resolvers/secrets.yaml` |
-| [identity.yaml](resolvers/identity.yaml) | Authentication identity info (requires auth) | `scafctl run solution -f examples/resolvers/identity.yaml` |
-| [cel-extensions.yaml](resolvers/cel-extensions.yaml) | All custom CEL extension functions | `scafctl run solution -f examples/resolvers/cel-extensions.yaml -o json` |
-| [cel-transforms.yaml](resolvers/cel-transforms.yaml) | Data transformation patterns with CEL | `scafctl run solution -f examples/resolvers/cel-transforms.yaml -o yaml` |
+| [hello-world.yaml](resolvers/hello-world.yaml) | Simplest resolver | `scafctl run resolver -f examples/resolvers/hello-world.yaml` |
+| [parameters.yaml](resolvers/parameters.yaml) | CLI parameters with defaults | `scafctl run resolver -f examples/resolvers/parameters.yaml -r name=Alice` |
+| [dependencies.yaml](resolvers/dependencies.yaml) | Resolver dependencies & phases | `scafctl run resolver -f examples/resolvers/dependencies.yaml` |
+| [env-config.yaml](resolvers/env-config.yaml) | Environment-based configuration | `scafctl run resolver -f examples/resolvers/env-config.yaml -r env=production` |
+| [validation.yaml](resolvers/validation.yaml) | Input validation patterns | `scafctl run resolver -f examples/resolvers/validation.yaml` |
+| [transform-pipeline.yaml](resolvers/transform-pipeline.yaml) | Data transformation pipeline | `scafctl run resolver -f examples/resolvers/transform-pipeline.yaml` |
+| [feature-flags.yaml](resolvers/feature-flags.yaml) | Feature flag patterns | `scafctl run resolver -f examples/resolvers/feature-flags.yaml` |
+| [secrets.yaml](resolvers/secrets.yaml) | Secret management (requires secret store) | `scafctl run resolver -f examples/resolvers/secrets.yaml` |
+| [identity.yaml](resolvers/identity.yaml) | Authentication identity info (requires auth) | `scafctl run resolver -f examples/resolvers/identity.yaml` |
+| [cel-extensions.yaml](resolvers/cel-extensions.yaml) | All custom CEL extension functions | `scafctl run resolver -f examples/resolvers/cel-extensions.yaml -o json` |
+| [cel-transforms.yaml](resolvers/cel-transforms.yaml) | Data transformation patterns with CEL | `scafctl run resolver -f examples/resolvers/cel-transforms.yaml -o yaml` |
 
 ---
 
@@ -181,7 +181,7 @@ Custom plugin development examples.
 
 ### View Output as JSON
 ```bash
-scafctl run solution -f examples/resolvers/hello-world.yaml -o json
+scafctl run resolver -f examples/resolvers/hello-world.yaml -o json
 ```
 
 ### Dry Run Mode
@@ -191,12 +191,12 @@ scafctl run solution -f examples/actions/hello-world.yaml --dry-run
 
 ### Debug Logging
 ```bash
-scafctl run solution -f examples/resolvers/dependencies.yaml -v
+scafctl run resolver -f examples/resolvers/dependencies.yaml -v
 ```
 
 ### Pass Multiple Parameters
 ```bash
-scafctl run solution -f examples/resolvers/parameters.yaml \
+scafctl run resolver -f examples/resolvers/parameters.yaml \
   -r name=Bob \
   -r count=5 \
   -r uppercase=true
@@ -205,13 +205,13 @@ scafctl run solution -f examples/resolvers/parameters.yaml \
 ### Interactive Mode
 ```bash
 # Explore output in a TUI (navigate, search, filter)
-scafctl run solution -f examples/resolvers/dependencies.yaml -i
+scafctl run resolver -f examples/resolvers/dependencies.yaml -i
 ```
 
 ### Filter with CEL Expressions
 ```bash
 # Extract specific values from output
-scafctl run solution -f examples/resolvers/dependencies.yaml -e '_.fullName'
+scafctl run resolver -f examples/resolvers/dependencies.yaml -e '_.fullName'
 ```
 
 ### Snapshots
@@ -237,7 +237,7 @@ scafctl snapshot diff /tmp/snap-a.json /tmp/snap-b.json
 scafctl build solution examples/resolver-demo.yaml --version 1.0.0
 
 # Run by name (no file path needed)
-scafctl run solution resolver-demo
+scafctl run resolver resolver-demo
 
 # List catalog contents
 scafctl catalog list
@@ -253,7 +253,7 @@ scafctl catalog save resolver-demo -o resolver-demo.tar
 scafctl catalog load --input resolver-demo.tar
 
 # Run the imported solution
-scafctl run solution resolver-demo
+scafctl run resolver resolver-demo
 ```
 
 ### Version Management
