@@ -244,6 +244,9 @@ type ActionConfig struct {
 type GlobalAuthConfig struct {
 	// Entra contains Microsoft Entra ID configuration.
 	Entra *EntraAuthConfig `json:"entra,omitempty" yaml:"entra,omitempty" mapstructure:"entra" doc:"Microsoft Entra ID configuration"`
+
+	// GitHub contains GitHub authentication configuration.
+	GitHub *GitHubAuthConfig `json:"github,omitempty" yaml:"github,omitempty" mapstructure:"github" doc:"GitHub authentication configuration"`
 }
 
 // EntraAuthConfig contains Entra-specific configuration.
@@ -256,6 +259,20 @@ type EntraAuthConfig struct {
 	// Use "common" for multi-tenant, "organizations" for work/school only,
 	// or a specific tenant GUID.
 	TenantID string `json:"tenantId,omitempty" yaml:"tenantId,omitempty" mapstructure:"tenantId" doc:"Default Azure tenant ID" example:"common" maxLength:"36"`
+
+	// DefaultScopes are requested during login if not specified on command line.
+	DefaultScopes []string `json:"defaultScopes,omitempty" yaml:"defaultScopes,omitempty" mapstructure:"defaultScopes" doc:"Default OAuth scopes" maxItems:"20"`
+}
+
+// GitHubAuthConfig contains GitHub-specific configuration.
+type GitHubAuthConfig struct {
+	// ClientID overrides the default GitHub OAuth App client ID.
+	// If not set, uses the default scafctl OAuth App client ID.
+	ClientID string `json:"clientId,omitempty" yaml:"clientId,omitempty" mapstructure:"clientId" doc:"GitHub OAuth App client ID" maxLength:"40"`
+
+	// Hostname sets the GitHub hostname for enterprise server (GHES).
+	// Defaults to "github.com".
+	Hostname string `json:"hostname,omitempty" yaml:"hostname,omitempty" mapstructure:"hostname" doc:"GitHub hostname" example:"github.com" maxLength:"253"`
 
 	// DefaultScopes are requested during login if not specified on command line.
 	DefaultScopes []string `json:"defaultScopes,omitempty" yaml:"defaultScopes,omitempty" mapstructure:"defaultScopes" doc:"Default OAuth scopes" maxItems:"20"`

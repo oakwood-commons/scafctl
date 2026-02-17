@@ -10,6 +10,7 @@ import (
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/auth/entra"
+	ghauth "github.com/oakwood-commons/scafctl/pkg/auth/github"
 	authcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/auth"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/build"
 	bundlecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/bundle"
@@ -217,6 +218,24 @@ func Root(opts *RootOptions) *cobra.Command {
 			} else {
 				if regErr := authRegistry.Register(entraHandler); regErr != nil {
 					lgr.V(1).Info("warning: failed to register Entra auth handler", "error", regErr)
+				}
+			}
+
+			// Initialize GitHub auth handler
+			var ghOpts []ghauth.Option
+			if cfg.Auth.GitHub != nil {
+				ghOpts = append(ghOpts, ghauth.WithConfig(&ghauth.Config{
+					ClientID:      cfg.Auth.GitHub.ClientID,
+					Hostname:      cfg.Auth.GitHub.Hostname,
+					DefaultScopes: cfg.Auth.GitHub.DefaultScopes,
+				}))
+			}
+			ghHandler, err := ghauth.New(ghOpts...)
+			if err != nil {
+				lgr.V(1).Info("warning: failed to initialize GitHub auth handler", "error", err)
+			} else {
+				if regErr := authRegistry.Register(ghHandler); regErr != nil {
+					lgr.V(1).Info("warning: failed to register GitHub auth handler", "error", regErr)
 				}
 			}
 			ctx = auth.WithRegistry(ctx, authRegistry)

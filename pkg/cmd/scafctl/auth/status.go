@@ -31,6 +31,7 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 
 			Supported handlers:
 			- entra: Microsoft Entra ID
+			- github: GitHub
 
 			Examples:
 			  # Show all auth status
@@ -38,6 +39,9 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 
 			  # Show Entra auth status
 			  scafctl auth status entra
+
+			  # Show GitHub auth status
+			  scafctl auth status github
 
 			  # Output as JSON
 			  scafctl auth status -o json
@@ -62,67 +66,65 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 			results := make([]map[string]any, 0, len(handlers))
 
 			for _, handlerName := range handlers {
-				switch handlerName {
-				case "entra":
-					handler, err := getEntraHandler(ctx)
-					if err != nil {
-						w.Warningf("Failed to initialize %s: %v", handlerName, err)
-						continue
-					}
-
-					status, err := handler.Status(ctx)
-					if err != nil {
-						w.Warningf("Failed to check %s status: %v", handlerName, err)
-						continue
-					}
-
-					result := map[string]any{
-						"handler":       handlerName,
-						"displayName":   handler.DisplayName(),
-						"authenticated": status.Authenticated,
-					}
-
-					// Add identity type
-					if status.IdentityType != "" {
-						result["identityType"] = string(status.IdentityType)
-					}
-
-					// For service principal/workload identity, show client ID
-					if status.ClientID != "" {
-						result["clientId"] = status.ClientID
-					}
-
-					// For workload identity, show token file path
-					if status.IdentityType == auth.IdentityTypeWorkloadIdentity && status.TokenFile != "" {
-						result["tokenFile"] = status.TokenFile
-					}
-
-					if status.Authenticated && status.Claims != nil {
-						if status.Claims.Email != "" {
-							result["email"] = status.Claims.Email
-						}
-						if status.Claims.Name != "" {
-							result["name"] = status.Claims.Name
-						}
-						if status.TenantID != "" {
-							result["tenantId"] = status.TenantID
-						}
-						if !status.ExpiresAt.IsZero() {
-							result["expiresAt"] = status.ExpiresAt
-						}
-						if !status.LastRefresh.IsZero() {
-							result["lastRefresh"] = status.LastRefresh
-						}
-					}
-
-					if len(status.Scopes) > 0 {
-						result["scopes"] = status.Scopes
-					}
-
-					results = append(results, result)
-				default:
-					w.Warningf("Unknown auth handler: %s", handlerName)
+				handler, err := getHandler(ctx, handlerName)
+				if err != nil {
+					w.Warningf("Failed to initialize %s: %v", handlerName, err)
+					continue
 				}
+
+				status, err := handler.Status(ctx)
+				if err != nil {
+					w.Warningf("Failed to check %s status: %v", handlerName, err)
+					continue
+				}
+
+				result := map[string]any{
+					"handler":       handlerName,
+					"displayName":   handler.DisplayName(),
+					"authenticated": status.Authenticated,
+				}
+
+				// Add identity type
+				if status.IdentityType != "" {
+					result["identityType"] = string(status.IdentityType)
+				}
+
+				// For service principal/workload identity, show client ID
+				if status.ClientID != "" {
+					result["clientId"] = status.ClientID
+				}
+
+				// For workload identity, show token file path
+				if status.IdentityType == auth.IdentityTypeWorkloadIdentity && status.TokenFile != "" {
+					result["tokenFile"] = status.TokenFile
+				}
+
+				if status.Authenticated && status.Claims != nil {
+					if status.Claims.Email != "" {
+						result["email"] = status.Claims.Email
+					}
+					if status.Claims.Name != "" {
+						result["name"] = status.Claims.Name
+					}
+					if status.Claims.Username != "" {
+						result["username"] = status.Claims.Username
+					}
+					if status.TenantID != "" {
+						result["tenantId"] = status.TenantID
+					}
+					if !status.ExpiresAt.IsZero() {
+						result["expiresAt"] = status.ExpiresAt
+					}
+					if !status.LastRefresh.IsZero() {
+						result["lastRefresh"] = status.LastRefresh
+					}
+				}
+
+				if len(status.Scopes) > 0 {
+					result["scopes"] = status.Scopes
+				}
+
+				results = append(results, result)
 			}
 
 			if len(results) == 0 {
