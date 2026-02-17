@@ -27,10 +27,14 @@ func CommandLogout(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comm
 
 			Supported handlers:
 			- entra: Microsoft Entra ID
+			- github: GitHub
 
 			Examples:
 			  # Logout from Entra ID
 			  scafctl auth logout entra
+
+			  # Logout from GitHub
+			  scafctl auth logout github
 		`),
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
@@ -46,7 +50,7 @@ func CommandLogout(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comm
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
-			handler, err := getEntraHandler(ctx)
+			handler, err := getHandler(ctx, handlerName)
 			if err != nil {
 				err = fmt.Errorf("failed to initialize auth handler: %w", err)
 				w.Errorf("%v", err)
@@ -62,7 +66,7 @@ func CommandLogout(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comm
 			}
 
 			if !status.Authenticated {
-				w.Info("Not currently authenticated with Entra ID.")
+				w.Infof("Not currently authenticated with %s.", handler.DisplayName())
 				return nil
 			}
 
@@ -72,7 +76,7 @@ func CommandLogout(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comm
 				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
-			w.Success("Successfully logged out from Entra ID.")
+			w.Successf("Successfully logged out from %s.", handler.DisplayName())
 			return nil
 		},
 	}

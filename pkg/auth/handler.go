@@ -65,6 +65,9 @@ const (
 
 	// FlowWorkloadIdentity is authentication using Azure Workload Identity (Kubernetes).
 	FlowWorkloadIdentity Flow = "workload_identity"
+
+	// FlowPAT is authentication using a personal access token from environment variables.
+	FlowPAT Flow = "pat"
 )
 
 // DefaultMinValidFor is the default minimum validity duration for tokens.
