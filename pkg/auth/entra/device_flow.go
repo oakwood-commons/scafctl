@@ -111,7 +111,7 @@ func (h *Handler) performDeviceCodeFlow(ctx context.Context, opts auth.LoginOpti
 	}
 
 	// Step 4: Store refresh token securely
-	if err := h.storeCredentials(ctx, tenantID, tokenResp, scopes); err != nil {
+	if err := h.storeCredentials(ctx, tenantID, tokenResp, h.config.ClientID, scopes); err != nil {
 		return nil, auth.NewError(HandlerName, "store_credentials", err)
 	}
 

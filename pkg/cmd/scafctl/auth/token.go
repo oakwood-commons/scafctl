@@ -24,8 +24,9 @@ import (
 func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
 	var outputFlags flags.KvxOutputFlags
 	var (
-		scopes      []string
-		minValidFor time.Duration
+		scopes       []string
+		minValidFor  time.Duration
+		forceRefresh bool
 	)
 
 	cmd := &cobra.Command{
@@ -35,26 +36,33 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			Get an access token from an auth handler.
 
 			This command is primarily for debugging and testing. It retrieves
-			a valid access token for the specified scope.
+			a valid access token from the specified handler.
+
+			For handlers that support per-request scopes (e.g., Entra), the --scope
+			flag is required and specifies which resource scope to request.
+
+			For handlers that do NOT support per-request scopes (e.g., GitHub),
+			the --scope flag is not accepted. Scopes for these handlers are fixed
+			at login time. Use 'scafctl auth login <handler> --scope <scope>' to
+			change scopes.
 
 			The token is cached to disk and will be reused if it has sufficient
 			remaining validity for the specified --min-valid-for duration.
 
 			WARNING: The token is sensitive and should not be shared or logged.
 
-			Supported handlers:
-			- entra: Microsoft Entra ID
-			- github: GitHub
-
 			Examples:
-			  # Get a token for Microsoft Graph
+			  # Get a token for Microsoft Graph (Entra - supports per-request scopes)
 			  scafctl auth token entra --scope "https://graph.microsoft.com/.default"
 
-			  # Get a GitHub token
-			  scafctl auth token github --scope "repo"
+			  # Get a GitHub token (no --scope needed, scopes fixed at login)
+			  scafctl auth token github
 
 			  # Get a token that will be valid for at least 5 minutes
 			  scafctl auth token entra --scope "https://graph.microsoft.com/.default" --min-valid-for 5m
+
+			  # Force a fresh token, bypassing the cache
+			  scafctl auth token entra --scope "https://graph.microsoft.com/.default" --force-refresh
 
 			  # Output as JSON (includes full token)
 			  scafctl auth token entra --scope "https://management.azure.com/.default" -o json
@@ -66,24 +74,11 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			w := writer.MustFromContext(ctx)
 			handlerName := args[0]
 
-			// Validate handler name
-			if !IsSupportedHandler(handlerName) {
-				err := fmt.Errorf("unknown auth handler: %s (supported: %v)", handlerName, SupportedHandlers())
+			// Validate handler name against registry
+			if err := validateHandlerName(ctx, handlerName); err != nil {
 				w.Errorf("%v", err)
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
-
-			if len(scopes) == 0 {
-				err := fmt.Errorf("--scope is required")
-				w.Errorf("%v", err)
-				return exitcode.WithCode(err, exitcode.InvalidInput)
-			}
-
-			// Sort scopes for deterministic cache key
-			sorted := make([]string, len(scopes))
-			copy(sorted, scopes)
-			sort.Strings(sorted)
-			scope := strings.Join(sorted, " ")
 
 			handler, err := getHandler(ctx, handlerName)
 			if err != nil {
@@ -92,9 +87,39 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
+			caps := handler.Capabilities()
+
+			// Validate --scope against capabilities
+			if len(scopes) > 0 && !auth.HasCapability(caps, auth.CapScopesOnTokenRequest) {
+				err := fmt.Errorf(
+					"the %q auth handler does not support per-request scopes; "+
+						"scopes are fixed at login time. Use 'scafctl auth login %s --scope <scope>' to change scopes",
+					handlerName, handlerName,
+				)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
+
+			// Scope is required only for handlers that support per-request scopes
+			if len(scopes) == 0 && auth.HasCapability(caps, auth.CapScopesOnTokenRequest) {
+				err := fmt.Errorf("--scope is required for the %q auth handler", handlerName)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
+
+			// Sort scopes for deterministic cache key
+			var scope string
+			if len(scopes) > 0 {
+				sorted := make([]string, len(scopes))
+				copy(sorted, scopes)
+				sort.Strings(sorted)
+				scope = strings.Join(sorted, " ")
+			}
+
 			token, err := handler.GetToken(ctx, auth.TokenOptions{
-				Scope:       scope,
-				MinValidFor: minValidFor,
+				Scope:        scope,
+				MinValidFor:  minValidFor,
+				ForceRefresh: forceRefresh,
 			})
 			if err != nil {
 				err = fmt.Errorf("failed to get token: %w", err)
@@ -143,8 +168,9 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 		},
 	}
 
-	cmd.Flags().StringSliceVar(&scopes, "scope", nil, "OAuth scope(s) for the token (required, can specify multiple)")
+	cmd.Flags().StringSliceVar(&scopes, "scope", nil, "OAuth scope(s) for the token (required for handlers with scopes_on_token_request capability)")
 	cmd.Flags().DurationVar(&minValidFor, "min-valid-for", auth.DefaultMinValidFor, "Minimum time the token should be valid for")
+	cmd.Flags().BoolVarP(&forceRefresh, "force-refresh", "f", false, "Force acquiring a new token, ignoring any cached token")
 	flags.AddKvxOutputFlagsToStruct(cmd, &outputFlags)
 
 	return cmd

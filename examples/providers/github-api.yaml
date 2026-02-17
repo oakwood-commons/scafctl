@@ -1,0 +1,13 @@
+# HTTP provider input - GitHub API call with authentication
+#
+# Prerequisites:
+#   - Run `scafctl auth login github` to authenticate first
+#
+# Usage:
+#   scafctl run provider http --input @examples/providers/github-api.yaml
+url: https://api.github.com/user
+method: GET
+headers:
+  Accept: application/json
+auth: github
+scope: "read:user"

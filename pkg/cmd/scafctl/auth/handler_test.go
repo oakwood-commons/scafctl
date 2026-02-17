@@ -27,28 +27,92 @@ func TestWithTestHandler(t *testing.T) {
 	assert.Equal(t, "test", h.Name())
 }
 
-func TestIsSupportedHandler(t *testing.T) {
-	tests := []struct {
-		name      string
-		handler   string
-		supported bool
-	}{
-		{"entra is supported", "entra", true},
-		{"unknown is not supported", "unknown", false},
-		{"empty is not supported", "", false},
-		{"azure is not supported", "azure", false},
-	}
+func TestIsHandlerRegistered_WithRegistry(t *testing.T) {
+	registry := auth.NewRegistry()
+	mock := auth.NewMockHandler("entra")
+	require.NoError(t, registry.Register(mock))
+	ctx := auth.WithRegistry(context.Background(), registry)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.supported, IsSupportedHandler(tt.handler))
-		})
-	}
+	assert.True(t, isHandlerRegistered(ctx, "entra"))
+	assert.False(t, isHandlerRegistered(ctx, "unknown"))
 }
 
-func TestSupportedHandlers(t *testing.T) {
-	handlers := SupportedHandlers()
+func TestIsHandlerRegistered_WithTestHandler(t *testing.T) {
+	mock := auth.NewMockHandler("test")
+	ctx := withTestHandler(context.Background(), mock)
+
+	// Test-injected handler matches any name
+	assert.True(t, isHandlerRegistered(ctx, "test"))
+	assert.True(t, isHandlerRegistered(ctx, "anything"))
+}
+
+func TestIsHandlerRegistered_NoContext(t *testing.T) {
+	ctx := context.Background()
+	assert.False(t, isHandlerRegistered(ctx, "entra"))
+}
+
+func TestListHandlers_WithRegistry(t *testing.T) {
+	registry := auth.NewRegistry()
+	mockEntra := auth.NewMockHandler("entra")
+	mockGH := auth.NewMockHandler("github")
+	require.NoError(t, registry.Register(mockEntra))
+	require.NoError(t, registry.Register(mockGH))
+	ctx := auth.WithRegistry(context.Background(), registry)
+
+	handlers := listHandlers(ctx)
 	assert.Contains(t, handlers, "entra")
 	assert.Contains(t, handlers, "github")
 	assert.Len(t, handlers, 2)
+}
+
+func TestListHandlers_WithTestHandler(t *testing.T) {
+	mock := auth.NewMockHandler("test")
+	ctx := withTestHandler(context.Background(), mock)
+
+	handlers := listHandlers(ctx)
+	assert.Equal(t, []string{"test"}, handlers)
+}
+
+func TestValidateHandlerName(t *testing.T) {
+	registry := auth.NewRegistry()
+	mock := auth.NewMockHandler("entra")
+	require.NoError(t, registry.Register(mock))
+	ctx := auth.WithRegistry(context.Background(), registry)
+
+	assert.NoError(t, validateHandlerName(ctx, "entra"))
+
+	err := validateHandlerName(ctx, "unknown")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown auth handler")
+	assert.Contains(t, err.Error(), "entra")
+}
+
+func TestGetHandler_FromRegistry(t *testing.T) {
+	registry := auth.NewRegistry()
+	mock := auth.NewMockHandler("entra")
+	require.NoError(t, registry.Register(mock))
+	ctx := auth.WithRegistry(context.Background(), registry)
+
+	handler, err := getHandler(ctx, "entra")
+	require.NoError(t, err)
+	assert.Equal(t, "entra", handler.Name())
+
+	_, err = getHandler(ctx, "unknown")
+	assert.Error(t, err)
+}
+
+func TestGetHandler_FromTestContext(t *testing.T) {
+	mock := auth.NewMockHandler("test")
+	ctx := withTestHandler(context.Background(), mock)
+
+	handler, err := getHandler(ctx, "test")
+	require.NoError(t, err)
+	assert.Equal(t, "test", handler.Name())
+}
+
+func TestGetHandler_NoContext(t *testing.T) {
+	ctx := context.Background()
+	_, err := getHandler(ctx, "entra")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no auth registry in context")
 }

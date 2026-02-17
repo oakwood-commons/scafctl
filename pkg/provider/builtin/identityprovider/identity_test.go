@@ -233,6 +233,7 @@ func TestIdentityProvider_ExecuteList(t *testing.T) {
 	// Setup multiple handlers
 	entraHandler := auth.NewMockHandler("entra")
 	entraHandler.DisplayNameValue = "Microsoft Entra ID"
+	entraHandler.CapabilitiesValue = []auth.Capability{auth.CapScopesOnLogin, auth.CapScopesOnTokenRequest, auth.CapTenantID}
 	entraHandler.StatusResult = &auth.Status{
 		Authenticated: true,
 		Claims:        &auth.Claims{Email: "user@example.com"},
@@ -240,6 +241,7 @@ func TestIdentityProvider_ExecuteList(t *testing.T) {
 
 	githubHandler := auth.NewMockHandler("github")
 	githubHandler.DisplayNameValue = "GitHub"
+	githubHandler.CapabilitiesValue = []auth.Capability{auth.CapScopesOnLogin, auth.CapHostname}
 	githubHandler.StatusResult = &auth.Status{Authenticated: false}
 
 	registry := auth.NewRegistry()
@@ -273,6 +275,12 @@ func TestIdentityProvider_ExecuteList(t *testing.T) {
 	assert.Equal(t, "Microsoft Entra ID", entraInfo["displayName"])
 	assert.Equal(t, true, entraInfo["authenticated"])
 	assert.Equal(t, "user@example.com", entraInfo["identity"])
+
+	// Verify capabilities are included in handler info
+	entraCapabilities, ok := entraInfo["capabilities"].([]string)
+	require.True(t, ok)
+	assert.Contains(t, entraCapabilities, string(auth.CapScopesOnTokenRequest))
+	assert.Contains(t, entraCapabilities, string(auth.CapTenantID))
 }
 
 func TestIdentityProvider_ExecuteDryRun(t *testing.T) {

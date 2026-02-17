@@ -37,14 +37,22 @@ Requiring users to register their own OAuth App before login creates unacceptabl
 
 ### Default Scopes
 
-**Decision**: Default to `repo` and `read:user`.
+**Decision**: Default to `gist`, `read:org`, `repo`, and `workflow` (matching the `gh` CLI).
 
 | Scope | Purpose |
-|-------|---------|
-| `read:user` | Verify identity, populate claims (username, email, name) |
+|-------|--------|
+| `gist` | Create and manage gists |
+| `read:org` | Read organization membership and teams |
 | `repo` | Access repositories (catalog, solutions, templates) |
+| `workflow` | Update GitHub Actions workflows |
 
-**Rationale**: `gh` CLI requests `repo`, `read:org`, `gist`, `workflow` by default but that's broader than needed. `repo` + `read:user` covers the primary use cases. Users can add more via `--scope` at login time.
+**Rationale**: Matching the `gh` CLI defaults ensures a consistent experience and avoids permission gaps when using scafctl alongside `gh`. Users can customize via `--scope` at login time.
+
+> **Note:** GitHub's OAuth token refresh endpoint does not accept a `scope`
+> parameter — scopes are fixed at login time. The GitHub handler therefore
+> declares `CapScopesOnLogin` but NOT `CapScopesOnTokenRequest`. Running
+> `scafctl auth token github --scope ...` will return an error. See the
+> [auth design doc](auth.md#handler-capabilities) for more on capabilities.
 
 ### Token Storage
 
@@ -79,7 +87,7 @@ All endpoints accept and return JSON when `Accept: application/json` is set.
 
 ```
 1. POST /login/device/code
-   Body: client_id=<id>&scope=repo read:user
+   Body: client_id=<id>&scope=gist read:org repo workflow
    Response: { device_code, user_code, verification_uri, expires_in, interval }
 
 2. Display: "Enter code ABCD-1234 at https://github.com/login/device"
@@ -131,41 +139,43 @@ pkg/auth/github/
 
 ## Implementation Tasks
 
-### Phase 1: Core Handler (Tasks 1-6)
+> **Status**: All phases complete. Implementation merged.
 
-| # | Task | Files | Description |
-|---|------|-------|-------------|
-| 1 | Create handler skeleton | `config.go`, `handler.go` | `Config` struct with defaults, `Handler` struct implementing `auth.Handler` interface, `New()` constructor with options pattern |
-| 2 | Implement HTTP client abstraction | `http.go` | Testable `HTTPClient` interface matching Entra pattern |
-| 3 | Implement device code flow | `device_flow.go` | Request device code, poll for token, handle `slow_down`/`authorization_pending`/`expired_token` errors |
-| 4 | Implement PAT flow | `pat.go` | Read `GITHUB_TOKEN`/`GH_TOKEN` from env, validate via API, detect credentials |
-| 5 | Implement token cache | `cache.go`, `token.go` | Disk-based token caching with `scafctl.auth.github.token.<scope-hash>` naming, refresh token support |
-| 6 | Implement claims extraction | `claims.go` | Call `/user` endpoint, map to `auth.Claims` (Subject=login, Email, Name, ObjectID=user ID) |
+### Phase 1: Core Handler (Tasks 1-6) — ✅ Complete
 
-### Phase 2: Wiring (Tasks 7-11)
+| # | Task | Files | Status |
+|---|------|-------|--------|
+| 1 | Create handler skeleton | `config.go`, `handler.go` | ✅ |
+| 2 | Implement HTTP client abstraction | `http.go` | ✅ |
+| 3 | Implement device code flow | `device_flow.go` | ✅ |
+| 4 | Implement PAT flow | `pat.go` | ✅ |
+| 5 | Implement token cache | `cache.go`, `token.go` | ✅ |
+| 6 | Implement claims extraction | `claims.go` | ✅ |
 
-| # | Task | Files | Description |
-|---|------|-------|-------------|
-| 7 | Add `FlowPAT` flow constant | `pkg/auth/handler.go` | Add `FlowPAT Flow = "pat"` |
-| 8 | Add GitHub config to global config | `pkg/config/types.go` | Add `GitHub *GitHubAuthConfig` to `GlobalAuthConfig` |
-| 9 | Wire into root command | `pkg/cmd/scafctl/root.go` | Instantiate and register GitHub handler alongside Entra |
-| 10 | Wire into CLI auth commands | `pkg/cmd/scafctl/auth/handler.go` | Add `"github"` to `SupportedHandlers()`, add `getGitHubHandler()` |
-| 11 | Update login command | `pkg/cmd/scafctl/auth/login.go` | Route `github` handler, add `--hostname` flag, update help text and examples |
+### Phase 2: Wiring (Tasks 7-11) — ✅ Complete
 
-### Phase 3: Testing (Tasks 12-13)
+| # | Task | Files | Status |
+|---|------|-------|--------|
+| 7 | Add `FlowPAT` flow constant | `pkg/auth/handler.go` | ✅ |
+| 8 | Add GitHub config to global config | `pkg/config/types.go` | ✅ |
+| 9 | Wire into root command | `pkg/cmd/scafctl/root.go` | ✅ |
+| 10 | Wire into CLI auth commands | `pkg/cmd/scafctl/auth/handler.go` | ✅ |
+| 11 | Update login command | `pkg/cmd/scafctl/auth/login.go` | ✅ |
 
-| # | Task | Files | Description |
-|---|------|-------|-------------|
-| 12 | Write unit tests | `pkg/auth/github/*_test.go` | Mock HTTP for all flows, test cache, test claims, test config validation |
-| 13 | Write CLI integration tests | `tests/integration/cli_test.go` | Add `auth login github`, `auth status`, `auth logout github` |
+### Phase 3: Testing (Tasks 12-13) — ✅ Complete
 
-### Phase 4: Documentation (Tasks 14-16)
+| # | Task | Files | Status |
+|---|------|-------|--------|
+| 12 | Write unit tests | `pkg/auth/github/*_test.go` | ✅ (31 tests) |
+| 13 | Write CLI integration tests | `tests/integration/cli_test.go` | ✅ |
 
-| # | Task | Files | Description |
-|---|------|-------|-------------|
-| 14 | Update auth design doc | `docs/design/auth.md` | Update handler table (mark `github` as implemented), add GitHub-specific sections |
-| 15 | Create auth tutorial | `docs/tutorials/github-auth-tutorial.md` | Step-by-step guide for GitHub authentication |
-| 16 | Add examples | `examples/` | Example configs using `authProvider: github` |
+### Phase 4: Documentation (Tasks 14-16) — ✅ Complete
+
+| # | Task | Files | Status |
+|---|------|-------|--------|
+| 14 | Update auth design doc | `docs/design/auth.md` | ✅ |
+| 15 | Update auth tutorial | `docs/tutorials/auth-tutorial.md` | ✅ |
+| 16 | Add examples | `examples/` | ✅ |
 
 ---
 
@@ -188,7 +198,7 @@ func DefaultConfig() *Config {
     return &Config{
         ClientID:      "Ov23li6xn492GhPmt4YG",
         Hostname:      "github.com",
-        DefaultScopes: []string{"repo", "read:user"},
+        DefaultScopes: []string{"gist", "read:org", "repo", "workflow"},
     }
 }
 ```
@@ -287,7 +297,7 @@ scafctl auth status
 # Status: Authenticated
 # Identity: octocat
 # Hostname: github.com
-# Scopes: repo, read:user
+# Scopes: gist, read:org, repo, workflow
 ```
 
 ### Token
@@ -317,9 +327,9 @@ scafctl auth logout github
 
 ---
 
-## Suggested Implementation Order
+## Implementation Order (Completed)
 
-Start with **Phase 1 (tasks 1-6)** since they're the core and self-contained. Tasks 1-2 are prerequisites; tasks 3-6 can progress in parallel after that. Then **Phase 2 (tasks 7-11)** for wiring, **Phase 3 (tasks 12-13)** for tests, and **Phase 4 (tasks 14-16)** for docs.
+All phases were implemented in order: **Phase 1 (core handler)** → **Phase 2 (CLI wiring)** → **Phase 3 (testing)** → **Phase 4 (docs & examples)**.
 
 ---
 

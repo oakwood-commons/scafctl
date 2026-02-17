@@ -37,7 +37,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		ClientID:          DefaultClientID,
 		Hostname:          DefaultHostname,
-		DefaultScopes:     []string{"repo", "read:user"},
+		DefaultScopes:     []string{"gist", "read:org", "repo", "workflow"},
 		MinPollInterval:   5 * time.Second,
 		SlowDownIncrement: 5 * time.Second,
 	}

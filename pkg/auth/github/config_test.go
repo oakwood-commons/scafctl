@@ -15,7 +15,7 @@ func TestDefaultConfig(t *testing.T) {
 
 	assert.Equal(t, DefaultClientID, cfg.ClientID)
 	assert.Equal(t, DefaultHostname, cfg.Hostname)
-	assert.Equal(t, []string{"repo", "read:user"}, cfg.DefaultScopes)
+	assert.Equal(t, []string{"gist", "read:org", "repo", "workflow"}, cfg.DefaultScopes)
 	assert.Equal(t, 5*time.Second, cfg.MinPollInterval)
 	assert.Equal(t, 5*time.Second, cfg.SlowDownIncrement)
 }

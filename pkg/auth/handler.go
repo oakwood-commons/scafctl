@@ -48,6 +48,11 @@ type Handler interface {
 
 	// SupportedFlows returns the authentication flows this handler supports.
 	SupportedFlows() []Flow
+
+	// Capabilities returns the set of capabilities this handler supports.
+	// Commands use capabilities to dynamically determine which flags and
+	// validation rules apply for a given handler.
+	Capabilities() []Capability
 }
 
 // Flow represents an authentication flow type.

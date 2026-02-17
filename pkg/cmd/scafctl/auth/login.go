@@ -110,9 +110,40 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 			w := writer.MustFromContext(ctx)
 			handlerName := args[0]
 
-			// Validate handler name
-			if !IsSupportedHandler(handlerName) {
-				err := fmt.Errorf("unknown auth handler: %s (supported: %v)", handlerName, SupportedHandlers())
+			// Validate handler name against registry
+			if err := validateHandlerName(ctx, handlerName); err != nil {
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
+
+			// Get handler to check capabilities
+			handler, err := getHandler(ctx, handlerName)
+			if err != nil {
+				err = fmt.Errorf("failed to initialize auth handler: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.GeneralError)
+			}
+
+			caps := handler.Capabilities()
+
+			// Validate capability-gated flags
+			if tenantID != "" && !auth.HasCapability(caps, auth.CapTenantID) {
+				err := fmt.Errorf("--tenant is not supported by the %q auth handler", handlerName)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
+			if hostname != "" && !auth.HasCapability(caps, auth.CapHostname) {
+				err := fmt.Errorf("--hostname is not supported by the %q auth handler", handlerName)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
+			if federatedToken != "" && !auth.HasCapability(caps, auth.CapFederatedToken) {
+				err := fmt.Errorf("--federated-token is not supported by the %q auth handler", handlerName)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
+			if len(scopes) > 0 && !auth.HasCapability(caps, auth.CapScopesOnLogin) {
+				err := fmt.Errorf("--scope is not supported at login time by the %q auth handler", handlerName)
 				w.Errorf("%v", err)
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
@@ -134,21 +165,23 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 		},
 	}
 
-	cmd.Flags().StringVar(&tenantID, "tenant", "", "Azure tenant ID (overrides config, Entra only)")
+	cmd.Flags().StringVar(&tenantID, "tenant", "", "Azure tenant ID (overrides config, requires tenant_id capability)")
 	cmd.Flags().StringVar(&clientID, "client-id", "", "OAuth application/client ID (overrides default)")
-	cmd.Flags().StringVar(&hostname, "hostname", "", "GitHub hostname for GHES (GitHub only, e.g. github.example.com)")
+	cmd.Flags().StringVar(&hostname, "hostname", "", "Hostname for enterprise/self-hosted instances (requires hostname capability)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 5*time.Minute, "Timeout for authentication flow")
 	cmd.Flags().StringVar(&flowStr, "flow", "", "Authentication flow (handler-specific)")
-	cmd.Flags().StringVar(&federatedToken, "federated-token", "", "Federated token for Entra workload identity (sets AZURE_FEDERATED_TOKEN)")
-	cmd.Flags().StringSliceVar(&scopes, "scope", nil, "OAuth scopes to request during login")
+	cmd.Flags().StringVar(&federatedToken, "federated-token", "", "Federated token for workload identity (requires federated_token capability)")
+	cmd.Flags().StringSliceVar(&scopes, "scope", nil, "OAuth scopes to request during login (requires scopes_on_login capability)")
 
 	return cmd
 }
 
 // loginGitHub handles the login flow for the GitHub auth handler.
 func loginGitHub(ctx context.Context, w *writer.Writer, flow auth.Flow, hostname, clientID string, timeout time.Duration, scopes []string) error {
-	// Auto-detect PAT if env vars are set and no explicit flow
-	if flow == "" && ghauth.HasPATCredentials() {
+	// Auto-detect PAT if env vars are set and no explicit flow.
+	// Skip auto-detection when user provides --scope flags, since scopes
+	// only apply to the device code flow (PAT scopes are fixed at creation).
+	if flow == "" && ghauth.HasPATCredentials() && len(scopes) == 0 {
 		flow = auth.FlowPAT
 		w.Info("Detected GitHub token in environment variables")
 	}

@@ -506,6 +506,89 @@ func TestIntegration_TokenRefresh_UsesClientIDFromMetadata(t *testing.T) {
 		"token refresh should use the client_id stored at login time, not the current config")
 }
 
+func TestIntegration_TokenRefresh_PreservesClientIDAfterRotation(t *testing.T) {
+	server := newMockEntraServer(t)
+	defer server.Close()
+
+	// First refresh: rotates the refresh token (new-refresh-token != existing-refresh-token)
+	server.AddTokenResponse(http.StatusOK, map[string]any{
+		"access_token":  "access-token-1",
+		"refresh_token": "rotated-refresh-token",
+		"token_type":    "Bearer",
+		"expires_in":    3600,
+		"scope":         "https://graph.microsoft.com/.default",
+	})
+
+	// Second refresh: uses the rotated refresh token
+	server.AddTokenResponse(http.StatusOK, map[string]any{
+		"access_token":  "access-token-2",
+		"refresh_token": "rotated-refresh-token-2",
+		"token_type":    "Bearer",
+		"expires_in":    3600,
+		"scope":         "https://graph.microsoft.com/.default",
+	})
+
+	store := secrets.NewMockStore()
+	ctx := context.Background()
+
+	// Pre-populate with existing refresh token
+	err := store.Set(ctx, SecretKeyRefreshToken, []byte("existing-refresh-token"))
+	require.NoError(t, err)
+
+	// Metadata was stored during login with a DIFFERENT client ID than the handler config
+	metadata := &TokenMetadata{
+		Claims:                &auth.Claims{Subject: "test-user"},
+		RefreshTokenExpiresAt: time.Now().Add(24 * time.Hour),
+		TenantID:              "test-tenant",
+		ClientID:              "login-client-id",
+	}
+	metadataBytes, _ := json.Marshal(metadata)
+	err = store.Set(ctx, SecretKeyMetadata, metadataBytes)
+	require.NoError(t, err)
+
+	// Handler config has a DIFFERENT client ID
+	cfg := &Config{
+		ClientID:  "config-client-id",
+		TenantID:  "test-tenant",
+		Authority: server.URL(),
+	}
+
+	handler, err := New(
+		WithConfig(cfg),
+		WithSecretStore(store),
+	)
+	require.NoError(t, err)
+
+	// First GetToken: triggers refresh + rotation
+	token, err := handler.GetToken(ctx, auth.TokenOptions{
+		Scope: "https://graph.microsoft.com/.default",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "access-token-1", token.AccessToken)
+
+	// Verify first request used the login-time client ID
+	assert.Equal(t, "login-client-id", server.lastTokenRequest["client_id"],
+		"first refresh should use login-time client_id")
+
+	// Verify metadata still has the login-time client ID after rotation
+	updatedMetadata, err := handler.loadMetadata(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "login-client-id", updatedMetadata.ClientID,
+		"metadata should preserve login-time client_id after rotation")
+
+	// Second GetToken with ForceRefresh: should STILL use login-time client ID
+	token, err = handler.GetToken(ctx, auth.TokenOptions{
+		Scope:        "https://graph.microsoft.com/.default",
+		ForceRefresh: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "access-token-2", token.AccessToken)
+
+	// The second refresh request must also use the login-time client ID
+	assert.Equal(t, "login-client-id", server.lastTokenRequest["client_id"],
+		"second refresh after rotation should still use login-time client_id, not config client_id")
+}
+
 func TestIntegration_TokenRefresh_FailsWithoutClientIDInMetadata(t *testing.T) {
 	server := newMockEntraServer(t)
 	defer server.Close()
