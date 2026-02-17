@@ -5,6 +5,8 @@ package auth
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/MakeNowJust/heredoc/v2"
@@ -22,7 +24,7 @@ import (
 func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
 	var outputFlags flags.KvxOutputFlags
 	var (
-		scope       string
+		scopes      []string
 		minValidFor time.Duration
 	)
 
@@ -42,10 +44,14 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 
 			Supported handlers:
 			- entra: Microsoft Entra ID
+			- github: GitHub
 
 			Examples:
 			  # Get a token for Microsoft Graph
 			  scafctl auth token entra --scope "https://graph.microsoft.com/.default"
+
+			  # Get a GitHub token
+			  scafctl auth token github --scope "repo"
 
 			  # Get a token that will be valid for at least 5 minutes
 			  scafctl auth token entra --scope "https://graph.microsoft.com/.default" --min-valid-for 5m
@@ -67,13 +73,19 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
-			if scope == "" {
+			if len(scopes) == 0 {
 				err := fmt.Errorf("--scope is required")
 				w.Errorf("%v", err)
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
-			handler, err := getEntraHandler(ctx)
+			// Sort scopes for deterministic cache key
+			sorted := make([]string, len(scopes))
+			copy(sorted, scopes)
+			sort.Strings(sorted)
+			scope := strings.Join(sorted, " ")
+
+			handler, err := getHandler(ctx, handlerName)
 			if err != nil {
 				err = fmt.Errorf("failed to initialize auth handler: %w", err)
 				w.Errorf("%v", err)
@@ -131,9 +143,8 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 		},
 	}
 
-	cmd.Flags().StringVar(&scope, "scope", "", "OAuth scope for the token (required)")
+	cmd.Flags().StringSliceVar(&scopes, "scope", nil, "OAuth scope(s) for the token (required, can specify multiple)")
 	cmd.Flags().DurationVar(&minValidFor, "min-valid-for", auth.DefaultMinValidFor, "Minimum time the token should be valid for")
-	_ = cmd.MarkFlagRequired("scope")
 	flags.AddKvxOutputFlagsToStruct(cmd, &outputFlags)
 
 	return cmd

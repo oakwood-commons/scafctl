@@ -49,5 +49,6 @@ func TestIsSupportedHandler(t *testing.T) {
 func TestSupportedHandlers(t *testing.T) {
 	handlers := SupportedHandlers()
 	assert.Contains(t, handlers, "entra")
-	assert.Len(t, handlers, 1)
+	assert.Contains(t, handlers, "github")
+	assert.Len(t, handlers, 2)
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/auth/entra"
+	ghauth "github.com/oakwood-commons/scafctl/pkg/auth/github"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 )
 
@@ -55,13 +56,12 @@ func getEntraHandler(ctx context.Context) (auth.Handler, error) {
 
 // getEntraHandlerWithOverrides creates an Entra handler with optional tenant and client ID overrides.
 // The flags take precedence over config.
-func getEntraHandlerWithOverrides(ctx context.Context, tenantOverride, clientIDOverride string) (auth.Handler, error) {
+func getEntraHandlerWithOverrides(ctx context.Context, tenantOverride, clientIDOverride string) (auth.Handler, error) { //nolint:dupl // Entra and GitHub handlers have intentionally similar structure but different types
 	// Check for test-injected handler
 	if h := handlerFromContext(ctx); h != nil {
 		return h, nil
 	}
 
-	// Build config from context and apply overrides
 	entraCfg := &entra.Config{}
 	if cfg := config.FromContext(ctx); cfg != nil && cfg.Auth.Entra != nil {
 		entraCfg.ClientID = cfg.Auth.Entra.ClientID
@@ -69,13 +69,8 @@ func getEntraHandlerWithOverrides(ctx context.Context, tenantOverride, clientIDO
 		entraCfg.DefaultScopes = cfg.Auth.Entra.DefaultScopes
 	}
 
-	// Flags override config
-	if tenantOverride != "" {
-		entraCfg.TenantID = tenantOverride
-	}
-	if clientIDOverride != "" {
-		entraCfg.ClientID = clientIDOverride
-	}
+	applyOverride(&entraCfg.TenantID, tenantOverride)
+	applyOverride(&entraCfg.ClientID, clientIDOverride)
 
 	var opts []entra.Option
 	if entraCfg.ClientID != "" || entraCfg.TenantID != "" || len(entraCfg.DefaultScopes) > 0 {
@@ -87,7 +82,7 @@ func getEntraHandlerWithOverrides(ctx context.Context, tenantOverride, clientIDO
 
 // SupportedHandlers returns the list of supported auth handler names.
 func SupportedHandlers() []string {
-	return []string{"entra"}
+	return []string{"entra", "github"}
 }
 
 // IsSupportedHandler returns true if the handler name is supported.
@@ -98,4 +93,71 @@ func IsSupportedHandler(name string) bool {
 		}
 	}
 	return false
+}
+
+// getGitHubHandler creates or retrieves a GitHub handler.
+// If a handler was injected via context (for testing), returns that.
+// Otherwise creates a new handler with configuration from context.
+func getGitHubHandler(ctx context.Context) (auth.Handler, error) {
+	// Check for test-injected handler
+	if h := handlerFromContext(ctx); h != nil {
+		return h, nil
+	}
+
+	// Build options from config
+	var opts []ghauth.Option
+	if cfg := config.FromContext(ctx); cfg != nil && cfg.Auth.GitHub != nil {
+		opts = append(opts, ghauth.WithConfig(&ghauth.Config{
+			ClientID:      cfg.Auth.GitHub.ClientID,
+			Hostname:      cfg.Auth.GitHub.Hostname,
+			DefaultScopes: cfg.Auth.GitHub.DefaultScopes,
+		}))
+	}
+
+	return ghauth.New(opts...)
+}
+
+// getGitHubHandlerWithOverrides creates a GitHub handler with optional hostname and client ID overrides.
+// The flags take precedence over config.
+func getGitHubHandlerWithOverrides(ctx context.Context, hostnameOverride, clientIDOverride string) (auth.Handler, error) { //nolint:dupl // Entra and GitHub handlers have intentionally similar structure but different types
+	// Check for test-injected handler
+	if h := handlerFromContext(ctx); h != nil {
+		return h, nil
+	}
+
+	ghCfg := &ghauth.Config{}
+	if cfg := config.FromContext(ctx); cfg != nil && cfg.Auth.GitHub != nil {
+		ghCfg.ClientID = cfg.Auth.GitHub.ClientID
+		ghCfg.Hostname = cfg.Auth.GitHub.Hostname
+		ghCfg.DefaultScopes = cfg.Auth.GitHub.DefaultScopes
+	}
+
+	applyOverride(&ghCfg.Hostname, hostnameOverride)
+	applyOverride(&ghCfg.ClientID, clientIDOverride)
+
+	var opts []ghauth.Option
+	if ghCfg.ClientID != "" || ghCfg.Hostname != "" || len(ghCfg.DefaultScopes) > 0 {
+		opts = append(opts, ghauth.WithConfig(ghCfg))
+	}
+
+	return ghauth.New(opts...)
+}
+
+// applyOverride sets the target to the override value if it is non-empty.
+func applyOverride(target *string, override string) {
+	if override != "" {
+		*target = override
+	}
+}
+
+// getHandler creates a handler for the given handler name.
+func getHandler(ctx context.Context, handlerName string) (auth.Handler, error) {
+	switch handlerName {
+	case "entra":
+		return getEntraHandler(ctx)
+	case "github":
+		return getGitHubHandler(ctx)
+	default:
+		return nil, auth.ErrHandlerNotFound
+	}
 }
