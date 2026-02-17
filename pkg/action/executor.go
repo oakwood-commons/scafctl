@@ -13,6 +13,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
+	"github.com/oakwood-commons/scafctl/pkg/terminal"
 )
 
 // Executor runs actions in dependency order with support for parallel execution,
@@ -41,6 +42,10 @@ type Executor struct {
 
 	// workflowResultSchemaMode is the workflow-level default for result schema validation
 	workflowResultSchemaMode ResultSchemaMode
+
+	// ioStreams provides terminal IO for providers that support streaming output.
+	// When set, providers can write output directly to the terminal in real-time.
+	ioStreams *provider.IOStreams
 }
 
 // ExecutorOption configures the executor.
@@ -86,6 +91,16 @@ func WithGracePeriod(d time.Duration) ExecutorOption {
 func WithDefaultTimeout(d time.Duration) ExecutorOption {
 	return func(e *Executor) {
 		e.defaultTimeout = d
+	}
+}
+
+// WithIOStreams sets the terminal IO streams for provider output streaming.
+// When set, providers that support streaming (e.g., exec) can write output
+// directly to the terminal in real-time. For parallel actions, each action
+// gets a prefixed writer to attribute output clearly.
+func WithIOStreams(streams *provider.IOStreams) ExecutorOption {
+	return func(e *Executor) {
+		e.ioStreams = streams
 	}
 }
 
@@ -393,6 +408,12 @@ func (e *Executor) executePhase(ctx context.Context, graph *Graph, actionNames [
 		return nil
 	}
 
+	// Determine if this is a parallel phase (multiple actions)
+	isParallel := len(actionsToRun) > 1
+
+	// Build per-action IOStreams for parallel phases using PrefixedWriter
+	actionIOStreams := e.buildActionIOStreams(actionsToRun, isParallel)
+
 	// Determine concurrency limit
 	concurrency := len(actionsToRun)
 	if e.maxConcurrency > 0 && concurrency > e.maxConcurrency {
@@ -424,8 +445,14 @@ func (e *Executor) executePhase(ctx context.Context, graph *Graph, actionNames [
 				return
 			}
 
+			// Inject per-action IOStreams into context
+			actionCtx := ctx
+			if streams, ok := actionIOStreams[actionName]; ok {
+				actionCtx = provider.WithIOStreams(ctx, streams)
+			}
+
 			// Execute the action
-			err := e.executeAction(ctx, graph, actionName)
+			err := e.executeAction(actionCtx, graph, actionName)
 			if err != nil {
 				errChan <- fmt.Errorf("action %q: %w", actionName, err)
 			}
@@ -447,6 +474,30 @@ func (e *Executor) executePhase(ctx context.Context, graph *Graph, actionNames [
 	}
 
 	return nil
+}
+
+// buildActionIOStreams creates per-action IO streams. For parallel phases (multiple actions),
+// each action gets a PrefixedWriter so output is clearly attributed. For single-action
+// phases, the raw IOStreams are used directly for clean, unprefixed output.
+func (e *Executor) buildActionIOStreams(actionNames []string, isParallel bool) map[string]*provider.IOStreams {
+	streams := make(map[string]*provider.IOStreams, len(actionNames))
+
+	if e.ioStreams == nil {
+		return streams
+	}
+
+	for _, name := range actionNames {
+		if isParallel {
+			streams[name] = &provider.IOStreams{
+				Out:    terminal.NewPrefixedWriter(e.ioStreams.Out, name),
+				ErrOut: terminal.NewPrefixedWriter(e.ioStreams.ErrOut, name),
+			}
+		} else {
+			streams[name] = e.ioStreams
+		}
+	}
+
+	return streams
 }
 
 // executeAction executes a single action with retry, timeout, and error handling.
@@ -582,6 +633,12 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 	}
 
 	e.actionContext.MarkSucceeded(actionName, results)
+
+	// Track whether the provider streamed output to the terminal
+	if output != nil && output.Streamed {
+		e.actionContext.MarkStreamed(actionName)
+	}
+
 	if e.progressCallback != nil {
 		e.progressCallback.OnActionComplete(actionName, results)
 	}
@@ -643,6 +700,11 @@ func (e *Executor) callProvider(ctx context.Context, action *ExpandedAction, inp
 
 	// Set up execution context with action mode
 	execCtx := provider.WithExecutionMode(ctx, provider.CapabilityAction)
+
+	// Pass through IOStreams from context if available (set by executePhase)
+	if streams, ok := provider.IOStreamsFromContext(ctx); ok {
+		execCtx = provider.WithIOStreams(execCtx, streams)
+	}
 
 	// Create executor and run
 	providerExecutor := provider.NewExecutor()

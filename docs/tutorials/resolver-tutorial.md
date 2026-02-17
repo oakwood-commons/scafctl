@@ -56,17 +56,19 @@ spec:
 ### Step 2: Run the Solution
 
 ```bash
-scafctl run solution -f hello.yaml
+scafctl run resolver -f hello.yaml
 ```
 
 Output:
-```json
-{
-  "greeting": "Hello, World!"
-}
+```
+╭─ scafctl run resolver ─╮
+│KEY       VALUE         │
+│─────────────────────── │
+│greeting  Hello, World! │
+╰ _ ─────────── map: 1/1 ╯
 ```
 
-> **Tip**: To run resolvers without executing actions (for debugging), use `scafctl run resolver -f hello.yaml`. See the [Run Resolver Tutorial](run-resolver-tutorial.md) for details.
+> **Tip**: Add `-o json` to get JSON output: `scafctl run resolver -f hello.yaml -o json`
 
 ### Understanding the Structure
 
@@ -120,14 +122,35 @@ spec:
 ### Step 2: Run with Parameters
 
 ```bash
-# Use default value
-scafctl run solution -f greet.yaml
+scafctl run resolver -f greet.yaml
+```
 
-# Pass a parameter
-scafctl run solution -f greet.yaml -r user_name=Alice
+Output:
 
-# Pass multiple parameters
-scafctl run solution -f greet.yaml -r user_name=Bob -r another=value
+```
+╭─ scafctl run resolver ─╮
+│KEY       VALUE         │
+│─────────────────────── │
+│greeting  Hello, World! │
+│name      World         │
+╰ _ ─────────── map: 1/2 ╯
+```
+
+Pass a parameter:
+
+```bash
+scafctl run resolver -f greet.yaml -r user_name=Alice
+```
+
+Output:
+
+```
+╭─ scafctl run resolver ─╮
+│KEY       VALUE         │
+│─────────────────────── │
+│greeting  Hello, Alice! │
+│name      Alice         │
+╰ _ ─────────── map: 1/2 ╯
 ```
 
 ### Using Parameter Files
@@ -143,7 +166,18 @@ region: us-west-2
 
 Run with the file:
 ```bash
-scafctl run solution -f greet.yaml -r @params.yaml
+scafctl run resolver -f greet.yaml -r @params.yaml
+```
+
+Output:
+
+```
+╭─ scafctl run resolver ──╮
+│KEY       VALUE          │
+│─────────────────────────│
+│greeting  Hello, Charlie!│
+│name      Charlie        │
+╰ _ ──────────── map: 1/2 ╯
 ```
 
 ---
@@ -218,7 +252,7 @@ spec:
 ### Step 2: Run and Observe Phases
 
 ```bash
-scafctl run solution -f config.yaml --progress
+scafctl run resolver -f config.yaml --progress
 ```
 
 The `--progress` flag shows how resolvers execute in phases based on dependencies:
@@ -242,6 +276,8 @@ Phase 3: config
 Transform values after they're resolved using the `transform` phase.
 
 ### Example: String Manipulation
+
+Create a file called `transform.yaml`:
 
 ```yaml
 apiVersion: scafctl.io/v1
@@ -275,7 +311,27 @@ spec:
 
 **Key Concept**: In the transform phase, `__self` refers to the current value being transformed. Each transform step receives the output of the previous step.
 
+Run it:
+
+```bash
+scafctl run resolver -f transform.yaml -o json --hide-execution
+```
+
+Output:
+
+```json
+{
+  "raw_input": "hello world"
+}
+```
+
+> **Tip**: `scafctl run resolver -o json` includes `__execution` metadata by default. Use `--hide-execution` for cleaner output. All examples in this tutorial use `--hide-execution`. See the [Run Resolver Tutorial](run-resolver-tutorial.md) for details on the execution metadata.
+
+The value was trimmed of whitespace, then lowercased — each transform step feeds into the next.
+
 ### Example: Data Enrichment
+
+Create a file called `enrich.yaml`:
 
 ```yaml
 apiVersion: scafctl.io/v1
@@ -307,6 +363,26 @@ spec:
               expression: "map.merge(__self, {'debug': true, 'logLevel': 'info'})"
 ```
 
+Run it:
+
+```bash
+scafctl run resolver -f enrich.yaml -o json --hide-execution
+```
+
+Output (timestamp will vary):
+
+```json
+{
+  "base_config": {
+    "debug": true,
+    "logLevel": "info",
+    "name": "my-app",
+    "timestamp": "2026-02-16T12:00:00.000000-05:00",
+    "version": "1.0.0"
+  }
+}
+```
+
 ---
 
 ## Validation
@@ -314,6 +390,8 @@ spec:
 Validate resolved values to ensure they meet requirements.
 
 ### Example: Port Range Validation
+
+Create a file called `validated-config.yaml`:
 
 ```yaml
 apiVersion: scafctl.io/v1
@@ -343,7 +421,35 @@ spec:
               message: "Port must be between 1024 and 65535"
 ```
 
+Run it with a valid port:
+
+```bash
+scafctl run resolver -f validated-config.yaml -r port=8080 -o json --hide-execution
+```
+
+Output:
+
+```json
+{
+  "port": 8080
+}
+```
+
+Run it with an invalid port to see the validation error:
+
+```bash
+scafctl run resolver -f validated-config.yaml -r port=80
+```
+
+Output:
+
+```
+❌ resolver execution failed: ... validation: Port must be between 1024 and 65535
+```
+
 ### Example: Multiple Validations
+
+Create a file called `email-validator.yaml`:
 
 ```yaml
 apiVersion: scafctl.io/v1
@@ -379,6 +485,36 @@ spec:
 
 **Note**: All validation rules run and errors are aggregated. You'll see all failures, not just the first one.
 
+Run it:
+
+```bash
+scafctl run resolver -f email-validator.yaml -o json --hide-execution
+```
+
+Output:
+
+```json
+{
+  "email": "user@example.com"
+}
+```
+
+Now try an invalid value that fails **both** validations — not a valid email format **and** ends with `.test`:
+
+```bash
+scafctl run resolver -f email-validator.yaml -r email="not-an-email.test" -o json --hide-execution
+```
+
+Output:
+
+```text
+❌ resolver execution failed: phase 1 failed: resolver "email" failed: resolver "email" validation failed with 2 errors:
+  - [rule 1] validation: Invalid email format
+  - [rule 2] validation: Test emails not allowed
+```
+
+Both validation errors are reported together rather than failing on the first one.
+
 ---
 
 ## Conditional Execution
@@ -386,6 +522,8 @@ spec:
 Skip resolvers or phases based on conditions.
 
 ### Resolver-Level Condition
+
+Create a file called `conditional.yaml`:
 
 ```yaml
 apiVersion: scafctl.io/v1
@@ -412,14 +550,46 @@ spec:
     prod_secrets:
       when:
         expr: "_.environment == 'production'"
+      type: string
       resolve:
         with:
-          - provider: env
+          - provider: static
             inputs:
-              name: PROD_API_KEY
+              value: "prod-secret-value"
+```
+
+Run it with `development` (default) — the `prod_secrets` resolver is skipped:
+
+```bash
+scafctl run resolver -f conditional.yaml -o json --hide-execution
+```
+
+Output (only `environment` is resolved; `prod_secrets` is skipped):
+
+```json
+{
+  "environment": "development"
+}
+```
+
+Run it with `production` — the `prod_secrets` resolver executes:
+
+```bash
+scafctl run resolver -f conditional.yaml -r env=production -o json --hide-execution
+```
+
+Output:
+
+```json
+{
+  "environment": "production",
+  "prod_secrets": "prod-secret-value"
+}
 ```
 
 ### Phase-Level Condition
+
+Create a file called `phase-condition.yaml`:
 
 ```yaml
 apiVersion: scafctl.io/v1
@@ -447,6 +617,23 @@ spec:
               expression: "map.merge(__self, {'transformed': true})"
 ```
 
+Run it:
+
+```bash
+scafctl run resolver -f phase-condition.yaml -o json --hide-execution
+```
+
+Output:
+
+```json
+{
+  "feature_flags": {
+    "enable_transform": true,
+    "transformed": true
+  }
+}
+```
+
 ---
 
 ## Error Handling
@@ -454,6 +641,8 @@ spec:
 Handle errors gracefully with fallback sources.
 
 ### Fallback Pattern
+
+Create a file called `fallback.yaml`:
 
 ```yaml
 apiVersion: scafctl.io/v1
@@ -476,6 +665,7 @@ spec:
           # Fall back to local file
           - provider: file
             inputs:
+              operation: read
               path: ./config.json
           # Last resort: default values
           - provider: static
@@ -483,6 +673,23 @@ spec:
               value:
                 debug: false
                 timeout: 30
+```
+
+Run it (the HTTP and file providers will fail, so it falls back to static):
+
+```bash
+scafctl run resolver -f fallback.yaml -o json --hide-execution
+```
+
+Output:
+
+```json
+{
+  "config": {
+    "debug": false,
+    "timeout": 30
+  }
+}
 ```
 
 **onError Options** (resolve phase):
@@ -496,6 +703,8 @@ spec:
 Fetch configuration from remote APIs.
 
 ### Basic HTTP Request
+
+Create a file called `http-example.yaml`:
 
 ```yaml
 apiVersion: scafctl.io/v1
@@ -512,14 +721,34 @@ spec:
         with:
           - provider: http
             inputs:
-              url: https://api.example.com/config
+              url: https://httpbin.org/get
               method: GET
               headers:
                 Accept: application/json
               timeout: 10s
 ```
 
+Run it:
+
+```bash
+scafctl run resolver -f http-example.yaml -o json --hide-execution
+```
+
+Output (body and headers will vary):
+
+```json
+{
+  "api_data": {
+    "body": "...",
+    "headers": { "...": "..." },
+    "statusCode": 200
+  }
+}
+```
+
 ### With Authentication
+
+Create a file called `auth-api.yaml`:
 
 ```yaml
 apiVersion: scafctl.io/v1
@@ -531,11 +760,12 @@ metadata:
 spec:
   resolvers:
     api_token:
-      sensitive: true  # Redact in logs
+      sensitive: true  # Redact in table output
       resolve:
         with:
           - provider: env
             inputs:
+              operation: get
               name: API_TOKEN
     
     api_data:
@@ -544,17 +774,28 @@ spec:
         with:
           - provider: http
             inputs:
-              url: https://api.example.com/secure/config
+              url: https://httpbin.org/headers
               headers:
                 Authorization:
                   tmpl: "Bearer {{._.api_token}}"
+```
+
+Run it (requires the `API_TOKEN` environment variable to be set):
+
+```bash
+export API_TOKEN=your-token-here
+scafctl run resolver -f auth-api.yaml -o json
 ```
 
 ---
 
 ## Common Patterns
 
+The following patterns are complete, self-contained solution files. Create a new file for each pattern to try it out.
+
 ### Pattern 1: Environment-Based Configuration
+
+Create a file called `env-config.yaml`:
 
 ```yaml
 apiVersion: scafctl.io/v1
@@ -590,7 +831,49 @@ spec:
                   : 'postgres://localhost:5432/app_dev'
 ```
 
+```bash
+scafctl run resolver -f env-config.yaml
+```
+
+Output:
+
+```
+╭─ scafctl run resolver ─╮
+│KEY           VALUE     │
+│─────────────────────── │
+│database_url  [REDACTED]│
+│environment   development│
+╰ _ ─────────── map: 1/2 ╯
+```
+
+> **Note**: Fields marked `sensitive: true` are shown as `[REDACTED]` in table output.
+
+Structured output (JSON, YAML) reveals sensitive values for machine consumption:
+
+```bash
+scafctl run resolver -f env-config.yaml -o json --hide-execution
+```
+
+Output:
+
+```json
+{
+  "database_url": "postgres://localhost:5432/app_dev",
+  "environment": "development"
+}
+```
+
+Use `--show-sensitive` to reveal values in table output:
+
+```bash
+scafctl run resolver -f env-config.yaml --show-sensitive
+```
+
+> **Sensitive Redaction Behavior**: Sensitive values are redacted in table/interactive output (human-facing) but revealed in JSON/YAML output (machine-facing), following the same model as Terraform. Use `--show-sensitive` to reveal values in all output formats.
+
 ### Pattern 2: Feature Toggles
+
+Create a file called `feature-toggles.yaml`:
 
 ```yaml
 apiVersion: scafctl.io/v1
@@ -628,7 +911,28 @@ spec:
                 }
 ```
 
+```bash
+scafctl run resolver -f feature-toggles.yaml -o json
+```
+
+Output:
+
+```json
+{
+  "features": {
+    "dark_mode": true,
+    "new_ui": false
+  },
+  "ui_config": {
+    "theme": "dark",
+    "version": "v1"
+  }
+}
+```
+
 ### Pattern 3: Secret Management
+
+Create a file called `secrets.yaml`:
 
 ```yaml
 apiVersion: scafctl.io/v1
@@ -640,21 +944,12 @@ metadata:
 spec:
   resolvers:
     db_password:
+      type: string
       sensitive: true
       resolve:
         with:
-          # Try environment variable first
-          - provider: env
-            onError: continue
-            inputs:
-              name: DB_PASSWORD
-          # Fall back to file-based secret
-          - provider: file
-            onError: continue
-            inputs:
-              operation: read
-              path: /run/secrets/db_password
-          # Fall back to generated password
+          # In practice, use env or file providers here
+          # with onError: continue to fall through
           - provider: static
             inputs:
               value: "default-dev-password"
@@ -666,11 +961,46 @@ spec:
         with:
           - provider: cel
             inputs:
-              expression: |
-                'postgres://app:' + _.db_password + '@db.example.com:5432/app'
+              expression: "'postgres://app:' + _.db_password + '@db.example.com:5432/app'"
 ```
 
+```bash
+scafctl run resolver -f secrets.yaml
+```
+
+Output:
+
+```
+╭─ scafctl run resolver ──────╮
+│KEY                VALUE     │
+│────────────────────────────  │
+│connection_string  [REDACTED] │
+│db_password        [REDACTED] │
+╰ _ ──────────────── map: 1/2  ╯
+```
+
+> **Note**: Both resolvers are marked `sensitive: true`, so their values are redacted in table output.
+
+Structured output reveals the actual values:
+
+```bash
+scafctl run resolver -f secrets.yaml -o json --hide-execution
+```
+
+Output:
+
+```json
+{
+  "connection_string": "postgres://app:default-dev-password@db.example.com:5432/app",
+  "db_password": "default-dev-password"
+}
+```
+
+> **Tip**: Use table output (the default) when sharing your screen or in CI logs to avoid accidentally exposing secrets. Use `-o json` or `-o yaml` when piping to downstream tools that need the actual values.
+
 ### Pattern 4: Multi-Stage Pipeline
+
+Create a file called `pipeline.yaml`:
 
 ```yaml
 apiVersion: scafctl.io/v1
@@ -682,11 +1012,28 @@ metadata:
 spec:
   resolvers:
     raw_data:
+      type: any
       resolve:
         with:
-          - provider: http
+          - provider: static
             inputs:
-              url: https://api.example.com/users
+              value:
+                - id: 1
+                  name: "Alice"
+                  email: "alice@example.com"
+                  active: true
+                - id: 2
+                  name: "Bob"
+                  email: "bob@example.com"
+                  active: false
+                - id: 3
+                  name: "Charlie"
+                  email: "charlie@example.com"
+                  active: true
+                - id: 4
+                  name: "Diana"
+                  email: "diana@example.com"
+                  active: true
     
     parsed_data:
       type: any
@@ -713,14 +1060,31 @@ spec:
               message: "No active users found"
 ```
 
+```bash
+scafctl run resolver -f pipeline.yaml -o json
+```
+
+Output:
+
+```json
+{
+  "parsed_data": [
+    { "email": "alice@example.com", "id": 1, "name": "Alice" },
+    { "email": "charlie@example.com", "id": 3, "name": "Charlie" },
+    { "email": "diana@example.com", "id": 4, "name": "Diana" }
+  ],
+  "raw_data": [
+    { "active": true, "email": "alice@example.com", "id": 1, "name": "Alice" },
+    { "active": false, "email": "bob@example.com", "id": 2, "name": "Bob" },
+    { "active": true, "email": "charlie@example.com", "id": 3, "name": "Charlie" },
+    { "active": true, "email": "diana@example.com", "id": 4, "name": "Diana" }
+  ]
+}
+```
+
+Bob was filtered out of `parsed_data` because `active` was `false`. The `raw_data` resolver is also included since `run resolver` returns all resolvers by default.
+
 ---
-
-## Next Steps
-
-- Explore the [built-in providers](../pkg/provider/builtin/README.md)
-- Read about [CEL expressions](../pkg/celexp/README.md)
-- Check out the [example solutions](./examples/)
-- Review the [resolver package reference](../pkg/resolver/README.md)
 
 ## Troubleshooting
 
@@ -752,3 +1116,13 @@ timeout: 60s
 Error: validation failed: Port must be between 1024 and 65535
 ```
 Solution: Check your input values meet the validation requirements.
+
+---
+
+## Next Steps
+
+- [Run Resolver Tutorial](run-resolver-tutorial.md) — Debug and inspect resolver execution
+- [Run Provider Tutorial](run-provider-tutorial.md) — Test providers in isolation
+- [Actions Tutorial](actions-tutorial.md) — Learn about workflows
+- [CEL Expressions Tutorial](cel-tutorial.md) — Master CEL expressions and extension functions
+- [Provider Reference](provider-reference.md) — Complete provider documentation

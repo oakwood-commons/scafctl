@@ -50,6 +50,9 @@ type ResolverOptions struct {
 
 	// Redact redacts sensitive values in the snapshot.
 	Redact bool
+
+	// HideExecution suppresses the __execution metadata from output.
+	HideExecution bool
 }
 
 // CommandResolver creates the 'run resolver' subcommand
@@ -80,9 +83,10 @@ This command is designed for debugging and inspecting resolver execution.
 It loads a solution file and executes only the resolvers, skipping the
 action/workflow phase entirely.
 
-The output always includes a __execution key containing per-resolver execution
-metadata: phase numbers, timing, provider info, dependencies, the resolver
-dependency graph, provider usage summary, and an aggregate summary.
+By default, the output includes a __execution key containing per-resolver
+execution metadata: phase numbers, timing, provider info, dependencies, the
+resolver dependency graph, provider usage summary, and an aggregate summary.
+Use --hide-execution to suppress this metadata for cleaner output.
 
 RESOLVER SELECTION:
   Pass resolver names as positional arguments to execute only specific
@@ -208,6 +212,7 @@ Examples:
 	cCmd.Flags().BoolVar(&options.Snapshot, "snapshot", false, "Save execution snapshot instead of normal output")
 	cCmd.Flags().StringVar(&options.SnapshotFile, "snapshot-file", "", "Snapshot output file (required with --snapshot)")
 	cCmd.Flags().BoolVar(&options.Redact, "redact", false, "Redact sensitive values in snapshot")
+	cCmd.Flags().BoolVar(&options.HideExecution, "hide-execution", false, "Suppress __execution metadata from output")
 
 	return cCmd
 }
@@ -332,35 +337,37 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		return o.exitWithCode(ctx, err, exitcode.ValidationFailed)
 	}
 
-	// Always include __execution metadata — this is a debugging command
-	executionData := buildExecutionData(resolverCtx, resolvers, elapsed)
+	// Include __execution metadata unless --hide-execution is set
+	if !o.HideExecution {
+		executionData := buildExecutionData(resolverCtx, resolvers, elapsed)
 
-	// Build and embed the resolver dependency graph
-	graph, graphErr := resolver.BuildGraph(resolvers, lookup)
-	if graphErr == nil {
-		if err := graph.RenderDiagrams(); err != nil {
-			lgr.V(1).Info("failed to render dependency graph diagrams", "error", err)
-		}
-		// Convert to map[string]any so CEL expressions can traverse the graph
-		graphJSON, err := json.Marshal(graph)
-		if err == nil {
-			var graphMap map[string]any
-			if err := json.Unmarshal(graphJSON, &graphMap); err == nil {
-				executionData["dependencyGraph"] = graphMap
+		// Build and embed the resolver dependency graph
+		graph, graphErr := resolver.BuildGraph(resolvers, lookup)
+		if graphErr == nil {
+			if err := graph.RenderDiagrams(); err != nil {
+				lgr.V(1).Info("failed to render dependency graph diagrams", "error", err)
+			}
+			// Convert to map[string]any so CEL expressions can traverse the graph
+			graphJSON, err := json.Marshal(graph)
+			if err == nil {
+				var graphMap map[string]any
+				if err := json.Unmarshal(graphJSON, &graphMap); err == nil {
+					executionData["dependencyGraph"] = graphMap
+				} else {
+					lgr.V(1).Info("failed to unmarshal dependency graph", "error", err)
+				}
 			} else {
-				lgr.V(1).Info("failed to unmarshal dependency graph", "error", err)
+				lgr.V(1).Info("failed to marshal dependency graph", "error", err)
 			}
 		} else {
-			lgr.V(1).Info("failed to marshal dependency graph", "error", err)
+			lgr.V(1).Info("failed to build dependency graph for __execution", "error", graphErr)
 		}
-	} else {
-		lgr.V(1).Info("failed to build dependency graph for __execution", "error", graphErr)
+
+		// Embed provider usage summary
+		executionData["providerSummary"] = buildProviderSummary(resolverCtx, resolvers)
+
+		results["__execution"] = executionData
 	}
-
-	// Embed provider usage summary
-	executionData["providerSummary"] = buildProviderSummary(resolverCtx, resolvers)
-
-	results["__execution"] = executionData
 
 	return o.writeResolverOutput(ctx, results, "scafctl run resolver")
 }

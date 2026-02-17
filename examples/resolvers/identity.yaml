@@ -3,7 +3,7 @@
 # Prerequisites:
 #   - Run `scafctl auth login entra` to authenticate first
 #
-# Run: scafctl run solution -f identity.yaml
+# Run: scafctl run resolver -f identity.yaml
 
 apiVersion: scafctl.io/v1
 kind: Solution

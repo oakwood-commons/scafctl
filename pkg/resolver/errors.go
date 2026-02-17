@@ -85,9 +85,9 @@ func (e *AggregatedValidationError) Error() string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("resolver %q validation failed with %d errors:\n", e.ResolverName, len(e.Failures)))
+	fmt.Fprintf(&sb, "resolver %q validation failed with %d errors:\n", e.ResolverName, len(e.Failures))
 	for i, f := range e.Failures {
-		sb.WriteString(fmt.Sprintf("  - [rule %d] %s\n", i+1, f.Error()))
+		fmt.Fprintf(&sb, "  - [rule %d] %s\n", i+1, f.Error())
 	}
 	return strings.TrimSuffix(sb.String(), "\n")
 }
@@ -291,17 +291,17 @@ func (e *AggregatedExecutionError) Error() string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("%d resolver(s) failed", len(e.Errors)))
+	fmt.Fprintf(&sb, "%d resolver(s) failed", len(e.Errors))
 	if e.SkippedCount > 0 {
-		sb.WriteString(fmt.Sprintf(", %d skipped due to failed dependencies", e.SkippedCount))
+		fmt.Fprintf(&sb, ", %d skipped due to failed dependencies", e.SkippedCount)
 	}
 	if e.SucceededCount > 0 {
-		sb.WriteString(fmt.Sprintf(", %d succeeded", e.SucceededCount))
+		fmt.Fprintf(&sb, ", %d succeeded", e.SucceededCount)
 	}
 	sb.WriteString(":\n")
 
 	for i, err := range e.Errors {
-		sb.WriteString(fmt.Sprintf("  %d. %s\n", i+1, err.Error()))
+		fmt.Fprintf(&sb, "  %d. %s\n", i+1, err.Error())
 	}
 
 	return strings.TrimSuffix(sb.String(), "\n")

@@ -1,7 +1,7 @@
 # Resolver Validation Failures Demo
 # Demonstrates various validation failure scenarios for testing and learning.
 #
-# Run: scafctl run solution -f resolver-validation-failures-demo.yaml
+# Run: scafctl run resolver -f resolver-validation-failures-demo.yaml
 #
 # This demo intentionally produces validation errors to show how scafctl
 # reports different types of validation failures.

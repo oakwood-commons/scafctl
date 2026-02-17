@@ -17,10 +17,12 @@ import (
 
 // CommandExists creates the 'secrets exists' command.
 func CommandExists(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
+	var allFlag bool
+
 	cmd := &cobra.Command{
 		Use:   "exists <name>",
 		Short: "Check if a secret exists",
-		Long:  "Check if a secret exists. Exits with code 0 if it exists, 1 if not.",
+		Long:  "Check if a secret exists. Exits with code 0 if it exists, 1 if not.\nUse --all to check internal secrets (e.g. auth tokens).",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -28,7 +30,7 @@ func CommandExists(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 			name := args[0]
 
 			// Validate name
-			if err := ValidateUserSecretName(name); err != nil {
+			if err := ValidateSecretName(name, allFlag); err != nil {
 				w.Errorf("%v", err)
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
@@ -60,6 +62,8 @@ func CommandExists(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 			return nil
 		},
 	}
+
+	cmd.Flags().BoolVarP(&allFlag, "all", "a", false, "Include internal secrets (e.g. auth tokens)")
 
 	return cmd
 }

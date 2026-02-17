@@ -115,6 +115,7 @@ type sharedResolverOptions struct {
 	SkipValidation  bool
 	SkipTransform   bool
 	ShowMetrics     bool
+	ShowSensitive   bool
 	WarnValueSize   int64
 	MaxValueSize    int64
 	ResolverTimeout time.Duration
@@ -298,19 +299,50 @@ func (o *sharedResolverOptions) exitWithCode(ctx context.Context, err error, cod
 	return exitcode.WithCode(err, code)
 }
 
-// buildResolverOutputMap builds the output map from resolver data with redaction for sensitive values
+// buildResolverOutputMap builds the output map from resolver data with format-aware redaction for sensitive values.
+// Sensitive values are redacted in table/interactive output (human-facing) but revealed in structured
+// output formats (json, yaml) since those are typically used for machine consumption.
+// Use --show-sensitive to reveal values in all formats.
 func (o *sharedResolverOptions) buildResolverOutputMap(resolverData map[string]any, sol *solution.Solution) map[string]any {
 	results := make(map[string]any)
 
+	// Determine whether to redact: redact in table/interactive (human-facing) output,
+	// reveal in structured output (json/yaml) for machine consumption.
+	// --show-sensitive overrides to always reveal.
+	shouldRedact := o.shouldRedactSensitive()
+
 	for name, value := range resolverData {
-		if r, ok := sol.Spec.Resolvers[name]; ok && r.Sensitive {
-			results[name] = "[REDACTED]"
-		} else {
-			results[name] = value
+		if shouldRedact {
+			if r, ok := sol.Spec.Resolvers[name]; ok && r.Sensitive {
+				results[name] = "[REDACTED]"
+				continue
+			}
 		}
+		results[name] = value
 	}
 
 	return results
+}
+
+// shouldRedactSensitive determines whether sensitive values should be redacted based on
+// the output format and --show-sensitive flag. Following the Terraform model:
+// - Table/interactive output: redacted (human-facing)
+// - JSON/YAML output: revealed (machine-facing)
+// - --show-sensitive: always reveals regardless of format
+func (o *sharedResolverOptions) shouldRedactSensitive() bool {
+	if o.ShowSensitive {
+		return false
+	}
+
+	// Structured formats (json, yaml, quiet) are for machine consumption — don't redact
+	format := o.Output
+	switch format {
+	case "json", "yaml", "quiet":
+		return false
+	default:
+		// Table and interactive modes are human-facing — redact
+		return true
+	}
 }
 
 // checkValueSizes checks if any values exceed size limits
@@ -589,6 +621,7 @@ func addSharedResolverFlags(cCmd *cobra.Command, o *sharedResolverOptions) {
 	cCmd.Flags().BoolVar(&o.ValidateAll, "validate-all", false, "Continue execution and show all validation/resolver errors")
 	cCmd.Flags().BoolVar(&o.SkipValidation, "skip-validation", false, "Skip the validation phase of all resolvers")
 	cCmd.Flags().BoolVar(&o.ShowMetrics, "show-metrics", false, "Show provider execution metrics after completion (output to stderr)")
+	cCmd.Flags().BoolVar(&o.ShowSensitive, "show-sensitive", false, "Reveal sensitive values in all output formats (by default, sensitive values are redacted in table output but shown in json/yaml)")
 	cCmd.Flags().Int64Var(&o.WarnValueSize, "warn-value-size", settings.DefaultWarnValueSize, "Warn when value exceeds this size in bytes (default: 1MB)")
 	cCmd.Flags().Int64Var(&o.MaxValueSize, "max-value-size", settings.DefaultMaxValueSize, "Fail when value exceeds this size in bytes (default: 10MB)")
 	cCmd.Flags().DurationVar(&o.ResolverTimeout, "resolver-timeout", settings.DefaultResolverTimeout, "Timeout per resolver")

@@ -231,7 +231,7 @@ func TestHandler_GetToken_MintNew(t *testing.T) {
 	// Set up authentication
 	err = store.Set(ctx, SecretKeyRefreshToken, []byte("test-refresh-token"))
 	require.NoError(t, err)
-	metadata := &TokenMetadata{TenantID: "test-tenant"}
+	metadata := &TokenMetadata{TenantID: "test-tenant", ClientID: "04b07795-8ddb-461a-bbee-02f9e1bf7b46"}
 	metadataBytes, _ := json.Marshal(metadata)
 	err = store.Set(ctx, SecretKeyMetadata, metadataBytes)
 	require.NoError(t, err)
@@ -268,7 +268,7 @@ func TestHandler_GetToken_ForceRefresh(t *testing.T) {
 	// Set up authentication
 	err = store.Set(ctx, SecretKeyRefreshToken, []byte("test-refresh-token"))
 	require.NoError(t, err)
-	metadata := &TokenMetadata{TenantID: "test-tenant"}
+	metadata := &TokenMetadata{TenantID: "test-tenant", ClientID: "04b07795-8ddb-461a-bbee-02f9e1bf7b46"}
 	metadataBytes, _ := json.Marshal(metadata)
 	err = store.Set(ctx, SecretKeyMetadata, metadataBytes)
 	require.NoError(t, err)

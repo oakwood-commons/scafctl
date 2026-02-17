@@ -1,11 +1,11 @@
 # Validation Example
 # Demonstrates input validation with multiple rules and aggregated errors.
 #
-# Run: scafctl run solution -f validation.yaml
-# Run: scafctl run solution -f validation.yaml -r email=test@example.com -r port=8080 -r password=MyP@ss123
+# Run: scafctl run resolver -f validation.yaml
+# Run: scafctl run resolver -f validation.yaml -r email=test@example.com -r port=8080 -r password=MyP@ss123
 #
 # Try invalid values to see validation errors:
-# Run: scafctl run solution -f validation.yaml -r email=invalid -r port=99999 -r password=weak
+# Run: scafctl run resolver -f validation.yaml -r email=invalid -r port=99999 -r password=weak
 
 apiVersion: scafctl.io/v1
 kind: Solution

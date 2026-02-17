@@ -53,6 +53,7 @@ func CommandExport(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *co
 		outputFile  string
 		formatFlag  string
 		encryptFlag bool
+		allFlag     bool
 	)
 
 	cmd := &cobra.Command{
@@ -68,7 +69,8 @@ Supported formats:
   - json:          JSON format
 
 Use --encrypt to export with password protection (AES-256-GCM).
-Internal secrets (scafctl.*) are automatically excluded.`,
+Use --all to include internal secrets (e.g. auth tokens).
+By default, internal secrets (scafctl.*) are excluded.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			w := writer.MustFromContext(ctx)
@@ -94,10 +96,10 @@ Internal secrets (scafctl.*) are automatically excluded.`,
 				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
-			// Filter out internal secrets
-			userSecrets := FilterUserSecrets(names)
+			// Filter secrets based on --all flag
+			filtered := FilterSecrets(names, allFlag)
 
-			if len(userSecrets) == 0 {
+			if len(filtered) == 0 {
 				w.Warning("No secrets to export")
 				return nil
 			}
@@ -106,10 +108,10 @@ Internal secrets (scafctl.*) are automatically excluded.`,
 			exportData := ExportFormat{
 				Version:    exportVersion,
 				ExportedAt: time.Now().UTC().Format(time.RFC3339),
-				Secrets:    make([]ExportedSecret, 0, len(userSecrets)),
+				Secrets:    make([]ExportedSecret, 0, len(filtered)),
 			}
 
-			for _, name := range userSecrets {
+			for _, name := range filtered {
 				value, err := store.Get(ctx, name)
 				if err != nil {
 					w.Warningf("Skipping secret '%s': %v\n", name, err)
@@ -209,6 +211,7 @@ Internal secrets (scafctl.*) are automatically excluded.`,
 	cmd.Flags().StringVarP(&outputFile, "output", "o", "", "Output file path (required)")
 	cmd.Flags().StringVarP(&formatFlag, "format", "f", "yaml", "Output format: yaml, json")
 	cmd.Flags().BoolVar(&encryptFlag, "encrypt", false, "Encrypt export with password")
+	cmd.Flags().BoolVarP(&allFlag, "all", "a", false, "Include internal secrets (e.g. auth tokens)")
 	_ = cmd.MarkFlagRequired("output")
 
 	return cmd

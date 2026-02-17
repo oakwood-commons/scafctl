@@ -421,7 +421,7 @@ func (p *HTTPProvider) executeWithRetry(
 		}
 
 		// Execute request
-		resp, err := client.Do(req)
+		resp, err := client.Do(req) //nolint:gosec // G704: URL is from provider configuration
 		if err != nil {
 			lastErr = err
 			// Network errors are retryable

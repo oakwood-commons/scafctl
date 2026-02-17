@@ -33,7 +33,7 @@ const (
 type ServicePrincipalCredentials struct {
 	ClientID     string
 	TenantID     string
-	ClientSecret string
+	ClientSecret string //nolint:gosec // G117: not a hardcoded credential, stores runtime secret from env vars
 }
 
 // GetServicePrincipalCredentials retrieves SP credentials from environment variables.

@@ -360,6 +360,10 @@ scafctl secrets get my-api-key
 scafctl secrets exists my-api-key
 scafctl secrets list
 
+# Include internal secrets (e.g. auth tokens)
+scafctl secrets list --all
+scafctl secrets get scafctl.auth.entra.metadata --all
+
 # Rotate encryption key
 scafctl secrets rotate
 
@@ -491,6 +495,7 @@ scafctl resolver graph -f solution.yaml
 # Configuration and secrets
 scafctl config show
 scafctl secrets list
+scafctl secrets list --all  # include auth tokens
 
 # Authentication
 scafctl auth login entra

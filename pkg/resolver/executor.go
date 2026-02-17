@@ -558,27 +558,11 @@ func (e *Executor) executeResolver(ctx context.Context, r *Resolver, phaseNum in
 		return false, result.Error
 	}
 
-	// Type coercion after resolve (if type is specified)
-	if r.Type != "" && r.Type != TypeAny {
-		coerced, err := CoerceType(value, r.Type)
-		if err != nil {
-			result.Value = value
-			result.Status = ExecutionStatusFailed
-			result.Error = &TypeCoercionError{
-				ResolverName: r.Name,
-				Phase:        "resolve",
-				SourceType:   fmt.Sprintf("%T", value),
-				TargetType:   r.Type,
-				Cause:        err,
-			}
-			return false, result.Error
-		}
-		value = coerced
-	}
-
 	// Execute transform phase
 	// Skip if transform is disabled via executor option (also skips validate)
+	coercionPhase := "resolve"
 	if r.Transform != nil && !e.skipTransform {
+		coercionPhase = "transform"
 		phaseStart := time.Now()
 		transformed, providerCalls, err := e.executeTransformPhase(resolverContext, r.Transform, value)
 		providerCallCount += providerCalls
@@ -603,24 +587,26 @@ func (e *Executor) executeResolver(ctx context.Context, r *Resolver, phaseNum in
 		}
 
 		value = transformed
+	}
 
-		// Type coercion after transform
-		if r.Type != "" && r.Type != TypeAny {
-			coerced, err := CoerceType(value, r.Type)
-			if err != nil {
-				result.Value = value
-				result.Status = ExecutionStatusFailed
-				result.Error = &TypeCoercionError{
-					ResolverName: r.Name,
-					Phase:        "transform",
-					SourceType:   fmt.Sprintf("%T", value),
-					TargetType:   r.Type,
-					Cause:        err,
-				}
-				return false, result.Error
+	// Type coercion on the final value (after resolve + optional transform)
+	// The type field describes the resolver's output contract, so we enforce it
+	// exactly once on whatever the final value is.
+	if r.Type != "" && r.Type != TypeAny {
+		coerced, err := CoerceType(value, r.Type)
+		if err != nil {
+			result.Value = value
+			result.Status = ExecutionStatusFailed
+			result.Error = &TypeCoercionError{
+				ResolverName: r.Name,
+				Phase:        coercionPhase,
+				SourceType:   fmt.Sprintf("%T", value),
+				TargetType:   r.Type,
+				Cause:        err,
 			}
-			value = coerced
+			return false, result.Error
 		}
+		value = coerced
 	}
 
 	// Execute validate phase (runs all validations and aggregates failures)

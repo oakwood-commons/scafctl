@@ -38,6 +38,7 @@ Authentication in scafctl follows these principles:
 - **Refresh tokens are stored securely** using your system's secret store
 - **Access tokens are short-lived** and cached for performance
 - **Secrets never appear** in solution files or logs
+- **Auth tokens are visible** via `scafctl secrets list --all` and `scafctl secrets get <name> --all`
 
 scafctl currently supports the following auth handlers:
 
@@ -87,6 +88,18 @@ scafctl auth login entra --tenant 08e70e8e-d05c-4449-a2c2-67bd0a9c4e79
 scafctl auth login entra --tenant contoso.onmicrosoft.com
 ```
 
+### Custom Client ID
+
+By default, scafctl uses the Azure CLI's public client ID (`04b07795-8ddb-461a-bbee-02f9e1bf7b46`) for device code flow. If your organization requires a custom app registration (e.g., for specific permissions or conditional access policies), use the `--client-id` flag:
+
+```bash
+scafctl auth login entra --client-id 12345678-abcd-1234-abcd-123456789abc
+```
+
+The client ID used during login is persisted in your credential metadata so that subsequent token refreshes use the same client ID, even if your configuration file specifies a different one. This prevents token minting failures caused by a mismatch between the login client ID and the refresh client ID.
+
+You can also set a default client ID via the scafctl configuration file under `auth.entra.clientId`. Note that the `--client-id` flag at login time always takes precedence, and the stored client ID from login will be used for all future token refreshes.
+
 ### Setting a Timeout
 
 The device code flow has a 5-minute default timeout. To extend it:
@@ -94,6 +107,25 @@ The device code flow has a 5-minute default timeout. To extend it:
 ```bash
 scafctl auth login entra --timeout 10m
 ```
+
+### Requesting Specific Scopes
+
+By default, login requests only basic scopes (`openid`, `profile`, `offline_access`). If your resolvers need access to specific APIs (e.g., Microsoft Graph), include the required scope during login to establish consent:
+
+```bash
+# Login with Microsoft Graph scope
+scafctl auth login entra --scope https://graph.microsoft.com/.default
+
+# Login with Azure Resource Manager scope
+scafctl auth login entra --scope https://management.azure.com/.default
+```
+
+This ensures your authentication session has consent for that API resource, preventing "consent required" errors when resolvers run. The refresh token obtained at login can then be used to mint access tokens for the consented resource.
+
+> **Note:** Login should target a single API resource at a time. If you need
+> tokens for multiple API resources, use separate `scafctl auth login` calls,
+> or rely on the refresh token to mint tokens for additional resources at
+> runtime via `scafctl auth token`.
 
 ### Service Principal Authentication (CI/CD)
 
@@ -440,6 +472,8 @@ The HTTP provider supports automatic authentication via the `authProvider` and `
 
 ### Basic Example
 
+Create a file called `graph-example.yaml`:
+
 ```yaml
 apiVersion: scafctl.io/v1
 kind: Solution
@@ -461,7 +495,25 @@ spec:
               scope: "https://graph.microsoft.com/.default"
 ```
 
-When you run this solution, scafctl:
+Run it (requires prior authentication via `scafctl auth login entra`):
+
+```bash
+# Login with Microsoft Graph scope for consent
+scafctl auth login entra --scope https://graph.microsoft.com/User.Read
+
+# Then run the resolver
+scafctl run resolver -f graph-example.yaml -o json --hide-execution
+```
+
+> **Note:** If you see a "consent required" error, it means your login session
+> doesn't have consent for the requested API scope. Re-login with the `--scope`
+> flag to grant consent:
+>
+> ```bash
+> scafctl auth login entra --scope https://graph.microsoft.com/User.Read
+> ```
+
+When you run this, scafctl:
 
 1. Retrieves a cached token (or fetches a new one)
 2. Adds the `Authorization: Bearer <token>` header
@@ -488,6 +540,8 @@ This handles cases where a cached token has been revoked.
 
 ### Azure Resource Manager Example
 
+Add the following resolver to your solution's `spec.resolvers` section:
+
 ```yaml
 spec:
   resolvers:
@@ -504,6 +558,8 @@ spec:
 ```
 
 ### Key Vault Example
+
+Add the following resolver to your solution's `spec.resolvers` section:
 
 ```yaml
 spec:
@@ -657,6 +713,26 @@ Your refresh token has expired (typically after 90 days of inactivity). Log in a
 scafctl auth login entra
 ```
 
+### Consent Required
+
+If you see:
+
+```
+consent required: please login with the required scope
+```
+
+Your login session does not have consent for the API scope your resolver is requesting. Re-login with the `--scope` flag to grant consent:
+
+```bash
+# For Microsoft Graph APIs
+scafctl auth login entra --scope https://graph.microsoft.com/User.Read
+
+# For Azure Resource Manager APIs
+scafctl auth login entra --scope https://management.azure.com/user_impersonation
+```
+
+The `--scope` flag tells Azure to request user consent for that specific API during the login flow.
+
 ### Wrong Tenant
 
 If you're getting 401 errors but you're authenticated, you may be authenticated to the wrong tenant:
@@ -714,6 +790,7 @@ scafctl uses your system's secret store (Keychain on macOS, Windows Credential M
 
 ## Next Steps
 
-- Explore the [HTTP provider documentation](resolver-tutorial.md#working-with-http-apis) for more HTTP examples
-- See [examples/resolvers/](../examples/resolvers/) for sample solutions
-- Read the [design document](design/auth.md) for architecture details
+- [CEL Expressions Tutorial](cel-tutorial.md) — Master CEL expressions and extension functions
+- [Go Templates Tutorial](go-templates-tutorial.md) — Generate files with Go template rendering
+- [Resolver Tutorial](resolver-tutorial.md) — More HTTP examples in resolver pipelines
+- [Provider Reference](provider-reference.md) — Complete provider documentation

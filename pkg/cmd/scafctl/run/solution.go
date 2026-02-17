@@ -70,9 +70,12 @@ Solutions can be loaded from:
 - URL: Use -f flag with an HTTP(S) URL
 - Auto-discovery: If no source is specified, searches for solution.yaml in current directory
 
+The solution MUST define a workflow with actions. If no workflow is defined,
+the command will error and suggest using 'scafctl run resolver' instead.
+
 The execution proceeds in two phases:
 1. RESOLVER PHASE: All resolvers execute in dependency order (concurrent within phases)
-2. ACTION PHASE: Actions execute using resolved data (if workflow defined)
+2. ACTION PHASE: Actions execute using resolved data
 
 To execute resolvers only without actions (for debugging/inspection), use:
   scafctl run resolver
@@ -85,9 +88,9 @@ RESOLVER PARAMETERS:
     key=val1,val2     Multiple values become an array
 
 EXECUTION ORDER:
-  1. Parse and validate solution
+  1. Parse and validate solution (must have workflow)
   2. Execute resolvers in dependency phases (concurrent within phases)
-  3. If workflow defined: build action graph and execute actions
+  3. Build action graph and execute actions
   4. Finally section actions always execute (even if main actions fail)
 
 OUTPUT FORMATS:
@@ -113,7 +116,7 @@ EXIT CODES:
   0  Success
   1  Resolver execution failed
   2  Validation failed
-  3  Invalid solution (cycle/parse error)
+  3  Invalid solution (no workflow, cycle, or parse error)
   4  File not found
   6  Action/workflow execution failed
 
@@ -236,11 +239,17 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 
 	actionAdapter := &actionRegistryAdapter{registry: reg}
 
-	// Validate the workflow if present
-	if sol.Spec.HasWorkflow() {
-		if err := action.ValidateWorkflow(sol.Spec.Workflow, actionAdapter); err != nil {
-			return o.exitWithCode(ctx, fmt.Errorf("workflow validation failed: %w", err), exitcode.ValidationFailed)
-		}
+	// Require a workflow — run solution is for executing actions.
+	// Use 'scafctl run resolver' for resolver-only solutions.
+	if !sol.Spec.HasWorkflow() {
+		return o.exitWithCode(ctx,
+			fmt.Errorf("solution %q has no workflow defined; use 'scafctl run resolver' to execute resolvers without actions", sol.Metadata.Name),
+			exitcode.InvalidInput)
+	}
+
+	// Validate the workflow
+	if err := action.ValidateWorkflow(sol.Spec.Workflow, actionAdapter); err != nil {
+		return o.exitWithCode(ctx, fmt.Errorf("workflow validation failed: %w", err), exitcode.ValidationFailed)
 	}
 
 	// Parse resolver parameters
@@ -263,18 +272,6 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	}
 
 	resolverElapsed := time.Since(start)
-
-	// If no workflow, output resolver results
-	if !sol.Spec.HasWorkflow() {
-		results := o.buildResolverOutputMap(resolverData, sol)
-		if err := o.checkValueSizes(results, *lgr); err != nil {
-			return o.exitWithCode(ctx, err, exitcode.ValidationFailed)
-		}
-		if o.ShowExecution {
-			results["__execution"] = buildExecutionData(resolverCtx, resolvers, resolverElapsed)
-		}
-		return o.writeResolverOutput(ctx, results, "scafctl run solution")
-	}
 
 	// Build action graph
 	graph, err := action.BuildGraph(ctx, sol.Spec.Workflow, resolverData, nil)
@@ -310,6 +307,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		action.WithDefaultTimeout(actionCfg.DefaultTimeout),
 		action.WithGracePeriod(actionCfg.GracePeriod),
 		action.WithMaxConcurrency(actionCfg.MaxConcurrency),
+		action.WithIOStreams(o.getActionIOStreams()),
 	)
 
 	result, err := actionExecutor.Execute(ctx, sol.Spec.Workflow)
@@ -361,12 +359,88 @@ func (o *SolutionOptions) showDryRun(graph *action.Graph) {
 	}
 }
 
-// writeActionOutput writes the action execution results
+// getActionIOStreams returns the provider IO streams for action execution.
+// For the default/table output format, IO streams are provided so providers can
+// stream output directly to the terminal. For json/yaml/quiet, no streams are
+// provided so all output is captured and serialized.
+func (o *SolutionOptions) getActionIOStreams() *provider.IOStreams {
+	switch o.Output {
+	case "json", "yaml", "quiet":
+		// Structured output modes: don't stream, capture everything for serialization
+		return nil
+	default:
+		// Default/table: stream output directly to terminal
+		return &provider.IOStreams{
+			Out:    o.IOStreams.Out,
+			ErrOut: o.IOStreams.ErrOut,
+		}
+	}
+}
+
+// writeActionOutput writes the action execution results.
+// For the default/table output format, output is minimal since providers that support
+// streaming (e.g., exec) already wrote their output directly to the terminal.
+// For json/yaml, the full execution envelope is serialized.
 func (o *SolutionOptions) writeActionOutput(_ context.Context, result *action.ExecutionResult, executionData map[string]any) error {
 	if o.Output == "quiet" {
 		return nil
 	}
 
+	switch o.Output {
+	case "table", "":
+		return o.writeActionOutputDefault(result)
+	case "json":
+		return o.writeActionOutputStructured(result, executionData, "json")
+	case "yaml":
+		return o.writeActionOutputStructured(result, executionData, "yaml")
+	default:
+		return fmt.Errorf("unsupported output format: %s", o.Output)
+	}
+}
+
+// writeActionOutputDefault writes the default/table output for action execution.
+// Actions that already streamed to the terminal are skipped. For non-streamed actions,
+// any stdout/stderr from the results is printed. Failed/skipped actions show a status line.
+func (o *SolutionOptions) writeActionOutputDefault(result *action.ExecutionResult) error {
+	for name, ar := range result.Actions {
+		// Skip actions that already streamed their output to the terminal
+		if ar.Streamed {
+			// If the action failed despite streaming, show the error
+			if ar.Status == action.StatusFailed || ar.Status == action.StatusTimeout {
+				fmt.Fprintf(o.IOStreams.ErrOut, "Error [%s]: %s\n", name, ar.Error)
+			}
+			continue
+		}
+
+		// For non-streamed actions, show results based on status
+		switch ar.Status {
+		case action.StatusSucceeded:
+			// Print stdout if available in results
+			if results, ok := ar.Results.(map[string]any); ok {
+				if stdout, ok := results["stdout"].(string); ok && stdout != "" {
+					fmt.Fprint(o.IOStreams.Out, stdout)
+				}
+			}
+		case action.StatusFailed, action.StatusTimeout:
+			// Show stderr if available, then error
+			if results, ok := ar.Results.(map[string]any); ok {
+				if stderr, ok := results["stderr"].(string); ok && stderr != "" {
+					fmt.Fprint(o.IOStreams.ErrOut, stderr)
+				}
+			}
+			fmt.Fprintf(o.IOStreams.ErrOut, "Error [%s]: %s\n", name, ar.Error)
+		case action.StatusSkipped:
+			fmt.Fprintf(o.IOStreams.ErrOut, "Skipped [%s]: %s\n", name, ar.SkipReason)
+		case action.StatusPending, action.StatusRunning, action.StatusCancelled:
+			// These statuses should not appear in final results; ignore.
+		}
+	}
+
+	return nil
+}
+
+// writeActionOutputStructured writes action results as JSON or YAML (the full execution envelope).
+func (o *SolutionOptions) writeActionOutputStructured(result *action.ExecutionResult, executionData map[string]any, format string) error {
 	// Build output structure
 	output := map[string]any{
 		"status":    string(result.FinalStatus),
@@ -409,18 +483,11 @@ func (o *SolutionOptions) writeActionOutput(_ context.Context, result *action.Ex
 	var data []byte
 	var marshalErr error
 
-	switch o.Output {
+	switch format {
 	case "yaml":
 		data, marshalErr = yaml.Marshal(output)
-	case "json", "table", "":
-		// table falls back to JSON for action output since actions
-		// don't have a tabular representation
+	case "json":
 		data, marshalErr = json.MarshalIndent(output, "", "  ")
-	case "quiet":
-		// Don't output anything
-		return nil
-	default:
-		return fmt.Errorf("unsupported output format: %s", o.Output)
 	}
 
 	if marshalErr != nil {

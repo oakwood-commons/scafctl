@@ -4,7 +4,7 @@
 # Run all resolvers:     scafctl run resolver -f resolver-demo.yaml
 # Run specific resolver: scafctl run resolver environment -f resolver-demo.yaml
 # Verbose debugging:     scafctl run resolver --verbose -f resolver-demo.yaml
-# Full solution:         scafctl run solution -f resolver-demo.yaml
+# Full solution:         scafctl run resolver -f resolver-demo.yaml
 
 apiVersion: scafctl.io/v1
 kind: Solution

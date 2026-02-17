@@ -74,9 +74,9 @@ func (e *AggregatedValidationError) Error() string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("workflow validation failed with %d errors:\n", len(e.Errors)))
+	fmt.Fprintf(&sb, "workflow validation failed with %d errors:\n", len(e.Errors))
 	for i, err := range e.Errors {
-		sb.WriteString(fmt.Sprintf("  %d. %s\n", i+1, err.Error()))
+		fmt.Fprintf(&sb, "  %d. %s\n", i+1, err.Error())
 	}
 	return strings.TrimSuffix(sb.String(), "\n")
 }

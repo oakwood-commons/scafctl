@@ -19,6 +19,7 @@ import (
 // listOptions holds the options for the list command.
 type listOptions struct {
 	flags.KvxOutputFlags
+	All bool
 }
 
 // CommandList creates the 'secrets list' command.
@@ -27,8 +28,8 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "List all user secrets",
-		Long:  "List the names of all stored secrets (excluding internal scafctl.* secrets).",
+		Short: "List secrets",
+		Long:  "List the names of all stored secrets. By default, internal scafctl.* secrets are excluded. Use --all to include them.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			w := writer.MustFromContext(ctx)
@@ -47,17 +48,18 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
-			// Filter out internal secrets
-			userSecrets := FilterUserSecrets(names)
+			// Filter secrets based on --all flag
+			filtered := FilterSecrets(names, opts.All)
 
 			// Prepare output with kvx flags
 			kvxOpts := flags.ToKvxOutputOptions(&opts.KvxOutputFlags, kvx.WithIOStreams(ioStreams))
 
 			// Convert to slice of maps for table output
-			data := make([]map[string]interface{}, len(userSecrets))
-			for i, name := range userSecrets {
+			data := make([]map[string]interface{}, len(filtered))
+			for i, name := range filtered {
 				data[i] = map[string]interface{}{
 					"name": name,
+					"type": SecretType(name),
 				}
 			}
 
@@ -65,7 +67,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 				return err
 			}
 
-			if len(userSecrets) == 0 && !cliParams.IsQuiet {
+			if len(filtered) == 0 && !cliParams.IsQuiet {
 				w.Warning("No secrets found")
 			}
 
@@ -74,6 +76,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 	}
 
 	flags.AddKvxOutputFlagsToStruct(cmd, &opts.KvxOutputFlags)
+	cmd.Flags().BoolVarP(&opts.All, "all", "a", false, "Include internal secrets (e.g. auth tokens)")
 
 	return cmd
 }

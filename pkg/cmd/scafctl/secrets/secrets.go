@@ -29,9 +29,9 @@ func CommandSecrets(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 
 			The master encryption key is stored in your OS keychain for security.
 
-			Reserved namespace:
-			  Secret names starting with "scafctl." are reserved for internal use
-			  and cannot be managed through these commands.
+			Internal secrets:
+			  Secret names starting with "scafctl." are used internally (e.g. auth tokens).
+			  By default they are hidden. Use --all on subcommands to include them.
 		`),
 		SilenceUsage: true,
 	}

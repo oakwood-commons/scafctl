@@ -315,5 +315,7 @@ SCAFCTL_DEBUG=1 scafctl run solution -f solution.yaml
 
 ## Next Steps
 
+- [Cache Tutorial](cache-tutorial.md) — Manage cached data and reclaim disk space
+- [Provider Reference](provider-reference.md) — Complete provider documentation
 - [Configuration Tutorial](config-tutorial.md) — Manage all application settings
 - [Getting Started](getting-started.md) — Run your first solution

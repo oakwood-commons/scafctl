@@ -112,7 +112,7 @@ func unifiedDiff(expected, actual, snapshotPath string) string {
 	actualLines := strings.Split(actual, "\n")
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("--- expected (%s)\n", snapshotPath))
+	fmt.Fprintf(&b, "--- expected (%s)\n", snapshotPath)
 	b.WriteString("+++ actual\n")
 
 	// Simple line-by-line diff with context.

@@ -70,7 +70,7 @@ Use --overwrite to replace existing secrets.`,
 			if bytes.HasPrefix(fileData, []byte(encryptedHeader)) {
 				// Encrypted format
 				fmt.Fprint(ioStreams.ErrOut, "Enter decryption password: ")
-				passwordBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
+				passwordBytes, err := term.ReadPassword(int(os.Stdin.Fd())) //nolint:gosec // G115: Fd() fits in int on all supported platforms
 				if err != nil {
 					err := fmt.Errorf("failed to read password: %w", err)
 					w.Errorf("%v", err)

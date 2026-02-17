@@ -16,6 +16,7 @@ Step-by-step guides for learning scafctl features.
 
 - [Resolver Tutorial](resolver-tutorial.md) — Master dynamic value resolution
 - [Run Resolver Tutorial](run-resolver-tutorial.md) — Debug and inspect resolver execution
+- [Run Provider Tutorial](run-provider-tutorial.md) — Test providers in isolation
 - [Actions Tutorial](actions-tutorial.md) — Learn how to use actions for workflow automation
 - [Authentication Tutorial](auth-tutorial.md) — Set up authentication for your workflows
 - [CEL Expressions Tutorial](cel-tutorial.md) — Master CEL expressions and extension functions
@@ -29,8 +30,8 @@ Step-by-step guides for learning scafctl features.
 
 ## Reference
 
-- [Provider Reference](provider-reference.md) — Complete documentation for all built-in providers
 - [Exec Provider Tutorial](exec-provider-tutorial.md) — Cross-platform shell execution with embedded and external shells
 - [Directory Provider Tutorial](directory-provider-tutorial.md) — Listing, scanning, and managing directories
+- [Provider Reference](provider-reference.md) — Complete documentation for all built-in providers
 - [Provider Development Guide](provider-development.md) — Build custom providers
 - [Plugin Development Guide](plugin-development.md) — Extend scafctl with plugins

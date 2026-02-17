@@ -64,6 +64,21 @@ Inputs are passed using `--input` flags. Multiple inputs can be specified by rep
 scafctl run provider http --input url=https://httpbin.org/get --input method=GET
 ```
 
+Output:
+
+```json
+{
+  "data": {
+    "body": "{...}",
+    "headers": {
+      "Content-Type": "application/json",
+      "...": "..."
+    },
+    "statusCode": 200
+  }
+}
+```
+
 ### Array Values
 
 Comma-separated values are automatically converted to arrays:
@@ -112,6 +127,18 @@ headers:
 
 ```bash
 scafctl run provider http --input @inputs.yaml
+```
+
+Output:
+
+```json
+{
+  "data": {
+    "body": "{...}",
+    "headers": { "...": "..." },
+    "statusCode": 200
+  }
+}
 ```
 
 ### Mix File and Inline Inputs
@@ -326,6 +353,7 @@ scafctl run provider secret --input operation=get --input name=my-secret --redac
 
 ## Next Steps
 
-- [Provider Reference](provider-reference.md) — full provider documentation
-- [Resolver Tutorial](resolver-tutorial.md) — using providers within resolvers
-- [Plugin Development](plugin-development.md) — creating custom providers
+- [Actions Tutorial](actions-tutorial.md) — Learn about workflows
+- [Provider Reference](provider-reference.md) — Full provider documentation
+- [Resolver Tutorial](resolver-tutorial.md) — Using providers within resolvers
+- [Provider Development](provider-development.md) — Creating custom providers

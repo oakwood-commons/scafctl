@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -280,8 +281,23 @@ func (p *ExecProvider) executeCommand(ctx context.Context, command string, input
 		workingDir = dir
 	}
 
-	// Capture stdout and stderr
+	// Capture stdout and stderr into buffers.
+	// If IOStreams are available in context, also stream to the terminal in real-time
+	// using io.MultiWriter so output appears immediately while still being captured
+	// for inter-action dependencies.
 	var stdout, stderr bytes.Buffer
+	var stdoutWriter, stderrWriter io.Writer = &stdout, &stderr
+	streamed := false
+
+	if ioStreams, ok := provider.IOStreamsFromContext(ctx); ok && ioStreams != nil {
+		if ioStreams.Out != nil {
+			stdoutWriter = io.MultiWriter(&stdout, ioStreams.Out)
+			streamed = true
+		}
+		if ioStreams.ErrOut != nil {
+			stderrWriter = io.MultiWriter(&stderr, ioStreams.ErrOut)
+		}
+	}
 
 	// Build run options
 	opts := &shellexec.RunOptions{
@@ -290,8 +306,8 @@ func (p *ExecProvider) executeCommand(ctx context.Context, command string, input
 		Shell:   shell,
 		Dir:     workingDir,
 		Env:     env,
-		Stdout:  &stdout,
-		Stderr:  &stderr,
+		Stdout:  stdoutWriter,
+		Stderr:  stderrWriter,
 	}
 	if stdin != nil {
 		opts.Stdin = stdin
@@ -315,6 +331,7 @@ func (p *ExecProvider) executeCommand(ctx context.Context, command string, input
 			"command":  fullCmd,
 			"shell":    string(result.Shell),
 		},
+		Streamed: streamed,
 	}, nil
 }
 

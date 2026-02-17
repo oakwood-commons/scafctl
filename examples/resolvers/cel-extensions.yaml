@@ -2,8 +2,8 @@
 # Demonstrates all custom CEL extension functions provided by scafctl.
 # Each resolver showcases a different extension category.
 #
-# Run: scafctl run solution -f examples/resolvers/cel-extensions.yaml -o json
-# Run: scafctl run solution -f examples/resolvers/cel-extensions.yaml -o yaml
+# Run: scafctl run resolver -f examples/resolvers/cel-extensions.yaml -o json
+# Run: scafctl run resolver -f examples/resolvers/cel-extensions.yaml -o yaml
 
 apiVersion: scafctl.io/v1
 kind: Solution

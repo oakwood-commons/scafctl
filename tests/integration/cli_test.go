@@ -333,6 +333,19 @@ func TestIntegration_RunSolution_HelloWorld(t *testing.T) {
 	assert.Contains(t, stdout, "Hello from Actions!")
 }
 
+func TestIntegration_RunSolution_NoWorkflowErrors(t *testing.T) {
+	t.Parallel()
+	// resolver-demo.yaml has resolvers but no workflow section
+	_, stderr, exitCode := runScafctl(t,
+		"run", "solution",
+		"-f", "examples/resolver-demo.yaml",
+	)
+
+	assert.Equal(t, 3, exitCode, "expected exit code 3 (InvalidInput), got %d", exitCode)
+	assert.Contains(t, stderr, "no workflow defined")
+	assert.Contains(t, stderr, "scafctl run resolver")
+}
+
 func TestIntegration_RunSolution_FileNotFound(t *testing.T) {
 	t.Parallel()
 	_, stderr, exitCode := runScafctl(t,
@@ -489,6 +502,19 @@ func TestIntegration_RunResolver_ExecutionMetadataAlwaysIncluded(t *testing.T) {
 	assert.Contains(t, stdout, "phaseCount")
 }
 
+func TestIntegration_RunResolver_HideExecution(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"--hide-execution",
+		"-o", "json",
+	)
+
+	assert.Equal(t, 0, exitCode)
+	assert.NotContains(t, stdout, "__execution")
+}
+
 func TestIntegration_RunResolver_SkipTransform(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t,
@@ -625,6 +651,123 @@ func TestIntegration_RunResolver_SnapshotRedact(t *testing.T) {
 	assert.Contains(t, stdout, "Snapshot saved to")
 }
 
+func TestIntegration_RunResolver_SensitiveRedactedInTable(t *testing.T) {
+	t.Parallel()
+	// Create a temp solution with sensitive values
+	tmpDir := t.TempDir()
+	solutionPath := filepath.Join(tmpDir, "sensitive.yaml")
+	content := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: sensitive-test
+  version: 1.0.0
+spec:
+  resolvers:
+    secret_val:
+      sensitive: true
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "my-secret-password"
+    public_val:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "public-data"
+`
+	err := os.WriteFile(solutionPath, []byte(content), 0o600)
+	require.NoError(t, err)
+
+	// Table output should redact sensitive values
+	stdout, _, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", solutionPath,
+	)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "[REDACTED]")
+	assert.NotContains(t, stdout, "my-secret-password")
+	assert.Contains(t, stdout, "public-data")
+}
+
+func TestIntegration_RunResolver_SensitiveRevealedInJSON(t *testing.T) {
+	t.Parallel()
+	// Create a temp solution with sensitive values
+	tmpDir := t.TempDir()
+	solutionPath := filepath.Join(tmpDir, "sensitive.yaml")
+	content := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: sensitive-test
+  version: 1.0.0
+spec:
+  resolvers:
+    secret_val:
+      sensitive: true
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "my-secret-password"
+    public_val:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "public-data"
+`
+	err := os.WriteFile(solutionPath, []byte(content), 0o600)
+	require.NoError(t, err)
+
+	// JSON output should reveal sensitive values (Terraform model)
+	stdout, _, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", solutionPath,
+		"-o", "json",
+		"--hide-execution",
+	)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "my-secret-password", "JSON output should reveal sensitive values")
+	assert.NotContains(t, stdout, "[REDACTED]", "JSON output should not redact")
+	assert.Contains(t, stdout, "public-data")
+}
+
+func TestIntegration_RunResolver_ShowSensitiveFlag(t *testing.T) {
+	t.Parallel()
+	// Create a temp solution with sensitive values
+	tmpDir := t.TempDir()
+	solutionPath := filepath.Join(tmpDir, "sensitive.yaml")
+	content := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: sensitive-test
+  version: 1.0.0
+spec:
+  resolvers:
+    secret_val:
+      sensitive: true
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "my-secret-password"
+`
+	err := os.WriteFile(solutionPath, []byte(content), 0o600)
+	require.NoError(t, err)
+
+	// --show-sensitive should work as a recognized flag
+	_, stderr, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", solutionPath,
+		"--show-sensitive",
+	)
+
+	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+}
+
 func TestIntegration_RunResolver_MutualExclusive_DryRunGraph(t *testing.T) {
 	t.Parallel()
 	_, stderr, exitCode := runScafctl(t,
@@ -653,9 +796,8 @@ func TestIntegration_RunResolver_SnapshotRequiresFile(t *testing.T) {
 func TestIntegration_RunSolution_ShowExecution(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t,
-		"run", "solution",
+		"run", "resolver",
 		"-f", "examples/resolver-demo.yaml",
-		"--show-execution",
 		"-o", "json",
 	)
 
@@ -1711,7 +1853,7 @@ func TestIntegration_RunSolution_FromCatalog_ByName(t *testing.T) {
 	require.Equal(t, 0, exitCode)
 
 	// Run the solution from catalog by name (should pick latest version)
-	stdout, _, exitCode := runScafctl(t, "run", "solution", "resolver-demo", "-o", "json")
+	stdout, _, exitCode := runScafctl(t, "run", "resolver", "-f", "resolver-demo", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 	// Should have resolver output
 	assert.Contains(t, stdout, "environment")
@@ -1731,7 +1873,7 @@ func TestIntegration_RunSolution_FromCatalog_ByNameVersion(t *testing.T) {
 	require.Equal(t, 0, exitCode)
 
 	// Run the solution from catalog by name@version
-	stdout, _, exitCode := runScafctl(t, "run", "solution", "resolver-demo@1.0.0", "-o", "json")
+	stdout, _, exitCode := runScafctl(t, "run", "resolver", "-f", "resolver-demo@1.0.0", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 	// Should have resolver output
 	assert.Contains(t, stdout, "environment")
@@ -1745,7 +1887,7 @@ func TestIntegration_RunSolution_FromCatalog_FallbackToFile(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Run a solution by file path (not bare name) - should use file
-	stdout, _, exitCode := runScafctl(t, "run", "solution", "-f", "examples/resolver-demo.yaml", "-o", "json")
+	stdout, _, exitCode := runScafctl(t, "run", "resolver", "-f", "examples/resolver-demo.yaml", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 	// Should have resolver output from file
 	assert.Contains(t, stdout, "environment")
@@ -2054,7 +2196,7 @@ func TestIntegration_CatalogSaveLoad_RoundTrip(t *testing.T) {
 	require.Equal(t, 0, exitCode)
 
 	// Verify the solution can be run
-	stdout, _, exitCode := runScafctl(t, "run", "solution", "resolver-demo", "-o", "json")
+	stdout, _, exitCode := runScafctl(t, "run", "resolver", "-f", "resolver-demo", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "environment")
 	assert.Contains(t, stdout, "production")
@@ -2401,7 +2543,7 @@ func TestIntegration_BuildSolution_NoCacheBypassesCacheHit(t *testing.T) {
 func TestIntegration_SolutionProvider_ResolverComposition(t *testing.T) {
 	t.Parallel()
 	stdout, stderr, exitCode := runScafctl(t,
-		"run", "solution",
+		"run", "resolver",
 		"-f", "tests/integration/testdata/solution-provider/parent-resolver.yaml",
 		"-o", "json",
 	)
@@ -2417,6 +2559,7 @@ func TestIntegration_SolutionProvider_WorkflowComposition(t *testing.T) {
 	stdout, stderr, exitCode := runScafctl(t,
 		"run", "solution",
 		"-f", "tests/integration/testdata/solution-provider/parent-action.yaml",
+		"-o", "json",
 	)
 	t.Logf("stdout: %s", stdout)
 	t.Logf("stderr: %s", stderr)
@@ -2427,7 +2570,7 @@ func TestIntegration_SolutionProvider_WorkflowComposition(t *testing.T) {
 func TestIntegration_SolutionProvider_CircularReference(t *testing.T) {
 	t.Parallel()
 	_, stderr, exitCode := runScafctl(t,
-		"run", "solution",
+		"run", "resolver",
 		"-f", "tests/integration/testdata/solution-provider/circular-a.yaml",
 	)
 	t.Logf("stderr: %s", stderr)
@@ -2494,7 +2637,7 @@ spec:
 	require.NoError(t, os.WriteFile(parentPath, []byte(parentSolution), 0o644))
 
 	stdout, stderr, exitCode := runScafctl(t,
-		"run", "solution",
+		"run", "resolver",
 		"-f", parentPath,
 		"-o", "json",
 	)
@@ -2531,7 +2674,7 @@ spec:
 	require.NoError(t, os.WriteFile(selfPath, []byte(selfRef), 0o644))
 
 	_, stderr, exitCode := runScafctl(t,
-		"run", "solution",
+		"run", "resolver",
 		"-f", selfPath,
 	)
 	t.Logf("stderr: %s", stderr)
@@ -2565,7 +2708,7 @@ spec:
 	require.NoError(t, os.WriteFile(parentPath, []byte(parentSolution), 0o644))
 
 	_, stderr, exitCode := runScafctl(t,
-		"run", "solution",
+		"run", "resolver",
 		"-f", parentPath,
 	)
 	t.Logf("stderr: %s", stderr)
@@ -2604,7 +2747,7 @@ spec:
 	require.NoError(t, os.WriteFile(parentPath, []byte(parentSolution), 0o644))
 
 	stdout, stderr, exitCode := runScafctl(t,
-		"run", "solution",
+		"run", "resolver",
 		"-f", parentPath,
 	)
 	t.Logf("stdout: %s", stdout)
@@ -2641,7 +2784,7 @@ spec:
 	require.NoError(t, os.WriteFile(parentPath, []byte(parentSolution), 0o644))
 
 	_, stderr, exitCode := runScafctl(t,
-		"run", "solution",
+		"run", "resolver",
 		"-f", parentPath,
 	)
 	t.Logf("stderr: %s", stderr)
@@ -2677,7 +2820,7 @@ spec:
 	require.NoError(t, os.WriteFile(parentPath, []byte(parentSolution), 0o644))
 
 	stdout, stderr, exitCode := runScafctl(t,
-		"run", "solution",
+		"run", "resolver",
 		"-f", parentPath,
 	)
 	t.Logf("stdout: %s", stdout)

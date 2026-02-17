@@ -227,10 +227,12 @@ For the Entra handler:
 | Secret Name | Description |
 |-------------|-------------|
 | `scafctl.auth.entra.refresh_token` | Long-lived refresh token |
-| `scafctl.auth.entra.metadata` | Token metadata (claims, tenant, expiry) |
+| `scafctl.auth.entra.metadata` | Token metadata (claims, tenant, client ID, expiry) |
 | `scafctl.auth.entra.token.<scope-hash>` | Cached access tokens by scope |
 
 The scope hash is a base64url-encoded representation of the scope string.
+
+The metadata includes the `clientId` used during login so that token refreshes always use the same client ID that originally obtained the refresh token, regardless of what client ID is in the current configuration.
 
 ---
 

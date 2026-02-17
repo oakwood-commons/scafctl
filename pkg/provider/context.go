@@ -3,7 +3,10 @@
 
 package provider
 
-import "context"
+import (
+	"context"
+	"io"
+)
 
 // Context keys for provider execution control (unexported for safety).
 type contextKey string
@@ -14,7 +17,31 @@ const (
 	resolverContextKey  contextKey = "scafctl.provider.resolverContext"
 	parametersKey       contextKey = "scafctl.provider.parameters"
 	iterationContextKey contextKey = "scafctl.provider.iterationContext"
+	ioStreamsKey        contextKey = "scafctl.provider.ioStreams"
 )
+
+// IOStreams holds terminal IO writers for providers that support streaming output.
+// Providers can use these to write output directly to the terminal during execution,
+// while still capturing data for inter-action dependencies.
+type IOStreams struct {
+	// Out is the writer for standard output (typically os.Stdout).
+	Out io.Writer
+	// ErrOut is the writer for standard error output (typically os.Stderr).
+	ErrOut io.Writer
+}
+
+// WithIOStreams returns a new context with IO streams for provider terminal output.
+func WithIOStreams(ctx context.Context, streams *IOStreams) context.Context {
+	return context.WithValue(ctx, ioStreamsKey, streams)
+}
+
+// IOStreamsFromContext retrieves the IO streams from the context.
+// Returns the IO streams and true if found, nil and false otherwise.
+// Providers should check this to determine if they can stream output to the terminal.
+func IOStreamsFromContext(ctx context.Context) (*IOStreams, bool) {
+	streams, ok := ctx.Value(ioStreamsKey).(*IOStreams)
+	return streams, ok
+}
 
 // WithExecutionMode returns a new context with the specified execution mode (capability).
 func WithExecutionMode(ctx context.Context, mode Capability) context.Context {

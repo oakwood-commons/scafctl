@@ -6,7 +6,6 @@ package run
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -161,7 +160,7 @@ func TestSolutionOptions_Run_FileNotFound(t *testing.T) {
 func TestSolutionOptions_Run_EmptySolution(t *testing.T) {
 	t.Parallel()
 
-	// Create a solution file with no resolvers
+	// Create a solution file with no resolvers and no workflow
 	tmpDir := t.TempDir()
 	solutionPath := filepath.Join(tmpDir, "solution.yaml")
 	solutionContent := `apiVersion: scafctl.io/v1
@@ -198,10 +197,9 @@ spec:
 	ctx := logger.WithLogger(context.Background(), lgr)
 
 	err = opts.Run(ctx)
-	require.NoError(t, err)
-
-	// Should output empty JSON object
-	assert.Contains(t, stdout.String(), "{}")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no workflow defined")
+	assert.Contains(t, err.Error(), "scafctl run resolver")
 }
 
 func TestCalculateValueSize(t *testing.T) {
@@ -277,7 +275,7 @@ func TestExitCodes(t *testing.T) {
 
 // CLI Scenario Tests - Phase 6 Testing & Validation
 
-func TestSolutionOptions_Run_StdinInput(t *testing.T) {
+func TestSolutionOptions_Run_StdinInput_NoWorkflow(t *testing.T) {
 	t.Parallel()
 
 	solutionContent := `apiVersion: scafctl.io/v1
@@ -319,12 +317,12 @@ spec:
 	ctx := logger.WithLogger(context.Background(), lgr)
 
 	err := opts.Run(ctx)
-	require.NoError(t, err)
-
-	assert.Contains(t, stdout.String(), "hello-from-stdin")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no workflow defined")
+	assert.Contains(t, err.Error(), "scafctl run resolver")
 }
 
-func TestSolutionOptions_Run_YAMLOutput(t *testing.T) {
+func TestSolutionOptions_Run_YAMLOutput_NoWorkflow(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
@@ -371,15 +369,11 @@ spec:
 	ctx := logger.WithLogger(context.Background(), lgr)
 
 	err = opts.Run(ctx)
-	require.NoError(t, err)
-
-	// YAML output should contain the value without JSON braces
-	output := stdout.String()
-	assert.Contains(t, output, "test:")
-	assert.Contains(t, output, "yaml-test-value")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no workflow defined")
 }
 
-func TestSolutionOptions_Run_QuietOutput(t *testing.T) {
+func TestSolutionOptions_Run_QuietOutput_NoWorkflow(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
@@ -426,10 +420,8 @@ spec:
 	ctx := logger.WithLogger(context.Background(), lgr)
 
 	err = opts.Run(ctx)
-	require.NoError(t, err)
-
-	// Quiet output should be empty
-	assert.Empty(t, stdout.String())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no workflow defined")
 }
 
 // testRegistryWithParameters creates a registry with static and parameter providers
@@ -440,7 +432,7 @@ func testRegistryWithParameters() *provider.Registry {
 	return reg
 }
 
-func TestSolutionOptions_Run_ParameterFromFile(t *testing.T) {
+func TestSolutionOptions_Run_ParameterFromFile_NoWorkflow(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
@@ -453,7 +445,7 @@ region: us-west-2
 	err := os.WriteFile(paramsPath, []byte(paramsContent), 0o600)
 	require.NoError(t, err)
 
-	// Create solution that uses parameter provider to access CLI params
+	// Create solution that uses parameter provider to access CLI params but has no workflow
 	solutionPath := filepath.Join(tmpDir, "solution.yaml")
 	solutionContent := `apiVersion: scafctl.io/v1
 kind: Solution
@@ -504,14 +496,11 @@ spec:
 	ctx := logger.WithLogger(context.Background(), lgr)
 
 	err = opts.Run(ctx)
-	require.NoError(t, err)
-
-	output := stdout.String()
-	assert.Contains(t, output, "production")
-	assert.Contains(t, output, "us-west-2")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no workflow defined")
 }
 
-func TestSolutionOptions_Run_ParameterKeyValue(t *testing.T) {
+func TestSolutionOptions_Run_ParameterKeyValue_NoWorkflow(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
@@ -559,12 +548,11 @@ spec:
 	ctx := logger.WithLogger(context.Background(), lgr)
 
 	err = opts.Run(ctx)
-	require.NoError(t, err)
-
-	assert.Contains(t, stdout.String(), "my-application")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no workflow defined")
 }
 
-func TestSolutionOptions_Run_SensitiveRedaction(t *testing.T) {
+func TestSolutionOptions_Run_SensitiveRedaction_NoWorkflow(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
@@ -618,17 +606,11 @@ spec:
 	ctx := logger.WithLogger(context.Background(), lgr)
 
 	err = opts.Run(ctx)
-	require.NoError(t, err)
-
-	output := stdout.String()
-	// Sensitive value should be redacted
-	assert.Contains(t, output, "[REDACTED]")
-	assert.NotContains(t, output, "super-secret-password")
-	// Public value should be visible
-	assert.Contains(t, output, "public-data")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no workflow defined")
 }
 
-func TestSolutionOptions_Run_MaxValueSizeExceeded(t *testing.T) {
+func TestSolutionOptions_Run_MaxValueSizeExceeded_NoWorkflow(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
@@ -675,14 +657,16 @@ spec:
 	lgr := logger.Get(0)
 	ctx := logger.WithLogger(context.Background(), lgr)
 
+	// Should error about no workflow, not about max value size
 	err = opts.Run(ctx)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "exceeds maximum")
+	assert.Contains(t, err.Error(), "no workflow defined")
 }
 
 func TestSolutionOptions_Run_InvalidOutputFormat(t *testing.T) {
 	t.Parallel()
 
+	// Use a solution with a workflow so we don't hit "no workflow" error first
 	tmpDir := t.TempDir()
 	solutionPath := filepath.Join(tmpDir, "solution.yaml")
 	solutionContent := `apiVersion: scafctl.io/v1
@@ -692,6 +676,12 @@ metadata:
   version: 1.0.0
 spec:
   resolvers: {}
+  workflow:
+    actions:
+      greet:
+        use: static
+        inputs:
+          value: hello
 `
 	err := os.WriteFile(solutionPath, []byte(solutionContent), 0o600)
 	require.NoError(t, err)
@@ -709,7 +699,8 @@ spec:
 	assert.Contains(t, err.Error(), "invalid")
 }
 
-func TestSolutionOptions_Run_ShowExecution(t *testing.T) {
+func TestSolutionOptions_Run_ShowExecution_NoWorkflow(t *testing.T) {
+	// Solutions without workflows should error even with --show-execution
 	t.Parallel()
 
 	tmpDir := t.TempDir()
@@ -757,26 +748,12 @@ spec:
 	ctx := logger.WithLogger(context.Background(), lgr)
 
 	err = opts.Run(ctx)
-	require.NoError(t, err)
-
-	output := stdout.String()
-	assert.Contains(t, output, "hello")
-	assert.Contains(t, output, "__execution")
-	assert.Contains(t, output, "resolvers")
-	assert.Contains(t, output, "summary")
-
-	// Parse and verify structure
-	var result map[string]any
-	err = json.Unmarshal([]byte(output), &result)
-	require.NoError(t, err)
-
-	execution, ok := result["__execution"].(map[string]any)
-	require.True(t, ok)
-	assert.Contains(t, execution, "resolvers")
-	assert.Contains(t, execution, "summary")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no workflow defined")
+	assert.Contains(t, err.Error(), "scafctl run resolver")
 }
 
-func TestSolutionOptions_Run_NoShowExecution(t *testing.T) {
+func TestSolutionOptions_Run_NoShowExecution_NoWorkflow(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
@@ -824,10 +801,6 @@ spec:
 	ctx := logger.WithLogger(context.Background(), lgr)
 
 	err = opts.Run(ctx)
-	require.NoError(t, err)
-
-	output := stdout.String()
-	assert.Contains(t, output, "hello")
-	// Without --show-execution, __execution should NOT be present
-	assert.NotContains(t, output, "__execution")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no workflow defined")
 }

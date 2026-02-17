@@ -45,7 +45,7 @@ You can optionally switch to an **external shell** (bash, pwsh, cmd) when you ne
 
 ## Running Simple Commands
 
-The simplest usage is a single command:
+The simplest usage is a single command. Create a file called `simple-exec.yaml`:
 
 ```yaml
 apiVersion: scafctl.io/v1
@@ -67,7 +67,13 @@ spec:
 Run it:
 
 ```bash
-scafctl run solution -f solution.yaml
+scafctl run solution -f simple-exec.yaml
+```
+
+Output:
+
+```
+Hello, World!
 ```
 
 ### Output Fields
@@ -86,6 +92,7 @@ Every exec action produces these output fields:
 You can reference these in downstream actions:
 
 ```yaml
+# Add these to your solution's workflow.actions section:
 actions:
   run-cmd:
     provider: exec
@@ -104,7 +111,9 @@ actions:
 
 ## Pipes and Shell Features
 
-Unlike traditional exec implementations that require a special flag for shell features, the embedded shell handles all POSIX syntax by default:
+Unlike traditional exec implementations that require a special flag for shell features, the embedded shell handles all POSIX syntax by default.
+
+> **Note:** The YAML snippets in the remaining sections show only the `actions:` block. To run them, place each snippet inside a complete solution file with `apiVersion`, `kind`, `metadata`, `spec.resolvers: {}`, and `spec.workflow` sections — like the `simple-exec.yaml` example above.
 
 ```yaml
 actions:
@@ -566,3 +575,10 @@ Complete runnable examples are available in the `examples/exec/` directory:
 | [shell-types.yaml](../../examples/exec/shell-types.yaml) | Using auto, bash, and PowerShell shells |
 | [environment-and-io.yaml](../../examples/exec/environment-and-io.yaml) | Environment variables, stdin, timeouts |
 | [cross-platform.yaml](../../examples/exec/cross-platform.yaml) | Patterns that work on all operating systems |
+
+## Next Steps
+
+- [Directory Provider Tutorial](directory-provider-tutorial.md) — Listing, scanning, and managing directories
+- [Logging & Debugging Tutorial](logging-tutorial.md) — Control log verbosity, format, and output
+- [Provider Reference](provider-reference.md) — Complete provider documentation
+- [Actions Tutorial](actions-tutorial.md) — Use exec providers in workflows

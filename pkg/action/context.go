@@ -220,6 +220,16 @@ func (c *Context) MarkSucceeded(name string, results any) {
 	}
 }
 
+// MarkStreamed marks an action as having streamed its output to the terminal.
+func (c *Context) MarkStreamed(name string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if existing, ok := c.actions[name]; ok {
+		existing.Streamed = true
+	}
+}
+
 // MarkFailed marks an action as failed with an error message.
 func (c *Context) MarkFailed(name, errMsg string) {
 	c.mu.Lock()

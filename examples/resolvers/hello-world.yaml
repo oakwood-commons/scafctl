@@ -1,7 +1,7 @@
 # Hello World Example
 # The simplest possible resolver that returns a static greeting.
 #
-# Run: scafctl run solution -f hello-world.yaml
+# Run: scafctl run resolver -f hello-world.yaml
 
 apiVersion: scafctl.io/v1
 kind: Solution

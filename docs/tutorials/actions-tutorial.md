@@ -28,7 +28,7 @@ Actions are the execution phase of a scafctl solution. While **resolvers** compu
 
 ### 1. Hello World
 
-The simplest action workflow:
+The simplest action workflow. Create a file called `hello-actions.yaml`:
 
 ```yaml
 apiVersion: scafctl.io/v1
@@ -61,65 +61,101 @@ spec:
 
 Run it:
 ```bash
-scafctl run solution -f hello.yaml
+scafctl run solution -f hello-actions.yaml
+```
+
+Output:
+
+```
+Hello, World!
 ```
 
 ### 2. Dependencies
 
-Actions can depend on other actions:
+Actions can depend on other actions. Create a file called `build-pipeline.yaml`:
 
 ```yaml
-workflow:
-  actions:
-    build:
-      provider: exec
-      inputs:
-        command: "go build ./..."
-    
-    test:
-      provider: exec
-      dependsOn: [build]  # test runs AFTER build
-      inputs:
-        command: "go test ./..."
-    
-    deploy:
-      provider: exec
-      dependsOn: [test]   # deploy runs AFTER test
-      inputs:
-        command: "deploy.sh"
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: build-pipeline
+  version: 1.0.0
+
+spec:
+  resolvers: {}
+  workflow:
+    actions:
+      build:
+        provider: exec
+        inputs:
+          command: "echo Building..."
+      
+      test:
+        provider: exec
+        dependsOn: [build]  # test runs AFTER build
+        inputs:
+          command: "echo Testing..."
+      
+      deploy:
+        provider: exec
+        dependsOn: [test]   # deploy runs AFTER test
+        inputs:
+          command: "echo Deploying..."
 ```
 
 This creates a linear chain: `build → test → deploy`
 
+Run it:
+
+```bash
+scafctl run solution -f build-pipeline.yaml
+```
+
+Output:
+
+```
+Building...
+Testing...
+Deploying...
+```
+
 ### 3. Parallel Execution
 
-Actions without dependencies (or with the same dependencies) run in parallel:
+Actions without dependencies (or with the same dependencies) run in parallel. Create a file called `parallel.yaml`:
 
 ```yaml
-workflow:
-  actions:
-    init:
-      provider: exec
-      inputs:
-        command: "init.sh"
-    
-    build:
-      provider: exec
-      dependsOn: [init]
-      inputs:
-        command: "build.sh"
-    
-    test:
-      provider: exec
-      dependsOn: [init]    # Same dependency as build
-      inputs:
-        command: "test.sh"  # Runs in PARALLEL with build
-    
-    deploy:
-      provider: exec
-      dependsOn: [build, test]  # Waits for BOTH
-      inputs:
-        command: "deploy.sh"
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: parallel-example
+  version: 1.0.0
+
+spec:
+  resolvers: {}
+  workflow:
+    actions:
+      init:
+        provider: exec
+        inputs:
+          command: "echo Initializing..."
+      
+      build:
+        provider: exec
+        dependsOn: [init]
+        inputs:
+          command: "echo Building..."
+      
+      test:
+        provider: exec
+        dependsOn: [init]    # Same dependency as build
+        inputs:
+          command: "echo Testing..."  # Runs in PARALLEL with build
+      
+      deploy:
+        provider: exec
+        dependsOn: [build, test]  # Waits for BOTH
+        inputs:
+          command: "echo Deploying..."
 ```
 
 This creates a diamond pattern:
@@ -131,34 +167,555 @@ This creates a diamond pattern:
    deploy
 ```
 
-## Core Concepts
+Run it:
 
-### Providers
+```bash
+scafctl run solution -f parallel.yaml
+```
 
-Actions use providers to execute operations. Providers must have the `action` capability.
+Output (build and test may appear in either order since they run in parallel):
 
-Built-in providers with action capability:
-- `shell` - Execute shell commands
-- `http` - Make HTTP requests
-- `file` - File operations
-- `git` - Git operations
-- `sleep` - Delay execution
+```
+Initializing...
+[build] Building...
+[test] Testing...
+Deploying...
+```
+
+> **Note**: When actions run in parallel, their output is prefixed with `[action-name]` to distinguish which action produced each line. Actions running alone (like `init` and `deploy`) don't get a prefix.
+
+## Conditions (`when`)
+
+Actions can be conditional — they only execute when a CEL expression evaluates to `true`. If the condition is `false`, the action is skipped.
+
+Create a file called `conditional-demo.yaml`:
+
+```yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: conditional-demo
+  version: 1.0.0
+
+spec:
+  resolvers:
+    environment:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            onError: continue
+            inputs:
+              key: environment
+          - provider: static
+            inputs:
+              value: staging
+
+  workflow:
+    actions:
+      setup:
+        provider: exec
+        inputs:
+          command:
+            expr: "'echo Setting up for ' + _.environment"
+
+      staging-deploy:
+        provider: exec
+        dependsOn: [setup]
+        when:
+          expr: "_.environment == 'staging'"
+        inputs:
+          command: "echo Deploying to staging..."
+
+      prod-deploy:
+        provider: exec
+        dependsOn: [setup]
+        when:
+          expr: "_.environment == 'prod'"
+        inputs:
+          command: "echo Deploying to production..."
+
+      notify:
+        provider: exec
+        dependsOn: [staging-deploy, prod-deploy]
+        inputs:
+          command:
+            expr: "'echo Deployment to ' + _.environment + ' complete'"
+```
+
+### Run with Default (staging)
+
+```bash
+scafctl run solution -f conditional-demo.yaml
+```
+
+Output:
+
+```
+Setting up for staging
+Deploying to staging...
+Deployment to staging complete
+```
+
+The `prod-deploy` action is skipped because the condition `_.environment == 'prod'` is `false`.
+
+### Run with Production
+
+```bash
+scafctl run solution -f conditional-demo.yaml -r environment=prod
+```
+
+Output:
+
+```
+Setting up for prod
+Deploying to production...
+Deployment to prod complete
+```
+
+Now `staging-deploy` is skipped and `prod-deploy` runs instead.
+
+---
+
+## ForEach
+
+ForEach expands a single action into multiple iterations — one for each item in an array. Each iteration can access the current element via `__item` and its index via `__index`.
+
+Create a file called `foreach-demo.yaml`:
+
+```yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: foreach-demo
+  version: 1.0.0
+
+spec:
+  resolvers:
+    targets:
+      type: array
+      items:
+        type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - server1.example.com
+                - server2.example.com
+                - server3.example.com
+    version:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: v1.2.3
+
+  workflow:
+    actions:
+      build:
+        provider: exec
+        inputs:
+          command:
+            expr: "'echo Building version ' + _.version + '...'"
+
+      deploy:
+        provider: exec
+        dependsOn: [build]
+        forEach:
+          in:
+            expr: "_.targets"
+          concurrency: 2
+          onError: continue
+        inputs:
+          command:
+            expr: "'echo Deploying ' + _.version + ' to ' + __item"
+
+      verify:
+        provider: exec
+        dependsOn: [deploy]
+        inputs:
+          command:
+            expr: "'echo Verifying ' + string(size(_.targets)) + ' deployments...'"
+```
+
+```bash
+scafctl run solution -f foreach-demo.yaml
+```
+
+Output:
+
+```
+Building version v1.2.3...
+[deploy[0]] Deploying v1.2.3 to server1.example.com
+[deploy[1]] Deploying v1.2.3 to server2.example.com
+[deploy[2]] Deploying v1.2.3 to server3.example.com
+Verifying 3 deployments...
+```
+
+The `deploy` action expands into `deploy[0]`, `deploy[1]`, `deploy[2]` — one per target. With `concurrency: 2`, at most two deploy iterations run in parallel. The `verify` action waits for all iterations to complete.
+
+### ForEach Options
+
+| Option | Description |
+|--------|-------------|
+| `in` | CEL expression returning an array to iterate over |
+| `item` | Alias for `__item` (e.g., `item: server` lets you use `server` instead) |
+| `index` | Alias for `__index` |
+| `concurrency` | Max parallel iterations (default: unlimited) |
+| `onError` | `fail` (default) or `continue` — controls behavior when an iteration fails |
+
+---
+
+## Error Handling
+
+By default, if an action fails the entire workflow stops. Use `onError: continue` to allow the workflow to proceed past failures.
+
+Create a file called `error-handling-demo.yaml`:
+
+```yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: error-handling-demo
+  version: 1.0.0
+
+spec:
+  resolvers: {}
+
+  workflow:
+    actions:
+      optional-cleanup:
+        description: Optional cleanup that might fail
+        provider: exec
+        onError: continue
+        inputs:
+          command: "echo 'Attempting optional cleanup...' && exit 1"
+
+      required-setup:
+        provider: exec
+        inputs:
+          command: "echo 'Running required setup...'"
+
+      main-work:
+        provider: exec
+        dependsOn: [optional-cleanup, required-setup]
+        inputs:
+          command: "echo 'Doing main work...'"
+```
+
+```bash
+scafctl run solution -f error-handling-demo.yaml
+```
+
+Output:
+
+```
+Attempting optional cleanup...
+Running required setup...
+Doing main work...
+```
+
+The `optional-cleanup` action fails (`exit 1`), but because `onError: continue` is set, the workflow continues. The `main-work` action still runs.
+
+Without `onError: continue`, the workflow would stop at `optional-cleanup` and `main-work` would be skipped.
+
+---
+
+## Action Results
+
+Actions can access results from previously completed actions using `__actions`. This enables data flow between actions.
+
+Create a file called `results-demo.yaml`:
+
+```yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: results-demo
+  version: 1.0.0
+
+spec:
+  resolvers:
+    user_id:
+      type: int
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: 42
+
+  workflow:
+    actions:
+      fetch-user:
+        provider: cel
+        inputs:
+          expression: |
+            {"id": 42, "name": "John Doe", "email": "john@example.com"}
+
+      greet:
+        provider: exec
+        dependsOn: [fetch-user]
+        inputs:
+          command:
+            expr: "'echo Hello, ' + __actions['fetch-user'].results.name + '!'"
+```
+
+```bash
+scafctl run solution -f results-demo.yaml
+```
+
+Output:
+
+```
+Hello, John Doe!
+```
+
+The `fetch-user` action uses the `cel` provider to return structured data. The `greet` action accesses that data via `__actions['fetch-user'].results.name`.
+
+### Available Fields in `__actions.<name>`
+
+| Field | Description |
+|-------|-------------|
+| `results` | The action's output data |
+| `status` | Execution status (`succeeded`, `failed`, `skipped`) |
+| `inputs` | Resolved input values |
+| `error` | Error message (if failed) |
+
+---
+
+## Retry
+
+Actions can automatically retry on failure with configurable backoff strategies.
+
+Create a file called `retry-demo.yaml`:
+
+```yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: retry-demo
+  version: 1.0.0
+
+spec:
+  resolvers: {}
+
+  workflow:
+    actions:
+      fixed-retry:
+        description: Fixed delay between retries (always 2s)
+        provider: exec
+        retry:
+          maxAttempts: 3
+          backoff: fixed
+          initialDelay: 2s
+        inputs:
+          command: "echo 'Fixed retry attempt succeeded'"
+
+      linear-retry:
+        description: Linearly increasing delay (1s, 2s, 3s, ...)
+        provider: exec
+        dependsOn: [fixed-retry]
+        retry:
+          maxAttempts: 4
+          backoff: linear
+          initialDelay: 1s
+          maxDelay: 10s
+        inputs:
+          command: "echo 'Linear retry attempt succeeded'"
+
+      exponential-retry:
+        description: Exponentially increasing delay (500ms, 1s, 2s, 4s, ...)
+        provider: exec
+        dependsOn: [linear-retry]
+        retry:
+          maxAttempts: 5
+          backoff: exponential
+          initialDelay: 500ms
+          maxDelay: 30s
+        inputs:
+          command: "echo 'Exponential retry attempt succeeded'"
+
+      retry-with-timeout:
+        description: Retry combined with a per-action timeout
+        provider: exec
+        dependsOn: [exponential-retry]
+        timeout: 30s
+        retry:
+          maxAttempts: 3
+          backoff: exponential
+          initialDelay: 1s
+          maxDelay: 5s
+        inputs:
+          command: "echo 'Retry + timeout succeeded'"
+```
+
+```bash
+scafctl run solution -f retry-demo.yaml
+```
+
+Output:
+
+```
+Fixed retry attempt succeeded
+Linear retry attempt succeeded
+Exponential retry attempt succeeded
+Retry + timeout succeeded
+```
+
+Since all commands succeed on the first try, no retries occur. Retries only trigger on failures.
+
+### Backoff Strategies
+
+| Strategy | Delay pattern | Best for |
+|----------|--------------|----------|
+| `fixed` | Constant (e.g., always 2s) | Known recovery time |
+| `linear` | Increases linearly (1s, 2s, 3s, ...) | Gradually increasing wait |
+| `exponential` | Doubles each time (1s, 2s, 4s, 8s, ...) | External API calls, rate limits |
+
+### Conditional Retry (retryIf)
+
+Use a CEL expression to retry only on specific error types:
+
+```yaml
+retry:
+  maxAttempts: 5
+  backoff: exponential
+  initialDelay: 1s
+  retryIf: "__error.statusCode == 429 || __error.statusCode >= 500"
+```
+
+The `__error` variable provides context about the failure:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `__error.message` | string | The error message |
+| `__error.type` | string | Error category: `http`, `exec`, `timeout`, `validation`, `unknown` |
+| `__error.statusCode` | int | HTTP status code (0 for non-HTTP errors) |
+| `__error.exitCode` | int | Process exit code (0 for non-exec errors) |
+| `__error.attempt` | int | Current attempt number (1-based) |
+| `__error.maxAttempts` | int | Maximum retry attempts configured |
+
+Common patterns:
+
+```yaml
+# Only retry on timeouts
+retryIf: "__error.type == 'timeout'"
+
+# Retry on rate limits or server errors
+retryIf: "__error.statusCode == 429 || __error.statusCode >= 500"
+
+# Limit effective retries regardless of maxAttempts
+retryIf: "__error.attempt < 3"
+
+# Disable retry entirely (even with retry config present)
+retryIf: "false"
+```
+
+---
+
+## Timeout
+
+Limit how long an action can run before being terminated:
 
 ```yaml
 actions:
-  api-call:
-    provider: http
+  quick-check:
+    provider: exec
+    timeout: 30s
     inputs:
-      method: POST
-      url: "https://api.example.com/deploy"
-      body:
-        version:
-          expr: "_.version"
+      command: "echo 'Must finish in 30 seconds'"
 ```
 
-### Inputs
+If the action exceeds its timeout, it fails with a timeout error. You can combine `timeout` with `retry` to automatically retry timed-out operations.
 
-Inputs are passed to the provider. They support:
+---
+
+## Finally Section
+
+Finally actions **always run**, even if main actions fail. This is essential for cleanup operations like removing temporary resources.
+
+Create a file called `finally-demo.yaml`:
+
+```yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: finally-demo
+  version: 1.0.0
+
+spec:
+  resolvers:
+    test_db:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: test_db_12345
+
+  workflow:
+    actions:
+      create-test-db:
+        provider: exec
+        inputs:
+          command:
+            expr: "'echo Creating test database: ' + _.test_db"
+
+      run-tests:
+        provider: exec
+        dependsOn: [create-test-db]
+        inputs:
+          command: "echo Running tests against test database..."
+
+      generate-reports:
+        provider: exec
+        dependsOn: [run-tests]
+        inputs:
+          command: "echo Generating test reports..."
+
+    finally:
+      cleanup-db:
+        provider: exec
+        inputs:
+          command:
+            expr: "'echo Dropping test database: ' + _.test_db"
+
+      notify:
+        provider: exec
+        dependsOn: [cleanup-db]
+        inputs:
+          command: "echo Workflow complete, cleanup finished"
+```
+
+```bash
+scafctl run solution -f finally-demo.yaml
+```
+
+Output:
+
+```
+Creating test database: test_db_12345
+Running tests against test database...
+Generating test reports...
+Dropping test database: test_db_12345
+Workflow complete, cleanup finished
+```
+
+The finally actions run after all main actions complete. If `run-tests` failed, the cleanup would still execute.
+
+### Finally Rules
+
+- Finally actions run **after all main actions** (whether they succeeded or failed)
+- Finally actions can only depend on **other finally actions** (not main actions)
+- ForEach is **not allowed** in the finally section
+
+---
+
+## Inputs Reference
+
+Inputs are passed to the provider and support several value types:
 
 **Literal values:**
 ```yaml
@@ -172,7 +729,7 @@ inputs:
 ```yaml
 inputs:
   environment:
-    rslvr: environment  # References resolver named "environment"
+    rslvr: environment
 ```
 
 **CEL expressions:**
@@ -189,243 +746,26 @@ inputs:
     tmpl: "Deploying {{ ._.project }} to {{ ._.environment }}"
 ```
 
-### Action Results
+---
 
-Actions can access results from previous actions using `__actions`:
+## Providers Reference
 
-```yaml
-actions:
-  build:
-    provider: exec
-    inputs:
-      command: "go build -o app"
-  
-  deploy:
-    provider: exec
-    dependsOn: [build]
-    inputs:
-      # Access build action's results
-      artifact:
-        expr: "__actions.build.results.output"
-```
+Actions use providers to execute operations. Providers must have the `action` capability.
 
-**Available in `__actions.<name>`:**
-- `results` - The action's output data
-- `status` - Execution status (succeeded, failed, skipped)
-- `inputs` - Resolved input values
-- `error` - Error message (if failed)
+Built-in providers with action capability:
 
-### Conditions (`when`)
+| Provider | Description |
+|----------|-------------|
+| `exec` | Execute shell commands |
+| `cel` | Evaluate CEL expressions and return structured data |
+| `http` | Make HTTP requests |
+| `file` | File operations |
+| `git` | Git operations |
+| `sleep` | Delay execution |
 
-Actions can be conditional:
+See [Provider Reference](provider-reference.md) for complete provider documentation.
 
-```yaml
-actions:
-  prod-deploy:
-    provider: exec
-    when:
-      expr: "_.environment == 'prod'"
-    inputs:
-      command: "prod-deploy.sh"
-```
-
-If the condition evaluates to `false`, the action is skipped with `SkipReasonCondition`.
-
-### ForEach
-
-Execute an action for each item in an array:
-
-```yaml
-resolvers:
-  servers:
-    type: array
-    resolve:
-      with:
-        - provider: static
-          inputs:
-            value: ["web1", "web2", "web3"]
-
-workflow:
-  actions:
-    deploy:
-      provider: exec
-      forEach:
-        in:
-          expr: "_.servers"
-      inputs:
-        server:
-          expr: "__item"   # Current array element
-        index:
-          expr: "__index"  # Current index (0, 1, 2, ...)
-        command:
-          expr: "'deploy.sh ' + __item"
-```
-
-The action expands to: `deploy[0]`, `deploy[1]`, `deploy[2]`
-
-**ForEach options:**
-```yaml
-forEach:
-  in:
-    expr: "_.servers"
-  item: server      # Alias for __item
-  index: i          # Alias for __index
-  concurrency: 2    # Max parallel iterations
-  onError: continue # Continue on iteration failure
-```
-
-### Error Handling
-
-**Default behavior (`fail`):** Stop workflow on failure
-```yaml
-actions:
-  critical:
-    provider: exec
-    onError: fail  # Default - stops workflow if this fails
-```
-
-**Continue on failure:**
-```yaml
-actions:
-  optional:
-    provider: exec
-    onError: continue  # Workflow continues even if this fails
-```
-
-**With ForEach:**
-```yaml
-actions:
-  deploy:
-    provider: exec
-    forEach:
-      in:
-        expr: "_.servers"
-      onError: continue  # Continue deploying to other servers
-```
-
-### Retry
-
-Automatic retry with backoff:
-
-```yaml
-actions:
-  flaky-api:
-    provider: http
-    retry:
-      maxAttempts: 5
-      backoff: exponential  # fixed, linear, or exponential
-      initialDelay: 1s
-      maxDelay: 30s
-    inputs:
-      url: "https://flaky-api.example.com"
-```
-
-**Backoff strategies:**
-- `fixed` - Constant delay (e.g., always 1s)
-- `linear` - Delay increases linearly (1s, 2s, 3s, ...)
-- `exponential` - Delay doubles (1s, 2s, 4s, 8s, ...)
-
-### Conditional Retry (retryIf)
-
-Use a CEL expression to control when retries occur:
-
-```yaml
-actions:
-  api-call:
-    provider: http
-    retry:
-      maxAttempts: 5
-      backoff: exponential
-      initialDelay: 1s
-      # Only retry on rate limits (429) or server errors (5xx)
-      retryIf: "__error.statusCode == 429 || __error.statusCode >= 500"
-    inputs:
-      url: "https://api.example.com/resource"
-```
-
-The `__error` context variable provides:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `__error.message` | string | The error message |
-| `__error.type` | string | Error category: `http`, `exec`, `timeout`, `validation`, `unknown` |
-| `__error.statusCode` | int | HTTP status code (0 for non-HTTP errors) |
-| `__error.exitCode` | int | Process exit code (0 for non-exec errors) |
-| `__error.attempt` | int | Current attempt number (1-based) |
-| `__error.maxAttempts` | int | Maximum retry attempts configured |
-
-**Example conditions:**
-
-```yaml
-# Only retry on timeout errors
-retryIf: "__error.type == 'timeout'"
-
-# Retry up to 3 times maximum (even if maxAttempts is higher)
-retryIf: "__error.attempt < 4"
-
-# Retry on specific HTTP errors
-retryIf: "__error.statusCode == 429 || __error.statusCode == 503"
-
-# Retry on exec errors except exit code 2 (permanent failure)
-retryIf: "__error.type == 'exec' && __error.exitCode != 2"
-
-# Complex condition
-retryIf: "(__error.type == 'http' && __error.statusCode >= 500) || __error.type == 'timeout'"
-
-# Never retry (disables retry even with retry config)
-retryIf: "false"
-```
-
-> **Note:** The exec provider does not return errors for non-zero exit codes - it reports exit codes in the output data. The `retryIf` feature works best with HTTP errors, timeouts, and exec failures like "command not found".
-
-### Timeout
-
-Limit action execution time:
-
-```yaml
-actions:
-  slow-operation:
-    provider: exec
-    timeout: 5m  # Fails after 5 minutes
-    inputs:
-      command: "long-running-script.sh"
-```
-
-### Finally Section
-
-Cleanup actions that **always run**, even if main actions fail:
-
-```yaml
-workflow:
-  actions:
-    create-resources:
-      provider: exec
-      inputs:
-        command: "create-test-db.sh"
-    
-    run-tests:
-      provider: exec
-      dependsOn: [create-resources]
-      inputs:
-        command: "run-tests.sh"  # Might fail
-
-  finally:
-    cleanup:
-      provider: exec
-      inputs:
-        command: "cleanup.sh"  # ALWAYS runs
-    
-    notify:
-      provider: exec
-      dependsOn: [cleanup]
-      inputs:
-        command: "notify.sh"
-```
-
-**Finally rules:**
-- Finally actions have implicit dependency on all main actions
-- Finally actions can only depend on other finally actions
-- ForEach is not allowed in finally section
+---
 
 ## Running Solutions
 
@@ -435,28 +775,28 @@ Run a solution (resolvers + actions):
 
 ```bash
 # Basic execution
-scafctl run solution -f my-solution.yaml
+scafctl run solution -f hello-world.yaml
 
 # Run with progress output
-scafctl run solution -f my-solution.yaml --progress
+scafctl run solution -f hello-world.yaml --progress
 
 # JSON output (for scripts/pipelines)
-scafctl run solution -f my-solution.yaml -o json
+scafctl run solution -f hello-world.yaml -o json
 
 # Override resolver values
-scafctl run solution -f my-solution.yaml -r environment=prod
+scafctl run solution -f conditional-demo.yaml -r environment=prod
 
 # Limit parallel actions
-scafctl run solution -f my-solution.yaml --max-action-concurrency=4
+scafctl run solution -f foreach-demo.yaml --max-action-concurrency=2
 
 # Dry-run (show plan without executing)
-scafctl run solution -f my-solution.yaml --dry-run
+scafctl run solution -f hello-world.yaml --dry-run
 
 # Run resolvers only (skip actions, for debugging)
-scafctl run resolver -f my-solution.yaml
+scafctl run resolver -f conditional-demo.yaml -r environment=staging --hide-execution
 
 # Run specific resolvers for inspection
-scafctl run resolver db config -f my-solution.yaml
+scafctl run resolver config -f conditional-demo.yaml -r environment=staging --hide-execution
 ```
 
 ### Render Mode
@@ -465,13 +805,13 @@ Generate an executor-ready artifact:
 
 ```bash
 # Render to JSON (default)
-scafctl render solution -f my-solution.yaml
+scafctl render solution -f hello-world.yaml
 
 # Render to YAML
-scafctl render solution -f my-solution.yaml -o yaml
+scafctl render solution -f hello-world.yaml -o yaml
 
 # Write to file
-scafctl render solution -f my-solution.yaml -o json > graph.json
+scafctl render solution -f hello-world.yaml -o json > graph.json
 ```
 
 The rendered output includes:
@@ -627,6 +967,7 @@ actions:
 
 ## Next Steps
 
-- Browse the [design documentation](design/actions.md)
-- Explore [provider documentation](design/providers.md)
-- Check out [CEL integration](design/cel-integration.md)
+- [Authentication Tutorial](auth-tutorial.md) — Set up authentication for your workflows
+- [CEL Expressions Tutorial](cel-tutorial.md) — Master CEL expressions and extension functions
+- [Resolver Tutorial](resolver-tutorial.md) — Deep dive into resolvers
+- [Provider Reference](provider-reference.md) — Complete provider documentation

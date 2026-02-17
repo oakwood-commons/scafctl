@@ -1,0 +1,206 @@
+# CEL Built-in Functions Example
+# Demonstrates built-in CEL functions: math, encoders, sets, optionals,
+# bindings, string operations, and list comprehensions.
+#
+# Run: scafctl run resolver -f examples/resolvers/cel-builtins.yaml -o json --hide-execution
+# Run: scafctl run resolver -f examples/resolvers/cel-builtins.yaml -o yaml --hide-execution
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: cel-builtins
+  version: 1.0.0
+  description: Built-in CEL functions and standard library showcase
+
+spec:
+  resolvers:
+    # ─────────────────────────────────────────────
+    # Math functions
+    # ─────────────────────────────────────────────
+
+    math_demo:
+      description: "Math functions: abs, ceil, floor, round, sqrt, least, greatest"
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                {
+                  "abs": math.abs(-5),
+                  "ceil": math.ceil(1.2),
+                  "floor": math.floor(1.8),
+                  "round": math.round(1.5),
+                  "sqrt": math.sqrt(81),
+                  "least": math.least(5, 10),
+                  "greatest": math.greatest(5, 10),
+                  "sign": math.sign(-42)
+                }
+
+    # ─────────────────────────────────────────────
+    # Encoders (base64)
+    # ─────────────────────────────────────────────
+
+    base64_encode:
+      description: "Base64 encode a string"
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'base64.encode(b"hello")'
+
+    base64_roundtrip:
+      description: "Encode then decode to verify roundtrip"
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'string(base64.decode(base64.encode(b"hello")))'
+
+    # ─────────────────────────────────────────────
+    # Sets
+    # ─────────────────────────────────────────────
+
+    sets_demo:
+      description: "Set operations: contains, equivalent, intersects"
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                {
+                  "contains": sets.contains([1, 2, 3, 4], [2, 3]),
+                  "equivalent": sets.equivalent([1, 2, 3], [3, 2, 1]),
+                  "intersects": sets.intersects([1, 2, 3], [3, 4, 5])
+                }
+
+    # ─────────────────────────────────────────────
+    # Optional types — safe navigation
+    # ─────────────────────────────────────────────
+
+    optional_field:
+      description: "Safe field access with orValue fallback"
+      type: integer
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '{"a": 1}[?"missing_key"].orValue(0)'
+
+    optional_map:
+      description: "Optional map indexing"
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                {"headers": {"Content-Type": "application/json"}}
+                  .headers[?"Authorization"]
+                  .orValue("none")
+
+    # ─────────────────────────────────────────────
+    # Bindings — local variables with cel.bind
+    # ─────────────────────────────────────────────
+
+    binding_simple:
+      description: "Bind a computed value to avoid repeating it"
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                cel.bind(fullName, "Alice" + " " + "Smith",
+                  fullName + " (" + string(size(fullName)) + " chars)"
+                )
+
+    binding_nested:
+      description: "Nested bindings to build a URL"
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                cel.bind(host, "api.example.com",
+                  cel.bind(base, "https://" + host,
+                    base + "/api/v1/users"
+                  )
+                )
+
+    # ─────────────────────────────────────────────
+    # String operations
+    # ─────────────────────────────────────────────
+
+    string_ops:
+      description: "Built-in string functions"
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                {
+                  "size": size("hello"),
+                  "contains": "hello world".contains("world"),
+                  "startsWith": "hello".startsWith("hel"),
+                  "endsWith": "hello".endsWith("llo"),
+                  "matches": "foo123".matches("^[a-z]+[0-9]+$"),
+                  "lower": "TacoCat".lowerAscii(),
+                  "upper": "TacoCat".upperAscii(),
+                  "trim": "  hello  ".trim(),
+                  "replace": "hello hello".replace("he", "we"),
+                  "split": "a,b,c".split(","),
+                  "reverse": "hello".reverse(),
+                  "substring": "tacocat".substring(0, 4),
+                  "format": "Hello %s, age %d".format(["Alice", 30])
+                }
+
+    # ─────────────────────────────────────────────
+    # List operations
+    # ─────────────────────────────────────────────
+
+    list_ops:
+      description: "List comprehensions and extensions"
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                {
+                  "filter": [1, 2, 3, 4].filter(x, x > 2),
+                  "map": [1, 2, 3].map(x, x * 2),
+                  "exists": [1, 2, 3].exists(x, x > 2),
+                  "all": [1, 2, 3].all(x, x > 0),
+                  "distinct": [1, 2, 2, 3].distinct(),
+                  "sorted": [3, 1, 2].sort(),
+                  "flattened": [1, [2, 3], [4]].flatten(),
+                  "sliced": [1, 2, 3, 4, 5].slice(1, 3),
+                  "reversed": [1, 2, 3].reverse(),
+                  "range": lists.range(5),
+                  "joined": ["a", "b", "c"].join(",")
+                }
+
+    # ─────────────────────────────────────────────
+    # Map operations
+    # ─────────────────────────────────────────────
+
+    map_ops:
+      description: "Map access, membership, and size"
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                {
+                  "access_dot": {"name": "Alice"}.name,
+                  "access_bracket": {"port": 8080}["port"],
+                  "membership": "name" in {"name": "Alice"},
+                  "size": size({"a": 1, "b": 2})
+                }

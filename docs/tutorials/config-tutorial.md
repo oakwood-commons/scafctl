@@ -178,12 +178,16 @@ scafctl config paths --platform linux
 Typical output:
 
 ```
-XDG Paths (darwin/arm64)
-
-Config:   ~/.config/scafctl/config.yaml
-Data:     ~/.local/share/scafctl/
-Cache:    ~/.cache/scafctl/
-State:    ~/.local/state/scafctl/
+ 💡 scafctl Paths
+Platform: darwin/arm64
+Config:      ~/.config/scafctl/config.yaml
+Secrets:     ~/.local/share/scafctl/secrets
+Data:        ~/.local/share/scafctl
+Catalog:     ~/.local/share/scafctl/catalog
+Cache:       ~/.cache/scafctl
+HTTP Cache:  ~/.cache/scafctl/http-cache
+State:       ~/.local/state/scafctl
+Override paths with XDG environment variables or SCAFCTL_SECRETS_DIR.
 ```
 
 ## Configuration Reference
@@ -272,7 +276,7 @@ scafctl config unset logging.level
 
 ## Next Steps
 
-- [Logging & Debugging Tutorial](logging-tutorial.md) — Control log verbosity, format, and output destination
-- [Catalog Tutorial](catalog-tutorial.md) — Build and manage solutions in the catalog
+- [Exec Provider Tutorial](exec-provider-tutorial.md) — Cross-platform shell execution
+- [Logging & Debugging Tutorial](logging-tutorial.md) — Control log verbosity, format, and output
 - [Cache Tutorial](cache-tutorial.md) — Manage cached data
-- [Getting Started](getting-started.md) — Run your first solution
+- [Catalog Tutorial](catalog-tutorial.md) — Build and manage solutions in the catalog

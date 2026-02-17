@@ -1,7 +1,7 @@
 # Feature Flags Example
 # Demonstrates feature toggles with remote fallback to local defaults.
 #
-# Run: scafctl run solution -f feature-flags.yaml
+# Run: scafctl run resolver -f feature-flags.yaml
 #
 # This example shows:
 # - Fetching flags from remote API with fallback

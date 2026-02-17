@@ -16,7 +16,7 @@ advanced CI integration.
 
 ## Writing Your First Test
 
-Add a `tests` section to your solution's `spec`:
+Add a `tests` section to your solution's `spec`. Create a file called `solution.yaml`:
 
 ```yaml
 apiVersion: scafctl.io/v1
@@ -62,6 +62,8 @@ my-solution    render-basic      PASS     8ms
 Each test specifies a `command` (the scafctl subcommand to run) and one or more
 `assertions` to validate the output. The runner automatically injects
 `-f <sandbox-copy-of-solution>` unless you set `injectFile: false`.
+
+> **Note:** The YAML snippets in the remaining sections of this tutorial show only the `tests:` block or relevant portion. To use them, add them to the `spec.tests` section of your solution file — like the `solution.yaml` example above.
 
 ---
 
@@ -674,7 +676,9 @@ testConfig:
 ## Compose Test Files
 
 Split tests across multiple files using compose. The `compose` field goes at the **top level**
-of the solution YAML, not inside `spec`:
+of the solution YAML, not inside `spec`.
+
+Create a main solution file called `solution.yaml`:
 
 ```yaml
 # solution.yaml
@@ -697,6 +701,8 @@ spec:
           output: "main.tf"
 ```
 
+Create a file called `tests/smoke.yaml`:
+
 ```yaml
 # tests/smoke.yaml
 spec:
@@ -708,6 +714,8 @@ spec:
       assertions:
         - expression: __exitCode == 0
 ```
+
+Create a file called `tests/validation.yaml`:
 
 ```yaml
 # tests/validation.yaml
@@ -1341,5 +1349,12 @@ This is the primary use case for requiring test files to be bundled and why `sca
 ### Test Scaffolding (`scafctl test init`)
 
 ✅ **Implemented.** See the [Test Scaffolding](#test-scaffolding-scafctl-test-init) section above.
+
+## Next Steps
+
+- [Configuration Tutorial](config-tutorial.md) — Manage application configuration
+- [Snapshots Tutorial](snapshots-tutorial.md) — Capture and compare execution snapshots
+- [Resolver Tutorial](resolver-tutorial.md) — Deep dive into resolvers
+- [Provider Reference](provider-reference.md) — Complete provider documentation
 
 ---

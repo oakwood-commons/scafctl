@@ -114,11 +114,12 @@ type Status struct {
 	IdentityType  IdentityType // Type of identity: "user", "service-principal", or "workload-identity"
 	ClientID      string       // For service principal/workload identity: the application ID
 	TokenFile     string       // For workload identity: path to the federated token file
+	Scopes        []string     // Scopes granted during login
 }
 
 // Token represents a short-lived access token.
 type Token struct {
-	AccessToken string
+	AccessToken string //nolint:gosec // G117: not a hardcoded credential, stores runtime token data
 	TokenType   string
 	ExpiresAt   time.Time
 	Scope       string

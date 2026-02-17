@@ -9,7 +9,7 @@
 # Usage:
 #   scafctl build solution examples/catalog/bundling-example/solution.yaml --dry-run
 #   scafctl build solution examples/catalog/bundling-example/solution.yaml --version 1.0.0
-#   scafctl run solution bundling-example -r environment=dev
+#   scafctl run resolver bundling-example -r environment=dev
 
 apiVersion: scafctl.io/v1
 kind: Solution

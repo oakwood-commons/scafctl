@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
@@ -22,6 +23,8 @@ type TokenMetadata struct {
 	RefreshTokenExpiresAt time.Time    `json:"refreshTokenExpiresAt"`
 	LastRefresh           time.Time    `json:"lastRefresh"`
 	TenantID              string       `json:"tenantId"`
+	ClientID              string       `json:"clientId,omitempty"`
+	Scopes                []string     `json:"scopes,omitempty"`
 }
 
 // mintToken creates a new access token for the specified scope.
@@ -44,9 +47,16 @@ func (h *Handler) mintToken(ctx context.Context, scope string) (*auth.Token, err
 	// Request new access token using refresh token
 	endpoint := fmt.Sprintf("%s/%s/oauth2/v2.0/token", h.config.GetAuthority(), metadata.TenantID)
 
+	// Use the client ID that was used during login (stored in metadata).
+	// This ensures the refresh token is always paired with the client ID
+	// that originally obtained it. If missing, the user must re-login.
+	if metadata.ClientID == "" {
+		return nil, fmt.Errorf("stored credentials are missing client ID, please re-authenticate with 'scafctl auth login entra': %w", auth.ErrNotAuthenticated)
+	}
+
 	data := url.Values{}
 	data.Set("grant_type", "refresh_token")
-	data.Set("client_id", h.config.ClientID)
+	data.Set("client_id", metadata.ClientID)
 	data.Set("refresh_token", refreshToken)
 	data.Set("scope", scope)
 
@@ -62,10 +72,30 @@ func (h *Handler) mintToken(ctx context.Context, scope string) (*auth.Token, err
 			return nil, fmt.Errorf("token request failed with status %d", resp.StatusCode)
 		}
 
-		// Check if refresh token is expired
+		// Check if refresh token is expired or consent is required
 		if errResp.Error == "invalid_grant" {
-			// Clear stored credentials since they're no longer valid
+			lgr.V(0).Info("token refresh failed with invalid_grant",
+				"errorDescription", errResp.ErrorDescription,
+				"scope", scope,
+			)
+
+			if strings.Contains(errResp.ErrorDescription, "AADSTS70000") {
+				return nil, fmt.Errorf("scope %q: %s: %w", scope, errResp.ErrorDescription, auth.ErrGrantInvalid)
+			}
+
+			// AADSTS65001: consent not granted for the requested scope
+			// AADSTS70011: invalid scope value
+			// In these cases the refresh token is still valid — don't logout
+			if strings.Contains(errResp.ErrorDescription, "AADSTS65001") ||
+				strings.Contains(errResp.ErrorDescription, "AADSTS70011") {
+				return nil, fmt.Errorf("scope %q: %s: %w", scope, errResp.ErrorDescription, auth.ErrConsentRequired)
+			}
+
+			// For genuine token expiry / revocation, clear stored credentials
 			_ = h.Logout(ctx)
+			if errResp.ErrorDescription != "" {
+				return nil, fmt.Errorf("%s: %w", errResp.ErrorDescription, auth.ErrTokenExpired)
+			}
 			return nil, auth.ErrTokenExpired
 		}
 
@@ -80,7 +110,7 @@ func (h *Handler) mintToken(ctx context.Context, scope string) (*auth.Token, err
 	// If we got a new refresh token, store it (token rotation)
 	if tokenResp.RefreshToken != "" && tokenResp.RefreshToken != refreshToken {
 		lgr.V(1).Info("refresh token rotated, storing new token")
-		if err := h.storeCredentials(ctx, metadata.TenantID, &tokenResp); err != nil {
+		if err := h.storeCredentials(ctx, metadata.TenantID, &tokenResp, metadata.Scopes); err != nil {
 			lgr.V(1).Info("warning: failed to update refresh token", "error", err)
 		}
 	}
@@ -102,7 +132,14 @@ func (h *Handler) mintToken(ctx context.Context, scope string) (*auth.Token, err
 }
 
 // storeCredentials securely stores the refresh token and metadata.
-func (h *Handler) storeCredentials(ctx context.Context, tenantID string, tokenResp *TokenResponse) error {
+// scopes records which OAuth scopes were used during login so they can be
+// surfaced later (e.g. in `auth status`).
+func (h *Handler) storeCredentials(ctx context.Context, tenantID string, tokenResp *TokenResponse, scopes []string) error {
+	// Validate refresh token is present
+	if tokenResp.RefreshToken == "" {
+		return fmt.Errorf("no refresh token in response (offline_access scope may be missing)")
+	}
+
 	// Store refresh token
 	if err := h.secretStore.Set(ctx, SecretKeyRefreshToken, []byte(tokenResp.RefreshToken)); err != nil {
 		return fmt.Errorf("failed to store refresh token: %w", err)
@@ -122,6 +159,8 @@ func (h *Handler) storeCredentials(ctx context.Context, tenantID string, tokenRe
 		RefreshTokenExpiresAt: time.Now().Add(DefaultRefreshTokenLifetime),
 		LastRefresh:           time.Now(),
 		TenantID:              tenantID,
+		ClientID:              h.config.ClientID,
+		Scopes:                scopes,
 	}
 
 	metadataBytes, err := json.Marshal(metadata)

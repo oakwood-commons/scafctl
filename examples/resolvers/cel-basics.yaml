@@ -1,0 +1,177 @@
+# CEL Basics Example
+# Demonstrates basic CEL expressions, literal types, and resolver references.
+# This is the "Quick Start" companion for the CEL tutorial.
+#
+# Run: scafctl run resolver -f examples/resolvers/cel-basics.yaml -o json --hide-execution
+# Run: scafctl run resolver -f examples/resolvers/cel-basics.yaml -o yaml --hide-execution
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: cel-basics
+  version: 1.0.0
+  description: Basic CEL expressions and resolver references
+
+spec:
+  resolvers:
+    # ─────────────────────────────────────────────
+    # 1. Literal values — strings, numbers, booleans, lists, maps
+    # ─────────────────────────────────────────────
+
+    greeting:
+      description: "String literal (single quotes inside expression)"
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "'Hello, World!'"
+
+    answer:
+      description: "Integer literal"
+      type: integer
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "42"
+
+    enabled:
+      description: "Boolean literal"
+      type: boolean
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "true"
+
+    numbers:
+      description: "List literal"
+      type: array
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "[1, 2, 3]"
+
+    metadata:
+      description: "Map literal"
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '{"key": "value", "count": 10}'
+
+    # ─────────────────────────────────────────────
+    # 2. Referencing other resolvers with _
+    # ─────────────────────────────────────────────
+
+    firstName:
+      description: "Static first name"
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "Alice"
+
+    lastName:
+      description: "Static last name"
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "Smith"
+
+    fullName:
+      description: "Concatenate two resolver values using _ namespace"
+      type: string
+      dependsOn: [firstName, lastName]
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.firstName + ' ' + _.lastName"
+
+    # ─────────────────────────────────────────────
+    # 3. Operators and ternary
+    # ─────────────────────────────────────────────
+
+    arithmetic:
+      description: "Basic arithmetic"
+      type: integer
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "(10 + 5) * 2 - 4"
+
+    comparison:
+      description: "Ternary conditional based on resolver value"
+      type: string
+      dependsOn: [answer]
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.answer > 40 ? "high" : "low"'
+
+    membership:
+      description: "Check if a value is in a list"
+      type: boolean
+      dependsOn: [firstName]
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.firstName in ["Alice", "Bob", "Charlie"]'
+
+    # ─────────────────────────────────────────────
+    # 4. String operations
+    # ─────────────────────────────────────────────
+
+    upperName:
+      description: "Built-in string functions"
+      type: string
+      dependsOn: [fullName]
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.fullName.upperAscii()"
+
+    formatted:
+      description: "Printf-style string formatting"
+      type: string
+      dependsOn: [firstName, answer]
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '"Name: %s, Answer: %d".format([_.firstName, _.answer])'
+
+    # ─────────────────────────────────────────────
+    # 5. List operations
+    # ─────────────────────────────────────────────
+
+    filtered:
+      description: "Filter and map over a list"
+      type: array
+      dependsOn: [numbers]
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.numbers.filter(x, x > 1).map(x, x * 10)"
+
+    allPositive:
+      description: "Check all elements with a comprehension"
+      type: boolean
+      dependsOn: [numbers]
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.numbers.all(x, x > 0)"

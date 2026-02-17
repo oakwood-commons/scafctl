@@ -122,11 +122,11 @@ flowchart TD
 
 2. **Decode** - If the provider defines a `Decode` function in its descriptor, scafctl calls it to convert the validated `map[string]any` into a strongly-typed structure. This step is optional; providers can work directly with maps.
 
-3. **Execute** - The provider's `Execute(ctx, input)` method runs with the validated (and optionally decoded) inputs. The provider performs its operation based on the execution mode and dry-run flag from the context. Providers that need access to resolver values retrieve them via `ResolverContextFromContext(ctx)`.
+3. **Execute** - The provider's `Execute(ctx, input)` method runs with the validated (and optionally decoded) inputs. The provider performs its operation based on the execution mode and dry-run flag from the context. Providers that need access to resolver values retrieve them via `ResolverContextFromContext(ctx)`. Providers producing user-visible output can stream it to the terminal via `IOStreamsFromContext(ctx)` and set `Output.Streamed = true` to prevent double-printing.
 
 4. **Output Schema Validation** - scafctl validates the `Output.Data` field against the provider's `OutputSchemas` for the current capability. Each capability can define different required output fields. This ensures both real and mock outputs conform to the declared structure for the specific execution context.
 
-5. **Return** - The validated `Output` (containing `Data`, optional `Warnings`, and optional `Metadata`) is returned to the caller (resolver or action orchestrator).
+5. **Return** - The validated `Output` (containing `Data`, optional `Warnings`, optional `Metadata`, and optional `Streamed` flag) is returned to the caller (resolver or action orchestrator).
 
 **Error Handling:**
 

@@ -5,7 +5,7 @@
 # passes parameters to it, and consumes the child's resolver values.
 #
 # Usage:
-#   scafctl run solution -f examples/solutions/composition/parent.yaml
+#   scafctl run resolver -f examples/solutions/composition/parent.yaml
 #
 # The child solution (child.yaml) resolves:
 #   - greeting: a static string "hello from child"

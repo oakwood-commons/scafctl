@@ -230,6 +230,14 @@ func TestIntegration_DeviceCodeFlow_Success(t *testing.T) {
 
 	refreshToken, _ := store.Get(ctx, SecretKeyRefreshToken)
 	assert.Equal(t, "test-refresh-token", string(refreshToken))
+
+	// Verify client ID was stored in metadata
+	metadataBytes, err := store.Get(ctx, SecretKeyMetadata)
+	require.NoError(t, err)
+	var storedMetadata TokenMetadata
+	require.NoError(t, json.Unmarshal(metadataBytes, &storedMetadata))
+	assert.Equal(t, "test-client-id", storedMetadata.ClientID,
+		"client_id used during login should be persisted in metadata")
 }
 
 func TestIntegration_DeviceCodeFlow_AuthorizationPending(t *testing.T) {
@@ -405,6 +413,7 @@ func TestIntegration_TokenRefresh_Success(t *testing.T) {
 		Claims:                &auth.Claims{Subject: "test-user"},
 		RefreshTokenExpiresAt: time.Now().Add(24 * time.Hour),
 		TenantID:              "test-tenant",
+		ClientID:              "test-client-id",
 	}
 	metadataBytes, _ := json.Marshal(metadata)
 	err = store.Set(ctx, SecretKeyMetadata, metadataBytes)
@@ -438,6 +447,110 @@ func TestIntegration_TokenRefresh_Success(t *testing.T) {
 	assert.Equal(t, "test-client-id", server.lastTokenRequest["client_id"])
 }
 
+func TestIntegration_TokenRefresh_UsesClientIDFromMetadata(t *testing.T) {
+	server := newMockEntraServer(t)
+	defer server.Close()
+
+	// Configure token refresh response
+	server.AddTokenResponse(http.StatusOK, map[string]any{
+		"access_token":  "new-access-token",
+		"refresh_token": "new-refresh-token",
+		"token_type":    "Bearer",
+		"expires_in":    3600,
+		"scope":         "https://graph.microsoft.com/.default",
+	})
+
+	store := secrets.NewMockStore()
+	ctx := context.Background()
+
+	// Pre-populate with existing refresh token
+	err := store.Set(ctx, SecretKeyRefreshToken, []byte("existing-refresh-token"))
+	require.NoError(t, err)
+
+	// Metadata was stored during login with a DIFFERENT client ID than the handler config
+	metadata := &TokenMetadata{
+		Claims:                &auth.Claims{Subject: "test-user"},
+		RefreshTokenExpiresAt: time.Now().Add(24 * time.Hour),
+		TenantID:              "test-tenant",
+		ClientID:              "login-client-id",
+	}
+	metadataBytes, _ := json.Marshal(metadata)
+	err = store.Set(ctx, SecretKeyMetadata, metadataBytes)
+	require.NoError(t, err)
+
+	// Handler config has a DIFFERENT client ID (e.g. from config file)
+	cfg := &Config{
+		ClientID:  "config-client-id",
+		TenantID:  "test-tenant",
+		Authority: server.URL(),
+	}
+
+	handler, err := New(
+		WithConfig(cfg),
+		WithSecretStore(store),
+	)
+	require.NoError(t, err)
+
+	// Request a token
+	token, err := handler.GetToken(ctx, auth.TokenOptions{
+		Scope: "https://graph.microsoft.com/.default",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, token)
+	assert.Equal(t, "new-access-token", token.AccessToken)
+
+	// The refresh request MUST use the client ID from metadata (login-time),
+	// not the one from the handler config
+	assert.Equal(t, "login-client-id", server.lastTokenRequest["client_id"],
+		"token refresh should use the client_id stored at login time, not the current config")
+}
+
+func TestIntegration_TokenRefresh_FailsWithoutClientIDInMetadata(t *testing.T) {
+	server := newMockEntraServer(t)
+	defer server.Close()
+
+	store := secrets.NewMockStore()
+	ctx := context.Background()
+
+	// Pre-populate with existing refresh token
+	err := store.Set(ctx, SecretKeyRefreshToken, []byte("existing-refresh-token"))
+	require.NoError(t, err)
+
+	// Metadata without ClientID (e.g. stored before client ID tracking was added)
+	metadata := &TokenMetadata{
+		Claims:                &auth.Claims{Subject: "test-user"},
+		RefreshTokenExpiresAt: time.Now().Add(24 * time.Hour),
+		TenantID:              "test-tenant",
+	}
+	metadataBytes, _ := json.Marshal(metadata)
+	err = store.Set(ctx, SecretKeyMetadata, metadataBytes)
+	require.NoError(t, err)
+
+	cfg := &Config{
+		ClientID:  "config-client-id",
+		TenantID:  "test-tenant",
+		Authority: server.URL(),
+	}
+
+	handler, err := New(
+		WithConfig(cfg),
+		WithSecretStore(store),
+	)
+	require.NoError(t, err)
+
+	// Request a token — should fail because metadata has no client ID
+	token, err := handler.GetToken(ctx, auth.TokenOptions{
+		Scope: "https://graph.microsoft.com/.default",
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, token)
+	assert.ErrorIs(t, err, auth.ErrNotAuthenticated)
+	assert.Contains(t, err.Error(), "missing client ID")
+	assert.Contains(t, err.Error(), "re-authenticate")
+}
+
 func TestIntegration_TokenRefresh_InvalidGrant(t *testing.T) {
 	server := newMockEntraServer(t)
 	defer server.Close()
@@ -459,6 +572,7 @@ func TestIntegration_TokenRefresh_InvalidGrant(t *testing.T) {
 		Claims:                &auth.Claims{Subject: "test-user"},
 		RefreshTokenExpiresAt: time.Now().Add(24 * time.Hour),
 		TenantID:              "test-tenant",
+		ClientID:              "test-client-id",
 	}
 	metadataBytes, _ := json.Marshal(metadata)
 	err = store.Set(ctx, SecretKeyMetadata, metadataBytes)
@@ -485,6 +599,63 @@ func TestIntegration_TokenRefresh_InvalidGrant(t *testing.T) {
 	assert.Nil(t, token)
 	// Should return token expired error since refresh token is invalid
 	assert.ErrorIs(t, err, auth.ErrTokenExpired)
+}
+
+func TestIntegration_TokenRefresh_ConsentRequired(t *testing.T) {
+	server := newMockEntraServer(t)
+	defer server.Close()
+
+	// Server responds with AADSTS65001 consent error
+	server.AddTokenResponse(http.StatusBadRequest, map[string]any{
+		"error":             "invalid_grant",
+		"error_description": "AADSTS65001: The user or administrator has not consented to use the application.",
+	})
+
+	store := secrets.NewMockStore()
+	ctx := context.Background()
+
+	// Pre-populate with a valid refresh token
+	err := store.Set(ctx, SecretKeyRefreshToken, []byte("valid-refresh-token"))
+	require.NoError(t, err)
+
+	metadata := &TokenMetadata{
+		Claims:                &auth.Claims{Subject: "test-user"},
+		RefreshTokenExpiresAt: time.Now().Add(24 * time.Hour),
+		TenantID:              "test-tenant",
+		ClientID:              "test-client-id",
+	}
+	metadataBytes, _ := json.Marshal(metadata)
+	err = store.Set(ctx, SecretKeyMetadata, metadataBytes)
+	require.NoError(t, err)
+
+	cfg := &Config{
+		ClientID:  "test-client-id",
+		TenantID:  "test-tenant",
+		Authority: server.URL(),
+	}
+
+	handler, err := New(
+		WithConfig(cfg),
+		WithSecretStore(store),
+	)
+	require.NoError(t, err)
+
+	// Request a token
+	token, err := handler.GetToken(ctx, auth.TokenOptions{
+		Scope: "https://graph.microsoft.com/.default",
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, token)
+	// Should return consent required error, NOT token expired
+	assert.ErrorIs(t, err, auth.ErrConsentRequired)
+	assert.NotErrorIs(t, err, auth.ErrTokenExpired)
+	assert.Contains(t, err.Error(), "AADSTS65001")
+
+	// Credentials should NOT have been cleared (refresh token still valid)
+	exists, err := store.Exists(ctx, SecretKeyRefreshToken)
+	require.NoError(t, err)
+	assert.True(t, exists, "refresh token should still exist after consent error")
 }
 
 // ============================================================================
@@ -573,6 +744,7 @@ func TestIntegration_TokenCaching_MinValidFor_RefreshNeeded(t *testing.T) {
 		Claims:                &auth.Claims{Subject: "test-user"},
 		RefreshTokenExpiresAt: time.Now().Add(24 * time.Hour),
 		TenantID:              "test-tenant",
+		ClientID:              "test-client-id",
 	}
 	metadataBytes, _ := json.Marshal(metadata)
 	err = store.Set(ctx, SecretKeyMetadata, metadataBytes)
@@ -639,6 +811,7 @@ func TestIntegration_TokenCaching_ForceRefresh(t *testing.T) {
 		Claims:                &auth.Claims{Subject: "test-user"},
 		RefreshTokenExpiresAt: time.Now().Add(24 * time.Hour),
 		TenantID:              "test-tenant",
+		ClientID:              "test-client-id",
 	}
 	metadataBytes, _ := json.Marshal(metadata)
 	err = store.Set(ctx, SecretKeyMetadata, metadataBytes)

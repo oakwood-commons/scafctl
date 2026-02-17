@@ -1,7 +1,7 @@
 # Dependencies Example
 # Shows how resolvers can depend on each other and execute in phases.
 #
-# Run: scafctl run solution -f dependencies.yaml --progress
+# Run: scafctl run resolver -f dependencies.yaml --progress
 #
 # Execution order:
 #   Phase 1: environment, region (no dependencies, run in parallel)
