@@ -272,6 +272,10 @@ type ActionResult struct {
 
 	// Error contains the error message if Status is StatusFailed or StatusTimeout.
 	Error string `json:"error,omitempty" yaml:"error,omitempty" doc:"Error message (if failed)"`
+
+	// Streamed indicates the provider already wrote its output to the terminal.
+	// When true, the CLI output layer should not re-print the action's results.
+	Streamed bool `json:"streamed,omitempty" yaml:"streamed,omitempty" doc:"Whether output was streamed to terminal"`
 }
 
 // Duration returns the execution duration, or zero if not available.

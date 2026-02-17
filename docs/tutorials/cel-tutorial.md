@@ -25,11 +25,21 @@ CEL is used throughout scafctl for dynamic evaluation:
 
 **Key principle:** In CEL expressions, all resolved values are available under the `_` namespace (e.g., `_.appName`, `_.config.port`).
 
+> **Hands-on:** Every section in this tutorial links to a runnable example file. Look for the **▶ Try it** callouts to run the examples yourself.
+
 ## Quick Start
 
 ### 1. Basic Expressions
 
+Create a file called `cel-basics.yaml`:
+
 ```yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: cel-basics
+  version: 1.0.0
+
 spec:
   resolvers:
     greeting:
@@ -40,6 +50,27 @@ spec:
             inputs:
               expression: "'Hello, World!'"
 ```
+
+Run it:
+
+```bash
+scafctl run resolver -f cel-basics.yaml -o json --hide-execution
+```
+
+Output:
+
+```json
+{
+  "greeting": "Hello, World!"
+}
+```
+
+> **Tip**: `run resolver -o json` includes `__execution` metadata by default. Use `--hide-execution` for cleaner output. All examples in this tutorial use `--hide-execution`. See the [Run Resolver Tutorial](run-resolver-tutorial.md) for details.
+
+> **▶ Try it:** The complete example with more expressions is at [cel-basics.yaml](../../examples/resolvers/cel-basics.yaml):
+> ```bash
+> scafctl run resolver -f examples/resolvers/cel-basics.yaml -o json --hide-execution
+> ```
 
 String literals use single quotes inside the expression. Numbers, booleans, and lists are written normally:
 
@@ -52,9 +83,15 @@ expression: '{"key": "value"}'
 
 ### 2. Referencing Resolvers
 
-Use `_` to access other resolver values:
+Use `_` to access other resolver values. Create a file called `cel-refs.yaml`:
 
 ```yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: cel-refs
+  version: 1.0.0
+
 spec:
   resolvers:
     firstName:
@@ -83,9 +120,27 @@ spec:
               expression: "_.firstName + ' ' + _.lastName"
 ```
 
+Run it:
+
+```bash
+scafctl run resolver -f cel-refs.yaml -o json --hide-execution
+```
+
+Output:
+
+```json
+{
+  "firstName": "Alice",
+  "fullName": "Alice Smith",
+  "lastName": "Smith"
+}
+```
+
+> **▶ Try it:** This example is also in [cel-basics.yaml](../../examples/resolvers/cel-basics.yaml) — it includes operators, string operations, list comprehensions, and more.
+
 ### 3. Using `expr` in Inputs
 
-The `expr` field can be used on any provider input for dynamic values:
+The `expr` field can be used on any provider input for dynamic values. For example, in your solution's `workflow.actions` section:
 
 ```yaml
 workflow:
@@ -210,11 +265,21 @@ size("hello")                         // 5
 "Hello %s, you are %d".format(["Alice", 30])  // "Hello Alice, you are 30"
 ```
 
+> **▶ Try it:** All the operators, string, list, and map operations above are runnable in [cel-builtins.yaml](../../examples/resolvers/cel-builtins.yaml):
+> ```bash
+> scafctl run resolver -f examples/resolvers/cel-builtins.yaml -o json --hide-execution
+> ```
+
 ---
 
 ## Custom Extension Functions
 
 scafctl extends CEL with project-specific functions for arrays, maps, strings, filepath, GUID, sorting, time, marshalling, and debugging.
+
+> **▶ Try it:** All custom extension functions are demonstrated in a single runnable file — [cel-extensions.yaml](../../examples/resolvers/cel-extensions.yaml):
+> ```bash
+> scafctl run resolver -f examples/resolvers/cel-extensions.yaml -o json --hide-execution
+> ```
 
 ### Arrays
 
@@ -662,9 +727,19 @@ cel.bind(base, _.host + ":" + string(_.port),
 )
 ```
 
+> **▶ Try it:** Encoders, math, optionals, sets, and bindings are all runnable in [cel-builtins.yaml](../../examples/resolvers/cel-builtins.yaml):
+> ```bash
+> scafctl run resolver -f examples/resolvers/cel-builtins.yaml -o json --hide-execution
+> ```
+
 ---
 
 ## Common Patterns
+
+> **▶ Try it:** All the patterns below are combined into one runnable file — [cel-common-patterns.yaml](../../examples/resolvers/cel-common-patterns.yaml):
+> ```bash
+> scafctl run resolver -f examples/resolvers/cel-common-patterns.yaml -o json --hide-execution
+> ```
 
 ### Conditional Configuration
 
@@ -767,6 +842,11 @@ deployments:
             })
 ```
 
+> **▶ Try it:** For more data transformation patterns (filtering, aggregation, enrichment, serialization), see [cel-transforms.yaml](../../examples/resolvers/cel-transforms.yaml):
+> ```bash
+> scafctl run resolver -f examples/resolvers/cel-transforms.yaml -o json --hide-execution
+> ```
+
 ## Function Reference
 
 ### Custom Functions (scafctl)
@@ -820,12 +900,16 @@ deployments:
 
 | Example | Description | Run |
 |---------|-------------|-----|
-| [cel-extensions.yaml](../../examples/resolvers/cel-extensions.yaml) | Showcase of all custom CEL extension functions | `scafctl run solution -f examples/resolvers/cel-extensions.yaml -o json` |
-| [cel-transforms.yaml](../../examples/resolvers/cel-transforms.yaml) | Data transformation patterns with CEL | `scafctl run solution -f examples/resolvers/cel-transforms.yaml -o json` |
+| [cel-basics.yaml](../../examples/resolvers/cel-basics.yaml) | Literals, resolver refs, operators, strings, lists | `scafctl run resolver -f examples/resolvers/cel-basics.yaml -o json --hide-execution` |
+| [cel-builtins.yaml](../../examples/resolvers/cel-builtins.yaml) | Math, encoders, sets, optionals, bindings, string/list ops | `scafctl run resolver -f examples/resolvers/cel-builtins.yaml -o json --hide-execution` |
+| [cel-common-patterns.yaml](../../examples/resolvers/cel-common-patterns.yaml) | Conditionals, map building, filtering, merging, resource generation | `scafctl run resolver -f examples/resolvers/cel-common-patterns.yaml -o json --hide-execution` |
+| [cel-extensions.yaml](../../examples/resolvers/cel-extensions.yaml) | All custom CEL extension functions (arrays, map, strings, etc.) | `scafctl run resolver -f examples/resolvers/cel-extensions.yaml -o json --hide-execution` |
+| [cel-transforms.yaml](../../examples/resolvers/cel-transforms.yaml) | Data transformation patterns (filter, aggregate, enrich) | `scafctl run resolver -f examples/resolvers/cel-transforms.yaml -o json --hide-execution` |
 
 ## Next Steps
 
+- [Go Templates Tutorial](go-templates-tutorial.md) — When to use `tmpl` vs `expr`
+- [Catalog Tutorial](catalog-tutorial.md) — Store and manage solutions in your local catalog
 - [Resolver Tutorial](resolver-tutorial.md) — Use CEL in resolver pipelines
 - [Actions Tutorial](actions-tutorial.md) — Dynamic inputs with `expr`
-- [Go Templates Tutorial](go-templates-tutorial.md) — When to use `tmpl` vs `expr`
 - [Provider Reference](provider-reference.md) — The `cel` provider

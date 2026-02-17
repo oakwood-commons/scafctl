@@ -24,7 +24,7 @@ scafctl <verb> <kind> <name[@version(or constraint)]> [flags]
 
 | Command | Status | Notes |
 |---------|--------|-------|
-| `run solution` | ✅ Implemented | Full support with actions |
+| `run solution` | ✅ Implemented | Requires workflow (errors if no workflow defined; use `run resolver` for resolver-only) |
 | `run resolver` | ✅ Implemented | Resolver-only execution for debugging and inspection |
 | `render solution` | ✅ Implemented | Includes graph and snapshot modes |
 | `get solution/provider/resolver` | ✅ Implemented | |
@@ -76,7 +76,7 @@ scafctl run solution "example@^1.2"         # planned
 
 ## Running a Solution
 
-Execute a solutions resolver and perform its actions.
+Execute a solution's resolvers and perform its workflow actions. The solution **must** define a `workflow` section with actions — if no workflow is defined, the command errors and suggests using `scafctl run resolver` instead.
 
 ~~~bash
 scafctl run solution example
@@ -670,8 +670,14 @@ Securely manage encrypted secrets for authentication and configuration:
 # List all secrets
 scafctl secrets list
 
+# List all secrets including internal (auth tokens, etc.)
+scafctl secrets list --all
+
 # Get a secret value
 scafctl secrets get my-api-key
+
+# Get an internal secret (e.g. auth token metadata)
+scafctl secrets get scafctl.auth.entra.metadata --all
 
 # Set a secret (prompts for value)
 scafctl secrets set my-api-key
@@ -751,8 +757,11 @@ scafctl run resolver -f solution.yaml
 # Run specific resolvers (with their transitive dependencies)
 scafctl run resolver db config -f solution.yaml
 
-# JSON output (always includes __execution metadata)
+# JSON output (includes __execution metadata by default)
 scafctl run resolver -f solution.yaml -o json
+
+# JSON output without __execution metadata
+scafctl run resolver -f solution.yaml -o json --hide-execution
 
 # Skip transform and validation phases
 scafctl run resolver --skip-transform -f solution.yaml

@@ -25,7 +25,7 @@ Resolvers do not cause side effects. They only compute values.
 | Phase-based execution (DAG ordering) | ✅ Implemented | `pkg/resolver/phase.go` |
 | Dependency extraction (CEL, templates, `dependsOn`) | ✅ Implemented | `pkg/resolver/graph.go` |
 | Cycle detection | ✅ Implemented | Uses `pkg/dag` |
-| Type coercion (string, int, float, bool, array, any) | ✅ Implemented | `pkg/spec/types.go` |
+| Type coercion (string, int, float, bool, array, object, any) | ✅ Implemented | `pkg/spec/types.go` |
 | Additional types: `time`, `duration` | ✅ Implemented | `pkg/spec/types.go` |
 | Special symbols (`__self`, `__item`, `__index`) | ✅ Implemented | `pkg/resolver/executor.go` |
 | Iteration aliases (`item`, `index` in forEach) | ✅ Implemented | `pkg/spec/foreach.go` |
@@ -119,9 +119,10 @@ Resolvers support optional type declarations for validation and automatic type c
 - `float` - Floating-point numbers
 - `bool` - Boolean true/false
 - `array` - Ordered lists (coerces single values to single-element arrays)
+- `object` - Key-value maps (`map[string]any`). Rejects non-map values.
 - `time` - Time values (parses ISO 8601 strings like `2026-01-14T12:00:00Z`)
 - `duration` - Duration values (parses Go duration strings like `5m`, `1h30m`, `500ms`)
-- `any` - No type constraint (default, use for maps/objects with dynamic structure)
+- `any` - No type constraint (default). Accepts any value with no validation or coercion.
 
 ### Type Aliases
 
@@ -131,6 +132,7 @@ For convenience, the following aliases are supported:
 - `integer` → `int`
 - `number` → `float`
 - `boolean` → `bool`
+- `map` → `object`
 
 ### Type Declaration
 
@@ -179,15 +181,16 @@ When a type is explicitly declared, scafctl will attempt to coerce the resolved 
 - `"2026-01-14T12:00:00Z"` → `time.Time` (string to time)
 - `"5m30s"` → `time.Duration` (string to duration)
 - `"-1h"` → `time.Duration` (negative duration)
+- `map[string]any{"key": "val"}` → `map[string]any{"key": "val"}` (map to object, validated)
 
 **Coercion rules:**
 
 - Type coercion only occurs when a type is explicitly declared
 - If coercion fails, the resolver fails with a type error
-- Coercion happens **twice**: after the resolve phase completes (before transform begins) and after the transform phase completes (before validate begins)
-- **No inter-step coercion**: Type coercion does NOT occur between individual transform steps. Transform steps work with the actual runtime types of values. Only the final output of the transform phase is coerced.
-- This ensures type consistency at resolver phase boundaries while allowing flexible type manipulation within the transform phase
+- Coercion happens **once**: on the final resolver value, after the last active phase (resolve or transform) completes and before validate begins. The `type` field describes the resolver's **output contract**, not the intermediate value between phases.
+- This means transform steps can work with raw provider types (e.g., `map[string]interface{}`) and reshape them freely — only the final output must match the declared type.
 - **Array coercion**: Non-array values are wrapped in a single-element array. Already-arrays pass through unchanged. This is useful when a field can accept either a single value or multiple values.
+- **Object coercion**: Accepts any map with string keys. Rejects non-map values (strings, ints, arrays, etc.) with a clear error.
 
 ### Type Validation
 
@@ -2374,7 +2377,7 @@ Resolvers support metadata fields for documentation and operational purposes:
 
 - **`description`**: Human-readable explanation of the resolver's purpose
 - **`displayName`**: Friendly name for UI and logging (defaults to resolver key)
-- **`sensitive`**: Boolean flag indicating the value should be redacted in logs and output
+- **`sensitive`**: Boolean flag indicating the value should be redacted in table/interactive output (human-facing). JSON and YAML output reveals sensitive values for machine consumption, following the Terraform model. Use `--show-sensitive` to reveal values in all output formats
 - **`example`**: Example value for documentation and testing
 
 ### Example

@@ -88,8 +88,7 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 					}
 
 					// For service principal/workload identity, show client ID
-					if (status.IdentityType == auth.IdentityTypeServicePrincipal ||
-						status.IdentityType == auth.IdentityTypeWorkloadIdentity) && status.ClientID != "" {
+					if status.ClientID != "" {
 						result["clientId"] = status.ClientID
 					}
 
@@ -114,6 +113,10 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 						if !status.LastRefresh.IsZero() {
 							result["lastRefresh"] = status.LastRefresh
 						}
+					}
+
+					if len(status.Scopes) > 0 {
+						result["scopes"] = status.Scopes
 					}
 
 					results = append(results, result)

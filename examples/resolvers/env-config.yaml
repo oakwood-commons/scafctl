@@ -1,9 +1,9 @@
 # Environment-Based Configuration
 # Shows how to build configuration that varies by deployment environment.
 #
-# Run: scafctl run solution -f env-config.yaml
-# Run: scafctl run solution -f env-config.yaml -r env=production
-# Run: scafctl run solution -f env-config.yaml -r env=staging
+# Run: scafctl run resolver -f env-config.yaml
+# Run: scafctl run resolver -f env-config.yaml -r env=production
+# Run: scafctl run resolver -f env-config.yaml -r env=staging
 
 apiVersion: scafctl.io/v1
 kind: Solution

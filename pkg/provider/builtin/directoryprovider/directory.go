@@ -786,7 +786,7 @@ func copyFile(src, dst string) error {
 		return err
 	}
 
-	dstFile, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, srcInfo.Mode().Perm())
+	dstFile, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, srcInfo.Mode().Perm()) //nolint:gosec // G703: dst is a resolved output path from provider config
 	if err != nil {
 		return err
 	}

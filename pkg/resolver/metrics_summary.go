@@ -160,17 +160,17 @@ func FormatMetricsSummary(summary *MetricsSummary) string {
 	sb.WriteString("==========================\n")
 
 	// Overview
-	sb.WriteString(fmt.Sprintf("Total: %d | Success: %d | Failed: %d | Skipped: %d\n",
-		summary.TotalResolvers, summary.SuccessCount, summary.FailedCount, summary.SkippedCount))
-	sb.WriteString(fmt.Sprintf("Duration: %v | Phases: %d\n\n",
-		summary.TotalDuration.Round(time.Millisecond), summary.PhaseCount))
+	fmt.Fprintf(&sb, "Total: %d | Success: %d | Failed: %d | Skipped: %d\n",
+		summary.TotalResolvers, summary.SuccessCount, summary.FailedCount, summary.SkippedCount)
+	fmt.Fprintf(&sb, "Duration: %v | Phases: %d\n\n",
+		summary.TotalDuration.Round(time.Millisecond), summary.PhaseCount)
 
 	// Slowest resolvers
 	if len(summary.SlowestResolvers) > 0 {
 		sb.WriteString("Slowest Resolvers:\n")
 		for i, r := range summary.SlowestResolvers {
-			sb.WriteString(fmt.Sprintf("  %d. %-20s %6s  (phase %d)\n",
-				i+1, r.Name, formatDuration(r.Duration), r.Phase))
+			fmt.Fprintf(&sb, "  %d. %-20s %6s  (phase %d)\n",
+				i+1, r.Name, formatDuration(r.Duration), r.Phase)
 		}
 		sb.WriteString("\n")
 	}
@@ -179,8 +179,8 @@ func FormatMetricsSummary(summary *MetricsSummary) string {
 	if len(summary.LargestValues) > 0 {
 		sb.WriteString("Largest Values:\n")
 		for i, r := range summary.LargestValues {
-			sb.WriteString(fmt.Sprintf("  %d. %-20s %s\n",
-				i+1, r.Name, formatBytes(r.Size)))
+			fmt.Fprintf(&sb, "  %d. %-20s %s\n",
+				i+1, r.Name, formatBytes(r.Size))
 		}
 		sb.WriteString("\n")
 	}
@@ -189,11 +189,11 @@ func FormatMetricsSummary(summary *MetricsSummary) string {
 	if len(summary.FailedAttempts) > 0 {
 		sb.WriteString("Failed Attempts (onError: continue):\n")
 		for _, fa := range summary.FailedAttempts {
-			sb.WriteString(fmt.Sprintf("  %s: %d attempts before success\n",
-				fa.ResolverName, fa.AttemptCount))
+			fmt.Fprintf(&sb, "  %s: %d attempts before success\n",
+				fa.ResolverName, fa.AttemptCount)
 			for _, attempt := range fa.Attempts {
-				sb.WriteString(fmt.Sprintf("    ✗ %s (%s)\n",
-					attempt.Provider, attempt.Error))
+				fmt.Fprintf(&sb, "    ✗ %s (%s)\n",
+					attempt.Provider, attempt.Error)
 			}
 		}
 		sb.WriteString("\n")
@@ -203,9 +203,9 @@ func FormatMetricsSummary(summary *MetricsSummary) string {
 	if len(summary.Failures) > 0 {
 		sb.WriteString("Failures:\n")
 		for _, f := range summary.Failures {
-			sb.WriteString(fmt.Sprintf("  ✗ %s (phase %d)\n",
-				f.Name, f.Phase))
-			sb.WriteString(fmt.Sprintf("    Error: %s\n", f.Error))
+			fmt.Fprintf(&sb, "  ✗ %s (phase %d)\n",
+				f.Name, f.Phase)
+			fmt.Fprintf(&sb, "    Error: %s\n", f.Error)
 		}
 	}
 

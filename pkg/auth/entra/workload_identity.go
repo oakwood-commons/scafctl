@@ -54,7 +54,7 @@ func GetWorkloadIdentityCredentials() *WorkloadIdentityCredentials {
 	hasDirectToken := directToken != ""
 	hasTokenFile := false
 	if tokenFile != "" {
-		if _, err := os.Stat(tokenFile); err == nil {
+		if _, err := os.Stat(tokenFile); err == nil { //nolint:gosec // G703: tokenFile is from trusted env var AZURE_FEDERATED_TOKEN_FILE
 			hasTokenFile = true
 		}
 	}
@@ -128,7 +128,7 @@ func (h *Handler) workloadIdentityLogin(ctx context.Context, _ auth.LoginOptions
 		if tokenFile == "" {
 			return nil, fmt.Errorf("workload identity not configured: %s environment variable not set", EnvAzureFederatedTokenFile)
 		}
-		if _, err := os.Stat(tokenFile); err != nil {
+		if _, err := os.Stat(tokenFile); err != nil { //nolint:gosec // G703: tokenFile is from trusted env var AZURE_FEDERATED_TOKEN_FILE
 			return nil, fmt.Errorf("workload identity token file not found: %s\nHint: Ensure the pod has the azure-workload-identity webhook labels and the service account is properly configured", tokenFile)
 		}
 		if os.Getenv(EnvAzureClientID) == "" {

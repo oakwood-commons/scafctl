@@ -28,8 +28,8 @@ type DeviceCodeResponse struct {
 
 // TokenResponse represents the response from the token endpoint.
 type TokenResponse struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
+	AccessToken  string `json:"access_token"`  //nolint:gosec // G117: not a hardcoded credential, stores runtime token data
+	RefreshToken string `json:"refresh_token"` //nolint:gosec // G117: not a hardcoded credential, stores runtime token data
 	TokenType    string `json:"token_type"`
 	ExpiresIn    int    `json:"expires_in"`
 	Scope        string `json:"scope"`
@@ -81,6 +81,13 @@ func (h *Handler) deviceCodeLogin(ctx context.Context, opts auth.LoginOptions) (
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	return h.performDeviceCodeFlow(ctx, opts, tenantID, scopes)
+}
+
+// performDeviceCodeFlow executes a single device code authentication flow for the given scopes.
+func (h *Handler) performDeviceCodeFlow(ctx context.Context, opts auth.LoginOptions, tenantID string, scopes []string) (*auth.Result, error) {
+	lgr := logger.FromContext(ctx)
+
 	// Step 1: Request device code
 	deviceCode, err := h.requestDeviceCode(ctx, tenantID, scopes)
 	if err != nil {
@@ -104,7 +111,7 @@ func (h *Handler) deviceCodeLogin(ctx context.Context, opts auth.LoginOptions) (
 	}
 
 	// Step 4: Store refresh token securely
-	if err := h.storeCredentials(ctx, tenantID, tokenResp); err != nil {
+	if err := h.storeCredentials(ctx, tenantID, tokenResp, scopes); err != nil {
 		return nil, auth.NewError(HandlerName, "store_credentials", err)
 	}
 

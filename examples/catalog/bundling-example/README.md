@@ -52,7 +52,7 @@ scafctl bundle extract bundling-example@1.0.0 --list
 ### 5. Run the Solution
 
 ```bash
-scafctl run solution bundling-example -r environment=dev
+scafctl run resolver bundling-example -r environment=dev
 ```
 
 ## Key Concepts Demonstrated

@@ -36,14 +36,14 @@ type dockerConfig struct {
 type dockerAuthEntry struct {
 	Auth          string `json:"auth"`
 	Username      string `json:"username"`
-	Password      string `json:"password"`
+	Password      string `json:"password"` //nolint:gosec // G117: not a hardcoded credential, stores docker auth data
 	IdentityToken string `json:"identitytoken"`
 }
 
 // credHelperResponse is the response from docker credential helpers.
 type credHelperResponse struct {
 	Username string `json:"Username"`
-	Secret   string `json:"Secret"`
+	Secret   string `json:"Secret"` //nolint:gosec // G117: not a hardcoded credential, stores docker cred helper response
 }
 
 // NewCredentialStore creates a credential store from the default docker config.
@@ -87,7 +87,7 @@ func findDockerConfig() string {
 	// Check DOCKER_CONFIG env var first
 	if dockerConfig := os.Getenv("DOCKER_CONFIG"); dockerConfig != "" {
 		configPath := filepath.Join(dockerConfig, "config.json")
-		if _, err := os.Stat(configPath); err == nil {
+		if _, err := os.Stat(configPath); err == nil { //nolint:gosec // G703: path from trusted DOCKER_CONFIG env var
 			return configPath
 		}
 	}
@@ -106,7 +106,7 @@ func findDockerConfig() string {
 	// Check XDG_RUNTIME_DIR for podman rootless
 	if xdgRuntime := os.Getenv("XDG_RUNTIME_DIR"); xdgRuntime != "" {
 		podmanPath := filepath.Join(xdgRuntime, "containers", "auth.json")
-		if _, err := os.Stat(podmanPath); err == nil {
+		if _, err := os.Stat(podmanPath); err == nil { //nolint:gosec // G703: path from trusted XDG_RUNTIME_DIR env var
 			return podmanPath
 		}
 	}

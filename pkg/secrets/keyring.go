@@ -251,7 +251,7 @@ func (k *fileKeyring) Set(service, account, value string) error {
 	}
 
 	// Atomic rename
-	if err := os.Rename(tmpPath, targetPath); err != nil {
+	if err := os.Rename(tmpPath, targetPath); err != nil { //nolint:gosec // G703: paths are within managed keyring directory
 		return NewKeyringError("set", fmt.Errorf("renaming key file: %w", err))
 	}
 

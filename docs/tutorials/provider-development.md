@@ -240,7 +240,58 @@ value := resolverCtx["otherResolver"]
 // Get logger
 lgr := logger.FromContext(ctx)
 lgr.V(1).Info("processing", "url", url)
+
+// Get IO streams for streaming output to the terminal
+ioStreams := provider.IOStreamsFromContext(ctx)
+if ioStreams != nil {
+    fmt.Fprintln(ioStreams.Out, "streaming output to terminal")
+}
 ```
+
+### Streaming Output
+
+Providers that produce user-visible output (e.g., command stdout/stderr) can stream it
+directly to the terminal instead of returning it only in `Output.Data`. This gives users
+real-time feedback during long-running operations.
+
+To stream output:
+
+1. **Get IO streams from context** — `provider.IOStreamsFromContext(ctx)` returns a
+   `*IOStreams` with `Out` and `ErrOut` writers. It may be `nil` when the CLI
+   is rendering structured output (JSON/YAML), so always check.
+
+2. **Write to both the capture buffer and the terminal** — Use `io.MultiWriter` to
+   write to both your internal buffer (for `Output.Data`) and the terminal writer.
+
+3. **Set `Streamed: true`** on the returned `Output` — This tells the CLI layer not
+   to re-print the data that was already streamed.
+
+```go
+func (p *MyProvider) Execute(ctx context.Context, input any) (*provider.Output, error) {
+    var buf bytes.Buffer
+    out := &buf
+
+    // Stream output to terminal if IO streams are available
+    ioStreams := provider.IOStreamsFromContext(ctx)
+    streamed := false
+    if ioStreams != nil {
+        out = io.MultiWriter(&buf, ioStreams.Out)
+        streamed = true
+    }
+
+    // Write output — goes to both buffer and terminal
+    fmt.Fprintln(out, "Hello, World!")
+
+    return &provider.Output{
+        Data:     map[string]any{"output": buf.String()},
+        Streamed: streamed,
+    }, nil
+}
+```
+
+When actions run in parallel, the CLI automatically wraps each action's IO streams with
+a `PrefixedWriter` that prepends `[action-name]` to each line, so users can tell which
+action produced which output.
 
 ## Using Typed Inputs (Decode)
 
@@ -546,6 +597,6 @@ func (p *RateLimitProvider) Execute(ctx context.Context, input any) (*provider.O
 
 ## Next Steps
 
-- See [Plugin Development Guide](plugin-development.md) to create external plugins
-- Review [Provider Reference](provider-reference.md) for built-in provider examples
-- Check [Contributing Guidelines](../CONTRIBUTING.md) for code standards
+- [Plugin Development Guide](plugin-development.md) — Extend scafctl with plugins
+- [Provider Reference](provider-reference.md) — Built-in provider examples
+- [Contributing Guidelines](../CONTRIBUTING.md) — Code standards

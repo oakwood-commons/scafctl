@@ -25,7 +25,7 @@ func (fm *fileManager) cleanUp() {
 	for _, f := range fm.files {
 		if f != nil {
 			f.Close()
-			os.Remove(f.Name())
+			os.Remove(f.Name()) //nolint:gosec // G703: path from os.File.Name(), not user input
 		}
 	}
 	fm.files = nil

@@ -275,6 +275,7 @@ scafctl snapshot save -f solution.yaml --output shareable.json --redact
 
 ## Next Steps
 
+- [Functional Testing Tutorial](functional-testing.md) — Write and run automated tests
+- [Configuration Tutorial](config-tutorial.md) — Manage application configuration
 - [Resolver Tutorial](resolver-tutorial.md) — Learn about resolvers that snapshots capture
-- [Actions Tutorial](actions-tutorial.md) — Use actions with render and snapshot
 - [Cache Tutorial](cache-tutorial.md) — Manage cached data from HTTP calls

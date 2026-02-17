@@ -126,6 +126,10 @@ type Output struct {
 	Data     any            `json:"data" yaml:"data" doc:"Provider output data" required:"true"`
 	Warnings []string       `json:"warnings,omitempty" yaml:"warnings,omitempty" doc:"Non-fatal warning messages" maxItems:"50"`
 	Metadata map[string]any `json:"metadata,omitempty" yaml:"metadata,omitempty" doc:"Execution metadata"`
+	// Streamed indicates that the provider already wrote its primary output
+	// (e.g., stdout/stderr) directly to the terminal via IOStreams from context.
+	// When true, the CLI output layer should not re-print the streamed content.
+	Streamed bool `json:"streamed,omitempty" yaml:"streamed,omitempty" doc:"Whether output was already streamed to terminal"`
 }
 
 // IsSensitiveField checks whether a field name is marked as sensitive in the descriptor.

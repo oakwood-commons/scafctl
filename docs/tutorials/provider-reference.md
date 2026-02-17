@@ -7,6 +7,8 @@ weight: 110
 
 This document provides a reference for all built-in providers in scafctl.
 
+> **Note:** All YAML examples in this reference show only the relevant resolver or action snippet. To use them, place each snippet inside a complete solution file with `apiVersion`, `kind`, `metadata`, and `spec` sections. See the [Getting Started](getting-started.md) tutorial for the full solution structure.
+
 ## Overview
 
 Providers are execution primitives used by resolvers and actions. Each provider has **capabilities** that determine where it can be used:
@@ -848,3 +850,10 @@ validate:
         expression: "!__self.startsWith('v0.')"
         message: "Version must be semver format and >= v1.0.0"
 ```
+
+## Next Steps
+
+- [Provider Development](provider-development.md) — Build custom providers
+- [Plugin Development](plugin-development.md) — Extend scafctl with plugins
+- [Resolver Tutorial](resolver-tutorial.md) — Using providers within resolvers
+- [Getting Started](getting-started.md) — Run your first solution

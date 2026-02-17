@@ -44,7 +44,7 @@ func (d *DefaultHTTPClient) Get(ctx context.Context, url string) (*http.Response
 	if err != nil {
 		return nil, err
 	}
-	return d.client.Do(req)
+	return d.client.Do(req) //nolint:gosec // G704: URL is from provider configuration
 }
 
 // FileOps defines the interface for file operations

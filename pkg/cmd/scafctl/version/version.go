@@ -132,7 +132,7 @@ func GetLatestVersion(ctx context.Context) (string, error) {
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req) //nolint:gosec // G704: URL is a known GitHub API endpoint, not user-controlled
 	if err != nil {
 		return "", fmt.Errorf("fetching latest release: %w", err)
 	}

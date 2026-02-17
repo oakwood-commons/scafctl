@@ -21,12 +21,13 @@ func CommandGet(_ *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra
 	var (
 		outputFormat string
 		noNewline    bool
+		allFlag      bool
 	)
 
 	cmd := &cobra.Command{
 		Use:   "get <name>",
 		Short: "Get a secret value",
-		Long:  "Retrieve and display the value of a secret. By default, prints the raw value to stdout.",
+		Long:  "Retrieve and display the value of a secret. By default, prints the raw value to stdout.\nUse --all to access internal secrets (e.g. auth tokens).",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -34,7 +35,7 @@ func CommandGet(_ *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra
 			name := args[0]
 
 			// Validate name
-			if err := ValidateUserSecretName(name); err != nil {
+			if err := ValidateSecretName(name, allFlag); err != nil {
 				w.Errorf("%v", err)
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
@@ -110,6 +111,7 @@ func CommandGet(_ *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra
 
 	cmd.Flags().StringVarP(&outputFormat, "output", "o", "", "Output format: json, yaml (default: raw)")
 	cmd.Flags().BoolVar(&noNewline, "no-newline", false, "Don't print trailing newline in raw output")
+	cmd.Flags().BoolVarP(&allFlag, "all", "a", false, "Include internal secrets (e.g. auth tokens)")
 
 	return cmd
 }

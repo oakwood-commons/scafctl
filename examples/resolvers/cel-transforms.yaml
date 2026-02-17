@@ -2,8 +2,8 @@
 # Demonstrates real-world data transformation patterns using CEL expressions.
 # Each resolver shows a practical pattern you can reuse in your solutions.
 #
-# Run: scafctl run solution -f examples/resolvers/cel-transforms.yaml -o yaml
-# Run: scafctl run solution -f examples/resolvers/cel-transforms.yaml -o json
+# Run: scafctl run resolver -f examples/resolvers/cel-transforms.yaml -o yaml
+# Run: scafctl run resolver -f examples/resolvers/cel-transforms.yaml -o json
 
 apiVersion: scafctl.io/v1
 kind: Solution

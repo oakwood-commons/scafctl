@@ -118,7 +118,7 @@ func fetchURL(ctx context.Context, urlStr string) ([]byte, error) {
 	}
 	req.Header.Set("User-Agent", "scafctl-flags-resolver/1.0")
 
-	resp, err := client.Do(req)
+	resp, err := client.Do(req) //nolint:gosec // G704: URL is validated before use
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch URL: %w", err)
 	}

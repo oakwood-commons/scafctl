@@ -299,6 +299,7 @@ Depending on the command:
 scafctl run solution myapp
 ~~~
 
+- Requires a workflow — errors if no workflow is defined (use `scafctl run resolver` for resolver-only execution)
 - Execute the rendered action graph
 - Invoke providers
 - Perform side effects

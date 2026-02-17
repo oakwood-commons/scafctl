@@ -45,8 +45,8 @@ scafctl catalog pull ghcr.io/YOUR_ORG/scafctl/solutions/resolver-demo@1.0.0
 # Verify it's in local catalog
 scafctl catalog list
 
-# Run the solution
-scafctl run solution resolver-demo
+# Run the resolver-only solution
+scafctl run resolver resolver-demo
 ```
 
 ## CI/CD Integration Example
