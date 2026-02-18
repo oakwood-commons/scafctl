@@ -172,6 +172,8 @@ There is no MCP library in `go.mod` today. We would add one:
 | `solution://{name}` | Solution YAML content |
 | `solution://{name}/schema` | JSON Schema for solution inputs |
 | `solution://{name}/graph` | Dependency graph (resolver + action) |
+| `provider://{name}` | Provider detail including input/output schemas, examples, CLI usage |
+| `provider://reference` | Compact reference of all providers with required/optional inputs |
 | `catalog://` | Catalog index |
 
 ### 5. Wiring / Integration Points
@@ -407,16 +409,27 @@ Provides sensible defaults: discard logger, empty auth registry, quiet/no-color 
 
 ## Recommended Approach
 
-An incremental rollout is recommended. Step 1 (preparatory refactoring) is already complete.
+An incremental rollout was used. All read-only phases are now **complete**.
 
 1. ~~**Preparatory refactoring** (~3-4 days)~~ — **✅ Complete.** Extracted command logic from Cobra closures, fixed `os.Exit`, created MCP context helper, added `cel-functions` command. See [Completed Preparatory Refactoring](#completed-preparatory-refactoring) for details.
-2. **Start with read-only tools** (`list_solutions`, `inspect_solution`, `lint_solution`, `list_providers`) — low risk, immediate value for AI-assisted authoring
-3. **Add `render_solution`** — still safe (no side effects), enables the AI to validate action graphs
-4. **Add `run_solution` with `--dry-run` default** — preview execution without side effects
-5. **Add full `run_solution`** behind explicit confirmation — the AI must surface the plan before executing
-6. **Register as a `scafctl mcp serve` command** using stdio transport (simplest, works with all MCP clients)
+2. ~~**Start with read-only tools** (`list_solutions`, `inspect_solution`, `lint_solution`, `list_providers`)~~ — **✅ Complete.** All Phase 2 tools implemented in `pkg/mcp/tools_*.go`.
+3. ~~**Add `render_solution`** and evaluation/catalog tools~~ — **✅ Complete.** Phase 3 tools (`evaluate_cel`, `render_solution`, `auth_status`, `catalog_list`) implemented.
+4. ~~**MCP Resources**~~ — **✅ Complete.** `solution://{name}` and `solution://{name}/schema` resource templates implemented. `provider://{name}` and `provider://reference` resources added for comprehensive provider schema access.
+5. ~~**Schema, Examples & Prompts**~~ — **✅ Complete.** Added `get_solution_schema` and `explain_kind` tools (Huma-based JSON Schema generation), `list_examples` and `get_example` tools, and 4 MCP prompts (`create_solution`, `debug_solution`, `add_resolver`, `add_action`).
+6. ~~**Testing**~~ — **✅ Complete.** Unit tests for all tool handlers, resources, server, and context. Integration tests for CLI commands and MCP protocol.
+7. ~~**Documentation, Tutorials & Examples**~~ — **✅ Complete.** Tutorial at `docs/tutorials/mcp-server-tutorial.md`, example configs at `examples/mcp/`.
+8. **Add `run_solution` with `--dry-run` default** — preview execution without side effects (deferred to future release)
+9. **Add full `run_solution`** behind explicit confirmation — the AI must surface the plan before executing (deferred to future release)
 
 This incremental approach lets us ship value at each step while managing the risk of AI-triggered side effects.
+
+### Implementation Details
+
+For the detailed implementation guide covering all phases, tool schemas, file maps, and test coverage, see [MCP Server Implementation Guide](./mcp-server-implementation-guide.md).
+
+For the user-facing tutorial, see [MCP Server Tutorial](../tutorials/mcp-server-tutorial.md).
+
+Example configurations for AI clients are in `examples/mcp/`.
 
 ## Decisions
 

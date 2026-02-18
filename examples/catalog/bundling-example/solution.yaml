@@ -39,8 +39,10 @@ spec:
         with:
           - provider: parameter
             inputs:
-              name: environment
-              default: dev
+              key: environment
+          - provider: static
+            inputs:
+              value: dev
 
     # STATIC PATH: This file reference is auto-discovered during build
     # No bundle.include needed - scafctl finds it automatically

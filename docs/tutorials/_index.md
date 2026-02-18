@@ -35,3 +35,7 @@ Step-by-step guides for learning scafctl features.
 - [Provider Reference](provider-reference.md) — Complete documentation for all built-in providers
 - [Provider Development Guide](provider-development.md) — Build custom providers
 - [Plugin Development Guide](plugin-development.md) — Extend scafctl with plugins
+
+## AI Integration
+
+- [MCP Server Tutorial](mcp-server-tutorial.md) — Set up AI agent integration with VS Code Copilot, Claude, Cursor, and Windsurf

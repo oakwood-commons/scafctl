@@ -352,14 +352,18 @@ resolvers:
         - provider: parameter
           inputs:
             key: environment
-            default: dev
+        - provider: static
+          inputs:
+            value: dev
   - name: region
     resolve:
       with:
         - provider: parameter
           inputs:
             key: region
-            default:
+        - provider: static
+          inputs:
+            value:
               rslvr: env
   - name: full-name
     resolve:
@@ -380,22 +384,25 @@ resolvers:
 
 	assert.Len(t, input.Resolvers, 3)
 
-	// Verify first resolver
+	// Verify first resolver with parameter + static fallback
 	r1 := input.Resolvers[0]
 	assert.Equal(t, "env", r1.Name)
 	require.NotNil(t, r1.Resolve)
-	assert.Len(t, r1.Resolve.With, 1)
+	assert.Len(t, r1.Resolve.With, 2)
 	assert.Equal(t, "parameter", r1.Resolve.With[0].Provider)
 	assert.Equal(t, "environment", r1.Resolve.With[0].Inputs["key"].Literal)
+	assert.Equal(t, "static", r1.Resolve.With[1].Provider)
+	assert.Equal(t, "dev", r1.Resolve.With[1].Inputs["value"].Literal)
 
-	// Verify second resolver with rslvr reference
+	// Verify second resolver with rslvr reference in static fallback
 	r2 := input.Resolvers[1]
 	assert.Equal(t, "region", r2.Name)
 	require.NotNil(t, r2.Resolve)
-	defaultVal := r2.Resolve.With[0].Inputs["default"]
-	require.NotNil(t, defaultVal)
-	require.NotNil(t, defaultVal.Resolver)
-	assert.Equal(t, "env", *defaultVal.Resolver)
+	assert.Len(t, r2.Resolve.With, 2)
+	fallbackVal := r2.Resolve.With[1].Inputs["value"]
+	require.NotNil(t, fallbackVal)
+	require.NotNil(t, fallbackVal.Resolver)
+	assert.Equal(t, "env", *fallbackVal.Resolver)
 
 	// Verify third resolver with expr
 	r3 := input.Resolvers[2]

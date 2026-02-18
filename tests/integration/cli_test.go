@@ -6,6 +6,7 @@ package integration
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -3144,7 +3145,7 @@ spec:
         with:
           - provider: parameter
             inputs:
-              name: environment
+              key: environment
 `
 	solPath := filepath.Join(tmpDir, "solution.yaml")
 	require.NoError(t, os.WriteFile(solPath, []byte(solContent), 0o644))
@@ -3716,4 +3717,124 @@ func TestIntegration_Test_Init_MissingFile(t *testing.T) {
 
 	assert.NotEqual(t, 0, exitCode, "expected non-zero exit code")
 	assert.Contains(t, stderr, "reading solution file")
+}
+
+// ─── MCP Server Integration Tests ────────────────────────────────────────────
+
+func TestIntegration_MCPHelp(t *testing.T) {
+	t.Parallel()
+
+	stdout, _, exitCode := runScafctl(t, "mcp", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "MCP")
+	assert.Contains(t, stdout, "serve")
+}
+
+func TestIntegration_MCPServeHelp(t *testing.T) {
+	t.Parallel()
+
+	stdout, _, exitCode := runScafctl(t, "mcp", "serve", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Start the MCP server")
+	assert.Contains(t, stdout, "--transport")
+	assert.Contains(t, stdout, "--info")
+	assert.Contains(t, stdout, "--log-file")
+}
+
+func TestIntegration_MCPServeInfo(t *testing.T) {
+	t.Parallel()
+
+	stdout, _, exitCode := runScafctl(t, "mcp", "serve", "--info")
+
+	assert.Equal(t, 0, exitCode)
+
+	// Verify valid JSON output
+	var info struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+		Tools   []struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		} `json:"tools"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &info))
+	assert.Equal(t, "scafctl", info.Name)
+	// Version may be empty in dev builds (no ldflags)
+
+	// Verify Phase 2 tools are registered
+	toolNames := make(map[string]bool)
+	for _, tool := range info.Tools {
+		toolNames[tool.Name] = true
+	}
+	assert.True(t, toolNames["list_solutions"], "expected list_solutions tool")
+	assert.True(t, toolNames["inspect_solution"], "expected inspect_solution tool")
+	assert.True(t, toolNames["lint_solution"], "expected lint_solution tool")
+	assert.True(t, toolNames["list_providers"], "expected list_providers tool")
+	assert.True(t, toolNames["get_provider_schema"], "expected get_provider_schema tool")
+	assert.True(t, toolNames["list_cel_functions"], "expected list_cel_functions tool")
+
+	// Phase 3 tools
+	assert.True(t, toolNames["evaluate_cel"], "expected evaluate_cel tool")
+	assert.True(t, toolNames["render_solution"], "expected render_solution tool")
+	assert.True(t, toolNames["auth_status"], "expected auth_status tool")
+	assert.True(t, toolNames["catalog_list"], "expected catalog_list tool")
+
+	// Phase 4b tools (schema, examples)
+	assert.True(t, toolNames["get_solution_schema"], "expected get_solution_schema tool")
+	assert.True(t, toolNames["explain_kind"], "expected explain_kind tool")
+	assert.True(t, toolNames["list_examples"], "expected list_examples tool")
+	assert.True(t, toolNames["get_example"], "expected get_example tool")
+}
+
+func TestIntegration_MCPServeProtocol(t *testing.T) {
+	t.Parallel()
+
+	// Test the MCP JSON-RPC protocol by piping an initialize message via stdin.
+	// We build a simple stdin payload and verify the server responds correctly.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, binaryPath, "mcp", "serve")
+	cmd.Dir = findProjectRoot()
+
+	initMsg := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}`
+	cmd.Stdin = strings.NewReader(initMsg + "\n")
+
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+
+	err := cmd.Run()
+	// The server may exit with an error when stdin closes, that's OK
+	_ = err
+
+	output := outBuf.String()
+	require.NotEmpty(t, output, "expected JSON-RPC response on stdout")
+
+	// Parse the first JSON-RPC response
+	var resp struct {
+		JSONRPC string `json:"jsonrpc"`
+		ID      int    `json:"id"`
+		Result  struct {
+			ProtocolVersion string `json:"protocolVersion"`
+			ServerInfo      struct {
+				Name    string `json:"name"`
+				Version string `json:"version"`
+			} `json:"serverInfo"`
+			Capabilities struct {
+				Tools     map[string]any `json:"tools"`
+				Resources map[string]any `json:"resources"`
+			} `json:"capabilities"`
+			Instructions string `json:"instructions"`
+		} `json:"result"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(output), &resp))
+	assert.Equal(t, "2.0", resp.JSONRPC)
+	assert.Equal(t, 1, resp.ID)
+	assert.Equal(t, "scafctl", resp.Result.ServerInfo.Name)
+	assert.NotEmpty(t, resp.Result.ProtocolVersion)
+	assert.NotEmpty(t, resp.Result.Instructions)
+	assert.NotNil(t, resp.Result.Capabilities.Tools)
 }

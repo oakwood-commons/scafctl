@@ -68,8 +68,10 @@ spec:
         with:
           - provider: parameter
             inputs:
-              name: env
-              default: development
+              key: env
+          - provider: static
+            inputs:
+              value: development
 
     port:
       type: int
@@ -564,8 +566,10 @@ spec:
         with:
           - provider: parameter
             inputs:
-              name: env
-              default: development
+              key: env
+          - provider: static
+            inputs:
+              value: development
 
     final-config:
       type: any

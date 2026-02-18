@@ -80,7 +80,7 @@ func (i providerItem) Description() string {
 
 func (i providerItem) FilterValue() string {
 	desc := i.provider.Descriptor()
-	return desc.Name + " " + desc.Description + " " + strings.Join(capabilitiesToStrings(desc.Capabilities), " ")
+	return desc.Name + " " + desc.Description + " " + strings.Join(CapabilitiesToStrings(desc.Capabilities), " ")
 }
 
 // view represents the current view state

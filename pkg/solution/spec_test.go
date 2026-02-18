@@ -562,7 +562,7 @@ spec:
         with:
           - provider: parameter
             inputs:
-              name: "env"
+              key: "env"
   tests:
     render-test:
       description: "Test rendering"
@@ -626,7 +626,7 @@ spec:
         with:
           - provider: parameter
             inputs:
-              name: "env"
+              key: "env"
   tests:
     my-test:
       description: "A test"
@@ -676,7 +676,7 @@ spec:
         with:
           - provider: parameter
             inputs:
-              name: "env"
+              key: "env"
 `
 	var sol Solution
 	err := sol.UnmarshalFromBytes([]byte(yamlContent))

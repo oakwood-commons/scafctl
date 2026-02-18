@@ -21,6 +21,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/explain"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/lint"
+	mcpcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/render"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/run"
@@ -337,5 +338,6 @@ func Root(opts *RootOptions) *cobra.Command {
 	cCmd.AddCommand(bundlecmd.CommandBundle(cliParams, ioStreams, settings.CliBinaryName))
 	cCmd.AddCommand(vendorcmd.CommandVendor(cliParams, ioStreams, settings.CliBinaryName))
 	cCmd.AddCommand(testcmd.CommandTest(cliParams, ioStreams, settings.CliBinaryName))
+	cCmd.AddCommand(mcpcmd.CommandMCP(cliParams, ioStreams, settings.CliBinaryName))
 	return cCmd
 }

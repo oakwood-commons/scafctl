@@ -959,10 +959,7 @@ actions:
   build:
     provider: exec
     inputs:
-      cmd:
-        - go
-        - build
-        - ./...
+      command: "go build ./..."
 ~~~
 
 Action orchestration, dependencies, iteration, and conditional execution are handled outside the provider.

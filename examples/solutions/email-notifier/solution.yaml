@@ -104,7 +104,7 @@ spec:
       when:
         expr: "_.environment != \"dev\""
       inputs:
-        cmd:
+        command:
           expr: "'echo Sending email from ' + _.emailFrom + ' to ' + _.emailTo + ' subject: ' + _.subject"
 
     renderPreview:

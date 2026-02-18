@@ -164,7 +164,7 @@ func TestDetectDynamicPaths_TransformFilePath(t *testing.T) {
 				"xform": {
 					Resolve: &resolver.ResolvePhase{
 						With: []resolver.ProviderSource{
-							{Provider: "parameter", Inputs: map[string]*spec.ValueRef{"name": {Literal: "x"}}},
+							{Provider: "parameter", Inputs: map[string]*spec.ValueRef{"key": {Literal: "x"}}},
 						},
 					},
 					Transform: &resolver.TransformPhase{

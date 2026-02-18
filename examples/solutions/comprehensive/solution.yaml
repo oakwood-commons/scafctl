@@ -300,11 +300,8 @@ spec:
       description: Create output directory for artifacts
       provider: exec
       inputs:
-        # Literal array input
-        cmd:
-          - mkdir
-          - -p
-          - ./output
+        # Literal string input
+        command: "mkdir -p ./output"
 
     # -------------------------------------------------------------------------
     # Action 2: Action using resolver binding (rslv)
@@ -315,9 +312,7 @@ spec:
       provider: exec
       dependsOn: [createOutputDirectory]
       inputs:
-        cmd:
-          - echo
-          - "Deploying to environment:"
+        command: "echo 'Deploying to environment:'"
         # Direct resolver binding - passes the value as-is
         env:
           ENVIRONMENT:
@@ -339,10 +334,7 @@ spec:
         # Conditional execution using expr
         expr: "!_.dryRun && _.environment != \"dev\""
       inputs:
-        cmd:
-          - docker
-          - build
-          - -t
+        command: "docker build -t"
           # Expression input combining multiple values
         env:
           IMAGE_TAG:
@@ -463,17 +455,13 @@ spec:
         in: _.regions
 
       inputs:
-        cmd:
-          - kubectl
-          - apply
-          - -f
+        command:
+          tmpl: "kubectl apply -f ./output/{{ .__region }}/"
         args:
-          path:
-            tmpl: "./output/{{ .__region }}/"
-          namespace:
-            rslvr: environment
-          context:
-            tmpl: "cluster-{{ .__region }}"
+          - "-n"
+          - rslvr: environment
+          - "--context"
+          - tmpl: "cluster-{{ .__region }}"
 
     # -------------------------------------------------------------------------
     # Action 7: Retry pattern with until condition
@@ -489,16 +477,13 @@ spec:
       until:
         expr: '_.__actions.deployToCluster.results.exitCode == 0 && _.__actions.deployToCluster.results.stdout.contains(\"Running\")'
       inputs:
-        cmd:
-          - kubectl
-          - get
-          - pods
-          - -n
-        args:
-          namespace:
+        command:
+          tmpl: "kubectl get pods -n {{ .environment }} -l app={{ .appName }}"
+        context:
+          environment:
             rslvr: environment
-          selector:
-            tmpl: "app={{ .appName }}"
+          appName:
+            rslvr: appName
 
     # -------------------------------------------------------------------------
     # Action 8: Consuming results from previous action
@@ -511,9 +496,7 @@ spec:
       when:
         expr: "!_.dryRun"
       inputs:
-        cmd:
-          - echo
-          - "Verifying deployment status"
+        command: "echo 'Verifying deployment status'"
         # Access results from deployToCluster action
         validate:
           statusCheck:
@@ -530,10 +513,7 @@ spec:
       when:
         expr: "_.environment == \"staging\" || _.environment == \"dev\""
       inputs:
-        cmd:
-          - npm
-          - run
-          - smoke-test
+        command: "npm run smoke-test"
         env:
           TEST_ENV:
             rslvr: environment
@@ -623,9 +603,6 @@ spec:
       provider: exec
       # No dependsOn - can run independently
       inputs:
-        cmd:
-          - rm
-          - -rf
-          - ./temp
+        command: "rm -rf ./temp"
         # Literal boolean flag
         continueOnError: true

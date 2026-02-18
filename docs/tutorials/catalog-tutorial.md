@@ -52,8 +52,10 @@ spec:
         with:
           - provider: parameter
             inputs:
-              name: name
-              default: World
+              key: name
+          - provider: static
+            inputs:
+              value: World
     message:
       type: string
       dependsOn:
@@ -286,8 +288,10 @@ spec:
         with:
           - provider: parameter
             inputs:
-              name: name
-              default: World
+              key: name
+          - provider: static
+            inputs:
+              value: World
     timestamp:
       type: string
       resolve:
@@ -846,8 +850,10 @@ spec:
         with:
           - provider: parameter
             inputs:
-              name: environment
-              default: dev
+              key: environment
+          - provider: static
+            inputs:
+              value: dev
 
     config:
       type: any

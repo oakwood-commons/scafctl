@@ -67,11 +67,10 @@ spec:
         description: Create output directory
         provider: exec
         inputs:
-          cmd:
-            - mkdir
-            - -p
-          args:
-            dir:
+          command:
+            expr: "'mkdir -p ' + _.outputDir"
+          context:
+            outputDir:
               rslvr: outputDir
 
       generate:
@@ -79,11 +78,8 @@ spec:
         provider: exec
         dependsOn: [create-dir]
         inputs:
-          cmd:
-            - echo
-          args:
-            msg:
-              tmpl: "Generating {{ .projectName }} ({{ .language }} v{{ .version }})"
+          command:
+            tmpl: "echo 'Generating {{ .projectName }} ({{ .language }} v{{ .version }})'"
           context:
             projectName:
               rslvr: projectName
@@ -99,11 +95,8 @@ spec:
         when:
           expr: '_.version != "0.1.0"'
         inputs:
-          cmd:
-            - echo
-          args:
-            msg:
-              tmpl: "Releasing {{ .projectName }} v{{ .version }}"
+          command:
+            tmpl: "echo 'Releasing {{ .projectName }} v{{ .version }}'"
           context:
             projectName:
               rslvr: projectName

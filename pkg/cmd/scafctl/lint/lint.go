@@ -166,8 +166,8 @@ func runLint(ctx context.Context, opts *Options) error {
 	lgr.V(1).Info("linting solution", "file", opts.File, "name", sol.Metadata.Name)
 
 	registry := getRegistry(ctx)
-	result := lintSolution(sol, opts.File, registry)
-	result = filterBySeverity(result, opts.Severity)
+	result := Solution(sol, opts.File, registry)
+	result = FilterBySeverity(result, opts.Severity)
 
 	if opts.Output == "quiet" {
 		if result.ErrorCount > 0 {
@@ -215,7 +215,9 @@ func writeError(opts *Options, msg string) {
 	).WriteMessage(msg)
 }
 
-func lintSolution(sol *solution.Solution, filePath string, registry *provider.Registry) *Result {
+// Solution validates a solution and returns structured lint findings.
+// This function is reusable by both CLI and MCP.
+func Solution(sol *solution.Solution, filePath string, registry *provider.Registry) *Result {
 	result := &Result{
 		File:     filePath,
 		Findings: make([]*Finding, 0),
@@ -661,7 +663,9 @@ func isCoveredByBundleInclude(file string, includes []string) bool {
 	return false
 }
 
-func filterBySeverity(result *Result, minSeverity string) *Result {
+// FilterBySeverity filters lint findings to only include those at or above
+// the specified minimum severity level.
+func FilterBySeverity(result *Result, minSeverity string) *Result {
 	severityOrder := map[SeverityLevel]int{
 		SeverityError:   3,
 		SeverityWarning: 2,
