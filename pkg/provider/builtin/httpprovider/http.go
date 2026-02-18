@@ -184,7 +184,7 @@ func NewHTTPProvider() *HTTPProvider {
 				"authProvider": schemahelper.StringProp("Authentication provider to use for this request (e.g., 'entra'). When set, the provider will automatically obtain and inject an access token.",
 					schemahelper.WithExample("entra"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(50))),
-				"scope": schemahelper.StringProp("OAuth scope for authentication (required when authProvider is set). The token will be valid for the request timeout plus a 60-second buffer.",
+				"scope": schemahelper.StringProp("OAuth scope for authentication. Required for auth providers that support per-request scopes (e.g., Entra). Not used for providers with scopes fixed at login time (e.g., GitHub).",
 					schemahelper.WithExample("https://graph.microsoft.com/.default"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(500))),
 			}),
@@ -329,14 +329,23 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 	scope, _ := inputs["scope"].(string)
 
 	if authProvider != "" {
-		if scope == "" {
-			return nil, fmt.Errorf("%s: scope is required when authProvider is set", ProviderName)
-		}
-
 		// Get auth handler from context
 		handler, err := auth.GetHandler(ctx, authProvider)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", ProviderName, err)
+		}
+
+		// Validate scope requirement based on handler capabilities
+		requiresScope := auth.HasCapability(handler.Capabilities(), auth.CapScopesOnTokenRequest)
+		if scope == "" && requiresScope {
+			return nil, fmt.Errorf("%s: scope is required when authProvider %q is set (handler supports per-request scopes)", ProviderName, authProvider)
+		}
+		if scope != "" && !requiresScope {
+			lgr.V(1).Info("ignoring scope for auth provider that does not support per-request scopes",
+				"authProvider", authProvider,
+				"scope", scope,
+			)
+			scope = ""
 		}
 
 		// Calculate minimum token validity: request timeout + 60 second buffer

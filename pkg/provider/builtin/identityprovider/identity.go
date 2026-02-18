@@ -320,9 +320,10 @@ func (p *IdentityProvider) executeList(ctx context.Context) (*provider.Output, e
 		}
 
 		info := map[string]any{
-			"name":        handler.Name(),
-			"displayName": handler.DisplayName(),
-			"flows":       flowsToStrings(handler.SupportedFlows()),
+			"name":         handler.Name(),
+			"displayName":  handler.DisplayName(),
+			"flows":        flowsToStrings(handler.SupportedFlows()),
+			"capabilities": capabilitiesToStrings(handler.Capabilities()),
 		}
 
 		// Check authentication status
@@ -378,6 +379,15 @@ func flowsToStrings(flows []auth.Flow) []string {
 	result := make([]string, len(flows))
 	for i, f := range flows {
 		result[i] = string(f)
+	}
+	return result
+}
+
+// capabilitiesToStrings converts auth capabilities to string slice for output.
+func capabilitiesToStrings(caps []auth.Capability) []string {
+	result := make([]string, len(caps))
+	for i, c := range caps {
+		result[i] = string(c)
 	}
 	return result
 }

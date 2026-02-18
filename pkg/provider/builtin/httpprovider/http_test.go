@@ -733,6 +733,7 @@ func TestHTTPProvider_Execute_AuthProvider_Success(t *testing.T) {
 
 	// Set up mock auth handler
 	mockHandler := auth.NewMockHandler("entra")
+	mockHandler.CapabilitiesValue = []auth.Capability{auth.CapScopesOnTokenRequest}
 	mockHandler.SetToken(&auth.Token{
 		AccessToken: "test-access-token-12345",
 		TokenType:   "Bearer",
@@ -772,8 +773,15 @@ func TestHTTPProvider_Execute_AuthProvider_Success(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_AuthProvider_MissingScope(t *testing.T) {
+	// Scope is required for handlers with CapScopesOnTokenRequest (e.g., entra)
+	mockHandler := auth.NewMockHandler("entra")
+	mockHandler.CapabilitiesValue = []auth.Capability{auth.CapScopesOnTokenRequest}
+
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(mockHandler))
+	ctx := auth.WithRegistry(context.Background(), registry)
+
 	p := NewHTTPProvider()
-	ctx := context.Background()
 
 	inputs := map[string]any{
 		"url":          "https://example.com/api",
@@ -786,7 +794,49 @@ func TestHTTPProvider_Execute_AuthProvider_MissingScope(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Nil(t, output)
-	assert.Contains(t, err.Error(), "scope is required when authProvider is set")
+	assert.Contains(t, err.Error(), "scope is required")
+}
+
+func TestHTTPProvider_Execute_AuthProvider_GitHubNoScope(t *testing.T) {
+	var receivedAuthHeader string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuthHeader = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok": true}`))
+	}))
+	defer server.Close()
+
+	// GitHub handler does NOT have CapScopesOnTokenRequest
+	mockHandler := auth.NewMockHandler("github")
+	mockHandler.CapabilitiesValue = []auth.Capability{auth.CapScopesOnLogin, auth.CapHostname}
+	mockHandler.SetToken(&auth.Token{
+		AccessToken: "gho_github_token",
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(1 * time.Hour),
+	})
+
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(mockHandler))
+	ctx := auth.WithRegistry(context.Background(), registry)
+
+	p := NewHTTPProvider()
+	inputs := map[string]any{
+		"url":          server.URL,
+		"method":       "GET",
+		"authProvider": "github",
+		// No scope — GitHub scopes are fixed at login time
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "Bearer gho_github_token", receivedAuthHeader)
+
+	// Verify GetToken was called with empty scope
+	require.Len(t, mockHandler.GetTokenCalls, 1)
+	assert.Empty(t, mockHandler.GetTokenCalls[0].Scope)
 }
 
 func TestHTTPProvider_Execute_AuthProvider_MissingRegistry(t *testing.T) {
@@ -831,6 +881,7 @@ func TestHTTPProvider_Execute_AuthProvider_UnknownHandler(t *testing.T) {
 func TestHTTPProvider_Execute_AuthProvider_TokenError(t *testing.T) {
 	// Set up mock auth handler that returns error
 	mockHandler := auth.NewMockHandler("entra")
+	mockHandler.CapabilitiesValue = []auth.Capability{auth.CapScopesOnTokenRequest}
 	mockHandler.SetTokenError(auth.ErrNotAuthenticated)
 
 	registry := auth.NewRegistry()
@@ -873,6 +924,7 @@ func TestHTTPProvider_Execute_AuthProvider_401Retry(t *testing.T) {
 
 	// Set up mock handler
 	mockHandler := auth.NewMockHandler("entra")
+	mockHandler.CapabilitiesValue = []auth.Capability{auth.CapScopesOnTokenRequest}
 	mockHandler.SetToken(&auth.Token{
 		AccessToken: "test-token",
 		TokenType:   "Bearer",
@@ -920,6 +972,7 @@ func TestHTTPProvider_Execute_AuthProvider_401RetryOnlyOnce(t *testing.T) {
 	defer server.Close()
 
 	mockHandler := auth.NewMockHandler("entra")
+	mockHandler.CapabilitiesValue = []auth.Capability{auth.CapScopesOnTokenRequest}
 	mockHandler.SetToken(&auth.Token{
 		AccessToken: "test-token",
 		TokenType:   "Bearer",

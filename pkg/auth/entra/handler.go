@@ -43,6 +43,7 @@ const (
 type Handler struct {
 	config      *Config
 	secretStore secrets.Store
+	secretErr   error // deferred error from secrets initialization
 	httpClient  HTTPClient
 	tokenCache  *TokenCache
 }
@@ -92,6 +93,10 @@ func WithHTTPClient(client HTTPClient) Option {
 }
 
 // New creates a new Entra auth handler.
+// Secret store initialization is deferred — if it fails, the handler is still
+// created so that metadata operations (Name, SupportedFlows, etc.) work.
+// Operations requiring secrets (Login, Logout, Status, GetToken) will return
+// the deferred error.
 func New(opts ...Option) (*Handler, error) {
 	h := &Handler{
 		config: DefaultConfig(),
@@ -105,9 +110,11 @@ func New(opts ...Option) (*Handler, error) {
 	if h.secretStore == nil {
 		store, err := secrets.New()
 		if err != nil {
-			return nil, fmt.Errorf("failed to initialize secrets store: %w", err)
+			// Defer the error — metadata-only operations still work
+			h.secretErr = fmt.Errorf("failed to initialize secrets store: %w", err)
+		} else {
+			h.secretStore = store
 		}
-		h.secretStore = store
 	}
 
 	// Initialize HTTP client if not provided
@@ -115,10 +122,23 @@ func New(opts ...Option) (*Handler, error) {
 		h.httpClient = NewDefaultHTTPClient()
 	}
 
-	// Initialize token cache with secret store
-	h.tokenCache = NewTokenCache(h.secretStore)
+	// Initialize token cache with secret store (nil-safe: checked before use)
+	if h.secretStore != nil {
+		h.tokenCache = NewTokenCache(h.secretStore)
+	}
 
 	return h, nil
+}
+
+// ensureSecrets returns an error if the secret store is not available.
+func (h *Handler) ensureSecrets() error {
+	if h.secretStore == nil {
+		if h.secretErr != nil {
+			return h.secretErr
+		}
+		return fmt.Errorf("secrets store not initialized")
+	}
+	return nil
 }
 
 // Name returns the handler identifier.
@@ -141,11 +161,28 @@ func (h *Handler) SupportedFlows() []auth.Flow {
 	return flows
 }
 
+// Capabilities returns the set of capabilities this handler supports.
+// Entra supports scopes at both login time and per-request (different
+// resource scopes), tenant ID selection, and federated tokens for
+// workload identity.
+func (h *Handler) Capabilities() []auth.Capability {
+	return []auth.Capability{
+		auth.CapScopesOnLogin,
+		auth.CapScopesOnTokenRequest,
+		auth.CapTenantID,
+		auth.CapFederatedToken,
+	}
+}
+
 // Login initiates the authentication flow.
 // For device code flow, this initiates interactive authentication.
 // For service principal flow, this validates the credentials.
 // For workload identity flow, this validates the federated token.
 func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Result, error) {
+	if err := h.ensureSecrets(); err != nil {
+		return nil, err
+	}
+
 	// Check if workload identity flow is requested or detected (highest priority)
 	if opts.Flow == auth.FlowWorkloadIdentity || (opts.Flow == "" && HasWorkloadIdentityCredentials()) {
 		return h.workloadIdentityLogin(ctx, opts)
@@ -161,6 +198,10 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 
 // Logout clears stored credentials and cached tokens.
 func (h *Handler) Logout(ctx context.Context) error {
+	if err := h.ensureSecrets(); err != nil {
+		return err
+	}
+
 	lgr := logger.FromContext(ctx)
 	lgr.V(1).Info("logging out", "handler", HandlerName)
 
@@ -184,6 +225,10 @@ func (h *Handler) Logout(ctx context.Context) error {
 
 // Status returns the current authentication status.
 func (h *Handler) Status(ctx context.Context) (*auth.Status, error) {
+	if err := h.ensureSecrets(); err != nil {
+		return nil, err
+	}
+
 	// Check for workload identity credentials first (highest priority)
 	if HasWorkloadIdentityCredentials() {
 		return h.workloadIdentityStatus(ctx)
@@ -235,6 +280,10 @@ func (h *Handler) Status(ctx context.Context) (*auth.Status, error) {
 
 // GetToken returns a valid access token for the specified options.
 func (h *Handler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.Token, error) {
+	if err := h.ensureSecrets(); err != nil {
+		return nil, err
+	}
+
 	// Use workload identity flow if credentials are present (highest priority)
 	if HasWorkloadIdentityCredentials() {
 		return h.getWorkloadIdentityToken(ctx, opts)
@@ -340,10 +389,16 @@ func getCachedOrAcquireToken[T any](
 		return nil, auth.ErrNotAuthenticated
 	}
 
+	// Apply default minimum validity to match the user-flow behavior.
+	minValidFor := opts.MinValidFor
+	if minValidFor == 0 {
+		minValidFor = auth.DefaultMinValidFor
+	}
+
 	// Check cache first (unless ForceRefresh)
 	if !opts.ForceRefresh {
 		cached, err := h.tokenCache.Get(ctx, opts.Scope)
-		if err == nil && cached != nil && cached.IsValidFor(opts.MinValidFor) {
+		if err == nil && cached != nil && cached.IsValidFor(minValidFor) {
 			lgr.V(1).Info("using cached "+logPrefix+" token", "scope", opts.Scope)
 			return cached, nil
 		}

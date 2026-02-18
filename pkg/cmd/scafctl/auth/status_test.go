@@ -48,8 +48,8 @@ func TestCommandStatus_AllHandlers(t *testing.T) {
 	err := cmd.Execute()
 	require.NoError(t, err)
 
-	// Verify status was checked (once per supported handler: entra, github)
-	assert.Equal(t, 2, mock.StatusCalls)
+	// With test handler injection, listHandlers returns only the mock's name
+	assert.Equal(t, 1, mock.StatusCalls)
 }
 
 func TestCommandStatus_SpecificHandler(t *testing.T) {

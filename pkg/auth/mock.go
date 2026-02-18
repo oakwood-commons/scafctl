@@ -13,9 +13,10 @@ import (
 type MockHandler struct {
 	mu sync.Mutex
 
-	NameValue        string
-	DisplayNameValue string
-	FlowsValue       []Flow
+	NameValue         string
+	DisplayNameValue  string
+	FlowsValue        []Flow
+	CapabilitiesValue []Capability
 
 	LoginResult    *Result
 	LoginErr       error
@@ -50,6 +51,10 @@ func (m *MockHandler) SupportedFlows() []Flow {
 		return []Flow{FlowDeviceCode}
 	}
 	return m.FlowsValue
+}
+
+func (m *MockHandler) Capabilities() []Capability {
+	return m.CapabilitiesValue
 }
 
 func (m *MockHandler) Login(_ context.Context, opts LoginOptions) (*Result, error) {

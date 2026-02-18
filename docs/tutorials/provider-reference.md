@@ -540,7 +540,7 @@ HTTP client for API calls.
 | `body` | string | ❌ | Request body |
 | `timeout` | int | ❌ | Timeout in seconds (max 300) |
 | `retry` | object | ❌ | Retry configuration |
-| `auth` | string | ❌ | Auth provider (e.g., `entra`) |
+| `auth` | string | ❌ | Auth provider (e.g., `entra`, `github`) |
 | `scope` | string | ❌ | OAuth scope for authentication |
 
 ### Output
@@ -583,6 +583,17 @@ inputs:
     maxAttempts: 3
     backoff: exponential
     initialDelay: 1s
+
+# Authenticated GitHub API request
+resolve:
+  with:
+    - provider: http
+      inputs:
+        url: https://api.github.com/user/repos
+        headers:
+          Accept: application/json
+        auth: github
+        scope: repo
 ```
 
 ---
@@ -600,7 +611,7 @@ Get authentication identity information without exposing tokens.
 | Field | Type | Required | Description |
 |-------|------|:--------:|-------------|
 | `operation` | string | ✅ | Operation: `status`, `claims`, `list` |
-| `handler` | string | ❌ | Auth handler name (e.g., `entra`) |
+| `handler` | string | ❌ | Auth handler name (e.g., `entra`, `github`) |
 
 ### Output
 
@@ -616,13 +627,21 @@ Get authentication identity information without exposing tokens.
 ### Examples
 
 ```yaml
-# Check if authenticated
+# Check if authenticated (Entra)
 resolve:
   with:
     - provider: identity
       inputs:
         operation: status
         handler: entra
+
+# Check if authenticated (GitHub)
+resolve:
+  with:
+    - provider: identity
+      inputs:
+        operation: status
+        handler: github
 
 # Get claims
 resolve:
@@ -631,6 +650,14 @@ resolve:
       inputs:
         operation: claims
         handler: entra
+
+# Get GitHub claims (login, name, email)
+resolve:
+  with:
+    - provider: identity
+      inputs:
+        operation: claims
+        handler: github
 ```
 
 ---

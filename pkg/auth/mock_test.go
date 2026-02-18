@@ -19,6 +19,14 @@ func TestMockHandler_Basics(t *testing.T) {
 	assert.Equal(t, "entra", mock.Name())
 	assert.Equal(t, "entra", mock.DisplayName())
 	assert.Contains(t, mock.SupportedFlows(), FlowDeviceCode)
+	assert.Empty(t, mock.Capabilities()) // Default: no capabilities
+
+	// Set capabilities
+	mock.CapabilitiesValue = []Capability{CapScopesOnLogin, CapScopesOnTokenRequest}
+	assert.Len(t, mock.Capabilities(), 2)
+	assert.True(t, HasCapability(mock.Capabilities(), CapScopesOnLogin))
+	assert.True(t, HasCapability(mock.Capabilities(), CapScopesOnTokenRequest))
+	assert.False(t, HasCapability(mock.Capabilities(), CapHostname))
 }
 
 func TestMockHandler_Login(t *testing.T) {

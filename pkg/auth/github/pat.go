@@ -49,7 +49,7 @@ func GetHostnameFromEnv() string {
 }
 
 // patLogin validates a PAT by calling the GitHub API.
-func (h *Handler) patLogin(ctx context.Context, _ auth.LoginOptions) (*auth.Result, error) {
+func (h *Handler) patLogin(ctx context.Context, opts auth.LoginOptions) (*auth.Result, error) {
 	lgr := logger.FromContext(ctx)
 	lgr.V(1).Info("starting PAT login", "handler", HandlerName)
 
@@ -69,6 +69,10 @@ func (h *Handler) patLogin(ctx context.Context, _ auth.LoginOptions) (*auth.Resu
 		"login", claims.Subject,
 		"name", claims.Name,
 	)
+
+	if len(opts.Scopes) > 0 {
+		lgr.V(0).Info("WARNING: --scope flags are ignored for PAT authentication; PAT scopes are fixed at token creation time on GitHub")
+	}
 
 	return &auth.Result{
 		Claims: claims,
@@ -117,7 +121,6 @@ func (h *Handler) getPATToken(ctx context.Context, opts auth.TokenOptions) (*aut
 				TokenType:   "Bearer",
 				// PATs don't expire via API, set a long validity
 				ExpiresAt: farFuture(),
-				Scope:     opts.Scope,
 			}, nil
 		},
 		"pat",

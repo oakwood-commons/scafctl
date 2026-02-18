@@ -189,7 +189,7 @@ func TestHandler_GetToken_NotAuthenticated(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx := context.Background()
-	_, err = handler.GetToken(ctx, auth.TokenOptions{Scope: "repo"})
+	_, err = handler.GetToken(ctx, auth.TokenOptions{})
 	assert.ErrorIs(t, err, auth.ErrNotAuthenticated)
 }
 
@@ -199,8 +199,15 @@ func TestHandler_GetToken_EmptyScope(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx := context.Background()
-	_, err = handler.GetToken(ctx, auth.TokenOptions{Scope: ""})
-	assert.ErrorIs(t, err, auth.ErrInvalidScope)
+
+	// With a stored access token, empty scope should succeed
+	// because GitHub scopes are fixed at login time.
+	err = store.Set(ctx, SecretKeyAccessToken, []byte("gho_testtoken"))
+	require.NoError(t, err)
+
+	token, err := handler.GetToken(ctx, auth.TokenOptions{Scope: ""})
+	require.NoError(t, err)
+	assert.Equal(t, "gho_testtoken", token.AccessToken)
 }
 
 func TestHandler_GetToken_WithStoredAccessToken(t *testing.T) {
@@ -213,11 +220,10 @@ func TestHandler_GetToken_WithStoredAccessToken(t *testing.T) {
 	err = store.Set(ctx, SecretKeyAccessToken, []byte("gho_testtoken"))
 	require.NoError(t, err)
 
-	token, err := handler.GetToken(ctx, auth.TokenOptions{Scope: "repo"})
+	token, err := handler.GetToken(ctx, auth.TokenOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, "gho_testtoken", token.AccessToken)
 	assert.Equal(t, "Bearer", token.TokenType)
-	assert.Equal(t, "repo", token.Scope)
 	assert.True(t, token.ExpiresAt.After(time.Now().Add(364*24*time.Hour)))
 }
 
@@ -232,15 +238,14 @@ func TestHandler_GetToken_CachedToken(t *testing.T) {
 		AccessToken: "cached-token",
 		TokenType:   "Bearer",
 		ExpiresAt:   time.Now().Add(1 * time.Hour),
-		Scope:       "repo",
 	}
-	err = handler.tokenCache.Set(ctx, "repo", cachedToken)
+	err = handler.tokenCache.Set(ctx, defaultCacheKey, cachedToken)
 	require.NoError(t, err)
 
 	err = store.Set(ctx, SecretKeyAccessToken, []byte("stored-token"))
 	require.NoError(t, err)
 
-	token, err := handler.GetToken(ctx, auth.TokenOptions{Scope: "repo"})
+	token, err := handler.GetToken(ctx, auth.TokenOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, "cached-token", token.AccessToken)
 }
@@ -256,16 +261,14 @@ func TestHandler_GetToken_ForceRefresh(t *testing.T) {
 		AccessToken: "cached-token",
 		TokenType:   "Bearer",
 		ExpiresAt:   time.Now().Add(1 * time.Hour),
-		Scope:       "repo",
 	}
-	err = handler.tokenCache.Set(ctx, "repo", cachedToken)
+	err = handler.tokenCache.Set(ctx, defaultCacheKey, cachedToken)
 	require.NoError(t, err)
 
 	err = store.Set(ctx, SecretKeyAccessToken, []byte("stored-token"))
 	require.NoError(t, err)
 
 	token, err := handler.GetToken(ctx, auth.TokenOptions{
-		Scope:        "repo",
 		ForceRefresh: true,
 	})
 	require.NoError(t, err)
@@ -285,7 +288,7 @@ func TestHandler_InjectAuth(t *testing.T) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/test", nil)
 	require.NoError(t, err)
 
-	err = handler.InjectAuth(ctx, req, auth.TokenOptions{Scope: "repo"})
+	err = handler.InjectAuth(ctx, req, auth.TokenOptions{})
 	require.NoError(t, err)
 
 	assert.Equal(t, "Bearer inject-test-token", req.Header.Get("Authorization"))
@@ -453,8 +456,117 @@ func TestHandler_MintToken_RefreshFlow(t *testing.T) {
 		"name":  "Test User",
 	})
 
-	token, err := handler.GetToken(ctx, auth.TokenOptions{Scope: "repo"})
+	token, err := handler.GetToken(ctx, auth.TokenOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, "ghu_new_access", token.AccessToken)
 	assert.Equal(t, "Bearer", token.TokenType)
+}
+
+func TestHandler_Login_DeviceCodeUsedWhenScopesProvided(t *testing.T) {
+	// When scopes are explicitly provided, Login should use device code flow
+	// even if PAT credentials exist in the environment.
+	store := secrets.NewMockStore()
+	mockHTTP := NewMockHTTPClient()
+
+	handler, err := New(
+		WithSecretStore(store),
+		WithHTTPClient(mockHTTP),
+	)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	// Set up mock responses for device code flow
+	mockHTTP.AddResponse(http.StatusOK, map[string]any{
+		"device_code":      "test-device-code",
+		"user_code":        "SCOP-1234",
+		"verification_uri": "https://github.com/login/device",
+		"expires_in":       900,
+		"interval":         5,
+	})
+
+	mockHTTP.AddResponse(http.StatusOK, map[string]any{
+		"access_token": "gho_scoped_token",
+		"token_type":   "Bearer",
+		"scope":        "admin:org workflow",
+	})
+
+	mockHTTP.AddResponse(http.StatusOK, map[string]any{
+		"login": "scopeuser",
+		"id":    99,
+		"name":  "Scope User",
+		"email": "scope@example.com",
+	})
+
+	// Login with explicit scopes; should use device code flow
+	result, err := handler.Login(ctx, auth.LoginOptions{
+		Flow:    auth.FlowDeviceCode,
+		Scopes:  []string{"admin:org", "workflow"},
+		Timeout: 10 * time.Second,
+	})
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, "scopeuser", result.Claims.Subject)
+
+	// Verify the token stored has the user-provided scopes, not the defaults
+	metadataBytes, err := store.Get(ctx, SecretKeyMetadata)
+	require.NoError(t, err)
+	var metadata TokenMetadata
+	err = json.Unmarshal(metadataBytes, &metadata)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"admin:org", "workflow"}, metadata.Scopes)
+}
+
+func TestHandler_Login_ScopesNotOverriddenByDefaults(t *testing.T) {
+	// Verify that when user provides scopes, the defaults are NOT used
+	store := secrets.NewMockStore()
+	mockHTTP := NewMockHTTPClient()
+
+	handler, err := New(
+		WithSecretStore(store),
+		WithHTTPClient(mockHTTP),
+	)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	mockHTTP.AddResponse(http.StatusOK, map[string]any{
+		"device_code":      "test-device-code",
+		"user_code":        "CUST-5678",
+		"verification_uri": "https://github.com/login/device",
+		"expires_in":       900,
+		"interval":         5,
+	})
+
+	mockHTTP.AddResponse(http.StatusOK, map[string]any{
+		"access_token": "gho_custom_token",
+		"token_type":   "Bearer",
+		"scope":        "notifications",
+	})
+
+	mockHTTP.AddResponse(http.StatusOK, map[string]any{
+		"login": "customuser",
+		"id":    77,
+		"name":  "Custom User",
+	})
+
+	// Provide scopes that differ from defaults ("gist", "read:org", "repo", "workflow")
+	customScopes := []string{"notifications"}
+	result, err := handler.Login(ctx, auth.LoginOptions{
+		Scopes:  customScopes,
+		Timeout: 10 * time.Second,
+	})
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+
+	// Verify stored metadata has the custom scopes, not the defaults
+	metadataBytes, err := store.Get(ctx, SecretKeyMetadata)
+	require.NoError(t, err)
+	var metadata TokenMetadata
+	err = json.Unmarshal(metadataBytes, &metadata)
+	require.NoError(t, err)
+	assert.Equal(t, customScopes, metadata.Scopes)
+	assert.NotEqual(t, []string{"gist", "read:org", "repo", "workflow"}, metadata.Scopes)
 }

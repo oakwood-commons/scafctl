@@ -206,6 +206,10 @@ Override paths with XDG environment variables or SCAFCTL_SECRETS_DIR.
 | `resolver.concurrency` | int | `4` | Max parallel resolver execution |
 | `action.timeout` | duration | `10m` | Overall action timeout |
 | `action.concurrency` | int | `4` | Max parallel action execution |
+| `auth.entra.*` | object | — | Entra (Azure AD) auth handler config |
+| `auth.github.hostname` | string | `github.com` | GitHub hostname (or GHES hostname) |
+| `auth.github.clientId` | string | built-in | OAuth App client ID |
+| `auth.github.defaultScopes` | []string | `[gist, read:org, repo, workflow]` | Default OAuth scopes |
 
 ### Config File Location
 
@@ -276,6 +280,7 @@ scafctl config unset logging.level
 
 ## Next Steps
 
+- [Authentication Tutorial](auth-tutorial.md) — Set up GitHub and Entra authentication
 - [Exec Provider Tutorial](exec-provider-tutorial.md) — Cross-platform shell execution
 - [Logging & Debugging Tutorial](logging-tutorial.md) — Control log verbosity, format, and output
 - [Cache Tutorial](cache-tutorial.md) — Manage cached data

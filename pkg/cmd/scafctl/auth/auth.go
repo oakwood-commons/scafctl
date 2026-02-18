@@ -22,10 +22,14 @@ func CommandAuth(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 			Manage authentication for scafctl.
 
 			Authentication handlers manage identity verification and token acquisition
-			for accessing protected resources. scafctl supports the following auth handlers:
+			for accessing protected resources. Handlers are loaded from the auth registry
+			and can be extended via plugins.
 
-			- entra: Microsoft Entra ID (formerly Azure AD)
+			Each handler declares its capabilities, which determine which flags and
+			features are available. For example, some handlers support per-request
+			scopes while others fix scopes at login time.
 
+			Use 'scafctl auth list' to see all registered handlers and their capabilities.
 			Use 'scafctl auth login <handler>' to authenticate.
 			Use 'scafctl auth status' to check current authentication status.
 			Use 'scafctl auth logout <handler>' to clear credentials.
@@ -35,6 +39,7 @@ func CommandAuth(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 	}
 
 	cmdPath := fmt.Sprintf("%s/%s", path, cmd.Use)
+	cmd.AddCommand(CommandList(cliParams, ioStreams, cmdPath))
 	cmd.AddCommand(CommandLogin(cliParams, ioStreams, cmdPath))
 	cmd.AddCommand(CommandLogout(cliParams, ioStreams, cmdPath))
 	cmd.AddCommand(CommandStatus(cliParams, ioStreams, cmdPath))

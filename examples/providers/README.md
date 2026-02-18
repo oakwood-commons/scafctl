@@ -8,6 +8,7 @@ Example input files for use with `scafctl run provider --input @<file>`.
 |------|----------|-------------|
 | [static-hello.yaml](static-hello.yaml) | `static` | Simple static string value |
 | [http-get.yaml](http-get.yaml) | `http` | HTTP GET request |
+| [github-api.yaml](github-api.yaml) | `http` | GitHub API call with authentication |
 | [exec-ls.yaml](exec-ls.yaml) | `exec` | Execute `ls -la` command |
 
 ## Usage

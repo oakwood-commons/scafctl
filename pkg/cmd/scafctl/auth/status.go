@@ -27,11 +27,7 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 		Long: heredoc.Doc(`
 			Show the current authentication status for auth handlers.
 
-			If no handler is specified, shows status for all known handlers.
-
-			Supported handlers:
-			- entra: Microsoft Entra ID
-			- github: GitHub
+			If no handler is specified, shows status for all registered handlers.
 
 			Examples:
 			  # Show all auth status
@@ -52,11 +48,10 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 			ctx := cmd.Context()
 			w := writer.MustFromContext(ctx)
 
-			handlers := SupportedHandlers()
+			handlers := listHandlers(ctx)
 			if len(args) > 0 {
 				handlerName := args[0]
-				if !IsSupportedHandler(handlerName) {
-					err := fmt.Errorf("unknown auth handler: %s (supported: %v)", handlerName, SupportedHandlers())
+				if err := validateHandlerName(ctx, handlerName); err != nil {
 					w.Errorf("%v", err)
 					return exitcode.WithCode(err, exitcode.InvalidInput)
 				}

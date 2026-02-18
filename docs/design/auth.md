@@ -31,7 +31,7 @@ scafctl provides built-in auth handlers for common identity providers:
 | Handler | Status | Description |
 |---------|--------|-------------|
 | `entra` | ✅ Implemented | Microsoft Entra ID (Azure AD) |
-| `github` | 🔜 Planned | GitHub OAuth |
+| `github` | ✅ Implemented | GitHub OAuth (Device Code + PAT) |
 | `gcp` | 🔜 Planned | Google Cloud Platform |
 
 **External Auth Handlers** can be distributed via the catalog for custom identity providers:
@@ -78,8 +78,36 @@ Auth handlers are responsible for:
 - Managing refresh tokens or equivalent credentials
 - Minting execution tokens for providers
 - Normalizing token metadata and claims
+- Declaring their capabilities for CLI flag validation
 
 Auth handlers are not action providers and do not perform side effects outside authentication.
+
+### Handler Capabilities
+
+Each handler declares a set of capabilities that describe which features it supports. CLI commands use these capabilities to dynamically validate flags and provide meaningful errors.
+
+| Capability | Description | Entra | GitHub |
+|------------|-------------|-------|--------|
+| `scopes_on_login` | Supports specifying scopes at login time | ✅ | ✅ |
+| `scopes_on_token_request` | Supports per-request scopes when acquiring tokens | ✅ | ❌ |
+| `tenant_id` | Supports tenant ID parameter | ✅ | ❌ |
+| `hostname` | Supports hostname parameter (enterprise/self-hosted) | ❌ | ✅ |
+| `federated_token` | Supports federated token input (workload identity) | ✅ | ❌ |
+
+**Why capabilities matter**: GitHub's OAuth does not support changing scopes on token refresh — scopes are fixed at login time. Entra ID supports requesting different resource scopes per token request. Instead of hardcoding these differences in CLI commands, each handler declares its capabilities, and the CLI validates flags accordingly.
+
+This design makes plugin-loaded auth handlers work without CLI code changes — a plugin handler declares its capabilities, and the CLI dynamically adapts.
+
+**Example**: Running `scafctl auth token github --scope repo` returns an error:
+> the "github" auth handler does not support per-request scopes; scopes are fixed at login time. Use 'scafctl auth login github --scope <scope>' to change scopes
+
+### Handler Registry
+
+Auth handlers are managed via a thread-safe registry (`auth.Registry`). CLI commands look up handlers by name from the registry in context, rather than using hardcoded switch statements. This supports:
+
+- Built-in handlers registered at startup
+- Plugin-loaded handlers registered after discovery
+- Dynamic handler enumeration for commands like `auth list` and `auth status` (shows all registered handlers)
 
 ---
 
@@ -136,6 +164,40 @@ Behavior:
 | Service Principal | `--flow service-principal` | CI/CD pipelines, automation |
 | Workload Identity | `--flow workload-identity` | Kubernetes (AKS) workload identity |
 
+### GitHub Device Code Flow
+
+~~~bash
+scafctl auth login github
+~~~
+
+Behavior:
+
+- Initiates GitHub OAuth device code flow
+- User authenticates in a browser at https://github.com/login/device
+- An access token (and optionally refresh token) is obtained
+- Credentials are stored securely
+- Supports GitHub Enterprise Server via `--hostname`
+
+### GitHub PAT Flow (CI/CD)
+
+~~~bash
+# Set token in environment
+export GITHUB_TOKEN="ghp_..."
+
+# Auto-detects PAT from env vars
+scafctl auth login github
+
+# Or explicitly specify the flow
+scafctl auth login github --flow pat
+~~~
+
+Behavior:
+
+- Reads `GITHUB_TOKEN` or `GH_TOKEN` from environment
+- Validates the token by calling the GitHub API
+- No user interaction required
+- Token is cached for performance
+
 ### Workload Identity Flow (Kubernetes)
 
 For Kubernetes workloads running in AKS with workload identity enabled:
@@ -183,11 +245,21 @@ Rules:
 - Credentials are never embedded in solutions
 - Credentials are never exposed to providers directly
 
-### Device Code Flow Storage
+### Device Code Flow Storage (Entra)
 
 Uses the system secret store for long-lived credentials.
 
-### Service Principal Flow Storage
+### Device Code Flow Storage (GitHub)
+
+Uses the system secret store for access tokens and optional refresh tokens.
+
+| Variable | Description |
+|----------|-------------|
+| `GITHUB_TOKEN` | GitHub personal access token or Actions token |
+| `GH_TOKEN` | GitHub personal access token (gh CLI convention) |
+| `GH_HOST` | GitHub hostname for Enterprise Server |
+
+### Service Principal Flow Storage (Entra)
 
 Credentials are read from environment variables (never stored):
 
@@ -229,6 +301,15 @@ For the Entra handler:
 | `scafctl.auth.entra.refresh_token` | Long-lived refresh token |
 | `scafctl.auth.entra.metadata` | Token metadata (claims, tenant, client ID, expiry) |
 | `scafctl.auth.entra.token.<scope-hash>` | Cached access tokens by scope |
+
+For the GitHub handler:
+
+| Secret Name | Description |
+|-------------|-------------|
+| `scafctl.auth.github.refresh_token` | OAuth refresh token (if token expiration is enabled) |
+| `scafctl.auth.github.access_token` | OAuth access token (non-expiring apps) |
+| `scafctl.auth.github.metadata` | Token metadata (claims, hostname, client ID, expiry) |
+| `scafctl.auth.github.token.<scope-hash>` | Cached access tokens by scope |
 
 The scope hash is a base64url-encoded representation of the scope string.
 

@@ -1,0 +1,126 @@
+# GitHub Authentication Examples
+#
+# Demonstrates using GitHub authentication with resolvers and actions.
+# Shows the identity provider with the GitHub handler and authenticated
+# HTTP requests to the GitHub API.
+#
+# Prerequisites:
+#   - Run `scafctl auth login github` to authenticate first
+#
+# Run: scafctl run solution -f examples/solutions/github-auth/solution.yaml
+# Run resolvers only: scafctl run resolver -f examples/solutions/github-auth/solution.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: github-auth-example
+  version: 1.0.0
+  description: GitHub authentication examples - identity, API calls, and status checks
+
+spec:
+  resolvers:
+    # Check GitHub authentication status
+    github_status:
+      description: Get authentication status from the GitHub handler
+      type: any
+      resolve:
+        with:
+          - provider: identity
+            inputs:
+              operation: status
+              handler: github
+
+    # Get GitHub user claims (login, name, email, etc.)
+    github_claims:
+      description: Get identity claims from the GitHub handler
+      type: any
+      resolve:
+        with:
+          - provider: identity
+            inputs:
+              operation: claims
+              handler: github
+
+    # List all available auth handlers
+    available_handlers:
+      description: List all registered authentication handlers
+      type: any
+      resolve:
+        with:
+          - provider: identity
+            inputs:
+              operation: list
+
+    # Fetch authenticated user profile from GitHub API
+    user_profile:
+      description: Fetch the authenticated user profile using the GitHub API
+      type: any
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: https://api.github.com/user
+              headers:
+                Accept: application/json
+              auth: github
+              scope: "read:user"
+
+    # Fetch user repositories from GitHub API
+    user_repos:
+      description: Fetch repositories for the authenticated user
+      type: any
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: https://api.github.com/user/repos?per_page=5&sort=updated
+              headers:
+                Accept: application/json
+              auth: github
+              scope: repo
+
+    # Extract username from claims
+    username:
+      description: Extract the GitHub username from claims
+      type: string
+      dependsOn:
+        - github_claims
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: |
+                has(_.github_claims.claims) && has(_.github_claims.claims.username)
+                  ? _.github_claims.claims.username
+                  : "unknown"
+
+    # Extract repo names from API response
+    repo_names:
+      description: Extract repository names from the API response
+      type: any
+      dependsOn:
+        - user_repos
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: |
+                has(_.user_repos.body) 
+                  ? fromJson(_.user_repos.body).map(r, r.full_name)
+                  : []
+
+  workflow:
+    actions:
+      show_identity:
+        description: Display authenticated GitHub identity
+        displayName: Show GitHub Identity
+        provider: debug
+        inputs:
+          label: "GitHub Identity"
+          format: yaml
+          expression: |
+            {
+              "username": _.username,
+              "authenticated": _.github_status.authenticated,
+              "repos": _.repo_names
+            }

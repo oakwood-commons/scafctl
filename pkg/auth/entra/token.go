@@ -110,7 +110,7 @@ func (h *Handler) mintToken(ctx context.Context, scope string) (*auth.Token, err
 	// If we got a new refresh token, store it (token rotation)
 	if tokenResp.RefreshToken != "" && tokenResp.RefreshToken != refreshToken {
 		lgr.V(1).Info("refresh token rotated, storing new token")
-		if err := h.storeCredentials(ctx, metadata.TenantID, &tokenResp, metadata.Scopes); err != nil {
+		if err := h.storeCredentials(ctx, metadata.TenantID, &tokenResp, metadata.ClientID, metadata.Scopes); err != nil {
 			lgr.V(1).Info("warning: failed to update refresh token", "error", err)
 		}
 	}
@@ -132,9 +132,12 @@ func (h *Handler) mintToken(ctx context.Context, scope string) (*auth.Token, err
 }
 
 // storeCredentials securely stores the refresh token and metadata.
+// clientID is the application client ID that was used to obtain the token —
+// this MUST be the same value that was used during the original login so that
+// future refresh-token exchanges continue to use the correct client.
 // scopes records which OAuth scopes were used during login so they can be
 // surfaced later (e.g. in `auth status`).
-func (h *Handler) storeCredentials(ctx context.Context, tenantID string, tokenResp *TokenResponse, scopes []string) error {
+func (h *Handler) storeCredentials(ctx context.Context, tenantID string, tokenResp *TokenResponse, clientID string, scopes []string) error {
 	// Validate refresh token is present
 	if tokenResp.RefreshToken == "" {
 		return fmt.Errorf("no refresh token in response (offline_access scope may be missing)")
@@ -159,7 +162,7 @@ func (h *Handler) storeCredentials(ctx context.Context, tenantID string, tokenRe
 		RefreshTokenExpiresAt: time.Now().Add(DefaultRefreshTokenLifetime),
 		LastRefresh:           time.Now(),
 		TenantID:              tenantID,
-		ClientID:              h.config.ClientID,
+		ClientID:              clientID,
 		Scopes:                scopes,
 	}
 

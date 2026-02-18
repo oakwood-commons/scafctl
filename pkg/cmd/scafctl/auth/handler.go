@@ -6,6 +6,7 @@ package auth
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/auth/entra"
@@ -32,31 +33,69 @@ func handlerFromContext(ctx context.Context) auth.Handler {
 	return nil
 }
 
-// getEntraHandler creates or retrieves an Entra handler.
-// If a handler was injected via context (for testing), returns that.
-// Otherwise creates a new handler with configuration from context.
-func getEntraHandler(ctx context.Context) (auth.Handler, error) {
-	// Check for test-injected handler
+// getHandler retrieves an auth handler from the registry or test context.
+// For production use, it looks up the handler by name from the auth registry.
+// For tests, it returns the test-injected handler.
+func getHandler(ctx context.Context, handlerName string) (auth.Handler, error) {
+	// Check for test-injected handler first
 	if h := handlerFromContext(ctx); h != nil {
 		return h, nil
 	}
 
-	// Build options from config
-	var opts []entra.Option
-	if cfg := config.FromContext(ctx); cfg != nil && cfg.Auth.Entra != nil {
-		opts = append(opts, entra.WithConfig(&entra.Config{
-			ClientID:      cfg.Auth.Entra.ClientID,
-			TenantID:      cfg.Auth.Entra.TenantID,
-			DefaultScopes: cfg.Auth.Entra.DefaultScopes,
-		}))
+	registry := auth.RegistryFromContext(ctx)
+	if registry == nil {
+		return nil, fmt.Errorf("%w: no auth registry in context", auth.ErrHandlerNotFound)
+	}
+	return registry.Get(handlerName)
+}
+
+// listHandlers returns the names of all registered handlers.
+// Falls back to the registry in context, or returns nil.
+func listHandlers(ctx context.Context) []string {
+	// If a test handler is injected, we can't enumerate all handlers.
+	// Return the known built-in names for the test context.
+	if h := handlerFromContext(ctx); h != nil {
+		return []string{h.Name()}
 	}
 
-	return entra.New(opts...)
+	registry := auth.RegistryFromContext(ctx)
+	if registry == nil {
+		return nil
+	}
+	return registry.List()
+}
+
+// isHandlerRegistered checks if a handler name is registered.
+func isHandlerRegistered(ctx context.Context, name string) bool {
+	// Test-injected handlers match any name (since tests inject a single mock)
+	if h := handlerFromContext(ctx); h != nil {
+		return true // Let the test handler respond regardless of name
+	}
+
+	registry := auth.RegistryFromContext(ctx)
+	if registry == nil {
+		return false
+	}
+	return registry.Has(name)
+}
+
+// validateHandlerName checks if a handler name is valid and returns a formatted error if not.
+func validateHandlerName(ctx context.Context, handlerName string) error {
+	if isHandlerRegistered(ctx, handlerName) {
+		return nil
+	}
+	handlers := listHandlers(ctx)
+	if len(handlers) == 0 {
+		return fmt.Errorf("unknown auth handler: %s (no handlers registered)", handlerName)
+	}
+	return fmt.Errorf("unknown auth handler: %s (registered: %v)", handlerName, handlers)
 }
 
 // getEntraHandlerWithOverrides creates an Entra handler with optional tenant and client ID overrides.
 // The flags take precedence over config.
-func getEntraHandlerWithOverrides(ctx context.Context, tenantOverride, clientIDOverride string) (auth.Handler, error) { //nolint:dupl // Entra and GitHub handlers have intentionally similar structure but different types
+//
+//nolint:dupl // Entra and GitHub handler construction share structure but use different types and config paths.
+func getEntraHandlerWithOverrides(ctx context.Context, tenantOverride, clientIDOverride string) (auth.Handler, error) {
 	// Check for test-injected handler
 	if h := handlerFromContext(ctx); h != nil {
 		return h, nil
@@ -80,46 +119,11 @@ func getEntraHandlerWithOverrides(ctx context.Context, tenantOverride, clientIDO
 	return entra.New(opts...)
 }
 
-// SupportedHandlers returns the list of supported auth handler names.
-func SupportedHandlers() []string {
-	return []string{"entra", "github"}
-}
-
-// IsSupportedHandler returns true if the handler name is supported.
-func IsSupportedHandler(name string) bool {
-	for _, h := range SupportedHandlers() {
-		if h == name {
-			return true
-		}
-	}
-	return false
-}
-
-// getGitHubHandler creates or retrieves a GitHub handler.
-// If a handler was injected via context (for testing), returns that.
-// Otherwise creates a new handler with configuration from context.
-func getGitHubHandler(ctx context.Context) (auth.Handler, error) {
-	// Check for test-injected handler
-	if h := handlerFromContext(ctx); h != nil {
-		return h, nil
-	}
-
-	// Build options from config
-	var opts []ghauth.Option
-	if cfg := config.FromContext(ctx); cfg != nil && cfg.Auth.GitHub != nil {
-		opts = append(opts, ghauth.WithConfig(&ghauth.Config{
-			ClientID:      cfg.Auth.GitHub.ClientID,
-			Hostname:      cfg.Auth.GitHub.Hostname,
-			DefaultScopes: cfg.Auth.GitHub.DefaultScopes,
-		}))
-	}
-
-	return ghauth.New(opts...)
-}
-
 // getGitHubHandlerWithOverrides creates a GitHub handler with optional hostname and client ID overrides.
 // The flags take precedence over config.
-func getGitHubHandlerWithOverrides(ctx context.Context, hostnameOverride, clientIDOverride string) (auth.Handler, error) { //nolint:dupl // Entra and GitHub handlers have intentionally similar structure but different types
+//
+//nolint:dupl // GitHub and Entra handler construction share structure but use different types and config paths.
+func getGitHubHandlerWithOverrides(ctx context.Context, hostnameOverride, clientIDOverride string) (auth.Handler, error) {
 	// Check for test-injected handler
 	if h := handlerFromContext(ctx); h != nil {
 		return h, nil
@@ -147,17 +151,5 @@ func getGitHubHandlerWithOverrides(ctx context.Context, hostnameOverride, client
 func applyOverride(target *string, override string) {
 	if override != "" {
 		*target = override
-	}
-}
-
-// getHandler creates a handler for the given handler name.
-func getHandler(ctx context.Context, handlerName string) (auth.Handler, error) {
-	switch handlerName {
-	case "entra":
-		return getEntraHandler(ctx)
-	case "github":
-		return getGitHubHandler(ctx)
-	default:
-		return nil, auth.ErrHandlerNotFound
 	}
 }
