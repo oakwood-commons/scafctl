@@ -11,9 +11,7 @@ import (
 	"strings"
 
 	"github.com/google/jsonschema-go/jsonschema"
-	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
-	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -77,15 +75,12 @@ func (o *ProviderOptions) Run(ctx context.Context, name string) error {
 	w := writer.New(o.IOStreams, o.CliParams)
 	ctx = writer.WithWriter(ctx, w)
 
-	reg := o.getRegistry(ctx)
-	p, ok := reg.Get(name)
-	if !ok {
-		err := fmt.Errorf("provider %q not found", name)
+	desc, err := LookupProvider(ctx, name, o.registry)
+	if err != nil {
 		w.Errorf("%v", err)
-		return exitcode.WithCode(err, exitcode.FileNotFound)
+		return err
 	}
 
-	desc := p.Descriptor()
 	o.printProviderExplanation(w, desc)
 	return nil
 }
@@ -263,17 +258,4 @@ func (o *ProviderOptions) printSchemaProperties(w *writer.Writer, schema *jsonsc
 			w.Plainlnf("%s      Example: %v", indent, prop.Examples[0])
 		}
 	}
-}
-
-// getRegistry returns the provider registry
-func (o *ProviderOptions) getRegistry(ctx context.Context) *provider.Registry {
-	if o.registry != nil {
-		return o.registry
-	}
-
-	reg, err := builtin.DefaultRegistry(ctx)
-	if err != nil {
-		return provider.GetGlobalRegistry()
-	}
-	return reg
 }

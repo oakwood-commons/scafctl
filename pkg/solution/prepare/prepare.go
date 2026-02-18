@@ -1,0 +1,315 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
+// Package prepare provides a standalone function for loading and preparing
+// a solution for execution. It decouples solution preparation from CLI-specific
+// types, making it reusable by both CLI commands and the MCP server.
+package prepare
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/solutionprovider"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
+	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+)
+
+// Option configures the PrepareSolution function.
+type Option func(*prepareConfig)
+
+type prepareConfig struct {
+	getter      get.Interface
+	registry    *provider.Registry
+	stdin       io.Reader
+	showMetrics bool
+	metricsOut  io.Writer
+}
+
+// WithGetter provides a custom solution getter. If not set, one is created
+// from context (with catalog resolution support).
+func WithGetter(g get.Interface) Option {
+	return func(c *prepareConfig) {
+		c.getter = g
+	}
+}
+
+// WithRegistry provides a custom provider registry. If not set,
+// builtin.DefaultRegistry is used.
+func WithRegistry(r *provider.Registry) Option {
+	return func(c *prepareConfig) {
+		c.registry = r
+	}
+}
+
+// WithStdin provides a reader for stdin-based solution loading (path == "-").
+func WithStdin(r io.Reader) Option {
+	return func(c *prepareConfig) {
+		c.stdin = r
+	}
+}
+
+// WithMetrics enables metrics collection and specifies where to write metrics output.
+func WithMetrics(out io.Writer) Option {
+	return func(c *prepareConfig) {
+		c.showMetrics = true
+		c.metricsOut = out
+	}
+}
+
+// Result holds the output of PrepareSolution.
+type Result struct {
+	// Solution is the loaded and prepared solution.
+	Solution *solution.Solution `json:"solution" yaml:"solution" doc:"The loaded solution"`
+	// Registry is the provider registry with all providers registered,
+	// including the solution provider.
+	Registry *provider.Registry `json:"-" yaml:"-"`
+	// Cleanup must be deferred by the caller. It handles temp directory
+	// removal, working directory restoration, and metrics output.
+	Cleanup func() `json:"-" yaml:"-"`
+}
+
+// Solution loads a solution from the given path, extracts any bundle,
+// merges plugin defaults, sets up the provider registry, and registers the
+// solution provider. The returned Result.Cleanup function must be deferred.
+//
+// This function is the standalone equivalent of the CLI's
+// sharedResolverOptions.prepareSolutionForExecution method, decoupled from
+// CLI-specific types so it can be used by the MCP server and other callers.
+func Solution(ctx context.Context, path string, opts ...Option) (*Result, error) {
+	cfg := &prepareConfig{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	lgr := logger.FromContext(ctx)
+
+	// Enable metrics collection if requested
+	if cfg.showMetrics {
+		provider.GlobalMetrics.Enable()
+	}
+
+	// Get or create the solution getter
+	getter := cfg.getter
+	if getter == nil {
+		getter = newDefaultGetter(ctx)
+	}
+
+	// Load the solution (with bundle if available)
+	sol, bundleDir, err := loadSolutionWithBundle(ctx, getter, path, cfg.stdin)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build cleanup function
+	cleanup := func() {
+		if cfg.showMetrics && cfg.metricsOut != nil {
+			writeMetrics(cfg.metricsOut)
+		}
+		if bundleDir != "" {
+			os.RemoveAll(bundleDir)
+		}
+	}
+
+	// Change to bundle directory if needed
+	if bundleDir != "" {
+		originalDir, wdErr := os.Getwd()
+		if wdErr != nil {
+			cleanup()
+			return nil, fmt.Errorf("failed to get working directory: %w", wdErr)
+		}
+		if chErr := os.Chdir(bundleDir); chErr != nil {
+			cleanup()
+			return nil, fmt.Errorf("failed to change to bundle directory: %w", chErr)
+		}
+		origCleanup := cleanup
+		cleanup = func() {
+			_ = os.Chdir(originalDir)
+			origCleanup()
+		}
+		if lgr != nil {
+			lgr.V(1).Info("using bundle extraction directory as working directory", "dir", bundleDir)
+		}
+	}
+
+	if lgr != nil {
+		lgr.V(1).Info("loaded solution",
+			"name", sol.Metadata.Name,
+			"version", sol.Metadata.Version,
+			"hasResolvers", sol.Spec.HasResolvers(),
+			"hasWorkflow", sol.Spec.HasWorkflow())
+	}
+
+	// Merge plugin defaults into provider inputs before DAG construction
+	if len(sol.Bundle.Plugins) > 0 {
+		bundler.MergePluginDefaults(sol)
+		if lgr != nil {
+			lgr.V(1).Info("merged plugin defaults", "pluginCount", len(sol.Bundle.Plugins))
+		}
+	}
+
+	// Set up provider registry
+	reg := cfg.registry
+	if reg == nil {
+		var regErr error
+		reg, regErr = builtin.DefaultRegistry(ctx)
+		if regErr != nil {
+			if lgr != nil {
+				lgr.V(0).Info("warning: failed to register some providers", "error", regErr)
+			}
+			reg = provider.GetGlobalRegistry()
+		}
+	}
+
+	// Register the solution provider
+	if !reg.Has(solutionprovider.ProviderName) {
+		solProvider := solutionprovider.New(
+			solutionprovider.WithLoader(getter),
+			solutionprovider.WithRegistry(reg),
+		)
+		if err := reg.Register(solProvider); err != nil {
+			cleanup()
+			return nil, fmt.Errorf("registering solution provider: %w", err)
+		}
+	}
+
+	return &Result{
+		Solution: sol,
+		Registry: reg,
+		Cleanup:  cleanup,
+	}, nil
+}
+
+// newDefaultGetter creates a default solution getter with catalog resolution support.
+func newDefaultGetter(ctx context.Context) get.Interface {
+	lgr := logger.FromContext(ctx)
+
+	var getterOpts []get.Option
+	if lgr != nil {
+		getterOpts = append(getterOpts, get.WithLogger(*lgr))
+
+		localCatalog, err := catalog.NewLocalCatalog(*lgr)
+		if err == nil {
+			catResolver := catalog.NewSolutionResolver(localCatalog, *lgr)
+			getterOpts = append(getterOpts, get.WithCatalogResolver(catResolver))
+		} else {
+			lgr.V(1).Info("catalog not available for solution resolution", "error", err)
+		}
+	}
+
+	return get.NewGetter(getterOpts...)
+}
+
+// loadSolutionWithBundle loads a solution and extracts its bundle if present.
+func loadSolutionWithBundle(ctx context.Context, getter get.Interface, path string, stdin io.Reader) (*solution.Solution, string, error) {
+	lgr := logger.FromContext(ctx)
+
+	// Handle stdin
+	if path == "-" {
+		if stdin == nil {
+			return nil, "", fmt.Errorf("stdin requested but no reader provided")
+		}
+		data, err := io.ReadAll(stdin)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to read from stdin: %w", err)
+		}
+
+		var sol solution.Solution
+		if err := sol.LoadFromBytes(data); err != nil {
+			return nil, "", fmt.Errorf("failed to parse solution from stdin: %w", err)
+		}
+		return &sol, "", nil
+	}
+
+	// Use GetWithBundle for catalog solutions to extract bundle
+	sol, bundleData, err := getter.GetWithBundle(ctx, path)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// If there's bundle data, extract it to a temp directory
+	if len(bundleData) > 0 {
+		if lgr != nil {
+			lgr.V(1).Info("extracting solution bundle", "size", len(bundleData))
+		}
+		tmpDir, err := os.MkdirTemp("", "scafctl-bundle-*")
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to create temp directory for bundle: %w", err)
+		}
+
+		// Write the solution YAML to the temp dir so relative paths work
+		solYAML, err := sol.ToYAML()
+		if err != nil {
+			os.RemoveAll(tmpDir)
+			return nil, "", fmt.Errorf("failed to serialize solution: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(tmpDir, "solution.yaml"), solYAML, 0o600); err != nil {
+			os.RemoveAll(tmpDir)
+			return nil, "", fmt.Errorf("failed to write solution to temp dir: %w", err)
+		}
+
+		// Extract bundle tar
+		manifest, err := bundler.ExtractBundleTar(bundleData, tmpDir)
+		if err != nil {
+			os.RemoveAll(tmpDir)
+			return nil, "", fmt.Errorf("failed to extract bundle: %w", err)
+		}
+
+		if lgr != nil {
+			lgr.V(1).Info("extracted bundle",
+				"files", len(manifest.Files),
+				"dir", tmpDir)
+		}
+
+		return sol, tmpDir, nil
+	}
+
+	return sol, "", nil
+}
+
+// writeMetrics writes provider execution metrics to the given writer.
+func writeMetrics(out io.Writer) {
+	allMetrics := provider.GlobalMetrics.GetAllMetrics()
+	if len(allMetrics) == 0 {
+		return
+	}
+
+	fmt.Fprintln(out, "")
+	fmt.Fprintln(out, "Provider Execution Metrics:")
+	fmt.Fprintln(out, strings.Repeat("-", 80))
+	fmt.Fprintf(out, "%-25s %8s %8s %8s %12s %12s\n",
+		"Provider", "Total", "Success", "Failure", "Avg Duration", "Success %")
+	fmt.Fprintln(out, strings.Repeat("-", 80))
+
+	// Sort provider names for consistent output
+	names := make([]string, 0, len(allMetrics))
+	for name := range allMetrics {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+
+	for _, name := range names {
+		m := allMetrics[name]
+		avgDuration := m.AverageDuration()
+		successRate := m.SuccessRate()
+		fmt.Fprintf(out, "%-25s %8d %8d %8d %12s %11.1f%%\n",
+			name,
+			m.ExecutionCount,
+			m.SuccessCount,
+			m.FailureCount,
+			avgDuration.Round(time.Millisecond),
+			successRate)
+	}
+	fmt.Fprintln(out, strings.Repeat("-", 80))
+}
