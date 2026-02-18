@@ -247,6 +247,9 @@ type GlobalAuthConfig struct {
 
 	// GitHub contains GitHub authentication configuration.
 	GitHub *GitHubAuthConfig `json:"github,omitempty" yaml:"github,omitempty" mapstructure:"github" doc:"GitHub authentication configuration"`
+
+	// GCP contains Google Cloud Platform authentication configuration.
+	GCP *GCPAuthConfig `json:"gcp,omitempty" yaml:"gcp,omitempty" mapstructure:"gcp" doc:"Google Cloud Platform authentication configuration"`
 }
 
 // EntraAuthConfig contains Entra-specific configuration.
@@ -276,6 +279,24 @@ type GitHubAuthConfig struct {
 
 	// DefaultScopes are requested during login if not specified on command line.
 	DefaultScopes []string `json:"defaultScopes,omitempty" yaml:"defaultScopes,omitempty" mapstructure:"defaultScopes" doc:"Default OAuth scopes" maxItems:"20"`
+}
+
+// GCPAuthConfig contains GCP-specific configuration.
+type GCPAuthConfig struct {
+	// ClientID overrides the default OAuth 2.0 client ID.
+	ClientID string `json:"clientId,omitempty" yaml:"clientId,omitempty" mapstructure:"clientId" doc:"OAuth 2.0 client ID for interactive authentication" maxLength:"255"`
+
+	// ClientSecret overrides the default OAuth 2.0 client secret.
+	ClientSecret string `json:"clientSecret,omitempty" yaml:"clientSecret,omitempty" mapstructure:"clientSecret" doc:"OAuth 2.0 client secret (not confidential for desktop apps)" maxLength:"255"` //nolint:gosec // G117: not a hardcoded credential, it's a config field
+
+	// DefaultScopes are requested during login if not specified on command line.
+	DefaultScopes []string `json:"defaultScopes,omitempty" yaml:"defaultScopes,omitempty" mapstructure:"defaultScopes" doc:"Default OAuth scopes for GCP authentication" maxItems:"20"`
+
+	// ImpersonateServiceAccount is the service account email to impersonate.
+	ImpersonateServiceAccount string `json:"impersonateServiceAccount,omitempty" yaml:"impersonateServiceAccount,omitempty" mapstructure:"impersonateServiceAccount" doc:"Service account email to impersonate" example:"deploy@my-project.iam.gserviceaccount.com" maxLength:"255"`
+
+	// Project is the default GCP project ID.
+	Project string `json:"project,omitempty" yaml:"project,omitempty" mapstructure:"project" doc:"Default GCP project ID" example:"my-project-123" maxLength:"64"`
 }
 
 // BuildConfig holds build command configuration.

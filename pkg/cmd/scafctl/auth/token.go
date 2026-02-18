@@ -66,6 +66,12 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 
 			  # Output as JSON (includes full token)
 			  scafctl auth token entra --scope "https://management.azure.com/.default" -o json
+
+			  # Get a GCP token for cloud-platform scope
+			  scafctl auth token gcp --scope "https://www.googleapis.com/auth/cloud-platform"
+
+			  # Get a GCP token for BigQuery
+			  scafctl auth token gcp --scope "https://www.googleapis.com/auth/bigquery"
 		`),
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),

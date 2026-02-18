@@ -10,6 +10,7 @@ import (
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/auth/entra"
+	gcpauth "github.com/oakwood-commons/scafctl/pkg/auth/gcp"
 	ghauth "github.com/oakwood-commons/scafctl/pkg/auth/github"
 	authcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/auth"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/build"
@@ -238,6 +239,27 @@ func Root(opts *RootOptions) *cobra.Command {
 					lgr.V(1).Info("warning: failed to register GitHub auth handler", "error", regErr)
 				}
 			}
+
+			// Initialize GCP auth handler
+			var gcpOpts []gcpauth.Option
+			if cfg.Auth.GCP != nil {
+				gcpOpts = append(gcpOpts, gcpauth.WithConfig(&gcpauth.Config{
+					ClientID:                  cfg.Auth.GCP.ClientID,
+					ClientSecret:              cfg.Auth.GCP.ClientSecret,
+					DefaultScopes:             cfg.Auth.GCP.DefaultScopes,
+					ImpersonateServiceAccount: cfg.Auth.GCP.ImpersonateServiceAccount,
+					Project:                   cfg.Auth.GCP.Project,
+				}))
+			}
+			gcpHandler, err := gcpauth.New(gcpOpts...)
+			if err != nil {
+				lgr.V(1).Info("warning: failed to initialize GCP auth handler", "error", err)
+			} else {
+				if regErr := authRegistry.Register(gcpHandler); regErr != nil {
+					lgr.V(1).Info("warning: failed to register GCP auth handler", "error", regErr)
+				}
+			}
+
 			ctx = auth.WithRegistry(ctx, authRegistry)
 
 			cCmd.SetContext(ctx)

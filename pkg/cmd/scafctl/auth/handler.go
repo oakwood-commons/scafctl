@@ -10,6 +10,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/auth/entra"
+	gcpauth "github.com/oakwood-commons/scafctl/pkg/auth/gcp"
 	ghauth "github.com/oakwood-commons/scafctl/pkg/auth/github"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 )
@@ -145,6 +146,34 @@ func getGitHubHandlerWithOverrides(ctx context.Context, hostnameOverride, client
 	}
 
 	return ghauth.New(opts...)
+}
+
+// getGCPHandlerWithOverrides creates a GCP handler with optional client ID and impersonation overrides.
+// The flags take precedence over config.
+func getGCPHandlerWithOverrides(ctx context.Context, clientIDOverride, impersonateOverride string) (auth.Handler, error) {
+	// Check for test-injected handler
+	if h := handlerFromContext(ctx); h != nil {
+		return h, nil
+	}
+
+	gcpCfg := &gcpauth.Config{}
+	if cfg := config.FromContext(ctx); cfg != nil && cfg.Auth.GCP != nil {
+		gcpCfg.ClientID = cfg.Auth.GCP.ClientID
+		gcpCfg.ClientSecret = cfg.Auth.GCP.ClientSecret
+		gcpCfg.DefaultScopes = cfg.Auth.GCP.DefaultScopes
+		gcpCfg.ImpersonateServiceAccount = cfg.Auth.GCP.ImpersonateServiceAccount
+		gcpCfg.Project = cfg.Auth.GCP.Project
+	}
+
+	applyOverride(&gcpCfg.ClientID, clientIDOverride)
+	applyOverride(&gcpCfg.ImpersonateServiceAccount, impersonateOverride)
+
+	var opts []gcpauth.Option
+	if gcpCfg.ClientID != "" || gcpCfg.ImpersonateServiceAccount != "" || len(gcpCfg.DefaultScopes) > 0 {
+		opts = append(opts, gcpauth.WithConfig(gcpCfg))
+	}
+
+	return gcpauth.New(opts...)
 }
 
 // applyOverride sets the target to the override value if it is non-empty.

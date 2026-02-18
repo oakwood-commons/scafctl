@@ -31,6 +31,9 @@ func CommandLogout(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comm
 
 			  # Logout from GitHub
 			  scafctl auth logout github
+
+			  # Logout from GCP
+			  scafctl auth logout gcp
 		`),
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
