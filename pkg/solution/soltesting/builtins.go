@@ -76,7 +76,7 @@ func allBuiltins() []*TestCase {
 			Description: "Verify solution has no lint errors",
 			Command:     []string{"lint"},
 			Assertions: []Assertion{
-				{Expression: `exitCode == 0`},
+				{Expression: `__exitCode == 0`},
 			},
 		},
 		{

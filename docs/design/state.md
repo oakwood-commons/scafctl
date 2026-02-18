@@ -126,7 +126,7 @@ spec:
         with:
           - provider: parameter
             inputs:
-              name: "Project Name"
+              key: "Project Name"
     api_key:
       type: string
       sensitive: true
@@ -135,7 +135,7 @@ spec:
         with:
           - provider: parameter
             inputs:
-              name: "API Key"
+              key: "API Key"
     cached_token:
       type: string
       resolve:
@@ -260,7 +260,7 @@ resolvers:
       with:
         - provider: parameter
           inputs:
-            name: "API Key"
+            key: "API Key"
 ~~~
 
 ### Behavior

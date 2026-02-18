@@ -156,7 +156,7 @@ spec:
         with:
           - provider: parameter
             inputs:
-              name: environment
+              key: environment
 `))
 	require.NoError(t, err)
 
