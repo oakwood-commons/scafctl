@@ -73,6 +73,9 @@ const (
 
 	// FlowPAT is authentication using a personal access token from environment variables.
 	FlowPAT Flow = "pat"
+
+	// FlowMetadata is authentication using cloud metadata server (e.g., GCE, Cloud Run).
+	FlowMetadata Flow = "metadata"
 )
 
 // DefaultMinValidFor is the default minimum validity duration for tokens.

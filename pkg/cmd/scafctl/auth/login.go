@@ -14,6 +14,7 @@ import (
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/auth/entra"
+	gcpauth "github.com/oakwood-commons/scafctl/pkg/auth/gcp"
 	ghauth "github.com/oakwood-commons/scafctl/pkg/auth/github"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -25,13 +26,14 @@ import (
 // CommandLogin creates the 'auth login' command.
 func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Command {
 	var (
-		tenantID       string
-		clientID       string
-		hostname       string
-		timeout        time.Duration
-		flowStr        string
-		federatedToken string
-		scopes         []string
+		tenantID                  string
+		clientID                  string
+		hostname                  string
+		timeout                   time.Duration
+		flowStr                   string
+		federatedToken            string
+		scopes                    []string
+		impersonateServiceAccount string
 	)
 
 	cmd := &cobra.Command{
@@ -48,6 +50,12 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 			For the 'github' handler, this supports:
 			- device-code: Interactive authentication via browser (default)
 			- pat: Personal access token from environment variables (GITHUB_TOKEN or GH_TOKEN)
+
+			For the 'gcp' handler, this supports:
+			- interactive: Browser-based OAuth (default for workstations)
+			- service-principal: Service account key (GOOGLE_APPLICATION_CREDENTIALS)
+			- workload-identity: Workload Identity Federation (GOOGLE_EXTERNAL_ACCOUNT)
+			- metadata: GCE metadata server (auto-detected on GCE/GKE/Cloud Run)
 
 			For Entra service principal flow, set these environment variables:
 			- AZURE_CLIENT_ID: Application (client) ID
@@ -70,6 +78,7 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 			Supported handlers:
 			- entra: Microsoft Entra ID
 			- github: GitHub
+			- gcp: Google Cloud Platform
 
 			Examples:
 			  # Login with Entra ID using device code flow (default)
@@ -102,6 +111,24 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 			  # Login with specific scopes
 			  scafctl auth login entra --scope https://graph.microsoft.com/User.Read
 			  scafctl auth login github --scope repo --scope read:org
+
+			  # Login with GCP using browser OAuth (default)
+			  scafctl auth login gcp
+
+			  # Login with GCP service account key
+			  scafctl auth login gcp --flow service-principal
+
+			  # Login with GCP workload identity federation
+			  scafctl auth login gcp --flow workload-identity
+
+			  # Login with GCE metadata server
+			  scafctl auth login gcp --flow metadata
+
+			  # Login with GCP service account impersonation
+			  scafctl auth login gcp --impersonate-service-account my-sa@project.iam.gserviceaccount.com
+
+			  # Login with GCP and specific scopes
+			  scafctl auth login gcp --scope https://www.googleapis.com/auth/bigquery
 		`),
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
@@ -155,10 +182,19 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
+			// Validate impersonation flag
+			if impersonateServiceAccount != "" && handlerName != "gcp" {
+				err := fmt.Errorf("--impersonate-service-account is only supported by the 'gcp' auth handler")
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
+
 			// Route to handler-specific login logic
 			switch handlerName {
 			case "github":
 				return loginGitHub(ctx, w, flow, hostname, clientID, timeout, scopes)
+			case "gcp":
+				return loginGCP(ctx, w, flow, clientID, impersonateServiceAccount, timeout, scopes)
 			default:
 				return loginEntra(ctx, w, flow, tenantID, clientID, timeout, federatedToken, flowStr, scopes)
 			}
@@ -172,6 +208,7 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 	cmd.Flags().StringVar(&flowStr, "flow", "", "Authentication flow (handler-specific)")
 	cmd.Flags().StringVar(&federatedToken, "federated-token", "", "Federated token for workload identity (requires federated_token capability)")
 	cmd.Flags().StringSliceVar(&scopes, "scope", nil, "OAuth scopes to request during login (requires scopes_on_login capability)")
+	cmd.Flags().StringVar(&impersonateServiceAccount, "impersonate-service-account", "", "GCP service account email to impersonate (gcp handler only)")
 
 	return cmd
 }
@@ -212,6 +249,50 @@ func loginGitHub(ctx context.Context, w *writer.Writer, flow auth.Flow, hostname
 			identity := status.Claims.DisplayIdentity()
 			w.Infof("Already authenticated as %s", identity)
 			w.Info("Use 'scafctl auth logout github' to sign out first, or continue to re-authenticate.")
+			w.Info("")
+		}
+	}
+
+	return executeLogin(ctx, w, handler, flow, "", timeout, scopes)
+}
+
+// loginGCP handles the login flow for the GCP auth handler.
+func loginGCP(ctx context.Context, w *writer.Writer, flow auth.Flow, clientID, impersonateServiceAccount string, timeout time.Duration, scopes []string) error {
+	// Auto-detect flow based on available credentials (highest priority first)
+	if flow == "" && gcpauth.HasWorkloadIdentityCredentials() {
+		flow = auth.FlowWorkloadIdentity
+		w.Info("Detected workload identity credentials in environment")
+	} else if flow == "" && gcpauth.HasServiceAccountCredentials() {
+		flow = auth.FlowServicePrincipal
+		w.Info("Detected service account key in environment")
+	}
+
+	// Default to interactive (browser OAuth)
+	if flow == "" {
+		flow = auth.FlowInteractive
+	}
+
+	// Get or create handler with overrides
+	handler, err := getGCPHandlerWithOverrides(ctx, clientID, impersonateServiceAccount)
+	if err != nil {
+		err = fmt.Errorf("failed to initialize auth handler: %w", err)
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
+	}
+
+	// Check if already authenticated (skip for non-interactive flows)
+	if flow == auth.FlowInteractive {
+		status, err := handler.Status(ctx)
+		if err != nil {
+			err = fmt.Errorf("failed to check auth status: %w", err)
+			w.Errorf("%v", err)
+			return exitcode.WithCode(err, exitcode.GeneralError)
+		}
+
+		if status.Authenticated {
+			identity := status.Claims.DisplayIdentity()
+			w.Infof("Already authenticated as %s", identity)
+			w.Info("Use 'scafctl auth logout gcp' to sign out first, or continue to re-authenticate.")
 			w.Info("")
 		}
 	}
@@ -349,6 +430,12 @@ func executeLogin(ctx context.Context, w *writer.Writer, handler auth.Handler, f
 	if flow == auth.FlowPAT {
 		w.Info("  Flow:     Personal Access Token")
 	}
+	if flow == auth.FlowMetadata {
+		w.Info("  Flow:     Metadata Server")
+	}
+	if flow == auth.FlowInteractive {
+		w.Info("  Flow:     Interactive (Browser OAuth)")
+	}
 
 	return nil
 }
@@ -361,16 +448,24 @@ func parseFlow(flowStr, handlerName string) (auth.Flow, error) {
 	switch strings.ToLower(flowStr) {
 	case "device-code", "devicecode":
 		return auth.FlowDeviceCode, nil
+	case "interactive":
+		return auth.FlowInteractive, nil
 	case "service-principal", "serviceprincipal", "sp":
 		return auth.FlowServicePrincipal, nil
 	case "workload-identity", "workloadidentity", "wi":
 		return auth.FlowWorkloadIdentity, nil
 	case "pat":
 		return auth.FlowPAT, nil
+	case "metadata":
+		return auth.FlowMetadata, nil
 	default:
-		if handlerName == "github" {
+		switch handlerName {
+		case "github":
 			return "", fmt.Errorf("unknown flow: %s (valid for github: device-code, pat)", flowStr)
+		case "gcp":
+			return "", fmt.Errorf("unknown flow: %s (valid for gcp: interactive, service-principal, workload-identity, metadata)", flowStr)
+		default:
+			return "", fmt.Errorf("unknown flow: %s (valid for entra: device-code, service-principal, workload-identity)", flowStr)
 		}
-		return "", fmt.Errorf("unknown flow: %s (valid for entra: device-code, service-principal, workload-identity)", flowStr)
 	}
 }
