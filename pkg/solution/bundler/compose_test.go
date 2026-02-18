@@ -27,7 +27,7 @@ spec:
         with:
           - provider: parameter
             inputs:
-              name: "env"
+              key: "env"
 `))
 	if err != nil {
 		panic(fmt.Sprintf("failed to create base solution: %v", err))

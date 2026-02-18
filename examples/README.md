@@ -38,6 +38,7 @@ scafctl run solution -f examples/actions/hello-world.yaml --log-level info --log
 | [catalog/](catalog/) | Catalog bundling and registry examples |
 | [config/](config/) | Configuration file examples |
 | [plugins/](plugins/) | go-plugin source code examples (see note below) |
+| [mcp/](mcp/) | MCP server configurations for AI clients |
 
 > **Terminology Note**: The `plugins/` directory contains go-plugin source code for developing custom providers. When distributing via the catalog, these are pushed as **provider** or **auth-handler** artifacts:
 > ```bash
@@ -175,6 +176,20 @@ Custom plugin development examples.
 | Example | Description |
 |---------|-------------|
 | [echo/](plugins/echo/) | Simple echo plugin implementation |
+
+---
+
+## MCP Server Configurations
+
+AI client configuration examples for connecting to scafctl's MCP server.
+
+| File | Description |
+|------|-------------|
+| [mcp/README.md](mcp/README.md) | Overview and setup instructions |
+| [mcp/vscode-mcp.json](mcp/vscode-mcp.json) | VS Code / GitHub Copilot configuration |
+| [mcp/claude-desktop-config.json](mcp/claude-desktop-config.json) | Claude Desktop configuration |
+| [mcp/cursor-mcp.json](mcp/cursor-mcp.json) | Cursor configuration |
+| [mcp/windsurf-mcp.json](mcp/windsurf-mcp.json) | Windsurf configuration |
 
 ---
 

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "scafctl": {
+      "command": "scafctl",
+      "args": ["mcp", "serve"]
+    }
+  }
+}

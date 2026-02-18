@@ -90,11 +90,10 @@ spec:
       description: Clean build directory
       provider: exec
       inputs:
-        cmd:
-          - rm
-          - -rf
-        args:
-          directory:
+        command:
+          expr: "'rm -rf ' + _.buildDir"
+        context:
+          buildDir:
             rslvr: buildDir
 
     test:
@@ -102,10 +101,7 @@ spec:
       provider: exec
       dependsOn: [clean]
       inputs:
-        cmd:
-          - go
-          - test
-          - ./...
+        command: "go test ./..."
 
     build:
       description: Build binary
@@ -117,14 +113,8 @@ spec:
             rslvr: goos
           GOARCH:
             rslvr: goarch
-        cmd:
-          - go
-          - build
-          - -o
-        args:
-          output:
-            tmpl: "{{ .buildDir }}/{{ .repo }}"
-          source: ./cmd/scafctl
+        command:
+          tmpl: "go build -o {{ .buildDir }}/{{ .repo }} ./cmd/scafctl"
         context:
           buildDir:
             rslvr: buildDir

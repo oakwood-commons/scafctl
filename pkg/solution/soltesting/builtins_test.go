@@ -4,8 +4,10 @@
 package soltesting_test
 
 import (
+	"context"
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -119,4 +121,27 @@ func TestBuiltinTests_ResolveDefaultsHasCommand(t *testing.T) {
 		}
 	}
 	t.Fatal("builtin:resolve-defaults not found")
+}
+
+func TestBuiltinTests_AssertionExpressionsCompile(t *testing.T) {
+	// Build a CEL context with all known variables so we can verify
+	// that every builtin assertion expression compiles without error.
+	celCtx := soltesting.BuildAssertionContext(&soltesting.CommandOutput{
+		Stdout:   "ok",
+		Stderr:   "",
+		ExitCode: 0,
+		Output:   map[string]any{},
+		Files:    map[string]soltesting.FileInfo{},
+	})
+
+	builtins := soltesting.BuiltinTests(nil)
+	for _, b := range builtins {
+		for _, a := range b.Assertions {
+			if a.Expression == "" {
+				continue
+			}
+			_, err := celexp.EvaluateExpression(context.Background(), string(a.Expression), nil, celCtx)
+			assert.NoError(t, err, "builtin %q assertion expression %q should compile", b.Name, a.Expression)
+		}
+	}
 }

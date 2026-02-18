@@ -159,7 +159,7 @@ func (o *Options) RunListProviders(ctx context.Context) error {
 			"displayName":  desc.DisplayName,
 			"version":      desc.Version.String(),
 			"description":  desc.Description,
-			"capabilities": capabilitiesToStrings(desc.Capabilities),
+			"capabilities": CapabilitiesToStrings(desc.Capabilities),
 			"category":     desc.Category,
 			"deprecated":   desc.Deprecated, //nolint:staticcheck // Intentionally display deprecated status
 			"beta":         desc.Beta,
@@ -189,7 +189,7 @@ func (o *Options) RunGetProvider(ctx context.Context, name string) error {
 	}
 
 	// Structured output for -o flag
-	output := buildProviderDetail(*desc)
+	output := BuildProviderDetail(*desc)
 	return o.writeOutput(ctx, output)
 }
 
@@ -355,7 +355,7 @@ func (o *Options) printProviderDetail(desc *provider.Descriptor) error {
 	}
 
 	// CLI Usage examples (auto-generated from schema)
-	cliExamples := generateCLIExamples(desc)
+	cliExamples := GenerateCLIExamples(desc)
 	if len(cliExamples) > 0 {
 		fmt.Fprintln(out)
 		fmt.Fprintf(out, "%s\n", keyStyle("CLI Usage:"))
@@ -422,15 +422,16 @@ func (o *Options) filterProviders(providers []provider.Provider) []provider.Prov
 	return filtered
 }
 
-// buildProviderDetail builds a detailed map for a single provider
-func buildProviderDetail(desc provider.Descriptor) map[string]any {
+// BuildProviderDetail builds a detailed map for a single provider.
+// Exported for reuse by the MCP server.
+func BuildProviderDetail(desc provider.Descriptor) map[string]any {
 	output := map[string]any{
 		"name":         desc.Name,
 		"displayName":  desc.DisplayName,
 		"apiVersion":   desc.APIVersion,
 		"version":      desc.Version.String(),
 		"description":  desc.Description,
-		"capabilities": capabilitiesToStrings(desc.Capabilities),
+		"capabilities": CapabilitiesToStrings(desc.Capabilities),
 		"mockBehavior": desc.MockBehavior,
 	}
 
@@ -452,14 +453,14 @@ func buildProviderDetail(desc provider.Descriptor) map[string]any {
 
 	// Add schema information
 	if desc.Schema != nil && len(desc.Schema.Properties) > 0 {
-		output["schema"] = buildSchemaOutput(desc.Schema)
+		output["schema"] = BuildSchemaOutput(desc.Schema)
 	}
 
 	// Add output schemas
 	if len(desc.OutputSchemas) > 0 {
 		outputSchemas := make(map[string]any)
 		for cap, schema := range desc.OutputSchemas {
-			outputSchemas[string(cap)] = buildSchemaOutput(schema)
+			outputSchemas[string(cap)] = BuildSchemaOutput(schema)
 		}
 		output["outputSchemas"] = outputSchemas
 	}
@@ -502,7 +503,7 @@ func buildProviderDetail(desc provider.Descriptor) map[string]any {
 	}
 
 	// Add CLI usage examples
-	cliExamples := generateCLIExamples(&desc)
+	cliExamples := GenerateCLIExamples(&desc)
 	if len(cliExamples) > 0 {
 		output["cliUsage"] = cliExamples
 	}
@@ -510,10 +511,11 @@ func buildProviderDetail(desc provider.Descriptor) map[string]any {
 	return output
 }
 
-// generateCLIExamples auto-generates CLI usage examples from the provider's schema.
+// GenerateCLIExamples auto-generates CLI usage examples from the provider's schema.
 // It builds "scafctl run provider <name>" commands using required fields and
 // type-appropriate placeholder values.
-func generateCLIExamples(desc *provider.Descriptor) []string {
+// Exported for reuse by the MCP server.
+func GenerateCLIExamples(desc *provider.Descriptor) []string {
 	if desc.Schema == nil || len(desc.Schema.Properties) == 0 {
 		return nil
 	}
@@ -537,7 +539,7 @@ func generateCLIExamples(desc *provider.Descriptor) []string {
 	inputFlags := make([]string, 0, len(requiredNames))
 	for _, name := range requiredNames {
 		prop := desc.Schema.Properties[name]
-		placeholder := schemaPlaceholder(name, prop)
+		placeholder := SchemaPlaceholder(name, prop)
 		inputFlags = append(inputFlags, fmt.Sprintf("--input %s=%s", name, placeholder))
 	}
 
@@ -570,8 +572,8 @@ func generateCLIExamples(desc *provider.Descriptor) []string {
 	return examples
 }
 
-// schemaPlaceholder returns a reasonable placeholder value for a schema property.
-func schemaPlaceholder(name string, prop *jsonschema.Schema) string {
+// SchemaPlaceholder returns a reasonable placeholder value for a schema property.
+func SchemaPlaceholder(name string, prop *jsonschema.Schema) string {
 	if prop == nil {
 		return "<value>"
 	}
@@ -603,8 +605,9 @@ func schemaPlaceholder(name string, prop *jsonschema.Schema) string {
 	}
 }
 
-// buildSchemaOutput converts a JSON Schema to a map for output
-func buildSchemaOutput(schema *jsonschema.Schema) map[string]any {
+// BuildSchemaOutput converts a JSON Schema to a map for output.
+// Exported for reuse by the MCP server.
+func BuildSchemaOutput(schema *jsonschema.Schema) map[string]any {
 	if schema == nil || len(schema.Properties) == 0 {
 		return nil
 	}
@@ -643,8 +646,9 @@ func buildSchemaOutput(schema *jsonschema.Schema) map[string]any {
 	return map[string]any{"properties": properties}
 }
 
-// capabilitiesToStrings converts []Capability to []string
-func capabilitiesToStrings(caps []provider.Capability) []string {
+// CapabilitiesToStrings converts []Capability to []string.
+// Exported for reuse by the MCP server.
+func CapabilitiesToStrings(caps []provider.Capability) []string {
 	result := make([]string, 0, len(caps))
 	for _, cap := range caps {
 		result = append(result, string(cap))

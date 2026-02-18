@@ -630,7 +630,7 @@ func TestBuildProviderDetail(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result := buildProviderDetail(tc.descriptor)
+			result := BuildProviderDetail(tc.descriptor)
 
 			for _, key := range tc.checkKeys {
 				assert.Contains(t, result, key, "expected key %q in result", key)
@@ -699,7 +699,7 @@ func TestBuildSchemaOutput(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result := buildSchemaOutput(tc.schema)
+			result := BuildSchemaOutput(tc.schema)
 			assert.Equal(t, tc.want, result)
 		})
 	}
@@ -730,7 +730,7 @@ func TestCapabilitiesToStrings(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result := capabilitiesToStrings(tc.caps)
+			result := CapabilitiesToStrings(tc.caps)
 			assert.Equal(t, tc.want, result)
 		})
 	}
