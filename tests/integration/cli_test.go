@@ -165,6 +165,62 @@ func TestIntegration_GetProviderJSON(t *testing.T) {
 }
 
 // ============================================================================
+// Get CEL Functions Tests
+// ============================================================================
+
+func TestIntegration_GetCelFunctions(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "cel-functions")
+
+	assert.Equal(t, 0, exitCode)
+	// Should list both built-in and custom functions
+	assert.Contains(t, stdout, "strings")
+	assert.Contains(t, stdout, "map.merge")
+}
+
+func TestIntegration_GetCelFunctionsCustom(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "cel-functions", "--custom")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "map.merge")
+	assert.Contains(t, stdout, "guid.new")
+}
+
+func TestIntegration_GetCelFunctionsBuiltin(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "cel-functions", "--builtin")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "strings")
+}
+
+func TestIntegration_GetCelFunctionsJSON(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "cel-functions", "-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "\"name\"")
+	assert.Contains(t, stdout, "\"custom\"")
+}
+
+func TestIntegration_GetCelFunctionsQuiet(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "cel-functions", "-o", "quiet")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "map.merge")
+}
+
+func TestIntegration_GetCelFunctionDetail(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "cel-functions", "map.merge")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "map.merge")
+}
+
+// ============================================================================
 // Explain Schema Tests
 // ============================================================================
 

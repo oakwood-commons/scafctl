@@ -154,7 +154,8 @@ func TestSolutionOptions_printSolutionExplanation(t *testing.T) {
 		sol.SetPath("/path/to/solution.yaml")
 
 		w := writer.New(ioStreams, options.CliParams)
-		options.printSolutionExplanation(w, sol)
+		exp := BuildSolutionExplanation(sol)
+		options.printSolutionExplanation(w, exp)
 
 		output := outBuf.String()
 
@@ -230,7 +231,8 @@ func TestSolutionOptions_printSolutionExplanation(t *testing.T) {
 		}
 
 		w := writer.New(ioStreams, options.CliParams)
-		options.printSolutionExplanation(w, sol)
+		exp := BuildSolutionExplanation(sol)
+		options.printSolutionExplanation(w, exp)
 
 		output := outBuf.String()
 		assert.Contains(t, output, "minimal-solution")
@@ -262,16 +264,15 @@ func TestSolutionOptions_printSolutionExplanation(t *testing.T) {
 		}
 
 		w := writer.New(ioStreams, options.CliParams)
-		options.printSolutionExplanation(w, sol)
+		exp := BuildSolutionExplanation(sol)
+		options.printSolutionExplanation(w, exp)
 
 		output := outBuf.String()
 		assert.Contains(t, output, "DISABLED")
 	})
 }
 
-func TestSolutionOptions_getResolverProviders(t *testing.T) {
-	options := &SolutionOptions{}
-
+func TestExtractProviderNames(t *testing.T) {
 	t.Run("extracts providers from all phases", func(t *testing.T) {
 		r := &resolver.Resolver{
 			Resolve: &resolver.ResolvePhase{
@@ -292,7 +293,7 @@ func TestSolutionOptions_getResolverProviders(t *testing.T) {
 			},
 		}
 
-		providers := options.getResolverProviders(r)
+		providers := extractProviderNames(r)
 
 		assert.Len(t, providers, 4)
 		assert.Contains(t, providers, "http")
@@ -311,7 +312,7 @@ func TestSolutionOptions_getResolverProviders(t *testing.T) {
 			},
 		}
 
-		providers := options.getResolverProviders(r)
+		providers := extractProviderNames(r)
 		assert.Len(t, providers, 1)
 		assert.Equal(t, "http", providers[0])
 	})
@@ -319,14 +320,12 @@ func TestSolutionOptions_getResolverProviders(t *testing.T) {
 	t.Run("returns empty slice for empty resolver", func(t *testing.T) {
 		r := &resolver.Resolver{}
 
-		providers := options.getResolverProviders(r)
+		providers := extractProviderNames(r)
 		assert.Empty(t, providers)
 	})
 }
 
-func TestSolutionOptions_getResolverPhases(t *testing.T) {
-	options := &SolutionOptions{}
-
+func TestExtractPhases(t *testing.T) {
 	t.Run("identifies all phases", func(t *testing.T) {
 		r := &resolver.Resolver{
 			Resolve: &resolver.ResolvePhase{
@@ -340,7 +339,7 @@ func TestSolutionOptions_getResolverPhases(t *testing.T) {
 			},
 		}
 
-		phases := options.getResolverPhases(r)
+		phases := extractPhases(r)
 		assert.Len(t, phases, 3)
 		assert.Equal(t, []string{"resolve", "transform", "validate"}, phases)
 	})
@@ -352,14 +351,14 @@ func TestSolutionOptions_getResolverPhases(t *testing.T) {
 			},
 		}
 
-		phases := options.getResolverPhases(r)
+		phases := extractPhases(r)
 		assert.Equal(t, []string{"resolve"}, phases)
 	})
 
 	t.Run("returns empty slice for empty resolver", func(t *testing.T) {
 		r := &resolver.Resolver{}
 
-		phases := options.getResolverPhases(r)
+		phases := extractPhases(r)
 		assert.Empty(t, phases)
 	})
 }
@@ -395,7 +394,8 @@ func TestSolutionOptions_Run_WithMock(t *testing.T) {
 		// Note: We can't easily inject the getter into Run() without refactoring,
 		// so we'll test the explanation printing directly
 		w := writer.New(ioStreams, options.CliParams)
-		options.printSolutionExplanation(w, sol)
+		exp := BuildSolutionExplanation(sol)
+		options.printSolutionExplanation(w, exp)
 
 		output := outBuf.String()
 		assert.Contains(t, output, "mocked-solution")

@@ -5,7 +5,6 @@ package secrets
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
@@ -56,7 +55,7 @@ func CommandExists(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 
 			// Set exit code
 			if !exists {
-				os.Exit(1)
+				return exitcode.WithCode(fmt.Errorf("secret %q does not exist", name), exitcode.GeneralError)
 			}
 
 			return nil

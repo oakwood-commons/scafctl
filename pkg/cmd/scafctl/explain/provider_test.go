@@ -259,22 +259,44 @@ func TestProviderOptions_Run(t *testing.T) {
 	})
 }
 
-func TestProviderOptions_getRegistry(t *testing.T) {
-	t.Run("returns injected registry when set", func(t *testing.T) {
+func TestLookupProvider(t *testing.T) {
+	t.Run("returns descriptor from injected registry", func(t *testing.T) {
 		customReg := provider.NewRegistry()
+		err := customReg.Register(&mockProvider{
+			descriptor: &provider.Descriptor{
+				Name:         "test-prov",
+				DisplayName:  "Test Provider",
+				Description:  "A test provider",
+				APIVersion:   "scafctl.io/v1",
+				Version:      semver.MustParse("1.0.0"),
+				Capabilities: []provider.Capability{provider.CapabilityFrom},
+				MockBehavior: "Returns test data",
+				Schema:       &jsonschema.Schema{Type: "object"},
+				OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+					provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+						"data": schemahelper.AnyProp(""),
+					}),
+				},
+			},
+		})
+		require.NoError(t, err)
 
-		options := &ProviderOptions{
-			registry: customReg,
-		}
-
-		result := options.getRegistry(context.Background())
-		assert.Equal(t, customReg, result)
+		desc, err := LookupProvider(context.Background(), "test-prov", customReg)
+		require.NoError(t, err)
+		assert.Equal(t, "test-prov", desc.Name)
 	})
 
-	t.Run("returns default registry when not set", func(t *testing.T) {
-		options := &ProviderOptions{}
+	t.Run("returns error for unknown provider", func(t *testing.T) {
+		customReg := provider.NewRegistry()
 
-		result := options.getRegistry(context.Background())
-		assert.NotNil(t, result)
+		_, err := LookupProvider(context.Background(), "nonexistent", customReg)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "not found")
+	})
+
+	t.Run("uses default registry when nil", func(t *testing.T) {
+		// Should not panic even when nil is passed
+		_, err := LookupProvider(context.Background(), "nonexistent-provider-xyz", nil)
+		assert.Error(t, err)
 	})
 }

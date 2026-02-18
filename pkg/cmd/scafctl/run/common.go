@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -16,19 +15,16 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
-	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
-	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
-	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/solutionprovider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
-	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
@@ -184,109 +180,6 @@ func (o *sharedResolverOptions) getEffectiveResolverConfig(ctx context.Context) 
 	result.MaxConcurrency = configValues.MaxConcurrency
 
 	return result
-}
-
-// getOrCreateGetter returns the injected getter or creates a default one, caching the result.
-func (o *sharedResolverOptions) getOrCreateGetter(ctx context.Context) get.Interface {
-	if o.getter != nil {
-		return o.getter
-	}
-
-	lgr := logger.FromContext(ctx)
-
-	getterOpts := []get.Option{
-		get.WithLogger(*lgr),
-	}
-
-	localCatalog, err := catalog.NewLocalCatalog(*lgr)
-	if err == nil {
-		catResolver := catalog.NewSolutionResolver(localCatalog, *lgr)
-		getterOpts = append(getterOpts, get.WithCatalogResolver(catResolver))
-	} else {
-		lgr.V(1).Info("catalog not available for solution resolution", "error", err)
-	}
-
-	o.getter = get.NewGetter(getterOpts...)
-	return o.getter
-}
-
-// loadSolutionWithBundle loads a solution and extracts its bundle if present.
-// Returns the solution, the path to the extracted bundle directory (empty if no bundle),
-// and any error. The caller is responsible for cleaning up the bundle directory.
-func (o *sharedResolverOptions) loadSolutionWithBundle(ctx context.Context) (*solution.Solution, string, error) {
-	lgr := logger.FromContext(ctx)
-	getter := o.getOrCreateGetter(ctx)
-
-	// Handle stdin
-	if o.File == "-" {
-		data, err := io.ReadAll(o.IOStreams.In)
-		if err != nil {
-			return nil, "", fmt.Errorf("failed to read from stdin: %w", err)
-		}
-
-		var sol solution.Solution
-		if err := sol.LoadFromBytes(data); err != nil {
-			return nil, "", fmt.Errorf("failed to parse solution from stdin: %w", err)
-		}
-		return &sol, "", nil
-	}
-
-	// Use GetWithBundle for catalog solutions to extract bundle
-	sol, bundleData, err := getter.GetWithBundle(ctx, o.File)
-	if err != nil {
-		return nil, "", err
-	}
-
-	// If there's bundle data, extract it to a temp directory
-	if len(bundleData) > 0 {
-		lgr.V(1).Info("extracting solution bundle", "size", len(bundleData))
-		tmpDir, err := os.MkdirTemp("", "scafctl-bundle-*")
-		if err != nil {
-			return nil, "", fmt.Errorf("failed to create temp directory for bundle: %w", err)
-		}
-
-		// Write the solution YAML to the temp dir so relative paths work
-		solYAML, err := sol.ToYAML()
-		if err != nil {
-			os.RemoveAll(tmpDir)
-			return nil, "", fmt.Errorf("failed to serialize solution: %w", err)
-		}
-		if err := os.WriteFile(filepath.Join(tmpDir, "solution.yaml"), solYAML, 0o600); err != nil {
-			os.RemoveAll(tmpDir)
-			return nil, "", fmt.Errorf("failed to write solution to temp dir: %w", err)
-		}
-
-		// Extract bundle tar
-		manifest, err := bundler.ExtractBundleTar(bundleData, tmpDir)
-		if err != nil {
-			os.RemoveAll(tmpDir)
-			return nil, "", fmt.Errorf("failed to extract bundle: %w", err)
-		}
-
-		lgr.V(1).Info("extracted bundle",
-			"files", len(manifest.Files),
-			"dir", tmpDir)
-
-		return sol, tmpDir, nil
-	}
-
-	return sol, "", nil
-}
-
-// getRegistry returns the provider registry (creates default if not injected)
-func (o *sharedResolverOptions) getRegistry(ctx context.Context) *provider.Registry {
-	if o.registry != nil {
-		return o.registry
-	}
-
-	reg, err := builtin.DefaultRegistry(ctx)
-	if err != nil {
-		lgr := logger.Get(0)
-		lgr.V(0).Info("warning: failed to register some providers", "error", err)
-		return provider.GetGlobalRegistry()
-	}
-
-	return reg
 }
 
 // exitWithCode prints the error message and returns an ExitError with the appropriate code
@@ -536,78 +429,31 @@ func filterResolversWithDependencies(resolvers []*resolver.Resolver, targetNames
 // prepareSolutionForExecution loads a solution, sets up the provider registry,
 // and registers the solution provider. It handles bundle extraction, plugin merging,
 // and working directory changes. Returns cleanup function that must be deferred.
+//
+// This method delegates to the standalone prepare.PrepareSolution function,
+// passing CLI-specific options (getter, registry, stdin, metrics).
 func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context) (*solution.Solution, *provider.Registry, func(), error) {
-	lgr := logger.FromContext(ctx)
+	var opts []prepare.Option
 
-	// Enable metrics collection if requested
-	if o.ShowMetrics {
-		provider.GlobalMetrics.Enable()
+	if o.getter != nil {
+		opts = append(opts, prepare.WithGetter(o.getter))
+	}
+	if o.registry != nil {
+		opts = append(opts, prepare.WithRegistry(o.registry))
+	}
+	if o.IOStreams != nil && o.IOStreams.In != nil {
+		opts = append(opts, prepare.WithStdin(o.IOStreams.In))
+	}
+	if o.ShowMetrics && o.IOStreams != nil {
+		opts = append(opts, prepare.WithMetrics(o.IOStreams.ErrOut))
 	}
 
-	// Load the solution (with bundle if available)
-	sol, bundleDir, err := o.loadSolutionWithBundle(ctx)
+	result, err := prepare.Solution(ctx, o.File, opts...)
 	if err != nil {
 		return nil, nil, func() {}, err
 	}
 
-	// Build cleanup function
-	cleanup := func() {
-		if o.ShowMetrics {
-			writeMetrics(o.IOStreams.ErrOut)
-		}
-		if bundleDir != "" {
-			os.RemoveAll(bundleDir)
-		}
-	}
-
-	// Change to bundle directory if needed
-	if bundleDir != "" {
-		originalDir, wdErr := os.Getwd()
-		if wdErr != nil {
-			cleanup()
-			return nil, nil, func() {}, fmt.Errorf("failed to get working directory: %w", wdErr)
-		}
-		if chErr := os.Chdir(bundleDir); chErr != nil {
-			cleanup()
-			return nil, nil, func() {}, fmt.Errorf("failed to change to bundle directory: %w", chErr)
-		}
-		origCleanup := cleanup
-		cleanup = func() {
-			_ = os.Chdir(originalDir)
-			origCleanup()
-		}
-		lgr.V(1).Info("using bundle extraction directory as working directory", "dir", bundleDir)
-	}
-
-	lgr.V(1).Info("loaded solution",
-		"name", sol.Metadata.Name,
-		"version", sol.Metadata.Version,
-		"hasResolvers", sol.Spec.HasResolvers(),
-		"hasWorkflow", sol.Spec.HasWorkflow())
-
-	// Merge plugin defaults into provider inputs before DAG construction
-	if len(sol.Bundle.Plugins) > 0 {
-		bundler.MergePluginDefaults(sol)
-		lgr.V(1).Info("merged plugin defaults", "pluginCount", len(sol.Bundle.Plugins))
-	}
-
-	// Set up provider registry
-	reg := o.getRegistry(ctx)
-
-	// Register the solution provider
-	if !reg.Has(solutionprovider.ProviderName) {
-		solGetter := o.getOrCreateGetter(ctx)
-		solProvider := solutionprovider.New(
-			solutionprovider.WithLoader(solGetter),
-			solutionprovider.WithRegistry(reg),
-		)
-		if err := reg.Register(solProvider); err != nil {
-			cleanup()
-			return nil, nil, func() {}, fmt.Errorf("registering solution provider: %w", err)
-		}
-	}
-
-	return sol, reg, cleanup, nil
+	return result.Solution, result.Registry, result.Cleanup, nil
 }
 
 // addSharedResolverFlags adds common resolver flags to a cobra command.
