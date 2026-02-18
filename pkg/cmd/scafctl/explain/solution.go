@@ -5,19 +5,10 @@ package explain
 
 import (
 	"context"
-	"fmt"
 	"path/filepath"
-	"sort"
 	"strings"
 
-	"github.com/oakwood-commons/scafctl/pkg/action"
-	"github.com/oakwood-commons/scafctl/pkg/catalog"
-	"github.com/oakwood-commons/scafctl/pkg/exitcode"
-	"github.com/oakwood-commons/scafctl/pkg/logger"
-	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
-	"github.com/oakwood-commons/scafctl/pkg/solution"
-	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
@@ -81,113 +72,116 @@ Examples:
 // Run executes the explain solution command
 func (o *SolutionOptions) Run(ctx context.Context) error {
 	w := writer.New(o.IOStreams, o.CliParams)
-	lgr := logger.FromContext(ctx)
 
-	// Set up getter with catalog resolver for bare name resolution
-	var getterOpts []get.Option
-	localCatalog, err := catalog.NewLocalCatalog(*lgr)
-	if err == nil {
-		resolver := catalog.NewSolutionResolver(localCatalog, *lgr)
-		getterOpts = append(getterOpts, get.WithCatalogResolver(resolver))
-	} else {
-		lgr.V(1).Info("catalog not available for solution resolution", "error", err)
-	}
-
-	// Load the solution
-	getter := get.NewGetter(getterOpts...)
-	sol, err := getter.Get(ctx, o.Path)
+	sol, err := LoadSolution(ctx, o.Path)
 	if err != nil {
-		err = fmt.Errorf("failed to load solution: %w", err)
 		w.Errorf("%v", err)
-		return exitcode.WithCode(err, exitcode.FileNotFound)
+		return err
 	}
 
-	o.printSolutionExplanation(w, sol)
+	exp := BuildSolutionExplanation(sol)
+	o.printSolutionExplanation(w, exp)
 	return nil
 }
 
 // printSolutionExplanation prints a human-readable explanation of a solution
-func (o *SolutionOptions) printSolutionExplanation(w *writer.Writer, sol *solution.Solution) {
+func (o *SolutionOptions) printSolutionExplanation(w *writer.Writer, exp *SolutionExplanation) {
 	// Header
-	displayName := sol.Metadata.DisplayName
+	displayName := exp.DisplayName
 	if displayName == "" {
-		displayName = sol.Metadata.Name
+		displayName = exp.Name
 	}
-	versionStr := "unknown"
-	if sol.Metadata.Version != nil {
-		versionStr = sol.Metadata.Version.String()
-	}
-	w.Infof("%s (%s@%s)", displayName, sol.Metadata.Name, versionStr)
+	w.Infof("%s (%s@%s)", displayName, exp.Name, exp.Version)
 	w.Plainln("")
 
 	// Description
-	if sol.Metadata.Description != "" {
-		w.Plainln(sol.Metadata.Description)
+	if exp.Description != "" {
+		w.Plainln(exp.Description)
 		w.Plainln("")
 	}
 
 	// Basic metadata
 	w.Infof("Metadata")
-	w.Plainlnf("  Name:       %s", sol.Metadata.Name)
-	w.Plainlnf("  Version:    %s", versionStr)
-	if sol.Metadata.Category != "" {
-		w.Plainlnf("  Category:   %s", sol.Metadata.Category)
+	w.Plainlnf("  Name:       %s", exp.Name)
+	w.Plainlnf("  Version:    %s", exp.Version)
+	if exp.Category != "" {
+		w.Plainlnf("  Category:   %s", exp.Category)
 	}
 	w.Plainln("")
 
 	// Catalog info
-	if sol.Catalog.Visibility != "" || sol.Catalog.Beta || sol.Catalog.Disabled {
+	if exp.Catalog != nil {
 		w.Infof("Catalog")
-		if sol.Catalog.Visibility != "" {
-			w.Plainlnf("  Visibility: %s", sol.Catalog.Visibility)
+		if exp.Catalog.Visibility != "" {
+			w.Plainlnf("  Visibility: %s", exp.Catalog.Visibility)
 		}
-		if sol.Catalog.Beta {
+		if exp.Catalog.Beta {
 			w.Plainln("  Status:     Beta")
 		}
-		if sol.Catalog.Disabled {
+		if exp.Catalog.Disabled {
 			w.Warningf("⚠️  This solution is DISABLED")
 		}
 		w.Plainln("")
 	}
 
 	// Resolvers
-	if sol.Spec.HasResolvers() {
-		w.Infof("Resolvers (%d)", len(sol.Spec.Resolvers))
-		o.printResolvers(w, sol)
+	if len(exp.Resolvers) > 0 {
+		w.Infof("Resolvers (%d)", len(exp.Resolvers))
+		for _, r := range exp.Resolvers {
+			if len(r.Providers) > 0 {
+				w.Plainlnf("  %s (%s)", r.Name, strings.Join(r.Providers, ", "))
+			} else {
+				w.Plainlnf("  %s", r.Name)
+			}
+			if len(r.DependsOn) > 0 {
+				w.Plainlnf("      depends on: %s", strings.Join(r.DependsOn, ", "))
+			}
+			if r.Conditional {
+				w.Plainln("      conditional: yes")
+			}
+			if len(r.Phases) > 0 {
+				w.Plainlnf("      phases: %s", strings.Join(r.Phases, " → "))
+			}
+		}
 		w.Plainln("")
 	}
 
 	// Actions
-	if sol.Spec.HasActions() {
-		actionCount := 0
-		if sol.Spec.Workflow != nil {
-			actionCount = len(sol.Spec.Workflow.Actions) + len(sol.Spec.Workflow.Finally)
-		}
+	actionCount := len(exp.Actions) + len(exp.Finally)
+	if actionCount > 0 {
 		w.Infof("Actions (%d)", actionCount)
-		o.printActions(w, sol)
+		for _, act := range exp.Actions {
+			o.printActionInfo(w, &act, "  ")
+		}
+		if len(exp.Finally) > 0 {
+			w.Plainln("  finally:")
+			for _, act := range exp.Finally {
+				o.printActionInfo(w, &act, "    ")
+			}
+		}
 		w.Plainln("")
 	}
 
 	// Tags
-	if len(sol.Metadata.Tags) > 0 {
+	if len(exp.Tags) > 0 {
 		w.Infof("Tags")
-		w.Plainln(strings.Join(sol.Metadata.Tags, ", "))
+		w.Plainln(strings.Join(exp.Tags, ", "))
 		w.Plainln("")
 	}
 
 	// Links
-	if len(sol.Metadata.Links) > 0 {
+	if len(exp.Links) > 0 {
 		w.Infof("Links")
-		for _, link := range sol.Metadata.Links {
+		for _, link := range exp.Links {
 			w.Plainlnf("  • %s: %s", link.Name, link.URL)
 		}
 		w.Plainln("")
 	}
 
 	// Maintainers
-	if len(sol.Metadata.Maintainers) > 0 {
+	if len(exp.Maintainers) > 0 {
 		w.Infof("Maintainers")
-		for _, m := range sol.Metadata.Maintainers {
+		for _, m := range exp.Maintainers {
 			if m.Email != "" {
 				w.Plainlnf("  • %s <%s>", m.Name, m.Email)
 			} else {
@@ -198,176 +192,26 @@ func (o *SolutionOptions) printSolutionExplanation(w *writer.Writer, sol *soluti
 	}
 
 	// Source path
-	if sol.GetPath() != "" {
+	if exp.Path != "" {
 		w.Infof("Source")
-		w.Plainln(sol.GetPath())
+		w.Plainln(exp.Path)
 	}
 }
 
-// printResolvers prints information about the solution's resolvers
-func (o *SolutionOptions) printResolvers(w *writer.Writer, sol *solution.Solution) {
-	// Sort resolver names for consistent output
-	names := make([]string, 0, len(sol.Spec.Resolvers))
-	for name := range sol.Spec.Resolvers {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+// printActionInfo prints a summary of a single action from structured data
+func (o *SolutionOptions) printActionInfo(w *writer.Writer, act *ActionInfo, indent string) {
+	w.Plainlnf("%s%s (%s)", indent, act.Name, act.Provider)
 
-	for _, name := range names {
-		r := sol.Spec.Resolvers[name]
-		if r == nil {
-			continue
-		}
-
-		// Build resolver info - get providers from phases
-		providers := o.getResolverProviders(r)
-		if len(providers) > 0 {
-			w.Plainlnf("  %s (%s)", name, strings.Join(providers, ", "))
-		} else {
-			w.Plainlnf("  %s", name)
-		}
-
-		// Show dependencies if any
-		if len(r.DependsOn) > 0 {
-			w.Plainlnf("      depends on: %s", strings.Join(r.DependsOn, ", "))
-		}
-
-		// Show condition if set
-		if r.When != nil {
-			w.Plainln("      conditional: yes")
-		}
-
-		// Show phases summary
-		phases := o.getResolverPhases(r)
-		if len(phases) > 0 {
-			w.Plainlnf("      phases: %s", strings.Join(phases, " → "))
-		}
-	}
-}
-
-// getResolverProviders extracts all provider names from resolver phases
-func (o *SolutionOptions) getResolverProviders(r *resolver.Resolver) []string {
-	providers := make(map[string]bool)
-
-	if r.Resolve != nil {
-		for _, source := range r.Resolve.With {
-			if source.Provider != "" {
-				providers[source.Provider] = true
-			}
-		}
-	}
-
-	if r.Transform != nil {
-		for _, transform := range r.Transform.With {
-			if transform.Provider != "" {
-				providers[transform.Provider] = true
-			}
-		}
-	}
-
-	if r.Validate != nil {
-		for _, validation := range r.Validate.With {
-			if validation.Provider != "" {
-				providers[validation.Provider] = true
-			}
-		}
-	}
-
-	// Convert to sorted slice
-	result := make([]string, 0, len(providers))
-	for p := range providers {
-		result = append(result, p)
-	}
-	sort.Strings(result)
-	return result
-}
-
-// getResolverPhases returns which phases are configured
-func (o *SolutionOptions) getResolverPhases(r *resolver.Resolver) []string {
-	var phases []string
-	if r.Resolve != nil && len(r.Resolve.With) > 0 {
-		phases = append(phases, "resolve")
-	}
-	if r.Transform != nil && len(r.Transform.With) > 0 {
-		phases = append(phases, "transform")
-	}
-	if r.Validate != nil && len(r.Validate.With) > 0 {
-		phases = append(phases, "validate")
-	}
-	return phases
-}
-
-// printActions prints information about the solution's actions
-func (o *SolutionOptions) printActions(w *writer.Writer, sol *solution.Solution) {
-	if sol.Spec.Workflow == nil {
-		return
-	}
-
-	// Print regular actions
-	if len(sol.Spec.Workflow.Actions) > 0 {
-		// Sort action names for consistent output
-		names := make([]string, 0, len(sol.Spec.Workflow.Actions))
-		for name := range sol.Spec.Workflow.Actions {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-
-		for _, name := range names {
-			act := sol.Spec.Workflow.Actions[name]
-			act.Name = name // Ensure name is set from map key
-			o.printActionSummary(w, act, "  ")
-		}
-	}
-
-	// Print finally actions
-	if len(sol.Spec.Workflow.Finally) > 0 {
-		w.Plainln("  finally:")
-
-		// Sort finally action names for consistent output
-		names := make([]string, 0, len(sol.Spec.Workflow.Finally))
-		for name := range sol.Spec.Workflow.Finally {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-
-		for _, name := range names {
-			act := sol.Spec.Workflow.Finally[name]
-			act.Name = name // Ensure name is set from map key
-			o.printActionSummary(w, act, "    ")
-		}
-	}
-}
-
-// printActionSummary prints a summary of a single action
-func (o *SolutionOptions) printActionSummary(w *writer.Writer, act *action.Action, indent string) {
-	if act == nil {
-		return
-	}
-
-	provider := act.Provider
-	if provider == "" {
-		provider = "unknown"
-	}
-
-	w.Plainlnf("%s%s (%s)", indent, act.Name, provider)
-
-	// Show dependencies if any
 	if len(act.DependsOn) > 0 {
 		w.Plainlnf("%s    depends on: %s", indent, strings.Join(act.DependsOn, ", "))
 	}
-
-	// Show condition if set
-	if act.When != nil {
+	if act.Conditional {
 		w.Plainlnf("%s    conditional: yes", indent)
 	}
-
-	// Show retry if configured
-	if act.Retry != nil {
+	if act.HasRetry {
 		w.Plainlnf("%s    retry: enabled", indent)
 	}
-
-	// Show forEach if configured
-	if act.ForEach != nil {
+	if act.HasForEach {
 		w.Plainlnf("%s    forEach: enabled", indent)
 	}
 }
