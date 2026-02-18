@@ -118,6 +118,7 @@ Complete solutions demonstrating real-world use cases.
 | [bad-solution-yaml/](solutions/bad-solution-yaml/) | Invalid solution demonstrating error handling for conflicting ValueRef keys |
 | [tested-solution/](solutions/tested-solution/) | Functional testing features: assertions, inheritance, tags, watch mode |
 | [scaffold-demo/](solutions/scaffold-demo/) | Test scaffolding with `scafctl test init` — generates starter test suites |
+| [github-auth/](solutions/github-auth/) | GitHub authentication — identity, API calls, and status checks |
 
 ---
 

@@ -25,10 +25,6 @@ func CommandLogout(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comm
 			This removes the stored refresh token, clears any cached access tokens,
 			and removes metadata.
 
-			Supported handlers:
-			- entra: Microsoft Entra ID
-			- github: GitHub
-
 			Examples:
 			  # Logout from Entra ID
 			  scafctl auth logout entra
@@ -43,9 +39,8 @@ func CommandLogout(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comm
 			w := writer.MustFromContext(ctx)
 			handlerName := args[0]
 
-			// Validate handler name
-			if !IsSupportedHandler(handlerName) {
-				err := fmt.Errorf("unknown auth handler: %s (supported: %v)", handlerName, SupportedHandlers())
+			// Validate handler name against registry
+			if err := validateHandlerName(ctx, handlerName); err != nil {
 				w.Errorf("%v", err)
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}

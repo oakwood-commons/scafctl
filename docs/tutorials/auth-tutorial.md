@@ -5,21 +5,24 @@ weight: 40
 
 # Authentication Tutorial
 
-This tutorial walks you through setting up and using authentication in scafctl. You'll learn how to authenticate with Microsoft Entra ID, manage credentials, and use authenticated HTTP requests in your solutions.
+This tutorial walks you through setting up and using authentication in scafctl. You'll learn how to authenticate with Microsoft Entra ID and GitHub, manage credentials, and use authenticated HTTP requests in your solutions.
 
 ## Prerequisites
 
 - scafctl installed and available in your PATH
-- Access to a Microsoft Entra ID tenant
+- For Entra: Access to a Microsoft Entra ID tenant
+- For GitHub: A GitHub account (or GitHub Enterprise Server instance)
 - A web browser for completing the device code flow
 
 ## Table of Contents
 
 1. [Understanding Auth in scafctl](#understanding-auth-in-scafctl)
 2. [Logging In](#logging-in)
-   - [Device Code Flow](#example-output)
-   - [Service Principal](#service-principal-authentication-cicd)
-   - [Workload Identity](#workload-identity-authentication-kubernetes)
+   - [Entra Device Code Flow](#example-output)
+   - [Entra Service Principal](#service-principal-authentication-cicd)
+   - [Entra Workload Identity](#workload-identity-authentication-kubernetes)
+   - [GitHub Device Code Flow](#github-device-code-flow)
+   - [GitHub PAT Flow](#github-pat-authentication-cicd)
 3. [Checking Auth Status](#checking-auth-status)
 4. [Using Auth in HTTP Providers](#using-auth-in-http-providers)
 5. [Getting Tokens for Debugging](#getting-tokens-for-debugging)
@@ -45,6 +48,17 @@ scafctl currently supports the following auth handlers:
 | Handler | Description | Flows |
 |---------|-------------|-------|
 | `entra` | Microsoft Entra ID (Azure AD) | Device Code, Service Principal, Workload Identity |
+| `github` | GitHub (github.com and GHES) | Device Code, PAT (Personal Access Token) |
+
+You can always discover registered handlers and their capabilities at runtime:
+
+```bash
+# List all handlers with flows and capabilities
+scafctl auth list
+
+# Output as JSON for scripting
+scafctl auth list -o json
+```
 
 ---
 
@@ -428,6 +442,115 @@ curl -s "$(kubectl get --raw /.well-known/openid-configuration | jq -r '.jwks_ur
 
 ---
 
+## GitHub Device Code Flow
+
+To authenticate with GitHub, use the `auth login` command:
+
+```bash
+scafctl auth login github
+```
+
+This initiates a device code flow:
+
+1. scafctl displays a code and URL
+2. Open the URL in your browser
+3. Enter the code when prompted
+4. Authorize the scafctl OAuth App
+5. scafctl stores your credentials securely
+
+### Example Output
+
+```
+To sign in, use a web browser to open the page:
+  https://github.com/login/device
+
+Enter the code: ABCD-1234
+
+Waiting for authentication...
+
+✓ Authentication successful!
+  Name:     The Octocat
+  Username: octocat
+  Email:    octocat@github.com
+  Flow:     Device Code
+```
+
+### GitHub Enterprise Server
+
+To authenticate with a GitHub Enterprise Server instance:
+
+```bash
+scafctl auth login github --hostname github.example.com
+```
+
+This adjusts all OAuth and API endpoints to use your GHES instance.
+
+### Custom Client ID
+
+By default, scafctl uses its own OAuth App client ID (`Ov23li6xn492GhPmt4YG`). If your organization requires a custom OAuth App:
+
+```bash
+scafctl auth login github --client-id your-custom-client-id
+```
+
+### Requesting Specific Scopes
+
+By default, login requests `gist`, `read:org`, `repo`, and `workflow` scopes (matching the `gh` CLI). To request different scopes:
+
+```bash
+# Login with additional scopes
+scafctl auth login github --scope repo --scope read:org --scope write:packages
+
+# Or comma-separated
+scafctl auth login github --scope "repo,read:org,write:packages"
+```
+
+> **Important:** GitHub scopes are fixed at login time. Unlike Entra ID, GitHub's
+> OAuth token refresh does not support changing scopes per-request. The `--scope`
+> flag on `scafctl auth token github` is not supported. If you need different
+> scopes, you must log out and log in again with the desired scopes.
+
+### Setting a Timeout
+
+The device code flow has a 5-minute default timeout. To extend it:
+
+```bash
+scafctl auth login github --timeout 10m
+```
+
+---
+
+## GitHub PAT Authentication (CI/CD)
+
+For non-interactive scenarios like CI/CD pipelines, use a Personal Access Token:
+
+```bash
+# Set token in environment (GITHUB_TOKEN takes precedence)
+export GITHUB_TOKEN="ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# Login with PAT (auto-detected from env vars)
+scafctl auth login github
+
+# Or explicitly specify the flow
+scafctl auth login github --flow pat
+```
+
+**Environment Variables:**
+
+| Variable | Description | Priority |
+|----------|-------------|----------|
+| `GITHUB_TOKEN` | GitHub personal access token or Actions token | 1 (highest) |
+| `GH_TOKEN` | GitHub personal access token (gh CLI convention) | 2 |
+| `GH_HOST` | GitHub hostname for Enterprise Server | — |
+
+**Notes:**
+- In GitHub Actions, `GITHUB_TOKEN` is automatically injected
+- When either token env var is set, scafctl automatically uses the PAT flow
+- PATs don't have a defined expiry, so status shows as authenticated until the token is revoked
+- The PAT identity type shows as `service-principal` since it acts like a non-interactive credential
+
+---
+
 ## Checking Auth Status
 
 To see your current authentication status:
@@ -438,6 +561,9 @@ scafctl auth status
 
 # Show status for a specific handler
 scafctl auth status entra
+
+# Show GitHub auth status
+scafctl auth status github
 
 # Output as JSON
 scafctl auth status -o json
@@ -457,11 +583,24 @@ Handler   Status         Identity                          IdentityType        T
 entra     Authenticated  Service Principal (12345678...)   service-principal   tenant-id    12345678-1234-...
 ```
 
+**GitHub Device Code Authentication:**
+```
+Handler   Status         Identity   Username   Hostname      Scopes
+github    Authenticated  octocat    octocat    github.com    gist, read:org, repo, workflow
+```
+
+**GitHub PAT Authentication:**
+```
+Handler   Status         Identity   Username   IdentityType        Scopes
+github    Authenticated  octocat    octocat    service-principal   gist, read:org, repo, workflow
+```
+
 When not authenticated:
 
 ```
 Handler   Status            Identity   Tenant   Expires
 entra     Not Authenticated -          -        -
+github    Not Authenticated -          -        -
 ```
 
 ---
@@ -576,6 +715,51 @@ spec:
               scope: "https://vault.azure.net/.default"
 ```
 
+### GitHub API Example
+
+Use the GitHub auth handler to authenticate API requests. Note that `scope` is not
+needed for GitHub — scopes are fixed at login time:
+
+```yaml
+spec:
+  resolvers:
+    repos:
+      type: object
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: "https://api.github.com/user/repos?per_page=10&sort=updated"
+              method: GET
+              authProvider: github
+```
+
+Run it (requires prior authentication):
+
+```bash
+# Login with GitHub
+scafctl auth login github
+
+# Run the resolver
+scafctl run resolver -f github-repos.yaml -o json --hide-execution
+```
+
+### GitHub Enterprise Server API Example
+
+```yaml
+spec:
+  resolvers:
+    ghesRepos:
+      type: object
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: "https://github.example.com/api/v3/user/repos"
+              method: GET
+              authProvider: github
+```
+
 ---
 
 ## Getting Tokens for Debugging
@@ -583,9 +767,17 @@ spec:
 The `auth token` command retrieves a valid access token for debugging:
 
 ```bash
-# Get a token for Microsoft Graph
+# Get a token for Microsoft Graph (Entra supports per-request scopes)
 scafctl auth token entra --scope "https://graph.microsoft.com/.default"
+
+# Get a GitHub token (uses scopes from login; --scope is not supported)
+scafctl auth token github
 ```
+
+> **Note:** The `--scope` flag is only supported on `auth token` for handlers
+> with the `scopes-on-token-request` capability (e.g., Entra ID). GitHub scopes
+> are fixed at login time — use `scafctl auth login github --scope <scope>` to
+> change them.
 
 ### Example Output
 
@@ -609,14 +801,27 @@ Access tokens are cached to disk (encrypted) and reused if they have sufficient 
 scafctl auth token entra --scope "https://graph.microsoft.com/.default" --min-valid-for 5m
 ```
 
+### Force Refresh
+
+If you need a fresh token regardless of cache state (e.g., after permission changes), use `--force-refresh`:
+
+```bash
+# Force acquiring a new token, bypassing the cache
+scafctl auth token entra --scope "https://graph.microsoft.com/.default" --force-refresh
+```
+
 ### Using the Token Directly
 
 You can use the token in other tools:
 
 ```bash
-# Use with curl
+# Use with curl (Entra / Microsoft Graph)
 TOKEN=$(scafctl auth token entra --scope "https://graph.microsoft.com/.default" -o json | jq -r '.accessToken')
 curl -H "Authorization: Bearer $TOKEN" https://graph.microsoft.com/v1.0/me
+
+# Use with curl (GitHub API)
+TOKEN=$(scafctl auth token github -o json | jq -r '.accessToken')
+curl -H "Authorization: Bearer $TOKEN" https://api.github.com/user/repos
 
 # Use with httpie
 scafctl auth token entra --scope "https://graph.microsoft.com/.default" -o json | \
@@ -670,12 +875,16 @@ If you need to use your own Azure application registration:
 To clear stored credentials:
 
 ```bash
+# Logout from Entra ID
 scafctl auth logout entra
+
+# Logout from GitHub
+scafctl auth logout github
 ```
 
 This removes:
 
-- The stored refresh token
+- The stored refresh token (or access token for GitHub)
 - All cached access tokens
 - Token metadata
 
@@ -698,6 +907,14 @@ not authenticated: please run 'scafctl auth login entra'
 ```
 
 Solution: Run `scafctl auth login entra` to authenticate.
+
+For GitHub:
+
+```
+not authenticated: please run 'scafctl auth login github'
+```
+
+Solution: Run `scafctl auth login github` or set `GITHUB_TOKEN` environment variable.
 
 ### Token Expired
 
@@ -782,9 +999,39 @@ scafctl --log-level -1 run solution -f mysolution.yaml
 
 scafctl uses your system's secret store (Keychain on macOS, Windows Credential Manager, or Secret Service on Linux). If you're having issues:
 
-- **macOS**: Check Keychain Access for `scafctl.auth.entra.*` entries
-- **Windows**: Check Credential Manager for `scafctl.auth.entra.*` entries
+- **macOS**: Check Keychain Access for `scafctl.auth.entra.*` or `scafctl.auth.github.*` entries
+- **Windows**: Check Credential Manager for `scafctl.auth.entra.*` or `scafctl.auth.github.*` entries
 - **Linux**: Ensure `gnome-keyring` or `kwallet` is running
+
+### GitHub: "Bad credentials" Error
+
+If you see a 401 error with "Bad credentials" when using GitHub auth:
+
+1. Your PAT may have expired or been revoked
+2. Generate a new PAT at https://github.com/settings/tokens
+3. Set the new token: `export GITHUB_TOKEN="ghp_..."`
+4. Re-login: `scafctl auth login github`
+
+### GitHub: Insufficient Scopes
+
+If you get 403 (Forbidden) errors on GitHub API calls:
+
+1. Check what scopes your token has: `scafctl auth status github`
+2. GitHub scopes are fixed at login time and cannot be changed per-request. Login again with the required scopes:
+   ```bash
+   scafctl auth logout github
+   scafctl auth login github --scope repo --scope read:org
+   ```
+3. For PATs, ensure the token was created with sufficient scopes
+
+### GitHub Enterprise Server: Connection Issues
+
+If you can't connect to your GHES instance:
+
+1. Verify the hostname is correct: `scafctl auth status github`
+2. Ensure the GHES instance has the device flow enabled
+3. Check network connectivity to the GHES instance
+4. Try with explicit hostname: `scafctl auth login github --hostname github.example.com`
 
 ---
 

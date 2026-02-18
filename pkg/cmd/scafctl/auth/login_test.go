@@ -39,7 +39,6 @@ func TestCommandLogin_UnknownHandler(t *testing.T) {
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown auth handler")
-	assert.Contains(t, err.Error(), "entra")
 }
 
 func TestCommandLogin_MissingHandler(t *testing.T) {
@@ -59,9 +58,15 @@ func TestCommandLogin_MissingHandler(t *testing.T) {
 func TestCommandLogin_Success(t *testing.T) {
 	ctx, buf := newTestContext(t)
 
-	// Set up mock handler
+	// Set up mock handler with Entra-like capabilities
 	mock := auth.NewMockHandler("entra")
 	mock.DisplayNameValue = "Microsoft Entra ID"
+	mock.CapabilitiesValue = []auth.Capability{
+		auth.CapScopesOnLogin,
+		auth.CapScopesOnTokenRequest,
+		auth.CapTenantID,
+		auth.CapFederatedToken,
+	}
 	mock.SetNotAuthenticated()
 	mock.LoginResult = &auth.Result{
 		Claims: &auth.Claims{
@@ -100,6 +105,12 @@ func TestCommandLogin_AlreadyAuthenticated(t *testing.T) {
 
 	// Set up mock handler as already authenticated
 	mock := auth.NewMockHandler("entra")
+	mock.CapabilitiesValue = []auth.Capability{
+		auth.CapScopesOnLogin,
+		auth.CapScopesOnTokenRequest,
+		auth.CapTenantID,
+		auth.CapFederatedToken,
+	}
 	mock.SetAuthenticated(&auth.Claims{
 		Email: "existing@example.com",
 	})
@@ -130,6 +141,12 @@ func TestCommandLogin_WithTenant(t *testing.T) {
 	ctx, buf := newTestContext(t)
 
 	mock := auth.NewMockHandler("entra")
+	mock.CapabilitiesValue = []auth.Capability{
+		auth.CapScopesOnLogin,
+		auth.CapScopesOnTokenRequest,
+		auth.CapTenantID,
+		auth.CapFederatedToken,
+	}
 	mock.SetNotAuthenticated()
 	mock.LoginResult = &auth.Result{
 		Claims: &auth.Claims{
@@ -159,6 +176,12 @@ func TestCommandLogin_Failure(t *testing.T) {
 	ctx, buf := newTestContext(t)
 
 	mock := auth.NewMockHandler("entra")
+	mock.CapabilitiesValue = []auth.Capability{
+		auth.CapScopesOnLogin,
+		auth.CapScopesOnTokenRequest,
+		auth.CapTenantID,
+		auth.CapFederatedToken,
+	}
 	mock.SetNotAuthenticated()
 	mock.LoginErr = errors.New("network error")
 
@@ -181,6 +204,12 @@ func TestCommandLogin_DeviceCodeCallback(t *testing.T) {
 	ctx, buf := newTestContext(t)
 
 	mock := auth.NewMockHandler("entra")
+	mock.CapabilitiesValue = []auth.Capability{
+		auth.CapScopesOnLogin,
+		auth.CapScopesOnTokenRequest,
+		auth.CapTenantID,
+		auth.CapFederatedToken,
+	}
 	mock.SetNotAuthenticated()
 
 	// Capture the callback

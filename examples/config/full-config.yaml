@@ -240,6 +240,37 @@ action:
   maxConcurrency: 0
 
 # =============================================================================
+# Auth - Authentication handler configuration
+# =============================================================================
+auth:
+  # --- GitHub Auth Handler ---
+  github:
+    # GitHub hostname (default: github.com)
+    # Set to your GitHub Enterprise Server hostname for GHES
+    # Can also be set via GH_HOST environment variable
+    # Default: "github.com"
+    hostname: "github.com"
+
+    # OAuth App client ID
+    # Override the built-in default if you want to use your own OAuth App
+    # Default: "Ov23li6xn492GhPmt4YG" (built-in scafctl OAuth App)
+    # clientId: "your-custom-client-id"
+
+    # Default OAuth scopes requested during login
+    # Users can add more scopes at login time with --scope flags
+    # Default: ["gist", "read:org", "repo", "workflow"]
+    defaultScopes:
+      - gist
+      - read:org
+      - repo
+      - workflow
+
+  # --- Entra (Azure AD) Auth Handler ---
+  # entra:
+  #   tenantId: "your-tenant-id"
+  #   clientId: "your-client-id"
+
+# =============================================================================
 # Catalogs - Registered solution catalogs
 # =============================================================================
 # Catalogs are sources for solutions, resolvers, and actions.

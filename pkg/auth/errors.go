@@ -10,17 +10,18 @@ import (
 
 // Sentinel errors for the auth package.
 var (
-	ErrNotAuthenticated     = errors.New("not authenticated: please run 'scafctl auth login entra'")
-	ErrAuthenticationFailed = errors.New("authentication failed")
-	ErrTokenExpired         = errors.New("credentials expired: please run 'scafctl auth login entra'")
-	ErrConsentRequired      = errors.New("consent required: please login with the required scope, e.g. 'scafctl auth login entra --scope <scope>'")
-	ErrInvalidScope         = errors.New("invalid scope: scope cannot be empty")
-	ErrHandlerNotFound      = errors.New("auth handler not found")
-	ErrFlowNotSupported     = errors.New("authentication flow not supported")
-	ErrUserCancelled        = errors.New("authentication cancelled by user")
-	ErrTimeout              = errors.New("authentication timed out")
-	ErrAlreadyAuthenticated = errors.New("already authenticated")
-	ErrGrantInvalid         = errors.New("invalid grant: the refresh token is invalid or has been revoked, please re-authenticate with 'scafctl auth login entra'")
+	ErrNotAuthenticated       = errors.New("not authenticated: please run 'scafctl auth login entra'")
+	ErrAuthenticationFailed   = errors.New("authentication failed")
+	ErrTokenExpired           = errors.New("credentials expired: please run 'scafctl auth login entra'")
+	ErrConsentRequired        = errors.New("consent required: please login with the required scope, e.g. 'scafctl auth login entra --scope <scope>'")
+	ErrInvalidScope           = errors.New("invalid scope: scope cannot be empty")
+	ErrHandlerNotFound        = errors.New("auth handler not found")
+	ErrFlowNotSupported       = errors.New("authentication flow not supported")
+	ErrUserCancelled          = errors.New("authentication cancelled by user")
+	ErrTimeout                = errors.New("authentication timed out")
+	ErrAlreadyAuthenticated   = errors.New("already authenticated")
+	ErrGrantInvalid           = errors.New("invalid grant: the refresh token is invalid or has been revoked, please re-authenticate with 'scafctl auth login entra'")
+	ErrCapabilityNotSupported = errors.New("capability not supported by this auth handler")
 )
 
 // Error wraps authentication errors with additional context.
@@ -76,4 +77,9 @@ func IsConsentRequired(err error) bool {
 // IsUserCancelled returns true if the error indicates the user cancelled.
 func IsUserCancelled(err error) bool {
 	return errors.Is(err, ErrUserCancelled)
+}
+
+// IsCapabilityNotSupported returns true if the error indicates a capability is not supported.
+func IsCapabilityNotSupported(err error) bool {
+	return errors.Is(err, ErrCapabilityNotSupported)
 }

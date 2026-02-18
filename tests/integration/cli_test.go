@@ -1170,9 +1170,40 @@ func TestIntegration_AuthHelp(t *testing.T) {
 	stdout, _, exitCode := runScafctl(t, "auth", "--help")
 
 	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "list")
 	assert.Contains(t, stdout, "login")
 	assert.Contains(t, stdout, "logout")
 	assert.Contains(t, stdout, "status")
+}
+
+func TestIntegration_AuthList(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "auth", "list")
+
+	assert.Equal(t, 0, exitCode)
+	// Should show the built-in handlers
+	assert.Contains(t, stdout, "entra")
+	assert.Contains(t, stdout, "github")
+}
+
+func TestIntegration_AuthListJSON(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "auth", "list", "-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, `"name"`)
+	assert.Contains(t, stdout, `"flows"`)
+	assert.Contains(t, stdout, `"capabilities"`)
+}
+
+func TestIntegration_AuthTokenHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "auth", "token", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "--scope")
+	assert.Contains(t, stdout, "--min-valid-for")
+	assert.Contains(t, stdout, "--force-refresh")
 }
 
 // ============================================================================

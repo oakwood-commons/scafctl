@@ -15,6 +15,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// newEntraMock creates a mock handler with Entra-like capabilities (supports per-request scopes).
+func newEntraMock() *auth.MockHandler {
+	mock := auth.NewMockHandler("entra")
+	mock.CapabilitiesValue = []auth.Capability{
+		auth.CapScopesOnLogin,
+		auth.CapScopesOnTokenRequest,
+		auth.CapTenantID,
+		auth.CapFederatedToken,
+	}
+	return mock
+}
+
+// newGitHubMock creates a mock handler with GitHub-like capabilities (no per-request scopes).
+func newGitHubMock() *auth.MockHandler {
+	mock := auth.NewMockHandler("github")
+	mock.CapabilitiesValue = []auth.Capability{
+		auth.CapScopesOnLogin,
+		auth.CapHostname,
+	}
+	return mock
+}
+
 func TestCommandToken_UnknownHandler(t *testing.T) {
 	ctx, _ := newTestContext(t)
 	cliParams := settings.NewCliParams()
@@ -43,8 +65,12 @@ func TestCommandToken_MissingHandler(t *testing.T) {
 	assert.Contains(t, err.Error(), "accepts 1 arg(s)")
 }
 
-func TestCommandToken_MissingScope(t *testing.T) {
+func TestCommandToken_MissingScopeForEntra(t *testing.T) {
 	ctx, _ := newTestContext(t)
+
+	mock := newEntraMock()
+	ctx = withTestHandler(ctx, mock)
+
 	cliParams := settings.NewCliParams()
 	ioStreams := terminal.NewIOStreams(nil, nil, nil, false)
 
@@ -55,12 +81,63 @@ func TestCommandToken_MissingScope(t *testing.T) {
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "scope")
+	assert.Contains(t, err.Error(), "required")
+}
+
+func TestCommandToken_ScopeRejectedForGitHub(t *testing.T) {
+	ctx, _ := newTestContext(t)
+
+	mock := newGitHubMock()
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, nil, nil, false)
+
+	cmd := CommandToken(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"github", "--scope", "repo"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not support per-request scopes")
+	assert.Contains(t, err.Error(), "scafctl auth login")
+}
+
+func TestCommandToken_GitHubSuccessWithoutScope(t *testing.T) {
+	ctx, buf := newTestContext(t)
+
+	mock := newGitHubMock()
+	mock.SetToken(&auth.Token{
+		AccessToken: "gho_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(time.Hour),
+		Scope:       "repo read:user",
+	})
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandToken(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"github"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+
+	// Verify GetToken was called with empty scope
+	require.Len(t, mock.GetTokenCalls, 1)
+	assert.Equal(t, "", mock.GetTokenCalls[0].Scope)
+
+	output := buf.String()
+	assert.Contains(t, output, "Handler:")
+	assert.Contains(t, output, "github")
 }
 
 func TestCommandToken_Success(t *testing.T) {
 	ctx, buf := newTestContext(t)
 
-	mock := auth.NewMockHandler("entra")
+	mock := newEntraMock()
 	mock.SetToken(&auth.Token{
 		AccessToken: "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsIng1dCI6Ik1uQ19WWmNBVGZNNXBP",
 		TokenType:   "Bearer",
@@ -98,7 +175,7 @@ func TestCommandToken_Success(t *testing.T) {
 func TestCommandToken_JSONOutput(t *testing.T) {
 	ctx, buf := newTestContext(t)
 
-	mock := auth.NewMockHandler("entra")
+	mock := newEntraMock()
 	mock.SetToken(&auth.Token{
 		AccessToken: "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsIng1dCI6Ik1uQ19WWmNBVGZNNXBP",
 		TokenType:   "Bearer",
@@ -127,7 +204,7 @@ func TestCommandToken_JSONOutput(t *testing.T) {
 func TestCommandToken_WithMinValidFor(t *testing.T) {
 	ctx, buf := newTestContext(t)
 
-	mock := auth.NewMockHandler("entra")
+	mock := newEntraMock()
 	mock.SetToken(&auth.Token{
 		AccessToken: "test-token",
 		TokenType:   "Bearer",
@@ -152,10 +229,38 @@ func TestCommandToken_WithMinValidFor(t *testing.T) {
 	assert.Equal(t, 5*time.Minute, mock.GetTokenCalls[0].MinValidFor)
 }
 
+func TestCommandToken_ForceRefresh(t *testing.T) {
+	ctx, buf := newTestContext(t)
+
+	mock := newEntraMock()
+	mock.SetToken(&auth.Token{
+		AccessToken: "fresh-token-value-that-is-long-enough",
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(time.Hour),
+		Scope:       "test-scope",
+	})
+
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandToken(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"entra", "--scope", "test-scope", "--force-refresh"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+
+	// Verify GetToken was called with ForceRefresh=true
+	require.Len(t, mock.GetTokenCalls, 1)
+	assert.True(t, mock.GetTokenCalls[0].ForceRefresh)
+}
+
 func TestCommandToken_NotAuthenticated(t *testing.T) {
 	ctx, buf := newTestContext(t)
 
-	mock := auth.NewMockHandler("entra")
+	mock := newEntraMock()
 	mock.SetTokenError(auth.ErrNotAuthenticated)
 
 	ctx = withTestHandler(ctx, mock)
@@ -175,7 +280,7 @@ func TestCommandToken_NotAuthenticated(t *testing.T) {
 func TestCommandToken_TokenError(t *testing.T) {
 	ctx, buf := newTestContext(t)
 
-	mock := auth.NewMockHandler("entra")
+	mock := newEntraMock()
 	mock.SetTokenError(errors.New("token refresh failed"))
 
 	ctx = withTestHandler(ctx, mock)
@@ -196,7 +301,7 @@ func TestCommandToken_TokenError(t *testing.T) {
 func TestCommandToken_ShortToken(t *testing.T) {
 	ctx, buf := newTestContext(t)
 
-	mock := auth.NewMockHandler("entra")
+	mock := newEntraMock()
 	mock.SetToken(&auth.Token{
 		AccessToken: "short", // Less than 20 chars
 		TokenType:   "Bearer",

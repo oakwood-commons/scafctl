@@ -1,7 +1,7 @@
 # Identity Provider Examples
 #
 # Prerequisites:
-#   - Run `scafctl auth login entra` to authenticate first
+#   - Run `scafctl auth login entra` or `scafctl auth login github` to authenticate first
 #
 # Run: scafctl run resolver -f identity.yaml
 
@@ -44,6 +44,17 @@ spec:
             inputs:
               operation: status
               handler: entra
+
+    # Example 3b: Get status from GitHub handler
+    github_status:
+      description: Get status from GitHub handler specifically
+      type: any
+      resolve:
+        with:
+          - provider: identity
+            inputs:
+              operation: status
+              handler: github
 
     # Example 4: List all available auth handlers
     available_handlers:
