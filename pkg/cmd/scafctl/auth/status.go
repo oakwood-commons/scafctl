@@ -39,6 +39,9 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 			  # Show GitHub auth status
 			  scafctl auth status github
 
+			  # Show GCP auth status
+			  scafctl auth status gcp
+
 			  # Output as JSON
 			  scafctl auth status -o json
 		`),

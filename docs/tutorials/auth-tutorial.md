@@ -5,13 +5,14 @@ weight: 40
 
 # Authentication Tutorial
 
-This tutorial walks you through setting up and using authentication in scafctl. You'll learn how to authenticate with Microsoft Entra ID and GitHub, manage credentials, and use authenticated HTTP requests in your solutions.
+This tutorial walks you through setting up and using authentication in scafctl. You'll learn how to authenticate with Microsoft Entra ID, GitHub, and Google Cloud Platform, manage credentials, and use authenticated HTTP requests in your solutions.
 
 ## Prerequisites
 
 - scafctl installed and available in your PATH
 - For Entra: Access to a Microsoft Entra ID tenant
 - For GitHub: A GitHub account (or GitHub Enterprise Server instance)
+- For GCP: A Google Cloud account
 - A web browser for completing the device code flow
 
 ## Table of Contents
@@ -23,6 +24,10 @@ This tutorial walks you through setting up and using authentication in scafctl. 
    - [Entra Workload Identity](#workload-identity-authentication-kubernetes)
    - [GitHub Device Code Flow](#github-device-code-flow)
    - [GitHub PAT Flow](#github-pat-authentication-cicd)
+   - [GCP Interactive Login](#gcp-interactive-login-browser-oauth)
+   - [GCP Service Account Key](#gcp-service-account-key-authentication-cicd)
+   - [GCP Workload Identity Federation](#gcp-workload-identity-federation)
+   - [GCP Metadata Server](#gcp-metadata-server-gcegkecloud-run)
 3. [Checking Auth Status](#checking-auth-status)
 4. [Using Auth in HTTP Providers](#using-auth-in-http-providers)
 5. [Getting Tokens for Debugging](#getting-tokens-for-debugging)
@@ -49,6 +54,7 @@ scafctl currently supports the following auth handlers:
 |---------|-------------|-------|
 | `entra` | Microsoft Entra ID (Azure AD) | Device Code, Service Principal, Workload Identity |
 | `github` | GitHub (github.com and GHES) | Device Code, PAT (Personal Access Token) |
+| `gcp` | Google Cloud Platform | Interactive (Browser OAuth), Service Account Key, Workload Identity Federation, Metadata Server |
 
 You can always discover registered handlers and their capabilities at runtime:
 
@@ -551,6 +557,68 @@ scafctl auth login github --flow pat
 
 ---
 
+## GCP Interactive Login (Browser OAuth)
+
+For local development, use the interactive browser OAuth flow:
+
+```bash
+# Login with GCP using browser OAuth (default)
+scafctl auth login gcp
+
+# Login with specific scopes
+scafctl auth login gcp --scope https://www.googleapis.com/auth/bigquery
+
+# Login with service account impersonation
+scafctl auth login gcp --impersonate-service-account my-sa@my-project.iam.gserviceaccount.com
+```
+
+This will:
+1. Start a local HTTP server
+2. Open your browser to Google's OAuth consent page
+3. Exchange the authorization code for refresh + access tokens
+4. Store the refresh token in your system's secret store
+
+## GCP Service Account Key Authentication (CI/CD)
+
+For non-interactive scenarios, use a service account key file:
+
+```bash
+# Point to your service account key JSON file
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/sa-key.json"
+
+# Login with service account (auto-detected from env var)
+scafctl auth login gcp
+
+# Or choose the flow explicitly
+scafctl auth login gcp --flow service-principal
+```
+
+## GCP Workload Identity Federation
+
+For Kubernetes and other cloud platforms:
+
+```bash
+# Point to external account JSON config
+export GOOGLE_EXTERNAL_ACCOUNT="/path/to/external-account.json"
+
+# Login (auto-detected)
+scafctl auth login gcp
+
+# Or explicitly
+scafctl auth login gcp --flow workload-identity
+```
+
+## GCP Metadata Server (GCE/GKE/Cloud Run)
+
+On Google Compute Engine, GKE, and Cloud Run:
+
+```bash
+# Login via metadata server (auto-detected on GCE)
+scafctl auth login gcp --flow metadata
+```
+
+---
+
 ## Checking Auth Status
 
 To see your current authentication status:
@@ -601,6 +669,7 @@ When not authenticated:
 Handler   Status            Identity   Tenant   Expires
 entra     Not Authenticated -          -        -
 github    Not Authenticated -          -        -
+gcp       Not Authenticated -          -        -
 ```
 
 ---

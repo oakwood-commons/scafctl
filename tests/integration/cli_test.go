@@ -1184,6 +1184,7 @@ func TestIntegration_AuthList(t *testing.T) {
 	// Should show the built-in handlers
 	assert.Contains(t, stdout, "entra")
 	assert.Contains(t, stdout, "github")
+	assert.Contains(t, stdout, "gcp")
 }
 
 func TestIntegration_AuthListJSON(t *testing.T) {
@@ -1204,6 +1205,46 @@ func TestIntegration_AuthTokenHelp(t *testing.T) {
 	assert.Contains(t, stdout, "--scope")
 	assert.Contains(t, stdout, "--min-valid-for")
 	assert.Contains(t, stdout, "--force-refresh")
+}
+
+func TestIntegration_AuthLoginGCPHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "auth", "login", "gcp", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "gcp")
+	assert.Contains(t, stdout, "--flow")
+	assert.Contains(t, stdout, "--impersonate-service-account")
+}
+
+func TestIntegration_AuthLoginGCPInvalidFlow(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t, "auth", "login", "gcp", "--flow", "invalid-flow")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "unknown flow")
+	assert.Contains(t, stderr, "gcp")
+}
+
+func TestIntegration_AuthStatusGCP(t *testing.T) {
+	t.Parallel()
+	_, _, exitCode := runScafctl(t, "auth", "status", "gcp")
+
+	// Should succeed even if not authenticated (shows "not authenticated")
+	assert.Equal(t, 0, exitCode)
+}
+
+func TestIntegration_AuthLogoutGCP(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "auth", "logout", "gcp")
+
+	// Should succeed regardless of authentication state
+	assert.Equal(t, 0, exitCode)
+	// May show "Not currently authenticated" or "Successfully logged out" depending on environment
+	assert.True(t,
+		strings.Contains(stdout, "Not currently authenticated") || strings.Contains(stdout, "Successfully logged out"),
+		"expected logout message, got: %s", stdout,
+	)
 }
 
 // ============================================================================
