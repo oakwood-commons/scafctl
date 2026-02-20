@@ -97,43 +97,44 @@ spec:
                 version: {{.version}}
                 featureCount: {{len .features}}
 
-  testConfig:
-    skipBuiltins: true
+  testing:
+    config:
+      skipBuiltins: true
 
-  tests:
-    _base:
-      description: Base template for go-template provider tests
-      command: [run, resolver]
-      args: ["-o", "json"]
-      tags: [provider, go-template]
-      assertions:
-        - expression: __exitCode == 0
+    cases:
+      _base:
+        description: Base template for go-template provider tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [provider, go-template]
+        assertions:
+          - expression: __exitCode == 0
 
-    simple-substitution:
-      description: Verify simple variable substitution
-      extends: [_base]
-      tags: [smoke]
-      assertions:
-        - expression: __output.simpleTemplate == "App: my-service, Version: 2.1.0"
+      simple-substitution:
+        description: Verify simple variable substitution
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.simpleTemplate == "App: my-service, Version: 2.1.0"
 
-    conditional-true:
-      description: Verify conditional template (true branch)
-      extends: [_base]
-      assertions:
-        - expression: __output.conditionalTemplate == "production-ready"
+      conditional-true:
+        description: Verify conditional template (true branch)
+        extends: [_base]
+        assertions:
+          - expression: __output.conditionalTemplate == "production-ready"
 
-    loop-rendering:
-      description: Verify range loop template
-      extends: [_base]
-      assertions:
-        - expression: __output.loopTemplate.contains("[logging]")
-        - expression: __output.loopTemplate.contains("[metrics]")
-        - expression: __output.loopTemplate.contains("[tracing]")
+      loop-rendering:
+        description: Verify range loop template
+        extends: [_base]
+        assertions:
+          - expression: __output.loopTemplate.contains("[logging]")
+          - expression: __output.loopTemplate.contains("[metrics]")
+          - expression: __output.loopTemplate.contains("[tracing]")
 
-    multiline-rendering:
-      description: Verify multiline template
-      extends: [_base]
-      assertions:
-        - expression: __output.multilineTemplate.contains("name: my-service")
-        - expression: __output.multilineTemplate.contains("version: 2.1.0")
-        - expression: __output.multilineTemplate.contains("featureCount: 3")
+      multiline-rendering:
+        description: Verify multiline template
+        extends: [_base]
+        assertions:
+          - expression: __output.multilineTemplate.contains("name: my-service")
+          - expression: __output.multilineTemplate.contains("version: 2.1.0")
+          - expression: __output.multilineTemplate.contains("featureCount: 3")

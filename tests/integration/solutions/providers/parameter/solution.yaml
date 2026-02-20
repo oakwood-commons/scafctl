@@ -1,0 +1,132 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-parameter-provider
+  version: 1.0.0
+  description: |
+    Functional tests for the parameter provider.
+    Verifies CLI parameter passing via -r flag, type coercion,
+    fallback chains, and various value formats.
+
+spec:
+  resolvers:
+    stringParam:
+      description: String parameter
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: name
+
+    intParam:
+      description: Integer parameter
+      type: int
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: count
+
+    boolParam:
+      description: Boolean parameter
+      type: bool
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: enabled
+
+    jsonParam:
+      description: JSON object parameter
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: config
+
+    csvParam:
+      description: CSV list parameter
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: tags
+
+    paramWithDefault:
+      description: Parameter with static fallback
+      resolve:
+        with:
+          - provider: parameter
+            onError: continue
+            inputs:
+              key: optional
+          - provider: static
+            inputs:
+              value: default-value
+
+    missingParam:
+      description: Missing parameter triggers fallback
+      resolve:
+        with:
+          - provider: parameter
+            onError: continue
+            inputs:
+              key: does-not-exist
+          - provider: static
+            inputs:
+              value: fallback-used
+
+  testing:
+    config:
+      skipBuiltins: true
+
+    cases:
+      _base:
+        description: Base template for parameter provider tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [provider, parameter]
+        assertions:
+          - expression: __exitCode == 0
+
+      string-parameter:
+        description: Verify string parameter passed via -r flag
+        extends: [_base]
+        tags: [smoke]
+        args: ["-o", "json", "-r", "name=hello-world", "-r", "count=10", "-r", "enabled=true", "-r", "config={\"key\":\"val\"}", "-r", "tags=a,b,c"]
+        assertions:
+          - expression: __output.stringParam == "hello-world"
+            message: "String parameter should resolve correctly"
+
+      integer-parameter:
+        description: Verify integer parameter with type coercion
+        extends: [_base]
+        args: ["-o", "json", "-r", "name=x", "-r", "count=42", "-r", "enabled=false", "-r", "config={}", "-r", "tags=a"]
+        assertions:
+          - expression: __output.intParam == 42
+            message: "Integer parameter should be coerced to int"
+
+      boolean-parameter:
+        description: Verify boolean parameter with type coercion
+        extends: [_base]
+        args: ["-o", "json", "-r", "name=x", "-r", "count=1", "-r", "enabled=true", "-r", "config={}", "-r", "tags=a"]
+        assertions:
+          - expression: __output.boolParam == true
+            message: "Boolean parameter should be coerced to bool"
+
+      param-with-default:
+        description: Verify missing parameter falls through to static default
+        extends: [_base]
+        args: ["-o", "json", "-r", "name=x", "-r", "count=1", "-r", "enabled=false", "-r", "config={}", "-r", "tags=a"]
+        assertions:
+          - expression: __output.paramWithDefault == "default-value"
+            message: "Missing optional parameter should use fallback"
+
+      missing-param-fallback:
+        description: Verify completely missing parameter uses fallback
+        extends: [_base]
+        args: ["-o", "json", "-r", "name=x", "-r", "count=1", "-r", "enabled=false", "-r", "config={}", "-r", "tags=a"]
+        assertions:
+          - expression: __output.missingParam == "fallback-used"
+            message: "Non-existent parameter should trigger fallback chain"

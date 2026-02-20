@@ -50,166 +50,167 @@ spec:
           command:
             expr: "'echo Hello from ' + _.environment"
 
-  testConfig:
-    skipBuiltins: true
+  testing:
+    config:
+      skipBuiltins: true
 
-  tests:
+    cases:
     # =========================================================================
     # run resolver -o test
     # =========================================================================
 
-    run-resolver-test-output:
-      description: Verify run resolver -o test emits a valid test YAML block
-      command: [run, resolver]
-      args: ["-o", "test"]
-      tags: [test-generation, smoke]
-      assertions:
-        - expression: __exitCode == 0
-          message: "run resolver -o test should succeed"
-        - contains: "command:"
-          message: "Output should include the command field"
-        - contains: "assertions:"
-          message: "Output should include the assertions field"
-        - contains: "Auto-generated test for: run resolver"
-          message: "Output should contain the auto-generated description"
+      run-resolver-test-output:
+        description: Verify run resolver -o test emits a valid test YAML block
+        command: [run, resolver]
+        args: ["-o", "test"]
+        tags: [test-generation, smoke]
+        assertions:
+          - expression: __exitCode == 0
+            message: "run resolver -o test should succeed"
+          - contains: "command:"
+            message: "Output should include the command field"
+          - contains: "assertions:"
+            message: "Output should include the assertions field"
+          - contains: "Auto-generated test for: run resolver"
+            message: "Output should contain the auto-generated description"
 
-    run-resolver-test-has-snapshot:
-      description: Verify run resolver -o test includes a snapshot reference
-      command: [run, resolver]
-      args: ["-o", "test"]
-      tags: [test-generation]
-      assertions:
-        - expression: __exitCode == 0
-        - contains: "snapshot:"
-          message: "Generated test should reference a snapshot file"
+      run-resolver-test-has-snapshot:
+        description: Verify run resolver -o test includes a snapshot reference
+        command: [run, resolver]
+        args: ["-o", "test"]
+        tags: [test-generation]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: "snapshot:"
+            message: "Generated test should reference a snapshot file"
 
-    run-resolver-test-has-generated-tag:
-      description: Verify the generated test includes the 'generated' tag
-      command: [run, resolver]
-      args: ["-o", "test"]
-      tags: [test-generation]
-      assertions:
-        - expression: __exitCode == 0
-        - contains: "generated"
-          message: "Generated test should be tagged with 'generated'"
+      run-resolver-test-has-generated-tag:
+        description: Verify the generated test includes the 'generated' tag
+        command: [run, resolver]
+        args: ["-o", "test"]
+        tags: [test-generation]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: "generated"
+            message: "Generated test should be tagged with 'generated'"
 
-    run-resolver-test-has-args:
-      description: Verify run resolver -o test includes the args field
-      command: [run, resolver]
-      args: ["-o", "test"]
-      tags: [test-generation]
-      assertions:
-        - expression: __exitCode == 0
-        - contains: "args:"
-          message: "Generated test should include args field"
+      run-resolver-test-has-args:
+        description: Verify run resolver -o test includes the args field
+        command: [run, resolver]
+        args: ["-o", "test"]
+        tags: [test-generation]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: "args:"
+            message: "Generated test should include args field"
 
-    run-resolver-custom-test-name:
-      description: Verify --test-name overrides the auto-derived test name
-      command: [run, resolver]
-      args: ["-o", "test", "--test-name", "my-custom-resolver-test"]
-      tags: [test-generation]
-      assertions:
-        - expression: __exitCode == 0
-        - contains: "my-custom-resolver-test"
-          message: "Custom test name should appear as the YAML key"
+      run-resolver-custom-test-name:
+        description: Verify --test-name overrides the auto-derived test name
+        command: [run, resolver]
+        args: ["-o", "test", "--test-name", "my-custom-resolver-test"]
+        tags: [test-generation]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: "my-custom-resolver-test"
+            message: "Custom test name should appear as the YAML key"
 
     # =========================================================================
     # render solution -o test
     # =========================================================================
 
-    render-solution-test-output:
-      description: Verify render solution -o test emits a valid test YAML block
-      command: [render, solution]
-      args: ["-o", "test"]
-      tags: [test-generation, smoke]
-      assertions:
-        - expression: __exitCode == 0
-          message: "render solution -o test should succeed"
-        - contains: "command:"
-        - contains: "assertions:"
-        - contains: "Auto-generated test for: render solution"
+      render-solution-test-output:
+        description: Verify render solution -o test emits a valid test YAML block
+        command: [render, solution]
+        args: ["-o", "test"]
+        tags: [test-generation, smoke]
+        assertions:
+          - expression: __exitCode == 0
+            message: "render solution -o test should succeed"
+          - contains: "command:"
+          - contains: "assertions:"
+          - contains: "Auto-generated test for: render solution"
 
-    render-solution-test-has-snapshot:
-      description: Verify render solution -o test includes a snapshot reference
-      command: [render, solution]
-      args: ["-o", "test"]
-      tags: [test-generation]
-      assertions:
-        - expression: __exitCode == 0
-        - contains: "snapshot:"
+      render-solution-test-has-snapshot:
+        description: Verify render solution -o test includes a snapshot reference
+        command: [render, solution]
+        args: ["-o", "test"]
+        tags: [test-generation]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: "snapshot:"
 
-    render-solution-custom-test-name:
-      description: Verify --test-name overrides the auto-derived name for render solution
-      command: [render, solution]
-      args: ["-o", "test", "--test-name", "my-custom-render-test"]
-      tags: [test-generation]
-      assertions:
-        - expression: __exitCode == 0
-        - contains: "my-custom-render-test"
-          message: "Custom test name should appear as the YAML key"
+      render-solution-custom-test-name:
+        description: Verify --test-name overrides the auto-derived name for render solution
+        command: [render, solution]
+        args: ["-o", "test", "--test-name", "my-custom-render-test"]
+        tags: [test-generation]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: "my-custom-render-test"
+            message: "Custom test name should appear as the YAML key"
 
     # =========================================================================
     # run solution -o test
     # =========================================================================
 
-    run-solution-test-output:
-      description: Verify run solution -o test emits a valid test YAML block
-      command: [run, solution]
-      args: ["-o", "test"]
-      tags: [test-generation, smoke]
-      assertions:
-        - expression: __exitCode == 0
-          message: "run solution -o test should succeed"
-        - contains: "command:"
-        - contains: "assertions:"
-        - contains: "Auto-generated test for: run solution"
+      run-solution-test-output:
+        description: Verify run solution -o test emits a valid test YAML block
+        command: [run, solution]
+        args: ["-o", "test"]
+        tags: [test-generation, smoke]
+        assertions:
+          - expression: __exitCode == 0
+            message: "run solution -o test should succeed"
+          - contains: "command:"
+          - contains: "assertions:"
+          - contains: "Auto-generated test for: run solution"
 
-    run-solution-test-has-snapshot:
-      description: Verify run solution -o test includes a snapshot reference
-      command: [run, solution]
-      args: ["-o", "test"]
-      tags: [test-generation]
-      assertions:
-        - expression: __exitCode == 0
-        - contains: "snapshot:"
+      run-solution-test-has-snapshot:
+        description: Verify run solution -o test includes a snapshot reference
+        command: [run, solution]
+        args: ["-o", "test"]
+        tags: [test-generation]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: "snapshot:"
 
     # =========================================================================
     # Unsupported commands
     # =========================================================================
 
-    unsupported-command-error:
-      description: Verify commands that do not support -o test emit a helpful error
-      command: [lint]
-      args: ["-o", "test"]
-      tags: [test-generation, negative]
-      expectFailure: true
-      assertions:
-        - expression: __exitCode != 0
-          message: "Unsupported command should fail"
-        - contains: "is not supported"
-          target: stderr
-          message: "Error should explain that -o test is not supported by this command"
+      unsupported-command-error:
+        description: Verify commands that do not support -o test emit a helpful error
+        command: [lint]
+        args: ["-o", "test"]
+        tags: [test-generation, negative]
+        expectFailure: true
+        assertions:
+          - expression: __exitCode != 0
+            message: "Unsupported command should fail"
+          - contains: "is not supported"
+            target: stderr
+            message: "Error should explain that -o test is not supported by this command"
 
     # =========================================================================
     # Generated assertions verify actual output shape
     # =========================================================================
 
-    run-resolver-assertions-reference-output:
-      description: Verify generated assertions reference __output
-      command: [run, resolver]
-      args: ["-o", "test"]
-      tags: [test-generation]
-      assertions:
-        - expression: __exitCode == 0
-        - contains: "__output"
-          message: "Generated assertions should reference __output"
+      run-resolver-assertions-reference-output:
+        description: Verify generated assertions reference __output
+        command: [run, resolver]
+        args: ["-o", "test"]
+        tags: [test-generation]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: "__output"
+            message: "Generated assertions should reference __output"
 
-    run-resolver-assertions-check-keys:
-      description: Verify generated assertions check the top-level key count
-      command: [run, resolver]
-      args: ["-o", "test"]
-      tags: [test-generation]
-      assertions:
-        - expression: __exitCode == 0
-        - regex: 'size\(__output\) =='
-          message: "Generated assertions should include a size(__output) check"
+      run-resolver-assertions-check-keys:
+        description: Verify generated assertions check the top-level key count
+        command: [run, resolver]
+        args: ["-o", "test"]
+        tags: [test-generation]
+        assertions:
+          - expression: __exitCode == 0
+          - regex: 'size\(__output\) =='
+            message: "Generated assertions should include a size(__output) check"

@@ -24,7 +24,7 @@ const (
 	StaticAnalysis DiscoverySource = iota
 	// ExplicitInclude means the file was declared in bundle.include.
 	ExplicitInclude
-	// TestInclude means the file was referenced in spec.tests[*].files.
+	// TestInclude means the file was referenced in spec.testing.cases[*].files.
 	TestInclude
 )
 
@@ -158,27 +158,29 @@ func DiscoverFiles(sol *solution.Solution, bundleRoot string, opts ...DiscoverOp
 		}
 	}
 
-	// Phase 3: Scan test file references from spec.tests[*].files
-	for _, tc := range sol.Spec.Tests {
-		if tc == nil {
-			continue
-		}
-		for _, fileRef := range tc.Files {
-			// Test file references may be globs — expand them
-			if strings.ContainsAny(fileRef, "*?[{") {
-				expanded, err := expandSingleGlob(bundleRoot, fileRef, cfg)
-				if err != nil {
-					// Log warning but don't fail — globs are validated at test time
-					continue
-				}
-				for _, relPath := range expanded {
-					if err := addFileEntry(result, seen, cfg, bundleRoot, relPath, TestInclude); err != nil {
+	// Phase 3: Scan test file references from spec.testing.cases[*].files
+	if sol.Spec.Testing != nil {
+		for _, tc := range sol.Spec.Testing.Cases {
+			if tc == nil {
+				continue
+			}
+			for _, fileRef := range tc.Files {
+				// Test file references may be globs — expand them
+				if strings.ContainsAny(fileRef, "*?[{") {
+					expanded, err := expandSingleGlob(bundleRoot, fileRef, cfg)
+					if err != nil {
+						// Log warning but don't fail — globs are validated at test time
+						continue
+					}
+					for _, relPath := range expanded {
+						if err := addFileEntry(result, seen, cfg, bundleRoot, relPath, TestInclude); err != nil {
+							continue // skip files that don't exist yet
+						}
+					}
+				} else {
+					if err := addFileEntry(result, seen, cfg, bundleRoot, fileRef, TestInclude); err != nil {
 						continue // skip files that don't exist yet
 					}
-				}
-			} else {
-				if err := addFileEntry(result, seen, cfg, bundleRoot, fileRef, TestInclude); err != nil {
-					continue // skip files that don't exist yet
 				}
 			}
 		}

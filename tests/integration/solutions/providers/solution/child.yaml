@@ -1,0 +1,36 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: child-for-test
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      type: string
+      description: Static greeting from child
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "hello from child"
+    echoParam:
+      type: string
+      description: Echoes the message parameter from parent
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: message
+    computedValue:
+      type: int
+      description: Computed value from parameter
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: number
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "int(__self) * 2"

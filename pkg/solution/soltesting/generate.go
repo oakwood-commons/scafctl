@@ -58,7 +58,7 @@ type GenerateResult struct {
 	// TestName is the (possibly derived) name of the test.
 	TestName string `json:"testName" yaml:"testName"`
 
-	// TestCase is the generated test case, ready to paste into spec.tests.
+	// TestCase is the generated test case, ready to paste into spec.testing.cases.
 	TestCase *TestCase `json:"testCase" yaml:"testCase"`
 
 	// SnapshotPath is the relative (or absolute) path where the snapshot file was
@@ -195,7 +195,7 @@ func DeriveTestName(command, args []string) string {
 }
 
 // GenerateToYAML marshals a GenerateResult to YAML ready for pasting into the
-// spec.tests section of a solution file. The outer key is the test name.
+// spec.testing.cases section of a solution file. The outer key is the test name.
 func GenerateToYAML(result *GenerateResult) ([]byte, error) {
 	wrapper := map[string]*TestCase{
 		result.TestName: result.TestCase,

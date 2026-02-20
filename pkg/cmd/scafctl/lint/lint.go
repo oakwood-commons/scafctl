@@ -600,14 +600,14 @@ func lintTests(sol *solution.Solution, result *Result) {
 
 	// Collect all extends references to detect unused templates.
 	extendsRefs := make(map[string]bool)
-	for _, tc := range sol.Spec.Tests {
+	for _, tc := range sol.Spec.Testing.Cases {
 		for _, ext := range tc.Extends {
 			extendsRefs[ext] = true
 		}
 	}
 
-	for name, tc := range sol.Spec.Tests {
-		location := fmt.Sprintf("tests.%s", name)
+	for name, tc := range sol.Spec.Testing.Cases {
+		location := fmt.Sprintf("testing.cases.%s", name)
 
 		// Rule: invalid-test-name — validate naming pattern.
 		// Use the map key directly rather than tc.Name, which may not be set yet.

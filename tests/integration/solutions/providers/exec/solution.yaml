@@ -106,59 +106,60 @@ spec:
             inputs:
               expression: "has(__self.exitCode) ? __self.exitCode : 0"
 
-  testConfig:
-    skipBuiltins: true
+  testing:
+    config:
+      skipBuiltins: true
 
-  tests:
-    _base:
-      description: Base template for exec provider tests
-      command: [run, resolver]
-      args: ["-o", "json"]
-      tags: [provider, exec]
-      assertions:
-        - expression: __exitCode == 0
+    cases:
+      _base:
+        description: Base template for exec provider tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [provider, exec]
+        assertions:
+          - expression: __exitCode == 0
 
-    simple-echo:
-      description: Verify simple echo command
-      extends: [_base]
-      tags: [smoke]
-      assertions:
-        - expression: __output.echoSimple == "hello-from-exec"
+      simple-echo:
+        description: Verify simple echo command
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.echoSimple == "hello-from-exec"
 
-    echo-with-args:
-      description: Verify echo with args
-      extends: [_base]
-      assertions:
-        - expression: __output.echoWithArgs == "no-newline"
+      echo-with-args:
+        description: Verify echo with args
+        extends: [_base]
+        assertions:
+          - expression: __output.echoWithArgs == "no-newline"
 
-    piped-command:
-      description: Verify piped command execution
-      extends: [_base]
-      assertions:
-        - expression: __output.pipedCommand == "alpha"
-          message: "Sorted first word should be alpha"
+      piped-command:
+        description: Verify piped command execution
+        extends: [_base]
+        assertions:
+          - expression: __output.pipedCommand == "alpha"
+            message: "Sorted first word should be alpha"
 
-    env-passthrough:
-      description: Verify environment variable passthrough to exec
-      extends: [_base]
-      assertions:
-        - expression: __output.envPassthrough == "exec-env-value"
+      env-passthrough:
+        description: Verify environment variable passthrough to exec
+        extends: [_base]
+        assertions:
+          - expression: __output.envPassthrough == "exec-env-value"
 
-    multiline-output:
-      description: Verify multi-line output capture
-      extends: [_base]
-      assertions:
-        - expression: __output.multilineOutput.contains("line1")
-        - expression: __output.multilineOutput.contains("line3")
+      multiline-output:
+        description: Verify multi-line output capture
+        extends: [_base]
+        assertions:
+          - expression: __output.multilineOutput.contains("line1")
+          - expression: __output.multilineOutput.contains("line3")
 
-    stdin-input:
-      description: Verify stdin is passed to command
-      extends: [_base]
-      assertions:
-        - expression: __output.stdinInput == "stdin-content"
+      stdin-input:
+        description: Verify stdin is passed to command
+        extends: [_base]
+        assertions:
+          - expression: __output.stdinInput == "stdin-content"
 
-    exit-code-capture:
-      description: Verify exit code is captured
-      extends: [_base]
-      assertions:
-        - expression: __output.exitCodeCapture == 0
+      exit-code-capture:
+        description: Verify exit code is captured
+        extends: [_base]
+        assertions:
+          - expression: __output.exitCodeCapture == 0

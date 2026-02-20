@@ -18,10 +18,10 @@ import (
 type SolutionTests struct {
 	// SolutionName is the metadata.name from the solution.
 	SolutionName string `json:"solutionName"`
-	// Tests contains the test definitions keyed by test name.
-	Tests map[string]*TestCase `json:"tests"`
-	// TestConfig holds the solution-level test configuration.
-	TestConfig *TestConfig `json:"testConfig,omitempty"`
+	// Cases contains the test definitions keyed by test name.
+	Cases map[string]*TestCase `json:"cases"`
+	// Config holds the solution-level test configuration.
+	Config *TestConfig `json:"config,omitempty"`
 	// FilePath is the absolute path to the solution file.
 	FilePath string `json:"filePath"`
 }
@@ -108,8 +108,7 @@ func DiscoverFromFile(filePath string) (*SolutionTests, error) {
 		} `yaml:"metadata"`
 		Compose []string `yaml:"compose"`
 		Spec    struct {
-			Tests      map[string]*TestCase `yaml:"tests"`
-			TestConfig *TestConfig          `yaml:"testConfig"`
+			Testing *TestSuite `yaml:"testing"`
 		} `yaml:"spec"`
 	}
 
@@ -136,41 +135,46 @@ func DiscoverFromFile(filePath string) (*SolutionTests, error) {
 				}
 				var composePart struct {
 					Spec struct {
-						Tests      map[string]*TestCase `yaml:"tests"`
-						TestConfig *TestConfig          `yaml:"testConfig"`
+						Testing *TestSuite `yaml:"testing"`
 					} `yaml:"spec"`
 				}
 				if unmarshalErr := yaml.Unmarshal(composeData, &composePart); unmarshalErr != nil {
 					return nil, fmt.Errorf("parsing compose file %q: %w", match, unmarshalErr)
 				}
-				// Merge tests from compose file
-				if doc.Spec.Tests == nil {
-					doc.Spec.Tests = make(map[string]*TestCase)
+				// Initialize doc testing if nil
+				if doc.Spec.Testing == nil {
+					doc.Spec.Testing = &TestSuite{}
 				}
-				for name, tc := range composePart.Spec.Tests {
-					if _, exists := doc.Spec.Tests[name]; exists {
-						return nil, fmt.Errorf("compose file %q: duplicate test name %q", match, name)
+				// Merge cases from compose file
+				if composePart.Spec.Testing != nil {
+					if doc.Spec.Testing.Cases == nil {
+						doc.Spec.Testing.Cases = make(map[string]*TestCase)
 					}
-					doc.Spec.Tests[name] = tc
-				}
-				// Merge testConfig from compose file
-				if composePart.Spec.TestConfig != nil {
-					if doc.Spec.TestConfig == nil {
-						doc.Spec.TestConfig = composePart.Spec.TestConfig
-					} else {
-						mergeTestConfig(doc.Spec.TestConfig, composePart.Spec.TestConfig)
+					for name, tc := range composePart.Spec.Testing.Cases {
+						if _, exists := doc.Spec.Testing.Cases[name]; exists {
+							return nil, fmt.Errorf("compose file %q: duplicate test name %q", match, name)
+						}
+						doc.Spec.Testing.Cases[name] = tc
+					}
+					// Merge config from compose file
+					if composePart.Spec.Testing.Config != nil {
+						if doc.Spec.Testing.Config == nil {
+							doc.Spec.Testing.Config = composePart.Spec.Testing.Config
+						} else {
+							mergeTestConfig(doc.Spec.Testing.Config, composePart.Spec.Testing.Config)
+						}
 					}
 				}
 			}
 		}
 	}
 
-	if len(doc.Spec.Tests) == 0 {
+	if doc.Spec.Testing == nil || len(doc.Spec.Testing.Cases) == 0 {
 		return nil, nil
 	}
 
 	// Set names from map keys
-	for name, tc := range doc.Spec.Tests {
+	for name, tc := range doc.Spec.Testing.Cases {
 		tc.Name = name
 	}
 
@@ -181,8 +185,8 @@ func DiscoverFromFile(filePath string) (*SolutionTests, error) {
 
 	return &SolutionTests{
 		SolutionName: doc.Metadata.Name,
-		Tests:        doc.Spec.Tests,
-		TestConfig:   doc.Spec.TestConfig,
+		Cases:        doc.Spec.Testing.Cases,
+		Config:       doc.Spec.Testing.Config,
 		FilePath:     absPath,
 	}, nil
 }
@@ -230,7 +234,7 @@ func FilterTests(solutions []SolutionTests, opts FilterOptions) []SolutionTests 
 		}
 
 		filtered := make(map[string]*TestCase)
-		for name, tc := range st.Tests {
+		for name, tc := range st.Cases {
 			// Exclude templates from execution
 			if tc.IsTemplate() {
 				continue
@@ -250,8 +254,8 @@ func FilterTests(solutions []SolutionTests, opts FilterOptions) []SolutionTests 
 		if len(filtered) > 0 {
 			result = append(result, SolutionTests{
 				SolutionName: st.SolutionName,
-				Tests:        filtered,
-				TestConfig:   st.TestConfig,
+				Cases:        filtered,
+				Config:       st.Config,
 				FilePath:     st.FilePath,
 			})
 		}
@@ -268,8 +272,8 @@ func FilterTests(solutions []SolutionTests, opts FilterOptions) []SolutionTests 
 // SortedTestNames returns the test names from a SolutionTests in sorted order.
 // Builtin tests (prefixed with "builtin:") sort first, then alphabetical.
 func SortedTestNames(st SolutionTests) []string {
-	names := make([]string, 0, len(st.Tests))
-	for name := range st.Tests {
+	names := make([]string, 0, len(st.Cases))
+	for name := range st.Cases {
 		names = append(names, name)
 	}
 

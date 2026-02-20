@@ -5,7 +5,7 @@
 // It defines the test case specification, assertion types, and result structures
 // used by the `scafctl test functional` and `scafctl test list` commands.
 //
-// Test definitions live under `spec.tests` in solution YAML and support
+// Test definitions live under `spec.testing` in solution YAML and support
 // compose-based splitting into separate files.
 package soltesting
 
@@ -18,6 +18,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/duration"
+	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting/mockserver"
 	"gopkg.in/yaml.v3"
 )
 
@@ -157,6 +158,27 @@ func (s SkipBuiltinsValue) IsSkipped() bool {
 	return s.All || len(s.Names) > 0
 }
 
+// TestSuite groups all test-related configuration under a single top-level property.
+type TestSuite struct {
+	// Config holds solution-level test configuration.
+	Config *TestConfig `json:"config,omitempty" yaml:"config,omitempty" doc:"Test configuration"`
+
+	// Cases is a map of functional test definitions keyed by test name.
+	// Test names must be unique and must match ^[a-zA-Z0-9][a-zA-Z0-9_-]*$.
+	// Names starting with _ are templates that are not executed directly.
+	Cases map[string]*TestCase `json:"cases,omitempty" yaml:"cases,omitempty" doc:"Test case definitions keyed by name"`
+}
+
+// HasCases returns true if the suite contains any test case definitions.
+func (ts *TestSuite) HasCases() bool {
+	return ts != nil && len(ts.Cases) > 0
+}
+
+// HasConfig returns true if the suite has test configuration.
+func (ts *TestSuite) HasConfig() bool {
+	return ts != nil && ts.Config != nil
+}
+
 // TestConfig holds solution-level test configuration.
 type TestConfig struct {
 	// SkipBuiltins disables builtin tests. true for all, or list of specific names.
@@ -170,6 +192,30 @@ type TestConfig struct {
 
 	// Cleanup contains suite-level teardown steps run once after all tests complete, even on failure.
 	Cleanup []InitStep `json:"cleanup,omitempty" yaml:"cleanup,omitempty" doc:"Suite-level teardown steps. Run once after all tests complete, even on failure" maxItems:"50"`
+
+	// Services defines background services started before tests and stopped after.
+	// Currently supports "http" type which starts a mock HTTP server.
+	Services []ServiceConfig `json:"services,omitempty" yaml:"services,omitempty" doc:"Background services started before tests" maxItems:"10"`
+}
+
+// ServiceConfig defines a background service for test infrastructure.
+type ServiceConfig struct {
+	// Name is a unique identifier for the service within this solution's tests.
+	Name string `json:"name" yaml:"name" doc:"Unique service identifier" maxLength:"100" pattern:"^[a-zA-Z0-9][a-zA-Z0-9_-]*$"`
+
+	// Type is the service type. Currently only "http" is supported.
+	Type string `json:"type" yaml:"type" doc:"Service type" pattern:"^http$" patternDescription:"Must be: http"`
+
+	// PortEnv is the environment variable name where the assigned port is exposed.
+	// Tests can reference this via testConfig.env or in resolver inputs (e.g., $MOCK_HTTP_PORT).
+	PortEnv string `json:"portEnv" yaml:"portEnv" doc:"Env var name for assigned port" maxLength:"100" pattern:"^[A-Z][A-Z0-9_]*$"`
+
+	// BaseURLEnv is the environment variable name where the base URL is exposed (e.g., http://127.0.0.1:PORT).
+	// Optional — if empty, only PortEnv is set.
+	BaseURLEnv string `json:"baseUrlEnv,omitempty" yaml:"baseUrlEnv,omitempty" doc:"Env var name for base URL" maxLength:"100"`
+
+	// Routes defines the mock HTTP routes (only used when Type is "http").
+	Routes []mockserver.Route `json:"routes,omitempty" yaml:"routes,omitempty" doc:"Mock HTTP routes" maxItems:"100"`
 }
 
 // InitStep is a setup/cleanup command.

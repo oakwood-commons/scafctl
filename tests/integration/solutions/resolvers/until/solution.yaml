@@ -46,41 +46,42 @@ spec:
             inputs:
               value: "fallback-after-error"
 
-  testConfig:
-    skipBuiltins: true
+  testing:
+    config:
+      skipBuiltins: true
 
-  tests:
-    _base:
-      description: Base template for until/fallback tests
-      command: [run, resolver]
-      args: ["-o", "json"]
-      tags: [resolver, until]
-      assertions:
-        - expression: __exitCode == 0
+    cases:
+      _base:
+        description: Base template for until/fallback tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [resolver, until]
+        assertions:
+          - expression: __exitCode == 0
 
-    default-fallback:
-      description: Verify default fallback to last non-null source
-      extends: [_base]
-      tags: [smoke]
-      assertions:
-        - expression: '__output.defaultFallback == "third-source-wins"'
+      default-fallback:
+        description: Verify default fallback to last non-null source
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: '__output.defaultFallback == "third-source-wins"'
 
-    param-override:
-      description: Verify parameter overrides static when provided
-      extends: [_base]
-      args: ["-o", "json", "-r", "overrideKey=param-value"]
-      assertions:
-        - expression: '__output.paramOverride == "param-value"'
+      param-override:
+        description: Verify parameter overrides static when provided
+        extends: [_base]
+        args: ["-o", "json", "-r", "overrideKey=param-value"]
+        assertions:
+          - expression: '__output.paramOverride == "param-value"'
 
-    param-fallback:
-      description: Verify static fallback when parameter not provided
-      extends: [_base]
-      assertions:
-        - expression: '__output.paramOverride == "static-fallback"'
+      param-fallback:
+        description: Verify static fallback when parameter not provided
+        extends: [_base]
+        assertions:
+          - expression: '__output.paramOverride == "static-fallback"'
 
-    error-continue:
-      description: Verify onError continue skips failed source
-      extends: [_base]
-      assertions:
-        - expression: '__output.errorContinue == "fallback-after-error"'
-          message: "Should fall through to static after file read fails"
+      error-continue:
+        description: Verify onError continue skips failed source
+        extends: [_base]
+        assertions:
+          - expression: '__output.errorContinue == "fallback-after-error"'
+            message: "Should fall through to static after file read fails"

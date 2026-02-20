@@ -18,6 +18,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/shellexec"
+	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting/mockserver"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
 )
@@ -93,15 +94,15 @@ func (r *Runner) Run(ctx context.Context, solutions []SolutionTests) ([]TestResu
 		st := &solutions[i]
 
 		// Generate builtins
-		builtins := BuiltinTests(st.TestConfig)
+		builtins := BuiltinTests(st.Config)
 		for _, b := range builtins {
-			st.Tests[b.Name] = b
+			st.Cases[b.Name] = b
 		}
 
 		// Resolve extends
-		if err := ResolveExtends(st.Tests); err != nil {
+		if err := ResolveExtends(st.Cases); err != nil {
 			// All tests in this solution get error status
-			for name := range st.Tests {
+			for name := range st.Cases {
 				result := TestResult{
 					Solution: st.SolutionName,
 					Test:     name,
@@ -115,7 +116,7 @@ func (r *Runner) Run(ctx context.Context, solutions []SolutionTests) ([]TestResu
 		}
 
 		// Validate all tests (skip builtins — they are generated internally)
-		for name, tc := range st.Tests {
+		for name, tc := range st.Cases {
 			if IsBuiltin(name) {
 				continue
 			}
@@ -128,7 +129,7 @@ func (r *Runner) Run(ctx context.Context, solutions []SolutionTests) ([]TestResu
 				}
 				r.emitTestComplete(result)
 				allResults = append(allResults, result)
-				delete(st.Tests, name)
+				delete(st.Cases, name)
 			}
 		}
 
@@ -144,7 +145,7 @@ func (r *Runner) Run(ctx context.Context, solutions []SolutionTests) ([]TestResu
 
 		if r.DryRun {
 			for _, name := range testNames {
-				tc := st.Tests[name]
+				tc := st.Cases[name]
 				if tc.IsTemplate() {
 					continue
 				}
@@ -175,8 +176,8 @@ func (r *Runner) runSolution(ctx context.Context, st *SolutionTests, testNames [
 	solutionDir := filepath.Dir(st.FilePath)
 
 	// Run suite-level setup if configured
-	if st.TestConfig != nil && len(st.TestConfig.Setup) > 0 {
-		if err := r.runInitSteps(ctx, st.TestConfig.Setup, solutionDir, nil); err != nil {
+	if st.Config != nil && len(st.Config.Setup) > 0 {
+		if err := r.runInitSteps(ctx, st.Config.Setup, solutionDir, nil); err != nil {
 			// All tests become error status
 			results := make([]TestResult, 0, len(testNames))
 			for _, name := range testNames {
@@ -195,10 +196,73 @@ func (r *Runner) runSolution(ctx context.Context, st *SolutionTests, testNames [
 
 	// Ensure suite-level cleanup runs after all tests
 	defer func() {
-		if st.TestConfig != nil && len(st.TestConfig.Cleanup) > 0 {
-			_ = r.runInitSteps(context.Background(), st.TestConfig.Cleanup, solutionDir, nil)
+		if st.Config != nil && len(st.Config.Cleanup) > 0 {
+			_ = r.runInitSteps(context.Background(), st.Config.Cleanup, solutionDir, nil)
 		}
 	}()
+
+	// Start background services (e.g., mock HTTP servers)
+	var serviceEnv map[string]string
+	if st.Config != nil && len(st.Config.Services) > 0 {
+		var servers []*mockserver.Server
+		serviceEnv = make(map[string]string)
+
+		// Ensure servers are stopped after all tests
+		defer func() {
+			for _, srv := range servers {
+				_ = srv.Stop()
+			}
+		}()
+
+		for _, svc := range st.Config.Services {
+			if svc.Type != "http" {
+				results := make([]TestResult, 0, len(testNames))
+				for _, name := range testNames {
+					result := TestResult{
+						Solution: st.SolutionName,
+						Test:     name,
+						Status:   StatusError,
+						Message:  fmt.Sprintf("unsupported service type: %s", svc.Type),
+					}
+					r.emitTestComplete(result)
+					results = append(results, result)
+				}
+				return results, nil
+			}
+
+			srv := mockserver.New(svc.Routes)
+			if err := srv.Start(); err != nil {
+				results := make([]TestResult, 0, len(testNames))
+				for _, name := range testNames {
+					result := TestResult{
+						Solution: st.SolutionName,
+						Test:     name,
+						Status:   StatusError,
+						Message:  fmt.Sprintf("service %q start failed: %s", svc.Name, err),
+					}
+					r.emitTestComplete(result)
+					results = append(results, result)
+				}
+				return results, nil
+			}
+			servers = append(servers, srv)
+
+			if svc.PortEnv != "" {
+				serviceEnv[svc.PortEnv] = fmt.Sprintf("%d", srv.Port())
+			}
+			if svc.BaseURLEnv != "" {
+				serviceEnv[svc.BaseURLEnv] = srv.BaseURL()
+			}
+		}
+
+		// Inject service env vars into testConfig.Env so buildEnvMap picks them up automatically.
+		if st.Config.Env == nil {
+			st.Config.Env = make(map[string]string)
+		}
+		for k, v := range serviceEnv {
+			st.Config.Env[k] = v
+		}
+	}
 
 	concurrency := r.Concurrency
 	if concurrency <= 1 {
@@ -309,7 +373,7 @@ func (r *Runner) runSolution(ctx context.Context, st *SolutionTests, testNames [
 
 // runTestWithRetries runs a test, retrying on failure up to tc.Retries times.
 func (r *Runner) runTestWithRetries(ctx context.Context, st *SolutionTests, name, solutionDir string) TestResult {
-	tc := st.Tests[name]
+	tc := st.Cases[name]
 	if tc == nil {
 		return TestResult{
 			Solution: st.SolutionName,
@@ -409,7 +473,7 @@ func (r *Runner) executeTest(ctx context.Context, tc *TestCase, st *SolutionTest
 
 	// Run test init steps
 	if len(tc.Init) > 0 {
-		envMap := r.buildEnvMap(tc, st.TestConfig, sandbox.Path())
+		envMap := r.buildEnvMap(tc, st.Config, sandbox.Path())
 		if err := r.runInitSteps(ctx, tc.Init, sandbox.Path(), envMap); err != nil {
 			result.Status = StatusError
 			result.Message = fmt.Sprintf("init step failed: %s", err)
@@ -504,7 +568,7 @@ func (r *Runner) executeTest(ctx context.Context, tc *TestCase, st *SolutionTest
 
 	// Run test cleanup steps
 	if len(tc.Cleanup) > 0 {
-		envMap := r.buildEnvMap(tc, st.TestConfig, sandbox.Path())
+		envMap := r.buildEnvMap(tc, st.Config, sandbox.Path())
 		// Cleanup errors are not test failures, just log them
 		_ = r.runInitSteps(ctx, tc.Cleanup, sandbox.Path(), envMap)
 	}
@@ -561,7 +625,7 @@ func (r *Runner) executeCommandSubprocess(ctx context.Context, tc *TestCase, st 
 
 	// Build isolated environment: inherit parent env + overlay test env vars.
 	// Each subprocess gets its own copy, so no races.
-	envMap := r.buildEnvMap(tc, st.TestConfig, sandbox.Path())
+	envMap := r.buildEnvMap(tc, st.Config, sandbox.Path())
 	cmd.Env = os.Environ()
 	for k, v := range envMap {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%v", k, v))

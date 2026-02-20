@@ -16,28 +16,29 @@ spec:
             inputs:
               value: Hello, World!
 
-  testConfig:
-    skipBuiltins: true
+  testing:
+    config:
+      skipBuiltins: true
 
-  tests:
-    render-basic:
-      description: Verify solution renders successfully
-      command: [run, resolver]
-      args: ["-o", "json"]
-      assertions:
-        - expression: __exitCode == 0
-        - contains: greeting
+    cases:
+      render-basic:
+        description: Verify solution renders successfully
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: greeting
 
-    resolver-output:
-      description: Verify resolver produces expected value
-      command: [run, resolver]
-      args: ["-o", "json"]
-      assertions:
-        - expression: __exitCode == 0
-        - contains: "Hello, World!"
+      resolver-output:
+        description: Verify resolver produces expected value
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: "Hello, World!"
 
-    expect-lint-clean:
-      description: Verify solution passes lint
-      command: [lint]
-      assertions:
-        - expression: __exitCode == 0
+      expect-lint-clean:
+        description: Verify solution passes lint
+        command: [lint]
+        assertions:
+          - expression: __exitCode == 0

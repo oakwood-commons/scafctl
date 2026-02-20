@@ -1,0 +1,125 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-action-conditional
+  version: 1.0.0
+  description: |
+    Functional tests for conditional action execution.
+    Verifies when conditions, skip reasons, and that
+    downstream dependents of skipped actions are also skipped.
+
+spec:
+  resolvers:
+    environment:
+      description: Target environment
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "staging"
+
+    enableNotification:
+      description: Whether to send notifications
+      type: bool
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: false
+
+  workflow:
+    actions:
+      setup:
+        description: Always-run setup
+        provider: exec
+        inputs:
+          command: "echo Setup complete"
+
+      prodDeploy:
+        description: Only runs in production
+        provider: exec
+        dependsOn: [setup]
+        when:
+          expr: "_.environment == 'prod'"
+        inputs:
+          command: "echo Deploying to production"
+
+      stagingDeploy:
+        description: Only runs in staging
+        provider: exec
+        dependsOn: [setup]
+        when:
+          expr: "_.environment == 'staging'"
+        inputs:
+          command: "echo Deploying to staging"
+
+      notify:
+        description: Only runs when notifications enabled
+        provider: exec
+        dependsOn: [setup]
+        when:
+          expr: "_.enableNotification == true"
+        inputs:
+          command: "echo Sending notification"
+
+      alwaysRun:
+        description: Runs regardless of conditions
+        provider: exec
+        dependsOn: [setup]
+        inputs:
+          command: "echo Always running"
+
+  testing:
+    config:
+      skipBuiltins: true
+
+    cases:
+      _run-base:
+        description: Base template for conditional action tests
+        command: [run, solution]
+        args: ["-o", "json"]
+        tags: [action, conditional]
+        assertions:
+          - expression: __exitCode == 0
+
+      staging-deploy-runs:
+        description: Verify staging deploy runs when environment is staging
+        extends: [_run-base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.status == "succeeded"
+          - expression: __output.actions["stagingDeploy"].status == "succeeded"
+            message: "Staging deploy should run in staging environment"
+
+      prod-deploy-skipped:
+        description: Verify prod deploy is skipped when environment is staging
+        extends: [_run-base]
+        assertions:
+          - expression: __output.actions["prodDeploy"].status == "skipped"
+            message: "Prod deploy should be skipped in staging"
+          - expression: __output.actions["prodDeploy"].skipReason == "condition"
+            message: "Skip reason should be condition"
+
+      notification-skipped:
+        description: Verify notification is skipped when disabled
+        extends: [_run-base]
+        assertions:
+          - expression: __output.actions["notify"].status == "skipped"
+            message: "Notify should be skipped when enableNotification is false"
+
+      always-runs:
+        description: Verify unconditional action always runs
+        extends: [_run-base]
+        assertions:
+          - expression: __output.actions["alwaysRun"].status == "succeeded"
+            message: "Unconditional action should always succeed"
+
+      skipped-in-list:
+        description: Verify skipped actions appear in skippedActions list
+        extends: [_run-base]
+        assertions:
+          - expression: __output.skippedActions.exists(a, a == "prodDeploy")
+            message: "prodDeploy should be in skippedActions"
+          - expression: __output.skippedActions.exists(a, a == "notify")
+            message: "notify should be in skippedActions"

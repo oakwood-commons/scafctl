@@ -1,0 +1,84 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-action-timeout
+  version: 1.0.0
+  description: |
+    Functional tests for per-action timeout.
+    Verifies that timeout configuration is rendered correctly
+    and that actions within timeout complete successfully.
+
+spec:
+  resolvers:
+    target:
+      description: Target system
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "prod-cluster"
+
+  workflow:
+    actions:
+      quickAction:
+        description: Fast action with generous timeout
+        provider: exec
+        timeout: 30s
+        inputs:
+          command: "echo fast action done"
+
+      mediumAction:
+        description: Medium action with timeout
+        provider: exec
+        timeout: 1m
+        dependsOn: [quickAction]
+        inputs:
+          command: "echo medium action done"
+
+      noTimeoutAction:
+        description: Action without timeout
+        provider: exec
+        dependsOn: [quickAction]
+        inputs:
+          command: "echo no timeout action done"
+
+  testing:
+    config:
+      skipBuiltins: true
+
+    cases:
+      _run-base:
+        description: Base template for timeout tests
+        command: [run, solution]
+        args: ["-o", "json"]
+        tags: [action, timeout]
+        assertions:
+          - expression: __exitCode == 0
+
+      _render-base:
+        description: Base template for render tests
+        command: [render, solution]
+        args: ["-o", "json"]
+        tags: [action, timeout, render]
+        assertions:
+          - expression: __exitCode == 0
+
+      all-within-timeout:
+        description: Verify all actions complete within their timeout
+        extends: [_run-base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.status == "succeeded"
+          - expression: __output.actions["quickAction"].status == "succeeded"
+          - expression: __output.actions["mediumAction"].status == "succeeded"
+          - expression: __output.actions["noTimeoutAction"].status == "succeeded"
+
+      render-timeout-config:
+        description: Verify timeout values appear in rendered graph
+        extends: [_render-base]
+        assertions:
+          - expression: __output.actions["quickAction"].timeout == "30s"
+            message: "quickAction should show 30s timeout"
+          - expression: __output.actions["mediumAction"].timeout == "1m0s"
+            message: "mediumAction should show 1m timeout"

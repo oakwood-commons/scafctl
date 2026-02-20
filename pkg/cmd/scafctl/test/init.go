@@ -39,7 +39,7 @@ based on the resolvers, validation rules, and workflow actions it finds.
 No commands are executed — this is structural analysis only.
 
 The generated YAML is written to stdout and can be pasted into the solution's
-spec.tests section or saved to a separate test file.
+spec.testing.cases section or saved to a separate test file.
 
 Examples:
   # Generate tests from a solution file

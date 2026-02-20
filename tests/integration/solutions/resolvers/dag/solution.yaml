@@ -98,59 +98,60 @@ spec:
             inputs:
               expression: '_.chainC + "D"'
 
-  testConfig:
-    skipBuiltins: true
+  testing:
+    config:
+      skipBuiltins: true
 
-  tests:
-    _base:
-      description: Base template for DAG tests
-      command: [run, resolver]
-      args: ["-o", "json"]
-      tags: [resolver, dag]
-      assertions:
-        - expression: __exitCode == 0
+    cases:
+      _base:
+        description: Base template for DAG tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [resolver, dag]
+        assertions:
+          - expression: __exitCode == 0
 
-    implicit-deps:
-      description: Verify implicit dependencies via _.ref are resolved
-      extends: [_base]
-      tags: [smoke]
-      assertions:
-        - expression: __output.fullName == "John Doe"
-          message: "fullName should combine firstName and lastName"
+      implicit-deps:
+        description: Verify implicit dependencies via _.ref are resolved
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.fullName == "John Doe"
+            message: "fullName should combine firstName and lastName"
 
-    explicit-depends-on:
-      description: Verify explicit dependsOn is honored
-      extends: [_base]
-      assertions:
-        - expression: __output.greeting == "Hello, John!"
+      explicit-depends-on:
+        description: Verify explicit dependsOn is honored
+        extends: [_base]
+        assertions:
+          - expression: __output.greeting == "Hello, John!"
 
-    multi-level-chain:
-      description: Verify multi-level dependency chain
-      extends: [_base]
-      assertions:
-        - expression: __output.formalGreeting == "Dear John Doe,"
+      multi-level-chain:
+        description: Verify multi-level dependency chain
+        extends: [_base]
+        assertions:
+          - expression: __output.formalGreeting == "Dear John Doe,"
 
-    diamond-dependency:
-      description: Verify diamond dependency pattern
-      extends: [_base]
-      assertions:
-        - expression: __output.summary == 'Hello, John! Your full name is John Doe.'
+      diamond-dependency:
+        description: Verify diamond dependency pattern
+        extends: [_base]
+        assertions:
+          - expression: __output.summary == 'Hello, John! Your full name is John Doe.'
 
-    deep-chain:
-      description: Verify 4-level deep dependency chain
-      extends: [_base]
-      assertions:
-        - expression: __output.chainD == "ABCD"
-          message: "Each level should append its letter"
+      deep-chain:
+        description: Verify 4-level deep dependency chain
+        extends: [_base]
+        assertions:
+          - expression: __output.chainD == "ABCD"
+            message: "Each level should append its letter"
 
-    all-resolvers-present:
-      description: Verify all resolvers are in output
-      extends: [_base]
-      assertions:
-        - expression: '"firstName" in __output'
-        - expression: '"lastName" in __output'
-        - expression: '"fullName" in __output'
-        - expression: '"greeting" in __output'
-        - expression: '"formalGreeting" in __output'
-        - expression: '"summary" in __output'
-        - expression: '"chainD" in __output'
+      all-resolvers-present:
+        description: Verify all resolvers are in output
+        extends: [_base]
+        assertions:
+          - expression: '"firstName" in __output'
+          - expression: '"lastName" in __output'
+          - expression: '"fullName" in __output'
+          - expression: '"greeting" in __output'
+          - expression: '"formalGreeting" in __output'
+          - expression: '"summary" in __output'
+          - expression: '"chainD" in __output'

@@ -18,23 +18,24 @@ spec:
             inputs:
               duration: "100ms"
 
-  testConfig:
-    skipBuiltins: true
+  testing:
+    config:
+      skipBuiltins: true
 
-  tests:
-    _base:
-      description: Base template for sleep provider tests
-      command: [run, resolver]
-      args: ["-o", "json"]
-      tags: [provider, sleep]
-      assertions:
-        - expression: __exitCode == 0
+    cases:
+      _base:
+        description: Base template for sleep provider tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [provider, sleep]
+        assertions:
+          - expression: __exitCode == 0
 
-    short-sleep:
-      description: Verify sleep provider completes successfully
-      extends: [_base]
-      tags: [smoke]
-      timeout: "10s"
-      assertions:
-        - contains: shortSleep
-          message: "Sleep resolver should appear in output"
+      short-sleep:
+        description: Verify sleep provider completes successfully
+        extends: [_base]
+        tags: [smoke]
+        timeout: "10s"
+        assertions:
+          - contains: shortSleep
+            message: "Sleep resolver should appear in output"

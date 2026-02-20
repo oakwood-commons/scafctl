@@ -36,49 +36,50 @@ spec:
               operation: get
               name: SCAFCTL_FUNC_TEST_VAR
 
-  testConfig:
-    skipBuiltins: true
-    env:
-      SCAFCTL_FUNC_TEST_VAR: "global-test-value"
-
-  tests:
-    _base:
-      description: Base template for env provider tests
-      command: [run, resolver]
-      args: ["-o", "json"]
-      tags: [provider, env]
-      assertions:
-        - expression: __exitCode == 0
-
-    home-dir:
-      description: Verify HOME variable is readable
-      extends: [_base]
-      tags: [smoke]
-      assertions:
-        - expression: __output.homeDir.exists == true
-          message: "HOME should exist"
-        - expression: '__output.homeDir.value != ""'
-          message: "HOME should be non-empty"
-
-    default-value:
-      description: Verify default is returned for unset variable
-      extends: [_base]
-      assertions:
-        - expression: '__output.withDefault.value == "fallback-value"'
-          message: "Unset variable should return the default value"
-
-    global-env-injection:
-      description: Verify testConfig env vars are available
-      extends: [_base]
-      assertions:
-        - expression: '__output.testInjected.value == "global-test-value"'
-          message: "testConfig env var should be accessible"
-
-    per-test-env-override:
-      description: Verify per-test env overrides global testConfig env
-      extends: [_base]
+  testing:
+    config:
+      skipBuiltins: true
       env:
-        SCAFCTL_FUNC_TEST_VAR: "overridden-value"
-      assertions:
-        - expression: '__output.testInjected.value == "overridden-value"'
-          message: "Per-test env should override testConfig env"
+        SCAFCTL_FUNC_TEST_VAR: "global-test-value"
+
+    cases:
+      _base:
+        description: Base template for env provider tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [provider, env]
+        assertions:
+          - expression: __exitCode == 0
+
+      home-dir:
+        description: Verify HOME variable is readable
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.homeDir.exists == true
+            message: "HOME should exist"
+          - expression: '__output.homeDir.value != ""'
+            message: "HOME should be non-empty"
+
+      default-value:
+        description: Verify default is returned for unset variable
+        extends: [_base]
+        assertions:
+          - expression: '__output.withDefault.value == "fallback-value"'
+            message: "Unset variable should return the default value"
+
+      global-env-injection:
+        description: Verify testConfig env vars are available
+        extends: [_base]
+        assertions:
+          - expression: '__output.testInjected.value == "global-test-value"'
+            message: "testConfig env var should be accessible"
+
+      per-test-env-override:
+        description: Verify per-test env overrides global testConfig env
+        extends: [_base]
+        env:
+          SCAFCTL_FUNC_TEST_VAR: "overridden-value"
+        assertions:
+          - expression: '__output.testInjected.value == "overridden-value"'
+            message: "Per-test env should override testConfig env"

@@ -71,57 +71,58 @@ spec:
             inputs:
               value: "native"
 
-  testConfig:
-    skipBuiltins: true
+  testing:
+    config:
+      skipBuiltins: true
 
-  tests:
-    _base:
-      description: Base template for type coercion tests
-      command: [run, resolver]
-      args: ["-o", "json"]
-      tags: [resolver, type-coercion]
-      assertions:
-        - expression: __exitCode == 0
+    cases:
+      _base:
+        description: Base template for type coercion tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [resolver, type-coercion]
+        assertions:
+          - expression: __exitCode == 0
 
-    string-to-int:
-      description: Verify string to int coercion
-      extends: [_base]
-      tags: [smoke]
-      assertions:
-        - expression: __output.stringToInt == 42
+      string-to-int:
+        description: Verify string to int coercion
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.stringToInt == 42
 
-    string-to-bool:
-      description: Verify string to bool coercion
-      extends: [_base]
-      assertions:
-        - expression: __output.stringToBool == true
+      string-to-bool:
+        description: Verify string to bool coercion
+        extends: [_base]
+        assertions:
+          - expression: __output.stringToBool == true
 
-    int-to-string:
-      description: Verify int to string coercion
-      extends: [_base]
-      assertions:
-        - expression: '__output.intToString == "123"'
+      int-to-string:
+        description: Verify int to string coercion
+        extends: [_base]
+        assertions:
+          - expression: '__output.intToString == "123"'
 
-    bool-to-string:
-      description: Verify bool to string coercion
-      extends: [_base]
-      assertions:
-        - expression: '__output.boolToString == "true"'
+      bool-to-string:
+        description: Verify bool to string coercion
+        extends: [_base]
+        assertions:
+          - expression: '__output.boolToString == "true"'
 
-    float-to-int:
-      description: Verify whole float to int coercion
-      extends: [_base]
-      assertions:
-        - expression: __output.wholeFloatToInt == 3
+      float-to-int:
+        description: Verify whole float to int coercion
+        extends: [_base]
+        assertions:
+          - expression: __output.wholeFloatToInt == 3
 
-    native-int:
-      description: Verify native int needs no coercion
-      extends: [_base]
-      assertions:
-        - expression: __output.nativeInt == 99
+      native-int:
+        description: Verify native int needs no coercion
+        extends: [_base]
+        assertions:
+          - expression: __output.nativeInt == 99
 
-    native-string:
-      description: Verify native string needs no coercion
-      extends: [_base]
-      assertions:
-        - expression: '__output.nativeString == "native"'
+      native-string:
+        description: Verify native string needs no coercion
+        extends: [_base]
+        assertions:
+          - expression: '__output.nativeString == "native"'

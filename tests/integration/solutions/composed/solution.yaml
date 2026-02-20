@@ -19,19 +19,20 @@ spec:
             inputs:
               value: composed-test-output
 
-  testConfig:
-    skipBuiltins: true
+  testing:
+    config:
+      skipBuiltins: true
 
-  tests:
-    _base:
-      description: Base template for rendering tests
-      command: [run, resolver]
-      args: ["-o", "json"]
-      assertions:
-        - expression: __exitCode == 0
+    cases:
+      _base:
+        description: Base template for rendering tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
 
-    render-check:
-      description: Verify rendering works via compose
-      extends: [_base]
-      assertions:
-        - contains: message
+      render-check:
+        description: Verify rendering works via compose
+        extends: [_base]
+        assertions:
+          - contains: message

@@ -1,0 +1,111 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-action-result-schema
+  version: 1.0.0
+  description: |
+    Functional tests for action result schema validation.
+    Verifies that resultSchema validates action output
+    and that valid output passes schema checks.
+
+spec:
+  resolvers:
+    userId:
+      description: User ID for lookup
+      type: int
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: 42
+
+  workflow:
+    actions:
+      fetchUser:
+        description: Action with valid result matching schema
+        provider: cel
+        resultSchema:
+          type: object
+          required: [id, name]
+          properties:
+            id:
+              type: integer
+            name:
+              type: string
+              minLength: 1
+            email:
+              type: string
+        inputs:
+          expression: |
+            {"id": 42, "name": "Alice", "email": "alice@example.com"}
+
+      fetchConfig:
+        description: Action returning config with schema
+        provider: cel
+        resultSchema:
+          type: object
+          required: [version, features]
+          properties:
+            version:
+              type: string
+            features:
+              type: array
+              items:
+                type: string
+        inputs:
+          expression: |
+            {"version": "2.0", "features": ["auth", "cache", "logging"]}
+
+      noSchema:
+        description: Action without result schema
+        provider: exec
+        inputs:
+          command: "echo no schema validation"
+
+  testing:
+    config:
+      skipBuiltins: true
+
+    cases:
+      _run-base:
+        description: Base template for result schema tests
+        command: [run, solution]
+        args: ["-o", "json"]
+        tags: [action, result-schema]
+        assertions:
+          - expression: __exitCode == 0
+
+      _render-base:
+        description: Base template for render tests
+        command: [render, solution]
+        args: ["-o", "json"]
+        tags: [action, result-schema, render]
+        assertions:
+          - expression: __exitCode == 0
+
+      valid-schema-passes:
+        description: Verify actions with valid results pass schema validation
+        extends: [_run-base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.status == "succeeded"
+          - expression: __output.actions["fetchUser"].status == "succeeded"
+            message: "fetchUser with valid schema should succeed"
+          - expression: __output.actions["fetchConfig"].status == "succeeded"
+            message: "fetchConfig with valid schema should succeed"
+
+      no-schema-still-works:
+        description: Verify action without schema also succeeds
+        extends: [_run-base]
+        assertions:
+          - expression: __output.actions["noSchema"].status == "succeeded"
+
+      render-shows-schema:
+        description: Verify rendered graph includes result schema
+        extends: [_render-base]
+        assertions:
+          - expression: __output.actions.exists_one(k, k == "fetchUser")
+            message: "fetchUser should be in rendered graph"
+          - expression: __output.actions.exists_one(k, k == "fetchConfig")
+            message: "fetchConfig should be in rendered graph"

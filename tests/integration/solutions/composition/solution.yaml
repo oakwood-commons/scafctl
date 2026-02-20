@@ -11,45 +11,46 @@ compose:
   - parts/resolvers.yaml
 
 spec:
-  testConfig:
-    skipBuiltins: true
+  testing:
+    config:
+      skipBuiltins: true
 
-  tests:
-    _base:
-      description: Base template for composition tests
-      command: [run, resolver]
-      args: ["-o", "json"]
-      tags: [composition]
-      assertions:
-        - expression: __exitCode == 0
+    cases:
+      _base:
+        description: Base template for composition tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [composition]
+        assertions:
+          - expression: __exitCode == 0
 
-    base-resolver:
-      description: Verify base resolver from main file
-      extends: [_base]
-      tags: [smoke]
-      assertions:
-        - expression: '__output.baseMessage == "from-main"'
-          message: "Main file resolver should be available"
+      base-resolver:
+        description: Verify base resolver from main file
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: '__output.baseMessage == "from-main"'
+            message: "Main file resolver should be available"
 
-    composed-resolver:
-      description: Verify resolver from composed file
-      extends: [_base]
-      assertions:
-        - expression: '__output.composedResolver == "from-composed-file"'
-          message: "Composed file resolver should be available"
+      composed-resolver:
+        description: Verify resolver from composed file
+        extends: [_base]
+        assertions:
+          - expression: '__output.composedResolver == "from-composed-file"'
+            message: "Composed file resolver should be available"
 
-    cross-file-dependency:
-      description: Verify composed resolver can reference main resolver
-      extends: [_base]
-      assertions:
-        - expression: '__output.derivedFromBase == "from-main-and-composed"'
-          message: "Composed resolver should access main file resolver"
+      cross-file-dependency:
+        description: Verify composed resolver can reference main resolver
+        extends: [_base]
+        assertions:
+          - expression: '__output.derivedFromBase == "from-main-and-composed"'
+            message: "Composed resolver should access main file resolver"
 
-    all-resolvers-merged:
-      description: Verify all resolvers from all files are present
-      extends: [_base]
-      tags: [smoke]
-      assertions:
-        - expression: '"baseMessage" in __output'
-        - expression: '"composedResolver" in __output'
-        - expression: '"derivedFromBase" in __output'
+      all-resolvers-merged:
+        description: Verify all resolvers from all files are present
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: '"baseMessage" in __output'
+          - expression: '"composedResolver" in __output'
+          - expression: '"derivedFromBase" in __output'

@@ -31,52 +31,53 @@ spec:
         inputs:
           command: "echo missing-ref"
 
-  testConfig:
-    skipBuiltins: true
+  testing:
+    config:
+      skipBuiltins: true
 
-  tests:
-    lint-rejects-self-reference:
-      description: Verify lint catches a self-referencing exclusive declaration
-      command: [lint]
-      tags: [exclusive, validation, negative]
-      expectFailure: true
-      assertions:
-        - expression: __exitCode != 0
-          message: "Lint should fail when exclusive contains a self-reference"
-        - contains: "cannot exclude itself"
-          message: "Error message should describe the self-reference problem"
+    cases:
+      lint-rejects-self-reference:
+        description: Verify lint catches a self-referencing exclusive declaration
+        command: [lint]
+        tags: [exclusive, validation, negative]
+        expectFailure: true
+        assertions:
+          - expression: __exitCode != 0
+            message: "Lint should fail when exclusive contains a self-reference"
+          - contains: "cannot exclude itself"
+            message: "Error message should describe the self-reference problem"
 
-    lint-rejects-missing-ref:
-      description: Verify lint catches an exclusive reference to a nonexistent action
-      command: [lint]
-      tags: [exclusive, validation, negative]
-      expectFailure: true
-      assertions:
-        - expression: __exitCode != 0
-          message: "Lint should fail when exclusive references a nonexistent action"
-        - contains: "not found in actions section"
-          message: "Error message should indicate the missing action reference"
+      lint-rejects-missing-ref:
+        description: Verify lint catches an exclusive reference to a nonexistent action
+        command: [lint]
+        tags: [exclusive, validation, negative]
+        expectFailure: true
+        assertions:
+          - expression: __exitCode != 0
+            message: "Lint should fail when exclusive references a nonexistent action"
+          - contains: "not found in actions section"
+            message: "Error message should indicate the missing action reference"
 
-    lint-detects-both-errors:
-      description: Verify lint reports multiple exclusive validation errors
-      command: [lint]
-      args: ["-o", "json"]
-      tags: [exclusive, validation, negative]
-      expectFailure: true
-      assertions:
-        - expression: __exitCode != 0
-          message: "Lint should fail with multiple validation errors"
-        - expression: __output.errorCount >= 2
-          message: "Both self-reference and missing-ref errors should be reported"
+      lint-detects-both-errors:
+        description: Verify lint reports multiple exclusive validation errors
+        command: [lint]
+        args: ["-o", "json"]
+        tags: [exclusive, validation, negative]
+        expectFailure: true
+        assertions:
+          - expression: __exitCode != 0
+            message: "Lint should fail with multiple validation errors"
+          - expression: __output.errorCount >= 2
+            message: "Both self-reference and missing-ref errors should be reported"
 
-    run-fails-on-invalid-exclusive:
-      description: Verify run solution rejects an invalid exclusive configuration
-      command: [run, solution]
-      tags: [exclusive, validation, negative]
-      expectFailure: true
-      assertions:
-        - expression: __exitCode != 0
-          message: "Run should fail when exclusive declarations are invalid"
-        - contains: "workflow validation failed"
-          target: stderr
-          message: "Error should indicate workflow validation failure"
+      run-fails-on-invalid-exclusive:
+        description: Verify run solution rejects an invalid exclusive configuration
+        command: [run, solution]
+        tags: [exclusive, validation, negative]
+        expectFailure: true
+        assertions:
+          - expression: __exitCode != 0
+            message: "Run should fail when exclusive declarations are invalid"
+          - contains: "workflow validation failed"
+            target: stderr
+            message: "Error should indicate workflow validation failure"

@@ -18,13 +18,12 @@ import (
 )
 
 // composePart represents a partial YAML file that contributes resolvers,
-// workflow actions, tests, and/or bundle includes to the parent solution.
+// workflow actions, testing configuration, and/or bundle includes to the parent solution.
 type composePart struct {
 	Spec struct {
-		Resolvers  map[string]*resolver.Resolver   `yaml:"resolvers"`
-		Workflow   *action.Workflow                `yaml:"workflow"`
-		Tests      map[string]*soltesting.TestCase `yaml:"tests"`
-		TestConfig *soltesting.TestConfig          `yaml:"testConfig"`
+		Resolvers map[string]*resolver.Resolver `yaml:"resolvers"`
+		Workflow  *action.Workflow              `yaml:"workflow"`
+		Testing   *soltesting.TestSuite         `yaml:"testing"`
 	} `yaml:"spec"`
 	Bundle struct {
 		Include []string `yaml:"include"`
@@ -58,8 +57,8 @@ func WithReadFileFunc(fn func(string) ([]byte, error)) ComposeOption {
 //   - Resolvers: merged by name. Duplicate resolver names across files are rejected.
 //   - Actions: merged by name. Duplicate action names across files are rejected.
 //   - Finally actions: merged by name. Same duplicate rules apply.
-//   - Tests: merged by name. Duplicate test names across files are rejected.
-//   - TestConfig: skipBuiltins (true-wins for bool, union for lists), env (last wins),
+//   - Testing.Cases: merged by name. Duplicate test names across files are rejected.
+//   - Testing.Config: skipBuiltins (true-wins for bool, union for lists), env (last wins),
 //     setup/cleanup (appended in compose-file order).
 //   - bundle.include: unioned (deduplicated).
 //   - Circular compose references are detected and rejected.
@@ -133,11 +132,13 @@ func Compose(sol *solution.Solution, bundleRoot string, opts ...ComposeOption) (
 				return nil, err
 			}
 
-			if err := mergeTests(merged, part.Spec.Tests, relPath); err != nil {
-				return nil, err
-			}
+			if part.Spec.Testing != nil {
+				if err := mergeTests(merged, part.Spec.Testing.Cases, relPath); err != nil {
+					return nil, err
+				}
 
-			mergeTestConfig(merged, part.Spec.TestConfig)
+				mergeTestConfig(merged, part.Spec.Testing.Config)
+			}
 
 			mergeIncludes(merged, part.Bundle.Include)
 		}
@@ -235,17 +236,20 @@ func mergeTests(merged *solution.Solution, tests map[string]*soltesting.TestCase
 		return nil
 	}
 
-	if merged.Spec.Tests == nil {
-		merged.Spec.Tests = make(map[string]*soltesting.TestCase)
+	if merged.Spec.Testing == nil {
+		merged.Spec.Testing = &soltesting.TestSuite{}
+	}
+	if merged.Spec.Testing.Cases == nil {
+		merged.Spec.Testing.Cases = make(map[string]*soltesting.TestCase)
 	}
 
 	for name, tc := range tests {
-		if _, exists := merged.Spec.Tests[name]; exists {
+		if _, exists := merged.Spec.Testing.Cases[name]; exists {
 			return fmt.Errorf("duplicate test %q: defined in both root solution and composed file %s", name, sourceFile)
 		}
 		// Set the Name field from the map key
 		tc.Name = name
-		merged.Spec.Tests[name] = tc
+		merged.Spec.Testing.Cases[name] = tc
 	}
 	return nil
 }
@@ -261,22 +265,25 @@ func mergeTestConfig(merged *solution.Solution, tc *soltesting.TestConfig) {
 		return
 	}
 
-	if merged.Spec.TestConfig == nil {
-		merged.Spec.TestConfig = &soltesting.TestConfig{}
+	if merged.Spec.Testing == nil {
+		merged.Spec.Testing = &soltesting.TestSuite{}
+	}
+	if merged.Spec.Testing.Config == nil {
+		merged.Spec.Testing.Config = &soltesting.TestConfig{}
 	}
 
 	// SkipBuiltins: true-wins for bool; union for lists
 	if tc.SkipBuiltins.All {
-		merged.Spec.TestConfig.SkipBuiltins.All = true
+		merged.Spec.Testing.Config.SkipBuiltins.All = true
 	}
-	if len(tc.SkipBuiltins.Names) > 0 && !merged.Spec.TestConfig.SkipBuiltins.All {
-		existing := make(map[string]bool, len(merged.Spec.TestConfig.SkipBuiltins.Names))
-		for _, n := range merged.Spec.TestConfig.SkipBuiltins.Names {
+	if len(tc.SkipBuiltins.Names) > 0 && !merged.Spec.Testing.Config.SkipBuiltins.All {
+		existing := make(map[string]bool, len(merged.Spec.Testing.Config.SkipBuiltins.Names))
+		for _, n := range merged.Spec.Testing.Config.SkipBuiltins.Names {
 			existing[n] = true
 		}
 		for _, n := range tc.SkipBuiltins.Names {
 			if !existing[n] {
-				merged.Spec.TestConfig.SkipBuiltins.Names = append(merged.Spec.TestConfig.SkipBuiltins.Names, n)
+				merged.Spec.Testing.Config.SkipBuiltins.Names = append(merged.Spec.Testing.Config.SkipBuiltins.Names, n)
 				existing[n] = true
 			}
 		}
@@ -284,19 +291,19 @@ func mergeTestConfig(merged *solution.Solution, tc *soltesting.TestConfig) {
 
 	// Env: merged map, last file wins on key conflict
 	if len(tc.Env) > 0 {
-		if merged.Spec.TestConfig.Env == nil {
-			merged.Spec.TestConfig.Env = make(map[string]string)
+		if merged.Spec.Testing.Config.Env == nil {
+			merged.Spec.Testing.Config.Env = make(map[string]string)
 		}
 		for k, v := range tc.Env {
-			merged.Spec.TestConfig.Env[k] = v
+			merged.Spec.Testing.Config.Env[k] = v
 		}
 	}
 
 	// Setup: appended in compose-file order
-	merged.Spec.TestConfig.Setup = append(merged.Spec.TestConfig.Setup, tc.Setup...)
+	merged.Spec.Testing.Config.Setup = append(merged.Spec.Testing.Config.Setup, tc.Setup...)
 
 	// Cleanup: appended in compose-file order
-	merged.Spec.TestConfig.Cleanup = append(merged.Spec.TestConfig.Cleanup, tc.Cleanup...)
+	merged.Spec.Testing.Config.Cleanup = append(merged.Spec.Testing.Config.Cleanup, tc.Cleanup...)
 }
 
 // deepCopySolution creates a deep copy of a solution by marshaling to YAML and back.

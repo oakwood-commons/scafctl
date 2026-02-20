@@ -144,85 +144,86 @@ spec:
             inputs:
               expression: '__self.replace(" ", "-")'
 
-  testConfig:
-    skipBuiltins: true
+  testing:
+    config:
+      skipBuiltins: true
 
-  tests:
-    _base:
-      description: Base template for CEL provider tests
-      command: [run, resolver]
-      args: ["-o", "json"]
-      tags: [provider, cel]
-      assertions:
-        - expression: __exitCode == 0
+    cases:
+      _base:
+        description: Base template for CEL provider tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [provider, cel]
+        assertions:
+          - expression: __exitCode == 0
 
-    upper-ascii:
-      description: Verify upperAscii string function
-      extends: [_base]
-      tags: [smoke]
-      assertions:
-        - expression: __output.upperName == "HELLO WORLD"
+      upper-ascii:
+        description: Verify upperAscii string function
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.upperName == "HELLO WORLD"
 
-    lower-ascii:
-      description: Verify lowerAscii string function
-      extends: [_base]
-      assertions:
-        - expression: __output.lowerName == "hello world"
+      lower-ascii:
+        description: Verify lowerAscii string function
+        extends: [_base]
+        assertions:
+          - expression: __output.lowerName == "hello world"
 
-    concatenation:
-      description: Verify string concatenation
-      extends: [_base]
-      assertions:
-        - expression: __output.concatenated == "prefix-Hello World-suffix"
+      concatenation:
+        description: Verify string concatenation
+        extends: [_base]
+        assertions:
+          - expression: __output.concatenated == "prefix-Hello World-suffix"
 
-    list-size:
-      description: Verify size() function on lists
-      extends: [_base]
-      assertions:
-        - expression: __output.listSize == 3
+      list-size:
+        description: Verify size() function on lists
+        extends: [_base]
+        assertions:
+          - expression: __output.listSize == 3
 
-    list-filter:
-      description: Verify filter() on lists
-      extends: [_base]
-      assertions:
-        - expression: size(__output.filteredList) == 2
-        - expression: '"banana" in __output.filteredList'
-        - expression: '"cherry" in __output.filteredList'
+      list-filter:
+        description: Verify filter() on lists
+        extends: [_base]
+        assertions:
+          - expression: size(__output.filteredList) == 2
+          - expression: '"banana" in __output.filteredList'
+          - expression: '"cherry" in __output.filteredList'
 
-    list-map:
-      description: Verify map() on lists
-      extends: [_base]
-      assertions:
-        - expression: __output.mappedList[0] == "APPLE"
-        - expression: __output.mappedList[1] == "BANANA"
+      list-map:
+        description: Verify map() on lists
+        extends: [_base]
+        assertions:
+          - expression: __output.mappedList[0] == "APPLE"
+          - expression: __output.mappedList[1] == "BANANA"
 
-    math-operations:
-      description: Verify arithmetic in CEL
-      extends: [_base]
-      assertions:
-        - expression: __output.mathResult == 35
+      math-operations:
+        description: Verify arithmetic in CEL
+        extends: [_base]
+        assertions:
+          - expression: __output.mathResult == 35
 
-    ternary-conditional:
-      description: Verify ternary operator
-      extends: [_base]
-      assertions:
-        - expression: __output.conditional == "large"
+      ternary-conditional:
+        description: Verify ternary operator
+        extends: [_base]
+        assertions:
+          - expression: __output.conditional == "large"
 
-    contains-check:
-      description: Verify 'in' operator on lists
-      extends: [_base]
-      assertions:
-        - expression: __output.containsCheck == true
+      contains-check:
+        description: Verify 'in' operator on lists
+        extends: [_base]
+        assertions:
+          - expression: __output.containsCheck == true
 
-    string-replace:
-      description: Verify replace() string function
-      extends: [_base]
-      assertions:
-        - expression: __output.stringReplace == "Hello_World"
+      string-replace:
+        description: Verify replace() string function
+        extends: [_base]
+        assertions:
+          - expression: __output.stringReplace == "Hello_World"
 
-    transform-chain:
-      description: Verify multi-step CEL transform pipeline
-      extends: [_base]
-      assertions:
-        - expression: __output.transformed == "mixed-case-input"
-          message: "Chained transforms should trim, lowercase, and replace spaces"
+      transform-chain:
+        description: Verify multi-step CEL transform pipeline
+        extends: [_base]
+        assertions:
+          - expression: __output.transformed == "mixed-case-input"
+            message: "Chained transforms should trim, lowercase, and replace spaces"

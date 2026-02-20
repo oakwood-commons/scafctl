@@ -18,10 +18,10 @@ func TestScaffold_EmptyInput(t *testing.T) {
 	result := Scaffold(&ScaffoldInput{})
 
 	require.NotNil(t, result)
-	assert.Len(t, result.Tests, 3, "should contain resolve-defaults, render-defaults, and lint")
-	assert.Contains(t, result.Tests, "resolve-defaults")
-	assert.Contains(t, result.Tests, "render-defaults")
-	assert.Contains(t, result.Tests, "lint")
+	assert.Len(t, result.Cases, 3, "should contain resolve-defaults, render-defaults, and lint")
+	assert.Contains(t, result.Cases, "resolve-defaults")
+	assert.Contains(t, result.Cases, "render-defaults")
+	assert.Contains(t, result.Cases, "lint")
 }
 
 func TestScaffold_WithResolvers(t *testing.T) {
@@ -62,21 +62,21 @@ func TestScaffold_WithResolvers(t *testing.T) {
 	require.NotNil(t, result)
 
 	// 3 base tests + 2 resolver tests + 1 validation failure test = 6
-	assert.Len(t, result.Tests, 6)
+	assert.Len(t, result.Cases, 6)
 
 	// Base tests
-	assert.Contains(t, result.Tests, "resolve-defaults")
-	assert.Contains(t, result.Tests, "render-defaults")
-	assert.Contains(t, result.Tests, "lint")
+	assert.Contains(t, result.Cases, "resolve-defaults")
+	assert.Contains(t, result.Cases, "render-defaults")
+	assert.Contains(t, result.Cases, "lint")
 
 	// Resolver tests
-	assert.Contains(t, result.Tests, "resolver-repo")
-	assert.Contains(t, result.Tests, "resolver-version")
+	assert.Contains(t, result.Cases, "resolver-repo")
+	assert.Contains(t, result.Cases, "resolver-version")
 
 	// Validation failure test for version
-	assert.Contains(t, result.Tests, "resolver-version-invalid")
-	assert.True(t, result.Tests["resolver-version-invalid"].ExpectFailure)
-	assert.Contains(t, result.Tests["resolver-version-invalid"].Tags, "negative")
+	assert.Contains(t, result.Cases, "resolver-version-invalid")
+	assert.True(t, result.Cases["resolver-version-invalid"].ExpectFailure)
+	assert.Contains(t, result.Cases["resolver-version-invalid"].Tags, "negative")
 }
 
 func TestScaffold_WithActions(t *testing.T) {
@@ -100,13 +100,13 @@ func TestScaffold_WithActions(t *testing.T) {
 	require.NotNil(t, result)
 
 	// 3 base tests + 2 action tests = 5
-	assert.Len(t, result.Tests, 5)
-	assert.Contains(t, result.Tests, "action-build")
-	assert.Contains(t, result.Tests, "action-test")
+	assert.Len(t, result.Cases, 5)
+	assert.Contains(t, result.Cases, "action-build")
+	assert.Contains(t, result.Cases, "action-test")
 
 	// Action tests should include provider tag
-	assert.Contains(t, result.Tests["action-build"].Tags, "exec")
-	assert.Contains(t, result.Tests["action-build"].Tags, "actions")
+	assert.Contains(t, result.Cases["action-build"].Tags, "exec")
+	assert.Contains(t, result.Cases["action-build"].Tags, "actions")
 }
 
 func TestScaffold_ConditionalAction(t *testing.T) {
@@ -127,8 +127,8 @@ func TestScaffold_ConditionalAction(t *testing.T) {
 	result := Scaffold(input)
 
 	require.NotNil(t, result)
-	assert.Contains(t, result.Tests, "action-release")
-	assert.Contains(t, result.Tests["action-release"].Tags, "conditional")
+	assert.Contains(t, result.Cases, "action-release")
+	assert.Contains(t, result.Cases["action-release"].Tags, "conditional")
 }
 
 func TestScaffold_ResolverWithValidationExpression(t *testing.T) {
@@ -157,8 +157,8 @@ func TestScaffold_ResolverWithValidationExpression(t *testing.T) {
 
 	result := Scaffold(input)
 
-	assert.Contains(t, result.Tests, "resolver-goos-invalid")
-	tc := result.Tests["resolver-goos-invalid"]
+	assert.Contains(t, result.Cases, "resolver-goos-invalid")
+	tc := result.Cases["resolver-goos-invalid"]
 	assert.True(t, tc.ExpectFailure)
 	assert.Contains(t, tc.Description, "expression")
 }
@@ -200,7 +200,8 @@ func TestScaffoldToYAML_ContainsExpectedContent(t *testing.T) {
 	out, err := ScaffoldToYAML(result)
 
 	require.NoError(t, err)
-	assert.Contains(t, string(out), "tests:")
+	assert.Contains(t, string(out), "testing:")
+	assert.Contains(t, string(out), "cases:")
 	assert.Contains(t, string(out), "resolve-defaults")
 	assert.Contains(t, string(out), "resolver-repo")
 }

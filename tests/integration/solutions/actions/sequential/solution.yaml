@@ -1,0 +1,118 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-action-sequential
+  version: 1.0.0
+  description: |
+    Functional tests for sequential action chains.
+    Verifies dependsOn ordering, result propagation,
+    and multi-step workflows.
+
+spec:
+  resolvers:
+    project:
+      description: Project name
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "my-app"
+
+    version:
+      description: Build version
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "2.1.0"
+
+  workflow:
+    actions:
+      checkout:
+        description: Checkout source code
+        displayName: Checkout
+        provider: exec
+        inputs:
+          command:
+            expr: "'echo Checking out ' + _.project"
+
+      build:
+        description: Build the project
+        displayName: Build
+        provider: exec
+        dependsOn: [checkout]
+        inputs:
+          command:
+            expr: "'echo Building ' + _.project + ' v' + _.version"
+
+      test:
+        description: Run test suite
+        displayName: Test
+        provider: exec
+        dependsOn: [build]
+        inputs:
+          command:
+            expr: "'echo Testing ' + _.project"
+
+      deploy:
+        description: Deploy the build
+        displayName: Deploy
+        provider: exec
+        dependsOn: [test]
+        inputs:
+          command:
+            expr: "'echo Deploying ' + _.project + ' v' + _.version"
+
+  testing:
+    config:
+      skipBuiltins: true
+
+    cases:
+      _run-base:
+        description: Base template for run tests
+        command: [run, solution]
+        args: ["-o", "json"]
+        tags: [action, sequential]
+        assertions:
+          - expression: __exitCode == 0
+
+      _render-base:
+        description: Base template for render tests
+        command: [render, solution]
+        args: ["-o", "json"]
+        tags: [action, sequential, render]
+        assertions:
+          - expression: __exitCode == 0
+
+      all-succeed:
+        description: Verify all actions in chain succeed
+        extends: [_run-base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.status == "succeeded"
+            message: "Overall status should be succeeded"
+          - expression: __output.actions["checkout"].status == "succeeded"
+          - expression: __output.actions["build"].status == "succeeded"
+          - expression: __output.actions["test"].status == "succeeded"
+          - expression: __output.actions["deploy"].status == "succeeded"
+
+      execution-order:
+        description: Verify sequential execution ordering via render
+        extends: [_render-base]
+        assertions:
+          - expression: size(__output.executionOrder) == 4
+            message: "Should have 4 phases for 4 sequential actions"
+          - expression: __output.executionOrder[0].exists(a, a == "checkout")
+            message: "checkout should be first"
+          - expression: __output.executionOrder[3].exists(a, a == "deploy")
+            message: "deploy should be last"
+
+      results-contain-output:
+        description: Verify action results contain exec output
+        extends: [_run-base]
+        assertions:
+          - expression: __output.actions["build"].results.stdout.contains("Building my-app v2.1.0")
+            message: "Build output should contain project and version"
+          - expression: __output.actions["deploy"].results.stdout.contains("Deploying my-app v2.1.0")
+            message: "Deploy output should contain project and version"

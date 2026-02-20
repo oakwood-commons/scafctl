@@ -16,7 +16,7 @@ advanced CI integration.
 
 ## Writing Your First Test
 
-Add a `tests` section to your solution's `spec`. Create a file called `solution.yaml`:
+Add a `testing` section to your solution's `spec`. Create a file called `solution.yaml`:
 
 ```yaml
 apiVersion: scafctl.io/v1
@@ -33,13 +33,14 @@ spec:
             inputs:
               value: Hello, World!
 
-  tests:
-    render-basic:
-      description: Verify solution renders successfully
-      command: [render, solution]
-      assertions:
-        - expression: __exitCode == 0
-        - contains: greeting
+  testing:
+    cases:
+      render-basic:
+        description: Verify solution renders successfully
+        command: [render, solution]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: greeting
 ```
 
 Run the test:
@@ -63,7 +64,7 @@ Each test specifies a `command` (the scafctl subcommand to run) and one or more
 `assertions` to validate the output. The runner automatically injects
 `-f <sandbox-copy-of-solution>` unless you set `injectFile: false`.
 
-> **Note:** The YAML snippets in the remaining sections of this tutorial show only the `tests:` block or relevant portion. To use them, add them to the `spec.tests` section of your solution file — like the `solution.yaml` example above.
+> **Note:** The YAML snippets in the remaining sections of this tutorial show only the `cases:` block or relevant portion. To use them, add them to the `spec.testing.cases` section of your solution file — like the `solution.yaml` example above.
 
 ---
 
@@ -238,7 +239,7 @@ Define reusable test templates with names starting with `_`. Templates are not e
 directly but can be inherited via `extends`:
 
 ```yaml
-tests:
+cases:
   _render-base:
     description: Base template for rendering tests
     command: [render, solution]
@@ -295,7 +296,7 @@ Circular extends chains and references to non-existent test names are validation
 Snapshots compare command output against a golden file:
 
 ```yaml
-tests:
+cases:
   render-snapshot:
     description: Compare render output to golden file
     command: [render, solution]
@@ -350,10 +351,11 @@ bundle:
     - "testdata/**"
 
 spec:
-  tests:
-    my-test:
-      files: ["testdata/input.txt"]
-      # ...
+  testing:
+    cases:
+      my-test:
+        files: ["testdata/input.txt"]
+        # ...
 ```
 
 The `unbundled-test-file` lint rule will flag test files not covered by `bundle.include`.
@@ -365,7 +367,7 @@ The `unbundled-test-file` lint rule will flag test files not covered by `bundle.
 Tests can define setup commands before and teardown commands after execution:
 
 ```yaml
-tests:
+cases:
   integration-test:
     description: Test with setup/teardown
     init:
@@ -407,7 +409,7 @@ directory) into every init step and test command.
 Set environment variables for a specific test's init, command, and cleanup steps:
 
 ```yaml
-tests:
+cases:
   custom-env-test:
     description: Test with custom environment
     env:
@@ -425,7 +427,7 @@ Variables are resolved in this precedence order (highest wins):
 | Priority | Source | Description |
 |----------|--------|-------------|
 | 1 (lowest) | Process environment | Inherited from the parent process |
-| 2 | `testConfig.env` | Suite-level env applied to all tests |
+| 2 | `testing.config.env` | Suite-level env applied to all tests |
 | 3 | `TestCase.env` | Per-test env overrides suite-level on key conflict |
 | 4 (highest) | `InitStep.env` | Per-step env overrides all others on key conflict |
 
@@ -438,7 +440,7 @@ Variables are resolved in this precedence order (highest wins):
 Copy additional files into the sandbox for test execution:
 
 ```yaml
-tests:
+cases:
   file-test:
     description: Test with additional files
     files:
@@ -460,7 +462,7 @@ files produce a test `error`** to catch typos early.
 Test that a command fails as expected:
 
 ```yaml
-tests:
+cases:
   validation-error:
     description: Invalid input should fail
     command: [render, solution]
@@ -474,7 +476,7 @@ tests:
 For exact exit code matching:
 
 ```yaml
-tests:
+cases:
   specific-exit-code:
     description: Expect specific exit code
     command: [lint]
@@ -493,7 +495,7 @@ tests:
 Set per-test timeouts using Go duration strings:
 
 ```yaml
-tests:
+cases:
   slow-test:
     description: Test that takes longer
     timeout: "2m"
@@ -521,7 +523,7 @@ scafctl test functional -f solution.yaml --timeout 10m
 ### Static Skip
 
 ```yaml
-tests:
+cases:
   temporarily-disabled:
     description: Skipped during development
     skip: true
@@ -536,7 +538,7 @@ tests:
 Skip based on runtime conditions using CEL expressions with `os`, `arch`, and `env` context:
 
 ```yaml
-tests:
+cases:
   linux-only:
     description: Only runs on Linux
     skipExpression: 'os != "linux"'
@@ -559,7 +561,7 @@ tests:
 Retry flaky tests up to 10 times:
 
 ```yaml
-tests:
+cases:
   flaky-test:
     description: Retry on failure
     retries: 3
@@ -582,7 +584,7 @@ By default, the runner auto-injects `-f <sandbox-solution-path>` into every comm
 Disable this for commands that don't accept `-f`:
 
 ```yaml
-tests:
+cases:
   config-check:
     description: Check config (does not use -f)
     injectFile: false
@@ -601,7 +603,7 @@ tests:
 Tag tests for selective execution:
 
 ```yaml
-tests:
+cases:
   renders-dev:
     description: Render dev config
     command: [render, solution]
@@ -631,21 +633,22 @@ Configure settings that apply to all tests in a solution:
 
 ```yaml
 spec:
-  testConfig:
-    skipBuiltins: true
-    env:
-      TEST_MODE: "true"
-      SCAFCTL_CONFIG_DIR: "$SCAFCTL_SANDBOX_DIR"
-    setup:
-      - command: "mkdir -p templates"
-      - command: "scafctl config set defaults.environment staging"
-    cleanup:
-      - command: "echo 'suite teardown complete'"
+  testing:
+    config:
+      skipBuiltins: true
+      env:
+        TEST_MODE: "true"
+        SCAFCTL_CONFIG_DIR: "$SCAFCTL_SANDBOX_DIR"
+      setup:
+        - command: "mkdir -p templates"
+        - command: "scafctl config set defaults.environment staging"
+      cleanup:
+        - command: "echo 'suite teardown complete'"
 ```
 
 ### Suite-Level Setup
 
-When `testConfig.setup` is defined:
+When `testing.config.setup` is defined:
 
 1. A base sandbox is created and solution + bundle files are copied
 2. Setup steps run sequentially in the base sandbox
@@ -661,11 +664,11 @@ for that solution report as `error`.
 
 ```yaml
 # Skip all builtins
-testConfig:
+config:
   skipBuiltins: true
 
 # Skip only specific builtins
-testConfig:
+config:
   skipBuiltins:
     - resolve-defaults
     - render-defaults
@@ -706,13 +709,14 @@ Create a file called `tests/smoke.yaml`:
 ```yaml
 # tests/smoke.yaml
 spec:
-  tests:
-    smoke-render:
-      description: Smoke test for rendering
-      command: [render, solution]
-      tags: [smoke]
-      assertions:
-        - expression: __exitCode == 0
+  testing:
+    cases:
+      smoke-render:
+        description: Smoke test for rendering
+        command: [render, solution]
+        tags: [smoke]
+        assertions:
+          - expression: __exitCode == 0
 ```
 
 Create a file called `tests/validation.yaml`:
@@ -720,23 +724,24 @@ Create a file called `tests/validation.yaml`:
 ```yaml
 # tests/validation.yaml
 spec:
-  tests:
-    rejects-invalid:
-      description: Invalid input fails
-      command: [run, resolver]
-      args: ["-r", "env=invalid"]
-      expectFailure: true
-      tags: [validation]
-      assertions:
-        - contains: "Invalid"
+  testing:
+    cases:
+      rejects-invalid:
+        description: Invalid input fails
+        command: [run, resolver]
+        args: ["-r", "env=invalid"]
+        expectFailure: true
+        tags: [validation]
+        assertions:
+          - contains: "Invalid"
 ```
 
 Tests from all compose files are merged by name (duplicates are rejected). Execution order
 is alphabetical regardless of compose file order.
 
-### Compose Merge for testConfig
+### Compose Merge for testing.config
 
-When `testConfig` appears in multiple compose files:
+When `testing.config` appears in multiple compose files:
 
 | Field | Merge Behavior |
 |-------|----------------|
@@ -918,14 +923,15 @@ Builtins run before user-defined tests. Skip all builtins:
 scafctl test functional -f solution.yaml --skip-builtins
 ```
 
-Or skip specific ones in your solution's `testConfig`:
+Or skip specific ones in your solution's `testing.config`:
 
 ```yaml
 spec:
-  testConfig:
-    skipBuiltins:
-      - lint
-      - resolve-defaults
+  testing:
+    config:
+      skipBuiltins:
+        - lint
+        - resolve-defaults
 ```
 
 ---
@@ -1136,7 +1142,7 @@ solution's structure. No commands are executed; it performs structural analysis 
 scafctl test init -f solution.yaml
 ```
 
-This outputs YAML to stdout that you can paste into your solution's `spec.tests` section or
+This outputs YAML to stdout that you can paste into your solution's `spec.testing.cases` section or
 redirect to a file:
 
 ```bash
@@ -1205,8 +1211,9 @@ Running `scafctl test init -f solution.yaml` produces:
 # Paste this into your solution's spec section or a compose test file.
 # Customize assertions and parameters to match your expected behavior.
 
-tests:
-    lint:
+testing:
+    cases:
+        lint:
         description: Verify solution has no lint errors
         command:
             - lint
@@ -1311,7 +1318,7 @@ The scaffold is a starting point. After generating, you should:
 1. Executes the command normally and captures the output
 2. Walks the output to derive CEL assertions describing its shape
 3. Writes a normalized snapshot golden file to `testdata/`
-4. Prints the complete test YAML to stdout, ready to paste into `spec.tests`
+4. Prints the complete test YAML to stdout, ready to paste into `spec.testing.cases`
 
 This is the fastest way to lock in known-good behavior. Run the command once to generate the test, curate the assertions, then commit both the test and snapshot.
 
@@ -1450,24 +1457,25 @@ run-solution-env-prod:
 
 ### Step 4 — Paste and Register the Tests
 
-Open `my-app.yaml` and add a `spec.tests` section (or a compose test file — see the [compose test files](#compose-test-files) section). Paste the generated YAML under `tests:`:
+Open `my-app.yaml` and add a `spec.testing.cases` section (or a compose test file — see the [compose test files](#compose-test-files) section). Paste the generated YAML under `cases:`:
 
 ```yaml
 spec:
-  tests:
-    render-solution-env-prod:
-      description: "Auto-generated test for: render solution -r env=prod"
-      command: [render, solution]
-      args: ["-r", "env=prod", "-o", "json"]
-      tags: [generated]
-      assertions:
-        - expression: 'size(__output) == 3'
-          message: __output should have 3 keys
-        - expression: 'size(__output["actions"]) == 2'
-          message: __output["actions"] should have 2 keys
-        - expression: '__output["resolvers"]["environment"] == "prod"'
-        - expression: '__output["resolvers"]["region"] == "us-east-1"'
-      snapshot: "testdata/render-solution-env-prod.json"
+  testing:
+    cases:
+      render-solution-env-prod:
+        description: "Auto-generated test for: render solution -r env=prod"
+        command: [render, solution]
+        args: ["-r", "env=prod", "-o", "json"]
+        tags: [generated]
+        assertions:
+          - expression: 'size(__output) == 3'
+            message: __output should have 3 keys
+          - expression: 'size(__output["actions"]) == 2'
+            message: __output["actions"] should have 2 keys
+          - expression: '__output["resolvers"]["environment"] == "prod"'
+          - expression: '__output["resolvers"]["region"] == "us-east-1"'
+        snapshot: "testdata/render-solution-env-prod.json"
 ```
 
 Then run it:
@@ -1573,7 +1581,7 @@ generate → curate → commit → CI
 ```
 
 1. Run the command with `-o test` for each scenario you want to protect
-2. Paste the output into `spec.tests`
+2. Paste the output into `spec.testing.cases`
 3. Curate — loosen volatile assertions, add missing detail assertions, rename as needed
 4. Commit both the test YAML and the `testdata/*.json` snapshot files
 5. `scafctl test functional` runs in CI on every push

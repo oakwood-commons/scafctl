@@ -34,7 +34,7 @@ This is the primary mechanism for validating solutions in CI and during developm
 | Compose support for tests | ✅ Done | `mergeTests()` and `mergeTestConfig()` in compose |
 | Parallel test execution | ✅ Done | Semaphore-based concurrency control |
 | CEL assertion diagnostics | ✅ Done | `pkg/solution/soltesting/diagnostics.go` |
-| Suite-level setup | ✅ Done | `testConfig.setup` with base sandbox copy |
+| Suite-level setup | ✅ Done | `testing.config.setup` with base sandbox copy |
 | Test tags and filtering | ✅ Done | `--tag` flag, `tags` field on test cases |
 | Per-test environment variables | ✅ Done | `env` field on test cases |
 | Cleanup steps | ✅ Done | `cleanup` field, runs even on failure |
@@ -48,19 +48,19 @@ This is the primary mechanism for validating solutions in CI and during developm
 | Concurrency control | ✅ Done | `-j` flag, `--sequential` as sugar for `-j 1` |
 | Conditional skip (`skipExpression`) | ✅ Done | CEL-based runtime skip evaluation |
 | Test retries | ✅ Done | `retries` field for flaky test resilience |
-| Suite-level cleanup | ✅ Done | `testConfig.cleanup` for teardown after all tests |
+| Suite-level cleanup | ✅ Done | `testing.config.cleanup` for teardown after all tests |
 | File size guard | ✅ Done | Cap `files[].content` at 10MB to prevent OOM |
 | In-process execution safety | ✅ Done | `Root()` accepts `*RootOptions`, no package-level state |
 | Unused template lint warning | ✅ Done | `unused-template` lint rule |
 | Solution filtering (`--solution`) | ✅ Done | Glob-based solution name filtering |
 | `--filter` solution/test format | ✅ Done | `--filter "solution/test-name"` glob support |
 | `--dry-run` flag | ✅ Done | Validate test definitions without executing |
-| Suite-level `env` | ✅ Done | `testConfig.env` shared across all tests |
+| Suite-level `env` | ✅ Done | `testing.config.env` shared across all tests |
 | Binary file content guard | ✅ Done | Non-UTF-8 files get `content` set to `"<binary file>"` |
 | Test execution ordering | ✅ Done | Alphabetical by name; builtins first |
 | Field max limits | ✅ Done | `assertions: 100`, `files: 50`, `tags: 20`, extends depth: 10 |
 | Glob zero-match error | ✅ Done | Test `files` globs matching zero files produce `error` |
-| Environment precedence chain | ✅ Done | process → `testConfig.env` → `TestCase.env` → `InitStep.env` |
+| Environment precedence chain | ✅ Done | process → `testing.config.env` → `TestCase.env` → `InitStep.env` |
 | `TestCase.Validate()` | ✅ Done | Comprehensive test case validation method |
 | Extends non-existent error | ✅ Done | `extends` referencing non-existent test names is a parse-time error |
 | Tests per solution limit | ✅ Done | Max 500 tests per solution |
@@ -73,7 +73,7 @@ This is the primary mechanism for validating solutions in CI and during developm
 
 ### Location
 
-Tests are defined under `spec.tests` in the solution YAML. Like resolvers, tests support the `compose` mechanism for splitting into separate files.
+Tests are defined under `spec.testing.cases` in the solution YAML. Like resolvers, tests support the `compose` mechanism for splitting into separate files.
 
 ---
 
@@ -110,85 +110,86 @@ spec:
           template:
             tmpl: "main.tf.tmpl"
           output: "{{environment}}/main.tf"
-  tests:
-    _base-render:
-      description: "Base render test template"
-      command: [render, solution]
-      assertions:
-        - expression: 'size(__output.actions) >= 1'
+  testing:
+    cases:
+      _base-render:
+        description: "Base render test template"
+        command: [render, solution]
+        assertions:
+          - expression: 'size(__output.actions) >= 1'
 
-    renders-dev-defaults:
-      description: "Default environment renders dev configuration"
-      extends: [_base-render]
-      tags: [smoke, render]
-      assertions:
-        - expression: 'size(__output.actions) == 1'
-          message: "Should produce exactly one action"
-        - contains: "dev/main.tf"
+      renders-dev-defaults:
+        description: "Default environment renders dev configuration"
+        extends: [_base-render]
+        tags: [smoke, render]
+        assertions:
+          - expression: 'size(__output.actions) == 1'
+            message: "Should produce exactly one action"
+          - contains: "dev/main.tf"
 
-    renders-prod-with-resolver-run:
-      description: "Run resolver with prod override"
-      command: [run, resolver]
-      args: ["-r", "env=prod"]
-      tags: [resolver]
-      assertions:
-        - expression: '__output.environment == "prod"'
-        - regex: '"environment":\s*"prod"'
+      renders-prod-with-resolver-run:
+        description: "Run resolver with prod override"
+        command: [run, resolver]
+        args: ["-r", "env=prod"]
+        tags: [resolver]
+        assertions:
+          - expression: '__output.environment == "prod"'
+          - regex: '"environment":\s*"prod"'
 
-    render-prod-override:
-      description: "Render with prod override produces correct paths"
-      extends: [_base-render]
-      args: ["-r", "env=prod"]
-      tags: [render]
-      assertions:
-        - expression: '__output.actions["render-main"].inputs.output == "prod/main.tf"'
+      render-prod-override:
+        description: "Render with prod override produces correct paths"
+        extends: [_base-render]
+        args: ["-r", "env=prod"]
+        tags: [render]
+        assertions:
+          - expression: '__output.actions["render-main"].inputs.output == "prod/main.tf"'
 
-    rejects-invalid-env:
-      description: "Invalid environment fails validation"
-      command: [run, resolver]
-      args: ["-r", "env=invalid"]
-      expectFailure: true
-      tags: [validation]
-      assertions:
-        - contains: "Invalid environment"
-        - notContains: "panic"
-        - contains: "validation"
-          target: stderr
+      rejects-invalid-env:
+        description: "Invalid environment fails validation"
+        command: [run, resolver]
+        args: ["-r", "env=invalid"]
+        expectFailure: true
+        tags: [validation]
+        assertions:
+          - contains: "Invalid environment"
+          - notContains: "panic"
+          - contains: "validation"
+            target: stderr
 
-    passes-lint:
-      description: "Solution passes lint with no errors"
-      command: [lint]
-      tags: [lint]
-      assertions:
-        - expression: '__output.errorCount == 0'
+      passes-lint:
+        description: "Solution passes lint with no errors"
+        command: [lint]
+        tags: [lint]
+        assertions:
+          - expression: '__output.errorCount == 0'
 
-    snapshot-action-graph:
-      description: "Action graph matches golden file"
-      command: [render, solution]
-      args: ["-r", "env=dev"]
-      tags: [snapshot]
-      snapshot: "testdata/expected-render.json"
+      snapshot-action-graph:
+        description: "Action graph matches golden file"
+        command: [render, solution]
+        args: ["-r", "env=dev"]
+        tags: [snapshot]
+        snapshot: "testdata/expected-render.json"
 
-    renders-with-setup:
-      description: "Render with custom setup and cleanup"
-      command: [render, solution]
-      env:
-        CUSTOM_VAR: "test-value"
-      init:
-        - command: "mkdir -p templates"
-      cleanup:
-        - command: "echo 'cleanup complete'"
-      assertions:
-        - expression: 'size(__output.actions) >= 1'
-        - expression: '__output.files["dev/main.tf"].exists'
+      renders-with-setup:
+        description: "Render with custom setup and cleanup"
+        command: [render, solution]
+        env:
+          CUSTOM_VAR: "test-value"
+        init:
+          - command: "mkdir -p templates"
+        cleanup:
+          - command: "echo 'cleanup complete'"
+        assertions:
+          - expression: 'size(__output.actions) >= 1'
+          - expression: '__output.files["dev/main.tf"].exists'
 
-    temporarily-disabled:
-      description: "This test is skipped during development"
-      skip: true
-      skipReason: "Waiting on upstream provider fix"
-      command: [render, solution]
-      assertions:
-        - expression: 'size(__output.actions) == 1'
+      temporarily-disabled:
+        description: "This test is skipped during development"
+        skip: true
+        skipReason: "Waiting on upstream provider fix"
+        command: [render, solution]
+        assertions:
+          - expression: 'size(__output.actions) == 1'
 ~~~
 
 ---
@@ -219,45 +220,47 @@ spec:
 ~~~yaml
 # tests/rendering.yaml
 spec:
-  tests:
-    renders-dev-defaults:
-      description: "Default environment renders dev configuration"
-      command: [render, solution]
-      tags: [smoke, render]
-      assertions:
-        - expression: 'size(__output.actions) == 1'
+  testing:
+    cases:
+      renders-dev-defaults:
+        description: "Default environment renders dev configuration"
+        command: [render, solution]
+        tags: [smoke, render]
+        assertions:
+          - expression: 'size(__output.actions) == 1'
 
-    renders-prod-override:
-      description: "Render with prod override produces correct paths"
-      command: [render, solution]
-      args: ["-r", "env=prod"]
-      tags: [render]
-      assertions:
-        - expression: '__output.actions["render-main"].inputs.output == "prod/main.tf"'
+      renders-prod-override:
+        description: "Render with prod override produces correct paths"
+        command: [render, solution]
+        args: ["-r", "env=prod"]
+        tags: [render]
+        assertions:
+          - expression: '__output.actions["render-main"].inputs.output == "prod/main.tf"'
 ~~~
 
 ~~~yaml
 # tests/validation.yaml
 spec:
-  tests:
-    rejects-invalid-env:
-      description: "Invalid environment fails validation"
-      command: [run, resolver]
-      args: ["-r", "env=invalid"]
-      expectFailure: true
-      tags: [validation]
-      assertions:
-        - contains: "Invalid environment"
+  testing:
+    cases:
+      rejects-invalid-env:
+        description: "Invalid environment fails validation"
+        command: [run, resolver]
+        args: ["-r", "env=invalid"]
+        expectFailure: true
+        tags: [validation]
+        assertions:
+          - contains: "Invalid environment"
 ~~~
 
 ---
 
 ## Test Case Spec
 
-Each test case is a named entry under `spec.tests`. Test names must match `^[a-zA-Z0-9][a-zA-Z0-9_-]*$` (letters, numbers, hyphens, underscores; must start with a letter or number). Names starting with `_` are test templates — they are not executed directly but can be inherited via `extends`.
+Each test case is a named entry under `spec.testing.cases`. Test names must match `^[a-zA-Z0-9][a-zA-Z0-9_-]*$` (letters, numbers, hyphens, underscores; must start with a letter or number). Names starting with `_` are test templates — they are not executed directly but can be inherited via `extends`.
 
 ~~~yaml
-tests:
+cases:
   <test-name>:
     description: <string>
     command: <list[string]>
@@ -280,7 +283,7 @@ tests:
     retries: <int>
 ~~~
 
-Each test case is a named entry under `spec.tests`. The maximum number of tests per solution is **500**.
+Each test case is a named entry under `spec.testing.cases`. The maximum number of tests per solution is **500**.
 
 ### Field Details
 
@@ -310,30 +313,31 @@ Each test case is a named entry under `spec.tests`. The maximum number of tests 
 
 ## Test Configuration
 
-Solution-level test configuration is defined under `spec.testConfig`:
+Solution-level test configuration is defined under `spec.testing.config`:
 
 ~~~yaml
 spec:
-  testConfig:
-    skipBuiltins: true
-    env:
-      SCAFCTL_CONFIG_DIR: "$SCAFCTL_SANDBOX_DIR"
-    setup:
-      - command: "scafctl config set defaults.environment staging"
-      - command: "mkdir -p templates"
-    cleanup:
-      - command: "echo 'suite teardown complete'"
+  testing:
+    config:
+      skipBuiltins: true
+      env:
+        SCAFCTL_CONFIG_DIR: "$SCAFCTL_SANDBOX_DIR"
+      setup:
+        - command: "scafctl config set defaults.environment staging"
+        - command: "mkdir -p templates"
+      cleanup:
+        - command: "echo 'suite teardown complete'"
 ~~~
 
 `skipBuiltins` accepts either a boolean or a list of builtin test names for selective skipping:
 
 ~~~yaml
 # Skip all builtins
-testConfig:
+config:
   skipBuiltins: true
 
 # Skip only specific builtins
-testConfig:
+config:
   skipBuiltins:
     - resolve-defaults
     - render-defaults
@@ -348,7 +352,7 @@ testConfig:
 
 ### Suite-Level Setup
 
-When `testConfig.setup` is defined:
+When `testing.config.setup` is defined:
 
 1. Create a base sandbox and copy the solution + bundle files
 2. Run `setup` steps sequentially in the base sandbox
@@ -359,7 +363,7 @@ This avoids duplicating the same init steps across every test. If any setup step
 
 ### Compose Merge Semantics
 
-When `testConfig` appears in multiple compose files:
+When `testing.config` appears in multiple compose files:
 
 | Field | Merge Behavior |
 | ----- | -------------- |
@@ -369,11 +373,11 @@ When `testConfig` appears in multiple compose files:
 | `cleanup` | Appended in compose-file order (first file's steps run first) |
 | `env` | Merged map; last compose file wins on key conflict |
 
-Compose-file order affects `testConfig.setup`, `testConfig.cleanup`, and `testConfig.env` merge ordering but does **not** affect test execution order. Tests from all compose files are merged into a single map and executed alphabetically (see [Test Execution Ordering](#test-execution-ordering)).
+Compose-file order affects `testing.config.setup`, `testing.config.cleanup`, and `testing.config.env` merge ordering but does **not** affect test execution order. Tests from all compose files are merged into a single map and executed alphabetically (see [Test Execution Ordering](#test-execution-ordering)).
 
-`spec.tests` entries are merged by name using the **reject-duplicates** strategy (same as resolvers and actions). If two compose files define a test with the same name, the compose merge fails with an error.
+`spec.testing.cases` entries are merged by name using the **reject-duplicates** strategy (same as resolvers and actions). If two compose files define a test with the same name, the compose merge fails with an error.
 
-> **`composePart` struct**: The `composePart` struct in `pkg/solution/bundler/compose.go` must be extended with `Tests map[string]*testing.TestCase` and `TestConfig *testing.TestConfig` fields to parse test-related sections from compose files.
+> **`composePart` struct**: The `composePart` struct in `pkg/solution/bundler/compose.go` has a `Testing *soltesting.TestSuite` field to parse test-related sections from compose files.
 
 > **Note**: `SkipBuiltinsValue` requires both `UnmarshalYAML` and `MarshalYAML` implementations to survive the `deepCopySolution` YAML round-trip used in compose.
 
@@ -384,7 +388,7 @@ Compose-file order affects `testConfig.setup`, `testConfig.cleanup`, and `testCo
 Tests can define setup steps that run before the test command. Init steps execute sequentially in the sandbox directory. Init uses the exec provider's input schema, giving access to all execution options.
 
 ~~~yaml
-tests:
+cases:
   renders-with-custom-config:
     description: "Renders with custom configuration"
     init:
@@ -431,7 +435,7 @@ Environment variables are resolved in the following precedence order (highest wi
 | Priority | Source | Description |
 | -------- | ------ | ----------- |
 | 1 (lowest) | Process environment | Inherited from the parent process |
-| 2 | `testConfig.env` | Suite-level env applied to all tests |
+| 2 | `testing.config.env` | Suite-level env applied to all tests |
 | 3 | `TestCase.env` | Per-test env overrides suite-level on key conflict |
 | 4 (highest) | `InitStep.env` | Per-step env overrides all others on key conflict |
 
@@ -445,15 +449,16 @@ Tests can declare additional files required for execution. These files are copie
 
 ~~~yaml
 spec:
-  tests:
-    renders-with-custom-template:
-      description: "Renders with a test-specific template"
-      files:
-        - testdata/custom-main.tf.tmpl
-        - testdata/variables.json
-      command: [render, solution]
-      assertions:
-        - expression: 'size(__output.actions) >= 1'
+  testing:
+    cases:
+      renders-with-custom-template:
+        description: "Renders with a test-specific template"
+        files:
+          - testdata/custom-main.tf.tmpl
+          - testdata/variables.json
+        command: [render, solution]
+        assertions:
+          - expression: 'size(__output.actions) >= 1'
 
 bundle:
   include:
@@ -465,7 +470,7 @@ bundle:
 | Phase | Behavior |
 | ----- | -------- |
 | **Development** | `files` paths are resolved relative to the solution directory. The runner copies them into the sandbox before init/command execution |
-| **Build** | `scafctl build` auto-discovers files referenced in `spec.tests[*].files` and includes them in the bundle artifact as a `TestInclude` discovery source |
+| **Build** | `scafctl build` auto-discovers files referenced in `spec.testing.cases[*].files` and includes them in the bundle artifact as a `TestInclude` discovery source |
 | **Lint** | `scafctl lint` produces an **error** if test files are not covered by `bundle.include` patterns. Tests must work from remote catalog artifacts |
 | **Bundle extraction** | Test files are extracted alongside solution files when a bundled solution is unpacked |
 
@@ -475,7 +480,7 @@ Files are copied into the sandbox maintaining their relative directory structure
 
 Globs in the `files` field (e.g., `testdata/**/*.json`) are resolved at **sandbox setup time** — after suite-level setup completes but before per-test init steps run. This means:
 
-- Globs are expanded against the solution source directory (or the suite-level base sandbox if `testConfig.setup` is defined)
+- Globs are expanded against the solution source directory (or the suite-level base sandbox if `testing.config.setup` is defined)
 - **Zero-match globs produce a test `error`**, not a silent no-op. This catches typos and missing test data early
 - Glob patterns are validated at lint time — `scafctl lint` warns on syntactically invalid glob patterns
 - Resolved paths are logged in verbose output for debugging
@@ -526,7 +531,7 @@ Test names starting with `_` are **templates** — they are not executed directl
 ### Example
 
 ~~~yaml
-tests:
+cases:
   _base-render:
     description: "Base render test"
     command: [render, solution]
@@ -560,7 +565,7 @@ The resolved `render-prod` test inherits:
 Tests can define cleanup steps that run after the test command, **even if the command or assertions fail**. Cleanup uses the same `InitStep` schema as `init`.
 
 ~~~yaml
-tests:
+cases:
   renders-with-temp-state:
     description: "Render with temporary state file"
     command: [render, solution]
@@ -585,7 +590,7 @@ Cleanup steps:
 Tests can be tagged for categorization and selective execution.
 
 ~~~yaml
-tests:
+cases:
   renders-dev:
     description: "Render dev config"
     command: [render, solution]
@@ -632,7 +637,7 @@ Invalid names are rejected during YAML parsing and surfaced as lint errors.
 
 ## Builtin Tests
 
-Every solution automatically receives builtin tests unless `testConfig.skipBuiltins` is set. Builtins validate baseline correctness without requiring explicit test definitions.
+Every solution automatically receives builtin tests unless `testing.config.skipBuiltins` is set. Builtins validate baseline correctness without requiring explicit test definitions.
 
 | Builtin Test | Command | Passes When |
 | ------------ | ------- | ----------- |
@@ -643,7 +648,7 @@ Every solution automatically receives builtin tests unless `testConfig.skipBuilt
 
 Builtins run before user-defined tests. By default, if a builtin fails, user-defined tests still run (they are independent). Use `--fail-fast` to stop remaining tests for that solution on first failure.
 
-Selective skipping is supported via `testConfig.skipBuiltins` — set to `true` to skip all, or provide a list of specific builtin names (without the `builtin:` prefix) to skip only those.
+Selective skipping is supported via `testing.config.skipBuiltins` — set to `true` to skip all, or provide a list of specific builtin names (without the `builtin:` prefix) to skip only those.
 
 ---
 
@@ -886,9 +891,9 @@ This is consistent with how the codebase handles action ordering within executio
 The test runner discovers tests in two ways:
 
 1. **Single solution**: `scafctl test functional -f solution.yaml` — runs tests defined in that solution
-2. **Directory scan**: `scafctl test functional --tests-path path/to/solutions/` — recursively discovers all solution files and runs their `spec.tests`
+2. **Directory scan**: `scafctl test functional --tests-path path/to/solutions/` — recursively discovers all solution files and runs their `spec.testing.cases`
 
-Solutions with no `spec.tests` still run builtin tests (unless `skipBuiltins` is set).
+Solutions with no `spec.testing.cases` still run builtin tests (unless `skipBuiltins` is set).
 
 Test templates (names starting with `_`) are resolved via `extends` but never executed directly.
 
@@ -914,7 +919,7 @@ For each test case:
 16. Run **all** assertions (CEL against parsed output, regex/contains against target stream). All assertions always run regardless of prior failures
 17. Run cleanup steps (even on failure or error)
 18. All checks pass → `pass`; any check fails → `fail`
-19. If `fail` and `retries > 0` → re-run from step 5 up to `retries` times. Each retry creates a **fresh sandbox** (re-copies solution + bundle files from the suite-level base sandbox if `testConfig.setup` is present, otherwise from source). Init steps re-run on each retry. If any retry passes → `pass (retry N/M)`. Retry attempts are shown in verbose output
+19. If `fail` and `retries > 0` → re-run from step 5 up to `retries` times. Each retry creates a **fresh sandbox** (re-copies solution + bundle files from the suite-level base sandbox if `testing.config.setup` is present, otherwise from source). Init steps re-run on each retry. If any retry passes → `pass (retry N/M)`. Retry attempts are shown in verbose output
 
 ### Parallelism
 
@@ -1159,13 +1164,13 @@ Example `<error>` element:
 
 ### Bundler Discovery
 
-`scafctl build` and the bundler's `DiscoverFiles()` must scan `spec.tests[*].files` entries as an additional discovery source. These are tagged as `TestInclude` to distinguish them from `StaticAnalysis` and `ExplicitInclude` sources.
+`scafctl build` and the bundler's `DiscoverFiles()` must scan `spec.testing.cases[*].files` entries as an additional discovery source. These are tagged as `TestInclude` to distinguish them from `StaticAnalysis` and `ExplicitInclude` sources.
 
 This ensures test files are included in the bundle artifact and available when tests run from a remote catalog.
 
 ### Lint Rule
 
-`scafctl lint` produces an **error** when files referenced in `spec.tests[*].files` are not covered by `bundle.include` patterns. Tests must work when the solution is fetched from a remote catalog, so all test files must be bundled.
+`scafctl lint` produces an **error** when files referenced in `spec.testing.cases[*].files` are not covered by `bundle.include` patterns. Tests must work when the solution is fetched from a remote catalog, so all test files must be bundled.
 
 ---
 
@@ -1330,9 +1335,9 @@ const (
 
 ### Additions to Existing Types
 
-- `pkg/solution/spec.go`: Add `Tests map[string]*testing.TestCase` and `TestConfig *testing.TestConfig` fields to `Spec`. Add `HasTests() bool` and `HasTestConfig() bool` helper methods following the existing `Has*()` pattern
-- `pkg/solution/bundler/compose.go`: Extend `composePart` struct with `Tests map[string]*testing.TestCase` and `TestConfig *testing.TestConfig` fields. Extend compose to merge `spec.tests` (by name, reject duplicates) and `spec.testConfig` (`skipBuiltins`: true-wins for bool / union for lists; `env`: merged map, last-file-wins on conflict; `setup`/`cleanup`: appended in compose-file order)
-- `pkg/solution/bundler/discover.go`: Add `TestInclude` discovery source; scan `spec.tests[*].files` entries
+- `pkg/solution/spec.go`: Has `Testing *soltesting.TestSuite` field on `Spec`. `HasTests()` and `HasTestConfig()` delegate to `Testing.HasCases()` and `Testing.HasConfig()`
+- `pkg/solution/bundler/compose.go`: `composePart` has `Testing *soltesting.TestSuite` field. Compose merges `spec.testing.cases` (by name, reject duplicates) and `spec.testing.config` (`skipBuiltins`: true-wins for bool / union for lists; `env`: merged map, last-file-wins on conflict; `setup`/`cleanup`: appended in compose-file order)
+- `pkg/solution/bundler/discover.go`: Add `TestInclude` discovery source; scan `spec.testing.cases[*].files` entries
 
 ---
 
@@ -1362,8 +1367,8 @@ const (
 | Create | `pkg/cmd/scafctl/test/functional.go` | `test functional` command |
 | Create | `pkg/cmd/scafctl/test/list.go` | `test list` command |
 | Modify | `pkg/cmd/scafctl/root.go` | Register `test` command |
-| Modify | `pkg/solution/spec.go` | Add `Tests` and `TestConfig` fields |
-| Modify | `pkg/solution/bundler/compose.go` | Merge `spec.tests` and `spec.testConfig` in compose |
+| Modify | `pkg/solution/spec.go` | Has `Testing *soltesting.TestSuite` field |
+| Modify | `pkg/solution/bundler/compose.go` | Merge `spec.testing.cases` and `spec.testing.config` in compose |
 | Modify | `pkg/solution/bundler/discover.go` | Add `TestInclude` discovery source |
 | Modify | `pkg/cmd/scafctl/lint/` | Add lint rule for unbundled test files (error), invalid test names, and unused templates (warning) |
 | Modify | `pkg/exitcode/exitcode.go` | Add `TestFailed = 11` constant |
@@ -1513,7 +1518,7 @@ The example solution at `examples/solutions/tested-solution/` should include:
 - **In-process execution** over subprocess: the runner invokes the cobra command tree directly using `Root()`. Faster, no built binary dependency, simpler output capture
 - **Auto-inject `-f` by default**: the runner injects `-f <sandbox-solution-path>` unless `injectFile: false`. `-f` must never appear in `args` regardless of `injectFile`. Disabled for catalog solution tests where no local file is needed
 - **Custom `exitFunc`**: uses `writer.WithExitFunc()` to intercept `os.Exit` calls during in-process execution, converting them to `*exitcode.ExitError` values
-- **Tests in `spec.tests`** with compose support: follows existing split-file pattern, keeps tests colocated with the solution
+- **Tests in `spec.testing.cases`** with compose support: follows existing split-file pattern, keeps tests colocated with the solution
 - **Temp directory sandbox**: init scripts can modify files safely without affecting source. Symlinks rejected
 - **Five assertion types** (CEL, regex, contains, notRegex, notContains): CEL for structured assertions; text matching for quick checks; negation for safety
 - **Assertion `target` field**: `stdout` (default), `stderr`, or `combined` for text assertions. Cleaner than separate `stderrContains`/`stderrRegex` fields
@@ -1552,15 +1557,15 @@ The example solution at `examples/solutions/tested-solution/` should include:
 - **File size guard**: 10MB cap on `files[].content` to prevent OOM without blocking tests
 - **Conditional skip via CEL**: `skipExpression` field evaluated at discovery time with `os`, `arch`, `env` context
 - **Test retries**: `retries` field for flaky test resilience, capped at 10 attempts
-- **Suite-level cleanup**: `testConfig.cleanup` runs after all tests, symmetric with `testConfig.setup`
-- **Compose `testConfig` merge**: `setup`/`cleanup` steps appended in compose-file order (new merge strategy); `skipBuiltins` uses `true`-wins for bool, union for lists
+- **Suite-level cleanup**: `testing.config.cleanup` runs after all tests, symmetric with `testing.config.setup`
+- **Compose `testing.config` merge**: `setup`/`cleanup` steps appended in compose-file order (new merge strategy); `skipBuiltins` uses `true`-wins for bool, union for lists
 - **`SkipBuiltinsValue` round-trip**: requires both `UnmarshalYAML` and `MarshalYAML` for compose `deepCopySolution` compatibility
 - **Snapshot normalization pipeline**: fixed set of scrubbers (timestamps, UUIDs, sandbox paths, sorted keys). Custom scrubbers deferred to future enhancement
 - **Alphabetical test ordering** over YAML definition order: consistent with how actions use `sort.Strings` within execution phases. No new infrastructure (ordered maps) needed. Tests should be independent — alphabetical ordering exposes hidden ordering dependencies
 - **`--filter` supports `solution/test-name` format**: when filter contains `/`, match against `solution-name/test-name`. When no `/`, match test name only (backward-compatible). Enables scoping in multi-solution runs
 - **`--solution` flag** for solution-level filtering: glob-based, ANDed with `--filter` and `--tag`. Simpler than always using `solution/test-name` format when you only care about the solution
 - **`--dry-run` flag** over separate `test validate` subcommand: simpler, one less command. Validates definitions and reports discovery without executing
-- **Suite-level `env`** (`testConfig.env`): avoids repeating environment variables on every test case. Precedence: process → `testConfig.env` → `TestCase.env` → `InitStep.env`
+- **Suite-level `env`** (`testing.config.env`): avoids repeating environment variables on every test case. Precedence: process → `testing.config.env` → `TestCase.env` → `InitStep.env`
 - **Fresh sandbox per retry**: each retry creates a new sandbox to ensure side-effect isolation. Init steps re-run on each attempt. Suite-level base sandbox is re-copied, not re-run
 - **Binary file content guard**: non-UTF-8 files get `content` set to `"<binary file>"`, parallel to the size guard. Prevents garbled CEL string comparisons
 - **`output` nil → test `error`** (not `fail`): referencing `output` when the command doesn't support `-o json` is a configuration issue, not an assertion failure
@@ -1573,5 +1578,5 @@ The example solution at `examples/solutions/tested-solution/` should include:
 - **`TestCase.Validate()` method**: comprehensive validation covering name format, field limits, mutual exclusion, and `args` content. Catches errors early at parse time
 - **Assertion count in verbose output**: `PASS (4/4)` / `FAIL (2/4)` gives quick visibility into test thoroughness without requiring `-o json`
 - **Duration as string type**: `"30s"` YAML format with custom marshal/unmarshal. More human-readable than integer seconds and more explicit than Go's default nanosecond marshalling
-- **Environment precedence chain documented**: process → `testConfig.env` → `TestCase.env` → `InitStep.env`. Each level merges with previous; only conflicting keys are overridden
-- **Compose test ordering independent of file order**: tests from all compose files execute alphabetically, not in compose-file order. Only `testConfig.setup`/`cleanup`/`env` follow compose-file ordering
+- **Environment precedence chain documented**: process → `testing.config.env` → `TestCase.env` → `InitStep.env`. Each level merges with previous; only conflicting keys are overridden
+- **Compose test ordering independent of file order**: tests from all compose files execute alphabetically, not in compose-file order. Only `testing.config.setup`/`cleanup`/`env` follow compose-file ordering

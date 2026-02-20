@@ -321,7 +321,9 @@ func discoverSolutionFiles(filePath string) (*SolutionInfo, error) {
 		Kind       string   `yaml:"kind"`
 		Compose    []string `yaml:"compose"`
 		Spec       struct {
-			Tests map[string]any `yaml:"tests"`
+			Testing *struct {
+				Cases map[string]any `yaml:"cases"`
+			} `yaml:"testing"`
 		} `yaml:"spec"`
 	}
 
@@ -330,7 +332,7 @@ func discoverSolutionFiles(filePath string) (*SolutionInfo, error) {
 	}
 
 	// Only watch solution files (must be a Solution kind or have tests).
-	if doc.Kind != "Solution" && len(doc.Spec.Tests) == 0 {
+	if doc.Kind != "Solution" && (doc.Spec.Testing == nil || len(doc.Spec.Testing.Cases) == 0) {
 		return nil, nil
 	}
 
