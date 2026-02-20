@@ -72,7 +72,7 @@ func TestCommandResolver_FlagDefaults(t *testing.T) {
 
 	output, err := ff.GetString("output")
 	require.NoError(t, err)
-	assert.Equal(t, "table", output)
+	assert.Equal(t, "auto", output)
 
 	skipTransform, err := ff.GetBool("skip-transform")
 	require.NoError(t, err)

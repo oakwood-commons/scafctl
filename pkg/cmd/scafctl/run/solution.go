@@ -389,7 +389,7 @@ func (o *SolutionOptions) writeActionOutput(_ context.Context, result *action.Ex
 	}
 
 	switch o.Output {
-	case "table", "":
+	case "auto", "table", "list", "":
 		return o.writeActionOutputDefault(result)
 	case "json":
 		return o.writeActionOutputStructured(result, executionData, "json")
