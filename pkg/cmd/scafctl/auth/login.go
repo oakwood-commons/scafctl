@@ -56,6 +56,7 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 			- service-principal: Service account key (GOOGLE_APPLICATION_CREDENTIALS)
 			- workload-identity: Workload Identity Federation (GOOGLE_EXTERNAL_ACCOUNT)
 			- metadata: GCE metadata server (auto-detected on GCE/GKE/Cloud Run)
+			- gcloud-adc: Use existing gcloud Application Default Credentials file
 
 			For Entra service principal flow, set these environment variables:
 			- AZURE_CLIENT_ID: Application (client) ID
@@ -123,6 +124,9 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 
 			  # Login with GCE metadata server
 			  scafctl auth login gcp --flow metadata
+
+			  # Login using existing gcloud ADC credentials
+			  scafctl auth login gcp --flow gcloud-adc
 
 			  # Login with GCP service account impersonation
 			  scafctl auth login gcp --impersonate-service-account my-sa@project.iam.gserviceaccount.com
@@ -281,7 +285,7 @@ func loginGCP(ctx context.Context, w *writer.Writer, flow auth.Flow, clientID, i
 	}
 
 	// Check if already authenticated (skip for non-interactive flows)
-	if flow == auth.FlowInteractive {
+	if flow == auth.FlowInteractive || flow == auth.FlowGcloudADC {
 		status, err := handler.Status(ctx)
 		if err != nil {
 			err = fmt.Errorf("failed to check auth status: %w", err)
@@ -458,12 +462,14 @@ func parseFlow(flowStr, handlerName string) (auth.Flow, error) {
 		return auth.FlowPAT, nil
 	case "metadata":
 		return auth.FlowMetadata, nil
+	case "gcloud-adc", "gcloudadc", "adc":
+		return auth.FlowGcloudADC, nil
 	default:
 		switch handlerName {
 		case "github":
 			return "", fmt.Errorf("unknown flow: %s (valid for github: device-code, pat)", flowStr)
 		case "gcp":
-			return "", fmt.Errorf("unknown flow: %s (valid for gcp: interactive, service-principal, workload-identity, metadata)", flowStr)
+			return "", fmt.Errorf("unknown flow: %s (valid for gcp: interactive, service-principal, workload-identity, metadata, gcloud-adc)", flowStr)
 		default:
 			return "", fmt.Errorf("unknown flow: %s (valid for entra: device-code, service-principal, workload-identity)", flowStr)
 		}

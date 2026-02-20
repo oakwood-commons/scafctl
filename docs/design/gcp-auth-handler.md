@@ -28,12 +28,20 @@ Implement a builtin GCP auth handler (`gcp`) following the established patterns 
 
 ### ADC Strategy
 
-**Decision**: Implement our own OAuth browser flow (authorization code + PKCE) as the primary interactive flow, with automatic fallback to detect existing gcloud ADC credentials from `~/.config/gcloud/application_default_credentials.json`.
+**Decision**: Implement our own OAuth browser flow (authorization code + PKCE) as the primary interactive flow, using Google's well-known ADC client credentials (the same ones used by `gcloud auth application-default login`). A `--flow gcloud-adc` option allows explicitly using existing gcloud ADC credentials from `~/.config/gcloud/application_default_credentials.json`.
 
 **Rationale**:
-- Own OAuth flow gives full control over the experience, token caching, and removes the gcloud CLI dependency
-- gcloud ADC fallback provides a zero-friction onboarding path for users who already have `gcloud auth application-default login` configured
-- This matches how the Entra handler works: its own device code flow is primary, but it could detect Azure CLI credentials as a fallback
+- Own OAuth flow gives full control over the experience, token caching, and removes the gcloud CLI dependency entirely
+- Using Google's public ADC client ID means no custom OAuth app setup is required for the default flow
+- gcloud ADC fallback (`--flow gcloud-adc`) provides backward compatibility for users who prefer to use gcloud's credentials
+- Users can still configure a custom `clientId` in the config to override the built-in default
+- This matches how the Entra handler works: its own device code flow is primary, with external credentials as an opt-in fallback
+
+**Default client credentials**: When no `clientId` is configured, scafctl uses Google's well-known ADC OAuth client:
+- Client ID: `764086051850-6qr4p6gpi6hn506pt8ejuq83di341hur.apps.googleusercontent.com`
+- Client Secret: `d-FL95Q19q7MQmFpd7hHD0Ty`
+
+These are the same public credentials embedded in the gcloud CLI source code.
 
 **OAuth Flow Details**: Unlike GitHub and Entra (which use device code), GCP's recommended interactive flow for CLI tools is authorization code + PKCE with a local redirect URI:
 
@@ -49,7 +57,7 @@ Implement a builtin GCP auth handler (`gcp`) following the established patterns 
 5. Receive: { access_token, refresh_token, expires_in, token_type, scope, id_token }
 ```
 
-**gcloud ADC Fallback**: When no stored scafctl credentials exist, check for gcloud ADC at:
+**gcloud ADC Fallback** (`--flow gcloud-adc`): When explicitly requested, or during token resolution as the lowest-priority fallback, check for gcloud ADC at:
 - `$CLOUDSDK_CONFIG/application_default_credentials.json` (if `CLOUDSDK_CONFIG` set)
 - `~/.config/gcloud/application_default_credentials.json` (Linux/macOS default)
 - `%APPDATA%/gcloud/application_default_credentials.json` (Windows)

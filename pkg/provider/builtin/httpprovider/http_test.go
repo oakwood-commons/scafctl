@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -344,8 +345,14 @@ func TestHTTPProvider_Execute_TimeoutExceeded(t *testing.T) {
 	output, err := p.Execute(ctx, inputs)
 	require.Error(t, err)
 	assert.Nil(t, output)
-	// Both error forms in different Go versions contain "Client.Timeout exceeded".
-	assert.Contains(t, err.Error(), "Client.Timeout exceeded")
+	// Different Go versions / OS schedulers surface the timeout differently:
+	// "Client.Timeout exceeded while awaiting headers" (older/macOS) or
+	// "context deadline exceeded" (newer/Linux).
+	errMsg := err.Error()
+	assert.True(t,
+		strings.Contains(errMsg, "Client.Timeout exceeded") || strings.Contains(errMsg, "context deadline exceeded"),
+		"expected timeout error, got: %s", errMsg,
+	)
 }
 
 func TestHTTPProvider_Execute_InvalidURL(t *testing.T) {
