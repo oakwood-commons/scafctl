@@ -6,6 +6,18 @@ package gcp
 
 import "fmt"
 
+const (
+	// DefaultADCClientID is Google's well-known OAuth client ID for Application Default Credentials.
+	// This is the same client ID used by gcloud for `gcloud auth application-default login`.
+	// It is public and safe to embed: https://cloud.google.com/sdk/docs/authorizing
+	DefaultADCClientID = "764086051850-6qr4p6gpi6hn506pt8ejuq83di341hur.apps.googleusercontent.com" //nolint:gosec // Google's public ADC client ID, not a credential
+
+	// DefaultADCClientSecret is the corresponding client secret for the default ADC OAuth client.
+	// Despite the name, this is not confidential — it is required by the OAuth protocol for
+	// installed/desktop applications but provides no security benefit.
+	DefaultADCClientSecret = "d-FL95Q19q7MQmFpd7hHD0Ty" //nolint:gosec // Google's public ADC client secret, not a credential
+)
+
 // Config holds GCP-specific configuration.
 type Config struct {
 	// ClientID is the OAuth 2.0 client ID for the ADC browser flow.

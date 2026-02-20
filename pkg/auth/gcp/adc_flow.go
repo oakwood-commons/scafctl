@@ -37,10 +37,13 @@ func (h *Handler) adcLogin(ctx context.Context, opts auth.LoginOptions) (*auth.R
 	lgr := logger.FromContext(ctx)
 	lgr.V(1).Info("starting ADC browser OAuth flow", "handler", HandlerName)
 
-	if h.config.ClientID == "" {
-		// Try gcloud ADC fallback
-		lgr.V(1).Info("no client ID configured, trying gcloud ADC fallback")
-		return h.gcloudADCLogin(ctx, opts)
+	// Use configured client ID, or fall back to Google's well-known ADC client credentials
+	clientID := h.config.ClientID
+	clientSecret := h.config.ClientSecret
+	if clientID == "" {
+		lgr.V(1).Info("no client ID configured, using Google's default ADC client credentials")
+		clientID = DefaultADCClientID
+		clientSecret = DefaultADCClientSecret
 	}
 
 	// Determine scopes
@@ -104,7 +107,7 @@ func (h *Handler) adcLogin(ctx context.Context, opts auth.LoginOptions) (*auth.R
 	// Build authorization URL
 	authURL := fmt.Sprintf("%s?client_id=%s&redirect_uri=%s&response_type=code&scope=%s&code_challenge=%s&code_challenge_method=S256&access_type=offline&prompt=consent",
 		authorizationEndpoint,
-		url.QueryEscape(h.config.ClientID),
+		url.QueryEscape(clientID),
 		url.QueryEscape(redirectURI),
 		url.QueryEscape(scopeStr),
 		url.QueryEscape(codeChallenge),
@@ -137,9 +140,9 @@ func (h *Handler) adcLogin(ctx context.Context, opts auth.LoginOptions) (*auth.R
 	// Exchange code for tokens
 	data := url.Values{}
 	data.Set("code", authCode)
-	data.Set("client_id", h.config.ClientID)
-	if h.config.ClientSecret != "" {
-		data.Set("client_secret", h.config.ClientSecret)
+	data.Set("client_id", clientID)
+	if clientSecret != "" {
+		data.Set("client_secret", clientSecret)
 	}
 	data.Set("redirect_uri", redirectURI)
 	data.Set("grant_type", "authorization_code")
@@ -220,17 +223,22 @@ func (h *Handler) mintToken(ctx context.Context, scope string) (*auth.Token, err
 		return nil, fmt.Errorf("failed to load metadata: %w", err)
 	}
 
-	// For ADC flow, use the stored client ID
+	// For ADC flow, use the stored client ID, then configured, then default
 	clientID := h.config.ClientID
+	clientSecret := h.config.ClientSecret
 	if metadata.ClientID != "" {
 		clientID = metadata.ClientID
+	}
+	if clientID == "" {
+		clientID = DefaultADCClientID
+		clientSecret = DefaultADCClientSecret
 	}
 
 	data := url.Values{}
 	data.Set("grant_type", "refresh_token")
 	data.Set("client_id", clientID)
-	if h.config.ClientSecret != "" {
-		data.Set("client_secret", h.config.ClientSecret)
+	if clientSecret != "" {
+		data.Set("client_secret", clientSecret)
 	}
 	data.Set("refresh_token", refreshToken)
 

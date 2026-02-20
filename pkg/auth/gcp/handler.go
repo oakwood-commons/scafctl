@@ -148,6 +148,7 @@ func (h *Handler) SupportedFlows() []auth.Flow {
 		auth.FlowServicePrincipal,
 		auth.FlowWorkloadIdentity,
 		auth.FlowMetadata,
+		auth.FlowGcloudADC,
 	}
 }
 
@@ -181,7 +182,12 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 		return h.serviceAccountLogin(ctx, opts)
 	}
 
-	// Default to ADC (browser OAuth or gcloud fallback)
+	// Check if gcloud ADC flow is explicitly requested
+	if opts.Flow == auth.FlowGcloudADC {
+		return h.gcloudADCLogin(ctx, opts)
+	}
+
+	// Default to ADC (native browser OAuth)
 	return h.adcLogin(ctx, opts)
 }
 

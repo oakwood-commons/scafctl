@@ -562,7 +562,7 @@ scafctl auth login github --flow pat
 For local development, use the interactive browser OAuth flow:
 
 ```bash
-# Login with GCP using browser OAuth (default)
+# Login with GCP using browser OAuth (default — no gcloud required)
 scafctl auth login gcp
 
 # Login with specific scopes
@@ -570,6 +570,9 @@ scafctl auth login gcp --scope https://www.googleapis.com/auth/bigquery
 
 # Login with service account impersonation
 scafctl auth login gcp --impersonate-service-account my-sa@my-project.iam.gserviceaccount.com
+
+# Login with a custom OAuth client ID (overrides the built-in default)
+scafctl auth login gcp --client-id YOUR_CLIENT_ID
 ```
 
 This will:
@@ -577,6 +580,19 @@ This will:
 2. Open your browser to Google's OAuth consent page
 3. Exchange the authorization code for refresh + access tokens
 4. Store the refresh token in your system's secret store
+
+> **Note:** scafctl uses Google's well-known ADC client credentials by default — the same ones used by `gcloud auth application-default login`. No gcloud installation is required. To use a custom OAuth client, see [GCP Custom OAuth Client Setup](gcp-custom-oauth-tutorial.md).
+
+## GCP gcloud ADC Fallback
+
+If you already have gcloud configured and prefer to use its existing credentials:
+
+```bash
+# Use existing gcloud Application Default Credentials
+scafctl auth login gcp --flow gcloud-adc
+```
+
+This reads the refresh token from `~/.config/gcloud/application_default_credentials.json` (produced by `gcloud auth application-default login`). Note that this flow is subject to your organization's RAPT re-authentication policies.
 
 ## GCP Service Account Key Authentication (CI/CD)
 
@@ -936,6 +952,39 @@ If you need to use your own Azure application registration:
 2. Configure it as a public client (mobile/desktop)
 3. Add the required API permissions
 4. Set `auth.entra.clientId` in your config
+
+### GCP Configuration
+
+You can configure a custom OAuth client for GCP to avoid depending on gcloud ADC:
+
+```yaml
+auth:
+  gcp:
+    # Custom OAuth 2.0 client (bypasses gcloud ADC)
+    clientId: "123456789-abc123.apps.googleusercontent.com"
+    clientSecret: "GOCSPX-xxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+    # Default scopes requested during login
+    defaultScopes:
+      - "openid"
+      - "https://www.googleapis.com/auth/cloud-platform"
+
+    # Optional: impersonate a service account
+    impersonateServiceAccount: "deploy@my-project.iam.gserviceaccount.com"
+
+    # Optional: default project
+    project: "my-project-123"
+```
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| `auth.gcp.clientId` | OAuth 2.0 client ID | *(empty — uses gcloud ADC)* |
+| `auth.gcp.clientSecret` | OAuth 2.0 client secret | *(empty)* |
+| `auth.gcp.defaultScopes` | Scopes requested during login | `openid`, `cloud-platform` |
+| `auth.gcp.impersonateServiceAccount` | Service account to impersonate | *(empty)* |
+| `auth.gcp.project` | Default GCP project ID | *(empty)* |
+
+> For a complete guide on creating the OAuth client with `gcloud` commands, see [GCP Custom OAuth Client Setup](gcp-custom-oauth-tutorial.md).
 
 ---
 
