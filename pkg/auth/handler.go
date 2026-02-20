@@ -76,6 +76,9 @@ const (
 
 	// FlowMetadata is authentication using cloud metadata server (e.g., GCE, Cloud Run).
 	FlowMetadata Flow = "metadata"
+
+	// FlowGcloudADC is authentication using gcloud's Application Default Credentials file.
+	FlowGcloudADC Flow = "gcloud_adc"
 )
 
 // DefaultMinValidFor is the default minimum validity duration for tokens.

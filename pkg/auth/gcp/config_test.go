@@ -23,6 +23,14 @@ func TestDefaultConfig(t *testing.T) {
 	assert.Contains(t, cfg.DefaultScopes, "https://www.googleapis.com/auth/cloud-platform")
 }
 
+func TestDefaultADCClientCredentials(t *testing.T) {
+	// Verify the well-known Google ADC client credentials are set correctly.
+	// These are public values embedded in gcloud's source code.
+	assert.NotEmpty(t, DefaultADCClientID)
+	assert.Contains(t, DefaultADCClientID, ".apps.googleusercontent.com")
+	assert.NotEmpty(t, DefaultADCClientSecret)
+}
+
 func TestConfig_Validate(t *testing.T) {
 	tests := []struct {
 		name    string
