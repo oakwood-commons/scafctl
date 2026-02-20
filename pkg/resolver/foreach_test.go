@@ -526,13 +526,88 @@ func TestForEach_WithWhenCondition(t *testing.T) {
 	arr, ok := value.([]any)
 	require.True(t, ok)
 
-	// Should have 6 items: nil for odd, values for even
+	// Skipped items are auto-filtered: only even numbers remain
+	require.Len(t, arr, 3)
+	assert.Equal(t, 2, arr[0])
+	assert.Equal(t, 4, arr[1])
+	assert.Equal(t, 6, arr[2])
+}
+
+func TestForEach_WithWhenCondition_KeepSkipped(t *testing.T) {
+	registry := newMockRegistry()
+
+	// Register identity provider
+	err := registry.Register(&mockProvider{
+		name: "identity",
+		executeFunc: func(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
+			resolverData, _ := provider.ResolverContextFromContext(ctx)
+			return &provider.Output{Data: resolverData["__item"]}, nil
+		},
+	})
+	require.NoError(t, err)
+
+	// Register static provider
+	err = registry.Register(&mockProvider{
+		name: "static",
+		executeFunc: func(_ context.Context, inputs map[string]any) (*provider.Output, error) {
+			return &provider.Output{Data: inputs["value"]}, nil
+		},
+	})
+	require.NoError(t, err)
+
+	executor := NewExecutor(registry)
+
+	// Only process even numbers, but retain index alignment via keepSkipped
+	resolvers := []*Resolver{
+		{
+			Name: "filteredKeep",
+			Type: TypeArray,
+			Resolve: &ResolvePhase{
+				With: []ProviderSource{
+					{
+						Provider: "static",
+						Inputs: map[string]*ValueRef{
+							"value": {Literal: []any{1, 2, 3, 4, 5, 6}},
+						},
+					},
+				},
+			},
+			Transform: &TransformPhase{
+				With: []ProviderTransform{
+					{
+						Provider: "identity",
+						ForEach: &ForEachClause{
+							Item:        "num",
+							KeepSkipped: true,
+						},
+						When: &Condition{
+							Expr: exprPtr("num % 2 == 0"),
+						},
+						Inputs: map[string]*ValueRef{},
+					},
+				},
+			},
+		},
+	}
+
+	ctx := context.Background()
+	ctx, err = executor.Execute(ctx, resolvers, nil)
+	require.NoError(t, err)
+
+	result, _ := FromContext(ctx)
+	value, ok := result.Get("filteredKeep")
+	require.True(t, ok)
+
+	arr, ok := value.([]any)
+	require.True(t, ok)
+
+	// keepSkipped: true preserves nil for skipped items, maintaining index alignment
 	require.Len(t, arr, 6)
-	assert.Nil(t, arr[0], "odd indices should be nil")
+	assert.Nil(t, arr[0], "odd item should be nil")
 	assert.Equal(t, 2, arr[1])
-	assert.Nil(t, arr[2])
+	assert.Nil(t, arr[2], "odd item should be nil")
 	assert.Equal(t, 4, arr[3])
-	assert.Nil(t, arr[4])
+	assert.Nil(t, arr[4], "odd item should be nil")
 	assert.Equal(t, 6, arr[5])
 }
 

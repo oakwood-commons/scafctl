@@ -28,4 +28,11 @@ type ForEachClause struct {
 	// OnError defines behavior when an iteration fails.
 	// This field is only used by actions; resolvers ignore it.
 	OnError OnErrorBehavior `json:"onError,omitempty" yaml:"onError,omitempty" doc:"Error handling behavior (actions only)" example:"fail" default:"fail"`
+
+	// KeepSkipped controls whether items skipped by a when condition are
+	// retained as nil entries in the output array.
+	// By default (false), skipped items are removed so the output contains
+	// only the items that were actually processed. Set to true when you need
+	// the output array to remain index-aligned with the input array.
+	KeepSkipped bool `json:"keepSkipped,omitempty" yaml:"keepSkipped,omitempty" doc:"Retain nil entries for items skipped by when condition (default: false)"`
 }

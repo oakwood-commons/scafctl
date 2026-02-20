@@ -1086,6 +1086,130 @@ Bob was filtered out of `parsed_data` because `active` was `false`. The `raw_dat
 
 ---
 
+## Array Iteration with `forEach`
+
+### Transform Phase `forEach`
+
+When a resolver produces an array, the `transform.with.forEach` clause processes each element independently and collects results back into an array:
+
+```yaml
+spec:
+  resolvers:
+    doubled:
+      type: '[]int'
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: [1, 2, 3, 4, 5]
+      transform:
+        with:
+          - provider: cel
+            forEach:
+              item: num       # alias for the current element
+              index: i        # alias for the current index
+            inputs:
+              expression: "num * 2"
+```
+
+Run it to see the result:
+
+```bash
+scafctl run resolver -f solution.yaml --resolver doubled -o json
+```
+
+#### Filtering with `when` and `forEach`
+
+By default, items where the `when` condition evaluates to `false` are **removed** from the output array. This makes `forEach` + `when` a natural filter:
+
+```yaml
+transform:
+  with:
+    - provider: cel
+      forEach:
+        item: num
+      when:
+        expr: "num % 2 == 0"    # only even numbers
+      inputs:
+        expression: "num * 2"
+```
+
+Input `[1, 2, 3, 4, 5]` → output `[4, 8]` (only even numbers, doubled).
+
+To retain index alignment (`nil` in place of skipped items), set `keepSkipped: true`:
+
+```yaml
+forEach:
+  item: num
+  keepSkipped: true    # output: [nil, 4, nil, 8, nil]
+```
+
+---
+
+### Resolve Phase `forEach` with `filter`
+
+For resolvers that produce arrays by resolving each element individually, use `forEach` directly in the `resolve` phase. This is useful when you want to iterate over an existing array and resolve a value for each item using provider logic or `when` conditions:
+
+```yaml
+spec:
+  resolvers:
+    allUsers:
+      type: '[]object'
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - {name: Alice, active: true}
+                - {name: Bob,   active: false}
+                - {name: Carol, active: true}
+
+    activeUsers:
+      type: '[]object'
+      resolve:
+        forEach:
+          items:
+            expr: allUsers       # source array (evaluates allUsers resolver)
+          as: user               # alias for each element
+          filter: true           # remove nil results from output
+          resolve:
+            with:
+              - provider: static
+                when:
+                  expr: 'user.active == true'
+                inputs:
+                  value:
+                    expr: user
+```
+
+Without `filter: true` the output would include `nil` for Bob:
+
+```
+[{name: Alice, active: true}, nil, {name: Carol, active: true}]
+```
+
+With `filter: true` the output contains only matched items:
+
+```
+[{name: Alice, active: true}, {name: Carol, active: true}]
+```
+
+Run it:
+
+```bash
+scafctl run resolver -f solution.yaml --resolver activeUsers -o json
+```
+
+#### `filter` vs `keepSkipped`
+
+| | `resolve.forEach` with `filter: true` | `transform.with.forEach` with `keepSkipped: true` |
+|-|--------------------------------------|--------------------------------------------------|
+| **Phase** | Resolve | Transform |
+| **Default** | Keep nil (index-aligned) | Remove nil (auto-filter) |
+| **Opt-in** | `filter: true` removes nil | `keepSkipped: true` retains nil |
+
+---
+
 ## Troubleshooting
 
 ### Common Issues

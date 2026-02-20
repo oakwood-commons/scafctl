@@ -1,0 +1,3 @@
+# Snapshot files written by -o test during test execution.
+# These are generated artifacts and should not be version-controlled here.
+testdata/
