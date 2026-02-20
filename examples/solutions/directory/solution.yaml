@@ -130,7 +130,7 @@ spec:
       cleanup-temp:
         provider: directory
         dependsOn: [backup-configs]
-        condition:
+        when:
           expr: "false"  # Disabled by default — set to true to enable cleanup
         inputs:
           operation: rmdir

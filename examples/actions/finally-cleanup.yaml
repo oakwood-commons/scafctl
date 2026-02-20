@@ -24,8 +24,6 @@ spec:
     temp_resources:
       description: Temporary resources to clean up
       type: array
-      items:
-        type: string
       resolve:
         with:
           - provider: static

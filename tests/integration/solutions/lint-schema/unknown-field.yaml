@@ -1,0 +1,17 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: lint-unknown-field
+  version: 1.0.0
+  description: "Solution with an unknown top-level field for lint testing"
+unknownField: "this should be caught by schema validation"
+spec:
+  resolvers:
+    env:
+      name: env
+      description: "Resolve the environment"
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "environment"

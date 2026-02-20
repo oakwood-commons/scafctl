@@ -6,6 +6,8 @@ package gcp
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -261,6 +263,48 @@ func TestHandler_GetToken_NotAuthenticated(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.ErrorIs(t, err, auth.ErrNotAuthenticated)
+}
+
+func TestHandler_GetToken_GcloudADCFallback_SetsFlow(t *testing.T) {
+	// Verify that when gcloud ADC is the credential source (e.g. after
+	// 'scafctl auth logout gcp' which only clears scafctl-managed creds),
+	// the returned token has Flow set to FlowGcloudADC so callers can see
+	// why the token was issued.
+	store := secrets.NewMockStore()
+	mockHTTP := NewMockHTTPClient()
+	handler, err := New(WithSecretStore(store), WithHTTPClient(mockHTTP))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+	t.Setenv("GOOGLE_EXTERNAL_ACCOUNT", "")
+
+	// Write a fake gcloud ADC credentials file
+	tmpDir := t.TempDir()
+	t.Setenv(EnvCloudSDKConfig, tmpDir)
+	adcPath := filepath.Join(tmpDir, "application_default_credentials.json")
+	adcData, _ := json.Marshal(GcloudADCCredentials{
+		ClientID:     "fake-client-id",
+		ClientSecret: "fake-client-secret",
+		RefreshToken: "fake-refresh-token",
+		Type:         "authorized_user",
+	})
+	require.NoError(t, os.WriteFile(adcPath, adcData, 0o600))
+
+	// Mock the token endpoint response
+	mockHTTP.AddResponse(200, TokenResponse{
+		AccessToken: "gcloud-fallback-token",
+		TokenType:   "Bearer",
+		ExpiresIn:   3600,
+	})
+
+	token, err := handler.GetToken(ctx, auth.TokenOptions{
+		Scope: "https://www.googleapis.com/auth/cloud-platform",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, token)
+	assert.Equal(t, "gcloud-fallback-token", token.AccessToken)
+	assert.Equal(t, auth.FlowGcloudADC, token.Flow, "Flow should identify gcloud ADC as the credential source")
 }
 
 func TestHandler_GetToken_FromCache(t *testing.T) {

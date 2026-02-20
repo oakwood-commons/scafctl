@@ -137,6 +137,9 @@ type Token struct {
 	TokenType   string
 	ExpiresAt   time.Time
 	Scope       string
+	// Flow is the authentication flow that produced this token (e.g. "device_code",
+	// "service_principal", "workload_identity").  Empty string means unknown.
+	Flow Flow
 }
 
 // IsValidFor returns true if the token will be valid for at least the specified duration.

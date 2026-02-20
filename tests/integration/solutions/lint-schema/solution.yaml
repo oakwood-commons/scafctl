@@ -1,0 +1,47 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: lint-schema-valid
+  version: 1.0.0
+  description: |
+    Functional tests verifying that valid solutions pass scafctl lint
+    without schema-violation findings.
+
+spec:
+  resolvers:
+    greeting:
+      description: Static greeting for a minimal valid solution
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+
+  workflow:
+    actions:
+      noop:
+        name: noop
+        description: No-op action so the solution is complete
+        provider: exec
+        inputs:
+          command: "echo ok"
+
+  testing:
+    config:
+      skipBuiltins: true
+
+    cases:
+      lint-passes:
+        description: Valid solution should pass lint with zero errors
+        command: [lint]
+        args: ["-o", "json"]
+        tags: [schema, lint, smoke]
+        assertions:
+          - expression: __exitCode == 0
+            message: "Valid solution should exit 0"
+          - expression: __output.errorCount == 0
+            message: "Valid solution should have no errors"
+          - expression: >
+              !__output.findings.exists(f, f.ruleName == "schema-violation")
+            message: "Valid solution should have no schema-violation findings"

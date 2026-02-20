@@ -62,7 +62,7 @@ spec:
               url: https://api.github.com/user
               headers:
                 Accept: application/json
-              auth: github
+              authProvider: github
               scope: "read:user"
 
     # Fetch user repositories from GitHub API
@@ -76,7 +76,7 @@ spec:
               url: https://api.github.com/user/repos?per_page=5&sort=updated
               headers:
                 Accept: application/json
-              auth: github
+              authProvider: github
               scope: repo
 
     # Extract username from claims

@@ -1,13 +1,15 @@
 # ForEach Filter Example
-# Demonstrates resolve.forEach with filter: true to remove nil results.
+# Demonstrates transform.forEach with keepSkipped to control nil handling.
 #
-# The `resolve.forEach` clause iterates over an array and resolves a value for
-# each element using a nested resolve block. Items where the nested resolve
-# returns nil (e.g., because a `when` condition was false) are normally
-# included as nil entries in the output array.
+# The `transform.forEach` clause iterates over an array and transforms each
+# element. When a `when` condition is present, items that don't match the
+# condition are skipped and produce a nil entry in the output array.
 #
-# Setting `filter: true` automatically removes those nil entries, producing
-# a clean output array with only the matched items.
+# By default (keepSkipped: false), nil entries are removed, producing a clean
+# compact array with only the matched items.
+#
+# Setting `keepSkipped: true` retains nil entries so the output array remains
+# index-aligned with the input array.
 #
 # Run: scafctl run resolver -f examples/resolvers/foreach-filter.yaml -o json --hide-execution
 
@@ -16,7 +18,7 @@ kind: Solution
 metadata:
   name: foreach-filter
   version: 1.0.0
-  description: ForEach with filter to strip nil results from array resolvers
+  description: ForEach with keepSkipped to control nil handling in array resolvers
 
 spec:
   resolvers:
@@ -24,7 +26,7 @@ spec:
     # 1. Source data — all users (active and inactive)
     # ─────────────────────────────────────────────
     allUsers:
-      type: '[]object'
+      type: array
       description: All users, regardless of status
       resolve:
         with:
@@ -38,68 +40,78 @@ spec:
                 - {name: Eve,   role: admin,  active: true}
 
     # ─────────────────────────────────────────────
-    # 2. Without filter — nil entries are preserved
-    #    Output: [alice, nil, carol, nil, eve]
+    # 2. keepSkipped: true — nil entries are preserved
+    #    Output: [alice, null, carol, null, eve]
     # ─────────────────────────────────────────────
     activeUsersRaw:
-      type: '[]object'
-      description: Active users — nil placeholders for skipped items
+      type: array
+      description: Active users — nil placeholders retained for skipped items (index-aligned)
+      dependsOn: [allUsers]
       resolve:
-        forEach:
-          items:
-            expr: allUsers
-          as: user
-          resolve:
-            with:
-              - provider: static
-                when:
-                  expr: 'user.active == true'
-                inputs:
-                  value:
-                    expr: user
+        with:
+          - provider: static
+            inputs:
+              value:
+                expr: _.allUsers
+      transform:
+        with:
+          - provider: cel
+            forEach:
+              item: user
+              keepSkipped: true   # Retain nil entries to stay index-aligned
+            when:
+              expr: 'user.active == true'
+            inputs:
+              expression: 'user'
 
     # ─────────────────────────────────────────────
-    # 3. With filter: true — nil entries are removed
+    # 3. keepSkipped: false (default) — nil entries are removed
     #    Output: [alice, carol, eve]
     # ─────────────────────────────────────────────
     activeUsers:
-      type: '[]object'
-      description: Active users only — nil entries stripped by filter
+      type: array
+      description: Active users only — nil entries removed (default keepSkipped=false)
+      dependsOn: [allUsers]
       resolve:
-        forEach:
-          items:
-            expr: allUsers
-          as: user
-          filter: true          # Remove nil results from the output array
-          resolve:
-            with:
-              - provider: static
-                when:
-                  expr: 'user.active == true'
-                inputs:
-                  value:
-                    expr: user
+        with:
+          - provider: static
+            inputs:
+              value:
+                expr: _.allUsers
+      transform:
+        with:
+          - provider: cel
+            forEach:
+              item: user
+              # keepSkipped: false is the default — nil entries are dropped
+            when:
+              expr: 'user.active == true'
+            inputs:
+              expression: 'user'
 
     # ─────────────────────────────────────────────
-    # 4. Admin users — filter combined with a different condition
+    # 4. Admin users — filter by role
+    #    Output: [alice, eve]
     # ─────────────────────────────────────────────
     adminUsers:
-      type: '[]object'
+      type: array
       description: Users with the admin role
+      dependsOn: [allUsers]
       resolve:
-        forEach:
-          items:
-            expr: allUsers
-          as: user
-          filter: true
-          resolve:
-            with:
-              - provider: static
-                when:
-                  expr: 'user.role == "admin"'
-                inputs:
-                  value:
-                    expr: user
+        with:
+          - provider: static
+            inputs:
+              value:
+                expr: _.allUsers
+      transform:
+        with:
+          - provider: cel
+            forEach:
+              item: user
+            when:
+              expr: 'user.role == "admin"'
+            inputs:
+              expression: 'user'
 
     # ─────────────────────────────────────────────
     # 5. Summary — derived from filtered resolvers
@@ -114,8 +126,8 @@ spec:
               value:
                 expr: |
                   {
-                    "total":   size(allUsers),
-                    "active":  size(activeUsers),
-                    "admins":  size(adminUsers),
-                    "inactive": size(allUsers) - size(activeUsers)
+                    "total":   size(_.allUsers),
+                    "active":  size(_.activeUsers),
+                    "admins":  size(_.adminUsers),
+                    "inactive": size(_.allUsers) - size(_.activeUsers)
                   }

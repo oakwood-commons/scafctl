@@ -123,7 +123,11 @@ func readSubjectToken(cfg *ExternalAccountConfig) (string, error) {
 		return string(data), nil
 	}
 
-	return "", fmt.Errorf("unsupported credential source: no file or URL configured")
+	return "", fmt.Errorf(
+		"unsupported credential source in external account config: "+
+			"no file or URL is configured under credential_source. "+
+			"Check the external account JSON file referenced by %s",
+		EnvGoogleExternalAccount)
 }
 
 // workloadIdentityLogin validates workload identity credentials by acquiring a token.
@@ -209,7 +213,11 @@ func (h *Handler) acquireWorkloadIdentityToken(ctx context.Context, cfg *Externa
 	if resp.StatusCode != 200 {
 		var errResp TokenErrorResponse
 		_ = json.NewDecoder(resp.Body).Decode(&errResp)
-		return nil, fmt.Errorf("STS token exchange failed: %s - %s", errResp.Error, errResp.ErrorDescription)
+		return nil, fmt.Errorf(
+			"STS token exchange failed: %s - %s. "+
+				"Verify the audience, subject_token_type, and token_url in the external account config (%s) "+
+				"and that the Workload Identity Pool is correctly configured in GCP IAM",
+			errResp.Error, errResp.ErrorDescription, EnvGoogleExternalAccount)
 	}
 
 	var stsResp STSTokenResponse

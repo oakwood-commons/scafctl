@@ -27,6 +27,7 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 		scopes       []string
 		minValidFor  time.Duration
 		forceRefresh bool
+		rawToken     bool
 	)
 
 	cmd := &cobra.Command{
@@ -72,7 +73,8 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 
 			  # Get a GCP token for BigQuery
 			  scafctl auth token gcp --scope "https://www.googleapis.com/auth/bigquery"
-		`),
+		  # Print just the raw token value (useful for scripting)
+		  export TOKEN=$(scafctl auth token gcp --scope "https://www.googleapis.com/auth/cloud-platform" --raw)		`),
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -133,31 +135,19 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
+			if rawToken {
+				fmt.Fprintln(ioStreams.Out, token.AccessToken)
+				return nil
+			}
+
 			result := map[string]any{
 				"handler":     handlerName,
+				"flow":        string(token.Flow),
 				"scope":       token.Scope,
 				"tokenType":   token.TokenType,
 				"expiresAt":   token.ExpiresAt,
 				"expiresIn":   token.TimeUntilExpiry().String(),
 				"accessToken": token.AccessToken,
-			}
-
-			// Parse output format
-			format, _ := kvx.ParseOutputFormat(outputFlags.Output)
-
-			// For table output, mask the token and display nicely
-			if kvx.IsTableFormat(format) {
-				w.Infof("Handler:    %s", handlerName)
-				w.Infof("Scope:      %s", token.Scope)
-				w.Infof("Type:       %s", token.TokenType)
-				w.Infof("Expires:    %s", token.ExpiresAt.Format("2006-01-02 15:04:05"))
-				w.Infof("Expires In: %s", token.TimeUntilExpiry().Round(time.Second))
-				if len(token.AccessToken) > 20 {
-					w.Infof("Token:      %s...%s", token.AccessToken[:10], token.AccessToken[len(token.AccessToken)-10:])
-				} else {
-					w.Infof("Token:      %s", token.AccessToken)
-				}
-				return nil
 			}
 
 			outputOpts := flags.NewKvxOutputOptionsFromFlags(
@@ -177,6 +167,7 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 	cmd.Flags().StringSliceVar(&scopes, "scope", nil, "OAuth scope(s) for the token (required for handlers with scopes_on_token_request capability)")
 	cmd.Flags().DurationVar(&minValidFor, "min-valid-for", auth.DefaultMinValidFor, "Minimum time the token should be valid for")
 	cmd.Flags().BoolVarP(&forceRefresh, "force-refresh", "f", false, "Force acquiring a new token, ignoring any cached token")
+	cmd.Flags().BoolVar(&rawToken, "raw", false, "Print only the raw access token value (useful for scripting)")
 	flags.AddKvxOutputFlagsToStruct(cmd, &outputFlags)
 
 	return cmd

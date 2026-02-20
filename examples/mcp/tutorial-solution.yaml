@@ -72,23 +72,24 @@ spec:
                 : _.style == "casual" ? "Hey " + _.username + "!"
                 : "Hello, " + _.username + "! Welcome!"
 
-  actions:
-    greet:
-      description: Print the greeting to the console
-      provider: exec
-      inputs:
-        command:
-          expr: '"echo " + _.message'
+  workflow:
+    actions:
+      greet:
+        description: Print the greeting to the console
+        provider: exec
+        inputs:
+          command:
+            expr: '"echo " + _.message'
 
-    log:
-      description: Log the greeting event
-      provider: static
-      dependsOn:
-        - greet
-      inputs:
-        value:
-          event: greeting_sent
-          user:
-            rslvr: username
-          style:
-            rslvr: style
+      log:
+        description: Log the greeting event
+        provider: static
+        dependsOn:
+          - greet
+        inputs:
+          value:
+            event: greeting_sent
+            user:
+              rslvr: username
+            style:
+              rslvr: style

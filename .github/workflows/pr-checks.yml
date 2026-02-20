@@ -57,3 +57,9 @@ jobs:
         env:
           # Test-only key — see comment above.
           SCAFCTL_SECRET_KEY: dGVzdC1zZWNyZXQta2V5LWZvci1jaS0xMjM0NTY3ODk=
+
+      - name: Lint solution examples and integration tests
+        run: task lint:solutions
+        env:
+          # Test-only key — see comment above.
+          SCAFCTL_SECRET_KEY: dGVzdC1zZWNyZXQta2V5LWZvci1jaS0xMjM0NTY3ODk=
