@@ -38,6 +38,8 @@ Resolvers do not cause side effects. They only compute values.
 | Graph visualization (DOT, Mermaid, ASCII, JSON) | ✅ Implemented | `pkg/resolver/graph.go` |
 | Prometheus metrics | ✅ Implemented | `pkg/resolver/metrics.go` |
 | forEach in transform | ✅ Implemented | `ForEachClause` |
+| forEach `keepSkipped` (nil retention opt-in) | ✅ Implemented | `ForEachClause.KeepSkipped` |
+| forEach `filter` in resolve phase | ✅ Implemented | `pkg/resolver/foreach.go` |
 | `onError` behavior | ✅ Implemented | `ErrorBehavior` type |
 | ValidateAll mode (`--validate-all`) | ✅ Implemented | `WithValidateAll()` |
 | SkipValidation mode (`--skip-validation`) | ✅ Implemented | `WithSkipValidation()` |
@@ -525,6 +527,59 @@ The resolve phase answers: where does the value come from?
 
 ---
 
+### ForEach Filter Property
+
+Resolvers that produce arrays from item-by-item resolution can use `forEach` at the resolve level. Each item is resolved independently using a nested `resolve` block, and the results are collected into an output array.
+
+~~~yaml
+resolvers:
+  activeUsers:
+    type: '[]object'
+    resolve:
+      forEach:
+        items:
+          expr: allUsers
+        as: user
+        filter: true  # Remove nil entries from output
+        resolve:
+          with:
+            - provider: static
+              when:
+                expr: 'user.active == true'
+              inputs:
+                value:
+                  expr: user
+~~~
+
+**ForEach Fields (resolve phase):**
+
+| Field | Description | Required |
+|-------|-------------|----------|
+| `items` | ValueRef pointing to the source array | Yes |
+| `as` | Variable alias for the current element | Yes |
+| `filter` | When `true`, nil results are removed from the output array | No (default: `false`) |
+| `resolve` | Nested resolve phase executed for each element | Yes |
+
+**`filter: true` behavior:**
+
+Without `filter: true`, items where the nested `resolve` returns `nil` (e.g., when a `when` condition is false) are included as `nil` entries in the output array, preserving index alignment with the input:
+
+```
+input:  [user1, user2, user3, user4]
+output: [user1, nil,   user3, nil  ]   # user2 and user4 skipped by when
+```
+
+With `filter: true`, `nil` entries are removed:
+
+```
+input:  [user1, user2, user3, user4]
+output: [user1, user3]                 # only matched items
+```
+
+This is more ergonomic than adding a separate transform step to strip `nil` entries when using `when` conditions inside `forEach`.
+
+---
+
 ## 2. Transform
 
 The transform phase derives a new value from the resolved value.
@@ -676,7 +731,22 @@ transform:
         expression: "num * 2"
 ~~~
 
-When a `when` condition evaluates to `false`, the result for that index is `nil`, preserving the array length and index positions.
+When a `when` condition evaluates to `false`, the item is **automatically removed** from the output array. This means the output length equals the number of items that matched the condition — the most useful default for filtering patterns.
+
+To retain index alignment with the input array (keeping `nil` placeholders for skipped items), set `keepSkipped: true` on the `forEach` clause:
+
+~~~yaml
+transform:
+  with:
+    - provider: cel
+      forEach:
+        item: num
+        keepSkipped: true   # opt-in: preserves nil for skipped items
+      when:
+        expr: "num % 2 == 0"
+      inputs:
+        expression: "num * 2"
+~~~
 
 #### Error Handling with `onError`
 
@@ -745,7 +815,7 @@ Results are always returned in the same order as the input array, regardless of 
 
 ---
 
-> **Future Enhancement**: A `filter` property may be added to automatically remove `nil` results from the output array when using `when` conditions. This would provide a more ergonomic way to filter arrays without needing a separate transform step.
+> **Skipped item behavior**: When a `when` condition skips an item, the default is to remove it from the output (auto-filter). Use `keepSkipped: true` on the `forEach` clause to retain `nil` placeholders and preserve index alignment with the input array.
 
 ---
 

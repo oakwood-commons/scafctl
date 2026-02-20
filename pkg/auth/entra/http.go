@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/oakwood-commons/scafctl/pkg/httpc"
 )
 
 // HTTPClient interface for token endpoint requests.
@@ -17,17 +19,23 @@ type HTTPClient interface {
 	PostForm(ctx context.Context, endpoint string, data url.Values) (*http.Response, error)
 }
 
-// DefaultHTTPClient implements HTTPClient using standard library.
+// DefaultHTTPClient implements HTTPClient using httpc.
 type DefaultHTTPClient struct {
-	client *http.Client
+	client *httpc.Client
 }
 
-// NewDefaultHTTPClient creates a new default HTTP client.
+// NewDefaultHTTPClient creates a new default HTTP client backed by httpc.
+// Caching is disabled because token-exchange responses must never be served from cache.
 func NewDefaultHTTPClient() *DefaultHTTPClient {
 	return &DefaultHTTPClient{
-		client: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		client: httpc.NewClient(&httpc.ClientConfig{
+			Timeout:           30 * time.Second,
+			RetryMax:          3,
+			RetryWaitMin:      1 * time.Second,
+			RetryWaitMax:      30 * time.Second,
+			EnableCache:       false,
+			EnableCompression: false,
+		}),
 	}
 }
 
@@ -38,5 +46,5 @@ func (c *DefaultHTTPClient) PostForm(ctx context.Context, endpoint string, data 
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	return c.client.Do(req) //nolint:gosec // G704: URL is constructed from trusted config, not user input
+	return c.client.Do(req)
 }

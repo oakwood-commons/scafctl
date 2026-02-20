@@ -1,0 +1,74 @@
+{
+  "__execution": {
+    "dependencyGraph": {
+      "diagrams": {
+        "ascii": "Resolver Dependency Graph:\n\nPhase 1:\n  - greeting\n\nStatistics:\n  Total Resolvers: 1\n  Total Phases: 1\n  Max Parallelism: 1\n  Avg Dependencies: 0.00\n",
+        "dot": "digraph Resolvers {\n  rankdir=LR;\n  node [shape=box, style=rounded];\n\n  subgraph cluster_phase_1 {\n    label=\"Phase 1\";\n    style=filled;\n    color=lightgrey;\n\n    \"greeting\" [fillcolor=lightgreen, style=\"rounded,filled\"];\n  }\n\n  // Dependencies\n}\n",
+        "mermaid": "graph LR\n  subgraph Phase_1[\"Phase 1\"]\n    greeting[greeting]\n  end\n  classDef conditional stroke-dasharray: 5 5\n"
+      },
+      "edges": [],
+      "nodes": [
+        {
+          "conditional": false,
+          "dependencies": [],
+          "id": "greeting",
+          "phase": 1,
+          "type": "string"
+        }
+      ],
+      "phases": [
+        {
+          "parallelism": 1,
+          "phase": 1,
+          "resolvers": [
+            "greeting"
+          ]
+        }
+      ],
+      "stats": {
+        "avgDependencies": 0,
+        "criticalDepth": 1,
+        "criticalPath": [
+          "greeting"
+        ],
+        "maxParallelism": 1,
+        "totalPhases": 1,
+        "totalResolvers": 1
+      }
+    },
+    "providerSummary": {
+      "static": {
+        "avgDuration": "0s",
+        "callCount": 1,
+        "failedCount": 0,
+        "resolverCount": 1,
+        "successCount": 1,
+        "totalDuration": "0s"
+      }
+    },
+    "resolvers": {
+      "greeting": {
+        "dependencies": [],
+        "dependencyCount": 0,
+        "duration": "0s",
+        "phase": 1,
+        "phaseMetrics": [
+          {
+            "duration": "0s",
+            "phase": "resolve"
+          }
+        ],
+        "provider": "static",
+        "providerCallCount": 1,
+        "status": "success",
+        "valueSizeBytes": 15
+      }
+    },
+    "summary": {
+      "phaseCount": 1,
+      "resolverCount": 1,
+      "totalDuration": "1ms"
+    }
+  },
+  "greeting": "Hello, World!"
+}

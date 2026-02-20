@@ -1296,7 +1296,7 @@ The scaffold is a starting point. After generating, you should:
 
 ### Difference from `-o test`
 
-| Feature | `test init` | `-o test` (future) |
+| Feature | `test init` | [`-o test`](#generating-tests-automatically--o-test) |
 |---------|------------|-------------------|
 | **Execution** | No commands run — structural analysis only | Executes the command and captures output |
 | **Output** | Skeleton tests with generic assertions | Complete tests with output-derived assertions + snapshots |
@@ -1304,33 +1304,283 @@ The scaffold is a starting point. After generating, you should:
 
 ---
 
-## Future Enhancements
+## Generating Tests Automatically (`-o test`)
 
-### Auto-Generated Tests (`-o test`)
+`-o test` is a special output format that turns any scafctl command into an instant test case. Instead of printing JSON or a table, scafctl:
 
-A future output type for commands that support `-o`. When used, scafctl captures the command and its arguments, executes it, and generates a complete test definition with assertions derived from the actual output.
+1. Executes the command normally and captures the output
+2. Walks the output to derive CEL assertions describing its shape
+3. Writes a normalized snapshot golden file to `testdata/`
+4. Prints the complete test YAML to stdout, ready to paste into `spec.tests`
 
-~~~bash
-scafctl render solution -f solution.yaml -r env=prod -o test
-~~~
+This is the fastest way to lock in known-good behavior. Run the command once to generate the test, curate the assertions, then commit both the test and snapshot.
 
-Would output:
-
-~~~yaml
-renders-prod:
-  description: "Auto-generated test for: render solution -r env=prod"
-  command: [render, solution]
-  args: ["-r", "env=prod"]
-  assertions:
-    - expression: 'size(output.actions) == 3'
-    - expression: 'output.actions["render-main"].inputs.output == "prod/main.tf"'
-    - expression: 'output.actions["render-main"].provider == "template"'
-  snapshot: "testdata/renders-prod.json"
-~~~
-
-The generator would execute the command, derive CEL assertions from the output shape, write a snapshot golden file, and emit the test YAML to stdout.
+**Supported commands:** `render solution`, `run resolver`, `run solution`
 
 ---
+
+### Step 1 — Create a Solution
+
+For this walkthrough, create `my-app.yaml`:
+
+```yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: my-app
+  version: 1.0.0
+
+spec:
+  resolvers:
+    environment:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: env
+          - provider: static
+            inputs:
+              value: dev
+
+    region:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: us-east-1
+
+  workflow:
+    actions:
+      deploy:
+        provider: exec
+        inputs:
+          command:
+            expr: '"deploying to " + _.environment + " in " + _.region'
+      notify:
+        dependsOn: [deploy]
+        provider: exec
+        inputs:
+          command:
+            expr: '"notifying stakeholders for " + _.environment'
+```
+
+---
+
+### Step 2 — Generate a Test for `render solution`
+
+```bash
+scafctl render solution -f my-app.yaml -r env=prod -o test
+```
+
+scafctl executes `render solution -f my-app.yaml -r env=prod`, captures the JSON output, and prints:
+
+```yaml
+render-solution-env-prod:
+  description: "Auto-generated test for: render solution -r env=prod"
+  command: [render, solution]
+  args: ["-r", "env=prod", "-o", "json"]
+  tags: [generated]
+  assertions:
+    - expression: 'size(__output) == 3'
+      message: __output should have 3 keys
+    - expression: 'size(__output["actions"]) == 2'
+      message: __output["actions"] should have 2 keys
+    - expression: 'size(__output["resolvers"]) == 2'
+      message: __output["resolvers"] should have 2 keys
+    - expression: '__output["resolvers"]["environment"] == "prod"'
+    - expression: '__output["resolvers"]["region"] == "us-east-1"'
+  snapshot: "testdata/render-solution-env-prod.json"
+```
+
+It also creates `testdata/render-solution-env-prod.json` beside `my-app.yaml` with the normalized snapshot content.
+
+---
+
+### Step 3 — Generate Tests for Other Commands
+
+The same flag works with `run resolver` and `run solution`.
+
+**Capture resolver output:**
+
+```bash
+scafctl run resolver -f my-app.yaml -r env=staging -o test
+```
+
+Produces a test that asserts on the resolved values:
+
+```yaml
+run-resolver-env-staging:
+  description: "Auto-generated test for: run resolver -r env=staging"
+  command: [run, resolver]
+  args: ["-r", "env=staging", "-o", "json"]
+  tags: [generated]
+  assertions:
+    - expression: 'size(__output) == 2'
+      message: __output should have 2 keys
+    - expression: '__output["environment"] == "staging"'
+    - expression: '__output["region"] == "us-east-1"'
+  snapshot: "testdata/run-resolver-env-staging.json"
+```
+
+**Capture action execution output:**
+
+```bash
+scafctl run solution -f my-app.yaml -r env=prod -o test
+```
+
+Produces a test confirming action results and statuses:
+
+```yaml
+run-solution-env-prod:
+  description: "Auto-generated test for: run solution -r env=prod"
+  command: [run, solution]
+  args: ["-r", "env=prod", "-o", "json"]
+  tags: [generated]
+  assertions:
+    - expression: 'size(__output) == 2'
+      message: __output should have 2 keys
+    - expression: '__output["deploy"]["status"] == "succeeded"'
+    - expression: '__output["notify"]["status"] == "succeeded"'
+  snapshot: "testdata/run-solution-env-prod.json"
+```
+
+---
+
+### Step 4 — Paste and Register the Tests
+
+Open `my-app.yaml` and add a `spec.tests` section (or a compose test file — see the [compose test files](#compose-test-files) section). Paste the generated YAML under `tests:`:
+
+```yaml
+spec:
+  tests:
+    render-solution-env-prod:
+      description: "Auto-generated test for: render solution -r env=prod"
+      command: [render, solution]
+      args: ["-r", "env=prod", "-o", "json"]
+      tags: [generated]
+      assertions:
+        - expression: 'size(__output) == 3'
+          message: __output should have 3 keys
+        - expression: 'size(__output["actions"]) == 2'
+          message: __output["actions"] should have 2 keys
+        - expression: '__output["resolvers"]["environment"] == "prod"'
+        - expression: '__output["resolvers"]["region"] == "us-east-1"'
+      snapshot: "testdata/render-solution-env-prod.json"
+```
+
+Then run it:
+
+```bash
+scafctl test functional -f my-app.yaml
+```
+
+The test passes immediately — the snapshot was already written with correct content during generation.
+
+---
+
+### Step 5 — Override the Test Name
+
+By default the test name is derived from the command and arguments. Use `--test-name` to set an explicit name:
+
+```bash
+scafctl render solution -f my-app.yaml -r env=prod -o test --test-name render-prod
+```
+
+Output test name becomes `render-prod` and the snapshot is written to `testdata/render-prod.json`.
+
+The derivation algorithm joins command words and flag values, slugified to kebab-case:
+
+| Command | Derived name |
+|---------|-------------|
+| `render solution -r env=prod` | `render-solution-env-prod` |
+| `run resolver -r env=staging` | `run-resolver-env-staging` |
+| `run solution` | `run-solution` |
+| `run resolver --resolver db` | `run-resolver-db` |
+
+---
+
+### How Assertions Are Derived
+
+The generator walks the JSON output to **depth 2** (root is depth 0, top-level keys are depth 1, their children are depth 2) and emits one assertion per node:
+
+| Output value type | Generated assertion |
+|-------------------|--------------------|
+| `map` (object) | `size(__output["key"]) == N` — asserts the number of keys |
+| `array` | `size(__output["key"]) == N` — asserts the number of elements |
+| `string` | `__output["key"] == "value"` — exact string equality |
+| `number` | `__output["key"] == 42` — exact numeric equality |
+| `bool` | `__output["key"] == true` — exact boolean equality |
+| `null` | `__output["key"] == null` |
+
+Keys at depth 2 both emit a size assertion (if object/array) and recurse one level deeper. Up to **20 assertions** are generated per command.
+
+`__execution` metadata (timing, version information) is **excluded** from assertion derivation — this data is too volatile to assert on directly. It is still included in the snapshot for reference.
+
+> `-o json` is automatically appended to the generated test's `args` when it is not already present. This ensures `__output` is populated during test execution.
+
+---
+
+### The Snapshot File
+
+When `-o test` generates a test with a snapshot field, it immediately writes a normalized golden file to `testdata/<name>.json` in the same directory as the solution file (or relative to the current working directory when reading from stdin).
+
+The snapshot:
+- Is written once during generation (no need to run `--update-snapshots` on first run)
+- Is normalized (deterministic key ordering, whitespace) so diffs are clean
+- Excludes no automatic fields — the full JSON output is captured
+
+To refresh a snapshot after an intentional change:
+
+```bash
+scafctl test functional -f my-app.yaml --update-snapshots --filter render-prod
+```
+
+---
+
+### Curating Generated Tests
+
+Generated tests are a **starting point**, not a final answer. After pasting, review each assertion and ask:
+
+**Keep as-is:** assertions that capture an important behavioral contract you want to protect, e.g. the number of actions, specific field values, or output types.
+
+**Loosen or replace:** assertions for exact values that are expected to change between runs, e.g. a timestamp, a generated ID, or a version string. Replace these with existence checks or CEL expressions using `matches()`, `contains()`, or range checks:
+
+```yaml
+# Too brittle — will break whenever the version bumps
+- expression: '__output["version"] == "1.0.0"'
+
+# Better — only assert the format
+- expression: '__output["version"].matches("^[0-9]+\\.[0-9]+\\.[0-9]+")'
+```
+
+**Remove:** assertions for internal housekeeping fields that don't reflect user-visible behavior.
+
+**Add:** assertions that the generator couldn't derive at depth 2, such as checking values deep in a nested structure or asserting on array element contents:
+
+```yaml
+- expression: '__output["actions"]["deploy"]["status"] == "succeeded"'
+- expression: 'size(__output["actions"]) >= 1'
+```
+
+---
+
+### Workflow Summary
+
+```
+generate → curate → commit → CI
+```
+
+1. Run the command with `-o test` for each scenario you want to protect
+2. Paste the output into `spec.tests`
+3. Curate — loosen volatile assertions, add missing detail assertions, rename as needed
+4. Commit both the test YAML and the `testdata/*.json` snapshot files
+5. `scafctl test functional` runs in CI on every push
+
+---
+
+## Future Enhancements
 
 ### Catalog Regression Testing (`scafctl pipeline`)
 
@@ -1345,10 +1595,6 @@ Would fetch matching solutions, extract bundled test files, run `test functional
 This is the primary use case for requiring test files to be bundled and why `scafctl lint` errors on unbundled test files.
 
 ---
-
-### Test Scaffolding (`scafctl test init`)
-
-✅ **Implemented.** See the [Test Scaffolding](#test-scaffolding-scafctl-test-init) section above.
 
 ## Next Steps
 

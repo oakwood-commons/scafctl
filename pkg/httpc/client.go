@@ -83,6 +83,11 @@ type ClientConfig struct {
 	RequestHooks []RequestHook
 	// ResponseHooks are functions called after each response
 	ResponseHooks []ResponseHook
+	// OnUnauthorized is called when a 401 Unauthorized response is received.
+	// Return the new full Authorization header value (e.g. "Bearer <new-token>") to
+	// inject a single transparent retry with the refreshed token.
+	// Return an empty string (or an error) to pass the 401 response through as-is.
+	OnUnauthorized func(ctx context.Context) (authorizationHeader string, err error)
 	// EnableCircuitBreaker enables circuit breaker pattern
 	EnableCircuitBreaker bool
 	// CircuitBreakerConfig holds circuit breaker configuration
@@ -230,18 +235,24 @@ func NewClient(config *ClientConfig) *Client {
 
 		httpClient = retryClient.StandardClient()
 	} else {
-		// Use standard client without caching
-		stdClient := retryClient.StandardClient()
-		stdClient.Timeout = config.Timeout
+		// Use standard client without caching.
+		// Set the timeout on retryClient.HTTPClient so it applies to every individual
+		// request attempt made by retryablehttp (not just to the top-level wrapper).
+		retryClient.HTTPClient.Timeout = config.Timeout
 
-		// Add compression if enabled
+		// Add compression to the underlying transport if enabled.
 		if config.EnableCompression {
-			baseTransport := stdClient.Transport
+			baseTransport := retryClient.HTTPClient.Transport
 			if baseTransport == nil {
 				baseTransport = http.DefaultTransport
 			}
-			stdClient.Transport = newCompressionTransport(baseTransport)
+			retryClient.HTTPClient.Transport = newCompressionTransport(baseTransport)
 		}
+
+		// StandardClient wraps retryablehttp as an http.RoundTripper; also set
+		// Timeout here for callers who obtain it via StandardClient().
+		stdClient := retryClient.StandardClient()
+		stdClient.Timeout = config.Timeout
 
 		httpClient = stdClient
 	}
@@ -314,6 +325,41 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 					resp.Body.Close()
 				}
 				return nil, fmt.Errorf("response hook failed: %w", hookErr)
+			}
+		}
+	}
+
+	// Handle 401 Unauthorized with optional token refresh (single retry).
+	// This runs after the retryablehttp layer has already exhausted its own retries.
+	if err == nil && resp != nil && resp.StatusCode == http.StatusUnauthorized && c.config.OnUnauthorized != nil {
+		reqCtx := req.Context()
+		newAuthHeader, hookErr := c.config.OnUnauthorized(reqCtx)
+		if hookErr == nil && newAuthHeader != "" {
+			// Drain and discard the 401 response body before re-using the connection.
+			_, _ = io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+
+			// Clone the original request and inject the refreshed credential.
+			retryReq := req.Clone(reqCtx)
+			retryReq.Header.Set("Authorization", newAuthHeader)
+			// Replay the request body if the caller provided a GetBody func.
+			if req.GetBody != nil {
+				retryReq.Body, _ = req.GetBody()
+			}
+
+			// Execute once through the raw httpClient (bypass retryable layer for this single auth retry).
+			resp, err = c.httpClient.Do(retryReq) //nolint:gosec // request cloned from caller-supplied req
+
+			// Run response hooks on the retried response.
+			if err == nil && resp != nil {
+				for _, hook := range c.config.ResponseHooks {
+					if hookErr2 := hook(resp); hookErr2 != nil {
+						if resp.Body != nil {
+							resp.Body.Close()
+						}
+						return nil, fmt.Errorf("response hook failed after auth retry: %w", hookErr2)
+					}
+				}
 			}
 		}
 	}

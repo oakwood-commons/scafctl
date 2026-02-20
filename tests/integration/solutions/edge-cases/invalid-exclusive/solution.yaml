@@ -1,0 +1,82 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-invalid-exclusive
+  version: 1.0.0
+  description: |
+    Tests for exclusive field validation error detection.
+    Verifies that lint and run both reject solutions containing
+    self-referencing exclusive declarations and references to
+    non-existent actions.
+
+spec:
+  workflow:
+    actions:
+      # Self-reference: an action cannot list itself in exclusive.
+      badSelfRef:
+        description: Action with an invalid self-referencing exclusive
+        provider: exec
+        exclusive:
+          - badSelfRef
+        inputs:
+          command: "echo self-ref"
+
+      # Missing reference: exclusive points to an action that does not exist.
+      badMissingRef:
+        description: Action with an exclusive reference to a nonexistent action
+        provider: exec
+        exclusive:
+          - nonExistentAction
+        inputs:
+          command: "echo missing-ref"
+
+  testConfig:
+    skipBuiltins: true
+
+  tests:
+    lint-rejects-self-reference:
+      description: Verify lint catches a self-referencing exclusive declaration
+      command: [lint]
+      tags: [exclusive, validation, negative]
+      expectFailure: true
+      assertions:
+        - expression: __exitCode != 0
+          message: "Lint should fail when exclusive contains a self-reference"
+        - contains: "cannot exclude itself"
+          message: "Error message should describe the self-reference problem"
+
+    lint-rejects-missing-ref:
+      description: Verify lint catches an exclusive reference to a nonexistent action
+      command: [lint]
+      tags: [exclusive, validation, negative]
+      expectFailure: true
+      assertions:
+        - expression: __exitCode != 0
+          message: "Lint should fail when exclusive references a nonexistent action"
+        - contains: "not found in actions section"
+          message: "Error message should indicate the missing action reference"
+
+    lint-detects-both-errors:
+      description: Verify lint reports multiple exclusive validation errors
+      command: [lint]
+      args: ["-o", "json"]
+      tags: [exclusive, validation, negative]
+      expectFailure: true
+      assertions:
+        - expression: __exitCode != 0
+          message: "Lint should fail with multiple validation errors"
+        - expression: __output.errorCount >= 2
+          message: "Both self-reference and missing-ref errors should be reported"
+
+    run-fails-on-invalid-exclusive:
+      description: Verify run solution rejects an invalid exclusive configuration
+      command: [run, solution]
+      tags: [exclusive, validation, negative]
+      expectFailure: true
+      assertions:
+        - expression: __exitCode != 0
+          message: "Run should fail when exclusive declarations are invalid"
+        - contains: "workflow validation failed"
+          target: stderr
+          message: "Error should indicate workflow validation failure"

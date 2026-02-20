@@ -1,0 +1,92 @@
+# Exclusive Actions Example
+# Demonstrates mutual exclusion between actions that share a resource.
+#
+# The `exclusive` field prevents two actions from running in parallel even when
+# they would otherwise be scheduled concurrently by the DAG executor. Unlike
+# `dependsOn`, exclusivity does not impose an ordering — one action simply runs
+# before the other (determined by declaration order).
+#
+#  migrateDatabase ──┐
+#                    │  (one then the other, never concurrent)
+#  updateDatabase  ──┘
+#
+#  sendNotification  (independent — runs after updateDatabase)
+#
+# Run: scafctl run solution -f examples/actions/exclusive-actions.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: exclusive-actions
+  version: 1.0.0
+  description: Mutual exclusion between actions sharing a resource
+
+spec:
+  resolvers:
+    dbHost:
+      description: Database host
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "db.internal"
+
+    environment:
+      description: Target environment
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "prod"
+
+  workflow:
+    actions:
+      # Runs first — mutually exclusive with migrateDatabase.
+      # The two actions share the same database connection and cannot safely
+      # run at the same time.
+      updateDatabase:
+        description: Apply status updates to the users table
+        displayName: Update Database
+        provider: exec
+        exclusive:
+          - migrateDatabase
+        inputs:
+          command:
+            expr: "'echo Updating users table on ' + _.dbHost + '...'"
+
+      # Runs second — does not need an explicit exclusive declaration because
+      # exclusivity is one-way: updateDatabase already declares it.
+      migrateDatabase:
+        description: Run pending database migrations
+        displayName: Migrate Database
+        provider: exec
+        inputs:
+          command:
+            expr: "'echo Running migrations on ' + _.dbHost + '...'"
+
+      # Fully independent — runs concurrently with anything it could.
+      # Declared after the two database actions for readability.
+      sendNotification:
+        description: Notify the team after the database work completes
+        displayName: Notify
+        provider: exec
+        dependsOn:
+          - updateDatabase
+          - migrateDatabase
+        inputs:
+          command:
+            expr: "'echo Deployment to ' + _.environment + ' complete. Notifying team...'"
+
+    finally:
+      # Always runs, reports final status regardless of errors.
+      auditLog:
+        description: Write an audit log entry
+        displayName: Audit Log
+        provider: exec
+        inputs:
+          command:
+            expr: |
+              'echo Audit: updateDatabase=' + __actions.updateDatabase.status
+              + ' migrateDatabase=' + __actions.migrateDatabase.status
