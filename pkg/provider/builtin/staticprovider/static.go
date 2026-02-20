@@ -44,10 +44,15 @@ func (p *StaticProvider) Descriptor() *provider.Descriptor {
 			provider.CapabilityTransform: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
 				"value": schemahelper.AnyProp("The static value that was provided (returned directly)", schemahelper.WithExample("example-value")),
 			}),
+			provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+				"success": schemahelper.BoolProp("Whether the static value was returned successfully (always true)"),
+				"value":   schemahelper.AnyProp("The static value that was provided (returned directly)", schemahelper.WithExample("example-value")),
+			}),
 		},
 		Capabilities: []provider.Capability{
 			provider.CapabilityFrom,
 			provider.CapabilityTransform,
+			provider.CapabilityAction,
 		},
 		Category:     "Core",
 		Tags:         []string{"static", "constant", "testing", "default"},

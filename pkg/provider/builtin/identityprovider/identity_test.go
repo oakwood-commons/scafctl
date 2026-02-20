@@ -5,6 +5,7 @@ package identityprovider
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -417,4 +418,116 @@ func TestValidateDescriptor(t *testing.T) {
 	p := NewIdentityProvider()
 	err := provider.ValidateDescriptor(p.Descriptor())
 	assert.NoError(t, err)
+}
+
+// groupCapableMockHandler wraps auth.MockHandler and also implements auth.GroupsProvider.
+type groupCapableMockHandler struct {
+	*auth.MockHandler
+	groups []string
+	err    error
+}
+
+func (g *groupCapableMockHandler) GetGroups(_ context.Context) ([]string, error) {
+	return g.groups, g.err
+}
+
+func TestIdentityProvider_ExecuteGroups_Success(t *testing.T) {
+	p := NewIdentityProvider()
+
+	mock := &groupCapableMockHandler{
+		MockHandler: auth.NewMockHandler("entra"),
+		groups:      []string{"group-aaa", "group-bbb", "group-ccc"},
+	}
+	mock.StatusResult = &auth.Status{Authenticated: true, IdentityType: auth.IdentityTypeUser}
+
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(mock))
+	ctx := auth.WithRegistry(context.Background(), registry)
+
+	output, err := p.Execute(ctx, map[string]any{
+		"operation": "groups",
+		"handler":   "entra",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	result, ok := output.Data.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "groups", result["operation"])
+	assert.Equal(t, "entra", result["handler"])
+	assert.Equal(t, 3, result["count"])
+
+	groups, ok := result["groups"].([]string)
+	require.True(t, ok)
+	assert.Equal(t, []string{"group-aaa", "group-bbb", "group-ccc"}, groups)
+}
+
+func TestIdentityProvider_ExecuteGroups_Empty(t *testing.T) {
+	p := NewIdentityProvider()
+
+	mock := &groupCapableMockHandler{
+		MockHandler: auth.NewMockHandler("entra"),
+		groups:      []string{},
+	}
+	mock.StatusResult = &auth.Status{Authenticated: true}
+
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(mock))
+	ctx := auth.WithRegistry(context.Background(), registry)
+
+	output, err := p.Execute(ctx, map[string]any{"operation": "groups"})
+	require.NoError(t, err)
+
+	result := output.Data.(map[string]any)
+	assert.Equal(t, 0, result["count"])
+
+	groups, ok := result["groups"].([]string)
+	require.True(t, ok)
+	assert.Empty(t, groups)
+}
+
+func TestIdentityProvider_ExecuteGroups_HandlerError(t *testing.T) {
+	p := NewIdentityProvider()
+
+	mock := &groupCapableMockHandler{
+		MockHandler: auth.NewMockHandler("entra"),
+		err:         fmt.Errorf("graph API unavailable"),
+	}
+
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(mock))
+	ctx := auth.WithRegistry(context.Background(), registry)
+
+	_, err := p.Execute(ctx, map[string]any{"operation": "groups"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to retrieve group memberships")
+	assert.Contains(t, err.Error(), "graph API unavailable")
+}
+
+func TestIdentityProvider_ExecuteGroups_NotSupported(t *testing.T) {
+	p := NewIdentityProvider()
+
+	// Regular MockHandler does NOT implement GroupsProvider.
+	mockHandler := auth.NewMockHandler("github")
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(mockHandler))
+	ctx := auth.WithRegistry(context.Background(), registry)
+
+	_, err := p.Execute(ctx, map[string]any{"operation": "groups"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not support group membership queries")
+}
+
+func TestIdentityProvider_ExecuteGroups_DryRun(t *testing.T) {
+	p := NewIdentityProvider()
+	ctx := provider.WithDryRun(context.Background(), true)
+
+	output, err := p.Execute(ctx, map[string]any{"operation": "groups"})
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	result := output.Data.(map[string]any)
+	assert.Equal(t, "groups", result["operation"])
+	assert.Equal(t, 0, result["count"])
+	assert.True(t, output.Metadata["dryRun"].(bool))
 }

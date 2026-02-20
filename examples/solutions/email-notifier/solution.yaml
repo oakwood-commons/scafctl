@@ -97,28 +97,29 @@ spec:
             inputs:
               value: "Hello from scafctl"
 
-  actions:
-    sendEmail:
-      description: Send an email notification (simulated with echo)
-      provider: exec
-      when:
-        expr: "_.environment != \"dev\""
-      inputs:
-        command:
-          expr: "'echo Sending email from ' + _.emailFrom + ' to ' + _.emailTo + ' subject: ' + _.subject"
+  workflow:
+    actions:
+      sendEmail:
+        description: Send an email notification (simulated with echo)
+        provider: exec
+        when:
+          expr: "_.environment != \"dev\""
+        inputs:
+          command:
+            expr: "'echo Sending email from ' + _.emailFrom + ' to ' + _.emailTo + ' subject: ' + _.subject"
 
-    renderPreview:
-      description: Render email payload without sending
-      provider: static
-      when:
-        expr: "_.isDryRun == true"
-      inputs:
-        value:
-          from:
-            rslvr: emailFrom
-          to:
-            rslvr: emailTo
-          subject:
-            rslvr: subject
-          body:
-            rslvr: body
+      renderPreview:
+        description: Render email payload without sending
+        provider: static
+        when:
+          expr: "_.isDryRun == true"
+        inputs:
+          value:
+            from:
+              rslvr: emailFrom
+            to:
+              rslvr: emailTo
+            subject:
+              rslvr: subject
+            body:
+              rslvr: body

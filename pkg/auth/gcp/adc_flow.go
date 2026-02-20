@@ -254,9 +254,14 @@ func (h *Handler) mintToken(ctx context.Context, scope string) (*auth.Token, err
 
 		if errResp.Error == "invalid_grant" {
 			_ = h.Logout(ctx)
-			return nil, fmt.Errorf("%s: %w", errResp.ErrorDescription, auth.ErrTokenExpired)
+			return nil, fmt.Errorf(
+				"GCP credentials have expired or been revoked (%s). "+
+					"Run: scafctl auth login gcp: %w",
+				errResp.ErrorDescription, auth.ErrTokenExpired)
 		}
-		return nil, fmt.Errorf("token refresh failed: %s - %s", errResp.Error, errResp.ErrorDescription)
+		return nil, fmt.Errorf(
+			"token refresh failed: %s - %s. Run: scafctl auth login gcp to re-authenticate",
+			errResp.Error, errResp.ErrorDescription)
 	}
 
 	var tokenResp TokenResponse

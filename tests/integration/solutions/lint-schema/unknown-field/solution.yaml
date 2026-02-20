@@ -1,0 +1,60 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: lint-schema-unknown-field
+  version: 1.0.0
+  description: |
+    Tests that scafctl lint detects unknown top-level fields as
+    schema violations.
+
+unknownField: "this should be caught by schema validation"
+
+spec:
+  resolvers:
+    env:
+      name: env
+      description: "Resolve the environment"
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "environment"
+
+  testing:
+    config:
+      skipBuiltins: true
+
+    cases:
+      schema-violation-detected:
+        description: Lint should report a schema-violation for the unknown top-level field
+        command: [lint]
+        args: ["-o", "json"]
+        tags: [schema, lint, negative]
+        expectFailure: true
+        assertions:
+          - expression: __exitCode != 0
+            message: "Solution with unknown field should fail lint"
+          - expression: __output.errorCount >= 1
+            message: "At least one error should be reported"
+          - expression: >
+              __output.findings.exists(f, f.ruleName == "schema-violation")
+            message: "A schema-violation finding should be present"
+          - contains: unknownField
+            message: "Error output should mention the offending field name"
+
+      schema-violation-severity:
+        description: Schema violation findings should have error severity and schema category
+        command: [lint]
+        args: ["-o", "json"]
+        tags: [schema, lint, negative]
+        expectFailure: true
+        assertions:
+          - expression: >
+              __output.findings.exists(f,
+                f.ruleName == "schema-violation" && f.severity == "error")
+            message: "schema-violation findings should have error severity"
+          - expression: >
+              __output.findings.exists(f,
+                f.ruleName == "schema-violation" && f.category == "schema")
+            message: "schema-violation findings should have schema category"

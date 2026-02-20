@@ -20,8 +20,6 @@ spec:
     targets:
       description: Deployment targets
       type: array
-      items:
-        type: string
       resolve:
         with:
           - provider: static

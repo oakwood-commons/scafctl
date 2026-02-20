@@ -1557,6 +1557,28 @@ func TestIntegration_Lint_TableOutput(t *testing.T) {
 	assert.NotEmpty(t, stdout)
 }
 
+func TestIntegration_Lint_SchemaViolation_UnknownField(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "lint", "-f", "tests/integration/solutions/lint-schema/unknown-field.yaml", "-o", "json")
+
+	// Should detect the unknown field and report schema-violation
+	assert.Contains(t, stdout, "schema-violation")
+	assert.Contains(t, stdout, "findings")
+	// Exit code 2 (validation failed) expected because schema-violation is an error
+	assert.Equal(t, 2, exitCode)
+}
+
+func TestIntegration_Lint_SchemaValid(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "lint", "-f", "tests/integration/solutions/lint-schema/valid-minimal.yaml", "-o", "json")
+
+	assert.Contains(t, stdout, "findings")
+	// A valid minimal solution should not have schema-violation findings
+	assert.NotContains(t, stdout, "schema-violation")
+	// May still have info-level findings (e.g., missing-description) but not schema errors
+	_ = exitCode
+}
+
 // ============================================================================
 // Build Command Tests
 // ============================================================================

@@ -23,7 +23,7 @@ spec:
   resolvers:
     # Use the solution provider to load and execute a child solution.
     # The child's resolver values are returned as a structured envelope.
-    child-data:
+    child_data:
       type: any
       description: "Data from the child solution"
       resolve:
@@ -41,22 +41,22 @@ spec:
               # timeout: "30s"
 
     # Extract individual values from the child's envelope using CEL.
-    child-greeting:
+    child_greeting:
       type: string
       description: "The greeting from the child solution"
       dependsOn:
-        - child-data
+        - child_data
       resolve:
         with:
           - provider: cel
             inputs:
               expression: "_.child_data.resolvers.greeting"
 
-    child-echo:
+    child_echo:
       type: string
       description: "The echoed parameter from the child solution"
       dependsOn:
-        - child-data
+        - child_data
       resolve:
         with:
           - provider: cel

@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -25,6 +26,8 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/solutionprovider"
+	"github.com/oakwood-commons/scafctl/pkg/schema"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
@@ -34,6 +37,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
 	"github.com/spf13/cobra"
+	yaml "gopkg.in/yaml.v3"
 )
 
 // SeverityLevel represents the severity of a lint finding.
@@ -89,13 +93,16 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 
 			LINT RULES:
 			  Errors (will cause execution failures):
-			    - unused-resolver      Resolver defined but never referenced
-			    - invalid-dependency   Action depends on non-existent action
-			    - missing-provider     Referenced provider not registered
-			    - invalid-expression   Invalid CEL expression syntax
-			    - invalid-template     Invalid Go template syntax
-			    - unbundled-test-file  Test file not covered by bundle.include
-			    - invalid-test-name    Test name does not match naming pattern
+			    - unused-resolver          Resolver defined but never referenced
+			    - invalid-dependency       Action depends on non-existent action
+			    - missing-provider         Referenced provider not registered
+			    - invalid-expression       Invalid CEL expression syntax
+			    - invalid-template         Invalid Go template syntax
+			    - unbundled-test-file      Test file not covered by bundle.include
+			    - invalid-test-name        Test name does not match naming pattern
+			    - schema-violation         Solution YAML violates the JSON Schema
+			    - unknown-provider-input   Input key not declared in provider schema
+			    - invalid-provider-input-type  Literal input value violates provider schema type
 
 			  Warnings (may cause problems):
 			    - empty-workflow       Workflow defined but no actions
@@ -201,7 +208,17 @@ func runLint(ctx context.Context, opts *Options) error {
 func getRegistry(ctx context.Context) *provider.Registry {
 	reg, err := builtin.DefaultRegistry(ctx)
 	if err != nil {
-		return provider.GetGlobalRegistry()
+		reg = provider.GetGlobalRegistry()
+	}
+	// The solution provider is not part of DefaultRegistry because it has a
+	// circular dependency on the registry itself and requires a loader. For
+	// lint purposes we only need the provider to be *registered* (so the
+	// missing-provider rule doesn't false-positive); it will never be executed.
+	if !reg.Has(solutionprovider.ProviderName) {
+		solProvider := solutionprovider.New(
+			solutionprovider.WithRegistry(reg),
+		)
+		_ = reg.Register(solProvider)
 	}
 	return reg
 }
@@ -223,6 +240,10 @@ func Solution(sol *solution.Solution, filePath string, registry *provider.Regist
 		Findings: make([]*Finding, 0),
 	}
 
+	// Schema validation: validate the raw YAML against the generated JSON Schema.
+	// This catches unknown fields, type mismatches, pattern violations, etc.
+	lintSchema(filePath, result)
+
 	if !sol.Spec.HasResolvers() && !sol.Spec.HasWorkflow() {
 		result.addFinding(SeverityError, "structure", "spec", "Solution has no resolvers or workflow", "", "empty-solution")
 		return result
@@ -233,6 +254,7 @@ func Solution(sol *solution.Solution, filePath string, registry *provider.Regist
 	lintResolvers(sol, result, registry, referencedResolvers)
 	lintWorkflow(sol, result, registry)
 	lintTests(sol, result)
+	lintProviderInputs(sol, result, registry)
 
 	for _, f := range result.Findings {
 		switch f.Severity {
@@ -569,11 +591,52 @@ func scanInputsForResolverRefs(inputs map[string]*spec.ValueRef, pattern *regexp
 		if val == nil {
 			continue
 		}
+		// Direct resolver reference: rslvr: resolverName
+		if val.Resolver != nil {
+			refs[*val.Resolver] = true
+		}
 		if val.Expr != nil {
 			scanExpressionForResolverRefs(string(*val.Expr), pattern, refs)
 		}
 		if val.Tmpl != nil {
 			scanExpressionForResolverRefs(string(*val.Tmpl), pattern, refs)
+		}
+		// Recurse into literal map values to find nested rslvr/expr/tmpl references
+		if val.Literal != nil {
+			scanLiteralForResolverRefs(val.Literal, pattern, refs)
+		}
+	}
+}
+
+// scanLiteralForResolverRefs scans literal values (maps, slices) for nested
+// resolver references, expressions, and templates. Nested maps with a single
+// "rslvr", "expr", or "tmpl" key are treated as resolver references.
+func scanLiteralForResolverRefs(v any, pattern *regexp.Regexp, refs map[string]bool) {
+	switch val := v.(type) {
+	case map[string]any:
+		// Check if this map itself is a resolver reference
+		if rslvr, ok := val["rslvr"]; ok {
+			if name, ok := rslvr.(string); ok {
+				refs[name] = true
+			}
+		}
+		if expr, ok := val["expr"]; ok {
+			if s, ok := expr.(string); ok {
+				scanExpressionForResolverRefs(s, pattern, refs)
+			}
+		}
+		if tmpl, ok := val["tmpl"]; ok {
+			if s, ok := tmpl.(string); ok {
+				scanExpressionForResolverRefs(s, pattern, refs)
+			}
+		}
+		// Recurse into nested values
+		for _, child := range val {
+			scanLiteralForResolverRefs(child, pattern, refs)
+		}
+	case []any:
+		for _, item := range val {
+			scanLiteralForResolverRefs(item, pattern, refs)
 		}
 	}
 }
@@ -661,6 +724,141 @@ func isCoveredByBundleInclude(file string, includes []string) bool {
 		}
 	}
 	return false
+}
+
+// lintSchema reads the solution file from disk, unmarshals it into a generic
+// map (preserving unknown fields), and validates it against the generated
+// JSON Schema. Any violations are added to the result as schema-violation findings.
+func lintSchema(filePath string, result *Result) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		// If we can't read the file, skip schema validation silently.
+		// The caller already loaded the solution successfully, so this is
+		// likely a non-file source (URL, catalog, etc.).
+		return
+	}
+
+	var raw any
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		// If raw YAML parsing fails, skip — the typed unmarshal already succeeded.
+		return
+	}
+
+	violations, err := schema.ValidateSolutionAgainstSchema(raw)
+	if err != nil {
+		// Schema compilation error — report as a single finding so users know.
+		result.addFinding(SeverityWarning, "schema", "", fmt.Sprintf("schema validation unavailable: %v", err), "", "schema-error")
+		return
+	}
+
+	for _, v := range violations {
+		location := v.Path
+		if location == "" {
+			location = "(root)"
+		}
+		result.addFinding(SeverityError, "schema", location, v.Message,
+			"Check field name spelling and value types against the solution schema",
+			"schema-violation")
+	}
+}
+
+// lintProviderInputs validates that resolver and action inputs match the
+// provider's declared JSON Schema. It checks:
+//   - Unknown input keys (keys not in the provider schema's properties)
+//   - Literal values that violate the provider schema's type constraints
+//
+// Expression, template, and resolver-reference values are silently skipped
+// because they can only be validated at runtime.
+func lintProviderInputs(sol *solution.Solution, result *Result, registry *provider.Registry) {
+	// Lint resolver inputs
+	for name, res := range sol.Spec.Resolvers {
+		if res.Resolve != nil {
+			for i, step := range res.Resolve.With {
+				location := fmt.Sprintf("resolvers.%s.resolve.with[%d]", name, i)
+				lintProviderInputsForStep(step.Provider, step.Inputs, location, result, registry)
+			}
+		}
+		if res.Transform != nil {
+			for i, step := range res.Transform.With {
+				location := fmt.Sprintf("resolvers.%s.transform.with[%d]", name, i)
+				lintProviderInputsForStep(step.Provider, step.Inputs, location, result, registry)
+			}
+		}
+		if res.Validate != nil {
+			for i, step := range res.Validate.With {
+				location := fmt.Sprintf("resolvers.%s.validate.with[%d]", name, i)
+				lintProviderInputsForStep(step.Provider, step.Inputs, location, result, registry)
+			}
+		}
+	}
+
+	// Lint workflow action inputs
+	if sol.Spec.Workflow != nil {
+		for name, act := range sol.Spec.Workflow.Actions {
+			location := fmt.Sprintf("workflow.actions.%s", name)
+			lintProviderInputsForStep(act.Provider, act.Inputs, location, result, registry)
+		}
+		for name, act := range sol.Spec.Workflow.Finally {
+			location := fmt.Sprintf("workflow.finally.%s", name)
+			lintProviderInputsForStep(act.Provider, act.Inputs, location, result, registry)
+		}
+	}
+}
+
+// lintProviderInputsForStep validates inputs for a single provider step.
+func lintProviderInputsForStep(providerName string, inputs map[string]*spec.ValueRef, location string, result *Result, registry *provider.Registry) {
+	if providerName == "" || inputs == nil {
+		return
+	}
+
+	p, found := registry.Get(providerName)
+	if !found {
+		// missing-provider is already reported by lintResolvers/lintAction.
+		return
+	}
+
+	desc := p.Descriptor()
+	if desc.Schema == nil {
+		return
+	}
+
+	// Get the allowed property names from the provider schema.
+	allowedProps := desc.Schema.Properties
+
+	for key, val := range inputs {
+		inputLoc := fmt.Sprintf("%s.inputs.%s", location, key)
+
+		// Check for unknown input keys.
+		if allowedProps != nil {
+			if _, exists := allowedProps[key]; !exists {
+				result.addFinding(SeverityError, "provider", inputLoc,
+					fmt.Sprintf("unknown input %q for provider %q", key, providerName),
+					fmt.Sprintf("Check the provider's accepted inputs. Run: scafctl explain provider %s", providerName),
+					"unknown-provider-input")
+				continue
+			}
+		}
+
+		// Validate literal values against the property schema type.
+		if val != nil && val.Literal != nil && allowedProps != nil {
+			propSchema, exists := allowedProps[key]
+			if !exists || propSchema == nil {
+				continue
+			}
+
+			resolved, err := propSchema.Resolve(nil)
+			if err != nil {
+				continue
+			}
+
+			if err := resolved.Validate(val.Literal); err != nil {
+				result.addFinding(SeverityError, "provider", inputLoc,
+					fmt.Sprintf("invalid value for input %q of provider %q: %v", key, providerName, err),
+					"Check the expected type and constraints for this input",
+					"invalid-provider-input-type")
+			}
+		}
+	}
 }
 
 // FilterBySeverity filters lint findings to only include those at or above

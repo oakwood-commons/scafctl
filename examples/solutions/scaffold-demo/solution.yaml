@@ -69,23 +69,19 @@ spec:
         inputs:
           command:
             expr: "'mkdir -p ' + _.outputDir"
-          context:
-            outputDir:
-              rslvr: outputDir
 
       generate:
         description: Generate project files
         provider: exec
         dependsOn: [create-dir]
         inputs:
-          command:
-            tmpl: "echo 'Generating {{ .projectName }} ({{ .language }} v{{ .version }})'"
-          context:
-            projectName:
+          command: "echo \"Generating $PROJECT_NAME ($LANGUAGE v$VERSION)\""
+          env:
+            PROJECT_NAME:
               rslvr: projectName
-            language:
+            LANGUAGE:
               rslvr: language
-            version:
+            VERSION:
               rslvr: version
 
       release:
@@ -95,10 +91,9 @@ spec:
         when:
           expr: '_.version != "0.1.0"'
         inputs:
-          command:
-            tmpl: "echo 'Releasing {{ .projectName }} v{{ .version }}'"
-          context:
-            projectName:
+          command: "echo \"Releasing $PROJECT_NAME v$VERSION\""
+          env:
+            PROJECT_NAME:
               rslvr: projectName
-            version:
+            VERSION:
               rslvr: version
