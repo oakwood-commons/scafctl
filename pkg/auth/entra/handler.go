@@ -45,6 +45,7 @@ type Handler struct {
 	secretStore secrets.Store
 	secretErr   error // deferred error from secrets initialization
 	httpClient  HTTPClient
+	graphClient GraphClient
 	tokenCache  *TokenCache
 }
 
@@ -92,6 +93,14 @@ func WithHTTPClient(client HTTPClient) Option {
 	}
 }
 
+// WithGraphClient sets a custom client for Microsoft Graph API requests.
+// Used primarily for testing.
+func WithGraphClient(client GraphClient) Option {
+	return func(h *Handler) {
+		h.graphClient = client
+	}
+}
+
 // New creates a new Entra auth handler.
 // Secret store initialization is deferred — if it fails, the handler is still
 // created so that metadata operations (Name, SupportedFlows, etc.) work.
@@ -120,6 +129,11 @@ func New(opts ...Option) (*Handler, error) {
 	// Initialize HTTP client if not provided
 	if h.httpClient == nil {
 		h.httpClient = NewDefaultHTTPClient()
+	}
+
+	// Initialize Graph client if not provided
+	if h.graphClient == nil {
+		h.graphClient = NewDefaultGraphClient()
 	}
 
 	// Initialize token cache with secret store (nil-safe: checked before use)

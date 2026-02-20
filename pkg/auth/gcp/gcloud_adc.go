@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
@@ -24,6 +25,29 @@ const (
 	// EnvCloudSDKConfig is the environment variable for custom gcloud config directory.
 	EnvCloudSDKConfig = "CLOUDSDK_CONFIG"
 )
+
+// formatGcloudTokenError converts a raw OAuth error response into a clear, actionable error.
+// It handles well-known error codes (e.g. invalid_grant / invalid_rapt) with remediation hints.
+func formatGcloudTokenError(errResp TokenErrorResponse) error {
+	if errResp.Error == "invalid_grant" {
+		// invalid_rapt means Google requires re-authentication (Re-Authentication Proof Token).
+		// This is common with corporate/org accounts that enforce periodic re-auth or
+		// conditional access policies.
+		if strings.Contains(errResp.ErrorDescription, "invalid_rapt") {
+			return fmt.Errorf(
+				"gcloud ADC credentials require re-authentication (invalid_rapt): " +
+					"a security policy requires you to reauthenticate. " +
+					"Run: scafctl auth login gcp",
+			)
+		}
+		return fmt.Errorf(
+			"gcloud ADC credentials have expired or been revoked (%s). "+
+				"Run: scafctl auth login gcp",
+			errResp.ErrorDescription,
+		)
+	}
+	return fmt.Errorf("gcloud ADC token refresh failed: %s - %s", errResp.Error, errResp.ErrorDescription)
+}
 
 // GcloudADCCredentials represents the structure of the gcloud ADC JSON file.
 type GcloudADCCredentials struct {
@@ -122,7 +146,7 @@ func (h *Handler) gcloudADCLogin(ctx context.Context, opts auth.LoginOptions) (*
 	if resp.StatusCode != 200 {
 		var errResp TokenErrorResponse
 		_ = json.NewDecoder(resp.Body).Decode(&errResp)
-		return nil, fmt.Errorf("gcloud ADC token refresh failed: %s - %s", errResp.Error, errResp.ErrorDescription)
+		return nil, formatGcloudTokenError(errResp)
 	}
 
 	var tokenResp TokenResponse
@@ -212,7 +236,7 @@ func (h *Handler) getGcloudADCToken(ctx context.Context, opts auth.TokenOptions)
 	if resp.StatusCode != 200 {
 		var errResp TokenErrorResponse
 		_ = json.NewDecoder(resp.Body).Decode(&errResp)
-		return nil, fmt.Errorf("gcloud ADC token refresh failed: %s - %s", errResp.Error, errResp.ErrorDescription)
+		return nil, formatGcloudTokenError(errResp)
 	}
 
 	var tokenResp TokenResponse
@@ -226,9 +250,10 @@ func (h *Handler) getGcloudADCToken(ctx context.Context, opts auth.TokenOptions)
 		TokenType:   tokenResp.TokenType,
 		ExpiresAt:   expiresAt,
 		Scope:       opts.Scope,
+		Flow:        auth.FlowGcloudADC,
 	}
 
-	// Cache the token
+	lgr.V(1).Info("acquired token via gcloud ADC fallback; to use scafctl-managed credentials run: scafctl auth login gcp")
 	if err := h.tokenCache.Set(ctx, opts.Scope, token); err != nil {
 		lgr.V(1).Info("failed to cache gcloud ADC token", "error", err)
 	}

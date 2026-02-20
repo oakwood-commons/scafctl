@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
@@ -208,6 +209,20 @@ func (h *Handler) acquireWorkloadIdentityToken(ctx context.Context, creds *Workl
 		if err := json.NewDecoder(resp.Body).Decode(&errResp); err != nil {
 			return nil, fmt.Errorf("token request failed with status %d", resp.StatusCode)
 		}
+
+		// AADSTS700024: the client assertion (federated token) is outside its valid
+		// time range — this almost always means the projected service account token
+		// has expired and has not yet been rotated by Kubernetes.
+		if errResp.Error == "invalid_client" && strings.Contains(errResp.ErrorDescription, "AADSTS700024") {
+			hint := "the federated token (client assertion) has expired and is no longer valid"
+			if creds.TokenFile != "" {
+				hint += fmt.Sprintf("; the projected service account token at %q may not have been rotated yet - verify the workload-identity webhook is running and the pod has the correct labels", creds.TokenFile)
+			} else {
+				hint += fmt.Sprintf("; provide a fresh token via the %s or %s environment variable", EnvAzureFederatedToken, EnvAzureFederatedTokenFile)
+			}
+			return nil, fmt.Errorf("token exchange failed: expired federated token (AADSTS700024): %s\nHint: %s", errResp.ErrorDescription, hint)
+		}
+
 		return nil, fmt.Errorf("token exchange failed: %s: %s", errResp.Error, errResp.ErrorDescription)
 	}
 
@@ -234,6 +249,7 @@ func (h *Handler) acquireWorkloadIdentityToken(ctx context.Context, creds *Workl
 		TokenType:   tokenResp.TokenType,
 		ExpiresAt:   expiresAt,
 		Scope:       scope,
+		Flow:        auth.FlowWorkloadIdentity,
 	}, nil
 }
 

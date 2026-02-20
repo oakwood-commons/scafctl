@@ -160,6 +160,10 @@ func NewClient(config *ClientConfig) *Client {
 	// Set up logging
 	if config.Logger.GetSink() != nil {
 		retryClient.Logger = &retryableLogger{logger: config.Logger}
+	} else {
+		// Silence retryablehttp's default stdlib logger, which prints [DEBUG]/[ERROR]
+		// directly to stderr when no logr sink is configured.
+		retryClient.Logger = nil
 	}
 
 	// Configure the HTTP client with caching if enabled

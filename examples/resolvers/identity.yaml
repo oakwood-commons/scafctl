@@ -66,7 +66,33 @@ spec:
             inputs:
               operation: list
 
-    # Example 5: Extract user email for use in other resolvers
+    # Example 5: Get Entra group memberships (ObjectIDs)
+    # Requires: scafctl auth login entra + GroupMember.Read.All or Directory.Read.All consented
+    # Always calls the Microsoft Graph API to handle users with >200 group memberships.
+    entra_groups:
+      description: Fetch all Entra group ObjectIDs the authenticated user belongs to
+      type: any
+      resolve:
+        with:
+          - provider: identity
+            inputs:
+              operation: groups
+              handler: entra
+
+    # Example 6: Check if the user is a member of a specific group
+    # Replace REPLACE-WITH-YOUR-GROUP-OBJECT-ID with your actual group ObjectID.
+    is_team_member:
+      description: Check if user belongs to a specific Entra group
+      type: bool
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: |
+                has(_.entra_groups.groups)
+                  && "REPLACE-WITH-YOUR-GROUP-OBJECT-ID" in _.entra_groups.groups
+
+    # Example 8: Extract user email for use in other resolvers
     user_email:
       description: Extract user email from claims
       type: string
@@ -79,7 +105,7 @@ spec:
                   ? _.user_claims.claims.email
                   : "unknown@example.com"
 
-    # Example 6: Check if user is authenticated
+    # Example 9: Check if user is authenticated
     is_authenticated:
       description: Boolean check if user is logged in
       type: bool
@@ -89,7 +115,7 @@ spec:
             inputs:
               expression: _.auth_status.authenticated
 
-    # Example 7: Get display identity for logging
+    # Example 10: Get display identity for logging
     display_identity:
       description: Get best available identity string for display
       type: string
@@ -102,7 +128,7 @@ spec:
                   ? _.user_claims.claims.displayIdentity
                   : "anonymous"
 
-    # Example 8: Get token expiry info
+    # Example 11: Get token expiry info
     token_expiry:
       description: Human-readable time until token expires
       type: string
@@ -115,7 +141,7 @@ spec:
                   ? _.auth_status.expiresIn
                   : "unknown"
 
-    # Example 9: Conditional logic based on identity type
+    # Example 12: Conditional logic based on identity type
     identity_type:
       description: Get the type of authenticated identity
       type: string
@@ -128,7 +154,7 @@ spec:
                   ? _.auth_status.identityType
                   : "none"
 
-    # Example 10: Build audit info combining identity data
+    # Example 13: Build audit info combining identity data
     audit_info:
       description: Structured audit information from identity
       type: any

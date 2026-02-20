@@ -291,318 +291,284 @@ spec:
   # ============================================================================
   # ACTIONS: Side effects and orchestration
   # ============================================================================
-  actions:
-    # -------------------------------------------------------------------------
-    # Action 1: Simple action with literal inputs
-    # Demonstrates: literal input values
-    # -------------------------------------------------------------------------
-    createOutputDirectory:
-      description: Create output directory for artifacts
-      provider: exec
-      inputs:
-        # Literal string input
-        command: "mkdir -p ./output"
+  workflow:
+    actions:
+      # -------------------------------------------------------------------------
+      # Action 1: Simple action with literal inputs
+      # Demonstrates: literal input values
+      # -------------------------------------------------------------------------
+      createOutputDirectory:
+        description: Create output directory for artifacts
+        provider: exec
+        inputs:
+          # Literal string input
+          command: "mkdir -p ./output"
 
-    # -------------------------------------------------------------------------
-    # Action 2: Action using resolver binding (rslv)
-    # Demonstrates: rslvr input form
-    # -------------------------------------------------------------------------
-    validateEnvironment:
-      description: Log the target environment
-      provider: exec
-      dependsOn: [createOutputDirectory]
-      inputs:
-        command: "echo 'Deploying to environment:'"
-        # Direct resolver binding - passes the value as-is
-        env:
-          ENVIRONMENT:
-            rslvr: environment
-          APP_NAME:
-            rslvr: appName
-          VERSION:
-            rslvr: version
+      # -------------------------------------------------------------------------
+      # Action 2: Action using resolver binding (rslv)
+      # Demonstrates: rslvr input form
+      # -------------------------------------------------------------------------
+      validateEnvironment:
+        description: Log the target environment
+        provider: exec
+        dependsOn: [createOutputDirectory]
+        inputs:
+          command: "echo 'Deploying to environment:'"
+          # Direct resolver binding - passes the value as-is
+          env:
+            ENVIRONMENT:
+              rslvr: environment
+            APP_NAME:
+              rslvr: appName
+            VERSION:
+              rslvr: version
 
-    # -------------------------------------------------------------------------
-    # Action 3: Action with expression inputs (expr)
-    # Demonstrates: expr input form
-    # -------------------------------------------------------------------------
-    buildDockerImage:
-      description: Build Docker image with computed tag
-      provider: exec
-      dependsOn: [validateEnvironment]
-      when:
-        # Conditional execution using expr
-        expr: "!_.dryRun && _.environment != \"dev\""
-      inputs:
-        command: "docker build -t"
-          # Expression input combining multiple values
-        env:
-          IMAGE_TAG:
-            expr: "\"myregistry.io/\" + _.appName + \":\" + _.version"
-          BUILD_TIME:
-            expr: "string(now())"
-          GIT_COMMIT:
-            rslvr: gitCommit
+      # -------------------------------------------------------------------------
+      # Action 3: Action with expression inputs (expr)
+      # Demonstrates: expr input form
+      # -------------------------------------------------------------------------
+      buildDockerImage:
+        description: Build Docker image with computed tag
+        provider: exec
+        dependsOn: [validateEnvironment]
+        when:
+          # Conditional execution using expr
+          expr: "!_.dryRun && _.environment != \"dev\""
+        inputs:
+          command: "docker build -t"
+            # Expression input combining multiple values
+          env:
+            IMAGE_TAG:
+              expr: "\"myregistry.io/\" + _.appName + \":\" + _.version"
+            BUILD_TIME:
+              expr: "string(now())"
+            GIT_COMMIT:
+              rslvr: gitCommit
 
-    # -------------------------------------------------------------------------
-    # Action 4: Action with template inputs (tmpl)
-    # Demonstrates: tmpl input form
-    # -------------------------------------------------------------------------
-    generateManifests:
-      description: Generate Kubernetes manifests for each region
-      provider: file
-      dependsOn: [validateEnvironment]
+      # -------------------------------------------------------------------------
+      # Action 4a: Create region directories
+      # Demonstrates: forEach with file provider
+      # -------------------------------------------------------------------------
+      createRegionDirs:
+        description: Create output directories for each region
+        provider: directory
+        dependsOn: [validateEnvironment]
 
-      # Iterate over regions
-      forEach:
-        item: __region # using __item to avoid name clash
-        in: _.regions
+        forEach:
+          item: __region
+          in: _.regions
 
-      inputs:
-        operations:
-          # Create region directory
-          - name: createRegionDir
-            action: mkdir
-            path:
-              # Template string using __item (forEach variable)
-              tmpl: "./output/{{ .__region }}"
+        inputs:
+          operation: mkdir
+          path:
+            tmpl: "./output/{{ .__region }}"
 
-          # Write deployment manifest
-          - name: writeDeployment
-            action: write
-            path:
-              tmpl: "./output/{{ .__region }}/deployment.yaml"
-            content:
-              # Resolver binding to template content
-              rslvr: deploymentTemplate
-            # Template context for rendering
-            context:
-              appName:
-                rslvr: appName
-              version:
-                rslvr: version
-              replicas:
-                rslvr: replicas
-              environment:
-                rslvr: environment
-              region:
-                expr: "_.__region"
+      # -------------------------------------------------------------------------
+      # Action 4b: Write deployment manifests
+      # Demonstrates: rslvr input form with forEach
+      # -------------------------------------------------------------------------
+      writeDeploymentManifests:
+        description: Write deployment manifest for each region
+        provider: file
+        dependsOn: [createRegionDirs]
 
-          # Write service manifest
-          - name: writeService
-            action: write
-            path:
-              tmpl: "./output/{{ .__region }}/service.yaml"
-            content:
-              rslvr: serviceTemplate
-            context:
-              appName:
-                rslvr: appName
-              environment:
-                rslvr: environment
-              region:
-                expr: "_.__region"
+        forEach:
+          item: __region
+          in: _.regions
 
-    # -------------------------------------------------------------------------
-    # Action 5: API call action with mixed input forms
-    # Demonstrates: multiple input forms in same action
-    # -------------------------------------------------------------------------
-    notifyDeployment:
-      description: Send deployment notification to webhook
-      provider: http
-      dependsOn: [generateManifests]
-      when:
-        expr: "!_.dryRun"
-      inputs:
-        url: https://hooks.example.com/deployments
-        method: POST
-        headers:
-          # Literal value
-          Content-Type: application/json
-          # Template value
-        # Expression creating JSON body
-        body:
-          app:
-            rslvr: appName
-          version:
-            rslvr: version
-          environment:
-            rslvr: environment
-          regions:
-            rslvr: regions
-          timestamp:
-            expr: "string(now())"
-          commit:
-            rslvr: gitCommit
-          branch:
-            rslvr: gitBranch
-          message:
-            tmpl: "Deployed {{ .appName }} version {{ .version }} to {{ .environment }}"
+        inputs:
+          operation: write
+          path:
+            tmpl: "./output/{{ .__region }}/deployment.yaml"
+          content:
+            rslvr: deploymentTemplate
 
-    # -------------------------------------------------------------------------
-    # Action 6: Action with results for downstream consumption
-    # Demonstrates: action results and fromAction references
-    # -------------------------------------------------------------------------
-    deployToCluster:
-      description: Deploy manifests to Kubernetes cluster
-      provider: exec
-      dependsOn: [generateManifests, buildDockerImage]
-      when:
-        expr: "!_.dryRun"
+      # -------------------------------------------------------------------------
+      # Action 4c: Write service manifests
+      # Demonstrates: rslvr input form with forEach
+      # -------------------------------------------------------------------------
+      writeServiceManifests:
+        description: Write service manifest for each region
+        provider: file
+        dependsOn: [createRegionDirs]
 
-      forEach:
-        item: __region
-        in: _.regions
+        forEach:
+          item: __region
+          in: _.regions
 
-      inputs:
-        command:
-          tmpl: "kubectl apply -f ./output/{{ .__region }}/"
-        args:
-          - "-n"
-          - rslvr: environment
-          - "--context"
-          - tmpl: "cluster-{{ .__region }}"
+        inputs:
+          operation: write
+          path:
+            tmpl: "./output/{{ .__region }}/service.yaml"
+          content:
+            rslvr: serviceTemplate
 
-    # -------------------------------------------------------------------------
-    # Action 7: Retry pattern with until condition
-    # Demonstrates: until for retry logic
-    # -------------------------------------------------------------------------
-    waitForDeployment:
-      description: Wait for deployment to be ready
-      provider: exec
-      dependsOn: [deployToCluster]
-      when:
-        expr: "!_.dryRun"
-      # Retry until deployment is ready (max attempts/timeout in provider config)
-      until:
-        expr: '_.__actions.deployToCluster.results.exitCode == 0 && _.__actions.deployToCluster.results.stdout.contains(\"Running\")'
-      inputs:
-        command:
-          tmpl: "kubectl get pods -n {{ .environment }} -l app={{ .appName }}"
-        context:
-          environment:
-            rslvr: environment
-          appName:
-            rslvr: appName
+      # -------------------------------------------------------------------------
+      # Action 5: API call action with mixed input forms
+      # Demonstrates: multiple input forms in same action
+      # -------------------------------------------------------------------------
+      notifyDeployment:
+        description: Send deployment notification to webhook
+        provider: http
+        dependsOn: [writeServiceManifests]
+        when:
+          expr: "!_.dryRun"
+        inputs:
+          url: https://hooks.example.com/deployments
+          method: POST
+          headers:
+            # Literal value
+            Content-Type: application/json
+            # Template value
+          # Expression creating JSON body
+          body:
+            expr: |
+              toJson({
+                "app": _.appName,
+                "version": _.version,
+                "environment": _.environment,
+                "regions": _.regions,
+                "timestamp": string(now()),
+                "commit": _.gitCommit,
+                "branch": _.gitBranch
+              })
 
-    # -------------------------------------------------------------------------
-    # Action 8: Consuming results from previous action
-    # Demonstrates: using action results via __actions reference
-    # -------------------------------------------------------------------------
-    verifyDeployment:
-      description: Verify deployment succeeded
-      provider: exec
-      dependsOn: [waitForDeployment]
-      when:
-        expr: "!_.dryRun"
-      inputs:
-        command: "echo 'Verifying deployment status'"
-        # Access results from deployToCluster action
-        validate:
-          statusCheck:
-            expr: "__actions.deployToCluster.results.value.deploymentStatus == 0"
+      # -------------------------------------------------------------------------
+      # Action 6: Action with results for downstream consumption
+      # Demonstrates: action results and fromAction references
+      # -------------------------------------------------------------------------
+      deployToCluster:
+        description: Deploy manifests to Kubernetes cluster
+        provider: exec
+        dependsOn: [writeServiceManifests, buildDockerImage]
+        when:
+          expr: "!_.dryRun"
 
-    # -------------------------------------------------------------------------
-    # Action 9: Conditional action based on environment
-    # Demonstrates: complex when conditions
-    # -------------------------------------------------------------------------
-    runSmokeTests:
-      description: Run smoke tests in non-production environments
-      provider: exec
-      dependsOn: [verifyDeployment]
-      when:
-        expr: "_.environment == \"staging\" || _.environment == \"dev\""
-      inputs:
-        command: "npm run smoke-test"
-        env:
-          TEST_ENV:
-            rslvr: environment
-          TEST_URL:
-            tmpl: "https://{{ .appName }}.{{ .environment }}.example.com"
+        forEach:
+          item: __region
+          in: _.regions
 
-    # -------------------------------------------------------------------------
-    # Action 10: Summary report combining all inputs
-    # Demonstrates: all four input forms in a single action
-    # -------------------------------------------------------------------------
-    generateReport:
-      description: Generate deployment report
-      provider: file
-      dependsOn: [notifyDeployment, verifyDeployment]
-      inputs:
-        operations:
-          - name: writeReport
-            action: write
-            path: ./output/deployment-report.json
-            # Expression creating complex JSON structure
-            content:
-              expr: |
-                {
-                  "deployment": {
-                    "app": _.appName,
-                    "version": _.version,
-                    "environment": _.environment,
-                    "regions": _.regions,
-                    "replicas": _.replicas,
-                    "dryRun": _.dryRun
-                  },
-                  "git": {
-                    "branch": _.gitBranch,
-                    "commit": _.gitCommit
-                  },
-                  "timestamp": string(now()),
-                  "status": "completed"
-                }
+        inputs:
+          command:
+            tmpl: "kubectl apply -f ./output/{{ .__region }}/"
+          args:
+            - "-n"
+            - rslvr: environment
+            - "--context"
+            - tmpl: "cluster-{{ .__region }}"
 
-          - name: writeMarkdown
-            action: write
-            path: ./output/deployment-report.md
-            # Template for human-readable report
-            content:
-              tmpl: |
-                # Deployment Report
+      # -------------------------------------------------------------------------
+      # Action 7: Retry pattern with until condition
+      # Demonstrates: until for retry logic
+      # -------------------------------------------------------------------------
+      waitForDeployment:
+        description: Wait for deployment to be ready
+        provider: exec
+        dependsOn: [deployToCluster]
+        when:
+          expr: "!_.dryRun"
+        # Retry until deployment is ready
+        retry:
+          maxAttempts: 5
+          initialDelay: "5s"
+          retryIf: '_.__actions.waitForDeployment.results.exitCode != 0'
+        inputs:
+          command:
+            expr: "'kubectl get pods -n ' + _.environment + ' -l app=' + _.appName"
 
-                **Application**: {{ .appName }}
-                **Version**: {{ .version }}
-                **Environment**: {{ .environment }}
-                **Regions**: {{ .regions | join ", " }}
-                **Replicas**: {{ .replicas }}
-                **Dry Run**: {{ .dryRun }}
+      # -------------------------------------------------------------------------
+      # Action 8: Consuming results from previous action
+      # Demonstrates: using action results via __actions reference
+      # -------------------------------------------------------------------------
+      verifyDeployment:
+        description: Verify deployment succeeded
+        provider: exec
+        dependsOn: [waitForDeployment]
+        when:
+          expr: "!_.dryRun"
+        inputs:
+          command: "echo 'Verifying deployment status'"
 
-                ## Git Information
-                - Branch: {{ .gitBranch }}
-                - Commit: {{ .gitCommit }}
+      # -------------------------------------------------------------------------
+      # Action 9: Conditional action based on environment
+      # Demonstrates: complex when conditions
+      # -------------------------------------------------------------------------
+      runSmokeTests:
+        description: Run smoke tests in non-production environments
+        provider: exec
+        dependsOn: [verifyDeployment]
+        when:
+          expr: "_.environment == \"staging\" || _.environment == \"dev\""
+        inputs:
+          command: "npm run smoke-test"
+          env:
+            TEST_ENV:
+              rslvr: environment
+            TEST_URL:
+              tmpl: "https://{{ .appName }}.{{ .environment }}.example.com"
 
-                ## Status
-                Deployment completed successfully at {{ .timestamp }}
-            context:
-              appName:
-                rslvr: appName
-              version:
-                rslvr: version
-              environment:
-                rslvr: environment
-              regions:
-                rslvr: regions
-              replicas:
-                rslvr: replicas
-              dryRun:
-                rslvr: dryRun
-              gitBranch:
-                rslvr: gitBranch
-              gitCommit:
-                rslvr: gitCommit
-              timestamp:
-                expr: "string(now())"
+      # -------------------------------------------------------------------------
+      # Action 10: Summary report combining all inputs
+      # Demonstrates: all four input forms in a single action
+      # -------------------------------------------------------------------------
+      writeDeploymentReport:
+        description: Write deployment report JSON
+        provider: file
+        dependsOn: [notifyDeployment, verifyDeployment]
+        inputs:
+          operation: write
+          path: ./output/deployment-report.json
+          content:
+            expr: |
+              {
+                "deployment": {
+                  "app": _.appName,
+                  "version": _.version,
+                  "environment": _.environment,
+                  "regions": _.regions,
+                  "replicas": _.replicas,
+                  "dryRun": _.dryRun
+                },
+                "git": {
+                  "branch": _.gitBranch,
+                  "commit": _.gitCommit
+                },
+                "timestamp": string(now()),
+                "status": "completed"
+              }
 
-    # -------------------------------------------------------------------------
-    # Action 11: Cleanup action that always runs
-    # Demonstrates: no dependencies, cleanup pattern
-    # -------------------------------------------------------------------------
-    cleanup:
-      description: Clean up temporary files
-      provider: exec
-      # No dependsOn - can run independently
-      inputs:
-        command: "rm -rf ./temp"
-        # Literal boolean flag
-        continueOnError: true
+      writeDeploymentMarkdown:
+        description: Write deployment report Markdown
+        provider: file
+        dependsOn: [writeDeploymentReport]
+        inputs:
+          operation: write
+          path: ./output/deployment-report.md
+          content:
+            tmpl: |
+              # Deployment Report
+
+              **Application**: {{ .appName }}
+              **Version**: {{ .version }}
+              **Environment**: {{ .environment }}
+              **Regions**: {{ .regions }}
+              **Replicas**: {{ .replicas }}
+              **Dry Run**: {{ .dryRun }}
+
+              ## Git Information
+              - Branch: {{ .gitBranch }}
+              - Commit: {{ .gitCommit }}
+
+              ## Status
+              Deployment completed successfully at {{ .timestamp }}
+
+      # -------------------------------------------------------------------------
+      # Action 11: Cleanup action that always runs
+      # Demonstrates: no dependencies, cleanup pattern
+      # -------------------------------------------------------------------------
+      cleanup:
+        description: Clean up temporary files
+        provider: exec
+        # No dependsOn - can run independently
+        inputs:
+          command: "rm -rf ./temp"

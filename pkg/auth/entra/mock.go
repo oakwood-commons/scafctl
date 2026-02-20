@@ -126,3 +126,103 @@ func (m *MockHTTPClient) Reset() {
 	m.Responses = make([]*MockResponse, 0)
 	m.callIndex = 0
 }
+
+// MockGetRequest records a GET request made to the mock Graph client.
+type MockGetRequest struct {
+	URL         string
+	BearerToken string //nolint:gosec // G117: test mock field, not a real secret
+}
+
+// MockGetResponse defines a response to return from the mock Graph client.
+type MockGetResponse struct {
+	StatusCode int
+	Body       any // Will be JSON-encoded
+	Err        error
+}
+
+// MockGraphClient is a mock implementation of GraphClient for testing.
+type MockGraphClient struct {
+	mu        sync.Mutex
+	Responses []*MockGetResponse
+	Requests  []*MockGetRequest
+	callIndex int
+}
+
+// NewMockGraphClient creates a new mock Graph client.
+func NewMockGraphClient() *MockGraphClient {
+	return &MockGraphClient{
+		Responses: make([]*MockGetResponse, 0),
+		Requests:  make([]*MockGetRequest, 0),
+	}
+}
+
+// AddResponse adds a response to the queue.
+func (m *MockGraphClient) AddResponse(statusCode int, body any) *MockGraphClient {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Responses = append(m.Responses, &MockGetResponse{
+		StatusCode: statusCode,
+		Body:       body,
+	})
+	return m
+}
+
+// AddError adds an error response to the queue.
+func (m *MockGraphClient) AddError(err error) *MockGraphClient {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Responses = append(m.Responses, &MockGetResponse{Err: err})
+	return m
+}
+
+// Get implements GraphClient.Get.
+func (m *MockGraphClient) Get(_ context.Context, url, bearerToken string) (*http.Response, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.Requests = append(m.Requests, &MockGetRequest{URL: url, BearerToken: bearerToken})
+
+	if m.callIndex >= len(m.Responses) {
+		return &http.Response{
+			StatusCode: http.StatusInternalServerError,
+			Body:       io.NopCloser(bytes.NewBufferString(`{"error": "no mock response configured"}`)),
+		}, nil
+	}
+
+	resp := m.Responses[m.callIndex]
+	m.callIndex++
+
+	if resp.Err != nil {
+		return nil, resp.Err
+	}
+
+	var bodyBytes []byte
+	if resp.Body != nil {
+		var err error
+		bodyBytes, err = json.Marshal(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &http.Response{
+		StatusCode: resp.StatusCode,
+		Body:       io.NopCloser(bytes.NewBuffer(bodyBytes)),
+	}, nil
+}
+
+// GetRequests returns all recorded GET requests.
+func (m *MockGraphClient) GetRequests() []*MockGetRequest {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.Requests
+}
+
+// Reset clears all recorded requests and responses.
+func (m *MockGraphClient) Reset() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Requests = make([]*MockGetRequest, 0)
+	m.Responses = make([]*MockGetResponse, 0)
+	m.callIndex = 0
+}

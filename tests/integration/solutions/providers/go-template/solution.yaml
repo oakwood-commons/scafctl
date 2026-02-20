@@ -40,6 +40,9 @@ spec:
 
     simpleTemplate:
       description: Simple variable substitution
+      dependsOn:
+        - appName
+        - version
       resolve:
         with:
           - provider: static
@@ -54,6 +57,8 @@ spec:
 
     conditionalTemplate:
       description: Conditional template rendering
+      dependsOn:
+        - appName
       resolve:
         with:
           - provider: static
@@ -68,6 +73,8 @@ spec:
 
     loopTemplate:
       description: Template with range loop
+      dependsOn:
+        - features
       resolve:
         with:
           - provider: static
@@ -82,6 +89,10 @@ spec:
 
     multilineTemplate:
       description: Multiline template rendering
+      dependsOn:
+        - appName
+        - version
+        - features
       resolve:
         with:
           - provider: static
@@ -115,7 +126,7 @@ spec:
         extends: [_base]
         tags: [smoke]
         assertions:
-          - expression: __output.simpleTemplate == "App: my-service, Version: 2.1.0"
+          - expression: '__output.simpleTemplate == "App: my-service, Version: 2.1.0"'
 
       conditional-true:
         description: Verify conditional template (true branch)
@@ -135,6 +146,6 @@ spec:
         description: Verify multiline template
         extends: [_base]
         assertions:
-          - expression: __output.multilineTemplate.contains("name: my-service")
-          - expression: __output.multilineTemplate.contains("version: 2.1.0")
-          - expression: __output.multilineTemplate.contains("featureCount: 3")
+          - expression: '__output.multilineTemplate.contains("name: my-service")'
+          - expression: '__output.multilineTemplate.contains("version: 2.1.0")'
+          - expression: '__output.multilineTemplate.contains("featureCount: 3")'

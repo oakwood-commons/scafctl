@@ -180,7 +180,12 @@ func TestFromUrl(t *testing.T) {
 		}))
 		defer server.Close()
 
-		getter := NewGetter()
+		// Disable caching so the 404 response is not persisted to the filesystem cache,
+		// which would cause stale responses for later tests that reuse the same port.
+		cfg := httpc.DefaultConfig()
+		cfg.EnableCache = false
+		cfg.RetryMax = 0
+		getter := NewGetter(WithHTTPClient(httpc.NewClient(cfg)))
 		ctx := context.Background()
 
 		sol, err := getter.FromURL(ctx, server.URL)
@@ -270,7 +275,14 @@ func TestFromUrl(t *testing.T) {
 		defer server.Close()
 
 		customLogger := logr.Discard()
-		getter := NewGetter(WithLogger(customLogger))
+		// Disable caching to avoid stale cached responses from port-reuse between tests.
+		cfg := httpc.DefaultConfig()
+		cfg.EnableCache = false
+		cfg.RetryMax = 0
+		getter := NewGetter(
+			WithLogger(customLogger),
+			WithHTTPClient(httpc.NewClient(cfg)),
+		)
 		ctx := context.Background()
 
 		sol, err := getter.FromURL(ctx, server.URL)
@@ -417,7 +429,12 @@ func TestGet(t *testing.T) {
 		}))
 		defer server.Close()
 
-		getter := NewGetter()
+		// Disable caching so a previously cached response for a reused port doesn't
+		// cause a stale 404 to be returned instead of the actual 200 from this server.
+		cfg := httpc.DefaultConfig()
+		cfg.EnableCache = false
+		cfg.RetryMax = 0
+		getter := NewGetter(WithHTTPClient(httpc.NewClient(cfg)))
 		ctx := context.Background()
 
 		sol, err := getter.Get(ctx, server.URL)

@@ -1,0 +1,25 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: lint-valid-minimal
+  version: 1.0.0
+  description: "A valid minimal solution for lint testing"
+spec:
+  resolvers:
+    env:
+      name: env
+      description: "Resolve the environment"
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "environment"
+  workflow:
+    actions:
+      greet:
+        name: greet
+        description: "Print a greeting"
+        provider: exec
+        inputs:
+          command:
+            expr: "'echo Hello ' + _.env"

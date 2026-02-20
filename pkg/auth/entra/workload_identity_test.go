@@ -609,3 +609,79 @@ func TestHandler_WorkloadIdentityLogin_ErrorMessages(t *testing.T) {
 		})
 	}
 }
+
+// TestHandler_AcquireWorkloadIdentityToken_ExpiredFederatedToken verifies that
+// an AADSTS700024 response (client assertion outside its valid time range)
+// produces a clear, actionable error message instead of the raw Azure error.
+func TestHandler_AcquireWorkloadIdentityToken_ExpiredFederatedToken(t *testing.T) {
+	tmpDir := t.TempDir()
+	tokenFile := filepath.Join(tmpDir, "token")
+	err := os.WriteFile(tokenFile, []byte("expired-jwt-token"), 0o600)
+	require.NoError(t, err)
+
+	t.Setenv(EnvAzureFederatedTokenFile, tokenFile)
+	t.Setenv(EnvAzureClientID, "test-client-id")
+	t.Setenv(EnvAzureTenantID, "test-tenant-id")
+
+	// Simulate the error returned by Entra when the federated token has expired.
+	const aadsts700024Desc = "AADSTS700024: Client assertion is not within its valid time range. " +
+		"Current time: 2026-02-20T17:25:38.0000000Z, assertion valid from 2026-02-20T15:56:53.0000000Z, " +
+		"expiry time of assertion 2026-02-20T16:56:53.0000000Z."
+
+	mockHTTP := NewMockHTTPClient()
+	mockHTTP.AddResponse(http.StatusBadRequest, map[string]string{
+		"error":             "invalid_client",
+		"error_description": aadsts700024Desc,
+	})
+
+	store := secrets.NewMockStore()
+	handler, err := New(
+		WithSecretStore(store),
+		WithHTTPClient(mockHTTP),
+	)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	_, err = handler.acquireWorkloadIdentityToken(ctx, GetWorkloadIdentityCredentials(), "https://management.azure.com/.default")
+
+	require.Error(t, err)
+	// Should mention the AADSTS code so users can look it up
+	assert.Contains(t, err.Error(), "AADSTS700024")
+	// Should clearly state the token has expired (not just echo the raw OAuth error)
+	assert.Contains(t, err.Error(), "expired federated token")
+	// Should reference the token file path so users know where to look
+	assert.Contains(t, err.Error(), tokenFile)
+}
+
+// TestHandler_AcquireWorkloadIdentityToken_ExpiredFederatedToken_DirectToken
+// verifies the hint differs when using a direct (env-var) token instead of a file.
+func TestHandler_AcquireWorkloadIdentityToken_ExpiredFederatedToken_DirectToken(t *testing.T) {
+	os.Unsetenv(EnvAzureFederatedTokenFile)
+	t.Setenv(EnvAzureFederatedToken, "expired-direct-token")
+	t.Setenv(EnvAzureClientID, "test-client-id")
+	t.Setenv(EnvAzureTenantID, "test-tenant-id")
+
+	const aadsts700024Desc = "AADSTS700024: Client assertion is not within its valid time range."
+
+	mockHTTP := NewMockHTTPClient()
+	mockHTTP.AddResponse(http.StatusBadRequest, map[string]string{
+		"error":             "invalid_client",
+		"error_description": aadsts700024Desc,
+	})
+
+	store := secrets.NewMockStore()
+	handler, err := New(
+		WithSecretStore(store),
+		WithHTTPClient(mockHTTP),
+	)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	_, err = handler.acquireWorkloadIdentityToken(ctx, GetWorkloadIdentityCredentials(), "https://management.azure.com/.default")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "AADSTS700024")
+	assert.Contains(t, err.Error(), "expired federated token")
+	// Should suggest the env vars to refresh
+	assert.Contains(t, err.Error(), EnvAzureFederatedToken)
+}

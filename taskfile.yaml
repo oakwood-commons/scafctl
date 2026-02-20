@@ -198,6 +198,81 @@ tasks:
         go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
         golangci-lint run --timeout 10m0s
 
+  lint:solutions:
+    deps: [build]
+    desc: "Lint all solution examples and integration test solutions"
+    silent: true
+    cmds:
+      - |
+        echo "Linting solution files..."
+        BINARY="{{.DIST}}/{{.OUTPUT_FILE}}"
+        ERRORS=0
+        PASSED=0
+        SKIPPED=0
+
+        # Directories/files that are intentionally invalid and should be skipped
+        EXCLUDE="bad-solution-yaml/|edge-cases/invalid-|lint-schema/unknown-field/|lint-schema/unknown-nested-field/|lint-schema/unknown-field.yaml"
+
+        {
+          find examples/solutions -name '*.yaml'
+          find tests/integration/solutions -name 'solution.yaml'
+        } | while IFS= read -r file; do
+          if echo "$file" | grep -qE "$EXCLUDE"; then
+            SKIPPED=$((SKIPPED + 1))
+            continue
+          fi
+
+          if "$BINARY" lint -f "$file" --no-color -o quiet >/dev/null 2>&1; then
+            PASSED=$((PASSED + 1))
+          else
+            echo "  FAIL: $file"
+            ERRORS=$((ERRORS + 1))
+          fi
+        done
+
+        # The while loop runs in a subshell due to the pipe, so we re-run to get the exit code
+        FAIL_COUNT=$(
+          {
+            find examples/solutions -name '*.yaml'
+            find tests/integration/solutions -name 'solution.yaml'
+          } | while IFS= read -r file; do
+            echo "$file" | grep -qE "$EXCLUDE" && continue
+            "$BINARY" lint -f "$file" --no-color -o quiet >/dev/null 2>&1 || echo "FAIL"
+          done | grep -c "FAIL" || true
+        )
+
+        TOTAL=$(
+          {
+            find examples/solutions -name '*.yaml'
+            find tests/integration/solutions -name 'solution.yaml'
+          } | wc -l | tr -d ' '
+        )
+
+        SKIP_COUNT=$(
+          {
+            find examples/solutions -name '*.yaml'
+            find tests/integration/solutions -name 'solution.yaml'
+          } | grep -cE "$EXCLUDE" || true
+        )
+
+        PASS_COUNT=$((TOTAL - FAIL_COUNT - SKIP_COUNT))
+
+        echo ""
+        echo "=== Lint Solutions Summary ==="
+        echo "  Total:   $TOTAL"
+        echo "  Passed:  $PASS_COUNT"
+        echo "  Failed:  $FAIL_COUNT"
+        echo "  Skipped: $SKIP_COUNT (intentionally invalid)"
+
+        if [ "$FAIL_COUNT" -gt 0 ]; then
+          echo ""
+          echo "FAIL: $FAIL_COUNT solution(s) failed lint"
+          exit 1
+        fi
+
+        echo ""
+        echo "All solution files passed lint ✓"
+
   lint:fix:
     desc: Runs golangci-lint and fixes any issues
     sources:
@@ -314,6 +389,7 @@ tasks:
     desc: "Run end-to-end tests"
     cmds:
       - task: test-cover
+      - task: lint:solutions
       - task: integration
 
   release:

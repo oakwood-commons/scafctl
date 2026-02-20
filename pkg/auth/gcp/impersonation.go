@@ -75,7 +75,23 @@ func (h *Handler) impersonateServiceAccount(ctx context.Context, sourceToken, ta
 	if resp.StatusCode != http.StatusOK {
 		var errBody map[string]any
 		_ = json.NewDecoder(resp.Body).Decode(&errBody)
-		return nil, fmt.Errorf("impersonation failed (status %d): %v", resp.StatusCode, errBody)
+		// Extract the message field if the response follows the Google API error format
+		msg := ""
+		if errObj, ok := errBody["error"].(map[string]any); ok {
+			if s, ok := errObj["message"].(string); ok {
+				msg = s
+			}
+		}
+		if msg == "" {
+			msg = fmt.Sprintf("%v", errBody)
+		}
+		if resp.StatusCode == http.StatusUnauthorized {
+			return nil, fmt.Errorf(
+				"impersonation failed: source identity is not authenticated (401): %s. "+
+					"Re-authenticate with: scafctl auth login gcp",
+				msg)
+		}
+		return nil, fmt.Errorf("impersonation failed (status %d): %s", resp.StatusCode, msg)
 	}
 
 	var impResp ImpersonationResponse

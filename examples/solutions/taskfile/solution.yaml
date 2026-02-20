@@ -75,62 +75,51 @@ spec:
             inputs:
               value: dist
 
-  actions:
-    clean:
-      description: Clean build directory
-      provider: exec
-      inputs:
-        command:
-          expr: "'rm -rf ' + _.buildDir"
-        context:
-          buildDir:
-            rslvr: buildDir
+  workflow:
+    actions:
+      clean:
+        description: Clean build directory
+        provider: exec
+        inputs:
+          command:
+            expr: "'rm -rf ' + _.buildDir"
 
-    test:
-      description: Run tests
-      provider: exec
-      dependsOn: [clean]
-      inputs:
-        command: "go test ./..."
+      test:
+        description: Run tests
+        provider: exec
+        dependsOn: [clean]
+        inputs:
+          command: "go test ./..."
 
-    build:
-      description: Build binary
-      provider: exec
-      dependsOn: [test]
-      inputs:
-        env:
-          GOOS:
-            rslvr: goos
-          GOARCH:
-            rslvr: goarch
-        command:
-          tmpl: "go build -o {{ .buildDir }}/{{ .repo }} ./cmd/scafctl"
-        context:
-          buildDir:
-            rslvr: buildDir
-          repo:
-            rslvr: repo
+      build:
+        description: Build binary
+        provider: exec
+        dependsOn: [test]
+        inputs:
+          env:
+            GOOS:
+              rslvr: goos
+            GOARCH:
+              rslvr: goarch
+          command:
+            expr: "'go build -o ' + _.buildDir + '/' + _.repo + ' ./cmd/scafctl'"
 
-    release:
-      description: Create GitHub release
-      provider: api
-      dependsOn: [build]
-      when:
-        expr: "_.version != \"dev\""
-      inputs:
-        endpoint: https://api.github.com/repos/oakwood-commons/scafctl/releases
-        method: POST
-        headers:
-          Authorization:
-            tmpl: "Bearer {{ .github_token }}"
-        body:
-          tag_name:
-            rslvr: version
-          name:
-            tmpl: "Release {{ .version }}"
-          draft: false
-          prerelease:
-            expr: "_.version.contains(\"alpha\") || _.version.contains(\"beta\")"
-        context:
-          version:
-            rslvr: version
+      release:
+        description: Create GitHub release
+        provider: http
+        dependsOn: [build]
+        when:
+          expr: "_.version != \"dev\""
+        inputs:
+          url: https://api.github.com/repos/oakwood-commons/scafctl/releases
+          method: POST
+          headers:
+            Content-Type: application/json
+          body:
+            expr: |
+              toJson({
+                "tag_name": _.version,
+                "name": "Release " + _.version,
+                "draft": false,
+                "prerelease": _.version.contains("alpha") || _.version.contains("beta")
+              })

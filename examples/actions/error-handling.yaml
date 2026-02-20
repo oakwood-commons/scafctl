@@ -15,8 +15,6 @@ spec:
     checks:
       description: List of health checks to run
       type: array
-      items:
-        type: any
       resolve:
         with:
           - provider: static

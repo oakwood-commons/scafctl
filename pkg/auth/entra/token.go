@@ -25,6 +25,11 @@ type TokenMetadata struct {
 	TenantID              string       `json:"tenantId"`
 	ClientID              string       `json:"clientId,omitempty"`
 	Scopes                []string     `json:"scopes,omitempty"`
+
+	// LoginFlow records the authentication flow used during the original login
+	// (e.g. "device_code"). Stored so that tokens minted from a stored refresh
+	// token can report the originating flow to callers.
+	LoginFlow auth.Flow `json:"loginFlow,omitempty"`
 }
 
 // mintToken creates a new access token for the specified scope.
@@ -79,6 +84,13 @@ func (h *Handler) mintToken(ctx context.Context, scope string) (*auth.Token, err
 				"scope", scope,
 			)
 
+			// AADSTS700016: application not found — this is a misconfiguration, not a
+			// revoked token.  Return a clear error without wiping stored credentials.
+			if strings.Contains(errResp.ErrorDescription, "AADSTS700016") {
+				return nil, formatAADSTSError(fmt.Sprintf("token refresh failed for scope %q", scope), errResp)
+			}
+
+			// AADSTS70000: generic invalid grant (revoked / rotated refresh token).
 			if strings.Contains(errResp.ErrorDescription, "AADSTS70000") {
 				return nil, fmt.Errorf("scope %q: %s: %w", scope, errResp.ErrorDescription, auth.ErrGrantInvalid)
 			}
@@ -99,6 +111,10 @@ func (h *Handler) mintToken(ctx context.Context, scope string) (*auth.Token, err
 			return nil, auth.ErrTokenExpired
 		}
 
+		if strings.Contains(errResp.ErrorDescription, "AADSTS") {
+			return nil, formatAADSTSError("token request failed", errResp)
+		}
+
 		return nil, fmt.Errorf("token request failed: %s - %s", errResp.Error, errResp.ErrorDescription)
 	}
 
@@ -110,7 +126,7 @@ func (h *Handler) mintToken(ctx context.Context, scope string) (*auth.Token, err
 	// If we got a new refresh token, store it (token rotation)
 	if tokenResp.RefreshToken != "" && tokenResp.RefreshToken != refreshToken {
 		lgr.V(1).Info("refresh token rotated, storing new token")
-		if err := h.storeCredentials(ctx, metadata.TenantID, &tokenResp, metadata.ClientID, metadata.Scopes); err != nil {
+		if err := h.storeCredentials(ctx, metadata.TenantID, &tokenResp, metadata.ClientID, metadata.Scopes, metadata.LoginFlow); err != nil {
 			lgr.V(1).Info("warning: failed to update refresh token", "error", err)
 		}
 	}
@@ -128,6 +144,7 @@ func (h *Handler) mintToken(ctx context.Context, scope string) (*auth.Token, err
 		TokenType:   tokenResp.TokenType,
 		ExpiresAt:   expiresAt,
 		Scope:       scope,
+		Flow:        metadata.LoginFlow,
 	}, nil
 }
 
@@ -137,7 +154,9 @@ func (h *Handler) mintToken(ctx context.Context, scope string) (*auth.Token, err
 // future refresh-token exchanges continue to use the correct client.
 // scopes records which OAuth scopes were used during login so they can be
 // surfaced later (e.g. in `auth status`).
-func (h *Handler) storeCredentials(ctx context.Context, tenantID string, tokenResp *TokenResponse, clientID string, scopes []string) error {
+// loginFlow records the authentication flow (e.g. auth.FlowDeviceCode) so that
+// tokens minted from the stored refresh token can surface the originating flow.
+func (h *Handler) storeCredentials(ctx context.Context, tenantID string, tokenResp *TokenResponse, clientID string, scopes []string, loginFlow auth.Flow) error {
 	// Validate refresh token is present
 	if tokenResp.RefreshToken == "" {
 		return fmt.Errorf("no refresh token in response (offline_access scope may be missing)")
@@ -164,6 +183,7 @@ func (h *Handler) storeCredentials(ctx context.Context, tenantID string, tokenRe
 		TenantID:              tenantID,
 		ClientID:              clientID,
 		Scopes:                scopes,
+		LoginFlow:             loginFlow,
 	}
 
 	metadataBytes, err := json.Marshal(metadata)

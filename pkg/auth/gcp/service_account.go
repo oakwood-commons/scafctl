@@ -161,7 +161,10 @@ func (h *Handler) acquireServiceAccountToken(ctx context.Context, key *ServiceAc
 	// Parse the private key
 	block, _ := pem.Decode([]byte(key.PrivateKey))
 	if block == nil {
-		return nil, fmt.Errorf("failed to parse PEM block from private key")
+		return nil, fmt.Errorf(
+			"failed to parse PEM block from service account private key: "+
+				"the private_key field in %s may be malformed or not in PEM format",
+			EnvGoogleApplicationCredentials)
 	}
 
 	rsaKey, err := x509.ParsePKCS8PrivateKey(block.Bytes)
@@ -207,7 +210,11 @@ func (h *Handler) acquireServiceAccountToken(ctx context.Context, key *ServiceAc
 	if resp.StatusCode != 200 {
 		var errResp TokenErrorResponse
 		_ = json.NewDecoder(resp.Body).Decode(&errResp)
-		return nil, fmt.Errorf("token request failed: %s - %s", errResp.Error, errResp.ErrorDescription)
+		return nil, fmt.Errorf(
+			"service account token request failed: %s - %s. "+
+				"Verify the key in %s is valid, has not been revoked, "+
+				"and the service account has the required IAM roles for the requested scope",
+			errResp.Error, errResp.ErrorDescription, EnvGoogleApplicationCredentials)
 	}
 
 	var tokenResp TokenResponse

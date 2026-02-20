@@ -130,7 +130,7 @@ func TestCommandToken_GitHubSuccessWithoutScope(t *testing.T) {
 	assert.Equal(t, "", mock.GetTokenCalls[0].Scope)
 
 	output := buf.String()
-	assert.Contains(t, output, "Handler:")
+	assert.Contains(t, output, "handler")
 	assert.Contains(t, output, "github")
 }
 
@@ -161,15 +161,15 @@ func TestCommandToken_Success(t *testing.T) {
 	require.Len(t, mock.GetTokenCalls, 1)
 	assert.Equal(t, "https://graph.microsoft.com/.default", mock.GetTokenCalls[0].Scope)
 
-	// Verify output (table format masks token)
+	// Verify output includes all fields
 	output := buf.String()
-	assert.Contains(t, output, "Handler:")
+	assert.Contains(t, output, "handler")
 	assert.Contains(t, output, "entra")
-	assert.Contains(t, output, "Scope:")
+	assert.Contains(t, output, "scope")
 	assert.Contains(t, output, "graph.microsoft.com")
-	assert.Contains(t, output, "Type:")
+	assert.Contains(t, output, "tokenType")
 	assert.Contains(t, output, "Bearer")
-	assert.Contains(t, output, "...") // Token is masked
+	assert.Contains(t, output, "accessToken") // Full token is present, not masked
 }
 
 func TestCommandToken_JSONOutput(t *testing.T) {

@@ -51,8 +51,8 @@ func NewIdentityProvider() *IdentityProvider {
 			},
 			Tags: []string{"auth", "identity", "claims", "security"},
 			Schema: schemahelper.ObjectSchema([]string{"operation"}, map[string]*jsonschema.Schema{
-				"operation": schemahelper.StringProp("Operation to perform: 'status' to get auth status, 'claims' to get identity claims, 'list' to list available handlers",
-					schemahelper.WithEnum("status", "claims", "list"),
+				"operation": schemahelper.StringProp("Operation to perform: 'status' to get auth status, 'claims' to get identity claims, 'groups' to get group memberships (Entra only), 'list' to list available handlers",
+					schemahelper.WithEnum("status", "claims", "groups", "list"),
 					schemahelper.WithExample("claims"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(10))),
 				"handler": schemahelper.StringProp("Name of the auth handler to query (e.g., 'entra'). If not specified, uses the first available authenticated handler.",
@@ -67,6 +67,8 @@ func NewIdentityProvider() *IdentityProvider {
 					"authenticated": schemahelper.BoolProp("Whether the user is authenticated", schemahelper.WithExample(true)),
 					"identityType":  schemahelper.StringProp("Type of identity: 'user', 'service-principal', or 'workload-identity'", schemahelper.WithExample("user")),
 					"claims":        schemahelper.AnyProp("Identity claims (name, email, subject, etc.)"),
+					"groups":        schemahelper.ArrayProp("List of Entra group ObjectIDs the user belongs to (groups operation only)"),
+					"count":         schemahelper.AnyProp("Number of groups returned (groups operation only)"),
 					"tenantId":      schemahelper.StringProp("Tenant ID for the authenticated identity", schemahelper.WithExample("12345678-1234-1234-1234-123456789012")),
 					"expiresAt":     schemahelper.StringProp("Token expiration time in RFC3339 format", schemahelper.WithExample("2024-01-15T10:30:00Z")),
 					"expiresIn":     schemahelper.StringProp("Human-readable duration until token expires", schemahelper.WithExample("55m30s")),
@@ -89,6 +91,15 @@ inputs:
 provider: identity
 inputs:
   operation: status
+  handler: entra`,
+				},
+				{
+					Name:        "Get Entra group memberships",
+					Description: "Retrieve all Entra group ObjectIDs the authenticated user belongs to. Requires GroupMember.Read.All or Directory.Read.All consent.",
+					YAML: `name: user-groups
+provider: identity
+inputs:
+  operation: groups
   handler: entra`,
 				},
 				{
@@ -140,6 +151,8 @@ func (p *IdentityProvider) Execute(ctx context.Context, input any) (*provider.Ou
 		result, err = p.executeStatus(ctx, handlerName)
 	case "claims":
 		result, err = p.executeClaims(ctx, handlerName)
+	case "groups":
+		result, err = p.executeGroups(ctx, handlerName)
 	case "list":
 		result, err = p.executeList(ctx)
 	default:
@@ -303,6 +316,37 @@ func (p *IdentityProvider) executeClaims(ctx context.Context, handlerName string
 	return &provider.Output{Data: result}, nil
 }
 
+func (p *IdentityProvider) executeGroups(ctx context.Context, handlerName string) (*provider.Output, error) {
+	handler, err := p.getHandler(ctx, handlerName)
+	if err != nil {
+		return nil, err
+	}
+
+	gp, ok := handler.(auth.GroupsProvider)
+	if !ok {
+		return nil, fmt.Errorf("handler %q does not support group membership queries; only the Entra handler implements this operation", handler.Name())
+	}
+
+	groups, err := gp.GetGroups(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve group memberships from handler %q: %w", handler.Name(), err)
+	}
+
+	// Normalise nil slice → empty slice so JSON output is [] not null.
+	if groups == nil {
+		groups = []string{}
+	}
+
+	return &provider.Output{
+		Data: map[string]any{
+			"operation": "groups",
+			"handler":   handler.Name(),
+			"groups":    groups,
+			"count":     len(groups),
+		},
+	}, nil
+}
+
 func (p *IdentityProvider) executeList(ctx context.Context) (*provider.Output, error) {
 	registry := auth.RegistryFromContext(ctx)
 	if registry == nil {
@@ -361,6 +405,10 @@ func (p *IdentityProvider) executeDryRun(operation, handlerName string) (*provid
 		result["handler"] = handlerName
 		result["authenticated"] = false
 		result["claims"] = nil
+	case "groups":
+		result["handler"] = handlerName
+		result["groups"] = []string{}
+		result["count"] = 0
 	case "list":
 		result["handlers"] = []map[string]any{}
 		result["count"] = 0

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
@@ -129,10 +130,29 @@ func (h *Handler) acquireServicePrincipalToken(ctx context.Context, creds *Servi
 		_ = json.NewDecoder(resp.Body).Decode(&errResp)
 
 		if errResp.Error == "invalid_client" {
-			return nil, fmt.Errorf("invalid credentials: %s", errResp.ErrorDescription)
+			// Use the shared hint helper which knows about AADSTS7000215 (expired/wrong
+			// secret) and AADSTS700016 (app not found) among others.
+			hint := aadstsHint(errResp.ErrorDescription)
+			if hint == "" {
+				// Generic guidance: the secret is the most common cause.
+				hint = fmt.Sprintf("verify %s contains the correct secret value (not the secret ID); "+
+					"if the secret has been rotated or expired, regenerate it in the Azure portal",
+					EnvAzureClientSecret)
+			}
+			return nil, fmt.Errorf("invalid client credentials: %s\nHint: %s", errResp.ErrorDescription, hint)
 		}
 		if errResp.Error == "unauthorized_client" {
-			return nil, fmt.Errorf("client not authorized for this scope: %s", errResp.ErrorDescription)
+			// Common cause: the service principal has not been granted the required
+			// API permissions or an admin has not consented.
+			return nil, fmt.Errorf("client not authorized: %s\nHint: ensure the app registration has the required API permissions "+
+				"and that an administrator has granted consent in the Azure portal "+
+				"(app registrations → API permissions → Grant admin consent)",
+				errResp.ErrorDescription)
+		}
+
+		// Check for other known AADSTS codes (e.g. AADSTS700016 - app not found).
+		if strings.Contains(errResp.ErrorDescription, "AADSTS") {
+			return nil, formatAADSTSError("token request failed", errResp)
 		}
 
 		return nil, fmt.Errorf("token request failed: %s - %s", errResp.Error, errResp.ErrorDescription)
@@ -155,6 +175,7 @@ func (h *Handler) acquireServicePrincipalToken(ctx context.Context, creds *Servi
 		TokenType:   tokenResp.TokenType,
 		ExpiresAt:   expiresAt,
 		Scope:       scope,
+		Flow:        auth.FlowServicePrincipal,
 	}, nil
 }
 

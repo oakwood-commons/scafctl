@@ -111,7 +111,7 @@ func (h *Handler) performDeviceCodeFlow(ctx context.Context, opts auth.LoginOpti
 	}
 
 	// Step 4: Store refresh token securely
-	if err := h.storeCredentials(ctx, tenantID, tokenResp, h.config.ClientID, scopes); err != nil {
+	if err := h.storeCredentials(ctx, tenantID, tokenResp, h.config.ClientID, scopes, auth.FlowDeviceCode); err != nil {
 		return nil, auth.NewError(HandlerName, "store_credentials", err)
 	}
 
@@ -149,6 +149,9 @@ func (h *Handler) requestDeviceCode(ctx context.Context, tenantID string, scopes
 		var errResp TokenErrorResponse
 		if err := json.NewDecoder(resp.Body).Decode(&errResp); err != nil {
 			return nil, fmt.Errorf("device code request failed with status %d", resp.StatusCode)
+		}
+		if strings.Contains(errResp.ErrorDescription, "AADSTS") {
+			return nil, formatAADSTSError("device code request failed", errResp)
 		}
 		return nil, fmt.Errorf("device code request failed: %s - %s", errResp.Error, errResp.ErrorDescription)
 	}
@@ -228,6 +231,9 @@ func (h *Handler) pollForToken(ctx context.Context, tenantID string, deviceCode 
 			case "authorization_declined":
 				return nil, auth.ErrUserCancelled
 			default:
+				if strings.Contains(errResp.ErrorDescription, "AADSTS") {
+					return nil, formatAADSTSError("token request failed", errResp)
+				}
 				return nil, fmt.Errorf("token request failed: %s - %s", errResp.Error, errResp.ErrorDescription)
 			}
 		}

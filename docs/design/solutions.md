@@ -94,7 +94,8 @@ bundle:                              # ⏳ Planned — build-time packaging meta
 
 spec:
   resolvers: {}
-  actions: {}
+  workflow:
+    actions: {}
 ~~~
 
 Top-level sections:

@@ -46,8 +46,6 @@ spec:
     targets:
       description: Deployment targets
       type: array
-      items:
-        type: any
       resolve:
         with:
           - provider: static
