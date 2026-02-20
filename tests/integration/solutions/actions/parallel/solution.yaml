@@ -1,0 +1,120 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-action-parallel
+  version: 1.0.0
+  description: |
+    Functional tests for parallel action execution with dependencies.
+    Verifies that independent actions run in the same phase and
+    dependent actions wait for their prerequisites.
+
+spec:
+  resolvers:
+    appName:
+      description: Application name
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "web-service"
+
+  workflow:
+    actions:
+      # Phase 1: These two have no dependencies, should run in parallel
+      buildFrontend:
+        description: Build frontend assets
+        provider: exec
+        inputs:
+          command: "echo Building frontend"
+
+      buildBackend:
+        description: Build backend service
+        provider: exec
+        inputs:
+          command: "echo Building backend"
+
+      # Phase 1 as well: independent
+      runLint:
+        description: Run linter
+        provider: exec
+        inputs:
+          command: "echo Running lint"
+
+      # Phase 2: depends on both builds
+      integrationTests:
+        description: Run integration tests after both builds
+        provider: exec
+        dependsOn: [buildFrontend, buildBackend]
+        inputs:
+          command:
+            expr: "'echo Testing ' + _.appName"
+
+      # Phase 3: depends on tests
+      publish:
+        description: Publish artifacts
+        provider: exec
+        dependsOn: [integrationTests, runLint]
+        inputs:
+          command:
+            expr: "'echo Publishing ' + _.appName"
+
+  testing:
+    config:
+      skipBuiltins: true
+
+    cases:
+      _run-base:
+        description: Base template for parallel tests
+        command: [run, solution]
+        args: ["-o", "json"]
+        tags: [action, parallel]
+        assertions:
+          - expression: __exitCode == 0
+
+      _render-base:
+        description: Base template for render tests
+        command: [render, solution]
+        args: ["-o", "json"]
+        tags: [action, parallel, render]
+        assertions:
+          - expression: __exitCode == 0
+
+      all-succeed:
+        description: Verify all parallel and sequential actions succeed
+        extends: [_run-base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.status == "succeeded"
+          - expression: __output.actions["buildFrontend"].status == "succeeded"
+          - expression: __output.actions["buildBackend"].status == "succeeded"
+          - expression: __output.actions["runLint"].status == "succeeded"
+          - expression: __output.actions["integrationTests"].status == "succeeded"
+          - expression: __output.actions["publish"].status == "succeeded"
+
+      parallel-phase-verification:
+        description: Verify independent actions share a phase
+        extends: [_render-base]
+        assertions:
+          - expression: >
+              __output.executionOrder.exists(phase,
+                phase.exists(a, a == "buildFrontend") &&
+                phase.exists(a, a == "buildBackend") &&
+                phase.exists(a, a == "runLint"))
+            message: "buildFrontend, buildBackend, and runLint should share a phase"
+
+      dependency-ordering:
+        description: Verify publish comes after integrationTests
+        extends: [_render-base]
+        assertions:
+          - expression: >
+              __output.executionOrder[size(__output.executionOrder) - 1].exists(
+                a, a == "publish")
+            message: "publish should be in the last phase"
+
+      three-phases:
+        description: Verify three execution phases
+        extends: [_render-base]
+        assertions:
+          - expression: size(__output.executionOrder) == 3
+            message: "Should have 3 phases: parallel builds, tests, publish"

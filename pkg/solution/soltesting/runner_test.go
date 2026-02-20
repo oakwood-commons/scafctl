@@ -89,11 +89,12 @@ func createTestSolution(t *testing.T, dir, name string) string {
 	content := `metadata:
   name: ` + name + `
 spec:
-  tests:
-    basic-test:
-      command: ["run"]
-      assertions:
-        - expression: "__exitCode == 0"
+  testing:
+    cases:
+      basic-test:
+        command: ["run"]
+        assertions:
+          - expression: "__exitCode == 0"
 `
 	path := filepath.Join(dir, "solution.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
@@ -113,8 +114,8 @@ func TestRunnerDryRun(t *testing.T) {
 		{
 			SolutionName: "test-solution",
 			FilePath:     "/tmp/solution.yaml",
-			TestConfig:   &TestConfig{SkipBuiltins: SkipBuiltinsValue{All: true}},
-			Tests: map[string]*TestCase{
+			Config:       &TestConfig{SkipBuiltins: SkipBuiltinsValue{All: true}},
+			Cases: map[string]*TestCase{
 				"my-test": {
 					Name:     "my-test",
 					Command:  []string{"run"},
@@ -147,8 +148,8 @@ func TestRunnerSkipTest(t *testing.T) {
 		{
 			SolutionName: "test-solution",
 			FilePath:     "/tmp/solution.yaml",
-			TestConfig:   &TestConfig{SkipBuiltins: SkipBuiltinsValue{All: true}},
-			Tests: map[string]*TestCase{
+			Config:       &TestConfig{SkipBuiltins: SkipBuiltinsValue{All: true}},
+			Cases: map[string]*TestCase{
 				"skipped-test": {
 					Name:       "skipped-test",
 					Command:    []string{"run"},
@@ -183,8 +184,8 @@ func TestRunnerPassingTest(t *testing.T) {
 		{
 			SolutionName: "passing-sol",
 			FilePath:     solutionPath,
-			TestConfig:   &TestConfig{SkipBuiltins: SkipBuiltinsValue{All: true}},
-			Tests: map[string]*TestCase{
+			Config:       &TestConfig{SkipBuiltins: SkipBuiltinsValue{All: true}},
+			Cases: map[string]*TestCase{
 				"pass-test": {
 					Name:    "pass-test",
 					Command: []string{"run"},
@@ -217,8 +218,8 @@ func TestRunnerFailingTest(t *testing.T) {
 		{
 			SolutionName: "failing-sol",
 			FilePath:     solutionPath,
-			TestConfig:   &TestConfig{SkipBuiltins: SkipBuiltinsValue{All: true}},
-			Tests: map[string]*TestCase{
+			Config:       &TestConfig{SkipBuiltins: SkipBuiltinsValue{All: true}},
+			Cases: map[string]*TestCase{
 				"fail-test": {
 					Name:     "fail-test",
 					Command:  []string{"run"},
@@ -251,8 +252,8 @@ func TestRunnerExpectFailure(t *testing.T) {
 		{
 			SolutionName: "expect-fail-sol",
 			FilePath:     solutionPath,
-			TestConfig:   &TestConfig{SkipBuiltins: SkipBuiltinsValue{All: true}},
-			Tests: map[string]*TestCase{
+			Config:       &TestConfig{SkipBuiltins: SkipBuiltinsValue{All: true}},
+			Cases: map[string]*TestCase{
 				"expect-fail": {
 					Name:          "expect-fail",
 					Command:       []string{"run"},
@@ -305,8 +306,8 @@ func TestRunnerRetry(t *testing.T) {
 		{
 			SolutionName: "retry-sol",
 			FilePath:     solutionPath,
-			TestConfig:   &TestConfig{SkipBuiltins: SkipBuiltinsValue{All: true}},
-			Tests: map[string]*TestCase{
+			Config:       &TestConfig{SkipBuiltins: SkipBuiltinsValue{All: true}},
+			Cases: map[string]*TestCase{
 				"retry-test": {
 					Name:     "retry-test",
 					Command:  []string{"run"},
@@ -343,8 +344,8 @@ func TestRunnerFailFast(t *testing.T) {
 		{
 			SolutionName: "failfast-sol",
 			FilePath:     solutionPath,
-			TestConfig:   &TestConfig{SkipBuiltins: SkipBuiltinsValue{All: true}},
-			Tests: map[string]*TestCase{
+			Config:       &TestConfig{SkipBuiltins: SkipBuiltinsValue{All: true}},
+			Cases: map[string]*TestCase{
 				"aaa-first": {
 					Name:     "aaa-first",
 					Command:  []string{"run"},
@@ -404,8 +405,8 @@ func TestRunnerConcurrency(t *testing.T) {
 		{
 			SolutionName: "concurrent-sol",
 			FilePath:     solutionPath,
-			TestConfig:   &TestConfig{SkipBuiltins: SkipBuiltinsValue{All: true}},
-			Tests:        tests,
+			Config:       &TestConfig{SkipBuiltins: SkipBuiltinsValue{All: true}},
+			Cases:        tests,
 		},
 	}
 
@@ -432,8 +433,8 @@ func TestRunnerNoCommand(t *testing.T) {
 		{
 			SolutionName: "nocmd-sol",
 			FilePath:     solutionPath,
-			TestConfig:   &TestConfig{SkipBuiltins: SkipBuiltinsValue{All: true}},
-			Tests: map[string]*TestCase{
+			Config:       &TestConfig{SkipBuiltins: SkipBuiltinsValue{All: true}},
+			Cases: map[string]*TestCase{
 				"no-command": {
 					Name: "no-command",
 					// No Command field — fails validation
@@ -463,8 +464,8 @@ func TestRunnerBuiltinParse(t *testing.T) {
 		{
 			SolutionName: "parse-sol",
 			FilePath:     solutionPath,
-			TestConfig:   &TestConfig{SkipBuiltins: SkipBuiltinsValue{Names: []string{"lint", "resolve-defaults", "render-defaults"}}},
-			Tests:        map[string]*TestCase{},
+			Config:       &TestConfig{SkipBuiltins: SkipBuiltinsValue{Names: []string{"lint", "resolve-defaults", "render-defaults"}}},
+			Cases:        map[string]*TestCase{},
 		},
 	}
 
@@ -498,8 +499,8 @@ func TestRunnerKeepSandbox(t *testing.T) {
 		{
 			SolutionName: "sandbox-sol",
 			FilePath:     solutionPath,
-			TestConfig:   &TestConfig{SkipBuiltins: SkipBuiltinsValue{All: true}},
-			Tests: map[string]*TestCase{
+			Config:       &TestConfig{SkipBuiltins: SkipBuiltinsValue{All: true}},
+			Cases: map[string]*TestCase{
 				"keep-test": {
 					Name:     "keep-test",
 					Command:  []string{"run"},
@@ -921,8 +922,8 @@ func TestRunnerGlobalTimeout(t *testing.T) {
 		{
 			SolutionName: "timeout-sol",
 			FilePath:     solutionPath,
-			TestConfig:   &TestConfig{SkipBuiltins: SkipBuiltinsValue{All: true}},
-			Tests: map[string]*TestCase{
+			Config:       &TestConfig{SkipBuiltins: SkipBuiltinsValue{All: true}},
+			Cases: map[string]*TestCase{
 				"slow-test": {
 					Name:     "slow-test",
 					Command:  []string{"run"},

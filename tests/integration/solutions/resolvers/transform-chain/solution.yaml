@@ -98,48 +98,49 @@ spec:
               name: config
               template: "app={{ .cleanedInput }}"
 
-  testConfig:
-    skipBuiltins: true
+  testing:
+    config:
+      skipBuiltins: true
 
-  tests:
-    _base:
-      description: Base template for transform chain tests
-      command: [run, resolver]
-      args: ["-o", "json"]
-      tags: [resolver, transform]
-      assertions:
-        - expression: __exitCode == 0
+    cases:
+      _base:
+        description: Base template for transform chain tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [resolver, transform]
+        assertions:
+          - expression: __exitCode == 0
 
-    multi-step-clean:
-      description: Verify multi-step string cleaning
-      extends: [_base]
-      tags: [smoke]
-      assertions:
-        - expression: __output.cleanedInput == "hello-world"
-          message: "Should trim, lowercase, remove punctuation, and hyphenate"
+      multi-step-clean:
+        description: Verify multi-step string cleaning
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.cleanedInput == "hello-world"
+            message: "Should trim, lowercase, remove punctuation, and hyphenate"
 
-    csv-to-filtered-list:
-      description: Verify CSV to filtered uppercase list
-      extends: [_base]
-      assertions:
-        - expression: size(__output.csvToList) == 4
-        - expression: __output.csvToList[0] == "APPLE"
-        - expression: __output.csvToList[3] == "DATE"
+      csv-to-filtered-list:
+        description: Verify CSV to filtered uppercase list
+        extends: [_base]
+        assertions:
+          - expression: size(__output.csvToList) == 4
+          - expression: __output.csvToList[0] == "APPLE"
+          - expression: __output.csvToList[3] == "DATE"
 
-    exec-output-transform:
-      description: Verify exec output is transformed through chain
-      extends: [_base]
-      assertions:
-        - expression: __output.execTransform == "test-value"
+      exec-output-transform:
+        description: Verify exec output is transformed through chain
+        extends: [_base]
+        assertions:
+          - expression: __output.execTransform == "test-value"
 
-    passthrough-no-transform:
-      description: Verify value passes through without transforms
-      extends: [_base]
-      assertions:
-        - expression: __output.passthrough == "unchanged"
+      passthrough-no-transform:
+        description: Verify value passes through without transforms
+        extends: [_base]
+        assertions:
+          - expression: __output.passthrough == "unchanged"
 
-    template-transform:
-      description: Verify go-template transform step
-      extends: [_base]
-      assertions:
-        - expression: __output.templateTransform == "app=hello-world"
+      template-transform:
+        description: Verify go-template transform step
+        extends: [_base]
+        assertions:
+          - expression: __output.templateTransform == "app=hello-world"

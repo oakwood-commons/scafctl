@@ -109,121 +109,122 @@ spec:
             inputs:
               expression: "user"
 
-  testConfig:
-    skipBuiltins: true
+  testing:
+    config:
+      skipBuiltins: true
 
-  tests:
+    cases:
     # =========================================================================
     # Base template
     # =========================================================================
 
-    _base:
-      description: Base template for forEach filter tests
-      command: [run, resolver]
-      args: ["-o", "json"]
-      tags: [resolver, foreach-filter]
-      assertions:
-        - expression: __exitCode == 0
+      _base:
+        description: Base template for forEach filter tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [resolver, foreach-filter]
+        assertions:
+          - expression: __exitCode == 0
 
     # =========================================================================
     # Default filter behavior (keepSkipped: false)
     # =========================================================================
 
-    filter-default-removes-nils:
-      description: Verify default behavior removes nil entries from forEach output
-      extends: [_base]
-      tags: [smoke]
-      assertions:
-        - expression: size(__output.evenNumbers) == 3
-          message: "Default filter should retain only the 3 even numbers"
-        - expression: __output.evenNumbers[0] == 2
-          message: "First element should be 2"
-        - expression: __output.evenNumbers[1] == 4
-          message: "Second element should be 4"
-        - expression: __output.evenNumbers[2] == 6
-          message: "Third element should be 6"
+      filter-default-removes-nils:
+        description: Verify default behavior removes nil entries from forEach output
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: size(__output.evenNumbers) == 3
+            message: "Default filter should retain only the 3 even numbers"
+          - expression: __output.evenNumbers[0] == 2
+            message: "First element should be 2"
+          - expression: __output.evenNumbers[1] == 4
+            message: "Second element should be 4"
+          - expression: __output.evenNumbers[2] == 6
+            message: "Third element should be 6"
 
-    filter-no-nulls-in-output:
-      description: Verify no null entries exist in default-filtered output
-      extends: [_base]
-      assertions:
-        - expression: >
-            !__output.evenNumbers.exists(v, v == null)
-          message: "Default filter should contain no null entries"
+      filter-no-nulls-in-output:
+        description: Verify no null entries exist in default-filtered output
+        extends: [_base]
+        assertions:
+          - expression: >
+              !__output.evenNumbers.exists(v, v == null)
+            message: "Default filter should contain no null entries"
 
     # =========================================================================
     # keepSkipped: true — index alignment
     # =========================================================================
 
-    keep-skipped-preserves-nils:
-      description: Verify keepSkipped=true preserves nil entries for index alignment
-      extends: [_base]
-      tags: [smoke]
-      assertions:
-        - expression: size(__output.evenNumbersAligned) == 6
-          message: "keepSkipped should retain all 6 positions including nils"
-        - expression: __output.evenNumbersAligned[0] == null
-          message: "Position 0 (value 1, odd) should be null"
-        - expression: __output.evenNumbersAligned[1] == 2
-          message: "Position 1 (value 2, even) should be 2"
-        - expression: __output.evenNumbersAligned[2] == null
-          message: "Position 2 (value 3, odd) should be null"
-        - expression: __output.evenNumbersAligned[3] == 4
-          message: "Position 3 (value 4, even) should be 4"
-        - expression: __output.evenNumbersAligned[4] == null
-          message: "Position 4 (value 5, odd) should be null"
-        - expression: __output.evenNumbersAligned[5] == 6
-          message: "Position 5 (value 6, even) should be 6"
+      keep-skipped-preserves-nils:
+        description: Verify keepSkipped=true preserves nil entries for index alignment
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: size(__output.evenNumbersAligned) == 6
+            message: "keepSkipped should retain all 6 positions including nils"
+          - expression: __output.evenNumbersAligned[0] == null
+            message: "Position 0 (value 1, odd) should be null"
+          - expression: __output.evenNumbersAligned[1] == 2
+            message: "Position 1 (value 2, even) should be 2"
+          - expression: __output.evenNumbersAligned[2] == null
+            message: "Position 2 (value 3, odd) should be null"
+          - expression: __output.evenNumbersAligned[3] == 4
+            message: "Position 3 (value 4, even) should be 4"
+          - expression: __output.evenNumbersAligned[4] == null
+            message: "Position 4 (value 5, odd) should be null"
+          - expression: __output.evenNumbersAligned[5] == 6
+            message: "Position 5 (value 6, even) should be 6"
 
     # =========================================================================
     # Comparison: filtered vs index-aligned
     # =========================================================================
 
-    filter-vs-keep-count:
-      description: Verify filtered result is smaller than index-aligned result
-      extends: [_base]
-      assertions:
-        - expression: size(__output.evenNumbers) < size(__output.evenNumbersAligned)
-          message: "Filtered result should have fewer elements than index-aligned result"
-        - expression: size(__output.evenNumbers) == 3
-        - expression: size(__output.evenNumbersAligned) == 6
+      filter-vs-keep-count:
+        description: Verify filtered result is smaller than index-aligned result
+        extends: [_base]
+        assertions:
+          - expression: size(__output.evenNumbers) < size(__output.evenNumbersAligned)
+            message: "Filtered result should have fewer elements than index-aligned result"
+          - expression: size(__output.evenNumbers) == 3
+          - expression: size(__output.evenNumbersAligned) == 6
 
     # =========================================================================
     # No when condition — all items pass through
     # =========================================================================
 
-    no-condition-all-pass:
-      description: Verify forEach without when condition passes all items through
-      extends: [_base]
-      assertions:
-        - expression: size(__output.allNumbers) == 3
-          message: "Without when condition all 3 items should pass through"
-        - expression: __output.allNumbers[0] == 10
-        - expression: __output.allNumbers[1] == 20
-        - expression: __output.allNumbers[2] == 30
+      no-condition-all-pass:
+        description: Verify forEach without when condition passes all items through
+        extends: [_base]
+        assertions:
+          - expression: size(__output.allNumbers) == 3
+            message: "Without when condition all 3 items should pass through"
+          - expression: __output.allNumbers[0] == 10
+          - expression: __output.allNumbers[1] == 20
+          - expression: __output.allNumbers[2] == 30
 
     # =========================================================================
     # Object filtering
     # =========================================================================
 
-    active-users-filtered:
-      description: Verify active users are correctly filtered from a mixed list
-      extends: [_base]
-      tags: [smoke]
-      assertions:
-        - expression: size(__output.activeUsers) == 3
-          message: "3 of 5 users are active and should appear in the output"
-        - expression: __output.activeUsers[0].name == "alice"
-          message: "First active user should be alice"
-        - expression: __output.activeUsers[1].name == "carol"
-          message: "Second active user should be carol"
-        - expression: __output.activeUsers[2].name == "eve"
-          message: "Third active user should be eve"
+      active-users-filtered:
+        description: Verify active users are correctly filtered from a mixed list
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: size(__output.activeUsers) == 3
+            message: "3 of 5 users are active and should appear in the output"
+          - expression: __output.activeUsers[0].name == "alice"
+            message: "First active user should be alice"
+          - expression: __output.activeUsers[1].name == "carol"
+            message: "Second active user should be carol"
+          - expression: __output.activeUsers[2].name == "eve"
+            message: "Third active user should be eve"
 
-    active-users-all-active:
-      description: Verify all returned users have active=true
-      extends: [_base]
-      assertions:
-        - expression: >
-            __output.activeUsers.all(u, u.active == true)
-          message: "All returned users should have active=true"
+      active-users-all-active:
+        description: Verify all returned users have active=true
+        extends: [_base]
+        assertions:
+          - expression: >
+              __output.activeUsers.all(u, u.active == true)
+            message: "All returned users should have active=true"

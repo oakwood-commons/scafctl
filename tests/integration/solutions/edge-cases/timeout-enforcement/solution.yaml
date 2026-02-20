@@ -21,17 +21,18 @@ spec:
             inputs:
               duration: "5s"
 
-  testConfig:
-    skipBuiltins: true
+  testing:
+    config:
+      skipBuiltins: true
 
-  tests:
-    timeout-exceeded:
-      description: Verify resolver timeout is enforced
-      command: [run, resolver]
-      args: ["--resolver", "slowResolver"]
-      tags: [edge-case, timeout, negative]
-      timeout: "15s"
-      expectFailure: true
-      assertions:
-        - notContains: "panic"
-          target: combined
+    cases:
+      timeout-exceeded:
+        description: Verify resolver timeout is enforced
+        command: [run, resolver]
+        args: ["--resolver", "slowResolver"]
+        tags: [edge-case, timeout, negative]
+        timeout: "15s"
+        expectFailure: true
+        assertions:
+          - notContains: "panic"
+            target: combined

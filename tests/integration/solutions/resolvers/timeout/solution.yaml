@@ -34,28 +34,29 @@ spec:
             inputs:
               value: "sleep-completed"
 
-  testConfig:
-    skipBuiltins: true
+  testing:
+    config:
+      skipBuiltins: true
 
-  tests:
-    _base:
-      description: Base template for timeout tests
-      command: [run, resolver]
-      args: ["-o", "json"]
-      tags: [resolver, timeout]
-      assertions:
-        - expression: __exitCode == 0
+    cases:
+      _base:
+        description: Base template for timeout tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [resolver, timeout]
+        assertions:
+          - expression: __exitCode == 0
 
-    fast-within-timeout:
-      description: Verify fast resolver completes within timeout
-      extends: [_base]
-      tags: [smoke]
-      assertions:
-        - expression: __output.fastResolver == "fast-result"
+      fast-within-timeout:
+        description: Verify fast resolver completes within timeout
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.fastResolver == "fast-result"
 
-    sleep-within-timeout:
-      description: Verify sleep completes within timeout
-      extends: [_base]
-      timeout: "15s"
-      assertions:
-        - expression: __output.timedSleep == "sleep-completed"
+      sleep-within-timeout:
+        description: Verify sleep completes within timeout
+        extends: [_base]
+        timeout: "15s"
+        assertions:
+          - expression: __output.timedSleep == "sleep-completed"

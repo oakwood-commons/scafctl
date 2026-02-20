@@ -1,0 +1,120 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-git-provider
+  version: 1.0.0
+  description: |
+    Functional tests for the git provider.
+    Uses per-test init steps to create a local bare repo and seeded
+    work tree so no network access is required.
+
+spec:
+  resolvers:
+    cloneRepo:
+      description: Clone the local bare repo
+      dependsOn: [sandboxDir]
+      resolve:
+        with:
+          - provider: git
+            inputs:
+              operation: clone
+              repository:
+                expr: "_.sandboxDir + '/bare-repo.git'"
+              path:
+                expr: "_.sandboxDir + '/clone-target'"
+
+    repoStatus:
+      description: Check status of the cloned repo
+      dependsOn: [cloneRepo]
+      resolve:
+        with:
+          - provider: git
+            inputs:
+              operation: status
+              path:
+                expr: "_.sandboxDir + '/clone-target'"
+
+    repoLog:
+      description: Get log of the cloned repo
+      dependsOn: [cloneRepo]
+      resolve:
+        with:
+          - provider: git
+            inputs:
+              operation: log
+              path:
+                expr: "_.sandboxDir + '/clone-target'"
+
+    sandboxDir:
+      description: Sandbox directory
+      resolve:
+        with:
+          - provider: env
+            inputs:
+              operation: get
+              name: SCAFCTL_SANDBOX_DIR
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "__self.value"
+
+  testing:
+    config:
+      skipBuiltins: true
+
+    cases:
+      _base:
+        description: Base template for git provider tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [provider, git]
+        assertions:
+          - expression: __exitCode == 0
+
+      _git-init:
+        description: Template providing git repo initialization
+        init:
+          - command: |
+              set -e
+              BARE="$SCAFCTL_SANDBOX_DIR/bare-repo.git"
+              git init --bare "$BARE"
+              WORK="$SCAFCTL_SANDBOX_DIR/seed-work"
+              git clone "$BARE" "$WORK"
+              cd "$WORK"
+              git config user.email "test@scafctl.io"
+              git config user.name "Test"
+              echo "hello" > README.md
+              git add README.md
+              git commit -m "Initial commit"
+              git push origin main 2>/dev/null || git push origin master 2>/dev/null || true
+            timeout: 30
+
+      clone-local-repo:
+        description: Verify clone from local bare repo succeeds
+        extends: [_base, _git-init]
+        tags: [smoke]
+        assertions:
+          - expression: __output.cloneRepo.success == true
+            message: "Clone should succeed"
+          - expression: __output.cloneRepo.operation == "clone"
+            message: "Operation should be clone"
+
+      repo-status-clean:
+        description: Verify freshly cloned repo has clean status
+        extends: [_base, _git-init]
+        assertions:
+          - expression: __output.repoStatus.success == true
+            message: "Status should succeed"
+          - expression: __output.repoStatus.operation == "status"
+            message: "Operation should be status"
+
+      repo-log:
+        description: Verify log contains initial commit
+        extends: [_base, _git-init]
+        assertions:
+          - expression: __output.repoLog.success == true
+            message: "Log should succeed"
+          - expression: __output.repoLog.output.contains("Initial commit")
+            message: "Log should contain initial commit message"

@@ -256,7 +256,7 @@ func descriptionFromPath(path string) string {
 		"solutions/composition/parent.yaml":       "Solution composition - parent that composes children",
 		"solutions/composition/child.yaml":        "Solution composition - child partial solution",
 		"solutions/taskfile/solution.yaml":        "Taskfile-based workflow solution",
-		"solutions/tested-solution/solution.yaml": "Solution with functional tests defined in spec.tests",
+		"solutions/tested-solution/solution.yaml": "Solution with functional tests defined in spec.testing.cases",
 
 		// Actions
 		"actions/hello-world.yaml":              "Simple hello world action",

@@ -1,0 +1,105 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-action-foreach
+  version: 1.0.0
+  description: |
+    Functional tests for the forEach action field.
+    Verifies iteration over arrays, expanded action naming,
+    concurrency configuration, and item/index access.
+
+spec:
+  resolvers:
+    servers:
+      description: List of servers to deploy to
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - web-01
+                - web-02
+                - web-03
+
+    version:
+      description: Deployment version
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "3.0.0"
+
+  workflow:
+    actions:
+      deploy:
+        description: Deploy to each server
+        provider: exec
+        forEach:
+          in:
+            expr: "_.servers"
+          concurrency: 2
+          onError: continue
+        inputs:
+          command:
+            expr: "'echo Deploying v' + _.version + ' to ' + __item"
+
+      healthCheck:
+        description: Health check each server
+        provider: exec
+        dependsOn: [deploy]
+        forEach:
+          in:
+            expr: "_.servers"
+          item: server
+        inputs:
+          command:
+            expr: "'echo Checking health of ' + server"
+
+  testing:
+    config:
+      skipBuiltins: true
+
+    cases:
+      _run-base:
+        description: Base template for forEach tests
+        command: [run, solution]
+        args: ["-o", "json"]
+        tags: [action, foreach]
+        assertions:
+          - expression: __exitCode == 0
+
+      _render-base:
+        description: Base template for render tests
+        command: [render, solution]
+        args: ["-o", "json"]
+        tags: [action, foreach, render]
+        assertions:
+          - expression: __exitCode == 0
+
+      all-iterations-succeed:
+        description: Verify all forEach iterations complete successfully
+        extends: [_run-base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.status == "succeeded"
+            message: "Overall status should be succeeded"
+
+      expanded-actions-exist:
+        description: Verify forEach expands into individual actions
+        extends: [_render-base]
+        assertions:
+          - expression: __output.metadata.forEachExpansions.deploy.exists(a, a.contains("deploy"))
+            message: "deploy should have forEach expansions"
+          - expression: size(__output.metadata.forEachExpansions.deploy) == 3
+            message: "deploy should expand into 3 iterations"
+
+      render-concurrency:
+        description: Verify forEach concurrency is reflected in render
+        extends: [_render-base]
+        assertions:
+          - expression: >
+              __output.actions.exists(k,
+                __output.actions[k].forEach.concurrency == 2 &&
+                __output.actions[k].forEach.expandedFrom == "deploy")
+            message: "Expanded deploy actions should show concurrency=2"

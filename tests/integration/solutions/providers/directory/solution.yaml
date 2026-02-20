@@ -27,37 +27,38 @@ spec:
               path: .
               recursive: true
 
-  testConfig:
-    skipBuiltins: true
+  testing:
+    config:
+      skipBuiltins: true
 
-  tests:
-    _base:
-      description: Base template for directory provider tests
-      command: [run, resolver]
-      args: ["-o", "json"]
-      tags: [provider, directory]
-      assertions:
-        - expression: __exitCode == 0
+    cases:
+      _base:
+        description: Base template for directory provider tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [provider, directory]
+        assertions:
+          - expression: __exitCode == 0
 
-    list-current-dir:
-      description: Verify listing current directory
-      extends: [_base]
-      tags: [smoke]
-      init:
-        - command: "touch file-a.txt file-b.txt file-c.log"
-      cleanup:
-        - command: "rm -f file-a.txt file-b.txt file-c.log"
-      assertions:
-        - contains: "file-a.txt"
-        - contains: "file-b.txt"
+      list-current-dir:
+        description: Verify listing current directory
+        extends: [_base]
+        tags: [smoke]
+        init:
+          - command: "touch file-a.txt file-b.txt file-c.log"
+        cleanup:
+          - command: "rm -f file-a.txt file-b.txt file-c.log"
+        assertions:
+          - contains: "file-a.txt"
+          - contains: "file-b.txt"
 
-    list-recursive:
-      description: Verify recursive listing
-      extends: [_base]
-      init:
-        - command: "mkdir -p subdir && touch subdir/nested.txt top.txt"
-      cleanup:
-        - command: "rm -rf subdir top.txt"
-      assertions:
-        - contains: "nested.txt"
-        - contains: "top.txt"
+      list-recursive:
+        description: Verify recursive listing
+        extends: [_base]
+        init:
+          - command: "mkdir -p subdir && touch subdir/nested.txt top.txt"
+        cleanup:
+          - command: "rm -rf subdir top.txt"
+        assertions:
+          - contains: "nested.txt"
+          - contains: "top.txt"

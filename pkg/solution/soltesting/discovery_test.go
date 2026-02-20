@@ -17,35 +17,37 @@ const discoverySolutionWithTests = `apiVersion: scafctl.io/v1
 metadata:
   name: my-solution
 spec:
-  tests:
-    smoke-test:
-      command: [render, solution]
-      tags: [smoke, fast]
-      assertions:
-        - contains: "success"
-    integration-test:
-      command: [run, resolver]
-      tags: [integration]
-      assertions:
-        - contains: "resolved"
-    _base-template:
-      command: [lint]
-      tags: [base]
+  testing:
+    cases:
+      smoke-test:
+        command: [render, solution]
+        tags: [smoke, fast]
+        assertions:
+          - contains: "success"
+      integration-test:
+        command: [run, resolver]
+        tags: [integration]
+        assertions:
+          - contains: "resolved"
+      _base-template:
+        command: [lint]
+        tags: [base]
 `
 
 const discoverySolutionWithTestConfig = `apiVersion: scafctl.io/v1
 metadata:
   name: configured-solution
 spec:
-  testConfig:
-    skipBuiltins: true
-    env:
-      FOO: bar
-  tests:
-    basic:
-      command: [render, solution]
-      assertions:
-        - contains: "ok"
+  testing:
+    config:
+      skipBuiltins: true
+      env:
+        FOO: bar
+    cases:
+      basic:
+        command: [render, solution]
+        assertions:
+          - contains: "ok"
 `
 
 const discoverySolutionWithoutTests = `apiVersion: scafctl.io/v1
@@ -81,7 +83,7 @@ func TestDiscoverSolutions_SingleFile(t *testing.T) {
 
 	require.Len(t, results, 1)
 	assert.Equal(t, "my-solution", results[0].SolutionName)
-	assert.Len(t, results[0].Tests, 3)
+	assert.Len(t, results[0].Cases, 3)
 }
 
 func TestDiscoverFromFile(t *testing.T) {
@@ -94,10 +96,10 @@ func TestDiscoverFromFile(t *testing.T) {
 	require.NotNil(t, st)
 
 	assert.Equal(t, "my-solution", st.SolutionName)
-	assert.Contains(t, st.Tests, "smoke-test")
-	assert.Contains(t, st.Tests, "integration-test")
-	assert.Contains(t, st.Tests, "_base-template")
-	assert.Equal(t, "smoke-test", st.Tests["smoke-test"].Name)
+	assert.Contains(t, st.Cases, "smoke-test")
+	assert.Contains(t, st.Cases, "integration-test")
+	assert.Contains(t, st.Cases, "_base-template")
+	assert.Equal(t, "smoke-test", st.Cases["smoke-test"].Name)
 }
 
 func TestDiscoverFromFile_WithTestConfig(t *testing.T) {
@@ -108,8 +110,8 @@ func TestDiscoverFromFile_WithTestConfig(t *testing.T) {
 	st, err := soltesting.DiscoverFromFile(solFile)
 	require.NoError(t, err)
 	require.NotNil(t, st)
-	require.NotNil(t, st.TestConfig)
-	assert.True(t, st.TestConfig.SkipBuiltins.All)
+	require.NotNil(t, st.Config)
+	assert.True(t, st.Config.SkipBuiltins.All)
 }
 
 func TestDiscoverFromFile_NoTests(t *testing.T) {
@@ -126,7 +128,7 @@ func TestFilterTests_NamePattern(t *testing.T) {
 	solutions := []soltesting.SolutionTests{
 		{
 			SolutionName: "my-solution",
-			Tests: map[string]*soltesting.TestCase{
+			Cases: map[string]*soltesting.TestCase{
 				"smoke-test":       {Name: "smoke-test", Command: []string{"render"}},
 				"integration-test": {Name: "integration-test", Command: []string{"run"}},
 				"_template":        {Name: "_template", Command: []string{"x"}},
@@ -139,16 +141,16 @@ func TestFilterTests_NamePattern(t *testing.T) {
 	})
 
 	require.Len(t, result, 1)
-	assert.Contains(t, result[0].Tests, "smoke-test")
-	assert.NotContains(t, result[0].Tests, "integration-test")
-	assert.NotContains(t, result[0].Tests, "_template")
+	assert.Contains(t, result[0].Cases, "smoke-test")
+	assert.NotContains(t, result[0].Cases, "integration-test")
+	assert.NotContains(t, result[0].Cases, "_template")
 }
 
 func TestFilterTests_SolutionTestPattern(t *testing.T) {
 	solutions := []soltesting.SolutionTests{
 		{
 			SolutionName: "my-solution",
-			Tests: map[string]*soltesting.TestCase{
+			Cases: map[string]*soltesting.TestCase{
 				"smoke-test": {Name: "smoke-test", Command: []string{"render"}},
 				"other-test": {Name: "other-test", Command: []string{"run"}},
 			},
@@ -160,15 +162,15 @@ func TestFilterTests_SolutionTestPattern(t *testing.T) {
 	})
 
 	require.Len(t, result, 1)
-	assert.Contains(t, result[0].Tests, "smoke-test")
-	assert.NotContains(t, result[0].Tests, "other-test")
+	assert.Contains(t, result[0].Cases, "smoke-test")
+	assert.NotContains(t, result[0].Cases, "other-test")
 }
 
 func TestFilterTests_TagFilter(t *testing.T) {
 	solutions := []soltesting.SolutionTests{
 		{
 			SolutionName: "my-solution",
-			Tests: map[string]*soltesting.TestCase{
+			Cases: map[string]*soltesting.TestCase{
 				"smoke-test":       {Name: "smoke-test", Tags: []string{"smoke", "fast"}, Command: []string{"x"}},
 				"integration-test": {Name: "integration-test", Tags: []string{"integration"}, Command: []string{"y"}},
 			},
@@ -180,21 +182,21 @@ func TestFilterTests_TagFilter(t *testing.T) {
 	})
 
 	require.Len(t, result, 1)
-	assert.Contains(t, result[0].Tests, "smoke-test")
-	assert.NotContains(t, result[0].Tests, "integration-test")
+	assert.Contains(t, result[0].Cases, "smoke-test")
+	assert.NotContains(t, result[0].Cases, "integration-test")
 }
 
 func TestFilterTests_SolutionFilter(t *testing.T) {
 	solutions := []soltesting.SolutionTests{
 		{
 			SolutionName: "alpha",
-			Tests: map[string]*soltesting.TestCase{
+			Cases: map[string]*soltesting.TestCase{
 				"test1": {Name: "test1", Command: []string{"x"}},
 			},
 		},
 		{
 			SolutionName: "beta",
-			Tests: map[string]*soltesting.TestCase{
+			Cases: map[string]*soltesting.TestCase{
 				"test2": {Name: "test2", Command: []string{"y"}},
 			},
 		},
@@ -212,7 +214,7 @@ func TestFilterTests_CombinedAND(t *testing.T) {
 	solutions := []soltesting.SolutionTests{
 		{
 			SolutionName: "my-solution",
-			Tests: map[string]*soltesting.TestCase{
+			Cases: map[string]*soltesting.TestCase{
 				"smoke-fast": {Name: "smoke-fast", Tags: []string{"smoke"}, Command: []string{"x"}},
 				"smoke-slow": {Name: "smoke-slow", Tags: []string{"integration"}, Command: []string{"y"}},
 				"other":      {Name: "other", Tags: []string{"smoke"}, Command: []string{"z"}},
@@ -226,16 +228,16 @@ func TestFilterTests_CombinedAND(t *testing.T) {
 	})
 
 	require.Len(t, result, 1)
-	assert.Contains(t, result[0].Tests, "smoke-fast")
-	assert.NotContains(t, result[0].Tests, "smoke-slow")
-	assert.NotContains(t, result[0].Tests, "other")
+	assert.Contains(t, result[0].Cases, "smoke-fast")
+	assert.NotContains(t, result[0].Cases, "smoke-slow")
+	assert.NotContains(t, result[0].Cases, "other")
 }
 
 func TestFilterTests_TemplateExclusion(t *testing.T) {
 	solutions := []soltesting.SolutionTests{
 		{
 			SolutionName: "my-solution",
-			Tests: map[string]*soltesting.TestCase{
+			Cases: map[string]*soltesting.TestCase{
 				"test1":     {Name: "test1", Command: []string{"x"}},
 				"_template": {Name: "_template", Command: []string{"y"}},
 			},
@@ -245,15 +247,15 @@ func TestFilterTests_TemplateExclusion(t *testing.T) {
 	result := soltesting.FilterTests(solutions, soltesting.FilterOptions{})
 
 	require.Len(t, result, 1)
-	assert.Contains(t, result[0].Tests, "test1")
-	assert.NotContains(t, result[0].Tests, "_template")
+	assert.Contains(t, result[0].Cases, "test1")
+	assert.NotContains(t, result[0].Cases, "_template")
 }
 
 func TestFilterTests_NoFilters(t *testing.T) {
 	solutions := []soltesting.SolutionTests{
 		{
 			SolutionName: "my-solution",
-			Tests: map[string]*soltesting.TestCase{
+			Cases: map[string]*soltesting.TestCase{
 				"test1": {Name: "test1", Command: []string{"x"}},
 				"test2": {Name: "test2", Command: []string{"y"}},
 			},
@@ -263,12 +265,12 @@ func TestFilterTests_NoFilters(t *testing.T) {
 	result := soltesting.FilterTests(solutions, soltesting.FilterOptions{})
 
 	require.Len(t, result, 1)
-	assert.Len(t, result[0].Tests, 2)
+	assert.Len(t, result[0].Cases, 2)
 }
 
 func TestSortedTestNames(t *testing.T) {
 	st := soltesting.SolutionTests{
-		Tests: map[string]*soltesting.TestCase{
+		Cases: map[string]*soltesting.TestCase{
 			"z-test":        {Name: "z-test"},
 			"a-test":        {Name: "a-test"},
 			"builtin:lint":  {Name: "builtin:lint"},
