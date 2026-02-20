@@ -28,6 +28,11 @@ const (
 
 	// OutputFormatQuiet suppresses all output (exit code only)
 	OutputFormatQuiet OutputFormat = "quiet"
+
+	// OutputFormatTest generates a functional test definition from the command output.
+	// The command is executed normally and the result is used to derive CEL assertions,
+	// write a snapshot golden file to testdata/, and emit test YAML to stdout.
+	OutputFormatTest OutputFormat = "test"
 )
 
 // String returns the string representation of the output format.
@@ -43,6 +48,7 @@ func BaseOutputFormats() []string {
 		string(OutputFormatJSON),
 		string(OutputFormatYAML),
 		string(OutputFormatQuiet),
+		string(OutputFormatTest),
 	}
 }
 
@@ -74,6 +80,8 @@ func ParseOutputFormat(s string) (OutputFormat, bool) {
 		return OutputFormatYAML, true
 	case "quiet":
 		return OutputFormatQuiet, true
+	case "test":
+		return OutputFormatTest, true
 	default:
 		return "", false
 	}
@@ -203,6 +211,12 @@ func (o *OutputOptions) Write(data any) error {
 		return nil
 	}
 
+	// Test generation is handled at the command level before reaching kvx.
+	// If it reaches here, the command does not implement test output support.
+	if o.Format == OutputFormatTest {
+		return fmt.Errorf("output format %q is not supported by this command; supported formats: table, json, yaml, quiet", OutputFormatTest)
+	}
+
 	// Determine if we should use kvx table/interactive output
 	useKvx := IsTableFormat(o.Format) || o.Interactive
 
@@ -289,8 +303,9 @@ func (o *OutputOptions) writeStructured(data any) error {
 		return o.writeJSON(outputData)
 	case OutputFormatYAML:
 		return o.writeYAML(outputData)
-	case OutputFormatTable, OutputFormatQuiet:
-		// These formats are handled in writeKvx, should not reach here
+	case OutputFormatTable, OutputFormatQuiet, OutputFormatTest:
+		// These formats are handled upstream (writeKvx or command-level test generation),
+		// and should not reach writeStructured.
 		return fmt.Errorf("unexpected output format in writeStructured: %s", o.Format)
 	default:
 		return fmt.Errorf("unsupported output format: %s", o.Format)

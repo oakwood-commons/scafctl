@@ -26,6 +26,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
 	"github.com/spf13/cobra"
@@ -40,7 +41,7 @@ type graphRenderer interface {
 }
 
 // ValidOutputTypes defines the supported output formats
-var ValidOutputTypes = []string{"json", "yaml"}
+var ValidOutputTypes = []string{"json", "yaml", "test"}
 
 // SolutionOptions holds configuration for the render solution command
 type SolutionOptions struct {
@@ -62,6 +63,10 @@ type SolutionOptions struct {
 	Snapshot     bool   // --snapshot: Save execution snapshot
 	SnapshotFile string // --snapshot-file: Snapshot output file
 	Redact       bool   // --redact: Redact sensitive values in snapshot
+
+	// TestName is the desired test name when using -o test output format.
+	// When empty, a name is derived from the command and resolver parameters.
+	TestName string
 
 	// Track which flags were explicitly set by user
 	flagsChanged map[string]bool
@@ -228,6 +233,9 @@ Examples:
 	cCmd.Flags().StringVar(&options.SnapshotFile, "snapshot-file", "", "Snapshot output file (required with --snapshot)")
 	cCmd.Flags().BoolVar(&options.Redact, "redact", false, "Redact sensitive values in snapshot")
 
+	// Test generation flag
+	cCmd.Flags().StringVar(&options.TestName, "test-name", "", "Test name for -o test output (derived from command and args when not set)")
+
 	return cCmd
 }
 
@@ -379,9 +387,15 @@ func (o *SolutionOptions) runActionGraph(ctx context.Context, lgr logr.Logger) e
 		return o.exitWithCode(fmt.Errorf("failed to build action graph: %w", err), exitcode.RenderFailed)
 	}
 
+	// For test generation, render as JSON and then derive assertions.
+	renderFormat := o.Output
+	if renderFormat == "test" {
+		renderFormat = "json"
+	}
+
 	// Render the graph
 	renderOpts := &action.RenderOptions{
-		Format:           o.Output,
+		Format:           renderFormat,
 		IncludeTimestamp: !o.NoTimestamp,
 		PrettyPrint:      !o.Compact,
 	}
@@ -389,6 +403,11 @@ func (o *SolutionOptions) runActionGraph(ctx context.Context, lgr logr.Logger) e
 	rendered, err := action.Render(graph, renderOpts)
 	if err != nil {
 		return o.exitWithCode(fmt.Errorf("failed to render graph: %w", err), exitcode.RenderFailed)
+	}
+
+	// When -o test: generate a test definition from the command output.
+	if o.Output == "test" {
+		return o.writeTestOutput(rendered)
 	}
 
 	// Write output
@@ -686,6 +705,53 @@ func (o *SolutionOptions) writeOutput(data []byte) error {
 	}
 
 	fmt.Fprintln(o.IOStreams.Out, string(data))
+	return nil
+}
+
+// writeTestOutput generates a functional test definition from the rendered JSON output
+// and writes the test YAML to stdout. A snapshot golden file is written to
+// testdata/ next to the solution file.
+func (o *SolutionOptions) writeTestOutput(rendered []byte) error {
+	// Parse the JSON output for assertion derivation.
+	var data any
+	if err := json.Unmarshal(rendered, &data); err != nil {
+		return o.exitWithCode(fmt.Errorf("failed to parse rendered output for test generation: %w", err), exitcode.RenderFailed)
+	}
+
+	// Reconstruct the args that the generated test should use (without -f and -o test).
+	testArgs := make([]string, 0, len(o.ResolverParams)*2)
+	for _, param := range o.ResolverParams {
+		testArgs = append(testArgs, "-r", param)
+	}
+
+	// Determine testdata/ directory relative to the solution file.
+	snapshotDir := "testdata"
+	if o.File != "" && o.File != "-" {
+		snapshotDir = filepath.Join(filepath.Dir(o.File), "testdata")
+	}
+
+	result, err := soltesting.Generate(&soltesting.GenerateInput{
+		Command:     []string{"render", "solution"},
+		Args:        testArgs,
+		TestName:    o.TestName,
+		SnapshotDir: snapshotDir,
+		Data:        data,
+		RawJSON:     rendered,
+	})
+	if err != nil {
+		return o.exitWithCode(fmt.Errorf("failed to generate test: %w", err), exitcode.RenderFailed)
+	}
+
+	yamlData, err := soltesting.GenerateToYAML(result)
+	if err != nil {
+		return o.exitWithCode(fmt.Errorf("failed to marshal test YAML: %w", err), exitcode.RenderFailed)
+	}
+
+	fmt.Fprint(o.IOStreams.Out, string(yamlData))
+
+	if result.SnapshotWritten {
+		fmt.Fprintf(o.IOStreams.ErrOut, "Snapshot written: %s\n", result.SnapshotPath)
+	}
 	return nil
 }
 

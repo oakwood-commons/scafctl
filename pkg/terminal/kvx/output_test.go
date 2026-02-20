@@ -38,7 +38,8 @@ func TestBaseOutputFormats(t *testing.T) {
 	assert.Contains(t, formats, "json")
 	assert.Contains(t, formats, "yaml")
 	assert.Contains(t, formats, "quiet")
-	assert.Len(t, formats, 4)
+	assert.Contains(t, formats, "test")
+	assert.Len(t, formats, 5)
 }
 
 func TestIsStructuredFormat(t *testing.T) {

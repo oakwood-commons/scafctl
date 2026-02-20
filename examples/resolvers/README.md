@@ -25,6 +25,7 @@ This directory contains practical examples demonstrating various resolver patter
 | Example | Description |
 |---------|-------------|
 | [transform-pipeline.yaml](transform-pipeline.yaml) | Multi-step data transformation |
+| [foreach-filter.yaml](foreach-filter.yaml) | ForEach in resolve phase with `filter: true` to strip nil results |
 | [validation.yaml](validation.yaml) | Input validation patterns |
 
 ### CEL Expressions

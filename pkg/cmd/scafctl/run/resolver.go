@@ -369,6 +369,11 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		results["__execution"] = executionData
 	}
 
+	// When -o test: generate a functional test definition instead of normal output.
+	if o.Output == "test" {
+		return o.generateTestOutput(ctx, []string{"run", "resolver"}, o.Names, results)
+	}
+
 	return o.writeResolverOutput(ctx, results, "scafctl run resolver")
 }
 

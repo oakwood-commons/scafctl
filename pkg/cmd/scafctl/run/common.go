@@ -25,6 +25,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
+	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
@@ -119,6 +120,10 @@ type sharedResolverOptions struct {
 
 	// kvx output integration (shared flags)
 	flags.KvxOutputFlags
+
+	// TestName is the desired test name when using -o test output format.
+	// When empty, a name is derived from the command and resolver parameters.
+	TestName string
 
 	// Track which flags were explicitly set by user
 	flagsChanged map[string]bool
@@ -278,6 +283,67 @@ func (o *sharedResolverOptions) writeResolverOutput(ctx context.Context, results
 	kvxOpts.IOStreams = o.IOStreams
 
 	return kvxOpts.Write(results)
+}
+
+// generateTestOutput generates a functional test definition from the given resolver results
+// and writes test YAML to stdout. It is called by subcommands that detect -o test.
+//
+// command is the subcommand path (e.g. ["run", "resolver"]).
+// extraArgs are positional args specific to the subcommand (e.g. resolver names).
+// results is the full output map; __execution is excluded from assertion derivation
+// but included in the snapshot for normalization purposes.
+func (o *sharedResolverOptions) generateTestOutput(ctx context.Context, command, extraArgs []string, results map[string]any) error {
+	// For assertion derivation, exclude __execution metadata because it contains
+	// volatile timing data that would create brittle assertions.
+	assertionData := make(map[string]any, len(results))
+	for k, v := range results {
+		if k != "__execution" {
+			assertionData[k] = v
+		}
+	}
+
+	// Serialize the full results (including __execution) for the snapshot normalizer.
+	rawJSON, err := json.MarshalIndent(results, "", "  ")
+	if err != nil {
+		return o.exitWithCode(ctx, fmt.Errorf("failed to marshal resolver output for test generation: %w", err), exitcode.GeneralError)
+	}
+
+	// Reconstruct the args the generated test should use (-r params + any extra positional args).
+	testArgs := make([]string, 0, len(extraArgs)+len(o.ResolverParams)*2)
+	testArgs = append(testArgs, extraArgs...)
+	for _, param := range o.ResolverParams {
+		testArgs = append(testArgs, "-r", param)
+	}
+
+	// Determine testdata/ directory relative to the solution file.
+	snapshotDir := "testdata"
+	if o.File != "" && o.File != "-" {
+		snapshotDir = filepath.Join(filepath.Dir(o.File), "testdata")
+	}
+
+	result, err := soltesting.Generate(&soltesting.GenerateInput{
+		Command:     command,
+		Args:        testArgs,
+		TestName:    o.TestName,
+		SnapshotDir: snapshotDir,
+		Data:        assertionData,
+		RawJSON:     rawJSON,
+	})
+	if err != nil {
+		return o.exitWithCode(ctx, fmt.Errorf("failed to generate test: %w", err), exitcode.GeneralError)
+	}
+
+	yamlData, err := soltesting.GenerateToYAML(result)
+	if err != nil {
+		return o.exitWithCode(ctx, fmt.Errorf("failed to marshal test YAML: %w", err), exitcode.GeneralError)
+	}
+
+	fmt.Fprint(o.IOStreams.Out, string(yamlData))
+
+	if result.SnapshotWritten {
+		fmt.Fprintf(o.IOStreams.ErrOut, "Snapshot written: %s\n", result.SnapshotPath)
+	}
+	return nil
 }
 
 // executeResolvers runs the resolver execution pipeline on the given resolvers.
@@ -472,6 +538,7 @@ func addSharedResolverFlags(cCmd *cobra.Command, o *sharedResolverOptions) {
 	cCmd.Flags().Int64Var(&o.MaxValueSize, "max-value-size", settings.DefaultMaxValueSize, "Fail when value exceeds this size in bytes (default: 10MB)")
 	cCmd.Flags().DurationVar(&o.ResolverTimeout, "resolver-timeout", settings.DefaultResolverTimeout, "Timeout per resolver")
 	cCmd.Flags().DurationVar(&o.PhaseTimeout, "phase-timeout", settings.DefaultPhaseTimeout, "Timeout per resolver phase")
+	cCmd.Flags().StringVar(&o.TestName, "test-name", "", "Test name for -o test output (derived from command and args when not set)")
 }
 
 // writeMetrics outputs provider execution metrics to stderr

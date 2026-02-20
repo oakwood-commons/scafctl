@@ -10,6 +10,7 @@ This directory contains example action configurations demonstrating the Actions 
 | [sequential-chain.yaml](sequential-chain.yaml) | Linear action dependency chain (A → B → C) |
 | [parallel-with-deps.yaml](parallel-with-deps.yaml) | Diamond pattern with parallel execution |
 | [foreach-deploy.yaml](foreach-deploy.yaml) | ForEach expansion for deploying to multiple targets |
+| [exclusive-actions.yaml](exclusive-actions.yaml) | Mutual exclusion for actions that share a resource |
 | [error-handling.yaml](error-handling.yaml) | Error handling with onError: continue |
 | [retry-backoff.yaml](retry-backoff.yaml) | Retry with exponential backoff |
 | [conditional-retry.yaml](conditional-retry.yaml) | Conditional retry with retryIf expressions |

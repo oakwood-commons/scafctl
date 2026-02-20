@@ -632,6 +632,73 @@ If the action exceeds its timeout, it fails with a timeout error. You can combin
 
 ---
 
+## Exclusive Actions
+
+When two actions share a resource (a database, a file, an external API), they cannot safely run at the same time — even if the DAG would otherwise schedule them concurrently. Use `exclusive` to declare mutual exclusion without forcing a specific order.
+
+### Basic Example
+
+Create `exclusive-demo.yaml`:
+
+```yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: exclusive-demo
+  version: 1.0.0
+
+spec:
+  workflow:
+    actions:
+      updateDatabase:
+        provider: exec
+        exclusive:
+          - migrateDatabase   # Cannot run at the same time as migrateDatabase
+        inputs:
+          command: "echo 'Updating users table...'"
+
+      migrateDatabase:
+        provider: exec
+        inputs:
+          command: "echo 'Running migrations...'"
+
+      sendNotification:
+        provider: exec
+        dependsOn:
+          - updateDatabase
+          - migrateDatabase
+        inputs:
+          command: "echo 'Done — notifying team'"
+```
+
+Both database actions are eligible to run at the same time (neither depends on the other), but `exclusive: [migrateDatabase]` on `updateDatabase` forces the executor to run one and then the other.
+
+Run it:
+
+```bash
+scafctl run solution -f exclusive-demo.yaml
+```
+
+### Key Rules
+
+| Rule | Detail |
+|------|--------|
+| **One-way** | Only the declaring action needs `exclusive`. The listed action does not need a reciprocal declaration. |
+| **No ordering** | `exclusive` does not imply `dependsOn`. The actions may execute in any order, just not simultaneously. |
+| **ForEach expansion** | If `deploy` declares `exclusive: [migrate]`, all expanded instances (`deploy[0]`, `deploy[1]`, …) individually exclude `migrate`. |
+| **Same section only** | Referenced actions must be in the same section (`workflow.actions`). Cross-section exclusion (e.g., `workflow.finally`) is not supported. |
+| **No self-reference** | Listing an action's own name is a validation error. |
+
+### When to Use `exclusive`
+
+- **Database access**: Two actions that write to the same table or run migrations
+- **Rate-limited APIs**: Prevent overwhelming an external service with concurrent requests
+- **File operations**: Two actions that read/write the same file or directory
+
+> **Tip:** Prefer `dependsOn` when there is a true data dependency (one action needs the output of another). Use `exclusive` when the dependency is only about shared resource access and the execution order does not matter.
+
+---
+
 ## Finally Section
 
 Finally actions **always run**, even if main actions fail. This is essential for cleanup operations like removing temporary resources.

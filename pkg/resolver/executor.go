@@ -1079,7 +1079,16 @@ func (e *Executor) executeForEachTransform(ctx context.Context, transform *Provi
 		}
 	}
 
-	// All succeeded - return clean results array
+	// All succeeded - filter out nil entries for skipped items unless keepSkipped is set
+	if transform.When != nil && !transform.ForEach.KeepSkipped {
+		filtered := results[:0]
+		for _, r := range results {
+			if r != nil {
+				filtered = append(filtered, r)
+			}
+		}
+		return filtered, providerCallCount, nil
+	}
 	return results, providerCallCount, nil
 }
 

@@ -1,0 +1,79 @@
+{
+  "actions": {
+    "auditLog": {
+      "dependsOn": [
+        "migrateDatabase",
+        "updateDatabase"
+      ],
+      "description": "Write an audit log entry",
+      "displayName": "Audit Log",
+      "inputs": {
+        "command": {
+          "deferred": true,
+          "originalExpr": "'echo Audit: updateDatabase=' + __actions.updateDatabase.status\n+ ' migrateDatabase=' + __actions.migrateDatabase.status\n"
+        }
+      },
+      "name": "auditLog",
+      "provider": "exec",
+      "section": "finally"
+    },
+    "migrateDatabase": {
+      "description": "Run pending database migrations",
+      "displayName": "Migrate Database",
+      "inputs": {
+        "command": "echo Running migrations on db.internal..."
+      },
+      "name": "migrateDatabase",
+      "provider": "exec",
+      "section": "actions"
+    },
+    "sendNotification": {
+      "dependsOn": [
+        "migrateDatabase",
+        "updateDatabase"
+      ],
+      "description": "Notify the team after the database work completes",
+      "displayName": "Notify",
+      "inputs": {
+        "command": "echo Deployment to prod complete. Notifying team..."
+      },
+      "name": "sendNotification",
+      "provider": "exec",
+      "section": "actions"
+    },
+    "updateDatabase": {
+      "description": "Apply status updates to the users table",
+      "displayName": "Update Database",
+      "inputs": {
+        "command": "echo Updating users table on db.internal..."
+      },
+      "name": "updateDatabase",
+      "provider": "exec",
+      "section": "actions"
+    }
+  },
+  "apiVersion": "scafctl.oakwood-commons.github.io/v1alpha1",
+  "executionOrder": [
+    [
+      "migrateDatabase"
+    ],
+    [
+      "updateDatabase"
+    ],
+    [
+      "sendNotification"
+    ]
+  ],
+  "finallyOrder": [
+    [
+      "auditLog"
+    ]
+  ],
+  "kind": "ActionGraph",
+  "metadata": {
+    "generatedAt": "<TIMESTAMP>",
+    "hasFinally": true,
+    "totalActions": 4,
+    "totalPhases": 4
+  }
+}

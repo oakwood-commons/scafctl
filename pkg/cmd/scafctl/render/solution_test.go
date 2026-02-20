@@ -397,7 +397,8 @@ func TestWriteSolutionError(t *testing.T) {
 func TestValidOutputTypes(t *testing.T) {
 	assert.Contains(t, ValidOutputTypes, "json")
 	assert.Contains(t, ValidOutputTypes, "yaml")
-	assert.Len(t, ValidOutputTypes, 2)
+	assert.Contains(t, ValidOutputTypes, "test")
+	assert.Len(t, ValidOutputTypes, 3)
 }
 
 func TestExitCodes(t *testing.T) {

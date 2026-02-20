@@ -12,9 +12,11 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/oakwood-commons/scafctl/pkg/httpc"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
@@ -33,18 +35,14 @@ type HTTPClient interface {
 	Get(ctx context.Context, url string) (*http.Response, error)
 }
 
-// DefaultHTTPClient provides real HTTP operations
+// DefaultHTTPClient provides real HTTP operations backed by httpc.
 type DefaultHTTPClient struct {
-	client *http.Client
+	client *httpc.Client
 }
 
 // Get performs an HTTP GET request
 func (d *DefaultHTTPClient) Get(ctx context.Context, url string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	return d.client.Do(req) //nolint:gosec // G704: URL is from provider configuration
+	return d.client.Get(ctx, url)
 }
 
 // FileOps defines the interface for file operations
@@ -137,8 +135,15 @@ inputs:
 				},
 			},
 		},
-		httpClient: &DefaultHTTPClient{client: http.DefaultClient},
-		fileOps:    &DefaultFileOps{},
+		httpClient: &DefaultHTTPClient{client: httpc.NewClient(&httpc.ClientConfig{
+			Timeout:           30 * time.Second,
+			RetryMax:          3,
+			RetryWaitMin:      1 * time.Second,
+			RetryWaitMax:      30 * time.Second,
+			EnableCache:       false,
+			EnableCompression: true,
+		})},
+		fileOps: &DefaultFileOps{},
 	}
 
 	// Apply options

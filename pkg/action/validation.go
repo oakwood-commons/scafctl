@@ -235,6 +235,11 @@ func validateAction(
 	// Validate dependsOn references
 	validateDependsOn(action, section, workflow, errs)
 
+	// Validate exclusive references
+	if len(action.Exclusive) > 0 {
+		validateExclusive(action, section, workflow, errs)
+	}
+
 	// Validate provider
 	validateProvider(action, section, registry, errs)
 
@@ -279,6 +284,41 @@ func validateAction(
 			Field:      "resultSchemaMode",
 			Message:    fmt.Sprintf("resultSchemaMode must be 'error', 'warn', or 'ignore', got %q", action.ResultSchemaMode),
 		})
+	}
+}
+
+// validateExclusive validates exclusive action references.
+// Referenced actions must exist in the same section and cannot be self-references.
+func validateExclusive(action *Action, section string, workflow *Workflow, errs *AggregatedValidationError) {
+	var validActions map[string]*Action
+	switch section {
+	case "actions":
+		validActions = workflow.Actions
+	case "finally":
+		validActions = workflow.Finally
+	}
+
+	for i, ref := range action.Exclusive {
+		// Self-reference is invalid
+		if ref == action.Name {
+			errs.AddError(&ValidationError{
+				Section:    section,
+				ActionName: action.Name,
+				Field:      fmt.Sprintf("exclusive[%d]", i),
+				Message:    "action cannot exclude itself",
+			})
+			continue
+		}
+
+		// Referenced action must exist in the same section
+		if _, exists := validActions[ref]; !exists {
+			errs.AddError(&ValidationError{
+				Section:    section,
+				ActionName: action.Name,
+				Field:      fmt.Sprintf("exclusive[%d]", i),
+				Message:    fmt.Sprintf("exclusive reference %q not found in %s section", ref, section),
+			})
+		}
 	}
 }
 

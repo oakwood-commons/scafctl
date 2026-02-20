@@ -1,0 +1,167 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-exclusive-actions
+  version: 1.0.0
+  description: |
+    Functional tests for the exclusive action field.
+    Verifies that mutually exclusive actions are split into separate
+    execution phases by the DAG executor and that the solution runs
+    successfully with all actions completing.
+
+spec:
+  resolvers:
+    dbHost:
+      description: Database host
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "db.internal"
+
+    environment:
+      description: Target environment
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "prod"
+
+  workflow:
+    actions:
+      # Declares mutual exclusion with migrateDatabase.
+      # Only this action needs to declare it — exclusivity is one-way.
+      # The executor splits the phase so they never run concurrently.
+      updateDatabase:
+        description: Apply status updates to the users table
+        displayName: Update Database
+        provider: exec
+        exclusive:
+          - migrateDatabase
+        inputs:
+          command:
+            expr: "'echo Updating on ' + _.dbHost"
+
+      # Does NOT declare exclusive — the scheduler still prevents it from
+      # running in the same phase as updateDatabase (one-way enforcement).
+      migrateDatabase:
+        description: Run pending database migrations
+        displayName: Migrate Database
+        provider: exec
+        inputs:
+          command:
+            expr: "'echo Migrating on ' + _.dbHost"
+
+      # Runs after both database actions complete.
+      sendNotification:
+        description: Notify team after database work completes
+        displayName: Notify
+        provider: exec
+        dependsOn:
+          - updateDatabase
+          - migrateDatabase
+        inputs:
+          command:
+            expr: "'echo Deployment to ' + _.environment + ' complete'"
+
+  testConfig:
+    skipBuiltins: true
+
+  tests:
+    # =========================================================================
+    # Base templates
+    # =========================================================================
+
+    _render-base:
+      description: Base template for render tests
+      command: [render, solution]
+      args: ["-o", "json"]
+      tags: [exclusive, render]
+      assertions:
+        - expression: __exitCode == 0
+
+    _run-base:
+      description: Base template for run tests
+      command: [run, solution]
+      args: ["-o", "json"]
+      tags: [exclusive, run]
+      assertions:
+        - expression: __exitCode == 0
+
+    # =========================================================================
+    # Runtime success
+    # =========================================================================
+
+    exclusive-solution-runs:
+      description: Verify exclusive solution executes successfully
+      command: [run, solution]
+      tags: [exclusive, smoke]
+      assertions:
+        - expression: __exitCode == 0
+          message: "Solution with exclusive actions should succeed"
+
+    all-actions-succeed:
+      description: Verify all actions complete with succeeded status
+      extends: [_run-base]
+      tags: [exclusive, smoke]
+      assertions:
+        - expression: __output.status == "succeeded"
+          message: "Overall solution status should be succeeded"
+        - expression: __output.actions["updateDatabase"].status == "succeeded"
+          message: "updateDatabase should succeed"
+        - expression: __output.actions["migrateDatabase"].status == "succeeded"
+          message: "migrateDatabase should succeed"
+        - expression: __output.actions["sendNotification"].status == "succeeded"
+          message: "sendNotification should succeed"
+
+    # =========================================================================
+    # Phase-split verification (via render)
+    # =========================================================================
+
+    phase-split-verification:
+      description: Verify exclusive actions land in separate execution phases
+      extends: [_render-base]
+      tags: [exclusive, smoke]
+      assertions:
+        - expression: size(__output.executionOrder) == 3
+          message: "Three phases expected: migrateDatabase, updateDatabase, sendNotification"
+        - expression: >
+            !__output.executionOrder.exists(phase,
+              phase.exists(a, a == "migrateDatabase") &&
+              phase.exists(a, a == "updateDatabase"))
+          message: "migrateDatabase and updateDatabase must not share a phase"
+
+    phases-are-singletons:
+      description: Verify each exclusive action is alone in its phase
+      extends: [_render-base]
+      assertions:
+        - expression: >
+            __output.executionOrder.exists(phase,
+              size(phase) == 1 && phase[0] == "migrateDatabase")
+          message: "migrateDatabase should occupy its own phase"
+        - expression: >
+            __output.executionOrder.exists(phase,
+              size(phase) == 1 && phase[0] == "updateDatabase")
+          message: "updateDatabase should occupy its own phase"
+
+    send-notification-last:
+      description: Verify sendNotification is scheduled after the exclusive pair
+      extends: [_render-base]
+      assertions:
+        - expression: >
+            __output.executionOrder[size(__output.executionOrder) - 1].exists(
+              a, a == "sendNotification")
+          message: "sendNotification should be in the last phase"
+
+    # =========================================================================
+    # Lint
+    # =========================================================================
+
+    lint-passes:
+      description: Verify valid exclusive declarations pass lint without errors
+      command: [lint]
+      tags: [exclusive, lint, smoke]
+      assertions:
+        - expression: __exitCode == 0
+          message: "Valid exclusive references should pass lint"

@@ -344,7 +344,8 @@ func TestHTTPProvider_Execute_TimeoutExceeded(t *testing.T) {
 	output, err := p.Execute(ctx, inputs)
 	require.Error(t, err)
 	assert.Nil(t, output)
-	assert.Contains(t, err.Error(), "context deadline exceeded")
+	// Both error forms in different Go versions contain "Client.Timeout exceeded".
+	assert.Contains(t, err.Error(), "Client.Timeout exceeded")
 }
 
 func TestHTTPProvider_Execute_InvalidURL(t *testing.T) {
@@ -632,7 +633,7 @@ func TestHTTPProvider_Execute_RetryContextCancellation(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, output)
-	assert.Contains(t, err.Error(), "cancelled")
+	assert.Contains(t, err.Error(), "cancel") // matches both "cancelled" and "context canceled"
 
 	// Should have made at least 1 attempt but not all 5
 	assert.GreaterOrEqual(t, attemptCount, 1)

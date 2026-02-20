@@ -1,0 +1,52 @@
+{
+  "actions": {
+    "auditLog": {
+      "results": {
+        "command": "echo Audit: updateDatabase=succeeded migrateDatabase=succeeded",
+        "exitCode": 0,
+        "shell": "auto",
+        "stderr": "",
+        "stdout": "Audit: updateDatabase=succeeded migrateDatabase=succeeded\n",
+        "success": true
+      },
+      "status": "succeeded"
+    },
+    "migrateDatabase": {
+      "results": {
+        "command": "echo Running migrations on db.internal...",
+        "exitCode": 0,
+        "shell": "auto",
+        "stderr": "",
+        "stdout": "Running migrations on db.internal...\n",
+        "success": true
+      },
+      "status": "succeeded"
+    },
+    "sendNotification": {
+      "results": {
+        "command": "echo Deployment to prod complete. Notifying team...",
+        "exitCode": 0,
+        "shell": "auto",
+        "stderr": "",
+        "stdout": "Deployment to prod complete. Notifying team...\n",
+        "success": true
+      },
+      "status": "succeeded"
+    },
+    "updateDatabase": {
+      "results": {
+        "command": "echo Updating users table on db.internal...",
+        "exitCode": 0,
+        "shell": "auto",
+        "stderr": "",
+        "stdout": "Updating users table on db.internal...\n",
+        "success": true
+      },
+      "status": "succeeded"
+    }
+  },
+  "duration": "4.183792ms",
+  "endTime": "<TIMESTAMP>",
+  "startTime": "<TIMESTAMP>",
+  "status": "succeeded"
+}

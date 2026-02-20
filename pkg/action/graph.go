@@ -58,6 +58,10 @@ type ExpandedAction struct {
 	// For regular actions, this matches DependsOn plus any implicit dependencies from __actions references.
 	// For expanded forEach actions, this includes dependencies on all iterations of referenced forEach actions.
 	Dependencies []string `json:"dependencies" yaml:"dependencies" doc:"Effective dependencies for scheduling"`
+
+	// ExpandedExclusive contains the effective exclusive action names for this expanded action.
+	// For forEach base action references, this expands to all iterations (e.g., "deploy" → "deploy[0]", "deploy[1]").
+	ExpandedExclusive []string `json:"expandedExclusive,omitempty" yaml:"expandedExclusive,omitempty" doc:"Effective exclusive action names (post-forEach expansion)"`
 }
 
 // ForEachExpansionMetadata tracks forEach expansion information.
@@ -119,7 +123,7 @@ func BuildGraph(ctx context.Context, w *Workflow, resolverData map[string]any, o
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute main execution order: %w", err)
 	}
-	graph.ExecutionOrder = mainOrder
+	graph.ExecutionOrder = splitPhasesForExclusive(mainOrder, mainExpanded)
 
 	// Compute execution order for finally actions
 	if len(finallyExpanded) > 0 {
@@ -127,7 +131,7 @@ func BuildGraph(ctx context.Context, w *Workflow, resolverData map[string]any, o
 		if err != nil {
 			return nil, fmt.Errorf("failed to compute finally execution order: %w", err)
 		}
-		graph.FinallyOrder = finallyOrder
+		graph.FinallyOrder = splitPhasesForExclusive(finallyOrder, finallyExpanded)
 	}
 
 	return graph, nil
@@ -203,6 +207,11 @@ func expandSection(
 		effectiveDeps := computeEffectiveDependencies(expandedAction, forEachExpansions)
 		expandedAction.Dependencies = effectiveDeps
 		deps[name] = effectiveDeps
+	}
+
+	// Third pass: compute expanded exclusive references with forEach rewriting
+	for _, expandedAction := range expanded {
+		expandedAction.ExpandedExclusive = computeExpandedExclusive(expandedAction, forEachExpansions)
 	}
 
 	return expanded, deps, nil
@@ -377,6 +386,129 @@ func computeEffectiveDependencies(
 	deps := sets.List(depSet)
 	sort.Strings(deps)
 	return deps
+}
+
+// computeExpandedExclusive computes the effective exclusive action names for an expanded action.
+// forEach base action references are rewritten to all their iterations.
+func computeExpandedExclusive(
+	expanded *ExpandedAction,
+	forEachExpansions map[string][]string,
+) []string {
+	if expanded.Action == nil || len(expanded.Exclusive) == 0 {
+		return nil
+	}
+
+	set := sets.Set[string]{}
+	for _, name := range expanded.Exclusive {
+		if iters, ok := forEachExpansions[name]; ok {
+			set.Insert(iters...)
+		} else {
+			set.Insert(name)
+		}
+	}
+
+	return sets.List(set)
+}
+
+// splitPhasesForExclusive post-processes execution phases, splitting any phase that
+// contains mutually exclusive actions into deterministic sequential sub-phases.
+// Actions without any exclusive conflicts in their phase pass through unchanged.
+func splitPhasesForExclusive(phases [][]string, actions map[string]*ExpandedAction) [][]string {
+	if len(phases) == 0 {
+		return phases // preserve nil vs empty distinction
+	}
+	result := make([][]string, 0, len(phases))
+	for _, phase := range phases {
+		result = append(result, splitPhaseForExclusive(phase, actions)...)
+	}
+	return result
+}
+
+// splitPhaseForExclusive splits a single phase into sub-phases so that no two exclusive
+// actions appear in the same sub-phase. Uses greedy graph coloring on the conflict graph
+// built from bidirectional exclusive declarations within the phase.
+func splitPhaseForExclusive(phase []string, actions map[string]*ExpandedAction) [][]string {
+	if len(phase) == 0 {
+		return nil
+	}
+	if len(phase) == 1 {
+		return [][]string{phase}
+	}
+
+	// Build set of names present in this phase for fast lookup
+	inPhase := make(map[string]struct{}, len(phase))
+	for _, name := range phase {
+		inPhase[name] = struct{}{}
+	}
+
+	// Build bidirectional conflict graph restricted to this phase
+	conflicts := make(map[string]sets.Set[string], len(phase))
+	for _, name := range phase {
+		conflicts[name] = sets.Set[string]{}
+	}
+
+	for _, name := range phase {
+		action := actions[name]
+		if action == nil {
+			continue
+		}
+		for _, excl := range action.ExpandedExclusive {
+			if _, ok := inPhase[excl]; ok {
+				conflicts[name].Insert(excl)
+				conflicts[excl].Insert(name)
+			}
+		}
+	}
+
+	// Short-circuit: if no conflicts exist, return the phase unchanged
+	hasConflicts := false
+	for _, c := range conflicts {
+		if c.Len() > 0 {
+			hasConflicts = true
+			break
+		}
+	}
+	if !hasConflicts {
+		return [][]string{phase}
+	}
+
+	// Greedy graph coloring — phase is already sorted, giving deterministic coloring
+	color := make(map[string]int, len(phase))
+	for _, name := range phase {
+		color[name] = -1
+	}
+
+	maxColor := -1
+	for _, name := range phase {
+		usedColors := make(map[int]struct{})
+		for _, neighbor := range sets.List(conflicts[name]) {
+			if c, ok := color[neighbor]; ok && c >= 0 {
+				usedColors[c] = struct{}{}
+			}
+		}
+
+		c := 0
+		for {
+			if _, used := usedColors[c]; !used {
+				break
+			}
+			c++
+		}
+		color[name] = c
+		if c > maxColor {
+			maxColor = c
+		}
+	}
+
+	// Group actions by color to form sub-phases
+	subPhases := make([][]string, maxColor+1)
+	for _, name := range phase {
+		c := color[name]
+		subPhases[c] = append(subPhases[c], name)
+	}
+
+	// Each sub-phase is already sorted because phase was sorted and we iterate in order
+	return subPhases
 }
 
 // extractActionsRefsFromDeferred extracts __actions references from a deferred value.

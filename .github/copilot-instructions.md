@@ -30,6 +30,7 @@ See `pkg/httpc/README.md`
 - Always create documentation, tutorials, and examples for new features, providers and commands.
 - Always update documentation, tutorials, and examples when features, providers or commands change.
 
+
 ### Paths
 
 - Use xdg paths via the pkg/paths package
@@ -43,6 +44,7 @@ See `pkg/httpc/README.md`
 
 - Use `tests/integration/cli_test.go` for integration tests of CLI commands.
 - Always add new commands to the CLI integration tests.
+- Always create solution integration tests in `tests/integration/solutions` whenever a something is updated or a new feature, provider, or command is added.
 
 ### `settings` Package
 

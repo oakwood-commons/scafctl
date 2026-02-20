@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"time"
+
+	"github.com/oakwood-commons/scafctl/pkg/httpc"
 )
 
 // HTTPClient abstracts HTTP calls for testability.
@@ -21,13 +24,21 @@ type HTTPClient interface {
 
 // DefaultHTTPClient is the standard HTTP client implementation.
 type DefaultHTTPClient struct {
-	client *http.Client
+	client *httpc.Client
 }
 
-// NewDefaultHTTPClient creates a new DefaultHTTPClient.
+// NewDefaultHTTPClient creates a new DefaultHTTPClient backed by httpc.
+// Caching is disabled because token-exchange responses must never be served from cache.
 func NewDefaultHTTPClient() *DefaultHTTPClient {
 	return &DefaultHTTPClient{
-		client: &http.Client{},
+		client: httpc.NewClient(&httpc.ClientConfig{
+			Timeout:           30 * time.Second,
+			RetryMax:          3,
+			RetryWaitMin:      1 * time.Second,
+			RetryWaitMax:      30 * time.Second,
+			EnableCache:       false,
+			EnableCompression: false,
+		}),
 	}
 }
 
@@ -40,7 +51,7 @@ func (c *DefaultHTTPClient) PostForm(ctx context.Context, reqURL string, data ur
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.URL.RawQuery = data.Encode()
-	return c.client.Do(req) //nolint:gosec // URL constructed from trusted config, not user input
+	return c.client.Do(req)
 }
 
 // Get sends a GET request with custom headers.
@@ -53,5 +64,5 @@ func (c *DefaultHTTPClient) Get(ctx context.Context, reqURL string, headers map[
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	return c.client.Do(req) //nolint:gosec // URL constructed from trusted config, not user input
+	return c.client.Do(req)
 }

@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/go-logr/logr"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/httpc"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
@@ -105,47 +105,12 @@ func parseRetryConfig(inputs map[string]any) *retryConfig {
 	return &cfg
 }
 
-// shouldRetry returns true if the status code should trigger a retry.
-func shouldRetry(statusCode int, retryOn []int) bool {
-	for _, code := range retryOn {
-		if code == statusCode {
-			return true
-		}
-	}
-	return false
-}
-
-// calculateBackoff returns the wait duration for the given attempt.
-func calculateBackoff(attempt int, cfg retryConfig) time.Duration {
-	var wait time.Duration
-
-	switch cfg.Backoff {
-	case "none":
-		wait = cfg.InitialWait
-	case "linear":
-		wait = cfg.InitialWait * time.Duration(attempt+1)
-	case "exponential":
-		// Cap at 10 to prevent overflow: 2^10 = 1024 is plenty
-		exp := attempt
-		if exp > 10 {
-			exp = 10
-		}
-		wait = cfg.InitialWait * time.Duration(1<<exp)
-	default:
-		wait = cfg.InitialWait
-	}
-
-	if wait > cfg.MaxWait {
-		wait = cfg.MaxWait
-	}
-
-	return wait
-}
+// shouldRetry and calculateBackoff have been removed — httpc.BuildStatusCodeCheckRetry
+// and httpc.BuildNamedBackoff now provide equivalent logic via retryablehttp.
 
 // HTTPProvider implements the Provider interface for making HTTP requests.
 type HTTPProvider struct {
 	descriptor *provider.Descriptor
-	client     *http.Client
 }
 
 // NewHTTPProvider creates a new HTTP provider instance.
@@ -262,9 +227,6 @@ inputs:
 				},
 			},
 		},
-		client: &http.Client{
-			Timeout: 30 * time.Second,
-		},
 	}
 }
 
@@ -370,161 +332,142 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 		)
 	}
 
-	// Create client with timeout
-	client := &http.Client{
-		Timeout: timeoutDuration,
+	// Build httpc client with timeout and user-supplied retry configuration.
+	retryCfg := parseRetryConfig(inputs)
+	httpcCfg := buildHTTPClientConfig(timeoutDuration, retryCfg)
+
+	// Wire 401 token-refresh via the httpc OnUnauthorized hook when an auth provider is configured.
+	// The initial token was already injected into headers above; this hook handles silent re-auth on 401.
+	if authProvider != "" {
+		capturedScope := scope
+		capturedTimeout := timeoutDuration
+		httpcCfg.OnUnauthorized = func(unauthCtx context.Context) (string, error) {
+			handler, handlerErr := auth.GetHandler(unauthCtx, authProvider)
+			if handlerErr != nil {
+				return "", handlerErr
+			}
+			token, tokenErr := handler.GetToken(unauthCtx, auth.TokenOptions{
+				Scope:        capturedScope,
+				MinValidFor:  capturedTimeout + 60*time.Second,
+				ForceRefresh: true,
+			})
+			if tokenErr != nil {
+				return "", tokenErr
+			}
+			return fmt.Sprintf("%s %s", token.TokenType, token.AccessToken), nil
+		}
 	}
 
-	// Parse retry configuration
-	retryCfg := parseRetryConfig(inputs)
-
-	// Execute request (with or without retry)
-	return p.executeWithRetry(ctx, lgr, client, method, urlStr, bodyContent, headers, retryCfg, authProvider, scope)
+	return p.execute(ctx, httpc.NewClient(httpcCfg), method, urlStr, bodyContent, headers)
 }
 
-// executeWithRetry performs an HTTP request with optional retry logic.
-// Supports automatic token refresh on 401 responses when authProvider is set.
-func (p *HTTPProvider) executeWithRetry(
+// buildHTTPClientConfig translates provider timeout and retry config into an httpc.ClientConfig.
+// When retryCfg is nil a single attempt is made and all HTTP responses are returned as-is
+// (matching the original http.Client behaviour).
+// When retryCfg is provided, retries are configured and the last HTTP response is always
+// returned to the caller even after retries are exhausted (network errors are still propagated).
+func buildHTTPClientConfig(timeout time.Duration, retryCfg *retryConfig) *httpc.ClientConfig {
+	cfg := &httpc.ClientConfig{
+		Timeout:              timeout,
+		RetryMax:             0,
+		EnableCache:          false,
+		EnableCompression:    true,
+		EnableCircuitBreaker: false,
+	}
+	if retryCfg == nil {
+		// No retry: block — single attempt, never retry on any HTTP status.
+		// This preserves the original http.Client behaviour where every HTTP response
+		// (including 4xx/5xx) is returned without error; only network failures error.
+		cfg.CheckRetry = func(_ context.Context, _ *http.Response, err error) (bool, error) {
+			return false, err
+		}
+		// Without an ErrorHandler, retryablehttp wraps any non-nil error in a
+		// "giving up after N attempt(s)" message even when shouldRetry is false.
+		// Pass the underlying error through unchanged so the caller gets the
+		// original net/http error (e.g. context deadline exceeded).
+		cfg.ErrorHandler = func(resp *http.Response, err error, _ int) (*http.Response, error) {
+			return resp, err
+		}
+		return cfg
+	}
+
+	cfg.RetryMax = retryCfg.MaxAttempts - 1
+	cfg.RetryWaitMin = retryCfg.InitialWait
+	cfg.RetryWaitMax = retryCfg.MaxWait
+	cfg.CheckRetry = httpc.BuildStatusCodeCheckRetry(retryCfg.RetryOn)
+	cfg.Backoff = httpc.BuildNamedBackoff(retryCfg.Backoff, retryCfg.InitialWait, retryCfg.MaxWait)
+	// After all retries are exhausted, return the last HTTP response instead of
+	// an error so callers can inspect the final status code (matches old behaviour).
+	cfg.ErrorHandler = func(resp *http.Response, err error, _ int) (*http.Response, error) {
+		if resp != nil {
+			return resp, nil
+		}
+		return nil, err
+	}
+	return cfg
+}
+
+// execute performs the HTTP request using the given httpc.Client.
+// Retries and 401 token-refresh are handled transparently by the httpc layer.
+func (p *HTTPProvider) execute(
 	ctx context.Context,
-	lgr *logr.Logger,
-	client *http.Client,
-	method, url, bodyContent string,
+	client *httpc.Client,
+	method, urlStr, bodyContent string,
 	headers map[string]any,
-	retryCfg *retryConfig,
-	authProvider, scope string,
 ) (*provider.Output, error) {
-	maxAttempts := 1
-	if retryCfg != nil {
-		maxAttempts = retryCfg.MaxAttempts
+	lgr := logger.FromContext(ctx)
+
+	var bodyReader io.Reader
+	if bodyContent != "" {
+		bodyReader = strings.NewReader(bodyContent)
 	}
 
-	var lastErr error
-	var lastStatusCode int
-	authRetried := false // Track if we've already retried with fresh token
-
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		// Check context cancellation
-		select {
-		case <-ctx.Done():
-			return nil, fmt.Errorf("%s: request cancelled: %w", ProviderName, ctx.Err())
-		default:
-		}
-
-		// Create request body for this attempt
-		var bodyReader io.Reader
-		if bodyContent != "" {
-			bodyReader = strings.NewReader(bodyContent)
-		}
-
-		// Create request
-		req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
-		if err != nil {
-			return nil, fmt.Errorf("%s: failed to create request: %w", ProviderName, err)
-		}
-
-		// Set headers
-		for key, value := range headers {
-			if strValue, ok := value.(string); ok {
-				req.Header.Set(key, strValue)
-			}
-		}
-
-		// Execute request
-		resp, err := client.Do(req) //nolint:gosec // G704: URL is from provider configuration
-		if err != nil {
-			lastErr = err
-			// Network errors are retryable
-			if retryCfg != nil && attempt < maxAttempts-1 {
-				wait := calculateBackoff(attempt, *retryCfg)
-				lgr.V(1).Info("request failed, retrying", "provider", ProviderName, "attempt", attempt+1, "maxAttempts", maxAttempts, "wait", wait, "error", err)
-				select {
-				case <-ctx.Done():
-					return nil, fmt.Errorf("%s: request cancelled during retry: %w", ProviderName, ctx.Err())
-				case <-time.After(wait):
-				}
-				continue
-			}
-			return nil, fmt.Errorf("%s: request failed: %w", ProviderName, err)
-		}
-
-		// Read response body
-		respBody, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			return nil, fmt.Errorf("%s: failed to read response body: %w", ProviderName, err)
-		}
-
-		lastStatusCode = resp.StatusCode
-
-		// Handle 401 Unauthorized with automatic token refresh
-		if resp.StatusCode == http.StatusUnauthorized && authProvider != "" && !authRetried {
-			lgr.V(1).Info("received 401, attempting token refresh", "provider", ProviderName, "authProvider", authProvider)
-			authRetried = true
-
-			// Get fresh token with ForceRefresh
-			handler, err := auth.GetHandler(ctx, authProvider)
-			if err != nil {
-				lgr.V(1).Info("failed to get auth handler for retry", "error", err)
-			} else {
-				minValidFor := client.Timeout + 60*time.Second
-				token, err := handler.GetToken(ctx, auth.TokenOptions{
-					Scope:        scope,
-					MinValidFor:  minValidFor,
-					ForceRefresh: true,
-				})
-				if err != nil {
-					lgr.V(1).Info("failed to refresh token", "error", err)
-				} else {
-					// Update authorization header and retry
-					headers["Authorization"] = fmt.Sprintf("%s %s", token.TokenType, token.AccessToken)
-					lgr.V(1).Info("token refreshed, retrying request",
-						"authProvider", authProvider,
-						"tokenExpiresAt", token.ExpiresAt,
-					)
-					// Don't count this as a regular retry attempt
-					attempt--
-					continue
-				}
-			}
-		}
-
-		// Check if we should retry based on status code
-		if retryCfg != nil && shouldRetry(resp.StatusCode, retryCfg.RetryOn) && attempt < maxAttempts-1 {
-			wait := calculateBackoff(attempt, *retryCfg)
-			lgr.V(1).Info("received retryable status code, retrying", "provider", ProviderName, "statusCode", resp.StatusCode, "attempt", attempt+1, "maxAttempts", maxAttempts, "wait", wait)
-			select {
-			case <-ctx.Done():
-				return nil, fmt.Errorf("%s: request cancelled during retry: %w", ProviderName, ctx.Err())
-			case <-time.After(wait):
-			}
-			continue
-		}
-
-		// Build response headers map
-		respHeaders := make(map[string]any)
-		for key, values := range resp.Header {
-			if len(values) == 1 {
-				respHeaders[key] = values[0]
-			} else {
-				respHeaders[key] = values
-			}
-		}
-
-		lgr.V(1).Info("provider execution completed", "provider", ProviderName, "statusCode", resp.StatusCode, "attempts", attempt+1)
-
-		// Return output
-		return &provider.Output{
-			Data: map[string]any{
-				"statusCode": resp.StatusCode,
-				"body":       string(respBody),
-				"headers":    respHeaders,
-			},
-		}, nil
+	req, err := http.NewRequestWithContext(ctx, method, urlStr, bodyReader)
+	if err != nil {
+		return nil, fmt.Errorf("%s: failed to create request: %w", ProviderName, err)
 	}
 
-	// All retries exhausted
-	if lastErr != nil {
-		return nil, fmt.Errorf("%s: max retries exceeded: %w", ProviderName, lastErr)
+	// Provide GetBody so the httpc OnUnauthorized hook can replay the body on an auth retry.
+	if bodyContent != "" {
+		capturedBody := bodyContent
+		req.GetBody = func() (io.ReadCloser, error) {
+			return io.NopCloser(strings.NewReader(capturedBody)), nil
+		}
 	}
-	return nil, fmt.Errorf("%s: max retries exceeded, last status code: %d", ProviderName, lastStatusCode)
+
+	for key, value := range headers {
+		if strValue, ok := value.(string); ok {
+			req.Header.Set(key, strValue)
+		}
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%s: request failed: %w", ProviderName, err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("%s: failed to read response body: %w", ProviderName, err)
+	}
+
+	respHeaders := make(map[string]any)
+	for key, values := range resp.Header {
+		if len(values) == 1 {
+			respHeaders[key] = values[0]
+		} else {
+			respHeaders[key] = values
+		}
+	}
+
+	lgr.V(1).Info("provider execution completed", "provider", ProviderName, "statusCode", resp.StatusCode)
+
+	return &provider.Output{
+		Data: map[string]any{
+			"statusCode": resp.StatusCode,
+			"body":       string(respBody),
+			"headers":    respHeaders,
+		},
+	}, nil
 }

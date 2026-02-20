@@ -150,6 +150,9 @@ spec:
           initialDelay: 1s
           maxDelay: 30s
 
+        # Mutual exclusion (not available in finally section)
+        exclusive: [migrateDatabase]  # Cannot run in parallel with these actions
+
         # Iteration (not available in finally section)
         forEach:
           item: region
@@ -746,6 +749,48 @@ inputs:
 
 ---
 
+## Exclusive Actions
+
+Actions that share resources (databases, files, external APIs) may be scheduled concurrently by the DAG executor. Use the `exclusive` field to declare which other actions an action cannot run in parallel with.
+
+~~~yaml
+spec:
+  workflow:
+    actions:
+      updateDatabase:
+        provider: sql
+        exclusive: [migrateDatabase]
+        inputs:
+          query: "UPDATE users SET status = 'active'"
+
+      migrateDatabase:
+        provider: sql
+        inputs:
+          script: "./migrations/001.sql"
+
+      sendNotification:
+        provider: slack
+        inputs:
+          message: "Update complete"
+~~~
+
+### Exclusive Behavior
+
+- `exclusive` is **one-way**: declaring `exclusive: [X]` on action A prevents X from running in parallel with A
+- The other action does **not** need to declare the same exclusivity (though it can for documentation clarity)
+- If both A and B are ready to run and A declares `exclusive: [B]`, the executor runs one then the other (order is determined by declaration order, not by which action holds the exclusion)
+- `exclusive` does **not** imply `dependsOn` — actions may run in any order, just not simultaneously
+- Applies to expanded forEach actions: if `deploy` declares `exclusive: [migrate]`, then `deploy[0]`, `deploy[1]`, etc. all exclude `migrate`
+- `exclusive` is only available in `workflow.actions` (not in `workflow.finally`)
+
+### Exclusive Use Cases
+
+- **Resource contention**: Two actions that access the same database, file, or service
+- **Rate limiting**: Avoid overwhelming an external API with concurrent requests
+- **Data consistency**: Prevent concurrent modifications to shared state
+
+---
+
 ## Finally Actions
 
 Cleanup actions are defined in the `workflow.finally` section, separate from regular actions for clear visual separation between main execution and cleanup.
@@ -1059,6 +1104,9 @@ The following are validated at parse/load time:
 12. `timeout` must be a valid duration
 13. `forEach.onError` must be `fail` or `continue` if specified
 14. `forEach.concurrency` must be >= 0 if specified
+15. `exclusive` referenced actions must exist in the same section (`workflow.actions` or `workflow.finally`)
+16. `exclusive` self-reference is invalid (an action cannot list itself)
+17. `exclusive` is only allowed in `workflow.actions`, not in `workflow.finally`
 
 ---
 
@@ -1250,52 +1298,6 @@ spec:
 
 ---
 
-### Exclusive Actions (Mutual Exclusion)
-
-Actions could declare other actions they cannot run in parallel with, even if they would otherwise be scheduled concurrently:
-
-~~~yaml
-spec:
-  workflow:
-    actions:
-      updateDatabase:
-        provider: sql
-        exclusive: [migrateDatabase]  # Cannot run at same time
-        inputs:
-          query: "UPDATE users SET status = 'active'"
-
-      migrateDatabase:
-        provider: sql
-        inputs:
-          script: "./migrations/001.sql"
-
-      sendNotification:
-        provider: slack
-        inputs:
-          message: "Update complete"
-~~~
-
-**Use Cases:**
-
-- **Resource contention**: Two actions that access the same database/file/service
-- **Rate limiting**: Avoid overwhelming an external API
-- **Data consistency**: Prevent concurrent modifications to shared state
-
-**Behavior:**
-
-- `exclusive` is **one-way**: declaring `exclusive: [X]` on action A prevents X from running in parallel with A
-- The other action does NOT need to declare the same exclusivity (though it can for documentation clarity)
-- If both A and B are ready to run and A declares `exclusive: [B]`, the executor will run one, then the other (order determined by other factors like declaration order)
-- `exclusive` does not imply `dependsOn` - the actions may run in any order, just not simultaneously
-- `exclusive` applies to expanded forEach actions: if `deploy` declares `exclusive: [migrate]`, then `deploy[0]`, `deploy[1]`, etc. all exclude `migrate`
-
-**Validation:**
-
-- Referenced actions must exist in the same section (`workflow.actions` or `workflow.finally`)
-- Self-reference is invalid (`exclusive: [self]`)
-
----
-
 ### Action Concurrency Limit
 
 A CLI parameter to limit the maximum number of actions executing concurrently:
@@ -1364,6 +1366,7 @@ Actions in scafctl follow a Tekton-inspired model: explicit dependencies, implic
 - **Timeouts**: Per-action timeout configuration
 - **Conditions**: `when` expressions supporting both resolver and action result references
 - **Iteration**: `forEach` expansion with `concurrency` and `onError` options (in `workflow.actions` only)
+- **Mutual exclusion**: `exclusive` field prevents two actions from running in parallel without requiring an explicit dependency
 - **Cleanup**: Dedicated `workflow.finally` section for cleanup actions that always run
 - **Cancellation**: Graceful shutdown with guaranteed finally execution
 - **Progress callbacks**: Real-time execution feedback for UIs and monitoring

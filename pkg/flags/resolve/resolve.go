@@ -19,8 +19,20 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/flags/validate"
+	"github.com/oakwood-commons/scafctl/pkg/httpc"
 	"gopkg.in/yaml.v3"
 )
+
+// defaultFlagHTTPClient is a shared httpc.Client used for fetching http(s):// flag values.
+// Caching is disabled so that flag values are always fresh at invocation time.
+var defaultFlagHTTPClient = httpc.NewClient(&httpc.ClientConfig{
+	Timeout:           30 * time.Second,
+	RetryMax:          3,
+	RetryWaitMin:      1 * time.Second,
+	RetryWaitMax:      30 * time.Second,
+	EnableCache:       false,
+	EnableCompression: true,
+})
 
 // ResolveValue validates and resolves a value based on its scheme prefix.
 // The scheme prefix is stripped from the result, and the data is fetched/parsed.
@@ -105,20 +117,15 @@ func ResolveAll(ctx context.Context, parsed map[string][]string) (map[string][]a
 	return result, nil
 }
 
-// fetchURL fetches content from an HTTP/HTTPS URL using the standard HTTP client.
+// fetchURL fetches content from an HTTP/HTTPS URL using the shared httpc client.
 func fetchURL(ctx context.Context, urlStr string) ([]byte, error) {
-	// Create HTTP client with timeout
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
-
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("User-Agent", "scafctl-flags-resolver/1.0")
 
-	resp, err := client.Do(req) //nolint:gosec // G704: URL is validated before use
+	resp, err := defaultFlagHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch URL: %w", err)
 	}

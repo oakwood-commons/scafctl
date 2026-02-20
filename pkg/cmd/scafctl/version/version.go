@@ -15,6 +15,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
+	"github.com/oakwood-commons/scafctl/pkg/httpc"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -126,13 +127,22 @@ func GetLatestVersion(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
+	client := httpc.NewClient(&httpc.ClientConfig{
+		Timeout:           5 * time.Second,
+		RetryMax:          1,
+		RetryWaitMin:      500 * time.Millisecond,
+		RetryWaitMax:      2 * time.Second,
+		EnableCache:       false,
+		EnableCompression: true,
+	})
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 
-	resp, err := http.DefaultClient.Do(req) //nolint:gosec // G704: URL is a known GitHub API endpoint, not user-controlled
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("fetching latest release: %w", err)
 	}

@@ -65,6 +65,7 @@ This is the primary mechanism for validating solutions in CI and during developm
 | Extends non-existent error | ✅ Done | `extends` referencing non-existent test names is a parse-time error |
 | Tests per solution limit | ✅ Done | Max 500 tests per solution |
 | Watch mode (`--watch`) | ✅ Done | `fsnotify`-based file watcher in `soltesting/watch.go` |
+| Auto-generated tests (`-o test`) | ✅ Done | `pkg/solution/soltesting/generate.go`; wired into `render solution`, `run resolver`, `run solution` |
 
 ---
 
@@ -1392,7 +1393,7 @@ const (
 
 ### Auto-Generated Tests (`-o test`)
 
-A future output type for commands that support `-o`. When used, scafctl captures the command and its arguments, executes it, and generates a complete test definition with assertions derived from the actual output.
+✅ **Implemented.** An output type for commands that support `-o`. When used, scafctl captures the command and its arguments, executes it, and generates a complete test definition with assertions derived from the actual output.
 
 ~~~bash
 scafctl render solution -f solution.yaml -r env=prod -o test
@@ -1401,18 +1402,33 @@ scafctl render solution -f solution.yaml -r env=prod -o test
 Would output:
 
 ~~~yaml
-renders-prod:
+render-solution-env-prod:
   description: "Auto-generated test for: render solution -r env=prod"
   command: [render, solution]
-  args: ["-r", "env=prod"]
+  args: ["-r", "env=prod", "-o", "json"]
+  tags: [generated]
   assertions:
-    - expression: 'size(__output.actions) == 3'
-    - expression: '__output.actions["render-main"].inputs.output == "prod/main.tf"'
-    - expression: '__output.actions["render-main"].provider == "template"'
-  snapshot: "testdata/renders-prod.json"
+    - expression: 'size(__output) == 3'
+      message: __output should have 3 keys
+    - expression: 'size(__output["actions"]) == 2'
+      message: __output["actions"] should have 2 keys
+  snapshot: "testdata/render-solution-env-prod.json"
 ~~~
 
-The generator would execute the command, derive CEL assertions from the output shape, write a snapshot golden file, and emit the test YAML to stdout.
+**Implementation:**
+- `pkg/solution/soltesting/generate.go` — `Generate()`, `DeriveTestName()`, `GenerateToYAML()`, `deriveAssertions()`
+- `pkg/terminal/kvx/output.go` — `OutputFormatTest` constant added to `BaseOutputFormats()`
+- `pkg/cmd/scafctl/render/solution.go` — wired via `writeTestOutput()`, `--test-name` flag
+- `pkg/cmd/scafctl/run/common.go` — `generateTestOutput()` shared helper, `--test-name` flag on all `run` subcommands
+- `pkg/cmd/scafctl/run/resolver.go` — intercepts `-o test` before `writeResolverOutput`
+- `pkg/cmd/scafctl/run/solution.go` — `writeActionTestOutput()`, `buildActionOutputData()` extracted helper
+
+**Behavior:**
+- Assertions are derived by walking the output up to depth 2: `size()` for maps/arrays, literal equality for strings/numbers/bools.
+- `__execution` metadata is excluded from assertion derivation (too volatile) but included in the snapshot for normalization.
+- The snapshot is written to `testdata/<name>.json` beside the solution file (or `testdata/` relative to CWD when using stdin).
+- `-o json` is appended to the generated test `args` automatically when not already present.
+- Use `--test-name` to override the derived test name.
 
 ---
 

@@ -63,6 +63,14 @@ type Action struct {
 	// For finally actions, only other finally actions can be referenced.
 	DependsOn []string `json:"dependsOn,omitempty" yaml:"dependsOn,omitempty" doc:"Actions that must complete before this action runs" maxItems:"100"`
 
+	// Exclusive lists action names that cannot run in parallel with this action.
+	// Declaration is one-way: only this action needs to declare the exclusivity.
+	// The executor serializes execution so that this action and any listed action
+	// never run simultaneously, regardless of which starts first.
+	// exclusive does NOT imply dependsOn — order is not guaranteed.
+	// Referenced actions must exist in the same section (actions or finally).
+	Exclusive []string `json:"exclusive,omitempty" yaml:"exclusive,omitempty" doc:"Actions that cannot run in parallel with this action" maxItems:"100"`
+
 	// When is a condition that must evaluate to true for the action to execute.
 	// If false, the action is skipped with SkipReasonCondition.
 	When *spec.Condition `json:"when,omitempty" yaml:"when,omitempty" doc:"Condition for execution (skipped if false)"`

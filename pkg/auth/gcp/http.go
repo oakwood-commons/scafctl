@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/oakwood-commons/scafctl/pkg/httpc"
 )
 
 // HTTPClient abstracts HTTP calls for testability.
@@ -27,15 +29,21 @@ type HTTPClient interface {
 
 // DefaultHTTPClient is the standard HTTP client implementation.
 type DefaultHTTPClient struct {
-	client *http.Client
+	client *httpc.Client
 }
 
-// NewDefaultHTTPClient creates a new DefaultHTTPClient.
+// NewDefaultHTTPClient creates a new DefaultHTTPClient backed by httpc.
+// Caching is disabled because metadata-server responses must never be served from cache.
 func NewDefaultHTTPClient() *DefaultHTTPClient {
 	return &DefaultHTTPClient{
-		client: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		client: httpc.NewClient(&httpc.ClientConfig{
+			Timeout:           30 * time.Second,
+			RetryMax:          3,
+			RetryWaitMin:      1 * time.Second,
+			RetryWaitMax:      30 * time.Second,
+			EnableCache:       false,
+			EnableCompression: false,
+		}),
 	}
 }
 
@@ -46,7 +54,7 @@ func (c *DefaultHTTPClient) PostForm(ctx context.Context, endpoint string, data 
 		return nil, fmt.Errorf("creating POST request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	return c.client.Do(req) //nolint:gosec // URL constructed from trusted config, not user input
+	return c.client.Do(req)
 }
 
 // Get sends a GET request with custom headers.
@@ -59,13 +67,13 @@ func (c *DefaultHTTPClient) Get(ctx context.Context, reqURL string, headers map[
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	return c.client.Do(req) //nolint:gosec // URL constructed from trusted config, not user input
+	return c.client.Do(req)
 }
 
 // Do sends an arbitrary HTTP request.
 func (c *DefaultHTTPClient) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
 	req = req.WithContext(ctx)
-	return c.client.Do(req) //nolint:gosec // URL constructed from trusted config, not user input
+	return c.client.Do(req)
 }
 
 // PostJSON sends a POST request with JSON body.
@@ -75,5 +83,5 @@ func (c *DefaultHTTPClient) PostJSON(ctx context.Context, endpoint string, body 
 		return nil, fmt.Errorf("creating POST JSON request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	return c.client.Do(req) //nolint:gosec // URL constructed from trusted config, not user input
+	return c.client.Do(req)
 }

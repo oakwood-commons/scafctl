@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/spf13/cobra"
@@ -361,11 +363,11 @@ func (o *SolutionOptions) showDryRun(graph *action.Graph) {
 
 // getActionIOStreams returns the provider IO streams for action execution.
 // For the default/table output format, IO streams are provided so providers can
-// stream output directly to the terminal. For json/yaml/quiet, no streams are
+// stream output directly to the terminal. For json/yaml/quiet/test, no streams are
 // provided so all output is captured and serialized.
 func (o *SolutionOptions) getActionIOStreams() *provider.IOStreams {
 	switch o.Output {
-	case "json", "yaml", "quiet":
+	case "json", "yaml", "quiet", "test":
 		// Structured output modes: don't stream, capture everything for serialization
 		return nil
 	default:
@@ -393,6 +395,8 @@ func (o *SolutionOptions) writeActionOutput(_ context.Context, result *action.Ex
 		return o.writeActionOutputStructured(result, executionData, "json")
 	case "yaml":
 		return o.writeActionOutputStructured(result, executionData, "yaml")
+	case "test":
+		return o.writeActionTestOutput(result, executionData)
 	default:
 		return fmt.Errorf("unsupported output format: %s", o.Output)
 	}
@@ -441,7 +445,78 @@ func (o *SolutionOptions) writeActionOutputDefault(result *action.ExecutionResul
 
 // writeActionOutputStructured writes action results as JSON or YAML (the full execution envelope).
 func (o *SolutionOptions) writeActionOutputStructured(result *action.ExecutionResult, executionData map[string]any, format string) error {
-	// Build output structure
+	outputData := buildActionOutputData(result, executionData)
+
+	var data []byte
+	var marshalErr error
+
+	switch format {
+	case "yaml":
+		data, marshalErr = yaml.Marshal(outputData)
+	case "json":
+		data, marshalErr = json.MarshalIndent(outputData, "", "  ")
+	}
+
+	if marshalErr != nil {
+		return fmt.Errorf("failed to marshal output: %w", marshalErr)
+	}
+
+	fmt.Fprintln(o.IOStreams.Out, string(data))
+	return nil
+}
+
+// writeActionTestOutput generates a functional test definition from the action execution
+// result and writes test YAML to stdout. A snapshot golden file is written to testdata/.
+func (o *SolutionOptions) writeActionTestOutput(result *action.ExecutionResult, executionData map[string]any) error {
+	// Full output (including __execution) for the snapshot.
+	fullData := buildActionOutputData(result, executionData)
+
+	// Assertion data excludes __execution to avoid volatile timing assertions.
+	assertionData := buildActionOutputData(result, nil)
+
+	rawJSON, err := json.MarshalIndent(fullData, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal output for test generation: %w", err)
+	}
+
+	testArgs := make([]string, 0, len(o.ResolverParams)*2)
+	for _, param := range o.ResolverParams {
+		testArgs = append(testArgs, "-r", param)
+	}
+
+	snapshotDir := "testdata"
+	if o.File != "" && o.File != "-" {
+		snapshotDir = filepath.Join(filepath.Dir(o.File), "testdata")
+	}
+
+	genResult, err := soltesting.Generate(&soltesting.GenerateInput{
+		Command:     []string{"run", "solution"},
+		Args:        testArgs,
+		TestName:    o.TestName,
+		SnapshotDir: snapshotDir,
+		Data:        assertionData,
+		RawJSON:     rawJSON,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to generate test: %w", err)
+	}
+
+	yamlData, err := soltesting.GenerateToYAML(genResult)
+	if err != nil {
+		return fmt.Errorf("failed to marshal test YAML: %w", err)
+	}
+
+	fmt.Fprint(o.IOStreams.Out, string(yamlData))
+
+	if genResult.SnapshotWritten {
+		fmt.Fprintf(o.IOStreams.ErrOut, "Snapshot written: %s\n", genResult.SnapshotPath)
+	}
+	return nil
+}
+
+// buildActionOutputData constructs the structured output map for action execution results.
+// When executionData is nil, the __execution key is omitted.
+func buildActionOutputData(result *action.ExecutionResult, executionData map[string]any) map[string]any {
 	output := map[string]any{
 		"status":    string(result.FinalStatus),
 		"startTime": result.StartTime.Format(time.RFC3339),
@@ -449,7 +524,6 @@ func (o *SolutionOptions) writeActionOutputStructured(result *action.ExecutionRe
 		"duration":  result.Duration().String(),
 	}
 
-	// Add action results
 	actions := make(map[string]any)
 	for name, ar := range result.Actions {
 		actionOutput := map[string]any{
@@ -475,27 +549,11 @@ func (o *SolutionOptions) writeActionOutputStructured(result *action.ExecutionRe
 		output["skippedActions"] = result.SkippedActions
 	}
 
-	// Include execution metadata if requested
 	if executionData != nil {
 		output["__execution"] = executionData
 	}
 
-	var data []byte
-	var marshalErr error
-
-	switch format {
-	case "yaml":
-		data, marshalErr = yaml.Marshal(output)
-	case "json":
-		data, marshalErr = json.MarshalIndent(output, "", "  ")
-	}
-
-	if marshalErr != nil {
-		return fmt.Errorf("failed to marshal output: %w", marshalErr)
-	}
-
-	fmt.Fprintln(o.IOStreams.Out, string(data))
-	return nil
+	return output
 }
 
 // actionRegistryAdapter adapts provider.Registry to action.RegistryInterface
