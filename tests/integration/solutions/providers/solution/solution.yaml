@@ -1,0 +1,107 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-solution-provider
+  version: 1.0.0
+  description: |
+    Functional tests for the solution provider.
+    Exercises sub-solution composition, parameter passing, and
+    selective resolver execution via child.yaml in the same directory.
+
+spec:
+  resolvers:
+    childAll:
+      description: Run all resolvers in child solution
+      resolve:
+        with:
+          - provider: solution
+            inputs:
+              source: "./child.yaml"
+              inputs:
+                message: "from-parent"
+                number: "5"
+
+    childSelectResolver:
+      description: Run only the greeting resolver in child
+      resolve:
+        with:
+          - provider: solution
+            inputs:
+              source: "./child.yaml"
+              resolvers:
+                - greeting
+
+    childWithInputs:
+      description: Pass inputs and verify child echoes them
+      resolve:
+        with:
+          - provider: solution
+            inputs:
+              source: "./child.yaml"
+              inputs:
+                message: "custom-message"
+                number: "3"
+              resolvers:
+                - echoParam
+
+    childComputed:
+      description: Verify child computes transformed value
+      resolve:
+        with:
+          - provider: solution
+            inputs:
+              source: "./child.yaml"
+              inputs:
+                message: "x"
+                number: "7"
+              resolvers:
+                - computedValue
+
+  testing:
+    config:
+      skipBuiltins: true
+
+    cases:
+      _base:
+        description: Base template for solution provider tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [provider, solution-provider]
+        files: ["child.yaml"]
+        assertions:
+          - expression: __exitCode == 0
+
+      run-all-child-resolvers:
+        description: Verify all child resolvers run and return results
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.childAll.status == "success"
+            message: "Child solution should succeed"
+          - expression: __output.childAll.resolvers.greeting == "hello from child"
+            message: "Child greeting resolver should resolve"
+          - expression: __output.childAll.resolvers.echoParam == "from-parent"
+            message: "Child echoParam should echo the parent input"
+
+      select-resolver:
+        description: Verify selective resolver execution
+        extends: [_base]
+        assertions:
+          - expression: __output.childSelectResolver.status == "success"
+          - expression: __output.childSelectResolver.resolvers.greeting == "hello from child"
+            message: "Selected resolver should be available"
+
+      pass-inputs:
+        description: Verify inputs are passed to child parameters
+        extends: [_base]
+        assertions:
+          - expression: __output.childWithInputs.resolvers.echoParam == "custom-message"
+            message: "Child should receive and echo the custom message"
+
+      computed-value:
+        description: Verify child transforms input value
+        extends: [_base]
+        assertions:
+          - expression: __output.childComputed.resolvers.computedValue == 14
+            message: "Child should compute 7 * 2 = 14"

@@ -1,0 +1,106 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-action-retry
+  version: 1.0.0
+  description: |
+    Functional tests for action retry with backoff.
+    Verifies retry configuration parsing and rendering.
+    Uses a command that always succeeds so the action passes
+    on the first attempt, confirming retry config doesn't break execution.
+
+spec:
+  resolvers:
+    endpoint:
+      description: API endpoint
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "https://api.example.com"
+
+  workflow:
+    actions:
+      fixedRetry:
+        description: Action with fixed backoff retry
+        provider: exec
+        retry:
+          maxAttempts: 3
+          backoff: fixed
+          initialDelay: 100ms
+        inputs:
+          command: "echo fixed retry success"
+
+      exponentialRetry:
+        description: Action with exponential backoff retry
+        provider: exec
+        retry:
+          maxAttempts: 5
+          backoff: exponential
+          initialDelay: 100ms
+          maxDelay: 2s
+        inputs:
+          command: "echo exponential retry success"
+
+      linearRetry:
+        description: Action with linear backoff retry
+        provider: exec
+        retry:
+          maxAttempts: 3
+          backoff: linear
+          initialDelay: 100ms
+          maxDelay: 1s
+        inputs:
+          command: "echo linear retry success"
+
+      noRetry:
+        description: Action with no retry config
+        provider: exec
+        inputs:
+          command: "echo no retry"
+
+  testing:
+    config:
+      skipBuiltins: true
+
+    cases:
+      _run-base:
+        description: Base template for retry tests
+        command: [run, solution]
+        args: ["-o", "json"]
+        tags: [action, retry]
+        assertions:
+          - expression: __exitCode == 0
+
+      _render-base:
+        description: Base template for render tests
+        command: [render, solution]
+        args: ["-o", "json"]
+        tags: [action, retry, render]
+        assertions:
+          - expression: __exitCode == 0
+
+      all-succeed-first-attempt:
+        description: Verify all retry-configured actions succeed on first attempt
+        extends: [_run-base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.status == "succeeded"
+          - expression: __output.actions["fixedRetry"].status == "succeeded"
+          - expression: __output.actions["exponentialRetry"].status == "succeeded"
+          - expression: __output.actions["linearRetry"].status == "succeeded"
+          - expression: __output.actions["noRetry"].status == "succeeded"
+
+      render-retry-config:
+        description: Verify retry configuration appears in rendered graph
+        extends: [_render-base]
+        assertions:
+          - expression: __output.actions["fixedRetry"].retry.maxAttempts == 3
+            message: "Fixed retry should have 3 max attempts"
+          - expression: __output.actions["fixedRetry"].retry.backoff == "fixed"
+            message: "Fixed retry should have fixed backoff"
+          - expression: __output.actions["exponentialRetry"].retry.maxAttempts == 5
+            message: "Exponential retry should have 5 max attempts"
+          - expression: __output.actions["exponentialRetry"].retry.backoff == "exponential"
+            message: "Exponential retry should have exponential backoff"

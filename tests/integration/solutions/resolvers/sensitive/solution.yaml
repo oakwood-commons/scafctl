@@ -28,26 +28,27 @@ spec:
             inputs:
               value: "visible-value"
 
-  testConfig:
-    skipBuiltins: true
+  testing:
+    config:
+      skipBuiltins: true
 
-  tests:
-    sensitive-in-json:
-      description: Verify sensitive value is accessible in JSON output
-      command: [run, resolver]
-      args: ["-o", "json"]
-      tags: [resolver, sensitive, smoke]
-      assertions:
-        - expression: __exitCode == 0
-        - expression: __output.normalValue == "visible-value"
+    cases:
+      sensitive-in-json:
+        description: Verify sensitive value is accessible in JSON output
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [resolver, sensitive, smoke]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.normalValue == "visible-value"
 
-    sensitive-masked-table:
-      description: Verify sensitive value is masked in table output
-      command: [run, resolver]
-      tags: [resolver, sensitive]
-      assertions:
-        - expression: __exitCode == 0
-        - notContains: "super-secret-password"
-          message: "Sensitive value should be masked in table output"
-        - contains: "visible-value"
-          message: "Non-sensitive value should be visible"
+      sensitive-masked-table:
+        description: Verify sensitive value is masked in table output
+        command: [run, resolver]
+        tags: [resolver, sensitive]
+        assertions:
+          - expression: __exitCode == 0
+          - notContains: "super-secret-password"
+            message: "Sensitive value should be masked in table output"
+          - contains: "visible-value"
+            message: "Non-sensitive value should be visible"

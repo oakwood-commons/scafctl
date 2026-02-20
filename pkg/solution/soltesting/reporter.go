@@ -211,7 +211,7 @@ func ReportList(solutions []SolutionTests, opts *kvx.OutputOptions, includeBuilt
 	var entries []listEntry
 	for _, st := range solutions {
 		if includeBuiltins {
-			builtins := BuiltinTests(st.TestConfig)
+			builtins := BuiltinTests(st.Config)
 			for _, b := range builtins {
 				entries = append(entries, listEntry{
 					Solution: st.SolutionName,
@@ -224,7 +224,7 @@ func ReportList(solutions []SolutionTests, opts *kvx.OutputOptions, includeBuilt
 
 		names := SortedTestNames(st)
 		for _, name := range names {
-			tc := st.Tests[name]
+			tc := st.Cases[name]
 			if tc.IsTemplate() {
 				continue
 			}

@@ -26,7 +26,7 @@ SUBCOMMANDS:
 
 Functional tests validate that solutions behave correctly by executing
 scafctl commands against them and checking the output. Tests are defined
-inline in solution YAML under spec.tests or in separate test files
+inline in solution YAML under spec.testing.cases or in separate test files
 under a tests/ directory.`, settings.CliBinaryName),
 		SilenceUsage: true,
 	}

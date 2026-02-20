@@ -126,94 +126,95 @@ spec:
                 line two
                 line three
 
-  testConfig:
-    skipBuiltins: true
+  testing:
+    config:
+      skipBuiltins: true
 
-  tests:
-    _base:
-      description: Base template for static provider tests
-      command: [run, resolver]
-      args: ["-o", "json"]
-      tags: [provider, static]
-      assertions:
-        - expression: __exitCode == 0
+    cases:
+      _base:
+        description: Base template for static provider tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [provider, static]
+        assertions:
+          - expression: __exitCode == 0
 
-    string-value:
-      description: Verify static string resolution
-      extends: [_base]
-      tags: [smoke]
-      assertions:
-        - expression: __output.stringValue == "hello world"
+      string-value:
+        description: Verify static string resolution
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.stringValue == "hello world"
 
-    int-value:
-      description: Verify static integer resolution
-      extends: [_base]
-      assertions:
-        - expression: __output.intValue == 42
+      int-value:
+        description: Verify static integer resolution
+        extends: [_base]
+        assertions:
+          - expression: __output.intValue == 42
 
-    bool-true:
-      description: Verify static boolean true resolution
-      extends: [_base]
-      assertions:
-        - expression: __output.boolTrue == true
+      bool-true:
+        description: Verify static boolean true resolution
+        extends: [_base]
+        assertions:
+          - expression: __output.boolTrue == true
 
-    bool-false:
-      description: Verify static boolean false resolution
-      extends: [_base]
-      assertions:
-        - expression: __output.boolFalse == false
+      bool-false:
+        description: Verify static boolean false resolution
+        extends: [_base]
+        assertions:
+          - expression: __output.boolFalse == false
 
-    float-value:
-      description: Verify static float resolution
-      extends: [_base]
-      assertions:
-        - expression: __output.floatValue == 3.14
+      float-value:
+        description: Verify static float resolution
+        extends: [_base]
+        assertions:
+          - expression: __output.floatValue == 3.14
 
-    list-value:
-      description: Verify static list resolution
-      extends: [_base]
-      assertions:
-        - expression: size(__output.listValue) == 3
-        - expression: __output.listValue[0] == "alpha"
-        - expression: __output.listValue[2] == "charlie"
+      list-value:
+        description: Verify static list resolution
+        extends: [_base]
+        assertions:
+          - expression: size(__output.listValue) == 3
+          - expression: __output.listValue[0] == "alpha"
+          - expression: __output.listValue[2] == "charlie"
 
-    map-value:
-      description: Verify static map resolution
-      extends: [_base]
-      assertions:
-        - expression: __output.mapValue.host == "localhost"
-        - expression: __output.mapValue.port == 8080
-        - expression: __output.mapValue.enabled == true
+      map-value:
+        description: Verify static map resolution
+        extends: [_base]
+        assertions:
+          - expression: __output.mapValue.host == "localhost"
+          - expression: __output.mapValue.port == 8080
+          - expression: __output.mapValue.enabled == true
 
-    nested-value:
-      description: Verify static nested structure resolution
-      extends: [_base]
-      assertions:
-        - expression: __output.nestedValue.database.primary.host == "db.example.com"
-        - expression: __output.nestedValue.database.primary.port == 5432
-        - expression: size(__output.nestedValue.database.replicas) == 2
+      nested-value:
+        description: Verify static nested structure resolution
+        extends: [_base]
+        assertions:
+          - expression: __output.nestedValue.database.primary.host == "db.example.com"
+          - expression: __output.nestedValue.database.primary.port == 5432
+          - expression: size(__output.nestedValue.database.replicas) == 2
 
-    empty-string:
-      description: Verify static empty string resolution
-      extends: [_base]
-      assertions:
-        - expression: __output.emptyString == ""
+      empty-string:
+        description: Verify static empty string resolution
+        extends: [_base]
+        assertions:
+          - expression: __output.emptyString == ""
 
-    empty-list:
-      description: Verify static empty list resolution
-      extends: [_base]
-      assertions:
-        - expression: size(__output.emptyList) == 0
+      empty-list:
+        description: Verify static empty list resolution
+        extends: [_base]
+        assertions:
+          - expression: size(__output.emptyList) == 0
 
-    empty-map:
-      description: Verify static empty map resolution
-      extends: [_base]
-      assertions:
-        - expression: size(__output.emptyMap) == 0
+      empty-map:
+        description: Verify static empty map resolution
+        extends: [_base]
+        assertions:
+          - expression: size(__output.emptyMap) == 0
 
-    multiline-string:
-      description: Verify static multiline string resolution
-      extends: [_base]
-      assertions:
-        - expression: __output.multilineString.contains("line one")
-        - expression: __output.multilineString.contains("line three")
+      multiline-string:
+        description: Verify static multiline string resolution
+        extends: [_base]
+        assertions:
+          - expression: __output.multilineString.contains("line one")
+          - expression: __output.multilineString.contains("line three")

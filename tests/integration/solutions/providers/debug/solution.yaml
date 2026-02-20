@@ -1,0 +1,144 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-debug-provider
+  version: 1.0.0
+  description: |
+    Functional tests for the debug provider.
+    Uses stderr and file destinations to avoid corrupting JSON output.
+    The debug provider is side-effect free and needs no mocking.
+
+spec:
+  resolvers:
+    sourceData:
+      description: Source data for debug inspection
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                name: test-item
+                count: 42
+                tags: [alpha, bravo]
+
+    debugStderr:
+      description: Debug output to stderr (does not corrupt stdout JSON)
+      dependsOn: [sourceData]
+      resolve:
+        with:
+          - provider: debug
+            inputs:
+              expression: "_.sourceData"
+              destination: stderr
+              label: "Stderr Debug"
+              format: json
+
+    debugCelFilter:
+      description: Debug with CEL expression filtering to stderr
+      dependsOn: [sourceData]
+      resolve:
+        with:
+          - provider: debug
+            inputs:
+              expression: "_.sourceData.name"
+              destination: stderr
+              label: "Filtered Name"
+
+    debugToFile:
+      description: Debug output to file
+      dependsOn: [sourceData]
+      resolve:
+        with:
+          - provider: debug
+            inputs:
+              expression: "_.sourceData"
+              destination: file
+              file:
+                expr: "_.sandboxDir + '/debug-output.json'"
+              format: json
+              label: "File Debug"
+
+    sandboxDir:
+      description: Sandbox directory path
+      resolve:
+        with:
+          - provider: env
+            inputs:
+              operation: get
+              name: SCAFCTL_SANDBOX_DIR
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "__self.value"
+
+    debugAsTransform:
+      description: Debug provider used in transform pipeline
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "transform-input"
+      transform:
+        with:
+          - provider: debug
+            inputs:
+              label: "Transform Debug"
+              destination: stderr
+
+  testing:
+    config:
+      skipBuiltins: true
+
+    cases:
+      _base:
+        description: Base template for debug provider tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [provider, debug]
+        assertions:
+          - expression: __exitCode == 0
+
+      debug-stderr-destination:
+        description: Verify debug outputs to stderr
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.debugStderr.success == true
+            message: "Debug should succeed"
+          - expression: __output.debugStderr.destination == "stderr"
+            message: "Destination should be stderr"
+
+      debug-cel-filter:
+        description: Verify CEL expression filters data
+        extends: [_base]
+        assertions:
+          - expression: __output.debugCelFilter.success == true
+          - expression: __output.debugCelFilter.result == "test-item"
+            message: "Filtered result should be just the name field"
+
+      debug-file-destination:
+        description: Verify debug can write to file
+        extends: [_base]
+        assertions:
+          - expression: __output.debugToFile.success == true
+          - expression: __output.debugToFile.destination.contains("debug-output.json")
+            message: "Destination should be the file path"
+
+      debug-as-transform:
+        description: Verify debug transform returns debug result
+        extends: [_base]
+        assertions:
+          - expression: __output.debugAsTransform.success == true
+            message: "Debug transform should succeed"
+          - expression: __output.debugAsTransform.result["__self"] == "transform-input"
+            message: "Debug result should contain the original input"
+
+      debug-stderr-contains-output:
+        description: Verify debug stderr contains expected content
+        extends: [_base]
+        assertions:
+          - regex: "test-item"
+            target: stderr
+            message: "Stderr should contain debug output"

@@ -38,7 +38,12 @@ tests/integration/solutions/
 │   ├── directory/            # Directory list/mkdir
 │   ├── go-template/          # Go template rendering
 │   ├── validation/           # Match/notMatch/expression validation
-│   └── sleep/                # Sleep/timing
+│   ├── sleep/                # Sleep/timing
+│   ├── http/                 # HTTP requests (via mock server)
+│   ├── git/                  # Git operations (via local bare repo)
+│   ├── debug/                # Debug output formatting
+│   ├── parameter/            # CLI parameter passing (-r flag)
+│   └── solution/             # Sub-solution composition
 ├── resolvers/                # Resolver feature tests
 │   ├── dag/                  # Dependency graph ordering
 │   ├── until/                # Fallback chains, until conditions
@@ -46,13 +51,28 @@ tests/integration/solutions/
 │   ├── transform-chain/      # Multi-step transform pipelines
 │   ├── conditional/          # When conditions
 │   ├── timeout/              # Per-resolver timeout
+│   ├── foreach-filter/       # ForEach filter tests
 │   └── sensitive/            # Sensitive value masking
+├── actions/                  # Workflow action tests
+│   ├── exclusive/            # Mutual exclusion (exclusive field)
+│   ├── sequential/           # Sequential dependsOn chains
+│   ├── conditional/          # When conditions on actions
+│   ├── parallel/             # Parallel execution with dependencies
+│   ├── error-handling/       # onError continue/fail behavior
+│   ├── retry/                # Retry with fixed/exponential/linear backoff
+│   ├── conditional-retry/    # retryIf conditional retry
+│   ├── finally/              # Finally cleanup section
+│   ├── foreach/              # ForEach iteration over arrays
+│   ├── timeout/              # Per-action timeout
+│   └── result-schema/        # Result schema validation
 ├── rendering/                # Template rendering tests
 ├── composition/              # Multi-file compose tests
 │   └── parts/                # Composed YAML fragments
+├── test-generation/          # Test generation tests
 └── edge-cases/               # Negative/error tests
     ├── validation-failures/  # Intentional validation errors
     ├── invalid-provider/     # Unknown provider handling
+    ├── invalid-exclusive/    # Invalid exclusive references
     └── timeout-enforcement/  # Timeout violation behavior
 ```
 
@@ -63,6 +83,15 @@ tests/integration/solutions/
 | `smoke` | Quick verification tests, good for CI gates |
 | `provider` | Provider-specific tests |
 | `static`, `env`, `cel`, `exec`, `file`, `directory`, `go-template`, `validation`, `sleep` | Individual provider tests |
+| `http` | HTTP provider tests (uses mock server) |
+| `git` | Git provider tests (uses local bare repo) |
+| `debug` | Debug provider tests |
+| `parameter` | Parameter provider tests |
+| `solution-provider` | Solution provider composition tests |
+| `action` | Workflow action tests |
+| `sequential`, `conditional`, `parallel`, `exclusive` | Action ordering/condition tests |
+| `error-handling`, `retry`, `conditional-retry` | Action error/retry tests |
+| `finally`, `foreach`, `timeout`, `result-schema` | Action feature tests |
 | `resolver` | Resolver feature tests |
 | `dag`, `until`, `type-coercion`, `transform`, `conditional`, `timeout`, `sensitive` | Individual resolver feature tests |
 | `rendering` | Template rendering tests |
@@ -88,12 +117,35 @@ tests/integration/solutions/
 5. Run `scafctl test functional -f <your-solution.yaml>` to verify
 6. The `task integration` step will automatically discover it
 
+## Mock Services
+
+The test framework supports `testConfig.services` for starting background mock servers.
+This eliminates external dependencies for providers like HTTP.
+
+```yaml
+testConfig:
+  services:
+    - name: mock-api
+      type: http                    # Only "http" is currently supported
+      portEnv: MOCK_HTTP_PORT       # Env var set to the server's random port
+      baseUrlEnv: MOCK_BASE_URL     # Env var set to http://127.0.0.1:<port>
+      routes:
+        - path: /api/users
+          method: GET               # Empty = match all methods
+          status: 200               # Default 200
+          body: '{"users": []}'     # Response body
+          headers:                  # Response headers
+            Content-Type: application/json
+          delay: "100ms"            # Simulated latency
+          echo: true                # Return request details as JSON
+```
+
+All mock servers expose a `/__health` endpoint for readiness checks.
+
 ## Excluded Providers
 
 These providers are excluded from functional tests due to external dependencies:
-- **`http`** — requires a network endpoint
-- **`git`** — requires a git repository with specific state
 - **`secret`** — requires keyring/credential store
 - **`identity`** — requires authentication handlers
 
-They can be added later with mocked endpoints or conditional `skipExpression` guards.
+They can be added later with conditional `skipExpression` guards.

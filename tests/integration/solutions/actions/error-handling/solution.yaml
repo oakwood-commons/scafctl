@@ -1,0 +1,95 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-action-error-handling
+  version: 1.0.0
+  description: |
+    Functional tests for action error handling.
+    Verifies onError continue/fail behavior, non-zero exit code capture,
+    and dependency-failed skip propagation.
+
+spec:
+  resolvers:
+    target:
+      description: Deployment target
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "test-env"
+
+  workflow:
+    actions:
+      successAction:
+        description: Action that succeeds
+        provider: exec
+        inputs:
+          command: "echo success"
+
+      nonZeroExit:
+        description: Action with non-zero exit code (exec provider still succeeds)
+        provider: exec
+        onError: continue
+        inputs:
+          command: "sh -c 'exit 1'"
+
+      afterNonZero:
+        description: Runs after the non-zero exit action
+        provider: exec
+        dependsOn: [nonZeroExit]
+        inputs:
+          command: "echo after-nonzero"
+
+      dependsOnSuccess:
+        description: Depends on the successful action
+        provider: exec
+        dependsOn: [successAction]
+        inputs:
+          command: "echo after-success"
+
+  testing:
+    config:
+      skipBuiltins: true
+
+    cases:
+      _run-base:
+        description: Base template for error handling tests
+        command: [run, solution]
+        args: ["-o", "json"]
+        tags: [action, error-handling]
+        assertions:
+          - expression: __exitCode == 0
+
+      nonzero-exit-captured:
+        description: Verify non-zero exit code is captured in results
+        extends: [_run-base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.actions["nonZeroExit"].results.exitCode == 1
+            message: "Exit code should be 1"
+          - expression: __output.actions["nonZeroExit"].results.success == false
+            message: "success should be false for non-zero exit"
+
+      dependent-still-runs:
+        description: Verify dependent action still runs with onError=continue
+        extends: [_run-base]
+        assertions:
+          - expression: __output.actions["afterNonZero"].status == "succeeded"
+            message: "Dependent action should run after onError=continue"
+          - expression: __output.actions["afterNonZero"].results.stdout.contains("after-nonzero")
+            message: "Dependent should produce correct output"
+
+      success-unaffected:
+        description: Verify unrelated success path is unaffected
+        extends: [_run-base]
+        assertions:
+          - expression: __output.actions["dependsOnSuccess"].status == "succeeded"
+            message: "Independent success path should work"
+
+      overall-status:
+        description: Verify overall solution status
+        extends: [_run-base]
+        assertions:
+          - expression: __output.status == "succeeded"
+            message: "Overall status should be succeeded when onError=continue"

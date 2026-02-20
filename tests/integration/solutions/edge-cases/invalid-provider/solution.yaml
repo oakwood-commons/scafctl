@@ -18,16 +18,17 @@ spec:
             inputs:
               value: "anything"
 
-  testConfig:
-    skipBuiltins: true
+  testing:
+    config:
+      skipBuiltins: true
 
-  tests:
-    unknown-provider:
-      description: Verify unknown provider produces meaningful error
-      command: [run, resolver]
-      tags: [edge-case, negative]
-      expectFailure: true
-      assertions:
-        - notContains: "panic"
-          target: combined
-          message: "Should not panic on unknown provider"
+    cases:
+      unknown-provider:
+        description: Verify unknown provider produces meaningful error
+        command: [run, resolver]
+        tags: [edge-case, negative]
+        expectFailure: true
+        assertions:
+          - notContains: "panic"
+            target: combined
+            message: "Should not panic on unknown provider"

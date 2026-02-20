@@ -44,63 +44,64 @@ spec:
               operation: read
               path: ./test-data.json
 
-  testConfig:
-    skipBuiltins: true
+  testing:
+    config:
+      skipBuiltins: true
 
-  tests:
-    _base:
-      description: Base template for file provider tests
-      command: [run, resolver]
-      args: ["-o", "json"]
-      tags: [provider, file]
-      assertions:
-        - expression: __exitCode == 0
+    cases:
+      _base:
+        description: Base template for file provider tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [provider, file]
+        assertions:
+          - expression: __exitCode == 0
 
-    read-fixture:
-      description: Verify reading a file
-      extends: [_base]
-      tags: [smoke]
-      init:
-        - command: "echo -n 'fixture-content' > test-fixture.txt"
-        - command: 'echo -n ''{"key":"value","count":42}'' > test-data.json'
-      cleanup:
-        - command: "rm -f test-fixture.txt test-data.json"
-      assertions:
-        - expression: '__output.readFixture.content == "fixture-content"'
-          message: "Should read the fixture file content"
+      read-fixture:
+        description: Verify reading a file
+        extends: [_base]
+        tags: [smoke]
+        init:
+          - command: "echo -n 'fixture-content' > test-fixture.txt"
+          - command: 'echo -n ''{"key":"value","count":42}'' > test-data.json'
+        cleanup:
+          - command: "rm -f test-fixture.txt test-data.json"
+        assertions:
+          - expression: '__output.readFixture.content == "fixture-content"'
+            message: "Should read the fixture file content"
 
-    file-exists:
-      description: Verify file exists check returns true
-      extends: [_base]
-      init:
-        - command: "echo -n 'exists' > test-fixture.txt"
-        - command: "echo -n '{}' > test-data.json"
-      cleanup:
-        - command: "rm -f test-fixture.txt test-data.json"
-      assertions:
-        - expression: __output.fileExists.exists == true
-          message: "Existing file should return true"
+      file-exists:
+        description: Verify file exists check returns true
+        extends: [_base]
+        init:
+          - command: "echo -n 'exists' > test-fixture.txt"
+          - command: "echo -n '{}' > test-data.json"
+        cleanup:
+          - command: "rm -f test-fixture.txt test-data.json"
+        assertions:
+          - expression: __output.fileExists.exists == true
+            message: "Existing file should return true"
 
-    file-not-exists:
-      description: Verify file exists check returns false
-      extends: [_base]
-      init:
-        - command: "echo -n 'needed' > test-fixture.txt"
-        - command: "echo -n '{}' > test-data.json"
-      cleanup:
-        - command: "rm -f test-fixture.txt test-data.json"
-      assertions:
-        - expression: __output.fileNotExists.exists == false
-          message: "Non-existent file should return false"
+      file-not-exists:
+        description: Verify file exists check returns false
+        extends: [_base]
+        init:
+          - command: "echo -n 'needed' > test-fixture.txt"
+          - command: "echo -n '{}' > test-data.json"
+        cleanup:
+          - command: "rm -f test-fixture.txt test-data.json"
+        assertions:
+          - expression: __output.fileNotExists.exists == false
+            message: "Non-existent file should return false"
 
-    read-json-content:
-      description: Verify reading JSON file content
-      extends: [_base]
-      init:
-        - command: "echo -n 'dummy' > test-fixture.txt"
-        - command: 'echo -n ''{"key":"value","count":42}'' > test-data.json'
-      cleanup:
-        - command: "rm -f test-fixture.txt test-data.json"
-      assertions:
-        - expression: '__output.readJson.content.contains("key")'
-        - expression: '__output.readJson.content.contains("value")'
+      read-json-content:
+        description: Verify reading JSON file content
+        extends: [_base]
+        init:
+          - command: "echo -n 'dummy' > test-fixture.txt"
+          - command: 'echo -n ''{"key":"value","count":42}'' > test-data.json'
+        cleanup:
+          - command: "rm -f test-fixture.txt test-data.json"
+        assertions:
+          - expression: '__output.readJson.content.contains("key")'
+          - expression: '__output.readJson.content.contains("value")'

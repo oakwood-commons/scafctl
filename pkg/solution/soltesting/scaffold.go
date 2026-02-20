@@ -15,8 +15,8 @@ import (
 
 // ScaffoldResult holds the generated test scaffold for a solution.
 type ScaffoldResult struct {
-	// Tests is a map of generated test cases keyed by name.
-	Tests map[string]*TestCase `json:"tests" yaml:"tests"`
+	// Cases is a map of generated test cases keyed by name.
+	Cases map[string]*TestCase `json:"cases" yaml:"cases"`
 }
 
 // ScaffoldInput provides the solution data needed for scaffold generation,
@@ -33,7 +33,7 @@ type ScaffoldInput struct {
 // It performs structural analysis only — no commands are executed.
 func Scaffold(input *ScaffoldInput) *ScaffoldResult {
 	result := &ScaffoldResult{
-		Tests: make(map[string]*TestCase),
+		Cases: make(map[string]*TestCase),
 	}
 
 	// Always generate builtin-style tests
@@ -57,7 +57,7 @@ func Scaffold(input *ScaffoldInput) *ScaffoldResult {
 // addResolveDefaultsTest adds a test that verifies all resolvers resolve with defaults.
 func addResolveDefaultsTest(result *ScaffoldResult) {
 	exitCodeZero := 0
-	result.Tests["resolve-defaults"] = &TestCase{
+	result.Cases["resolve-defaults"] = &TestCase{
 		Description: "Verify all resolvers resolve with default values",
 		Command:     []string{"run", "resolver"},
 		Args:        []string{"-o", "json"},
@@ -69,7 +69,7 @@ func addResolveDefaultsTest(result *ScaffoldResult) {
 // addRenderDefaultsTest adds a test that verifies the solution renders with defaults.
 func addRenderDefaultsTest(result *ScaffoldResult) {
 	exitCodeZero := 0
-	result.Tests["render-defaults"] = &TestCase{
+	result.Cases["render-defaults"] = &TestCase{
 		Description: "Verify solution renders with default values",
 		Command:     []string{"render", "solution"},
 		Tags:        []string{"smoke", "render"},
@@ -80,7 +80,7 @@ func addRenderDefaultsTest(result *ScaffoldResult) {
 // addLintTest adds a lint test.
 func addLintTest(result *ScaffoldResult) {
 	exitCodeZero := 0
-	result.Tests["lint"] = &TestCase{
+	result.Cases["lint"] = &TestCase{
 		Description: "Verify solution has no lint errors",
 		Command:     []string{"lint"},
 		Tags:        []string{"smoke", "lint"},
@@ -106,7 +106,7 @@ func addResolverTests(result *ScaffoldResult, resolvers map[string]*resolver.Res
 		// Generate a basic resolver output test
 		exitCodeZero := 0
 		testName := fmt.Sprintf("resolver-%s", name)
-		result.Tests[testName] = &TestCase{
+		result.Cases[testName] = &TestCase{
 			Description: fmt.Sprintf("Verify resolver %q produces expected output", name),
 			Command:     []string{"run", "resolver"},
 			Args:        []string{"--resolver", name, "-o", "json"},
@@ -145,7 +145,7 @@ func addResolverTests(result *ScaffoldResult, resolvers map[string]*resolver.Res
 
 			// Add parameter override with obviously invalid value
 			tc.Args = append(tc.Args, "--param", fmt.Sprintf("%s=___invalid___", name))
-			result.Tests[failTestName] = tc
+			result.Cases[failTestName] = tc
 		}
 	}
 }
@@ -185,16 +185,18 @@ func addActionTests(result *ScaffoldResult, wf *action.Workflow) {
 
 		exitCodeZero := 0
 		tc.ExitCode = &exitCodeZero
-		result.Tests[testName] = tc
+		result.Cases[testName] = tc
 	}
 }
 
 // ScaffoldToYAML marshals the scaffold result to YAML suitable for embedding
-// in a solution's spec.tests section.
+// in a solution's spec.testing.cases section.
 func ScaffoldToYAML(result *ScaffoldResult) ([]byte, error) {
-	// Build a wrapper that produces spec-level YAML: tests: { ... }
+	// Build a wrapper that produces spec-level YAML: testing: { cases: { ... } }
 	wrapper := map[string]any{
-		"tests": result.Tests,
+		"testing": map[string]any{
+			"cases": result.Cases,
+		},
 	}
 	return yaml.Marshal(wrapper)
 }

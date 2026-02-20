@@ -3292,14 +3292,15 @@ spec:
           - provider: static
             inputs:
               value: hello
-  tests:
-    basic-render:
-      description: Verify render works
-      command: [run, resolver]
-      args: ["-o", "json"]
-      assertions:
-        - expression: __exitCode == 0
-        - contains: greeting
+  testing:
+    cases:
+      basic-render:
+        description: Verify render works
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: greeting
 `
 	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
 
@@ -3335,13 +3336,14 @@ spec:
           - provider: static
             inputs:
               value: hello
-  tests:
-    fail-on-purpose:
-      description: This test should fail
-      command: [run, resolver]
-      args: ["-o", "json"]
-      assertions:
-        - contains: this-string-definitely-does-not-exist-in-output
+  testing:
+    cases:
+      fail-on-purpose:
+        description: This test should fail
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - contains: this-string-definitely-does-not-exist-in-output
 `
 	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
 
@@ -3375,19 +3377,20 @@ spec:
           - provider: static
             inputs:
               value: hi
-  tests:
-    smoke-test:
-      description: Smoke test
-      command: [run, resolver]
-      args: ["-o", "json"]
-      tags: [smoke]
-      assertions:
-        - expression: __exitCode == 0
-    another-test:
-      description: Another test
-      command: [lint]
-      assertions:
-        - expression: __exitCode == 0
+  testing:
+    cases:
+      smoke-test:
+        description: Smoke test
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [smoke]
+        assertions:
+          - expression: __exitCode == 0
+      another-test:
+        description: Another test
+        command: [lint]
+        assertions:
+          - expression: __exitCode == 0
 `
 	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
 
@@ -3424,13 +3427,14 @@ spec:
           - provider: static
             inputs:
               value: data
-  tests:
-    json-test:
-      description: Test with JSON output
-      command: [run, resolver]
-      args: ["-o", "json"]
-      assertions:
-        - expression: __exitCode == 0
+  testing:
+    cases:
+      json-test:
+        description: Test with JSON output
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
 `
 	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
 
@@ -3470,13 +3474,14 @@ spec:
           - provider: static
             inputs:
               value: data
-  tests:
-    junit-test:
-      description: Test for JUnit report
-      command: [run, resolver]
-      args: ["-o", "json"]
-      assertions:
-        - expression: __exitCode == 0
+  testing:
+    cases:
+      junit-test:
+        description: Test for JUnit report
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
 `
 	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
 
@@ -3522,13 +3527,14 @@ spec:
           - provider: static
             inputs:
               value: data
-  tests:
-    dry-test:
-      description: Dry run test
-      command: [run, resolver]
-      args: ["-o", "json"]
-      assertions:
-        - contains: impossible-string-that-would-fail
+  testing:
+    cases:
+      dry-test:
+        description: Dry run test
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - contains: impossible-string-that-would-fail
 `
 	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
 
@@ -3566,19 +3572,20 @@ spec:
           - provider: static
             inputs:
               value: data
-  tests:
-    render-pass:
-      description: This test should run and pass
-      command: [run, resolver]
-      args: ["-o", "json"]
-      assertions:
-        - expression: __exitCode == 0
-    skipped-test:
-      description: This test should not run due to filter
-      command: [run, resolver]
-      args: ["-o", "json"]
-      assertions:
-        - contains: impossible-string-that-would-fail
+  testing:
+    cases:
+      render-pass:
+        description: This test should run and pass
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+      skipped-test:
+        description: This test should not run due to filter
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - contains: impossible-string-that-would-fail
 `
 	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
 
@@ -3620,21 +3627,23 @@ spec:
           - provider: static
             inputs:
               value: composed-output
-  tests:
-    _base:
-      description: Base template
-      command: [run, resolver]
-      args: ["-o", "json"]
-      assertions:
-        - expression: __exitCode == 0
+  testing:
+    cases:
+      _base:
+        description: Base template
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
 `
 	testFileContent := `spec:
-  tests:
-    composed-test:
-      description: Test from composed file
-      extends: [_base]
-      assertions:
-        - expression: '"msg" in __output'
+  testing:
+    cases:
+      composed-test:
+        description: Test from composed file
+        extends: [_base]
+        assertions:
+          - expression: '"msg" in __output'
 `
 	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(testsDir, "smoke.yaml"), []byte(testFileContent), 0o644))
@@ -3697,7 +3706,7 @@ spec:
 	t.Logf("stderr: %s", stderr)
 
 	assert.Equal(t, 0, exitCode, "expected exit code 0")
-	assert.Contains(t, stdout, "tests:")
+	assert.Contains(t, stdout, "cases:")
 	assert.Contains(t, stdout, "resolve-defaults")
 	assert.Contains(t, stdout, "render-defaults")
 	assert.Contains(t, stdout, "lint")

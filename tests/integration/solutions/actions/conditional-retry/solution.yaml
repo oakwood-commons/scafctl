@@ -1,0 +1,92 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-action-conditional-retry
+  version: 1.0.0
+  description: |
+    Functional tests for conditional retry (retryIf).
+    Verifies that retryIf expressions are parsed and rendered
+    correctly in the action graph.
+
+spec:
+  resolvers:
+    apiUrl:
+      description: API URL
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "https://api.example.com"
+
+  workflow:
+    actions:
+      retryOnExitCode:
+        description: Retry only on specific exit codes
+        provider: exec
+        retry:
+          maxAttempts: 3
+          backoff: fixed
+          initialDelay: 100ms
+          retryIf: "__error.exitCode == 1 || __error.exitCode == 2"
+        inputs:
+          command: "echo conditional retry pass"
+
+      retryOnType:
+        description: Retry only on timeout errors
+        provider: exec
+        retry:
+          maxAttempts: 2
+          backoff: exponential
+          initialDelay: 200ms
+          retryIf: "__error.type == 'timeout'"
+        inputs:
+          command: "echo type-based retry pass"
+
+      noConditionalRetry:
+        description: Plain retry without condition
+        provider: exec
+        retry:
+          maxAttempts: 2
+          backoff: fixed
+          initialDelay: 100ms
+        inputs:
+          command: "echo plain retry pass"
+
+  testing:
+    config:
+      skipBuiltins: true
+
+    cases:
+      _run-base:
+        description: Base template for conditional retry tests
+        command: [run, solution]
+        args: ["-o", "json"]
+        tags: [action, conditional-retry]
+        assertions:
+          - expression: __exitCode == 0
+
+      _render-base:
+        description: Base template for render tests
+        command: [render, solution]
+        args: ["-o", "json"]
+        tags: [action, conditional-retry, render]
+        assertions:
+          - expression: __exitCode == 0
+
+      all-succeed:
+        description: Verify all actions succeed (no failures to trigger retry)
+        extends: [_run-base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.status == "succeeded"
+          - expression: __output.actions["retryOnExitCode"].status == "succeeded"
+          - expression: __output.actions["retryOnType"].status == "succeeded"
+          - expression: __output.actions["noConditionalRetry"].status == "succeeded"
+
+      render-retryif:
+        description: Verify retryIf expressions appear in rendered graph
+        extends: [_render-base]
+        assertions:
+          - expression: __output.actions["retryOnExitCode"].retry.maxAttempts == 3
+          - expression: __output.actions["retryOnType"].retry.maxAttempts == 2

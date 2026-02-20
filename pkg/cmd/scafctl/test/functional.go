@@ -178,10 +178,10 @@ func runFunctional(ctx context.Context, opts *FunctionalOptions) error {
 	// Apply skip builtins to each solution's test config
 	if opts.SkipBuiltins {
 		for i := range solutions {
-			if solutions[i].TestConfig == nil {
-				solutions[i].TestConfig = &soltesting.TestConfig{}
+			if solutions[i].Config == nil {
+				solutions[i].Config = &soltesting.TestConfig{}
 			}
-			solutions[i].TestConfig.SkipBuiltins = skipBuiltins
+			solutions[i].Config.SkipBuiltins = skipBuiltins
 		}
 	}
 
@@ -322,7 +322,7 @@ func runWatchMode(ctx context.Context, opts *FunctionalOptions, w *writer.Writer
 	}
 
 	// Unused in watch mode — skip builtins are applied per-run via
-	// the solution's TestConfig, which DiscoverSolutions populates.
+	// the solution's Config, which DiscoverSolutions populates.
 	_ = skipBuiltins
 
 	isTTY := kvx.IsTerminal(opts.IOStreams.ErrOut)

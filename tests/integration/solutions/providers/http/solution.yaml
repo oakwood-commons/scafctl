@@ -1,0 +1,171 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-http-provider
+  version: 1.0.0
+  description: |
+    Functional tests for the HTTP provider.
+    Uses a mock HTTP server started via testConfig.services to verify
+    GET, POST, custom headers, error status codes, and response parsing.
+
+spec:
+  resolvers:
+    getUsers:
+      description: GET request returning JSON
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url:
+                expr: "_.mockBaseUrl + '/api/users'"
+              method: GET
+              headers:
+                Accept: application/json
+
+    postData:
+      description: POST request with echo to verify request body
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url:
+                expr: "_.mockBaseUrl + '/api/echo'"
+              method: POST
+              body: '{"action":"create","name":"test-item"}'
+              headers:
+                Content-Type: application/json
+
+    notFoundEndpoint:
+      description: GET request to non-existent endpoint
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url:
+                expr: "_.mockBaseUrl + '/api/missing'"
+              method: GET
+
+    customHeaders:
+      description: GET request with custom response headers
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url:
+                expr: "_.mockBaseUrl + '/api/custom-headers'"
+              method: GET
+
+    healthCheck:
+      description: GET request to the built-in health endpoint
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url:
+                expr: "_.mockBaseUrl + '/__health'"
+              method: GET
+
+    mockBaseUrl:
+      description: Base URL of mock server from env
+      resolve:
+        with:
+          - provider: env
+            inputs:
+              operation: get
+              name: MOCK_BASE_URL
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "__self.value"
+
+  testing:
+    config:
+      skipBuiltins: true
+      services:
+        - name: mock-api
+          type: http
+          portEnv: MOCK_HTTP_PORT
+          baseUrlEnv: MOCK_BASE_URL
+          routes:
+            - path: /api/users
+              method: GET
+              status: 200
+              body: '{"users":[{"id":1,"name":"alice"},{"id":2,"name":"bob"}]}'
+              headers:
+                Content-Type: application/json
+            - path: /api/echo
+              method: POST
+              status: 201
+              echo: true
+            - path: /api/missing
+              method: GET
+              status: 404
+              body: '{"error":"not found"}'
+              headers:
+                Content-Type: application/json
+            - path: /api/custom-headers
+              method: GET
+              status: 200
+              body: ok
+              headers:
+                Content-Type: text/plain
+                X-Custom-Header: custom-value
+                X-Request-Id: req-12345
+
+    cases:
+      _base:
+        description: Base template for HTTP provider tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [provider, http]
+        assertions:
+          - expression: __exitCode == 0
+
+      get-json-response:
+        description: Verify GET request returns parsed JSON body
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.getUsers.body.contains("alice")
+            message: "GET /api/users should contain alice"
+          - expression: __output.getUsers.statusCode == 200
+            message: "Status code should be 200"
+
+      post-echo-body:
+        description: Verify POST request echoes back the request body and method
+        extends: [_base]
+        assertions:
+          - expression: __output.postData.statusCode == 201
+            message: "POST /api/echo should return 201"
+          - expression: __output.postData.body.contains("create")
+            message: "Echo response should contain the posted body content"
+          - expression: __output.postData.body.contains("POST")
+            message: "Echo response should contain the HTTP method"
+
+      not-found-response:
+        description: Verify 404 response from missing endpoint
+        extends: [_base]
+        assertions:
+          - expression: __output.notFoundEndpoint.statusCode == 404
+            message: "Missing endpoint should return 404"
+          - expression: __output.notFoundEndpoint.body.contains("not found")
+            message: "404 body should contain error message"
+
+      custom-response-headers:
+        description: Verify custom response headers are returned
+        extends: [_base]
+        assertions:
+          - expression: __output.customHeaders.statusCode == 200
+          - expression: __output.customHeaders.headers["X-Custom-Header"] == "custom-value"
+            message: "Custom header should be present"
+          - expression: __output.customHeaders.headers["X-Request-Id"] == "req-12345"
+            message: "Request ID header should be present"
+
+      health-endpoint:
+        description: Verify mock server health endpoint
+        extends: [_base]
+        assertions:
+          - expression: __output.healthCheck.statusCode == 200
+            message: "Health endpoint should return 200"

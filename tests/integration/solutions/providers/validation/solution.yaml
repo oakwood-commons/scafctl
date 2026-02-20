@@ -83,45 +83,46 @@ spec:
               expression: "size(__self) >= 3 && size(__self) <= 20"
             message: "Must be between 3 and 20 characters"
 
-  testConfig:
-    skipBuiltins: true
+  testing:
+    config:
+      skipBuiltins: true
 
-  tests:
-    _base:
-      description: Base template for validation provider tests
-      command: [run, resolver]
-      args: ["-o", "json"]
-      tags: [provider, validation]
-      assertions:
-        - expression: __exitCode == 0
+    cases:
+      _base:
+        description: Base template for validation provider tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [provider, validation]
+        assertions:
+          - expression: __exitCode == 0
 
-    valid-name:
-      description: Verify match validation passes
-      extends: [_base]
-      tags: [smoke]
-      assertions:
-        - expression: '__output.validName == "my-valid-app"'
+      valid-name:
+        description: Verify match validation passes
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: '__output.validName == "my-valid-app"'
 
-    valid-email:
-      description: Verify email pattern validation passes
-      extends: [_base]
-      assertions:
-        - expression: '__output.validEmail == "user@example.com"'
+      valid-email:
+        description: Verify email pattern validation passes
+        extends: [_base]
+        assertions:
+          - expression: '__output.validEmail == "user@example.com"'
 
-    not-match-passes:
-      description: Verify notMatch validation passes
-      extends: [_base]
-      assertions:
-        - expression: '__output.noSpaces == "no-spaces-here"'
+      not-match-passes:
+        description: Verify notMatch validation passes
+        extends: [_base]
+        assertions:
+          - expression: '__output.noSpaces == "no-spaces-here"'
 
-    cel-expression-passes:
-      description: Verify CEL expression validation passes
-      extends: [_base]
-      assertions:
-        - expression: __output.celValidation == 42
+      cel-expression-passes:
+        description: Verify CEL expression validation passes
+        extends: [_base]
+        assertions:
+          - expression: __output.celValidation == 42
 
-    multiple-validations:
-      description: Verify multiple validation rules all pass
-      extends: [_base]
-      assertions:
-        - expression: '__output.multiValidation == "hello"'
+      multiple-validations:
+        description: Verify multiple validation rules all pass
+        extends: [_base]
+        assertions:
+          - expression: '__output.multiValidation == "hello"'

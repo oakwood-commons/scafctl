@@ -515,11 +515,12 @@ func TestSpec_HasTests(t *testing.T) {
 	}{
 		{"nil spec", nil, false},
 		{"empty spec", &Spec{}, false},
-		{"nil tests", &Spec{Tests: nil}, false},
-		{"empty tests map", &Spec{Tests: map[string]*soltesting.TestCase{}}, false},
-		{"has tests", &Spec{Tests: map[string]*soltesting.TestCase{
+		{"nil testing", &Spec{Testing: nil}, false},
+		{"nil cases", &Spec{Testing: &soltesting.TestSuite{Cases: nil}}, false},
+		{"empty cases map", &Spec{Testing: &soltesting.TestSuite{Cases: map[string]*soltesting.TestCase{}}}, false},
+		{"has cases", &Spec{Testing: &soltesting.TestSuite{Cases: map[string]*soltesting.TestCase{
 			"test1": {Name: "test1"},
-		}}, true},
+		}}}, true},
 	}
 
 	for _, tt := range tests {
@@ -537,8 +538,9 @@ func TestSpec_HasTestConfig(t *testing.T) {
 	}{
 		{"nil spec", nil, false},
 		{"empty spec", &Spec{}, false},
-		{"nil testConfig", &Spec{TestConfig: nil}, false},
-		{"has testConfig", &Spec{TestConfig: &soltesting.TestConfig{}}, true},
+		{"nil testing", &Spec{Testing: nil}, false},
+		{"nil config", &Spec{Testing: &soltesting.TestSuite{Config: nil}}, false},
+		{"has config", &Spec{Testing: &soltesting.TestSuite{Config: &soltesting.TestConfig{}}}, true},
 	}
 
 	for _, tt := range tests {
@@ -563,27 +565,28 @@ spec:
           - provider: parameter
             inputs:
               key: "env"
-  tests:
-    render-test:
-      description: "Test rendering"
-      command:
-        - render
-        - solution
-      assertions:
-        - contains: "hello"
-      tags:
-        - smoke
-    _base-template:
-      description: "Base template"
-      command:
-        - render
-        - solution
-  testConfig:
-    skipBuiltins: false
-    env:
-      MY_VAR: "value"
-    setup:
-      - command: "echo setup"
+  testing:
+    cases:
+      render-test:
+        description: "Test rendering"
+        command:
+          - render
+          - solution
+        assertions:
+          - contains: "hello"
+        tags:
+          - smoke
+      _base-template:
+        description: "Base template"
+        command:
+          - render
+          - solution
+    config:
+      skipBuiltins: false
+      env:
+        MY_VAR: "value"
+      setup:
+        - command: "echo setup"
 `
 	var sol Solution
 	err := sol.UnmarshalFromBytes([]byte(yamlContent))
@@ -591,9 +594,10 @@ spec:
 
 	assert.True(t, sol.Spec.HasTests())
 	assert.True(t, sol.Spec.HasTestConfig())
-	require.Len(t, sol.Spec.Tests, 2)
+	require.NotNil(t, sol.Spec.Testing)
+	require.Len(t, sol.Spec.Testing.Cases, 2)
 
-	renderTest := sol.Spec.Tests["render-test"]
+	renderTest := sol.Spec.Testing.Cases["render-test"]
 	require.NotNil(t, renderTest)
 	assert.Equal(t, "Test rendering", renderTest.Description)
 	assert.Equal(t, []string{"render", "solution"}, renderTest.Command)
@@ -601,15 +605,15 @@ spec:
 	assert.Equal(t, "hello", renderTest.Assertions[0].Contains)
 	assert.Equal(t, []string{"smoke"}, renderTest.Tags)
 
-	baseTemplate := sol.Spec.Tests["_base-template"]
+	baseTemplate := sol.Spec.Testing.Cases["_base-template"]
 	require.NotNil(t, baseTemplate)
 	assert.Equal(t, "Base template", baseTemplate.Description)
 
-	require.NotNil(t, sol.Spec.TestConfig)
-	assert.False(t, sol.Spec.TestConfig.SkipBuiltins.All)
-	assert.Equal(t, "value", sol.Spec.TestConfig.Env["MY_VAR"])
-	require.Len(t, sol.Spec.TestConfig.Setup, 1)
-	assert.Equal(t, "echo setup", sol.Spec.TestConfig.Setup[0].Command)
+	require.NotNil(t, sol.Spec.Testing.Config)
+	assert.False(t, sol.Spec.Testing.Config.SkipBuiltins.All)
+	assert.Equal(t, "value", sol.Spec.Testing.Config.Env["MY_VAR"])
+	require.Len(t, sol.Spec.Testing.Config.Setup, 1)
+	assert.Equal(t, "echo setup", sol.Spec.Testing.Config.Setup[0].Command)
 }
 
 func TestSolution_RoundTrip_WithTests(t *testing.T) {
@@ -627,16 +631,17 @@ spec:
           - provider: parameter
             inputs:
               key: "env"
-  tests:
-    my-test:
-      description: "A test"
-      command:
-        - render
-        - solution
-      assertions:
-        - contains: "output"
-  testConfig:
-    skipBuiltins: true
+  testing:
+    cases:
+      my-test:
+        description: "A test"
+        command:
+          - render
+          - solution
+        assertions:
+          - contains: "output"
+    config:
+      skipBuiltins: true
 `
 	var sol Solution
 	err := sol.UnmarshalFromBytes([]byte(yamlContent))
@@ -653,12 +658,12 @@ spec:
 
 	// Verify tests survived round-trip
 	assert.True(t, sol2.Spec.HasTests())
-	require.Contains(t, sol2.Spec.Tests, "my-test")
-	assert.Equal(t, "A test", sol2.Spec.Tests["my-test"].Description)
+	require.Contains(t, sol2.Spec.Testing.Cases, "my-test")
+	assert.Equal(t, "A test", sol2.Spec.Testing.Cases["my-test"].Description)
 
 	// Verify testConfig survived round-trip (including SkipBuiltinsValue)
 	assert.True(t, sol2.Spec.HasTestConfig())
-	assert.True(t, sol2.Spec.TestConfig.SkipBuiltins.All)
+	assert.True(t, sol2.Spec.Testing.Config.SkipBuiltins.All)
 }
 
 func TestSolution_BackwardCompat_NoTests(t *testing.T) {
@@ -684,6 +689,5 @@ spec:
 
 	assert.False(t, sol.Spec.HasTests())
 	assert.False(t, sol.Spec.HasTestConfig())
-	assert.Nil(t, sol.Spec.Tests)
-	assert.Nil(t, sol.Spec.TestConfig)
+	assert.Nil(t, sol.Spec.Testing)
 }
