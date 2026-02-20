@@ -18,7 +18,9 @@ func TestOutputFormat_String(t *testing.T) {
 		format   OutputFormat
 		expected string
 	}{
+		{OutputFormatAuto, "auto"},
 		{OutputFormatTable, "table"},
+		{OutputFormatList, "list"},
 		{OutputFormatJSON, "json"},
 		{OutputFormatYAML, "yaml"},
 		{OutputFormatQuiet, "quiet"},
@@ -34,12 +36,14 @@ func TestOutputFormat_String(t *testing.T) {
 func TestBaseOutputFormats(t *testing.T) {
 	formats := BaseOutputFormats()
 
+	assert.Contains(t, formats, "auto")
 	assert.Contains(t, formats, "table")
+	assert.Contains(t, formats, "list")
 	assert.Contains(t, formats, "json")
 	assert.Contains(t, formats, "yaml")
 	assert.Contains(t, formats, "quiet")
 	assert.Contains(t, formats, "test")
-	assert.Len(t, formats, 5)
+	assert.Len(t, formats, 7)
 }
 
 func TestIsStructuredFormat(t *testing.T) {
@@ -47,7 +51,9 @@ func TestIsStructuredFormat(t *testing.T) {
 		format   OutputFormat
 		expected bool
 	}{
+		{OutputFormatAuto, false},
 		{OutputFormatTable, false},
+		{OutputFormatList, false},
 		{OutputFormatJSON, true},
 		{OutputFormatYAML, true},
 		{OutputFormatQuiet, false},
@@ -60,12 +66,14 @@ func TestIsStructuredFormat(t *testing.T) {
 	}
 }
 
-func TestIsTableFormat(t *testing.T) {
+func TestIsKvxFormat(t *testing.T) {
 	tests := []struct {
 		format   OutputFormat
 		expected bool
 	}{
+		{OutputFormatAuto, true},
 		{OutputFormatTable, true},
+		{OutputFormatList, true},
 		{"", true},
 		{OutputFormatJSON, false},
 		{OutputFormatYAML, false},
@@ -74,7 +82,7 @@ func TestIsTableFormat(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(string(tt.format), func(t *testing.T) {
-			assert.Equal(t, tt.expected, IsTableFormat(tt.format))
+			assert.Equal(t, tt.expected, IsKvxFormat(tt.format))
 		})
 	}
 }
@@ -85,7 +93,9 @@ func TestIsQuietFormat(t *testing.T) {
 		expected bool
 	}{
 		{OutputFormatQuiet, true},
+		{OutputFormatAuto, false},
 		{OutputFormatTable, false},
+		{OutputFormatList, false},
 		{OutputFormatJSON, false},
 		{OutputFormatYAML, false},
 	}
@@ -103,8 +113,10 @@ func TestParseOutputFormat(t *testing.T) {
 		expected OutputFormat
 		ok       bool
 	}{
+		{"auto", OutputFormatAuto, true},
 		{"table", OutputFormatTable, true},
-		{"", OutputFormatTable, true},
+		{"list", OutputFormatList, true},
+		{"", OutputFormatAuto, true},
 		{"json", OutputFormatJSON, true},
 		{"yaml", OutputFormatYAML, true},
 		{"quiet", OutputFormatQuiet, true},
@@ -269,9 +281,11 @@ func TestOutputOptions_WithOutputFormatString(t *testing.T) {
 	}{
 		{"json", OutputFormatJSON},
 		{"yaml", OutputFormatYAML},
+		{"auto", OutputFormatAuto},
 		{"table", OutputFormatTable},
+		{"list", OutputFormatList},
 		{"quiet", OutputFormatQuiet},
-		{"invalid", OutputFormatTable},
+		{"invalid", OutputFormatAuto},
 	}
 
 	for _, tt := range tests {
@@ -289,7 +303,7 @@ func TestNewOutputOptions_Defaults(t *testing.T) {
 
 	opts := NewOutputOptions(ioStreams)
 
-	assert.Equal(t, OutputFormatTable, opts.Format)
+	assert.Equal(t, OutputFormatAuto, opts.Format)
 	assert.True(t, opts.PrettyPrint)
 	assert.False(t, opts.Interactive)
 	assert.Empty(t, opts.Expression)
@@ -301,7 +315,7 @@ func TestOutputOptions_Write_TableFallbackToJSONWhenNotTTY(t *testing.T) {
 	ioStreams := &terminal.IOStreams{Out: out}
 
 	opts := NewOutputOptions(ioStreams)
-	opts.Format = OutputFormatTable
+	opts.Format = OutputFormatAuto
 
 	data := map[string]any{"name": "test"}
 	err := opts.Write(data)
@@ -315,7 +329,7 @@ func TestOutputOptions_Write_InteractiveErrorWhenNotTTY(t *testing.T) {
 	ioStreams := &terminal.IOStreams{Out: out}
 
 	opts := NewOutputOptions(ioStreams)
-	opts.Format = OutputFormatTable
+	opts.Format = OutputFormatAuto
 	opts.Interactive = true
 
 	data := map[string]any{"name": "test"}

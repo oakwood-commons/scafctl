@@ -61,6 +61,10 @@ type ViewerOptions struct {
 	// Theme is the color theme for interactive mode (dark, warm, cool, midnight)
 	Theme string `json:"theme,omitempty" yaml:"theme,omitempty" doc:"Color theme for TUI" example:"dark" maxLength:"20"`
 
+	// Layout controls the non-interactive rendering layout.
+	// Valid values: "auto" (default - kvx decides), "table" (force bordered table), "list" (force list view).
+	Layout string `json:"layout,omitempty" yaml:"layout,omitempty" doc:"Rendering layout for non-interactive display" example:"auto" maxLength:"10"`
+
 	// InitialExpr is an initial expression to evaluate when launching TUI
 	InitialExpr string `json:"initialExpr,omitempty" yaml:"initialExpr,omitempty" doc:"Initial CEL expression to evaluate in TUI" maxLength:"4096"`
 }
@@ -126,6 +130,12 @@ func WithTheme(theme string) Option {
 	return func(o *ViewerOptions) { o.Theme = theme }
 }
 
+// WithLayout sets the rendering layout for non-interactive display.
+// Valid values: "auto" (default), "table", "list".
+func WithLayout(layout string) Option {
+	return func(o *ViewerOptions) { o.Layout = layout }
+}
+
 // WithInitialExpr sets an initial expression for TUI
 func WithInitialExpr(expr string) Option {
 	return func(o *ViewerOptions) { o.InitialExpr = expr }
@@ -173,8 +183,16 @@ func View(data any, opts ...Option) error {
 		return runInteractive(root, options)
 	}
 
-	// Non-interactive: render table
-	return renderTable(root, options)
+	// Non-interactive: render based on layout
+	switch options.Layout {
+	case "list":
+		return renderList(root, options)
+	default:
+		// "auto", "table", and empty all use table rendering.
+		// The upstream tui.RenderTable with ColumnarMode "auto" (default)
+		// already handles smart layout detection for arrays vs objects.
+		return renderTable(root, options)
+	}
 }
 
 // renderTable outputs data as a bordered table (non-interactive).
@@ -186,6 +204,13 @@ func renderTable(root any, options *ViewerOptions) error {
 		Width:    options.Width,
 		NoColor:  options.NoColor,
 	})
+	fmt.Fprint(options.Out, output)
+	return nil
+}
+
+// renderList outputs data as a key-value list (non-interactive).
+func renderList(root any, options *ViewerOptions) error {
+	output := tui.RenderList(root, options.NoColor)
 	fmt.Fprint(options.Out, output)
 	return nil
 }
@@ -248,4 +273,15 @@ func RenderTable(data any, opts tui.TableOptions) (string, error) {
 	}
 
 	return tui.RenderTable(root, opts), nil
+}
+
+// RenderList renders data as a non-interactive list string.
+// This is useful when you need the list output as a string rather than writing to a stream.
+func RenderList(data any, noColor bool) (string, error) {
+	root, err := core.LoadObject(data)
+	if err != nil {
+		return "", fmt.Errorf("failed to load data: %w", err)
+	}
+
+	return tui.RenderList(root, noColor), nil
 }

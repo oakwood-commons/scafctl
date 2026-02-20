@@ -15,8 +15,8 @@ import (
 // KvxOutputFlags holds the flag values for kvx-enabled output.
 // This struct is typically embedded in command options structs.
 type KvxOutputFlags struct {
-	// Output specifies the output format (table, json, yaml, quiet)
-	Output string `json:"output,omitempty" yaml:"output,omitempty" doc:"Output format" example:"table" maxLength:"10"`
+	// Output specifies the output format (auto, table, list, json, yaml, quiet)
+	Output string `json:"output,omitempty" yaml:"output,omitempty" doc:"Output format" example:"auto" maxLength:"10"`
 
 	// Interactive enables the kvx TUI for data exploration
 	Interactive bool `json:"interactive,omitempty" yaml:"interactive,omitempty" doc:"Launch interactive TUI mode"`
@@ -36,7 +36,7 @@ type KvxOutputFlags struct {
 func AddKvxOutputFlags(cmd *cobra.Command, outputFormat *string, interactive *bool, expression *string) {
 	validFormats := kvx.BaseOutputFormats()
 
-	cmd.Flags().StringVarP(outputFormat, "output", "o", "table",
+	cmd.Flags().StringVarP(outputFormat, "output", "o", "auto",
 		fmt.Sprintf("Output format: %s", strings.Join(validFormats, ", ")))
 
 	cmd.Flags().BoolVarP(interactive, "interactive", "i", false,
@@ -82,7 +82,7 @@ func ToKvxOutputOptions(flags *KvxOutputFlags, opts ...kvx.OutputOption) *kvx.Ou
 	if f, ok := kvx.ParseOutputFormat(flags.Output); ok {
 		kvxOpts.Format = f
 	} else {
-		kvxOpts.Format = kvx.OutputFormatTable
+		kvxOpts.Format = kvx.OutputFormatAuto
 	}
 
 	// Apply additional options

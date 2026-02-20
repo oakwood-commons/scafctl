@@ -14,8 +14,15 @@ package output
 type OutputFormat string
 
 const (
-	// OutputFormatTable uses kvx table view (default for terminal output)
+	// OutputFormatAuto lets kvx choose the best visual format (table or list)
+	// based on the data shape. This is the default.
+	OutputFormatAuto OutputFormat = "auto"
+
+	// OutputFormatTable uses kvx bordered table view
 	OutputFormatTable OutputFormat = "table"
+
+	// OutputFormatList uses kvx list view for key-value display
+	OutputFormatList OutputFormat = "list"
 
 	// OutputFormatJSON outputs as JSON (for piping/scripting)
 	OutputFormatJSON OutputFormat = "json"
@@ -36,7 +43,9 @@ func (f OutputFormat) String() string {
 // This list is used for flag validation and help text generation.
 func BaseOutputFormats() []string {
 	return []string{
+		string(OutputFormatAuto),
 		string(OutputFormatTable),
+		string(OutputFormatList),
 		string(OutputFormatJSON),
 		string(OutputFormatYAML),
 		string(OutputFormatQuiet),
@@ -49,9 +58,9 @@ func IsStructuredFormat(format OutputFormat) bool {
 	return format == OutputFormatJSON || format == OutputFormatYAML
 }
 
-// IsTableFormat returns true if the format uses kvx table output.
-func IsTableFormat(format OutputFormat) bool {
-	return format == OutputFormatTable || format == ""
+// IsKvxFormat returns true if the format uses kvx visual output (auto, table, or list).
+func IsKvxFormat(format OutputFormat) bool {
+	return format == OutputFormatAuto || format == OutputFormatTable || format == OutputFormatList || format == ""
 }
 
 // IsQuietFormat returns true if the format suppresses output.
@@ -63,8 +72,12 @@ func IsQuietFormat(format OutputFormat) bool {
 // It returns the format and whether it was recognized.
 func ParseOutputFormat(s string) (OutputFormat, bool) {
 	switch s {
-	case "table", "":
+	case "auto", "":
+		return OutputFormatAuto, true
+	case "table":
 		return OutputFormatTable, true
+	case "list":
+		return OutputFormatList, true
 	case "json":
 		return OutputFormatJSON, true
 	case "yaml":

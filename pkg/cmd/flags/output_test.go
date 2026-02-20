@@ -24,7 +24,7 @@ func TestAddKvxOutputFlags(t *testing.T) {
 	outputFlag := cmd.Flags().Lookup("output")
 	require.NotNil(t, outputFlag)
 	assert.Equal(t, "o", outputFlag.Shorthand)
-	assert.Equal(t, "table", outputFlag.DefValue)
+	assert.Equal(t, "auto", outputFlag.DefValue)
 
 	interactiveFlag := cmd.Flags().Lookup("interactive")
 	require.NotNil(t, interactiveFlag)
@@ -57,8 +57,10 @@ func TestValidateKvxOutputFormat(t *testing.T) {
 		format  string
 		wantErr bool
 	}{
-		{"", false},        // Empty defaults to table
+		{"", false},        // Empty defaults to auto
+		{"auto", false},    //
 		{"table", false},   //
+		{"list", false},    //
 		{"json", false},    //
 		{"yaml", false},    //
 		{"quiet", false},   //
@@ -121,8 +123,8 @@ func TestToKvxOutputOptions_InvalidFormat(t *testing.T) {
 
 	opts := ToKvxOutputOptions(flags)
 
-	// Invalid formats should default to table
-	assert.Equal(t, kvx.OutputFormatTable, opts.Format)
+	// Invalid formats should default to auto
+	assert.Equal(t, kvx.OutputFormatAuto, opts.Format)
 }
 
 func TestNewKvxOutputOptionsFromFlags(t *testing.T) {
@@ -147,11 +149,13 @@ func TestNewKvxOutputOptionsFromFlags_AllFormats(t *testing.T) {
 		format   string
 		expected kvx.OutputFormat
 	}{
+		{"auto", kvx.OutputFormatAuto},
 		{"table", kvx.OutputFormatTable},
+		{"list", kvx.OutputFormatList},
 		{"json", kvx.OutputFormatJSON},
 		{"yaml", kvx.OutputFormatYAML},
 		{"quiet", kvx.OutputFormatQuiet},
-		{"", kvx.OutputFormatTable}, // Empty defaults to table
+		{"", kvx.OutputFormatAuto}, // Empty defaults to auto
 	}
 
 	for _, tt := range tests {
@@ -169,7 +173,7 @@ func TestKvxOutputFlags_Zero_Value(t *testing.T) {
 	assert.False(t, flags.Interactive)
 	assert.Empty(t, flags.Expression)
 
-	// Converting zero value flags should result in table format
+	// Converting zero value flags should result in auto format
 	opts := ToKvxOutputOptions(&flags)
-	assert.Equal(t, kvx.OutputFormatTable, opts.Format)
+	assert.Equal(t, kvx.OutputFormatAuto, opts.Format)
 }
