@@ -72,7 +72,7 @@ func TestCommandSolution_FlagDefaults(t *testing.T) {
 
 	output, err := flags.GetString("output")
 	require.NoError(t, err)
-	assert.Equal(t, "table", output) // Changed from "json" to "table" for kvx integration
+	assert.Equal(t, "auto", output) // Changed from "json" to "auto" for kvx integration
 
 	interactive, err := flags.GetBool("interactive")
 	require.NoError(t, err)

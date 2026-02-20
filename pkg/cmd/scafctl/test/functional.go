@@ -214,10 +214,10 @@ func runFunctional(ctx context.Context, opts *FunctionalOptions) error {
 	}
 
 	// Set up progress reporting unless explicitly disabled or output format
-	// is non-table (json/yaml/quiet — progress would corrupt structured output).
+	// is non-visual (json/yaml/quiet — progress would corrupt structured output).
 	if !opts.NoProgress && !opts.DryRun {
 		format, _ := kvx.ParseOutputFormat(opts.Output)
-		if kvx.IsTableFormat(format) || opts.Output == "" {
+		if kvx.IsKvxFormat(format) {
 			if kvx.IsTerminal(opts.IOStreams.ErrOut) {
 				runner.Progress = NewMPBTestProgress(opts.IOStreams.ErrOut)
 			} else {
@@ -335,7 +335,7 @@ func runWatchMode(ctx context.Context, opts *FunctionalOptions, w *writer.Writer
 				// Set up progress for each run (mpb instances are single-use).
 				if !opts.NoProgress && !opts.DryRun {
 					format, _ := kvx.ParseOutputFormat(opts.Output)
-					if kvx.IsTableFormat(format) || opts.Output == "" {
+					if kvx.IsKvxFormat(format) {
 						if isTTY {
 							runner.Progress = NewMPBTestProgress(opts.IOStreams.ErrOut)
 						} else {

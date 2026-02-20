@@ -63,7 +63,7 @@ func ReportResults(results []TestResult, opts *kvx.OutputOptions, verbose bool, 
 	switch {
 	case kvx.IsQuietFormat(opts.Format):
 		return nil
-	case kvx.IsTableFormat(opts.Format):
+	case kvx.IsKvxFormat(opts.Format):
 		return reportTable(results, opts.IOStreams.Out, verbose, elapsed)
 	default:
 		// JSON / YAML
@@ -253,7 +253,7 @@ func ReportList(solutions []SolutionTests, opts *kvx.OutputOptions, includeBuilt
 	switch {
 	case kvx.IsQuietFormat(opts.Format):
 		return nil
-	case kvx.IsTableFormat(opts.Format):
+	case kvx.IsKvxFormat(opts.Format):
 		return reportListTable(entries, opts.IOStreams.Out)
 	default:
 		return opts.Write(entries)
