@@ -418,8 +418,9 @@ An incremental rollout was used. All read-only phases are now **complete**.
 5. ~~**Schema, Examples & Prompts**~~ — **✅ Complete.** Added `get_solution_schema` and `explain_kind` tools (Huma-based JSON Schema generation), `list_examples` and `get_example` tools, and 4 MCP prompts (`create_solution`, `debug_solution`, `add_resolver`, `add_action`).
 6. ~~**Testing**~~ — **✅ Complete.** Unit tests for all tool handlers, resources, server, and context. Integration tests for CLI commands and MCP protocol.
 7. ~~**Documentation, Tutorials & Examples**~~ — **✅ Complete.** Tutorial at `docs/tutorials/mcp-server-tutorial.md`, example configs at `examples/mcp/`.
-8. **Add `run_solution` with `--dry-run` default** — preview execution without side effects (deferred to future release)
-9. **Add full `run_solution`** behind explicit confirmation — the AI must surface the plan before executing (deferred to future release)
+8. ~~**Solution Developer Experience Enhancements**~~ — **✅ Complete.** Added 6 new tools (`evaluate_go_template`, `validate_expression`, `explain_lint_rule`, `scaffold_solution`, `preview_action`, `diff_solution`), 1 new resource (`solution://{name}/graph`), 1 new prompt (`compose_solution`), plus `resolver` filter on `preview_resolvers` and `verbose` mode on `run_solution_tests`.
+9. **Add `run_solution` with `--dry-run` default** — preview execution without side effects (deferred to future release)
+10. **Add full `run_solution`** behind explicit confirmation — the AI must surface the plan before executing (deferred to future release)
 
 This incremental approach lets us ship value at each step while managing the risk of AI-triggered side effects.
 

@@ -82,10 +82,43 @@ func WithServerContext(ctx context.Context) ServerOption {
 }
 
 const serverInstructions = `scafctl is a CLI tool for managing infrastructure solutions using CEL expressions, 
-Go templates, and a provider-based architecture. This MCP server exposes read-only tools 
-for inspecting solutions, validating configurations, evaluating CEL expressions, and 
-browsing the solution catalog. All tools are safe to call — they do not modify files, 
-create resources, or trigger side effects.
+Go templates, and a provider-based architecture. This MCP server exposes tools 
+for inspecting solutions, validating configurations, evaluating CEL expressions, 
+browsing the solution catalog, previewing resolver outputs, and running functional tests.
+
+Most tools are read-only and safe to call. The following tools execute solution code 
+and may have side effects depending on the providers used (e.g., exec, http):
+  - preview_resolvers: executes the resolver chain
+  - preview_action: builds action graph from live resolver data (executes resolvers, but NOT actions)
+  - run_solution_tests: runs functional test cases
+  - render_solution: executes resolvers to build graphs
+All other tools only inspect, validate, or list — they never modify files or trigger side effects.
+
+Solution Development Workflow:
+  For the best AI-assisted solution authoring experience, follow this loop:
+  1. Create/edit the solution YAML (or call scaffold_solution to generate a skeleton)
+  2. Call lint_solution to validate structure (call explain_lint_rule for help with findings)
+  3. Call validate_expression to check CEL/Go-template syntax in isolation
+  4. Call evaluate_go_template to test Go templates with sample data
+  5. Call preview_resolvers to verify resolver outputs (use resolver param to focus on one)
+  6. Call preview_action to dry-run the action graph and see materialized inputs
+  7. Call run_solution_tests to run functional tests (use verbose=true for full assertion details)
+  8. Call diff_solution to compare solution versions before committing changes
+  9. Call get_run_command to get the exact CLI command for the user
+
+Scaffolding a New Solution:
+  Call scaffold_solution with a name, description, and optional features/providers to 
+  generate a complete skeleton YAML with examples. This is the fastest way to start.
+
+Expression Debugging:
+  - validate_expression: syntax-check CEL expressions or Go templates without running them
+  - evaluate_go_template: render a Go template with sample data and see referenced fields
+  - evaluate_cel: evaluate a CEL expression with data context
+
+Composition Workflow:
+  For multi-file solutions, use the compose_solution prompt to guide splitting a solution 
+  into reusable partial YAML files. The solution://{name}/graph resource shows the resolver 
+  dependency graph for a composed (or standalone) solution.
 
 Provider Schema Reference:
   When creating or editing solution YAML (actions, resolvers), ALWAYS call 
@@ -242,6 +275,21 @@ func (s *Server) registerTools() {
 
 	// Auth tools (Phase 3)
 	s.registerAuthTools()
+
+	// Template & expression tools
+	s.registerTemplateTools()
+
+	// Lint explanation tools
+	s.registerLintTools()
+
+	// Scaffold tools
+	s.registerScaffoldTools()
+
+	// Action preview tools
+	s.registerActionTools()
+
+	// Diff tools
+	s.registerDiffTools()
 }
 
 // registerResources registers all MCP resources on the server.

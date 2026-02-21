@@ -398,3 +398,418 @@ spec:
 		assert.Contains(t, text, "params")
 	})
 }
+
+func TestHandlePreviewResolvers(t *testing.T) {
+	t.Run("missing path returns error", func(t *testing.T) {
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "preview_resolvers"
+		request.Params.Arguments = map[string]any{}
+
+		result, err := srv.handlePreviewResolvers(context.Background(), request)
+		require.NoError(t, err)
+		assert.True(t, result.IsError)
+	})
+
+	t.Run("nonexistent path returns error", func(t *testing.T) {
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "preview_resolvers"
+		request.Params.Arguments = map[string]any{
+			"path": "/nonexistent/solution.yaml",
+		}
+
+		result, err := srv.handlePreviewResolvers(context.Background(), request)
+		require.NoError(t, err)
+		assert.True(t, result.IsError)
+	})
+
+	t.Run("solution without resolvers returns empty", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		solFile := filepath.Join(tmpDir, "no-resolvers.yaml")
+		solContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: no-resolvers
+  version: 1.0.0
+spec:
+  workflow:
+    actions:
+      greet:
+        provider: exec
+        inputs:
+          command: "echo hello"
+`
+		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
+
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "preview_resolvers"
+		request.Params.Arguments = map[string]any{
+			"path": solFile,
+		}
+
+		result, err := srv.handlePreviewResolvers(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+		assert.Contains(t, parsed, "message")
+	})
+
+	t.Run("previews static resolvers", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		solFile := filepath.Join(tmpDir, "static-resolvers.yaml")
+		solContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: static-resolvers
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "Hello World"
+    count:
+      type: int
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: 42
+`
+		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
+
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "preview_resolvers"
+		request.Params.Arguments = map[string]any{
+			"path": solFile,
+		}
+
+		result, err := srv.handlePreviewResolvers(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+		assert.Equal(t, float64(2), parsed["total"])
+		assert.Equal(t, float64(2), parsed["resolved"])
+
+		resolvers := parsed["resolvers"].(map[string]any)
+		greeting := resolvers["greeting"].(map[string]any)
+		assert.Equal(t, "Hello World", greeting["value"])
+		assert.Equal(t, "resolved", greeting["status"])
+		assert.Equal(t, "static", greeting["provider"])
+	})
+
+	t.Run("invalid params type returns error", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		solFile := filepath.Join(tmpDir, "sol.yaml")
+		solContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test
+  version: 1.0.0
+spec:
+  resolvers:
+    x:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "ok"
+`
+		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
+
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "preview_resolvers"
+		request.Params.Arguments = map[string]any{
+			"path":   solFile,
+			"params": "not-an-object",
+		}
+
+		result, err := srv.handlePreviewResolvers(context.Background(), request)
+		require.NoError(t, err)
+		assert.True(t, result.IsError)
+	})
+}
+
+func TestHandleGetRunCommand(t *testing.T) {
+	t.Run("missing path returns error", func(t *testing.T) {
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "get_run_command"
+		request.Params.Arguments = map[string]any{}
+
+		result, err := srv.handleGetRunCommand(context.Background(), request)
+		require.NoError(t, err)
+		assert.True(t, result.IsError)
+	})
+
+	t.Run("solution with workflow returns run solution", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		solFile := filepath.Join(tmpDir, "with-workflow.yaml")
+		solContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: with-workflow
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "hello"
+  workflow:
+    actions:
+      greet:
+        provider: exec
+        inputs:
+          command: "echo hello"
+`
+		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
+
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "get_run_command"
+		request.Params.Arguments = map[string]any{
+			"path": solFile,
+		}
+
+		result, err := srv.handleGetRunCommand(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+		assert.Equal(t, "scafctl run solution", parsed["subcommand"])
+		assert.Equal(t, true, parsed["hasWorkflow"])
+		assert.Equal(t, true, parsed["hasResolvers"])
+		assert.Contains(t, parsed["command"], "run solution")
+	})
+
+	t.Run("solution without workflow returns run resolver", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		solFile := filepath.Join(tmpDir, "resolvers-only.yaml")
+		solContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: resolvers-only
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "hello"
+`
+		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
+
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "get_run_command"
+		request.Params.Arguments = map[string]any{
+			"path": solFile,
+		}
+
+		result, err := srv.handleGetRunCommand(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+		assert.Equal(t, "scafctl run resolver", parsed["subcommand"])
+		assert.Equal(t, false, parsed["hasWorkflow"])
+		assert.Contains(t, parsed["command"], "run resolver")
+	})
+
+	t.Run("solution with parameter resolvers includes flags", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		solFile := filepath.Join(tmpDir, "with-params.yaml")
+		solContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: with-params
+  version: 1.0.0
+spec:
+  resolvers:
+    env:
+      type: string
+      description: "Target environment"
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              prompt: "Enter environment"
+    region:
+      type: string
+      description: "AWS region"
+      example: "us-east-1"
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              prompt: "Enter region"
+`
+		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
+
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "get_run_command"
+		request.Params.Arguments = map[string]any{
+			"path": solFile,
+		}
+
+		result, err := srv.handleGetRunCommand(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+
+		// Check parameters are detected
+		params := parsed["parameters"].([]any)
+		assert.Len(t, params, 2)
+
+		// Check command includes -r flags
+		cmd := parsed["command"].(string)
+		assert.Contains(t, cmd, "-r env=")
+		assert.Contains(t, cmd, "-r region=us-east-1")
+	})
+
+	t.Run("empty solution returns error", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		solFile := filepath.Join(tmpDir, "empty.yaml")
+		solContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: empty
+  version: 1.0.0
+spec: {}
+`
+		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
+
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "get_run_command"
+		request.Params.Arguments = map[string]any{
+			"path": solFile,
+		}
+
+		result, err := srv.handleGetRunCommand(context.Background(), request)
+		require.NoError(t, err)
+		// Should return a result with error info (not IsError, but contains 'error' key)
+		assert.False(t, result.IsError)
+		text := result.Content[0].(mcp.TextContent).Text
+		assert.Contains(t, text, "error")
+	})
+}
+
+func TestHandleRunSolutionTests(t *testing.T) {
+	t.Run("missing path returns error", func(t *testing.T) {
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "run_solution_tests"
+		request.Params.Arguments = map[string]any{}
+
+		result, err := srv.handleRunSolutionTests(context.Background(), request)
+		require.NoError(t, err)
+		assert.True(t, result.IsError)
+	})
+
+	t.Run("nonexistent path returns error", func(t *testing.T) {
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "run_solution_tests"
+		request.Params.Arguments = map[string]any{
+			"path": "/nonexistent/path",
+		}
+
+		result, err := srv.handleRunSolutionTests(context.Background(), request)
+		require.NoError(t, err)
+		assert.True(t, result.IsError)
+	})
+
+	t.Run("directory with no tests returns empty results", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		solFile := filepath.Join(tmpDir, "no-tests.yaml")
+		solContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: no-tests
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "hello"
+`
+		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
+
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "run_solution_tests"
+		request.Params.Arguments = map[string]any{
+			"path":          solFile,
+			"skip_builtins": true,
+		}
+
+		result, err := srv.handleRunSolutionTests(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+		summary := parsed["summary"].(map[string]any)
+		assert.Equal(t, float64(0), summary["total"])
+	})
+}
