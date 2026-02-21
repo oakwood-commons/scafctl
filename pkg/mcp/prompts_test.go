@@ -181,3 +181,118 @@ func TestHandleAddActionPrompt(t *testing.T) {
 		assert.Contains(t, text, "perform an operation") // default purpose
 	})
 }
+
+func TestHandleUpdateSolutionPrompt(t *testing.T) {
+	srv, err := NewServer(WithServerVersion("test"))
+	require.NoError(t, err)
+
+	t.Run("with all arguments", func(t *testing.T) {
+		request := mcp.GetPromptRequest{}
+		request.Params.Name = "update_solution"
+		request.Params.Arguments = map[string]string{
+			"path":   "solutions/my-solution/solution.yaml",
+			"change": "add retry logic to the deploy action",
+		}
+
+		result, err := srv.handleUpdateSolutionPrompt(context.Background(), request)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.NotEmpty(t, result.Messages)
+
+		text := result.Messages[0].Content.(mcp.TextContent).Text
+		assert.Contains(t, text, "solutions/my-solution/solution.yaml")
+		assert.Contains(t, text, "add retry logic to the deploy action")
+		assert.Contains(t, text, "inspect_solution")
+		assert.Contains(t, text, "lint_solution")
+		assert.Contains(t, text, "preview_resolvers")
+		assert.Contains(t, text, "run_solution_tests")
+		assert.Contains(t, text, "get_run_command")
+		assert.Contains(t, text, "STEP 1")
+		assert.Contains(t, text, "STEP 4")
+	})
+}
+
+func TestHandleAddTestsPrompt(t *testing.T) {
+	srv, err := NewServer(WithServerVersion("test"))
+	require.NoError(t, err)
+
+	t.Run("with all arguments", func(t *testing.T) {
+		request := mcp.GetPromptRequest{}
+		request.Params.Name = "add_tests"
+		request.Params.Arguments = map[string]string{
+			"path":  "solutions/my-solution/solution.yaml",
+			"scope": "resolvers",
+		}
+
+		result, err := srv.handleAddTestsPrompt(context.Background(), request)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.NotEmpty(t, result.Messages)
+
+		text := result.Messages[0].Content.(mcp.TextContent).Text
+		assert.Contains(t, text, "solutions/my-solution/solution.yaml")
+		assert.Contains(t, text, "resolvers")
+		assert.Contains(t, text, "RESOLVER TESTING TIPS")
+		assert.Contains(t, text, "lint_solution")
+		assert.Contains(t, text, "run_solution_tests")
+		assert.Contains(t, text, "explain_kind")
+	})
+
+	t.Run("with default scope", func(t *testing.T) {
+		request := mcp.GetPromptRequest{}
+		request.Params.Name = "add_tests"
+		request.Params.Arguments = map[string]string{
+			"path": "test.yaml",
+		}
+
+		result, err := srv.handleAddTestsPrompt(context.Background(), request)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		text := result.Messages[0].Content.(mcp.TextContent).Text
+		assert.Contains(t, text, "COMPREHENSIVE TESTING TIPS") // default scope
+	})
+
+	t.Run("actions scope", func(t *testing.T) {
+		request := mcp.GetPromptRequest{}
+		request.Params.Name = "add_tests"
+		request.Params.Arguments = map[string]string{
+			"path":  "test.yaml",
+			"scope": "actions",
+		}
+
+		result, err := srv.handleAddTestsPrompt(context.Background(), request)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		text := result.Messages[0].Content.(mcp.TextContent).Text
+		assert.Contains(t, text, "ACTION TESTING TIPS")
+	})
+}
+
+func TestHandleComposeSolutionPrompt(t *testing.T) {
+	srv, err := NewServer(WithServerVersion("test"))
+	require.NoError(t, err)
+
+	t.Run("with all arguments", func(t *testing.T) {
+		request := mcp.GetPromptRequest{}
+		request.Params.Name = "compose_solution"
+		request.Params.Arguments = map[string]string{
+			"path": "solutions/my-composed",
+			"goal": "modular deploy pipeline with separate resolver and action bundles",
+		}
+
+		result, err := srv.handleComposeSolutionPrompt(context.Background(), request)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.NotEmpty(t, result.Messages)
+		assert.Equal(t, mcp.RoleUser, result.Messages[0].Role)
+
+		text := result.Messages[0].Content.(mcp.TextContent).Text
+		assert.Contains(t, text, "solutions/my-composed")
+		assert.Contains(t, text, "modular deploy pipeline")
+		assert.Contains(t, text, "compose")
+		assert.Contains(t, text, "partial")
+		assert.Contains(t, text, "deep-merge")
+	})
+}

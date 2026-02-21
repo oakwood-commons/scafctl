@@ -16,7 +16,7 @@ This tutorial walks you through setting up scafctl's Model Context Protocol (MCP
 
 The MCP server is a **local process** that translates between the AI agent's JSON-RPC protocol and scafctl's Go library functions. When an AI agent decides to use a tool (e.g., "lint this solution"), it sends a structured request to the MCP server, which calls the same code that the CLI commands use and returns structured JSON results.
 
-All tools exposed by the MCP server are **read-only** — they inspect, validate, evaluate, and list, but never create files, deploy resources, or modify state.
+Most tools exposed by the MCP server are **read-only** — they inspect, validate, evaluate, and list. A few tools (`preview_resolvers`, `run_solution_tests`, `render_solution`) execute solution code which may have side effects depending on the providers used (e.g., exec, http).
 
 ```
 AI Agent (Copilot, Claude, etc.)
@@ -590,18 +590,27 @@ The AI calls `get_example` with `path: "solutions/email-notifier/solution.yaml"`
 |------|-------------|
 | `auth_status` | Check auth handler status (configured, token validity, expiry). Auth handlers manage authentication identity — they are not solution providers |
 | `catalog_list` | List catalog entries filtered by kind (`solution`, `provider`, `auth-handler`) and name |
+| `diff_solution` | Compare two solution files structurally — shows added, removed, and changed resolvers, actions, metadata, and tests |
 | `evaluate_cel` | Evaluate a CEL expression with inline data, variables, or file-based context |
+| `evaluate_go_template` | Evaluate a Go template against provided data, returning rendered output and referenced fields |
 | `explain_kind` | Explain any registered kind (solution, resolver, action, etc.) — shows all fields, types, descriptions, and validation tags |
+| `explain_lint_rule` | Get a detailed explanation of a lint rule — description, severity, category, why it matters, how to fix it, and examples |
 | `get_example` | Read the contents of a scafctl example file. Use `list_examples` first to find available examples |
 | `get_provider_schema` | Get comprehensive provider info: input schema (with per-property required), output schemas, examples, CLI usage |
 | `get_solution_schema` | Get the full JSON Schema for the solution YAML file format. Optionally drill into a specific field (e.g., `metadata`, `spec`) |
+| `get_run_command` | Get the exact CLI command to run a solution (determines run solution vs run resolver) |
 | `inspect_solution` | Full solution metadata — resolvers, actions, tags, links, maintainers |
 | `lint_solution` | Validate a solution YAML file and return structured findings |
 | `list_cel_functions` | List CEL functions — custom scafctl functions, built-in, or by name |
 | `list_examples` | List available scafctl example files with category filtering (solutions, resolvers, actions, providers, etc.) |
 | `list_providers` | List all providers with capability and category filtering |
 | `list_solutions` | List solutions from the local catalog with name filtering |
+| `preview_action` | Preview what each action in a workflow would do WITHOUT executing — shows materialized inputs, deferred values, phases, and dependencies |
+| `preview_resolvers` | Execute a solution's resolver chain and return each resolver's resolved value. Use `resolver` param to focus on a single resolver and its dependencies |
 | `render_solution` | Render action, resolver, or action-deps graphs as structured JSON |
+| `run_solution_tests` | Execute functional tests defined in a solution and return structured results. Use `verbose=true` for full assertion details |
+| `scaffold_solution` | Generate a complete skeleton solution YAML from parameters — name, description, features, and providers |
+| `validate_expression` | Syntax-check a CEL expression or Go template without executing it — returns validity, errors, and referenced fields |
 
 ## 8. Available Resources
 
@@ -611,6 +620,7 @@ MCP resources are read-only data endpoints that AI agents can fetch on demand:
 |-------------|-------------|
 | `solution://{name}` | Raw YAML content of a solution |
 | `solution://{name}/schema` | JSON Schema for a solution's input parameters |
+| `solution://{name}/graph` | Resolver dependency graph with execution tiers, ASCII diagram, and Mermaid diagram |
 | `provider://{name}` | Detailed provider info: input schema (with required/optional per property), output schemas, examples, CLI usage |
 | `provider://reference` | Compact reference of all providers with required/optional inputs, capabilities, and descriptions |
 
@@ -624,6 +634,9 @@ MCP prompts are predefined templates that guide AI agents through common workflo
 | `debug_solution` | Systematic debugging workflow that inspects, lints, checks schema, and renders dependency graphs. | `path` |
 | `add_resolver` | Guide for adding a resolver using a specific provider. Fetches provider schema and resolver examples. | `provider` |
 | `add_action` | Guide for adding an action to a solution's workflow. Shows all action features (retry, forEach, when, etc.). | `provider` |
+| `update_solution` | Guide for modifying an existing solution. Follows inspect → edit → lint → preview → test workflow. | `path`, `change` |
+| `add_tests` | Guide for writing functional tests for a solution. Covers test schema, assertions, and test patterns. | `path` |
+| `compose_solution` | Guide for designing a multi-file composed solution with partial YAML files that get merged at build time. | `path`, `goal` |
 
 ### Using Prompts
 

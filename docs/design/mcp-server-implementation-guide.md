@@ -1572,9 +1572,12 @@ The `scafctl mcp serve` command's `Long` description (in `pkg/cmd/scafctl/mcp/se
 | 5 | `get_provider_schema` | `tools_provider.go` | Get JSON Schema for a provider's inputs | No | Phase 2 |
 | 6 | `list_cel_functions` | `tools_cel.go` | List available CEL functions | No | Phase 2 |
 | 7 | `evaluate_cel` | `tools_cel.go` | Evaluate a CEL expression with data | No | Phase 3 |
-| 8 | `render_solution` | `tools_solution.go` | Render action/resolver graph | Yes | Phase 3 |
+| 8 | `render_solution` | `tools_solution.go` | Render action/resolver graph (now embeds resolver data) | Yes | Phase 3 |
 | 9 | `auth_status` | `tools_auth.go` | Check auth provider status | Yes | Phase 3 |
 | 10 | `catalog_list` | `tools_catalog.go` | List catalog entries | No | Phase 3 |
+| 11 | `preview_resolvers` | `tools_solution.go` | Execute resolver chain and return per-resolver values | Yes | Phase 5 |
+| 12 | `run_solution_tests` | `tools_solution.go` | Execute functional tests and return structured results | Yes | Phase 5 |
+| 13 | `get_run_command` | `tools_solution.go` | Get exact CLI command to run a solution | Yes | Phase 5 |
 
 ### Complete File Map
 
@@ -1584,7 +1587,7 @@ pkg/mcp/
   context_test.go         # ✅ EXISTS
   server.go               # ✅ EXISTS — Server struct, construction, Serve(), Info()
   server_test.go          # ✅ EXISTS — Server construction tests
-  tools_solution.go       # ✅ EXISTS — list_solutions, inspect_solution, lint_solution, render_solution
+  tools_solution.go       # ✅ EXISTS — list_solutions, inspect_solution, lint_solution, render_solution, preview_resolvers, run_solution_tests, get_run_command
   tools_solution_test.go  # ✅ EXISTS
   tools_provider.go       # ✅ EXISTS — list_providers, get_provider_schema
   tools_provider_test.go  # ✅ EXISTS

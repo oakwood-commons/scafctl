@@ -3817,6 +3817,11 @@ func TestIntegration_MCPServeInfo(t *testing.T) {
 	assert.True(t, toolNames["explain_kind"], "expected explain_kind tool")
 	assert.True(t, toolNames["list_examples"], "expected list_examples tool")
 	assert.True(t, toolNames["get_example"], "expected get_example tool")
+
+	// Phase 5 tools (authoring workflow)
+	assert.True(t, toolNames["preview_resolvers"], "expected preview_resolvers tool")
+	assert.True(t, toolNames["run_solution_tests"], "expected run_solution_tests tool")
+	assert.True(t, toolNames["get_run_command"], "expected get_run_command tool")
 }
 
 func TestIntegration_MCPServeProtocol(t *testing.T) {
