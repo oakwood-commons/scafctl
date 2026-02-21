@@ -46,6 +46,15 @@ func (s *Server) registerResourceTemplates() {
 	)
 	s.mcpServer.AddResourceTemplate(providerTemplate, s.handleProviderResource)
 
+	// solution://{name}/graph — resolver dependency graph
+	graphTemplate := mcp.NewResourceTemplate(
+		"solution://{name}/graph",
+		"Solution Dependency Graph",
+		mcp.WithTemplateDescription("Returns the resolver dependency graph for a solution as JSON with execution tiers and an ASCII + Mermaid diagram. Use the solution's local file path, catalog name, or URL as the {name} parameter."),
+		mcp.WithTemplateMIMEType("application/json"),
+	)
+	s.mcpServer.AddResourceTemplate(graphTemplate, s.handleSolutionGraphResource)
+
 	// provider://reference — compact reference of all providers and their key properties
 	s.mcpServer.AddResource(
 		mcp.NewResource(
@@ -108,6 +117,48 @@ func (s *Server) handleSolutionSchemaResource(_ context.Context, request mcp.Rea
 			URI:      request.Params.URI,
 			MIMEType: "application/json",
 			Text:     string(schemaJSON),
+		},
+	}, nil
+}
+
+// handleSolutionGraphResource returns the resolver dependency graph for a solution.
+func (s *Server) handleSolutionGraphResource(_ context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+	name := extractNameFromURI(request.Params.URI, "solution://")
+	name = strings.TrimSuffix(name, "/graph")
+	if name == "" {
+		return nil, fmt.Errorf("solution name is required in URI (e.g., solution://path/to/solution.yaml/graph)")
+	}
+
+	sol, err := explain.LoadSolution(s.ctx, name)
+	if err != nil {
+		return nil, fmt.Errorf("loading solution %q: %w", name, err)
+	}
+
+	result, err := s.renderResolverGraph(sol, s.registry)
+	if err != nil {
+		return nil, fmt.Errorf("rendering resolver graph: %w", err)
+	}
+
+	// Extract the JSON text from the tool result
+	if result.IsError {
+		tc, ok := result.Content[0].(mcp.TextContent)
+		if !ok {
+			return nil, fmt.Errorf("building graph: unexpected content type")
+		}
+		return nil, fmt.Errorf("building graph: %s", tc.Text)
+	}
+
+	tc, ok := result.Content[0].(mcp.TextContent)
+	if !ok {
+		return nil, fmt.Errorf("unexpected content type in graph result")
+	}
+	graphJSON := tc.Text
+
+	return []mcp.ResourceContents{
+		mcp.TextResourceContents{
+			URI:      request.Params.URI,
+			MIMEType: "application/json",
+			Text:     graphJSON,
 		},
 	}, nil
 }

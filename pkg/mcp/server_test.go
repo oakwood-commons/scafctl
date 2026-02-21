@@ -116,6 +116,17 @@ func TestServerInfo(t *testing.T) {
 		assert.True(t, toolNames["explain_kind"])
 		assert.True(t, toolNames["list_examples"])
 		assert.True(t, toolNames["get_example"])
+		// Template & expression tools
+		assert.True(t, toolNames["evaluate_go_template"])
+		assert.True(t, toolNames["validate_expression"])
+		// Lint tools
+		assert.True(t, toolNames["explain_lint_rule"])
+		// Scaffold tools
+		assert.True(t, toolNames["scaffold_solution"])
+		// Action tools
+		assert.True(t, toolNames["preview_action"])
+		// Diff tools
+		assert.True(t, toolNames["diff_solution"])
 	})
 }
 
