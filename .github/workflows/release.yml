@@ -34,7 +34,7 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Install goreleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           install-only: true
       
