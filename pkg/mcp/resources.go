@@ -15,27 +15,28 @@ import (
 	getprovider "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get/provider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 )
 
 // registerResourceTemplates registers MCP resource templates on the server.
 func (s *Server) registerResourceTemplates() {
-	// solution://{name} — raw solution YAML content
+	// solution://{+name} — unified solution resource template using RFC 6570 reserved expansion
+	// so that file paths containing slashes (e.g., solution:///Users/.../file.yaml) match.
+	// Suffix-based routing dispatches to content, schema, graph, or tests handlers.
 	solutionTemplate := mcp.NewResourceTemplate(
-		"solution://{name}",
-		"Solution Content",
-		mcp.WithTemplateDescription("Returns the raw YAML content of a solution. Use the solution's local file path, catalog name, or URL as the {name} parameter."),
+		"solution://{+name}",
+		"Solution Resource",
+		mcp.WithTemplateDescription("Access solution content, schema, dependency graph, or tests. "+
+			"Use the solution's local file path, catalog name, or URL as the name. "+
+			"Append /schema for the input JSON Schema, /graph for the resolver dependency graph, "+
+			"or /tests for the functional test cases. "+
+			"Examples: solution://path/to/solution.yaml, solution://my-solution/schema, "+
+			"solution:///abs/path/solution.yaml/tests"),
 		mcp.WithTemplateMIMEType("application/yaml"),
+		mcp.WithTemplateIcons(resourceIcons["solution"]),
+		mcp.WithTemplateAnnotations([]mcp.Role{mcp.RoleUser, mcp.RoleAssistant}, 0.7, ""),
 	)
-	s.mcpServer.AddResourceTemplate(solutionTemplate, s.handleSolutionResource)
-
-	// solution://{name}/schema — solution input schema
-	schemaTemplate := mcp.NewResourceTemplate(
-		"solution://{name}/schema",
-		"Solution Input Schema",
-		mcp.WithTemplateDescription("Returns a JSON Schema describing the expected input parameters for a solution's resolvers. Use the solution's local file path, catalog name, or URL as the {name} parameter."),
-		mcp.WithTemplateMIMEType("application/json"),
-	)
-	s.mcpServer.AddResourceTemplate(schemaTemplate, s.handleSolutionSchemaResource)
+	s.mcpServer.AddResourceTemplate(solutionTemplate, s.routeSolutionResource)
 
 	// provider://{name} — provider details including schema, examples, capabilities
 	providerTemplate := mcp.NewResourceTemplate(
@@ -43,17 +44,10 @@ func (s *Server) registerResourceTemplates() {
 		"Provider Details",
 		mcp.WithTemplateDescription("Returns detailed information about a provider including its input schema (with required/optional properties, types, defaults, examples), output schemas per capability, YAML usage examples, CLI usage examples, and capabilities. Use the provider name (e.g., exec, http, static, file, cel, directory, parameter) as the {name} parameter."),
 		mcp.WithTemplateMIMEType("application/json"),
+		mcp.WithTemplateIcons(resourceIcons["provider"]),
+		mcp.WithTemplateAnnotations([]mcp.Role{mcp.RoleAssistant}, 0.6, ""),
 	)
 	s.mcpServer.AddResourceTemplate(providerTemplate, s.handleProviderResource)
-
-	// solution://{name}/graph — resolver dependency graph
-	graphTemplate := mcp.NewResourceTemplate(
-		"solution://{name}/graph",
-		"Solution Dependency Graph",
-		mcp.WithTemplateDescription("Returns the resolver dependency graph for a solution as JSON with execution tiers and an ASCII + Mermaid diagram. Use the solution's local file path, catalog name, or URL as the {name} parameter."),
-		mcp.WithTemplateMIMEType("application/json"),
-	)
-	s.mcpServer.AddResourceTemplate(graphTemplate, s.handleSolutionGraphResource)
 
 	// provider://reference — compact reference of all providers and their key properties
 	s.mcpServer.AddResource(
@@ -62,9 +56,29 @@ func (s *Server) registerResourceTemplates() {
 			"Provider Quick Reference",
 			mcp.WithResourceDescription("Returns a compact reference of all registered providers with their required inputs, capabilities, and descriptions. Use this to quickly understand what providers are available and what inputs they need, without calling get_provider_schema for each one individually."),
 			mcp.WithMIMEType("application/json"),
+			mcp.WithResourceIcons(resourceIcons["provider"]),
+			mcp.WithAnnotations([]mcp.Role{mcp.RoleAssistant}, 0.8, ""),
 		),
 		s.handleProviderReferenceResource,
 	)
+}
+
+// routeSolutionResource dispatches solution resource requests based on URI suffix.
+// This unified router avoids map iteration ordering issues when multiple templates
+// with {+name} (reserved expansion) could match the same URI.
+func (s *Server) routeSolutionResource(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+	name := extractNameFromURI(request.Params.URI, "solution://")
+
+	switch {
+	case strings.HasSuffix(name, "/tests"):
+		return s.handleSolutionTestsResource(ctx, request)
+	case strings.HasSuffix(name, "/schema"):
+		return s.handleSolutionSchemaResource(ctx, request)
+	case strings.HasSuffix(name, "/graph"):
+		return s.handleSolutionGraphResource(ctx, request)
+	default:
+		return s.handleSolutionResource(ctx, request)
+	}
 }
 
 // handleSolutionResource returns the raw YAML content of a solution.
@@ -271,6 +285,92 @@ func (s *Server) handleProviderReferenceResource(_ context.Context, request mcp.
 			URI:      request.Params.URI,
 			MIMEType: "application/json",
 			Text:     string(refJSON),
+		},
+	}, nil
+}
+
+// handleSolutionTestsResource returns the functional test cases defined in a solution.
+func (s *Server) handleSolutionTestsResource(_ context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+	name := extractNameFromURI(request.Params.URI, "solution://")
+	name = strings.TrimSuffix(name, "/tests")
+	if name == "" {
+		return nil, fmt.Errorf("solution name is required in URI (e.g., solution://path/to/solution.yaml/tests)")
+	}
+
+	st, err := soltesting.DiscoverFromFile(name)
+	if err != nil {
+		return nil, fmt.Errorf("discovering tests in %q: %w", name, err)
+	}
+
+	if len(st.Cases) == 0 {
+		result := map[string]any{
+			"solutionName": st.SolutionName,
+			"filePath":     st.FilePath,
+			"testCount":    0,
+			"cases":        map[string]any{},
+		}
+		resultJSON, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return nil, fmt.Errorf("marshaling test data: %w", err)
+		}
+		return []mcp.ResourceContents{
+			mcp.TextResourceContents{
+				URI:      request.Params.URI,
+				MIMEType: "application/json",
+				Text:     string(resultJSON),
+			},
+		}, nil
+	}
+
+	// Build structured test data
+	cases := make(map[string]any, len(st.Cases))
+	testNames := soltesting.SortedTestNames(*st)
+	for _, tName := range testNames {
+		tc := st.Cases[tName]
+		caseData := map[string]any{
+			"command": tc.Command,
+		}
+		if tc.Description != "" {
+			caseData["description"] = tc.Description
+		}
+		if len(tc.Args) > 0 {
+			caseData["args"] = tc.Args
+		}
+		if len(tc.Assertions) > 0 {
+			caseData["assertions"] = tc.Assertions
+		}
+		if len(tc.Tags) > 0 {
+			caseData["tags"] = tc.Tags
+		}
+		if tc.Skip {
+			caseData["skip"] = true
+			if tc.SkipReason != "" {
+				caseData["skipReason"] = tc.SkipReason
+			}
+		}
+		cases[tName] = caseData
+	}
+
+	result := map[string]any{
+		"solutionName": st.SolutionName,
+		"filePath":     st.FilePath,
+		"testCount":    len(st.Cases),
+		"cases":        cases,
+	}
+	if st.Config != nil {
+		result["config"] = st.Config
+	}
+
+	resultJSON, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshaling test data: %w", err)
+	}
+
+	return []mcp.ResourceContents{
+		mcp.TextResourceContents{
+			URI:      request.Params.URI,
+			MIMEType: "application/json",
+			Text:     string(resultJSON),
 		},
 	}, nil
 }

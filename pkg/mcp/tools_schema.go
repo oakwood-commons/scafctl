@@ -21,6 +21,7 @@ func (s *Server) registerSchemaTools() {
 	getSolutionSchemaTool := mcp.NewTool("get_solution_schema",
 		mcp.WithDescription("Get the full JSON Schema for a scafctl solution YAML file. This describes ALL valid fields, types, validation rules, and documentation for authoring a solution. Use this before creating or editing solution files."),
 		mcp.WithTitleAnnotation("Get Solution Schema"),
+		mcp.WithToolIcons(toolIcons["schema"]),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(true),
@@ -35,6 +36,7 @@ func (s *Server) registerSchemaTools() {
 	explainKindTool := mcp.NewTool("explain_kind",
 		mcp.WithDescription("Get detailed field documentation for a scafctl type (kind). Works like 'kubectl explain' — shows field names, types, descriptions, validation rules, and examples. Available kinds: solution, resolver, action, workflow, spec, provider, schema, retry."),
 		mcp.WithTitleAnnotation("Explain Kind"),
+		mcp.WithToolIcons(toolIcons["schema"]),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(true),
@@ -60,7 +62,9 @@ func (s *Server) handleGetSolutionSchema(_ context.Context, request mcp.CallTool
 
 	schemaBytes, err := schema.GenerateSolutionSchema()
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to generate solution schema: %v", err)), nil
+		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to generate solution schema: %v", err),
+			WithSuggestion("This is an internal error — please report it"),
+		), nil
 	}
 
 	return mcp.NewToolResultText(string(schemaBytes)), nil
@@ -70,12 +74,16 @@ func (s *Server) handleGetSolutionSchema(_ context.Context, request mcp.CallTool
 func (s *Server) handleGetSolutionSchemaField(field string) (*mcp.CallToolResult, error) {
 	schemaBytes, err := schema.GenerateSolutionSchema()
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to generate solution schema: %v", err)), nil
+		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to generate solution schema: %v", err),
+			WithSuggestion("This is an internal error — please report it"),
+		), nil
 	}
 
 	var doc map[string]any
 	if err := json.Unmarshal(schemaBytes, &doc); err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to parse schema: %v", err)), nil
+		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to parse schema: %v", err),
+			WithSuggestion("This is an internal error — please report it"),
+		), nil
 	}
 
 	// Navigate the schema following the field path
@@ -88,15 +96,24 @@ func (s *Server) handleGetSolutionSchemaField(field string) (*mcp.CallToolResult
 			if ref, ok := current["$ref"].(string); ok {
 				resolved := resolveRef(doc, ref)
 				if resolved == nil {
-					return mcp.NewToolResultError(fmt.Sprintf("could not resolve $ref %q for field %q", ref, field)), nil
+					return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("could not resolve $ref %q for field %q", ref, field),
+						WithField("field"),
+						WithSuggestion("The schema references a definition that doesn't exist"),
+					), nil
 				}
 				current = resolved
 				props, ok = current["properties"].(map[string]any)
 				if !ok {
-					return mcp.NewToolResultError(fmt.Sprintf("field %q is not an object type", field)), nil
+					return newStructuredError(ErrCodeInvalidInput, fmt.Sprintf("field %q is not an object type", field),
+						WithField("field"),
+						WithSuggestion("This field is a scalar or array type, not an object with sub-fields"),
+					), nil
 				}
 			} else {
-				return mcp.NewToolResultError(fmt.Sprintf("field %q is not an object type (no properties)", field)), nil
+				return newStructuredError(ErrCodeInvalidInput, fmt.Sprintf("field %q is not an object type (no properties)", field),
+					WithField("field"),
+					WithSuggestion("This field is a scalar or array type, not an object with sub-fields"),
+				), nil
 			}
 		}
 
@@ -107,7 +124,10 @@ func (s *Server) handleGetSolutionSchemaField(field string) (*mcp.CallToolResult
 				available = append(available, k)
 			}
 			sort.Strings(available)
-			return mcp.NewToolResultError(fmt.Sprintf("field %q not found. Available fields: %s", part, strings.Join(available, ", "))), nil
+			return newStructuredError(ErrCodeNotFound, fmt.Sprintf("field %q not found. Available fields: %s", part, strings.Join(available, ", ")),
+				WithField("field"),
+				WithSuggestion("Check the field name against the available fields listed above"),
+			), nil
 		}
 		current = fieldSchema
 	}
@@ -122,7 +142,9 @@ func (s *Server) handleGetSolutionSchemaField(field string) (*mcp.CallToolResult
 
 	result, err := json.MarshalIndent(current, "", "  ")
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to marshal field schema: %v", err)), nil
+		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to marshal field schema: %v", err),
+			WithSuggestion("This is an internal error — please report it"),
+		), nil
 	}
 
 	return mcp.NewToolResultText(string(result)), nil
@@ -151,7 +173,10 @@ func resolveRef(doc map[string]any, ref string) map[string]any {
 func (s *Server) handleExplainKind(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	kindName, err := request.RequireString("kind")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("kind"),
+			WithSuggestion("Use explain_kind with a kind name like 'Solution', 'Resolver', 'Action'"),
+		), nil
 	}
 	field := request.GetString("field", "")
 
@@ -159,13 +184,19 @@ func (s *Server) handleExplainKind(_ context.Context, request mcp.CallToolReques
 	if !ok {
 		names := schema.GetGlobalRegistry().Names()
 		sort.Strings(names)
-		return mcp.NewToolResultError(fmt.Sprintf("kind %q not found. Available kinds: %s", kindName, strings.Join(names, ", "))), nil
+		return newStructuredError(ErrCodeNotFound, fmt.Sprintf("kind %q not found. Available kinds: %s", kindName, strings.Join(names, ", ")),
+			WithField("kind"),
+			WithSuggestion("Check the kind name against the available kinds listed above"),
+		), nil
 	}
 
 	if field != "" {
 		fieldInfo, err := schema.IntrospectField(kindDef.TypeInstance, field)
 		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("field %q not found in %s: %v", field, kindName, err)), nil
+			return newStructuredError(ErrCodeNotFound, fmt.Sprintf("field %q not found in %s: %v", field, kindName, err),
+				WithField("field"),
+				WithSuggestion("Use explain_kind without a field to see all available fields"),
+			), nil
 		}
 		return mcp.NewToolResultJSON(fieldInfo)
 	}
@@ -173,7 +204,9 @@ func (s *Server) handleExplainKind(_ context.Context, request mcp.CallToolReques
 	// Return full type info
 	info := kindDef.TypeInfo
 	if info == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("no type info available for kind %q", kindName)), nil
+		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("no type info available for kind %q", kindName),
+			WithSuggestion("This is an internal error — please report it"),
+		), nil
 	}
 
 	// Build a structured response

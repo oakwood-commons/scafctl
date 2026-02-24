@@ -1206,9 +1206,19 @@ rm -rf deploy-app/
 
 ---
 
+## Using the Catalog with the MCP Server
+
+When using AI agents (VS Code Copilot, Claude, Cursor), the MCP server provides catalog tools:
+
+- **`catalog_list`** — List catalog entries filtered by kind and name
+- **`catalog_inspect`** — Get detailed metadata for a specific catalog artifact — version, kind, digest, created timestamp, and dependency list
+
+The AI can inspect catalog artifacts, look up solution versions, and help you manage your catalog.
+
 ## Next Steps
 
 - [Go Templates Tutorial](go-templates-tutorial.md) — Generate structured text with Go templates
 - [Snapshots Tutorial](snapshots-tutorial.md) — Capture and compare execution snapshots
 - [Functional Testing Tutorial](functional-testing.md) — Write and run automated tests
 - [Configuration Tutorial](config-tutorial.md) — Manage application configuration
+- [MCP Server Tutorial](mcp-server-tutorial.md) — AI-assisted catalog management

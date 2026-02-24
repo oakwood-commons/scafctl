@@ -117,6 +117,15 @@ spec:
 		require.NoError(t, json.Unmarshal([]byte(text), &explanation))
 		assert.Contains(t, explanation, "name")
 		assert.Equal(t, "test-inspect", explanation["name"])
+
+		// Verify resolvers include source positions
+		resolvers := explanation["resolvers"].([]any)
+		require.NotEmpty(t, resolvers)
+		firstResolver := resolvers[0].(map[string]any)
+		sourcePos := firstResolver["sourcePos"]
+		require.NotNil(t, sourcePos, "sourcePos should be present in inspection resolvers")
+		sp := sourcePos.(map[string]any)
+		assert.Greater(t, sp["line"], float64(0), "line should be > 0")
 	})
 }
 
@@ -290,7 +299,7 @@ func TestHandleRenderSolution(t *testing.T) {
 		}
 	})
 
-	t.Run("solution without workflow returns error for action graph", func(t *testing.T) {
+	t.Run("solution without workflow auto-falls back to resolver graph", func(t *testing.T) {
 		// Create a solution with only resolvers, no workflow
 		tmpDir := t.TempDir()
 		solFile := filepath.Join(tmpDir, "resolvers-only.yaml")
@@ -322,9 +331,12 @@ spec:
 
 		result, err := srv.handleRenderSolution(context.Background(), request)
 		require.NoError(t, err)
-		assert.True(t, result.IsError)
+		// Should auto-fallback to resolver graph instead of erroring
+		assert.False(t, result.IsError, "resolver-only solution should auto-fallback to resolver graph")
 		text := result.Content[0].(mcp.TextContent).Text
-		assert.Contains(t, text, "workflow")
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+		assert.Contains(t, parsed, "nodes")
 	})
 
 	t.Run("solution without resolvers returns error for resolver graph", func(t *testing.T) {
@@ -516,6 +528,13 @@ spec:
 		assert.Equal(t, "Hello World", greeting["value"])
 		assert.Equal(t, "resolved", greeting["status"])
 		assert.Equal(t, "static", greeting["provider"])
+
+		// Verify source position is included
+		sourcePos := greeting["sourcePos"]
+		require.NotNil(t, sourcePos, "sourcePos should be present for resolvers")
+		sp := sourcePos.(map[string]any)
+		assert.Greater(t, sp["line"], float64(0), "line should be > 0")
+		assert.Greater(t, sp["column"], float64(0), "column should be > 0")
 	})
 
 	t.Run("invalid params type returns error", func(t *testing.T) {
@@ -740,6 +759,51 @@ spec: {}
 		assert.False(t, result.IsError)
 		text := result.Content[0].(mcp.TextContent).Text
 		assert.Contains(t, text, "error")
+	})
+
+	t.Run("bare filename gets ./ prefix in command", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		solFile := filepath.Join(tmpDir, "my-solution.yaml")
+		solContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: my-solution
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "hello"
+`
+		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
+
+		// Change to tmpDir so bare filename resolves
+		origDir, _ := os.Getwd()
+		require.NoError(t, os.Chdir(tmpDir))
+		t.Cleanup(func() { os.Chdir(origDir) })
+
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "get_run_command"
+		request.Params.Arguments = map[string]any{
+			"path": "my-solution.yaml", // bare filename, no ./
+		}
+
+		result, err := srv.handleGetRunCommand(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+		cmd := parsed["command"].(string)
+		assert.Contains(t, cmd, "-f ./my-solution.yaml", "bare filenames should get ./ prefix")
 	})
 }
 

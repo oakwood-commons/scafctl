@@ -21,6 +21,7 @@ func (s *Server) registerCELTools() {
 	listCELFunctionsTool := mcp.NewTool("list_cel_functions",
 		mcp.WithDescription("List all available CEL (Common Expression Language) functions. Includes both scafctl custom functions (map.merge, json.unmarshal, guid.new, etc.) and standard CEL built-in functions."),
 		mcp.WithTitleAnnotation("List CEL Functions"),
+		mcp.WithToolIcons(toolIcons["cel"]),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(true),
@@ -41,10 +42,12 @@ func (s *Server) registerCELTools() {
 	evaluateCELTool := mcp.NewTool("evaluate_cel",
 		mcp.WithDescription("Evaluate a CEL (Common Expression Language) expression against provided data. Supports both inline data and file-based context. Data is accessible as '_' in the expression (e.g., '_.name'). Additional variables are accessible as top-level names."),
 		mcp.WithTitleAnnotation("Evaluate CEL"),
+		mcp.WithToolIcons(toolIcons["cel"]),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithRawOutputSchema(outputSchemaEvaluateCEL),
 		mcp.WithString("expression",
 			mcp.Required(),
 			mcp.Description("CEL expression to evaluate (e.g., '_.items.map(i, i.name)', '_.count > 5')"),
@@ -85,7 +88,11 @@ func (s *Server) handleListCELFunctions(_ context.Context, request mcp.CallToolR
 			}
 		}
 		if len(filtered) == 0 {
-			return mcp.NewToolResultError(fmt.Sprintf("no CEL function matching %q found", name)), nil
+			return newStructuredError(ErrCodeNotFound, fmt.Sprintf("no CEL function matching %q found", name),
+				WithField("name"),
+				WithSuggestion("Use list_cel_functions without a name filter to see all available functions"),
+				WithRelatedTools("list_cel_functions"),
+			), nil
 		}
 		functions = filtered
 	}
@@ -97,7 +104,10 @@ func (s *Server) handleListCELFunctions(_ context.Context, request mcp.CallToolR
 func (s *Server) handleEvaluateCEL(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	expression, err := request.RequireString("expression")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("expression"),
+			WithSuggestion("Provide a CEL expression string to evaluate"),
+		), nil
 	}
 
 	args := request.GetArguments()
@@ -108,18 +118,27 @@ func (s *Server) handleEvaluateCEL(_ context.Context, request mcp.CallToolReques
 	dataFile := request.GetString("data_file", "")
 
 	if hasData && data != nil && dataFile != "" {
-		return mcp.NewToolResultError("cannot specify both 'data' and 'data_file' — use one or the other"), nil
+		return newStructuredError(ErrCodeInvalidInput, "cannot specify both 'data' and 'data_file' — use one or the other",
+			WithField("data"),
+			WithSuggestion("Use 'data' for inline JSON data or 'data_file' for file-based data, not both"),
+		), nil
 	}
 
 	if dataFile != "" {
 		fileBytes, err := os.ReadFile(dataFile)
 		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("failed to read data file %q: %v", dataFile, err)), nil
+			return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("failed to read data file %q: %v", dataFile, err),
+				WithField("data_file"),
+				WithSuggestion("Check the file path exists and is readable"),
+			), nil
 		}
 
 		var fileData any
 		if err := yaml.Unmarshal(fileBytes, &fileData); err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("failed to parse data file %q: %v", dataFile, err)), nil
+			return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("failed to parse data file %q: %v", dataFile, err),
+				WithField("data_file"),
+				WithSuggestion("Ensure the file contains valid YAML or JSON"),
+			), nil
 		}
 		rootData = fileData
 	} else if hasData && data != nil {
@@ -132,14 +151,21 @@ func (s *Server) handleEvaluateCEL(_ context.Context, request mcp.CallToolReques
 		if varsMap, ok := vars.(map[string]any); ok {
 			additionalVars = varsMap
 		} else {
-			return mcp.NewToolResultError("'variables' must be an object (key-value pairs)"), nil
+			return newStructuredError(ErrCodeInvalidInput, "'variables' must be an object (key-value pairs)",
+				WithField("variables"),
+				WithSuggestion("Provide variables as a JSON object, e.g. {\"key\": \"value\"}"),
+			), nil
 		}
 	}
 
 	// Evaluate the expression
 	result, err := celexp.EvaluateExpression(s.ctx, expression, rootData, additionalVars)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("CEL evaluation failed: %v", err)), nil
+		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("CEL evaluation failed: %v", err),
+			WithField("expression"),
+			WithSuggestion("Use validate_expression to check CEL syntax first"),
+			WithRelatedTools("validate_expression", "list_cel_functions"),
+		), nil
 	}
 
 	return mcp.NewToolResultJSON(map[string]any{

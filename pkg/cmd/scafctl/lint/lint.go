@@ -21,17 +21,21 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/solutionprovider"
+	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/schema"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
+	"github.com/oakwood-commons/scafctl/pkg/solution/walk"
+	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
@@ -57,6 +61,9 @@ type Finding struct {
 	Message    string        `json:"message" yaml:"message"`
 	Suggestion string        `json:"suggestion,omitempty" yaml:"suggestion,omitempty"`
 	RuleName   string        `json:"ruleName" yaml:"ruleName"`
+	Line       int           `json:"line,omitempty" yaml:"line,omitempty"`
+	Column     int           `json:"column,omitempty" yaml:"column,omitempty"`
+	SourceFile string        `json:"sourceFile,omitempty" yaml:"sourceFile,omitempty"`
 }
 
 // Result contains all lint findings for a solution.
@@ -66,6 +73,9 @@ type Result struct {
 	ErrorCount int        `json:"errorCount" yaml:"errorCount"`
 	WarnCount  int        `json:"warnCount" yaml:"warnCount"`
 	InfoCount  int        `json:"infoCount" yaml:"infoCount"`
+
+	// sourceMap is used internally to enrich findings with source positions.
+	sourceMap *sourcepos.SourceMap `json:"-" yaml:"-"`
 }
 
 // Options holds command flags and settings.
@@ -141,16 +151,22 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 		SilenceUsage: true,
 	}
 
-	cmd.Flags().StringVarP(&options.File, "file", "f", "", "Solution file path (required)")
+	cmd.Flags().StringVarP(&options.File, "file", "f", "", "Solution file path (required for lint)")
 	cmd.Flags().StringVarP(&options.Output, "output", "o", "table", "Output format: table, json, yaml, quiet")
 	cmd.Flags().StringVar(&options.Severity, "severity", "info", "Minimum severity to report: error, warning, info")
 
-	_ = cmd.MarkFlagRequired("file")
+	lintPath := fmt.Sprintf("%s/%s", path, cmd.Use)
+	cmd.AddCommand(CommandRules(cliParams, ioStreams, lintPath))
+	cmd.AddCommand(CommandExplainRule(cliParams, ioStreams, lintPath))
 
 	return cmd
 }
 
 func runLint(ctx context.Context, opts *Options) error {
+	if opts.File == "" {
+		return fmt.Errorf("required flag \"file\" not set")
+	}
+
 	lgr := logger.FromContext(ctx)
 
 	// Set up getter with catalog resolver for bare name resolution
@@ -240,6 +256,9 @@ func Solution(sol *solution.Solution, filePath string, registry *provider.Regist
 		Findings: make([]*Finding, 0),
 	}
 
+	// Capture source map for enriching findings with line/column positions.
+	result.sourceMap = sol.SourceMap()
+
 	// Schema validation: validate the raw YAML against the generated JSON Schema.
 	// This catches unknown fields, type mismatches, pattern violations, etc.
 	lintSchema(filePath, result)
@@ -271,14 +290,32 @@ func Solution(sol *solution.Solution, filePath string, registry *provider.Regist
 }
 
 func (r *Result) addFinding(severity SeverityLevel, category, location, message, suggestion, rule string) {
-	r.Findings = append(r.Findings, &Finding{
+	f := &Finding{
 		Severity:   severity,
 		Category:   category,
 		Location:   location,
 		Message:    message,
 		Suggestion: suggestion,
 		RuleName:   rule,
-	})
+	}
+
+	// Enrich with source position if a source map is available.
+	// Lint paths omit the "spec." prefix (e.g. "resolvers.foo"), while the
+	// source map records full YAML paths (e.g. "spec.resolvers.foo").
+	// Try the raw location first, then the "spec." prefixed variant.
+	if r.sourceMap != nil {
+		if pos, ok := r.sourceMap.Get(location); ok {
+			f.Line = pos.Line
+			f.Column = pos.Column
+			f.SourceFile = pos.File
+		} else if pos, ok := r.sourceMap.Get("spec." + location); ok {
+			f.Line = pos.Line
+			f.Column = pos.Column
+			f.SourceFile = pos.File
+		}
+	}
+
+	r.Findings = append(r.Findings, f)
 }
 
 func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Registry, referencedResolvers map[string]bool) {
@@ -332,6 +369,69 @@ func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Re
 				}
 
 				lintExpressions(step.Inputs, stepLocation, result)
+			}
+		}
+
+		// Check for self-references in transform/validate phases.
+		// Using _.resolverName in these phases creates a circular dependency;
+		// the correct idiom is __self.
+		lintResolverSelfReferences(name, res, location, result)
+	}
+}
+
+// lintResolverSelfReferences checks whether a resolver's transform or validate
+// expressions reference their own name via _.resolverName instead of __self.
+func lintResolverSelfReferences(name string, res *resolver.Resolver, location string, result *Result) {
+	// Build the pattern to detect: _.resolverName (with optional field access)
+	selfPattern := "_." + name
+
+	checkInputs := func(inputs map[string]*spec.ValueRef, stepLoc string) {
+		for _, val := range inputs {
+			if val == nil {
+				continue
+			}
+			if val.Expr != nil && strings.Contains(string(*val.Expr), selfPattern) {
+				result.addFinding(SeverityError, "expression", stepLoc,
+					fmt.Sprintf("resolver '%s' references itself via _.%s in an expression; use __self instead", name, name),
+					fmt.Sprintf("Replace _.%s with __self in the expression to avoid a circular dependency", name),
+					"resolver-self-reference")
+			}
+			if val.Tmpl != nil && strings.Contains(string(*val.Tmpl), selfPattern) {
+				result.addFinding(SeverityError, "expression", stepLoc,
+					fmt.Sprintf("resolver '%s' references itself via _.%s in a template; use __self instead", name, name),
+					fmt.Sprintf("Replace _.%s with __self in the template to avoid a circular dependency", name),
+					"resolver-self-reference")
+			}
+		}
+	}
+
+	if res.Transform != nil {
+		for i, step := range res.Transform.With {
+			stepLoc := fmt.Sprintf("%s.transform.with[%d]", location, i)
+			checkInputs(step.Inputs, stepLoc)
+		}
+	}
+
+	if res.Validate != nil {
+		for i, step := range res.Validate.With {
+			stepLoc := fmt.Sprintf("%s.validate.with[%d]", location, i)
+			checkInputs(step.Inputs, stepLoc)
+			// Also check the message field which can be a ValueRef
+			if step.Message != nil {
+				if step.Message.Expr != nil && strings.Contains(string(*step.Message.Expr), selfPattern) {
+					msgLoc := fmt.Sprintf("%s.validate.with[%d].message", location, i)
+					result.addFinding(SeverityError, "expression", msgLoc,
+						fmt.Sprintf("resolver '%s' references itself via _.%s in message; use __self instead", name, name),
+						fmt.Sprintf("Replace _.%s with __self in the message expression", name),
+						"resolver-self-reference")
+				}
+				if step.Message.Tmpl != nil && strings.Contains(string(*step.Message.Tmpl), selfPattern) {
+					msgLoc := fmt.Sprintf("%s.validate.with[%d].message", location, i)
+					result.addFinding(SeverityError, "expression", msgLoc,
+						fmt.Sprintf("resolver '%s' references itself via _.%s in message template; use __self instead", name, name),
+						fmt.Sprintf("Replace _.%s with __self in the message template", name),
+						"resolver-self-reference")
+				}
 			}
 		}
 	}
@@ -559,53 +659,29 @@ func collectReferencedResolvers(sol *solution.Solution) map[string]bool {
 
 	resolverRefPattern := regexp.MustCompile(`_\.([a-zA-Z_][a-zA-Z0-9_]*)|__resolvers\.([a-zA-Z_][a-zA-Z0-9_]*)`)
 
-	for _, res := range sol.Spec.Resolvers {
-		if res.Resolve == nil {
-			continue
-		}
-		for _, step := range res.Resolve.With {
-			scanInputsForResolverRefs(step.Inputs, resolverRefPattern, refs)
-		}
-	}
-
-	if sol.Spec.Workflow != nil {
-		for _, act := range sol.Spec.Workflow.Actions {
-			scanInputsForResolverRefs(act.Inputs, resolverRefPattern, refs)
-			if act.When != nil && act.When.Expr != nil {
-				scanExpressionForResolverRefs(string(*act.When.Expr), resolverRefPattern, refs)
+	_ = walk.Walk(sol, &walk.Visitor{
+		ValueRef: func(_ string, vr *spec.ValueRef) error {
+			if vr.Resolver != nil {
+				refs[*vr.Resolver] = true
 			}
-		}
-		for _, act := range sol.Spec.Workflow.Finally {
-			scanInputsForResolverRefs(act.Inputs, resolverRefPattern, refs)
-			if act.When != nil && act.When.Expr != nil {
-				scanExpressionForResolverRefs(string(*act.When.Expr), resolverRefPattern, refs)
+			if vr.Expr != nil {
+				scanExpressionForResolverRefs(string(*vr.Expr), resolverRefPattern, refs)
 			}
-		}
-	}
+			if vr.Tmpl != nil {
+				scanExpressionForResolverRefs(string(*vr.Tmpl), resolverRefPattern, refs)
+			}
+			if vr.Literal != nil {
+				scanLiteralForResolverRefs(vr.Literal, resolverRefPattern, refs)
+			}
+			return nil
+		},
+		Condition: func(_, _ string, expr *celexp.Expression) error {
+			scanExpressionForResolverRefs(string(*expr), resolverRefPattern, refs)
+			return nil
+		},
+	})
 
 	return refs
-}
-
-func scanInputsForResolverRefs(inputs map[string]*spec.ValueRef, pattern *regexp.Regexp, refs map[string]bool) {
-	for _, val := range inputs {
-		if val == nil {
-			continue
-		}
-		// Direct resolver reference: rslvr: resolverName
-		if val.Resolver != nil {
-			refs[*val.Resolver] = true
-		}
-		if val.Expr != nil {
-			scanExpressionForResolverRefs(string(*val.Expr), pattern, refs)
-		}
-		if val.Tmpl != nil {
-			scanExpressionForResolverRefs(string(*val.Tmpl), pattern, refs)
-		}
-		// Recurse into literal map values to find nested rslvr/expr/tmpl references
-		if val.Literal != nil {
-			scanLiteralForResolverRefs(val.Literal, pattern, refs)
-		}
-	}
 }
 
 // scanLiteralForResolverRefs scans literal values (maps, slices) for nested
@@ -770,39 +846,24 @@ func lintSchema(filePath string, result *Result) {
 // Expression, template, and resolver-reference values are silently skipped
 // because they can only be validated at runtime.
 func lintProviderInputs(sol *solution.Solution, result *Result, registry *provider.Registry) {
-	// Lint resolver inputs
-	for name, res := range sol.Spec.Resolvers {
-		if res.Resolve != nil {
-			for i, step := range res.Resolve.With {
-				location := fmt.Sprintf("resolvers.%s.resolve.with[%d]", name, i)
-				lintProviderInputsForStep(step.Provider, step.Inputs, location, result, registry)
-			}
-		}
-		if res.Transform != nil {
-			for i, step := range res.Transform.With {
-				location := fmt.Sprintf("resolvers.%s.transform.with[%d]", name, i)
-				lintProviderInputsForStep(step.Provider, step.Inputs, location, result, registry)
-			}
-		}
-		if res.Validate != nil {
-			for i, step := range res.Validate.With {
-				location := fmt.Sprintf("resolvers.%s.validate.with[%d]", name, i)
-				lintProviderInputsForStep(step.Provider, step.Inputs, location, result, registry)
-			}
-		}
-	}
-
-	// Lint workflow action inputs
-	if sol.Spec.Workflow != nil {
-		for name, act := range sol.Spec.Workflow.Actions {
-			location := fmt.Sprintf("workflow.actions.%s", name)
-			lintProviderInputsForStep(act.Provider, act.Inputs, location, result, registry)
-		}
-		for name, act := range sol.Spec.Workflow.Finally {
-			location := fmt.Sprintf("workflow.finally.%s", name)
-			lintProviderInputsForStep(act.Provider, act.Inputs, location, result, registry)
-		}
-	}
+	_ = walk.Walk(sol, &walk.Visitor{
+		ProviderSource: func(path string, ps *resolver.ProviderSource) error {
+			lintProviderInputsForStep(ps.Provider, ps.Inputs, strings.TrimPrefix(path, "spec."), result, registry)
+			return nil
+		},
+		ProviderTransform: func(path string, pt *resolver.ProviderTransform) error {
+			lintProviderInputsForStep(pt.Provider, pt.Inputs, strings.TrimPrefix(path, "spec."), result, registry)
+			return nil
+		},
+		ProviderValidation: func(path string, pv *resolver.ProviderValidation) error {
+			lintProviderInputsForStep(pv.Provider, pv.Inputs, strings.TrimPrefix(path, "spec."), result, registry)
+			return nil
+		},
+		Action: func(path, _, _ string, act *action.Action) error {
+			lintProviderInputsForStep(act.Provider, act.Inputs, strings.TrimPrefix(path, "spec."), result, registry)
+			return nil
+		},
+	})
 }
 
 // lintProviderInputsForStep validates inputs for a single provider step.

@@ -1,0 +1,15 @@
+# OData / Microsoft Graph pagination
+# Follows @odata.nextLink URL from the response body
+# Common pattern for Microsoft Graph, Dynamics 365, and OData APIs
+name: odata-pagination
+provider: http
+inputs:
+  url: "https://graph.microsoft.com/v1.0/users?$top=100"
+  method: GET
+  authProvider: entra
+  scope: "https://graph.microsoft.com/.default"
+  pagination:
+    strategy: cursor
+    maxPages: 50
+    nextURLPath: "body['@odata.nextLink']"
+    collectPath: "body.value"

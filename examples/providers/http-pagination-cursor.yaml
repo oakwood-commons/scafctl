@@ -1,0 +1,14 @@
+# Cursor-based pagination (token extracted from response body)
+# Fetches all items by following the nextCursor token until null
+name: cursor-pagination
+provider: http
+inputs:
+  url: "https://api.example.com/items?limit=50"
+  method: GET
+  pagination:
+    strategy: cursor
+    maxPages: 10
+    nextTokenPath: "body.nextCursor"
+    nextTokenParam: "cursor"
+    collectPath: "body.items"
+    stopWhen: "size(body.items) == 0"

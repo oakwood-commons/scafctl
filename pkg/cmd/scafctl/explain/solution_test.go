@@ -16,6 +16,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -413,5 +414,97 @@ func TestSolutionOptions_Run_WithMock(t *testing.T) {
 		assert.Error(t, err)
 		assert.Nil(t, sol)
 		mockGetter.AssertExpectations(t)
+	})
+}
+
+func TestBuildSolutionExplanation_SourcePositions(t *testing.T) {
+	t.Run("includes source positions when source map is set", func(t *testing.T) {
+		ver := semver.MustParse("1.0.0")
+		sol := &solution.Solution{
+			APIVersion: "scafctl.io/v1",
+			Kind:       "Solution",
+			Metadata: solution.Metadata{
+				Name:    "pos-test",
+				Version: ver,
+			},
+			Spec: solution.Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"greeting": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{
+								{Provider: "static"},
+							},
+						},
+					},
+				},
+				Workflow: &action.Workflow{
+					Actions: map[string]*action.Action{
+						"deploy": {
+							Name:     "deploy",
+							Provider: "exec",
+						},
+					},
+					Finally: map[string]*action.Action{
+						"cleanup": {
+							Name:     "cleanup",
+							Provider: "exec",
+						},
+					},
+				},
+			},
+		}
+
+		// Set up source map with positions
+		sm := sourcepos.NewSourceMap()
+		sm.Set("spec.resolvers.greeting", sourcepos.Position{Line: 8, Column: 5, File: "solution.yaml"})
+		sm.Set("spec.workflow.actions.deploy", sourcepos.Position{Line: 15, Column: 7, File: "solution.yaml"})
+		sm.Set("spec.workflow.finally.cleanup", sourcepos.Position{Line: 22, Column: 7, File: "solution.yaml"})
+		sol.SetSourceMap(sm)
+
+		exp := BuildSolutionExplanation(sol)
+
+		// Verify resolver source position
+		require.Len(t, exp.Resolvers, 1)
+		require.NotNil(t, exp.Resolvers[0].SourcePos)
+		assert.Equal(t, 8, exp.Resolvers[0].SourcePos.Line)
+		assert.Equal(t, 5, exp.Resolvers[0].SourcePos.Column)
+		assert.Equal(t, "solution.yaml", exp.Resolvers[0].SourcePos.File)
+
+		// Verify action source position
+		require.Len(t, exp.Actions, 1)
+		require.NotNil(t, exp.Actions[0].SourcePos)
+		assert.Equal(t, 15, exp.Actions[0].SourcePos.Line)
+		assert.Equal(t, 7, exp.Actions[0].SourcePos.Column)
+
+		// Verify finally source position
+		require.Len(t, exp.Finally, 1)
+		require.NotNil(t, exp.Finally[0].SourcePos)
+		assert.Equal(t, 22, exp.Finally[0].SourcePos.Line)
+	})
+
+	t.Run("omits source positions when no source map", func(t *testing.T) {
+		sol := &solution.Solution{
+			APIVersion: "scafctl.io/v1",
+			Kind:       "Solution",
+			Metadata: solution.Metadata{
+				Name: "no-pos",
+			},
+			Spec: solution.Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"data": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{
+								{Provider: "static"},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		exp := BuildSolutionExplanation(sol)
+
+		require.Len(t, exp.Resolvers, 1)
+		assert.Nil(t, exp.Resolvers[0].SourcePos)
 	})
 }

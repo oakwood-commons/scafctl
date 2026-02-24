@@ -146,6 +146,55 @@ func NewHTTPProvider() *HTTPProvider {
 					schemahelper.WithExample(30),
 					schemahelper.WithMaximum(*ptrs.Float64Ptr(300.0))),
 				"retry": schemahelper.AnyProp("Retry configuration for transient failures"),
+				"pagination": schemahelper.ObjectProp("Pagination configuration for automatically following paginated API responses", []string{"strategy", "maxPages"}, map[string]*jsonschema.Schema{
+					"strategy": schemahelper.StringProp("Pagination strategy to use",
+						schemahelper.WithEnum("offset", "pageNumber", "cursor", "linkHeader", "custom"),
+						schemahelper.WithExample("cursor")),
+					"maxPages": schemahelper.IntProp("Maximum number of pages to fetch (safety limit to prevent infinite loops)",
+						schemahelper.WithExample(10),
+						schemahelper.WithMaximum(*ptrs.Float64Ptr(10000)),
+						schemahelper.WithDefault(100)),
+					"offsetParam": schemahelper.StringProp("Query parameter name for offset (offset strategy, default: 'offset')",
+						schemahelper.WithExample("offset"),
+						schemahelper.WithMaxLength(*ptrs.IntPtr(100))),
+					"limitParam": schemahelper.StringProp("Query parameter name for limit (offset strategy, default: 'limit')",
+						schemahelper.WithExample("limit"),
+						schemahelper.WithMaxLength(*ptrs.IntPtr(100))),
+					"limit": schemahelper.IntProp("Page size for offset strategy",
+						schemahelper.WithExample(50),
+						schemahelper.WithMaximum(*ptrs.Float64Ptr(10000))),
+					"pageParam": schemahelper.StringProp("Query parameter name for page number (pageNumber strategy, default: 'page')",
+						schemahelper.WithExample("page"),
+						schemahelper.WithMaxLength(*ptrs.IntPtr(100))),
+					"pageSizeParam": schemahelper.StringProp("Query parameter name for page size (pageNumber strategy, default: 'pageSize')",
+						schemahelper.WithExample("pageSize"),
+						schemahelper.WithMaxLength(*ptrs.IntPtr(100))),
+					"pageSize": schemahelper.IntProp("Page size for pageNumber strategy",
+						schemahelper.WithExample(50),
+						schemahelper.WithMaximum(*ptrs.Float64Ptr(10000))),
+					"startPage": schemahelper.IntProp("Starting page number for pageNumber strategy (default: 1)",
+						schemahelper.WithExample(1),
+						schemahelper.WithDefault(1)),
+					"nextTokenPath": schemahelper.StringProp("CEL expression to extract the next cursor/token from the response body (cursor strategy)",
+						schemahelper.WithExample("body.nextToken"),
+						schemahelper.WithMaxLength(*ptrs.IntPtr(500))),
+					"nextTokenParam": schemahelper.StringProp("Query parameter name to set the cursor/token on the next request (cursor strategy)",
+						schemahelper.WithExample("cursor"),
+						schemahelper.WithMaxLength(*ptrs.IntPtr(100))),
+					"nextURLPath": schemahelper.StringProp("CEL expression to extract the full next page URL from the response body (cursor strategy)",
+						schemahelper.WithExample("body['@odata.nextLink']"),
+						schemahelper.WithMaxLength(*ptrs.IntPtr(500))),
+					"nextURL": schemahelper.StringProp("CEL expression that returns the full URL for the next request; null/empty stops pagination (custom strategy)",
+						schemahelper.WithMaxLength(*ptrs.IntPtr(1000))),
+					"nextParams": schemahelper.StringProp("CEL expression that returns a map of query params for the next request (custom strategy)",
+						schemahelper.WithMaxLength(*ptrs.IntPtr(1000))),
+					"stopWhen": schemahelper.StringProp("CEL expression evaluated against each response; if true, pagination stops. Available variables: statusCode, body, rawBody, headers, page",
+						schemahelper.WithExample("size(body.items) == 0"),
+						schemahelper.WithMaxLength(*ptrs.IntPtr(500))),
+					"collectPath": schemahelper.StringProp("CEL expression to extract items from each page's response body. Items are accumulated across pages into a single array.",
+						schemahelper.WithExample("body.items"),
+						schemahelper.WithMaxLength(*ptrs.IntPtr(500))),
+				}),
 				"authProvider": schemahelper.StringProp("Authentication provider to use for this request (e.g., 'entra'). When set, the provider will automatically obtain and inject an access token.",
 					schemahelper.WithExample("entra"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(50))),
@@ -155,20 +204,26 @@ func NewHTTPProvider() *HTTPProvider {
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
-					"statusCode": schemahelper.IntProp("HTTP response status code", schemahelper.WithExample(200)),
-					"body":       schemahelper.StringProp("Response body as string"),
-					"headers":    schemahelper.AnyProp("Response headers"),
+					"statusCode": schemahelper.IntProp("HTTP response status code (last page when paginating)", schemahelper.WithExample(200)),
+					"body":       schemahelper.StringProp("Response body as string. When paginating with collectPath, contains the JSON array of all collected items"),
+					"headers":    schemahelper.AnyProp("Response headers (last page when paginating)"),
+					"pages":      schemahelper.IntProp("Number of pages fetched (only present when pagination is configured)", schemahelper.WithExample(3)),
+					"totalItems": schemahelper.IntProp("Total number of items collected across all pages (only present when pagination is configured)", schemahelper.WithExample(150)),
 				}),
 				provider.CapabilityTransform: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
-					"statusCode": schemahelper.IntProp("HTTP response status code", schemahelper.WithExample(200)),
-					"body":       schemahelper.StringProp("Response body as string"),
-					"headers":    schemahelper.AnyProp("Response headers"),
+					"statusCode": schemahelper.IntProp("HTTP response status code (last page when paginating)", schemahelper.WithExample(200)),
+					"body":       schemahelper.StringProp("Response body as string. When paginating with collectPath, contains the JSON array of all collected items"),
+					"headers":    schemahelper.AnyProp("Response headers (last page when paginating)"),
+					"pages":      schemahelper.IntProp("Number of pages fetched (only present when pagination is configured)", schemahelper.WithExample(3)),
+					"totalItems": schemahelper.IntProp("Total number of items collected across all pages (only present when pagination is configured)", schemahelper.WithExample(150)),
 				}),
 				provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
 					"success":    schemahelper.BoolProp("Whether the HTTP request completed successfully (2xx status)"),
-					"statusCode": schemahelper.IntProp("HTTP response status code", schemahelper.WithExample(200)),
-					"body":       schemahelper.StringProp("Response body as string"),
-					"headers":    schemahelper.AnyProp("Response headers"),
+					"statusCode": schemahelper.IntProp("HTTP response status code (last page when paginating)", schemahelper.WithExample(200)),
+					"body":       schemahelper.StringProp("Response body as string. When paginating with collectPath, contains the JSON array of all collected items"),
+					"headers":    schemahelper.AnyProp("Response headers (last page when paginating)"),
+					"pages":      schemahelper.IntProp("Number of pages fetched (only present when pagination is configured)", schemahelper.WithExample(3)),
+					"totalItems": schemahelper.IntProp("Total number of items collected across all pages (only present when pagination is configured)", schemahelper.WithExample(150)),
 				}),
 			},
 			Examples: []provider.Example{
@@ -224,6 +279,102 @@ inputs:
   method: GET
   authProvider: entra
   scope: "https://graph.microsoft.com/.default"`,
+				},
+				{
+					Name:        "Cursor-based pagination",
+					Description: "Fetch all pages from an API using cursor-based pagination with a token extracted from the response body",
+					YAML: `name: fetch-all-items
+provider: http
+inputs:
+  url: "https://api.example.com/items"
+  method: GET
+  pagination:
+    strategy: cursor
+    maxPages: 10
+    nextTokenPath: "body.nextCursor"
+    nextTokenParam: "cursor"
+    collectPath: "body.items"
+    stopWhen: "body.nextCursor == null"`,
+				},
+				{
+					Name:        "Cursor-based pagination with nextURL",
+					Description: "Fetch all pages from a Microsoft Graph or OData API where the response body contains the full next page URL",
+					YAML: `name: fetch-graph-users
+provider: http
+inputs:
+  url: "https://graph.microsoft.com/v1.0/users?$top=100"
+  method: GET
+  authProvider: entra
+  scope: "https://graph.microsoft.com/.default"
+  pagination:
+    strategy: cursor
+    maxPages: 50
+    nextURLPath: "body['@odata.nextLink']"
+    collectPath: "body.value"`,
+				},
+				{
+					Name:        "Link header pagination",
+					Description: "Follow RFC 8288 Link header pagination (used by GitHub, GitLab, and other REST APIs)",
+					YAML: `name: fetch-github-repos
+provider: http
+inputs:
+  url: "https://api.github.com/users/octocat/repos?per_page=30"
+  method: GET
+  headers:
+    Accept: "application/vnd.github+json"
+  pagination:
+    strategy: linkHeader
+    maxPages: 5
+    collectPath: "body"`,
+				},
+				{
+					Name:        "Offset-based pagination",
+					Description: "Paginate through results using offset and limit query parameters",
+					YAML: `name: fetch-all-records
+provider: http
+inputs:
+  url: "https://api.example.com/records"
+  method: GET
+  pagination:
+    strategy: offset
+    maxPages: 20
+    limit: 50
+    offsetParam: "offset"
+    limitParam: "limit"
+    collectPath: "body.records"
+    stopWhen: "size(body.records) < 50"`,
+				},
+				{
+					Name:        "Page number pagination",
+					Description: "Paginate through results using page number and page size query parameters",
+					YAML: `name: fetch-paginated
+provider: http
+inputs:
+  url: "https://api.example.com/products"
+  method: GET
+  pagination:
+    strategy: pageNumber
+    maxPages: 10
+    pageSize: 25
+    pageParam: "page"
+    pageSizeParam: "per_page"
+    collectPath: "body.products"
+    stopWhen: "size(body.products) == 0"`,
+				},
+				{
+					Name:        "Custom pagination with CEL",
+					Description: "Use custom CEL expressions for full control over pagination logic",
+					YAML: `name: fetch-custom-paginated
+provider: http
+inputs:
+  url: "https://api.example.com/search?q=test"
+  method: GET
+  pagination:
+    strategy: custom
+    maxPages: 10
+    nextURL: "has(body.links) && has(body.links.next) ? body.links.next : ''"
+    collectPath: "body.results"
+    stopWhen: "!has(body.links) || !has(body.links.next)"`,
 				},
 			},
 		},
@@ -358,7 +509,20 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 		}
 	}
 
-	return p.execute(ctx, httpc.NewClient(httpcCfg), method, urlStr, bodyContent, headers)
+	// Parse pagination configuration
+	pagCfg, err := parsePaginationConfig(inputs)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", ProviderName, err)
+	}
+
+	httpClient := httpc.NewClient(httpcCfg)
+
+	// If pagination is configured, use the paginated execution path
+	if pagCfg != nil {
+		return p.executePaginated(ctx, httpClient, method, urlStr, bodyContent, headers, pagCfg)
+	}
+
+	return p.execute(ctx, httpClient, method, urlStr, bodyContent, headers)
 }
 
 // buildHTTPClientConfig translates provider timeout and retry config into an httpc.ClientConfig.

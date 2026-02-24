@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -24,6 +25,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
+	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 )
 
@@ -33,10 +35,12 @@ func (s *Server) registerSolutionTools() {
 	listSolutionsTool := mcp.NewTool("list_solutions",
 		mcp.WithDescription("List available solutions from the local catalog. Returns solution names, versions, descriptions, and tags."),
 		mcp.WithTitleAnnotation("List Solutions"),
+		mcp.WithToolIcons(toolIcons["solution"]),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithRawOutputSchema(outputSchemaListSolutions),
 		mcp.WithString("name",
 			mcp.Description("Filter solutions by name (substring match). Omit to list all."),
 		),
@@ -47,10 +51,12 @@ func (s *Server) registerSolutionTools() {
 	inspectSolutionTool := mcp.NewTool("inspect_solution",
 		mcp.WithDescription("Get full solution metadata including resolvers, actions, tags, links, maintainers, and catalog info. Accepts a local file path, catalog name, or URL."),
 		mcp.WithTitleAnnotation("Inspect Solution"),
+		mcp.WithToolIcons(toolIcons["solution"]),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(true),
+		mcp.WithRawOutputSchema(outputSchemaInspectSolution),
 		mcp.WithString("path",
 			mcp.Required(),
 			mcp.Description("Path to solution file, catalog name, or URL"),
@@ -62,10 +68,12 @@ func (s *Server) registerSolutionTools() {
 	lintSolutionTool := mcp.NewTool("lint_solution",
 		mcp.WithDescription("Validate a solution file and return structured lint findings. Checks for unused resolvers, invalid dependencies, missing providers, invalid expressions, and more."),
 		mcp.WithTitleAnnotation("Lint Solution"),
+		mcp.WithToolIcons(toolIcons["lint"]),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithRawOutputSchema(outputSchemaLintResult),
 		mcp.WithString("file",
 			mcp.Required(),
 			mcp.Description("Path to the solution YAML file"),
@@ -81,10 +89,12 @@ func (s *Server) registerSolutionTools() {
 	renderSolutionTool := mcp.NewTool("render_solution",
 		mcp.WithDescription("Render a solution's action graph, resolver dependency graph, or action dependency graph. Executes resolvers and builds the graph as structured JSON. Use graph_type to select the visualization: 'action' (default) renders the executable action graph, 'resolver' shows resolver dependency phases, 'action-deps' shows action dependency visualization."),
 		mcp.WithTitleAnnotation("Render Solution"),
+		mcp.WithToolIcons(toolIcons["solution"]),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(true),
+		mcp.WithRawOutputSchema(outputSchemaRenderSolution),
 		mcp.WithString("path",
 			mcp.Required(),
 			mcp.Description("Path to solution file, catalog name, or URL"),
@@ -103,10 +113,12 @@ func (s *Server) registerSolutionTools() {
 	previewResolversTool := mcp.NewTool("preview_resolvers",
 		mcp.WithDescription("Execute a solution's resolver chain and return each resolver's resolved value. This is the 'does it actually work?' step between writing YAML and running the full solution. Shows the resolved value, type, and status for every resolver. Accepts optional input parameters for parameter-type resolvers. Use the 'resolver' parameter to debug a single resolver and see its resolve/transform/validate pipeline in detail."),
 		mcp.WithTitleAnnotation("Preview Resolvers"),
+		mcp.WithToolIcons(toolIcons["solution"]),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
 		mcp.WithOpenWorldHintAnnotation(true),
+		mcp.WithRawOutputSchema(outputSchemaPreviewResolvers),
 		mcp.WithString("path",
 			mcp.Required(),
 			mcp.Description("Path to solution file, catalog name, or URL"),
@@ -124,6 +136,7 @@ func (s *Server) registerSolutionTools() {
 	runSolutionTestsTool := mcp.NewTool("run_solution_tests",
 		mcp.WithDescription("Execute functional tests defined in a solution YAML file (spec.testing.cases) or in a tests/ directory. Returns structured test results with pass/fail status, duration, and assertion details. Closes the write → lint → test loop entirely within the AI session."),
 		mcp.WithTitleAnnotation("Run Solution Tests"),
+		mcp.WithToolIcons(toolIcons["testing"]),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
@@ -151,6 +164,7 @@ func (s *Server) registerSolutionTools() {
 	getRunCommandTool := mcp.NewTool("get_run_command",
 		mcp.WithDescription("Get the exact CLI command to run a solution. Analyzes the solution to determine whether to use 'run solution' or 'run resolver', identifies required parameter-type resolvers, and returns the complete command with correct flags. Eliminates guesswork about which command form to use."),
 		mcp.WithTitleAnnotation("Get Run Command"),
+		mcp.WithToolIcons(toolIcons["action"]),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(true),
@@ -169,18 +183,45 @@ func (s *Server) handleListSolutions(_ context.Context, request mcp.CallToolRequ
 
 	localCatalog, err := catalog.NewLocalCatalog(s.logger)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to initialize local catalog: %v", err)), nil
+		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to initialize local catalog: %v", err),
+			WithSuggestion("Check your catalog configuration with get_config"),
+			WithRelatedTools("get_config", "catalog_list"),
+		), nil
 	}
 
 	items, err := localCatalog.List(s.ctx, catalog.ArtifactKindSolution, name)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to list solutions: %v", err)), nil
+		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to list solutions: %v", err),
+			WithSuggestion("Check your catalog configuration with get_config"),
+			WithRelatedTools("get_config", "catalog_list"),
+		), nil
 	}
 
 	if len(items) == 0 {
+		// If catalog has no solutions, try discovering from workspace roots
+		workspaceFiles := s.discoverSolutionFiles(s.ctx)
+		if len(workspaceFiles) > 0 {
+			type discoveredSolution struct {
+				Path   string `json:"path"`
+				Source string `json:"source"`
+			}
+			discovered := make([]discoveredSolution, 0, len(workspaceFiles))
+			for _, f := range workspaceFiles {
+				discovered = append(discovered, discoveredSolution{
+					Path:   f,
+					Source: "workspace",
+				})
+			}
+			return mcp.NewToolResultJSON(map[string]any{
+				"solutions": discovered,
+				"message":   "No solutions in catalog, but found solution files in workspace roots",
+				"source":    "workspace_roots",
+			})
+		}
+
 		return mcp.NewToolResultJSON(map[string]any{
 			"solutions": []any{},
-			"message":   "No solutions found in local catalog",
+			"message":   "No solutions found in local catalog or workspace",
 		})
 	}
 
@@ -191,24 +232,43 @@ func (s *Server) handleListSolutions(_ context.Context, request mcp.CallToolRequ
 func (s *Server) handleInspectSolution(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	path, err := request.RequireString("path")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("path"),
+			WithSuggestion("Provide a solution file path, catalog name, or URL"),
+		), nil
 	}
 
 	sol, err := explain.LoadSolution(s.ctx, path)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("loading solution: %v", err)), nil
+		return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("loading solution: %v", err),
+			WithField("path"),
+			WithSuggestion("Check the file exists and contains valid YAML"),
+			WithRelatedTools("lint_solution"),
+		), nil
 	}
 
 	explanation := explain.BuildSolutionExplanation(sol)
 
-	return mcp.NewToolResultJSON(explanation)
+	result, err := mcp.NewToolResultJSON(explanation)
+	if err != nil {
+		return nil, err
+	}
+	result.Content = append(result.Content,
+		mcp.NewResourceLink("solution://"+path, "Solution YAML", "Raw solution YAML content", "application/x-yaml"),
+		mcp.NewResourceLink("solution://"+path+"/schema", "Input Schema", "Solution input schema", "application/schema+json"),
+		mcp.NewResourceLink("solution://"+path+"/graph", "Dependency Graph", "Resolver dependency graph", "application/json"),
+	)
+	return result, nil
 }
 
 // handleLintSolution validates a solution file and returns structured findings.
 func (s *Server) handleLintSolution(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	file, err := request.RequireString("file")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("file"),
+			WithSuggestion("Provide the path to a solution YAML file"),
+		), nil
 	}
 	severity := request.GetString("severity", "info")
 
@@ -217,7 +277,38 @@ func (s *Server) handleLintSolution(_ context.Context, request mcp.CallToolReque
 		prepare.WithRegistry(s.registry),
 	)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("loading solution: %v", err)), nil
+		errMsg := err.Error()
+
+		// Detect cycle errors and provide actionable __self guidance
+		if strings.Contains(errMsg, "cycle detected") {
+			return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("loading solution: %v", err),
+				WithField("file"),
+				WithSuggestion("Circular dependency detected in resolvers. "+
+					"If a resolver's validate or transform phase references its own resolved value "+
+					"(e.g., _.myResolver.statusCode), replace it with __self (e.g., __self.statusCode). "+
+					"Using _.resolverName in validate/transform creates a self-referencing cycle. "+
+					"__self is the correct way to reference the current resolver's value in transform and validate phases."),
+				WithRelatedTools("render_solution", "lint_solution"),
+			), nil
+		}
+
+		// Detect YAML unmarshal errors and provide structural guidance
+		if strings.Contains(errMsg, "cannot unmarshal") {
+			return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("loading solution: %v", err),
+				WithField("file"),
+				WithSuggestion("YAML structure error. Each phase (resolve, transform, validate) must use the 'with' key "+
+					"containing an array of provider entries. Example:\n"+
+					"  validate:\n    with:\n      - provider: validation\n        inputs:\n          expression: \"__self.size() > 0\"\n"+
+					"Do NOT use a bare array directly under the phase key."),
+				WithRelatedTools("explain_kind", "get_solution_schema"),
+			), nil
+		}
+
+		return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("loading solution: %v", err),
+			WithField("file"),
+			WithSuggestion("Check the file exists and contains valid solution YAML"),
+			WithRelatedTools("inspect_solution"),
+		), nil
 	}
 	if prepResult.Cleanup != nil {
 		defer prepResult.Cleanup()
@@ -238,7 +329,10 @@ func (s *Server) handleLintSolution(_ context.Context, request mcp.CallToolReque
 func (s *Server) handleRenderSolution(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	path, err := request.RequireString("path")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("path"),
+			WithSuggestion("Provide a solution file path, catalog name, or URL"),
+		), nil
 	}
 
 	graphType := request.GetString("graph_type", "action")
@@ -250,7 +344,10 @@ func (s *Server) handleRenderSolution(_ context.Context, request mcp.CallToolReq
 		if pm, ok := p.(map[string]any); ok {
 			params = pm
 		} else {
-			return mcp.NewToolResultError("'params' must be an object (key-value pairs)"), nil
+			return newStructuredError(ErrCodeInvalidInput, "'params' must be an object (key-value pairs)",
+				WithField("params"),
+				WithSuggestion("Provide params as a JSON object, e.g. {\"key\": \"value\"}"),
+			), nil
 		}
 	}
 
@@ -259,7 +356,35 @@ func (s *Server) handleRenderSolution(_ context.Context, request mcp.CallToolReq
 		prepare.WithRegistry(s.registry),
 	)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("loading solution: %v", err)), nil
+		errMsg := err.Error()
+
+		// Detect cycle errors and provide actionable __self guidance
+		if strings.Contains(errMsg, "cycle detected") {
+			return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("loading solution: %v", err),
+				WithField("path"),
+				WithSuggestion("Circular dependency detected in resolvers. "+
+					"If a resolver's validate or transform phase references its own resolved value "+
+					"(e.g., _.myResolver.statusCode), replace it with __self (e.g., __self.statusCode). "+
+					"__self is the correct way to reference the current resolver's value in transform and validate phases."),
+				WithRelatedTools("lint_solution", "inspect_solution"),
+			), nil
+		}
+
+		// Detect YAML unmarshal errors and provide structural guidance
+		if strings.Contains(errMsg, "cannot unmarshal") {
+			return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("loading solution: %v", err),
+				WithField("path"),
+				WithSuggestion("YAML structure error. Each phase (resolve, transform, validate) must use the 'with' key "+
+					"containing an array of provider entries. Do NOT use a bare array directly under the phase key."),
+				WithRelatedTools("explain_kind", "get_solution_schema"),
+			), nil
+		}
+
+		return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("loading solution: %v", err),
+			WithField("path"),
+			WithSuggestion("Check the file exists and contains valid solution YAML"),
+			WithRelatedTools("lint_solution", "inspect_solution"),
+		), nil
 	}
 	if prepResult.Cleanup != nil {
 		defer prepResult.Cleanup()
@@ -267,6 +392,14 @@ func (s *Server) handleRenderSolution(_ context.Context, request mcp.CallToolReq
 
 	sol := prepResult.Solution
 	reg := prepResult.Registry
+
+	// Auto-fallback: if the user requested the default "action" graph but the
+	// solution has no workflow, automatically switch to the resolver graph
+	// instead of returning an error. This is the most common mistake when an
+	// AI agent calls render_solution on a resolver-only solution.
+	if graphType == "action" && !sol.Spec.HasWorkflow() && sol.Spec.HasResolvers() {
+		graphType = "resolver"
+	}
 
 	switch graphType {
 	case "resolver":
@@ -281,7 +414,10 @@ func (s *Server) handleRenderSolution(_ context.Context, request mcp.CallToolReq
 // renderResolverGraph builds and returns the resolver dependency graph.
 func (s *Server) renderResolverGraph(sol *solution.Solution, reg *provider.Registry) (*mcp.CallToolResult, error) {
 	if !sol.Spec.HasResolvers() {
-		return mcp.NewToolResultError("solution does not define any resolvers"), nil
+		return newStructuredError(ErrCodeValidationError, "solution does not define any resolvers",
+			WithSuggestion("Add resolvers to the solution spec.resolvers section"),
+			WithRelatedTools("get_solution_schema", "scaffold_solution"),
+		), nil
 	}
 
 	resolvers := sol.Spec.ResolversToSlice()
@@ -293,7 +429,10 @@ func (s *Server) renderResolverGraph(sol *solution.Solution, reg *provider.Regis
 
 	graph, err := resolver.BuildGraph(resolvers, lookup)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to build resolver graph: %v", err)), nil
+		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to build resolver graph: %v", err),
+			WithSuggestion("Check resolver dependencies for cycles or missing references"),
+			WithRelatedTools("lint_solution", "extract_resolver_refs"),
+		), nil
 	}
 
 	// Also include ASCII diagram in the response for readability
@@ -314,19 +453,32 @@ func (s *Server) renderResolverGraph(sol *solution.Solution, reg *provider.Regis
 // renderActionGraph executes resolvers, builds, and renders the action graph.
 func (s *Server) renderActionGraph(sol *solution.Solution, params map[string]any) (*mcp.CallToolResult, error) { //nolint:unparam // error is always nil per MCP pattern
 	if !sol.Spec.HasWorkflow() {
-		return mcp.NewToolResultError("solution does not define a workflow"), nil
+		suggestion := "Add a spec.workflow section with actions to the solution"
+		if sol.Spec.HasResolvers() {
+			suggestion = "This solution only has resolvers and no workflow. Use graph_type='resolver' to render the resolver dependency graph, or add a spec.workflow section with actions"
+		}
+		return newStructuredError(ErrCodeValidationError, "solution does not define a workflow",
+			WithSuggestion(suggestion),
+			WithRelatedTools("get_solution_schema", "scaffold_solution"),
+		), nil
 	}
 
 	// Execute resolvers to get data for action inputs
 	resolverData, err := s.executeResolversForRender(sol, params)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("resolver execution failed: %v", err)), nil
+		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("resolver execution failed: %v", err),
+			WithSuggestion("Check resolver configuration with preview_resolvers"),
+			WithRelatedTools("preview_resolvers", "lint_solution"),
+		), nil
 	}
 
 	// Build the action graph
 	graph, err := action.BuildGraph(s.ctx, sol.Spec.Workflow, resolverData, nil)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to build action graph: %v", err)), nil
+		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to build action graph: %v", err),
+			WithSuggestion("Check action dependencies and provider configurations"),
+			WithRelatedTools("lint_solution"),
+		), nil
 	}
 
 	// Render as JSON
@@ -338,7 +490,9 @@ func (s *Server) renderActionGraph(sol *solution.Solution, params map[string]any
 
 	rendered, err := action.Render(graph, renderOpts)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to render action graph: %v", err)), nil
+		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to render action graph: %v", err),
+			WithSuggestion("This is an internal error — please report it"),
+		), nil
 	}
 
 	// Embed resolver data alongside the graph for a complete picture
@@ -359,19 +513,28 @@ func (s *Server) renderActionGraph(sol *solution.Solution, params map[string]any
 // renderActionDepsGraph builds and returns the action dependency visualization.
 func (s *Server) renderActionDepsGraph(sol *solution.Solution, params map[string]any) (*mcp.CallToolResult, error) {
 	if !sol.Spec.HasWorkflow() {
-		return mcp.NewToolResultError("solution does not define a workflow"), nil
+		return newStructuredError(ErrCodeValidationError, "solution does not define a workflow",
+			WithSuggestion("Add a spec.workflow section with actions to the solution"),
+			WithRelatedTools("get_solution_schema", "scaffold_solution"),
+		), nil
 	}
 
 	// Execute resolvers to get data for action inputs
 	resolverData, err := s.executeResolversForRender(sol, params)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("resolver execution failed: %v", err)), nil
+		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("resolver execution failed: %v", err),
+			WithSuggestion("Check resolver configuration with preview_resolvers"),
+			WithRelatedTools("preview_resolvers", "lint_solution"),
+		), nil
 	}
 
 	// Build the action graph
 	graph, err := action.BuildGraph(s.ctx, sol.Spec.Workflow, resolverData, nil)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to build action graph: %v", err)), nil
+		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to build action graph: %v", err),
+			WithSuggestion("Check action dependencies and provider configurations"),
+			WithRelatedTools("lint_solution"),
+		), nil
 	}
 
 	// Build visualization
@@ -429,7 +592,10 @@ func (s *Server) executeResolversForRender(sol *solution.Solution, params map[st
 func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	path, err := request.RequireString("path")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("path"),
+			WithSuggestion("Provide the path to a solution file"),
+		), nil
 	}
 
 	// Parse params
@@ -439,7 +605,10 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 		if pm, ok := p.(map[string]any); ok {
 			params = pm
 		} else {
-			return mcp.NewToolResultError("'params' must be an object (key-value pairs)"), nil
+			return newStructuredError(ErrCodeInvalidInput, "'params' must be an object (key-value pairs)",
+				WithField("params"),
+				WithSuggestion("Pass params as a JSON object, e.g. {\"key\": \"value\"}"),
+			), nil
 		}
 	}
 
@@ -448,7 +617,29 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 		prepare.WithRegistry(s.registry),
 	)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("loading solution: %v", err)), nil
+		errMsg := err.Error()
+
+		if strings.Contains(errMsg, "cycle detected") {
+			return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("loading solution: %v", err),
+				WithField("path"),
+				WithSuggestion("Circular dependency detected. In validate/transform phases, use __self instead of _.resolverName to reference the resolver's own value."),
+				WithRelatedTools("lint_solution"),
+			), nil
+		}
+
+		if strings.Contains(errMsg, "cannot unmarshal") {
+			return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("loading solution: %v", err),
+				WithField("path"),
+				WithSuggestion("YAML structure error. Each phase (resolve, transform, validate) must use the 'with' key containing an array. Do NOT use a bare array."),
+				WithRelatedTools("explain_kind", "get_solution_schema"),
+			), nil
+		}
+
+		return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("loading solution: %v", err),
+			WithField("path"),
+			WithSuggestion("Check that the path points to a valid solution file"),
+			WithRelatedTools("lint_solution"),
+		), nil
 	}
 	if prepResult.Cleanup != nil {
 		defer prepResult.Cleanup()
@@ -464,10 +655,36 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 		})
 	}
 
+	// Elicit missing parameter values: find parameter-type resolvers without provided values
+	if params == nil {
+		params = make(map[string]any)
+	}
+	var missingParamNames []string
+	missingDescriptions := make(map[string]string)
+	for name, rslvr := range sol.Spec.Resolvers {
+		if rslvr.Resolve != nil && len(rslvr.Resolve.With) > 0 && rslvr.Resolve.With[0].Provider == "parameter" {
+			if _, provided := params[name]; !provided {
+				missingParamNames = append(missingParamNames, name)
+				if rslvr.Description != "" {
+					missingDescriptions[name] = rslvr.Description
+				}
+			}
+		}
+	}
+	if len(missingParamNames) > 0 {
+		sort.Strings(missingParamNames)
+		for k, v := range s.elicitMissingParams(s.ctx, missingParamNames, missingDescriptions) {
+			params[k] = v
+		}
+	}
+
 	if reg == nil {
 		reg, err = builtin.DefaultRegistry(s.ctx)
 		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("failed to create provider registry: %v", err)), nil
+			return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to create provider registry: %v", err),
+				WithSuggestion("Check provider configurations"),
+				WithRelatedTools("list_providers"),
+			), nil
 		}
 	}
 
@@ -475,10 +692,21 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 	// Check if we're debugging a single resolver
 	resolverFilter := request.GetString("resolver", "")
 
+	// Send progress notifications during execution
+	progress := newProgressReporter(s, request)
+	progress.setTotal(3)
+	progress.report(s.ctx, 1, "Loading and validating solution")
+
+	progress.report(s.ctx, 2, fmt.Sprintf("Executing %d resolvers", len(sol.Spec.Resolvers)))
 	result, err := run.ExecuteResolvers(s.ctx, sol, params, reg, cfg)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("resolver execution failed: %v", err)), nil
+		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("resolver execution failed: %v", err),
+			WithSuggestion("Check resolver configuration and dependencies"),
+			WithRelatedTools("lint_solution", "inspect_solution"),
+		), nil
 	}
+
+	progress.report(s.ctx, 3, "Building response")
 
 	// Build structured response with per-resolver details
 	type resolverPhaseInfo struct {
@@ -497,6 +725,7 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 		Transform   []resolverPhaseInfo `json:"transform,omitempty"`
 		Validate    []resolverPhaseInfo `json:"validate,omitempty"`
 		When        string              `json:"when,omitempty"`
+		SourcePos   *sourcepos.Position `json:"sourcePos,omitempty"`
 	}
 
 	resolvers := make(map[string]resolverPreview, len(sol.Spec.Resolvers))
@@ -512,6 +741,13 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 		preview := resolverPreview{
 			Description: rslvr.Description,
 			Type:        string(rslvr.Type),
+		}
+
+		// Enrich with source position if available
+		if sm := sol.SourceMap(); sm != nil {
+			if pos, ok := sm.Get("spec.resolvers." + name); ok {
+				preview.SourcePos = &pos
+			}
 		}
 
 		// Get the primary provider name
@@ -569,7 +805,10 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 				availableNames = append(availableNames, name)
 			}
 			sort.Strings(availableNames)
-			return mcp.NewToolResultError(fmt.Sprintf("resolver %q not found. Available resolvers: %v", resolverFilter, availableNames)), nil
+			return newStructuredError(ErrCodeNotFound, fmt.Sprintf("resolver %q not found. Available resolvers: %v", resolverFilter, availableNames),
+				WithField("resolver"),
+				WithSuggestion(fmt.Sprintf("Use one of the available resolver names: %v", availableNames)),
+			), nil
 		}
 	}
 
@@ -583,14 +822,25 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 		response["total"] = len(resolvers)
 	}
 
-	return mcp.NewToolResultJSON(response)
+	result2, err := mcp.NewToolResultJSON(response)
+	if err != nil {
+		return nil, err
+	}
+	result2.Content = append(result2.Content,
+		mcp.NewResourceLink("solution://"+path, "Solution YAML", "Raw solution YAML content", "application/x-yaml"),
+		mcp.NewResourceLink("solution://"+path+"/graph", "Dependency Graph", "Resolver dependency graph", "application/json"),
+	)
+	return result2, nil
 }
 
 // handleRunSolutionTests executes functional tests for a solution.
 func (s *Server) handleRunSolutionTests(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	path, err := request.RequireString("path")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("path"),
+			WithSuggestion("Provide the path to a solution or directory containing solutions"),
+		), nil
 	}
 
 	filter := request.GetString("filter", "")
@@ -604,13 +854,19 @@ func (s *Server) handleRunSolutionTests(_ context.Context, request mcp.CallToolR
 
 	// Verify the path exists
 	if _, err := os.Stat(path); err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("path not found: %v", err)), nil
+		return newStructuredError(ErrCodeNotFound, fmt.Sprintf("path not found: %v", err),
+			WithField("path"),
+			WithSuggestion("Check the path exists and is accessible"),
+		), nil
 	}
 
 	// Discover solutions with tests
 	solutions, err := soltesting.DiscoverSolutions(path)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("test discovery failed: %v", err)), nil
+		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("test discovery failed: %v", err),
+			WithField("path"),
+			WithSuggestion("Ensure the path contains valid solutions with test configurations"),
+		), nil
 	}
 
 	if len(solutions) == 0 {
@@ -636,7 +892,9 @@ func (s *Server) handleRunSolutionTests(_ context.Context, request mcp.CallToolR
 	// Resolve binary path for subprocess execution
 	binaryPath, err := os.Executable()
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to resolve executable path: %v", err)), nil
+		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to resolve executable path: %v", err),
+			WithSuggestion("Ensure the scafctl binary is accessible"),
+		), nil
 	}
 
 	// Build runner
@@ -656,13 +914,23 @@ func (s *Server) handleRunSolutionTests(_ context.Context, request mcp.CallToolR
 		runner.Filter.Tags = []string{tag}
 	}
 
+	// Send progress notifications during test execution
+	progress := newProgressReporter(s, request)
+	progress.setTotal(float64(len(solutions) + 2))
+	progress.report(s.ctx, 1, fmt.Sprintf("Discovered %d solution(s) with tests", len(solutions)))
+
 	// Execute tests
 	start := time.Now()
+	progress.report(s.ctx, 2, "Running tests...")
 	results, err := runner.Run(s.ctx, solutions)
 	elapsed := time.Since(start)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("test execution failed: %v", err)), nil
+		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("test execution failed: %v", err),
+			WithSuggestion("Review test configurations and solution definitions"),
+			WithRelatedTools("lint_solution", "inspect_solution"),
+		), nil
 	}
+	progress.report(s.ctx, float64(len(solutions)+2), fmt.Sprintf("Tests complete (%s)", elapsed.String()))
 
 	// Build structured response
 	summary := soltesting.Summarize(results)
@@ -711,12 +979,19 @@ func (s *Server) handleRunSolutionTests(_ context.Context, request mcp.CallToolR
 func (s *Server) handleGetRunCommand(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	path, err := request.RequireString("path")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("path"),
+			WithSuggestion("Provide the path to a solution file"),
+		), nil
 	}
 
 	sol, err := explain.LoadSolution(s.ctx, path)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("loading solution: %v", err)), nil
+		return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("loading solution: %v", err),
+			WithField("path"),
+			WithSuggestion("Check that the path points to a valid solution file"),
+			WithRelatedTools("lint_solution"),
+		), nil
 	}
 
 	hasResolvers := sol.Spec.HasResolvers()
@@ -774,8 +1049,14 @@ func (s *Server) handleGetRunCommand(_ context.Context, request mcp.CallToolRequ
 		}
 	}
 
-	// Build the full command string
-	fullCommand := fmt.Sprintf("%s -f %s", command, path)
+	// Build the full command string.
+	// Ensure relative paths have "./" prefix so VS Code chat does not
+	// auto-linkify bare filenames into content-reference URLs.
+	cmdPath := path
+	if !strings.HasPrefix(cmdPath, "/") && !strings.HasPrefix(cmdPath, "./") && !strings.HasPrefix(cmdPath, "../") && !strings.Contains(cmdPath, "://") {
+		cmdPath = "./" + cmdPath
+	}
+	fullCommand := fmt.Sprintf("%s -f %s", command, cmdPath)
 	for _, p := range parameters {
 		exampleVal := "<value>"
 		if p.Example != nil {
@@ -784,7 +1065,11 @@ func (s *Server) handleGetRunCommand(_ context.Context, request mcp.CallToolRequ
 		fullCommand += fmt.Sprintf(" -r %s=%s", p.Name, exampleVal)
 	}
 
-	return mcp.NewToolResultJSON(map[string]any{
+	// Build result with content annotations.
+	// The command is primarily for the assistant, the explanation is for both.
+	assistantPriority := 1.0
+	userPriority := 0.8
+	result, err := mcp.NewToolResultJSON(map[string]any{
 		"command":      fullCommand,
 		"subcommand":   command,
 		"explanation":  explanation,
@@ -792,6 +1077,35 @@ func (s *Server) handleGetRunCommand(_ context.Context, request mcp.CallToolRequ
 		"hasWorkflow":  hasWorkflow,
 		"hasResolvers": hasResolvers,
 	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Add annotated text content: command for assistant, explanation for user
+	result.Content = append(result.Content,
+		mcp.TextContent{
+			Annotated: mcp.Annotated{
+				Annotations: &mcp.Annotations{
+					Audience: []mcp.Role{mcp.RoleAssistant},
+					Priority: &assistantPriority,
+				},
+			},
+			Type: "text",
+			Text: fmt.Sprintf("Run command: %s", fullCommand),
+		},
+		mcp.TextContent{
+			Annotated: mcp.Annotated{
+				Annotations: &mcp.Annotations{
+					Audience: []mcp.Role{mcp.RoleUser},
+					Priority: &userPriority,
+				},
+			},
+			Type: "text",
+			Text: fmt.Sprintf("Explanation: %s", explanation),
+		},
+	)
+
+	return result, nil
 }
 
 // isResolverDependency checks if candidateName is a direct or transitive dependency
