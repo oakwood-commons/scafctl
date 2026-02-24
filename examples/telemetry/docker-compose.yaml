@@ -1,0 +1,42 @@
+# docker-compose.yaml — local observability stack for scafctl development.
+#
+# Services:
+#   jaeger          — all-in-one Jaeger backend + UI  (http://localhost:16686)
+#   otel-collector  — OTel Collector; receives OTLP from scafctl on :4317 / :4318
+#
+# Quick start:
+#   docker compose up
+#   scafctl run --otel-endpoint localhost:4317 --otel-insecure <solution.yaml>
+#   open http://localhost:16686
+
+services:
+  # ---------------------------------------------------------------------------
+  # Jaeger all-in-one
+  # Stores traces in-memory and exposes a web UI.
+  # ---------------------------------------------------------------------------
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    environment:
+      # Accept OTLP gRPC on the internal network (collector → jaeger).
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "14250:14250"   # Jaeger native gRPC (optional, for direct export)
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # OpenTelemetry Collector
+  # Acts as the single ingest point so scafctl only needs one endpoint.
+  # ---------------------------------------------------------------------------
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.105.0
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./collector-config.yaml:/etc/otel/config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC  (used by --otel-endpoint)
+      - "4318:4318"   # OTLP HTTP
+      - "8888:8888"   # Collector internal Prometheus metrics
+    depends_on:
+      - jaeger
+    restart: unless-stopped

@@ -15,6 +15,10 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/telemetry"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // RegistryInterface defines the interface for provider registries
@@ -205,12 +209,20 @@ func OptionsFromAppConfig(cfg ConfigInput) []ExecutorOption {
 func (e *Executor) Execute(ctx context.Context, resolvers []*Resolver, params map[string]any) (context.Context, error) {
 	lgr := logger.FromContext(ctx)
 
+	// Span for the full resolver pass so per-resolver child spans nest under it.
+	ctx, span := telemetry.Tracer(telemetry.TracerResolver).Start(ctx, "resolver.Execute",
+		trace.WithAttributes(attribute.Int("resolver.count", len(resolvers))),
+	)
+	defer span.End()
+
 	// Create descriptor lookup function from registry
 	lookup := e.registry.DescriptorLookup()
 
 	// Build execution phases
 	phases, err := BuildPhases(resolvers, lookup)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return ctx, fmt.Errorf("failed to build execution phases: %w", err)
 	}
 
@@ -261,7 +273,10 @@ func (e *Executor) Execute(ctx context.Context, resolvers []*Resolver, params ma
 		phaseErr := e.executePhase(ctx, phase, &failedResolvers, depsMap, aggregatedError)
 		if phaseErr != nil {
 			if !e.validateAll {
-				return ctx, fmt.Errorf("phase %d failed: %w", phase.Phase, phaseErr)
+				phaseWrapErr := fmt.Errorf("phase %d failed: %w", phase.Phase, phaseErr)
+				span.RecordError(phaseWrapErr)
+				span.SetStatus(codes.Error, phaseWrapErr.Error())
+				return ctx, phaseWrapErr
 			}
 			// In validate-all mode, continue to next phase
 			lgr.V(1).Info("phase had errors but continuing in validate-all mode",
@@ -273,6 +288,8 @@ func (e *Executor) Execute(ctx context.Context, resolvers []*Resolver, params ma
 
 	// In validate-all mode, return aggregated error if there were any failures
 	if e.validateAll && aggregatedError != nil && aggregatedError.HasErrors() {
+		span.RecordError(aggregatedError)
+		span.SetStatus(codes.Error, aggregatedError.Error())
 		return ctx, aggregatedError
 	}
 
@@ -435,6 +452,16 @@ func (e *Executor) executeResolver(ctx context.Context, r *Resolver, phaseNum in
 	}
 	ctx = logger.WithLogger(ctx, &resolverLgr)
 
+	// Create a child span for this individual resolver execution.
+	ctx, span := telemetry.Tracer(telemetry.TracerResolver).Start(ctx, "resolver.executeResolver",
+		trace.WithAttributes(
+			attribute.String("resolver.name", r.Name),
+			attribute.Int("resolver.phase", phaseNum),
+			attribute.Bool("resolver.sensitive", r.Sensitive),
+		),
+	)
+	defer span.End()
+
 	resolverLgr.V(1).Info("executing resolver")
 
 	// Get resolver context from context
@@ -503,6 +530,11 @@ func (e *Executor) executeResolver(ctx context.Context, r *Resolver, phaseNum in
 				"providerCalls", result.ProviderCallCount,
 				"failedAttempts", len(result.FailedAttempts),
 				"error", errorMsg)
+			// Record failure on the span (never expose redacted messages to telemetry).
+			if result.Error != nil {
+				span.RecordError(result.Error)
+				span.SetStatus(codes.Error, "resolver failed")
+			}
 		}
 	}()
 

@@ -302,6 +302,49 @@ Or use the environment variable (no config changes needed):
 SCAFCTL_DEBUG=1 scafctl run solution -f solution.yaml
 ```
 
+## OpenTelemetry Integration
+
+scafctl uses an OpenTelemetry logging bridge so that structured log records are
+forwarded to an OTLP-compatible backend when `--otel-endpoint` is set. When an
+active trace span is in progress, the OTel bridge automatically attaches the
+current **trace ID** and **span ID** to every log record. This appears as extra
+fields in JSON-format log output:
+
+```json
+{"time":"2026-02-24T10:00:00Z","level":"DEBUG","msg":"executing resolver","resolver":"env-name","trace_id":"4bf92f3577b34da6a3ce929d0e0e4736","span_id":"00f067aa0ba902b7"}
+```
+
+### What the IDs mean
+
+| Field | Description |
+|-------|-------------|
+| `trace_id` | 128-bit W3C trace ID — same value across all spans in one CLI invocation |
+| `span_id` | 64-bit span ID of the currently active operation (resolver, action, etc.) |
+
+These IDs let you correlate log records with spans in Jaeger or another trace
+backend:
+
+1. Note the `trace_id` from a log record.
+2. Search for that trace in Jaeger: `http://localhost:16686/trace/<trace_id>`.
+3. Every span in the waterfall appears with its own log records alongside.
+
+### Enabling trace context in logs
+
+Trace IDs only appear when **both** conditions are true:
+
+1. `--otel-endpoint` is set (or `OTEL_EXPORTER_OTLP_ENDPOINT` env var).
+2. A trace span is active at the time the log record is emitted.
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4317 \
+  scafctl run solution -f solution.yaml --log-level debug --log-format json
+```
+
+Local console-format logs (without `--log-format json`) do **not** include the
+trace/span IDs — they only appear in the OTLP log stream and in JSON format.
+
+See the [Telemetry Tutorial](telemetry-tutorial.md) for a complete walkthrough.
+
 ## Summary
 
 | What You Want | Command |
@@ -312,9 +355,11 @@ SCAFCTL_DEBUG=1 scafctl run solution -f solution.yaml
 | JSON for tooling | `scafctl ... --log-level info --log-format json` |
 | Logs to file | `scafctl ... --debug --log-file debug.log` |
 | CI/CD env vars | `SCAFCTL_LOG_LEVEL=error SCAFCTL_LOG_FORMAT=json` |
+| Logs + traces to OTLP | `OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4317 scafctl ... --log-level debug` |
 
 ## Next Steps
 
+- [Telemetry Tutorial](telemetry-tutorial.md) — Ship traces and metrics to Jaeger / Prometheus
 - [Cache Tutorial](cache-tutorial.md) — Manage cached data and reclaim disk space
 - [Provider Reference](provider-reference.md) — Complete provider documentation
 - [Configuration Tutorial](config-tutorial.md) — Manage all application settings

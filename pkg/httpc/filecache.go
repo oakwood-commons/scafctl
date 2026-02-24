@@ -190,7 +190,9 @@ func (fc *FileCache) Get(ctx context.Context, key string) ([]byte, error) {
 			if errors.Is(result.err, fs.ErrNotExist) {
 				// Cache miss
 				atomic.AddUint64(&fc.misses, 1)
-				metrics.HTTPClientCacheMisses.Inc()
+				if metrics.HTTPClientCacheMisses != nil {
+					metrics.HTTPClientCacheMisses.Add(ctx, 1)
+				}
 				// Return nil, nil for httpcache compatibility
 				return nil, nil
 			}
@@ -209,7 +211,9 @@ func (fc *FileCache) Get(ctx context.Context, key string) ([]byte, error) {
 		}
 		// Cache miss (expired)
 		atomic.AddUint64(&fc.misses, 1)
-		metrics.HTTPClientCacheMisses.Inc()
+		if metrics.HTTPClientCacheMisses != nil {
+			metrics.HTTPClientCacheMisses.Add(ctx, 1)
+		}
 		// Return nil, nil for httpcache compatibility
 		return nil, nil
 	}
@@ -231,7 +235,9 @@ func (fc *FileCache) Get(ctx context.Context, key string) ([]byte, error) {
 			if errors.Is(result.err, fs.ErrNotExist) {
 				// File was deleted between stat and read
 				atomic.AddUint64(&fc.misses, 1)
-				metrics.HTTPClientCacheMisses.Inc()
+				if metrics.HTTPClientCacheMisses != nil {
+					metrics.HTTPClientCacheMisses.Add(ctx, 1)
+				}
 				// Return nil, nil for httpcache compatibility
 				return nil, nil
 			}
@@ -239,7 +245,9 @@ func (fc *FileCache) Get(ctx context.Context, key string) ([]byte, error) {
 		}
 		// Cache hit
 		atomic.AddUint64(&fc.hits, 1)
-		metrics.HTTPClientCacheHits.Inc()
+		if metrics.HTTPClientCacheHits != nil {
+			metrics.HTTPClientCacheHits.Add(ctx, 1)
+		}
 		fc.logger.V(2).Info("cache hit", "key", key, "size", len(result.data))
 		return result.data, nil
 	case <-readCtx.Done():
@@ -382,6 +390,6 @@ func (fc *FileCache) updateCacheSizeMetric() {
 		}
 	}
 
-	metrics.HTTPClientCacheSizeBytes.Set(float64(totalSize))
+	metrics.SetCacheSizeBytes(totalSize)
 	fc.logger.V(2).Info("updated cache size metric", "bytes", totalSize)
 }

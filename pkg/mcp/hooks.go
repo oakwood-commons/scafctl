@@ -10,6 +10,9 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/oakwood-commons/scafctl/pkg/telemetry"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 )
 
 // newObservabilityHooks creates lifecycle hooks for logging, timing,
@@ -57,16 +60,29 @@ func newObservabilityHooks(lgr logr.Logger) *server.Hooks {
 	return hooks
 }
 
-// toolTimingMiddleware wraps tool handlers with timing instrumentation.
-// It logs the duration of each tool call and adds it to the result metadata.
+// toolTimingMiddleware wraps tool handlers with timing and trace instrumentation.
+// It logs the duration of each tool call, adds it to the result metadata, and
+// creates an OTel span scoped to the tool execution.
 func toolTimingMiddleware(lgr logr.Logger) server.ToolHandlerMiddleware {
 	return func(next server.ToolHandlerFunc) server.ToolHandlerFunc {
 		return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			toolName := request.Params.Name
+
+			ctx, span := telemetry.Tracer(telemetry.TracerMCP).Start(ctx, "mcp.tool")
+			span.SetAttributes(attribute.String("mcp.tool.name", toolName))
+			defer span.End()
+
 			start := time.Now()
 			result, err := next(ctx, request)
 			duration := time.Since(start)
 
-			toolName := request.Params.Name
+			if err != nil {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
+			} else if result != nil && result.IsError {
+				span.SetStatus(codes.Error, "tool returned error result")
+			}
+
 			lgr.V(1).Info("tool execution time",
 				"tool", toolName,
 				"duration", duration.String(),

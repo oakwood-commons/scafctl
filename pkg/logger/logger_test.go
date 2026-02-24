@@ -6,13 +6,14 @@ package logger
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"testing"
 
 	"github.com/go-logr/logr"
 )
 
-// mockLogLevel is a valid zapcore.Level value for testing.
-const mockLogLevel int8 = 0 // zapcore.InfoLevel
+// mockLogLevel is a slog.Level value for testing (slog.LevelInfo = 0).
+const mockLogLevel slog.Level = 0
 
 func TestGetReturnsLoggerInstance(t *testing.T) {
 	logger := Get(mockLogLevel)
@@ -120,18 +121,33 @@ func TestFromContextReturnsNoopLoggerIfNoGlobalOrContextLogger(t *testing.T) {
 	}
 }
 
-func TestSyncDoesNotPanicWhenGlobalZapLoggerIsNil(t *testing.T) {
-	// Save and restore globalZapLogger for isolation
-	orig := globalZapLogger
-	globalZapLogger = nil
-	defer func() { globalZapLogger = orig }()
-
-	defer func() {
-		if r := recover(); r != nil {
-			t.Errorf("Sync should not panic when globalZapLogger is nil, but got panic: %v", r)
-		}
-	}()
-	Sync()
+func TestParseLogLevelNamedLevels(t *testing.T) {
+	cases := []struct {
+		input   string
+		want    slog.Level
+		wantErr bool
+	}{
+		{"none", LogLevelNone, false},
+		{"", LogLevelNone, false},
+		{"error", slog.LevelError, false},
+		{"warn", slog.LevelWarn, false},
+		{"info", slog.LevelInfo, false},
+		{"debug", slog.Level(-1), false},
+		{"trace", slog.Level(-2), false},
+		{"3", slog.Level(-3), false},
+		{"invalid", slog.LevelInfo, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.input, func(t *testing.T) {
+			got, err := ParseLogLevel(tc.input)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("ParseLogLevel(%q) error = %v, wantErr %v", tc.input, err, tc.wantErr)
+			}
+			if !tc.wantErr && got != tc.want {
+				t.Errorf("ParseLogLevel(%q) = %v, want %v", tc.input, got, tc.want)
+			}
+		})
+	}
 }
 
 func TestGetGlobalLoggerReturnsGlobalLogger(t *testing.T) {

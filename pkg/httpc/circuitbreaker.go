@@ -79,7 +79,7 @@ func newCircuitBreaker(config *CircuitBreakerConfig) *circuitBreaker {
 		config:   config,
 		breakers: make(map[string]*hostBreaker),
 		metricsUpdateFunc: func(host string, state CircuitBreakerState) {
-			metrics.HTTPClientCircuitBreakerState.WithLabelValues(host).Set(float64(state))
+			metrics.SetCircuitBreakerState(host, float64(state))
 		},
 	}
 }
