@@ -1,0 +1,14 @@
+{
+  "name": "my-app",
+  "namespace": "production",
+  "environment": "prod",
+  "replicas": 3,
+  "image": "ghcr.io/example/my-app",
+  "tag": "v1.2.3",
+  "port": 8080,
+  "env": {
+    "LOG_LEVEL": "info",
+    "DATABASE_URL": "postgres://db:5432/myapp",
+    "CACHE_TTL": "300"
+  }
+}

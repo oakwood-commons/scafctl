@@ -48,6 +48,17 @@ Runnable examples are located in the [`/examples`](https://github.com/oakwood-co
 
 - [`examples/actions/`](https://github.com/oakwood-commons/scafctl/tree/main/examples/actions) — Action workflow examples
 - [`examples/config/`](https://github.com/oakwood-commons/scafctl/tree/main/examples/config) — Configuration examples
+- [`examples/exec/`](https://github.com/oakwood-commons/scafctl/tree/main/examples/exec) — Shell execution examples
+- [`examples/mcp/`](https://github.com/oakwood-commons/scafctl/tree/main/examples/mcp) — MCP server integration examples
+- [`examples/providers/`](https://github.com/oakwood-commons/scafctl/tree/main/examples/providers) — Provider examples
 - [`examples/resolvers/`](https://github.com/oakwood-commons/scafctl/tree/main/examples/resolvers) — Resolver examples
+- [`examples/snapshots/`](https://github.com/oakwood-commons/scafctl/tree/main/examples/snapshots) — Snapshot examples
 - [`examples/solutions/`](https://github.com/oakwood-commons/scafctl/tree/main/examples/solutions) — Complete solution examples
 - [`examples/plugins/`](https://github.com/oakwood-commons/scafctl/tree/main/examples/plugins) — Plugin examples
+
+Browse examples from the CLI:
+
+```bash
+scafctl examples list
+scafctl examples get resolvers/hello-world.yaml
+```

@@ -222,12 +222,35 @@ scafctl render solution -f solution.yaml -i
 
 # JSON/YAML output
 scafctl render solution -f solution.yaml -o json
+
+# Scaffold a new solution
+scafctl new solution --name my-app --output my-app.yaml
+
+# Browse and download examples
+scafctl examples list
+scafctl examples get resolvers/hello-world.yaml -o hello.yaml
+
+# Evaluate a CEL expression
+scafctl eval cel '"hello".upperAscii()'
+
+# Validate a solution file
+scafctl eval validate -f solution.yaml
+
+# List lint rules
+scafctl lint rules
+
+# Explain a lint rule
+scafctl lint explain <rule-id>
 ```
 
 ## Next Steps
 
+- [Solution Scaffolding Tutorial](scaffolding-tutorial.md) — Create new solutions quickly
 - [Resolver Tutorial](resolver-tutorial.md) — Deep dive into resolvers
 - [Actions Tutorial](actions-tutorial.md) — Learn about workflows
+- [Eval Tutorial](eval-tutorial.md) — Test CEL expressions and Go templates
+- [Linting Tutorial](linting-tutorial.md) — Validate solutions and explore lint rules
 - [Catalog Tutorial](catalog-tutorial.md) — Store and run solutions by name
 - [Provider Reference](provider-reference.md) — All providers documented
+- [MCP Server Tutorial](mcp-server-tutorial.md) — AI-assisted development
 - [Examples](https://github.com/oakwood-commons/scafctl/tree/main/examples) — Working examples

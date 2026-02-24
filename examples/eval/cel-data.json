@@ -1,0 +1,28 @@
+# CEL Evaluation Examples
+# Test CEL expressions from the command line without writing a full solution.
+#
+# Run: scafctl eval cel "1 + 2"
+# Run: scafctl eval cel '_.name + " is " + string(_.age)' --data '{"name": "Alice", "age": 30}'
+# Run: scafctl eval cel '_.items.filter(i, i.active).map(i, i.name)' --data-file eval/cel-data.json
+
+# This file is example data for use with `scafctl eval cel`:
+#
+#   scafctl eval cel '_.items.filter(i, i.active).map(i, i.name)' --data-file eval/cel-data.json
+#   scafctl eval cel '_.items.size()' --data-file eval/cel-data.json
+#   scafctl eval cel '_.items.exists(i, i.name == "deploy-service")' --data-file eval/cel-data.json
+
+{
+  "project": "example-app",
+  "environment": "staging",
+  "items": [
+    {"name": "build-image", "active": true, "priority": 1},
+    {"name": "run-tests", "active": true, "priority": 2},
+    {"name": "deploy-service", "active": false, "priority": 3},
+    {"name": "notify-team", "active": true, "priority": 4}
+  ],
+  "config": {
+    "replicas": 3,
+    "region": "us-east-1",
+    "features": ["logging", "metrics", "tracing"]
+  }
+}

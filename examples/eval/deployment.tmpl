@@ -1,0 +1,33 @@
+# Go Template Evaluation Example
+# Render Go templates from the command line.
+#
+# Run: scafctl eval template --template-file eval/deployment.tmpl --data-file eval/template-data.json
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{.name}}
+  namespace: {{.namespace}}
+  labels:
+    app: {{.name}}
+    environment: {{.environment}}
+spec:
+  replicas: {{.replicas}}
+  selector:
+    matchLabels:
+      app: {{.name}}
+  template:
+    metadata:
+      labels:
+        app: {{.name}}
+    spec:
+      containers:
+        - name: {{.name}}
+          image: {{.image}}:{{.tag}}
+          ports:
+            - containerPort: {{.port}}
+          env:
+{{- range $key, $value := .env}}
+            - name: {{$key}}
+              value: "{{$value}}"
+{{- end}}

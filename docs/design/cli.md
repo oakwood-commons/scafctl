@@ -37,6 +37,14 @@ scafctl <verb> <kind> <name[@version(or constraint)]> [flags]
 | `build solution` | ✅ Implemented | Catalog feature |
 | `catalog list/inspect/delete/prune` | ✅ Implemented | Catalog management |
 | `catalog save/load` | ✅ Implemented | Offline distribution |
+| `eval cel` | ✅ Implemented | Evaluate CEL expressions from CLI |
+| `eval template` | ✅ Implemented | Evaluate Go templates from CLI |
+| `eval validate` | ✅ Implemented | Validate solution files from CLI |
+| `new solution` | ✅ Implemented | Scaffold a new solution from template |
+| `lint rules` | ✅ Implemented | List all available lint rules |
+| `lint explain` | ✅ Implemented | Explain a specific lint rule |
+| `examples list` | ✅ Implemented | List available example configurations |
+| `examples get` | ✅ Implemented | Get/download an example file |
 | `push solution/plugin` | 📋 Planned | Remote catalog feature |
 | `pull solution/plugin` | 📋 Planned | Remote catalog feature |
 | `tag solution/plugin` | 📋 Planned | Catalog feature |
@@ -818,3 +826,129 @@ The scafctl CLI follows a structured, extensible pattern:
 - Names and versions identify concrete artifacts
 
 This design enables dynamic extension, clear UX, and long-term scalability without breaking existing commands.
+
+---
+
+## Evaluating Expressions
+
+The `eval` command group lets you test CEL expressions, Go templates, and validate solution files without running a full solution.
+
+### Evaluate CEL
+
+~~~bash
+# Simple expression
+scafctl eval cel "1 + 2"
+
+# With JSON data
+scafctl eval cel '_.name == "test"' --data '{"name": "test"}'
+
+# From a data file
+scafctl eval cel '_.items.size() > 0' --data-file data.json
+
+# Output as JSON
+scafctl eval cel '_.items.filter(i, i.active)' --data-file data.json -o json
+~~~
+
+### Evaluate Go Template
+
+~~~bash
+# Simple template
+scafctl eval template '{{.name}}' --data '{"name": "hello"}'
+
+# Template from file
+scafctl eval template --template-file template.txt --data-file data.json
+
+# With output file
+scafctl eval template --template-file template.txt --data-file data.json --output result.txt
+~~~
+
+### Validate Solution
+
+~~~bash
+# Validate a solution YAML file
+scafctl eval validate -f solution.yaml
+
+# Output as JSON
+scafctl eval validate -f solution.yaml -o json
+~~~
+
+---
+
+## Creating New Solutions
+
+Scaffold a new solution from a built-in template:
+
+~~~bash
+# Interactive — prompts for name, description, providers
+scafctl new solution
+
+# With flags
+scafctl new solution --name my-solution --description "My new solution" --output my-solution.yaml
+
+# With specific providers
+scafctl new solution --name my-solution --providers static,exec,cel
+~~~
+
+---
+
+## Exploring Lint Rules
+
+### List Rules
+
+List all available lint rules with severity, category, and descriptions:
+
+~~~bash
+# List all rules
+scafctl lint rules
+
+# Output as JSON
+scafctl lint rules -o json
+~~~
+
+### Explain a Rule
+
+Get a detailed explanation of a specific lint rule:
+
+~~~bash
+# Show rule details, examples, and fix guidance
+scafctl lint explain <rule-id>
+
+# Output as JSON
+scafctl lint explain <rule-id> -o json
+~~~
+
+---
+
+## Browsing Examples
+
+Discover and download built-in example configurations:
+
+### List Examples
+
+~~~bash
+# List all examples
+scafctl examples list
+
+# Filter by category
+scafctl examples list --category solutions
+scafctl examples list --category resolvers
+scafctl examples list --category actions
+
+# Output as JSON
+scafctl examples list -o json
+
+# Output as YAML
+scafctl examples list -o yaml
+~~~
+
+### Get an Example
+
+~~~bash
+# Print example to stdout
+scafctl examples get resolvers/hello-world.yaml
+
+# Save to file
+scafctl examples get resolvers/hello-world.yaml -o output.yaml
+~~~
+
+Aliases: `ls` for list

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"gopkg.in/yaml.v3"
 )
@@ -74,6 +75,10 @@ type Solution struct {
 
 	// path is an internal field for the file path where the solution was loaded from
 	path string `json:"-" yaml:"-"`
+
+	// sourceMap maps logical YAML paths to source positions (line/column).
+	// It is populated during FromYAML when the solution is loaded from YAML bytes.
+	sourceMap *sourcepos.SourceMap `json:"-" yaml:"-"`
 }
 
 // Metadata contains the descriptive information about a solution.
@@ -218,9 +223,22 @@ func (s *Solution) ToYAML() ([]byte, error) {
 }
 
 // FromYAML unmarshals the provided YAML data into the Solution struct.
+// It also builds a SourceMap that maps logical YAML paths to source positions.
 // It returns an error if the unmarshalling process fails.
 func (s *Solution) FromYAML(data []byte) error {
-	return yaml.Unmarshal(data, s)
+	if err := yaml.Unmarshal(data, s); err != nil {
+		return err
+	}
+
+	// Build source map for line/column tracking.
+	// This is a best-effort operation; parsing errors are non-fatal since we
+	// already successfully unmarshalled the data above.
+	sm, err := sourcepos.BuildSourceMap(data, s.path)
+	if err == nil {
+		s.sourceMap = sm
+	}
+
+	return nil
 }
 
 // UnmarshalFromBytes attempts to unmarshal the provided byte slice into the Solution struct.
@@ -268,6 +286,26 @@ func (s *Solution) GetPath() string {
 // It updates the internal path field with the provided value.
 func (s *Solution) SetPath(path string) {
 	s.path = path
+}
+
+// SourceMap returns the source map for this solution, if available.
+// The source map is populated during FromYAML and maps logical YAML paths
+// (e.g., "spec.resolvers.appName") to source positions (line, column, file).
+// Returns nil if the solution was not loaded from YAML or if source map building failed.
+func (s *Solution) SourceMap() *sourcepos.SourceMap {
+	if s == nil {
+		return nil
+	}
+	return s.sourceMap
+}
+
+// SetSourceMap sets the source map for this solution.
+// This is useful when composing solutions from multiple files.
+func (s *Solution) SetSourceMap(sm *sourcepos.SourceMap) {
+	if s == nil {
+		return
+	}
+	s.sourceMap = sm
 }
 
 // ApplyDefaults populates default values for optional top-level fields.

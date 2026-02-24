@@ -14,10 +14,12 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/dryrun"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
@@ -262,6 +264,11 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 
 	lgr.V(1).Info("parsed parameters", "count", len(params))
 
+	// Dry run — execute resolvers in dry-run mode and show structured report
+	if o.DryRun {
+		return o.executeDryRun(ctx, sol, reg, params)
+	}
+
 	// Execute resolvers if present
 	resolvers := sol.Spec.ResolversToSlice()
 
@@ -285,12 +292,6 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		"totalActions", len(graph.Actions),
 		"mainPhases", len(graph.ExecutionOrder),
 		"finallyPhases", len(graph.FinallyOrder))
-
-	// Dry run - just show what would be executed
-	if o.DryRun {
-		o.showDryRun(graph)
-		return nil
-	}
 
 	// Set up action progress callback if enabled
 	var actionProgressCallback action.ProgressCallback
@@ -325,40 +326,140 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	return o.writeActionOutput(ctx, result, executionData)
 }
 
-// showDryRun displays what would be executed without actually running
-func (o *SolutionOptions) showDryRun(graph *action.Graph) {
-	fmt.Fprintln(o.IOStreams.Out, "=== DRY RUN ===")
-	fmt.Fprintln(o.IOStreams.Out, "")
-	fmt.Fprintf(o.IOStreams.Out, "Total actions: %d\n", len(graph.Actions))
-	fmt.Fprintf(o.IOStreams.Out, "Main phases: %d\n", len(graph.ExecutionOrder))
-	fmt.Fprintf(o.IOStreams.Out, "Finally phases: %d\n", len(graph.FinallyOrder))
-	fmt.Fprintln(o.IOStreams.Out, "")
-
-	fmt.Fprintln(o.IOStreams.Out, "EXECUTION ORDER:")
-	for i, phase := range graph.ExecutionOrder {
-		fmt.Fprintf(o.IOStreams.Out, "  Phase %d: %s\n", i, strings.Join(phase, ", "))
-	}
-
-	if len(graph.FinallyOrder) > 0 {
-		fmt.Fprintln(o.IOStreams.Out, "")
-		fmt.Fprintln(o.IOStreams.Out, "FINALLY ORDER:")
-		for i, phase := range graph.FinallyOrder {
-			fmt.Fprintf(o.IOStreams.Out, "  Phase %d: %s\n", i, strings.Join(phase, ", "))
+// executeDryRun runs resolvers in dry-run mode and produces a structured report
+// showing what a full solution execution would do without side effects.
+func (o *SolutionOptions) executeDryRun(ctx context.Context, sol *solution.Solution, reg *provider.Registry, params map[string]any) error {
+	// Execute resolvers in dry-run mode to get preview data
+	var resolverData map[string]any
+	if sol.Spec.HasResolvers() {
+		cfg := ResolverExecutionConfigFromContext(ctx)
+		cfg.DryRun = true
+		result, err := ExecuteResolvers(ctx, sol, params, reg, cfg)
+		if err != nil {
+			// Non-fatal — report will include warnings
+			resolverData = make(map[string]any)
+		} else {
+			resolverData = result.Data
 		}
 	}
 
-	fmt.Fprintln(o.IOStreams.Out, "")
-	fmt.Fprintln(o.IOStreams.Out, "ACTIONS:")
-	for name, act := range graph.Actions {
-		fmt.Fprintf(o.IOStreams.Out, "  %s:\n", name)
-		fmt.Fprintf(o.IOStreams.Out, "    provider: %s\n", act.Provider)
-		if len(act.Dependencies) > 0 {
-			fmt.Fprintf(o.IOStreams.Out, "    dependencies: %s\n", strings.Join(act.Dependencies, ", "))
+	report, err := dryrun.Generate(ctx, sol, dryrun.Options{
+		Params:       params,
+		Registry:     reg,
+		ResolverData: resolverData,
+	})
+	if err != nil {
+		return o.exitWithCode(ctx, fmt.Errorf("dry-run failed: %w", err), exitcode.GeneralError)
+	}
+
+	return o.writeDryRunOutput(report)
+}
+
+// writeDryRunOutput renders a dry-run report in the requested output format.
+func (o *SolutionOptions) writeDryRunOutput(report *dryrun.Report) error {
+	switch o.Output {
+	case "json":
+		data, err := json.MarshalIndent(report, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to marshal dry-run report: %w", err)
 		}
-		if act.ForEachMetadata != nil {
-			fmt.Fprintf(o.IOStreams.Out, "    forEach: expanded from %s[%d]\n", act.ForEachMetadata.ExpandedFrom, act.ForEachMetadata.Index)
+		fmt.Fprintln(o.IOStreams.Out, string(data))
+		return nil
+	case "yaml":
+		data, err := yaml.Marshal(report)
+		if err != nil {
+			return fmt.Errorf("failed to marshal dry-run report: %w", err)
+		}
+		fmt.Fprint(o.IOStreams.Out, string(data))
+		return nil
+	case "quiet":
+		return nil
+	default:
+		return o.writeDryRunTable(report)
+	}
+}
+
+// writeDryRunTable renders a human-readable dry-run report to the terminal.
+func (o *SolutionOptions) writeDryRunTable(report *dryrun.Report) error {
+	out := o.IOStreams.Out
+
+	fmt.Fprintln(out, "=== DRY RUN ===")
+	fmt.Fprintln(out, "")
+	fmt.Fprintf(out, "Solution:     %s\n", report.Solution)
+	if report.Version != "" {
+		fmt.Fprintf(out, "Version:      %s\n", report.Version)
+	}
+	fmt.Fprintf(out, "Has resolvers: %t\n", report.HasResolvers)
+	fmt.Fprintf(out, "Has workflow:  %t\n", report.HasWorkflow)
+
+	// Parameters
+	if len(report.Parameters) > 0 {
+		fmt.Fprintln(out, "")
+		fmt.Fprintln(out, "PARAMETERS:")
+		for k, v := range report.Parameters {
+			fmt.Fprintf(out, "  %s = %v\n", k, v)
 		}
 	}
+
+	// Resolvers
+	if len(report.Resolvers) > 0 {
+		fmt.Fprintln(out, "")
+		fmt.Fprintln(out, "RESOLVERS:")
+		for name, r := range report.Resolvers {
+			status := r.Status
+			if r.Value != nil {
+				fmt.Fprintf(out, "  %-30s [%s] = %v\n", name, status, r.Value)
+			} else {
+				fmt.Fprintf(out, "  %-30s [%s]\n", name, status)
+			}
+		}
+	}
+
+	// Action plan
+	if len(report.ActionPlan) > 0 {
+		fmt.Fprintln(out, "")
+		fmt.Fprintf(out, "ACTION PLAN (%d actions, %d phases):\n", report.TotalActions, report.TotalPhases)
+		currentPhase := -1
+		for _, act := range report.ActionPlan {
+			if act.Phase != currentPhase {
+				currentPhase = act.Phase
+				fmt.Fprintf(out, "\n  Phase %d:\n", currentPhase)
+			}
+			fmt.Fprintf(out, "    %s (%s/%s)\n", act.Name, act.Section, act.Provider)
+			if act.Description != "" {
+				fmt.Fprintf(out, "      desc: %s\n", act.Description)
+			}
+			if len(act.Dependencies) > 0 {
+				fmt.Fprintf(out, "      deps: %s\n", strings.Join(act.Dependencies, ", "))
+			}
+			if act.When != "" {
+				fmt.Fprintf(out, "      when: %s\n", act.When)
+			}
+			if act.MockBehavior != "" {
+				fmt.Fprintf(out, "      mock: %s\n", act.MockBehavior)
+			}
+		}
+	}
+
+	// Mock behaviors
+	if len(report.MockBehaviors) > 0 {
+		fmt.Fprintln(out, "")
+		fmt.Fprintln(out, "PROVIDER MOCK BEHAVIORS:")
+		for _, mb := range report.MockBehaviors {
+			fmt.Fprintf(out, "  %-20s %s\n", mb.Provider+":", mb.MockBehavior)
+		}
+	}
+
+	// Warnings
+	if len(report.Warnings) > 0 {
+		fmt.Fprintln(out, "")
+		fmt.Fprintln(out, "WARNINGS:")
+		for _, w := range report.Warnings {
+			fmt.Fprintf(out, "  - %s\n", w)
+		}
+	}
+
+	return nil
 }
 
 // getActionIOStreams returns the provider IO streams for action execution.

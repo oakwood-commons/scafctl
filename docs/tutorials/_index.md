@@ -28,6 +28,12 @@ Step-by-step guides for learning scafctl features.
 - [Logging & Debugging Tutorial](logging-tutorial.md) — Control log verbosity, format, and output
 - [Cache Tutorial](cache-tutorial.md) — Manage cached data and reclaim disk space
 
+## Developer Tools
+
+- [Solution Scaffolding Tutorial](scaffolding-tutorial.md) — Create new solutions with `scafctl new solution`
+- [Eval Tutorial](eval-tutorial.md) — Test CEL expressions and Go templates from the CLI
+- [Linting Tutorial](linting-tutorial.md) — Validate solutions, explore lint rules, and fix issues
+
 ## Reference
 
 - [Exec Provider Tutorial](exec-provider-tutorial.md) — Cross-platform shell execution with embedded and external shells

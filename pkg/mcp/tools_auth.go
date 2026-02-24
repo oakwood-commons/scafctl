@@ -16,12 +16,25 @@ func (s *Server) registerAuthTools() {
 	authStatusTool := mcp.NewTool("auth_status",
 		mcp.WithDescription("Report which auth handlers (e.g. entra, gcp, github) are configured and whether their tokens are valid. Auth handlers manage authentication and identity — they are NOT solution providers. Helps verify authentication is set up correctly before attempting operations that require it."),
 		mcp.WithTitleAnnotation("Auth Status"),
+		mcp.WithToolIcons(toolIcons["auth"]),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(true),
+		mcp.WithRawOutputSchema(outputSchemaAuthStatus),
 	)
 	s.mcpServer.AddTool(authStatusTool, s.handleAuthStatus)
+
+	listAuthHandlersTool := mcp.NewTool("list_auth_handlers",
+		mcp.WithDescription("List all registered auth handlers with their supported flows and capabilities. Unlike auth_status which shows credential state, this tool shows what handlers are available and what they support (device-code, interactive, service-principal, workload-identity, PAT, metadata flows). Use this to understand which auth methods are available before attempting login."),
+		mcp.WithTitleAnnotation("List Auth Handlers"),
+		mcp.WithToolIcons(toolIcons["auth"]),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+	)
+	s.mcpServer.AddTool(listAuthHandlersTool, s.handleListAuthHandlers)
 }
 
 // authHandlerStatus represents the status of a single auth handler.
@@ -106,5 +119,57 @@ func (s *Server) handleAuthStatus(_ context.Context, _ mcp.CallToolRequest) (*mc
 	return mcp.NewToolResultJSON(map[string]any{
 		"handlers": statuses,
 		"count":    len(statuses),
+	})
+}
+
+// handleListAuthHandlers lists all registered auth handlers with their flows and capabilities.
+func (s *Server) handleListAuthHandlers(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.authReg == nil {
+		return mcp.NewToolResultJSON(map[string]any{
+			"handlers": []any{},
+			"message":  "No auth registry configured",
+		})
+	}
+
+	names := s.authReg.List()
+	if len(names) == 0 {
+		return mcp.NewToolResultJSON(map[string]any{
+			"handlers": []any{},
+			"message":  "No auth handlers registered",
+		})
+	}
+
+	type handlerInfo struct {
+		Name         string   `json:"name"`
+		DisplayName  string   `json:"displayName,omitempty"`
+		Flows        []string `json:"flows"`
+		Capabilities []string `json:"capabilities"`
+	}
+
+	handlers := make([]handlerInfo, 0, len(names))
+	for _, name := range names {
+		h, err := s.authReg.Get(name)
+		if err != nil {
+			continue
+		}
+
+		info := handlerInfo{
+			Name:        h.Name(),
+			DisplayName: h.DisplayName(),
+		}
+
+		for _, flow := range h.SupportedFlows() {
+			info.Flows = append(info.Flows, string(flow))
+		}
+		for _, cap := range h.Capabilities() {
+			info.Capabilities = append(info.Capabilities, string(cap))
+		}
+
+		handlers = append(handlers, info)
+	}
+
+	return mcp.NewToolResultJSON(map[string]any{
+		"handlers": handlers,
+		"count":    len(handlers),
 	})
 }

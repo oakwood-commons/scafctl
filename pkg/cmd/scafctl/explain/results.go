@@ -17,6 +17,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
 )
 
 // SolutionExplanation holds structured explanation data for a solution.
@@ -49,21 +50,23 @@ type CatalogInfo struct {
 
 // ResolverInfo holds structured information about a resolver.
 type ResolverInfo struct {
-	Name        string   `json:"name" yaml:"name" doc:"Resolver name"`
-	Providers   []string `json:"providers,omitempty" yaml:"providers,omitempty" doc:"Provider names used"`
-	DependsOn   []string `json:"dependsOn,omitempty" yaml:"dependsOn,omitempty" doc:"Resolver dependencies"`
-	Conditional bool     `json:"conditional,omitempty" yaml:"conditional,omitempty" doc:"Whether resolver has a when condition"`
-	Phases      []string `json:"phases,omitempty" yaml:"phases,omitempty" doc:"Configured phases (resolve, transform, validate)"`
+	Name        string              `json:"name" yaml:"name" doc:"Resolver name"`
+	Providers   []string            `json:"providers,omitempty" yaml:"providers,omitempty" doc:"Provider names used"`
+	DependsOn   []string            `json:"dependsOn,omitempty" yaml:"dependsOn,omitempty" doc:"Resolver dependencies"`
+	Conditional bool                `json:"conditional,omitempty" yaml:"conditional,omitempty" doc:"Whether resolver has a when condition"`
+	Phases      []string            `json:"phases,omitempty" yaml:"phases,omitempty" doc:"Configured phases (resolve, transform, validate)"`
+	SourcePos   *sourcepos.Position `json:"sourcePos,omitempty" yaml:"sourcePos,omitempty" doc:"Source file location"`
 }
 
 // ActionInfo holds structured information about an action.
 type ActionInfo struct {
-	Name        string   `json:"name" yaml:"name" doc:"Action name"`
-	Provider    string   `json:"provider" yaml:"provider" doc:"Provider used by this action"`
-	DependsOn   []string `json:"dependsOn,omitempty" yaml:"dependsOn,omitempty" doc:"Action dependencies"`
-	Conditional bool     `json:"conditional,omitempty" yaml:"conditional,omitempty" doc:"Whether action has a when condition"`
-	HasRetry    bool     `json:"hasRetry,omitempty" yaml:"hasRetry,omitempty" doc:"Whether retry is configured"`
-	HasForEach  bool     `json:"hasForEach,omitempty" yaml:"hasForEach,omitempty" doc:"Whether forEach is configured"`
+	Name        string              `json:"name" yaml:"name" doc:"Action name"`
+	Provider    string              `json:"provider" yaml:"provider" doc:"Provider used by this action"`
+	DependsOn   []string            `json:"dependsOn,omitempty" yaml:"dependsOn,omitempty" doc:"Action dependencies"`
+	Conditional bool                `json:"conditional,omitempty" yaml:"conditional,omitempty" doc:"Whether action has a when condition"`
+	HasRetry    bool                `json:"hasRetry,omitempty" yaml:"hasRetry,omitempty" doc:"Whether retry is configured"`
+	HasForEach  bool                `json:"hasForEach,omitempty" yaml:"hasForEach,omitempty" doc:"Whether forEach is configured"`
+	SourcePos   *sourcepos.Position `json:"sourcePos,omitempty" yaml:"sourcePos,omitempty" doc:"Source file location"`
 }
 
 // LinkInfo holds a named link.
@@ -137,14 +140,15 @@ func BuildSolutionExplanation(sol *solution.Solution) *SolutionExplanation {
 	}
 
 	// Resolvers
+	sm := sol.SourceMap()
 	if sol.Spec.HasResolvers() {
-		exp.Resolvers = buildResolverInfos(sol)
+		exp.Resolvers = buildResolverInfos(sol, sm)
 	}
 
 	// Actions
 	if sol.Spec.HasActions() && sol.Spec.Workflow != nil {
-		exp.Actions = buildActionInfos(sol.Spec.Workflow.Actions)
-		exp.Finally = buildActionInfos(sol.Spec.Workflow.Finally)
+		exp.Actions = buildActionInfos(sol.Spec.Workflow.Actions, sm, "spec.workflow.actions")
+		exp.Finally = buildActionInfos(sol.Spec.Workflow.Finally, sm, "spec.workflow.finally")
 	}
 
 	// Tags
@@ -194,7 +198,7 @@ func LookupProvider(ctx context.Context, name string, reg *provider.Registry) (*
 }
 
 // buildResolverInfos extracts structured resolver information from a solution.
-func buildResolverInfos(sol *solution.Solution) []ResolverInfo {
+func buildResolverInfos(sol *solution.Solution, sm *sourcepos.SourceMap) []ResolverInfo {
 	names := make([]string, 0, len(sol.Spec.Resolvers))
 	for name := range sol.Spec.Resolvers {
 		names = append(names, name)
@@ -215,6 +219,14 @@ func buildResolverInfos(sol *solution.Solution) []ResolverInfo {
 			Conditional: r.When != nil,
 			Phases:      extractPhases(r),
 		}
+
+		// Enrich with source position
+		if sm != nil {
+			if pos, ok := sm.Get("spec.resolvers." + name); ok {
+				info.SourcePos = &pos
+			}
+		}
+
 		infos = append(infos, info)
 	}
 
@@ -222,7 +234,7 @@ func buildResolverInfos(sol *solution.Solution) []ResolverInfo {
 }
 
 // buildActionInfos extracts structured action information.
-func buildActionInfos(actions map[string]*action.Action) []ActionInfo {
+func buildActionInfos(actions map[string]*action.Action, sm *sourcepos.SourceMap, basePath string) []ActionInfo {
 	if len(actions) == 0 {
 		return nil
 	}
@@ -253,6 +265,14 @@ func buildActionInfos(actions map[string]*action.Action) []ActionInfo {
 			HasRetry:    act.Retry != nil,
 			HasForEach:  act.ForEach != nil,
 		}
+
+		// Enrich with source position
+		if sm != nil {
+			if pos, ok := sm.Get(basePath + "." + name); ok {
+				info.SourcePos = &pos
+			}
+		}
+
 		infos = append(infos, info)
 	}
 

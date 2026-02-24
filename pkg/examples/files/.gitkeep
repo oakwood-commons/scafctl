@@ -1,0 +1,3 @@
+# This directory is populated at build time by copying the examples/ directory.
+# See taskfile.yaml embed:examples task.
+# Added to .gitignore.

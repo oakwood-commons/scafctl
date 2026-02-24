@@ -524,7 +524,7 @@ transform:
 
 ## http
 
-HTTP client for API calls.
+HTTP client for API calls with built-in pagination support for fetching data across multiple pages.
 
 ### Capabilities
 
@@ -542,15 +542,87 @@ HTTP client for API calls.
 | `retry` | object | ❌ | Retry configuration |
 | `auth` | string | ❌ | Auth provider (e.g., `entra`, `github`) |
 | `scope` | string | ❌ | OAuth scope for authentication |
+| `pagination` | object | ❌ | Pagination configuration (see below) |
+
+### Pagination
+
+The `pagination` input enables automatic multi-page fetching. Five strategies are supported to cover different API pagination patterns.
+
+#### Pagination Fields
+
+| Field | Type | Required | Description |
+|-------|------|:--------:|-------------|
+| `strategy` | string | ✅ | One of: `offset`, `pageNumber`, `cursor`, `linkHeader`, `custom` |
+| `maxPages` | int | ✅ | Safety limit for max pages to fetch (default: 100, max: 10000) |
+| `collectPath` | string | ❌ | CEL expression to extract items from each response (e.g., `body.items`) |
+| `stopWhen` | string | ❌ | CEL expression; if true, stop paginating (e.g., `size(body.items) == 0`) |
+
+**CEL variables available** in `collectPath`, `stopWhen`, and strategy-specific expressions:
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `statusCode` | int | HTTP response status code |
+| `body` | any | Parsed JSON response body |
+| `rawBody` | string | Raw response body string |
+| `headers` | object | Response headers |
+| `page` | int | Current page number (1-based) |
+
+#### Strategy: `offset`
+
+Increments an offset query parameter each page.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `limit` | int | *(required)* | Page size |
+| `offsetParam` | string | `offset` | Query parameter name for offset |
+| `limitParam` | string | `limit` | Query parameter name for limit |
+
+#### Strategy: `pageNumber`
+
+Increments a page number query parameter each page.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `pageSize` | int | *(required)* | Page size |
+| `pageParam` | string | `page` | Query parameter name for page number |
+| `pageSizeParam` | string | `pageSize` | Query parameter name for page size |
+| `startPage` | int | `1` | Starting page number |
+
+#### Strategy: `cursor`
+
+Extracts a cursor token or next URL from the response to fetch subsequent pages.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `nextTokenPath` | string | CEL expression to extract cursor from response (e.g., `body.nextCursor`) |
+| `nextTokenParam` | string | Query parameter to set with the cursor value (required with `nextTokenPath`) |
+| `nextURLPath` | string | CEL expression to extract the full next page URL (e.g., `body['@odata.nextLink']`). Alternative to `nextTokenPath`. |
+
+Use `nextTokenPath` + `nextTokenParam` for APIs that return a token. Use `nextURLPath` for APIs that return a full URL (e.g., Microsoft Graph `@odata.nextLink`).
+
+#### Strategy: `linkHeader`
+
+Follows `rel="next"` links in the `Link` response header (RFC 8288). Used by GitHub, GitLab, and other REST APIs. No additional configuration needed.
+
+#### Strategy: `custom`
+
+Full control using CEL expressions.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `nextURL` | string | CEL expression returning the full next page URL (empty string = stop) |
+| `nextParams` | string | CEL expression returning a map of query params for the next request (empty map = stop) |
 
 ### Output
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `statusCode` | int | HTTP status code |
-| `body` | string | Response body |
-| `headers` | object | Response headers |
+| `statusCode` | int | HTTP status code (last page when paginating) |
+| `body` | string | Response body. When paginating with `collectPath`, contains JSON array of all collected items |
+| `headers` | object | Response headers (last page when paginating) |
 | `success` | bool | Whether request succeeded (action only) |
+| `pages` | int | Number of pages fetched (only when paginating) |
+| `totalItems` | int | Total items collected across all pages (only when paginating) |
 
 ### Examples
 
@@ -594,6 +666,76 @@ resolve:
           Accept: application/json
         auth: github
         scope: repo
+
+# Cursor pagination (token-based)
+provider: http
+inputs:
+  url: https://api.example.com/items
+  pagination:
+    strategy: cursor
+    maxPages: 10
+    nextTokenPath: "body.nextCursor"
+    nextTokenParam: "cursor"
+    collectPath: "body.items"
+    stopWhen: "body.nextCursor == null"
+
+# Cursor pagination (OData / Microsoft Graph nextLink)
+provider: http
+inputs:
+  url: https://graph.microsoft.com/v1.0/users?$top=100
+  authProvider: entra
+  scope: "https://graph.microsoft.com/.default"
+  pagination:
+    strategy: cursor
+    maxPages: 50
+    nextURLPath: "body['@odata.nextLink']"
+    collectPath: "body.value"
+
+# Link header pagination (GitHub-style)
+provider: http
+inputs:
+  url: https://api.github.com/users/octocat/repos?per_page=30
+  headers:
+    Accept: application/vnd.github+json
+  pagination:
+    strategy: linkHeader
+    maxPages: 5
+    collectPath: "body"
+
+# Offset pagination
+provider: http
+inputs:
+  url: https://api.example.com/records
+  pagination:
+    strategy: offset
+    maxPages: 20
+    limit: 50
+    collectPath: "body.records"
+    stopWhen: "size(body.records) < 50"
+
+# Page number pagination
+provider: http
+inputs:
+  url: https://api.example.com/products
+  pagination:
+    strategy: pageNumber
+    maxPages: 10
+    pageSize: 25
+    pageParam: "page"
+    pageSizeParam: "per_page"
+    collectPath: "body.products"
+    stopWhen: "size(body.products) == 0"
+
+# Custom pagination with CEL expressions
+provider: http
+inputs:
+  url: https://api.example.com/search?q=test
+  pagination:
+    strategy: custom
+    maxPages: 10
+    nextURL: "has(body.links) && has(body.links.next) ? body.links.next : ''"
+    collectPath: "body.results"
+    stopWhen: "!has(body.links) || !has(body.links.next)"
 ```
 
 ---
@@ -876,6 +1018,7 @@ validate:
         match: "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
         expression: "!__self.startsWith('v0.')"
         message: "Version must be semver format and >= v1.0.0"
+
 ```
 
 ## Next Steps
