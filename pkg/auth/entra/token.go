@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 )
@@ -30,6 +31,12 @@ type TokenMetadata struct {
 	// (e.g. "device_code"). Stored so that tokens minted from a stored refresh
 	// token can report the originating flow to callers.
 	LoginFlow auth.Flow `json:"loginFlow,omitempty"`
+
+	// SessionID is a stable identifier for the authentication session.
+	// Generated once at login time and preserved across refresh-token rotations
+	// so that every access token minted from a given login can be traced back
+	// to the originating session.
+	SessionID string `json:"sessionId,omitempty"`
 }
 
 // mintToken creates a new access token for the specified scope.
@@ -126,7 +133,7 @@ func (h *Handler) mintToken(ctx context.Context, scope string) (*auth.Token, err
 	// If we got a new refresh token, store it (token rotation)
 	if tokenResp.RefreshToken != "" && tokenResp.RefreshToken != refreshToken {
 		lgr.V(1).Info("refresh token rotated, storing new token")
-		if err := h.storeCredentials(ctx, metadata.TenantID, &tokenResp, metadata.ClientID, metadata.Scopes, metadata.LoginFlow); err != nil {
+		if err := h.storeCredentials(ctx, metadata.TenantID, &tokenResp, metadata.ClientID, metadata.Scopes, metadata.LoginFlow, metadata.SessionID); err != nil {
 			lgr.V(1).Info("warning: failed to update refresh token", "error", err)
 		}
 	}
@@ -137,6 +144,7 @@ func (h *Handler) mintToken(ctx context.Context, scope string) (*auth.Token, err
 		"expiresIn", tokenResp.ExpiresIn,
 		"expiresAt", expiresAt,
 		"scope", scope,
+		"sessionId", metadata.SessionID,
 	)
 
 	return &auth.Token{
@@ -145,6 +153,7 @@ func (h *Handler) mintToken(ctx context.Context, scope string) (*auth.Token, err
 		ExpiresAt:   expiresAt,
 		Scope:       scope,
 		Flow:        metadata.LoginFlow,
+		SessionID:   metadata.SessionID,
 	}, nil
 }
 
@@ -156,7 +165,10 @@ func (h *Handler) mintToken(ctx context.Context, scope string) (*auth.Token, err
 // surfaced later (e.g. in `auth status`).
 // loginFlow records the authentication flow (e.g. auth.FlowDeviceCode) so that
 // tokens minted from the stored refresh token can surface the originating flow.
-func (h *Handler) storeCredentials(ctx context.Context, tenantID string, tokenResp *TokenResponse, clientID string, scopes []string, loginFlow auth.Flow) error {
+// sessionID is a stable identifier for the authentication session.  Pass an
+// empty string on initial login to auto-generate a new ID; pass the existing
+// ID during refresh-token rotation to preserve the session lineage.
+func (h *Handler) storeCredentials(ctx context.Context, tenantID string, tokenResp *TokenResponse, clientID string, scopes []string, loginFlow auth.Flow, sessionID string) error {
 	// Validate refresh token is present
 	if tokenResp.RefreshToken == "" {
 		return fmt.Errorf("no refresh token in response (offline_access scope may be missing)")
@@ -165,6 +177,11 @@ func (h *Handler) storeCredentials(ctx context.Context, tenantID string, tokenRe
 	// Store refresh token
 	if err := h.secretStore.Set(ctx, SecretKeyRefreshToken, []byte(tokenResp.RefreshToken)); err != nil {
 		return fmt.Errorf("failed to store refresh token: %w", err)
+	}
+
+	// Generate a new session ID on initial login; preserve across rotations.
+	if sessionID == "" {
+		sessionID = uuid.New().String()
 	}
 
 	// Extract claims and store metadata
@@ -184,6 +201,7 @@ func (h *Handler) storeCredentials(ctx context.Context, tenantID string, tokenRe
 		ClientID:              clientID,
 		Scopes:                scopes,
 		LoginFlow:             loginFlow,
+		SessionID:             sessionID,
 	}
 
 	metadataBytes, err := json.Marshal(metadata)

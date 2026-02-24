@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 )
@@ -22,6 +23,10 @@ type TokenMetadata struct {
 	ClientID              string       `json:"clientId,omitempty"`
 	Scopes                []string     `json:"scopes,omitempty"`
 	IdentityType          string       `json:"identityType,omitempty"`
+
+	// SessionID is a stable identifier for the authentication session.
+	// Generated once at login time and preserved across refresh-token rotations.
+	SessionID string `json:"sessionId,omitempty"`
 }
 
 // TokenResponse represents the response from the GitHub OAuth token endpoint.
@@ -106,10 +111,12 @@ func (h *Handler) refreshAccessToken(ctx context.Context, refreshToken, clientID
 		lgr.V(1).Info("refresh token rotated, storing new token")
 		metadata, _ := h.loadMetadata(ctx)
 		var scopes []string
+		var sessionID string
 		if metadata != nil {
 			scopes = metadata.Scopes
+			sessionID = metadata.SessionID
 		}
-		if _, err := h.storeCredentials(ctx, &tokenResp, scopes); err != nil {
+		if _, err := h.storeCredentials(ctx, &tokenResp, scopes, sessionID); err != nil {
 			lgr.V(1).Info("warning: failed to update refresh token", "error", err)
 		}
 	}
@@ -128,7 +135,7 @@ func (h *Handler) refreshAccessToken(ctx context.Context, refreshToken, clientID
 }
 
 // storeCredentials securely stores the refresh token (or access token) and metadata.
-func (h *Handler) storeCredentials(ctx context.Context, tokenResp *TokenResponse, scopes []string) (*auth.Claims, error) {
+func (h *Handler) storeCredentials(ctx context.Context, tokenResp *TokenResponse, scopes []string, sessionID string) (*auth.Claims, error) {
 	// Store refresh token if present (OAuth App with token expiration enabled)
 	if tokenResp.RefreshToken != "" {
 		if err := h.secretStore.Set(ctx, SecretKeyRefreshToken, []byte(tokenResp.RefreshToken)); err != nil {
@@ -152,6 +159,11 @@ func (h *Handler) storeCredentials(ctx context.Context, tokenResp *TokenResponse
 		}
 	}
 
+	// Generate a new session ID on initial login; preserve across rotations.
+	if sessionID == "" {
+		sessionID = uuid.New().String()
+	}
+
 	// Determine refresh token expiry
 	var refreshTokenExpiresAt time.Time
 	if tokenResp.RefreshTokenExpiresIn > 0 {
@@ -166,6 +178,7 @@ func (h *Handler) storeCredentials(ctx context.Context, tokenResp *TokenResponse
 		ClientID:              h.config.ClientID,
 		Scopes:                scopes,
 		IdentityType:          string(auth.IdentityTypeUser),
+		SessionID:             sessionID,
 	}
 
 	metadataBytes, err := json.Marshal(metadata)

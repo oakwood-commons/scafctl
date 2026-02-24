@@ -18,20 +18,25 @@ type MockHandler struct {
 	FlowsValue        []Flow
 	CapabilitiesValue []Capability
 
-	LoginResult    *Result
-	LoginErr       error
-	LogoutErr      error
-	StatusResult   *Status
-	StatusErr      error
-	GetTokenResult *Token
-	GetTokenErr    error
-	InjectAuthErr  error
+	LoginResult            *Result
+	LoginErr               error
+	LogoutErr              error
+	StatusResult           *Status
+	StatusErr              error
+	GetTokenResult         *Token
+	GetTokenErr            error
+	InjectAuthErr          error
+	ListCachedTokensResult []*CachedTokenInfo
+	ListCachedTokensErr    error
+	PurgeExpiredResult     int
+	PurgeExpiredErr        error
 
-	LoginCalls      []LoginOptions
-	LogoutCalls     int
-	StatusCalls     int
-	GetTokenCalls   []TokenOptions
-	InjectAuthCalls []TokenOptions
+	LoginCalls        []LoginOptions
+	LogoutCalls       int
+	StatusCalls       int
+	GetTokenCalls     []TokenOptions
+	InjectAuthCalls   []TokenOptions
+	PurgeExpiredCalls int
 }
 
 // NewMockHandler creates a new mock auth handler with default values.
@@ -106,6 +111,7 @@ func (m *MockHandler) Reset() {
 	m.StatusCalls = 0
 	m.GetTokenCalls = nil
 	m.InjectAuthCalls = nil
+	m.PurgeExpiredCalls = 0
 }
 
 func (m *MockHandler) SetAuthenticated(claims *Claims) {
@@ -134,4 +140,21 @@ func (m *MockHandler) SetTokenError(err error) {
 	m.GetTokenErr = err
 }
 
-var _ Handler = (*MockHandler)(nil)
+func (m *MockHandler) ListCachedTokens(_ context.Context) ([]*CachedTokenInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.ListCachedTokensResult, m.ListCachedTokensErr
+}
+
+func (m *MockHandler) PurgeExpiredTokens(_ context.Context) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.PurgeExpiredCalls++
+	return m.PurgeExpiredResult, m.PurgeExpiredErr
+}
+
+var (
+	_ Handler     = (*MockHandler)(nil)
+	_ TokenLister = (*MockHandler)(nil)
+	_ TokenPurger = (*MockHandler)(nil)
+)

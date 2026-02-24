@@ -116,6 +116,7 @@ func TestCommandLogout_Failure(t *testing.T) {
 
 	err := cmd.Execute()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "logout failed")
-	assert.Contains(t, err.Error(), "failed to clear credentials")
+	assert.Contains(t, err.Error(), "one or more logout operations failed")
+	// The specific underlying error is printed to output, not wrapped in the returned error
+	assert.Contains(t, buf.String(), "failed to clear credentials")
 }

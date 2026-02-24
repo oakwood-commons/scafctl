@@ -217,6 +217,7 @@ func Root(opts *RootOptions) *cobra.Command {
 					DefaultScopes: cfg.Auth.Entra.DefaultScopes,
 				}))
 			}
+			entraOpts = append(entraOpts, entra.WithLogger(*lgr))
 			entraHandler, err := entra.New(entraOpts...)
 			if err != nil {
 				lgr.V(1).Info("warning: failed to initialize Entra auth handler", "error", err)
@@ -235,6 +236,7 @@ func Root(opts *RootOptions) *cobra.Command {
 					DefaultScopes: cfg.Auth.GitHub.DefaultScopes,
 				}))
 			}
+			ghOpts = append(ghOpts, ghauth.WithLogger(*lgr))
 			ghHandler, err := ghauth.New(ghOpts...)
 			if err != nil {
 				lgr.V(1).Info("warning: failed to initialize GitHub auth handler", "error", err)
@@ -255,6 +257,7 @@ func Root(opts *RootOptions) *cobra.Command {
 					Project:                   cfg.Auth.GCP.Project,
 				}))
 			}
+			gcpOpts = append(gcpOpts, gcpauth.WithLogger(*lgr))
 			gcpHandler, err := gcpauth.New(gcpOpts...)
 			if err != nil {
 				lgr.V(1).Info("warning: failed to initialize GCP auth handler", "error", err)

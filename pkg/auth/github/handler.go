@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
@@ -41,6 +42,10 @@ const (
 	DefaultMinPollInterval = 5 * time.Second
 )
 
+// authHTTPLogLevel is the verbosity offset applied to the base logger
+// before it is handed to the HTTP transport used by auth handlers.
+const authHTTPLogLevel = 5
+
 // Handler implements auth.Handler for GitHub.
 type Handler struct {
 	config      *Config
@@ -48,6 +53,7 @@ type Handler struct {
 	secretErr   error // deferred error from secrets initialization
 	httpClient  HTTPClient
 	tokenCache  *TokenCache
+	logger      logr.Logger
 }
 
 // Option configures the Handler.
@@ -90,6 +96,15 @@ func WithHTTPClient(client HTTPClient) Option {
 	}
 }
 
+// WithLogger sets the logger for the handler.
+// The logger is offset by authHTTPLogLevel before being passed to the HTTP
+// transport so that auth HTTP traffic only appears at high verbosity.
+func WithLogger(lgr logr.Logger) Option {
+	return func(h *Handler) {
+		h.logger = lgr
+	}
+}
+
 // New creates a new GitHub auth handler.
 // Secret store initialization is deferred — if it fails, the handler is still
 // created so that metadata operations (Name, SupportedFlows, etc.) work.
@@ -115,9 +130,13 @@ func New(opts ...Option) (*Handler, error) {
 		}
 	}
 
+	// Compute the HTTP-level logger: offset by authHTTPLogLevel so that
+	// auth HTTP calls only appear at high verbosity.
+	httpLogger := h.logger.V(authHTTPLogLevel)
+
 	// Initialize HTTP client if not provided
 	if h.httpClient == nil {
-		h.httpClient = NewDefaultHTTPClient()
+		h.httpClient = NewDefaultHTTPClient(httpLogger)
 	}
 
 	// Initialize token cache with secret store (nil-safe: checked before use)
@@ -422,5 +441,98 @@ func farFuture() time.Time {
 	return time.Now().Add(365 * 24 * time.Hour)
 }
 
-// Compile-time check that Handler implements auth.Handler.
-var _ auth.Handler = (*Handler)(nil)
+// Compile-time check that Handler implements auth.Handler, auth.TokenLister, and auth.TokenPurger.
+var (
+	_ auth.Handler     = (*Handler)(nil)
+	_ auth.TokenLister = (*Handler)(nil)
+	_ auth.TokenPurger = (*Handler)(nil)
+)
+
+// ListCachedTokens returns metadata for all tokens stored by the GitHub handler.
+// It includes the OAuth refresh token (device code flow), any directly stored
+// access token (PAT or non-expiring OAuth App), and all minted access tokens
+// from the on-disk cache.  Actual token values are intentionally excluded.
+func (h *Handler) ListCachedTokens(ctx context.Context) ([]*auth.CachedTokenInfo, error) {
+	if err := h.ensureSecrets(); err != nil {
+		return nil, err
+	}
+
+	var results []*auth.CachedTokenInfo
+
+	// Refresh token (device code flow with token expiry enabled)
+	hasRefresh, _ := h.secretStore.Exists(ctx, SecretKeyRefreshToken)
+	if hasRefresh {
+		info := &auth.CachedTokenInfo{
+			Handler:   HandlerName,
+			TokenKind: "refresh",
+			Flow:      auth.FlowDeviceCode,
+		}
+		if metadata, err := h.loadMetadata(ctx); err == nil && metadata != nil {
+			info.ExpiresAt = metadata.RefreshTokenExpiresAt
+			info.CachedAt = metadata.LastRefresh
+			info.SessionID = metadata.SessionID
+		}
+		if !info.ExpiresAt.IsZero() {
+			info.IsExpired = time.Now().After(info.ExpiresAt)
+		}
+		results = append(results, info)
+	}
+
+	// Minted access tokens (short-lived and direct-stored)
+	if h.tokenCache != nil {
+		scopes, _ := h.tokenCache.ListCachedScopes(ctx)
+		for _, scope := range scopes {
+			token, err := h.tokenCache.Get(ctx, scope)
+			if err != nil || token == nil {
+				continue
+			}
+			results = append(results, &auth.CachedTokenInfo{
+				Handler:   HandlerName,
+				TokenKind: "access",
+				TokenType: token.TokenType,
+				Flow:      token.Flow,
+				ExpiresAt: token.ExpiresAt,
+				CachedAt:  token.CachedAt,
+				IsExpired: token.IsExpired(),
+				SessionID: token.SessionID,
+			})
+		}
+	}
+
+	// If no tokenCache entry for the default key but a direct access token exists
+	// (e.g. the user just logged in with PAT and has not yet called GetToken),
+	// show a basic entry so the token is visible.
+	if h.tokenCache != nil {
+		hasAccess, _ := h.secretStore.Exists(ctx, SecretKeyAccessToken)
+		if hasAccess {
+			_, cacheErr := h.tokenCache.Get(ctx, defaultCacheKey)
+			if cacheErr != nil {
+				info := &auth.CachedTokenInfo{
+					Handler:   HandlerName,
+					TokenKind: "access",
+					TokenType: "Bearer",
+				}
+				if metadata, err := h.loadMetadata(ctx); err == nil && metadata != nil {
+					info.CachedAt = metadata.LastRefresh
+					info.SessionID = metadata.SessionID
+				}
+				results = append(results, info)
+			}
+		}
+	}
+
+	return results, nil
+}
+
+// PurgeExpiredTokens removes expired access tokens from the on-disk cache.
+// The refresh token and valid access tokens are left untouched.
+// Returns the number of tokens removed.
+func (h *Handler) PurgeExpiredTokens(ctx context.Context) (int, error) {
+	if err := h.ensureSecrets(); err != nil {
+		return 0, err
+	}
+	if h.tokenCache == nil {
+		return 0, nil
+	}
+	return h.tokenCache.PurgeExpired(ctx)
+}

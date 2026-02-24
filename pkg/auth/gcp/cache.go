@@ -28,6 +28,7 @@ type CachedToken struct {
 	ExpiresAt   time.Time `json:"expiresAt"`
 	Scope       string    `json:"scope"`
 	CachedAt    time.Time `json:"cachedAt"`
+	SessionID   string    `json:"sessionId,omitempty"`
 }
 
 // NewTokenCache creates a new disk-based token cache.
@@ -59,6 +60,8 @@ func (c *TokenCache) Get(ctx context.Context, scope string) (*auth.Token, error)
 		TokenType:   cached.TokenType,
 		ExpiresAt:   cached.ExpiresAt,
 		Scope:       cached.Scope,
+		CachedAt:    cached.CachedAt,
+		SessionID:   cached.SessionID,
 	}, nil
 }
 
@@ -72,6 +75,7 @@ func (c *TokenCache) Set(ctx context.Context, scope string, token *auth.Token) e
 		ExpiresAt:   token.ExpiresAt,
 		Scope:       scope,
 		CachedAt:    time.Now(),
+		SessionID:   token.SessionID,
 	}
 
 	data, err := json.Marshal(cached)
@@ -109,6 +113,29 @@ func (c *TokenCache) Clear(ctx context.Context) error {
 	}
 
 	return lastErr
+}
+
+// PurgeExpired removes all expired access tokens from the cache.
+// Returns the number of tokens removed.
+func (c *TokenCache) PurgeExpired(ctx context.Context) (int, error) {
+	scopes, err := c.ListCachedScopes(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to list cached scopes: %w", err)
+	}
+
+	purged := 0
+	for _, scope := range scopes {
+		token, err := c.Get(ctx, scope)
+		if err != nil || token == nil {
+			continue
+		}
+		if token.IsExpired() {
+			if delErr := c.Delete(ctx, scope); delErr == nil {
+				purged++
+			}
+		}
+	}
+	return purged, nil
 }
 
 // ListCachedScopes returns a list of scopes that have cached tokens.

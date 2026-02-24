@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 )
@@ -25,6 +26,10 @@ type TokenMetadata struct {
 	ImpersonateServiceAccount string       `json:"impersonateServiceAccount,omitempty"`
 	Scopes                    []string     `json:"scopes,omitempty"`
 	ServiceAccountEmail       string       `json:"serviceAccountEmail,omitempty"`
+
+	// SessionID is a stable identifier for the authentication session.
+	// Generated once at login time and preserved across refresh-token rotations.
+	SessionID string `json:"sessionId,omitempty"`
 }
 
 // TokenResponse represents the response from GCP token endpoints.
@@ -44,7 +49,7 @@ type TokenErrorResponse struct {
 }
 
 // storeCredentials securely stores the refresh token and metadata.
-func (h *Handler) storeCredentials(ctx context.Context, tokenResp *TokenResponse, flow auth.Flow, scopes []string) error {
+func (h *Handler) storeCredentials(ctx context.Context, tokenResp *TokenResponse, flow auth.Flow, scopes []string, sessionID string) error {
 	// Store refresh token if present (ADC browser flow)
 	if tokenResp.RefreshToken != "" {
 		if err := h.secretStore.Set(ctx, SecretKeyRefreshToken, []byte(tokenResp.RefreshToken)); err != nil {
@@ -60,6 +65,11 @@ func (h *Handler) storeCredentials(ctx context.Context, tokenResp *TokenResponse
 		}
 	}
 
+	// Generate a new session ID on initial login; preserve across rotations.
+	if sessionID == "" {
+		sessionID = uuid.New().String()
+	}
+
 	metadata := &TokenMetadata{
 		Claims:                    claims,
 		Flow:                      flow,
@@ -67,6 +77,7 @@ func (h *Handler) storeCredentials(ctx context.Context, tokenResp *TokenResponse
 		Project:                   h.config.Project,
 		ImpersonateServiceAccount: h.config.ImpersonateServiceAccount,
 		Scopes:                    scopes,
+		SessionID:                 sessionID,
 	}
 
 	if tokenResp.RefreshToken != "" {
@@ -95,6 +106,7 @@ func (h *Handler) storeMetadataOnly(ctx context.Context, claims *auth.Claims, fl
 		Project:                   h.config.Project,
 		ImpersonateServiceAccount: h.config.ImpersonateServiceAccount,
 		Scopes:                    scopes,
+		SessionID:                 uuid.New().String(),
 	}
 
 	metadataBytes, err := json.Marshal(metadata)
