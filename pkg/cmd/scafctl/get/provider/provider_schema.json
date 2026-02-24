@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Scafctl Provider Catalog",
+  "description": "Schema for scafctl workflow providers with display extensions",
+  "type": "array",
+
+  "x-kvx-icon": "📦",
+  "x-kvx-collectionTitle": "Providers",
+
+  "x-kvx-list": {
+    "titleField": "name",
+    "subtitleField": "description",
+    "subtitleMaxLines": 1,
+    "badgeFields": ["category", "version"]
+  },
+
+  "x-kvx-detail": {
+    "titleField": "displayName",
+    "hiddenFields": [],
+    "sections": [
+      {
+        "title": "",
+        "fields": ["name", "version", "category"],
+        "layout": "inline"
+      },
+      {
+        "title": "Description",
+        "fields": ["description"],
+        "layout": "paragraph"
+      },
+      {
+        "title": "Capabilities",
+        "fields": ["capabilities"],
+        "layout": "tags"
+      },
+      {
+        "title": "Status",
+        "fields": ["beta", "deprecated"],
+        "layout": "table"
+      }
+    ]
+  },
+
+  "items": {
+    "type": "object",
+    "required": ["name", "version"],
+    "properties": {
+      "name": {
+        "type": "string",
+        "title": "Name",
+        "description": "Unique provider identifier"
+      },
+      "displayName": {
+        "type": "string",
+        "title": "Display Name",
+        "description": "Human-readable provider name"
+      },
+      "version": {
+        "type": "string",
+        "title": "Version",
+        "description": "Semantic version of the provider"
+      },
+      "description": {
+        "type": "string",
+        "title": "Description",
+        "description": "Human-readable summary of the provider"
+      },
+      "category": {
+        "type": "string",
+        "title": "Category",
+        "description": "Provider category (e.g., data, filesystem, system, network)"
+      },
+      "capabilities": {
+        "type": "array",
+        "items": { "type": "string" },
+        "title": "Capabilities",
+        "description": "Supported lifecycle hooks (from, transform, action, validation, authentication)"
+      },
+      "beta": {
+        "type": "boolean",
+        "title": "Beta",
+        "description": "Whether the provider is in beta"
+      },
+      "deprecated": {
+        "type": "boolean",
+        "title": "Deprecated",
+        "description": "Whether the provider is deprecated"
+      }
+    }
+  }
+}

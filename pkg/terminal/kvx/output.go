@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"gopkg.in/yaml.v3"
 )
@@ -149,6 +150,26 @@ type OutputOptions struct {
 
 	// PrettyPrint enables indented JSON output
 	PrettyPrint bool `json:"prettyPrint,omitempty" yaml:"prettyPrint,omitempty" doc:"Enable indented JSON output"`
+
+	// ColumnOrder specifies the preferred display order of columns for table rendering.
+	// Fields not listed are appended in their natural order.
+	ColumnOrder []string `json:"columnOrder,omitempty" yaml:"columnOrder,omitempty" doc:"Preferred column display order for table rendering"`
+
+	// ColumnHints provides per-column display customizations (header rename, max width, alignment, visibility).
+	// Use SchemaJSON for a declarative alternative derived from a JSON Schema.
+	ColumnHints map[string]tui.ColumnHint `json:"-" yaml:"-" doc:"Per-column display hints"`
+
+	// SchemaJSON is a JSON Schema document used to derive column display hints.
+	// Parsed via tui.ParseSchema; any ColumnHints set directly take precedence
+	// over schema-derived hints on a per-key basis.
+	SchemaJSON []byte `json:"-" yaml:"-" doc:"JSON Schema for deriving column display hints"`
+
+	// DisplaySchemaJSON is a JSON Schema document with x-kvx-* vendor extensions
+	// that control the interactive TUI's card-list and detail view rendering.
+	// Parsed via tui.ParseSchemaWithDisplay for use in interactive mode.
+	// When set, the TUI renders arrays as a scrollable card list with sectioned
+	// detail views instead of the default KEY/VALUE table.
+	DisplaySchemaJSON []byte `json:"-" yaml:"-" doc:"JSON Schema with x-kvx-* extensions for rich TUI rendering"`
 }
 
 // NewOutputOptions creates a new OutputOptions with default settings.
@@ -219,6 +240,32 @@ func WithOutputPrettyPrint(pretty bool) OutputOption {
 // This enables context-dependent features like debug.out when Writer is in context.
 func WithOutputContext(ctx context.Context) OutputOption {
 	return func(o *OutputOptions) { o.Ctx = ctx }
+}
+
+// WithOutputColumnOrder sets the preferred column order for table rendering.
+func WithOutputColumnOrder(order []string) OutputOption {
+	return func(o *OutputOptions) { o.ColumnOrder = order }
+}
+
+// WithOutputColumnHints sets per-column display hints (header rename, max width, alignment, visibility).
+// For a declarative alternative, use WithOutputSchemaJSON.
+func WithOutputColumnHints(hints map[string]tui.ColumnHint) OutputOption {
+	return func(o *OutputOptions) { o.ColumnHints = hints }
+}
+
+// WithOutputSchemaJSON sets a JSON Schema document used to derive column display hints.
+// The schema is parsed via tui.ParseSchema. Any ColumnHints set directly take
+// precedence over schema-derived hints on a per-key basis.
+func WithOutputSchemaJSON(schema []byte) OutputOption {
+	return func(o *OutputOptions) { o.SchemaJSON = schema }
+}
+
+// WithOutputDisplaySchemaJSON sets a JSON Schema document with x-kvx-* vendor extensions
+// that control the interactive TUI's card-list and detail view rendering.
+// The schema is parsed via tui.ParseSchemaWithDisplay. Column hints derived from
+// the schema are merged with any programmatic ColumnHints (programmatic take precedence).
+func WithOutputDisplaySchemaJSON(schema []byte) OutputOption {
+	return func(o *OutputOptions) { o.DisplaySchemaJSON = schema }
 }
 
 // WithIOStreams sets the IOStreams for output.
@@ -312,6 +359,18 @@ func (o *OutputOptions) writeKvx(data any) error {
 	}
 	if o.Theme != "" {
 		kvxOpts = append(kvxOpts, WithTheme(o.Theme))
+	}
+	if len(o.ColumnOrder) > 0 {
+		kvxOpts = append(kvxOpts, WithColumnOrder(o.ColumnOrder))
+	}
+	if len(o.ColumnHints) > 0 {
+		kvxOpts = append(kvxOpts, WithColumnHints(o.ColumnHints))
+	}
+	if len(o.SchemaJSON) > 0 {
+		kvxOpts = append(kvxOpts, WithSchemaJSON(o.SchemaJSON))
+	}
+	if len(o.DisplaySchemaJSON) > 0 {
+		kvxOpts = append(kvxOpts, WithDisplaySchemaJSON(o.DisplaySchemaJSON))
 	}
 
 	return View(data, kvxOpts...)

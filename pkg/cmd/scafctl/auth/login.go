@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/auth/entra"
 	gcpauth "github.com/oakwood-commons/scafctl/pkg/auth/gcp"
@@ -19,6 +20,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	skvx "github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
@@ -369,6 +371,8 @@ func loginEntra(ctx context.Context, w *writer.Writer, flow auth.Flow, tenantID,
 }
 
 // executeLogin runs the common login logic for any auth handler.
+// For device-code flows on a terminal, it uses the kvx status screen TUI.
+// All other flows (and non-terminal output) use plain text output.
 func executeLogin(ctx context.Context, w *writer.Writer, handler auth.Handler, flow auth.Flow, tenantID string, timeout time.Duration, scopes []string) error {
 	// Set up cancellation handling
 	ctx, cancel := context.WithCancel(ctx)
@@ -384,7 +388,14 @@ func executeLogin(ctx context.Context, w *writer.Writer, handler auth.Handler, f
 	}()
 	defer signal.Stop(sigChan)
 
-	// Prepare login options
+	ioStreams := w.IOStreams()
+
+	// Use kvx status TUI for device-code flows when running in a terminal.
+	if flow == auth.FlowDeviceCode && skvx.IsTerminal(ioStreams.Out) {
+		return executeLoginWithStatusTUI(ctx, w, handler, flow, tenantID, timeout, scopes, ioStreams)
+	}
+
+	// Plain-text login path (non-terminal, or non-device-code flows).
 	loginOpts := auth.LoginOptions{
 		TenantID: tenantID,
 		Scopes:   scopes,
@@ -412,6 +423,171 @@ func executeLogin(ctx context.Context, w *writer.Writer, handler auth.Handler, f
 	}
 
 	w.Info("")
+	return displayLoginResult(w, result, flow)
+}
+
+// executeLoginWithStatusTUI runs the device-code login flow using the kvx status
+// screen TUI. It:
+//  1. Starts handler.Login in a goroutine with a DeviceCodeCallback that captures
+//     the verification URL and user code.
+//  2. Waits for the device code before launching the TUI (avoids empty-data start).
+//  3. Launches tui.Run with a DisplaySchema status view and a Done channel that
+//     receives the login outcome when the goroutine completes.
+func executeLoginWithStatusTUI(
+	ctx context.Context,
+	w *writer.Writer,
+	handler auth.Handler,
+	flow auth.Flow,
+	tenantID string,
+	timeout time.Duration,
+	scopes []string,
+	ioStreams *terminal.IOStreams,
+) error {
+	type deviceCodeData struct {
+		userCode        string
+		verificationURI string
+	}
+	type loginOutcome struct {
+		result *auth.Result
+		err    error
+	}
+
+	deviceCodeChan := make(chan deviceCodeData, 1)
+	outcomeChan := make(chan loginOutcome, 1)
+	done := make(chan tui.StatusResult, 1)
+
+	loginOpts := auth.LoginOptions{
+		TenantID: tenantID,
+		Scopes:   scopes,
+		Flow:     flow,
+		Timeout:  timeout,
+		DeviceCodeCallback: func(userCode, verificationURI, _ string) {
+			select {
+			case deviceCodeChan <- deviceCodeData{userCode: userCode, verificationURI: verificationURI}:
+			default:
+			}
+		},
+	}
+
+	go func() {
+		result, err := handler.Login(ctx, loginOpts)
+		outcomeChan <- loginOutcome{result: result, err: err}
+	}()
+
+	// Wait for the device code, an early completion, or cancellation.
+	w.Infof("Initiating authentication with %s...", handler.DisplayName())
+	var dci deviceCodeData
+	select {
+	case dci = <-deviceCodeChan:
+		// Device code ready - proceed to TUI.
+	case outcome := <-outcomeChan:
+		// Login completed before device code was shown (unusual).
+		if outcome.err != nil {
+			if ctx.Err() != nil {
+				return exitcode.WithCode(auth.ErrUserCancelled, exitcode.GeneralError)
+			}
+			err := fmt.Errorf("authentication failed: %w", outcome.err)
+			w.Errorf("%v", err)
+			return exitcode.WithCode(err, exitcode.GeneralError)
+		}
+		w.Info("")
+		return displayLoginResult(w, outcome.result, flow)
+	case <-ctx.Done():
+		return exitcode.WithCode(auth.ErrUserCancelled, exitcode.GeneralError)
+	}
+
+	// Forward the login outcome to the TUI done channel.
+	// capturedOutcome is safe to read after outcomeReady is closed because
+	// close(outcomeReady) happens-before the receive on that channel.
+	var capturedOutcome loginOutcome
+	outcomeReady := make(chan struct{})
+	go func() {
+		outcome := <-outcomeChan
+		capturedOutcome = outcome
+		if outcome.err != nil {
+			done <- tui.StatusResult{Err: outcome.err}
+		} else {
+			identity := outcome.result.Claims.DisplayIdentity()
+			if identity == "" {
+				identity = "unknown user"
+			}
+			done <- tui.StatusResult{Message: "Authenticated as " + identity}
+		}
+		close(outcomeReady)
+	}()
+
+	data := map[string]any{
+		"title": fmt.Sprintf("Sign in to %s", handler.DisplayName()),
+		"url":   dci.verificationURI,
+		"code":  dci.userCode,
+	}
+
+	schema := &tui.DisplaySchema{
+		Version: "v1",
+		Status: &tui.StatusDisplayConfig{
+			TitleField:     "title",
+			WaitMessage:    "Waiting for authentication...",
+			SuccessMessage: "Authenticated successfully!",
+			DoneBehavior:   tui.DoneBehaviorExitAfterDelay,
+			DoneDelay:      "2s",
+			DisplayFields: []tui.StatusFieldDisplay{
+				{Label: "URL", Field: "url"},
+				{Label: "Code", Field: "code"},
+			},
+			Actions: []tui.StatusActionConfig{
+				{
+					Label: "Copy code",
+					Type:  "copy-value",
+					Field: "code",
+					Keys:  tui.StatusKeyBindings{Vim: "c", Emacs: "alt+c", Function: "f2"},
+				},
+				{
+					Label: "Open URL",
+					Type:  "open-url",
+					Field: "url",
+					Keys:  tui.StatusKeyBindings{Vim: "o", Emacs: "alt+o", Function: "f3"},
+				},
+			},
+		},
+	}
+
+	cfg := tui.DefaultConfig()
+	cfg.AppName = "scafctl"
+	cfg.DisplaySchema = schema
+	cfg.Done = done
+
+	teaOpts := tui.WithIO(ioStreams.In, ioStreams.Out)
+	if runErr := tui.Run(data, cfg, teaOpts...); runErr != nil {
+		if ctx.Err() != nil {
+			return exitcode.WithCode(auth.ErrUserCancelled, exitcode.GeneralError)
+		}
+		return fmt.Errorf("authentication display failed: %w", runErr)
+	}
+
+	// TUI exited normally (done channel received, DoneDelay elapsed).
+	// The outcomeReady channel should already be closed at this point.
+	select {
+	case <-outcomeReady:
+		// Outcome is captured - continue to post-display.
+	default:
+		// TUI exited before login completed (user quit early) - treat as cancelled.
+		return exitcode.WithCode(auth.ErrUserCancelled, exitcode.GeneralError)
+	}
+
+	if capturedOutcome.err != nil {
+		if ctx.Err() != nil {
+			return exitcode.WithCode(auth.ErrUserCancelled, exitcode.GeneralError)
+		}
+		err := fmt.Errorf("authentication failed: %w", capturedOutcome.err)
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
+	}
+
+	return displayLoginResult(w, capturedOutcome.result, flow)
+}
+
+// displayLoginResult prints the authentication success header and claim details.
+func displayLoginResult(w *writer.Writer, result *auth.Result, flow auth.Flow) error {
 	w.Success("Authentication successful!")
 	if result.Claims.Name != "" {
 		w.Infof("  Name:     %s", result.Claims.Name)
@@ -440,7 +616,6 @@ func executeLogin(ctx context.Context, w *writer.Writer, handler auth.Handler, f
 	if flow == auth.FlowInteractive {
 		w.Info("  Flow:     Interactive (Browser OAuth)")
 	}
-
 	return nil
 }
 

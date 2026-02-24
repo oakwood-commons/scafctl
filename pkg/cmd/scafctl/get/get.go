@@ -6,6 +6,7 @@ package get
 import (
 	"fmt"
 
+	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get/authhandler"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get/celfunction"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get/provider"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get/resolver"
@@ -22,6 +23,7 @@ func CommandGet(cliParams *settings.Run, ioStreams *terminal.IOStreams, path str
 		Short:        fmt.Sprintf("Gets %s things", settings.CliBinaryName),
 		SilenceUsage: true,
 	}
+	cCmd.AddCommand(authhandler.CommandAuthHandler(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
 	cCmd.AddCommand(provider.CommandProvider(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
 	cCmd.AddCommand(solution.CommandSolution(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
 	cCmd.AddCommand(resolver.CommandResolver(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
