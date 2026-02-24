@@ -11,7 +11,7 @@ require (
 	github.com/adrg/xdg v0.5.3
 	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/charmbracelet/lipgloss v1.1.0
-	github.com/danielgtaylor/huma/v2 v2.37.1
+	github.com/danielgtaylor/huma/v2 v2.37.2
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/gin-gonic/gin v1.11.0
 	github.com/go-logr/logr v1.4.3
