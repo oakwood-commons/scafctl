@@ -4,6 +4,7 @@
 package provider
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -44,10 +45,9 @@ func (m *ExecutionMetrics) SuccessRate() float64 {
 // Metrics provides global provider metrics collection.
 // It is safe for concurrent use.
 type Metrics struct {
-	enabled    bool
-	prometheus bool
-	mu         sync.RWMutex
-	providers  sync.Map // map[string]*ExecutionMetrics
+	enabled   bool
+	mu        sync.RWMutex
+	providers sync.Map // map[string]*ExecutionMetrics
 }
 
 // GlobalMetrics is the default metrics collector.
@@ -59,28 +59,6 @@ func (m *Metrics) Enable() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.enabled = true
-}
-
-// EnablePrometheus turns on Prometheus metrics recording.
-// When enabled, provider executions are also recorded to Prometheus metrics.
-func (m *Metrics) EnablePrometheus() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.prometheus = true
-}
-
-// DisablePrometheus turns off Prometheus metrics recording.
-func (m *Metrics) DisablePrometheus() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.prometheus = false
-}
-
-// IsPrometheusEnabled returns whether Prometheus metrics recording is enabled.
-func (m *Metrics) IsPrometheusEnabled() bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.prometheus
 }
 
 // Disable turns off metrics collection.
@@ -98,17 +76,15 @@ func (m *Metrics) IsEnabled() bool {
 }
 
 // Record records an execution result for a provider.
-// This is a no-op if metrics collection is disabled.
-// If Prometheus recording is enabled, metrics are also sent to Prometheus.
-func (m *Metrics) Record(providerName string, duration time.Duration, success bool) {
-	// Record to Prometheus if enabled (independent of in-memory metrics)
-	if m.IsPrometheusEnabled() {
-		metrics.RecordProviderExecution(providerName, duration.Seconds(), success)
-	}
-
+// When metrics collection is enabled, results are written to both the in-memory
+// store and the global OTel MeterProvider.
+func (m *Metrics) Record(ctx context.Context, providerName string, duration time.Duration, success bool) {
 	if !m.IsEnabled() {
 		return
 	}
+
+	// Record to OTel.
+	metrics.RecordProviderExecution(ctx, providerName, duration.Seconds(), success)
 
 	pm, _ := m.providers.LoadOrStore(providerName, &ExecutionMetrics{})
 	metrics, ok := pm.(*ExecutionMetrics)

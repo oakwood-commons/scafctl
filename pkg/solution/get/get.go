@@ -21,6 +21,11 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
+	"github.com/oakwood-commons/scafctl/pkg/telemetry"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // CatalogResolver is an interface for fetching solutions from a catalog.
@@ -165,8 +170,16 @@ func (o *Getter) Get(ctx context.Context, path string) (*solution.Solution, erro
 		path = o.FindSolution()
 	}
 
+	ctx, span := telemetry.Tracer(telemetry.TracerSolution).Start(ctx, "solution.Get",
+		trace.WithAttributes(attribute.String("solution.path", path)),
+	)
+	defer span.End()
+
 	defer func() {
-		metrics.GetSolutionTimeHistogram.WithLabelValues(path).Observe(time.Since(start).Seconds())
+		if metrics.GetSolutionTimeHistogram != nil {
+			metrics.GetSolutionTimeHistogram.Record(ctx, time.Since(start).Seconds(),
+				metric.WithAttributes(attribute.String(metrics.AttrPath, path)))
+		}
 	}()
 
 	if path == "" {
@@ -220,8 +233,16 @@ func (o *Getter) GetWithBundle(ctx context.Context, path string) (*solution.Solu
 		path = o.FindSolution()
 	}
 
+	ctx, span := telemetry.Tracer(telemetry.TracerSolution).Start(ctx, "solution.GetWithBundle",
+		trace.WithAttributes(attribute.String("solution.path", path)),
+	)
+	defer span.End()
+
 	defer func() {
-		metrics.GetSolutionTimeHistogram.WithLabelValues(path).Observe(time.Since(start).Seconds())
+		if metrics.GetSolutionTimeHistogram != nil {
+			metrics.GetSolutionTimeHistogram.Record(ctx, time.Since(start).Seconds(),
+				metric.WithAttributes(attribute.String(metrics.AttrPath, path)))
+		}
 	}()
 
 	if path == "" {
@@ -339,16 +360,23 @@ func (o *Getter) fromCatalog(ctx context.Context, nameWithVersion string) (*solu
 //
 //	*solution.Solution - The loaded solution object (empty on error).
 //	error              - An error if reading or unmarshalling fails.
-func (o *Getter) FromLocalFileSystem(_ context.Context, path string) (*solution.Solution, error) {
+func (o *Getter) FromLocalFileSystem(ctx context.Context, path string) (*solution.Solution, error) {
 	if o.readFile == nil {
 		o.readFile = os.ReadFile
 	}
+
+	_, span := telemetry.Tracer(telemetry.TracerSolution).Start(ctx, "solution.FromLocalFileSystem",
+		trace.WithAttributes(attribute.String("solution.path", path)),
+	)
+	defer span.End()
 
 	o.logger.V(1).Info("Reading solution from local filesystem", "path", path)
 
 	data, err := o.readFile(path)
 	if err != nil {
 		o.logger.V(1).Info("Failed to read file", "path", path, "error", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return &solution.Solution{}, fmt.Errorf("unable to get the solution. Failed reading file '%s': %w", path, err)
 	}
 
@@ -400,10 +428,17 @@ func (o *Getter) FromURL(ctx context.Context, url string) (*solution.Solution, e
 		return nil, fmt.Errorf("the provided path to the solution is not a valid URL: %s", url)
 	}
 
+	ctx, span := telemetry.Tracer(telemetry.TracerSolution).Start(ctx, "solution.FromURL",
+		trace.WithAttributes(attribute.String("solution.url", url)),
+	)
+	defer span.End()
+
 	o.logger.V(1).Info("Fetching solution from URL", "url", url)
 	resp, err := o.httpClient.Get(ctx, url)
 	if err != nil {
 		o.logger.Error(err, "Failed to fetch solution from URL", "url", url)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("unable to get the solution. Failed fetching from URL '%s': %w", url, err)
 	}
 	defer resp.Body.Close()

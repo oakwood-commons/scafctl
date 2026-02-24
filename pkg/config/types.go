@@ -16,6 +16,7 @@ type Config struct {
 	Catalogs   []CatalogConfig  `json:"catalogs" yaml:"catalogs" mapstructure:"catalogs" doc:"Configured catalogs" maxItems:"50"`
 	Settings   Settings         `json:"settings" yaml:"settings" mapstructure:"settings" doc:"Application settings"`
 	Logging    LoggingConfig    `json:"logging,omitempty" yaml:"logging,omitempty" mapstructure:"logging" doc:"Logging configuration"`
+	Telemetry  TelemetryConfig  `json:"telemetry,omitempty" yaml:"telemetry,omitempty" mapstructure:"telemetry" doc:"OpenTelemetry configuration"`
 	HTTPClient HTTPClientConfig `json:"httpClient,omitempty" yaml:"httpClient,omitempty" mapstructure:"httpClient" doc:"Global HTTP client configuration"`
 	CEL        CELConfig        `json:"cel,omitempty" yaml:"cel,omitempty" mapstructure:"cel" doc:"CEL expression engine configuration"`
 	Resolver   ResolverConfig   `json:"resolver,omitempty" yaml:"resolver,omitempty" mapstructure:"resolver" doc:"Resolver executor configuration"`
@@ -46,6 +47,29 @@ type Settings struct {
 	DefaultCatalog string `json:"defaultCatalog,omitempty" yaml:"defaultCatalog,omitempty" mapstructure:"defaultCatalog" doc:"Default catalog name" example:"default" maxLength:"255"`
 	NoColor        bool   `json:"noColor,omitempty" yaml:"noColor,omitempty" mapstructure:"noColor" doc:"Disable colored output"`
 	Quiet          bool   `json:"quiet,omitempty" yaml:"quiet,omitempty" mapstructure:"quiet" doc:"Suppress non-essential output"`
+}
+
+// TelemetryConfig holds OpenTelemetry configuration.
+type TelemetryConfig struct {
+	// Endpoint is the OTLP gRPC exporter endpoint (e.g. localhost:4317).
+	// Equivalent to the OTEL_EXPORTER_OTLP_ENDPOINT environment variable.
+	// When empty, traces are written to stderr and no OTLP export occurs.
+	Endpoint string `json:"endpoint,omitempty" yaml:"endpoint,omitempty" mapstructure:"endpoint" doc:"OTLP gRPC exporter endpoint" example:"localhost:4317" maxLength:"2048"`
+
+	// Insecure disables TLS for the OTLP gRPC connection. Useful for local
+	// development setups where the collector has no TLS configured.
+	Insecure bool `json:"insecure,omitempty" yaml:"insecure,omitempty" mapstructure:"insecure" doc:"Disable TLS for OTLP gRPC connection (development only)"`
+
+	// ServiceName overrides the OTel resource service.name attribute.
+	// Defaults to the binary name (scafctl).
+	ServiceName string `json:"serviceName,omitempty" yaml:"serviceName,omitempty" mapstructure:"serviceName" doc:"OTel resource service.name override" example:"scafctl-ci" maxLength:"255"`
+
+	// SamplerType controls the trace sampler. Supported values: always_on, always_off, traceidratio.
+	// Defaults to always_on.
+	SamplerType string `json:"samplerType,omitempty" yaml:"samplerType,omitempty" mapstructure:"samplerType" doc:"Trace sampler type (always_on, always_off, traceidratio)" example:"always_on" maxLength:"50"`
+
+	// SamplerArg is the argument passed to the sampler (e.g. ratio for traceidratio).
+	SamplerArg float64 `json:"samplerArg,omitempty" yaml:"samplerArg,omitempty" mapstructure:"samplerArg" doc:"Sampler argument (e.g. 0.1 for 10% sampling ratio)" example:"1.0"`
 }
 
 // LoggingConfig holds logging configuration.

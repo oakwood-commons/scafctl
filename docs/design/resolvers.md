@@ -2540,6 +2540,49 @@ Resolver execution is instrumented for observability via Prometheus metrics:
 
 Metrics are registered via `RegisterResolverMetrics()` and recorded automatically during execution.
 
+### OpenTelemetry Traces
+
+> **Status**: ✅ Implemented in `pkg/resolver/executor.go`
+
+Resolver execution is also instrumented with OpenTelemetry spans for distributed tracing. Two spans are emitted per resolver invocation:
+
+#### `resolver.Execute` span
+
+Wraps the entire lifecycle of a single named resolver (resolve + transform + validate).
+
+| Property | Value |
+|---|---|
+| Tracer name | `github.com/oakwood-commons/scafctl/resolver` |
+| Span kind | `SpanKindInternal` |
+
+| Attribute | Type | Description |
+|---|---|---|
+| `resolver.count` | int | Total number of resolvers in the current execution batch |
+
+#### `resolver.executeResolver` span
+
+Child span scoped to one resolver's execution inside `executeResolver()`.
+
+| Attribute | Type | Description |
+|---|---|---|
+| `resolver.name` | string | Name of the resolver being executed |
+| `resolver.phase` | string | Current phase: `resolve`, `transform`, or `validate` |
+| `resolver.sensitive` | bool | Whether the resolver is marked sensitive |
+
+#### Error Recording
+
+If a resolver fails, the error is recorded on the innermost active span and the span status is set to `codes.Error` before the span ends. The parent `resolver.Execute` span propagates the error status upward.
+
+#### Trace Hierarchy Example
+
+```
+solution.Get                         ← pkg/solution
+  └─ resolver.Execute                ← full batch
+        └─ resolver.executeResolver  ← one resolver
+              └─ provider.Execute    ← one provider call
+                    └─ HTTP GET ...  ← otelhttp transport
+```
+
 ---
 
 ## Design Constraints

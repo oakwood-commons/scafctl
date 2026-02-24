@@ -1,0 +1,55 @@
+# OTel Collector configuration for local scafctl development.
+# Receives all three signals from scafctl via OTLP gRPC and forwards them to Jaeger.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+
+  # Adds host metadata to every span/metric/log.
+  resourcedetection:
+    detectors: [env, system]
+    timeout: 5s
+    override: false
+
+exporters:
+  # Forward traces to Jaeger via OTLP gRPC.
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+
+  # Debug exporter — prints a short summary of each received batch to the
+  # collector's stdout. Useful for confirming data is flowing.
+  debug:
+    verbosity: normal
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [resourcedetection, batch]
+      exporters: [otlp/jaeger, debug]
+
+    metrics:
+      receivers: [otlp]
+      processors: [resourcedetection, batch]
+      exporters: [debug]
+
+    logs:
+      receivers: [otlp]
+      processors: [resourcedetection, batch]
+      exporters: [debug]
+
+  # Expose Collector's own internal metrics via Prometheus.
+  telemetry:
+    metrics:
+      address: 0.0.0.0:8888
