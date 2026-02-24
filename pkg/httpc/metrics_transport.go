@@ -15,6 +15,9 @@ import (
 	"syscall"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/oakwood-commons/scafctl/pkg/metrics"
 )
 
@@ -38,9 +41,17 @@ func (t *metricsTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	method := req.Method
 	host, pathTemplate := extractMetricLabels(req.URL)
 
+	ctx := req.Context()
+	baseAttrs := []attribute.KeyValue{
+		attribute.String(metrics.AttrMethod, method),
+		attribute.String(metrics.LabelHost, host),
+		attribute.String(metrics.LabelPathTemplate, pathTemplate),
+	}
+
 	// Track request size if body is present
-	if req.Body != nil && req.ContentLength > 0 {
-		metrics.HTTPClientRequestSize.WithLabelValues(method, host, pathTemplate).Observe(float64(req.ContentLength))
+	if req.Body != nil && req.ContentLength > 0 && metrics.HTTPClientRequestSize != nil {
+		metrics.HTTPClientRequestSize.Record(ctx, float64(req.ContentLength),
+			metric.WithAttributes(baseAttrs...))
 	}
 
 	// Execute the request
@@ -54,21 +65,29 @@ func (t *metricsTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	if resp != nil {
 		statusCode = strconv.Itoa(resp.StatusCode)
 		// Track response size if available
-		if resp.ContentLength > 0 {
-			metrics.HTTPClientResponseSize.WithLabelValues(method, host, pathTemplate).Observe(float64(resp.ContentLength))
+		if resp.ContentLength > 0 && metrics.HTTPClientResponseSize != nil {
+			metrics.HTTPClientResponseSize.Record(ctx, float64(resp.ContentLength),
+				metric.WithAttributes(baseAttrs...))
 		}
 	}
 
+	statusAttrs := append(baseAttrs, attribute.String(metrics.AttrStatusCode, statusCode)) //nolint:gocritic
+
 	// Record request duration histogram
-	metrics.HTTPClientDuration.WithLabelValues(method, host, pathTemplate, statusCode).Observe(duration)
+	if metrics.HTTPClientDuration != nil {
+		metrics.HTTPClientDuration.Record(ctx, duration, metric.WithAttributes(statusAttrs...))
+	}
 
 	// Record request counter
-	metrics.HTTPClientRequestsTotal.WithLabelValues(method, host, pathTemplate, statusCode).Inc()
+	if metrics.HTTPClientRequestsTotal != nil {
+		metrics.HTTPClientRequestsTotal.Add(ctx, 1, metric.WithAttributes(statusAttrs...))
+	}
 
 	// Record errors if present
-	if err != nil {
+	if err != nil && metrics.HTTPClientErrorsTotal != nil {
 		errorType := categorizeError(err, resp)
-		metrics.HTTPClientErrorsTotal.WithLabelValues(method, host, pathTemplate, errorType).Inc()
+		metrics.HTTPClientErrorsTotal.Add(ctx, 1,
+			metric.WithAttributes(append(baseAttrs, attribute.String(metrics.AttrErrorType, errorType))...))
 	}
 
 	return resp, err

@@ -4,6 +4,7 @@
 package provider
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -28,7 +29,7 @@ func TestMetrics_Record(t *testing.T) {
 	m := &Metrics{enabled: true}
 
 	// Record a successful execution
-	m.Record("test-provider", 100*time.Millisecond, true)
+	m.Record(context.Background(), "test-provider", 100*time.Millisecond, true)
 
 	metrics := m.GetMetrics("test-provider")
 	require.NotNil(t, metrics)
@@ -44,7 +45,7 @@ func TestMetrics_Record_Disabled(t *testing.T) {
 	m := &Metrics{enabled: false}
 
 	// Recording when disabled should be a no-op
-	m.Record("test-provider", 100*time.Millisecond, true)
+	m.Record(context.Background(), "test-provider", 100*time.Millisecond, true)
 
 	metrics := m.GetMetrics("test-provider")
 	assert.Nil(t, metrics)
@@ -53,7 +54,7 @@ func TestMetrics_Record_Disabled(t *testing.T) {
 func TestMetrics_Record_Failure(t *testing.T) {
 	m := &Metrics{enabled: true}
 
-	m.Record("test-provider", 50*time.Millisecond, false)
+	m.Record(context.Background(), "test-provider", 50*time.Millisecond, false)
 
 	metrics := m.GetMetrics("test-provider")
 	require.NotNil(t, metrics)
@@ -66,9 +67,9 @@ func TestMetrics_Record_Failure(t *testing.T) {
 func TestMetrics_Record_Multiple(t *testing.T) {
 	m := &Metrics{enabled: true}
 
-	m.Record("test-provider", 100*time.Millisecond, true)
-	m.Record("test-provider", 200*time.Millisecond, true)
-	m.Record("test-provider", 50*time.Millisecond, false)
+	m.Record(context.Background(), "test-provider", 100*time.Millisecond, true)
+	m.Record(context.Background(), "test-provider", 200*time.Millisecond, true)
+	m.Record(context.Background(), "test-provider", 50*time.Millisecond, false)
 
 	metrics := m.GetMetrics("test-provider")
 	require.NotNil(t, metrics)
@@ -82,9 +83,9 @@ func TestMetrics_Record_Multiple(t *testing.T) {
 func TestExecutionMetrics_AverageDuration(t *testing.T) {
 	m := &Metrics{enabled: true}
 
-	m.Record("test-provider", 100*time.Millisecond, true)
-	m.Record("test-provider", 200*time.Millisecond, true)
-	m.Record("test-provider", 300*time.Millisecond, true)
+	m.Record(context.Background(), "test-provider", 100*time.Millisecond, true)
+	m.Record(context.Background(), "test-provider", 200*time.Millisecond, true)
+	m.Record(context.Background(), "test-provider", 300*time.Millisecond, true)
 
 	metrics := m.GetMetrics("test-provider")
 	require.NotNil(t, metrics)
@@ -101,10 +102,10 @@ func TestExecutionMetrics_AverageDuration_Empty(t *testing.T) {
 func TestExecutionMetrics_SuccessRate(t *testing.T) {
 	m := &Metrics{enabled: true}
 
-	m.Record("test-provider", 100*time.Millisecond, true)
-	m.Record("test-provider", 100*time.Millisecond, true)
-	m.Record("test-provider", 100*time.Millisecond, false)
-	m.Record("test-provider", 100*time.Millisecond, false)
+	m.Record(context.Background(), "test-provider", 100*time.Millisecond, true)
+	m.Record(context.Background(), "test-provider", 100*time.Millisecond, true)
+	m.Record(context.Background(), "test-provider", 100*time.Millisecond, false)
+	m.Record(context.Background(), "test-provider", 100*time.Millisecond, false)
 
 	metrics := m.GetMetrics("test-provider")
 	require.NotNil(t, metrics)
@@ -121,8 +122,8 @@ func TestExecutionMetrics_SuccessRate_Empty(t *testing.T) {
 func TestMetrics_GetAllMetrics(t *testing.T) {
 	m := &Metrics{enabled: true}
 
-	m.Record("provider-a", 100*time.Millisecond, true)
-	m.Record("provider-b", 200*time.Millisecond, false)
+	m.Record(context.Background(), "provider-a", 100*time.Millisecond, true)
+	m.Record(context.Background(), "provider-b", 200*time.Millisecond, false)
 
 	all := m.GetAllMetrics()
 
@@ -137,8 +138,8 @@ func TestMetrics_GetAllMetrics(t *testing.T) {
 func TestMetrics_Reset(t *testing.T) {
 	m := &Metrics{enabled: true}
 
-	m.Record("provider-a", 100*time.Millisecond, true)
-	m.Record("provider-b", 200*time.Millisecond, true)
+	m.Record(context.Background(), "provider-a", 100*time.Millisecond, true)
+	m.Record(context.Background(), "provider-b", 200*time.Millisecond, true)
 
 	assert.Len(t, m.GetAllMetrics(), 2)
 
@@ -161,7 +162,7 @@ func TestMetrics_ConcurrentAccess(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < numRecordsPerGoroutine; j++ {
-				m.Record("concurrent-provider", time.Millisecond, true)
+				m.Record(context.Background(), "concurrent-provider", time.Millisecond, true)
 			}
 		}()
 	}

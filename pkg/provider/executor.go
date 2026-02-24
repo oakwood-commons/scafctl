@@ -7,6 +7,11 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/oakwood-commons/scafctl/pkg/telemetry"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // ExecutionResult contains the result of a provider execution.
@@ -99,6 +104,12 @@ func (e *Executor) Execute(ctx context.Context, provider Provider, inputs map[st
 		return nil, fmt.Errorf("provider descriptor cannot be nil")
 	}
 
+	// Start a span for this provider execution.
+	ctx, span := telemetry.Tracer(telemetry.TracerProvider).Start(ctx, "provider.Execute",
+		trace.WithAttributes(attribute.String("provider.name", desc.Name)),
+	)
+	defer span.End()
+
 	// Validate execution mode
 	if err := validateExecutionMode(ctx, desc); err != nil {
 		return nil, err
@@ -143,13 +154,18 @@ func (e *Executor) Execute(ctx context.Context, provider Provider, inputs map[st
 	executionDuration := time.Since(startTime)
 
 	// Record metrics (no-op if metrics collection is disabled)
-	GlobalMetrics.Record(desc.Name, executionDuration, err == nil)
+	GlobalMetrics.Record(ctx, desc.Name, executionDuration, err == nil)
 
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("provider execution failed: %w", err)
 	}
 	if outputPtr == nil {
-		return nil, fmt.Errorf("provider returned nil output")
+		nilErr := fmt.Errorf("provider returned nil output")
+		span.RecordError(nilErr)
+		span.SetStatus(codes.Error, nilErr.Error())
+		return nil, nilErr
 	}
 	output := *outputPtr
 

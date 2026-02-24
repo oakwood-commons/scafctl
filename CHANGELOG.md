@@ -6,6 +6,42 @@ All notable changes to this project will be documented in this file.
 
 ### 🚀 Features
 
+- *(auth)* [**breaking**] Add builtin GitHub authentication handler (#78)
+- *(auth)* Add GCP authentication handler (#80)
+- Prepare codebase for MCP server integration (#81)
+- *(mcp)* Add MCP server implementation with tools for solutions, providers, CEL, auth, catalog, schema, and examples (#82)
+- [**breaking**] Consolidate test schema under \spec.testing\ and add mock HTTP… (#84)
+- *(auth/gcp)* [**breaking**] Native browser OAuth for GCP login, add gcloud-adc flow (#85)
+- Add schema validation to lint, Entra group membership, and AADS… (#86)
+- Add auto and list output formats to kvx (#87)
+- *(mcp)* Add solution developer experience tools (Phase 5) (#88)
+- *(kvx,provider)* Replace bespoke TUI with schema-driven kvx card-l… (#95)
+- *(auth)* Add diagnose command, enhance list/status/token/login com… (#96)
+
+### 🐛 Bug Fixes
+
+- *(auth)* Preserve login-time client ID during token rotation (#79)
+
+### 💼 Other
+
+- *(deps)* Bump github.com/danielgtaylor/huma/v2 from 2.37.1 to 2.37.2 (#93)
+- *(deps)* Bump github.com/oakwood-commons/kvx from 0.4.0 to 0.6.0 (#92)
+- *(deps)* Bump goreleaser/goreleaser-action from 6 to 7 (#91)
+
+### 🧪 Testing
+
+- Add solution integration tests for exclusive actions, forEach f… (#83)
+
+## [0.4.0] - 2026-02-17
+
+### 🚀 Features
+
+- [**breaking**] Add object type coercion, single final-value coercion, and action streaming output (#77)
+
+## [0.3.0] - 2026-02-16
+
+### 🚀 Features
+
 - *(build)* Add incremental build caching and remote artifact auto-caching (#47)
 - *(soltesting)* Implement functional testing framework (#49)
 - *(testing)* Add subprocess executor and functional integration test suite (#63)
@@ -14,6 +50,11 @@ All notable changes to this project will be documented in this file.
 ### 🚜 Refactor
 
 - *(cmd)* [**breaking**] Eliminate Root() package-level state for parallel exection (#48)
+
+### ⚙️ Miscellaneous Tasks
+
+- Prepare repository for public release (#65)
+- Block fork PR workflows and update Go dependencies (#76)
 
 ## [0.2.0] - 2026-02-12
 

@@ -75,6 +75,17 @@ const (
 	DefaultMaxValueSize = 10 * 1024 * 1024
 )
 
+// OTel / telemetry defaults
+const (
+	// DefaultOTelSamplerType is the default trace sampler. always_on means every
+	// span is recorded (appropriate for a CLI tool with low call volume).
+	DefaultOTelSamplerType = "always_on"
+
+	// DefaultOTelSamplerArg is the default argument for the sampler.
+	// For traceidratio this is the sampling probability (0.0–1.0).
+	DefaultOTelSamplerArg = 1.0
+)
+
 // CEL defaults
 const (
 	// DefaultCELCacheSize is the default size for the CEL program cache.

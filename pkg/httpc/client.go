@@ -16,6 +16,9 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/metrics"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"ivan.dev/httpcache"
 )
 
@@ -166,6 +169,16 @@ func NewClient(config *ClientConfig) *Client {
 		retryClient.Logger = nil
 	}
 
+	// Wrap the retryClient's inner transport with OTel tracing so every actual
+	// HTTP attempt gets a span and W3C Trace Context headers are injected.
+	{
+		base := retryClient.HTTPClient.Transport
+		if base == nil {
+			base = http.DefaultTransport
+		}
+		retryClient.HTTPClient.Transport = otelhttp.NewTransport(base)
+	}
+
 	// Configure the HTTP client with caching if enabled
 	var httpClient *http.Client
 	var cache httpcache.Cache
@@ -299,8 +312,8 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 	}
 
 	// Track concurrent requests
-	metrics.HTTPClientConcurrentRequests.Inc()
-	defer metrics.HTTPClientConcurrentRequests.Dec()
+	metrics.IncConcurrentRequests(req.Context())
+	defer metrics.DecConcurrentRequests(req.Context())
 
 	// Convert to retryable request for retry logic
 	retryReq, err := retryablehttp.FromRequest(req)
@@ -563,7 +576,7 @@ func wrapCheckRetryWithMetrics(original retryablehttp.CheckRetry) retryablehttp.
 			shouldRetry, checkErr = retryablehttp.DefaultRetryPolicy(ctx, resp, err)
 		}
 
-		if shouldRetry {
+		if shouldRetry && metrics.HTTPClientRetriesTotal != nil {
 			method := "unknown"
 			host := "unknown"
 			pathTemplate := "/"
@@ -572,7 +585,12 @@ func wrapCheckRetryWithMetrics(original retryablehttp.CheckRetry) retryablehttp.
 				method = resp.Request.Method
 				host, pathTemplate = extractMetricLabels(resp.Request.URL)
 			}
-			metrics.HTTPClientRetriesTotal.WithLabelValues(method, host, pathTemplate).Inc()
+			metrics.HTTPClientRetriesTotal.Add(ctx, 1,
+				metric.WithAttributes(
+					attribute.String(metrics.AttrMethod, method),
+					attribute.String(metrics.LabelHost, host),
+					attribute.String(metrics.LabelPathTemplate, pathTemplate),
+				))
 		}
 
 		return shouldRetry, checkErr

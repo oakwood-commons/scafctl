@@ -13,7 +13,11 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
+	"github.com/oakwood-commons/scafctl/pkg/telemetry"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Executor runs actions in dependency order with support for parallel execution,
@@ -250,6 +254,12 @@ func (e *Executor) Execute(ctx context.Context, w *Workflow) (*ExecutionResult, 
 	// Store workflow-level result schema mode for use during action execution
 	e.workflowResultSchemaMode = w.ResultSchemaMode
 
+	// Create a span for the full workflow execution.
+	ctx, span := telemetry.Tracer(telemetry.TracerAction).Start(ctx, "action.Execute",
+		trace.WithAttributes(attribute.Int("action.count", len(w.Actions))),
+	)
+	defer span.End()
+
 	result := &ExecutionResult{
 		Actions:   make(map[string]*ActionResult),
 		StartTime: time.Now(),
@@ -263,6 +273,8 @@ func (e *Executor) Execute(ctx context.Context, w *Workflow) (*ExecutionResult, 
 	graph, err := BuildGraph(ctx, w, e.resolverData, nil)
 	if err != nil {
 		result.FinalStatus = ExecutionFailed
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return result, fmt.Errorf("failed to build action graph: %w", err)
 	}
 
@@ -507,6 +519,12 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		return fmt.Errorf("action not found in graph")
 	}
 
+	// Create a child span for this individual action execution.
+	ctx, span := telemetry.Tracer(telemetry.TracerAction).Start(ctx, "action.executeAction",
+		trace.WithAttributes(attribute.String("action.name", actionName)),
+	)
+	defer span.End()
+
 	// Evaluate condition if present
 	if action.When != nil {
 		additionalVars := map[string]any{
@@ -537,6 +555,8 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		if e.progressCallback != nil {
 			e.progressCallback.OnActionFailed(actionName, err)
 		}
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return err
 	}
 
@@ -577,7 +597,10 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		if e.progressCallback != nil {
 			e.progressCallback.OnActionTimeout(actionName, timeout)
 		}
-		return fmt.Errorf("action timed out after %v", timeout)
+		timeoutErr := fmt.Errorf("action timed out after %v", timeout)
+		span.RecordError(timeoutErr)
+		span.SetStatus(codes.Error, timeoutErr.Error())
+		return timeoutErr
 	}
 
 	if err != nil {
@@ -590,6 +613,8 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		if action.OnError.OrDefault() == spec.OnErrorContinue {
 			return nil
 		}
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return err
 	}
 

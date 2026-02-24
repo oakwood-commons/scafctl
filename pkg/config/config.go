@@ -119,6 +119,13 @@ func (m *Manager) setDefaults() {
 	m.v.SetDefault("logging.timestamps", true)
 	m.v.SetDefault("logging.enableProfiling", false)
 
+	// Telemetry defaults
+	m.v.SetDefault("telemetry.endpoint", "")
+	m.v.SetDefault("telemetry.insecure", false)
+	m.v.SetDefault("telemetry.serviceName", "")
+	m.v.SetDefault("telemetry.samplerType", settings.DefaultOTelSamplerType)
+	m.v.SetDefault("telemetry.samplerArg", settings.DefaultOTelSamplerArg)
+
 	// HTTP client defaults - all values from settings package
 	m.v.SetDefault("httpClient.timeout", settings.DefaultHTTPTimeout.String())
 	m.v.SetDefault("httpClient.retryMax", settings.DefaultHTTPRetryMax)
@@ -193,6 +200,7 @@ func (m *Manager) Save() error {
 	m.v.Set("catalogs", m.config.Catalogs)
 	m.v.Set("settings", m.config.Settings)
 	m.v.Set("logging", m.config.Logging)
+	m.v.Set("telemetry", m.config.Telemetry)
 	m.v.Set("httpClient", m.config.HTTPClient)
 	m.v.Set("cel", m.config.CEL)
 	m.v.Set("resolver", m.config.Resolver)
@@ -220,6 +228,7 @@ func (m *Manager) SaveAs(path string) error {
 	m.v.Set("catalogs", m.config.Catalogs)
 	m.v.Set("settings", m.config.Settings)
 	m.v.Set("logging", m.config.Logging)
+	m.v.Set("telemetry", m.config.Telemetry)
 	m.v.Set("httpClient", m.config.HTTPClient)
 	m.v.Set("cel", m.config.CEL)
 	m.v.Set("resolver", m.config.Resolver)

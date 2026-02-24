@@ -6,6 +6,7 @@ package scafctl
 import (
 	"context"
 	"os"
+	"time"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
@@ -35,14 +36,15 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/version"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/metrics"
 	"github.com/oakwood-commons/scafctl/pkg/profiler"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/telemetry"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/input"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
-	"go.uber.org/zap"
 )
 
 // RootOptions configures a Root() invocation. All fields are optional;
@@ -87,10 +89,12 @@ func Root(opts *RootOptions) *cobra.Command {
 	// Per-invocation state — no package-level mutable variables.
 	cliParams := settings.NewCliParams()
 	var (
-		configPath = opts.ConfigPath
-		debugFlag  bool
-		logFormat  = "console"
-		logFile    string
+		configPath   = opts.ConfigPath
+		debugFlag    bool
+		logFormat    = "console"
+		logFile      string
+		otelInsecure bool
+		telShutdown  func(context.Context) error
 	)
 
 	// Resolve IOStreams: use caller-provided or default to OS streams.
@@ -168,11 +172,45 @@ func Root(opts *RootOptions) *cobra.Command {
 				}
 			}
 
-			// Parse the resolved log level string to a zap level
-			zapLevel, parseErr := logger.ParseLogLevel(resolvedLogLevel)
+			// ── OTel setup (must run before logger so otellogr picks up real provider) ──
+			// Priority: CLI flag > OTEL_EXPORTER_OTLP_ENDPOINT env var > config file > default (empty)
+			otelEndpoint := cfg.Telemetry.Endpoint
+			if envEndpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); envEndpoint != "" {
+				otelEndpoint = envEndpoint
+			}
+			if cCmd.Flags().Changed("otel-endpoint") {
+				otelEndpoint, _ = cCmd.Flags().GetString("otel-endpoint")
+			}
+			// Priority for insecure: CLI flag > config file > default (false)
+			resolvedOtelInsecure := cfg.Telemetry.Insecure
+			if cCmd.Flags().Changed("otel-insecure") {
+				resolvedOtelInsecure = otelInsecure
+			}
+			// Service name: CLI has no override flag; config file > default (binary name)
+			serviceName := settings.CliBinaryName
+			if cfg.Telemetry.ServiceName != "" {
+				serviceName = cfg.Telemetry.ServiceName
+			}
+			telShutdown, err = telemetry.Setup(context.Background(), telemetry.Options{
+				ServiceName:      serviceName,
+				ServiceVersion:   settings.VersionInformation.BuildVersion,
+				ExporterEndpoint: otelEndpoint,
+				ExporterInsecure: resolvedOtelInsecure,
+			})
+			if err != nil {
+				_, _ = ioStreams.ErrOut.Write([]byte("Warning: failed to initialize telemetry: " + err.Error() + "\n"))
+			}
+
+			// Initialise OTel metric instruments (must run after telemetry.Setup).
+			if initErr := metrics.InitMetrics(context.Background()); initErr != nil {
+				_, _ = ioStreams.ErrOut.Write([]byte("Warning: failed to initialize metrics: " + initErr.Error() + "\n"))
+			}
+
+			// Parse the resolved log level string to a slog level
+			logLevel, parseErr := logger.ParseLogLevel(resolvedLogLevel)
 			if parseErr != nil {
 				_, _ = ioStreams.ErrOut.Write([]byte("Warning: " + parseErr.Error() + ", defaulting to 'none'\n"))
-				zapLevel = logger.LogLevelNone
+				logLevel = logger.LogLevelNone
 			}
 
 			// Map format string to logger.LogFormat
@@ -188,7 +226,7 @@ func Root(opts *RootOptions) *cobra.Command {
 
 			// Build logger options
 			logOpts := logger.Options{
-				Level:      zapLevel,
+				Level:      logLevel,
 				Timestamps: cfg.Logging.Timestamps,
 				Format:     logFmt,
 				FilePath:   resolvedLogFile,
@@ -299,11 +337,18 @@ func Root(opts *RootOptions) *cobra.Command {
 				go func() {
 					e := p.Start(lgr)
 					if e != nil {
-						lgr.V(1).Info("Error starting profiler", zap.Error(e))
+						lgr.V(1).Info("Error starting profiler", "error", e)
 						w.Errorf("Error starting profiler: %v", e)
 						return
 					}
 				}()
+			}
+		},
+		PersistentPostRun: func(_ *cobra.Command, _ []string) {
+			if telShutdown != nil {
+				shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_ = telShutdown(shutCtx)
 			}
 		},
 		Annotations: map[string]string{
@@ -320,6 +365,8 @@ func Root(opts *RootOptions) *cobra.Command {
 	cCmd.PersistentFlags().StringVar(&configPath, "config", "", "Path to config file (default: ~/.scafctl/config.yaml)")
 	cCmd.PersistentFlags().String("pprof", "", "Enable profiling (options: memory, cpu)")
 	cCmd.PersistentFlags().String("pprof-output-dir", "./", "directory path to save the profiler.prof file (default: current working directory)")
+	cCmd.PersistentFlags().String("otel-endpoint", "", "OpenTelemetry OTLP exporter endpoint (e.g. localhost:4317). Overrides OTEL_EXPORTER_OTLP_ENDPOINT")
+	cCmd.PersistentFlags().BoolVar(&otelInsecure, "otel-insecure", false, "Disable TLS for OTLP gRPC connection (development only)")
 
 	if err := cCmd.PersistentFlags().MarkHidden("pprof"); err != nil {
 		return nil

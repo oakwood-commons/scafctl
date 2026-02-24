@@ -1,191 +1,283 @@
 // Copyright 2025-2026 Oakwood Commons
 // SPDX-License-Identifier: Apache-2.0
 
+// Package metrics provides OpenTelemetry metric instruments for the scafctl application.
+// All instruments are initialized by calling InitMetrics after telemetry.Setup so that
+// the real SDK MeterProvider is in place.
 package metrics
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strconv"
+	"sync"
+	"sync/atomic"
 
 	"github.com/gin-gonic/gin"
-	"github.com/oakwood-commons/scafctl/pkg/settings"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
+// Attribute key constants used as OTel metric labels.
 const (
-	statusCodeLabel   = "status_code"
-	urlLabel          = "url"
-	pathLabel         = "path"
-	methodLabel       = "method"
-	errorTypeLabel    = "error_type"
+	AttrStatusCode    = "status_code"
+	AttrURL           = "url"
+	AttrPath          = "path"
+	AttrMethod        = "method"
+	AttrErrorType     = "error_type"
 	LabelHost         = "host"
 	LabelPathTemplate = "path_template"
-	providerNameLabel = "provider_name"
-	statusLabel       = "status"
+	AttrProviderName  = "provider_name"
+	AttrStatus        = "status"
 )
 
+// requestTimesBuckets are the histogram bucket boundaries used for duration metrics.
+var requestTimesBuckets = []float64{.1, .2, .4, .6, .8, 1, 2.5, 5, 10, 20}
+
+// backing stores for observable gauge instruments
 var (
-	requestTimesBuckets = []float64{.1, .2, .4, .6, .8, 1, 2.5, 5, 10, 20}
-
-	// httpRequestsTotal is a Prometheus counter vector that tracks the total number of HTTP requests.
-	// It is labeled by request path and status code, allowing for detailed metrics on request volume and outcomes.
-	// The metric name is dynamically generated based on the CLI binary name from settings.
-	httpRequestsTotal = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: fmt.Sprintf("%s_http_requests_total", settings.CliBinaryName),
-			Help: "Number of HTTP requests",
-		},
-		[]string{pathLabel, statusCodeLabel},
-	)
-
-	// HTTPClientDuration is a Prometheus histogram vector that records the duration of HTTP client requests in seconds.
-	// It is labeled by HTTP method, host, path template, and status code to provide detailed performance metrics
-	// while maintaining bounded cardinality through path parameterization.
-	HTTPClientDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    fmt.Sprintf("%s_http_client_duration_seconds", settings.CliBinaryName),
-		Help:    "HTTP client request duration in seconds",
-		Buckets: requestTimesBuckets,
-	}, []string{methodLabel, LabelHost, LabelPathTemplate, statusCodeLabel})
-
-	// HTTPClientRequestsTotal is a Prometheus counter vector that tracks the total number of HTTP client requests.
-	// It is labeled by HTTP method, host, path template, and status code.
-	HTTPClientRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: fmt.Sprintf("%s_http_client_requests_total", settings.CliBinaryName),
-		Help: "Total number of HTTP client requests",
-	}, []string{methodLabel, LabelHost, LabelPathTemplate, statusCodeLabel})
-
-	// HTTPClientErrorsTotal is a Prometheus counter vector that tracks the total number of HTTP client errors.
-	// It is labeled by HTTP method, host, path template, and error type (e.g., client_error, server_error, timeout, etc.).
-	HTTPClientErrorsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: fmt.Sprintf("%s_http_client_errors_total", settings.CliBinaryName),
-		Help: "Total number of HTTP client errors by type",
-	}, []string{methodLabel, LabelHost, LabelPathTemplate, errorTypeLabel})
-
-	// HTTPClientRetriesTotal is a Prometheus counter vector that tracks the total number of HTTP client retry attempts.
-	// It is labeled by HTTP method, host, and path template.
-	HTTPClientRetriesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: fmt.Sprintf("%s_http_client_retries_total", settings.CliBinaryName),
-		Help: "Total number of HTTP client retry attempts",
-	}, []string{methodLabel, LabelHost, LabelPathTemplate})
-
-	// HTTPClientCacheHits is a Prometheus gauge that tracks the total number of HTTP cache hits.
-	HTTPClientCacheHits = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: fmt.Sprintf("%s_http_client_cache_hits_total", settings.CliBinaryName),
-		Help: "Total number of HTTP cache hits",
-	})
-
-	// HTTPClientCacheMisses is a Prometheus gauge that tracks the total number of HTTP cache misses.
-	HTTPClientCacheMisses = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: fmt.Sprintf("%s_http_client_cache_misses_total", settings.CliBinaryName),
-		Help: "Total number of HTTP cache misses",
-	})
-
-	// HTTPClientRequestSize is a Prometheus histogram vector that records the size of HTTP request bodies in bytes.
-	HTTPClientRequestSize = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    fmt.Sprintf("%s_http_client_request_size_bytes", settings.CliBinaryName),
-		Help:    "HTTP client request body size in bytes",
-		Buckets: []float64{100, 1000, 10000, 100000, 1000000, 10000000},
-	}, []string{methodLabel, LabelHost, LabelPathTemplate})
-
-	// HTTPClientResponseSize is a Prometheus histogram vector that records the size of HTTP response bodies in bytes.
-	HTTPClientResponseSize = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    fmt.Sprintf("%s_http_client_response_size_bytes", settings.CliBinaryName),
-		Help:    "HTTP client response body size in bytes",
-		Buckets: []float64{100, 1000, 10000, 100000, 1000000, 10000000},
-	}, []string{methodLabel, LabelHost, LabelPathTemplate})
-
-	// HTTPClientCacheSizeBytes is a Prometheus gauge that tracks the total size of cached data in bytes.
-	HTTPClientCacheSizeBytes = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: fmt.Sprintf("%s_http_client_cache_size_bytes", settings.CliBinaryName),
-		Help: "Total size of HTTP client cache in bytes",
-	})
-
-	// HTTPClientConcurrentRequests is a Prometheus gauge that tracks the current number of concurrent HTTP requests.
-	HTTPClientConcurrentRequests = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: fmt.Sprintf("%s_http_client_concurrent_requests", settings.CliBinaryName),
-		Help: "Current number of concurrent HTTP client requests",
-	})
-
-	// HTTPClientCircuitBreakerState is a Prometheus gauge vector that tracks circuit breaker states (0=closed, 1=open, 2=half-open).
-	HTTPClientCircuitBreakerState = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: fmt.Sprintf("%s_http_client_circuit_breaker_state", settings.CliBinaryName),
-		Help: "Circuit breaker state: 0=closed, 1=open, 2=half-open",
-	}, []string{LabelHost})
-
-	// GetSolutionTimeHistogram is a Prometheus histogram vector that records the duration (in seconds)
-	// it takes to retrieve a solution. The histogram is labeled by the request path and uses predefined
-	// buckets specified by requestTimesBuckets. This metric helps monitor and analyze the performance
-	// of solution retrieval operations.
-	GetSolutionTimeHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    fmt.Sprintf("%s_get_solution_duration_seconds", settings.CliBinaryName),
-		Help:    "Histogram of the time it takes to get a solution in seconds",
-		Buckets: requestTimesBuckets,
-	}, []string{pathLabel})
-
-	// ProviderExecutionDuration is a Prometheus histogram vector that records the duration of provider executions in seconds.
-	// It is labeled by provider name and status (success/failure) for observability into provider performance.
-	ProviderExecutionDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    fmt.Sprintf("%s_provider_execution_duration_seconds", settings.CliBinaryName),
-		Help:    "Provider execution duration in seconds",
-		Buckets: requestTimesBuckets,
-	}, []string{providerNameLabel, statusLabel})
-
-	// ProviderExecutionTotal is a Prometheus counter vector that tracks the total number of provider executions.
-	// It is labeled by provider name and status (success/failure).
-	ProviderExecutionTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: fmt.Sprintf("%s_provider_execution_total", settings.CliBinaryName),
-		Help: "Total number of provider executions",
-	}, []string{providerNameLabel, statusLabel})
+	cacheSizeBytesVal    atomic.Int64
+	circuitBreakerStates sync.Map // map[string]float64
 )
 
-// Handler returns an HTTP handler that exposes Prometheus metrics.
-// It can be used to serve metrics at an endpoint for scraping by Prometheus.
-func Handler() http.Handler {
-	return promhttp.Handler()
+// OTel metric instruments (initialised by InitMetrics).
+var (
+	HTTPClientDuration        metric.Float64Histogram
+	HTTPClientRequestsTotal   metric.Int64Counter
+	HTTPClientErrorsTotal     metric.Int64Counter
+	HTTPClientRetriesTotal    metric.Int64Counter
+	HTTPClientCacheHits       metric.Int64Counter
+	HTTPClientCacheMisses     metric.Int64Counter
+	HTTPClientRequestSize     metric.Float64Histogram
+	HTTPClientResponseSize    metric.Float64Histogram
+	GetSolutionTimeHistogram  metric.Float64Histogram
+	ProviderExecutionDuration metric.Float64Histogram
+	ProviderExecutionTotal    metric.Int64Counter
+)
+
+// private instruments
+var (
+	httpRequestsTotal             metric.Int64Counter
+	httpClientConcurrentRequests  metric.Int64UpDownCounter
+	httpClientCacheSizeBytes      metric.Float64ObservableGauge
+	httpClientCircuitBreakerState metric.Float64ObservableGauge
+)
+
+var initOnce sync.Once
+
+// InitMetrics initialises all OTel metric instruments from the global MeterProvider.
+// Must be called after telemetry.Setup. Safe to call multiple times.
+func InitMetrics(_ context.Context) error {
+	var initErr error
+	initOnce.Do(func() {
+		m := otel.GetMeterProvider().Meter(settings.CliBinaryName)
+		n := settings.CliBinaryName
+		var err error
+
+		httpRequestsTotal, err = m.Int64Counter(fmt.Sprintf("%s_http_requests_total", n),
+			metric.WithDescription("Number of HTTP requests"))
+		if err != nil {
+			initErr = fmt.Errorf("httpRequestsTotal: %w", err)
+			return
+		}
+
+		httpClientConcurrentRequests, err = m.Int64UpDownCounter(fmt.Sprintf("%s_http_client_concurrent_requests", n),
+			metric.WithDescription("Current number of concurrent HTTP client requests"))
+		if err != nil {
+			initErr = fmt.Errorf("httpClientConcurrentRequests: %w", err)
+			return
+		}
+
+		httpClientCacheSizeBytes, err = m.Float64ObservableGauge(fmt.Sprintf("%s_http_client_cache_size_bytes", n),
+			metric.WithDescription("Total size of HTTP client cache in bytes"),
+			metric.WithUnit("By"))
+		if err != nil {
+			initErr = fmt.Errorf("httpClientCacheSizeBytes: %w", err)
+			return
+		}
+		if _, regErr := m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
+			o.ObserveFloat64(httpClientCacheSizeBytes, float64(cacheSizeBytesVal.Load()))
+			return nil
+		}, httpClientCacheSizeBytes); regErr != nil {
+			initErr = fmt.Errorf("register httpClientCacheSizeBytes callback: %w", regErr)
+			return
+		}
+
+		httpClientCircuitBreakerState, err = m.Float64ObservableGauge(fmt.Sprintf("%s_http_client_circuit_breaker_state", n),
+			metric.WithDescription("Circuit breaker state: 0=closed, 1=open, 2=half-open"))
+		if err != nil {
+			initErr = fmt.Errorf("httpClientCircuitBreakerState: %w", err)
+			return
+		}
+		if _, regErr := m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
+			circuitBreakerStates.Range(func(key, val any) bool {
+				host, _ := key.(string)
+				state, _ := val.(float64)
+				o.ObserveFloat64(httpClientCircuitBreakerState, state,
+					metric.WithAttributes(attribute.String(LabelHost, host)))
+				return true
+			})
+			return nil
+		}, httpClientCircuitBreakerState); regErr != nil {
+			initErr = fmt.Errorf("register httpClientCircuitBreakerState callback: %w", regErr)
+			return
+		}
+
+		HTTPClientDuration, err = m.Float64Histogram(fmt.Sprintf("%s_http_client_duration_seconds", n),
+			metric.WithDescription("HTTP client request duration in seconds"),
+			metric.WithUnit("s"),
+			metric.WithExplicitBucketBoundaries(requestTimesBuckets...))
+		if err != nil {
+			initErr = fmt.Errorf("HTTPClientDuration: %w", err)
+			return
+		}
+
+		HTTPClientRequestsTotal, err = m.Int64Counter(fmt.Sprintf("%s_http_client_requests_total", n),
+			metric.WithDescription("Total number of HTTP client requests"))
+		if err != nil {
+			initErr = fmt.Errorf("HTTPClientRequestsTotal: %w", err)
+			return
+		}
+
+		HTTPClientErrorsTotal, err = m.Int64Counter(fmt.Sprintf("%s_http_client_errors_total", n),
+			metric.WithDescription("Total number of HTTP client errors by type"))
+		if err != nil {
+			initErr = fmt.Errorf("HTTPClientErrorsTotal: %w", err)
+			return
+		}
+
+		HTTPClientRetriesTotal, err = m.Int64Counter(fmt.Sprintf("%s_http_client_retries_total", n),
+			metric.WithDescription("Total number of HTTP client retry attempts"))
+		if err != nil {
+			initErr = fmt.Errorf("HTTPClientRetriesTotal: %w", err)
+			return
+		}
+
+		HTTPClientCacheHits, err = m.Int64Counter(fmt.Sprintf("%s_http_client_cache_hits_total", n),
+			metric.WithDescription("Total number of HTTP cache hits"))
+		if err != nil {
+			initErr = fmt.Errorf("HTTPClientCacheHits: %w", err)
+			return
+		}
+
+		HTTPClientCacheMisses, err = m.Int64Counter(fmt.Sprintf("%s_http_client_cache_misses_total", n),
+			metric.WithDescription("Total number of HTTP cache misses"))
+		if err != nil {
+			initErr = fmt.Errorf("HTTPClientCacheMisses: %w", err)
+			return
+		}
+
+		HTTPClientRequestSize, err = m.Float64Histogram(fmt.Sprintf("%s_http_client_request_size_bytes", n),
+			metric.WithDescription("HTTP client request body size in bytes"),
+			metric.WithUnit("By"),
+			metric.WithExplicitBucketBoundaries(100, 1000, 10000, 100000, 1000000, 10000000))
+		if err != nil {
+			initErr = fmt.Errorf("HTTPClientRequestSize: %w", err)
+			return
+		}
+
+		HTTPClientResponseSize, err = m.Float64Histogram(fmt.Sprintf("%s_http_client_response_size_bytes", n),
+			metric.WithDescription("HTTP client response body size in bytes"),
+			metric.WithUnit("By"),
+			metric.WithExplicitBucketBoundaries(100, 1000, 10000, 100000, 1000000, 10000000))
+		if err != nil {
+			initErr = fmt.Errorf("HTTPClientResponseSize: %w", err)
+			return
+		}
+
+		GetSolutionTimeHistogram, err = m.Float64Histogram(fmt.Sprintf("%s_get_solution_duration_seconds", n),
+			metric.WithDescription("Histogram of the time it takes to get a solution in seconds"),
+			metric.WithUnit("s"),
+			metric.WithExplicitBucketBoundaries(requestTimesBuckets...))
+		if err != nil {
+			initErr = fmt.Errorf("GetSolutionTimeHistogram: %w", err)
+			return
+		}
+
+		ProviderExecutionDuration, err = m.Float64Histogram(fmt.Sprintf("%s_provider_execution_duration_seconds", n),
+			metric.WithDescription("Provider execution duration in seconds"),
+			metric.WithUnit("s"),
+			metric.WithExplicitBucketBoundaries(requestTimesBuckets...))
+		if err != nil {
+			initErr = fmt.Errorf("ProviderExecutionDuration: %w", err)
+			return
+		}
+
+		ProviderExecutionTotal, err = m.Int64Counter(fmt.Sprintf("%s_provider_execution_total", n),
+			metric.WithDescription("Total number of provider executions"))
+		if err != nil {
+			initErr = fmt.Errorf("ProviderExecutionTotal: %w", err)
+			return
+		}
+	})
+	return initErr
 }
 
-// RegisterMetrics registers Prometheus metrics and sets up the HTTP handler for the "/metrics" endpoint.
-// It ensures that the application's metrics are exposed and available for scraping by Prometheus.
-func RegisterMetrics() {
-	prometheus.MustRegister(httpRequestsTotal)
-	prometheus.MustRegister(HTTPClientDuration)
-	prometheus.MustRegister(HTTPClientRequestsTotal)
-	prometheus.MustRegister(HTTPClientErrorsTotal)
-	prometheus.MustRegister(HTTPClientRetriesTotal)
-	prometheus.MustRegister(HTTPClientCacheHits)
-	prometheus.MustRegister(HTTPClientCacheMisses)
-	prometheus.MustRegister(HTTPClientRequestSize)
-	prometheus.MustRegister(HTTPClientResponseSize)
-	prometheus.MustRegister(HTTPClientCacheSizeBytes)
-	prometheus.MustRegister(HTTPClientConcurrentRequests)
-	prometheus.MustRegister(HTTPClientCircuitBreakerState)
-	prometheus.MustRegister(GetSolutionTimeHistogram)
-	prometheus.MustRegister(ProviderExecutionDuration)
-	prometheus.MustRegister(ProviderExecutionTotal)
-	http.Handle("/metrics", Handler())
-}
+// SetCacheSizeBytes updates the observable gauge backing value for HTTP client cache size.
+func SetCacheSizeBytes(bytes int64) { cacheSizeBytesVal.Store(bytes) }
 
-// PrometheusMiddleware returns a Gin middleware handler that records the total number of HTTP requests.
-// It increments a Prometheus counter metric labeled with the request path and response status code
-// after each request is processed.
-func PrometheusMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.Next()
-		statusCode := strconv.Itoa(c.Writer.Status())
-		httpRequestsTotal.With(prometheus.Labels{pathLabel: c.Request.URL.Path, statusCodeLabel: statusCode}).Inc()
+// SetCircuitBreakerState stores the circuit breaker state for a host.
+// state: 0=closed, 1=open, 2=half-open.
+func SetCircuitBreakerState(host string, state float64) { circuitBreakerStates.Store(host, state) }
+
+// IncConcurrentRequests increments the in-flight HTTP request counter.
+func IncConcurrentRequests(ctx context.Context) {
+	if httpClientConcurrentRequests != nil {
+		httpClientConcurrentRequests.Add(ctx, 1)
 	}
 }
 
-// RecordProviderExecution records provider execution metrics to Prometheus.
-// This should be called after each provider execution with the provider name,
-// execution duration, and whether the execution was successful.
-func RecordProviderExecution(providerName string, duration float64, success bool) {
+// DecConcurrentRequests decrements the in-flight HTTP request counter.
+func DecConcurrentRequests(ctx context.Context) {
+	if httpClientConcurrentRequests != nil {
+		httpClientConcurrentRequests.Add(ctx, -1)
+	}
+}
+
+// Handler returns an HTTP handler that exposes Prometheus metrics via the OTel
+// Prometheus bridge exporter.
+func Handler() http.Handler { return promhttp.Handler() }
+
+// RegisterMetrics is a compatibility shim that calls InitMetrics.
+func RegisterMetrics() {
+	_ = InitMetrics(context.Background())
+	http.Handle("/metrics", Handler())
+}
+
+// PrometheusMiddleware returns a Gin middleware handler that records HTTP request totals.
+func PrometheusMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Next()
+		if httpRequestsTotal == nil {
+			return
+		}
+		statusCode := strconv.Itoa(c.Writer.Status())
+		httpRequestsTotal.Add(c.Request.Context(), 1,
+			metric.WithAttributes(
+				attribute.String(AttrPath, c.Request.URL.Path),
+				attribute.String(AttrStatusCode, statusCode),
+			))
+	}
+}
+
+// RecordProviderExecution records provider execution metrics to OTel.
+func RecordProviderExecution(ctx context.Context, providerName string, duration float64, success bool) {
+	if ProviderExecutionDuration == nil || ProviderExecutionTotal == nil {
+		return
+	}
 	status := "success"
 	if !success {
 		status = "failure"
 	}
-	ProviderExecutionDuration.WithLabelValues(providerName, status).Observe(duration)
-	ProviderExecutionTotal.WithLabelValues(providerName, status).Inc()
+	attrs := metric.WithAttributes(
+		attribute.String(AttrProviderName, providerName),
+		attribute.String(AttrStatus, status),
+	)
+	ProviderExecutionDuration.Record(ctx, duration, attrs)
+	ProviderExecutionTotal.Add(ctx, 1, attrs)
 }

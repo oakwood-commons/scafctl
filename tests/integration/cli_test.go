@@ -4273,3 +4273,44 @@ func TestIntegration_RunSolution_DryRun_YAML(t *testing.T) {
 	assert.Contains(t, stdout, "dryRun: true")
 	assert.Contains(t, stdout, "solution:")
 }
+
+// ============================================================================
+// Telemetry Flag Tests
+// ============================================================================
+
+// TestIntegration_LogLevel_Debug verifies that --log-level debug is accepted
+// and produces log output on stderr.
+func TestIntegration_LogLevel_Debug(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t, "version", "--log-level", "debug")
+	assert.Equal(t, 0, exitCode)
+	// Debug logging should include at least one log entry on stderr.
+	assert.NotEmpty(t, stderr)
+}
+
+// TestIntegration_LogLevel_Numeric verifies that a numeric V-level (e.g. "3")
+// is accepted without a flag-parsing error.
+func TestIntegration_LogLevel_Numeric(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t, "version", "--log-level", "3")
+	assert.Equal(t, 0, exitCode)
+	assert.NotContains(t, stderr, "invalid")
+}
+
+// TestIntegration_OtelEndpoint_FlagRegistered confirms that --otel-endpoint is
+// listed in the root --help output.
+func TestIntegration_OtelEndpoint_FlagRegistered(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "--help")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "otel-endpoint")
+}
+
+// TestIntegration_OtelInsecure_FlagRegistered confirms that --otel-insecure is
+// listed in the root --help output.
+func TestIntegration_OtelInsecure_FlagRegistered(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "--help")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "otel-insecure")
+}

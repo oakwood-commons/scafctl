@@ -1477,6 +1477,50 @@ func (p *APIProvider) Execute(ctx context.Context, input any) (*Output, error) {
 
 ---
 
+## Trace Instrumentation
+
+> **Status**: ✅ Implemented in `pkg/provider/executor.go`
+
+Every provider execution is wrapped in an OpenTelemetry span, giving end-to-end visibility across resolver phases and provider calls.
+
+### Span Name and Tracer
+
+| Property | Value |
+|---|---|
+| Tracer name | `github.com/oakwood-commons/scafctl/provider` |
+| Span name | `provider.Execute` |
+| Span kind | `SpanKindInternal` |
+
+### Span Attributes
+
+| Attribute | Type | Description |
+|---|---|---|
+| `provider.name` | string | Registered name of the provider (e.g. `static`, `cel`, `http`) |
+
+### Error Recording
+
+If the provider returns a non-nil error the span is marked with `codes.Error` and the error message is recorded before the span ends:
+
+~~~go
+if err != nil {
+    span.RecordError(err)
+    span.SetStatus(codes.Error, err.Error())
+}
+~~~
+
+### Context Propagation
+
+The span context is stored inside the `context.Context` that is threaded through every provider call. Child operations (e.g. HTTP provider outbound requests via `otelhttp.NewTransport`) automatically become child spans of the provider span, giving a complete trace hierarchy:
+
+```
+resolver.Execute
+  └─ resolver.executeResolver
+        └─ provider.Execute          ← this span
+              └─ HTTP GET /api/...   ← child from otelhttp transport
+```
+
+---
+
 ## Design Constraints
 
 - Providers must be stateless

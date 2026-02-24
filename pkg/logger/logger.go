@@ -6,6 +6,9 @@ package logger
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
+	"math"
 	"os"
 	"runtime/debug"
 	"strconv"
@@ -13,10 +16,9 @@ import (
 	"sync"
 
 	"github.com/go-logr/logr"
-	"github.com/go-logr/zapr"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
+	"go.opentelemetry.io/contrib/bridges/otellogr"
+	logGlobal "go.opentelemetry.io/otel/log/global"
 )
 
 // Define an unexported custom type for the context key to prevent collisions.
@@ -38,10 +40,6 @@ const (
 
 var (
 	once sync.Once // Ensures Setup is called only once
-
-	// globalZapLogger is the underlying *zap.Logger for explicit Zap-specific operations like Sync().
-	// It's package-private to prevent direct modification.
-	globalZapLogger *zap.Logger
 
 	// globalLogrLogger is the logr.Logger instance that application code will primarily use
 	// if not retrieving from context, or as a default for context.
@@ -80,41 +78,40 @@ const (
 	LevelTrace = "trace"
 )
 
-// LogLevelNone is the sentinel zap level value that silences all log output.
-// It is set above FatalLevel so no log entry can reach it.
-const LogLevelNone = zapcore.FatalLevel + 1
+// LogLevelNone is the sentinel slog.Level value that silences all log output.
+// It is set to math.MaxInt32 so no log entry can reach it.
+const LogLevelNone = slog.Level(math.MaxInt32)
 
-// ParseLogLevel converts a named or numeric log level string to a zapcore.Level.
+// ParseLogLevel converts a named or numeric log level string to a slog.Level.
 // Named levels: none, error, warn, info, debug, trace.
 // Numeric levels: any integer string (e.g., "3", "5") is treated as a logr V-level
-// and negated to produce the corresponding zap level (user's 3 → zap -3 → V(3) visible).
-func ParseLogLevel(s string) (zapcore.Level, error) {
+// and negated to produce the corresponding slog level (user's 3 → slog.Level(-3) → V(3) visible).
+//
+// The logr/slog bridge maps logr V-level n to slog.Level(-n), so the handler
+// threshold must also be -n to enable that level.
+func ParseLogLevel(s string) (slog.Level, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case LevelNone, "":
 		return LogLevelNone, nil
 	case LevelError:
-		return zapcore.ErrorLevel, nil
+		return slog.LevelError, nil
 	case LevelWarn:
-		return zapcore.WarnLevel, nil
+		return slog.LevelWarn, nil
 	case LevelInfo:
-		return zapcore.InfoLevel, nil
+		return slog.LevelInfo, nil
 	case LevelDebug:
-		return zapcore.Level(-1), nil // V(1)
+		return slog.Level(-1), nil // V(1)
 	case LevelTrace:
-		return zapcore.Level(-2), nil // V(2)
+		return slog.Level(-2), nil // V(2)
 	default:
 		// Try numeric V-level
 		n, err := strconv.Atoi(s)
 		if err != nil {
-			return zapcore.InfoLevel, fmt.Errorf("invalid log level %q: must be one of none, error, warn, info, debug, trace, or a numeric V-level", s)
+			return slog.LevelInfo, fmt.Errorf("invalid log level %q: must be one of none, error, warn, info, debug, trace, or a numeric V-level", s)
 		}
 		// Numeric values are treated as V-levels: user provides positive number,
-		// we negate to get the zap level (e.g., 3 → -3 → V(3) visible).
-		if n < 0 {
-			// Already negative means the user is specifying a raw zap level directly
-			return zapcore.Level(n), nil //nolint:gosec // intentional int→int8 for raw zap level
-		}
-		return zapcore.Level(-n), nil //nolint:gosec // intentional negation
+		// we negate to get the slog level (e.g., 3 → slog.Level(-3) → V(3) visible).
+		return slog.Level(-n), nil
 	}
 }
 
@@ -125,13 +122,13 @@ func IsDebugLevel(level string) bool {
 	if err != nil {
 		return false
 	}
-	return l <= zapcore.Level(-1)
+	return l <= slog.Level(-1)
 }
 
 // Options configures the logger behavior.
 type Options struct {
-	// Level is the minimum zap log level.
-	Level zapcore.Level
+	// Level is the minimum slog log level. Use ParseLogLevel to obtain from a string.
+	Level slog.Level
 	// Format is the output format (json, console, or text).
 	Format LogFormat
 	// Timestamps controls whether timestamps are included in log output.
@@ -153,21 +150,25 @@ func DefaultOptions() Options {
 	}
 }
 
-// Get initializes the global Zap and Logr loggers with default options.
+// Get initializes the global logger with default options and the given slog level.
 // It can only be called once. Subsequent calls will have no effect.
-// logLevel: The minimum zap logging level (e.g., -1=Debug/V(1), 0=Info, 1=Warn, 2=Error).
 // This function must be called before using FromContext or any logging operations.
-func Get(logLevel int8) *logr.Logger {
+func Get(logLevel slog.Level) *logr.Logger {
 	return GetWithOptions(Options{
-		Level:      zapcore.Level(logLevel),
+		Level:      logLevel,
 		Format:     FormatJSON,
 		Timestamps: true,
 	})
 }
 
-// GetWithOptions initializes the global Zap and Logr loggers with custom options.
+// GetWithOptions initializes the global logr logger with custom options using
+// a slog handler for local output and an otellogr sink for OTel export.
 // It can only be called once. Subsequent calls will have no effect.
 // This function must be called before using FromContext or any logging operations.
+//
+// If telemetry.Setup has been called before this function, the otellogr sink
+// will forward log records to the configured OTel LoggerProvider. Otherwise
+// the noop provider is used, which is safe for unit tests.
 func GetWithOptions(opts Options) *logr.Logger {
 	once.Do(func() {
 		// If level is set to LogLevelNone, return a noop logger
@@ -177,83 +178,76 @@ func GetWithOptions(opts Options) *logr.Logger {
 			return
 		}
 
-		// Encoder Configuration: How log entries are formatted
-		encoderCfg := zap.NewProductionEncoderConfig()
-		encoderCfg.MessageKey = MessageKey
-
-		// Configure timestamps
-		if opts.Timestamps {
-			encoderCfg.EncodeTime = zapcore.ISO8601TimeEncoder
-			encoderCfg.TimeKey = TimeStampKey
-		} else {
-			encoderCfg.TimeKey = "" // Disable timestamps
-		}
-
-		// Determine the minimum log level
-		minimumLogLevel := opts.Level
-
 		buildInfo, _ := debug.ReadBuildInfo()
-
-		// Create encoder based on format
-		var encoder zapcore.Encoder
-		if opts.Format == FormatText || opts.Format == FormatConsole {
-			encoderCfg.EncodeLevel = zapcore.CapitalColorLevelEncoder
-			encoder = zapcore.NewConsoleEncoder(encoderCfg)
-		} else {
-			encoder = zapcore.NewJSONEncoder(encoderCfg)
+		goVersion := ""
+		if buildInfo != nil {
+			goVersion = buildInfo.GoVersion
 		}
 
-		// Determine output destination(s)
-		var writeSyncer zapcore.WriteSyncer
-		switch {
-		case opts.FilePath != "":
+		// ── Sink 1: slog handler for local console/file output ───────────────
+		slogLevel := &slog.LevelVar{}
+		slogLevel.Set(opts.Level)
+
+		// Determine output destination
+		var slogWriter io.Writer = os.Stderr
+		if opts.FilePath != "" {
 			f, err := os.OpenFile(opts.FilePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 			switch {
 			case err != nil:
 				fmt.Fprintf(os.Stderr, "WARNING: failed to open log file %q: %v, falling back to stderr\n", opts.FilePath, err)
-				writeSyncer = zapcore.Lock(os.Stderr)
 			case opts.AlsoStderr:
-				writeSyncer = zapcore.NewMultiWriteSyncer(
-					zapcore.Lock(os.Stderr),
-					zapcore.AddSync(f),
-				)
+				slogWriter = io.MultiWriter(os.Stderr, f)
 			default:
-				writeSyncer = zapcore.AddSync(f)
+				slogWriter = f
 			}
-		default:
-			writeSyncer = zapcore.Lock(os.Stderr)
 		}
 
-		// Create a Zap Core: Combines encoder, sink (output destination), and level
-		core := zapcore.NewCore(
-			encoder,
-			writeSyncer,
-			zap.NewAtomicLevelAt(minimumLogLevel), // Set the logging level
-		).With(
-			[]zapcore.Field{
-				zap.String(CommitKey, settings.VersionInformation.Commit),
-				zap.String(VersionKey, settings.VersionInformation.BuildVersion),
-				zap.String(BuildTimeKey, settings.VersionInformation.BuildTime),
-				zap.String(GoVersionKey, buildInfo.GoVersion),
+		handlerOpts := &slog.HandlerOptions{
+			Level:     slogLevel,
+			AddSource: true,
+			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+				if a.Key == slog.TimeKey && !opts.Timestamps {
+					return slog.Attr{} // drop timestamp
+				}
+				if a.Key == slog.TimeKey {
+					a.Key = TimeStampKey
+				}
+				if a.Key == slog.MessageKey {
+					a.Key = MessageKey
+				}
+				return a
 			},
+		}
+
+		var slogHandler slog.Handler
+		if opts.Format == FormatJSON {
+			slogHandler = slog.NewJSONHandler(slogWriter, handlerOpts)
+		} else {
+			slogHandler = slog.NewTextHandler(slogWriter, handlerOpts)
+		}
+
+		// Add static fields (commit, version, build time, go version)
+		slogHandler = slogHandler.WithAttrs([]slog.Attr{
+			slog.String(CommitKey, settings.VersionInformation.Commit),
+			slog.String(VersionKey, settings.VersionInformation.BuildVersion),
+			slog.String(BuildTimeKey, settings.VersionInformation.BuildTime),
+			slog.String(GoVersionKey, goVersion),
+		})
+
+		consoleSink := logr.FromSlogHandler(slogHandler).GetSink()
+
+		// ── Sink 2: otellogr forwarding to global OTel LoggerProvider ────────
+		// Uses logGlobal.GetLoggerProvider() which returns the provider set by
+		// telemetry.Setup(). If Setup has not been called, this is the noop provider
+		// and nothing is exported — safe for unit tests.
+		otelSink := otellogr.NewLogSink(settings.CliBinaryName,
+			otellogr.WithLoggerProvider(logGlobal.GetLoggerProvider()),
 		)
 
-		// Build the Zap logger with options
-		// zap.AddCaller(): Includes file and line number where the log was called.
-		// zap.AddStacktrace(zap.ErrorLevel): Captures stack traces for logs at Error level and above.
-		// zap.WithFatalHook(zapcore.WriteThenPanic): Ensures logs are flushed before panicking on Fatal.
-		globalZapLogger = zap.New(core,
-			zap.AddCaller(),
-			zap.AddStacktrace(zap.ErrorLevel),
-			zap.WithFatalHook(zapcore.WriteThenPanic),
-		)
-
-		// Wrap the Zap logger with zapr to get a logr.Logger
-		gl := zapr.NewLogger(globalZapLogger)
+		gl := logr.New(newMultiSink(consoleSink, otelSink))
 		globalLogrLogger = &gl
 	})
 	if globalLogrLogger == nil {
-		// This should never happen due to once.Do, but just in case
 		return &defaultNoopLogger
 	}
 	return globalLogrLogger
@@ -283,19 +277,6 @@ func FromContext(ctx context.Context) *logr.Logger {
 	}
 	// Fallback to a no-op logger if Setup hasn't been called at all.
 	return &defaultNoopLogger
-}
-
-// Sync flushes any buffered log entries to their destination.
-// This should be called before the application exits, typically via `defer logger.Sync()` in main.
-func Sync() {
-	if globalZapLogger != nil {
-		if err := globalZapLogger.Sync(); err != nil {
-			// Sync can return an error (e.g., if stderr is closed).
-			// In most CLI cases, this is safe to ignore or log to a fallback.
-			// Since this is Sync, we can't log to globalZapLogger itself.
-			fmt.Fprintf(os.Stderr, "WARNING: failed to sync zap logger: %v\n", err)
-		}
-	}
 }
 
 // GetGlobalLogger returns the globally configured logr.Logger.

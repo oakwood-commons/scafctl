@@ -49,14 +49,18 @@ func (m *metricsMemoryCache) Get(ctx context.Context, key string) ([]byte, error
 	if err != nil || data == nil || len(data) == 0 {
 		// Cache miss
 		atomic.AddUint64(&m.misses, 1)
-		metrics.HTTPClientCacheMisses.Inc()
+		if metrics.HTTPClientCacheMisses != nil {
+			metrics.HTTPClientCacheMisses.Add(ctx, 1)
+		}
 		// Return nil, nil for httpcache compatibility (ignore base cache error)
 		return nil, nil //nolint:nilerr // httpcache expects (nil, nil) for cache misses
 	}
 
 	// Cache hit
 	atomic.AddUint64(&m.hits, 1)
-	metrics.HTTPClientCacheHits.Inc()
+	if metrics.HTTPClientCacheHits != nil {
+		metrics.HTTPClientCacheHits.Add(ctx, 1)
+	}
 
 	return data, nil
 }

@@ -1,0 +1,57 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: telemetry-test
+  version: 1.0.0
+  description: |
+    Verifies that provider execution instrumentation is wired correctly.
+    Running with --otel-endpoint will emit traces; without it, metrics are still
+    recorded via the Prometheus bridge and spans are created as no-ops.
+
+spec:
+  resolvers:
+    app-name:
+      description: Static resolver — exercises the provider.Execute span path
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: telemetry-test
+
+    env-tier:
+      description: Second resolver to verify per-batch span attributes
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: integration
+
+  testing:
+    config:
+      skipBuiltins: true
+
+    cases:
+      resolvers-succeed:
+        description: Verify all resolvers complete successfully (spans recorded)
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: app-name
+          - contains: telemetry-test
+
+      both-resolvers-present:
+        description: Verify both resolvers appear in output
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: env-tier
+          - contains: integration
+
+      lint-clean:
+        description: Solution passes lint (schema valid)
+        command: [lint]
+        assertions:
+          - expression: __exitCode == 0
