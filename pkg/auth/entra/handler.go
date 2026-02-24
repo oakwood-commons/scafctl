@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
@@ -39,6 +40,12 @@ const (
 	DefaultRefreshTokenLifetime = 90 * 24 * time.Hour
 )
 
+// authHTTPLogLevel is the verbosity offset applied to the base logger
+// before it is handed to the HTTP transport used by auth handlers.
+// This ensures auth HTTP calls only appear at high verbosity levels
+// (e.g. base V(0) + offset 5 → effective V(5)).
+const authHTTPLogLevel = 5
+
 // Handler implements auth.Handler for Microsoft Entra ID.
 type Handler struct {
 	config      *Config
@@ -47,6 +54,7 @@ type Handler struct {
 	httpClient  HTTPClient
 	graphClient GraphClient
 	tokenCache  *TokenCache
+	logger      logr.Logger
 }
 
 // Option configures the Handler.
@@ -101,6 +109,15 @@ func WithGraphClient(client GraphClient) Option {
 	}
 }
 
+// WithLogger sets the logger for the handler.
+// The logger is offset by authHTTPLogLevel before being passed to the HTTP
+// transport so that auth HTTP traffic only appears at high verbosity.
+func WithLogger(lgr logr.Logger) Option {
+	return func(h *Handler) {
+		h.logger = lgr
+	}
+}
+
 // New creates a new Entra auth handler.
 // Secret store initialization is deferred — if it fails, the handler is still
 // created so that metadata operations (Name, SupportedFlows, etc.) work.
@@ -126,14 +143,18 @@ func New(opts ...Option) (*Handler, error) {
 		}
 	}
 
+	// Compute the HTTP-level logger: offset by authHTTPLogLevel so that
+	// auth HTTP calls only appear at high verbosity.
+	httpLogger := h.logger.V(authHTTPLogLevel)
+
 	// Initialize HTTP client if not provided
 	if h.httpClient == nil {
-		h.httpClient = NewDefaultHTTPClient()
+		h.httpClient = NewDefaultHTTPClient(httpLogger)
 	}
 
 	// Initialize Graph client if not provided
 	if h.graphClient == nil {
-		h.graphClient = NewDefaultGraphClient()
+		h.graphClient = NewDefaultGraphClient(httpLogger)
 	}
 
 	// Initialize token cache with secret store (nil-safe: checked before use)
@@ -432,5 +453,76 @@ func getCachedOrAcquireToken[T any](
 	return token, nil
 }
 
-// Compile-time check that Handler implements auth.Handler.
-var _ auth.Handler = (*Handler)(nil)
+// Compile-time check that Handler implements auth.Handler, auth.TokenLister, and auth.TokenPurger.
+var (
+	_ auth.Handler     = (*Handler)(nil)
+	_ auth.TokenLister = (*Handler)(nil)
+	_ auth.TokenPurger = (*Handler)(nil)
+)
+
+// ListCachedTokens returns metadata for all tokens stored by the Entra handler.
+// It includes the long-lived refresh token (if any) and all minted access tokens
+// from the on-disk cache.  Actual token values are intentionally excluded.
+func (h *Handler) ListCachedTokens(ctx context.Context) ([]*auth.CachedTokenInfo, error) {
+	if err := h.ensureSecrets(); err != nil {
+		return nil, err
+	}
+
+	var results []*auth.CachedTokenInfo
+
+	// Refresh token
+	exists, _ := h.secretStore.Exists(ctx, SecretKeyRefreshToken)
+	if exists {
+		info := &auth.CachedTokenInfo{
+			Handler:   HandlerName,
+			TokenKind: "refresh",
+		}
+		if metadata, err := h.loadMetadata(ctx); err == nil && metadata != nil {
+			info.ExpiresAt = metadata.RefreshTokenExpiresAt
+			info.CachedAt = metadata.LastRefresh
+			info.Flow = metadata.LoginFlow
+			info.SessionID = metadata.SessionID
+		}
+		if !info.ExpiresAt.IsZero() {
+			info.IsExpired = time.Now().After(info.ExpiresAt)
+		}
+		results = append(results, info)
+	}
+
+	// Minted access tokens
+	if h.tokenCache != nil {
+		scopes, _ := h.tokenCache.ListCachedScopes(ctx)
+		for _, scope := range scopes {
+			token, err := h.tokenCache.Get(ctx, scope)
+			if err != nil || token == nil {
+				continue
+			}
+			results = append(results, &auth.CachedTokenInfo{
+				Handler:   HandlerName,
+				TokenKind: "access",
+				Scope:     scope,
+				TokenType: token.TokenType,
+				Flow:      token.Flow,
+				ExpiresAt: token.ExpiresAt,
+				CachedAt:  token.CachedAt,
+				IsExpired: token.IsExpired(),
+				SessionID: token.SessionID,
+			})
+		}
+	}
+
+	return results, nil
+}
+
+// PurgeExpiredTokens removes expired access tokens from the on-disk cache.
+// The refresh token and valid access tokens are left untouched.
+// Returns the number of tokens removed.
+func (h *Handler) PurgeExpiredTokens(ctx context.Context) (int, error) {
+	if err := h.ensureSecrets(); err != nil {
+		return 0, err
+	}
+	if h.tokenCache == nil {
+		return 0, nil
+	}
+	return h.tokenCache.PurgeExpired(ctx)
+}

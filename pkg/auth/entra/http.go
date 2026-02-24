@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/httpc"
 )
 
@@ -33,7 +34,8 @@ type DefaultGraphClient struct {
 
 // NewDefaultGraphClient creates a new Graph API HTTP client.
 // Caching is disabled because membership responses must always be fresh.
-func NewDefaultGraphClient() *DefaultGraphClient {
+// The logger parameter controls HTTP-level logging; pass logr.Discard() to suppress.
+func NewDefaultGraphClient(logger logr.Logger) *DefaultGraphClient {
 	return &DefaultGraphClient{
 		client: httpc.NewClient(&httpc.ClientConfig{
 			Timeout:           30 * time.Second,
@@ -42,6 +44,7 @@ func NewDefaultGraphClient() *DefaultGraphClient {
 			RetryWaitMax:      30 * time.Second,
 			EnableCache:       false,
 			EnableCompression: false,
+			Logger:            logger,
 		}),
 	}
 }
@@ -64,7 +67,8 @@ type DefaultHTTPClient struct {
 
 // NewDefaultHTTPClient creates a new default HTTP client backed by httpc.
 // Caching is disabled because token-exchange responses must never be served from cache.
-func NewDefaultHTTPClient() *DefaultHTTPClient {
+// The logger parameter controls HTTP-level logging; pass logr.Discard() to suppress.
+func NewDefaultHTTPClient(logger logr.Logger) *DefaultHTTPClient {
 	return &DefaultHTTPClient{
 		client: httpc.NewClient(&httpc.ClientConfig{
 			Timeout:           30 * time.Second,
@@ -73,6 +77,7 @@ func NewDefaultHTTPClient() *DefaultHTTPClient {
 			RetryWaitMax:      30 * time.Second,
 			EnableCache:       false,
 			EnableCompression: false,
+			Logger:            logger,
 		}),
 	}
 }

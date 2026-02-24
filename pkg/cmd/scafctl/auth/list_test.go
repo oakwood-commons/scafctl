@@ -5,6 +5,7 @@ package auth
 
 import (
 	"testing"
+	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -13,13 +14,51 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCommandList_Success(t *testing.T) {
+func TestCommandList_NoTokens(t *testing.T) {
 	ctx, buf := newTestContext(t)
 
 	mock := auth.NewMockHandler("entra")
-	mock.DisplayNameValue = "Microsoft Entra ID"
-	mock.FlowsValue = []auth.Flow{auth.FlowDeviceCode, auth.FlowServicePrincipal}
-	mock.CapabilitiesValue = []auth.Capability{auth.CapScopesOnLogin, auth.CapTenantID}
+	mock.ListCachedTokensResult = nil
+
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandList(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "No cached tokens found")
+}
+
+func TestCommandList_WithTokens(t *testing.T) {
+	ctx, buf := newTestContext(t)
+
+	now := time.Now()
+	mock := auth.NewMockHandler("entra")
+	mock.ListCachedTokensResult = []*auth.CachedTokenInfo{
+		{
+			Handler:   "entra",
+			TokenKind: "refresh",
+			Flow:      auth.FlowDeviceCode,
+			ExpiresAt: now.Add(89 * 24 * time.Hour),
+			CachedAt:  now.Add(-1 * time.Hour),
+			IsExpired: false,
+		},
+		{
+			Handler:   "entra",
+			TokenKind: "access",
+			Scope:     "https://graph.microsoft.com/.default",
+			TokenType: "Bearer",
+			Flow:      auth.FlowDeviceCode,
+			ExpiresAt: now.Add(55 * time.Minute),
+			CachedAt:  now.Add(-5 * time.Minute),
+			IsExpired: false,
+		},
+	}
 
 	ctx = withTestHandler(ctx, mock)
 
@@ -35,11 +74,36 @@ func TestCommandList_Success(t *testing.T) {
 
 	output := buf.String()
 	assert.Contains(t, output, "entra")
-	assert.Contains(t, output, "Microsoft Entra ID")
+	assert.Contains(t, output, "refresh")
+	assert.Contains(t, output, "access")
 	assert.Contains(t, output, "device_code")
-	assert.Contains(t, output, "service_principal")
-	assert.Contains(t, output, "scopes_on_login")
-	assert.Contains(t, output, "tenant_id")
+}
+
+func TestCommandList_FilterByHandler(t *testing.T) {
+	ctx, buf := newTestContext(t)
+
+	mock := auth.NewMockHandler("entra")
+	mock.ListCachedTokensResult = []*auth.CachedTokenInfo{
+		{
+			Handler:   "entra",
+			TokenKind: "refresh",
+			ExpiresAt: time.Now().Add(89 * 24 * time.Hour),
+			IsExpired: false,
+		},
+	}
+
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandList(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"entra"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "entra")
 }
 
 func TestCommandList_NoHandlers(t *testing.T) {
@@ -57,13 +121,38 @@ func TestCommandList_NoHandlers(t *testing.T) {
 	assert.Contains(t, err.Error(), "no auth handlers registered")
 }
 
+func TestCommandList_TooManyArgs(t *testing.T) {
+	ctx, _ := newTestContext(t)
+
+	mock := auth.NewMockHandler("entra")
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, nil, nil, false)
+
+	cmd := CommandList(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"entra", "github"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+}
+
 func TestCommandList_JSONOutput(t *testing.T) {
 	ctx, buf := newTestContext(t)
 
+	now := time.Now()
 	mock := auth.NewMockHandler("github")
-	mock.DisplayNameValue = "GitHub"
-	mock.FlowsValue = []auth.Flow{auth.FlowDeviceCode, auth.FlowPAT}
-	mock.CapabilitiesValue = []auth.Capability{auth.CapScopesOnLogin, auth.CapHostname}
+	mock.ListCachedTokensResult = []*auth.CachedTokenInfo{
+		{
+			Handler:   "github",
+			TokenKind: "access",
+			TokenType: "Bearer",
+			ExpiresAt: now.Add(8 * time.Hour),
+			CachedAt:  now.Add(-10 * time.Minute),
+			IsExpired: false,
+		},
+	}
 
 	ctx = withTestHandler(ctx, mock)
 
@@ -78,38 +167,28 @@ func TestCommandList_JSONOutput(t *testing.T) {
 	require.NoError(t, err)
 
 	output := buf.String()
-	assert.Contains(t, output, `"name"`)
+	assert.Contains(t, output, `"handler"`)
 	assert.Contains(t, output, `"github"`)
-	assert.Contains(t, output, `"displayName"`)
-	assert.Contains(t, output, `"flows"`)
-	assert.Contains(t, output, `"capabilities"`)
+	assert.Contains(t, output, `"tokenKind"`)
+	assert.Contains(t, output, `"access"`)
+	assert.Contains(t, output, `"isExpired"`)
+	assert.Contains(t, output, `"tokenType"`)
 }
 
-func TestCommandList_NoArgs(t *testing.T) {
-	ctx, _ := newTestContext(t)
-
-	mock := auth.NewMockHandler("test")
-	ctx = withTestHandler(ctx, mock)
-
-	cliParams := settings.NewCliParams()
-	ioStreams := terminal.NewIOStreams(nil, nil, nil, false)
-
-	cmd := CommandList(cliParams, ioStreams, "scafctl/auth")
-	cmd.SetContext(ctx)
-	cmd.SetArgs([]string{"extra-arg"})
-
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown command")
-}
-
-func TestCommandList_EmptyCapabilities(t *testing.T) {
+func TestCommandList_ExpiredToken(t *testing.T) {
 	ctx, buf := newTestContext(t)
 
-	mock := auth.NewMockHandler("custom")
-	mock.DisplayNameValue = "Custom Handler"
-	mock.FlowsValue = []auth.Flow{auth.FlowDeviceCode}
-	mock.CapabilitiesValue = nil
+	mock := auth.NewMockHandler("gcp")
+	mock.ListCachedTokensResult = []*auth.CachedTokenInfo{
+		{
+			Handler:   "gcp",
+			TokenKind: "access",
+			TokenType: "Bearer",
+			Scope:     "https://www.googleapis.com/auth/cloud-platform",
+			ExpiresAt: time.Now().Add(-1 * time.Hour),
+			IsExpired: true,
+		},
+	}
 
 	ctx = withTestHandler(ctx, mock)
 
@@ -122,32 +201,25 @@ func TestCommandList_EmptyCapabilities(t *testing.T) {
 
 	err := cmd.Execute()
 	require.NoError(t, err)
-
-	output := buf.String()
-	assert.Contains(t, output, "custom")
-	assert.Contains(t, output, "Custom Handler")
+	assert.Contains(t, buf.String(), "gcp")
 }
 
-func TestFlowsToStrings(t *testing.T) {
-	flows := []auth.Flow{auth.FlowDeviceCode, auth.FlowServicePrincipal, auth.FlowPAT}
-	result := flowsToStrings(flows)
-
-	assert.Equal(t, []string{"device_code", "service_principal", "pat"}, result)
-}
-
-func TestFlowsToStrings_Empty(t *testing.T) {
-	result := flowsToStrings(nil)
-	assert.Len(t, result, 0)
-}
-
-func TestCapabilitiesToStrings(t *testing.T) {
-	caps := []auth.Capability{auth.CapScopesOnLogin, auth.CapTenantID, auth.CapHostname}
-	result := capabilitiesToStrings(caps)
-
-	assert.Equal(t, []string{"scopes_on_login", "tenant_id", "hostname"}, result)
-}
-
-func TestCapabilitiesToStrings_Empty(t *testing.T) {
-	result := capabilitiesToStrings(nil)
-	assert.Len(t, result, 0)
+func TestHumanDuration(t *testing.T) {
+	tests := []struct {
+		name     string
+		d        time.Duration
+		expected string
+	}{
+		{"zero", 0, "expired"},
+		{"negative", -5 * time.Second, "expired"},
+		{"seconds", 45 * time.Second, "45s"},
+		{"minutes", 5*time.Minute + 30*time.Second, "5m30s"},
+		{"hours", 2*time.Hour + 15*time.Minute, "2h15m"},
+		{"days", 3*24*time.Hour + 6*time.Hour, "3d6h"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, humanDuration(tc.d))
+		})
+	}
 }

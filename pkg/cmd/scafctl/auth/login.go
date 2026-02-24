@@ -36,6 +36,8 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 		federatedToken            string
 		scopes                    []string
 		impersonateServiceAccount string
+		force                     bool
+		skipIfAuthenticated       bool
 	)
 
 	cmd := &cobra.Command{
@@ -198,11 +200,11 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 			// Route to handler-specific login logic
 			switch handlerName {
 			case "github":
-				return loginGitHub(ctx, w, flow, hostname, clientID, timeout, scopes)
+				return loginGitHub(ctx, w, flow, hostname, clientID, timeout, scopes, force, skipIfAuthenticated)
 			case "gcp":
-				return loginGCP(ctx, w, flow, clientID, impersonateServiceAccount, timeout, scopes)
+				return loginGCP(ctx, w, flow, clientID, impersonateServiceAccount, timeout, scopes, force, skipIfAuthenticated)
 			default:
-				return loginEntra(ctx, w, flow, tenantID, clientID, timeout, federatedToken, flowStr, scopes)
+				return loginEntra(ctx, w, flow, tenantID, clientID, timeout, federatedToken, flowStr, scopes, force, skipIfAuthenticated)
 			}
 		},
 	}
@@ -215,12 +217,14 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 	cmd.Flags().StringVar(&federatedToken, "federated-token", "", "Federated token for workload identity (requires federated_token capability)")
 	cmd.Flags().StringSliceVar(&scopes, "scope", nil, "OAuth scopes to request during login (requires scopes_on_login capability)")
 	cmd.Flags().StringVar(&impersonateServiceAccount, "impersonate-service-account", "", "GCP service account email to impersonate (gcp handler only)")
+	cmd.Flags().BoolVarP(&force, "force", "f", false, "Re-authenticate even if already logged in (logs out first)")
+	cmd.Flags().BoolVar(&skipIfAuthenticated, "skip-if-authenticated", false, "Exit successfully without re-authenticating if already logged in (idempotent for scripts)")
 
 	return cmd
 }
 
 // loginGitHub handles the login flow for the GitHub auth handler.
-func loginGitHub(ctx context.Context, w *writer.Writer, flow auth.Flow, hostname, clientID string, timeout time.Duration, scopes []string) error {
+func loginGitHub(ctx context.Context, w *writer.Writer, flow auth.Flow, hostname, clientID string, timeout time.Duration, scopes []string, force, skipIfAuthenticated bool) error {
 	// Auto-detect PAT if env vars are set and no explicit flow.
 	// Skip auto-detection when user provides --scope flags, since scopes
 	// only apply to the device code flow (PAT scopes are fixed at creation).
@@ -242,8 +246,11 @@ func loginGitHub(ctx context.Context, w *writer.Writer, flow auth.Flow, hostname
 		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
-	// Check if already authenticated (skip for PAT)
-	if flow != auth.FlowPAT {
+	// Force re-auth: log out first if already authenticated.
+	if force {
+		_ = handler.Logout(ctx) // best-effort; ignore error
+	} else if flow != auth.FlowPAT {
+		// Check if already authenticated (skip for PAT)
 		status, err := handler.Status(ctx)
 		if err != nil {
 			err = fmt.Errorf("failed to check auth status: %w", err)
@@ -253,8 +260,12 @@ func loginGitHub(ctx context.Context, w *writer.Writer, flow auth.Flow, hostname
 
 		if status.Authenticated {
 			identity := status.Claims.DisplayIdentity()
-			w.Infof("Already authenticated as %s", identity)
-			w.Info("Use 'scafctl auth logout github' to sign out first, or continue to re-authenticate.")
+			if skipIfAuthenticated {
+				w.Infof("Already authenticated as %s — skipping login.", identity)
+				return nil
+			}
+			w.Warningf("Already authenticated as %s.", identity)
+			w.Warning("Use 'scafctl auth logout github' to sign out first, or use --force to re-authenticate.")
 			w.Info("")
 		}
 	}
@@ -263,7 +274,7 @@ func loginGitHub(ctx context.Context, w *writer.Writer, flow auth.Flow, hostname
 }
 
 // loginGCP handles the login flow for the GCP auth handler.
-func loginGCP(ctx context.Context, w *writer.Writer, flow auth.Flow, clientID, impersonateServiceAccount string, timeout time.Duration, scopes []string) error {
+func loginGCP(ctx context.Context, w *writer.Writer, flow auth.Flow, clientID, impersonateServiceAccount string, timeout time.Duration, scopes []string, force, skipIfAuthenticated bool) error {
 	// Auto-detect flow based on available credentials (highest priority first)
 	if flow == "" && gcpauth.HasWorkloadIdentityCredentials() {
 		flow = auth.FlowWorkloadIdentity
@@ -286,8 +297,11 @@ func loginGCP(ctx context.Context, w *writer.Writer, flow auth.Flow, clientID, i
 		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
-	// Check if already authenticated (skip for non-interactive flows)
-	if flow == auth.FlowInteractive || flow == auth.FlowGcloudADC {
+	// Force re-auth: log out first if already authenticated.
+	if force {
+		_ = handler.Logout(ctx) // best-effort; ignore error
+	} else if flow == auth.FlowInteractive || flow == auth.FlowGcloudADC {
+		// Check if already authenticated (skip for non-interactive flows)
 		status, err := handler.Status(ctx)
 		if err != nil {
 			err = fmt.Errorf("failed to check auth status: %w", err)
@@ -297,8 +311,12 @@ func loginGCP(ctx context.Context, w *writer.Writer, flow auth.Flow, clientID, i
 
 		if status.Authenticated {
 			identity := status.Claims.DisplayIdentity()
-			w.Infof("Already authenticated as %s", identity)
-			w.Info("Use 'scafctl auth logout gcp' to sign out first, or continue to re-authenticate.")
+			if skipIfAuthenticated {
+				w.Infof("Already authenticated as %s — skipping login.", identity)
+				return nil
+			}
+			w.Warningf("Already authenticated as %s.", identity)
+			w.Warning("Use 'scafctl auth logout gcp' to sign out first, or use --force to re-authenticate.")
 			w.Info("")
 		}
 	}
@@ -307,7 +325,7 @@ func loginGCP(ctx context.Context, w *writer.Writer, flow auth.Flow, clientID, i
 }
 
 // loginEntra handles the login flow for the Entra auth handler.
-func loginEntra(ctx context.Context, w *writer.Writer, flow auth.Flow, tenantID, clientID string, timeout time.Duration, federatedToken, flowStr string, scopes []string) error {
+func loginEntra(ctx context.Context, w *writer.Writer, flow auth.Flow, tenantID, clientID string, timeout time.Duration, federatedToken, flowStr string, scopes []string, force, skipIfAuthenticated bool) error {
 	// If --federated-token is provided, set the env var for workload identity
 	if federatedToken != "" {
 		if err := os.Setenv(entra.EnvAzureFederatedToken, federatedToken); err != nil {
@@ -344,8 +362,11 @@ func loginEntra(ctx context.Context, w *writer.Writer, flow auth.Flow, tenantID,
 		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
-	// Check if already authenticated (skip for service principal)
-	if flow != auth.FlowServicePrincipal {
+	// Force re-auth: log out first if already authenticated.
+	if force {
+		_ = handler.Logout(ctx) // best-effort; ignore error
+	} else if flow != auth.FlowServicePrincipal {
+		// Check if already authenticated (skip for service principal)
 		status, err := handler.Status(ctx)
 		if err != nil {
 			err = fmt.Errorf("failed to check auth status: %w", err)
@@ -361,8 +382,12 @@ func loginEntra(ctx context.Context, w *writer.Writer, flow auth.Flow, tenantID,
 			if identity == "" {
 				identity = status.Claims.Subject
 			}
-			w.Infof("Already authenticated as %s", identity)
-			w.Info("Use 'scafctl auth logout entra' to sign out first, or continue to re-authenticate.")
+			if skipIfAuthenticated {
+				w.Infof("Already authenticated as %s — skipping login.", identity)
+				return nil
+			}
+			w.Warningf("Already authenticated as %s.", identity)
+			w.Warning("Use 'scafctl auth logout entra' to sign out first, or use --force to re-authenticate.")
 			w.Info("")
 		}
 	}

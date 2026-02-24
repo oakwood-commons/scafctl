@@ -137,9 +137,16 @@ type Token struct {
 	TokenType   string
 	ExpiresAt   time.Time
 	Scope       string
+	// CachedAt records when this token was written to the on-disk cache.
+	// Zero value means the token was not loaded from the cache.
+	CachedAt time.Time
 	// Flow is the authentication flow that produced this token (e.g. "device_code",
 	// "service_principal", "workload_identity").  Empty string means unknown.
 	Flow Flow
+	// SessionID is a stable identifier linking this access token back to the
+	// authentication session (login) that produced it.  Generated once at login
+	// time and preserved across refresh-token rotations.
+	SessionID string
 }
 
 // IsValidFor returns true if the token will be valid for at least the specified duration.
@@ -166,4 +173,56 @@ func (t *Token) TimeUntilExpiry() time.Duration {
 		return 0
 	}
 	return remaining
+}
+
+// CachedTokenInfo holds display metadata for a cached token (refresh or access).
+// The actual token value is intentionally omitted — use 'auth token' to retrieve it.
+type CachedTokenInfo struct {
+	// Handler is the name of the auth handler that owns this token.
+	Handler string `json:"handler"`
+	// TokenKind is either "refresh" or "access".
+	TokenKind string `json:"tokenKind"`
+	// Scope is the OAuth scope associated with the token.
+	// Empty for refresh tokens that were not scope-specific.
+	Scope string `json:"scope,omitempty"`
+	// TokenType is the token type, e.g. "Bearer".
+	TokenType string `json:"tokenType,omitempty"`
+	// Flow is the authentication flow that produced the token.
+	Flow Flow `json:"flow,omitempty"`
+	// ExpiresAt is when the token expires.
+	ExpiresAt time.Time `json:"expiresAt,omitempty"`
+	// CachedAt is when the token was written to the on-disk cache.
+	CachedAt time.Time `json:"cachedAt,omitempty"`
+	// IsExpired indicates whether the token is past its expiry time.
+	IsExpired bool `json:"isExpired"`
+	// SessionID is the stable identifier of the authentication session that
+	// produced this token.  Present on both refresh and access entries, allowing
+	// callers to trace which login session minted a given access token.
+	SessionID string `json:"sessionId,omitempty"`
+}
+
+// TimeUntilExpiry returns the duration until this cached token expires.
+// Returns 0 if the token is already expired or has no expiry set.
+func (c *CachedTokenInfo) TimeUntilExpiry() time.Duration {
+	if c.ExpiresAt.IsZero() {
+		return 0
+	}
+	remaining := time.Until(c.ExpiresAt)
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
+// TokenLister is an optional interface implemented by auth handlers that can
+// enumerate all cached tokens (both refresh and minted access tokens).
+type TokenLister interface {
+	ListCachedTokens(ctx context.Context) ([]*CachedTokenInfo, error)
+}
+
+// TokenPurger is an optional interface implemented by auth handlers that can
+// remove expired access tokens from the cache without affecting valid tokens
+// or the refresh token.  Returns the number of tokens removed.
+type TokenPurger interface {
+	PurgeExpiredTokens(ctx context.Context) (int, error)
 }

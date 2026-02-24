@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -28,7 +29,7 @@ func TestDefaultHTTPClient_PostForm(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewDefaultHTTPClient()
+	client := NewDefaultHTTPClient(logr.Discard())
 	ctx := context.Background()
 
 	data := map[string][]string{
@@ -48,7 +49,7 @@ func TestDefaultHTTPClient_PostForm_Cancelled(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewDefaultHTTPClient()
+	client := NewDefaultHTTPClient(logr.Discard())
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 

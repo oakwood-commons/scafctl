@@ -29,16 +29,18 @@ func CommandAuth(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 			features are available. For example, some handlers support per-request
 			scopes while others fix scopes at login time.
 
-			Use 'scafctl auth list' to see all registered handlers and their capabilities.
 			Use 'scafctl auth login <handler>' to authenticate.
 			Use 'scafctl auth status' to check current authentication status.
+			Use 'scafctl auth list' to show cached refresh and access token metadata.
 			Use 'scafctl auth logout <handler>' to clear credentials.
-			Use 'scafctl auth token <handler>' to display a token (for debugging).
+			Use 'scafctl auth token <handler>' to retrieve a token value (for debugging).
+			Use 'scafctl auth diagnose' to run health checks and troubleshoot issues.
 		`),
 		SilenceUsage: true,
 	}
 
 	cmdPath := fmt.Sprintf("%s/%s", path, cmd.Use)
+	cmd.AddCommand(CommandDiagnose(cliParams, ioStreams, cmdPath))
 	cmd.AddCommand(CommandList(cliParams, ioStreams, cmdPath))
 	cmd.AddCommand(CommandLogin(cliParams, ioStreams, cmdPath))
 	cmd.AddCommand(CommandLogout(cliParams, ioStreams, cmdPath))

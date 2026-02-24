@@ -1,0 +1,13 @@
+# HTTP provider input - Microsoft Graph API call with Entra authentication
+#
+# Prerequisites:
+#   scafctl auth login entra --scope https://graph.microsoft.com/.default
+#
+# Usage:
+#   scafctl run provider http --input @examples/providers/http-entra.yaml
+url: https://graph.microsoft.com/v1.0/me
+method: GET
+headers:
+  Accept: application/json
+auth: entra
+scope: "https://graph.microsoft.com/.default"
