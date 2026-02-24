@@ -222,13 +222,58 @@ Behavior:
 - Exchanges token using OAuth2 client assertion grant
 - No user interaction required
 - Tokens are cached like other flows
-- Highest priority: takes precedence over service principal if both are configured
+- **Highest priority**: takes precedence over all other flows — stored refresh tokens (device code) and service principal credentials are bypassed when WIF env vars are present
 
-Logout clears stored credentials:
+### Flow Priority
+
+When `GetToken` is called, the Entra handler selects the flow in this order:
+
+| Priority | Flow | Condition |
+|----------|------|-----------|
+| 1 | Workload Identity | `AZURE_FEDERATED_TOKEN_FILE` or `AZURE_FEDERATED_TOKEN` is set and valid |
+| 2 | Service Principal | `AZURE_CLIENT_SECRET` is set |
+| 3 | Device Code (refresh token) | A refresh token is present in the system secret store |
+
+Only the first matching flow is used.
+
+### Isolation from Stored Refresh Tokens
+
+WIF and the device-code refresh token are **completely independent** and stored separately:
+
+- WIF reads only environment variables and the projected token file — it never reads, writes, or modifies `scafctl.auth.entra.refresh_token`
+- Running `scafctl auth login entra` with WIF env vars present does **not** clear or replace any stored refresh token
+- A refresh token from a prior device-code login may silently coexist in the secret store while WIF is active; `scafctl auth list` will display both
+
+### Fallback Behavior
+
+If WIF env vars are later removed or the token file disappears, the handler automatically falls through to the next available flow (service principal, then stored refresh token). No reconfiguration is required.
+
+This is useful in migration scenarios, for example when bootstrapping WIF on a cluster: a developer's device-code session is still usable outside the cluster without any changes.
+
+### Stale Stored Credentials
+
+Because WIF never clears the secret store, a refresh token from a previous device-code login may remain stored after WIF is deployed. While this token is never used while WIF is active, it still appears in `scafctl auth list` and counts against the 90-day idle expiry.
+
+If you want a clean state after switching to WIF, explicitly clear stored credentials:
 
 ~~~bash
 scafctl auth logout entra
 ~~~
+
+This removes the refresh token and access token cache without affecting WIF, which is entirely env-var driven.
+
+---
+
+## Refresh Token Rotation
+
+Entra ID issues a **new refresh token value** on every use of an existing refresh token (this is called rolling or rotating refresh tokens). Key points:
+
+- The **lifetime** of a refresh token is 90 days, measured as a **sliding window** — each successful use resets the 90-day clock
+- The old token value is invalidated and the new value is atomically stored in the secret store
+- This rotation is transparent to the user; from scafctl's perspective the session simply continues
+- A refresh token that has not been used for 90 consecutive days will expire and require re-authentication
+
+Scafctl handles rotation automatically in `mintToken()`: if the token response contains a new refresh token value, it is stored immediately before the access token is returned.
 
 ---
 

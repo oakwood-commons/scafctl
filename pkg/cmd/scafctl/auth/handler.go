@@ -13,6 +13,7 @@ import (
 	gcpauth "github.com/oakwood-commons/scafctl/pkg/auth/gcp"
 	ghauth "github.com/oakwood-commons/scafctl/pkg/auth/github"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/logger"
 )
 
 // handlerContextKey is used for test injection of handlers.
@@ -116,6 +117,7 @@ func getEntraHandlerWithOverrides(ctx context.Context, tenantOverride, clientIDO
 	if entraCfg.ClientID != "" || entraCfg.TenantID != "" || len(entraCfg.DefaultScopes) > 0 {
 		opts = append(opts, entra.WithConfig(entraCfg))
 	}
+	opts = append(opts, entra.WithLogger(*logger.FromContext(ctx)))
 
 	return entra.New(opts...)
 }
@@ -144,6 +146,7 @@ func getGitHubHandlerWithOverrides(ctx context.Context, hostnameOverride, client
 	if ghCfg.ClientID != "" || ghCfg.Hostname != "" || len(ghCfg.DefaultScopes) > 0 {
 		opts = append(opts, ghauth.WithConfig(ghCfg))
 	}
+	opts = append(opts, ghauth.WithLogger(*logger.FromContext(ctx)))
 
 	return ghauth.New(opts...)
 }
@@ -172,6 +175,7 @@ func getGCPHandlerWithOverrides(ctx context.Context, clientIDOverride, impersona
 	if gcpCfg.ClientID != "" || gcpCfg.ImpersonateServiceAccount != "" || len(gcpCfg.DefaultScopes) > 0 {
 		opts = append(opts, gcpauth.WithConfig(gcpCfg))
 	}
+	opts = append(opts, gcpauth.WithLogger(*logger.FromContext(ctx)))
 
 	return gcpauth.New(opts...)
 }

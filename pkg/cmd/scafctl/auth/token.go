@@ -4,12 +4,15 @@
 package auth
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/atotto/clipboard"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -27,7 +30,13 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 		scopes       []string
 		minValidFor  time.Duration
 		forceRefresh bool
+		force        bool
 		rawToken     bool
+		clip         bool
+		decode       bool
+		curl         bool
+		curlURL      string
+		exportToken  bool
 	)
 
 	cmd := &cobra.Command{
@@ -73,14 +82,33 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 
 			  # Get a GCP token for BigQuery
 			  scafctl auth token gcp --scope "https://www.googleapis.com/auth/bigquery"
-		  # Print just the raw token value (useful for scripting)
-		  export TOKEN=$(scafctl auth token gcp --scope "https://www.googleapis.com/auth/cloud-platform" --raw)		`),
+
+			  # Print just the raw token value (useful for scripting)
+			  export TOKEN=$(scafctl auth token gcp --scope "https://www.googleapis.com/auth/cloud-platform" --raw)
+
+# Decode and display the JWT header and claims from the token (no signature validation)
+		  scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode
+
+		  # Decode as JSON for full structured output (header + payload both present)
+		  scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode -o json
+
+			  # Emit a ready-to-run curl command with the token injected
+			  scafctl auth token entra --scope "https://management.azure.com/.default" --curl --curl-url "https://management.azure.com/subscriptions?api-version=2020-01-01"
+
+			  # Export the token as a shell variable (eval-compatible)
+			  eval $(scafctl auth token gcp --scope "https://www.googleapis.com/auth/cloud-platform" --export)
+		`),
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			w := writer.MustFromContext(ctx)
 			handlerName := args[0]
+
+			// --force is an alias for --force-refresh
+			if force {
+				forceRefresh = true
+			}
 
 			// Validate handler name against registry
 			if err := validateHandlerName(ctx, handlerName); err != nil {
@@ -140,6 +168,51 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 				return nil
 			}
 
+			if clip {
+				if err := clipboard.WriteAll(token.AccessToken); err != nil {
+					err = fmt.Errorf("failed to copy token to clipboard: %w", err)
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.GeneralError)
+				}
+				w.Successf("Token copied to clipboard (expires in %s).", humanDuration(token.TimeUntilExpiry()))
+				return nil
+			}
+
+			if exportToken {
+				varName := tokenExportVarName(handlerName)
+				fmt.Fprintf(ioStreams.Out, "export %s=%s\n", varName, token.AccessToken)
+				return nil
+			}
+
+			if curl {
+				url := curlURL
+				if url == "" {
+					url = "<URL>"
+				}
+				fmt.Fprintf(ioStreams.Out, "curl -H %q %q\n",
+					fmt.Sprintf("Authorization: %s %s", token.TokenType, token.AccessToken), url)
+				return nil
+			}
+
+			if decode {
+				decoded, decErr := decodeJWT(token.AccessToken)
+				if decErr != nil {
+					decErr = fmt.Errorf("failed to decode JWT: %w", decErr)
+					w.Errorf("%v", decErr)
+					return exitcode.WithCode(decErr, exitcode.GeneralError)
+				}
+				outputOpts := flags.NewKvxOutputOptionsFromFlags(
+					outputFlags.Output,
+					outputFlags.Interactive,
+					outputFlags.Expression,
+					kvx.WithOutputContext(ctx),
+					kvx.WithOutputNoColor(cliParams.NoColor),
+					kvx.WithOutputAppName("scafctl auth token --decode"),
+				)
+				outputOpts.IOStreams = ioStreams
+				return outputOpts.Write(decoded)
+			}
+
 			result := map[string]any{
 				"handler":     handlerName,
 				"flow":        string(token.Flow),
@@ -148,6 +221,10 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 				"expiresAt":   token.ExpiresAt,
 				"expiresIn":   token.TimeUntilExpiry().String(),
 				"accessToken": token.AccessToken,
+			}
+
+			if token.SessionID != "" {
+				result["sessionId"] = token.SessionID
 			}
 
 			outputOpts := flags.NewKvxOutputOptionsFromFlags(
@@ -167,8 +244,74 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 	cmd.Flags().StringSliceVar(&scopes, "scope", nil, "OAuth scope(s) for the token (required for handlers with scopes_on_token_request capability)")
 	cmd.Flags().DurationVar(&minValidFor, "min-valid-for", auth.DefaultMinValidFor, "Minimum time the token should be valid for")
 	cmd.Flags().BoolVarP(&forceRefresh, "force-refresh", "f", false, "Force acquiring a new token, ignoring any cached token")
+	cmd.Flags().BoolVar(&force, "force", false, "Force acquiring a new token, ignoring any cached token (alias for --force-refresh)")
 	cmd.Flags().BoolVar(&rawToken, "raw", false, "Print only the raw access token value (useful for scripting)")
+	cmd.Flags().BoolVar(&clip, "clip", false, "Copy the token to the clipboard instead of printing it")
+	cmd.Flags().BoolVar(&decode, "decode", false, "Decode and display JWT header and claims from the access token (no signature validation); use -o json for full structured output")
+	cmd.Flags().BoolVar(&curl, "curl", false, "Emit a ready-to-run curl command with the token injected")
+	cmd.Flags().StringVar(&curlURL, "curl-url", "", "URL to embed in the --curl output (default: '<URL>' placeholder)")
+	cmd.Flags().BoolVar(&exportToken, "export", false, "Output a shell export statement: eval $(scafctl auth token ... --export)")
 	flags.AddKvxOutputFlagsToStruct(cmd, &outputFlags)
 
 	return cmd
+}
+
+// decodeJWT parses a JWT and returns a map with "header" and "payload" keys,
+// each containing the decoded claims for that section.
+// The token signature is NOT validated — this is for display/debugging only.
+func decodeJWT(tokenStr string) (map[string]any, error) {
+	parts := strings.Split(tokenStr, ".")
+	if len(parts) < 2 {
+		return nil, fmt.Errorf("not a valid JWT: expected at least 2 dot-separated segments, got %d", len(parts))
+	}
+
+	decodedHeader, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return nil, fmt.Errorf("failed to base64-decode JWT header: %w", err)
+	}
+	decodedPayload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("failed to base64-decode JWT payload: %w", err)
+	}
+
+	var header map[string]any
+	if err := json.Unmarshal(decodedHeader, &header); err != nil {
+		return nil, fmt.Errorf("failed to parse JWT header JSON: %w", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(decodedPayload, &payload); err != nil {
+		return nil, fmt.Errorf("failed to parse JWT payload JSON: %w", err)
+	}
+
+	// Augment well-known unix timestamp fields in the payload with human-readable counterparts.
+	for _, field := range []string{"exp", "iat", "nbf", "auth_time"} {
+		if v, ok := payload[field]; ok {
+			if ts, ok := jwtFloat64(v); ok {
+				payload[field+"_human"] = time.Unix(int64(ts), 0).UTC().Format(time.RFC3339)
+			}
+		}
+	}
+
+	return map[string]any{
+		"header":  header,
+		"payload": payload,
+	}, nil
+}
+
+// jwtFloat64 converts a JSON-decoded numeric value to float64.
+func jwtFloat64(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case json.Number:
+		f, err := n.Float64()
+		return f, err == nil
+	}
+	return 0, false
+}
+
+// tokenExportVarName returns the shell variable name used by --export.
+func tokenExportVarName(handlerName string) string {
+	return strings.ToUpper(handlerName) + "_TOKEN"
 }

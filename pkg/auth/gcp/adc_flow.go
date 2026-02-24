@@ -166,7 +166,7 @@ func (h *Handler) adcLogin(ctx context.Context, opts auth.LoginOptions) (*auth.R
 	}
 
 	// Store credentials
-	if err := h.storeCredentials(ctx, &tokenResp, auth.FlowInteractive, scopes); err != nil {
+	if err := h.storeCredentials(ctx, &tokenResp, auth.FlowInteractive, scopes, ""); err != nil {
 		return nil, fmt.Errorf("failed to store credentials: %w", err)
 	}
 
@@ -272,7 +272,7 @@ func (h *Handler) mintToken(ctx context.Context, scope string) (*auth.Token, err
 	// Handle refresh token rotation
 	if tokenResp.RefreshToken != "" && tokenResp.RefreshToken != refreshToken {
 		lgr.V(1).Info("refresh token rotated, storing new token")
-		if err := h.storeCredentials(ctx, &tokenResp, auth.FlowInteractive, metadata.Scopes); err != nil {
+		if err := h.storeCredentials(ctx, &tokenResp, auth.FlowInteractive, metadata.Scopes, metadata.SessionID); err != nil {
 			lgr.V(1).Info("warning: failed to update refresh token", "error", err)
 		}
 	}
@@ -284,6 +284,7 @@ func (h *Handler) mintToken(ctx context.Context, scope string) (*auth.Token, err
 		TokenType:   tokenResp.TokenType,
 		ExpiresAt:   expiresAt,
 		Scope:       scope,
+		SessionID:   metadata.SessionID,
 	}, nil
 }
 

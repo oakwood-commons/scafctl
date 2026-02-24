@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -112,7 +113,7 @@ func TestMockHTTPClient_Reset(t *testing.T) {
 }
 
 func TestDefaultHTTPClient(t *testing.T) {
-	client := NewDefaultHTTPClient()
+	client := NewDefaultHTTPClient(logr.Discard())
 	require.NotNil(t, client)
 }
 

@@ -29,11 +29,13 @@ This tutorial walks you through setting up and using authentication in scafctl. 
    - [GCP Workload Identity Federation](#gcp-workload-identity-federation)
    - [GCP Metadata Server](#gcp-metadata-server-gcegkecloud-run)
 3. [Checking Auth Status](#checking-auth-status)
-4. [Using Auth in HTTP Providers](#using-auth-in-http-providers)
-5. [Getting Tokens for Debugging](#getting-tokens-for-debugging)
-6. [Configuration](#configuration)
-7. [Logging Out](#logging-out)
-8. [Troubleshooting](#troubleshooting)
+4. [Listing and Sorting Cached Tokens](#listing-and-sorting-cached-tokens)
+5. [Using Auth in HTTP Providers](#using-auth-in-http-providers)
+6. [Getting Tokens for Debugging](#getting-tokens-for-debugging)
+7. [Configuration](#configuration)
+8. [Logging Out](#logging-out)
+9. [Auth Diagnostics](#auth-diagnostics)
+10. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -95,6 +97,21 @@ Waiting for authentication...
 ✓ Successfully authenticated as user@example.com
   Tenant: contoso.onmicrosoft.com
 ```
+
+### Idempotent Login for Scripts (--skip-if-authenticated)
+
+Use `--skip-if-authenticated` to skip re-authentication if you're already logged in. The command exits `0` without prompting, making it safe to call at the start of scripts or CI jobs without disrupting an active session:
+
+```bash
+# Only login if not already authenticated
+scafctl auth login entra --skip-if-authenticated
+scafctl auth login github --skip-if-authenticated
+scafctl auth login gcp --skip-if-authenticated
+```
+
+When already authenticated this prints a message and exits `0`. Without the flag, the command prompts for re-authentication (or warns if already authenticated but continues).
+
+---
 
 ### Specifying a Tenant
 
@@ -397,6 +414,36 @@ echo "Getting access token for Azure Resource Manager..."
 scafctl auth token entra --scope "https://management.azure.com/.default"
 ```
 
+##### Flow Priority and Interaction with Stored Credentials
+
+The Entra handler selects which flow to use based on what is available at runtime, in this order:
+
+| Priority | Flow | What triggers it |
+|----------|------|------------------|
+| 1 (highest) | Workload Identity | `AZURE_FEDERATED_TOKEN_FILE` or `AZURE_FEDERATED_TOKEN` is set |
+| 2 | Service Principal | `AZURE_CLIENT_SECRET` is set |
+| 3 (lowest) | Device Code / Refresh Token | A refresh token is stored in the system secret store |
+
+**WIF does not touch the stored refresh token.**
+
+When WIF is active, the stored device-code refresh token (if any) is bypassed but **not deleted**. The two credential types live in completely separate storage:
+
+- WIF is entirely env-var driven — no reads or writes to `scafctl.auth.entra.refresh_token`
+- A prior device-code session silently coexists in the secret store while WIF is active
+- `scafctl auth list` will display both the WIF-sourced access tokens and any stored refresh token
+
+**Fallback behavior**: removing WIF env vars causes the handler to automatically fall through to the next available flow. If you have a stored refresh token, it resumes being used with no reconfiguration needed.
+
+**Stale stored credentials**: if you want a clean slate after switching to WIF, explicitly remove the stored device-code session:
+
+```bash
+scafctl auth logout entra
+```
+
+This removes the refresh token and cached access tokens without affecting WIF, which is entirely driven by environment variables.
+
+---
+
 ##### Troubleshooting Workload Identity
 
 **Error: "AADSTS70021: No matching federated identity record found"**
@@ -679,14 +726,116 @@ Handler   Status         Identity   Username   IdentityType        Scopes
 github    Authenticated  octocat    octocat    service-principal   gist, read:org, repo, workflow
 ```
 
-When not authenticated:
+When not authenticated, the `hint` field tells you the exact command to run:
 
 ```
-Handler   Status            Identity   Tenant   Expires
-entra     Not Authenticated -          -        -
-github    Not Authenticated -          -        -
-gcp       Not Authenticated -          -        -
+Handler   Status            Identity   Tenant   Expires   Hint
+entra     Not Authenticated -          -        -         run 'scafctl auth login entra' to authenticate
+github    Not Authenticated -          -        -         run 'scafctl auth login github' to authenticate
+gcp       Not Authenticated -          -        -         run 'scafctl auth login gcp' to authenticate
 ```
+
+### Scripting with --exit-code
+
+Use `--exit-code` to make the command exit non-zero when any handler is not authenticated — handy in CI pre-flight checks:
+
+```bash
+# Fail the script if not authenticated
+scafctl auth status entra --exit-code || { echo "Not authenticated. Run: scafctl auth login entra"; exit 1; }
+```
+
+### Proactive Expiry Warnings (--warn-within)
+
+Use `--warn-within <duration>` to exit non-zero if any authenticated token will expire within the given window. This catches near-expiry tokens **before** they cause a mid-job failure:
+
+```bash
+# Exit non-zero if any token expires within 10 minutes
+scafctl auth status --warn-within 10m
+
+# Check a specific handler
+scafctl auth status entra --warn-within 1h
+
+# Combine with --exit-code for a full CI pre-flight check
+scafctl auth status --exit-code --warn-within 15m || {
+  echo "Auth pre-flight failed — not authenticated or token expiring soon"
+  exit 1
+}
+```
+
+The JSON output includes a `cachedTokens` field showing how many access tokens are in the cache for each handler — useful for verifying token cache health:
+
+```bash
+scafctl auth status -o json | jq '.[].cachedTokens'
+```
+
+---
+
+## Listing and Sorting Cached Tokens
+
+The `auth list` command shows metadata for all cached tokens (refresh tokens and access tokens) without revealing the actual token values:
+
+```bash
+# Show all cached tokens for all handlers
+scafctl auth list
+
+# Show cached tokens for a single handler
+scafctl auth list entra
+scafctl auth list github
+scafctl auth list gcp
+
+# Show only expired tokens
+scafctl auth list --expired-only
+
+# Show only valid tokens
+scafctl auth list --valid-only
+
+# Sort by expiry (soonest expiring first — useful for spotting tokens about to expire)
+scafctl auth list --sort expires-at
+
+# Sort by handler name
+scafctl auth list --sort handler
+
+# Sort by scope
+scafctl auth list --sort scope
+
+# Output as JSON for scripting
+scafctl auth list -o json
+
+# Remove all expired access tokens from the cache (refresh tokens and valid tokens are preserved)
+scafctl auth list --purge-expired
+
+# Purge expired tokens for a specific handler
+scafctl auth list entra --purge-expired
+```
+
+**Sort fields:**
+
+| Flag value | Sorted by |
+|------------|-----------|
+| `handler` | Auth handler name |
+| `kind` | Token kind (`refresh` / `access`) |
+| `scope` | OAuth scope string |
+| `expires-at` | Expiry time (soonest first) |
+| `cached-at` | When the token was cached (oldest first) |
+
+The `getTokenCommand` column in the output shows the exact `scafctl auth token` command to retrieve each access token, making it easy to copy-paste for debugging.
+
+### Purging Expired Tokens (--purge-expired)
+
+Over time the token cache can accumulate expired access tokens. Use `--purge-expired` to clean them up. Refresh tokens and still-valid access tokens are **not** affected:
+
+```bash
+# Remove expired cache entries across all handlers
+scafctl auth list --purge-expired
+# Output:
+# ✓ Purged 2 expired access token(s) from entra.
+# ✓ Purged 0 expired access token(s) from github.
+
+# Purge only for a specific handler
+scafctl auth list gcp --purge-expired
+```
+
+> `--purge-expired` cannot be combined with `--expired-only` or `--valid-only` (it exits early without listing).
 
 ---
 
@@ -857,10 +1006,13 @@ scafctl auth token entra --scope "https://graph.microsoft.com/.default"
 
 # Get a GitHub token (uses scopes from login; --scope is not supported)
 scafctl auth token github
+
+# Get a GCP token
+scafctl auth token gcp --scope "https://www.googleapis.com/auth/cloud-platform"
 ```
 
 > **Note:** The `--scope` flag is only supported on `auth token` for handlers
-> with the `scopes-on-token-request` capability (e.g., Entra ID). GitHub scopes
+> with the `scopes-on-token-request` capability (e.g., Entra ID and GCP). GitHub scopes
 > are fixed at login time — use `scafctl auth login github --scope <scope>` to
 > change them.
 
@@ -895,23 +1047,125 @@ If you need a fresh token regardless of cache state (e.g., after permission chan
 scafctl auth token entra --scope "https://graph.microsoft.com/.default" --force-refresh
 ```
 
-### Using the Token Directly
+### Printing the Raw Token (Scripting)
 
-You can use the token in other tools:
+Use `--raw` to print just the token value — ideal for shell scripting:
 
 ```bash
-# Use with curl (Entra / Microsoft Graph)
+# Assign to a variable
+export TOKEN=$(scafctl auth token gcp --scope "https://www.googleapis.com/auth/cloud-platform" --raw)
+
+# Use directly with curl
+curl -H "Authorization: Bearer $(scafctl auth token github --raw)" https://api.github.com/user
+```
+
+### Shell Export (eval-compatible)
+
+Use `--export` to get a shell export statement you can `eval` into the current shell. The variable is named `<HANDLER>_TOKEN`:
+
+```bash
+# Add a GCP token to the current shell environment
+eval $(scafctl auth token gcp --scope "https://www.googleapis.com/auth/cloud-platform" --export)
+echo $GCP_TOKEN
+
+# Other handlers follow the same pattern
+eval $(scafctl auth token github --export)
+echo $GITHUB_TOKEN
+
+eval $(scafctl auth token entra --scope "https://management.azure.com/.default" --export)
+echo $ENTRA_TOKEN
+```
+
+### Emitting a Ready-to-Run curl Command
+
+Use `--curl` to print a `curl` command with the `Authorization` header already populated — great for quick API call reproduction without any `jq` piping:
+
+```bash
+# Emit a curl one-liner for Microsoft Graph
+scafctl auth token entra --scope "https://graph.microsoft.com/.default" \
+  --curl --curl-url "https://graph.microsoft.com/v1.0/me"
+# Output:
+# curl -H "Authorization: Bearer eyJ..." "https://graph.microsoft.com/v1.0/me"
+
+# Emit a curl one-liner for GCP
+scafctl auth token gcp --scope "https://www.googleapis.com/auth/cloud-platform" \
+  --curl --curl-url "https://storage.googleapis.com/storage/v1/b?project=my-project"
+
+# Emit without a URL (useful to inspect — fills in a placeholder)
+scafctl auth token github --curl
+# Output:
+# curl -H "Authorization: Bearer ghp_..." "<URL>"
+```
+
+### Decoding the JWT (Header + Payload)
+
+Use `--decode` to inspect the full JWT structure — both the **header** and the **payload** — without needing an external decoder tool. Signature validation is intentionally skipped; this is for debugging only:
+
+```bash
+# Decode and display the full JWT (header and payload)
+scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode
+
+# Output as JSON — filter with jq
+scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode -o json \
+  | jq '{alg: .header.alg, audience: .payload.aud, upn: .payload.upn, expires: .payload.exp_human}'
+```
+
+Example output (table):
+
+```
+Key                   Value
+header.alg            RS256
+header.typ            JWT
+header.kid            abc123...
+payload.aud           https://graph.microsoft.com
+payload.iss           https://login.microsoftonline.com/...
+payload.sub           A3ECB230-...
+payload.oid           12345678-...
+payload.upn           user@example.com
+payload.roles         ["Directory.Read.All"]
+payload.exp           1740000000
+payload.exp_human     2026-02-19T22:13:20Z
+payload.iat_human     2026-02-19T21:13:20Z
+```
+
+The header section tells you the signing algorithm (`alg`), key ID (`kid`), and token type (`typ`) — useful for confirming which key was used and troubleshooting signature or algorithm policy issues.
+
+Unix timestamp fields (`exp`, `iat`, `nbf`, `auth_time`) are automatically augmented with a `_human` counterpart in RFC 3339 format.
+
+This is the single fastest way to check:
+- Which audience (`aud`) the token is for
+- Which roles or scopes are included (`roles`, `scp`)
+- Whether the token's expiry (`exp_human`) matches what you expect
+- Tenant, OID, and UPN for identity verification
+
+### Copying to Clipboard
+
+Use `--clip` to copy the token directly to your clipboard without it appearing in your terminal (useful when pasting into browser DevTools or Postman):
+
+```bash
+scafctl auth token entra --scope "https://management.azure.com/.default" --clip
+# Output: ✓ Token copied to clipboard (expires in 58m42s).
+```
+
+### Using the Token Directly
+
+Get the full token for use with other tools:
+
+```bash
+# Approach 1: --raw (simplest)
+curl -H "Authorization: Bearer $(scafctl auth token entra --scope 'https://graph.microsoft.com/.default' --raw)" \
+  https://graph.microsoft.com/v1.0/me
+
+# Approach 2: --curl (no jq required)
+scafctl auth token entra --scope "https://graph.microsoft.com/.default" \
+  --curl --curl-url "https://graph.microsoft.com/v1.0/me" | bash
+
+# Approach 3: JSON output + jq (most flexible)
 TOKEN=$(scafctl auth token entra --scope "https://graph.microsoft.com/.default" -o json | jq -r '.accessToken')
 curl -H "Authorization: Bearer $TOKEN" https://graph.microsoft.com/v1.0/me
 
-# Use with curl (GitHub API)
-TOKEN=$(scafctl auth token github -o json | jq -r '.accessToken')
-curl -H "Authorization: Bearer $TOKEN" https://api.github.com/user/repos
-
-# Use with httpie
-scafctl auth token entra --scope "https://graph.microsoft.com/.default" -o json | \
-  jq -r '"Bearer " + .accessToken' | \
-  http GET https://graph.microsoft.com/v1.0/me Authorization:@-
+# GitHub API example
+curl -H "Authorization: Bearer $(scafctl auth token github --raw)" https://api.github.com/user/repos
 ```
 
 ---
@@ -998,6 +1252,19 @@ scafctl auth logout entra
 
 # Logout from GitHub
 scafctl auth logout github
+
+# Logout from GCP
+scafctl auth logout gcp
+
+# Logout from all registered handlers at once (prompts for confirmation)
+scafctl auth logout --all
+
+# Skip the confirmation prompt (for scripts and CI)
+scafctl auth logout --all --yes
+scafctl auth logout --all -y
+
+# Force clear credentials even if not currently logged in
+scafctl auth logout entra --force
 ```
 
 This removes:
@@ -1006,10 +1273,102 @@ This removes:
 - All cached access tokens
 - Token metadata
 
+### Dry Run
+
+Use `--dry-run` to see which credentials would be removed without actually removing them. Useful before running `--all` in a shared or production environment:
+
+```bash
+# Preview what would be removed for Entra
+scafctl auth logout entra --dry-run
+# Output: [dry-run] Would log out from Microsoft Entra ID (cached tokens and refresh token would be removed).
+
+# Preview across all handlers
+scafctl auth logout --all --dry-run
+```
+
 ### Example Output
 
 ```
-✓ Successfully logged out from entra
+✓ Successfully logged out from Microsoft Entra ID.
+```
+
+---
+
+## Auth Diagnostics
+
+The `auth diagnose` command (alias: `auth doctor`) runs a series of health checks
+and reports any issues with your auth configuration. It's the first command to run
+when troubleshooting auth problems:
+
+```bash
+# Run all checks and print a human-readable report
+scafctl auth diagnose
+
+# Alias
+scafctl auth doctor
+
+# Scope checks to a single handler (skips checks for the others)
+scafctl auth diagnose entra
+scafctl auth diagnose github
+scafctl auth diagnose gcp
+
+# Also attempt a live token fetch for each authenticated handler
+scafctl auth diagnose --live-token
+
+# Scope live-token check to one handler
+scafctl auth diagnose entra --live-token
+
+# Output as JSON for automated pipelines
+scafctl auth diagnose -o json
+```
+
+### What It Checks
+
+| Category | What is checked |
+|----------|-----------------|
+| `registry` | Auth handlers are registered and available |
+| `config` | Config file presence; `auth.entra`, `auth.github`, `auth.gcp` sections |
+| `env` | Relevant environment variables (`AZURE_*`, `GITHUB_TOKEN`, `GOOGLE_*`) |
+| `clock-skew` | System clock is validated against an external time source; warns if skew exceeds 5 minutes (clock skew causes token validation failures) |
+| `handler` | Each handler's authentication status; hints for unauthenticated handlers |
+| `cache` | Token cache health — count and number of expired cached tokens |
+| `live` | *(Only with `--live-token`)* Performs an actual `GetToken` call to confirm end-to-end flow |
+
+### Example Output
+
+```
+✅ [ok]   auth registry: registered handlers: [entra gcp github]
+⚠️  [warn] config file: config file not found — using built-in defaults
+✅ [ok]   env GITHUB_TOKEN: GitHub personal access token — set
+✅ [ok]   env gcp: gcloud ADC: gcloud Application Default Credentials file found
+✅ [ok]   entra: authenticated: authenticated as "user@example.com", expires in 58m
+⚠️  [warn] entra: token cache: 3 cached token(s), 1 expired
+✅ [ok]   gcp: authenticated: authenticated as "gcloud ADC (application default credentials)"
+✅ [ok]   gcp: token cache: 1 cached token(s)
+⚠️  [warn] github: authenticated: not authenticated — run 'scafctl auth login github'
+
+⚠️ Diagnostics complete: 3 warning(s), 5 ok (no failures)
+```
+
+### Exit Codes
+
+| Condition | Exit code |
+|-----------|-----------|
+| All checks pass or warn | `0` |
+| Any check **fails** | non-zero |
+
+> Warnings (unauthenticated handler, expired tokens, missing config file) do **not** produce a
+> non-zero exit code on their own. Only hard failures (registry empty, handler init error) do.
+
+### Using in CI Preflight
+
+```bash
+# Verify end-to-end auth before running a pipeline
+scafctl auth diagnose --live-token
+if [ $? -ne 0 ]; then
+  echo "Auth health check failed. Check 'scafctl auth diagnose' output."
+  exit 1
+fi
 ```
 
 ---
@@ -1091,18 +1450,25 @@ If you're getting 403 (Forbidden) errors, the token may not have the required pe
 
 ### Checking Token Claims
 
-To debug token issues, get a token and decode it:
+Use `--decode` on `auth token` to inspect JWT claims directly without needing an
+external tool or manual base64 decoding:
 
 ```bash
-# Get the token
-TOKEN=$(scafctl auth token entra --scope "https://graph.microsoft.com/.default" -o json | jq -r '.accessToken')
+# Decode and display claims in table format (no signature validation)
+scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode
 
-# Decode the token (using jwt-cli or online decoder)
-echo $TOKEN | jwt decode -
-
-# Or decode just the payload (base64)
-echo $TOKEN | cut -d. -f2 | base64 -d 2>/dev/null | jq .
+# Output as JSON for further processing (e.g., with jq)
+scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode -o json | jq '.aud,.upn,.roles'
 ```
+
+Unix timestamp fields (`exp`, `iat`, `nbf`, `auth_time`) are automatically augmented
+with a `_human` RFC 3339 counterpart so you can read them without converting.
+
+Useful things to verify:
+- `aud` — correct audience for the API you're calling
+- `scp` / `roles` — scopes or app roles granted
+- `exp_human` — actual token expiry in human-readable form
+- `upn` / `unique_name` / `preferred_username` — the authenticated identity
 
 ### Debug Logging
 

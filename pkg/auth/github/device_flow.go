@@ -75,7 +75,7 @@ func (h *Handler) performDeviceCodeFlow(ctx context.Context, opts auth.LoginOpti
 	}
 
 	// Step 4: Store credentials securely and fetch claims
-	claims, err := h.storeCredentials(ctx, tokenResp, scopes)
+	claims, err := h.storeCredentials(ctx, tokenResp, scopes, "")
 	if err != nil {
 		return nil, auth.NewError(HandlerName, "store_credentials", err)
 	}

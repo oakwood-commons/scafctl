@@ -25,15 +25,16 @@ func TestCommandAuth(t *testing.T) {
 
 	// Verify subcommands are added
 	subCmds := cmd.Commands()
-	require.Len(t, subCmds, 5)
+	require.Len(t, subCmds, 6)
 
 	cmdNames := make([]string, len(subCmds))
 	for i, c := range subCmds {
 		cmdNames[i] = c.Use
 	}
-	assert.Contains(t, cmdNames, "list")
+	assert.Contains(t, cmdNames, "diagnose")
+	assert.Contains(t, cmdNames, "list [handler]")
 	assert.Contains(t, cmdNames, "login <handler>")
-	assert.Contains(t, cmdNames, "logout <handler>")
+	assert.Contains(t, cmdNames, "logout [handler]")
 	assert.Contains(t, cmdNames, "status [handler]")
 	assert.Contains(t, cmdNames, "token <handler>")
 }

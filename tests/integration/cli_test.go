@@ -1238,20 +1238,37 @@ func TestIntegration_AuthList(t *testing.T) {
 	stdout, _, exitCode := runScafctl(t, "auth", "list")
 
 	assert.Equal(t, 0, exitCode)
-	// Should show the built-in handlers
-	assert.Contains(t, stdout, "entra")
-	assert.Contains(t, stdout, "github")
-	assert.Contains(t, stdout, "gcp")
+	// With no active login sessions the command succeeds and reports no tokens.
+	// If tokens are cached from a prior login the handler name would appear instead.
+	assert.True(t,
+		strings.Contains(stdout, "No cached tokens found") ||
+			strings.Contains(stdout, "entra") ||
+			strings.Contains(stdout, "github") ||
+			strings.Contains(stdout, "gcp"),
+		"expected no-token message or token rows, got: %q", stdout,
+	)
 }
 
 func TestIntegration_AuthListJSON(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "auth", "list", "-o", "json")
 
+	// Command should always exit 0 regardless of whether tokens are present.
 	assert.Equal(t, 0, exitCode)
-	assert.Contains(t, stdout, `"name"`)
-	assert.Contains(t, stdout, `"flows"`)
-	assert.Contains(t, stdout, `"capabilities"`)
+	// When tokens are present they are returned as JSON; when absent the
+	// informational message is written to stderr/stdout without JSON.
+	if strings.Contains(stdout, `"handler"`) {
+		assert.Contains(t, stdout, `"tokenKind"`)
+	}
+}
+
+func TestIntegration_AuthListHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "auth", "list", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "handler")
+	assert.Contains(t, stdout, "refresh")
 }
 
 func TestIntegration_AuthTokenHelp(t *testing.T) {
