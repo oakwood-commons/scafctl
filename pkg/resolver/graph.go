@@ -47,14 +47,34 @@ func extractDependencies(r *Resolver, lookup DescriptorLookup) []string {
 		extractDepsFromResolvePhase(r.Resolve, deps, lookup)
 	}
 
-	// Extract from transform phase
+	// Extract from transform phase (self-refs collected separately).
+	//
+	// Using _.resolverName in transform/validate is always wrong — the resolver's
+	// own value is NOT stored in the context map (_.resolverName) until after ALL
+	// phases complete (see executor.go SetResult in the defer). The correct way to
+	// reference the current value is __self, which is injected via
+	// executeProviderWithSelf. This filter prevents a confusing "cycle detected"
+	// error from the DAG builder; the real issue is caught by the
+	// resolver-self-reference lint rule which gives an actionable suggestion.
 	if r.Transform != nil {
-		extractDepsFromTransformPhase(r.Transform, deps, lookup)
+		transformDeps := make(map[string]bool)
+		extractDepsFromTransformPhase(r.Transform, transformDeps, lookup)
+		for dep := range transformDeps {
+			if dep != r.Name {
+				deps[dep] = true
+			}
+		}
 	}
 
-	// Extract from validate phase
+	// Extract from validate phase (same self-ref filtering as transform above)
 	if r.Validate != nil {
-		extractDepsFromValidatePhase(r.Validate, deps, lookup)
+		validateDeps := make(map[string]bool)
+		extractDepsFromValidatePhase(r.Validate, validateDeps, lookup)
+		for dep := range validateDeps {
+			if dep != r.Name {
+				deps[dep] = true
+			}
+		}
 	}
 
 	// Convert to slice

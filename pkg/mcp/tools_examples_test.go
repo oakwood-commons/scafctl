@@ -6,11 +6,10 @@ package mcp
 import (
 	"context"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/oakwood-commons/scafctl/pkg/examples"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -33,13 +32,13 @@ func TestHandleListExamples(t *testing.T) {
 		var data map[string]any
 		require.NoError(t, json.Unmarshal([]byte(text), &data))
 
-		examples, ok := data["examples"].([]any)
+		exs, ok := data["examples"].([]any)
 		require.True(t, ok, "expected examples array")
-		assert.Greater(t, len(examples), 0, "should find at least one example")
+		assert.Greater(t, len(exs), 0, "should find at least one example")
 
 		count, ok := data["count"].(float64)
 		require.True(t, ok)
-		assert.Equal(t, float64(len(examples)), count)
+		assert.Equal(t, float64(len(exs)), count)
 	})
 
 	t.Run("filters by category", func(t *testing.T) {
@@ -61,9 +60,9 @@ func TestHandleListExamples(t *testing.T) {
 		var data map[string]any
 		require.NoError(t, json.Unmarshal([]byte(text), &data))
 
-		examples, ok := data["examples"].([]any)
+		exs, ok := data["examples"].([]any)
 		require.True(t, ok)
-		for _, ex := range examples {
+		for _, ex := range exs {
 			exMap := ex.(map[string]any)
 			assert.Equal(t, "actions", exMap["category"])
 		}
@@ -88,9 +87,9 @@ func TestHandleListExamples(t *testing.T) {
 		var data map[string]any
 		require.NoError(t, json.Unmarshal([]byte(text), &data))
 
-		examples, ok := data["examples"].([]any)
+		exs, ok := data["examples"].([]any)
 		require.True(t, ok)
-		assert.Empty(t, examples)
+		assert.Empty(t, exs)
 	})
 }
 
@@ -108,10 +107,10 @@ func TestHandleGetExample(t *testing.T) {
 		text := extractText(t, listResult)
 		var data map[string]any
 		require.NoError(t, json.Unmarshal([]byte(text), &data))
-		examples := data["examples"].([]any)
-		require.NotEmpty(t, examples, "need at least one action example")
+		exs := data["examples"].([]any)
+		require.NotEmpty(t, exs, "need at least one action example")
 
-		firstExample := examples[0].(map[string]any)
+		firstExample := exs[0].(map[string]any)
 		exPath := firstExample["path"].(string)
 
 		// Now get that example
@@ -177,39 +176,9 @@ func TestHandleGetExample(t *testing.T) {
 	})
 }
 
-func TestFindExamplesDir(t *testing.T) {
-	dir, err := findExamplesDir()
-	require.NoError(t, err)
-	assert.DirExists(t, dir)
-
-	// Verify it actually contains example files
-	entries, err := os.ReadDir(dir)
-	require.NoError(t, err)
-	assert.Greater(t, len(entries), 0)
-
-	// Check that expected subdirectories exist
-	hasActions := false
-	hasSolutions := false
-	for _, e := range entries {
-		if e.IsDir() {
-			switch e.Name() {
-			case "actions":
-				hasActions = true
-			case "solutions":
-				hasSolutions = true
-			}
-		}
-	}
-	assert.True(t, hasActions, "examples/ should have actions/ subdirectory")
-	assert.True(t, hasSolutions, "examples/ should have solutions/ subdirectory")
-}
-
-func TestScanExamples(t *testing.T) {
-	dir, err := findExamplesDir()
-	require.NoError(t, err)
-
+func TestExamplesScan(t *testing.T) {
 	t.Run("scans all examples", func(t *testing.T) {
-		items, err := scanExamples(dir, "")
+		items, err := examples.Scan("")
 		require.NoError(t, err)
 		assert.Greater(t, len(items), 0)
 
@@ -224,7 +193,7 @@ func TestScanExamples(t *testing.T) {
 	})
 
 	t.Run("filters by category", func(t *testing.T) {
-		items, err := scanExamples(dir, "solutions")
+		items, err := examples.Scan("solutions")
 		require.NoError(t, err)
 		for _, item := range items {
 			assert.Equal(t, "solutions", item.Category)
@@ -232,7 +201,7 @@ func TestScanExamples(t *testing.T) {
 	})
 
 	t.Run("skips bad-solution examples", func(t *testing.T) {
-		items, err := scanExamples(dir, "")
+		items, err := examples.Scan("")
 		require.NoError(t, err)
 		for _, item := range items {
 			assert.NotContains(t, item.Path, "bad-solution")
@@ -240,32 +209,32 @@ func TestScanExamples(t *testing.T) {
 	})
 }
 
-func TestDescriptionFromPath(t *testing.T) {
+func TestExamplesDescriptionFromPath(t *testing.T) {
 	t.Run("known path returns specific description", func(t *testing.T) {
-		desc := descriptionFromPath("actions/hello-world.yaml")
+		desc := examples.DescriptionFromPath("actions/hello-world.yaml")
 		assert.Equal(t, "Simple hello world action", desc)
 	})
 
 	t.Run("unknown path generates fallback", func(t *testing.T) {
-		desc := descriptionFromPath("custom/my-custom-thing.yaml")
+		desc := examples.DescriptionFromPath("custom/my-custom-thing.yaml")
 		assert.Contains(t, desc, "My Custom Thing")
 		assert.Contains(t, desc, "example")
 	})
 
 	t.Run("dashes replaced with spaces", func(t *testing.T) {
-		desc := descriptionFromPath("something/some-long-name.yaml")
+		desc := examples.DescriptionFromPath("something/some-long-name.yaml")
 		assert.Contains(t, desc, "Some Long Name")
 	})
 
 	t.Run("underscores replaced with spaces", func(t *testing.T) {
-		desc := descriptionFromPath("something/some_other_name.yaml")
+		desc := examples.DescriptionFromPath("something/some_other_name.yaml")
 		assert.Contains(t, desc, "Some Other Name")
 	})
 }
 
-func TestScanExamplesNonexistentDir(t *testing.T) {
-	items, err := scanExamples(filepath.Join(os.TempDir(), "nonexistent_dir_12345"), "")
-	// filepath.Walk returns an error for non-existent root
-	assert.Error(t, err)
-	assert.Empty(t, items)
+func TestExamplesCategories(t *testing.T) {
+	cats := examples.Categories()
+	assert.NotEmpty(t, cats)
+	assert.Contains(t, cats, "actions")
+	assert.Contains(t, cats, "solutions")
 }

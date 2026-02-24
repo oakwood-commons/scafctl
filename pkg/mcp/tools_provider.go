@@ -19,6 +19,7 @@ func (s *Server) registerProviderTools() {
 	listProvidersTool := mcp.NewTool("list_providers",
 		mcp.WithDescription("List all available solution providers (e.g. http, static, file, cel, exec, directory). Solution providers are the building blocks of solutions — they fetch data, transform values, validate inputs, and execute actions. Returns name, description, capabilities, and category for each provider. To get full input/output schemas, examples, and CLI usage for a specific provider, call get_provider_schema with the provider name."),
 		mcp.WithTitleAnnotation("List Providers"),
+		mcp.WithToolIcons(toolIcons["provider"]),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(true),
@@ -37,6 +38,7 @@ func (s *Server) registerProviderTools() {
 	getProviderSchemaTool := mcp.NewTool("get_provider_schema",
 		mcp.WithDescription("Get comprehensive information about a provider: input schema (properties with types, required/optional, defaults, validation), output schemas per capability, YAML usage examples, CLI usage examples, capabilities, and version info. ALWAYS call this before writing action or resolver YAML to verify exact field names, types, and which fields are required."),
 		mcp.WithTitleAnnotation("Get Provider Schema"),
+		mcp.WithToolIcons(toolIcons["provider"]),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(true),
@@ -67,7 +69,9 @@ func (s *Server) handleListProviders(_ context.Context, request mcp.CallToolRequ
 	category := request.GetString("category", "")
 
 	if s.registry == nil {
-		return mcp.NewToolResultError("provider registry not available"), nil
+		return newStructuredError(ErrCodeConfigError, "provider registry not available",
+			WithSuggestion("Ensure the server was started with a provider registry"),
+		), nil
 	}
 
 	var providers []provider.Provider
@@ -102,7 +106,14 @@ func (s *Server) handleListProviders(_ context.Context, request mcp.CallToolRequ
 		items = append(items, item)
 	}
 
-	return mcp.NewToolResultJSON(items)
+	result, err := mcp.NewToolResultJSON(items)
+	if err != nil {
+		return nil, err
+	}
+	result.Content = append(result.Content,
+		mcp.NewResourceLink("provider://reference", "Provider Reference", "Compact reference of all providers", "application/json"),
+	)
+	return result, nil
 }
 
 // handleGetProviderSchema returns comprehensive provider information including
@@ -112,7 +123,11 @@ func (s *Server) handleListProviders(_ context.Context, request mcp.CallToolRequ
 func (s *Server) handleGetProviderSchema(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	name, err := request.RequireString("name")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("name"),
+			WithSuggestion("Use list_providers to see available provider names"),
+			WithRelatedTools("list_providers"),
+		), nil
 	}
 
 	desc, err := explain.LookupProvider(s.ctx, name, s.registry)
@@ -125,7 +140,11 @@ func (s *Server) handleGetProviderSchema(_ context.Context, request mcp.CallTool
 				availableNames = fmt.Sprintf(". Available providers: %v", names)
 			}
 		}
-		return mcp.NewToolResultError(fmt.Sprintf("provider %q not found%s", name, availableNames)), nil
+		return newStructuredError(ErrCodeNotFound, fmt.Sprintf("provider %q not found%s", name, availableNames),
+			WithField("name"),
+			WithSuggestion("Use list_providers to see available provider names"),
+			WithRelatedTools("list_providers"),
+		), nil
 	}
 
 	// Use BuildProviderDetail for a structured, AI-friendly response that includes:

@@ -1,0 +1,15 @@
+# Offset-based pagination
+# Uses offset and limit query parameters to page through results
+name: offset-pagination
+provider: http
+inputs:
+  url: "https://api.example.com/records"
+  method: GET
+  pagination:
+    strategy: offset
+    maxPages: 20
+    limit: 50
+    offsetParam: "offset"
+    limitParam: "limit"
+    collectPath: "body.records"
+    stopWhen: "size(body.records) < 50"

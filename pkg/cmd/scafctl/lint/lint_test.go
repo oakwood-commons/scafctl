@@ -5,7 +5,6 @@ package lint
 
 import (
 	"context"
-	"regexp"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
@@ -286,74 +285,255 @@ func TestLintProviderInputs_MissingProviderSkipped(t *testing.T) {
 	}
 }
 
-func TestScanInputsForResolverRefs_DirectRslvr(t *testing.T) {
-	refs := make(map[string]bool)
-	pattern := regexp.MustCompile(`_\.([a-zA-Z_][a-zA-Z0-9_]*)`)
-
+func TestCollectReferencedResolvers_DirectRslvr(t *testing.T) {
 	resolverName := "myResolver"
-	inputs := map[string]*spec.ValueRef{
-		"field": {Resolver: &resolverName},
-	}
-
-	scanInputsForResolverRefs(inputs, pattern, refs)
-	assert.True(t, refs["myResolver"], "should detect direct rslvr reference")
-}
-
-func TestScanInputsForResolverRefs_NestedRslvrInLiteral(t *testing.T) {
-	refs := make(map[string]bool)
-	pattern := regexp.MustCompile(`_\.([a-zA-Z_][a-zA-Z0-9_]*)`)
-
-	// Simulates: value: { body: { rslvr: "emailBody" } }
-	inputs := map[string]*spec.ValueRef{
-		"value": {
-			Literal: map[string]any{
-				"body": map[string]any{
-					"rslvr": "emailBody",
-				},
-				"subject": map[string]any{
-					"rslvr": "emailSubject",
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"source": {
+					Name: "source",
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "parameter",
+							Inputs: map[string]*spec.ValueRef{
+								"field": {Resolver: &resolverName},
+							},
+						}},
+					},
 				},
 			},
 		},
 	}
 
-	scanInputsForResolverRefs(inputs, pattern, refs)
+	refs := collectReferencedResolvers(sol)
+	assert.True(t, refs["myResolver"], "should detect direct rslvr reference")
+}
+
+func TestCollectReferencedResolvers_NestedRslvrInLiteral(t *testing.T) {
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"source": {
+					Name: "source",
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "parameter",
+							Inputs: map[string]*spec.ValueRef{
+								"value": {
+									Literal: map[string]any{
+										"body": map[string]any{
+											"rslvr": "emailBody",
+										},
+										"subject": map[string]any{
+											"rslvr": "emailSubject",
+										},
+									},
+								},
+							},
+						}},
+					},
+				},
+			},
+		},
+	}
+
+	refs := collectReferencedResolvers(sol)
 	assert.True(t, refs["emailBody"], "should detect nested rslvr in literal map")
 	assert.True(t, refs["emailSubject"], "should detect nested rslvr in literal map")
 }
 
-func TestScanInputsForResolverRefs_NestedExprInLiteral(t *testing.T) {
-	refs := make(map[string]bool)
-	pattern := regexp.MustCompile(`_\.([a-zA-Z_][a-zA-Z0-9_]*)`)
-
-	// Simulates: value: { ts: { expr: "_.timestamp" } }
-	inputs := map[string]*spec.ValueRef{
-		"value": {
-			Literal: map[string]any{
-				"ts": map[string]any{
-					"expr": "string(_.timestamp)",
+func TestCollectReferencedResolvers_NestedExprInLiteral(t *testing.T) {
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"source": {
+					Name: "source",
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "parameter",
+							Inputs: map[string]*spec.ValueRef{
+								"value": {
+									Literal: map[string]any{
+										"ts": map[string]any{
+											"expr": "string(_.timestamp)",
+										},
+									},
+								},
+							},
+						}},
+					},
 				},
 			},
 		},
 	}
 
-	scanInputsForResolverRefs(inputs, pattern, refs)
+	refs := collectReferencedResolvers(sol)
 	assert.True(t, refs["timestamp"], "should detect resolver ref in nested expr")
 }
 
-func TestScanInputsForResolverRefs_NestedInArray(t *testing.T) {
-	refs := make(map[string]bool)
-	pattern := regexp.MustCompile(`_\.([a-zA-Z_][a-zA-Z0-9_]*)`)
-
-	// Simulates: args: [ { rslvr: "env" } ]
-	inputs := map[string]*spec.ValueRef{
-		"args": {
-			Literal: []any{
-				map[string]any{"rslvr": "env"},
+func TestCollectReferencedResolvers_NestedInArray(t *testing.T) {
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"source": {
+					Name: "source",
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "parameter",
+							Inputs: map[string]*spec.ValueRef{
+								"args": {
+									Literal: []any{
+										map[string]any{"rslvr": "env"},
+									},
+								},
+							},
+						}},
+					},
+				},
 			},
 		},
 	}
 
-	scanInputsForResolverRefs(inputs, pattern, refs)
+	refs := collectReferencedResolvers(sol)
 	assert.True(t, refs["env"], "should detect rslvr inside array elements")
+}
+
+func TestLintResolverSelfReferences(t *testing.T) {
+	validationProv := newFakeProvider("validation", map[string]*jsonschema.Schema{
+		"expression": {Type: "string"},
+	})
+	celProv := newFakeProvider("cel", map[string]*jsonschema.Schema{
+		"expression": {Type: "string"},
+	})
+	staticProv := newFakeProvider("static", map[string]*jsonschema.Schema{
+		"value": {Type: "string"},
+	})
+
+	reg := provider.NewRegistry()
+	_ = reg.Register(validationProv)
+	_ = reg.Register(celProv)
+	_ = reg.Register(staticProv)
+
+	selfExpr := celexp.Expression("_.publicSiteCheck.statusCode == 200")
+	correctExpr := celexp.Expression("__self.statusCode == 200")
+	otherExpr := celexp.Expression("_.otherResolver.value == 'ok'")
+
+	tests := []struct {
+		name          string
+		resolverName  string
+		resolver      *resolver.Resolver
+		expectFinding bool
+		findingRule   string
+	}{
+		{
+			name:         "validate self-reference via _.name triggers finding",
+			resolverName: "publicSiteCheck",
+			resolver: &resolver.Resolver{
+				Type: "object",
+				Resolve: &resolver.ResolvePhase{
+					With: []resolver.ProviderSource{{Provider: "static", Inputs: map[string]*spec.ValueRef{"value": {Literal: "test"}}}},
+				},
+				Validate: &resolver.ValidatePhase{
+					With: []resolver.ProviderValidation{{
+						Provider: "validation",
+						Inputs:   map[string]*spec.ValueRef{"expression": {Expr: &selfExpr}},
+					}},
+				},
+			},
+			expectFinding: true,
+			findingRule:   "resolver-self-reference",
+		},
+		{
+			name:         "validate using __self is clean",
+			resolverName: "publicSiteCheck",
+			resolver: &resolver.Resolver{
+				Type: "object",
+				Resolve: &resolver.ResolvePhase{
+					With: []resolver.ProviderSource{{Provider: "static", Inputs: map[string]*spec.ValueRef{"value": {Literal: "test"}}}},
+				},
+				Validate: &resolver.ValidatePhase{
+					With: []resolver.ProviderValidation{{
+						Provider: "validation",
+						Inputs:   map[string]*spec.ValueRef{"expression": {Expr: &correctExpr}},
+					}},
+				},
+			},
+			expectFinding: false,
+		},
+		{
+			name:         "validate referencing other resolver is fine",
+			resolverName: "publicSiteCheck",
+			resolver: &resolver.Resolver{
+				Type: "object",
+				Resolve: &resolver.ResolvePhase{
+					With: []resolver.ProviderSource{{Provider: "static", Inputs: map[string]*spec.ValueRef{"value": {Literal: "test"}}}},
+				},
+				Validate: &resolver.ValidatePhase{
+					With: []resolver.ProviderValidation{{
+						Provider: "validation",
+						Inputs:   map[string]*spec.ValueRef{"expression": {Expr: &otherExpr}},
+					}},
+				},
+			},
+			expectFinding: false,
+		},
+		{
+			name:         "transform self-reference via _.name triggers finding",
+			resolverName: "myValue",
+			resolver: &resolver.Resolver{
+				Type: "string",
+				Resolve: &resolver.ResolvePhase{
+					With: []resolver.ProviderSource{{Provider: "static", Inputs: map[string]*spec.ValueRef{"value": {Literal: "test"}}}},
+				},
+				Transform: &resolver.TransformPhase{
+					With: []resolver.ProviderTransform{{
+						Provider: "cel",
+						Inputs:   map[string]*spec.ValueRef{"expression": {Expr: exprPtr("_.myValue + '-suffix'")}},
+					}},
+				},
+			},
+			expectFinding: true,
+			findingRule:   "resolver-self-reference",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sol := &solution.Solution{
+				Spec: solution.Spec{
+					Resolvers: map[string]*resolver.Resolver{
+						tt.resolverName: tt.resolver,
+					},
+				},
+			}
+
+			result := Solution(sol, "test.yaml", reg)
+
+			selfRefFindings := filterFindingsByRule(result, tt.findingRule)
+			if tt.expectFinding {
+				require.NotEmpty(t, selfRefFindings, "expected resolver-self-reference finding")
+				assert.Contains(t, selfRefFindings[0].Message, tt.resolverName)
+			} else {
+				assert.Empty(t, selfRefFindings, "expected no resolver-self-reference finding")
+			}
+		})
+	}
+}
+
+func exprPtr(s string) *celexp.Expression {
+	e := celexp.Expression(s)
+	return &e
+}
+
+func filterFindingsByRule(result *Result, rule string) []*Finding {
+	if rule == "" {
+		return nil
+	}
+	var out []*Finding
+	for _, f := range result.Findings {
+		if f.RuleName == rule {
+			out = append(out, f)
+		}
+	}
+	return out
 }

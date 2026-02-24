@@ -80,6 +80,10 @@ type ResolverExecutionConfig struct {
 
 	// SkipTransform skips resolver transforms.
 	SkipTransform bool `json:"skipTransform,omitempty" yaml:"skipTransform,omitempty" doc:"Skip resolver transforms"`
+
+	// DryRun enables dry-run mode: providers return mock/no-op outputs
+	// instead of performing real side effects.
+	DryRun bool `json:"dryRun,omitempty" yaml:"dryRun,omitempty" doc:"Enable dry-run mode (providers return mock outputs)"`
 }
 
 // ResolverExecutionResult holds the structured output of resolver execution.
@@ -104,6 +108,11 @@ func ExecuteResolvers(
 	cfg ResolverExecutionConfig,
 ) (*ResolverExecutionResult, error) {
 	lgr := logger.FromContext(ctx)
+
+	// Enable dry-run mode on the context when requested.
+	if cfg.DryRun {
+		ctx = provider.WithDryRun(ctx, true)
+	}
 
 	resolvers := sol.Spec.ResolversToSlice()
 	resolverData := make(map[string]any)

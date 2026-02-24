@@ -23,6 +23,26 @@ Snapshots capture the state of resolver execution — values, timing, status, er
 └─────────────┘     └──────────────┘     └──────────────┘
 ```
 
+## When to Use Snapshots
+
+Snapshots are **flag-triggered** (`--snapshot`), never automatically created. Here are the real-world scenarios where they provide value:
+
+| Use Case | Scenario | How | Why Not Just Logs? |
+|----------|----------|-----|-------------------|
+| **Debugging a failed run** | A resolver fails or returns an unexpected value | `--snapshot` captures full state even when execution fails — you see which resolvers succeeded, which failed, and the exact error for each | Logs show temporal events; snapshots show the complete picture — every resolver's value, status, and timing in one structured file |
+| **Regression detection** | You changed a solution, provider config, or parameter and need to verify nothing broke | Capture a known-good baseline, then diff after changes | `git diff` shows YAML changes; `snapshot diff` shows what those changes *did to the output* |
+| **Environment comparison** | You need to see exactly which resolver values differ between staging and production | Snapshot with `-r env=staging` vs `-r env=production` and diff | Environment differences are computed at runtime by providers — they can't be seen by inspecting the solution YAML |
+| **Golden-file testing** | Automated CI checks that resolver outputs haven't drifted | The `soltesting` package compares execution output against stored snapshots, normalizing timestamps and UUIDs | Manual inspection doesn't scale; golden files catch regressions automatically |
+| **Audit trail** | Record what values were resolved at a specific point in time (before/after a deployment or config change) | Capture and archive snapshots with timestamps | Logs are ephemeral; snapshots are portable JSON files you can store and revisit |
+| **Safe sharing** | A teammate needs to see your resolver output, but the solution uses secrets or credentials | `--redact` replaces values of `sensitive: true` resolvers with `<redacted>` | Copy-pasting terminal output risks leaking secrets and loses structure |
+
+### Key Properties
+
+- **Captures failures too** — Unlike normal output that stops on error, snapshots record partial state. A snapshot from a failed run shows you exactly which resolvers succeeded before the failure.
+- **Structured data** — Every resolver's value, status, duration, phase, provider calls, and errors in one JSON file. Supports programmatic processing (`-o json`), CI pipeline assertions, and diff operations.
+- **Redaction-safe** — Resolvers marked `sensitive: true` in the solution YAML have their values replaced with `<redacted>` when using `--redact`, making snapshots safe to share or store in version control.
+- **Deterministic diff** — `snapshot diff` with `--ignore-fields duration,providerCalls` strips non-deterministic timing data, leaving only meaningful value and status changes.
+
 ## Creating Snapshots
 
 ### From `render`
@@ -273,9 +293,19 @@ scafctl snapshot save -f solution.yaml --output shareable.json --redact
 | `--redact` | save, render | Redact sensitive resolver values |
 | `-r key=value` | save | Pass resolver parameters |
 
+## Using Snapshots with the MCP Server
+
+When using AI agents (VS Code Copilot, Claude, Cursor), the MCP server provides snapshot tools:
+
+- **`show_snapshot`** — Display snapshot contents with structured output (same as `scafctl snapshot show`)
+- **`diff_snapshots`** — Compare two snapshots and return structured diffs showing added, removed, modified, and unchanged resolvers
+
+The `analyze_execution` prompt automatically suggests using snapshots for debugging.
+
 ## Next Steps
 
 - [Functional Testing Tutorial](functional-testing.md) — Write and run automated tests
 - [Configuration Tutorial](config-tutorial.md) — Manage application configuration
 - [Resolver Tutorial](resolver-tutorial.md) — Learn about resolvers that snapshots capture
 - [Cache Tutorial](cache-tutorial.md) — Manage cached data from HTTP calls
+- [MCP Server Tutorial](mcp-server-tutorial.md) — AI-assisted snapshot analysis

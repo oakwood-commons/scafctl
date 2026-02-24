@@ -394,6 +394,109 @@ func TestExtractDependencies(t *testing.T) {
 			// config appears in both dependsOn and when condition - should be deduplicated
 			want: []string{"config", "other"},
 		},
+		{
+			name: "self-reference in validate expression is not a dependency",
+			resolver: &Resolver{
+				Name: "publicSiteCheck",
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{
+						{
+							Provider: "http",
+							Inputs: map[string]*ValueRef{
+								"url":    {Literal: "https://httpbin.org/get"},
+								"method": {Literal: "GET"},
+							},
+						},
+					},
+				},
+				Validate: &ValidatePhase{
+					With: []ProviderValidation{
+						{
+							Provider: "validation",
+							Inputs: map[string]*ValueRef{
+								"expression": {Expr: celExpPtr("_.publicSiteCheck.statusCode == 200")},
+							},
+						},
+					},
+				},
+			},
+			// _.publicSiteCheck inside publicSiteCheck's validate phase is __self, not a dependency
+			want: []string{},
+		},
+		{
+			name: "self-reference in transform expression is not a dependency",
+			resolver: &Resolver{
+				Name: "myResolver",
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{
+						{
+							Provider: "static",
+							Inputs: map[string]*ValueRef{
+								"value": {Literal: "hello"},
+							},
+						},
+					},
+				},
+				Transform: &TransformPhase{
+					With: []ProviderTransform{
+						{
+							Provider: "cel",
+							Inputs: map[string]*ValueRef{
+								"expression": {Expr: celExpPtr("_.myResolver + '-suffix'")},
+							},
+						},
+					},
+				},
+			},
+			// _.myResolver inside myResolver's transform phase is __self, not a dependency
+			want: []string{},
+		},
+		{
+			name: "self-reference in resolve phase IS a real dependency",
+			resolver: &Resolver{
+				Name: "selfRef",
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{
+						{
+							Provider: "cel",
+							Inputs: map[string]*ValueRef{
+								"value": {Resolver: stringPtr("selfRef")},
+							},
+						},
+					},
+				},
+			},
+			// Self-reference in resolve phase is a genuine circular dependency
+			want: []string{"selfRef"},
+		},
+		{
+			name: "validate self-ref with other deps keeps other deps",
+			resolver: &Resolver{
+				Name: "checker",
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{
+						{
+							Provider: "static",
+							Inputs: map[string]*ValueRef{
+								"value": {Literal: "test"},
+							},
+						},
+					},
+				},
+				Validate: &ValidatePhase{
+					With: []ProviderValidation{
+						{
+							Provider: "validation",
+							Inputs: map[string]*ValueRef{
+								"expression": {Expr: celExpPtr("_.checker != _.otherResolver")},
+							},
+						},
+					},
+				},
+			},
+			// _.checker is self-ref (filtered), _.otherResolver is a real dep
+			want: []string{"otherResolver"},
+		},
 	}
 
 	for _, tt := range tests {

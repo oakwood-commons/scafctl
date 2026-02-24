@@ -609,3 +609,65 @@ The primary use case is AI-assisted solution authoring — helping users create 
 The refactoring (extracting command logic from Cobra closures, fixing the stray `os.Exit`, creating the MCP context helper, adding the `cel-functions` command, etc.) was submitted as its own PR. This keeps the MCP implementation PR focused on new functionality rather than mixing refactoring with feature work, and the refactoring improvements (better testability, cleaner separation of concerns) benefit the codebase regardless of MCP.
 
 See [Completed Preparatory Refactoring](#completed-preparatory-refactoring) for the full list of changes and file references.
+
+## Advanced Protocol Features
+
+The MCP server leverages several advanced features from the mcp-go SDK (v0.44.0):
+
+### Observability Hooks & Middleware
+
+All MCP requests are instrumented with timing and logging via `server.Hooks`:
+- `BeforeAny` / `OnSuccess` / `OnError` hooks log request lifecycle
+- `BeforeCallTool` / `AfterCallTool` hooks track tool execution duration
+- `OnRegisterSession` / `OnUnregisterSession` track client connections
+- Separate tool and resource timing middleware layers
+
+Implementation: `pkg/mcp/hooks.go`
+
+### Structured Errors
+
+All tool error responses use a consistent structured format (`ToolError`) with:
+- Machine-readable error code (`INVALID_INPUT`, `NOT_FOUND`, `LOAD_FAILED`, etc.)
+- Contextual field name identifying which input caused the error
+- Actionable suggestions for resolution
+- Related tool names that may help
+
+Implementation: `pkg/mcp/errors.go`
+
+### Auto-Completion
+
+The server provides completion suggestions for prompt arguments and resource template URIs:
+- Provider names from the registry
+- Migration types, solution features
+- Solution names from the local catalog
+- Lint rule names, CEL function names, example names
+
+Implementation: `pkg/mcp/completions.go`
+
+### Contextual Tool Filtering
+
+A `ToolFilterFunc` dynamically hides tools whose required capabilities are unavailable:
+- Auth tools hidden when no auth handlers configured
+- Catalog tools hidden when no catalogs configured
+- Provider tools hidden when no registry available
+
+Implementation: `pkg/mcp/filter.go`
+
+### Transport Protocols
+
+The server supports three transports via CLI flags:
+- **stdio** (default): JSON-RPC 2.0 over stdin/stdout
+- **sse**: Server-Sent Events over HTTP (for remote/multi-client)
+- **http**: Streamable HTTP transport
+
+Implementation: `pkg/mcp/server.go` (`Serve`, `ServeSSE`, `ServeHTTP`)
+
+### Additional SDK Capabilities
+
+- **Structured Log Streaming**: `SendLog()` sends log messages to clients respecting their log level
+- **Workspace Roots**: `RequestRoots()` discovers client workspace directories
+- **Sampling**: `RequestSampling()` requests LLM completions from the client
+- **Elicitation**: `RequestElicitation()` requests structured user input
+- **Resource Notifications**: `NotifyResourcesChanged()` and `NotifyToolsChanged()` for change propagation
+- **Pagination**: Configurable via `WithPaginationLimit()`
+- **Tool & Resource Capabilities**: `listChanged` enabled for dynamic registration

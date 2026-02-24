@@ -118,6 +118,16 @@ spec:
 		require.NoError(t, json.Unmarshal([]byte(text), &output))
 		assert.NotNil(t, output["actions"])
 		assert.NotNil(t, output["resolverData"])
+
+		// Verify source position is included in action previews
+		actions := output["actions"].([]any)
+		require.NotEmpty(t, actions)
+		firstAction := actions[0].(map[string]any)
+		sourcePos := firstAction["sourcePos"]
+		require.NotNil(t, sourcePos, "sourcePos should be present for actions")
+		sp := sourcePos.(map[string]any)
+		assert.Greater(t, sp["line"], float64(0), "line should be > 0")
+		assert.Greater(t, sp["column"], float64(0), "column should be > 0")
 	})
 
 	t.Run("filter nonexistent action", func(t *testing.T) {

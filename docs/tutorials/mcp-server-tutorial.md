@@ -48,15 +48,27 @@ You should see JSON output listing all available tools:
   "version": "dev",
   "tools": [
     { "name": "auth_status", "description": "Report which auth handlers (e.g. entra, gcp, github) are configured..." },
+    { "name": "catalog_inspect", "description": "Get detailed metadata for a specific catalog artifact..." },
     { "name": "catalog_list", "description": "List entries in the local catalog..." },
+    { "name": "diff_solution", "description": "Compare two solution files structurally..." },
+    { "name": "diff_snapshots", "description": "Diff two resolver snapshots..." },
     { "name": "evaluate_cel", "description": "Evaluate a CEL expression..." },
-    { "name": "get_provider_schema", "description": "Get the full JSON Schema for a provider..." },
+    { "name": "evaluate_go_template", "description": "Evaluate a Go template against provided data..." },
+    { "name": "extract_resolver_refs", "description": "Find all resolver cross-references in a solution..." },
+    { "name": "generate_test_scaffold", "description": "Generate functional test cases for a solution..." },
+    { "name": "get_config_paths", "description": "List all XDG-compliant paths used by scafctl..." },
+    { "name": "get_version", "description": "Return scafctl version, commit, and build time..." },
     { "name": "inspect_solution", "description": "Get full solution metadata..." },
     { "name": "lint_solution", "description": "Validate a solution file..." },
+    { "name": "list_auth_handlers", "description": "List all registered auth handlers..." },
     { "name": "list_cel_functions", "description": "List all available CEL functions..." },
+    { "name": "list_examples", "description": "List available scafctl example files..." },
     { "name": "list_providers", "description": "List all available providers..." },
     { "name": "list_solutions", "description": "List available solutions from the local catalog..." },
-    { "name": "render_solution", "description": "Render a solution's action graph..." }
+    { "name": "list_tests", "description": "List functional tests defined in a solution..." },
+    { "name": "render_solution", "description": "Render a solution's action graph..." },
+    { "name": "show_snapshot", "description": "Show the contents of a resolver snapshot..." },
+    { "name": "validate_expressions", "description": "Validate CEL expressions or Go templates..." }
   ]
 }
 ```
@@ -611,6 +623,16 @@ The AI calls `get_example` with `path: "solutions/email-notifier/solution.yaml"`
 | `run_solution_tests` | Execute functional tests defined in a solution and return structured results. Use `verbose=true` for full assertion details |
 | `scaffold_solution` | Generate a complete skeleton solution YAML from parameters — name, description, features, and providers |
 | `validate_expression` | Syntax-check a CEL expression or Go template without executing it — returns validity, errors, and referenced fields |
+| `catalog_inspect` | Get detailed metadata for a specific catalog artifact — version, kind, digest, created timestamp, and dependency list |
+| `extract_resolver_refs` | Find all resolver cross-references (`_.resolverName`) in a solution — shows which resolvers reference which others |
+| `generate_test_scaffold` | Generate functional test case scaffolding for a solution — creates test YAML with assertions and tags based on the solution's resolvers and actions |
+| `list_tests` | List functional tests defined in a solution's `spec.testing.cases` — shows test names, descriptions, assertions, and tags |
+| `show_snapshot` | Display the contents of a resolver execution snapshot file — resolver values, timing, status, and errors |
+| `diff_snapshots` | Compare two resolver snapshots and return structured diffs — added, removed, modified, and unchanged resolvers |
+| `list_auth_handlers` | List all registered authentication handlers with their configuration status and token expiry |
+| `get_config_paths` | List all XDG-compliant paths used by scafctl — config, data, cache, state, secrets, plugins, and runtime directories |
+| `validate_expressions` | Batch-validate multiple CEL expressions or Go templates — returns validity, errors, and referenced fields for each |
+| `get_version` | Return scafctl version, commit SHA, and build timestamp |
 
 ## 8. Available Resources
 
@@ -623,6 +645,7 @@ MCP resources are read-only data endpoints that AI agents can fetch on demand:
 | `solution://{name}/graph` | Resolver dependency graph with execution tiers, ASCII diagram, and Mermaid diagram |
 | `provider://{name}` | Detailed provider info: input schema (with required/optional per property), output schemas, examples, CLI usage |
 | `provider://reference` | Compact reference of all providers with required/optional inputs, capabilities, and descriptions |
+| `solution://{name}/tests` | Functional test cases defined in a solution's `spec.testing.cases` — test names, descriptions, assertions, tags, and configuration |
 
 ## 9. Available Prompts
 
@@ -637,6 +660,9 @@ MCP prompts are predefined templates that guide AI agents through common workflo
 | `update_solution` | Guide for modifying an existing solution. Follows inspect → edit → lint → preview → test workflow. | `path`, `change` |
 | `add_tests` | Guide for writing functional tests for a solution. Covers test schema, assertions, and test patterns. | `path` |
 | `compose_solution` | Guide for designing a multi-file composed solution with partial YAML files that get merged at build time. | `path`, `goal` |
+| `analyze_execution` | Analyze solution execution results — diagnose failures, performance bottlenecks, and unexpected values. | `path` |
+| `migrate_solution` | Guide for migrating a solution — add composition, extract templates, split into multiple files, add tests, or upgrade patterns. | `path`, `migration` |
+| `optimize_solution` | Analyze a solution for optimization opportunities — performance, readability, testing coverage, or all areas. | `path` |
 
 ### Using Prompts
 
@@ -789,6 +815,148 @@ If you are behind a corporate proxy, ensure proxy environment variables are avai
   }
 }
 ```
+
+## Advanced Features
+
+### Transport Protocols
+
+The MCP server supports three transport protocols:
+
+```bash
+# Default: stdio (JSON-RPC 2.0 over stdin/stdout)
+scafctl mcp serve
+
+# SSE: Server-Sent Events over HTTP
+scafctl mcp serve --transport sse --addr :8080
+
+# HTTP: Streamable HTTP transport
+scafctl mcp serve --transport http --addr :8080
+```
+
+SSE and HTTP transports are useful for remote or multi-client scenarios where stdio is not available.
+
+### Structured Error Responses
+
+All tool errors return structured JSON with machine-readable context:
+
+```json
+{
+  "code": "INVALID_INPUT",
+  "message": "'path' is required",
+  "field": "path",
+  "suggestion": "Provide the path to a solution file",
+  "related": ["list_solutions", "scaffold_solution"]
+}
+```
+
+Error codes include:
+- `INVALID_INPUT` — Bad or missing input arguments
+- `NOT_FOUND` — Requested resource doesn't exist
+- `VALIDATION_ERROR` — Content failed validation
+- `LOAD_FAILED` — Could not load or parse a file
+- `EXECUTION_FAILED` — Runtime execution error
+- `AUTH_REQUIRED` — Authentication needed
+- `CONFIG_ERROR` — Configuration issue
+
+### Observability Hooks
+
+The server includes built-in observability via hooks and middleware:
+
+- **Request timing**: Every tool and resource call is timed and logged
+- **Session tracking**: Client connections and disconnections are logged
+- **Error tracking**: Failures include timing and context information
+
+Enable detailed logging with:
+
+```bash
+scafctl mcp serve --log-file /tmp/scafctl-mcp.log
+```
+
+### Auto-Completion
+
+MCP clients that support argument completion will receive suggestions for:
+
+- **Provider names**: When a prompt or resource expects a provider name
+- **Migration types**: composition, templates, split, tests, upgrade
+- **Solution features**: resolvers, actions, transforms, validation, etc.
+- **Solution names**: From the local catalog for resource template URIs
+- **Lint rule names**: Available lint rules for the explain_lint_rule tool
+
+### Contextual Tool Filtering
+
+The server dynamically filters tools based on available capabilities:
+
+- **Auth tools** (e.g., `auth_status`) are hidden when no auth handlers are configured
+- **Catalog tools** (e.g., `catalog_list`) are hidden when no catalogs are configured
+- **Provider tools** (e.g., `list_providers`) are hidden when no registry is available
+
+This reduces noise and prevents AI agents from invoking tools that will always fail.
+
+### Log Streaming
+
+The server can stream structured log messages to connected clients in real-time during tool execution. This uses the MCP logging notification protocol, respecting the client's configured log level.
+
+### Workspace Roots
+
+For clients that support the MCP roots capability, the server can discover workspace root directories, enabling workspace-aware file operations.
+
+### Sampling and Elicitation
+
+The server supports two client interaction capabilities:
+
+- **Sampling**: Request the client's LLM to generate text (e.g., for intelligent defaults)
+- **Elicitation**: Request structured input from the user during tool execution
+
+### Stdio Tuning
+
+For high-throughput scenarios, you can tune the stdio transport:
+
+```bash
+scafctl mcp serve --worker-pool-size 4 --queue-size 200
+```
+
+## 10. Protocol Features
+
+The MCP server leverages advanced protocol features from the MCP spec (2025-06-18) for a richer experience.
+
+### Progress Notifications
+
+Long-running tools (`preview_resolvers`, `run_solution_tests`, `dry_run_solution`) send real-time progress notifications. Clients that pass a `progressToken` in the request metadata will receive `notifications/progress` messages with step count, total, and human-readable descriptions.
+
+### Icons
+
+All tools, prompts, and resources include SVG icons via data URIs. MCP clients that support the `icons` field (VS Code, Claude Desktop, Cursor) display these alongside tool names for quick visual identification.
+
+### Output Schemas
+
+Key tools declare their output JSON Schema via `outputSchema`, enabling clients to validate and render structured output. This applies to `list_solutions`, `inspect_solution`, `preview_resolvers`, `get_version`, `evaluate_cel`, `auth_status`, `get_config`, `get_config_paths`, `lint_solution`, `render_solution`, and `dry_run_solution`.
+
+### ResourceLink in Results
+
+Tool results include `ResourceLink` items that point to related MCP resources:
+- `inspect_solution` → links to the solution's YAML, schema, and dependency graph resources
+- `list_providers` → link to the provider quick reference resource
+- `preview_resolvers` → links to the solution and its dependency graph
+
+### Content Annotations
+
+Some tool results annotate content items with audience hints (`user` vs `assistant`) and priority values. For example, `get_run_command` marks the command text for the assistant and the explanation for the user.
+
+### Deferred Loading
+
+Rarely-used tools (`show_snapshot`, `diff_snapshots`, `diff_solution`, `extract_resolver_refs`, `explain_lint_rule`) use deferred loading to reduce initial tool list size. They are still discoverable but load lazily.
+
+### Elicitation
+
+When `preview_resolvers` encounters parameter-type resolvers without provided values, it uses MCP elicitation to prompt the user for input interactively. This works with clients that support the `elicitation` capability.
+
+### Roots Discovery
+
+The `list_solutions` tool uses MCP roots to discover solution files in workspace directories when the catalog returns no results, enabling workspace-aware behavior.
+
+### Resource Recovery
+
+All resource handlers have automatic panic recovery (`WithResourceRecovery`), ensuring a panic in one resource handler doesn't crash the server.
 
 ## Next Steps
 

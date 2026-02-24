@@ -3874,3 +3874,385 @@ func TestIntegration_MCPServeProtocol(t *testing.T) {
 	assert.NotEmpty(t, resp.Result.Instructions)
 	assert.NotNil(t, resp.Result.Capabilities.Tools)
 }
+
+// ============================================================================
+// Eval Command Tests
+// ============================================================================
+
+func TestIntegration_EvalCEL_Simple(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "eval", "cel", "--expression", "1 + 2")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "3")
+}
+
+func TestIntegration_EvalCEL_WithVar(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "eval", "cel", "--expression", "size(name) > 3", "-v", "name=hello")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "true")
+}
+
+func TestIntegration_EvalCEL_WithData(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "eval", "cel", "--expression", "_.name == 'hello'", "--data", `{"name": "hello"}`)
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "true")
+}
+
+func TestIntegration_EvalCEL_JSON(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "eval", "cel", "--expression", "1 + 2", "-o", "json")
+	assert.Equal(t, 0, exitCode)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &result))
+	assert.Equal(t, "1 + 2", result["expression"])
+}
+
+func TestIntegration_EvalCEL_InvalidExpression(t *testing.T) {
+	_, _, exitCode := runScafctl(t, "eval", "cel", "--expression", "invalid ++ syntax")
+	assert.NotEqual(t, 0, exitCode)
+}
+
+func TestIntegration_EvalCEL_MissingExpression(t *testing.T) {
+	_, _, exitCode := runScafctl(t, "eval", "cel")
+	assert.NotEqual(t, 0, exitCode)
+}
+
+func TestIntegration_EvalTemplate_Simple(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "eval", "template", "-t", "hello {{ .name }}", "-v", "name=world")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "hello world")
+}
+
+func TestIntegration_EvalTemplate_JSON(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "eval", "template", "-t", "hi {{ .name }}", "-v", "name=test", "-o", "json")
+	assert.Equal(t, 0, exitCode)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &result))
+	assert.Contains(t, result["output"], "hi test")
+}
+
+func TestIntegration_EvalTemplate_ShowRefs(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "eval", "template", "-t", "{{ .name }} {{ .age }}", "-v", "name=test", "-v", "age=25", "--show-refs")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "test")
+}
+
+func TestIntegration_EvalTemplate_MissingTemplate(t *testing.T) {
+	_, _, exitCode := runScafctl(t, "eval", "template")
+	assert.NotEqual(t, 0, exitCode)
+}
+
+func TestIntegration_EvalValidate_CELValid(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "eval", "validate", "--expression", "size(name) > 3", "--type", "cel")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "valid")
+}
+
+func TestIntegration_EvalValidate_CELInvalid(t *testing.T) {
+	_, _, exitCode := runScafctl(t, "eval", "validate", "--expression", "invalid +++ (", "--type", "cel")
+	assert.NotEqual(t, 0, exitCode)
+}
+
+func TestIntegration_EvalValidate_GoTemplateValid(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "eval", "validate", "--expression", "{{ .name }}", "--type", "go-template")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "valid")
+}
+
+func TestIntegration_EvalValidate_GoTemplateInvalid(t *testing.T) {
+	_, _, exitCode := runScafctl(t, "eval", "validate", "--expression", "{{ .name", "--type", "go-template")
+	assert.NotEqual(t, 0, exitCode)
+}
+
+func TestIntegration_EvalValidate_JSON(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "eval", "validate", "--expression", "1 + 2", "--type", "cel", "-o", "json")
+	assert.Equal(t, 0, exitCode)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &result))
+	assert.Equal(t, true, result["valid"])
+	assert.Equal(t, "cel", result["type"])
+}
+
+func TestIntegration_EvalValidate_UnsupportedType(t *testing.T) {
+	_, _, exitCode := runScafctl(t, "eval", "validate", "--expression", "test", "--type", "python")
+	assert.NotEqual(t, 0, exitCode)
+}
+
+// ============================================================================
+// New Solution Command Tests
+// ============================================================================
+
+func TestIntegration_NewSolution_Basic(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "new", "solution", "-n", "test-app", "--description", "A test application")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "test-app")
+	assert.Contains(t, stdout, "A test application")
+}
+
+func TestIntegration_NewSolution_WithFeatures(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "new", "solution", "-n", "my-deploy", "--description", "Deploy to K8s",
+		"--features", "parameters,resolvers,actions")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "my-deploy")
+	assert.Contains(t, stdout, "resolvers")
+}
+
+func TestIntegration_NewSolution_WithProviders(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "new", "solution", "-n", "my-deploy", "--description", "Deploy",
+		"--providers", "exec,http")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "my-deploy")
+}
+
+func TestIntegration_NewSolution_ToFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	outFile := filepath.Join(tmpDir, "solution.yaml")
+
+	_, _, exitCode := runScafctl(t, "new", "solution", "-n", "file-test", "--description", "Written to file", "-o", outFile)
+	assert.Equal(t, 0, exitCode)
+
+	data, err := os.ReadFile(outFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "file-test")
+}
+
+func TestIntegration_NewSolution_MissingName(t *testing.T) {
+	_, _, exitCode := runScafctl(t, "new", "solution", "--description", "Missing name")
+	assert.NotEqual(t, 0, exitCode)
+}
+
+func TestIntegration_NewSolution_InvalidFeature(t *testing.T) {
+	_, _, exitCode := runScafctl(t, "new", "solution", "-n", "test", "--description", "Test", "--features", "invalid-feature")
+	assert.NotEqual(t, 0, exitCode)
+}
+
+func TestIntegration_NewSolution_ScaffoldPassesLint(t *testing.T) {
+	// Scaffold with defaults, write to file, then lint — must produce zero findings.
+	tmpDir := t.TempDir()
+	outFile := filepath.Join(tmpDir, "solution.yaml")
+
+	_, _, exitCode := runScafctl(t, "new", "solution", "-n", "lint-check", "--description", "Lint check", "-o", outFile)
+	require.Equal(t, 0, exitCode)
+
+	stdout, _, exitCode := runScafctl(t, "lint", "-f", outFile, "-o", "json")
+	require.Equal(t, 0, exitCode, "lint should pass: %s", stdout)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &result))
+	assert.Equal(t, float64(0), result["errorCount"])
+	assert.Equal(t, float64(0), result["warnCount"])
+}
+
+func TestIntegration_NewSolution_ScaffoldRunsSuccessfully(t *testing.T) {
+	// Scaffold with defaults, write to file, then run — must execute without errors.
+	tmpDir := t.TempDir()
+	outFile := filepath.Join(tmpDir, "solution.yaml")
+
+	_, _, exitCode := runScafctl(t, "new", "solution", "-n", "run-check", "--description", "Run check", "-o", outFile)
+	require.Equal(t, 0, exitCode)
+
+	stdout, stderr, exitCode := runScafctl(t, "run", "solution", "-f", outFile, "-r", "inputName=world")
+	assert.Equal(t, 0, exitCode, "run should succeed: stdout=%s stderr=%s", stdout, stderr)
+	assert.Contains(t, stdout, "Hello")
+}
+
+func TestIntegration_NewSolution_AllFeaturesScaffoldPassesLint(t *testing.T) {
+	// Scaffold with all features, write to file, then lint.
+	tmpDir := t.TempDir()
+	outFile := filepath.Join(tmpDir, "solution.yaml")
+
+	_, _, exitCode := runScafctl(t, "new", "solution", "-n", "all-features",
+		"--description", "All features", "--features",
+		"parameters,resolvers,actions,transforms,validation,tests,composition",
+		"-o", outFile)
+	require.Equal(t, 0, exitCode)
+
+	stdout, _, exitCode := runScafctl(t, "lint", "-f", outFile, "-o", "json")
+	require.Equal(t, 0, exitCode, "lint should pass: %s", stdout)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &result))
+	assert.Equal(t, float64(0), result["errorCount"])
+	assert.Equal(t, float64(0), result["warnCount"])
+}
+
+func TestIntegration_NewSolution_ScaffoldFunctionalTestsPass(t *testing.T) {
+	// Scaffold with defaults, then run functional tests — all must pass (including builtins).
+	tmpDir := t.TempDir()
+	outFile := filepath.Join(tmpDir, "solution.yaml")
+
+	_, _, exitCode := runScafctl(t, "new", "solution", "-n", "func-test", "--description", "Functional test check", "-o", outFile)
+	require.Equal(t, 0, exitCode)
+
+	stdout, stderr, exitCode := runScafctl(t, "test", "functional", "-f", outFile, "--no-color")
+	assert.Equal(t, 0, exitCode, "functional tests should pass: stdout=%s stderr=%s", stdout, stderr)
+	assert.Contains(t, stdout, "0 failed")
+}
+
+// ============================================================================
+// Lint Rules/Explain Command Tests
+// ============================================================================
+
+func TestIntegration_LintRules_List(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "lint", "rules")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "RULE")
+	assert.Contains(t, stdout, "SEVERITY")
+}
+
+func TestIntegration_LintRules_FilterSeverity(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "lint", "rules", "--severity", "error")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "error")
+	assert.NotContains(t, stdout, "warning")
+}
+
+func TestIntegration_LintRules_JSON(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "lint", "rules", "-o", "json")
+	assert.Equal(t, 0, exitCode)
+
+	var rules []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &rules))
+	assert.Greater(t, len(rules), 0)
+	assert.Contains(t, rules[0], "rule")
+	assert.Contains(t, rules[0], "severity")
+}
+
+func TestIntegration_LintExplain_KnownRule(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "lint", "explain", "missing-description")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "missing-description")
+	assert.Contains(t, stdout, "Severity")
+}
+
+func TestIntegration_LintExplain_UnknownRule(t *testing.T) {
+	_, _, exitCode := runScafctl(t, "lint", "explain", "nonexistent-rule")
+	assert.NotEqual(t, 0, exitCode)
+}
+
+func TestIntegration_LintExplain_JSON(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "lint", "explain", "missing-description", "-o", "json")
+	assert.Equal(t, 0, exitCode)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &result))
+	assert.Equal(t, "missing-description", result["rule"])
+}
+
+// ============================================================================
+// Examples Command Tests (Sprint 5)
+// ============================================================================
+
+func TestIntegration_Examples_Help(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "examples", "--help")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "list")
+	assert.Contains(t, stdout, "get")
+}
+
+func TestIntegration_Examples_List(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "examples", "list", "-o", "yaml")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "path:")
+	assert.Contains(t, stdout, "category:")
+	assert.Contains(t, stdout, "description:")
+}
+
+func TestIntegration_Examples_List_JSON(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "examples", "list", "-o", "json")
+	assert.Equal(t, 0, exitCode)
+
+	var examples []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &examples))
+	assert.Greater(t, len(examples), 0)
+	assert.Contains(t, examples[0], "path")
+	assert.Contains(t, examples[0], "category")
+}
+
+func TestIntegration_Examples_List_FilterCategory(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "examples", "list", "--category", "solutions")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "solutions")
+}
+
+func TestIntegration_Examples_Get(t *testing.T) {
+	t.Parallel()
+	// Get a known example — resolver-demo.yaml is a top-level example
+	stdout, _, exitCode := runScafctl(t, "examples", "get", "resolver-demo.yaml")
+	assert.Equal(t, 0, exitCode)
+	assert.NotEmpty(t, stdout)
+}
+
+func TestIntegration_Examples_Get_NotFound(t *testing.T) {
+	t.Parallel()
+	_, _, exitCode := runScafctl(t, "examples", "get", "nonexistent-example.yaml")
+	assert.NotEqual(t, 0, exitCode)
+}
+
+func TestIntegration_Examples_Get_OutputFile(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	outFile := filepath.Join(tmpDir, "output.yaml")
+
+	_, _, exitCode := runScafctl(t, "examples", "get", "resolver-demo.yaml", "-o", outFile)
+	assert.Equal(t, 0, exitCode)
+
+	// Verify the file was written
+	data, err := os.ReadFile(outFile)
+	require.NoError(t, err)
+	assert.NotEmpty(t, data)
+}
+
+// ============================================================================
+// Enhanced Dry-Run Tests (Sprint 5)
+// ============================================================================
+
+func TestIntegration_RunSolution_DryRun_EnhancedOutput(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t,
+		"run", "solution",
+		"-f", "examples/actions/hello-world.yaml",
+		"--dry-run",
+	)
+
+	assert.Equal(t, 0, exitCode)
+	// Enhanced dry-run includes solution info and action plan
+	assert.Contains(t, stdout, "DRY RUN")
+	assert.Contains(t, stdout, "ACTION PLAN")
+}
+
+func TestIntegration_RunSolution_DryRun_JSON(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t,
+		"run", "solution",
+		"-f", "examples/actions/hello-world.yaml",
+		"--dry-run",
+		"-o", "json",
+	)
+
+	assert.Equal(t, 0, exitCode)
+
+	var report map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &report))
+	assert.Equal(t, true, report["dryRun"])
+	assert.NotEmpty(t, report["solution"])
+}
+
+func TestIntegration_RunSolution_DryRun_YAML(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t,
+		"run", "solution",
+		"-f", "examples/actions/hello-world.yaml",
+		"--dry-run",
+		"-o", "yaml",
+	)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "dryRun: true")
+	assert.Contains(t, stdout, "solution:")
+}

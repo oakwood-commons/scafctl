@@ -18,10 +18,13 @@ import (
 	cachecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/cache"
 	catalogcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/catalog"
 	configcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/config"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/eval"
+	examplescmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/examples"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/explain"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/lint"
 	mcpcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/mcp"
+	newcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/new"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/render"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/run"
@@ -332,6 +335,9 @@ func Root(opts *RootOptions) *cobra.Command {
 	cCmd.AddCommand(secretscmd.CommandSecrets(cliParams, ioStreams, settings.CliBinaryName))
 	cCmd.AddCommand(authcmd.CommandAuth(cliParams, ioStreams, settings.CliBinaryName))
 	cCmd.AddCommand(lint.CommandLint(cliParams, ioStreams, settings.CliBinaryName))
+	cCmd.AddCommand(eval.CommandEval(cliParams, ioStreams, settings.CliBinaryName))
+	cCmd.AddCommand(newcmd.CommandNew(cliParams, ioStreams, settings.CliBinaryName))
+	cCmd.AddCommand(examplescmd.CommandExamples(cliParams, ioStreams, settings.CliBinaryName))
 	cCmd.AddCommand(build.CommandBuild(cliParams, ioStreams, settings.CliBinaryName))
 	cCmd.AddCommand(catalogcmd.CommandCatalog(cliParams, ioStreams, settings.CliBinaryName))
 	cCmd.AddCommand(cachecmd.CommandCache(cliParams, ioStreams, settings.CliBinaryName))

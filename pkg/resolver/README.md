@@ -221,6 +221,13 @@ transform:
 
 Explicit `dependsOn` dependencies are merged with auto-extracted dependencies.
 
+**Self-Reference Handling:**
+
+References to a resolver's own name (`_.myResolver`) in its `transform` or `validate` phase are automatically
+filtered from the dependency graph. These are semantically equivalent to `__self` and never create circular
+dependencies. Self-references in the `resolve` phase remain errors because a resolver cannot use its own value
+to bootstrap itself.
+
 **Provider-Specific Extraction:**
 
 Providers can implement custom dependency extraction via `ExtractDependencies` on their `Descriptor`. This is useful for providers with custom input formats:

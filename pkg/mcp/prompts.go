@@ -11,12 +11,46 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
+// resolvePathArg detects whether a prompt argument contains file content
+// (as happens when MCP clients resolve file references to their contents)
+// rather than a file system path. Returns a path reference suitable for
+// embedding in tool call instructions and an optional inline note explaining
+// that the file content was provided instead of a path.
+func resolvePathArg(argValue string) (pathRef, inlineNote string) {
+	trimmed := strings.TrimSpace(argValue)
+	if !strings.Contains(argValue, "\n") &&
+		len(trimmed) < 500 &&
+		!strings.HasPrefix(trimmed, "apiVersion:") &&
+		!strings.HasPrefix(trimmed, "kind:") {
+		// Looks like a normal file path
+		return argValue, ""
+	}
+
+	// The argument contains file content, not a path.
+	// Include the content for context and instruct the LLM to determine the real path.
+	inlineNote = fmt.Sprintf(`
+
+IMPORTANT: The path argument contains the solution's YAML content instead of a file path.
+This happens when MCP clients resolve file references to their contents.
+You MUST determine the actual file system path before calling any tools
+(inspect_solution, lint_solution, run_solution_tests, etc.).
+Ask the user for the file path if it cannot be determined from context.
+
+Solution content provided inline:
+---
+%s
+---
+`, argValue)
+	return "<solution_file_path>", inlineNote
+}
+
 // registerPrompts registers all MCP prompts on the server.
 func (s *Server) registerPrompts() {
 	// create_solution prompt
 	s.mcpServer.AddPrompt(
 		mcp.NewPrompt("create_solution",
 			mcp.WithPromptDescription("Guide for creating a new scafctl solution YAML file from scratch. Provides the solution schema, examples, and step-by-step instructions."),
+			mcp.WithPromptIcons(promptIcons["create"]),
 			mcp.WithArgument("name",
 				mcp.ArgumentDescription("Name for the new solution (lowercase, hyphens allowed, e.g., 'my-solution')"),
 				mcp.RequiredArgument(),
@@ -36,6 +70,7 @@ func (s *Server) registerPrompts() {
 	s.mcpServer.AddPrompt(
 		mcp.NewPrompt("debug_solution",
 			mcp.WithPromptDescription("Help debug a scafctl solution that isn't working as expected. Inspects the solution, lints it, and suggests fixes."),
+			mcp.WithPromptIcons(promptIcons["debug"]),
 			mcp.WithArgument("path",
 				mcp.ArgumentDescription("Path to the solution file to debug"),
 				mcp.RequiredArgument(),
@@ -51,6 +86,7 @@ func (s *Server) registerPrompts() {
 	s.mcpServer.AddPrompt(
 		mcp.NewPrompt("add_resolver",
 			mcp.WithPromptDescription("Guide for adding a new resolver to an existing solution. Shows available providers, schema, and patterns."),
+			mcp.WithPromptIcons(promptIcons["create"]),
 			mcp.WithArgument("provider",
 				mcp.ArgumentDescription("Provider to use for the resolver (e.g., parameter, static, env, http, cel, file, exec)"),
 				mcp.RequiredArgument(),
@@ -66,6 +102,7 @@ func (s *Server) registerPrompts() {
 	s.mcpServer.AddPrompt(
 		mcp.NewPrompt("add_action",
 			mcp.WithPromptDescription("Guide for adding a new action to an existing solution's workflow. Shows available action providers, schema, and patterns."),
+			mcp.WithPromptIcons(promptIcons["create"]),
 			mcp.WithArgument("provider",
 				mcp.ArgumentDescription("Provider to use for the action (e.g., exec, http, directory, go-template)"),
 				mcp.RequiredArgument(),
@@ -81,6 +118,7 @@ func (s *Server) registerPrompts() {
 	s.mcpServer.AddPrompt(
 		mcp.NewPrompt("update_solution",
 			mcp.WithPromptDescription("Guide for modifying an existing scafctl solution. Inspects the current state, makes targeted changes, then validates with lint and preview."),
+			mcp.WithPromptIcons(promptIcons["guide"]),
 			mcp.WithArgument("path",
 				mcp.ArgumentDescription("Path to the existing solution file to modify"),
 				mcp.RequiredArgument(),
@@ -97,6 +135,7 @@ func (s *Server) registerPrompts() {
 	s.mcpServer.AddPrompt(
 		mcp.NewPrompt("add_tests",
 			mcp.WithPromptDescription("Guide for writing functional tests for a scafctl solution. Walks through test schema, assertions, snapshots, and test patterns."),
+			mcp.WithPromptIcons(promptIcons["create"]),
 			mcp.WithArgument("path",
 				mcp.ArgumentDescription("Path to the solution file to add tests to"),
 				mcp.RequiredArgument(),
@@ -112,6 +151,7 @@ func (s *Server) registerPrompts() {
 	s.mcpServer.AddPrompt(
 		mcp.NewPrompt("compose_solution",
 			mcp.WithPromptDescription("Guide for designing a multi-file composed solution using scafctl's composition system. Breaks a solution into reusable partial YAML files that get merged at build time."),
+			mcp.WithPromptIcons(promptIcons["guide"]),
 			mcp.WithArgument("path",
 				mcp.ArgumentDescription("Path to the root solution file (or directory for a new composed solution)"),
 				mcp.RequiredArgument(),
@@ -122,6 +162,93 @@ func (s *Server) registerPrompts() {
 			),
 		),
 		s.handleComposeSolutionPrompt,
+	)
+
+	// fix_lint prompt
+	s.mcpServer.AddPrompt(
+		mcp.NewPrompt("fix_lint",
+			mcp.WithPromptDescription("Guide for fixing lint findings in a scafctl solution. Lints the solution, explains each finding, and applies targeted fixes in priority order (errors first, then warnings)."),
+			mcp.WithPromptIcons(promptIcons["debug"]),
+			mcp.WithArgument("path",
+				mcp.ArgumentDescription("Path to the solution file to fix"),
+				mcp.RequiredArgument(),
+			),
+			mcp.WithArgument("severity",
+				mcp.ArgumentDescription("Minimum severity to fix: 'error' (errors only), 'warning' (errors + warnings), 'info' (all). Default: warning"),
+			),
+		),
+		s.handleFixLintPrompt,
+	)
+
+	// prepare_execution prompt
+	s.mcpServer.AddPrompt(
+		mcp.NewPrompt("prepare_execution",
+			mcp.WithPromptDescription("Prepare a scafctl solution for execution. Validates, previews, and generates the exact CLI command — without actually running it. Use this when you're ready to run a solution but want to verify everything first."),
+			mcp.WithPromptIcons(promptIcons["guide"]),
+			mcp.WithArgument("path",
+				mcp.ArgumentDescription("Path to the solution file to prepare for execution"),
+				mcp.RequiredArgument(),
+			),
+			mcp.WithArgument("params",
+				mcp.ArgumentDescription("Comma-separated key=value input parameters (e.g., 'env=prod,region=us-east1')"),
+			),
+		),
+		s.handlePrepareExecutionPrompt,
+	)
+
+	// analyze_execution prompt
+	s.mcpServer.AddPrompt(
+		mcp.NewPrompt("analyze_execution",
+			mcp.WithPromptDescription("Analyze a completed scafctl execution by inspecting the snapshot. Identifies failures, regressions, and suggests fixes. Optionally compares against a known-good snapshot."),
+			mcp.WithPromptIcons(promptIcons["analyze"]),
+			mcp.WithArgument("snapshot_path",
+				mcp.ArgumentDescription("Path to the snapshot JSON file from the failed or unexpected run"),
+				mcp.RequiredArgument(),
+			),
+			mcp.WithArgument("previous_snapshot",
+				mcp.ArgumentDescription("Path to a known-good snapshot for comparison (optional — enables regression detection)"),
+			),
+			mcp.WithArgument("problem",
+				mcp.ArgumentDescription("Description of what went wrong or what was unexpected"),
+			),
+		),
+		s.handleAnalyzeExecutionPrompt,
+	)
+
+	// migrate_solution prompt
+	s.mcpServer.AddPrompt(
+		mcp.NewPrompt("migrate_solution",
+			mcp.WithPromptDescription("Guide for structurally refactoring a scafctl solution. Supports adding composition, extracting templates, splitting into multiple files, adding tests, and upgrading to newer patterns."),
+			mcp.WithPromptIcons(promptIcons["guide"]),
+			mcp.WithArgument("path",
+				mcp.ArgumentDescription("Path to the solution file to migrate"),
+				mcp.RequiredArgument(),
+			),
+			mcp.WithArgument("migration",
+				mcp.ArgumentDescription("Migration type: 'add-composition' (split into composed files), 'extract-templates' (move inline templates to files), 'split-solution' (break into smaller solutions), 'add-tests' (add comprehensive functional tests), 'upgrade-patterns' (modernize to latest best practices)"),
+				mcp.RequiredArgument(),
+			),
+			mcp.WithArgument("target_dir",
+				mcp.ArgumentDescription("Target directory for split/extracted files (optional, defaults to solution directory)"),
+			),
+		),
+		s.handleMigrateSolutionPrompt,
+	)
+
+	// optimize_solution prompt
+	s.mcpServer.AddPrompt(
+		mcp.NewPrompt("optimize_solution",
+			mcp.WithPromptDescription("Analyze a scafctl solution for performance, readability, and quality improvements. Identifies parallelization opportunities, unnecessary dependencies, naming issues, and missing test coverage."),
+			mcp.WithPromptIcons(promptIcons["analyze"]),
+			mcp.WithArgument("path",
+				mcp.ArgumentDescription("Path to the solution file to optimize"),
+				mcp.RequiredArgument(),
+			),
+			mcp.WithArgument("focus",
+				mcp.ArgumentDescription("Optimization focus: 'performance' (parallelization, dependency optimization), 'readability' (naming, structure, documentation), 'testing' (coverage gaps, missing edge cases), 'all' (comprehensive analysis). Default: all"),
+			),
+		),
+		s.handleOptimizeSolutionPrompt,
 	)
 }
 
@@ -154,6 +281,9 @@ Follow these rules when creating the solution:
 - metadata.name must be lowercase with hyphens only (3-60 chars)
 - metadata.version must be a valid semver (e.g., "1.0.0")
 - Resolvers go under spec.resolvers.<name> with resolve/transform/validate phases
+- The resolver "type" field is OPTIONAL. Only set it when the resolved value is a known scalar type.
+  NEVER set type: string on resolvers using providers that return objects (e.g., http returns {statusCode, body, headers}).
+  When in doubt, omit the type field entirely.
 - Actions go under spec.workflow.actions.<name> with provider and inputs
 - Use ValueRef format for inputs: literal (raw value), rslvr (resolver reference), expr (CEL expression), or tmpl (Go template)
 - Always validate user inputs using the validate phase with the validation provider
@@ -165,6 +295,9 @@ NEVER invent fields that don't exist in the schema. Only use fields documented i
 When using any provider in an action, ALWAYS call get_provider_schema first to verify the exact field names and types.
 
 After creating the solution, tell the user how to run it.
+IMPORTANT: When referencing filenames in your response, ALWAYS prefix relative paths
+with "./" (e.g., "./test-solution.yaml", NOT "test-solution.yaml"). Bare filenames
+without "./" get auto-linkified by VS Code Chat into broken content-reference URLs.
 IMPORTANT: Choose the correct run command based on whether the solution has a workflow:
   • If the solution has spec.workflow.actions (i.e. it performs side-effects/actions):
       scafctl run solution -f ./<filename>.yaml -r key=value
@@ -200,13 +333,15 @@ func (s *Server) handleDebugSolutionPrompt(_ context.Context, request mcp.GetPro
 	path := request.Params.Arguments["path"]
 	problem := request.Params.Arguments["problem"]
 
+	pathRef, inlineNote := resolvePathArg(path)
+
 	problemDesc := "The solution is not working as expected."
 	if problem != "" {
 		problemDesc = problem
 	}
 
 	prompt := fmt.Sprintf(`Debug the scafctl solution at %q.
-
+%s
 Problem: %s
 
 Follow this debugging process:
@@ -229,7 +364,7 @@ Check for common issues:
 
 7. Call preview_resolvers with path %q to check if resolvers execute successfully and produce expected values
 8. If the solution has tests, call run_solution_tests with path %q to verify test results
-9. Call get_run_command with path %q to verify the correct run command`, path, problemDesc, path, path, path, path, path)
+9. Call get_run_command with path %q to verify the correct run command`, pathRef, inlineNote, problemDesc, pathRef, pathRef, pathRef, pathRef, pathRef)
 
 	return &mcp.GetPromptResult{
 		Description: fmt.Sprintf("Debug solution: %s", path),
@@ -272,7 +407,7 @@ A resolver has these phases:
 Resolver field structure:
   <resolver-name>:
     description: "what this resolves"
-    type: string|int|float|bool|array|object|time|duration|any
+    type: string|int|float|bool|array|object|time|duration|any  # OPTIONAL — see type rules below
     resolve:
       with:
         - provider: %q
@@ -287,8 +422,25 @@ Resolver field structure:
       with:
         - provider: validation
           inputs:
-            expression: "<CEL validation expression>"
+            expression: "<CEL validation expression using __self>"
           message: "Error message if validation fails"
+
+IMPORTANT rules for resolver phases:
+- Each phase (resolve, transform, validate) MUST use the "with" key containing an array. Never use a bare array.
+- In transform and validate phases, use __self to reference the resolver's own value, NOT _.resolverName.
+  Using _.resolverName creates a circular dependency. __self is the correct way to access the current value.
+  Example: expression: "__self.statusCode == 200"  (correct)
+           expression: "_.myResolver.statusCode == 200"  (WRONG - causes cycle)
+- In resolve phase, _.otherResolver references other resolvers' values (not self).
+
+IMPORTANT rules for the resolver "type" field:
+- The type field is OPTIONAL. When omitted, the value passes through as-is (equivalent to type: any).
+- Only set type when you KNOW the resolved value is a simple scalar (string, int, float, bool).
+- NEVER set type: string on resolvers that use providers returning objects/maps (e.g., http, exec).
+  The http provider returns an object with statusCode, body, headers — setting type: string would
+  cause a coercion error. Omit the type field or use type: object for these providers.
+- When in doubt, OMIT the type field entirely — it is safer than guessing wrong.
+- Call get_provider_schema to check what a provider returns before deciding on a type.
 
 Input values use ValueRef format:
 - Literal: just the raw value
@@ -382,8 +534,10 @@ func (s *Server) handleUpdateSolutionPrompt(_ context.Context, request mcp.GetPr
 	path := request.Params.Arguments["path"]
 	change := request.Params.Arguments["change"]
 
-	prompt := fmt.Sprintf(`Modify the existing scafctl solution at %q.
+	pathRef, inlineNote := resolvePathArg(path)
 
+	prompt := fmt.Sprintf(`Modify the existing scafctl solution at %q.
+%s
 Requested change: %s
 
 Follow this workflow to make a safe, validated change:
@@ -412,7 +566,7 @@ IMPORTANT:
 - Do NOT restructure the entire solution — make the minimal change needed
 - If lint_solution reports errors after your change, fix them before finishing
 - If preview_resolvers shows unexpected values, investigate and fix
-- Always verify provider field names with get_provider_schema before writing inputs`, path, change, path, path, path, path, path)
+- Always verify provider field names with get_provider_schema before writing inputs`, pathRef, inlineNote, change, pathRef, pathRef, pathRef, pathRef, pathRef)
 
 	return &mcp.GetPromptResult{
 		Description: fmt.Sprintf("Update solution: %s", path),
@@ -433,12 +587,14 @@ func (s *Server) handleAddTestsPrompt(_ context.Context, request mcp.GetPromptRe
 	path := request.Params.Arguments["path"]
 	scope := request.Params.Arguments["scope"]
 
+	pathRef, inlineNote := resolvePathArg(path)
+
 	if scope == "" {
 		scope = "all"
 	}
 
 	prompt := fmt.Sprintf(`Add functional tests to the scafctl solution at %q.
-
+%s
 Test scope: %s
 
 Follow these steps:
@@ -448,7 +604,7 @@ STEP 1 — UNDERSTAND the solution:
 2. Identify what needs testing based on the scope
 
 STEP 2 — LEARN the test format:
-3. Call explain_kind with kind "solution" and field "testing" to see test schema
+3. Call explain_kind with kind "solution" and field "spec.testing" to see test schema
 4. Call get_example with path "solutions/tested-solution/solution.yaml" for a practical reference
 5. Review the test case structure
 
@@ -496,15 +652,21 @@ STEP 4 — VALIDATE the tests:
 6. Call lint_solution with file %q to verify the solution with tests is valid YAML
 7. Call run_solution_tests with path %q to execute the tests and verify they pass
 
+After adding tests, tell the user how to run them from the CLI:
+  scafctl test functional -f ./<filename>.yaml
+  scafctl test functional -f ./<filename>.yaml -v   # verbose output
+IMPORTANT: The CLI command is 'scafctl test functional -f <file>', NOT 'scafctl test -f <file>'.
+The 'functional' subcommand is REQUIRED. 'scafctl test -f' will FAIL.
+
 IMPORTANT:
 - Test names must be lowercase with hyphens (no spaces, underscores, or uppercase)
 - Built-in tests (lint, parse) run automatically unless skipped
 - Use tags to organize tests (smoke, validation, integration, etc.)
 - The -f flag is auto-injected; do NOT include it in args
-- Use 'render solution' with '-o json' for most resolver output testing`, path, scope, path, scopeHints(scope), path, path)
+- Use 'render solution' with '-o json' for most resolver output testing`, pathRef, inlineNote, scope, pathRef, scopeHints(scope), pathRef, pathRef)
 
 	return &mcp.GetPromptResult{
-		Description: fmt.Sprintf("Add tests to solution: %s", path),
+		Description: fmt.Sprintf("Add tests to solution: %s", pathRef),
 		Messages: []mcp.PromptMessage{
 			{
 				Role: mcp.RoleUser,
@@ -522,16 +684,19 @@ func (s *Server) handleComposeSolutionPrompt(_ context.Context, request mcp.GetP
 	path := request.Params.Arguments["path"]
 	goal := request.Params.Arguments["goal"]
 
+	pathRef, inlineNote := resolvePathArg(path)
+
 	prompt := fmt.Sprintf(`Design a multi-file composed scafctl solution.
 
 Root path: %s
+%s
 Goal: %s
 
 Composition allows splitting a large solution into multiple partial YAML files that get merged at build time. This promotes reusability and maintainability.
 
 STEP 1 — UNDERSTAND composition:
 1. Call get_solution_schema and look at the "compose" field in the spec
-2. Call get_example with path "solutions/composed/solution.yaml" or similar composition examples from list_examples (category: "solutions")
+2. Call get_example with path "solutions/composition/parent.yaml" or similar composition examples from list_examples (category: "solutions")
 
 Composition works by declaring partial YAML files in the root solution:
 
@@ -582,10 +747,10 @@ IMPORTANT RULES:
 - Names must be globally unique — two files cannot define the same resolver or action name
 - Use relative paths in the compose list (relative to the root solution file)
 - Deep merge means maps are merged recursively; arrays are replaced, not appended
-- Order matters: later compose entries override earlier ones for conflicting keys`, path, goal)
+- Order matters: later compose entries override earlier ones for conflicting keys`, pathRef, inlineNote, goal)
 
 	return &mcp.GetPromptResult{
-		Description: fmt.Sprintf("Compose solution: %s", path),
+		Description: fmt.Sprintf("Compose solution: %s", pathRef),
 		Messages: []mcp.PromptMessage{
 			{
 				Role: mcp.RoleUser,
@@ -623,5 +788,483 @@ func scopeHints(scope string) string {
 - Include edge cases: missing params, invalid inputs
 - Tag tests appropriately: smoke (fast, essential), validation, integration
 - Test both success and expected failure paths`
+	}
+}
+
+// handleFixLintPrompt returns a prompt guiding the AI to fix lint findings.
+func (s *Server) handleFixLintPrompt(_ context.Context, request mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+	path := request.Params.Arguments["path"]
+	severity := request.Params.Arguments["severity"]
+
+	pathRef, inlineNote := resolvePathArg(path)
+
+	if severity == "" {
+		severity = "warning"
+	}
+
+	prompt := fmt.Sprintf(`Fix lint findings in the scafctl solution at %q.
+%s
+Minimum severity to fix: %s
+
+Follow this exact workflow:
+
+STEP 1 — LINT the solution:
+1. Call lint_solution with file %q and severity %q to get current findings
+2. If there are no findings, report "Solution is clean" and stop
+
+STEP 2 — UNDERSTAND each finding:
+3. For each finding, call explain_lint_rule with the finding's ruleName to get:
+   - What the rule checks for
+   - Why it matters
+   - How to fix it
+   - Examples of correct usage
+
+STEP 3 — FIX findings in priority order:
+Fix errors first, then warnings, then info:
+
+For each finding:
+4. Read the solution file and locate the problem area (the finding's "location" field tells you where)
+5. Apply the fix suggested by explain_lint_rule
+6. If the fix requires verifying a provider's schema (e.g., fixing unknown-provider-input), call get_provider_schema first
+7. If the fix involves CEL expressions, call validate_expression to verify the corrected expression
+8. If the fix involves Go templates, call evaluate_go_template to verify
+
+STEP 4 — VALIDATE the fixes:
+9. Call lint_solution again with the same severity to confirm all findings are resolved
+10. If new findings appeared from the fixes, repeat from STEP 3
+11. Call preview_resolvers with path %q to verify the solution still works correctly
+
+IMPORTANT:
+- Fix ONE finding at a time to avoid cascading errors
+- Always re-lint after each fix to catch regressions
+- Do NOT change anything unrelated to the lint findings
+- If a finding is intentional (e.g., long-timeout for a known long operation), explain and skip it
+- Some findings may be related (e.g., unused-resolver + missing reference) — fix them together`, pathRef, inlineNote, severity, pathRef, severity, pathRef)
+
+	return &mcp.GetPromptResult{
+		Description: fmt.Sprintf("Fix lint findings in: %s", pathRef),
+		Messages: []mcp.PromptMessage{
+			{
+				Role: mcp.RoleUser,
+				Content: mcp.TextContent{
+					Type: "text",
+					Text: prompt,
+				},
+			},
+		},
+	}, nil
+}
+
+// handlePrepareExecutionPrompt returns a prompt that validates and prepares a solution for execution.
+func (s *Server) handlePrepareExecutionPrompt(_ context.Context, request mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+	path := request.Params.Arguments["path"]
+	params := request.Params.Arguments["params"]
+
+	pathRef, inlineNote := resolvePathArg(path)
+
+	paramsSection := ""
+	if params != "" {
+		paramsSection = fmt.Sprintf("\nUser-provided parameters: %s\n", params)
+	}
+
+	prompt := fmt.Sprintf(`Prepare the scafctl solution at %q for execution.
+%s%s
+This prompt validates the solution, previews its behavior, and provides the exact CLI 
+command to run it — without actually executing it. The user makes the final decision.
+
+STEP 1 — INSPECT the solution:
+1. Call inspect_solution with path %q to understand its structure
+2. Identify:
+   - Does it have a spec.workflow.actions section? → needs 'run solution'
+   - Does it have only resolvers (no workflow)? → needs 'run resolver'
+   - What resolver parameters does it expect? (look for parameter provider usage)
+
+STEP 2 — VALIDATE the solution:
+3. Call lint_solution with file %q to check for errors
+4. If there are error-severity findings, STOP and tell the user to fix them first
+   (suggest using the fix_lint prompt)
+
+STEP 3 — CHECK authentication:
+5. Call auth_status to see configured auth providers
+6. Cross-reference with the solution's providers — if the solution uses HTTP providers 
+   that need auth, or cloud providers (GCP, Azure, GitHub), warn if auth is not configured
+
+STEP 4 — PREVIEW the solution:
+7. Call preview_resolvers with path %q to see what values the resolvers produce
+   - Verify resolver outputs look correct for the given parameters
+   - Flag any resolvers that returned errors or unexpected values
+8. If the solution has a workflow, call preview_action with path %q to see the action graph
+   - Review which actions would execute and in what order
+   - Check for any actions with conditions (when clauses) that might skip
+
+STEP 5 — GENERATE the run command:
+9. Call get_run_command with path %q to get the exact CLI command
+
+STEP 6 — PRESENT the execution plan:
+Present a clear summary to the user:
+
+**Solution:** <name> (v<version>)
+**Command type:** run solution / run resolver
+**Parameters:** <list of parameters and their values>
+**Resolvers:** <count> resolvers will execute
+**Actions:** <count> actions will execute (if applicable)
+**Auth:** <status of required auth providers>
+**Warnings:** <any issues from preview>
+
+**Command to run:**
+`+"```"+`
+<exact command from get_run_command>
+`+"```"+`
+
+DO NOT run the command yourself. Present it to the user and let them execute it.
+If there are any concerns from the preview (unexpected values, missing auth, lint warnings), 
+highlight them clearly so the user can make an informed decision.`, pathRef, inlineNote, paramsSection, pathRef, pathRef, pathRef, pathRef, pathRef)
+
+	return &mcp.GetPromptResult{
+		Description: fmt.Sprintf("Prepare execution: %s", pathRef),
+		Messages: []mcp.PromptMessage{
+			{
+				Role: mcp.RoleUser,
+				Content: mcp.TextContent{
+					Type: "text",
+					Text: prompt,
+				},
+			},
+		},
+	}, nil
+}
+
+// handleAnalyzeExecutionPrompt returns a prompt guiding post-execution analysis.
+func (s *Server) handleAnalyzeExecutionPrompt(_ context.Context, request mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+	snapshotPath := request.Params.Arguments["snapshot_path"]
+	previousSnapshot := request.Params.Arguments["previous_snapshot"]
+	problem := request.Params.Arguments["problem"]
+
+	problemDesc := "The execution did not produce the expected results."
+	if problem != "" {
+		problemDesc = problem
+	}
+
+	var diffSection string
+	if previousSnapshot != "" {
+		diffSection = fmt.Sprintf(`
+STEP 2 — COMPARE with the previous snapshot:
+3. Call diff_snapshots with before %q and after %q
+4. Review the diff output:
+   - Look for status changes (success → failed indicates a regression)
+   - Look for value changes (unexpected output changes)
+   - Look for added/removed resolvers (structural changes)
+5. For any regressions (success → failed), note the resolver name and error message`, previousSnapshot, snapshotPath)
+	} else {
+		diffSection = `
+STEP 2 — No previous snapshot provided:
+- If the user has a known-good snapshot from a prior run, suggest they provide it for comparison
+- Without a baseline, focus on the error messages and resolver statuses in the current snapshot`
+	}
+
+	prompt := fmt.Sprintf(`Analyze the execution results from snapshot at %q.
+
+Problem reported: %s
+
+Follow this analysis process:
+
+STEP 1 — INSPECT the snapshot:
+1. Call show_snapshot with path %q and format "full" to see complete results
+2. Review the snapshot:
+   - Overall status (success/failed)
+   - Duration (was it unusually slow?)
+   - Phase execution order
+   - Failed resolvers (status != "success")
+   - Resolver errors (error messages)
+%s
+
+STEP 3 — DIAGNOSE failed resolvers:
+For each failed resolver:
+6. Note the provider used and the error message
+7. Call get_provider_schema for that provider to verify the configuration is correct
+8. If the provider is an HTTP/cloud provider (http, gcp, azure, github), call auth_status to check authentication
+9. Common failure patterns:
+   - "connection refused" or "timeout" → service endpoint issue, check URL/host configuration
+   - "401 Unauthorized" or "403 Forbidden" → auth issue, verify credentials/tokens
+   - "no such key" or "not found" → configuration key changed or missing
+   - "template execution failed" → Go template syntax error, use eval_template to test
+   - "CEL evaluation failed" → CEL expression error, use eval_cel to test
+   - "dependency failed" → upstream resolver failed, fix that first
+
+STEP 4 — SUGGEST fixes:
+10. For each issue found, provide a specific fix:
+    - If it's a configuration issue: show the exact YAML change needed
+    - If it's an auth issue: show the auth setup command
+    - If it's an expression error: show the corrected expression
+    - If it's a dependency issue: identify the root cause (upstream) resolver
+
+STEP 5 — VERIFY fixes:
+11. After suggesting fixes, recommend verification steps:
+    - Re-run the solution with --snapshot flag to capture new results
+    - Compare new snapshot with the problematic one using diff_snapshots
+    - Run lint_solution to check for any structural issues
+
+Present findings as:
+
+**Execution Summary:**
+- Status: <overall status>
+- Duration: <duration>
+- Resolvers: <success>/<total> succeeded
+
+**Failed Resolvers:**
+For each failure:
+- **<name>** (<provider>): <error summary>
+  - Root cause: <analysis>
+  - Fix: <specific fix>
+
+**Regressions:** (if comparison snapshot provided)
+- <list of resolvers that changed from success to failed>
+
+**Recommended Actions:**
+1. <prioritized list of fixes>`, snapshotPath, problemDesc, snapshotPath, diffSection)
+
+	return &mcp.GetPromptResult{
+		Description: fmt.Sprintf("Analyze execution: %s", snapshotPath),
+		Messages: []mcp.PromptMessage{
+			{
+				Role: mcp.RoleUser,
+				Content: mcp.TextContent{
+					Type: "text",
+					Text: prompt,
+				},
+			},
+		},
+	}, nil
+}
+
+// handleMigrateSolutionPrompt returns a prompt guiding structural migration of a solution.
+func (s *Server) handleMigrateSolutionPrompt(_ context.Context, request mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+	path := request.Params.Arguments["path"]
+	migration := request.Params.Arguments["migration"]
+	targetDir := request.Params.Arguments["target_dir"]
+
+	pathRef, inlineNote := resolvePathArg(path)
+
+	targetSection := ""
+	if targetDir != "" {
+		targetSection = fmt.Sprintf("\nTarget directory for extracted/split files: %s\n", targetDir)
+	}
+
+	migrationGuide := migrationTypeGuide(migration)
+
+	prompt := fmt.Sprintf(`Migrate the scafctl solution at %q.
+%s
+Migration type: %s
+%s
+This prompt guides a STRUCTURAL refactoring of the solution. Unlike update_solution (which makes
+targeted functional changes), this migration reorganizes the solution's architecture while
+preserving its behavior.
+
+STEP 1 — ESTABLISH baseline:
+1. Call inspect_solution with path %q to understand the current structure
+2. Call lint_solution with file %q to establish a baseline — note any existing findings
+3. Call preview_resolvers with path %q to capture expected resolver outputs (these MUST NOT change)
+
+STEP 2 — PLAN the migration:
+%s
+
+STEP 3 — EXECUTE the migration:
+4. Apply the planned changes according to the migration type above
+5. Preserve ALL functional behavior — resolver outputs, action execution order, and conditions must remain identical
+
+STEP 4 — VALIDATE the migration:
+6. Call lint_solution with the root solution file — ZERO new findings should appear
+7. Call preview_resolvers with the root path — compare outputs against the baseline from STEP 1
+8. Call diff_solution between the original and migrated solution to confirm only structural changes
+9. If the solution has tests, call run_solution_tests to verify all tests still pass
+
+CRITICAL RULES:
+- Migration MUST be behavior-preserving — same inputs produce same outputs
+- Do NOT add, remove, or modify resolver logic (that's what update_solution is for)
+- Do NOT change action behavior or ordering
+- If any validation step fails, revert the change and investigate before continuing
+- Document what was migrated and why in commit messages`, pathRef, inlineNote, migration, targetSection, pathRef, pathRef, pathRef, migrationGuide)
+
+	return &mcp.GetPromptResult{
+		Description: fmt.Sprintf("Migrate solution (%s): %s", migration, pathRef),
+		Messages: []mcp.PromptMessage{
+			{
+				Role: mcp.RoleUser,
+				Content: mcp.TextContent{
+					Type: "text",
+					Text: prompt,
+				},
+			},
+		},
+	}, nil
+}
+
+// migrationTypeGuide returns migration-specific instructions.
+func migrationTypeGuide(migration string) string {
+	switch migration {
+	case "add-composition":
+		return `Migration: ADD COMPOSITION
+- Identify logical groupings of resolvers and actions
+- Create partial YAML files for each group (e.g., resolvers/params.yaml, actions/deploy.yaml)
+- Move resolver and action definitions into the partials
+- Add spec.compose entries in the root solution pointing to each partial
+- The root solution keeps metadata, compose list, and any shared configuration
+- Verify the merged result matches the original with lint_solution`
+	case "extract-templates":
+		return `Migration: EXTRACT TEMPLATES
+- Find all inline Go templates (tmpl: fields with multi-line content)
+- Create template files in a templates/ directory alongside the solution
+- Replace inline tmpl: values with file references (tmpl: file:templates/<name>.tmpl)
+- For CEL expressions, consider if complex ones should become standalone files
+- Use extract_resolver_refs on each template to verify references are preserved`
+	case "split-solution":
+		return `Migration: SPLIT SOLUTION
+- Identify independent functional units in the solution
+- Create separate solution files for each unit
+- Ensure each sub-solution is self-contained (has its own resolvers)
+- Shared resolvers should be duplicated or extracted into a composition partial
+- Update any documentation or run commands to reference the new files`
+	case "add-tests":
+		return `Migration: ADD TESTS
+- Call generate_test_scaffold to get starter test cases based on the solution
+- Add comprehensive tests for each resolver (use command [render, solution] -o json)
+- Add workflow tests if spec.workflow exists (use command [run, solution])
+- Include edge cases: missing parameters, invalid inputs, boundary values
+- Tag tests appropriately (smoke, validation, integration)
+- Call run_solution_tests to verify all new tests pass`
+	case "upgrade-patterns":
+		return `Migration: UPGRADE PATTERNS
+- Check for deprecated patterns (old-style ValueRef formats, legacy fields)
+- Replace string concatenation in templates with proper expressions
+- Add missing validation phases to resolvers that accept user input
+- Ensure all providers are using their latest input field names (call get_provider_schema)
+- Add display_name and description fields where missing
+- Standardize naming conventions (lowercase-with-hyphens)
+- Add type annotations to resolvers that are missing them`
+	default:
+		return fmt.Sprintf(`Migration: %s
+- Inspect the solution to understand current structure
+- Plan changes that preserve behavior
+- Execute incrementally, validating after each change`, migration)
+	}
+}
+
+// handleOptimizeSolutionPrompt returns a prompt for performance/quality analysis.
+func (s *Server) handleOptimizeSolutionPrompt(_ context.Context, request mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+	path := request.Params.Arguments["path"]
+	focus := request.Params.Arguments["focus"]
+
+	pathRef, inlineNote := resolvePathArg(path)
+
+	if focus == "" {
+		focus = "all"
+	}
+
+	focusGuide := optimizationFocusGuide(focus)
+
+	prompt := fmt.Sprintf(`Optimize the scafctl solution at %q.
+%s
+Optimization focus: %s
+
+STEP 1 — ANALYZE structure:
+1. Call inspect_solution with path %q to see the full structure
+2. Call render_solution with path %q and graph_type "resolver" to see the resolver dependency graph
+3. Call render_solution with path %q and graph_type "action-deps" to see action dependencies
+4. Call lint_solution with file %q to identify quality issues
+
+STEP 2 — IDENTIFY optimization opportunities:
+%s
+
+STEP 3 — PRIORITIZE recommendations:
+Present findings as a prioritized list:
+
+**High Impact:**
+- Changes that improve execution speed or correctness
+- Missing validations that could prevent runtime errors
+
+**Medium Impact:**
+- Readability improvements that help maintainability
+- Test coverage gaps
+
+**Low Impact:**
+- Cosmetic naming/formatting improvements
+- Documentation additions
+
+For each recommendation, provide:
+- What to change (specific YAML snippet)
+- Why it helps
+- Expected impact
+
+STEP 4 — VALIDATE changes (if user applies them):
+5. Call lint_solution to verify no regressions
+6. Call preview_resolvers to confirm resolver outputs are unchanged
+7. Call extract_resolver_refs on any modified templates to verify references
+8. If tests exist, call run_solution_tests to ensure nothing broke
+
+IMPORTANT:
+- Optimizations MUST be behavior-preserving unless explicitly noted
+- Flag any changes that alter execution order or outputs
+- Performance changes (parallelization) should be safe — only parallelize truly independent items`, pathRef, inlineNote, focus, pathRef, pathRef, pathRef, pathRef, focusGuide)
+
+	return &mcp.GetPromptResult{
+		Description: fmt.Sprintf("Optimize solution (%s): %s", focus, pathRef),
+		Messages: []mcp.PromptMessage{
+			{
+				Role: mcp.RoleUser,
+				Content: mcp.TextContent{
+					Type: "text",
+					Text: prompt,
+				},
+			},
+		},
+	}, nil
+}
+
+// optimizationFocusGuide returns focus-specific optimization instructions.
+func optimizationFocusGuide(focus string) string {
+	switch focus {
+	case "performance":
+		return `PERFORMANCE ANALYSIS:
+- Identify resolvers that run serially but could run in parallel (no shared dependencies)
+- Find unnecessary dependsOn chains — remove dependencies that aren't actually needed
+- Look for duplicate resolver work (two resolvers fetching the same data)
+- Check action parallelization opportunities (independent actions in different phases)
+- Look for expensive operations (HTTP calls, exec commands) that could be cached or avoided
+- Check if resolver types are set correctly (wrong types cause unnecessary conversion overhead)`
+	case "readability":
+		return `READABILITY ANALYSIS:
+- Check naming consistency: resolver names, action names, parameter names (should be lowercase-with-hyphens)
+- Look for missing descriptions on resolvers and actions
+- Find overly complex CEL expressions that could be simplified or split
+- Identify undocumented parameters (parameter provider resolvers without descriptions)
+- Check for magic values that should be named resolvers
+- Look for duplicate template logic that could be extracted
+- Verify display_name fields are set for user-facing resolvers`
+	case "testing":
+		return `TESTING ANALYSIS:
+- Call list_tests to see existing test coverage
+- Call generate_test_scaffold to see what tests are recommended
+- Identify untested resolvers (especially those with complex transform/validate phases)
+- Look for missing edge case tests (empty inputs, boundary values, error conditions)
+- Check for untested conditional logic (when clauses)
+- Verify error path testing (expected failures, validation errors)
+- Look for missing integration tests if the solution has external dependencies`
+	default:
+		return `COMPREHENSIVE ANALYSIS (all areas):
+
+PERFORMANCE:
+- Identify serial resolvers that could run in parallel
+- Find unnecessary dependency chains
+- Look for duplicate work and caching opportunities
+
+READABILITY:
+- Check naming consistency and missing descriptions
+- Simplify complex expressions
+- Document undocumented parameters
+
+TESTING:
+- Identify untested resolvers and actions
+- Look for missing edge case coverage
+- Call list_tests and generate_test_scaffold for gap analysis`
 	}
 }

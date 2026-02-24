@@ -1,0 +1,14 @@
+# Link header pagination (RFC 8288)
+# Follows rel="next" links in the Link response header
+# Used by GitHub, GitLab, and many REST APIs
+name: link-header-pagination
+provider: http
+inputs:
+  url: "https://api.github.com/users/octocat/repos?per_page=30"
+  method: GET
+  headers:
+    Accept: "application/vnd.github+json"
+  pagination:
+    strategy: linkHeader
+    maxPages: 5
+    collectPath: "body"

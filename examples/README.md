@@ -24,6 +24,26 @@ scafctl run solution -f examples/actions/hello-world.yaml --debug
 scafctl run solution -f examples/actions/hello-world.yaml --log-level info --log-format json
 ```
 
+### Browse Examples from the CLI
+
+You can also discover and download examples using the built-in `examples` command:
+
+```bash
+# List all available examples
+scafctl examples list
+
+# Filter by category
+scafctl examples list --category resolvers
+scafctl examples list --category actions
+scafctl examples list --category solutions
+
+# Download an example
+scafctl examples get resolvers/hello-world.yaml -o hello.yaml
+
+# List in JSON format
+scafctl examples list -o json
+```
+
 ---
 
 ## Directory Structure
@@ -37,6 +57,7 @@ scafctl run solution -f examples/actions/hello-world.yaml --log-level info --log
 | [snapshots/](snapshots/) | Execution snapshot capture and comparison |
 | [catalog/](catalog/) | Catalog bundling and registry examples |
 | [config/](config/) | Configuration file examples |
+| [eval/](eval/) | CEL and Go template evaluation data and templates |
 | [plugins/](plugins/) | go-plugin source code examples (see note below) |
 | [mcp/](mcp/) | MCP server configurations for AI clients |
 
@@ -68,6 +89,18 @@ Action workflows demonstrate executing tasks with dependencies, parallelism, and
 | [template-render.yaml](actions/template-render.yaml) | Render files from templates | `scafctl run solution -f examples/actions/template-render.yaml` |
 | [go-template-inline.yaml](actions/go-template-inline.yaml) | Inline Go templates with loops/conditionals | `scafctl run solution -f examples/actions/go-template-inline.yaml` |
 | [complex-workflow.yaml](actions/complex-workflow.yaml) | Full CI/CD-style workflow | `scafctl run solution -f examples/actions/complex-workflow.yaml` |
+
+---
+
+## Eval Examples
+
+Data files and templates for use with `scafctl eval` commands.
+
+| Example | Description | Run |
+|---------|-------------|-----|
+| [cel-data.json](eval/cel-data.json) | Sample data for CEL expression evaluation | `scafctl eval cel '_.items.filter(i, i.active).map(i, i.name)' --data-file examples/eval/cel-data.json` |
+| [deployment.tmpl](eval/deployment.tmpl) | Kubernetes deployment template | `scafctl eval template --template-file examples/eval/deployment.tmpl --data-file examples/eval/template-data.json` |
+| [template-data.json](eval/template-data.json) | Data for Go template rendering | Used with `deployment.tmpl` above |
 
 ---
 

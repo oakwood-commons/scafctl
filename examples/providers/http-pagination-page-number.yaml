@@ -1,0 +1,16 @@
+# Page number pagination
+# Increments a page number query parameter each request
+name: page-number-pagination
+provider: http
+inputs:
+  url: "https://api.example.com/products"
+  method: GET
+  pagination:
+    strategy: pageNumber
+    maxPages: 10
+    pageSize: 25
+    pageParam: "page"
+    pageSizeParam: "per_page"
+    startPage: 1
+    collectPath: "body.products"
+    stopWhen: "size(body.products) == 0"

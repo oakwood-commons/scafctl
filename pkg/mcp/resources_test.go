@@ -388,6 +388,91 @@ func TestExtractNameFromURI(t *testing.T) {
 	}
 }
 
+func TestRouteSolutionResource(t *testing.T) {
+	// Create a test solution file to use across sub-tests
+	dir := t.TempDir()
+	solPath := filepath.Join(dir, "test-solution.yaml")
+	solYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test-solution
+  version: 1.0.0
+  description: Test solution for routing
+spec:
+  resolvers:
+    greeting:
+      description: A greeting
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "Hello!"
+  testing:
+    cases:
+      basic-test:
+        description: renders successfully
+        command: [render, solution]
+        assertions:
+          - expression: __exitCode == 0
+`
+	require.NoError(t, os.WriteFile(solPath, []byte(solYAML), 0o644))
+
+	srv, err := NewServer(WithServerVersion("test"))
+	require.NoError(t, err)
+
+	t.Run("routes to content handler for bare path", func(t *testing.T) {
+		request := mcp.ReadResourceRequest{}
+		request.Params.URI = "solution://" + solPath
+
+		contents, err := srv.routeSolutionResource(context.Background(), request)
+		require.NoError(t, err)
+		require.Len(t, contents, 1)
+		textContent, ok := mcp.AsTextResourceContents(contents[0])
+		require.True(t, ok)
+		assert.Equal(t, "application/yaml", textContent.MIMEType)
+		assert.Contains(t, textContent.Text, "test-solution")
+	})
+
+	t.Run("routes to schema handler for /schema suffix", func(t *testing.T) {
+		request := mcp.ReadResourceRequest{}
+		request.Params.URI = "solution://" + solPath + "/schema"
+
+		contents, err := srv.routeSolutionResource(context.Background(), request)
+		require.NoError(t, err)
+		require.Len(t, contents, 1)
+		textContent, ok := mcp.AsTextResourceContents(contents[0])
+		require.True(t, ok)
+		assert.Equal(t, "application/json", textContent.MIMEType)
+		assert.Contains(t, textContent.Text, "test-solution Input Parameters")
+	})
+
+	t.Run("routes to tests handler for /tests suffix", func(t *testing.T) {
+		request := mcp.ReadResourceRequest{}
+		request.Params.URI = "solution://" + solPath + "/tests"
+
+		contents, err := srv.routeSolutionResource(context.Background(), request)
+		require.NoError(t, err)
+		require.Len(t, contents, 1)
+		textContent, ok := mcp.AsTextResourceContents(contents[0])
+		require.True(t, ok)
+		assert.Equal(t, "application/json", textContent.MIMEType)
+		assert.Contains(t, textContent.Text, "basic-test")
+	})
+
+	t.Run("routes to graph handler for /graph suffix", func(t *testing.T) {
+		request := mcp.ReadResourceRequest{}
+		request.Params.URI = "solution://" + solPath + "/graph"
+
+		contents, err := srv.routeSolutionResource(context.Background(), request)
+		require.NoError(t, err)
+		require.Len(t, contents, 1)
+		textContent, ok := mcp.AsTextResourceContents(contents[0])
+		require.True(t, ok)
+		assert.Equal(t, "application/json", textContent.MIMEType)
+	})
+}
+
 func TestGenerateSolutionInputSchema(t *testing.T) {
 	t.Run("nil solution spec", func(t *testing.T) {
 		sol := &solution.Solution{}

@@ -11,6 +11,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
+	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
 )
 
 // registerActionTools registers action-related MCP tools.
@@ -19,6 +20,7 @@ func (s *Server) registerActionTools() {
 	previewActionTool := mcp.NewTool("preview_action",
 		mcp.WithDescription("Preview what each action in a solution's workflow would do WITHOUT executing it. Resolves all inputs (expanding CEL expressions, Go templates, and resolver references) and shows the final computed values each action would receive. This is an 'action dry-run' that shows the full picture before execution."),
 		mcp.WithTitleAnnotation("Preview Actions"),
+		mcp.WithToolIcons(toolIcons["action"]),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
@@ -41,7 +43,10 @@ func (s *Server) registerActionTools() {
 func (s *Server) handlePreviewAction(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	path, err := request.RequireString("path")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("path"),
+			WithSuggestion("Provide the path to a solution YAML file"),
+		), nil
 	}
 
 	actionFilter := request.GetString("action", "")
@@ -53,7 +58,9 @@ func (s *Server) handlePreviewAction(_ context.Context, request mcp.CallToolRequ
 		if pm, ok := p.(map[string]any); ok {
 			params = pm
 		} else {
-			return mcp.NewToolResultError("'params' must be an object (key-value pairs)"), nil
+			return newStructuredError(ErrCodeInvalidInput, "'params' must be an object (key-value pairs)",
+				WithField("params"),
+			), nil
 		}
 	}
 
@@ -62,7 +69,11 @@ func (s *Server) handlePreviewAction(_ context.Context, request mcp.CallToolRequ
 		prepare.WithRegistry(s.registry),
 	)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("loading solution: %v", err)), nil
+		return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("loading solution: %v", err),
+			WithField("path"),
+			WithSuggestion("Verify the file exists and is valid YAML. Use lint_solution to check."),
+			WithRelatedTools("lint_solution", "inspect_solution"),
+		), nil
 	}
 	if prepResult.Cleanup != nil {
 		defer prepResult.Cleanup()
@@ -71,19 +82,28 @@ func (s *Server) handlePreviewAction(_ context.Context, request mcp.CallToolRequ
 	sol := prepResult.Solution
 
 	if !sol.Spec.HasWorkflow() {
-		return mcp.NewToolResultError("solution does not define a workflow — use preview_resolvers instead"), nil
+		return newStructuredError(ErrCodeInvalidInput, "solution does not define a workflow",
+			WithSuggestion("This solution has no spec.workflow section. Use preview_resolvers to see resolver outputs instead."),
+			WithRelatedTools("preview_resolvers"),
+		), nil
 	}
 
 	// Execute resolvers to get data for action inputs
 	resolverData, err := s.executeResolversForRender(sol, params)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("resolver execution failed: %v", err)), nil
+		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("resolver execution failed: %v", err),
+			WithSuggestion("Check resolver configurations with preview_resolvers. Missing parameters can be passed via the params field."),
+			WithRelatedTools("preview_resolvers", "inspect_solution"),
+		), nil
 	}
 
 	// Build the action graph (this materializes inputs)
 	graph, err := action.BuildGraph(s.ctx, sol.Spec.Workflow, resolverData, nil)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to build action graph: %v", err)), nil
+		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to build action graph: %v", err),
+			WithSuggestion("Check action definitions and dependencies. Use lint_solution to find structural issues."),
+			WithRelatedTools("lint_solution", "inspect_solution"),
+		), nil
 	}
 
 	// Build structured preview response
@@ -97,20 +117,21 @@ func (s *Server) handlePreviewAction(_ context.Context, request mcp.CallToolRequ
 		Backoff     string `json:"backoff,omitempty"`
 	}
 	type actionPreview struct {
-		Name               string            `json:"name"`
-		Description        string            `json:"description,omitempty"`
-		Provider           string            `json:"provider"`
-		MaterializedInputs map[string]any    `json:"materializedInputs,omitempty"`
-		DeferredInputs     map[string]string `json:"deferredInputs,omitempty"`
-		Dependencies       []string          `json:"dependencies,omitempty"`
-		When               string            `json:"when,omitempty"`
-		Section            string            `json:"section"`
-		Phase              int               `json:"phase"`
-		ForEach            *forEachPreview   `json:"forEach,omitempty"`
-		Retry              *retryPreview     `json:"retry,omitempty"`
-		Timeout            string            `json:"timeout,omitempty"`
-		OnError            string            `json:"onError,omitempty"`
-		Exclusive          []string          `json:"exclusive,omitempty"`
+		Name               string              `json:"name"`
+		Description        string              `json:"description,omitempty"`
+		Provider           string              `json:"provider"`
+		MaterializedInputs map[string]any      `json:"materializedInputs,omitempty"`
+		DeferredInputs     map[string]string   `json:"deferredInputs,omitempty"`
+		Dependencies       []string            `json:"dependencies,omitempty"`
+		When               string              `json:"when,omitempty"`
+		Section            string              `json:"section"`
+		Phase              int                 `json:"phase"`
+		ForEach            *forEachPreview     `json:"forEach,omitempty"`
+		Retry              *retryPreview       `json:"retry,omitempty"`
+		Timeout            string              `json:"timeout,omitempty"`
+		OnError            string              `json:"onError,omitempty"`
+		Exclusive          []string            `json:"exclusive,omitempty"`
+		SourcePos          *sourcepos.Position `json:"sourcePos,omitempty"`
 	}
 
 	previews := make([]actionPreview, 0)
@@ -150,6 +171,18 @@ func (s *Server) handlePreviewAction(_ context.Context, request mcp.CallToolRequ
 			Dependencies:       ea.Dependencies,
 			Section:            ea.Section,
 			Phase:              phaseMap[name],
+		}
+
+		// Enrich with source position if available
+		if sm := sol.SourceMap(); sm != nil {
+			// Try the section-specific path (actions vs finally)
+			path := "spec.workflow.actions." + ea.Name
+			if ea.Section == "finally" {
+				path = "spec.workflow.finally." + ea.Name
+			}
+			if pos, ok := sm.Get(path); ok {
+				preview.SourcePos = &pos
+			}
 		}
 
 		// Use fields from the embedded Action
@@ -209,7 +242,10 @@ func (s *Server) handlePreviewAction(_ context.Context, request mcp.CallToolRequ
 			availableNames = append(availableNames, name)
 		}
 		sort.Strings(availableNames)
-		return mcp.NewToolResultError(fmt.Sprintf("action %q not found. Available actions: %v", actionFilter, availableNames)), nil
+		return newStructuredError(ErrCodeNotFound, fmt.Sprintf("action %q not found. Available actions: %v", actionFilter, availableNames),
+			WithField("action"),
+			WithSuggestion(fmt.Sprintf("Use one of the available action names: %v", availableNames)),
+		), nil
 	}
 
 	response := map[string]any{

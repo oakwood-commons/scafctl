@@ -28,7 +28,23 @@ Architecture and design documentation for scafctl.
 - [Catalog Build Bundling](catalog-build-bundling.md) — Solution file bundling
 - [Catalog CLI Design Decision](catalog-cli-design-decision.md) — ADR: push/pull reference patterns
 - [JSON Schema Migration](jsonschema-migration-decision.md) — ADR: provider schema approach
+- [Shared Library Migration](shared-library-migration.md) — Shared library extraction for MCP/CLI parity
 - [Future Enhancements](future-enhancements.md) — Planned features and enhancements
+
+## MCP & AI Integration
+
+- [MCP Server](mcp-server.md) — MCP server architecture and tool design
+- [MCP Server Enhancements](mcp-server-enhancements.md) — Enhanced tools, prompts, resources, and CLI parity
+- [MCP Server Implementation Guide](mcp-server-implementation-guide.md) — Implementation patterns and conventions
+
+## Auth & Infrastructure
+
+- [Entra Auth Implementation](entra-auth-implementation.md) — Microsoft Entra ID authentication
+- [GCP Auth Handler](gcp-auth-handler.md) — Google Cloud Platform authentication
+- [GitHub Auth Handler](github-auth-handler.md) — GitHub authentication
+- [OTel Telemetry Migration](otel-telemetry-migration.md) — OpenTelemetry integration
+- [State](state.md) — State management design
+- [Testing Consolidation](testing-consolidation.md) — Testing strategy consolidation
 
 ## Contributing
 
