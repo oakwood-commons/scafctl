@@ -67,6 +67,28 @@ type ViewerOptions struct {
 
 	// InitialExpr is an initial expression to evaluate when launching TUI
 	InitialExpr string `json:"initialExpr,omitempty" yaml:"initialExpr,omitempty" doc:"Initial CEL expression to evaluate in TUI" maxLength:"4096"`
+
+	// ColumnOrder specifies the preferred display order of columns for table rendering.
+	// Fields not listed are appended in their natural order.
+	ColumnOrder []string `json:"columnOrder,omitempty" yaml:"columnOrder,omitempty" doc:"Preferred column display order for table rendering"`
+
+	// ColumnHints provides per-column display customizations (header rename, max width, alignment, visibility).
+	// Use SchemaJSON for a declarative alternative derived from a JSON Schema.
+	ColumnHints map[string]tui.ColumnHint `json:"-" yaml:"-" doc:"Per-column display hints"`
+
+	// SchemaJSON is a JSON Schema document used to derive column display hints.
+	// Parsed via tui.ParseSchema; any ColumnHints set directly take precedence
+	// over schema-derived hints on a per-key basis. Supports title (header rename),
+	// maxLength (max width), deprecated (hidden), type integer/number (right-align),
+	// and required (priority boost).
+	SchemaJSON []byte `json:"-" yaml:"-" doc:"JSON Schema for deriving column display hints"`
+
+	// DisplaySchemaJSON is a JSON Schema document with x-kvx-* vendor extensions
+	// that control the interactive TUI's card-list and detail view rendering.
+	// Parsed via tui.ParseSchemaWithDisplay for use in interactive mode.
+	// When set, the TUI renders arrays as a scrollable card list with sectioned
+	// detail views instead of the default KEY/VALUE table.
+	DisplaySchemaJSON []byte `json:"-" yaml:"-" doc:"JSON Schema with x-kvx-* extensions for rich TUI rendering"`
 }
 
 // DefaultViewerOptions returns sensible defaults for scafctl
@@ -141,6 +163,32 @@ func WithInitialExpr(expr string) Option {
 	return func(o *ViewerOptions) { o.InitialExpr = expr }
 }
 
+// WithColumnOrder sets the preferred column order for table rendering.
+func WithColumnOrder(order []string) Option {
+	return func(o *ViewerOptions) { o.ColumnOrder = order }
+}
+
+// WithColumnHints sets per-column display hints (header rename, max width, alignment, visibility).
+// For a declarative alternative, use WithSchemaJSON.
+func WithColumnHints(hints map[string]tui.ColumnHint) Option {
+	return func(o *ViewerOptions) { o.ColumnHints = hints }
+}
+
+// WithSchemaJSON sets a JSON Schema document used to derive column display hints.
+// The schema is parsed via tui.ParseSchema. Any ColumnHints set directly take
+// precedence over schema-derived hints on a per-key basis.
+func WithSchemaJSON(schema []byte) Option {
+	return func(o *ViewerOptions) { o.SchemaJSON = schema }
+}
+
+// WithDisplaySchemaJSON sets a JSON Schema document with x-kvx-* vendor extensions
+// that control the interactive TUI's card-list and detail view rendering.
+// The schema is parsed via tui.ParseSchemaWithDisplay. Column hints derived from
+// the schema are merged with any programmatic ColumnHints (programmatic take precedence).
+func WithDisplaySchemaJSON(schema []byte) Option {
+	return func(o *ViewerOptions) { o.DisplaySchemaJSON = schema }
+}
+
 // WithContext sets the context for CEL expression evaluation.
 // This enables context-dependent features like debug.out when Writer is in context.
 func WithContext(ctx context.Context) Option {
@@ -197,15 +245,46 @@ func View(data any, opts ...Option) error {
 
 // renderTable outputs data as a bordered table (non-interactive).
 func renderTable(root any, options *ViewerOptions) error {
+	hints := resolveColumnHints(options.SchemaJSON, options.ColumnHints)
 	output := tui.RenderTable(root, tui.TableOptions{
-		AppName:  options.AppName,
-		Path:     "_",
-		Bordered: true,
-		Width:    options.Width,
-		NoColor:  options.NoColor,
+		AppName:     options.AppName,
+		Path:        "_",
+		Bordered:    true,
+		Width:       options.Width,
+		NoColor:     options.NoColor,
+		ColumnOrder: options.ColumnOrder,
+		ColumnHints: hints,
 	})
 	fmt.Fprint(options.Out, output)
 	return nil
+}
+
+// resolveColumnHints merges schema-derived hints with programmatic hints.
+// Programmatic hints take precedence over schema-derived ones on a per-key basis.
+func resolveColumnHints(schemaJSON []byte, programmatic map[string]tui.ColumnHint) map[string]tui.ColumnHint {
+	if len(schemaJSON) == 0 && len(programmatic) == 0 {
+		return nil
+	}
+
+	var merged map[string]tui.ColumnHint
+
+	if len(schemaJSON) > 0 {
+		parsed, err := tui.ParseSchema(schemaJSON)
+		if err == nil {
+			merged = parsed
+		}
+	}
+
+	if len(programmatic) > 0 {
+		if merged == nil {
+			return programmatic
+		}
+		for k, v := range programmatic {
+			merged[k] = v
+		}
+	}
+
+	return merged
 }
 
 // renderList outputs data as a key-value list (non-interactive).
@@ -241,6 +320,28 @@ func runInteractive(root any, options *ViewerOptions) error {
 
 	if options.InitialExpr != "" {
 		cfg.InitialExpr = options.InitialExpr
+	}
+
+	// Apply display schema (x-kvx-* extensions) for rich card-list and detail views.
+	// Also merge any derived column hints with programmatic hints.
+	if len(options.DisplaySchemaJSON) > 0 {
+		schemaHints, displaySchema, err := tui.ParseSchemaWithDisplay(options.DisplaySchemaJSON)
+		if err == nil {
+			if displaySchema != nil {
+				cfg.DisplaySchema = displaySchema
+			}
+			// Merge schema-derived hints: programmatic hints take precedence
+			if len(schemaHints) > 0 {
+				merged := make(map[string]tui.ColumnHint, len(schemaHints))
+				for k, v := range schemaHints {
+					merged[k] = v
+				}
+				for k, v := range options.ColumnHints {
+					merged[k] = v
+				}
+				options.ColumnHints = merged
+			}
+		}
 	}
 
 	teaOpts := make([]tea.ProgramOption, 0)

@@ -7,9 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"path/filepath"
 	"slices"
 	"strings"
+
+	_ "embed"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
@@ -23,6 +26,9 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
+
+//go:embed provider_schema.json
+var providerSchemaJSON []byte
 
 // Options holds configuration for the get provider command
 type Options struct {
@@ -51,8 +57,8 @@ func CommandProvider(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 		Long: `List all registered providers or get details about a specific provider.
 
 Without arguments, prints a simple list of provider names and descriptions.
-Use -i/--interactive to launch a TUI for browsing, filtering, and viewing
-provider details.
+Use -i/--interactive to launch a rich kvx TUI for browsing, filtering, and
+viewing provider details using a card-list and sectioned detail view.
 
 With a provider name argument, shows detailed information about that provider
 including its full schema, examples, and configuration options.
@@ -63,14 +69,6 @@ OUTPUT FORMATS:
   json      Full provider information as JSON
   yaml      Full provider information as YAML
   quiet     Provider names only (one per line)
-
-INTERACTIVE MODE (-i):
-  ↑↓         Navigate provider list
-  →/enter    View provider details
-  ←/esc      Go back to list
-  /          Filter providers
-  c          Copy example YAML to clipboard
-  q          Quit
 
 FILTERS:
   --capability  Filter providers by supported capability (from, transform, validation, action)
@@ -133,20 +131,8 @@ func (o *Options) RunListProviders(ctx context.Context) error {
 	// Apply filters
 	filtered := o.filterProviders(providers)
 
-	// Interactive mode (-i): launch custom TUI
-	if o.Interactive {
-		if !kvx.IsTerminal(o.IOStreams.Out) {
-			err := fmt.Errorf("interactive mode requires a terminal")
-			if w := writer.FromContext(ctx); w != nil {
-				w.Errorf("%v", err)
-			}
-			return exitcode.WithCode(err, exitcode.InvalidInput)
-		}
-		return RunTUI(filtered, o.IOStreams.Out)
-	}
-
-	// Default (no -o flag): simple list
-	if o.Output == "" {
+	// Default (no -o flag and not interactive): simple list
+	if o.Output == "" && !o.Interactive {
 		return printSimpleList(filtered, o.IOStreams.Out)
 	}
 
@@ -382,6 +368,15 @@ func (o *Options) printProviderDetail(desc *provider.Descriptor) error {
 		}
 	}
 
+	return nil
+}
+
+// printSimpleList outputs providers as a simple list for non-interactive mode.
+func printSimpleList(providers []provider.Provider, out io.Writer) error {
+	for _, p := range providers {
+		desc := p.Descriptor()
+		fmt.Fprintf(out, "%-20s %s\n", desc.Name, desc.Description)
+	}
 	return nil
 }
 
@@ -676,7 +671,7 @@ func (o *Options) writeOutput(ctx context.Context, data any) error {
 		return o.writeQuietOutput(data)
 	}
 
-	// Use the shared kvx output infrastructure
+	// Use the shared kvx output infrastructure with display schema for rich TUI rendering
 	kvxOpts := flags.NewKvxOutputOptionsFromFlags(
 		o.Output,
 		o.Interactive,
@@ -684,13 +679,7 @@ func (o *Options) writeOutput(ctx context.Context, data any) error {
 		kvx.WithOutputContext(ctx),
 		kvx.WithOutputNoColor(o.CliParams.NoColor),
 		kvx.WithOutputAppName("scafctl get provider"),
-		kvx.WithOutputHelp("scafctl get provider", []string{
-			"Provider Information Viewer",
-			"",
-			"Navigate: ↑↓ arrows | Back: ← | Enter: →",
-			"Search: / or F3 | Expression: F6",
-			"Copy path: F5 | Quit: q or F10",
-		}),
+		kvx.WithOutputDisplaySchemaJSON(providerSchemaJSON),
 	)
 	kvxOpts.IOStreams = o.IOStreams
 
