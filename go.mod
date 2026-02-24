@@ -24,7 +24,7 @@ require (
 	github.com/hashicorp/go-plugin v1.7.0
 	github.com/hashicorp/go-retryablehttp v0.7.8
 	github.com/mark3labs/mcp-go v0.44.0
-	github.com/oakwood-commons/kvx v0.4.0
+	github.com/oakwood-commons/kvx v0.6.0
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/prometheus/client_golang v1.23.2
