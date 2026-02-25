@@ -15,6 +15,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
@@ -137,7 +138,7 @@ func runSave(ctx context.Context, opts *SaveOptions, ioStreams terminal.IOStream
 	// Execute resolvers
 	providerRegistry := provider.NewRegistry()
 	// Create adapter for registry
-	registryAdapter := &registryAdapter{registry: providerRegistry}
+	registryAdapter := execute.NewResolverRegistryAdapter(providerRegistry)
 	executor := resolver.NewExecutor(registryAdapter)
 	start := time.Now()
 	execCtx, err := executor.Execute(ctx, config.Resolvers, params)
@@ -199,29 +200,4 @@ func runSave(ctx context.Context, opts *SaveOptions, ioStreams terminal.IOStream
 	fmt.Fprintf(ioStreams.Out, "  Status: %s\n", snapshot.Metadata.Status)
 
 	return nil
-}
-
-// registryAdapter adapts provider.Registry to resolver.RegistryInterface
-type registryAdapter struct {
-	registry *provider.Registry
-}
-
-func (r *registryAdapter) Register(p provider.Provider) error {
-	return r.registry.Register(p)
-}
-
-func (r *registryAdapter) Get(name string) (provider.Provider, error) {
-	p, ok := r.registry.Get(name)
-	if !ok {
-		return nil, fmt.Errorf("provider %s not found", name)
-	}
-	return p, nil
-}
-
-func (r *registryAdapter) List() []provider.Provider {
-	return r.registry.ListProviders()
-}
-
-func (r *registryAdapter) DescriptorLookup() resolver.DescriptorLookup {
-	return r.registry.DescriptorLookup()
 }

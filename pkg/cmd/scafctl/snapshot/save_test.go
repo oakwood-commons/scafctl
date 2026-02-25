@@ -14,6 +14,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -268,7 +269,7 @@ resolvers:
 func TestRegistryAdapter_Register(t *testing.T) {
 	// This is a simple adapter test - detailed provider tests are in pkg/provider
 	registry := provider.NewRegistry()
-	adapter := &registryAdapter{registry: registry}
+	adapter := execute.NewResolverRegistryAdapter(registry)
 
 	// Should not panic
 	assert.NotPanics(t, func() {
@@ -278,7 +279,7 @@ func TestRegistryAdapter_Register(t *testing.T) {
 
 func TestRegistryAdapter_Get(t *testing.T) {
 	registry := provider.NewRegistry()
-	adapter := &registryAdapter{registry: registry}
+	adapter := execute.NewResolverRegistryAdapter(registry)
 
 	// Getting non-existent provider should return error
 	_, err := adapter.Get("nonexistent")
@@ -288,7 +289,7 @@ func TestRegistryAdapter_Get(t *testing.T) {
 
 func TestRegistryAdapter_List(t *testing.T) {
 	registry := provider.NewRegistry()
-	adapter := &registryAdapter{registry: registry}
+	adapter := execute.NewResolverRegistryAdapter(registry)
 
 	// Should not panic
 	assert.NotPanics(t, func() {

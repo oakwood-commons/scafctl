@@ -4,12 +4,6 @@
 package secrets
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -17,35 +11,24 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
+	"github.com/oakwood-commons/scafctl/pkg/secrets/secretcrypto"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/input"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
-	"golang.org/x/crypto/pbkdf2"
 	"gopkg.in/yaml.v3"
 )
 
-const (
-	exportVersion    = "scafctl-secrets-v1"
-	encryptedHeader  = "SCAFCTL-ENC-V1\n"
-	pbkdf2Iterations = 100000
-	pbkdf2KeySize    = 32
-	pbkdf2SaltSize   = 16
-)
+// ExportFormat is an alias for secretcrypto.ExportFormat.
+//
+// Deprecated: Use secretcrypto.ExportFormat from pkg/secrets/secretcrypto instead.
+type ExportFormat = secretcrypto.ExportFormat
 
-// ExportFormat represents the format for exported secrets.
-type ExportFormat struct {
-	Version    string           `json:"version" yaml:"version"`
-	ExportedAt string           `json:"exported_at" yaml:"exported_at"`
-	Secrets    []ExportedSecret `json:"secrets" yaml:"secrets"`
-}
-
-// ExportedSecret represents a single exported secret.
-type ExportedSecret struct {
-	Name  string `json:"name" yaml:"name"`
-	Value string `json:"value" yaml:"value"`
-}
+// ExportedSecret is an alias for secretcrypto.ExportedSecret.
+//
+// Deprecated: Use secretcrypto.ExportedSecret from pkg/secrets/secretcrypto instead.
+type ExportedSecret = secretcrypto.ExportedSecret
 
 // CommandExport creates the 'secrets export' command.
 func CommandExport(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Command {
@@ -106,7 +89,7 @@ By default, internal secrets (scafctl.*) are excluded.`,
 
 			// Retrieve all secret values
 			exportData := ExportFormat{
-				Version:    exportVersion,
+				Version:    secretcrypto.ExportVersion,
 				ExportedAt: time.Now().UTC().Format(time.RFC3339),
 				Secrets:    make([]ExportedSecret, 0, len(filtered)),
 			}
@@ -164,7 +147,7 @@ By default, internal secrets (scafctl.*) are excluded.`,
 					return exitcode.WithCode(err, exitcode.GeneralError)
 				}
 
-				exportBytes, err = encryptExport(exportBytes, password)
+				exportBytes, err = secretcrypto.Encrypt(exportBytes, password)
 				if err != nil {
 					err := fmt.Errorf("failed to encrypt export: %w", err)
 					w.Errorf("%v", err)
@@ -215,47 +198,4 @@ By default, internal secrets (scafctl.*) are excluded.`,
 	_ = cmd.MarkFlagRequired("output")
 
 	return cmd
-}
-
-// encryptExport encrypts export data with a password using PBKDF2 + AES-256-GCM.
-func encryptExport(data []byte, password string) ([]byte, error) {
-	// Generate random salt
-	salt := make([]byte, pbkdf2SaltSize)
-	if _, err := rand.Read(salt); err != nil {
-		return nil, fmt.Errorf("failed to generate salt: %w", err)
-	}
-
-	// Derive key from password
-	key := pbkdf2.Key([]byte(password), salt, pbkdf2Iterations, pbkdf2KeySize, sha256.New)
-
-	// Create cipher
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create cipher: %w", err)
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create GCM: %w", err)
-	}
-
-	// Generate nonce
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, fmt.Errorf("failed to generate nonce: %w", err)
-	}
-
-	// Encrypt
-	ciphertext := gcm.Seal(nonce, nonce, data, nil)
-
-	// Format: header + salt + iterations + ciphertext
-	iterationsBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(iterationsBytes, pbkdf2Iterations)
-
-	result := []byte(encryptedHeader)
-	result = append(result, salt...)
-	result = append(result, iterationsBytes...)
-	result = append(result, []byte(base64.StdEncoding.EncodeToString(ciphertext))...)
-
-	return result, nil
 }

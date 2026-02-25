@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/explain"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/inspect"
 )
 
 // Change represents a single structural difference between two solutions.
@@ -268,12 +268,12 @@ func Compare(solA, solB *solution.Solution) *Result {
 
 // CompareFiles loads two solution files and compares them structurally.
 func CompareFiles(ctx context.Context, pathA, pathB string) (*Result, error) {
-	solA, err := explain.LoadSolution(ctx, pathA)
+	solA, err := inspect.LoadSolution(ctx, pathA)
 	if err != nil {
 		return nil, fmt.Errorf("loading solution A (%s): %w", pathA, err)
 	}
 
-	solB, err := explain.LoadSolution(ctx, pathB)
+	solB, err := inspect.LoadSolution(ctx, pathB)
 	if err != nil {
 		return nil, fmt.Errorf("loading solution B (%s): %w", pathB, err)
 	}

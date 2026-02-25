@@ -5,10 +5,8 @@ Go-based CLI tool using CEL (Common Expression Language) for dynamic configurati
 
 ## Key Patterns
 
-### Logging
-Uses **logr/zapr**. Context-aware: `logger.FromContext(ctx)`, `logger.WithLogger(ctx, lgr)`
-
 ### CLI Output (`pkg/terminal/writer/`)
+
 Use **Writer** for all terminal output—**never** use `fmt.Fprintf` directly.
 - Get via `writer.FromContext(ctx)` or `writer.MustFromContext(ctx)`
 - Respects `--quiet` and `--no-color` flags automatically
@@ -91,5 +89,7 @@ go test ./...                    # Run all tests
 golangci-lint run --fix          # Run Linter and auto-fix issues
 
 ```
+
+**IMPORTANT**: Never include business logic in CLI command packages (`pkg/cmd/scafctl/...`), MCP handler files (`pkg/mcp/tools_*.go`) or API packages (future) instead, put it into proper shared domain packages (`pkg/...`)
 
 **Note**: The project uses `task` (go-task/task) as a convenience wrapper, but AI agents should use raw Go commands for clarity and portability.

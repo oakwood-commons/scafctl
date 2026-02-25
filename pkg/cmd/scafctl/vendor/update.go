@@ -5,8 +5,6 @@ package vendor
 
 import (
 	"context"
-	"crypto/sha256"
-	"fmt"
 	"os"
 	"path/filepath"
 
@@ -90,18 +88,6 @@ func CommandUpdate(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 	return cmd
 }
 
-// updateEntry tracks the state of a single dependency update.
-type updateEntry struct {
-	ref           string
-	lockedVersion string
-	lockedDigest  string
-	latestVersion string
-	latestDigest  string
-	content       []byte
-	info          catalog.ArtifactInfo
-	needsUpdate   bool
-}
-
 func runVendorUpdate(ctx context.Context, opts *UpdateOptions) error {
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
@@ -149,12 +135,12 @@ func runVendorUpdate(ctx context.Context, opts *UpdateOptions) error {
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
-	fetcher := &catalogFetcherAdapter{catalog: localCatalog}
+	fetcher := &bundler.LocalCatalogFetcherAdapter{Catalog: localCatalog}
 
 	// Filter dependencies if --dependency was specified
 	deps := existingLock.Dependencies
 	if len(opts.Dependencies) > 0 {
-		deps, err = filterDependencies(existingLock.Dependencies, opts.Dependencies)
+		deps, err = bundler.FilterDependencies(existingLock.Dependencies, opts.Dependencies)
 		if err != nil {
 			w.Errorf("%v", err)
 			return exitcode.WithCode(err, exitcode.InvalidInput)
@@ -170,75 +156,42 @@ func runVendorUpdate(ctx context.Context, opts *UpdateOptions) error {
 	}
 	w.Plainf("")
 
-	var entries []updateEntry
+	entries, err := bundler.CheckForUpdates(ctx, deps, fetcher, *lgr)
+	if err != nil {
+		w.Errorf("failed to check for updates: %v", err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
+	}
+
 	var updateCount int
-
-	for _, dep := range deps {
-		entry := updateEntry{
-			ref:           dep.Ref,
-			lockedVersion: extractVersionFromRef(dep.Ref),
-			lockedDigest:  dep.Digest,
-		}
-
-		// Re-resolve from catalog
-		latestContent, latestInfo, fetchErr := fetcher.FetchSolution(ctx, dep.Ref)
-		if fetchErr != nil {
-			lgr.V(1).Info("failed to re-resolve dependency", "ref", dep.Ref, "error", fetchErr)
-			w.Plainf("  ✗ %s: failed to resolve (%v)", dep.Ref, fetchErr)
-			entries = append(entries, entry)
-			continue
-		}
-
-		latestDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(latestContent))
-		entry.latestVersion = extractVersionFromRef(dep.Ref)
-		if latestInfo.Reference.Version != nil {
-			entry.latestVersion = latestInfo.Reference.Version.String()
-		}
-		entry.latestDigest = latestDigest
-		entry.content = latestContent
-		entry.info = latestInfo
-
-		if latestDigest != dep.Digest {
-			entry.needsUpdate = true
+	for _, entry := range entries {
+		if entry.NeedsUpdate {
 			updateCount++
 		}
-
-		entries = append(entries, entry)
+		if entry.LatestDigest == "" && entry.NeedsUpdate {
+			w.Plainf("  ✗ %s: failed to resolve", entry.Ref)
+		}
 	}
 
 	// Print status
 	for _, entry := range entries {
-		if entry.needsUpdate {
+		if entry.NeedsUpdate {
 			if opts.DryRun {
-				w.Plainf("  %s:", entry.ref)
-				w.Plainf("    locked:   %s (%s)", entry.lockedVersion, truncateDigest(entry.lockedDigest))
-				w.Plainf("    latest:   %s (%s)", entry.latestVersion, truncateDigest(entry.latestDigest))
+				w.Plainf("  %s:", entry.Ref)
+				w.Plainf("    locked:   %s (%s)", entry.LockedVersion, bundler.TruncateDigest(entry.LockedDigest))
+				w.Plainf("    latest:   %s (%s)", entry.LatestVersion, bundler.TruncateDigest(entry.LatestDigest))
 				w.Plainf("    action:   would update")
 			} else {
-				// Write vendored file
-				if !opts.LockOnly {
-					vendorDir := filepath.Join(bundleRoot, bundler.VendorDirName)
-					vendoredName := bundler.VendorFileNameFromRef(entry.ref, entry.info)
-					vendorPath := filepath.Join(vendorDir, vendoredName)
-
-					if err := os.MkdirAll(filepath.Dir(vendorPath), 0o755); err != nil {
-						w.Errorf("failed to create vendor directory: %v", err)
-						return exitcode.WithCode(err, exitcode.GeneralError)
-					}
-					if err := os.WriteFile(vendorPath, entry.content, 0o600); err != nil {
-						w.Errorf("failed to write vendored file: %v", err)
-						return exitcode.WithCode(err, exitcode.GeneralError)
-					}
-				}
-				w.Successf("  %s: %s → %s", entry.ref, truncateDigest(entry.lockedDigest), truncateDigest(entry.latestDigest))
+				w.Successf("  %s: %s → %s", entry.Ref, bundler.TruncateDigest(entry.LockedDigest), bundler.TruncateDigest(entry.LatestDigest))
 			}
-		} else if entry.latestDigest != "" {
-			w.Plainf("  • %s: up to date", entry.ref)
+		} else if entry.LatestDigest != "" {
+			w.Plainf("  • %s: up to date", entry.Ref)
 		}
 	}
 
 	// Also check plugin dependencies
-	checkPluginUpdates(ctx, existingLock, w)
+	for _, msg := range bundler.CheckPluginUpdates(existingLock) {
+		w.Plainf("%s", msg)
+	}
 
 	w.Plainf("")
 
@@ -251,31 +204,11 @@ func runVendorUpdate(ctx context.Context, opts *UpdateOptions) error {
 		return nil
 	}
 
-	// Update lock file
-	newLock := &bundler.LockFile{
-		Version:      bundler.LockFileVersion,
-		Dependencies: make([]bundler.LockDependency, 0, len(existingLock.Dependencies)),
-		Plugins:      existingLock.Plugins, // preserve existing plugin entries
-	}
-
-	// Rebuild dependency list with updates
-	for _, dep := range existingLock.Dependencies {
-		updated := false
-		for _, entry := range entries {
-			if entry.ref == dep.Ref && entry.needsUpdate {
-				newLock.Dependencies = append(newLock.Dependencies, bundler.LockDependency{
-					Ref:          entry.ref,
-					Digest:       entry.latestDigest,
-					ResolvedFrom: entry.info.Catalog,
-					VendoredAt:   dep.VendoredAt,
-				})
-				updated = true
-				break
-			}
-		}
-		if !updated {
-			newLock.Dependencies = append(newLock.Dependencies, dep)
-		}
+	// Apply updates: write vendored files and build new lock
+	newLock, err := bundler.ApplyUpdates(entries, existingLock, bundleRoot, opts.LockOnly, *lgr)
+	if err != nil {
+		w.Errorf("failed to apply updates: %v", err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
 	if err := bundler.WriteLockFile(lockPath, newLock); err != nil {
@@ -286,77 +219,4 @@ func runVendorUpdate(ctx context.Context, opts *UpdateOptions) error {
 	w.Successf("Updated %s", bundler.DefaultLockFileName)
 
 	return nil
-}
-
-// filterDependencies returns only the dependencies whose refs match the filter list.
-func filterDependencies(deps []bundler.LockDependency, filter []string) ([]bundler.LockDependency, error) {
-	filterSet := make(map[string]bool)
-	for _, f := range filter {
-		filterSet[f] = true
-	}
-
-	var result []bundler.LockDependency
-	for _, dep := range deps {
-		if filterSet[dep.Ref] {
-			result = append(result, dep)
-			delete(filterSet, dep.Ref)
-		}
-	}
-
-	for f := range filterSet {
-		return nil, fmt.Errorf("dependency %q not found in lock file", f)
-	}
-
-	return result, nil
-}
-
-// extractVersionFromRef extracts the version part from a catalog reference.
-func extractVersionFromRef(ref string) string {
-	for i := len(ref) - 1; i >= 0; i-- {
-		if ref[i] == '@' {
-			return ref[i+1:]
-		}
-	}
-	return "latest"
-}
-
-// truncateDigest truncates a digest for display.
-func truncateDigest(digest string) string {
-	if len(digest) > 19 {
-		return digest[:19] + "..."
-	}
-	return digest
-}
-
-// catalogFetcherAdapter adapts LocalCatalog to the CatalogFetcher interface.
-type catalogFetcherAdapter struct {
-	catalog *catalog.LocalCatalog
-}
-
-func (a *catalogFetcherAdapter) FetchSolution(ctx context.Context, nameWithVersion string) ([]byte, catalog.ArtifactInfo, error) {
-	ref, err := catalog.ParseReference(catalog.ArtifactKindSolution, nameWithVersion)
-	if err != nil {
-		return nil, catalog.ArtifactInfo{}, fmt.Errorf("invalid reference %q: %w", nameWithVersion, err)
-	}
-
-	content, info, err := a.catalog.Fetch(ctx, ref)
-	if err != nil {
-		return nil, catalog.ArtifactInfo{}, err
-	}
-
-	return content, info, nil
-}
-
-// ListSolutions returns all available versions of a named solution artifact.
-func (a *catalogFetcherAdapter) ListSolutions(ctx context.Context, name string) ([]catalog.ArtifactInfo, error) {
-	return a.catalog.List(ctx, catalog.ArtifactKindSolution, name)
-}
-
-// checkPluginUpdates reports the locked state of plugin dependencies.
-// Plugin version resolution requires a plugin registry; for now we just
-// report the locked state since plugins are binary artifacts.
-func checkPluginUpdates(_ context.Context, lock *bundler.LockFile, w *writer.Writer) {
-	for _, p := range lock.Plugins {
-		w.Plainf("  • %s (%s): %s (locked at %s)", p.Name, p.Kind, p.Version, truncateDigest(p.Digest))
-	}
 }

@@ -5,10 +5,9 @@ package cache
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	cachelib "github.com/oakwood-commons/scafctl/pkg/cache"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -25,23 +24,15 @@ type InfoOptions struct {
 	flags.KvxOutputFlags
 }
 
-// Info represents information about a cache directory.
-type Info struct {
-	Name        string `json:"name" yaml:"name"`
-	Path        string `json:"path" yaml:"path"`
-	Size        int64  `json:"size" yaml:"size"`
-	SizeHuman   string `json:"sizeHuman" yaml:"sizeHuman"`
-	FileCount   int64  `json:"fileCount" yaml:"fileCount"`
-	Description string `json:"description" yaml:"description"`
-}
+// Info is an alias for cache.Info.
+//
+// Deprecated: Use cache.Info from pkg/cache instead.
+type Info = cachelib.Info
 
-// InfoOutput represents the info command output.
-type InfoOutput struct {
-	Caches     []Info `json:"caches" yaml:"caches"`
-	TotalSize  int64  `json:"totalSize" yaml:"totalSize"`
-	TotalHuman string `json:"totalHuman" yaml:"totalHuman"`
-	TotalFiles int64  `json:"totalFiles" yaml:"totalFiles"`
-}
+// InfoOutput is an alias for cache.InfoOutput.
+//
+// Deprecated: Use cache.InfoOutput from pkg/cache instead.
+type InfoOutput = cachelib.InfoOutput
 
 // CommandInfo creates the info command.
 func CommandInfo(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
@@ -83,8 +74,8 @@ func runInfo(ctx context.Context, _ *InfoOptions, outputOpts *kvx.OutputOptions)
 
 	// Collect cache info
 	caches := []Info{
-		getCacheInfo("HTTP Cache", paths.HTTPCacheDir(), "HTTP response cache"),
-		getCacheInfo("Build Cache", paths.BuildCacheDir(), "Incremental build fingerprints"),
+		cachelib.GetCacheInfo("HTTP Cache", paths.HTTPCacheDir(), "HTTP response cache"),
+		cachelib.GetCacheInfo("Build Cache", paths.BuildCacheDir(), "Incremental build fingerprints"),
 	}
 
 	// Calculate totals
@@ -98,7 +89,7 @@ func runInfo(ctx context.Context, _ *InfoOptions, outputOpts *kvx.OutputOptions)
 	output := InfoOutput{
 		Caches:     caches,
 		TotalSize:  totalSize,
-		TotalHuman: formatBytes(totalSize),
+		TotalHuman: cachelib.FormatBytes(totalSize),
 		TotalFiles: totalFiles,
 	}
 
@@ -128,33 +119,4 @@ func runInfo(ctx context.Context, _ *InfoOptions, outputOpts *kvx.OutputOptions)
 	w.Plainf("Total: %s (%d files)\n", output.TotalHuman, output.TotalFiles)
 
 	return nil
-}
-
-// getCacheInfo returns information about a cache directory.
-func getCacheInfo(name, dir, description string) Info {
-	info := Info{
-		Name:        name,
-		Path:        dir,
-		Description: description,
-	}
-
-	// Check if directory exists
-	stat, err := os.Stat(dir)
-	if os.IsNotExist(err) || !stat.IsDir() {
-		info.SizeHuman = "0 B"
-		return info
-	}
-
-	// Calculate size and file count
-	_ = filepath.Walk(dir, func(_ string, fileInfo os.FileInfo, walkErr error) error {
-		if walkErr != nil || fileInfo.IsDir() {
-			return nil //nolint:nilerr // Intentionally ignoring walk errors
-		}
-		info.Size += fileInfo.Size()
-		info.FileCount++
-		return nil
-	})
-
-	info.SizeHuman = formatBytes(info.Size)
-	return info
 }
