@@ -79,6 +79,11 @@ const (
 
 	// FlowGcloudADC is authentication using gcloud's Application Default Credentials file.
 	FlowGcloudADC Flow = "gcloud_adc"
+
+	// FlowGitHubApp is authentication using a GitHub App installation token.
+	// A JWT is minted from the App's private key and exchanged for a short-lived
+	// installation access token.
+	FlowGitHubApp Flow = "github_app"
 )
 
 // DefaultMinValidFor is the default minimum validity duration for tokens.

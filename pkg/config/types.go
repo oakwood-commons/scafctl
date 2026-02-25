@@ -297,12 +297,33 @@ type GitHubAuthConfig struct {
 	// If not set, uses the default scafctl OAuth App client ID.
 	ClientID string `json:"clientId,omitempty" yaml:"clientId,omitempty" mapstructure:"clientId" doc:"GitHub OAuth App client ID" maxLength:"40"`
 
+	// ClientSecret is the GitHub OAuth App client secret.
+	// Required for the interactive (browser authorization code + PKCE) flow.
+	// When not set, the interactive flow automatically uses device code with
+	// browser auto-open — the same behaviour as 'gh auth login'.
+	ClientSecret string `json:"clientSecret,omitempty" yaml:"clientSecret,omitempty" mapstructure:"clientSecret" doc:"GitHub OAuth App client secret (required for browser auth code flow)" maxLength:"64"` //nolint:gosec // G117: config field, not a hardcoded credential
+
 	// Hostname sets the GitHub hostname for enterprise server (GHES).
 	// Defaults to "github.com".
 	Hostname string `json:"hostname,omitempty" yaml:"hostname,omitempty" mapstructure:"hostname" doc:"GitHub hostname" example:"github.com" maxLength:"253"`
 
 	// DefaultScopes are requested during login if not specified on command line.
 	DefaultScopes []string `json:"defaultScopes,omitempty" yaml:"defaultScopes,omitempty" mapstructure:"defaultScopes" doc:"Default OAuth scopes" maxItems:"20"`
+
+	// AppID is the GitHub App ID for the installation token flow.
+	AppID int64 `json:"appId,omitempty" yaml:"appId,omitempty" mapstructure:"appId" doc:"GitHub App ID for installation token flow" example:"123456"`
+
+	// InstallationID is the GitHub App installation ID.
+	InstallationID int64 `json:"installationId,omitempty" yaml:"installationId,omitempty" mapstructure:"installationId" doc:"GitHub App installation ID" example:"78901234"`
+
+	// PrivateKeyPath is the file path to the PEM-encoded private key for the GitHub App.
+	PrivateKeyPath string `json:"privateKeyPath,omitempty" yaml:"privateKeyPath,omitempty" mapstructure:"privateKeyPath" doc:"File path to PEM-encoded private key for the GitHub App" example:"/path/to/private-key.pem" maxLength:"1024"`
+
+	// PrivateKey is the inline PEM-encoded private key for the GitHub App.
+	PrivateKey string `json:"privateKey,omitempty" yaml:"privateKey,omitempty" mapstructure:"privateKey" doc:"Inline PEM-encoded private key for the GitHub App" maxLength:"8192"` //nolint:gosec // Field name, not a credential
+
+	// PrivateKeySecretName is the name of the secret store entry containing the private key.
+	PrivateKeySecretName string `json:"privateKeySecretName,omitempty" yaml:"privateKeySecretName,omitempty" mapstructure:"privateKeySecretName" doc:"Secret store key for the GitHub App private key" maxLength:"255"`
 }
 
 // GCPAuthConfig contains GCP-specific configuration.
