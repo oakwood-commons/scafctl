@@ -4,8 +4,11 @@
 package github
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"time"
@@ -18,6 +21,9 @@ import (
 type HTTPClient interface {
 	// PostForm sends a POST request with form-encoded body and returns the response.
 	PostForm(ctx context.Context, url string, data url.Values) (*http.Response, error)
+
+	// PostJSON sends a POST request with JSON body and custom headers.
+	PostJSON(ctx context.Context, url string, body any, headers map[string]string) (*http.Response, error)
 
 	// Get sends a GET request with the given headers and returns the response.
 	Get(ctx context.Context, url string, headers map[string]string) (*http.Response, error)
@@ -64,6 +70,29 @@ func (c *DefaultHTTPClient) Get(ctx context.Context, reqURL string, headers map[
 		return nil, fmt.Errorf("creating GET request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	return c.client.Do(req)
+}
+
+// PostJSON sends a POST request with a JSON body and custom headers.
+func (c *DefaultHTTPClient) PostJSON(ctx context.Context, reqURL string, body any, headers map[string]string) (*http.Response, error) {
+	var bodyReader io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return nil, fmt.Errorf("marshaling JSON body: %w", err)
+		}
+		bodyReader = bytes.NewReader(data)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bodyReader)
+	if err != nil {
+		return nil, fmt.Errorf("creating POST request: %w", err)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Content-Type", "application/json")
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}

@@ -52,8 +52,14 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 			- workload-identity: Kubernetes workload identity (AKS)
 
 			For the 'github' handler, this supports:
-			- device-code: Interactive authentication via browser (default)
+			- interactive: Opens browser for authentication (default).
+			            Without 'clientSecret' configured: uses device code flow with automatic
+			            browser open (identical to 'gh auth login'). With 'clientSecret'
+			            configured in scafctl config: uses OAuth Authorization Code + PKCE.
+			- device-code: Device code flow without browser auto-open; prints a code and URL
+			               for manual entry (headless/SSH/CI use).
 			- pat: Personal access token from environment variables (GITHUB_TOKEN or GH_TOKEN)
+			- github-app: GitHub App installation token (for CI/automation)
 
 			For the 'gcp' handler, this supports:
 			- interactive: Browser-based OAuth (default for workstations)
@@ -77,7 +83,10 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 			- --federated-token flag: Pass token directly (for testing)
 
 			By default, the Entra device code flow uses the Azure CLI's public client ID.
-			The GitHub device code flow uses the scafctl OAuth App client ID.
+			The default GitHub interactive flow uses the built-in OAuth App client ID with
+			device code + automatic browser open (no client secret required).
+			To use browser redirect (Authorization Code + PKCE), configure 'auth.github.clientSecret'
+			in the scafctl config file and use --client-id with your OAuth App's client ID.
 			Use --client-id to specify a custom application registration.
 
 			Supported handlers:
@@ -89,8 +98,14 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 			  # Login with Entra ID using device code flow (default)
 			  scafctl auth login entra
 
-			  # Login with GitHub using device code flow (default)
+			  # Login with GitHub (default: device code + browser auto-open, like 'gh auth login')
 			  scafctl auth login github
+
+			  # Login with GitHub using browser redirect (requires clientSecret in config)
+			  scafctl auth login github --client-id <your-oauth-app-client-id>
+
+			  # Login with GitHub headless device code (SSH/CI: prints code+URL, no browser)
+			  scafctl auth login github --flow device-code
 
 			  # Login with GitHub Enterprise Server
 			  scafctl auth login github --hostname github.example.com
@@ -205,7 +220,7 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 			// Route to handler-specific login logic
 			switch handlerName {
 			case "github":
-				return loginGitHub(ctx, w, flow, hostname, clientID, timeout, scopes, force, skipIfAuthenticated)
+				return loginGitHub(ctx, w, flow, hostname, clientID, callbackPort, timeout, scopes, force, skipIfAuthenticated)
 			case "gcp":
 				return loginGCP(ctx, w, flow, clientID, impersonateServiceAccount, callbackPort, timeout, scopes, force, skipIfAuthenticated)
 			default:
@@ -230,18 +245,18 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 }
 
 // loginGitHub handles the login flow for the GitHub auth handler.
-func loginGitHub(ctx context.Context, w *writer.Writer, flow auth.Flow, hostname, clientID string, timeout time.Duration, scopes []string, force, skipIfAuthenticated bool) error {
+func loginGitHub(ctx context.Context, w *writer.Writer, flow auth.Flow, hostname, clientID string, callbackPort int, timeout time.Duration, scopes []string, force, skipIfAuthenticated bool) error {
 	// Auto-detect PAT if env vars are set and no explicit flow.
 	// Skip auto-detection when user provides --scope flags, since scopes
-	// only apply to the device code flow (PAT scopes are fixed at creation).
+	// only apply to the device code / interactive flows (PAT scopes are fixed at creation).
 	if flow == "" && ghauth.HasPATCredentials() && len(scopes) == 0 {
 		flow = auth.FlowPAT
 		w.Info("Detected GitHub token in environment variables")
 	}
 
-	// Default to device code
+	// Default to interactive (browser/PKCE)
 	if flow == "" {
-		flow = auth.FlowDeviceCode
+		flow = auth.FlowInteractive
 	}
 
 	// Get or create handler
@@ -276,7 +291,7 @@ func loginGitHub(ctx context.Context, w *writer.Writer, flow auth.Flow, hostname
 		}
 	}
 
-	return executeLogin(ctx, w, handler, flow, "", 0, timeout, scopes)
+	return executeLogin(ctx, w, handler, flow, "", callbackPort, timeout, scopes)
 }
 
 // loginGCP handles the login flow for the GCP auth handler.

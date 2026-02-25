@@ -48,6 +48,74 @@ func (h *Handler) deviceCodeLogin(ctx context.Context, opts auth.LoginOptions) (
 	return h.performDeviceCodeFlow(ctx, opts, scopes)
 }
 
+// interactiveDeviceCodeLogin is the default interactive GitHub login. It runs
+// the device code flow but automatically opens the browser to the verification
+// URI before prompting the user — matching the behaviour of 'gh auth login'.
+// This is used when no client_secret is configured (the common case with the
+// built-in OAuth App client ID, which only supports device flow).
+func (h *Handler) interactiveDeviceCodeLogin(ctx context.Context, opts auth.LoginOptions) (*auth.Result, error) {
+	lgr := logger.FromContext(ctx)
+	lgr.V(1).Info("starting GitHub interactive flow (device code with browser auto-open)")
+
+	scopes := opts.Scopes
+	if len(scopes) == 0 {
+		scopes = h.config.DefaultScopes
+	}
+	timeout := opts.Timeout
+	if timeout == 0 {
+		timeout = DefaultTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	// Get device code first so we can open the browser
+	deviceCode, err := h.requestDeviceCode(ctx, scopes)
+	if err != nil {
+		return nil, auth.NewError(HandlerName, "device_code_request", err)
+	}
+
+	lgr.V(1).Info("device code obtained",
+		"userCode", deviceCode.UserCode,
+		"verificationURI", deviceCode.VerificationURI,
+	)
+
+	// Open browser to the device verification page
+	if err := BrowserOpener(ctx, deviceCode.VerificationURI); err != nil {
+		lgr.V(0).Info("could not open browser automatically", "url", deviceCode.VerificationURI)
+	}
+
+	// Notify callback (for CLI display of code + URL fallback)
+	if opts.DeviceCodeCallback != nil {
+		opts.DeviceCodeCallback(deviceCode.UserCode, deviceCode.VerificationURI, "")
+	}
+
+	// Poll for token
+	tokenResp, err := h.pollForToken(ctx, deviceCode)
+	if err != nil {
+		return nil, auth.NewError(HandlerName, "token_poll", err)
+	}
+
+	claims, err := h.storeCredentials(ctx, tokenResp, scopes, "")
+	if err != nil {
+		return nil, auth.NewError(HandlerName, "store_credentials", err)
+	}
+
+	lgr.V(1).Info("interactive authentication successful",
+		"subject", claims.Subject,
+		"name", claims.Name,
+	)
+
+	expiresAt := time.Now().Add(8 * time.Hour)
+	if tokenResp.RefreshTokenExpiresIn > 0 {
+		expiresAt = time.Now().Add(time.Duration(tokenResp.RefreshTokenExpiresIn) * time.Second)
+	}
+
+	return &auth.Result{
+		Claims:    claims,
+		ExpiresAt: expiresAt,
+	}, nil
+}
+
 // performDeviceCodeFlow executes the device code authentication flow.
 func (h *Handler) performDeviceCodeFlow(ctx context.Context, opts auth.LoginOptions, scopes []string) (*auth.Result, error) {
 	lgr := logger.FromContext(ctx)
