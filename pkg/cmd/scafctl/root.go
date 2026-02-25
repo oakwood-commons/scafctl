@@ -197,6 +197,8 @@ func Root(opts *RootOptions) *cobra.Command {
 				ServiceVersion:   settings.VersionInformation.BuildVersion,
 				ExporterEndpoint: otelEndpoint,
 				ExporterInsecure: resolvedOtelInsecure,
+				SamplerType:      cfg.Telemetry.SamplerType,
+				SamplerArg:       cfg.Telemetry.SamplerArg,
 			})
 			if err != nil {
 				_, _ = ioStreams.ErrOut.Write([]byte("Warning: failed to initialize telemetry: " + err.Error() + "\n"))

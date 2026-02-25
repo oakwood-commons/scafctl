@@ -6,8 +6,8 @@ weight: 96
 # Telemetry Tutorial
 
 scafctl emits **all three OpenTelemetry signals** — logs, traces, and metrics.
-By default everything stays local (stderr + Prometheus `/metrics`). When you
-point scafctl at an OTLP endpoint every signal is exported for backend analysis.
+By default, telemetry is silent (noop providers). When you point scafctl at an
+OTLP endpoint every signal is exported for backend analysis.
 
 ---
 
@@ -15,8 +15,8 @@ point scafctl at an OTLP endpoint every signal is exported for backend analysis.
 
 | Signal  | Default output | With `--otel-endpoint` |
 |---------|---------------|------------------------|
-| Logs    | slog text/JSON → stderr | Also batched via OTLP gRPC |
-| Traces  | JSON spans → stderr | Exported via OTLP gRPC |
+| Logs    | slog text/JSON → stderr (via `--log-level`) | Also batched via OTLP gRPC |
+| Traces  | Disabled (noop) | Exported via OTLP gRPC |
 | Metrics | Prometheus `/metrics` (MCP server) | Also pushed via OTLP gRPC |
 
 ---
@@ -38,7 +38,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4317 \
 
 | Flag | Env override | Default | Description |
 |------|-------------|---------|-------------|
-| `--otel-endpoint` | `OTEL_EXPORTER_OTLP_ENDPOINT` | _(none)_ | OTLP gRPC endpoint. When unset, traces go to stderr as JSON. |
+| `--otel-endpoint` | `OTEL_EXPORTER_OTLP_ENDPOINT` | _(none)_ | OTLP gRPC endpoint. When unset, tracing is disabled (noop). |
 | `--otel-insecure` | _(none)_ | `false` | Skip TLS verification. Use in local dev only. |
 
 ---
@@ -51,10 +51,12 @@ Logs use the `go-logr/logr` interface throughout the codebase. The underlying
 sink is a `multiSink` that fans out to:
 
 1. **slog handler** → stderr (text or JSON via `--log-format`)
-2. **otellogr bridge** → OTel `LoggerProvider` → OTLP when configured
+2. **otellogr bridge** → OTel `LoggerProvider` → OTLP when `--otel-endpoint` is set
 
-When an active span is in scope, the OTLP log record carries the `trace_id` and
-`span_id` automatically (correlation without any extra code).
+When no OTLP endpoint is configured, only the slog handler is active — no OTel
+log records are emitted to stderr. When an active span is in scope, the OTLP log
+record carries the `trace_id` and `span_id` automatically (correlation without
+any extra code).
 
 Control verbosity:
 
@@ -90,26 +92,16 @@ All spans propagate W3C `traceparent` / `tracestate` headers on outbound HTTP
 requests via `otelhttp.NewTransport`, enabling distributed tracing when calling
 instrumented backends.
 
-#### Local trace output (no collector)
+#### Local trace debugging
 
-Without `--otel-endpoint`, traces are written to **stderr** as pretty-printed
-JSON. This is useful for quick debugging:
+Without `--otel-endpoint`, tracing is disabled (noop). To inspect traces locally,
+run a local collector such as [otel-desktop-viewer](https://github.com/CtrlSpice/otel-desktop-viewer)
+or Jaeger and point scafctl at it:
 
 ```bash
-unset OTEL_EXPORTER_OTLP_ENDPOINT
-scafctl run solution -f solution.yaml 2>&1 | grep '"Name"' | head -10
-```
-
-Example output:
-
-```json
-{
-  "Name": "resolver.Execute",
-  "SpanContext": { "TraceID": "...", "SpanID": "..." },
-  "StartTime": "2026-02-24T10:00:00Z",
-  "EndTime":   "2026-02-24T10:00:01Z",
-  "Attributes": [{"Key":"resolver.count","Value":{"Type":"INT64","Value":3}}]
-}
+# Start local Jaeger (see examples/telemetry/ for Docker Compose)
+OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4317 \
+  scafctl run solution -f solution.yaml --otel-insecure
 ```
 
 ### Metrics

@@ -30,6 +30,11 @@ const (
 	// CapFederatedToken indicates the handler supports federated token input.
 	// Entra uses this for workload identity (Kubernetes) authentication.
 	CapFederatedToken Capability = "federated_token"
+
+	// CapCallbackPort indicates the handler supports binding the OAuth callback
+	// server to a specific port via --callback-port. Handlers that use the
+	// authorization code + PKCE flow (Entra, GCP) advertise this capability.
+	CapCallbackPort Capability = "callback_port"
 )
 
 // HasCapability checks if a set of capabilities includes the specified capability.

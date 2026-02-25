@@ -86,13 +86,14 @@ Auth handlers are not action providers and do not perform side effects outside a
 
 Each handler declares a set of capabilities that describe which features it supports. CLI commands use these capabilities to dynamically validate flags and provide meaningful errors.
 
-| Capability | Description | Entra | GitHub |
-|------------|-------------|-------|--------|
-| `scopes_on_login` | Supports specifying scopes at login time | ✅ | ✅ |
-| `scopes_on_token_request` | Supports per-request scopes when acquiring tokens | ✅ | ❌ |
-| `tenant_id` | Supports tenant ID parameter | ✅ | ❌ |
-| `hostname` | Supports hostname parameter (enterprise/self-hosted) | ❌ | ✅ |
-| `federated_token` | Supports federated token input (workload identity) | ✅ | ❌ |
+| Capability | Description | Entra | GitHub | GCP |
+|------------|-------------|-------|--------|-----|
+| `scopes_on_login` | Supports specifying scopes at login time | ✅ | ✅ | ✅ |
+| `scopes_on_token_request` | Supports per-request scopes when acquiring tokens | ✅ | ❌ | ✅ |
+| `tenant_id` | Supports tenant ID parameter | ✅ | ❌ | ❌ |
+| `hostname` | Supports hostname parameter (enterprise/self-hosted) | ❌ | ✅ | ❌ |
+| `federated_token` | Supports federated token input (workload identity) | ✅ | ❌ | ✅ |
+| `callback_port` | Supports `--callback-port` for fixed OAuth redirect URI | ✅ | ❌ | ✅ |
 
 **Why capabilities matter**: GitHub's OAuth does not support changing scopes on token refresh — scopes are fixed at login time. Entra ID supports requesting different resource scopes per token request. Instead of hardcoding these differences in CLI commands, each handler declares its capabilities, and the CLI validates flags accordingly.
 
@@ -130,6 +131,30 @@ Behavior:
 - No provider execution occurs
 
 This establishes a local identity context for future runs.
+
+### Authorization Code + PKCE Flow (Default Interactive)
+
+The default interactive flow uses OAuth 2.0 Authorization Code with PKCE. It opens a browser to the Entra authorize endpoint and listens on a local HTTP server for the redirect callback:
+
+~~~bash
+# Default — uses ephemeral port
+scafctl auth login entra
+
+# Fixed port — for app registrations with specific redirect URIs
+scafctl auth login entra --callback-port 8400
+~~~
+
+Behavior:
+
+- Starts a local HTTP callback server on `localhost` (ephemeral or fixed port)
+- Generates PKCE code verifier and challenge
+- Opens the browser to the Entra `/authorize` endpoint
+- Receives the authorization code via redirect, exchanges it for tokens
+- Stores refresh token and metadata in the secret store
+
+The `--callback-port` flag binds the callback server to a specific port so the redirect URI is predictable (e.g., `http://localhost:8400`). This is necessary when the app registration only allows specific redirect URIs. When omitted, the OS assigns an ephemeral port.
+
+**AADSTS500113 handling**: When the redirect URI is not registered on the app, Entra shows an error in the browser but never redirects to the callback server. The CLI detects this scenario by providing an informative timeout message that suggests registering `http://localhost` as a redirect URI or using `--flow device-code`.
 
 ### Service Principal Flow (Non-Interactive)
 

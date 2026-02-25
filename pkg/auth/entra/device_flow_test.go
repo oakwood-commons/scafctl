@@ -59,6 +59,7 @@ func TestDeviceCodeLogin_Success(t *testing.T) {
 	var receivedUserCode string
 
 	result, err := handler.Login(ctx, auth.LoginOptions{
+		Flow:    auth.FlowDeviceCode,
 		Timeout: 30 * time.Second,
 		DeviceCodeCallback: func(userCode, verificationURI, message string) {
 			callbackCalled = true
@@ -109,6 +110,7 @@ func TestDeviceCodeLogin_CustomTenantAndScopes(t *testing.T) {
 	})
 
 	_, err = handler.Login(ctx, auth.LoginOptions{
+		Flow:     auth.FlowDeviceCode,
 		TenantID: "custom-tenant",
 		Scopes:   []string{"custom-scope"},
 		Timeout:  30 * time.Second,
@@ -162,6 +164,7 @@ func TestDeviceCodeLogin_AuthorizationPending(t *testing.T) {
 	})
 
 	result, err := handler.Login(ctx, auth.LoginOptions{
+		Flow:    auth.FlowDeviceCode,
 		Timeout: 30 * time.Second,
 	})
 
@@ -200,6 +203,7 @@ func TestDeviceCodeLogin_UserDeclined(t *testing.T) {
 	})
 
 	_, err = handler.Login(ctx, auth.LoginOptions{
+		Flow:    auth.FlowDeviceCode,
 		Timeout: 30 * time.Second,
 	})
 
@@ -237,6 +241,7 @@ func TestDeviceCodeLogin_Timeout(t *testing.T) {
 	}
 
 	_, err = handler.Login(ctx, auth.LoginOptions{
+		Flow:    auth.FlowDeviceCode,
 		Timeout: 100 * time.Millisecond, // Very short timeout for fast test
 	})
 
@@ -265,6 +270,7 @@ func TestDeviceCodeLogin_DeviceCodeRequestFailed(t *testing.T) {
 	})
 
 	_, err = handler.Login(ctx, auth.LoginOptions{
+		Flow:    auth.FlowDeviceCode,
 		Timeout: 30 * time.Second,
 	})
 
@@ -311,6 +317,7 @@ func TestDeviceCodeLogin_SlowDown(t *testing.T) {
 	})
 
 	result, err := handler.Login(ctx, auth.LoginOptions{
+		Flow:    auth.FlowDeviceCode,
 		Timeout: 30 * time.Second,
 	})
 
@@ -345,6 +352,7 @@ func TestDeviceCodeLogin_ExpiredToken(t *testing.T) {
 	})
 
 	_, err = handler.Login(ctx, auth.LoginOptions{
+		Flow:    auth.FlowDeviceCode,
 		Timeout: 30 * time.Second,
 	})
 

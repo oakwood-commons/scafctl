@@ -54,7 +54,7 @@ scafctl currently supports the following auth handlers:
 
 | Handler | Description | Flows |
 |---------|-------------|-------|
-| `entra` | Microsoft Entra ID (Azure AD) | Device Code, Service Principal, Workload Identity |
+| `entra` | Microsoft Entra ID (Azure AD) | Interactive (Browser OAuth + PKCE), Device Code, Service Principal, Workload Identity |
 | `github` | GitHub (github.com and GHES) | Device Code, PAT (Personal Access Token) |
 | `gcp` | Google Cloud Platform | Interactive (Browser OAuth), Service Account Key, Workload Identity Federation, Metadata Server |
 
@@ -78,15 +78,33 @@ To authenticate with Microsoft Entra ID, use the `auth login` command:
 scafctl auth login entra
 ```
 
-This initiates a device code flow:
+By default, this opens your browser for an OAuth authorization code flow with PKCE — the same approach used by `az login`, `gh auth login`, and `gcloud auth login`:
 
-1. scafctl displays a code and URL
-2. Open the URL in your browser
-3. Enter the code when prompted
-4. Sign in with your Microsoft account
-5. scafctl stores your refresh token securely
+1. scafctl starts a local HTTP server on an ephemeral port
+2. Your browser opens to the Microsoft login page
+3. Sign in and grant consent
+4. The browser redirects back to the local server with an authorization code
+5. scafctl exchanges the code for tokens and stores your refresh token securely
 
 ### Example Output
+
+```
+→ Opening browser for authentication...
+  If the browser does not open, visit: https://login.microsoftonline.com/...
+
+✓ Successfully authenticated as user@example.com
+  Tenant: contoso.onmicrosoft.com
+```
+
+### Device Code Flow (Headless / SSH Fallback)
+
+If you are in a headless environment, over SSH, or the browser cannot open, use the device code flow:
+
+```bash
+scafctl auth login entra --flow device-code
+```
+
+This displays a code and URL for you to enter manually:
 
 ```
 To sign in, use a web browser to open the page https://microsoft.com/devicelogin
@@ -127,7 +145,7 @@ scafctl auth login entra --tenant contoso.onmicrosoft.com
 
 ### Custom Client ID
 
-By default, scafctl uses the Azure CLI's public client ID (`04b07795-8ddb-461a-bbee-02f9e1bf7b46`) for device code flow. If your organization requires a custom app registration (e.g., for specific permissions or conditional access policies), use the `--client-id` flag:
+By default, scafctl uses the Azure CLI's public client ID (`04b07795-8ddb-461a-bbee-02f9e1bf7b46`). If your organization requires a custom app registration (e.g., for specific permissions or conditional access policies), use the `--client-id` flag:
 
 ```bash
 scafctl auth login entra --client-id 12345678-abcd-1234-abcd-123456789abc
@@ -137,9 +155,38 @@ The client ID used during login is persisted in your credential metadata so that
 
 You can also set a default client ID via the scafctl configuration file under `auth.entra.clientId`. Note that the `--client-id` flag at login time always takes precedence, and the stored client ID from login will be used for all future token refreshes.
 
+> **Important — Redirect URI registration:** When using a custom client ID with the
+> interactive (browser) login flow, the app registration must have `http://localhost`
+> registered as a redirect URI. Without it, Entra returns AADSTS500113 and the CLI
+> times out. In the Azure portal, go to **App registrations → your app →
+> Authentication → Add a platform → Mobile and desktop applications** and add
+> `http://localhost`.
+>
+> If you cannot modify the app registration, use `--flow device-code` instead
+> (device code does not require a redirect URI), or use `--callback-port` to bind
+> the callback server to a specific port that matches a registered redirect URI:
+>
+> ```bash
+> # If the app registration has http://localhost:8400 as a redirect URI
+> scafctl auth login entra --client-id 12345678-abcd-1234-abcd-123456789abc --callback-port 8400
+> ```
+
+### Setting a Callback Port
+
+By default, the interactive login flow starts a local HTTP server on a random
+(ephemeral) port. Some app registrations only allow specific redirect URIs. Use
+`--callback-port` to bind to a predictable port:
+
+```bash
+scafctl auth login entra --callback-port 8400
+```
+
+This makes the redirect URI `http://localhost:8400`, which must be registered in
+the app registration's **Authentication** settings.
+
 ### Setting a Timeout
 
-The device code flow has a 5-minute default timeout. To extend it:
+The interactive login flow has a 5-minute default timeout. To extend it:
 
 ```bash
 scafctl auth login entra --timeout 10m
@@ -1426,6 +1473,39 @@ scafctl auth login entra --scope https://management.azure.com/user_impersonation
 ```
 
 The `--scope` flag tells Azure to request user consent for that specific API during the login flow.
+
+### AADSTS500113: No Reply Address Registered
+
+If the browser shows this error during interactive login:
+
+```
+AADSTS500113: No reply address is registered for the application.
+```
+
+This means the app registration does not have a redirect URI matching `http://localhost`. The default Azure CLI client ID already has this registered; this error only occurs with custom `--client-id` values.
+
+**Fix options:**
+
+1. **Register the redirect URI** (recommended): In the Azure portal, go to **App registrations → your app → Authentication → Add a platform → Mobile and desktop applications**, then add `http://localhost`.
+
+2. **Use a specific port**: If the app registration only allows a specific URI like `http://localhost:8400`:
+
+   ```bash
+   scafctl auth login entra --client-id YOUR_CLIENT_ID --callback-port 8400
+   ```
+
+3. **Use device code flow**: Device code does not require a redirect URI:
+
+   ```bash
+   scafctl auth login entra --client-id YOUR_CLIENT_ID --flow device-code
+   ```
+
+### Login Times Out With No Error
+
+If `scafctl auth login entra` times out after 5 minutes with no error in the
+terminal, the most common cause is the AADSTS500113 error above — check the
+browser tab for an error message. The improved timeout message will now suggest
+checking redirect URI registration.
 
 ### Wrong Tenant
 

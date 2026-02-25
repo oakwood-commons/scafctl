@@ -53,7 +53,7 @@ type Settings struct {
 type TelemetryConfig struct {
 	// Endpoint is the OTLP gRPC exporter endpoint (e.g. localhost:4317).
 	// Equivalent to the OTEL_EXPORTER_OTLP_ENDPOINT environment variable.
-	// When empty, traces are written to stderr and no OTLP export occurs.
+	// When empty, tracing and OTel log export are disabled (noop providers).
 	Endpoint string `json:"endpoint,omitempty" yaml:"endpoint,omitempty" mapstructure:"endpoint" doc:"OTLP gRPC exporter endpoint" example:"localhost:4317" maxLength:"2048"`
 
 	// Insecure disables TLS for the OTLP gRPC connection. Useful for local

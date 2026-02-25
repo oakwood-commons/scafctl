@@ -10,7 +10,9 @@ package telemetry
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"strings"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -18,8 +20,6 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/prometheus"
-	"go.opentelemetry.io/otel/exporters/stdout/stdoutlog"
-	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	logGlobal "go.opentelemetry.io/otel/log/global"
 	"go.opentelemetry.io/otel/propagation"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
@@ -42,11 +42,19 @@ type Options struct {
 	ServiceVersion string
 	// ExporterEndpoint is the OTLP gRPC endpoint (e.g. "localhost:4317").
 	// Overrides the OTEL_EXPORTER_OTLP_ENDPOINT environment variable.
-	// When empty and the env var is also unset, no OTLP export occurs.
+	// When empty and the env var is also unset, tracing is disabled (noop).
 	ExporterEndpoint string
 	// ExporterInsecure disables TLS for the OTLP gRPC connection.
 	// Useful for local development against an OTel collector without TLS.
 	ExporterInsecure bool
+	// SamplerType controls the trace sampler. Supported values:
+	//   always_on  — sample every span (default)
+	//   always_off — drop all spans
+	//   traceidratio — sample a fraction of spans (controlled by SamplerArg)
+	SamplerType string
+	// SamplerArg is the argument passed to the sampler.
+	// For traceidratio this is the sampling ratio (0.0–1.0). Defaults to 1.0.
+	SamplerArg float64
 }
 
 // Setup initializes the OTel TracerProvider and LoggerProvider and registers
@@ -90,32 +98,31 @@ func Setup(ctx context.Context, opts Options) (shutdown func(context.Context) er
 	}
 
 	// ── Trace provider ────────────────────────────────────────────────────────
-	var traceExporter sdktrace.SpanExporter
+	sampler, samplerErr := parseSampler(opts.SamplerType, opts.SamplerArg)
+	if samplerErr != nil {
+		return nil, samplerErr
+	}
+
+	tpOpts := []sdktrace.TracerProviderOption{
+		sdktrace.WithResource(res),
+		sdktrace.WithSampler(sampler),
+	}
 	if endpoint != "" {
 		dialOpts := []otlptracegrpc.Option{otlptracegrpc.WithEndpoint(endpoint)}
 		if opts.ExporterInsecure {
 			dialOpts = append(dialOpts, otlptracegrpc.WithInsecure())
 		}
-		traceExporter, err = otlptracegrpc.New(ctx, dialOpts...)
-		if err != nil {
-			return nil, err
+		traceExporter, traceErr := otlptracegrpc.New(ctx, dialOpts...)
+		if traceErr != nil {
+			return nil, traceErr
 		}
-	} else {
-		// Local fallback: write JSON spans to stderr.
-		traceExporter, err = stdouttrace.New(
-			stdouttrace.WithWriter(os.Stderr),
-			stdouttrace.WithPrettyPrint(),
-		)
-		if err != nil {
-			return nil, err
-		}
+		tpOpts = append(tpOpts, sdktrace.WithBatcher(traceExporter))
 	}
+	// When no endpoint is configured, the TracerProvider is created without an
+	// exporter. Spans are still recorded in-process (propagation works) but
+	// nothing is exported — no stderr noise.
 
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(traceExporter),
-		sdktrace.WithResource(res),
-		sdktrace.WithSampler(sdktrace.AlwaysSample()),
-	)
+	tp := sdktrace.NewTracerProvider(tpOpts...)
 	otel.SetTracerProvider(tp)
 
 	// Register W3C TraceContext + Baggage propagators so otelhttp and other
@@ -126,11 +133,10 @@ func Setup(ctx context.Context, opts Options) (shutdown func(context.Context) er
 	))
 
 	// ── Log provider ──────────────────────────────────────────────────────────
+	// Only create OTel log processors when an OTLP endpoint is configured.
+	// Without an endpoint, the slog/logr logger handles all log output; no
+	// stderr fallback exporter is needed.
 	var logProcessors []sdklog.Processor
-	stdoutLogExp, stdoutLogErr := stdoutlog.New(stdoutlog.WithWriter(os.Stderr))
-	if stdoutLogErr == nil {
-		logProcessors = append(logProcessors, sdklog.NewSimpleProcessor(stdoutLogExp))
-	}
 	if endpoint != "" {
 		logDialOpts := []otlploggrpc.Option{otlploggrpc.WithEndpoint(endpoint)}
 		if opts.ExporterInsecure {
@@ -190,4 +196,22 @@ func Setup(ctx context.Context, opts Options) (shutdown func(context.Context) er
 		}
 		return errors.Join(errs...)
 	}, nil
+}
+
+// parseSampler converts a sampler type string + argument into an sdktrace.Sampler.
+// Recognised types: always_on (default), always_off, traceidratio.
+func parseSampler(samplerType string, samplerArg float64) (sdktrace.Sampler, error) {
+	switch strings.ToLower(strings.TrimSpace(samplerType)) {
+	case "", "always_on":
+		return sdktrace.AlwaysSample(), nil
+	case "always_off":
+		return sdktrace.NeverSample(), nil
+	case "traceidratio":
+		if samplerArg < 0 || samplerArg > 1 {
+			return nil, fmt.Errorf("traceidratio sampler arg must be between 0.0 and 1.0, got %f", samplerArg)
+		}
+		return sdktrace.TraceIDRatioBased(samplerArg), nil
+	default:
+		return nil, fmt.Errorf("unknown sampler type %q (valid: always_on, always_off, traceidratio)", samplerType)
+	}
 }

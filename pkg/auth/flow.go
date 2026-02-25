@@ -37,7 +37,7 @@ func ParseFlow(flowStr, handlerName string) (Flow, error) {
 		case "gcp":
 			return "", fmt.Errorf("unknown flow: %s (valid for gcp: interactive, service-principal, workload-identity, metadata, gcloud-adc)", flowStr)
 		default:
-			return "", fmt.Errorf("unknown flow: %s (valid for entra: device-code, service-principal, workload-identity)", flowStr)
+			return "", fmt.Errorf("unknown flow: %s (valid for entra: interactive, device-code, service-principal, workload-identity)", flowStr)
 		}
 	}
 }

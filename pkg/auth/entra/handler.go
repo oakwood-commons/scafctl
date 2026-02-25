@@ -189,6 +189,7 @@ func (h *Handler) DisplayName() string {
 // SupportedFlows returns the authentication flows this handler supports.
 func (h *Handler) SupportedFlows() []auth.Flow {
 	flows := []auth.Flow{
+		auth.FlowInteractive,
 		auth.FlowDeviceCode,
 		auth.FlowServicePrincipal,
 		auth.FlowWorkloadIdentity,
@@ -206,11 +207,13 @@ func (h *Handler) Capabilities() []auth.Capability {
 		auth.CapScopesOnTokenRequest,
 		auth.CapTenantID,
 		auth.CapFederatedToken,
+		auth.CapCallbackPort,
 	}
 }
 
 // Login initiates the authentication flow.
-// For device code flow, this initiates interactive authentication.
+// For interactive flow, this opens a browser for authorization code + PKCE.
+// For device code flow, this initiates device code authentication.
 // For service principal flow, this validates the credentials.
 // For workload identity flow, this validates the federated token.
 func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Result, error) {
@@ -228,7 +231,13 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 		return h.servicePrincipalLogin(ctx, opts)
 	}
 
-	return h.deviceCodeLogin(ctx, opts)
+	// Device code flow only when explicitly requested
+	if opts.Flow == auth.FlowDeviceCode {
+		return h.deviceCodeLogin(ctx, opts)
+	}
+
+	// Default to interactive (browser OAuth with authorization code + PKCE)
+	return h.authCodeLogin(ctx, opts)
 }
 
 // Logout clears stored credentials and cached tokens.

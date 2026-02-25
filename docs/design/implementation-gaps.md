@@ -5,7 +5,7 @@ weight: 99
 
 # Implementation Gaps
 
-> **Generated:** 2026-02-24
+> **Generated:** 2026-02-25
 >
 > This document tracks features described in design documents that are **not yet fully implemented**. Fully implemented features are omitted. For complete design specs, see the linked source documents.
 
@@ -47,7 +47,7 @@ Additional artifact types beyond solutions, providers, and auth handlers — TBD
 
 **Source:** [plugins.md](plugins.md)
 
-Plugins currently expose providers only. Future capability types may include provider sets, schemas, and validation helpers.
+Plugins currently expose providers and auth handlers. Future capability types may include provider sets, schemas, and validation helpers.
 
 ### Future Provider Capabilities
 
@@ -126,19 +126,6 @@ Phases 9–10 of the MCP server design — executing solutions through the MCP s
 
 > **Note:** [state.md](state.md) is excluded from this document — it is still under active design discussion.
 
-### External Auth Handlers via Plugin/Catalog
-
-**Source:** [auth.md](auth.md)
-
-~~The design describes loading custom auth handlers (e.g., Okta) from the catalog via the go-plugin mechanism, similar to how provider plugins work. No plugin-based auth handler loading exists in code.~~
-
-**Now Implemented.** Auth handler plugins are fully supported:
-- `AuthHandlerPlugin` interface (`pkg/plugin/interface.go`) with 7 methods
-- gRPC service (`AuthHandlerService`) with server-side streaming for Login device-code relay
-- gRPC server/client (`pkg/plugin/grpc_auth.go`), wrapper adapter (`pkg/plugin/wrapper_auth.go`)
-- `ServeAuthHandler` entry point, `NewAuthHandlerClient`, `DiscoverAuthHandlers`
-- `RegisterFetchedAuthHandlerPlugins` in `pkg/plugin/fetcher.go`
-- Wired into preparation pipeline via `prepare.WithAuthRegistry`
-- See the [Auth Handler Development Guide](../tutorials/auth-handler-development.md#delivering-as-a-plugin)
+No outstanding items at this time. All previously tracked gaps have been implemented or promoted to the Deferred section above.
 
 

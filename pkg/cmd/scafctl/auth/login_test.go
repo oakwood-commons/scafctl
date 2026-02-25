@@ -91,7 +91,7 @@ func TestCommandLogin_Success(t *testing.T) {
 
 	// Verify login was called
 	require.Len(t, mock.LoginCalls, 1)
-	assert.Equal(t, auth.FlowDeviceCode, mock.LoginCalls[0].Flow)
+	assert.Equal(t, auth.FlowInteractive, mock.LoginCalls[0].Flow)
 
 	// Verify output
 	output := buf.String()
