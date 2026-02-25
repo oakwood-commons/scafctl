@@ -67,6 +67,17 @@ func aadstsHint(desc string) string {
 	case strings.Contains(desc, "AADSTS500011"):
 		return "the target API resource was not found in this tenant; ensure the API " +
 			"application is registered in the same tenant and that admin consent has been granted"
+
+	// AADSTS500113: No reply address is registered for the application.
+	// The app registration does not have a redirect URI matching the one sent
+	// in the authorization request.  For the interactive (browser OAuth) flow,
+	// register http://localhost under 'Mobile and desktop applications' platform
+	// in the Azure portal (App registrations → Authentication → Add a platform).
+	case strings.Contains(desc, "AADSTS500113"):
+		return "no redirect URI is registered for this application; in the Azure portal, " +
+			"go to App registrations → your app → Authentication → Add a platform → " +
+			"'Mobile and desktop applications', then add http://localhost as a redirect URI. " +
+			"Alternatively, use '--flow device-code' which does not require a redirect URI"
 	}
 
 	return ""

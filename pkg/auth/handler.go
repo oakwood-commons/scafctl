@@ -90,6 +90,7 @@ type LoginOptions struct {
 	Scopes             []string
 	Flow               Flow
 	Timeout            time.Duration
+	CallbackPort       int
 	DeviceCodeCallback func(userCode, verificationURI, message string)
 }
 

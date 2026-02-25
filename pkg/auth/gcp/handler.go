@@ -177,6 +177,7 @@ func (h *Handler) Capabilities() []auth.Capability {
 		auth.CapScopesOnLogin,
 		auth.CapScopesOnTokenRequest,
 		auth.CapFederatedToken,
+		auth.CapCallbackPort,
 	}
 }
 

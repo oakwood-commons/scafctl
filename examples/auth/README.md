@@ -9,7 +9,7 @@ This directory contains examples and cheat-sheets for the `scafctl auth` command
 ### Login
 
 ```bash
-# Entra ID (device code — opens browser)
+# Entra ID (browser OAuth + PKCE — default)
 scafctl auth login entra
 
 # GitHub (device code — opens browser)
@@ -19,6 +19,7 @@ scafctl auth login github
 scafctl auth login gcp
 
 # Non-interactive flows
+scafctl auth login entra --flow device-code          # headless / SSH fallback
 scafctl auth login entra --flow service-principal   # requires AZURE_* env vars
 scafctl auth login github --flow pat                # requires GITHUB_TOKEN or GH_TOKEN
 scafctl auth login gcp --flow service-principal     # requires GOOGLE_APPLICATION_CREDENTIALS

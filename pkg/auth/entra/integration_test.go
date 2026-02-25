@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -204,6 +205,7 @@ func TestIntegration_DeviceCodeFlow_Success(t *testing.T) {
 	var receivedVerificationURI string
 
 	result, err := handler.Login(ctx, auth.LoginOptions{
+		Flow:    auth.FlowDeviceCode,
 		Timeout: 5 * time.Second,
 		DeviceCodeCallback: func(userCode, verificationURI, message string) {
 			callbackInvoked = true
@@ -284,6 +286,7 @@ func TestIntegration_DeviceCodeFlow_AuthorizationPending(t *testing.T) {
 	ctx := context.Background()
 
 	result, err := handler.Login(ctx, auth.LoginOptions{
+		Flow:               auth.FlowDeviceCode,
 		Timeout:            5 * time.Second,
 		DeviceCodeCallback: func(userCode, verificationURI, message string) {},
 	})
@@ -331,6 +334,7 @@ func TestIntegration_DeviceCodeFlow_AccessDenied(t *testing.T) {
 	ctx := context.Background()
 
 	result, err := handler.Login(ctx, auth.LoginOptions{
+		Flow:               auth.FlowDeviceCode,
 		Timeout:            5 * time.Second,
 		DeviceCodeCallback: func(userCode, verificationURI, message string) {},
 	})
@@ -376,6 +380,7 @@ func TestIntegration_DeviceCodeFlow_ExpiredCode(t *testing.T) {
 	ctx := context.Background()
 
 	result, err := handler.Login(ctx, auth.LoginOptions{
+		Flow:               auth.FlowDeviceCode,
 		Timeout:            5 * time.Second,
 		DeviceCodeCallback: func(userCode, verificationURI, message string) {},
 	})
@@ -383,6 +388,129 @@ func TestIntegration_DeviceCodeFlow_ExpiredCode(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, result)
 	assert.ErrorIs(t, err, auth.ErrTimeout)
+}
+
+// ============================================================================
+// Auth Code (Interactive) Flow Integration Tests
+// ============================================================================
+
+func TestIntegration_AuthCodeFlow_Success(t *testing.T) {
+	server := newMockEntraServer(t)
+	defer server.Close()
+
+	// Configure token exchange response
+	server.AddTokenResponse(http.StatusOK, map[string]any{
+		"access_token":  "test-access-token",
+		"refresh_token": "test-refresh-token",
+		"token_type":    "Bearer",
+		"expires_in":    3600,
+		"scope":         "openid profile offline_access",
+		"id_token":      createTestIDToken(t),
+	})
+
+	store := secrets.NewMockStore()
+	cfg := DefaultConfig()
+	cfg.Authority = server.URL()
+	cfg.MinPollInterval = 10 * time.Millisecond
+
+	handler, err := New(
+		WithConfig(cfg),
+		WithSecretStore(store),
+	)
+	require.NoError(t, err)
+
+	// Override browser opener to simulate the redirect
+	originalOpener := BrowserOpener
+	BrowserOpener = func(ctx context.Context, authURL string) error {
+		// Parse redirect_uri from the auth URL
+		parsed, pErr := parseURLForTest(authURL)
+		if pErr != nil {
+			return pErr
+		}
+		redirectURI := parsed.Query().Get("redirect_uri")
+
+		// Simulate the browser redirect with an auth code
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			_ = simulateBrowserRedirect(redirectURI, "integration-test-code")
+		}()
+		return nil
+	}
+	defer func() { BrowserOpener = originalOpener }()
+
+	ctx := context.Background()
+	result, err := handler.Login(ctx, auth.LoginOptions{
+		Flow:    auth.FlowInteractive,
+		Timeout: 5 * time.Second,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.NotNil(t, result.Claims)
+	assert.False(t, result.ExpiresAt.IsZero())
+
+	// Verify the token exchange request
+	assert.NotNil(t, server.lastTokenRequest)
+	assert.Equal(t, "authorization_code", server.lastTokenRequest["grant_type"])
+	assert.Equal(t, "integration-test-code", server.lastTokenRequest["code"])
+	assert.NotEmpty(t, server.lastTokenRequest["code_verifier"])
+	assert.NotEmpty(t, server.lastTokenRequest["redirect_uri"])
+
+	// Verify credentials were stored
+	exists, _ := store.Exists(ctx, SecretKeyRefreshToken)
+	assert.True(t, exists)
+	exists, _ = store.Exists(ctx, SecretKeyMetadata)
+	assert.True(t, exists)
+}
+
+func TestIntegration_AuthCodeFlow_TokenExchangeError(t *testing.T) {
+	server := newMockEntraServer(t)
+	defer server.Close()
+
+	// Configure token exchange error
+	server.AddTokenResponse(http.StatusBadRequest, map[string]any{
+		"error":             "invalid_grant",
+		"error_description": "AADSTS54005: The authorization code has expired",
+	})
+
+	store := secrets.NewMockStore()
+	cfg := DefaultConfig()
+	cfg.Authority = server.URL()
+
+	handler, err := New(
+		WithConfig(cfg),
+		WithSecretStore(store),
+	)
+	require.NoError(t, err)
+
+	originalOpener := BrowserOpener
+	BrowserOpener = func(_ context.Context, authURL string) error {
+		parsed, pErr := parseURLForTest(authURL)
+		if pErr != nil {
+			return pErr
+		}
+		redirectURI := parsed.Query().Get("redirect_uri")
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			_ = simulateBrowserRedirect(redirectURI, "expired-code")
+		}()
+		return nil
+	}
+	defer func() { BrowserOpener = originalOpener }()
+
+	ctx := context.Background()
+	_, err = handler.Login(ctx, auth.LoginOptions{
+		Flow:    auth.FlowInteractive,
+		Timeout: 5 * time.Second,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "AADSTS54005")
+}
+
+// parseURLForTest is a test helper that parses a URL string.
+func parseURLForTest(rawURL string) (*url.URL, error) {
+	return url.Parse(rawURL)
 }
 
 // ============================================================================
