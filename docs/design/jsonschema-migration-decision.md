@@ -5,7 +5,7 @@ weight: 17
 
 # Provider Schema Migration: Custom SchemaDefinition → JSON Schema
 
-**Status:** Proposed  
+**Status:** Implemented  
 **Created:** 2026-02-07  
 **Author:** (team discussion)
 

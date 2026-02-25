@@ -145,6 +145,50 @@ func TestDescriptorConversion(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "descriptor with all metadata fields",
+			descriptor: &provider.Descriptor{
+				Name:            "full-provider",
+				DisplayName:     "Full Provider",
+				APIVersion:      "v1",
+				Version:         semver.MustParse("2.3.4"),
+				Description:     "A fully-populated provider descriptor",
+				Category:        "network",
+				MockBehavior:    "Returns mock data without making real requests",
+				SensitiveFields: []string{"apiKey", "token"},
+				Tags:            []string{"http", "api", "network"},
+				Icon:            "https://example.com/icon.png",
+				Deprecated:      true,
+				Beta:            false,
+				Capabilities:    []provider.Capability{provider.CapabilityFrom, provider.CapabilityTransform},
+				Links: []provider.Link{
+					{Name: "Docs", URL: "https://example.com/docs"},
+					{Name: "Source", URL: "https://github.com/example/provider"},
+				},
+				Examples: []provider.Example{
+					{
+						Name:        "Basic usage",
+						Description: "Fetch data from an API",
+						YAML:        "provider: full-provider\ninputs:\n  url: https://api.example.com",
+					},
+				},
+				Maintainers: []provider.Contact{
+					{Name: "Jane Doe", Email: "jane@example.com"},
+					{Name: "Team", Email: "team@example.com"},
+				},
+				Schema: schemahelper.ObjectSchema([]string{"url"}, map[string]*jsonschema.Schema{
+					"url": schemahelper.StringProp("URL to fetch"),
+				}),
+				OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+					provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+						"data": schemahelper.StringProp("Response data"),
+					}),
+					provider.CapabilityTransform: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+						"result": schemahelper.StringProp("Transformed result"),
+					}),
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -166,6 +210,31 @@ func TestDescriptorConversion(t *testing.T) {
 			}
 			assert.Equal(t, tt.descriptor.Category, converted.Category)
 			assert.Equal(t, len(tt.descriptor.Capabilities), len(converted.Capabilities))
+
+			// Compare new metadata fields
+			assert.Equal(t, tt.descriptor.APIVersion, converted.APIVersion)
+			assert.Equal(t, tt.descriptor.MockBehavior, converted.MockBehavior)
+			assert.Equal(t, tt.descriptor.SensitiveFields, converted.SensitiveFields)
+			assert.Equal(t, tt.descriptor.Tags, converted.Tags)
+			assert.Equal(t, tt.descriptor.Icon, converted.Icon)
+			assert.Equal(t, tt.descriptor.Deprecated, converted.Deprecated) //nolint:staticcheck // field is intentionally tested for gRPC roundtrip
+			assert.Equal(t, tt.descriptor.Beta, converted.Beta)
+			assert.Equal(t, len(tt.descriptor.Links), len(converted.Links))
+			for i, link := range tt.descriptor.Links {
+				assert.Equal(t, link.Name, converted.Links[i].Name)
+				assert.Equal(t, link.URL, converted.Links[i].URL)
+			}
+			assert.Equal(t, len(tt.descriptor.Examples), len(converted.Examples))
+			for i, ex := range tt.descriptor.Examples {
+				assert.Equal(t, ex.Name, converted.Examples[i].Name)
+				assert.Equal(t, ex.Description, converted.Examples[i].Description)
+				assert.Equal(t, ex.YAML, converted.Examples[i].YAML)
+			}
+			assert.Equal(t, len(tt.descriptor.Maintainers), len(converted.Maintainers))
+			for i, m := range tt.descriptor.Maintainers {
+				assert.Equal(t, m.Name, converted.Maintainers[i].Name)
+				assert.Equal(t, m.Email, converted.Maintainers[i].Email)
+			}
 
 			// Compare schema
 			if tt.descriptor.Schema != nil && len(tt.descriptor.Schema.Properties) > 0 {

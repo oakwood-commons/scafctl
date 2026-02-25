@@ -198,8 +198,10 @@ See the [Provider Reference](docs/tutorials/provider-reference.md) and [Provider
 - [Caching](docs/tutorials/cache-tutorial.md) — Provider result caching
 - [Directory Provider](docs/tutorials/directory-provider-tutorial.md) — Listing, scanning, and managing directories
 - [Snapshots](docs/tutorials/snapshots-tutorial.md) — Capturing and diffing output
-- [Plugin Development](docs/tutorials/plugin-development.md) — Building custom providers
-- [Provider Development](docs/tutorials/provider-development.md) — Contributing providers
+- [Provider Development](docs/tutorials/provider-development.md) — Building providers (builtin and plugin)
+- [Auth Handler Development](docs/tutorials/auth-handler-development.md) — Building auth handlers (builtin and plugin)
+- [Extension Concepts](docs/tutorials/extension-concepts.md) — Provider vs Auth Handler vs Plugin terminology
+- [Plugin Development](docs/tutorials/plugin-development.md) — Plugin overview and discovery
 
 ### Design Documents
 
@@ -388,9 +390,9 @@ spec:
 
 ## Plugins
 
-scafctl supports external plugins that extend the provider system. Plugins are standalone executables that communicate via a defined protocol.
+scafctl supports external plugins that extend the provider and auth handler systems. Plugins are standalone executables that communicate via gRPC.
 
-See the [Plugin Design](docs/design/plugins.md) and [Plugin Development Tutorial](docs/tutorials/plugin-development.md).
+See the [Plugin Design](docs/design/plugins.md), [Provider Development Guide](docs/tutorials/provider-development.md#delivering-as-a-plugin), and [Auth Handler Development Guide](docs/tutorials/auth-handler-development.md#delivering-as-a-plugin).
 
 ## Actions Overview
 

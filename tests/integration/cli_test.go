@@ -4314,3 +4314,69 @@ func TestIntegration_OtelInsecure_FlagRegistered(t *testing.T) {
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "otel-insecure")
 }
+
+// ============================================================================
+// Plugins Command Tests
+// ============================================================================
+
+// TestIntegration_Plugins_Help verifies the plugins command group shows help.
+func TestIntegration_Plugins_Help(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "plugins", "--help")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "install")
+	assert.Contains(t, stdout, "list")
+}
+
+// TestIntegration_Plugins_Install_Help verifies the plugins install command shows help.
+func TestIntegration_Plugins_Install_Help(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "plugins", "install", "--help")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "--file")
+	assert.Contains(t, stdout, "--platform")
+	assert.Contains(t, stdout, "--cache-dir")
+}
+
+// TestIntegration_Plugins_List_EmptyCache verifies plugins list shows no plugins with an empty cache.
+func TestIntegration_Plugins_List_EmptyCache(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+
+	stdout, _, exitCode := runScafctl(t, "plugins", "list")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "No plugins cached")
+}
+
+// TestIntegration_Plugins_List_JSON verifies plugins list supports JSON output.
+func TestIntegration_Plugins_List_JSON(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+
+	stdout, _, exitCode := runScafctl(t, "plugins", "list", "-o", "json")
+	assert.Equal(t, 0, exitCode)
+	// With empty cache and JSON output, it emits a human-readable message or null/empty JSON.
+	stdout = strings.TrimSpace(stdout)
+	assert.True(t, stdout == "null" || stdout == "[]" || json.Valid([]byte(stdout)) || strings.Contains(stdout, "No plugins cached"),
+		"expected valid JSON or no-cache message, got: %s", stdout)
+}
+
+// TestIntegration_Plugins_Install_MissingSolutionFile verifies error on missing file.
+func TestIntegration_Plugins_Install_MissingSolutionFile(t *testing.T) {
+	t.Parallel()
+	_, _, exitCode := runScafctl(t, "plugins", "install", "-f", "/nonexistent/solution.yaml")
+	assert.NotEqual(t, 0, exitCode)
+}
+
+// TestIntegration_Plugins_Install_NoPlugins verifies install succeeds with a solution that has no plugins.
+func TestIntegration_Plugins_Install_NoPlugins(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Use an existing simple solution file that has no plugin dependencies
+	stdout, stderr, exitCode := runScafctl(t, "plugins", "install", "-f", "examples/resolver-demo.yaml")
+	_ = stderr
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "No plugins declared")
+}

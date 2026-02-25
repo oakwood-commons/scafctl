@@ -353,6 +353,48 @@ Plugins are an implementation detail that enables extensibility.
 
 ---
 
+## Auto-Fetch & Runtime Loading
+
+When a solution declares plugin dependencies under `bundle.plugins`, scafctl automatically fetches missing binaries from configured catalogs at runtime.
+
+### Architecture
+
+| Component | Package | Responsibility |
+|-----------|---------|----------------|
+| **Fetcher** | `pkg/plugin/fetcher.go` | Orchestrates fetch + cache + registration |
+| **Cache** | `pkg/plugin/cache.go` | Content-addressed binary cache under `$XDG_CACHE_HOME/scafctl/plugins/` |
+| **ChainCatalog** | `pkg/catalog/chain.go` | Tries catalogs in order (local → remote OCI) |
+| **PluginFetcher** | `pkg/catalog/plugin_fetcher.go` | Platform-aware binary extraction from catalog artifacts |
+| **Platform** | `pkg/plugin/platform.go` | Detects OS/arch, generates cache keys |
+
+### Flow
+
+1. Solution is loaded with `bundle.plugins` entries
+2. `Fetcher.FetchPlugins()` iterates declared plugins
+3. For each plugin, the cache is checked first (by name + version + platform digest)
+4. On cache miss, `ChainCatalog` queries configured catalogs in order
+5. `PluginFetcher` extracts the platform-specific binary from the OCI artifact
+6. Binary is stored in the content-addressed cache (atomic write, `0o755`)
+7. `RegisterFetchedPlugins()` adds cached paths to the plugin registry
+
+### CLI Commands
+
+- **`scafctl plugins install`** — Pre-fetch plugin binaries from catalogs before a build or run
+- **`scafctl plugins list`** — List cached plugin binaries with digest, size, and platform info
+
+Both commands live in `pkg/cmd/scafctl/plugins/`.
+
+### Cache Layout
+
+```
+$XDG_CACHE_HOME/scafctl/plugins/
+└── <sha256-digest>/           # Content-addressed binary
+```
+
+See the [Plugin Auto-Fetching Tutorial](../tutorials/plugin-auto-fetch-tutorial.md) for a complete walkthrough.
+
+---
+
 ## Summary
 
 Plugins are the extensibility layer of scafctl. They exist to supply providers in an isolated, versioned, and scalable way using go-plugin. Plugins are not a new execution model or abstraction. They are the mechanism by which providers are distributed and invoked, keeping the core system small, stable, and extensible.

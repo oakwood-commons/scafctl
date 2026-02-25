@@ -252,7 +252,7 @@ scafctl run provider echo --input message=hello --plugin-dir ./plugins
 scafctl run provider my-plugin --input key=value --plugin-dir ./plugins --plugin-dir /opt/plugins
 ```
 
-See the [Plugin Development](plugin-development.md) tutorial for creating custom providers.
+See the [Provider Development Guide](provider-development.md) for creating custom providers (including [plugin delivery](provider-development.md#delivering-as-a-plugin)).
 
 ---
 

@@ -39,7 +39,7 @@ Resolvers do not cause side effects. They only compute values.
 | Prometheus metrics | ✅ Implemented | `pkg/resolver/metrics.go` |
 | forEach in transform | ✅ Implemented | `ForEachClause` |
 | forEach `keepSkipped` (nil retention opt-in) | ✅ Implemented | `ForEachClause.KeepSkipped` |
-| forEach `filter` in resolve phase | ✅ Implemented | `pkg/resolver/foreach.go` |
+| forEach nil filtering (default behavior) | ✅ Implemented | `pkg/resolver/executor.go`, `pkg/spec/foreach.go` (`KeepSkipped`) |
 | `onError` behavior | ✅ Implemented | `ErrorBehavior` type |
 | ValidateAll mode (`--validate-all`) | ✅ Implemented | `WithValidateAll()` |
 | SkipValidation mode (`--skip-validation`) | ✅ Implemented | `WithSkipValidation()` |
