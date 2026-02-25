@@ -1,0 +1,52 @@
+# Example: GitHub App authentication configuration
+#
+# This config file shows how to set up GitHub App installation token
+# authentication for service-to-service automation and CI/CD pipelines.
+#
+# Usage:
+#   scafctl auth login github --flow github-app
+#
+# The GitHub App flow creates a JWT signed with the App's private key,
+# validates it against the GitHub API, and exchanges it for an installation
+# access token. Installation tokens expire after 1 hour and are automatically
+# cached and refreshed.
+#
+# Prerequisites:
+#   1. Create a GitHub App: https://github.com/settings/apps/new
+#   2. Generate a private key for the App
+#   3. Install the App on your target organization/repository
+#   4. Note the App ID (from the App's settings page) and Installation ID
+#      (from the installation URL or API)
+
+auth:
+  github:
+    # GitHub App ID (required for github-app flow)
+    # Found on the App's settings page: https://github.com/settings/apps/<app-slug>
+    # Can also be set via SCAFCTL_GITHUB_APP_ID environment variable
+    appId: "12345"
+
+    # Installation ID (required for github-app flow)
+    # Found in the installation URL or via the GitHub API:
+    #   GET /orgs/{org}/installation  or  GET /repos/{owner}/{repo}/installation
+    # Can also be set via SCAFCTL_GITHUB_APP_INSTALLATION_ID environment variable
+    installationId: "67890"
+
+    # Private key — choose ONE of the following three options:
+
+    # Option 1: File path to PEM private key (recommended for local development)
+    # Can also be set via SCAFCTL_GITHUB_APP_PRIVATE_KEY_PATH environment variable
+    privateKeyPath: "/path/to/github-app-private-key.pem"
+
+    # Option 2: Inline PEM private key (useful for CI/CD secrets)
+    # Can also be set via SCAFCTL_GITHUB_APP_PRIVATE_KEY environment variable
+    # privateKey: |
+    #   -----BEGIN RSA PRIVATE KEY-----
+    #   MIIEpAIBAAKCAQEA...
+    #   -----END RSA PRIVATE KEY-----
+
+    # Option 3: Secret store reference (for production environments)
+    # The private key is fetched from the configured secret store at runtime
+    # privateKeySecretName: "github-app-private-key"
+
+    # GitHub Enterprise Server hostname (optional, defaults to github.com)
+    # hostname: "github.example.com"

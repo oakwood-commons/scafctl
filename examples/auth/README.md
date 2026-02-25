@@ -12,7 +12,7 @@ This directory contains examples and cheat-sheets for the `scafctl auth` command
 # Entra ID (browser OAuth + PKCE — default)
 scafctl auth login entra
 
-# GitHub (device code — opens browser)
+# GitHub (browser OAuth + PKCE — default)
 scafctl auth login github
 
 # GCP (browser OAuth)
@@ -21,7 +21,9 @@ scafctl auth login gcp
 # Non-interactive flows
 scafctl auth login entra --flow device-code          # headless / SSH fallback
 scafctl auth login entra --flow service-principal   # requires AZURE_* env vars
+scafctl auth login github --flow device-code        # headless / SSH fallback
 scafctl auth login github --flow pat                # requires GITHUB_TOKEN or GH_TOKEN
+scafctl auth login github --flow github-app         # requires GitHub App credentials
 scafctl auth login gcp --flow service-principal     # requires GOOGLE_APPLICATION_CREDENTIALS
 scafctl auth login gcp --flow gcloud-adc            # uses existing gcloud ADC file
 
@@ -29,6 +31,15 @@ scafctl auth login gcp --flow gcloud-adc            # uses existing gcloud ADC f
 scafctl auth login entra --skip-if-authenticated
 scafctl auth login github --skip-if-authenticated
 scafctl auth login gcp --skip-if-authenticated
+
+# GitHub App flow with environment variables
+export SCAFCTL_GITHUB_APP_ID="12345"
+export SCAFCTL_GITHUB_APP_INSTALLATION_ID="67890"
+export SCAFCTL_GITHUB_APP_PRIVATE_KEY_PATH="/path/to/private-key.pem"
+scafctl auth login github --flow github-app
+
+# GitHub interactive with custom callback port
+scafctl auth login github --callback-port 8400
 ```
 
 ---

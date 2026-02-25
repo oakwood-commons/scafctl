@@ -30,10 +30,12 @@ func ParseFlow(flowStr, handlerName string) (Flow, error) {
 		return FlowMetadata, nil
 	case "gcloud-adc", "gcloudadc", "adc":
 		return FlowGcloudADC, nil
+	case "github-app", "githubapp", "app":
+		return FlowGitHubApp, nil
 	default:
 		switch handlerName {
 		case "github":
-			return "", fmt.Errorf("unknown flow: %s (valid for github: device-code, pat)", flowStr)
+			return "", fmt.Errorf("unknown flow: %s (valid for github: interactive, device-code, pat, github-app)", flowStr)
 		case "gcp":
 			return "", fmt.Errorf("unknown flow: %s (valid for gcp: interactive, service-principal, workload-identity, metadata, gcloud-adc)", flowStr)
 		default:

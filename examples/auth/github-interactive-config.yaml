@@ -1,0 +1,34 @@
+# Example: GitHub Interactive OAuth (Browser + PKCE) authentication
+#
+# This config file shows how to customize the interactive GitHub login flow.
+# The interactive flow is the default when running `scafctl auth login github`.
+#
+# Usage:
+#   scafctl auth login github                     # uses browser OAuth + PKCE
+#   scafctl auth login github --flow device-code  # fallback for headless environments
+#
+# The interactive flow:
+#   1. Starts a local HTTP callback server
+#   2. Opens your browser to GitHub's authorization page
+#   3. After you authorize, GitHub redirects back to the local server
+#   4. scafctl exchanges the authorization code for tokens using PKCE verification
+#
+# This is the same pattern used by `gh auth login`, `az login`, and `gcloud auth login`.
+
+auth:
+  github:
+    # Custom OAuth App client ID (optional)
+    # By default, scafctl uses its own OAuth App client ID.
+    # Override this if your organization requires a custom OAuth App.
+    # clientId: "your-custom-client-id"
+
+    # Default scopes requested at login time (optional)
+    # Defaults to: gist, read:org, repo, workflow (matching the gh CLI)
+    # defaultScopes:
+    #   - repo
+    #   - read:org
+    #   - workflow
+    #   - write:packages
+
+    # GitHub Enterprise Server hostname (optional, defaults to github.com)
+    # hostname: "github.example.com"

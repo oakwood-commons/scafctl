@@ -272,9 +272,15 @@ func Root(opts *RootOptions) *cobra.Command {
 			var ghOpts []ghauth.Option
 			if cfg.Auth.GitHub != nil {
 				ghOpts = append(ghOpts, ghauth.WithConfig(&ghauth.Config{
-					ClientID:      cfg.Auth.GitHub.ClientID,
-					Hostname:      cfg.Auth.GitHub.Hostname,
-					DefaultScopes: cfg.Auth.GitHub.DefaultScopes,
+					ClientID:             cfg.Auth.GitHub.ClientID,
+					ClientSecret:         cfg.Auth.GitHub.ClientSecret,
+					Hostname:             cfg.Auth.GitHub.Hostname,
+					DefaultScopes:        cfg.Auth.GitHub.DefaultScopes,
+					AppID:                cfg.Auth.GitHub.AppID,
+					InstallationID:       cfg.Auth.GitHub.InstallationID,
+					PrivateKey:           cfg.Auth.GitHub.PrivateKey,
+					PrivateKeyPath:       cfg.Auth.GitHub.PrivateKeyPath,
+					PrivateKeySecretName: cfg.Auth.GitHub.PrivateKeySecretName,
 				}))
 			}
 			ghOpts = append(ghOpts, ghauth.WithLogger(*lgr))

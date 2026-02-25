@@ -24,8 +24,10 @@ func TestHandler_NewWithDefaults(t *testing.T) {
 	assert.NotNil(t, handler)
 	assert.Equal(t, HandlerName, handler.Name())
 	assert.Equal(t, HandlerDisplayName, handler.DisplayName())
+	assert.Contains(t, handler.SupportedFlows(), auth.FlowInteractive)
 	assert.Contains(t, handler.SupportedFlows(), auth.FlowDeviceCode)
 	assert.Contains(t, handler.SupportedFlows(), auth.FlowPAT)
+	assert.Contains(t, handler.SupportedFlows(), auth.FlowGitHubApp)
 }
 
 func TestHandler_NewWithOptions(t *testing.T) {
@@ -554,6 +556,7 @@ func TestHandler_Login_ScopesNotOverriddenByDefaults(t *testing.T) {
 	// Provide scopes that differ from defaults ("gist", "read:org", "repo", "workflow")
 	customScopes := []string{"notifications"}
 	result, err := handler.Login(ctx, auth.LoginOptions{
+		Flow:    auth.FlowDeviceCode,
 		Scopes:  customScopes,
 		Timeout: 10 * time.Second,
 	})

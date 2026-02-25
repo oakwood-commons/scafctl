@@ -124,6 +124,14 @@ func (m *MockHTTPClient) Get(ctx context.Context, endpoint string, headers map[s
 	return m.nextResponse("GET", endpoint, nil, headers)
 }
 
+// PostJSON implements HTTPClient.PostJSON.
+func (m *MockHTTPClient) PostJSON(ctx context.Context, endpoint string, _ any, headers map[string]string) (*http.Response, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	return m.nextResponse("POST", endpoint, nil, headers)
+}
+
 // GetRequests returns all recorded requests.
 func (m *MockHTTPClient) GetRequests() []*MockRequest {
 	m.mu.Lock()

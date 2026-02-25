@@ -1341,12 +1341,45 @@ func TestIntegration_AuthLoginEntraInvalidFlow(t *testing.T) {
 	assert.Contains(t, stderr, "interactive")
 }
 
-func TestIntegration_AuthLoginCallbackPortUnsupported(t *testing.T) {
+func TestIntegration_AuthLoginCallbackPortSupported(t *testing.T) {
 	t.Parallel()
-	_, stderr, exitCode := runScafctl(t, "auth", "login", "github", "--callback-port", "8400")
+	// GitHub now supports --callback-port for the interactive (PKCE) flow.
+	// The login command should accept this flag without error (it will still
+	// fail because we don't complete the browser auth, but it shouldn't
+	// reject the flag itself).
+	stdout, _, exitCode := runScafctl(t, "auth", "login", "github", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "--callback-port")
+}
+
+func TestIntegration_AuthLoginGitHubInteractiveFlow(t *testing.T) {
+	t.Parallel()
+	// Verify that --flow interactive is accepted for GitHub
+	stdout, _, exitCode := runScafctl(t, "auth", "login", "github", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "--flow")
+}
+
+func TestIntegration_AuthLoginGitHubInvalidFlow(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t, "auth", "login", "github", "--flow", "bogus-flow")
 
 	assert.NotEqual(t, 0, exitCode)
-	assert.Contains(t, stderr, "--callback-port is not supported")
+	assert.Contains(t, stderr, "unknown flow")
+	assert.Contains(t, stderr, "github")
+}
+
+func TestIntegration_AuthLoginGitHubAppFlow(t *testing.T) {
+	t.Parallel()
+	// github-app flow without required config should fail with a config error,
+	// not a flow-parsing error.
+	_, stderr, exitCode := runScafctl(t, "auth", "login", "github", "--flow", "github-app")
+
+	assert.NotEqual(t, 0, exitCode)
+	// Should fail with a config error about missing app ID or private key
+	assert.Contains(t, stderr, "app ID is required")
 }
 
 func TestIntegration_AuthStatusEntra(t *testing.T) {

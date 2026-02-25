@@ -66,6 +66,9 @@ func WithConfig(cfg *Config) Option {
 			if cfg.ClientID != "" {
 				h.config.ClientID = cfg.ClientID
 			}
+			if cfg.ClientSecret != "" {
+				h.config.ClientSecret = cfg.ClientSecret
+			}
 			if cfg.Hostname != "" {
 				h.config.Hostname = cfg.Hostname
 			}
@@ -77,6 +80,21 @@ func WithConfig(cfg *Config) Option {
 			}
 			if cfg.SlowDownIncrement > 0 {
 				h.config.SlowDownIncrement = cfg.SlowDownIncrement
+			}
+			if cfg.AppID != 0 {
+				h.config.AppID = cfg.AppID
+			}
+			if cfg.InstallationID != 0 {
+				h.config.InstallationID = cfg.InstallationID
+			}
+			if cfg.PrivateKey != "" {
+				h.config.PrivateKey = cfg.PrivateKey
+			}
+			if cfg.PrivateKeyPath != "" {
+				h.config.PrivateKeyPath = cfg.PrivateKeyPath
+			}
+			if cfg.PrivateKeySecretName != "" {
+				h.config.PrivateKeySecretName = cfg.PrivateKeySecretName
 			}
 		}
 	}
@@ -171,25 +189,33 @@ func (h *Handler) DisplayName() string {
 // SupportedFlows returns the authentication flows this handler supports.
 func (h *Handler) SupportedFlows() []auth.Flow {
 	return []auth.Flow{
+		auth.FlowInteractive,
 		auth.FlowDeviceCode,
 		auth.FlowPAT,
+		auth.FlowGitHubApp,
 	}
 }
 
 // Capabilities returns the set of capabilities this handler supports.
-// GitHub supports scopes at login time (device code flow) and hostname
+// GitHub supports scopes at login time (device code / interactive flows) and hostname
 // for GHES, but does NOT support per-request scopes (scopes are fixed
 // at login time and cannot be changed on token refresh).
+// CallbackPort is supported for the interactive (browser/PKCE) flow.
 func (h *Handler) Capabilities() []auth.Capability {
 	return []auth.Capability{
 		auth.CapScopesOnLogin,
 		auth.CapHostname,
+		auth.CapCallbackPort,
 	}
 }
 
 // Login initiates the authentication flow.
-// For device code flow, this initiates interactive authentication.
-// For PAT flow, this validates the token from environment.
+// Default interactive flow behaviour:
+//   - With client_secret configured → OAuth authorization code + PKCE (browser redirect)
+//   - Without client_secret → device code flow with browser auto-open (same as 'gh auth login')
+//
+// Use --flow device-code to force the headless code-prompt (no browser).
+// Use --flow github-app for service-to-service installation tokens.
 func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Result, error) {
 	if err := h.ensureSecrets(); err != nil {
 		return nil, err
@@ -202,7 +228,23 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 		return h.patLogin(ctx, opts)
 	}
 
-	return h.deviceCodeLogin(ctx, opts)
+	switch opts.Flow { //nolint:exhaustive // Only GitHub-supported flows are handled; others fall through to default
+	case auth.FlowDeviceCode:
+		// Explicit device-code: show code, do not open browser
+		return h.deviceCodeLogin(ctx, opts)
+	case auth.FlowGitHubApp:
+		return h.appLogin(ctx, opts)
+	case auth.FlowInteractive, "":
+		// Interactive default: use browser auth code + PKCE when a client_secret
+		// is configured. Without a secret, GitHub OAuth Apps reject the exchange,
+		// so fall back to device code with browser auto-open (matching 'gh auth login').
+		if h.config.ClientSecret != "" {
+			return h.authCodeLogin(ctx, opts)
+		}
+		return h.interactiveDeviceCodeLogin(ctx, opts)
+	default:
+		return nil, fmt.Errorf("%w: %s", auth.ErrFlowNotSupported, opts.Flow)
+	}
 }
 
 // Logout clears stored credentials and cached tokens.

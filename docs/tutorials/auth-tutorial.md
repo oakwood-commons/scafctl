@@ -24,6 +24,8 @@ This tutorial walks you through setting up and using authentication in scafctl. 
    - [Entra Workload Identity](#workload-identity-authentication-kubernetes)
    - [GitHub Device Code Flow](#github-device-code-flow)
    - [GitHub PAT Flow](#github-pat-authentication-cicd)
+   - [GitHub Interactive Flow (Browser OAuth + PKCE)](#github-interactive-flow-browser-oauth--pkce)
+   - [GitHub App Installation Token](#github-app-installation-token)
    - [GCP Interactive Login](#gcp-interactive-login-browser-oauth)
    - [GCP Service Account Key](#gcp-service-account-key-authentication-cicd)
    - [GCP Workload Identity Federation](#gcp-workload-identity-federation)
@@ -55,7 +57,7 @@ scafctl currently supports the following auth handlers:
 | Handler | Description | Flows |
 |---------|-------------|-------|
 | `entra` | Microsoft Entra ID (Azure AD) | Interactive (Browser OAuth + PKCE), Device Code, Service Principal, Workload Identity |
-| `github` | GitHub (github.com and GHES) | Device Code, PAT (Personal Access Token) |
+| `github` | GitHub (github.com and GHES) | Interactive (Browser OAuth + PKCE), Device Code, PAT (Personal Access Token), GitHub App |
 | `gcp` | Google Cloud Platform | Interactive (Browser OAuth), Service Account Key, Workload Identity Federation, Metadata Server |
 
 You can always discover registered handlers and their capabilities at runtime:
@@ -542,15 +544,53 @@ curl -s "$(kubectl get --raw /.well-known/openid-configuration | jq -r '.jwks_ur
 
 ---
 
-## GitHub Device Code Flow
+## GitHub Interactive Flow (Browser OAuth + PKCE)
 
-To authenticate with GitHub, use the `auth login` command:
+The default GitHub login flow opens your browser for OAuth Authorization Code + PKCE authentication — the same approach used by `gh auth login` and the Entra handler:
 
 ```bash
 scafctl auth login github
 ```
 
-This initiates a device code flow:
+This initiates a browser-based login:
+
+1. scafctl starts a local HTTP server on an ephemeral port
+2. Your browser opens to the GitHub authorization page
+3. Authorize the scafctl OAuth App
+4. GitHub redirects back to the local server with an authorization code
+5. scafctl exchanges the code for tokens using PKCE verification
+6. Credentials are stored securely
+
+### Example Output
+
+```
+→ Opening browser for authentication...
+  If the browser does not open, visit: https://github.com/login/oauth/authorize?...
+
+✓ Authentication successful!
+  Name:     The Octocat
+  Username: octocat
+  Email:    octocat@github.com
+  Flow:     Interactive
+```
+
+### Setting a Callback Port
+
+By default, the interactive flow starts a local HTTP server on a random (ephemeral) port. Use `--callback-port` to bind to a predictable port:
+
+```bash
+scafctl auth login github --callback-port 8400
+```
+
+---
+
+## GitHub Device Code Flow
+
+For headless environments, SSH sessions, or when the browser cannot open, use the device code flow:
+
+```bash
+scafctl auth login github --flow device-code
+```
 
 1. scafctl displays a code and URL
 2. Open the URL in your browser
@@ -648,6 +688,109 @@ scafctl auth login github --flow pat
 - When either token env var is set, scafctl automatically uses the PAT flow
 - PATs don't have a defined expiry, so status shows as authenticated until the token is revoked
 - The PAT identity type shows as `service-principal` since it acts like a non-interactive credential
+
+---
+
+## GitHub App Installation Token
+
+For service-to-service automation and CI/CD without user tokens, use a GitHub App installation token. This is the recommended approach for automated workflows that need repository access.
+
+### Prerequisites
+
+1. Create a GitHub App in your organization or account
+2. Generate a private key for the App
+3. Install the App on the target repository/organization
+4. Note the App ID and Installation ID
+
+### Configuration
+
+Set the GitHub App credentials via config file, environment variables, or a combination:
+
+**Config file (`~/.config/scafctl/config.yaml`):**
+
+```yaml
+auth:
+  github:
+    appId: "12345"
+    installationId: "67890"
+    privateKeyPath: "/path/to/private-key.pem"
+```
+
+**Environment variables:**
+
+```bash
+export SCAFCTL_GITHUB_APP_ID="12345"
+export SCAFCTL_GITHUB_APP_INSTALLATION_ID="67890"
+export SCAFCTL_GITHUB_APP_PRIVATE_KEY_PATH="/path/to/private-key.pem"
+```
+
+### Login
+
+```bash
+# Login with GitHub App (requires App credentials configured)
+scafctl auth login github --flow github-app
+```
+
+### Example Output
+
+```
+✓ Authentication successful!
+  App:             my-automation-app
+  Installation ID: 67890
+  Flow:            GitHub App
+  Identity Type:   service-principal
+```
+
+### Private Key Sources
+
+The private key can be provided from multiple sources (checked in priority order):
+
+| Source | Config Field | Env Var |
+|--------|-------------|---------|
+| Inline PEM | `privateKey` | `SCAFCTL_GITHUB_APP_PRIVATE_KEY` |
+| File path | `privateKeyPath` | `SCAFCTL_GITHUB_APP_PRIVATE_KEY_PATH` |
+| Secret store | `privateKeySecretName` | — |
+
+**Inline PEM (CI/CD secret):**
+
+```bash
+export SCAFCTL_GITHUB_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----
+MIIEpAIBAAKCAQEA...
+-----END RSA PRIVATE KEY-----"
+scafctl auth login github --flow github-app
+```
+
+**File path:**
+
+```bash
+export SCAFCTL_GITHUB_APP_PRIVATE_KEY_PATH="/path/to/private-key.pem"
+scafctl auth login github --flow github-app
+```
+
+**Secret store:**
+
+```yaml
+# config.yaml
+auth:
+  github:
+    appId: "12345"
+    installationId: "67890"
+    privateKeySecretName: "github-app-private-key"
+```
+
+### GitHub Enterprise Server
+
+The GitHub App flow works with GHES by setting `--hostname`:
+
+```bash
+scafctl auth login github --flow github-app --hostname github.example.com
+```
+
+### Notes
+- Installation tokens expire after 1 hour and are automatically cached
+- The identity type is `service-principal` (no user context)
+- The App must be installed on the target organization/repository
+- Both PKCS#1 (`BEGIN RSA PRIVATE KEY`) and PKCS#8 (`BEGIN PRIVATE KEY`) PEM formats are supported
 
 ---
 
