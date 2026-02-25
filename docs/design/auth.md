@@ -32,7 +32,7 @@ scafctl provides built-in auth handlers for common identity providers:
 |---------|--------|-------------|
 | `entra` | ✅ Implemented | Microsoft Entra ID (Azure AD) |
 | `github` | ✅ Implemented | GitHub OAuth (Device Code + PAT) |
-| `gcp` | 🔜 Planned | Google Cloud Platform |
+| `gcp` | ✅ Implemented | Google Cloud Platform (ADC, Service Account, Metadata, Workload Identity, gcloud ADC, Impersonation) |
 
 **External Auth Handlers** can be distributed via the catalog for custom identity providers:
 

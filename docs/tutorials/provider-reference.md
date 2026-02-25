@@ -1023,7 +1023,8 @@ validate:
 
 ## Next Steps
 
-- [Provider Development](provider-development.md) — Build custom providers
-- [Plugin Development](plugin-development.md) — Extend scafctl with plugins
+- [Provider Development](provider-development.md) — Build custom providers (builtin and plugin)
+- [Auth Handler Development](auth-handler-development.md) — Build custom auth handlers (builtin and plugin)
+- [Extension Concepts](extension-concepts.md) — Provider vs Auth Handler vs Plugin terminology
 - [Resolver Tutorial](resolver-tutorial.md) — Using providers within resolvers
 - [Getting Started](getting-started.md) — Run your first solution
