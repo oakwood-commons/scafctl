@@ -1321,6 +1321,53 @@ func TestIntegration_AuthLogoutGCP(t *testing.T) {
 	)
 }
 
+func TestIntegration_AuthLoginEntraHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "auth", "login", "entra", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "entra")
+	assert.Contains(t, stdout, "--flow")
+	assert.Contains(t, stdout, "--tenant")
+	assert.Contains(t, stdout, "--callback-port")
+}
+
+func TestIntegration_AuthLoginEntraInvalidFlow(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t, "auth", "login", "entra", "--flow", "bogus-flow")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "unknown flow")
+	assert.Contains(t, stderr, "interactive")
+}
+
+func TestIntegration_AuthLoginCallbackPortUnsupported(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t, "auth", "login", "github", "--callback-port", "8400")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "--callback-port is not supported")
+}
+
+func TestIntegration_AuthStatusEntra(t *testing.T) {
+	t.Parallel()
+	_, _, exitCode := runScafctl(t, "auth", "status", "entra")
+
+	// Should succeed even if not authenticated
+	assert.Equal(t, 0, exitCode)
+}
+
+func TestIntegration_AuthLogoutEntra(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "auth", "logout", "entra")
+
+	assert.Equal(t, 0, exitCode)
+	assert.True(t,
+		strings.Contains(stdout, "Not currently authenticated") || strings.Contains(stdout, "Successfully logged out"),
+		"expected logout message, got: %s", stdout,
+	)
+}
+
 // ============================================================================
 // Error Handling Tests
 // ============================================================================
@@ -4279,13 +4326,12 @@ func TestIntegration_RunSolution_DryRun_YAML(t *testing.T) {
 // ============================================================================
 
 // TestIntegration_LogLevel_Debug verifies that --log-level debug is accepted
-// and produces log output on stderr.
+// without errors. Debug logging only produces stderr output when the command
+// emits V(1)+ log records, so we only assert a zero exit code.
 func TestIntegration_LogLevel_Debug(t *testing.T) {
 	t.Parallel()
-	_, stderr, exitCode := runScafctl(t, "version", "--log-level", "debug")
+	_, _, exitCode := runScafctl(t, "version", "--log-level", "debug")
 	assert.Equal(t, 0, exitCode)
-	// Debug logging should include at least one log entry on stderr.
-	assert.NotEmpty(t, stderr)
 }
 
 // TestIntegration_LogLevel_Numeric verifies that a numeric V-level (e.g. "3")

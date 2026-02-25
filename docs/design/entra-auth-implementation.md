@@ -20,14 +20,17 @@ The package manually implements all OAuth 2.0 flows using raw `net/http` POST ca
 
 | Flow | Grant Type | File | Use Case |
 |------|-----------|------|----------|
-| Device Code | `urn:ietf:params:oauth:grant-type:device_code` | `device_flow.go` | Interactive CLI login |
+| Authorization Code + PKCE | `authorization_code` | `authcode_flow.go` | **Default** interactive CLI login (opens browser) |
+| Device Code | `urn:ietf:params:oauth:grant-type:device_code` | `device_flow.go` | Interactive CLI login (headless / SSH fallback via `--flow device-code`) |
 | Client Credentials (Service Principal) | `client_credentials` | `service_principal.go` | Non-interactive, from `AZURE_CLIENT_*` env vars |
 | Workload Identity | `client_credentials` with `client_assertion` (JWT bearer) | `workload_identity.go` | Kubernetes federated token exchange |
 | Refresh Token | `refresh_token` | `token.go` | Silent token renewal with rotation |
 
 ### Flow Priority
 
-Auto-detection order: **Workload Identity > Service Principal > Device Code**.
+Auto-detection order: **Workload Identity > Service Principal > Authorization Code + PKCE** (interactive default).
+
+The device code flow is available as a fallback via `--flow device-code` for headless or SSH sessions.
 
 ### Token Caching
 
@@ -59,7 +62,7 @@ Two layers of persistence, both backed by `secrets.Store` (OS keychain/credentia
 | Disadvantage | Detail |
 |--------------|--------|
 | **Maintenance burden** | OAuth 2.0 protocol implementation must be maintained manually. Microsoft endpoint behavior changes or new error codes require manual updates. |
-| **No PKCE / Auth Code flow** | MSAL supports interactive browser auth with PKCE out of the box. Adding this manually is significant work. |
+| ~~**No PKCE / Auth Code flow**~~ | ✅ **Resolved.** Authorization code + PKCE flow implemented in `authcode_flow.go` using a shared `pkg/auth/oauth` package (PKCE, local callback server, browser opener). Now the default interactive flow. |
 | **No certificate-based auth** | MSAL supports client certificate credentials natively; currently missing. |
 | **No instance discovery / sovereign clouds** | MSAL handles authority validation, instance discovery metadata, and sovereign cloud endpoints (Azure Government, Azure China). The manual code hardcodes `login.microsoftonline.com`. |
 | **No Conditional Access / Claims Challenge** | MSAL handles the `claims` parameter for Conditional Access challenges automatically. |
@@ -81,7 +84,7 @@ Switching is not a clean drop-in replacement:
 
 **Retain the manual implementation.** The current approach is reasonable given the project's constraints:
 
-- Only 3 well-defined flows are needed (device code, client credentials, workload identity)
+- 4 well-defined flows are implemented (authorization code + PKCE, device code, client credentials, workload identity)
 - Custom caching requirements (`secrets.Store` integration) would require adapter code regardless
 - The code is well-tested (~3,500 lines of tests including integration)
 - The project values minimal dependencies
@@ -97,7 +100,7 @@ Switching is not a clean drop-in replacement:
 
 Switch to MSAL if any of the following become requirements:
 
-- **Interactive browser auth with PKCE** — significant work to implement manually
+- ~~**Interactive browser auth with PKCE**~~ — ✅ implemented (`authcode_flow.go` + shared `pkg/auth/oauth` package)
 - **Client certificate authentication** — non-trivial to implement correctly (key signing, x5c/x5t headers)
 - **Sovereign cloud support** — instance discovery and authority validation across Azure Government, Azure China, etc.
 - **Conditional Access / Claims Challenges** — protocol-level complexity that MSAL handles transparently

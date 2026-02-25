@@ -35,6 +35,7 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 		federatedToken            string
 		scopes                    []string
 		impersonateServiceAccount string
+		callbackPort              int
 		force                     bool
 		skipIfAuthenticated       bool
 	)
@@ -181,6 +182,11 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 				w.Errorf("%v", err)
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
+			if callbackPort != 0 && !auth.HasCapability(caps, auth.CapCallbackPort) {
+				err := fmt.Errorf("--callback-port is not supported by the %q auth handler", handlerName)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
 
 			// Parse flow
 			flow, err := parseFlow(flowStr, handlerName)
@@ -201,9 +207,9 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 			case "github":
 				return loginGitHub(ctx, w, flow, hostname, clientID, timeout, scopes, force, skipIfAuthenticated)
 			case "gcp":
-				return loginGCP(ctx, w, flow, clientID, impersonateServiceAccount, timeout, scopes, force, skipIfAuthenticated)
+				return loginGCP(ctx, w, flow, clientID, impersonateServiceAccount, callbackPort, timeout, scopes, force, skipIfAuthenticated)
 			default:
-				return loginEntra(ctx, w, flow, tenantID, clientID, timeout, federatedToken, flowStr, scopes, force, skipIfAuthenticated)
+				return loginEntra(ctx, w, flow, tenantID, clientID, callbackPort, timeout, federatedToken, flowStr, scopes, force, skipIfAuthenticated)
 			}
 		},
 	}
@@ -218,6 +224,7 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 	cmd.Flags().StringVar(&impersonateServiceAccount, "impersonate-service-account", "", "GCP service account email to impersonate (gcp handler only)")
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "Re-authenticate even if already logged in (logs out first)")
 	cmd.Flags().BoolVar(&skipIfAuthenticated, "skip-if-authenticated", false, "Exit successfully without re-authenticating if already logged in (idempotent for scripts)")
+	cmd.Flags().IntVar(&callbackPort, "callback-port", 0, "Fixed port for the OAuth callback server (e.g. 8400); the redirect URI becomes http://localhost:<port>. Register this URI in your app registration. 0 = ephemeral (default).")
 
 	return cmd
 }
@@ -269,11 +276,11 @@ func loginGitHub(ctx context.Context, w *writer.Writer, flow auth.Flow, hostname
 		}
 	}
 
-	return executeLogin(ctx, w, handler, flow, "", timeout, scopes)
+	return executeLogin(ctx, w, handler, flow, "", 0, timeout, scopes)
 }
 
 // loginGCP handles the login flow for the GCP auth handler.
-func loginGCP(ctx context.Context, w *writer.Writer, flow auth.Flow, clientID, impersonateServiceAccount string, timeout time.Duration, scopes []string, force, skipIfAuthenticated bool) error {
+func loginGCP(ctx context.Context, w *writer.Writer, flow auth.Flow, clientID, impersonateServiceAccount string, callbackPort int, timeout time.Duration, scopes []string, force, skipIfAuthenticated bool) error {
 	// Auto-detect flow based on available credentials (highest priority first)
 	if flow == "" && gcpauth.HasWorkloadIdentityCredentials() {
 		flow = auth.FlowWorkloadIdentity
@@ -320,11 +327,11 @@ func loginGCP(ctx context.Context, w *writer.Writer, flow auth.Flow, clientID, i
 		}
 	}
 
-	return executeLogin(ctx, w, handler, flow, "", timeout, scopes)
+	return executeLogin(ctx, w, handler, flow, "", callbackPort, timeout, scopes)
 }
 
 // loginEntra handles the login flow for the Entra auth handler.
-func loginEntra(ctx context.Context, w *writer.Writer, flow auth.Flow, tenantID, clientID string, timeout time.Duration, federatedToken, flowStr string, scopes []string, force, skipIfAuthenticated bool) error {
+func loginEntra(ctx context.Context, w *writer.Writer, flow auth.Flow, tenantID, clientID string, callbackPort int, timeout time.Duration, federatedToken, flowStr string, scopes []string, force, skipIfAuthenticated bool) error {
 	// If --federated-token is provided, set the env var for workload identity
 	if federatedToken != "" {
 		if err := os.Setenv(entra.EnvAzureFederatedToken, federatedToken); err != nil {
@@ -348,9 +355,9 @@ func loginEntra(ctx context.Context, w *writer.Writer, flow auth.Flow, tenantID,
 		w.Info("Detected service principal credentials in environment variables")
 	}
 
-	// Default to device code if no flow detected
+	// Default to interactive (browser OAuth with authorization code + PKCE)
 	if flow == "" {
-		flow = auth.FlowDeviceCode
+		flow = auth.FlowInteractive
 	}
 
 	// Get or create handler
@@ -391,13 +398,13 @@ func loginEntra(ctx context.Context, w *writer.Writer, flow auth.Flow, tenantID,
 		}
 	}
 
-	return executeLogin(ctx, w, handler, flow, tenantID, timeout, scopes)
+	return executeLogin(ctx, w, handler, flow, tenantID, callbackPort, timeout, scopes)
 }
 
 // executeLogin runs the common login logic for any auth handler.
 // For device-code flows on a terminal, it uses the kvx status screen TUI.
 // All other flows (and non-terminal output) use plain text output.
-func executeLogin(ctx context.Context, w *writer.Writer, handler auth.Handler, flow auth.Flow, tenantID string, timeout time.Duration, scopes []string) error {
+func executeLogin(ctx context.Context, w *writer.Writer, handler auth.Handler, flow auth.Flow, tenantID string, callbackPort int, timeout time.Duration, scopes []string) error {
 	// Set up cancellation handling
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -416,15 +423,16 @@ func executeLogin(ctx context.Context, w *writer.Writer, handler auth.Handler, f
 
 	// Use kvx status TUI for device-code flows when running in a terminal.
 	if flow == auth.FlowDeviceCode && skvx.IsTerminal(ioStreams.Out) {
-		return executeLoginWithStatusTUI(ctx, w, handler, flow, tenantID, timeout, scopes, ioStreams)
+		return executeLoginWithStatusTUI(ctx, w, handler, flow, tenantID, callbackPort, timeout, scopes, ioStreams)
 	}
 
 	// Plain-text login path (non-terminal, or non-device-code flows).
 	loginOpts := auth.LoginOptions{
-		TenantID: tenantID,
-		Scopes:   scopes,
-		Flow:     flow,
-		Timeout:  timeout,
+		TenantID:     tenantID,
+		Scopes:       scopes,
+		Flow:         flow,
+		Timeout:      timeout,
+		CallbackPort: callbackPort,
 		DeviceCodeCallback: func(userCode, verificationURI, _ string) {
 			w.Info("")
 			w.Info("To sign in, use a web browser to open the page:")
@@ -463,6 +471,7 @@ func executeLoginWithStatusTUI(
 	handler auth.Handler,
 	flow auth.Flow,
 	tenantID string,
+	callbackPort int,
 	timeout time.Duration,
 	scopes []string,
 	ioStreams *terminal.IOStreams,
@@ -481,10 +490,11 @@ func executeLoginWithStatusTUI(
 	done := make(chan tui.StatusResult, 1)
 
 	loginOpts := auth.LoginOptions{
-		TenantID: tenantID,
-		Scopes:   scopes,
-		Flow:     flow,
-		Timeout:  timeout,
+		TenantID:     tenantID,
+		Scopes:       scopes,
+		Flow:         flow,
+		Timeout:      timeout,
+		CallbackPort: callbackPort,
 		DeviceCodeCallback: func(userCode, verificationURI, _ string) {
 			select {
 			case deviceCodeChan <- deviceCodeData{userCode: userCode, verificationURI: verificationURI}:
