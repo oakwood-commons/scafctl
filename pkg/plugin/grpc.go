@@ -204,16 +204,48 @@ func descriptorToProto(desc *provider.Descriptor) *proto.ProviderDescriptor {
 		version = desc.Version.String()
 	}
 	protoDesc := &proto.ProviderDescriptor{
-		Name:         desc.Name,
-		DisplayName:  desc.DisplayName,
-		Description:  desc.Description,
-		Version:      version,
-		Category:     desc.Category,
-		Capabilities: make([]string, len(desc.Capabilities)),
+		Name:            desc.Name,
+		DisplayName:     desc.DisplayName,
+		Description:     desc.Description,
+		Version:         version,
+		Category:        desc.Category,
+		Capabilities:    make([]string, len(desc.Capabilities)),
+		ApiVersion:      desc.APIVersion,
+		MockBehavior:    desc.MockBehavior,
+		SensitiveFields: desc.SensitiveFields,
+		Tags:            desc.Tags,
+		Icon:            desc.Icon,
+		Deprecated:      desc.Deprecated, //nolint:staticcheck // field is intentionally used for gRPC serialization
+		Beta:            desc.Beta,
 	}
 
 	for i, cap := range desc.Capabilities {
 		protoDesc.Capabilities[i] = string(cap)
+	}
+
+	// Convert links
+	for _, link := range desc.Links {
+		protoDesc.Links = append(protoDesc.Links, &proto.Link{
+			Name: link.Name,
+			Url:  link.URL,
+		})
+	}
+
+	// Convert examples
+	for _, ex := range desc.Examples {
+		protoDesc.Examples = append(protoDesc.Examples, &proto.Example{
+			Name:        ex.Name,
+			Description: ex.Description,
+			Yaml:        ex.YAML,
+		})
+	}
+
+	// Convert maintainers
+	for _, m := range desc.Maintainers {
+		protoDesc.Maintainers = append(protoDesc.Maintainers, &proto.Contact{
+			Name:  m.Name,
+			Email: m.Email,
+		})
 	}
 
 	// Convert schema
@@ -303,16 +335,48 @@ func protoToDescriptor(protoDesc *proto.ProviderDescriptor) *provider.Descriptor
 		version, _ = semver.NewVersion(protoDesc.Version)
 	}
 	desc := &provider.Descriptor{
-		Name:         protoDesc.Name,
-		DisplayName:  protoDesc.DisplayName,
-		Description:  protoDesc.Description,
-		Version:      version,
-		Category:     protoDesc.Category,
-		Capabilities: make([]provider.Capability, len(protoDesc.Capabilities)),
+		Name:            protoDesc.Name,
+		DisplayName:     protoDesc.DisplayName,
+		Description:     protoDesc.Description,
+		Version:         version,
+		Category:        protoDesc.Category,
+		Capabilities:    make([]provider.Capability, len(protoDesc.Capabilities)),
+		APIVersion:      protoDesc.ApiVersion,
+		MockBehavior:    protoDesc.MockBehavior,
+		SensitiveFields: protoDesc.SensitiveFields,
+		Tags:            protoDesc.Tags,
+		Icon:            protoDesc.Icon,
+		Deprecated:      protoDesc.Deprecated,
+		Beta:            protoDesc.Beta,
 	}
 
 	for i, cap := range protoDesc.Capabilities {
 		desc.Capabilities[i] = provider.Capability(cap)
+	}
+
+	// Convert links
+	for _, link := range protoDesc.Links {
+		desc.Links = append(desc.Links, provider.Link{
+			Name: link.Name,
+			URL:  link.Url,
+		})
+	}
+
+	// Convert examples
+	for _, ex := range protoDesc.Examples {
+		desc.Examples = append(desc.Examples, provider.Example{
+			Name:        ex.Name,
+			Description: ex.Description,
+			YAML:        ex.Yaml,
+		})
+	}
+
+	// Convert maintainers
+	for _, m := range protoDesc.Maintainers {
+		desc.Maintainers = append(desc.Maintainers, provider.Contact{
+			Name:  m.Name,
+			Email: m.Email,
+		})
 	}
 
 	// Convert schema

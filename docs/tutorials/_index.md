@@ -39,8 +39,14 @@ Step-by-step guides for learning scafctl features.
 - [Exec Provider Tutorial](exec-provider-tutorial.md) — Cross-platform shell execution with embedded and external shells
 - [Directory Provider Tutorial](directory-provider-tutorial.md) — Listing, scanning, and managing directories
 - [Provider Reference](provider-reference.md) — Complete documentation for all built-in providers
-- [Provider Development Guide](provider-development.md) — Build custom providers
-- [Plugin Development Guide](plugin-development.md) — Extend scafctl with plugins
+
+## Extension Development
+
+- [Extension Concepts](extension-concepts.md) — Provider vs Auth Handler vs Plugin terminology
+- [Provider Development Guide](provider-development.md) — Build custom providers (builtin and plugin)
+- [Auth Handler Development Guide](auth-handler-development.md) — Build custom auth handlers (builtin and plugin)
+- [Plugin Development Guide](plugin-development.md) — Plugin overview and discovery
+- [Plugin Auto-Fetching Tutorial](plugin-auto-fetch-tutorial.md) — Automatically fetch plugins from catalogs at runtime
 
 ## AI Integration
 

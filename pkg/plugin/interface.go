@@ -5,7 +5,9 @@ package plugin
 
 import (
 	"context"
+	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 )
 
@@ -22,11 +24,102 @@ type ProviderPlugin interface {
 	ExecuteProvider(ctx context.Context, providerName string, input map[string]any) (*provider.Output, error)
 }
 
-// HandshakeConfig is used to verify plugin compatibility
+// AuthHandlerInfo holds static metadata about an auth handler exposed by a plugin.
+type AuthHandlerInfo struct {
+	Name         string
+	DisplayName  string
+	Flows        []auth.Flow
+	Capabilities []auth.Capability
+}
+
+// LoginRequest contains parameters for a plugin Login call.
+type LoginRequest struct {
+	TenantID string
+	Scopes   []string
+	Flow     auth.Flow
+	Timeout  time.Duration
+}
+
+// LoginResponse contains the result of a plugin Login call.
+type LoginResponse struct {
+	Claims    *auth.Claims
+	ExpiresAt time.Time
+}
+
+// DeviceCodePrompt is sent over streaming Login to relay device-code info to the host.
+type DeviceCodePrompt struct {
+	UserCode        string
+	VerificationURI string
+	Message         string
+}
+
+// LoginStreamMessage represents a message in the Login server-stream.
+// Exactly one field is non-nil.
+type LoginStreamMessage struct {
+	DeviceCodePrompt *DeviceCodePrompt
+	Result           *LoginResponse
+	Error            string
+}
+
+// TokenRequest contains parameters for a plugin GetToken call.
+type TokenRequest struct {
+	Scope        string
+	MinValidFor  time.Duration
+	ForceRefresh bool
+}
+
+// TokenResponse contains the result of a plugin GetToken call.
+type TokenResponse struct {
+	AccessToken string //nolint:gosec // G117: not a hardcoded credential, stores runtime token data
+	TokenType   string
+	ExpiresAt   time.Time
+	Scope       string
+	CachedAt    time.Time
+	Flow        auth.Flow
+	SessionID   string
+}
+
+// AuthHandlerPlugin is the interface that auth handler plugins must implement.
+// This wraps the auth.Handler interface for plugin communication over gRPC.
+type AuthHandlerPlugin interface {
+	// GetAuthHandlers returns metadata for all auth handlers exposed by this plugin.
+	GetAuthHandlers(ctx context.Context) ([]AuthHandlerInfo, error)
+
+	// Login initiates authentication for the named handler.
+	// The callback, if non-nil, is invoked when the plugin sends a device-code prompt.
+	Login(ctx context.Context, handlerName string, req LoginRequest, deviceCodeCb func(DeviceCodePrompt)) (*LoginResponse, error)
+
+	// Logout clears stored credentials for the named handler.
+	Logout(ctx context.Context, handlerName string) error
+
+	// GetStatus returns the current authentication status for the named handler.
+	GetStatus(ctx context.Context, handlerName string) (*auth.Status, error)
+
+	// GetToken returns a valid access token for the named handler.
+	GetToken(ctx context.Context, handlerName string, req TokenRequest) (*TokenResponse, error)
+
+	// ListCachedTokens returns all cached tokens for the named handler.
+	// Returns an empty slice if the handler does not support token listing.
+	ListCachedTokens(ctx context.Context, handlerName string) ([]*auth.CachedTokenInfo, error)
+
+	// PurgeExpiredTokens removes expired tokens for the named handler.
+	// Returns the number of tokens removed and an error if the handler
+	// does not support token purging.
+	PurgeExpiredTokens(ctx context.Context, handlerName string) (int, error)
+}
+
+// HandshakeConfig is used to verify provider plugin compatibility.
 var HandshakeConfig = &HandshakeConfigData{
 	ProtocolVersion:  1,
 	MagicCookieKey:   "SCAFCTL_PLUGIN",
 	MagicCookieValue: "scafctl_provider_plugin",
+}
+
+// AuthHandlerHandshakeConfig is used to verify auth handler plugin compatibility.
+var AuthHandlerHandshakeConfig = &HandshakeConfigData{
+	ProtocolVersion:  1,
+	MagicCookieKey:   "SCAFCTL_AUTH_PLUGIN",
+	MagicCookieValue: "scafctl_auth_handler_plugin",
 }
 
 // HandshakeConfigData contains the handshake configuration

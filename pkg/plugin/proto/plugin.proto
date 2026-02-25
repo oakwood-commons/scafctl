@@ -2,7 +2,7 @@ syntax = "proto3";
 package plugin;
 option go_package = "github.com/oakwood-commons/scafctl/pkg/plugin/proto";
 
-// PluginService is the main plugin service
+// PluginService is the provider plugin service.
 service PluginService {
   // GetProviders returns all providers exposed by this plugin
   rpc GetProviders(GetProvidersRequest) returns (GetProvidersResponse);
@@ -12,6 +12,31 @@ service PluginService {
   
   // ExecuteProvider executes a provider
   rpc ExecuteProvider(ExecuteProviderRequest) returns (ExecuteProviderResponse);
+}
+
+// AuthHandlerService is the auth handler plugin service.
+service AuthHandlerService {
+  // GetAuthHandlers returns metadata for all auth handlers exposed by this plugin.
+  rpc GetAuthHandlers(GetAuthHandlersRequest) returns (GetAuthHandlersResponse);
+
+  // Login initiates authentication. Returns a stream: zero or more DeviceCodePrompt
+  // messages followed by exactly one LoginResult message.
+  rpc Login(LoginRequest) returns (stream LoginStreamMessage);
+
+  // Logout clears stored credentials for the named handler.
+  rpc Logout(LogoutRequest) returns (LogoutResponse);
+
+  // GetStatus returns the current authentication status.
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+
+  // GetToken returns a valid access token.
+  rpc GetToken(GetTokenRequest) returns (GetTokenResponse);
+
+  // ListCachedTokens enumerates cached tokens for the named handler.
+  rpc ListCachedTokens(ListCachedTokensRequest) returns (ListCachedTokensResponse);
+
+  // PurgeExpiredTokens removes expired tokens for the named handler.
+  rpc PurgeExpiredTokens(PurgeExpiredTokensRequest) returns (PurgeExpiredTokensResponse);
 }
 
 message GetProvidersRequest {}
@@ -37,6 +62,35 @@ message ProviderDescriptor {
   repeated string capabilities = 6;
   Schema schema = 7;
   map<string, Schema> output_schemas = 8;  // key is capability string (from, transform, validation, authentication, action)
+  string api_version = 9;
+  string mock_behavior = 10;
+  repeated string sensitive_fields = 11;
+  repeated string tags = 12;
+  string icon = 13;
+  repeated Link links = 14;
+  repeated Example examples = 15;
+  repeated Contact maintainers = 16;
+  bool deprecated = 17;
+  bool beta = 18;
+}
+
+// Link represents a named hyperlink.
+message Link {
+  string name = 1;
+  string url = 2;
+}
+
+// Example represents a usage example for a provider.
+message Example {
+  string name = 1;
+  string description = 2;
+  string yaml = 3;
+}
+
+// Contact represents maintainer contact information.
+message Contact {
+  string name = 1;
+  string email = 2;
 }
 
 message Schema {
@@ -64,4 +118,128 @@ message ExecuteProviderRequest {
 message ExecuteProviderResponse {
   bytes output = 1; // JSON-encoded output (ProviderOutput)
   string error = 2;  // Empty if no error
+}
+
+// ---- Auth Handler Messages ----
+
+message GetAuthHandlersRequest {}
+
+message GetAuthHandlersResponse {
+  repeated AuthHandlerInfo handlers = 1;
+}
+
+message AuthHandlerInfo {
+  string name = 1;
+  string display_name = 2;
+  repeated string flows = 3;
+  repeated string capabilities = 4;
+}
+
+message LoginRequest {
+  string handler_name = 1;
+  string tenant_id = 2;
+  repeated string scopes = 3;
+  string flow = 4;
+  int64 timeout_seconds = 5;
+}
+
+// LoginStreamMessage is sent over the Login server-stream.
+// Exactly one of device_code_prompt or result is set per message.
+message LoginStreamMessage {
+  oneof payload {
+    DeviceCodePrompt device_code_prompt = 1;
+    LoginResult result = 2;
+    string error = 3;
+  }
+}
+
+message DeviceCodePrompt {
+  string user_code = 1;
+  string verification_uri = 2;
+  string message = 3;
+}
+
+message LoginResult {
+  Claims claims = 1;
+  int64 expires_at_unix = 2; // Unix timestamp (seconds)
+}
+
+message Claims {
+  string issuer = 1;
+  string subject = 2;
+  string tenant_id = 3;
+  string object_id = 4;
+  string client_id = 5;
+  string email = 6;
+  string name = 7;
+  string username = 8;
+  int64 issued_at_unix = 9;
+  int64 expires_at_unix = 10;
+}
+
+message LogoutRequest {
+  string handler_name = 1;
+}
+
+message LogoutResponse {}
+
+message GetStatusRequest {
+  string handler_name = 1;
+}
+
+message GetStatusResponse {
+  bool authenticated = 1;
+  Claims claims = 2;
+  int64 expires_at_unix = 3;
+  int64 last_refresh_unix = 4;
+  string tenant_id = 5;
+  string identity_type = 6;
+  string client_id = 7;
+  string token_file = 8;
+  repeated string scopes = 9;
+}
+
+message GetTokenRequest {
+  string handler_name = 1;
+  string scope = 2;
+  int64 min_valid_for_seconds = 3;
+  bool force_refresh = 4;
+}
+
+message GetTokenResponse {
+  string access_token = 1;
+  string token_type = 2;
+  int64 expires_at_unix = 3;
+  string scope = 4;
+  int64 cached_at_unix = 5;
+  string flow = 6;
+  string session_id = 7;
+}
+
+message ListCachedTokensRequest {
+  string handler_name = 1;
+}
+
+message ListCachedTokensResponse {
+  repeated CachedTokenInfo tokens = 1;
+}
+
+message CachedTokenInfo {
+  string handler = 1;
+  string token_kind = 2;
+  string scope = 3;
+  string token_type = 4;
+  string flow = 5;
+  int64 expires_at_unix = 6;
+  int64 cached_at_unix = 7;
+  bool is_expired = 8;
+  string session_id = 9;
+}
+
+message PurgeExpiredTokensRequest {
+  string handler_name = 1;
+}
+
+message PurgeExpiredTokensResponse {
+  int32 purged_count = 1;
 }

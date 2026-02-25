@@ -26,6 +26,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/lint"
 	mcpcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/mcp"
 	newcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/new"
+	pluginscmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/plugins"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/render"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/run"
@@ -395,5 +396,6 @@ func Root(opts *RootOptions) *cobra.Command {
 	cCmd.AddCommand(vendorcmd.CommandVendor(cliParams, ioStreams, settings.CliBinaryName))
 	cCmd.AddCommand(testcmd.CommandTest(cliParams, ioStreams, settings.CliBinaryName))
 	cCmd.AddCommand(mcpcmd.CommandMCP(cliParams, ioStreams, settings.CliBinaryName))
+	cCmd.AddCommand(pluginscmd.CommandPlugins(cliParams, ioStreams, settings.CliBinaryName))
 	return cCmd
 }

@@ -16,8 +16,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/solutionprovider"
@@ -30,11 +32,14 @@ import (
 type Option func(*prepareConfig)
 
 type prepareConfig struct {
-	getter      get.Interface
-	registry    *provider.Registry
-	stdin       io.Reader
-	showMetrics bool
-	metricsOut  io.Writer
+	getter        get.Interface
+	registry      *provider.Registry
+	authRegistry  *auth.Registry
+	stdin         io.Reader
+	showMetrics   bool
+	metricsOut    io.Writer
+	pluginFetcher *plugin.Fetcher
+	lockPlugins   []bundler.LockPlugin
 }
 
 // WithGetter provides a custom solution getter. If not set, one is created
@@ -65,6 +70,32 @@ func WithMetrics(out io.Writer) Option {
 	return func(c *prepareConfig) {
 		c.showMetrics = true
 		c.metricsOut = out
+	}
+}
+
+// WithAuthRegistry provides an auth handler registry for registering
+// auth handler plugins. If not set, auth handler plugin loading is skipped.
+func WithAuthRegistry(r *auth.Registry) Option {
+	return func(c *prepareConfig) {
+		c.authRegistry = r
+	}
+}
+
+// WithPluginFetcher provides a plugin fetcher for auto-fetching plugin
+// binaries from catalogs at runtime. If not set, plugin auto-fetching
+// is skipped (plugins must be available via --plugin-dir).
+func WithPluginFetcher(f *plugin.Fetcher) Option {
+	return func(c *prepareConfig) {
+		c.pluginFetcher = f
+	}
+}
+
+// WithLockPlugins provides lock file plugin entries for reproducible
+// plugin resolution. When provided, pinned versions and digests are
+// used instead of resolving constraints against catalogs.
+func WithLockPlugins(plugins []bundler.LockPlugin) Option {
+	return func(c *prepareConfig) {
+		c.lockPlugins = plugins
 	}
 }
 
@@ -169,6 +200,62 @@ func Solution(ctx context.Context, path string, opts ...Option) (*Result, error)
 				lgr.V(0).Info("warning: failed to register some providers", "error", regErr)
 			}
 			reg = provider.GetGlobalRegistry()
+		}
+	}
+
+	// Auto-fetch and register plugin binaries from catalogs
+	var pluginClients []*plugin.Client
+	if len(sol.Bundle.Plugins) > 0 && cfg.pluginFetcher != nil {
+		fetchResults, fetchErr := cfg.pluginFetcher.FetchPlugins(ctx, sol.Bundle.Plugins, cfg.lockPlugins)
+		if fetchErr != nil {
+			cleanup()
+			return nil, fmt.Errorf("auto-fetching plugins: %w", fetchErr)
+		}
+
+		clients, regErr := plugin.RegisterFetchedPlugins(ctx, reg, fetchResults)
+		if regErr != nil {
+			cleanup()
+			return nil, fmt.Errorf("registering fetched plugins: %w", regErr)
+		}
+		pluginClients = clients
+
+		// Register auth handler plugins if auth registry is available
+		if cfg.authRegistry != nil {
+			authClients, authRegErr := plugin.RegisterFetchedAuthHandlerPlugins(ctx, cfg.authRegistry, fetchResults)
+			if authRegErr != nil {
+				cleanup()
+				return nil, fmt.Errorf("registering fetched auth handler plugins: %w", authRegErr)
+			}
+			// Add auth handler client cleanup
+			origCleanup2 := cleanup
+			cleanup = func() {
+				for _, c := range authClients {
+					c.Kill()
+				}
+				origCleanup2()
+			}
+		}
+
+		if lgr != nil {
+			for _, r := range fetchResults {
+				src := "catalog"
+				if r.FromCache {
+					src = "cache"
+				}
+				lgr.V(1).Info("plugin loaded",
+					"name", r.Name,
+					"version", r.Version,
+					"source", src)
+			}
+		}
+
+		// Add plugin cleanup to the cleanup chain
+		origCleanup := cleanup
+		cleanup = func() {
+			for _, c := range pluginClients {
+				c.Kill()
+			}
+			origCleanup()
 		}
 	}
 

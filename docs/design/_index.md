@@ -18,7 +18,7 @@ Architecture and design documentation for scafctl.
 - [CEL Integration](cel.md) — CEL expression language integration
 - [Catalog](catalog.md) — Catalog system design
 - [CLI](cli.md) — Command-line interface design
-- [Plugins](plugins.md) — Plugin system architecture
+- [Plugins](plugins.md) — Plugin system architecture and auto-fetch
 - [Testing](testing.md) — Testing strategy and patterns
 - [Miscellaneous](misc.md) — Cross-cutting design considerations
 

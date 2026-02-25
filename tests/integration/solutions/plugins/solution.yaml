@@ -1,0 +1,46 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: plugin-deps-test
+  version: 1.0.0
+  description: Solution for testing plugin CLI commands
+
+spec:
+  resolvers:
+    greeting:
+      description: Static greeting
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: Hello from plugin test
+
+  testing:
+    config:
+      skipBuiltins: true
+
+    cases:
+      plugins-help:
+        description: Verify plugins help works
+        command: [plugins, --help]
+        injectFile: false
+        assertions:
+          - expression: __exitCode == 0
+          - contains: install
+          - contains: list
+
+      plugins-list-empty:
+        description: Verify plugins list works with empty cache
+        command: [plugins, list]
+        injectFile: false
+        assertions:
+          - expression: __exitCode == 0
+
+      render-greeting:
+        description: Verify resolver renders
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: greeting

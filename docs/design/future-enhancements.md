@@ -7,15 +7,17 @@ weight: 13
 
 Consolidated index of planned features and future enhancements across all design docs. Each entry links back to the source design doc for full context.
 
+Items marked ✅ have been implemented since this document was originally written.
+
 ---
 
 ## Actions
 
 Source: [actions.md](actions.md)
 
-### Result Schema Validation
+### ✅ Result Schema Validation
 
-Actions could optionally declare an expected result schema for validation and documentation. This would enable runtime validation of provider output, self-documenting result structures, and better CEL/template autocomplete. Schema uses standard JSON Schema format.
+**Implemented.** Actions can declare a `resultSchema` with JSON Schema and a `resultSchemaMode` (`error`, `warn`, `ignore`). Validated at runtime in the action executor. Supports workflow-level defaults. See `pkg/action/result_validation.go` and `pkg/action/executor.go`.
 
 ### Conditional Retry
 
@@ -29,13 +31,13 @@ Parallel expansion across multiple dimensions (e.g., region × environment). Sup
 
 Actions could declare a short alias for more readable expression references (e.g., `config.results.endpoint` instead of `__actions.fetchConfiguration.results.endpoint`). Supports refactoring without updating all expressions.
 
-### Exclusive Actions (Mutual Exclusion)
+### ✅ Exclusive Actions (Mutual Exclusion)
 
-Actions could declare mutual exclusion constraints to prevent concurrent execution of actions that share resources. One-way declaration, does not imply dependency ordering.
+**Implemented.** Actions can declare `exclusive: [<other-action>]` to prevent concurrent execution. One-way declaration, causes DAG phase splitting. See `pkg/action/validation.go` and `pkg/action/exclusive_test.go`.
 
-### Action Concurrency Limit
+### ✅ Action Concurrency Limit
 
-A `--max-action-concurrency` CLI parameter to limit the maximum number of actions executing concurrently. Allows runtime tuning without modifying the solution.
+**Implemented.** The `--max-action-concurrency` flag on `scafctl run solution` limits the maximum number of actions executing concurrently. Default is 0 (unlimited). See `pkg/cmd/scafctl/run/solution.go`.
 
 ---
 
@@ -53,7 +55,7 @@ A dedicated provider to expose authentication claims (tenant ID, subject, scopes
 
 Source: [catalog-build-bundling.md](catalog-build-bundling.md)
 
-The bundling design is now fully specified. Key features:
+✅ The bundling design is now fully implemented. Key features:
 
 - **Multi-file composition (`compose`)** — Split solutions across YAML files, merged at build time
 - **Static analysis + explicit `bundle.include`** — Auto-discover literal file paths; declare globs for dynamic paths
@@ -65,11 +67,9 @@ The bundling design is now fully specified. Key features:
 - **Nested bundle support** — Bundled sub-solutions can themselves contain bundles
 - **Semver constraint resolution** — Catalog refs support full semver constraints (`^`, `~`, `>=`, etc.) resolved at build time to the highest matching version
 - **Version conflict detection** — Conflicting transitive dependency versions are detected and rejected at build time
-
-Future enhancements tracked in the bundling design doc:
-- `scafctl bundle verify` — validate built artifacts
-- Bundle diffing between versions
-- Per-provider defaults within a plugin
+- **`scafctl bundle verify`** — Validate built artifacts
+- **Bundle diffing between versions** — `scafctl bundle diff`
+- **Selective extraction** — `scafctl bundle extract`
 
 ---
 
@@ -81,11 +81,9 @@ Source: [catalog.md](catalog.md)
 
 Additional artifact types beyond solutions, providers, and auth handlers — TBD as the system evolves.
 
-### Catalog Lock File
+### ✅ Catalog Lock File
 
-Source: [catalog-build-bundling.md](catalog-build-bundling.md)
-
-The `solution.lock` file is now part of the bundling design. It records resolved versions and digests for both vendored catalog dependencies and plugin dependencies. Generated during `scafctl build solution`, replayed on subsequent builds for reproducibility. Use `--update-lock` to re-resolve.
+**Implemented.** The `solution.lock` file records resolved versions and digests for vendored catalog dependencies and plugin dependencies. Generated during `scafctl build solution`, replayed on subsequent builds for reproducibility. Use `--update-lock` to re-resolve. See `pkg/solution/bundler/lock.go`.
 
 ---
 
@@ -93,25 +91,25 @@ The `solution.lock` file is now part of the bundling design. It records resolved
 
 Source: [cli.md](cli.md)
 
-### Publishing Artifacts (`push`)
+### ✅ Publishing Artifacts (`push`)
 
-Push artifacts to a remote catalog (analogous to `docker push`). Supports pushing solutions and plugins to named catalogs.
+**Implemented.** `scafctl catalog push` pushes artifacts to a remote catalog. See `pkg/cmd/scafctl/catalog/push.go`.
 
-### Pulling Artifacts (`pull`)
+### ✅ Pulling Artifacts (`pull`)
 
-Pull artifacts from a remote catalog to local (analogous to `docker pull`).
+**Implemented.** `scafctl catalog pull` pulls artifacts from a remote catalog. See `pkg/cmd/scafctl/catalog/pull.go`.
 
-### Tagging Artifacts (`tag`)
+### ✅ Tagging Artifacts (`tag`)
 
-Create version aliases for artifacts (e.g., `my-solution:latest`, `aws-provider:stable`).
+**Implemented.** `scafctl catalog tag` creates version aliases. See `pkg/cmd/scafctl/catalog/tag.go`.
 
-### Catalog Resolution (`--catalog` flag)
+### ✅ Catalog Resolution (`--catalog` flag)
 
-Target a specific configured catalog for commands like `run`, `get`, `push`, `pull`.
+**Implemented.** The `--catalog` flag targets a specific configured catalog. Falls back to config-based default. See `pkg/cmd/scafctl/catalog/resolve.go`.
 
-### Version Constraints
+### ✅ Version Constraints
 
-Support constraint-based version resolution in run commands (e.g., `example@^1.2`, `example@>=1.0 <2.0`). Requires catalog.
+**Implemented.** Semver constraint resolution (`^`, `~`, `>=`, etc.) is supported in catalog vendoring and plugin dependencies. See `pkg/solution/bundler/plugin.go` and `pkg/solution/bundler/vendor.go`.
 
 ---
 
@@ -119,13 +117,13 @@ Support constraint-based version resolution in run commands (e.g., `example@^1.2
 
 Source: [misc.md](misc.md)
 
-### Linting
+### ✅ Linting
 
-Advisory linting for solutions: unused resolvers, unreachable actions, missing dependencies, anti-pattern detection. Non-blocking.
+**Implemented.** `scafctl lint` provides advisory linting with `scafctl lint rules` and `scafctl lint explain`. See `pkg/cmd/scafctl/lint/`.
 
-### Action DAG Visualization (ASCII/DOT/Mermaid)
+### ✅ Action DAG Visualization (ASCII/DOT/Mermaid)
 
-Action DAG visualization currently supports JSON/YAML only. ASCII, DOT, and Mermaid output formats are planned to match resolver DAG visualization.
+**Implemented.** Action DAG visualization supports ASCII, DOT, Mermaid, JSON, and YAML formats. See `pkg/action/graph_visualization.go`.
 
 ---
 
@@ -158,21 +156,21 @@ The capability model is designed for extension. Future capabilities may include:
 
 Source: [functional-testing.md](functional-testing.md)
 
-### Auto-Generated Tests (`-o test`)
+### ✅ Auto-Generated Tests (`-o test`)
 
-A future output type for commands that support `-o`. When used, scafctl captures the command and its arguments, executes it, and generates a complete test definition with assertions derived from the actual output plus a snapshot golden file.
+**Implemented.** The `-o test` output type captures command execution and generates test definitions with assertions and golden files. See `pkg/solution/soltesting/generate.go`.
 
 ### Catalog Regression Testing (`scafctl pipeline`)
 
 A future command that executes functional tests across solutions in a remote catalog, enabling validation that scafctl changes don't break existing solutions. Fetches matching solutions, extracts bundled test files, runs `test functional`, and reports aggregate results.
 
-### Test Scaffolding (`scafctl test init`)
+### ✅ Test Scaffolding (`scafctl test init`)
 
-✅ **Implemented.** Generates a starter test suite for an existing solution by analyzing its structure — parsing resolvers with defaults, validation rules, and workflow actions, then outputting skeleton test YAML. Unlike `-o test` (which captures actual output), `test init` generates a starting point before running anything. See `pkg/solution/soltesting/scaffold.go` and `pkg/cmd/scafctl/test/init.go`.
+**Implemented.** Generates a starter test suite for an existing solution by analyzing its structure — parsing resolvers with defaults, validation rules, and workflow actions, then outputting skeleton test YAML. See `pkg/solution/soltesting/scaffold.go` and `pkg/cmd/scafctl/test/init.go`.
 
-### Watch Mode (`--watch`)
+### ✅ Watch Mode (`--watch`)
 
-✅ **Implemented.** The `--watch` / `-w` flag for `scafctl test functional` monitors solution files for changes and automatically re-runs affected tests. Uses `fsnotify` with debounce. See `pkg/solution/soltesting/watch.go`.
+**Implemented.** The `--watch` / `-w` flag for `scafctl test functional` monitors solution files for changes and automatically re-runs affected tests. Uses `fsnotify` with debounce. See `pkg/solution/soltesting/watch.go`.
 
 ---
 
@@ -180,9 +178,9 @@ A future command that executes functional tests across solutions in a remote cat
 
 Source: [resolvers.md](resolvers.md)
 
-### ForEach Filter Property
+### ✅ ForEach Filter Property
 
-A `filter` property to automatically remove `nil` results from the output array when using `when` conditions. Provides a more ergonomic alternative to a separate transform step.
+**Implemented** (with inverted API). Rather than an opt-in `filter: true`, the default behavior filters out `nil` results from forEach with `when` conditions. Use `keepSkipped: true` to retain them. See `pkg/spec/foreach.go` and `pkg/resolver/executor.go`.
 
 ---
 
@@ -190,6 +188,8 @@ A `filter` property to automatically remove `nil` results from the output array 
 
 Source: [solutions.md](solutions.md)
 
-### Plugin Dependencies
+### ✅ Plugin Dependencies
 
-Solutions will be able to declare dependencies on plugins that provide custom providers, with semver version constraints. scafctl will check, pull, validate, and dynamically load required plugins.
+**Implemented.** Solutions can declare plugin dependencies in `bundle.plugins` with kind, version constraints, and ValueRef-aware defaults. Vendored during `scafctl build solution` and tracked in `solution.lock`. See `pkg/solution/solution.go` and `pkg/solution/bundler/vendor_plugins.go`.
+
+> **Note:** Dynamic plugin auto-fetching from remote catalogs at runtime (without a prior build step) is not yet implemented. Plugins must be vendored at build time.

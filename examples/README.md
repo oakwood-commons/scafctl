@@ -209,6 +209,7 @@ Custom plugin development examples.
 | Example | Description |
 |---------|-------------|
 | [echo/](plugins/echo/) | Simple echo plugin implementation |
+| [auto-fetch-solution.yaml](plugins/auto-fetch-solution.yaml) | Solution demonstrating automatic plugin fetching from catalogs |
 
 ---
 

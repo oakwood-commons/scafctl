@@ -75,6 +75,9 @@ root (scafctl)
 │   └── diff                      # Compare two snapshots
 ├── delete
 │   └── solution                  # Delete solution from catalog
+├── plugins
+│   ├── install                   # Pre-fetch plugin binaries from catalogs
+│   └── list                      # List cached plugin binaries
 └── config
     ├── view                      # View current config
     ├── get                       # Get a config value
@@ -1122,36 +1125,79 @@ This section tracks which commands from the design are implemented and what work
 | Command | Status | Notes |
 |---------|--------|-------|
 | `version` | ✅ | Complete |
-| `get solution` | ✅ | Needs catalog support for `name@version` |
-| `get solutions` | ❌ | List all solutions from catalog (use plural alias) |
-| `get provider` | ❌ | Show provider metadata |
-| `get providers` | ❌ | List all registered providers (use plural alias) |
-| `get catalog` | ❌ | Show catalog configuration |
-| `get catalogs` | ❌ | List configured catalogs (use plural alias) |
-| `run solution` | ✅ | Executes resolvers AND actions. |
-| `run resolver` | ✅ | Executes resolvers only (for debugging and inspection). Supports named resolvers. |
-| `render solution` | ⚠️ | Add `--graph` and `--snapshot` flags |
-| `publish solution` | ❌ | Publish to catalog |
-| `delete solution` | ❌ | Delete solution from catalog |
-| `explain solution` | ❌ | Show solution metadata |
-| `explain provider` | ❌ | Show provider schema/docs |
-| `snapshot show` | ✅ | Display saved snapshot (keep as-is) |
-| `snapshot diff` | ✅ | Compare two snapshots (keep as-is) |
-| `config view` | ❌ | View current configuration |
-| `config get` | ❌ | Get specific config value |
-| `config set` | ❌ | Set config value |
-| `config unset` | ❌ | Remove config value |
-| `config add-catalog` | ❌ | Add catalog configuration |
-| `config remove-catalog` | ❌ | Remove catalog |
-| `config use-catalog` | ❌ | Set default catalog |
+| `get solution` | ✅ | Complete with catalog support |
+| `get solutions` | ✅ | List all solutions (plural alias) |
+| `get provider` | ✅ | Show provider metadata |
+| `get providers` | ✅ | List all registered providers (plural alias) |
+| `get resolver` | ✅ | Show resolver details |
+| `get authhandler` | ✅ | Show auth handler details |
+| `get celfunction` | ✅ | Show CEL function details |
+| `run solution` | ✅ | Executes resolvers AND actions |
+| `run resolver` | ✅ | Executes resolvers only (for debugging and inspection) |
+| `render solution` | ✅ | Includes `--graph`, `--action-graph`, `--snapshot`, `--redact` flags |
+| `build solution` | ✅ | Build solution into local catalog |
+| `catalog push` | ✅ | Push artifacts to remote catalog |
+| `catalog pull` | ✅ | Pull artifacts from remote catalog |
+| `catalog list` | ✅ | List catalog contents |
+| `catalog inspect` | ✅ | Inspect artifact metadata |
+| `catalog delete` | ✅ | Delete artifact from catalog |
+| `catalog prune` | ✅ | Prune unused catalog entries |
+| `catalog tag` | ✅ | Create version aliases |
+| `catalog save` | ✅ | Export artifact to tar |
+| `catalog load` | ✅ | Import artifact from tar |
+| `explain solution` | ✅ | Show solution metadata |
+| `explain provider` | ✅ | Show provider schema/docs |
+| `snapshot show` | ✅ | Display saved snapshot |
+| `snapshot diff` | ✅ | Compare two snapshots |
+| `config view` | ✅ | View current configuration |
+| `config get` | ✅ | Get specific config value |
+| `config set` | ✅ | Set config value |
+| `config unset` | ✅ | Remove config value |
+| `config add-catalog` | ✅ | Add catalog configuration |
+| `config remove-catalog` | ✅ | Remove catalog |
+| `config use-catalog` | ✅ | Set default catalog |
+| `config init` | ✅ | Initialize configuration |
+| `config schema` | ✅ | Show config schema |
+| `config validate` | ✅ | Validate config file |
+| `eval cel` | ✅ | Evaluate CEL expressions |
+| `eval template` | ✅ | Evaluate Go templates |
+| `eval validate` | ✅ | Validate expressions |
+| `new solution` | ✅ | Scaffold new solution |
+| `lint` | ✅ | Lint solution files |
+| `lint rules` | ✅ | List lint rules |
+| `lint explain` | ✅ | Explain a lint rule |
+| `test functional` | ✅ | Run functional tests |
+| `test list` | ✅ | List test cases |
+| `test init` | ✅ | Scaffold test suite |
+| `examples list` | ✅ | List available examples |
+| `examples get` | ✅ | Get an example |
+| `bundle verify` | ✅ | Verify bundle integrity |
+| `bundle diff` | ✅ | Diff two bundles |
+| `bundle extract` | ✅ | Extract bundle contents |
+| `vendor update` | ✅ | Update vendored dependencies |
+| `secrets list` | ✅ | List secrets |
+| `secrets get` | ✅ | Get a secret |
+| `secrets set` | ✅ | Set a secret |
+| `secrets delete` | ✅ | Delete a secret |
+| `secrets exists` | ✅ | Check if a secret exists |
+| `secrets export` | ✅ | Export secrets |
+| `secrets import` | ✅ | Import secrets |
+| `secrets rotate` | ✅ | Rotate encryption key |
+| `auth login` | ✅ | Authenticate with a handler |
+| `auth logout` | ✅ | Clear stored credentials |
+| `auth status` | ✅ | Show auth status |
+| `auth token` | ✅ | Get an access token |
+| `auth list` | ✅ | List auth handlers |
+| `mcp serve` | ✅ | Start MCP server |
+| `cache clear` | ✅ | Clear caches |
 
-### Commands to Remove/Refactor
+### Commands Removed/Refactored
 
 | Command | Action | Reason |
 |---------|--------|--------|
 | `run workflow` | ✅ **Removed** | Merged into `run solution` (solution now runs resolvers + actions) |
-| `snapshot save` | **Remove** | Replace with `render solution --snapshot` |
-| `resolver graph` | **Remove** | Replace with `render solution --graph` |
+| `snapshot save` | ✅ **Removed** | Replaced with `render solution --snapshot` |
+| `resolver graph` | ✅ **Removed** | Replaced with `render solution --graph` |
 
 ### Code Changes Required
 
