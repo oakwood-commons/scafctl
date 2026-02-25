@@ -11,10 +11,10 @@ import (
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/explain"
-	getprovider "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get/provider"
+	provdetail "github.com/oakwood-commons/scafctl/pkg/provider/detail"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/inspect"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 )
 
@@ -88,7 +88,7 @@ func (s *Server) handleSolutionResource(_ context.Context, request mcp.ReadResou
 		return nil, fmt.Errorf("solution name is required in URI (e.g., solution://path/to/solution.yaml)")
 	}
 
-	sol, err := explain.LoadSolution(s.ctx, name)
+	sol, err := inspect.LoadSolution(s.ctx, name)
 	if err != nil {
 		return nil, fmt.Errorf("loading solution %q: %w", name, err)
 	}
@@ -115,7 +115,7 @@ func (s *Server) handleSolutionSchemaResource(_ context.Context, request mcp.Rea
 		return nil, fmt.Errorf("solution name is required in URI (e.g., solution://path/to/solution.yaml/schema)")
 	}
 
-	sol, err := explain.LoadSolution(s.ctx, name)
+	sol, err := inspect.LoadSolution(s.ctx, name)
 	if err != nil {
 		return nil, fmt.Errorf("loading solution %q: %w", name, err)
 	}
@@ -143,7 +143,7 @@ func (s *Server) handleSolutionGraphResource(_ context.Context, request mcp.Read
 		return nil, fmt.Errorf("solution name is required in URI (e.g., solution://path/to/solution.yaml/graph)")
 	}
 
-	sol, err := explain.LoadSolution(s.ctx, name)
+	sol, err := inspect.LoadSolution(s.ctx, name)
 	if err != nil {
 		return nil, fmt.Errorf("loading solution %q: %w", name, err)
 	}
@@ -195,7 +195,7 @@ func (s *Server) handleProviderResource(_ context.Context, request mcp.ReadResou
 	}
 
 	desc := p.Descriptor()
-	detail := getprovider.BuildProviderDetail(*desc)
+	detail := provdetail.BuildProviderDetail(*desc)
 
 	detailJSON, err := json.MarshalIndent(detail, "", "  ")
 	if err != nil {
@@ -226,7 +226,7 @@ func (s *Server) handleProviderReferenceResource(_ context.Context, request mcp.
 		entry := map[string]any{
 			"name":         desc.Name,
 			"description":  desc.Description,
-			"capabilities": getprovider.CapabilitiesToStrings(desc.Capabilities),
+			"capabilities": provdetail.CapabilitiesToStrings(desc.Capabilities),
 		}
 
 		// Include required and optional input fields

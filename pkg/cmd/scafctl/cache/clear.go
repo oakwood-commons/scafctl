@@ -6,11 +6,10 @@ package cache
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	cachelib "github.com/oakwood-commons/scafctl/pkg/cache"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
@@ -32,29 +31,27 @@ type ClearOptions struct {
 	flags.KvxOutputFlags
 }
 
-// ClearOutput represents the clear command output.
-type ClearOutput struct {
-	RemovedFiles int64  `json:"removedFiles" yaml:"removedFiles"`
-	RemovedBytes int64  `json:"removedBytes" yaml:"removedBytes"`
-	RemovedHuman string `json:"reclaimedHuman" yaml:"reclaimedHuman"`
-	Kind         string `json:"kind,omitempty" yaml:"kind,omitempty"`
-	Name         string `json:"name,omitempty" yaml:"name,omitempty"`
-}
+// ClearOutput is an alias for cachelib.ClearOutput.
+//
+// Deprecated: Use cache.ClearOutput from pkg/cache instead.
+type ClearOutput = cachelib.ClearOutput
 
-// Kind represents the type of cache to clear.
-type Kind string
+// Kind is an alias for cachelib.Kind.
+//
+// Deprecated: Use cache.Kind from pkg/cache instead.
+type Kind = cachelib.Kind
 
 const (
 	// KindAll clears all caches.
-	KindAll Kind = "all"
+	KindAll Kind = cachelib.KindAll
 	// KindHTTP clears the HTTP response cache.
-	KindHTTP Kind = "http"
+	KindHTTP Kind = cachelib.KindHTTP
 	// KindBuild clears the build cache (incremental build fingerprints).
-	KindBuild Kind = "build"
+	KindBuild Kind = cachelib.KindBuild
 )
 
 // ValidKinds lists all valid cache kinds.
-var ValidKinds = []string{string(KindAll), string(KindHTTP), string(KindBuild)}
+var ValidKinds = cachelib.ValidKinds
 
 // CommandClear creates the clear command.
 func CommandClear(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
@@ -164,7 +161,7 @@ func runClear(ctx context.Context, options *ClearOptions, outputOpts *kvx.Output
 	switch kind {
 	case KindAll:
 		// Clear all cache directories
-		files, bytes, err := clearDirectory(paths.CacheDir(), options.Name)
+		files, bytes, err := cachelib.ClearDirectory(paths.CacheDir(), options.Name)
 		if err != nil {
 			w.Errorf("failed to clear cache: %v", err)
 			return exitcode.WithCode(err, exitcode.GeneralError)
@@ -173,7 +170,7 @@ func runClear(ctx context.Context, options *ClearOptions, outputOpts *kvx.Output
 		totalBytes += bytes
 
 	case KindHTTP:
-		files, bytes, err := clearDirectory(paths.HTTPCacheDir(), options.Name)
+		files, bytes, err := cachelib.ClearDirectory(paths.HTTPCacheDir(), options.Name)
 		if err != nil {
 			w.Errorf("failed to clear HTTP cache: %v", err)
 			return exitcode.WithCode(err, exitcode.GeneralError)
@@ -182,7 +179,7 @@ func runClear(ctx context.Context, options *ClearOptions, outputOpts *kvx.Output
 		totalBytes += bytes
 
 	case KindBuild:
-		files, bytes, err := clearDirectory(paths.BuildCacheDir(), options.Name)
+		files, bytes, err := cachelib.ClearDirectory(paths.BuildCacheDir(), options.Name)
 		if err != nil {
 			w.Errorf("failed to clear build cache: %v", err)
 			return exitcode.WithCode(err, exitcode.GeneralError)
@@ -195,7 +192,7 @@ func runClear(ctx context.Context, options *ClearOptions, outputOpts *kvx.Output
 	output := ClearOutput{
 		RemovedFiles: totalFiles,
 		RemovedBytes: totalBytes,
-		RemovedHuman: formatBytes(totalBytes),
+		RemovedHuman: cachelib.FormatBytes(totalBytes),
 		Kind:         string(kind),
 	}
 	if options.Name != "" {
@@ -217,89 +214,4 @@ func runClear(ctx context.Context, options *ClearOptions, outputOpts *kvx.Output
 	}
 
 	return nil
-}
-
-// clearDirectory removes files from a directory, optionally matching a pattern.
-// Returns the number of files removed and total bytes reclaimed.
-func clearDirectory(dir, pattern string) (int64, int64, error) {
-	var filesRemoved int64
-	var bytesRemoved int64
-
-	// Check if directory exists
-	info, err := os.Stat(dir)
-	if os.IsNotExist(err) {
-		return 0, 0, nil
-	}
-	if err != nil {
-		return 0, 0, fmt.Errorf("failed to stat directory: %w", err)
-	}
-	if !info.IsDir() {
-		return 0, 0, fmt.Errorf("path is not a directory: %s", dir)
-	}
-
-	// If no pattern and clearing everything, just remove the whole directory
-	if pattern == "" {
-		// Calculate size first
-		_ = filepath.Walk(dir, func(_ string, info os.FileInfo, walkErr error) error {
-			if walkErr != nil || info.IsDir() {
-				return nil //nolint:nilerr // Intentionally ignoring walk errors
-			}
-			bytesRemoved += info.Size()
-			filesRemoved++
-			return nil
-		})
-
-		// Remove the directory contents (but keep the directory itself)
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			return 0, 0, fmt.Errorf("failed to read directory: %w", err)
-		}
-		for _, entry := range entries {
-			entryPath := filepath.Join(dir, entry.Name())
-			if err := os.RemoveAll(entryPath); err != nil {
-				return filesRemoved, bytesRemoved, fmt.Errorf("failed to remove %s: %w", entryPath, err)
-			}
-		}
-
-		return filesRemoved, bytesRemoved, nil
-	}
-
-	// With a pattern, only remove matching files
-	_ = filepath.Walk(dir, func(filePath string, info os.FileInfo, walkErr error) error {
-		if walkErr != nil || info.IsDir() {
-			return nil //nolint:nilerr // Intentionally ignoring walk errors
-		}
-
-		// Check if file matches pattern
-		name := filepath.Base(filePath)
-		matched, matchErr := filepath.Match(pattern, name)
-		if matchErr != nil {
-			// Invalid pattern, try as prefix match
-			matched = strings.HasPrefix(name, strings.TrimSuffix(pattern, "*"))
-		}
-
-		if matched {
-			bytesRemoved += info.Size()
-			_ = os.Remove(filePath) // Ignore individual file removal errors
-			filesRemoved++
-		}
-
-		return nil
-	})
-
-	return filesRemoved, bytesRemoved, nil
-}
-
-// formatBytes formats bytes as a human-readable string.
-func formatBytes(bytes int64) string {
-	const unit = 1024
-	if bytes < unit {
-		return fmt.Sprintf("%d B", bytes)
-	}
-	div, exp := int64(unit), 0
-	for n := bytes / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }

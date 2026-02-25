@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"strings"
 	"time"
 
 	"github.com/MakeNowJust/heredoc/v2"
@@ -645,33 +644,7 @@ func displayLoginResult(w *writer.Writer, result *auth.Result, flow auth.Flow) e
 }
 
 // parseFlow converts a flow string to an auth.Flow constant.
+// Delegates to auth.ParseFlow in the shared auth package.
 func parseFlow(flowStr, handlerName string) (auth.Flow, error) {
-	if flowStr == "" {
-		return "", nil // Will be auto-detected per handler
-	}
-	switch strings.ToLower(flowStr) {
-	case "device-code", "devicecode":
-		return auth.FlowDeviceCode, nil
-	case "interactive":
-		return auth.FlowInteractive, nil
-	case "service-principal", "serviceprincipal", "sp":
-		return auth.FlowServicePrincipal, nil
-	case "workload-identity", "workloadidentity", "wi":
-		return auth.FlowWorkloadIdentity, nil
-	case "pat":
-		return auth.FlowPAT, nil
-	case "metadata":
-		return auth.FlowMetadata, nil
-	case "gcloud-adc", "gcloudadc", "adc":
-		return auth.FlowGcloudADC, nil
-	default:
-		switch handlerName {
-		case "github":
-			return "", fmt.Errorf("unknown flow: %s (valid for github: device-code, pat)", flowStr)
-		case "gcp":
-			return "", fmt.Errorf("unknown flow: %s (valid for gcp: interactive, service-principal, workload-identity, metadata, gcloud-adc)", flowStr)
-		default:
-			return "", fmt.Errorf("unknown flow: %s (valid for entra: device-code, service-principal, workload-identity)", flowStr)
-		}
-	}
+	return auth.ParseFlow(flowStr, handlerName)
 }

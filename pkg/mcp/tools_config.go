@@ -59,7 +59,7 @@ func (s *Server) handleGetConfig(_ context.Context, request mcp.CallToolRequest)
 		}
 	}
 
-	sanitized := sanitizeConfig(cfg)
+	sanitized := config.SanitizeConfig(cfg)
 	section := request.GetString("section", "")
 
 	if section == "" {
@@ -95,127 +95,6 @@ func (s *Server) handleGetConfig(_ context.Context, request mcp.CallToolRequest)
 		"section": section,
 		"data":    sectionData,
 	})
-}
-
-// sanitizedConfig mirrors config.Config but with sensitive fields redacted.
-type sanitizedConfig struct {
-	Version    int                     `json:"version,omitempty"`
-	Catalogs   []sanitizedCatalog      `json:"catalogs"`
-	Settings   config.Settings         `json:"settings"`
-	Logging    config.LoggingConfig    `json:"logging"`
-	HTTPClient config.HTTPClientConfig `json:"httpClient"`
-	CEL        config.CELConfig        `json:"cel"`
-	Resolver   config.ResolverConfig   `json:"resolver"`
-	Action     config.ActionConfig     `json:"action"`
-	Auth       sanitizedAuth           `json:"auth"`
-	Build      config.BuildConfig      `json:"build"`
-}
-
-// sanitizedCatalog redacts auth tokens from catalog config.
-type sanitizedCatalog struct {
-	Name     string            `json:"name"`
-	Type     string            `json:"type"`
-	Path     string            `json:"path,omitempty"`
-	URL      string            `json:"url,omitempty"`
-	Auth     *sanitizedCatAuth `json:"auth,omitempty"`
-	Metadata map[string]string `json:"metadata,omitempty"`
-}
-
-type sanitizedCatAuth struct {
-	Type        string `json:"type"`
-	TokenEnvVar string `json:"tokenEnvVar,omitempty"`
-}
-
-// sanitizedAuth redacts client secrets and tokens from auth config.
-type sanitizedAuth struct {
-	Entra  *sanitizedEntraAuth  `json:"entra,omitempty"`
-	GitHub *sanitizedGitHubAuth `json:"github,omitempty"`
-	GCP    *sanitizedGCPAuth    `json:"gcp,omitempty"`
-}
-
-type sanitizedEntraAuth struct {
-	ClientID      string   `json:"clientId,omitempty"`
-	TenantID      string   `json:"tenantId,omitempty"`
-	DefaultScopes []string `json:"defaultScopes,omitempty"`
-}
-
-type sanitizedGitHubAuth struct {
-	ClientID      string   `json:"clientId,omitempty"`
-	Hostname      string   `json:"hostname,omitempty"`
-	DefaultScopes []string `json:"defaultScopes,omitempty"`
-}
-
-type sanitizedGCPAuth struct {
-	ClientID                  string   `json:"clientId,omitempty"`
-	GCPClientCredential       string   `json:"gcpClientCredential,omitempty"` // will be redacted
-	DefaultScopes             []string `json:"defaultScopes,omitempty"`
-	ImpersonateServiceAccount string   `json:"impersonateServiceAccount,omitempty"`
-	Project                   string   `json:"project,omitempty"`
-}
-
-const redactedValue = "***REDACTED***"
-
-// sanitizeConfig creates a sanitized copy of the config with sensitive values redacted.
-func sanitizeConfig(cfg *config.Config) sanitizedConfig {
-	s := sanitizedConfig{
-		Version:    cfg.Version,
-		Settings:   cfg.Settings,
-		Logging:    cfg.Logging,
-		HTTPClient: cfg.HTTPClient,
-		CEL:        cfg.CEL,
-		Resolver:   cfg.Resolver,
-		Action:     cfg.Action,
-		Build:      cfg.Build,
-	}
-
-	// Sanitize catalogs
-	s.Catalogs = make([]sanitizedCatalog, 0, len(cfg.Catalogs))
-	for _, cat := range cfg.Catalogs {
-		sc := sanitizedCatalog{
-			Name:     cat.Name,
-			Type:     cat.Type,
-			Path:     cat.Path,
-			URL:      cat.URL,
-			Metadata: cat.Metadata,
-		}
-		if cat.Auth != nil {
-			sc.Auth = &sanitizedCatAuth{
-				Type:        cat.Auth.Type,
-				TokenEnvVar: cat.Auth.TokenEnvVar,
-			}
-		}
-		s.Catalogs = append(s.Catalogs, sc)
-	}
-
-	// Sanitize auth — redact secrets
-	if cfg.Auth.Entra != nil {
-		s.Auth.Entra = &sanitizedEntraAuth{
-			ClientID:      cfg.Auth.Entra.ClientID,
-			TenantID:      cfg.Auth.Entra.TenantID,
-			DefaultScopes: cfg.Auth.Entra.DefaultScopes,
-		}
-	}
-	if cfg.Auth.GitHub != nil {
-		s.Auth.GitHub = &sanitizedGitHubAuth{
-			ClientID:      cfg.Auth.GitHub.ClientID,
-			Hostname:      cfg.Auth.GitHub.Hostname,
-			DefaultScopes: cfg.Auth.GitHub.DefaultScopes,
-		}
-	}
-	if cfg.Auth.GCP != nil {
-		gcp := &sanitizedGCPAuth{
-			ClientID:                  cfg.Auth.GCP.ClientID,
-			DefaultScopes:             cfg.Auth.GCP.DefaultScopes,
-			ImpersonateServiceAccount: cfg.Auth.GCP.ImpersonateServiceAccount,
-			Project:                   cfg.Auth.GCP.Project,
-		}
-		if cfg.Auth.GCP.ClientSecret != "" {
-			gcp.GCPClientCredential = redactedValue
-		}
-		s.Auth.GCP = gcp
-	}
-
-	return s
 }
 
 // handleGetConfigPaths returns all XDG-compliant filesystem paths used by scafctl.

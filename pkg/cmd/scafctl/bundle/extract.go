@@ -6,20 +6,17 @@ package bundle
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
-	actionpkg "github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
-	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
@@ -157,7 +154,7 @@ func runExtract(ctx context.Context, opts *ExtractOptions) error {
 				w.Warningf("resolver %q not found in solution", resolverName)
 				continue
 			}
-			traced := traceResolverDeps(resolverName, &sol, make(map[string]bool))
+			traced := bundler.TraceResolverDeps(resolverName, &sol, make(map[string]bool))
 			for _, f := range traced {
 				needed[f] = true
 			}
@@ -175,7 +172,7 @@ func runExtract(ctx context.Context, opts *ExtractOptions) error {
 						continue
 					}
 				}
-				traced := extractActionFiles(a)
+				traced := bundler.ExtractActionFiles(a)
 				for _, f := range traced {
 					needed[f] = true
 				}
@@ -185,7 +182,7 @@ func runExtract(ctx context.Context, opts *ExtractOptions) error {
 		// Add include globs
 		for _, pattern := range opts.Include {
 			for _, entry := range manifest.Files {
-				if matchGlob(pattern, entry.Path) {
+				if bundler.MatchGlob(pattern, entry.Path) {
 					needed[entry.Path] = true
 				}
 			}
@@ -222,138 +219,15 @@ func runExtract(ctx context.Context, opts *ExtractOptions) error {
 			destPath = filepath.Join(outDir, entry.Path)
 		}
 
-		if err := copyFile(srcPath, destPath); err != nil {
+		if err := bundler.CopyFile(srcPath, destPath); err != nil {
 			w.Warningf("failed to extract %s: %v", entry.Path, err)
 			continue
 		}
 		totalSize += entry.Size
 	}
 
-	w.Successf("Extracted %d file(s) (%s) to %s", len(filesToExtract), formatSize(totalSize), outDir)
+	w.Successf("Extracted %d file(s) (%s) to %s", len(filesToExtract), bundler.FormatSize(totalSize), outDir)
 	return nil
-}
-
-// traceResolverDeps performs static analysis on a resolver to find referenced files,
-// following rslvr: bindings transitively.
-func traceResolverDeps(name string, sol *solution.Solution, visited map[string]bool) []string {
-	if visited[name] {
-		return nil
-	}
-	visited[name] = true
-
-	r, exists := sol.Spec.Resolvers[name]
-	if !exists || r == nil {
-		return nil
-	}
-
-	var files []string
-
-	// Check resolve.with
-	if r.Resolve != nil {
-		for _, ps := range r.Resolve.With {
-			files = append(files, extractProviderStepFiles(ps.Provider, ps.Inputs)...)
-			// Follow rslvr: bindings in inputs
-			for _, vr := range ps.Inputs {
-				if vr != nil && vr.Resolver != nil {
-					depName := extractResolverName(*vr.Resolver)
-					files = append(files, traceResolverDeps(depName, sol, visited)...)
-				}
-			}
-		}
-	}
-
-	// Check transform.with
-	if r.Transform != nil {
-		for _, pt := range r.Transform.With {
-			files = append(files, extractProviderStepFiles(pt.Provider, pt.Inputs)...)
-			for _, vr := range pt.Inputs {
-				if vr != nil && vr.Resolver != nil {
-					depName := extractResolverName(*vr.Resolver)
-					files = append(files, traceResolverDeps(depName, sol, visited)...)
-				}
-			}
-		}
-	}
-
-	// Check validate.with
-	if r.Validate != nil {
-		for _, pv := range r.Validate.With {
-			files = append(files, extractProviderStepFiles(pv.Provider, pv.Inputs)...)
-			for _, vr := range pv.Inputs {
-				if vr != nil && vr.Resolver != nil {
-					depName := extractResolverName(*vr.Resolver)
-					files = append(files, traceResolverDeps(depName, sol, visited)...)
-				}
-			}
-		}
-	}
-
-	return files
-}
-
-// extractActionFiles traces files referenced by an action.
-func extractActionFiles(a *actionpkg.Action) []string {
-	if a == nil {
-		return nil
-	}
-	return extractProviderStepFiles(a.Provider, a.Inputs)
-}
-
-func extractProviderStepFiles(provider string, inputs map[string]*spec.ValueRef) []string {
-	var files []string
-	switch provider {
-	case "file":
-		if path := extractLiteralFromInputs(inputs, "path"); path != "" && isLocalFilePath(path) {
-			files = append(files, path)
-		}
-	case "solution":
-		if source := extractLiteralFromInputs(inputs, "source"); source != "" && isLocalFilePath(source) {
-			files = append(files, source)
-		}
-	}
-	return files
-}
-
-func extractLiteralFromInputs(inputs map[string]*spec.ValueRef, key string) string {
-	if inputs == nil {
-		return ""
-	}
-	vr := inputs[key]
-	if vr == nil {
-		return ""
-	}
-	if vr.Expr != nil || vr.Tmpl != nil || vr.Resolver != nil {
-		return ""
-	}
-	s, ok := vr.Literal.(string)
-	if !ok {
-		return ""
-	}
-	return s
-}
-
-func isLocalFilePath(path string) bool {
-	if path == "" {
-		return false
-	}
-	if strings.Contains(path, "://") {
-		return false
-	}
-	if strings.Contains(path, "@") {
-		return false
-	}
-	if filepath.IsAbs(path) {
-		return false
-	}
-	return true
-}
-
-func extractResolverName(name string) string {
-	// Strip any selector, e.g. "myResolver.result" → "myResolver"
-	if idx := strings.Index(name, "."); idx != -1 {
-		return name[:idx]
-	}
-	return name
 }
 
 func printFileList(w *writer.Writer, files []bundler.BundleFileEntry, resolvers, actions []string) {
@@ -366,32 +240,10 @@ func printFileList(w *writer.Writer, files []bundler.BundleFileEntry, resolvers,
 
 	var totalSize int64
 	for _, f := range files {
-		w.Plain(fmt.Sprintf("  %-40s (%s)", f.Path, formatSize(f.Size)))
+		w.Plain(fmt.Sprintf("  %-40s (%s)", f.Path, bundler.FormatSize(f.Size)))
 		totalSize += f.Size
 	}
 
 	w.Plain("")
-	w.Infof("Total: %d file(s), %s", len(files), formatSize(totalSize))
-}
-
-func copyFile(src, dst string) error {
-	// Create parent directories
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
-	}
-
-	srcFile, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer srcFile.Close()
-
-	dstFile, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer dstFile.Close()
-
-	_, err = io.Copy(dstFile, srcFile)
-	return err
+	w.Infof("Total: %d file(s), %s", len(files), bundler.FormatSize(totalSize))
 }

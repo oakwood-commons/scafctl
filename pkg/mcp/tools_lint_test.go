@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/lint"
+	pkglint "github.com/oakwood-commons/scafctl/pkg/lint"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -64,7 +64,7 @@ func TestHandleExplainLintRule(t *testing.T) {
 	})
 
 	t.Run("all known rules have required fields", func(t *testing.T) {
-		for name, rule := range lint.KnownRules {
+		for name, rule := range pkglint.KnownRules {
 			assert.NotEmpty(t, rule.Rule, "rule %q missing Rule field", name)
 			assert.NotEmpty(t, rule.Description, "rule %q missing Description", name)
 			assert.NotEmpty(t, rule.Fix, "rule %q missing Fix", name)
@@ -92,10 +92,10 @@ func TestHandleListLintRules(t *testing.T) {
 		var output map[string]any
 		require.NoError(t, json.Unmarshal([]byte(text), &output))
 		count := int(output["count"].(float64))
-		assert.Equal(t, len(lint.KnownRules), count)
+		assert.Equal(t, len(pkglint.KnownRules), count)
 
 		rules := output["rules"].([]any)
-		assert.Len(t, rules, len(lint.KnownRules))
+		assert.Len(t, rules, len(pkglint.KnownRules))
 
 		// Verify sorted — errors should come before warnings, warnings before info
 		var prevSeverityOrder int

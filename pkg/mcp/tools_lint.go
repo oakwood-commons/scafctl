@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/lint"
+	pkglint "github.com/oakwood-commons/scafctl/pkg/lint"
 )
 
 // registerLintTools registers lint-related MCP tools.
@@ -59,12 +59,12 @@ type lintRuleSummary struct {
 }
 
 // handleListLintRules returns all known lint rules with optional filtering.
-// Rules are sourced from the canonical lint.KnownRules registry.
+// Rules are sourced from the canonical pkglint.KnownRules registry.
 func (s *Server) handleListLintRules(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	severityFilter := request.GetString("severity", "")
 	categoryFilter := request.GetString("category", "")
 
-	allRules := lint.ListRules() // already sorted by severity, then name
+	allRules := pkglint.ListRules() // already sorted by severity, then name
 	rules := make([]lintRuleSummary, 0, len(allRules))
 	for _, r := range allRules {
 		if severityFilter != "" && r.Severity != severityFilter {
@@ -88,7 +88,7 @@ func (s *Server) handleListLintRules(_ context.Context, request mcp.CallToolRequ
 }
 
 // handleExplainLintRule returns a detailed explanation for a specific lint rule.
-// Data is sourced from the canonical lint.KnownRules registry.
+// Data is sourced from the canonical pkglint.KnownRules registry.
 func (s *Server) handleExplainLintRule(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	rule, err := request.RequireString("rule")
 	if err != nil {
@@ -99,10 +99,10 @@ func (s *Server) handleExplainLintRule(_ context.Context, request mcp.CallToolRe
 		), nil
 	}
 
-	meta, ok := lint.GetRule(rule)
+	meta, ok := pkglint.GetRule(rule)
 	if !ok {
 		// List all known rules
-		allRules := lint.ListRules()
+		allRules := pkglint.ListRules()
 		known := make([]string, 0, len(allRules))
 		for _, r := range allRules {
 			known = append(known, r.Rule)

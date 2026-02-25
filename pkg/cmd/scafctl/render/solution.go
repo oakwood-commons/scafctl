@@ -21,11 +21,11 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
-	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+	solrender "github.com/oakwood-commons/scafctl/pkg/solution/render"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
@@ -241,47 +241,8 @@ Examples:
 
 // getEffectiveResolverConfig returns resolver config values, using app config
 // as defaults when CLI flags weren't explicitly set.
-func (o *SolutionOptions) getEffectiveResolverConfig(ctx context.Context) config.ResolverConfigValues {
-	// Start with CLI flag values
-	result := config.ResolverConfigValues{
-		Timeout:        o.ResolverTimeout,
-		PhaseTimeout:   o.PhaseTimeout,
-		MaxConcurrency: 0,
-		WarnValueSize:  settings.DefaultWarnValueSize,
-		MaxValueSize:   settings.DefaultMaxValueSize,
-		ValidateAll:    false,
-	}
-
-	// If config is available, use its values for non-changed flags
-	cfg := config.FromContext(ctx)
-	if cfg == nil {
-		return result
-	}
-
-	// Parse config values
-	configValues, err := cfg.Resolver.ToResolverValues()
-	if err != nil {
-		lgr := logger.FromContext(ctx)
-		lgr.V(1).Info("failed to parse resolver config, using CLI defaults", "error", err)
-		return result
-	}
-
-	// Override with config values for flags that weren't explicitly set.
-	// Only apply overrides when flagsChanged is set (i.e., we're in command execution flow).
-	// When flagsChanged is nil (e.g., in tests), respect the values set on the options struct.
-	if o.flagsChanged != nil {
-		if !o.flagsChanged["resolver-timeout"] {
-			result.Timeout = configValues.Timeout
-		}
-		if !o.flagsChanged["phase-timeout"] {
-			result.PhaseTimeout = configValues.PhaseTimeout
-		}
-	}
-
-	// MaxConcurrency always comes from config (no CLI flag)
-	result.MaxConcurrency = configValues.MaxConcurrency
-
-	return result
+func (o *SolutionOptions) getEffectiveResolverConfig(ctx context.Context) solrender.ResolverConfig {
+	return solrender.GetEffectiveResolverConfig(ctx, o.ResolverTimeout, o.PhaseTimeout, o.flagsChanged)
 }
 
 // Run executes the render solution command
@@ -327,7 +288,7 @@ func (o *SolutionOptions) runActionGraph(ctx context.Context, lgr logr.Logger) e
 
 	// Validate the workflow
 	reg := o.getRegistry(ctx)
-	adapter := &solutionRegistryAdapter{registry: reg}
+	adapter := &solutionRegistryAdapter{Registry: reg}
 	if err := action.ValidateWorkflow(sol.Spec.Workflow, adapter); err != nil {
 		return o.exitWithCode(fmt.Errorf("workflow validation failed: %w", err), exitcode.ValidationFailed)
 	}
@@ -337,48 +298,16 @@ func (o *SolutionOptions) runActionGraph(ctx context.Context, lgr logr.Logger) e
 	if sol.Spec.HasResolvers() {
 		lgr.V(1).Info("resolving resolvers for action inputs")
 
-		// Parse resolver parameters
 		params, err := run.ParseResolverFlags(o.ResolverParams)
 		if err != nil {
 			return o.exitWithCode(fmt.Errorf("failed to parse resolver parameters: %w", err), exitcode.ValidationFailed)
 		}
 
-		// Create resolver registry adapter
-		resolverAdapter := &solutionResolverRegistryAdapter{solutionRegistryAdapter: adapter}
-
-		// Get effective resolver config (CLI flags override app config)
 		resolverCfg := o.getEffectiveResolverConfig(ctx)
-
-		// Execute resolvers
-		resolvers := sol.Spec.ResolversToSlice()
-		executorOpts := []resolver.ExecutorOption{
-			resolver.WithDefaultTimeout(resolverCfg.Timeout),
-			resolver.WithPhaseTimeout(resolverCfg.PhaseTimeout),
-		}
-		if resolverCfg.MaxConcurrency > 0 {
-			executorOpts = append(executorOpts, resolver.WithMaxConcurrency(resolverCfg.MaxConcurrency))
-		}
-		executor := resolver.NewExecutor(resolverAdapter, executorOpts...)
-
-		resultCtx, err := executor.Execute(ctx, resolvers, params)
+		resolverData, err = solrender.ExecuteResolvers(ctx, sol, params, reg, resolverCfg, lgr)
 		if err != nil {
-			return o.exitWithCode(fmt.Errorf("resolver execution failed: %w", err), exitcode.RenderFailed)
+			return o.exitWithCode(err, exitcode.RenderFailed)
 		}
-
-		// Build resolver data map
-		resolverCtx, ok := resolver.FromContext(resultCtx)
-		if !ok {
-			return o.exitWithCode(fmt.Errorf("failed to retrieve resolver results"), exitcode.RenderFailed)
-		}
-
-		for name := range sol.Spec.Resolvers {
-			result, ok := resolverCtx.GetResult(name)
-			if ok && result.Status == resolver.ExecutionStatusSuccess {
-				resolverData[name] = result.Value
-			}
-		}
-
-		lgr.V(1).Info("resolver execution complete", "resolvedCount", len(resolverData))
 	}
 
 	// Build the action graph
@@ -466,7 +395,7 @@ func (o *SolutionOptions) runActionGraphVisualization(ctx context.Context, lgr l
 
 	// Validate the workflow
 	reg := o.getRegistry(ctx)
-	adapter := &solutionRegistryAdapter{registry: reg}
+	adapter := &solutionRegistryAdapter{Registry: reg}
 	if err := action.ValidateWorkflow(sol.Spec.Workflow, adapter); err != nil {
 		return o.exitWithCode(fmt.Errorf("workflow validation failed: %w", err), exitcode.ValidationFailed)
 	}
@@ -476,46 +405,16 @@ func (o *SolutionOptions) runActionGraphVisualization(ctx context.Context, lgr l
 	if sol.Spec.HasResolvers() {
 		lgr.V(1).Info("resolving resolvers for action inputs")
 
-		// Parse resolver parameters
 		params, err := run.ParseResolverFlags(o.ResolverParams)
 		if err != nil {
 			return o.exitWithCode(fmt.Errorf("failed to parse resolver parameters: %w", err), exitcode.ValidationFailed)
 		}
 
-		// Create resolver registry adapter
-		resolverAdapter := &solutionResolverRegistryAdapter{solutionRegistryAdapter: adapter}
-
-		// Get effective resolver config (CLI flags override app config)
 		resolverCfg := o.getEffectiveResolverConfig(ctx)
-
-		// Execute resolvers
-		resolvers := sol.Spec.ResolversToSlice()
-		executorOpts := []resolver.ExecutorOption{
-			resolver.WithDefaultTimeout(resolverCfg.Timeout),
-			resolver.WithPhaseTimeout(resolverCfg.PhaseTimeout),
-		}
-		if resolverCfg.MaxConcurrency > 0 {
-			executorOpts = append(executorOpts, resolver.WithMaxConcurrency(resolverCfg.MaxConcurrency))
-		}
-		executor := resolver.NewExecutor(resolverAdapter, executorOpts...)
-
-		resultCtx, err := executor.Execute(ctx, resolvers, params)
+		resolverData, err = solrender.ExecuteResolvers(ctx, sol, params, reg, resolverCfg, lgr)
 		if err != nil {
-			return o.exitWithCode(fmt.Errorf("resolver execution failed: %w", err), exitcode.RenderFailed)
+			return o.exitWithCode(err, exitcode.RenderFailed)
 		}
-
-		// Build resolver data map
-		resolverCtx, ok := resolver.FromContext(resultCtx)
-		if ok {
-			for name := range sol.Spec.Resolvers {
-				result, ok := resolverCtx.GetResult(name)
-				if ok && result.Status == resolver.ExecutionStatusSuccess {
-					resolverData[name] = result.Value
-				}
-			}
-		}
-
-		lgr.V(1).Info("resolver execution complete", "resolvedCount", len(resolverData))
 	}
 
 	// Build the action graph
@@ -564,20 +463,8 @@ func (o *SolutionOptions) runSnapshot(ctx context.Context, lgr logr.Logger) erro
 
 	// Execute resolvers
 	reg := o.getRegistry(ctx)
-	adapter := &solutionRegistryAdapter{registry: reg}
-	resolverAdapter := &solutionResolverRegistryAdapter{solutionRegistryAdapter: adapter}
-
-	// Get effective resolver config (CLI flags override app config)
 	resolverCfg := o.getEffectiveResolverConfig(ctx)
-
-	executorOpts := []resolver.ExecutorOption{
-		resolver.WithDefaultTimeout(resolverCfg.Timeout),
-		resolver.WithPhaseTimeout(resolverCfg.PhaseTimeout),
-	}
-	if resolverCfg.MaxConcurrency > 0 {
-		executorOpts = append(executorOpts, resolver.WithMaxConcurrency(resolverCfg.MaxConcurrency))
-	}
-	executor := resolver.NewExecutor(resolverAdapter, executorOpts...)
+	executor := solrender.NewResolverExecutor(reg, resolverCfg)
 
 	start := time.Now()
 	execCtx, err := executor.Execute(ctx, resolvers, params)
@@ -687,15 +574,7 @@ func (o *SolutionOptions) getRegistry(ctx context.Context) *provider.Registry {
 	if o.registry != nil {
 		return o.registry
 	}
-
-	reg, err := builtin.DefaultRegistry(ctx)
-	if err != nil {
-		lgr := logger.Get(0)
-		lgr.V(0).Info("warning: failed to register some providers", "error", err)
-		return provider.GetGlobalRegistry()
-	}
-
-	return reg
+	return solrender.GetDefaultRegistry(ctx)
 }
 
 // writeOutput writes the rendered output to stdout or file
@@ -787,46 +666,11 @@ func writeSolutionError(o *SolutionOptions, msg string) {
 	).WriteMessage(msg)
 }
 
-// solutionRegistryAdapter adapts provider.Registry to action.RegistryInterface
-type solutionRegistryAdapter struct {
-	registry *provider.Registry
-}
+// solutionRegistryAdapter is a type alias for the domain RegistryAdapter.
+type solutionRegistryAdapter = solrender.RegistryAdapter
 
-func (r *solutionRegistryAdapter) Get(name string) (provider.Provider, bool) {
-	return r.registry.Get(name)
-}
-
-func (r *solutionRegistryAdapter) Has(name string) bool {
-	_, ok := r.registry.Get(name)
-	return ok
-}
-
-// For resolver.RegistryInterface compatibility
-func (r *solutionRegistryAdapter) Register(p provider.Provider) error {
-	return r.registry.Register(p)
-}
-
-func (r *solutionRegistryAdapter) List() []provider.Provider {
-	return r.registry.ListProviders()
-}
-
-func (r *solutionRegistryAdapter) DescriptorLookup() resolver.DescriptorLookup {
-	return r.registry.DescriptorLookup()
-}
-
-// solutionResolverRegistryAdapter adapts solutionRegistryAdapter to resolver.RegistryInterface
-type solutionResolverRegistryAdapter struct {
-	*solutionRegistryAdapter
-}
-
-// Get implements resolver.RegistryInterface with error return
-func (r *solutionResolverRegistryAdapter) Get(name string) (provider.Provider, error) {
-	p, ok := r.registry.Get(name)
-	if !ok {
-		return nil, fmt.Errorf("provider %s not found", name)
-	}
-	return p, nil
-}
+// solutionResolverRegistryAdapter is a type alias for the domain ResolverRegistryAdapter.
+type solutionResolverRegistryAdapter = solrender.ResolverRegistryAdapter
 
 // renderGraph renders a graph in the specified format using the common interface.
 func (o *SolutionOptions) renderGraph(graph graphRenderer, data any) error {

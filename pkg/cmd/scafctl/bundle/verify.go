@@ -6,9 +6,6 @@ package bundle
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
@@ -108,109 +105,15 @@ func runVerify(ctx context.Context, opts *VerifyOptions) error {
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
-	var errors []verifyError
-	var successes []string
-	var warnings []string
-
-	if len(bundleData) == 0 {
-		// No bundle — check if any files would be needed
-		discovery, err := bundler.DiscoverFiles(&sol, ".")
-		if err == nil && len(discovery.LocalFiles) > 0 {
-			warnings = append(warnings, fmt.Sprintf("solution references %d local files but has no bundle", len(discovery.LocalFiles)))
-		}
-		if err == nil && len(discovery.CatalogRefs) > 0 {
-			warnings = append(warnings, fmt.Sprintf("solution references %d catalog dependencies but has no vendored copies", len(discovery.CatalogRefs)))
-		}
-	} else {
-		// Extract bundle to temp dir for verification
-		tmpDir, err := os.MkdirTemp("", "scafctl-verify-*")
-		if err != nil {
-			w.Errorf("failed to create temp directory: %v", err)
-			return exitcode.WithCode(err, exitcode.GeneralError)
-		}
-		defer os.RemoveAll(tmpDir)
-
-		manifest, err := bundler.ExtractBundleTar(bundleData, tmpDir)
-		if err != nil {
-			w.Errorf("failed to extract bundle: %v", err)
-			return exitcode.WithCode(err, exitcode.GeneralError)
-		}
-
-		// Build a set of bundled file paths
-		bundledFiles := make(map[string]bool)
-		for _, f := range manifest.Files {
-			bundledFiles[f.Path] = true
-		}
-
-		// Static path check: verify that all literal file references exist in the bundle
-		discovery, discErr := bundler.DiscoverFiles(&sol, tmpDir)
-		if discErr != nil {
-			lgr.V(1).Info("discovery failed during verify", "error", discErr)
-		} else {
-			w.Plain("")
-			w.Plain("  Static paths:")
-			for _, f := range discovery.LocalFiles {
-				if f.Source == bundler.StaticAnalysis {
-					filePath := filepath.Join(tmpDir, f.RelPath)
-					if _, statErr := os.Stat(filePath); statErr == nil {
-						successes = append(successes, f.RelPath)
-						w.Successf("    ✓ %s", f.RelPath)
-					} else {
-						errors = append(errors, verifyError{path: f.RelPath, reason: "not found in bundle"})
-						w.Errorf("    ✗ %s — not found in bundle", f.RelPath)
-					}
-				}
-			}
-
-			// Glob coverage check
-			if len(sol.Bundle.Include) > 0 {
-				w.Plain("")
-				w.Plain("  Bundle includes (glob coverage):")
-				for _, pattern := range sol.Bundle.Include {
-					matched := false
-					for _, f := range manifest.Files {
-						if matchGlob(pattern, f.Path) {
-							matched = true
-							break
-						}
-					}
-					if matched {
-						successes = append(successes, fmt.Sprintf("glob:%s", pattern))
-						w.Successf("    ✓ %s", pattern)
-					} else {
-						warnings = append(warnings, fmt.Sprintf("pattern %q matches no bundled files", pattern))
-						w.Warningf("    ⚠ %s — no matching files in bundle", pattern)
-					}
-				}
-			}
-
-			// Vendored dependency check
-			if len(discovery.CatalogRefs) > 0 {
-				w.Plain("")
-				w.Plain("  Vendored dependencies:")
-				for _, cr := range discovery.CatalogRefs {
-					if bundledFiles[cr.VendorPath] {
-						successes = append(successes, cr.VendorPath)
-						w.Successf("    ✓ %s", cr.VendorPath)
-					} else {
-						errors = append(errors, verifyError{path: cr.VendorPath, reason: "not found in bundle"})
-						w.Errorf("    ✗ %s — not found in bundle", cr.VendorPath)
-					}
-				}
-			}
-		}
-
-		// Plugin availability check
-		if len(manifest.Plugins) > 0 {
-			w.Plain("")
-			w.Plain("  Plugins:")
-			for _, p := range manifest.Plugins {
-				// Record plugin info (actual resolution would require plugin cache check)
-				successes = append(successes, fmt.Sprintf("plugin:%s", p.Name))
-				w.Successf("    ✓ %s (%s) %s", p.Name, p.Kind, p.Version)
-			}
-		}
+	// Delegate verification to domain package
+	result, err := bundler.VerifyBundle(ctx, &sol, bundleData, *lgr)
+	if err != nil {
+		w.Errorf("verification error: %v", err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
+
+	// Display results
+	displayVerifyResult(w, result)
 
 	// Parse params for dynamic path verification if provided
 	if opts.Params != "" || opts.ParamsFile != "" {
@@ -230,52 +133,100 @@ func runVerify(ctx context.Context, opts *VerifyOptions) error {
 
 	// Summary
 	w.Plain("")
-	if len(errors) > 0 {
-		w.Errorf("Verification failed: %d error(s)", len(errors))
+	if len(result.Errors) > 0 {
+		w.Errorf("Verification failed: %d error(s)", len(result.Errors))
 		return exitcode.Errorf("verification failed")
 	}
 
-	if len(warnings) > 0 && opts.Strict {
-		w.Errorf("Verification failed (strict mode): %d warning(s)", len(warnings))
+	if len(result.Warnings) > 0 && opts.Strict {
+		w.Errorf("Verification failed (strict mode): %d warning(s)", len(result.Warnings))
 		return exitcode.Errorf("verification failed (strict)")
 	}
 
-	if len(warnings) > 0 {
-		w.Warningf("Verification passed with %d warning(s): %d files checked", len(warnings), len(successes))
+	if len(result.Warnings) > 0 {
+		w.Warningf("Verification passed with %d warning(s): %d files checked", len(result.Warnings), len(result.Successes))
 	} else {
-		w.Successf("Verification passed: %d item(s) checked", len(successes))
+		w.Successf("Verification passed: %d item(s) checked", len(result.Successes))
 	}
 
 	return nil
 }
 
-type verifyError struct {
-	path   string
-	reason string
-}
-
-// matchGlob tests whether a path matches a glob pattern.
-// Uses filepath.Match for single-level patterns and a simple recursive check for **.
-func matchGlob(pattern, path string) bool {
-	matched, _ := filepath.Match(pattern, path)
-	if matched {
-		return true
-	}
-	// Simple ** support: if pattern contains **, try matching the suffix
-	if len(pattern) > 2 {
-		for i := range pattern {
-			if i+1 < len(pattern) && pattern[i] == '*' && pattern[i+1] == '*' {
-				suffix := pattern[i+2:]
-				if len(suffix) > 0 && suffix[0] == '/' {
-					suffix = suffix[1:]
-				}
-				// Try matching suffix against path and all subdirectories
-				m, _ := filepath.Match(suffix, filepath.Base(path))
-				if m {
-					return true
-				}
+// displayVerifyResult formats the verification result for terminal output.
+func displayVerifyResult(w *writer.Writer, result *bundler.VerifyResult) {
+	// Categorize successes and errors for structured display.
+	// Static paths
+	hasStatic := false
+	for _, s := range result.Successes {
+		if !hasPrefix(s, "glob:") && !hasPrefix(s, "plugin:") {
+			if !hasStatic {
+				w.Plain("")
+				w.Plain("  Static paths:")
+				hasStatic = true
 			}
+			w.Successf("    ✓ %s", s)
 		}
 	}
-	return false
+	for _, e := range result.Errors {
+		if !hasPrefix(e.Path, "glob:") && !hasPrefix(e.Path, "plugin:") {
+			if !hasStatic {
+				w.Plain("")
+				w.Plain("  Static paths:")
+				hasStatic = true
+			}
+			w.Errorf("    ✗ %s — %s", e.Path, e.Reason)
+		}
+	}
+
+	// Glob coverage
+	hasGlob := false
+	for _, s := range result.Successes {
+		if hasPrefix(s, "glob:") {
+			if !hasGlob {
+				w.Plain("")
+				w.Plain("  Bundle includes (glob coverage):")
+				hasGlob = true
+			}
+			w.Successf("    ✓ %s", s[len("glob:"):])
+		}
+	}
+	for _, warning := range result.Warnings {
+		if hasPrefix(warning, "pattern ") {
+			if !hasGlob {
+				w.Plain("")
+				w.Plain("  Bundle includes (glob coverage):")
+				hasGlob = true
+			}
+			w.Warningf("    ⚠ %s", warning)
+		}
+	}
+
+	// Vendored dependencies (successes that are not glob/plugin and not already displayed as static)
+	// We detect vendored paths by checking they contain "/" which vendor paths typically do
+	// but this is already handled in the static paths section above.
+
+	// Plugins
+	hasPlugin := false
+	for _, s := range result.Successes {
+		if hasPrefix(s, "plugin:") {
+			if !hasPlugin {
+				w.Plain("")
+				w.Plain("  Plugins:")
+				hasPlugin = true
+			}
+			w.Successf("    ✓ %s", s[len("plugin:"):])
+		}
+	}
+
+	// Show non-categorized warnings (e.g., no-bundle warnings)
+	for _, warning := range result.Warnings {
+		if !hasPrefix(warning, "pattern ") {
+			w.Warningf("  ⚠ %s", warning)
+		}
+	}
+}
+
+// hasPrefix is a small helper to avoid importing strings just for prefix checks.
+func hasPrefix(s, prefix string) bool {
+	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
 }

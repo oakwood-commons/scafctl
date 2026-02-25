@@ -5,22 +5,17 @@ package secrets
 
 import (
 	"bytes"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os"
 
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
+	"github.com/oakwood-commons/scafctl/pkg/secrets/secretcrypto"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
-	"golang.org/x/crypto/pbkdf2"
 	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 )
@@ -67,7 +62,7 @@ Use --overwrite to replace existing secrets.`,
 
 			// Detect format and decrypt if needed
 			var importData ExportFormat
-			if bytes.HasPrefix(fileData, []byte(encryptedHeader)) {
+			if bytes.HasPrefix(fileData, []byte(secretcrypto.EncryptedHeader)) {
 				// Encrypted format
 				fmt.Fprint(ioStreams.ErrOut, "Enter decryption password: ")
 				passwordBytes, err := term.ReadPassword(int(os.Stdin.Fd())) //nolint:gosec // G115: Fd() fits in int on all supported platforms
@@ -79,7 +74,7 @@ Use --overwrite to replace existing secrets.`,
 				password := string(passwordBytes)
 				fmt.Fprintln(ioStreams.ErrOut)
 
-				decrypted, err := decryptExport(fileData, password)
+				decrypted, err := secretcrypto.Decrypt(fileData, password)
 				if err != nil {
 					err := fmt.Errorf("failed to decrypt: %w", err)
 					w.Errorf("%v", err)
@@ -106,9 +101,9 @@ Use --overwrite to replace existing secrets.`,
 			}
 
 			// Validate version
-			if importData.Version != exportVersion {
+			if importData.Version != secretcrypto.ExportVersion {
 				w.Warningf("Warning: Import file version '%s' does not match expected '%s'\n",
-					importData.Version, exportVersion)
+					importData.Version, secretcrypto.ExportVersion)
 			}
 
 			// Filter out internal secrets
@@ -193,60 +188,4 @@ Use --overwrite to replace existing secrets.`,
 	cmd.Flags().BoolVar(&overwriteFlag, "overwrite", false, "Overwrite existing secrets")
 
 	return cmd
-}
-
-// decryptExport decrypts an encrypted export file.
-func decryptExport(data []byte, password string) ([]byte, error) {
-	// Remove header
-	if !bytes.HasPrefix(data, []byte(encryptedHeader)) {
-		return nil, fmt.Errorf("invalid encrypted format")
-	}
-	data = data[len(encryptedHeader):]
-
-	// Parse: salt + iterations + base64-ciphertext
-	if len(data) < pbkdf2SaltSize+4 {
-		return nil, fmt.Errorf("invalid encrypted data: too short")
-	}
-
-	salt := data[:pbkdf2SaltSize]
-	iterationsBytes := data[pbkdf2SaltSize : pbkdf2SaltSize+4]
-	iterations := binary.BigEndian.Uint32(iterationsBytes)
-	ciphertextB64 := data[pbkdf2SaltSize+4:]
-
-	// Decode base64
-	ciphertext, err := base64.StdEncoding.DecodeString(string(ciphertextB64))
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode base64: %w", err)
-	}
-
-	// Derive key
-	key := pbkdf2.Key([]byte(password), salt, int(iterations), pbkdf2KeySize, sha256.New)
-
-	// Create cipher
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create cipher: %w", err)
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create GCM: %w", err)
-	}
-
-	// Extract nonce
-	nonceSize := gcm.NonceSize()
-	if len(ciphertext) < nonceSize {
-		return nil, fmt.Errorf("ciphertext too short")
-	}
-
-	nonce := ciphertext[:nonceSize]
-	ciphertext = ciphertext[nonceSize:]
-
-	// Decrypt
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return nil, fmt.Errorf("decryption failed (wrong password?): %w", err)
-	}
-
-	return plaintext, nil
 }

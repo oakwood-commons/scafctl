@@ -16,13 +16,13 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
-	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/explain"
-	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/lint"
-	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/run"
+	pkglint "github.com/oakwood-commons/scafctl/pkg/lint"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
+	"github.com/oakwood-commons/scafctl/pkg/solution/inspect"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
@@ -238,7 +238,7 @@ func (s *Server) handleInspectSolution(_ context.Context, request mcp.CallToolRe
 		), nil
 	}
 
-	sol, err := explain.LoadSolution(s.ctx, path)
+	sol, err := inspect.LoadSolution(s.ctx, path)
 	if err != nil {
 		return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("loading solution: %v", err),
 			WithField("path"),
@@ -247,7 +247,7 @@ func (s *Server) handleInspectSolution(_ context.Context, request mcp.CallToolRe
 		), nil
 	}
 
-	explanation := explain.BuildSolutionExplanation(sol)
+	explanation := inspect.BuildSolutionExplanation(sol)
 
 	result, err := mcp.NewToolResultJSON(explanation)
 	if err != nil {
@@ -315,11 +315,11 @@ func (s *Server) handleLintSolution(_ context.Context, request mcp.CallToolReque
 	}
 
 	// Run linting
-	result := lint.Solution(prepResult.Solution, file, prepResult.Registry)
+	result := pkglint.Solution(prepResult.Solution, file, prepResult.Registry)
 
 	// Filter by severity
 	if severity != "info" {
-		result = lint.FilterBySeverity(result, severity)
+		result = pkglint.FilterBySeverity(result, severity)
 	}
 
 	return mcp.NewToolResultJSON(result)
@@ -579,8 +579,8 @@ func (s *Server) executeResolversForRender(sol *solution.Solution, params map[st
 		}
 	}
 
-	cfg := run.ResolverExecutionConfigFromContext(s.ctx)
-	result, err := run.ExecuteResolvers(s.ctx, sol, params, reg, cfg)
+	cfg := execute.ResolverExecutionConfigFromContext(s.ctx)
+	result, err := execute.Resolvers(s.ctx, sol, params, reg, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -688,7 +688,7 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 		}
 	}
 
-	cfg := run.ResolverExecutionConfigFromContext(s.ctx)
+	cfg := execute.ResolverExecutionConfigFromContext(s.ctx)
 	// Check if we're debugging a single resolver
 	resolverFilter := request.GetString("resolver", "")
 
@@ -698,7 +698,7 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 	progress.report(s.ctx, 1, "Loading and validating solution")
 
 	progress.report(s.ctx, 2, fmt.Sprintf("Executing %d resolvers", len(sol.Spec.Resolvers)))
-	result, err := run.ExecuteResolvers(s.ctx, sol, params, reg, cfg)
+	result, err := execute.Resolvers(s.ctx, sol, params, reg, cfg)
 	if err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("resolver execution failed: %v", err),
 			WithSuggestion("Check resolver configuration and dependencies"),
@@ -985,7 +985,7 @@ func (s *Server) handleGetRunCommand(_ context.Context, request mcp.CallToolRequ
 		), nil
 	}
 
-	sol, err := explain.LoadSolution(s.ctx, path)
+	sol, err := inspect.LoadSolution(s.ctx, path)
 	if err != nil {
 		return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("loading solution: %v", err),
 			WithField("path"),

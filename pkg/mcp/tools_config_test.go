@@ -62,7 +62,7 @@ func TestHandleGetConfig(t *testing.T) {
 		assert.False(t, result.IsError)
 
 		text := result.Content[0].(mcp.TextContent).Text
-		var output sanitizedConfig
+		var output config.SanitizedConfig
 		require.NoError(t, json.Unmarshal([]byte(text), &output))
 
 		assert.Equal(t, 1, output.Version)
@@ -117,7 +117,7 @@ func TestHandleGetConfig(t *testing.T) {
 
 		text := result.Content[0].(mcp.TextContent).Text
 		assert.NotContains(t, text, "super-secret-value")
-		assert.Contains(t, text, redactedValue)
+		assert.Contains(t, text, config.RedactedValue)
 		// Client ID should still be visible
 		assert.Contains(t, text, "my-client-id")
 	})
@@ -135,72 +135,5 @@ func TestHandleGetConfig(t *testing.T) {
 		require.NoError(t, err)
 		// Either way, it should not panic
 		assert.NotNil(t, result)
-	})
-}
-
-func TestSanitizeConfig(t *testing.T) {
-	t.Run("redacts GCP client secret", func(t *testing.T) {
-		cfg := &config.Config{
-			Auth: config.GlobalAuthConfig{
-				GCP: &config.GCPAuthConfig{
-					ClientID:     "visible-id",
-					ClientSecret: "should-be-hidden",
-					Project:      "my-proj",
-				},
-			},
-		}
-
-		sanitized := sanitizeConfig(cfg)
-		assert.Equal(t, "visible-id", sanitized.Auth.GCP.ClientID)
-		assert.Equal(t, redactedValue, sanitized.Auth.GCP.GCPClientCredential)
-		assert.Equal(t, "my-proj", sanitized.Auth.GCP.Project)
-	})
-
-	t.Run("empty secret not redacted", func(t *testing.T) {
-		cfg := &config.Config{
-			Auth: config.GlobalAuthConfig{
-				GCP: &config.GCPAuthConfig{
-					ClientID:     "visible-id",
-					ClientSecret: "",
-				},
-			},
-		}
-
-		sanitized := sanitizeConfig(cfg)
-		assert.Equal(t, "", sanitized.Auth.GCP.GCPClientCredential)
-	})
-
-	t.Run("nil auth sections", func(t *testing.T) {
-		cfg := &config.Config{
-			Auth: config.GlobalAuthConfig{},
-		}
-
-		sanitized := sanitizeConfig(cfg)
-		assert.Nil(t, sanitized.Auth.Entra)
-		assert.Nil(t, sanitized.Auth.GitHub)
-		assert.Nil(t, sanitized.Auth.GCP)
-	})
-
-	t.Run("catalogs with auth", func(t *testing.T) {
-		cfg := &config.Config{
-			Catalogs: []config.CatalogConfig{
-				{
-					Name: "remote",
-					Type: "oci",
-					URL:  "https://registry.example.com",
-					Auth: &config.AuthConfig{
-						Type:        "token",
-						TokenEnvVar: "MY_TOKEN",
-					},
-				},
-			},
-		}
-
-		sanitized := sanitizeConfig(cfg)
-		require.Len(t, sanitized.Catalogs, 1)
-		assert.Equal(t, "remote", sanitized.Catalogs[0].Name)
-		require.NotNil(t, sanitized.Catalogs[0].Auth)
-		assert.Equal(t, "token", sanitized.Catalogs[0].Auth.Type)
-		assert.Equal(t, "MY_TOKEN", sanitized.Catalogs[0].Auth.TokenEnvVar)
 	})
 }
