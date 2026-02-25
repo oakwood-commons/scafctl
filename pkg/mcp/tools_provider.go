@@ -8,9 +8,9 @@ import (
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/explain"
-	getprovider "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	provdetail "github.com/oakwood-commons/scafctl/pkg/provider/detail"
+	"github.com/oakwood-commons/scafctl/pkg/solution/inspect"
 )
 
 // registerProviderTools registers all provider-related MCP tools.
@@ -130,7 +130,7 @@ func (s *Server) handleGetProviderSchema(_ context.Context, request mcp.CallTool
 		), nil
 	}
 
-	desc, err := explain.LookupProvider(s.ctx, name, s.registry)
+	desc, err := inspect.LookupProvider(s.ctx, name, s.registry)
 	if err != nil {
 		// Build a helpful error with available provider names
 		availableNames := ""
@@ -153,7 +153,7 @@ func (s *Server) handleGetProviderSchema(_ context.Context, request mcp.CallTool
 	// - examples with YAML
 	// - CLI usage examples
 	// - version, capabilities, category, tags, links, maintainers
-	detail := getprovider.BuildProviderDetail(*desc)
+	detail := provdetail.BuildProviderDetail(*desc)
 
 	return mcp.NewToolResultJSON(detail)
 }

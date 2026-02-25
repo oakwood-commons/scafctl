@@ -44,7 +44,6 @@ Architecture and design documentation for scafctl.
 - [GitHub Auth Handler](github-auth-handler.md) — GitHub authentication
 - [OTel Telemetry Migration](otel-telemetry-migration.md) — OpenTelemetry integration
 - [State](state.md) — State management design
-- [Testing Consolidation](testing-consolidation.md) — Testing strategy consolidation
 
 ## Contributing
 

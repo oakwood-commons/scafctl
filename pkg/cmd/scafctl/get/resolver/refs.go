@@ -8,15 +8,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"sort"
-	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
-	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
-	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	refslib "github.com/oakwood-commons/scafctl/pkg/resolver/refs"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -34,13 +31,10 @@ type RefsOptions struct {
 	Output       string
 }
 
-// RefsOutput represents the output structure for refs command
-type RefsOutput struct {
-	Source     string   `json:"source" yaml:"source"`
-	SourceType string   `json:"sourceType" yaml:"sourceType"`
-	References []string `json:"references" yaml:"references"`
-	Count      int      `json:"count" yaml:"count"`
-}
+// RefsOutput is an alias for refs.Output.
+//
+// Deprecated: Use refs.Output from pkg/resolver/refs instead.
+type RefsOutput = refslib.Output
 
 // CommandRefs creates the resolver refs command
 func CommandRefs(_ *settings.Run, ioStreams *terminal.IOStreams, binaryName string) *cobra.Command {
@@ -149,33 +143,33 @@ func runRefs(ctx context.Context, opts *RefsOptions, ioStreams *terminal.IOStrea
 	case opts.TemplateFile != "":
 		sourceType = "template-file"
 		source = opts.TemplateFile
-		refs, err = extractRefsFromTemplateFile(opts.TemplateFile, opts.LeftDelim, opts.RightDelim)
+		refs, err = refslib.ExtractFromTemplateFile(opts.TemplateFile, opts.LeftDelim, opts.RightDelim)
 
 	case opts.Template != "":
 		sourceType = "template"
 		if opts.Template == "-" {
 			sourceType = "template-stdin"
-			opts.Template, err = readStdin(ioStreams.In)
+			opts.Template, err = refslib.ReadStdin(ioStreams.In)
 			if err != nil {
 				writeErr(err)
 				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 		}
 		source = opts.Template
-		refs, err = extractRefsFromTemplate(opts.Template, opts.LeftDelim, opts.RightDelim)
+		refs, err = refslib.ExtractFromTemplate(opts.Template, opts.LeftDelim, opts.RightDelim)
 
 	case opts.Expr != "":
 		sourceType = "cel-expression"
 		if opts.Expr == "-" {
 			sourceType = "cel-expression-stdin"
-			opts.Expr, err = readStdin(ioStreams.In)
+			opts.Expr, err = refslib.ReadStdin(ioStreams.In)
 			if err != nil {
 				writeErr(err)
 				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 		}
 		source = opts.Expr
-		refs, err = extractRefsFromCEL(opts.Expr)
+		refs, err = refslib.ExtractFromCEL(opts.Expr)
 	}
 
 	if err != nil {
@@ -198,80 +192,18 @@ func runRefs(ctx context.Context, opts *RefsOptions, ioStreams *terminal.IOStrea
 	return writeOutput(ioStreams, opts.Output, output)
 }
 
-func readStdin(r io.Reader) (string, error) {
-	if r == nil {
-		return "", fmt.Errorf("stdin is not available")
-	}
-	data, err := io.ReadAll(r)
-	if err != nil {
-		return "", fmt.Errorf("failed to read from stdin: %w", err)
-	}
-	return strings.TrimSuffix(string(data), "\n"), nil
-}
-
-func extractRefsFromTemplateFile(filePath, leftDelim, rightDelim string) ([]string, error) {
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read template file: %w", err)
-	}
-
-	return extractRefsFromTemplate(string(content), leftDelim, rightDelim)
-}
-
-func extractRefsFromTemplate(content, leftDelim, rightDelim string) ([]string, error) {
-	templateRefs, err := gotmpl.GetGoTemplateReferences(content, leftDelim, rightDelim)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse template: %w", err)
-	}
-
-	// Extract resolver names from paths and deduplicate
-	seen := make(map[string]bool)
-	var refs []string
-
-	for _, ref := range templateRefs {
-		name := extractResolverName(ref.Path)
-		if name != "" && !seen[name] {
-			seen[name] = true
-			refs = append(refs, name)
-		}
-	}
-
-	return refs, nil
-}
-
-func extractRefsFromCEL(expr string) ([]string, error) {
-	celExpr := celexp.Expression(expr)
-	vars, err := celExpr.GetUnderscoreVariables()
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse CEL expression: %w", err)
-	}
-
-	return vars, nil
-}
-
-// extractResolverName extracts the resolver name from a template path
-// e.g., "._.config.host" -> "config", ".config" -> "config"
+// extractResolverName delegates to refslib.ExtractResolverName.
+//
+// Deprecated: Use refs.ExtractResolverName from pkg/resolver/refs instead.
 func extractResolverName(path string) string {
-	// Remove leading dot
-	if len(path) > 0 && path[0] == '.' {
-		path = path[1:]
-	}
+	return refslib.ExtractResolverName(path)
+}
 
-	// Handle _.resolverName pattern
-	if len(path) > 2 && path[0] == '_' && path[1] == '.' {
-		path = path[2:]
-	} else if len(path) > 1 && path[0] == '_' {
-		path = path[1:]
-	}
-
-	// Get first segment (resolver name)
-	for i, c := range path {
-		if c == '.' {
-			return path[:i]
-		}
-	}
-
-	return path
+// readStdin delegates to refslib.ReadStdin.
+//
+// Deprecated: Use refs.ReadStdin from pkg/resolver/refs instead.
+func readStdin(r io.Reader) (string, error) {
+	return refslib.ReadStdin(r)
 }
 
 func writeOutput(ioStreams *terminal.IOStreams, format string, output RefsOutput) error {

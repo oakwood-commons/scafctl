@@ -8,7 +8,7 @@ import (
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/explain"
+	"github.com/oakwood-commons/scafctl/pkg/solution/inspect"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 )
 
@@ -66,7 +66,7 @@ func (s *Server) handleGenerateTestScaffold(_ context.Context, request mcp.CallT
 		), nil
 	}
 
-	sol, err := explain.LoadSolution(s.ctx, path)
+	sol, err := inspect.LoadSolution(s.ctx, path)
 	if err != nil {
 		return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("failed to load solution: %v", err),
 			WithField("path"),

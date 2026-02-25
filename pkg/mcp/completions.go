@@ -12,8 +12,8 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/celexp/ext"
-	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/lint"
 	"github.com/oakwood-commons/scafctl/pkg/examples"
+	pkglint "github.com/oakwood-commons/scafctl/pkg/lint"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 )
 
@@ -190,7 +190,7 @@ func (c *toolArgCompletions) ProviderNames() []string {
 
 // LintRuleNames returns available lint rule names.
 func (c *toolArgCompletions) LintRuleNames() []string {
-	rules := lint.ListRules()
+	rules := pkglint.ListRules()
 	names := make([]string, 0, len(rules))
 	for _, r := range rules {
 		names = append(names, r.Rule)

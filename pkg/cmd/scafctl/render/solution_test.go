@@ -411,7 +411,7 @@ func TestExitCodes(t *testing.T) {
 func TestSolutionRegistryAdapter(t *testing.T) {
 	t.Run("Get_returns_provider_when_exists", func(t *testing.T) {
 		reg := provider.NewRegistry(provider.WithAllowOverwrite(true))
-		adapter := &solutionRegistryAdapter{registry: reg}
+		adapter := &solutionRegistryAdapter{Registry: reg}
 
 		// Try to get a non-existent provider
 		p, ok := adapter.Get("nonexistent")
@@ -421,14 +421,14 @@ func TestSolutionRegistryAdapter(t *testing.T) {
 
 	t.Run("Has_returns_false_for_nonexistent", func(t *testing.T) {
 		reg := provider.NewRegistry()
-		adapter := &solutionRegistryAdapter{registry: reg}
+		adapter := &solutionRegistryAdapter{Registry: reg}
 
 		assert.False(t, adapter.Has("nonexistent"))
 	})
 
 	t.Run("List_returns_all_providers", func(t *testing.T) {
 		reg := provider.NewRegistry()
-		adapter := &solutionRegistryAdapter{registry: reg}
+		adapter := &solutionRegistryAdapter{Registry: reg}
 
 		providers := adapter.List()
 		assert.NotNil(t, providers)
@@ -436,7 +436,7 @@ func TestSolutionRegistryAdapter(t *testing.T) {
 
 	t.Run("DescriptorLookup_returns_lookup", func(t *testing.T) {
 		reg := provider.NewRegistry()
-		adapter := &solutionRegistryAdapter{registry: reg}
+		adapter := &solutionRegistryAdapter{Registry: reg}
 
 		lookup := adapter.DescriptorLookup()
 		assert.NotNil(t, lookup)
@@ -447,7 +447,7 @@ func TestSolutionResolverRegistryAdapter(t *testing.T) {
 	t.Run("Get_returns_error_for_nonexistent", func(t *testing.T) {
 		reg := provider.NewRegistry()
 		adapter := &solutionResolverRegistryAdapter{
-			solutionRegistryAdapter: &solutionRegistryAdapter{registry: reg},
+			RegistryAdapter: &solutionRegistryAdapter{Registry: reg},
 		}
 
 		p, err := adapter.Get("nonexistent")

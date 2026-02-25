@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	celdetail "github.com/oakwood-commons/scafctl/pkg/celexp/detail"
 	"github.com/oakwood-commons/scafctl/pkg/celexp/ext"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -309,50 +310,18 @@ func (o *Options) printFunctionDetail(fn *celexp.ExtFunction) error {
 	return nil
 }
 
-// buildFunctionListOutput builds structured output for the function list
+// buildFunctionListOutput delegates to celdetail.BuildFunctionList.
+//
+// Deprecated: Use celdetail.BuildFunctionList from pkg/celexp/detail instead.
 func buildFunctionListOutput(funcs celexp.ExtFunctionList) []map[string]any {
-	output := make([]map[string]any, 0, len(funcs))
-	for _, fn := range funcs {
-		output = append(output, buildFunctionDetailOutput(&fn))
-	}
-	return output
+	return celdetail.BuildFunctionList(funcs)
 }
 
-// buildFunctionDetailOutput builds structured output for a single function
+// buildFunctionDetailOutput delegates to celdetail.BuildFunctionDetail.
+//
+// Deprecated: Use celdetail.BuildFunctionDetail from pkg/celexp/detail instead.
 func buildFunctionDetailOutput(fn *celexp.ExtFunction) map[string]any {
-	m := map[string]any{
-		"name":   fn.Name,
-		"custom": fn.Custom,
-	}
-
-	if fn.Description != "" {
-		m["description"] = fn.Description
-	}
-	if len(fn.FunctionNames) > 0 {
-		m["functionNames"] = fn.FunctionNames
-	}
-	if len(fn.Links) > 0 {
-		m["links"] = fn.Links
-	}
-	if len(fn.Examples) > 0 {
-		examples := make([]map[string]any, 0, len(fn.Examples))
-		for _, ex := range fn.Examples {
-			exMap := map[string]any{}
-			if ex.Description != "" {
-				exMap["description"] = ex.Description
-			}
-			if ex.Expression != "" {
-				exMap["expression"] = ex.Expression
-			}
-			if len(ex.Links) > 0 {
-				exMap["links"] = ex.Links
-			}
-			examples = append(examples, exMap)
-		}
-		m["examples"] = examples
-	}
-
-	return m
+	return celdetail.BuildFunctionDetail(fn)
 }
 
 // writeOutput writes the output using kvx

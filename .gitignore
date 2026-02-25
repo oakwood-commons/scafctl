@@ -58,4 +58,4 @@ scafctl.exe~
 .venv/
 .DS_Store
 __debug*
-refs/
+/refs/

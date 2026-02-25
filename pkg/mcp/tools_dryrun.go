@@ -8,9 +8,9 @@ import (
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/run"
 	"github.com/oakwood-commons/scafctl/pkg/dryrun"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
+	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 )
 
@@ -94,10 +94,10 @@ func (s *Server) handleDryRunSolution(_ context.Context, request mcp.CallToolReq
 	// Execute resolvers in dry-run mode
 	var resolverData map[string]any
 	if sol.Spec.HasResolvers() {
-		cfg := run.ResolverExecutionConfigFromContext(s.ctx)
+		cfg := execute.ResolverExecutionConfigFromContext(s.ctx)
 		cfg.DryRun = true
 
-		result, err := run.ExecuteResolvers(s.ctx, sol, params, reg, cfg)
+		result, err := execute.Resolvers(s.ctx, sol, params, reg, cfg)
 		if err != nil {
 			resolverData = make(map[string]any)
 		} else {
