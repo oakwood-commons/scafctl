@@ -1209,7 +1209,7 @@ name: "api-key"
 
 ### hcl
 
-Parses HCL (HashiCorp Configuration Language) content and extracts structured block information. Supports Terraform and OpenTofu configuration files.
+Processes HCL (HashiCorp Configuration Language) content. Supports four operations: `parse` (default) extracts structured block information; `format` canonically formats; `validate` checks syntax; `generate` produces HCL from structured input. Accepts single files, multiple paths, or a directory of `.tf` files.
 
 ~~~yaml
 resolve:
@@ -1226,12 +1226,17 @@ resolve:
 **Capabilities:** `from`, `transform`
 
 **Inputs:**
-- `content` (optional): Raw HCL content to parse as a string
-- `path` (optional): Path to an HCL file to read and parse
+- `operation` (optional): `parse` (default), `format`, `validate`, or `generate`
+- `content` (optional): Raw HCL content to process as a string
+- `path` (optional): Path to a single HCL file
+- `paths` (optional): Array of HCL file paths — results are merged (parse) or returned per-file (format/validate)
+- `dir` (optional): Directory path — all `.tf`/`.tf.json` files are processed
+- `blocks` (optional): Structured block data for `generate` (same schema as parse output)
+- `output_format` (optional): Generation output format — `hcl` (default, native HCL syntax) or `json` (Terraform JSON syntax `.tf.json`)
 
-One of `content` or `path` must be provided, but not both.
+For `parse`/`format`/`validate`, provide exactly one of `content`, `path`, `paths`, or `dir` (mutually exclusive). For `generate`, use `blocks` and optionally `output_format`.
 
-**Output:** An object with arrays/maps for each block type:
+**Output (operation: parse):** An object with arrays/maps for each block type:
 - `variables`: Array of variable definitions (name, type, default, description, sensitive, nullable, validation)
 - `resources`: Array of resource blocks (type, name, attributes, sub-blocks)
 - `data`: Array of data source blocks (type, name, attributes, sub-blocks)
@@ -1243,6 +1248,25 @@ One of `content` or `path` must be provided, but not both.
 - `moved`: Array of moved blocks (from, to)
 - `import`: Array of import blocks (to, id, provider)
 - `check`: Array of check blocks (name, data, assertions)
+
+When multiple files are parsed (`paths`/`dir`), results are merged: arrays are concatenated, `locals` and `terraform` maps are merged (last-file-wins for conflicts).
+
+**Output (operation: format):**
+- `formatted`: The canonically formatted HCL content as a string
+- `changed`: Boolean indicating whether the formatter modified the content
+
+Multi-file format returns `{ files: [{filename, formatted, changed}, ...], changed: bool }`.
+
+**Output (operation: validate):**
+- `valid`: Boolean — `true` if no syntax errors
+- `error_count`: Number of error-level diagnostics
+- `diagnostics`: Array of diagnostic entries (severity, summary, detail, range)
+
+Multi-file validate returns `{ valid: bool, error_count: int, files: [...] }`.
+
+**Output (operation: generate):**
+- `hcl`: Generated HCL text string (native HCL syntax or Terraform JSON depending on `output_format`)
+- Metadata includes `output_format` (`hcl` or `json`) indicating which format was produced
 
 **Expression handling:** Literal values (strings, numbers, booleans, lists, maps) are evaluated to native types. Complex expressions (variable references, function calls, conditionals) are returned as raw source text strings.
 
