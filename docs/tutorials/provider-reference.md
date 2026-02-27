@@ -525,7 +525,7 @@ transform:
 
 ## hcl
 
-Parse HCL (HashiCorp Configuration Language) content and extract structured block information from Terraform and OpenTofu configuration files.
+Process HCL (HashiCorp Configuration Language) content. Supports four operations: `parse` (default) extracts structured block information; `format` canonically formats; `validate` checks syntax; `generate` produces HCL from structured input. Accepts single files, multiple paths, or a directory of `.tf` files.
 
 ### Capabilities
 
@@ -535,12 +535,17 @@ Parse HCL (HashiCorp Configuration Language) content and extract structured bloc
 
 | Field | Type | Required | Description |
 |-------|------|:--------:|-------------|
-| `content` | string | ❌ | Raw HCL content to parse |
-| `path` | string | ❌ | Path to an HCL file to read and parse |
+| `operation` | string | ❌ | `parse` (default), `format`, `validate`, or `generate` |
+| `content` | string | ❌ | Raw HCL content to process |
+| `path` | string | ❌ | Path to a single HCL file |
+| `paths` | array | ❌ | Array of HCL file paths (merged for parse; per-file for format/validate) |
+| `dir` | string | ❌ | Directory path — all `.tf`/`.tf.json` files are processed |
+| `blocks` | object | ❌ | Structured block data for `generate` (same schema as parse output) |
+| `output_format` | string | ❌ | Generation output format: `hcl` (default) or `json` (Terraform JSON syntax `.tf.json`) |
 
-One of `content` or `path` must be provided, but not both.
+**Source selection:** For `parse`/`format`/`validate`, provide exactly one of `content`, `path`, `paths`, or `dir` (mutually exclusive). For `generate`, use `blocks` and optionally `output_format`.
 
-### Output
+### Output — `parse` (default)
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -556,10 +561,39 @@ One of `content` or `path` must be provided, but not both.
 | `import` | array | Import blocks (to, id, provider) |
 | `check` | array | Check blocks (name, data, assertions) |
 
+When multiple files are parsed (`paths` or `dir`), results are merged: arrays are concatenated, `locals` and `terraform` maps are merged (last-file-wins for conflicting keys).
+
+### Output — `format`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `formatted` | string | The canonically formatted HCL content (single file) |
+| `changed` | bool | `true` if the formatter modified the content |
+
+Multi-file format returns `{ files: [{filename, formatted, changed}, ...], changed: bool }`.
+
+### Output — `validate`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `valid` | bool | `true` if no syntax errors were found |
+| `error_count` | int | Number of error-level diagnostics |
+| `diagnostics` | array | Diagnostic entries with severity, summary, detail, range |
+
+Multi-file validate returns `{ valid: bool, error_count: int, files: [{filename, valid, error_count, diagnostics}, ...] }`.
+
+### Output — `generate`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `hcl` | string | Generated HCL text (native HCL syntax or Terraform JSON depending on `output_format`) |
+
+**Metadata** includes `output_format` (`hcl` or `json`) indicating which format was produced.
+
 ### Examples
 
 ```yaml
-# Parse inline HCL content
+# Parse inline HCL content (operation defaults to "parse")
 resolve:
   with:
     - provider: hcl
@@ -577,12 +611,89 @@ resolve:
       inputs:
         path: ./main.tf
 
+# Parse all .tf files in a directory (results merged)
+resolve:
+  with:
+    - provider: hcl
+      inputs:
+        dir: ./terraform
+
+# Parse multiple specific files
+resolve:
+  with:
+    - provider: hcl
+      inputs:
+        paths:
+          - ./main.tf
+          - ./variables.tf
+          - ./outputs.tf
+
 # Transform: parse HCL from another resolver's output
 transform:
   with:
     - provider: hcl
       inputs:
         content: "{{ .resolvers.tfFile.content }}"
+
+# Format inline HCL content
+resolve:
+  with:
+    - provider: hcl
+      inputs:
+        operation: format
+        content: |
+          variable "region" {
+          type=string
+          default="us-east-1"
+          }
+
+# Format all files in a directory
+resolve:
+  with:
+    - provider: hcl
+      inputs:
+        operation: format
+        dir: ./terraform
+
+# Validate HCL syntax
+resolve:
+  with:
+    - provider: hcl
+      inputs:
+        operation: validate
+        path: ./main.tf
+
+# Generate HCL from structured data
+resolve:
+  with:
+    - provider: hcl
+      inputs:
+        operation: generate
+        blocks:
+          variables:
+            - name: region
+              type: string
+              default: us-east-1
+              description: "AWS region"
+
+# Generate Terraform JSON (.tf.json) from structured data
+resolve:
+  with:
+    - provider: hcl
+      inputs:
+        operation: generate
+        output_format: json
+        blocks:
+          variables:
+            - name: region
+              type: string
+              default: us-east-1
+          resources:
+            - type: aws_instance
+              name: web
+              attributes:
+                ami: ami-12345
+                instance_type: t3.micro
 ```
 
 ---

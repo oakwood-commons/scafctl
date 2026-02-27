@@ -11,6 +11,10 @@ Example input files for use with `scafctl run provider --input @<file>`.
 | [github-api.yaml](github-api.yaml) | `http` | GitHub API call with authentication |
 | [exec-ls.yaml](exec-ls.yaml) | `exec` | Execute `ls -la` command |
 | [hcl-parse-variables.yaml](hcl-parse-variables.yaml) | `hcl` | Parse HCL content to extract variable definitions |
+| [hcl-format.yaml](hcl-format.yaml) | `hcl` | Format HCL content to canonical style |
+| [hcl-validate.yaml](hcl-validate.yaml) | `hcl` | Validate HCL syntax and return diagnostics |
+| [hcl-generate.yaml](hcl-generate.yaml) | `hcl` | Generate HCL from structured block data |
+| [hcl-generate-json.yaml](hcl-generate-json.yaml) | `hcl` | Generate Terraform JSON (`.tf.json`) from structured block data |
 
 ## Usage
 

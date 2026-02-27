@@ -121,6 +121,102 @@ spec:
                   most_recent = true
                 }
 
+    formatUnformatted:
+      description: Format unformatted HCL content
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              operation: format
+              content: |
+                variable "region" {
+                type=string
+                default="us-east-1"
+                }
+
+    formatAlreadyFormatted:
+      description: Format already-formatted HCL content
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              operation: format
+              content: |
+                variable "region" {
+                  type    = string
+                  default = "us-east-1"
+                }
+
+    validateValid:
+      description: Validate valid HCL syntax
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              operation: validate
+              content: |
+                variable "region" {
+                  type    = string
+                  default = "us-east-1"
+                }
+
+    validateInvalid:
+      description: Validate invalid HCL syntax
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              operation: validate
+              content: "this is { not valid hcl !!!"
+
+    generateVariables:
+      description: Generate HCL from structured variable data
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              operation: generate
+              blocks:
+                variables:
+                  - name: region
+                    type: string
+                    default: us-east-1
+                    description: "AWS region"
+
+    generateResources:
+      description: Generate HCL from structured resource data
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              operation: generate
+              blocks:
+                resources:
+                  - type: aws_instance
+                    name: web
+                    attributes:
+                      ami: ami-12345
+                      instance_type: t3.micro
+
+    generateJSON:
+      description: Generate Terraform JSON from structured data
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              operation: generate
+              output_format: json
+              blocks:
+                variables:
+                  - name: region
+                    type: string
+                    default: us-east-1
+                resources:
+                  - type: aws_instance
+                    name: web
+                    attributes:
+                      ami: ami-12345
+
   testing:
     config:
       skipBuiltins: true
@@ -240,3 +336,61 @@ spec:
         assertions:
           - expression: __output.parseDataSources.data[0].type == "aws_ami"
           - expression: __output.parseDataSources.data[0].name == "ubuntu"
+
+      format-changed:
+        description: Verify formatting detects changes
+        extends: [_base]
+        assertions:
+          - expression: __output.formatUnformatted.changed == true
+          - expression: size(__output.formatUnformatted.formatted) > 0
+
+      format-unchanged:
+        description: Verify already-formatted content is unchanged
+        extends: [_base]
+        assertions:
+          - expression: __output.formatAlreadyFormatted.changed == false
+
+      validate-valid:
+        description: Verify valid HCL passes validation
+        extends: [_base]
+        assertions:
+          - expression: __output.validateValid.valid == true
+          - expression: __output.validateValid.error_count == 0
+          - expression: size(__output.validateValid.diagnostics) == 0
+
+      validate-invalid:
+        description: Verify invalid HCL fails validation
+        extends: [_base]
+        assertions:
+          - expression: __output.validateInvalid.valid == false
+          - expression: __output.validateInvalid.error_count > 0
+          - expression: size(__output.validateInvalid.diagnostics) > 0
+
+      validate-diagnostic-severity:
+        description: Verify diagnostic severity is reported
+        extends: [_base]
+        assertions:
+          - expression: __output.validateInvalid.diagnostics[0].severity == "error"
+
+      generate-variable-hcl:
+        description: Verify generated HCL contains variable block
+        extends: [_base]
+        assertions:
+          - expression: __output.generateVariables.hcl.contains("variable")
+          - expression: __output.generateVariables.hcl.contains("region")
+
+      generate-resource-hcl:
+        description: Verify generated HCL contains resource block
+        extends: [_base]
+        assertions:
+          - expression: __output.generateResources.hcl.contains("resource")
+          - expression: __output.generateResources.hcl.contains("aws_instance")
+
+      generate-json-valid:
+        description: Verify JSON generation produces valid JSON with correct structure
+        extends: [_base]
+        assertions:
+          - expression: __output.generateJSON.hcl.contains("\"variable\"")
+          - expression: __output.generateJSON.hcl.contains("\"region\"")
+          - expression: __output.generateJSON.hcl.contains("\"resource\"")
+          - expression: __output.generateJSON.hcl.contains("\"aws_instance\"")

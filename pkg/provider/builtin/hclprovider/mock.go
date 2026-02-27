@@ -13,6 +13,10 @@ type MockFileReader struct {
 	ReadFileErr bool
 	// Content is returned by ReadFile when ReadFileFunc is nil and ReadFileErr is false.
 	Content []byte
+	// ListHCLFilesFunc allows custom directory listing per test.
+	ListHCLFilesFunc func(dir string) ([]string, error)
+	// DirFiles is returned by ListHCLFiles when ListHCLFilesFunc is nil.
+	DirFiles []string
 }
 
 // ReadFile reads a file using the mock configuration.
@@ -24,4 +28,12 @@ func (m *MockFileReader) ReadFile(path string) ([]byte, error) {
 		return m.ReadFileFunc(path)
 	}
 	return m.Content, nil
+}
+
+// ListHCLFiles returns the configured list of HCL files for a directory.
+func (m *MockFileReader) ListHCLFiles(dir string) ([]string, error) {
+	if m.ListHCLFilesFunc != nil {
+		return m.ListHCLFilesFunc(dir)
+	}
+	return m.DirFiles, nil
 }

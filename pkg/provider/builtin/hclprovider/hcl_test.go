@@ -18,7 +18,7 @@ func TestHCLProvider_Descriptor(t *testing.T) {
 	desc := p.Descriptor()
 
 	assert.Equal(t, "hcl", desc.Name)
-	assert.Equal(t, "HCL Parser", desc.DisplayName)
+	assert.Equal(t, "HCL", desc.DisplayName)
 	assert.Equal(t, "v1", desc.APIVersion)
 	assert.NotNil(t, desc.Version)
 	assert.NotEmpty(t, desc.Description)
@@ -118,7 +118,7 @@ func TestHCLProvider_Execute_MissingInputs(t *testing.T) {
 	output, err := p.Execute(ctx, inputs)
 	assert.Error(t, err)
 	assert.Nil(t, output)
-	assert.Contains(t, err.Error(), "either 'content' or 'path' must be provided")
+	assert.Contains(t, err.Error(), "one of 'content', 'path', 'paths', or 'dir' must be provided")
 }
 
 func TestHCLProvider_Execute_BothInputs(t *testing.T) {
@@ -134,7 +134,7 @@ func TestHCLProvider_Execute_BothInputs(t *testing.T) {
 	output, err := p.Execute(ctx, inputs)
 	assert.Error(t, err)
 	assert.Nil(t, output)
-	assert.Contains(t, err.Error(), "provide either 'content' or 'path', not both")
+	assert.Contains(t, err.Error(), "mutually exclusive")
 }
 
 func TestHCLProvider_Execute_InvalidInputType(t *testing.T) {
@@ -301,4 +301,123 @@ output "result" {
 	assert.Equal(t, "result", outputs[0].(map[string]any)["name"])
 	assert.Equal(t, "hello", outputs[0].(map[string]any)["value"])
 	assert.Equal(t, "A test output", outputs[0].(map[string]any)["description"])
+}
+
+func TestHCLProvider_Execute_Format_UnformattedContent(t *testing.T) {
+	t.Parallel()
+	p := NewHCLProvider()
+	ctx := context.Background()
+
+	// Poorly formatted HCL – compact attribute assignments with no spacing
+	unformatted := `variable "region" {
+type=string
+default="us-east-1"
+}`
+
+	inputs := map[string]any{
+		"operation": "format",
+		"content":   unformatted,
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	data := output.Data.(map[string]any)
+	assert.True(t, data["changed"].(bool), "changed should be true for unformatted input")
+	formatted := data["formatted"].(string)
+	assert.NotEmpty(t, formatted)
+	assert.Contains(t, formatted, "type")
+	assert.Contains(t, formatted, "region")
+
+	meta := output.Metadata
+	assert.Equal(t, "format", meta["operation"])
+}
+
+func TestHCLProvider_Execute_Format_AlreadyFormatted(t *testing.T) {
+	t.Parallel()
+	p := NewHCLProvider()
+	ctx := context.Background()
+
+	// Content already in canonical form – hclwrite.Format should return it unchanged.
+	alreadyFormatted := `variable "region" {
+  type    = string
+  default = "us-east-1"
+}
+`
+
+	inputs := map[string]any{
+		"operation": "format",
+		"content":   alreadyFormatted,
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	data := output.Data.(map[string]any)
+	assert.False(t, data["changed"].(bool), "changed should be false when content is already canonical")
+	assert.Equal(t, alreadyFormatted, data["formatted"].(string))
+}
+
+func TestHCLProvider_Execute_Format_WithFilePath(t *testing.T) {
+	t.Parallel()
+	p := NewHCLProvider(WithFileReader(&MockFileReader{
+		Content: []byte(`resource "aws_s3_bucket" "b" {
+bucket="my-bucket"
+}`),
+	}))
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"operation": "format",
+		"path":      "./main.tf",
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	data := output.Data.(map[string]any)
+	assert.True(t, data["changed"].(bool))
+	assert.Contains(t, data["formatted"].(string), "aws_s3_bucket")
+
+	meta := output.Metadata
+	assert.Equal(t, "format", meta["operation"])
+	assert.Equal(t, "./main.tf", meta["filename"])
+}
+
+func TestHCLProvider_Execute_Format_DryRun(t *testing.T) {
+	t.Parallel()
+	p := NewHCLProvider()
+	ctx := provider.WithDryRun(context.Background(), true)
+
+	inputs := map[string]any{
+		"operation": "format",
+		"content":   `variable "x" { type=string }`,
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	data := output.Data.(map[string]any)
+	assert.Equal(t, "", data["formatted"])
+	assert.Equal(t, false, data["changed"])
+	assert.Equal(t, "dry-run", output.Metadata["mode"])
+}
+
+func TestHCLProvider_Execute_Format_InvalidOperation(t *testing.T) {
+	t.Parallel()
+	p := NewHCLProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"operation": "unknown",
+		"content":   `variable "x" {}`,
+	}
+
+	_, err := p.Execute(ctx, inputs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported operation")
 }

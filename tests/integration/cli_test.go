@@ -373,6 +373,51 @@ func TestIntegration_RunProvider_HCL_DryRun(t *testing.T) {
 	assert.Contains(t, stdout, "dryRun")
 }
 
+func TestIntegration_RunProvider_HCL_Validate(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "run", "provider", "hcl",
+		"--input", "operation=validate",
+		"--input", "content=variable \"x\" { type = string }",
+		"-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "valid")
+}
+
+func TestIntegration_RunProvider_HCL_Generate(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "run", "provider", "hcl",
+		"--input", "@examples/providers/hcl-generate.yaml",
+		"-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "hcl")
+}
+
+func TestIntegration_RunProvider_HCL_GenerateJSON(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "run", "provider", "hcl",
+		"--input", "@examples/providers/hcl-generate-json.yaml",
+		"-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "hcl")
+	assert.Contains(t, stdout, "variable")
+	assert.Contains(t, stdout, "resource")
+}
+
+func TestIntegration_RunProvider_HCL_Format(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "run", "provider", "hcl",
+		"--input", "operation=format",
+		"--input", "content=variable \"x\" {\ntype=string\n}",
+		"-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "formatted")
+	assert.Contains(t, stdout, "changed")
+}
+
 // ============================================================================
 // Get Provider CLI Usage Tests
 // ============================================================================
