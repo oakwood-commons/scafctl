@@ -33,6 +33,7 @@ Providers are execution primitives used by resolvers and actions. Each provider 
 | [file](#file) | ✅ | ✅ | ❌ | ✅ |
 | [git](#git) | ✅ | ❌ | ❌ | ✅ |
 | [go-template](#go-template) | ❌ | ✅ | ❌ | ✅ |
+| [hcl](#hcl) | ✅ | ✅ | ❌ | ❌ |
 | [http](#http) | ✅ | ✅ | ❌ | ✅ |
 | [identity](#identity) | ✅ | ❌ | ❌ | ❌ |
 | [parameter](#parameter) | ✅ | ❌ | ❌ | ❌ |
@@ -518,6 +519,70 @@ transform:
             host: {{ .host }}
             port: {{ .port }}
             env: {{ .environment }}
+```
+
+---
+
+## hcl
+
+Parse HCL (HashiCorp Configuration Language) content and extract structured block information from Terraform and OpenTofu configuration files.
+
+### Capabilities
+
+`from`, `transform`
+
+### Inputs
+
+| Field | Type | Required | Description |
+|-------|------|:--------:|-------------|
+| `content` | string | ❌ | Raw HCL content to parse |
+| `path` | string | ❌ | Path to an HCL file to read and parse |
+
+One of `content` or `path` must be provided, but not both.
+
+### Output
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `variables` | array | Variable blocks (name, type, default, description, sensitive, validation) |
+| `resources` | array | Resource blocks (type, name, attributes, sub-blocks) |
+| `data` | array | Data source blocks (type, name, attributes, sub-blocks) |
+| `modules` | array | Module blocks (name, source, version, attributes) |
+| `outputs` | array | Output blocks (name, value, description, sensitive) |
+| `locals` | map | Local values merged across all `locals` blocks |
+| `providers` | array | Provider configuration blocks (name, alias, attributes) |
+| `terraform` | object | Terraform block (required_version, required_providers, backend, cloud) |
+| `moved` | array | Moved blocks (from, to) |
+| `import` | array | Import blocks (to, id, provider) |
+| `check` | array | Check blocks (name, data, assertions) |
+
+### Examples
+
+```yaml
+# Parse inline HCL content
+resolve:
+  with:
+    - provider: hcl
+      inputs:
+        content: |
+          variable "region" {
+            type    = string
+            default = "us-east-1"
+          }
+
+# Parse an HCL file
+resolve:
+  with:
+    - provider: hcl
+      inputs:
+        path: ./main.tf
+
+# Transform: parse HCL from another resolver's output
+transform:
+  with:
+    - provider: hcl
+      inputs:
+        content: "{{ .resolvers.tfFile.content }}"
 ```
 
 ---

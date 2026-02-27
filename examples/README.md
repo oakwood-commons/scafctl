@@ -52,6 +52,7 @@ scafctl examples list -o json
 |-----------|-------------|
 | [actions/](actions/) | Workflow automation with actions |
 | [exec/](exec/) | Exec provider shell execution patterns |
+| [providers/](providers/) | Provider input file examples for `scafctl run provider` |
 | [resolvers/](resolvers/) | Dynamic value resolution patterns |
 | [solutions/](solutions/) | Complete end-to-end solution examples |
 | [snapshots/](snapshots/) | Execution snapshot capture and comparison |

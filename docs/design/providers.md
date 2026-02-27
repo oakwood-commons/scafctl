@@ -1207,6 +1207,47 @@ name: "api-key"
 
 ---
 
+### hcl
+
+Parses HCL (HashiCorp Configuration Language) content and extracts structured block information. Supports Terraform and OpenTofu configuration files.
+
+~~~yaml
+resolve:
+  with:
+    - provider: hcl
+      inputs:
+        content: |
+          variable "region" {
+            type    = string
+            default = "us-east-1"
+          }
+~~~
+
+**Capabilities:** `from`, `transform`
+
+**Inputs:**
+- `content` (optional): Raw HCL content to parse as a string
+- `path` (optional): Path to an HCL file to read and parse
+
+One of `content` or `path` must be provided, but not both.
+
+**Output:** An object with arrays/maps for each block type:
+- `variables`: Array of variable definitions (name, type, default, description, sensitive, nullable, validation)
+- `resources`: Array of resource blocks (type, name, attributes, sub-blocks)
+- `data`: Array of data source blocks (type, name, attributes, sub-blocks)
+- `modules`: Array of module blocks (name, source, version, attributes)
+- `outputs`: Array of output blocks (name, value, description, sensitive)
+- `locals`: Map of local values (merged across multiple `locals` blocks)
+- `providers`: Array of provider configurations (name, alias, region, attributes)
+- `terraform`: Object with required_version, required_providers, backend, cloud
+- `moved`: Array of moved blocks (from, to)
+- `import`: Array of import blocks (to, id, provider)
+- `check`: Array of check blocks (name, data, assertions)
+
+**Expression handling:** Literal values (strings, numbers, booleans, lists, maps) are evaluated to native types. Complex expressions (variable references, function calls, conditionals) are returned as raw source text strings.
+
+---
+
 ### identity
 
 Provides authentication identity information from auth handlers without exposing tokens or secrets.

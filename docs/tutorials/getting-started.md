@@ -179,6 +179,7 @@ Providers are the execution primitives. Common ones:
 | `http` | API calls |
 | `exec` | Shell commands |
 | `cel` | Expression evaluation |
+| `hcl` | Parse Terraform/OpenTofu HCL files |
 | `validation` | Data validation |
 | `secret` | Encrypted secrets |
 

@@ -17,6 +17,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/fileprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/gitprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/gotmplprovider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/hclprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/httpprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/identityprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/parameterprovider"
@@ -69,6 +70,7 @@ func registerAllToRegistry(ctx context.Context, reg *provider.Registry) error {
 		staticprovider.New(),
 		gotmplprovider.NewGoTemplateProvider(),
 		identityprovider.NewIdentityProvider(),
+		hclprovider.NewHCLProvider(),
 	}
 
 	// Initialize secrets store for the secret provider.
@@ -131,6 +133,7 @@ func ProviderNames() []string {
 		"go-template",
 		"secret",
 		"identity",
+		"hcl",
 	}
 }
 

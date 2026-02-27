@@ -334,6 +334,9 @@ Built-in providers available in the default registry:
 | `file` | File contents | `path: ./config.json` |
 | `exec` | Command execution | `command: echo hello` |
 | `git` | Git operations | `operation: branch` |
+| `hcl` | Parse HCL files | `content: 'variable "x" { default = 1 }'` |
+| `identity` | Auth identity info | `operation: status, handler: entra` |
+| `secret` | Encrypted secrets | `operation: get, name: api-key` |
 | `validation` | Value validation | `pattern: ^[a-z]+$` |
 | `sleep` | Delay execution | `duration: 1s` |
 | `debug` | Debug utilities | `message: checkpoint` |
