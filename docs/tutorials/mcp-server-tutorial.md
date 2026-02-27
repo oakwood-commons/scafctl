@@ -322,6 +322,7 @@ Here are the available solution providers:
 | file        | data        | from               |
 | git         | data        | from               |
 | go-template | transform   | from, transform    |
+| hcl         | data        | from, transform    |
 | http        | data        | from, action       |
 | identity    | auth        | from               |
 | parameter   | data        | from               |
@@ -330,7 +331,7 @@ Here are the available solution providers:
 | static      | data        | from, action       |
 | validation  | validation  | validation         |
 
-15 providers available. Use `get_provider_schema` with a specific
+16 providers available. Use `get_provider_schema` with a specific
 provider name to see its full input schema and examples.
 ```
 

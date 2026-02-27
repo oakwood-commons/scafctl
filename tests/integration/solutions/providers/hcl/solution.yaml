@@ -1,0 +1,242 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-hcl-provider
+  version: 1.0.0
+  description: |
+    Functional tests for the HCL provider.
+    Verifies parsing of Terraform/OpenTofu configuration blocks:
+    variables, resources, data sources, modules, outputs, locals,
+    providers, terraform blocks, moved, import, and check blocks.
+
+spec:
+  resolvers:
+    parseVariables:
+      description: Parse HCL variables from inline content
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              content: |
+                variable "region" {
+                  type        = string
+                  default     = "us-east-1"
+                  description = "AWS region"
+                }
+
+                variable "count" {
+                  type    = number
+                  default = 3
+                }
+
+    parseResources:
+      description: Parse HCL resources from inline content
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              content: |
+                resource "aws_instance" "web" {
+                  ami           = "ami-12345"
+                  instance_type = "t3.micro"
+                }
+
+                resource "aws_s3_bucket" "data" {
+                  bucket = "my-bucket"
+                }
+
+    parseModules:
+      description: Parse HCL modules from inline content
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              content: |
+                module "vpc" {
+                  source  = "terraform-aws-modules/vpc/aws"
+                  version = "5.0.0"
+                  name    = "my-vpc"
+                }
+
+    parseOutputs:
+      description: Parse HCL outputs from inline content
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              content: |
+                output "vpc_id" {
+                  value       = "vpc-12345"
+                  description = "The VPC ID"
+                  sensitive   = false
+                }
+
+    parseLocals:
+      description: Parse HCL locals from inline content
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              content: |
+                locals {
+                  environment = "production"
+                  region      = "us-west-2"
+                }
+
+    parseTerraform:
+      description: Parse terraform block from inline content
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              content: |
+                terraform {
+                  required_version = ">= 1.5.0"
+
+                  required_providers {
+                    aws = {
+                      source  = "hashicorp/aws"
+                      version = "~> 5.0"
+                    }
+                  }
+                }
+
+    parseEmpty:
+      description: Parse empty HCL content
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              content: ""
+
+    parseDataSources:
+      description: Parse HCL data sources from inline content
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              content: |
+                data "aws_ami" "ubuntu" {
+                  most_recent = true
+                }
+
+  testing:
+    config:
+      skipBuiltins: true
+
+    cases:
+      _base:
+        description: Base template for HCL provider tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [provider, hcl]
+        assertions:
+          - expression: __exitCode == 0
+
+      variables-count:
+        description: Verify correct number of variables parsed
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: size(__output.parseVariables.variables) == 2
+
+      variable-name:
+        description: Verify variable name extraction
+        extends: [_base]
+        assertions:
+          - expression: __output.parseVariables.variables[0].name == "region"
+
+      variable-default:
+        description: Verify variable default value
+        extends: [_base]
+        assertions:
+          - expression: __output.parseVariables.variables[0]["default"] == "us-east-1"
+
+      variable-description:
+        description: Verify variable description extraction
+        extends: [_base]
+        assertions:
+          - expression: __output.parseVariables.variables[0].description == "AWS region"
+
+      variable-number-default:
+        description: Verify numeric variable default
+        extends: [_base]
+        assertions:
+          - expression: __output.parseVariables.variables[1]["default"] == 3
+
+      resources-count:
+        description: Verify correct number of resources parsed
+        extends: [_base]
+        assertions:
+          - expression: size(__output.parseResources.resources) == 2
+
+      resource-type:
+        description: Verify resource type extraction
+        extends: [_base]
+        assertions:
+          - expression: __output.parseResources.resources[0].type == "aws_instance"
+
+      resource-name:
+        description: Verify resource name extraction
+        extends: [_base]
+        assertions:
+          - expression: __output.parseResources.resources[0].name == "web"
+
+      resource-attribute:
+        description: Verify resource attribute value
+        extends: [_base]
+        assertions:
+          - expression: __output.parseResources.resources[0].attributes.ami == "ami-12345"
+
+      module-source:
+        description: Verify module source extraction
+        extends: [_base]
+        assertions:
+          - expression: __output.parseModules.modules[0].source == "terraform-aws-modules/vpc/aws"
+
+      module-version:
+        description: Verify module version extraction
+        extends: [_base]
+        assertions:
+          - expression: __output.parseModules.modules[0].version == "5.0.0"
+
+      output-value:
+        description: Verify output value extraction
+        extends: [_base]
+        assertions:
+          - expression: __output.parseOutputs.outputs[0].value == "vpc-12345"
+
+      output-description:
+        description: Verify output description extraction
+        extends: [_base]
+        assertions:
+          - expression: __output.parseOutputs.outputs[0].description == "The VPC ID"
+
+      locals-values:
+        description: Verify locals key-value extraction
+        extends: [_base]
+        assertions:
+          - expression: __output.parseLocals.locals.environment == "production"
+          - expression: __output.parseLocals.locals.region == "us-west-2"
+
+      terraform-version:
+        description: Verify terraform required_version extraction
+        extends: [_base]
+        assertions:
+          - expression: __output.parseTerraform.terraform.required_version == ">= 1.5.0"
+
+      empty-content:
+        description: Verify empty HCL content produces empty results
+        extends: [_base]
+        assertions:
+          - expression: size(__output.parseEmpty.variables) == 0
+          - expression: size(__output.parseEmpty.resources) == 0
+          - expression: size(__output.parseEmpty.modules) == 0
+
+      data-source-type:
+        description: Verify data source type extraction
+        extends: [_base]
+        assertions:
+          - expression: __output.parseDataSources.data[0].type == "aws_ami"
+          - expression: __output.parseDataSources.data[0].name == "ubuntu"

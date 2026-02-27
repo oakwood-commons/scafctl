@@ -1,0 +1,17 @@
+# HCL provider input - parse inline Terraform variable definitions
+content: |
+  variable "region" {
+    type        = string
+    default     = "us-east-1"
+    description = "AWS region for resources"
+  }
+
+  variable "environment" {
+    type    = string
+    default = "dev"
+
+    validation {
+      condition     = contains(["dev", "staging", "prod"], var.environment)
+      error_message = "Must be one of: dev, staging, prod."
+    }
+  }
