@@ -135,10 +135,10 @@ As more artifact kinds are added (plugins, auth-handlers), a standard schema sys
 
 ### Cons
 
-#### 1. Breaking Change — All 14 Builtin Providers Must Be Rewritten
-Every provider's `Descriptor()` method constructs `SchemaDefinition{Properties: map[string]PropertyDefinition{...}}`. All 14 must be migrated to `jsonschema.Schema` construction. This is mechanical but significant in scope.
+#### 1. Breaking Change — All 16 Builtin Providers Must Be Rewritten
+Every provider's `Descriptor()` method constructs `SchemaDefinition{Properties: map[string]PropertyDefinition{...}}`. All 16 must be migrated to `jsonschema.Schema` construction. This is mechanical but significant in scope.
 
-**Affected providers:** `cel`, `debug`, `env`, `exec`, `file`, `git`, `gotmpl`, `http`, `identity`, `parameter`, `secret`, `sleep`, `static`, `validation`
+**Affected providers:** `cel`, `debug`, `directory`, `env`, `exec`, `file`, `git`, `gotmpl`, `hcl`, `http`, `identity`, `parameter`, `secret`, `sleep`, `static`, `validation`
 
 #### 2. Verbose Schema Construction in Go
 `jsonschema.Schema` construction in Go is more verbose than our current flat struct:

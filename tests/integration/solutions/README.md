@@ -82,7 +82,7 @@ tests/integration/solutions/
 |-----|-------------|
 | `smoke` | Quick verification tests, good for CI gates |
 | `provider` | Provider-specific tests |
-| `static`, `env`, `cel`, `exec`, `file`, `directory`, `go-template`, `validation`, `sleep` | Individual provider tests |
+| `static`, `env`, `cel`, `exec`, `file`, `directory`, `go-template`, `hcl`, `validation`, `sleep` | Individual provider tests |
 | `http` | HTTP provider tests (uses mock server) |
 | `git` | Git provider tests (uses local bare repo) |
 | `debug` | Debug provider tests |

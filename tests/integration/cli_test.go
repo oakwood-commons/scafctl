@@ -349,6 +349,30 @@ func TestIntegration_RunProvider_ShowMetrics(t *testing.T) {
 	assert.Contains(t, stderr, "Provider Execution Metrics")
 }
 
+func TestIntegration_RunProvider_HCL(t *testing.T) {
+	t.Parallel()
+
+	// Write HCL to a temp file to avoid CLI argument escaping issues
+	tmpDir := t.TempDir()
+	hclFile := filepath.Join(tmpDir, "main.tf")
+	hclContent := "variable \"region\" {\n  default = \"us-east-1\"\n  description = \"AWS region\"\n}\n"
+	require.NoError(t, os.WriteFile(hclFile, []byte(hclContent), 0o644))
+
+	stdout, _, exitCode := runScafctl(t, "run", "provider", "hcl", "--input", "path="+hclFile, "-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "region")
+	assert.Contains(t, stdout, "variables")
+}
+
+func TestIntegration_RunProvider_HCL_DryRun(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "run", "provider", "hcl", "--input", "content=variable \"x\" {}", "--dry-run")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "dryRun")
+}
+
 // ============================================================================
 // Get Provider CLI Usage Tests
 // ============================================================================
