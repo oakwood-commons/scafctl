@@ -109,7 +109,8 @@ func (h *Handler) appLogin(ctx context.Context, _ auth.LoginOptions) (*auth.Resu
 		Flow:        auth.FlowGitHubApp,
 	}
 	if h.tokenCache != nil {
-		if cacheErr := h.tokenCache.Set(ctx, installationTokenCacheKey, token); cacheErr != nil {
+		appFingerprint := auth.FingerprintHash(fmt.Sprintf("%d:%d", appID, installationID))
+		if cacheErr := h.tokenCache.Set(ctx, auth.FlowGitHubApp, appFingerprint, installationTokenCacheKey, token); cacheErr != nil {
 			lgr.V(1).Info("failed to cache installation token", "error", cacheErr)
 		}
 	}

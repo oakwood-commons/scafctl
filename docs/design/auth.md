@@ -370,7 +370,7 @@ For the Entra handler:
 |-------------|-------------|
 | `scafctl.auth.entra.refresh_token` | Long-lived refresh token |
 | `scafctl.auth.entra.metadata` | Token metadata (claims, tenant, client ID, expiry) |
-| `scafctl.auth.entra.token.<scope-hash>` | Cached access tokens by scope |
+| `scafctl.auth.entra.token.<flow>.<fingerprint>.<scope-hash>` | Cached access tokens partitioned by flow, config identity, and scope |
 
 For the GitHub handler:
 
@@ -379,9 +379,9 @@ For the GitHub handler:
 | `scafctl.auth.github.refresh_token` | OAuth refresh token (if token expiration is enabled) |
 | `scafctl.auth.github.access_token` | OAuth access token (non-expiring apps) |
 | `scafctl.auth.github.metadata` | Token metadata (claims, hostname, client ID, expiry) |
-| `scafctl.auth.github.token.<scope-hash>` | Cached access tokens by scope |
+| `scafctl.auth.github.token.<flow>.<fingerprint>.<scope-hash>` | Cached access tokens partitioned by flow, config identity, and scope |
 
-The scope hash is a base64url-encoded representation of the scope string.
+The cache key encodes the authentication flow (e.g., `device_code`, `workload_identity`, `service_principal`), a config identity fingerprint, and the scope. The fingerprint is a truncated SHA-256 hash of the core identity fields for the current configuration (e.g., `clientID:tenantID` for Entra, `hostname` for GitHub). The scope hash is a base64url-encoded representation of the scope string. This three-segment key prevents cross-flow cache contamination — a token acquired via one authentication flow will never be served when a different flow is active — and prevents cross-config contamination — switching configurations (e.g., different tenant IDs, client IDs, or WIF audiences) results in a cache miss rather than serving stale tokens from the previous configuration.
 
 The metadata includes the `clientId` used during login so that token refreshes always use the same client ID that originally obtained the refresh token, regardless of what client ID is in the current configuration.
 

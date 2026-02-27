@@ -276,8 +276,9 @@ func TestGetGroups_UsesGraphScope(t *testing.T) {
 func TestGetGroups_TokenCached(t *testing.T) {
 	handler, _, mockGraph, ctx := setupGroupsHandler(t)
 	// Pre-populate the token cache so no HTTP token request is needed.
-	cache := NewTokenCache(handler.secretStore)
-	require.NoError(t, cache.Set(ctx, graphGroupsScope, &auth.Token{
+	cache := auth.NewTokenCache(handler.secretStore, SecretKeyTokenPrefix)
+	fp := auth.FingerprintHash(handler.config.ClientID + ":" + handler.config.TenantID)
+	require.NoError(t, cache.Set(ctx, auth.FlowDeviceCode, fp, graphGroupsScope, &auth.Token{
 		AccessToken: "cached-graph-token",
 		TokenType:   "Bearer",
 		ExpiresAt:   time.Now().Add(1 * time.Hour),

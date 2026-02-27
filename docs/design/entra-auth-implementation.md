@@ -37,7 +37,7 @@ The device code flow is available as a fallback via `--flow device-code` for hea
 Two layers of persistence, both backed by `secrets.Store` (OS keychain/credential store):
 
 1. **Refresh Token + Metadata** — persistent refresh token and `TokenMetadata` (claims, expiry, tenant) for device code flow
-2. **Access Token Cache** (`TokenCache`) — per-scope cached access tokens keyed by `scafctl.auth.entra.token.<base64url(scope)>`, used by all three flows via a generic `getCachedOrAcquireToken` helper
+2. **Access Token Cache** (`TokenCache`) — cached access tokens keyed by `scafctl.auth.entra.token.<flow>.<fingerprint>.<base64url(scope)>`, partitioned by authentication flow, config identity fingerprint (truncated SHA-256 of `clientID:tenantID`), and scope. The `getCachedOrAcquireToken` helper passes the current flow and a `getFingerprint` callback so tokens from one flow or configuration are never served for another.
 
 ### Test Coverage
 

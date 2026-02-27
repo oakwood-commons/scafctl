@@ -544,17 +544,23 @@ return nil, fmt.Errorf("not logged in")
 
 ### 5. Cache Access Tokens
 
-Don't request new access tokens on every `GetToken` call. Cache them and check `MinValidFor`:
+Don't request new access tokens on every `GetToken` call. Cache them and check `MinValidFor`.
+
+**Important:** Cache keys are partitioned by authentication flow, config identity fingerprint, and scope to prevent cross-flow and cross-config contamination (e.g., a token from one WIF configuration being served when a different WIF configuration is active):
 
 ```go
 func (h *Handler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.Token, error) {
+    flow := h.determineFlow(ctx) // e.g., auth.FlowInteractive, auth.FlowWorkloadIdentity
+    fingerprint := auth.FingerprintHash(h.config.ClientID + ":" + h.config.TenantID)
     // Check cache first
-    cached := h.tokenCache.Get(opts.Scope)
+    cached, _ := h.tokenCache.Get(ctx, flow, fingerprint, opts.Scope)
     if cached != nil && !opts.ForceRefresh && cached.IsValidFor(opts.MinValidFor) {
         return cached, nil
     }
     // Refresh or acquire new token
     // ...
+    // Cache the result
+    h.tokenCache.Set(ctx, flow, fingerprint, opts.Scope, token)
 }
 ```
 

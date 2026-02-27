@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -53,13 +54,12 @@ func NewDefaultHTTPClient(logger logr.Logger) *DefaultHTTPClient {
 
 // PostForm sends a POST request with form-encoded body.
 func (c *DefaultHTTPClient) PostForm(ctx context.Context, reqURL string, data url.Values) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, strings.NewReader(data.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("creating POST request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.URL.RawQuery = data.Encode()
 	return c.client.Do(req)
 }
 

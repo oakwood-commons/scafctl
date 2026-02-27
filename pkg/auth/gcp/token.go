@@ -159,12 +159,12 @@ func extractClaims(tokenResp *TokenResponse) (*auth.Claims, error) {
 
 // extractClaimsFromIDToken extracts claims from a GCP ID token JWT.
 func extractClaimsFromIDToken(idToken string) (*auth.Claims, error) {
-	parts := splitJWT(idToken)
+	parts := strings.SplitN(idToken, ".", 3)
 	if len(parts) != 3 {
 		return nil, fmt.Errorf("invalid ID token format")
 	}
 
-	payload, err := base64URLDecode(parts[1])
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode ID token payload: %w", err)
 	}
@@ -240,29 +240,4 @@ func (h *Handler) fetchUserinfoClaims(ctx context.Context, accessToken string) (
 		Name:     userinfo.Name,
 		Username: username,
 	}, nil
-}
-
-// splitJWT splits a JWT into its parts.
-func splitJWT(token string) []string {
-	parts := make([]string, 0, 3)
-	start := 0
-	for i := 0; i < len(token); i++ {
-		if token[i] == '.' {
-			parts = append(parts, token[start:i])
-			start = i + 1
-		}
-	}
-	parts = append(parts, token[start:])
-	return parts
-}
-
-// base64URLDecode decodes a base64url encoded string.
-func base64URLDecode(s string) ([]byte, error) {
-	switch len(s) % 4 {
-	case 2:
-		s += "=="
-	case 3:
-		s += "="
-	}
-	return base64.URLEncoding.DecodeString(s)
 }

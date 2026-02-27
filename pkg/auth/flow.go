@@ -16,21 +16,21 @@ func ParseFlow(flowStr, handlerName string) (Flow, error) {
 		return "", nil // Will be auto-detected per handler
 	}
 	switch strings.ToLower(flowStr) {
-	case "device-code", "devicecode":
+	case "device_code", "device-code", "devicecode":
 		return FlowDeviceCode, nil
 	case "interactive":
 		return FlowInteractive, nil
-	case "service-principal", "serviceprincipal", "sp":
+	case "service_principal", "service-principal", "serviceprincipal", "sp":
 		return FlowServicePrincipal, nil
-	case "workload-identity", "workloadidentity", "wi":
+	case "workload_identity", "workload-identity", "workloadidentity", "wi":
 		return FlowWorkloadIdentity, nil
 	case "pat":
 		return FlowPAT, nil
 	case "metadata":
 		return FlowMetadata, nil
-	case "gcloud-adc", "gcloudadc", "adc":
+	case "gcloud_adc", "gcloud-adc", "gcloudadc", "adc":
 		return FlowGcloudADC, nil
-	case "github-app", "githubapp", "app":
+	case "github_app", "github-app", "githubapp", "app":
 		return FlowGitHubApp, nil
 	default:
 		switch handlerName {
@@ -38,8 +38,10 @@ func ParseFlow(flowStr, handlerName string) (Flow, error) {
 			return "", fmt.Errorf("unknown flow: %s (valid for github: interactive, device-code, pat, github-app)", flowStr)
 		case "gcp":
 			return "", fmt.Errorf("unknown flow: %s (valid for gcp: interactive, service-principal, workload-identity, metadata, gcloud-adc)", flowStr)
-		default:
+		case "entra":
 			return "", fmt.Errorf("unknown flow: %s (valid for entra: interactive, device-code, service-principal, workload-identity)", flowStr)
+		default:
+			return "", fmt.Errorf("unknown flow: %s", flowStr)
 		}
 	}
 }

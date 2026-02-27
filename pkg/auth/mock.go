@@ -97,6 +97,9 @@ func (m *MockHandler) InjectAuth(_ context.Context, req *http.Request, opts Toke
 	if m.InjectAuthErr != nil {
 		return m.InjectAuthErr
 	}
+	if m.GetTokenErr != nil {
+		return m.GetTokenErr
+	}
 	if m.GetTokenResult != nil {
 		req.Header.Set("Authorization", m.GetTokenResult.TokenType+" "+m.GetTokenResult.AccessToken)
 	}

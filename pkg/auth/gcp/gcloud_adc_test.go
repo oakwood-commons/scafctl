@@ -5,6 +5,7 @@ package gcp
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -34,8 +35,9 @@ func TestLoadGcloudADCCredentials_NoFile(t *testing.T) {
 	t.Setenv(EnvCloudSDKConfig, tmpDir)
 
 	creds, err := LoadGcloudADCCredentials()
-	require.NoError(t, err)
-	assert.Nil(t, creds) // No file, no error
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrNoGcloudADCConfigured))
+	assert.Nil(t, creds)
 }
 
 func TestLoadGcloudADCCredentials_InvalidJSON(t *testing.T) {
@@ -65,7 +67,8 @@ func TestLoadGcloudADCCredentials_WrongType(t *testing.T) {
 	require.NoError(t, err)
 
 	creds, err := LoadGcloudADCCredentials()
-	require.NoError(t, err)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrNoGcloudADCConfigured))
 	assert.Nil(t, creds) // not authorized_user type
 }
 

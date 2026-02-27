@@ -45,7 +45,7 @@ type Handler struct {
 	secretStore secrets.Store
 	secretErr   error // deferred error from secrets initialization
 	httpClient  HTTPClient
-	tokenCache  *TokenCache
+	tokenCache  *auth.TokenCache
 	logger      logr.Logger
 }
 
@@ -133,7 +133,7 @@ func New(opts ...Option) (*Handler, error) {
 
 	// Initialize token cache with secret store
 	if h.secretStore != nil {
-		h.tokenCache = NewTokenCache(h.secretStore)
+		h.tokenCache = auth.NewTokenCache(h.secretStore, SecretKeyTokenPrefix)
 	}
 
 	return h, nil
@@ -335,7 +335,7 @@ func (h *Handler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.T
 // resolveSourceTokenFunc returns the appropriate token acquisition function
 // based on available credentials, following the auto-detection priority:
 // WI > Metadata > SA Key > ADC (stored) > gcloud ADC.
-func (h *Handler) resolveSourceTokenFunc(_ context.Context) func(context.Context, auth.TokenOptions) (*auth.Token, error) {
+func (h *Handler) resolveSourceTokenFunc(ctx context.Context) func(context.Context, auth.TokenOptions) (*auth.Token, error) {
 	// Workload identity (highest priority)
 	if HasWorkloadIdentityCredentials() {
 		return h.getWorkloadIdentityToken
@@ -343,7 +343,7 @@ func (h *Handler) resolveSourceTokenFunc(_ context.Context) func(context.Context
 
 	// Metadata server — check stored metadata to see if we logged in via metadata
 	// (don't probe the network on every token request)
-	metadata, err := h.loadMetadata(context.Background())
+	metadata, err := h.loadMetadata(ctx)
 	if err == nil && metadata != nil && metadata.Flow == auth.FlowMetadata {
 		return h.getMetadataToken
 	}
@@ -354,7 +354,7 @@ func (h *Handler) resolveSourceTokenFunc(_ context.Context) func(context.Context
 	}
 
 	// Check for stored refresh token (ADC browser flow)
-	exists, _ := h.secretStore.Exists(context.Background(), SecretKeyRefreshToken)
+	exists, _ := h.secretStore.Exists(ctx, SecretKeyRefreshToken)
 	if exists {
 		return h.getStoredRefreshToken
 	}
@@ -378,14 +378,23 @@ func (h *Handler) getStoredRefreshToken(ctx context.Context, opts auth.TokenOpti
 
 	lgr := logger.FromContext(ctx)
 
+	// Determine the flow from stored metadata so we can partition the cache.
+	var userFlow auth.Flow
+	if metadata, err := h.loadMetadata(ctx); err == nil && metadata != nil {
+		userFlow = metadata.Flow
+	}
+
 	minValidFor := opts.MinValidFor
 	if minValidFor == 0 {
 		minValidFor = auth.DefaultMinValidFor
 	}
 
+	// Compute identity fingerprint for cache partitioning.
+	fingerprint := auth.FingerprintHash(h.config.ClientID)
+
 	// Check cache first
 	if !opts.ForceRefresh {
-		cached, err := h.tokenCache.Get(ctx, opts.Scope)
+		cached, err := h.tokenCache.Get(ctx, userFlow, fingerprint, opts.Scope)
 		if err == nil && cached != nil && cached.IsValidFor(minValidFor) {
 			lgr.V(1).Info("using cached token", "scope", opts.Scope)
 			return cached, nil
@@ -399,7 +408,7 @@ func (h *Handler) getStoredRefreshToken(ctx context.Context, opts auth.TokenOpti
 	}
 
 	// Cache the token
-	if err := h.tokenCache.Set(ctx, opts.Scope, token); err != nil {
+	if err := h.tokenCache.Set(ctx, userFlow, fingerprint, opts.Scope, token); err != nil {
 		lgr.V(1).Info("failed to cache token", "error", err)
 	}
 
@@ -415,62 +424,6 @@ func (h *Handler) InjectAuth(ctx context.Context, req *http.Request, opts auth.T
 
 	req.Header.Set("Authorization", fmt.Sprintf("%s %s", token.TokenType, token.AccessToken))
 	return nil
-}
-
-// tokenAcquireFunc is a function that acquires a token given credentials and scope.
-type tokenAcquireFunc[T any] func(ctx context.Context, creds T, scope string) (*auth.Token, error)
-
-// getCachedOrAcquireToken is a generic helper that handles the common pattern of:
-// 1. Checking if credentials exist
-// 2. Checking the cache (unless ForceRefresh)
-// 3. Acquiring a new token if needed
-// 4. Caching the new token
-func getCachedOrAcquireToken[T any](
-	ctx context.Context,
-	h *Handler,
-	opts auth.TokenOptions,
-	getCreds func() (T, error),
-	isCredsNil func(T, error) bool,
-	acquireToken tokenAcquireFunc[T],
-	logPrefix string,
-) (*auth.Token, error) {
-	if opts.Scope == "" {
-		opts.Scope = "https://www.googleapis.com/auth/cloud-platform"
-	}
-
-	lgr := logger.FromContext(ctx)
-
-	creds, err := getCreds()
-	if isCredsNil(creds, err) {
-		return nil, auth.ErrNotAuthenticated
-	}
-
-	minValidFor := opts.MinValidFor
-	if minValidFor == 0 {
-		minValidFor = auth.DefaultMinValidFor
-	}
-
-	// Check cache first (unless ForceRefresh)
-	if !opts.ForceRefresh {
-		cached, cacheErr := h.tokenCache.Get(ctx, opts.Scope)
-		if cacheErr == nil && cached != nil && cached.IsValidFor(minValidFor) {
-			lgr.V(1).Info("using cached "+logPrefix+" token", "scope", opts.Scope)
-			return cached, nil
-		}
-	}
-
-	// Acquire new token
-	token, err := acquireToken(ctx, creds, opts.Scope)
-	if err != nil {
-		return nil, err
-	}
-
-	// Cache the token
-	if cacheErr := h.tokenCache.Set(ctx, opts.Scope, token); cacheErr != nil {
-		lgr.V(1).Info("failed to cache "+logPrefix+" token", "error", cacheErr)
-	}
-
-	return token, nil
 }
 
 // Compile-time check that Handler implements auth.Handler, auth.TokenLister, and auth.TokenPurger.
@@ -510,16 +463,16 @@ func (h *Handler) ListCachedTokens(ctx context.Context) ([]*auth.CachedTokenInfo
 
 	// Minted access tokens
 	if h.tokenCache != nil {
-		scopes, _ := h.tokenCache.ListCachedScopes(ctx)
-		for _, scope := range scopes {
-			token, err := h.tokenCache.Get(ctx, scope)
+		entries, _ := h.tokenCache.ListCachedEntries(ctx)
+		for _, entry := range entries {
+			token, err := h.tokenCache.Get(ctx, entry.Flow, entry.Fingerprint, entry.Scope)
 			if err != nil || token == nil {
 				continue
 			}
 			results = append(results, &auth.CachedTokenInfo{
 				Handler:   HandlerName,
 				TokenKind: "access",
-				Scope:     scope,
+				Scope:     entry.Scope,
 				TokenType: token.TokenType,
 				Flow:      token.Flow,
 				ExpiresAt: token.ExpiresAt,
