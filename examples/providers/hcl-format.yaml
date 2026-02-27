@@ -1,0 +1,18 @@
+# HCL provider input - format poorly-formatted Terraform content to canonical style
+# The 'changed' field in the output indicates whether the formatter modified the content.
+operation: format
+content: |
+  variable "region" {
+  type=string
+  default="us-east-1"
+  description="AWS region for resources"
+  }
+
+  resource "aws_s3_bucket" "data" {
+  bucket="my-data-bucket"
+  force_destroy=true
+  tags={
+  Environment="prod"
+  Owner="team-platform"
+  }
+  }

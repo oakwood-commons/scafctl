@@ -1,0 +1,25 @@
+operation: generate
+output_format: json
+blocks:
+  variables:
+    - name: region
+      type: string
+      default: us-east-1
+      description: "AWS region"
+    - name: env
+      type: string
+      default: dev
+      description: "Environment name"
+  resources:
+    - type: aws_instance
+      name: web
+      attributes:
+        ami: ami-12345
+        instance_type: t3.micro
+        tags:
+          Name: web-server
+          Environment: prod
+  outputs:
+    - name: instance_id
+      value: aws_instance.web.id
+      description: "The instance ID"

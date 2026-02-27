@@ -17,14 +17,19 @@ This tutorial walks you through using the `hcl` provider to parse Terraform and 
 
 1. [Parsing Inline HCL Content](#parsing-inline-hcl-content)
 2. [Parsing HCL Files](#parsing-hcl-files)
-3. [Extracting Variables](#extracting-variables)
-4. [Extracting Resources](#extracting-resources)
-5. [Working with Modules](#working-with-modules)
-6. [Terraform Block Extraction](#terraform-block-extraction)
-7. [Combining with CEL Expressions](#combining-with-cel-expressions)
-8. [Transform Capability](#transform-capability)
-9. [Expression Handling](#expression-handling)
-10. [Common Patterns](#common-patterns)
+3. [Multi-File and Directory Support](#multi-file-and-directory-support)
+4. [Extracting Variables](#extracting-variables)
+5. [Extracting Resources](#extracting-resources)
+6. [Working with Modules](#working-with-modules)
+7. [Terraform Block Extraction](#terraform-block-extraction)
+8. [Combining with CEL Expressions](#combining-with-cel-expressions)
+9. [Transform Capability](#transform-capability)
+10. [Expression Handling](#expression-handling)
+11. [Common Patterns](#common-patterns)
+12. [Formatting HCL Content](#formatting-hcl-content)
+13. [Validating HCL Syntax](#validating-hcl-syntax)
+14. [Generating HCL from Structured Data](#generating-hcl-from-structured-data)
+15. [Generating Terraform JSON (`.tf.json`)](#generating-terraform-json-tfjson)
 
 ---
 
@@ -113,6 +118,93 @@ spec:
 The `path` input reads the file from disk and parses it. You must provide either `content` or `path`, not both.
 
 When using `path`, the `metadata.filename` in the output reflects the actual file path instead of the default `input.tf`.
+
+---
+
+## Multi-File and Directory Support
+
+The HCL provider can process multiple files at once. This is useful for real Terraform projects that split configuration across many `.tf` files.
+
+### Parse Multiple Files
+
+Use the `paths` input to specify an array of files. Parse results are **merged** — arrays are concatenated and maps are merged:
+
+```yaml
+spec:
+  resolvers:
+    fullConfig:
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              paths:
+                - ./main.tf
+                - ./variables.tf
+                - ./outputs.tf
+```
+
+The metadata includes `filenames` (array) and `files` (count) instead of a single `filename`.
+
+### Parse a Directory
+
+Use `dir` to process all `.tf` and `.tf.json` files in a directory (non-recursive):
+
+```yaml
+spec:
+  resolvers:
+    infraConfig:
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              dir: ./terraform/environments/prod
+```
+
+This automatically discovers all HCL files, reads them, and merges the parsed results.
+
+### Multi-File Format and Validate
+
+When `paths` or `dir` is used with `format` or `validate`, results are returned **per file** rather than merged:
+
+```yaml
+# Format all .tf files in a directory
+spec:
+  resolvers:
+    formatted:
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              operation: format
+              dir: ./terraform
+```
+
+Format output with multiple files:
+```json
+{
+  "files": [
+    { "filename": "./terraform/main.tf", "formatted": "...", "changed": true },
+    { "filename": "./terraform/vars.tf", "formatted": "...", "changed": false }
+  ],
+  "changed": true
+}
+```
+
+Validate output with multiple files:
+```json
+{
+  "valid": false,
+  "error_count": 2,
+  "files": [
+    { "filename": "main.tf", "valid": true, "error_count": 0, "diagnostics": [] },
+    { "filename": "bad.tf", "valid": false, "error_count": 2, "diagnostics": [...] }
+  ]
+}
+```
+
+### Source Selection Rules
+
+Exactly one of `content`, `path`, `paths`, or `dir` must be provided — they are mutually exclusive. For the `generate` operation, use `blocks` instead.
 
 ---
 
@@ -503,6 +595,345 @@ spec:
 
 ---
 
+## Formatting HCL Content
+
+The `format` operation canonically formats HCL content using the same rules as `terraform fmt`. It accepts the same `content` or `path` inputs as the `parse` operation and returns two fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `formatted` | string | The canonically formatted HCL |
+| `changed` | bool | `true` if the formatter modified the input |
+
+### Format Inline Content
+
+```yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: fmt-demo
+  version: 1.0.0
+
+spec:
+  resolvers:
+    result:
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              operation: format
+              content: |
+                variable "region" {
+                type=string
+                default="us-east-1"
+                }
+```
+
+Output:
+
+```json
+{
+  "data": {
+    "changed": true,
+    "formatted": "variable \"region\" {\n  type    = string\n  default = \"us-east-1\"\n}\n"
+  },
+  "metadata": {
+    "bytes": 52,
+    "filename": "input.tf",
+    "operation": "format"
+  }
+}
+```
+
+### Format a File
+
+```yaml
+spec:
+  resolvers:
+    result:
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              operation: format
+              path: ./main.tf
+```
+
+### Check Whether a File Needs Formatting
+
+Combine with a CEL expression to build a lint-style check:
+
+```yaml
+spec:
+  resolvers:
+    fmt:
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              operation: format
+              path: ./main.tf
+
+    check:
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: |
+                resolvers.fmt.changed
+                  ? "main.tf needs formatting — run terraform fmt"
+                  : "main.tf is correctly formatted"
+```
+
+---
+
+## Validating HCL Syntax
+
+The `validate` operation checks HCL syntax without extracting blocks. It returns structured diagnostics, making it ideal for CI pipelines, pre-commit hooks, and configuration auditing.
+
+### Validate Inline Content
+
+```yaml
+spec:
+  resolvers:
+    checkSyntax:
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              operation: validate
+              content: |
+                variable "region" {
+                  type    = string
+                  default = "us-east-1"
+                }
+```
+
+Output for valid HCL:
+
+```json
+{
+  "valid": true,
+  "error_count": 0,
+  "diagnostics": []
+}
+```
+
+### Validate a File
+
+```yaml
+spec:
+  resolvers:
+    validateMain:
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              operation: validate
+              path: ./main.tf
+```
+
+### Validate a Directory
+
+```yaml
+spec:
+  resolvers:
+    validateAll:
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              operation: validate
+              dir: ./terraform
+```
+
+When validating multiple files, the output aggregates results:
+
+```json
+{
+  "valid": false,
+  "error_count": 3,
+  "files": [
+    {
+      "filename": "main.tf",
+      "valid": true,
+      "error_count": 0,
+      "diagnostics": []
+    },
+    {
+      "filename": "bad.tf",
+      "valid": false,
+      "error_count": 3,
+      "diagnostics": [
+        {
+          "severity": "error",
+          "summary": "Invalid block definition",
+          "range": { "filename": "bad.tf", "start": { "line": 1, "column": 10 } }
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Use Validate with CEL
+
+```yaml
+spec:
+  resolvers:
+    syntaxCheck:
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              operation: validate
+              dir: ./terraform
+      expression: |
+        result.valid
+          ? "All files are syntactically correct"
+          : "Found " + string(result.error_count) + " syntax errors"
+```
+
+---
+
+## Generating HCL from Structured Data
+
+The `generate` operation produces HCL text from a structured map, using the same schema as the parse output. This enables round-trip workflows: parse HCL, transform the data, then generate updated HCL.
+
+### Basic Generation
+
+```yaml
+spec:
+  resolvers:
+    generated:
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              operation: generate
+              blocks:
+                variables:
+                  - name: region
+                    type: string
+                    default: us-east-1
+                    description: "AWS region"
+                  - name: env
+                    type: string
+                    default: dev
+```
+
+Output:
+
+```json
+{
+  "hcl": "variable \"region\" {\n  type        = string\n  default     = \"us-east-1\"\n  description = \"AWS region\"\n}\n\nvariable \"env\" {\n  type    = string\n  default = \"dev\"\n}\n"
+}
+```
+
+### Generate Resources
+
+```yaml
+spec:
+  resolvers:
+    infraCode:
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              operation: generate
+              blocks:
+                resources:
+                  - type: aws_instance
+                    name: web
+                    attributes:
+                      ami: ami-12345
+                      instance_type: t3.micro
+                      tags:
+                        Name: web-server
+                        Environment: prod
+```
+
+### Block Ordering
+
+Generated HCL follows Terraform convention ordering:
+1. `terraform`
+2. `variable`
+3. `locals`
+4. `data`
+5. `resource`
+6. `module`
+7. `output`
+8. `provider`
+9. `moved`
+10. `import`
+11. `check`
+
+### Round-Trip Workflow
+
+Parse existing HCL, transform it, and generate new HCL:
+
+```yaml
+spec:
+  resolvers:
+    original:
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              path: ./main.tf
+
+    updated:
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              operation: generate
+              blocks: "{{ .resolvers.original | toJson }}"
+```
+
+### Generating Terraform JSON (`.tf.json`)
+
+Set `output_format: json` to produce [Terraform JSON Configuration Syntax](https://developer.hashicorp.com/terraform/language/syntax/json) instead of native HCL:
+
+```yaml
+spec:
+  resolvers:
+    jsonConfig:
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              operation: generate
+              output_format: json
+              blocks:
+                variables:
+                  - name: region
+                    type: string
+                    default: us-east-1
+                resources:
+                  - type: aws_instance
+                    name: web
+                    attributes:
+                      ami: ami-12345
+                      instance_type: t3.micro
+```
+
+Output:
+
+```json
+{
+  "hcl": "{\n  \"variable\": {\n    \"region\": {\n      \"default\": \"us-east-1\",\n      \"type\": \"string\"\n    }\n  },\n  \"resource\": {\n    \"aws_instance\": {\n      \"web\": {\n        \"ami\": \"ami-12345\",\n        \"instance_type\": \"t3.micro\"\n      }\n    }\n  }\n}\n"
+}
+```
+
+The JSON output follows the [Terraform JSON Configuration Syntax](https://developer.hashicorp.com/terraform/language/syntax/json) specification:
+- Block types become top-level JSON keys (singular: `variable`, `resource`, not plural)
+- Single-label blocks (variable, module, output) nest by name: `{"variable": {"region": {...}}}`
+- Double-label blocks (resource, data) nest by type then name: `{"resource": {"aws_instance": {"web": {...}}}}`
+- Provider blocks with aliases produce arrays for the same provider name
+- Unlabeled blocks (moved, import) remain as arrays
+
+---
+
 ## Supported Block Types
 
 The HCL provider extracts the following Terraform/OpenTofu block types:
@@ -531,11 +962,38 @@ You can also run the HCL provider directly from the command line:
 # Parse a file
 scafctl run provider hcl --input path=./main.tf -o json
 
-# Dry run
+# Parse a directory
+scafctl run provider hcl --input dir=./terraform -o json
+
+# Format inline HCL
+scafctl run provider hcl --input operation=format --input 'content=variable "x" { type=string }' -o json
+
+# Format a file
+scafctl run provider hcl --input operation=format --input path=./main.tf -o json
+
+# Format all files in a directory
+scafctl run provider hcl --input operation=format --input dir=./terraform -o json
+
+# Validate a file
+scafctl run provider hcl --input operation=validate --input path=./main.tf -o json
+
+# Validate a directory
+scafctl run provider hcl --input operation=validate --input dir=./terraform -o json
+
+# Use a pre-built example input file
+scafctl run provider hcl --input @examples/providers/hcl-format.yaml -o json
+
+# Dry run (parse)
 scafctl run provider hcl --input path=./main.tf --dry-run
+
+# Dry run (format)
+scafctl run provider hcl --input operation=format --input path=./main.tf --dry-run
+
+# Dry run (validate)
+scafctl run provider hcl --input operation=validate --input path=./main.tf --dry-run
 ```
 
-Dry-run output returns the empty structure with a `dryRun` flag instead of actually parsing:
+Dry-run returns an empty structure without reading or modifying anything. For `parse`:
 
 ```json
 {
@@ -554,7 +1012,24 @@ Dry-run output returns the empty structure with a `dryRun` flag instead of actua
   },
   "dryRun": true,
   "metadata": {
-    "mode": "dry-run"
+    "mode": "dry-run",
+    "operation": "parse"
+  }
+}
+```
+
+For `format`:
+
+```json
+{
+  "data": {
+    "changed": false,
+    "formatted": ""
+  },
+  "dryRun": true,
+  "metadata": {
+    "mode": "dry-run",
+    "operation": "format"
   }
 }
 ```
