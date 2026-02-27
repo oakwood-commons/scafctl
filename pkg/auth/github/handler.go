@@ -52,7 +52,7 @@ type Handler struct {
 	secretStore secrets.Store
 	secretErr   error // deferred error from secrets initialization
 	httpClient  HTTPClient
-	tokenCache  *TokenCache
+	tokenCache  *auth.TokenCache
 	logger      logr.Logger
 }
 
@@ -159,7 +159,7 @@ func New(opts ...Option) (*Handler, error) {
 
 	// Initialize token cache with secret store (nil-safe: checked before use)
 	if h.secretStore != nil {
-		h.tokenCache = NewTokenCache(h.secretStore)
+		h.tokenCache = auth.NewTokenCache(h.secretStore, SecretKeyTokenPrefix)
 	}
 
 	return h, nil
@@ -362,9 +362,11 @@ func (h *Handler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.T
 		"forceRefresh", opts.ForceRefresh,
 	)
 
+	fingerprint := auth.FingerprintHash(h.config.Hostname)
+
 	// Check disk cache first (unless force refresh)
 	if !opts.ForceRefresh {
-		token, err := h.tokenCache.Get(ctx, defaultCacheKey)
+		token, err := h.tokenCache.Get(ctx, auth.FlowDeviceCode, fingerprint, defaultCacheKey)
 		if err == nil && token != nil && token.IsValidFor(minValidFor) {
 			lgr.V(1).Info("using cached token",
 				"expiresAt", token.ExpiresAt,
@@ -392,7 +394,7 @@ func (h *Handler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.T
 			TokenType:   "Bearer",
 			ExpiresAt:   farFuture(),
 		}
-		if cacheErr := h.tokenCache.Set(ctx, defaultCacheKey, token); cacheErr != nil {
+		if cacheErr := h.tokenCache.Set(ctx, auth.FlowDeviceCode, fingerprint, defaultCacheKey, token); cacheErr != nil {
 			lgr.V(1).Info("failed to cache token", "error", cacheErr)
 		}
 		return token, nil
@@ -405,7 +407,7 @@ func (h *Handler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.T
 	}
 
 	// Cache the token to disk
-	if err := h.tokenCache.Set(ctx, defaultCacheKey, token); err != nil {
+	if err := h.tokenCache.Set(ctx, auth.FlowDeviceCode, fingerprint, defaultCacheKey, token); err != nil {
 		lgr.V(1).Info("failed to cache token", "error", err)
 	}
 
@@ -420,62 +422,6 @@ func (h *Handler) InjectAuth(ctx context.Context, req *http.Request, opts auth.T
 	}
 	req.Header.Set("Authorization", fmt.Sprintf("%s %s", token.TokenType, token.AccessToken))
 	return nil
-}
-
-// tokenAcquireFunc is a function that acquires a token given credentials and scope.
-type tokenAcquireFunc[T any] func(ctx context.Context, creds T, scope string) (*auth.Token, error)
-
-// getCachedOrAcquireToken is a generic helper that handles the common pattern of:
-// 1. Checking if credentials exist
-// 2. Checking the cache (unless ForceRefresh)
-// 3. Acquiring a new token if needed
-// 4. Caching the new token
-func getCachedOrAcquireToken[T any](
-	ctx context.Context,
-	h *Handler,
-	opts auth.TokenOptions,
-	getCreds func() T,
-	isCredsNil func(T) bool,
-	acquireToken tokenAcquireFunc[T],
-	logPrefix string,
-) (*auth.Token, error) {
-	lgr := logger.FromContext(ctx)
-	creds := getCreds()
-
-	if isCredsNil(creds) {
-		return nil, auth.ErrNotAuthenticated
-	}
-
-	// Use fixed cache key — GitHub scopes are determined at login, not per-request.
-	cacheKey := defaultCacheKey
-
-	// Apply default minimum validity to match the user-flow behavior.
-	minValidFor := opts.MinValidFor
-	if minValidFor == 0 {
-		minValidFor = auth.DefaultMinValidFor
-	}
-
-	// Check cache first (unless ForceRefresh)
-	if !opts.ForceRefresh {
-		cached, err := h.tokenCache.Get(ctx, cacheKey)
-		if err == nil && cached != nil && cached.IsValidFor(minValidFor) {
-			lgr.V(1).Info("using cached "+logPrefix+" token", "cacheKey", cacheKey)
-			return cached, nil
-		}
-	}
-
-	// Acquire new token
-	token, err := acquireToken(ctx, creds, cacheKey)
-	if err != nil {
-		return nil, err
-	}
-
-	// Cache the token
-	if err := h.tokenCache.Set(ctx, cacheKey, token); err != nil {
-		lgr.V(1).Info("failed to cache "+logPrefix+" token", "error", err)
-	}
-
-	return token, nil
 }
 
 // farFuture returns a time far in the future for tokens with no defined expiry.
@@ -522,9 +468,9 @@ func (h *Handler) ListCachedTokens(ctx context.Context) ([]*auth.CachedTokenInfo
 
 	// Minted access tokens (short-lived and direct-stored)
 	if h.tokenCache != nil {
-		scopes, _ := h.tokenCache.ListCachedScopes(ctx)
-		for _, scope := range scopes {
-			token, err := h.tokenCache.Get(ctx, scope)
+		entries, _ := h.tokenCache.ListCachedEntries(ctx)
+		for _, entry := range entries {
+			token, err := h.tokenCache.Get(ctx, entry.Flow, entry.Fingerprint, entry.Scope)
 			if err != nil || token == nil {
 				continue
 			}
@@ -547,7 +493,7 @@ func (h *Handler) ListCachedTokens(ctx context.Context) ([]*auth.CachedTokenInfo
 	if h.tokenCache != nil {
 		hasAccess, _ := h.secretStore.Exists(ctx, SecretKeyAccessToken)
 		if hasAccess {
-			_, cacheErr := h.tokenCache.Get(ctx, defaultCacheKey)
+			_, cacheErr := h.tokenCache.Get(ctx, auth.FlowDeviceCode, auth.FingerprintHash(h.config.Hostname), defaultCacheKey)
 			if cacheErr != nil {
 				info := &auth.CachedTokenInfo{
 					Handler:   HandlerName,

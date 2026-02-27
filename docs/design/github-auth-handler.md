@@ -341,7 +341,7 @@ scafctl.auth.github.<type>
 |-------------|-------------|
 | `scafctl.auth.github.refresh_token` | OAuth refresh token (if token expiration is enabled) |
 | `scafctl.auth.github.metadata` | Token metadata (claims, hostname, client ID, expiry) |
-| `scafctl.auth.github.token.<scope-hash>` | Cached access tokens by scope |
+| `scafctl.auth.github.token.<flow>.<fingerprint>.<scope-hash>` | Cached access tokens partitioned by flow, config identity, and scope |
 
 ---
 

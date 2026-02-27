@@ -895,14 +895,16 @@ func TestIntegration_TokenCaching_UseCachedToken(t *testing.T) {
 	require.NoError(t, err)
 
 	// Pre-populate cache with a valid token
-	cache := NewTokenCache(store)
+	cache := auth.NewTokenCache(store, SecretKeyTokenPrefix)
 	cachedToken := &auth.Token{
 		AccessToken: "cached-access-token",
 		TokenType:   "Bearer",
 		ExpiresAt:   time.Now().Add(30 * time.Minute),
 		Scope:       scope,
 	}
-	err = cache.Set(ctx, scope, cachedToken)
+	// Use the fingerprint that matches what the handler will compute from config
+	fp := auth.FingerprintHash("test-client-id" + ":" + "test-tenant")
+	err = cache.Set(ctx, "", fp, scope, cachedToken)
 	require.NoError(t, err)
 
 	cfg := &Config{
@@ -962,14 +964,15 @@ func TestIntegration_TokenCaching_MinValidFor_RefreshNeeded(t *testing.T) {
 	require.NoError(t, err)
 
 	// Pre-populate cache with a token that expires soon
-	cache := NewTokenCache(store)
+	cache := auth.NewTokenCache(store, SecretKeyTokenPrefix)
 	cachedToken := &auth.Token{
 		AccessToken: "expiring-token",
 		TokenType:   "Bearer",
 		ExpiresAt:   time.Now().Add(2 * time.Minute), // Expires in 2 minutes
 		Scope:       scope,
 	}
-	err = cache.Set(ctx, scope, cachedToken)
+	fp := auth.FingerprintHash("test-client-id" + ":" + "test-tenant")
+	err = cache.Set(ctx, "", fp, scope, cachedToken)
 	require.NoError(t, err)
 
 	cfg := &Config{
@@ -1029,14 +1032,15 @@ func TestIntegration_TokenCaching_ForceRefresh(t *testing.T) {
 	require.NoError(t, err)
 
 	// Pre-populate cache with a perfectly valid token
-	cache := NewTokenCache(store)
+	cache := auth.NewTokenCache(store, SecretKeyTokenPrefix)
 	cachedToken := &auth.Token{
 		AccessToken: "cached-but-should-skip",
 		TokenType:   "Bearer",
 		ExpiresAt:   time.Now().Add(1 * time.Hour),
 		Scope:       scope,
 	}
-	err = cache.Set(ctx, scope, cachedToken)
+	fp := auth.FingerprintHash("test-client-id" + ":" + "test-tenant")
+	err = cache.Set(ctx, "", fp, scope, cachedToken)
 	require.NoError(t, err)
 
 	cfg := &Config{

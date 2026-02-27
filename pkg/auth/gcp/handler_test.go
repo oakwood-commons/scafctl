@@ -330,7 +330,7 @@ func TestHandler_GetToken_FromCache(t *testing.T) {
 		ExpiresAt:   time.Now().Add(30 * time.Minute),
 		Scope:       scope,
 	}
-	err = handler.tokenCache.Set(ctx, scope, cachedToken)
+	err = handler.tokenCache.Set(ctx, "", "_", scope, cachedToken)
 	require.NoError(t, err)
 
 	// GetToken should return the cached token without any HTTP calls
@@ -385,7 +385,7 @@ func TestHandler_GetToken_ForceRefresh(t *testing.T) {
 		ExpiresAt:   time.Now().Add(30 * time.Minute),
 		Scope:       scope,
 	}
-	err = handler.tokenCache.Set(ctx, scope, cachedToken)
+	err = handler.tokenCache.Set(ctx, auth.FlowInteractive, "_", scope, cachedToken)
 	require.NoError(t, err)
 
 	// Mock token endpoint response for refresh
@@ -450,7 +450,7 @@ func TestHandler_InjectAuth(t *testing.T) {
 		ExpiresAt:   time.Now().Add(30 * time.Minute),
 		Scope:       scope,
 	}
-	err = handler.tokenCache.Set(ctx, scope, cachedToken)
+	err = handler.tokenCache.Set(ctx, "", "_", scope, cachedToken)
 	require.NoError(t, err)
 
 	// Create a request and inject auth

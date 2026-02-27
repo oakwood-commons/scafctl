@@ -97,19 +97,24 @@ func (h *Handler) patStatus(ctx context.Context) (*auth.Status, error) {
 	return &auth.Status{
 		Authenticated: true,
 		Claims:        claims,
-		IdentityType:  auth.IdentityTypeServicePrincipal, // PAT acts like a service principal
+		IdentityType:  auth.IdentityTypeUser, // PAT authenticates as the user who created it
 		Scopes:        h.config.DefaultScopes,
 	}, nil
 }
 
 // getPATToken returns a token from the PAT environment variable.
 func (h *Handler) getPATToken(ctx context.Context, opts auth.TokenOptions) (*auth.Token, error) {
-	return getCachedOrAcquireToken(
+	return auth.GetCachedOrAcquireToken(
 		ctx,
-		h,
+		h.tokenCache,
 		opts,
-		GetPATFromEnv,
+		auth.FlowPAT,
+		defaultCacheKey,
+		func() (string, error) { return GetPATFromEnv(), nil },
 		func(s string) bool { return s == "" },
+		func(pat string) string {
+			return auth.FingerprintHash(pat)
+		},
 		func(ctx context.Context, token, _ string) (*auth.Token, error) {
 			// Validate the PAT
 			_, err := h.fetchUserClaims(ctx, token)
@@ -119,6 +124,7 @@ func (h *Handler) getPATToken(ctx context.Context, opts auth.TokenOptions) (*aut
 			return &auth.Token{
 				AccessToken: token,
 				TokenType:   "Bearer",
+				Flow:        auth.FlowPAT,
 				// PATs don't expire via API, set a long validity
 				ExpiresAt: farFuture(),
 			}, nil

@@ -142,6 +142,7 @@ func (h *Handler) acquireMetadataToken(ctx context.Context) (*auth.Token, error)
 		TokenType:   tokenResp.TokenType,
 		ExpiresAt:   expiresAt,
 		Scope:       "https://www.googleapis.com/auth/cloud-platform",
+		Flow:        auth.FlowMetadata,
 	}, nil
 }
 
@@ -172,9 +173,8 @@ func (h *Handler) fetchMetadataEmail(ctx context.Context) (string, error) {
 
 // getMetadataToken gets a token from metadata server, with caching.
 func (h *Handler) getMetadataToken(ctx context.Context, opts auth.TokenOptions) (*auth.Token, error) {
-	// Metadata server doesn't take credentials, so use a simpler approach
 	if opts.Scope == "" {
-		opts.Scope = "https://www.googleapis.com/auth/cloud-platform"
+		return nil, auth.ErrInvalidScope
 	}
 
 	lgr := logger.FromContext(ctx)
@@ -186,7 +186,7 @@ func (h *Handler) getMetadataToken(ctx context.Context, opts auth.TokenOptions) 
 
 	// Check cache first
 	if !opts.ForceRefresh {
-		cached, err := h.tokenCache.Get(ctx, opts.Scope)
+		cached, err := h.tokenCache.Get(ctx, auth.FlowMetadata, auth.FingerprintHash(""), opts.Scope)
 		if err == nil && cached != nil && cached.IsValidFor(minValidFor) {
 			lgr.V(1).Info("using cached metadata token", "scope", opts.Scope)
 			return cached, nil
@@ -200,7 +200,7 @@ func (h *Handler) getMetadataToken(ctx context.Context, opts auth.TokenOptions) 
 	}
 
 	// Cache the token
-	if err := h.tokenCache.Set(ctx, opts.Scope, token); err != nil {
+	if err := h.tokenCache.Set(ctx, auth.FlowMetadata, auth.FingerprintHash(""), opts.Scope, token); err != nil {
 		lgr.V(1).Info("failed to cache metadata token", "error", err)
 	}
 

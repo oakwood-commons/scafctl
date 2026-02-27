@@ -131,6 +131,7 @@ func (h *Handler) refreshAccessToken(ctx context.Context, refreshToken, clientID
 		TokenType:   tokenResp.TokenType,
 		ExpiresAt:   expiresAt,
 		Scope:       tokenResp.Scope,
+		Flow:        auth.FlowDeviceCode,
 	}, nil
 }
 

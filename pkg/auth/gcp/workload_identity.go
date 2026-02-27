@@ -8,9 +8,11 @@ package gcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
@@ -24,6 +26,10 @@ const (
 	// stsEndpoint is the Google STS token exchange endpoint.
 	stsEndpoint = "https://sts.googleapis.com/v1/token"
 )
+
+// ErrNoWorkloadIdentityConfigured is returned by GetExternalAccountConfig when no
+// workload identity credentials are configured (env var missing or wrong type).
+var ErrNoWorkloadIdentityConfigured = errors.New("no workload identity configured")
 
 // ExternalAccountConfig represents the external account credential configuration JSON.
 type ExternalAccountConfig struct {
@@ -65,7 +71,7 @@ type STSTokenResponse struct {
 func GetExternalAccountConfig() (*ExternalAccountConfig, error) {
 	path := os.Getenv(EnvGoogleExternalAccount)
 	if path == "" {
-		return nil, nil //nolint:nilnil // nil,nil means not configured
+		return nil, ErrNoWorkloadIdentityConfigured
 	}
 
 	data, err := os.ReadFile(path) //nolint:gosec // G703: path from env var is expected
@@ -79,7 +85,7 @@ func GetExternalAccountConfig() (*ExternalAccountConfig, error) {
 	}
 
 	if cfg.Type != "external_account" {
-		return nil, nil //nolint:nilnil // not an external account config
+		return nil, ErrNoWorkloadIdentityConfigured
 	}
 
 	return &cfg, nil
@@ -87,8 +93,8 @@ func GetExternalAccountConfig() (*ExternalAccountConfig, error) {
 
 // HasWorkloadIdentityCredentials checks if workload identity credentials are configured.
 func HasWorkloadIdentityCredentials() bool {
-	cfg, err := GetExternalAccountConfig()
-	return err == nil && cfg != nil
+	_, err := GetExternalAccountConfig()
+	return err == nil
 }
 
 // readSubjectToken reads the subject token from the credential source.
@@ -137,16 +143,16 @@ func (h *Handler) workloadIdentityLogin(ctx context.Context, opts auth.LoginOpti
 
 	cfg, err := GetExternalAccountConfig()
 	if err != nil {
+		if errors.Is(err, ErrNoWorkloadIdentityConfigured) {
+			return nil, fmt.Errorf("workload identity credentials not configured: set %s environment variable",
+				EnvGoogleExternalAccount)
+		}
 		return nil, fmt.Errorf("workload identity credentials error: %w", err)
-	}
-	if cfg == nil {
-		return nil, fmt.Errorf("workload identity credentials not configured: set %s environment variable",
-			EnvGoogleExternalAccount)
 	}
 
 	scope := "https://www.googleapis.com/auth/cloud-platform"
 	if len(opts.Scopes) > 0 {
-		scope = joinScopes(opts.Scopes)
+		scope = strings.Join(opts.Scopes, " ")
 	}
 
 	// Acquire a token to validate credentials
@@ -236,17 +242,26 @@ func (h *Handler) acquireWorkloadIdentityToken(ctx context.Context, cfg *Externa
 		TokenType:   stsResp.TokenType,
 		ExpiresAt:   expiresAt,
 		Scope:       scope,
+		Flow:        auth.FlowWorkloadIdentity,
 	}, nil
 }
 
 // getWorkloadIdentityToken gets a token using workload identity, with caching.
 func (h *Handler) getWorkloadIdentityToken(ctx context.Context, opts auth.TokenOptions) (*auth.Token, error) {
-	return getCachedOrAcquireToken(
+	if opts.Scope == "" {
+		return nil, auth.ErrInvalidScope
+	}
+	return auth.GetCachedOrAcquireToken(
 		ctx,
-		h,
+		h.tokenCache,
 		opts,
+		auth.FlowWorkloadIdentity,
+		opts.Scope,
 		func() (*ExternalAccountConfig, error) { return GetExternalAccountConfig() },
-		func(cfg *ExternalAccountConfig, err error) bool { return cfg == nil || err != nil },
+		func(_ *ExternalAccountConfig) bool { return false },
+		func(cfg *ExternalAccountConfig) string {
+			return auth.FingerprintHash(cfg.Audience)
+		},
 		func(ctx context.Context, cfg *ExternalAccountConfig, scope string) (*auth.Token, error) {
 			return h.acquireWorkloadIdentityToken(ctx, cfg, scope)
 		},
@@ -257,7 +272,7 @@ func (h *Handler) getWorkloadIdentityToken(ctx context.Context, opts auth.TokenO
 // workloadIdentityStatus returns the status for workload identity authentication.
 func (h *Handler) workloadIdentityStatus(_ context.Context) (*auth.Status, error) {
 	cfg, err := GetExternalAccountConfig()
-	if err != nil || cfg == nil {
+	if err != nil {
 		return &auth.Status{ //nolint:nilerr // intentional: credential read errors mean not authenticated
 			Authenticated: false,
 		}, nil

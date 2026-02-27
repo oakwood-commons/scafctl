@@ -312,7 +312,7 @@ pkg/auth/gcp/
 |---|------|-------|-------------|
 | 1 | Create handler skeleton | `config.go`, `handler.go` | `Config` struct with defaults (client ID, scopes), `Handler` struct implementing `auth.Handler` interface, `New()` constructor with functional options pattern (`WithConfig`, `WithSecretStore`, `WithHTTPClient`) |
 | 2 | Implement HTTP client abstraction | `http.go`, `mock.go` | Testable `HTTPClient` interface with `PostForm`, `Get`, `Do` methods. `DefaultHTTPClient` with 30s timeout. `MockHTTPClient` with request recording and response queue |
-| 3 | Implement token cache | `cache.go`, `token.go` | Disk-based token caching via `secrets.Store` with `scafctl.auth.gcp.token.<base64url(scope)>` naming. `TokenMetadata` struct. Generic `getCachedOrAcquireToken` helper for cache-check → acquire → cache pattern |
+| 3 | Implement token cache | `cache.go`, `token.go` | Disk-based token caching via `secrets.Store` with `scafctl.auth.gcp.token.<flow>.<fingerprint>.<base64url(scope)>` naming, partitioned by authentication flow, config identity fingerprint, and scope. `TokenMetadata` struct. Generic `getCachedOrAcquireToken` helper for cache-check → acquire → cache pattern |
 
 ### Phase 2: Authentication Flows (Tasks 4-7)
 
@@ -430,7 +430,7 @@ scafctl.auth.gcp.<type>
 |-------------|-------------|
 | `scafctl.auth.gcp.refresh_token` | OAuth refresh token (from ADC browser flow) |
 | `scafctl.auth.gcp.metadata` | Token metadata (claims, flow type, impersonation target, client ID, expiry) |
-| `scafctl.auth.gcp.token.<scope-hash>` | Cached access tokens by scope (base64url-encoded scope string) |
+| `scafctl.auth.gcp.token.<flow>.<fingerprint>.<scope-hash>` | Cached access tokens by flow, config identity fingerprint, and scope |
 
 ### TokenMetadata Struct
 
@@ -612,10 +612,10 @@ Any source flow (ADC, SA Key, WI, Metadata)
 
 ### Caching
 
-Impersonated tokens are cached with a distinct key pattern to avoid conflicts with direct tokens:
+Impersonated tokens are cached with the impersonation flow and target SA as the fingerprint identity:
 
 ```
-scafctl.auth.gcp.token.impersonate.<target-sa-hash>.<scope-hash>
+scafctl.auth.gcp.token.impersonate.<fingerprint(target-sa)>.<scope-hash>
 ```
 
 ### Claims for Impersonated Identity

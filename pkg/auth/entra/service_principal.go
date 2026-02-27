@@ -181,12 +181,20 @@ func (h *Handler) acquireServicePrincipalToken(ctx context.Context, creds *Servi
 
 // getServicePrincipalToken gets a token for SP auth, using cache when valid.
 func (h *Handler) getServicePrincipalToken(ctx context.Context, opts auth.TokenOptions) (*auth.Token, error) {
-	return getCachedOrAcquireToken(
+	if opts.Scope == "" {
+		return nil, auth.ErrInvalidScope
+	}
+	return auth.GetCachedOrAcquireToken(
 		ctx,
-		h,
+		h.tokenCache,
 		opts,
-		GetServicePrincipalCredentials,
+		auth.FlowServicePrincipal,
+		opts.Scope,
+		func() (*ServicePrincipalCredentials, error) { return GetServicePrincipalCredentials(), nil },
 		func(creds *ServicePrincipalCredentials) bool { return creds == nil },
+		func(creds *ServicePrincipalCredentials) string {
+			return auth.FingerprintHash(creds.ClientID + ":" + creds.TenantID)
+		},
 		h.acquireServicePrincipalToken,
 		"SP",
 	)

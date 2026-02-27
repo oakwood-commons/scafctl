@@ -9,6 +9,7 @@ package gcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -25,6 +26,10 @@ const (
 	// EnvCloudSDKConfig is the environment variable for custom gcloud config directory.
 	EnvCloudSDKConfig = "CLOUDSDK_CONFIG"
 )
+
+// ErrNoGcloudADCConfigured is returned by LoadGcloudADCCredentials when no
+// gcloud Application Default Credentials are configured.
+var ErrNoGcloudADCConfigured = errors.New("no gcloud ADC credentials configured")
 
 // formatGcloudTokenError converts a raw OAuth error response into a clear, actionable error.
 // It handles well-known error codes (e.g. invalid_grant / invalid_rapt) with remediation hints.
@@ -84,13 +89,13 @@ func getGcloudADCPath() string {
 func LoadGcloudADCCredentials() (*GcloudADCCredentials, error) {
 	path := getGcloudADCPath()
 	if path == "" {
-		return nil, nil //nolint:nilnil // nil,nil means no credentials found
+		return nil, ErrNoGcloudADCConfigured
 	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil //nolint:nilnil // file doesn't exist, no credentials
+			return nil, ErrNoGcloudADCConfigured
 		}
 		return nil, fmt.Errorf("reading gcloud ADC file: %w", err)
 	}
@@ -101,11 +106,11 @@ func LoadGcloudADCCredentials() (*GcloudADCCredentials, error) {
 	}
 
 	if creds.Type != "authorized_user" {
-		return nil, nil //nolint:nilnil // not user credentials (could be service account)
+		return nil, ErrNoGcloudADCConfigured
 	}
 
 	if creds.RefreshToken == "" {
-		return nil, nil //nolint:nilnil // no refresh token
+		return nil, ErrNoGcloudADCConfigured
 	}
 
 	return &creds, nil
@@ -113,8 +118,8 @@ func LoadGcloudADCCredentials() (*GcloudADCCredentials, error) {
 
 // HasGcloudADCCredentials checks if gcloud ADC credentials exist.
 func HasGcloudADCCredentials() bool {
-	creds, err := LoadGcloudADCCredentials()
-	return err == nil && creds != nil
+	_, err := LoadGcloudADCCredentials()
+	return err == nil
 }
 
 // gcloudADCLogin uses existing gcloud ADC credentials to authenticate.
@@ -124,10 +129,10 @@ func (h *Handler) gcloudADCLogin(ctx context.Context, opts auth.LoginOptions) (*
 
 	creds, err := LoadGcloudADCCredentials()
 	if err != nil {
+		if errors.Is(err, ErrNoGcloudADCConfigured) {
+			return nil, fmt.Errorf("no gcloud ADC credentials found; run 'gcloud auth application-default login' or configure a client ID for scafctl")
+		}
 		return nil, fmt.Errorf("loading gcloud ADC credentials: %w", err)
-	}
-	if creds == nil {
-		return nil, fmt.Errorf("no gcloud ADC credentials found; run 'gcloud auth application-default login' or configure a client ID for scafctl")
 	}
 
 	// Use gcloud's refresh token to get an access token
@@ -178,7 +183,7 @@ func (h *Handler) gcloudADCLogin(ctx context.Context, opts auth.LoginOptions) (*
 		scopeStr = "https://www.googleapis.com/auth/cloud-platform"
 	}
 	expiresAt := time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
-	_ = h.tokenCache.Set(ctx, scopeStr, &auth.Token{
+	_ = h.tokenCache.Set(ctx, auth.FlowGcloudADC, auth.FingerprintHash(""), scopeStr, &auth.Token{
 		AccessToken: tokenResp.AccessToken,
 		TokenType:   tokenResp.TokenType,
 		ExpiresAt:   expiresAt,
@@ -201,6 +206,13 @@ func (h *Handler) getGcloudADCToken(ctx context.Context, opts auth.TokenOptions)
 		return nil, auth.ErrInvalidScope
 	}
 
+	creds, err := LoadGcloudADCCredentials()
+	if err != nil {
+		return nil, auth.ErrNotAuthenticated
+	}
+
+	fingerprint := auth.FingerprintHash(creds.ClientID)
+
 	minValidFor := opts.MinValidFor
 	if minValidFor == 0 {
 		minValidFor = auth.DefaultMinValidFor
@@ -208,16 +220,11 @@ func (h *Handler) getGcloudADCToken(ctx context.Context, opts auth.TokenOptions)
 
 	// Check cache first
 	if !opts.ForceRefresh {
-		cached, err := h.tokenCache.Get(ctx, opts.Scope)
+		cached, err := h.tokenCache.Get(ctx, auth.FlowGcloudADC, fingerprint, opts.Scope)
 		if err == nil && cached != nil && cached.IsValidFor(minValidFor) {
 			lgr.V(1).Info("using cached gcloud ADC token", "scope", opts.Scope)
 			return cached, nil
 		}
-	}
-
-	creds, err := LoadGcloudADCCredentials()
-	if err != nil || creds == nil {
-		return nil, auth.ErrNotAuthenticated
 	}
 
 	// Refresh token using gcloud's credentials
@@ -254,7 +261,7 @@ func (h *Handler) getGcloudADCToken(ctx context.Context, opts auth.TokenOptions)
 	}
 
 	lgr.V(1).Info("acquired token via gcloud ADC fallback; to use scafctl-managed credentials run: scafctl auth login gcp")
-	if err := h.tokenCache.Set(ctx, opts.Scope, token); err != nil {
+	if err := h.tokenCache.Set(ctx, auth.FlowGcloudADC, fingerprint, opts.Scope, token); err != nil {
 		lgr.V(1).Info("failed to cache gcloud ADC token", "error", err)
 	}
 

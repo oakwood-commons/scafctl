@@ -4,6 +4,7 @@
 package auth
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -20,10 +21,20 @@ func NewRegistry() *Registry {
 	return &Registry{handlers: make(map[string]Handler)}
 }
 
+// Sentinel errors for the registry.
+var (
+	// ErrNilHandler indicates a nil handler was passed to Register.
+	ErrNilHandler = errors.New("cannot register nil handler")
+	// ErrEmptyHandlerName indicates a handler with an empty name was passed to Register.
+	ErrEmptyHandlerName = errors.New("handler name cannot be empty")
+	// ErrHandlerAlreadyRegistered indicates a handler with the same name is already registered.
+	ErrHandlerAlreadyRegistered = errors.New("auth handler already registered")
+)
+
 // Register adds an auth handler to the registry.
 func (r *Registry) Register(handler Handler) error {
 	if handler == nil {
-		return fmt.Errorf("cannot register nil handler")
+		return ErrNilHandler
 	}
 
 	r.mu.Lock()
@@ -31,11 +42,11 @@ func (r *Registry) Register(handler Handler) error {
 
 	name := handler.Name()
 	if name == "" {
-		return fmt.Errorf("handler name cannot be empty")
+		return ErrEmptyHandlerName
 	}
 
 	if _, exists := r.handlers[name]; exists {
-		return fmt.Errorf("auth handler %q already registered", name)
+		return fmt.Errorf("%w: %s", ErrHandlerAlreadyRegistered, name)
 	}
 
 	r.handlers[name] = handler
