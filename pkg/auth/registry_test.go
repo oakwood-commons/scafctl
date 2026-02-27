@@ -4,6 +4,7 @@
 package auth
 
 import (
+	"errors"
 	"sync"
 	"testing"
 
@@ -22,9 +23,11 @@ func TestRegistry_Register(t *testing.T) {
 
 	err := r.Register(nil)
 	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrNilHandler))
 
 	err = r.Register(&MockHandler{NameValue: ""})
 	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrEmptyHandlerName))
 
 	err = r.Register(NewMockHandler("entra"))
 	require.NoError(t, err)
@@ -36,6 +39,7 @@ func TestRegistry_Register_Duplicate(t *testing.T) {
 	require.NoError(t, r.Register(NewMockHandler("entra")))
 	err := r.Register(NewMockHandler("entra"))
 	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrHandlerAlreadyRegistered))
 }
 
 func TestRegistry_Unregister(t *testing.T) {

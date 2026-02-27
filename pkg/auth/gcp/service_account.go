@@ -7,18 +7,15 @@ package gcp
 
 import (
 	"context"
-	"crypto/rsa"
-	"crypto/sha256"
-	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
-	"encoding/pem"
+	"errors"
 	"fmt"
-	"math/big"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 )
@@ -30,6 +27,10 @@ const (
 	// tokenEndpoint is the Google OAuth 2.0 token endpoint.
 	tokenEndpoint = "https://oauth2.googleapis.com/token" //nolint:gosec // G117: not a credential, it's an endpoint URL
 )
+
+// ErrNoServiceAccountConfigured is returned by GetServiceAccountKey when no
+// service account credentials are configured (env var missing or wrong key type).
+var ErrNoServiceAccountConfigured = errors.New("no service account configured")
 
 // ServiceAccountKey represents the JSON structure of a GCP service account key file.
 type ServiceAccountKey struct {
@@ -50,7 +51,7 @@ type ServiceAccountKey struct {
 func GetServiceAccountKey() (*ServiceAccountKey, error) {
 	path := os.Getenv(EnvGoogleApplicationCredentials)
 	if path == "" {
-		return nil, nil //nolint:nilnil // nil,nil means no credentials configured
+		return nil, ErrNoServiceAccountConfigured
 	}
 
 	data, err := os.ReadFile(path) //nolint:gosec // G703: path from env var is expected
@@ -64,7 +65,7 @@ func GetServiceAccountKey() (*ServiceAccountKey, error) {
 	}
 
 	if key.Type != "service_account" {
-		return nil, nil //nolint:nilnil // not a service account key
+		return nil, ErrNoServiceAccountConfigured
 	}
 
 	return &key, nil
@@ -72,8 +73,8 @@ func GetServiceAccountKey() (*ServiceAccountKey, error) {
 
 // HasServiceAccountCredentials checks if service account credentials are configured.
 func HasServiceAccountCredentials() bool {
-	key, err := GetServiceAccountKey()
-	return err == nil && key != nil
+	_, err := GetServiceAccountKey()
+	return err == nil
 }
 
 // serviceAccountLogin validates SA credentials by acquiring a token.
@@ -83,16 +84,16 @@ func (h *Handler) serviceAccountLogin(ctx context.Context, opts auth.LoginOption
 
 	key, err := GetServiceAccountKey()
 	if err != nil {
+		if errors.Is(err, ErrNoServiceAccountConfigured) {
+			return nil, fmt.Errorf("service account credentials not configured: set %s environment variable",
+				EnvGoogleApplicationCredentials)
+		}
 		return nil, fmt.Errorf("service account credentials error: %w", err)
-	}
-	if key == nil {
-		return nil, fmt.Errorf("service account credentials not configured: set %s environment variable",
-			EnvGoogleApplicationCredentials)
 	}
 
 	scope := "https://www.googleapis.com/auth/cloud-platform"
 	if len(opts.Scopes) > 0 {
-		scope = joinScopes(opts.Scopes)
+		scope = strings.Join(opts.Scopes, " ")
 	}
 
 	// Acquire a token to validate credentials
@@ -129,14 +130,19 @@ func (h *Handler) serviceAccountLogin(ctx context.Context, opts auth.LoginOption
 func (h *Handler) acquireServiceAccountToken(ctx context.Context, key *ServiceAccountKey, scope string) (*auth.Token, error) {
 	lgr := logger.FromContext(ctx)
 
-	// Create the JWT assertion
-	now := time.Now()
-	jwtHeader := map[string]string{
-		"alg": "RS256",
-		"typ": "JWT",
-		"kid": key.PrivateKeyID,
+	// Parse the private key using golang-jwt's built-in PEM parser,
+	// which supports both PKCS#1 and PKCS#8 formats.
+	privateKey, err := jwt.ParseRSAPrivateKeyFromPEM([]byte(key.PrivateKey))
+	if err != nil {
+		return nil, fmt.Errorf(
+			"failed to parse service account private key: "+
+				"the private_key field in %s may be malformed or not in PEM format: %w",
+			EnvGoogleApplicationCredentials, err)
 	}
-	jwtPayload := map[string]any{
+
+	// Create the JWT assertion with RS256 signing.
+	now := time.Now()
+	claims := jwt.MapClaims{
 		"iss":   key.ClientEmail,
 		"sub":   key.ClientEmail,
 		"aud":   tokenEndpoint,
@@ -145,51 +151,13 @@ func (h *Handler) acquireServiceAccountToken(ctx context.Context, key *ServiceAc
 		"scope": scope,
 	}
 
-	headerJSON, err := json.Marshal(jwtHeader)
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token.Header["kid"] = key.PrivateKeyID
+
+	assertion, err := token.SignedString(privateKey)
 	if err != nil {
-		return nil, fmt.Errorf("encoding JWT header: %w", err)
-	}
-	payloadJSON, err := json.Marshal(jwtPayload)
-	if err != nil {
-		return nil, fmt.Errorf("encoding JWT payload: %w", err)
-	}
-
-	headerB64 := base64.RawURLEncoding.EncodeToString(headerJSON)
-	payloadB64 := base64.RawURLEncoding.EncodeToString(payloadJSON)
-	signingInput := headerB64 + "." + payloadB64
-
-	// Parse the private key
-	block, _ := pem.Decode([]byte(key.PrivateKey))
-	if block == nil {
-		return nil, fmt.Errorf(
-			"failed to parse PEM block from service account private key: "+
-				"the private_key field in %s may be malformed or not in PEM format",
-			EnvGoogleApplicationCredentials)
-	}
-
-	rsaKey, err := x509.ParsePKCS8PrivateKey(block.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("parsing private key: %w", err)
-	}
-
-	privateKey, ok := rsaKey.(*rsa.PrivateKey)
-	if !ok {
-		return nil, fmt.Errorf("private key is not RSA")
-	}
-
-	// Sign the JWT
-	hash := sha256.Sum256([]byte(signingInput))
-	signature, err := rsa.SignPKCS1v15(nil, privateKey, 0, hash[:])
-	if err != nil {
-		// Use stdlib big.Int for signing to avoid crypto/rand dependency
-		// Actually rsa.SignPKCS1v15 with nil rand works for deterministic signing
-		// But let's use the proper approach
 		return nil, fmt.Errorf("signing JWT: %w", err)
 	}
-	_ = big.NewInt(0) // keep import for potential future use
-
-	signatureB64 := base64.RawURLEncoding.EncodeToString(signature)
-	assertion := signingInput + "." + signatureB64
 
 	// Exchange JWT assertion for access token
 	data := url.Values{}
@@ -234,17 +202,26 @@ func (h *Handler) acquireServiceAccountToken(ctx context.Context, key *ServiceAc
 		TokenType:   tokenResp.TokenType,
 		ExpiresAt:   expiresAt,
 		Scope:       scope,
+		Flow:        auth.FlowServicePrincipal,
 	}, nil
 }
 
 // getServiceAccountToken gets a token using service account key, with caching.
 func (h *Handler) getServiceAccountToken(ctx context.Context, opts auth.TokenOptions) (*auth.Token, error) {
-	return getCachedOrAcquireToken(
+	if opts.Scope == "" {
+		return nil, auth.ErrInvalidScope
+	}
+	return auth.GetCachedOrAcquireToken(
 		ctx,
-		h,
+		h.tokenCache,
 		opts,
+		auth.FlowServicePrincipal,
+		opts.Scope,
 		func() (*ServiceAccountKey, error) { return GetServiceAccountKey() },
-		func(key *ServiceAccountKey, err error) bool { return key == nil || err != nil },
+		func(_ *ServiceAccountKey) bool { return false },
+		func(key *ServiceAccountKey) string {
+			return auth.FingerprintHash(key.ClientEmail)
+		},
 		func(ctx context.Context, key *ServiceAccountKey, scope string) (*auth.Token, error) {
 			return h.acquireServiceAccountToken(ctx, key, scope)
 		},
@@ -255,7 +232,7 @@ func (h *Handler) getServiceAccountToken(ctx context.Context, opts auth.TokenOpt
 // serviceAccountStatus returns the status for SA authentication.
 func (h *Handler) serviceAccountStatus(_ context.Context) (*auth.Status, error) {
 	key, err := GetServiceAccountKey()
-	if err != nil || key == nil {
+	if err != nil {
 		return &auth.Status{ //nolint:nilerr // intentional: credential read errors mean not authenticated
 			Authenticated: false,
 		}, nil
@@ -274,16 +251,4 @@ func (h *Handler) serviceAccountStatus(_ context.Context) (*auth.Status, error) 
 		IdentityType: auth.IdentityTypeServicePrincipal,
 		ClientID:     key.ClientID,
 	}, nil
-}
-
-// joinScopes joins scopes into a space-separated string.
-func joinScopes(scopes []string) string {
-	result := ""
-	for i, s := range scopes {
-		if i > 0 {
-			result += " "
-		}
-		result += s
-	}
-	return result
 }

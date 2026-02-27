@@ -21,20 +21,20 @@ const (
 // Config holds GCP-specific configuration.
 type Config struct {
 	// ClientID is the OAuth 2.0 client ID for the ADC browser flow.
-	ClientID string `json:"clientId,omitempty" yaml:"clientId,omitempty"`
+	ClientID string `json:"clientId,omitempty" yaml:"clientId,omitempty" doc:"OAuth 2.0 client ID for the ADC browser flow" example:"764086051850-6qr4p6gpi6hn506pt8ejuq83di341hur.apps.googleusercontent.com" maxLength:"256"`
 
 	// ClientSecret is the OAuth 2.0 client secret (not confidential for desktop apps).
-	ClientSecret string `json:"clientSecret,omitempty" yaml:"clientSecret,omitempty"` //nolint:gosec // G117: not a hardcoded credential, it's a config field
+	ClientSecret string `json:"clientSecret,omitempty" yaml:"clientSecret,omitempty" doc:"OAuth 2.0 client secret (not confidential for desktop apps)" maxLength:"256"` //nolint:gosec // G117: not a hardcoded credential, it's a config field
 
 	// DefaultScopes are the default OAuth scopes requested during login.
-	DefaultScopes []string `json:"defaultScopes,omitempty" yaml:"defaultScopes,omitempty"`
+	DefaultScopes []string `json:"defaultScopes,omitempty" yaml:"defaultScopes,omitempty" doc:"Default OAuth scopes requested during login" maxItems:"20"`
 
 	// ImpersonateServiceAccount is the target service account email for impersonation.
 	// When set, all token requests will impersonate this service account.
-	ImpersonateServiceAccount string `json:"impersonateServiceAccount,omitempty" yaml:"impersonateServiceAccount,omitempty"`
+	ImpersonateServiceAccount string `json:"impersonateServiceAccount,omitempty" yaml:"impersonateServiceAccount,omitempty" doc:"Target service account email for impersonation" example:"sa@project.iam.gserviceaccount.com" maxLength:"320"`
 
 	// Project is the default GCP project (informational, not used for auth).
-	Project string `json:"project,omitempty" yaml:"project,omitempty"`
+	Project string `json:"project,omitempty" yaml:"project,omitempty" doc:"Default GCP project (informational)" example:"my-project-id" maxLength:"128"`
 }
 
 // DefaultConfig returns the default GCP configuration.

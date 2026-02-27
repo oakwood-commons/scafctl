@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
@@ -115,7 +116,7 @@ func (h *Handler) impersonateServiceAccount(ctx context.Context, sourceToken, ta
 		AccessToken: impResp.AccessToken,
 		TokenType:   "Bearer",
 		ExpiresAt:   expireTime,
-		Scope:       joinScopes(scopes),
+		Scope:       strings.Join(scopes, " "),
 	}, nil
 }
 
@@ -139,13 +140,14 @@ func (h *Handler) getImpersonatedToken(ctx context.Context, opts auth.TokenOptio
 	}
 
 	// Check cache for impersonated token
-	cacheKey := fmt.Sprintf("impersonate.%s.%s", targetSA, opts.Scope)
+	impersonateFingerprint := auth.FingerprintHash(targetSA)
+	impersonateFlow := auth.Flow("impersonation")
 	if !opts.ForceRefresh {
 		minValidFor := opts.MinValidFor
 		if minValidFor == 0 {
 			minValidFor = auth.DefaultMinValidFor
 		}
-		cached, cacheErr := h.tokenCache.Get(ctx, cacheKey)
+		cached, cacheErr := h.tokenCache.Get(ctx, impersonateFlow, impersonateFingerprint, opts.Scope)
 		if cacheErr == nil && cached != nil && cached.IsValidFor(minValidFor) {
 			lgr.V(1).Info("using cached impersonated token",
 				"targetServiceAccount", targetSA,
@@ -162,7 +164,7 @@ func (h *Handler) getImpersonatedToken(ctx context.Context, opts auth.TokenOptio
 	}
 
 	// Cache the impersonated token
-	if err := h.tokenCache.Set(ctx, cacheKey, token); err != nil {
+	if err := h.tokenCache.Set(ctx, impersonateFlow, impersonateFingerprint, opts.Scope, token); err != nil {
 		lgr.V(1).Info("failed to cache impersonated token", "error", err)
 	}
 

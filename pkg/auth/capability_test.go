@@ -32,6 +32,7 @@ func TestCapabilityConstants(t *testing.T) {
 		CapTenantID,
 		CapHostname,
 		CapFederatedToken,
+		CapCallbackPort,
 	}
 
 	seen := make(map[Capability]bool)

@@ -136,8 +136,8 @@ func TestHandler_Logout(t *testing.T) {
 	require.NoError(t, err)
 
 	// Store a cached token
-	cache := NewTokenCache(store)
-	err = cache.Set(ctx, "test-scope", &auth.Token{
+	cache := auth.NewTokenCache(store, SecretKeyTokenPrefix)
+	err = cache.Set(ctx, "", "_", "test-scope", &auth.Token{
 		AccessToken: "test-token",
 		TokenType:   "Bearer",
 		ExpiresAt:   time.Now().Add(1 * time.Hour),
@@ -155,7 +155,7 @@ func TestHandler_Logout(t *testing.T) {
 	assert.False(t, exists)
 
 	// Token should be cleared too
-	token, err := cache.Get(ctx, "test-scope")
+	token, err := cache.Get(ctx, "", "_", "test-scope")
 	require.NoError(t, err)
 	assert.Nil(t, token)
 }
@@ -191,14 +191,16 @@ func TestHandler_GetToken_FromCache(t *testing.T) {
 	scope := "https://graph.microsoft.com/.default"
 
 	// Pre-populate cache
-	cache := NewTokenCache(store)
+	cache := auth.NewTokenCache(store, SecretKeyTokenPrefix)
 	cachedToken := &auth.Token{
 		AccessToken: "cached-access-token",
 		TokenType:   "Bearer",
 		ExpiresAt:   time.Now().Add(1 * time.Hour),
 		Scope:       scope,
 	}
-	err = cache.Set(ctx, scope, cachedToken)
+	// Use the same fingerprint the handler will compute from default config
+	fp := auth.FingerprintHash(handler.config.ClientID + ":" + handler.config.TenantID)
+	err = cache.Set(ctx, "", fp, scope, cachedToken)
 	require.NoError(t, err)
 
 	// Also set up refresh token so the handler thinks we're authenticated
@@ -274,8 +276,9 @@ func TestHandler_GetToken_ForceRefresh(t *testing.T) {
 	require.NoError(t, err)
 
 	// Pre-populate cache with valid token
-	cache := NewTokenCache(store)
-	err = cache.Set(ctx, scope, &auth.Token{
+	cache := auth.NewTokenCache(store, SecretKeyTokenPrefix)
+	fp := auth.FingerprintHash(handler.config.ClientID + ":" + handler.config.TenantID)
+	err = cache.Set(ctx, "", fp, scope, &auth.Token{
 		AccessToken: "cached-access-token",
 		TokenType:   "Bearer",
 		ExpiresAt:   time.Now().Add(1 * time.Hour),
@@ -309,8 +312,9 @@ func TestHandler_InjectAuth(t *testing.T) {
 	scope := "https://graph.microsoft.com/.default"
 
 	// Pre-populate cache
-	cache := NewTokenCache(store)
-	err = cache.Set(ctx, scope, &auth.Token{
+	cache := auth.NewTokenCache(store, SecretKeyTokenPrefix)
+	fp := auth.FingerprintHash(handler.config.ClientID + ":" + handler.config.TenantID)
+	err = cache.Set(ctx, "", fp, scope, &auth.Token{
 		AccessToken: "test-access-token",
 		TokenType:   "Bearer",
 		ExpiresAt:   time.Now().Add(1 * time.Hour),
@@ -390,49 +394,4 @@ func TestExtractClaims_NoIDToken(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, claims)
 	assert.Empty(t, claims.Subject)
-}
-
-func TestBase64URLDecode(t *testing.T) {
-	tests := []struct {
-		name    string
-		input   string
-		want    string
-		wantErr bool
-	}{
-		{
-			name:  "no padding needed",
-			input: "dGVzdA",
-			want:  "test",
-		},
-		{
-			name:  "one padding needed",
-			input: "dGVzdDE",
-			want:  "test1",
-		},
-		{
-			name:  "two padding needed",
-			input: "dGVzdDEy",
-			want:  "test12",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := base64URLDecode(tt.input)
-			if tt.wantErr {
-				require.Error(t, err)
-			} else {
-				require.NoError(t, err)
-				assert.Equal(t, tt.want, string(got))
-			}
-		})
-	}
-}
-
-func TestSplitJWT(t *testing.T) {
-	parts := splitJWT("header.payload.signature")
-	assert.Len(t, parts, 3)
-	assert.Equal(t, "header", parts[0])
-	assert.Equal(t, "payload", parts[1])
-	assert.Equal(t, "signature", parts[2])
 }

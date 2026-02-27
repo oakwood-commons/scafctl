@@ -10,25 +10,25 @@ import (
 
 // Sentinel errors for the auth package.
 var (
-	ErrNotAuthenticated       = errors.New("not authenticated: please run 'scafctl auth login entra'")
+	ErrNotAuthenticated       = errors.New("not authenticated")
 	ErrAuthenticationFailed   = errors.New("authentication failed")
-	ErrTokenExpired           = errors.New("credentials expired: please run 'scafctl auth login entra'")
-	ErrConsentRequired        = errors.New("consent required: please login with the required scope, e.g. 'scafctl auth login entra --scope <scope>'")
+	ErrTokenExpired           = errors.New("credentials expired")
+	ErrConsentRequired        = errors.New("consent required: please login with the required scope")
 	ErrInvalidScope           = errors.New("invalid scope: scope cannot be empty")
 	ErrHandlerNotFound        = errors.New("auth handler not found")
 	ErrFlowNotSupported       = errors.New("authentication flow not supported")
 	ErrUserCancelled          = errors.New("authentication cancelled by user")
 	ErrTimeout                = errors.New("authentication timed out")
 	ErrAlreadyAuthenticated   = errors.New("already authenticated")
-	ErrGrantInvalid           = errors.New("invalid grant: the refresh token is invalid or has been revoked, please re-authenticate with 'scafctl auth login entra'")
+	ErrGrantInvalid           = errors.New("invalid grant: the refresh token is invalid or has been revoked")
 	ErrCapabilityNotSupported = errors.New("capability not supported by this auth handler")
 )
 
 // Error wraps authentication errors with additional context.
 type Error struct {
-	Handler   string
-	Operation string
-	Cause     error
+	Handler   string `json:"handler" yaml:"handler" doc:"Name of the auth handler" example:"entra" maxLength:"64"`
+	Operation string `json:"operation" yaml:"operation" doc:"Operation that failed" example:"login" maxLength:"64"`
+	Cause     error  `json:"-" yaml:"-"`
 }
 
 // Error implements the error interface.
@@ -82,4 +82,29 @@ func IsUserCancelled(err error) bool {
 // IsCapabilityNotSupported returns true if the error indicates a capability is not supported.
 func IsCapabilityNotSupported(err error) bool {
 	return errors.Is(err, ErrCapabilityNotSupported)
+}
+
+// IsGrantInvalid returns true if the error indicates the grant (refresh token) is invalid or revoked.
+func IsGrantInvalid(err error) bool {
+	return errors.Is(err, ErrGrantInvalid)
+}
+
+// IsAlreadyAuthenticated returns true if the error indicates the user is already authenticated.
+func IsAlreadyAuthenticated(err error) bool {
+	return errors.Is(err, ErrAlreadyAuthenticated)
+}
+
+// IsFlowNotSupported returns true if the error indicates the flow is not supported.
+func IsFlowNotSupported(err error) bool {
+	return errors.Is(err, ErrFlowNotSupported)
+}
+
+// IsAuthenticationFailed returns true if the error indicates authentication failed.
+func IsAuthenticationFailed(err error) bool {
+	return errors.Is(err, ErrAuthenticationFailed)
+}
+
+// IsInvalidScope returns true if the error indicates the scope is invalid.
+func IsInvalidScope(err error) bool {
+	return errors.Is(err, ErrInvalidScope)
 }

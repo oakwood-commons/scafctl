@@ -201,6 +201,32 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 					w.Errorf("%v", decErr)
 					return exitcode.WithCode(decErr, exitcode.GeneralError)
 				}
+
+				// Resolve full group membership when the token contains a groups overage.
+				// Entra emits _claim_names.groups instead of a groups claim when the user
+				// belongs to more than 200 groups. We detect this and call the handler's
+				// GroupsProvider to fetch the complete list via Microsoft Graph.
+				if hasGroupsOverage(decoded) {
+					payload, ok := decoded["payload"].(map[string]any)
+					if !ok {
+						payload = map[string]any{}
+						decoded["payload"] = payload
+					}
+					payload["groups_overage"] = true
+					if gp, ok := handler.(auth.GroupsProvider); ok {
+						w.Warningf("Groups overage detected: fetching full group membership via Microsoft Graph...")
+						groups, grpErr := gp.GetGroups(ctx)
+						if grpErr != nil {
+							payload["groups_resolved_error"] = grpErr.Error()
+						} else {
+							payload["groups_resolved"] = groups
+							payload["groups_resolved_count"] = len(groups)
+						}
+					} else {
+						payload["groups_resolved_error"] = "handler does not support group membership queries (GroupsProvider not implemented)"
+					}
+				}
+
 				outputOpts := flags.NewKvxOutputOptionsFromFlags(
 					outputFlags.Output,
 					outputFlags.Interactive,
@@ -254,6 +280,25 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 	flags.AddKvxOutputFlagsToStruct(cmd, &outputFlags)
 
 	return cmd
+}
+
+// hasGroupsOverage reports whether the decoded JWT payload contains a groups
+// overage indicator. This occurs when the user belongs to more than 200 Entra
+// groups — Entra omits the groups claim and instead emits _claim_names with a
+// "groups" key pointing to a _claim_sources entry. Per Microsoft's guidance,
+// callers must not use the _claim_sources endpoint value and should instead
+// query Microsoft Graph directly.
+func hasGroupsOverage(decoded map[string]any) bool {
+	payload, ok := decoded["payload"].(map[string]any)
+	if !ok {
+		return false
+	}
+	claimNames, ok := payload["_claim_names"].(map[string]any)
+	if !ok {
+		return false
+	}
+	_, hasGroups := claimNames["groups"]
+	return hasGroups
 }
 
 // decodeJWT parses a JWT and returns a map with "header" and "payload" keys,

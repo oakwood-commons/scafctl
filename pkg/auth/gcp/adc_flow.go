@@ -132,7 +132,7 @@ func (h *Handler) adcLogin(ctx context.Context, opts auth.LoginOptions) (*auth.R
 	// Cache the access token
 	if tokenResp.AccessToken != "" {
 		expiresAt := time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
-		_ = h.tokenCache.Set(ctx, scopeStr, &auth.Token{
+		_ = h.tokenCache.Set(ctx, auth.FlowInteractive, auth.FingerprintHash(h.config.ClientID), scopeStr, &auth.Token{
 			AccessToken: tokenResp.AccessToken,
 			TokenType:   tokenResp.TokenType,
 			ExpiresAt:   expiresAt,
@@ -243,6 +243,7 @@ func (h *Handler) mintToken(ctx context.Context, scope string) (*auth.Token, err
 		TokenType:   tokenResp.TokenType,
 		ExpiresAt:   expiresAt,
 		Scope:       scope,
+		Flow:        auth.FlowInteractive,
 		SessionID:   metadata.SessionID,
 	}, nil
 }

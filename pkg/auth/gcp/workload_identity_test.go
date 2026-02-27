@@ -5,6 +5,7 @@ package gcp
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -17,7 +18,8 @@ func TestGetExternalAccountConfig_NoEnv(t *testing.T) {
 	t.Setenv(EnvGoogleExternalAccount, "")
 
 	cfg, err := GetExternalAccountConfig()
-	require.NoError(t, err)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrNoWorkloadIdentityConfigured))
 	assert.Nil(t, cfg)
 }
 
@@ -54,7 +56,8 @@ func TestGetExternalAccountConfig_WrongType(t *testing.T) {
 	t.Setenv(EnvGoogleExternalAccount, tmpFile)
 
 	cfg, err := GetExternalAccountConfig()
-	require.NoError(t, err)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrNoWorkloadIdentityConfigured))
 	assert.Nil(t, cfg) // not an external_account type
 }
 

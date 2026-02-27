@@ -255,12 +255,20 @@ func (h *Handler) acquireWorkloadIdentityToken(ctx context.Context, creds *Workl
 
 // getWorkloadIdentityToken gets an access token using workload identity, with caching.
 func (h *Handler) getWorkloadIdentityToken(ctx context.Context, opts auth.TokenOptions) (*auth.Token, error) {
-	return getCachedOrAcquireToken(
+	if opts.Scope == "" {
+		return nil, auth.ErrInvalidScope
+	}
+	return auth.GetCachedOrAcquireToken(
 		ctx,
-		h,
+		h.tokenCache,
 		opts,
-		GetWorkloadIdentityCredentials,
+		auth.FlowWorkloadIdentity,
+		opts.Scope,
+		func() (*WorkloadIdentityCredentials, error) { return GetWorkloadIdentityCredentials(), nil },
 		func(creds *WorkloadIdentityCredentials) bool { return creds == nil },
+		func(creds *WorkloadIdentityCredentials) string {
+			return auth.FingerprintHash(creds.ClientID + ":" + creds.TenantID)
+		},
 		h.acquireWorkloadIdentityToken,
 		"workload identity",
 	)

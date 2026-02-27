@@ -241,7 +241,8 @@ func TestHandler_GetToken_CachedToken(t *testing.T) {
 		TokenType:   "Bearer",
 		ExpiresAt:   time.Now().Add(1 * time.Hour),
 	}
-	err = handler.tokenCache.Set(ctx, defaultCacheKey, cachedToken)
+	fp := auth.FingerprintHash(handler.config.Hostname)
+	err = handler.tokenCache.Set(ctx, auth.FlowDeviceCode, fp, defaultCacheKey, cachedToken)
 	require.NoError(t, err)
 
 	err = store.Set(ctx, SecretKeyAccessToken, []byte("stored-token"))
@@ -264,7 +265,8 @@ func TestHandler_GetToken_ForceRefresh(t *testing.T) {
 		TokenType:   "Bearer",
 		ExpiresAt:   time.Now().Add(1 * time.Hour),
 	}
-	err = handler.tokenCache.Set(ctx, defaultCacheKey, cachedToken)
+	fp := auth.FingerprintHash(handler.config.Hostname)
+	err = handler.tokenCache.Set(ctx, auth.FlowDeviceCode, fp, defaultCacheKey, cachedToken)
 	require.NoError(t, err)
 
 	err = store.Set(ctx, SecretKeyAccessToken, []byte("stored-token"))

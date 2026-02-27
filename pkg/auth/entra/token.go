@@ -247,13 +247,13 @@ func (h *Handler) extractClaims(tokenResp *TokenResponse) (*auth.Claims, error) 
 	}
 
 	// Parse ID token (JWT format: header.payload.signature)
-	parts := splitJWT(tokenResp.IDToken)
+	parts := strings.SplitN(tokenResp.IDToken, ".", 3)
 	if len(parts) != 3 {
 		return nil, fmt.Errorf("invalid ID token format")
 	}
 
 	// Decode payload (base64url)
-	payload, err := base64URLDecode(parts[1])
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode ID token payload: %w", err)
 	}
@@ -292,31 +292,4 @@ func (h *Handler) extractClaims(tokenResp *TokenResponse) (*auth.Claims, error) 
 		IssuedAt:  time.Unix(idTokenClaims.IssuedAt, 0),
 		ExpiresAt: time.Unix(idTokenClaims.ExpiresAt, 0),
 	}, nil
-}
-
-// splitJWT splits a JWT into its parts without using strings.Split
-// to avoid issues with tokens that might contain periods in their values.
-func splitJWT(token string) []string {
-	parts := make([]string, 0, 3)
-	start := 0
-	for i := 0; i < len(token); i++ {
-		if token[i] == '.' {
-			parts = append(parts, token[start:i])
-			start = i + 1
-		}
-	}
-	parts = append(parts, token[start:])
-	return parts
-}
-
-// base64URLDecode decodes a base64url encoded string.
-func base64URLDecode(s string) ([]byte, error) {
-	// Add padding if necessary
-	switch len(s) % 4 {
-	case 2:
-		s += "=="
-	case 3:
-		s += "="
-	}
-	return base64.URLEncoding.DecodeString(s)
 }

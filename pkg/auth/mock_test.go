@@ -74,6 +74,17 @@ func TestMockHandler_InjectAuth(t *testing.T) {
 	assert.Equal(t, "Bearer test-token", req.Header.Get("Authorization"))
 }
 
+func TestMockHandler_InjectAuth_GetTokenErr(t *testing.T) {
+	mock := NewMockHandler("entra")
+	mock.SetTokenError(ErrNotAuthenticated)
+
+	req := httptest.NewRequest(http.MethodGet, "https://example.com/api", nil)
+	err := mock.InjectAuth(context.Background(), req, TokenOptions{})
+	require.Error(t, err)
+	assert.True(t, IsNotAuthenticated(err))
+	assert.Empty(t, req.Header.Get("Authorization"))
+}
+
 func TestMockHandler_Reset(t *testing.T) {
 	mock := NewMockHandler("entra")
 
