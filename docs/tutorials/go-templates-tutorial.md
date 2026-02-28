@@ -27,6 +27,10 @@ This tutorial walks you through using Go templates in scafctl to generate struct
 10. [Using `tmpl` for Dynamic Inputs](#using-tmpl-for-dynamic-inputs)
 11. [Generating Multiple Files with ForEach](#generating-multiple-files-with-foreach)
 12. [Putting It All Together: README Generator](#putting-it-all-together-readme-generator)
+13. [Using Sprig Functions](#using-sprig-functions)
+14. [Converting Data to HCL with toHcl](#converting-data-to-hcl-with-tohcl)
+15. [Serializing and Parsing YAML with toYaml / fromYaml](#serializing-and-parsing-yaml-with-toyaml--fromyaml)
+16. [Discovering Available Functions](#discovering-available-functions)
 
 ---
 
@@ -1391,6 +1395,316 @@ go run .
 
 ---
 
+## Using Sprig Functions
+
+scafctl includes [Sprig v3](https://masterminds.github.io/sprig/) — a library of 100+ utility functions for Go templates. These are available automatically in all `go-template` provider invocations.
+
+### Step 1: Create the Solution File
+
+Create a file called `template-sprig.yaml`:
+
+```yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: template-sprig
+  version: 1.0.0
+
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: sprig-demo
+              template: |
+                {{ "hello world" | upper | trunc 5 }}
+              data:
+                unused: placeholder
+
+    config:
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: sprig-dict
+              template: |
+                {{- $defaults := dict "port" 3000 "debug" false -}}
+                {{- $overrides := dict "port" 8080 "tls" true -}}
+                {{- $merged := merge $overrides $defaults -}}
+                port={{ $merged.port }}, tls={{ $merged.tls }}, debug={{ $merged.debug }}
+
+    formatted:
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: sprig-string
+              template: |
+                {{ "my-app-service" | camelcase }}
+```
+
+### Step 2: Run It
+
+```bash
+scafctl run resolver -f template-sprig.yaml -e _.greeting -o yaml --hide-execution
+```
+
+### Step 3: Check the Output
+
+```
+HELLO
+```
+
+The `upper` function uppercases the string, and `trunc 5` truncates it to 5 characters.
+
+Try the other resolvers:
+
+```bash
+scafctl run resolver -f template-sprig.yaml -e _.config -o yaml --hide-execution
+```
+
+```
+port=8080, tls=true, debug=false
+```
+
+```bash
+scafctl run resolver -f template-sprig.yaml -e _.formatted -o yaml --hide-execution
+```
+
+```
+MyAppService
+```
+
+### What You Learned
+
+- **Sprig is built in** — All Sprig v3 functions work in `go-template` templates with no extra configuration.
+- **Piping** — Use `|` to chain functions: `{{ "text" | upper | trunc 5 }}`.
+- **`dict` and `merge`** — Create and merge maps for configuration defaults.
+- **String helpers** — `camelcase`, `snakecase`, `kebabcase`, `title`, `upper`, `lower`, `trim`, `replace`, and many more.
+
+> **Tip:** See the [Sprig documentation](https://masterminds.github.io/sprig/) for the full list of available functions grouped by category: strings, math, dates, lists, dicts, crypto, encoding, and more.
+
+---
+
+## Converting Data to HCL with toHcl
+
+scafctl provides a custom `toHcl` function that converts Go data structures into HashiCorp Configuration Language (HCL) format. This is useful for generating Terraform configurations.
+
+### Step 1: Create the Solution File
+
+Create a file called `template-tohcl.yaml`:
+
+```yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: template-tohcl
+  version: 1.0.0
+
+spec:
+  resolvers:
+    config:
+      type: any
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                name: my-bucket
+                region: us-east-1
+                tags:
+                  environment: production
+                  team: platform
+
+    hclOutput:
+      description: Generate HCL from structured data
+      type: string
+      dependsOn: [config]
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: hcl-gen
+              template: |
+                resource "aws_s3_bucket" "main" {
+                  {{ toHcl .config | indent 2 }}
+                }
+```
+
+### Step 2: Run It
+
+```bash
+scafctl run resolver -f template-tohcl.yaml -e _.hclOutput -o yaml --hide-execution
+```
+
+### Step 3: Check the Output
+
+```hcl
+resource "aws_s3_bucket" "main" {
+  name   = "my-bucket"
+  region = "us-east-1"
+  tags = {
+    environment = "production"
+    team        = "platform"
+  }
+}
+```
+
+### What You Learned
+
+- **`toHcl`** — Converts maps, lists, and primitives into HCL syntax.
+- **Nested structures** — Maps within maps render as nested HCL blocks.
+- **Combined with Sprig** — Use `indent` (from Sprig) to properly nest the generated HCL.
+- **Terraform workflows** — Generate provider blocks, resource definitions, and variable files from structured data.
+
+---
+
+## Serializing and Parsing YAML with toYaml / fromYaml
+
+scafctl provides custom `toYaml`, `fromYaml`, `mustToYaml`, and `mustFromYaml` functions for YAML serialization and deserialization. These fill the gap left by Sprig v3.3.0, which removed its YAML functions.
+
+### Step 1: Create the Solution File
+
+Create a file called `template-yaml.yaml`:
+
+```yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: template-yaml
+  version: 1.0.0
+
+spec:
+  resolvers:
+    config:
+      type: any
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                name: my-service
+                port: 8080
+                tags:
+                  env: production
+                  team: platform
+
+    yamlOutput:
+      description: Encode data as YAML
+      type: string
+      dependsOn: [config]
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: yaml-gen
+              template: |
+                {{ toYaml .config }}
+
+    roundTrip:
+      description: Parse YAML and access fields
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: yaml-roundtrip
+              template: |
+                {{- $parsed := fromYaml "name: myapp\nport: 8080" -}}
+                name={{ $parsed.name }}, port={{ $parsed.port }}
+```
+
+### Step 2: Run It
+
+```bash
+scafctl run resolver -f template-yaml.yaml -e _.yamlOutput -o yaml --hide-execution
+```
+
+### Step 3: Check the Output
+
+```yaml
+name: my-service
+port: 8080
+tags:
+    env: production
+    team: platform
+```
+
+### Available YAML Functions
+
+| Function | Description |
+|----------|-------------|
+| `toYaml` | Encodes a value as a YAML string |
+| `fromYaml` | Decodes a YAML string into a `map[string]any` |
+| `mustToYaml` | Same as `toYaml` (errors propagate in Go templates) |
+| `mustFromYaml` | Same as `fromYaml` (errors propagate in Go templates) |
+
+### What You Learned
+
+- **`toYaml`** — Encodes any Go value (maps, lists, structs, primitives) as YAML.
+- **`fromYaml`** — Parses a YAML string back into a map for field access.
+- **Round-trips** — Combine `toYaml` and `fromYaml` for data transformation pipelines.
+- **`must*` variants** — Exist for Helm naming convention compatibility; behavior is identical in Go templates.
+
+---
+
+## Discovering Available Functions
+
+scafctl provides tools to explore all available Go template functions — both Sprig and custom.
+
+### Using the CLI
+
+List all available functions:
+
+```bash
+scafctl get go-template-functions
+```
+
+Filter to custom functions only:
+
+```bash
+scafctl get go-template-functions --custom
+```
+
+Filter to Sprig functions only:
+
+```bash
+scafctl get go-template-functions --sprig
+```
+
+Get details for a specific function:
+
+```bash
+scafctl get go-template-functions toHcl
+```
+
+Output as JSON:
+
+```bash
+scafctl get go-template-functions -o json
+```
+
+### Using the MCP Server
+
+If you use an AI agent with the scafctl MCP server, you can ask:
+
+> **You:** "What Go template functions are available for data formatting?"
+
+The AI calls `list_go_template_functions` and returns a curated list of matching functions with descriptions and examples.
+
+### What You Learned
+
+- **CLI discovery** — `scafctl get go-template-functions` lists all available functions with `--custom`, `--sprig`, and `-o json` flags.
+- **MCP discovery** — The `list_go_template_functions` tool lets AI agents search and filter functions.
+- **Function detail** — Pass a function name as an argument to see its full description, signature, and examples.
+
+---
+
 ## Provider Reference
 
 For a quick reference of all `go-template` provider inputs:
@@ -1419,3 +1733,5 @@ For a quick reference of all `go-template` provider inputs:
 - [Snapshots Tutorial](snapshots-tutorial.md) — Capture and compare execution snapshots
 - [Actions Tutorial](actions-tutorial.md) — Use templates in action workflows
 - [Provider Reference](provider-reference.md) — Full `go-template` provider documentation
+- [Sprig Functions Reference](https://masterminds.github.io/sprig/) — Complete Sprig v3 function documentation
+- [MCP Server Tutorial](mcp-server-tutorial.md) — Use `list_go_template_functions` via AI agents

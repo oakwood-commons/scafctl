@@ -222,6 +222,79 @@ func TestIntegration_GetCelFunctionDetail(t *testing.T) {
 }
 
 // ============================================================================
+// Get Go Template Functions Tests
+// ============================================================================
+
+func TestIntegration_GetGoTemplateFunctions(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "go-template-functions")
+
+	assert.Equal(t, 0, exitCode)
+	// Should list both sprig and custom functions
+	assert.Contains(t, stdout, "upper")
+	assert.Contains(t, stdout, "toHcl")
+	assert.Contains(t, stdout, "toYaml")
+	assert.Contains(t, stdout, "fromYaml")
+}
+
+func TestIntegration_GetGoTemplateFunctionsCustom(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "go-template-functions", "--custom")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "toHcl")
+	assert.Contains(t, stdout, "toYaml")
+	assert.Contains(t, stdout, "fromYaml")
+	assert.Contains(t, stdout, "mustToYaml")
+	assert.Contains(t, stdout, "mustFromYaml")
+}
+
+func TestIntegration_GetGoTemplateFunctionsSprig(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "go-template-functions", "--sprig")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "upper")
+	assert.Contains(t, stdout, "lower")
+}
+
+func TestIntegration_GetGoTemplateFunctionsJSON(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "go-template-functions", "-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "\"name\"")
+	assert.Contains(t, stdout, "\"custom\"")
+}
+
+func TestIntegration_GetGoTemplateFunctionsQuiet(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "go-template-functions", "-o", "quiet")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "toHcl")
+	assert.Contains(t, stdout, "toYaml")
+	assert.Contains(t, stdout, "fromYaml")
+}
+
+func TestIntegration_GetGoTemplateFunctionDetail(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "go-template-functions", "toHcl")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "toHcl")
+}
+
+func TestIntegration_GetGoTemplateFunctionDetailToYaml(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "go-template-functions", "toYaml")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "toYaml")
+	assert.Contains(t, stdout, "YAML")
+}
+
+// ============================================================================
 // Explain Schema Tests
 // ============================================================================
 

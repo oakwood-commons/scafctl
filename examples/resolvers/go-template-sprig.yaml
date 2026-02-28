@@ -1,0 +1,323 @@
+# Go Template Sprig Functions Example
+# Demonstrates Sprig v3 utility functions available in Go templates.
+# Each resolver showcases a different Sprig function category.
+#
+# Run: scafctl run resolver -f examples/resolvers/go-template-sprig.yaml -o json
+# Run: scafctl run resolver -f examples/resolvers/go-template-sprig.yaml -o yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: go-template-sprig-showcase
+  version: 1.0.0
+  description: Demonstrates Sprig v3 functions in Go templates
+
+spec:
+  resolvers:
+    # ─────────────────────────────────────────────
+    # STRING - String manipulation functions
+    # ─────────────────────────────────────────────
+
+    string_upper:
+      description: "upper - Convert to uppercase"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: string-upper
+              template: '{{ "hello world" | upper }}'
+
+    string_lower:
+      description: "lower - Convert to lowercase"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: string-lower
+              template: '{{ "HELLO WORLD" | lower }}'
+
+    string_title:
+      description: "title - Convert to title case"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: string-title
+              template: '{{ "hello world from scafctl" | title }}'
+
+    string_camelcase:
+      description: "camelcase - Convert to camelCase"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: string-camel
+              template: '{{ "my-app-service" | camelcase }}'
+
+    string_snakecase:
+      description: "snakecase - Convert to snake_case"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: string-snake
+              template: '{{ "MyAppService" | snakecase }}'
+
+    string_kebabcase:
+      description: "kebabcase - Convert to kebab-case"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: string-kebab
+              template: '{{ "MyAppService" | kebabcase }}'
+
+    string_trunc:
+      description: "trunc - Truncate a string"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: string-trunc
+              template: '{{ "Hello, World!" | trunc 5 }}'
+
+    string_replace:
+      description: "replace - Replace occurrences"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: string-replace
+              template: '{{ "hello-world-app" | replace "-" "_" }}'
+
+    string_repeat:
+      description: "repeat - Repeat a string N times"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: string-repeat
+              template: '{{ "ab" | repeat 3 }}'
+
+    string_trim:
+      description: "trim / trimPrefix / trimSuffix"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: string-trim
+              template: '{{ "  hello  " | trim }}-{{ "hello-world" | trimPrefix "hello-" }}-{{ "app.yaml" | trimSuffix ".yaml" }}'
+
+    # ─────────────────────────────────────────────
+    # DICT - Dictionary/map operations
+    # ─────────────────────────────────────────────
+
+    dict_create:
+      description: "dict - Create a dictionary"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: dict-create
+              template: |
+                {{- $d := dict "name" "Alice" "role" "admin" -}}
+                name={{ $d.name }}, role={{ $d.role }}
+
+    dict_merge:
+      description: "merge - Merge dictionaries (first wins)"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: dict-merge
+              template: |
+                {{- $defaults := dict "port" 3000 "debug" false -}}
+                {{- $overrides := dict "port" 8080 "tls" true -}}
+                {{- $merged := merge $overrides $defaults -}}
+                port={{ $merged.port }}, tls={{ $merged.tls }}, debug={{ $merged.debug }}
+
+    dict_keys:
+      description: "keys - Get dictionary keys"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: dict-keys
+              template: |
+                {{- $d := dict "c" 3 "a" 1 "b" 2 -}}
+                {{- range $k := keys $d | sortAlpha -}}{{ $k }} {{ end }}
+
+    dict_hasKey:
+      description: "hasKey - Check if key exists"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: dict-haskey
+              template: |
+                {{- $d := dict "name" "Alice" -}}
+                has_name={{ hasKey $d "name" }}, has_age={{ hasKey $d "age" }}
+
+    # ─────────────────────────────────────────────
+    # LIST - List operations
+    # ─────────────────────────────────────────────
+
+    list_create:
+      description: "list - Create a list"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: list-create
+              template: |
+                {{- $l := list "alpha" "beta" "gamma" -}}
+                {{- range $l }}{{ . }} {{ end }}
+
+    list_append:
+      description: "append - Append to list"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: list-append
+              template: |
+                {{- $l := list "a" "b" -}}
+                {{- $l = append $l "c" -}}
+                {{- range $l }}{{ . }} {{ end }}
+
+    list_has:
+      description: "has - Check if list contains value"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: list-has
+              template: |
+                {{- $l := list "dev" "staging" "prod" -}}
+                has_prod={{ has "prod" $l }}, has_qa={{ has "qa" $l }}
+
+    list_without:
+      description: "without - Remove items from list"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: list-without
+              template: |
+                {{- $l := list "a" "b" "c" "d" -}}
+                {{- range without $l "b" "d" }}{{ . }} {{ end }}
+
+    list_uniq:
+      description: "uniq - Deduplicate list"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: list-uniq
+              template: |
+                {{- $l := list "a" "b" "a" "c" "b" -}}
+                {{- range uniq $l }}{{ . }} {{ end }}
+
+    # ─────────────────────────────────────────────
+    # MATH - Numeric operations
+    # ─────────────────────────────────────────────
+
+    math_add:
+      description: "add / sub / mul / div - Basic arithmetic"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: math-ops
+              template: 'add={{ add 10 5 }}, sub={{ sub 10 5 }}, mul={{ mul 3 4 }}, div={{ div 20 4 }}'
+
+    math_max_min:
+      description: "max / min - Find extremes"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: math-minmax
+              template: 'max={{ max 10 3 7 }}, min={{ min 10 3 7 }}'
+
+    # ─────────────────────────────────────────────
+    # DEFAULT - Default value handling
+    # ─────────────────────────────────────────────
+
+    default_value:
+      description: "default - Provide fallback values"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: default-val
+              template: |
+                {{- $empty := "" -}}
+                {{- $present := "hello" -}}
+                empty={{ $empty | default "fallback" }}, present={{ $present | default "fallback" }}
+
+    # ─────────────────────────────────────────────
+    # ENCODING - Base64 and other encoding
+    # ─────────────────────────────────────────────
+
+    encoding_base64:
+      description: "b64enc / b64dec - Base64 encode/decode"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: encoding-b64
+              template: |
+                {{- $encoded := "Hello, World!" | b64enc -}}
+                encoded={{ $encoded }}, decoded={{ $encoded | b64dec }}
+
+    # ─────────────────────────────────────────────
+    # TYPE CONVERSION - Type casting
+    # ─────────────────────────────────────────────
+
+    type_conversion:
+      description: "toString / toInt / toBool - Type conversions"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: type-conv
+              template: 'int={{ "42" | atoi }}, string={{ 42 | toString }}'
+
+    # ─────────────────────────────────────────────
+    # CHAINED - Combining multiple Sprig functions
+    # ─────────────────────────────────────────────
+
+    chained_pipeline:
+      description: "Chaining multiple Sprig functions in a pipeline"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: chained
+              template: '{{ "  My App Service  " | trim | kebabcase | lower }}'

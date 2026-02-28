@@ -13,7 +13,8 @@ The `eval` commands are developer tools for quick iteration:
 
 - **`eval cel`** — Evaluate CEL expressions with inline or file-based data
 - **`eval template`** — Render Go templates against JSON/YAML data
-- **`eval validate`** — Validate a solution file against the schema and lint rules
+
+For solution file validation, use the separate **`scafctl lint`** command (covered in [Section 3](#3-validating-solution-files-with-scafctl-lint) below).
 
 ```
 ┌──────────────┐         ┌──────────────┐         ┌──────────────┐
@@ -153,55 +154,91 @@ scafctl eval template --template-file config.tmpl \
 
 > **Tip:** Use `eval template` to preview scaffold/render actions before running the full solution workflow.
 
-## 3. Validating Solution Files
+## 3. Validating Solution Files with `scafctl lint`
+
+While `eval cel` and `eval template` test individual expressions and templates, use the **`scafctl lint`** command to validate entire solution files against the schema and lint rules.
+
+> **Note:** `scafctl lint` is a separate top-level command, not part of `eval`. It's included here because validation is a natural part of the expression development workflow.
 
 ### Basic Validation
 
 Check a solution file for schema errors and lint violations:
 
+{{< tabs "eval-lint-basic" >}}
+{{< tab "Bash" >}}
 ```bash
-scafctl eval validate -f solution.yaml
+scafctl lint -f solution.yaml
 ```
-
-### JSON Output
+{{< /tab >}}
+{{< tab "PowerShell" >}}
+```powershell
+scafctl lint -f solution.yaml
+```
+{{< /tab >}}
+{{< /tabs >}}
 
 Get structured validation results:
 
+{{< tabs "eval-lint-json" >}}
+{{< tab "Bash" >}}
 ```bash
-scafctl eval validate -f solution.yaml -o json
+scafctl lint -f solution.yaml -o json
 ```
+{{< /tab >}}
+{{< tab "PowerShell" >}}
+```powershell
+scafctl lint -f solution.yaml -o json
+```
+{{< /tab >}}
+{{< /tabs >}}
 
-This returns:
+### Filter by Severity
 
-```json
-{
-  "file": "solution.yaml",
-  "errorCount": 0,
-  "warnCount": 1,
-  "infoCount": 0,
-  "findings": [
-    {
-      "rule": "missing-description",
-      "severity": "warning",
-      "message": "Solution metadata should include a description",
-      "location": "metadata"
-    }
-  ]
-}
+Only show findings at or above a minimum severity level:
+
+```bash
+# Show only warnings and errors (skip info)
+scafctl lint -f solution.yaml --severity warning
 ```
 
 ### Quick Validation in Scripts
 
-Use quiet mode for CI/CD pipelines:
+Use quiet mode for CI/CD pipelines — returns exit code only (0 = clean, non-zero = errors):
 
+{{< tabs "eval-lint-quiet" >}}
+{{< tab "Bash" >}}
 ```bash
-if scafctl eval validate -f solution.yaml -o quiet; then
+if scafctl lint -f solution.yaml -o quiet; then
   echo "Valid!"
 else
   echo "Validation failed"
   exit 1
 fi
 ```
+{{< /tab >}}
+{{< tab "PowerShell" >}}
+```powershell
+scafctl lint -f solution.yaml -o quiet
+if ($LASTEXITCODE -eq 0) { Write-Host "Valid!" } else { Write-Host "Validation failed"; exit 1 }
+```
+{{< /tab >}}
+{{< /tabs >}}
+
+### Exploring Lint Rules
+
+List all available lint rules:
+
+```bash
+scafctl lint rules
+```
+
+Get a detailed explanation of a specific rule:
+
+```bash
+scafctl lint explain <rule-id>
+```
+
+See the [Linting Tutorial](linting-tutorial.md) for a deep dive into lint rules and custom validation workflows.
 
 ## 4. Common Workflows
 
@@ -236,10 +273,19 @@ scafctl eval template --template-file deploy.tmpl --data-file snapshot.json
 
 Add to your pre-commit hooks or CI pipeline:
 
+{{< tabs "eval-precommit" >}}
+{{< tab "Bash" >}}
 ```bash
 # Validate all solution files in a directory
-find . -name 'solution.yaml' -exec scafctl eval validate -f {} -o quiet \;
+find . -name 'solution.yaml' -exec scafctl lint -f {} -o quiet \;
 ```
+{{< /tab >}}
+{{< tab "PowerShell" >}}
+```powershell
+Get-ChildItem -Recurse -Filter 'solution.yaml' | ForEach-Object { scafctl lint -f $_.FullName -o quiet }
+```
+{{< /tab >}}
+{{< /tabs >}}
 
 ## Next Steps
 
