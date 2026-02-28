@@ -1,0 +1,289 @@
+# Go Template Extension Functions Example
+# Demonstrates custom Go template extension functions provided by scafctl.
+# Includes toHcl for HCL generation and toYaml/fromYaml/mustToYaml/mustFromYaml
+# for YAML serialization (these were removed from Sprig v3.3.0).
+#
+# The `data` input merges its fields into the root template context.
+# To pass a map to toHcl/toYaml, nest it under a named key (e.g., data.config → .config).
+#
+# Run: scafctl run resolver -f examples/resolvers/go-template-extensions.yaml -o json
+# Run: scafctl run resolver -f examples/resolvers/go-template-extensions.yaml -o yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: go-template-extensions-showcase
+  version: 1.0.0
+  description: Demonstrates custom Go template extension functions
+
+spec:
+  resolvers:
+    # ─────────────────────────────────────────────
+    # toHcl - Convert data to HCL format
+    # ─────────────────────────────────────────────
+
+    tohcl_simple_map:
+      description: "toHcl - Simple map to HCL"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: tohcl-simple
+              template: |
+                {{ toHcl .config }}
+              data:
+                config:
+                  name: my-service
+                  port: 8080
+                  debug: false
+
+    tohcl_nested_map:
+      description: "toHcl - Nested map to HCL"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: tohcl-nested
+              template: |
+                {{ toHcl .config }}
+              data:
+                config:
+                  name: my-bucket
+                  region: us-east-1
+                  tags:
+                    environment: production
+                    team: platform
+                    project: scafctl
+
+    tohcl_with_list:
+      description: "toHcl - Map with lists"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: tohcl-list
+              template: |
+                {{ toHcl .config }}
+              data:
+                config:
+                  name: my-app
+                  allowed_origins:
+                    - https://example.com
+                    - https://api.example.com
+
+    tohcl_terraform_resource:
+      description: "toHcl - Generate a Terraform resource block"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: tohcl-terraform
+              template: |
+                resource "aws_s3_bucket" "main" {
+                  {{ toHcl .config | indent 2 }}
+                }
+              data:
+                config:
+                  bucket: my-app-bucket
+                  acl: private
+                  versioning:
+                    enabled: true
+                  tags:
+                    Name: my-app-bucket
+                    Environment: production
+
+    tohcl_terraform_variable:
+      description: "toHcl - Generate Terraform variable blocks"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: tohcl-vars
+              template: |
+                {{- range $name, $var := .variables }}
+                variable "{{ $name }}" {
+                  {{ toHcl $var | indent 2 }}
+                }
+                {{ end }}
+              data:
+                variables:
+                  project_name:
+                    description: The name of the project
+                    type: string
+                    default: my-project
+                  environment:
+                    description: The deployment environment
+                    type: string
+                    default: development
+
+    tohcl_complex:
+      description: "toHcl - Complex nested structure"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: tohcl-complex
+              template: |
+                {{ toHcl .config }}
+              data:
+                config:
+                  ingress:
+                    from_port: 443
+                    to_port: 443
+                    protocol: tcp
+                    cidr_blocks:
+                      - 10.0.0.0/8
+                      - 172.16.0.0/12
+                    description: Allow HTTPS
+                  egress:
+                    from_port: 0
+                    to_port: 0
+                    protocol: "-1"
+                    cidr_blocks:
+                      - 0.0.0.0/0
+
+    # ─────────────────────────────────────────────
+    # COMBINED - toHcl with Sprig functions
+    # ─────────────────────────────────────────────
+
+    combined_tohcl_sprig:
+      description: "Combining toHcl with Sprig indent and upper"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: combined
+              template: |
+                # Generated by scafctl
+                # Project: {{ .project | upper }}
+
+                resource "aws_instance" "web" {
+                  {{ toHcl .config | indent 2 }}
+                }
+              data:
+                project: my-service
+                config:
+                  ami: ami-0c55b159cbfafe1f0
+                  instance_type: t3.micro
+                  tags:
+                    Name: web-server
+                    ManagedBy: scafctl
+
+    # ─────────────────────────────────────────────
+    # toYaml - Encode data as YAML
+    # ─────────────────────────────────────────────
+
+    toyaml_simple_map:
+      description: "toYaml - Simple map to YAML"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: toyaml-simple
+              template: |
+                {{ toYaml .config }}
+              data:
+                config:
+                  name: my-service
+                  port: 8080
+                  debug: false
+
+    toyaml_nested_map:
+      description: "toYaml - Nested map to YAML"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: toyaml-nested
+              template: |
+                {{ toYaml .config }}
+              data:
+                config:
+                  name: my-app
+                  server:
+                    host: localhost
+                    port: 443
+                  tags:
+                    environment: production
+                    team: platform
+
+    toyaml_with_indent:
+      description: "toYaml - Combined with Sprig indent"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: toyaml-indent
+              template: |
+                metadata:
+                  labels:
+                    {{ toYaml .labels | indent 4 }}
+              data:
+                labels:
+                  app: my-service
+                  env: production
+                  team: platform
+
+    # ─────────────────────────────────────────────
+    # fromYaml - Parse YAML strings
+    # ─────────────────────────────────────────────
+
+    fromyaml_parse_and_access:
+      description: "fromYaml - Parse YAML and access fields"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: fromyaml-access
+              template: |
+                {{- $config := fromYaml "name: myapp\nport: 8080\nenabled: true" -}}
+                App: {{ $config.name }}, Port: {{ $config.port }}, Enabled: {{ $config.enabled }}
+
+    fromyaml_roundtrip:
+      description: "fromYaml - Round-trip with toYaml"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: fromyaml-roundtrip
+              template: |
+                {{- $original := dict "app" "scafctl" "version" "2.0" -}}
+                {{- $yaml := toYaml $original -}}
+                {{- $decoded := fromYaml $yaml -}}
+                Decoded app={{ $decoded.app }}, version={{ $decoded.version }}
+
+    # ─────────────────────────────────────────────
+    # COMBINED - YAML and HCL together
+    # ─────────────────────────────────────────────
+
+    combined_yaml_hcl:
+      description: "Combining toYaml and toHcl with same data"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: combined-formats
+              template: |
+                # YAML format:
+                {{ toYaml .config }}
+
+                # HCL format:
+                {{ toHcl .config }}
+              data:
+                config:
+                  name: my-service
+                  port: 8080
+                  debug: false

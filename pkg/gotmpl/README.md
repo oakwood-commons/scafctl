@@ -12,6 +12,8 @@ The `gotmpl` package provides a service-oriented wrapper around Go's standard `t
 - **Context Integration**: Full context support for logging and cancellation
 - **Structured Logging**: Detailed logging at multiple verbosity levels
 - **Reference Extraction**: Extract data field references from templates for dependency analysis
+- **Sprig Functions**: 100+ built-in utility functions via [Masterminds/sprig](https://masterminds.github.io/sprig/)
+- **Extension System**: Pluggable architecture for custom Go template functions (see `ext/` sub-packages)
 
 ## Installation
 
@@ -510,6 +512,196 @@ For high-performance scenarios:
 - Minimize replacements (only protect necessary strings)
 - Disable verbose logging in production
 - Consider caching parsed templates externally if needed
+
+## Extensions
+
+The `gotmpl/ext` package provides an extension system for registering additional template functions, mirroring the pattern in `pkg/celexp/ext`. Extensions are automatically available to all template executions via `NewService()` and `Execute()`.
+
+### Built-in Extensions
+
+#### Sprig Functions
+
+Over 100 utility functions from [Masterminds/sprig v3](https://masterminds.github.io/sprig/) are automatically available in all templates:
+
+```go
+// String functions
+{{ "hello" | upper }}        // "HELLO"
+{{ "HELLO" | lower }}        // "hello"
+{{ "  hello  " | trim }}     // "hello"
+{{ "hello" | repeat 3 }}     // "hellohellohello"
+
+// Data format functions
+{{ dict "key" "value" | toJson }}           // {"key":"value"}
+{{ dict "key" "value" | toPrettyJson }}     // formatted JSON
+
+// Math functions
+{{ add 1 2 }}                // 3
+{{ max 5 3 }}                // 5
+
+// Date functions
+{{ now | date "2006-01-02" }}  // today's date
+
+// List functions
+{{ list 1 2 3 | join "," }}    // "1,2,3"
+```
+
+See the [sprig documentation](https://masterminds.github.io/sprig/) for the full list.
+
+#### Custom Extensions
+
+##### toHcl
+
+Converts a Go object into HCL (HashiCorp Configuration Language) format:
+
+```go
+{{ dict "name" "myapp" "port" 8080 | toHcl }}
+// Output:
+// name = "myapp"
+// port = 8080
+
+// Nested objects become HCL blocks:
+{{ dict "server" (dict "host" "localhost" "port" 443) | toHcl }}
+// Output:
+// server {
+//   host = "localhost"
+//   port = 443
+// }
+```
+
+##### toYaml
+
+Encodes a Go value as a YAML string:
+
+```go
+{{ dict "name" "myapp" "port" 8080 | toYaml }}
+// Output:
+// name: myapp
+// port: 8080
+
+// Combined with indent for nested YAML:
+{{ .config | toYaml | indent 4 }}
+```
+
+##### fromYaml
+
+Decodes a YAML string into a `map[string]any`:
+
+```go
+{{ $parsed := fromYaml "name: myapp\nport: 8080" }}
+{{ $parsed.name }}  // "myapp"
+{{ $parsed.port }}  // 8080
+```
+
+##### mustToYaml / mustFromYaml
+
+Identical to `toYaml` and `fromYaml` respectively. In Go templates, errors always propagate, so behavior is the same. These exist for Helm naming convention compatibility.
+
+### Discovering Available Functions
+
+#### CLI
+
+```bash
+# List all available functions
+scafctl get go-template-functions
+
+# List only custom (non-sprig) functions
+scafctl get go-template-functions --custom
+
+# List only sprig functions
+scafctl get go-template-functions --sprig
+
+# Get details for a specific function
+scafctl get go-template-functions toHcl
+
+# Output as JSON
+scafctl get go-template-functions -o json
+```
+
+#### MCP Server
+
+The `list_go_template_functions` MCP tool exposes the same information:
+
+| Parameter     | Description                      |
+|---------------|----------------------------------|
+| `name`        | Filter by function name (substring match) |
+| `custom_only` | Show only custom extensions      |
+| `sprig_only`  | Show only sprig functions        |
+
+### Adding New Extensions
+
+To add a new custom template function:
+
+1. **Create a sub-package** under `pkg/gotmpl/ext/` (e.g., `ext/myfunc/`):
+
+```go
+package myfunc
+
+import (
+    "github.com/oakwood-commons/scafctl/pkg/gotmpl"
+    "text/template"
+)
+
+func MyFunc(input string) (string, error) {
+    // implementation
+    return result, nil
+}
+
+func MyFuncDef() gotmpl.ExtFunction {
+    return gotmpl.ExtFunction{
+        Name:        "myFunc",
+        Description: "Describes what myFunc does",
+        Custom:      true,
+        Links: []string{
+            "https://example.com/docs",
+        },
+        Examples: []gotmpl.Example{
+            {
+                Description: "Basic usage",
+                Template:    `{{ "input" | myFunc }}`,
+            },
+        },
+        Func: template.FuncMap{
+            "myFunc": MyFunc,
+        },
+    }
+}
+```
+
+2. **Register in the extension registry** (`pkg/gotmpl/ext/ext.go`):
+
+```go
+func Custom() gotmpl.ExtFunctionList {
+    return gotmpl.ExtFunctionList{
+        hcl.ToHclFunc(),
+        extyaml.ToYamlFunc(),
+        extyaml.FromYamlFunc(),
+        extyaml.MustToYamlFunc(),
+        extyaml.MustFromYamlFunc(),
+        myfunc.MyFuncDef(), // Add here
+    }
+}
+```
+
+3. **Add tests** in `ext/myfunc/myfunc_test.go`
+
+The function will be automatically available in all templates, the MCP server, and the CLI.
+
+### Architecture
+
+Extensions use a factory pattern to avoid import cycles:
+
+```
+cmd/scafctl/scafctl.go
+  └─ gotmpl.SetExtensionFuncMapFactory(gotmplext.AllFuncMap)  // Wire at init
+
+pkg/gotmpl/gotmpl.go
+  └─ NewService() calls factory → gets merged FuncMap
+  └─ Execute() calls NewService(nil) → extensions included automatically
+
+pkg/gotmpl/ext/ext.go
+  └─ All() = Sprig() + Custom()
+  └─ AllFuncMap() merges all into template.FuncMap
+```
 
 ## Related Packages
 

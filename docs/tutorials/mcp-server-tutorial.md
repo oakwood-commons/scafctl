@@ -62,6 +62,7 @@ You should see JSON output listing all available tools:
     { "name": "lint_solution", "description": "Validate a solution file..." },
     { "name": "list_auth_handlers", "description": "List all registered auth handlers..." },
     { "name": "list_cel_functions", "description": "List all available CEL functions..." },
+    { "name": "list_go_template_functions", "description": "List all available Go template extension functions..." },
     { "name": "list_examples", "description": "List available scafctl example files..." },
     { "name": "list_providers", "description": "List all available providers..." },
     { "name": "list_solutions", "description": "List available solutions from the local catalog..." },
@@ -442,6 +443,42 @@ Here are the custom scafctl CEL functions for string manipulation:
 Use `evaluate_cel` to test any of these interactively.
 ```
 
+### Discover Go Template Functions
+
+No files needed.
+
+> **You:** "What Go template functions are available for string manipulation?"
+
+The AI calls `list_go_template_functions` and returns something like:
+
+```
+Here are some Go template functions for string manipulation:
+
+**Sprig Functions:**
+- **upper** — Convert to uppercase
+- **lower** — Convert to lowercase
+- **title** — Convert to title case
+- **trim** / **trimAll** / **trimPrefix** / **trimSuffix** — Trim whitespace or characters
+- **replace** — Replace occurrences of a substring
+- **camelcase** / **snakecase** / **kebabcase** — Case conversions
+- **contains** / **hasPrefix** / **hasSuffix** — String tests
+
+**Custom Functions:**
+- **toHcl** — Convert a Go object to HCL format
+- **toYaml** — Encode a Go value as a YAML string
+- **fromYaml** — Decode a YAML string into a map
+- **mustToYaml** — Same as toYaml (errors propagate in Go templates)
+- **mustFromYaml** — Same as fromYaml (errors propagate in Go templates)
+
+Use `evaluate_go_template` to test any of these interactively.
+```
+
+You can also filter to specific categories:
+
+> **You:** "List only the custom Go template functions"
+
+The AI calls `list_go_template_functions` with `custom_only: true` and returns the custom scafctl functions.
+
 ### Browse the Catalog
 
 This tool queries your local catalog. If you haven't added solutions to the catalog yet, the result will be empty.
@@ -615,6 +652,7 @@ The AI calls `get_example` with `path: "solutions/email-notifier/solution.yaml"`
 | `inspect_solution` | Full solution metadata — resolvers, actions, tags, links, maintainers |
 | `lint_solution` | Validate a solution YAML file and return structured findings |
 | `list_cel_functions` | List CEL functions — custom scafctl functions, built-in, or by name |
+| `list_go_template_functions` | List Go template extension functions — Sprig, custom, or by name |
 | `list_examples` | List available scafctl example files with category filtering (solutions, resolvers, actions, providers, etc.) |
 | `list_providers` | List all providers with capability and category filtering |
 | `list_solutions` | List solutions from the local catalog with name filtering |

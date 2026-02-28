@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
@@ -78,26 +77,10 @@ func (s *Server) handleListCELFunctions(_ context.Context, request mcp.CallToolR
 		functions = ext.BuiltIn()
 	}
 
-	// If searching by name, filter
-	if name != "" {
-		filtered := functions[:0:0]
-		nameLower := strings.ToLower(name)
-		for _, f := range functions {
-			if strings.Contains(strings.ToLower(f.Name), nameLower) {
-				filtered = append(filtered, f)
-			}
-		}
-		if len(filtered) == 0 {
-			return newStructuredError(ErrCodeNotFound, fmt.Sprintf("no CEL function matching %q found", name),
-				WithField("name"),
-				WithSuggestion("Use list_cel_functions without a name filter to see all available functions"),
-				WithRelatedTools("list_cel_functions"),
-			), nil
-		}
-		functions = filtered
-	}
-
-	return mcp.NewToolResultJSON(functions)
+	return filterAndReturnNamedFunctions(
+		functions, name,
+		"CEL function", "list_cel_functions",
+	)
 }
 
 // handleEvaluateCEL evaluates a CEL expression against provided data.

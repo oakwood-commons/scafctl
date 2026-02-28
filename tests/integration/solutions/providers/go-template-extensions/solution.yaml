@@ -1,0 +1,670 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-go-template-extensions
+  version: 1.0.0
+  description: |
+    Functional tests for Go template extension functions.
+    Verifies Sprig v3 functions and custom scafctl extensions (toHcl, toYaml, fromYaml, mustToYaml, mustFromYaml).
+
+spec:
+  resolvers:
+    # ─────────────────────────────────────────────
+    # Sprig String Functions
+    # ─────────────────────────────────────────────
+
+    sprigUpper:
+      description: Sprig upper function
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: sprig-upper
+              template: '{{ "hello" | upper }}'
+
+    sprigLower:
+      description: Sprig lower function
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: sprig-lower
+              template: '{{ "HELLO" | lower }}'
+
+    sprigTitle:
+      description: Sprig title function
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: sprig-title
+              template: '{{ "hello world" | title }}'
+
+    sprigCamelcase:
+      description: Sprig camelcase function
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: sprig-camel
+              template: '{{ "my-app-service" | camelcase }}'
+
+    sprigSnakecase:
+      description: Sprig snakecase function
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: sprig-snake
+              template: '{{ "MyApp" | snakecase }}'
+
+    sprigKebabcase:
+      description: Sprig kebabcase function
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: sprig-kebab
+              template: '{{ "MyApp" | kebabcase }}'
+
+    sprigTrim:
+      description: Sprig trim function
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: sprig-trim
+              template: '{{ "  hello  " | trim }}'
+
+    sprigReplace:
+      description: Sprig replace function
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: sprig-replace
+              template: '{{ "hello-world" | replace "-" "_" }}'
+
+    sprigTrunc:
+      description: Sprig trunc function
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: sprig-trunc
+              template: '{{ "Hello, World!" | trunc 5 }}'
+
+    sprigRepeat:
+      description: Sprig repeat function
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: sprig-repeat
+              template: '{{ "ab" | repeat 3 }}'
+
+    # ─────────────────────────────────────────────
+    # Sprig Dict Functions
+    # ─────────────────────────────────────────────
+
+    sprigDict:
+      description: Sprig dict creation
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: sprig-dict
+              template: |
+                {{- $d := dict "name" "Alice" "role" "admin" -}}
+                name={{ $d.name }}, role={{ $d.role }}
+
+    sprigMerge:
+      description: Sprig merge function
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: sprig-merge
+              template: |
+                {{- $a := dict "port" 3000 "debug" false -}}
+                {{- $b := dict "port" 8080 "tls" true -}}
+                {{- $m := merge $b $a -}}
+                port={{ $m.port }}, tls={{ $m.tls }}, debug={{ $m.debug }}
+
+    sprigHasKey:
+      description: Sprig hasKey function
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: sprig-haskey
+              template: |
+                {{- $d := dict "name" "Alice" -}}
+                has_name={{ hasKey $d "name" }}, has_age={{ hasKey $d "age" }}
+
+    # ─────────────────────────────────────────────
+    # Sprig List Functions
+    # ─────────────────────────────────────────────
+
+    sprigList:
+      description: Sprig list creation
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: sprig-list
+              template: |
+                {{- $l := list "a" "b" "c" -}}
+                {{ $l | join "," }}
+
+    sprigHas:
+      description: Sprig has function
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: sprig-has
+              template: |
+                {{- $l := list "dev" "staging" "prod" -}}
+                has_prod={{ has "prod" $l }}, has_qa={{ has "qa" $l }}
+
+    # ─────────────────────────────────────────────
+    # Sprig Math Functions
+    # ─────────────────────────────────────────────
+
+    sprigMath:
+      description: Sprig arithmetic functions
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: sprig-math
+              template: 'add={{ add 10 5 }}, sub={{ sub 10 5 }}, mul={{ mul 3 4 }}'
+
+    # ─────────────────────────────────────────────
+    # Sprig Default and Encoding
+    # ─────────────────────────────────────────────
+
+    sprigDefault:
+      description: Sprig default function
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: sprig-default
+              template: '{{ "" | default "fallback" }}'
+
+    sprigBase64:
+      description: Sprig base64 encode/decode
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: sprig-b64
+              template: '{{ "hello" | b64enc | b64dec }}'
+
+    # ─────────────────────────────────────────────
+    # Custom toHcl Function
+    # ─────────────────────────────────────────────
+
+    toHclSimpleData:
+      description: Data for simple toHcl test
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                name: my-service
+                port: 8080
+
+    toHclSimple:
+      description: toHcl with simple map
+      dependsOn: [toHclSimpleData]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              name: tohcl-simple
+              template: '{{ toHcl .toHclSimpleData }}'
+
+    toHclNestedData:
+      description: Data for nested toHcl test
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                name: my-bucket
+                tags:
+                  env: production
+                  team: platform
+
+    toHclNested:
+      description: toHcl with nested map
+      dependsOn: [toHclNestedData]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              name: tohcl-nested
+              template: '{{ toHcl .toHclNestedData }}'
+
+    toHclListData:
+      description: Data for list toHcl test
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                name: my-app
+                ports:
+                  - 80
+                  - 443
+
+    toHclList:
+      description: toHcl with list values
+      dependsOn: [toHclListData]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              name: tohcl-list
+              template: '{{ toHcl .toHclListData }}'
+
+    toHclIndentData:
+      description: Data for indent toHcl test
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                ami: ami-12345678
+                instance_type: t3.micro
+
+    toHclWithIndent:
+      description: toHcl combined with Sprig indent
+      dependsOn: [toHclIndentData]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              name: tohcl-indent
+              template: |
+                resource "aws_instance" "web" {
+                  {{ toHcl .toHclIndentData | indent 2 }}
+                }
+
+    # ─────────────────────────────────────────────
+    # Custom YAML Functions (toYaml, fromYaml, mustToYaml, mustFromYaml)
+    # ─────────────────────────────────────────────
+
+    toYamlData:
+      description: Data for toYaml test
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                name: my-service
+                port: 8080
+                debug: false
+
+    toYamlSimple:
+      description: toYaml with simple map
+      dependsOn: [toYamlData]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              name: toyaml-simple
+              template: '{{ toYaml .toYamlData }}'
+
+    toYamlNestedData:
+      description: Data for nested toYaml test
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                name: my-app
+                server:
+                  host: localhost
+                  port: 443
+
+    toYamlNested:
+      description: toYaml with nested map
+      dependsOn: [toYamlNestedData]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              name: toyaml-nested
+              template: '{{ toYaml .toYamlNestedData }}'
+
+    fromYamlTest:
+      description: fromYaml parsing and field access
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: fromyaml-basic
+              template: |
+                {{- $parsed := fromYaml "name: myapp\nport: 8080" -}}
+                name={{ $parsed.name }}, port={{ $parsed.port }}
+
+    mustToYamlData:
+      description: Data for mustToYaml test
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                env: production
+                replicas: 3
+
+    mustToYamlTest:
+      description: mustToYaml encoding
+      dependsOn: [mustToYamlData]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              name: musttoyaml-basic
+              template: '{{ mustToYaml .mustToYamlData }}'
+
+    mustFromYamlTest:
+      description: mustFromYaml parsing
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: mustfromyaml-basic
+              template: |
+                {{- $parsed := mustFromYaml "env: staging\nreplicas: 2" -}}
+                env={{ $parsed.env }}, replicas={{ $parsed.replicas }}
+
+    yamlRoundTrip:
+      description: YAML round-trip via toYaml and fromYaml
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: yaml-roundtrip
+              template: |
+                {{- $original := dict "app" "scafctl" "version" "1.0" -}}
+                {{- $yaml := toYaml $original -}}
+                {{- $decoded := fromYaml $yaml -}}
+                app={{ $decoded.app }}, version={{ $decoded.version }}
+
+  testing:
+    config:
+      skipBuiltins: true
+
+    cases:
+      _base:
+        description: Base template for go-template extension tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [provider, go-template, extensions]
+        assertions:
+          - expression: __exitCode == 0
+
+      # Sprig string tests
+      sprig-upper:
+        description: Verify Sprig upper
+        extends: [_base]
+        tags: [sprig, string]
+        assertions:
+          - expression: '__output.sprigUpper == "HELLO"'
+
+      sprig-lower:
+        description: Verify Sprig lower
+        extends: [_base]
+        tags: [sprig, string]
+        assertions:
+          - expression: '__output.sprigLower == "hello"'
+
+      sprig-title:
+        description: Verify Sprig title
+        extends: [_base]
+        tags: [sprig, string]
+        assertions:
+          - expression: '__output.sprigTitle == "Hello World"'
+
+      sprig-camelcase:
+        description: Verify Sprig camelcase
+        extends: [_base]
+        tags: [sprig, string]
+        assertions:
+          - expression: '__output.sprigCamelcase == "MyAppService"'
+
+      sprig-snakecase:
+        description: Verify Sprig snakecase
+        extends: [_base]
+        tags: [sprig, string]
+        assertions:
+          - expression: '__output.sprigSnakecase == "my_app"'
+
+      sprig-kebabcase:
+        description: Verify Sprig kebabcase
+        extends: [_base]
+        tags: [sprig, string]
+        assertions:
+          - expression: '__output.sprigKebabcase == "my-app"'
+
+      sprig-trim:
+        description: Verify Sprig trim
+        extends: [_base]
+        tags: [sprig, string]
+        assertions:
+          - expression: '__output.sprigTrim == "hello"'
+
+      sprig-replace:
+        description: Verify Sprig replace
+        extends: [_base]
+        tags: [sprig, string]
+        assertions:
+          - expression: '__output.sprigReplace == "hello_world"'
+
+      sprig-trunc:
+        description: Verify Sprig trunc
+        extends: [_base]
+        tags: [sprig, string]
+        assertions:
+          - expression: '__output.sprigTrunc == "Hello"'
+
+      sprig-repeat:
+        description: Verify Sprig repeat
+        extends: [_base]
+        tags: [sprig, string]
+        assertions:
+          - expression: '__output.sprigRepeat == "ababab"'
+
+      # Sprig dict tests
+      sprig-dict:
+        description: Verify Sprig dict creation
+        extends: [_base]
+        tags: [sprig, dict]
+        assertions:
+          - expression: '__output.sprigDict.contains("name=Alice")'
+          - expression: '__output.sprigDict.contains("role=admin")'
+
+      sprig-merge:
+        description: Verify Sprig merge
+        extends: [_base]
+        tags: [sprig, dict]
+        assertions:
+          - expression: '__output.sprigMerge.contains("port=8080")'
+          - expression: '__output.sprigMerge.contains("tls=true")'
+          - expression: '__output.sprigMerge.contains("debug=false")'
+
+      sprig-haskey:
+        description: Verify Sprig hasKey
+        extends: [_base]
+        tags: [sprig, dict]
+        assertions:
+          - expression: '__output.sprigHasKey.contains("has_name=true")'
+          - expression: '__output.sprigHasKey.contains("has_age=false")'
+
+      # Sprig list tests
+      sprig-list-join:
+        description: Verify Sprig list and join
+        extends: [_base]
+        tags: [sprig, list]
+        assertions:
+          - expression: '__output.sprigList.contains("a,b,c")'
+
+      sprig-has:
+        description: Verify Sprig has
+        extends: [_base]
+        tags: [sprig, list]
+        assertions:
+          - expression: '__output.sprigHas.contains("has_prod=true")'
+          - expression: '__output.sprigHas.contains("has_qa=false")'
+
+      # Sprig math tests
+      sprig-math:
+        description: Verify Sprig arithmetic
+        extends: [_base]
+        tags: [sprig, math]
+        assertions:
+          - expression: '__output.sprigMath.contains("add=15")'
+          - expression: '__output.sprigMath.contains("sub=5")'
+          - expression: '__output.sprigMath.contains("mul=12")'
+
+      # Sprig default and encoding tests
+      sprig-default:
+        description: Verify Sprig default
+        extends: [_base]
+        tags: [sprig]
+        assertions:
+          - expression: '__output.sprigDefault == "fallback"'
+
+      sprig-base64:
+        description: Verify Sprig base64 roundtrip
+        extends: [_base]
+        tags: [sprig, encoding]
+        assertions:
+          - expression: '__output.sprigBase64 == "hello"'
+
+      # Custom toHcl tests
+      tohcl-simple:
+        description: Verify toHcl with simple map
+        extends: [_base]
+        tags: [custom, toHcl]
+        assertions:
+          - expression: '__output.toHclSimple.contains("name")'
+          - expression: '__output.toHclSimple.contains("my-service")'
+          - expression: '__output.toHclSimple.contains("port")'
+
+      tohcl-nested:
+        description: Verify toHcl with nested map
+        extends: [_base]
+        tags: [custom, toHcl]
+        assertions:
+          - expression: '__output.toHclNested.contains("name")'
+          - expression: '__output.toHclNested.contains("tags")'
+          - expression: '__output.toHclNested.contains("production")'
+
+      tohcl-list:
+        description: Verify toHcl with list values
+        extends: [_base]
+        tags: [custom, toHcl]
+        assertions:
+          - expression: '__output.toHclList.contains("ports")'
+
+      tohcl-with-indent:
+        description: Verify toHcl with Sprig indent
+        extends: [_base]
+        tags: [custom, toHcl, sprig]
+        assertions:
+          - expression: '__output.toHclWithIndent.contains("resource")'
+          - expression: '__output.toHclWithIndent.contains("ami")'
+          - expression: '__output.toHclWithIndent.contains("instance_type")'
+
+      # Custom YAML function tests
+      toyaml-simple:
+        description: Verify toYaml with simple map
+        extends: [_base]
+        tags: [custom, toYaml]
+        assertions:
+          - expression: '__output.toYamlSimple.contains("name: my-service")'
+          - expression: '__output.toYamlSimple.contains("port: 8080")'
+          - expression: '__output.toYamlSimple.contains("debug: false")'
+
+      toyaml-nested:
+        description: Verify toYaml with nested map
+        extends: [_base]
+        tags: [custom, toYaml]
+        assertions:
+          - expression: '__output.toYamlNested.contains("name: my-app")'
+          - expression: '__output.toYamlNested.contains("server:")'
+          - expression: '__output.toYamlNested.contains("host: localhost")'
+
+      fromyaml-basic:
+        description: Verify fromYaml parsing and field access
+        extends: [_base]
+        tags: [custom, fromYaml]
+        assertions:
+          - expression: '__output.fromYamlTest.contains("name=myapp")'
+          - expression: '__output.fromYamlTest.contains("port=8080")'
+
+      musttoyaml-basic:
+        description: Verify mustToYaml encoding
+        extends: [_base]
+        tags: [custom, mustToYaml]
+        assertions:
+          - expression: '__output.mustToYamlTest.contains("env: production")'
+          - expression: '__output.mustToYamlTest.contains("replicas: 3")'
+
+      mustfromyaml-basic:
+        description: Verify mustFromYaml parsing
+        extends: [_base]
+        tags: [custom, mustFromYaml]
+        assertions:
+          - expression: '__output.mustFromYamlTest.contains("env=staging")'
+          - expression: '__output.mustFromYamlTest.contains("replicas=2")'
+
+      yaml-roundtrip:
+        description: Verify YAML round-trip via toYaml and fromYaml
+        extends: [_base]
+        tags: [custom, toYaml, fromYaml]
+        assertions:
+          - expression: '__output.yamlRoundTrip.contains("app=scafctl")'
+          - expression: '__output.yamlRoundTrip.contains("version=1.0")'

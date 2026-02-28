@@ -39,15 +39,33 @@ This generates a valid solution file with:
 
 Immediately validate the generated file:
 
+{{< tabs "scaffolding-lint-verify" >}}
+{{< tab "Bash" >}}
 ```bash
-scafctl eval validate -f my-app.yaml
+scafctl lint -f my-app.yaml
 ```
+{{< /tab >}}
+{{< tab "PowerShell" >}}
+```powershell
+scafctl lint -f my-app.yaml
+```
+{{< /tab >}}
+{{< /tabs >}}
 
 Run it:
 
+{{< tabs "scaffolding-run-solution" >}}
+{{< tab "Bash" >}}
 ```bash
 scafctl run solution -f my-app.yaml
 ```
+{{< /tab >}}
+{{< tab "PowerShell" >}}
+```powershell
+scafctl run solution -f my-app.yaml
+```
+{{< /tab >}}
+{{< /tabs >}}
 
 ## 2. Choosing Providers
 
@@ -82,6 +100,8 @@ scafctl get provider http
 
 Instead of scaffolding from scratch, you can also start from an existing example:
 
+{{< tabs "scaffolding-from-examples" >}}
+{{< tab "Bash" >}}
 ```bash
 # Browse available solution examples
 scafctl examples list --category solutions
@@ -90,8 +110,17 @@ scafctl examples list --category solutions
 scafctl examples get solutions/email-notifier/solution.yaml -o my-solution.yaml
 
 # Modify and validate
-scafctl eval validate -f my-solution.yaml
+scafctl lint -f my-solution.yaml
 ```
+{{< /tab >}}
+{{< tab "PowerShell" >}}
+```powershell
+scafctl examples list --category solutions
+scafctl examples get solutions/email-notifier/solution.yaml -o my-solution.yaml
+scafctl lint -f my-solution.yaml
+```
+{{< /tab >}}
+{{< /tabs >}}
 
 This is useful when you want a more complete starting point with real patterns (parameters, validation, actions, composition).
 
@@ -131,22 +160,31 @@ scafctl new solution \
 
 Once your solution works, add functional tests:
 
+{{< tabs "scaffolding-add-tests" >}}
+{{< tab "Bash" >}}
 ```bash
-# View the testing section that was scaffolded
-scafctl eval validate -f my-solution.yaml
+# Validate the solution
+scafctl lint -f my-solution.yaml
 
 # Use the MCP server to generate test scaffolding (if using AI tools)
 # Or see the Functional Testing Tutorial for manual test writing
 ```
+{{< /tab >}}
+{{< tab "PowerShell" >}}
+```powershell
+scafctl lint -f my-solution.yaml
+```
+{{< /tab >}}
+{{< /tabs >}}
 
 ## 5. Workflow
 
 The recommended scaffolding workflow:
 
 1. **Scaffold** — `scafctl new solution --name my-app --output my-app.yaml`
-2. **Validate** — `scafctl eval validate -f my-app.yaml`
+2. **Lint** — `scafctl lint -f my-app.yaml`
 3. **Edit** — Modify resolvers and actions for your needs
-4. **Lint** — `scafctl lint -f my-app.yaml`
+4. **Lint again** — `scafctl lint -f my-app.yaml`
 5. **Test** — `scafctl run resolver -f my-app.yaml` to verify resolvers
 6. **Run** — `scafctl run solution -f my-app.yaml` for the full workflow
 

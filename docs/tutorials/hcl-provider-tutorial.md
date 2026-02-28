@@ -979,11 +979,24 @@ scafctl run provider hcl --input operation=validate --input path=./main.tf -o js
 
 # Validate a directory
 scafctl run provider hcl --input operation=validate --input dir=./terraform -o json
+```
 
+{{< tabs "hcl-file-input" >}}
+{{< tab "Bash" >}}
+```bash
 # Use a pre-built example input file
 scafctl run provider hcl --input @examples/providers/hcl-format.yaml -o json
+```
+{{< /tab >}}
+{{< tab "PowerShell" >}}
+```powershell
+# Wrap @file in single quotes to avoid splatting operator
+scafctl run provider hcl --input '@examples/providers/hcl-format.yaml' -o json
+```
+{{< /tab >}}
+{{< /tabs >}}
 
-# Dry run (parse)
+```bash
 scafctl run provider hcl --input path=./main.tf --dry-run
 
 # Dry run (format)

@@ -578,6 +578,7 @@ The primary use case is AI-assisted solution authoring — helping users create 
 | `get_provider_schema` | Get JSON Schema for a provider's inputs | Yes |
 | `render_solution` | Render action graph without executing | Yes |
 | `list_cel_functions` | List all available CEL functions (built-in + scafctl custom) | Yes |
+| `list_go_template_functions` | List all available Go template extension functions (Sprig + custom) | Yes |
 | `evaluate_cel` | Test a CEL expression against sample data | Yes |
 | `explain_solution` | Explain a solution's configuration | Yes |
 | `explain_provider` | Explain a provider's capabilities and inputs | Yes |

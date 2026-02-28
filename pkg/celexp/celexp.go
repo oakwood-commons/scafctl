@@ -144,6 +144,12 @@ type ExtFunction struct {
 	Custom        bool            `json:"custom,omitempty" yaml:"custom,omitempty"`
 }
 
+// GetName returns the function name, implementing the named interface
+// for use with generic filter helpers.
+func (f ExtFunction) GetName() string {
+	return f.Name
+}
+
 type Example struct {
 	Description string   `json:"description,omitempty" yaml:"description,omitempty"`
 	Expression  string   `json:"expression,omitempty" yaml:"expression,omitempty"`

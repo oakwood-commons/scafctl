@@ -12,6 +12,8 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/celexp/env"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
+	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
+	gotmplext "github.com/oakwood-commons/scafctl/pkg/gotmpl/ext"
 	"github.com/oakwood-commons/scafctl/pkg/profiler"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
@@ -54,6 +56,10 @@ func run() error {
 	// Register env.GlobalCache as the cache factory for celexp package.
 	// This allows celexp to automatically use the global cache when no cache is specified.
 	celexp.SetCacheFactory(env.GlobalCache)
+
+	// Register Go template extension functions (sprig + custom) for the gotmpl package.
+	// This allows gotmpl.NewService(nil) to automatically include all extension functions.
+	gotmpl.SetExtensionFuncMapFactory(gotmplext.AllFuncMap)
 
 	cli := scafctl.Root(nil)
 	defer func() {

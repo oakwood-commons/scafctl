@@ -13,6 +13,7 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
+	gotmplext "github.com/oakwood-commons/scafctl/pkg/gotmpl/ext"
 	"sigs.k8s.io/yaml"
 )
 
@@ -100,6 +101,27 @@ func (s *Server) registerTemplateTools() {
 		),
 	)
 	s.mcpServer.AddTool(validateExpressionsTool, s.handleValidateExpressions)
+
+	// list_go_template_functions
+	listGoTemplateFunctionsTool := mcp.NewTool("list_go_template_functions",
+		mcp.WithDescription("List all available Go template extension functions. Includes both sprig functions (upper, lower, toJson, dict, etc.) and custom scafctl-specific functions (toHcl, toYaml, fromYaml, mustToYaml, mustFromYaml)."),
+		mcp.WithTitleAnnotation("List Go Template Functions"),
+		mcp.WithToolIcons(toolIcons["template"]),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithBoolean("custom_only",
+			mcp.Description("If true, only return scafctl custom functions (e.g., toHcl, toYaml, fromYaml)"),
+		),
+		mcp.WithBoolean("sprig_only",
+			mcp.Description("If true, only return sprig library functions"),
+		),
+		mcp.WithString("name",
+			mcp.Description("Get details for a specific function by name (substring match)"),
+		),
+	)
+	s.mcpServer.AddTool(listGoTemplateFunctionsTool, s.handleListGoTemplateFunctions)
 }
 
 // handleEvaluateGoTemplate evaluates a Go template against provided data.
@@ -186,6 +208,25 @@ func (s *Server) handleEvaluateGoTemplate(_ context.Context, request mcp.CallToo
 	}
 
 	return mcp.NewToolResultJSON(response)
+}
+
+// handleListGoTemplateFunctions lists available Go template extension functions.
+func (s *Server) handleListGoTemplateFunctions(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	customOnly := request.GetBool("custom_only", false)
+	sprigOnly := request.GetBool("sprig_only", false)
+	name := request.GetString("name", "")
+
+	functions := gotmplext.All()
+	if customOnly {
+		functions = gotmplext.Custom()
+	} else if sprigOnly {
+		functions = gotmplext.Sprig()
+	}
+
+	return filterAndReturnNamedFunctions(
+		functions, name,
+		"Go template function", "list_go_template_functions",
+	)
 }
 
 // handleValidateExpression validates a CEL expression or Go template for syntax errors.

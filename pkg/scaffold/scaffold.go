@@ -169,7 +169,7 @@ func BuildYAML(name, description, version string, features map[string]bool, prov
 				b.WriteString("        with:\n")
 				b.WriteString("          - provider: http\n")
 				b.WriteString("            inputs:\n")
-				b.WriteString("              url: \"https://api.example.com/data\"\n")
+				b.WriteString("              url: \"https://httpbin.org/get\"\n")
 				b.WriteString("              method: GET\n")
 			case "env":
 				b.WriteString("    # Environment variable\n")
@@ -180,6 +180,7 @@ func BuildYAML(name, description, version string, features map[string]bool, prov
 				b.WriteString("        with:\n")
 				b.WriteString("          - provider: env\n")
 				b.WriteString("            inputs:\n")
+				b.WriteString("              operation: get\n")
 				b.WriteString("              name: MY_ENV_VAR\n")
 			case "file":
 				b.WriteString("    # File content\n")

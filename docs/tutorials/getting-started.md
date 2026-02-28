@@ -207,7 +207,7 @@ scafctl run solution -f solution.yaml --dry-run
 scafctl render solution -f solution.yaml
 
 # Show dependency graph
-scafctl resolver graph -f solution.yaml
+scafctl render solution --graph -f solution.yaml
 
 # List available providers
 scafctl get provider
@@ -235,7 +235,7 @@ scafctl examples get resolvers/hello-world.yaml -o hello.yaml
 scafctl eval cel '"hello".upperAscii()'
 
 # Validate a solution file
-scafctl eval validate -f solution.yaml
+scafctl lint -f solution.yaml
 
 # List lint rules
 scafctl lint rules

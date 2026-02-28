@@ -8,10 +8,19 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"text/template"
 
 	"github.com/google/uuid"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+)
+
+var (
+	// extensionFuncMapFactory is the factory function that provides extension functions.
+	// Set via SetExtensionFuncMapFactory during application initialization.
+	extensionFuncMapFactory func() template.FuncMap
+	extensionFuncMapOnce    sync.Once
+	extensionFuncMapMu      sync.RWMutex
 )
 
 const (
@@ -104,8 +113,62 @@ type Service struct {
 	defaultFuncs template.FuncMap
 }
 
-// NewService creates a new template service with optional default functions
-func NewService(defaultFuncs template.FuncMap) *Service {
+// SetExtensionFuncMapFactory sets the factory function used to provide extension
+// template functions (sprig + custom). This should be called once during
+// application initialization to wire in extension functions without creating
+// import cycles.
+//
+// This function is thread-safe and uses sync.Once to ensure it's only set once.
+//
+// Example (called during application initialization):
+//
+//	gotmpl.SetExtensionFuncMapFactory(ext.AllFuncMap)
+func SetExtensionFuncMapFactory(factory func() template.FuncMap) {
+	extensionFuncMapOnce.Do(func() {
+		extensionFuncMapMu.Lock()
+		defer extensionFuncMapMu.Unlock()
+		extensionFuncMapFactory = factory
+	})
+}
+
+// getExtensionFuncMap returns the extension function map from the factory.
+// Returns an empty FuncMap if no factory has been set.
+func getExtensionFuncMap() template.FuncMap {
+	extensionFuncMapMu.RLock()
+	defer extensionFuncMapMu.RUnlock()
+	if extensionFuncMapFactory != nil {
+		return extensionFuncMapFactory()
+	}
+	return make(template.FuncMap)
+}
+
+// NewService creates a new template service with all registered extension
+// functions (sprig + custom scafctl extensions) available by default.
+// If additionalFuncs is provided, those functions are merged on top of the
+// extensions, allowing callers to override any extension function.
+//
+// Extension functions are provided via SetExtensionFuncMapFactory, which
+// should be called during application initialization.
+//
+// Use NewServiceRaw to create a service without auto-registered extensions.
+func NewService(additionalFuncs template.FuncMap) *Service {
+	// Start with all extension functions (sprig + custom)
+	defaultFuncs := getExtensionFuncMap()
+
+	// Merge caller-provided functions on top (overrides extensions)
+	for k, v := range additionalFuncs {
+		defaultFuncs[k] = v
+	}
+
+	return &Service{
+		defaultFuncs: defaultFuncs,
+	}
+}
+
+// NewServiceRaw creates a new template service without any auto-registered
+// extension functions. Only the explicitly provided functions will be available.
+// Use this when you want a bare template service without sprig or custom extensions.
+func NewServiceRaw(defaultFuncs template.FuncMap) *Service {
 	if defaultFuncs == nil {
 		defaultFuncs = make(template.FuncMap)
 	}

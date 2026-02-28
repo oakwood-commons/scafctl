@@ -125,9 +125,19 @@ headers:
 
 ### Run with File Input
 
+{{< tabs "runprov-file-input" >}}
+{{< tab "Bash" >}}
 ```bash
 scafctl run provider http --input @inputs.yaml
 ```
+{{< /tab >}}
+{{< tab "PowerShell" >}}
+```powershell
+# Wrap @file in single quotes to avoid splatting operator
+scafctl run provider http --input '@inputs.yaml'
+```
+{{< /tab >}}
+{{< /tabs >}}
 
 Output:
 
@@ -147,9 +157,18 @@ File and inline inputs are merged. When the same key appears in both,
 the values are combined into an array. To override a file value, omit
 that key from the file:
 
+{{< tabs "runprov-mixed-input" >}}
+{{< tab "Bash" >}}
 ```bash
 scafctl run provider http --input @inputs.yaml --input timeout=30
 ```
+{{< /tab >}}
+{{< tab "PowerShell" >}}
+```powershell
+scafctl run provider http --input '@inputs.yaml' --input timeout=30
+```
+{{< /tab >}}
+{{< /tabs >}}
 
 This loads all values from `inputs.yaml` and adds `timeout=30`.
 
@@ -218,17 +237,35 @@ scafctl run provider static --input value=hello -o quiet
 
 Explore complex output in an interactive TUI:
 
+{{< tabs "runprov-interactive" >}}
+{{< tab "Bash" >}}
 ```bash
-scafctl run provider http --input url=https://api.example.com -i
+scafctl run provider http --input url=https://httpbin.org/get -i
 ```
+{{< /tab >}}
+{{< tab "PowerShell" >}}
+```powershell
+scafctl run provider http --input url=https://httpbin.org/get -i
+```
+{{< /tab >}}
+{{< /tabs >}}
 
 ### CEL Expressions
 
 Filter or transform output using CEL expressions:
 
+{{< tabs "runprov-cel-expr" >}}
+{{< tab "Bash" >}}
 ```bash
-scafctl run provider http --input url=https://api.example.com -e "_.data"
+scafctl run provider http --input url=https://httpbin.org/get -e "_.data"
 ```
+{{< /tab >}}
+{{< tab "PowerShell" >}}
+```powershell
+scafctl run provider http --input url=https://httpbin.org/get -e '_.data'
+```
+{{< /tab >}}
+{{< /tabs >}}
 
 ### Execution Metrics
 
