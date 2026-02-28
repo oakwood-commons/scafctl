@@ -136,6 +136,8 @@ Resolvers demonstrate dynamic value computation, validation, and transformation.
 | [identity.yaml](resolvers/identity.yaml) | Authentication identity info (requires auth) | `scafctl run resolver -f examples/resolvers/identity.yaml` |
 | [cel-extensions.yaml](resolvers/cel-extensions.yaml) | All custom CEL extension functions | `scafctl run resolver -f examples/resolvers/cel-extensions.yaml -o json` |
 | [cel-transforms.yaml](resolvers/cel-transforms.yaml) | Data transformation patterns with CEL | `scafctl run resolver -f examples/resolvers/cel-transforms.yaml -o yaml` |
+| [go-template-sprig.yaml](resolvers/go-template-sprig.yaml) | Sprig v3 functions in Go templates | `scafctl run resolver -f examples/resolvers/go-template-sprig.yaml -o json` |
+| [go-template-extensions.yaml](resolvers/go-template-extensions.yaml) | Custom Go template extensions (toHcl, toYaml, fromYaml) | `scafctl run resolver -f examples/resolvers/go-template-extensions.yaml -o json` |
 
 ---
 

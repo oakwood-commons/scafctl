@@ -37,6 +37,7 @@ tests/integration/solutions/
 │   ├── file/                 # File read/write/exists
 │   ├── directory/            # Directory list/mkdir
 │   ├── go-template/          # Go template rendering
+│   ├── go-template-extensions/ # Go template extensions (Sprig + toHcl + toYaml/fromYaml)
 │   ├── validation/           # Match/notMatch/expression validation
 │   ├── sleep/                # Sleep/timing
 │   ├── http/                 # HTTP requests (via mock server)
@@ -82,7 +83,7 @@ tests/integration/solutions/
 |-----|-------------|
 | `smoke` | Quick verification tests, good for CI gates |
 | `provider` | Provider-specific tests |
-| `static`, `env`, `cel`, `exec`, `file`, `directory`, `go-template`, `hcl`, `validation`, `sleep` | Individual provider tests |
+| `static`, `env`, `cel`, `exec`, `file`, `directory`, `go-template`, `go-template-extensions`, `hcl`, `validation`, `sleep` | Individual provider tests |
 | `http` | HTTP provider tests (uses mock server) |
 | `git` | Git provider tests (uses local bare repo) |
 | `debug` | Debug provider tests |

@@ -165,9 +165,19 @@ region: us-west-2
 ```
 
 Run with the file:
+{{< tabs "resolver-param-file" >}}
+{{< tab "Bash" >}}
 ```bash
 scafctl run resolver -f greet.yaml -r @params.yaml
 ```
+{{< /tab >}}
+{{< tab "PowerShell" >}}
+```powershell
+# Wrap @file in single quotes to avoid splatting operator
+scafctl run resolver -f greet.yaml -r '@params.yaml'
+```
+{{< /tab >}}
+{{< /tabs >}}
 
 Output:
 
@@ -1092,7 +1102,15 @@ Bob was filtered out of `parsed_data` because `active` was `false`. The `raw_dat
 
 When a resolver produces an array, the `transform.with.forEach` clause processes each element independently and collects results back into an array:
 
+Save this as `foreach-demo.yaml`:
+
 ```yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: foreach-demo
+  version: 1.0.0
+
 spec:
   resolvers:
     doubled:
@@ -1114,9 +1132,18 @@ spec:
 
 Run it to see the result:
 
+{{< tabs "resolver-foreach-run" >}}
+{{< tab "Bash" >}}
 ```bash
-scafctl run resolver -f solution.yaml --resolver doubled -o json
+scafctl run resolver doubled -f foreach-demo.yaml -o json
 ```
+{{< /tab >}}
+{{< tab "PowerShell" >}}
+```powershell
+scafctl run resolver doubled -f foreach-demo.yaml -o json
+```
+{{< /tab >}}
+{{< /tabs >}}
 
 #### Filtering with `when` and `forEach`
 
@@ -1150,7 +1177,15 @@ forEach:
 
 For resolvers that produce arrays by resolving each element individually, use `forEach` directly in the `resolve` phase. This is useful when you want to iterate over an existing array and resolve a value for each item using provider logic or `when` conditions:
 
+Save this as `foreach-filter-demo.yaml`:
+
 ```yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: foreach-filter-demo
+  version: 1.0.0
+
 spec:
   resolvers:
     allUsers:
@@ -1197,7 +1232,12 @@ With `filter: true` the output contains only matched items:
 Run it:
 
 ```bash
-scafctl run resolver -f solution.yaml --resolver activeUsers -o json
+scafctl run resolver activeUsers -f foreach-filter-demo.yaml -o json
+```
+
+```powershell
+# PowerShell
+scafctl run resolver activeUsers -f foreach-filter-demo.yaml -o json
 ```
 
 #### `filter` vs `keepSkipped`

@@ -1164,7 +1164,7 @@ Every new tool, prompt, and CLI command must have unit tests following existing 
 
 | Category | Count | Details |
 |----------|-------|---------|
-| New MCP Tools | 9 | `extract_resolver_refs`, `generate_test_scaffold`, `list_tests`, `show_snapshot`, `diff_snapshots`, `catalog_inspect`, `list_auth_handlers`, `get_config_paths`, `validate_expressions` |
+| New MCP Tools | 9 | `extract_resolver_refs`, `generate_test_scaffold`, `list_tests`, `show_snapshot`, `diff_snapshots`, `catalog_inspect`, `list_auth_handlers`, `get_config_paths`, `validate_expressions`, `list_go_template_functions` |
 | New MCP Prompts | 3 | `analyze_execution`, `migrate_solution`, `optimize_solution` |
 | New MCP Resources | 1 | `solution://{name}/tests` |
 | New CLI Commands | 9 | `eval cel`, `eval template`, `eval validate`, `new solution`, `lint rules`, `lint explain`, `examples list`, `examples get`, enhanced `--dry-run` |

@@ -108,6 +108,53 @@ spec:
                 version: {{.version}}
                 featureCount: {{len .features}}
 
+    sprigUpperTemplate:
+      description: Sprig upper function
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: sprig-upper
+              template: '{{ "hello world" | upper }}'
+
+    sprigDictTemplate:
+      description: Sprig dict and merge functions
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: sprig-dict
+              template: |
+                {{- $defaults := dict "port" 3000 "debug" false -}}
+                {{- $overrides := dict "port" 8080 "tls" true -}}
+                {{- $merged := merge $overrides $defaults -}}
+                port={{ $merged.port }}, tls={{ $merged.tls }}, debug={{ $merged.debug }}
+
+    toHclData:
+      description: Data for toHcl test
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                name: my-service
+                port: 8080
+
+    toHclTemplate:
+      description: Custom toHcl function
+      dependsOn: [toHclData]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              name: tohcl-test
+              template: '{{ toHcl .toHclData }}'
+
   testing:
     config:
       skipBuiltins: true
@@ -149,3 +196,28 @@ spec:
           - expression: '__output.multilineTemplate.contains("name: my-service")'
           - expression: '__output.multilineTemplate.contains("version: 2.1.0")'
           - expression: '__output.multilineTemplate.contains("featureCount: 3")'
+
+      sprig-upper:
+        description: Verify Sprig upper function
+        extends: [_base]
+        tags: [sprig]
+        assertions:
+          - expression: '__output.sprigUpperTemplate == "HELLO WORLD"'
+
+      sprig-dict-merge:
+        description: Verify Sprig dict and merge functions
+        extends: [_base]
+        tags: [sprig]
+        assertions:
+          - expression: '__output.sprigDictTemplate.contains("port=8080")'
+          - expression: '__output.sprigDictTemplate.contains("tls=true")'
+          - expression: '__output.sprigDictTemplate.contains("debug=false")'
+
+      tohcl-basic:
+        description: Verify custom toHcl function
+        extends: [_base]
+        tags: [custom, toHcl]
+        assertions:
+          - expression: '__output.toHclTemplate.contains("name")'
+          - expression: '__output.toHclTemplate.contains("my-service")'
+          - expression: '__output.toHclTemplate.contains("port")'

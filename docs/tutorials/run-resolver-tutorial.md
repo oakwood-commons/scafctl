@@ -457,11 +457,22 @@ Statistics:
 
 ### Graphviz DOT Format
 
+> **Prerequisite:** Requires [Graphviz](https://graphviz.org/) (`dot` command) to be installed.
+
 Generate DOT output and pipe it to Graphviz for a visual diagram:
 
+{{< tabs "runres-graph-dot" >}}
+{{< tab "Bash" >}}
 ```bash
 scafctl run resolver --graph --graph-format=dot -f dep-demo.yaml | dot -Tpng > graph.png
 ```
+{{< /tab >}}
+{{< tab "PowerShell" >}}
+```powershell
+scafctl run resolver --graph --graph-format=dot -f dep-demo.yaml | dot -Tpng -o graph.png
+```
+{{< /tab >}}
+{{< /tabs >}}
 
 ### Mermaid Format
 
@@ -475,9 +486,20 @@ scafctl run resolver --graph --graph-format=mermaid -f dep-demo.yaml
 
 Get the graph as structured JSON for programmatic analysis:
 
+{{< tabs "runres-graph-json" >}}
+{{< tab "Bash" >}}
 ```bash
 scafctl run resolver --graph --graph-format=json -f dep-demo.yaml | jq .
 ```
+{{< /tab >}}
+{{< tab "PowerShell" >}}
+```powershell
+scafctl run resolver --graph --graph-format=json -f dep-demo.yaml | ConvertFrom-Json
+```
+{{< /tab >}}
+{{< /tabs >}}
+
+> **Bash users:** The above command uses [jq](https://jqlang.github.io/jq/), a command-line JSON processor. Install it separately if not already available.
 
 The JSON output includes:
 - **nodes**: List of resolvers with name, type, phase, provider, and conditional flag
@@ -508,6 +530,10 @@ The **providerSummary** shows per-provider statistics: resolver count, total dur
 
 The `dependencyGraph` in `__execution` includes a `diagrams` field with pre-rendered ASCII, DOT, and Mermaid representations. Use the `-e` flag (CEL expression) to extract a specific diagram:
 
+> **Prerequisite:** The DOT diagram commands below require [Graphviz](https://graphviz.org/) to be installed.
+
+{{< tabs "runres-extract-diagrams" >}}
+{{< tab "Bash" >}}
 ```bash
 # Extract the Mermaid diagram
 scafctl run resolver -f dep-demo.yaml -o json -e '_.__execution.dependencyGraph.diagrams.mermaid'
@@ -518,14 +544,38 @@ scafctl run resolver -f dep-demo.yaml -o json -e '_.__execution.dependencyGraph.
 # Extract the ASCII diagram
 scafctl run resolver -f dep-demo.yaml -o json -e '_.__execution.dependencyGraph.diagrams.ascii'
 ```
+{{< /tab >}}
+{{< tab "PowerShell" >}}
+```powershell
+# Extract the Mermaid diagram
+scafctl run resolver -f dep-demo.yaml -o json -e '_.__execution.dependencyGraph.diagrams.mermaid'
+
+# Extract the DOT diagram and render with Graphviz
+scafctl run resolver -f dep-demo.yaml -o json -e '_.__execution.dependencyGraph.diagrams.dot' | dot -Tpng -o graph.png
+
+# Extract the ASCII diagram
+scafctl run resolver -f dep-demo.yaml -o json -e '_.__execution.dependencyGraph.diagrams.ascii'
+```
+{{< /tab >}}
+{{< /tabs >}}
 
 You can also extract diagrams when running only specific resolvers:
 
+{{< tabs "runres-extract-subset" >}}
+{{< tab "Bash" >}}
 ```bash
-# Get the Mermaid diagram for just log_level and health_check_endpoints (and their deps)
-scafctl run resolver log_level health_check_endpoints -f solution.yaml -o json \
+# Get the Mermaid diagram for just endpoint and unrelated (and their deps)
+scafctl run resolver endpoint unrelated -f dep-demo.yaml -o json \
   -e '_.__execution.dependencyGraph.diagrams.mermaid'
 ```
+{{< /tab >}}
+{{< tab "PowerShell" >}}
+```powershell
+scafctl run resolver endpoint unrelated -f dep-demo.yaml -o json `
+  -e '_.__execution.dependencyGraph.diagrams.mermaid'
+```
+{{< /tab >}}
+{{< /tabs >}}
 
 This is useful for generating focused dependency visualizations of a resolver subset without rendering the full solution graph.
 
@@ -605,9 +655,18 @@ A common debugging workflow is to inspect how resolver dependencies cascade.
 
 ### Step 1: Visualize the Graph
 
+{{< tabs "runres-debug-graph" >}}
+{{< tab "Bash" >}}
 ```bash
-scafctl resolver graph -f dep-demo.yaml
+scafctl render solution --graph -f dep-demo.yaml
 ```
+{{< /tab >}}
+{{< tab "PowerShell" >}}
+```powershell
+scafctl render solution --graph -f dep-demo.yaml
+```
+{{< /tab >}}
+{{< /tabs >}}
 
 ### Step 2: Run Target Resolver
 
@@ -629,6 +688,8 @@ This lets you progressively narrow down which resolver is producing unexpected o
 
 Pass parameters using `-r` flags, just like with `run solution`:
 
+{{< tabs "runres-params" >}}
+{{< tab "Bash" >}}
 ```bash
 # Key-value parameter
 scafctl run resolver -f parameterized.yaml -r env=staging
@@ -639,6 +700,19 @@ scafctl run resolver -f parameterized.yaml -r @params.yaml
 # Multiple parameters
 scafctl run resolver -f parameterized.yaml -r env=prod -r region=us-east1
 ```
+{{< /tab >}}
+{{< tab "PowerShell" >}}
+```powershell
+scafctl run resolver -f parameterized.yaml -r env=staging
+
+# Load parameters from file — wrap @file in single quotes to avoid splatting operator
+scafctl run resolver -f parameterized.yaml -r '@params.yaml'
+
+# Multiple parameters
+scafctl run resolver -f parameterized.yaml -r env=prod -r region=us-east1
+```
+{{< /tab >}}
+{{< /tabs >}}
 
 ### Example with Parameter Provider
 

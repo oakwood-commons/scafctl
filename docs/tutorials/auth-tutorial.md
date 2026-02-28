@@ -298,6 +298,8 @@ The federated identity credential tells Entra ID to trust tokens from your Kuber
 
 1. **Get your Kubernetes cluster's OIDC issuer URL**:
 
+   {{< tabs "auth-oidc-issuer" >}}
+   {{< tab "Bash" >}}
    ```bash
    # For AKS
    az aks show --name <cluster-name> --resource-group <rg-name> \
@@ -306,6 +308,17 @@ The federated identity credential tells Entra ID to trust tokens from your Kuber
    # For other clusters (e.g., kind, minikube with OIDC enabled)
    kubectl get --raw /.well-known/openid-configuration | jq -r '.issuer'
    ```
+   {{< /tab >}}
+   {{< tab "PowerShell" >}}
+   ```powershell
+   az aks show --name <cluster-name> --resource-group <rg-name> `
+     --query "oidcIssuerProfile.issuerUrl" -o tsv
+
+   # For other clusters
+   (kubectl get --raw /.well-known/openid-configuration | ConvertFrom-Json).issuer
+   ```
+   {{< /tab >}}
+   {{< /tabs >}}
 
 2. **Create the federated credential** via Azure Portal or CLI:
 
@@ -502,10 +515,21 @@ This means the token's claims don't match the federated credential configuration
 - Verify the `subject` matches your service account (`system:serviceaccount:<namespace>:<name>`)
 - Verify the `audience` in both the federated credential and `kubectl create token` command
 
+{{< tabs "auth-decode-token" >}}
+{{< tab "Bash" >}}
 ```bash
 # Decode the token to inspect its claims
 echo "$FEDERATED_TOKEN" | cut -d. -f2 | base64 -d 2>/dev/null | jq .
 ```
+{{< /tab >}}
+{{< tab "PowerShell" >}}
+```powershell
+# Decode the token to inspect its claims
+$parts = $env:FEDERATED_TOKEN -split '\.'
+[System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($parts[1] + '=' * (4 - $parts[1].Length % 4))) | ConvertFrom-Json
+```
+{{< /tab >}}
+{{< /tabs >}}
 
 Check these claims match your federated credential:
 - `iss` (issuer)
@@ -534,6 +558,8 @@ echo "AZURE_FEDERATED_TOKEN: ${AZURE_FEDERATED_TOKEN:0:20}..." # First 20 chars
 
 Verify your cluster's OIDC configuration is accessible:
 
+{{< tabs "auth-oidc-discovery" >}}
+{{< tab "Bash" >}}
 ```bash
 # Get the OIDC configuration
 curl -s "$(kubectl get --raw /.well-known/openid-configuration | jq -r '.issuer')/.well-known/openid-configuration" | jq .
@@ -541,6 +567,14 @@ curl -s "$(kubectl get --raw /.well-known/openid-configuration | jq -r '.issuer'
 # Get the JWKS (signing keys)
 curl -s "$(kubectl get --raw /.well-known/openid-configuration | jq -r '.jwks_uri')" | jq .
 ```
+{{< /tab >}}
+{{< tab "PowerShell" >}}
+```powershell
+$issuer = (kubectl get --raw /.well-known/openid-configuration | ConvertFrom-Json).issuer
+Invoke-RestMethod "$issuer/.well-known/openid-configuration"
+```
+{{< /tab >}}
+{{< /tabs >}}
 
 ---
 
@@ -954,9 +988,18 @@ scafctl auth status --exit-code --warn-within 15m || {
 
 The JSON output includes a `cachedTokens` field showing how many access tokens are in the cache for each handler — useful for verifying token cache health:
 
+{{< tabs "auth-cached-tokens" >}}
+{{< tab "Bash" >}}
 ```bash
 scafctl auth status -o json | jq '.[].cachedTokens'
 ```
+{{< /tab >}}
+{{< tab "PowerShell" >}}
+```powershell
+(scafctl auth status -o json | ConvertFrom-Json).cachedTokens
+```
+{{< /tab >}}
+{{< /tabs >}}
 
 ---
 
@@ -1291,6 +1334,8 @@ scafctl auth token github --curl
 
 Use `--decode` to inspect the full JWT structure — both the **header** and the **payload** — without needing an external decoder tool. Signature validation is intentionally skipped; this is for debugging only:
 
+{{< tabs "auth-jwt-decode" >}}
+{{< tab "Bash" >}}
 ```bash
 # Decode and display the full JWT (header and payload)
 scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode
@@ -1299,6 +1344,17 @@ scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode
 scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode -o json \
   | jq '{alg: .header.alg, audience: .payload.aud, upn: .payload.upn, expires: .payload.exp_human}'
 ```
+{{< /tab >}}
+{{< tab "PowerShell" >}}
+```powershell
+scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode
+
+# Output as JSON — use ConvertFrom-Json to filter
+$decoded = scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode -o json | ConvertFrom-Json
+$decoded | Select-Object @{N='alg';E={$_.header.alg}}, @{N='audience';E={$_.payload.aud}}, @{N='upn';E={$_.payload.upn}}, @{N='expires';E={$_.payload.exp_human}}
+```
+{{< /tab >}}
+{{< /tabs >}}
 
 Example output (table):
 
@@ -1341,6 +1397,8 @@ scafctl auth token entra --scope "https://management.azure.com/.default" --clip
 
 Get the full token for use with other tools:
 
+{{< tabs "auth-token-usage" >}}
+{{< tab "Bash" >}}
 ```bash
 # Approach 1: --raw (simplest)
 curl -H "Authorization: Bearer $(scafctl auth token entra --scope 'https://graph.microsoft.com/.default' --raw)" \
@@ -1357,6 +1415,19 @@ curl -H "Authorization: Bearer $TOKEN" https://graph.microsoft.com/v1.0/me
 # GitHub API example
 curl -H "Authorization: Bearer $(scafctl auth token github --raw)" https://api.github.com/user/repos
 ```
+{{< /tab >}}
+{{< tab "PowerShell" >}}
+```powershell
+# Approach 1: --raw (simplest)
+$token = scafctl auth token entra --scope 'https://graph.microsoft.com/.default' --raw
+Invoke-RestMethod -Uri 'https://graph.microsoft.com/v1.0/me' -Headers @{ Authorization = "Bearer $token" }
+
+# Approach 2: JSON output + ConvertFrom-Json
+$token = (scafctl auth token entra --scope 'https://graph.microsoft.com/.default' -o json | ConvertFrom-Json).accessToken
+Invoke-RestMethod -Uri 'https://graph.microsoft.com/v1.0/me' -Headers @{ Authorization = "Bearer $token" }
+```
+{{< /tab >}}
+{{< /tabs >}}
 
 ---
 
@@ -1676,6 +1747,8 @@ If you're getting 403 (Forbidden) errors, the token may not have the required pe
 Use `--decode` on `auth token` to inspect JWT claims directly without needing an
 external tool or manual base64 decoding:
 
+{{< tabs "auth-troubleshoot-claims" >}}
+{{< tab "Bash" >}}
 ```bash
 # Decode and display claims in table format (no signature validation)
 scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode
@@ -1683,6 +1756,17 @@ scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode
 # Output as JSON for further processing (e.g., with jq)
 scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode -o json | jq '.aud,.upn,.roles'
 ```
+{{< /tab >}}
+{{< tab "PowerShell" >}}
+```powershell
+scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode
+
+# Output as JSON for further processing
+$decoded = scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode -o json | ConvertFrom-Json
+$decoded.aud, $decoded.upn, $decoded.roles
+```
+{{< /tab >}}
+{{< /tabs >}}
 
 Unix timestamp fields (`exp`, `iat`, `nbf`, `auth_time`) are automatically augmented
 with a `_human` RFC 3339 counterpart so you can read them without converting.

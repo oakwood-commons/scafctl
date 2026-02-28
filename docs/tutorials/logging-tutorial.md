@@ -140,9 +140,22 @@ Output:
 
 Filter with `jq`:
 
+{{< tabs "logging-json-filter" >}}
+{{< tab "Bash" >}}
 ```bash
 scafctl run solution -f solution.yaml --log-level debug --log-format json 2>&1 | jq 'select(.level == "error")'
 ```
+
+> **Note:** The above command uses [jq](https://jqlang.github.io/jq/), a command-line JSON processor. Install it separately if not already available.
+{{< /tab >}}
+{{< tab "PowerShell" >}}
+```powershell
+scafctl run solution -f solution.yaml --log-level debug --log-format json 2>&1 |
+  ForEach-Object { $_ | ConvertFrom-Json } |
+  Where-Object { $_.level -eq 'error' }
+```
+{{< /tab >}}
+{{< /tabs >}}
 
 ## Log File Output
 
