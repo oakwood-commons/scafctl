@@ -8,6 +8,7 @@ package identityprovider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -59,6 +60,9 @@ func NewIdentityProvider() *IdentityProvider {
 					schemahelper.WithMaxLength(*ptrs.IntPtr(50)),
 					schemahelper.WithPattern(`^[a-z][a-z0-9-]*$`),
 					schemahelper.WithExample("entra")),
+				"scope": schemahelper.StringProp("OAuth scope for scoped token operations. When set, 'claims' and 'status' operations mint a token with this scope and return its details instead of stored metadata. Not supported for 'groups' or 'list' operations.",
+					schemahelper.WithMaxLength(*ptrs.IntPtr(1024)),
+					schemahelper.WithExample("api://my-app/.default")),
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
@@ -73,6 +77,11 @@ func NewIdentityProvider() *IdentityProvider {
 					"expiresAt":     schemahelper.StringProp("Token expiration time in RFC3339 format", schemahelper.WithExample("2024-01-15T10:30:00Z")),
 					"expiresIn":     schemahelper.StringProp("Human-readable duration until token expires", schemahelper.WithExample("55m30s")),
 					"handlers":      schemahelper.ArrayProp("List of available auth handler names (for 'list' operation)"),
+					"scopedToken":   schemahelper.BoolProp("Whether the response was derived from a scoped access token (true when scope input was provided)"),
+					"tokenScope":    schemahelper.StringProp("The OAuth scope the token was minted for (present when scope input was provided)", schemahelper.WithExample("api://my-app/.default")),
+					"tokenType":     schemahelper.StringProp("Token type, typically Bearer (present when scope input was provided)", schemahelper.WithExample("Bearer")),
+					"flow":          schemahelper.StringProp("Authentication flow that produced the token (present when scope input was provided)", schemahelper.WithExample("device_code")),
+					"sessionId":     schemahelper.StringProp("Stable identifier of the authentication session (present when scope input was provided)"),
 				}),
 			},
 			Examples: []provider.Example{
@@ -110,6 +119,25 @@ provider: identity
 inputs:
   operation: list`,
 				},
+				{
+					Name:        "Get claims from a scoped token",
+					Description: "Mint a token for a specific OAuth scope and return the claims parsed from the access token JWT",
+					YAML: `name: scoped-claims
+provider: identity
+inputs:
+  operation: claims
+  scope: api://my-app/.default`,
+				},
+				{
+					Name:        "Check scoped token status",
+					Description: "Mint a token for a specific OAuth scope and return its metadata (expiry, flow, type)",
+					YAML: `name: scoped-status
+provider: identity
+inputs:
+  operation: status
+  scope: https://management.azure.com/.default
+  handler: entra`,
+				},
 			},
 		},
 	}
@@ -135,12 +163,18 @@ func (p *IdentityProvider) Execute(ctx context.Context, input any) (*provider.Ou
 	}
 
 	handlerName, _ := inputs["handler"].(string)
+	scope, _ := inputs["scope"].(string)
 
-	lgr.V(1).Info("executing provider", "provider", ProviderName, "operation", operation, "handler", handlerName)
+	lgr.V(1).Info("executing provider", "provider", ProviderName, "operation", operation, "handler", handlerName, "scope", scope)
+
+	// Validate scope is only used with supported operations
+	if scope != "" && (operation == "groups" || operation == "list") {
+		return nil, fmt.Errorf("%s: scope is not supported for the %q operation; it can only be used with 'claims' or 'status'", ProviderName, operation)
+	}
 
 	// Check for dry-run mode
 	if dryRun := provider.DryRunFromContext(ctx); dryRun {
-		return p.executeDryRun(operation, handlerName)
+		return p.executeDryRun(operation, handlerName, scope)
 	}
 
 	var result *provider.Output
@@ -148,9 +182,17 @@ func (p *IdentityProvider) Execute(ctx context.Context, input any) (*provider.Ou
 
 	switch operation {
 	case "status":
-		result, err = p.executeStatus(ctx, handlerName)
+		if scope != "" {
+			result, err = p.executeScopedStatus(ctx, handlerName, scope)
+		} else {
+			result, err = p.executeStatus(ctx, handlerName)
+		}
 	case "claims":
-		result, err = p.executeClaims(ctx, handlerName)
+		if scope != "" {
+			result, err = p.executeScopedClaims(ctx, handlerName, scope)
+		} else {
+			result, err = p.executeClaims(ctx, handlerName)
+		}
 	case "groups":
 		result, err = p.executeGroups(ctx, handlerName)
 	case "list":
@@ -273,47 +315,183 @@ func (p *IdentityProvider) executeClaims(ctx context.Context, handlerName string
 	}
 
 	// Build claims map from the Claims struct
-	claims := make(map[string]any)
-	if status.Claims != nil {
-		if status.Claims.Issuer != "" {
-			claims["issuer"] = status.Claims.Issuer
-		}
-		if status.Claims.Subject != "" {
-			claims["subject"] = status.Claims.Subject
-		}
-		if status.Claims.TenantID != "" {
-			claims["tenantId"] = status.Claims.TenantID
-		}
-		if status.Claims.ObjectID != "" {
-			claims["objectId"] = status.Claims.ObjectID
-		}
-		if status.Claims.ClientID != "" {
-			claims["clientId"] = status.Claims.ClientID
-		}
-		if status.Claims.Email != "" {
-			claims["email"] = status.Claims.Email
-		}
-		if status.Claims.Name != "" {
-			claims["name"] = status.Claims.Name
-		}
-		if status.Claims.Username != "" {
-			claims["username"] = status.Claims.Username
-		}
-		if !status.Claims.IssuedAt.IsZero() {
-			claims["issuedAt"] = status.Claims.IssuedAt.Format(time.RFC3339)
-		}
-		if !status.Claims.ExpiresAt.IsZero() {
-			claims["expiresAt"] = status.Claims.ExpiresAt.Format(time.RFC3339)
-		}
-
-		// Provide a display identity for convenience
-		claims["displayIdentity"] = status.Claims.DisplayIdentity()
-	}
+	claims := claimsToMap(status.Claims)
 
 	result["claims"] = claims
 	result["identityType"] = string(status.IdentityType)
 
 	return &provider.Output{Data: result}, nil
+}
+
+// executeScopedStatus mints a token for the given scope and returns status
+// derived from the token metadata rather than stored session metadata.
+func (p *IdentityProvider) executeScopedStatus(ctx context.Context, handlerName, scope string) (*provider.Output, error) {
+	handler, err := p.getHandler(ctx, handlerName)
+	if err != nil {
+		return nil, err
+	}
+
+	token, err := handler.GetToken(ctx, auth.TokenOptions{Scope: scope})
+	if err != nil {
+		return nil, fmt.Errorf("failed to mint scoped token from handler %q for scope %q: %w", handler.Name(), scope, err)
+	}
+
+	result := map[string]any{
+		"operation":     "status",
+		"handler":       handler.Name(),
+		"authenticated": true,
+		"scopedToken":   true,
+		"tokenScope":    scope,
+	}
+
+	if token.TokenType != "" {
+		result["tokenType"] = token.TokenType
+	}
+	if string(token.Flow) != "" {
+		result["flow"] = string(token.Flow)
+	}
+	if token.SessionID != "" {
+		result["sessionId"] = token.SessionID
+	}
+
+	if !token.ExpiresAt.IsZero() {
+		result["expiresAt"] = token.ExpiresAt.Format(time.RFC3339)
+		remaining := time.Until(token.ExpiresAt)
+		if remaining > 0 {
+			result["expiresIn"] = remaining.Truncate(time.Second).String()
+		} else {
+			result["expiresIn"] = "expired"
+		}
+	}
+
+	// Try to extract identity info from the access token JWT
+	var warnings []string
+	claims, parseErr := auth.ParseJWTClaims(token.AccessToken)
+	if parseErr != nil {
+		if errors.Is(parseErr, auth.ErrOpaqueToken) {
+			warnings = append(warnings, fmt.Sprintf("access token is not a decodable JWT — identity details unavailable: %v", parseErr))
+		} else {
+			warnings = append(warnings, fmt.Sprintf("failed to parse access token claims: %v", parseErr))
+		}
+	} else {
+		if claims.TenantID != "" {
+			result["tenantId"] = claims.TenantID
+		}
+		if string(identityTypeFromClaims(claims)) != "" {
+			result["identityType"] = string(identityTypeFromClaims(claims))
+		}
+	}
+
+	output := &provider.Output{Data: result}
+	if len(warnings) > 0 {
+		output.Warnings = warnings
+	}
+	return output, nil
+}
+
+// executeScopedClaims mints a token for the given scope and returns claims
+// parsed from the access token JWT.
+func (p *IdentityProvider) executeScopedClaims(ctx context.Context, handlerName, scope string) (*provider.Output, error) {
+	handler, err := p.getHandler(ctx, handlerName)
+	if err != nil {
+		return nil, err
+	}
+
+	token, err := handler.GetToken(ctx, auth.TokenOptions{Scope: scope})
+	if err != nil {
+		return nil, fmt.Errorf("failed to mint scoped token from handler %q for scope %q: %w", handler.Name(), scope, err)
+	}
+
+	result := map[string]any{
+		"operation":     "claims",
+		"handler":       handler.Name(),
+		"authenticated": true,
+		"scopedToken":   true,
+		"tokenScope":    scope,
+	}
+
+	var warnings []string
+	parsedClaims, parseErr := auth.ParseJWTClaims(token.AccessToken)
+	if parseErr != nil {
+		// Opaque/encrypted token — return token metadata without claims
+		if errors.Is(parseErr, auth.ErrOpaqueToken) {
+			warnings = append(warnings, fmt.Sprintf("access token is not a decodable JWT — claims unavailable: %v", parseErr))
+		} else {
+			warnings = append(warnings, fmt.Sprintf("failed to parse access token claims: %v", parseErr))
+		}
+		result["claims"] = nil
+
+		// Still include what we know from the token metadata
+		if !token.ExpiresAt.IsZero() {
+			result["expiresAt"] = token.ExpiresAt.Format(time.RFC3339)
+		}
+	} else {
+		// Build claims map from parsed JWT
+		claims := claimsToMap(parsedClaims)
+		result["claims"] = claims
+		result["identityType"] = string(identityTypeFromClaims(parsedClaims))
+	}
+
+	output := &provider.Output{Data: result}
+	if len(warnings) > 0 {
+		output.Warnings = warnings
+	}
+	return output, nil
+}
+
+// claimsToMap converts an auth.Claims struct to a map[string]any,
+// omitting zero-value fields.
+func claimsToMap(c *auth.Claims) map[string]any {
+	if c == nil {
+		return nil
+	}
+	claims := make(map[string]any)
+	if c.Issuer != "" {
+		claims["issuer"] = c.Issuer
+	}
+	if c.Subject != "" {
+		claims["subject"] = c.Subject
+	}
+	if c.TenantID != "" {
+		claims["tenantId"] = c.TenantID
+	}
+	if c.ObjectID != "" {
+		claims["objectId"] = c.ObjectID
+	}
+	if c.ClientID != "" {
+		claims["clientId"] = c.ClientID
+	}
+	if c.Email != "" {
+		claims["email"] = c.Email
+	}
+	if c.Name != "" {
+		claims["name"] = c.Name
+	}
+	if c.Username != "" {
+		claims["username"] = c.Username
+	}
+	if !c.IssuedAt.IsZero() {
+		claims["issuedAt"] = c.IssuedAt.Format(time.RFC3339)
+	}
+	if !c.ExpiresAt.IsZero() {
+		claims["expiresAt"] = c.ExpiresAt.Format(time.RFC3339)
+	}
+	claims["displayIdentity"] = c.DisplayIdentity()
+	return claims
+}
+
+// identityTypeFromClaims infers the identity type from JWT claims.
+// If ObjectID is present but no human-readable fields (Name, Email, Username),
+// this is likely a service principal. Otherwise, it's a user.
+func identityTypeFromClaims(c *auth.Claims) auth.IdentityType {
+	if c == nil {
+		return auth.IdentityTypeUser
+	}
+	// Service principals typically have no name/email/username in the access token
+	if c.Name == "" && c.Email == "" && c.Username == "" && c.ObjectID != "" {
+		return auth.IdentityTypeServicePrincipal
+	}
+	return auth.IdentityTypeUser
 }
 
 func (p *IdentityProvider) executeGroups(ctx context.Context, handlerName string) (*provider.Output, error) {
@@ -391,7 +569,7 @@ func (p *IdentityProvider) executeList(ctx context.Context) (*provider.Output, e
 	}, nil
 }
 
-func (p *IdentityProvider) executeDryRun(operation, handlerName string) (*provider.Output, error) {
+func (p *IdentityProvider) executeDryRun(operation, handlerName, scope string) (*provider.Output, error) {
 	result := map[string]any{
 		"operation": operation,
 	}
@@ -401,10 +579,18 @@ func (p *IdentityProvider) executeDryRun(operation, handlerName string) (*provid
 		result["handler"] = handlerName
 		result["authenticated"] = false
 		result["identityType"] = "[DRY-RUN] Not checked"
+		if scope != "" {
+			result["scopedToken"] = true
+			result["tokenScope"] = scope
+		}
 	case "claims":
 		result["handler"] = handlerName
 		result["authenticated"] = false
 		result["claims"] = nil
+		if scope != "" {
+			result["scopedToken"] = true
+			result["tokenScope"] = scope
+		}
 	case "groups":
 		result["handler"] = handlerName
 		result["groups"] = []string{}

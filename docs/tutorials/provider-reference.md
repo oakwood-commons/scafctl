@@ -1173,7 +1173,9 @@ inputs:
 
 ## identity
 
-Get authentication identity information without exposing tokens.
+Get authentication identity information without exposing tokens. Supports
+reading stored session metadata or minting a fresh scoped access token to
+inspect its claims on demand.
 
 ### Capabilities
 
@@ -1183,19 +1185,43 @@ Get authentication identity information without exposing tokens.
 
 | Field | Type | Required | Description |
 |-------|------|:--------:|-------------|
-| `operation` | string | ✅ | Operation: `status`, `claims`, `list` |
+| `operation` | string | ✅ | Operation: `status`, `claims`, `groups`, `list` |
 | `handler` | string | ❌ | Auth handler name (e.g., `entra`, `github`) |
+| `scope` | string | ❌ | OAuth scope for on-demand token minting. When set, `claims` and `status` mint a fresh access token for the scope and return its details instead of stored session metadata. Not supported for `groups` or `list`. |
+
+### Operations
+
+| Operation | Description |
+|-----------|-------------|
+| `status` | Returns authentication status, expiry, and identity type from stored session metadata (or scoped token when `scope` is set) |
+| `claims` | Returns identity claims (name, email, tenant, etc.) from stored session metadata (or scoped token JWT when `scope` is set) |
+| `groups` | Returns Entra group memberships for the authenticated user |
+| `list` | Lists all registered auth handler names |
 
 ### Output
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `operation` | string | The operation that was executed |
+| `handler` | string | The auth handler that was used |
 | `authenticated` | bool | Whether authenticated |
-| `identityType` | string | Type of identity |
-| `claims` | object | Token claims |
-| `tenantId` | string | Tenant ID |
-| `expiresAt` | string | Token expiration |
-| `handlers` | array | Available handlers (for `list`) |
+| `identityType` | string | Identity type: `user` or `service-principal` |
+| `claims` | object | Token claims (email, name, subject, tenantId, etc.) |
+| `tenantId` | string | Tenant ID (for Entra) |
+| `expiresAt` | string | Token expiration in RFC3339 format |
+| `expiresIn` | string | Human-readable duration until expiry |
+| `groups` | array | Group display names (for `groups` operation) |
+| `handlers` | array | Available handler names (for `list` operation) |
+| `scopedToken` | bool | `true` when the response was derived from a scoped access token |
+| `tokenScope` | string | The OAuth scope the token was minted for (when `scope` input was set) |
+| `tokenType` | string | Token type, typically `Bearer` (when `scope` input was set) |
+| `flow` | string | Auth flow that produced the token (when `scope` input was set) |
+| `sessionId` | string | Stable session identifier (when `scope` input was set) |
+
+> **Opaque tokens:** When `scope` is provided and the access token is not a
+> decodable JWT (e.g., encrypted Microsoft Graph tokens), claims will be `null`
+> and a warning is added to the output. Token metadata (expiry, type) is still
+> returned where available.
 
 ### Examples
 
@@ -1216,7 +1242,7 @@ resolve:
         operation: status
         handler: github
 
-# Get claims
+# Get claims from stored session metadata
 resolve:
   with:
     - provider: identity
@@ -1231,6 +1257,38 @@ resolve:
       inputs:
         operation: claims
         handler: github
+
+# Mint a scoped token and inspect its claims
+resolve:
+  with:
+    - provider: identity
+      inputs:
+        operation: claims
+        scope: api://my-app/.default
+
+# Check scoped token status (expiry, flow, tokenType)
+resolve:
+  with:
+    - provider: identity
+      inputs:
+        operation: status
+        scope: https://management.azure.com/.default
+        handler: entra
+
+# List all registered auth handlers
+resolve:
+  with:
+    - provider: identity
+      inputs:
+        operation: list
+
+# Get Entra group memberships
+resolve:
+  with:
+    - provider: identity
+      inputs:
+        operation: groups
+        handler: entra
 ```
 
 ---

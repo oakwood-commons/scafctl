@@ -1,0 +1,7 @@
+# Identity provider - check scoped token status
+# Mints (or retrieves from cache) an access token for the given scope
+# and returns token metadata (expiry, flow, type) along with
+# identity details parsed from the JWT.
+operation: status
+scope: https://management.azure.com/.default
+handler: entra

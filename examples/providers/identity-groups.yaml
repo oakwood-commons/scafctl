@@ -1,0 +1,3 @@
+# Identity provider - get Entra group memberships
+operation: groups
+handler: entra
