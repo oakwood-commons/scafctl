@@ -712,8 +712,23 @@ spec:
 Routes support:
 - **Static responses**: `body`, `status`, `headers`
 - **Echo mode**: `echo: true` returns the request body and method
+- **Body matching**: `bodyContains: "substring"` — route only matches if the request body contains the given substring. Useful for routing POST endpoints like GraphQL where all requests hit the same path but carry different query payloads.
 - **Latency simulation**: `delay: 2s`
 - **Health endpoint**: Every mock has a `/__health` endpoint for readiness
+
+**Body matching example** (routing GraphQL queries to different responses):
+
+```yaml
+routes:
+  - path: /graphql
+    method: POST
+    bodyContains: "repository(owner:"
+    body: '{"data": {"repository": {"name": "test-repo"}}}'
+  - path: /graphql
+    method: POST
+    bodyContains: "createIssue"
+    body: '{"data": {"createIssue": {"issue": {"number": 1}}}}'
+```
 
 ### Exec Mock Services
 

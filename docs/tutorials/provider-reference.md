@@ -32,7 +32,7 @@ Providers are execution primitives used by resolvers and actions. Each provider 
 | [exec](#exec) | ✅ | ✅ | ❌ | ✅ |
 | [file](#file) | ✅ | ✅ | ❌ | ✅ |
 | [git](#git) | ✅ | ❌ | ❌ | ✅ |
-| [github](#github) | ✅ | ✅ | ❌ | ❌ |
+| [github](#github) | ✅ | ✅ | ✅ | ❌ |
 | [go-template](#go-template) | ❌ | ✅ | ❌ | ✅ |
 | [hcl](#hcl) | ✅ | ✅ | ❌ | ❌ |
 | [http](#http) | ✅ | ✅ | ❌ | ✅ |
@@ -486,44 +486,104 @@ inputs:
 
 ## github
 
-Retrieve data from the GitHub REST API. Supports repository info, file content, releases, and pull requests. Uses the configured GitHub auth handler automatically.
+Interact with GitHub via GraphQL (reads, issues, PRs, signed commits, branches, tags) and REST (releases). Uses the configured GitHub auth handler automatically. Commit operations use `createCommitOnBranch` for GPG-signed multi-file atomic commits.
 
 > For arbitrary HTTP requests to GitHub, use the `http` provider with `auth: github`.
 
 ### Capabilities
 
-`from`, `transform`
+`from`, `transform`, `action`
 
 ### Inputs
 
 | Field | Type | Required | Description |
 |-------|------|:--------:|-------------|
-| `operation` | string | ✅ | API operation: `get_repo`, `get_file`, `list_releases`, `get_latest_release`, `list_pull_requests`, `get_pull_request` |
+| `operation` | string | ✅ | API operation (see operations table below) |
 | `owner` | string | ✅ | Repository owner (user or organization) |
 | `repo` | string | ✅ | Repository name |
+| `api_base` | string | ❌ | GitHub API base URL (default: `https://api.github.com`). Set for GitHub Enterprise. |
 | `path` | string | ❌ | File path within the repository (for `get_file`) |
 | `ref` | string | ❌ | Git reference (branch, tag, or commit SHA). Defaults to repo's default branch |
-| `number` | int | ❌ | Pull request number (for `get_pull_request`) |
-| `state` | string | ❌ | Filter by state: `open`, `closed`, `all` (default: `open`) |
+| `number` | int | ❌ | Issue or pull request number |
+| `state` | string | ❌ | Filter by state: `open`, `closed`, `all`, `merged` (default: `open`) |
 | `per_page` | int | ❌ | Results per page, 1–100 (default: 30) |
-| `api_base` | string | ❌ | GitHub API base URL (default: `https://api.github.com`). Set for GitHub Enterprise. |
+| `title` | string | ❌ | Title for issue or pull request create/update |
+| `body` | string | ❌ | Body text for issue, pull request, release, or comment |
+| `labels` | array | ❌ | Labels to apply (names for issues) |
+| `assignees` | array | ❌ | Assignee login usernames |
+| `head` | string | ❌ | Head branch for creating a pull request |
+| `base` | string | ❌ | Base branch for creating a pull request |
+| `draft` | bool | ❌ | Create PR as draft |
+| `merge_method` | string | ❌ | Merge method: `MERGE`, `SQUASH`, `REBASE` (default: `MERGE`) |
+| `branch` | string | ❌ | Branch name for commit/branch/tag operations |
+| `message` | string | ❌ | Commit message headline |
+| `expected_head_oid` | string | ❌ | Expected HEAD OID (40-char SHA) for optimistic locking in `create_commit` |
+| `additions` | array | ❌ | Files to add/update: `[{path, content}]` |
+| `deletions` | array | ❌ | Files to delete: `[{path}]` |
+| `oid` | string | ❌ | Git object ID (SHA) for branch/tag creation |
+| `tag` | string | ❌ | Tag name for tag operations |
+| `tag_name` | string | ❌ | Tag name for release |
+| `name` | string | ❌ | Release name/title |
+| `release_id` | int | ❌ | Release ID for update/delete |
+| `prerelease` | bool | ❌ | Whether release is a prerelease |
+| `target_commitish` | string | ❌ | Branch/SHA target for release tag |
+
+### Operations
+
+**Read operations** (capabilities: `from`, `transform`):
+
+| Operation | Description |
+|-----------|-------------|
+| `get_repo` | Get repository metadata |
+| `get_file` | Get file content (returned as plain text, not base64) |
+| `list_releases` | List releases |
+| `get_latest_release` | Get the latest release |
+| `list_pull_requests` | List pull requests (filterable by state) |
+| `get_pull_request` | Get a single pull request |
+| `list_issues` | List issues (filterable by state) |
+| `get_issue` | Get a single issue |
+| `list_issue_comments` | List comments on an issue |
+| `list_branches` | List branches |
+| `get_branch` | Get a single branch |
+| `list_tags` | List tags |
+| `get_head_oid` | Get HEAD commit SHA for a branch |
+
+**Write operations** (capability: `action` — returns `success` boolean):
+
+| Operation | API | Description |
+|-----------|-----|-------------|
+| `create_issue` | GraphQL | Create a new issue |
+| `update_issue` | GraphQL | Update an existing issue |
+| `create_issue_comment` | GraphQL | Add a comment to an issue |
+| `create_pull_request` | GraphQL | Open a new pull request |
+| `update_pull_request` | GraphQL | Update a pull request |
+| `merge_pull_request` | GraphQL | Merge a pull request |
+| `close_pull_request` | GraphQL | Close a pull request |
+| `create_commit` | GraphQL | Create a GPG-signed commit (multi-file, atomic) |
+| `create_branch` | GraphQL | Create a branch |
+| `delete_branch` | GraphQL | Delete a branch |
+| `create_tag` | GraphQL | Create a lightweight tag |
+| `delete_tag` | GraphQL | Delete a tag |
+| `create_release` | REST | Create a release |
+| `update_release` | REST | Update a release |
+| `delete_release` | REST | Delete a release |
 
 ### Output
 
+**Read operations:**
+
 | Field | Type | Description |
 |-------|------|-------------|
-| `result` | any | API response — structure varies by operation (see below) |
+| `result` | any | API response — structure varies by operation |
 
-**Operation output shapes:**
+**Write operations (action):**
 
-| Operation | `result` type | Key fields |
-|-----------|--------------|------------|
-| `get_repo` | object | `name`, `full_name`, `description`, `default_branch`, `private`, `html_url` |
-| `get_file` | object | `name`, `content`, `decoded_content`, `sha`, `size`, `type` |
-| `list_releases` | array | Each: `tag_name`, `name`, `body`, `published_at`, `prerelease` |
-| `get_latest_release` | object | `tag_name`, `name`, `body`, `published_at` |
-| `list_pull_requests` | array | Each: `number`, `title`, `state`, `user`, `created_at` |
-| `get_pull_request` | object | `number`, `title`, `state`, `body`, `user`, `mergeable` |
+| Field | Type | Description |
+|-------|------|-------------|
+| `success` | bool | Whether the operation succeeded |
+| `operation` | string | The operation that was performed |
+| `result` | any | API response data |
+| `error` | string | Error message if the operation failed |
 
 ### Examples
 
@@ -537,7 +597,7 @@ resolve:
         owner: octocat
         repo: hello-world
 
-# Get file content from a specific branch
+# Get file content from a specific branch (returns plain text)
 transform:
   with:
     - provider: github
@@ -548,25 +608,48 @@ transform:
         path: README.md
         ref: main
 
-# Get latest release
-resolve:
+# Create a GPG-signed commit with multiple files
+action:
   with:
     - provider: github
       inputs:
-        operation: get_latest_release
-        owner: cli
-        repo: cli
+        operation: create_commit
+        owner: my-org
+        repo: my-repo
+        branch: feature-branch
+        message: "feat: add scaffolded files"
+        expected_head_oid: abc123def456789012345678901234567890abcd
+        additions:
+          - path: src/main.go
+            content: "package main\n\nfunc main() {}\n"
+          - path: README.md
+            content: "# My Project\n"
 
-# List open pull requests
-resolve:
+# Create an issue with labels
+action:
   with:
     - provider: github
       inputs:
-        operation: list_pull_requests
-        owner: golang
-        repo: go
-        state: open
-        per_page: 10
+        operation: create_issue
+        owner: my-org
+        repo: my-repo
+        title: "Bug: something is broken"
+        body: "Steps to reproduce..."
+        labels:
+          - bug
+          - priority/high
+
+# Create a release (uses REST API)
+action:
+  with:
+    - provider: github
+      inputs:
+        operation: create_release
+        owner: my-org
+        repo: my-repo
+        tag_name: v1.0.0
+        name: "Release 1.0.0"
+        body: "First stable release"
 ```
 
 ---
