@@ -4,6 +4,7 @@
 package ext
 
 import (
+	"strings"
 	"sync"
 
 	"github.com/google/cel-go/cel"
@@ -16,6 +17,7 @@ import (
 	celmap "github.com/oakwood-commons/scafctl/pkg/celexp/ext/map"
 	"github.com/oakwood-commons/scafctl/pkg/celexp/ext/marshalling"
 	"github.com/oakwood-commons/scafctl/pkg/celexp/ext/out"
+	celregex "github.com/oakwood-commons/scafctl/pkg/celexp/ext/regex"
 	celsort "github.com/oakwood-commons/scafctl/pkg/celexp/ext/sort"
 	celstrings "github.com/oakwood-commons/scafctl/pkg/celexp/ext/strings"
 	celtime "github.com/oakwood-commons/scafctl/pkg/celexp/ext/time"
@@ -69,6 +71,7 @@ func BuiltIn() celexp.ExtFunctionList {
 	funcs := celexp.ExtFunctionList{
 		{
 			Name:        "strings",
+			Category:    "strings",
 			Links:       []string{"https://github.com/google/cel-go/blob/master/ext/strings.go"},
 			Description: "String manipulation functions",
 			Custom:      false,
@@ -146,6 +149,7 @@ func BuiltIn() celexp.ExtFunctionList {
 		},
 		{
 			Name:        "lists",
+			Category:    "collections",
 			Links:       []string{"https://github.com/google/cel-go/blob/master/ext/lists.go"},
 			Description: "List manipulation functions",
 			Custom:      false,
@@ -195,6 +199,7 @@ func BuiltIn() celexp.ExtFunctionList {
 		},
 		{
 			Name:        "bindings",
+			Category:    "language",
 			Links:       []string{"https://github.com/google/cel-go/blob/master/ext/bindings.go"},
 			Description: "Dynamic bindings for local variables in expressions",
 			Custom:      false,
@@ -224,6 +229,7 @@ func BuiltIn() celexp.ExtFunctionList {
 		},
 		{
 			Name:        "encoders",
+			Category:    "encoding",
 			Links:       []string{"https://github.com/google/cel-go/blob/master/ext/encoders.go"},
 			Description: "Encoding and decoding functions",
 			Custom:      false,
@@ -241,6 +247,7 @@ func BuiltIn() celexp.ExtFunctionList {
 		},
 		{
 			Name:        "math",
+			Category:    "math",
 			Links:       []string{"https://github.com/google/cel-go/blob/master/ext/math.go"},
 			Description: "Mathematical functions",
 			Custom:      false,
@@ -330,6 +337,7 @@ func BuiltIn() celexp.ExtFunctionList {
 		},
 		{
 			Name:        "protos",
+			Category:    "encoding",
 			Links:       []string{"https://github.com/google/cel-go/blob/master/ext/protos.go"},
 			Description: "Protobuf related functions for proto2 extension fields",
 			Custom:      false,
@@ -359,6 +367,7 @@ func BuiltIn() celexp.ExtFunctionList {
 		},
 		{
 			Name:        "sets",
+			Category:    "collections",
 			Links:       []string{"https://github.com/google/cel-go/blob/master/ext/sets.go"},
 			Description: "Set manipulation functions",
 			Custom:      false,
@@ -414,6 +423,7 @@ func BuiltIn() celexp.ExtFunctionList {
 		// It is disabled by default for better UX with dynamic configuration data.
 		{
 			Name:        "eagerlyValidateDeclarations",
+			Category:    "language",
 			Links:       []string{"https://github.com/google/cel-go/blob/e2bc9c90751b39e3b8401b6394e5f4dab2d48808/cel/options.go#L167C4-L177"},
 			Description: "EagerlyValidateDeclarations ensures that any collisions between configured declarations are caught at the time of the `NewEnv` call. This is useful for bootstrapping a base cel.Env value. Calls to base Env.Extend() will be significantly faster when declarations are eagerly validated as declarations will be collision-checked at most once and only incrementally by way of Extend. Disabled by default as not all environments are used for type-checking.",
 			Custom:      false,
@@ -422,6 +432,7 @@ func BuiltIn() celexp.ExtFunctionList {
 		},
 		{
 			Name:        "defaultUTCTimeZone",
+			Category:    "time",
 			Links:       []string{"https://github.com/google/cel-go/blob/e2bc9c90751b39e3b8401b6394e5f4dab2d48808/cel/options.go#L836-L840"},
 			Description: "DefaultUTCTimeZone ensures that time-based operations use the UTC timezone rather than the input time's local timezone",
 			Custom:      false,
@@ -435,6 +446,7 @@ func BuiltIn() celexp.ExtFunctionList {
 		},
 		{
 			Name:        "crossTypeNumericComparisons",
+			Category:    "math",
 			Links:       []string{"https://github.com/google/cel-go/blob/e2bc9c90751b39e3b8401b6394e5f4dab2d48808/cel/options.go#L831-L834"},
 			Description: "CrossTypeNumericComparisons makes it possible to compare across numeric types, e.g. double < int",
 			Custom:      false,
@@ -452,6 +464,7 @@ func BuiltIn() celexp.ExtFunctionList {
 		},
 		{
 			Name:        "optionalTypes",
+			Category:    "language",
 			Links:       []string{"https://github.com/google/cel-go/blob/e2bc9c90751b39e3b8401b6394e5f4dab2d48808/cel/library.go#L207-L368"},
 			Description: "OptionalTypes enable support for optional syntax and types in CEL. The optional value type makes it possible to express whether variables have been provided, whether a result has been computed, and in the future whether an object field path, map key value, or list index has a value",
 			Custom:      false,
@@ -549,6 +562,7 @@ func BuiltIn() celexp.ExtFunctionList {
 		},
 		{
 			Name:        "astValidators",
+			Category:    "language",
 			Links:       []string{"https://github.com/google/cel-go/blob/master/cel/validator.go"},
 			Description: "ASTValidators enable various AST validation options. The available validators are: ValidateDurationLiterals, ValidateTimestampLiterals, ValidateRegexLiterals, and optionally ValidateHomogeneousAggregateLiterals (controlled by feature flag)",
 			Custom:      false,
@@ -580,6 +594,7 @@ func BuiltIn() celexp.ExtFunctionList {
 		// Add the standalone option
 		funcs = append(funcs, celexp.ExtFunction{
 			Name:        "homogeneousAggregateLiterals",
+			Category:    "language",
 			Links:       []string{"https://github.com/google/cel-go/blob/e2bc9c90751b39e3b8401b6394e5f4dab2d48808/cel/options.go#L179-L186"},
 			Description: "HomogeneousAggregateLiterals disables mixed type list and map literal values. Note: heterogeneous aggregates are still possible when provided as variables, via conversion of well-known dynamic types, or with unchecked expressions. This option is DISABLED by default - enable with ext.SetHomogeneousAggregateLiterals(true)",
 			Custom:      false,
@@ -603,6 +618,7 @@ func BuiltIn() celexp.ExtFunctionList {
 		// Also add the AST validator version
 		funcs = append(funcs, celexp.ExtFunction{
 			Name:        "astValidatorHomogeneousAggregateLiterals",
+			Category:    "language",
 			Links:       []string{"https://github.com/google/cel-go/blob/master/cel/validator.go"},
 			Description: "AST validator for HomogeneousAggregateLiterals (only included when feature flag is enabled)",
 			Custom:      false,
@@ -691,7 +707,7 @@ func SetFunctionNames(funcs celexp.ExtFunctionList) error {
 //	    fmt.Printf("Custom Function: %s (%s)\n", f.Name, f.Description)
 //	}
 func Custom() celexp.ExtFunctionList {
-	return celexp.ExtFunctionList{
+	funcs := celexp.ExtFunctionList{
 		// Arrays functions
 		arrays.StringAddFunc(),
 		arrays.StringsUniqueFunc(),
@@ -728,6 +744,12 @@ func Custom() celexp.ExtFunctionList {
 		// Out functions
 		out.NilFunc(),
 
+		// Regex functions
+		celregex.MatchFunc(),
+		celregex.ReplaceFunc(),
+		celregex.FindAllFunc(),
+		celregex.SplitFunc(),
+
 		// Sort functions
 		celsort.ObjectsFunc(),
 		celsort.ObjectsDescendingFunc(),
@@ -740,6 +762,38 @@ func Custom() celexp.ExtFunctionList {
 		celtime.NowFunc(),
 		celtime.NowFmtFunc(),
 	}
+
+	// Assign categories based on function name prefix
+	categoryMap := map[string]string{
+		"arrays.":  "collections",
+		"debug.":   "debug",
+		"filepath": "filepath",
+		"guid.":    "utility",
+		"map.":     "collections",
+		"json.":    "encoding",
+		"yaml.":    "encoding",
+		"out.":     "utility",
+		"regex.":   "strings",
+		"sort.":    "collections",
+		"strings.": "strings",
+		"time.":    "time",
+	}
+	for i := range funcs {
+		if funcs[i].Category != "" {
+			continue
+		}
+		for prefix, cat := range categoryMap {
+			if strings.HasPrefix(funcs[i].Name, prefix) {
+				funcs[i].Category = cat
+				break
+			}
+		}
+		if funcs[i].Category == "" {
+			funcs[i].Category = "utility"
+		}
+	}
+
+	return funcs
 }
 
 // All returns a combined list of all CEL extension functions, including both

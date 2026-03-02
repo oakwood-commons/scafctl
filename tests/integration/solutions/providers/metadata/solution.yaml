@@ -1,0 +1,61 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: metadata-provider-test
+  version: 1.0.0
+  description: Integration test for the metadata provider
+  category: test
+
+spec:
+  resolvers:
+    # Full metadata map
+    full-meta:
+      resolve:
+        with:
+          - provider: metadata
+            inputs:
+              name: my-solution
+              version: 2.1.0
+              category: infrastructure
+              tags:
+                - gcp
+                - terraform
+
+    # Single field extraction
+    sol-name:
+      resolve:
+        with:
+          - provider: metadata
+            inputs:
+              field: name
+              name: my-solution
+              version: 2.1.0
+
+  testing:
+    config:
+      # render-defaults: solution has no workflow.actions section
+      skipBuiltins: [render-defaults]
+    cases:
+      resolve-full-meta:
+        description: Verify full metadata map resolves correctly
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: '__output["full-meta"].name == "my-solution"'
+            message: "name should be my-solution"
+          - expression: '__output["full-meta"].version == "2.1.0"'
+            message: "version should be 2.1.0"
+          - expression: '__output["full-meta"].category == "infrastructure"'
+            message: "category should be infrastructure"
+          - expression: 'size(__output["full-meta"].tags) == 2'
+            message: "should have 2 tags"
+
+      resolve-sol-name:
+        description: Verify single field extraction returns name
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: '__output["sol-name"] == "my-solution"'
+            message: "should return my-solution"

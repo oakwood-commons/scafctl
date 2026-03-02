@@ -53,7 +53,7 @@ func TestToolIcons(t *testing.T) {
 		"solution", "provider", "cel", "template", "schema",
 		"example", "catalog", "auth", "lint", "scaffold",
 		"action", "diff", "dryrun", "config", "refs",
-		"testing", "snapshot", "version",
+		"testing", "snapshot", "version", "help",
 	}
 
 	for _, cat := range expectedCategories {

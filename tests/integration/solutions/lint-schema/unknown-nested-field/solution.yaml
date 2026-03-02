@@ -33,7 +33,10 @@ spec:
 
   testing:
     config:
-      skipBuiltins: true
+      # lint: solution intentionally has unknown nested field (spec.badNestedField) that lint correctly rejects
+      # resolve-defaults: resolver uses parameter provider requiring external input
+      # render-defaults: solution has no workflow.actions section
+      skipBuiltins: [lint, resolve-defaults, render-defaults]
 
     cases:
       nested-field-detected:

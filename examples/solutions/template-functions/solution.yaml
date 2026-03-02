@@ -1,0 +1,151 @@
+# Template Functions Demo
+#
+# Demonstrates the custom Go template functions available in scafctl:
+#   slugify, toDnsString, where, selectField, cel, toHcl, toYaml, fromYaml
+#
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: template-functions-demo
+  version: 1.0.0
+  displayName: Template Functions Demo
+  description: Demonstrates scafctl custom Go template functions
+  category: demo
+  tags:
+    - templates
+    - functions
+    - demo
+
+spec:
+  resolvers:
+    # Source data
+    project-name:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "My Cool Project!"
+
+    services:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - name: api-gateway
+                  port: 8080
+                  active: true
+                - name: auth-service
+                  port: 8081
+                  active: true
+                - name: legacy-proxy
+                  port: 9090
+                  active: false
+
+    # slugify — convert any string to a DNS-safe slug
+    slugified-name:
+      dependsOn: [project-name]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              template: '{{ slugify (index . "project-name") }}'
+              name: slugify-demo
+      # Result: "my-cool-project"
+
+    # toDnsString — strict RFC 1123 DNS label
+    dns-label:
+      dependsOn: [project-name]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              template: '{{ toDnsString (index . "project-name") }}'
+              name: dns-demo
+      # Result: "my-cool-project"
+
+    # where — filter a list by field value
+    active-services:
+      dependsOn: [services]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              template: '{{ where "active" true .services | toYaml }}'
+              name: where-demo
+      # Returns only services where active == true
+
+    # selectField — extract a single field from each item
+    service-names:
+      dependsOn: [services]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              template: '{{ selectField "name" .services | toYaml }}'
+              name: select-demo
+      # Returns: ["api-gateway", "auth-service", "legacy-proxy"]
+
+    # cel — inline CEL expression in a Go template
+    active-count:
+      dependsOn: [services]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              template: '{{ cel "size(_.services.filter(s, s.active == true))" . }}'
+              name: cel-demo
+      # Returns: "2"
+
+    # toYaml / fromYaml — round-trip YAML serialization
+    yaml-roundtrip:
+      dependsOn: [services]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              template: |
+                {{ $yaml := toYaml .services }}
+                {{ $parsed := fromYaml $yaml }}
+                Service count: {{ len $parsed }}
+              name: yaml-demo
+
+    # Solution metadata via metadata provider
+    solution-meta:
+      resolve:
+        with:
+          - provider: metadata
+            inputs:
+              name: template-functions-demo
+              version: 1.0.0
+              category: demo

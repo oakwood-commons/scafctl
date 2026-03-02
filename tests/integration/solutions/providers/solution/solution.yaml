@@ -60,7 +60,9 @@ spec:
 
   testing:
     config:
-      skipBuiltins: true
+      # resolve-defaults: child solution requires parameter inputs (message, number)
+      # render-defaults: solution has no workflow.actions section
+      skipBuiltins: [resolve-defaults, render-defaults]
 
     cases:
       _base:

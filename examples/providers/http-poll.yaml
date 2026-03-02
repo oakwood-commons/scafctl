@@ -1,0 +1,12 @@
+# HTTP provider with polling — re-execute requests until a condition is met.
+# Useful for waiting on async operations like deployments or CI pipelines.
+#
+# Run: scafctl run provider -f examples/providers/http-poll.yaml
+
+url: https://httpbin.org/get
+method: GET
+autoParseJson: true
+poll:
+  until: 'statusCode == 200'
+  interval: 2s
+  maxAttempts: 3

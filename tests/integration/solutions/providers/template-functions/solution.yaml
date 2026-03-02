@@ -1,0 +1,149 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: template-functions-test
+  version: 1.0.0
+  description: Integration test for custom Go template functions
+  category: test
+
+spec:
+  resolvers:
+    project-name:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "My Cool Project! (v2)"
+
+    services:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - name: api-gateway
+                  port: 8080
+                  active: true
+                - name: auth-service
+                  port: 8081
+                  active: true
+                - name: legacy-proxy
+                  port: 9090
+                  active: false
+
+    # slugify test
+    slugified:
+      dependsOn: [project-name]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              template: '{{ slugify (index . "project-name") }}'
+              name: slugify-test
+
+    # toDnsString test
+    dns-label:
+      dependsOn: [project-name]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              template: '{{ toDnsString (index . "project-name") }}'
+              name: dns-test
+
+    # where test
+    active-services:
+      dependsOn: [services]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.services.filter(s, s.active == true)'
+
+    # selectField test
+    service-names:
+      dependsOn: [services]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              template: '{{ selectField "name" .services | toYaml }}'
+              name: select-test
+
+    # cel inline test
+    active-count:
+      dependsOn: [services]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              template: '{{ cel "string(size(_.services.filter(s, s.active == true)))" . }}'
+              name: cel-inline-test
+
+  testing:
+    config:
+      # render-defaults: solution has no workflow.actions section
+      skipBuiltins: [render-defaults]
+    cases:
+      test-slugify:
+        description: Verify slugify produces correct slug
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.slugified == "my-cool-project-v2"
+            message: "slugify should produce correct slug"
+
+      test-dns-string:
+        description: Verify toDnsString produces correct DNS label
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output["dns-label"] == "my-cool-project-v2"
+            message: "toDnsString should produce correct DNS label"
+
+      test-active-count:
+        description: Verify cel inline counts active services
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output["active-count"] == "2"
+            message: "cel inline should count active services"
+
+      test-service-names:
+        description: Verify selectField extracts service names
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: '__output["service-names"].contains("api-gateway")'
+            message: "selectField should extract api-gateway"
+          - expression: '__output["service-names"].contains("legacy-proxy")'
+            message: "selectField should extract legacy-proxy"

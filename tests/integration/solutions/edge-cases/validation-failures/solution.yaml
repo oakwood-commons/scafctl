@@ -67,7 +67,9 @@ spec:
 
   testing:
     config:
-      skipBuiltins: true
+      # resolve-defaults: resolvers have intentional validation failures by design
+      # render-defaults: solution has no workflow.actions section
+      skipBuiltins: [resolve-defaults, render-defaults]
 
     cases:
       valid-passes:

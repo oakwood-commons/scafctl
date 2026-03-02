@@ -1074,3 +1074,95 @@ func TestHTTPProvider_Execute_HeadersCopy(t *testing.T) {
 	_, hasAuth := originalHeaders["Authorization"]
 	assert.False(t, hasAuth, "Original headers should not be modified")
 }
+
+func TestHTTPProvider_Execute_AutoParseJson(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"users":[{"name":"alice"},{"name":"bob"}],"count":2}`))
+	}))
+	defer server.Close()
+
+	p := NewHTTPProvider()
+	ctx := context.Background()
+
+	t.Run("enabled", func(t *testing.T) {
+		inputs := map[string]any{
+			"url":           server.URL,
+			"method":        "GET",
+			"autoParseJson": true,
+		}
+
+		output, err := p.Execute(ctx, inputs)
+		require.NoError(t, err)
+		data := output.Data.(map[string]any)
+
+		// Body should be parsed into structured data
+		body, ok := data["body"].(map[string]any)
+		require.True(t, ok, "body should be a map when autoParseJson is true")
+		assert.Equal(t, float64(2), body["count"])
+
+		users, ok := body["users"].([]any)
+		require.True(t, ok)
+		assert.Len(t, users, 2)
+	})
+
+	t.Run("disabled", func(t *testing.T) {
+		inputs := map[string]any{
+			"url":    server.URL,
+			"method": "GET",
+		}
+
+		output, err := p.Execute(ctx, inputs)
+		require.NoError(t, err)
+		data := output.Data.(map[string]any)
+
+		// Body should be a raw string when autoParseJson is not set
+		body, ok := data["body"].(string)
+		require.True(t, ok, "body should be a string when autoParseJson is false")
+		assert.Contains(t, body, `"users"`)
+	})
+
+	t.Run("non-json-content-type", func(t *testing.T) {
+		textServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/plain")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`not json`))
+		}))
+		defer textServer.Close()
+
+		inputs := map[string]any{
+			"url":           textServer.URL,
+			"method":        "GET",
+			"autoParseJson": true,
+		}
+
+		output, err := p.Execute(ctx, inputs)
+		require.NoError(t, err)
+		data := output.Data.(map[string]any)
+
+		// Body should remain a string for non-JSON content type
+		_, ok := data["body"].(string)
+		assert.True(t, ok, "body should remain string for non-JSON content type")
+	})
+}
+
+func TestIsJSONContentType(t *testing.T) {
+	tests := []struct {
+		contentType string
+		expected    bool
+	}{
+		{"application/json", true},
+		{"application/json; charset=utf-8", true},
+		{"APPLICATION/JSON", true},
+		{"application/vnd.api+json", true},
+		{"text/plain", false},
+		{"text/html", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.contentType, func(t *testing.T) {
+			assert.Equal(t, tt.expected, isJSONContentType(tt.contentType))
+		})
+	}
+}

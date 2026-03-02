@@ -182,8 +182,8 @@ func mergeTestCase(dst, src *TestCase) {
 	if src.ExitCode != nil {
 		dst.ExitCode = src.ExitCode
 	}
-	if src.Skip {
-		dst.Skip = true
+	if !src.Skip.IsZero() {
+		dst.Skip = src.Skip
 	}
 	if src.SkipReason != "" {
 		dst.SkipReason = src.SkipReason
@@ -193,9 +193,6 @@ func mergeTestCase(dst, src *TestCase) {
 	}
 	if src.Snapshot != "" {
 		dst.Snapshot = src.Snapshot
-	}
-	if src.SkipExpression != "" {
-		dst.SkipExpression = src.SkipExpression
 	}
 	if src.Retries > 0 {
 		dst.Retries = src.Retries

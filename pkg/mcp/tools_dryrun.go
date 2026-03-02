@@ -32,6 +32,9 @@ func (s *Server) registerDryRunTools() {
 		mcp.WithObject("params",
 			mcp.Description("Input parameters as key-value pairs for parameter-type resolvers"),
 		),
+		mcp.WithObject("mock_data",
+			mcp.Description("Override specific resolver values with mock data instead of executing them. Keys are resolver names, values are the mock output. Useful for testing action behavior with specific resolver outputs without requiring real provider execution. Example: {\"api_url\": \"https://mock.example.com\", \"config\": {\"env\": \"test\"}}"),
+		),
 	)
 	s.mcpServer.AddTool(dryRunTool, s.handleDryRunSolution)
 }
@@ -48,6 +51,7 @@ func (s *Server) handleDryRunSolution(_ context.Context, request mcp.CallToolReq
 
 	// Parse params
 	var params map[string]any
+	var mockData map[string]any
 	args := request.GetArguments()
 	if p, ok := args["params"]; ok && p != nil {
 		if pm, ok := p.(map[string]any); ok {
@@ -56,6 +60,16 @@ func (s *Server) handleDryRunSolution(_ context.Context, request mcp.CallToolReq
 			return newStructuredError(ErrCodeInvalidInput, "'params' must be an object (key-value pairs)",
 				WithField("params"),
 				WithSuggestion("Provide params as a JSON object, e.g. {\"key\": \"value\"}"),
+			), nil
+		}
+	}
+	if m, ok := args["mock_data"]; ok && m != nil {
+		if mm, ok := m.(map[string]any); ok {
+			mockData = mm
+		} else {
+			return newStructuredError(ErrCodeInvalidInput, "'mock_data' must be an object mapping resolver names to mock values",
+				WithField("mock_data"),
+				WithSuggestion("Provide mock_data as {\"resolver_name\": <value>}"),
 			), nil
 		}
 	}
@@ -102,6 +116,16 @@ func (s *Server) handleDryRunSolution(_ context.Context, request mcp.CallToolReq
 			resolverData = make(map[string]any)
 		} else {
 			resolverData = result.Data
+		}
+	}
+
+	// Apply mock_data overrides — these take precedence over dry-run results
+	if len(mockData) > 0 {
+		if resolverData == nil {
+			resolverData = make(map[string]any)
+		}
+		for name, val := range mockData {
+			resolverData[name] = val
 		}
 	}
 

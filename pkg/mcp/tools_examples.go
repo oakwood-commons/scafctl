@@ -15,7 +15,7 @@ import (
 func (s *Server) registerExampleTools() {
 	// list_examples — list available example files
 	listExamplesTool := mcp.NewTool("list_examples",
-		mcp.WithDescription("List available scafctl example files. Examples demonstrate best practices for solutions, resolvers, actions, providers, and more. Filter by category (solutions, resolvers, actions, providers, exec, config, mcp, snapshots, catalog) or get all."),
+		mcp.WithDescription("List available scafctl example files. Examples demonstrate best practices for solutions, resolvers, actions, providers, and more. Filter by category or get all (grouped by category)."),
 		mcp.WithTitleAnnotation("List Examples"),
 		mcp.WithToolIcons(toolIcons["example"]),
 		mcp.WithReadOnlyHintAnnotation(true),
@@ -23,8 +23,8 @@ func (s *Server) registerExampleTools() {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithString("category",
-			mcp.Description("Filter by category: solutions, resolvers, actions, providers, exec, config, mcp, snapshots, catalog. Omit to list all."),
-			mcp.Enum("solutions", "resolvers", "actions", "providers", "exec", "config", "mcp", "snapshots", "catalog"),
+			mcp.Description("Filter by category. Omit to list all examples grouped by category."),
+			mcp.Enum("solutions", "resolvers", "actions", "providers", "exec", "config", "mcp", "snapshots", "catalog", "auth", "eval", "plugins", "telemetry"),
 		),
 	)
 	s.mcpServer.AddTool(listExamplesTool, s.handleListExamples)
@@ -68,9 +68,54 @@ func (s *Server) handleListExamples(_ context.Context, request mcp.CallToolReque
 		})
 	}
 
+	// When listing all (no category filter), group by category for easier navigation.
+	if category == "" {
+		grouped := make(map[string][]examples.Example)
+		for _, item := range items {
+			cat := item.Category
+			if cat == "" {
+				cat = "(uncategorized)"
+			}
+			grouped[cat] = append(grouped[cat], item)
+		}
+
+		// Build summary per category.
+		type categorySummary struct {
+			Category string             `json:"category"`
+			Count    int                `json:"count"`
+			Examples []examples.Example `json:"examples"`
+		}
+
+		cats := examples.Categories()
+		summaries := make([]categorySummary, 0, len(cats))
+		for _, cat := range cats {
+			if g, ok := grouped[cat]; ok {
+				summaries = append(summaries, categorySummary{
+					Category: cat,
+					Count:    len(g),
+					Examples: g,
+				})
+			}
+		}
+		// Include uncategorized if present.
+		if g, ok := grouped["(uncategorized)"]; ok {
+			summaries = append(summaries, categorySummary{
+				Category: "(uncategorized)",
+				Count:    len(g),
+				Examples: g,
+			})
+		}
+
+		return mcp.NewToolResultJSON(map[string]any{
+			"categories": summaries,
+			"totalCount": len(items),
+		})
+	}
+
 	return mcp.NewToolResultJSON(map[string]any{
 		"examples": items,
 		"count":    len(items),
+		"category": category,
 	})
 }
 

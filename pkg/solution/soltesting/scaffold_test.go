@@ -210,3 +210,35 @@ func exprPtr(s string) *celexp.Expression {
 	e := celexp.Expression(s)
 	return &e
 }
+
+func TestScaffold_FileDependenciesPopulatedOnAllCases(t *testing.T) {
+	input := &ScaffoldInput{
+		Resolvers: map[string]*resolver.Resolver{
+			"region": {
+				Resolve: &resolver.ResolvePhase{
+					With: []resolver.ProviderSource{
+						{Provider: "static"},
+					},
+				},
+			},
+		},
+		FileDependencies: []string{"templates/main.yaml", "data/config.json"},
+	}
+
+	result := Scaffold(input)
+
+	// Every generated case should have the file dependencies
+	for name, tc := range result.Cases {
+		assert.Equal(t, []string{"data/config.json", "templates/main.yaml"}, tc.Files,
+			"test case %q should have sorted file dependencies", name)
+	}
+}
+
+func TestScaffold_EmptyFileDependenciesOmitted(t *testing.T) {
+	result := Scaffold(&ScaffoldInput{})
+
+	for name, tc := range result.Cases {
+		assert.Nil(t, tc.Files,
+			"test case %q should have nil Files when no dependencies discovered", name)
+	}
+}

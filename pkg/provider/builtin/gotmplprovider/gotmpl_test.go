@@ -431,6 +431,7 @@ func TestGoTemplateProvider_Descriptor_Schema(t *testing.T) {
 	require.Contains(t, props, "leftDelim")
 	require.Contains(t, props, "rightDelim")
 	require.Contains(t, props, "data")
+	require.Contains(t, props, "ignoredBlocks")
 
 	// Check required fields
 	assert.Contains(t, desc.Schema.Required, "template")
@@ -439,4 +440,242 @@ func TestGoTemplateProvider_Descriptor_Schema(t *testing.T) {
 	// Check optional fields are not required
 	assert.NotContains(t, desc.Schema.Required, "missingKey")
 	assert.NotContains(t, desc.Schema.Required, "data")
+	assert.NotContains(t, desc.Schema.Required, "ignoredBlocks")
+}
+
+func TestGoTemplateProvider_Execute_IgnoredBlocks(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{
+		"name":     "my-resource",
+		"location": "eastus",
+	})
+
+	inputs := map[string]any{
+		"name": "ignored-blocks-test",
+		"template": `resource "azurerm_resource_group" "rg" {
+  name     = "{{.name}}"
+  location = "{{.location}}"
+  /*scafctl:ignore:start*/
+  for_each = { for k, v in var.items : k => v }
+  /*scafctl:ignore:end*/
+}`,
+		"ignoredBlocks": []any{
+			map[string]any{
+				"start": "/*scafctl:ignore:start*/",
+				"end":   "/*scafctl:ignore:end*/",
+			},
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	result, ok := output.Data.(string)
+	require.True(t, ok)
+
+	// Verify template variables were rendered
+	assert.Contains(t, result, `name     = "my-resource"`)
+	assert.Contains(t, result, `location = "eastus"`)
+
+	// Verify ignored block markers and content were preserved literally
+	assert.Contains(t, result, "/*scafctl:ignore:start*/")
+	assert.Contains(t, result, "/*scafctl:ignore:end*/")
+	assert.Contains(t, result, "for_each = { for k, v in var.items : k => v }")
+}
+
+func TestGoTemplateProvider_Execute_IgnoredBlocks_Multiple(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{
+		"value": "rendered",
+	})
+
+	inputs := map[string]any{
+		"name":     "multi-blocks-test",
+		"template": `before-{{.value}}-<!--preserve-->{{ .broken }}<!--/preserve-->-after-{{.value}}`,
+		"ignoredBlocks": []any{
+			map[string]any{
+				"start": "<!--preserve-->",
+				"end":   "<!--/preserve-->",
+			},
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	result, ok := output.Data.(string)
+	require.True(t, ok)
+
+	assert.Contains(t, result, "before-rendered-")
+	assert.Contains(t, result, "<!--preserve-->{{ .broken }}<!--/preserve-->")
+	assert.Contains(t, result, "-after-rendered")
+}
+
+func TestGoTemplateProvider_Execute_IgnoredBlocks_Empty(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{
+		"name": "test",
+	})
+
+	// Empty/invalid blocks should be silently skipped
+	inputs := map[string]any{
+		"name":     "empty-blocks-test",
+		"template": "Hello, {{.name}}!",
+		"ignoredBlocks": []any{
+			map[string]any{"start": "", "end": ""},
+			map[string]any{"start": "something", "end": ""},
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	assert.Equal(t, "Hello, test!", output.Data)
+}
+
+func TestGoTemplateProvider_Execute_IgnoredBlocks_Line(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{
+		"appName": "my-app",
+	})
+
+	inputs := map[string]any{
+		"name": "line-ignore-test",
+		"template": `name: {{.appName}}
+steps:
+  - run: echo ${{ secrets.TOKEN }}  # scafctl:ignore
+  - run: echo "deployed"`,
+		"ignoredBlocks": []any{
+			map[string]any{
+				"line": "# scafctl:ignore",
+			},
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	result, ok := output.Data.(string)
+	require.True(t, ok)
+
+	// Template variable should be rendered
+	assert.Contains(t, result, "name: my-app")
+	// The ignored line should be preserved literally (including the ${{ }} syntax)
+	assert.Contains(t, result, "${{ secrets.TOKEN }}")
+	assert.Contains(t, result, "# scafctl:ignore")
+	// Non-ignored line should still be present
+	assert.Contains(t, result, `echo "deployed"`)
+}
+
+func TestGoTemplateProvider_Execute_IgnoredBlocks_Line_Multiple(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{
+		"env": "prod",
+	})
+
+	inputs := map[string]any{
+		"name": "multi-line-ignore-test",
+		"template": `env: {{.env}}
+line1: ${{ secrets.A }}  # scafctl:ignore
+line2: normal content
+line3: ${{ secrets.B }}  # scafctl:ignore`,
+		"ignoredBlocks": []any{
+			map[string]any{
+				"line": "# scafctl:ignore",
+			},
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	result, ok := output.Data.(string)
+	require.True(t, ok)
+
+	assert.Contains(t, result, "env: prod")
+	assert.Contains(t, result, "${{ secrets.A }}")
+	assert.Contains(t, result, "${{ secrets.B }}")
+	assert.Contains(t, result, "normal content")
+}
+
+func TestGoTemplateProvider_Execute_IgnoredBlocks_Line_MutualExclusion(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{
+		"name": "test",
+	})
+
+	// Using both line and start/end should produce an error
+	inputs := map[string]any{
+		"name":     "mutual-exclusion-test",
+		"template": "Hello, {{.name}}!",
+		"ignoredBlocks": []any{
+			map[string]any{
+				"line":  "# scafctl:ignore",
+				"start": "/*start*/",
+				"end":   "/*end*/",
+			},
+		},
+	}
+
+	_, err := p.Execute(ctx, inputs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mutually exclusive")
+}
+
+func TestGoTemplateProvider_Execute_IgnoredBlocks_Line_MixedEntries(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{
+		"name": "my-resource",
+	})
+
+	// Different entries can use different modes
+	inputs := map[string]any{
+		"name": "mixed-entries-test",
+		"template": `resource "aws_instance" "main" {
+  name = "{{.name}}"
+  secret = ${{ secrets.KEY }}  # scafctl:ignore
+  /*preserve:start*/
+  tags = { for k, v in var.x : k => v }
+  /*preserve:end*/
+}`,
+		"ignoredBlocks": []any{
+			map[string]any{
+				"line": "# scafctl:ignore",
+			},
+			map[string]any{
+				"start": "/*preserve:start*/",
+				"end":   "/*preserve:end*/",
+			},
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	result, ok := output.Data.(string)
+	require.True(t, ok)
+
+	// Template variable rendered
+	assert.Contains(t, result, `name = "my-resource"`)
+	// Line-ignored content preserved
+	assert.Contains(t, result, "${{ secrets.KEY }}")
+	// Block-ignored content preserved
+	assert.Contains(t, result, "for k, v in var.x : k => v")
 }

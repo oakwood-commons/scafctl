@@ -1,0 +1,13 @@
+# Metadata provider example — expose solution metadata as resolver data
+#
+# The metadata provider accepts arbitrary key-value pairs and returns them
+# as a map. Use the optional "field" key to return a single value.
+
+# Full metadata map
+name: my-solution
+version: 2.1.0
+description: Scaffolds a GCP project
+category: infrastructure
+tags:
+  - gcp
+  - terraform

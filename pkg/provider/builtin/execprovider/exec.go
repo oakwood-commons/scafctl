@@ -313,8 +313,8 @@ func (p *ExecProvider) executeCommand(ctx context.Context, command string, input
 		opts.Stdin = stdin
 	}
 
-	// Execute command
-	result, err := shellexec.Run(cmdCtx, opts)
+	// Execute command — uses RunWithContext so tests can inject a mock RunFunc
+	result, err := shellexec.RunWithContext(cmdCtx, opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute command: %w", err)
 	}

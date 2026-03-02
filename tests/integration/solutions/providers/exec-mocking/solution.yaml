@@ -1,0 +1,108 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-exec-mocking
+  version: 1.0.0
+  description: |
+    Functional tests for exec command mocking.
+    Verifies that exec provider calls can be intercepted by mock rules
+    defined in testing.config.services with type: exec.
+
+spec:
+  resolvers:
+    kubectlPods:
+      description: Simulated kubectl command via exec mock
+      resolve:
+        with:
+          - provider: exec
+            inputs:
+              command: "kubectl get pods -n production"
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "__self.stdout.trim()"
+
+    terraformPlan:
+      description: Simulated terraform plan via pattern-matched mock
+      resolve:
+        with:
+          - provider: exec
+            inputs:
+              command: "terraform plan -out=plan.tfplan"
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "__self.stdout.trim()"
+
+    failingCommand:
+      description: Simulated failing command returning non-zero exit code
+      resolve:
+        with:
+          - provider: exec
+            inputs:
+              command: "curl https://unreachable.example.com"
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "string(__self.exitCode)"
+
+  testing:
+    config:
+      # resolve-defaults: resolvers use exec provider with commands that require mock services
+      # render-defaults: solution has no workflow.actions section
+      skipBuiltins: [resolve-defaults, render-defaults]
+      services:
+        - name: exec-mock
+          type: exec
+          execRules:
+            - command: "kubectl get pods -n production"
+              stdout: |
+                NAME       READY   STATUS
+                web-1      1/1     Running
+                api-2      1/1     Running
+              exitCode: 0
+            - pattern: "^terraform plan.*"
+              stdout: "No changes. Infrastructure is up-to-date."
+              exitCode: 0
+            - pattern: "^curl.*"
+              stderr: "curl: (7) Failed to connect"
+              exitCode: 7
+
+    cases:
+      _base:
+        description: Base template for exec mock tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [provider, exec, mock]
+        skip: 'subprocess'
+        skipReason: "exec mocking requires in-process execution; subprocess mode does not support RunFunc injection"
+        assertions:
+          - expression: __exitCode == 0
+
+      exact-command-match:
+        description: Verify exact command matching returns mocked stdout
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.kubectlPods.contains("web-1")
+            message: "Mocked kubectl should return pod list"
+          - expression: __output.kubectlPods.contains("Running")
+            message: "Pod status should be Running"
+
+      pattern-command-match:
+        description: Verify regex pattern matching returns mocked output
+        extends: [_base]
+        assertions:
+          - expression: __output.terraformPlan.contains("No changes")
+            message: "Mocked terraform plan should return no changes"
+
+      failing-command-mock:
+        description: Verify mocked non-zero exit code is captured
+        extends: [_base]
+        assertions:
+          - expression: __output.failingCommand == "7"
+            message: "Exit code should be 7 from mocked curl failure"

@@ -153,7 +153,7 @@ func TestRunnerSkipTest(t *testing.T) {
 				"skipped-test": {
 					Name:       "skipped-test",
 					Command:    []string{"run"},
-					Skip:       true,
+					Skip:       SkipValue{Static: true},
 					SkipReason: "not ready yet",
 					Assertions: []Assertion{
 						{Expression: "__exitCode == 0"},

@@ -298,6 +298,7 @@ func TestCustom(t *testing.T) {
 		"map":         {"map.add", "map.select", "map.omit", "map.merge"},
 		"marshalling": {"json.marshal", "json.unmarshal", "yaml.marshal", "yaml.unmarshal"},
 		"out":         {"out.nil"},
+		"regex":       {"regex.match", "regex.replace", "regex.findAll", "regex.split"},
 		"sort":        {"sort.objects"},
 		"strings":     {"strings.clean", "strings.title"},
 		"time":        {"time.now"},

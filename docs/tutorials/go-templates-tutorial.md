@@ -30,7 +30,11 @@ This tutorial walks you through using Go templates in scafctl to generate struct
 13. [Using Sprig Functions](#using-sprig-functions)
 14. [Converting Data to HCL with toHcl](#converting-data-to-hcl-with-tohcl)
 15. [Serializing and Parsing YAML with toYaml / fromYaml](#serializing-and-parsing-yaml-with-toyaml--fromyaml)
-16. [Discovering Available Functions](#discovering-available-functions)
+16. [DNS-Safe Strings with slugify / toDnsString](#dns-safe-strings-with-slugify--todnsstring)
+17. [Filtering Lists with where / selectField](#filtering-lists-with-where--selectfield)
+18. [Inline CEL with cel](#inline-cel-with-cel)
+19. [Debugging Template Type Errors](#debugging-template-type-errors)
+20. [Discovering Available Functions](#discovering-available-functions)
 
 ---
 
@@ -1653,6 +1657,200 @@ tags:
 
 ---
 
+## DNS-Safe Strings with slugify / toDnsString
+
+scafctl provides two functions for converting arbitrary strings into DNS-safe labels (RFC 1123):
+
+- **`slugify`** — Converts a string to lowercase, replaces non-alphanumeric characters with hyphens, collapses consecutive hyphens, and trims leading/trailing hyphens. Max 63 characters.
+- **`toDnsString`** — Alias for `slugify` with the same behavior. Use whichever name reads better in your template.
+
+### Example
+
+```yaml
+spec:
+  resolvers:
+    project-name:
+      type: static
+      from:
+        value: "My Cool Project! (v2)"
+
+    dns-label:
+      type: go-template
+      dependsOn: [project-name]
+      transform:
+        template: '{{ slugify .project-name }}'
+        name: slugify-demo
+```
+
+```bash
+scafctl run resolver -f slugify-demo.yaml -e _.dns-label
+# Output: my-cool-project-v2
+```
+
+### Key behaviors
+
+- Unicode letters are transliterated where possible, others become hyphens
+- Leading/trailing hyphens are trimmed
+- Consecutive hyphens are collapsed to one
+- Empty result returns `"unnamed"`
+- Output is truncated to 63 characters (DNS label limit)
+
+---
+
+## Filtering Lists with where / selectField
+
+Two collection functions let you filter and project lists of maps without CEL:
+
+- **`where key value list`** — Returns items where `item[key] == value`
+- **`selectField key list`** — Returns a list of `item[key]` values (like SQL SELECT)
+
+### Filtering with where
+
+```yaml
+spec:
+  resolvers:
+    services:
+      type: static
+      from:
+        value:
+          - name: api
+            active: true
+          - name: legacy
+            active: false
+          - name: web
+            active: true
+
+    active-only:
+      type: go-template
+      dependsOn: [services]
+      transform:
+        template: '{{ where "active" true .services | toYaml }}'
+        name: where-demo
+```
+
+Result: only `api` and `web` items are returned.
+
+### Projecting with selectField
+
+```yaml
+    service-names:
+      type: go-template
+      dependsOn: [services]
+      transform:
+        template: '{{ selectField "name" .services | toYaml }}'
+        name: select-demo
+```
+
+Result: `["api", "legacy", "web"]`
+
+### Combining with pipes
+
+```yaml
+    active-names:
+      type: go-template
+      dependsOn: [services]
+      transform:
+        template: '{{ where "active" true .services | selectField "name" | toYaml }}'
+        name: combined-demo
+```
+
+Result: `["api", "web"]`
+
+---
+
+## Inline CEL with cel
+
+The `cel` function lets you evaluate a CEL expression directly inside a Go template. This is useful when you need CEL's powerful list operations alongside Go template's text rendering.
+
+**Syntax:** `{{ cel "expression" data }}`
+
+The data argument becomes `_` in the CEL expression (same as the `expr` field convention).
+
+### Example
+
+```yaml
+spec:
+  resolvers:
+    services:
+      type: static
+      from:
+        value:
+          - name: api
+            port: 8080
+            active: true
+          - name: legacy
+            port: 9090
+            active: false
+
+    summary:
+      type: go-template
+      dependsOn: [services]
+      transform:
+        template: |
+          Active services: {{ cel "size(_.services.filter(s, s.active == true))" . }}
+          Total ports: {{ cel "_.services.map(s, s.port).reduce(a, b, a + b)" . }}
+        name: cel-in-template
+```
+
+### When to use cel vs pure Go template
+
+- Use `cel` when you need list filtering, mapping, or aggregation that would be verbose in Go templates
+- Use pure Go template for text formatting, conditionals, and simple iteration
+- The `cel` function returns a string — use it for interpolation, not for complex data structures
+
+---
+
+## Debugging Template Type Errors
+
+When a Go template fails at execution time, scafctl provides **diagnostic hints** to help you identify the root cause quickly. Instead of raw Go stack traces, you get:
+
+- **What went wrong** — a plain-language explanation of the error category
+- **Data context** — the Go type and available top-level keys of the template data
+- **Actionable fix** — what to check or change
+
+### Common Error Categories
+
+| Error | Diagnostic Hint |
+|-------|----------------|
+| Nil pointer dereference | "A value used in the template is nil. Check that all referenced resolver fields have been resolved before this template runs." |
+| Range over non-iterable | "The 'range' action received a non-iterable value. Ensure the variable is a list/slice or map, not a string or number." |
+| Missing field | "A referenced field does not exist on the data object. Double-check field names and casing." |
+| Undefined function | "A template function is not registered. Available custom functions: slugify, toDnsString, where, selectField, cel, toHcl, toYaml, fromYaml." |
+| Wrong number of args | "A function or method was called with the wrong number of arguments. Check the function signature." |
+| Missing map key | "A map key was not found. Use 'index' to safely access map keys, or set missingKey to 'zero' or 'default'." |
+
+### Example Error Output
+
+Say you have a template that tries to range over a string:
+
+```yaml
+resolvers:
+  greeting:
+    type: go-template
+    transform:
+      template: '{{ range .name }}{{ . }}{{ end }}'
+      name: bad-range
+```
+
+If `.name` resolves to the string `"Alice"` instead of a list, the error output includes:
+
+```
+execution error: template: bad-range:1:9: executing "bad-range" at <.name>:
+  range can't iterate over Alice
+Hints: The 'range' action received a non-iterable value. Ensure the variable
+  is a list/slice or map, not a string or number. |
+  Template data type: map[string]interface {} |
+  Available top-level keys: name
+```
+
+### Tips
+
+- Set `missingKey: "error"` to catch typos in field names at execution time instead of silently rendering empty strings
+- Use `{{ printf "%T" .myField }}` to inspect the type of a value at runtime
+- Check `dependsOn` to ensure all upstream resolvers are resolved before the template runs
+
+---
+
 ## Discovering Available Functions
 
 scafctl provides tools to explore all available Go template functions — both Sprig and custom.
@@ -1705,6 +1903,86 @@ The AI calls `list_go_template_functions` and returns a curated list of matching
 
 ---
 
+## Ignored Blocks
+
+When templates contain syntax that conflicts with Go template delimiters (e.g., Terraform `${}`, Helm double braces, GitHub Actions `${{ }}`, or PromQL), you can preserve those sections literally using `ignoredBlocks`.
+
+### Start/End Mode (Multi-line)
+
+Define pairs of start/end markers. Content between matched markers passes through without template processing:
+
+```yaml
+transform:
+  with:
+    - provider: go-template
+      inputs:
+        name: terraform-module
+        template: |
+          resource "aws_instance" "main" {
+            ami           = "{{ .ami }}"
+            instance_type = "{{ .instanceType }}"
+            /*scafctl:ignore:start*/
+            tags = {
+              Name = "${var.name}-${var.env}"
+            }
+            /*scafctl:ignore:end*/
+          }
+        ignoredBlocks:
+          - start: "/*scafctl:ignore:start*/"
+            end: "/*scafctl:ignore:end*/"
+```
+
+The markers themselves are preserved in the output. The content between them — including Go template-like syntax, interpolations, and special characters — passes through unchanged.
+
+### Line Mode (Single-line)
+
+When only a single line needs to be preserved, use `line` instead of wrapping it in start/end markers. Every line containing the marker substring is preserved literally:
+
+```yaml
+transform:
+  with:
+    - provider: go-template
+      inputs:
+        name: github-workflow
+        template: |
+          name: Deploy {{ .appName }}
+          on: [push]
+          jobs:
+            deploy:
+              runs-on: ubuntu-latest
+              steps:
+                - run: echo ${{ secrets.TOKEN }}  # scafctl:ignore
+                - run: echo ${{ github.sha }}  # scafctl:ignore
+                - run: echo "deployed"
+        ignoredBlocks:
+          - line: "# scafctl:ignore"
+```
+
+Append the marker as an inline comment on any line that should be ignored. Only those lines are protected — the rest of the template renders normally.
+
+> **Note:** `line` and `start`/`end` are mutually exclusive within a single entry. Different entries can use different modes.
+
+### Multiple Ignored Blocks
+
+You can define multiple marker pairs and use them multiple times in a single template:
+
+```yaml
+ignoredBlocks:
+  - start: "# BEGIN TERRAFORM"
+    end: "# END TERRAFORM"
+  - start: "{{/* skip:start */}}"
+    end: "{{/* skip:end */}}"
+```
+
+### Use Cases
+
+- **Terraform/OpenTofu** — Preserve `${var.name}` interpolations
+- **Helm** — Preserve Helm `{{ .Values.x }}` while processing outer scafctl templates
+- **PromQL** — Preserve `rate(metric{label="x"}[5m])` in monitoring configs
+- **Pre-existing templates** — Mix scafctl template logic with other template engines in the same file
+
+---
+
 ## Provider Reference
 
 For a quick reference of all `go-template` provider inputs:
@@ -1717,6 +1995,7 @@ For a quick reference of all `go-template` provider inputs:
 | `leftDelim` | string | ❌ | Custom left delimiter (default: `{{`) |
 | `rightDelim` | string | ❌ | Custom right delimiter (default: `}}`) |
 | `data` | any | ❌ | Additional data merged into template context |
+| `ignoredBlocks` | array | ❌ | Blocks to pass through literally. Each entry: `{ start, end }` markers OR `{ line }` marker |
 
 ---
 

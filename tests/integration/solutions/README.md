@@ -40,7 +40,9 @@ tests/integration/solutions/
 │   ├── go-template-extensions/ # Go template extensions (Sprig + toHcl + toYaml/fromYaml)
 │   ├── validation/           # Match/notMatch/expression validation
 │   ├── sleep/                # Sleep/timing
-│   ├── http/                 # HTTP requests (via mock server)
+│   ├── http/                 # HTTP requests (via mock server), autoParseJson, polling
+│   ├── github/               # GitHub API provider (via mock server)
+│   ├── exec-mocking/         # Exec command mocking (mock service rules)
 │   ├── git/                  # Git operations (via local bare repo)
 │   ├── debug/                # Debug output formatting
 │   ├── parameter/            # CLI parameter passing (-r flag)
@@ -53,6 +55,7 @@ tests/integration/solutions/
 │   ├── conditional/          # When conditions
 │   ├── timeout/              # Per-resolver timeout
 │   ├── foreach-filter/       # ForEach filter tests
+│   ├── messages/             # Custom error messages (messages.error)
 │   └── sensitive/            # Sensitive value masking
 ├── actions/                  # Workflow action tests
 │   ├── exclusive/            # Mutual exclusion (exclusive field)
@@ -149,4 +152,4 @@ These providers are excluded from functional tests due to external dependencies:
 - **`secret`** — requires keyring/credential store
 - **`identity`** — requires authentication handlers
 
-They can be added later with conditional `skipExpression` guards.
+They can be added later with conditional `skip` expression guards.

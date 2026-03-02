@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -19,6 +20,7 @@ import (
 	pkglint "github.com/oakwood-commons/scafctl/pkg/lint"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
+	provdetail "github.com/oakwood-commons/scafctl/pkg/provider/detail"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
@@ -700,10 +702,7 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 	progress.report(s.ctx, 2, fmt.Sprintf("Executing %d resolvers", len(sol.Spec.Resolvers)))
 	result, err := execute.Resolvers(s.ctx, sol, params, reg, cfg)
 	if err != nil {
-		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("resolver execution failed: %v", err),
-			WithSuggestion("Check resolver configuration and dependencies"),
-			WithRelatedTools("lint_solution", "inspect_solution"),
-		), nil
+		return buildResolverExecutionError(err, sol), nil
 	}
 
 	progress.report(s.ctx, 3, "Building response")
@@ -715,17 +714,18 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 	}
 
 	type resolverPreview struct {
-		Value       any                 `json:"value"`
-		Type        string              `json:"type,omitempty"`
-		Description string              `json:"description,omitempty"`
-		Status      string              `json:"status"`
-		Provider    string              `json:"provider,omitempty"`
-		DependsOn   []string            `json:"dependsOn,omitempty"`
-		Resolve     []resolverPhaseInfo `json:"resolve,omitempty"`
-		Transform   []resolverPhaseInfo `json:"transform,omitempty"`
-		Validate    []resolverPhaseInfo `json:"validate,omitempty"`
-		When        string              `json:"when,omitempty"`
-		SourcePos   *sourcepos.Position `json:"sourcePos,omitempty"`
+		Value        any                 `json:"value"`
+		Type         string              `json:"type,omitempty"`
+		Description  string              `json:"description,omitempty"`
+		Status       string              `json:"status"`
+		Provider     string              `json:"provider,omitempty"`
+		OutputSchema any                 `json:"outputSchema,omitempty"`
+		DependsOn    []string            `json:"dependsOn,omitempty"`
+		Resolve      []resolverPhaseInfo `json:"resolve,omitempty"`
+		Transform    []resolverPhaseInfo `json:"transform,omitempty"`
+		Validate     []resolverPhaseInfo `json:"validate,omitempty"`
+		When         string              `json:"when,omitempty"`
+		SourcePos    *sourcepos.Position `json:"sourcePos,omitempty"`
 	}
 
 	resolvers := make(map[string]resolverPreview, len(sol.Spec.Resolvers))
@@ -753,6 +753,29 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 		// Get the primary provider name
 		if rslvr.Resolve != nil && len(rslvr.Resolve.With) > 0 {
 			preview.Provider = rslvr.Resolve.With[0].Provider
+		}
+
+		// Determine output schema: last transform provider's transform schema,
+		// or first resolve provider's from schema if no transforms exist.
+		{
+			var outputProviderName string
+			var outputCap provider.Capability
+			if rslvr.Transform != nil && len(rslvr.Transform.With) > 0 {
+				last := rslvr.Transform.With[len(rslvr.Transform.With)-1]
+				outputProviderName = last.Provider
+				outputCap = provider.CapabilityTransform
+			} else if rslvr.Resolve != nil && len(rslvr.Resolve.With) > 0 {
+				outputProviderName = rslvr.Resolve.With[0].Provider
+				outputCap = provider.CapabilityFrom
+			}
+			if outputProviderName != "" && reg != nil {
+				if p, ok := reg.Get(outputProviderName); ok {
+					desc := p.Descriptor()
+					if schema, ok := desc.OutputSchemas[outputCap]; ok {
+						preview.OutputSchema = provdetail.BuildSchemaOutput(schema)
+					}
+				}
+			}
 		}
 
 		// Add pipeline details for single-resolver debugging
@@ -1106,6 +1129,122 @@ func (s *Server) handleGetRunCommand(_ context.Context, request mcp.CallToolRequ
 	)
 
 	return result, nil
+}
+
+// buildResolverExecutionError converts resolver execution errors into rich structured
+// error responses with typed diagnostics and actionable suggestions.
+func buildResolverExecutionError(err error, sol *solution.Solution) *mcp.CallToolResult {
+	var suggestions []string
+	var details strings.Builder
+
+	switch {
+	case errors.As(err, new(*resolver.AggregatedExecutionError)):
+		var aggErr *resolver.AggregatedExecutionError
+		errors.As(err, &aggErr)
+
+		fmt.Fprintf(&details, "%d resolver(s) failed", len(aggErr.Errors))
+		if aggErr.SucceededCount > 0 {
+			fmt.Fprintf(&details, ", %d succeeded", aggErr.SucceededCount)
+		}
+		if aggErr.SkippedCount > 0 {
+			fmt.Fprintf(&details, ", %d skipped (failed dependencies: %s)",
+				aggErr.SkippedCount, strings.Join(aggErr.SkippedNames, ", "))
+		}
+		details.WriteString("\n\nFailures:\n")
+
+		for i, fr := range aggErr.Errors {
+			fmt.Fprintf(&details, "  %d. resolver %q (phase %d): %s\n", i+1, fr.ResolverName, fr.Phase, fr.ErrMessage)
+			appendResolverHints(&suggestions, fr.Err, fr.ResolverName, sol)
+		}
+
+	case errors.As(err, new(*resolver.ExecutionError)):
+		var execErr *resolver.ExecutionError
+		errors.As(err, &execErr)
+
+		fmt.Fprintf(&details, "Resolver %q failed in %s phase (step %d", execErr.ResolverName, execErr.Phase, execErr.Step)
+		if execErr.Provider != "" {
+			fmt.Fprintf(&details, ", provider: %s", execErr.Provider)
+		}
+		details.WriteString(")\n")
+		fmt.Fprintf(&details, "Error: %v", execErr.Cause)
+
+		appendResolverHints(&suggestions, execErr.Cause, execErr.ResolverName, sol)
+		if execErr.Provider == "http" {
+			suggestions = append(suggestions, "HTTP provider returns {statusCode, body, headers} — use body.field, not field directly")
+		}
+
+	case errors.As(err, new(*resolver.TypeCoercionError)):
+		var coercionErr *resolver.TypeCoercionError
+		errors.As(err, &coercionErr)
+
+		fmt.Fprintf(&details, "Resolver %q: cannot coerce %s → %s (after %s phase)\n",
+			coercionErr.ResolverName, coercionErr.SourceType, coercionErr.TargetType, coercionErr.Phase)
+		fmt.Fprintf(&details, "Error: %v", coercionErr.Cause)
+		suggestions = append(suggestions,
+			fmt.Sprintf("Add a transform step to convert %s to %s before the type coercion", coercionErr.SourceType, coercionErr.TargetType),
+			"Check if the provider output shape matches the expected resolver type",
+		)
+
+	case errors.As(err, new(*resolver.AggregatedValidationError)):
+		var valErr *resolver.AggregatedValidationError
+		errors.As(err, &valErr)
+
+		fmt.Fprintf(&details, "Resolver %q failed validation with %d error(s):\n", valErr.ResolverName, len(valErr.Failures))
+		for i, f := range valErr.Failures {
+			fmt.Fprintf(&details, "  %d. [rule %d] %s\n", i+1, f.Rule, f.Error())
+		}
+		suggestions = append(suggestions, "Review the validation rules in the resolver's validate section")
+
+	case errors.As(err, new(*resolver.CircularDependencyError)):
+		var circErr *resolver.CircularDependencyError
+		errors.As(err, &circErr)
+
+		fmt.Fprintf(&details, "Circular dependency detected: %s", strings.Join(circErr.Cycle, " → "))
+		suggestions = append(suggestions, "Break the cycle by restructuring resolver dependencies or using a transform to combine data")
+
+	default:
+		details.WriteString(err.Error())
+	}
+
+	if len(suggestions) == 0 {
+		suggestions = append(suggestions, "Check resolver configuration and dependencies")
+	}
+
+	opts := make([]ErrorOption, 0, 1+len(suggestions))
+	opts = append(opts, WithRelatedTools("lint_solution", "inspect_solution"))
+	for _, s := range suggestions {
+		opts = append(opts, WithSuggestion(s))
+	}
+
+	return newStructuredError(ErrCodeExecFailed,
+		fmt.Sprintf("resolver execution failed: %s", details.String()),
+		opts...,
+	)
+}
+
+// appendResolverHints inspects an error cause and adds provider-specific hints.
+func appendResolverHints(suggestions *[]string, cause error, resolverName string, sol *solution.Solution) {
+	if cause == nil {
+		return
+	}
+	msg := cause.Error()
+
+	// HTTP provider: hint about envelope structure
+	if strings.Contains(msg, "no such key") {
+		if res, ok := sol.Spec.Resolvers[resolverName]; ok && res.Resolve != nil {
+			for _, step := range res.Resolve.With {
+				if step.Provider == "http" {
+					*suggestions = append(*suggestions, fmt.Sprintf("Resolver %q uses the http provider which returns {statusCode, body, headers} — reference nested fields as body.<field>", resolverName))
+					break
+				}
+			}
+		}
+	}
+
+	// CEL expression errors
+	if strings.Contains(msg, "undeclared reference") || strings.Contains(msg, "found no matching overload") {
+		*suggestions = append(*suggestions, "Use list_cel_functions to see available CEL functions and their signatures")
+	}
 }
 
 // isResolverDependency checks if candidateName is a direct or transitive dependency

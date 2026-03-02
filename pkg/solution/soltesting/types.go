@@ -18,6 +18,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/duration"
+	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting/mockexec"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting/mockserver"
 	"gopkg.in/yaml.v3"
 )
@@ -158,6 +159,111 @@ func (s SkipBuiltinsValue) IsSkipped() bool {
 	return s.All || len(s.Names) > 0
 }
 
+// SkipValue supports both bool and CEL expression string via custom UnmarshalYAML.
+// When bool: true skips unconditionally, false means no skip.
+// When string: the string is evaluated as a CEL expression at discovery time.
+// YAML usage:
+//
+//	skip: true              # unconditional skip
+//	skip: 'os == "windows"'  # conditional skip via CEL
+type SkipValue struct {
+	// Static when true means unconditionally skip.
+	Static bool `json:"-" yaml:"-"`
+	// Expression is a CEL expression for conditional skipping.
+	Expression celexp.Expression `json:"-" yaml:"-"`
+}
+
+// UnmarshalYAML implements yaml.Unmarshaler for SkipValue.
+func (s *SkipValue) UnmarshalYAML(value *yaml.Node) error {
+	// Try bool first
+	var b bool
+	if err := value.Decode(&b); err == nil {
+		s.Static = b
+		s.Expression = ""
+		return nil
+	}
+
+	// Try string (CEL expression)
+	var expr string
+	if err := value.Decode(&expr); err == nil {
+		s.Static = false
+		s.Expression = celexp.Expression(expr)
+		return nil
+	}
+
+	return fmt.Errorf("skip must be a bool or a CEL expression string")
+}
+
+// MarshalYAML implements yaml.Marshaler for SkipValue.
+func (s SkipValue) MarshalYAML() (any, error) {
+	if s.Expression != "" {
+		return string(s.Expression), nil
+	}
+	if s.Static {
+		return true, nil
+	}
+	return false, nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler for SkipValue.
+func (s *SkipValue) UnmarshalJSON(data []byte) error {
+	// Try bool first
+	var b bool
+	if err := json.Unmarshal(data, &b); err == nil {
+		s.Static = b
+		s.Expression = ""
+		return nil
+	}
+
+	// Try string (CEL expression)
+	var expr string
+	if err := json.Unmarshal(data, &expr); err == nil {
+		s.Static = false
+		s.Expression = celexp.Expression(expr)
+		return nil
+	}
+
+	return fmt.Errorf("skip must be a bool or a CEL expression string")
+}
+
+// MarshalJSON implements json.Marshaler for SkipValue.
+func (s SkipValue) MarshalJSON() ([]byte, error) {
+	if s.Expression != "" {
+		return json.Marshal(string(s.Expression))
+	}
+	if s.Static {
+		return json.Marshal(true)
+	}
+	return json.Marshal(false)
+}
+
+// IsZero returns true if the SkipValue is the zero value (no skip configured).
+func (s SkipValue) IsZero() bool {
+	return !s.Static && s.Expression == ""
+}
+
+// ShouldSkip returns true if the SkipValue indicates unconditional skip.
+// For expression-based skip, use the runner's evaluation logic.
+func (s SkipValue) ShouldSkip() bool {
+	return s.Static
+}
+
+// HasExpression returns true if the SkipValue has a CEL expression.
+func (s SkipValue) HasExpression() bool {
+	return s.Expression != ""
+}
+
+// String returns a human-readable string representation.
+func (s SkipValue) String() string {
+	if s.Expression != "" {
+		return string(s.Expression)
+	}
+	if s.Static {
+		return "true"
+	}
+	return "false"
+}
+
 // TestSuite groups all test-related configuration under a single top-level property.
 type TestSuite struct {
 	// Config holds solution-level test configuration.
@@ -203,19 +309,28 @@ type ServiceConfig struct {
 	// Name is a unique identifier for the service within this solution's tests.
 	Name string `json:"name" yaml:"name" doc:"Unique service identifier" maxLength:"100" pattern:"^[a-zA-Z0-9][a-zA-Z0-9_-]*$"`
 
-	// Type is the service type. Currently only "http" is supported.
-	Type string `json:"type" yaml:"type" doc:"Service type" pattern:"^http$" patternDescription:"Must be: http"`
+	// Type is the service type. Supported: "http" (mock HTTP server), "exec" (mock shell commands).
+	Type string `json:"type" yaml:"type" doc:"Service type" pattern:"^(http|exec)$" patternDescription:"Must be: http or exec"`
 
 	// PortEnv is the environment variable name where the assigned port is exposed.
 	// Tests can reference this via testConfig.env or in resolver inputs (e.g., $MOCK_HTTP_PORT).
-	PortEnv string `json:"portEnv" yaml:"portEnv" doc:"Env var name for assigned port" maxLength:"100" pattern:"^[A-Z][A-Z0-9_]*$"`
+	// Only used when Type is "http".
+	PortEnv string `json:"portEnv,omitempty" yaml:"portEnv,omitempty" doc:"Env var name for assigned port (http only)" maxLength:"100" pattern:"^[A-Z][A-Z0-9_]*$"`
 
 	// BaseURLEnv is the environment variable name where the base URL is exposed (e.g., http://127.0.0.1:PORT).
-	// Optional — if empty, only PortEnv is set.
-	BaseURLEnv string `json:"baseUrlEnv,omitempty" yaml:"baseUrlEnv,omitempty" doc:"Env var name for base URL" maxLength:"100"`
+	// Optional — if empty, only PortEnv is set. Only used when Type is "http".
+	BaseURLEnv string `json:"baseUrlEnv,omitempty" yaml:"baseUrlEnv,omitempty" doc:"Env var name for base URL (http only)" maxLength:"100"`
 
 	// Routes defines the mock HTTP routes (only used when Type is "http").
 	Routes []mockserver.Route `json:"routes,omitempty" yaml:"routes,omitempty" doc:"Mock HTTP routes" maxItems:"100"`
+
+	// ExecRules defines mock command rules (only used when Type is "exec").
+	// Rules are matched in order — the first matching rule wins.
+	ExecRules []mockexec.Rule `json:"execRules,omitempty" yaml:"execRules,omitempty" doc:"Mock command rules" maxItems:"100"`
+
+	// Passthrough allows unmatched exec commands to run normally (only used when Type is "exec").
+	// When false (default), unmatched commands fail with an error.
+	Passthrough bool `json:"passthrough,omitempty" yaml:"passthrough,omitempty" doc:"Allow unmatched exec commands to run (exec only)"`
 }
 
 // InitStep is a setup/cleanup command.
@@ -266,8 +381,10 @@ type TestCase struct {
 	// Env contains per-test environment variables.
 	Env map[string]string `json:"env,omitempty" yaml:"env,omitempty" doc:"Per-test environment variables"`
 
-	// Files lists relative paths or globs for files required by this test.
-	Files []string `json:"files,omitempty" yaml:"files,omitempty" doc:"Relative paths or globs for files required by this test" maxItems:"50"`
+	// Files lists relative paths, glob patterns, or directory paths for files required by this test.
+	// Globs (e.g., 'templates/**/*.yaml') are expanded using doublestar matching.
+	// Directories (e.g., 'templates/') are recursively expanded to include all files.
+	Files []string `json:"files,omitempty" yaml:"files,omitempty" doc:"Relative paths, glob patterns (e.g., 'templates/**'), or directory paths for files required by this test. Directories are recursively copied." maxItems:"50"`
 
 	// Init contains setup steps executed sequentially before the command.
 	Init []InitStep `json:"init,omitempty" yaml:"init,omitempty" doc:"Setup steps executed sequentially before the command" maxItems:"50"`
@@ -294,14 +411,11 @@ type TestCase struct {
 	// Timeout is the per-test timeout as a Go duration string.
 	Timeout *duration.Duration `json:"timeout,omitempty" yaml:"timeout,omitempty" doc:"Per-test timeout as a Go duration string"`
 
-	// Skip skips this test when true.
-	Skip bool `json:"skip,omitempty" yaml:"skip,omitempty" doc:"Skip this test"`
+	// Skip controls test skipping. Accepts true (unconditional) or a CEL expression string (conditional).
+	Skip SkipValue `json:"skip,omitempty" yaml:"skip,omitempty" doc:"Skip this test: true for unconditional, or a CEL expression string for conditional skip"`
 
 	// SkipReason is a human-readable reason for skipping.
 	SkipReason string `json:"skipReason,omitempty" yaml:"skipReason,omitempty" doc:"Human-readable reason for skipping" maxLength:"500"`
-
-	// SkipExpression is a CEL expression evaluated at discovery time for conditional skipping.
-	SkipExpression celexp.Expression `json:"skipExpression,omitempty" yaml:"skipExpression,omitempty" doc:"CEL expression for conditional skip evaluation"`
 
 	// Retries is the number of retry attempts for a failing test.
 	Retries int `json:"retries,omitempty" yaml:"retries,omitempty" doc:"Number of retry attempts for failing tests" maximum:"10"`

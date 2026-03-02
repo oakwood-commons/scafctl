@@ -210,12 +210,12 @@ func TestResolveExtends_ScalarChildWins(t *testing.T) {
 
 	tests := map[string]*soltesting.TestCase{
 		"_base": {
-			Name:           "_base",
-			Description:    "base desc",
-			Timeout:        &baseTimeout,
-			ExpectFailure:  true,
-			SkipExpression: celexp.Expression("true"),
-			Retries:        2,
+			Name:          "_base",
+			Description:   "base desc",
+			Timeout:       &baseTimeout,
+			ExpectFailure: true,
+			Skip:          soltesting.SkipValue{Expression: celexp.Expression("true")},
+			Retries:       2,
 		},
 		"child": {
 			Name:        "child",
@@ -239,7 +239,7 @@ func TestResolveExtends_ScalarChildWins(t *testing.T) {
 	assert.True(t, child.ExpectFailure)
 	assert.Equal(t, 42, *child.ExitCode)
 	assert.Equal(t, 5, child.Retries)
-	assert.Equal(t, celexp.Expression("true"), child.SkipExpression)
+	assert.Equal(t, celexp.Expression("true"), child.Skip.Expression)
 }
 
 func TestResolveExtends_FilesMergeDedup(t *testing.T) {

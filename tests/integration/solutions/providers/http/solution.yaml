@@ -66,6 +66,32 @@ spec:
                 expr: "_.mockBaseUrl + '/__health'"
               method: GET
 
+    autoParsedGet:
+      description: GET with autoParseJson enabled
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url:
+                expr: "_.mockBaseUrl + '/api/users'"
+              method: GET
+              autoParseJson: true
+
+    pollEndpoint:
+      description: Poll an endpoint until condition is met
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url:
+                expr: "_.mockBaseUrl + '/__health'"
+              method: GET
+              autoParseJson: true
+              poll:
+                until: 'statusCode == 200'
+                interval: 1s
+                maxAttempts: 3
+
     mockBaseUrl:
       description: Base URL of mock server from env
       resolve:
@@ -82,7 +108,9 @@ spec:
 
   testing:
     config:
-      skipBuiltins: true
+      # resolve-defaults: resolvers depend on MOCK_BASE_URL env var and moc  resolvers
+      # render-defaults: solution has no workflow.actions section
+      skipBuiltins: [resolve-defaults, render-defaults]
       services:
         - name: mock-api
           type: http
@@ -169,3 +197,24 @@ spec:
         assertions:
           - expression: __output.healthCheck.statusCode == 200
             message: "Health endpoint should return 200"
+
+      autoparse-json:
+        description: Verify autoParseJson parses response body into structured data
+        extends: [_base]
+        tags: [autoParseJson]
+        assertions:
+          - expression: __output.autoParsedGet.statusCode == 200
+          - expression: type(__output.autoParsedGet.body) != type("")
+            message: "Body should be parsed object, not string"
+          - expression: size(__output.autoParsedGet.body.users) == 2
+            message: "Should have 2 users in parsed body"
+          - expression: __output.autoParsedGet.body.users[0].name == "alice"
+            message: "First user should be alice"
+
+      poll-until-success:
+        description: Verify poll executes until condition is met
+        extends: [_base]
+        tags: [poll]
+        assertions:
+          - expression: __output.pollEndpoint.statusCode == 200
+            message: "Poll should succeed with 200"

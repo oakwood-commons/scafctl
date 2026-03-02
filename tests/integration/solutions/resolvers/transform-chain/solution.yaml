@@ -100,7 +100,9 @@ spec:
 
   testing:
     config:
-      skipBuiltins: true
+      # resolve-defaults: execTransform resolver uses exec provider requiring shell execution
+      # render-defaults: solution has no workflow.actions section
+      skipBuiltins: [resolve-defaults, render-defaults]
 
     cases:
       _base:

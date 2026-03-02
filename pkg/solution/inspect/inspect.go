@@ -8,6 +8,7 @@ package inspect
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sort"
 
 	"github.com/oakwood-commons/scafctl/pkg/action"
@@ -18,6 +19,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
 )
@@ -41,6 +43,9 @@ type SolutionExplanation struct {
 	Tags        []string         `json:"tags,omitempty" yaml:"tags,omitempty" doc:"Solution tags"`
 	Links       []LinkInfo       `json:"links,omitempty" yaml:"links,omitempty" doc:"Related links"`
 	Maintainers []MaintainerInfo `json:"maintainers,omitempty" yaml:"maintainers,omitempty" doc:"Solution maintainers"`
+
+	// FileDependencies lists files discovered through static analysis of provider inputs.
+	FileDependencies []FileDependencyInfo `json:"fileDependencies,omitempty" yaml:"fileDependencies,omitempty" doc:"File dependencies discovered via static analysis"`
 }
 
 // CatalogInfo holds catalog metadata.
@@ -81,6 +86,12 @@ type LinkInfo struct {
 type MaintainerInfo struct {
 	Name  string `json:"name" yaml:"name" doc:"Maintainer name"`
 	Email string `json:"email,omitempty" yaml:"email,omitempty" doc:"Maintainer email"`
+}
+
+// FileDependencyInfo describes a file dependency discovered via static analysis.
+type FileDependencyInfo struct {
+	Path   string `json:"path" yaml:"path" doc:"Relative file path"`
+	Source string `json:"source" yaml:"source" doc:"How the dependency was discovered (static-analysis, explicit-include, test-include)"`
 }
 
 // LoadSolution loads a solution from a path using the standard loader with
@@ -172,6 +183,19 @@ func BuildSolutionExplanation(sol *solution.Solution) *SolutionExplanation {
 			Name:  m.Name,
 			Email: m.Email,
 		})
+	}
+
+	// File dependencies via static analysis
+	if solPath := sol.GetPath(); solPath != "" {
+		bundleRoot := filepath.Dir(solPath)
+		if result, err := bundler.DiscoverFiles(sol, bundleRoot); err == nil && result != nil {
+			for _, f := range result.LocalFiles {
+				exp.FileDependencies = append(exp.FileDependencies, FileDependencyInfo{
+					Path:   f.RelPath,
+					Source: f.Source.String(),
+				})
+			}
+		}
 	}
 
 	return exp

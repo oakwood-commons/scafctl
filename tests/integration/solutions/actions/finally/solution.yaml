@@ -50,9 +50,6 @@ spec:
           command: "echo Sending completion notification"
 
   testing:
-    config:
-      skipBuiltins: true
-
     cases:
       _run-base:
         description: Base template for finally tests

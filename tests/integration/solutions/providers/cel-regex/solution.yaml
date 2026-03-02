@@ -1,0 +1,205 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-cel-regex
+  version: 1.0.0
+  description: |
+    Functional tests for the regex CEL extension functions.
+    Verifies regex.match, regex.replace, regex.findAll, and regex.split
+    work correctly within the CEL provider.
+
+spec:
+  resolvers:
+    # Base values for regex tests
+    textWithNumbers:
+      description: A string containing mixed text and numbers
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "Hello 123 World 456 Foo 789"
+
+    emailList:
+      description: A string containing email addresses
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "Contact user@example.com or admin@server.org for help"
+
+    csvLine:
+      description: A CSV-like string with mixed delimiters
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "apple,banana;cherry,,date;elderberry"
+
+    dirtyString:
+      description: A string with special characters to clean
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "hello! @world# 123"
+
+    # Regex-computed resolvers
+    matchDigits:
+      description: Check if text contains digits
+      type: bool
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'regex.match("[0-9]+", _.textWithNumbers)'
+
+    matchNoDigits:
+      description: Check if text without digits returns false
+      type: bool
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'regex.match("[0-9]+", "no digits here")'
+
+    replaceDigits:
+      description: Replace all digit sequences with a hash
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'regex.replace(_.textWithNumbers, "[0-9]+", "#")'
+
+    removeSpecialChars:
+      description: Remove non-alphanumeric characters
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'regex.replace(_.dirtyString, "[^a-zA-Z0-9 ]", "")'
+
+    findAllDigits:
+      description: Find all digit sequences
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'regex.findAll("[0-9]+", _.textWithNumbers)'
+
+    findAllDigitsCount:
+      description: Count of digit sequences found
+      type: int
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'size(regex.findAll("[0-9]+", _.textWithNumbers))'
+
+    splitByDelimiters:
+      description: Split CSV with mixed delimiters
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'regex.split("[,;]+", _.csvLine)'
+
+    splitByWhitespace:
+      description: Split text by whitespace
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'regex.split("\\s+", _.textWithNumbers)'
+
+    # Chained operations
+    cleanAndMatch:
+      description: Clean string then check if it matches a pattern
+      type: bool
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'regex.match("^hello", regex.replace(_.dirtyString, "[^a-zA-Z0-9 ]", ""))'
+
+  testing:
+    config:
+      # render-defaults: solution has no workflow.actions section
+      skipBuiltins: [render-defaults]
+
+    cases:
+      _base:
+        description: Base template for regex CEL tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [provider, cel, regex]
+        assertions:
+          - expression: __exitCode == 0
+
+      match-digits-true:
+        description: Verify regex.match returns true when digits present
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.matchDigits == true
+            message: "regex.match should find digits in text"
+
+      match-digits-false:
+        description: Verify regex.match returns false when no digits
+        extends: [_base]
+        assertions:
+          - expression: __output.matchNoDigits == false
+            message: "regex.match should not find digits in text without digits"
+
+      replace-digits:
+        description: Verify regex.replace replaces all digit sequences
+        extends: [_base]
+        assertions:
+          - expression: '__output.replaceDigits == "Hello # World # Foo #"'
+            message: "regex.replace should replace all digit sequences with #"
+
+      remove-special-chars:
+        description: Verify regex.replace can remove characters
+        extends: [_base]
+        assertions:
+          - expression: __output.removeSpecialChars == "hello world 123"
+            message: "regex.replace should remove non-alphanumeric chars"
+
+      find-all-digits:
+        description: Verify regex.findAll returns all matches
+        extends: [_base]
+        assertions:
+          - expression: size(__output.findAllDigits) == 3
+            message: "regex.findAll should find 3 digit sequences"
+          - expression: '"123" in __output.findAllDigits'
+          - expression: '"456" in __output.findAllDigits'
+          - expression: '"789" in __output.findAllDigits'
+
+      find-all-digits-count:
+        description: Verify size of findAll result
+        extends: [_base]
+        assertions:
+          - expression: __output.findAllDigitsCount == 3
+
+      split-by-delimiters:
+        description: Verify regex.split with mixed delimiters
+        extends: [_base]
+        assertions:
+          - expression: size(__output.splitByDelimiters) == 5
+            message: "regex.split should produce 5 parts from mixed delimiters"
+          - expression: __output.splitByDelimiters[0] == "apple"
+          - expression: __output.splitByDelimiters[1] == "banana"
+
+      split-by-whitespace:
+        description: Verify regex.split by whitespace
+        extends: [_base]
+        assertions:
+          - expression: size(__output.splitByWhitespace) == 6
+            message: "regex.split by whitespace should produce 6 tokens"
+
+      chained-clean-and-match:
+        description: Verify chained regex operations
+        extends: [_base]
+        assertions:
+          - expression: __output.cleanAndMatch == true
+            message: "Chained regex.replace then regex.match should work"

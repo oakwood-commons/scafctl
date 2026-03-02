@@ -18,7 +18,8 @@ spec:
 
   testing:
     config:
-      skipBuiltins: true
+      # render-defaults: solution has no workflow.actions section
+      skipBuiltins: [render-defaults]
 
     cases:
       plugins-help:

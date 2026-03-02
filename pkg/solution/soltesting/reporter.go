@@ -233,11 +233,8 @@ func ReportList(solutions []SolutionTests, opts *kvx.OutputOptions, includeBuilt
 			}
 
 			skip := "false"
-			if tc.Skip {
-				skip = "true"
-			}
-			if tc.SkipExpression != "" {
-				skip = string(tc.SkipExpression)
+			if !tc.Skip.IsZero() {
+				skip = tc.Skip.String()
 			}
 
 			entries = append(entries, listEntry{

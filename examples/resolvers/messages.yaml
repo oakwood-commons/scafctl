@@ -1,0 +1,50 @@
+# Custom error messages — replace default error text with user-friendly messages.
+# The messages.error field supports static strings, CEL expressions, and Go templates.
+#
+# Run: scafctl run solution -f examples/resolvers/messages.yaml -r port=80 -o json
+# (Port 80 will trigger the validation error with the custom message)
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: custom-error-messages
+  version: 1.0.0
+  description: Demonstrates custom error messages on resolver failures.
+
+spec:
+  resolvers:
+    port:
+      description: Application port number (must be 1024-65535)
+      messages:
+        error:
+          tmpl: "Invalid port '{{ .__error }}'. Please use a port between 1024 and 65535."
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              name: port
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              rules:
+                - expr: "int(__self) >= 1024 && int(__self) <= 65535"
+                  message: port out of allowed range
+
+    environment:
+      description: Deployment environment
+      messages:
+        error:
+          expr: "'Environment resolution failed: ' + __error"
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              name: environment
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              rules:
+                - expr: '__self in ["dev", "staging", "production"]'
+                  message: must be dev, staging, or production

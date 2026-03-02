@@ -6,8 +6,11 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/solution/inspect"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 )
@@ -76,8 +79,9 @@ func (s *Server) handleGenerateTestScaffold(_ context.Context, request mcp.CallT
 	}
 
 	input := &soltesting.ScaffoldInput{
-		Resolvers: sol.Spec.Resolvers,
-		Workflow:  sol.Spec.Workflow,
+		Resolvers:        sol.Spec.Resolvers,
+		Workflow:         sol.Spec.Workflow,
+		FileDependencies: discoverFileDeps(sol, path),
 	}
 
 	result := soltesting.Scaffold(input)
@@ -131,6 +135,27 @@ func (s *Server) handleGenerateTestScaffold(_ context.Context, request mcp.CallT
 			"Add edge case tests for error conditions",
 			"Run run_solution_tests to verify tests pass",
 		},
+		"sandboxGuidance": map[string]any{
+			"overview": "Each test case runs in an isolated sandbox directory. The sandbox copies the solution file and any files listed in the test case 'files' field.",
+			"filesField": []string{
+				"Use relative paths from the solution directory (e.g., 'templates/main.tf')",
+				"Use glob patterns to match multiple files (e.g., 'templates/**')",
+				"Use directory paths to copy entire directories (e.g., 'configs/')",
+				"Files are deduplicated — overlapping globs and directories are safe",
+			},
+			"fileDependencies": func() string {
+				if len(input.FileDependencies) > 0 {
+					return fmt.Sprintf("Detected %d file dependencies from provider inputs. These have been auto-populated in each test case's 'files' field.", len(input.FileDependencies))
+				}
+				return "No file dependencies were detected. If your solution references external files (templates, configs, etc.), add them to each test case's 'files' field."
+			}(),
+			"commonPatterns": []string{
+				"Use 'expr' in assertions to write CEL expressions that check resolved values",
+				"Use 'contains' for partial string matching in resolver outputs",
+				"Use 'eq' for exact value comparison",
+				"Mock external providers (HTTP, exec) with static values for deterministic tests",
+			},
+		},
 	})
 }
 
@@ -167,7 +192,7 @@ func (s *Server) handleListTests(_ context.Context, request mcp.CallToolRequest)
 		Description    string   `json:"description,omitempty"`
 		Command        []string `json:"command,omitempty"`
 		Tags           []string `json:"tags,omitempty"`
-		Skip           bool     `json:"skip,omitempty"`
+		Skip           string   `json:"skip,omitempty"`
 		SkipReason     string   `json:"skipReason,omitempty"`
 		AssertionCount int      `json:"assertionCount"`
 	}
@@ -190,7 +215,7 @@ func (s *Server) handleListTests(_ context.Context, request mcp.CallToolRequest)
 				Description:    tc.Description,
 				Command:        tc.Command,
 				Tags:           tc.Tags,
-				Skip:           tc.Skip,
+				Skip:           tc.Skip.String(),
 				SkipReason:     tc.SkipReason,
 				AssertionCount: len(tc.Assertions),
 			}
@@ -210,4 +235,24 @@ func (s *Server) handleListTests(_ context.Context, request mcp.CallToolRequest)
 		"totalTests":     totalTests,
 		"totalSolutions": len(solutionResults),
 	})
+}
+
+// discoverFileDeps uses bundler.DiscoverFiles to extract local file dependencies
+// from a loaded solution. Returns nil on error (best-effort).
+func discoverFileDeps(sol *solution.Solution, solutionPath string) []string {
+	if sol == nil {
+		return nil
+	}
+
+	bundleRoot := filepath.Dir(solutionPath)
+	result, err := bundler.DiscoverFiles(sol, bundleRoot)
+	if err != nil || result == nil {
+		return nil
+	}
+
+	var deps []string
+	for _, f := range result.LocalFiles {
+		deps = append(deps, f.RelPath)
+	}
+	return deps
 }

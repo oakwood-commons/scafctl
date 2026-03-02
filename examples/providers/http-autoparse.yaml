@@ -1,0 +1,8 @@
+# HTTP provider with autoParseJson — parse JSON responses automatically.
+# Instead of getting a raw string body, get a structured object for direct field access.
+#
+# Run: scafctl run provider -f examples/providers/http-autoparse.yaml
+
+url: https://httpbin.org/get
+method: GET
+autoParseJson: true

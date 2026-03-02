@@ -5,6 +5,7 @@ package httpprovider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -146,6 +147,21 @@ func NewHTTPProvider() *HTTPProvider {
 					schemahelper.WithExample(30),
 					schemahelper.WithMaximum(*ptrs.Float64Ptr(300.0))),
 				"retry": schemahelper.AnyProp("Retry configuration for transient failures"),
+				"poll": schemahelper.ObjectProp("Polling configuration for re-executing the request until a condition is met. Use this for waiting on async operations (e.g., deployment status). Different from retry: retry handles transient failures, poll re-executes until the response content matches a condition.", []string{"until"}, map[string]*jsonschema.Schema{
+					"until": schemahelper.StringProp("CEL expression evaluated against {statusCode, body, headers}. Polling stops when this returns true.",
+						schemahelper.WithExample("_.body.status == 'succeeded'"),
+						schemahelper.WithMaxLength(*ptrs.IntPtr(500))),
+					"failWhen": schemahelper.StringProp("CEL expression for early exit with error. If true, polling stops immediately with a failure.",
+						schemahelper.WithExample("_.body.status == 'failed'"),
+						schemahelper.WithMaxLength(*ptrs.IntPtr(500))),
+					"interval": schemahelper.StringProp("Duration between poll attempts (Go duration format or integer seconds, default: 10s)",
+						schemahelper.WithDefault("10s"),
+						schemahelper.WithExample("5s")),
+					"maxAttempts": schemahelper.IntProp("Maximum number of poll attempts before giving up (default: 30)",
+						schemahelper.WithDefault(30),
+						schemahelper.WithExample(30),
+						schemahelper.WithMaximum(*ptrs.Float64Ptr(1000))),
+				}),
 				"pagination": schemahelper.ObjectProp("Pagination configuration for automatically following paginated API responses", []string{"strategy", "maxPages"}, map[string]*jsonschema.Schema{
 					"strategy": schemahelper.StringProp("Pagination strategy to use",
 						schemahelper.WithEnum("offset", "pageNumber", "cursor", "linkHeader", "custom"),
@@ -201,18 +217,19 @@ func NewHTTPProvider() *HTTPProvider {
 				"scope": schemahelper.StringProp("OAuth scope for authentication. Required for auth providers that support per-request scopes (e.g., Entra). Not used for providers with scopes fixed at login time (e.g., GitHub).",
 					schemahelper.WithExample("https://graph.microsoft.com/.default"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(500))),
+				"autoParseJson": schemahelper.BoolProp("When true and the response Content-Type is application/json, automatically parse the body into a structured object instead of returning it as a raw string. This allows direct field access in downstream CEL expressions (e.g., _.myApi.body.items) without manual parsing."),
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
 					"statusCode": schemahelper.IntProp("HTTP response status code (last page when paginating)", schemahelper.WithExample(200)),
-					"body":       schemahelper.StringProp("Response body as string. When paginating with collectPath, contains the JSON array of all collected items"),
+					"body":       schemahelper.AnyProp("Response body as string (default) or parsed JSON object when autoParseJson is true. When paginating with collectPath, contains the JSON array of all collected items"),
 					"headers":    schemahelper.AnyProp("Response headers (last page when paginating)"),
 					"pages":      schemahelper.IntProp("Number of pages fetched (only present when pagination is configured)", schemahelper.WithExample(3)),
 					"totalItems": schemahelper.IntProp("Total number of items collected across all pages (only present when pagination is configured)", schemahelper.WithExample(150)),
 				}),
 				provider.CapabilityTransform: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
 					"statusCode": schemahelper.IntProp("HTTP response status code (last page when paginating)", schemahelper.WithExample(200)),
-					"body":       schemahelper.StringProp("Response body as string. When paginating with collectPath, contains the JSON array of all collected items"),
+					"body":       schemahelper.AnyProp("Response body as string (default) or parsed JSON object when autoParseJson is true. When paginating with collectPath, contains the JSON array of all collected items"),
 					"headers":    schemahelper.AnyProp("Response headers (last page when paginating)"),
 					"pages":      schemahelper.IntProp("Number of pages fetched (only present when pagination is configured)", schemahelper.WithExample(3)),
 					"totalItems": schemahelper.IntProp("Total number of items collected across all pages (only present when pagination is configured)", schemahelper.WithExample(150)),
@@ -220,7 +237,7 @@ func NewHTTPProvider() *HTTPProvider {
 				provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
 					"success":    schemahelper.BoolProp("Whether the HTTP request completed successfully (2xx status)"),
 					"statusCode": schemahelper.IntProp("HTTP response status code (last page when paginating)", schemahelper.WithExample(200)),
-					"body":       schemahelper.StringProp("Response body as string. When paginating with collectPath, contains the JSON array of all collected items"),
+					"body":       schemahelper.AnyProp("Response body as string (default) or parsed JSON object when autoParseJson is true. When paginating with collectPath, contains the JSON array of all collected items"),
 					"headers":    schemahelper.AnyProp("Response headers (last page when paginating)"),
 					"pages":      schemahelper.IntProp("Number of pages fetched (only present when pagination is configured)", schemahelper.WithExample(3)),
 					"totalItems": schemahelper.IntProp("Total number of items collected across all pages (only present when pagination is configured)", schemahelper.WithExample(150)),
@@ -376,6 +393,31 @@ inputs:
     collectPath: "body.results"
     stopWhen: "!has(body.links) || !has(body.links.next)"`,
 				},
+				{
+					Name:        "Auto-parse JSON response",
+					Description: "Automatically parse JSON response body for direct field access in downstream expressions",
+					YAML: `name: fetch-user-parsed
+provider: http
+inputs:
+  url: "https://api.example.com/users/1"
+  method: GET
+  autoParseJson: true`,
+				},
+				{
+					Name:        "Poll until condition is met",
+					Description: "Keep checking a deployment status API until the deployment succeeds or fails",
+					YAML: `name: wait-for-deployment
+provider: http
+inputs:
+  url: "https://api.example.com/deployments/123"
+  method: GET
+  autoParseJson: true
+  poll:
+    until: "_.body.status == 'succeeded'"
+    failWhen: "_.body.status == 'failed'"
+    interval: "10s"
+    maxAttempts: 30`,
+				},
 			},
 		},
 	}
@@ -515,14 +557,32 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 		return nil, fmt.Errorf("%s: %w", ProviderName, err)
 	}
 
+	// Parse poll configuration
+	pollCfg, err := parsePollConfig(inputs)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", ProviderName, err)
+	}
+
 	httpClient := httpc.NewClient(httpcCfg)
+
+	autoParseJSON, _ := inputs["autoParseJson"].(bool)
 
 	// If pagination is configured, use the paginated execution path
 	if pagCfg != nil {
 		return p.executePaginated(ctx, httpClient, method, urlStr, bodyContent, headers, pagCfg)
 	}
 
-	return p.execute(ctx, httpClient, method, urlStr, bodyContent, headers)
+	// Build the execute function for potential polling
+	executeFunc := func() (*provider.Output, error) {
+		return p.execute(ctx, httpClient, method, urlStr, bodyContent, headers, autoParseJSON)
+	}
+
+	// If polling is configured, wrap execution in a poll loop
+	if pollCfg != nil {
+		return p.executePoll(ctx, nil, method, urlStr, bodyContent, headers, pollCfg, autoParseJSON, executeFunc)
+	}
+
+	return executeFunc()
 }
 
 // buildHTTPClientConfig translates provider timeout and retry config into an httpc.ClientConfig.
@@ -578,6 +638,7 @@ func (p *HTTPProvider) execute(
 	client *httpc.Client,
 	method, urlStr, bodyContent string,
 	headers map[string]any,
+	autoParseJSON bool,
 ) (*provider.Output, error) {
 	lgr := logger.FromContext(ctx)
 
@@ -627,11 +688,28 @@ func (p *HTTPProvider) execute(
 
 	lgr.V(1).Info("provider execution completed", "provider", ProviderName, "statusCode", resp.StatusCode)
 
+	// Determine response body value
+	var bodyValue any = string(respBody)
+	if autoParseJSON && isJSONContentType(resp.Header.Get("Content-Type")) && len(respBody) > 0 {
+		var parsed any
+		if err := json.Unmarshal(respBody, &parsed); err == nil {
+			bodyValue = parsed
+		}
+		// If JSON parse fails, fall back to raw string silently
+	}
+
 	return &provider.Output{
 		Data: map[string]any{
 			"statusCode": resp.StatusCode,
-			"body":       string(respBody),
+			"body":       bodyValue,
 			"headers":    respHeaders,
 		},
 	}, nil
+}
+
+// isJSONContentType returns true if the Content-Type header indicates a JSON response.
+func isJSONContentType(contentType string) bool {
+	ct := strings.ToLower(strings.TrimSpace(contentType))
+	return strings.HasPrefix(ct, "application/json") ||
+		strings.HasSuffix(ct, "+json")
 }

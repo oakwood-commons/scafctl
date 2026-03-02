@@ -61,9 +61,6 @@ spec:
           command: "echo no retry"
 
   testing:
-    config:
-      skipBuiltins: true
-
     cases:
       _run-base:
         description: Base template for retry tests

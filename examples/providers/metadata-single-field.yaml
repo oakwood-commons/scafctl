@@ -1,0 +1,8 @@
+# Metadata provider — extract a single field
+#
+# Set "field" to the key you want returned as a scalar value
+# instead of the full metadata map.
+
+field: name
+name: my-solution
+version: 2.1.0

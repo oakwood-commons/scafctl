@@ -12,6 +12,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -89,9 +90,11 @@ func runInit(ctx context.Context, opts *InitOptions) error {
 	}
 
 	// Build scaffold input from the parsed solution
+	fileDeps := discoverFileDepsFromSolution(&sol, opts.File)
 	input := &soltesting.ScaffoldInput{
-		Resolvers: sol.Spec.Resolvers,
-		Workflow:  sol.Spec.Workflow,
+		Resolvers:        sol.Spec.Resolvers,
+		Workflow:         sol.Spec.Workflow,
+		FileDependencies: fileDeps,
 	}
 
 	// Generate scaffold
@@ -111,4 +114,20 @@ func runInit(ctx context.Context, opts *InitOptions) error {
 	fmt.Fprint(opts.IOStreams.Out, string(out))
 
 	return nil
+}
+
+// discoverFileDepsFromSolution uses bundler.DiscoverFiles to extract file dependencies.
+// Returns nil on error (best-effort).
+func discoverFileDepsFromSolution(sol *solution.Solution, solutionPath string) []string {
+	bundleRoot := filepath.Dir(solutionPath)
+	result, err := bundler.DiscoverFiles(sol, bundleRoot)
+	if err != nil || result == nil {
+		return nil
+	}
+
+	var deps []string
+	for _, f := range result.LocalFiles {
+		deps = append(deps, f.RelPath)
+	}
+	return deps
 }

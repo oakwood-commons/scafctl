@@ -260,7 +260,7 @@ spec:
 
       skip-conditional:
         description: Demonstrate conditional skip (skips on Windows)
-        skipExpression: 'os == "windows"'
+        skip: 'os == "windows"'
         extends: [_resolver-base]
         tags: [skip]
         assertions:

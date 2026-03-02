@@ -87,10 +87,14 @@ func buildFunctionHints() map[string]string {
 			hints[extFunc.Name] = "e.g. urlDecode(_.encoded)"
 
 		// String functions
-		case "regexMatch":
-			hints[extFunc.Name] = "e.g. regexMatch('^test', _.name)"
-		case "regexReplace":
-			hints[extFunc.Name] = "e.g. regexReplace(_.text, 'old', 'new')"
+		case "regex.match":
+			hints[extFunc.Name] = "e.g. regex.match('^test', _.name)"
+		case "regex.replace":
+			hints[extFunc.Name] = "e.g. regex.replace(_.text, '[0-9]+', '#')"
+		case "regex.findAll":
+			hints[extFunc.Name] = "e.g. regex.findAll('[0-9]+', _.text)"
+		case "regex.split":
+			hints[extFunc.Name] = "e.g. regex.split('[,;]+', _.csv)"
 		case "split":
 			hints[extFunc.Name] = "e.g. split(_.csv, ',')"
 		case "join":

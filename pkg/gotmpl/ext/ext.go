@@ -14,6 +14,9 @@ import (
 
 	sprig "github.com/Masterminds/sprig/v3"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
+	"github.com/oakwood-commons/scafctl/pkg/gotmpl/ext/celeval"
+	"github.com/oakwood-commons/scafctl/pkg/gotmpl/ext/collections"
+	"github.com/oakwood-commons/scafctl/pkg/gotmpl/ext/dns"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl/ext/hcl"
 	extyaml "github.com/oakwood-commons/scafctl/pkg/gotmpl/ext/yaml"
 )
@@ -69,6 +72,17 @@ func Custom() gotmpl.ExtFunctionList {
 	return gotmpl.ExtFunctionList{
 		// HCL functions
 		hcl.ToHclFunc(),
+
+		// DNS / slugify functions
+		dns.SlugifyFunc(),
+		dns.ToDNSStringFunc(),
+
+		// Collection / list-filtering functions
+		collections.WhereFunc(),
+		collections.SelectFunc(),
+
+		// Inline CEL evaluation
+		celeval.CelFunc(),
 
 		// YAML functions (removed from Sprig v3.3.0)
 		extyaml.ToYamlFunc(),

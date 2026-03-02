@@ -235,6 +235,159 @@ func TestNewBaseSandbox_And_CopyForTest(t *testing.T) {
 	assert.Equal(t, "shared config", string(content))
 }
 
+func TestNewSandbox_GlobExpansion(t *testing.T) {
+	dir := setupSandboxDir(t)
+	writeSandboxFile(t, dir, "templates/main.yaml", "main")
+	writeSandboxFile(t, dir, "templates/sub/nested.yaml", "nested")
+	writeSandboxFile(t, dir, "templates/other.txt", "other")
+
+	sb, err := soltesting.NewSandbox(
+		filepath.Join(dir, "solution.yaml"),
+		nil,
+		[]string{"templates/**/*.yaml"},
+	)
+	require.NoError(t, err)
+	defer sb.Cleanup()
+
+	// Both .yaml files should be copied
+	content, err := os.ReadFile(filepath.Join(sb.Path(), "templates/main.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, "main", string(content))
+
+	content, err = os.ReadFile(filepath.Join(sb.Path(), "templates/sub/nested.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, "nested", string(content))
+
+	// .txt file should NOT be copied (doesn't match *.yaml glob)
+	_, err = os.Stat(filepath.Join(sb.Path(), "templates/other.txt"))
+	assert.True(t, os.IsNotExist(err), "non-matching file should not be copied")
+}
+
+func TestNewSandbox_DirectoryExpansion(t *testing.T) {
+	dir := setupSandboxDir(t)
+	writeSandboxFile(t, dir, "testdata/a.json", "a")
+	writeSandboxFile(t, dir, "testdata/sub/b.yaml", "b")
+
+	sb, err := soltesting.NewSandbox(
+		filepath.Join(dir, "solution.yaml"),
+		nil,
+		[]string{"testdata"},
+	)
+	require.NoError(t, err)
+	defer sb.Cleanup()
+
+	content, err := os.ReadFile(filepath.Join(sb.Path(), "testdata/a.json"))
+	require.NoError(t, err)
+	assert.Equal(t, "a", string(content))
+
+	content, err = os.ReadFile(filepath.Join(sb.Path(), "testdata/sub/b.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, "b", string(content))
+}
+
+func TestNewSandbox_DirectoryWithTrailingSlash(t *testing.T) {
+	dir := setupSandboxDir(t)
+	writeSandboxFile(t, dir, "data/file1.txt", "f1")
+	writeSandboxFile(t, dir, "data/file2.txt", "f2")
+
+	sb, err := soltesting.NewSandbox(
+		filepath.Join(dir, "solution.yaml"),
+		nil,
+		[]string{"data/"},
+	)
+	require.NoError(t, err)
+	defer sb.Cleanup()
+
+	content, err := os.ReadFile(filepath.Join(sb.Path(), "data/file1.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "f1", string(content))
+
+	content, err = os.ReadFile(filepath.Join(sb.Path(), "data/file2.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "f2", string(content))
+}
+
+func TestNewSandbox_MixedFilesGlobsAndDirectories(t *testing.T) {
+	dir := setupSandboxDir(t)
+	writeSandboxFile(t, dir, "single.txt", "single")
+	writeSandboxFile(t, dir, "templates/main.yaml", "main-tmpl")
+	writeSandboxFile(t, dir, "templates/other.yaml", "other-tmpl")
+	writeSandboxFile(t, dir, "data/input.json", "input")
+
+	sb, err := soltesting.NewSandbox(
+		filepath.Join(dir, "solution.yaml"),
+		nil,
+		[]string{"single.txt", "templates/*.yaml", "data"},
+	)
+	require.NoError(t, err)
+	defer sb.Cleanup()
+
+	content, err := os.ReadFile(filepath.Join(sb.Path(), "single.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "single", string(content))
+
+	content, err = os.ReadFile(filepath.Join(sb.Path(), "templates/main.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, "main-tmpl", string(content))
+
+	content, err = os.ReadFile(filepath.Join(sb.Path(), "templates/other.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, "other-tmpl", string(content))
+
+	content, err = os.ReadFile(filepath.Join(sb.Path(), "data/input.json"))
+	require.NoError(t, err)
+	assert.Equal(t, "input", string(content))
+}
+
+func TestNewSandbox_DeduplicatesGlobResults(t *testing.T) {
+	dir := setupSandboxDir(t)
+	writeSandboxFile(t, dir, "templates/main.yaml", "content")
+
+	// Both entries resolve to the same file — should not error
+	sb, err := soltesting.NewSandbox(
+		filepath.Join(dir, "solution.yaml"),
+		nil,
+		[]string{"templates/main.yaml", "templates/*.yaml"},
+	)
+	require.NoError(t, err)
+	defer sb.Cleanup()
+
+	content, err := os.ReadFile(filepath.Join(sb.Path(), "templates/main.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, "content", string(content))
+}
+
+func TestCopyForTest_GlobAndDirectoryExpansion(t *testing.T) {
+	dir := setupSandboxDir(t)
+	writeSandboxFile(t, dir, "shared/config.yaml", "shared")
+	writeSandboxFile(t, dir, "testdata/a.json", "a")
+	writeSandboxFile(t, dir, "testdata/b.json", "b")
+	writeSandboxFile(t, dir, "extra/deep/file.txt", "deep")
+
+	base, err := soltesting.NewBaseSandbox(
+		filepath.Join(dir, "solution.yaml"),
+		[]string{"shared/config.yaml"},
+	)
+	require.NoError(t, err)
+	defer base.Cleanup()
+
+	child, err := base.CopyForTest(dir, []string{"testdata/*.json", "extra"})
+	require.NoError(t, err)
+	defer child.Cleanup()
+
+	content, err := os.ReadFile(filepath.Join(child.Path(), "testdata/a.json"))
+	require.NoError(t, err)
+	assert.Equal(t, "a", string(content))
+
+	content, err = os.ReadFile(filepath.Join(child.Path(), "testdata/b.json"))
+	require.NoError(t, err)
+	assert.Equal(t, "b", string(content))
+
+	content, err = os.ReadFile(filepath.Join(child.Path(), "extra/deep/file.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "deep", string(content))
+}
+
 func setupSandboxDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()

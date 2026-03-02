@@ -1,0 +1,228 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-github-provider
+  version: 1.0.0
+  description: |
+    Functional tests for the GitHub API provider.
+    Uses a mock HTTP server to simulate GitHub API endpoints.
+    Tests repository info, file content, releases, and pull requests.
+
+spec:
+  resolvers:
+    mockBaseUrl:
+      description: Base URL of mock GitHub API server from env
+      resolve:
+        with:
+          - provider: env
+            inputs:
+              operation: get
+              name: MOCK_GITHUB_BASE_URL
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "__self.value"
+
+    repoInfo:
+      description: Get repository information
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: get_repo
+              owner: test-org
+              repo: test-repo
+              api_base:
+                expr: "_.mockBaseUrl"
+
+    fileContent:
+      description: Get file content from repository
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: get_file
+              owner: test-org
+              repo: test-repo
+              path: README.md
+              ref: main
+              api_base:
+                expr: "_.mockBaseUrl"
+
+    latestRelease:
+      description: Get latest release
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: get_latest_release
+              owner: test-org
+              repo: test-repo
+              api_base:
+                expr: "_.mockBaseUrl"
+
+    listPullRequests:
+      description: List open pull requests
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: list_pull_requests
+              owner: test-org
+              repo: test-repo
+              state: open
+              per_page: 10
+              api_base:
+                expr: "_.mockBaseUrl"
+
+    pullRequestDetail:
+      description: Get a single pull request
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: get_pull_request
+              owner: test-org
+              repo: test-repo
+              number: 42
+              api_base:
+                expr: "_.mockBaseUrl"
+
+    listReleases:
+      description: List releases
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: list_releases
+              owner: test-org
+              repo: test-repo
+              per_page: 5
+              api_base:
+                expr: "_.mockBaseUrl"
+
+  testing:
+    config:
+      # resolve-defaults: resolvers depend on MOCK_GITHUB_BASE_URL env var and mock HTTP service
+      # render-defaults: solution has no workflow.actions section
+      skipBuiltins: [resolve-defaults, render-defaults]
+      services:
+        - name: github-mock
+          type: http
+          baseUrlEnv: MOCK_GITHUB_BASE_URL
+          routes:
+            - path: /repos/test-org/test-repo
+              method: GET
+              status: 200
+              body: '{"name":"test-repo","full_name":"test-org/test-repo","description":"A test repository","default_branch":"main","private":false,"html_url":"https://github.com/test-org/test-repo","stargazers_count":42}'
+              headers:
+                Content-Type: application/json
+
+            - path: /repos/test-org/test-repo/contents/README.md
+              method: GET
+              status: 200
+              body: '{"name":"README.md","path":"README.md","sha":"abc123","size":45,"type":"file","content":"IyBUZXN0IFJlcG8KClRoaXMgaXMgYSB0ZXN0Lg==","encoding":"base64"}'
+              headers:
+                Content-Type: application/json
+
+            - path: /repos/test-org/test-repo/releases/latest
+              method: GET
+              status: 200
+              body: '{"tag_name":"v1.2.3","name":"Release 1.2.3","body":"Bug fixes and improvements","published_at":"2025-01-15T00:00:00Z","prerelease":false}'
+              headers:
+                Content-Type: application/json
+
+            - path: /repos/test-org/test-repo/pulls
+              method: GET
+              status: 200
+              body: '[{"number":42,"title":"Add feature X","state":"open","user":{"login":"alice"},"created_at":"2025-06-01T00:00:00Z"},{"number":43,"title":"Fix bug Y","state":"open","user":{"login":"bob"},"created_at":"2025-06-02T00:00:00Z"}]'
+              headers:
+                Content-Type: application/json
+
+            - path: /repos/test-org/test-repo/pulls/42
+              method: GET
+              status: 200
+              body: '{"number":42,"title":"Add feature X","state":"open","body":"This PR adds feature X","user":{"login":"alice"},"mergeable":true,"created_at":"2025-06-01T00:00:00Z"}'
+              headers:
+                Content-Type: application/json
+
+            - path: /repos/test-org/test-repo/releases
+              method: GET
+              status: 200
+              body: '[{"tag_name":"v1.2.3","name":"Release 1.2.3","published_at":"2025-01-15T00:00:00Z","prerelease":false},{"tag_name":"v1.2.2","name":"Release 1.2.2","published_at":"2025-01-01T00:00:00Z","prerelease":false}]'
+              headers:
+                Content-Type: application/json
+
+    cases:
+      _base:
+        description: Base template for GitHub provider tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [provider, github]
+        assertions:
+          - expression: __exitCode == 0
+
+      get-repo-info:
+        description: Verify get_repo returns repository metadata
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.repoInfo.result.name == "test-repo"
+            message: "Repository name should be test-repo"
+          - expression: __output.repoInfo.result.default_branch == "main"
+            message: "Default branch should be main"
+          - expression: __output.repoInfo.result.full_name == "test-org/test-repo"
+            message: "Full name should include org"
+
+      get-file-content:
+        description: Verify get_file returns decoded file content
+        extends: [_base]
+        assertions:
+          - expression: __output.fileContent.result.name == "README.md"
+            message: "File name should be README.md"
+          - expression: '__output.fileContent.result.decoded_content.contains("Test Repo")'
+            message: "Decoded content should contain the readme text"
+          - expression: __output.fileContent.result.sha == "abc123"
+            message: "SHA should match"
+
+      get-latest-release:
+        description: Verify get_latest_release returns release info
+        extends: [_base]
+        assertions:
+          - expression: __output.latestRelease.result.tag_name == "v1.2.3"
+            message: "Tag should be v1.2.3"
+          - expression: '__output.latestRelease.result.name == "Release 1.2.3"'
+            message: "Release name should match"
+
+      list-pull-requests:
+        description: Verify list_pull_requests returns array of PRs
+        extends: [_base]
+        assertions:
+          - expression: size(__output.listPullRequests.result) == 2
+            message: "Should return 2 pull requests"
+          - expression: __output.listPullRequests.result[0].number == 42.0
+            message: "First PR number should be 42"
+          - expression: __output.listPullRequests.result[0].title == "Add feature X"
+            message: "First PR title should match"
+
+      get-pull-request-detail:
+        description: Verify get_pull_request returns single PR with details
+        extends: [_base]
+        assertions:
+          - expression: __output.pullRequestDetail.result.number == 42.0
+            message: "PR number should be 42"
+          - expression: __output.pullRequestDetail.result.mergeable == true
+            message: "PR should be mergeable"
+          - expression: __output.pullRequestDetail.result.user.login == "alice"
+            message: "PR author should be alice"
+
+      list-releases:
+        description: Verify list_releases returns release array
+        extends: [_base]
+        assertions:
+          - expression: size(__output.listReleases.result) == 2
+            message: "Should return 2 releases"
+          - expression: __output.listReleases.result[0].tag_name == "v1.2.3"
+            message: "First release tag should be v1.2.3"

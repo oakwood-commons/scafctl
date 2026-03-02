@@ -85,8 +85,13 @@ func NewSandbox(solutionPath string, bundleFiles, testFiles []string) (*Sandbox,
 		}
 	}
 
-	// Copy test files
-	for _, f := range testFiles {
+	// Copy test files (with glob and directory expansion)
+	expandedTestFiles, err := resolveFileEntries(solutionDir, testFiles)
+	if err != nil {
+		_ = os.RemoveAll(tmpDir)
+		return nil, fmt.Errorf("resolving test files: %w", err)
+	}
+	for _, f := range expandedTestFiles {
 		if err := s.copyFile(solutionDir, f); err != nil {
 			_ = os.RemoveAll(tmpDir)
 			return nil, fmt.Errorf("copying test file %q: %w", f, err)
@@ -122,8 +127,13 @@ func (s *Sandbox) CopyForTest(solutionDir string, testFiles []string) (*Sandbox,
 		solutionPath: filepath.Join(tmpDir, solutionBase),
 	}
 
-	// Copy test-specific files from the original solution directory
-	for _, f := range testFiles {
+	// Copy test-specific files from the original solution directory (with glob and directory expansion)
+	expandedTestFiles, err := resolveFileEntries(solutionDir, testFiles)
+	if err != nil {
+		_ = os.RemoveAll(tmpDir)
+		return nil, fmt.Errorf("resolving test files: %w", err)
+	}
+	for _, f := range expandedTestFiles {
 		if err := child.copyFile(solutionDir, f); err != nil {
 			_ = os.RemoveAll(tmpDir)
 			return nil, fmt.Errorf("copying test file %q: %w", f, err)
@@ -222,7 +232,11 @@ func (s *Sandbox) copyFile(sourceDir, relPath string) error {
 	// Reject path traversal
 	cleaned := filepath.Clean(relPath)
 	if strings.HasPrefix(cleaned, "..") || filepath.IsAbs(cleaned) {
-		return fmt.Errorf("path traversal rejected: %q", relPath)
+		return fmt.Errorf(
+			"path traversal rejected: %q — test files must be within the solution directory. "+
+				"Move or copy the file alongside solution.yaml, or use 'init' steps instead",
+			relPath,
+		)
 	}
 
 	srcPath := filepath.Join(sourceDir, cleaned)
@@ -234,6 +248,13 @@ func (s *Sandbox) copyFile(sourceDir, relPath string) error {
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("symlinks are not allowed: %q", relPath)
+	}
+	if info.IsDir() {
+		return fmt.Errorf(
+			"is a directory: %q — the 'files' property requires file paths or glob patterns "+
+				"(e.g., %q to copy the entire directory tree)",
+			relPath, relPath+"/**",
+		)
 	}
 
 	dstPath := filepath.Join(s.root, cleaned)
@@ -317,6 +338,135 @@ func copyDirRecursive(src, dst string) error {
 
 		return os.Chmod(dstPath, info.Mode())
 	})
+}
+
+// resolveFileEntries expands a list of file entries (which may include glob patterns
+// and directory paths) into a flat list of individual relative file paths.
+//
+// Supported entry types:
+//   - Plain file path: "config.yaml" — used as-is
+//   - Glob pattern: "templates/**/*.yaml" — expanded via doublestar
+//   - Directory path: "templates/" (trailing slash) or a path that resolves to a directory
+//     — recursively expanded to include all files in the tree
+//
+// All returned paths are relative to sourceDir.
+func resolveFileEntries(sourceDir string, entries []string) ([]string, error) {
+	var result []string
+	seen := make(map[string]bool)
+
+	for _, entry := range entries {
+		expanded, err := resolveOneFileEntry(sourceDir, entry)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range expanded {
+			if !seen[p] {
+				seen[p] = true
+				result = append(result, p)
+			}
+		}
+	}
+
+	return result, nil
+}
+
+// resolveOneFileEntry resolves a single file entry to one or more relative paths.
+func resolveOneFileEntry(sourceDir, entry string) ([]string, error) {
+	cleaned := filepath.Clean(entry)
+
+	// Reject path traversal early
+	if strings.HasPrefix(cleaned, "..") || filepath.IsAbs(cleaned) {
+		// Let copyFile produce the detailed error
+		return []string{entry}, nil
+	}
+
+	absPath := filepath.Join(sourceDir, cleaned)
+
+	// Check if it's a directory (either by trailing slash or by stat)
+	isDir := strings.HasSuffix(entry, "/") || strings.HasSuffix(entry, string(filepath.Separator))
+	if !isDir {
+		info, err := os.Stat(absPath)
+		if err == nil && info.IsDir() {
+			isDir = true
+		}
+	}
+
+	if isDir {
+		return expandDirectory(sourceDir, cleaned)
+	}
+
+	// Check if it contains glob characters
+	if strings.ContainsAny(entry, "*?[{") {
+		return expandGlob(sourceDir, entry)
+	}
+
+	// Plain file path — return as-is
+	return []string{cleaned}, nil
+}
+
+// expandDirectory recursively walks a directory and returns all files as relative paths.
+func expandDirectory(sourceDir, relDir string) ([]string, error) {
+	absDir := filepath.Join(sourceDir, relDir)
+	info, err := os.Stat(absDir)
+	if err != nil {
+		return nil, fmt.Errorf("directory %q: %w", relDir, err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("not a directory: %q", relDir)
+	}
+
+	var result []string
+	err = filepath.Walk(absDir, func(path string, fi os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if fi.IsDir() {
+			return nil
+		}
+		// Skip symlinks
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return nil
+		}
+		rel, err := filepath.Rel(sourceDir, path)
+		if err != nil {
+			return fmt.Errorf("computing relative path for %q: %w", path, err)
+		}
+		result = append(result, rel)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("walking directory %q: %w", relDir, err)
+	}
+
+	return result, nil
+}
+
+// expandGlob expands a glob pattern relative to sourceDir into matching file paths.
+func expandGlob(sourceDir, pattern string) ([]string, error) {
+	absPattern := filepath.Join(sourceDir, pattern)
+
+	matches, err := doublestar.FilepathGlob(absPattern)
+	if err != nil {
+		return nil, fmt.Errorf("glob pattern %q: %w", pattern, err)
+	}
+
+	var result []string
+	for _, match := range matches {
+		info, err := os.Stat(match)
+		if err != nil {
+			continue // skip unstat-able entries
+		}
+		if info.IsDir() {
+			continue // skip directories, only include files
+		}
+		rel, err := filepath.Rel(sourceDir, match)
+		if err != nil {
+			return nil, fmt.Errorf("computing relative path for %q: %w", match, err)
+		}
+		result = append(result, rel)
+	}
+
+	return result, nil
 }
 
 // discoverComposeFiles reads a solution file and returns the relative paths

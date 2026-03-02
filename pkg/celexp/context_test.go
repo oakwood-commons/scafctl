@@ -521,3 +521,133 @@ func TestEvaluateExpression_IntRootData(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(25), result)
 }
+
+// Tests for enriched error messages
+
+func TestEvaluateExpression_CompilationError_EnrichedMessage(t *testing.T) {
+	ctx := context.Background()
+	rootData := map[string]any{
+		"name": "test",
+	}
+	additionalVars := map[string]any{
+		"x": int64(10),
+	}
+
+	_, err := EvaluateExpression(ctx, "_.invalidSyntax(((", rootData, additionalVars)
+	require.Error(t, err)
+	errMsg := err.Error()
+	assert.Contains(t, errMsg, `failed to compile expression "_.invalidSyntax((("`)
+	assert.Contains(t, errMsg, "Available variables:")
+	assert.Contains(t, errMsg, "_")
+	assert.Contains(t, errMsg, "x")
+}
+
+func TestEvaluateExpression_EvaluationError_EnrichedMessage(t *testing.T) {
+	ctx := context.Background()
+	rootData := map[string]any{
+		"items": []any{int64(1), int64(2)},
+	}
+
+	_, err := EvaluateExpression(ctx, "_.items[10]", rootData, nil)
+	require.Error(t, err)
+	errMsg := err.Error()
+	assert.Contains(t, errMsg, `failed to evaluate expression "_.items[10]"`)
+	assert.Contains(t, errMsg, "Available variables:")
+	assert.Contains(t, errMsg, "_")
+	assert.Contains(t, errMsg, "Data shape of _:")
+	assert.Contains(t, errMsg, "items")
+}
+
+func TestEvaluateExpression_CompilationError_NoRootData(t *testing.T) {
+	ctx := context.Background()
+	additionalVars := map[string]any{
+		"foo": "bar",
+	}
+
+	_, err := EvaluateExpression(ctx, "bad(((syntax", nil, additionalVars)
+	require.Error(t, err)
+	errMsg := err.Error()
+	assert.Contains(t, errMsg, "Available variables:")
+	assert.Contains(t, errMsg, "foo")
+	assert.NotContains(t, errMsg, "_, ")
+}
+
+// Tests for describeAvailableVars
+
+func TestDescribeAvailableVars_RootDataAndAdditional(t *testing.T) {
+	result := describeAvailableVars(map[string]any{"key": "val"}, map[string]any{"x": 1, "y": 2})
+	assert.Contains(t, result, "_")
+	assert.Contains(t, result, "x")
+	assert.Contains(t, result, "y")
+}
+
+func TestDescribeAvailableVars_RootDataOnly(t *testing.T) {
+	result := describeAvailableVars("hello", nil)
+	assert.Equal(t, "_", result)
+}
+
+func TestDescribeAvailableVars_AdditionalOnly(t *testing.T) {
+	result := describeAvailableVars(nil, map[string]any{"a": 1, "b": 2})
+	assert.Contains(t, result, "a")
+	assert.Contains(t, result, "b")
+	assert.NotContains(t, result, "_")
+}
+
+func TestDescribeAvailableVars_None(t *testing.T) {
+	result := describeAvailableVars(nil, nil)
+	assert.Equal(t, "(none)", result)
+}
+
+// Tests for describeDataShape
+
+func TestDescribeDataShape_Nil(t *testing.T) {
+	assert.Equal(t, "(nil)", describeDataShape(nil))
+}
+
+func TestDescribeDataShape_EmptyMap(t *testing.T) {
+	result := describeDataShape(map[string]any{})
+	assert.Equal(t, "{} (empty map)", result)
+}
+
+func TestDescribeDataShape_MapWithEntries(t *testing.T) {
+	data := map[string]any{
+		"name":  "test",
+		"count": int64(42),
+		"items": []any{1, 2, 3},
+	}
+	result := describeDataShape(data)
+	assert.Contains(t, result, "name: string")
+	assert.Contains(t, result, "count: int")
+	assert.Contains(t, result, "items: list")
+}
+
+func TestDescribeDataShape_EmptySlice(t *testing.T) {
+	result := describeDataShape([]any{})
+	assert.Equal(t, "[] (empty list)", result)
+}
+
+func TestDescribeDataShape_SliceOfStrings(t *testing.T) {
+	result := describeDataShape([]any{"a", "b", "c"})
+	assert.Contains(t, result, "string")
+	assert.Contains(t, result, "len=3")
+}
+
+func TestDescribeDataShape_String(t *testing.T) {
+	assert.Equal(t, "string", describeDataShape("hello"))
+}
+
+func TestDescribeDataShape_Int(t *testing.T) {
+	assert.Equal(t, "int", describeDataShape(int64(42)))
+}
+
+func TestDescribeDataShape_Bool(t *testing.T) {
+	assert.Equal(t, "bool", describeDataShape(true))
+}
+
+func TestDescribeDataShape_NestedMap(t *testing.T) {
+	data := map[string]any{
+		"inner": map[string]any{"nested": "value"},
+	}
+	result := describeDataShape(data)
+	assert.Contains(t, result, "inner: map")
+}

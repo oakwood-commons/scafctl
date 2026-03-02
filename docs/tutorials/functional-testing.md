@@ -276,7 +276,7 @@ Multiple templates can be specified — they are applied left to right. The reso
 
 | Field | Merge Behavior |
 |-------|----------------|
-| `command`, `description`, `timeout`, `expectFailure`, `exitCode`, `skip`, `injectFile`, `snapshot`, `skipExpression`, `retries` | Child wins if set |
+| `command`, `description`, `timeout`, `expectFailure`, `exitCode`, `skip`, `injectFile`, `snapshot`, `retries` | Child wins if set |
 | `args` | Appended (base args first, then child) |
 | `assertions` | Appended (base first, then child) |
 | `files`, `tags` | Appended (deduplicated) |
@@ -535,20 +535,20 @@ cases:
 
 ### Conditional Skip
 
-Skip based on runtime conditions using CEL expressions with `os`, `arch`, and `env` context:
+Skip based on runtime conditions using CEL expressions with `os`, `arch`, `subprocess`, and `env` context:
 
 ```yaml
 cases:
   linux-only:
     description: Only runs on Linux
-    skipExpression: 'os != "linux"'
+    skip: 'os != "linux"'
     command: [run, solution]
     assertions:
       - expression: __exitCode == 0
 
   ci-only:
     description: Only runs in CI
-    skipExpression: '!("CI" in env)'
+    skip: '!("CI" in env)'
     command: [run, solution]
     assertions:
       - expression: __exitCode == 0
@@ -672,6 +672,101 @@ config:
   skipBuiltins:
     - resolve-defaults
     - render-defaults
+```
+
+---
+
+## Mock Services
+
+Test solutions that depend on external services by configuring mock HTTP servers and exec command stubs in `testing.config.services`.
+
+### HTTP Mock Servers
+
+Mock HTTP servers start automatically before tests and shut down after. Each mock binds to a random port and injects the base URL into a resolver:
+
+```yaml
+spec:
+  testing:
+    config:
+      services:
+        - type: http
+          portEnv: mockBaseUrl     # resolver name that receives the base URL
+          routes:
+            - path: /api/users
+              method: GET
+              status: 200
+              body: '[{"name":"alice"},{"name":"bob"}]'
+              headers:
+                Content-Type: application/json
+            - path: /api/echo
+              method: POST
+              status: 201
+              echo: true           # echoes back the request body + method
+            - path: /api/slow
+              method: GET
+              status: 200
+              body: '{"status":"ok"}'
+              delay: 2s            # simulates latency
+```
+
+Routes support:
+- **Static responses**: `body`, `status`, `headers`
+- **Echo mode**: `echo: true` returns the request body and method
+- **Latency simulation**: `delay: 2s`
+- **Health endpoint**: Every mock has a `/__health` endpoint for readiness
+
+### Exec Mock Services
+
+Mock exec commands by defining rules that intercept `exec` provider calls. Rules match by exact command or regex pattern:
+
+```yaml
+spec:
+  testing:
+    config:
+      services:
+        - type: exec
+          rules:
+            - command: "kubectl get pods -n production"
+              stdout: "NAME  READY  STATUS\nweb-1  1/1  Running"
+              exitCode: 0
+            - pattern: "^terraform plan.*"
+              stdout: "No changes. Infrastructure is up-to-date."
+              exitCode: 0
+            - pattern: "^curl.*"
+              stderr: "connection refused"
+              exitCode: 7
+```
+
+Rule fields:
+- `command`: Exact command string to match
+- `pattern`: Regex pattern to match against the command
+- `stdout`: Simulated stdout output
+- `stderr`: Simulated stderr output
+- `exitCode`: Simulated exit code (default: 0)
+
+When `passthrough: true` is set on the service, unmatched commands execute normally. Without it, unmatched commands return an error.
+
+### Combining Services
+
+You can use both HTTP and exec mocks together:
+
+```yaml
+spec:
+  testing:
+    config:
+      services:
+        - type: http
+          portEnv: apiBaseUrl
+          routes:
+            - path: /api/deploy
+              method: POST
+              status: 200
+              body: '{"id":"deploy-123"}'
+        - type: exec
+          rules:
+            - command: "kubectl rollout status deployment/web"
+              stdout: "deployment rolled out"
+              exitCode: 0
 ```
 
 ---

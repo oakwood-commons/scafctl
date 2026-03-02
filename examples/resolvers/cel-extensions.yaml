@@ -127,6 +127,67 @@ spec:
               expression: 'strings.title("hello world from scafctl")'
 
     # ─────────────────────────────────────────────
+    # REGEX - Regular expression operations
+    # ─────────────────────────────────────────────
+
+    regex_match:
+      description: "regex.match - Test if a string matches a pattern"
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                {
+                  "starts_with_hello": regex.match("^Hello", "Hello World"),
+                  "has_digits": regex.match("[0-9]+", "abc123"),
+                  "email_valid": regex.match("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}", "user@example.com"),
+                  "no_match": regex.match("^xyz", "Hello World")
+                }
+
+    regex_replace:
+      description: "regex.replace - Replace all occurrences of a pattern"
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                {
+                  "digits_to_hash": regex.replace("abc123def456", "[0-9]+", "#"),
+                  "spaces_to_dashes": regex.replace("hello world foo", "\\s+", "-"),
+                  "strip_special": regex.replace("hello! @world#", "[^a-zA-Z0-9 ]", "")
+                }
+
+    regex_find_all:
+      description: "regex.findAll - Find all matches of a pattern"
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                {
+                  "digits": regex.findAll("[0-9]+", "abc123def456ghi789"),
+                  "words": regex.findAll("[a-zA-Z]+", "hello 123 world 456"),
+                  "no_matches": regex.findAll("[0-9]+", "no digits here")
+                }
+
+    regex_split:
+      description: "regex.split - Split a string by a pattern"
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                {
+                  "by_whitespace": regex.split("\\s+", "hello   world   foo"),
+                  "by_delimiters": regex.split("[,;]+", "a,b;c,,d"),
+                  "by_digits": regex.split("[0-9]+", "abc123def456ghi")
+                }
+
+    # ─────────────────────────────────────────────
     # FILEPATH - Path operations
     # ─────────────────────────────────────────────
 

@@ -32,10 +32,12 @@ Providers are execution primitives used by resolvers and actions. Each provider 
 | [exec](#exec) | ✅ | ✅ | ❌ | ✅ |
 | [file](#file) | ✅ | ✅ | ❌ | ✅ |
 | [git](#git) | ✅ | ❌ | ❌ | ✅ |
+| [github](#github) | ✅ | ✅ | ❌ | ❌ |
 | [go-template](#go-template) | ❌ | ✅ | ❌ | ✅ |
 | [hcl](#hcl) | ✅ | ✅ | ❌ | ❌ |
 | [http](#http) | ✅ | ✅ | ❌ | ✅ |
 | [identity](#identity) | ✅ | ❌ | ❌ | ❌ |
+| [metadata](#metadata) | ✅ | ❌ | ❌ | ❌ |
 | [parameter](#parameter) | ✅ | ❌ | ❌ | ❌ |
 | [secret](#secret) | ✅ | ❌ | ❌ | ❌ |
 | [sleep](#sleep) | ✅ | ✅ | ✅ | ✅ |
@@ -482,6 +484,93 @@ inputs:
 
 ---
 
+## github
+
+Retrieve data from the GitHub REST API. Supports repository info, file content, releases, and pull requests. Uses the configured GitHub auth handler automatically.
+
+> For arbitrary HTTP requests to GitHub, use the `http` provider with `auth: github`.
+
+### Capabilities
+
+`from`, `transform`
+
+### Inputs
+
+| Field | Type | Required | Description |
+|-------|------|:--------:|-------------|
+| `operation` | string | ✅ | API operation: `get_repo`, `get_file`, `list_releases`, `get_latest_release`, `list_pull_requests`, `get_pull_request` |
+| `owner` | string | ✅ | Repository owner (user or organization) |
+| `repo` | string | ✅ | Repository name |
+| `path` | string | ❌ | File path within the repository (for `get_file`) |
+| `ref` | string | ❌ | Git reference (branch, tag, or commit SHA). Defaults to repo's default branch |
+| `number` | int | ❌ | Pull request number (for `get_pull_request`) |
+| `state` | string | ❌ | Filter by state: `open`, `closed`, `all` (default: `open`) |
+| `per_page` | int | ❌ | Results per page, 1–100 (default: 30) |
+| `api_base` | string | ❌ | GitHub API base URL (default: `https://api.github.com`). Set for GitHub Enterprise. |
+
+### Output
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `result` | any | API response — structure varies by operation (see below) |
+
+**Operation output shapes:**
+
+| Operation | `result` type | Key fields |
+|-----------|--------------|------------|
+| `get_repo` | object | `name`, `full_name`, `description`, `default_branch`, `private`, `html_url` |
+| `get_file` | object | `name`, `content`, `decoded_content`, `sha`, `size`, `type` |
+| `list_releases` | array | Each: `tag_name`, `name`, `body`, `published_at`, `prerelease` |
+| `get_latest_release` | object | `tag_name`, `name`, `body`, `published_at` |
+| `list_pull_requests` | array | Each: `number`, `title`, `state`, `user`, `created_at` |
+| `get_pull_request` | object | `number`, `title`, `state`, `body`, `user`, `mergeable` |
+
+### Examples
+
+```yaml
+# Get repository info
+resolve:
+  with:
+    - provider: github
+      inputs:
+        operation: get_repo
+        owner: octocat
+        repo: hello-world
+
+# Get file content from a specific branch
+transform:
+  with:
+    - provider: github
+      inputs:
+        operation: get_file
+        owner: octocat
+        repo: hello-world
+        path: README.md
+        ref: main
+
+# Get latest release
+resolve:
+  with:
+    - provider: github
+      inputs:
+        operation: get_latest_release
+        owner: cli
+        repo: cli
+
+# List open pull requests
+resolve:
+  with:
+    - provider: github
+      inputs:
+        operation: list_pull_requests
+        owner: golang
+        repo: go
+        state: open
+        per_page: 10
+```
+
+---
+
 ## go-template
 
 Transform data using Go text/template syntax.
@@ -500,10 +589,63 @@ Transform data using Go text/template syntax.
 | `leftDelim` | string | ❌ | Left delimiter (default: `{{`) |
 | `rightDelim` | string | ❌ | Right delimiter (default: `}}`) |
 | `data` | any | ❌ | Additional data to merge with resolver context |
+| `ignoredBlocks` | array | ❌ | Blocks to pass through literally without template processing. Each entry uses EITHER `{ start, end }` markers (multi-line) OR `{ line }` marker (single-line). Content is preserved as-is. |
 
 ### Output
 
 Returns the rendered template as a string.
+
+### Ignored Blocks
+
+Use `ignoredBlocks` to bypass template rendering for specific sections. This is useful when templates contain syntax that conflicts with Go template delimiters (e.g., Terraform `${}`, Helm `{{ }}`, GitHub Actions `${{ }}`).
+
+#### Start/End Mode (Multi-line)
+
+Define `start` and `end` markers. All content between matched markers (inclusive) is preserved:
+
+```yaml
+transform:
+  with:
+    - provider: go-template
+      inputs:
+        name: terraform-config
+        template: |
+          resource "aws_instance" "main" {
+            ami           = "{{ .ami }}"
+            instance_type = "{{ .instanceType }}"
+            /*scafctl:ignore:start*/
+            tags = {
+              Name = "${var.name}"
+            }
+            /*scafctl:ignore:end*/
+          }
+        ignoredBlocks:
+          - start: "/*scafctl:ignore:start*/"
+            end: "/*scafctl:ignore:end*/"
+```
+
+#### Line Mode (Single-line)
+
+Define a `line` marker. Every line containing that substring is preserved literally:
+
+```yaml
+transform:
+  with:
+    - provider: go-template
+      inputs:
+        name: workflow-config
+        template: |
+          name: Deploy {{ .appName }}
+          steps:
+            - run: echo ${{ secrets.TOKEN }}  # scafctl:ignore
+            - run: echo "deployed"
+        ignoredBlocks:
+          - line: "# scafctl:ignore"
+```
+
+> **Note:** `line` and `start`/`end` are mutually exclusive within a single entry, but different entries can use different modes.
+
+The content between `start` and `end` markers (including the markers themselves) passes through unchanged. For `line` mode, the entire line containing the marker is preserved.
 
 ### Examples
 
@@ -719,6 +861,8 @@ HTTP client for API calls with built-in pagination support for fetching data acr
 | `auth` | string | ❌ | Auth provider (e.g., `entra`, `github`) |
 | `scope` | string | ❌ | OAuth scope for authentication |
 | `pagination` | object | ❌ | Pagination configuration (see below) |
+| `autoParseJson` | bool | ❌ | Parse response body as JSON when Content-Type is `application/json`. Enables direct field access (e.g., `_.result.body.items`) |
+| `poll` | object | ❌ | Polling configuration — re-execute request until a condition is met (see below) |
 
 ### Pagination
 
@@ -789,12 +933,40 @@ Full control using CEL expressions.
 | `nextURL` | string | CEL expression returning the full next page URL (empty string = stop) |
 | `nextParams` | string | CEL expression returning a map of query params for the next request (empty map = stop) |
 
+### Polling
+
+The `poll` input enables re-executing the request until a response condition is met. This is different from `retry` (which handles transient failures) — polling re-executes on successful responses until the content matches expectations.
+
+| Field | Type | Required | Description |
+|-------|------|:--------:|-------------|
+| `until` | string | ✅ | CEL expression evaluated against the response. Polling stops when this returns `true`. Available variables: `body` (parsed if JSON), `statusCode`, `headers` |
+| `failWhen` | string | ❌ | CEL expression that triggers immediate failure (e.g., terminal error states) |
+| `interval` | string | ❌ | Duration between polls (default: `5s`). Format: `1s`, `30s`, `2m` |
+| `maxAttempts` | int | ❌ | Maximum number of poll attempts (default: 60) |
+
+```yaml
+# Wait for deployment to complete
+resolve:
+  with:
+    - provider: http
+      inputs:
+        url: https://api.example.com/deployments/123/status
+        method: GET
+        auth: entra
+        autoParseJson: true
+        poll:
+          until: 'body.status == "succeeded"'
+          failWhen: 'body.status == "failed"'
+          interval: 10s
+          maxAttempts: 30
+```
+
 ### Output
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `statusCode` | int | HTTP status code (last page when paginating) |
-| `body` | string | Response body. When paginating with `collectPath`, contains JSON array of all collected items |
+| `body` | any | Response body as string, or parsed JSON object when `autoParseJson: true`. When paginating with `collectPath`, contains JSON array of all collected items |
 | `headers` | object | Response headers (last page when paginating) |
 | `success` | bool | Whether request succeeded (action only) |
 | `pages` | int | Number of pages fetched (only when paginating) |
@@ -976,6 +1148,58 @@ resolve:
       inputs:
         operation: claims
         handler: github
+```
+
+---
+
+## metadata
+
+Return structured metadata about a solution. Accepts arbitrary key-value pairs and returns them as a map, optionally returning a single field by key. Useful for exposing solution name, version, description, tags, and custom attributes to templates and downstream resolvers.
+
+### Capabilities
+
+`from`
+
+### Inputs
+
+| Field | Type | Required | Description |
+|-------|------|:--------:|-------------|
+| `field` | string | ❌ | Return only this single field from the metadata map instead of the full map |
+| *(any key)* | any | ❌ | Arbitrary metadata key-value pairs |
+
+### Output
+
+When `field` is set: the value of that specific key.
+When `field` is omitted: a map of all provided key-value pairs (excluding `field` itself).
+
+### Examples
+
+**Full metadata map:**
+
+```yaml
+resolvers:
+  solution-meta:
+    type: metadata
+    from:
+      name: my-solution
+      version: 2.1.0
+      description: Scaffolds a GCP project
+      category: infrastructure
+      tags:
+        - gcp
+        - terraform
+```
+
+**Single field extraction:**
+
+```yaml
+resolvers:
+  solution-name:
+    type: metadata
+    from:
+      field: name
+      name: my-solution
+      version: 2.1.0
 ```
 
 ---

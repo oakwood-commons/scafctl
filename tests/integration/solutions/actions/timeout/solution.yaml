@@ -44,9 +44,6 @@ spec:
           command: "echo no timeout action done"
 
   testing:
-    config:
-      skipBuiltins: true
-
     cases:
       _run-base:
         description: Base template for timeout tests

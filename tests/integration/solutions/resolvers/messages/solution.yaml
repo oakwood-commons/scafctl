@@ -1,0 +1,98 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-resolver-messages
+  version: 1.0.0
+  description: |
+    Functional tests for custom error messages on resolvers.
+    Verifies that messages.error overrides default error text
+    for validation failures, using static strings and CEL expressions.
+
+spec:
+  resolvers:
+    validPort:
+      description: Port that passes validation (no custom error expected)
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "8080"
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: "int(__self) >= 1024 && int(__self) <= 65535"
+              message: port out of range
+
+    invalidPortStatic:
+      description: Port that fails validation with a static custom error
+      messages:
+        error: "Port must be between 1024 and 65535. Please fix your configuration."
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "80"
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: "int(__self) >= 1024 && int(__self) <= 65535"
+              message: port out of range
+
+    invalidPortCel:
+      description: Port that fails validation with a CEL-based custom error
+      messages:
+        error:
+          expr: "'Custom CEL error: port validation failed with ' + __self"
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "80"
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: "int(__self) >= 1024 && int(__self) <= 65535"
+              message: port out of range
+
+  testing:
+    config:
+      # resolve-defaults: invalidPortStatic and invalidPortCel have intentional validation failures
+      # render-defaults: solution has no workflow.actions section
+      skipBuiltins: [resolve-defaults, render-defaults]
+
+    cases:
+      valid-resolver-succeeds:
+        description: Resolver with valid data should resolve normally
+        command: [run, resolver, validPort]
+        args: ["-o", "json"]
+        tags: [resolver, messages]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.validPort == "8080"
+            message: "Valid port should resolve to 8080"
+
+      static-custom-error:
+        description: Verify static custom error message overrides default
+        command: [run, resolver, invalidPortStatic]
+        args: ["-o", "json"]
+        tags: [resolver, messages, negative]
+        expectFailure: true
+        assertions:
+          - expression: __exitCode != 0
+          - expression: '__stderr.contains("Port must be between 1024 and 65535")'
+            message: "Custom static error message should appear in output"
+
+      cel-custom-error:
+        description: Verify CEL-based custom error message includes dynamic content
+        command: [run, resolver, invalidPortCel]
+        args: ["-o", "json"]
+        tags: [resolver, messages, negative]
+        expectFailure: true
+        assertions:
+          - expression: __exitCode != 0
+          - expression: '__stderr.contains("Custom CEL error")'
+            message: "CEL-generated custom error should appear in output"

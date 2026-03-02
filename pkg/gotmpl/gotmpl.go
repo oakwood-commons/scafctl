@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"text/template"
@@ -411,7 +412,7 @@ func (s *Service) executeTemplate(ctx context.Context, tmpl *template.Template, 
 		lgr.Error(err, "template execution failed",
 			"name", opts.Name,
 			"dataType", fmt.Sprintf("%T", opts.Data))
-		return "", fmt.Errorf("execution error: %w", err)
+		return "", fmt.Errorf("execution error: %w\n%s", err, diagnoseTemplateError(err, opts))
 	}
 
 	output := buf.String()
@@ -428,6 +429,66 @@ func truncateString(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// diagnoseTemplateError inspects a template execution error and returns
+// actionable guidance for common failure modes.
+func diagnoseTemplateError(err error, opts TemplateOptions) string {
+	msg := err.Error()
+	var hints []string
+
+	// Nil pointer / interface conversion (usually accessing a field on nil data).
+	if strings.Contains(msg, "nil pointer") || strings.Contains(msg, "interface conversion") {
+		hints = append(hints, "A value used in the template is nil. Check that all referenced resolver fields have been resolved before this template runs.")
+	}
+
+	// Wrong type for range (e.g., ranging over a string).
+	if strings.Contains(msg, "range can't iterate over") {
+		hints = append(hints, "The 'range' action received a non-iterable value. Ensure the variable is a list/slice or map, not a string or number.")
+	}
+
+	// Method/field not found.
+	if strings.Contains(msg, "can't evaluate field") || strings.Contains(msg, "is not a field of struct") {
+		hints = append(hints, "A referenced field does not exist on the data object. Double-check field names and casing. Resolver data keys are case-sensitive.")
+	}
+
+	// Function not defined.
+	if strings.Contains(msg, "function") && strings.Contains(msg, "not defined") {
+		hints = append(hints, "A template function is not registered. Available custom functions: slugify, toDnsString, where, selectField, cel, toHcl, toYaml, fromYaml. Sprig functions are also available.")
+	}
+
+	// Wrong number of args.
+	if strings.Contains(msg, "wrong number of args") {
+		hints = append(hints, "A function or method was called with the wrong number of arguments. Check the function signature.")
+	}
+
+	// Map has no entry.
+	if strings.Contains(msg, "map has no entry for key") {
+		hints = append(hints, "A map key was not found. Use 'index' to safely access map keys, or set missingKey to 'zero' or 'default'.")
+	}
+
+	// Describe the data type passed.
+	if opts.Data != nil {
+		hints = append(hints, fmt.Sprintf("Template data type: %T", opts.Data))
+		if m, ok := opts.Data.(map[string]any); ok && len(m) > 0 {
+			keys := make([]string, 0, len(m))
+			for k := range m {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			if len(keys) > 20 {
+				keys = append(keys[:20], "...")
+			}
+			hints = append(hints, fmt.Sprintf("Available top-level keys: %s", strings.Join(keys, ", ")))
+		}
+	} else {
+		hints = append(hints, "Template data is nil — no resolver data was passed to this template.")
+	}
+
+	if len(hints) == 0 {
+		return ""
+	}
+	return "Hints: " + strings.Join(hints, " | ")
 }
 
 // Execute is a convenience function that creates a service and executes a template

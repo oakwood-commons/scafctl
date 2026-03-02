@@ -46,7 +46,7 @@ This is the primary mechanism for validating solutions in CI and during developm
 | Selective builtin skip | ✅ Done | `SkipBuiltinsValue` with custom unmarshal |
 | In-process command execution | ✅ Done | `Root()` with `*RootOptions`, `CommandBuilder` |
 | Concurrency control | ✅ Done | `-j` flag, `--sequential` as sugar for `-j 1` |
-| Conditional skip (`skipExpression`) | ✅ Done | CEL-based runtime skip evaluation |
+| Conditional skip (CEL `skip` expression) | ✅ Done | CEL-based runtime skip evaluation |
 | Test retries | ✅ Done | `retries` field for flaky test resilience |
 | Suite-level cleanup | ✅ Done | `testing.config.cleanup` for teardown after all tests |
 | File size guard | ✅ Done | Cap `files[].content` at 10MB to prevent OOM |
@@ -277,9 +277,8 @@ cases:
     expectFailure: <bool>
     exitCode: <int>
     timeout: <string>  # Go duration format, e.g., "30s", "2m"
-    skip: <bool>
+    skip: <bool | Expression>
     skipReason: <string>
-    skipExpression: <Expression>
     retries: <int>
 ~~~
 
@@ -304,9 +303,8 @@ Each test case is a named entry under `spec.testing.cases`. The maximum number o
 | `expectFailure` | `bool` | No | `false` | When `true`, the test passes if the command exits non-zero |
 | `exitCode` | `int` | No | — | Exact expected exit code. **Mutually exclusive** with `expectFailure` — setting both is a validation error |
 | `timeout` | `string` | No | `"30s"` | Per-test timeout as a Go duration string (e.g., `"30s"`, `"2m"`, `"1m30s"`). Parsed via a custom `Duration` type with string-based YAML/JSON marshalling |
-| `skip` | `bool` | No | `false` | Skip this test |
+| `skip` | `bool \| Expression` | No | `false` | Skip this test. When `true`, unconditionally skip. When a CEL expression string, evaluated at discovery time — if `true`, the test is skipped. Context variables: `os` (GOOS), `arch` (GOARCH), `env` (environment variables map), `subprocess` (bool). Example: `'os == "windows"'` |
 | `skipReason` | `string` | No | — | Human-readable reason for skipping. Shown in test output |
-| `skipExpression` | `Expression` | No | — | CEL expression evaluated at discovery time. If `true`, the test is skipped with the expression as the reason. Context variables: `os` (GOOS), `arch` (GOARCH), `env` (environment variables map). Example: `'os == "windows"'` |
 | `retries` | `int` | No | `0` | Number of retry attempts for a failing test. The test passes if any attempt succeeds. Retry count shown in output: `PASS (retry 2/3)` |
 
 ---
@@ -525,7 +523,6 @@ Test names starting with `_` are **templates** — they are not executed directl
 | `skip` | Child wins if set |
 | `injectFile` | Child wins if set |
 | `snapshot` | Child wins if set |
-| `skipExpression` | Child wins if set |
 | `retries` | Child wins if set |
 
 ### Example
@@ -904,7 +901,7 @@ For each test case:
 1. Resolve `extends` chains and merge inherited fields
 2. Validate test name matches `^[a-zA-Z0-9][a-zA-Z0-9_-]*$`
 3. If `skip: true` → status `skip`, stop
-4. If `skipExpression` is set → evaluate CEL expression with `os`, `arch`, `env` context. If `true` → status `skip` with expression as reason, stop
+4. If `skip` is a CEL expression → evaluate with `os`, `arch`, `env`, `subprocess` context. If `true` → status `skip` with expression as reason, stop
 5. Create temp sandbox and copy solution + bundle files + test files
 6. Snapshot sandbox file list and modification times
 7. Run init steps sequentially; if any fails → status `error`, run cleanup, stop
@@ -1197,9 +1194,8 @@ type TestCase struct {
     ExpectFailure bool              `json:"expectFailure,omitempty" yaml:"expectFailure,omitempty" doc:"Pass if command exits non-zero"`
     ExitCode      *int              `json:"exitCode,omitempty" yaml:"exitCode,omitempty" doc:"Exact expected exit code. Mutually exclusive with expectFailure"`
     Timeout       *Duration         `json:"timeout,omitempty" yaml:"timeout,omitempty" doc:"Per-test timeout as Go duration string" example:"30s"`
-    Skip          bool              `json:"skip,omitempty" yaml:"skip,omitempty" doc:"Skip this test"`
+    Skip          SkipValue         `json:"skip,omitempty" yaml:"skip,omitempty" doc:"Skip this test: true for unconditional, or a CEL expression string for conditional skip"`
     SkipReason    string            `json:"skipReason,omitempty" yaml:"skipReason,omitempty" doc:"Human-readable skip reason"`
-    SkipExpression celexp.Expression `json:"skipExpression,omitempty" yaml:"skipExpression,omitempty" doc:"CEL expression evaluated at discovery time. If true, test is skipped. Context: os, arch, env"`
     Retries       int               `json:"retries,omitempty" yaml:"retries,omitempty" doc:"Number of retry attempts for failing tests" maximum:"10"`
 }
 
@@ -1500,7 +1496,7 @@ The planned tutorial at `docs/tutorials/functional-testing.md` should cover:
 3. **Test inheritance** — `_`-prefixed templates, `extends` chains, merge behavior for args/assertions/tags
 4. **Snapshots** — golden file workflow, `--update-snapshots`, normalization pipeline
 5. **CI integration** — JUnit XML reporting with `--report-file`, exit codes, `--fail-fast` patterns
-6. **Advanced features** — init/cleanup steps, test files, `skipExpression`, retries, suite-level setup
+6. **Advanced features** — init/cleanup steps, test files, conditional `skip` expressions, retries, suite-level setup
 
 The example solution at `examples/solutions/tested-solution/` should include:
 
@@ -1555,7 +1551,7 @@ The example solution at `examples/solutions/tested-solution/` should include:
 - **`__output` nil when unsupported**: diagnostic error rather than empty map to prevent silent assertion failures
 - **Concurrency control**: `-j N` flag with `--sequential` as sugar for `-j 1` — standard test runner pattern
 - **File size guard**: 10MB cap on `files[].content` to prevent OOM without blocking tests
-- **Conditional skip via CEL**: `skipExpression` field evaluated at discovery time with `os`, `arch`, `env` context
+- **Conditional skip via CEL**: `skip` field accepts either `true` or a CEL expression string, evaluated at discovery time with `os`, `arch`, `env`, `subprocess` context
 - **Test retries**: `retries` field for flaky test resilience, capped at 10 attempts
 - **Suite-level cleanup**: `testing.config.cleanup` runs after all tests, symmetric with `testing.config.setup`
 - **Compose `testing.config` merge**: `setup`/`cleanup` steps appended in compose-file order (new merge strategy); `skipBuiltins` uses `true`-wins for bool, union for lists

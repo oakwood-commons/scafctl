@@ -15,7 +15,7 @@ import (
 )
 
 func TestHandleListExamples(t *testing.T) {
-	t.Run("lists all examples", func(t *testing.T) {
+	t.Run("lists all examples grouped by category", func(t *testing.T) {
 		srv, err := NewServer(WithServerVersion("test"))
 		require.NoError(t, err)
 
@@ -32,13 +32,19 @@ func TestHandleListExamples(t *testing.T) {
 		var data map[string]any
 		require.NoError(t, json.Unmarshal([]byte(text), &data))
 
-		exs, ok := data["examples"].([]any)
-		require.True(t, ok, "expected examples array")
-		assert.Greater(t, len(exs), 0, "should find at least one example")
+		cats, ok := data["categories"].([]any)
+		require.True(t, ok, "expected categories array")
+		assert.Greater(t, len(cats), 0, "should have at least one category")
 
-		count, ok := data["count"].(float64)
+		totalCount, ok := data["totalCount"].(float64)
 		require.True(t, ok)
-		assert.Equal(t, float64(len(exs)), count)
+		assert.Greater(t, totalCount, float64(0), "should find at least one example")
+
+		// Each category entry should have category, count, and examples
+		first := cats[0].(map[string]any)
+		assert.NotEmpty(t, first["category"])
+		assert.Greater(t, first["count"].(float64), float64(0))
+		assert.NotEmpty(t, first["examples"])
 	})
 
 	t.Run("filters by category", func(t *testing.T) {
