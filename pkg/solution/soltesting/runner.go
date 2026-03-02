@@ -18,6 +18,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/shellexec"
+	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting/mockexec"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting/mockserver"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
@@ -201,8 +202,9 @@ func (r *Runner) runSolution(ctx context.Context, st *SolutionTests, testNames [
 		}
 	}()
 
-	// Start background services (e.g., mock HTTP servers)
+	// Start background services (e.g., mock HTTP servers, exec mocks)
 	var serviceEnv map[string]string
+	var execMocks []*mockexec.MockExec
 	if st.Config != nil && len(st.Config.Services) > 0 {
 		var servers []*mockserver.Server
 		serviceEnv = make(map[string]string)
@@ -215,7 +217,51 @@ func (r *Runner) runSolution(ctx context.Context, st *SolutionTests, testNames [
 		}()
 
 		for _, svc := range st.Config.Services {
-			if svc.Type != "http" {
+			switch svc.Type {
+			case "http":
+				srv := mockserver.New(svc.Routes)
+				if err := srv.Start(); err != nil {
+					results := make([]TestResult, 0, len(testNames))
+					for _, name := range testNames {
+						result := TestResult{
+							Solution: st.SolutionName,
+							Test:     name,
+							Status:   StatusError,
+							Message:  fmt.Sprintf("service %q start failed: %s", svc.Name, err),
+						}
+						r.emitTestComplete(result)
+						results = append(results, result)
+					}
+					return results, nil
+				}
+				servers = append(servers, srv)
+
+				if svc.PortEnv != "" {
+					serviceEnv[svc.PortEnv] = fmt.Sprintf("%d", srv.Port())
+				}
+				if svc.BaseURLEnv != "" {
+					serviceEnv[svc.BaseURLEnv] = srv.BaseURL()
+				}
+
+			case "exec":
+				me, err := mockexec.New(svc.ExecRules, mockexec.WithPassthrough(svc.Passthrough))
+				if err != nil {
+					results := make([]TestResult, 0, len(testNames))
+					for _, name := range testNames {
+						result := TestResult{
+							Solution: st.SolutionName,
+							Test:     name,
+							Status:   StatusError,
+							Message:  fmt.Sprintf("exec service %q init failed: %s", svc.Name, err),
+						}
+						r.emitTestComplete(result)
+						results = append(results, result)
+					}
+					return results, nil
+				}
+				execMocks = append(execMocks, me)
+
+			default:
 				results := make([]TestResult, 0, len(testNames))
 				for _, name := range testNames {
 					result := TestResult{
@@ -229,30 +275,6 @@ func (r *Runner) runSolution(ctx context.Context, st *SolutionTests, testNames [
 				}
 				return results, nil
 			}
-
-			srv := mockserver.New(svc.Routes)
-			if err := srv.Start(); err != nil {
-				results := make([]TestResult, 0, len(testNames))
-				for _, name := range testNames {
-					result := TestResult{
-						Solution: st.SolutionName,
-						Test:     name,
-						Status:   StatusError,
-						Message:  fmt.Sprintf("service %q start failed: %s", svc.Name, err),
-					}
-					r.emitTestComplete(result)
-					results = append(results, result)
-				}
-				return results, nil
-			}
-			servers = append(servers, srv)
-
-			if svc.PortEnv != "" {
-				serviceEnv[svc.PortEnv] = fmt.Sprintf("%d", srv.Port())
-			}
-			if svc.BaseURLEnv != "" {
-				serviceEnv[svc.BaseURLEnv] = srv.BaseURL()
-			}
 		}
 
 		// Inject service env vars into testConfig.Env so buildEnvMap picks them up automatically.
@@ -261,6 +283,15 @@ func (r *Runner) runSolution(ctx context.Context, st *SolutionTests, testNames [
 		}
 		for k, v := range serviceEnv {
 			st.Config.Env[k] = v
+		}
+
+		// Inject exec mock into context so the exec provider uses mock responses.
+		// This works for in-process test execution. For subprocess execution, exec
+		// mocks are not yet supported — unmatched commands run normally.
+		if len(execMocks) > 0 {
+			// Compose all exec mocks into a single RunFunc: try each in order.
+			composed := composeExecMocks(execMocks)
+			ctx = shellexec.WithRunFunc(ctx, composed)
 		}
 	}
 
@@ -413,7 +444,7 @@ func (r *Runner) executeTest(ctx context.Context, tc *TestCase, st *SolutionTest
 	}
 
 	// Check skip conditions
-	if tc.Skip {
+	if tc.Skip.ShouldSkip() {
 		result.Status = StatusSkip
 		result.Message = tc.SkipReason
 		if result.Message == "" {
@@ -423,8 +454,8 @@ func (r *Runner) executeTest(ctx context.Context, tc *TestCase, st *SolutionTest
 		return result
 	}
 
-	if tc.SkipExpression != "" {
-		skipped, err := r.evaluateSkipExpression(ctx, string(tc.SkipExpression))
+	if tc.Skip.HasExpression() {
+		skipped, err := r.evaluateSkipExpression(ctx, string(tc.Skip.Expression))
 		if err != nil {
 			result.Status = StatusError
 			result.Message = fmt.Sprintf("skip expression error: %s", err)
@@ -435,7 +466,7 @@ func (r *Runner) executeTest(ctx context.Context, tc *TestCase, st *SolutionTest
 			result.Status = StatusSkip
 			result.Message = tc.SkipReason
 			if result.Message == "" {
-				result.Message = fmt.Sprintf("skip expression: %s", tc.SkipExpression)
+				result.Message = fmt.Sprintf("skip expression: %s", tc.Skip.Expression)
 			}
 			result.Duration = time.Since(start)
 			return result
@@ -750,8 +781,9 @@ func (r *Runner) checkExitCode(tc *TestCase, output *CommandOutput) bool {
 // evaluateSkipExpression evaluates a CEL skip expression.
 func (r *Runner) evaluateSkipExpression(ctx context.Context, expr string) (bool, error) {
 	envVars := map[string]any{
-		"os":   os.Getenv("GOOS"),
-		"arch": os.Getenv("GOARCH"),
+		"os":         os.Getenv("GOOS"),
+		"arch":       os.Getenv("GOARCH"),
+		"subprocess": r.BinaryPath != "",
 	}
 
 	result, err := celexp.EvaluateExpression(ctx, expr, nil, envVars)
@@ -863,4 +895,42 @@ func mergeEnvForStep(envMap map[string]any, stepEnv map[string]string) []string 
 	}
 
 	return shellexec.MergeEnv(combined)
+}
+
+// composeExecMocks creates a single RunFunc that tries each MockExec in order.
+// The first mock that has a matching rule handles the command. If no mock matches
+// and a mock allows passthrough, the real shellexec.Run is called.
+func composeExecMocks(mocks []*mockexec.MockExec) shellexec.RunFunc {
+	fns := make([]shellexec.RunFunc, len(mocks))
+	for i, m := range mocks {
+		fns[i] = m.RunFunc()
+	}
+
+	return func(ctx context.Context, opts *shellexec.RunOptions) (*shellexec.RunResult, error) {
+		fullCmd := shellexec.BuildFullCommand(opts.Command, opts.Args)
+		var lastErr error
+
+		for i, m := range mocks {
+			// Check if any rule matches in this mock
+			for _, rule := range m.Rules() {
+				if rule.Matches(fullCmd) {
+					return fns[i](ctx, opts)
+				}
+			}
+		}
+
+		// No match found — try each mock's RunFunc (which will either passthrough or error)
+		for _, fn := range fns {
+			result, err := fn(ctx, opts)
+			if err == nil {
+				return result, nil
+			}
+			lastErr = err
+		}
+
+		if lastErr != nil {
+			return nil, lastErr
+		}
+		return nil, fmt.Errorf("mockexec: no matching rule for command %q", fullCmd)
+	}
 }

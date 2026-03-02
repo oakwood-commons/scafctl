@@ -74,7 +74,7 @@ func TestProviderNames(t *testing.T) {
 	names := ProviderNames()
 
 	// Should have all built-in providers
-	expectedCount := 16 // http, env, cel, file, directory, validation, exec, git, debug, sleep, parameter, static, go-template, secret, identity, hcl
+	expectedCount := 18 // http, env, cel, file, directory, validation, exec, git, debug, sleep, parameter, static, go-template, secret, identity, hcl, github, metadata
 	assert.Len(t, names, expectedCount, "should have %d built-in providers", expectedCount)
 
 	// Verify expected names are present
@@ -95,6 +95,8 @@ func TestProviderNames(t *testing.T) {
 		"secret",
 		"identity",
 		"hcl",
+		"github",
+		"metadata",
 	}
 
 	for _, expected := range expectedNames {
@@ -171,6 +173,8 @@ func TestAllProvidersRegistered(t *testing.T) {
 		{"secret", "secret"},
 		{"identity", "identity"},
 		{"hcl", "HCL"},
+		{"metadata", "metadata"},
+		{"github", "GitHub"},
 	}
 
 	for _, expected := range expectedProviders {

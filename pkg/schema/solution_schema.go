@@ -174,6 +174,7 @@ func patchSchema(doc map[string]any) {
 
 	patchValueRef(defs)
 	patchSkipBuiltinsValue(defs)
+	patchSkipValue(defs)
 	patchMapKeyNames(defs)
 	patchJSONSchemaType(defs)
 }
@@ -295,6 +296,24 @@ func patchSkipBuiltinsValue(defs map[string]any) {
 				"type":  "array",
 				"items": map[string]any{"type": "string"},
 			},
+		},
+	}
+}
+
+// patchSkipValue replaces the SkipValue $def with oneOf
+// since it supports both bool and string (CEL expression) via custom UnmarshalYAML
+// but Huma sees an empty object (all fields are json:"-").
+func patchSkipValue(defs map[string]any) {
+	key := findDefKey(defs, "SkipValue")
+	if key == "" {
+		return
+	}
+
+	defs[key] = map[string]any{
+		"description": "When true, unconditionally skips the test. When a string, evaluated as a CEL expression for conditional skipping.",
+		"oneOf": []any{
+			map[string]any{"type": "boolean"},
+			map[string]any{"type": "string"},
 		},
 	}
 }

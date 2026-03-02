@@ -15,11 +15,13 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/envprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/execprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/fileprovider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/githubprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/gitprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/gotmplprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/hclprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/httpprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/identityprovider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/metadataprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/parameterprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/secretprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/sleepprovider"
@@ -64,6 +66,7 @@ func registerAllToRegistry(ctx context.Context, reg *provider.Registry) error {
 		validationprovider.NewValidationProvider(),
 		execprovider.NewExecProvider(),
 		gitprovider.NewGitProvider(),
+		githubprovider.NewGitHubProvider(),
 		debugprovider.NewDebugProvider(),
 		sleepprovider.NewSleepProvider(),
 		parameterprovider.NewParameterProvider(),
@@ -71,6 +74,7 @@ func registerAllToRegistry(ctx context.Context, reg *provider.Registry) error {
 		gotmplprovider.NewGoTemplateProvider(),
 		identityprovider.NewIdentityProvider(),
 		hclprovider.NewHCLProvider(),
+		metadataprovider.New(),
 	}
 
 	// Initialize secrets store for the secret provider.
@@ -134,6 +138,8 @@ func ProviderNames() []string {
 		"secret",
 		"identity",
 		"hcl",
+		"github",
+		"metadata",
 	}
 }
 

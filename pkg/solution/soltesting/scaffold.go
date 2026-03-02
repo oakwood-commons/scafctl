@@ -27,6 +27,11 @@ type ScaffoldInput struct {
 
 	// Workflow is the action workflow from the solution spec (may be nil).
 	Workflow *action.Workflow
+
+	// FileDependencies is a list of file paths (relative to the solution dir)
+	// discovered through static analysis of provider inputs.
+	// These are automatically populated onto generated test cases.
+	FileDependencies []string
 }
 
 // Scaffold generates a skeleton test suite from the provided solution data.
@@ -49,6 +54,17 @@ func Scaffold(input *ScaffoldInput) *ScaffoldResult {
 	// Generate action-specific tests
 	if input.Workflow != nil && input.Workflow.Actions != nil {
 		addActionTests(result, input.Workflow)
+	}
+
+	// Auto-populate discovered file dependencies on all generated test cases
+	if len(input.FileDependencies) > 0 {
+		sorted := make([]string, len(input.FileDependencies))
+		copy(sorted, input.FileDependencies)
+		sort.Strings(sorted)
+
+		for _, tc := range result.Cases {
+			tc.Files = sorted
+		}
 	}
 
 	return result

@@ -342,8 +342,8 @@ func (s *Server) handleSolutionTestsResource(_ context.Context, request mcp.Read
 		if len(tc.Tags) > 0 {
 			caseData["tags"] = tc.Tags
 		}
-		if tc.Skip {
-			caseData["skip"] = true
+		if !tc.Skip.IsZero() {
+			caseData["skip"] = tc.Skip.String()
 			if tc.SkipReason != "" {
 				caseData["skipReason"] = tc.SkipReason
 			}

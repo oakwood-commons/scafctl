@@ -155,9 +155,55 @@ spec:
               name: tohcl-test
               template: '{{ toHcl .toHclData }}'
 
+    ignoredBlocksTemplate:
+      description: Template with ignored blocks for literal pass-through
+      dependsOn: [appName]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              name: ignored-blocks
+              template: |
+                name = "{{ .appName }}"
+                /*scafctl:ignore:start*/
+                tags = {
+                  Name = "${var.project}-${var.env}"
+                }
+                /*scafctl:ignore:end*/
+              ignoredBlocks:
+                - start: "/*scafctl:ignore:start*/"
+                  end: "/*scafctl:ignore:end*/"
+
+    ignoredBlocksLineTemplate:
+      description: Template with line-based ignore markers
+      dependsOn: [appName]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              name: ignored-blocks-line
+              template: |
+                name: {{ .appName }}
+                steps:
+                  - run: echo ${{ secrets.TOKEN }}  # scafctl:ignore
+                  - run: echo "deployed"
+              ignoredBlocks:
+                - line: "# scafctl:ignore"
+
   testing:
     config:
-      skipBuiltins: true
+      # render-defaults: solution has no workflow.actions section
+      skipBuiltins: [render-defaults]
 
     cases:
       _base:
@@ -221,3 +267,27 @@ spec:
           - expression: '__output.toHclTemplate.contains("name")'
           - expression: '__output.toHclTemplate.contains("my-service")'
           - expression: '__output.toHclTemplate.contains("port")'
+
+      ignored-blocks:
+        description: Verify ignoredBlocks preserves content literally
+        extends: [_base]
+        tags: [ignoredBlocks]
+        assertions:
+          - expression: '__output.ignoredBlocksTemplate.contains("name = \"my-service\"")'
+            message: "Template variables outside ignored blocks should be rendered"
+          - expression: '__output.ignoredBlocksTemplate.contains("${var.project}")'
+            message: "Content inside ignored blocks should be preserved literally"
+          - expression: '__output.ignoredBlocksTemplate.contains("${var.env}")'
+            message: "Terraform interpolations should pass through unchanged"
+
+      ignored-blocks-line:
+        description: Verify line-based ignoredBlocks preserves single lines
+        extends: [_base]
+        tags: [ignoredBlocks]
+        assertions:
+          - expression: '__output.ignoredBlocksLineTemplate.contains("name: my-service")'
+            message: "Template variables should be rendered"
+          - expression: '__output.ignoredBlocksLineTemplate.contains("${{ secrets.TOKEN }}")'
+            message: "Line with ignore marker should be preserved literally"
+          - expression: '__output.ignoredBlocksLineTemplate.contains("echo \"deployed\"")'
+            message: "Non-ignored lines should render normally"

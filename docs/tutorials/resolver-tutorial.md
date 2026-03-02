@@ -706,6 +706,59 @@ Output:
 - `continue` (default): Try the next source in the list. The resolve phase acts as an implicit fallback chain.
 - `fail`: Stop execution immediately and return the error without trying remaining sources.
 
+### Custom Error Messages
+
+Use the `messages` field to replace default error text with user-friendly messages. The `messages.error` field supports static strings, CEL expressions (`expr:`), and Go templates (`tmpl:`):
+
+```yaml
+# messages-error.yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: custom-error-messages
+  version: 1.0.0
+
+spec:
+  resolvers:
+    port:
+      description: Application port number
+      messages:
+        error: "Port must be between 1024 and 65535. Got: {{ .__error }}"
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              name: port
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              rules:
+                - expr: "int(__self) >= 1024 && int(__self) <= 65535"
+                  message: invalid port range
+
+    apiEndpoint:
+      description: API endpoint URL
+      messages:
+        error:
+          expr: "'Failed to reach API endpoint. Error: ' + __error"
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: https://api.example.com/health
+              method: GET
+```
+
+The `messages.error` value is evaluated when any phase fails (resolve, transform, or validate). Two variables are available:
+
+| Variable | Description |
+|----------|-------------|
+| `_` | The resolver data map (all resolved values so far) |
+| `__error` | The original error message string |
+
+When a custom error message is set, it replaces the default error text in all output — CLI, MCP tools, and snapshot captures.
+
 ---
 
 ## Working with HTTP APIs

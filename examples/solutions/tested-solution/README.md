@@ -21,7 +21,7 @@ Demonstrates functional testing features in scafctl.
 | `expectFailure` | `expect-failure` |
 | Per-test `timeout` | `timeout-test` |
 | Static `skip` / `skipReason` | `skip-static` |
-| Conditional `skipExpression` | `skip-conditional` |
+| Conditional `skip` (CEL expression) | `skip-conditional` |
 | `retries` | `retry-test` |
 
 ## Running

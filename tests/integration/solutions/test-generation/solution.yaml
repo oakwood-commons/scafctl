@@ -51,9 +51,6 @@ spec:
             expr: "'echo Hello from ' + _.environment"
 
   testing:
-    config:
-      skipBuiltins: true
-
     cases:
     # =========================================================================
     # run resolver -o test

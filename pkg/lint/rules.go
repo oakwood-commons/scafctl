@@ -234,6 +234,17 @@ var KnownRules = map[string]RuleMeta{
 			"# Wrong (causes cycle):\nvalidate:\n  with:\n    - provider: validation\n      inputs:\n        expression: \"_.myResolver.statusCode == 200\"\n\n# Correct:\nvalidate:\n  with:\n    - provider: validation\n      inputs:\n        expression: \"__self.statusCode == 200\"",
 		},
 	},
+	"unreachable-test-path": {
+		Rule:        "unreachable-test-path",
+		Severity:    string(SeverityWarning),
+		Category:    "testing",
+		Description: "A test case references a file path in its 'files' list that does not exist on disk and does not match any file via glob expansion.",
+		Why:         "Tests that reference non-existent files will fail at sandbox setup time with a confusing error. This usually indicates a typo in the path, a deleted file, or a glob pattern that doesn't match anything.",
+		Fix:         "Check the file path for typos. Run 'ls' or glob expansion to verify the pattern matches files. Use directories (e.g., 'templates/') or globs (e.g., 'templates/**/*.yaml') for dynamic file sets.",
+		Examples: []string{
+			"# Correct patterns:\nfiles:\n  - templates/main.yaml      # exact file\n  - data/                     # entire directory\n  - configs/**/*.yaml          # recursive glob",
+		},
+	},
 }
 
 // ListRules returns all known lint rules sorted by severity (error > warning > info)

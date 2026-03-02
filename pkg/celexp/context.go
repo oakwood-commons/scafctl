@@ -6,6 +6,9 @@ package celexp
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"sort"
+	"strings"
 
 	"github.com/google/cel-go/cel"
 	"github.com/oakwood-commons/scafctl/pkg/celexp/conversion"
@@ -140,13 +143,16 @@ func EvaluateExpression(
 	compileOpts := append([]Option{WithContext(ctx)}, opts...)
 	compiled, err := expr.Compile(envOpts, compileOpts...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to compile expression: %w", err)
+		availableVars := describeAvailableVars(rootData, additionalVars)
+		return nil, fmt.Errorf("failed to compile expression %q: %w\nAvailable variables: %s", exprStr, err, availableVars)
 	}
 
 	// Evaluate the expression
 	result, err := compiled.Eval(celVars)
 	if err != nil {
-		return nil, fmt.Errorf("failed to evaluate expression: %w", err)
+		availableVars := describeAvailableVars(rootData, additionalVars)
+		dataShape := describeDataShape(rootData)
+		return nil, fmt.Errorf("failed to evaluate expression %q: %w\nAvailable variables: %s\nData shape of _: %s", exprStr, err, availableVars, dataShape)
 	}
 
 	// Convert CEL types to Go types (handles deep conversion for arrays, maps, etc.)
@@ -154,4 +160,133 @@ func EvaluateExpression(
 	convertedResult := conversion.CelValueToGo(goResult)
 
 	return convertedResult, nil
+}
+
+// describeAvailableVars returns a human-readable summary of available variable names.
+// This is used in error messages to help users understand what variables they can reference.
+func describeAvailableVars(rootData any, additionalVars map[string]any) string {
+	var names []string
+	if rootData != nil {
+		names = append(names, "_")
+	}
+	for k := range additionalVars {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	if len(names) == 0 {
+		return "(none)"
+	}
+	return strings.Join(names, ", ")
+}
+
+// describeDataShape returns a concise summary of a data value's structure.
+// For maps, it shows top-level keys and their Go types.
+// For slices, it shows the element type if uniform, or "mixed" otherwise.
+// For scalar types, it returns the Go type name.
+// This is used in error messages to help users understand the shape of `_`.
+//
+// The output never includes values — only keys and types — to avoid leaking
+// sensitive data in error messages.
+func describeDataShape(data any) string {
+	if data == nil {
+		return "(nil)"
+	}
+
+	v := reflect.ValueOf(data)
+
+	switch v.Kind() { //nolint:exhaustive // Only map/slice/array need special handling; everything else falls through to describeType.
+	case reflect.Map:
+		if v.Len() == 0 {
+			return "{} (empty map)"
+		}
+
+		keys := make([]string, 0, v.Len())
+		for _, k := range v.MapKeys() {
+			keys = append(keys, k.String())
+		}
+		sort.Strings(keys)
+
+		// Truncate if too many keys
+		const maxKeys = 20
+		truncated := false
+		if len(keys) > maxKeys {
+			keys = keys[:maxKeys]
+			truncated = true
+		}
+
+		parts := make([]string, 0, len(keys))
+		for _, key := range keys {
+			val := v.MapIndex(reflect.ValueOf(key))
+			if val.IsValid() {
+				parts = append(parts, fmt.Sprintf("%s: %s", key, describeType(val.Interface())))
+			}
+		}
+
+		result := "{" + strings.Join(parts, ", ") + "}"
+		if truncated {
+			result += fmt.Sprintf(" (and %d more keys)", v.Len()-maxKeys)
+		}
+		return result
+
+	case reflect.Slice, reflect.Array:
+		if v.Len() == 0 {
+			return "[] (empty list)"
+		}
+		return fmt.Sprintf("[%s] (len=%d)", describeElementTypes(v), v.Len())
+
+	default: // reflect.String, reflect.Bool, reflect.Int*, reflect.Uint*, reflect.Float*, reflect.Struct, etc.
+		return describeType(data)
+	}
+}
+
+// describeType returns a concise type description for a value.
+func describeType(v any) string {
+	if v == nil {
+		return "nil"
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() { //nolint:exhaustive // Exhaustive listing not needed; default formats with %T.
+	case reflect.String:
+		return "string"
+	case reflect.Bool:
+		return "bool"
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return "int"
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return "uint"
+	case reflect.Float32, reflect.Float64:
+		return "float"
+	case reflect.Map:
+		return "map"
+	case reflect.Slice, reflect.Array:
+		return "list"
+	default: // reflect.Struct, reflect.Ptr, reflect.Chan, reflect.Func, etc.
+		return fmt.Sprintf("%T", v)
+	}
+}
+
+// describeElementTypes returns a description of element types in a slice/array.
+func describeElementTypes(v reflect.Value) string {
+	if v.Len() == 0 {
+		return "empty"
+	}
+
+	types := make(map[string]bool)
+	for i := 0; i < v.Len() && i < 10; i++ {
+		elem := v.Index(i)
+		if elem.IsValid() {
+			types[describeType(elem.Interface())] = true
+		}
+	}
+
+	typeNames := make([]string, 0, len(types))
+	for t := range types {
+		typeNames = append(typeNames, t)
+	}
+	sort.Strings(typeNames)
+
+	if len(typeNames) == 1 {
+		return typeNames[0]
+	}
+	return strings.Join(typeNames, "|")
 }

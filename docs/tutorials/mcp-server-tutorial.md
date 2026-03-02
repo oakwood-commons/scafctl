@@ -54,6 +54,7 @@ You should see JSON output listing all available tools:
     { "name": "diff_snapshots", "description": "Diff two resolver snapshots..." },
     { "name": "evaluate_cel", "description": "Evaluate a CEL expression..." },
     { "name": "evaluate_go_template", "description": "Evaluate a Go template against provided data..." },
+    { "name": "explain_concepts", "description": "Look up and explain scafctl concepts..." },
     { "name": "extract_resolver_refs", "description": "Find all resolver cross-references in a solution..." },
     { "name": "generate_test_scaffold", "description": "Generate functional test cases for a solution..." },
     { "name": "get_config_paths", "description": "List all XDG-compliant paths used by scafctl..." },
@@ -634,6 +635,22 @@ The AI calls `list_examples` with `category: "actions"` to see all available act
 
 The AI calls `get_example` with `path: "solutions/email-notifier/solution.yaml"` to get a practical reference, then uses `get_solution_schema` to verify the structure.
 
+#### Explain a Concept
+
+> **You:** "What is a resolver and how does it work?"
+
+The AI calls `explain_concepts` with `name: "resolver"` and returns a detailed explanation including the concept summary, category, examples, and related concepts.
+
+> **You:** "What testing concepts does scafctl support?"
+
+The AI calls `explain_concepts` with `category: "testing"` and gets summaries for all testing-related concepts — functional testing, test sandbox, test scaffold, and test assertions.
+
+#### Inspect Solution File Dependencies
+
+> **You:** "What files does my solution depend on?"
+
+The AI calls `inspect_solution` with `path: "solution.yaml"` and the response includes a `fileDependencies` array listing all external files referenced by providers (e.g., template files loaded via `go-template`, HCL files via `hcl`), along with which resolver references each file.
+
 ## 7. Available Tools Reference
 
 | Tool | Description |
@@ -643,28 +660,31 @@ The AI calls `get_example` with `path: "solutions/email-notifier/solution.yaml"`
 | `diff_solution` | Compare two solution files structurally — shows added, removed, and changed resolvers, actions, metadata, and tests |
 | `evaluate_cel` | Evaluate a CEL expression with inline data, variables, or file-based context |
 | `evaluate_go_template` | Evaluate a Go template against provided data, returning rendered output and referenced fields |
+| `explain_error` | Explain a scafctl error message — root cause, resolution steps, related tools, and example fixes |
 | `explain_kind` | Explain any registered kind (solution, resolver, action, etc.) — shows all fields, types, descriptions, and validation tags |
 | `explain_lint_rule` | Get a detailed explanation of a lint rule — description, severity, category, why it matters, how to fix it, and examples |
 | `get_example` | Read the contents of a scafctl example file. Use `list_examples` first to find available examples |
 | `get_provider_schema` | Get comprehensive provider info: input schema (with per-property required), output schemas, examples, CLI usage |
+| `get_provider_output_shape` | Get the output schema for a provider. Optionally filter by capability (`from`, `transform`, `action`) |
 | `get_solution_schema` | Get the full JSON Schema for the solution YAML file format. Optionally drill into a specific field (e.g., `metadata`, `spec`) |
 | `get_run_command` | Get the exact CLI command to run a solution (determines run solution vs run resolver) |
-| `inspect_solution` | Full solution metadata — resolvers, actions, tags, links, maintainers |
+| `explain_concepts` | Look up and explain scafctl concepts (resolvers, providers, testing, CEL, etc.). Use without arguments to list all, or provide a name/query/category |
+| `inspect_solution` | Full solution metadata — resolvers, actions, tags, links, maintainers, and file dependencies |
 | `lint_solution` | Validate a solution YAML file and return structured findings |
-| `list_cel_functions` | List CEL functions — custom scafctl functions, built-in, or by name |
+| `list_cel_functions` | List CEL functions — custom scafctl functions, built-in, or by name. Use `category` to filter (e.g., `strings`, `collections`, `encoding`) |
 | `list_go_template_functions` | List Go template extension functions — Sprig, custom, or by name |
 | `list_examples` | List available scafctl example files with category filtering (solutions, resolvers, actions, providers, etc.) |
 | `list_providers` | List all providers with capability and category filtering |
 | `list_solutions` | List solutions from the local catalog with name filtering |
 | `preview_action` | Preview what each action in a workflow would do WITHOUT executing — shows materialized inputs, deferred values, phases, and dependencies |
-| `preview_resolvers` | Execute a solution's resolver chain and return each resolver's resolved value. Use `resolver` param to focus on a single resolver and its dependencies |
+| `preview_resolvers` | Execute a solution's resolver chain and return each resolver's resolved value, output schema, and source positions. Use `resolver` param to focus on a single resolver and its dependencies |
 | `render_solution` | Render action, resolver, or action-deps graphs as structured JSON |
 | `run_solution_tests` | Execute functional tests defined in a solution and return structured results. Use `verbose=true` for full assertion details |
 | `scaffold_solution` | Generate a complete skeleton solution YAML from parameters — name, description, features, and providers |
 | `validate_expression` | Syntax-check a CEL expression or Go template without executing it — returns validity, errors, and referenced fields |
 | `catalog_inspect` | Get detailed metadata for a specific catalog artifact — version, kind, digest, created timestamp, and dependency list |
 | `extract_resolver_refs` | Find all resolver cross-references (`_.resolverName`) in a solution — shows which resolvers reference which others |
-| `generate_test_scaffold` | Generate functional test case scaffolding for a solution — creates test YAML with assertions and tags based on the solution's resolvers and actions |
+| `generate_test_scaffold` | Generate functional test case scaffolding for a solution — creates test YAML with assertions, tags, auto-populated file dependencies, and sandbox guidance |
 | `list_tests` | List functional tests defined in a solution's `spec.testing.cases` — shows test names, descriptions, assertions, and tags |
 | `show_snapshot` | Display the contents of a resolver execution snapshot file — resolver values, timing, status, and errors |
 | `diff_snapshots` | Compare two resolver snapshots and return structured diffs — added, removed, modified, and unchanged resolvers |
@@ -672,6 +692,7 @@ The AI calls `get_example` with `path: "solutions/email-notifier/solution.yaml"`
 | `get_config_paths` | List all XDG-compliant paths used by scafctl — config, data, cache, state, secrets, plugins, and runtime directories |
 | `validate_expressions` | Batch-validate multiple CEL expressions or Go templates — returns validity, errors, and referenced fields for each |
 | `get_version` | Return scafctl version, commit SHA, and build timestamp |
+| `dry_run_solution` | Dry-run a solution without executing providers. Use `mock_data` to inject custom mock values per resolver |
 
 ## 8. Available Resources
 

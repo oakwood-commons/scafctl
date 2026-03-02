@@ -65,9 +65,6 @@ spec:
             expr: "'echo Deploying ' + _.project + ' v' + _.version"
 
   testing:
-    config:
-      skipBuiltins: true
-
     cases:
       _run-base:
         description: Base template for run tests

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"text/template"
@@ -88,7 +89,7 @@ func Solution(sol *solution.Solution, filePath string, registry *provider.Regist
 
 	lintResolvers(sol, result, registry, referencedResolvers)
 	lintWorkflow(sol, result, registry)
-	lintTests(sol, result)
+	lintTests(sol, filePath, result)
 	lintProviderInputs(sol, result, registry)
 
 	for _, f := range result.Findings {
@@ -544,10 +545,12 @@ func scanExpressionForResolverRefs(expr string, pattern *regexp.Regexp, refs map
 	}
 }
 
-func lintTests(sol *solution.Solution, result *Result) {
+func lintTests(sol *solution.Solution, solutionPath string, result *Result) {
 	if !sol.Spec.HasTests() {
 		return
 	}
+
+	solutionDir := filepath.Dir(solutionPath)
 
 	// Test name validation regexes (same as soltesting package).
 	testNameRegex := soltesting.TestNamePattern()
@@ -596,6 +599,19 @@ func lintTests(sol *solution.Solution, result *Result) {
 			}
 		}
 
+		// Rule: unreachable-test-path — warn when a files entry doesn't resolve to anything on disk.
+		if solutionDir != "" && len(tc.Files) > 0 {
+			for i, file := range tc.Files {
+				fileLoc := fmt.Sprintf("%s.files[%d]", location, i)
+				if !testFileReachable(solutionDir, file) {
+					result.addFinding(SeverityWarning, "testing", fileLoc,
+						fmt.Sprintf("test file path %q does not match any existing file or directory", file),
+						"Check for typos, verify the file exists, or use a valid glob pattern (e.g., 'templates/**/*.yaml')",
+						"unreachable-test-path")
+				}
+			}
+		}
+
 		// Rule: unused-template — templates not referenced by any extends.
 		if isTemplate && !extendsRefs[name] {
 			result.addFinding(SeverityWarning, "usage", location,
@@ -616,6 +632,29 @@ func isCoveredByBundleInclude(file string, includes []string) bool {
 		}
 	}
 	return false
+}
+
+// testFileReachable returns true if a test file entry resolves to at least one
+// existing file or directory on disk. Supports plain paths, directories, and glob patterns.
+func testFileReachable(solutionDir, entry string) bool {
+	cleaned := filepath.Clean(entry)
+
+	// Reject path traversal and absolute paths — let other rules handle those.
+	if strings.HasPrefix(cleaned, "..") || filepath.IsAbs(cleaned) {
+		return true // don't double-flag, other rules will catch this
+	}
+
+	// Glob patterns: check if they expand to at least one match.
+	if strings.ContainsAny(entry, "*?[{") {
+		absPattern := filepath.Join(solutionDir, entry)
+		matches, err := doublestar.FilepathGlob(absPattern)
+		return err == nil && len(matches) > 0
+	}
+
+	// Plain path or directory: check if it exists on disk.
+	absPath := filepath.Join(solutionDir, cleaned)
+	_, err := os.Stat(absPath)
+	return err == nil
 }
 
 // lintSchema reads the solution file from disk, unmarshals it into a generic
@@ -708,6 +747,10 @@ func lintProviderInputsForStep(providerName string, inputs map[string]*spec.Valu
 		// Check for unknown input keys.
 		if allowedProps != nil {
 			if _, exists := allowedProps[key]; !exists {
+				// If the schema allows additional properties, skip the unknown-input check.
+				if desc.Schema.AdditionalProperties != nil {
+					continue
+				}
 				result.addFinding(SeverityError, "provider", inputLoc,
 					fmt.Sprintf("unknown input %q for provider %q", key, providerName),
 					fmt.Sprintf("Check the provider's accepted inputs. Run: scafctl explain provider %s", providerName),

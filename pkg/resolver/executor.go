@@ -6,6 +6,7 @@ package resolver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"sync"
@@ -582,10 +583,11 @@ func (e *Executor) executeResolver(ctx context.Context, r *Resolver, phaseNum in
 		result.Value = nil
 		result.Status = ExecutionStatusFailed
 		result.Error = &ExecutionError{
-			ResolverName: r.Name,
-			Phase:        "resolve",
-			Step:         0,
-			Cause:        err,
+			ResolverName:  r.Name,
+			Phase:         "resolve",
+			Step:          0,
+			Cause:         err,
+			CustomMessage: resolveCustomErrorMessage(resolverContext, r, err),
 		}
 		return false, result.Error
 	}
@@ -610,10 +612,11 @@ func (e *Executor) executeResolver(ctx context.Context, r *Resolver, phaseNum in
 			result.Value = value
 			result.Status = ExecutionStatusFailed
 			result.Error = &ExecutionError{
-				ResolverName: r.Name,
-				Phase:        "transform",
-				Step:         0,
-				Cause:        err,
+				ResolverName:  r.Name,
+				Phase:         "transform",
+				Step:          0,
+				Cause:         err,
+				CustomMessage: resolveCustomErrorMessage(resolverContext, r, err),
 			}
 			return false, result.Error
 		}
@@ -630,11 +633,12 @@ func (e *Executor) executeResolver(ctx context.Context, r *Resolver, phaseNum in
 			result.Value = value
 			result.Status = ExecutionStatusFailed
 			result.Error = &TypeCoercionError{
-				ResolverName: r.Name,
-				Phase:        coercionPhase,
-				SourceType:   fmt.Sprintf("%T", value),
-				TargetType:   r.Type,
-				Cause:        err,
+				ResolverName:  r.Name,
+				Phase:         coercionPhase,
+				SourceType:    fmt.Sprintf("%T", value),
+				TargetType:    r.Type,
+				Cause:         err,
+				CustomMessage: resolveCustomErrorMessage(resolverContext, r, err),
 			}
 			return false, result.Error
 		}
@@ -658,6 +662,11 @@ func (e *Executor) executeResolver(ctx context.Context, r *Resolver, phaseNum in
 			// Emit transformed value even on validation failure (partial emission)
 			result.Value = value
 			result.Status = ExecutionStatusFailed
+			// Inject custom message from messages.error if configured
+			var aggErr *AggregatedValidationError
+			if errors.As(validationErr, &aggErr) {
+				aggErr.CustomMessage = resolveCustomErrorMessage(resolverContext, r, validationErr)
+			}
 			result.Error = validationErr
 			return false, result.Error
 		}
@@ -1463,4 +1472,34 @@ func RedactMapValues(m map[string]any, sensitive bool) map[string]any {
 		result[k] = "[REDACTED]"
 	}
 	return result
+}
+
+// resolveCustomErrorMessage evaluates a resolver's messages.error field and returns the
+// resolved string, or "" if no custom message is configured or evaluation fails.
+func resolveCustomErrorMessage(ctx context.Context, r *Resolver, originalErr error) string {
+	if r.Messages == nil || r.Messages.Error == nil {
+		return ""
+	}
+
+	resolverCtx, ok := FromContext(ctx)
+	if !ok {
+		return ""
+	}
+
+	resolverData := resolverCtx.ToMap()
+
+	// Pass __error as the self parameter so it's available as __self in CEL/templates,
+	// and also add it to resolverData so it's available as _.__error or _["__error"].
+	errorMsg := originalErr.Error()
+	resolverData["__error"] = errorMsg
+
+	resolved, err := r.Messages.Error.Resolve(ctx, resolverData, errorMsg)
+	if err != nil {
+		return ""
+	}
+
+	if msg, ok := resolved.(string); ok {
+		return msg
+	}
+	return fmt.Sprintf("%v", resolved)
 }
