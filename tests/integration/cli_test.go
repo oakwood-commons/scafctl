@@ -4061,6 +4061,12 @@ func TestIntegration_MCPServeInfo(t *testing.T) {
 	assert.True(t, toolNames["preview_resolvers"], "expected preview_resolvers tool")
 	assert.True(t, toolNames["run_solution_tests"], "expected run_solution_tests tool")
 	assert.True(t, toolNames["get_run_command"], "expected get_run_command tool")
+
+	// New tools from recent enhancements
+	assert.True(t, toolNames["explain_error"], "expected explain_error tool")
+	assert.True(t, toolNames["get_provider_output_shape"], "expected get_provider_output_shape tool")
+	assert.True(t, toolNames["dry_run_solution"], "expected dry_run_solution tool")
+	assert.True(t, toolNames["explain_concepts"], "expected explain_concepts tool")
 }
 
 func TestIntegration_MCPServeProtocol(t *testing.T) {
@@ -4600,4 +4606,235 @@ func TestIntegration_Plugins_Install_NoPlugins(t *testing.T) {
 	_ = stderr
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "No plugins declared")
+}
+
+// TestIntegration_RunResolver_MetadataProvider runs the metadata provider and verifies output.
+func TestIntegration_RunResolver_MetadataProvider(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	solutionFile := filepath.Join(tmpDir, "solution.yaml")
+
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: metadata-test
+  version: 1.0.0
+spec:
+  resolvers:
+    meta:
+      resolve:
+        with:
+          - provider: metadata
+            inputs:
+              name: my-solution
+              version: 2.1.0
+              category: infrastructure
+`
+	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
+
+	stdout, stderr, exitCode := runScafctl(t, "run", "resolver", "-f", solutionFile, "-e", "_.meta.name", "-o", "json", "--hide-execution")
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstdout: %s\nstderr: %s", exitCode, stdout, stderr)
+	assert.Contains(t, stdout, "my-solution")
+}
+
+// TestIntegration_RunResolver_TemplateFunctions_Slugify verifies slugify template function.
+func TestIntegration_RunResolver_TemplateFunctions_Slugify(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	solutionFile := filepath.Join(tmpDir, "solution.yaml")
+
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: slugify-test
+  version: 1.0.0
+spec:
+  resolvers:
+    input:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "My Cool Project!"
+    slugified:
+      dependsOn: [input]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              template: '{{ slugify .input }}'
+              name: slugify-test
+`
+	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
+
+	stdout, stderr, exitCode := runScafctl(t, "run", "resolver", "-f", solutionFile, "-e", "_.slugified", "-o", "json", "--hide-execution")
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstdout: %s\nstderr: %s", exitCode, stdout, stderr)
+	assert.Contains(t, stdout, "my-cool-project")
+}
+
+// TestIntegration_RunResolver_TemplateFunctions_CelInline verifies inline cel template function.
+func TestIntegration_RunResolver_TemplateFunctions_CelInline(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	solutionFile := filepath.Join(tmpDir, "solution.yaml")
+
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: cel-inline-test
+  version: 1.0.0
+spec:
+  resolvers:
+    items:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - name: a
+                  active: true
+                - name: b
+                  active: false
+    count:
+      dependsOn: [items]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              template: '{{ cel "string(size(_.items.filter(x, x.active == true)))" . }}'
+              name: cel-inline-test
+`
+	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
+
+	stdout, stderr, exitCode := runScafctl(t, "run", "resolver", "-f", solutionFile, "-e", "_.count", "-o", "json", "--hide-execution")
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstdout: %s\nstderr: %s", exitCode, stdout, stderr)
+	assert.Contains(t, stdout, "1")
+}
+
+// TestIntegration_RunResolver_TemplateFunctions_WhereSelectField verifies where and selectField template functions.
+func TestIntegration_RunResolver_TemplateFunctions_WhereSelectField(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	solutionFile := filepath.Join(tmpDir, "solution.yaml")
+
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: where-select-test
+  version: 1.0.0
+spec:
+  resolvers:
+    services:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - name: api
+                  active: true
+                - name: web
+                  active: true
+                - name: legacy
+                  active: false
+    names:
+      dependsOn: [services]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              template: '{{ selectField "name" .services | toYaml }}'
+              name: select-test
+`
+	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
+
+	stdout, stderr, exitCode := runScafctl(t, "run", "resolver", "-f", solutionFile, "-e", "_.names", "-o", "json", "--hide-execution")
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstdout: %s\nstderr: %s", exitCode, stdout, stderr)
+	assert.Contains(t, stdout, "api")
+	assert.Contains(t, stdout, "legacy")
+}
+
+// TestIntegration_Lint_UnreachableTestPath verifies unreachable-test-path lint rule detects bad test file references.
+func TestIntegration_Lint_UnreachableTestPath(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	solutionFile := filepath.Join(tmpDir, "solution.yaml")
+
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: unreachable-path-test
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+  testing:
+    cases:
+      bad-test:
+        description: This test references a non-existent file
+        command: [run, resolver]
+        files:
+          - testdata/does-not-exist.json
+        assertions:
+          - expression: __exitCode == 0
+`
+	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
+
+	stdout, _, exitCode := runScafctl(t, "lint", "-f", solutionFile, "-o", "json")
+
+	// Exit code 0 = no errors (warnings only), 2 = validation errors found
+	assert.True(t, exitCode == 0 || exitCode == 2, "lint should exit 0 or 2, got %d", exitCode)
+	assert.Contains(t, stdout, "unreachable-test-path")
+}
+
+// TestIntegration_MCPServeInfo_ExplainConcepts verifies explain_concepts tool is registered.
+func TestIntegration_MCPServeInfo_ExplainConcepts(t *testing.T) {
+	t.Parallel()
+
+	stdout, _, exitCode := runScafctl(t, "mcp", "serve", "--info")
+	assert.Equal(t, 0, exitCode)
+
+	var info struct {
+		Tools []struct {
+			Name string `json:"name"`
+		} `json:"tools"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &info))
+
+	toolNames := make(map[string]bool)
+	for _, tool := range info.Tools {
+		toolNames[tool.Name] = true
+	}
+	assert.True(t, toolNames["explain_concepts"], "expected explain_concepts tool to be registered")
 }

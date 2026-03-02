@@ -66,9 +66,6 @@ spec:
             expr: "'echo Deployment to ' + _.environment + ' complete'"
 
   testing:
-    config:
-      skipBuiltins: true
-
     cases:
     # =========================================================================
     # Base templates

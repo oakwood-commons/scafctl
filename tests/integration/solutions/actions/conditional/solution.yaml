@@ -71,9 +71,6 @@ spec:
           command: "echo Always running"
 
   testing:
-    config:
-      skipBuiltins: true
-
     cases:
       _run-base:
         description: Base template for conditional action tests

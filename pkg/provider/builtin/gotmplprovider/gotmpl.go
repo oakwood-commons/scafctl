@@ -69,6 +69,25 @@ func NewGoTemplateProvider() *GoTemplateProvider {
 					schemahelper.WithExample("%>"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(10))),
 				"data": schemahelper.AnyProp("Additional data to merge with resolver context. These values are accessible alongside resolver data in the template."),
+				"ignoredBlocks": schemahelper.ArrayProp(
+					"List of literal blocks to preserve without template parsing. Each entry uses EITHER start/end markers (for multi-line blocks) OR a line marker (for single-line matches). Content is passed through unchanged. Useful for templates containing syntax like Terraform for_each or GitHub Actions expressions that conflict with Go template delimiters.",
+					schemahelper.WithItems(schemahelper.ObjectProp(
+						"A block to exclude from template parsing. Use 'start'+'end' for multi-line ranges, or 'line' for single-line matches. These modes are mutually exclusive.",
+						nil,
+						map[string]*jsonschema.Schema{
+							"start": schemahelper.StringProp("Start marker for a multi-line ignored block (e.g., '/*scafctl:ignore:start*/'). Must be paired with 'end'. Mutually exclusive with 'line'.",
+								schemahelper.WithExample("/*scafctl:ignore:start*/"),
+								schemahelper.WithMaxLength(*ptrs.IntPtr(255))),
+							"end": schemahelper.StringProp("End marker for a multi-line ignored block (e.g., '/*scafctl:ignore:end*/'). Must be paired with 'start'. Mutually exclusive with 'line'.",
+								schemahelper.WithExample("/*scafctl:ignore:end*/"),
+								schemahelper.WithMaxLength(*ptrs.IntPtr(255))),
+							"line": schemahelper.StringProp("Marker that identifies lines to ignore individually. Every line containing this substring is preserved literally. Mutually exclusive with 'start'/'end'.",
+								schemahelper.WithExample("# scafctl:ignore"),
+								schemahelper.WithMaxLength(*ptrs.IntPtr(255))),
+						},
+					)),
+					schemahelper.WithMaxItems(20),
+				),
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 				provider.CapabilityTransform: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
@@ -152,6 +171,43 @@ inputs:
   data:
     prefix: "*** "
     suffix: " ***"`,
+				},
+				{
+					Name:        "Ignored blocks for literal pass-through",
+					Description: "Preserve Terraform for_each expressions that conflict with Go template syntax",
+					YAML: `name: terraform-template
+provider: go-template
+inputs:
+  name: terraform-config
+  template: |
+    resource "azurerm_resource_group" "rg" {
+      name     = "{{.resourceGroupName}}"
+      location = "{{.location}}"
+      /*scafctl:ignore:start*/
+      for_each = { for k, v in var.items : k => v }
+      /*scafctl:ignore:end*/
+    }
+  ignoredBlocks:
+    - start: "/*scafctl:ignore:start*/"
+      end: "/*scafctl:ignore:end*/"`,
+				},
+				{
+					Name:        "Line-based ignore for single-line pass-through",
+					Description: "Preserve individual lines containing a marker without needing start/end wrappers",
+					YAML: `name: github-actions
+provider: go-template
+inputs:
+  name: workflow-config
+  template: |
+    name: Deploy {{.appName}}
+    on: [push]
+    jobs:
+      deploy:
+        runs-on: ubuntu-latest
+        steps:
+          - run: echo ${{ secrets.TOKEN }}  # scafctl:ignore
+  ignoredBlocks:
+    - line: "# scafctl:ignore"`,
 				},
 			},
 		},
@@ -250,14 +306,73 @@ func (p *GoTemplateProvider) Execute(ctx context.Context, input any) (*provider.
 		"leftDelim", leftDelim,
 		"rightDelim", rightDelim)
 
+	// Extract ignored blocks for literal pass-through
+	// Supports two modes:
+	//   1. start/end — multi-line block markers (content between markers is preserved)
+	//   2. line — every line containing the marker substring is preserved
+	var replacements []gotmpl.Replacement
+	if blocks, ok := inputs["ignoredBlocks"].([]any); ok {
+		for i, block := range blocks {
+			blockMap, ok := block.(map[string]any)
+			if !ok {
+				continue
+			}
+
+			start, _ := blockMap["start"].(string)
+			end, _ := blockMap["end"].(string)
+			line, _ := blockMap["line"].(string)
+
+			// Mutual exclusion: line and start/end cannot be used together
+			hasStartEnd := start != "" || end != ""
+			hasLine := line != ""
+
+			if hasLine && hasStartEnd {
+				return nil, fmt.Errorf("%s: ignoredBlocks[%d]: 'line' and 'start'/'end' are mutually exclusive — use one mode per entry", ProviderName, i)
+			}
+
+			if hasLine {
+				// Line mode: find every line that contains the marker and preserve it
+				for _, templateLine := range strings.Split(templateStr, "\n") {
+					if strings.Contains(templateLine, line) {
+						replacements = append(replacements, gotmpl.Replacement{Find: templateLine})
+					}
+				}
+				continue
+			}
+
+			if start == "" || end == "" {
+				continue
+			}
+
+			// Start/end mode: find all occurrences of start...end and create a replacement for each full block
+			remaining := templateStr
+			for {
+				startIdx := strings.Index(remaining, start)
+				if startIdx < 0 {
+					break
+				}
+				afterStart := remaining[startIdx+len(start):]
+				endIdx := strings.Index(afterStart, end)
+				if endIdx < 0 {
+					break
+				}
+				// Extract the full block: start marker + content + end marker
+				fullBlock := remaining[startIdx : startIdx+len(start)+endIdx+len(end)]
+				replacements = append(replacements, gotmpl.Replacement{Find: fullBlock})
+				remaining = remaining[startIdx+len(start)+endIdx+len(end):]
+			}
+		}
+	}
+
 	// Execute the template
 	result, err := p.service.Execute(ctx, gotmpl.TemplateOptions{
-		Content:    templateStr,
-		Name:       templateName,
-		Data:       templateData,
-		MissingKey: missingKey,
-		LeftDelim:  leftDelim,
-		RightDelim: rightDelim,
+		Content:      templateStr,
+		Name:         templateName,
+		Data:         templateData,
+		MissingKey:   missingKey,
+		LeftDelim:    leftDelim,
+		RightDelim:   rightDelim,
+		Replacements: replacements,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", ProviderName, err)

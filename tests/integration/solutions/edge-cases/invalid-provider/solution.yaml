@@ -20,7 +20,10 @@ spec:
 
   testing:
     config:
-      skipBuiltins: true
+      # lint: solution uses non-existent provider (does-not-exist) that lint correctly rejects
+      # resolve-defaults: resolver uses non-existent provider that fails resolution
+      # render-defaults: solution has no workflow.actions section
+      skipBuiltins: [lint, resolve-defaults, render-defaults]
 
     cases:
       unknown-provider:

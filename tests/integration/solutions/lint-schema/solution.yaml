@@ -28,9 +28,6 @@ spec:
           command: "echo ok"
 
   testing:
-    config:
-      skipBuiltins: true
-
     cases:
       lint-passes:
         description: Valid solution should pass lint with zero errors

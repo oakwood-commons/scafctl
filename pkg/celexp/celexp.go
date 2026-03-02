@@ -136,6 +136,7 @@ type VarInfo struct {
 
 type ExtFunction struct {
 	Name          string          `json:"name,omitempty" yaml:"name,omitempty"`
+	Category      string          `json:"category,omitempty" yaml:"category,omitempty"`
 	Links         []string        `json:"links,omitempty" yaml:"links,omitempty"`
 	Examples      []Example       `json:"examples,omitempty" yaml:"examples,omitempty"`
 	Description   string          `json:"description,omitempty" yaml:"description,omitempty"`

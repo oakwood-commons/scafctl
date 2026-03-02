@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
@@ -33,6 +34,9 @@ func (s *Server) registerCELTools() {
 		),
 		mcp.WithString("name",
 			mcp.Description("Get details for a specific function by name (substring match)"),
+		),
+		mcp.WithString("category",
+			mcp.Description("Filter by category: 'strings', 'collections', 'encoding', 'math', 'time', 'filepath', 'debug', 'utility', 'language'. Omit to list all."),
 		),
 	)
 	s.mcpServer.AddTool(listCELFunctionsTool, s.handleListCELFunctions)
@@ -69,12 +73,23 @@ func (s *Server) handleListCELFunctions(_ context.Context, request mcp.CallToolR
 	customOnly := request.GetBool("custom_only", false)
 	builtinOnly := request.GetBool("builtin_only", false)
 	name := request.GetString("name", "")
+	category := request.GetString("category", "")
 
 	functions := ext.All()
 	if customOnly {
 		functions = ext.Custom()
 	} else if builtinOnly {
 		functions = ext.BuiltIn()
+	}
+
+	if category != "" {
+		filtered := make(celexp.ExtFunctionList, 0, len(functions))
+		for _, f := range functions {
+			if strings.EqualFold(f.Category, category) {
+				filtered = append(filtered, f)
+			}
+		}
+		functions = filtered
 	}
 
 	return filterAndReturnNamedFunctions(

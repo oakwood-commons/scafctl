@@ -521,6 +521,9 @@ func (s *Server) registerTools() {
 	// Lint explanation tools
 	s.registerLintTools()
 
+	// Error explanation tools
+	s.registerErrorTools()
+
 	// Scaffold tools
 	s.registerScaffoldTools()
 
@@ -544,6 +547,9 @@ func (s *Server) registerTools() {
 
 	// Snapshot inspection & diff tools
 	s.registerSnapshotTools()
+
+	// Concept explanation tools
+	s.registerConceptTools()
 
 	// Version tool
 	s.registerVersionTools()

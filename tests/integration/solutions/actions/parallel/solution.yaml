@@ -60,9 +60,6 @@ spec:
             expr: "'echo Publishing ' + _.appName"
 
   testing:
-    config:
-      skipBuiltins: true
-
     cases:
       _run-base:
         description: Base template for parallel tests

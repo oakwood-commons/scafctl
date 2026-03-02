@@ -81,6 +81,17 @@ type Resolver struct {
 	Resolve   *ResolvePhase   `json:"resolve" yaml:"resolve" doc:"Value resolution phase"`
 	Transform *TransformPhase `json:"transform,omitempty" yaml:"transform,omitempty" doc:"Value transformation phase"`
 	Validate  *ValidatePhase  `json:"validate,omitempty" yaml:"validate,omitempty" doc:"Value validation phase"`
+
+	// Messages contains user-defined messages shown on resolver outcomes.
+	Messages *Messages `json:"messages,omitempty" yaml:"messages,omitempty" doc:"Custom messages for resolver outcomes"`
+}
+
+// Messages holds user-defined messages displayed on resolver outcomes.
+type Messages struct {
+	// Error is shown when the resolver fails (resolve, transform, or validate phase).
+	// Supports static strings, CEL expressions (expr:), and Go templates (tmpl:).
+	// The resolver data map is available as _ and the error message as __error.
+	Error *ValueRef `json:"error,omitempty" yaml:"error,omitempty" doc:"Custom message on resolver failure"`
 }
 
 // ResolvePhase defines how to obtain an initial value

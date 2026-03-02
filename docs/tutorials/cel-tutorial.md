@@ -274,7 +274,7 @@ size("hello")                         // 5
 
 ## Custom Extension Functions
 
-scafctl extends CEL with project-specific functions for arrays, maps, strings, filepath, GUID, sorting, time, marshalling, and debugging.
+scafctl extends CEL with project-specific functions for arrays, maps, strings, regex, filepath, GUID, sorting, time, marshalling, and debugging.
 
 > **▶ Try it:** All custom extension functions are demonstrated in a single runnable file — [cel-extensions.yaml](../../examples/resolvers/cel-extensions.yaml):
 > ```bash
@@ -409,6 +409,62 @@ normalizedName:
       - provider: cel
         inputs:
           expression: "strings.clean(_.rawName)"
+```
+
+### Regex
+
+Regular expression functions using RE2 syntax.
+
+```cel
+// Test if a string matches a pattern
+regex.match("^Hello", "Hello World")
+// → true
+
+regex.match("[0-9]+", "no digits")
+// → false
+
+// Replace all occurrences of a pattern
+regex.replace("abc123def456", "[0-9]+", "#")
+// → "abc#def#"
+
+regex.replace("hello world foo", "\\s+", "-")
+// → "hello-world-foo"
+
+// Find all matches
+regex.findAll("[0-9]+", "abc123def456")
+// → ["123", "456"]
+
+regex.findAll("[a-zA-Z]+", "hello 123 world")
+// → ["hello", "world"]
+
+// Split a string by a pattern
+regex.split("\\s+", "hello   world   foo")
+// → ["hello", "world", "foo"]
+
+regex.split("[,;]+", "a,b;c,,d")
+// → ["a", "b", "c", "d"]
+```
+
+**Use case — validate and sanitize input:**
+
+```yaml
+sanitizedName:
+  type: string
+  dependsOn: [rawInput]
+  resolve:
+    with:
+      - provider: cel
+        inputs:
+          expression: 'regex.replace(_.rawInput, "[^a-zA-Z0-9-]", "")'
+
+isValidEmail:
+  type: bool
+  dependsOn: [email]
+  resolve:
+    with:
+      - provider: cel
+        inputs:
+          expression: 'regex.match("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}", _.email)'
 ```
 
 ### Filepath
@@ -877,6 +933,10 @@ deployments:
 | `map.merge(a, b)` | Merge maps (b wins) |
 | `map.recurse(list, ids, idField, depsField)` | Resolve transitive deps |
 | `out.nil(val)` | Discard value, return null |
+| `regex.match(pattern, input)` | Test if input matches regex pattern (RE2) |
+| `regex.replace(input, pattern, replacement)` | Replace all regex matches |
+| `regex.findAll(pattern, input)` | Find all regex matches as list |
+| `regex.split(pattern, input)` | Split string by regex pattern |
 | `sort.objects(list, prop)` | Sort objects ascending |
 | `sort.objectsDescending(list, prop)` | Sort objects descending |
 | `strings.clean(str)` | Lowercase + remove separators |

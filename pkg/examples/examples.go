@@ -218,17 +218,18 @@ func findExamplesDir() (string, error) {
 func DescriptionFromPath(path string) string {
 	descriptions := map[string]string{
 		// Solutions
-		"solutions/comprehensive/solution.yaml":   "Comprehensive solution demonstrating all features (resolvers, actions, transforms, validation, etc.)",
-		"solutions/email-notifier/solution.yaml":  "Email notification solution with parameters, validation, and action workflow",
-		"solutions/terraform/solution.yaml":       "Terraform infrastructure scaffolding solution",
-		"solutions/k8s-clusters/solution.yaml":    "Kubernetes cluster provisioning solution",
-		"solutions/directory/solution.yaml":       "Directory provider examples (list, read, create, copy)",
-		"solutions/scaffold-demo/solution.yaml":   "Scaffold/template rendering demo solution",
-		"solutions/github-auth/solution.yaml":     "GitHub authentication and API access solution",
-		"solutions/composition/parent.yaml":       "Solution composition - parent that composes children",
-		"solutions/composition/child.yaml":        "Solution composition - child partial solution",
-		"solutions/taskfile/solution.yaml":        "Taskfile-based workflow solution",
-		"solutions/tested-solution/solution.yaml": "Solution with functional tests defined in spec.testing.cases",
+		"solutions/comprehensive/solution.yaml":      "Comprehensive solution demonstrating all features (resolvers, actions, transforms, validation, etc.)",
+		"solutions/email-notifier/solution.yaml":     "Email notification solution with parameters, validation, and action workflow",
+		"solutions/terraform/solution.yaml":          "Terraform infrastructure scaffolding solution",
+		"solutions/k8s-clusters/solution.yaml":       "Kubernetes cluster provisioning solution",
+		"solutions/directory/solution.yaml":          "Directory provider examples (list, read, create, copy)",
+		"solutions/scaffold-demo/solution.yaml":      "Scaffold/template rendering demo solution",
+		"solutions/github-auth/solution.yaml":        "GitHub authentication and API access solution",
+		"solutions/composition/parent.yaml":          "Solution composition - parent that composes children",
+		"solutions/composition/child.yaml":           "Solution composition - child partial solution",
+		"solutions/taskfile/solution.yaml":           "Taskfile-based workflow solution",
+		"solutions/tested-solution/solution.yaml":    "Solution with functional tests defined in spec.testing.cases",
+		"solutions/template-functions/solution.yaml": "Demonstrates custom Go template functions: slugify, where, selectField, cel, toYaml, metadata provider",
 
 		// Actions
 		"actions/hello-world.yaml":              "Simple hello world action",
@@ -260,6 +261,10 @@ func DescriptionFromPath(path string) string {
 		"resolvers/feature-flags.yaml":       "Feature flag resolver pattern",
 		"resolvers/identity.yaml":            "Identity/auth resolver pattern",
 		"resolvers/secrets.yaml":             "Secrets resolver pattern",
+
+		// Providers
+		"providers/metadata-full.yaml":         "Metadata provider — expose all solution metadata as a map",
+		"providers/metadata-single-field.yaml": "Metadata provider — extract a single metadata field",
 	}
 
 	if desc, ok := descriptions[path]; ok {

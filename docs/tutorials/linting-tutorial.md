@@ -237,6 +237,40 @@ resolvers:
             value: "hello"
 ```
 
+### Unreachable Test Path
+
+```yaml
+# Before (triggers warning — file doesn't exist)
+testing:
+  cases:
+    my-test:
+      files:
+        - testdata/config.json   # this file doesn't exist
+      command: [render, solution]
+      assertions:
+        - expression: __exitCode == 0
+
+# After (use correct path, glob, or directory)
+testing:
+  cases:
+    my-test:
+      files:
+        - testdata/config.yaml     # exact file that exists
+        - templates/*.yaml          # glob pattern matching files
+        - data/                     # entire directory
+      command: [render, solution]
+      assertions:
+        - expression: __exitCode == 0
+```
+
+The `unreachable-test-path` rule detects `files` entries in test cases that reference paths not found on disk and don't match any files via glob expansion. This catches typos and stale references before they cause confusing sandbox setup failures.
+
+For more details:
+
+```bash
+scafctl lint explain unreachable-test-path
+```
+
 ## 6. Using Lint with the MCP Server
 
 When using AI agents (VS Code Copilot, Claude, Cursor), the MCP server exposes lint functionality through:

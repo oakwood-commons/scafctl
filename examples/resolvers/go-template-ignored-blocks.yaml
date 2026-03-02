@@ -1,0 +1,86 @@
+# Go-template ignoredBlocks — preserve literal content that conflicts with
+# Go template delimiters.
+#
+# Two modes:
+#   1. start/end — Multi-line block markers. Content between markers passes through unchanged.
+#   2. line      — Every line containing the marker substring is preserved literally.
+#
+# Run: scafctl run solution -f examples/resolvers/go-template-ignored-blocks.yaml -o json
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: go-template-ignored-blocks
+  version: 1.0.0
+  description: Demonstrates ignoredBlocks to preserve literal content in Go templates.
+
+spec:
+  resolvers:
+    instanceType:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: t3.medium
+
+    # --- start/end mode: multi-line block ---
+    terraformConfig:
+      description: Generates Terraform with mixed scafctl + Terraform syntax
+      dependsOn: [instanceType]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              name: terraform
+              template: |
+                resource "aws_instance" "main" {
+                  ami           = "ami-0123456789"
+                  instance_type = "{{ .instanceType }}"
+                  /*scafctl:ignore:start*/
+                  tags = {
+                    Name = "${var.project}-${var.env}"
+                    ManagedBy = "terraform"
+                  }
+                  /*scafctl:ignore:end*/
+                }
+              ignoredBlocks:
+                - start: "/*scafctl:ignore:start*/"
+                  end: "/*scafctl:ignore:end*/"
+
+    appName:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: my-app
+
+    # --- line mode: single-line ignore ---
+    githubWorkflow:
+      description: Preserve GitHub Actions expressions on specific lines
+      dependsOn: [appName]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              name: workflow
+              template: |
+                name: Deploy {{ .appName }}
+                on: [push]
+                jobs:
+                  deploy:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: echo ${{ secrets.TOKEN }}  # scafctl:ignore
+                      - run: echo ${{ github.sha }}  # scafctl:ignore
+              ignoredBlocks:
+                - line: "# scafctl:ignore"

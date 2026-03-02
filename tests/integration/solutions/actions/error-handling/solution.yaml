@@ -49,9 +49,6 @@ spec:
           command: "echo after-success"
 
   testing:
-    config:
-      skipBuiltins: true
-
     cases:
       _run-base:
         description: Base template for error handling tests

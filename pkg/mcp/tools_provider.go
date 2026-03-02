@@ -49,6 +49,26 @@ func (s *Server) registerProviderTools() {
 		),
 	)
 	s.mcpServer.AddTool(getProviderSchemaTool, s.handleGetProviderSchema)
+
+	// get_provider_output_shape
+	getProviderOutputShapeTool := mcp.NewTool("get_provider_output_shape",
+		mcp.WithDescription("Get the output shape (field names, types) for a specific provider and capability. Use this to discover what fields a resolver produces after execution — essential for writing CEL expressions that reference resolver output. Returns the output schema for the requested capability, or all capabilities if none specified."),
+		mcp.WithTitleAnnotation("Get Provider Output Shape"),
+		mcp.WithToolIcons(toolIcons["provider"]),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithString("name",
+			mcp.Required(),
+			mcp.Description("Provider name (e.g., http, static, file, cel, exec)"),
+		),
+		mcp.WithString("capability",
+			mcp.Description("Optional capability to filter output schema (from, transform, validation, authentication, action). Omit for all capabilities."),
+			mcp.Enum("from", "transform", "validation", "authentication", "action"),
+		),
+	)
+	s.mcpServer.AddTool(getProviderOutputShapeTool, s.handleGetProviderOutputShape)
 }
 
 // providerItem is a structured response for provider listings.
@@ -156,4 +176,72 @@ func (s *Server) handleGetProviderSchema(_ context.Context, request mcp.CallTool
 	detail := provdetail.BuildProviderDetail(*desc)
 
 	return mcp.NewToolResultJSON(detail)
+}
+
+// handleGetProviderOutputShape returns the output schema for a provider, optionally
+// filtered by capability. This makes it easy for agents to discover what fields
+// resolver results contain after execution.
+func (s *Server) handleGetProviderOutputShape(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	name, err := request.RequireString("name")
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("name"),
+			WithSuggestion("Use list_providers to see available provider names"),
+			WithRelatedTools("list_providers"),
+		), nil
+	}
+	capability := request.GetString("capability", "")
+
+	desc, err := inspect.LookupProvider(s.ctx, name, s.registry)
+	if err != nil {
+		availableNames := ""
+		if s.registry != nil {
+			names := s.registry.List()
+			if len(names) > 0 {
+				availableNames = fmt.Sprintf(". Available providers: %v", names)
+			}
+		}
+		return newStructuredError(ErrCodeNotFound, fmt.Sprintf("provider %q not found%s", name, availableNames),
+			WithField("name"),
+			WithSuggestion("Use list_providers to see available provider names"),
+			WithRelatedTools("list_providers"),
+		), nil
+	}
+
+	if len(desc.OutputSchemas) == 0 {
+		return newStructuredError(ErrCodeNotFound, fmt.Sprintf("provider %q has no output schemas defined", name),
+			WithSuggestion("Not all providers define output schemas. Use get_provider_schema for full details."),
+			WithRelatedTools("get_provider_schema"),
+		), nil
+	}
+
+	result := map[string]any{
+		"provider": name,
+	}
+
+	if capability != "" {
+		provCap := provider.Capability(capability)
+		schema, ok := desc.OutputSchemas[provCap]
+		if !ok {
+			availableCaps := make([]string, 0, len(desc.OutputSchemas))
+			for c := range desc.OutputSchemas {
+				availableCaps = append(availableCaps, string(c))
+			}
+			return newStructuredError(ErrCodeNotFound,
+				fmt.Sprintf("provider %q has no output schema for capability %q. Available: %v", name, capability, availableCaps),
+				WithField("capability"),
+				WithSuggestion("Check the capability name against the available capabilities"),
+			), nil
+		}
+		result["capability"] = capability
+		result["outputSchema"] = provdetail.BuildSchemaOutput(schema)
+	} else {
+		outputSchemas := make(map[string]any, len(desc.OutputSchemas))
+		for cap, schema := range desc.OutputSchemas {
+			outputSchemas[string(cap)] = provdetail.BuildSchemaOutput(schema)
+		}
+		result["outputSchemas"] = outputSchemas
+	}
+
+	return mcp.NewToolResultJSON(result)
 }

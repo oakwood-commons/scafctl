@@ -12,15 +12,24 @@ import (
 // ExecutionError represents an error during resolver execution with context about
 // which resolver, phase, step, and provider were involved.
 type ExecutionError struct {
-	ResolverName string `json:"resolverName" yaml:"resolverName" doc:"Name of the resolver that failed" example:"my-resolver"`
-	Phase        string `json:"phase" yaml:"phase" doc:"Execution phase where failure occurred" enum:"resolve,transform,validate" example:"resolve"`
-	Step         int    `json:"step" yaml:"step" doc:"Step number within the phase (0-indexed)" minimum:"0" example:"0"`
-	Provider     string `json:"provider" yaml:"provider" doc:"Provider name that failed" example:"http"`
-	Cause        error  `json:"-" yaml:"-" doc:"Underlying error that caused the failure"`
+	ResolverName  string `json:"resolverName" yaml:"resolverName" doc:"Name of the resolver that failed" example:"my-resolver"`
+	Phase         string `json:"phase" yaml:"phase" doc:"Execution phase where failure occurred" enum:"resolve,transform,validate" example:"resolve"`
+	Step          int    `json:"step" yaml:"step" doc:"Step number within the phase (0-indexed)" minimum:"0" example:"0"`
+	Provider      string `json:"provider" yaml:"provider" doc:"Provider name that failed" example:"http"`
+	Cause         error  `json:"-" yaml:"-" doc:"Underlying error that caused the failure"`
+	CustomMessage string `json:"customMessage,omitempty" yaml:"customMessage,omitempty" doc:"User-defined error message from messages.error"`
 }
 
 // Error implements the error interface.
 func (e *ExecutionError) Error() string {
+	if e.CustomMessage != "" {
+		if e.Provider != "" {
+			return fmt.Sprintf("resolver %q failed in %s phase (step %d, provider %s): %s (detail: %v)",
+				e.ResolverName, e.Phase, e.Step, e.Provider, e.CustomMessage, e.Cause)
+		}
+		return fmt.Sprintf("resolver %q failed in %s phase (step %d): %s (detail: %v)",
+			e.ResolverName, e.Phase, e.Step, e.CustomMessage, e.Cause)
+	}
 	if e.Provider != "" {
 		return fmt.Sprintf("resolver %q failed in %s phase (step %d, provider %s): %v",
 			e.ResolverName, e.Phase, e.Step, e.Provider, e.Cause)
@@ -68,14 +77,19 @@ func (f *ValidationFailure) Error() string {
 // AggregatedValidationError represents validation failure with multiple messages.
 // This collects all validation failures from a resolver's validate phase.
 type AggregatedValidationError struct {
-	ResolverName string              `json:"resolverName" yaml:"resolverName" doc:"Name of the resolver that failed validation" example:"user-email"`
-	Value        any                 `json:"-" yaml:"-" doc:"The value that failed validation"`
-	Failures     []ValidationFailure `json:"failures" yaml:"failures" doc:"List of validation failures" minItems:"1"`
-	Sensitive    bool                `json:"sensitive,omitempty" yaml:"sensitive,omitempty" doc:"Whether the resolver value is sensitive"`
+	ResolverName  string              `json:"resolverName" yaml:"resolverName" doc:"Name of the resolver that failed validation" example:"user-email"`
+	Value         any                 `json:"-" yaml:"-" doc:"The value that failed validation"`
+	Failures      []ValidationFailure `json:"failures" yaml:"failures" doc:"List of validation failures" minItems:"1"`
+	Sensitive     bool                `json:"sensitive,omitempty" yaml:"sensitive,omitempty" doc:"Whether the resolver value is sensitive"`
+	CustomMessage string              `json:"customMessage,omitempty" yaml:"customMessage,omitempty" doc:"User-defined error message from messages.error"`
 }
 
 // Error implements the error interface.
 func (e *AggregatedValidationError) Error() string {
+	if e.CustomMessage != "" {
+		return fmt.Sprintf("resolver %q validation failed: %s", e.ResolverName, e.CustomMessage)
+	}
+
 	if len(e.Failures) == 0 {
 		return fmt.Sprintf("resolver %q validation failed (no details)", e.ResolverName)
 	}
@@ -156,15 +170,20 @@ func (e *ValueSizeError) Error() string {
 
 // TypeCoercionError represents a failure to coerce a value to the expected type.
 type TypeCoercionError struct {
-	ResolverName string `json:"resolverName" yaml:"resolverName" doc:"Name of the resolver" example:"age-value"`
-	Phase        string `json:"phase" yaml:"phase" doc:"Phase where coercion was attempted" enum:"resolve,transform" example:"resolve"`
-	SourceType   string `json:"sourceType" yaml:"sourceType" doc:"Original type of the value" example:"string"`
-	TargetType   Type   `json:"targetType" yaml:"targetType" doc:"Target type for coercion" example:"int"`
-	Cause        error  `json:"-" yaml:"-" doc:"Underlying coercion error"`
+	ResolverName  string `json:"resolverName" yaml:"resolverName" doc:"Name of the resolver" example:"age-value"`
+	Phase         string `json:"phase" yaml:"phase" doc:"Phase where coercion was attempted" enum:"resolve,transform" example:"resolve"`
+	SourceType    string `json:"sourceType" yaml:"sourceType" doc:"Original type of the value" example:"string"`
+	TargetType    Type   `json:"targetType" yaml:"targetType" doc:"Target type for coercion" example:"int"`
+	Cause         error  `json:"-" yaml:"-" doc:"Underlying coercion error"`
+	CustomMessage string `json:"customMessage,omitempty" yaml:"customMessage,omitempty" doc:"User-defined error message from messages.error"`
 }
 
 // Error implements the error interface.
 func (e *TypeCoercionError) Error() string {
+	if e.CustomMessage != "" {
+		return fmt.Sprintf("resolver %q: type coercion from %s to %s failed after %s phase: %s (detail: %v)",
+			e.ResolverName, e.SourceType, e.TargetType, e.Phase, e.CustomMessage, e.Cause)
+	}
 	return fmt.Sprintf("resolver %q: type coercion from %s to %s failed after %s phase: %v",
 		e.ResolverName, e.SourceType, e.TargetType, e.Phase, e.Cause)
 }

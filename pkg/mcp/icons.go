@@ -84,6 +84,10 @@ var toolIcons = map[string]mcp.Icon{
 		Src:      "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2390A4AE' stroke-width='2'><circle cx='12' cy='12' r='10'/><line x1='12' y1='16' x2='12' y2='12'/><line x1='12' y1='8' x2='12.01' y2='8'/></svg>",
 		MIMEType: "image/svg+xml",
 	},
+	"help": {
+		Src:      "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2329B6F6' stroke-width='2'><circle cx='12' cy='12' r='10'/><path d='M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3'/><line x1='12' y1='17' x2='12.01' y2='17'/></svg>",
+		MIMEType: "image/svg+xml",
+	},
 }
 
 // promptIcons maps prompt categories to their icons.

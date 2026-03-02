@@ -64,9 +64,6 @@ spec:
           command: "echo no schema validation"
 
   testing:
-    config:
-      skipBuiltins: true
-
     cases:
       _run-base:
         description: Base template for result schema tests

@@ -33,12 +33,14 @@ Step-by-step guides for learning scafctl features.
 - [Solution Scaffolding Tutorial](scaffolding-tutorial.md) — Create new solutions with `scafctl new solution`
 - [Eval Tutorial](eval-tutorial.md) — Test CEL expressions and Go templates from the CLI
 - [Linting Tutorial](linting-tutorial.md) — Validate solutions, explore lint rules, and fix issues
+- [Validation Patterns Tutorial](validation-patterns-tutorial.md) — Input constraints, runtime validation, and common regex/CEL patterns
 
 ## Reference
 
 - [Exec Provider Tutorial](exec-provider-tutorial.md) — Cross-platform shell execution with embedded and external shells
 - [Directory Provider Tutorial](directory-provider-tutorial.md) — Listing, scanning, and managing directories
 - [HCL Provider Tutorial](hcl-provider-tutorial.md) — Parse, format, validate, and generate Terraform/OpenTofu HCL configuration files
+- [Provider Output Shapes](provider-output-shapes.md) — Quick reference for provider output data shapes
 - [Provider Reference](provider-reference.md) — Complete documentation for all built-in providers
 
 ## Extension Development
