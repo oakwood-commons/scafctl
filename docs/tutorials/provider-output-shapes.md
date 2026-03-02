@@ -106,28 +106,58 @@ transform:
 
 ### `github`
 
+Uses GitHub GraphQL API for reads and mutations, and REST API for releases.
+
 | Capability | Fields | Type | Description |
 |-----------|--------|------|-------------|
 | from / transform | `result` | any | API response (structure varies by operation) |
+| action | `success` | bool | Whether the write operation succeeded |
+| | `operation` | string | The operation that was performed |
+| | `result` | any | API response data |
+| | `error` | string | Error message if failed |
 
-**Operation output shapes:**
+**Read operations (`from` / `transform`) — `result` shapes:**
 
 | Operation | `result` type | Key fields |
 |-----------|--------------|------------|
-| `get_repo` | object | `name`, `full_name`, `description`, `default_branch`, `private`, `html_url` |
-| `get_file` | object | `name`, `content`, `decoded_content`, `sha`, `size`, `type` |
-| `list_releases` | array | Each: `tag_name`, `name`, `body`, `published_at`, `prerelease` |
-| `get_latest_release` | object | `tag_name`, `name`, `body`, `published_at` |
-| `list_pull_requests` | array | Each: `number`, `title`, `state`, `user`, `created_at` |
-| `get_pull_request` | object | `number`, `title`, `state`, `body`, `user`, `mergeable` |
+| `get_repo` | object | `name`, `full_name`, `description`, `default_branch`, `isPrivate`, `url`, `stargazerCount` |
+| `get_file` | object | `name`, `content` (plain text), `sha`, `size` |
+| `list_releases` | array | Each: `tagName`, `name`, `description`, `publishedAt`, `isPrerelease` |
+| `get_latest_release` | object | `tagName`, `name`, `description`, `publishedAt` |
+| `list_pull_requests` | array | Each: `number`, `title`, `state`, `author`, `createdAt`, `headRefName` |
+| `get_pull_request` | object | `number`, `title`, `state`, `body`, `author`, `mergeable`, `isDraft` |
+| `list_issues` | array | Each: `number`, `title`, `state`, `author`, `createdAt` |
+| `get_issue` | object | `number`, `title`, `state`, `body`, `author`, `labels` |
+| `list_issue_comments` | array | Each: `body`, `author`, `createdAt` |
+| `list_branches` | array | Each: `name`, `target.oid` |
+| `get_branch` | object | `name`, `target.oid` |
+| `list_tags` | array | Each: `name`, `target.oid` |
+| `get_head_oid` | object | `oid`, `branch` |
+
+**Write operations (`action`) — `result` shapes:**
+
+| Operation | `result` key fields |
+|-----------|--------------------|
+| `create_issue` | `id`, `number`, `title`, `url`, `state` |
+| `create_pull_request` | `id`, `number`, `title`, `url`, `headRefName`, `baseRefName` |
+| `create_commit` | `oid`, `url`, `message`, `signature.isValid` |
+| `create_branch` | `name`, `target.oid` |
+| `create_release` | `id`, `tag_name`, `name`, `url` (REST) |
 
 ```yaml
-# Access GitHub API results
+# Access GitHub API results (read)
 transform:
   with:
     - provider: cel
       inputs:
         expression: "_.repo_info.result.default_branch"
+
+# Check write operation success (action)
+transform:
+  with:
+    - provider: cel
+      inputs:
+        expression: "_.commit_result.success && _.commit_result.result.signature.isValid"
 ```
 
 ### `file`

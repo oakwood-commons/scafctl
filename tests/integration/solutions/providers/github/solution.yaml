@@ -3,11 +3,12 @@ kind: Solution
 
 metadata:
   name: test-github-provider
-  version: 1.0.0
+  version: 2.0.0
   description: |
-    Functional tests for the GitHub API provider.
-    Uses a mock HTTP server to simulate GitHub API endpoints.
-    Tests repository info, file content, releases, and pull requests.
+    Functional tests for the GitHub API provider v2.
+    Uses a mock HTTP server to simulate GitHub GraphQL and REST API endpoints.
+    Tests repository info, file content, releases, pull requests, issues, and branches
+    via GraphQL, and release writes via REST.
 
 spec:
   resolvers:
@@ -26,7 +27,7 @@ spec:
               expression: "__self.value"
 
     repoInfo:
-      description: Get repository information
+      description: Get repository information via GraphQL
       resolve:
         with:
           - provider: github
@@ -38,7 +39,7 @@ spec:
                 expr: "_.mockBaseUrl"
 
     fileContent:
-      description: Get file content from repository
+      description: Get file content from repository via GraphQL
       resolve:
         with:
           - provider: github
@@ -52,7 +53,7 @@ spec:
                 expr: "_.mockBaseUrl"
 
     latestRelease:
-      description: Get latest release
+      description: Get latest release via GraphQL
       resolve:
         with:
           - provider: github
@@ -64,7 +65,7 @@ spec:
                 expr: "_.mockBaseUrl"
 
     listPullRequests:
-      description: List open pull requests
+      description: List open pull requests via GraphQL
       resolve:
         with:
           - provider: github
@@ -78,7 +79,7 @@ spec:
                 expr: "_.mockBaseUrl"
 
     pullRequestDetail:
-      description: Get a single pull request
+      description: Get a single pull request via GraphQL
       resolve:
         with:
           - provider: github
@@ -91,7 +92,7 @@ spec:
                 expr: "_.mockBaseUrl"
 
     listReleases:
-      description: List releases
+      description: List releases via GraphQL
       resolve:
         with:
           - provider: github
@@ -103,57 +104,237 @@ spec:
               api_base:
                 expr: "_.mockBaseUrl"
 
+    listBranches:
+      description: List branches via GraphQL
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: list_branches
+              owner: test-org
+              repo: test-repo
+              api_base:
+                expr: "_.mockBaseUrl"
+
+    headOid:
+      description: Get HEAD OID for a branch via GraphQL
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: get_head_oid
+              owner: test-org
+              repo: test-repo
+              branch: main
+              api_base:
+                expr: "_.mockBaseUrl"
+
   testing:
     config:
-      # resolve-defaults: resolvers depend on MOCK_GITHUB_BASE_URL env var and mock HTTP service
-      # render-defaults: solution has no workflow.actions section
       skipBuiltins: [resolve-defaults, render-defaults]
       services:
         - name: github-mock
           type: http
           baseUrlEnv: MOCK_GITHUB_BASE_URL
           routes:
-            - path: /repos/test-org/test-repo
-              method: GET
+            # ── get_repo ──────────────────────────────────────────────────────
+            # Unique: "nameWithOwner" only appears in the get_repo query.
+            - path: /graphql
+              method: POST
+              bodyContains: "nameWithOwner"
               status: 200
-              body: '{"name":"test-repo","full_name":"test-org/test-repo","description":"A test repository","default_branch":"main","private":false,"html_url":"https://github.com/test-org/test-repo","stargazers_count":42}'
               headers:
                 Content-Type: application/json
+              body: |
+                {
+                  "data": {
+                    "repository": {
+                      "name": "test-repo",
+                      "nameWithOwner": "test-org/test-repo",
+                      "description": "A test repository",
+                      "url": "https://github.com/test-org/test-repo",
+                      "isPrivate": false,
+                      "isFork": false,
+                      "isArchived": false,
+                      "defaultBranchRef": { "name": "main" },
+                      "stargazerCount": 42,
+                      "forkCount": 5,
+                      "primaryLanguage": { "name": "Go" },
+                      "licenseInfo": { "spdxId": "Apache-2.0" }
+                    }
+                  }
+                }
 
-            - path: /repos/test-org/test-repo/contents/README.md
-              method: GET
+            # ── get_file ──────────────────────────────────────────────────────
+            # Unique: "object(expression:" only appears in the get_file query.
+            - path: /graphql
+              method: POST
+              bodyContains: "object(expression:"
               status: 200
-              body: '{"name":"README.md","path":"README.md","sha":"abc123","size":45,"type":"file","content":"IyBUZXN0IFJlcG8KClRoaXMgaXMgYSB0ZXN0Lg==","encoding":"base64"}'
               headers:
                 Content-Type: application/json
+              body: |
+                {
+                  "data": {
+                    "repository": {
+                      "object": {
+                        "text": "# Test Repo\n\nThis is a test.",
+                        "byteSize": 27,
+                        "oid": "abc123",
+                        "isTruncated": false
+                      }
+                    }
+                  }
+                }
 
-            - path: /repos/test-org/test-repo/releases/latest
-              method: GET
+            # ── get_latest_release ────────────────────────────────────────────
+            # Unique: "latestRelease {" only appears in the get_latest_release query.
+            - path: /graphql
+              method: POST
+              bodyContains: "latestRelease {"
               status: 200
-              body: '{"tag_name":"v1.2.3","name":"Release 1.2.3","body":"Bug fixes and improvements","published_at":"2025-01-15T00:00:00Z","prerelease":false}'
               headers:
                 Content-Type: application/json
+              body: |
+                {
+                  "data": {
+                    "repository": {
+                      "latestRelease": {
+                        "tagName": "v1.2.3",
+                        "name": "Release 1.2.3",
+                        "description": "Bug fixes and improvements",
+                        "publishedAt": "2025-01-15T00:00:00Z",
+                        "isPrerelease": false
+                      }
+                    }
+                  }
+                }
 
-            - path: /repos/test-org/test-repo/pulls
-              method: GET
+            # ── list_releases ─────────────────────────────────────────────────
+            # Unique: "releases(first:" only appears in the list_releases query.
+            - path: /graphql
+              method: POST
+              bodyContains: "releases(first:"
               status: 200
-              body: '[{"number":42,"title":"Add feature X","state":"open","user":{"login":"alice"},"created_at":"2025-06-01T00:00:00Z"},{"number":43,"title":"Fix bug Y","state":"open","user":{"login":"bob"},"created_at":"2025-06-02T00:00:00Z"}]'
               headers:
                 Content-Type: application/json
+              body: |
+                {
+                  "data": {
+                    "repository": {
+                      "releases": {
+                        "nodes": [
+                          { "tagName": "v1.2.3", "name": "Release 1.2.3", "publishedAt": "2025-01-15T00:00:00Z", "isPrerelease": false },
+                          { "tagName": "v1.2.2", "name": "Release 1.2.2", "publishedAt": "2025-01-01T00:00:00Z", "isPrerelease": false }
+                        ]
+                      }
+                    }
+                  }
+                }
 
-            - path: /repos/test-org/test-repo/pulls/42
-              method: GET
+            # ── list_pull_requests ────────────────────────────────────────────
+            # Unique: "pullRequests(first:" only appears in the list_pull_requests query.
+            - path: /graphql
+              method: POST
+              bodyContains: "pullRequests(first:"
               status: 200
-              body: '{"number":42,"title":"Add feature X","state":"open","body":"This PR adds feature X","user":{"login":"alice"},"mergeable":true,"created_at":"2025-06-01T00:00:00Z"}'
               headers:
                 Content-Type: application/json
+              body: |
+                {
+                  "data": {
+                    "repository": {
+                      "pullRequests": {
+                        "nodes": [
+                          { "number": 42, "title": "Add feature X", "state": "OPEN", "author": { "login": "alice" }, "createdAt": "2025-06-01T00:00:00Z", "headRefName": "feature-x", "baseRefName": "main", "isDraft": false },
+                          { "number": 43, "title": "Fix bug Y", "state": "OPEN", "author": { "login": "bob" }, "createdAt": "2025-06-02T00:00:00Z", "headRefName": "fix-y", "baseRefName": "main", "isDraft": false }
+                        ]
+                      }
+                    }
+                  }
+                }
 
-            - path: /repos/test-org/test-repo/releases
-              method: GET
+            # ── get_pull_request ──────────────────────────────────────────────
+            # Unique: "pullRequest(number:" only appears in the get_pull_request query.
+            - path: /graphql
+              method: POST
+              bodyContains: "pullRequest(number:"
               status: 200
-              body: '[{"tag_name":"v1.2.3","name":"Release 1.2.3","published_at":"2025-01-15T00:00:00Z","prerelease":false},{"tag_name":"v1.2.2","name":"Release 1.2.2","published_at":"2025-01-01T00:00:00Z","prerelease":false}]'
               headers:
                 Content-Type: application/json
+              body: |
+                {
+                  "data": {
+                    "repository": {
+                      "pullRequest": {
+                        "id": "PR_abc123",
+                        "number": 42,
+                        "title": "Add feature X",
+                        "state": "OPEN",
+                        "body": "This PR adds feature X",
+                        "author": { "login": "alice" },
+                        "mergeable": "MERGEABLE",
+                        "merged": false,
+                        "isDraft": false,
+                        "headRefName": "feature-x",
+                        "baseRefName": "main",
+                        "createdAt": "2025-06-01T00:00:00Z",
+                        "additions": 50,
+                        "deletions": 10,
+                        "changedFiles": 3,
+                        "commits": { "totalCount": 2 },
+                        "comments": { "totalCount": 1 },
+                        "reviews": { "totalCount": 0 }
+                      }
+                    }
+                  }
+                }
+
+            # ── list_branches ─────────────────────────────────────────────────
+            # Unique: "refPrefix" only appears in the list_branches (and list_tags) query.
+            # Cannot use "refs/heads/" because get_head_oid also sends refs/heads/ in its
+            # qualifiedName variable.
+            - path: /graphql
+              method: POST
+              bodyContains: "refPrefix"
+              status: 200
+              headers:
+                Content-Type: application/json
+              body: |
+                {
+                  "data": {
+                    "repository": {
+                      "refs": {
+                        "nodes": [
+                          { "name": "main", "target": { "oid": "abc123def456789012345678901234567890abcd" } },
+                          { "name": "dev",  "target": { "oid": "def456abc789012345678901234567890abcd1234" } }
+                        ]
+                      }
+                    }
+                  }
+                }
+
+            # ── get_head_oid ──────────────────────────────────────────────────
+            # Unique: "qualifiedName" only appears as a variable in get_head_oid/get_branch.
+            # Cannot use "target { oid }" alone because refs/heads/ collision above.
+            - path: /graphql
+              method: POST
+              bodyContains: "qualifiedName"
+              status: 200
+              headers:
+                Content-Type: application/json
+              body: |
+                {
+                  "data": {
+                    "repository": {
+                      "ref": {
+                        "target": {
+                          "oid": "abc123def456789012345678901234567890abcd"
+                        }
+                      }
+                    }
+                  }
+                }
 
     cases:
       _base:
@@ -165,7 +346,7 @@ spec:
           - expression: __exitCode == 0
 
       get-repo-info:
-        description: Verify get_repo returns repository metadata
+        description: Verify get_repo returns repository metadata via GraphQL
         extends: [_base]
         tags: [smoke]
         assertions:
@@ -177,27 +358,27 @@ spec:
             message: "Full name should include org"
 
       get-file-content:
-        description: Verify get_file returns decoded file content
+        description: Verify get_file returns decoded file content via GraphQL
         extends: [_base]
         assertions:
           - expression: __output.fileContent.result.name == "README.md"
             message: "File name should be README.md"
-          - expression: '__output.fileContent.result.decoded_content.contains("Test Repo")'
-            message: "Decoded content should contain the readme text"
+          - expression: '__output.fileContent.result.content.contains("Test Repo")'
+            message: "Content should contain the readme text"
           - expression: __output.fileContent.result.sha == "abc123"
             message: "SHA should match"
 
       get-latest-release:
-        description: Verify get_latest_release returns release info
+        description: Verify get_latest_release returns release info via GraphQL
         extends: [_base]
         assertions:
-          - expression: __output.latestRelease.result.tag_name == "v1.2.3"
+          - expression: __output.latestRelease.result.tagName == "v1.2.3"
             message: "Tag should be v1.2.3"
           - expression: '__output.latestRelease.result.name == "Release 1.2.3"'
             message: "Release name should match"
 
       list-pull-requests:
-        description: Verify list_pull_requests returns array of PRs
+        description: Verify list_pull_requests returns array of PRs via GraphQL
         extends: [_base]
         assertions:
           - expression: size(__output.listPullRequests.result) == 2
@@ -208,21 +389,39 @@ spec:
             message: "First PR title should match"
 
       get-pull-request-detail:
-        description: Verify get_pull_request returns single PR with details
+        description: Verify get_pull_request returns single PR with details via GraphQL
         extends: [_base]
         assertions:
           - expression: __output.pullRequestDetail.result.number == 42.0
             message: "PR number should be 42"
-          - expression: __output.pullRequestDetail.result.mergeable == true
+          - expression: __output.pullRequestDetail.result.mergeable == "MERGEABLE"
             message: "PR should be mergeable"
-          - expression: __output.pullRequestDetail.result.user.login == "alice"
+          - expression: __output.pullRequestDetail.result.author.login == "alice"
             message: "PR author should be alice"
 
       list-releases:
-        description: Verify list_releases returns release array
+        description: Verify list_releases returns release array via GraphQL
         extends: [_base]
         assertions:
           - expression: size(__output.listReleases.result) == 2
             message: "Should return 2 releases"
-          - expression: __output.listReleases.result[0].tag_name == "v1.2.3"
+          - expression: __output.listReleases.result[0].tagName == "v1.2.3"
             message: "First release tag should be v1.2.3"
+
+      list-branches:
+        description: Verify list_branches returns branch array via GraphQL
+        extends: [_base]
+        assertions:
+          - expression: size(__output.listBranches.result) == 2
+            message: "Should return 2 branches"
+          - expression: __output.listBranches.result[0].name == "main"
+            message: "First branch should be main"
+
+      get-head-oid:
+        description: Verify get_head_oid returns branch HEAD SHA via GraphQL
+        extends: [_base]
+        assertions:
+          - expression: __output.headOid.result.branch == "main"
+            message: "Branch should be main"
+          - expression: __output.headOid.result.oid == "abc123def456789012345678901234567890abcd"
+            message: "OID should match"

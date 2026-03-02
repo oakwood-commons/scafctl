@@ -1,7 +1,14 @@
-# GitHub provider examples — retrieve GitHub data without raw HTTP calls.
+# GitHub provider examples — read & write via GraphQL + REST (releases).
 # Requires GitHub authentication: scafctl auth login github
 #
 # Run: scafctl run provider -f examples/providers/github-provider.yaml
+#
+# Read operations use the GitHub GraphQL API.
+# Write operations (issues, PRs, commits, branches, tags) use GraphQL mutations.
+# Release write operations use the GitHub REST API.
+# Commits are automatically GPG-signed via createCommitOnBranch.
+
+# ─── Read operations ─────────────────────────────────────────────────────────
 
 # Get repository info
 operation: get_repo

@@ -27,6 +27,11 @@ type Route struct {
 	// Method is the HTTP method to match. Empty matches all methods.
 	Method string `json:"method,omitempty" yaml:"method,omitempty" doc:"HTTP method to match (empty = all)" maxLength:"10"`
 
+	// BodyContains is an optional substring that must appear in the request body
+	// for the route to match. Useful for routing POST endpoints like GraphQL where
+	// all requests hit the same path but carry different query payloads.
+	BodyContains string `json:"bodyContains,omitempty" yaml:"bodyContains,omitempty" doc:"Request body must contain this substring" maxLength:"1000"`
+
 	// Status is the HTTP status code to return (default: 200).
 	Status int `json:"status,omitempty" yaml:"status,omitempty" doc:"HTTP status code to return" maximum:"599"`
 
@@ -264,6 +269,21 @@ func (s *Server) recordRequest(r *http.Request) {
 
 // matchRoute finds the first route that matches the request.
 func (s *Server) matchRoute(r *http.Request) *Route {
+	// Pre-read the body once, since some routes may need body matching.
+	var bodyStr string
+	var needBody bool
+	for i := range s.routes {
+		if s.routes[i].BodyContains != "" {
+			needBody = true
+			break
+		}
+	}
+	if needBody {
+		bodyBytes, _ := io.ReadAll(r.Body)
+		bodyStr = string(bodyBytes)
+		r.Body = io.NopCloser(strings.NewReader(bodyStr))
+	}
+
 	for i := range s.routes {
 		route := &s.routes[i]
 
@@ -272,6 +292,10 @@ func (s *Server) matchRoute(r *http.Request) *Route {
 		}
 
 		if route.Method != "" && !strings.EqualFold(route.Method, r.Method) {
+			continue
+		}
+
+		if route.BodyContains != "" && !strings.Contains(bodyStr, route.BodyContains) {
 			continue
 		}
 
