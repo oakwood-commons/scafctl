@@ -10,6 +10,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
@@ -44,6 +45,9 @@ Shows test names, commands, tags, and skip status without running any tests.
 Useful for discovering available tests and verifying test configuration.
 
 Examples:
+  # Auto-discover solution in current directory
+  scafctl test list
+
   # List all tests in a solution
   scafctl test list -f ./solution.yaml
 
@@ -71,7 +75,7 @@ Examples:
 	}
 
 	// Register flags
-	cCmd.Flags().StringVarP(&opts.File, "file", "f", "", "Path to the solution file")
+	cCmd.Flags().StringVarP(&opts.File, "file", "f", "", "Solution file path (auto-discovered if not provided)")
 	cCmd.Flags().StringVar(&opts.TestsPath, "tests-path", "", "Path to directory containing solution files with tests")
 	cCmd.Flags().StringVarP(&opts.Output, "output", "o", "table", "Output format: table, json, yaml, quiet")
 	cCmd.Flags().BoolVar(&opts.IncludeBuiltins, "include-builtins", false, "Include builtin tests in the listing")
@@ -89,19 +93,21 @@ func runList(ctx context.Context, opts *ListOptions) error {
 		w = writer.New(opts.IOStreams, opts.CliParams)
 	}
 
-	// Validate input
-	if opts.File == "" && opts.TestsPath == "" {
-		err := fmt.Errorf("either --file (-f) or --tests-path must be specified")
+	// Determine the path to discover solutions from.
+	// Priority: --tests-path > -f > auto-discover
+	testsPath := opts.TestsPath
+	if testsPath == "" {
+		testsPath = opts.File
+	}
+	if testsPath == "" {
+		testsPath = get.NewGetter().FindSolution()
+	}
+	if testsPath == "" {
+		err := fmt.Errorf("no solution path provided and no solution file found in default locations; use --file (-f) or --tests-path")
 		if w != nil {
 			w.Errorf("%s", err)
 		}
 		return exitcode.WithCode(err, exitcode.InvalidInput)
-	}
-
-	// Discover solutions
-	testsPath := opts.TestsPath
-	if testsPath == "" {
-		testsPath = opts.File
 	}
 
 	solutions, err := soltesting.DiscoverSolutions(testsPath)

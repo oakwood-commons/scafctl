@@ -69,11 +69,16 @@ func findProjectRoot() string {
 
 func runScafctl(t *testing.T, args ...string) (stdout, stderr string, exitCode int) {
 	t.Helper()
+	return runScafctlInDir(t, findProjectRoot(), args...)
+}
+
+func runScafctlInDir(t *testing.T, dir string, args ...string) (stdout, stderr string, exitCode int) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, binaryPath, args...)
-	cmd.Dir = findProjectRoot()
+	cmd.Dir = dir
 
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
@@ -492,7 +497,8 @@ func TestIntegration_RunProvider_Identity_DryRun(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			args := []string{"run", "provider", "identity", "--input", "operation=" + tt.operation, "--dry-run", "-o", "json"}
+			args := make([]string, 0, 8+len(tt.extra))
+			args = append(args, "run", "provider", "identity", "--input", "operation="+tt.operation, "--dry-run", "-o", "json")
 			args = append(args, tt.extra...)
 			stdout, _, exitCode := runScafctl(t, args...)
 
@@ -1734,10 +1740,12 @@ func TestIntegration_Lint_Help(t *testing.T) {
 
 func TestIntegration_Lint_RequiresFile(t *testing.T) {
 	t.Parallel()
-	_, stderr, exitCode := runScafctl(t, "lint")
+	// Run lint from an empty dir where no solution can be auto-discovered
+	emptyDir := t.TempDir()
+	_, stderr, exitCode := runScafctlInDir(t, emptyDir, "lint")
 
 	assert.NotEqual(t, 0, exitCode)
-	assert.Contains(t, stderr, "required flag")
+	assert.Contains(t, stderr, "no solution path provided")
 }
 
 func TestIntegration_Lint_ValidSolution(t *testing.T) {
@@ -1886,6 +1894,32 @@ func TestIntegration_Lint_SchemaValid(t *testing.T) {
 	assert.NotContains(t, stdout, "schema-violation")
 	// May still have info-level findings (e.g., missing-description) but not schema errors
 	_ = exitCode
+}
+
+func TestIntegration_Lint_AutoDiscovery(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	solutionFile := filepath.Join(tmpDir, "solution.yaml")
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: auto-lint
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: Hello
+`
+	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
+
+	stdout, _, exitCode := runScafctlInDir(t, tmpDir, "lint", "-o", "json")
+	// Should auto-discover solution.yaml and lint it
+	assert.Contains(t, stdout, "findings")
+	assert.True(t, exitCode == 0 || exitCode == 2, "lint should exit 0 or 2, got %d", exitCode)
 }
 
 // ============================================================================
@@ -3993,6 +4027,93 @@ spec:
 	assert.Contains(t, stdout, "composed-test", "composed test should appear in output")
 }
 
+func TestIntegration_Test_Functional_AutoDiscovery(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	solutionFile := filepath.Join(tmpDir, "solution.yaml")
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: auto-functional
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: Hello
+  testing:
+    cases:
+      resolve-greeting:
+        description: Verify greeting resolver
+        command: [run, resolver]
+        assertions:
+          - expression: __exitCode == 0
+`
+	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
+
+	stdout, stderr, exitCode := runScafctlInDir(t, tmpDir,
+		"test", "functional", "--skip-builtins", "--no-color",
+	)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	assert.Equal(t, 0, exitCode, "expected auto-discovery to work\nstdout: %s\nstderr: %s", stdout, stderr)
+}
+
+func TestIntegration_Test_Functional_AutoDiscoveryNoFile(t *testing.T) {
+	t.Parallel()
+	emptyDir := t.TempDir()
+
+	_, stderr, exitCode := runScafctlInDir(t, emptyDir, "test", "functional")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "no solution path provided")
+}
+
+func TestIntegration_Test_List_AutoDiscovery(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	solutionFile := filepath.Join(tmpDir, "solution.yaml")
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: auto-list
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: Hello
+  testing:
+    cases:
+      resolve-greeting:
+        description: Verify greeting resolver
+        command: [run, resolver]
+        assertions:
+          - expression: __exitCode == 0
+`
+	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
+
+	stdout, stderr, exitCode := runScafctlInDir(t, tmpDir, "test", "list")
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	assert.Equal(t, 0, exitCode, "expected test list to auto-discover solution.yaml")
+	assert.Contains(t, stdout, "resolve-greeting")
+}
+
+func TestIntegration_Test_List_AutoDiscoveryNoFile(t *testing.T) {
+	t.Parallel()
+	emptyDir := t.TempDir()
+
+	_, stderr, exitCode := runScafctlInDir(t, emptyDir, "test", "list")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "no solution path provided")
+}
+
 func TestIntegration_Test_Init(t *testing.T) {
 	t.Parallel()
 	tmpDir := t.TempDir()
@@ -4057,6 +4178,40 @@ func TestIntegration_Test_Init_MissingFile(t *testing.T) {
 
 	assert.NotEqual(t, 0, exitCode, "expected non-zero exit code")
 	assert.Contains(t, stderr, "reading solution file")
+}
+
+func TestIntegration_Test_Init_AutoDiscovery(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	solutionFile := filepath.Join(tmpDir, "solution.yaml")
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: auto-init
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: Hello
+`
+	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
+
+	stdout, _, exitCode := runScafctlInDir(t, tmpDir, "test", "init")
+	assert.Equal(t, 0, exitCode, "expected test init to auto-discover solution.yaml")
+	assert.Contains(t, stdout, "cases:")
+}
+
+func TestIntegration_Test_Init_AutoDiscoveryNoFile(t *testing.T) {
+	t.Parallel()
+	emptyDir := t.TempDir()
+
+	_, stderr, exitCode := runScafctlInDir(t, emptyDir, "test", "init")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "no solution path provided")
 }
 
 // ─── MCP Server Integration Tests ────────────────────────────────────────────
@@ -4665,6 +4820,15 @@ func TestIntegration_Plugins_Install_MissingSolutionFile(t *testing.T) {
 	assert.NotEqual(t, 0, exitCode)
 }
 
+// TestIntegration_Plugins_Install_AutoDiscoveryNoFile verifies error when no solution is found.
+func TestIntegration_Plugins_Install_AutoDiscoveryNoFile(t *testing.T) {
+	t.Parallel()
+	emptyDir := t.TempDir()
+	_, stderr, exitCode := runScafctlInDir(t, emptyDir, "plugins", "install")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "no solution path provided")
+}
+
 // TestIntegration_Plugins_Install_NoPlugins verifies install succeeds with a solution that has no plugins.
 func TestIntegration_Plugins_Install_NoPlugins(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -4675,6 +4839,33 @@ func TestIntegration_Plugins_Install_NoPlugins(t *testing.T) {
 	stdout, stderr, exitCode := runScafctl(t, "plugins", "install", "-f", "examples/resolver-demo.yaml")
 	_ = stderr
 	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "No plugins declared")
+}
+
+// TestIntegration_Plugins_Install_AutoDiscovery verifies auto-discovery of solution file.
+func TestIntegration_Plugins_Install_AutoDiscovery(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	solutionFile := filepath.Join(tmpDir, "solution.yaml")
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: auto-plugins
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: Hello
+`
+	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
+
+	stdout, _, exitCode := runScafctlInDir(t, tmpDir, "plugins", "install")
+	assert.Equal(t, 0, exitCode, "expected plugins install to auto-discover solution.yaml")
 	assert.Contains(t, stdout, "No plugins declared")
 }
 

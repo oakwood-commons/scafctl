@@ -1,0 +1,43 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: auto-discovery-test
+  version: 1.0.0
+  description: Tests that commands auto-discover solution files when -f is not provided
+
+spec:
+  resolvers:
+    greeting:
+      description: Static greeting for auto-discovery test
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: Discovered!
+
+  testing:
+    config:
+      skipBuiltins: [render-defaults]
+
+    cases:
+      lint-auto-discovery:
+        description: Verify lint auto-discovers and succeeds
+        command: [lint]
+        assertions:
+          - expression: __exitCode == 0
+
+      resolve-auto-discovery:
+        description: Verify resolver resolves via auto-discovery
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: "Discovered!"
+
+      test-list-auto-discovery:
+        description: Verify test list auto-discovers tests
+        command: [test, list]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: lint-auto-discovery

@@ -127,7 +127,7 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 		SilenceUsage: true,
 	}
 
-	cmd.Flags().StringVarP(&options.File, "file", "f", "", "Solution file path (required for lint)")
+	cmd.Flags().StringVarP(&options.File, "file", "f", "", "Solution file path (auto-discovered if not provided, use '-' for stdin)")
 	cmd.Flags().StringVarP(&options.Output, "output", "o", "table", "Output format: table, json, yaml, quiet")
 	cmd.Flags().StringVar(&options.Severity, "severity", "info", "Minimum severity to report: error, warning, info")
 
@@ -139,10 +139,6 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 }
 
 func runLint(ctx context.Context, opts *Options) error {
-	if opts.File == "" {
-		return fmt.Errorf("required flag \"file\" not set")
-	}
-
 	lgr := logger.FromContext(ctx)
 
 	// Set up getter with catalog resolver for bare name resolution
