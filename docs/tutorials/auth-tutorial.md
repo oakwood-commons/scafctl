@@ -1393,6 +1393,48 @@ scafctl auth token entra --scope "https://management.azure.com/.default" --clip
 # Output: ✓ Token copied to clipboard (expires in 58m42s).
 ```
 
+### Inspecting Scoped Token Claims in Resolvers
+
+The `identity` provider's `scope` input lets you mint a fresh access token for a
+specific OAuth scope inside a resolver and inspect the claims or metadata parsed
+from its JWT — without ever exposing the token value. This is useful for
+preflight checks, per-API identity auditing, and debugging consent errors.
+
+```yaml
+# Mint a token for an API scope and surface the caller's identity claims
+resolve:
+  with:
+    - provider: identity
+      inputs:
+        operation: claims
+        scope: api://my-app/.default
+
+# Check token expiry and flow for a management-plane scope
+resolve:
+  with:
+    - provider: identity
+      inputs:
+        operation: status
+        scope: https://management.azure.com/.default
+        handler: entra
+```
+
+**Key differences from `auth token`:**
+
+| | `auth token` | `identity` provider (scoped) |
+|-|---|---|
+| Returns the raw token | ✅ | ❌ (token is never exposed) |
+| Parses JWT claims | ❌ | ✅ |
+| Usable inside a resolver pipeline | ❌ | ✅ |
+| Dry-run support | N/A | ✅ |
+
+When the access token is opaque (not a decodable JWT — common with Microsoft
+Graph tokens), `claims` will be `null` and a warning is emitted. Token metadata
+such as expiry and type is still returned.
+
+> **Scope restriction:** The `scope` input is only valid for `claims` and
+> `status` operations. Using it with `groups` or `list` returns an error.
+
 ### Using the Token Directly
 
 Get the full token for use with other tools:

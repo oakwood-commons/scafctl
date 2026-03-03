@@ -5,7 +5,6 @@ package entra
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -241,55 +240,11 @@ func (h *Handler) loadMetadata(ctx context.Context) (*TokenMetadata, error) {
 }
 
 // extractClaims extracts normalized claims from the token response.
+// Delegates to the shared auth.ParseJWTClaims parser.
 func (h *Handler) extractClaims(tokenResp *TokenResponse) (*auth.Claims, error) {
 	if tokenResp.IDToken == "" {
 		return &auth.Claims{}, nil
 	}
 
-	// Parse ID token (JWT format: header.payload.signature)
-	parts := strings.SplitN(tokenResp.IDToken, ".", 3)
-	if len(parts) != 3 {
-		return nil, fmt.Errorf("invalid ID token format")
-	}
-
-	// Decode payload (base64url)
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode ID token payload: %w", err)
-	}
-
-	var idTokenClaims struct {
-		Issuer            string `json:"iss"`
-		Subject           string `json:"sub"`
-		Audience          string `json:"aud"`
-		TenantID          string `json:"tid"`
-		ObjectID          string `json:"oid"`
-		Email             string `json:"email"`
-		PreferredUsername string `json:"preferred_username"`
-		Name              string `json:"name"`
-		IssuedAt          int64  `json:"iat"`
-		ExpiresAt         int64  `json:"exp"`
-	}
-
-	if err := json.Unmarshal(payload, &idTokenClaims); err != nil {
-		return nil, fmt.Errorf("failed to parse ID token claims: %w", err)
-	}
-
-	email := idTokenClaims.Email
-	if email == "" {
-		email = idTokenClaims.PreferredUsername
-	}
-
-	return &auth.Claims{
-		Issuer:    idTokenClaims.Issuer,
-		Subject:   idTokenClaims.Subject,
-		TenantID:  idTokenClaims.TenantID,
-		ObjectID:  idTokenClaims.ObjectID,
-		ClientID:  idTokenClaims.Audience,
-		Email:     email,
-		Name:      idTokenClaims.Name,
-		Username:  idTokenClaims.PreferredUsername,
-		IssuedAt:  time.Unix(idTokenClaims.IssuedAt, 0),
-		ExpiresAt: time.Unix(idTokenClaims.ExpiresAt, 0),
-	}, nil
+	return auth.ParseJWTClaims(tokenResp.IDToken)
 }

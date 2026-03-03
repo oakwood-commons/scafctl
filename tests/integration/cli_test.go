@@ -446,6 +446,76 @@ func TestIntegration_RunProvider_HCL_DryRun(t *testing.T) {
 	assert.Contains(t, stdout, "dryRun")
 }
 
+func TestIntegration_RunProvider_Identity_DryRun(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		operation string
+		extra     []string // additional --input flags
+		wantInOut string   // substring expected in stdout
+	}{
+		{
+			name:      "claims",
+			operation: "claims",
+			wantInOut: "claims",
+		},
+		{
+			name:      "status",
+			operation: "status",
+			wantInOut: "status",
+		},
+		{
+			name:      "groups",
+			operation: "groups",
+			wantInOut: "groups",
+		},
+		{
+			name:      "list",
+			operation: "list",
+			wantInOut: "list",
+		},
+		{
+			name:      "scoped claims",
+			operation: "claims",
+			extra:     []string{"--input", "scope=api://my-app/.default"},
+			wantInOut: "scopedToken",
+		},
+		{
+			name:      "scoped status",
+			operation: "status",
+			extra:     []string{"--input", "scope=https://management.azure.com/.default"},
+			wantInOut: "scopedToken",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			args := []string{"run", "provider", "identity", "--input", "operation=" + tt.operation, "--dry-run", "-o", "json"}
+			args = append(args, tt.extra...)
+			stdout, _, exitCode := runScafctl(t, args...)
+
+			assert.Equal(t, 0, exitCode)
+			assert.Contains(t, stdout, "dryRun")
+			assert.Contains(t, stdout, tt.wantInOut)
+		})
+	}
+}
+
+func TestIntegration_RunProvider_Identity_ScopeRestriction(t *testing.T) {
+	t.Parallel()
+
+	// scope + groups should error (even with --dry-run, scope validation happens before dry-run check)
+	_, stderr, exitCode := runScafctl(t, "run", "provider", "identity",
+		"--input", "operation=groups",
+		"--input", "scope=api://my-app/.default",
+		"-o", "json")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "scope is not supported")
+}
+
 func TestIntegration_RunProvider_HCL_Validate(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "run", "provider", "hcl",
