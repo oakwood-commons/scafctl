@@ -474,7 +474,7 @@ func (o *Getter) FromURL(ctx context.Context, url string) (*solution.Solution, e
 func (o *Getter) FindSolution() string {
 	for _, folder := range settings.RootSolutionFolders {
 		for _, filename := range settings.SolutionFileNames {
-			fullPath := filepath.Join(folder, filename)
+			fullPath := filepath.NormalizeFilePath(pathlib.Join(folder, filename))
 			if filepath.PathExists(fullPath, o.statFunc) {
 				return fullPath
 			}
@@ -491,7 +491,7 @@ func PossibleSolutionPaths() []string {
 
 	for _, folder := range settings.RootSolutionFolders {
 		for _, filename := range settings.SolutionFileNames {
-			fullPath := filepath.Join(folder, filename)
+			fullPath := filepath.NormalizeFilePath(pathlib.Join(folder, filename))
 			paths = append(paths, fullPath)
 		}
 	}
