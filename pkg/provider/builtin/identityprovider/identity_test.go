@@ -5,6 +5,8 @@ package identityprovider
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -530,4 +532,431 @@ func TestIdentityProvider_ExecuteGroups_DryRun(t *testing.T) {
 	assert.Equal(t, "groups", result["operation"])
 	assert.Equal(t, 0, result["count"])
 	assert.True(t, output.Metadata["dryRun"].(bool))
+}
+
+// --- Scope feature tests ---
+
+// testBuildJWT constructs a minimal unsigned JWT from a claims map for testing.
+func testBuildJWT(t *testing.T, payload map[string]any) string {
+	t.Helper()
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+	encodedBody := base64.RawURLEncoding.EncodeToString(body)
+	return header + "." + encodedBody + ".sig"
+}
+
+func TestIdentityProvider_ScopedClaims_Success(t *testing.T) {
+	p := NewIdentityProvider()
+
+	accessToken := testBuildJWT(t, map[string]any{
+		"iss":                "https://login.microsoftonline.com/tenant-123/v2.0",
+		"sub":                "scoped-subject",
+		"aud":                "api://my-app",
+		"tid":                "tenant-123",
+		"oid":                "obj-789",
+		"email":              "scoped@example.com",
+		"preferred_username": "scoped@example.com",
+		"name":               "Scoped User",
+		"iat":                1700000000,
+		"exp":                1700003600,
+	})
+
+	mockHandler := auth.NewMockHandler("entra")
+	mockHandler.SetToken(&auth.Token{
+		AccessToken: accessToken,
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(1 * time.Hour),
+		Scope:       "api://my-app/.default",
+		Flow:        auth.FlowDeviceCode,
+		SessionID:   "session-123",
+	})
+
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(mockHandler))
+	ctx := auth.WithRegistry(context.Background(), registry)
+
+	output, err := p.Execute(ctx, map[string]any{
+		"operation": "claims",
+		"scope":     "api://my-app/.default",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	result, ok := output.Data.(map[string]any)
+	require.True(t, ok)
+
+	assert.Equal(t, "claims", result["operation"])
+	assert.Equal(t, "entra", result["handler"])
+	assert.True(t, result["authenticated"].(bool))
+	assert.True(t, result["scopedToken"].(bool))
+	assert.Equal(t, "api://my-app/.default", result["tokenScope"])
+
+	claims, ok := result["claims"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "scoped@example.com", claims["email"])
+	assert.Equal(t, "Scoped User", claims["name"])
+	assert.Equal(t, "tenant-123", claims["tenantId"])
+	assert.Equal(t, "scoped-subject", claims["subject"])
+	assert.Equal(t, "user", result["identityType"])
+	assert.NotEmpty(t, claims["displayIdentity"])
+
+	// Verify GetToken was called with the correct scope
+	require.Len(t, mockHandler.GetTokenCalls, 1)
+	assert.Equal(t, "api://my-app/.default", mockHandler.GetTokenCalls[0].Scope)
+
+	// No warnings for a valid JWT
+	assert.Empty(t, output.Warnings)
+}
+
+func TestIdentityProvider_ScopedClaims_OpaqueToken(t *testing.T) {
+	p := NewIdentityProvider()
+
+	mockHandler := auth.NewMockHandler("entra")
+	mockHandler.SetToken(&auth.Token{
+		AccessToken: "opaque-encrypted-token-not-a-jwt",
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(1 * time.Hour),
+		Scope:       "https://graph.microsoft.com/.default",
+	})
+
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(mockHandler))
+	ctx := auth.WithRegistry(context.Background(), registry)
+
+	output, err := p.Execute(ctx, map[string]any{
+		"operation": "claims",
+		"scope":     "https://graph.microsoft.com/.default",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	result := output.Data.(map[string]any)
+	assert.True(t, result["scopedToken"].(bool))
+	assert.Nil(t, result["claims"])
+
+	// Should have a warning about opaque token
+	require.NotEmpty(t, output.Warnings)
+	assert.Contains(t, output.Warnings[0], "not a decodable JWT")
+
+	// Should still include token expiry metadata
+	assert.NotEmpty(t, result["expiresAt"])
+}
+
+func TestIdentityProvider_ScopedClaims_TokenError(t *testing.T) {
+	p := NewIdentityProvider()
+
+	mockHandler := auth.NewMockHandler("entra")
+	mockHandler.SetTokenError(fmt.Errorf("token acquisition failed: consent required"))
+
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(mockHandler))
+	ctx := auth.WithRegistry(context.Background(), registry)
+
+	_, err := p.Execute(ctx, map[string]any{
+		"operation": "claims",
+		"scope":     "api://my-app/.default",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to mint scoped token")
+	assert.Contains(t, err.Error(), "consent required")
+}
+
+func TestIdentityProvider_ScopedStatus_Success(t *testing.T) {
+	p := NewIdentityProvider()
+
+	accessToken := testBuildJWT(t, map[string]any{
+		"iss":   "https://login.microsoftonline.com/tenant-abc/v2.0",
+		"sub":   "status-subject",
+		"tid":   "tenant-abc",
+		"email": "user@test.com",
+		"name":  "Status User",
+		"iat":   1700000000,
+		"exp":   1700003600,
+	})
+
+	mockHandler := auth.NewMockHandler("entra")
+	mockHandler.SetToken(&auth.Token{
+		AccessToken: accessToken,
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(30 * time.Minute),
+		Scope:       "https://management.azure.com/.default",
+		Flow:        auth.FlowDeviceCode,
+		SessionID:   "sess-456",
+	})
+
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(mockHandler))
+	ctx := auth.WithRegistry(context.Background(), registry)
+
+	output, err := p.Execute(ctx, map[string]any{
+		"operation": "status",
+		"scope":     "https://management.azure.com/.default",
+		"handler":   "entra",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	result := output.Data.(map[string]any)
+	assert.Equal(t, "status", result["operation"])
+	assert.Equal(t, "entra", result["handler"])
+	assert.True(t, result["authenticated"].(bool))
+	assert.True(t, result["scopedToken"].(bool))
+	assert.Equal(t, "https://management.azure.com/.default", result["tokenScope"])
+	assert.Equal(t, "Bearer", result["tokenType"])
+	assert.Equal(t, "device_code", result["flow"])
+	assert.Equal(t, "sess-456", result["sessionId"])
+	assert.NotEmpty(t, result["expiresAt"])
+	assert.NotEmpty(t, result["expiresIn"])
+	assert.Equal(t, "tenant-abc", result["tenantId"])
+	assert.Equal(t, "user", result["identityType"])
+
+	// No warnings for a valid JWT
+	assert.Empty(t, output.Warnings)
+}
+
+func TestIdentityProvider_ScopedStatus_OpaqueToken(t *testing.T) {
+	p := NewIdentityProvider()
+
+	mockHandler := auth.NewMockHandler("entra")
+	mockHandler.SetToken(&auth.Token{
+		AccessToken: "not.a.jwt.with.four.parts",
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(1 * time.Hour),
+		Flow:        auth.FlowServicePrincipal,
+	})
+
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(mockHandler))
+	ctx := auth.WithRegistry(context.Background(), registry)
+
+	output, err := p.Execute(ctx, map[string]any{
+		"operation": "status",
+		"scope":     "api://my-app/.default",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	result := output.Data.(map[string]any)
+	assert.True(t, result["scopedToken"].(bool))
+	assert.True(t, result["authenticated"].(bool))
+
+	// Should have a warning about opaque token
+	require.NotEmpty(t, output.Warnings)
+	assert.Contains(t, output.Warnings[0], "not a decodable JWT")
+
+	// identityType and tenantId should NOT be present (couldn't parse JWT)
+	_, hasTenant := result["tenantId"]
+	assert.False(t, hasTenant)
+}
+
+func TestIdentityProvider_ScopedStatus_TokenError(t *testing.T) {
+	p := NewIdentityProvider()
+
+	mockHandler := auth.NewMockHandler("entra")
+	mockHandler.SetTokenError(auth.ErrNotAuthenticated)
+
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(mockHandler))
+	ctx := auth.WithRegistry(context.Background(), registry)
+
+	_, err := p.Execute(ctx, map[string]any{
+		"operation": "status",
+		"scope":     "api://my-app/.default",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to mint scoped token")
+}
+
+func TestIdentityProvider_ScopeNotSupportedForGroups(t *testing.T) {
+	p := NewIdentityProvider()
+
+	mockHandler := auth.NewMockHandler("entra")
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(mockHandler))
+	ctx := auth.WithRegistry(context.Background(), registry)
+
+	_, err := p.Execute(ctx, map[string]any{
+		"operation": "groups",
+		"scope":     "api://my-app/.default",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scope is not supported for the \"groups\" operation")
+}
+
+func TestIdentityProvider_ScopeNotSupportedForList(t *testing.T) {
+	p := NewIdentityProvider()
+
+	mockHandler := auth.NewMockHandler("entra")
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(mockHandler))
+	ctx := auth.WithRegistry(context.Background(), registry)
+
+	_, err := p.Execute(ctx, map[string]any{
+		"operation": "list",
+		"scope":     "api://my-app/.default",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scope is not supported for the \"list\" operation")
+}
+
+func TestIdentityProvider_ScopedDryRun_Claims(t *testing.T) {
+	p := NewIdentityProvider()
+	ctx := provider.WithDryRun(context.Background(), true)
+
+	output, err := p.Execute(ctx, map[string]any{
+		"operation": "claims",
+		"scope":     "api://my-app/.default",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	result := output.Data.(map[string]any)
+	assert.Equal(t, "claims", result["operation"])
+	assert.True(t, result["scopedToken"].(bool))
+	assert.Equal(t, "api://my-app/.default", result["tokenScope"])
+	assert.True(t, output.Metadata["dryRun"].(bool))
+}
+
+func TestIdentityProvider_ScopedDryRun_Status(t *testing.T) {
+	p := NewIdentityProvider()
+	ctx := provider.WithDryRun(context.Background(), true)
+
+	output, err := p.Execute(ctx, map[string]any{
+		"operation": "status",
+		"scope":     "https://management.azure.com/.default",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	result := output.Data.(map[string]any)
+	assert.Equal(t, "status", result["operation"])
+	assert.True(t, result["scopedToken"].(bool))
+	assert.Equal(t, "https://management.azure.com/.default", result["tokenScope"])
+	assert.True(t, output.Metadata["dryRun"].(bool))
+}
+
+func TestIdentityProvider_ScopedClaims_ServicePrincipalDetection(t *testing.T) {
+	p := NewIdentityProvider()
+
+	// Service principal tokens typically have no name/email/username
+	accessToken := testBuildJWT(t, map[string]any{
+		"iss":   "https://login.microsoftonline.com/tenant-sp/v2.0",
+		"sub":   "sp-subject",
+		"aud":   "api://target-app",
+		"tid":   "tenant-sp",
+		"oid":   "sp-object-id",
+		"appid": "sp-app-id",
+		"iat":   1700000000,
+		"exp":   1700003600,
+	})
+
+	mockHandler := auth.NewMockHandler("entra")
+	mockHandler.SetToken(&auth.Token{
+		AccessToken: accessToken,
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(1 * time.Hour),
+	})
+
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(mockHandler))
+	ctx := auth.WithRegistry(context.Background(), registry)
+
+	output, err := p.Execute(ctx, map[string]any{
+		"operation": "claims",
+		"scope":     "api://target-app/.default",
+	})
+	require.NoError(t, err)
+
+	result := output.Data.(map[string]any)
+	assert.Equal(t, "service-principal", result["identityType"])
+}
+
+func TestIdentityProvider_WithoutScope_UsesStoredMetadata(t *testing.T) {
+	// Verify that claims without scope still uses Status() not GetToken()
+	p := NewIdentityProvider()
+
+	mockHandler := auth.NewMockHandler("entra")
+	mockHandler.StatusResult = &auth.Status{
+		Authenticated: true,
+		IdentityType:  auth.IdentityTypeUser,
+		Claims: &auth.Claims{
+			Email: "stored@example.com",
+			Name:  "Stored User",
+		},
+	}
+
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(mockHandler))
+	ctx := auth.WithRegistry(context.Background(), registry)
+
+	output, err := p.Execute(ctx, map[string]any{"operation": "claims"})
+	require.NoError(t, err)
+
+	result := output.Data.(map[string]any)
+	// Should NOT have scopedToken
+	_, hasScopedToken := result["scopedToken"]
+	assert.False(t, hasScopedToken)
+
+	claims := result["claims"].(map[string]any)
+	assert.Equal(t, "stored@example.com", claims["email"])
+
+	// GetToken should NOT have been called
+	assert.Empty(t, mockHandler.GetTokenCalls)
+}
+
+func TestIdentityProvider_ScopedClaims_SpecificHandler(t *testing.T) {
+	p := NewIdentityProvider()
+
+	accessToken := testBuildJWT(t, map[string]any{
+		"sub":   "handler2-subject",
+		"email": "handler2@example.com",
+	})
+
+	handler1 := auth.NewMockHandler("handler1")
+	handler2 := auth.NewMockHandler("handler2")
+	handler2.SetToken(&auth.Token{
+		AccessToken: accessToken,
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(1 * time.Hour),
+	})
+
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(handler1))
+	require.NoError(t, registry.Register(handler2))
+	ctx := auth.WithRegistry(context.Background(), registry)
+
+	output, err := p.Execute(ctx, map[string]any{
+		"operation": "claims",
+		"scope":     "api://my-app/.default",
+		"handler":   "handler2",
+	})
+	require.NoError(t, err)
+
+	result := output.Data.(map[string]any)
+	assert.Equal(t, "handler2", result["handler"])
+
+	claims := result["claims"].(map[string]any)
+	assert.Equal(t, "handler2@example.com", claims["email"])
+
+	// Verify handler2 received the call, handler1 didn't
+	assert.Len(t, handler2.GetTokenCalls, 1)
+	assert.Empty(t, handler1.GetTokenCalls)
+}
+
+func TestIdentityProvider_Descriptor_HasScopeField(t *testing.T) {
+	p := NewIdentityProvider()
+	desc := p.Descriptor()
+
+	// Verify scope is in the input schema
+	assert.Contains(t, desc.Schema.Properties, "scope")
+
+	// Verify new output fields exist
+	outputSchema, ok := desc.OutputSchemas[provider.CapabilityFrom]
+	require.True(t, ok)
+	assert.Contains(t, outputSchema.Properties, "scopedToken")
+	assert.Contains(t, outputSchema.Properties, "tokenScope")
+	assert.Contains(t, outputSchema.Properties, "tokenType")
+	assert.Contains(t, outputSchema.Properties, "flow")
+	assert.Contains(t, outputSchema.Properties, "sessionId")
 }

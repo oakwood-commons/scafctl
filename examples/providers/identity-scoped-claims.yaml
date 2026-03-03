@@ -1,0 +1,5 @@
+# Identity provider - get claims from a scoped access token
+# Mints (or retrieves from cache) an access token for the given scope,
+# parses its JWT payload, and returns the claims.
+operation: claims
+scope: api://my-app/.default

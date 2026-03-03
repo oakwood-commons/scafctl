@@ -1,0 +1,113 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-identity-provider
+  version: 1.0.0
+  description: |
+    Functional tests for the identity provider using dry-run mode.
+    The identity provider requires active auth sessions for live tests;
+    each test case calls 'run provider identity' directly with --dry-run
+    so __output reflects the provider's own JSON output shape rather than
+    resolver keys (which would be empty under 'run resolver --dry-run').
+
+spec:
+  resolvers:
+    # Placeholder resolver so the solution parses correctly.
+    # Actual test cases below call 'run provider identity' directly.
+    _placeholder:
+      description: Placeholder — not used by any test case
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: identity-provider-tests
+
+  testing:
+    config:
+      skipBuiltins: [render-defaults, resolve-defaults]
+
+    cases:
+      _base:
+        description: Base template for identity provider dry-run tests
+        # Each test case overrides command+args; this just sets shared tags.
+        tags: [provider, identity, dry-run]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.dryRun == true
+
+      status-dry-run:
+        description: Verify dry-run status output shape
+        extends: [_base]
+        tags: [smoke]
+        command: [run, provider, identity]
+        args: ["--input", "operation=status", "--dry-run", "-o", "json"]
+        injectFile: false
+        assertions:
+          - expression: __output.data.operation == "status"
+          - expression: __output.data.authenticated == false
+          - expression: has(__output.data.identityType)
+
+      claims-dry-run:
+        description: Verify dry-run claims output shape
+        extends: [_base]
+        command: [run, provider, identity]
+        args: ["--input", "operation=claims", "--dry-run", "-o", "json"]
+        injectFile: false
+        assertions:
+          - expression: __output.data.operation == "claims"
+          - expression: __output.data.authenticated == false
+
+      groups-dry-run:
+        description: Verify dry-run groups output shape
+        extends: [_base]
+        command: [run, provider, identity]
+        args: ["--input", "operation=groups", "--dry-run", "-o", "json"]
+        injectFile: false
+        assertions:
+          - expression: __output.data.operation == "groups"
+          - expression: has(__output.data.groups)
+
+      list-dry-run:
+        description: Verify dry-run list output shape
+        extends: [_base]
+        command: [run, provider, identity]
+        args: ["--input", "operation=list", "--dry-run", "-o", "json"]
+        injectFile: false
+        assertions:
+          - expression: __output.data.operation == "list"
+          - expression: has(__output.data.handlers)
+
+      scoped-claims-dry-run:
+        description: Verify scoped claims dry-run includes scopedToken and tokenScope
+        extends: [_base]
+        tags: [smoke]
+        command: [run, provider, identity]
+        args: ["--input", "operation=claims", "--input", "scope=api://my-app/.default", "--dry-run", "-o", "json"]
+        injectFile: false
+        assertions:
+          - expression: __output.data.operation == "claims"
+          - expression: __output.data.scopedToken == true
+          - expression: __output.data.tokenScope == "api://my-app/.default"
+
+      scoped-status-dry-run:
+        description: Verify scoped status dry-run includes scopedToken and tokenScope
+        extends: [_base]
+        command: [run, provider, identity]
+        args: ["--input", "operation=status", "--input", "scope=https://management.azure.com/.default", "--input", "handler=entra", "--dry-run", "-o", "json"]
+        injectFile: false
+        assertions:
+          - expression: __output.data.operation == "status"
+          - expression: __output.data.scopedToken == true
+          - expression: __output.data.tokenScope == "https://management.azure.com/.default"
+          - expression: __output.data.handler == "entra"
+
+      scope-restriction-groups:
+        description: Verify scope is rejected for groups operation
+        command: [run, provider, identity]
+        args: ["--input", "operation=groups", "--input", "scope=api://my-app/.default", "-o", "json"]
+        injectFile: false
+        tags: [provider, identity]
+        assertions:
+          - expression: __exitCode != 0
+          - expression: __stderr.contains("scope is not supported")

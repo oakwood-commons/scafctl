@@ -1,0 +1,3 @@
+# Identity provider - check auth status
+operation: status
+handler: entra
