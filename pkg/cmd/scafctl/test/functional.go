@@ -14,6 +14,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
@@ -61,6 +62,9 @@ using CEL expressions, regex matching, substring checks, and golden-file
 snapshots.
 
 Examples:
+  # Auto-discover solution in current directory
+  scafctl test functional
+
   # Run all tests in a solution
   scafctl test functional -f ./solution.yaml
 
@@ -98,7 +102,7 @@ Examples:
 	}
 
 	// Register flags
-	cCmd.Flags().StringVarP(&opts.File, "file", "f", "", "Path to the solution file")
+	cCmd.Flags().StringVarP(&opts.File, "file", "f", "", "Solution file path (auto-discovered if not provided)")
 	cCmd.Flags().StringVar(&opts.TestsPath, "tests-path", "", "Path to directory containing solution files with tests")
 	cCmd.Flags().StringVarP(&opts.Output, "output", "o", "table", "Output format: table, json, yaml, quiet")
 	cCmd.Flags().StringVar(&opts.ReportFile, "report-file", "", "Path to write JUnit XML report")
@@ -129,19 +133,21 @@ func runFunctional(ctx context.Context, opts *FunctionalOptions) error {
 		w = writer.New(opts.IOStreams, opts.CliParams)
 	}
 
-	// Validate input
-	if opts.File == "" && opts.TestsPath == "" {
-		err := fmt.Errorf("either --file (-f) or --tests-path must be specified")
+	// Determine the path to discover solutions from.
+	// Priority: --tests-path > -f > auto-discover
+	testsPath := opts.TestsPath
+	if testsPath == "" {
+		testsPath = opts.File
+	}
+	if testsPath == "" {
+		testsPath = get.NewGetter().FindSolution()
+	}
+	if testsPath == "" {
+		err := fmt.Errorf("no solution path provided and no solution file found in default locations; use --file (-f) or --tests-path")
 		if w != nil {
 			w.Errorf("%s", err)
 		}
 		return exitcode.WithCode(err, exitcode.InvalidInput)
-	}
-
-	// Determine the path to discover solutions from.
-	testsPath := opts.TestsPath
-	if testsPath == "" {
-		testsPath = opts.File
 	}
 
 	// Watch mode — delegate to the watcher loop.

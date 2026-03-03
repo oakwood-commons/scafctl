@@ -13,6 +13,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
+	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -63,8 +64,7 @@ Examples:
 		},
 	}
 
-	cCmd.Flags().StringVarP(&opts.File, "file", "f", "", "Path to the solution file (required)")
-	_ = cCmd.MarkFlagRequired("file")
+	cCmd.Flags().StringVarP(&opts.File, "file", "f", "", "Path to the solution file (auto-discovered if not provided)")
 
 	return cCmd
 }
@@ -76,8 +76,19 @@ func runInit(ctx context.Context, opts *InitOptions) error {
 		w = writer.New(opts.IOStreams, opts.CliParams)
 	}
 
+	// Auto-discover solution file if not provided
+	filePath := opts.File
+	if filePath == "" {
+		filePath = get.NewGetter().FindSolution()
+	}
+	if filePath == "" {
+		err := fmt.Errorf("no solution path provided and no solution file found in default locations; use --file (-f)")
+		w.Errorf("%s", err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
+	}
+
 	// Read and parse the solution
-	data, err := os.ReadFile(opts.File)
+	data, err := os.ReadFile(filePath)
 	if err != nil {
 		w.Errorf("reading solution file: %s", err)
 		return exitcode.WithCode(fmt.Errorf("reading solution file: %w", err), exitcode.FileNotFound)
@@ -90,7 +101,7 @@ func runInit(ctx context.Context, opts *InitOptions) error {
 	}
 
 	// Build scaffold input from the parsed solution
-	fileDeps := discoverFileDepsFromSolution(&sol, opts.File)
+	fileDeps := discoverFileDepsFromSolution(&sol, filePath)
 	input := &soltesting.ScaffoldInput{
 		Resolvers:        sol.Spec.Resolvers,
 		Workflow:         sol.Spec.Workflow,
@@ -108,7 +119,7 @@ func runInit(ctx context.Context, opts *InitOptions) error {
 	}
 
 	// Write YAML header comment
-	fmt.Fprintf(opts.IOStreams.Out, "# Generated test scaffold for %s\n", opts.File)
+	fmt.Fprintf(opts.IOStreams.Out, "# Generated test scaffold for %s\n", filePath)
 	fmt.Fprintf(opts.IOStreams.Out, "# Paste this into your solution's spec section or a compose test file.\n")
 	fmt.Fprintf(opts.IOStreams.Out, "# Customize assertions and parameters to match your expected behavior.\n\n")
 	fmt.Fprint(opts.IOStreams.Out, string(out))

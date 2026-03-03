@@ -31,6 +31,12 @@ scafctl includes a built-in linter that checks solution YAML files for:
 scafctl lint -f solution.yaml
 ```
 
+If your solution file is in a well-known location (`solution.yaml`, `scafctl.yaml`, etc. in the current directory or `scafctl/`/`.scafctl/` subdirectories), you can omit `-f`:
+
+```bash
+scafctl lint
+```
+
 Output shows findings in a table with severity, rule, message, and location.
 
 ### JSON Output

@@ -158,9 +158,9 @@ func TestParseJWTClaims_EmailFallback(t *testing.T) {
 
 func TestParseJWTClaims_ClientIDPrecedence(t *testing.T) {
 	tests := []struct {
-		name     string
-		payload  map[string]any
-		wantID   string
+		name    string
+		payload map[string]any
+		wantID  string
 	}{
 		{
 			name:    "aud takes precedence",

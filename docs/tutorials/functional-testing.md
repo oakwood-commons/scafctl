@@ -49,6 +49,12 @@ Run the test:
 scafctl test functional -f solution.yaml
 ```
 
+If your solution file is named `solution.yaml` (or any other well-known name like `scafctl.yaml`) in the current directory or `scafctl/`/`.scafctl/` subdirectories, you can omit `-f` entirely:
+
+```bash
+scafctl test functional
+```
+
 Expected output:
 
 ```

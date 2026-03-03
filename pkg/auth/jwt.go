@@ -51,12 +51,12 @@ func ParseJWTClaims(rawJWT string) (*Claims, error) {
 	// Decode payload (base64url, part index 1)
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to decode payload: %v", ErrOpaqueToken, err)
+		return nil, fmt.Errorf("%w: failed to decode payload: %w", ErrOpaqueToken, err)
 	}
 
 	var raw jwtClaims
 	if err := json.Unmarshal(payload, &raw); err != nil {
-		return nil, fmt.Errorf("%w: failed to parse claims: %v", ErrOpaqueToken, err)
+		return nil, fmt.Errorf("%w: failed to parse claims: %w", ErrOpaqueToken, err)
 	}
 
 	// Resolve email: prefer email > preferred_username > upn > unique_name

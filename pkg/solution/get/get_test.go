@@ -561,14 +561,14 @@ func TestGetPossibleSolutionPaths(t *testing.T) {
 		paths := PossibleSolutionPaths()
 
 		// Check for some expected paths
-		// Note: empty folder creates paths like "/solution.yaml"
+		// Note: empty folder + filename produces bare "solution.yaml" (no leading slash)
 		expectedPaths := []string{
 			"scafctl/solution.yaml",
 			"scafctl/solution.yml",
 			".scafctl/solution.yaml",
-			"/solution.yaml", // Empty folder + filename
+			"solution.yaml", // Empty folder + filename
 			"scafctl/scafctl.yaml",
-			"/solution.json", // Empty folder + filename
+			"solution.json", // Empty folder + filename
 		}
 
 		for _, expected := range expectedPaths {

@@ -19,6 +19,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
+	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
@@ -79,10 +80,9 @@ func CommandInstall(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ st
 		},
 	}
 
-	cmd.Flags().StringVarP(&opts.File, "file", "f", "", "Path to solution file (required)")
+	cmd.Flags().StringVarP(&opts.File, "file", "f", "", "Path to solution file (auto-discovered if not provided)")
 	cmd.Flags().StringVar(&opts.Platform, "platform", "", "Target platform (default: current, e.g., linux/amd64)")
 	cmd.Flags().StringVar(&opts.CacheDir, "cache-dir", "", "Plugin cache directory (default: $XDG_CACHE_HOME/scafctl/plugins/)")
-	_ = cmd.MarkFlagRequired("file")
 
 	return cmd
 }
@@ -91,8 +91,19 @@ func runInstall(ctx context.Context, opts *InstallOptions) error {
 	w := writer.MustFromContext(ctx)
 	lgr := logger.FromContext(ctx)
 
+	// Auto-discover solution file if not provided
+	filePath := opts.File
+	if filePath == "" {
+		filePath = get.NewGetter().FindSolution()
+	}
+	if filePath == "" {
+		err := fmt.Errorf("no solution path provided and no solution file found in default locations; use --file (-f)")
+		w.Errorf("%s", err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
+	}
+
 	// Load the solution
-	sol, err := loadSolution(opts.File)
+	sol, err := loadSolution(filePath)
 	if err != nil {
 		w.Errorf("failed to load solution: %v", err)
 		return exitcode.WithCode(err, exitcode.InvalidInput)
@@ -104,7 +115,7 @@ func runInstall(ctx context.Context, opts *InstallOptions) error {
 	}
 
 	// Load lock file if available
-	lockFile, _ := bundler.LoadLockFile(filepath.Join(filepath.Dir(opts.File), bundler.DefaultLockFileName))
+	lockFile, _ := bundler.LoadLockFile(filepath.Join(filepath.Dir(filePath), bundler.DefaultLockFileName))
 	var lockPlugins []bundler.LockPlugin
 	if lockFile != nil {
 		lockPlugins = lockFile.Plugins
