@@ -61,7 +61,7 @@ Use --overwrite to replace existing secrets.`,
 			}
 
 			// Detect format and decrypt if needed
-			var importData ExportFormat
+			var importData secretcrypto.ExportFormat
 			if bytes.HasPrefix(fileData, []byte(secretcrypto.EncryptedHeader)) {
 				// Encrypted format
 				fmt.Fprint(ioStreams.ErrOut, "Enter decryption password: ")
@@ -107,10 +107,10 @@ Use --overwrite to replace existing secrets.`,
 			}
 
 			// Filter out internal secrets
-			userSecrets := make([]ExportedSecret, 0, len(importData.Secrets))
+			userSecrets := make([]secretcrypto.ExportedSecret, 0, len(importData.Secrets))
 			skippedInternal := 0
 			for _, secret := range importData.Secrets {
-				if err := ValidateUserSecretName(secret.Name); err != nil {
+				if err := secrets.ValidateUserSecretName(secret.Name); err != nil {
 					w.Warningf("Skipping internal secret: %s\n", secret.Name)
 					skippedInternal++
 					continue

@@ -26,11 +26,6 @@ import (
 // Supported platforms for --platform flag.
 var supportedPlatforms = paths.SupportedPlatforms
 
-// PathInfo is an alias for paths.PathInfo.
-//
-// Deprecated: Use paths.PathInfo from pkg/paths instead.
-type PathInfo = paths.PathInfo
-
 // PathsOptions holds options for the config paths command.
 type PathsOptions struct {
 	IOStreams      *terminal.IOStreams
@@ -138,11 +133,11 @@ func (o *PathsOptions) Run(ctx context.Context) error {
 		targetPlatform = runtime.GOOS
 	}
 
-	var pathInfos []PathInfo
+	var pathInfos []paths.PathInfo
 
 	if isIllustrative {
 		// Generate illustrative paths for the target platform
-		pathInfos = getIllustrativePaths(targetPlatform)
+		pathInfos = paths.IllustrativePaths(targetPlatform)
 	} else {
 		// Get real paths for current platform
 		pathInfos = o.getRealPaths()
@@ -187,13 +182,6 @@ func (o *PathsOptions) Run(ctx context.Context) error {
 }
 
 // getRealPaths returns the actual paths for the current platform.
-func (o *PathsOptions) getRealPaths() []PathInfo {
+func (o *PathsOptions) getRealPaths() []paths.PathInfo {
 	return paths.AllPaths()
-}
-
-// getIllustrativePaths returns illustrative default paths for a given platform.
-//
-// Deprecated: Use paths.IllustrativePaths from pkg/paths instead.
-func getIllustrativePaths(platform string) []PathInfo {
-	return paths.IllustrativePaths(platform)
 }

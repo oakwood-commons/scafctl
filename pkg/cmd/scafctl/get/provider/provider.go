@@ -147,7 +147,7 @@ func (o *Options) RunListProviders(ctx context.Context) error {
 			"description":  desc.Description,
 			"capabilities": CapabilitiesToStrings(desc.Capabilities),
 			"category":     desc.Category,
-			"deprecated":   desc.Deprecated, //nolint:staticcheck // Intentionally display deprecated status
+			"deprecated":   desc.IsDeprecated,
 			"beta":         desc.Beta,
 		})
 	}
@@ -244,7 +244,7 @@ func (o *Options) printProviderDetail(desc *provider.Descriptor) error {
 	if desc.Beta {
 		fmt.Fprintln(out, warnStyle("⚠ This provider is in BETA"))
 	}
-	if desc.Deprecated { //nolint:staticcheck // Intentionally showing deprecated status
+	if desc.IsDeprecated {
 		fmt.Fprintln(out, errorStyle("⚠ This provider is DEPRECATED"))
 	}
 	fmt.Fprintln(out)

@@ -107,9 +107,9 @@ func TestDescriptor_Complete(t *testing.T) {
 				YAML:        "provider: test-provider\ninputs:\n  name: my-resource",
 			},
 		},
-		Deprecated:  false,
-		Beta:        true,
-		Maintainers: []Contact{{Name: "Test User", Email: "test@example.com"}},
+		IsDeprecated: false,
+		Beta:         true,
+		Maintainers:  []Contact{{Name: "Test User", Email: "test@example.com"}},
 	}
 
 	assert.Equal(t, "test-provider", descriptor.Name)

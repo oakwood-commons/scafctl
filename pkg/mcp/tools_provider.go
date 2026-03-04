@@ -117,7 +117,7 @@ func (s *Server) handleListProviders(_ context.Context, request mcp.CallToolRequ
 			Description:  d.Description,
 			Category:     d.Category,
 			Capabilities: caps,
-			Deprecated:   d.Deprecated, //nolint:staticcheck // Intentionally expose deprecated status
+			Deprecated:   d.IsDeprecated,
 			Beta:         d.Beta,
 		}
 		if d.Version != nil {

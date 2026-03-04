@@ -20,6 +20,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
@@ -321,7 +322,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// Build and write output
 	var executionData map[string]any
 	if o.ShowExecution {
-		executionData = buildExecutionData(resolverCtx, resolvers, resolverElapsed)
+		executionData = execute.BuildExecutionData(resolverCtx, resolvers, resolverElapsed)
 	}
 	return o.writeActionOutput(ctx, result, executionData)
 }

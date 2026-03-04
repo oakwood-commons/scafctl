@@ -106,7 +106,7 @@ func (o *ProviderOptions) printProviderExplanation(w *writer.Writer, desc *provi
 	}
 
 	// Status flags
-	if desc.Deprecated { //nolint:staticcheck // Intentionally display deprecated status
+	if desc.IsDeprecated {
 		w.Warningf("⚠️  This provider is DEPRECATED")
 	}
 	if desc.Beta {

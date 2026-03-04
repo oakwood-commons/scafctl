@@ -33,7 +33,7 @@ scafctl <verb> <kind> <name[@version(or constraint)]> [flags]
 | `snapshot show/diff` | ✅ Implemented | |
 | `secrets *` | ✅ Implemented | list, get, set, delete, exists, export, import, rotate |
 | `auth *` | ✅ Implemented | login, logout, status, token |
-| `resolver graph` | ✅ Implemented | Standalone graph visualization |
+| `resolver graph` | ❌ Removed | Use `render solution --graph` or `run resolver --graph` instead |
 | `build solution` | ✅ Implemented | Catalog feature |
 | `catalog list/inspect/delete/prune` | ✅ Implemented | Catalog management |
 | `catalog save/load` | ✅ Implemented | Offline distribution |
@@ -742,17 +742,8 @@ scafctl auth logout entra
 
 ## Resolver Commands
 
-Standalone resolver utilities:
-
-~~~bash
-# Visualize resolver dependency graph from file
-scafctl resolver graph -f solution.yaml
-
-# Different output formats
-scafctl resolver graph -f solution.yaml --format=dot
-scafctl resolver graph -f solution.yaml --format=mermaid
-scafctl resolver graph -f solution.yaml --format=json
-~~~
+> **Note**: The standalone `scafctl resolver graph` command has been removed.
+> Use `scafctl render solution --graph` or `scafctl run resolver --graph` instead.
 
 ### Running Resolvers
 
@@ -952,3 +943,126 @@ scafctl examples get resolvers/hello-world.yaml -o output.yaml
 ~~~
 
 Aliases: `ls` for list
+
+---
+
+## Command Grammar: Verb-Noun vs Noun-Verb
+
+### Current State of scafctl
+
+scafctl uses two distinct command grammar patterns:
+
+**Verb-Noun** (kubectl-style) — the verb is the top-level command, the noun follows:
+
+| Command | Verb | Noun |
+|---------|------|------|
+| `scafctl run solution` | run | solution |
+| `scafctl run resolver` | run | resolver |
+| `scafctl get solution` | get | solution |
+| `scafctl render solution` | render | solution |
+| `scafctl explain solution` | explain | solution |
+| `scafctl build solution` | build | solution |
+| `scafctl new solution` | new | solution |
+| `scafctl push solution` | push | solution |
+| `scafctl pull solution` | pull | solution |
+| `scafctl tag solution` | tag | solution |
+
+**Noun-Verb** — the noun is the top-level command, the verb follows:
+
+| Command | Noun | Verb |
+|---------|------|------|
+| `scafctl secrets get` | secrets | get |
+| `scafctl secrets set` | secrets | set |
+| `scafctl secrets list` | secrets | list |
+| `scafctl secrets delete` | secrets | delete |
+| `scafctl auth login` | auth | login |
+| `scafctl auth logout` | auth | logout |
+| `scafctl auth status` | auth | status |
+| `scafctl config view` | config | view |
+| `scafctl config set` | config | set |
+| `scafctl config get` | config | get |
+| `scafctl catalog list` | catalog | list |
+| `scafctl catalog inspect` | catalog | inspect |
+| `scafctl snapshot show` | snapshot | show |
+| `scafctl snapshot diff` | snapshot | diff |
+| `scafctl lint rules` | lint | rules |
+| `scafctl lint explain` | lint | explain |
+| `scafctl eval cel` | eval | cel |
+| `scafctl eval template` | eval | template |
+| `scafctl examples list` | examples | list |
+| `scafctl examples get` | examples | get |
+| `scafctl cache clean` | cache | clean |
+| `scafctl plugins list` | plugins | list |
+| `scafctl bundle create` | bundle | create |
+| `scafctl vendor sync` | vendor | sync |
+
+**Standalone** (no sub-noun or sub-verb):
+
+| Command | Notes |
+|---------|-------|
+| `scafctl version` | informational |
+| `scafctl mcp` | launches MCP server |
+| `scafctl test` | runs solution tests |
+
+---
+
+### What Major CLIs Do
+
+Most successful CLIs converge on the same hybrid pattern scafctl already uses:
+
+| CLI | Core Domain Objects | Service/Infrastructure | Example |
+|-----|---------------------|------------------------|---------|
+| **kubectl** | verb-noun: `get pods`, `delete svc`, `apply -f` | noun-verb: `config use-context`, `auth can-i` | Domain is verb-noun; plumbing is noun-verb |
+| **docker** | verb-noun: `run`, `build`, `pull`, `push` | noun-verb: `network create`, `volume ls`, `system prune` | Top-level verbs act on images/containers; subsystems are noun-verb |
+| **git** | verb-first: `clone`, `commit`, `push`, `pull` | noun-verb: `remote add`, `branch delete`, `stash pop` | Core workflow is verbs; ancillary resource management is noun-verb |
+| **gh** (GitHub CLI) | verb-noun: `pr create`, `issue list` | noun-verb: `auth login`, `config set`, `secret set` | Domain objects verb-noun; infrastructure noun-verb |
+| **az** (Azure CLI) | noun-verb: `az vm create`, `az storage blob upload` | noun-verb throughout | Purely noun-verb (resource-group style) |
+| **gcloud** | noun-verb: `gcloud compute instances create` | noun-verb throughout | Purely noun-verb (resource hierarchy) |
+| **terraform** | verb-first: `plan`, `apply`, `destroy` | — | No sub-resources, single verb layer |
+| **helm** | verb-noun: `install`, `upgrade`, `rollback` | noun-verb: `repo add`, `plugin install` | Charts are verb-noun; supporting systems noun-verb |
+
+**Observation**: The most widely-used developer CLIs (kubectl, docker, git, gh, helm) all use a **hybrid** model. Only cloud-provider CLIs (az, gcloud) that model deep resource hierarchies go fully noun-verb. Purely verb-noun CLIs (terraform) tend to have a flat, single-resource domain.
+
+---
+
+### Best Practice: The Delineation Rule
+
+The hybrid pattern is not arbitrary — it follows a clear principle:
+
+> **Use verb-noun for domain operations on core business objects.
+> Use noun-verb for infrastructure, plumbing, and service management.**
+
+The deciding question: **"Is this a core workflow action the user came here to do, or is it managing supporting infrastructure?"**
+
+| Category | Pattern | Rationale | scafctl examples |
+|----------|---------|-----------|-----------------|
+| **Core domain operations** | `<verb> <kind>` | The user thinks in terms of *what they want to do*: run, get, render, build. The kind is just a target. | `run solution`, `get provider`, `render solution`, `build solution`, `new solution` |
+| **Infrastructure / services** | `<noun> <action>` | The user thinks in terms of *which subsystem* they need to manage. The subsystem is the anchor; actions within it are secondary. | `config set`, `secrets get`, `auth login`, `catalog list`, `cache clean` |
+| **Standalone utilities** | `<verb>` or `<noun>` | Single-purpose commands that don't need a sub-resource. | `version`, `mcp`, `test` |
+
+**Why this works:**
+
+1. **Discoverability** — Users can type `scafctl` and immediately see the core verbs (`run`, `get`, `render`) alongside the subsystems (`config`, `secrets`, `auth`). The top-level command list reads like a table-of-contents.
+2. **Composability** — Verb-noun allows the same verb to apply to multiple kinds (`run solution`, `run resolver`). Noun-verb allows subsystems to have independent, self-documenting action sets.
+3. **Scalability** — New kinds slot into existing verbs. New subsystem features slot into their noun group. Neither pollutes the other.
+4. **Precedent** — kubectl, docker, git, gh, and helm all draw the same line, so users already have muscle memory for the split.
+
+---
+
+### Verdict on scafctl
+
+**The current hybrid structure is correct. No changes needed.**
+
+scafctl already follows the established delineation:
+
+- **Verb-noun** for core domain operations — `run`, `get`, `render`, `explain`, `build`, `new`, `push`, `pull`, `tag` all act on domain kinds (solution, provider, resolver).
+- **Noun-verb** for infrastructure/services — `config`, `secrets`, `auth`, `catalog`, `snapshot`, `lint`, `eval`, `examples`, `cache`, `plugins`, `bundle`, `vendor` are all subsystem groups with their own actions.
+- **Standalone** for single-purpose utilities — `version`, `mcp`, `test`.
+
+This matches how kubectl, docker, git, gh, and helm structure their CLIs. Attempting to "unify" to pure verb-noun or pure noun-verb would:
+
+- **Break user expectations** from other tools.
+- **Create awkward commands** — `scafctl manage secrets get` (verb-noun forced) or `scafctl solution run` (noun-verb forced for domain ops) reads worse in both cases.
+- **Lose discoverability** — a flat verb-only top level hides subsystem structure; a flat noun-only top level hides the core workflow.
+
+The rule of thumb going forward: if adding a new top-level command, ask *"Is the user performing a core domain action on a kind, or managing a subsystem?"* — verb-noun for the former, noun-verb for the latter.

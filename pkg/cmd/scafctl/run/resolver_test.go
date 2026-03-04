@@ -18,6 +18,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -988,7 +989,7 @@ func TestResolverProviderName(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, tt.expected, resolverProviderName(tt.resolver))
+			assert.Equal(t, tt.expected, execute.ResolverProviderName(tt.resolver))
 		})
 	}
 }
@@ -1057,7 +1058,7 @@ func TestBuildExecutionData(t *testing.T) {
 
 	opts := &ResolverOptions{}
 	_ = opts // verify type exists
-	data := buildExecutionData(resolverCtx, resolvers, 300*time.Millisecond)
+	data := execute.BuildExecutionData(resolverCtx, resolvers, 300*time.Millisecond)
 
 	// Check top-level sections
 	assert.Contains(t, data, "resolvers")
@@ -1114,7 +1115,7 @@ func TestBuildExecutionData_MissingResult(t *testing.T) {
 		},
 	}
 
-	data := buildExecutionData(resolverCtx, resolvers, 100*time.Millisecond)
+	data := execute.BuildExecutionData(resolverCtx, resolvers, 100*time.Millisecond)
 
 	resolversMeta := data["resolvers"].(map[string]any)
 	missingMeta, ok := resolversMeta["missing"].(map[string]any)
@@ -1157,7 +1158,7 @@ func TestBuildExecutionData_WithFailedAttempts(t *testing.T) {
 
 	opts := &ResolverOptions{}
 	_ = opts // verify type exists
-	data := buildExecutionData(resolverCtx, resolvers, 100*time.Millisecond)
+	data := execute.BuildExecutionData(resolverCtx, resolvers, 100*time.Millisecond)
 
 	resolversMeta := data["resolvers"].(map[string]any)
 	fbMeta := resolversMeta["fallback"].(map[string]any)
@@ -1223,7 +1224,7 @@ func TestBuildExecutionData_CELDependencies(t *testing.T) {
 
 	opts := &ResolverOptions{}
 	_ = opts // verify type exists
-	data := buildExecutionData(resolverCtx, resolvers, 20*time.Millisecond)
+	data := execute.BuildExecutionData(resolverCtx, resolvers, 20*time.Millisecond)
 
 	resolversMeta := data["resolvers"].(map[string]any)
 	hostnameMeta := resolversMeta["hostname"].(map[string]any)

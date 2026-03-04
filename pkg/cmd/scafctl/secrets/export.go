@@ -20,16 +20,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ExportFormat is an alias for secretcrypto.ExportFormat.
-//
-// Deprecated: Use secretcrypto.ExportFormat from pkg/secrets/secretcrypto instead.
-type ExportFormat = secretcrypto.ExportFormat
-
-// ExportedSecret is an alias for secretcrypto.ExportedSecret.
-//
-// Deprecated: Use secretcrypto.ExportedSecret from pkg/secrets/secretcrypto instead.
-type ExportedSecret = secretcrypto.ExportedSecret
-
 // CommandExport creates the 'secrets export' command.
 func CommandExport(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Command {
 	var (
@@ -80,7 +70,7 @@ By default, internal secrets (scafctl.*) are excluded.`,
 			}
 
 			// Filter secrets based on --all flag
-			filtered := FilterSecrets(names, allFlag)
+			filtered := secrets.FilterSecrets(names, allFlag)
 
 			if len(filtered) == 0 {
 				w.Warning("No secrets to export")
@@ -88,10 +78,10 @@ By default, internal secrets (scafctl.*) are excluded.`,
 			}
 
 			// Retrieve all secret values
-			exportData := ExportFormat{
+			exportData := secretcrypto.ExportFormat{
 				Version:    secretcrypto.ExportVersion,
 				ExportedAt: time.Now().UTC().Format(time.RFC3339),
-				Secrets:    make([]ExportedSecret, 0, len(filtered)),
+				Secrets:    make([]secretcrypto.ExportedSecret, 0, len(filtered)),
 			}
 
 			for _, name := range filtered {
@@ -100,7 +90,7 @@ By default, internal secrets (scafctl.*) are excluded.`,
 					w.Warningf("Skipping secret '%s': %v\n", name, err)
 					continue
 				}
-				exportData.Secrets = append(exportData.Secrets, ExportedSecret{
+				exportData.Secrets = append(exportData.Secrets, secretcrypto.ExportedSecret{
 					Name:  name,
 					Value: string(value),
 				})

@@ -42,7 +42,7 @@ If the secret already exists, use --overwrite to replace it.`,
 			name := args[0]
 
 			// Validate name
-			if err := ValidateUserSecretName(name); err != nil {
+			if err := secrets.ValidateUserSecretName(name); err != nil {
 				w.Errorf("%v", err)
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
