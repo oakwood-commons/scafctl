@@ -158,7 +158,7 @@ func TestDescriptorConversion(t *testing.T) {
 				SensitiveFields: []string{"apiKey", "token"},
 				Tags:            []string{"http", "api", "network"},
 				Icon:            "https://example.com/icon.png",
-				Deprecated:      true,
+				IsDeprecated:    true,
 				Beta:            false,
 				Capabilities:    []provider.Capability{provider.CapabilityFrom, provider.CapabilityTransform},
 				Links: []provider.Link{
@@ -217,7 +217,7 @@ func TestDescriptorConversion(t *testing.T) {
 			assert.Equal(t, tt.descriptor.SensitiveFields, converted.SensitiveFields)
 			assert.Equal(t, tt.descriptor.Tags, converted.Tags)
 			assert.Equal(t, tt.descriptor.Icon, converted.Icon)
-			assert.Equal(t, tt.descriptor.Deprecated, converted.Deprecated) //nolint:staticcheck // field is intentionally tested for gRPC roundtrip
+			assert.Equal(t, tt.descriptor.IsDeprecated, converted.IsDeprecated)
 			assert.Equal(t, tt.descriptor.Beta, converted.Beta)
 			assert.Equal(t, len(tt.descriptor.Links), len(converted.Links))
 			for i, link := range tt.descriptor.Links {

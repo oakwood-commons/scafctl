@@ -34,7 +34,7 @@ func CommandDelete(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *co
 			name := args[0]
 
 			// Validate name
-			if err := ValidateSecretName(name, allFlag); err != nil {
+			if err := secrets.ValidateSecretName(name, allFlag); err != nil {
 				w.Errorf("%v", err)
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
@@ -60,7 +60,7 @@ func CommandDelete(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *co
 			}
 
 			// Warn about internal secret deletion
-			if IsInternalSecret(name) {
+			if secrets.IsInternalSecret(name) {
 				w.Warning("⚠️  WARNING: This is an internal secret managed by scafctl.")
 				w.Warning("   Deleting it may break authentication or other functionality.")
 			}

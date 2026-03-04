@@ -16,6 +16,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -277,7 +278,7 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 	if reg != nil {
 		lookup = reg.DescriptorLookup()
 	}
-	resolvers := filterResolversWithDependencies(allResolvers, o.Names, lookup)
+	resolvers := execute.FilterResolversWithDependencies(allResolvers, o.Names, lookup)
 
 	// Validate requested names exist
 	if len(o.Names) > 0 {
@@ -339,7 +340,7 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 
 	// Include __execution metadata unless --hide-execution is set
 	if !o.HideExecution {
-		executionData := buildExecutionData(resolverCtx, resolvers, elapsed)
+		executionData := execute.BuildExecutionData(resolverCtx, resolvers, elapsed)
 
 		// Build and embed the resolver dependency graph
 		graph, graphErr := resolver.BuildGraph(resolvers, lookup)
@@ -364,7 +365,7 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		}
 
 		// Embed provider usage summary
-		executionData["providerSummary"] = buildProviderSummary(resolverCtx, resolvers)
+		executionData["providerSummary"] = execute.BuildProviderSummary(resolverCtx, resolvers)
 
 		results["__execution"] = executionData
 	}
@@ -437,7 +438,7 @@ func buildDryRunPlan(phases []*resolver.PhaseGroup, resolvers []*resolver.Resolv
 		}
 
 		resolverInfo[r.Name] = map[string]any{
-			"provider":         resolverProviderName(r),
+			"provider":         execute.ResolverProviderName(r),
 			"dependencies":     deps,
 			"configuredPhases": configuredPhases,
 		}
@@ -468,7 +469,7 @@ func (o *ResolverOptions) showResolverGraph(ctx context.Context, resolvers []*re
 		return o.exitWithCode(ctx, fmt.Errorf("failed to build dependency graph: %w", err), exitcode.InvalidInput)
 	}
 
-	if err := renderGraph(o.IOStreams.Out, graph, graph, o.GraphFormat); err != nil {
+	if err := execute.RenderGraph(o.IOStreams.Out, graph, graph, o.GraphFormat); err != nil {
 		return o.exitWithCode(ctx, fmt.Errorf("failed to render graph: %w", err), exitcode.GeneralError)
 	}
 

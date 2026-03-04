@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	celdetail "github.com/oakwood-commons/scafctl/pkg/celexp/detail"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/stretchr/testify/assert"
@@ -203,7 +204,7 @@ func TestBuildFunctionDetailOutput(t *testing.T) {
 		},
 	}
 
-	result := buildFunctionDetailOutput(fn)
+	result := celdetail.BuildFunctionDetail(fn)
 	assert.Equal(t, "test", result["name"])
 	assert.Equal(t, true, result["custom"])
 	assert.Equal(t, "test desc", result["description"])
@@ -220,7 +221,7 @@ func TestBuildFunctionDetailOutput(t *testing.T) {
 func TestBuildFunctionListOutput(t *testing.T) {
 	t.Parallel()
 	funcs := testFuncs()
-	result := buildFunctionListOutput(funcs)
+	result := celdetail.BuildFunctionList(funcs)
 	assert.Len(t, result, 2)
 	assert.Equal(t, "test.custom", result[0]["name"])
 	assert.Equal(t, "test.builtin", result[1]["name"])

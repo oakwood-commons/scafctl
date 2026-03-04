@@ -24,16 +24,6 @@ type InfoOptions struct {
 	flags.KvxOutputFlags
 }
 
-// Info is an alias for cache.Info.
-//
-// Deprecated: Use cache.Info from pkg/cache instead.
-type Info = cachelib.Info
-
-// InfoOutput is an alias for cache.InfoOutput.
-//
-// Deprecated: Use cache.InfoOutput from pkg/cache instead.
-type InfoOutput = cachelib.InfoOutput
-
 // CommandInfo creates the info command.
 func CommandInfo(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
 	options := &InfoOptions{
@@ -73,7 +63,7 @@ func runInfo(ctx context.Context, _ *InfoOptions, outputOpts *kvx.OutputOptions)
 	w := writer.MustFromContext(ctx)
 
 	// Collect cache info
-	caches := []Info{
+	caches := []cachelib.Info{
 		cachelib.GetCacheInfo("HTTP Cache", paths.HTTPCacheDir(), "HTTP response cache"),
 		cachelib.GetCacheInfo("Build Cache", paths.BuildCacheDir(), "Incremental build fingerprints"),
 	}
@@ -86,7 +76,7 @@ func runInfo(ctx context.Context, _ *InfoOptions, outputOpts *kvx.OutputOptions)
 		totalFiles += cache.FileCount
 	}
 
-	output := InfoOutput{
+	output := cachelib.InfoOutput{
 		Caches:     caches,
 		TotalSize:  totalSize,
 		TotalHuman: cachelib.FormatBytes(totalSize),

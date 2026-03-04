@@ -19,6 +19,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/parameterprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/staticprovider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -247,7 +248,7 @@ func TestCalculateValueSize(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			size := calculateValueSize(tt.value)
+			size := execute.CalculateValueSize(tt.value)
 			assert.GreaterOrEqual(t, size, tt.minSize)
 			assert.LessOrEqual(t, size, tt.maxSize)
 		})

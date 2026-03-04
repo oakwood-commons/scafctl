@@ -37,7 +37,7 @@ func BuildProviderDetail(desc provider.Descriptor) map[string]any {
 	if desc.Icon != "" {
 		output["icon"] = desc.Icon
 	}
-	if desc.Deprecated { //nolint:staticcheck // Intentionally display deprecated status
+	if desc.IsDeprecated {
 		output["deprecated"] = true
 	}
 	if desc.Beta {

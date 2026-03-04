@@ -537,7 +537,7 @@ func TestBuildProviderDetail(t *testing.T) {
 				Description:  "Deprecated description",
 				Capabilities: []provider.Capability{provider.CapabilityFrom},
 				MockBehavior: "Test mock behavior",
-				Deprecated:   true,
+				IsDeprecated: true,
 			},
 			checkKeys: []string{"deprecated"},
 			checkVals: map[string]any{
