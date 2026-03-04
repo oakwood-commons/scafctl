@@ -1,0 +1,117 @@
+# Template Directory Rendering Example
+#
+# Demonstrates the complete directory→render→write pipeline:
+# 1. Read a directory tree of .tpl template files (directory provider)
+# 2. Batch-render all templates with shared variables (go-template render-tree)
+# 3. Write all rendered files preserving structure, stripping .tpl extension
+#    (file provider write-tree with outputPath)
+#
+# This is the recommended pattern for scaffolding projects that use a directory
+# of templates spanning multiple subdirectories.
+#
+# Run:
+#   scafctl run solution -f examples/solutions/template-directory/solution.yaml
+#
+# After running, check the output:
+#   find ./output -type f
+#   cat ./output/k8s/deployment.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: template-directory-rendering
+  version: 1.0.0
+  description: |
+    Render a directory tree of Go templates into final files, preserving
+    directory structure and stripping the .tpl extension from output paths.
+
+spec:
+  resolvers:
+    # -------------------------------------------------------------------------
+    # Step 1: Define template variables
+    # -------------------------------------------------------------------------
+    vars:
+      description: Shared variables injected into every template
+      type: any
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                appName: myapp
+                appVersion: "1.2.0"
+                namespace: production
+                environment: prod
+                replicas: 3
+                registry: ghcr.io/myorg
+                containerPort: 8080
+                servicePort: 80
+                serviceType: ClusterIP
+                cpuRequest: "100m"
+                cpuLimit: "500m"
+                memoryRequest: "128Mi"
+                memoryLimit: "512Mi"
+                logLevel: info
+                dbHost: postgres.svc.cluster.local
+                dbPort: 5432
+                dbName: myapp_prod
+                dbPoolSize: 20
+                cacheEnabled: true
+                cacheTTL: "300s"
+
+    # -------------------------------------------------------------------------
+    # Step 2: Read template files from the templates/ directory
+    # -------------------------------------------------------------------------
+    templateFiles:
+      description: Read all .tpl files recursively, including their content
+      type: any
+      resolve:
+        with:
+          - provider: directory
+            inputs:
+              operation: list
+              path: examples/solutions/template-directory/templates
+              recursive: true
+              filterGlob: "*.tpl"
+              includeContent: true
+
+    # -------------------------------------------------------------------------
+    # Step 3: Render all templates in one batch using render-tree
+    # -------------------------------------------------------------------------
+    rendered:
+      description: Batch-render every template file with the shared variables
+      type: any
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              operation: render-tree
+              entries:
+                expr: '_.templateFiles.entries'
+              data:
+                rslvr: vars
+
+  # ===========================================================================
+  # ACTIONS: Write rendered files to disk
+  # ===========================================================================
+  workflow:
+    actions:
+      # -----------------------------------------------------------------------
+      # Step 4: Write all rendered files, stripping the .tpl extension
+      # -----------------------------------------------------------------------
+      write-rendered-files:
+        description: >
+          Write the rendered templates under ./output, preserving the directory
+          structure and removing the .tpl suffix from each file name.
+        provider: file
+        inputs:
+          operation: write-tree
+          basePath: ./output
+          entries:
+            rslvr: rendered
+          # Strip the .tpl extension:
+          #   k8s/deployment.yaml.tpl → k8s/deployment.yaml
+          #   config/app.yaml.tpl     → config/app.yaml
+          #   README.md.tpl           → README.md
+          outputPath: >-
+            {{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}

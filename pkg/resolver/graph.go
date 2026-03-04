@@ -92,7 +92,7 @@ func extractDepsFromExpression(expr string, deps map[string]bool) {
 	// Use existing CEL expression parsing functionality
 	celExpr := celexp.Expression(expr)
 
-	// Extract all _.resolverName references
+	// Extract all _.resolverName and _["resolverName"] references
 	vars, err := celExpr.GetUnderscoreVariables()
 	if err != nil {
 		// If parsing fails, skip dependency extraction for this expression
@@ -142,8 +142,8 @@ func extractDepsFromValueRef(ref *ValueRef, deps map[string]bool) {
 func extractDepsFromLiteral(literal any, deps map[string]bool) {
 	switch v := literal.(type) {
 	case string:
-		// Check if the string contains CEL-like expressions (_.something patterns)
-		if strings.Contains(v, "_.") {
+		// Check if the string contains CEL-like expressions (_.something or _["something"] patterns)
+		if strings.Contains(v, "_.") || strings.Contains(v, "_[") {
 			extractDepsFromExpression(v, deps)
 		}
 		// Check if the string contains Go template syntax ({{ and }})

@@ -67,6 +67,28 @@ func findProjectRoot() string {
 	}
 }
 
+// copyDir recursively copies a directory tree from src to dst.
+func copyDir(src, dst string) error {
+	return filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0o644)
+	})
+}
+
 func runScafctl(t *testing.T, args ...string) (stdout, stderr string, exitCode int) {
 	t.Helper()
 	return runScafctlInDir(t, findProjectRoot(), args...)
@@ -1130,6 +1152,83 @@ func TestIntegration_RunSolution_K8sClusters(t *testing.T) {
 			assert.Contains(t, string(content), "kind: ResourceQuota", "manifest should contain ResourceQuota")
 		}
 	}
+}
+
+func TestIntegration_RunSolution_TemplateDirectory(t *testing.T) {
+	// Tests the directory → render-tree → write-tree pipeline end-to-end.
+	// Reads .tpl templates, renders them with shared vars, writes output
+	// stripping the .tpl extension and preserving directory structure.
+	projectRoot := findProjectRoot()
+	outputDir := t.TempDir()
+	solutionDir := t.TempDir()
+
+	// The solution references $OUTPUT_DIR as basePath — we inject it via env
+	// by rewriting the solution to use a concrete path.
+	solutionSrc, err := os.ReadFile(filepath.Join(projectRoot,
+		"tests/integration/solutions/template-directory/solution.yaml"))
+	require.NoError(t, err)
+
+	solutionContent := strings.ReplaceAll(string(solutionSrc), "$OUTPUT_DIR", outputDir)
+	tmpSolution := filepath.Join(solutionDir, "solution.yaml")
+	err = os.WriteFile(tmpSolution, []byte(solutionContent), 0o644)
+	require.NoError(t, err)
+
+	// Copy the templates directory next to the solution so relative path "templates" works
+	srcTemplates := filepath.Join(projectRoot, "tests/integration/solutions/template-directory/templates")
+	dstTemplates := filepath.Join(solutionDir, "templates")
+	err = copyDir(srcTemplates, dstTemplates)
+	require.NoError(t, err)
+
+	stdout, stderr, exitCode := runScafctlInDir(t, solutionDir,
+		"run", "solution",
+		"-f", tmpSolution,
+	)
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstderr: %s", exitCode, stderr)
+
+	// Verify output files exist with correct content
+	type expectedFile struct {
+		path     string
+		contains []string
+	}
+	expected := []expectedFile{
+		{
+			path:     "k8s/deployment.yaml",
+			contains: []string{"name: test-app", "namespace: test-ns", "replicas: 2"},
+		},
+		{
+			path:     "k8s/service.yaml",
+			contains: []string{"name: test-app-svc", "namespace: test-ns", "port: 8080"},
+		},
+		{
+			path:     "config/app.yaml",
+			contains: []string{"port: 8080", "level: debug"},
+		},
+		{
+			path:     "README.md",
+			contains: []string{"# test-app", "Version: 2.0.0"},
+		},
+	}
+
+	for _, ef := range expected {
+		fullPath := filepath.Join(outputDir, ef.path)
+		assert.FileExists(t, fullPath, "expected file %s", ef.path)
+
+		content, readErr := os.ReadFile(fullPath)
+		if assert.NoError(t, readErr, "reading %s", ef.path) {
+			for _, substr := range ef.contains {
+				assert.Contains(t, string(content), substr,
+					"file %s should contain %q", ef.path, substr)
+			}
+		}
+	}
+
+	// Ensure .tpl files do NOT exist — extension should be stripped
+	assert.NoFileExists(t, filepath.Join(outputDir, "k8s/deployment.yaml.tpl"))
+	assert.NoFileExists(t, filepath.Join(outputDir, "README.md.tpl"))
 }
 
 func TestIntegration_RunSolution_RetryIfWithCommandNotFound(t *testing.T) {

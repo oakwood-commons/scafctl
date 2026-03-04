@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
@@ -42,11 +44,11 @@ func NewFileProvider() *FileProvider {
 				provider.CapabilityAction,    // write, delete operations
 				provider.CapabilityTransform, // transform operations on file content
 			},
-			Schema: schemahelper.ObjectSchema([]string{"operation", "path"}, map[string]*jsonschema.Schema{
+			Schema: schemahelper.ObjectSchema([]string{"operation"}, map[string]*jsonschema.Schema{
 				"operation": schemahelper.StringProp("Operation to perform",
 					schemahelper.WithExample("read"),
-					schemahelper.WithEnum("read", "write", "exists", "delete")),
-				"path": schemahelper.StringProp("File path (absolute or relative)",
+					schemahelper.WithEnum("read", "write", "exists", "delete", "write-tree")),
+				"path": schemahelper.StringProp("File path (absolute or relative). Required for read, write, exists, delete operations.",
 					schemahelper.WithExample("./config.yaml"),
 					schemahelper.WithMaxLength(4096)),
 				"content": schemahelper.StringProp("Content to write (required for write operation)",
@@ -59,6 +61,24 @@ func NewFileProvider() *FileProvider {
 					schemahelper.WithExample("utf-8"),
 					schemahelper.WithDefault("utf-8"),
 					schemahelper.WithEnum("utf-8", "binary")),
+				"basePath": schemahelper.StringProp("Destination root directory (required for write-tree operation). Entries are written relative to this path.",
+					schemahelper.WithExample("./output"),
+					schemahelper.WithMaxLength(4096)),
+				"entries": schemahelper.ArrayProp("Array of {path, content} objects to write (required for write-tree operation). Typically produced by the go-template provider's render-tree operation.",
+					schemahelper.WithItems(schemahelper.ObjectProp(
+						"A file entry with relative path and content to write",
+						[]string{"path", "content"},
+						map[string]*jsonschema.Schema{
+							"path":    schemahelper.StringProp("Relative file path within basePath"),
+							"content": schemahelper.StringProp("File content to write"),
+						},
+					))),
+				"outputPath": schemahelper.StringProp("Go template for transforming each entry's output path before writing (write-tree only). "+
+					"Available variables: __filePath (relative path), __fileName (base name), __fileStem (name without final extension), "+
+					"__fileExtension (final extension with dot), __fileDir (parent directory). "+
+					"Sprig functions are available. If omitted, the original entry path is used unchanged.",
+					schemahelper.WithExample("{{ .__fileDir }}/{{ .__fileStem }}"),
+					schemahelper.WithMaxLength(4096)),
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
@@ -116,6 +136,29 @@ inputs:
   operation: delete
   path: /tmp/temporary-file.txt`,
 				},
+				{
+					Name:        "Write tree of rendered templates",
+					Description: "Write an array of rendered file entries to a destination directory, preserving directory structure. Typically used with the go-template provider's render-tree output.",
+					YAML: `name: write-rendered-templates
+provider: file
+inputs:
+  operation: write-tree
+  basePath: ./output
+  entries:
+    rslvr: rendered-templates`,
+				},
+				{
+					Name:        "Write tree with path transformation",
+					Description: "Write rendered templates while stripping the .tpl extension from output paths using outputPath Go template",
+					YAML: `name: write-with-path-transform
+provider: file
+inputs:
+  operation: write-tree
+  basePath: ./output
+  entries:
+    rslvr: rendered-templates
+  outputPath: "{{ .__fileDir }}/{{ .__fileStem }}"`,
+				},
 			},
 		},
 	}
@@ -139,12 +182,19 @@ func (p *FileProvider) Execute(ctx context.Context, input any) (*provider.Output
 		return nil, fmt.Errorf("%s: operation is required and must be a string", ProviderName)
 	}
 
+	lgr.V(1).Info("executing provider", "provider", ProviderName, "operation", operation)
+
+	// write-tree uses basePath instead of path
+	if operation == "write-tree" {
+		return p.executeWriteTreeDispatch(ctx, inputs)
+	}
+
 	path, ok := inputs["path"].(string)
 	if !ok {
 		return nil, fmt.Errorf("%s: path is required and must be a string", ProviderName)
 	}
 
-	lgr.V(1).Info("executing provider", "provider", ProviderName, "operation", operation, "path", path)
+	lgr.V(1).Info("executing file operation", "provider", ProviderName, "operation", operation, "path", path)
 
 	// Convert to absolute path
 	absPath, err := filepath.Abs(path)
@@ -271,6 +321,223 @@ func (p *FileProvider) executeDelete(absPath string) (*provider.Output, error) {
 		Data: map[string]any{
 			"success": true,
 			"path":    absPath,
+		},
+	}, nil
+}
+
+// executeWriteTreeDispatch handles the write-tree operation routing (dry-run vs live).
+func (p *FileProvider) executeWriteTreeDispatch(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
+	lgr := logger.FromContext(ctx)
+
+	basePath, ok := inputs["basePath"].(string)
+	if !ok || basePath == "" {
+		return nil, fmt.Errorf("%s: basePath is required for write-tree operation", ProviderName)
+	}
+
+	absBasePath, err := filepath.Abs(basePath)
+	if err != nil {
+		return nil, fmt.Errorf("%s: invalid basePath: %w", ProviderName, err)
+	}
+
+	if provider.DryRunFromContext(ctx) {
+		return p.executeDryRunWriteTree(absBasePath, inputs)
+	}
+
+	result, err := p.executeWriteTree(absBasePath, inputs)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", ProviderName, err)
+	}
+
+	lgr.V(1).Info("provider completed", "provider", ProviderName, "operation", "write-tree")
+	return result, nil
+}
+
+// executeWriteTree writes an array of {path, content} entries to the filesystem under basePath.
+func (p *FileProvider) executeWriteTree(absBasePath string, inputs map[string]any) (*provider.Output, error) {
+	entries, err := p.parseWriteTreeEntries(inputs)
+	if err != nil {
+		return nil, err
+	}
+
+	outputPathTmpl, _ := inputs["outputPath"].(string)
+
+	var writtenPaths []string
+
+	for i, entry := range entries {
+		outputPath := entry.path
+		if outputPathTmpl != "" {
+			transformed, tmplErr := p.renderOutputPath(outputPathTmpl, entry.path)
+			if tmplErr != nil {
+				return nil, fmt.Errorf("outputPath template failed for entries[%d] (%s): %w", i, entry.path, tmplErr)
+			}
+			outputPath = transformed
+		}
+
+		// Resolve absolute destination
+		absDest := filepath.Join(absBasePath, outputPath)
+
+		// Path traversal safety: ensure the destination is under basePath
+		if !isSubPath(absBasePath, absDest) {
+			return nil, fmt.Errorf("path traversal detected: entries[%d] path %q resolves outside basePath %q", i, outputPath, absBasePath)
+		}
+
+		// Create parent directories
+		dir := filepath.Dir(absDest)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, fmt.Errorf("failed to create directories for %s: %w", outputPath, err)
+		}
+
+		// Write file
+		//nolint:gosec // 0644 is intentional for user-created files
+		if err := os.WriteFile(absDest, []byte(entry.content), 0o644); err != nil {
+			return nil, fmt.Errorf("failed to write %s: %w", outputPath, err)
+		}
+
+		writtenPaths = append(writtenPaths, outputPath)
+	}
+
+	return &provider.Output{
+		Data: map[string]any{
+			"success":      true,
+			"operation":    "write-tree",
+			"basePath":     absBasePath,
+			"filesWritten": len(writtenPaths),
+			"paths":        writtenPaths,
+		},
+	}, nil
+}
+
+// writeTreeEntry holds a parsed entry for write-tree.
+type writeTreeEntry struct {
+	path    string
+	content string
+}
+
+// parseWriteTreeEntries parses and validates the entries input for write-tree.
+func (p *FileProvider) parseWriteTreeEntries(inputs map[string]any) ([]writeTreeEntry, error) {
+	entriesRaw, ok := inputs["entries"]
+	if !ok || entriesRaw == nil {
+		return nil, fmt.Errorf("entries is required for write-tree operation")
+	}
+
+	// Handle both []any and []map[string]any (the latter comes from JSON/resolver data)
+	var entryMaps []map[string]any
+	switch v := entriesRaw.(type) {
+	case []any:
+		entryMaps = make([]map[string]any, 0, len(v))
+		for i, item := range v {
+			m, ok := item.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("entries[%d] must be a map, got %T", i, item)
+			}
+			entryMaps = append(entryMaps, m)
+		}
+	case []map[string]any:
+		entryMaps = v
+	default:
+		return nil, fmt.Errorf("entries must be an array, got %T", entriesRaw)
+	}
+
+	result := make([]writeTreeEntry, 0, len(entryMaps))
+	for i, entry := range entryMaps {
+		path, ok := entry["path"].(string)
+		if !ok || path == "" {
+			return nil, fmt.Errorf("entries[%d].path is required and must be a string", i)
+		}
+
+		content, ok := entry["content"].(string)
+		if !ok {
+			return nil, fmt.Errorf("entries[%d].content is required and must be a string", i)
+		}
+
+		result = append(result, writeTreeEntry{path: path, content: content})
+	}
+
+	return result, nil
+}
+
+// renderOutputPath renders the outputPath Go template for a given file path,
+// injecting __file* variables computed from the path.
+func (p *FileProvider) renderOutputPath(outputPathTmpl, filePath string) (string, error) {
+	// Compute __file* variables
+	fileName := filepath.Base(filePath)
+	fileExt := filepath.Ext(fileName)
+	fileStem := strings.TrimSuffix(fileName, fileExt)
+	fileDir := filepath.ToSlash(filepath.Dir(filePath))
+	if fileDir == "." {
+		fileDir = ""
+	}
+
+	data := map[string]any{
+		"__filePath":      filepath.ToSlash(filePath),
+		"__fileName":      fileName,
+		"__fileStem":      fileStem,
+		"__fileExtension": fileExt,
+		"__fileDir":       fileDir,
+	}
+
+	svc := gotmpl.NewService(nil)
+	result, err := svc.Execute(context.Background(), gotmpl.TemplateOptions{
+		Content: outputPathTmpl,
+		Name:    "outputPath",
+		Data:    data,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	// Clean up the result
+	output := strings.TrimSpace(result.Output)
+	// Normalize path separators
+	output = filepath.ToSlash(output)
+	// Remove leading slash if present (should be relative)
+	output = strings.TrimPrefix(output, "/")
+
+	return output, nil
+}
+
+// isSubPath checks that child is under parent (path traversal protection).
+func isSubPath(parent, child string) bool {
+	rel, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	// If the relative path starts with "..", it's outside the parent
+	return !strings.HasPrefix(rel, "..") && rel != ".."
+}
+
+// executeDryRunWriteTree returns a dry-run preview for write-tree.
+func (p *FileProvider) executeDryRunWriteTree(absBasePath string, inputs map[string]any) (*provider.Output, error) {
+	entries, err := p.parseWriteTreeEntries(inputs)
+	if err != nil {
+		// In dry-run, still validate entries
+		return nil, fmt.Errorf("%s: %w", ProviderName, err)
+	}
+
+	outputPathTmpl, _ := inputs["outputPath"].(string)
+
+	var outputPaths []string
+	for i, entry := range entries {
+		outputPath := entry.path
+		if outputPathTmpl != "" {
+			transformed, tmplErr := p.renderOutputPath(outputPathTmpl, entry.path)
+			if tmplErr != nil {
+				return nil, fmt.Errorf("%s: outputPath template failed for entries[%d] (%s): %w", ProviderName, i, entry.path, tmplErr)
+			}
+			outputPath = transformed
+		}
+		outputPaths = append(outputPaths, outputPath)
+	}
+
+	return &provider.Output{
+		Data: map[string]any{
+			"success":      true,
+			"operation":    "write-tree",
+			"basePath":     absBasePath,
+			"filesWritten": len(outputPaths),
+			"paths":        outputPaths,
+			"_dryRun":      true,
+			"_message":     fmt.Sprintf("Would write %d files under %s", len(outputPaths), absBasePath),
 		},
 	}, nil
 }

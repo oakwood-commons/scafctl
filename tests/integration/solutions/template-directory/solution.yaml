@@ -1,0 +1,90 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: template-directory-integration
+  version: 1.0.0
+  description: Integration test for directory → render-tree → write-tree pipeline
+
+spec:
+  resolvers:
+    vars:
+      type: any
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                appName: test-app
+                appVersion: "2.0.0"
+                namespace: test-ns
+                replicas: 2
+                servicePort: 8080
+                logLevel: debug
+
+    templateFiles:
+      type: any
+      resolve:
+        with:
+          - provider: directory
+            inputs:
+              operation: list
+              path: templates
+              recursive: true
+              filterGlob: "*.tpl"
+              includeContent: true
+
+    rendered:
+      type: any
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              operation: render-tree
+              entries:
+                expr: '_.templateFiles.entries'
+              data:
+                rslvr: vars
+
+  workflow:
+    actions:
+      write-output:
+        provider: file
+        inputs:
+          operation: write-tree
+          basePath: $OUTPUT_DIR
+          entries:
+            rslvr: rendered
+          outputPath: >-
+            {{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}
+
+  testing:
+    config:
+      skipBuiltins: [render-defaults, resolve-defaults]
+
+    cases:
+      _base:
+        description: Base for template-directory tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        files: ["templates/**"]
+        tags: [template-directory]
+        assertions:
+          - expression: __exitCode == 0
+
+      templates-loaded:
+        description: Verify template files were read
+        extends: [_base]
+        command: [run, resolver, templateFiles]
+        assertions:
+          - expression: size(__output.templateFiles.entries) == 4
+            message: "Expected 4 template files"
+
+      templates-rendered:
+        description: Verify all templates were rendered with vars
+        extends: [_base]
+        command: [run, resolver, rendered]
+        assertions:
+          - expression: size(__output.rendered) == 4
+            message: "Expected 4 rendered entries"
+          - expression: '__output.rendered.exists(e, e.content.contains("test-app"))'
+            message: "Rendered content should contain the appName variable"

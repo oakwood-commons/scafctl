@@ -16,14 +16,17 @@ import (
 // that start with the specified prefix. The returned variable names do not include the prefix.
 // It returns a deduplicated, sorted list of variable names. If prefix is empty, it defaults to "_."
 //
+// Both dot notation (_.resolverName) and bracket notation (_["resolverName"]) are supported
+// for prefixes ending in "." (like "_.").
+//
 // Example:
 //
 //	expr := celexp.CelExpression("_.user.name + _.config.value")
-//	vars, err := expr.GetVariablesWithPrefix("_.")
+//	vars, err := expr.GetVariablesWithPrefix("\.")
 //	// Returns: []string{"config", "user"}, nil (sorted)
 //
-//	expr := celexp.CelExpression("ctx.user.name + ctx.config.value")
-//	vars, err := expr.GetVariablesWithPrefix("ctx.")
+//	expr := celexp.CelExpression(`_["user"].name + _["config"].value`)
+//	vars, err := expr.GetVariablesWithPrefix("_.")
 //	// Returns: []string{"config", "user"}, nil (sorted)
 func (e Expression) GetVariablesWithPrefix(prefix string) ([]string, error) {
 	// Default prefix to _. if empty
@@ -72,12 +75,17 @@ func (e Expression) GetVariablesWithPrefix(prefix string) ([]string, error) {
 }
 
 // GetUnderscoreVariables is a convenience method that calls GetVariablesWithPrefix with "_." prefix.
+// Supports both dot notation (_.name) and bracket notation (_["name"]).
 //
 // Example:
 //
 //	expr := celexp.CelExpression("_.user.name + _.config.value")
 //	vars, err := expr.GetUnderscoreVariables()
-//	// Returns: []string{"user", "config"}, nil
+//	// Returns: []string{"config", "user"}, nil
+//
+//	expr := celexp.CelExpression(`_["user"].name + _["config"].value`)
+//	vars, err := expr.GetUnderscoreVariables()
+//	// Returns: []string{"config", "user"}, nil
 func (e Expression) GetUnderscoreVariables() ([]string, error) {
 	return e.GetVariablesWithPrefix("_.")
 }
@@ -207,6 +215,20 @@ func extractVariablesWithPrefix(expr *exprpb.Expr, prefix string, vars map[strin
 	case *exprpb.Expr_CallExpr:
 		// Process function calls and their arguments
 		call := expr.GetCallExpr()
+
+		// Handle bracket/index access: _["resolverName"] is parsed as a CallExpr
+		// with function "_[_]", where args[0] is the map operand and args[1] is the key.
+		if useSelect && call.GetFunction() == "_[_]" && len(call.GetArgs()) == 2 {
+			operand := call.GetArgs()[0]
+			key := call.GetArgs()[1]
+			if operand.GetIdentExpr() != nil && operand.GetIdentExpr().GetName() == baseIdent {
+				// Check if the key is a string constant (e.g., _["resolverName"])
+				if key.GetConstExpr() != nil && key.GetConstExpr().GetStringValue() != "" {
+					vars[key.GetConstExpr().GetStringValue()] = struct{}{}
+				}
+			}
+		}
+
 		if call.GetTarget() != nil {
 			extractVariablesWithPrefix(call.GetTarget(), prefix, vars)
 		}

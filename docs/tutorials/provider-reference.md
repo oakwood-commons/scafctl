@@ -375,7 +375,8 @@ inputs:
 
 ## file
 
-Filesystem operations: read, write, check existence, delete.
+Filesystem operations: read, write, check existence, delete, and batch write
+a tree of files.
 
 ### Capabilities
 
@@ -385,11 +386,14 @@ Filesystem operations: read, write, check existence, delete.
 
 | Field | Type | Required | Description |
 |-------|------|:--------:|-------------|
-| `operation` | string | ✅ | Operation: `read`, `write`, `exists`, `delete` |
-| `path` | string | ✅ | File path (absolute or relative) |
+| `operation` | string | ✅ | Operation: `read`, `write`, `exists`, `delete`, `write-tree` |
+| `path` | string | ❌ | File path — required for `read`, `write`, `exists`, `delete` |
 | `content` | string | ❌ | Content to write (required for `write`) |
-| `createDirs` | bool | ❌ | Create parent directories if missing |
+| `createDirs` | bool | ❌ | Create parent directories if missing (for `write`) |
 | `encoding` | string | ❌ | File encoding: `utf-8`, `binary` (default: `utf-8`) |
+| `basePath` | string | ❌ | Destination root directory (required for `write-tree`) |
+| `entries` | array | ❌ | Array of `{path, content}` objects (required for `write-tree`) |
+| `outputPath` | string | ❌ | Go template to transform each entry's path before writing (`write-tree` only). Available variables: `__filePath`, `__fileName`, `__fileStem`, `__fileExtension`, `__fileDir`. Sprig functions supported. |
 
 ### Output
 
@@ -399,6 +403,10 @@ Filesystem operations: read, write, check existence, delete.
 | `exists` | bool | Whether file exists |
 | `size` | int | File size in bytes |
 | `success` | bool | Operation success (action only) |
+| `operation` | string | Operation performed (`write-tree` only) |
+| `basePath` | string | Resolved base path (`write-tree` only) |
+| `filesWritten` | int | Number of files written (`write-tree` only) |
+| `paths` | array | Relative paths of files written (`write-tree` only) |
 
 ### Examples
 
@@ -427,6 +435,16 @@ resolve:
       inputs:
         operation: exists
         path: "./optional-config.yaml"
+
+# Write a tree of rendered files, stripping .tpl extensions
+provider: file
+inputs:
+  operation: write-tree
+  basePath: ./output
+  entries:
+    rslvr: rendered
+  outputPath: >-
+    {{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}
 ```
 
 ---
@@ -656,7 +674,8 @@ action:
 
 ## go-template
 
-Transform data using Go text/template syntax.
+Transform data using Go text/template syntax. Supports single-template rendering
+(`render`, the default) and batch directory rendering (`render-tree`).
 
 ### Capabilities
 
@@ -666,8 +685,10 @@ Transform data using Go text/template syntax.
 
 | Field | Type | Required | Description |
 |-------|------|:--------:|-------------|
-| `template` | string | ✅ | Go template content |
-| `name` | string | ✅ | Template name (for error messages) |
+| `operation` | string | ❌ | Operation: `render` (default) or `render-tree` |
+| `template` | string | ❌ | Go template content (required for `render`) |
+| `name` | string | ❌ | Template name for error messages (defaults to `"render-tree"` for render-tree) |
+| `entries` | array | ❌ | Array of `{path, content}` objects to render (required for `render-tree`) |
 | `missingKey` | string | ❌ | Behavior for missing keys: `default`, `zero`, `error` |
 | `leftDelim` | string | ❌ | Left delimiter (default: `{{`) |
 | `rightDelim` | string | ❌ | Right delimiter (default: `}}`) |
@@ -676,7 +697,11 @@ Transform data using Go text/template syntax.
 
 ### Output
 
-Returns the rendered template as a string.
+**`render` operation:** Returns the rendered template as a string.
+
+**`render-tree` operation:** Returns an array of `{path, content}` objects where
+each `content` is the rendered result. Metadata includes `templateName` and
+`entryCount`.
 
 ### Ignored Blocks
 
@@ -733,7 +758,7 @@ The content between `start` and `end` markers (including the markers themselves)
 ### Examples
 
 ```yaml
-# Render template
+# Render a single template
 transform:
   with:
     - provider: go-template
@@ -744,6 +769,17 @@ transform:
             host: {{ .host }}
             port: {{ .port }}
             env: {{ .environment }}
+
+# Batch-render a directory of templates (render-tree)
+resolve:
+  with:
+    - provider: go-template
+      inputs:
+        operation: render-tree
+        entries:
+          expr: '_.templateFiles.entries'
+        data:
+          rslvr: vars
 ```
 
 ---
