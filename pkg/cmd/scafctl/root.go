@@ -28,7 +28,6 @@ import (
 	newcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/new"
 	pluginscmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/plugins"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/render"
-	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/run"
 	secretscmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/snapshot"
@@ -388,7 +387,6 @@ func Root(opts *RootOptions) *cobra.Command {
 	cCmd.AddCommand(run.CommandRun(cliParams, ioStreams, settings.CliBinaryName))
 	cCmd.AddCommand(render.CommandRender(cliParams, ioStreams, settings.CliBinaryName))
 	cCmd.AddCommand(explain.CommandExplain(cliParams, ioStreams, settings.CliBinaryName))
-	cCmd.AddCommand(resolver.CommandResolver(cliParams, *ioStreams, settings.CliBinaryName))
 	cCmd.AddCommand(snapshot.CommandSnapshot(cliParams, *ioStreams, settings.CliBinaryName))
 	cCmd.AddCommand(configcmd.CommandConfig(cliParams, ioStreams, settings.CliBinaryName))
 	cCmd.AddCommand(secretscmd.CommandSecrets(cliParams, ioStreams, settings.CliBinaryName))

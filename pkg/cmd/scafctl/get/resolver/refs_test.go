@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	refslib "github.com/oakwood-commons/scafctl/pkg/resolver/refs"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/stretchr/testify/assert"
@@ -61,7 +62,7 @@ func TestCommandRefs_Template(t *testing.T) {
 			err := cmd.Execute()
 			require.NoError(t, err)
 
-			var result RefsOutput
+			var result refslib.Output
 			err = json.Unmarshal(out.Bytes(), &result)
 			require.NoError(t, err)
 
@@ -111,7 +112,7 @@ func TestCommandRefs_CEL(t *testing.T) {
 			err := cmd.Execute()
 			require.NoError(t, err)
 
-			var result RefsOutput
+			var result refslib.Output
 			err = json.Unmarshal(out.Bytes(), &result)
 			require.NoError(t, err)
 
@@ -145,7 +146,7 @@ func TestCommandRefs_TemplateFile(t *testing.T) {
 	err = cmd.Execute()
 	require.NoError(t, err)
 
-	var result RefsOutput
+	var result refslib.Output
 	err = json.Unmarshal(out.Bytes(), &result)
 	require.NoError(t, err)
 
@@ -175,7 +176,7 @@ func TestCommandRefs_CustomDelimiters(t *testing.T) {
 	err := cmd.Execute()
 	require.NoError(t, err)
 
-	var result RefsOutput
+	var result refslib.Output
 	err = json.Unmarshal(out.Bytes(), &result)
 	require.NoError(t, err)
 
@@ -282,7 +283,7 @@ func TestExtractResolverName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
-			result := extractResolverName(tt.path)
+			result := refslib.ExtractResolverName(tt.path)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -305,7 +306,7 @@ func TestCommandRefs_TemplateStdin(t *testing.T) {
 	err := cmd.Execute()
 	require.NoError(t, err)
 
-	var result RefsOutput
+	var result refslib.Output
 	err = json.Unmarshal(out.Bytes(), &result)
 	require.NoError(t, err)
 
@@ -331,7 +332,7 @@ func TestCommandRefs_CELStdin(t *testing.T) {
 	err := cmd.Execute()
 	require.NoError(t, err)
 
-	var result RefsOutput
+	var result refslib.Output
 	err = json.Unmarshal(out.Bytes(), &result)
 	require.NoError(t, err)
 
@@ -358,7 +359,7 @@ func TestCommandRefs_StdinWithNewline(t *testing.T) {
 	err := cmd.Execute()
 	require.NoError(t, err)
 
-	var result RefsOutput
+	var result refslib.Output
 	err = json.Unmarshal(out.Bytes(), &result)
 	require.NoError(t, err)
 
@@ -398,7 +399,7 @@ func TestReadStdin(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			reader := bytes.NewBufferString(tt.input)
-			result, err := readStdin(reader)
+			result, err := refslib.ReadStdin(reader)
 			require.NoError(t, err)
 			assert.Equal(t, tt.expected, result)
 		})
@@ -406,7 +407,7 @@ func TestReadStdin(t *testing.T) {
 }
 
 func TestReadStdin_NilReader(t *testing.T) {
-	_, err := readStdin(nil)
+	_, err := refslib.ReadStdin(nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "stdin is not available")
 }

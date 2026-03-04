@@ -31,23 +31,13 @@ type ClearOptions struct {
 	flags.KvxOutputFlags
 }
 
-// ClearOutput is an alias for cachelib.ClearOutput.
-//
-// Deprecated: Use cache.ClearOutput from pkg/cache instead.
-type ClearOutput = cachelib.ClearOutput
-
-// Kind is an alias for cachelib.Kind.
-//
-// Deprecated: Use cache.Kind from pkg/cache instead.
-type Kind = cachelib.Kind
-
 const (
 	// KindAll clears all caches.
-	KindAll Kind = cachelib.KindAll
+	KindAll cachelib.Kind = cachelib.KindAll
 	// KindHTTP clears the HTTP response cache.
-	KindHTTP Kind = cachelib.KindHTTP
+	KindHTTP cachelib.Kind = cachelib.KindHTTP
 	// KindBuild clears the build cache (incremental build fingerprints).
-	KindBuild Kind = cachelib.KindBuild
+	KindBuild cachelib.Kind = cachelib.KindBuild
 )
 
 // ValidKinds lists all valid cache kinds.
@@ -189,7 +179,7 @@ func runClear(ctx context.Context, options *ClearOptions, outputOpts *kvx.Output
 	}
 
 	// Format output
-	output := ClearOutput{
+	output := cachelib.ClearOutput{
 		RemovedFiles: totalFiles,
 		RemovedBytes: totalBytes,
 		RemovedHuman: cachelib.FormatBytes(totalBytes),

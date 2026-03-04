@@ -189,7 +189,7 @@ func TestProviderOptions_Run(t *testing.T) {
 						"data": schemahelper.AnyProp(""),
 					}),
 				},
-				Deprecated: true,
+				IsDeprecated: true,
 			},
 		}
 		err := reg.Register(mp)

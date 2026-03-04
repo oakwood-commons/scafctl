@@ -441,13 +441,6 @@ func (o *sharedResolverOptions) executeResolvers(
 	return resolverData, resolverCtx, nil
 }
 
-// filterResolversWithDependencies delegates to execute.FilterResolversWithDependencies.
-//
-// Deprecated: Use execute.FilterResolversWithDependencies from pkg/solution/execute instead.
-func filterResolversWithDependencies(resolvers []*resolver.Resolver, targetNames []string, lookup resolver.DescriptorLookup) []*resolver.Resolver {
-	return execute.FilterResolversWithDependencies(resolvers, targetNames, lookup)
-}
-
 // prepareSolutionForExecution loads a solution, sets up the provider registry,
 // and registers the solution provider. It handles bundle extraction, plugin merging,
 // and working directory changes. Returns cleanup function that must be deferred.
@@ -531,51 +524,4 @@ func writeMetrics(errOut io.Writer) {
 			successRate)
 	}
 	fmt.Fprintln(errOut, strings.Repeat("-", 80))
-}
-
-// calculateValueSize delegates to execute.CalculateValueSize.
-//
-// Deprecated: Use execute.CalculateValueSize from pkg/solution/execute instead.
-func calculateValueSize(value any) int64 {
-	return execute.CalculateValueSize(value)
-}
-
-// buildExecutionData delegates to execute.BuildExecutionData.
-//
-// Deprecated: Use execute.BuildExecutionData from pkg/solution/execute instead.
-func buildExecutionData(
-	resolverCtx *resolver.Context,
-	resolvers []*resolver.Resolver,
-	totalElapsed time.Duration,
-) map[string]any {
-	return execute.BuildExecutionData(resolverCtx, resolvers, totalElapsed)
-}
-
-// buildProviderSummary delegates to execute.BuildProviderSummary.
-//
-// Deprecated: Use execute.BuildProviderSummary from pkg/solution/execute instead.
-func buildProviderSummary(
-	resolverCtx *resolver.Context,
-	resolvers []*resolver.Resolver,
-) map[string]any {
-	return execute.BuildProviderSummary(resolverCtx, resolvers)
-}
-
-// renderGraph delegates to execute.RenderGraph.
-//
-// Deprecated: Use execute.RenderGraph from pkg/solution/execute instead.
-func renderGraph(w io.Writer, graph graphRenderer, data any, format string) error {
-	return execute.RenderGraph(w, graph, data, format)
-}
-
-// graphRenderer is an alias for execute.GraphRenderer.
-//
-// Deprecated: Use execute.GraphRenderer from pkg/solution/execute instead.
-type graphRenderer = execute.GraphRenderer
-
-// resolverProviderName delegates to execute.ResolverProviderName.
-//
-// Deprecated: Use execute.ResolverProviderName from pkg/solution/execute instead.
-func resolverProviderName(r *resolver.Resolver) string {
-	return execute.ResolverProviderName(r)
 }

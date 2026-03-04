@@ -122,54 +122,6 @@ func (k *envKeyring) Delete(_, _ string) error {
 	return NewKeyringError("delete", errors.New("cannot delete values in environment keyring"))
 }
 
-// fallbackKeyring implements Keyring by trying an OS keyring first,
-// then falling back to an environment-based keyring.
-//
-// Deprecated: Use chainKeyring instead.
-type fallbackKeyring struct {
-	primary  Keyring
-	fallback Keyring
-}
-
-// newFallbackKeyring creates a keyring that tries the primary keyring first,
-// then falls back to the fallback keyring if the primary fails.
-//
-// Deprecated: Use newChainKeyring instead.
-func newFallbackKeyring(primary, fallback Keyring) *fallbackKeyring {
-	return &fallbackKeyring{
-		primary:  primary,
-		fallback: fallback,
-	}
-}
-
-// Get tries to get a value from the primary keyring, falling back to the fallback.
-func (k *fallbackKeyring) Get(service, account string) (string, error) {
-	value, err := k.primary.Get(service, account)
-	if err == nil {
-		return value, nil
-	}
-
-	// Try fallback
-	value, fallbackErr := k.fallback.Get(service, account)
-	if fallbackErr == nil {
-		return value, nil
-	}
-
-	// Return the primary error if both fail
-	return "", err
-}
-
-// Set stores a value in the primary keyring.
-// Does not fall back since we want to use the secure storage when available.
-func (k *fallbackKeyring) Set(service, account, value string) error {
-	return k.primary.Set(service, account, value)
-}
-
-// Delete removes a value from the primary keyring.
-func (k *fallbackKeyring) Delete(service, account string) error {
-	return k.primary.Delete(service, account)
-}
-
 // fileKeyring implements Keyring using a file-based key store.
 // This is a last-resort fallback for environments where neither the OS keyring
 // nor the environment variable is available. The master key is stored in a file

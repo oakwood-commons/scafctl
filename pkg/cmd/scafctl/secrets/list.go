@@ -49,7 +49,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			}
 
 			// Filter secrets based on --all flag
-			filtered := FilterSecrets(names, opts.All)
+			filtered := secrets.FilterSecrets(names, opts.All)
 
 			// Prepare output with kvx flags
 			kvxOpts := flags.ToKvxOutputOptions(&opts.KvxOutputFlags, kvx.WithIOStreams(ioStreams))
@@ -59,7 +59,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			for i, name := range filtered {
 				data[i] = map[string]interface{}{
 					"name": name,
-					"type": SecretType(name),
+					"type": secrets.SecretType(name),
 				}
 			}
 

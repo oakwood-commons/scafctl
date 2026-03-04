@@ -162,7 +162,7 @@ func (o *Options) RunListFunctions(ctx context.Context) error {
 	}
 
 	// Build output data
-	output := buildFunctionListOutput(funcs)
+	output := celdetail.BuildFunctionList(funcs)
 
 	return o.writeOutput(ctx, output)
 }
@@ -200,7 +200,7 @@ func (o *Options) RunGetFunction(ctx context.Context, name string) error {
 		return o.printFunctionDetail(found)
 	}
 
-	output := buildFunctionDetailOutput(found)
+	output := celdetail.BuildFunctionDetail(found)
 	return o.writeOutput(ctx, output)
 }
 
@@ -308,20 +308,6 @@ func (o *Options) printFunctionDetail(fn *celexp.ExtFunction) error {
 	}
 
 	return nil
-}
-
-// buildFunctionListOutput delegates to celdetail.BuildFunctionList.
-//
-// Deprecated: Use celdetail.BuildFunctionList from pkg/celexp/detail instead.
-func buildFunctionListOutput(funcs celexp.ExtFunctionList) []map[string]any {
-	return celdetail.BuildFunctionList(funcs)
-}
-
-// buildFunctionDetailOutput delegates to celdetail.BuildFunctionDetail.
-//
-// Deprecated: Use celdetail.BuildFunctionDetail from pkg/celexp/detail instead.
-func buildFunctionDetailOutput(fn *celexp.ExtFunction) map[string]any {
-	return celdetail.BuildFunctionDetail(fn)
 }
 
 // writeOutput writes the output using kvx

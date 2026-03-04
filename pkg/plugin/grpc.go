@@ -215,7 +215,7 @@ func descriptorToProto(desc *provider.Descriptor) *proto.ProviderDescriptor {
 		SensitiveFields: desc.SensitiveFields,
 		Tags:            desc.Tags,
 		Icon:            desc.Icon,
-		Deprecated:      desc.Deprecated, //nolint:staticcheck // field is intentionally used for gRPC serialization
+		Deprecated:      desc.IsDeprecated,
 		Beta:            desc.Beta,
 	}
 
@@ -346,7 +346,7 @@ func protoToDescriptor(protoDesc *proto.ProviderDescriptor) *provider.Descriptor
 		SensitiveFields: protoDesc.SensitiveFields,
 		Tags:            protoDesc.Tags,
 		Icon:            protoDesc.Icon,
-		Deprecated:      protoDesc.Deprecated,
+		IsDeprecated:    protoDesc.Deprecated,
 		Beta:            protoDesc.Beta,
 	}
 

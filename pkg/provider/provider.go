@@ -108,9 +108,9 @@ type Descriptor struct {
 	// Shown in documentation and can be used for testing.
 	Examples []Example `json:"examples,omitempty" yaml:"examples,omitempty" doc:"Usage examples" maxItems:"10"`
 
-	// Deprecated: This field indicates the provider should no longer be used.
+	// IsDeprecated indicates the provider should no longer be used.
 	// Deprecated providers may be removed in future versions.
-	Deprecated bool `json:"deprecated,omitempty" yaml:"deprecated,omitempty" doc:"Deprecation status"`
+	IsDeprecated bool `json:"deprecated,omitempty" yaml:"deprecated,omitempty" doc:"Deprecation status"`
 
 	// Beta indicates the provider is experimental and may have breaking changes.
 	// Beta providers are not recommended for production use.

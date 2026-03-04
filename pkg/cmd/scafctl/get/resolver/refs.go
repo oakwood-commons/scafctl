@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"sort"
 
 	"github.com/MakeNowJust/heredoc/v2"
@@ -30,11 +29,6 @@ type RefsOptions struct {
 	RightDelim   string
 	Output       string
 }
-
-// RefsOutput is an alias for refs.Output.
-//
-// Deprecated: Use refs.Output from pkg/resolver/refs instead.
-type RefsOutput = refslib.Output
 
 // CommandRefs creates the resolver refs command
 func CommandRefs(_ *settings.Run, ioStreams *terminal.IOStreams, binaryName string) *cobra.Command {
@@ -182,7 +176,7 @@ func runRefs(ctx context.Context, opts *RefsOptions, ioStreams *terminal.IOStrea
 	// Sort refs for consistent output
 	sort.Strings(refs)
 
-	output := RefsOutput{
+	output := refslib.Output{
 		Source:     source,
 		SourceType: sourceType,
 		References: refs,
@@ -192,21 +186,7 @@ func runRefs(ctx context.Context, opts *RefsOptions, ioStreams *terminal.IOStrea
 	return writeOutput(ioStreams, opts.Output, output)
 }
 
-// extractResolverName delegates to refslib.ExtractResolverName.
-//
-// Deprecated: Use refs.ExtractResolverName from pkg/resolver/refs instead.
-func extractResolverName(path string) string {
-	return refslib.ExtractResolverName(path)
-}
-
-// readStdin delegates to refslib.ReadStdin.
-//
-// Deprecated: Use refs.ReadStdin from pkg/resolver/refs instead.
-func readStdin(r io.Reader) (string, error) {
-	return refslib.ReadStdin(r)
-}
-
-func writeOutput(ioStreams *terminal.IOStreams, format string, output RefsOutput) error {
+func writeOutput(ioStreams *terminal.IOStreams, format string, output refslib.Output) error {
 	switch format {
 	case "json":
 		enc := json.NewEncoder(ioStreams.Out)

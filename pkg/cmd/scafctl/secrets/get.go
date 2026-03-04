@@ -35,7 +35,7 @@ func CommandGet(_ *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra
 			name := args[0]
 
 			// Validate name
-			if err := ValidateSecretName(name, allFlag); err != nil {
+			if err := secrets.ValidateSecretName(name, allFlag); err != nil {
 				w.Errorf("%v", err)
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
