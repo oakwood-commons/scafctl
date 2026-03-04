@@ -1012,17 +1012,45 @@ resolve:
 
 ### file
 
-Reads data from the local filesystem.
+Filesystem operations: read, write, check existence, delete, and batch write-tree.
 
 > **Note:** Previously documented as `filesystem`.
 
 ~~~yaml
+# Read a file
 resolve:
   with:
     - provider: file
       inputs:
         operation: read
         path: ./config/name.txt
+~~~
+
+**Operations:**
+- `read` — Read file content
+- `write` — Write content to a file
+- `exists` — Check if a file exists
+- `delete` — Delete a file
+- `write-tree` — Batch-write an array of `{path, content}` entries under a base directory
+
+**`write-tree` inputs:**
+- `basePath` (required): Destination root directory
+- `entries` (required): Array of `{path, content}` objects
+- `outputPath`: Go template to transform each entry’s output path. Variables: `__filePath`, `__fileName`, `__fileStem`, `__fileExtension`, `__fileDir`
+
+~~~yaml
+# Batch-write rendered templates, stripping .tpl extensions
+workflow:
+  actions:
+    write-output:
+      provider: file
+      inputs:
+        operation: write-tree
+        basePath: ./output
+        entries:
+          rslvr: rendered
+        outputPath: >-
+          {{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}
 ~~~
 
 ---
@@ -1151,8 +1179,11 @@ resolve:
 ### go-template
 
 Renders Go text/template content with resolver data as the template context.
+Supports single-template rendering (`render`, the default) and batch directory
+rendering (`render-tree`).
 
 ~~~yaml
+# Single template render
 resolve:
   with:
     - provider: go-template
@@ -1161,12 +1192,29 @@ resolve:
         template: "Hello, {{.name}}!"
 ~~~
 
-**Inputs:**
-- `name` (required): Name for the template, used in error messages and logging
-- `template` (required): Go template content to render
+**Inputs (shared):**
+- `operation`: `render` (default) or `render-tree`
+- `name`: Name for the template (optional, defaults to `"render-tree"` for render-tree)
 - `missingKey`: Behavior when a map key is missing: `default`, `zero`, or `error`
 - `leftDelim`, `rightDelim`: Custom delimiters (default: `{{` and `}}`)
 - `data`: Additional data to merge with resolver context
+- `ignoredBlocks`: Blocks to pass through without template processing
+
+**`render-tree` inputs:**
+- `entries` (required): Array of `{path, content}` objects (typically from the directory provider with `includeContent: true`)
+
+~~~yaml
+# Batch-render a directory of templates
+resolve:
+  with:
+    - provider: go-template
+      inputs:
+        operation: render-tree
+        entries:
+          expr: '_.templateFiles.entries'
+        data:
+          rslvr: vars
+~~~
 
 ---
 

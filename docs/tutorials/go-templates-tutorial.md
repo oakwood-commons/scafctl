@@ -26,15 +26,16 @@ This tutorial walks you through using Go templates in scafctl to generate struct
 9. [Using Custom Delimiters](#using-custom-delimiters)
 10. [Using `tmpl` for Dynamic Inputs](#using-tmpl-for-dynamic-inputs)
 11. [Generating Multiple Files with ForEach](#generating-multiple-files-with-foreach)
-12. [Putting It All Together: README Generator](#putting-it-all-together-readme-generator)
-13. [Using Sprig Functions](#using-sprig-functions)
-14. [Converting Data to HCL with toHcl](#converting-data-to-hcl-with-tohcl)
-15. [Serializing and Parsing YAML with toYaml / fromYaml](#serializing-and-parsing-yaml-with-toyaml--fromyaml)
-16. [DNS-Safe Strings with slugify / toDnsString](#dns-safe-strings-with-slugify--todnsstring)
-17. [Filtering Lists with where / selectField](#filtering-lists-with-where--selectfield)
-18. [Inline CEL with cel](#inline-cel-with-cel)
-19. [Debugging Template Type Errors](#debugging-template-type-errors)
-20. [Discovering Available Functions](#discovering-available-functions)
+12. [Rendering Template Directories](#rendering-template-directories)
+13. [Putting It All Together: README Generator](#putting-it-all-together-readme-generator)
+14. [Using Sprig Functions](#using-sprig-functions)
+15. [Converting Data to HCL with toHcl](#converting-data-to-hcl-with-tohcl)
+16. [Serializing and Parsing YAML with toYaml / fromYaml](#serializing-and-parsing-yaml-with-toyaml--fromyaml)
+17. [DNS-Safe Strings with slugify / toDnsString](#dns-safe-strings-with-slugify--todnsstring)
+18. [Filtering Lists with where / selectField](#filtering-lists-with-where--selectfield)
+19. [Inline CEL with cel](#inline-cel-with-cel)
+20. [Debugging Template Type Errors](#debugging-template-type-errors)
+21. [Discovering Available Functions](#discovering-available-functions)
 
 ---
 
@@ -1217,6 +1218,121 @@ replicas: 3
 - Inside `tmpl`, the iteration variable is accessed as `{{ .svc.name }}`.
 - Both `path` and `content` can use `tmpl` — making it easy to generate unique filenames and content per item.
 - Other resolvers (like `team`) remain accessible alongside the iteration variable.
+
+---
+
+## Rendering Template Directories
+
+While `forEach` generates files from a list, the `render-tree` operation lets you
+render an **entire directory** of Go template files in one step. This is ideal
+for scaffolding complete projects where each template file retains its directory
+structure.
+
+The pattern uses three providers in sequence:
+
+1. **`directory`** — reads all template files and their content
+2. **`go-template` (render-tree)** — batch-renders every template
+3. **`file` (write-tree)** — writes the rendered files preserving structure
+
+### Step 1: Create Template Files
+
+Create a `templates/` directory with `.tpl` files:
+
+```
+templates/
+├── README.md.tpl
+└── k8s/
+    └── deployment.yaml.tpl
+```
+
+`templates/k8s/deployment.yaml.tpl`:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .appName }}
+spec:
+  replicas: {{ .replicas }}
+```
+
+### Step 2: Create the Solution
+
+```yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: render-tree-demo
+  version: 1.0.0
+
+spec:
+  resolvers:
+    vars:
+      type: any
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                appName: myapp
+                replicas: 3
+
+    templateFiles:
+      type: any
+      resolve:
+        with:
+          - provider: directory
+            inputs:
+              operation: list
+              path: ./templates
+              recursive: true
+              filterGlob: "*.tpl"
+              includeContent: true
+
+    rendered:
+      type: any
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              operation: render-tree
+              entries:
+                expr: '_.templateFiles.entries'
+              data:
+                rslvr: vars
+
+  workflow:
+    actions:
+      write-output:
+        provider: file
+        inputs:
+          operation: write-tree
+          basePath: ./output
+          entries:
+            rslvr: rendered
+          outputPath: >-
+            {{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}
+```
+
+### Step 3: Run It
+
+```bash
+scafctl run solution -f solution.yaml
+```
+
+Result:
+- `templates/k8s/deployment.yaml.tpl` → `output/k8s/deployment.yaml` (rendered, `.tpl` stripped)
+- `templates/README.md.tpl` → `output/README.md`
+
+### What You Learned
+
+- `render-tree` batch-renders an array of `{path, content}` entries
+- `write-tree` writes them to disk preserving directory structure
+- `outputPath` is a Go template for transforming output paths (variables: `__filePath`, `__fileName`, `__fileStem`, `__fileExtension`, `__fileDir`)
+- Use `expr: '_.resolver.entries'` to feed directory provider results into render-tree
+
+For a complete walkthrough with advanced patterns, see the
+[Template Directory Rendering]({{< relref "template-directory-rendering" >}}) tutorial.
 
 ---
 

@@ -209,6 +209,30 @@ Provider Schema Reference:
   types, which fields are required, and what outputs are available.
   The provider://reference resource gives a compact overview of all providers.
 
+Template Directory Rendering (directory → render-tree → write-tree pipeline):
+  Use this pattern to render a directory tree of Go templates with shared variables
+  and write the rendered files preserving the original directory structure.
+  
+  The pipeline uses three providers in sequence:
+  1. directory provider (operation: list): reads template files, returns entries array
+     - Use recursive: true, filterGlob: "*.tpl", includeContent: true
+  2. go-template provider (operation: render-tree): batch-renders all entries
+     - Takes entries (array of {path, content}) and data (shared template variables)
+     - entries is typically: expr: '_.templateFiles.entries' (CEL sub-key access)
+     - data is typically: rslvr: vars (references a resolver with shared variables)
+     - 'name' input is optional for render-tree (defaults to "render-tree")
+     - Returns array of {path, content} with rendered content
+  3. file provider (operation: write-tree): writes rendered entries to disk
+     - Takes basePath (output directory), entries (from render-tree), and optional outputPath
+     - outputPath is a Go template for renaming files. Available variables:
+       __filePath, __fileName, __fileStem, __fileExtension, __fileDir
+     - Example outputPath to strip .tpl extension:
+       '{{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}'
+  
+  IMPORTANT: Use 'expr:' (CEL) syntax to access sub-keys of resolver outputs
+  (e.g., expr: '_.templateFiles.entries'). The 'rslvr:' syntax does not support
+  dotted sub-path access.
+
 CLI Usage Reference (use these exact flags when suggesting commands to users):
   Run a solution:       scafctl run solution -f ./solution.yaml -r key=value
   Run resolvers only:   scafctl run resolver -f ./solution.yaml -r key=value

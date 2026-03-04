@@ -161,13 +161,18 @@ transform:
 ```
 
 ### `file`
-Returns file content.
+Returns file content, or for `write-tree`, information about written files.
 
 | Capability | Fields | Type | Description |
 |-----------|--------|------|-------------|
 | from | `content` | string | Raw file content |
 | | `path` | string | Resolved file path |
 | | `size` | int | File size in bytes |
+| action (`write-tree`) | `success` | bool | Whether all files were written |
+| | `operation` | string | `"write-tree"` |
+| | `basePath` | string | Resolved base directory path |
+| | `filesWritten` | int | Number of files written |
+| | `paths` | array | Relative paths of written files |
 
 ### `directory`
 Returns directory listings.
@@ -209,11 +214,12 @@ transform:
 ```
 
 ### `go-template`
-Returns rendered template output.
+Returns rendered template output. For `render-tree`, returns an array of rendered entries.
 
 | Capability | Fields | Type | Description |
 |-----------|--------|------|-------------|
-| transform | `<rendered text>` | string | Template output as string |
+| transform (`render`) | `<rendered text>` | string | Template output as string |
+| transform (`render-tree`) | `[{path, content}]` | array | Array of rendered file entries. Each entry has `path` (string) and `content` (string). |
 
 ### `hcl`
 Varies by operation — parse returns structured data, format/validate return strings.
