@@ -425,6 +425,7 @@ func TestGoTemplateProvider_Descriptor_Schema(t *testing.T) {
 
 	// Check required properties exist
 	props := desc.Schema.Properties
+	require.Contains(t, props, "operation")
 	require.Contains(t, props, "template")
 	require.Contains(t, props, "name")
 	require.Contains(t, props, "missingKey")
@@ -432,10 +433,14 @@ func TestGoTemplateProvider_Descriptor_Schema(t *testing.T) {
 	require.Contains(t, props, "rightDelim")
 	require.Contains(t, props, "data")
 	require.Contains(t, props, "ignoredBlocks")
+	require.Contains(t, props, "entries")
 
-	// Check required fields
-	assert.Contains(t, desc.Schema.Required, "template")
-	assert.Contains(t, desc.Schema.Required, "name")
+	// Check required fields - name is no longer globally required (optional for render-tree)
+	// No fields are globally required (template or entries depend on operation, name defaults for render-tree)
+	assert.Empty(t, desc.Schema.Required)
+
+	// template is no longer globally required (only for render operation)
+	assert.NotContains(t, desc.Schema.Required, "template")
 
 	// Check optional fields are not required
 	assert.NotContains(t, desc.Schema.Required, "missingKey")
@@ -678,4 +683,337 @@ func TestGoTemplateProvider_Execute_IgnoredBlocks_Line_MixedEntries(t *testing.T
 	assert.Contains(t, result, "${{ secrets.KEY }}")
 	// Block-ignored content preserved
 	assert.Contains(t, result, "for k, v in var.x : k => v")
+}
+
+// --- render-tree tests ---
+
+func TestGoTemplateProvider_RenderTree_BasicMultipleEntries(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{})
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "test-tree",
+		"entries": []any{
+			map[string]any{
+				"path":    "app/deployment.yaml.tpl",
+				"content": "name: {{ .appName }}\nreplicas: {{ .replicas }}",
+			},
+			map[string]any{
+				"path":    "app/service.yaml.tpl",
+				"content": "service: {{ .appName }}-svc\nport: {{ .port }}",
+			},
+		},
+		"data": map[string]any{
+			"appName":  "my-app",
+			"replicas": 3,
+			"port":     8080,
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, results, 2)
+
+	// First entry
+	assert.Equal(t, "app/deployment.yaml.tpl", results[0]["path"])
+	assert.Equal(t, "name: my-app\nreplicas: 3", results[0]["content"])
+
+	// Second entry
+	assert.Equal(t, "app/service.yaml.tpl", results[1]["path"])
+	assert.Equal(t, "service: my-app-svc\nport: 8080", results[1]["content"])
+
+	// Metadata
+	assert.Equal(t, "test-tree", output.Metadata["templateName"])
+	assert.Equal(t, 2, output.Metadata["entryCount"])
+}
+
+func TestGoTemplateProvider_RenderTree_EmptyEntries(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "empty-tree",
+		"entries":   []any{},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	assert.Empty(t, results)
+	assert.Equal(t, 0, output.Metadata["entryCount"])
+}
+
+func TestGoTemplateProvider_RenderTree_MissingEntries(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "missing-entries",
+	}
+
+	_, err := p.Execute(ctx, inputs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "entries is required")
+}
+
+func TestGoTemplateProvider_RenderTree_InvalidEntryType(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "invalid-entries",
+		"entries":   []any{"not-a-map"},
+	}
+
+	_, err := p.Execute(ctx, inputs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "entries[0] must be a map")
+}
+
+func TestGoTemplateProvider_RenderTree_MissingEntryPath(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "no-path",
+		"entries": []any{
+			map[string]any{
+				"content": "hello",
+			},
+		},
+	}
+
+	_, err := p.Execute(ctx, inputs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "entries[0].path is required")
+}
+
+func TestGoTemplateProvider_RenderTree_SkipsEntriesWithoutContent(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "skip-no-content",
+		"entries": []any{
+			map[string]any{
+				"path":    "good.txt",
+				"content": "Hello {{ .name }}",
+			},
+			map[string]any{
+				"path": "no-content.bin",
+				// no content field
+			},
+		},
+		"data": map[string]any{"name": "World"},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	assert.Len(t, results, 1)
+	assert.Equal(t, "good.txt", results[0]["path"])
+	assert.Equal(t, "Hello World", results[0]["content"])
+
+	// Should have a warning for the skipped entry
+	assert.Len(t, output.Warnings, 1)
+	assert.Contains(t, output.Warnings[0], "no-content.bin")
+}
+
+func TestGoTemplateProvider_RenderTree_ErrorIncludesPath(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"operation":  "render-tree",
+		"name":       "error-path",
+		"missingKey": "error",
+		"entries": []any{
+			map[string]any{
+				"path":    "broken/template.tpl",
+				"content": "{{ .nonExistentVar }}",
+			},
+		},
+	}
+
+	_, err := p.Execute(ctx, inputs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "broken/template.tpl")
+}
+
+func TestGoTemplateProvider_RenderTree_WithResolverContext(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{
+		"env": "production",
+	})
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "resolver-ctx",
+		"entries": []any{
+			map[string]any{
+				"path":    "config.yaml",
+				"content": "environment: {{ .env }}",
+			},
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, results, 1)
+	assert.Equal(t, "environment: production", results[0]["content"])
+}
+
+func TestGoTemplateProvider_RenderTree_DataOverridesResolverContext(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{
+		"env": "staging",
+	})
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "data-override",
+		"entries": []any{
+			map[string]any{
+				"path":    "config.yaml",
+				"content": "environment: {{ .env }}",
+			},
+		},
+		"data": map[string]any{
+			"env": "production",
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, results, 1)
+	assert.Equal(t, "environment: production", results[0]["content"])
+}
+
+func TestGoTemplateProvider_RenderTree_DryRun(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+	ctx = provider.WithDryRun(ctx, true)
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "dry-run-tree",
+		"entries": []any{
+			map[string]any{
+				"path":    "a.tpl",
+				"content": "{{ .val }}",
+			},
+			map[string]any{
+				"path":    "b/c.tpl",
+				"content": "{{ .val }}",
+			},
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	assert.Len(t, results, 2)
+	assert.Equal(t, "a.tpl", results[0]["path"])
+	assert.Equal(t, "[dry-run rendered]", results[0]["content"])
+	assert.Equal(t, "b/c.tpl", results[1]["path"])
+	assert.Equal(t, "[dry-run rendered]", results[1]["content"])
+
+	assert.True(t, output.Metadata["dryRun"].(bool))
+}
+
+func TestGoTemplateProvider_RenderTree_PathsPassThrough(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "path-passthrough",
+		"entries": []any{
+			map[string]any{
+				"path":    "child1/grandchild1/app.deployment.tpl",
+				"content": "name: {{ .appName }}",
+			},
+			map[string]any{
+				"path":    "child2/service.yaml.tpl",
+				"content": "svc: {{ .appName }}",
+			},
+		},
+		"data": map[string]any{
+			"appName": "test",
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, results, 2)
+
+	// Paths are preserved exactly as provided
+	assert.Equal(t, "child1/grandchild1/app.deployment.tpl", results[0]["path"])
+	assert.Equal(t, "child2/service.yaml.tpl", results[1]["path"])
+}
+
+func TestGoTemplateProvider_RenderTree_DefaultOperationIsRender(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{
+		"name": "World",
+	})
+
+	// No operation specified - should default to render
+	inputs := map[string]any{
+		"name":     "default-op",
+		"template": "Hello, {{.name}}!",
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	assert.Equal(t, "Hello, World!", output.Data)
+}
+
+func TestGoTemplateProvider_RenderTree_UnsupportedOperation(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"operation": "invalid-op",
+		"name":      "bad-op",
+	}
+
+	_, err := p.Execute(ctx, inputs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported operation")
 }

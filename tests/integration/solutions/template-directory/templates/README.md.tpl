@@ -1,0 +1,3 @@
+# {{ .appName }}
+
+Version: {{ .appVersion }}

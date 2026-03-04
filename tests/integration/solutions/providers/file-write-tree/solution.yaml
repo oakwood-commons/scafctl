@@ -1,0 +1,116 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-file-write-tree
+  version: 1.0.0
+  description: Tests for the file provider write-tree operation
+
+spec:
+  resolvers:
+    entries:
+      description: Static entries for write-tree tests
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - path: "hello.txt"
+                  content: "Hello, world!"
+                - path: "sub/nested.yaml"
+                  content: "key: value"
+                - path: "deep/dir/file.md"
+                  content: "# Title"
+
+    tplEntries:
+      description: Entries with .tpl extensions for outputPath tests
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - path: "config.yaml.tpl"
+                  content: "setting: true"
+                - path: "k8s/deploy.yaml.tpl"
+                  content: "kind: Deployment"
+                - path: "README.md.tpl"
+                  content: "# Docs"
+
+  workflow:
+    actions:
+      write-basic:
+        description: Write entries preserving paths
+        provider: file
+        inputs:
+          operation: write-tree
+          basePath: ./write-tree-output
+          entries:
+            rslvr: entries
+
+      write-with-output-path:
+        description: Write entries with outputPath stripping .tpl extension
+        provider: file
+        dependsOn: [write-basic]
+        inputs:
+          operation: write-tree
+          basePath: ./write-tree-transformed
+          entries:
+            rslvr: tplEntries
+          outputPath: >-
+            {{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}
+
+  testing:
+
+
+    cases:
+      _base:
+        description: Base template for write-tree tests
+        command: [run, solution]
+        args: ["-o", "json"]
+        tags: [provider, file, write-tree]
+        cleanup:
+          - command: "rm -rf write-tree-output write-tree-transformed"
+        assertions:
+          - expression: __exitCode == 0
+
+      write-tree-basic:
+        description: Verify write-tree writes files and creates subdirectories
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.status == "succeeded"
+            message: "Solution should succeed"
+          - expression: __output.actions["write-basic"].status == "succeeded"
+            message: "write-basic action should succeed"
+          - expression: __output.actions["write-basic"].results.success == true
+            message: "write-tree should report success"
+          - expression: '__output.actions["write-basic"].results.operation == "write-tree"'
+            message: "Should report write-tree operation"
+          - expression: __output.actions["write-basic"].results.filesWritten == 3
+            message: "Should write 3 files"
+
+      write-tree-paths:
+        description: Verify write-tree reports correct output paths
+        extends: [_base]
+        assertions:
+          - expression: __output.actions["write-basic"].results.paths.exists(p, p == "hello.txt")
+            message: "Should include hello.txt in paths"
+          - expression: __output.actions["write-basic"].results.paths.exists(p, p == "sub/nested.yaml")
+            message: "Should include sub/nested.yaml in paths"
+          - expression: __output.actions["write-basic"].results.paths.exists(p, p == "deep/dir/file.md")
+            message: "Should include deep/dir/file.md in paths"
+
+      write-tree-output-path:
+        description: Verify write-tree outputPath strips .tpl extensions
+        extends: [_base]
+        assertions:
+          - expression: __output.actions["write-with-output-path"].status == "succeeded"
+            message: "write-with-output-path action should succeed"
+          - expression: __output.actions["write-with-output-path"].results.filesWritten == 3
+            message: "Should write 3 transformed files"
+          - expression: '__output.actions["write-with-output-path"].results.paths.exists(p, p == "config.yaml")'
+            message: "Should strip .tpl from config.yaml.tpl"
+          - expression: '__output.actions["write-with-output-path"].results.paths.exists(p, p == "k8s/deploy.yaml")'
+            message: "Should strip .tpl from k8s/deploy.yaml.tpl preserving directory"
+          - expression: '__output.actions["write-with-output-path"].results.paths.exists(p, p == "README.md")'
+            message: "Should strip .tpl from README.md.tpl"

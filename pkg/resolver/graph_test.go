@@ -497,6 +497,40 @@ func TestExtractDependencies(t *testing.T) {
 			// _.checker is self-ref (filtered), _.otherResolver is a real dep
 			want: []string{"otherResolver"},
 		},
+		{
+			name: "bracket notation CEL expression dependency",
+			resolver: &Resolver{
+				Name: "bracketTest",
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{
+						{
+							Provider: "cel",
+							Inputs: map[string]*ValueRef{
+								"expression": {Expr: celExpPtr(`_["base"] + "-suffix"`)},
+							},
+						},
+					},
+				},
+			},
+			want: []string{"base"},
+		},
+		{
+			name: "bracket notation mixed with dot notation dependency",
+			resolver: &Resolver{
+				Name: "mixedNotation",
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{
+						{
+							Provider: "cel",
+							Inputs: map[string]*ValueRef{
+								"expression": {Expr: celExpPtr(`_.dotRef + _["bracketRef"]`)},
+							},
+						},
+					},
+				},
+			},
+			want: []string{"dotRef", "bracketRef"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -544,6 +578,21 @@ func TestExtractDepsFromExpression(t *testing.T) {
 			name: "nested expressions",
 			expr: "(_.enabled == true) && (_.region != '') && (_.account != '')",
 			want: []string{"enabled", "region", "account"},
+		},
+		{
+			name: "bracket notation single",
+			expr: `_["environment"]`,
+			want: []string{"environment"},
+		},
+		{
+			name: "bracket notation multiple",
+			expr: `_["env"] + '-' + _["region"]`,
+			want: []string{"env", "region"},
+		},
+		{
+			name: "bracket notation mixed with dot",
+			expr: `_.env + _["region"]`,
+			want: []string{"env", "region"},
 		},
 		{
 			name: "invalid expression (should not panic)",

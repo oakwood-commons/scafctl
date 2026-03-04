@@ -235,6 +235,31 @@ func TestGetUnderscoreVariables_EdgeCases(t *testing.T) {
 			expected:   []string{"count", "minCount", "maxCount"},
 		},
 		{
+			name:       "bracket notation single",
+			expression: `_["resolverName"]`,
+			expected:   []string{"resolverName"},
+		},
+		{
+			name:       "bracket notation multiple",
+			expression: `_["first"] + _["second"]`,
+			expected:   []string{"first", "second"},
+		},
+		{
+			name:       "bracket notation mixed with dot notation",
+			expression: `_.dotAccess + _["bracketAccess"]`,
+			expected:   []string{"bracketAccess", "dotAccess"},
+		},
+		{
+			name:       "bracket notation with nested property",
+			expression: `_["config"].host`,
+			expected:   []string{"config"},
+		},
+		{
+			name:       "bracket notation duplicate with dot",
+			expression: `_.user + _["user"]`,
+			expected:   []string{"user"},
+		},
+		{
 			name:       "unclosed parenthesis",
 			expression: "_.value + (_.other",
 			wantError:  true,
