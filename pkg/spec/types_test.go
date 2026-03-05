@@ -397,3 +397,18 @@ func TestType_Constants(t *testing.T) {
 	assert.Equal(t, Type("duration"), TypeDuration)
 	assert.Equal(t, Type("any"), TypeAny)
 }
+
+func TestIsValidType(t *testing.T) {
+	valid := []Type{
+		"", "string", "int", "float", "bool", "array", "object", "time", "duration", "any",
+		"integer", "number", "boolean", "map", "timestamp", "datetime",
+	}
+	for _, typ := range valid {
+		assert.True(t, IsValidType(typ), "expected %q to be valid", typ)
+	}
+
+	invalid := []Type{"[]string", "[]int", "list", "hash", "map[string]string", "String", "ARRAY"}
+	for _, typ := range invalid {
+		assert.False(t, IsValidType(typ), "expected %q to be invalid", typ)
+	}
+}

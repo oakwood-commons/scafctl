@@ -111,8 +111,9 @@ func writeHcl(buf *strings.Builder, value any, indent int) error {
 	case []any:
 		return writeHclList(buf, v, indent)
 	default:
-		// Primitive at top level — not valid HCL on its own
-		return fmt.Errorf("top-level value must be a map/object, got %T", value)
+		// Scalar at top level — emit as a bare HCL literal
+		buf.WriteString(formatHclValue(v))
+		return nil
 	}
 }
 

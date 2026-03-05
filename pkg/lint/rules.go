@@ -245,6 +245,44 @@ var KnownRules = map[string]RuleMeta{
 			"# Correct patterns:\nfiles:\n  - templates/main.yaml      # exact file\n  - data/                     # entire directory\n  - configs/**/*.yaml          # recursive glob",
 		},
 	},
+	"nil-provider-input": {
+		Rule:        "nil-provider-input",
+		Severity:    string(SeverityError),
+		Category:    "provider",
+		Description: "A provider input key has no value (dangling YAML key). This will cause resolver execution to fail at runtime with an error.",
+		Why:         "A YAML key with no value (e.g., 'my-input:' on its own line) results in a nil entry. When the resolver engine evaluates provider inputs, a nil value causes resolution to fail with a descriptive runtime error.",
+		Fix:         "Either provide a value for the input key or remove the dangling key entirely.",
+		Examples: []string{
+			"# Wrong (dangling key):\ninputs:\n  my-input:\n\n# Correct:\ninputs:\n  my-input: 'some-value'",
+		},
+	},
+	"invalid-resolver-type": {
+		Rule:        "invalid-resolver-type",
+		Severity:    string(SeverityError),
+		Category:    "type",
+		Description: "A resolver declares a type that is not recognised by the type system. This will cause a runtime error when the resolver engine tries to coerce the resolved value.",
+		Why:         "Only the built-in types (string, int, float, bool, array, object, time, duration, any) and their aliases (integer, number, boolean, map, timestamp, datetime) are supported. Go-style types like '[]string' are not valid.",
+		Fix:         "Replace the type with a valid scafctl type. For slices use 'array', for maps use 'object'.",
+		Examples: []string{
+			"# Wrong:\ntype: []string\n\n# Correct:\ntype: array",
+		},
+	},
+	"empty-transform-with": {
+		Rule:        "empty-transform-with",
+		Severity:    string(SeverityWarning),
+		Category:    "structure",
+		Description: "A resolver has a transform phase with an empty 'with' array. No transformations will be applied.",
+		Why:         "An empty transform.with array is almost certainly unintentional. The transform phase will be silently skipped, which may cause unexpected resolver output.",
+		Fix:         "Either add transform steps to the with array or remove the transform section entirely.",
+	},
+	"empty-validate-with": {
+		Rule:        "empty-validate-with",
+		Severity:    string(SeverityWarning),
+		Category:    "structure",
+		Description: "A resolver has a validate phase with an empty 'with' array. No validations will be applied.",
+		Why:         "An empty validate.with array is almost certainly unintentional. The validate phase will be silently skipped, which may cause unexpected behavior.",
+		Fix:         "Either add validation rules to the with array or remove the validate section entirely.",
+	},
 }
 
 // ListRules returns all known lint rules sorted by severity (error > warning > info)

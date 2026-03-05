@@ -165,6 +165,13 @@ func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Re
 				"unused-resolver")
 		}
 
+		if res.Type != "" && !spec.IsValidType(res.Type) {
+			result.addFinding(SeverityError, "type", location+".type",
+				fmt.Sprintf("unknown resolver type %q (valid types: string, int, float, bool, array, object, time, duration, any)", res.Type),
+				"Replace with a valid type; for slices use 'array', for maps use 'object'",
+				"invalid-resolver-type")
+		}
+
 		if res.Description == "" {
 			result.addFinding(SeverityInfo, "documentation", location,
 				"resolver lacks description",
@@ -185,7 +192,36 @@ func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Re
 					}
 				}
 
+				lintNilInputs(step.Inputs, stepLocation, result)
 				lintExpressions(step.Inputs, stepLocation, result)
+			}
+		}
+
+		// Check for empty transform.with / validate.with arrays.
+		if res.Transform != nil && len(res.Transform.With) == 0 {
+			result.addFinding(SeverityWarning, "structure", location+".transform",
+				"transform phase has empty 'with' array; no transformations will be applied",
+				"Add transform steps or remove the transform section entirely",
+				"empty-transform-with")
+		}
+		if res.Validate != nil && len(res.Validate.With) == 0 {
+			result.addFinding(SeverityWarning, "structure", location+".validate",
+				"validate phase has empty 'with' array; no validations will be applied",
+				"Add validation rules or remove the validate section entirely",
+				"empty-validate-with")
+		}
+
+		// Check for nil inputs in transform/validate phases.
+		if res.Transform != nil {
+			for i, step := range res.Transform.With {
+				stepLocation := fmt.Sprintf("%s.transform.with[%d]", location, i)
+				lintNilInputs(step.Inputs, stepLocation, result)
+			}
+		}
+		if res.Validate != nil {
+			for i, step := range res.Validate.With {
+				stepLocation := fmt.Sprintf("%s.validate.with[%d]", location, i)
+				lintNilInputs(step.Inputs, stepLocation, result)
 			}
 		}
 
@@ -421,6 +457,20 @@ func lintResultSchema(schema *jsonschema.Schema, location string, result *Result
 	// Lint array items schema
 	if schema.Items != nil {
 		lintResultSchema(schema.Items, location+".items", result)
+	}
+}
+
+// lintNilInputs checks for nil ValueRef entries in provider inputs, which
+// typically result from dangling YAML keys with no value.
+func lintNilInputs(inputs map[string]*spec.ValueRef, location string, result *Result) {
+	for key, val := range inputs {
+		if val == nil {
+			inputLoc := fmt.Sprintf("%s.inputs.%s", location, key)
+			result.addFinding(SeverityError, "provider", inputLoc,
+				fmt.Sprintf("input '%s' has no value (dangling YAML key)", key),
+				"Provide a value for the input or remove the key entirely",
+				"nil-provider-input")
+		}
 	}
 }
 

@@ -66,6 +66,21 @@ func CoerceType(value any, targetType Type) (any, error) {
 	}
 }
 
+// IsValidType reports whether t is a recognised resolver type
+// (after normalising aliases like "integer" → "int").
+func IsValidType(t Type) bool {
+	if t == "" {
+		return true // empty means untyped / any
+	}
+	norm := normalizeType(t)
+	switch norm {
+	case TypeString, TypeInt, TypeFloat, TypeBool, TypeArray, TypeObject, TypeTime, TypeDuration, TypeAny:
+		return true
+	default:
+		return false
+	}
+}
+
 // normalizeType converts type aliases to canonical types.
 func normalizeType(t Type) Type {
 	switch strings.ToLower(string(t)) {
