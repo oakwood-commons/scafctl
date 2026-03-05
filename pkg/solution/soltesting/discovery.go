@@ -24,6 +24,9 @@ type SolutionTests struct {
 	Config *TestConfig `json:"config,omitempty"`
 	// FilePath is the absolute path to the solution file.
 	FilePath string `json:"filePath"`
+	// DetectedFiles contains file patterns auto-detected from resolver specs
+	// (e.g., directory provider paths). Used to populate builtin test files.
+	DetectedFiles []string `json:"detectedFiles,omitempty"`
 }
 
 // FilterOptions specifies how to filter discovered tests.
@@ -108,12 +111,20 @@ func DiscoverFromFile(filePath string) (*SolutionTests, error) {
 		} `yaml:"metadata"`
 		Compose []string `yaml:"compose"`
 		Spec    struct {
-			Testing *TestSuite `yaml:"testing"`
+			Testing   *TestSuite `yaml:"testing"`
+			Resolvers yaml.Node  `yaml:"resolvers"`
 		} `yaml:"spec"`
 	}
 
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("parsing %q: %w", filePath, err)
+	}
+
+	// Best-effort parse of resolvers for file dependency detection.
+	// Only map-shaped resolvers are supported — arrays or other forms are silently ignored.
+	var resolverSpecs map[string]minimalResolver
+	if doc.Spec.Resolvers.Kind == yaml.MappingNode {
+		_ = doc.Spec.Resolvers.Decode(&resolverSpecs) // ignore errors — best-effort
 	}
 
 	// Process compose files — merge tests from referenced files
@@ -135,12 +146,26 @@ func DiscoverFromFile(filePath string) (*SolutionTests, error) {
 				}
 				var composePart struct {
 					Spec struct {
-						Testing *TestSuite `yaml:"testing"`
+						Testing   *TestSuite `yaml:"testing"`
+						Resolvers yaml.Node  `yaml:"resolvers"`
 					} `yaml:"spec"`
 				}
 				if unmarshalErr := yaml.Unmarshal(composeData, &composePart); unmarshalErr != nil {
 					return nil, fmt.Errorf("parsing compose file %q: %w", match, unmarshalErr)
 				}
+				// Merge resolvers from compose file for dependency detection
+				if composePart.Spec.Resolvers.Kind == yaml.MappingNode {
+					var composeResolvers map[string]minimalResolver
+					if decErr := composePart.Spec.Resolvers.Decode(&composeResolvers); decErr == nil {
+						if resolverSpecs == nil {
+							resolverSpecs = make(map[string]minimalResolver)
+						}
+						for k, v := range composeResolvers {
+							resolverSpecs[k] = v
+						}
+					}
+				}
+
 				// Initialize doc testing if nil
 				if doc.Spec.Testing == nil {
 					doc.Spec.Testing = &TestSuite{}
@@ -184,10 +209,11 @@ func DiscoverFromFile(filePath string) (*SolutionTests, error) {
 	}
 
 	return &SolutionTests{
-		SolutionName: doc.Metadata.Name,
-		Cases:        doc.Spec.Testing.Cases,
-		Config:       doc.Spec.Testing.Config,
-		FilePath:     absPath,
+		SolutionName:  doc.Metadata.Name,
+		Cases:         doc.Spec.Testing.Cases,
+		Config:        doc.Spec.Testing.Config,
+		FilePath:      absPath,
+		DetectedFiles: detectFileDependencies(resolverSpecs),
 	}, nil
 }
 
@@ -346,4 +372,59 @@ func matchesTagFilter(testTags, filterTags []string) bool {
 		}
 	}
 	return false
+}
+
+// minimalResolver is a lightweight struct for extracting directory provider
+// paths without importing the full resolver package.
+type minimalResolver struct {
+	Resolve *struct {
+		With []struct {
+			Provider string         `yaml:"provider"`
+			Inputs   map[string]any `yaml:"inputs"`
+		} `yaml:"with"`
+	} `yaml:"resolve"`
+}
+
+// detectFileDependencies scans minimally-parsed resolver specs for directory
+// provider path inputs and returns glob patterns covering those paths.
+// This enables builtin tests to auto-detect file dependencies.
+func detectFileDependencies(resolvers map[string]minimalResolver) []string {
+	seen := make(map[string]bool)
+	var patterns []string
+
+	for _, res := range resolvers {
+		if res.Resolve == nil {
+			continue
+		}
+		for _, step := range res.Resolve.With {
+			if step.Provider != "directory" {
+				continue
+			}
+			pathVal, ok := step.Inputs["path"]
+			if !ok {
+				continue
+			}
+			pathStr, ok := pathVal.(string)
+			if !ok || pathStr == "" {
+				continue
+			}
+			// Skip absolute paths and dynamic references
+			if filepath.IsAbs(pathStr) ||
+				strings.Contains(pathStr, "{{") ||
+				strings.HasPrefix(pathStr, "expr:") ||
+				strings.HasPrefix(pathStr, "rslvr:") ||
+				strings.HasPrefix(pathStr, "tmpl:") {
+				continue
+			}
+			// Convert directory path to a recursive glob
+			pattern := strings.TrimSuffix(pathStr, "/") + "/**"
+			if !seen[pattern] {
+				seen[pattern] = true
+				patterns = append(patterns, pattern)
+			}
+		}
+	}
+
+	sort.Strings(patterns)
+	return patterns
 }

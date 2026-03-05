@@ -97,6 +97,11 @@ func (r *Runner) Run(ctx context.Context, solutions []SolutionTests) ([]TestResu
 		// Generate builtins
 		builtins := BuiltinTests(st.Config)
 		for _, b := range builtins {
+			// Auto-populate builtin test files from detected dependencies
+			// so directory provider paths are available in the sandbox.
+			if len(b.Files) == 0 && len(st.DetectedFiles) > 0 {
+				b.Files = append(b.Files, st.DetectedFiles...)
+			}
 			st.Cases[b.Name] = b
 		}
 

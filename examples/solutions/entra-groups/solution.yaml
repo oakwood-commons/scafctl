@@ -1,0 +1,71 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: entra-groups
+  version: 1.0.0
+  displayName: Entra Group Membership Check
+  description: >
+    Resolves the current user's Entra group memberships via the Microsoft Graph API.
+    Bypasses the 200-group JWT overage limit by calling /me/memberOf directly.
+  tags:
+    - entra
+    - identity
+    - groups
+
+spec:
+  resolvers:
+    # Get identity claims (name, email, objectId, etc.)
+    userClaims:
+      resolve:
+        with:
+          - provider: identity
+            inputs:
+              operation: claims
+              handler: entra
+
+    # Get ALL group ObjectIDs via Graph API (not the JWT claim)
+    userGroups:
+      resolve:
+        with:
+          - provider: identity
+            inputs:
+              operation: groups
+              handler: entra
+
+    # Extract just the group ID list
+    groupIds:
+      resolve:
+        with:
+          - provider: identity
+            inputs:
+              operation: groups
+              handler: entra
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "__self.groups"
+
+    # Group count
+    groupCount:
+      resolve:
+        with:
+          - provider: identity
+            inputs:
+              operation: groups
+              handler: entra
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "__self.count"
+
+    # Check membership in a specific group (replace with your group ObjectID)
+    # isInTargetGroup:
+    #   dependsOn: [userGroups]
+    #   resolve:
+    #     with:
+    #       - provider: cel
+    #         inputs:
+    #           expression: |
+    #             _.userGroups.groups.exists(g, g == "YOUR-GROUP-OBJECT-ID-HERE")
