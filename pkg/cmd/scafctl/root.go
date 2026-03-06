@@ -13,6 +13,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/auth/entra"
 	gcpauth "github.com/oakwood-commons/scafctl/pkg/auth/gcp"
 	ghauth "github.com/oakwood-commons/scafctl/pkg/auth/github"
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	authcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/auth"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/build"
 	bundlecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/bundle"
@@ -35,6 +36,7 @@ import (
 	vendorcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/vendor"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/version"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/metrics"
 	"github.com/oakwood-commons/scafctl/pkg/profiler"
@@ -246,6 +248,22 @@ func Root(opts *RootOptions) *cobra.Command {
 			ctx = writer.WithWriter(ctx, w)
 			ctx = input.WithInput(ctx, in)
 			ctx = config.WithConfig(ctx, cfg)
+
+			// ── Initialize CEL subsystem from config ──
+			celValues := cfg.CEL.ToCELValues()
+			celexp.InitFromAppConfig(ctx, celexp.CELConfigInput{
+				CacheSize:          celValues.CacheSize,
+				CostLimit:          celValues.CostLimit,
+				UseASTBasedCaching: celValues.UseASTBasedCaching,
+				EnableMetrics:      celValues.EnableMetrics,
+			})
+
+			// ── Initialize Go template cache from config ──
+			gtValues := cfg.GoTemplate.ToGoTemplateValues()
+			gotmpl.InitFromAppConfig(ctx, gotmpl.GoTemplateConfigInput{
+				CacheSize:     gtValues.CacheSize,
+				EnableMetrics: gtValues.EnableMetrics,
+			})
 
 			// Initialize auth registry with Entra handler
 			authRegistry := auth.NewRegistry()

@@ -18,7 +18,37 @@ const (
 	parametersKey       contextKey = "scafctl.provider.parameters"
 	iterationContextKey contextKey = "scafctl.provider.iterationContext"
 	ioStreamsKey        contextKey = "scafctl.provider.ioStreams"
+	solutionMetadataKey contextKey = "scafctl.provider.solutionMetadata"
 )
+
+// SolutionMeta holds solution metadata fields made available to providers via context.
+// This is a provider-package type to avoid circular imports with pkg/solution.
+type SolutionMeta struct {
+	// Name is the unique identifier for the solution.
+	Name string `json:"name" yaml:"name" doc:"The unique name of the solution"`
+	// Version is the semantic version string of the solution.
+	Version string `json:"version" yaml:"version" doc:"The version of the solution"`
+	// DisplayName is the human-readable name of the solution.
+	DisplayName string `json:"displayName,omitempty" yaml:"displayName,omitempty" doc:"The display name of the solution"`
+	// Description provides details about the solution's purpose.
+	Description string `json:"description,omitempty" yaml:"description,omitempty" doc:"The description of the solution"`
+	// Category classifies the solution.
+	Category string `json:"category,omitempty" yaml:"category,omitempty" doc:"The category of the solution"`
+	// Tags are searchable keywords associated with the solution.
+	Tags []string `json:"tags,omitempty" yaml:"tags,omitempty" doc:"A list of tags for the solution"`
+}
+
+// WithSolutionMetadata returns a new context with the solution metadata attached.
+func WithSolutionMetadata(ctx context.Context, meta *SolutionMeta) context.Context {
+	return context.WithValue(ctx, solutionMetadataKey, meta)
+}
+
+// SolutionMetadataFromContext retrieves the solution metadata from the context.
+// Returns the solution metadata and true if found, nil and false otherwise.
+func SolutionMetadataFromContext(ctx context.Context) (*SolutionMeta, bool) {
+	meta, ok := ctx.Value(solutionMetadataKey).(*SolutionMeta)
+	return meta, ok
+}
 
 // IOStreams holds terminal IO writers for providers that support streaming output.
 // Providers can use these to write output directly to the terminal during execution,

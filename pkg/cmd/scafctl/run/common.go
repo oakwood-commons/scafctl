@@ -406,6 +406,9 @@ func (o *sharedResolverOptions) executeResolvers(
 	}
 	executor := resolver.NewExecutor(resolverAdapter, executorOpts...)
 
+	// Attach solution metadata to the context so providers (e.g., metadata) can access it.
+	ctx = provider.WithSolutionMetadata(ctx, solutionMetaFromSolution(sol))
+
 	// Execute resolvers
 	resultCtx, err := executor.Execute(ctx, resolvers, params)
 	if err != nil {
@@ -524,4 +527,19 @@ func writeMetrics(errOut io.Writer) {
 			successRate)
 	}
 	fmt.Fprintln(errOut, strings.Repeat("-", 80))
+}
+
+// solutionMetaFromSolution converts a solution's metadata to a provider.SolutionMeta.
+func solutionMetaFromSolution(sol *solution.Solution) *provider.SolutionMeta {
+	meta := &provider.SolutionMeta{
+		Name:        sol.Metadata.Name,
+		DisplayName: sol.Metadata.DisplayName,
+		Description: sol.Metadata.Description,
+		Category:    sol.Metadata.Category,
+		Tags:        sol.Metadata.Tags,
+	}
+	if sol.Metadata.Version != nil {
+		meta.Version = sol.Metadata.Version.String()
+	}
+	return meta
 }

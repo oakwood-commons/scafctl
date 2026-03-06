@@ -1027,6 +1027,132 @@ Now any file ending in `_test.yaml` will be excluded, even if it matches an incl
 
 ---
 
+## Nested Bundle Support
+
+When a parent solution references sub-solutions via the `solution` provider, scafctl automatically discovers and bundles the sub-solution files recursively. This means nested solutions are fully self-contained — everything a sub-solution needs is included in the parent's bundle.
+
+### Step 1: Create the Project Structure
+
+```bash
+mkdir -p nested-demo/sub/templates
+```
+
+Create `nested-demo/parent-config.txt`:
+
+```
+parent data content
+```
+
+Create `nested-demo/sub/child.yaml`:
+
+```yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: nested-child
+  version: 1.0.0
+  description: Child sub-solution with its own local template
+
+spec:
+  resolvers:
+    child-template:
+      type: string
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              operation: read
+              path: "templates/greeting.tmpl"
+    child-greeting:
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "'hello from child'"
+```
+
+Create `nested-demo/sub/templates/greeting.tmpl`:
+
+```
+Hello from the child template!
+```
+
+### Step 2: Create the Parent Solution
+
+Create `nested-demo/parent.yaml`:
+
+```yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: nested-demo
+  version: 1.0.0
+  description: Parent solution referencing a child sub-solution
+
+spec:
+  resolvers:
+    parent-config:
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              operation: read
+              path: "parent-config.txt"
+
+    child-result:
+      type: any
+      resolve:
+        with:
+          - provider: solution
+            inputs:
+              source: "./sub/child.yaml"
+```
+
+### Step 3: Preview the Bundle
+
+```bash
+scafctl build solution nested-demo/parent.yaml --dry-run
+```
+
+Expected output:
+
+```
+Bundle analysis for nested-demo/parent.yaml:
+  Static analysis discovered:
+    parent-config.txt
+    sub/child.yaml
+    sub/templates/greeting.tmpl
+  Total: 3 bundled file(s)
+💡 Dry run: would build nested-demo@1.0.0
+```
+
+Notice that scafctl **recursively discovered** the child sub-solution (`sub/child.yaml`) and its file dependency (`sub/templates/greeting.tmpl`). No `bundle.include` is needed — the solution provider reference is detected by static analysis.
+
+### Step 4: Build and Run
+
+```bash
+scafctl build solution nested-demo/parent.yaml
+scafctl run resolver -f nested-demo -o json
+```
+
+### How It Works
+
+1. **Static analysis** — `scafctl build` parses the parent solution and finds the `solution` provider reference to `./sub/child.yaml`
+2. **Recursive discovery** — It then parses `sub/child.yaml` and discovers its own file dependencies (`templates/greeting.tmpl`)
+3. **Path normalization** — All paths are normalized relative to the parent bundle root (`sub/templates/greeting.tmpl` not `templates/greeting.tmpl`)
+4. **Circular reference detection** — If solution A references B and B references A, the build fails with a clear error
+
+### What You Learned
+
+- Sub-solutions referenced via the `solution` provider are automatically discovered during `build`
+- All nested file dependencies are included in the parent bundle — no extra `bundle.include` needed
+- Path normalization ensures sub-solution paths resolve correctly within the bundle
+- Circular sub-solution references are detected and reported at build time
+- `--dry-run` shows the full recursive file tree
+
+---
+
 ## Verifying and Extracting Bundles
 
 After building a bundle, you can verify its integrity and examine its contents.

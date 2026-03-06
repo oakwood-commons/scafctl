@@ -1,0 +1,68 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-nested-bundle
+  version: 1.0.0
+  description: Tests nested bundle support — sub-solutions with their own file dependencies
+
+spec:
+  resolvers:
+    # Parent reads a local file — file provider returns {content, path, size}
+    parent-config:
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              operation: read
+              path: "parent-data.txt"
+
+    # Sub-solution that has its own file dependency
+    child-result:
+      type: any
+      resolve:
+        with:
+          - provider: solution
+            inputs:
+              source: "./sub/child.yaml"
+
+  testing:
+    config:
+      # resolve-defaults: resolvers read local files that must be staged via files:
+      # render-defaults: solution has no workflow.actions section
+      skipBuiltins: [resolve-defaults, render-defaults]
+
+    cases:
+      _base:
+        description: Base template for nested bundle tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [bundling, nested-bundle]
+        files: ["parent-data.txt", "sub/**"]
+        assertions:
+          - expression: __exitCode == 0
+
+      parent-file-resolved:
+        description: Verify parent reads its own local file
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: '__output["parent-config"].content == "parent data content"'
+            message: "Parent should resolve its local file content"
+
+      child-solution-resolved:
+        description: Verify child sub-solution executes and returns data
+        extends: [_base]
+        assertions:
+          - expression: '"child-result" in __output'
+            message: "Child solution result should be present"
+          - expression: '__output["child-result"].status == "success"'
+            message: "Child solution should succeed"
+
+      child-file-resolved:
+        description: Verify child sub-solution can read its own template file
+        extends: [_base]
+        assertions:
+          - expression: '"child-result" in __output'
+          - expression: '__output["child-result"].resolvers["child-template"] == "child template content"'
+            message: "Child should resolve its own local template file"

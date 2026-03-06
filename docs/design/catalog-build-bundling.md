@@ -697,6 +697,39 @@ Use `--no-vendor` to skip catalog vendoring. The solution will reference catalog
 
 If a vendored sub-solution itself references other catalog dependencies, those are vendored recursively. Circular references are detected and rejected.
 
+#### Nested Bundle Support
+
+Bundled sub-solutions (referenced via the `solution` provider) can themselves contain bundles. The build system supports full recursive composability:
+
+1. **Recursive file discovery** — When a sub-solution is discovered via the `solution` provider's `source` input, `DiscoverFiles` recursively parses the sub-solution's YAML and analyzes it for its own local file references, catalog dependencies, and `bundle.include` globs. All discovered paths are normalized relative to the parent solution's bundle root.
+
+2. **Recursive vendoring** — If a sub-solution (local or vendored) references catalog dependencies, those are discovered and vendored recursively into the parent bundle's `.scafctl/vendor/` directory.
+
+3. **Deep nesting** — Recursive discovery supports arbitrary depth (parent → child → grandchild → ...). Each level's files and catalog references are merged and deduplicated into the parent's bundle.
+
+4. **Circular reference detection** — The discovery engine tracks visited solution file paths. If a sub-solution chain forms a cycle (A → B → A), the build fails with a clear error message identifying the circular reference.
+
+5. **Nested tar extraction** — When extracting a bundle that contains nested `.bundle.tar` files (from sub-solutions that were independently built), `ExtractBundleTar` recursively extracts them into the appropriate subdirectories. Circular nested tars are detected via content digest tracking.
+
+6. **Nested bundle verification** — `scafctl bundle verify` validates that all files referenced by sub-solutions are present in the bundle, checking recursively through the sub-solution chain.
+
+**Example: Nested directory structure after bundling**
+```
+bundle-root/
+  solution.yaml
+  parent-template.tmpl
+  sub/
+    child.yaml                    # local sub-solution
+    child-template.tmpl           # discovered from child.yaml's file provider refs
+    configs/
+      dev.yaml                    # discovered from child.yaml's bundle.include
+      prod.yaml
+  .scafctl/
+    bundle-manifest.json
+    vendor/
+      shared-lib@1.0.0.yaml      # vendored from child.yaml's catalog refs
+```
+
 ---
 
 ### Security Considerations

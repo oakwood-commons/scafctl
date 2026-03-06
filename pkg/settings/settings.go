@@ -96,6 +96,12 @@ const (
 	DefaultCELCostLimit = 1000000
 )
 
+// Go template defaults
+const (
+	// DefaultGoTemplateCacheSize is the default size for the Go template compilation cache.
+	DefaultGoTemplateCacheSize = 10000
+)
+
 // Circuit breaker defaults
 const (
 	// DefaultCircuitBreakerMaxFailures is the number of consecutive failures before opening the circuit.

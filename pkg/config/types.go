@@ -19,6 +19,7 @@ type Config struct {
 	Telemetry  TelemetryConfig  `json:"telemetry,omitempty" yaml:"telemetry,omitempty" mapstructure:"telemetry" doc:"OpenTelemetry configuration"`
 	HTTPClient HTTPClientConfig `json:"httpClient,omitempty" yaml:"httpClient,omitempty" mapstructure:"httpClient" doc:"Global HTTP client configuration"`
 	CEL        CELConfig        `json:"cel,omitempty" yaml:"cel,omitempty" mapstructure:"cel" doc:"CEL expression engine configuration"`
+	GoTemplate GoTemplateConfig `json:"goTemplate,omitempty" yaml:"goTemplate,omitempty" mapstructure:"goTemplate" doc:"Go template engine configuration"`
 	Resolver   ResolverConfig   `json:"resolver,omitempty" yaml:"resolver,omitempty" mapstructure:"resolver" doc:"Resolver executor configuration"`
 	Action     ActionConfig     `json:"action,omitempty" yaml:"action,omitempty" mapstructure:"action" doc:"Action executor configuration"`
 	Auth       GlobalAuthConfig `json:"auth,omitempty" yaml:"auth,omitempty" mapstructure:"auth" doc:"Authentication handler configuration"`
@@ -229,6 +230,15 @@ type CELConfig struct {
 
 	// EnableMetrics enables expression metrics collection
 	EnableMetrics *bool `json:"enableMetrics,omitempty" yaml:"enableMetrics,omitempty" mapstructure:"enableMetrics" doc:"Enable expression metrics"`
+}
+
+// GoTemplateConfig holds Go template engine configuration.
+type GoTemplateConfig struct {
+	// CacheSize is the maximum number of compiled templates to cache
+	CacheSize int `json:"cacheSize,omitempty" yaml:"cacheSize,omitempty" mapstructure:"cacheSize" doc:"Go template cache size" example:"10000" maximum:"1000000"`
+
+	// EnableMetrics enables template metrics collection
+	EnableMetrics *bool `json:"enableMetrics,omitempty" yaml:"enableMetrics,omitempty" mapstructure:"enableMetrics" doc:"Enable template metrics"`
 }
 
 // ResolverConfig holds resolver executor configuration.

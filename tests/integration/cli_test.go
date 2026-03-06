@@ -3566,6 +3566,22 @@ func TestIntegration_BundleDiff_SameVersion(t *testing.T) {
 	assert.Contains(t, stdout, "Summary")
 }
 
+func TestIntegration_BuildSolution_NestedBundle(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+
+	// Build the nested-bundle example — should discover sub-solution files recursively
+	stdout, stderr, exitCode := runScafctl(t, "build", "solution", "examples/solutions/nested-bundle/parent.yaml", "--version", "1.0.0", "--dry-run")
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	assert.Equal(t, 0, exitCode)
+
+	// Dry-run output should list the child sub-solution and its files
+	assert.Contains(t, stdout, "parent-config.txt", "should discover parent's local file")
+	assert.Contains(t, stdout, "child.yaml", "should discover the sub-solution file")
+}
+
 // ============================================================================
 // Vendor Command Tests
 // ============================================================================
@@ -4985,19 +5001,24 @@ spec:
       resolve:
         with:
           - provider: metadata
-            inputs:
-              name: my-solution
-              version: 2.1.0
-              category: infrastructure
+            inputs: {}
 `
 	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
 
-	stdout, stderr, exitCode := runScafctl(t, "run", "resolver", "-f", solutionFile, "-e", "_.meta.name", "-o", "json", "--hide-execution")
+	stdout, stderr, exitCode := runScafctl(t, "run", "resolver", "-f", solutionFile, "-e", "_.meta", "-o", "json", "--hide-execution")
 	t.Logf("stdout: %s", stdout)
 	t.Logf("stderr: %s", stderr)
 
 	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstdout: %s\nstderr: %s", exitCode, stdout, stderr)
-	assert.Contains(t, stdout, "my-solution")
+	// Verify the output contains the expected runtime metadata fields.
+	assert.Contains(t, stdout, "version")
+	assert.Contains(t, stdout, "args")
+	assert.Contains(t, stdout, "cwd")
+	assert.Contains(t, stdout, "entrypoint")
+	assert.Contains(t, stdout, "command")
+	assert.Contains(t, stdout, "solution")
+	// Verify solution metadata was populated from the solution file.
+	assert.Contains(t, stdout, "metadata-test")
 }
 
 // TestIntegration_RunResolver_TemplateFunctions_Slugify verifies slugify template function.

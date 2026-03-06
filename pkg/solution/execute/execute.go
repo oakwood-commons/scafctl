@@ -124,6 +124,9 @@ func Resolvers(
 		ctx = provider.WithDryRun(ctx, true)
 	}
 
+	// Attach solution metadata to the context so providers (e.g., metadata) can access it.
+	ctx = provider.WithSolutionMetadata(ctx, toSolutionMeta(sol))
+
 	resolvers := sol.Spec.ResolversToSlice()
 	resolverData := make(map[string]any)
 
@@ -276,4 +279,19 @@ func (r *ResolverRegistryAdapter) List() []provider.Provider {
 
 func (r *ResolverRegistryAdapter) DescriptorLookup() resolver.DescriptorLookup {
 	return r.registry.DescriptorLookup()
+}
+
+// toSolutionMeta converts a solution's metadata into the provider-package SolutionMeta type.
+func toSolutionMeta(sol *solution.Solution) *provider.SolutionMeta {
+	meta := &provider.SolutionMeta{
+		Name:        sol.Metadata.Name,
+		DisplayName: sol.Metadata.DisplayName,
+		Description: sol.Metadata.Description,
+		Category:    sol.Metadata.Category,
+		Tags:        sol.Metadata.Tags,
+	}
+	if sol.Metadata.Version != nil {
+		meta.Version = sol.Metadata.Version.String()
+	}
+	return meta
 }

@@ -2099,6 +2099,55 @@ ignoredBlocks:
 
 ---
 
+## Template Caching
+
+scafctl includes a built-in **LRU cache for compiled Go templates** that avoids re-parsing the same template content across evaluations. This is especially beneficial when multiple resolvers or actions use identical or similar templates.
+
+### How It Works
+
+- Each template's content + configuration (delimiters, missingKey, functions) is hashed with SHA-256
+- Compiled templates are stored in a bounded LRU cache
+- Identical templates share cache entries — even across different resolvers
+- The cache is thread-safe and returns clones so concurrent evaluations are safe
+
+### Configuration
+
+The cache size is controlled in your application config:
+
+```yaml
+# ~/.config/scafctl/config.yaml
+goTemplate:
+  cacheSize: 10000     # Max compiled templates to cache (default: 10000)
+  enableMetrics: true  # Enable per-template hit tracking
+```
+
+### Checking Cache Performance
+
+You can inspect cache statistics anytime:
+
+```bash
+# View cache stats via the CLI
+scafctl get config -e 'cfg.goTemplate'
+```
+
+Programmatically (for provider or plugin developers):
+
+```go
+stats := gotmpl.GetDefaultCache().Stats()
+fmt.Printf("Cache: %d/%d entries, %.1f%% hit rate\n",
+    stats.Size, stats.MaxSize, stats.HitRate)
+```
+
+### When Caching Helps Most
+
+- Solutions with many resolvers that use templates with the same structure
+- Repeated `run resolver` invocations during development
+- Actions that render multiple files from templates in a loop
+
+The cache is transparent — no solution YAML changes are required. It's enabled by default.
+
+---
+
 ## Provider Reference
 
 For a quick reference of all `go-template` provider inputs:

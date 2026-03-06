@@ -44,6 +44,32 @@ func (c *CELConfig) ToCELValues() CELConfigValues {
 	}
 }
 
+// GoTemplateConfigValues holds parsed Go template config values.
+// This avoids circular dependencies between config and gotmpl packages.
+type GoTemplateConfigValues struct {
+	CacheSize     int
+	EnableMetrics bool
+}
+
+// ToGoTemplateValues converts GoTemplateConfig to a GoTemplateConfigValues struct.
+// If a config value is zero/empty, the default value from settings is used.
+func (g *GoTemplateConfig) ToGoTemplateValues() GoTemplateConfigValues {
+	enableMetrics := true
+	if g.EnableMetrics != nil {
+		enableMetrics = *g.EnableMetrics
+	}
+
+	cacheSize := g.CacheSize
+	if cacheSize == 0 {
+		cacheSize = settings.DefaultGoTemplateCacheSize
+	}
+
+	return GoTemplateConfigValues{
+		CacheSize:     cacheSize,
+		EnableMetrics: enableMetrics,
+	}
+}
+
 // ResolverConfigValues holds parsed resolver config values with durations.
 type ResolverConfigValues struct {
 	Timeout        time.Duration

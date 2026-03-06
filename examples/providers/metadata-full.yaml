@@ -1,13 +1,11 @@
-# Metadata provider example — expose solution metadata as resolver data
+# Metadata provider example — returns runtime metadata about scafctl and the current solution
 #
-# The metadata provider accepts arbitrary key-value pairs and returns them
-# as a map. Use the optional "field" key to return a single value.
+# The metadata provider requires no inputs. It automatically returns:
+#   - version: scafctl build version info (buildVersion, commit, buildTime)
+#   - args: CLI arguments passed to scafctl
+#   - cwd: current working directory
+#   - entrypoint: "cli" or "api"
+#   - command: the command path (e.g. scafctl/run/solution)
+#   - solution: metadata of the currently-running solution
 
-# Full metadata map
-name: my-solution
-version: 2.1.0
-description: Scaffolds a GCP project
-category: infrastructure
-tags:
-  - gcp
-  - terraform
+# No inputs needed — all data is gathered from runtime state

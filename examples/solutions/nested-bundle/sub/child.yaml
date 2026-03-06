@@ -1,0 +1,34 @@
+# Nested Bundle Example — Child Solution
+#
+# This sub-solution is referenced by the parent and has its own local file
+# dependency (templates/greeting.tmpl). When the parent is built, the bundler
+# recursively discovers this template file and includes it in the bundle.
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: nested-bundle-child
+  version: 1.0.0
+  description: Child sub-solution with its own file dependencies
+
+spec:
+  resolvers:
+    # Local file reference — auto-discovered by the parent bundler.
+    greeting_template:
+      type: string
+      description: "Greeting template content"
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              operation: read
+              path: "templates/greeting.tmpl"
+
+    greeting:
+      type: string
+      description: "Formatted greeting"
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "'Hello, World!'"

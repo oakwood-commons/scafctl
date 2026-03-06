@@ -110,6 +110,14 @@ func WithWalkDirFunc(fn func(string, filepath.WalkFunc) error) DiscoverOption {
 //
 // Returns deduplicated lists of local files and catalog references.
 func DiscoverFiles(sol *solution.Solution, bundleRoot string, opts ...DiscoverOption) (*DiscoveryResult, error) {
+	return discoverFilesRecursive(sol, bundleRoot, bundleRoot, nil, opts...)
+}
+
+// discoverFilesRecursive is the internal recursive implementation of DiscoverFiles.
+// parentBundleRoot is the top-level bundle root used for path normalization.
+// currentRoot is the directory containing the current solution being analyzed.
+// visitedPaths tracks already-visited solution files to detect circular references.
+func discoverFilesRecursive(sol *solution.Solution, parentBundleRoot, currentRoot string, visitedPaths map[string]bool, opts ...DiscoverOption) (*DiscoveryResult, error) {
 	if sol == nil {
 		return nil, fmt.Errorf("solution is nil")
 	}
@@ -124,14 +132,33 @@ func DiscoverFiles(sol *solution.Solution, bundleRoot string, opts ...DiscoverOp
 		opt(cfg)
 	}
 
+	if visitedPaths == nil {
+		visitedPaths = make(map[string]bool)
+	}
+
 	result := &DiscoveryResult{}
 	seen := make(map[string]bool)
 
 	// Phase 1: Static analysis of provider inputs
 	staticFiles, catalogRefs := analyzeProviderInputs(sol)
 
+	// Separate local sub-solution files from other static files for recursive analysis.
+	subSolutionFiles := identifySubSolutionFiles(sol)
+	subSolutionSet := make(map[string]bool, len(subSolutionFiles))
+	for _, sf := range subSolutionFiles {
+		subSolutionSet[filepath.Clean(sf)] = true
+	}
+
 	for _, relPath := range staticFiles {
-		if err := addFileEntry(result, seen, cfg, bundleRoot, relPath, StaticAnalysis); err != nil {
+		// When analyzing a sub-solution, normalize paths relative to the parent bundle root.
+		normalizedPath := relPath
+		if currentRoot != parentBundleRoot {
+			relFromParent, err := filepath.Rel(parentBundleRoot, filepath.Join(currentRoot, relPath))
+			if err == nil {
+				normalizedPath = relFromParent
+			}
+		}
+		if err := addFileEntry(result, seen, cfg, parentBundleRoot, normalizedPath, StaticAnalysis); err != nil {
 			return nil, fmt.Errorf("static analysis: %w", err)
 		}
 	}
@@ -145,14 +172,69 @@ func DiscoverFiles(sol *solution.Solution, bundleRoot string, opts ...DiscoverOp
 		}
 	}
 
+	// Phase 1b: Recursively discover files from local sub-solutions
+	for _, subPath := range subSolutionFiles {
+		absSubPath := filepath.Join(currentRoot, subPath)
+		cleanAbsSubPath := filepath.Clean(absSubPath)
+
+		// Circular reference detection
+		if visitedPaths[cleanAbsSubPath] {
+			return nil, fmt.Errorf("circular sub-solution reference detected: %s", subPath)
+		}
+		visitedPaths[cleanAbsSubPath] = true
+
+		// Read and parse the sub-solution
+		subContent, err := cfg.readFile(absSubPath)
+		if err != nil {
+			// Sub-solution file not found — already added as a file entry, skip recursive analysis
+			continue
+		}
+
+		var subSol solution.Solution
+		if err := subSol.UnmarshalFromBytes(subContent); err != nil {
+			// Not a valid solution YAML — skip recursive analysis
+			continue
+		}
+
+		subRoot := filepath.Dir(absSubPath)
+		subResult, err := discoverFilesRecursive(&subSol, parentBundleRoot, subRoot, visitedPaths, opts...)
+		if err != nil {
+			return nil, fmt.Errorf("recursive discovery of sub-solution %s: %w", subPath, err)
+		}
+
+		// Merge sub-solution discovery results into parent results
+		for _, f := range subResult.LocalFiles {
+			if !seen[f.RelPath] {
+				seen[f.RelPath] = true
+				result.LocalFiles = append(result.LocalFiles, f)
+			}
+		}
+		for _, ref := range subResult.CatalogRefs {
+			if !catalogSeen[ref.Ref] {
+				catalogSeen[ref.Ref] = true
+				result.CatalogRefs = append(result.CatalogRefs, ref)
+			}
+		}
+	}
+
 	// Phase 2: Expand explicit bundle.include globs
 	if len(sol.Bundle.Include) > 0 {
-		expanded, err := expandGlobs(bundleRoot, sol.Bundle.Include, cfg)
+		// For sub-solutions, expand globs relative to their own directory
+		// but normalize results relative to the parent bundle root.
+		expandRoot := currentRoot
+		expanded, err := expandGlobs(expandRoot, sol.Bundle.Include, cfg)
 		if err != nil {
 			return nil, fmt.Errorf("bundle.include expansion: %w", err)
 		}
 		for _, relPath := range expanded {
-			if err := addFileEntry(result, seen, cfg, bundleRoot, relPath, ExplicitInclude); err != nil {
+			normalizedPath := relPath
+			if currentRoot != parentBundleRoot {
+				relFromParent, relErr := filepath.Rel(parentBundleRoot, filepath.Join(currentRoot, relPath))
+				if relErr == nil {
+					normalizedPath = relFromParent
+				}
+			}
+			if err := addFileEntry(result, seen, cfg, parentBundleRoot, normalizedPath, ExplicitInclude); err != nil {
 				return nil, fmt.Errorf("bundle.include: %w", err)
 			}
 		}
@@ -165,20 +247,34 @@ func DiscoverFiles(sol *solution.Solution, bundleRoot string, opts ...DiscoverOp
 				continue
 			}
 			for _, fileRef := range tc.Files {
+				normalizedRef := fileRef
+				if currentRoot != parentBundleRoot {
+					relFromParent, relErr := filepath.Rel(parentBundleRoot, filepath.Join(currentRoot, fileRef))
+					if relErr == nil {
+						normalizedRef = relFromParent
+					}
+				}
 				// Test file references may be globs — expand them
 				if strings.ContainsAny(fileRef, "*?[{") {
-					expanded, err := expandSingleGlob(bundleRoot, fileRef, cfg)
+					expanded, err := expandSingleGlob(currentRoot, fileRef, cfg)
 					if err != nil {
 						// Log warning but don't fail — globs are validated at test time
 						continue
 					}
 					for _, relPath := range expanded {
-						if err := addFileEntry(result, seen, cfg, bundleRoot, relPath, TestInclude); err != nil {
+						normalizedPath := relPath
+						if currentRoot != parentBundleRoot {
+							relFromParent, relErr := filepath.Rel(parentBundleRoot, filepath.Join(currentRoot, relPath))
+							if relErr == nil {
+								normalizedPath = relFromParent
+							}
+						}
+						if err := addFileEntry(result, seen, cfg, parentBundleRoot, normalizedPath, TestInclude); err != nil {
 							continue // skip files that don't exist yet
 						}
 					}
 				} else {
-					if err := addFileEntry(result, seen, cfg, bundleRoot, fileRef, TestInclude); err != nil {
+					if err := addFileEntry(result, seen, cfg, parentBundleRoot, normalizedRef, TestInclude); err != nil {
 						continue // skip files that don't exist yet
 					}
 				}
@@ -187,6 +283,54 @@ func DiscoverFiles(sol *solution.Solution, bundleRoot string, opts ...DiscoverOp
 	}
 
 	return result, nil
+}
+
+// identifySubSolutionFiles returns local file paths that are sub-solution references
+// (solution provider with literal local source paths).
+func identifySubSolutionFiles(sol *solution.Solution) []string {
+	var subFiles []string
+	subSeen := make(map[string]bool)
+
+	for _, r := range sol.Spec.Resolvers {
+		if r == nil || r.Resolve == nil {
+			continue
+		}
+		for _, ps := range r.Resolve.With {
+			if ps.Provider == "solution" {
+				if source := extractLiteralString(ps.Inputs, "source"); source != "" && isLocalPath(source) {
+					clean := filepath.Clean(source)
+					if !subSeen[clean] {
+						subSeen[clean] = true
+						subFiles = append(subFiles, source)
+					}
+				}
+			}
+		}
+	}
+
+	// Also check actions
+	if sol.Spec.Workflow != nil {
+		collectSubSolutionActions(sol.Spec.Workflow.Actions, &subFiles, subSeen)
+		collectSubSolutionActions(sol.Spec.Workflow.Finally, &subFiles, subSeen)
+	}
+
+	return subFiles
+}
+
+// collectSubSolutionActions scans actions for local sub-solution references.
+func collectSubSolutionActions(actions map[string]*actionpkg.Action, subFiles *[]string, subSeen map[string]bool) {
+	for _, a := range actions {
+		if a == nil || a.Provider != "solution" {
+			continue
+		}
+		if source := extractLiteralString(a.Inputs, "source"); source != "" && isLocalPath(source) {
+			clean := filepath.Clean(source)
+			if !subSeen[clean] {
+				subSeen[clean] = true
+				*subFiles = append(*subFiles, source)
+			}
+		}
+	}
 }
 
 // addFileEntry validates and adds a file to the discovery result, respecting ignore rules.

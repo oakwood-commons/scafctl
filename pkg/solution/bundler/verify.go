@@ -100,6 +100,10 @@ func verifyWithBundle(_ context.Context, sol *solution.Solution, bundleData []by
 		verifyStaticPaths(discovery, tmpDir, result)
 		verifyGlobCoverage(sol, manifest, result)
 		verifyVendoredDeps(discovery, bundledFiles, result)
+
+		// Verify nested sub-solution bundles: check that all files
+		// referenced by sub-solutions are present in the extracted tree.
+		verifyNestedBundles(discovery, tmpDir, result, lgr)
 	}
 
 	verifyPlugins(manifest, result)
@@ -161,5 +165,60 @@ func verifyVendoredDeps(discovery *DiscoveryResult, bundledFiles map[string]bool
 func verifyPlugins(manifest *BundleManifest, result *VerifyResult) {
 	for _, p := range manifest.Plugins {
 		result.Successes = append(result.Successes, fmt.Sprintf("plugin:%s (%s) %s", p.Name, p.Kind, p.Version))
+	}
+}
+
+// verifyNestedBundles checks that sub-solution files discovered recursively
+// are present in the extracted bundle tree. This validates that nested bundles
+// were correctly included when the parent bundle was built.
+func verifyNestedBundles(discovery *DiscoveryResult, tmpDir string, result *VerifyResult, lgr logr.Logger) {
+	for _, f := range discovery.LocalFiles {
+		filePath := filepath.Join(tmpDir, f.RelPath)
+		if _, statErr := os.Stat(filePath); statErr != nil {
+			// Only report sub-solution files that were discovered by static analysis
+			// but not yet reported (dedup with verifyStaticPaths which only checks
+			// direct static-analysis entries).
+			if f.Source == StaticAnalysis {
+				continue // already checked by verifyStaticPaths
+			}
+			result.Warnings = append(result.Warnings, fmt.Sprintf("nested bundle file %s not found in bundle", f.RelPath))
+		}
+	}
+
+	// Check for sub-solution YAML files and verify their own bundle integrity
+	for _, f := range discovery.LocalFiles {
+		if f.Source != StaticAnalysis {
+			continue
+		}
+		filePath := filepath.Join(tmpDir, f.RelPath)
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			continue
+		}
+
+		var subSol solution.Solution
+		if err := subSol.UnmarshalFromBytes(content); err != nil {
+			continue
+		}
+
+		// If the sub-solution has bundle includes or references files, verify them
+		subRoot := filepath.Dir(filePath)
+		subDiscovery, err := DiscoverFiles(&subSol, subRoot)
+		if err != nil {
+			lgr.V(1).Info("nested bundle verify: discovery failed for sub-solution", "path", f.RelPath, "error", err)
+			continue
+		}
+
+		for _, sf := range subDiscovery.LocalFiles {
+			subFilePath := filepath.Join(subRoot, sf.RelPath)
+			if _, statErr := os.Stat(subFilePath); statErr == nil {
+				result.Successes = append(result.Successes, fmt.Sprintf("nested:%s/%s", f.RelPath, sf.RelPath))
+			} else {
+				result.Errors = append(result.Errors, VerifyError{
+					Path:   fmt.Sprintf("nested:%s/%s", f.RelPath, sf.RelPath),
+					Reason: "sub-solution file not found in bundle",
+				})
+			}
+		}
 	}
 }

@@ -150,6 +150,10 @@ func (m *Manager) setDefaults() {
 	m.v.SetDefault("cel.useASTBasedCaching", false)
 	m.v.SetDefault("cel.enableMetrics", true)
 
+	// Go template defaults - all values from settings package
+	m.v.SetDefault("goTemplate.cacheSize", settings.DefaultGoTemplateCacheSize)
+	m.v.SetDefault("goTemplate.enableMetrics", true)
+
 	// Resolver defaults - all values from settings package
 	m.v.SetDefault("resolver.timeout", settings.DefaultResolverTimeout.String())
 	m.v.SetDefault("resolver.phaseTimeout", settings.DefaultPhaseTimeout.String())

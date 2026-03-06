@@ -5,6 +5,7 @@ The `gotmpl` package provides a service-oriented wrapper around Go's standard `t
 ## Features
 
 - **Service Pattern**: Reusable service instances with default configurations
+- **Template Caching**: Thread-safe LRU cache for compiled templates with SHA-256 content hashing
 - **Custom Delimiters**: Support for any delimiter pair (e.g., `[[`, `]]` or `{%`, `%}`)
 - **String Replacements**: Protect literal strings from template parsing with UUID placeholders
 - **Custom Functions**: Add custom template functions with flexible override capabilities
@@ -14,6 +15,7 @@ The `gotmpl` package provides a service-oriented wrapper around Go's standard `t
 - **Reference Extraction**: Extract data field references from templates for dependency analysis
 - **Sprig Functions**: 100+ built-in utility functions via [Masterminds/sprig](https://masterminds.github.io/sprig/)
 - **Extension System**: Pluggable architecture for custom Go template functions (see `ext/` sub-packages)
+- **Cache Metrics**: Per-template hit tracking with configurable limits
 
 ## Installation
 
@@ -501,7 +503,7 @@ Using a custom type instead of strings provides:
 
 ## Performance Considerations
 
-- **Template parsing**: Parse once per execution (not cached across executions)
+- **Template caching**: Compiled templates are cached in an LRU cache keyed by SHA-256 hash of content + configuration. The default cache holds up to 10,000 entries.
 - **Replacements**: Linear scan of content (O(n) per replacement)
 - **Reference extraction**: Parse tree traversal (O(nodes) in template)
 - **Logging overhead**: Minimal when verbosity is disabled
@@ -511,7 +513,47 @@ For high-performance scenarios:
 - Reuse Service instances to avoid function map duplication
 - Minimize replacements (only protect necessary strings)
 - Disable verbose logging in production
-- Consider caching parsed templates externally if needed
+- Tune the cache size via `goTemplate.cacheSize` in your app config (default: 10,000)
+
+### Template Cache
+
+The package includes a **thread-safe LRU template cache** (`TemplateCache`) that avoids re-parsing identical templates across executions. Cache keys are SHA-256 hashes of: template content, delimiters, missingKey option, and function map keys.
+
+```go
+// Access the default cache (singleton, lazily initialized)
+cache := gotmpl.GetDefaultCache()
+
+// Check cache stats
+stats := cache.Stats()
+fmt.Printf("Size: %d/%d, Hit rate: %.1f%%\n", stats.Size, stats.MaxSize, stats.HitRate)
+
+// Detailed stats with top-N most accessed templates
+detailed := cache.GetDetailedStats(10)
+for _, ts := range detailed.TopTemplates {
+    fmt.Printf("  %s: %d hits\n", ts.TemplateName, ts.Hits)
+}
+```
+
+#### App-level configuration
+
+The cache size is configured via application config:
+
+```yaml
+goTemplate:
+  cacheSize: 10000    # Max compiled templates to cache (default: 10000)
+  enableMetrics: true  # Enable template cache metrics
+```
+
+At startup, call `InitFromAppConfig` to wire the cache to the config:
+
+```go
+gotmpl.InitFromAppConfig(ctx, gotmpl.GoTemplateConfigInput{
+    CacheSize:     cfg.GoTemplate.CacheSize,
+    EnableMetrics: true,
+})
+```
+
+The function is idempotent — subsequent calls are no-ops.
 
 ## Extensions
 

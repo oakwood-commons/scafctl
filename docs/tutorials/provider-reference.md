@@ -1331,7 +1331,7 @@ resolve:
 
 ## metadata
 
-Return structured metadata about a solution. Accepts arbitrary key-value pairs and returns them as a map, optionally returning a single field by key. Useful for exposing solution name, version, description, tags, and custom attributes to templates and downstream resolvers.
+Returns runtime metadata about the scafctl process and the currently-executing solution. Requires no inputs — all data is gathered from the execution context and process environment. Useful for conditional logic, auditing, and passing runtime info to templates and downstream resolvers.
 
 ### Capabilities
 
@@ -1339,44 +1339,58 @@ Return structured metadata about a solution. Accepts arbitrary key-value pairs a
 
 ### Inputs
 
-| Field | Type | Required | Description |
-|-------|------|:--------:|-------------|
-| `field` | string | ❌ | Return only this single field from the metadata map instead of the full map |
-| *(any key)* | any | ❌ | Arbitrary metadata key-value pairs |
+None. The metadata provider accepts no inputs.
 
 ### Output
 
-When `field` is set: the value of that specific key.
-When `field` is omitted: a map of all provided key-value pairs (excluding `field` itself).
+| Field | Type | Description |
+|-------|------|-------------|
+| `version` | object | Build version information |
+| `version.buildVersion` | string | Semantic version of the scafctl build |
+| `version.commit` | string | Git commit hash of the build |
+| `version.buildTime` | string | Timestamp of the build |
+| `args` | string[] | Command-line arguments passed to scafctl |
+| `cwd` | string | Current working directory |
+| `entrypoint` | string | How scafctl was invoked: `"cli"`, `"api"`, or `"unknown"` |
+| `command` | string | The command path (e.g. `scafctl/run/solution`) |
+| `solution` | object | Metadata about the currently-running solution |
+| `solution.name` | string | Solution name |
+| `solution.version` | string | Solution version |
+| `solution.displayName` | string | Solution display name |
+| `solution.description` | string | Solution description |
+| `solution.category` | string | Solution category |
+| `solution.tags` | string[] | Solution tags |
 
 ### Examples
 
-**Full metadata map:**
+**Resolve runtime metadata:**
 
 ```yaml
 resolvers:
-  solution-meta:
-    type: metadata
-    from:
-      name: my-solution
-      version: 2.1.0
-      description: Scaffolds a GCP project
-      category: infrastructure
-      tags:
-        - gcp
-        - terraform
+  runtime-meta:
+    resolve:
+      with:
+        - provider: metadata
 ```
 
-**Single field extraction:**
+**Use metadata in a downstream resolver via CEL:**
 
 ```yaml
 resolvers:
-  solution-name:
-    type: metadata
-    from:
-      field: name
-      name: my-solution
-      version: 2.1.0
+  runtime-meta:
+    resolve:
+      with:
+        - provider: metadata
+  greeting:
+    dependsOn: [runtime-meta]
+    resolve:
+      with:
+        - provider: cel
+          inputs:
+            expression: >-
+              "Running " + _.runtime_meta.solution.name +
+              " v" + _.runtime_meta.solution.version +
+              " via " + _.runtime_meta.entrypoint
 ```
 
 ---

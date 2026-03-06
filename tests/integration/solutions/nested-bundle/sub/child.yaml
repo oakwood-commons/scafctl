@@ -1,0 +1,25 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: nested-bundle-child
+  version: 1.0.0
+  description: Child sub-solution that reads its own local template file
+
+spec:
+  resolvers:
+    child-template:
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "'child template content'"
+
+    child-greeting:
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "'hello from child'"

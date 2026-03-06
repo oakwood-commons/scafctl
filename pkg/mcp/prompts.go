@@ -747,7 +747,15 @@ IMPORTANT RULES:
 - Names must be globally unique — two files cannot define the same resolver or action name
 - Use relative paths in the compose list (relative to the root solution file)
 - Deep merge means maps are merged recursively; arrays are replaced, not appended
-- Order matters: later compose entries override earlier ones for conflicting keys`, pathRef, inlineNote, goal)
+- Order matters: later compose entries override earlier ones for conflicting keys
+
+SUB-SOLUTION COMPOSITION (alternative to compose partials):
+- Use the 'solution' provider to delegate to a child solution (full encapsulation)
+- Child solutions are separate .yaml files with their own apiVersion, kind, metadata, and resolvers
+- Reference them with: provider: solution, inputs: { source: "./sub/child.yaml" }
+- When building for the catalog, child solution files and their dependencies are discovered recursively
+- Circular sub-solution references are detected and reported at build time
+- See get_example with path "solutions/nested-bundle/parent.yaml" for a nested sub-solution example`, pathRef, inlineNote, goal)
 
 	return &mcp.GetPromptResult{
 		Description: fmt.Sprintf("Compose solution: %s", pathRef),
@@ -1122,6 +1130,8 @@ func migrationTypeGuide(migration string) string {
 - Identify independent functional units in the solution
 - Create separate solution files for each unit
 - Ensure each sub-solution is self-contained (has its own resolvers)
+- Use the 'solution' provider to reference sub-solutions: provider: solution, inputs: { source: "./sub/child.yaml" }
+- When building for the catalog, nested sub-solution files and their dependencies are bundled recursively
 - Shared resolvers should be duplicated or extracted into a composition partial
 - Update any documentation or run commands to reference the new files`
 	case "add-tests":
