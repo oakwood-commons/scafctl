@@ -40,6 +40,13 @@ type Action struct {
 	// Cannot start with "__" (reserved) or contain "[" or "]".
 	Name string `json:"name" yaml:"name" doc:"Action identifier (set from map key)" maxLength:"100" pattern:"^[a-zA-Z_][a-zA-Z0-9_-]*$" patternDescription:"Must start with letter/underscore, followed by alphanumerics, underscores, or hyphens"`
 
+	// Alias provides a short name for use in CEL/template expressions.
+	// When set, the action's result data is available as a top-level variable
+	// under this alias, in addition to the standard __actions.<name> reference.
+	// For example, alias: config allows using config.results.endpoint instead of
+	// __actions.fetchConfiguration.results.endpoint.
+	Alias string `json:"alias,omitempty" yaml:"alias,omitempty" doc:"Short alias for expression references" maxLength:"100" pattern:"^[a-zA-Z_][a-zA-Z0-9_-]*$" patternDescription:"Must start with letter/underscore, followed by alphanumerics, underscores, or hyphens"`
+
 	// Description provides documentation for the action.
 	Description string `json:"description,omitempty" yaml:"description,omitempty" doc:"Human-readable description of what the action does" maxLength:"500"`
 

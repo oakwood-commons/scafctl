@@ -93,7 +93,9 @@ Plus all sprig v3 functions (https://masterminds.github.io/sprig/).`,
 		Summary:  "A workflow step that performs a side effect using a provider (e.g., create file, deploy resource).",
 		Explanation: `Actions are defined under spec.workflow.actions and execute after all resolvers complete. Each action specifies a provider and inputs, and can optionally declare dependencies on other actions via 'dependsOn'.
 
-Actions support: conditional execution (when), retry policies, forEach iteration, timeouts, and result schemas. The workflow engine executes actions as a DAG, running independent actions in parallel.
+Actions support: conditional execution (when), retry policies, forEach iteration, timeouts, result schemas, and aliases. The workflow engine executes actions as a DAG, running independent actions in parallel.
+
+Actions can declare an 'alias' field for shorter expression references. For example, alias: config allows using config.results.endpoint instead of the verbose __actions.fetchConfiguration.results.endpoint.
 
 Cleanup actions go under spec.workflow.finally and always execute (even if earlier actions fail).`,
 		Examples: []string{

@@ -122,6 +122,7 @@ spec:
         description: "Human-readable description of what this action does"
         displayName: "Deploy Application"
         sensitive: false  # Whether results should be redacted in table output
+        alias: deploy     # Short alias for expression references (optional)
 
         # Provider
         provider: api
@@ -1259,7 +1260,8 @@ actions:
 
 ### Action Alias
 
-Actions could declare an alias for shorter, more readable references in expressions:
+Actions can declare an `alias` for shorter, more readable references in expressions.
+When set, the action's result data is available as a top-level CEL variable under the alias name, in addition to the standard `__actions.<actionName>` reference.
 
 ~~~yaml
 spec:
@@ -1281,6 +1283,10 @@ spec:
             expr: config.results.endpoint
           version:
             expr: config.results.version
+
+          # The original __actions form still works:
+          status:
+            expr: __actions.fetchConfiguration.status
 ~~~
 
 **Benefits:**
@@ -1291,10 +1297,13 @@ spec:
 
 **Rules:**
 
-- Alias must be unique across all actions (including other aliases)
-- Alias cannot conflict with reserved names (`_`, `__actions`, `__item`, `__index`, `__error`, etc.)
+- Alias must be unique across all actions and aliases (both `actions` and `finally` sections)
+- Alias cannot conflict with any action name
+- Alias cannot conflict with reserved names (`_`, `__actions`, `__item`, `__index`, `__error`, `__self`, `true`, `false`, `null`)
+- Alias cannot start with `__` (reserved prefix)
 - Alias follows the same naming pattern as action names: `^[a-zA-Z_][a-zA-Z0-9_-]*$`
 - The original `__actions.<actionName>` reference remains valid alongside the alias
+- Alias references in inputs are deferred (resolved at runtime) just like `__actions` references
 
 ---
 

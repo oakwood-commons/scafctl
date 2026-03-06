@@ -1,0 +1,140 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-action-alias
+  version: 1.0.0
+  description: |
+    Functional tests for action alias feature.
+    Verifies that aliases create shorter top-level variables
+    for referencing action results in CEL expressions.
+
+spec:
+  resolvers:
+    region:
+      description: Deployment region
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "us-east-1"
+
+  workflow:
+    actions:
+      fetchConfiguration:
+        alias: config
+        description: Fetch deployment configuration
+        provider: cel
+        inputs:
+          expression: |
+            {"region": "us-east-1", "env": "production", "replicas": 3}
+
+      validateConfig:
+        alias: validation
+        description: Validate the fetched configuration using config alias
+        provider: cel
+        dependsOn: [fetchConfiguration]
+        inputs:
+          expression: |
+            configData.env == "production" ? {"valid": true, "message": "Config OK"} : {"valid": false, "message": "Not production"}
+          variables:
+            expr: |
+              {"configData": config.results}
+
+      deploy:
+        alias: deployment
+        description: Deploy using config and validation alias references
+        provider: cel
+        dependsOn: [validateConfig]
+        inputs:
+          expression: |
+            validData.valid ? {"deployed": true, "region": configData.region, "replicas": configData.replicas} : {"deployed": false}
+          variables:
+            expr: |
+              {"configData": config.results, "validData": validation.results}
+
+      verifyWithFullRef:
+        description: Verify alias and __actions references return the same values
+        provider: cel
+        dependsOn: [fetchConfiguration]
+        inputs:
+          expression: |
+            {"aliasRegion": cfgAlias.region, "fullRefRegion": cfgFull.region}
+          variables:
+            expr: |
+              {"cfgAlias": config.results, "cfgFull": __actions["fetchConfiguration"].results}
+
+    finally:
+      cleanup:
+        description: Finally action using deployment alias reference
+        provider: cel
+        inputs:
+          expression: |
+            {"cleanedUp": true, "wasDeployed": deployData.deployed}
+          variables:
+            expr: |
+              {"deployData": deployment.results}
+
+  testing:
+    cases:
+      _run-base:
+        description: Base template for alias action tests
+        command: [run, solution]
+        args: ["-o", "json"]
+        tags: [action, alias]
+        assertions:
+          - expression: __exitCode == 0
+
+      workflow-succeeds:
+        description: Verify entire workflow succeeds with aliases
+        extends: [_run-base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.status == "succeeded"
+
+      alias-resolves-results:
+        description: Verify alias references resolve action results correctly
+        extends: [_run-base]
+        assertions:
+          - expression: __output.actions["fetchConfiguration"].status == "succeeded"
+          - expression: __output.actions["fetchConfiguration"].results.region == "us-east-1"
+            message: "fetchConfiguration should return region"
+
+      alias-in-dependent-action:
+        description: Verify alias works in dependent action expressions
+        extends: [_run-base]
+        assertions:
+          - expression: __output.actions["validateConfig"].status == "succeeded"
+          - expression: __output.actions["validateConfig"].results.valid == true
+            message: "Validation should pass using alias reference to config"
+
+      chained-alias-references:
+        description: Verify chaining multiple alias references in one expression
+        extends: [_run-base]
+        assertions:
+          - expression: __output.actions["deploy"].status == "succeeded"
+          - expression: __output.actions["deploy"].results.deployed == true
+            message: "Deploy should use both config and validation aliases"
+          - expression: __output.actions["deploy"].results.region == "us-east-1"
+            message: "Deploy should resolve config.results.region via alias"
+          - expression: __output.actions["deploy"].results.replicas == 3
+            message: "Deploy should resolve config.results.replicas via alias"
+
+      alias-and-full-ref-equivalent:
+        description: Verify alias and __actions form return the same values
+        extends: [_run-base]
+        assertions:
+          - expression: __output.actions["verifyWithFullRef"].status == "succeeded"
+          - expression: __output.actions["verifyWithFullRef"].results.aliasRegion == __output.actions["verifyWithFullRef"].results.fullRefRegion
+            message: "Alias and __actions references should return identical values"
+
+      alias-in-finally:
+        description: Verify aliases work in finally section
+        extends: [_run-base]
+        assertions:
+          - expression: __output.actions["cleanup"].status == "succeeded"
+          - expression: __output.actions["cleanup"].results.cleanedUp == true
+            message: "Finally action should resolve alias references"
+          - expression: __output.actions["cleanup"].results.wasDeployed == true
+            message: "Finally action should see deployment alias results"

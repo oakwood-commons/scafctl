@@ -527,9 +527,7 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 
 	// Evaluate condition if present
 	if action.When != nil {
-		additionalVars := map[string]any{
-			"__actions": e.actionContext.GetNamespace(),
-		}
+		additionalVars := e.buildAdditionalVars(graph.AliasMap)
 		shouldRun, err := action.When.EvaluateWithAdditionalVars(ctx, e.resolverData, additionalVars)
 		if err != nil {
 			e.actionContext.MarkFailed(actionName, fmt.Sprintf("condition evaluation failed: %v", err))
@@ -549,7 +547,7 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 	}
 
 	// Resolve inputs (including deferred values)
-	resolvedInputs, err := e.resolveInputs(ctx, action)
+	resolvedInputs, err := e.resolveInputs(ctx, action, graph.AliasMap)
 	if err != nil {
 		e.actionContext.MarkFailed(actionName, fmt.Sprintf("input resolution failed: %v", err))
 		if e.progressCallback != nil {
@@ -672,7 +670,7 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 }
 
 // resolveInputs resolves all inputs including deferred values.
-func (e *Executor) resolveInputs(ctx context.Context, action *ExpandedAction) (map[string]any, error) {
+func (e *Executor) resolveInputs(ctx context.Context, action *ExpandedAction, aliasMap map[string]string) (map[string]any, error) {
 	// Start with materialized inputs
 	inputs := make(map[string]any)
 	for k, v := range action.MaterializedInputs {
@@ -681,14 +679,14 @@ func (e *Executor) resolveInputs(ctx context.Context, action *ExpandedAction) (m
 
 	// Resolve deferred inputs using current action results
 	if len(action.DeferredInputs) > 0 {
-		actionsNamespace := e.actionContext.GetNamespace()
+		additionalVars := e.buildAdditionalVars(aliasMap)
 
 		for name, deferredVal := range action.DeferredInputs {
 			if deferredVal == nil || !deferredVal.IsDeferred() {
 				continue
 			}
 
-			resolved, err := deferredVal.Evaluate(ctx, e.resolverData, actionsNamespace)
+			resolved, err := deferredVal.Evaluate(ctx, e.resolverData, additionalVars)
 			if err != nil {
 				return nil, fmt.Errorf("failed to resolve deferred input %q: %w", name, err)
 			}
@@ -697,6 +695,26 @@ func (e *Executor) resolveInputs(ctx context.Context, action *ExpandedAction) (m
 	}
 
 	return inputs, nil
+}
+
+// buildAdditionalVars creates the additional variables map for CEL evaluation.
+// It includes the __actions namespace and any alias top-level variables.
+// Each alias points to the same data as __actions.<actionName> for the aliased action.
+func (e *Executor) buildAdditionalVars(aliasMap map[string]string) map[string]any {
+	namespace := e.actionContext.GetNamespace()
+
+	additionalVars := map[string]any{
+		"__actions": namespace,
+	}
+
+	// Add aliases as top-level variables
+	for alias, actionName := range aliasMap {
+		if actionData, ok := namespace[actionName]; ok {
+			additionalVars[alias] = actionData
+		}
+	}
+
+	return additionalVars
 }
 
 // callProvider executes the provider for an action.

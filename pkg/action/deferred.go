@@ -31,16 +31,12 @@ func (d *DeferredValue) IsDeferred() bool {
 	return d != nil && d.Deferred
 }
 
-// Evaluate resolves the deferred value using the provided resolver data and action results.
-// The actionsData should contain the __actions namespace with completed action results.
-func (d *DeferredValue) Evaluate(ctx context.Context, resolverData, actionsData map[string]any) (any, error) {
+// Evaluate resolves the deferred value using the provided resolver data and additional variables.
+// The additionalVars should contain both the __actions namespace (keyed by celexp.VarActions)
+// and any alias top-level variables pointing to individual action result data.
+func (d *DeferredValue) Evaluate(ctx context.Context, resolverData, additionalVars map[string]any) (any, error) {
 	if d == nil || !d.Deferred {
 		return nil, fmt.Errorf("cannot evaluate non-deferred value")
-	}
-
-	// Build additional vars with __actions namespace
-	additionalVars := map[string]any{
-		celexp.VarActions: actionsData,
 	}
 
 	if d.OriginalExpr != "" {
@@ -52,10 +48,12 @@ func (d *DeferredValue) Evaluate(ctx context.Context, resolverData, actionsData 
 	}
 
 	if d.OriginalTmpl != "" {
-		// For templates, merge resolver data with __actions at the template data level
+		// For templates, merge resolver data with additional vars at the template data level
 		templateData := map[string]any{
-			"_":         resolverData,
-			"__actions": actionsData,
+			"_": resolverData,
+		}
+		for k, v := range additionalVars {
+			templateData[k] = v
 		}
 		result, err := gotmpl.Execute(ctx, gotmpl.TemplateOptions{
 			Content: d.OriginalTmpl,
@@ -143,9 +141,10 @@ func HasDeferredValues(values map[string]any) bool {
 	return false
 }
 
-// ResolveDeferredValues evaluates all deferred values in the map using the provided action results.
+// ResolveDeferredValues evaluates all deferred values in the map using the provided additional variables.
+// additionalVars should contain __actions namespace and any alias variables.
 // Non-deferred values are passed through unchanged.
-func ResolveDeferredValues(ctx context.Context, values, resolverData, actionsData map[string]any) (map[string]any, error) {
+func ResolveDeferredValues(ctx context.Context, values, resolverData, additionalVars map[string]any) (map[string]any, error) {
 	if values == nil {
 		return nil, nil
 	}
@@ -154,7 +153,7 @@ func ResolveDeferredValues(ctx context.Context, values, resolverData, actionsDat
 
 	for name, v := range values {
 		if dv, ok := v.(*DeferredValue); ok && dv.IsDeferred() {
-			resolved, err := dv.Evaluate(ctx, resolverData, actionsData)
+			resolved, err := dv.Evaluate(ctx, resolverData, additionalVars)
 			if err != nil {
 				return nil, fmt.Errorf("failed to resolve deferred value %q: %w", name, err)
 			}

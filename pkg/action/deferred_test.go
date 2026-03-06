@@ -37,12 +37,12 @@ func TestDeferredValue_Evaluate(t *testing.T) {
 	ctx := context.Background()
 
 	tests := []struct {
-		name         string
-		value        *DeferredValue
-		resolverData map[string]any
-		actionsData  map[string]any
-		expected     any
-		expectError  bool
+		name           string
+		value          *DeferredValue
+		resolverData   map[string]any
+		additionalVars map[string]any
+		expected       any
+		expectError    bool
 	}{
 		{
 			name:        "nil value",
@@ -61,10 +61,12 @@ func TestDeferredValue_Evaluate(t *testing.T) {
 				Deferred:     true,
 			},
 			resolverData: map[string]any{"env": "prod"},
-			actionsData: map[string]any{
-				"build": map[string]any{
-					"results": map[string]any{
-						"exitCode": int64(0),
+			additionalVars: map[string]any{
+				"__actions": map[string]any{
+					"build": map[string]any{
+						"results": map[string]any{
+							"exitCode": int64(0),
+						},
 					},
 				},
 			},
@@ -77,10 +79,12 @@ func TestDeferredValue_Evaluate(t *testing.T) {
 				Deferred:     true,
 			},
 			resolverData: map[string]any{"env": "prod"},
-			actionsData: map[string]any{
-				"build": map[string]any{
-					"results": map[string]any{
-						"output": "success",
+			additionalVars: map[string]any{
+				"__actions": map[string]any{
+					"build": map[string]any{
+						"results": map[string]any{
+							"output": "success",
+						},
 					},
 				},
 			},
@@ -92,14 +96,39 @@ func TestDeferredValue_Evaluate(t *testing.T) {
 				OriginalTmpl: "Exit: {{ .__actions.build.results.exitCode }}",
 				Deferred:     true,
 			},
-			actionsData: map[string]any{
-				"build": map[string]any{
-					"results": map[string]any{
-						"exitCode": 0,
+			additionalVars: map[string]any{
+				"__actions": map[string]any{
+					"build": map[string]any{
+						"results": map[string]any{
+							"exitCode": 0,
+						},
 					},
 				},
 			},
 			expected: "Exit: 0",
+		},
+		{
+			name: "evaluate expr with alias",
+			value: &DeferredValue{
+				OriginalExpr: "config.results.endpoint",
+				Deferred:     true,
+			},
+			resolverData: map[string]any{"env": "prod"},
+			additionalVars: map[string]any{
+				"__actions": map[string]any{
+					"fetchConfiguration": map[string]any{
+						"results": map[string]any{
+							"endpoint": "https://api.example.com",
+						},
+					},
+				},
+				"config": map[string]any{
+					"results": map[string]any{
+						"endpoint": "https://api.example.com",
+					},
+				},
+			},
+			expected: "https://api.example.com",
 		},
 		{
 			name: "empty deferred value",
@@ -112,7 +141,7 @@ func TestDeferredValue_Evaluate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := tt.value.Evaluate(ctx, tt.resolverData, tt.actionsData)
+			result, err := tt.value.Evaluate(ctx, tt.resolverData, tt.additionalVars)
 			if tt.expectError {
 				require.Error(t, err)
 				return
@@ -284,11 +313,13 @@ func TestResolveDeferredValues(t *testing.T) {
 	ctx := context.Background()
 
 	resolverData := map[string]any{"env": "prod"}
-	actionsData := map[string]any{
-		"build": map[string]any{
-			"results": map[string]any{
-				"exitCode": int64(0),
-				"output":   "success",
+	additionalVars := map[string]any{
+		"__actions": map[string]any{
+			"build": map[string]any{
+				"results": map[string]any{
+					"exitCode": int64(0),
+					"output":   "success",
+				},
 			},
 		},
 	}
@@ -302,7 +333,7 @@ func TestResolveDeferredValues(t *testing.T) {
 		},
 	}
 
-	result, err := ResolveDeferredValues(ctx, values, resolverData, actionsData)
+	result, err := ResolveDeferredValues(ctx, values, resolverData, additionalVars)
 	require.NoError(t, err)
 
 	assert.Equal(t, "hello", result["literal"])

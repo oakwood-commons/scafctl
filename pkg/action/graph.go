@@ -28,6 +28,11 @@ type Graph struct {
 	// FinallyOrder contains phases for the finally section.
 	// Finally actions have an implicit dependency on all main actions completing.
 	FinallyOrder [][]string `json:"finallyOrder,omitempty" yaml:"finallyOrder,omitempty" doc:"Parallel execution phases for finally actions"`
+
+	// AliasMap maps action aliases to their original action names.
+	// This enables shorter, more readable references in CEL expressions.
+	// For example, alias "config" → action name "fetchConfiguration".
+	AliasMap map[string]string `json:"aliasMap,omitempty" yaml:"aliasMap,omitempty" doc:"Alias-to-action-name mapping"`
 }
 
 // ExpandedAction is an action with materialized inputs ready for execution.
@@ -95,11 +100,15 @@ func BuildGraph(ctx context.Context, w *Workflow, resolverData map[string]any, o
 	}
 
 	graph := &Graph{
-		Actions: make(map[string]*ExpandedAction),
+		Actions:  make(map[string]*ExpandedAction),
+		AliasMap: make(map[string]string),
 	}
 
+	// Build alias map from all sections
+	aliasNames := buildAliasNames(w.Actions, w.Finally)
+
 	// Process main actions section
-	mainExpanded, mainDeps, err := expandSection(ctx, w.Actions, "actions", resolverData, opts)
+	mainExpanded, mainDeps, err := expandSection(ctx, w.Actions, "actions", resolverData, aliasNames, opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to expand actions section: %w", err)
 	}
@@ -109,7 +118,7 @@ func BuildGraph(ctx context.Context, w *Workflow, resolverData map[string]any, o
 	}
 
 	// Process finally section
-	finallyExpanded, finallyDeps, err := expandSection(ctx, w.Finally, "finally", resolverData, opts)
+	finallyExpanded, finallyDeps, err := expandSection(ctx, w.Finally, "finally", resolverData, aliasNames, opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to expand finally section: %w", err)
 	}
@@ -134,6 +143,15 @@ func BuildGraph(ctx context.Context, w *Workflow, resolverData map[string]any, o
 		graph.FinallyOrder = splitPhasesForExclusive(finallyOrder, finallyExpanded)
 	}
 
+	// Populate alias map from action definitions
+	for _, actions := range []map[string]*Action{w.Actions, w.Finally} {
+		for name, action := range actions {
+			if action != nil && action.Alias != "" {
+				graph.AliasMap[action.Alias] = name
+			}
+		}
+	}
+
 	return graph, nil
 }
 
@@ -144,6 +162,7 @@ func expandSection(
 	actions map[string]*Action,
 	section string,
 	resolverData map[string]any,
+	aliasNames []string,
 	opts *BuildGraphOptions,
 ) (map[string]*ExpandedAction, map[string][]string, error) {
 	expanded := make(map[string]*ExpandedAction)
@@ -180,7 +199,7 @@ func expandSection(
 				expandedName := fmt.Sprintf("%s[%d]", originalName, i)
 				expandedNames = append(expandedNames, expandedName)
 
-				expandedAction, err := createExpandedAction(ctx, action, section, i, item, originalName, resolverData, opts)
+				expandedAction, err := createExpandedAction(ctx, action, section, i, item, originalName, resolverData, aliasNames, opts)
 				if err != nil {
 					return nil, nil, fmt.Errorf("action %q iteration %d: %w", originalName, i, err)
 				}
@@ -193,7 +212,7 @@ func expandSection(
 			forEachExpansions[originalName] = expandedNames
 		} else {
 			// Non-forEach action - create single expanded action
-			expandedAction, err := createExpandedAction(ctx, action, section, -1, nil, name, resolverData, opts)
+			expandedAction, err := createExpandedAction(ctx, action, section, -1, nil, name, resolverData, aliasNames, opts)
 			if err != nil {
 				return nil, nil, fmt.Errorf("action %q: %w", name, err)
 			}
@@ -272,6 +291,7 @@ func createExpandedAction(
 	item any,
 	originalName string,
 	resolverData map[string]any,
+	aliasNames []string,
 	opts *BuildGraphOptions,
 ) (*ExpandedAction, error) {
 	expanded := &ExpandedAction{
@@ -311,8 +331,8 @@ func createExpandedAction(
 				continue
 			}
 
-			// Check if the value references __actions (needs deferral)
-			if valueRef.ReferencesVariable(celexp.VarActions) {
+			// Check if the value references __actions or an alias (needs deferral)
+			if referencesActionsOrAlias(valueRef, aliasNames) {
 				dv, err := materializeDeferred(valueRef)
 				if err != nil {
 					return nil, fmt.Errorf("failed to defer input %q: %w", inputName, err)
@@ -725,4 +745,39 @@ func parseActionsRefsForGraph(s string) []string {
 		result = append(result, name)
 	}
 	return result
+}
+
+// buildAliasNames collects all alias names from all workflow sections.
+// Returns a deduplicated slice of alias strings used during graph building
+// to detect which ValueRefs need deferral (because they reference an alias).
+func buildAliasNames(sections ...map[string]*Action) []string {
+	aliases := make([]string, 0)
+	seen := make(map[string]bool)
+
+	for _, actions := range sections {
+		for _, action := range actions {
+			if action != nil && action.Alias != "" && !seen[action.Alias] {
+				aliases = append(aliases, action.Alias)
+				seen[action.Alias] = true
+			}
+		}
+	}
+
+	return aliases
+}
+
+// referencesActionsOrAlias checks if a ValueRef references __actions or any action alias.
+// If either is true, the value must be deferred until runtime when action results are available.
+func referencesActionsOrAlias(v *spec.ValueRef, aliasNames []string) bool {
+	if v.ReferencesVariable(celexp.VarActions) {
+		return true
+	}
+
+	for _, alias := range aliasNames {
+		if v.ReferencesVariable(alias) {
+			return true
+		}
+	}
+
+	return false
 }

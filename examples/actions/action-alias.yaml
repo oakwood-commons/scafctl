@@ -1,0 +1,57 @@
+# Action Alias Example
+# Demonstrates using action aliases for shorter, more readable expression references.
+# Instead of verbose __actions.fetchConfiguration.results.endpoint, use config.results.endpoint.
+#
+# Run: scafctl run solution -f examples/actions/action-alias.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: action-alias-demo
+  version: 1.0.0
+  description: Action alias for readable expression references
+
+spec:
+  resolvers:
+    environment:
+      description: Target environment
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "production"
+
+  workflow:
+    actions:
+      # Step 1: Fetch configuration
+      fetchConfiguration:
+        description: Load configuration from a static provider
+        displayName: Fetch Config
+        alias: config  # Short alias for expression references
+        provider: exec
+        inputs:
+          command: "echo '{\"endpoint\": \"https://api.example.com/deploy\", \"version\": \"2.1.0\"}'"
+
+      # Step 2: Validate (uses alias for readable expressions)
+      validateConfig:
+        description: Validate the fetched configuration
+        displayName: Validate
+        alias: validation
+        provider: exec
+        dependsOn: [fetchConfiguration]
+        inputs:
+          # Use short alias instead of __actions.fetchConfiguration.results.endpoint
+          command:
+            expr: "'echo Validating endpoint: ' + config.results.stdout"
+
+      # Step 3: Deploy (uses both alias and traditional __actions references)
+      deploy:
+        description: Deploy with validated configuration
+        displayName: Deploy
+        provider: exec
+        dependsOn: [fetchConfiguration, validateConfig]
+        inputs:
+          # Alias reference (short form)
+          command:
+            expr: "'echo Deploying v' + config.results.stdout + ' with validation status: ' + string(validation.status)"
