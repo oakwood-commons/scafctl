@@ -114,6 +114,7 @@ type sharedResolverOptions struct {
 	SkipTransform   bool
 	ShowMetrics     bool
 	ShowSensitive   bool
+	NoCache         bool
 	WarnValueSize   int64
 	MaxValueSize    int64
 	ResolverTimeout time.Duration
@@ -456,6 +457,9 @@ func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context)
 	if o.getter != nil {
 		opts = append(opts, prepare.WithGetter(o.getter))
 	}
+	if o.NoCache {
+		opts = append(opts, prepare.WithNoCache())
+	}
 	if o.registry != nil {
 		opts = append(opts, prepare.WithRegistry(o.registry))
 	}
@@ -486,6 +490,7 @@ func addSharedResolverFlags(cCmd *cobra.Command, o *sharedResolverOptions) {
 	cCmd.Flags().BoolVar(&o.SkipValidation, "skip-validation", false, "Skip the validation phase of all resolvers")
 	cCmd.Flags().BoolVar(&o.ShowMetrics, "show-metrics", false, "Show provider execution metrics after completion (output to stderr)")
 	cCmd.Flags().BoolVar(&o.ShowSensitive, "show-sensitive", false, "Reveal sensitive values in all output formats (by default, sensitive values are redacted in table output but shown in json/yaml)")
+	cCmd.Flags().BoolVar(&o.NoCache, "no-cache", false, "Bypass the artifact cache and fetch directly from the catalog")
 	cCmd.Flags().Int64Var(&o.WarnValueSize, "warn-value-size", settings.DefaultWarnValueSize, "Warn when value exceeds this size in bytes (default: 1MB)")
 	cCmd.Flags().Int64Var(&o.MaxValueSize, "max-value-size", settings.DefaultMaxValueSize, "Fail when value exceeds this size in bytes (default: 10MB)")
 	cCmd.Flags().DurationVar(&o.ResolverTimeout, "resolver-timeout", settings.DefaultResolverTimeout, "Timeout per resolver")

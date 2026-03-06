@@ -66,6 +66,7 @@ func runInfo(ctx context.Context, _ *InfoOptions, outputOpts *kvx.OutputOptions)
 	caches := []cachelib.Info{
 		cachelib.GetCacheInfo("HTTP Cache", paths.HTTPCacheDir(), "HTTP response cache"),
 		cachelib.GetCacheInfo("Build Cache", paths.BuildCacheDir(), "Incremental build fingerprints"),
+		cachelib.GetCacheInfo("Artifact Cache", paths.ArtifactCacheDir(), "Downloaded catalog artifacts (TTL-based)"),
 	}
 
 	// Calculate totals

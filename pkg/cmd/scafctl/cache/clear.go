@@ -38,6 +38,8 @@ const (
 	KindHTTP cachelib.Kind = cachelib.KindHTTP
 	// KindBuild clears the build cache (incremental build fingerprints).
 	KindBuild cachelib.Kind = cachelib.KindBuild
+	// KindArtifact clears the artifact cache (downloaded catalog artifacts with TTL).
+	KindArtifact cachelib.Kind = cachelib.KindArtifact
 )
 
 // ValidKinds lists all valid cache kinds.
@@ -62,9 +64,10 @@ func CommandClear(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			type of cache, or --name to clear cache entries matching a pattern.
 
 			Cache kinds:
-			  all   - Clear all caches (default)
-			  http  - Clear HTTP response cache
-			  build - Clear build cache (incremental build fingerprints)
+		  all      - Clear all caches (default)
+		  http     - Clear HTTP response cache
+		  build    - Clear build cache (incremental build fingerprints)
+		  artifact - Clear artifact cache (downloaded catalog artifacts)
 
 			Examples:
 			  # Clear all caches
@@ -72,7 +75,8 @@ func CommandClear(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 
 			  # Clear only HTTP cache
 			  scafctl cache clear --kind http
-
+		  # Clear only artifact cache
+		  scafctl cache clear --kind artifact
 			  # Clear cache entries matching a pattern
 			  scafctl cache clear --name "api.github.com*"
 
@@ -110,6 +114,8 @@ func runClear(ctx context.Context, options *ClearOptions, outputOpts *kvx.Output
 			kind = KindHTTP
 		case string(KindBuild):
 			kind = KindBuild
+		case string(KindArtifact):
+			kind = KindArtifact
 		default:
 			err := fmt.Errorf("invalid cache kind %q; valid kinds: %s", options.Kind, strings.Join(ValidKinds, ", "))
 			w.Errorf("%v", err)
@@ -172,6 +178,15 @@ func runClear(ctx context.Context, options *ClearOptions, outputOpts *kvx.Output
 		files, bytes, err := cachelib.ClearDirectory(paths.BuildCacheDir(), options.Name)
 		if err != nil {
 			w.Errorf("failed to clear build cache: %v", err)
+			return exitcode.WithCode(err, exitcode.GeneralError)
+		}
+		totalFiles += files
+		totalBytes += bytes
+
+	case KindArtifact:
+		files, bytes, err := cachelib.ClearDirectory(paths.ArtifactCacheDir(), options.Name)
+		if err != nil {
+			w.Errorf("failed to clear artifact cache: %v", err)
 			return exitcode.WithCode(err, exitcode.GeneralError)
 		}
 		totalFiles += files

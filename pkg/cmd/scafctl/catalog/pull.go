@@ -9,9 +9,11 @@ import (
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/scafctl/pkg/cache"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -26,6 +28,7 @@ type PullOptions struct {
 	Kind       string // Artifact kind override (--kind)
 	Force      bool   // Overwrite existing (--force)
 	Insecure   bool   // Allow HTTP (--insecure)
+	NoCache    bool   // Invalidate artifact cache after pull (--no-cache)
 	CliParams  *settings.Run
 	IOStreams  *terminal.IOStreams
 }
@@ -78,6 +81,7 @@ func CommandPull(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 	cmd.Flags().StringVar(&options.Kind, "kind", "", "Artifact kind override (solution, provider, auth-handler)")
 	cmd.Flags().BoolVarP(&options.Force, "force", "f", false, "Overwrite existing local artifact")
 	cmd.Flags().BoolVar(&options.Insecure, "insecure", false, "Allow insecure HTTP connections")
+	cmd.Flags().BoolVar(&options.NoCache, "no-cache", false, "Invalidate the artifact cache for this artifact after pulling")
 
 	return cmd
 }
@@ -188,6 +192,26 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 		displayName,
 		ref.Version.String(),
 		formatBytes(result.Size))
+
+	// When --no-cache is set, invalidate any stale artifact cache entry so that
+	// subsequent run/render/get commands fetch the freshly pulled artifact from
+	// the local catalog rather than a cached copy.
+	if opts.NoCache {
+		artifactCache := cache.NewArtifactCache(paths.ArtifactCacheDir(), settings.DefaultArtifactCacheTTL)
+		targetName := ref.Name
+		if opts.TargetName != "" {
+			targetName = opts.TargetName
+		}
+		version := ""
+		if ref.Version != nil {
+			version = ref.Version.String()
+		}
+		if err := artifactCache.Invalidate(string(ref.Kind), targetName, version); err != nil {
+			lgr.V(1).Info("failed to invalidate artifact cache (ignoring)", "error", err)
+		} else {
+			lgr.V(1).Info("artifact cache invalidated", "kind", ref.Kind, "name", targetName, "version", version)
+		}
+	}
 
 	return nil
 }

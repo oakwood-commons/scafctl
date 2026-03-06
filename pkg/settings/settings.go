@@ -49,6 +49,10 @@ const (
 
 	// DefaultHTTPCacheKeyPrefix is the default prefix for HTTP cache keys.
 	DefaultHTTPCacheKeyPrefix = "scafctl:"
+
+	// DefaultArtifactCacheTTL is the default TTL for the artifact cache.
+	// Catalog artifacts are cached for 24 hours by default.
+	DefaultArtifactCacheTTL = 24 * time.Hour
 )
 
 // DefaultHTTPCacheDir returns the default directory for HTTP cache.
