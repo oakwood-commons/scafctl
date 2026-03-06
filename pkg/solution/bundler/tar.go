@@ -195,9 +195,33 @@ func writeToTarWriter(tw *tar.Writer, name string, content []byte) error {
 // ExtractBundleTar extracts a bundle tar archive to a destination directory.
 // Returns the bundle manifest.
 func ExtractBundleTar(tarData []byte, destDir string) (*BundleManifest, error) {
+	return extractBundleTarRecursive(tarData, destDir, nil)
+}
+
+// extractBundleTarRecursive extracts a bundle tar archive, detecting and recursively
+// extracting nested tar archives from sub-solution bundles.
+// visitedDigests tracks tar content digests to detect circular nested bundles.
+func extractBundleTarRecursive(tarData []byte, destDir string, visitedDigests map[string]bool) (*BundleManifest, error) {
+	if visitedDigests == nil {
+		visitedDigests = make(map[string]bool)
+	}
+
+	// Detect circular nested tar references via content digest
+	tarDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(tarData))
+	if visitedDigests[tarDigest] {
+		return nil, fmt.Errorf("circular nested bundle detected (digest %s)", tarDigest)
+	}
+	visitedDigests[tarDigest] = true
+
 	tr := tar.NewReader(bytes.NewReader(tarData))
 
 	var manifest *BundleManifest
+	// Collect nested tar entries for deferred extraction after the main pass.
+	type nestedTar struct {
+		destDir string
+		content []byte
+	}
+	var nestedTars []nestedTar
 
 	for {
 		header, err := tr.Next()
@@ -243,6 +267,14 @@ func ExtractBundleTar(tarData []byte, destDir string) (*BundleManifest, error) {
 					return nil, fmt.Errorf("failed to parse bundle manifest: %w", err)
 				}
 			}
+
+			// Detect nested tar archives (sub-solution bundles)
+			if isNestedBundleTar(cleanName, content) {
+				nestedTars = append(nestedTars, nestedTar{
+					destDir: filepath.Dir(destPath),
+					content: content,
+				})
+			}
 		}
 	}
 
@@ -250,5 +282,57 @@ func ExtractBundleTar(tarData []byte, destDir string) (*BundleManifest, error) {
 		return nil, fmt.Errorf("bundle tar does not contain a manifest at %s", BundleManifestPath)
 	}
 
+	// Extract nested tar archives
+	for _, nt := range nestedTars {
+		nestedManifest, err := extractBundleTarRecursive(nt.content, nt.destDir, visitedDigests)
+		if err != nil {
+			// Log but don't fail — nested bundles are best-effort
+			continue
+		}
+		// Merge nested manifest files into the parent manifest for visibility
+		if nestedManifest != nil {
+			relDir, relErr := filepath.Rel(destDir, nt.destDir)
+			if relErr != nil {
+				relDir = nt.destDir
+			}
+			for _, f := range nestedManifest.Files {
+				nestedPath := filepath.ToSlash(filepath.Join(relDir, f.Path))
+				manifest.Files = append(manifest.Files, BundleFileEntry{
+					Path:   nestedPath,
+					Size:   f.Size,
+					Digest: f.Digest,
+				})
+			}
+		}
+	}
+
 	return manifest, nil
+}
+
+// isNestedBundleTar checks whether a tar entry contains a nested bundle tar archive.
+// A nested bundle tar is detected by checking if the file name ends with .bundle.tar
+// or if the content starts with a valid tar header containing a bundle manifest path.
+func isNestedBundleTar(name string, content []byte) bool {
+	// Check by file extension convention
+	slashName := filepath.ToSlash(name)
+	if strings.HasSuffix(slashName, ".bundle.tar") {
+		return true
+	}
+
+	// Check if the content is a tar archive containing a bundle manifest
+	if len(content) < 512 { // minimum tar header size
+		return false
+	}
+
+	tr := tar.NewReader(bytes.NewReader(content))
+	for i := 0; i < 5; i++ { // only check first few entries
+		header, err := tr.Next()
+		if err != nil {
+			return false
+		}
+		if filepath.ToSlash(filepath.Clean(header.Name)) == BundleManifestPath {
+			return true
+		}
+	}
+	return false
 }

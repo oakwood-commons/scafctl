@@ -263,8 +263,8 @@ func DescriptionFromPath(path string) string {
 		"resolvers/secrets.yaml":             "Secrets resolver pattern",
 
 		// Providers
-		"providers/metadata-full.yaml":         "Metadata provider — expose all solution metadata as a map",
-		"providers/metadata-single-field.yaml": "Metadata provider — extract a single metadata field",
+		"providers/metadata-full.yaml":         "Metadata provider — returns runtime metadata about scafctl and the current solution",
+		"providers/metadata-single-field.yaml": "Metadata provider — use CEL to extract a single field from runtime metadata",
 	}
 
 	if desc, ok := descriptions[path]; ok {

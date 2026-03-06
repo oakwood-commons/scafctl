@@ -5,21 +5,22 @@ package metadataprovider
 
 import (
 	"context"
-	"fmt"
+	"os"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
 // ProviderName is the name of this provider.
 const ProviderName = "metadata"
 
-// MetadataProvider returns solution metadata fields as resolved data.
-// This lets resolvers expose metadata (name, version, description, etc.)
-// for use in templates and downstream providers without hard-coding values.
+// MetadataProvider returns runtime metadata about the scafctl process and
+// the currently-executing solution. It requires no inputs — all data is
+// gathered from the execution context and process environment.
 type MetadataProvider struct{}
 
 // New creates a new metadata provider instance.
@@ -33,87 +34,109 @@ func (p *MetadataProvider) Descriptor() *provider.Descriptor {
 		Name:        ProviderName,
 		DisplayName: "Metadata Provider",
 		APIVersion:  "v1",
-		Version:     semver.MustParse("1.0.0"),
-		Description: "Returns structured metadata about a solution. Accepts arbitrary key-value pairs and returns them as a map, optionally returning a single field by key. Useful for exposing solution name, version, description, tags, and custom attributes to templates and downstream resolvers.",
-		Schema: func() *jsonschema.Schema {
-			s := schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
-				"field": schemahelper.StringProp("Optional: return only this single field from the metadata map instead of the full map", schemahelper.WithMaxLength(200), schemahelper.WithExample("name")),
-			})
-			s.AdditionalProperties = &jsonschema.Schema{} // allow arbitrary metadata keys
-			return s
-		}(),
+		Version:     semver.MustParse("2.0.0"),
+		Description: "Returns runtime metadata about the scafctl process and the currently-executing solution. Provides the scafctl version, CLI arguments, working directory, entrypoint type (cli/api), command path, and solution metadata. Requires no inputs.",
+		Schema:      schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{}),
 		OutputSchemas: map[provider.Capability]*jsonschema.Schema{
-			provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
-				"metadata": schemahelper.AnyProp("The full metadata map or a single field value"),
-			}),
+			provider.CapabilityFrom: schemahelper.ObjectSchema(
+				[]string{"version", "args", "cwd", "entrypoint", "command", "solution"},
+				map[string]*jsonschema.Schema{
+					"version": schemahelper.ObjectProp("Build version information", nil, map[string]*jsonschema.Schema{
+						"buildVersion": schemahelper.StringProp("Semantic version of the scafctl build"),
+						"commit":       schemahelper.StringProp("Git commit hash of the build"),
+						"buildTime":    schemahelper.StringProp("Timestamp of the build"),
+					}),
+					"args":       schemahelper.ArrayProp("Command-line arguments passed to scafctl", schemahelper.WithItems(schemahelper.StringProp("A CLI argument"))),
+					"cwd":        schemahelper.StringProp("Current working directory"),
+					"entrypoint": schemahelper.StringProp("How scafctl was invoked", schemahelper.WithEnum("cli", "api", "unknown")),
+					"command":    schemahelper.StringProp("The command path (e.g. scafctl/run/solution)"),
+					"solution": schemahelper.ObjectProp("Metadata about the currently-running solution", nil, map[string]*jsonschema.Schema{
+						"name":        schemahelper.StringProp("Solution name"),
+						"version":     schemahelper.StringProp("Solution version"),
+						"displayName": schemahelper.StringProp("Solution display name"),
+						"description": schemahelper.StringProp("Solution description"),
+						"category":    schemahelper.StringProp("Solution category"),
+						"tags":        schemahelper.ArrayProp("Solution tags", schemahelper.WithItems(schemahelper.StringProp("A tag"))),
+					}),
+				},
+			),
 		},
 		Capabilities: []provider.Capability{
 			provider.CapabilityFrom,
 		},
 		Category:     "Core",
-		Tags:         []string{"metadata", "solution", "introspection"},
-		MockBehavior: "Returns the provided metadata map unchanged",
+		Tags:         []string{"metadata", "solution", "introspection", "runtime"},
+		MockBehavior: "Returns runtime metadata with current build version, arguments, working directory, entrypoint info, and solution metadata",
 		Examples: []provider.Example{
 			{
-				Name:        "Full metadata",
-				Description: "Return all metadata fields as a map",
-				YAML: `name: sol-meta
+				Name:        "Runtime metadata",
+				Description: "Return all runtime metadata about the scafctl process and current solution",
+				YAML: `name: runtime-meta
 type: metadata
 from:
-  name: my-solution
-  version: 2.1.0
-  description: Scaffolds a GCP project
-  category: infrastructure
-  tags:
-    - gcp
-    - terraform`,
-			},
-			{
-				Name:        "Single field",
-				Description: "Return only the solution name",
-				YAML: `name: sol-name
-type: metadata
-from:
-  field: name
-  name: my-solution
-  version: 2.1.0`,
+  inputs: {}`,
 			},
 		},
 	}
 }
 
-// Execute returns the metadata map or a single field from it.
-func (p *MetadataProvider) Execute(ctx context.Context, input any) (*provider.Output, error) {
+// Execute gathers runtime metadata from the process environment and context.
+func (p *MetadataProvider) Execute(ctx context.Context, _ any) (*provider.Output, error) {
 	lgr := logger.FromContext(ctx)
-
-	inputs, ok := input.(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("%s: expected map[string]any, got %T", ProviderName, input)
-	}
-
 	lgr.V(1).Info("executing provider", "provider", ProviderName)
 
-	// Check if a specific field was requested.
-	fieldName, _ := inputs["field"].(string)
-
-	if fieldName != "" {
-		value, exists := inputs[fieldName]
-		if !exists {
-			return nil, fmt.Errorf("%s: requested field %q not found in metadata inputs", ProviderName, fieldName)
-		}
-		lgr.V(1).Info("provider completed", "provider", ProviderName, "field", fieldName)
-		return &provider.Output{Data: value}, nil
+	// Build version info from the global settings.
+	versionInfo := settings.VersionInformation
+	version := map[string]any{
+		"buildVersion": versionInfo.BuildVersion,
+		"commit":       versionInfo.Commit,
+		"buildTime":    versionInfo.BuildTime,
 	}
 
-	// Return the full metadata map (excluding the "field" key itself).
-	result := make(map[string]any, len(inputs))
-	for k, v := range inputs {
-		if k == "field" {
-			continue
+	// CLI arguments.
+	args := os.Args
+
+	// Current working directory.
+	cwd, _ := os.Getwd()
+
+	// Entrypoint and command path from settings context.
+	entrypoint := "unknown"
+	command := ""
+	if run, ok := settings.FromContext(ctx); ok && run != nil {
+		ep := run.EntryPointSettings
+		switch {
+		case ep.FromCli:
+			entrypoint = "cli"
+		case ep.FromAPI:
+			entrypoint = "api"
 		}
-		result[k] = v
+		command = ep.Path
 	}
 
-	lgr.V(1).Info("provider completed", "provider", ProviderName, "keys", len(result))
+	// Solution metadata from provider context.
+	var solData map[string]any
+	if meta, ok := provider.SolutionMetadataFromContext(ctx); ok && meta != nil {
+		solData = map[string]any{
+			"name":        meta.Name,
+			"version":     meta.Version,
+			"displayName": meta.DisplayName,
+			"description": meta.Description,
+			"category":    meta.Category,
+			"tags":        meta.Tags,
+		}
+	} else {
+		solData = map[string]any{}
+	}
+
+	result := map[string]any{
+		"version":    version,
+		"args":       args,
+		"cwd":        cwd,
+		"entrypoint": entrypoint,
+		"command":    command,
+		"solution":   solData,
+	}
+
+	lgr.V(1).Info("provider completed", "provider", ProviderName)
 	return &provider.Output{Data: result}, nil
 }
