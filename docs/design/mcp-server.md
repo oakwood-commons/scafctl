@@ -161,6 +161,9 @@ There is no MCP library in `go.mod` today. We would add one:
 | `list_providers` | `scafctl get provider` | List available providers |
 | `run_provider` | `scafctl run provider` | Execute a single provider |
 | `catalog_list` | `scafctl catalog list` | List catalog entries |
+| `catalog_inspect` | `scafctl catalog inspect` | Inspect artifact metadata (includes multi-platform info) |
+| `catalog_list_platforms` | — | List platforms for a multi-platform plugin artifact |
+| `build_plugin` | `scafctl build plugin` | Build multi-platform plugin into local catalog |
 | `catalog_pull` | `scafctl catalog pull` | Pull a solution from registry |
 | `test_solution` | `scafctl test functional` | Run functional tests |
 | `explain_solution` | `scafctl explain` | Explain a configuration |
