@@ -125,5 +125,6 @@ func TestValidKinds(t *testing.T) {
 	assert.Contains(t, ValidKinds, "all")
 	assert.Contains(t, ValidKinds, "http")
 	assert.Contains(t, ValidKinds, "build")
-	assert.Len(t, ValidKinds, 3)
+	assert.Contains(t, ValidKinds, "artifact")
+	assert.Len(t, ValidKinds, 4)
 }

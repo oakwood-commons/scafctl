@@ -23,10 +23,12 @@ const (
 	KindHTTP Kind = "http"
 	// KindBuild clears the build cache (incremental build fingerprints).
 	KindBuild Kind = "build"
+	// KindArtifact clears the artifact cache (downloaded catalog artifacts with TTL).
+	KindArtifact Kind = "artifact"
 )
 
 // ValidKinds lists all valid cache kinds.
-var ValidKinds = []string{string(KindAll), string(KindHTTP), string(KindBuild)}
+var ValidKinds = []string{string(KindAll), string(KindHTTP), string(KindBuild), string(KindArtifact)}
 
 // ClearOutput represents the result of a cache clear operation.
 type ClearOutput struct {

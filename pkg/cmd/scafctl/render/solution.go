@@ -15,11 +15,13 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/action"
+	"github.com/oakwood-commons/scafctl/pkg/cache"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/run"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -55,6 +57,7 @@ type SolutionOptions struct {
 	PhaseTimeout    time.Duration
 	Compact         bool
 	NoTimestamp     bool
+	NoCache         bool
 
 	// Mode flags (mutually exclusive)
 	Graph        bool   // --graph: Show resolver dependency graph
@@ -222,6 +225,7 @@ Examples:
 	cCmd.Flags().BoolVar(&options.NoTimestamp, "no-timestamp", false, "Omit generation timestamp from output")
 	cCmd.Flags().DurationVar(&options.ResolverTimeout, "resolver-timeout", settings.DefaultResolverTimeout, "Timeout per resolver")
 	cCmd.Flags().DurationVar(&options.PhaseTimeout, "phase-timeout", settings.DefaultPhaseTimeout, "Timeout per phase")
+	cCmd.Flags().BoolVar(&options.NoCache, "no-cache", false, "Bypass the artifact cache and fetch directly from the catalog")
 
 	// Graph mode flags
 	cCmd.Flags().BoolVar(&options.Graph, "graph", false, "Show resolver dependency graph instead of action graph")
@@ -542,7 +546,14 @@ func (o *SolutionOptions) loadSolution(ctx context.Context) (*solution.Solution,
 		// Try to set up catalog resolver for bare name resolution
 		localCatalog, err := catalog.NewLocalCatalog(*lgr)
 		if err == nil {
-			resolver := catalog.NewSolutionResolver(localCatalog, *lgr)
+			resolverOpts := []catalog.SolutionResolverOption{
+				catalog.WithResolverNoCache(o.NoCache),
+			}
+			if !o.NoCache {
+				artifactCache := cache.NewArtifactCache(paths.ArtifactCacheDir(), settings.DefaultArtifactCacheTTL)
+				resolverOpts = append(resolverOpts, catalog.WithResolverArtifactCache(artifactCache))
+			}
+			resolver := catalog.NewSolutionResolver(localCatalog, *lgr, resolverOpts...)
 			getterOpts = append(getterOpts, get.WithCatalogResolver(resolver))
 		} else {
 			lgr.V(1).Info("catalog not available for solution resolution", "error", err)

@@ -30,6 +30,9 @@ const (
 
 	// PluginCacheDirName is the name of the plugin cache subdirectory.
 	PluginCacheDirName = "plugins"
+
+	// ArtifactCacheDirName is the name of the artifact cache subdirectory.
+	ArtifactCacheDirName = "artifact"
 )
 
 // ConfigFile returns the path to the config file.
@@ -165,6 +168,20 @@ func BuildCacheDir() string {
 //   - Windows: %LOCALAPPDATA%\cache\scafctl\plugins\
 func PluginCacheDir() string {
 	return filepath.Join(xdg.CacheHome, AppName, PluginCacheDirName)
+}
+
+// ArtifactCacheDir returns the default path to the artifact cache directory.
+// Used for caching downloaded catalog artifacts (solutions, providers, auth-handlers)
+// with configurable TTL-based expiration.
+//
+// Returns: $XDG_CACHE_HOME/scafctl/artifact/
+//
+// Platform defaults:
+//   - Linux: ~/.cache/scafctl/artifact/
+//   - macOS: ~/.cache/scafctl/artifact/
+//   - Windows: %LOCALAPPDATA%\cache\scafctl\artifact\
+func ArtifactCacheDir() string {
+	return filepath.Join(xdg.CacheHome, AppName, ArtifactCacheDirName)
 }
 
 // RuntimeDir returns the path to the runtime directory.
