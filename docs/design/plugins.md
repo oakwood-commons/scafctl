@@ -395,6 +395,77 @@ See the [Plugin Auto-Fetching Tutorial](../tutorials/plugin-auto-fetch-tutorial.
 
 ---
 
+## Multi-Platform Support via OCI Image Index
+
+Plugin binaries are platform-specific — a Linux x86-64 binary cannot run on
+macOS ARM64. To distribute a single plugin that works across OS/architecture
+combinations, scafctl supports **OCI image indexes** (fat manifests).
+
+### Architecture
+
+| Component | Package | Responsibility |
+|-----------|---------|----------------|
+| **MultiPlatform helpers** | `pkg/catalog/multiplatform.go` | Platform↔OCI conversion, index matching |
+| **StoreMultiPlatform** | `pkg/catalog/local_multiplatform.go` | Store multi-platform artifact as image index |
+| **FetchByPlatform** | `pkg/catalog/local_multiplatform.go` | Fetch correct platform binary from image index |
+| **PlatformAwareCatalog** | `pkg/catalog/plugin_fetcher.go` | Interface for catalogs with image index support |
+| **build plugin** | `pkg/cmd/scafctl/build/plugin.go` | CLI for building multi-platform artifacts |
+
+### OCI Image Index Structure
+
+A multi-platform plugin is stored as an OCI image index referencing
+per-platform image manifests:
+
+```
+image index (application/vnd.oci.image.index.v1+json)
+├── platform: linux/amd64
+│   └── manifest → config + binary layer
+├── platform: darwin/arm64
+│   └── manifest → config + binary layer
+└── platform: windows/amd64
+    └── manifest → config + binary layer
+```
+
+### Platform Resolution Strategy
+
+When `PluginFetcher.FetchPlugin()` is called:
+
+1. **OCI image index** — If the catalog implements `PlatformAwareCatalog`,
+   try `FetchByPlatform()` which resolves the platform from the image index.
+   If the artifact IS an image index but the platform is missing, return
+   `PlatformNotFoundError` (no fallback — the artifact is explicitly
+   multi-platform).
+
+2. **Annotation matching** (legacy) — Fall back to listing artifacts and
+   matching the `dev.scafctl.plugin.platform` annotation on individual
+   manifests.
+
+3. **Direct fetch** — Fall back to fetching the artifact directly
+   (single-platform artifacts without platform metadata).
+
+### Supported Platforms
+
+- `linux/amd64`
+- `linux/arm64`
+- `darwin/amd64`
+- `darwin/arm64`
+- `windows/amd64`
+
+### Building Multi-Platform Artifacts
+
+```bash
+scafctl build plugin \
+  --name my-provider \
+  --kind provider \
+  --version 1.0.0 \
+  --platform linux/amd64=./dist/linux-amd64/my-provider \
+  --platform darwin/arm64=./dist/darwin-arm64/my-provider
+```
+
+See the [Multi-Platform Plugin Build Tutorial](../tutorials/multi-platform-plugin-build.md) for a complete walkthrough.
+
+---
+
 ## Summary
 
 Plugins are the extensibility layer of scafctl. They exist to supply providers in an isolated, versioned, and scalable way using go-plugin. Plugins are not a new execution model or abstraction. They are the mechanism by which providers are distributed and invoked, keeping the core system small, stable, and extensible.

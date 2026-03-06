@@ -192,5 +192,17 @@ func (s *Server) handleCatalogInspect(_ context.Context, request mcp.CallToolReq
 		result["annotations"] = info.Annotations
 	}
 
+	// Surface multi-platform info for plugin artifacts
+	if artifactKind == catalog.ArtifactKindProvider || artifactKind == catalog.ArtifactKindAuthHandler {
+		platforms, err := localCatalog.ListPlatforms(s.ctx, ref)
+		if err == nil {
+			result["isMultiPlatform"] = len(platforms) > 0
+			if len(platforms) > 0 {
+				result["platforms"] = platforms
+				result["platformCount"] = len(platforms)
+			}
+		}
+	}
+
 	return mcp.NewToolResultJSON(result)
 }

@@ -575,6 +575,9 @@ func (s *Server) registerTools() {
 	// Concept explanation tools
 	s.registerConceptTools()
 
+	// Catalog multi-platform tools (list platforms, build plugin)
+	s.registerCatalogMultiPlatformTools()
+
 	// Version tool
 	s.registerVersionTools()
 }

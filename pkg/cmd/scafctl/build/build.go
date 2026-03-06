@@ -32,6 +32,7 @@ func CommandBuild(cliParams *settings.Run, ioStreams *terminal.IOStreams, path s
 	}
 
 	cmd.AddCommand(CommandBuildSolution(cliParams, ioStreams, path))
+	cmd.AddCommand(CommandBuildPlugin(cliParams, ioStreams, path))
 
 	return cmd
 }

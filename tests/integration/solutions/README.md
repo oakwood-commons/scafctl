@@ -72,6 +72,8 @@ tests/integration/solutions/
 ├── rendering/                # Template rendering tests
 ├── composition/              # Multi-file compose tests
 │   └── parts/                # Composed YAML fragments
+├── plugins/                  # Plugin CLI command tests
+│                             #   build plugin help, missing flags, subcommand discovery
 ├── test-generation/          # Test generation tests
 └── edge-cases/               # Negative/error tests
     ├── validation-failures/  # Intentional validation errors
@@ -100,6 +102,7 @@ tests/integration/solutions/
 | `dag`, `until`, `type-coercion`, `transform`, `conditional`, `timeout`, `sensitive` | Individual resolver feature tests |
 | `rendering` | Template rendering tests |
 | `composition` | Multi-file compose tests |
+| `plugin` | Plugin CLI command tests (build plugin, list, help) |
 | `edge-case` | Error handling and boundary tests |
 | `negative` | Tests expecting failures |
 
