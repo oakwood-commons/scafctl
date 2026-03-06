@@ -537,3 +537,103 @@ func filterFindingsByRule(result *Result, rule string) []*Finding {
 	}
 	return out
 }
+
+func TestLintNilProviderInput(t *testing.T) {
+	staticProv := newFakeProvider("static", map[string]*jsonschema.Schema{
+		"value": {Type: "string"},
+	})
+	reg := provider.NewRegistry()
+	_ = reg.Register(staticProv)
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"has-nil-input": {
+					Type: "string",
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "static",
+							Inputs: map[string]*spec.ValueRef{
+								"value":        {Literal: "ok"},
+								"dangling-key": nil,
+							},
+						}},
+					},
+				},
+			},
+		},
+	}
+
+	result := Solution(sol, "test.yaml", reg)
+
+	findings := filterFindingsByRule(result, "nil-provider-input")
+	require.Len(t, findings, 1)
+	assert.Contains(t, findings[0].Message, "dangling-key")
+	assert.Contains(t, findings[0].Message, "no value")
+}
+
+func TestLintEmptyTransformWith(t *testing.T) {
+	staticProv := newFakeProvider("static", map[string]*jsonschema.Schema{
+		"value": {Type: "string"},
+	})
+	reg := provider.NewRegistry()
+	_ = reg.Register(staticProv)
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"empty-transform": {
+					Type: "string",
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "static",
+							Inputs:   map[string]*spec.ValueRef{"value": {Literal: "ok"}},
+						}},
+					},
+					Transform: &resolver.TransformPhase{
+						With: []resolver.ProviderTransform{},
+					},
+				},
+			},
+		},
+	}
+
+	result := Solution(sol, "test.yaml", reg)
+
+	findings := filterFindingsByRule(result, "empty-transform-with")
+	require.Len(t, findings, 1)
+	assert.Contains(t, findings[0].Message, "empty")
+}
+
+func TestLintEmptyValidateWith(t *testing.T) {
+	staticProv := newFakeProvider("static", map[string]*jsonschema.Schema{
+		"value": {Type: "string"},
+	})
+	reg := provider.NewRegistry()
+	_ = reg.Register(staticProv)
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"empty-validate": {
+					Type: "string",
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "static",
+							Inputs:   map[string]*spec.ValueRef{"value": {Literal: "ok"}},
+						}},
+					},
+					Validate: &resolver.ValidatePhase{
+						With: []resolver.ProviderValidation{},
+					},
+				},
+			},
+		},
+	}
+
+	result := Solution(sol, "test.yaml", reg)
+
+	findings := filterFindingsByRule(result, "empty-validate-with")
+	require.Len(t, findings, 1)
+	assert.Contains(t, findings[0].Message, "empty")
+}

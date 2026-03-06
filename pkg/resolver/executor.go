@@ -1359,6 +1359,9 @@ func (e *Executor) executeProviderWithSelf(ctx context.Context, providerName str
 	resolverData := resolverCtx.ToMap()
 
 	for key, valueRef := range inputRefs {
+		if valueRef == nil {
+			return nil, fmt.Errorf("input %q has no value (nil); check for dangling YAML keys with no value", key)
+		}
 		resolved, err := valueRef.Resolve(ctx, resolverData, self)
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve input %q: %w", key, err)

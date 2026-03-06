@@ -187,9 +187,25 @@ func TestToHcl_EmptyMap(t *testing.T) {
 }
 
 func TestToHcl_TopLevelPrimitive(t *testing.T) {
-	_, err := ToHcl("hello")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "top-level value must be a map/object")
+	tests := []struct {
+		name     string
+		input    any
+		expected string
+	}{
+		{"string", "hello", `"hello"`},
+		{"bool true", true, "true"},
+		{"bool false", false, "false"},
+		{"integer", float64(42), "42"},
+		{"float", 3.14, "3.14"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ToHcl(tt.input)
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
 }
 
 func TestToHcl_ComplexExample(t *testing.T) {

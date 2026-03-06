@@ -1591,3 +1591,39 @@ func TestExecutor_Execute_ConcurrentStress(t *testing.T) {
 		}
 	})
 }
+
+func TestExecutor_Execute_NilValueRefInput(t *testing.T) {
+	registry := newMockRegistry()
+	registry.Register(&mockProvider{name: "mock"})
+	executor := NewExecutor(registry)
+
+	resolvers := []*Resolver{
+		{
+			Name: "dangling-key",
+			Resolve: &ResolvePhase{
+				With: []ProviderSource{
+					{
+						Provider: "mock",
+						Inputs: map[string]*ValueRef{
+							"valid-key": {Literal: "hello"},
+							"nil-key":   nil, // dangling YAML key
+						},
+					},
+				},
+			},
+		},
+	}
+
+	ctx := context.Background()
+	ctx, err := executor.Execute(ctx, resolvers, nil)
+
+	require.Error(t, err)
+	result, _ := FromContext(ctx)
+	require.NotNil(t, result)
+
+	execResult, ok := result.GetResult("dangling-key")
+	require.True(t, ok)
+	assert.Equal(t, ExecutionStatusFailed, execResult.Status)
+	require.Error(t, execResult.Error)
+	assert.Contains(t, execResult.Error.Error(), "no value (nil)")
+}

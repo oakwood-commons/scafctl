@@ -288,3 +288,134 @@ func TestSortedTestNames(t *testing.T) {
 	assert.Equal(t, "m-test", names[3])
 	assert.Equal(t, "z-test", names[4])
 }
+
+func TestDiscoverFromFile_DetectsDirectoryProviderFiles(t *testing.T) {
+	solutionYAML := `apiVersion: scafctl/v1
+kind: Solution
+metadata:
+  name: detect-files-test
+spec:
+  resolvers:
+    my-template:
+      type: object
+      resolve:
+        with:
+          - provider: directory
+            inputs:
+              path: templates/app
+              operation: list
+    my-data:
+      type: object
+      resolve:
+        with:
+          - provider: directory
+            inputs:
+              path: data/configs
+              operation: list
+    no-directory:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+  testing:
+    cases:
+      basic:
+        command: [run, resolver]
+        assertions:
+          - expression: '__exitCode == 0'
+`
+	dir := t.TempDir()
+	solPath := filepath.Join(dir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solPath, []byte(solutionYAML), 0o644))
+
+	// Create the referenced directories so the solution is valid
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "templates", "app"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "data", "configs"), 0o755))
+
+	st, err := soltesting.DiscoverFromFile(solPath)
+	require.NoError(t, err)
+	require.NotNil(t, st)
+
+	assert.Equal(t, []string{"data/configs/**", "templates/app/**"}, st.DetectedFiles)
+}
+
+func TestDiscoverFromFile_NoDetectedFilesWithoutDirectoryProvider(t *testing.T) {
+	solutionYAML := `apiVersion: scafctl/v1
+kind: Solution
+metadata:
+  name: no-files-test
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+  testing:
+    cases:
+      basic:
+        command: [run, resolver]
+        assertions:
+          - expression: '__exitCode == 0'
+`
+	dir := t.TempDir()
+	solPath := filepath.Join(dir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solPath, []byte(solutionYAML), 0o644))
+
+	st, err := soltesting.DiscoverFromFile(solPath)
+	require.NoError(t, err)
+	require.NotNil(t, st)
+
+	assert.Empty(t, st.DetectedFiles)
+}
+
+func TestDiscoverFromFile_DetectsFileDepsFromComposeResolvers(t *testing.T) {
+	solutionYAML := `apiVersion: scafctl/v1
+kind: Solution
+metadata:
+  name: compose-file-deps-test
+compose:
+  - resolvers.yaml
+spec:
+  testing:
+    cases:
+      basic:
+        command: [run, resolver]
+        assertions:
+          - expression: '__exitCode == 0'
+`
+	resolversYAML := `apiVersion: scafctl/v1
+kind: Solution
+spec:
+  resolvers:
+    my-files:
+      type: object
+      resolve:
+        with:
+          - provider: directory
+            inputs:
+              path: templates/app
+              operation: list
+    my-data:
+      type: object
+      resolve:
+        with:
+          - provider: directory
+            inputs:
+              path: data/configs
+              operation: list
+`
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "solution.yaml"), []byte(solutionYAML), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "resolvers.yaml"), []byte(resolversYAML), 0o644))
+
+	st, err := soltesting.DiscoverFromFile(filepath.Join(dir, "solution.yaml"))
+	require.NoError(t, err)
+	require.NotNil(t, st)
+
+	assert.Equal(t, []string{"data/configs/**", "templates/app/**"}, st.DetectedFiles)
+}
