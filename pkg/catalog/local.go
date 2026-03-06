@@ -925,10 +925,31 @@ func (c *LocalCatalog) Save(ctx context.Context, name, version, outputPath strin
 	}, nil
 }
 
-// collectBlobsForExport recursively collects all blobs referenced by a manifest.
+// collectBlobsForExport recursively collects all blobs referenced by a
+// manifest or image index.
 func (c *LocalCatalog) collectBlobsForExport(ctx context.Context, desc ocispec.Descriptor, blobs map[string]ocispec.Descriptor) error {
 	// Add this blob
 	blobs[desc.Digest.String()] = desc
+
+	// If it's an image index, recursively collect all referenced manifests
+	if IsImageIndex(desc) {
+		data, err := c.fetchBlob(ctx, desc)
+		if err != nil {
+			return err
+		}
+
+		var index ocispec.Index
+		if err := json.Unmarshal(data, &index); err != nil {
+			return err
+		}
+
+		for _, manifestDesc := range index.Manifests {
+			if err := c.collectBlobsForExport(ctx, manifestDesc, blobs); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 
 	// If it's a manifest, also collect config and layers
 	if desc.MediaType == ocispec.MediaTypeImageManifest {
@@ -1066,9 +1087,10 @@ func (c *LocalCatalog) Load(ctx context.Context, inputPath string, force bool) (
 	}, nil
 }
 
-// markReferencedBlobs recursively marks all blobs referenced by a manifest.
+// markReferencedBlobs recursively marks all blobs referenced by a manifest
+// or image index.
 func (c *LocalCatalog) markReferencedBlobs(ctx context.Context, desc ocispec.Descriptor, refs map[string]bool) error {
-	// Fetch the manifest content
+	// Fetch the manifest/index content
 	rc, err := c.store.Fetch(ctx, desc)
 	if err != nil {
 		return err
@@ -1080,8 +1102,24 @@ func (c *LocalCatalog) markReferencedBlobs(ctx context.Context, desc ocispec.Des
 		return err
 	}
 
-	// Mark the manifest blob itself
+	// Mark the blob itself
 	refs[desc.Digest.String()] = true
+
+	// Check if this is an image index (multi-platform artifact)
+	if IsImageIndex(desc) {
+		var index ocispec.Index
+		if err := json.Unmarshal(manifestData, &index); err != nil {
+			return nil // not a valid index, just mark the blob
+		}
+		// Recursively mark all referenced manifests in the index
+		for _, manifestDesc := range index.Manifests {
+			if err := c.markReferencedBlobs(ctx, manifestDesc, refs); err != nil {
+				c.logger.V(2).Info("failed to mark blobs for index manifest",
+					"digest", manifestDesc.Digest.String(), "error", err)
+			}
+		}
+		return nil
+	}
 
 	// Parse as OCI manifest to get config and layers
 	var manifest ocispec.Manifest

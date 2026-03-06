@@ -3699,6 +3699,192 @@ func TestIntegration_BuildSolution_DryRunShowsDetails(t *testing.T) {
 }
 
 // ============================================================================
+// Build Plugin Integration Tests
+// ============================================================================
+
+func TestIntegration_BuildPluginHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "build", "plugin", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "multi-platform")
+	assert.Contains(t, stdout, "--name")
+	assert.Contains(t, stdout, "--kind")
+	assert.Contains(t, stdout, "--version")
+	assert.Contains(t, stdout, "--platform")
+	assert.Contains(t, stdout, "--force")
+}
+
+func TestIntegration_BuildPlugin_HelpShownInBuildParent(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "build", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "plugin")
+}
+
+func TestIntegration_BuildPlugin_MissingRequiredFlags(t *testing.T) {
+	t.Parallel()
+	_, _, exitCode := runScafctl(t, "build", "plugin")
+	assert.NotEqual(t, 0, exitCode)
+}
+
+func TestIntegration_BuildPlugin_SinglePlatform(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+
+	// Create a mock binary
+	binPath := filepath.Join(tmpDir, "my-provider")
+	require.NoError(t, os.WriteFile(binPath, []byte("fake-plugin-binary"), 0o755))
+
+	stdout, stderr, exitCode := runScafctl(t, "build", "plugin",
+		"--name", "test-provider",
+		"--kind", "provider",
+		"--version", "1.0.0",
+		"--platform", "linux/amd64="+binPath)
+
+	if exitCode != 0 {
+		t.Logf("stdout: %s", stdout)
+		t.Logf("stderr: %s", stderr)
+	}
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Built test-provider@1.0.0")
+	assert.Contains(t, stdout, "1 platform(s)")
+	assert.Contains(t, stdout, "linux/amd64")
+}
+
+func TestIntegration_BuildPlugin_MultiPlatform(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+
+	// Create mock binaries for two platforms
+	linuxBin := filepath.Join(tmpDir, "provider-linux")
+	darwinBin := filepath.Join(tmpDir, "provider-darwin")
+	require.NoError(t, os.WriteFile(linuxBin, []byte("linux-binary"), 0o755))
+	require.NoError(t, os.WriteFile(darwinBin, []byte("darwin-binary"), 0o755))
+
+	stdout, stderr, exitCode := runScafctl(t, "build", "plugin",
+		"--name", "multi-provider",
+		"--kind", "provider",
+		"--version", "2.0.0",
+		"--platform", "linux/amd64="+linuxBin,
+		"--platform", "darwin/arm64="+darwinBin)
+
+	if exitCode != 0 {
+		t.Logf("stdout: %s", stdout)
+		t.Logf("stderr: %s", stderr)
+	}
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Built multi-provider@2.0.0")
+	assert.Contains(t, stdout, "2 platform(s)")
+}
+
+func TestIntegration_BuildPlugin_AuthHandler(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+
+	binPath := filepath.Join(tmpDir, "auth-handler")
+	require.NoError(t, os.WriteFile(binPath, []byte("auth-binary"), 0o755))
+
+	stdout, stderr, exitCode := runScafctl(t, "build", "plugin",
+		"--name", "test-auth",
+		"--kind", "auth-handler",
+		"--version", "1.0.0",
+		"--platform", "linux/amd64="+binPath)
+
+	if exitCode != 0 {
+		t.Logf("stdout: %s", stdout)
+		t.Logf("stderr: %s", stderr)
+	}
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Built test-auth@1.0.0")
+}
+
+func TestIntegration_BuildPlugin_ForceOverwrite(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+
+	binPath := filepath.Join(tmpDir, "provider")
+	require.NoError(t, os.WriteFile(binPath, []byte("binary-v1"), 0o755))
+
+	// First build
+	_, _, exitCode := runScafctl(t, "build", "plugin",
+		"--name", "force-test",
+		"--kind", "provider",
+		"--version", "1.0.0",
+		"--platform", "linux/amd64="+binPath)
+	assert.Equal(t, 0, exitCode)
+
+	// Second build without --force should fail
+	_, stderr, exitCode := runScafctl(t, "build", "plugin",
+		"--name", "force-test",
+		"--kind", "provider",
+		"--version", "1.0.0",
+		"--platform", "linux/amd64="+binPath)
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "already exists")
+
+	// Third build with --force should succeed
+	stdout, _, exitCode := runScafctl(t, "build", "plugin",
+		"--name", "force-test",
+		"--kind", "provider",
+		"--version", "1.0.0",
+		"--platform", "linux/amd64="+binPath,
+		"--force")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Built force-test@1.0.0")
+}
+
+func TestIntegration_BuildPlugin_InvalidPlatform(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	binPath := filepath.Join(tmpDir, "provider")
+	require.NoError(t, os.WriteFile(binPath, []byte("binary"), 0o755))
+
+	_, stderr, exitCode := runScafctl(t, "build", "plugin",
+		"--name", "bad-plat",
+		"--kind", "provider",
+		"--version", "1.0.0",
+		"--platform", "freebsd/amd64="+binPath)
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "unsupported platform")
+}
+
+func TestIntegration_BuildPlugin_InvalidKind(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	binPath := filepath.Join(tmpDir, "provider")
+	require.NoError(t, os.WriteFile(binPath, []byte("binary"), 0o755))
+
+	_, stderr, exitCode := runScafctl(t, "build", "plugin",
+		"--name", "bad-kind",
+		"--kind", "solution",
+		"--version", "1.0.0",
+		"--platform", "linux/amd64="+binPath)
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "invalid kind")
+}
+
+func TestIntegration_BuildPlugin_BinaryNotFound(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	_, stderr, exitCode := runScafctl(t, "build", "plugin",
+		"--name", "missing",
+		"--kind", "provider",
+		"--version", "1.0.0",
+		"--platform", "linux/amd64=/nonexistent/path")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "binary not found")
+}
+
+// ============================================================================
 // Directory Provider Integration Tests
 // ============================================================================
 

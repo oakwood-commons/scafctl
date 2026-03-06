@@ -51,8 +51,6 @@ See `pkg/httpc/README.md`
 - **Commits**: Use [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/#specification)
 - **Errors**: Return errors with `fmt.Errorf("context: %w", err)`, don't panic
 - **Testing**: Use `testify/assert`, mocks in `mock.go` files
-- **Linting**: Run `golangci-lint run` before committing
-- **Build**: Include LDFLAGS for version injection (see `taskfile.yaml`)
 - **Breaking changes**: Allowed—this app is not in production. Note when doing so.
 - **Backward compatibility**: Do not do it, see Breaking changes above.
 
@@ -93,3 +91,7 @@ golangci-lint run --fix          # Run Linter and auto-fix issues
 **IMPORTANT**: Never include business logic in CLI command packages (`pkg/cmd/scafctl/...`), MCP handler files (`pkg/mcp/tools_*.go`) or API packages (future) instead, put it into proper shared domain packages (`pkg/...`)
 
 **Note**: The project uses `task` (go-task/task) as a convenience wrapper, but AI agents should use raw Go commands for clarity and portability.
+
+**IMPORTANT**: Always update documentation, tutorials, examples, mcp server tools (if applicable) when features, providers or commands change or added.
+**IMPORTANT**: Add benchmark tests for any new features or providers in `*_test.go` files using Go's `testing` package.
+**IMPORTANT**: After any change, run `task test:e2e` to ensure everything passes.

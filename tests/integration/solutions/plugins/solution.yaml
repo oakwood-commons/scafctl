@@ -38,6 +38,35 @@ spec:
         assertions:
           - expression: __exitCode == 0
 
+      build-plugin-help:
+        description: Verify build plugin help works
+        command: [build, plugin, --help]
+        injectFile: false
+        assertions:
+          - expression: __exitCode == 0
+          - contains: multi-platform
+          - contains: --name
+          - contains: --kind
+          - contains: --version
+          - contains: --platform
+          - contains: --force
+
+      build-plugin-missing-flags:
+        description: Build plugin without required flags should fail
+        command: [build, plugin]
+        injectFile: false
+        expectFailure: true
+        assertions:
+          - expression: __exitCode != 0
+
+      build-help-shows-plugin:
+        description: Build parent shows plugin subcommand
+        command: [build, --help]
+        injectFile: false
+        assertions:
+          - expression: __exitCode == 0
+          - contains: plugin
+
       render-greeting:
         description: Verify resolver renders
         command: [run, resolver]

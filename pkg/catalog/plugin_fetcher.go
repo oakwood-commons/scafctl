@@ -10,9 +10,26 @@ import (
 	"github.com/go-logr/logr"
 )
 
+// PlatformAwareCatalog extends Catalog with multi-platform image index support.
+// Catalogs that store multi-platform artifacts (e.g. LocalCatalog) implement
+// this interface to allow transparent platform-specific fetching.
+type PlatformAwareCatalog interface {
+	Catalog
+
+	// FetchByPlatform fetches a plugin binary for the given platform,
+	// transparently handling both single-platform manifests and
+	// multi-platform image indexes.
+	FetchByPlatform(ctx context.Context, ref Reference, platform string) ([]byte, ArtifactInfo, error)
+
+	// ListPlatforms returns the platforms available for a multi-platform artifact.
+	// Returns nil if the artifact is single-platform.
+	ListPlatforms(ctx context.Context, ref Reference) ([]string, error)
+}
+
 // PluginFetcher fetches plugin binaries from a catalog with platform awareness.
 // It resolves plugin references, selects the appropriate platform variant via
-// the AnnotationPlatform annotation, and returns the raw binary data.
+// the OCI image index (preferred) or AnnotationPlatform annotation (fallback),
+// and returns the raw binary data.
 type PluginFetcher struct {
 	catalog Catalog
 	logger  logr.Logger
@@ -55,11 +72,38 @@ func (f *PluginFetcher) ResolvePlugin(ctx context.Context, name string, kind Art
 }
 
 // FetchPlugin fetches a plugin binary for the given platform.
-// It first tries to find a platform-specific artifact by listing all versions
-// and matching the AnnotationPlatform annotation. If no platform-specific
-// artifact is found, it falls back to the default (un-annotated) artifact.
+// It uses the following resolution strategy:
+//  1. If the catalog implements PlatformAwareCatalog, use FetchByPlatform
+//     which handles OCI image indexes (fat manifests) transparently.
+//  2. Otherwise, fall back to listing artifacts and matching the
+//     AnnotationPlatform annotation on individual manifests.
+//  3. If no platform-specific artifact is found, attempt a direct fetch
+//     (single-platform fallback).
 func (f *PluginFetcher) FetchPlugin(ctx context.Context, name string, kind ArtifactKind, version, platform string) ([]byte, ArtifactInfo, error) {
-	// List all artifacts for this plugin to find platform-specific variants
+	// Strategy 1: Use OCI image index via PlatformAwareCatalog
+	if pac, ok := f.catalog.(PlatformAwareCatalog); ok {
+		ref, err := f.buildRef(name, kind, version)
+		if err == nil {
+			data, info, err := pac.FetchByPlatform(ctx, ref, platform)
+			if err == nil {
+				f.logger.V(1).Info("fetched plugin via image index",
+					"name", name,
+					"version", version,
+					"platform", platform)
+				return data, info, nil
+			}
+			// If platform not found in an image index, don't fall back — the
+			// artifact is explicitly multi-platform and the requested platform
+			// is unavailable.
+			if IsPlatformNotFound(err) {
+				return nil, ArtifactInfo{}, err
+			}
+			f.logger.V(1).Info("image index fetch failed, trying annotation-based fallback",
+				"name", name, "error", err)
+		}
+	}
+
+	// Strategy 2: Annotation-based matching (legacy)
 	artifacts, err := f.catalog.List(ctx, kind, name)
 	if err != nil {
 		f.logger.V(1).Info("could not list plugin artifacts for platform selection, falling back to direct fetch",
@@ -86,7 +130,7 @@ func (f *PluginFetcher) FetchPlugin(ctx context.Context, name string, kind Artif
 		}
 	}
 
-	// No platform-specific artifact found — try direct fetch (single-platform fallback)
+	// Strategy 3: Direct fetch fallback (single-platform)
 	f.logger.V(1).Info("no platform-specific artifact found, falling back to direct fetch",
 		"name", name,
 		"version", version,
@@ -121,4 +165,13 @@ func (f *PluginFetcher) fetchByInfo(ctx context.Context, info ArtifactInfo) ([]b
 		return nil, ArtifactInfo{}, fmt.Errorf("fetching plugin %s: %w", info.Reference.String(), err)
 	}
 	return content, fetchedInfo, nil
+}
+
+// buildRef constructs a Reference from name, kind, and version string.
+func (f *PluginFetcher) buildRef(name string, kind ArtifactKind, version string) (Reference, error) {
+	refStr := name
+	if version != "" {
+		refStr = name + "@" + version
+	}
+	return ParseReference(kind, refStr)
 }
