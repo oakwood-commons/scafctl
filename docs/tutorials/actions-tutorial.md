@@ -483,6 +483,44 @@ The `fetch-user` action uses the `cel` provider to return structured data. The `
 | `inputs` | Resolved input values |
 | `error` | Error message (if failed) |
 
+### Action Aliases
+
+Referencing actions via `__actions['my-long-action-name'].results.field` can be verbose. You can declare an `alias` on an action to create a shorter top-level variable in CEL expressions.
+
+```yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: alias-demo
+  version: 1.0.0
+
+spec:
+  resolvers: {}
+  workflow:
+    actions:
+      fetch-configuration:
+        alias: config
+        provider: cel
+        inputs:
+          expression: |
+            {"region": "us-east-1", "env": "production"}
+
+      deploy:
+        provider: exec
+        dependsOn: [fetch-configuration]
+        inputs:
+          command:
+            expr: "'echo Deploying to ' + config.results.region"
+```
+
+With the alias `config`, you can write `config.results.region` instead of `__actions['fetch-configuration'].results.region`. The `__actions` form still works alongside aliases.
+
+**Alias Rules:**
+- Must match `^[a-zA-Z_][a-zA-Z0-9_-]*$`
+- Cannot start with `__` (reserved prefix)
+- Cannot conflict with action names or reserved names (`true`, `false`, `null`, etc.)
+- Must be unique across all actions in the workflow
+
 ---
 
 ## Retry
@@ -996,6 +1034,7 @@ See the [examples/actions/](../examples/actions/) directory for complete working
 - `conditional-retry.yaml` - Conditional retry with retryIf
 - `conditional-execution.yaml` - When conditions
 - `finally-cleanup.yaml` - Cleanup actions
+- `action-alias.yaml` - Action aliases for shorter expression references
 - `complex-workflow.yaml` - Full CI/CD example
 
 ## Troubleshooting

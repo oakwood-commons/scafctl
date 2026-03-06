@@ -111,6 +111,10 @@ linters:
         linters:
           - revive
         text: "var-naming: avoid package names"
+      - path: pkg/cmd/scafctl/build/plugin\.go
+        linters:
+          - revive
+        text: "var-naming: avoid package names"
 formatters:
   enable:
     - gofumpt
