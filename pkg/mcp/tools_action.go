@@ -118,6 +118,7 @@ func (s *Server) handlePreviewAction(_ context.Context, request mcp.CallToolRequ
 	}
 	type actionPreview struct {
 		Name               string              `json:"name"`
+		Alias              string              `json:"alias,omitempty"`
 		Description        string              `json:"description,omitempty"`
 		Provider           string              `json:"provider"`
 		MaterializedInputs map[string]any      `json:"materializedInputs,omitempty"`
@@ -187,6 +188,7 @@ func (s *Server) handlePreviewAction(_ context.Context, request mcp.CallToolRequ
 
 		// Use fields from the embedded Action
 		preview.Description = ea.Description
+		preview.Alias = ea.Alias
 		if ea.When != nil && ea.When.Expr != nil {
 			preview.When = string(*ea.When.Expr)
 		}

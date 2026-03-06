@@ -1781,6 +1781,22 @@ func TestIntegration_ParallelWithDeps(t *testing.T) {
 	assert.Equal(t, 0, exitCode)
 }
 
+func TestIntegration_ActionAlias(t *testing.T) {
+	t.Parallel()
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "solution",
+		"-f", "examples/actions/action-alias.yaml",
+		"-o", "json",
+	)
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "action alias example should succeed")
+	assert.Contains(t, stdout, "fetchConfiguration")
+	assert.Contains(t, stdout, "deploy")
+}
+
 // ============================================================================
 // Quiet Mode Tests
 // ============================================================================

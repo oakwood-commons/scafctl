@@ -9,6 +9,7 @@ This directory contains example action configurations demonstrating the Actions 
 | [hello-world.yaml](hello-world.yaml) | Simplest possible action workflow |
 | [sequential-chain.yaml](sequential-chain.yaml) | Linear action dependency chain (A → B → C) |
 | [parallel-with-deps.yaml](parallel-with-deps.yaml) | Diamond pattern with parallel execution |
+| [action-alias.yaml](action-alias.yaml) | Action aliases for shorter expression references |
 | [foreach-deploy.yaml](foreach-deploy.yaml) | ForEach expansion for deploying to multiple targets |
 | [exclusive-actions.yaml](exclusive-actions.yaml) | Mutual exclusion for actions that share a resource |
 | [error-handling.yaml](error-handling.yaml) | Error handling with onError: continue |

@@ -20,6 +20,20 @@ import (
 // Names must start with a letter or underscore, followed by alphanumerics, underscores, or hyphens.
 var actionNameRegex = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_-]*$`)
 
+// reservedNames are variable names that cannot be used as action aliases.
+// These are reserved for the CEL expression context.
+var reservedNames = map[string]bool{
+	"_":         true,
+	"__actions": true,
+	"__item":    true,
+	"__index":   true,
+	"__error":   true,
+	"__self":    true,
+	"true":      true,
+	"false":     true,
+	"null":      true,
+}
+
 // ValidationError provides detailed validation failure information.
 // It contains context about where the validation error occurred.
 type ValidationError struct {
@@ -132,11 +146,28 @@ func ValidateWorkflow(w *Workflow, registry RegistryInterface) error {
 	// Collect all action names across sections for uniqueness check
 	allNames := make(map[string]string) // name -> section
 
+	// Pre-collect all action names from both sections for alias conflict detection.
+	// This is separate from allNames because allNames is populated incrementally
+	// during validation to detect duplicate action names, while allActionNames
+	// needs all names upfront to catch alias-vs-action-name conflicts.
+	allActionNames := make(map[string]string) // name -> section
+	for name := range w.Actions {
+		allActionNames[name] = "actions"
+	}
+	for name := range w.Finally {
+		if _, exists := allActionNames[name]; !exists {
+			allActionNames[name] = "finally"
+		}
+	}
+
+	// Collect all aliases for uniqueness check (alias -> section.actionName)
+	allAliases := make(map[string]string)
+
 	// Validate actions section
-	validateSection(w.Actions, "actions", allNames, w, registry, errs)
+	validateSection(w.Actions, "actions", allNames, allActionNames, allAliases, w, registry, errs)
 
 	// Validate finally section
-	validateSection(w.Finally, "finally", allNames, w, registry, errs)
+	validateSection(w.Finally, "finally", allNames, allActionNames, allAliases, w, registry, errs)
 
 	return errs.ToError()
 }
@@ -146,6 +177,8 @@ func validateSection(
 	actions map[string]*Action,
 	section string,
 	allNames map[string]string,
+	allActionNames map[string]string,
+	allAliases map[string]string,
 	workflow *Workflow,
 	registry RegistryInterface,
 	errs *AggregatedValidationError,
@@ -171,6 +204,11 @@ func validateSection(
 				Message:    "action definition cannot be nil",
 			})
 			continue
+		}
+
+		// Validate alias if present
+		if action.Alias != "" {
+			validateAlias(action, section, allActionNames, allAliases, errs)
 		}
 
 		// Validate individual action
@@ -222,6 +260,70 @@ func validateActionName(name, section string, allNames map[string]string, errs *
 			Message:    fmt.Sprintf("action name %q already defined in %s section", name, existingSection),
 		})
 	}
+}
+
+// validateAlias validates an action's alias.
+func validateAlias(
+	action *Action,
+	section string,
+	allNames map[string]string,
+	allAliases map[string]string,
+	errs *AggregatedValidationError,
+) {
+	alias := action.Alias
+
+	// Rule: Alias must match the action name regex
+	if !actionNameRegex.MatchString(alias) {
+		errs.AddError(&ValidationError{
+			Section:    section,
+			ActionName: action.Name,
+			Field:      "alias",
+			Message:    fmt.Sprintf("alias must match pattern ^[a-zA-Z_][a-zA-Z0-9_-]*$, got %q", alias),
+		})
+	}
+
+	// Rule: Alias cannot start with "__" (reserved prefix)
+	if strings.HasPrefix(alias, "__") {
+		errs.AddError(&ValidationError{
+			Section:    section,
+			ActionName: action.Name,
+			Field:      "alias",
+			Message:    fmt.Sprintf("alias %q cannot start with '__' (reserved prefix)", alias),
+		})
+	}
+
+	// Rule: Alias cannot be a reserved name
+	if reservedNames[alias] {
+		errs.AddError(&ValidationError{
+			Section:    section,
+			ActionName: action.Name,
+			Field:      "alias",
+			Message:    fmt.Sprintf("alias %q is a reserved name", alias),
+		})
+	}
+
+	// Rule: Alias cannot conflict with any action name
+	if existingSection, exists := allNames[alias]; exists {
+		errs.AddError(&ValidationError{
+			Section:    section,
+			ActionName: action.Name,
+			Field:      "alias",
+			Message:    fmt.Sprintf("alias %q conflicts with action name in %s section", alias, existingSection),
+		})
+	}
+
+	// Rule: Alias must be unique across all aliases
+	if existingAction, exists := allAliases[alias]; exists {
+		errs.AddError(&ValidationError{
+			Section:    section,
+			ActionName: action.Name,
+			Field:      "alias",
+			Message:    fmt.Sprintf("alias %q already used by action %s", alias, existingAction),
+		})
+	}
+
+	// Register alias for uniqueness tracking
+	allAliases[alias] = section + "." + action.Name
 }
 
 // validateAction validates an individual action definition.
