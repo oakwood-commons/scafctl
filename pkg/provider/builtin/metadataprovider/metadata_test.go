@@ -5,8 +5,11 @@ package metadataprovider
 
 import (
 	"context"
+	"os"
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -16,78 +19,136 @@ func TestDescriptor(t *testing.T) {
 	d := p.Descriptor()
 	assert.Equal(t, ProviderName, d.Name)
 	assert.Equal(t, "Metadata Provider", d.DisplayName)
+	assert.Equal(t, "v1", d.APIVersion)
 	assert.NotNil(t, d.Schema)
 	assert.Len(t, d.Capabilities, 1)
-	assert.Len(t, d.Examples, 2)
+	assert.Equal(t, provider.CapabilityFrom, d.Capabilities[0])
+	assert.Len(t, d.Examples, 1)
+	assert.NotNil(t, d.OutputSchemas[provider.CapabilityFrom])
 }
 
-func TestExecute_FullMap(t *testing.T) {
+func TestExecute_FullContext(t *testing.T) {
 	p := New()
-	input := map[string]any{
-		"name":    "my-solution",
-		"version": "1.0.0",
-		"tags":    []string{"gcp", "terraform"},
-	}
-	out, err := p.Execute(context.Background(), input)
+
+	// Set up context with settings and solution metadata.
+	ctx := context.Background()
+	ctx = settings.IntoContext(ctx, &settings.Run{
+		EntryPointSettings: settings.EntryPointSettings{
+			FromCli: true,
+			Path:    "scafctl/run/solution",
+		},
+	})
+	ctx = provider.WithSolutionMetadata(ctx, &provider.SolutionMeta{
+		Name:        "my-solution",
+		Version:     "1.2.3",
+		DisplayName: "My Solution",
+		Description: "A test solution",
+		Category:    "testing",
+		Tags:        []string{"test", "example"},
+	})
+
+	out, err := p.Execute(ctx, nil)
+	require.NoError(t, err)
+
+	result, ok := out.Data.(map[string]any)
+	require.True(t, ok, "expected map[string]any output")
+
+	// Verify version info.
+	versionMap, ok := result["version"].(map[string]any)
+	require.True(t, ok, "version should be a map")
+	assert.Equal(t, settings.VersionInformation.BuildVersion, versionMap["buildVersion"])
+	assert.Equal(t, settings.VersionInformation.Commit, versionMap["commit"])
+	assert.Equal(t, settings.VersionInformation.BuildTime, versionMap["buildTime"])
+
+	// Verify args — should be os.Args.
+	args, ok := result["args"].([]string)
+	require.True(t, ok, "args should be []string")
+	assert.Equal(t, os.Args, args)
+
+	// Verify cwd.
+	expectedCwd, _ := os.Getwd()
+	assert.Equal(t, expectedCwd, result["cwd"])
+
+	// Verify entrypoint.
+	assert.Equal(t, "cli", result["entrypoint"])
+
+	// Verify command.
+	assert.Equal(t, "scafctl/run/solution", result["command"])
+
+	// Verify solution metadata.
+	solMap, ok := result["solution"].(map[string]any)
+	require.True(t, ok, "solution should be a map")
+	assert.Equal(t, "my-solution", solMap["name"])
+	assert.Equal(t, "1.2.3", solMap["version"])
+	assert.Equal(t, "My Solution", solMap["displayName"])
+	assert.Equal(t, "A test solution", solMap["description"])
+	assert.Equal(t, "testing", solMap["category"])
+	assert.Equal(t, []string{"test", "example"}, solMap["tags"])
+}
+
+func TestExecute_APIEntrypoint(t *testing.T) {
+	p := New()
+
+	ctx := context.Background()
+	ctx = settings.IntoContext(ctx, &settings.Run{
+		EntryPointSettings: settings.EntryPointSettings{
+			FromAPI: true,
+			Path:    "api/v1/solutions/run",
+		},
+	})
+
+	out, err := p.Execute(ctx, nil)
+	require.NoError(t, err)
+
+	result := out.Data.(map[string]any)
+	assert.Equal(t, "api", result["entrypoint"])
+	assert.Equal(t, "api/v1/solutions/run", result["command"])
+}
+
+func TestExecute_NoContext(t *testing.T) {
+	p := New()
+
+	// No settings or solution metadata in context — should still succeed with defaults.
+	out, err := p.Execute(context.Background(), nil)
 	require.NoError(t, err)
 
 	result, ok := out.Data.(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, "my-solution", result["name"])
-	assert.Equal(t, "1.0.0", result["version"])
-	assert.Equal(t, []string{"gcp", "terraform"}, result["tags"])
-}
 
-func TestExecute_SingleField(t *testing.T) {
-	p := New()
-	input := map[string]any{
-		"field":   "name",
-		"name":    "my-solution",
-		"version": "2.0.0",
-	}
-	out, err := p.Execute(context.Background(), input)
-	require.NoError(t, err)
-	assert.Equal(t, "my-solution", out.Data)
-}
+	// entrypoint should be "unknown" when no settings are in context.
+	assert.Equal(t, "unknown", result["entrypoint"])
+	assert.Equal(t, "", result["command"])
 
-func TestExecute_SingleField_Missing(t *testing.T) {
-	p := New()
-	input := map[string]any{
-		"field": "missing-key",
-		"name":  "my-solution",
-	}
-	_, err := p.Execute(context.Background(), input)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "missing-key")
-}
-
-func TestExecute_FieldKeyExcluded(t *testing.T) {
-	p := New()
-	input := map[string]any{
-		"field":   "",
-		"name":    "test",
-		"version": "1.0.0",
-	}
-	out, err := p.Execute(context.Background(), input)
-	require.NoError(t, err)
-	result, ok := out.Data.(map[string]any)
+	// solution should be an empty map.
+	solMap, ok := result["solution"].(map[string]any)
 	require.True(t, ok)
-	assert.NotContains(t, result, "field")
-	assert.Equal(t, "test", result["name"])
+	assert.Empty(t, solMap)
+
+	// version, args, cwd should still be populated from process state.
+	assert.NotNil(t, result["version"])
+	assert.NotNil(t, result["args"])
+	assert.NotEmpty(t, result["cwd"])
 }
 
-func TestExecute_BadInputType(t *testing.T) {
+func TestExecute_NoSolutionMetadata(t *testing.T) {
 	p := New()
-	_, err := p.Execute(context.Background(), "not-a-map")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "expected map[string]any")
-}
 
-func TestExecute_EmptyMap(t *testing.T) {
-	p := New()
-	out, err := p.Execute(context.Background(), map[string]any{})
+	ctx := context.Background()
+	ctx = settings.IntoContext(ctx, &settings.Run{
+		EntryPointSettings: settings.EntryPointSettings{
+			FromCli: true,
+			Path:    "scafctl/run/resolver",
+		},
+	})
+
+	out, err := p.Execute(ctx, nil)
 	require.NoError(t, err)
-	result, ok := out.Data.(map[string]any)
+
+	result := out.Data.(map[string]any)
+	assert.Equal(t, "cli", result["entrypoint"])
+
+	// solution should be an empty map when not set.
+	solMap, ok := result["solution"].(map[string]any)
 	require.True(t, ok)
-	assert.Empty(t, result)
+	assert.Empty(t, solMap)
 }

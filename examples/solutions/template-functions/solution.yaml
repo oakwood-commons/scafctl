@@ -140,12 +140,9 @@ spec:
                 Service count: {{ len $parsed }}
               name: yaml-demo
 
-    # Solution metadata via metadata provider
+    # Runtime metadata via metadata provider (no inputs needed)
     solution-meta:
       resolve:
         with:
           - provider: metadata
-            inputs:
-              name: template-functions-demo
-              version: 1.0.0
-              category: demo
+            inputs: {}

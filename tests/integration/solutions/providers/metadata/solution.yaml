@@ -8,54 +8,41 @@ metadata:
 
 spec:
   resolvers:
-    # Full metadata map
-    full-meta:
+    # Runtime metadata — no inputs needed
+    runtime-meta:
       resolve:
         with:
           - provider: metadata
-            inputs:
-              name: my-solution
-              version: 2.1.0
-              category: infrastructure
-              tags:
-                - gcp
-                - terraform
-
-    # Single field extraction
-    sol-name:
-      resolve:
-        with:
-          - provider: metadata
-            inputs:
-              field: name
-              name: my-solution
-              version: 2.1.0
+            inputs: {}
 
   testing:
     config:
       # render-defaults: solution has no workflow.actions section
       skipBuiltins: [render-defaults]
     cases:
-      resolve-full-meta:
-        description: Verify full metadata map resolves correctly
+      resolve-runtime-meta:
+        description: Verify runtime metadata resolves with expected fields
         command: [run, resolver]
         args: ["-o", "json"]
         assertions:
           - expression: __exitCode == 0
-          - expression: '__output["full-meta"].name == "my-solution"'
-            message: "name should be my-solution"
-          - expression: '__output["full-meta"].version == "2.1.0"'
-            message: "version should be 2.1.0"
-          - expression: '__output["full-meta"].category == "infrastructure"'
-            message: "category should be infrastructure"
-          - expression: 'size(__output["full-meta"].tags) == 2'
-            message: "should have 2 tags"
-
-      resolve-sol-name:
-        description: Verify single field extraction returns name
-        command: [run, resolver]
-        args: ["-o", "json"]
-        assertions:
-          - expression: __exitCode == 0
-          - expression: '__output["sol-name"] == "my-solution"'
-            message: "should return my-solution"
+          - expression: 'has(__output["runtime-meta"].version)'
+            message: "should have version field"
+          - expression: 'has(__output["runtime-meta"].version.buildVersion)'
+            message: "should have version.buildVersion"
+          - expression: 'has(__output["runtime-meta"].args)'
+            message: "should have args field"
+          - expression: 'size(__output["runtime-meta"].args) > 0'
+            message: "args should not be empty"
+          - expression: '__output["runtime-meta"].cwd != ""'
+            message: "cwd should not be empty"
+          - expression: '__output["runtime-meta"].entrypoint == "cli"'
+            message: "entrypoint should be cli"
+          - expression: '__output["runtime-meta"].command != ""'
+            message: "command path should not be empty"
+          - expression: '__output["runtime-meta"].solution.name == "metadata-provider-test"'
+            message: "solution name should match"
+          - expression: '__output["runtime-meta"].solution.version == "1.0.0"'
+            message: "solution version should match"
+          - expression: '__output["runtime-meta"].solution.category == "test"'
+            message: "solution category should match"

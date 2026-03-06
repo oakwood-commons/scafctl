@@ -112,6 +112,9 @@ type ExecuteResult struct {
 type Service struct {
 	// defaultFuncs are the default custom functions available to all templates
 	defaultFuncs template.FuncMap
+
+	// cache is the template compilation cache. If nil, the package-level default is used.
+	cache *TemplateCache
 }
 
 // SetExtensionFuncMapFactory sets the factory function used to provide extension
@@ -166,6 +169,14 @@ func NewService(additionalFuncs template.FuncMap) *Service {
 	}
 }
 
+// NewServiceWithCache creates a new template service with a custom cache.
+// This is useful for testing or when you want isolated cache instances.
+func NewServiceWithCache(additionalFuncs template.FuncMap, cache *TemplateCache) *Service {
+	svc := NewService(additionalFuncs)
+	svc.cache = cache
+	return svc
+}
+
 // NewServiceRaw creates a new template service without any auto-registered
 // extension functions. Only the explicitly provided functions will be available.
 // Use this when you want a bare template service without sprig or custom extensions.
@@ -176,6 +187,15 @@ func NewServiceRaw(defaultFuncs template.FuncMap) *Service {
 	return &Service{
 		defaultFuncs: defaultFuncs,
 	}
+}
+
+// getCache returns the cache to use for this service.
+// If a custom cache was provided, it is used; otherwise the package-level default is used.
+func (s *Service) getCache() *TemplateCache {
+	if s.cache != nil {
+		return s.cache
+	}
+	return GetDefaultCache()
 }
 
 // Execute renders a template with the provided options
@@ -316,14 +336,11 @@ func (s *Service) restoreReplacements(ctx context.Context, content string, rever
 	return restored
 }
 
-// createTemplate creates and configures a new template
+// createTemplate creates and configures a new template, using the cache when possible.
 func (s *Service) createTemplate(ctx context.Context, name, content string, opts TemplateOptions) (*template.Template, error) {
 	lgr := logger.FromContext(ctx)
 
-	// Create base template
-	tmpl := template.New(name)
-
-	// Set delimiters (use defaults if not specified)
+	// Resolve effective options
 	leftDelim := opts.LeftDelim
 	rightDelim := opts.RightDelim
 	if leftDelim == "" {
@@ -332,6 +349,28 @@ func (s *Service) createTemplate(ctx context.Context, name, content string, opts
 	if rightDelim == "" {
 		rightDelim = DefaultRightDelim
 	}
+
+	missingKey := opts.MissingKey
+	if missingKey == "" {
+		missingKey = MissingKeyDefault
+	}
+
+	// Build the effective function map keys for cache key generation
+	funcMapKeys := s.collectFuncMapKeys(opts)
+
+	// Check the cache
+	cache := s.getCache()
+	cacheKey := generateTemplateCacheKey(content, leftDelim, rightDelim, missingKey, funcMapKeys)
+
+	if cached, ok := cache.Get(cacheKey); ok {
+		lgr.V(2).Info("template cache hit", "name", name, "key", cacheKey[:12])
+		return cached, nil
+	}
+
+	lgr.V(2).Info("template cache miss, parsing", "name", name, "key", cacheKey[:12])
+
+	// Create base template
+	tmpl := template.New(name)
 
 	// Only log if non-default delimiters are used
 	if leftDelim != DefaultLeftDelim || rightDelim != DefaultRightDelim {
@@ -342,12 +381,6 @@ func (s *Service) createTemplate(ctx context.Context, name, content string, opts
 	}
 
 	tmpl = tmpl.Delims(leftDelim, rightDelim)
-
-	// Set missing key behavior (default to "default" if not specified)
-	missingKey := opts.MissingKey
-	if missingKey == "" {
-		missingKey = MissingKeyDefault
-	}
 
 	optionStr := fmt.Sprintf("missingkey=%s", missingKey)
 	lgr.V(2).Info("setting missing key option",
@@ -395,8 +428,32 @@ func (s *Service) createTemplate(ctx context.Context, name, content string, opts
 		return nil, fmt.Errorf("parse error: %w", err)
 	}
 
-	lgr.V(2).Info("template parsed successfully", "name", name)
+	// Store in cache
+	cache.Put(cacheKey, parsedTmpl, name)
+	lgr.V(2).Info("template parsed and cached", "name", name, "key", cacheKey[:12])
+
 	return parsedTmpl, nil
+}
+
+// collectFuncMapKeys returns the sorted list of function names that will be in
+// the effective FuncMap for a given set of template options.
+func (s *Service) collectFuncMapKeys(opts TemplateOptions) []string {
+	seen := make(map[string]struct{})
+
+	if !opts.DisableBuiltinFuncs {
+		for k := range s.defaultFuncs {
+			seen[k] = struct{}{}
+		}
+	}
+	for k := range opts.Funcs {
+		seen[k] = struct{}{}
+	}
+
+	keys := make([]string, 0, len(seen))
+	for k := range seen {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 // executeTemplate executes a parsed template with the provided data

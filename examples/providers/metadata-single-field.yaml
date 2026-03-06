@@ -1,8 +1,9 @@
-# Metadata provider — extract a single field
+# Metadata provider — use CEL to extract a single field
 #
-# Set "field" to the key you want returned as a scalar value
-# instead of the full metadata map.
-
-field: name
-name: my-solution
-version: 2.1.0
+# The metadata provider always returns the full runtime metadata map.
+# To reference a single field, use CEL expressions in downstream resolvers.
+#
+# Example CEL expression after resolving metadata:
+#   _.runtime-meta.solution.name    → solution name
+#   _.runtime-meta.version.buildVersion  → scafctl version
+#   _.runtime-meta.entrypoint       → "cli" or "api"
