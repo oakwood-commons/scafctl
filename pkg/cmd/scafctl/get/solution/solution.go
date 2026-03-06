@@ -9,9 +9,11 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/oakwood-commons/scafctl/pkg/cache"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -28,6 +30,7 @@ type CmdOptionsVersion struct {
 	CliParams *settings.Run
 	Output    string
 	Path      string
+	NoCache   bool
 }
 
 func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
@@ -75,6 +78,7 @@ func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 	}
 	cCmd.PersistentFlags().StringVarP(&options.Output, "output", "o", "", fmt.Sprintf("Output format. One of: (%s)", strings.Join(ValidOutputTypes, ", ")))
 	cCmd.PersistentFlags().StringVarP(&options.Path, "path", "p", "", "Path to the solution. This can be a local file path or a URL. If not provided, the command will attempt to locate a solution file in default locations.")
+	cCmd.PersistentFlags().BoolVar(&options.NoCache, "no-cache", false, "Bypass the artifact cache and fetch directly from the catalog")
 	return cCmd
 }
 
@@ -85,7 +89,14 @@ func (o *CmdOptionsVersion) GetSolution(ctx context.Context) error {
 	var getterOpts []get.Option
 	localCatalog, err := catalog.NewLocalCatalog(*lgr)
 	if err == nil {
-		resolver := catalog.NewSolutionResolver(localCatalog, *lgr)
+		resolverOpts := []catalog.SolutionResolverOption{
+			catalog.WithResolverNoCache(o.NoCache),
+		}
+		if !o.NoCache {
+			artifactCache := cache.NewArtifactCache(paths.ArtifactCacheDir(), settings.DefaultArtifactCacheTTL)
+			resolverOpts = append(resolverOpts, catalog.WithResolverArtifactCache(artifactCache))
+		}
+		resolver := catalog.NewSolutionResolver(localCatalog, *lgr, resolverOpts...)
 		getterOpts = append(getterOpts, get.WithCatalogResolver(resolver))
 	} else {
 		lgr.V(1).Info("catalog not available for solution resolution", "error", err)

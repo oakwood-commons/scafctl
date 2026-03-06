@@ -17,12 +17,15 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/cache"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/solutionprovider"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
@@ -40,6 +43,7 @@ type prepareConfig struct {
 	metricsOut    io.Writer
 	pluginFetcher *plugin.Fetcher
 	lockPlugins   []bundler.LockPlugin
+	noCache       bool
 }
 
 // WithGetter provides a custom solution getter. If not set, one is created
@@ -99,6 +103,14 @@ func WithLockPlugins(plugins []bundler.LockPlugin) Option {
 	}
 }
 
+// WithNoCache disables artifact caching when loading solutions from the catalog.
+// When set, the catalog is always queried directly, bypassing the filesystem cache.
+func WithNoCache() Option {
+	return func(c *prepareConfig) {
+		c.noCache = true
+	}
+}
+
 // Result holds the output of PrepareSolution.
 type Result struct {
 	// Solution is the loaded and prepared solution.
@@ -134,7 +146,7 @@ func Solution(ctx context.Context, path string, opts ...Option) (*Result, error)
 	// Get or create the solution getter
 	getter := cfg.getter
 	if getter == nil {
-		getter = newDefaultGetter(ctx)
+		getter = newDefaultGetter(ctx, cfg.noCache)
 	}
 
 	// Load the solution (with bundle if available)
@@ -279,7 +291,8 @@ func Solution(ctx context.Context, path string, opts ...Option) (*Result, error)
 }
 
 // newDefaultGetter creates a default solution getter with catalog resolution support.
-func newDefaultGetter(ctx context.Context) get.Interface {
+// When noCache is true, the artifact cache is disabled so the catalog is always queried directly.
+func newDefaultGetter(ctx context.Context, noCache bool) get.Interface {
 	lgr := logger.FromContext(ctx)
 
 	var getterOpts []get.Option
@@ -288,7 +301,15 @@ func newDefaultGetter(ctx context.Context) get.Interface {
 
 		localCatalog, err := catalog.NewLocalCatalog(*lgr)
 		if err == nil {
-			catResolver := catalog.NewSolutionResolver(localCatalog, *lgr)
+			// Build SolutionResolverOptions with optional artifact cache
+			resolverOpts := []catalog.SolutionResolverOption{
+				catalog.WithResolverNoCache(noCache),
+			}
+			if !noCache {
+				artifactCache := cache.NewArtifactCache(paths.ArtifactCacheDir(), settings.DefaultArtifactCacheTTL)
+				resolverOpts = append(resolverOpts, catalog.WithResolverArtifactCache(artifactCache))
+			}
+			catResolver := catalog.NewSolutionResolver(localCatalog, *lgr, resolverOpts...)
 			getterOpts = append(getterOpts, get.WithCatalogResolver(catResolver))
 		} else {
 			lgr.V(1).Info("catalog not available for solution resolution", "error", err)
