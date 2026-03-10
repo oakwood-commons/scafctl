@@ -36,7 +36,7 @@ require (
 	github.com/vbauerster/mpb/v8 v8.12.0
 	github.com/zalando/go-keyring v0.2.6
 	github.com/zclconf/go-cty v1.18.0
-	go.opentelemetry.io/contrib/bridges/otellogr v0.15.0
+	go.opentelemetry.io/contrib/bridges/otellogr v0.17.0
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.65.0
 	go.opentelemetry.io/otel v1.42.0
 	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc v0.16.0
