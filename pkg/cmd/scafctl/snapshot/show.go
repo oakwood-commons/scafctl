@@ -125,6 +125,9 @@ func showSummary(snapshot *resolver.Snapshot, opts *ShowOptions, ioStreams termi
 	// Count status
 	var success, failed, skipped int
 	for _, res := range snapshot.Resolvers {
+		if res == nil {
+			continue
+		}
 		switch res.Status {
 		case "success":
 			success++
@@ -169,6 +172,9 @@ func showResolvers(snapshot *resolver.Snapshot, opts *ShowOptions, ioStreams ter
 	fmt.Fprintf(out, "=============\n\n")
 
 	for name, res := range snapshot.Resolvers {
+		if res == nil {
+			continue
+		}
 		var statusIcon string
 		switch res.Status {
 		case "failed":

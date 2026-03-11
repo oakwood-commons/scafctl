@@ -31,6 +31,9 @@ func MergePluginDefaults(sol *solution.Solution) {
 	// Merge defaults into resolver provider inputs
 	if sol.Spec.Resolvers != nil {
 		for _, r := range sol.Spec.Resolvers {
+			if r == nil {
+				continue
+			}
 			if r.Resolve != nil {
 				for _, src := range r.Resolve.With {
 					mergeInputDefaults(src.Provider, src.Inputs, defaultsMap)

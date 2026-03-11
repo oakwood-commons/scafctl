@@ -37,6 +37,11 @@ func (s *Solution) ValidateSpec() error {
 			problems = append(problems, err.Error())
 		}
 
+		if r == nil {
+			problems = append(problems, fmt.Sprintf("resolver %q has a null value — a resolve block is required", name))
+			continue
+		}
+
 		// Validate dependsOn references point to existing resolvers
 		for _, dep := range r.DependsOn {
 			if dep == "" {

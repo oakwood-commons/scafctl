@@ -480,6 +480,27 @@ spec:
 			wantErr: true,
 			errMsg:  "cannot start with '__'",
 		},
+		{
+			name: "null resolver value in YAML",
+			yaml: `
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test-solution
+  version: 1.0.0
+spec:
+  resolvers:
+    map:
+    hello:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "world"
+`,
+			wantErr: true,
+			errMsg:  "has a null value",
+		},
 	}
 
 	for _, tt := range tests {
@@ -495,6 +516,38 @@ spec:
 				require.NoError(t, err)
 			}
 		})
+	}
+}
+
+func TestSolution_ValidateSpec_NilResolverValue(t *testing.T) {
+	sol := &Solution{
+		Spec: Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"map":   nil,
+				"hello": {Type: resolver.TypeString},
+			},
+		},
+	}
+
+	err := sol.ValidateSpec()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `resolver "map" has a null value`)
+	assert.NotContains(t, err.Error(), `resolver "hello"`)
+}
+
+func BenchmarkValidateSpec_NilResolver(b *testing.B) {
+	sol := &Solution{
+		Spec: Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"nil_resolver": nil,
+				"valid":        {Type: resolver.TypeString},
+			},
+		},
+	}
+
+	b.ResetTimer()
+	for b.Loop() {
+		_ = sol.ValidateSpec()
 	}
 }
 
