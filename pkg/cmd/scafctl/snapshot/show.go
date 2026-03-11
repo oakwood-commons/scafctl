@@ -122,12 +122,13 @@ func showSummary(snapshot *resolver.Snapshot, opts *ShowOptions, ioStreams termi
 	fmt.Fprintf(out, "Total Duration:  %s\n", snapshot.Metadata.TotalDuration)
 	fmt.Fprintf(out, "Overall Status:  %s\n\n", snapshot.Metadata.Status)
 
-	// Count status
-	var success, failed, skipped int
+	// Count status (only count non-nil entries for accurate totals)
+	var total, success, failed, skipped int
 	for _, res := range snapshot.Resolvers {
 		if res == nil {
 			continue
 		}
+		total++
 		switch res.Status {
 		case "success":
 			success++
@@ -138,7 +139,7 @@ func showSummary(snapshot *resolver.Snapshot, opts *ShowOptions, ioStreams termi
 		}
 	}
 
-	fmt.Fprintf(out, "Resolvers:       %d total\n", len(snapshot.Resolvers))
+	fmt.Fprintf(out, "Resolvers:       %d total\n", total)
 	fmt.Fprintf(out, "  Success:       %d\n", success)
 	fmt.Fprintf(out, "  Failed:        %d\n", failed)
 	fmt.Fprintf(out, "  Skipped:       %d\n", skipped)
@@ -168,7 +169,15 @@ func showSummary(snapshot *resolver.Snapshot, opts *ShowOptions, ioStreams termi
 func showResolvers(snapshot *resolver.Snapshot, opts *ShowOptions, ioStreams terminal.IOStreams) error {
 	out := ioStreams.Out
 
-	fmt.Fprintf(out, "Resolvers (%d)\n", len(snapshot.Resolvers))
+	// Count non-nil resolvers for accurate header
+	var count int
+	for _, res := range snapshot.Resolvers {
+		if res != nil {
+			count++
+		}
+	}
+
+	fmt.Fprintf(out, "Resolvers (%d)\n", count)
 	fmt.Fprintf(out, "=============\n\n")
 
 	for name, res := range snapshot.Resolvers {

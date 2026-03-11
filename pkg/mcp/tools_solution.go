@@ -665,7 +665,12 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 	missingDescriptions := make(map[string]string)
 	for name, rslvr := range sol.Spec.Resolvers {
 		if rslvr == nil {
-			continue
+			return newStructuredError(ErrCodeLoadFailed,
+				fmt.Sprintf("invalid resolver %q: resolver definition is null", name),
+				WithField(fmt.Sprintf("resolvers.%s", name)),
+				WithSuggestion("Resolver entries must be objects, not null. Define the resolver steps or remove this entry."),
+				WithRelatedTools("lint_solution"),
+			), nil
 		}
 		if rslvr.Resolve != nil && len(rslvr.Resolve.With) > 0 && rslvr.Resolve.With[0].Provider == "parameter" {
 			if _, provided := params[name]; !provided {
@@ -734,6 +739,10 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 	resolvers := make(map[string]resolverPreview, len(sol.Spec.Resolvers))
 	for name, rslvr := range sol.Spec.Resolvers {
 		if rslvr == nil {
+			resolvers[name] = resolverPreview{
+				Status:      "error",
+				Description: "resolver definition is nil; check the solution YAML configuration for this resolver",
+			}
 			continue
 		}
 		// If filtering to a single resolver, check if this one or its deps match

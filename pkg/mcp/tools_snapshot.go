@@ -75,9 +75,9 @@ func (s *Server) handleShowSnapshot(_ context.Context, request mcp.CallToolReque
 		), nil
 	}
 
-	// Build resolver counts
+	// Build resolver counts (only count non-nil entries for accurate totals)
 	counts := map[string]int{
-		"total":   len(snapshot.Resolvers),
+		"total":   0,
 		"success": 0,
 		"failed":  0,
 		"skipped": 0,
@@ -86,6 +86,7 @@ func (s *Server) handleShowSnapshot(_ context.Context, request mcp.CallToolReque
 		if r == nil {
 			continue
 		}
+		counts["total"]++
 		switch r.Status {
 		case string(resolver.ExecutionStatusSuccess):
 			counts["success"]++
