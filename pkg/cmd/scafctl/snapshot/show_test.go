@@ -17,6 +17,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -304,8 +305,9 @@ func TestShowSummary_StatusCounting(t *testing.T) {
 
 	var stdout bytes.Buffer
 	ioStreams := terminal.IOStreams{Out: &stdout}
+	w := writer.New(&ioStreams, &settings.Run{})
 
-	err := showSummary(snapshot, &ShowOptions{}, ioStreams)
+	err := showSummary(snapshot, &ShowOptions{}, w)
 
 	require.NoError(t, err)
 	output := stdout.String()
@@ -379,8 +381,9 @@ func TestShowResolvers_StatusIcons(t *testing.T) {
 
 			var stdout bytes.Buffer
 			ioStreams := terminal.IOStreams{Out: &stdout}
+			w := writer.New(&ioStreams, &settings.Run{})
 
-			err := showResolvers(snapshot, &ShowOptions{}, ioStreams)
+			err := showResolvers(snapshot, &ShowOptions{}, w)
 			require.NoError(t, err)
 
 			output := stdout.String()

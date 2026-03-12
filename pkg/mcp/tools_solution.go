@@ -738,11 +738,9 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 
 	resolvers := make(map[string]resolverPreview, len(sol.Spec.Resolvers))
 	for name, rslvr := range sol.Spec.Resolvers {
+		// Note: nil resolvers are caught earlier in the param elicitation loop
+		// with a structured error, so we can safely skip them here.
 		if rslvr == nil {
-			resolvers[name] = resolverPreview{
-				Status:      "error",
-				Description: "resolver definition is nil; check the solution YAML configuration for this resolver",
-			}
 			continue
 		}
 		// If filtering to a single resolver, check if this one or its deps match
