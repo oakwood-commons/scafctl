@@ -272,6 +272,17 @@ var KnownRules = map[string]RuleMeta{
 		Why:         "An empty validate.with array is almost certainly unintentional. The validate phase will be silently skipped, which may cause unexpected behavior.",
 		Fix:         "Either add validation rules to the with array or remove the validate section entirely.",
 	},
+	"null-resolver": {
+		Rule:        "null-resolver",
+		Severity:    string(SeverityError),
+		Category:    "structure",
+		Description: "A resolver key has a null value instead of a resolver definition object.",
+		Why:         "A YAML key with no value (e.g., 'my-resolver:' on its own line) results in a nil entry. Resolvers require at minimum a resolve block with provider steps.",
+		Fix:         "Define the resolver with at least a resolve block, or remove the dangling key entirely.",
+		Examples: []string{
+			"# Wrong (null resolver):\nresolvers:\n  my-resolver:\n\n# Correct:\nresolvers:\n  my-resolver:\n    resolve:\n      with:\n        - provider: static\n          inputs:\n            value: \"...\"",
+		},
+	},
 }
 
 // ListRules returns all known lint rules sorted by severity (error > warning > info)

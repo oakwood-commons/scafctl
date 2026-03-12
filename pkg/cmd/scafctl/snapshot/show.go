@@ -70,7 +70,12 @@ func runShow(ctx context.Context, opts *ShowOptions, ioStreams terminal.IOStream
 
 	// Create a fallback Writer if one isn't in context (e.g., in tests)
 	if w == nil {
-		w = writer.New(&ioStreams, &settings.Run{})
+		// Ensure ErrOut is non-nil to avoid panics in error paths
+		streams := &ioStreams
+		if streams.ErrOut == nil {
+			streams.ErrOut = streams.Out
+		}
+		w = writer.New(streams, settings.NewCliParams())
 	}
 
 	// Helper to write error
