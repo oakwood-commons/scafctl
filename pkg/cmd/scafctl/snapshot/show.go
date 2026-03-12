@@ -68,11 +68,19 @@ func runShow(ctx context.Context, opts *ShowOptions, ioStreams terminal.IOStream
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
 
+	// Create a fallback Writer if one isn't in context (e.g., in tests)
+	if w == nil {
+		// Ensure ErrOut is non-nil to avoid panics in error paths
+		streams := &ioStreams
+		if streams.ErrOut == nil {
+			streams.ErrOut = streams.Out
+		}
+		w = writer.New(streams, settings.NewCliParams())
+	}
+
 	// Helper to write error
 	writeErr := func(err error) {
-		if w != nil {
-			w.Errorf("%v", err)
-		}
+		w.Errorf("%v", err)
 	}
 
 	// Load snapshot
@@ -86,7 +94,7 @@ func runShow(ctx context.Context, opts *ShowOptions, ioStreams terminal.IOStream
 
 	switch opts.Format {
 	case "summary":
-		return showSummary(snapshot, opts, ioStreams)
+		return showSummary(snapshot, opts, w)
 
 	case "json":
 		encoder := json.NewEncoder(ioStreams.Out)
@@ -98,7 +106,7 @@ func runShow(ctx context.Context, opts *ShowOptions, ioStreams terminal.IOStream
 		}
 
 	case "resolvers":
-		return showResolvers(snapshot, opts, ioStreams)
+		return showResolvers(snapshot, opts, w)
 
 	default:
 		err := fmt.Errorf("unsupported format: %s (supported: summary, json, resolvers)", opts.Format)
@@ -109,22 +117,24 @@ func runShow(ctx context.Context, opts *ShowOptions, ioStreams terminal.IOStream
 	return nil
 }
 
-func showSummary(snapshot *resolver.Snapshot, opts *ShowOptions, ioStreams terminal.IOStreams) error {
-	out := ioStreams.Out
-
-	fmt.Fprintf(out, "Snapshot Summary\n")
-	fmt.Fprintf(out, "================\n\n")
+func showSummary(snapshot *resolver.Snapshot, opts *ShowOptions, w *writer.Writer) error {
+	w.Plainlnf("Snapshot Summary")
+	w.Plainlnf("================\n")
 
 	// Metadata
-	fmt.Fprintf(out, "Solution:        %s (v%s)\n", snapshot.Metadata.Solution, snapshot.Metadata.Version)
-	fmt.Fprintf(out, "Timestamp:       %s\n", snapshot.Metadata.Timestamp.Format("2006-01-02 15:04:05"))
-	fmt.Fprintf(out, "scafctl Version: %s\n", snapshot.Metadata.ScafctlVersion)
-	fmt.Fprintf(out, "Total Duration:  %s\n", snapshot.Metadata.TotalDuration)
-	fmt.Fprintf(out, "Overall Status:  %s\n\n", snapshot.Metadata.Status)
+	w.Plainlnf("Solution:        %s (v%s)", snapshot.Metadata.Solution, snapshot.Metadata.Version)
+	w.Plainlnf("Timestamp:       %s", snapshot.Metadata.Timestamp.Format("2006-01-02 15:04:05"))
+	w.Plainlnf("scafctl Version: %s", snapshot.Metadata.ScafctlVersion)
+	w.Plainlnf("Total Duration:  %s", snapshot.Metadata.TotalDuration)
+	w.Plainlnf("Overall Status:  %s\n", snapshot.Metadata.Status)
 
-	// Count status
-	var success, failed, skipped int
+	// Count status (only count non-nil entries for accurate totals)
+	var total, success, failed, skipped int
 	for _, res := range snapshot.Resolvers {
+		if res == nil {
+			continue
+		}
+		total++
 		switch res.Status {
 		case "success":
 			success++
@@ -135,26 +145,26 @@ func showSummary(snapshot *resolver.Snapshot, opts *ShowOptions, ioStreams termi
 		}
 	}
 
-	fmt.Fprintf(out, "Resolvers:       %d total\n", len(snapshot.Resolvers))
-	fmt.Fprintf(out, "  Success:       %d\n", success)
-	fmt.Fprintf(out, "  Failed:        %d\n", failed)
-	fmt.Fprintf(out, "  Skipped:       %d\n", skipped)
+	w.Plainlnf("Resolvers:       %d total", total)
+	w.Plainlnf("  Success:       %d", success)
+	w.Plainlnf("  Failed:        %d", failed)
+	w.Plainlnf("  Skipped:       %d", skipped)
 
 	if len(snapshot.Phases) > 0 {
-		fmt.Fprintf(out, "\nPhases:          %d\n", len(snapshot.Phases))
+		w.Plainlnf("\nPhases:          %d", len(snapshot.Phases))
 		if opts.Verbose {
 			for _, phase := range snapshot.Phases {
-				fmt.Fprintf(out, "  Phase %d:       %s (%d resolvers)\n",
+				w.Plainlnf("  Phase %d:       %s (%d resolvers)",
 					phase.Phase, phase.Duration, len(phase.Resolvers))
 			}
 		}
 	}
 
 	if len(snapshot.Parameters) > 0 {
-		fmt.Fprintf(out, "\nParameters:      %d\n", len(snapshot.Parameters))
+		w.Plainlnf("\nParameters:      %d", len(snapshot.Parameters))
 		if opts.Verbose {
 			for key, value := range snapshot.Parameters {
-				fmt.Fprintf(out, "  %s: %v\n", key, value)
+				w.Plainlnf("  %s: %v", key, value)
 			}
 		}
 	}
@@ -162,13 +172,22 @@ func showSummary(snapshot *resolver.Snapshot, opts *ShowOptions, ioStreams termi
 	return nil
 }
 
-func showResolvers(snapshot *resolver.Snapshot, opts *ShowOptions, ioStreams terminal.IOStreams) error {
-	out := ioStreams.Out
+func showResolvers(snapshot *resolver.Snapshot, opts *ShowOptions, w *writer.Writer) error {
+	// Count non-nil resolvers for accurate header
+	var count int
+	for _, res := range snapshot.Resolvers {
+		if res != nil {
+			count++
+		}
+	}
 
-	fmt.Fprintf(out, "Resolvers (%d)\n", len(snapshot.Resolvers))
-	fmt.Fprintf(out, "=============\n\n")
+	w.Plainlnf("Resolvers (%d)", count)
+	w.Plainlnf("=============\n")
 
 	for name, res := range snapshot.Resolvers {
+		if res == nil {
+			continue
+		}
 		var statusIcon string
 		switch res.Status {
 		case "failed":
@@ -179,36 +198,36 @@ func showResolvers(snapshot *resolver.Snapshot, opts *ShowOptions, ioStreams ter
 			statusIcon = "✓"
 		}
 
-		fmt.Fprintf(out, "%s %s\n", statusIcon, name)
-		fmt.Fprintf(out, "  Status:        %s\n", res.Status)
-		fmt.Fprintf(out, "  Phase:         %d\n", res.Phase)
-		fmt.Fprintf(out, "  Duration:      %s\n", res.Duration)
-		fmt.Fprintf(out, "  Provider Calls: %d\n", res.ProviderCalls)
+		w.Plainlnf("%s %s", statusIcon, name)
+		w.Plainlnf("  Status:        %s", res.Status)
+		w.Plainlnf("  Phase:         %d", res.Phase)
+		w.Plainlnf("  Duration:      %s", res.Duration)
+		w.Plainlnf("  Provider Calls: %d", res.ProviderCalls)
 
 		if opts.Verbose {
-			fmt.Fprintf(out, "  Value:         %v\n", res.Value)
+			w.Plainlnf("  Value:         %v", res.Value)
 			if res.ValueSizeBytes > 0 {
-				fmt.Fprintf(out, "  Value Size:    %d bytes\n", res.ValueSizeBytes)
+				w.Plainlnf("  Value Size:    %d bytes", res.ValueSizeBytes)
 			}
 			if res.Sensitive {
-				fmt.Fprintf(out, "  Sensitive:     yes\n")
+				w.Plainlnf("  Sensitive:     yes")
 			}
 		}
 
 		if res.Error != "" {
-			fmt.Fprintf(out, "  Error:         %s\n", res.Error)
+			w.Plainlnf("  Error:         %s", res.Error)
 		}
 
 		if len(res.FailedAttempts) > 0 {
-			fmt.Fprintf(out, "  Failed Attempts: %d\n", len(res.FailedAttempts))
+			w.Plainlnf("  Failed Attempts: %d", len(res.FailedAttempts))
 			if opts.Verbose {
 				for i, attempt := range res.FailedAttempts {
-					fmt.Fprintf(out, "    %d. %s: %s\n", i+1, attempt.Provider, attempt.Error)
+					w.Plainlnf("    %d. %s: %s", i+1, attempt.Provider, attempt.Error)
 				}
 			}
 		}
 
-		fmt.Fprintf(out, "\n")
+		w.Plainlnf("")
 	}
 
 	return nil

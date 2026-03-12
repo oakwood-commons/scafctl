@@ -637,3 +637,66 @@ func TestLintEmptyValidateWith(t *testing.T) {
 	require.Len(t, findings, 1)
 	assert.Contains(t, findings[0].Message, "empty")
 }
+
+func TestLintNullResolverValue(t *testing.T) {
+	reg := provider.NewRegistry()
+	staticProv := newFakeProvider("static", map[string]*jsonschema.Schema{
+		"value": {Type: "string"},
+	})
+	_ = reg.Register(staticProv)
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"map": nil,
+				"hello": {
+					Type: "string",
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "static",
+							Inputs:   map[string]*spec.ValueRef{"value": {Literal: "world"}},
+						}},
+					},
+				},
+			},
+		},
+	}
+
+	result := Solution(sol, "test.yaml", reg)
+
+	findings := filterFindingsByRule(result, "null-resolver")
+	require.Len(t, findings, 1)
+	assert.Equal(t, SeverityError, findings[0].Severity)
+	assert.Contains(t, findings[0].Message, "null value")
+	assert.Contains(t, findings[0].Location, "map")
+}
+
+func BenchmarkLintNullResolver(b *testing.B) {
+	reg := provider.NewRegistry()
+	staticProv := newFakeProvider("static", map[string]*jsonschema.Schema{
+		"value": {Type: "string"},
+	})
+	_ = reg.Register(staticProv)
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"null_resolver": nil,
+				"valid": {
+					Type: "string",
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "static",
+							Inputs:   map[string]*spec.ValueRef{"value": {Literal: "ok"}},
+						}},
+					},
+				},
+			},
+		},
+	}
+
+	b.ResetTimer()
+	for b.Loop() {
+		_ = Solution(sol, "bench.yaml", reg)
+	}
+}

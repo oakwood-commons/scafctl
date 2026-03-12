@@ -178,6 +178,9 @@ func runSave(ctx context.Context, opts *SaveOptions, ioStreams terminal.IOStream
 			}
 		}
 		for name, sr := range snapshot.Resolvers {
+			if sr == nil {
+				continue
+			}
 			if sensitiveMap[name] {
 				sr.Value = "<redacted>"
 				sr.Sensitive = true

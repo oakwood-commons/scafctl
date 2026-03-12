@@ -151,6 +151,14 @@ func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Re
 	for name, res := range sol.Spec.Resolvers {
 		location := fmt.Sprintf("resolvers.%s", name)
 
+		if res == nil {
+			result.addFinding(SeverityError, "structure", location,
+				fmt.Sprintf("resolver '%s' has a null value — a resolve block is required", name),
+				"Define the resolver with at least a resolve block, e.g.:\n  resolve:\n    with:\n      - provider: static\n        inputs:\n          value: \"...\"",
+				"null-resolver")
+			continue
+		}
+
 		if reservedNames[name] {
 			result.addFinding(SeverityError, "naming", location,
 				fmt.Sprintf("resolver name '%s' is reserved", name),
