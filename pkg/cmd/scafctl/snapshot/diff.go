@@ -168,9 +168,9 @@ func runDiff(ctx context.Context, opts *DiffOptions, ioStreams terminal.IOStream
 	}
 
 	// Print summary to stderr if output is redirected
-	if opts.Output != "" {
-		fmt.Fprintf(ioStreams.ErrOut, "Diff saved to %s\n", opts.Output)
-		fmt.Fprintf(ioStreams.ErrOut, "Total: %d | Added: %d | Removed: %d | Modified: %d | Unchanged: %d\n",
+	if opts.Output != "" && w != nil {
+		w.WarnStderrf("Diff saved to %s", opts.Output)
+		w.WarnStderrf("Total: %d | Added: %d | Removed: %d | Modified: %d | Unchanged: %d",
 			diff.Summary.TotalResolvers,
 			diff.Summary.Added,
 			diff.Summary.Removed,

@@ -11,6 +11,8 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/httpc"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 )
@@ -48,12 +50,13 @@ const authHTTPLogLevel = 5
 
 // Handler implements auth.Handler for GitHub.
 type Handler struct {
-	config      *Config
-	secretStore secrets.Store
-	secretErr   error // deferred error from secrets initialization
-	httpClient  HTTPClient
-	tokenCache  *auth.TokenCache
-	logger      logr.Logger
+	config           *Config
+	secretStore      secrets.Store
+	secretErr        error // deferred error from secrets initialization
+	httpClient       HTTPClient
+	httpClientConfig *config.HTTPClientConfig
+	tokenCache       *auth.TokenCache
+	logger           logr.Logger
 }
 
 // Option configures the Handler.
@@ -114,6 +117,14 @@ func WithHTTPClient(client HTTPClient) Option {
 	}
 }
 
+// WithHTTPClientConfig configures the handler's HTTP client from application config.
+// The config is merged: global HTTPClientConfig → auth-level HTTPClient → handler-level HTTPClient.
+func WithHTTPClientConfig(cfg *config.HTTPClientConfig) Option {
+	return func(h *Handler) {
+		h.httpClientConfig = cfg
+	}
+}
+
 // WithLogger sets the logger for the handler.
 // The logger is offset by authHTTPLogLevel before being passed to the HTTP
 // transport so that auth HTTP traffic only appears at high verbosity.
@@ -154,7 +165,13 @@ func New(opts ...Option) (*Handler, error) {
 
 	// Initialize HTTP client if not provided
 	if h.httpClient == nil {
-		h.httpClient = NewDefaultHTTPClient(httpLogger)
+		if h.httpClientConfig != nil {
+			h.httpClient = &DefaultHTTPClient{
+				client: httpc.NewClientFromAppConfig(h.httpClientConfig, httpLogger),
+			}
+		} else {
+			h.httpClient = NewDefaultHTTPClient(httpLogger)
+		}
 	}
 
 	// Initialize token cache with secret store (nil-safe: checked before use)

@@ -1,0 +1,91 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-dryrun
+  version: 1.0.0
+  description: |
+    Functional tests for dry-run functionality.
+    Verifies that --dry-run resolves values without
+    executing actions and returns expected output.
+
+spec:
+  resolvers:
+    greeting:
+      description: A simple greeting
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "Hello from dry-run!"
+
+    environment:
+      description: Target environment
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "test"
+
+    computedMessage:
+      description: Computed from other resolvers
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.greeting + ' env=' + _.environment"
+
+  workflow:
+    actions:
+      greet:
+        provider: exec
+        inputs:
+          command: echo
+          args:
+            - "{{ .greeting }}"
+
+  testing:
+    config:
+      skipBuiltins: [render-defaults]
+
+    cases:
+      dryrun-resolves-values:
+        description: Verify dry-run resolves all values
+        command: [run, solution]
+        args: ["--dry-run", "-o", "json"]
+        tags: [dryrun, smoke]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: "greeting"
+          - contains: "Hello from dry-run!"
+
+      dryrun-shows-actions:
+        description: Verify dry-run shows planned actions
+        command: [run, solution]
+        args: ["--dry-run"]
+        tags: [dryrun]
+        assertions:
+          - expression: __exitCode == 0
+
+      dryrun-resolver-only:
+        description: Verify resolver-only dry-run works
+        command: [run, resolver]
+        args: ["--dry-run", "-o", "json"]
+        tags: [dryrun, resolver]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: "greeting"
+          - contains: "environment"
+
+      dryrun-computed-resolver:
+        description: Verify computed resolvers work in dry-run
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [dryrun, resolver]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: "computedMessage"
+          - contains: "Hello from dry-run! env=test"

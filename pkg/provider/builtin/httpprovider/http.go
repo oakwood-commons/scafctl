@@ -27,6 +27,14 @@ const (
 	Version      = "1.0.0"
 )
 
+// Field name constants for input/output map keys.
+const (
+	fieldURL     = "url"
+	fieldMethod  = "method"
+	fieldHeaders = "headers"
+	fieldBody    = "body"
+)
+
 // retryConfig holds retry configuration for HTTP requests.
 type retryConfig struct {
 	MaxAttempts int           // Maximum number of attempts (default: 3)
@@ -132,16 +140,16 @@ func NewHTTPProvider() *HTTPProvider {
 				provider.CapabilityAction,
 				provider.CapabilityTransform,
 			},
-			Schema: schemahelper.ObjectSchema([]string{"url"}, map[string]*jsonschema.Schema{
-				"url": schemahelper.StringProp("The URL to request",
+			Schema: schemahelper.ObjectSchema([]string{fieldURL}, map[string]*jsonschema.Schema{
+				fieldURL: schemahelper.StringProp("The URL to request",
 					schemahelper.WithExample("https://api.example.com/users"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(2048)),
 					schemahelper.WithPattern(`^https?://.*`)),
-				"method": schemahelper.StringProp("HTTP method",
+				fieldMethod: schemahelper.StringProp("HTTP method",
 					schemahelper.WithExample("GET"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(10))),
-				"headers": schemahelper.AnyProp("HTTP headers as key-value pairs"),
-				"body": schemahelper.StringProp("Request body for POST/PUT/PATCH requests",
+				fieldHeaders: schemahelper.AnyProp("HTTP headers as key-value pairs"),
+				fieldBody: schemahelper.StringProp("Request body for POST/PUT/PATCH requests",
 					schemahelper.WithMaxLength(*ptrs.IntPtr(1048576))),
 				"timeout": schemahelper.IntProp("Request timeout in seconds",
 					schemahelper.WithExample(30),
@@ -222,23 +230,23 @@ func NewHTTPProvider() *HTTPProvider {
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
 					"statusCode": schemahelper.IntProp("HTTP response status code (last page when paginating)", schemahelper.WithExample(200)),
-					"body":       schemahelper.AnyProp("Response body as string (default) or parsed JSON object when autoParseJson is true. When paginating with collectPath, contains the JSON array of all collected items"),
-					"headers":    schemahelper.AnyProp("Response headers (last page when paginating)"),
+					fieldBody:    schemahelper.AnyProp("Response body as string (default) or parsed JSON object when autoParseJson is true. When paginating with collectPath, contains the JSON array of all collected items"),
+					fieldHeaders: schemahelper.AnyProp("Response headers (last page when paginating)"),
 					"pages":      schemahelper.IntProp("Number of pages fetched (only present when pagination is configured)", schemahelper.WithExample(3)),
 					"totalItems": schemahelper.IntProp("Total number of items collected across all pages (only present when pagination is configured)", schemahelper.WithExample(150)),
 				}),
 				provider.CapabilityTransform: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
 					"statusCode": schemahelper.IntProp("HTTP response status code (last page when paginating)", schemahelper.WithExample(200)),
-					"body":       schemahelper.AnyProp("Response body as string (default) or parsed JSON object when autoParseJson is true. When paginating with collectPath, contains the JSON array of all collected items"),
-					"headers":    schemahelper.AnyProp("Response headers (last page when paginating)"),
+					fieldBody:    schemahelper.AnyProp("Response body as string (default) or parsed JSON object when autoParseJson is true. When paginating with collectPath, contains the JSON array of all collected items"),
+					fieldHeaders: schemahelper.AnyProp("Response headers (last page when paginating)"),
 					"pages":      schemahelper.IntProp("Number of pages fetched (only present when pagination is configured)", schemahelper.WithExample(3)),
 					"totalItems": schemahelper.IntProp("Total number of items collected across all pages (only present when pagination is configured)", schemahelper.WithExample(150)),
 				}),
 				provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
 					"success":    schemahelper.BoolProp("Whether the HTTP request completed successfully (2xx status)"),
 					"statusCode": schemahelper.IntProp("HTTP response status code (last page when paginating)", schemahelper.WithExample(200)),
-					"body":       schemahelper.AnyProp("Response body as string (default) or parsed JSON object when autoParseJson is true. When paginating with collectPath, contains the JSON array of all collected items"),
-					"headers":    schemahelper.AnyProp("Response headers (last page when paginating)"),
+					fieldBody:    schemahelper.AnyProp("Response body as string (default) or parsed JSON object when autoParseJson is true. When paginating with collectPath, contains the JSON array of all collected items"),
+					fieldHeaders: schemahelper.AnyProp("Response headers (last page when paginating)"),
 					"pages":      schemahelper.IntProp("Number of pages fetched (only present when pagination is configured)", schemahelper.WithExample(3)),
 					"totalItems": schemahelper.IntProp("Total number of items collected across all pages (only present when pagination is configured)", schemahelper.WithExample(150)),
 				}),
@@ -437,22 +445,22 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 		return nil, fmt.Errorf("%s: expected map[string]any, got %T", ProviderName, input)
 	}
 
-	lgr.V(1).Info("executing provider", "provider", ProviderName, "url", inputs["url"])
+	lgr.V(1).Info("executing provider", "provider", ProviderName, fieldURL, inputs[fieldURL])
 
 	// Check for dry-run mode
 	if provider.DryRunFromContext(ctx) {
 		return &provider.Output{
 			Data: map[string]any{
 				"statusCode": 200,
-				"body":       "[DRY-RUN] Request not executed",
-				"headers":    map[string]any{},
+				fieldBody:    "[DRY-RUN] Request not executed",
+				fieldHeaders: map[string]any{},
 			},
 		}, nil
 	}
 
 	// Extract inputs
-	urlStr, _ := inputs["url"].(string)
-	method, _ := inputs["method"].(string)
+	urlStr, _ := inputs[fieldURL].(string)
+	method, _ := inputs[fieldMethod].(string)
 	if method == "" {
 		method = "GET"
 	}
@@ -469,11 +477,11 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 	timeoutDuration := time.Duration(timeout) * time.Second
 
 	// Get body content for potential retries
-	bodyContent, _ := inputs["body"].(string)
+	bodyContent, _ := inputs[fieldBody].(string)
 
 	// Get headers (make a copy to avoid modifying input)
 	headers := make(map[string]any)
-	if h, ok := inputs["headers"].(map[string]any); ok {
+	if h, ok := inputs[fieldHeaders].(map[string]any); ok {
 		for k, v := range h {
 			headers[k] = v
 		}
@@ -701,8 +709,8 @@ func (p *HTTPProvider) execute(
 	return &provider.Output{
 		Data: map[string]any{
 			"statusCode": resp.StatusCode,
-			"body":       bodyValue,
-			"headers":    respHeaders,
+			fieldBody:    bodyValue,
+			fieldHeaders: respHeaders,
 		},
 	}, nil
 }

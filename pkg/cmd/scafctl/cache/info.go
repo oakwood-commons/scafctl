@@ -5,6 +5,7 @@ package cache
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	cachelib "github.com/oakwood-commons/scafctl/pkg/cache"
@@ -12,6 +13,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/format"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
@@ -60,7 +62,10 @@ func CommandInfo(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 }
 
 func runInfo(ctx context.Context, _ *InfoOptions, outputOpts *kvx.OutputOptions) error {
-	w := writer.MustFromContext(ctx)
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return fmt.Errorf("writer not initialized in context")
+	}
 
 	// Collect cache info
 	caches := []cachelib.Info{
@@ -80,7 +85,7 @@ func runInfo(ctx context.Context, _ *InfoOptions, outputOpts *kvx.OutputOptions)
 	output := cachelib.InfoOutput{
 		Caches:     caches,
 		TotalSize:  totalSize,
-		TotalHuman: cachelib.FormatBytes(totalSize),
+		TotalHuman: format.Bytes(totalSize),
 		TotalFiles: totalFiles,
 	}
 

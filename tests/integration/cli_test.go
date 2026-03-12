@@ -5421,3 +5421,373 @@ func TestIntegration_MCPServeInfo_ExplainConcepts(t *testing.T) {
 	}
 	assert.True(t, toolNames["explain_concepts"], "expected explain_concepts tool to be registered")
 }
+
+// ============================================================================
+// Snapshot Command Tests
+// ============================================================================
+
+func TestIntegration_Snapshot_Show_Summary(t *testing.T) {
+	t.Parallel()
+	snapshotFile := filepath.Join(t.TempDir(), "snapshot.json")
+
+	// Create a snapshot first
+	_, _, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"--snapshot",
+		"--snapshot-file="+snapshotFile,
+	)
+	require.Equal(t, 0, exitCode, "failed to create snapshot")
+
+	// Show summary (default format)
+	stdout, _, exitCode := runScafctl(t, "snapshot", "show", snapshotFile)
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Snapshot Summary")
+	assert.Contains(t, stdout, "resolver-demo")
+	assert.Contains(t, stdout, "Resolvers:")
+	assert.Contains(t, stdout, "Success:")
+}
+
+func TestIntegration_Snapshot_Show_JSON(t *testing.T) {
+	t.Parallel()
+	snapshotFile := filepath.Join(t.TempDir(), "snapshot.json")
+
+	// Create a snapshot
+	_, _, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"--snapshot",
+		"--snapshot-file="+snapshotFile,
+	)
+	require.Equal(t, 0, exitCode, "failed to create snapshot")
+
+	// Show as JSON
+	stdout, _, exitCode := runScafctl(t, "snapshot", "show", snapshotFile, "--format", "json")
+	assert.Equal(t, 0, exitCode)
+
+	// Verify valid JSON
+	var parsed map[string]interface{}
+	err := json.Unmarshal([]byte(stdout), &parsed)
+	assert.NoError(t, err, "snapshot show --format json should produce valid JSON")
+	assert.Contains(t, parsed, "metadata")
+	assert.Contains(t, parsed, "resolvers")
+}
+
+func TestIntegration_Snapshot_Show_Resolvers(t *testing.T) {
+	t.Parallel()
+	snapshotFile := filepath.Join(t.TempDir(), "snapshot.json")
+
+	// Create a snapshot
+	_, _, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"--snapshot",
+		"--snapshot-file="+snapshotFile,
+	)
+	require.Equal(t, 0, exitCode, "failed to create snapshot")
+
+	// Show resolvers format
+	stdout, _, exitCode := runScafctl(t, "snapshot", "show", snapshotFile, "--format", "resolvers")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Resolvers")
+	// resolver-demo.yaml has environment, region, port, exposedPort, hostname, config
+	assert.Contains(t, stdout, "environment")
+	assert.Contains(t, stdout, "region")
+	assert.Contains(t, stdout, "port")
+}
+
+func TestIntegration_Snapshot_Show_Verbose(t *testing.T) {
+	t.Parallel()
+	snapshotFile := filepath.Join(t.TempDir(), "snapshot.json")
+
+	// Create a snapshot
+	_, _, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"--snapshot",
+		"--snapshot-file="+snapshotFile,
+	)
+	require.Equal(t, 0, exitCode, "failed to create snapshot")
+
+	// Show resolvers with verbose flag
+	stdout, _, exitCode := runScafctl(t, "snapshot", "show", snapshotFile, "--format", "resolvers", "--verbose")
+	assert.Equal(t, 0, exitCode)
+	// Verbose should show values
+	assert.Contains(t, stdout, "Value:")
+}
+
+func TestIntegration_Snapshot_Show_MissingFile(t *testing.T) {
+	t.Parallel()
+	_, _, exitCode := runScafctl(t, "snapshot", "show", "/nonexistent/path/snapshot.json")
+	assert.NotEqual(t, 0, exitCode, "should fail when snapshot file does not exist")
+}
+
+func TestIntegration_Snapshot_Show_NoArgs(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t, "snapshot", "show")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "accepts 1 arg")
+}
+
+func TestIntegration_Snapshot_Diff_Human(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	beforeFile := filepath.Join(tmpDir, "before.json")
+	afterFile := filepath.Join(tmpDir, "after.json")
+
+	// Create before snapshot from resolver-demo.yaml
+	_, _, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"--snapshot",
+		"--snapshot-file="+beforeFile,
+	)
+	require.Equal(t, 0, exitCode, "failed to create before snapshot")
+
+	// Create after snapshot from a modified solution
+	modifiedSolution := filepath.Join(tmpDir, "modified.yaml")
+	content := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: resolver-demo
+  version: 2.0.0
+spec:
+  resolvers:
+    environment:
+      description: Target deployment environment
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: staging
+    region:
+      description: Deployment region
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: eu-west-1
+    port:
+      description: Application port
+      type: int
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: 9090
+`
+	err := os.WriteFile(modifiedSolution, []byte(content), 0o600)
+	require.NoError(t, err)
+
+	_, _, exitCode = runScafctl(t,
+		"run", "resolver",
+		"-f", modifiedSolution,
+		"--snapshot",
+		"--snapshot-file="+afterFile,
+	)
+	require.Equal(t, 0, exitCode, "failed to create after snapshot")
+
+	// Diff in human format (default)
+	stdout, _, exitCode := runScafctl(t, "snapshot", "diff", beforeFile, afterFile)
+	assert.Equal(t, 0, exitCode)
+	// Human diff should contain some output (could be changes or summary)
+	assert.NotEmpty(t, stdout, "diff output should not be empty")
+}
+
+func TestIntegration_Snapshot_Diff_JSON(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	beforeFile := filepath.Join(tmpDir, "before.json")
+	afterFile := filepath.Join(tmpDir, "after.json")
+
+	// Create two snapshots (same solution = identical)
+	_, _, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"--snapshot",
+		"--snapshot-file="+beforeFile,
+	)
+	require.Equal(t, 0, exitCode)
+
+	_, _, exitCode = runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"--snapshot",
+		"--snapshot-file="+afterFile,
+	)
+	require.Equal(t, 0, exitCode)
+
+	// JSON format diff
+	stdout, _, exitCode := runScafctl(t, "snapshot", "diff", beforeFile, afterFile, "--format", "json")
+	assert.Equal(t, 0, exitCode)
+
+	// Should be valid JSON
+	var parsed map[string]interface{}
+	err := json.Unmarshal([]byte(stdout), &parsed)
+	assert.NoError(t, err, "diff --format json should produce valid JSON")
+	assert.Contains(t, parsed, "summary")
+}
+
+func TestIntegration_Snapshot_Diff_Unified(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	beforeFile := filepath.Join(tmpDir, "before.json")
+	afterFile := filepath.Join(tmpDir, "after.json")
+
+	// Create two identical snapshots
+	_, _, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"--snapshot",
+		"--snapshot-file="+beforeFile,
+	)
+	require.Equal(t, 0, exitCode)
+
+	_, _, exitCode = runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"--snapshot",
+		"--snapshot-file="+afterFile,
+	)
+	require.Equal(t, 0, exitCode)
+
+	// Unified diff format
+	stdout, _, exitCode := runScafctl(t, "snapshot", "diff", beforeFile, afterFile, "--format", "unified")
+	assert.Equal(t, 0, exitCode)
+	// Output may be empty if nothing changed — that's fine
+	t.Logf("unified diff output: %s", stdout)
+}
+
+func TestIntegration_Snapshot_Diff_IgnoreUnchanged(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	beforeFile := filepath.Join(tmpDir, "before.json")
+	afterFile := filepath.Join(tmpDir, "after.json")
+
+	// Two identical snapshots
+	_, _, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"--snapshot",
+		"--snapshot-file="+beforeFile,
+	)
+	require.Equal(t, 0, exitCode)
+
+	_, _, exitCode = runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"--snapshot",
+		"--snapshot-file="+afterFile,
+	)
+	require.Equal(t, 0, exitCode)
+
+	// With --ignore-unchanged, identical snapshots should produce minimal output
+	stdout, _, exitCode := runScafctl(t, "snapshot", "diff", beforeFile, afterFile, "--ignore-unchanged")
+	assert.Equal(t, 0, exitCode)
+	t.Logf("ignore-unchanged diff output: %s", stdout)
+}
+
+func TestIntegration_Snapshot_Diff_IgnoreFields(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	beforeFile := filepath.Join(tmpDir, "before.json")
+	afterFile := filepath.Join(tmpDir, "after.json")
+
+	_, _, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"--snapshot",
+		"--snapshot-file="+beforeFile,
+	)
+	require.Equal(t, 0, exitCode)
+
+	_, _, exitCode = runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"--snapshot",
+		"--snapshot-file="+afterFile,
+	)
+	require.Equal(t, 0, exitCode)
+
+	// Ignore duration and providerCalls fields
+	stdout, _, exitCode := runScafctl(t,
+		"snapshot", "diff", beforeFile, afterFile,
+		"--ignore-fields", "duration,providerCalls",
+	)
+	assert.Equal(t, 0, exitCode)
+	t.Logf("ignore-fields diff output: %s", stdout)
+}
+
+func TestIntegration_Snapshot_Diff_OutputFile(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	beforeFile := filepath.Join(tmpDir, "before.json")
+	afterFile := filepath.Join(tmpDir, "after.json")
+	outputFile := filepath.Join(tmpDir, "diff-output.txt")
+
+	_, _, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"--snapshot",
+		"--snapshot-file="+beforeFile,
+	)
+	require.Equal(t, 0, exitCode)
+
+	_, _, exitCode = runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"--snapshot",
+		"--snapshot-file="+afterFile,
+	)
+	require.Equal(t, 0, exitCode)
+
+	// Write diff to file
+	_, _, exitCode = runScafctl(t,
+		"snapshot", "diff", beforeFile, afterFile,
+		"--output", outputFile,
+	)
+	assert.Equal(t, 0, exitCode)
+
+	// Verify output file was created
+	data, err := os.ReadFile(outputFile)
+	require.NoError(t, err)
+	assert.NotEmpty(t, data, "diff output file should not be empty")
+}
+
+func TestIntegration_Snapshot_Diff_MissingFile(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	snapshotFile := filepath.Join(tmpDir, "exists.json")
+
+	// Create one valid snapshot
+	_, _, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"--snapshot",
+		"--snapshot-file="+snapshotFile,
+	)
+	require.Equal(t, 0, exitCode)
+
+	// Diff with missing second file
+	_, _, exitCode = runScafctl(t,
+		"snapshot", "diff", snapshotFile, "/nonexistent/after.json",
+	)
+	assert.NotEqual(t, 0, exitCode, "should fail when snapshot file does not exist")
+}
+
+func TestIntegration_Snapshot_Diff_NoArgs(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t, "snapshot", "diff")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "accepts 2 arg")
+}
+
+func TestIntegration_Snapshot_Help(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "snapshot", "--help")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "show")
+	assert.Contains(t, stdout, "diff")
+}

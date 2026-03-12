@@ -14,18 +14,20 @@ import (
 // This mirrors config.CELConfig but avoids circular dependencies.
 type CELConfigInput struct {
 	// CacheSize is the maximum number of compiled programs to cache
-	CacheSize int
+	CacheSize int `json:"cacheSize" yaml:"cacheSize" doc:"Maximum number of compiled programs to cache" maximum:"100000" example:"10000"`
 	// CostLimit is the cost limit for expression evaluation (0 = disabled)
-	CostLimit int64
+	CostLimit int64 `json:"costLimit" yaml:"costLimit" doc:"Cost limit for expression evaluation (0 = disabled)" example:"1000000"`
 	// UseASTBasedCaching enables AST-based cache key generation
-	UseASTBasedCaching bool
+	UseASTBasedCaching bool `json:"useASTBasedCaching" yaml:"useASTBasedCaching" doc:"Enable AST-based cache key generation"`
 	// EnableMetrics enables expression metrics collection
-	EnableMetrics bool
+	EnableMetrics bool `json:"enableMetrics" yaml:"enableMetrics" doc:"Enable expression metrics collection"`
 }
 
 var (
-	// appConfigOnce ensures InitFromAppConfig is only called once
-	appConfigOnce sync.Once
+	// appConfigMu protects the app config initialization state
+	appConfigMu sync.Mutex
+	// appConfigInitialized tracks whether InitFromAppConfig has been called
+	appConfigInitialized bool
 
 	// appConfigCache stores the configured cache for InitFromAppConfig
 	appConfigCache *ProgramCache
@@ -51,9 +53,12 @@ var (
 //	    EnableMetrics:      true,
 //	})
 func InitFromAppConfig(ctx context.Context, cfg CELConfigInput) {
-	appConfigOnce.Do(func() {
+	appConfigMu.Lock()
+	defer appConfigMu.Unlock()
+	if !appConfigInitialized {
 		initFromAppConfigInternal(ctx, cfg)
-	})
+		appConfigInitialized = true
+	}
 }
 
 // initFromAppConfigInternal performs the actual initialization.
@@ -98,11 +103,13 @@ func initFromAppConfigInternal(ctx context.Context, cfg CELConfigInput) {
 // ResetForTesting resets the app config state for testing purposes.
 // This should only be called from tests.
 func ResetForTesting() {
-	appConfigOnce = sync.Once{}
+	appConfigMu.Lock()
+	appConfigInitialized = false
 	appConfigCache = nil
+	appConfigMu.Unlock()
 	// Also reset the cache factory
-	cacheFactoryOnce = sync.Once{}
 	cacheFactoryMu.Lock()
+	cacheFactoryInitialized = false
 	cacheFactory = nil
 	cacheFactoryMu.Unlock()
 }

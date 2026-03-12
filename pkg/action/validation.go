@@ -619,7 +619,7 @@ func extractRefsFromExpression(expr *celexp.Expression, refs map[string]struct{}
 	}
 
 	// Use the RequiredVariables to check for __actions, then parse action names
-	requiredVars, err := expr.RequiredVariables()
+	requiredVars, err := expr.RequiredVariables(context.TODO())
 	if err != nil {
 		// Can't parse expression, skip reference extraction
 		return
@@ -852,6 +852,3 @@ func findCycle(deps map[string][]string) []string {
 
 	return nil
 }
-
-// Ensure context package is used (for future enhancements)
-var _ = context.Background

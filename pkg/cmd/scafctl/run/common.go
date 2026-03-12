@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -53,7 +52,7 @@ type runCommandConfig struct {
 func makeRunEFunc(cfg runCommandConfig, cmdUse string) func(*cobra.Command, []string) error {
 	return func(cCmd *cobra.Command, args []string) error {
 		cfg.cliParams.EntryPointSettings.Path = filepath.Join(cfg.path, cmdUse)
-		ctx := settings.IntoContext(context.Background(), cfg.cliParams)
+		ctx := settings.IntoContext(cCmd.Context(), cfg.cliParams)
 
 		lgr := logger.FromContext(cCmd.Context())
 		if lgr != nil {
@@ -193,8 +192,6 @@ func (o *sharedResolverOptions) getEffectiveResolverConfig(ctx context.Context) 
 func (o *sharedResolverOptions) exitWithCode(ctx context.Context, err error, code int) error {
 	if w := writer.FromContext(ctx); w != nil {
 		w.Errorf("%v", err)
-	} else {
-		fmt.Fprintf(o.IOStreams.ErrOut, " ❌ %v\n", err)
 	}
 	return exitcode.WithCode(err, code)
 }
@@ -340,10 +337,11 @@ func (o *sharedResolverOptions) generateTestOutput(ctx context.Context, command,
 		return o.exitWithCode(ctx, fmt.Errorf("failed to marshal test YAML: %w", err), exitcode.GeneralError)
 	}
 
-	fmt.Fprint(o.IOStreams.Out, string(yamlData))
-
-	if result.SnapshotWritten {
-		fmt.Fprintf(o.IOStreams.ErrOut, "Snapshot written: %s\n", result.SnapshotPath)
+	if w := writer.FromContext(ctx); w != nil {
+		w.Plain(string(yamlData))
+		if result.SnapshotWritten {
+			w.WarnStderrf("Snapshot written: %s", result.SnapshotPath)
+		}
 	}
 	return nil
 }
@@ -499,18 +497,22 @@ func addSharedResolverFlags(cCmd *cobra.Command, o *sharedResolverOptions) {
 }
 
 // writeMetrics outputs provider execution metrics to stderr
-func writeMetrics(errOut io.Writer) {
+func writeMetrics(ctx context.Context) {
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return
+	}
 	allMetrics := provider.GlobalMetrics.GetAllMetrics()
 	if len(allMetrics) == 0 {
 		return
 	}
 
-	fmt.Fprintln(errOut, "")
-	fmt.Fprintln(errOut, "Provider Execution Metrics:")
-	fmt.Fprintln(errOut, strings.Repeat("-", 80))
-	fmt.Fprintf(errOut, "%-25s %8s %8s %8s %12s %12s\n",
+	w.WarnStderrf("")
+	w.WarnStderrf("Provider Execution Metrics:")
+	w.WarnStderrf("%s", strings.Repeat("-", 80))
+	w.WarnStderrf("%-25s %8s %8s %8s %12s %12s",
 		"Provider", "Total", "Success", "Failure", "Avg Duration", "Success %")
-	fmt.Fprintln(errOut, strings.Repeat("-", 80))
+	w.WarnStderrf("%s", strings.Repeat("-", 80))
 
 	// Sort provider names for consistent output
 	names := make([]string, 0, len(allMetrics))
@@ -523,7 +525,7 @@ func writeMetrics(errOut io.Writer) {
 		m := allMetrics[name]
 		avgDuration := m.AverageDuration()
 		successRate := m.SuccessRate()
-		fmt.Fprintf(errOut, "%-25s %8d %8d %8d %12s %11.1f%%\n",
+		w.WarnStderrf("%-25s %8d %8d %8d %12s %11.1f%%",
 			name,
 			m.ExecutionCount,
 			m.SuccessCount,
@@ -531,7 +533,7 @@ func writeMetrics(errOut io.Writer) {
 			avgDuration.Round(time.Millisecond),
 			successRate)
 	}
-	fmt.Fprintln(errOut, strings.Repeat("-", 80))
+	w.WarnStderrf("%s", strings.Repeat("-", 80))
 }
 
 // solutionMetaFromSolution converts a solution's metadata to a provider.SolutionMeta.

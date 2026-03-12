@@ -61,7 +61,10 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 		Args:         cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			w := writer.MustFromContext(ctx)
+			w := writer.FromContext(ctx)
+			if w == nil {
+				return fmt.Errorf("writer not initialized in context")
+			}
 
 			handlers := listHandlers(ctx)
 			if len(args) > 0 {

@@ -31,7 +31,10 @@ func CommandGet(_ *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			w := writer.MustFromContext(ctx)
+			w := writer.FromContext(ctx)
+			if w == nil {
+				return fmt.Errorf("writer not initialized in context")
+			}
 			name := args[0]
 
 			// Validate name
@@ -72,11 +75,7 @@ func CommandGet(_ *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra
 					w.Errorf("%v", err)
 					return exitcode.WithCode(err, exitcode.GeneralError)
 				}
-				if _, err := fmt.Fprintln(ioStreams.Out); err != nil {
-					err := fmt.Errorf("failed to write newline: %w", err)
-					w.Errorf("%v", err)
-					return exitcode.WithCode(err, exitcode.GeneralError)
-				}
+				w.Plainln("")
 			case "yaml":
 				data := map[string]interface{}{
 					"name":  name,
@@ -97,11 +96,7 @@ func CommandGet(_ *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra
 					return exitcode.WithCode(err, exitcode.GeneralError)
 				}
 				if !noNewline {
-					if _, err := fmt.Fprintln(ioStreams.Out); err != nil {
-						err := fmt.Errorf("failed to write newline: %w", err)
-						w.Errorf("%v", err)
-						return exitcode.WithCode(err, exitcode.GeneralError)
-					}
+					w.Plainln("")
 				}
 			}
 

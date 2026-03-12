@@ -153,7 +153,7 @@ func (c *GRPCClient) GetProviderDescriptor(ctx context.Context, providerName str
 	}
 
 	// Convert proto.ProviderDescriptor to provider.Descriptor
-	return protoToDescriptor(resp.GetDescriptor_()), nil
+	return protoToDescriptor(resp.GetDescriptor_())
 }
 
 // ExecuteProvider implements ProviderPlugin.ExecuteProvider
@@ -329,10 +329,14 @@ func descriptorToProto(desc *provider.Descriptor) *proto.ProviderDescriptor {
 // protoToDescriptor converts proto.ProviderDescriptor to provider.Descriptor
 //
 //nolint:dupl // Schema and OutputSchema conversion are intentionally similar
-func protoToDescriptor(protoDesc *proto.ProviderDescriptor) *provider.Descriptor {
+func protoToDescriptor(protoDesc *proto.ProviderDescriptor) (*provider.Descriptor, error) {
 	var version *semver.Version
 	if protoDesc.Version != "" {
-		version, _ = semver.NewVersion(protoDesc.Version)
+		var err error
+		version, err = semver.NewVersion(protoDesc.Version)
+		if err != nil {
+			return nil, fmt.Errorf("plugin %q has invalid semver version %q: %w", protoDesc.Name, protoDesc.Version, err)
+		}
 	}
 	desc := &provider.Descriptor{
 		Name:            protoDesc.Name,
@@ -452,5 +456,5 @@ func protoToDescriptor(protoDesc *proto.ProviderDescriptor) *provider.Descriptor
 		}
 	}
 
-	return desc
+	return desc, nil
 }

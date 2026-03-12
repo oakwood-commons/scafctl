@@ -19,6 +19,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/format"
 )
 
 // BuildBundleOptions holds configuration for the build bundle pipeline.
@@ -305,7 +306,7 @@ func BuildBundle(ctx context.Context, sol *solution.Solution, solutionContent []
 		result.InputFileCount = len(discovery.LocalFiles)
 		result.Messages = append(result.Messages, fmt.Sprintf("Bundled %d file(s) (%s, deduplicated: %d layer(s))",
 			len(dedupeResult.Manifest.Files),
-			FormatByteSize(dedupeResult.TotalSize),
+			format.Bytes(dedupeResult.TotalSize),
 			len(dedupeResult.LargeBlobs)+1)) // +1 for small files tar if present
 
 		return result, nil
@@ -322,7 +323,7 @@ func BuildBundle(ctx context.Context, sol *solution.Solution, solutionContent []
 	result.BuildFingerprint = buildFingerprint
 	result.BuildCacheDir = buildCacheDir
 	result.InputFileCount = len(discovery.LocalFiles)
-	result.Messages = append(result.Messages, fmt.Sprintf("Bundled %d file(s) (%s)", len(manifest.Files), FormatByteSize(int64(len(tarData)))))
+	result.Messages = append(result.Messages, fmt.Sprintf("Bundled %d file(s) (%s)", len(manifest.Files), format.Bytes(int64(len(tarData)))))
 
 	return result, nil
 }
@@ -364,18 +365,6 @@ func ParseByteSize(s string) (int64, error) {
 		return 0, fmt.Errorf("invalid size %q", s)
 	}
 	return n, nil
-}
-
-// FormatByteSize formats bytes as a human-readable string.
-func FormatByteSize(b int64) string {
-	switch {
-	case b >= 1024*1024:
-		return fmt.Sprintf("%.1f MB", float64(b)/(1024*1024))
-	case b >= 1024:
-		return fmt.Sprintf("%.1f KB", float64(b)/1024)
-	default:
-		return fmt.Sprintf("%d B", b)
-	}
 }
 
 // CatalogPluginResolver adapts a catalog.Catalog to the bundler.PluginResolver interface.

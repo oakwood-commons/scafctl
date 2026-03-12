@@ -13,6 +13,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 )
 
 func TestVersionCmdOptions_PrintVersion(t *testing.T) {
@@ -109,6 +110,8 @@ func TestVersionCmdOptions_PrintVersion(t *testing.T) {
 				GetLatestVersion: tt.getLatestVersion,
 			}
 			ctx := context.Background()
+			w2 := writer.New(ioStreams, options.CliParams)
+			ctx = writer.WithWriter(ctx, w2)
 
 			err := options.PrintVersion(ctx)
 			w.Close()

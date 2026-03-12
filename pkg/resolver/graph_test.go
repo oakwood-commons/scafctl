@@ -1048,3 +1048,65 @@ func tmplPtr(tmpl string) *gotmpl.GoTemplatingContent {
 	t := gotmpl.GoTemplatingContent(tmpl)
 	return &t
 }
+
+func TestIsTransitiveDependency(t *testing.T) {
+	resolvers := map[string]*Resolver{
+		"a": {DependsOn: []string{"b"}},
+		"b": {DependsOn: []string{"c"}},
+		"c": {},
+		"d": {DependsOn: []string{"a"}},
+	}
+
+	tests := []struct {
+		name      string
+		target    string
+		candidate string
+		expected  bool
+	}{
+		{"direct dependency", "a", "b", true},
+		{"transitive dependency", "a", "c", true},
+		{"no dependency", "a", "d", false},
+		{"non-existent target", "x", "a", false},
+		{"non-existent candidate", "a", "x", false},
+		{"self", "a", "a", false},
+		{"deep transitive", "d", "c", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := IsTransitiveDependency(resolvers, tt.target, tt.candidate)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestIsTransitiveDependency_CycleProtection(t *testing.T) {
+	// Create a cycle: a → b → a
+	resolvers := map[string]*Resolver{
+		"a": {DependsOn: []string{"b"}},
+		"b": {DependsOn: []string{"a"}},
+	}
+
+	// Should not infinite loop; b is a direct dep of a
+	assert.True(t, IsTransitiveDependency(resolvers, "a", "b"))
+	// a is a dep of b (through the cycle)
+	assert.True(t, IsTransitiveDependency(resolvers, "b", "a"))
+	// c doesn't exist
+	assert.False(t, IsTransitiveDependency(resolvers, "a", "c"))
+}
+
+func BenchmarkIsTransitiveDependency(b *testing.B) {
+	resolvers := map[string]*Resolver{
+		"a": {DependsOn: []string{"b", "c"}},
+		"b": {DependsOn: []string{"d", "e"}},
+		"c": {DependsOn: []string{"f"}},
+		"d": {},
+		"e": {},
+		"f": {},
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		IsTransitiveDependency(resolvers, "a", "f")
+	}
+}

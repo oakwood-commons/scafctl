@@ -161,28 +161,28 @@ var VersionInformation = VersionInfo{
 // EntryPointSettings holds configuration options for determining the entry point source.
 // It specifies whether the entry point is provided via an API or CLI, and the path to the entry point.
 type EntryPointSettings struct {
-	FromAPI bool
-	FromCli bool
-	Path    string
+	FromAPI bool   `json:"fromAPI" yaml:"fromAPI" doc:"Whether the entry point is provided via API"`
+	FromCli bool   `json:"fromCli" yaml:"fromCli" doc:"Whether the entry point is provided via CLI"`
+	Path    string `json:"path,omitempty" yaml:"path,omitempty" doc:"Path to the entry point" maxLength:"512" example:"./solution.yaml"`
 }
 
 // VersionInfo holds metadata about the build, including the commit hash,
 // build version, and build timestamp.
 type VersionInfo struct {
-	Commit       string
-	BuildVersion string
-	BuildTime    string
+	Commit       string `json:"commit" yaml:"commit" doc:"Git commit hash" maxLength:"64" example:"abc1234"`
+	BuildVersion string `json:"buildVersion" yaml:"buildVersion" doc:"Build version string" maxLength:"64" example:"v1.2.3"`
+	BuildTime    string `json:"buildTime" yaml:"buildTime" doc:"Build timestamp" maxLength:"64" example:"2025-01-01T00:00:00Z"`
 }
 
 // Run holds configuration settings for a single execution of the application.
 // It includes options for logging, entry point configuration, output formatting,
 // and error handling behavior.
 type Run struct {
-	MinLogLevel        string
-	EntryPointSettings EntryPointSettings
-	IsQuiet            bool
-	NoColor            bool
-	ExitOnError        bool
+	MinLogLevel        string             `json:"minLogLevel" yaml:"minLogLevel" doc:"Minimum log level" maxLength:"16" example:"info"`
+	EntryPointSettings EntryPointSettings `json:"entryPointSettings" yaml:"entryPointSettings" doc:"Entry point configuration"`
+	IsQuiet            bool               `json:"isQuiet" yaml:"isQuiet" doc:"Whether to suppress non-essential output"`
+	NoColor            bool               `json:"noColor" yaml:"noColor" doc:"Whether to disable colored output"`
+	ExitOnError        bool               `json:"exitOnError" yaml:"exitOnError" doc:"Whether to exit on error"`
 }
 
 // NewCliParams initializes and returns a pointer to a Run struct with default CLI parameters.

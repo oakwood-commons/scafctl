@@ -39,7 +39,10 @@ This is useful for:
   - Before sharing a device or system`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
-			w := writer.MustFromContext(ctx)
+			w := writer.FromContext(ctx)
+			if w == nil {
+				return fmt.Errorf("writer not initialized in context")
+			}
 
 			store, err := secrets.New()
 			if err != nil {
@@ -66,7 +69,10 @@ This is useful for:
 				}
 			}
 
-			in := input.MustFromContext(ctx)
+			in := input.FromContext(ctx)
+			if in == nil {
+				return fmt.Errorf("input not initialized in context")
+			}
 			confirmed, err := in.Confirm(input.NewConfirmOptions().
 				WithPrompt("Continue?").
 				WithDefault(false).

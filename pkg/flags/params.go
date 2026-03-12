@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Oakwood Commons
 // SPDX-License-Identifier: Apache-2.0
 
-package run
+package flags
 
 import (
 	"encoding/json"
@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/oakwood-commons/scafctl/pkg/flags"
 	"gopkg.in/yaml.v3"
 )
 
@@ -71,11 +70,11 @@ func ParseResolverFlags(values []string) (map[string]any, error) {
 			}
 			// Merge file params into result
 			for k, val := range fileParams {
-				result[k] = mergeValue(result[k], val)
+				result[k] = MergeValue(result[k], val)
 			}
 		} else {
-			// Parse key=value using flags.ParseKeyValueCSV
-			parsed, err := flags.ParseKeyValueCSV([]string{v})
+			// Parse key=value using ParseKeyValueCSV
+			parsed, err := ParseKeyValueCSV([]string{v})
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse parameter %q: %w", v, err)
 			}
@@ -83,14 +82,14 @@ func ParseResolverFlags(values []string) (map[string]any, error) {
 			for k, vals := range parsed {
 				// Convert []string to appropriate type
 				if len(vals) == 1 {
-					result[k] = mergeValue(result[k], vals[0])
+					result[k] = MergeValue(result[k], vals[0])
 				} else {
 					// Multiple values - convert to []any
 					anyVals := make([]any, len(vals))
 					for i, s := range vals {
 						anyVals[i] = s
 					}
-					result[k] = mergeValue(result[k], anyVals)
+					result[k] = MergeValue(result[k], anyVals)
 				}
 			}
 		}
@@ -99,10 +98,10 @@ func ParseResolverFlags(values []string) (map[string]any, error) {
 	return result, nil
 }
 
-// mergeValue merges a new value with an existing value, creating arrays as needed.
+// MergeValue merges a new value with an existing value, creating arrays as needed.
 // If existing is nil, returns newVal. If both are slices, concatenates them.
 // If existing is a scalar and newVal is provided, creates a slice.
-func mergeValue(existing, newVal any) any {
+func MergeValue(existing, newVal any) any {
 	if existing == nil {
 		return newVal
 	}

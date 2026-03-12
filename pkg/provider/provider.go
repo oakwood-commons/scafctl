@@ -39,7 +39,7 @@ type Descriptor struct {
 
 	// APIVersion indicates the provider API contract version (e.g., "v1").
 	// Used for compatibility checking and migration support.
-	APIVersion string `json:"apiVersion" yaml:"apiVersion" doc:"Provider API version" example:"v1" pattern:"^v[0-9]+$" required:"true"`
+	APIVersion string `json:"apiVersion" yaml:"apiVersion" doc:"Provider API version" maxLength:"16" example:"v1" pattern:"^v[0-9]+$" required:"true"`
 
 	// Version is the semantic version of this provider implementation.
 	// Follows semver conventions for versioning provider releases.
@@ -47,7 +47,7 @@ type Descriptor struct {
 
 	// Description provides a concise explanation of what the provider does.
 	// Displayed in catalogs, help text, and documentation.
-	Description string `json:"description" yaml:"description" doc:"Provider description" minLength:"10" maxLength:"500" required:"true"`
+	Description string `json:"description" yaml:"description" doc:"Provider description" minLength:"10" maxLength:"500" example:"Fetches data over HTTP" required:"true"`
 
 	// Schema defines the structure and validation rules for provider inputs using JSON Schema.
 	// Used for input validation, documentation generation, and UI form building.
@@ -83,11 +83,11 @@ type Descriptor struct {
 
 	// MockBehavior describes what the provider does during dry-run/mock execution.
 	// Should explain the simulated behavior without side effects.
-	MockBehavior string `json:"mockBehavior" yaml:"mockBehavior" doc:"Dry-run behavior description" minLength:"10" maxLength:"500" required:"true"`
+	MockBehavior string `json:"mockBehavior" yaml:"mockBehavior" doc:"Dry-run behavior description" minLength:"10" maxLength:"500" example:"Returns static mock data" required:"true"`
 
 	// Capabilities declares the execution contexts this provider supports.
 	// Determines where the provider can be used (from, transform, validation, etc.).
-	Capabilities []Capability `json:"capabilities" yaml:"capabilities" doc:"Supported execution contexts" minItems:"1" required:"true"`
+	Capabilities []Capability `json:"capabilities" yaml:"capabilities" doc:"Supported execution contexts" minItems:"1" maxItems:"10" required:"true"`
 
 	// Category classifies the provider for organization in catalogs and documentation.
 	// Examples: "network", "storage", "security", "utility".
@@ -99,7 +99,7 @@ type Descriptor struct {
 
 	// Icon is a URL to an image representing the provider.
 	// Displayed in UIs and documentation alongside the provider name.
-	Icon string `json:"icon,omitempty" yaml:"icon,omitempty" doc:"Icon URL" format:"uri" maxLength:"500"`
+	Icon string `json:"icon,omitempty" yaml:"icon,omitempty" doc:"Icon URL" format:"uri" maxLength:"500" example:"https://example.com/icon.svg"`
 
 	// Links provides related resources such as documentation, source code, or tutorials.
 	Links []Link `json:"links,omitempty" yaml:"links,omitempty" doc:"Related links" maxItems:"10"`
@@ -183,7 +183,7 @@ type Link struct {
 // Example represents a usage example for a provider.
 type Example struct {
 	Name        string `json:"name,omitempty" yaml:"name,omitempty" doc:"Example name" maxLength:"50" example:"Basic usage"`
-	Description string `json:"description,omitempty" yaml:"description,omitempty" doc:"Example description" maxLength:"300"`
+	Description string `json:"description,omitempty" yaml:"description,omitempty" doc:"Example description" maxLength:"300" example:"Basic HTTP GET request"`
 	YAML        string `json:"yaml" yaml:"yaml" doc:"YAML example" minLength:"10" maxLength:"2000" required:"true"`
 }
 

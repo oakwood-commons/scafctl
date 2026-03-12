@@ -17,6 +17,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/metrics"
+	"github.com/oakwood-commons/scafctl/pkg/paths"
 )
 
 // FileCacheConfig holds configuration for filesystem cache
@@ -63,12 +64,9 @@ func NewFileCache(config *FileCacheConfig) (*FileCache, error) {
 	}
 
 	// Expand home directory if present
-	if len(dir) > 0 && dir[0] == '~' {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get home directory: %w", err)
-		}
-		dir = filepath.Join(homeDir, dir[1:])
+	dir, err := paths.ExpandHome(dir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get home directory: %w", err)
 	}
 
 	// Create directory if it doesn't exist

@@ -26,14 +26,14 @@ import (
 // Position represents a location in a YAML source file.
 type Position struct {
 	// Line is the 1-based line number in the source file.
-	Line int `json:"line" yaml:"line" doc:"1-based line number in source file"`
+	Line int `json:"line" yaml:"line" doc:"1-based line number in source file" maximum:"1000000" example:"42"`
 
 	// Column is the 1-based column number in the source file.
-	Column int `json:"column" yaml:"column" doc:"1-based column number in source file"`
+	Column int `json:"column" yaml:"column" doc:"1-based column number in source file" maximum:"10000" example:"5"`
 
 	// File is the source file path. This is important for compose scenarios
 	// where multiple files contribute to a single solution.
-	File string `json:"file,omitempty" yaml:"file,omitempty" doc:"Source file path (important for compose)"`
+	File string `json:"file,omitempty" yaml:"file,omitempty" doc:"Source file path (important for compose)" maxLength:"512" example:"solution.yaml"`
 }
 
 // String returns a human-readable representation of the position.

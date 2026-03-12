@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/oakwood-commons/scafctl/pkg/terminal/format"
 )
 
 // Kind represents the type of cache to clear.
@@ -118,7 +120,7 @@ func ClearDirectory(dir, pattern string) (int64, int64, error) {
 
 		if matched {
 			bytesRemoved += info.Size()
-			_ = os.Remove(filePath) // Ignore individual file removal errors
+			_ = os.Remove(filePath) //nolint:gosec // G122: path comes from filepath.Walk on a trusted cache directory we own
 			filesRemoved++
 		}
 
@@ -153,20 +155,6 @@ func GetCacheInfo(name, dir, description string) Info {
 		return nil
 	})
 
-	info.SizeHuman = FormatBytes(info.Size)
+	info.SizeHuman = format.Bytes(info.Size)
 	return info
-}
-
-// FormatBytes formats bytes as a human-readable string.
-func FormatBytes(bytes int64) string {
-	const unit = 1024
-	if bytes < unit {
-		return fmt.Sprintf("%d B", bytes)
-	}
-	div, exp := int64(unit), 0
-	for n := bytes / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }

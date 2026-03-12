@@ -18,7 +18,11 @@ import (
 // documentation about resource schemas and solution/provider instances.
 func CommandExplain(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
 	// Get available kinds for documentation
-	kindNames := schema.GetGlobalRegistry().Names()
+	reg, err := schema.GetGlobalRegistry()
+	var kindNames []string
+	if err == nil {
+		kindNames = reg.Names()
+	}
 	sort.Strings(kindNames)
 
 	cCmd := &cobra.Command{

@@ -103,7 +103,7 @@ func (c *TokenCache) Set(ctx context.Context, flow Flow, fingerprint, scope stri
 		SessionID:   token.SessionID,
 	}
 
-	data, err := json.Marshal(cached)
+	data, err := json.Marshal(cached) //nolint:gosec // G117: not a hardcoded credential; stores runtime OAuth token data in the system secret store
 	if err != nil {
 		return fmt.Errorf("failed to marshal token for cache: %w", err)
 	}

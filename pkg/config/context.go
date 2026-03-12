@@ -21,13 +21,3 @@ func FromContext(ctx context.Context) *Config {
 	cfg, _ := ctx.Value(configContextKey{}).(*Config)
 	return cfg
 }
-
-// MustFromContext retrieves the Config from the context.
-// Panics if no Config is stored in the context.
-func MustFromContext(ctx context.Context) *Config {
-	cfg := FromContext(ctx)
-	if cfg == nil {
-		panic("config not found in context")
-	}
-	return cfg
-}

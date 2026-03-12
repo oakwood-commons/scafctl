@@ -12,7 +12,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/jsonschema-go/jsonschema"
@@ -21,6 +20,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/ptrs"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
 const (
@@ -136,10 +136,10 @@ inputs:
 			},
 		},
 		httpClient: &DefaultHTTPClient{client: httpc.NewClient(&httpc.ClientConfig{
-			Timeout:           30 * time.Second,
-			RetryMax:          3,
-			RetryWaitMin:      1 * time.Second,
-			RetryWaitMax:      30 * time.Second,
+			Timeout:           settings.DefaultHTTPTimeout,
+			RetryMax:          settings.DefaultHTTPRetryMax,
+			RetryWaitMin:      settings.DefaultHTTPRetryWaitMinimum,
+			RetryWaitMax:      settings.DefaultHTTPRetryWaitMaximum,
 			EnableCache:       false,
 			EnableCompression: true,
 		})},

@@ -25,14 +25,6 @@ func TestRegistryFromContext(t *testing.T) {
 	assert.NotNil(t, RegistryFromContext(ctx))
 }
 
-func TestMustRegistryFromContext(t *testing.T) {
-	assert.Panics(t, func() { MustRegistryFromContext(context.Background()) })
-
-	registry := NewRegistry()
-	ctx := WithRegistry(context.Background(), registry)
-	assert.Equal(t, registry, MustRegistryFromContext(ctx))
-}
-
 func TestGetHandler(t *testing.T) {
 	_, err := GetHandler(context.Background(), "entra")
 	require.Error(t, err)

@@ -9,13 +9,13 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
-// CELConfigToCELInput converts CELConfig to celexp.CELConfigInput values.
+// CELConfigValues holds parsed CEL configuration values.
 // This avoids circular dependencies between config and celexp packages.
 type CELConfigValues struct {
-	CacheSize          int
-	CostLimit          int64
-	UseASTBasedCaching bool
-	EnableMetrics      bool
+	CacheSize          int   `json:"cacheSize" yaml:"cacheSize" doc:"CEL program cache size" maximum:"100000" example:"1000"`
+	CostLimit          int64 `json:"costLimit" yaml:"costLimit" doc:"CEL evaluation cost limit" maximum:"1000000000" example:"100000"`
+	UseASTBasedCaching bool  `json:"useASTBasedCaching" yaml:"useASTBasedCaching" doc:"Use AST-based cache keys for deduplication"`
+	EnableMetrics      bool  `json:"enableMetrics" yaml:"enableMetrics" doc:"Enable CEL evaluation metrics"`
 }
 
 // ToCELValues converts CELConfig to a CELConfigValues struct.
@@ -47,8 +47,8 @@ func (c *CELConfig) ToCELValues() CELConfigValues {
 // GoTemplateConfigValues holds parsed Go template config values.
 // This avoids circular dependencies between config and gotmpl packages.
 type GoTemplateConfigValues struct {
-	CacheSize     int
-	EnableMetrics bool
+	CacheSize     int  `json:"cacheSize" yaml:"cacheSize" doc:"Template compilation cache size" maximum:"100000" example:"500"`
+	EnableMetrics bool `json:"enableMetrics" yaml:"enableMetrics" doc:"Enable template execution metrics"`
 }
 
 // ToGoTemplateValues converts GoTemplateConfig to a GoTemplateConfigValues struct.
@@ -72,12 +72,12 @@ func (g *GoTemplateConfig) ToGoTemplateValues() GoTemplateConfigValues {
 
 // ResolverConfigValues holds parsed resolver config values with durations.
 type ResolverConfigValues struct {
-	Timeout        time.Duration
-	PhaseTimeout   time.Duration
-	MaxConcurrency int
-	WarnValueSize  int64
-	MaxValueSize   int64
-	ValidateAll    bool
+	Timeout        time.Duration `json:"timeout" yaml:"timeout" doc:"Per-resolver execution timeout"`
+	PhaseTimeout   time.Duration `json:"phaseTimeout" yaml:"phaseTimeout" doc:"Per-phase execution timeout"`
+	MaxConcurrency int           `json:"maxConcurrency" yaml:"maxConcurrency" doc:"Maximum concurrent resolver executions" maximum:"1000" example:"10"`
+	WarnValueSize  int64         `json:"warnValueSize" yaml:"warnValueSize" doc:"Value size threshold for warnings (bytes)" maximum:"1073741824" example:"1048576"`
+	MaxValueSize   int64         `json:"maxValueSize" yaml:"maxValueSize" doc:"Maximum allowed value size (bytes)" maximum:"1073741824" example:"10485760"`
+	ValidateAll    bool          `json:"validateAll" yaml:"validateAll" doc:"Run all validators even if one fails"`
 }
 
 // ToResolverValues converts ResolverConfig to a ResolverConfigValues struct.
@@ -123,9 +123,9 @@ func (r *ResolverConfig) ToResolverValues() (ResolverConfigValues, error) {
 
 // ActionConfigValues holds parsed action config values with durations.
 type ActionConfigValues struct {
-	DefaultTimeout time.Duration
-	GracePeriod    time.Duration
-	MaxConcurrency int
+	DefaultTimeout time.Duration `json:"defaultTimeout" yaml:"defaultTimeout" doc:"Default per-action execution timeout"`
+	GracePeriod    time.Duration `json:"gracePeriod" yaml:"gracePeriod" doc:"Cancellation grace period"`
+	MaxConcurrency int           `json:"maxConcurrency" yaml:"maxConcurrency" doc:"Maximum concurrent action executions" maximum:"1000" example:"5"`
 }
 
 // ToActionValues converts ActionConfig to an ActionConfigValues struct.

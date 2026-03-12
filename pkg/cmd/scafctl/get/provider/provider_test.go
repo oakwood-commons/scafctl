@@ -15,6 +15,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -268,7 +269,9 @@ func TestOptions_RunListProviders(t *testing.T) {
 			tc.options.CliParams = &settings.Run{}
 			tc.options.registry = tc.setupReg()
 
-			err := tc.options.RunListProviders(context.Background())
+			w := writer.New(ioStreams, tc.options.CliParams)
+			ctx := writer.WithWriter(context.Background(), w)
+			err := tc.options.RunListProviders(ctx)
 
 			if tc.wantErr {
 				require.Error(t, err)
@@ -352,7 +355,9 @@ func TestOptions_RunGetProvider(t *testing.T) {
 			tc.options.CliParams = &settings.Run{}
 			tc.options.registry = tc.setupReg()
 
-			err := tc.options.RunGetProvider(context.Background(), tc.providerName)
+			w := writer.New(ioStreams, tc.options.CliParams)
+			ctx := writer.WithWriter(context.Background(), w)
+			err := tc.options.RunGetProvider(ctx, tc.providerName)
 
 			if tc.wantErr {
 				require.Error(t, err)
@@ -796,13 +801,16 @@ func TestOptions_writeQuietOutput(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var outBuf bytes.Buffer
+			ioStreams := &terminal.IOStreams{
+				Out: &outBuf,
+			}
 			options := &Options{
-				IOStreams: &terminal.IOStreams{
-					Out: &outBuf,
-				},
+				IOStreams: ioStreams,
 			}
 
-			err := options.writeQuietOutput(tc.data)
+			w := writer.New(ioStreams, &settings.Run{})
+			ctx := writer.WithWriter(context.Background(), w)
+			err := options.writeQuietOutput(ctx, tc.data)
 			require.NoError(t, err)
 			tc.checkOutput(t, outBuf.String())
 		})

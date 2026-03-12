@@ -6,9 +6,6 @@ package mcp
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -153,9 +150,9 @@ func (s *Server) handleBuildPlugin(_ context.Context, request mcp.CallToolReques
 		), nil
 	}
 
-	artifactKind, ok := catalog.ParseArtifactKind(kindStr)
-	if !ok || (artifactKind != catalog.ArtifactKindProvider && artifactKind != catalog.ArtifactKindAuthHandler) {
-		return newStructuredError(ErrCodeInvalidInput, fmt.Sprintf("invalid kind %q for plugin build; must be 'provider' or 'auth-handler'", kindStr),
+	artifactKind, err := catalog.ValidatePluginKind(kindStr)
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
 			WithField("kind"),
 			WithSuggestion("Use 'provider' or 'auth-handler'"),
 		), nil
@@ -197,9 +194,8 @@ func (s *Server) handleBuildPlugin(_ context.Context, request mcp.CallToolReques
 
 	force := request.GetBool("force", false)
 
-	// Validate platforms and read binaries
-	var platformBinaries []catalog.PlatformBinary
-	var platformList []string
+	// Convert platforms map to string paths and validate/read binaries
+	platformPaths := make(map[string]string, len(platformsMap))
 	for platform, pathRaw := range platformsMap {
 		binPath, ok := pathRaw.(string)
 		if !ok || binPath == "" {
@@ -207,47 +203,20 @@ func (s *Server) handleBuildPlugin(_ context.Context, request mcp.CallToolReques
 				WithField("platforms"),
 			), nil
 		}
+		platformPaths[platform] = binPath
+	}
 
-		if !catalog.IsSupportedPlatform(platform) {
-			return newStructuredError(ErrCodeInvalidInput, fmt.Sprintf("unsupported platform %q; supported: %s", platform, strings.Join(catalog.SupportedPluginPlatforms, ", ")),
-				WithField("platforms"),
-				WithSuggestion(fmt.Sprintf("Supported platforms: %s", strings.Join(catalog.SupportedPluginPlatforms, ", "))),
-			), nil
-		}
+	platformBinaries, err := catalog.ReadPlatformBinaries(platformPaths)
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("platforms"),
+			WithSuggestion("Ensure binary paths exist and are valid files"),
+		), nil
+	}
 
-		// Resolve and validate path
-		absPath, err := filepath.Abs(binPath)
-		if err != nil {
-			return newStructuredError(ErrCodeInvalidInput, fmt.Sprintf("platform %q: invalid path %q: %v", platform, binPath, err),
-				WithField("platforms"),
-			), nil
-		}
-
-		fi, err := os.Stat(absPath)
-		if err != nil {
-			return newStructuredError(ErrCodeInvalidInput, fmt.Sprintf("platform %q: binary not found at %q: %v", platform, absPath, err),
-				WithField("platforms"),
-				WithSuggestion("Ensure the binary has been compiled and the path is correct"),
-			), nil //nolint:nilerr // returning structured MCP error, not propagating err
-		}
-		if fi.IsDir() {
-			return newStructuredError(ErrCodeInvalidInput, fmt.Sprintf("platform %q: path %q is a directory, not a binary", platform, absPath),
-				WithField("platforms"),
-			), nil
-		}
-
-		data, err := os.ReadFile(absPath)
-		if err != nil {
-			return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("platform %q: failed to read binary: %v", platform, err),
-				WithField("platforms"),
-			), nil
-		}
-
-		platformBinaries = append(platformBinaries, catalog.PlatformBinary{
-			Platform: platform,
-			Data:     data,
-		})
-		platformList = append(platformList, platform)
+	platformList := make([]string, 0, len(platformBinaries))
+	for _, pb := range platformBinaries {
+		platformList = append(platformList, pb.Platform)
 	}
 
 	ref := catalog.Reference{

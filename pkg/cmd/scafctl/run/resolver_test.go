@@ -20,6 +20,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1823,6 +1824,9 @@ spec:
 		cliParams := settings.NewCliParams()
 		cliParams.ExitOnError = false
 
+		w := writer.New(streams, cliParams)
+		testCtx := writer.WithWriter(ctx, w)
+
 		opts := &ResolverOptions{
 			sharedResolverOptions: sharedResolverOptions{
 				IOStreams:       streams,
@@ -1837,7 +1841,7 @@ spec:
 			SnapshotFile: snapshotFile,
 		}
 
-		err := opts.Run(ctx)
+		err := opts.Run(testCtx)
 		require.NoError(t, err)
 
 		// Verify file was created

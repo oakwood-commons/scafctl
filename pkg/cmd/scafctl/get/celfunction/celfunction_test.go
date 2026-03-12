@@ -12,6 +12,7 @@ import (
 	celdetail "github.com/oakwood-commons/scafctl/pkg/celexp/detail"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -65,6 +66,7 @@ func TestRunListFunctions_SimpleList(t *testing.T) {
 	var buf bytes.Buffer
 	opts := mkTestOpts(&buf)
 	ctx := settings.IntoContext(context.Background(), opts.CliParams)
+	ctx = writer.WithWriter(ctx, writer.New(opts.IOStreams, opts.CliParams))
 
 	err := opts.RunListFunctions(ctx)
 	require.NoError(t, err)
@@ -82,6 +84,7 @@ func TestRunListFunctions_CustomFilter(t *testing.T) {
 	opts := mkTestOpts(&buf)
 	opts.Custom = true
 	ctx := settings.IntoContext(context.Background(), opts.CliParams)
+	ctx = writer.WithWriter(ctx, writer.New(opts.IOStreams, opts.CliParams))
 
 	err := opts.RunListFunctions(ctx)
 	require.NoError(t, err)
@@ -97,6 +100,7 @@ func TestRunListFunctions_BuiltInFilter(t *testing.T) {
 	opts := mkTestOpts(&buf)
 	opts.BuiltIn = true
 	ctx := settings.IntoContext(context.Background(), opts.CliParams)
+	ctx = writer.WithWriter(ctx, writer.New(opts.IOStreams, opts.CliParams))
 
 	err := opts.RunListFunctions(ctx)
 	require.NoError(t, err)
@@ -112,6 +116,7 @@ func TestRunListFunctions_JSON(t *testing.T) {
 	opts := mkTestOpts(&buf)
 	opts.Output = "json"
 	ctx := settings.IntoContext(context.Background(), opts.CliParams)
+	ctx = writer.WithWriter(ctx, writer.New(opts.IOStreams, opts.CliParams))
 
 	err := opts.RunListFunctions(ctx)
 	require.NoError(t, err)
@@ -128,6 +133,7 @@ func TestRunListFunctions_Quiet(t *testing.T) {
 	opts := mkTestOpts(&buf)
 	opts.Output = "quiet"
 	ctx := settings.IntoContext(context.Background(), opts.CliParams)
+	ctx = writer.WithWriter(ctx, writer.New(opts.IOStreams, opts.CliParams))
 
 	err := opts.RunListFunctions(ctx)
 	require.NoError(t, err)
@@ -142,6 +148,7 @@ func TestRunGetFunction_Found(t *testing.T) {
 	var buf bytes.Buffer
 	opts := mkTestOpts(&buf)
 	ctx := settings.IntoContext(context.Background(), opts.CliParams)
+	ctx = writer.WithWriter(ctx, writer.New(opts.IOStreams, opts.CliParams))
 
 	err := opts.RunGetFunction(ctx, "test.custom")
 	require.NoError(t, err)
@@ -159,6 +166,7 @@ func TestRunGetFunction_NotFound(t *testing.T) {
 	var buf bytes.Buffer
 	opts := mkTestOpts(&buf)
 	ctx := settings.IntoContext(context.Background(), opts.CliParams)
+	ctx = writer.WithWriter(ctx, writer.New(opts.IOStreams, opts.CliParams))
 
 	err := opts.RunGetFunction(ctx, "nonexistent")
 	require.Error(t, err)
@@ -170,6 +178,7 @@ func TestRunGetFunction_CaseInsensitive(t *testing.T) {
 	var buf bytes.Buffer
 	opts := mkTestOpts(&buf)
 	ctx := settings.IntoContext(context.Background(), opts.CliParams)
+	ctx = writer.WithWriter(ctx, writer.New(opts.IOStreams, opts.CliParams))
 
 	err := opts.RunGetFunction(ctx, "TEST.CUSTOM")
 	require.NoError(t, err)
@@ -182,6 +191,7 @@ func TestRunGetFunction_JSON(t *testing.T) {
 	opts := mkTestOpts(&buf)
 	opts.Output = "json"
 	ctx := settings.IntoContext(context.Background(), opts.CliParams)
+	ctx = writer.WithWriter(ctx, writer.New(opts.IOStreams, opts.CliParams))
 
 	err := opts.RunGetFunction(ctx, "test.custom")
 	require.NoError(t, err)

@@ -332,6 +332,48 @@ func TestGitProvider_InjectCredentials_HTTPS(t *testing.T) {
 			password: "testpass",
 			expected: "git@github.com:user/repo.git",
 		},
+		{
+			name:     "at-sign in username and password",
+			repoURL:  "https://github.com/org/repo",
+			username: "user@corp",
+			password: "p@ss",
+			expected: "https://user%40corp:p%40ss@github.com/org/repo",
+		},
+		{
+			name:     "colon in password",
+			repoURL:  "https://github.com/org/repo",
+			username: "user",
+			password: "p:ss:word",
+			expected: "https://user:p%3Ass%3Aword@github.com/org/repo",
+		},
+		{
+			name:     "slash in password",
+			repoURL:  "https://github.com/org/repo",
+			username: "user",
+			password: "p/ss/word",
+			expected: "https://user:p%2Fss%2Fword@github.com/org/repo",
+		},
+		{
+			name:     "percent in credentials",
+			repoURL:  "https://github.com/org/repo",
+			username: "user%name",
+			password: "100%pass",
+			expected: "https://user%25name:100%25pass@github.com/org/repo",
+		},
+		{
+			name:     "space in credentials",
+			repoURL:  "https://github.com/org/repo",
+			username: "my user",
+			password: "my pass",
+			expected: "https://my%20user:my%20pass@github.com/org/repo",
+		},
+		{
+			name:     "special characters mix",
+			repoURL:  "https://github.com/org/repo",
+			username: "user+name",
+			password: "p@ss:w/rd%100",
+			expected: "https://user+name:p%40ss%3Aw%2Frd%25100@github.com/org/repo",
+		},
 	}
 
 	for _, tt := range tests {
@@ -386,4 +428,25 @@ func TestGitProvider_Execute_Tag_List(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Nil(t, output)
+}
+
+func BenchmarkInjectCredentials(b *testing.B) {
+	benchmarks := []struct {
+		name     string
+		repoURL  string
+		username string
+		password string
+	}{
+		{"basic", "https://github.com/org/repo.git", "user", "pass"},
+		{"special_chars", "https://github.com/org/repo.git", "user@corp", "p@ss:w/rd%100"},
+		{"ssh_noop", "git@github.com:user/repo.git", "user", "pass"},
+	}
+
+	for _, bb := range benchmarks {
+		b.Run(bb.name, func(b *testing.B) {
+			for b.Loop() {
+				_ = injectCredentials(bb.repoURL, bb.username, bb.password)
+			}
+		})
+	}
 }

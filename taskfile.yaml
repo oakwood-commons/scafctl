@@ -48,7 +48,7 @@ vars:
           awk '/^go[[:space:]]+/ {print $2; exit}' go.mod | tr -d '\r'
         fi
       else
-        echo "1.25"
+        echo "1.26"
       fi
   GOTOOLCHAIN: "go{{.GO_VERSION}}"
   BUILD_COMMIT:

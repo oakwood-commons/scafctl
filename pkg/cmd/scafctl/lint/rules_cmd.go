@@ -5,6 +5,7 @@ package lint
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -56,7 +57,7 @@ func CommandRules(cliParams *settings.Run, ioStreams *terminal.IOStreams, path s
 		`),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Use)
-			ctx := settings.IntoContext(context.Background(), cliParams)
+			ctx := settings.IntoContext(cmd.Context(), cliParams)
 
 			if lgr := logger.FromContext(cmd.Context()); lgr != nil {
 				ctx = logger.WithLogger(ctx, lgr)
@@ -85,7 +86,10 @@ func CommandRules(cliParams *settings.Run, ioStreams *terminal.IOStreams, path s
 
 // Run executes the lint rules command.
 func (o *RulesOptions) Run(ctx context.Context) error {
-	w := writer.MustFromContext(ctx)
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return fmt.Errorf("writer not initialized in context")
+	}
 
 	rules := ListRules()
 

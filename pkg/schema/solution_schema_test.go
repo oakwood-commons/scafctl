@@ -5,7 +5,6 @@ package schema
 
 import (
 	"encoding/json"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -14,7 +13,7 @@ import (
 
 func TestGenerateSolutionSchema(t *testing.T) {
 	t.Run("produces valid JSON", func(t *testing.T) {
-		// Reset the sync.Once for testing
+		// Reset the schema state for testing
 		resetSolutionSchemaOnce()
 
 		schemaBytes, err := GenerateSolutionSchema()
@@ -127,9 +126,7 @@ func TestRewriteRefs(t *testing.T) {
 	})
 }
 
-// resetSolutionSchemaOnce resets the sync.Once so each test starts clean.
+// resetSolutionSchemaOnce resets the schema state so each test starts clean.
 func resetSolutionSchemaOnce() {
-	solutionSchemaOnce = sync.Once{}
-	solutionSchemaJSON = nil
-	solutionSchemaErr = nil
+	resetSolutionSchemaForTesting()
 }

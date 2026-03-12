@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/terminal/format"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -56,40 +57,38 @@ func TestParsePlatformFlags(t *testing.T) {
 		require.Error(t, err)
 	})
 
-	t.Run("unsupported platform", func(t *testing.T) {
-		dir := t.TempDir()
-		bin := filepath.Join(dir, "bin")
-		require.NoError(t, os.WriteFile(bin, []byte("binary"), 0o755))
-
-		_, err := parsePlatformFlags([]string{"freebsd/amd64=" + bin})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "unsupported platform")
+	t.Run("unsupported platform passes through", func(t *testing.T) {
+		// parsePlatformFlags no longer validates platform names;
+		// that is handled by catalog.ReadPlatformBinaries.
+		result, err := parsePlatformFlags([]string{"freebsd/amd64=./bin"})
+		require.NoError(t, err)
+		assert.Equal(t, "./bin", result["freebsd/amd64"])
 	})
 
 	t.Run("duplicate platform", func(t *testing.T) {
-		dir := t.TempDir()
-		bin := filepath.Join(dir, "bin")
-		require.NoError(t, os.WriteFile(bin, []byte("binary"), 0o755))
-
 		_, err := parsePlatformFlags([]string{
-			"linux/amd64=" + bin,
-			"linux/amd64=" + bin,
+			"linux/amd64=./bin1",
+			"linux/amd64=./bin2",
 		})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "duplicate platform")
 	})
 
-	t.Run("file not found", func(t *testing.T) {
-		_, err := parsePlatformFlags([]string{"linux/amd64=/nonexistent/path"})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "binary not found")
+	t.Run("nonexistent path passes through", func(t *testing.T) {
+		// parsePlatformFlags no longer stats files;
+		// that is handled by catalog.ReadPlatformBinaries.
+		result, err := parsePlatformFlags([]string{"linux/amd64=/nonexistent/path"})
+		require.NoError(t, err)
+		assert.Equal(t, "/nonexistent/path", result["linux/amd64"])
 	})
 
-	t.Run("path is directory", func(t *testing.T) {
+	t.Run("directory path passes through", func(t *testing.T) {
+		// parsePlatformFlags no longer checks if path is a directory;
+		// that is handled by catalog.ReadPlatformBinaries.
 		dir := t.TempDir()
-		_, err := parsePlatformFlags([]string{"linux/amd64=" + dir})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "is a directory")
+		result, err := parsePlatformFlags([]string{"linux/amd64=" + dir})
+		require.NoError(t, err)
+		assert.Equal(t, dir, result["linux/amd64"])
 	})
 }
 
@@ -107,6 +106,6 @@ func TestFormatBytes(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		assert.Equal(t, tt.want, formatBytes(tt.input))
+		assert.Equal(t, tt.want, format.Bytes(tt.input))
 	}
 }

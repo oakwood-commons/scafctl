@@ -198,7 +198,8 @@ func TestDescriptorConversion(t *testing.T) {
 			require.NotNil(t, protoDesc)
 
 			// Convert back
-			converted := protoToDescriptor(protoDesc)
+			converted, err := protoToDescriptor(protoDesc)
+			require.NoError(t, err)
 			require.NotNil(t, converted)
 
 			// Compare
@@ -260,6 +261,62 @@ func TestDescriptorConversion(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestProtoToDescriptor_InvalidSemver(t *testing.T) {
+	tests := []struct {
+		name    string
+		version string
+		wantErr string
+	}{
+		{
+			name:    "invalid semver string",
+			version: "not-a-version",
+			wantErr: "invalid semver version",
+		},
+		{
+			name:    "garbage version string",
+			version: "abc.def.ghi",
+			wantErr: "invalid semver version",
+		},
+		{
+			name:    "empty string is valid (no version)",
+			version: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			protoDesc := &proto.ProviderDescriptor{
+				Name:    "test-plugin",
+				Version: tt.version,
+			}
+			desc, err := protoToDescriptor(protoDesc)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				assert.Nil(t, desc)
+			} else {
+				require.NoError(t, err)
+				assert.NotNil(t, desc)
+			}
+		})
+	}
+}
+
+func BenchmarkProtoToDescriptor(b *testing.B) {
+	protoDesc := &proto.ProviderDescriptor{
+		Name:        "bench-plugin",
+		DisplayName: "Benchmark Plugin",
+		Description: "A plugin for benchmarking",
+		Version:     "1.2.3",
+		Category:    "test",
+		ApiVersion:  "v1",
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = protoToDescriptor(protoDesc)
 	}
 }
 

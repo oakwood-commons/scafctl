@@ -22,13 +22,13 @@ import (
 // Example:
 //
 //	expr := celexp.CelExpression("_.user.name + _.config.value")
-//	vars, err := expr.GetVariablesWithPrefix("\.")
-//	// Returns: []string{"config", "user"}, nil (sorted)
+//	 vars, err := expr.GetVariablesWithPrefix(ctx, "\.")
+//	 // Returns: []string{"config", "user"}, nil (sorted)
 //
-//	expr := celexp.CelExpression(`_["user"].name + _["config"].value`)
-//	vars, err := expr.GetVariablesWithPrefix("_.")
-//	// Returns: []string{"config", "user"}, nil (sorted)
-func (e Expression) GetVariablesWithPrefix(prefix string) ([]string, error) {
+//	 expr := celexp.CelExpression(`_["user"].name + _["config"].value`)
+//	 vars, err := expr.GetVariablesWithPrefix(ctx, "_.")
+//	 // Returns: []string{"config", "user"}, nil (sorted)
+func (e Expression) GetVariablesWithPrefix(ctx context.Context, prefix string) ([]string, error) {
 	// Default prefix to _. if empty
 	if prefix == "" {
 		prefix = "_."
@@ -40,7 +40,7 @@ func (e Expression) GetVariablesWithPrefix(prefix string) ([]string, error) {
 	var err error
 	factory := getEnvFactory()
 	if factory != nil {
-		env, err = factory(context.Background())
+		env, err = factory(ctx)
 	} else {
 		env, err = cel.NewEnv()
 	}
@@ -80,14 +80,14 @@ func (e Expression) GetVariablesWithPrefix(prefix string) ([]string, error) {
 // Example:
 //
 //	expr := celexp.CelExpression("_.user.name + _.config.value")
-//	vars, err := expr.GetUnderscoreVariables()
+//	vars, err := expr.GetUnderscoreVariables(ctx)
 //	// Returns: []string{"config", "user"}, nil
 //
 //	expr := celexp.CelExpression(`_["user"].name + _["config"].value`)
-//	vars, err := expr.GetUnderscoreVariables()
+//	vars, err := expr.GetUnderscoreVariables(ctx)
 //	// Returns: []string{"config", "user"}, nil
-func (e Expression) GetUnderscoreVariables() ([]string, error) {
-	return e.GetVariablesWithPrefix("_.")
+func (e Expression) GetUnderscoreVariables(ctx context.Context) ([]string, error) {
+	return e.GetVariablesWithPrefix(ctx, "_.")
 }
 
 // RequiredVariables parses the CEL expression and returns all variable references
@@ -106,24 +106,24 @@ func (e Expression) GetUnderscoreVariables() ([]string, error) {
 // Example:
 //
 //	expr := celexp.Expression("x + y + z")
-//	vars, err := expr.RequiredVariables()
+//	vars, err := expr.RequiredVariables(ctx)
 //	// Returns: []string{"x", "y", "z"}, nil (sorted)
 //
 //	expr = celexp.Expression("user.name + config.value")
-//	vars, err = expr.RequiredVariables()
+//	vars, err = expr.RequiredVariables(ctx)
 //	// Returns: []string{"config", "user"}, nil (sorted)
 //
 //	expr = celexp.Expression("[1, 2, 3].filter(x, x > 1)")
-//	vars, err = expr.RequiredVariables()
+//	vars, err = expr.RequiredVariables(ctx)
 //	// Returns: []string{}, nil (x is a comprehension variable, not external)
-func (e Expression) RequiredVariables() ([]string, error) {
+func (e Expression) RequiredVariables(ctx context.Context) ([]string, error) {
 	// Create a CEL environment for parsing
 	// Use the environment factory if available to include custom extensions
 	var env *cel.Env
 	var err error
 	factory := getEnvFactory()
 	if factory != nil {
-		env, err = factory(context.Background())
+		env, err = factory(ctx)
 	} else {
 		env, err = cel.NewEnv()
 	}

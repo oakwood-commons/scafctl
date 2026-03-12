@@ -8,10 +8,10 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/httpc"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
 // HTTPClient interface for token endpoint requests.
@@ -38,10 +38,10 @@ type DefaultGraphClient struct {
 func NewDefaultGraphClient(logger logr.Logger) *DefaultGraphClient {
 	return &DefaultGraphClient{
 		client: httpc.NewClient(&httpc.ClientConfig{
-			Timeout:           30 * time.Second,
-			RetryMax:          3,
-			RetryWaitMin:      1 * time.Second,
-			RetryWaitMax:      30 * time.Second,
+			Timeout:           settings.DefaultHTTPTimeout,
+			RetryMax:          settings.DefaultHTTPRetryMax,
+			RetryWaitMin:      settings.DefaultHTTPRetryWaitMinimum,
+			RetryWaitMax:      settings.DefaultHTTPRetryWaitMaximum,
 			EnableCache:       false,
 			EnableCompression: false,
 			Logger:            logger,
@@ -71,10 +71,10 @@ type DefaultHTTPClient struct {
 func NewDefaultHTTPClient(logger logr.Logger) *DefaultHTTPClient {
 	return &DefaultHTTPClient{
 		client: httpc.NewClient(&httpc.ClientConfig{
-			Timeout:           30 * time.Second,
-			RetryMax:          3,
-			RetryWaitMin:      1 * time.Second,
-			RetryWaitMax:      30 * time.Second,
+			Timeout:           settings.DefaultHTTPTimeout,
+			RetryMax:          settings.DefaultHTTPRetryMax,
+			RetryWaitMin:      settings.DefaultHTTPRetryWaitMinimum,
+			RetryWaitMax:      settings.DefaultHTTPRetryWaitMaximum,
 			EnableCache:       false,
 			EnableCompression: false,
 			Logger:            logger,

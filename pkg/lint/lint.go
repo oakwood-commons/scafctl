@@ -42,24 +42,24 @@ const (
 
 // Finding represents a single lint issue found in the solution.
 type Finding struct {
-	Severity   SeverityLevel `json:"severity" yaml:"severity"`
-	Category   string        `json:"category" yaml:"category"`
-	Location   string        `json:"location" yaml:"location"`
-	Message    string        `json:"message" yaml:"message"`
-	Suggestion string        `json:"suggestion,omitempty" yaml:"suggestion,omitempty"`
-	RuleName   string        `json:"ruleName" yaml:"ruleName"`
-	Line       int           `json:"line,omitempty" yaml:"line,omitempty"`
-	Column     int           `json:"column,omitempty" yaml:"column,omitempty"`
-	SourceFile string        `json:"sourceFile,omitempty" yaml:"sourceFile,omitempty"`
+	Severity   SeverityLevel `json:"severity" yaml:"severity" doc:"Issue severity level" maxLength:"16" example:"error"`
+	Category   string        `json:"category" yaml:"category" doc:"Issue category" maxLength:"64" example:"validation"`
+	Location   string        `json:"location" yaml:"location" doc:"Logical path of the issue" maxLength:"512" example:"spec.resolvers.appName"`
+	Message    string        `json:"message" yaml:"message" doc:"Issue description" maxLength:"2048" example:"unknown field"`
+	Suggestion string        `json:"suggestion,omitempty" yaml:"suggestion,omitempty" doc:"Suggested fix" maxLength:"2048" example:"Remove the unknown field"`
+	RuleName   string        `json:"ruleName" yaml:"ruleName" doc:"Lint rule name" maxLength:"128" example:"unknown-field"`
+	Line       int           `json:"line,omitempty" yaml:"line,omitempty" doc:"Source line number" maximum:"1000000" example:"42"`
+	Column     int           `json:"column,omitempty" yaml:"column,omitempty" doc:"Source column number" maximum:"10000" example:"5"`
+	SourceFile string        `json:"sourceFile,omitempty" yaml:"sourceFile,omitempty" doc:"Source file path" maxLength:"512" example:"solution.yaml"`
 }
 
 // Result contains all lint findings for a solution.
 type Result struct {
-	File       string     `json:"file" yaml:"file"`
-	Findings   []*Finding `json:"findings" yaml:"findings"`
-	ErrorCount int        `json:"errorCount" yaml:"errorCount"`
-	WarnCount  int        `json:"warnCount" yaml:"warnCount"`
-	InfoCount  int        `json:"infoCount" yaml:"infoCount"`
+	File       string     `json:"file" yaml:"file" doc:"Solution file path" maxLength:"512" example:"solution.yaml"`
+	Findings   []*Finding `json:"findings" yaml:"findings" doc:"Lint findings" maxItems:"1000"`
+	ErrorCount int        `json:"errorCount" yaml:"errorCount" doc:"Number of error-level findings" maximum:"1000" example:"2"`
+	WarnCount  int        `json:"warnCount" yaml:"warnCount" doc:"Number of warning-level findings" maximum:"1000" example:"3"`
+	InfoCount  int        `json:"infoCount" yaml:"infoCount" doc:"Number of info-level findings" maximum:"1000" example:"1"`
 
 	// sourceMap is used internally to enrich findings with source positions.
 	sourceMap *sourcepos.SourceMap `json:"-" yaml:"-"`

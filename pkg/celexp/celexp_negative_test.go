@@ -544,3 +544,36 @@ func TestCache_ConcurrencyErrors(t *testing.T) {
 	// If we reach here without panic, test passes
 	assert.True(t, true)
 }
+
+func TestValidateSyntax(t *testing.T) {
+	tests := []struct {
+		name    string
+		expr    string
+		wantErr bool
+	}{
+		{name: "valid_simple", expr: "1 + 2", wantErr: false},
+		{name: "valid_function", expr: "size('hello')", wantErr: false},
+		{name: "valid_ternary", expr: "x > 0 ? 'pos' : 'neg'", wantErr: false},
+		{name: "valid_boolean", expr: "true && false", wantErr: false},
+		{name: "invalid_unclosed_paren", expr: "size('hello'", wantErr: true},
+		{name: "invalid_missing_operand", expr: "1 +", wantErr: true},
+		{name: "invalid_unclosed_string", expr: "'hello", wantErr: true},
+		{name: "empty_expression", expr: "", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateSyntax(tt.expr)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func BenchmarkValidateSyntax(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		ValidateSyntax("x > 0 ? size(name) : 0")
+	}
+}

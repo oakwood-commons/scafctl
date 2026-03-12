@@ -72,14 +72,12 @@ func CommandSave(_ *settings.Run, ioStreams terminal.IOStreams, binaryName strin
 	cmd.Flags().BoolVar(&opts.Redact, "redact", false, "Redact sensitive values in snapshot")
 	cmd.Flags().StringArrayVarP(&opts.Parameters, "resolver", "r", []string{}, "Resolver parameters (key=value)")
 
-	if err := cmd.MarkFlagRequired("output"); err != nil {
-		panic(fmt.Sprintf("failed to mark output flag as required: %v", err))
-	}
+	_ = cmd.MarkFlagRequired("output")
 
 	return cmd
 }
 
-func runSave(ctx context.Context, opts *SaveOptions, ioStreams terminal.IOStreams) error {
+func runSave(ctx context.Context, opts *SaveOptions, _ terminal.IOStreams) error {
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
 
@@ -196,11 +194,13 @@ func runSave(ctx context.Context, opts *SaveOptions, ioStreams terminal.IOStream
 		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
-	fmt.Fprintf(ioStreams.Out, "Snapshot saved to %s\n", opts.OutputFile)
-	fmt.Fprintf(ioStreams.Out, "  Solution: %s (v%s)\n", snapshot.Metadata.Solution, snapshot.Metadata.Version)
-	fmt.Fprintf(ioStreams.Out, "  Resolvers: %d\n", len(snapshot.Resolvers))
-	fmt.Fprintf(ioStreams.Out, "  Duration: %s\n", snapshot.Metadata.TotalDuration)
-	fmt.Fprintf(ioStreams.Out, "  Status: %s\n", snapshot.Metadata.Status)
+	if w != nil {
+		w.Successf("Snapshot saved to %s", opts.OutputFile)
+		w.Plainf("  Solution: %s (v%s)\n", snapshot.Metadata.Solution, snapshot.Metadata.Version)
+		w.Plainf("  Resolvers: %d\n", len(snapshot.Resolvers))
+		w.Plainf("  Duration: %s\n", snapshot.Metadata.TotalDuration)
+		w.Plainf("  Status: %s\n", snapshot.Metadata.Status)
+	}
 
 	return nil
 }

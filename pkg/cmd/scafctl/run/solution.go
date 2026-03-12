@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"path/filepath"
 	"strings"
 	"time"
@@ -16,6 +15,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/dryrun"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
+	"github.com/oakwood-commons/scafctl/pkg/flags"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -24,6 +24,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"gopkg.in/yaml.v3"
@@ -258,7 +259,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	}
 
 	// Parse resolver parameters
-	params, err := ParseResolverFlags(o.ResolverParams)
+	params, err := flags.ParseResolverFlags(o.ResolverParams)
 	if err != nil {
 		return o.exitWithCode(ctx, fmt.Errorf("failed to parse resolver parameters: %w", err), exitcode.ValidationFailed)
 	}
@@ -297,7 +298,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// Set up action progress callback if enabled
 	var actionProgressCallback action.ProgressCallback
 	if o.Progress {
-		actionProgressCallback = NewActionProgressCallback(o.IOStreams.ErrOut)
+		actionProgressCallback = NewActionProgressCallback(writer.FromContext(ctx))
 	}
 
 	// Get effective action config (CLI flags override app config)
@@ -353,110 +354,118 @@ func (o *SolutionOptions) executeDryRun(ctx context.Context, sol *solution.Solut
 		return o.exitWithCode(ctx, fmt.Errorf("dry-run failed: %w", err), exitcode.GeneralError)
 	}
 
-	return o.writeDryRunOutput(report)
+	return o.writeDryRunOutput(ctx, report)
 }
 
 // writeDryRunOutput renders a dry-run report in the requested output format.
-func (o *SolutionOptions) writeDryRunOutput(report *dryrun.Report) error {
+func (o *SolutionOptions) writeDryRunOutput(ctx context.Context, report *dryrun.Report) error {
+	w := writer.FromContext(ctx)
 	switch o.Output {
 	case "json":
 		data, err := json.MarshalIndent(report, "", "  ")
 		if err != nil {
 			return fmt.Errorf("failed to marshal dry-run report: %w", err)
 		}
-		fmt.Fprintln(o.IOStreams.Out, string(data))
+		if w != nil {
+			w.Plainln(string(data))
+		}
 		return nil
 	case "yaml":
 		data, err := yaml.Marshal(report)
 		if err != nil {
 			return fmt.Errorf("failed to marshal dry-run report: %w", err)
 		}
-		fmt.Fprint(o.IOStreams.Out, string(data))
+		if w != nil {
+			w.Plain(string(data))
+		}
 		return nil
 	case "quiet":
 		return nil
 	default:
-		return o.writeDryRunTable(report)
+		return o.writeDryRunTable(ctx, report)
 	}
 }
 
 // writeDryRunTable renders a human-readable dry-run report to the terminal.
-func (o *SolutionOptions) writeDryRunTable(report *dryrun.Report) error {
-	out := o.IOStreams.Out
-
-	fmt.Fprintln(out, "=== DRY RUN ===")
-	fmt.Fprintln(out, "")
-	fmt.Fprintf(out, "Solution:     %s\n", report.Solution)
-	if report.Version != "" {
-		fmt.Fprintf(out, "Version:      %s\n", report.Version)
+func (o *SolutionOptions) writeDryRunTable(ctx context.Context, report *dryrun.Report) error {
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return nil
 	}
-	fmt.Fprintf(out, "Has resolvers: %t\n", report.HasResolvers)
-	fmt.Fprintf(out, "Has workflow:  %t\n", report.HasWorkflow)
+
+	w.Plainln("=== DRY RUN ===")
+	w.Plainln("")
+	w.Plainlnf("Solution:     %s", report.Solution)
+	if report.Version != "" {
+		w.Plainlnf("Version:      %s", report.Version)
+	}
+	w.Plainlnf("Has resolvers: %t", report.HasResolvers)
+	w.Plainlnf("Has workflow:  %t", report.HasWorkflow)
 
 	// Parameters
 	if len(report.Parameters) > 0 {
-		fmt.Fprintln(out, "")
-		fmt.Fprintln(out, "PARAMETERS:")
+		w.Plainln("")
+		w.Plainln("PARAMETERS:")
 		for k, v := range report.Parameters {
-			fmt.Fprintf(out, "  %s = %v\n", k, v)
+			w.Plainlnf("  %s = %v", k, v)
 		}
 	}
 
 	// Resolvers
 	if len(report.Resolvers) > 0 {
-		fmt.Fprintln(out, "")
-		fmt.Fprintln(out, "RESOLVERS:")
+		w.Plainln("")
+		w.Plainln("RESOLVERS:")
 		for name, r := range report.Resolvers {
 			status := r.Status
 			if r.Value != nil {
-				fmt.Fprintf(out, "  %-30s [%s] = %v\n", name, status, r.Value)
+				w.Plainlnf("  %-30s [%s] = %v", name, status, r.Value)
 			} else {
-				fmt.Fprintf(out, "  %-30s [%s]\n", name, status)
+				w.Plainlnf("  %-30s [%s]", name, status)
 			}
 		}
 	}
 
 	// Action plan
 	if len(report.ActionPlan) > 0 {
-		fmt.Fprintln(out, "")
-		fmt.Fprintf(out, "ACTION PLAN (%d actions, %d phases):\n", report.TotalActions, report.TotalPhases)
+		w.Plainln("")
+		w.Plainlnf("ACTION PLAN (%d actions, %d phases):", report.TotalActions, report.TotalPhases)
 		currentPhase := -1
 		for _, act := range report.ActionPlan {
 			if act.Phase != currentPhase {
 				currentPhase = act.Phase
-				fmt.Fprintf(out, "\n  Phase %d:\n", currentPhase)
+				w.Plainlnf("\n  Phase %d:", currentPhase)
 			}
-			fmt.Fprintf(out, "    %s (%s/%s)\n", act.Name, act.Section, act.Provider)
+			w.Plainlnf("    %s (%s/%s)", act.Name, act.Section, act.Provider)
 			if act.Description != "" {
-				fmt.Fprintf(out, "      desc: %s\n", act.Description)
+				w.Plainlnf("      desc: %s", act.Description)
 			}
 			if len(act.Dependencies) > 0 {
-				fmt.Fprintf(out, "      deps: %s\n", strings.Join(act.Dependencies, ", "))
+				w.Plainlnf("      deps: %s", strings.Join(act.Dependencies, ", "))
 			}
 			if act.When != "" {
-				fmt.Fprintf(out, "      when: %s\n", act.When)
+				w.Plainlnf("      when: %s", act.When)
 			}
 			if act.MockBehavior != "" {
-				fmt.Fprintf(out, "      mock: %s\n", act.MockBehavior)
+				w.Plainlnf("      mock: %s", act.MockBehavior)
 			}
 		}
 	}
 
 	// Mock behaviors
 	if len(report.MockBehaviors) > 0 {
-		fmt.Fprintln(out, "")
-		fmt.Fprintln(out, "PROVIDER MOCK BEHAVIORS:")
+		w.Plainln("")
+		w.Plainln("PROVIDER MOCK BEHAVIORS:")
 		for _, mb := range report.MockBehaviors {
-			fmt.Fprintf(out, "  %-20s %s\n", mb.Provider+":", mb.MockBehavior)
+			w.Plainlnf("  %-20s %s", mb.Provider+":", mb.MockBehavior)
 		}
 	}
 
 	// Warnings
 	if len(report.Warnings) > 0 {
-		fmt.Fprintln(out, "")
-		fmt.Fprintln(out, "WARNINGS:")
-		for _, w := range report.Warnings {
-			fmt.Fprintf(out, "  - %s\n", w)
+		w.Plainln("")
+		w.Plainln("WARNINGS:")
+		for _, wn := range report.Warnings {
+			w.Plainlnf("  - %s", wn)
 		}
 	}
 
@@ -485,20 +494,20 @@ func (o *SolutionOptions) getActionIOStreams() *provider.IOStreams {
 // For the default/table output format, output is minimal since providers that support
 // streaming (e.g., exec) already wrote their output directly to the terminal.
 // For json/yaml, the full execution envelope is serialized.
-func (o *SolutionOptions) writeActionOutput(_ context.Context, result *action.ExecutionResult, executionData map[string]any) error {
+func (o *SolutionOptions) writeActionOutput(ctx context.Context, result *action.ExecutionResult, executionData map[string]any) error {
 	if o.Output == "quiet" {
 		return nil
 	}
 
 	switch o.Output {
 	case "auto", "table", "list", "":
-		return o.writeActionOutputDefault(result)
+		return o.writeActionOutputDefault(ctx, result)
 	case "json":
-		return o.writeActionOutputStructured(result, executionData, "json")
+		return o.writeActionOutputStructured(ctx, result, executionData, "json")
 	case "yaml":
-		return o.writeActionOutputStructured(result, executionData, "yaml")
+		return o.writeActionOutputStructured(ctx, result, executionData, "yaml")
 	case "test":
-		return o.writeActionTestOutput(result, executionData)
+		return o.writeActionTestOutput(ctx, result, executionData)
 	default:
 		return fmt.Errorf("unsupported output format: %s", o.Output)
 	}
@@ -507,13 +516,17 @@ func (o *SolutionOptions) writeActionOutput(_ context.Context, result *action.Ex
 // writeActionOutputDefault writes the default/table output for action execution.
 // Actions that already streamed to the terminal are skipped. For non-streamed actions,
 // any stdout/stderr from the results is printed. Failed/skipped actions show a status line.
-func (o *SolutionOptions) writeActionOutputDefault(result *action.ExecutionResult) error {
+func (o *SolutionOptions) writeActionOutputDefault(ctx context.Context, result *action.ExecutionResult) error {
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return nil
+	}
 	for name, ar := range result.Actions {
 		// Skip actions that already streamed their output to the terminal
 		if ar.Streamed {
 			// If the action failed despite streaming, show the error
 			if ar.Status == action.StatusFailed || ar.Status == action.StatusTimeout {
-				fmt.Fprintf(o.IOStreams.ErrOut, "Error [%s]: %s\n", name, ar.Error)
+				w.Errorf("Error [%s]: %s", name, ar.Error)
 			}
 			continue
 		}
@@ -524,19 +537,19 @@ func (o *SolutionOptions) writeActionOutputDefault(result *action.ExecutionResul
 			// Print stdout if available in results
 			if results, ok := ar.Results.(map[string]any); ok {
 				if stdout, ok := results["stdout"].(string); ok && stdout != "" {
-					fmt.Fprint(o.IOStreams.Out, stdout)
+					w.Plain(stdout)
 				}
 			}
 		case action.StatusFailed, action.StatusTimeout:
 			// Show stderr if available, then error
 			if results, ok := ar.Results.(map[string]any); ok {
 				if stderr, ok := results["stderr"].(string); ok && stderr != "" {
-					fmt.Fprint(o.IOStreams.ErrOut, stderr)
+					w.WarnStderrf("%s", stderr)
 				}
 			}
-			fmt.Fprintf(o.IOStreams.ErrOut, "Error [%s]: %s\n", name, ar.Error)
+			w.Errorf("Error [%s]: %s", name, ar.Error)
 		case action.StatusSkipped:
-			fmt.Fprintf(o.IOStreams.ErrOut, "Skipped [%s]: %s\n", name, ar.SkipReason)
+			w.WarnStderrf("Skipped [%s]: %s", name, ar.SkipReason)
 		case action.StatusPending, action.StatusRunning, action.StatusCancelled:
 			// These statuses should not appear in final results; ignore.
 		}
@@ -546,8 +559,8 @@ func (o *SolutionOptions) writeActionOutputDefault(result *action.ExecutionResul
 }
 
 // writeActionOutputStructured writes action results as JSON or YAML (the full execution envelope).
-func (o *SolutionOptions) writeActionOutputStructured(result *action.ExecutionResult, executionData map[string]any, format string) error {
-	outputData := buildActionOutputData(result, executionData)
+func (o *SolutionOptions) writeActionOutputStructured(ctx context.Context, result *action.ExecutionResult, executionData map[string]any, format string) error {
+	outputData := action.BuildOutputData(result, executionData)
 
 	var data []byte
 	var marshalErr error
@@ -563,18 +576,20 @@ func (o *SolutionOptions) writeActionOutputStructured(result *action.ExecutionRe
 		return fmt.Errorf("failed to marshal output: %w", marshalErr)
 	}
 
-	fmt.Fprintln(o.IOStreams.Out, string(data))
+	if w := writer.FromContext(ctx); w != nil {
+		w.Plainln(string(data))
+	}
 	return nil
 }
 
 // writeActionTestOutput generates a functional test definition from the action execution
 // result and writes test YAML to stdout. A snapshot golden file is written to testdata/.
-func (o *SolutionOptions) writeActionTestOutput(result *action.ExecutionResult, executionData map[string]any) error {
+func (o *SolutionOptions) writeActionTestOutput(ctx context.Context, result *action.ExecutionResult, executionData map[string]any) error {
 	// Full output (including __execution) for the snapshot.
-	fullData := buildActionOutputData(result, executionData)
+	fullData := action.BuildOutputData(result, executionData)
 
 	// Assertion data excludes __execution to avoid volatile timing assertions.
-	assertionData := buildActionOutputData(result, nil)
+	assertionData := action.BuildOutputData(result, nil)
 
 	rawJSON, err := json.MarshalIndent(fullData, "", "  ")
 	if err != nil {
@@ -608,54 +623,13 @@ func (o *SolutionOptions) writeActionTestOutput(result *action.ExecutionResult, 
 		return fmt.Errorf("failed to marshal test YAML: %w", err)
 	}
 
-	fmt.Fprint(o.IOStreams.Out, string(yamlData))
-
-	if genResult.SnapshotWritten {
-		fmt.Fprintf(o.IOStreams.ErrOut, "Snapshot written: %s\n", genResult.SnapshotPath)
+	if w := writer.FromContext(ctx); w != nil {
+		w.Plain(string(yamlData))
+		if genResult.SnapshotWritten {
+			w.WarnStderrf("Snapshot written: %s", genResult.SnapshotPath)
+		}
 	}
 	return nil
-}
-
-// buildActionOutputData constructs the structured output map for action execution results.
-// When executionData is nil, the __execution key is omitted.
-func buildActionOutputData(result *action.ExecutionResult, executionData map[string]any) map[string]any {
-	output := map[string]any{
-		"status":    string(result.FinalStatus),
-		"startTime": result.StartTime.Format(time.RFC3339),
-		"endTime":   result.EndTime.Format(time.RFC3339),
-		"duration":  result.Duration().String(),
-	}
-
-	actions := make(map[string]any)
-	for name, ar := range result.Actions {
-		actionOutput := map[string]any{
-			"status": string(ar.Status),
-		}
-		if ar.Results != nil {
-			actionOutput["results"] = ar.Results
-		}
-		if ar.Error != "" {
-			actionOutput["error"] = ar.Error
-		}
-		if ar.SkipReason != "" {
-			actionOutput["skipReason"] = string(ar.SkipReason)
-		}
-		actions[name] = actionOutput
-	}
-	output["actions"] = actions
-
-	if len(result.FailedActions) > 0 {
-		output["failedActions"] = result.FailedActions
-	}
-	if len(result.SkippedActions) > 0 {
-		output["skippedActions"] = result.SkippedActions
-	}
-
-	if executionData != nil {
-		output["__execution"] = executionData
-	}
-
-	return output
 }
 
 // actionRegistryAdapter adapts provider.Registry to action.RegistryInterface
@@ -676,58 +650,58 @@ func (r *actionRegistryAdapter) Has(name string) bool {
 
 // ActionProgressCallback implements action.ProgressCallback for CLI output
 type ActionProgressCallback struct {
-	out io.Writer
+	w *writer.Writer
 }
 
 // NewActionProgressCallback creates a new action progress callback
-func NewActionProgressCallback(out io.Writer) *ActionProgressCallback {
-	return &ActionProgressCallback{out: out}
+func NewActionProgressCallback(w *writer.Writer) *ActionProgressCallback {
+	return &ActionProgressCallback{w: w}
 }
 
 func (a *ActionProgressCallback) OnActionStart(actionName string) {
-	fmt.Fprintf(a.out, "[ACTION] Starting: %s\n", actionName)
+	a.w.Infof("[ACTION] Starting: %s", actionName)
 }
 
 func (a *ActionProgressCallback) OnActionComplete(actionName string, _ any) {
-	fmt.Fprintf(a.out, "[ACTION] Completed: %s ✓\n", actionName)
+	a.w.Successf("[ACTION] Completed: %s ✓", actionName)
 }
 
 func (a *ActionProgressCallback) OnActionFailed(actionName string, err error) {
-	fmt.Fprintf(a.out, "[ACTION] Failed: %s ✗ (%v)\n", actionName, err)
+	a.w.Errorf("[ACTION] Failed: %s ✗ (%v)", actionName, err)
 }
 
 func (a *ActionProgressCallback) OnActionSkipped(actionName, reason string) {
-	fmt.Fprintf(a.out, "[ACTION] Skipped: %s (%s)\n", actionName, reason)
+	a.w.Warningf("[ACTION] Skipped: %s (%s)", actionName, reason)
 }
 
 func (a *ActionProgressCallback) OnActionTimeout(actionName string, timeout time.Duration) {
-	fmt.Fprintf(a.out, "[ACTION] Timeout: %s (after %v)\n", actionName, timeout)
+	a.w.Errorf("[ACTION] Timeout: %s (after %v)", actionName, timeout)
 }
 
 func (a *ActionProgressCallback) OnActionCancelled(actionName string) {
-	fmt.Fprintf(a.out, "[ACTION] Cancelled: %s\n", actionName)
+	a.w.Warningf("[ACTION] Cancelled: %s", actionName)
 }
 
 func (a *ActionProgressCallback) OnRetryAttempt(actionName string, attempt, maxAttempts int, err error) {
-	fmt.Fprintf(a.out, "[ACTION] Retry %d/%d for %s: %v\n", attempt, maxAttempts, actionName, err)
+	a.w.Warningf("[ACTION] Retry %d/%d for %s: %v", attempt, maxAttempts, actionName, err)
 }
 
 func (a *ActionProgressCallback) OnForEachProgress(actionName string, completed, total int) {
-	fmt.Fprintf(a.out, "[ACTION] %s: %d/%d iterations complete\n", actionName, completed, total)
+	a.w.Infof("[ACTION] %s: %d/%d iterations complete", actionName, completed, total)
 }
 
 func (a *ActionProgressCallback) OnPhaseStart(phase int, actionNames []string) {
-	fmt.Fprintf(a.out, "[PHASE] Starting phase %d: %s\n", phase, strings.Join(actionNames, ", "))
+	a.w.Infof("[PHASE] Starting phase %d: %s", phase, strings.Join(actionNames, ", "))
 }
 
 func (a *ActionProgressCallback) OnPhaseComplete(phase int) {
-	fmt.Fprintf(a.out, "[PHASE] Completed phase %d\n", phase)
+	a.w.Successf("[PHASE] Completed phase %d", phase)
 }
 
 func (a *ActionProgressCallback) OnFinallyStart() {
-	fmt.Fprintf(a.out, "[FINALLY] Starting finally section\n")
+	a.w.Infof("[FINALLY] Starting finally section")
 }
 
 func (a *ActionProgressCallback) OnFinallyComplete() {
-	fmt.Fprintf(a.out, "[FINALLY] Completed finally section\n")
+	a.w.Successf("[FINALLY] Completed finally section")
 }

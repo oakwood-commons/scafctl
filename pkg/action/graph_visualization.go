@@ -12,40 +12,40 @@ import (
 // GraphVisualization holds visualization data for rendering.
 type GraphVisualization struct {
 	// Phases contains main action phases for visualization.
-	Phases []*VisualizationPhase `json:"phases" yaml:"phases"`
+	Phases []*VisualizationPhase `json:"phases" yaml:"phases" doc:"Main action phases for visualization" maxItems:"100"`
 
 	// FinallyPhases contains finally action phases.
-	FinallyPhases []*VisualizationPhase `json:"finallyPhases,omitempty" yaml:"finallyPhases,omitempty"`
+	FinallyPhases []*VisualizationPhase `json:"finallyPhases,omitempty" yaml:"finallyPhases,omitempty" doc:"Finally/cleanup action phases" maxItems:"100"`
 
 	// Edges represents dependencies between actions.
-	Edges []*VisualizationEdge `json:"edges" yaml:"edges"`
+	Edges []*VisualizationEdge `json:"edges" yaml:"edges" doc:"Dependencies between actions" maxItems:"10000"`
 
 	// Stats contains graph statistics.
-	Stats *VisualizationStats `json:"stats" yaml:"stats"`
+	Stats *VisualizationStats `json:"stats" yaml:"stats" doc:"Graph statistics"`
 }
 
 // VisualizationPhase represents a phase in the execution order.
 type VisualizationPhase struct {
-	Phase   int      `json:"phase" yaml:"phase"`
-	Actions []string `json:"actions" yaml:"actions"`
-	Section string   `json:"section" yaml:"section"` // "actions" or "finally"
+	Phase   int      `json:"phase" yaml:"phase" doc:"Phase number" maximum:"100" example:"1"`
+	Actions []string `json:"actions" yaml:"actions" doc:"Action names in this phase" maxItems:"1000"`
+	Section string   `json:"section" yaml:"section" doc:"Workflow section (actions or finally)" maxLength:"16" example:"actions"`
 }
 
 // VisualizationEdge represents a dependency edge.
 type VisualizationEdge struct {
-	From  string `json:"from" yaml:"from"`
-	To    string `json:"to" yaml:"to"`
-	Label string `json:"label,omitempty" yaml:"label,omitempty"`
+	From  string `json:"from" yaml:"from" doc:"Source action name" maxLength:"256" example:"deploy"`
+	To    string `json:"to" yaml:"to" doc:"Target action name" maxLength:"256" example:"build"`
+	Label string `json:"label,omitempty" yaml:"label,omitempty" doc:"Edge label" maxLength:"128" example:"depends_on"`
 }
 
 // VisualizationStats contains graph statistics.
 type VisualizationStats struct {
-	TotalActions    int     `json:"totalActions" yaml:"totalActions"`
-	TotalPhases     int     `json:"totalPhases" yaml:"totalPhases"`
-	MaxParallelism  int     `json:"maxParallelism" yaml:"maxParallelism"`
-	AvgDependencies float64 `json:"avgDependencies" yaml:"avgDependencies"`
-	HasFinally      bool    `json:"hasFinally" yaml:"hasFinally"`
-	ForEachCount    int     `json:"forEachCount" yaml:"forEachCount"`
+	TotalActions    int     `json:"totalActions" yaml:"totalActions" doc:"Total number of actions" maximum:"1000" example:"10"`
+	TotalPhases     int     `json:"totalPhases" yaml:"totalPhases" doc:"Total number of phases" maximum:"100" example:"3"`
+	MaxParallelism  int     `json:"maxParallelism" yaml:"maxParallelism" doc:"Maximum parallelism across all phases" maximum:"1000" example:"4"`
+	AvgDependencies float64 `json:"avgDependencies" yaml:"avgDependencies" doc:"Average number of dependencies per action"`
+	HasFinally      bool    `json:"hasFinally" yaml:"hasFinally" doc:"Whether the graph has finally actions"`
+	ForEachCount    int     `json:"forEachCount" yaml:"forEachCount" doc:"Number of forEach actions" maximum:"1000" example:"2"`
 }
 
 // BuildVisualization creates visualization data from a Graph.
@@ -250,8 +250,7 @@ func (v *GraphVisualization) RenderDOT(w io.Writer) error {
 	}
 
 	// Finally action phase subgraphs
-	for i, phase := range v.FinallyPhases {
-		phaseNum := len(v.Phases) + i
+	for _, phase := range v.FinallyPhases {
 		fmt.Fprintf(w, "  subgraph cluster_finally_%d {\n", phase.Phase)
 		fmt.Fprintf(w, "    label=\"Finally Phase %d\";\n", phase.Phase)
 		fmt.Fprintln(w, "    style=filled;")
@@ -265,7 +264,6 @@ func (v *GraphVisualization) RenderDOT(w io.Writer) error {
 		}
 
 		fmt.Fprintln(w, "  }")
-		_ = phaseNum
 		fmt.Fprintln(w)
 	}
 

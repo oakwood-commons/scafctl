@@ -15,6 +15,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/format"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/input"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -101,7 +102,10 @@ func CommandClear(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 }
 
 func runClear(ctx context.Context, options *ClearOptions, outputOpts *kvx.OutputOptions) error {
-	w := writer.MustFromContext(ctx)
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return fmt.Errorf("writer not initialized in context")
+	}
 
 	// Validate kind if provided
 	kind := KindAll
@@ -135,7 +139,10 @@ func runClear(ctx context.Context, options *ClearOptions, outputOpts *kvx.Output
 	// Confirm action (skip in force mode or quiet mode)
 	skipConfirmation := options.Force || options.CliParams.IsQuiet
 	if !skipConfirmation {
-		in := input.MustFromContext(ctx)
+		in := input.FromContext(ctx)
+		if in == nil {
+			return fmt.Errorf("input not initialized in context")
+		}
 		confirmed, err := in.Confirm(input.NewConfirmOptions().
 			WithPrompt(fmt.Sprintf("Clear %s?", description)).
 			WithDefault(false))
@@ -197,7 +204,7 @@ func runClear(ctx context.Context, options *ClearOptions, outputOpts *kvx.Output
 	output := cachelib.ClearOutput{
 		RemovedFiles: totalFiles,
 		RemovedBytes: totalBytes,
-		RemovedHuman: cachelib.FormatBytes(totalBytes),
+		RemovedHuman: format.Bytes(totalBytes),
 		Kind:         string(kind),
 	}
 	if options.Name != "" {

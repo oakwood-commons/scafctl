@@ -9,8 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
+	cmdflags "github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
+	"github.com/oakwood-commons/scafctl/pkg/flags"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -28,7 +29,7 @@ type ProviderOptions struct {
 	CliParams *settings.Run
 
 	// kvx output integration
-	flags.KvxOutputFlags
+	cmdflags.KvxOutputFlags
 
 	// ProviderName is the name of the provider to execute (positional arg).
 	ProviderName string
@@ -188,7 +189,7 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 	}
 	defer func() {
 		if o.ShowMetrics {
-			writeMetrics(o.IOStreams.ErrOut)
+			writeMetrics(ctx)
 		}
 	}()
 
@@ -218,7 +219,7 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 	desc := prov.Descriptor()
 
 	// Parse input parameters
-	inputs, err := ParseResolverFlags(o.InputParams)
+	inputs, err := flags.ParseResolverFlags(o.InputParams)
 	if err != nil {
 		err := fmt.Errorf("failed to parse input parameters: %w", err)
 		w.Errorf("%v", err)
@@ -348,7 +349,7 @@ func (o *ProviderOptions) redactSensitiveFields(output map[string]any, sensitive
 
 // writeOutput writes provider output using kvx
 func (o *ProviderOptions) writeOutput(ctx context.Context, output map[string]any) error {
-	kvxOpts := flags.NewKvxOutputOptionsFromFlags(
+	kvxOpts := cmdflags.NewKvxOutputOptionsFromFlags(
 		o.Output,
 		o.Interactive,
 		o.Expression,

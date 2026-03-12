@@ -88,7 +88,10 @@ func CommandInstall(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ st
 }
 
 func runInstall(ctx context.Context, opts *InstallOptions) error {
-	w := writer.MustFromContext(ctx)
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return fmt.Errorf("writer not initialized in context")
+	}
 	lgr := logger.FromContext(ctx)
 
 	// Auto-discover solution file if not provided

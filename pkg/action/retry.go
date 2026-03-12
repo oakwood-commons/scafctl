@@ -252,19 +252,19 @@ func (r *RetryExecutor) ExecuteWithRetry(
 // RetryResult contains information about a retry execution.
 type RetryResult struct {
 	// Output is the successful output (nil if all attempts failed)
-	Output *provider.Output
+	Output *provider.Output `json:"output,omitempty" yaml:"output,omitempty" doc:"Successful output (nil if all attempts failed)"`
 
 	// Attempts is the total number of attempts made
-	Attempts int
+	Attempts int `json:"attempts" yaml:"attempts" doc:"Total number of attempts made" maximum:"100" example:"3"`
 
 	// TotalDuration is the total time spent including delays
-	TotalDuration time.Duration
+	TotalDuration time.Duration `json:"totalDuration" yaml:"totalDuration" doc:"Total time spent including delays"`
 
 	// FinalError is the error from the last attempt (nil if succeeded)
-	FinalError error
+	FinalError error `json:"finalError,omitempty" yaml:"finalError,omitempty" doc:"Error from the last attempt (nil if succeeded)"`
 
 	// AttemptErrors contains errors from each attempt
-	AttemptErrors []error
+	AttemptErrors []error `json:"attemptErrors,omitempty" yaml:"attemptErrors,omitempty" doc:"Errors from each attempt" maxItems:"100"`
 }
 
 // ExecuteWithRetryDetailed runs an action with retry support and returns detailed results.

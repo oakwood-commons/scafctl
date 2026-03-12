@@ -9,10 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/MakeNowJust/heredoc/v2"
-	"github.com/Masterminds/semver/v3"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
@@ -146,48 +144,22 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 	bundleRoot := filepath.Dir(absFile)
 
 	// Determine artifact name (priority: --name flag > metadata.name > filename)
-	name := opts.Name
-	if name == "" {
-		// Try to get name from solution metadata
-		if sol.Metadata.Name != "" {
-			name = sol.Metadata.Name
-		} else {
-			// Fall back to filename (e.g., my-solution.yaml -> my-solution)
-			base := filepath.Base(opts.File)
-			ext := filepath.Ext(base)
-			name = strings.TrimSuffix(base, ext)
-		}
-	}
-
-	// Validate name format
-	if !catalog.IsValidName(name) {
-		w.Errorf("invalid name %q: must be lowercase alphanumeric with hyphens (e.g., 'my-solution')", name)
-		return exitcode.Errorf("invalid name")
+	name, err := solution.ResolveArtifactName(opts.Name, sol.Metadata.Name, opts.File)
+	if err != nil {
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
 	// Determine version (priority: --version flag > metadata.version)
-	var version *semver.Version
-	switch {
-	case opts.Version != "":
-		// User provided --version flag
-		version, err = semver.NewVersion(opts.Version)
-		if err != nil {
-			w.Errorf("invalid version %q: %v", opts.Version, err)
-			return exitcode.WithCode(err, exitcode.InvalidInput)
-		}
-
-		// Warn if overriding metadata version
-		if sol.Metadata.Version != nil && !sol.Metadata.Version.Equal(version) {
-			w.Warningf("--version %s overrides metadata version %s", version.String(), sol.Metadata.Version.String())
-		}
-	case sol.Metadata.Version != nil:
-		// Use metadata version
-		version = sol.Metadata.Version
+	version, overrides, err := solution.ResolveArtifactVersion(opts.Version, sol.Metadata.Version)
+	if err != nil {
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
+	}
+	if overrides {
+		w.Warningf("--version %s overrides metadata version %s", version.String(), sol.Metadata.Version.String())
+	} else if opts.Version == "" && sol.Metadata.Version != nil {
 		lgr.V(1).Info("using version from solution metadata", "version", version.String())
-	default:
-		// No version available
-		w.Error("solution has no version in metadata; use --version to specify one")
-		return exitcode.Errorf("no version")
 	}
 
 	// === Bundle pipeline ===
@@ -217,24 +189,12 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 		return nil
 	}
 
-	// Create reference
-	ref := catalog.Reference{
-		Kind:    catalog.ArtifactKindSolution,
-		Name:    name,
-		Version: version,
-	}
-
 	// Create local catalog
 	localCatalog, err := catalog.NewLocalCatalog(*lgr)
 	if err != nil {
 		w.Errorf("failed to open catalog: %v", err)
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
-
-	// Build annotations
-	annotations := catalog.NewAnnotationBuilder().
-		Set(catalog.AnnotationSource, opts.File).
-		Build()
 
 	// Re-serialize the solution (it may have been modified by compose/vendor)
 	if !opts.NoBundle && (len(sol.Compose) > 0 || len(sol.Bundle.Include) > 0) {
@@ -245,24 +205,11 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 		}
 	}
 
-	// Store the artifact
-	var info catalog.ArtifactInfo
-
-	if br != nil && br.Dedup != nil {
-		// Content-addressable dedup storage (v2)
-		var blobLayers [][]byte
-		for _, blob := range br.Dedup.LargeBlobs {
-			blobLayers = append(blobLayers, blob.Content)
-		}
-		info, err = localCatalog.StoreDedup(ctx, ref, content, br.Dedup.ManifestJSON, br.Dedup.SmallBlobsTar, blobLayers, annotations, opts.Force)
-	} else {
-		var bundleData []byte
-		if br != nil {
-			bundleData = br.TarData
-		}
-		info, err = localCatalog.Store(ctx, ref, content, bundleData, annotations, opts.Force)
-	}
-
+	// Store the artifact (handles dedup vs traditional, plus build cache)
+	storeResult, err := builder.StoreSolutionArtifact(ctx, localCatalog, name, version, content, br, builder.StoreOptions{
+		Force:  opts.Force,
+		Source: opts.File,
+	})
 	if err != nil {
 		if catalog.IsExists(err) {
 			w.Errorf("%v\nUse --force to overwrite", err)
@@ -272,28 +219,7 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
-	lgr.V(1).Info("built solution",
-		"name", info.Reference.Name,
-		"version", info.Reference.Version.String(),
-		"digest", info.Digest)
-
-	// Write build cache entry after successful store
-	if br != nil && br.BuildFingerprint != "" && br.BuildCacheDir != "" {
-		cacheEntry := &bundler.BuildCacheEntry{
-			Fingerprint:     br.BuildFingerprint,
-			ArtifactName:    info.Reference.Name,
-			ArtifactVersion: info.Reference.Version.String(),
-			ArtifactDigest:  info.Digest,
-			CreatedAt:       time.Now(),
-			InputFiles:      br.InputFileCount,
-		}
-		if cacheErr := bundler.WriteBuildCache(br.BuildCacheDir, br.BuildFingerprint, cacheEntry); cacheErr != nil {
-			lgr.V(1).Info("failed to write build cache (non-fatal)", "error", cacheErr)
-		} else {
-			lgr.V(1).Info("wrote build cache entry", "fingerprint", br.BuildFingerprint)
-		}
-	}
-
+	info := storeResult.Info
 	w.Successf("Built %s@%s", info.Reference.Name, info.Reference.Version.String())
 	w.Infof("  Digest: %s", info.Digest)
 	w.Infof("  Catalog: %s", localCatalog.Path())
@@ -330,16 +256,6 @@ func buildBundle(ctx context.Context, sol *solution.Solution, solutionContent []
 	}
 
 	return br, nil
-}
-
-// parseByteSize delegates to the shared builder.ParseByteSize.
-func parseByteSize(s string) (int64, error) {
-	return builder.ParseByteSize(s)
-}
-
-// formatByteSize delegates to the shared builder.FormatByteSize.
-func formatByteSize(b int64) string {
-	return builder.FormatByteSize(b)
 }
 
 // printDryRunOutput produces a formatted summary of what would be bundled.

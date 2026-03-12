@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"oras.land/oras-go/v2/registry/remote/auth"
 )
 
@@ -92,7 +93,7 @@ func findDockerConfig() string {
 		}
 	}
 
-	homeDir, err := os.UserHomeDir()
+	homeDir, err := paths.HomeDir()
 	if err != nil {
 		return ""
 	}

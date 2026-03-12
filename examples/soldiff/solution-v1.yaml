@@ -1,0 +1,59 @@
+# Solution Diff Examples
+#
+# Compare two solution files structurally to see what changed.
+# This is useful for reviewing changes before deploying, debugging
+# configuration drift, or validating refactors.
+#
+# Usage:
+#   # Compare the two solutions
+#   scafctl solution diff examples/soldiff/solution-v1.yaml examples/soldiff/solution-v2.yaml
+#
+#   # Output as JSON
+#   scafctl solution diff examples/soldiff/solution-v1.yaml examples/soldiff/solution-v2.yaml -o json
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: soldiff-demo
+  version: 1.0.0
+  description: Baseline version of a solution for diff demonstration
+
+spec:
+  resolvers:
+    app_name:
+      description: Application name
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "my-service"
+
+    replicas:
+      description: Number of replicas
+      type: int
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: 2
+
+    environment:
+      description: Target environment
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "staging"
+
+  workflow:
+    actions:
+      deploy:
+        description: Deploy the application
+        with:
+          - provider: exec
+            inputs:
+              command: echo
+              args:
+                - "Deploying {{ .app_name }} with {{ .replicas }} replicas to {{ .environment }}"

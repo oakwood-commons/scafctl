@@ -157,7 +157,10 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 		Args:         cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			w := writer.MustFromContext(ctx)
+			w := writer.FromContext(ctx)
+			if w == nil {
+				return fmt.Errorf("writer not initialized in context")
+			}
 			handlerName := args[0]
 
 			// Validate handler name against registry
@@ -246,17 +249,21 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 
 // loginGitHub handles the login flow for the GitHub auth handler.
 func loginGitHub(ctx context.Context, w *writer.Writer, flow auth.Flow, hostname, clientID string, callbackPort int, timeout time.Duration, scopes []string, force, skipIfAuthenticated bool) error {
-	// Auto-detect PAT if env vars are set and no explicit flow.
-	// Skip auto-detection when user provides --scope flags, since scopes
+	// Auto-detect flow from available credentials.
+	// Skip PAT auto-detection when user provides --scope flags, since scopes
 	// only apply to the device code / interactive flows (PAT scopes are fixed at creation).
-	if flow == "" && ghauth.HasPATCredentials() && len(scopes) == 0 {
-		flow = auth.FlowPAT
-		w.Info("Detected GitHub token in environment variables")
+	var detectors []auth.CredentialDetector
+	if len(scopes) == 0 {
+		detectors = append(detectors, auth.CredentialDetector{
+			HasCredentials: ghauth.HasPATCredentials,
+			Flow:           auth.FlowPAT,
+			Description:    "Detected GitHub token in environment variables",
+		})
 	}
-
-	// Default to interactive (browser/PKCE)
-	if flow == "" {
-		flow = auth.FlowInteractive
+	detection := auth.DetectFlow(flow, detectors, auth.FlowInteractive)
+	flow = detection.Flow
+	if detection.Description != "" {
+		w.Info(detection.Description)
 	}
 
 	// Get or create handler
@@ -267,28 +274,22 @@ func loginGitHub(ctx context.Context, w *writer.Writer, flow auth.Flow, hostname
 		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
-	// Force re-auth: log out first if already authenticated.
-	if force {
-		_ = handler.Logout(ctx) // best-effort; ignore error
-	} else if flow != auth.FlowPAT {
-		// Check if already authenticated (skip for PAT)
-		status, err := handler.Status(ctx)
-		if err != nil {
-			err = fmt.Errorf("failed to check auth status: %w", err)
-			w.Errorf("%v", err)
-			return exitcode.WithCode(err, exitcode.GeneralError)
-		}
-
-		if status.Authenticated {
-			identity := status.Claims.DisplayIdentity()
-			if skipIfAuthenticated {
-				w.Infof("Already authenticated as %s — skipping login.", identity)
-				return nil
-			}
-			w.Warningf("Already authenticated as %s.", identity)
-			w.Warning("Use 'scafctl auth logout github' to sign out first, or use --force to re-authenticate.")
-			w.Info("")
-		}
+	// Check pre-login state
+	preLogin, err := auth.PreLoginCheck(ctx, handler, flow, force, skipIfAuthenticated, auth.FlowPAT)
+	if err != nil {
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
+	}
+	switch preLogin.Action {
+	case auth.PreLoginProceed:
+		// Continue with login
+	case auth.PreLoginSkip:
+		w.Infof("Already authenticated as %s — skipping login.", preLogin.Identity)
+		return nil
+	case auth.PreLoginAlreadyAuthenticated:
+		w.Warningf("Already authenticated as %s.", preLogin.Identity)
+		w.Warning("Use 'scafctl auth logout github' to sign out first, or use --force to re-authenticate.")
+		w.Info("")
 	}
 
 	return executeLogin(ctx, w, handler, flow, "", callbackPort, timeout, scopes)
@@ -297,17 +298,21 @@ func loginGitHub(ctx context.Context, w *writer.Writer, flow auth.Flow, hostname
 // loginGCP handles the login flow for the GCP auth handler.
 func loginGCP(ctx context.Context, w *writer.Writer, flow auth.Flow, clientID, impersonateServiceAccount string, callbackPort int, timeout time.Duration, scopes []string, force, skipIfAuthenticated bool) error {
 	// Auto-detect flow based on available credentials (highest priority first)
-	if flow == "" && gcpauth.HasWorkloadIdentityCredentials() {
-		flow = auth.FlowWorkloadIdentity
-		w.Info("Detected workload identity credentials in environment")
-	} else if flow == "" && gcpauth.HasServiceAccountCredentials() {
-		flow = auth.FlowServicePrincipal
-		w.Info("Detected service account key in environment")
-	}
-
-	// Default to interactive (browser OAuth)
-	if flow == "" {
-		flow = auth.FlowInteractive
+	detection := auth.DetectFlow(flow, []auth.CredentialDetector{
+		{
+			HasCredentials: gcpauth.HasWorkloadIdentityCredentials,
+			Flow:           auth.FlowWorkloadIdentity,
+			Description:    "Detected workload identity credentials in environment",
+		},
+		{
+			HasCredentials: gcpauth.HasServiceAccountCredentials,
+			Flow:           auth.FlowServicePrincipal,
+			Description:    "Detected service account key in environment",
+		},
+	}, auth.FlowInteractive)
+	flow = detection.Flow
+	if detection.Description != "" {
+		w.Info(detection.Description)
 	}
 
 	// Get or create handler with overrides
@@ -318,28 +323,23 @@ func loginGCP(ctx context.Context, w *writer.Writer, flow auth.Flow, clientID, i
 		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
-	// Force re-auth: log out first if already authenticated.
-	if force {
-		_ = handler.Logout(ctx) // best-effort; ignore error
-	} else if flow == auth.FlowInteractive || flow == auth.FlowGcloudADC {
-		// Check if already authenticated (skip for non-interactive flows)
-		status, err := handler.Status(ctx)
-		if err != nil {
-			err = fmt.Errorf("failed to check auth status: %w", err)
-			w.Errorf("%v", err)
-			return exitcode.WithCode(err, exitcode.GeneralError)
-		}
-
-		if status.Authenticated {
-			identity := status.Claims.DisplayIdentity()
-			if skipIfAuthenticated {
-				w.Infof("Already authenticated as %s — skipping login.", identity)
-				return nil
-			}
-			w.Warningf("Already authenticated as %s.", identity)
-			w.Warning("Use 'scafctl auth logout gcp' to sign out first, or use --force to re-authenticate.")
-			w.Info("")
-		}
+	// Check pre-login state (skip check for non-interactive flows except interactive and gcloud_adc)
+	preLogin, err := auth.PreLoginCheck(ctx, handler, flow, force, skipIfAuthenticated,
+		auth.FlowWorkloadIdentity, auth.FlowServicePrincipal, auth.FlowPAT, auth.FlowMetadata)
+	if err != nil {
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
+	}
+	switch preLogin.Action {
+	case auth.PreLoginProceed:
+		// Continue with login
+	case auth.PreLoginSkip:
+		w.Infof("Already authenticated as %s — skipping login.", preLogin.Identity)
+		return nil
+	case auth.PreLoginAlreadyAuthenticated:
+		w.Warningf("Already authenticated as %s.", preLogin.Identity)
+		w.Warning("Use 'scafctl auth logout gcp' to sign out first, or use --force to re-authenticate.")
+		w.Info("")
 	}
 
 	return executeLogin(ctx, w, handler, flow, "", callbackPort, timeout, scopes)
@@ -360,19 +360,22 @@ func loginEntra(ctx context.Context, w *writer.Writer, flow auth.Flow, tenantID,
 		}
 	}
 
-	// Auto-detect workload identity if env vars are set and no explicit flow (highest priority)
-	if flowStr == "" && entra.HasWorkloadIdentityCredentials() {
-		flow = auth.FlowWorkloadIdentity
-		w.Info("Detected workload identity credentials in environment")
-	} else if flowStr == "" && entra.HasServicePrincipalCredentials() {
-		// Auto-detect service principal if env vars are set and no explicit flow
-		flow = auth.FlowServicePrincipal
-		w.Info("Detected service principal credentials in environment variables")
-	}
-
-	// Default to interactive (browser OAuth with authorization code + PKCE)
-	if flow == "" {
-		flow = auth.FlowInteractive
+	// Auto-detect flow from available credentials
+	detection := auth.DetectFlow(flow, []auth.CredentialDetector{
+		{
+			HasCredentials: entra.HasWorkloadIdentityCredentials,
+			Flow:           auth.FlowWorkloadIdentity,
+			Description:    "Detected workload identity credentials in environment",
+		},
+		{
+			HasCredentials: entra.HasServicePrincipalCredentials,
+			Flow:           auth.FlowServicePrincipal,
+			Description:    "Detected service principal credentials in environment variables",
+		},
+	}, auth.FlowInteractive)
+	flow = detection.Flow
+	if detection.Description != "" {
+		w.Info(detection.Description)
 	}
 
 	// Get or create handler
@@ -383,34 +386,22 @@ func loginEntra(ctx context.Context, w *writer.Writer, flow auth.Flow, tenantID,
 		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
-	// Force re-auth: log out first if already authenticated.
-	if force {
-		_ = handler.Logout(ctx) // best-effort; ignore error
-	} else if flow != auth.FlowServicePrincipal {
-		// Check if already authenticated (skip for service principal)
-		status, err := handler.Status(ctx)
-		if err != nil {
-			err = fmt.Errorf("failed to check auth status: %w", err)
-			w.Errorf("%v", err)
-			return exitcode.WithCode(err, exitcode.GeneralError)
-		}
-
-		if status.Authenticated {
-			identity := status.Claims.Email
-			if identity == "" {
-				identity = status.Claims.Name
-			}
-			if identity == "" {
-				identity = status.Claims.Subject
-			}
-			if skipIfAuthenticated {
-				w.Infof("Already authenticated as %s — skipping login.", identity)
-				return nil
-			}
-			w.Warningf("Already authenticated as %s.", identity)
-			w.Warning("Use 'scafctl auth logout entra' to sign out first, or use --force to re-authenticate.")
-			w.Info("")
-		}
+	// Check pre-login state (skip check for service principal)
+	preLogin, err := auth.PreLoginCheck(ctx, handler, flow, force, skipIfAuthenticated, auth.FlowServicePrincipal)
+	if err != nil {
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
+	}
+	switch preLogin.Action {
+	case auth.PreLoginProceed:
+		// Continue with login
+	case auth.PreLoginSkip:
+		w.Infof("Already authenticated as %s — skipping login.", preLogin.Identity)
+		return nil
+	case auth.PreLoginAlreadyAuthenticated:
+		w.Warningf("Already authenticated as %s.", preLogin.Identity)
+		w.Warning("Use 'scafctl auth logout entra' to sign out first, or use --force to re-authenticate.")
+		w.Info("")
 	}
 
 	return executeLogin(ctx, w, handler, flow, tenantID, callbackPort, timeout, scopes)

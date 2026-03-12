@@ -24,7 +24,7 @@ type ForEachExecutor struct {
 	onError spec.OnErrorBehavior
 
 	// progressCallback receives progress updates during execution
-	progressCallback ProgressCallback
+	progressCallback RetryObserver
 }
 
 // ForEachExecutorOption configures the ForEachExecutor.
@@ -46,7 +46,8 @@ func WithForEachOnError(behavior spec.OnErrorBehavior) ForEachExecutorOption {
 }
 
 // WithForEachProgressCallback sets the progress callback for forEach execution.
-func WithForEachProgressCallback(callback ProgressCallback) ForEachExecutorOption {
+// It accepts a RetryObserver since forEach only reports retry and iteration progress.
+func WithForEachProgressCallback(callback RetryObserver) ForEachExecutorOption {
 	return func(e *ForEachExecutor) {
 		e.progressCallback = callback
 	}
@@ -64,7 +65,7 @@ func NewForEachExecutor(opts ...ForEachExecutorOption) *ForEachExecutor {
 }
 
 // FromForEachClause creates a ForEachExecutor configured from a ForEachClause.
-func FromForEachClause(clause *spec.ForEachClause, progressCallback ProgressCallback) *ForEachExecutor {
+func FromForEachClause(clause *spec.ForEachClause, progressCallback RetryObserver) *ForEachExecutor {
 	if clause == nil {
 		return NewForEachExecutor()
 	}

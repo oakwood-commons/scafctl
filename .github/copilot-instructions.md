@@ -8,7 +8,7 @@ Go-based CLI tool using CEL (Common Expression Language) for dynamic configurati
 ### CLI Output (`pkg/terminal/writer/`)
 
 Use **Writer** for all terminal output—**never** use `fmt.Fprintf` directly.
-- Get via `writer.FromContext(ctx)` or `writer.MustFromContext(ctx)`
+- Get via `writer.FromContext(ctx)`
 - Respects `--quiet` and `--no-color` flags automatically
 - For testing, use `writer.WithExitFunc()` to capture exit calls
 
@@ -95,3 +95,4 @@ golangci-lint run --fix          # Run Linter and auto-fix issues
 **IMPORTANT**: Always update documentation, tutorials, examples, mcp server tools (if applicable) when features, providers or commands change or added.
 **IMPORTANT**: Add benchmark tests for any new features or providers in `*_test.go` files using Go's `testing` package.
 **IMPORTANT**: After any change, run `task test:e2e` to ensure everything passes.
+**IMPORTANT**: Never use magic strings or numbers; always define constants or use settings for configuration values.
