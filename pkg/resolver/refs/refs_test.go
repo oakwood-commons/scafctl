@@ -5,6 +5,7 @@ package refs
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -95,7 +96,7 @@ func TestExtractFromCEL(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			refs, err := ExtractFromCEL(tt.expr)
+			refs, err := ExtractFromCEL(context.Background(), tt.expr)
 			require.NoError(t, err)
 			assert.Equal(t, tt.expected, refs)
 		})

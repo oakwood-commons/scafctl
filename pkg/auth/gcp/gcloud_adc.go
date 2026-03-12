@@ -20,6 +20,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/paths"
 )
 
 const (
@@ -77,7 +78,7 @@ func getGcloudADCPath() string {
 		}
 	default:
 		// Linux and macOS
-		if home, err := os.UserHomeDir(); err == nil {
+		if home, err := paths.HomeDir(); err == nil {
 			return filepath.Join(home, ".config", "gcloud", "application_default_credentials.json")
 		}
 	}

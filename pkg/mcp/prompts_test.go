@@ -695,8 +695,8 @@ func TestPromptToolReferencesAreValid(t *testing.T) {
 				kindName := match[1]
 				fieldPath := match[2]
 
-				kindDef, ok := schema.GetKind(kindName)
-				require.True(t, ok, "prompt %q references kind %q which is not registered", pc.name, kindName)
+				kindDef, err := schema.GetKind(kindName)
+				require.NoError(t, err, "prompt %q references kind %q which is not registered", pc.name, kindName)
 
 				fieldInfo, err := schema.IntrospectField(kindDef.TypeInstance, fieldPath)
 				assert.NoError(t, err,

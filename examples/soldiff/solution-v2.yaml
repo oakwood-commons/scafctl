@@ -1,0 +1,77 @@
+# Solution Diff Examples — Version 2
+#
+# This file represents an updated version of the solution with
+# structural changes: a modified resolver, a new resolver, and an
+# updated action. Compare against solution-v1.yaml to see the diff.
+#
+# Usage:
+#   scafctl solution diff examples/soldiff/solution-v1.yaml examples/soldiff/solution-v2.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: soldiff-demo
+  version: 2.0.0
+  description: Updated version with scaling and monitoring changes
+
+spec:
+  resolvers:
+    app_name:
+      description: Application name
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "my-service"
+
+    replicas:
+      description: Number of replicas (scaled up)
+      type: int
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: 5
+
+    environment:
+      description: Target environment
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "production"
+
+    # New resolver added in v2
+    health_check_url:
+      description: Health check endpoint
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "'https://' + _.app_name + '.example.com/healthz'"
+
+  workflow:
+    actions:
+      deploy:
+        description: Deploy the application with health check
+        with:
+          - provider: exec
+            inputs:
+              command: echo
+              args:
+                - "Deploying {{ .app_name }} with {{ .replicas }} replicas to {{ .environment }}"
+
+      # New action added in v2
+      verify:
+        description: Verify deployment health
+        dependsOn:
+          - deploy
+        with:
+          - provider: exec
+            inputs:
+              command: echo
+              args:
+                - "Checking health at {{ .health_check_url }}"

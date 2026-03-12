@@ -32,7 +32,10 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 		Long:  "List the names of all stored secrets. By default, internal scafctl.* secrets are excluded. Use --all to include them.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
-			w := writer.MustFromContext(ctx)
+			w := writer.FromContext(ctx)
+			if w == nil {
+				return fmt.Errorf("writer not initialized in context")
+			}
 
 			store, err := secrets.New()
 			if err != nil {

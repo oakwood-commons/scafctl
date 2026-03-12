@@ -296,21 +296,21 @@ func (c *TemplateCache) hitRate() float64 {
 
 // TemplateCacheStats contains cache performance statistics.
 type TemplateCacheStats struct {
-	Size          int            `json:"size"`
-	MaxSize       int            `json:"max_size"`
-	Hits          uint64         `json:"hits"`
-	Misses        uint64         `json:"misses"`
-	Evictions     uint64         `json:"evictions"`
-	HitRate       float64        `json:"hit_rate"` // Percentage
-	TotalAccesses uint64         `json:"total_accesses"`
-	TopTemplates  []TemplateStat `json:"top_templates,omitempty"`
+	Size          int            `json:"size" yaml:"size" doc:"Current number of cached templates" maximum:"100000" example:"42"`
+	MaxSize       int            `json:"max_size" yaml:"max_size" doc:"Maximum cache capacity" maximum:"100000" example:"1000"`
+	Hits          uint64         `json:"hits" yaml:"hits" doc:"Total cache hits"`
+	Misses        uint64         `json:"misses" yaml:"misses" doc:"Total cache misses"`
+	Evictions     uint64         `json:"evictions" yaml:"evictions" doc:"Total cache evictions"`
+	HitRate       float64        `json:"hit_rate" yaml:"hit_rate" doc:"Cache hit rate percentage"`
+	TotalAccesses uint64         `json:"total_accesses" yaml:"total_accesses" doc:"Total number of cache accesses"`
+	TopTemplates  []TemplateStat `json:"top_templates,omitempty" yaml:"top_templates,omitempty" doc:"Most frequently accessed templates" maxItems:"50"`
 }
 
 // TemplateStat contains statistics for a specific template.
 type TemplateStat struct {
-	TemplateName string    `json:"template_name"`
-	Hits         uint64    `json:"hits"`
-	LastAccess   time.Time `json:"last_access"`
+	TemplateName string    `json:"template_name" yaml:"template_name" doc:"Template name/identifier" maxLength:"512" example:"greeting.tmpl"`
+	Hits         uint64    `json:"hits" yaml:"hits" doc:"Number of cache hits for this template"`
+	LastAccess   time.Time `json:"last_access" yaml:"last_access" doc:"Time of last access"`
 }
 
 // generateTemplateCacheKey creates a unique cache key from template content and options.
@@ -340,16 +340,16 @@ func generateTemplateCacheKey(content, leftDelim, rightDelim string, missingKey 
 
 // Package-level default cache (mirrors the CEL cache pattern)
 var (
-	defaultTemplateCache     *TemplateCache
-	defaultTemplateCacheOnce sync.Once
-	defaultTemplateCacheMu   sync.RWMutex
+	defaultTemplateCache            *TemplateCache
+	defaultTemplateCacheInitialized bool
+	defaultTemplateCacheMu          sync.RWMutex
 
 	// cacheFactory is an optional factory function that provides the default cache.
 	// When set via SetCacheFactory, GetDefaultCache() delegates to this factory
 	// instead of creating its own cache.
-	cacheFactory     func() *TemplateCache
-	cacheFactoryOnce sync.Once
-	cacheFactoryMu   sync.RWMutex
+	cacheFactory            func() *TemplateCache
+	cacheFactoryInitialized bool
+	cacheFactoryMu          sync.RWMutex
 
 	// DefaultTemplateCacheSize is the default size for the package-level cache.
 	DefaultTemplateCacheSize = settings.DefaultGoTemplateCacheSize
@@ -362,11 +362,12 @@ var (
 //
 // This function is thread-safe and uses sync.Once to ensure it's only set once.
 func SetCacheFactory(factory func() *TemplateCache) {
-	cacheFactoryOnce.Do(func() {
-		cacheFactoryMu.Lock()
-		defer cacheFactoryMu.Unlock()
+	cacheFactoryMu.Lock()
+	defer cacheFactoryMu.Unlock()
+	if !cacheFactoryInitialized {
 		cacheFactory = factory
-	})
+		cacheFactoryInitialized = true
+	}
 }
 
 // getCacheFactory returns the current cache factory function.
@@ -393,12 +394,13 @@ func GetDefaultCache() *TemplateCache {
 		return factory()
 	}
 
-	defaultTemplateCacheMu.RLock()
-	defer defaultTemplateCacheMu.RUnlock()
+	defaultTemplateCacheMu.Lock()
+	defer defaultTemplateCacheMu.Unlock()
 
-	defaultTemplateCacheOnce.Do(func() {
+	if !defaultTemplateCacheInitialized {
 		defaultTemplateCache = NewTemplateCache(DefaultTemplateCacheSize)
-	})
+		defaultTemplateCacheInitialized = true
+	}
 	return defaultTemplateCache
 }
 

@@ -29,7 +29,7 @@ type Workflow struct {
 
 	// ResultSchemaMode sets the default validation behavior for resultSchema across all actions.
 	// Individual actions can override this setting. Default is "error".
-	ResultSchemaMode ResultSchemaMode `json:"resultSchemaMode,omitempty" yaml:"resultSchemaMode,omitempty" doc:"Default result schema validation mode" example:"error" default:"error"`
+	ResultSchemaMode ResultSchemaMode `json:"resultSchemaMode,omitempty" yaml:"resultSchemaMode,omitempty" doc:"Default result schema validation mode" maxLength:"16" example:"error" default:"error"`
 }
 
 // Action represents a single action definition.
@@ -38,7 +38,7 @@ type Workflow struct {
 type Action struct {
 	// Name is the action identifier, set from the map key.
 	// Cannot start with "__" (reserved) or contain "[" or "]".
-	Name string `json:"name" yaml:"name" doc:"Action identifier (set from map key)" maxLength:"100" pattern:"^[a-zA-Z_][a-zA-Z0-9_-]*$" patternDescription:"Must start with letter/underscore, followed by alphanumerics, underscores, or hyphens"`
+	Name string `json:"name" yaml:"name" doc:"Action identifier (set from map key)" maxLength:"100" example:"deploy-service" pattern:"^[a-zA-Z_][a-zA-Z0-9_-]*$" patternDescription:"Must start with letter/underscore, followed by alphanumerics, underscores, or hyphens"`
 
 	// Alias provides a short name for use in CEL/template expressions.
 	// When set, the action's result data is available as a top-level variable
@@ -48,10 +48,10 @@ type Action struct {
 	Alias string `json:"alias,omitempty" yaml:"alias,omitempty" doc:"Short alias for expression references" maxLength:"100" pattern:"^[a-zA-Z_][a-zA-Z0-9_-]*$" patternDescription:"Must start with letter/underscore, followed by alphanumerics, underscores, or hyphens"`
 
 	// Description provides documentation for the action.
-	Description string `json:"description,omitempty" yaml:"description,omitempty" doc:"Human-readable description of what the action does" maxLength:"500"`
+	Description string `json:"description,omitempty" yaml:"description,omitempty" doc:"Human-readable description of what the action does" maxLength:"500" example:"Deploys the service to the cluster"`
 
 	// DisplayName is a human-friendly name for UI display.
-	DisplayName string `json:"displayName,omitempty" yaml:"displayName,omitempty" doc:"Human-friendly display name" maxLength:"100"`
+	DisplayName string `json:"displayName,omitempty" yaml:"displayName,omitempty" doc:"Human-friendly display name" maxLength:"100" example:"Deploy Service"`
 
 	// Sensitive indicates the action handles sensitive data (masks in logs).
 	Sensitive bool `json:"sensitive,omitempty" yaml:"sensitive,omitempty" doc:"If true, inputs and outputs are masked in logs"`
@@ -84,7 +84,7 @@ type Action struct {
 
 	// OnError defines behavior when this action fails.
 	// Default is "fail" which stops workflow execution.
-	OnError spec.OnErrorBehavior `json:"onError,omitempty" yaml:"onError,omitempty" doc:"Error handling behavior" example:"fail" default:"fail"`
+	OnError spec.OnErrorBehavior `json:"onError,omitempty" yaml:"onError,omitempty" doc:"Error handling behavior" maxLength:"16" example:"fail" default:"fail"`
 
 	// Timeout limits how long the action can run.
 	// If exceeded, the action fails with StatusTimeout.
@@ -106,7 +106,7 @@ type Action struct {
 
 	// ResultSchemaMode controls behavior when result schema validation fails.
 	// Overrides the workflow-level default. Options: "error" (fail action), "warn" (log and continue), "ignore" (skip validation).
-	ResultSchemaMode ResultSchemaMode `json:"resultSchemaMode,omitempty" yaml:"resultSchemaMode,omitempty" doc:"Result schema validation mode" example:"error"`
+	ResultSchemaMode ResultSchemaMode `json:"resultSchemaMode,omitempty" yaml:"resultSchemaMode,omitempty" doc:"Result schema validation mode" maxLength:"16" example:"error"`
 }
 
 // ResultSchemaMode defines the validation behavior when result schema validation fails.
@@ -145,11 +145,11 @@ func (m ResultSchemaMode) OrDefault() ResultSchemaMode {
 type RetryConfig struct {
 	// MaxAttempts is the total number of execution attempts (including initial).
 	// Must be >= 1.
-	MaxAttempts int `json:"maxAttempts" yaml:"maxAttempts" doc:"Total execution attempts (min: 1)" minimum:"1" example:"3"`
+	MaxAttempts int `json:"maxAttempts" yaml:"maxAttempts" doc:"Total execution attempts (min: 1)" minimum:"1" maximum:"100" example:"3"`
 
 	// Backoff defines the delay strategy between retries.
 	// Default is "fixed".
-	Backoff BackoffType `json:"backoff,omitempty" yaml:"backoff,omitempty" doc:"Backoff strategy" example:"exponential" default:"fixed"`
+	Backoff BackoffType `json:"backoff,omitempty" yaml:"backoff,omitempty" doc:"Backoff strategy" maxLength:"16" example:"exponential" default:"fixed"`
 
 	// InitialDelay is the delay before the first retry.
 	// For exponential backoff, subsequent delays are multiplied by 2.
@@ -274,10 +274,10 @@ type ActionResult struct {
 	Results any `json:"results,omitempty" yaml:"results,omitempty" doc:"Provider output data"`
 
 	// Status is the final execution status.
-	Status ActionStatus `json:"status" yaml:"status" doc:"Execution status"`
+	Status ActionStatus `json:"status" yaml:"status" doc:"Execution status" maxLength:"16" example:"success"`
 
 	// SkipReason explains why the action was skipped (if Status is StatusSkipped).
-	SkipReason SkipReason `json:"skipReason,omitempty" yaml:"skipReason,omitempty" doc:"Reason for skipping (if skipped)"`
+	SkipReason SkipReason `json:"skipReason,omitempty" yaml:"skipReason,omitempty" doc:"Reason for skipping (if skipped)" maxLength:"32" example:"condition"`
 
 	// StartTime is when execution began.
 	StartTime *time.Time `json:"startTime,omitempty" yaml:"startTime,omitempty" doc:"Execution start time"`
@@ -286,7 +286,7 @@ type ActionResult struct {
 	EndTime *time.Time `json:"endTime,omitempty" yaml:"endTime,omitempty" doc:"Execution end time"`
 
 	// Error contains the error message if Status is StatusFailed or StatusTimeout.
-	Error string `json:"error,omitempty" yaml:"error,omitempty" doc:"Error message (if failed)"`
+	Error string `json:"error,omitempty" yaml:"error,omitempty" doc:"Error message (if failed)" maxLength:"4096" example:"command exited with code 1"`
 
 	// Streamed indicates the provider already wrote its output to the terminal.
 	// When true, the CLI output layer should not re-print the action's results.
@@ -305,16 +305,16 @@ func (r *ActionResult) Duration() time.Duration {
 // When an action uses forEach, results are collected into an array of these.
 type ForEachIterationResult struct {
 	// Index is the 0-based iteration index.
-	Index int `json:"index" yaml:"index" doc:"Iteration index (0-based)"`
+	Index int `json:"index" yaml:"index" doc:"Iteration index (0-based)" maximum:"10000" example:"0"`
 
 	// Name is the expanded action name (e.g., "deploy[0]", "deploy[1]").
-	Name string `json:"name" yaml:"name" doc:"Expanded action name" maxLength:"150"`
+	Name string `json:"name" yaml:"name" doc:"Expanded action name" maxLength:"150" example:"deploy[0]"`
 
 	// Results contains the output data from this iteration.
 	Results any `json:"results,omitempty" yaml:"results,omitempty" doc:"Iteration output data"`
 
 	// Status is the execution status of this iteration.
-	Status ActionStatus `json:"status" yaml:"status" doc:"Iteration execution status"`
+	Status ActionStatus `json:"status" yaml:"status" doc:"Iteration execution status" maxLength:"16" example:"success"`
 
 	// StartTime is when this iteration began.
 	StartTime *time.Time `json:"startTime,omitempty" yaml:"startTime,omitempty" doc:"Iteration start time"`
@@ -323,7 +323,7 @@ type ForEachIterationResult struct {
 	EndTime *time.Time `json:"endTime,omitempty" yaml:"endTime,omitempty" doc:"Iteration end time"`
 
 	// Error contains the error message if this iteration failed.
-	Error string `json:"error,omitempty" yaml:"error,omitempty" doc:"Error message (if failed)"`
+	Error string `json:"error,omitempty" yaml:"error,omitempty" doc:"Error message (if failed)" maxLength:"4096" example:"timeout exceeded"`
 }
 
 // Duration returns the iteration execution duration, or zero if not available.

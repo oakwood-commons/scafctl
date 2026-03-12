@@ -96,6 +96,5 @@ func BenchmarkGlobalCache_ConcurrentAccess(b *testing.B) {
 // resetGlobalState resets the global state for testing.
 // WARNING: This is only safe in tests and should never be used in production code.
 func resetGlobalState() {
-	globalCache = nil
-	globalCacheOnce = sync.Once{}
+	resetGlobalCacheForTesting()
 }

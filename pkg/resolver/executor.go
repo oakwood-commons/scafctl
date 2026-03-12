@@ -23,6 +23,13 @@ import (
 )
 
 // RegistryInterface defines the interface for provider registries
+
+// Log key constants for structured logging.
+const (
+	logKeyProvider = "provider"
+	logKeyStep     = "step"
+)
+
 type RegistryInterface interface {
 	Register(p provider.Provider) error
 	Get(name string) (provider.Provider, error)
@@ -155,17 +162,17 @@ func NewExecutor(registry RegistryInterface, opts ...ExecutorOption) *Executor {
 // This mirrors config.ResolverConfig but avoids circular dependencies.
 type ConfigInput struct {
 	// Timeout is the default timeout per resolver execution
-	Timeout time.Duration
+	Timeout time.Duration `json:"timeout" yaml:"timeout" doc:"Default timeout per resolver execution"`
 	// PhaseTimeout is the maximum time for each resolution phase
-	PhaseTimeout time.Duration
+	PhaseTimeout time.Duration `json:"phaseTimeout" yaml:"phaseTimeout" doc:"Maximum time for each resolution phase"`
 	// MaxConcurrency is the maximum concurrent resolvers per phase (0 = unlimited)
-	MaxConcurrency int
+	MaxConcurrency int `json:"maxConcurrency" yaml:"maxConcurrency" doc:"Maximum concurrent resolvers per phase (0 = unlimited)" maximum:"1000" example:"10"`
 	// WarnValueSize is the warn threshold in bytes (0 = disabled)
-	WarnValueSize int64
+	WarnValueSize int64 `json:"warnValueSize" yaml:"warnValueSize" doc:"Warn threshold in bytes (0 = disabled)" example:"1048576"`
 	// MaxValueSize is the max value size in bytes (0 = disabled)
-	MaxValueSize int64
+	MaxValueSize int64 `json:"maxValueSize" yaml:"maxValueSize" doc:"Max value size in bytes (0 = disabled)" example:"10485760"`
 	// ValidateAll enables collecting all errors instead of stopping at first
-	ValidateAll bool
+	ValidateAll bool `json:"validateAll" yaml:"validateAll" doc:"Collect all validation errors instead of stopping at first"`
 }
 
 // NewExecutorFromAppConfig creates a new resolver executor using app configuration.
@@ -797,7 +804,7 @@ func (e *Executor) executeResolvePhase(ctx context.Context, phase *ResolvePhase)
 			if err != nil {
 				lgr.V(1).Info("failed to evaluate source when condition",
 					"source", i+1,
-					"provider", source.Provider,
+					logKeyProvider, source.Provider,
 					"error", err)
 				if source.OnError == ErrorBehaviorFail {
 					return nil, providerCallCount, fmt.Errorf("source %d: when condition evaluation failed: %w", i+1, err)
@@ -809,7 +816,7 @@ func (e *Executor) executeResolvePhase(ctx context.Context, phase *ResolvePhase)
 			if !shouldExecute {
 				lgr.V(1).Info("skipping source due to when condition",
 					"source", i+1,
-					"provider", source.Provider)
+					logKeyProvider, source.Provider)
 				continue
 			}
 		}
@@ -822,7 +829,7 @@ func (e *Executor) executeResolvePhase(ctx context.Context, phase *ResolvePhase)
 		if err != nil {
 			lgr.V(1).Info("provider failed",
 				"source", i+1,
-				"provider", source.Provider,
+				logKeyProvider, source.Provider,
 				"error", err,
 				"onError", source.OnError,
 				"duration", attemptDuration)
@@ -900,8 +907,8 @@ func (e *Executor) executeTransformPhase(ctx context.Context, phase *TransformPh
 			if err != nil {
 				if transform.OnError == ErrorBehaviorContinue {
 					lgr.V(1).Info("forEach transform failed, continuing",
-						"step", i+1,
-						"provider", transform.Provider,
+						logKeyStep, i+1,
+						logKeyProvider, transform.Provider,
 						"error", err)
 					continue
 				}
@@ -916,8 +923,8 @@ func (e *Executor) executeTransformPhase(ctx context.Context, phase *TransformPh
 			shouldExecute, err := e.evaluateConditionWithSelf(ctx, transform.When, currentValue)
 			if err != nil {
 				lgr.V(1).Info("failed to evaluate transform when condition",
-					"step", i+1,
-					"provider", transform.Provider,
+					logKeyStep, i+1,
+					logKeyProvider, transform.Provider,
 					"error", err)
 				if transform.OnError == ErrorBehaviorContinue {
 					continue
@@ -926,8 +933,8 @@ func (e *Executor) executeTransformPhase(ctx context.Context, phase *TransformPh
 			}
 			if !shouldExecute {
 				lgr.V(1).Info("skipping transform step due to when condition",
-					"step", i+1,
-					"provider", transform.Provider)
+					logKeyStep, i+1,
+					logKeyProvider, transform.Provider)
 				continue
 			}
 		}
@@ -939,8 +946,8 @@ func (e *Executor) executeTransformPhase(ctx context.Context, phase *TransformPh
 
 		if err != nil {
 			lgr.V(1).Info("transform provider failed",
-				"step", i+1,
-				"provider", transform.Provider,
+				logKeyStep, i+1,
+				logKeyProvider, transform.Provider,
 				"error", err,
 				"onError", transform.OnError,
 				"duration", attemptDuration)
@@ -1002,14 +1009,14 @@ func (e *Executor) executeForEachTransform(ctx context.Context, transform *Provi
 	// Handle empty array - return empty array
 	if len(inputArray) == 0 {
 		lgr.V(1).Info("forEach: empty input array, returning []",
-			"step", stepIndex+1,
-			"provider", transform.Provider)
+			logKeyStep, stepIndex+1,
+			logKeyProvider, transform.Provider)
 		return []any{}, 0, nil
 	}
 
 	lgr.V(1).Info("executing forEach transform",
-		"step", stepIndex+1,
-		"provider", transform.Provider,
+		logKeyStep, stepIndex+1,
+		logKeyProvider, transform.Provider,
 		"itemCount", len(inputArray),
 		"concurrency", transform.ForEach.Concurrency)
 
@@ -1054,7 +1061,7 @@ func (e *Executor) executeForEachTransform(ctx context.Context, transform *Provi
 				}
 				if !shouldExecute {
 					lgr.V(2).Info("skipping forEach iteration due to when condition",
-						"step", stepIndex+1,
+						logKeyStep, stepIndex+1,
 						"index", i)
 					// Mark as skipped with nil result
 					results[i] = nil
@@ -1071,7 +1078,7 @@ func (e *Executor) executeForEachTransform(ctx context.Context, transform *Provi
 			if err != nil {
 				errors[i] = err
 				lgr.V(1).Info("forEach iteration failed",
-					"step", stepIndex+1,
+					logKeyStep, stepIndex+1,
 					"index", i,
 					"error", err)
 			} else {
@@ -1324,7 +1331,7 @@ func (e *Executor) executeValidatePhase(ctx context.Context, resolverName string
 
 			lgr.V(1).Info("validation rule failed",
 				"rule", i+1,
-				"provider", validation.Provider,
+				logKeyProvider, validation.Provider,
 				"message", redactForLog(message, sensitive))
 		}
 	}

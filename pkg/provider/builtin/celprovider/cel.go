@@ -194,7 +194,7 @@ func extractDependencies(inputs map[string]any) []string {
 
 	// Use celexp to extract underscore variables
 	expr := celexp.Expression(exprStr)
-	vars, err := expr.GetUnderscoreVariables()
+	vars, err := expr.GetUnderscoreVariables(context.TODO())
 	if err != nil {
 		// On parse error, fall back to no dependencies - the error will be caught during execution
 		return nil

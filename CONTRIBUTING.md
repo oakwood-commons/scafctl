@@ -41,7 +41,7 @@ We appreciate your patience and contributions!
 
 ### Prerequisites
 
-- Go 1.25.4+
+- Go 1.26.0+
 - golangci-lint
 - Git
 

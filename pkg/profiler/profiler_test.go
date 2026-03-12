@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 
 	"github.com/google/pprof/profile"
@@ -15,9 +14,13 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// resetProfilerSingleton resets the profiler singleton state for testing.
+// This is safe because it uses the same mutex as GetProfiler/StopProfiler.
 func resetProfilerSingleton() {
-	profilerOnce = sync.Once{} // Reset the sync.Once instance
-	instance = nil             // Reset the singleton instance
+	profilerMu.Lock()
+	defer profilerMu.Unlock()
+	instance = nil
+	profilerStarted = false
 }
 
 func TestGetProfiler(t *testing.T) {

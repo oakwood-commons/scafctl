@@ -55,7 +55,7 @@ Examples:
 		SilenceUsage: true,
 		RunE: func(cCmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
-			ctx := settings.IntoContext(context.Background(), cliParams)
+			ctx := settings.IntoContext(cCmd.Context(), cliParams)
 
 			opts.IOStreams = ioStreams
 			opts.CliParams = cliParams
@@ -119,10 +119,10 @@ func runInit(ctx context.Context, opts *InitOptions) error {
 	}
 
 	// Write YAML header comment
-	fmt.Fprintf(opts.IOStreams.Out, "# Generated test scaffold for %s\n", filePath)
-	fmt.Fprintf(opts.IOStreams.Out, "# Paste this into your solution's spec section or a compose test file.\n")
-	fmt.Fprintf(opts.IOStreams.Out, "# Customize assertions and parameters to match your expected behavior.\n\n")
-	fmt.Fprint(opts.IOStreams.Out, string(out))
+	w.Plainlnf("# Generated test scaffold for %s", filePath)
+	w.Plainln("# Paste this into your solution's spec section or a compose test file.")
+	w.Plainlnf("# Customize assertions and parameters to match your expected behavior.\n")
+	w.Plain(string(out))
 
 	return nil
 }

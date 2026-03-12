@@ -343,22 +343,6 @@ func TestFromContext_NoWriter(t *testing.T) {
 	assert.Nil(t, retrieved)
 }
 
-func TestMustFromContext(t *testing.T) {
-	w, _, _ := newTestWriter()
-	ctx := WithWriter(context.Background(), w)
-
-	retrieved := MustFromContext(ctx)
-	assert.Equal(t, w, retrieved)
-}
-
-func TestMustFromContext_Panics(t *testing.T) {
-	ctx := context.Background()
-
-	assert.Panics(t, func() {
-		MustFromContext(ctx)
-	})
-}
-
 // Integration-style tests
 
 func TestMultipleMessages(t *testing.T) {

@@ -11,6 +11,8 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/httpc"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 )
@@ -48,13 +50,14 @@ const authHTTPLogLevel = 5
 
 // Handler implements auth.Handler for Microsoft Entra ID.
 type Handler struct {
-	config      *Config
-	secretStore secrets.Store
-	secretErr   error // deferred error from secrets initialization
-	httpClient  HTTPClient
-	graphClient GraphClient
-	tokenCache  *auth.TokenCache
-	logger      logr.Logger
+	config           *Config
+	secretStore      secrets.Store
+	secretErr        error // deferred error from secrets initialization
+	httpClient       HTTPClient
+	httpClientConfig *config.HTTPClientConfig
+	graphClient      GraphClient
+	tokenCache       *auth.TokenCache
+	logger           logr.Logger
 }
 
 // Option configures the Handler.
@@ -98,6 +101,14 @@ func WithSecretStore(store secrets.Store) Option {
 func WithHTTPClient(client HTTPClient) Option {
 	return func(h *Handler) {
 		h.httpClient = client
+	}
+}
+
+// WithHTTPClientConfig configures the handler's HTTP client from application config.
+// The config is merged: global HTTPClientConfig → auth-level HTTPClient → handler-level HTTPClient.
+func WithHTTPClientConfig(cfg *config.HTTPClientConfig) Option {
+	return func(h *Handler) {
+		h.httpClientConfig = cfg
 	}
 }
 
@@ -149,12 +160,24 @@ func New(opts ...Option) (*Handler, error) {
 
 	// Initialize HTTP client if not provided
 	if h.httpClient == nil {
-		h.httpClient = NewDefaultHTTPClient(httpLogger)
+		if h.httpClientConfig != nil {
+			h.httpClient = &DefaultHTTPClient{
+				client: httpc.NewClientFromAppConfig(h.httpClientConfig, httpLogger),
+			}
+		} else {
+			h.httpClient = NewDefaultHTTPClient(httpLogger)
+		}
 	}
 
 	// Initialize Graph client if not provided
 	if h.graphClient == nil {
-		h.graphClient = NewDefaultGraphClient(httpLogger)
+		if h.httpClientConfig != nil {
+			h.graphClient = &DefaultGraphClient{
+				client: httpc.NewClientFromAppConfig(h.httpClientConfig, httpLogger),
+			}
+		} else {
+			h.graphClient = NewDefaultGraphClient(httpLogger)
+		}
 	}
 
 	// Initialize token cache with secret store (nil-safe: checked before use)

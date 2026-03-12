@@ -23,6 +23,16 @@ import (
 // ProviderName is the name of this provider used for error wrapping and identification.
 const ProviderName = "debug"
 
+// Field name constants for input/output map keys.
+const (
+	fieldExpression  = "expression"
+	fieldLabel       = "label"
+	fieldFormat      = "format"
+	fieldDestination = "destination"
+	fieldFile        = "file"
+	fieldColorize    = "colorize"
+)
+
 // DebugProvider provides debugging capabilities for inspecting data during workflow execution.
 type DebugProvider struct {
 	descriptor *provider.Descriptor
@@ -47,59 +57,59 @@ func NewDebugProvider() *DebugProvider {
 				provider.CapabilityAction,
 			},
 			Schema: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
-				"expression": schemahelper.StringProp("Optional CEL expression to filter or transform resolver data before output. If not provided, outputs all resolver data. Resolver data is available under the '_' variable (e.g., _.user.name).",
+				fieldExpression: schemahelper.StringProp("Optional CEL expression to filter or transform resolver data before output. If not provided, outputs all resolver data. Resolver data is available under the '_' variable (e.g., _.user.name).",
 					schemahelper.WithExample("_.user.name"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(8192))),
-				"label": schemahelper.StringProp("Optional label or message to add context to the debug output",
+				fieldLabel: schemahelper.StringProp("Optional label or message to add context to the debug output",
 					schemahelper.WithExample("User data after transformation"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(500))),
-				"format": schemahelper.StringProp("Output format for the debug data",
+				fieldFormat: schemahelper.StringProp("Output format for the debug data",
 					schemahelper.WithExample("json"),
 					schemahelper.WithEnum("json", "yaml", "pretty"),
 					schemahelper.WithDefault("json"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(10))),
-				"destination": schemahelper.StringProp("Where to output the debug data",
+				fieldDestination: schemahelper.StringProp("Where to output the debug data",
 					schemahelper.WithExample("stdout"),
 					schemahelper.WithEnum("stdout", "stderr", "file"),
 					schemahelper.WithDefault("stdout"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(10))),
-				"file": schemahelper.StringProp("File path when destination is 'file'",
+				fieldFile: schemahelper.StringProp("File path when destination is 'file'",
 					schemahelper.WithExample("/tmp/debug.log"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(500))),
-				"colorize": schemahelper.BoolProp("Whether to colorize the output (only applies to terminal output)",
+				fieldColorize: schemahelper.BoolProp("Whether to colorize the output (only applies to terminal output)",
 					schemahelper.WithExample("false"),
 					schemahelper.WithDefault(false)),
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
-					"result":      schemahelper.AnyProp("The filtered or transformed resolver data (if expression provided) or all resolver data (if no expression)"),
-					"output":      schemahelper.StringProp("The formatted debug output containing the formatted representation of the result"),
-					"destination": schemahelper.StringProp("Where the output was written (stdout, stderr, or file path)"),
+					"result":         schemahelper.AnyProp("The filtered or transformed resolver data (if expression provided) or all resolver data (if no expression)"),
+					"output":         schemahelper.StringProp("The formatted debug output containing the formatted representation of the result"),
+					fieldDestination: schemahelper.StringProp("Where the output was written (stdout, stderr, or file path)"),
 				}),
 				provider.CapabilityTransform: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
-					"result":      schemahelper.AnyProp("The filtered or transformed resolver data (if expression provided) or all resolver data (if no expression)"),
-					"output":      schemahelper.StringProp("The formatted debug output containing the formatted representation of the result"),
-					"destination": schemahelper.StringProp("Where the output was written (stdout, stderr, or file path)"),
+					"result":         schemahelper.AnyProp("The filtered or transformed resolver data (if expression provided) or all resolver data (if no expression)"),
+					"output":         schemahelper.StringProp("The formatted debug output containing the formatted representation of the result"),
+					fieldDestination: schemahelper.StringProp("Where the output was written (stdout, stderr, or file path)"),
 				}),
 				provider.CapabilityValidation: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
-					"valid":       schemahelper.BoolProp("Whether the debug operation succeeded (always true if no errors occurred)"),
-					"errors":      schemahelper.ArrayProp("Validation errors (empty if valid)"),
-					"result":      schemahelper.AnyProp("The filtered or transformed resolver data"),
-					"output":      schemahelper.StringProp("The formatted debug output"),
-					"destination": schemahelper.StringProp("Where the output was written"),
+					"valid":          schemahelper.BoolProp("Whether the debug operation succeeded (always true if no errors occurred)"),
+					"errors":         schemahelper.ArrayProp("Validation errors (empty if valid)"),
+					"result":         schemahelper.AnyProp("The filtered or transformed resolver data"),
+					"output":         schemahelper.StringProp("The formatted debug output"),
+					fieldDestination: schemahelper.StringProp("Where the output was written"),
 				}),
 				provider.CapabilityAuthentication: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
-					"authenticated": schemahelper.BoolProp("Whether authentication succeeded (always true for debug)"),
-					"token":         schemahelper.StringProp("The authentication token (empty for debug provider)"),
-					"result":        schemahelper.AnyProp("The filtered or transformed resolver data"),
-					"output":        schemahelper.StringProp("The formatted debug output"),
-					"destination":   schemahelper.StringProp("Where the output was written"),
+					"authenticated":  schemahelper.BoolProp("Whether authentication succeeded (always true for debug)"),
+					"token":          schemahelper.StringProp("The authentication token (empty for debug provider)"),
+					"result":         schemahelper.AnyProp("The filtered or transformed resolver data"),
+					"output":         schemahelper.StringProp("The formatted debug output"),
+					fieldDestination: schemahelper.StringProp("Where the output was written"),
 				}),
 				provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
-					"success":     schemahelper.BoolProp("Whether the debug operation succeeded. Always true if no errors occurred"),
-					"result":      schemahelper.AnyProp("The filtered or transformed resolver data (if expression provided) or all resolver data (if no expression)"),
-					"output":      schemahelper.StringProp("The formatted debug output containing the formatted representation of the result"),
-					"destination": schemahelper.StringProp("Where the output was written (stdout, stderr, or file path)"),
+					"success":        schemahelper.BoolProp("Whether the debug operation succeeded. Always true if no errors occurred"),
+					"result":         schemahelper.AnyProp("The filtered or transformed resolver data (if expression provided) or all resolver data (if no expression)"),
+					"output":         schemahelper.StringProp("The formatted debug output containing the formatted representation of the result"),
+					fieldDestination: schemahelper.StringProp("Where the output was written (stdout, stderr, or file path)"),
 				}),
 			},
 			Examples: []provider.Example{
@@ -160,7 +170,7 @@ func (p *DebugProvider) Execute(ctx context.Context, input any) (*provider.Outpu
 
 	// Determine what data to output
 	var data any
-	exprStr, hasExpr := inputs["expression"].(string)
+	exprStr, hasExpr := inputs[fieldExpression].(string)
 
 	if hasExpr && exprStr != "" {
 		// Evaluate CEL expression to filter/transform data
@@ -176,17 +186,17 @@ func (p *DebugProvider) Execute(ctx context.Context, input any) (*provider.Outpu
 	}
 
 	// Get optional fields
-	label, _ := inputs["label"].(string)
-	format, _ := inputs["format"].(string)
+	label, _ := inputs[fieldLabel].(string)
+	format, _ := inputs[fieldFormat].(string)
 	if format == "" {
 		format = "json"
 	}
-	destination, _ := inputs["destination"].(string)
+	destination, _ := inputs[fieldDestination].(string)
 	if destination == "" {
 		destination = "stdout"
 	}
-	filePath, _ := inputs["file"].(string)
-	colorize, _ := inputs["colorize"].(bool)
+	filePath, _ := inputs[fieldFile].(string)
+	colorize, _ := inputs[fieldColorize].(bool)
 
 	// Validate file path if destination is file
 	if destination == "file" && filePath == "" {
@@ -215,15 +225,15 @@ func (p *DebugProvider) Execute(ctx context.Context, input any) (*provider.Outpu
 		destStr = filePath
 	}
 
-	lgr.V(1).Info("Debug operation completed", "format", format, "destination", destStr, "hasExpression", hasExpr)
+	lgr.V(1).Info("Debug operation completed", fieldFormat, format, fieldDestination, destStr, "hasExpression", hasExpr)
 
 	// Return result
 	return &provider.Output{
 		Data: map[string]any{
-			"success":     true,
-			"result":      data,
-			"output":      output,
-			"destination": destStr,
+			"success":        true,
+			"result":         data,
+			"output":         output,
+			fieldDestination: destStr,
 		},
 	}, nil
 }
@@ -324,16 +334,16 @@ func (p *DebugProvider) writeOutput(ctx context.Context, output, destination, fi
 
 // executeDryRun handles dry-run mode.
 func (p *DebugProvider) executeDryRun(inputs map[string]any) (*provider.Output, error) {
-	exprStr, _ := inputs["expression"].(string)
-	format, _ := inputs["format"].(string)
+	exprStr, _ := inputs[fieldExpression].(string)
+	format, _ := inputs[fieldFormat].(string)
 	if format == "" {
 		format = "json"
 	}
-	destination, _ := inputs["destination"].(string)
+	destination, _ := inputs[fieldDestination].(string)
 	if destination == "" {
 		destination = "stdout"
 	}
-	label, _ := inputs["label"].(string)
+	label, _ := inputs[fieldLabel].(string)
 
 	message := fmt.Sprintf("Would execute debug with format=%s, destination=%s", format, destination)
 	if exprStr != "" {
@@ -345,12 +355,12 @@ func (p *DebugProvider) executeDryRun(inputs map[string]any) (*provider.Output, 
 
 	return &provider.Output{
 		Data: map[string]any{
-			"success":     true,
-			"result":      "[DRY-RUN] Data not evaluated",
-			"output":      "",
-			"destination": destination,
-			"_dryRun":     true,
-			"_message":    message,
+			"success":        true,
+			"result":         "[DRY-RUN] Data not evaluated",
+			"output":         "",
+			fieldDestination: destination,
+			"_dryRun":        true,
+			"_message":       message,
 		},
 	}, nil
 }

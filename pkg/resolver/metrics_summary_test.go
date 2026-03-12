@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/terminal/format"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -308,9 +309,9 @@ func TestFormatMetricsSummary(t *testing.T) {
 			contains: []string{
 				"Largest Values:",
 				"1. large1",
-				"2.00 MB",
+				"2.0 MB",
 				"2. large2",
-				"10.00 KB",
+				"10.0 KB",
 			},
 		},
 		{
@@ -385,7 +386,7 @@ func TestFormatDuration(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.duration.String(), func(t *testing.T) {
-			got := formatDuration(tt.duration)
+			got := format.Duration(tt.duration)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -399,17 +400,17 @@ func TestFormatBytes(t *testing.T) {
 		{0, "0 B"},
 		{100, "100 B"},
 		{1023, "1023 B"},
-		{1024, "1.00 KB"},
-		{10240, "10.00 KB"},
-		{1048576, "1.00 MB"},
-		{2097152, "2.00 MB"},
-		{1073741824, "1.00 GB"},
-		{2147483648, "2.00 GB"},
+		{1024, "1.0 KB"},
+		{10240, "10.0 KB"},
+		{1048576, "1.0 MB"},
+		{2097152, "2.0 MB"},
+		{1073741824, "1.0 GB"},
+		{2147483648, "2.0 GB"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
-			got := formatBytes(tt.bytes)
+			got := format.Bytes(tt.bytes)
 			assert.Equal(t, tt.want, got)
 		})
 	}

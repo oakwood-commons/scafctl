@@ -25,17 +25,17 @@ const (
 // This is a provider-package type to avoid circular imports with pkg/solution.
 type SolutionMeta struct {
 	// Name is the unique identifier for the solution.
-	Name string `json:"name" yaml:"name" doc:"The unique name of the solution"`
+	Name string `json:"name" yaml:"name" doc:"The unique name of the solution" maxLength:"256" example:"my-solution"`
 	// Version is the semantic version string of the solution.
-	Version string `json:"version" yaml:"version" doc:"The version of the solution"`
+	Version string `json:"version" yaml:"version" doc:"The version of the solution" maxLength:"64" example:"1.0.0"`
 	// DisplayName is the human-readable name of the solution.
-	DisplayName string `json:"displayName,omitempty" yaml:"displayName,omitempty" doc:"The display name of the solution"`
+	DisplayName string `json:"displayName,omitempty" yaml:"displayName,omitempty" doc:"The display name of the solution" maxLength:"256" example:"My Solution"`
 	// Description provides details about the solution's purpose.
-	Description string `json:"description,omitempty" yaml:"description,omitempty" doc:"The description of the solution"`
+	Description string `json:"description,omitempty" yaml:"description,omitempty" doc:"The description of the solution" maxLength:"2048" example:"Deploys and configures services"`
 	// Category classifies the solution.
-	Category string `json:"category,omitempty" yaml:"category,omitempty" doc:"The category of the solution"`
+	Category string `json:"category,omitempty" yaml:"category,omitempty" doc:"The category of the solution" maxLength:"128" example:"infrastructure"`
 	// Tags are searchable keywords associated with the solution.
-	Tags []string `json:"tags,omitempty" yaml:"tags,omitempty" doc:"A list of tags for the solution"`
+	Tags []string `json:"tags,omitempty" yaml:"tags,omitempty" doc:"A list of tags for the solution" maxItems:"50"`
 }
 
 // WithSolutionMetadata returns a new context with the solution metadata attached.
@@ -55,9 +55,9 @@ func SolutionMetadataFromContext(ctx context.Context) (*SolutionMeta, bool) {
 // while still capturing data for inter-action dependencies.
 type IOStreams struct {
 	// Out is the writer for standard output (typically os.Stdout).
-	Out io.Writer
+	Out io.Writer `json:"-" yaml:"-" doc:"Writer for standard output"`
 	// ErrOut is the writer for standard error output (typically os.Stderr).
-	ErrOut io.Writer
+	ErrOut io.Writer `json:"-" yaml:"-" doc:"Writer for standard error output"`
 }
 
 // WithIOStreams returns a new context with IO streams for provider terminal output.
@@ -129,11 +129,11 @@ type IterationContext struct {
 	// Item is the current element being iterated over.
 	Item any `json:"item" yaml:"item" doc:"Current element in the iteration."`
 	// Index is the current index in the iteration.
-	Index int `json:"index" yaml:"index" doc:"Current zero-based index in the iteration."`
+	Index int `json:"index" yaml:"index" doc:"Current zero-based index in the iteration." maximum:"10000" example:"0"`
 	// ItemAlias is the custom variable name for the current item (empty if using default __item).
-	ItemAlias string `json:"itemAlias,omitempty" yaml:"itemAlias,omitempty" doc:"Custom variable name for current item."`
+	ItemAlias string `json:"itemAlias,omitempty" yaml:"itemAlias,omitempty" doc:"Custom variable name for current item." maxLength:"128" example:"server"`
 	// IndexAlias is the custom variable name for the current index (empty if using default __index).
-	IndexAlias string `json:"indexAlias,omitempty" yaml:"indexAlias,omitempty" doc:"Custom variable name for current index."`
+	IndexAlias string `json:"indexAlias,omitempty" yaml:"indexAlias,omitempty" doc:"Custom variable name for current index." maxLength:"128" example:"i"`
 }
 
 // WithIterationContext returns a new context with the iteration context.

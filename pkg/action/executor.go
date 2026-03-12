@@ -127,11 +127,11 @@ func NewExecutor(opts ...ExecutorOption) *Executor {
 // This mirrors config.ActionConfig but avoids circular dependencies.
 type ConfigInput struct {
 	// DefaultTimeout is the default timeout per action execution
-	DefaultTimeout time.Duration
+	DefaultTimeout time.Duration `json:"defaultTimeout" yaml:"defaultTimeout" doc:"Default timeout per action execution"`
 	// GracePeriod is the cancellation grace period
-	GracePeriod time.Duration
+	GracePeriod time.Duration `json:"gracePeriod" yaml:"gracePeriod" doc:"Cancellation grace period"`
 	// MaxConcurrency is the max concurrent actions (0 = unlimited)
-	MaxConcurrency int
+	MaxConcurrency int `json:"maxConcurrency" yaml:"maxConcurrency" doc:"Maximum concurrent actions (0 = unlimited)" maximum:"1000" example:"5"`
 }
 
 // OptionsFromAppConfig creates executor options from app configuration.
@@ -163,42 +163,13 @@ func OptionsFromAppConfig(cfg ConfigInput) []ExecutorOption {
 }
 
 // ProgressCallback receives execution events for progress reporting.
+// It composes ActionObserver, PhaseObserver, and RetryObserver for full
+// lifecycle coverage. New code should prefer accepting the narrower
+// observer interface(s) it actually needs.
 type ProgressCallback interface {
-	// OnActionStart is called when an action begins execution.
-	OnActionStart(actionName string)
-
-	// OnActionComplete is called when an action completes successfully.
-	OnActionComplete(actionName string, results any)
-
-	// OnActionFailed is called when an action fails.
-	OnActionFailed(actionName string, err error)
-
-	// OnActionSkipped is called when an action is skipped.
-	OnActionSkipped(actionName, reason string)
-
-	// OnActionTimeout is called when an action times out.
-	OnActionTimeout(actionName string, timeout time.Duration)
-
-	// OnActionCancelled is called when an action is cancelled.
-	OnActionCancelled(actionName string)
-
-	// OnRetryAttempt is called before each retry attempt.
-	OnRetryAttempt(actionName string, attempt, maxAttempts int, err error)
-
-	// OnForEachProgress is called during forEach execution.
-	OnForEachProgress(actionName string, completed, total int)
-
-	// OnPhaseStart is called when a new execution phase begins.
-	OnPhaseStart(phase int, actionNames []string)
-
-	// OnPhaseComplete is called when an execution phase completes.
-	OnPhaseComplete(phase int)
-
-	// OnFinallyStart is called when the finally section begins.
-	OnFinallyStart()
-
-	// OnFinallyComplete is called when the finally section completes.
-	OnFinallyComplete()
+	Observer
+	PhaseObserver
+	RetryObserver
 }
 
 // ExecutionResult contains the final execution state.
@@ -787,9 +758,9 @@ func (e *Executor) Reset() {
 	e.actionContext.Reset()
 }
 
-// progressRetryAdapter adapts ProgressCallback to RetryCallback.
+// progressRetryAdapter adapts RetryObserver to RetryCallback.
 type progressRetryAdapter struct {
-	callback   ProgressCallback
+	callback   RetryObserver
 	actionName string
 }
 

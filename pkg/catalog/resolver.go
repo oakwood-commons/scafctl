@@ -72,7 +72,7 @@ func NewSolutionResolver(catalog Catalog, logger logr.Logger, opts ...SolutionRe
 // result is stored for future use.
 func (r *SolutionResolver) FetchSolution(ctx context.Context, nameWithVersion string) ([]byte, error) {
 	// Parse the name[@version] format
-	name, version := parseNameVersion(nameWithVersion)
+	name, version := ParseNameVersion(nameWithVersion)
 
 	// Check artifact cache (skip when --no-cache or no cache configured)
 	if !r.noCache && r.artifactCache != nil {
@@ -134,7 +134,7 @@ func (r *SolutionResolver) FetchSolution(ctx context.Context, nameWithVersion st
 // are cached together for TTL-based reuse.
 func (r *SolutionResolver) FetchSolutionWithBundle(ctx context.Context, nameWithVersion string) ([]byte, []byte, error) {
 	// Parse the name[@version] format
-	name, version := parseNameVersion(nameWithVersion)
+	name, version := ParseNameVersion(nameWithVersion)
 
 	// Check artifact cache (skip when --no-cache or no cache configured)
 	if !r.noCache && r.artifactCache != nil {
@@ -189,9 +189,10 @@ func (r *SolutionResolver) FetchSolutionWithBundle(ctx context.Context, nameWith
 	return content, bundleData, nil
 }
 
-// parseNameVersion splits "name@version" into (name, version).
+// ParseNameVersion splits "name@version" into (name, version).
 // If no @ is present, returns (input, "").
-func parseNameVersion(input string) (string, string) {
+// Handles digest references (e.g., "name@sha256:abc123").
+func ParseNameVersion(input string) (string, string) {
 	// Handle digest references (sha256:...)
 	if strings.Contains(input, "@sha256:") {
 		parts := strings.SplitN(input, "@sha256:", 2)

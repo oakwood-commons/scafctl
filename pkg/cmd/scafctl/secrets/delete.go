@@ -30,7 +30,10 @@ func CommandDelete(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *co
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			w := writer.MustFromContext(ctx)
+			w := writer.FromContext(ctx)
+			if w == nil {
+				return fmt.Errorf("writer not initialized in context")
+			}
 			name := args[0]
 
 			// Validate name
@@ -66,7 +69,10 @@ func CommandDelete(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *co
 			}
 
 			// Confirm deletion (skip in force mode, quiet handled by SkipCondition)
-			in := input.MustFromContext(ctx)
+			in := input.FromContext(ctx)
+			if in == nil {
+				return fmt.Errorf("input not initialized in context")
+			}
 			skipConfirmation := forceFlag || cliParams.IsQuiet
 			confirmed, err := in.Confirm(input.NewConfirmOptions().
 				WithPrompt(fmt.Sprintf("Are you sure you want to delete secret '%s'?", name)).

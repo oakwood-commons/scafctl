@@ -78,7 +78,7 @@ Examples:
   scafctl get go-template-functions -i`,
 		RunE: func(cCmd *cobra.Command, args []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
-			ctx := settings.IntoContext(context.Background(), cliParams)
+			ctx := settings.IntoContext(cCmd.Context(), cliParams)
 
 			options.IOStreams = ioStreams
 			options.CliParams = cliParams
@@ -151,7 +151,7 @@ func (o *Options) RunListFunctions(ctx context.Context) error {
 
 	// Default (no -o flag): simple list
 	if o.Output == "" && !o.Interactive {
-		return o.printSimpleList(funcs)
+		return o.printSimpleList(ctx, funcs)
 	}
 
 	// Build output data
@@ -183,7 +183,7 @@ func (o *Options) RunGetFunction(ctx context.Context, name string) error {
 
 	// Default: custom formatted view
 	if o.Output == "" && !o.Interactive {
-		return o.printFunctionDetail(found)
+		return o.printFunctionDetail(ctx, found)
 	}
 
 	output := gotmpldetail.BuildFunctionDetail(found)
@@ -191,9 +191,12 @@ func (o *Options) RunGetFunction(ctx context.Context, name string) error {
 }
 
 // printSimpleList prints a simple list of function names and descriptions
-func (o *Options) printSimpleList(funcs gotmpl.ExtFunctionList) error {
-	out := o.IOStreams.Out
-	noColor := o.CliParams.NoColor
+func (o *Options) printSimpleList(ctx context.Context, funcs gotmpl.ExtFunctionList) error {
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return nil
+	}
+	noColor := w.NoColor()
 
 	for _, fn := range funcs {
 		name := fn.Name
@@ -209,22 +212,25 @@ func (o *Options) printSimpleList(funcs gotmpl.ExtFunctionList) error {
 		if len(desc) > 80 {
 			desc = desc[:77] + "..."
 		}
-		fmt.Fprintf(out, "  %s\n", name)
+		w.Plainlnf("  %s", name)
 		if desc != "" {
 			dimDesc := desc
 			if !noColor {
 				dimDesc = "\033[2m" + desc + "\033[0m"
 			}
-			fmt.Fprintf(out, "    %s\n", dimDesc)
+			w.Plainlnf("    %s", dimDesc)
 		}
 	}
 	return nil
 }
 
 // printFunctionDetail prints a nicely formatted function detail view
-func (o *Options) printFunctionDetail(fn *gotmpl.ExtFunction) error {
-	out := o.IOStreams.Out
-	noColor := o.CliParams.NoColor
+func (o *Options) printFunctionDetail(ctx context.Context, fn *gotmpl.ExtFunction) error {
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return nil
+	}
+	noColor := w.NoColor()
 
 	keyStyle := func(s string) string {
 		if noColor {
@@ -246,41 +252,41 @@ func (o *Options) printFunctionDetail(fn *gotmpl.ExtFunction) error {
 	}
 
 	// Name and type
-	fmt.Fprintf(out, "%s %s", keyStyle("Name:"), fn.Name)
+	w.Plainf("%s %s", keyStyle("Name:"), fn.Name)
 	if fn.Custom {
-		fmt.Fprintf(out, " %s", tagStyle("custom"))
+		w.Plainf(" %s", tagStyle("custom"))
 	} else {
-		fmt.Fprintf(out, " %s", tagStyle("sprig"))
+		w.Plainf(" %s", tagStyle("sprig"))
 	}
-	fmt.Fprintln(out)
+	w.Plainln("")
 
 	// Description
 	if fn.Description != "" {
-		fmt.Fprintln(out)
-		fmt.Fprintf(out, "%s\n", keyStyle("Description:"))
-		fmt.Fprintf(out, "  %s\n", fn.Description)
+		w.Plainln("")
+		w.Plainln(keyStyle("Description:"))
+		w.Plainlnf("  %s", fn.Description)
 	}
 
 	// Examples
 	if len(fn.Examples) > 0 {
-		fmt.Fprintln(out)
-		fmt.Fprintf(out, "%s\n", keyStyle("Examples:"))
+		w.Plainln("")
+		w.Plainln(keyStyle("Examples:"))
 		for _, ex := range fn.Examples {
 			if ex.Description != "" {
-				fmt.Fprintf(out, "  %s\n", dimStyle(ex.Description))
+				w.Plainlnf("  %s", dimStyle(ex.Description))
 			}
 			if ex.Template != "" {
-				fmt.Fprintf(out, "    %s\n", ex.Template)
+				w.Plainlnf("    %s", ex.Template)
 			}
 		}
 	}
 
 	// Links
 	if len(fn.Links) > 0 {
-		fmt.Fprintln(out)
-		fmt.Fprintf(out, "%s\n", keyStyle("Links:"))
+		w.Plainln("")
+		w.Plainln(keyStyle("Links:"))
 		for _, link := range fn.Links {
-			fmt.Fprintf(out, "  %s\n", link)
+			w.Plainlnf("  %s", link)
 		}
 	}
 
@@ -290,7 +296,7 @@ func (o *Options) printFunctionDetail(fn *gotmpl.ExtFunction) error {
 // writeOutput writes the output using kvx
 func (o *Options) writeOutput(ctx context.Context, data any) error {
 	if o.Output == "quiet" {
-		return o.writeQuietOutput(data)
+		return o.writeQuietOutput(ctx, data)
 	}
 
 	kvxOpts := flags.NewKvxOutputOptionsFromFlags(
@@ -314,17 +320,21 @@ func (o *Options) writeOutput(ctx context.Context, data any) error {
 }
 
 // writeQuietOutput prints just the function names
-func (o *Options) writeQuietOutput(data any) error {
+func (o *Options) writeQuietOutput(ctx context.Context, data any) error {
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return nil
+	}
 	switch v := data.(type) {
 	case []map[string]any:
 		for _, item := range v {
 			if name, ok := item["name"].(string); ok {
-				fmt.Fprintln(o.IOStreams.Out, name)
+				w.Plainln(name)
 			}
 		}
 	case map[string]any:
 		if name, ok := v["name"].(string); ok {
-			fmt.Fprintln(o.IOStreams.Out, name)
+			w.Plainln(name)
 		}
 	}
 	return nil

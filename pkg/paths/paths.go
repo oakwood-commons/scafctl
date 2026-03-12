@@ -4,6 +4,8 @@
 package paths
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/adrg/xdg"
@@ -190,4 +192,24 @@ func ArtifactCacheDir() string {
 // Returns: $XDG_RUNTIME_DIR/scafctl/
 func RuntimeDir() string {
 	return filepath.Join(xdg.RuntimeDir, AppName)
+}
+
+// HomeDir returns the user's home directory path.
+// This centralizes home directory resolution so callers outside pkg/paths
+// do not call os.UserHomeDir directly.
+func HomeDir() (string, error) {
+	return os.UserHomeDir()
+}
+
+// ExpandHome expands a leading ~ in the given path to the user's home directory.
+// If the path does not start with ~, it is returned unchanged.
+func ExpandHome(path string) (string, error) {
+	if len(path) == 0 || path[0] != '~' {
+		return path, nil
+	}
+	home, err := HomeDir()
+	if err != nil {
+		return "", fmt.Errorf("expand home directory: %w", err)
+	}
+	return filepath.Join(home, path[1:]), nil
 }

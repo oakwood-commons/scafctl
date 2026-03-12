@@ -23,36 +23,36 @@ const (
 
 // SnapshotDiff represents the differences between two snapshots
 type SnapshotDiff struct {
-	Before    *SnapshotMetadata        `json:"before" doc:"Metadata of the before snapshot"`
-	After     *SnapshotMetadata        `json:"after" doc:"Metadata of the after snapshot"`
-	Resolvers map[string]*ResolverDiff `json:"resolvers" doc:"Differences in resolvers"`
-	Summary   *DiffSummary             `json:"summary" doc:"Summary of changes"`
+	Before    *SnapshotMetadata        `json:"before" yaml:"before" doc:"Metadata of the before snapshot"`
+	After     *SnapshotMetadata        `json:"after" yaml:"after" doc:"Metadata of the after snapshot"`
+	Resolvers map[string]*ResolverDiff `json:"resolvers" yaml:"resolvers" doc:"Differences in resolvers"`
+	Summary   *DiffSummary             `json:"summary" yaml:"summary" doc:"Summary of changes"`
 }
 
 // ResolverDiff represents the difference for a single resolver
 //
 //nolint:revive // ResolverDiff name is intentional for clarity in resolver package
 type ResolverDiff struct {
-	Type    DiffType          `json:"type" doc:"Type of difference (added, removed, modified, unchanged)"`
-	Before  *SnapshotResolver `json:"before,omitempty" doc:"Value before change"`
-	After   *SnapshotResolver `json:"after,omitempty" doc:"Value after change"`
-	Changes []FieldChange     `json:"changes,omitempty" doc:"List of field changes"`
+	Type    DiffType          `json:"type" yaml:"type" doc:"Type of difference (added, removed, modified, unchanged)" maxLength:"16" example:"modified"`
+	Before  *SnapshotResolver `json:"before,omitempty" yaml:"before,omitempty" doc:"Value before change"`
+	After   *SnapshotResolver `json:"after,omitempty" yaml:"after,omitempty" doc:"Value after change"`
+	Changes []FieldChange     `json:"changes,omitempty" yaml:"changes,omitempty" doc:"List of field changes" maxItems:"50"`
 }
 
 // FieldChange represents a change in a specific field
 type FieldChange struct {
-	Field  string `json:"field" doc:"Field name that changed"`
-	Before any    `json:"before" doc:"Value before change"`
-	After  any    `json:"after" doc:"Value after change"`
+	Field  string `json:"field" yaml:"field" doc:"Field name that changed" maxLength:"128" example:"value"`
+	Before any    `json:"before" yaml:"before" doc:"Value before change"`
+	After  any    `json:"after" yaml:"after" doc:"Value after change"`
 }
 
 // DiffSummary provides a summary of all changes
 type DiffSummary struct {
-	TotalResolvers int `json:"totalResolvers" doc:"Total number of resolvers compared"`
-	Added          int `json:"added" doc:"Number of resolvers added"`
-	Removed        int `json:"removed" doc:"Number of resolvers removed"`
-	Modified       int `json:"modified" doc:"Number of resolvers modified"`
-	Unchanged      int `json:"unchanged" doc:"Number of resolvers unchanged"`
+	TotalResolvers int `json:"totalResolvers" yaml:"totalResolvers" doc:"Total number of resolvers compared" maximum:"10000" example:"20"`
+	Added          int `json:"added" yaml:"added" doc:"Number of resolvers added" maximum:"10000" example:"2"`
+	Removed        int `json:"removed" yaml:"removed" doc:"Number of resolvers removed" maximum:"10000" example:"1"`
+	Modified       int `json:"modified" yaml:"modified" doc:"Number of resolvers modified" maximum:"10000" example:"3"`
+	Unchanged      int `json:"unchanged" yaml:"unchanged" doc:"Number of resolvers unchanged" maximum:"10000" example:"14"`
 }
 
 // DiffSnapshots compares two snapshots and returns their differences
@@ -385,9 +385,9 @@ func formatValue(v any) string {
 
 // DiffOptions provides options for diff comparison
 type DiffOptions struct {
-	IgnoreUnchanged bool     `json:"ignoreUnchanged" doc:"Whether to omit unchanged resolvers from output"`
-	IgnoreFields    []string `json:"ignoreFields" doc:"Fields to ignore in comparison (e.g., duration, providerCalls)"`
-	ResolverFilter  string   `json:"resolverFilter" doc:"Only compare resolvers matching this pattern"`
+	IgnoreUnchanged bool     `json:"ignoreUnchanged" yaml:"ignoreUnchanged" doc:"Whether to omit unchanged resolvers from output"`
+	IgnoreFields    []string `json:"ignoreFields,omitempty" yaml:"ignoreFields,omitempty" doc:"Fields to ignore in comparison (e.g., duration, providerCalls)" maxItems:"20"`
+	ResolverFilter  string   `json:"resolverFilter,omitempty" yaml:"resolverFilter,omitempty" doc:"Only compare resolvers matching this pattern" maxLength:"256" example:"api-*"`
 }
 
 // DiffSnapshotsWithOptions compares two snapshots with custom options

@@ -5,6 +5,7 @@ package resolver
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"os"
@@ -14,6 +15,7 @@ import (
 	refslib "github.com/oakwood-commons/scafctl/pkg/resolver/refs"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -238,8 +240,12 @@ func TestCommandRefs_TextOutput(t *testing.T) {
 		ErrOut: errOut,
 	}
 
-	cmd := CommandRefs(&settings.Run{}, ioStreams, "scafctl")
+	cliParams := &settings.Run{}
+	cmd := CommandRefs(cliParams, ioStreams, "scafctl")
 	cmd.SetArgs([]string{"--template", "{{ ._.config.host }}:{{ ._.port.value }}"})
+
+	w := writer.New(ioStreams, cliParams)
+	cmd.SetContext(writer.WithWriter(context.Background(), w))
 
 	err := cmd.Execute()
 	require.NoError(t, err)
@@ -259,8 +265,12 @@ func TestCommandRefs_NoReferencesTextOutput(t *testing.T) {
 		ErrOut: errOut,
 	}
 
-	cmd := CommandRefs(&settings.Run{}, ioStreams, "scafctl")
+	cliParams := &settings.Run{}
+	cmd := CommandRefs(cliParams, ioStreams, "scafctl")
 	cmd.SetArgs([]string{"--template", "static content"})
+
+	w := writer.New(ioStreams, cliParams)
+	cmd.SetContext(writer.WithWriter(context.Background(), w))
 
 	err := cmd.Execute()
 	require.NoError(t, err)

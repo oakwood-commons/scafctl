@@ -278,24 +278,6 @@ func TestRegistry_Get(t *testing.T) {
 	}
 }
 
-func TestRegistry_MustGet(t *testing.T) {
-	r := NewRegistry()
-	p := newMockProvider("test", "1.0.0")
-	_ = r.Register(p)
-
-	t.Run("existing provider", func(t *testing.T) {
-		retrieved := r.MustGet("test")
-		assert.NotNil(t, retrieved)
-		assert.Equal(t, "test", retrieved.Descriptor().Name)
-	})
-
-	t.Run("non-existing provider panics", func(t *testing.T) {
-		assert.Panics(t, func() {
-			r.MustGet("nonexistent")
-		})
-	})
-}
-
 func TestRegistry_Has(t *testing.T) {
 	r := NewRegistry()
 	p := newMockProvider("test", "1.0.0")
@@ -542,15 +524,6 @@ func TestGlobalRegistry(t *testing.T) {
 	t.Run("has", func(t *testing.T) {
 		assert.True(t, Has("global-test"))
 		assert.False(t, Has("nonexistent"))
-	})
-
-	t.Run("must get", func(t *testing.T) {
-		p := MustGet("global-test")
-		assert.NotNil(t, p)
-
-		assert.Panics(t, func() {
-			MustGet("nonexistent")
-		})
 	})
 
 	t.Run("list", func(t *testing.T) {

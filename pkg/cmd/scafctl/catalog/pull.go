@@ -16,6 +16,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/format"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
@@ -191,13 +192,12 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 	w.Successf("Pulled %s@%s (%s)",
 		displayName,
 		ref.Version.String(),
-		formatBytes(result.Size))
+		format.Bytes(result.Size))
 
 	// When --no-cache is set, invalidate any stale artifact cache entry so that
 	// subsequent run/render/get commands fetch the freshly pulled artifact from
 	// the local catalog rather than a cached copy.
 	if opts.NoCache {
-		artifactCache := cache.NewArtifactCache(paths.ArtifactCacheDir(), settings.DefaultArtifactCacheTTL)
 		targetName := ref.Name
 		if opts.TargetName != "" {
 			targetName = opts.TargetName
@@ -206,7 +206,7 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 		if ref.Version != nil {
 			version = ref.Version.String()
 		}
-		if err := artifactCache.Invalidate(string(ref.Kind), targetName, version); err != nil {
+		if err := cache.InvalidateArtifact(paths.ArtifactCacheDir(), settings.DefaultArtifactCacheTTL, string(ref.Kind), targetName, version); err != nil {
 			lgr.V(1).Info("failed to invalidate artifact cache (ignoring)", "error", err)
 		} else {
 			lgr.V(1).Info("artifact cache invalidated", "kind", ref.Kind, "name", targetName, "version", version)

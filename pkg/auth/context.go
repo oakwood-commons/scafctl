@@ -23,16 +23,6 @@ func RegistryFromContext(ctx context.Context) *Registry {
 	return registry
 }
 
-// MustRegistryFromContext retrieves the auth registry from the context.
-// Panics if no registry is attached.
-func MustRegistryFromContext(ctx context.Context) *Registry {
-	registry := RegistryFromContext(ctx)
-	if registry == nil {
-		panic("auth registry not found in context")
-	}
-	return registry
-}
-
 // GetHandler gets an auth handler from the context's registry.
 func GetHandler(ctx context.Context, name string) (Handler, error) {
 	registry := RegistryFromContext(ctx)

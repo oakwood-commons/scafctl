@@ -4,7 +4,6 @@
 package secrets
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"time"
@@ -17,7 +16,6 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal/input"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
 // CommandExport creates the 'secrets export' command.
@@ -46,7 +44,10 @@ Use --all to include internal secrets (e.g. auth tokens).
 By default, internal secrets (scafctl.*) are excluded.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
-			w := writer.MustFromContext(ctx)
+			w := writer.FromContext(ctx)
+			if w == nil {
+				return fmt.Errorf("writer not initialized in context")
+			}
 
 			if outputFile == "" {
 				err := fmt.Errorf("output file is required (use --output or -o)")
@@ -101,45 +102,20 @@ By default, internal secrets (scafctl.*) are excluded.`,
 				return nil
 			}
 
-			// Encode to bytes
-			var exportBytes []byte
-			switch formatFlag {
-			case "json":
-				exportBytes, err = json.Marshal(exportData)
-				if err != nil {
-					err := fmt.Errorf("failed to encode as JSON: %w", err)
-					w.Errorf("%v", err)
-					return exitcode.WithCode(err, exitcode.GeneralError)
-				}
-			case "yaml":
-				exportBytes, err = yaml.Marshal(exportData)
-				if err != nil {
-					err := fmt.Errorf("failed to encode as YAML: %w", err)
-					w.Errorf("%v", err)
-					return exitcode.WithCode(err, exitcode.GeneralError)
-				}
-			default:
-				err := fmt.Errorf("unsupported format: %s (use yaml or json)", formatFlag)
-				w.Errorf("%v", err)
-				return exitcode.WithCode(err, exitcode.InvalidInput)
+			// Get password if encrypting
+			in := input.FromContext(ctx)
+			if in == nil {
+				return fmt.Errorf("input not initialized in context")
 			}
 
-			// Encrypt if requested
-			in := input.MustFromContext(ctx)
+			var password string
 			if encryptFlag {
-				password, err := in.ReadPassword(input.NewPasswordOptions().
+				password, err = in.ReadPassword(input.NewPasswordOptions().
 					WithPrompt("Enter encryption password").
 					WithConfirmation(true).
 					WithMinLength(1))
 				if err != nil {
 					err := fmt.Errorf("failed to read password: %w", err)
-					w.Errorf("%v", err)
-					return exitcode.WithCode(err, exitcode.GeneralError)
-				}
-
-				exportBytes, err = secretcrypto.Encrypt(exportBytes, password)
-				if err != nil {
-					err := fmt.Errorf("failed to encrypt export: %w", err)
 					w.Errorf("%v", err)
 					return exitcode.WithCode(err, exitcode.GeneralError)
 				}
@@ -162,6 +138,17 @@ By default, internal secrets (scafctl.*) are excluded.`,
 					w.Info("Export cancelled")
 					return nil
 				}
+			}
+
+			// Encode and optionally encrypt
+			exportBytes, err := secrets.Export(&exportData, secrets.ExportOptions{
+				Format:   formatFlag,
+				Encrypt:  encryptFlag,
+				Password: password,
+			})
+			if err != nil {
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
 			// Write to file

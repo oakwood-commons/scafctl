@@ -287,3 +287,70 @@ func TestPlatformDefaults(t *testing.T) {
 		}
 	})
 }
+
+func TestHomeDir(t *testing.T) {
+	t.Run("returns non-empty absolute path", func(t *testing.T) {
+		home, err := HomeDir()
+		require.NoError(t, err)
+		assert.NotEmpty(t, home)
+		assert.True(t, filepath.IsAbs(home), "home dir should be absolute")
+	})
+
+	t.Run("matches os.UserHomeDir", func(t *testing.T) {
+		expected, err := os.UserHomeDir()
+		require.NoError(t, err)
+		got, err := HomeDir()
+		require.NoError(t, err)
+		assert.Equal(t, expected, got)
+	})
+}
+
+func TestExpandHome(t *testing.T) {
+	t.Run("expands tilde to home directory", func(t *testing.T) {
+		home, err := HomeDir()
+		require.NoError(t, err)
+
+		expanded, err := ExpandHome("~/some/path")
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Join(home, "some/path"), expanded)
+	})
+
+	t.Run("returns unchanged path without tilde", func(t *testing.T) {
+		expanded, err := ExpandHome("/absolute/path")
+		require.NoError(t, err)
+		assert.Equal(t, "/absolute/path", expanded)
+	})
+
+	t.Run("returns unchanged empty string", func(t *testing.T) {
+		expanded, err := ExpandHome("")
+		require.NoError(t, err)
+		assert.Equal(t, "", expanded)
+	})
+
+	t.Run("expands bare tilde to home directory", func(t *testing.T) {
+		home, err := HomeDir()
+		require.NoError(t, err)
+
+		expanded, err := ExpandHome("~")
+		require.NoError(t, err)
+		assert.Equal(t, home, expanded)
+	})
+
+	t.Run("returns relative path unchanged", func(t *testing.T) {
+		expanded, err := ExpandHome("relative/path")
+		require.NoError(t, err)
+		assert.Equal(t, "relative/path", expanded)
+	})
+}
+
+func BenchmarkHomeDir(b *testing.B) {
+	for b.Loop() {
+		_, _ = HomeDir()
+	}
+}
+
+func BenchmarkExpandHome(b *testing.B) {
+	for b.Loop() {
+		_, _ = ExpandHome("~/some/path")
+	}
+}

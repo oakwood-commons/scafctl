@@ -18,13 +18,3 @@ func FromContext(ctx context.Context) *Input {
 	i, _ := ctx.Value(contextKey{}).(*Input)
 	return i
 }
-
-// MustFromContext retrieves the Input from the context.
-// Panics if no Input is present.
-func MustFromContext(ctx context.Context) *Input {
-	i := FromContext(ctx)
-	if i == nil {
-		panic("input: no Input in context")
-	}
-	return i
-}

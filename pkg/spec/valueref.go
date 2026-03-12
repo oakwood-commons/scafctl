@@ -195,7 +195,7 @@ func (v *ValueRef) ReferencesVariable(varName string) bool {
 
 	if v.Expr != nil {
 		// Check top-level variables (for __actions, __self, __item, __index)
-		topLevelVars, err := v.Expr.RequiredVariables()
+		topLevelVars, err := v.Expr.RequiredVariables(context.TODO())
 		if err == nil {
 			for _, vn := range topLevelVars {
 				if vn == varName {
@@ -205,7 +205,7 @@ func (v *ValueRef) ReferencesVariable(varName string) bool {
 		}
 
 		// Also check underscore-prefixed variables (for _.resolver references)
-		underscoreVars, err := v.Expr.GetUnderscoreVariables()
+		underscoreVars, err := v.Expr.GetUnderscoreVariables(context.TODO())
 		if err == nil {
 			for _, vn := range underscoreVars {
 				if vn == varName {

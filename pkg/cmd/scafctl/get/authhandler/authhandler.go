@@ -170,9 +170,11 @@ func (o *Options) RunGetHandler(ctx context.Context, name string) error {
 
 // printHandlerDetail prints a formatted single-handler view to the terminal.
 func (o *Options) printHandlerDetail(ctx context.Context, handler auth.Handler) error {
-	out := o.IOStreams.Out
-	noColor := o.CliParams.NoColor
-	_ = ctx
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return nil
+	}
+	noColor := w.NoColor()
 
 	keyStyle := func(s string) string {
 		if noColor {
@@ -193,26 +195,26 @@ func (o *Options) printHandlerDetail(ctx context.Context, handler auth.Handler) 
 		return "\033[38;5;85;48;5;235m " + s + " \033[0m"
 	}
 
-	fmt.Fprintf(out, "%s %s\n", keyStyle("Name:"), handler.Name())
-	fmt.Fprintf(out, "%s %s\n", keyStyle("Display Name:"), handler.DisplayName())
-	fmt.Fprintln(out)
+	w.Plainlnf("%s %s", keyStyle("Name:"), handler.Name())
+	w.Plainlnf("%s %s", keyStyle("Display Name:"), handler.DisplayName())
+	w.Plainln("")
 
 	flows := handler.SupportedFlows()
 	flowStrs := make([]string, len(flows))
 	for i, f := range flows {
 		flowStrs[i] = capStyle(string(f))
 	}
-	fmt.Fprintf(out, "%s %s\n", keyStyle("Supported Flows:"), strings.Join(flowStrs, " "))
+	w.Plainlnf("%s %s", keyStyle("Supported Flows:"), strings.Join(flowStrs, " "))
 
 	caps := handler.Capabilities()
 	capStrs := make([]string, len(caps))
 	for i, c := range caps {
 		capStrs[i] = capStyle(string(c))
 	}
-	fmt.Fprintf(out, "%s %s\n", keyStyle("Capabilities:"), strings.Join(capStrs, " "))
+	w.Plainlnf("%s %s", keyStyle("Capabilities:"), strings.Join(capStrs, " "))
 
-	fmt.Fprintln(out)
-	fmt.Fprintf(out, "%s\n", dimStyle("Use -o json or -o yaml for full structured output."))
+	w.Plainln("")
+	w.Plainln(dimStyle("Use -o json or -o yaml for full structured output."))
 
 	return nil
 }

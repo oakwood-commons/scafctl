@@ -20,9 +20,10 @@ import (
 const SolutionSchemaID = "https://scafctl.dev/schemas/v1/solution.json"
 
 var (
-	solutionSchemaOnce sync.Once
-	solutionSchemaJSON []byte
-	solutionSchemaErr  error
+	solutionSchemaMu          sync.Mutex
+	solutionSchemaInitialized bool
+	solutionSchemaJSON        []byte
+	solutionSchemaErr         error
 )
 
 // durationAlias is a simple string type used as a Huma type alias for
@@ -34,7 +35,9 @@ type durationAlias string
 // using Huma's schema generation which reads the struct tags (doc, example,
 // pattern, maxLength, etc.) to produce a full OpenAPI-compatible schema.
 func GenerateSolutionSchema() ([]byte, error) {
-	solutionSchemaOnce.Do(func() {
+	solutionSchemaMu.Lock()
+	defer solutionSchemaMu.Unlock()
+	if !solutionSchemaInitialized {
 		// Use a custom namer that includes the package name to avoid collisions
 		// between types with the same name from different packages (e.g.,
 		// spec.Condition vs resolver.Condition).
@@ -80,12 +83,14 @@ func GenerateSolutionSchema() ([]byte, error) {
 		rootBytes, err := json.Marshal(schema)
 		if err != nil {
 			solutionSchemaErr = err
-			return
+			solutionSchemaInitialized = true
+			return solutionSchemaJSON, solutionSchemaErr
 		}
 		var rootMap map[string]any
 		if err := json.Unmarshal(rootBytes, &rootMap); err != nil {
 			solutionSchemaErr = err
-			return
+			solutionSchemaInitialized = true
+			return solutionSchemaJSON, solutionSchemaErr
 		}
 		maps.Copy(doc, rootMap)
 
@@ -114,8 +119,20 @@ func GenerateSolutionSchema() ([]byte, error) {
 		patchSchema(doc)
 
 		solutionSchemaJSON, solutionSchemaErr = json.MarshalIndent(doc, "", "  ")
-	})
+		solutionSchemaInitialized = true
+	}
 	return solutionSchemaJSON, solutionSchemaErr
+}
+
+// resetSolutionSchemaForTesting resets the solution schema state for testing.
+// This is safe for use in tests as it acquires the mutex before resetting.
+// WARNING: This should only be called from tests.
+func resetSolutionSchemaForTesting() {
+	solutionSchemaMu.Lock()
+	defer solutionSchemaMu.Unlock()
+	solutionSchemaInitialized = false
+	solutionSchemaJSON = nil
+	solutionSchemaErr = nil
 }
 
 // GenerateSolutionSchemaCompact generates a compact (no indentation) JSON Schema.

@@ -92,7 +92,7 @@ Examples:
 		SilenceUsage: true,
 		RunE: func(cCmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
-			ctx := settings.IntoContext(context.Background(), cliParams)
+			ctx := settings.IntoContext(cCmd.Context(), cliParams)
 
 			opts.IOStreams = ioStreams
 			opts.CliParams = cliParams
@@ -227,7 +227,7 @@ func runFunctional(ctx context.Context, opts *FunctionalOptions) error {
 			if kvx.IsTerminal(opts.IOStreams.ErrOut) {
 				runner.Progress = NewMPBTestProgress(opts.IOStreams.ErrOut)
 			} else {
-				runner.Progress = NewLineTestProgress(opts.IOStreams.ErrOut)
+				runner.Progress = NewLineTestProgress(w)
 			}
 		}
 	}
@@ -345,7 +345,7 @@ func runWatchMode(ctx context.Context, opts *FunctionalOptions, w *writer.Writer
 						if isTTY {
 							runner.Progress = NewMPBTestProgress(opts.IOStreams.ErrOut)
 						} else {
-							runner.Progress = NewLineTestProgress(opts.IOStreams.ErrOut)
+							runner.Progress = NewLineTestProgress(w)
 						}
 					}
 				}
@@ -353,7 +353,7 @@ func runWatchMode(ctx context.Context, opts *FunctionalOptions, w *writer.Writer
 				if w != nil {
 					if isTTY {
 						// ANSI clear screen + cursor home for clean re-display.
-						fmt.Fprint(opts.IOStreams.ErrOut, "\033[2J\033[H")
+						w.Plain("\033[2J\033[H")
 					}
 					w.Infof("[watch] %s — running tests...", triggerFile)
 				}
@@ -402,7 +402,7 @@ func runWatchMode(ctx context.Context, opts *FunctionalOptions, w *writer.Writer
 	if err != nil && ctx.Err() != nil {
 		// Context cancelled via signal — this is a clean exit.
 		if w != nil {
-			fmt.Fprintln(opts.IOStreams.ErrOut)
+			w.Plainln("")
 			w.Info("[watch] stopped")
 		}
 		return nil

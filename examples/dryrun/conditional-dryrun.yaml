@@ -1,0 +1,78 @@
+# Dry-Run with Conditional Actions
+#
+# Demonstrates how dry-run reports conditional (when) actions and
+# deferred inputs that can't be resolved until runtime.
+#
+# Usage:
+#   scafctl run solution -f examples/dryrun/conditional-dryrun.yaml --dry-run
+#   scafctl run solution -f examples/dryrun/conditional-dryrun.yaml --dry-run -o json
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: conditional-dryrun-demo
+  version: 1.0.0
+  description: Demonstrates dry-run with conditional actions and deferred inputs
+
+spec:
+  resolvers:
+    enabled:
+      description: Whether the feature is enabled
+      type: bool
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: true
+
+    app_name:
+      description: Application name
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "my-app"
+
+    replicas:
+      description: Number of replicas
+      type: int
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: 3
+
+  workflow:
+    actions:
+      setup:
+        description: Initial setup
+        with:
+          - provider: exec
+            inputs:
+              command: echo
+              args:
+                - "Setting up {{ .app_name }}"
+
+      scale:
+        description: Scale the application (only when enabled)
+        dependsOn:
+          - setup
+        when:
+          expr: "_.enabled == true"
+        with:
+          - provider: exec
+            inputs:
+              command: echo
+              args:
+                - "Scaling {{ .app_name }} to {{ .replicas }} replicas"
+
+    finally:
+      cleanup:
+        description: Cleanup temporary resources
+        with:
+          - provider: exec
+            inputs:
+              command: echo
+              args:
+                - "Cleaning up after {{ .app_name }}"

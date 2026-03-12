@@ -16,6 +16,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -68,8 +69,10 @@ func TestRunDiff_MissingBeforeFile(t *testing.T) {
 		Out:    &stdout,
 		ErrOut: &stderr,
 	}
+	w := writer.New(&ioStreams, &settings.Run{})
+	testCtx := writer.WithWriter(ctx, w)
 
-	err = runDiff(ctx, opts, ioStreams)
+	err = runDiff(testCtx, opts, ioStreams)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to load before snapshot")
@@ -94,8 +97,10 @@ func TestRunDiff_MissingAfterFile(t *testing.T) {
 		Out:    &stdout,
 		ErrOut: &stderr,
 	}
+	w := writer.New(&ioStreams, &settings.Run{})
+	testCtx := writer.WithWriter(ctx, w)
 
-	err = runDiff(ctx, opts, ioStreams)
+	err = runDiff(testCtx, opts, ioStreams)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to load after snapshot")
@@ -117,8 +122,10 @@ func TestRunDiff_InvalidFormat(t *testing.T) {
 		Out:    &stdout,
 		ErrOut: &stderr,
 	}
+	w := writer.New(&ioStreams, &settings.Run{})
+	testCtx := writer.WithWriter(ctx, w)
 
-	err := runDiff(ctx, opts, ioStreams)
+	err := runDiff(testCtx, opts, ioStreams)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported format")
@@ -140,8 +147,10 @@ func TestRunDiff_HumanFormat(t *testing.T) {
 		Out:    &stdout,
 		ErrOut: &stderr,
 	}
+	w := writer.New(&ioStreams, &settings.Run{})
+	testCtx := writer.WithWriter(ctx, w)
 
-	err := runDiff(ctx, opts, ioStreams)
+	err := runDiff(testCtx, opts, ioStreams)
 
 	require.NoError(t, err)
 	output := stdout.String()
@@ -165,8 +174,10 @@ func TestRunDiff_JSONFormat(t *testing.T) {
 		Out:    &stdout,
 		ErrOut: &stderr,
 	}
+	w := writer.New(&ioStreams, &settings.Run{})
+	testCtx := writer.WithWriter(ctx, w)
 
-	err := runDiff(ctx, opts, ioStreams)
+	err := runDiff(testCtx, opts, ioStreams)
 
 	require.NoError(t, err)
 
@@ -196,8 +207,10 @@ func TestRunDiff_UnifiedFormat(t *testing.T) {
 		Out:    &stdout,
 		ErrOut: &stderr,
 	}
+	w := writer.New(&ioStreams, &settings.Run{})
+	testCtx := writer.WithWriter(ctx, w)
 
-	err := runDiff(ctx, opts, ioStreams)
+	err := runDiff(testCtx, opts, ioStreams)
 
 	require.NoError(t, err)
 	output := stdout.String()
@@ -223,8 +236,10 @@ func TestRunDiff_OutputToFile(t *testing.T) {
 		Out:    &stdout,
 		ErrOut: &stderr,
 	}
+	w := writer.New(&ioStreams, &settings.Run{})
+	testCtx := writer.WithWriter(ctx, w)
 
-	err := runDiff(ctx, opts, ioStreams)
+	err := runDiff(testCtx, opts, ioStreams)
 
 	require.NoError(t, err)
 

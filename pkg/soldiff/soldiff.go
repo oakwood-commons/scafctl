@@ -15,26 +15,26 @@ import (
 
 // Change represents a single structural difference between two solutions.
 type Change struct {
-	Field    string `json:"field"`
-	Type     string `json:"type"` // "added", "removed", "changed"
-	OldValue any    `json:"oldValue,omitempty"`
-	NewValue any    `json:"newValue,omitempty"`
+	Field    string `json:"field" yaml:"field" doc:"Dot-separated path of the changed field" maxLength:"512" example:"spec.resolvers.appName"`
+	Type     string `json:"type" yaml:"type" doc:"Change type (added, removed, changed)" maxLength:"16" example:"changed"`
+	OldValue any    `json:"oldValue,omitempty" yaml:"oldValue,omitempty" doc:"Value before the change"`
+	NewValue any    `json:"newValue,omitempty" yaml:"newValue,omitempty" doc:"Value after the change"`
 }
 
 // Result contains the diff output.
 type Result struct {
-	PathA   string   `json:"pathA"`
-	PathB   string   `json:"pathB"`
-	Changes []Change `json:"changes"`
-	Summary Summary  `json:"summary"`
+	PathA   string   `json:"pathA" yaml:"pathA" doc:"Path to the first solution file" maxLength:"512" example:"solution-v1.yaml"`
+	PathB   string   `json:"pathB" yaml:"pathB" doc:"Path to the second solution file" maxLength:"512" example:"solution-v2.yaml"`
+	Changes []Change `json:"changes" yaml:"changes" doc:"List of structural differences" maxItems:"1000"`
+	Summary Summary  `json:"summary" yaml:"summary" doc:"Summary counts by change type"`
 }
 
 // Summary counts changes by type.
 type Summary struct {
-	Total   int `json:"total"`
-	Added   int `json:"added"`
-	Removed int `json:"removed"`
-	Changed int `json:"changed"`
+	Total   int `json:"total" yaml:"total" doc:"Total number of changes" maximum:"10000" example:"5"`
+	Added   int `json:"added" yaml:"added" doc:"Number of additions" maximum:"10000" example:"2"`
+	Removed int `json:"removed" yaml:"removed" doc:"Number of removals" maximum:"10000" example:"1"`
+	Changed int `json:"changed" yaml:"changed" doc:"Number of modifications" maximum:"10000" example:"2"`
 }
 
 // Compare performs a structural comparison of two solutions.

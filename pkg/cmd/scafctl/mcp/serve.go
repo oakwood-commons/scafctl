@@ -6,7 +6,6 @@ package mcp
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/mark3labs/mcp-go/server"
@@ -17,6 +16,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
 
@@ -151,7 +151,8 @@ func runServe(ctx context.Context, opts *ServeOptions) error {
 		if err != nil {
 			return fmt.Errorf("getting server info: %w", err)
 		}
-		fmt.Fprintln(os.Stdout, string(info))
+		w := writer.FromContext(ctx)
+		w.Plainln(string(info))
 		return nil
 	}
 

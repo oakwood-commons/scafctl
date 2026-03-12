@@ -17,9 +17,9 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/cache"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
-	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/run"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
+	"github.com/oakwood-commons/scafctl/pkg/flags"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -31,6 +31,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -157,7 +158,7 @@ Examples:
 		},
 		RunE: func(cCmd *cobra.Command, args []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
-			ctx := settings.IntoContext(context.Background(), cliParams)
+			ctx := settings.IntoContext(cCmd.Context(), cliParams)
 
 			lgr := logger.FromContext(cCmd.Context())
 			if lgr != nil {
@@ -302,7 +303,7 @@ func (o *SolutionOptions) runActionGraph(ctx context.Context, lgr logr.Logger) e
 	if sol.Spec.HasResolvers() {
 		lgr.V(1).Info("resolving resolvers for action inputs")
 
-		params, err := run.ParseResolverFlags(o.ResolverParams)
+		params, err := flags.ParseResolverFlags(o.ResolverParams)
 		if err != nil {
 			return o.exitWithCode(fmt.Errorf("failed to parse resolver parameters: %w", err), exitcode.ValidationFailed)
 		}
@@ -340,11 +341,11 @@ func (o *SolutionOptions) runActionGraph(ctx context.Context, lgr logr.Logger) e
 
 	// When -o test: generate a test definition from the command output.
 	if o.Output == "test" {
-		return o.writeTestOutput(rendered)
+		return o.writeTestOutput(ctx, rendered)
 	}
 
 	// Write output
-	return o.writeOutput(rendered)
+	return o.writeOutput(ctx, rendered)
 }
 
 // runGraph renders the resolver dependency graph (--graph mode)
@@ -409,7 +410,7 @@ func (o *SolutionOptions) runActionGraphVisualization(ctx context.Context, lgr l
 	if sol.Spec.HasResolvers() {
 		lgr.V(1).Info("resolving resolvers for action inputs")
 
-		params, err := run.ParseResolverFlags(o.ResolverParams)
+		params, err := flags.ParseResolverFlags(o.ResolverParams)
 		if err != nil {
 			return o.exitWithCode(fmt.Errorf("failed to parse resolver parameters: %w", err), exitcode.ValidationFailed)
 		}
@@ -455,7 +456,7 @@ func (o *SolutionOptions) runSnapshot(ctx context.Context, lgr logr.Logger) erro
 	}
 
 	// Parse resolver parameters
-	params, err := run.ParseResolverFlags(o.ResolverParams)
+	params, err := flags.ParseResolverFlags(o.ResolverParams)
 	if err != nil {
 		return o.exitWithCode(fmt.Errorf("failed to parse resolver parameters: %w", err), exitcode.ValidationFailed)
 	}
@@ -523,11 +524,13 @@ func (o *SolutionOptions) runSnapshot(ctx context.Context, lgr logr.Logger) erro
 		return o.exitWithCode(fmt.Errorf("failed to save snapshot: %w", err), exitcode.RenderFailed)
 	}
 
-	fmt.Fprintf(o.IOStreams.Out, "Snapshot saved to %s\n", o.SnapshotFile)
-	fmt.Fprintf(o.IOStreams.Out, "  Solution: %s (v%s)\n", snapshot.Metadata.Solution, snapshot.Metadata.Version)
-	fmt.Fprintf(o.IOStreams.Out, "  Resolvers: %d\n", len(snapshot.Resolvers))
-	fmt.Fprintf(o.IOStreams.Out, "  Duration: %s\n", snapshot.Metadata.TotalDuration)
-	fmt.Fprintf(o.IOStreams.Out, "  Status: %s\n", snapshot.Metadata.Status)
+	if w := writer.FromContext(ctx); w != nil {
+		w.Successf("Snapshot saved to %s", o.SnapshotFile)
+		w.Plainlnf("  Solution: %s (v%s)", snapshot.Metadata.Solution, snapshot.Metadata.Version)
+		w.Plainlnf("  Resolvers: %d", len(snapshot.Resolvers))
+		w.Plainlnf("  Duration: %s", snapshot.Metadata.TotalDuration)
+		w.Plainlnf("  Status: %s", snapshot.Metadata.Status)
+	}
 
 	return nil
 }
@@ -589,19 +592,21 @@ func (o *SolutionOptions) getRegistry(ctx context.Context) *provider.Registry {
 }
 
 // writeOutput writes the rendered output to stdout or file
-func (o *SolutionOptions) writeOutput(data []byte) error {
+func (o *SolutionOptions) writeOutput(ctx context.Context, data []byte) error {
 	if o.OutputFile != "" {
 		return o.writeToFile(data)
 	}
 
-	fmt.Fprintln(o.IOStreams.Out, string(data))
+	if w := writer.FromContext(ctx); w != nil {
+		w.Plainln(string(data))
+	}
 	return nil
 }
 
 // writeTestOutput generates a functional test definition from the rendered JSON output
 // and writes the test YAML to stdout. A snapshot golden file is written to
 // testdata/ next to the solution file.
-func (o *SolutionOptions) writeTestOutput(rendered []byte) error {
+func (o *SolutionOptions) writeTestOutput(ctx context.Context, rendered []byte) error {
 	// Parse the JSON output for assertion derivation.
 	var data any
 	if err := json.Unmarshal(rendered, &data); err != nil {
@@ -637,10 +642,11 @@ func (o *SolutionOptions) writeTestOutput(rendered []byte) error {
 		return o.exitWithCode(fmt.Errorf("failed to marshal test YAML: %w", err), exitcode.RenderFailed)
 	}
 
-	fmt.Fprint(o.IOStreams.Out, string(yamlData))
-
-	if result.SnapshotWritten {
-		fmt.Fprintf(o.IOStreams.ErrOut, "Snapshot written: %s\n", result.SnapshotPath)
+	if w := writer.FromContext(ctx); w != nil {
+		w.Plain(string(yamlData))
+		if result.SnapshotWritten {
+			w.WarnStderrf("Snapshot written: %s", result.SnapshotPath)
+		}
 	}
 	return nil
 }
