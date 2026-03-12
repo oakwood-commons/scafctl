@@ -13,6 +13,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/format"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
@@ -72,7 +73,7 @@ func runSave(ctx context.Context, opts *SaveOptions) error {
 	w := writer.FromContext(ctx)
 
 	// Parse reference
-	name, version := parseNameVersion(opts.Reference)
+	name, version := catalog.ParseNameVersion(opts.Reference)
 
 	// Create local catalog
 	localCatalog, err := catalog.NewLocalCatalog(*lgr)
@@ -104,17 +105,7 @@ func runSave(ctx context.Context, opts *SaveOptions) error {
 		result.Reference.Name,
 		versionStr,
 		opts.OutputPath,
-		formatBytes(result.Size))
+		format.Bytes(result.Size))
 
 	return nil
-}
-
-// parseNameVersion splits "name@version" into name and version parts.
-func parseNameVersion(ref string) (name, version string) {
-	for i := len(ref) - 1; i >= 0; i-- {
-		if ref[i] == '@' {
-			return ref[:i], ref[i+1:]
-		}
-	}
-	return ref, ""
 }

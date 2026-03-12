@@ -29,9 +29,10 @@ const (
 )
 
 var (
-	globalConfig     *Config
-	globalConfigOnce sync.Once
-	globalConfigErr  error
+	globalConfig            *Config
+	globalConfigMu          sync.Mutex
+	globalConfigInitialized bool
+	globalConfigErr         error
 )
 
 // Manager handles configuration loading and access.
@@ -329,16 +330,21 @@ func (m *Manager) AllSettings() map[string]any {
 
 // Global returns the global configuration (loads once).
 func Global() (*Config, error) {
-	globalConfigOnce.Do(func() {
+	globalConfigMu.Lock()
+	defer globalConfigMu.Unlock()
+	if !globalConfigInitialized {
 		mgr := NewManager("")
 		globalConfig, globalConfigErr = mgr.Load()
-	})
+		globalConfigInitialized = true
+	}
 	return globalConfig, globalConfigErr
 }
 
 // ResetGlobal resets the global configuration (primarily for testing).
 func ResetGlobal() {
-	globalConfigOnce = sync.Once{}
+	globalConfigMu.Lock()
+	defer globalConfigMu.Unlock()
+	globalConfigInitialized = false
 	globalConfig = nil
 	globalConfigErr = nil
 }

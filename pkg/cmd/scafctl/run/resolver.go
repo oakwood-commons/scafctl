@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
+	"github.com/oakwood-commons/scafctl/pkg/flags"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
@@ -18,6 +19,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -265,7 +267,7 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 	defer cleanup()
 
 	// Parse resolver parameters
-	params, err := ParseResolverFlags(o.ResolverParams)
+	params, err := flags.ParseResolverFlags(o.ResolverParams)
 	if err != nil {
 		return o.exitWithCode(ctx, fmt.Errorf("failed to parse resolver parameters: %w", err), exitcode.ValidationFailed)
 	}
@@ -541,15 +543,17 @@ func (o *ResolverOptions) showResolverSnapshot(
 		return o.exitWithCode(ctx, fmt.Errorf("failed to save snapshot: %w", err), exitcode.GeneralError)
 	}
 
-	fmt.Fprintf(o.IOStreams.Out, "Snapshot saved to %s\n", o.SnapshotFile)
-	fmt.Fprintf(o.IOStreams.Out, "  Solution: %s", snapshot.Metadata.Solution)
-	if snapshot.Metadata.Version != "" {
-		fmt.Fprintf(o.IOStreams.Out, " (v%s)", snapshot.Metadata.Version)
+	if w := writer.FromContext(ctx); w != nil {
+		w.Successf("Snapshot saved to %s", o.SnapshotFile)
+		solutionLine := fmt.Sprintf("  Solution: %s", snapshot.Metadata.Solution)
+		if snapshot.Metadata.Version != "" {
+			solutionLine += fmt.Sprintf(" (v%s)", snapshot.Metadata.Version)
+		}
+		w.Plainln(solutionLine)
+		w.Plainlnf("  Resolvers: %d", len(snapshot.Resolvers))
+		w.Plainlnf("  Duration: %s", snapshot.Metadata.TotalDuration)
+		w.Plainlnf("  Status: %s", snapshot.Metadata.Status)
 	}
-	fmt.Fprintln(o.IOStreams.Out)
-	fmt.Fprintf(o.IOStreams.Out, "  Resolvers: %d\n", len(snapshot.Resolvers))
-	fmt.Fprintf(o.IOStreams.Out, "  Duration: %s\n", snapshot.Metadata.TotalDuration)
-	fmt.Fprintf(o.IOStreams.Out, "  Status: %s\n", snapshot.Metadata.Status)
 
 	return nil
 }

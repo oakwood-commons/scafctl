@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/terminal/format"
+
 	"github.com/vbauerster/mpb/v8"
 	"github.com/vbauerster/mpb/v8/decor"
 )
@@ -63,7 +65,7 @@ func (p *ProgressReporter) StartPhase(phaseNum int, resolverNames []string) {
 		elapsedOnComplete := decor.Any(func(s decor.Statistics) string {
 			if s.Completed {
 				if elapsed, ok := p.barElapsed[resolverName]; ok {
-					return formatDuration(elapsed)
+					return format.Duration(elapsed)
 				}
 			}
 			return "" // Show nothing while in progress
@@ -79,17 +81,6 @@ func (p *ProgressReporter) StartPhase(phaseNum int, resolverNames []string) {
 		)
 		p.bars[name] = bar
 	}
-}
-
-// formatDuration formats a duration showing milliseconds for sub-second durations
-func formatDuration(d time.Duration) string {
-	if d < time.Second {
-		return fmt.Sprintf("%dms", d.Milliseconds())
-	}
-	// Show seconds and milliseconds for longer durations
-	secs := d / time.Second
-	ms := (d % time.Second) / time.Millisecond
-	return fmt.Sprintf("%ds %dms", secs, ms)
 }
 
 // Complete marks a resolver as successfully completed.

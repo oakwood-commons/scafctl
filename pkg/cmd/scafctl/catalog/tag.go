@@ -6,7 +6,6 @@ package catalog
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
@@ -85,13 +84,13 @@ func runTag(ctx context.Context, opts *TagOptions) error {
 	w := writer.FromContext(ctx)
 
 	// Validate alias - must not be a valid semver version
-	if err := validateAlias(opts.Alias); err != nil {
+	if err := catalog.ValidateAlias(opts.Alias); err != nil {
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
 	// Parse reference - require version
-	name, version := parseNameVersion(opts.Reference)
+	name, version := catalog.ParseNameVersion(opts.Reference)
 	if version == "" {
 		w.Error("version required: use format 'name@version' (e.g., 'my-solution@1.0.0')")
 		return exitcode.Errorf("version required")
@@ -115,7 +114,7 @@ func runTag(ctx context.Context, opts *TagOptions) error {
 		}
 		artifactKind = kind
 	} else {
-		artifactKind, err = inferKindFromLocalCatalog(ctx, localCatalog, name, version)
+		artifactKind, err = catalog.InferKindFromLocalCatalog(ctx, localCatalog, name, version)
 		if err != nil {
 			w.Errorf("failed to infer artifact kind: %v", err)
 			w.Infof("Hint: use --kind to specify the artifact kind explicitly")
@@ -156,13 +155,13 @@ func runTagRemote(ctx context.Context, opts *TagOptions, ref catalog.Reference) 
 	w := writer.FromContext(ctx)
 
 	// Resolve catalog URL
-	catalogURL, err := resolveCatalogURL(ctx, opts.Catalog)
+	catalogURL, err := catalog.ResolveCatalogURL(ctx, opts.Catalog)
 	if err != nil {
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
-	registry, repository := parseCatalogURL(catalogURL)
+	registry, repository := catalog.ParseCatalogURL(catalogURL)
 
 	// Create credential store
 	credStore, err := catalog.NewCredentialStore(*lgr)
@@ -199,40 +198,4 @@ func runTagRemote(ctx context.Context, opts *TagOptions, ref catalog.Reference) 
 	w.Successf("Tagged %s@%s as %q in %s", ref.Name, ref.Version.String(), opts.Alias, catalogURL)
 
 	return nil
-}
-
-// validateAlias checks that an alias tag is valid.
-// It must not be empty, must not be a valid semver version, and must not contain
-// characters that are invalid in OCI tags.
-func validateAlias(alias string) error {
-	if alias == "" {
-		return fmt.Errorf("alias tag cannot be empty")
-	}
-
-	// Must not be a valid semver version (those should be created via build)
-	if _, err := catalog.ParseReference(catalog.ArtifactKindSolution, "x@"+alias); err == nil {
-		return fmt.Errorf("alias %q looks like a semver version; use 'scafctl build' to create versioned artifacts", alias)
-	}
-
-	// OCI tag constraints: must match [a-zA-Z0-9_.-]+
-	for _, ch := range alias {
-		if !isValidTagChar(ch) {
-			return fmt.Errorf("alias %q contains invalid character %q; valid characters: letters, digits, '.', '-', '_'", alias, string(ch))
-		}
-	}
-
-	// Must not start with a dot or hyphen
-	if strings.HasPrefix(alias, ".") || strings.HasPrefix(alias, "-") {
-		return fmt.Errorf("alias %q must start with a letter, digit, or underscore", alias)
-	}
-
-	return nil
-}
-
-// isValidTagChar returns true if the rune is valid for an OCI tag.
-func isValidTagChar(ch rune) bool {
-	return (ch >= 'a' && ch <= 'z') ||
-		(ch >= 'A' && ch <= 'Z') ||
-		(ch >= '0' && ch <= '9') ||
-		ch == '_' || ch == '.' || ch == '-'
 }

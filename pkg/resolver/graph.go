@@ -5,6 +5,7 @@ package resolver
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -13,6 +14,36 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 )
+
+// IsTransitiveDependency checks if candidateName is a direct or transitive dependency
+// of the targetResolver within the solution's resolver map.
+// This is useful for filtering resolver graphs to show only relevant dependencies.
+func IsTransitiveDependency(resolvers map[string]*Resolver, targetResolver, candidateName string) bool {
+	return isTransitiveDep(resolvers, targetResolver, candidateName, make(map[string]bool))
+}
+
+// isTransitiveDep is the recursive implementation with cycle protection.
+func isTransitiveDep(resolvers map[string]*Resolver, targetResolver, candidateName string, visited map[string]bool) bool {
+	if visited[targetResolver] {
+		return false
+	}
+	visited[targetResolver] = true
+
+	target, ok := resolvers[targetResolver]
+	if !ok {
+		return false
+	}
+
+	for _, dep := range target.DependsOn {
+		if dep == candidateName {
+			return true
+		}
+		if isTransitiveDep(resolvers, dep, candidateName, visited) {
+			return true
+		}
+	}
+	return false
+}
 
 // DescriptorLookup is a function that retrieves a provider descriptor by name.
 // Used during dependency extraction to allow providers to participate in
@@ -93,7 +124,7 @@ func extractDepsFromExpression(expr string, deps map[string]bool) {
 	celExpr := celexp.Expression(expr)
 
 	// Extract all _.resolverName and _["resolverName"] references
-	vars, err := celExpr.GetUnderscoreVariables()
+	vars, err := celExpr.GetUnderscoreVariables(context.TODO())
 	if err != nil {
 		// If parsing fails, skip dependency extraction for this expression
 		// This is a non-fatal error - the resolver may still be valid
@@ -361,57 +392,57 @@ func extractDepsFromValidatePhase(phase *ValidatePhase, deps map[string]bool, lo
 
 // GraphNode represents a resolver node in the dependency graph
 type GraphNode struct {
-	Name         string            `json:"id" yaml:"id" doc:"Resolver name"`
-	Type         Type              `json:"type" yaml:"type" doc:"Resolver type"`
-	Phase        int               `json:"phase" yaml:"phase" doc:"Execution phase (1-based)"`
+	Name         string            `json:"id" yaml:"id" doc:"Resolver name" maxLength:"256" example:"api-data"`
+	Type         Type              `json:"type" yaml:"type" doc:"Resolver type" maxLength:"64" example:"standard"`
+	Phase        int               `json:"phase" yaml:"phase" doc:"Execution phase (1-based)" maximum:"100" example:"1"`
 	Conditional  bool              `json:"conditional" yaml:"conditional" doc:"Whether resolver has conditional execution"`
-	Dependencies []GraphDependency `json:"dependencies" yaml:"dependencies" doc:"List of dependencies"`
+	Dependencies []GraphDependency `json:"dependencies" yaml:"dependencies" doc:"List of dependencies" maxItems:"100"`
 }
 
 // GraphDependency represents a dependency edge
 type GraphDependency struct {
-	Resolver string `json:"resolver" yaml:"resolver" doc:"Target resolver name"`
-	Field    string `json:"field" yaml:"field" doc:"Field name in reference"`
+	Resolver string `json:"resolver" yaml:"resolver" doc:"Target resolver name" maxLength:"256" example:"auth-token"`
+	Field    string `json:"field" yaml:"field" doc:"Field name in reference" maxLength:"128" example:"value"`
 }
 
 // GraphEdge represents a directed edge
 type GraphEdge struct {
-	From  string `json:"from" yaml:"from" doc:"Source resolver name"`
-	To    string `json:"to" yaml:"to" doc:"Target resolver name"`
-	Label string `json:"label" yaml:"label" doc:"Edge label"`
+	From  string `json:"from" yaml:"from" doc:"Source resolver name" maxLength:"256" example:"api-data"`
+	To    string `json:"to" yaml:"to" doc:"Target resolver name" maxLength:"256" example:"auth-token"`
+	Label string `json:"label" yaml:"label" doc:"Edge label" maxLength:"256" example:"depends_on"`
 }
 
 // GraphDiagrams contains pre-rendered diagram representations of the dependency graph.
 type GraphDiagrams struct {
-	ASCII   string `json:"ascii" yaml:"ascii" doc:"ASCII art representation of the graph"`
-	DOT     string `json:"dot" yaml:"dot" doc:"Graphviz DOT format representation"`
-	Mermaid string `json:"mermaid" yaml:"mermaid" doc:"Mermaid.js diagram representation"`
+	ASCII   string `json:"ascii" yaml:"ascii" doc:"ASCII art representation of the graph" maxLength:"65536"`
+	DOT     string `json:"dot" yaml:"dot" doc:"Graphviz DOT format representation" maxLength:"65536"`
+	Mermaid string `json:"mermaid" yaml:"mermaid" doc:"Mermaid.js diagram representation" maxLength:"65536"`
 }
 
 // Graph represents the complete resolver dependency graph
 type Graph struct {
-	Nodes    []*GraphNode   `json:"nodes" yaml:"nodes" doc:"Graph nodes"`
-	Edges    []*GraphEdge   `json:"edges" yaml:"edges" doc:"Graph edges"`
-	Phases   []*PhaseInfo   `json:"phases" yaml:"phases" doc:"Phase information"`
+	Nodes    []*GraphNode   `json:"nodes" yaml:"nodes" doc:"Graph nodes" maxItems:"1000"`
+	Edges    []*GraphEdge   `json:"edges" yaml:"edges" doc:"Graph edges" maxItems:"10000"`
+	Phases   []*PhaseInfo   `json:"phases" yaml:"phases" doc:"Phase information" maxItems:"100"`
 	Stats    *GraphStats    `json:"stats" yaml:"stats" doc:"Graph statistics"`
 	Diagrams *GraphDiagrams `json:"diagrams" yaml:"diagrams" doc:"Pre-rendered diagram representations"`
 }
 
 // PhaseInfo contains information about a phase
 type PhaseInfo struct {
-	Phase       int      `json:"phase" yaml:"phase" doc:"Phase number (1-based)"`
-	Resolvers   []string `json:"resolvers" yaml:"resolvers" doc:"Resolver names in this phase"`
-	Parallelism int      `json:"parallelism" yaml:"parallelism" doc:"Number of resolvers that can execute in parallel"`
+	Phase       int      `json:"phase" yaml:"phase" doc:"Phase number (1-based)" maximum:"100" example:"1"`
+	Resolvers   []string `json:"resolvers" yaml:"resolvers" doc:"Resolver names in this phase" maxItems:"1000"`
+	Parallelism int      `json:"parallelism" yaml:"parallelism" doc:"Number of resolvers that can execute in parallel" maximum:"1000" example:"4"`
 }
 
 // GraphStats contains graph statistics
 type GraphStats struct {
-	TotalResolvers  int      `json:"totalResolvers" yaml:"totalResolvers" doc:"Total number of resolvers"`
-	TotalPhases     int      `json:"totalPhases" yaml:"totalPhases" doc:"Total number of execution phases"`
-	MaxParallelism  int      `json:"maxParallelism" yaml:"maxParallelism" doc:"Maximum parallelism across all phases"`
+	TotalResolvers  int      `json:"totalResolvers" yaml:"totalResolvers" doc:"Total number of resolvers" maximum:"10000" example:"20"`
+	TotalPhases     int      `json:"totalPhases" yaml:"totalPhases" doc:"Total number of execution phases" maximum:"100" example:"3"`
+	MaxParallelism  int      `json:"maxParallelism" yaml:"maxParallelism" doc:"Maximum parallelism across all phases" maximum:"1000" example:"4"`
 	AvgDependencies float64  `json:"avgDependencies" yaml:"avgDependencies" doc:"Average number of dependencies per resolver"`
-	CriticalPath    []string `json:"criticalPath" yaml:"criticalPath" doc:"Longest dependency chain in the graph"`
-	CriticalDepth   int      `json:"criticalDepth" yaml:"criticalDepth" doc:"Length of the critical path"`
+	CriticalPath    []string `json:"criticalPath" yaml:"criticalPath" doc:"Longest dependency chain in the graph" maxItems:"100"`
+	CriticalDepth   int      `json:"criticalDepth" yaml:"criticalDepth" doc:"Length of the critical path" maximum:"100" example:"5"`
 }
 
 // BuildGraph creates a Graph from resolvers.

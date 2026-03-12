@@ -35,7 +35,11 @@ func CommandSchema(cliParams *settings.Run, ioStreams *terminal.IOStreams, path 
 	options := &SchemaOptions{}
 
 	// Get available kinds for documentation
-	kindNames := schema.GetGlobalRegistry().Names()
+	reg, err := schema.GetGlobalRegistry()
+	var kindNames []string
+	if err == nil {
+		kindNames = reg.Names()
+	}
 	sort.Strings(kindNames)
 
 	cCmd := &cobra.Command{
@@ -78,7 +82,7 @@ Examples:
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cCmd *cobra.Command, args []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
-			ctx := settings.IntoContext(context.Background(), cliParams)
+			ctx := settings.IntoContext(cCmd.Context(), cliParams)
 
 			options.IOStreams = ioStreams
 			options.CliParams = cliParams
@@ -88,8 +92,12 @@ Examples:
 		ValidArgsFunction: func(_ *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 			if len(args) == 0 {
 				// Complete kind names
+				kinds, err := schema.ListKinds()
+				if err != nil {
+					return nil, cobra.ShellCompDirectiveNoFileComp
+				}
 				var completions []string
-				for _, kind := range schema.ListKinds() {
+				for _, kind := range kinds {
 					if strings.HasPrefix(strings.ToLower(kind.Name), strings.ToLower(toComplete)) {
 						completions = append(completions, kind.Name)
 					}
@@ -127,10 +135,15 @@ func (o *SchemaOptions) Run(_ context.Context, args []string) error {
 	}
 
 	// Look up the kind
-	kindDef, ok := schema.GetKind(kindName)
-	if !ok {
-		err := fmt.Errorf("unknown kind %q. Available kinds: %s",
-			kindName, strings.Join(schema.GetGlobalRegistry().Names(), ", "))
+	kindDef, err := schema.GetKind(kindName)
+	if err != nil {
+		reg, regErr := schema.GetGlobalRegistry()
+		var availableKinds string
+		if regErr == nil {
+			availableKinds = strings.Join(reg.Names(), ", ")
+		}
+		err = fmt.Errorf("unknown kind %q. Available kinds: %s",
+			kindName, availableKinds)
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}

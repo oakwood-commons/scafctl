@@ -81,7 +81,7 @@ func runDelete(ctx context.Context, opts *DeleteOptions) error {
 	}
 
 	// Parse reference to get name and version
-	name, version := parseNameVersion(opts.Reference)
+	name, version := catalog.ParseNameVersion(opts.Reference)
 	if version == "" {
 		w.Error("version required: use format 'name@version' (e.g., 'my-solution@1.0.0')")
 		return exitcode.Errorf("version required")
@@ -105,7 +105,7 @@ func runDelete(ctx context.Context, opts *DeleteOptions) error {
 		artifactKind = kind
 	} else {
 		// Infer kind from local catalog by trying each kind
-		artifactKind, err = inferKindFromLocalCatalog(ctx, localCatalog, name, version)
+		artifactKind, err = catalog.InferKindFromLocalCatalog(ctx, localCatalog, name, version)
 		if err != nil {
 			w.Errorf("failed to infer artifact kind: %v", err)
 			w.Infof("Hint: use --kind to specify the artifact kind explicitly")
@@ -177,19 +177,19 @@ func runDeleteRemote(ctx context.Context, opts *DeleteOptions) error {
 		ref = localRef
 	} else {
 		// Short reference with --catalog flag: my-solution@1.0.0 --catalog myregistry
-		name, version := parseNameVersion(opts.Reference)
+		name, version := catalog.ParseNameVersion(opts.Reference)
 		if version == "" {
 			w.Error("version required: use format 'name@version' (e.g., 'my-solution@1.0.0')")
 			return exitcode.Errorf("version required")
 		}
 
 		// Resolve catalog URL
-		catalogURL, err := resolveCatalogURL(ctx, opts.Catalog)
+		catalogURL, err := catalog.ResolveCatalogURL(ctx, opts.Catalog)
 		if err != nil {
 			w.Errorf("%v", err)
 			return exitcode.WithCode(err, exitcode.InvalidInput)
 		}
-		registry, repository = parseCatalogURL(catalogURL)
+		registry, repository = catalog.ParseCatalogURL(catalogURL)
 
 		// Determine artifact kind
 		var artifactKind catalog.ArtifactKind
@@ -204,7 +204,7 @@ func runDeleteRemote(ctx context.Context, opts *DeleteOptions) error {
 			// Try to infer from local catalog
 			localCatalog, localErr := catalog.NewLocalCatalog(*lgr)
 			if localErr == nil {
-				artifactKind, err = inferKindFromLocalCatalog(ctx, localCatalog, name, version)
+				artifactKind, err = catalog.InferKindFromLocalCatalog(ctx, localCatalog, name, version)
 				if err != nil {
 					w.Errorf("could not infer artifact kind: %v", err)
 					w.Infof("Hint: use --kind to specify the artifact kind explicitly")

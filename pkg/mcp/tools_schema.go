@@ -180,9 +180,13 @@ func (s *Server) handleExplainKind(_ context.Context, request mcp.CallToolReques
 	}
 	field := request.GetString("field", "")
 
-	kindDef, ok := schema.GetKind(kindName)
-	if !ok {
-		names := schema.GetGlobalRegistry().Names()
+	kindDef, err := schema.GetKind(kindName)
+	if err != nil {
+		reg, regErr := schema.GetGlobalRegistry()
+		var names []string
+		if regErr == nil {
+			names = reg.Names()
+		}
 		sort.Strings(names)
 		return newStructuredError(ErrCodeNotFound, fmt.Sprintf("kind %q not found. Available kinds: %s", kindName, strings.Join(names, ", ")),
 			WithField("kind"),

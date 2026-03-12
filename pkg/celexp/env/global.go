@@ -20,8 +20,10 @@ var (
 	// It caches compiled CEL programs (ASTs) for reuse across multiple evaluations.
 	globalCache *celexp.ProgramCache
 
-	// globalCacheOnce ensures the global cache is initialized exactly once.
-	globalCacheOnce sync.Once
+	// globalCacheMu protects the global cache initialization state.
+	globalCacheMu sync.Mutex
+	// globalCacheInitialized tracks whether the global cache has been created.
+	globalCacheInitialized bool
 )
 
 // GlobalCache returns the global singleton program cache used for AST caching.
@@ -39,8 +41,21 @@ var (
 //	    fmt.Printf("Cache hit rate: %.2f%%\n", stats.HitRate)
 //	}
 func GlobalCache() *celexp.ProgramCache {
-	globalCacheOnce.Do(func() {
+	globalCacheMu.Lock()
+	defer globalCacheMu.Unlock()
+	if !globalCacheInitialized {
 		globalCache = celexp.NewProgramCache(GlobalCacheSize)
-	})
+		globalCacheInitialized = true
+	}
 	return globalCache
+}
+
+// resetGlobalCacheForTesting resets the global cache state for testing.
+// This is safe for use in tests as it acquires the mutex before resetting.
+// WARNING: This should only be called from tests.
+func resetGlobalCacheForTesting() {
+	globalCacheMu.Lock()
+	defer globalCacheMu.Unlock()
+	globalCache = nil
+	globalCacheInitialized = false
 }

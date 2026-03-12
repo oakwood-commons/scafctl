@@ -118,7 +118,7 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 		`),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Use)
-			ctx := settings.IntoContext(context.Background(), cliParams)
+			ctx := settings.IntoContext(cmd.Context(), cliParams)
 			lgr := logger.FromContext(cmd.Context())
 			ctx = logger.WithLogger(ctx, lgr)
 

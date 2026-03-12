@@ -16,6 +16,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -71,8 +72,10 @@ func TestRunSave_MissingConfigFile(t *testing.T) {
 		Out:    &stdout,
 		ErrOut: &stderr,
 	}
+	w := writer.New(&ioStreams, &settings.Run{})
+	testCtx := writer.WithWriter(ctx, w)
 
-	err := runSave(ctx, opts, ioStreams)
+	err := runSave(testCtx, opts, ioStreams)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to read config file")
@@ -96,8 +99,10 @@ func TestRunSave_InvalidYAML(t *testing.T) {
 		Out:    &stdout,
 		ErrOut: &stderr,
 	}
+	w := writer.New(&ioStreams, &settings.Run{})
+	testCtx := writer.WithWriter(ctx, w)
 
-	err = runSave(ctx, opts, ioStreams)
+	err = runSave(testCtx, opts, ioStreams)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to parse config file")
@@ -126,8 +131,10 @@ resolvers: []
 		Out:    &stdout,
 		ErrOut: &stderr,
 	}
+	w := writer.New(&ioStreams, &settings.Run{})
+	testCtx := writer.WithWriter(ctx, w)
 
-	err = runSave(ctx, opts, ioStreams)
+	err = runSave(testCtx, opts, ioStreams)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no resolvers found in config file")
@@ -159,8 +166,10 @@ resolvers:
 		Out:    &stdout,
 		ErrOut: &stderr,
 	}
+	w := writer.New(&ioStreams, &settings.Run{})
+	testCtx := writer.WithWriter(ctx, w)
 
-	err = runSave(ctx, opts, ioStreams)
+	err = runSave(testCtx, opts, ioStreams)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid parameter format")
@@ -195,8 +204,10 @@ resolvers:
 		Out:    &stdout,
 		ErrOut: &stderr,
 	}
+	w := writer.New(&ioStreams, &settings.Run{})
+	testCtx := writer.WithWriter(ctx, w)
 
-	err = runSave(ctx, opts, ioStreams)
+	err = runSave(testCtx, opts, ioStreams)
 
 	require.NoError(t, err)
 	assert.Contains(t, stdout.String(), "Snapshot saved to")
@@ -247,8 +258,10 @@ resolvers:
 		Out:    &stdout,
 		ErrOut: &stderr,
 	}
+	w := writer.New(&ioStreams, &settings.Run{})
+	testCtx := writer.WithWriter(ctx, w)
 
-	err = runSave(ctx, opts, ioStreams)
+	err = runSave(testCtx, opts, ioStreams)
 
 	require.NoError(t, err)
 

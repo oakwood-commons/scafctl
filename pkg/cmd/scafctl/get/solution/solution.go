@@ -18,6 +18,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
 
@@ -41,7 +42,7 @@ func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 		Short:   fmt.Sprintf("Gets %s solutions", settings.CliBinaryName),
 		RunE: func(cCmd *cobra.Command, args []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
-			ctx := settings.IntoContext(context.Background(), cliParams)
+			ctx := settings.IntoContext(cCmd.Context(), cliParams)
 
 			lgr := logger.FromContext(ctx)
 			lgr.V(3).Info("Solution command invoked")
@@ -110,15 +111,21 @@ func (o *CmdOptionsVersion) GetSolution(ctx context.Context) error {
 // This method allows for dependency injection, making it easier to test with mock implementations.
 // The getter parameter should implement the get.Interface.
 func (o *CmdOptionsVersion) GetSolutionWithGetter(ctx context.Context, getter get.Interface) error {
+	w := writer.FromContext(ctx)
+
 	sol, err := getter.Get(ctx, o.Path)
 	if err != nil {
-		fmt.Fprintf(o.IOStreams.ErrOut, " ❌ %v\n", err)
+		if w != nil {
+			w.Errorf("%v", err)
+		}
 		return exitcode.WithCode(err, exitcode.FileNotFound)
 	}
 
 	err = output.WriteOutput(o.IOStreams, o.Output, sol, nil)
 	if err != nil {
-		fmt.Fprintf(o.IOStreams.ErrOut, " ❌ %v\n", err)
+		if w != nil {
+			w.Errorf("%v", err)
+		}
 		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 	return nil

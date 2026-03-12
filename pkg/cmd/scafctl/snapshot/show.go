@@ -118,8 +118,12 @@ func runShow(ctx context.Context, opts *ShowOptions, ioStreams terminal.IOStream
 }
 
 func showSummary(snapshot *resolver.Snapshot, opts *ShowOptions, w *writer.Writer) error {
-	w.Plainlnf("Snapshot Summary")
-	w.Plainlnf("================\n")
+	if w == nil {
+		return nil
+	}
+
+	w.Plainln("Snapshot Summary")
+	w.Plainln("================\n")
 
 	// Metadata
 	w.Plainlnf("Solution:        %s (v%s)", snapshot.Metadata.Solution, snapshot.Metadata.Version)
@@ -145,7 +149,7 @@ func showSummary(snapshot *resolver.Snapshot, opts *ShowOptions, w *writer.Write
 		}
 	}
 
-	w.Plainlnf("Resolvers:       %d total", total)
+	w.Plainlnf("Resolvers:       %d total", len(snapshot.Resolvers))
 	w.Plainlnf("  Success:       %d", success)
 	w.Plainlnf("  Failed:        %d", failed)
 	w.Plainlnf("  Skipped:       %d", skipped)
@@ -182,7 +186,7 @@ func showResolvers(snapshot *resolver.Snapshot, opts *ShowOptions, w *writer.Wri
 	}
 
 	w.Plainlnf("Resolvers (%d)", count)
-	w.Plainlnf("=============\n")
+	w.Plainln("=============\n")
 
 	for name, res := range snapshot.Resolvers {
 		if res == nil {
@@ -210,7 +214,7 @@ func showResolvers(snapshot *resolver.Snapshot, opts *ShowOptions, w *writer.Wri
 				w.Plainlnf("  Value Size:    %d bytes", res.ValueSizeBytes)
 			}
 			if res.Sensitive {
-				w.Plainlnf("  Sensitive:     yes")
+				w.Plainln("  Sensitive:     yes")
 			}
 		}
 
@@ -227,7 +231,7 @@ func showResolvers(snapshot *resolver.Snapshot, opts *ShowOptions, w *writer.Wri
 			}
 		}
 
-		w.Plainlnf("")
+		w.Plainln("")
 	}
 
 	return nil

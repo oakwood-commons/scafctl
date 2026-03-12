@@ -8,10 +8,9 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"text/template"
 
-	"github.com/google/cel-go/cel"
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	gotmplext "github.com/oakwood-commons/scafctl/pkg/gotmpl/ext"
 	"sigs.k8s.io/yaml"
@@ -264,20 +263,12 @@ func (s *Server) handleValidateExpression(_ context.Context, request mcp.CallToo
 
 // validateCELExpression checks a CEL expression for syntax errors without executing it.
 func (s *Server) validateCELExpression(expression string) (*mcp.CallToolResult, error) {
-	env, err := cel.NewEnv()
-	if err != nil {
-		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to create CEL environment: %v", err),
-			WithSuggestion("This is an internal error — please report it"),
-		), nil
-	}
-
-	_, issues := env.Parse(expression)
-	if issues != nil && issues.Err() != nil {
+	if err := celexp.ValidateSyntax(expression); err != nil {
 		return mcp.NewToolResultJSON(map[string]any{
 			"valid":      false,
 			"type":       "cel",
 			"expression": expression,
-			"error":      issues.Err().Error(),
+			"error":      err.Error(),
 			"suggestion": "Check CEL syntax. Common issues: missing quotes around strings, using == instead of =, unbalanced parentheses. Use list_cel_functions to see available functions.",
 		})
 	}
@@ -291,20 +282,7 @@ func (s *Server) validateCELExpression(expression string) (*mcp.CallToolResult, 
 
 // validateGoTemplate checks a Go template for parse errors without executing it.
 func (s *Server) validateGoTemplate(content, leftDelim, rightDelim string) (*mcp.CallToolResult, error) {
-	// Use text/template to parse-only (no execution)
-	tmpl := template.New("mcp-validate")
-
-	switch {
-	case leftDelim != "" && rightDelim != "":
-		tmpl = tmpl.Delims(leftDelim, rightDelim)
-	case leftDelim != "":
-		tmpl = tmpl.Delims(leftDelim, "}}")
-	case rightDelim != "":
-		tmpl = tmpl.Delims("{{", rightDelim)
-	}
-
-	_, err := tmpl.Parse(content)
-	if err != nil {
+	if err := gotmpl.ValidateSyntax(content, leftDelim, rightDelim); err != nil {
 		errMsg := err.Error()
 		suggestion := "Check Go template syntax. Common issues: missing closing braces '}}', unclosed {{ if }}/{{ range }}/{{ with }} blocks, undefined functions."
 		if strings.Contains(errMsg, "function") {
@@ -459,22 +437,15 @@ func (s *Server) handleValidateExpressions(_ context.Context, request mcp.CallTo
 
 // validateCELExpressionDirect validates a CEL expression and returns (valid, errorMsg).
 func (s *Server) validateCELExpressionDirect(expression string) (bool, string) {
-	env, err := cel.NewEnv()
-	if err != nil {
-		return false, fmt.Sprintf("failed to create CEL environment: %v", err)
-	}
-	_, issues := env.Parse(expression)
-	if issues != nil && issues.Err() != nil {
-		return false, issues.Err().Error()
+	if err := celexp.ValidateSyntax(expression); err != nil {
+		return false, err.Error()
 	}
 	return true, ""
 }
 
 // validateGoTemplateDirect validates a Go template and returns (valid, errorMsg, references).
 func (s *Server) validateGoTemplateDirect(content string) (bool, string, []string) {
-	tmpl := template.New("mcp-batch-validate")
-	_, err := tmpl.Parse(content)
-	if err != nil {
+	if err := gotmpl.ValidateSyntax(content, "", ""); err != nil {
 		return false, err.Error(), nil
 	}
 

@@ -9,53 +9,55 @@ import (
 	"fmt"
 	"os"
 	"time"
+
+	"github.com/oakwood-commons/scafctl/pkg/terminal/format"
 )
 
 // Snapshot represents a complete snapshot of resolver execution
 type Snapshot struct {
-	Metadata   SnapshotMetadata             `json:"metadata" doc:"Snapshot metadata"`
-	Parameters map[string]any               `json:"parameters" doc:"Parameters used in execution"`
-	Resolvers  map[string]*SnapshotResolver `json:"resolvers" doc:"Resolver execution results"`
-	Phases     []SnapshotPhase              `json:"phases" doc:"Phase execution information"`
+	Metadata   SnapshotMetadata             `json:"metadata" yaml:"metadata" doc:"Snapshot metadata"`
+	Parameters map[string]any               `json:"parameters" yaml:"parameters" doc:"Parameters used in execution"`
+	Resolvers  map[string]*SnapshotResolver `json:"resolvers" yaml:"resolvers" doc:"Resolver execution results"`
+	Phases     []SnapshotPhase              `json:"phases" yaml:"phases" doc:"Phase execution information" maxItems:"100"`
 }
 
 // SnapshotMetadata contains metadata about the snapshot
 type SnapshotMetadata struct {
-	Solution       string    `json:"solution" doc:"Solution name"`
-	Version        string    `json:"version,omitempty" doc:"Solution version"`
-	Timestamp      time.Time `json:"timestamp" doc:"When snapshot was captured"`
-	ScafctlVersion string    `json:"scafctlVersion" doc:"scafctl version"`
-	TotalDuration  string    `json:"totalDuration" doc:"Total execution duration"`
-	Status         string    `json:"status" doc:"Overall execution status (success, failed)"`
+	Solution       string    `json:"solution" yaml:"solution" doc:"Solution name" maxLength:"512" example:"my-solution"`
+	Version        string    `json:"version,omitempty" yaml:"version,omitempty" doc:"Solution version" maxLength:"64" example:"1.0.0"`
+	Timestamp      time.Time `json:"timestamp" yaml:"timestamp" doc:"When snapshot was captured"`
+	ScafctlVersion string    `json:"scafctlVersion" yaml:"scafctlVersion" doc:"scafctl version" maxLength:"64" example:"0.5.0"`
+	TotalDuration  string    `json:"totalDuration" yaml:"totalDuration" doc:"Total execution duration" maxLength:"32" example:"1.5s"`
+	Status         string    `json:"status" yaml:"status" doc:"Overall execution status (success, failed)" maxLength:"32" example:"success"`
 }
 
 // SnapshotResolver contains execution result for a single resolver
 type SnapshotResolver struct {
-	Value          any                     `json:"value" doc:"Resolved value (or <redacted> if sensitive)"`
-	Status         string                  `json:"status" doc:"Execution status (success, failed, skipped)"`
-	Phase          int                     `json:"phase" doc:"Execution phase number"`
-	Duration       string                  `json:"duration" doc:"Execution duration"`
-	ProviderCalls  int                     `json:"providerCalls" doc:"Number of provider calls made"`
-	ValueSizeBytes int64                   `json:"valueSizeBytes,omitempty" doc:"Size of value in bytes"`
-	Sensitive      bool                    `json:"sensitive,omitempty" doc:"Whether value was redacted"`
-	Error          string                  `json:"error,omitempty" doc:"Error message if failed"`
-	FailedAttempts []SnapshotFailedAttempt `json:"failedAttempts,omitempty" doc:"Failed provider attempts (onError: continue)"`
+	Value          any                     `json:"value" yaml:"value" doc:"Resolved value (or <redacted> if sensitive)"`
+	Status         string                  `json:"status" yaml:"status" doc:"Execution status (success, failed, skipped)" maxLength:"32" example:"success"`
+	Phase          int                     `json:"phase" yaml:"phase" doc:"Execution phase number" maximum:"100" example:"1"`
+	Duration       string                  `json:"duration" yaml:"duration" doc:"Execution duration" maxLength:"32" example:"250ms"`
+	ProviderCalls  int                     `json:"providerCalls" yaml:"providerCalls" doc:"Number of provider calls made" maximum:"1000" example:"3"`
+	ValueSizeBytes int64                   `json:"valueSizeBytes,omitempty" yaml:"valueSizeBytes,omitempty" doc:"Size of value in bytes" maximum:"1073741824" example:"1024"`
+	Sensitive      bool                    `json:"sensitive,omitempty" yaml:"sensitive,omitempty" doc:"Whether value was redacted"`
+	Error          string                  `json:"error,omitempty" yaml:"error,omitempty" doc:"Error message if failed" maxLength:"4096" example:"connection refused"`
+	FailedAttempts []SnapshotFailedAttempt `json:"failedAttempts,omitempty" yaml:"failedAttempts,omitempty" doc:"Failed provider attempts (onError: continue)" maxItems:"100"`
 }
 
 // SnapshotFailedAttempt contains information about a failed provider attempt
 type SnapshotFailedAttempt struct {
-	Provider   string `json:"provider" doc:"Provider name"`
-	SourceStep int    `json:"sourceStep" doc:"Source/step index in phase"`
-	Error      string `json:"error" doc:"Error message"`
-	Duration   string `json:"duration" doc:"Time spent on this attempt"`
-	Timestamp  string `json:"timestamp" doc:"When attempt occurred"`
+	Provider   string `json:"provider" yaml:"provider" doc:"Provider name" maxLength:"128" example:"http"`
+	SourceStep int    `json:"sourceStep" yaml:"sourceStep" doc:"Source/step index in phase" maximum:"100" example:"0"`
+	Error      string `json:"error" yaml:"error" doc:"Error message" maxLength:"4096" example:"timeout"`
+	Duration   string `json:"duration" yaml:"duration" doc:"Time spent on this attempt" maxLength:"32" example:"5s"`
+	Timestamp  string `json:"timestamp" yaml:"timestamp" doc:"When attempt occurred" maxLength:"64" example:"2026-01-29T12:00:00Z"`
 }
 
 // SnapshotPhase contains information about a phase execution
 type SnapshotPhase struct {
-	Phase     int      `json:"phase" doc:"Phase number (1-based)"`
-	Duration  string   `json:"duration" doc:"Phase execution duration"`
-	Resolvers []string `json:"resolvers" doc:"Resolver names in this phase"`
+	Phase     int      `json:"phase" yaml:"phase" doc:"Phase number (1-based)" maximum:"100" example:"1"`
+	Duration  string   `json:"duration" yaml:"duration" doc:"Phase execution duration" maxLength:"32" example:"500ms"`
+	Resolvers []string `json:"resolvers" yaml:"resolvers" doc:"Resolver names in this phase" maxItems:"500"`
 }
 
 // CaptureSnapshot creates a snapshot from execution context and results
@@ -82,7 +84,7 @@ func CaptureSnapshot(
 			Version:        solutionVersion,
 			Timestamp:      time.Now().UTC(),
 			ScafctlVersion: buildVersion,
-			TotalDuration:  formatDuration(totalDuration),
+			TotalDuration:  format.Duration(totalDuration),
 			Status:         string(overallStatus),
 		},
 		Parameters: parameters,
@@ -98,7 +100,7 @@ func CaptureSnapshot(
 		sr := &SnapshotResolver{
 			Status:        string(result.Status),
 			Phase:         result.Phase,
-			Duration:      formatDuration(result.TotalDuration),
+			Duration:      format.Duration(result.TotalDuration),
 			ProviderCalls: result.ProviderCallCount,
 		}
 
@@ -126,7 +128,7 @@ func CaptureSnapshot(
 					Provider:   attempt.Provider,
 					SourceStep: attempt.SourceStep,
 					Error:      attempt.Error,
-					Duration:   formatDuration(attempt.Duration),
+					Duration:   format.Duration(attempt.Duration),
 					Timestamp:  attempt.Timestamp.Format(time.RFC3339),
 				}
 			}
@@ -153,7 +155,7 @@ func CaptureSnapshot(
 
 			snapshot.Phases = append(snapshot.Phases, SnapshotPhase{
 				Phase:     phase,
-				Duration:  formatDuration(maxDuration),
+				Duration:  format.Duration(maxDuration),
 				Resolvers: resolvers,
 			})
 		}

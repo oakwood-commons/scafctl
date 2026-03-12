@@ -102,7 +102,10 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 		Args:         cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			w := writer.MustFromContext(ctx)
+			w := writer.FromContext(ctx)
+			if w == nil {
+				return fmt.Errorf("writer not initialized in context")
+			}
 			handlerName := args[0]
 
 			// --force is an alias for --force-refresh
@@ -164,7 +167,7 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			}
 
 			if rawToken {
-				fmt.Fprintln(ioStreams.Out, token.AccessToken)
+				w.Plainln(token.AccessToken)
 				return nil
 			}
 
@@ -180,7 +183,7 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 
 			if exportToken {
 				varName := tokenExportVarName(handlerName)
-				fmt.Fprintf(ioStreams.Out, "export %s=%s\n", varName, token.AccessToken)
+				w.Plainlnf("export %s=%s", varName, token.AccessToken)
 				return nil
 			}
 
@@ -189,7 +192,7 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 				if url == "" {
 					url = "<URL>"
 				}
-				fmt.Fprintf(ioStreams.Out, "curl -H %q %q\n",
+				w.Plainlnf("curl -H %q %q",
 					fmt.Sprintf("Authorization: %s %s", token.TokenType, token.AccessToken), url)
 				return nil
 			}

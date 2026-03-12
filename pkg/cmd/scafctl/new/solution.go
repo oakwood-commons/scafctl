@@ -76,7 +76,7 @@ func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 		`),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Use)
-			ctx := settings.IntoContext(context.Background(), cliParams)
+			ctx := settings.IntoContext(cmd.Context(), cliParams)
 
 			if lgr := logger.FromContext(cmd.Context()); lgr != nil {
 				ctx = logger.WithLogger(ctx, lgr)
@@ -111,7 +111,10 @@ func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 
 // Run executes the new solution command.
 func (o *SolutionOptions) Run(ctx context.Context) error {
-	w := writer.MustFromContext(ctx)
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return fmt.Errorf("writer not initialized in context")
+	}
 
 	// Build features map
 	features := make(map[string]bool)
@@ -175,7 +178,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	}
 
 	// Write to stdout
-	fmt.Fprint(o.IOStreams.Out, result.YAML)
+	w.Plain(result.YAML)
 
 	return nil
 }

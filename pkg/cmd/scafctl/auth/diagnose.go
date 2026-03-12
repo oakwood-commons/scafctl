@@ -5,15 +5,11 @@ package auth
 
 import (
 	"fmt"
-	"net/http"
-	"os"
 	"time"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	authpkg "github.com/oakwood-commons/scafctl/pkg/auth"
-	entraauth "github.com/oakwood-commons/scafctl/pkg/auth/entra"
-	gcpauth "github.com/oakwood-commons/scafctl/pkg/auth/gcp"
-	ghauth "github.com/oakwood-commons/scafctl/pkg/auth/github"
+	"github.com/oakwood-commons/scafctl/pkg/auth/diagnose"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -24,24 +20,6 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
-
-// diagCheckStatus represents the result of a single diagnostic check.
-type diagCheckStatus string
-
-const (
-	diagOK   diagCheckStatus = "ok"
-	diagWarn diagCheckStatus = "warn"
-	diagFail diagCheckStatus = "fail"
-	diagInfo diagCheckStatus = "info"
-)
-
-// diagCheck represents one diagnostic check result.
-type diagCheck struct {
-	Category string          `json:"category"`
-	Check    string          `json:"check"`
-	Status   diagCheckStatus `json:"status"`
-	Message  string          `json:"message"`
-}
 
 // CommandDiagnose creates the 'auth diagnose' command.
 func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
@@ -87,44 +65,47 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 		Args:         cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			w := writer.MustFromContext(ctx)
+			w := writer.FromContext(ctx)
+			if w == nil {
+				return fmt.Errorf("writer not initialized in context")
+			}
 
 			// When -o/--interactive/--expression is given, suppress human text and
 			// emit only the structured data at the end.
 			structuredOutput := cmd.Flags().Changed("output") || outputFlags.Interactive || outputFlags.Expression != ""
 
-			var checks []diagCheck
-			addCheck := func(c diagCheck) {
+			var checks []diagnose.Check
+			addCheck := func(c diagnose.Check) {
 				checks = append(checks, c)
 				if structuredOutput {
 					return
 				}
 				switch c.Status {
-				case diagOK:
-					w.Successf("[ok]   %s: %s", c.Check, c.Message)
-				case diagWarn:
-					w.Warningf("[warn] %s: %s", c.Check, c.Message)
-				case diagFail:
-					w.Errorf("[fail] %s: %s", c.Check, c.Message)
-				case diagInfo:
-					w.Infof("[info] %s: %s", c.Check, c.Message)
+				case diagnose.StatusOK:
+					w.Successf("[ok]   %s: %s", c.Name, c.Message)
+				case diagnose.StatusWarn:
+					w.Warningf("[warn] %s: %s", c.Name, c.Message)
+				case diagnose.StatusFail:
+					w.Errorf("[fail] %s: %s", c.Name, c.Message)
+				case diagnose.StatusInfo:
+					w.Infof("[info] %s: %s", c.Name, c.Message)
 				}
 			}
 
 			// ── 1. Auth registry ──────────────────────────────────────────────
 			handlerNames := listHandlers(ctx)
 			if len(handlerNames) == 0 {
-				addCheck(diagCheck{
+				addCheck(diagnose.Check{
 					Category: "registry",
-					Check:    "auth registry",
-					Status:   diagFail,
+					Name:     "auth registry",
+					Status:   diagnose.StatusFail,
 					Message:  "no auth handlers registered — registry may not be initialised",
 				})
 			} else {
-				addCheck(diagCheck{
+				addCheck(diagnose.Check{
 					Category: "registry",
-					Check:    "auth registry",
-					Status:   diagOK,
+					Name:     "auth registry",
+					Status:   diagnose.StatusOK,
 					Message:  fmt.Sprintf("registered handlers: %v", handlerNames),
 				})
 			}
@@ -132,17 +113,17 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 			// ── 2. Config file ────────────────────────────────────────────────
 			cfgPath, cfgPathErr := paths.SearchConfigFile()
 			if cfgPathErr != nil {
-				addCheck(diagCheck{
+				addCheck(diagnose.Check{
 					Category: "config",
-					Check:    "config file",
-					Status:   diagWarn,
+					Name:     "config file",
+					Status:   diagnose.StatusWarn,
 					Message:  "config file not found — using built-in defaults",
 				})
 			} else {
-				addCheck(diagCheck{
+				addCheck(diagnose.Check{
 					Category: "config",
-					Check:    "config file",
-					Status:   diagOK,
+					Name:     "config file",
+					Status:   diagnose.StatusOK,
 					Message:  cfgPath,
 				})
 			}
@@ -151,38 +132,38 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 			cfg := config.FromContext(ctx)
 			if cfg != nil {
 				if cfg.Auth.Entra != nil {
-					addCheck(diagCheck{
+					addCheck(diagnose.Check{
 						Category: "config",
-						Check:    "config entra section",
-						Status:   diagOK,
+						Name:     "config entra section",
+						Status:   diagnose.StatusOK,
 						Message:  fmt.Sprintf("clientId=%q tenantId=%q", cfg.Auth.Entra.ClientID, cfg.Auth.Entra.TenantID),
 					})
 				}
 				if cfg.Auth.GitHub != nil {
-					addCheck(diagCheck{
+					addCheck(diagnose.Check{
 						Category: "config",
-						Check:    "config github section",
-						Status:   diagOK,
+						Name:     "config github section",
+						Status:   diagnose.StatusOK,
 						Message:  fmt.Sprintf("clientId=%q hostname=%q", cfg.Auth.GitHub.ClientID, cfg.Auth.GitHub.Hostname),
 					})
 				}
 				if cfg.Auth.GCP != nil {
-					addCheck(diagCheck{
+					addCheck(diagnose.Check{
 						Category: "config",
-						Check:    "config gcp section",
-						Status:   diagOK,
+						Name:     "config gcp section",
+						Status:   diagnose.StatusOK,
 						Message:  fmt.Sprintf("clientId=%q impersonate=%q", cfg.Auth.GCP.ClientID, cfg.Auth.GCP.ImpersonateServiceAccount),
 					})
 				}
 			}
 
 			// ── 3. Environment variables ──────────────────────────────────────
-			for _, c := range runEnvVarChecks() {
+			for _, c := range diagnose.RunEnvVarChecks() {
 				addCheck(c)
 			}
 
 			// ── 3.5. Clock skew ───────────────────────────────────────────────
-			addCheck(runClockSkewCheck())
+			addCheck(diagnose.RunClockSkewCheck())
 
 			// ── 4. Handler authentication status & token health ───────────────
 			// When a handler name is provided, scope checks to that handler only.
@@ -199,10 +180,10 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 			for _, name := range handlerNames {
 				handler, err := getHandler(ctx, name)
 				if err != nil {
-					addCheck(diagCheck{
+					addCheck(diagnose.Check{
 						Category: "handler",
-						Check:    fmt.Sprintf("%s: init", name),
-						Status:   diagFail,
+						Name:     fmt.Sprintf("%s: init", name),
+						Status:   diagnose.StatusFail,
 						Message:  err.Error(),
 					})
 					failCount++
@@ -211,10 +192,10 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 
 				status, err := handler.Status(ctx)
 				if err != nil {
-					addCheck(diagCheck{
+					addCheck(diagnose.Check{
 						Category: "handler",
-						Check:    fmt.Sprintf("%s: status", name),
-						Status:   diagFail,
+						Name:     fmt.Sprintf("%s: status", name),
+						Status:   diagnose.StatusFail,
 						Message:  err.Error(),
 					})
 					failCount++
@@ -222,10 +203,10 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 				}
 
 				if !status.Authenticated {
-					addCheck(diagCheck{
+					addCheck(diagnose.Check{
 						Category: "handler",
-						Check:    fmt.Sprintf("%s: authenticated", name),
-						Status:   diagWarn,
+						Name:     fmt.Sprintf("%s: authenticated", name),
+						Status:   diagnose.StatusWarn,
 						Message:  fmt.Sprintf("not authenticated — run 'scafctl auth login %s'", name),
 					})
 					continue
@@ -239,10 +220,10 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 				if !status.ExpiresAt.IsZero() {
 					msg += fmt.Sprintf(", expires in %s", humanDuration(time.Until(status.ExpiresAt)))
 				}
-				addCheck(diagCheck{
+				addCheck(diagnose.Check{
 					Category: "handler",
-					Check:    fmt.Sprintf("%s: authenticated", name),
-					Status:   diagOK,
+					Name:     fmt.Sprintf("%s: authenticated", name),
+					Status:   diagnose.StatusOK,
 					Message:  msg,
 				})
 
@@ -250,10 +231,10 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 				if lister, ok := handler.(authpkg.TokenLister); ok {
 					tokens, err := lister.ListCachedTokens(ctx)
 					if err != nil {
-						addCheck(diagCheck{
+						addCheck(diagnose.Check{
 							Category: "cache",
-							Check:    fmt.Sprintf("%s: token cache", name),
-							Status:   diagWarn,
+							Name:     fmt.Sprintf("%s: token cache", name),
+							Status:   diagnose.StatusWarn,
 							Message:  fmt.Sprintf("could not read cached tokens: %v", err),
 						})
 					} else {
@@ -264,14 +245,14 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 							}
 						}
 						cacheMsg := fmt.Sprintf("%d cached token(s)", len(tokens))
-						cacheStatus := diagOK
+						cacheStatus := diagnose.StatusOK
 						if expired > 0 {
 							cacheMsg += fmt.Sprintf(", %d expired", expired)
-							cacheStatus = diagWarn
+							cacheStatus = diagnose.StatusWarn
 						}
-						addCheck(diagCheck{
+						addCheck(diagnose.Check{
 							Category: "cache",
-							Check:    fmt.Sprintf("%s: token cache", name),
+							Name:     fmt.Sprintf("%s: token cache", name),
 							Status:   cacheStatus,
 							Message:  cacheMsg,
 						})
@@ -281,10 +262,10 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 				// Live token fetch
 				if liveToken && authpkg.HasCapability(handler.Capabilities(), authpkg.CapScopesOnTokenRequest) {
 					// Cannot do a generic live fetch without a scope — report info
-					addCheck(diagCheck{
+					addCheck(diagnose.Check{
 						Category: "live",
-						Check:    fmt.Sprintf("%s: live token", name),
-						Status:   diagInfo,
+						Name:     fmt.Sprintf("%s: live token", name),
+						Status:   diagnose.StatusInfo,
 						Message:  "handler requires --scope for token fetch; use 'scafctl auth token " + name + " --scope <scope>' to test manually",
 					})
 				} else if liveToken {
@@ -292,18 +273,18 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 						MinValidFor: authpkg.DefaultMinValidFor,
 					})
 					if err != nil {
-						addCheck(diagCheck{
+						addCheck(diagnose.Check{
 							Category: "live",
-							Check:    fmt.Sprintf("%s: live token", name),
-							Status:   diagFail,
+							Name:     fmt.Sprintf("%s: live token", name),
+							Status:   diagnose.StatusFail,
 							Message:  err.Error(),
 						})
 						failCount++
 					} else {
-						addCheck(diagCheck{
+						addCheck(diagnose.Check{
 							Category: "live",
-							Check:    fmt.Sprintf("%s: live token", name),
-							Status:   diagOK,
+							Name:     fmt.Sprintf("%s: live token", name),
+							Status:   diagnose.StatusOK,
 							Message:  "token acquired successfully",
 						})
 					}
@@ -315,19 +296,19 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 			okCount := 0
 			for _, c := range checks {
 				switch c.Status {
-				case diagFail:
+				case diagnose.StatusFail:
 					// counted above
-				case diagWarn:
+				case diagnose.StatusWarn:
 					warnCount++
-				case diagOK:
+				case diagnose.StatusOK:
 					okCount++
-				case diagInfo:
+				case diagnose.StatusInfo:
 					// info checks do not affect counts
 				}
 			}
 
 			if !structuredOutput {
-				fmt.Fprintln(ioStreams.Out, "")
+				w.Plainln("")
 				switch {
 				case failCount > 0:
 					w.Errorf("Diagnostics complete: %d failure(s), %d warning(s), %d ok", failCount, warnCount, okCount)
@@ -344,7 +325,7 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 				for _, c := range checks {
 					results = append(results, map[string]any{
 						"category": c.Category,
-						"check":    c.Check,
+						"check":    c.Name,
 						"status":   string(c.Status),
 						"message":  c.Message,
 					})
@@ -374,185 +355,4 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 	cmd.Flags().BoolVar(&liveToken, "live-token", false, "Attempt a live token fetch for each authenticated handler to confirm end-to-end health")
 
 	return cmd
-}
-
-// runEnvVarChecks checks common environment variables for all known auth handlers.
-func runEnvVarChecks() []diagCheck {
-	var checks []diagCheck
-
-	entraVars := []struct {
-		name, desc string
-	}{
-		{"AZURE_CLIENT_ID", "Entra service principal client ID"},
-		{"AZURE_TENANT_ID", "Entra tenant ID"},
-		{"AZURE_CLIENT_SECRET", "Entra client secret (service principal)"},
-		{"AZURE_FEDERATED_TOKEN_FILE", "Entra workload identity token file path"},
-		{"AZURE_FEDERATED_TOKEN", "Entra workload identity token (raw)"},
-	}
-	for _, v := range entraVars {
-		val := os.Getenv(v.name)
-		if val != "" {
-			checks = append(checks, diagCheck{
-				Category: "env",
-				Check:    fmt.Sprintf("env %s", v.name),
-				Status:   diagOK,
-				Message:  fmt.Sprintf("%s — set (%s)", v.desc, v.name),
-			})
-		}
-	}
-	if entraauth.HasServicePrincipalCredentials() {
-		checks = append(checks, diagCheck{
-			Category: "env",
-			Check:    "env entra: service-principal credentials",
-			Status:   diagOK,
-			Message:  "AZURE_CLIENT_ID + AZURE_TENANT_ID + AZURE_CLIENT_SECRET are all set",
-		})
-	}
-	if entraauth.HasWorkloadIdentityCredentials() {
-		checks = append(checks, diagCheck{
-			Category: "env",
-			Check:    "env entra: workload-identity credentials",
-			Status:   diagOK,
-			Message:  "workload identity environment detected (AZURE_FEDERATED_TOKEN_FILE or AZURE_FEDERATED_TOKEN)",
-		})
-	}
-
-	ghVars := []struct{ name, desc string }{
-		{"GITHUB_TOKEN", "GitHub personal access token"},
-		{"GH_TOKEN", "GitHub personal access token (alternate)"},
-	}
-	for _, v := range ghVars {
-		if os.Getenv(v.name) != "" {
-			checks = append(checks, diagCheck{
-				Category: "env",
-				Check:    fmt.Sprintf("env %s", v.name),
-				Status:   diagOK,
-				Message:  fmt.Sprintf("%s — set", v.desc),
-			})
-		}
-	}
-	if ghauth.HasPATCredentials() {
-		checks = append(checks, diagCheck{
-			Category: "env",
-			Check:    "env github: PAT credentials",
-			Status:   diagOK,
-			Message:  "GITHUB_TOKEN or GH_TOKEN is set",
-		})
-	}
-
-	gcpVars := []struct{ name, desc string }{
-		{"GOOGLE_APPLICATION_CREDENTIALS", "GCP service account key file path"},
-		{"GOOGLE_EXTERNAL_ACCOUNT", "GCP workload identity external account config"},
-		{"GOOGLE_CLOUD_PROJECT", "GCP project ID"},
-	}
-	for _, v := range gcpVars {
-		if os.Getenv(v.name) != "" {
-			checks = append(checks, diagCheck{
-				Category: "env",
-				Check:    fmt.Sprintf("env %s", v.name),
-				Status:   diagOK,
-				Message:  fmt.Sprintf("%s — set", v.desc),
-			})
-		}
-	}
-	if gcpauth.HasServiceAccountCredentials() {
-		checks = append(checks, diagCheck{
-			Category: "env",
-			Check:    "env gcp: service-account credentials",
-			Status:   diagOK,
-			Message:  "GOOGLE_APPLICATION_CREDENTIALS is set and points to a service account key",
-		})
-	}
-	if gcpauth.HasWorkloadIdentityCredentials() {
-		checks = append(checks, diagCheck{
-			Category: "env",
-			Check:    "env gcp: workload-identity credentials",
-			Status:   diagOK,
-			Message:  "GCP workload identity environment detected",
-		})
-	}
-	if gcpauth.HasGcloudADCCredentials() {
-		checks = append(checks, diagCheck{
-			Category: "env",
-			Check:    "env gcp: gcloud ADC",
-			Status:   diagOK,
-			Message:  "gcloud Application Default Credentials file found",
-		})
-	}
-
-	if len(checks) == 0 {
-		checks = append(checks, diagCheck{
-			Category: "env",
-			Check:    "env: credential variables",
-			Status:   diagInfo,
-			Message:  "no auth-related environment variables detected (interactive login may still work)",
-		})
-	}
-
-	return checks
-}
-
-// runClockSkewCheck compares the local system clock against the Date header
-// returned by a well-known HTTPS endpoint (cloudflare.com).
-// A skew > 5 minutes can cause token validation failures.
-func runClockSkewCheck() diagCheck {
-	const endpoint = "https://cloudflare.com"
-	const maxSkew = 5 * time.Minute
-	const timeout = 4 * time.Second
-
-	client := &http.Client{Timeout: timeout}
-	before := time.Now()
-	resp, err := client.Head(endpoint) //nolint:noctx // no context needed for a simple diagnostic probe
-	if err != nil {
-		return diagCheck{
-			Category: "clock",
-			Check:    "clock skew",
-			Status:   diagWarn,
-			Message:  fmt.Sprintf("could not reach %s to check clock skew: %v", endpoint, err),
-		}
-	}
-	defer resp.Body.Close()
-	after := time.Now()
-	localMid := before.Add(after.Sub(before) / 2) // midpoint of the round-trip
-
-	dateHeader := resp.Header.Get("Date")
-	if dateHeader == "" {
-		return diagCheck{
-			Category: "clock",
-			Check:    "clock skew",
-			Status:   diagInfo,
-			Message:  fmt.Sprintf("no Date header returned by %s; cannot check clock skew", endpoint),
-		}
-	}
-
-	serverTime, err := http.ParseTime(dateHeader)
-	if err != nil {
-		return diagCheck{
-			Category: "clock",
-			Check:    "clock skew",
-			Status:   diagWarn,
-			Message:  fmt.Sprintf("could not parse Date header %q: %v", dateHeader, err),
-		}
-	}
-
-	skew := localMid.Sub(serverTime)
-	if skew < 0 {
-		skew = -skew
-	}
-
-	if skew > maxSkew {
-		return diagCheck{
-			Category: "clock",
-			Check:    "clock skew",
-			Status:   diagFail,
-			Message:  fmt.Sprintf("clock skew is %s (local: %s, server: %s) — token validation may fail (JWT nbf/exp checks require skew < 5m)", skew.Round(time.Second), localMid.UTC().Format(time.RFC3339), serverTime.UTC().Format(time.RFC3339)),
-		}
-	}
-
-	return diagCheck{
-		Category: "clock",
-		Check:    "clock skew",
-		Status:   diagOK,
-		Message:  fmt.Sprintf("clock skew is %s (within acceptable range)", skew.Round(time.Millisecond)),
-	}
 }

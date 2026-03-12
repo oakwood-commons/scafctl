@@ -5,6 +5,7 @@ package config
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 
 	"github.com/MakeNowJust/heredoc/v2"
@@ -54,7 +55,7 @@ func CommandSchema(cliParams *settings.Run, ioStreams *terminal.IOStreams, path 
 		`),
 		RunE: func(cCmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
-			ctx := settings.IntoContext(context.Background(), cliParams)
+			ctx := settings.IntoContext(cCmd.Context(), cliParams)
 
 			if lgr := logger.FromContext(cCmd.Context()); lgr != nil {
 				ctx = logger.WithLogger(ctx, lgr)
@@ -81,7 +82,10 @@ func CommandSchema(cliParams *settings.Run, ioStreams *terminal.IOStreams, path 
 
 // Run executes the config schema command.
 func (o *SchemaOptions) Run(ctx context.Context) error {
-	w := writer.MustFromContext(ctx)
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return fmt.Errorf("writer not initialized in context")
+	}
 
 	var schemaBytes []byte
 	var err error

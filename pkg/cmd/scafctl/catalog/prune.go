@@ -5,7 +5,6 @@ package catalog
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
@@ -14,6 +13,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/format"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
@@ -94,7 +94,7 @@ func runPrune(ctx context.Context, _ *PruneOptions, outputOpts *kvx.OutputOption
 		RemovedManifests: result.RemovedManifests,
 		RemovedBlobs:     result.RemovedBlobs,
 		ReclaimedBytes:   result.ReclaimedBytes,
-		ReclaimedHuman:   formatBytes(result.ReclaimedBytes),
+		ReclaimedHuman:   format.Bytes(result.ReclaimedBytes),
 	}
 
 	// For structured output, use kvx
@@ -117,18 +117,4 @@ func runPrune(ctx context.Context, _ *PruneOptions, outputOpts *kvx.OutputOption
 	}
 
 	return nil
-}
-
-// formatBytes formats bytes as a human-readable string.
-func formatBytes(bytes int64) string {
-	const unit = 1024
-	if bytes < unit {
-		return fmt.Sprintf("%d B", bytes)
-	}
-	div, exp := int64(unit), 0
-	for n := bytes / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }

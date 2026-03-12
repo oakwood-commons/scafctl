@@ -130,7 +130,7 @@ func extractGoTemplateRefs(content string) ([]string, error) {
 // extractCELRefs extracts resolver references from a CEL expression.
 func extractCELRefs(content string) ([]string, error) {
 	expr := celexp.Expression(content)
-	vars, err := expr.GetUnderscoreVariables()
+	vars, err := expr.GetUnderscoreVariables(context.TODO())
 	if err != nil {
 		return nil, err
 	}

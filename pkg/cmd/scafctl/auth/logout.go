@@ -74,7 +74,10 @@ func CommandLogout(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			w := writer.MustFromContext(ctx)
+			w := writer.FromContext(ctx)
+			if w == nil {
+				return fmt.Errorf("writer not initialized in context")
+			}
 
 			var handlerNames []string
 			if all {

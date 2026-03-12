@@ -63,7 +63,7 @@ func CommandValidate(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 		`),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Use)
-			ctx := settings.IntoContext(context.Background(), cliParams)
+			ctx := settings.IntoContext(cmd.Context(), cliParams)
 
 			if lgr := logger.FromContext(cmd.Context()); lgr != nil {
 				ctx = logger.WithLogger(ctx, lgr)
@@ -95,7 +95,10 @@ func CommandValidate(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 
 // Run executes the eval validate command.
 func (o *ValidateOptions) Run(ctx context.Context) error {
-	w := writer.MustFromContext(ctx)
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return fmt.Errorf("writer not initialized in context")
+	}
 
 	var result *ValidateResult
 

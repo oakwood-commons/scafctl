@@ -15,7 +15,7 @@ import (
 )
 
 // CommandExists creates the 'secrets exists' command.
-func CommandExists(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
+func CommandExists(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Command {
 	var allFlag bool
 
 	cmd := &cobra.Command{
@@ -25,7 +25,10 @@ func CommandExists(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			w := writer.MustFromContext(ctx)
+			w := writer.FromContext(ctx)
+			if w == nil {
+				return fmt.Errorf("writer not initialized in context")
+			}
 			name := args[0]
 
 			// Validate name
@@ -50,7 +53,7 @@ func CommandExists(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 
 			// Print result
 			if !cliParams.IsQuiet {
-				fmt.Fprintln(ioStreams.Out, exists)
+				w.Plainlnf("%v", exists)
 			}
 
 			// Set exit code

@@ -159,12 +159,6 @@ func TestContext(t *testing.T) {
 		retrieved := FromContext(context.Background())
 		assert.Nil(t, retrieved)
 	})
-
-	t.Run("MustFromContext panics with no Input", func(t *testing.T) {
-		assert.Panics(t, func() {
-			MustFromContext(context.Background())
-		})
-	})
 }
 
 func TestNew(t *testing.T) {

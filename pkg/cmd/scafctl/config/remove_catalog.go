@@ -5,6 +5,7 @@ package config
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 
 	"github.com/MakeNowJust/heredoc/v2"
@@ -47,7 +48,7 @@ func CommandRemoveCatalog(cliParams *settings.Run, ioStreams *terminal.IOStreams
 		Args: cobra.ExactArgs(1),
 		RunE: func(cCmd *cobra.Command, args []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
-			ctx := settings.IntoContext(context.Background(), cliParams)
+			ctx := settings.IntoContext(cCmd.Context(), cliParams)
 
 			if lgr := logger.FromContext(cCmd.Context()); lgr != nil {
 				ctx = logger.WithLogger(ctx, lgr)
@@ -78,7 +79,10 @@ func CommandRemoveCatalog(cliParams *settings.Run, ioStreams *terminal.IOStreams
 
 // Run executes the config remove-catalog command.
 func (o *RemoveCatalogOptions) Run(ctx context.Context) error {
-	w := writer.MustFromContext(ctx)
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return fmt.Errorf("writer not initialized in context")
+	}
 
 	mgr := appconfig.NewManager(o.ConfigPath)
 	cfg, err := mgr.Load()

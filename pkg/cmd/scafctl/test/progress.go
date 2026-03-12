@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/vbauerster/mpb/v8"
 	"github.com/vbauerster/mpb/v8/decor"
 )
@@ -182,12 +183,12 @@ func (p *MPBTestProgress) Wait() {
 // LineTestProgress prints one line per completed test.
 // Suitable for non-interactive output (CI logs, piped streams).
 type LineTestProgress struct {
-	w  io.Writer
+	w  *writer.Writer
 	mu sync.Mutex
 }
 
 // NewLineTestProgress creates a line-based progress reporter.
-func NewLineTestProgress(w io.Writer) *LineTestProgress {
+func NewLineTestProgress(w *writer.Writer) *LineTestProgress {
 	return &LineTestProgress{w: w}
 }
 
@@ -216,7 +217,7 @@ func (r *LineTestProgress) OnTestComplete(result soltesting.TestResult) {
 		dur = fmt.Sprintf("  (%s)", fmtDuration(result.Duration))
 	}
 
-	fmt.Fprintf(r.w, "%s %-5s  %s :: %s%s\n", icon, result.Status, result.Solution, result.Test, dur)
+	r.w.Plainlnf("%s %-5s  %s :: %s%s", icon, result.Status, result.Solution, result.Test, dur)
 }
 
 // Wait is a no-op for line-based output.

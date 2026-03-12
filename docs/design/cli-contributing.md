@@ -450,7 +450,10 @@ The `writer` package provides centralized terminal output. **Never use `fmt.Fpri
 import "github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 
 func (o *Options) Run(ctx context.Context) error {
-    w := writer.MustFromContext(ctx)
+    w := writer.FromContext(ctx)
+    if w == nil {
+        return fmt.Errorf("writer not initialized in context")
+    }
     
     // Success message (respects --quiet and --no-color)
     w.Success("Operation completed")
@@ -702,7 +705,10 @@ func (o *Options) Run(ctx context.Context) error {
     lgr.V(1).Info("message", "key", value)
 
     // Writer
-    w := writer.MustFromContext(ctx)
+    w := writer.FromContext(ctx)
+    if w == nil {
+        return fmt.Errorf("writer not initialized in context")
+    }
     w.Success("Done")
 
     // Settings
@@ -1061,7 +1067,10 @@ func Command(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string
 }
 
 func (o *Options) Run(ctx context.Context) error {
-    w := writer.MustFromContext(ctx)
+    w := writer.FromContext(ctx)
+    if w == nil {
+        return fmt.Errorf("writer not initialized in context")
+    }
     w.Successf("Hello, %s!", o.Name)
     return nil
 }

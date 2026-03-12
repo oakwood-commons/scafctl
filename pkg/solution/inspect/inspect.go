@@ -27,49 +27,49 @@ import (
 // SolutionExplanation holds structured explanation data for a solution.
 // This can be serialized to JSON/YAML or formatted for terminal output.
 type SolutionExplanation struct {
-	Name        string `json:"name" yaml:"name" doc:"Solution name"`
-	DisplayName string `json:"displayName,omitempty" yaml:"displayName,omitempty" doc:"Human-readable display name"`
-	Version     string `json:"version" yaml:"version" doc:"Solution version"`
-	Description string `json:"description,omitempty" yaml:"description,omitempty" doc:"Solution description"`
-	Category    string `json:"category,omitempty" yaml:"category,omitempty" doc:"Solution category"`
-	Path        string `json:"path,omitempty" yaml:"path,omitempty" doc:"Source file path"`
+	Name        string `json:"name" yaml:"name" doc:"Solution name" maxLength:"256" example:"my-solution"`
+	DisplayName string `json:"displayName,omitempty" yaml:"displayName,omitempty" doc:"Human-readable display name" maxLength:"256" example:"My Solution"`
+	Version     string `json:"version" yaml:"version" doc:"Solution version" maxLength:"64" example:"1.0.0"`
+	Description string `json:"description,omitempty" yaml:"description,omitempty" doc:"Solution description" maxLength:"2048" example:"Deploys infrastructure"`
+	Category    string `json:"category,omitempty" yaml:"category,omitempty" doc:"Solution category" maxLength:"128" example:"infrastructure"`
+	Path        string `json:"path,omitempty" yaml:"path,omitempty" doc:"Source file path" maxLength:"512" example:"./solution.yaml"`
 
 	Catalog *CatalogInfo `json:"catalog,omitempty" yaml:"catalog,omitempty" doc:"Catalog visibility info"`
 
-	Resolvers []ResolverInfo `json:"resolvers,omitempty" yaml:"resolvers,omitempty" doc:"Resolver configurations"`
-	Actions   []ActionInfo   `json:"actions,omitempty" yaml:"actions,omitempty" doc:"Action configurations"`
-	Finally   []ActionInfo   `json:"finally,omitempty" yaml:"finally,omitempty" doc:"Finally/cleanup actions"`
+	Resolvers []ResolverInfo `json:"resolvers,omitempty" yaml:"resolvers,omitempty" doc:"Resolver configurations" maxItems:"1000"`
+	Actions   []ActionInfo   `json:"actions,omitempty" yaml:"actions,omitempty" doc:"Action configurations" maxItems:"1000"`
+	Finally   []ActionInfo   `json:"finally,omitempty" yaml:"finally,omitempty" doc:"Finally/cleanup actions" maxItems:"100"`
 
-	Tags        []string         `json:"tags,omitempty" yaml:"tags,omitempty" doc:"Solution tags"`
-	Links       []LinkInfo       `json:"links,omitempty" yaml:"links,omitempty" doc:"Related links"`
-	Maintainers []MaintainerInfo `json:"maintainers,omitempty" yaml:"maintainers,omitempty" doc:"Solution maintainers"`
+	Tags        []string         `json:"tags,omitempty" yaml:"tags,omitempty" doc:"Solution tags" maxItems:"50"`
+	Links       []LinkInfo       `json:"links,omitempty" yaml:"links,omitempty" doc:"Related links" maxItems:"50"`
+	Maintainers []MaintainerInfo `json:"maintainers,omitempty" yaml:"maintainers,omitempty" doc:"Solution maintainers" maxItems:"20"`
 
 	// FileDependencies lists files discovered through static analysis of provider inputs.
-	FileDependencies []FileDependencyInfo `json:"fileDependencies,omitempty" yaml:"fileDependencies,omitempty" doc:"File dependencies discovered via static analysis"`
+	FileDependencies []FileDependencyInfo `json:"fileDependencies,omitempty" yaml:"fileDependencies,omitempty" doc:"File dependencies discovered via static analysis" maxItems:"500"`
 }
 
 // CatalogInfo holds catalog metadata.
 type CatalogInfo struct {
-	Visibility string `json:"visibility,omitempty" yaml:"visibility,omitempty" doc:"Catalog visibility level"`
+	Visibility string `json:"visibility,omitempty" yaml:"visibility,omitempty" doc:"Catalog visibility level" maxLength:"32" example:"public"`
 	Beta       bool   `json:"beta,omitempty" yaml:"beta,omitempty" doc:"Whether the solution is in beta"`
 	Disabled   bool   `json:"disabled,omitempty" yaml:"disabled,omitempty" doc:"Whether the solution is disabled"`
 }
 
 // ResolverInfo holds structured information about a resolver.
 type ResolverInfo struct {
-	Name        string              `json:"name" yaml:"name" doc:"Resolver name"`
-	Providers   []string            `json:"providers,omitempty" yaml:"providers,omitempty" doc:"Provider names used"`
-	DependsOn   []string            `json:"dependsOn,omitempty" yaml:"dependsOn,omitempty" doc:"Resolver dependencies"`
+	Name        string              `json:"name" yaml:"name" doc:"Resolver name" maxLength:"256" example:"api-data"`
+	Providers   []string            `json:"providers,omitempty" yaml:"providers,omitempty" doc:"Provider names used" maxItems:"20"`
+	DependsOn   []string            `json:"dependsOn,omitempty" yaml:"dependsOn,omitempty" doc:"Resolver dependencies" maxItems:"100"`
 	Conditional bool                `json:"conditional,omitempty" yaml:"conditional,omitempty" doc:"Whether resolver has a when condition"`
-	Phases      []string            `json:"phases,omitempty" yaml:"phases,omitempty" doc:"Configured phases (resolve, transform, validate)"`
+	Phases      []string            `json:"phases,omitempty" yaml:"phases,omitempty" doc:"Configured phases (resolve, transform, validate)" maxItems:"3"`
 	SourcePos   *sourcepos.Position `json:"sourcePos,omitempty" yaml:"sourcePos,omitempty" doc:"Source file location"`
 }
 
 // ActionInfo holds structured information about an action.
 type ActionInfo struct {
-	Name        string              `json:"name" yaml:"name" doc:"Action name"`
-	Provider    string              `json:"provider" yaml:"provider" doc:"Provider used by this action"`
-	DependsOn   []string            `json:"dependsOn,omitempty" yaml:"dependsOn,omitempty" doc:"Action dependencies"`
+	Name        string              `json:"name" yaml:"name" doc:"Action name" maxLength:"256" example:"deploy"`
+	Provider    string              `json:"provider" yaml:"provider" doc:"Provider used by this action" maxLength:"128" example:"shell"`
+	DependsOn   []string            `json:"dependsOn,omitempty" yaml:"dependsOn,omitempty" doc:"Action dependencies" maxItems:"100"`
 	Conditional bool                `json:"conditional,omitempty" yaml:"conditional,omitempty" doc:"Whether action has a when condition"`
 	HasRetry    bool                `json:"hasRetry,omitempty" yaml:"hasRetry,omitempty" doc:"Whether retry is configured"`
 	HasForEach  bool                `json:"hasForEach,omitempty" yaml:"hasForEach,omitempty" doc:"Whether forEach is configured"`
@@ -78,20 +78,20 @@ type ActionInfo struct {
 
 // LinkInfo holds a named link.
 type LinkInfo struct {
-	Name string `json:"name" yaml:"name" doc:"Link display name"`
-	URL  string `json:"url" yaml:"url" doc:"Link URL"`
+	Name string `json:"name" yaml:"name" doc:"Link display name" maxLength:"128" example:"Documentation"`
+	URL  string `json:"url" yaml:"url" doc:"Link URL" maxLength:"1024" example:"https://example.com/docs"`
 }
 
 // MaintainerInfo holds maintainer contact info.
 type MaintainerInfo struct {
-	Name  string `json:"name" yaml:"name" doc:"Maintainer name"`
-	Email string `json:"email,omitempty" yaml:"email,omitempty" doc:"Maintainer email"`
+	Name  string `json:"name" yaml:"name" doc:"Maintainer name" maxLength:"128" example:"Jane Doe"`
+	Email string `json:"email,omitempty" yaml:"email,omitempty" doc:"Maintainer email" maxLength:"256" example:"jane@example.com"`
 }
 
 // FileDependencyInfo describes a file dependency discovered via static analysis.
 type FileDependencyInfo struct {
-	Path   string `json:"path" yaml:"path" doc:"Relative file path"`
-	Source string `json:"source" yaml:"source" doc:"How the dependency was discovered (static-analysis, explicit-include, test-include)"`
+	Path   string `json:"path" yaml:"path" doc:"Relative file path" maxLength:"512" example:"templates/main.tf"`
+	Source string `json:"source" yaml:"source" doc:"How the dependency was discovered (static-analysis, explicit-include, test-include)" maxLength:"64" example:"static-analysis"`
 }
 
 // LoadSolution loads a solution from a path using the standard loader with

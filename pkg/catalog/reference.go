@@ -4,6 +4,7 @@
 package catalog
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
@@ -75,16 +76,6 @@ func ParseReference(kind ArtifactKind, input string) (Reference, error) {
 	ref.Version = v
 
 	return ref, nil
-}
-
-// MustParseReference parses a reference string and panics on error.
-// Only use in tests or with known-valid input.
-func MustParseReference(kind ArtifactKind, input string) Reference {
-	ref, err := ParseReference(kind, input)
-	if err != nil {
-		panic(err)
-	}
-	return ref
 }
 
 // validateName checks if an artifact name is valid.
@@ -328,4 +319,40 @@ func NormalizeRegistryHost(host string) string {
 	default:
 		return host
 	}
+}
+
+// ValidateAlias checks that an alias tag is valid for use as a non-version tag.
+// It must not be empty, must not be a valid semver version, and must only contain
+// characters valid in OCI tags ([a-zA-Z0-9_.-]).
+func ValidateAlias(alias string) error {
+	if alias == "" {
+		return fmt.Errorf("alias tag cannot be empty")
+	}
+
+	// Must not be a valid semver version (those should be created via build)
+	if _, err := ParseReference(ArtifactKindSolution, "x@"+alias); err == nil {
+		return fmt.Errorf("alias %q looks like a semver version; use 'scafctl build' to create versioned artifacts", alias)
+	}
+
+	// OCI tag constraints: must match [a-zA-Z0-9_.-]+
+	for _, ch := range alias {
+		if !IsValidTagChar(ch) {
+			return fmt.Errorf("alias %q contains invalid character %q; valid characters: letters, digits, '.', '-', '_'", alias, string(ch))
+		}
+	}
+
+	// Must not start with a dot or hyphen
+	if strings.HasPrefix(alias, ".") || strings.HasPrefix(alias, "-") {
+		return fmt.Errorf("alias %q must start with a letter, digit, or underscore", alias)
+	}
+
+	return nil
+}
+
+// IsValidTagChar returns true if the rune is valid for an OCI tag.
+func IsValidTagChar(ch rune) bool {
+	return (ch >= 'a' && ch <= 'z') ||
+		(ch >= 'A' && ch <= 'Z') ||
+		(ch >= '0' && ch <= '9') ||
+		ch == '_' || ch == '.' || ch == '-'
 }

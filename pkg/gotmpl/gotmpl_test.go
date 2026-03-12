@@ -590,3 +590,39 @@ func TestService_Execute_ReplacementEdgeCases(t *testing.T) {
 		assert.Equal(t, "LITERAL and LITERAL again", result.Output)
 	})
 }
+
+func TestValidateSyntax(t *testing.T) {
+	tests := []struct {
+		name       string
+		content    string
+		leftDelim  string
+		rightDelim string
+		wantErr    bool
+	}{
+		{name: "valid_simple", content: "Hello {{ .Name }}", wantErr: false},
+		{name: "valid_range", content: "{{ range .Items }}{{ . }}{{ end }}", wantErr: false},
+		{name: "valid_if_else", content: "{{ if .Active }}yes{{ else }}no{{ end }}", wantErr: false},
+		{name: "valid_plain_text", content: "no template syntax here", wantErr: false},
+		{name: "invalid_unclosed_action", content: "Hello {{ .Name", wantErr: true},
+		{name: "invalid_unclosed_range", content: "{{ range .Items }}{{ . }}", wantErr: true},
+		{name: "custom_delimiters_valid", content: "Hello <% .Name %>", leftDelim: "<%", rightDelim: "%>", wantErr: false},
+		{name: "custom_left_delim_only", content: "Hello <% .Name }}", leftDelim: "<%", wantErr: false},
+		{name: "custom_right_delim_only", content: "Hello {{ .Name %>", rightDelim: "%>", wantErr: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateSyntax(tt.content, tt.leftDelim, tt.rightDelim)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func BenchmarkValidateSyntax(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		ValidateSyntax("Hello {{ .Name }}, you have {{ len .Items }} items", "", "")
+	}
+}

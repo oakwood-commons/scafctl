@@ -14,14 +14,16 @@ import (
 // This mirrors config.GoTemplateConfig but avoids circular dependencies.
 type GoTemplateConfigInput struct {
 	// CacheSize is the maximum number of compiled templates to cache
-	CacheSize int
+	CacheSize int `json:"cacheSize" yaml:"cacheSize" doc:"Maximum number of compiled templates to cache" maximum:"100000" example:"10000"`
 	// EnableMetrics enables template cache metrics collection
-	EnableMetrics bool
+	EnableMetrics bool `json:"enableMetrics" yaml:"enableMetrics" doc:"Enable template cache metrics collection"`
 }
 
 var (
-	// appConfigOnce ensures InitFromAppConfig is only called once
-	appConfigOnce sync.Once
+	// appConfigMu protects the app config initialization state
+	appConfigMu sync.Mutex
+	// appConfigInitialized tracks whether InitFromAppConfig has been called
+	appConfigInitialized bool
 
 	// appConfigCache stores the configured cache for InitFromAppConfig
 	appConfigCache *TemplateCache
@@ -44,9 +46,12 @@ var (
 //	    EnableMetrics: true,
 //	})
 func InitFromAppConfig(ctx context.Context, cfg GoTemplateConfigInput) {
-	appConfigOnce.Do(func() {
+	appConfigMu.Lock()
+	defer appConfigMu.Unlock()
+	if !appConfigInitialized {
 		initFromAppConfigInternal(ctx, cfg)
-	})
+		appConfigInitialized = true
+	}
 }
 
 // initFromAppConfigInternal performs the actual initialization.
@@ -76,15 +81,17 @@ func initFromAppConfigInternal(ctx context.Context, cfg GoTemplateConfigInput) {
 // ResetAppConfigForTesting resets the app config state for testing purposes.
 // This should only be called from tests.
 func ResetAppConfigForTesting() {
-	appConfigOnce = sync.Once{}
+	appConfigMu.Lock()
+	appConfigInitialized = false
 	appConfigCache = nil
+	appConfigMu.Unlock()
 	// Also reset the cache factory and default cache
-	cacheFactoryOnce = sync.Once{}
 	cacheFactoryMu.Lock()
+	cacheFactoryInitialized = false
 	cacheFactory = nil
 	cacheFactoryMu.Unlock()
-	defaultTemplateCacheOnce = sync.Once{}
 	defaultTemplateCacheMu.Lock()
+	defaultTemplateCacheInitialized = false
 	defaultTemplateCache = nil
 	defaultTemplateCacheMu.Unlock()
 }

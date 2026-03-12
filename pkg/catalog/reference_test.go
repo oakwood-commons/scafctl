@@ -210,20 +210,6 @@ func TestReference_HasDigest(t *testing.T) {
 	})
 }
 
-func TestMustParseReference(t *testing.T) {
-	t.Run("valid reference", func(t *testing.T) {
-		ref := MustParseReference(ArtifactKindSolution, "my-solution@1.0.0")
-		assert.Equal(t, "my-solution", ref.Name)
-		assert.Equal(t, "1.0.0", ref.Version.String())
-	})
-
-	t.Run("invalid reference panics", func(t *testing.T) {
-		assert.Panics(t, func() {
-			MustParseReference(ArtifactKindSolution, "Invalid-Name@1.0.0")
-		})
-	})
-}
-
 func TestIsValidName(t *testing.T) {
 	valid := []string{"a", "abc", "my-solution", "my-app-v2", "app123", "a1"}
 
@@ -447,5 +433,59 @@ func TestRemoteReference_ToReference(t *testing.T) {
 				assert.Equal(t, tt.wantDigest, ref.Digest)
 			}
 		})
+	}
+}
+
+func TestValidateAlias(t *testing.T) {
+	tests := []struct {
+		name    string
+		alias   string
+		wantErr string
+	}{
+		{name: "valid alias - stable", alias: "stable"},
+		{name: "valid alias - latest", alias: "latest"},
+		{name: "valid alias - production", alias: "production"},
+		{name: "valid alias - with dots", alias: "v1.release"},
+		{name: "valid alias - with hyphens", alias: "pre-release"},
+		{name: "valid alias - with underscores", alias: "staging_v2"},
+		{name: "valid alias - uppercase", alias: "STABLE"},
+		{name: "empty alias", alias: "", wantErr: "cannot be empty"},
+		{name: "semver version - rejected", alias: "1.0.0", wantErr: "looks like a semver version"},
+		{name: "semver with prerelease - rejected", alias: "1.2.3-alpha.1", wantErr: "looks like a semver version"},
+		{name: "contains slash", alias: "foo/bar", wantErr: "invalid character"},
+		{name: "contains space", alias: "foo bar", wantErr: "invalid character"},
+		{name: "contains colon", alias: "foo:bar", wantErr: "invalid character"},
+		{name: "starts with dot", alias: ".hidden", wantErr: "must start with"},
+		{name: "starts with hyphen", alias: "-flag", wantErr: "must start with"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateAlias(tt.alias)
+			if tt.wantErr != "" {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestIsValidTagChar(t *testing.T) {
+	valid := []rune{'a', 'z', 'A', 'Z', '0', '9', '_', '.', '-'}
+	for _, ch := range valid {
+		assert.True(t, IsValidTagChar(ch), "expected %q to be valid", string(ch))
+	}
+
+	invalid := []rune{'/', ':', ' ', '@', '#', '!'}
+	for _, ch := range invalid {
+		assert.False(t, IsValidTagChar(ch), "expected %q to be invalid", string(ch))
+	}
+}
+
+func BenchmarkValidateAlias(b *testing.B) {
+	for b.Loop() {
+		_ = ValidateAlias("production")
 	}
 }

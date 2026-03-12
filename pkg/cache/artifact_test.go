@@ -176,3 +176,44 @@ func BenchmarkArtifactCache_PutGet(b *testing.B) {
 		_, _, _, _ = c.Get("solution", "bench-solution", "1.0.0")
 	}
 }
+
+func TestInvalidateArtifact(t *testing.T) {
+	dir := t.TempDir()
+	c := cache.NewArtifactCache(dir, time.Hour)
+
+	// Store an entry
+	content := []byte("solution: {}")
+	require.NoError(t, c.Put("solution", "my-app", "2.0.0", "sha256:def456", content, nil))
+
+	// Verify it's there
+	_, _, ok, err := c.Get("solution", "my-app", "2.0.0")
+	require.NoError(t, err)
+	assert.True(t, ok)
+
+	// Invalidate via convenience function
+	err = cache.InvalidateArtifact(dir, time.Hour, "solution", "my-app", "2.0.0")
+	require.NoError(t, err)
+
+	// Should be gone
+	_, _, ok, err = c.Get("solution", "my-app", "2.0.0")
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
+func TestInvalidateArtifact_NonExistent(t *testing.T) {
+	dir := t.TempDir()
+
+	// Should not error for non-existent entry
+	err := cache.InvalidateArtifact(dir, time.Hour, "solution", "nonexistent", "1.0.0")
+	assert.NoError(t, err)
+}
+
+func BenchmarkInvalidateArtifact(b *testing.B) {
+	dir := b.TempDir()
+	c := cache.NewArtifactCache(dir, time.Hour)
+
+	for b.Loop() {
+		_ = c.Put("solution", "bench", "1.0.0", "sha256:bench", []byte("data"), nil)
+		_ = cache.InvalidateArtifact(dir, time.Hour, "solution", "bench", "1.0.0")
+	}
+}

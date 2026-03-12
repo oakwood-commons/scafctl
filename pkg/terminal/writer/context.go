@@ -18,13 +18,3 @@ func FromContext(ctx context.Context) *Writer {
 	w, _ := ctx.Value(contextKey{}).(*Writer)
 	return w
 }
-
-// MustFromContext retrieves the Writer from the context.
-// Panics if no Writer is present.
-func MustFromContext(ctx context.Context) *Writer {
-	w := FromContext(ctx)
-	if w == nil {
-		panic("writer: no Writer in context")
-	}
-	return w
-}

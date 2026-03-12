@@ -56,8 +56,10 @@ func TestRunShow_MissingFile(t *testing.T) {
 		Out:    &stdout,
 		ErrOut: &stderr,
 	}
+	w := writer.New(&ioStreams, &settings.Run{})
+	testCtx := writer.WithWriter(ctx, w)
 
-	err := runShow(ctx, opts, ioStreams)
+	err := runShow(testCtx, opts, ioStreams)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to load snapshot")
@@ -82,8 +84,10 @@ func TestRunShow_InvalidFormat(t *testing.T) {
 		Out:    &stdout,
 		ErrOut: &stderr,
 	}
+	w := writer.New(&ioStreams, &settings.Run{})
+	testCtx := writer.WithWriter(ctx, w)
 
-	err = runShow(ctx, opts, ioStreams)
+	err = runShow(testCtx, opts, ioStreams)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported format")
@@ -109,8 +113,10 @@ func TestRunShow_Summary(t *testing.T) {
 		Out:    &stdout,
 		ErrOut: &stderr,
 	}
+	w := writer.New(&ioStreams, &settings.Run{})
+	testCtx := writer.WithWriter(ctx, w)
 
-	err = runShow(ctx, opts, ioStreams)
+	err = runShow(testCtx, opts, ioStreams)
 
 	require.NoError(t, err)
 	output := stdout.String()
@@ -146,8 +152,10 @@ func TestRunShow_SummaryVerbose(t *testing.T) {
 		Out:    &stdout,
 		ErrOut: &stderr,
 	}
+	w := writer.New(&ioStreams, &settings.Run{})
+	testCtx := writer.WithWriter(ctx, w)
 
-	err = runShow(ctx, opts, ioStreams)
+	err = runShow(testCtx, opts, ioStreams)
 
 	require.NoError(t, err)
 	output := stdout.String()
@@ -175,8 +183,10 @@ func TestRunShow_JSON(t *testing.T) {
 		Out:    &stdout,
 		ErrOut: &stderr,
 	}
+	w := writer.New(&ioStreams, &settings.Run{})
+	testCtx := writer.WithWriter(ctx, w)
 
-	err = runShow(ctx, opts, ioStreams)
+	err = runShow(testCtx, opts, ioStreams)
 
 	require.NoError(t, err)
 
@@ -210,8 +220,10 @@ func TestRunShow_Resolvers(t *testing.T) {
 		Out:    &stdout,
 		ErrOut: &stderr,
 	}
+	w := writer.New(&ioStreams, &settings.Run{})
+	testCtx := writer.WithWriter(ctx, w)
 
-	err = runShow(ctx, opts, ioStreams)
+	err = runShow(testCtx, opts, ioStreams)
 
 	require.NoError(t, err)
 	output := stdout.String()
@@ -244,8 +256,10 @@ func TestRunShow_ResolversVerbose(t *testing.T) {
 		Out:    &stdout,
 		ErrOut: &stderr,
 	}
+	w := writer.New(&ioStreams, &settings.Run{})
+	testCtx := writer.WithWriter(ctx, w)
 
-	err = runShow(ctx, opts, ioStreams)
+	err = runShow(testCtx, opts, ioStreams)
 
 	require.NoError(t, err)
 	output := stdout.String()
@@ -284,8 +298,10 @@ func TestRunShow_ResolversWithErrors(t *testing.T) {
 		Out:    &stdout,
 		ErrOut: &stderr,
 	}
+	w := writer.New(&ioStreams, &settings.Run{})
+	testCtx := writer.WithWriter(ctx, w)
 
-	err = runShow(ctx, opts, ioStreams)
+	err = runShow(testCtx, opts, ioStreams)
 
 	require.NoError(t, err)
 	output := stdout.String()
@@ -305,7 +321,8 @@ func TestShowSummary_StatusCounting(t *testing.T) {
 
 	var stdout bytes.Buffer
 	ioStreams := terminal.IOStreams{Out: &stdout}
-	w := writer.New(&ioStreams, &settings.Run{})
+	cliParams := &settings.Run{}
+	w := writer.New(&ioStreams, cliParams)
 
 	err := showSummary(snapshot, &ShowOptions{}, w)
 
@@ -381,7 +398,8 @@ func TestShowResolvers_StatusIcons(t *testing.T) {
 
 			var stdout bytes.Buffer
 			ioStreams := terminal.IOStreams{Out: &stdout}
-			w := writer.New(&ioStreams, &settings.Run{})
+			cliParams := &settings.Run{}
+			w := writer.New(&ioStreams, cliParams)
 
 			err := showResolvers(snapshot, &ShowOptions{}, w)
 			require.NoError(t, err)
@@ -520,8 +538,10 @@ func TestRunShow_Integration(t *testing.T) {
 			}
 			var stdout bytes.Buffer
 			ioStreams := terminal.IOStreams{Out: &stdout}
+			w := writer.New(&ioStreams, &settings.Run{})
+			testCtx := writer.WithWriter(ctx, w)
 
-			err := runShow(ctx, opts, ioStreams)
+			err := runShow(testCtx, opts, ioStreams)
 			require.NoError(t, err)
 
 			output := stdout.String()
@@ -539,8 +559,10 @@ func TestRunShow_Integration(t *testing.T) {
 		}
 		var stdout bytes.Buffer
 		ioStreams := terminal.IOStreams{Out: &stdout}
+		w := writer.New(&ioStreams, &settings.Run{})
+		testCtx := writer.WithWriter(ctx, w)
 
-		err := runShow(ctx, opts, ioStreams)
+		err := runShow(testCtx, opts, ioStreams)
 		require.NoError(t, err)
 
 		// Parse and verify JSON structure
@@ -575,8 +597,10 @@ func TestCommandShow_InvalidSnapshotJSON(t *testing.T) {
 		Out:    &stdout,
 		ErrOut: &stderr,
 	}
+	w := writer.New(&ioStreams, &settings.Run{})
+	testCtx := writer.WithWriter(ctx, w)
 
-	err = runShow(ctx, opts, ioStreams)
+	err = runShow(testCtx, opts, ioStreams)
 
 	require.Error(t, err)
 	assert.Contains(t, strings.ToLower(err.Error()), "failed to load snapshot")

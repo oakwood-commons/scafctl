@@ -38,7 +38,10 @@ If the secret already exists, use --overwrite to replace it.`,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			w := writer.MustFromContext(ctx)
+			w := writer.FromContext(ctx)
+			if w == nil {
+				return fmt.Errorf("writer not initialized in context")
+			}
 			name := args[0]
 
 			// Validate name

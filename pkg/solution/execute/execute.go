@@ -14,6 +14,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 )
@@ -195,6 +196,38 @@ func Resolvers(
 		Data:    resolverData,
 		Context: resolverCtx,
 	}, nil
+}
+
+// ResolversForPreview is a convenience wrapper over Resolvers that accepts
+// a provider.Registry directly and returns only the resolved data map.
+// It initialises a default registry when reg is nil and reads the execution
+// config from context. This is the shared entry point for preview/render
+// operations in both the MCP server and the CLI.
+func ResolversForPreview(
+	ctx context.Context,
+	sol *solution.Solution,
+	params map[string]any,
+	reg *provider.Registry,
+) (map[string]any, error) {
+	if !sol.Spec.HasResolvers() {
+		return make(map[string]any), nil
+	}
+
+	if reg == nil {
+		var err error
+		reg, err = builtin.DefaultRegistry(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create provider registry: %w", err)
+		}
+	}
+
+	cfg := ResolverExecutionConfigFromContext(ctx)
+	result, err := Resolvers(ctx, sol, params, reg, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	return result.Data, nil
 }
 
 // ResolverExecutionConfigFromContext creates a ResolverExecutionConfig from the

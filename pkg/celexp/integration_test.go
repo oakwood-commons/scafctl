@@ -175,10 +175,12 @@ func TestIntegration_ConcurrentCompilation(t *testing.T) {
 	// Verify cache efficiency
 	stats := cache.Stats()
 	expectedMisses := uint64(numExpressions)
-	// Due to concurrent access and race conditions, we might have more misses
-	// The important thing is that we have some cache hits
+	// Due to concurrent access and race conditions, we might have more misses.
+	// In the worst case every goroutine can miss on every expression before the
+	// cache is populated, so the upper bound is numGoroutines * numExpressions.
+	// We use numExpressions * numGoroutines as the ceiling to avoid flaky failures.
 	assert.LessOrEqual(t, expectedMisses, stats.Misses, "should have at least %d misses", numExpressions)
-	assert.LessOrEqual(t, stats.Misses, uint64(numExpressions*3), "should not have more than 3x misses")
+	assert.LessOrEqual(t, stats.Misses, uint64(numGoroutines*numExpressions), "misses should not exceed total compilations")
 	assert.Greater(t, stats.Hits, uint64(0), "should have cache hits from concurrent access")
 }
 

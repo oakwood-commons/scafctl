@@ -110,7 +110,7 @@ func TestResolveCatalogURL(t *testing.T) {
 				ctx = config.WithConfig(ctx, tt.config)
 			}
 
-			url, err := resolveCatalogURL(ctx, tt.catalogFlag)
+			url, err := ResolveCatalogURL(ctx, tt.catalogFlag)
 
 			if tt.wantErr != "" {
 				require.Error(t, err)
@@ -141,7 +141,56 @@ func TestLooksLikeCatalogURL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			assert.Equal(t, tt.want, looksLikeCatalogURL(tt.input))
+			assert.Equal(t, tt.want, LooksLikeCatalogURL(tt.input))
 		})
+	}
+}
+
+func TestParseCatalogURL(t *testing.T) {
+	tests := []struct {
+		input          string
+		wantRegistry   string
+		wantRepository string
+	}{
+		{"ghcr.io/myorg/scafctl", "ghcr.io", "myorg/scafctl"},
+		{"ghcr.io/myorg", "ghcr.io", "myorg"},
+		{"localhost:5000", "localhost:5000", ""},
+		{"oci://ghcr.io/myorg/scafctl", "ghcr.io", "myorg/scafctl"},
+		{"https://ghcr.io/myorg", "ghcr.io", "myorg"},
+		{"http://localhost:5000/repo", "localhost:5000", "repo"},
+		{"ghcr.io/myorg/scafctl/", "ghcr.io", "myorg/scafctl"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			registry, repository := ParseCatalogURL(tt.input)
+			assert.Equal(t, tt.wantRegistry, registry)
+			assert.Equal(t, tt.wantRepository, repository)
+		})
+	}
+}
+
+func BenchmarkParseCatalogURL(b *testing.B) {
+	for b.Loop() {
+		ParseCatalogURL("oci://ghcr.io/myorg/scafctl")
+	}
+}
+
+func BenchmarkLooksLikeCatalogURL(b *testing.B) {
+	for b.Loop() {
+		LooksLikeCatalogURL("ghcr.io/myorg/scafctl")
+	}
+}
+
+func BenchmarkResolveCatalogURL(b *testing.B) {
+	ctx := config.WithConfig(context.Background(), &config.Config{
+		Settings: config.Settings{DefaultCatalog: "default"},
+		Catalogs: []config.CatalogConfig{
+			{Name: "default", Type: "oci", URL: "ghcr.io/myorg/default"},
+		},
+	})
+
+	for b.Loop() {
+		_, _ = ResolveCatalogURL(ctx, "")
 	}
 }

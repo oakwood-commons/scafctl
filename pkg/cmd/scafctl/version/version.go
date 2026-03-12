@@ -44,7 +44,7 @@ func CommandVersion(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 		Short:   fmt.Sprintf("Prints the %s version", settings.CliBinaryName),
 		RunE: func(cCmd *cobra.Command, args []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
-			ctx := settings.IntoContext(context.Background(), cliParams)
+			ctx := settings.IntoContext(cCmd.Context(), cliParams)
 
 			lgr := logger.FromContext(ctx)
 			lgr.V(3).Info("Version command invoked")
@@ -110,7 +110,16 @@ func (options *CmdOptionsVersion) PrintVersion(ctx context.Context) error {
 		lgr.V(0).Info("A newer version of scafctl is available. Please consider updating to the latest version.")
 	}
 	verDetails := newVersionDetails(latestVersion)
-	err = output.WriteOutput(options.IOStreams, options.Output, verDetails, customOutput)
+	customOutputFn := func(_ *terminal.IOStreams, data map[string]any) error {
+		if w != nil {
+			w.Plainf("\n%s        %s\n", styles.SuccessStyle.Render("Version:"), settings.VersionInformation.BuildVersion)
+			w.Plainf("%s %s\n", styles.SuccessStyle.Render("Latest Version:"), data["latestVersion"])
+			w.Plainf("%s         %s\n", styles.SuccessStyle.Render("Commit:"), settings.VersionInformation.Commit)
+			w.Plainf("%s     %s\n\n", styles.SuccessStyle.Render("Build Time:"), settings.VersionInformation.BuildTime)
+		}
+		return nil
+	}
+	err = output.WriteOutput(options.IOStreams, options.Output, verDetails, customOutputFn)
 	if err != nil {
 		if w != nil {
 			w.Errorf("%v", err)
@@ -160,14 +169,6 @@ func GetLatestVersion(ctx context.Context) (string, error) {
 	}
 
 	return strings.TrimPrefix(release.TagName, "v"), nil
-}
-
-func customOutput(ioStreams *terminal.IOStreams, data map[string]any) error {
-	fmt.Fprintf(ioStreams.Out, "\n%s        %s\n", styles.SuccessStyle.Render("Version:"), settings.VersionInformation.BuildVersion)
-	fmt.Fprintf(ioStreams.Out, "%s %s\n", styles.SuccessStyle.Render("Latest Version:"), data["latestVersion"])
-	fmt.Fprintf(ioStreams.Out, "%s         %s\n", styles.SuccessStyle.Render("Commit:"), settings.VersionInformation.Commit)
-	fmt.Fprintf(ioStreams.Out, "%s     %s\n\n", styles.SuccessStyle.Render("Build Time:"), settings.VersionInformation.BuildTime)
-	return nil
 }
 
 func newVersionDetails(latestVersion string) map[string]any {

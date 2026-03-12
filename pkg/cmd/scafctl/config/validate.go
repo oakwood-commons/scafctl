@@ -57,7 +57,7 @@ func CommandValidate(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cCmd *cobra.Command, args []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
-			ctx := settings.IntoContext(context.Background(), cliParams)
+			ctx := settings.IntoContext(cCmd.Context(), cliParams)
 
 			if lgr := logger.FromContext(cCmd.Context()); lgr != nil {
 				ctx = logger.WithLogger(ctx, lgr)
@@ -91,7 +91,10 @@ func CommandValidate(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 
 // Run executes the config validate command.
 func (o *ValidateOptions) Run(ctx context.Context) error {
-	w := writer.MustFromContext(ctx)
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return fmt.Errorf("writer not initialized in context")
+	}
 	lgr := logger.FromContext(ctx)
 
 	// Determine file to validate

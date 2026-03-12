@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/terminal/format"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 )
 
@@ -106,7 +107,7 @@ func buildReportData(results []TestResult, elapsed time.Duration) reportData {
 			Solution:     r.Solution,
 			Test:         r.Test,
 			Status:       r.Status,
-			Duration:     formatDuration(r.Duration),
+			Duration:     format.Duration(r.Duration),
 			Message:      r.Message,
 			RetryAttempt: r.RetryAttempt,
 			SandboxPath:  r.SandboxPath,
@@ -155,7 +156,7 @@ func reportTable(results []TestResult, w io.Writer, verbose bool, elapsed time.D
 	// Rows
 	for _, r := range results {
 		status := statusIcon(r.Status)
-		dur := formatDuration(r.Duration)
+		dur := format.Duration(r.Duration)
 
 		if verbose {
 			assertions := formatAssertionCounts(r.Assertions)
@@ -192,7 +193,7 @@ func reportTable(results []TestResult, w io.Writer, verbose bool, elapsed time.D
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "%d passed, %d failed, %d errors, %d skipped (%s)\n",
 		summary.Passed, summary.Failed, summary.Errors, summary.Skipped,
-		formatDuration(summary.ElapsedDuration()))
+		format.Duration(summary.ElapsedDuration()))
 
 	return nil
 }
@@ -300,18 +301,6 @@ func statusIcon(s Status) string {
 		return "ERROR"
 	default:
 		return string(s)
-	}
-}
-
-// formatDuration formats a duration as a human-readable string.
-func formatDuration(d time.Duration) string {
-	switch {
-	case d < time.Millisecond:
-		return fmt.Sprintf("%dµs", d.Microseconds())
-	case d < time.Second:
-		return fmt.Sprintf("%dms", d.Milliseconds())
-	default:
-		return fmt.Sprintf("%.2fs", d.Seconds())
 	}
 }
 

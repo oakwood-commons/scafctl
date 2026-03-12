@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/format"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -724,9 +725,9 @@ func TestStatusIcon(t *testing.T) {
 }
 
 func TestFormatDuration(t *testing.T) {
-	assert.Equal(t, "500µs", formatDuration(500*time.Microsecond))
-	assert.Equal(t, "150ms", formatDuration(150*time.Millisecond))
-	assert.Equal(t, "1.50s", formatDuration(1500*time.Millisecond))
+	assert.Equal(t, "500µs", format.Duration(500*time.Microsecond))
+	assert.Equal(t, "150ms", format.Duration(150*time.Millisecond))
+	assert.Equal(t, "1.50s", format.Duration(1500*time.Millisecond))
 }
 
 func TestFormatAssertionCounts(t *testing.T) {

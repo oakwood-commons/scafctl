@@ -7,9 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
@@ -71,7 +69,7 @@ func CommandCEL(cliParams *settings.Run, ioStreams *terminal.IOStreams, path str
 		`),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Use)
-			ctx := settings.IntoContext(context.Background(), cliParams)
+			ctx := settings.IntoContext(cmd.Context(), cliParams)
 
 			if lgr := logger.FromContext(cmd.Context()); lgr != nil {
 				ctx = logger.WithLogger(ctx, lgr)
@@ -104,17 +102,20 @@ func CommandCEL(cliParams *settings.Run, ioStreams *terminal.IOStreams, path str
 
 // Run executes the eval cel command.
 func (o *CELOptions) Run(ctx context.Context) error {
-	w := writer.MustFromContext(ctx)
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return fmt.Errorf("writer not initialized in context")
+	}
 
 	// Build root data from --data or --file
-	rootData, err := buildDataContext(o.Data, o.File)
+	rootData, err := celexp.BuildDataContext(o.Data, o.File)
 	if err != nil {
 		w.Errorf("failed to build data context: %v", err)
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
 	// Parse --var flags into additional variables
-	vars, err := parseVars(o.Vars)
+	vars, err := celexp.ParseVars(o.Vars)
 	if err != nil {
 		w.Errorf("failed to parse variables: %v", err)
 		return exitcode.WithCode(err, exitcode.InvalidInput)
@@ -142,65 +143,6 @@ func (o *CELOptions) Run(ctx context.Context) error {
 	w.Plainf("%v\n", result)
 
 	return nil
-}
-
-// buildDataContext creates a data context map from --data or --file flags.
-func buildDataContext(data, file string) (any, error) {
-	if data != "" && file != "" {
-		return nil, fmt.Errorf("cannot use both --data and --file")
-	}
-
-	if data == "" && file == "" {
-		return nil, nil
-	}
-
-	var raw []byte
-	if data != "" {
-		raw = []byte(data)
-	} else {
-		var err error
-		raw, err = os.ReadFile(file)
-		if err != nil {
-			return nil, fmt.Errorf("reading file %s: %w", file, err)
-		}
-	}
-
-	// Try JSON first, then YAML
-	var result any
-	if err := json.Unmarshal(raw, &result); err != nil {
-		if err2 := yaml.Unmarshal(raw, &result); err2 != nil {
-			return nil, fmt.Errorf("data is not valid JSON or YAML: %w", err)
-		}
-	}
-
-	return result, nil
-}
-
-// parseVars converts key=value pairs into a map.
-func parseVars(vars []string) (map[string]any, error) {
-	if len(vars) == 0 {
-		return nil, nil
-	}
-
-	result := make(map[string]any, len(vars))
-	for _, v := range vars {
-		parts := strings.SplitN(v, "=", 2)
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid variable format %q; expected key=value", v)
-		}
-		key := strings.TrimSpace(parts[0])
-		value := parts[1]
-
-		// Try to parse as JSON for complex values
-		var parsed any
-		if err := json.Unmarshal([]byte(value), &parsed); err == nil {
-			result[key] = parsed
-		} else {
-			result[key] = value
-		}
-	}
-
-	return result, nil
 }
 
 // writeStructured writes data as JSON or YAML to the output stream.

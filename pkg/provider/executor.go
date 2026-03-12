@@ -169,10 +169,15 @@ func (e *Executor) Execute(ctx context.Context, provider Provider, inputs map[st
 	}
 	output := *outputPtr
 
-	// Validate output if schema is defined for the execution mode capability
-	// Note: We currently don't have access to which capability was used for execution,
-	// so output validation against per-capability schemas would need to be done at a higher level
-	// TODO: Consider passing capability context to executor for per-capability output validation
+	// Output validation is intentionally not performed per-capability here.
+	// The executor operates at the provider level and does not know which
+	// capability (resolve, action, etc.) initiated the call. Per-capability
+	// output schema validation is the responsibility of the higher-level
+	// caller (e.g., resolver engine or action runner) which has the
+	// capability context. Pushing capability awareness into the executor
+	// would couple it to the solution execution model, violating the
+	// single-responsibility boundary between provider execution and
+	// solution orchestration.
 
 	// Build result
 	result := &ExecutionResult{
@@ -197,16 +202,6 @@ func (e *Executor) ExecuteByName(ctx context.Context, providerName string, input
 	return e.Execute(ctx, provider, inputs)
 }
 
-// MustExecuteByName executes a provider by name and panics if the provider is not found or execution fails.
-// This is useful for initialization code where a provider must exist and execute successfully.
-func (e *Executor) MustExecuteByName(ctx context.Context, providerName string, inputs map[string]any) *ExecutionResult {
-	result, err := e.ExecuteByName(ctx, providerName, inputs)
-	if err != nil {
-		panic(fmt.Sprintf("failed to execute provider %q: %v", providerName, err))
-	}
-	return result
-}
-
 // globalExecutor is the default package-level executor.
 var globalExecutor = NewExecutor()
 
@@ -218,11 +213,6 @@ func Execute(ctx context.Context, provider Provider, inputs map[string]any) (*Ex
 // ExecuteByName executes a provider by name using the global executor.
 func ExecuteByName(ctx context.Context, providerName string, inputs map[string]any) (*ExecutionResult, error) {
 	return globalExecutor.ExecuteByName(ctx, providerName, inputs)
-}
-
-// MustExecuteByName executes a provider by name using the global executor and panics on failure.
-func MustExecuteByName(ctx context.Context, providerName string, inputs map[string]any) *ExecutionResult {
-	return globalExecutor.MustExecuteByName(ctx, providerName, inputs)
 }
 
 // GetGlobalExecutor returns the global executor instance.

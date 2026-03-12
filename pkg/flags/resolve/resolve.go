@@ -16,20 +16,20 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/flags/validate"
 	"github.com/oakwood-commons/scafctl/pkg/httpc"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"gopkg.in/yaml.v3"
 )
 
 // defaultFlagHTTPClient is a shared httpc.Client used for fetching http(s):// flag values.
 // Caching is disabled so that flag values are always fresh at invocation time.
 var defaultFlagHTTPClient = httpc.NewClient(&httpc.ClientConfig{
-	Timeout:           30 * time.Second,
-	RetryMax:          3,
-	RetryWaitMin:      1 * time.Second,
-	RetryWaitMax:      30 * time.Second,
+	Timeout:           settings.DefaultHTTPTimeout,
+	RetryMax:          settings.DefaultHTTPRetryMax,
+	RetryWaitMin:      settings.DefaultHTTPRetryWaitMinimum,
+	RetryWaitMax:      settings.DefaultHTTPRetryWaitMaximum,
 	EnableCache:       false,
 	EnableCompression: true,
 })

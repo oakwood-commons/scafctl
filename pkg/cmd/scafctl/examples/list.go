@@ -5,6 +5,7 @@ package examples
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -56,7 +57,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 		`),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Use)
-			ctx := settings.IntoContext(context.Background(), cliParams)
+			ctx := settings.IntoContext(cmd.Context(), cliParams)
 
 			if lgr := logger.FromContext(cmd.Context()); lgr != nil {
 				ctx = logger.WithLogger(ctx, lgr)
@@ -84,7 +85,10 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 
 // Run executes the examples list command.
 func (o *ListOptions) Run(ctx context.Context) error {
-	w := writer.MustFromContext(ctx)
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return fmt.Errorf("writer not initialized in context")
+	}
 
 	items, err := exampleslib.Scan(o.Category)
 	if err != nil {

@@ -150,13 +150,13 @@ type RenderedForEachMetadata struct {
 // RenderOptions configures rendering behavior.
 type RenderOptions struct {
 	// Format specifies the output format: "json" (default) or "yaml".
-	Format string
+	Format string `json:"format" yaml:"format" doc:"Output format" maxLength:"16" example:"json"`
 
 	// IncludeTimestamp adds a generation timestamp to metadata.
-	IncludeTimestamp bool
+	IncludeTimestamp bool `json:"includeTimestamp" yaml:"includeTimestamp" doc:"Add generation timestamp to metadata"`
 
 	// PrettyPrint enables indented output for readability.
-	PrettyPrint bool
+	PrettyPrint bool `json:"prettyPrint" yaml:"prettyPrint" doc:"Enable indented output"`
 }
 
 // DefaultRenderOptions returns the default rendering options.

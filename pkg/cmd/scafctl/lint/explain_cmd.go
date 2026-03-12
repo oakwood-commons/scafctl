@@ -48,7 +48,7 @@ func CommandExplainRule(cliParams *settings.Run, ioStreams *terminal.IOStreams, 
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Use)
-			ctx := settings.IntoContext(context.Background(), cliParams)
+			ctx := settings.IntoContext(cmd.Context(), cliParams)
 
 			if lgr := logger.FromContext(cmd.Context()); lgr != nil {
 				ctx = logger.WithLogger(ctx, lgr)
@@ -75,7 +75,10 @@ func CommandExplainRule(cliParams *settings.Run, ioStreams *terminal.IOStreams, 
 
 // Run executes the lint explain command.
 func (o *ExplainOptions) Run(ctx context.Context, ruleName string) error {
-	w := writer.MustFromContext(ctx)
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return fmt.Errorf("writer not initialized in context")
+	}
 
 	rule, found := GetRule(ruleName)
 	if !found {

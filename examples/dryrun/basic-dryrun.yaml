@@ -1,0 +1,81 @@
+# Dry-Run Basic Example
+#
+# Demonstrates how --dry-run shows what a solution execution would do
+# without performing any side effects.
+#
+# Usage:
+#   # Dry-run the full solution (resolvers + action plan)
+#   scafctl run solution -f examples/dryrun/basic-dryrun.yaml --dry-run
+#
+#   # Dry-run with JSON output for programmatic consumption
+#   scafctl run solution -f examples/dryrun/basic-dryrun.yaml --dry-run -o json
+#
+#   # Dry-run resolvers only
+#   scafctl run resolver -f examples/dryrun/basic-dryrun.yaml --dry-run
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: dryrun-demo
+  version: 1.0.0
+  description: Demonstrates dry-run with resolvers and actions
+
+spec:
+  resolvers:
+    greeting:
+      description: Greeting message
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "Hello, World!"
+
+    target:
+      description: Deployment target
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "staging"
+
+    port:
+      description: Service port
+      type: int
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: 8080
+
+    endpoint:
+      description: Computed service endpoint
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "'https://' + _.target + '.example.com:' + string(_.port)"
+
+  workflow:
+    actions:
+      greet:
+        description: Print greeting
+        with:
+          - provider: exec
+            inputs:
+              command: echo
+              args:
+                - "{{ .greeting }}"
+
+      deploy:
+        description: Deploy service to target
+        dependsOn:
+          - greet
+        with:
+          - provider: exec
+            inputs:
+              command: echo
+              args:
+                - "Deploying to {{ .endpoint }}"

@@ -17,8 +17,9 @@ import (
 )
 
 var (
-	profilerOnce sync.Once
-	instance     *Proxy
+	profilerMu      sync.Mutex
+	profilerStarted bool
+	instance        *Proxy
 )
 
 func concreteProfiler(profileType string) (runtimeProfiler, error) {
@@ -54,23 +55,24 @@ func GetProfiler(profileType, path string, lgr *logr.Logger) (*Proxy, error) {
 		path = "./"
 	}
 
-	profilerOnce.Do(func() {
-		var profiler runtimeProfiler
+	profilerMu.Lock()
+	defer profilerMu.Unlock()
 
-		profiler, err = concreteProfiler(profileType)
-		if err != nil {
-			return
-		}
-		lgr.V(1).Info("Creating profiler", "type", profileType, "path", path)
-		instance = &Proxy{profileType: profileType, path: path, profiler: profiler, stopCh: make(chan struct{})}
-	})
+	if profilerStarted {
+		return instance, nil
+	}
 
+	profiler, err := concreteProfiler(profileType)
 	if err != nil {
 		lgr.Error(err, "Error creating profiler")
 		return nil, fmt.Errorf("error creating profiler: %w", err)
 	}
 
-	return instance, err
+	lgr.V(1).Info("Creating profiler", "type", profileType, "path", path)
+	instance = &Proxy{profileType: profileType, path: path, profiler: profiler, stopCh: make(chan struct{})}
+	profilerStarted = true
+
+	return instance, nil
 }
 
 func (p *Proxy) Start(lgr *logr.Logger) error {
@@ -180,7 +182,10 @@ func (p *Proxy) getFiles() []*os.File {
 }
 
 func StopProfiler() error {
-	if instance == nil {
+	profilerMu.Lock()
+	defer profilerMu.Unlock()
+
+	if !profilerStarted || instance == nil {
 		return nil
 	}
 
@@ -191,9 +196,8 @@ func StopProfiler() error {
 		return fmt.Errorf("error stopping profiler: %w", err)
 	}
 
-	// reset singleton
 	instance = nil
-	profilerOnce = sync.Once{}
+	profilerStarted = false
 
 	return nil
 }

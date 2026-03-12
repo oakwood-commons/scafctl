@@ -403,46 +403,6 @@ func TestExecutor_ExecuteByName_ProviderNotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "not found")
 }
 
-func TestExecutor_MustExecuteByName_Success(t *testing.T) {
-	// Clean up global registry
-	ResetGlobalRegistry()
-	defer ResetGlobalRegistry()
-
-	executor := NewExecutor()
-	provider := newMockExecutableProvider("test-provider", nil)
-
-	// Register provider
-	err := Register(provider)
-	require.NoError(t, err)
-
-	ctx := WithExecutionMode(context.Background(), CapabilityFrom)
-	inputs := map[string]any{
-		"input1": "test-value",
-	}
-
-	result := executor.MustExecuteByName(ctx, "test-provider", inputs)
-
-	require.NotNil(t, result)
-	assert.Equal(t, "success", result.Output.Data.(map[string]any)["result"])
-}
-
-func TestExecutor_MustExecuteByName_Panic(t *testing.T) {
-	// Clean up global registry
-	ResetGlobalRegistry()
-	defer ResetGlobalRegistry()
-
-	executor := NewExecutor()
-
-	ctx := WithExecutionMode(context.Background(), CapabilityFrom)
-	inputs := map[string]any{
-		"input1": "test-value",
-	}
-
-	assert.Panics(t, func() {
-		executor.MustExecuteByName(ctx, "non-existent-provider", inputs)
-	})
-}
-
 func TestGlobalExecutor_Execute(t *testing.T) {
 	provider := newMockExecutableProvider("test-provider", nil)
 
@@ -477,28 +437,6 @@ func TestGlobalExecutor_ExecuteByName(t *testing.T) {
 	result, err := ExecuteByName(ctx, "test-provider", inputs)
 
 	require.NoError(t, err)
-	require.NotNil(t, result)
-	assert.Equal(t, "success", result.Output.Data.(map[string]any)["result"])
-}
-
-func TestGlobalExecutor_MustExecuteByName(t *testing.T) {
-	// Clean up global registry
-	ResetGlobalRegistry()
-	defer ResetGlobalRegistry()
-
-	provider := newMockExecutableProvider("test-provider", nil)
-
-	// Register provider
-	err := Register(provider)
-	require.NoError(t, err)
-
-	ctx := WithExecutionMode(context.Background(), CapabilityFrom)
-	inputs := map[string]any{
-		"input1": "test-value",
-	}
-
-	result := MustExecuteByName(ctx, "test-provider", inputs)
-
 	require.NotNil(t, result)
 	assert.Equal(t, "success", result.Output.Data.(map[string]any)["result"])
 }

@@ -320,7 +320,7 @@ func copyDirRecursive(src, dst string) error {
 		}
 
 		// Copy file
-		srcFile, err := os.Open(path)
+		srcFile, err := os.Open(path) //nolint:gosec // G122: path comes from filepath.Walk on a test sandbox directory we own
 		if err != nil {
 			return err
 		}

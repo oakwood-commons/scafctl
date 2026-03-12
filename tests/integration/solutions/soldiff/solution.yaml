@@ -1,0 +1,81 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-soldiff
+  version: 1.0.0
+  description: |
+    Functional tests for solution diff (soldiff) functionality.
+    Verifies that snapshot diff correctly identifies changes
+    between resolver executions.
+
+spec:
+  resolvers:
+    appName:
+      description: Application name
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "my-app"
+
+    version:
+      description: Application version
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "1.0.0"
+
+    replicas:
+      description: Number of replicas
+      type: int
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: 3
+
+    config:
+      description: Combined configuration
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: |
+                {
+                  'name': dyn(_.appName),
+                  'version': dyn(_.version),
+                  'replicas': dyn(_.replicas)
+                }
+
+  testing:
+    config:
+      skipBuiltins: [render-defaults]
+
+    cases:
+      snapshot-creation:
+        description: Verify snapshot can be created for diff comparison
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [soldiff, snapshot, smoke]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: "appName"
+          - contains: "my-app"
+          - contains: "version"
+          - contains: "1.0.0"
+
+      resolver-values:
+        description: Verify all resolvers produce expected values
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [soldiff, resolver]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.appName == "my-app"
+          - expression: __output.version == "1.0.0"
+          - expression: __output.replicas == 3

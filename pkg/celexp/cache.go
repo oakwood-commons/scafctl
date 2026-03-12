@@ -330,21 +330,21 @@ func (c *ProgramCache) hitRate() float64 {
 
 // CacheStats contains cache performance statistics.
 type CacheStats struct {
-	Size           int              `json:"size"`
-	MaxSize        int              `json:"max_size"`
-	Hits           uint64           `json:"hits"`
-	Misses         uint64           `json:"misses"`
-	Evictions      uint64           `json:"evictions"`
-	HitRate        float64          `json:"hit_rate"` // Percentage
-	TotalAccesses  uint64           `json:"total_accesses"`
-	TopExpressions []ExpressionStat `json:"top_expressions,omitempty"`
+	Size           int              `json:"size" yaml:"size" doc:"Current number of cached entries" maximum:"100000" example:"42"`
+	MaxSize        int              `json:"max_size" yaml:"max_size" doc:"Maximum cache capacity" maximum:"100000" example:"1000"`
+	Hits           uint64           `json:"hits" yaml:"hits" doc:"Total cache hits"`
+	Misses         uint64           `json:"misses" yaml:"misses" doc:"Total cache misses"`
+	Evictions      uint64           `json:"evictions" yaml:"evictions" doc:"Total cache evictions"`
+	HitRate        float64          `json:"hit_rate" yaml:"hit_rate" doc:"Cache hit rate percentage"`
+	TotalAccesses  uint64           `json:"total_accesses" yaml:"total_accesses" doc:"Total number of cache accesses"`
+	TopExpressions []ExpressionStat `json:"top_expressions,omitempty" yaml:"top_expressions,omitempty" doc:"Most frequently accessed expressions" maxItems:"50"`
 }
 
 // ExpressionStat contains statistics for a specific expression.
 type ExpressionStat struct {
-	Expression string    `json:"expression"`
-	Hits       uint64    `json:"hits"`
-	LastAccess time.Time `json:"last_access"`
+	Expression string    `json:"expression" yaml:"expression" doc:"CEL expression text" maxLength:"2048" example:"_.myVar > 10"`
+	Hits       uint64    `json:"hits" yaml:"hits" doc:"Number of cache hits for this expression"`
+	LastAccess time.Time `json:"last_access" yaml:"last_access" doc:"Time of last access"`
 }
 
 // cacheKeyResult holds the result of generating a cache key

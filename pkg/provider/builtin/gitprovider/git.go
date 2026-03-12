@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -22,6 +23,22 @@ import (
 
 // ProviderName is the name of this provider.
 const ProviderName = "git"
+
+// Field name constants for input/output map keys.
+const (
+	fieldOperation  = "operation"
+	fieldRepository = "repository"
+	fieldPath       = "path"
+	fieldBranch     = "branch"
+	fieldMessage    = "message"
+	fieldFiles      = "files"
+	fieldTag        = "tag"
+	fieldRemote     = "remote"
+	fieldDepth      = "depth"
+	fieldUsername   = "username"
+	fieldPassword   = "password"
+	fieldForce      = "force"
+)
 
 // GitProvider provides Git repository operations.
 type GitProvider struct {
@@ -43,59 +60,59 @@ func NewGitProvider() *GitProvider {
 				provider.CapabilityAction,
 				provider.CapabilityFrom,
 			},
-			SensitiveFields: []string{"password"},
-			Schema: schemahelper.ObjectSchema([]string{"operation"}, map[string]*jsonschema.Schema{
-				"operation": schemahelper.StringProp("Git operation to perform",
+			SensitiveFields: []string{fieldPassword},
+			Schema: schemahelper.ObjectSchema([]string{fieldOperation}, map[string]*jsonschema.Schema{
+				fieldOperation: schemahelper.StringProp("Git operation to perform",
 					schemahelper.WithExample("clone"),
 					schemahelper.WithEnum("clone", "pull", "status", "add", "commit", "push", "checkout", "branch", "log", "tag"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(50))),
-				"repository": schemahelper.StringProp("Repository URL for clone operation",
+				fieldRepository: schemahelper.StringProp("Repository URL for clone operation",
 					schemahelper.WithExample("https://github.com/user/repo.git"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(1000))),
-				"path": schemahelper.StringProp("Local path for repository",
+				fieldPath: schemahelper.StringProp("Local path for repository",
 					schemahelper.WithExample("/tmp/repo"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(500))),
-				"branch": schemahelper.StringProp("Branch name",
+				fieldBranch: schemahelper.StringProp("Branch name",
 					schemahelper.WithExample("main"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(200))),
-				"message": schemahelper.StringProp("Commit message",
+				fieldMessage: schemahelper.StringProp("Commit message",
 					schemahelper.WithExample("Update configuration"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(1000))),
-				"files": schemahelper.ArrayProp("Files to add",
+				fieldFiles: schemahelper.ArrayProp("Files to add",
 					schemahelper.WithMaxItems(*ptrs.IntPtr(100))),
-				"tag": schemahelper.StringProp("Tag name",
+				fieldTag: schemahelper.StringProp("Tag name",
 					schemahelper.WithExample("v1.0.0"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(200))),
-				"remote": schemahelper.StringProp("Remote name",
+				fieldRemote: schemahelper.StringProp("Remote name",
 					schemahelper.WithExample("origin"),
 					schemahelper.WithDefault("origin"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(100))),
-				"depth": schemahelper.IntProp("Clone depth for shallow clone",
+				fieldDepth: schemahelper.IntProp("Clone depth for shallow clone",
 					schemahelper.WithExample("1"),
 					schemahelper.WithMaximum(*ptrs.Float64Ptr(10000.0))),
-				"username": schemahelper.StringProp("Username for authentication",
+				fieldUsername: schemahelper.StringProp("Username for authentication",
 					schemahelper.WithExample("user"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(200))),
-				"password": schemahelper.StringProp("Password or token for authentication",
+				fieldPassword: schemahelper.StringProp("Password or token for authentication",
 					schemahelper.WithExample("ghp_token"),
 					schemahelper.WithWriteOnly(),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(500))),
-				"force": schemahelper.BoolProp("Force the operation",
+				fieldForce: schemahelper.BoolProp("Force the operation",
 					schemahelper.WithExample("false"),
 					schemahelper.WithDefault(false)),
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
-					"output":    schemahelper.StringProp("Command output"),
-					"operation": schemahelper.StringProp("The operation that was performed"),
-					"path":      schemahelper.StringProp("Repository path used"),
+					"output":       schemahelper.StringProp("Command output"),
+					fieldOperation: schemahelper.StringProp("The operation that was performed"),
+					fieldPath:      schemahelper.StringProp("Repository path used"),
 				}),
 				provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
-					"success":   schemahelper.BoolProp("Whether the operation succeeded"),
-					"output":    schemahelper.StringProp("Command output"),
-					"error":     schemahelper.StringProp("Error message if operation failed"),
-					"operation": schemahelper.StringProp("The operation that was performed"),
-					"path":      schemahelper.StringProp("Repository path used"),
+					"success":      schemahelper.BoolProp("Whether the operation succeeded"),
+					"output":       schemahelper.StringProp("Command output"),
+					"error":        schemahelper.StringProp("Error message if operation failed"),
+					fieldOperation: schemahelper.StringProp("The operation that was performed"),
+					fieldPath:      schemahelper.StringProp("Repository path used"),
 				}),
 			},
 			Examples: []provider.Example{
@@ -174,7 +191,7 @@ func (p *GitProvider) Execute(ctx context.Context, input any) (*provider.Output,
 	if !ok {
 		return nil, fmt.Errorf("%s: expected map[string]any, got %T", ProviderName, input)
 	}
-	operation, ok := inputs["operation"].(string)
+	operation, ok := inputs[fieldOperation].(string)
 	if !ok || operation == "" {
 		return nil, fmt.Errorf("%s: operation is required and must be a non-empty string", ProviderName)
 	}
@@ -227,19 +244,19 @@ func (p *GitProvider) executeGitOperation(ctx context.Context, operation string,
 }
 
 func (p *GitProvider) executeClone(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
-	repository, ok := inputs["repository"].(string)
+	repository, ok := inputs[fieldRepository].(string)
 	if !ok || repository == "" {
 		return nil, fmt.Errorf("repository URL is required for clone operation")
 	}
 
-	path, _ := inputs["path"].(string)
+	path, _ := inputs[fieldPath].(string)
 	if path == "" {
 		return nil, fmt.Errorf("path is required for clone operation")
 	}
 
 	args := []string{"clone"}
 
-	if depthRaw, ok := inputs["depth"]; ok {
+	if depthRaw, ok := inputs[fieldDepth]; ok {
 		var depth int
 		switch v := depthRaw.(type) {
 		case int:
@@ -252,13 +269,13 @@ func (p *GitProvider) executeClone(ctx context.Context, inputs map[string]any) (
 		}
 	}
 
-	if branch, ok := inputs["branch"].(string); ok && branch != "" {
+	if branch, ok := inputs[fieldBranch].(string); ok && branch != "" {
 		args = append(args, "--branch", branch)
 	}
 
 	repoURL := repository
-	if username, ok := inputs["username"].(string); ok && username != "" {
-		if password, ok := inputs["password"].(string); ok && password != "" {
+	if username, ok := inputs[fieldUsername].(string); ok && username != "" {
+		if password, ok := inputs[fieldPassword].(string); ok && password != "" {
 			repoURL = injectCredentials(repository, username, password)
 		}
 	}
@@ -269,19 +286,19 @@ func (p *GitProvider) executeClone(ctx context.Context, inputs map[string]any) (
 }
 
 func (p *GitProvider) executePull(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
-	path, _ := inputs["path"].(string)
+	path, _ := inputs[fieldPath].(string)
 	if path == "" {
 		return nil, fmt.Errorf("path is required for pull operation")
 	}
 
-	remote, _ := inputs["remote"].(string)
+	remote, _ := inputs[fieldRemote].(string)
 	if remote == "" {
 		remote = "origin"
 	}
 
 	args := []string{"pull", remote}
 
-	if branch, ok := inputs["branch"].(string); ok && branch != "" {
+	if branch, ok := inputs[fieldBranch].(string); ok && branch != "" {
 		args = append(args, branch)
 	}
 
@@ -289,7 +306,7 @@ func (p *GitProvider) executePull(ctx context.Context, inputs map[string]any) (*
 }
 
 func (p *GitProvider) executeStatus(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
-	path, _ := inputs["path"].(string)
+	path, _ := inputs[fieldPath].(string)
 	if path == "" {
 		return nil, fmt.Errorf("path is required for status operation")
 	}
@@ -300,14 +317,14 @@ func (p *GitProvider) executeStatus(ctx context.Context, inputs map[string]any) 
 }
 
 func (p *GitProvider) executeAdd(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
-	path, _ := inputs["path"].(string)
+	path, _ := inputs[fieldPath].(string)
 	if path == "" {
 		return nil, fmt.Errorf("path is required for add operation")
 	}
 
 	args := []string{"add"}
 
-	filesRaw, ok := inputs["files"]
+	filesRaw, ok := inputs[fieldFiles]
 	if !ok || filesRaw == nil {
 		return nil, fmt.Errorf("files is required for add operation")
 	}
@@ -327,12 +344,12 @@ func (p *GitProvider) executeAdd(ctx context.Context, inputs map[string]any) (*p
 }
 
 func (p *GitProvider) executeCommit(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
-	path, _ := inputs["path"].(string)
+	path, _ := inputs[fieldPath].(string)
 	if path == "" {
 		return nil, fmt.Errorf("path is required for commit operation")
 	}
 
-	message, ok := inputs["message"].(string)
+	message, ok := inputs[fieldMessage].(string)
 	if !ok || message == "" {
 		return nil, fmt.Errorf("message is required for commit operation")
 	}
@@ -343,23 +360,23 @@ func (p *GitProvider) executeCommit(ctx context.Context, inputs map[string]any) 
 }
 
 func (p *GitProvider) executePush(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
-	path, _ := inputs["path"].(string)
+	path, _ := inputs[fieldPath].(string)
 	if path == "" {
 		return nil, fmt.Errorf("path is required for push operation")
 	}
 
-	remote, _ := inputs["remote"].(string)
+	remote, _ := inputs[fieldRemote].(string)
 	if remote == "" {
 		remote = "origin"
 	}
 
 	args := []string{"push", remote}
 
-	if branch, ok := inputs["branch"].(string); ok && branch != "" {
+	if branch, ok := inputs[fieldBranch].(string); ok && branch != "" {
 		args = append(args, branch)
 	}
 
-	if force, ok := inputs["force"].(bool); ok && force {
+	if force, ok := inputs[fieldForce].(bool); ok && force {
 		args = append(args, "--force")
 	}
 
@@ -367,12 +384,12 @@ func (p *GitProvider) executePush(ctx context.Context, inputs map[string]any) (*
 }
 
 func (p *GitProvider) executeCheckout(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
-	path, _ := inputs["path"].(string)
+	path, _ := inputs[fieldPath].(string)
 	if path == "" {
 		return nil, fmt.Errorf("path is required for checkout operation")
 	}
 
-	branch, ok := inputs["branch"].(string)
+	branch, ok := inputs[fieldBranch].(string)
 	if !ok || branch == "" {
 		return nil, fmt.Errorf("branch is required for checkout operation")
 	}
@@ -383,14 +400,14 @@ func (p *GitProvider) executeCheckout(ctx context.Context, inputs map[string]any
 }
 
 func (p *GitProvider) executeBranch(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
-	path, _ := inputs["path"].(string)
+	path, _ := inputs[fieldPath].(string)
 	if path == "" {
 		return nil, fmt.Errorf("path is required for branch operation")
 	}
 
 	args := []string{"branch"}
 
-	if branch, ok := inputs["branch"].(string); ok && branch != "" {
+	if branch, ok := inputs[fieldBranch].(string); ok && branch != "" {
 		args = append(args, branch)
 	} else {
 		args = append(args, "-a")
@@ -400,7 +417,7 @@ func (p *GitProvider) executeBranch(ctx context.Context, inputs map[string]any) 
 }
 
 func (p *GitProvider) executeLog(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
-	path, _ := inputs["path"].(string)
+	path, _ := inputs[fieldPath].(string)
 	if path == "" {
 		return nil, fmt.Errorf("path is required for log operation")
 	}
@@ -411,19 +428,19 @@ func (p *GitProvider) executeLog(ctx context.Context, inputs map[string]any) (*p
 }
 
 func (p *GitProvider) executeTag(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
-	path, _ := inputs["path"].(string)
+	path, _ := inputs[fieldPath].(string)
 	if path == "" {
 		return nil, fmt.Errorf("path is required for tag operation")
 	}
 
-	tag, ok := inputs["tag"].(string)
+	tag, ok := inputs[fieldTag].(string)
 	if !ok || tag == "" {
 		return p.runGitCommand(ctx, path, []string{"tag"}, "tag")
 	}
 
 	args := []string{"tag", tag}
 
-	if message, ok := inputs["message"].(string); ok && message != "" {
+	if message, ok := inputs[fieldMessage].(string); ok && message != "" {
 		args = append(args, "-m", message)
 	}
 
@@ -471,11 +488,11 @@ func (p *GitProvider) runGitCommand(ctx context.Context, workDir string, args []
 
 	return &provider.Output{
 		Data: map[string]any{
-			"success":   success,
-			"output":    strings.TrimSpace(output),
-			"error":     errorMsg,
-			"operation": operation,
-			"path":      workDir,
+			"success":      success,
+			"output":       strings.TrimSpace(output),
+			"error":        errorMsg,
+			fieldOperation: operation,
+			fieldPath:      workDir,
 		},
 	}, nil
 }
@@ -484,37 +501,41 @@ func (p *GitProvider) runGitCommand(ctx context.Context, workDir string, args []
 func (p *GitProvider) executeDryRun(operation string, inputs map[string]any) (*provider.Output, error) {
 	message := fmt.Sprintf("Would execute git %s", operation)
 
-	if repository, ok := inputs["repository"].(string); ok && repository != "" {
+	if repository, ok := inputs[fieldRepository].(string); ok && repository != "" {
 		message += fmt.Sprintf(" on repository: %s", repository)
 	}
 
-	if path, ok := inputs["path"].(string); ok && path != "" {
+	if path, ok := inputs[fieldPath].(string); ok && path != "" {
 		message += fmt.Sprintf(" at path: %s", path)
 	}
 
-	if branch, ok := inputs["branch"].(string); ok && branch != "" {
+	if branch, ok := inputs[fieldBranch].(string); ok && branch != "" {
 		message += fmt.Sprintf(" for branch: %s", branch)
 	}
 
 	return &provider.Output{
 		Data: map[string]any{
-			"success":   true,
-			"output":    "",
-			"error":     "",
-			"operation": operation,
-			"path":      inputs["path"],
-			"_dryRun":   true,
-			"_message":  message,
+			"success":      true,
+			"output":       "",
+			"error":        "",
+			fieldOperation: operation,
+			fieldPath:      inputs[fieldPath],
+			"_dryRun":      true,
+			"_message":     message,
 		},
 	}, nil
 }
 
 func injectCredentials(repoURL, username, password string) string {
-	if strings.HasPrefix(repoURL, "https://") {
-		return strings.Replace(repoURL, "https://", fmt.Sprintf("https://%s:%s@", username, password), 1)
+	u, err := url.Parse(repoURL)
+	if err != nil {
+		// Non-standard URLs (e.g. SSH git@host:path) cannot be parsed; return unchanged.
+		return repoURL
 	}
-	if strings.HasPrefix(repoURL, "http://") {
-		return strings.Replace(repoURL, "http://", fmt.Sprintf("http://%s:%s@", username, password), 1)
+	// Only inject credentials for HTTP(S) URLs; leave SSH and other schemes unchanged.
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return repoURL
 	}
-	return repoURL
+	u.User = url.UserPassword(username, password)
+	return u.String()
 }

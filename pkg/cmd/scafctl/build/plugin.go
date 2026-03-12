@@ -6,8 +6,6 @@ package build
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
@@ -17,6 +15,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/format"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
@@ -110,9 +109,9 @@ func runBuildPlugin(ctx context.Context, opts *PluginOptions) error {
 	}
 
 	// Validate kind
-	kind, ok := catalog.ParseArtifactKind(opts.Kind)
-	if !ok || (kind != catalog.ArtifactKindProvider && kind != catalog.ArtifactKindAuthHandler) {
-		w.Errorf("invalid kind %q: must be 'provider' or 'auth-handler'", opts.Kind)
+	kind, err := catalog.ValidatePluginKind(opts.Kind)
+	if err != nil {
+		w.Errorf("%v", err)
 		return exitcode.Errorf("invalid kind")
 	}
 
@@ -123,33 +122,22 @@ func runBuildPlugin(ctx context.Context, opts *PluginOptions) error {
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
-	// Parse platform mappings
-	binaries, err := parsePlatformFlags(opts.Platforms)
+	// Parse platform flag format and resolve paths
+	platformPaths, err := parsePlatformFlags(opts.Platforms)
 	if err != nil {
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
-	// Read binary files
-	platformBinaries := make([]catalog.PlatformBinary, 0, len(binaries))
-	for platform, path := range binaries {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			w.Errorf("failed to read binary for %s at %s: %v", platform, path, err)
-			return exitcode.WithCode(err, exitcode.FileNotFound)
-		}
+	// Validate and read platform binaries
+	platformBinaries, err := catalog.ReadPlatformBinaries(platformPaths)
+	if err != nil {
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
+	}
 
-		if len(data) == 0 {
-			w.Errorf("binary for %s at %s is empty", platform, path)
-			return exitcode.Errorf("empty binary")
-		}
-
-		platformBinaries = append(platformBinaries, catalog.PlatformBinary{
-			Platform: platform,
-			Data:     data,
-		})
-
-		w.Infof("  %s → %s (%s)", platform, path, formatBytes(int64(len(data))))
+	for _, pb := range platformBinaries {
+		w.Infof("  %s (%s)", pb.Platform, format.Bytes(int64(len(pb.Data))))
 	}
 
 	// Build reference
@@ -197,7 +185,8 @@ func runBuildPlugin(ctx context.Context, opts *PluginOptions) error {
 }
 
 // parsePlatformFlags parses --platform flags of the form "os/arch=path" into a
-// map[platform]path. Validates that each platform is supported and the path exists.
+// map[platform]path. Checks for duplicates and format correctness.
+// Platform validation and path resolution are handled by catalog.ReadPlatformBinaries.
 func parsePlatformFlags(flags []string) (map[string]string, error) {
 	result := make(map[string]string, len(flags))
 
@@ -210,50 +199,12 @@ func parsePlatformFlags(flags []string) (map[string]string, error) {
 		platform := parts[0]
 		path := parts[1]
 
-		if !catalog.IsSupportedPlatform(platform) {
-			return nil, fmt.Errorf("unsupported platform %q: supported platforms are %v", platform, catalog.SupportedPluginPlatforms)
-		}
-
 		if _, exists := result[platform]; exists {
 			return nil, fmt.Errorf("duplicate platform %q", platform)
 		}
 
-		// Resolve and validate path
-		absPath, err := filepath.Abs(path)
-		if err != nil {
-			return nil, fmt.Errorf("invalid path %q for platform %s: %w", path, platform, err)
-		}
-
-		info, err := os.Stat(absPath)
-		if err != nil {
-			return nil, fmt.Errorf("binary not found for platform %s at %q: %w", platform, path, err)
-		}
-		if info.IsDir() {
-			return nil, fmt.Errorf("path for platform %s is a directory, expected a file: %s", platform, path)
-		}
-
-		result[platform] = absPath
+		result[platform] = path
 	}
 
 	return result, nil
-}
-
-// formatBytes formats bytes as a human-readable string (local copy to avoid
-// pulling in the catalog cmd package).
-func formatBytes(b int64) string {
-	const (
-		kb = 1024
-		mb = kb * 1024
-		gb = mb * 1024
-	)
-	switch {
-	case b >= gb:
-		return fmt.Sprintf("%.1f GB", float64(b)/float64(gb))
-	case b >= mb:
-		return fmt.Sprintf("%.1f MB", float64(b)/float64(mb))
-	case b >= kb:
-		return fmt.Sprintf("%.1f KB", float64(b)/float64(kb))
-	default:
-		return fmt.Sprintf("%d B", b)
-	}
 }

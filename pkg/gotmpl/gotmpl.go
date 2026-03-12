@@ -52,60 +52,60 @@ const (
 // TemplateOptions contains configuration for template execution
 type TemplateOptions struct {
 	// Content is the template content as a string
-	Content string
+	Content string `json:"content" yaml:"content" doc:"Template content as a string" maxLength:"1048576" example:"Hello {{ .Name }}"`
 
 	// Name is the reference name/identifier for the template (e.g., file path)
 	// Used in logging and error messages
-	Name string
+	Name string `json:"name" yaml:"name" doc:"Reference name/identifier for the template" maxLength:"512" example:"greeting.tmpl"`
 
 	// Data is the data source passed to the template during execution
-	Data any
+	Data any `json:"data,omitempty" yaml:"data,omitempty" doc:"Data source passed to the template during execution"`
 
 	// LeftDelim sets the left action delimiter (default: "{{")
-	LeftDelim string
+	LeftDelim string `json:"leftDelim,omitempty" yaml:"leftDelim,omitempty" doc:"Left action delimiter" maxLength:"8" example:"{{"`
 
 	// RightDelim sets the right action delimiter (default: "}}")
-	RightDelim string
+	RightDelim string `json:"rightDelim,omitempty" yaml:"rightDelim,omitempty" doc:"Right action delimiter" maxLength:"8" example:"}}"`
 
 	// Replacements is a map of strings to replace before template execution
 	// The key is replaced with a UUID placeholder, then restored after execution
 	// This helps avoid template parsing errors for content that should be literal
-	Replacements []Replacement
+	Replacements []Replacement `json:"replacements,omitempty" yaml:"replacements,omitempty" doc:"String replacements to perform before/after template execution" maxItems:"100"`
 
 	// Funcs is a map of custom template functions to make available
 	// These are added to the template's function map
-	Funcs template.FuncMap
+	Funcs template.FuncMap `json:"-" yaml:"-" doc:"Custom template functions to make available"`
 
 	// MissingKey controls the behavior when a map key is missing
 	// Default: MissingKeyDefault (prints "<no value>")
 	// Options: MissingKeyDefault, MissingKeyZero, MissingKeyError
-	MissingKey MissingKeyOption
+	MissingKey MissingKeyOption `json:"missingKey,omitempty" yaml:"missingKey,omitempty" doc:"Behavior when a map key is missing" maxLength:"16" example:"default"`
 
 	// DisableBuiltinFuncs disables the built-in template functions
 	// By default, basic functions like "html", "js", etc. are available
-	DisableBuiltinFuncs bool
+	DisableBuiltinFuncs bool `json:"disableBuiltinFuncs,omitempty" yaml:"disableBuiltinFuncs,omitempty" doc:"Disables the built-in template functions"`
 }
 
 // Replacement defines a string replacement to perform before/after templating
 type Replacement struct {
 	// Find is the string to search for in the template content
-	Find string
+	Find string `json:"find" yaml:"find" doc:"String to search for in the template content" maxLength:"4096" example:"${LITERAL}"`
 
 	// Replace is the temporary replacement value
 	// If empty, a UUID will be generated automatically
-	Replace string
+	Replace string `json:"replace,omitempty" yaml:"replace,omitempty" doc:"Temporary replacement value; if empty, a UUID is generated" maxLength:"4096"`
 }
 
 // ExecuteResult contains the result of template execution
 type ExecuteResult struct {
 	// Output is the rendered template content
-	Output string
+	Output string `json:"output" yaml:"output" doc:"Rendered template content" maxLength:"10485760"`
 
 	// TemplateName is the name/identifier of the template
-	TemplateName string
+	TemplateName string `json:"templateName" yaml:"templateName" doc:"Name/identifier of the template" maxLength:"512" example:"greeting.tmpl"`
 
 	// ReplacementsMade is the number of replacements that were applied
-	ReplacementsMade int
+	ReplacementsMade int `json:"replacementsMade" yaml:"replacementsMade" doc:"Number of replacements that were applied" maximum:"1000" example:"3"`
 }
 
 // Service provides template execution capabilities
@@ -553,4 +553,24 @@ func diagnoseTemplateError(err error, opts TemplateOptions) string {
 func Execute(ctx context.Context, opts TemplateOptions) (*ExecuteResult, error) {
 	svc := NewService(nil)
 	return svc.Execute(ctx, opts)
+}
+
+// ValidateSyntax checks a Go template for parse errors without executing it.
+// It returns nil if the template is syntactically valid.
+// Use leftDelim/rightDelim to override the default "{{" / "}}" delimiters
+// (pass empty strings for defaults).
+func ValidateSyntax(content, leftDelim, rightDelim string) error {
+	tmpl := template.New("validate")
+
+	switch {
+	case leftDelim != "" && rightDelim != "":
+		tmpl = tmpl.Delims(leftDelim, rightDelim)
+	case leftDelim != "":
+		tmpl = tmpl.Delims(leftDelim, DefaultRightDelim)
+	case rightDelim != "":
+		tmpl = tmpl.Delims(DefaultLeftDelim, rightDelim)
+	}
+
+	_, err := tmpl.Parse(content)
+	return err
 }

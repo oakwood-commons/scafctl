@@ -17,9 +17,7 @@ import (
 func TestEnvironmentCaching(t *testing.T) {
 	t.Run("getBaseEnvOptions caches results", func(t *testing.T) {
 		// Reset for clean test
-		baseEnvOnce = sync.Once{}
-		baseEnvOpts = nil
-		baseEnvErr = nil
+		resetBaseEnvForTesting()
 
 		ctx := context.Background()
 
@@ -36,9 +34,7 @@ func TestEnvironmentCaching(t *testing.T) {
 
 	t.Run("New uses cached base options", func(t *testing.T) {
 		// Reset for clean test
-		baseEnvOnce = sync.Once{}
-		baseEnvOpts = nil
-		baseEnvErr = nil
+		resetBaseEnvForTesting()
 
 		ctx := context.Background()
 
@@ -64,9 +60,7 @@ func TestEnvironmentCaching(t *testing.T) {
 
 	t.Run("concurrent New calls are safe", func(t *testing.T) {
 		// Reset for clean test
-		baseEnvOnce = sync.Once{}
-		baseEnvOpts = nil
-		baseEnvErr = nil
+		resetBaseEnvForTesting()
 
 		ctx := context.Background()
 		var wg sync.WaitGroup
@@ -97,9 +91,7 @@ func TestEnvironmentCaching(t *testing.T) {
 func TestContextCancellation(t *testing.T) {
 	t.Run("context cancellation before getBaseEnvOptions", func(t *testing.T) {
 		// Reset for clean test
-		baseEnvOnce = sync.Once{}
-		baseEnvOpts = nil
-		baseEnvErr = nil
+		resetBaseEnvForTesting()
 
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel() // Cancel immediately
@@ -119,9 +111,7 @@ func TestContextCancellation(t *testing.T) {
 
 	t.Run("context timeout during New", func(t *testing.T) {
 		// Reset to force slow initialization
-		baseEnvOnce = sync.Once{}
-		baseEnvOpts = nil
-		baseEnvErr = nil
+		resetBaseEnvForTesting()
 
 		// Very short timeout
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
@@ -211,9 +201,7 @@ func TestNewEnvironmentWithExtensions(t *testing.T) {
 
 func BenchmarkNewWithCache(b *testing.B) {
 	// Reset to ensure cache is built
-	baseEnvOnce = sync.Once{}
-	baseEnvOpts = nil
-	baseEnvErr = nil
+	resetBaseEnvForTesting()
 
 	ctx := context.Background()
 
@@ -228,9 +216,7 @@ func BenchmarkNewWithCache(b *testing.B) {
 
 func BenchmarkNewConcurrent(b *testing.B) {
 	// Reset
-	baseEnvOnce = sync.Once{}
-	baseEnvOpts = nil
-	baseEnvErr = nil
+	resetBaseEnvForTesting()
 
 	ctx := context.Background()
 

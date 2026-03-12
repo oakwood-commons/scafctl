@@ -163,7 +163,7 @@ func runRefs(ctx context.Context, opts *RefsOptions, ioStreams *terminal.IOStrea
 			}
 		}
 		source = opts.Expr
-		refs, err = refslib.ExtractFromCEL(opts.Expr)
+		refs, err = refslib.ExtractFromCEL(ctx, opts.Expr)
 	}
 
 	if err != nil {
@@ -183,10 +183,10 @@ func runRefs(ctx context.Context, opts *RefsOptions, ioStreams *terminal.IOStrea
 		Count:      len(refs),
 	}
 
-	return writeOutput(ioStreams, opts.Output, output)
+	return writeOutput(ctx, ioStreams, opts.Output, output)
 }
 
-func writeOutput(ioStreams *terminal.IOStreams, format string, output refslib.Output) error {
+func writeOutput(ctx context.Context, ioStreams *terminal.IOStreams, format string, output refslib.Output) error {
 	switch format {
 	case "json":
 		enc := json.NewEncoder(ioStreams.Out)
@@ -200,15 +200,20 @@ func writeOutput(ioStreams *terminal.IOStreams, format string, output refslib.Ou
 
 	case "text":
 		if len(output.References) == 0 {
-			fmt.Fprintln(ioStreams.Out, "No resolver references found.")
+			if w := writer.FromContext(ctx); w != nil {
+				w.Plainln("No resolver references found.")
+			}
 			return nil
 		}
 
-		fmt.Fprintf(ioStreams.Out, "Resolver references found in %s:\n", output.SourceType)
-		for _, ref := range output.References {
-			fmt.Fprintf(ioStreams.Out, "  - %s\n", ref)
+		w := writer.FromContext(ctx)
+		if w != nil {
+			w.Plainlnf("Resolver references found in %s:", output.SourceType)
+			for _, ref := range output.References {
+				w.Plainlnf("  - %s", ref)
+			}
+			w.Plainlnf("\nTotal: %d reference(s)", output.Count)
 		}
-		fmt.Fprintf(ioStreams.Out, "\nTotal: %d reference(s)\n", output.Count)
 		return nil
 
 	default:

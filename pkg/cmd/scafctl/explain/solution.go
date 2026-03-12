@@ -50,7 +50,7 @@ Examples:
   scafctl explain solution https://example.com/solution.yaml`,
 		RunE: func(cCmd *cobra.Command, args []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
-			ctx := settings.IntoContext(context.Background(), cliParams)
+			ctx := settings.IntoContext(cCmd.Context(), cliParams)
 
 			options.IOStreams = ioStreams
 			options.CliParams = cliParams

@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Oakwood Commons
 // SPDX-License-Identifier: Apache-2.0
 
-package run
+package flags
 
 import (
 	"os"
@@ -47,7 +47,7 @@ func TestLoadParameterFile(t *testing.T) {
 			content:  `{"key1": "value1", "key2": 123}`,
 			expected: map[string]any{
 				"key1": "value1",
-				"key2": float64(123), // JSON unmarshals numbers as float64
+				"key2": float64(123),
 			},
 		},
 		{
@@ -84,13 +84,11 @@ func TestLoadParameterFile(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			// Create temp file
 			tmpDir := t.TempDir()
 			filePath := filepath.Join(tmpDir, tt.filename)
 			err := os.WriteFile(filePath, []byte(tt.content), 0o600)
 			require.NoError(t, err)
 
-			// Load file
 			result, err := LoadParameterFile(filePath)
 
 			if tt.wantErr {
@@ -170,14 +168,12 @@ func TestParseResolverFlags(t *testing.T) {
 func TestParseResolverFlags_WithFileRef(t *testing.T) {
 	t.Parallel()
 
-	// Create temp file with params
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "params.yaml")
 	content := "fileKey: fileValue\n"
 	err := os.WriteFile(filePath, []byte(content), 0o600)
 	require.NoError(t, err)
 
-	// Parse with file reference
 	result, err := ParseResolverFlags([]string{"@" + filePath, "cliKey=cliValue"})
 	require.NoError(t, err)
 
@@ -259,8 +255,40 @@ func TestMergeValue(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			result := mergeValue(tt.existing, tt.newVal)
+			result := MergeValue(tt.existing, tt.newVal)
 			assert.Equal(t, tt.expected, result)
 		})
+	}
+}
+
+func BenchmarkLoadParameterFile(b *testing.B) {
+	dir := b.TempDir()
+	p := filepath.Join(dir, "bench.yaml")
+	_ = os.WriteFile(p, []byte("key1: value1\nkey2: 123\nnested:\n  a: b\n"), 0o600)
+
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = LoadParameterFile(p)
+	}
+}
+
+func BenchmarkParseResolverFlags(b *testing.B) {
+	dir := b.TempDir()
+	p := filepath.Join(dir, "params.yaml")
+	_ = os.WriteFile(p, []byte("fileKey: fileValue\n"), 0o600)
+	values := []string{"key1=value1", "key2=value2", "@" + p}
+
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = ParseResolverFlags(values)
+	}
+}
+
+func BenchmarkMergeValue(b *testing.B) {
+	existing := []any{"value1", "value2"}
+	newVal := []any{"value3", "value4"}
+
+	for b.Loop() {
+		_ = MergeValue(existing, newVal)
 	}
 }

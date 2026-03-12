@@ -5,6 +5,7 @@ package plugins
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
@@ -68,7 +69,10 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 }
 
 func runList(ctx context.Context, opts *ListOptions, kvxOpts *kvx.OutputOptions) error {
-	w := writer.MustFromContext(ctx)
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return fmt.Errorf("writer not initialized in context")
+	}
 
 	cache := plugin.NewCache(opts.CacheDir)
 	cached, err := cache.List()

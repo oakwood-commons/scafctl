@@ -8,49 +8,51 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/oakwood-commons/scafctl/pkg/terminal/format"
 )
 
 // MetricsSummary contains aggregated metrics for display
 type MetricsSummary struct {
-	TotalResolvers   int           `json:"totalResolvers" doc:"Total number of resolvers executed"`
-	SuccessCount     int           `json:"successCount" doc:"Number of successful resolvers"`
-	FailedCount      int           `json:"failedCount" doc:"Number of failed resolvers"`
-	SkippedCount     int           `json:"skippedCount" doc:"Number of skipped resolvers"`
-	TotalDuration    time.Duration `json:"totalDuration" doc:"Total execution time"`
-	PhaseCount       int           `json:"phaseCount" doc:"Number of execution phases"`
-	SlowestResolvers []ResolverMetric
-	LargestValues    []ResolverMetric
-	FailedAttempts   []FailedAttemptSummary
-	Failures         []FailureSummary
+	TotalResolvers   int                    `json:"totalResolvers" yaml:"totalResolvers" doc:"Total number of resolvers executed" maximum:"10000" example:"20"`
+	SuccessCount     int                    `json:"successCount" yaml:"successCount" doc:"Number of successful resolvers" maximum:"10000" example:"18"`
+	FailedCount      int                    `json:"failedCount" yaml:"failedCount" doc:"Number of failed resolvers" maximum:"10000" example:"1"`
+	SkippedCount     int                    `json:"skippedCount" yaml:"skippedCount" doc:"Number of skipped resolvers" maximum:"10000" example:"1"`
+	TotalDuration    time.Duration          `json:"totalDuration" yaml:"totalDuration" doc:"Total execution time"`
+	PhaseCount       int                    `json:"phaseCount" yaml:"phaseCount" doc:"Number of execution phases" maximum:"100" example:"3"`
+	SlowestResolvers []ResolverMetric       `json:"slowestResolvers,omitempty" yaml:"slowestResolvers,omitempty" doc:"Top resolvers by execution time" maxItems:"20"`
+	LargestValues    []ResolverMetric       `json:"largestValues,omitempty" yaml:"largestValues,omitempty" doc:"Top resolvers by value size" maxItems:"20"`
+	FailedAttempts   []FailedAttemptSummary `json:"failedAttempts,omitempty" yaml:"failedAttempts,omitempty" doc:"Resolvers with failed provider attempts" maxItems:"100"`
+	Failures         []FailureSummary       `json:"failures,omitempty" yaml:"failures,omitempty" doc:"Failed resolver details" maxItems:"100"`
 }
 
 // ResolverMetric contains metrics for a single resolver
 // nolint:revive // ResolverMetric name is intentional for clarity in metrics context
 type ResolverMetric struct {
-	Name     string        `json:"name" doc:"Resolver name"`
-	Duration time.Duration `json:"duration,omitempty" doc:"Execution duration"`
-	Size     int64         `json:"size,omitempty" doc:"Value size in bytes"`
-	Phase    int           `json:"phase" doc:"Execution phase number"`
+	Name     string        `json:"name" yaml:"name" doc:"Resolver name" maxLength:"256" example:"api-data"`
+	Duration time.Duration `json:"duration,omitempty" yaml:"duration,omitempty" doc:"Execution duration"`
+	Size     int64         `json:"size,omitempty" yaml:"size,omitempty" doc:"Value size in bytes" maximum:"1073741824" example:"1024"`
+	Phase    int           `json:"phase" yaml:"phase" doc:"Execution phase number" maximum:"100" example:"1"`
 }
 
 // FailedAttemptSummary summarizes failed attempts for a resolver
 type FailedAttemptSummary struct {
-	ResolverName string          `json:"resolverName" doc:"Resolver name"`
-	AttemptCount int             `json:"attemptCount" doc:"Number of failed attempts"`
-	Attempts     []AttemptDetail `json:"attempts" doc:"Details of each failed attempt"`
+	ResolverName string          `json:"resolverName" yaml:"resolverName" doc:"Resolver name" maxLength:"256" example:"api-data"`
+	AttemptCount int             `json:"attemptCount" yaml:"attemptCount" doc:"Number of failed attempts" maximum:"100" example:"2"`
+	Attempts     []AttemptDetail `json:"attempts" yaml:"attempts" doc:"Details of each failed attempt" maxItems:"100"`
 }
 
 // AttemptDetail contains details of a failed attempt
 type AttemptDetail struct {
-	Provider string `json:"provider" doc:"Provider name"`
-	Error    string `json:"error" doc:"Error message"`
+	Provider string `json:"provider" yaml:"provider" doc:"Provider name" maxLength:"128" example:"http"`
+	Error    string `json:"error" yaml:"error" doc:"Error message" maxLength:"4096" example:"connection refused"`
 }
 
 // FailureSummary contains information about a failed resolver
 type FailureSummary struct {
-	Name  string `json:"name" doc:"Resolver name"`
-	Phase int    `json:"phase" doc:"Phase where failure occurred"`
-	Error string `json:"error" doc:"Error message"`
+	Name  string `json:"name" yaml:"name" doc:"Resolver name" maxLength:"256" example:"api-data"`
+	Phase int    `json:"phase" yaml:"phase" doc:"Phase where failure occurred" maximum:"100" example:"1"`
+	Error string `json:"error" yaml:"error" doc:"Error message" maxLength:"4096" example:"timeout"`
 }
 
 // BuildMetricsSummary creates a metrics summary from execution results
@@ -170,7 +172,7 @@ func FormatMetricsSummary(summary *MetricsSummary) string {
 		sb.WriteString("Slowest Resolvers:\n")
 		for i, r := range summary.SlowestResolvers {
 			fmt.Fprintf(&sb, "  %d. %-20s %6s  (phase %d)\n",
-				i+1, r.Name, formatDuration(r.Duration), r.Phase)
+				i+1, r.Name, format.Duration(r.Duration), r.Phase)
 		}
 		sb.WriteString("\n")
 	}
@@ -180,7 +182,7 @@ func FormatMetricsSummary(summary *MetricsSummary) string {
 		sb.WriteString("Largest Values:\n")
 		for i, r := range summary.LargestValues {
 			fmt.Fprintf(&sb, "  %d. %-20s %s\n",
-				i+1, r.Name, formatBytes(r.Size))
+				i+1, r.Name, format.Bytes(r.Size))
 		}
 		sb.WriteString("\n")
 	}
@@ -210,35 +212,4 @@ func FormatMetricsSummary(summary *MetricsSummary) string {
 	}
 
 	return sb.String()
-}
-
-// formatDuration formats duration in human-readable format
-func formatDuration(d time.Duration) string {
-	if d < time.Millisecond {
-		return fmt.Sprintf("%dµs", d.Microseconds())
-	}
-	if d < time.Second {
-		return fmt.Sprintf("%dms", d.Milliseconds())
-	}
-	return fmt.Sprintf("%.2fs", d.Seconds())
-}
-
-// formatBytes formats bytes in human-readable format
-func formatBytes(b int64) string {
-	const (
-		KB = 1024
-		MB = KB * 1024
-		GB = MB * 1024
-	)
-
-	switch {
-	case b >= GB:
-		return fmt.Sprintf("%.2f GB", float64(b)/float64(GB))
-	case b >= MB:
-		return fmt.Sprintf("%.2f MB", float64(b)/float64(MB))
-	case b >= KB:
-		return fmt.Sprintf("%.2f KB", float64(b)/float64(KB))
-	default:
-		return fmt.Sprintf("%d B", b)
-	}
 }

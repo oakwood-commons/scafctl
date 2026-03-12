@@ -14,6 +14,7 @@ import (
 	solutionpkg "github.com/oakwood-commons/scafctl/pkg/solution"
 	solutionget "github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -154,7 +155,10 @@ func TestCmdOptionsVersion_GetSolutionWithGetter(t *testing.T) {
 			Path:   "/invalid/path",
 		}
 
-		err := options.GetSolutionWithGetter(context.Background(), mockGetter)
+		w := writer.New(ioStreams, options.CliParams)
+		ctx := writer.WithWriter(context.Background(), w)
+
+		err := options.GetSolutionWithGetter(ctx, mockGetter)
 		require.Error(t, err)
 		assert.True(t, errors.Is(err, expectedError), "error should wrap the original error")
 		assert.Equal(t, exitcode.FileNotFound, exitcode.GetCode(err), "should return FileNotFound exit code")

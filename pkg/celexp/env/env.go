@@ -14,8 +14,10 @@ import (
 )
 
 var (
-	// baseEnvOnce ensures base environment is created only once
-	baseEnvOnce sync.Once
+	// baseEnvMu protects baseEnv initialization state.
+	baseEnvMu sync.Mutex
+	// baseEnvInitialized tracks whether base environment options have been created.
+	baseEnvInitialized bool
 	// baseEnvOpts contains all extension function options (BuiltIn + Custom), cached for reuse.
 	// Note: debug.DebugOutFunc is NOT included here because it requires a Writer parameter.
 	// It is added separately via NewWithWriter() or by callers using DebugOutEnvOptions().
@@ -32,12 +34,13 @@ var (
 // Note: debug.DebugOutFunc is NOT included in the cached options because it
 // requires a Writer parameter. Use DebugOutEnvOptions() to add it separately.
 func getBaseEnvOptions(ctx context.Context) ([]cel.EnvOption, error) {
-	// Check context before potentially waiting on sync.Once
+	// Check context before potentially waiting on mutex
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
-	baseEnvOnce.Do(func() {
+	baseEnvMu.Lock()
+	if !baseEnvInitialized {
 		// Get all CEL extension functions (both built-in and custom)
 		// Note: ext.All() excludes debug.DebugOutFunc which requires Writer
 		extFuncs := ext.All()
@@ -50,20 +53,33 @@ func getBaseEnvOptions(ctx context.Context) ([]cel.EnvOption, error) {
 			baseEnvOpts = append(baseEnvOpts, extFunc.EnvOptions...)
 		}
 		// baseEnvErr is intentionally left nil on success
-	})
+		baseEnvInitialized = true
+	}
+	baseEnvMu.Unlock()
 
-	// If sync.Once encountered an error during initialization, return it
+	// If initialization encountered an error, return it
 	if baseEnvErr != nil {
 		return nil, baseEnvErr
 	}
 
-	// Check context after sync.Once completes - this allows callers with cancelled
+	// Check context after initialization completes - this allows callers with cancelled
 	// contexts to get an error even though the extensions were successfully cached
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
 	return baseEnvOpts, nil
+}
+
+// resetBaseEnvForTesting resets the base environment state for testing.
+// This is safe for use in tests as it acquires the mutex before resetting.
+// WARNING: This should only be called from tests.
+func resetBaseEnvForTesting() {
+	baseEnvMu.Lock()
+	defer baseEnvMu.Unlock()
+	baseEnvInitialized = false
+	baseEnvOpts = nil
+	baseEnvErr = nil
 }
 
 // DebugOutEnvOptions returns the CEL environment options for debug.out with the given Writer.

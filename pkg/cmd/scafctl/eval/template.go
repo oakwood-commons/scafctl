@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
@@ -70,7 +71,7 @@ func CommandTemplate(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 		`),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Use)
-			ctx := settings.IntoContext(context.Background(), cliParams)
+			ctx := settings.IntoContext(cmd.Context(), cliParams)
 
 			if lgr := logger.FromContext(cmd.Context()); lgr != nil {
 				ctx = logger.WithLogger(ctx, lgr)
@@ -105,7 +106,10 @@ func CommandTemplate(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 
 // Run executes the eval template command.
 func (o *TemplateOptions) Run(ctx context.Context) error {
-	w := writer.MustFromContext(ctx)
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return fmt.Errorf("writer not initialized in context")
+	}
 
 	// Get template content
 	tmplContent, err := o.getTemplateContent()
@@ -115,14 +119,14 @@ func (o *TemplateOptions) Run(ctx context.Context) error {
 	}
 
 	// Build data context
-	rootData, err := buildDataContext(o.Data, o.File)
+	rootData, err := celexp.BuildDataContext(o.Data, o.File)
 	if err != nil {
 		w.Errorf("failed to build data context: %v", err)
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
 	// Parse --var flags
-	vars, err := parseVars(o.Vars)
+	vars, err := celexp.ParseVars(o.Vars)
 	if err != nil {
 		w.Errorf("failed to parse variables: %v", err)
 		return exitcode.WithCode(err, exitcode.InvalidInput)

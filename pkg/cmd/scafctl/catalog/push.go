@@ -6,7 +6,6 @@ package catalog
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
@@ -14,6 +13,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/format"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
@@ -97,7 +97,7 @@ func runPush(ctx context.Context, opts *PushOptions) error {
 	w := writer.FromContext(ctx)
 
 	// Parse reference
-	name, version := parseNameVersion(opts.Reference)
+	name, version := catalog.ParseNameVersion(opts.Reference)
 
 	// Create local catalog
 	localCatalog, err := catalog.NewLocalCatalog(*lgr)
@@ -118,7 +118,7 @@ func runPush(ctx context.Context, opts *PushOptions) error {
 		artifactKind = kind
 	} else {
 		// Infer kind from local catalog by trying each kind
-		artifactKind, err = inferKindFromLocalCatalog(ctx, localCatalog, name, version)
+		artifactKind, err = catalog.InferKindFromLocalCatalog(ctx, localCatalog, name, version)
 		if err != nil {
 			w.Errorf("failed to infer artifact kind: %v", err)
 			w.Infof("Hint: use --kind to specify the artifact kind explicitly")
@@ -154,14 +154,14 @@ func runPush(ctx context.Context, opts *PushOptions) error {
 	ref = info.Reference
 
 	// Resolve catalog URL from flag, config name, or default
-	catalogURL, err := resolveCatalogURL(ctx, opts.Catalog)
+	catalogURL, err := catalog.ResolveCatalogURL(ctx, opts.Catalog)
 	if err != nil {
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
 	// Parse target catalog URL
-	registry, repository := parseCatalogURL(catalogURL)
+	registry, repository := catalog.ParseCatalogURL(catalogURL)
 	if registry == "" {
 		err = fmt.Errorf("invalid catalog URL: %s", catalogURL)
 		w.Errorf("%v", err)
@@ -223,64 +223,7 @@ func runPush(ctx context.Context, opts *PushOptions) error {
 	w.Successf("Pushed %s@%s (%s)",
 		displayName,
 		ref.Version.String(),
-		formatBytes(result.Size))
+		format.Bytes(result.Size))
 
 	return nil
-}
-
-// parseCatalogURL parses a catalog URL into registry and repository parts.
-// Examples:
-//   - "ghcr.io/myorg/scafctl" -> registry: "ghcr.io", repository: "myorg/scafctl"
-//   - "ghcr.io/myorg" -> registry: "ghcr.io", repository: "myorg"
-//   - "localhost:5000" -> registry: "localhost:5000", repository: ""
-func parseCatalogURL(url string) (registry, repository string) {
-	url = strings.TrimPrefix(url, "oci://")
-	url = strings.TrimPrefix(url, "https://")
-	url = strings.TrimPrefix(url, "http://")
-	url = strings.TrimSuffix(url, "/")
-
-	parts := strings.SplitN(url, "/", 2)
-	registry = parts[0]
-	if len(parts) > 1 {
-		repository = parts[1]
-	}
-
-	return registry, repository
-}
-
-// inferKindFromLocalCatalog searches the local catalog to determine an artifact's kind.
-// It tries each artifact kind in order and returns the first match.
-func inferKindFromLocalCatalog(ctx context.Context, localCatalog *catalog.LocalCatalog, name, version string) (catalog.ArtifactKind, error) {
-	kinds := []catalog.ArtifactKind{
-		catalog.ArtifactKindSolution,
-		catalog.ArtifactKindProvider,
-		catalog.ArtifactKindAuthHandler,
-	}
-
-	for _, kind := range kinds {
-		ref := catalog.Reference{
-			Kind: kind,
-			Name: name,
-		}
-
-		// If version specified, try to parse it
-		if version != "" {
-			parsedRef, err := catalog.ParseReference(kind, name+"@"+version)
-			if err != nil {
-				continue
-			}
-			ref = parsedRef
-		}
-
-		// Check if artifact exists with this kind
-		exists, err := localCatalog.Exists(ctx, ref)
-		if err != nil {
-			continue
-		}
-		if exists {
-			return kind, nil
-		}
-	}
-
-	return "", fmt.Errorf("artifact %q not found in local catalog", name)
 }

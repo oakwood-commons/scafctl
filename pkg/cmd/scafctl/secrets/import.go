@@ -4,24 +4,20 @@
 package secrets
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"os"
 
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
-	"github.com/oakwood-commons/scafctl/pkg/secrets/secretcrypto"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
-	"gopkg.in/yaml.v3"
 )
 
 // CommandImport creates the 'secrets import' command.
-func CommandImport(_ *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
+func CommandImport(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Command {
 	var (
 		dryRunFlag    bool
 		overwriteFlag bool
@@ -42,7 +38,10 @@ Use --overwrite to replace existing secrets.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			w := writer.MustFromContext(ctx)
+			w := writer.FromContext(ctx)
+			if w == nil {
+				return fmt.Errorf("writer not initialized in context")
+			}
 			inputFile := args[0]
 
 			store, err := secrets.New()
@@ -60,65 +59,35 @@ Use --overwrite to replace existing secrets.`,
 				return exitcode.WithCode(err, exitcode.FileNotFound)
 			}
 
-			// Detect format and decrypt if needed
-			var importData secretcrypto.ExportFormat
-			if bytes.HasPrefix(fileData, []byte(secretcrypto.EncryptedHeader)) {
-				// Encrypted format
-				fmt.Fprint(ioStreams.ErrOut, "Enter decryption password: ")
+			// Read password for encrypted files if needed
+			var password string
+			if secrets.IsEncrypted(fileData) {
+				w.WarnStderrf("Enter decryption password: ")
 				passwordBytes, err := term.ReadPassword(int(os.Stdin.Fd())) //nolint:gosec // G115: Fd() fits in int on all supported platforms
 				if err != nil {
 					err := fmt.Errorf("failed to read password: %w", err)
 					w.Errorf("%v", err)
 					return exitcode.WithCode(err, exitcode.GeneralError)
 				}
-				password := string(passwordBytes)
-				fmt.Fprintln(ioStreams.ErrOut)
-
-				decrypted, err := secretcrypto.Decrypt(fileData, password)
-				if err != nil {
-					err := fmt.Errorf("failed to decrypt: %w", err)
-					w.Errorf("%v", err)
-					return exitcode.WithCode(err, exitcode.GeneralError)
-				}
-
-				// Try JSON first, then YAML
-				if err := json.Unmarshal(decrypted, &importData); err != nil {
-					if err := yaml.Unmarshal(decrypted, &importData); err != nil {
-						err := fmt.Errorf("failed to parse decrypted data: %w", err)
-						w.Errorf("%v", err)
-						return exitcode.WithCode(err, exitcode.InvalidInput)
-					}
-				}
-			} else {
-				// Plaintext format - try JSON first, then YAML
-				if err := json.Unmarshal(fileData, &importData); err != nil {
-					if err := yaml.Unmarshal(fileData, &importData); err != nil {
-						err := fmt.Errorf("failed to parse file (unsupported format): %w", err)
-						w.Errorf("%v", err)
-						return exitcode.WithCode(err, exitcode.InvalidInput)
-					}
-				}
+				password = string(passwordBytes)
+				w.Plainln("")
 			}
 
-			// Validate version
-			if importData.Version != secretcrypto.ExportVersion {
-				w.Warningf("Warning: Import file version '%s' does not match expected '%s'\n",
-					importData.Version, secretcrypto.ExportVersion)
+			// Parse and validate import data
+			importResult, err := secrets.Import(fileData, secrets.ImportOptions{
+				Password: password,
+			})
+			if err != nil {
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
-			// Filter out internal secrets
-			userSecrets := make([]secretcrypto.ExportedSecret, 0, len(importData.Secrets))
-			skippedInternal := 0
-			for _, secret := range importData.Secrets {
-				if err := secrets.ValidateUserSecretName(secret.Name); err != nil {
-					w.Warningf("Skipping internal secret: %s\n", secret.Name)
-					skippedInternal++
-					continue
-				}
-				userSecrets = append(userSecrets, secret)
+			if importResult.VersionMismatch {
+				w.Warningf("Warning: Import file version '%s' does not match expected version\n",
+					importResult.Version)
 			}
 
-			if len(userSecrets) == 0 {
+			if len(importResult.Secrets) == 0 {
 				w.Warning("No user secrets found in import file")
 				return nil
 			}
@@ -126,11 +95,11 @@ Use --overwrite to replace existing secrets.`,
 			// Dry run - just preview
 			if dryRunFlag {
 				w.Info("Dry run - would import:")
-				for _, secret := range userSecrets {
+				for _, secret := range importResult.Secrets {
 					w.Infof("  - %s (%d bytes)\n", secret.Name, len(secret.Value))
 				}
-				if skippedInternal > 0 {
-					w.Warningf("Skipped %d internal secret(s)\n", skippedInternal)
+				if importResult.SkippedInternal > 0 {
+					w.Warningf("Skipped %d internal secret(s)\n", importResult.SkippedInternal)
 				}
 				return nil
 			}
@@ -140,7 +109,7 @@ Use --overwrite to replace existing secrets.`,
 			updated := 0
 			skipped := 0
 
-			for _, secret := range userSecrets {
+			for _, secret := range importResult.Secrets {
 				exists, err := store.Exists(ctx, secret.Name)
 				if err != nil {
 					w.Warningf("Failed to check if '%s' exists: %v\n", secret.Name, err)
@@ -176,8 +145,8 @@ Use --overwrite to replace existing secrets.`,
 			if skipped > 0 {
 				w.Warningf("  - Skipped: %d\n", skipped)
 			}
-			if skippedInternal > 0 {
-				w.Warningf("  - Skipped internal: %d\n", skippedInternal)
+			if importResult.SkippedInternal > 0 {
+				w.Warningf("  - Skipped internal: %d\n", importResult.SkippedInternal)
 			}
 
 			return nil

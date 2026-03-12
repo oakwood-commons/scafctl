@@ -30,8 +30,8 @@ type Config struct {
 type CatalogConfig struct {
 	Name       string            `json:"name" yaml:"name" mapstructure:"name" doc:"Catalog name" example:"internal" maxLength:"255"`
 	Type       string            `json:"type" yaml:"type" mapstructure:"type" doc:"Catalog type" example:"filesystem" maxLength:"50"`
-	Path       string            `json:"path,omitempty" yaml:"path,omitempty" mapstructure:"path" doc:"Path for filesystem catalogs" maxLength:"4096"`
-	URL        string            `json:"url,omitempty" yaml:"url,omitempty" mapstructure:"url" doc:"URL for remote catalogs" maxLength:"2048"`
+	Path       string            `json:"path,omitempty" yaml:"path,omitempty" mapstructure:"path" doc:"Path for filesystem catalogs" maxLength:"4096" example:"~/.config/scafctl/catalog"`
+	URL        string            `json:"url,omitempty" yaml:"url,omitempty" mapstructure:"url" doc:"URL for remote catalogs" maxLength:"2048" example:"https://catalog.example.com"`
 	Auth       *AuthConfig       `json:"auth,omitempty" yaml:"auth,omitempty" mapstructure:"auth" doc:"Authentication configuration"`
 	Metadata   map[string]string `json:"metadata,omitempty" yaml:"metadata,omitempty" mapstructure:"metadata" doc:"Additional metadata"`
 	HTTPClient *HTTPClientConfig `json:"httpClient,omitempty" yaml:"httpClient,omitempty" mapstructure:"httpClient" doc:"Per-catalog HTTP client overrides (inherits from global)"`
@@ -40,14 +40,23 @@ type CatalogConfig struct {
 // AuthConfig holds authentication settings for a catalog.
 type AuthConfig struct {
 	Type        string `json:"type" yaml:"type" mapstructure:"type" doc:"Auth type" example:"token" maxLength:"50"`
-	TokenEnvVar string `json:"tokenEnvVar,omitempty" yaml:"tokenEnvVar,omitempty" mapstructure:"tokenEnvVar" doc:"Environment variable containing token" maxLength:"255"`
+	TokenEnvVar string `json:"tokenEnvVar,omitempty" yaml:"tokenEnvVar,omitempty" mapstructure:"tokenEnvVar" doc:"Environment variable containing token" maxLength:"255" example:"SCAFCTL_TOKEN"`
 }
 
 // Settings holds application-wide settings.
 type Settings struct {
-	DefaultCatalog string `json:"defaultCatalog,omitempty" yaml:"defaultCatalog,omitempty" mapstructure:"defaultCatalog" doc:"Default catalog name" example:"default" maxLength:"255"`
-	NoColor        bool   `json:"noColor,omitempty" yaml:"noColor,omitempty" mapstructure:"noColor" doc:"Disable colored output"`
-	Quiet          bool   `json:"quiet,omitempty" yaml:"quiet,omitempty" mapstructure:"quiet" doc:"Suppress non-essential output"`
+	DefaultCatalog string              `json:"defaultCatalog,omitempty" yaml:"defaultCatalog,omitempty" mapstructure:"defaultCatalog" doc:"Default catalog name" example:"default" maxLength:"255"`
+	NoColor        bool                `json:"noColor,omitempty" yaml:"noColor,omitempty" mapstructure:"noColor" doc:"Disable colored output"`
+	Quiet          bool                `json:"quiet,omitempty" yaml:"quiet,omitempty" mapstructure:"quiet" doc:"Suppress non-essential output"`
+	VersionCheck   *VersionCheckConfig `json:"versionCheck,omitempty" yaml:"versionCheck,omitempty" mapstructure:"versionCheck" doc:"Version check configuration"`
+}
+
+// VersionCheckConfig holds version check configuration.
+type VersionCheckConfig struct {
+	// Timeout overrides the version check HTTP timeout (default: 5s).
+	Timeout string `json:"timeout,omitempty" yaml:"timeout,omitempty" mapstructure:"timeout" doc:"Version check timeout" example:"5s" maxLength:"20"`
+	// Enabled can disable the automatic version check.
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty" mapstructure:"enabled" doc:"Enable version check"`
 }
 
 // TelemetryConfig holds OpenTelemetry configuration.
@@ -181,7 +190,7 @@ type HTTPClientConfig struct {
 	CacheDir         string `json:"cacheDir,omitempty" yaml:"cacheDir,omitempty" mapstructure:"cacheDir" doc:"Directory for filesystem cache" example:"~/.scafctl/http-cache" maxLength:"4096"`
 	CacheTTL         string `json:"cacheTTL,omitempty" yaml:"cacheTTL,omitempty" mapstructure:"cacheTTL" doc:"Time-to-live for cached responses" example:"10m" maxLength:"20"`
 	CacheKeyPrefix   string `json:"cacheKeyPrefix,omitempty" yaml:"cacheKeyPrefix,omitempty" mapstructure:"cacheKeyPrefix" doc:"Prefix for cache keys" example:"scafctl:" maxLength:"50"`
-	MaxCacheFileSize int64  `json:"maxCacheFileSize,omitempty" yaml:"maxCacheFileSize,omitempty" mapstructure:"maxCacheFileSize" doc:"Maximum size for a single cached file in bytes" example:"10485760"`
+	MaxCacheFileSize int64  `json:"maxCacheFileSize,omitempty" yaml:"maxCacheFileSize,omitempty" mapstructure:"maxCacheFileSize" doc:"Maximum size for a single cached file in bytes" maximum:"1073741824" example:"10485760"`
 	MemoryCacheSize  int    `json:"memoryCacheSize,omitempty" yaml:"memoryCacheSize,omitempty" mapstructure:"memoryCacheSize" doc:"Maximum number of entries in memory cache" example:"1000" maximum:"100000"`
 
 	// Circuit breaker settings
@@ -222,7 +231,7 @@ type CELConfig struct {
 
 	// CostLimit is the cost limit for expression evaluation (0 = disabled)
 	// Prevents runaway expressions from consuming resources
-	CostLimit int64 `json:"costLimit,omitempty" yaml:"costLimit,omitempty" mapstructure:"costLimit" doc:"CEL cost limit (0=disabled)" example:"1000000"`
+	CostLimit int64 `json:"costLimit,omitempty" yaml:"costLimit,omitempty" mapstructure:"costLimit" doc:"CEL cost limit (0=disabled)" maximum:"100000000" example:"1000000"`
 
 	// UseASTBasedCaching enables AST-based cache key generation for better hit rates
 	// Expressions with same structure share cache entries
@@ -253,10 +262,10 @@ type ResolverConfig struct {
 	MaxConcurrency int `json:"maxConcurrency,omitempty" yaml:"maxConcurrency,omitempty" mapstructure:"maxConcurrency" doc:"Max concurrent resolvers (0=unlimited)" example:"10" maximum:"1000"`
 
 	// WarnValueSize is the warn threshold in bytes (0 = disabled)
-	WarnValueSize int64 `json:"warnValueSize,omitempty" yaml:"warnValueSize,omitempty" mapstructure:"warnValueSize" doc:"Warn threshold in bytes" example:"1048576"`
+	WarnValueSize int64 `json:"warnValueSize,omitempty" yaml:"warnValueSize,omitempty" mapstructure:"warnValueSize" doc:"Warn threshold in bytes" maximum:"1073741824" example:"1048576"`
 
 	// MaxValueSize is the max value size in bytes (0 = disabled)
-	MaxValueSize int64 `json:"maxValueSize,omitempty" yaml:"maxValueSize,omitempty" mapstructure:"maxValueSize" doc:"Max value size in bytes" example:"10485760"`
+	MaxValueSize int64 `json:"maxValueSize,omitempty" yaml:"maxValueSize,omitempty" mapstructure:"maxValueSize" doc:"Max value size in bytes" maximum:"1073741824" example:"10485760"`
 
 	// ValidateAll enables collecting all errors instead of stopping at first
 	ValidateAll bool `json:"validateAll,omitempty" yaml:"validateAll,omitempty" mapstructure:"validateAll" doc:"Collect all errors vs stop at first"`
@@ -276,6 +285,10 @@ type ActionConfig struct {
 
 // GlobalAuthConfig holds authentication handler configuration.
 type GlobalAuthConfig struct {
+	// HTTPClient optionally overrides the global HTTP client settings for all auth handlers.
+	// Individual handler configs (Entra, GitHub, GCP) can further override these.
+	HTTPClient *HTTPClientConfig `json:"httpClient,omitempty" yaml:"httpClient,omitempty" mapstructure:"httpClient" doc:"HTTP client overrides for auth handlers"`
+
 	// Entra contains Microsoft Entra ID configuration.
 	Entra *EntraAuthConfig `json:"entra,omitempty" yaml:"entra,omitempty" mapstructure:"entra" doc:"Microsoft Entra ID configuration"`
 
@@ -288,9 +301,12 @@ type GlobalAuthConfig struct {
 
 // EntraAuthConfig contains Entra-specific configuration.
 type EntraAuthConfig struct {
+	// HTTPClient optionally overrides HTTP settings for Entra auth requests.
+	HTTPClient *HTTPClientConfig `json:"httpClient,omitempty" yaml:"httpClient,omitempty" mapstructure:"httpClient" doc:"HTTP client overrides for Entra"`
+
 	// ClientID overrides the default application ID.
 	// If not set, uses the default scafctl public client ID.
-	ClientID string `json:"clientId,omitempty" yaml:"clientId,omitempty" mapstructure:"clientId" doc:"Azure application ID" maxLength:"36"`
+	ClientID string `json:"clientId,omitempty" yaml:"clientId,omitempty" mapstructure:"clientId" doc:"Azure application ID" maxLength:"36" example:"00000000-0000-0000-0000-000000000000"`
 
 	// TenantID sets the default tenant for authentication.
 	// Use "common" for multi-tenant, "organizations" for work/school only,
@@ -303,9 +319,12 @@ type EntraAuthConfig struct {
 
 // GitHubAuthConfig contains GitHub-specific configuration.
 type GitHubAuthConfig struct {
+	// HTTPClient optionally overrides HTTP settings for GitHub auth requests.
+	HTTPClient *HTTPClientConfig `json:"httpClient,omitempty" yaml:"httpClient,omitempty" mapstructure:"httpClient" doc:"HTTP client overrides for GitHub"`
+
 	// ClientID overrides the default GitHub OAuth App client ID.
 	// If not set, uses the default scafctl OAuth App client ID.
-	ClientID string `json:"clientId,omitempty" yaml:"clientId,omitempty" mapstructure:"clientId" doc:"GitHub OAuth App client ID" maxLength:"40"`
+	ClientID string `json:"clientId,omitempty" yaml:"clientId,omitempty" mapstructure:"clientId" doc:"GitHub OAuth App client ID" maxLength:"40" example:"Iv1.abc123def456"`
 
 	// ClientSecret is the GitHub OAuth App client secret.
 	// Required for the interactive (browser authorization code + PKCE) flow.
@@ -321,10 +340,10 @@ type GitHubAuthConfig struct {
 	DefaultScopes []string `json:"defaultScopes,omitempty" yaml:"defaultScopes,omitempty" mapstructure:"defaultScopes" doc:"Default OAuth scopes" maxItems:"20"`
 
 	// AppID is the GitHub App ID for the installation token flow.
-	AppID int64 `json:"appId,omitempty" yaml:"appId,omitempty" mapstructure:"appId" doc:"GitHub App ID for installation token flow" example:"123456"`
+	AppID int64 `json:"appId,omitempty" yaml:"appId,omitempty" mapstructure:"appId" doc:"GitHub App ID for installation token flow" maximum:"1000000000" example:"123456"`
 
 	// InstallationID is the GitHub App installation ID.
-	InstallationID int64 `json:"installationId,omitempty" yaml:"installationId,omitempty" mapstructure:"installationId" doc:"GitHub App installation ID" example:"78901234"`
+	InstallationID int64 `json:"installationId,omitempty" yaml:"installationId,omitempty" mapstructure:"installationId" doc:"GitHub App installation ID" maximum:"1000000000" example:"78901234"`
 
 	// PrivateKeyPath is the file path to the PEM-encoded private key for the GitHub App.
 	PrivateKeyPath string `json:"privateKeyPath,omitempty" yaml:"privateKeyPath,omitempty" mapstructure:"privateKeyPath" doc:"File path to PEM-encoded private key for the GitHub App" example:"/path/to/private-key.pem" maxLength:"1024"`
@@ -333,13 +352,16 @@ type GitHubAuthConfig struct {
 	PrivateKey string `json:"privateKey,omitempty" yaml:"privateKey,omitempty" mapstructure:"privateKey" doc:"Inline PEM-encoded private key for the GitHub App" maxLength:"8192"` //nolint:gosec // Field name, not a credential
 
 	// PrivateKeySecretName is the name of the secret store entry containing the private key.
-	PrivateKeySecretName string `json:"privateKeySecretName,omitempty" yaml:"privateKeySecretName,omitempty" mapstructure:"privateKeySecretName" doc:"Secret store key for the GitHub App private key" maxLength:"255"`
+	PrivateKeySecretName string `json:"privateKeySecretName,omitempty" yaml:"privateKeySecretName,omitempty" mapstructure:"privateKeySecretName" doc:"Secret store key for the GitHub App private key" maxLength:"255" example:"github-app-key"`
 }
 
 // GCPAuthConfig contains GCP-specific configuration.
 type GCPAuthConfig struct {
+	// HTTPClient optionally overrides HTTP settings for GCP auth requests.
+	HTTPClient *HTTPClientConfig `json:"httpClient,omitempty" yaml:"httpClient,omitempty" mapstructure:"httpClient" doc:"HTTP client overrides for GCP"`
+
 	// ClientID overrides the default OAuth 2.0 client ID.
-	ClientID string `json:"clientId,omitempty" yaml:"clientId,omitempty" mapstructure:"clientId" doc:"OAuth 2.0 client ID for interactive authentication" maxLength:"255"`
+	ClientID string `json:"clientId,omitempty" yaml:"clientId,omitempty" mapstructure:"clientId" doc:"OAuth 2.0 client ID for interactive authentication" maxLength:"255" example:"123456789.apps.googleusercontent.com"`
 
 	// ClientSecret overrides the default OAuth 2.0 client secret.
 	ClientSecret string `json:"clientSecret,omitempty" yaml:"clientSecret,omitempty" mapstructure:"clientSecret" doc:"OAuth 2.0 client secret (not confidential for desktop apps)" maxLength:"255"` //nolint:gosec // G117: not a hardcoded credential, it's a config field
@@ -360,13 +382,13 @@ type BuildConfig struct {
 	EnableCache *bool `json:"enableCache,omitempty" yaml:"enableCache,omitempty" mapstructure:"enableCache" doc:"Enable build-level caching"`
 
 	// CacheDir is the directory for storing build cache entries.
-	CacheDir string `json:"cacheDir,omitempty" yaml:"cacheDir,omitempty" mapstructure:"cacheDir" doc:"Build cache directory" maxLength:"4096"`
+	CacheDir string `json:"cacheDir,omitempty" yaml:"cacheDir,omitempty" mapstructure:"cacheDir" doc:"Build cache directory" maxLength:"4096" example:"~/.cache/scafctl/build-cache"`
 
 	// AutoCacheRemoteArtifacts automatically caches remote catalog fetches into the local catalog.
 	AutoCacheRemoteArtifacts *bool `json:"autoCacheRemoteArtifacts,omitempty" yaml:"autoCacheRemoteArtifacts,omitempty" mapstructure:"autoCacheRemoteArtifacts" doc:"Auto-cache remote catalog fetches locally"`
 
 	// PluginCacheDir is the directory for cached plugin binaries.
-	PluginCacheDir string `json:"pluginCacheDir,omitempty" yaml:"pluginCacheDir,omitempty" mapstructure:"pluginCacheDir" doc:"Plugin binary cache directory" maxLength:"4096"`
+	PluginCacheDir string `json:"pluginCacheDir,omitempty" yaml:"pluginCacheDir,omitempty" mapstructure:"pluginCacheDir" doc:"Plugin binary cache directory" maxLength:"4096" example:"~/.cache/scafctl/plugins"`
 }
 
 // IsCacheEnabled returns whether build caching is enabled (defaults to true).

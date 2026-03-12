@@ -6,13 +6,11 @@ package mcp
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/celexp/ext"
-	"sigs.k8s.io/yaml"
 )
 
 // registerCELTools registers all CEL-related MCP tools.
@@ -123,19 +121,11 @@ func (s *Server) handleEvaluateCEL(_ context.Context, request mcp.CallToolReques
 	}
 
 	if dataFile != "" {
-		fileBytes, err := os.ReadFile(dataFile)
+		fileData, err := celexp.LoadDataFile(dataFile)
 		if err != nil {
-			return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("failed to read data file %q: %v", dataFile, err),
+			return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("failed to load data file %q: %v", dataFile, err),
 				WithField("data_file"),
-				WithSuggestion("Check the file path exists and is readable"),
-			), nil
-		}
-
-		var fileData any
-		if err := yaml.Unmarshal(fileBytes, &fileData); err != nil {
-			return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("failed to parse data file %q: %v", dataFile, err),
-				WithField("data_file"),
-				WithSuggestion("Ensure the file contains valid YAML or JSON"),
+				WithSuggestion("Check the file path exists and contains valid YAML or JSON"),
 			), nil
 		}
 		rootData = fileData

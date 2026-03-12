@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/oakwood-commons/scafctl/pkg/errexplain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -149,7 +150,7 @@ func TestHandleExplainError(t *testing.T) {
 			require.Len(t, result.Content, 1)
 
 			text := result.Content[0].(mcp.TextContent).Text
-			var exp errorExplanation
+			var exp errexplain.Explanation
 			require.NoError(t, json.Unmarshal([]byte(text), &exp))
 
 			assert.Equal(t, tt.wantCategory, exp.Category)

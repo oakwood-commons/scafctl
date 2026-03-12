@@ -3,8 +3,6 @@ title: "Testing"
 weight: 10
 ---
 
-# Testing
-
 ## Purpose
 
 Testing in scafctl ensures that solutions behave correctly, deterministically, and safely before performing side effects.
@@ -39,7 +37,7 @@ scafctl supports five testing layers.
 
 ## 1. Resolver Tests (Unit)
 
-### Scope
+### Resolver Scope
 
 Resolver tests validate:
 
@@ -101,7 +99,7 @@ Test cases:
 
 ---
 
-### Execution Model
+### Resolver Execution Model
 
 Resolver tests:
 
@@ -114,7 +112,7 @@ Resolver tests:
 
 ## 2. Provider Tests (Unit)
 
-### Scope
+### Provider Scope
 
 Providers are tested independently of:
 
@@ -134,7 +132,7 @@ Provider behavior should also be testable when used within a solution. External 
 
 ---
 
-### What Is Tested
+### What Providers Test
 
 - Input schema validation
 - Typed input handling
@@ -143,7 +141,7 @@ Provider behavior should also be testable when used within a solution. External 
 
 ---
 
-### Examples
+### Provider Examples
 
 - Template provider renders expected output for given context
 - Expression provider evaluates CEL correctly
@@ -162,7 +160,7 @@ All inputs are concrete by the time a provider executes.
 
 ## 3. Solution Tests (Integration, Render-Only)
 
-### Scope
+### Solution Scope
 
 Solution tests validate the full solution behavior without executing side effects.
 
@@ -188,7 +186,7 @@ Render mode does not:
 
 ---
 
-### What Is Tested
+### What Solutions Test
 
 - Resolver integration
 - Action ordering
@@ -199,7 +197,7 @@ Render mode does not:
 
 ---
 
-### Example
+### Solution Example
 
 ~~~bash
 scafctl render solution terraform-scaffold \
@@ -242,7 +240,7 @@ Tests load the input, execute the logic, and compare the output against the gold
 
 ## 4. CLI Tests (Integration)
 
-### Scope
+### CLI Scope
 
 CLI integration tests validate end-to-end command behavior by building the scafctl binary and executing it as an external process. This layer covers:
 
@@ -253,7 +251,7 @@ CLI integration tests validate end-to-end command behavior by building the scafc
 
 ---
 
-### Structure
+### CLI Structure
 
 Tests live in `tests/integration/cli_test.go` and follow this pattern:
 
@@ -264,7 +262,7 @@ Tests live in `tests/integration/cli_test.go` and follow this pattern:
 
 ---
 
-### Example
+### CLI Example
 
 ~~~go
 func TestVersionCommand(t *testing.T) {
@@ -278,7 +276,7 @@ func TestVersionCommand(t *testing.T) {
 
 ---
 
-### What Is Tested
+### What CLI Tests Cover
 
 - `version`, `help`, `render`, `run`, `explain`, `get`, `config`, `secrets`, `snapshot` commands
 - Error output on invalid input
@@ -358,7 +356,7 @@ w := writer.New(streams, cliParams, writer.WithExitFunc(func(code int) {
 }))
 ~~~
 
-Retrieve the writer from context in production code with `writer.FromContext(ctx)` or `writer.MustFromContext(ctx)`.
+Retrieve the writer from context in production code with `writer.FromContext(ctx)`.
 
 ### Logger
 

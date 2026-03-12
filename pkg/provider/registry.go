@@ -110,16 +110,6 @@ func (r *Registry) Get(name string) (Provider, bool) {
 	return p, exists
 }
 
-// MustGet retrieves a provider by name and panics if not found.
-// This is useful for initialization code where a provider must exist.
-func (r *Registry) MustGet(name string) Provider {
-	p, exists := r.Get(name)
-	if !exists {
-		panic(fmt.Sprintf("provider %q not found in registry", name))
-	}
-	return p
-}
-
 // Has checks if a provider with the given name is registered.
 func (r *Registry) Has(name string) bool {
 	r.mu.RLock()
@@ -330,11 +320,6 @@ func Register(p Provider) error {
 // Get retrieves a provider from the global registry.
 func Get(name string) (Provider, bool) {
 	return globalRegistry.Get(name)
-}
-
-// MustGet retrieves a provider from the global registry and panics if not found.
-func MustGet(name string) Provider {
-	return globalRegistry.MustGet(name)
 }
 
 // Has checks if a provider is registered in the global registry.

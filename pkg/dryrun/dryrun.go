@@ -10,6 +10,7 @@ package dryrun
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sort"
 
 	"github.com/oakwood-commons/scafctl/pkg/action"
@@ -19,57 +20,57 @@ import (
 
 // Report is the full structured dry-run output.
 type Report struct {
-	DryRun        bool                `json:"dryRun" yaml:"dryRun"`
-	Solution      string              `json:"solution" yaml:"solution"`
-	Version       string              `json:"version,omitempty" yaml:"version,omitempty"`
-	HasResolvers  bool                `json:"hasResolvers" yaml:"hasResolvers"`
-	HasWorkflow   bool                `json:"hasWorkflow" yaml:"hasWorkflow"`
-	Parameters    map[string]any      `json:"parameters,omitempty" yaml:"parameters,omitempty"`
-	Resolvers     map[string]Resolver `json:"resolvers,omitempty" yaml:"resolvers,omitempty"`
-	ActionPlan    []Action            `json:"actionPlan,omitempty" yaml:"actionPlan,omitempty"`
-	TotalActions  int                 `json:"totalActions,omitempty" yaml:"totalActions,omitempty"`
-	TotalPhases   int                 `json:"totalPhases,omitempty" yaml:"totalPhases,omitempty"`
-	MockBehaviors []MockBehavior      `json:"mockBehaviors,omitempty" yaml:"mockBehaviors,omitempty"`
-	Warnings      []string            `json:"warnings,omitempty" yaml:"warnings,omitempty"`
+	DryRun        bool                `json:"dryRun" yaml:"dryRun" doc:"Whether this is a dry-run report"`
+	Solution      string              `json:"solution" yaml:"solution" doc:"Solution name" maxLength:"256" example:"my-solution"`
+	Version       string              `json:"version,omitempty" yaml:"version,omitempty" doc:"Solution version" maxLength:"64" example:"1.0.0"`
+	HasResolvers  bool                `json:"hasResolvers" yaml:"hasResolvers" doc:"Whether the solution has resolvers"`
+	HasWorkflow   bool                `json:"hasWorkflow" yaml:"hasWorkflow" doc:"Whether the solution has a workflow"`
+	Parameters    map[string]any      `json:"parameters,omitempty" yaml:"parameters,omitempty" doc:"Resolver parameters"`
+	Resolvers     map[string]Resolver `json:"resolvers,omitempty" yaml:"resolvers,omitempty" doc:"Resolver dry-run results"`
+	ActionPlan    []Action            `json:"actionPlan,omitempty" yaml:"actionPlan,omitempty" doc:"Planned action execution order" maxItems:"1000"`
+	TotalActions  int                 `json:"totalActions,omitempty" yaml:"totalActions,omitempty" doc:"Total number of planned actions" maximum:"1000" example:"5"`
+	TotalPhases   int                 `json:"totalPhases,omitempty" yaml:"totalPhases,omitempty" doc:"Total number of execution phases" maximum:"100" example:"3"`
+	MockBehaviors []MockBehavior      `json:"mockBehaviors,omitempty" yaml:"mockBehaviors,omitempty" doc:"Provider mock behavior descriptions" maxItems:"100"`
+	Warnings      []string            `json:"warnings,omitempty" yaml:"warnings,omitempty" doc:"Warnings about the dry-run" maxItems:"100"`
 }
 
 // Resolver describes a single resolver's dry-run result.
 type Resolver struct {
-	Value  any    `json:"value" yaml:"value"`
-	Status string `json:"status" yaml:"status"`
-	DryRun bool   `json:"dryRun" yaml:"dryRun"`
+	Value  any    `json:"value" yaml:"value" doc:"Resolved value"`
+	Status string `json:"status" yaml:"status" doc:"Resolution status" maxLength:"32" example:"success"`
+	DryRun bool   `json:"dryRun" yaml:"dryRun" doc:"Whether the value came from dry-run mode"`
 }
 
 // Action describes a single action in the dry-run plan.
 type Action struct {
-	Name               string            `json:"name" yaml:"name"`
-	Provider           string            `json:"provider" yaml:"provider"`
-	Description        string            `json:"description,omitempty" yaml:"description,omitempty"`
-	MaterializedInputs map[string]any    `json:"materializedInputs,omitempty" yaml:"materializedInputs,omitempty"`
-	DeferredInputs     map[string]string `json:"deferredInputs,omitempty" yaml:"deferredInputs,omitempty"`
-	Dependencies       []string          `json:"dependencies,omitempty" yaml:"dependencies,omitempty"`
-	When               string            `json:"when,omitempty" yaml:"when,omitempty"`
-	Section            string            `json:"section" yaml:"section"`
-	Phase              int               `json:"phase" yaml:"phase"`
-	MockBehavior       string            `json:"mockBehavior,omitempty" yaml:"mockBehavior,omitempty"`
+	Name               string            `json:"name" yaml:"name" doc:"Action name" maxLength:"256" example:"deploy-service"`
+	Provider           string            `json:"provider" yaml:"provider" doc:"Provider name" maxLength:"128" example:"shell"`
+	Description        string            `json:"description,omitempty" yaml:"description,omitempty" doc:"Action description" maxLength:"512" example:"Deploy the service"`
+	MaterializedInputs map[string]any    `json:"materializedInputs,omitempty" yaml:"materializedInputs,omitempty" doc:"Inputs resolved at plan time"`
+	DeferredInputs     map[string]string `json:"deferredInputs,omitempty" yaml:"deferredInputs,omitempty" doc:"Inputs deferred until runtime"`
+	Dependencies       []string          `json:"dependencies,omitempty" yaml:"dependencies,omitempty" doc:"Action dependencies" maxItems:"100"`
+	When               string            `json:"when,omitempty" yaml:"when,omitempty" doc:"Conditional expression" maxLength:"2048" example:"_.enabled == true"`
+	Section            string            `json:"section" yaml:"section" doc:"Workflow section (actions or finally)" maxLength:"16" example:"actions"`
+	Phase              int               `json:"phase" yaml:"phase" doc:"Execution phase number" maximum:"100" example:"1"`
+	MockBehavior       string            `json:"mockBehavior,omitempty" yaml:"mockBehavior,omitempty" doc:"Provider mock behavior description" maxLength:"512" example:"Returns static mock data"`
 }
 
 // MockBehavior describes what a provider does in dry-run mode.
 type MockBehavior struct {
-	Provider     string `json:"provider" yaml:"provider"`
-	MockBehavior string `json:"mockBehavior" yaml:"mockBehavior"`
+	Provider     string `json:"provider" yaml:"provider" doc:"Provider name" maxLength:"128" example:"shell"`
+	MockBehavior string `json:"mockBehavior" yaml:"mockBehavior" doc:"Mock behavior description" maxLength:"512" example:"Returns exit code 0"`
 }
 
 // Options controls the dry-run generation.
 type Options struct {
 	// Params are the resolver parameters that were (or would be) passed.
-	Params map[string]any
+	Params map[string]any `json:"-" yaml:"-" doc:"Resolver parameters"`
 	// Registry provides provider descriptors for mock behavior lookups.
-	Registry *provider.Registry
+	Registry *provider.Registry `json:"-" yaml:"-" doc:"Provider registry"`
 	// ResolverData is the pre-executed resolver data (from dry-run mode execution).
 	// Callers should execute resolvers with dry-run enabled before calling Generate.
 	// If nil, the report will note that resolver data was not provided.
-	ResolverData map[string]any
+	ResolverData map[string]any `json:"-" yaml:"-" doc:"Pre-executed resolver data"`
 }
 
 // Generate builds a structured dry-run report from a solution and pre-executed resolver data.
@@ -228,6 +229,11 @@ func Generate(ctx context.Context, sol *solution.Solution, opts Options) (*Repor
 
 func versionString(v fmt.Stringer) string {
 	if v == nil {
+		return ""
+	}
+	// Handle nil pointer wrapped in a non-nil interface
+	// (e.g. (*semver.Version)(nil) passed as fmt.Stringer).
+	if rv := reflect.ValueOf(v); rv.Kind() == reflect.Ptr && rv.IsNil() {
 		return ""
 	}
 	return v.String()

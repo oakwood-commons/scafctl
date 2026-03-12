@@ -85,7 +85,10 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 		Args:         cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			w := writer.MustFromContext(ctx)
+			w := writer.FromContext(ctx)
+			if w == nil {
+				return fmt.Errorf("writer not initialized in context")
+			}
 
 			if expiredOnly && validOnly {
 				err := fmt.Errorf("--expired-only and --valid-only are mutually exclusive")

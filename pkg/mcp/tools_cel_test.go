@@ -283,7 +283,7 @@ func TestHandleEvaluateCEL(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, result.IsError)
 		text := result.Content[0].(mcp.TextContent).Text
-		assert.Contains(t, text, "failed to read data file")
+		assert.Contains(t, text, "failed to load data file")
 	})
 
 	t.Run("no data expression", func(t *testing.T) {

@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"path/filepath"
 	"strings"
 
@@ -94,7 +93,7 @@ Examples:
   scafctl get provider http -o json`,
 		RunE: func(cCmd *cobra.Command, args []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
-			ctx := settings.IntoContext(context.Background(), cliParams)
+			ctx := settings.IntoContext(cCmd.Context(), cliParams)
 
 			options.IOStreams = ioStreams
 			options.CliParams = cliParams
@@ -133,7 +132,7 @@ func (o *Options) RunListProviders(ctx context.Context) error {
 
 	// Default (no -o flag and not interactive): simple list
 	if o.Output == "" && !o.Interactive {
-		return printSimpleList(filtered, o.IOStreams.Out)
+		return o.printSimpleList(ctx, filtered)
 	}
 
 	// Build output data for explicit output formats (-o table/json/yaml/quiet)
@@ -171,7 +170,7 @@ func (o *Options) RunGetProvider(ctx context.Context, name string) error {
 
 	// Default: custom formatted view (unless -o is specified)
 	if o.Output == "" && !o.Interactive {
-		return o.printProviderDetail(desc)
+		return o.printProviderDetail(ctx, desc)
 	}
 
 	// Structured output for -o flag
@@ -180,9 +179,12 @@ func (o *Options) RunGetProvider(ctx context.Context, name string) error {
 }
 
 // printProviderDetail prints a nicely formatted provider detail view
-func (o *Options) printProviderDetail(desc *provider.Descriptor) error {
-	out := o.IOStreams.Out
-	noColor := o.CliParams.NoColor
+func (o *Options) printProviderDetail(ctx context.Context, desc *provider.Descriptor) error {
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return nil
+	}
+	noColor := w.NoColor()
 
 	// Style helpers
 	keyStyle := func(s string) string {
@@ -220,48 +222,48 @@ func (o *Options) printProviderDetail(desc *provider.Descriptor) error {
 	}
 
 	// Header
-	fmt.Fprintf(out, "%s %s\n", keyStyle("Name:"), valueStyle(desc.Name))
+	w.Plainlnf("%s %s", keyStyle("Name:"), valueStyle(desc.Name))
 	if desc.DisplayName != "" && desc.DisplayName != desc.Name {
-		fmt.Fprintf(out, "%s %s\n", keyStyle("Display Name:"), valueStyle(desc.DisplayName))
+		w.Plainlnf("%s %s", keyStyle("Display Name:"), valueStyle(desc.DisplayName))
 	}
-	fmt.Fprintf(out, "%s %s\n", keyStyle("Version:"), valueStyle(desc.Version.String()))
-	fmt.Fprintf(out, "%s %s\n", keyStyle("API Version:"), valueStyle(desc.APIVersion))
-	fmt.Fprintln(out)
+	w.Plainlnf("%s %s", keyStyle("Version:"), valueStyle(desc.Version.String()))
+	w.Plainlnf("%s %s", keyStyle("API Version:"), valueStyle(desc.APIVersion))
+	w.Plainln("")
 
 	// Description
-	fmt.Fprintf(out, "%s\n", keyStyle("Description:"))
-	fmt.Fprintf(out, "  %s\n\n", valueStyle(desc.Description))
+	w.Plainln(keyStyle("Description:"))
+	w.Plainlnf("  %s\n", valueStyle(desc.Description))
 
 	// Capabilities
-	fmt.Fprintf(out, "%s ", keyStyle("Capabilities:"))
+	w.Plainf("%s ", keyStyle("Capabilities:"))
 	caps := make([]string, 0, len(desc.Capabilities))
 	for _, cap := range desc.Capabilities {
 		caps = append(caps, capStyle(string(cap)))
 	}
-	fmt.Fprintln(out, strings.Join(caps, " "))
+	w.Plainln(strings.Join(caps, " "))
 
 	// Status flags
 	if desc.Beta {
-		fmt.Fprintln(out, warnStyle("⚠ This provider is in BETA"))
+		w.Plainln(warnStyle("⚠ This provider is in BETA"))
 	}
 	if desc.IsDeprecated {
-		fmt.Fprintln(out, errorStyle("⚠ This provider is DEPRECATED"))
+		w.Plainln(errorStyle("⚠ This provider is DEPRECATED"))
 	}
-	fmt.Fprintln(out)
+	w.Plainln("")
 
 	// Category/Tags
 	if desc.Category != "" {
-		fmt.Fprintf(out, "%s %s\n", keyStyle("Category:"), valueStyle(desc.Category))
+		w.Plainlnf("%s %s", keyStyle("Category:"), valueStyle(desc.Category))
 	}
 	if len(desc.Tags) > 0 {
-		fmt.Fprintf(out, "%s %s\n", keyStyle("Tags:"), valueStyle(strings.Join(desc.Tags, ", ")))
+		w.Plainlnf("%s %s", keyStyle("Tags:"), valueStyle(strings.Join(desc.Tags, ", ")))
 	}
 
 	// Mock behavior
 	if desc.MockBehavior != "" {
-		fmt.Fprintln(out)
-		fmt.Fprintf(out, "%s\n", keyStyle("Mock Behavior:"))
-		fmt.Fprintf(out, "  %s\n", dimStyle(desc.MockBehavior))
+		w.Plainln("")
+		w.Plainln(keyStyle("Mock Behavior:"))
+		w.Plainlnf("  %s", dimStyle(desc.MockBehavior))
 	}
 
 	// Schema properties
@@ -271,8 +273,8 @@ func (o *Options) printProviderDetail(desc *provider.Descriptor) error {
 		for _, name := range desc.Schema.Required {
 			requiredSet[name] = true
 		}
-		fmt.Fprintln(out)
-		fmt.Fprintf(out, "%s\n", keyStyle("Schema Properties:"))
+		w.Plainln("")
+		w.Plainln(keyStyle("Schema Properties:"))
 		for name, prop := range desc.Schema.Properties {
 			required := ""
 			if requiredSet[name] {
@@ -282,38 +284,38 @@ func (o *Options) printProviderDetail(desc *provider.Descriptor) error {
 			if typeStr == "" {
 				typeStr = "any"
 			}
-			fmt.Fprintf(out, "  %s %s%s\n", keyStyle(name), dimStyle("("+typeStr+")"), required)
+			w.Plainlnf("  %s %s%s", keyStyle(name), dimStyle("("+typeStr+")"), required)
 			if prop.Description != "" {
-				fmt.Fprintf(out, "    %s\n", dimStyle(prop.Description))
+				w.Plainlnf("    %s", dimStyle(prop.Description))
 			}
 			if prop.Default != nil {
-				fmt.Fprintf(out, "    %s %s\n", dimStyle("Default:"), string(prop.Default))
+				w.Plainlnf("    %s %s", dimStyle("Default:"), string(prop.Default))
 			}
 			if len(prop.Enum) > 0 {
 				enumStrs := make([]string, len(prop.Enum))
 				for i, v := range prop.Enum {
 					enumStrs[i] = fmt.Sprintf("%v", v)
 				}
-				fmt.Fprintf(out, "    %s %s\n", dimStyle("Enum:"), strings.Join(enumStrs, ", "))
+				w.Plainlnf("    %s %s", dimStyle("Enum:"), strings.Join(enumStrs, ", "))
 			}
 		}
 	}
 
 	// Output schemas
 	if len(desc.OutputSchemas) > 0 {
-		fmt.Fprintln(out)
-		fmt.Fprintf(out, "%s\n", keyStyle("Output Schemas:"))
+		w.Plainln("")
+		w.Plainln(keyStyle("Output Schemas:"))
 		for cap, schema := range desc.OutputSchemas {
-			fmt.Fprintf(out, "  %s\n", capStyle(string(cap)))
+			w.Plainlnf("  %s", capStyle(string(cap)))
 			if schema != nil {
 				for name, prop := range schema.Properties {
 					typeStr := prop.Type
 					if typeStr == "" {
 						typeStr = "any"
 					}
-					fmt.Fprintf(out, "    %s %s\n", name, dimStyle("("+typeStr+")"))
+					w.Plainlnf("    %s %s", name, dimStyle("("+typeStr+")"))
 					if prop.Description != "" {
-						fmt.Fprintf(out, "      %s\n", dimStyle(prop.Description))
+						w.Plainlnf("      %s", dimStyle(prop.Description))
 					}
 				}
 			}
@@ -322,18 +324,18 @@ func (o *Options) printProviderDetail(desc *provider.Descriptor) error {
 
 	// Examples
 	if len(desc.Examples) > 0 {
-		fmt.Fprintln(out)
-		fmt.Fprintf(out, "%s\n", keyStyle("Examples:"))
+		w.Plainln("")
+		w.Plainln(keyStyle("Examples:"))
 		for _, ex := range desc.Examples {
-			fmt.Fprintf(out, "  %s\n", keyStyle(ex.Name))
+			w.Plainlnf("  %s", keyStyle(ex.Name))
 			if ex.Description != "" {
-				fmt.Fprintf(out, "    %s\n", dimStyle(ex.Description))
+				w.Plainlnf("    %s", dimStyle(ex.Description))
 			}
 			if ex.YAML != "" {
-				fmt.Fprintln(out, "    ---")
+				w.Plainln("    ---")
 				for _, line := range strings.Split(ex.YAML, "\n") {
 					if line != "" {
-						fmt.Fprintf(out, "    %s\n", line)
+						w.Plainlnf("    %s", line)
 					}
 				}
 			}
@@ -343,28 +345,28 @@ func (o *Options) printProviderDetail(desc *provider.Descriptor) error {
 	// CLI Usage examples (auto-generated from schema)
 	cliExamples := GenerateCLIExamples(desc)
 	if len(cliExamples) > 0 {
-		fmt.Fprintln(out)
-		fmt.Fprintf(out, "%s\n", keyStyle("CLI Usage:"))
+		w.Plainln("")
+		w.Plainln(keyStyle("CLI Usage:"))
 		for _, example := range cliExamples {
-			fmt.Fprintf(out, "  %s\n", dimStyle(example))
+			w.Plainlnf("  %s", dimStyle(example))
 		}
 	}
 
 	// Links
 	if len(desc.Links) > 0 {
-		fmt.Fprintln(out)
-		fmt.Fprintf(out, "%s\n", keyStyle("Links:"))
+		w.Plainln("")
+		w.Plainln(keyStyle("Links:"))
 		for _, link := range desc.Links {
-			fmt.Fprintf(out, "  %s: %s\n", link.Name, link.URL)
+			w.Plainlnf("  %s: %s", link.Name, link.URL)
 		}
 	}
 
 	// Maintainers
 	if len(desc.Maintainers) > 0 {
-		fmt.Fprintln(out)
-		fmt.Fprintf(out, "%s\n", keyStyle("Maintainers:"))
+		w.Plainln("")
+		w.Plainln(keyStyle("Maintainers:"))
 		for _, m := range desc.Maintainers {
-			fmt.Fprintf(out, "  %s <%s>\n", m.Name, m.Email)
+			w.Plainlnf("  %s <%s>", m.Name, m.Email)
 		}
 	}
 
@@ -372,10 +374,14 @@ func (o *Options) printProviderDetail(desc *provider.Descriptor) error {
 }
 
 // printSimpleList outputs providers as a simple list for non-interactive mode.
-func printSimpleList(providers []provider.Provider, out io.Writer) error {
+func (o *Options) printSimpleList(ctx context.Context, providers []provider.Provider) error {
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return nil
+	}
 	for _, p := range providers {
 		desc := p.Descriptor()
-		fmt.Fprintf(out, "%-20s %s\n", desc.Name, desc.Description)
+		w.Plainlnf("%-20s %s", desc.Name, desc.Description)
 	}
 	return nil
 }
@@ -459,7 +465,7 @@ func (o *Options) getRegistry(ctx context.Context) *provider.Registry {
 func (o *Options) writeOutput(ctx context.Context, data any) error {
 	// Handle quiet output specially - just print names
 	if o.Output == "quiet" {
-		return o.writeQuietOutput(data)
+		return o.writeQuietOutput(ctx, data)
 	}
 
 	// Use the shared kvx output infrastructure with display schema for rich TUI rendering
@@ -478,25 +484,29 @@ func (o *Options) writeOutput(ctx context.Context, data any) error {
 }
 
 // writeQuietOutput prints just the provider names
-func (o *Options) writeQuietOutput(data any) error {
+func (o *Options) writeQuietOutput(ctx context.Context, data any) error {
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return nil
+	}
 	switch v := data.(type) {
 	case []map[string]any:
 		for _, item := range v {
 			if name, ok := item["name"].(string); ok {
-				fmt.Fprintln(o.IOStreams.Out, name)
+				w.Plainln(name)
 			}
 		}
 	case map[string]any:
 		if name, ok := v["name"].(string); ok {
-			fmt.Fprintln(o.IOStreams.Out, name)
+			w.Plainln(name)
 		} else {
 			// Single provider detail - output as yaml for quiet mode
 			data, _ := yaml.Marshal(v)
-			fmt.Fprintln(o.IOStreams.Out, string(data))
+			w.Plainln(string(data))
 		}
 	default:
 		data, _ := json.MarshalIndent(v, "", "  ")
-		fmt.Fprintln(o.IOStreams.Out, string(data))
+		w.Plainln(string(data))
 	}
 	return nil
 }

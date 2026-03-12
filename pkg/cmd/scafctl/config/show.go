@@ -59,7 +59,7 @@ func CommandShow(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 		Args: cobra.NoArgs,
 		RunE: func(cCmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
-			ctx := settings.IntoContext(context.Background(), cliParams)
+			ctx := settings.IntoContext(cCmd.Context(), cliParams)
 
 			if lgr := logger.FromContext(cCmd.Context()); lgr != nil {
 				ctx = logger.WithLogger(ctx, lgr)
@@ -89,7 +89,10 @@ func CommandShow(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 
 // Run executes the config show command.
 func (o *ShowOptions) Run(ctx context.Context) error {
-	w := writer.MustFromContext(ctx)
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return fmt.Errorf("writer not initialized in context")
+	}
 
 	mgr := appconfig.NewManager(o.ConfigPath)
 	cfg, err := mgr.Load()

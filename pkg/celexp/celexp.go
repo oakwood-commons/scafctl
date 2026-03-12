@@ -33,16 +33,16 @@ var (
 	// envFactory is a function that creates CEL environments with all extensions loaded.
 	// This is set by the env package to avoid circular dependencies.
 	// If nil, cel.NewEnv() is used as fallback (without custom extensions).
-	envFactory     func(context.Context, ...cel.EnvOption) (*cel.Env, error)
-	envFactoryOnce sync.Once
-	envFactoryMu   sync.RWMutex
+	envFactory            func(context.Context, ...cel.EnvOption) (*cel.Env, error)
+	envFactoryInitialized bool
+	envFactoryMu          sync.RWMutex
 
 	// cacheFactory is a function that returns the global program cache.
 	// This is set by the env package to avoid circular dependencies.
 	// If nil, GetDefaultCache() creates a local cache.
-	cacheFactory     func() *ProgramCache
-	cacheFactoryOnce sync.Once
-	cacheFactoryMu   sync.RWMutex
+	cacheFactory            func() *ProgramCache
+	cacheFactoryInitialized bool
+	cacheFactoryMu          sync.RWMutex
 )
 
 // init initializes the default cost limit
@@ -76,11 +76,12 @@ func SetDefaultCostLimit(limit uint64) {
 //
 // This function is thread-safe and uses sync.Once to ensure it's only set once.
 func SetEnvFactory(factory func(context.Context, ...cel.EnvOption) (*cel.Env, error)) {
-	envFactoryOnce.Do(func() {
-		envFactoryMu.Lock()
-		defer envFactoryMu.Unlock()
+	envFactoryMu.Lock()
+	defer envFactoryMu.Unlock()
+	if !envFactoryInitialized {
 		envFactory = factory
-	})
+		envFactoryInitialized = true
+	}
 }
 
 // getEnvFactory returns the current environment factory function.
@@ -101,11 +102,12 @@ func getEnvFactory() func(context.Context, ...cel.EnvOption) (*cel.Env, error) {
 //
 //	celexp.SetCacheFactory(env.GlobalCache)
 func SetCacheFactory(factory func() *ProgramCache) {
-	cacheFactoryOnce.Do(func() {
-		cacheFactoryMu.Lock()
-		defer cacheFactoryMu.Unlock()
+	cacheFactoryMu.Lock()
+	defer cacheFactoryMu.Unlock()
+	if !cacheFactoryInitialized {
 		cacheFactory = factory
-	})
+		cacheFactoryInitialized = true
+	}
 }
 
 // getCacheFactory returns the current cache factory function.
@@ -125,24 +127,26 @@ type (
 // This is useful for debugging, documentation generation, and validation.
 type VarInfo struct {
 	// Name is the variable name as it appears in expressions
-	Name string
+	Name string `json:"name" yaml:"name" doc:"Variable name as it appears in expressions" maxLength:"256" example:"myVar"`
 
 	// Type is a human-readable type name (e.g., "int", "string", "list", "map")
-	Type string
+	Type string `json:"type" yaml:"type" doc:"Human-readable type name" maxLength:"64" example:"string"`
 
 	// CelType is the underlying CEL type object for advanced type checking
-	CelType *cel.Type
+	CelType *cel.Type `json:"-" yaml:"-" doc:"Underlying CEL type object for advanced type checking"`
 }
 
+// ExtFunction defines a custom CEL extension function that can be registered
+// with the CEL environment to extend the expression language capabilities.
 type ExtFunction struct {
-	Name          string          `json:"name,omitempty" yaml:"name,omitempty"`
-	Category      string          `json:"category,omitempty" yaml:"category,omitempty"`
-	Links         []string        `json:"links,omitempty" yaml:"links,omitempty"`
-	Examples      []Example       `json:"examples,omitempty" yaml:"examples,omitempty"`
-	Description   string          `json:"description,omitempty" yaml:"description,omitempty"`
-	EnvOptions    []cel.EnvOption `json:"-" yaml:"-"`
-	FunctionNames []string        `json:"function_names,omitempty" yaml:"function_names,omitempty"`
-	Custom        bool            `json:"custom,omitempty" yaml:"custom,omitempty"`
+	Name          string          `json:"name,omitempty" yaml:"name,omitempty" doc:"Function name" maxLength:"128" example:"size"`
+	Category      string          `json:"category,omitempty" yaml:"category,omitempty" doc:"Function category" maxLength:"64" example:"collections"`
+	Links         []string        `json:"links,omitempty" yaml:"links,omitempty" doc:"Reference URLs" maxItems:"10"`
+	Examples      []Example       `json:"examples,omitempty" yaml:"examples,omitempty" doc:"Usage examples" maxItems:"20"`
+	Description   string          `json:"description,omitempty" yaml:"description,omitempty" doc:"Human-readable description" maxLength:"1024" example:"Returns the size of a collection"`
+	EnvOptions    []cel.EnvOption `json:"-" yaml:"-" doc:"CEL environment options"`
+	FunctionNames []string        `json:"function_names,omitempty" yaml:"function_names,omitempty" doc:"CEL function names registered" maxItems:"10"`
+	Custom        bool            `json:"custom,omitempty" yaml:"custom,omitempty" doc:"Whether this is a scafctl-specific function"`
 }
 
 // GetName returns the function name, implementing the named interface
@@ -151,10 +155,12 @@ func (f ExtFunction) GetName() string {
 	return f.Name
 }
 
+// Example represents a usage example for a CEL extension function,
+// including the expression to evaluate and the expected result.
 type Example struct {
-	Description string   `json:"description,omitempty" yaml:"description,omitempty"`
-	Expression  string   `json:"expression,omitempty" yaml:"expression,omitempty"`
-	Links       []string `json:"links,omitempty" yaml:"links,omitempty"`
+	Description string   `json:"description,omitempty" yaml:"description,omitempty" doc:"What the example demonstrates" maxLength:"512" example:"Check if a list is empty"`
+	Expression  string   `json:"expression,omitempty" yaml:"expression,omitempty" doc:"CEL expression snippet" maxLength:"2048" example:"size(myList) == 0"`
+	Links       []string `json:"links,omitempty" yaml:"links,omitempty" doc:"Reference URLs for the example" maxItems:"10"`
 }
 
 // Option is a functional option for configuring expression compilation.
@@ -725,6 +731,22 @@ func formatCelType(t *cel.Type) string {
 		// return the full type string
 		return typeStr
 	}
+}
+
+// ValidateSyntax checks a CEL expression for parse errors without executing it
+// or requiring any variable declarations. It uses a minimal CEL environment for
+// fast syntax validation. Returns nil if the expression is syntactically valid.
+func ValidateSyntax(expression string) error {
+	env, err := cel.NewEnv()
+	if err != nil {
+		return fmt.Errorf("creating CEL environment: %w", err)
+	}
+
+	_, issues := env.Parse(expression)
+	if issues != nil && issues.Err() != nil {
+		return issues.Err()
+	}
+	return nil
 }
 
 // getDeclaredTypeNames returns a map of variable names to their human-readable type names.

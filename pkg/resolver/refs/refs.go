@@ -6,6 +6,7 @@
 package refs
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -68,9 +69,9 @@ func ExtractFromTemplate(content, leftDelim, rightDelim string) ([]string, error
 }
 
 // ExtractFromCEL extracts resolver references from a CEL expression.
-func ExtractFromCEL(expr string) ([]string, error) {
+func ExtractFromCEL(ctx context.Context, expr string) ([]string, error) {
 	celExpr := celexp.Expression(expr)
-	vars, err := celExpr.GetUnderscoreVariables()
+	vars, err := celExpr.GetUnderscoreVariables(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse CEL expression: %w", err)
 	}

@@ -6,6 +6,7 @@ package builder
 import (
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/terminal/format"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -53,7 +54,7 @@ func TestFormatByteSize(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.expected, func(t *testing.T) {
-			assert.Equal(t, tt.expected, FormatByteSize(tt.input))
+			assert.Equal(t, tt.expected, format.Bytes(tt.input))
 		})
 	}
 }

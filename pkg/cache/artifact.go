@@ -139,6 +139,19 @@ func (c *ArtifactCache) Invalidate(kind, name, version string) error {
 	return nil
 }
 
+// InvalidateArtifact is a convenience function that creates a default
+// ArtifactCache and invalidates the entry for the given kind, name, and
+// optional version. The cacheDir and ttl are forwarded to NewArtifactCache.
+//
+// This encapsulates the common pattern:
+//
+//	cache := NewArtifactCache(dir, ttl)
+//	cache.Invalidate(kind, name, version)
+func InvalidateArtifact(cacheDir string, ttl time.Duration, kind, name, version string) error {
+	c := NewArtifactCache(cacheDir, ttl)
+	return c.Invalidate(kind, name, version)
+}
+
 // entryDir returns the directory path for a given cache entry.
 // Path: {c.dir}/{safeKind}/{safeNameVersion}
 func (c *ArtifactCache) entryDir(kind, name, version string) string {

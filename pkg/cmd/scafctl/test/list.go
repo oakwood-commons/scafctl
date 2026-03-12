@@ -65,7 +65,7 @@ Examples:
 		SilenceUsage: true,
 		RunE: func(cCmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
-			ctx := settings.IntoContext(context.Background(), cliParams)
+			ctx := settings.IntoContext(cCmd.Context(), cliParams)
 
 			opts.IOStreams = ioStreams
 			opts.CliParams = cliParams

@@ -16,6 +16,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -304,13 +305,17 @@ func TestSolutionOptions_getRegistry(t *testing.T) {
 func TestSolutionOptions_writeOutput(t *testing.T) {
 	t.Run("writes_to_stdout_when_no_file_specified", func(t *testing.T) {
 		var outBuf bytes.Buffer
-		options := &SolutionOptions{
-			IOStreams: &terminal.IOStreams{
-				Out: &outBuf,
-			},
+		ioStreams := &terminal.IOStreams{
+			Out: &outBuf,
 		}
+		options := &SolutionOptions{
+			IOStreams: ioStreams,
+		}
+		cliParams := &settings.Run{}
+		w := writer.New(ioStreams, cliParams)
+		ctx := writer.WithWriter(context.Background(), w)
 
-		err := options.writeOutput([]byte("test output"))
+		err := options.writeOutput(ctx, []byte("test output"))
 		require.NoError(t, err)
 		assert.Equal(t, "test output\n", outBuf.String())
 	})

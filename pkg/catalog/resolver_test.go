@@ -59,7 +59,7 @@ func TestParseNameVersion(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			name, version := parseNameVersion(tt.input)
+			name, version := ParseNameVersion(tt.input)
 			assert.Equal(t, tt.expectedName, name)
 			assert.Equal(t, tt.expectedVersion, version)
 		})
@@ -92,7 +92,8 @@ metadata:
 spec:
   resolvers: {}
 `)
-		ref := MustParseReference(ArtifactKindSolution, "test-solution@1.0.0")
+		ref, err := ParseReference(ArtifactKindSolution, "test-solution@1.0.0")
+		require.NoError(t, err)
 		_, err = catalog.Store(context.Background(), ref, content, nil, nil, false)
 		require.NoError(t, err)
 
@@ -125,8 +126,10 @@ metadata:
 spec:
   resolvers: {}
 `)
-		ref1 := MustParseReference(ArtifactKindSolution, "multi-version@1.0.0")
-		ref2 := MustParseReference(ArtifactKindSolution, "multi-version@2.0.0")
+		ref1, err := ParseReference(ArtifactKindSolution, "multi-version@1.0.0")
+		require.NoError(t, err)
+		ref2, err := ParseReference(ArtifactKindSolution, "multi-version@2.0.0")
+		require.NoError(t, err)
 		_, err = catalog.Store(context.Background(), ref1, content1, nil, nil, false)
 		require.NoError(t, err)
 		_, err = catalog.Store(context.Background(), ref2, content2, nil, nil, false)
