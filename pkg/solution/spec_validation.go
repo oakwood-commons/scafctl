@@ -37,6 +37,13 @@ func (s *Solution) ValidateSpec() error {
 			problems = append(problems, err.Error())
 		}
 
+		if r == nil {
+			problems = append(problems, fmt.Sprintf("resolver %q has a null value — a resolve block is required", name))
+			// Mark that we have nil resolvers; skip cycle check later to avoid confusing cascading errors
+			resolverNames[name] = false
+			continue
+		}
+
 		// Validate dependsOn references point to existing resolvers
 		for _, dep := range r.DependsOn {
 			if dep == "" {
@@ -53,15 +60,27 @@ func (s *Solution) ValidateSpec() error {
 		}
 	}
 
-	// Check for circular dependencies by building phases
+	// Check for circular dependencies by building phases, but only if there are no nil resolvers.
+	// Nil resolvers cause ResolversToSlice to drop them, which can produce confusing cascading
+	// dependency errors ("depends on X but X wasn't present").
+	hasNilResolvers := false
+	for _, valid := range resolverNames {
+		if !valid {
+			hasNilResolvers = true
+			break
+		}
+	}
+
 	// Note: We pass nil for the lookup since spec validation doesn't have access to
 	// the provider registry. This means generic dependency extraction is used,
 	// which is sufficient for detecting circular dependencies.
-	resolvers := s.Spec.ResolversToSlice()
-	if len(resolvers) > 0 {
-		_, err := resolver.BuildPhases(resolvers, nil)
-		if err != nil {
-			problems = append(problems, fmt.Sprintf("resolver dependency error: %v", err))
+	if !hasNilResolvers {
+		resolvers := s.Spec.ResolversToSlice()
+		if len(resolvers) > 0 {
+			_, err := resolver.BuildPhases(resolvers, nil)
+			if err != nil {
+				problems = append(problems, fmt.Sprintf("resolver dependency error: %v", err))
+			}
 		}
 	}
 

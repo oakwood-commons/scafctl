@@ -75,14 +75,18 @@ func (s *Server) handleShowSnapshot(_ context.Context, request mcp.CallToolReque
 		), nil
 	}
 
-	// Build resolver counts
+	// Build resolver counts (only count non-nil entries for accurate totals)
 	counts := map[string]int{
-		"total":   len(snapshot.Resolvers),
+		"total":   0,
 		"success": 0,
 		"failed":  0,
 		"skipped": 0,
 	}
 	for _, r := range snapshot.Resolvers {
+		if r == nil {
+			continue
+		}
+		counts["total"]++
 		switch r.Status {
 		case string(resolver.ExecutionStatusSuccess):
 			counts["success"]++
@@ -108,6 +112,9 @@ func (s *Server) handleShowSnapshot(_ context.Context, request mcp.CallToolReque
 	if format == "resolvers" || format == "full" {
 		resolvers := make([]map[string]any, 0, len(snapshot.Resolvers))
 		for name, r := range snapshot.Resolvers {
+			if r == nil {
+				continue
+			}
 			entry := map[string]any{
 				"name":     name,
 				"status":   r.Status,
@@ -188,6 +195,9 @@ func (s *Server) handleDiffSnapshots(_ context.Context, request mcp.CallToolRequ
 	statusChanges := make([]map[string]any, 0)
 
 	for name, rd := range diff.Resolvers {
+		if rd == nil {
+			continue
+		}
 		switch rd.Type {
 		case resolver.DiffTypeAdded:
 			entry := map[string]any{"name": name}

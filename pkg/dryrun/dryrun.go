@@ -186,6 +186,9 @@ func Generate(ctx context.Context, sol *solution.Solution, opts Options) (*Repor
 	// Phase 3: Collect provider mock behaviors
 	usedProviders := make(map[string]bool)
 	for _, res := range sol.Spec.Resolvers {
+		if res == nil {
+			continue
+		}
 		if res.Resolve != nil {
 			for _, step := range res.Resolve.With {
 				usedProviders[step.Provider] = true

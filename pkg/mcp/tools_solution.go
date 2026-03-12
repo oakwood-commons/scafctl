@@ -664,6 +664,14 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 	var missingParamNames []string
 	missingDescriptions := make(map[string]string)
 	for name, rslvr := range sol.Spec.Resolvers {
+		if rslvr == nil {
+			return newStructuredError(ErrCodeLoadFailed,
+				fmt.Sprintf("invalid resolver %q: resolver definition is null", name),
+				WithField(fmt.Sprintf("resolvers.%s", name)),
+				WithSuggestion("Resolver entries must be objects, not null. Define the resolver steps or remove this entry."),
+				WithRelatedTools("lint_solution"),
+			), nil
+		}
 		if rslvr.Resolve != nil && len(rslvr.Resolve.With) > 0 && rslvr.Resolve.With[0].Provider == "parameter" {
 			if _, provided := params[name]; !provided {
 				missingParamNames = append(missingParamNames, name)
@@ -730,6 +738,11 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 
 	resolvers := make(map[string]resolverPreview, len(sol.Spec.Resolvers))
 	for name, rslvr := range sol.Spec.Resolvers {
+		// Note: nil resolvers are caught earlier in the param elicitation loop
+		// with a structured error, so we can safely skip them here.
+		if rslvr == nil {
+			continue
+		}
 		// If filtering to a single resolver, check if this one or its deps match
 		if resolverFilter != "" && name != resolverFilter {
 			// Include dependencies of the filtered resolver
