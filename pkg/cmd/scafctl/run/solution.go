@@ -252,7 +252,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 
 	// Validate and prepare output directory before execution (fail-fast).
 	// In dry-run mode, resolve the path without creating the directory.
-	absOutputDir, err := o.resolveOutputDir(o.DryRun)
+	absOutputDir, err := o.resolveOutputDir(ctx, o.DryRun)
 	if err != nil {
 		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
 	}
@@ -260,7 +260,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// Capture the original working directory before prepareSolutionForExecution,
 	// which may os.Chdir into a bundle extraction directory. This ensures __cwd
 	// in action expressions reflects the user's actual working directory.
-	originalCwd, err := os.Getwd()
+	originalCwd, err := provider.GetWorkingDirectory(ctx)
 	if err != nil {
 		return o.exitWithCode(ctx, fmt.Errorf("failed to get working directory: %w", err), exitcode.GeneralError)
 	}
@@ -532,12 +532,12 @@ func (o *SolutionOptions) getActionIOStreams() *provider.IOStreams {
 // Returns the absolute path if --output-dir was set, or empty string if not.
 // When dryRun is false, creates the directory if it doesn't exist.
 // When dryRun is true, only resolves to an absolute path without creating it.
-func (o *SolutionOptions) resolveOutputDir(dryRun bool) (string, error) {
+func (o *SolutionOptions) resolveOutputDir(ctx context.Context, dryRun bool) (string, error) {
 	if o.OutputDir == "" {
 		return "", nil
 	}
 
-	absDir, err := filepath.Abs(o.OutputDir)
+	absDir, err := provider.AbsFromContext(ctx, o.OutputDir)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve output directory %q: %w", o.OutputDir, err)
 	}

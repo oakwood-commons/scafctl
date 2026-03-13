@@ -62,6 +62,9 @@ func (s *Server) registerCatalogMultiPlatformTools() {
 		mcp.WithBoolean("force",
 			mcp.Description("Overwrite an existing artifact with the same name and version (default: false)"),
 		),
+		mcp.WithString("cwd",
+			mcp.Description("Working directory for path resolution. When set, relative platform binary paths resolve against this directory instead of the process CWD."),
+		),
 	)
 	s.mcpServer.AddTool(buildPluginTool, s.handleBuildPlugin)
 }
@@ -193,6 +196,15 @@ func (s *Server) handleBuildPlugin(_ context.Context, request mcp.CallToolReques
 	}
 
 	force := request.GetBool("force", false)
+	cwd := request.GetString("cwd", "")
+
+	ctx, err := s.contextWithCwd(cwd)
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("cwd"),
+			WithSuggestion("Provide a valid existing directory path"),
+		), nil
+	}
 
 	// Convert platforms map to string paths and validate/read binaries
 	platformPaths := make(map[string]string, len(platformsMap))
@@ -206,7 +218,7 @@ func (s *Server) handleBuildPlugin(_ context.Context, request mcp.CallToolReques
 		platformPaths[platform] = binPath
 	}
 
-	platformBinaries, err := catalog.ReadPlatformBinaries(platformPaths)
+	platformBinaries, err := catalog.ReadPlatformBinaries(ctx, platformPaths)
 	if err != nil {
 		return newStructuredError(ErrCodeInvalidInput, err.Error(),
 			WithField("platforms"),
@@ -232,7 +244,7 @@ func (s *Server) handleBuildPlugin(_ context.Context, request mcp.CallToolReques
 		), nil
 	}
 
-	info, err := localCatalog.StoreMultiPlatform(s.ctx, ref, platformBinaries, nil, force)
+	info, err := localCatalog.StoreMultiPlatform(ctx, ref, platformBinaries, nil, force)
 	if err != nil {
 		if catalog.IsExists(err) {
 			return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("artifact %s@%s already exists", name, versionStr),

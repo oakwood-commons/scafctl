@@ -47,6 +47,9 @@ func TestRoot_PersistentFlags(t *testing.T) {
 	if flags.Lookup("pprof-output-dir") == nil {
 		t.Error("Expected 'pprof-output-dir' persistent flag to be defined")
 	}
+	if flags.Lookup("cwd") == nil {
+		t.Error("Expected 'cwd' persistent flag to be defined")
+	}
 }
 
 func TestRoot_HiddenFlags(t *testing.T) {

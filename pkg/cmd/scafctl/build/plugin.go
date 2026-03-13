@@ -130,7 +130,7 @@ func runBuildPlugin(ctx context.Context, opts *PluginOptions) error {
 	}
 
 	// Validate and read platform binaries
-	platformBinaries, err := catalog.ReadPlatformBinaries(platformPaths)
+	platformBinaries, err := catalog.ReadPlatformBinaries(ctx, platformPaths)
 	if err != nil {
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.InvalidInput)

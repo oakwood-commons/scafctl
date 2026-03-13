@@ -134,6 +134,10 @@ The MCP server runs **locally on the user's machine**, in the same security cont
 
 The AI client (VS Code, Claude Desktop, etc.) connects to this local server process — it does not expose anything to the network (when using stdio transport).
 
+### Working Directory Override
+
+All MCP tools that accept file paths support an optional `cwd` parameter. This allows AI agents to specify the project directory for path resolution without requiring the MCP server process to be started from that directory. See the [cwd design doc](cwd.md) for details.
+
 ## What Is Required
 
 ### 1. New Go Dependency

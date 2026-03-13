@@ -137,7 +137,7 @@ func TestCanonicalize_URL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got := Canonicalize(tt.input)
+			got := Canonicalize(context.Background(), tt.input)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -155,19 +155,19 @@ func TestCanonicalize_CatalogReference(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got := Canonicalize(tt.input)
+			got := Canonicalize(context.Background(), tt.input)
 			assert.Equal(t, tt.want, got)
 		})
 	}
 }
 
 func TestCanonicalize_AbsolutePath(t *testing.T) {
-	got := Canonicalize("/home/user/infra.yaml")
+	got := Canonicalize(context.Background(), "/home/user/infra.yaml")
 	assert.Equal(t, "/home/user/infra.yaml", got)
 }
 
 func TestCanonicalize_RelativePath(t *testing.T) {
-	got := Canonicalize("./child.yaml")
+	got := Canonicalize(context.Background(), "./child.yaml")
 	// Should be resolved to an absolute path
 	assert.True(t, len(got) > len("./child.yaml"), "expected absolute path, got: %s", got)
 	assert.NotEqual(t, "./child.yaml", got)

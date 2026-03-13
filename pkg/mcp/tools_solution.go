@@ -62,6 +62,9 @@ func (s *Server) registerSolutionTools() {
 			mcp.Required(),
 			mcp.Description("Path to solution file, catalog name, or URL"),
 		),
+		mcp.WithString("cwd",
+			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
+		),
 	)
 	s.mcpServer.AddTool(inspectSolutionTool, s.handleInspectSolution)
 
@@ -82,6 +85,9 @@ func (s *Server) registerSolutionTools() {
 		mcp.WithString("severity",
 			mcp.Description("Minimum severity to return: error, warning, info (default: info)"),
 			mcp.Enum("error", "warning", "info"),
+		),
+		mcp.WithString("cwd",
+			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
 		),
 	)
 	s.mcpServer.AddTool(lintSolutionTool, s.handleLintSolution)
@@ -110,6 +116,9 @@ func (s *Server) registerSolutionTools() {
 		mcp.WithString("output_dir",
 			mcp.Description("Target directory for action output. When set, actions resolve relative paths against this directory instead of CWD. Resolvers always use CWD regardless of this setting."),
 		),
+		mcp.WithString("cwd",
+			mcp.Description("Working directory for path resolution. When set, relative paths (including the solution path itself) resolve against this directory instead of the process CWD."),
+		),
 	)
 	s.mcpServer.AddTool(renderSolutionTool, s.handleRenderSolution)
 
@@ -135,6 +144,9 @@ func (s *Server) registerSolutionTools() {
 		),
 		mcp.WithString("output_dir",
 			mcp.Description("Target directory for action output. Included for path preview purposes — resolvers always use CWD regardless of this setting."),
+		),
+		mcp.WithString("cwd",
+			mcp.Description("Working directory for path resolution. When set, relative paths (including the solution path itself) resolve against this directory instead of the process CWD."),
 		),
 	)
 	s.mcpServer.AddTool(previewResolversTool, s.handlePreviewResolvers)
@@ -167,6 +179,9 @@ func (s *Server) registerSolutionTools() {
 		mcp.WithString("output_dir",
 			mcp.Description("Target directory for action output during test execution. When set, actions resolve relative paths against this directory instead of CWD."),
 		),
+		mcp.WithString("cwd",
+			mcp.Description("Working directory for path resolution. When set, relative paths (including the solution path itself) resolve against this directory instead of the process CWD."),
+		),
 	)
 	s.mcpServer.AddTool(runSolutionTestsTool, s.handleRunSolutionTests)
 
@@ -182,6 +197,9 @@ func (s *Server) registerSolutionTools() {
 		mcp.WithString("path",
 			mcp.Required(),
 			mcp.Description("Path to solution file, catalog name, or URL"),
+		),
+		mcp.WithString("cwd",
+			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
 		),
 	)
 	s.mcpServer.AddTool(getRunCommandTool, s.handleGetRunCommand)
@@ -247,8 +265,17 @@ func (s *Server) handleInspectSolution(_ context.Context, request mcp.CallToolRe
 			WithSuggestion("Provide a solution file path, catalog name, or URL"),
 		), nil
 	}
+	cwd := request.GetString("cwd", "")
 
-	sol, err := inspect.LoadSolution(s.ctx, path)
+	ctx, err := s.contextWithCwd(cwd)
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("cwd"),
+			WithSuggestion("Provide a valid existing directory path"),
+		), nil
+	}
+
+	sol, err := inspect.LoadSolution(ctx, path)
 	if err != nil {
 		return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("loading solution: %v", err),
 			WithField("path"),
@@ -281,9 +308,18 @@ func (s *Server) handleLintSolution(_ context.Context, request mcp.CallToolReque
 		), nil
 	}
 	severity := request.GetString("severity", "info")
+	cwd := request.GetString("cwd", "")
+
+	ctx, err := s.contextWithCwd(cwd)
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("cwd"),
+			WithSuggestion("Provide a valid existing directory path"),
+		), nil
+	}
 
 	// Use prepare.Solution which handles catalog resolution and registry setup
-	prepResult, err := prepare.Solution(s.ctx, file,
+	prepResult, err := prepare.Solution(ctx, file,
 		prepare.WithRegistry(s.registry),
 	)
 	if err != nil {
@@ -347,6 +383,15 @@ func (s *Server) handleRenderSolution(_ context.Context, request mcp.CallToolReq
 
 	graphType := request.GetString("graph_type", "action")
 	outputDir := request.GetString("output_dir", "")
+	cwd := request.GetString("cwd", "")
+
+	ctx, err := s.contextWithCwd(cwd)
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("cwd"),
+			WithSuggestion("Provide a valid existing directory path"),
+		), nil
+	}
 
 	// Parse params from arguments
 	var params map[string]any
@@ -363,7 +408,7 @@ func (s *Server) handleRenderSolution(_ context.Context, request mcp.CallToolReq
 	}
 
 	// Load solution via prepare.Solution
-	prepResult, err := prepare.Solution(s.ctx, path,
+	prepResult, err := prepare.Solution(ctx, path,
 		prepare.WithRegistry(s.registry),
 	)
 	if err != nil {
@@ -416,9 +461,9 @@ func (s *Server) handleRenderSolution(_ context.Context, request mcp.CallToolReq
 	case "resolver":
 		return s.renderResolverGraph(sol, reg)
 	case "action-deps":
-		return s.renderActionDepsGraph(sol, params, outputDir)
+		return s.renderActionDepsGraph(ctx, sol, params, outputDir)
 	default:
-		return s.renderActionGraph(sol, params, outputDir)
+		return s.renderActionGraph(ctx, sol, params, outputDir)
 	}
 }
 
@@ -462,7 +507,7 @@ func (s *Server) renderResolverGraph(sol *solution.Solution, reg *provider.Regis
 }
 
 // renderActionGraph executes resolvers, builds, and renders the action graph.
-func (s *Server) renderActionGraph(sol *solution.Solution, params map[string]any, outputDir string) (*mcp.CallToolResult, error) { //nolint:unparam // error is always nil per MCP pattern
+func (s *Server) renderActionGraph(ctx context.Context, sol *solution.Solution, params map[string]any, outputDir string) (*mcp.CallToolResult, error) { //nolint:unparam // error is always nil per MCP pattern
 	if !sol.Spec.HasWorkflow() {
 		suggestion := "Add a spec.workflow section with actions to the solution"
 		if sol.Spec.HasResolvers() {
@@ -475,7 +520,7 @@ func (s *Server) renderActionGraph(sol *solution.Solution, params map[string]any
 	}
 
 	// Execute resolvers to get data for action inputs
-	resolverData, err := s.executeResolversForRender(sol, params)
+	resolverData, err := s.executeResolversForRender(ctx, sol, params)
 	if err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("resolver execution failed: %v", err),
 			WithSuggestion("Check resolver configuration with preview_resolvers"),
@@ -484,7 +529,7 @@ func (s *Server) renderActionGraph(sol *solution.Solution, params map[string]any
 	}
 
 	// Build the action graph
-	graph, err := action.BuildGraph(s.ctx, sol.Spec.Workflow, resolverData, nil)
+	graph, err := action.BuildGraph(ctx, sol.Spec.Workflow, resolverData, nil)
 	if err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to build action graph: %v", err),
 			WithSuggestion("Check action dependencies and provider configurations"),
@@ -524,7 +569,7 @@ func (s *Server) renderActionGraph(sol *solution.Solution, params map[string]any
 }
 
 // renderActionDepsGraph builds and returns the action dependency visualization.
-func (s *Server) renderActionDepsGraph(sol *solution.Solution, params map[string]any, outputDir string) (*mcp.CallToolResult, error) {
+func (s *Server) renderActionDepsGraph(ctx context.Context, sol *solution.Solution, params map[string]any, outputDir string) (*mcp.CallToolResult, error) {
 	if !sol.Spec.HasWorkflow() {
 		return newStructuredError(ErrCodeValidationError, "solution does not define a workflow",
 			WithSuggestion("Add a spec.workflow section with actions to the solution"),
@@ -533,7 +578,7 @@ func (s *Server) renderActionDepsGraph(sol *solution.Solution, params map[string
 	}
 
 	// Execute resolvers to get data for action inputs
-	resolverData, err := s.executeResolversForRender(sol, params)
+	resolverData, err := s.executeResolversForRender(ctx, sol, params)
 	if err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("resolver execution failed: %v", err),
 			WithSuggestion("Check resolver configuration with preview_resolvers"),
@@ -542,7 +587,7 @@ func (s *Server) renderActionDepsGraph(sol *solution.Solution, params map[string
 	}
 
 	// Build the action graph
-	graph, err := action.BuildGraph(s.ctx, sol.Spec.Workflow, resolverData, nil)
+	graph, err := action.BuildGraph(ctx, sol.Spec.Workflow, resolverData, nil)
 	if err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to build action graph: %v", err),
 			WithSuggestion("Check action dependencies and provider configurations"),
@@ -576,8 +621,8 @@ func (s *Server) renderActionDepsGraph(sol *solution.Solution, params map[string
 }
 
 // executeResolversForRender runs resolver execution for render operations.
-func (s *Server) executeResolversForRender(sol *solution.Solution, params map[string]any) (map[string]any, error) {
-	return execute.ResolversForPreview(s.ctx, sol, params, s.registry)
+func (s *Server) executeResolversForRender(ctx context.Context, sol *solution.Solution, params map[string]any) (map[string]any, error) {
+	return execute.ResolversForPreview(ctx, sol, params, s.registry)
 }
 
 // handlePreviewResolvers executes a solution's resolver chain and returns each resolver's value.
@@ -591,6 +636,15 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 	}
 
 	outputDir := request.GetString("output_dir", "")
+	cwd := request.GetString("cwd", "")
+
+	ctx, err := s.contextWithCwd(cwd)
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("cwd"),
+			WithSuggestion("Provide a valid existing directory path"),
+		), nil
+	}
 
 	// Parse params
 	var params map[string]any
@@ -607,7 +661,7 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 	}
 
 	// Load solution
-	prepResult, err := prepare.Solution(s.ctx, path,
+	prepResult, err := prepare.Solution(ctx, path,
 		prepare.WithRegistry(s.registry),
 	)
 	if err != nil {
@@ -675,13 +729,13 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 	}
 	if len(missingParamNames) > 0 {
 		sort.Strings(missingParamNames)
-		for k, v := range s.elicitMissingParams(s.ctx, missingParamNames, missingDescriptions) {
+		for k, v := range s.elicitMissingParams(ctx, missingParamNames, missingDescriptions) {
 			params[k] = v
 		}
 	}
 
 	if reg == nil {
-		reg, err = builtin.DefaultRegistry(s.ctx)
+		reg, err = builtin.DefaultRegistry(ctx)
 		if err != nil {
 			return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to create provider registry: %v", err),
 				WithSuggestion("Check provider configurations"),
@@ -690,22 +744,22 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 		}
 	}
 
-	cfg := execute.ResolverExecutionConfigFromContext(s.ctx)
+	cfg := execute.ResolverExecutionConfigFromContext(ctx)
 	// Check if we're debugging a single resolver
 	resolverFilter := request.GetString("resolver", "")
 
 	// Send progress notifications during execution
 	progress := newProgressReporter(s, request)
 	progress.setTotal(3)
-	progress.report(s.ctx, 1, "Loading and validating solution")
+	progress.report(ctx, 1, "Loading and validating solution")
 
-	progress.report(s.ctx, 2, fmt.Sprintf("Executing %d resolvers", len(sol.Spec.Resolvers)))
-	result, err := execute.Resolvers(s.ctx, sol, params, reg, cfg)
+	progress.report(ctx, 2, fmt.Sprintf("Executing %d resolvers", len(sol.Spec.Resolvers)))
+	result, err := execute.Resolvers(ctx, sol, params, reg, cfg)
 	if err != nil {
 		return buildResolverExecutionError(err, sol), nil
 	}
 
-	progress.report(s.ctx, 3, "Building response")
+	progress.report(ctx, 3, "Building response")
 
 	// Build structured response with per-resolver details
 	type resolverPhaseInfo struct {
@@ -877,11 +931,28 @@ func (s *Server) handleRunSolutionTests(_ context.Context, request mcp.CallToolR
 	filter := request.GetString("filter", "")
 	tag := request.GetString("tag", "")
 	outputDir := request.GetString("output_dir", "")
+	cwd := request.GetString("cwd", "")
 	skipBuiltins := false
 	if sb, ok := request.GetArguments()["skip_builtins"]; ok {
 		if b, ok := sb.(bool); ok {
 			skipBuiltins = b
 		}
+	}
+
+	ctx, cwdErr := s.contextWithCwd(cwd)
+	if cwdErr != nil {
+		return newStructuredError(ErrCodeInvalidInput, cwdErr.Error(),
+			WithField("cwd"),
+			WithSuggestion("Provide a valid existing directory path"),
+		), nil
+	}
+
+	// Resolve relative path against the working directory
+	path, err = provider.AbsFromContext(ctx, path)
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, fmt.Sprintf("failed to resolve path: %v", err),
+			WithField("path"),
+		), nil
 	}
 
 	// Verify the path exists
@@ -949,12 +1020,12 @@ func (s *Server) handleRunSolutionTests(_ context.Context, request mcp.CallToolR
 	// Send progress notifications during test execution
 	progress := newProgressReporter(s, request)
 	progress.setTotal(float64(len(solutions) + 2))
-	progress.report(s.ctx, 1, fmt.Sprintf("Discovered %d solution(s) with tests", len(solutions)))
+	progress.report(ctx, 1, fmt.Sprintf("Discovered %d solution(s) with tests", len(solutions)))
 
 	// Execute tests
 	start := time.Now()
-	progress.report(s.ctx, 2, "Running tests...")
-	results, err := runner.Run(s.ctx, solutions)
+	progress.report(ctx, 2, "Running tests...")
+	results, err := runner.Run(ctx, solutions)
 	elapsed := time.Since(start)
 	if err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("test execution failed: %v", err),
@@ -962,7 +1033,7 @@ func (s *Server) handleRunSolutionTests(_ context.Context, request mcp.CallToolR
 			WithRelatedTools("lint_solution", "inspect_solution"),
 		), nil
 	}
-	progress.report(s.ctx, float64(len(solutions)+2), fmt.Sprintf("Tests complete (%s)", elapsed.String()))
+	progress.report(ctx, float64(len(solutions)+2), fmt.Sprintf("Tests complete (%s)", elapsed.String()))
 
 	// Build structured response
 	summary := soltesting.Summarize(results)
@@ -1021,8 +1092,17 @@ func (s *Server) handleGetRunCommand(_ context.Context, request mcp.CallToolRequ
 			WithSuggestion("Provide the path to a solution file"),
 		), nil
 	}
+	cwd := request.GetString("cwd", "")
 
-	sol, err := inspect.LoadSolution(s.ctx, path)
+	ctx, err := s.contextWithCwd(cwd)
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("cwd"),
+			WithSuggestion("Provide a valid existing directory path"),
+		), nil
+	}
+
+	sol, err := inspect.LoadSolution(ctx, path)
 	if err != nil {
 		return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("loading solution: %v", err),
 			WithField("path"),

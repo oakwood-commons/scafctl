@@ -20,6 +20,7 @@ const (
 	ioStreamsKey        contextKey = "scafctl.provider.ioStreams"
 	solutionMetadataKey contextKey = "scafctl.provider.solutionMetadata"
 	outputDirectoryKey  contextKey = "scafctl.provider.outputDirectory"
+	workingDirectoryKey contextKey = "scafctl.provider.workingDirectory"
 )
 
 // SolutionMeta holds solution metadata fields made available to providers via context.
@@ -62,6 +63,22 @@ func WithOutputDirectory(ctx context.Context, dir string) context.Context {
 // Returns the directory path and true if found, empty string and false otherwise.
 func OutputDirectoryFromContext(ctx context.Context) (string, bool) {
 	dir, ok := ctx.Value(outputDirectoryKey).(string)
+	return dir, ok
+}
+
+// WithWorkingDirectory returns a new context with the logical working directory attached.
+// When set, path resolution helpers use this directory instead of the process CWD
+// (os.Getwd). This allows callers—such as the MCP server or a --cwd CLI flag—to
+// control path resolution without mutating global process state.
+func WithWorkingDirectory(ctx context.Context, dir string) context.Context {
+	return context.WithValue(ctx, workingDirectoryKey, dir)
+}
+
+// WorkingDirectoryFromContext retrieves the logical working directory from the context.
+// Returns the directory path and true if found, empty string and false otherwise.
+// When not set, callers should fall back to os.Getwd().
+func WorkingDirectoryFromContext(ctx context.Context) (string, bool) {
+	dir, ok := ctx.Value(workingDirectoryKey).(string)
 	return dir, ok
 }
 

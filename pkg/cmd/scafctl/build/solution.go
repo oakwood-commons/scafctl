@@ -14,6 +14,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/builder"
@@ -136,7 +137,7 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 	}
 
 	// Determine bundle root (directory containing the solution file)
-	absFile, err := filepath.Abs(opts.File)
+	absFile, err := provider.AbsFromContext(ctx, opts.File)
 	if err != nil {
 		w.Errorf("failed to resolve path: %v", err)
 		return exitcode.WithCode(err, exitcode.InvalidInput)

@@ -649,6 +649,25 @@ scafctl run resolver -f demo.yaml -e '_.environment'
 
 ---
 
+## Working Directory Override
+
+Use the `--cwd` (or `-C`) global flag to run commands as if you were in a different directory. This is useful when scripting or when your solution files live in a different location:
+
+```bash
+# Run resolvers from a solution in another directory
+scafctl --cwd /path/to/project run resolver -f solution.yaml
+
+# Short form (similar to git -C)
+scafctl -C /path/to/project run resolver -f solution.yaml
+
+# Combine with other flags
+scafctl -C /path/to/project run resolver -f solution.yaml -o json
+```
+
+All relative paths (including `-f`, `--output-dir`, etc.) are resolved against the specified working directory instead of the current directory.
+
+---
+
 ## Debugging Dependencies
 
 A common debugging workflow is to inspect how resolver dependencies cascade.

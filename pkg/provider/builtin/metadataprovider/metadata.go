@@ -96,8 +96,8 @@ func (p *MetadataProvider) Execute(ctx context.Context, _ any) (*provider.Output
 	// CLI arguments.
 	args := os.Args
 
-	// Current working directory.
-	cwd, _ := os.Getwd()
+	// Current working directory (context-aware).
+	cwd, _ := provider.GetWorkingDirectory(ctx)
 
 	// Entrypoint and command path from settings context.
 	entrypoint := "unknown"

@@ -1727,6 +1727,52 @@ Examples:
 
 ---
 
+## Working Directory (`cwd`) Parameter
+
+All MCP tools that accept file paths support an optional `cwd` string parameter. When provided, relative paths resolve against the specified directory instead of the server's process CWD.
+
+### Pattern
+
+```go
+func (s *Server) handleMyTool(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+    path := request.GetString("path", "")
+    cwd := request.GetString("cwd", "")
+
+    ctx, err := s.contextWithCwd(cwd)
+    if err != nil {
+        return newStructuredError(ErrCodeInvalidInput, err.Error(),
+            WithField("cwd"),
+            WithSuggestion("Provide a valid existing directory path"),
+        ), nil
+    }
+
+    // For tools that load solutions via prepare.Solution or inspect.LoadSolution,
+    // the path is resolved automatically by the getter:
+    sol, err := prepare.Solution(ctx, path, ...)
+
+    // For tools that use raw file I/O (e.g., snapshot loading),
+    // resolve the path explicitly first:
+    path, err = provider.AbsFromContext(ctx, path)
+    data, err := os.ReadFile(path)
+}
+```
+
+### Tool Registration
+
+```go
+mcp.WithString("cwd",
+    mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
+),
+```
+
+### Design Rationale
+
+- Uses `context.Context` instead of `os.Chdir` — safe for concurrent MCP requests
+- Mirrors the CLI `--cwd` / `-C` flag behavior
+- See [cwd design doc](cwd.md) for full architecture details
+
+---
+
 ## Implementation Order & Dependencies
 
 ```

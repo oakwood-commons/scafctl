@@ -514,7 +514,7 @@ func TestExecute_CircularDetection(t *testing.T) {
 	// Simulate already being inside a.yaml by pushing it as an ancestor
 	ctx = WithAncestorStack(ctx, []string{})
 	var err error
-	ctx, err = PushAncestor(ctx, Canonicalize("./a.yaml"))
+	ctx, err = PushAncestor(ctx, Canonicalize(ctx, "./a.yaml"))
 	require.NoError(t, err)
 
 	// Now try to execute a.yaml again — should detect circular reference

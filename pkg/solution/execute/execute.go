@@ -9,7 +9,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/action"
@@ -336,7 +335,7 @@ func Actions(
 	// the context for action-mode providers. Only create the directory when
 	// not in dry-run mode to avoid filesystem side effects.
 	if cfg.OutputDir != "" {
-		absDir, err := filepath.Abs(cfg.OutputDir)
+		absDir, err := provider.AbsFromContext(ctx, cfg.OutputDir)
 		if err != nil {
 			return nil, fmt.Errorf("resolving output directory: %w", err)
 		}
@@ -360,6 +359,8 @@ func Actions(
 	}
 	if cfg.Cwd != "" {
 		executorOpts = append(executorOpts, action.WithCwd(cfg.Cwd))
+	} else if cwd, ok := provider.WorkingDirectoryFromContext(ctx); ok && cwd != "" {
+		executorOpts = append(executorOpts, action.WithCwd(cwd))
 	}
 
 	executor := action.NewExecutor(executorOpts...)

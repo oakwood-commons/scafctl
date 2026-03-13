@@ -18,7 +18,9 @@ import (
 //   - The execution mode is CapabilityAction
 //   - An output directory is set in the context
 //
-// Otherwise, the path is resolved against the current working directory via filepath.Abs.
+// Otherwise, the path is resolved against the context working directory (set via
+// WithWorkingDirectory), falling back to the process CWD when no context directory
+// is set.
 //
 // When resolving against an output directory, the result is validated to ensure it
 // does not escape the output directory via parent traversal (e.g., "../../../etc/passwd").
@@ -38,6 +40,51 @@ func ResolvePath(ctx context.Context, path string) (string, error) {
 		}
 	}
 
+	return AbsFromContext(ctx, path)
+}
+
+// GetWorkingDirectory returns the effective working directory from the context.
+// It checks the context for a logical working directory first (set via
+// WithWorkingDirectory), then falls back to the process CWD via os.Getwd().
+func GetWorkingDirectory(ctx context.Context) (string, error) {
+	if cwd, ok := WorkingDirectoryFromContext(ctx); ok && cwd != "" {
+		return cwd, nil
+	}
+	return os.Getwd()
+}
+
+// ValidateDirectory resolves a directory path to an absolute path and validates
+// that it exists and is a directory. Returns the resolved absolute path or an error.
+func ValidateDirectory(dir string) (string, error) {
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("resolving path %q: %w", dir, err)
+	}
+	info, err := os.Stat(absDir)
+	if err != nil {
+		return "", fmt.Errorf("directory %q does not exist: %w", absDir, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("path %q is not a directory", absDir)
+	}
+	return absDir, nil
+}
+
+// AbsFromContext resolves a relative path to an absolute path using the context
+// working directory. If no working directory is set in the context, it falls back
+// to filepath.Abs (which uses os.Getwd()).
+//
+// Note: this function does NOT perform path containment/traversal validation.
+// If the caller needs to restrict resolved paths within a specific directory,
+// use ResolvePath (which validates containment for output directories) or
+// perform additional checks after calling this function.
+func AbsFromContext(ctx context.Context, path string) (string, error) {
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path), nil
+	}
+	if cwd, ok := WorkingDirectoryFromContext(ctx); ok && cwd != "" {
+		return filepath.Join(cwd, path), nil
+	}
 	return filepath.Abs(path)
 }
 

@@ -1,0 +1,39 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: cwd-example
+  version: 1.0.0
+  description: |
+    Demonstrates the --cwd flag for working directory override.
+    All relative paths resolve against the --cwd directory instead of the process CWD.
+
+spec:
+  resolvers:
+    greeting:
+      description: Static greeting to verify basic resolver execution
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: Hello from cwd example
+
+    local-data:
+      description: Read data.txt from the working directory
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              operation: read
+              path: data.txt
+
+  workflow:
+    actions:
+      write-result:
+        description: Write resolver results to a file
+        provider: file
+        inputs:
+          operation: write
+          path: result.txt
+          content:
+            expr: '"greeting=" + _.greeting + "\ndata=" + _["local-data"]'

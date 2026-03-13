@@ -919,6 +919,18 @@ scafctl render solution -f hello-world.yaml -o yaml
 scafctl render solution -f hello-world.yaml -o json > graph.json
 ```
 
+### Working Directory Override
+
+Use `--cwd` (`-C`) to run solutions from a different directory. All file paths in actions (reads, writes, exec commands) resolve against the specified directory:
+
+```bash
+# Run a solution in a different project directory
+scafctl --cwd /path/to/project run solution -f solution.yaml
+
+# Combine with --output-dir: resolvers read from --cwd, actions write to --output-dir
+scafctl -C /path/to/project run solution -f solution.yaml --output-dir /tmp/output
+```
+
 The rendered output includes:
 - Expanded actions (ForEach iterations)
 - Materialized inputs

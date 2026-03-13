@@ -1580,6 +1580,7 @@ These flags should be available on the root command and inherited by all subcomm
 
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
+| `--cwd` | `-C` | string | `""` | Change the working directory before executing the command (similar to `git -C`) |
 | `--catalog` | | string | `""` | Target a specific configured catalog |
 | `--output` | `-o` | string | `table` | Output format: `table`, `json`, `yaml`, `quiet` |
 | `--quiet` | `-q` | bool | `false` | Suppress non-essential output |

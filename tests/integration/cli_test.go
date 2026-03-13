@@ -6006,3 +6006,64 @@ func TestIntegration_Snapshot_Help(t *testing.T) {
 	assert.Contains(t, stdout, "show")
 	assert.Contains(t, stdout, "diff")
 }
+
+// ============================================================================
+// CWD Flag Tests
+// ============================================================================
+
+func TestIntegration_CwdFlag_ResolvesRelativePath(t *testing.T) {
+	t.Parallel()
+	// Run from a different directory with --cwd pointing to project root,
+	// using a relative solution path that only makes sense from the project root.
+	projectRoot := findProjectRoot()
+
+	// Use --cwd to set the working directory to the project root,
+	// while the process CWD is a temp directory
+	tmpDir := t.TempDir()
+	stdout, stderr, exitCode := runScafctlInDir(t, tmpDir,
+		"--cwd", projectRoot,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"-o", "json",
+	)
+
+	assert.Equal(t, 0, exitCode, "stderr: %s\nstdout: %s", stderr, stdout)
+	// The JSON output should contain resolver results
+	assert.Contains(t, stdout, "environment")
+}
+
+func TestIntegration_CwdFlag_NonExistentDir(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t, "--cwd", "/nonexistent-dir-12345", "version")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "does not exist")
+}
+
+func TestIntegration_CwdFlag_FileNotDir(t *testing.T) {
+	t.Parallel()
+	// Create a temp file (not directory)
+	tmpFile := filepath.Join(t.TempDir(), "notadir.txt")
+	require.NoError(t, os.WriteFile(tmpFile, []byte("hello"), 0o644))
+
+	_, stderr, exitCode := runScafctl(t, "--cwd", tmpFile, "version")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "not a directory")
+}
+
+func TestIntegration_CwdFlag_ShortFlag(t *testing.T) {
+	t.Parallel()
+	// The -C short flag should work the same as --cwd
+	projectRoot := findProjectRoot()
+	tmpDir := t.TempDir()
+	stdout, stderr, exitCode := runScafctlInDir(t, tmpDir,
+		"-C", projectRoot,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"-o", "json",
+	)
+
+	assert.Equal(t, 0, exitCode, "stderr: %s\nstdout: %s", stderr, stdout)
+	assert.Contains(t, stdout, "environment")
+}
