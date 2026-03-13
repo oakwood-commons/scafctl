@@ -1,4 +1,27 @@
-# Exec provider input - list current directory
-command: ls
-args:
-  - "-la"
+# Exec Provider — List Directory Contents
+#
+# Demonstrates the exec provider running a simple command.
+#
+# Run: scafctl run solution -f examples/providers/exec-ls.yaml
+# Run: scafctl run resolver -f examples/providers/exec-ls.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: exec-ls-example
+  version: 1.0.0
+  description: List directory contents using the exec provider
+
+spec:
+  resolvers:
+    listing:
+      description: Directory listing via exec provider
+      type: any
+      resolve:
+        with:
+          - provider: exec
+            inputs:
+              command: ls
+              args:
+                - "-la"

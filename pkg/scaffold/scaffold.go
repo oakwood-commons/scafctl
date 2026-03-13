@@ -238,11 +238,12 @@ func BuildYAML(name, description, version string, features map[string]bool, prov
 			b.WriteString("        provider: exec\n")
 			b.WriteString("        description: \"A simple action\"\n")
 			b.WriteString("        inputs:\n")
-			b.WriteString("          command:\n")
+			b.WriteString("          command: echo\n")
+			b.WriteString("          args:\n")
 			if features["transforms"] {
-				b.WriteString("            expr: '\"echo Hello, \" + _.inputName + \" - processed: \" + _.processed'\n")
+				b.WriteString("            - expr: '\"Hello, \" + _.inputName + \" - processed: \" + _.processed'\n")
 			} else {
-				b.WriteString("            expr: '\"echo Hello, \" + _.inputName'\n")
+				b.WriteString("            - expr: '\"Hello, \" + _.inputName'\n")
 			}
 		}
 	}

@@ -1,3 +1,26 @@
-# HTTP provider input - simple GET request
-url: https://httpbin.org/get
-method: GET
+# HTTP Provider — Simple GET Request
+#
+# Demonstrates a basic HTTP GET request using the http provider.
+#
+# Run: scafctl run solution -f examples/providers/http-get.yaml
+# Run: scafctl run resolver -f examples/providers/http-get.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: http-get-example
+  version: 1.0.0
+  description: Simple HTTP GET request using the http provider
+
+spec:
+  resolvers:
+    response:
+      description: HTTP GET response from httpbin
+      type: any
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: https://httpbin.org/get
+              method: GET

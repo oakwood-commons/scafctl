@@ -1,8 +1,28 @@
-# HTTP provider with autoParseJson — parse JSON responses automatically.
-# Instead of getting a raw string body, get a structured object for direct field access.
+# HTTP Provider — Auto-Parse JSON Responses
 #
-# Run: scafctl run provider -f examples/providers/http-autoparse.yaml
+# Demonstrates autoParseJson which returns a structured object
+# instead of a raw string body, enabling direct field access.
+#
+# Run: scafctl run solution -f examples/providers/http-autoparse.yaml
+# Run: scafctl run resolver -f examples/providers/http-autoparse.yaml
 
-url: https://httpbin.org/get
-method: GET
-autoParseJson: true
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: http-autoparse-example
+  version: 1.0.0
+  description: HTTP provider with automatic JSON response parsing
+
+spec:
+  resolvers:
+    parsed-response:
+      description: Parsed JSON response from httpbin
+      type: any
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: https://httpbin.org/get
+              method: GET
+              autoParseJson: true

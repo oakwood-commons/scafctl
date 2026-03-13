@@ -1,13 +1,33 @@
-# HTTP provider input - Microsoft Graph API call with Entra authentication
+# HTTP Provider — Entra (Azure AD) Authentication
+#
+# Demonstrates calling Microsoft Graph API with Entra authentication.
 #
 # Prerequisites:
 #   scafctl auth login entra --scope https://graph.microsoft.com/.default
 #
-# Usage:
-#   scafctl run provider http --input @examples/providers/http-entra.yaml
-url: https://graph.microsoft.com/v1.0/me
-method: GET
-headers:
-  Accept: application/json
-auth: entra
-scope: "https://graph.microsoft.com/.default"
+# Run: scafctl run solution -f examples/providers/http-entra.yaml
+# Run: scafctl run resolver -f examples/providers/http-entra.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: http-entra-example
+  version: 1.0.0
+  description: Microsoft Graph API call with Entra authentication
+
+spec:
+  resolvers:
+    user-profile:
+      description: Current user profile from Microsoft Graph
+      type: any
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: https://graph.microsoft.com/v1.0/me
+              method: GET
+              headers:
+                Accept: application/json
+              auth: entra
+              scope: "https://graph.microsoft.com/.default"

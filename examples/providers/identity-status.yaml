@@ -1,3 +1,29 @@
-# Identity provider - check auth status
-operation: status
-handler: entra
+# Identity Provider — Check Authentication Status
+#
+# Checks the current authentication status for a handler.
+#
+# Prerequisites:
+#   scafctl auth login entra
+#
+# Run: scafctl run solution -f examples/providers/identity-status.yaml
+# Run: scafctl run resolver -f examples/providers/identity-status.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: identity-status-example
+  version: 1.0.0
+  description: Check Entra authentication status
+
+spec:
+  resolvers:
+    auth-status:
+      description: Current Entra authentication status
+      type: any
+      resolve:
+        with:
+          - provider: identity
+            inputs:
+              operation: status
+              handler: entra

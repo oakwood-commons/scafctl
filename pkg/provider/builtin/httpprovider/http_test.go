@@ -13,10 +13,20 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/ptrs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// testContext returns a context with allowPrivateIPs=true so that tests using
+// httptest.NewServer (which binds to 127.0.0.1) are not blocked by the SSRF guard.
+func testContext(_ testing.TB) context.Context {
+	cfg := &config.Config{}
+	cfg.HTTPClient.AllowPrivateIPs = ptrs.BoolPtr(true)
+	return config.WithConfig(context.Background(), cfg)
+}
 
 func TestNewHTTPProvider(t *testing.T) {
 	p := NewHTTPProvider()
@@ -39,7 +49,7 @@ func TestHTTPProvider_Execute_GET(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 	inputs := map[string]any{
 		"url":    server.URL,
 		"method": "GET",
@@ -58,7 +68,7 @@ func TestHTTPProvider_Execute_GET(t *testing.T) {
 
 func TestHTTPProvider_Execute_DryRun(t *testing.T) {
 	p := NewHTTPProvider()
-	ctx := provider.WithDryRun(context.Background(), true)
+	ctx := provider.WithDryRun(testContext(t), true)
 	inputs := map[string]any{
 		"url":    "https://api.example.com/test",
 		"method": "GET",
@@ -95,7 +105,7 @@ func TestHTTPProvider_Execute_POST(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":    server.URL,
@@ -135,7 +145,7 @@ func TestHTTPProvider_Execute_CustomHeaders(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url": server.URL,
@@ -173,7 +183,7 @@ func TestHTTPProvider_Execute_PUT(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":    server.URL,
@@ -198,7 +208,7 @@ func TestHTTPProvider_Execute_DELETE(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":    server.URL,
@@ -221,7 +231,7 @@ func TestHTTPProvider_Execute_404(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url": server.URL,
@@ -244,7 +254,7 @@ func TestHTTPProvider_Execute_500(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url": server.URL,
@@ -271,7 +281,7 @@ func TestHTTPProvider_Execute_MultipleHeaderValues(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url": server.URL,
@@ -311,7 +321,7 @@ func TestHTTPProvider_Execute_Timeout(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":     server.URL,
@@ -335,7 +345,7 @@ func TestHTTPProvider_Execute_TimeoutExceeded(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":     server.URL,
@@ -357,7 +367,7 @@ func TestHTTPProvider_Execute_TimeoutExceeded(t *testing.T) {
 
 func TestHTTPProvider_Execute_InvalidURL(t *testing.T) {
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url": "://invalid-url",
@@ -378,7 +388,7 @@ func TestHTTPProvider_Execute_DefaultMethod(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	// Don't specify method - should default to GET
 	inputs := map[string]any{
@@ -410,7 +420,7 @@ func TestHTTPProvider_Execute_EmptyBody(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":    server.URL,
@@ -447,7 +457,7 @@ func TestHTTPProvider_Execute_RetryOnServerError(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":    server.URL,
@@ -484,7 +494,7 @@ func TestHTTPProvider_Execute_RetryExhausted(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":    server.URL,
@@ -528,7 +538,7 @@ func TestHTTPProvider_Execute_RetryLinearBackoff(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":    server.URL,
@@ -575,7 +585,7 @@ func TestHTTPProvider_Execute_RetryExponentialBackoff(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":    server.URL,
@@ -617,7 +627,7 @@ func TestHTTPProvider_Execute_RetryContextCancellation(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(testContext(t))
 
 	inputs := map[string]any{
 		"url":    server.URL,
@@ -659,7 +669,7 @@ func TestHTTPProvider_Execute_NoRetryOnNonRetryableStatus(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":    server.URL,
@@ -702,7 +712,7 @@ func TestHTTPProvider_Execute_RetryOnRateLimited(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":    server.URL,
@@ -754,7 +764,7 @@ func TestHTTPProvider_Execute_AuthProvider_Success(t *testing.T) {
 	require.NoError(t, registry.Register(mockHandler))
 
 	// Create context with registry
-	ctx := auth.WithRegistry(context.Background(), registry)
+	ctx := auth.WithRegistry(testContext(t), registry)
 
 	p := NewHTTPProvider()
 	inputs := map[string]any{
@@ -787,7 +797,7 @@ func TestHTTPProvider_Execute_AuthProvider_MissingScope(t *testing.T) {
 
 	registry := auth.NewRegistry()
 	require.NoError(t, registry.Register(mockHandler))
-	ctx := auth.WithRegistry(context.Background(), registry)
+	ctx := auth.WithRegistry(testContext(t), registry)
 
 	p := NewHTTPProvider()
 
@@ -826,7 +836,7 @@ func TestHTTPProvider_Execute_AuthProvider_GitHubNoScope(t *testing.T) {
 
 	registry := auth.NewRegistry()
 	require.NoError(t, registry.Register(mockHandler))
-	ctx := auth.WithRegistry(context.Background(), registry)
+	ctx := auth.WithRegistry(testContext(t), registry)
 
 	p := NewHTTPProvider()
 	inputs := map[string]any{
@@ -850,7 +860,7 @@ func TestHTTPProvider_Execute_AuthProvider_GitHubNoScope(t *testing.T) {
 func TestHTTPProvider_Execute_AuthProvider_MissingRegistry(t *testing.T) {
 	p := NewHTTPProvider()
 	// Context without auth registry
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":          "https://example.com/api",
@@ -869,7 +879,7 @@ func TestHTTPProvider_Execute_AuthProvider_MissingRegistry(t *testing.T) {
 func TestHTTPProvider_Execute_AuthProvider_UnknownHandler(t *testing.T) {
 	// Create empty registry
 	registry := auth.NewRegistry()
-	ctx := auth.WithRegistry(context.Background(), registry)
+	ctx := auth.WithRegistry(testContext(t), registry)
 
 	p := NewHTTPProvider()
 	inputs := map[string]any{
@@ -894,7 +904,7 @@ func TestHTTPProvider_Execute_AuthProvider_TokenError(t *testing.T) {
 
 	registry := auth.NewRegistry()
 	require.NoError(t, registry.Register(mockHandler))
-	ctx := auth.WithRegistry(context.Background(), registry)
+	ctx := auth.WithRegistry(testContext(t), registry)
 
 	p := NewHTTPProvider()
 	inputs := map[string]any{
@@ -941,7 +951,7 @@ func TestHTTPProvider_Execute_AuthProvider_401Retry(t *testing.T) {
 
 	registry := auth.NewRegistry()
 	require.NoError(t, registry.Register(mockHandler))
-	ctx := auth.WithRegistry(context.Background(), registry)
+	ctx := auth.WithRegistry(testContext(t), registry)
 
 	p := NewHTTPProvider()
 	inputs := map[string]any{
@@ -989,7 +999,7 @@ func TestHTTPProvider_Execute_AuthProvider_401RetryOnlyOnce(t *testing.T) {
 
 	registry := auth.NewRegistry()
 	require.NoError(t, registry.Register(mockHandler))
-	ctx := auth.WithRegistry(context.Background(), registry)
+	ctx := auth.WithRegistry(testContext(t), registry)
 
 	p := NewHTTPProvider()
 	inputs := map[string]any{
@@ -1019,7 +1029,7 @@ func TestHTTPProvider_Execute_FloatTimeout(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	// Timeout as float64 (from JSON/YAML unmarshaling)
 	inputs := map[string]any{
@@ -1052,7 +1062,7 @@ func TestHTTPProvider_Execute_HeadersCopy(t *testing.T) {
 	})
 	registry := auth.NewRegistry()
 	require.NoError(t, registry.Register(mockHandler))
-	ctx := auth.WithRegistry(context.Background(), registry)
+	ctx := auth.WithRegistry(testContext(t), registry)
 
 	// Original headers
 	originalHeaders := map[string]any{
@@ -1084,7 +1094,7 @@ func TestHTTPProvider_Execute_AutoParseJson(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	t.Run("enabled", func(t *testing.T) {
 		inputs := map[string]any{

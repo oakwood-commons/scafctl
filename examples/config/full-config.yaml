@@ -38,6 +38,13 @@ settings:
   # Default: false
   quiet: false
 
+  # Require OS keyring for secret storage. When true, scafctl will fail
+  # instead of falling back to insecure file-based or env-var-based master
+  # key storage. Enable this in production or shared CI/CD environments.
+  # Can also be set via SCAFCTL_REQUIRE_SECURE_KEYRING=true env var.
+  # Default: false
+  requireSecureKeyring: false
+
 # =============================================================================
 # Logging - Control log output format and verbosity
 # =============================================================================
@@ -159,6 +166,21 @@ httpClient:
   # Enable automatic gzip compression for requests
   # Default: true
   enableCompression: true
+
+  # --- Security ---
+
+  # Allow HTTP requests to private, loopback, and link-local IP addresses.
+  # Blocked by default to prevent SSRF attacks against cloud metadata endpoints
+  # (e.g. 169.254.169.254) and internal services.
+  # Set to true only when accessing on-premises endpoints or local dev servers.
+  # Default: false
+  # allowPrivateIPs: false
+
+  # Maximum size in bytes the HTTP provider will read from a single response
+  # body. Prevents denial-of-service via unbounded responses from malicious
+  # or misconfigured servers. Values <= 0 are ignored and the default is used.
+  # Default: 104857600 (100 MB)
+  maxResponseBodySize: 104857600
 
 # =============================================================================
 # CEL - Common Expression Language engine configuration

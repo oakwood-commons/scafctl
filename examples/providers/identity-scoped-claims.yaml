@@ -1,5 +1,30 @@
-# Identity provider - get claims from a scoped access token
+# Identity Provider — Get Claims from a Scoped Access Token
+#
 # Mints (or retrieves from cache) an access token for the given scope,
 # parses its JWT payload, and returns the claims.
-operation: claims
-scope: api://my-app/.default
+#
+# Prerequisites:
+#   scafctl auth login entra
+#
+# Run: scafctl run solution -f examples/providers/identity-scoped-claims.yaml
+# Run: scafctl run resolver -f examples/providers/identity-scoped-claims.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: identity-scoped-claims-example
+  version: 1.0.0
+  description: Get claims from a scoped access token JWT
+
+spec:
+  resolvers:
+    scoped-claims:
+      description: Claims parsed from a scoped access token
+      type: any
+      resolve:
+        with:
+          - provider: identity
+            inputs:
+              operation: claims
+              scope: api://my-app/.default

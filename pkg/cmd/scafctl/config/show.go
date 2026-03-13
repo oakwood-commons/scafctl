@@ -160,6 +160,24 @@ type envOverride struct {
 	value string
 }
 
+// sensitiveEnvKeywords is the list of substrings that mark an env var as sensitive.
+// Keys containing any of these words (case-insensitive) have their value redacted.
+var sensitiveEnvKeywords = []string{ //nolint:gochecknoglobals
+	"secret", "password", "token", "credential", "apikey", "api_key", "private_key", "privatekey",
+}
+
+// redactEnvValue returns "***REDACTED***" if the key contains a sensitive keyword,
+// otherwise it returns the original value unchanged.
+func redactEnvValue(key, value string) string {
+	lower := strings.ToLower(key)
+	for _, kw := range sensitiveEnvKeywords {
+		if strings.Contains(lower, kw) {
+			return appconfig.RedactedValue
+		}
+	}
+	return value
+}
+
 // findEnvOverrides finds SCAFCTL_ environment variables.
 func (o *ShowOptions) findEnvOverrides() []envOverride {
 	var overrides []envOverride
@@ -172,7 +190,7 @@ func (o *ShowOptions) findEnvOverrides() []envOverride {
 		}
 		key, value := parts[0], parts[1]
 		if strings.HasPrefix(key, prefix) {
-			overrides = append(overrides, envOverride{key: key, value: value})
+			overrides = append(overrides, envOverride{key: key, value: redactEnvValue(key, value)})
 		}
 	}
 

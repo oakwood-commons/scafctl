@@ -1,0 +1,106 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-directory-security
+  version: 1.0.0
+  description: |
+    Security tests for the directory provider.
+    Validates recursion depth limits and symlink skipping.
+
+spec:
+  resolvers:
+    # List with valid maxDepth at the upper bound
+    maxBoundDepth:
+      description: List with maxDepth at the allowed maximum (50)
+      resolve:
+        with:
+          - provider: directory
+            inputs:
+              operation: list
+              path: .
+              recursive: true
+              maxDepth: 50
+
+    # List with a typical restricted depth
+    validDepth:
+      description: List with restricted maxDepth
+      resolve:
+        with:
+          - provider: directory
+            inputs:
+              operation: list
+              path: .
+              recursive: true
+              maxDepth: 3
+
+    # List directory containing a symlink — symlinks should be skipped
+    symlinkDir:
+      description: List directory that contains a symlink
+      resolve:
+        with:
+          - provider: directory
+            inputs:
+              operation: list
+              path: ./symlink-test-dir
+              recursive: true
+
+  testing:
+    config:
+      # resolve-defaults: resolvers depend on test setup
+      # render-defaults: solution has no workflow.actions section
+      skipBuiltins: [resolve-defaults, render-defaults]
+
+    cases:
+      _base:
+        description: Base template for directory security tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [provider, directory, security]
+
+      max-depth-boundary:
+        description: Verify maxDepth at 50 (upper bound) succeeds
+        extends: [_base]
+        args: ["maxBoundDepth", "-o", "json"]
+        init:
+          - command: "mkdir -p d1/d2 && touch d1/d2/deep.txt"
+        cleanup:
+          - command: "rm -rf d1"
+        assertions:
+          - expression: __exitCode == 0
+            message: "maxDepth of 50 should succeed"
+
+      depth-limits-traversal:
+        description: Verify maxDepth restricts how deep listing goes
+        extends: [_base]
+        args: ["validDepth", "-o", "json"]
+        init:
+          - command: "mkdir -p d1/d2/d3/d4/d5 && touch d1/d2/d3/ok.txt && touch d1/d2/d3/d4/d5/too-deep.txt"
+        cleanup:
+          - command: "rm -rf d1"
+        assertions:
+          - expression: __exitCode == 0
+            message: "maxDepth of 3 should succeed"
+          - expression: __output.validDepth.entries.exists(e, e.name == "ok.txt")
+            message: "Files within maxDepth should be listed"
+          - expression: "!__output.validDepth.entries.exists(e, e.name == \"too-deep.txt\")"
+            message: "Files beyond maxDepth should not be listed"
+
+      symlinks-skipped:
+        description: Verify symlinks are silently skipped during listing
+        extends: [_base]
+        args: ["symlinkDir", "-o", "json"]
+        init:
+          - command: |
+              mkdir -p symlink-test-dir
+              echo "real" > symlink-test-dir/real-file.txt
+              ln -sf /tmp symlink-test-dir/escape-link
+        cleanup:
+          - command: "rm -rf symlink-test-dir"
+        assertions:
+          - expression: __exitCode == 0
+            message: "Listing directory with symlinks should succeed"
+          - expression: __output.symlinkDir.entries.exists(e, e.name == "real-file.txt")
+            message: "Real files should be listed"
+          - expression: "!__output.symlinkDir.entries.exists(e, e.name == \"escape-link\")"
+            message: "Symlinks should be skipped"

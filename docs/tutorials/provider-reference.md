@@ -239,6 +239,14 @@ inputs:
   destination: ./config-backup
 ```
 
+### Security
+
+The directory provider enforces several security measures:
+
+- **Recursion depth limit**: The `maxDepth` input is clamped to 1–50 (default: 10). This prevents unbounded filesystem traversal that could cause resource exhaustion.
+- **Symlink skipping**: Symbolic links are silently skipped during listing to prevent symlink escape attacks where a symlink points outside the intended directory tree.
+- **File size limit**: When `includeContent` is enabled, `maxFileSize` (default: 1 MB) caps the content read per file to prevent memory exhaustion from large files.
+
 ---
 
 ## env
@@ -286,6 +294,13 @@ resolve:
         operation: list
         prefix: "APP_"
 ```
+
+### Security
+
+The env provider enforces several security measures:
+
+- **Mandatory prefix for list**: The `list` operation **requires** a non-empty `prefix` input. Listing all environment variables without a scope would expose process secrets such as tokens, API keys, and database credentials.
+- **No credential-bearing variables in output**: By forcing a prefix scope, the provider prevents accidental enumeration of variables like `AWS_SECRET_ACCESS_KEY`, `DATABASE_URL`, or `GITHUB_TOKEN` that happen to exist in the process environment.
 
 ---
 
@@ -371,6 +386,28 @@ inputs:
   shell: bash
 ```
 
+### Security
+
+The exec provider enforces several security measures:
+
+- **Lint rule for command injection**: The `exec-command-injection` lint rule emits a warning when the `command` input uses a dynamic expression (`expr`) or template (`tmpl`). Shell metacharacters in resolved values can escape the intended command and execute arbitrary code.
+- **Shell-quoted arguments**: The `args` input automatically shell-quotes each argument before appending it to the command. Always pass dynamic/user-controlled data via `args` instead of interpolating it into the `command` string.
+
+```yaml
+# BAD — dynamic value in command string risks injection
+provider: exec
+inputs:
+  command:
+    expr: "'echo ' + _.userInput"
+
+# GOOD — static command, dynamic value via args (shell-quoted)
+provider: exec
+inputs:
+  command: echo
+  args:
+    - expr: "_.userInput"
+```
+
 ---
 
 ## file
@@ -447,6 +484,13 @@ inputs:
     {{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}
 ```
 
+### Security
+
+The file provider enforces several security measures:
+
+- **Path traversal protection**: The `write-tree` operation validates that every output file resolves to a path **inside** the declared `basePath`. Entries containing `..` segments that escape the base directory are rejected with an error.
+- **outputPath traversal protection**: When `outputPath` is specified, the final templated path is also validated to remain within `basePath`. This prevents a crafted Go template from writing files outside the intended output directory.
+
 ---
 
 ## git
@@ -499,6 +543,15 @@ inputs:
   operation: push
   path: ./repo
 ```
+
+### Security
+
+The git provider enforces several security measures:
+
+- **Credential isolation**: Authentication credentials are passed via a temporary `.netrc` file with `0600` permissions instead of being embedded in command-line arguments. This prevents credentials from being exposed via `ps`, `/proc`, or audit logs.
+- **Netrc injection prevention**: Username and password inputs are validated to reject whitespace and control characters (`<= 0x20` or `0x7f`). The netrc format is whitespace-delimited, so embedded spaces, tabs, or newlines could inject additional machine entries.
+- **Automatic cleanup**: The temporary credential directory is automatically removed after the git operation completes.
+- **Terminal prompt disabled**: `GIT_TERMINAL_PROMPT=0` is set to prevent git from hanging on interactive credential prompts in automated environments.
 
 ---
 
@@ -1203,6 +1256,23 @@ inputs:
     nextURL: "has(body.links) && has(body.links.next) ? body.links.next : ''"
     collectPath: "body.results"
     stopWhen: "!has(body.links) || !has(body.links.next)"
+```
+
+### Security
+
+The HTTP provider enforces several security measures:
+
+- **SSRF protection**: Requests to private, loopback, and link-local IP addresses (e.g., `169.254.169.254`) are blocked by default. Set `httpClient.allowPrivateIPs: true` in config to allow private network access for on-premises endpoints.
+- **Response body size limit**: Each response is limited to `httpClient.maxResponseBodySize` (default: 100 MB). This prevents denial-of-service via unbounded responses from malicious or misconfigured servers. Applies to both direct requests and each page in paginated requests.
+- **Redirect validation**: Each redirect target is checked against the SSRF private IP blocklist. A maximum of 10 redirects is enforced.
+- **Pagination host validation**: Pagination next URLs must stay on the same hostname as the original request to prevent open redirect attacks.
+- **Token security**: Authentication tokens are injected via the `Authorization` header and are never logged. Token refresh on 401 responses is handled transparently.
+
+```yaml
+# Override the default response body size limit (e.g. for large API responses)
+# In config.yaml:
+httpClient:
+  maxResponseBodySize: 209715200  # 200 MB
 ```
 
 ---

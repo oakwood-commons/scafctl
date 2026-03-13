@@ -1,16 +1,32 @@
-# GitHub provider examples — read & write via GraphQL + REST (releases).
-# Requires GitHub authentication: scafctl auth login github
+# GitHub Provider — Repository Information
 #
-# Run: scafctl run provider -f examples/providers/github-provider.yaml
+# Demonstrates the GitHub provider for reading repository data via GraphQL.
+# Supports operations: get_repo, list_branches, list_tags, list_releases,
+# and write operations (issues, PRs, commits, branches, tags, releases).
 #
-# Read operations use the GitHub GraphQL API.
-# Write operations (issues, PRs, commits, branches, tags) use GraphQL mutations.
-# Release write operations use the GitHub REST API.
-# Commits are automatically GPG-signed via createCommitOnBranch.
+# Prerequisites:
+#   scafctl auth login github
+#
+# Run: scafctl run solution -f examples/providers/github-provider.yaml
+# Run: scafctl run resolver -f examples/providers/github-provider.yaml
 
-# ─── Read operations ─────────────────────────────────────────────────────────
+apiVersion: scafctl.io/v1
+kind: Solution
 
-# Get repository info
-operation: get_repo
-owner: cli
-repo: cli
+metadata:
+  name: github-provider-example
+  version: 1.0.0
+  description: GitHub provider — read repository info via GraphQL
+
+spec:
+  resolvers:
+    repo-info:
+      description: Repository information from GitHub GraphQL API
+      type: any
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: get_repo
+              owner: cli
+              repo: cli

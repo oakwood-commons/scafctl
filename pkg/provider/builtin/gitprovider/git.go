@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
@@ -274,15 +275,24 @@ func (p *GitProvider) executeClone(ctx context.Context, inputs map[string]any) (
 	}
 
 	repoURL := repository
+	var credCleanup func()
+	var credEnv []string
 	if username, ok := inputs[fieldUsername].(string); ok && username != "" {
 		if password, ok := inputs[fieldPassword].(string); ok && password != "" {
-			repoURL = injectCredentials(repository, username, password)
+			var err error
+			credEnv, credCleanup, err = createNetrcCredentials(repository, username, password)
+			if err != nil {
+				return nil, fmt.Errorf("setting up git credentials: %w", err)
+			}
 		}
+	}
+	if credCleanup != nil {
+		defer credCleanup()
 	}
 
 	args = append(args, repoURL, path)
 
-	return p.runGitCommand(ctx, "", args, "clone")
+	return p.runGitCommand(ctx, "", args, "clone", credEnv)
 }
 
 func (p *GitProvider) executePull(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
@@ -302,7 +312,7 @@ func (p *GitProvider) executePull(ctx context.Context, inputs map[string]any) (*
 		args = append(args, branch)
 	}
 
-	return p.runGitCommand(ctx, path, args, "pull")
+	return p.runGitCommand(ctx, path, args, "pull", nil)
 }
 
 func (p *GitProvider) executeStatus(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
@@ -313,7 +323,7 @@ func (p *GitProvider) executeStatus(ctx context.Context, inputs map[string]any) 
 
 	args := []string{"status", "--porcelain"}
 
-	return p.runGitCommand(ctx, path, args, "status")
+	return p.runGitCommand(ctx, path, args, "status", nil)
 }
 
 func (p *GitProvider) executeAdd(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
@@ -340,7 +350,7 @@ func (p *GitProvider) executeAdd(ctx context.Context, inputs map[string]any) (*p
 		return nil, fmt.Errorf("files must be an array")
 	}
 
-	return p.runGitCommand(ctx, path, args, "add")
+	return p.runGitCommand(ctx, path, args, "add", nil)
 }
 
 func (p *GitProvider) executeCommit(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
@@ -356,7 +366,7 @@ func (p *GitProvider) executeCommit(ctx context.Context, inputs map[string]any) 
 
 	args := []string{"commit", "-m", message}
 
-	return p.runGitCommand(ctx, path, args, "commit")
+	return p.runGitCommand(ctx, path, args, "commit", nil)
 }
 
 func (p *GitProvider) executePush(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
@@ -380,7 +390,7 @@ func (p *GitProvider) executePush(ctx context.Context, inputs map[string]any) (*
 		args = append(args, "--force")
 	}
 
-	return p.runGitCommand(ctx, path, args, "push")
+	return p.runGitCommand(ctx, path, args, "push", nil)
 }
 
 func (p *GitProvider) executeCheckout(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
@@ -396,7 +406,7 @@ func (p *GitProvider) executeCheckout(ctx context.Context, inputs map[string]any
 
 	args := []string{"checkout", branch}
 
-	return p.runGitCommand(ctx, path, args, "checkout")
+	return p.runGitCommand(ctx, path, args, "checkout", nil)
 }
 
 func (p *GitProvider) executeBranch(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
@@ -413,7 +423,7 @@ func (p *GitProvider) executeBranch(ctx context.Context, inputs map[string]any) 
 		args = append(args, "-a")
 	}
 
-	return p.runGitCommand(ctx, path, args, "branch")
+	return p.runGitCommand(ctx, path, args, "branch", nil)
 }
 
 func (p *GitProvider) executeLog(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
@@ -424,7 +434,7 @@ func (p *GitProvider) executeLog(ctx context.Context, inputs map[string]any) (*p
 
 	args := []string{"log", "--oneline", "-n", "10"}
 
-	return p.runGitCommand(ctx, path, args, "log")
+	return p.runGitCommand(ctx, path, args, "log", nil)
 }
 
 func (p *GitProvider) executeTag(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
@@ -435,7 +445,7 @@ func (p *GitProvider) executeTag(ctx context.Context, inputs map[string]any) (*p
 
 	tag, ok := inputs[fieldTag].(string)
 	if !ok || tag == "" {
-		return p.runGitCommand(ctx, path, []string{"tag"}, "tag")
+		return p.runGitCommand(ctx, path, []string{"tag"}, "tag", nil)
 	}
 
 	args := []string{"tag", tag}
@@ -444,10 +454,10 @@ func (p *GitProvider) executeTag(ctx context.Context, inputs map[string]any) (*p
 		args = append(args, "-m", message)
 	}
 
-	return p.runGitCommand(ctx, path, args, "tag")
+	return p.runGitCommand(ctx, path, args, "tag", nil)
 }
 
-func (p *GitProvider) runGitCommand(ctx context.Context, workDir string, args []string, operation string) (*provider.Output, error) {
+func (p *GitProvider) runGitCommand(ctx context.Context, workDir string, args []string, operation string, extraEnv []string) (*provider.Output, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 
 	if workDir != "" {
@@ -457,6 +467,10 @@ func (p *GitProvider) runGitCommand(ctx context.Context, workDir string, args []
 			}
 		}
 		cmd.Dir = workDir
+	}
+
+	if len(extraEnv) > 0 {
+		cmd.Env = extraEnv
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -526,16 +540,108 @@ func (p *GitProvider) executeDryRun(operation string, inputs map[string]any) (*p
 	}, nil
 }
 
-func injectCredentials(repoURL, username, password string) string {
-	u, err := url.Parse(repoURL)
-	if err != nil {
-		// Non-standard URLs (e.g. SSH git@host:path) cannot be parsed; return unchanged.
-		return repoURL
+// createNetrcCredentials creates a temporary .netrc file for HTTPS git authentication
+// and returns a merged environment (based on os.Environ()) that sets HOME to the temp
+// directory. Using a .netrc file avoids embedding credentials in process arguments
+// where they would be visible via ps, /proc, or audit logs.
+//
+// The caller MUST invoke the returned cleanup function to remove the temp directory.
+func createNetrcCredentials(repoURL, username, password string) (env []string, cleanup func(), err error) {
+	if !strings.HasPrefix(repoURL, "http://") && !strings.HasPrefix(repoURL, "https://") {
+		// Non-HTTP(S) scheme (e.g. SSH) — credentials not applicable via netrc.
+		return nil, func() {}, nil
 	}
-	// Only inject credentials for HTTP(S) URLs; leave SSH and other schemes unchanged.
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return repoURL
+
+	u, parseErr := url.Parse(repoURL)
+	if parseErr != nil {
+		return nil, nil, fmt.Errorf("parsing repository URL: %w", parseErr)
 	}
-	u.User = url.UserPassword(username, password)
-	return u.String()
+
+	host := u.Hostname()
+	if host == "" {
+		return nil, nil, fmt.Errorf("repository URL has no hostname")
+	}
+
+	// Validate that username and password do not contain whitespace or control characters.
+	// The netrc format is whitespace-delimited, so embedded spaces/tabs/newlines
+	// would corrupt the file and could inject additional machine entries.
+	for _, field := range []struct{ name, val string }{{"username", username}, {"password", password}} {
+		for _, r := range field.val {
+			if r <= 0x20 || r == 0x7f {
+				return nil, nil, fmt.Errorf("%s contains whitespace or control characters, which are not allowed in netrc credentials", field.name)
+			}
+		}
+	}
+
+	tmpDir, mkErr := os.MkdirTemp("", ".scafctl-git-creds-*")
+	if mkErr != nil {
+		return nil, nil, fmt.Errorf("creating credential temp dir: %w", mkErr)
+	}
+
+	cleanupFn := func() { os.RemoveAll(tmpDir) } //nolint:errcheck
+
+	// Write .netrc (Unix) and _netrc (Windows / Git for Windows).
+	// The file names are hardcoded literals — no path traversal is possible.
+	netrcContent := fmt.Sprintf("machine %s\nlogin %s\npassword %s\n", host, username, password)
+	for _, name := range []string{".netrc", "_netrc"} {
+		netrcPath := filepath.Join(tmpDir, name) //nolint:gosec // name is a hardcoded literal
+		if writeErr := os.WriteFile(netrcPath, []byte(netrcContent), 0o600); writeErr != nil {
+			cleanupFn()
+			return nil, nil, fmt.Errorf("writing credential file: %w", writeErr)
+		}
+	}
+
+	// Build env: start from the current process environment, override HOME / USERPROFILE
+	// so git picks up the .netrc, and preserve the real global git config.
+	overrides := map[string]string{
+		"HOME":                tmpDir,
+		"USERPROFILE":         tmpDir,
+		"GIT_TERMINAL_PROMPT": "0",
+	}
+	if homeDir, hdErr := os.UserHomeDir(); hdErr == nil {
+		globalConfig := filepath.Join(homeDir, ".gitconfig")
+		if _, statErr := os.Stat(globalConfig); statErr == nil {
+			overrides["GIT_CONFIG_GLOBAL"] = globalConfig
+		} else {
+			// Fallback: check XDG-style git config location used when ~/.gitconfig is absent.
+			xdgConfigHome := os.Getenv("XDG_CONFIG_HOME")
+			if xdgConfigHome == "" {
+				xdgConfigHome = filepath.Join(homeDir, ".config")
+			}
+			xdgGitConfig := filepath.Clean(filepath.Join(xdgConfigHome, "git", "config"))
+			if _, xdgErr := os.Stat(xdgGitConfig); xdgErr == nil { //nolint:gosec // xdgConfigHome is from the user's own environment
+				overrides["GIT_CONFIG_GLOBAL"] = xdgGitConfig
+			}
+		}
+	}
+
+	mergedEnv := applyEnvOverrides(os.Environ(), overrides)
+	return mergedEnv, cleanupFn, nil
+}
+
+// applyEnvOverrides returns a copy of base with the specified key=value pairs
+// overriding any existing entries for those keys. Key comparison is
+// case-insensitive so that Windows env vars (which are case-insensitive) are
+// matched correctly.
+func applyEnvOverrides(base []string, overrides map[string]string) []string {
+	// Build an upper-cased lookup so key comparison is case-insensitive.
+	upperOverrides := make(map[string]struct{}, len(overrides))
+	for k := range overrides {
+		upperOverrides[strings.ToUpper(k)] = struct{}{}
+	}
+
+	result := make([]string, 0, len(base)+len(overrides))
+	for _, e := range base {
+		key := e
+		if idx := strings.Index(e, "="); idx >= 0 {
+			key = e[:idx]
+		}
+		if _, overridden := upperOverrides[strings.ToUpper(key)]; !overridden {
+			result = append(result, e)
+		}
+	}
+	for k, v := range overrides {
+		result = append(result, k+"="+v)
+	}
+	return result
 }

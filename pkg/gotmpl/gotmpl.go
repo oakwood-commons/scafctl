@@ -22,6 +22,20 @@ var (
 	extensionFuncMapFactory func() template.FuncMap
 	extensionFuncMapOnce    sync.Once
 	extensionFuncMapMu      sync.RWMutex
+
+	// allowEnvFunctions controls whether sprig's env/expandenv functions are included
+	// in the extension func map. Defaults to false (deny) for security.
+	// Call SetAllowEnvFunctions after loading config to change this.
+	allowEnvFunctionsMu   sync.RWMutex
+	allowEnvFunctionsFlag bool // false by default
+
+	// contextFuncBinderFactory is an optional factory that returns context-aware
+	// template.FuncMap entries (e.g. a context-bound cel function). Set via
+	// SetContextFuncBinderFactory during application initialization. The returned
+	// FuncMap is applied to each template clone right before execution so that
+	// parent timeouts and cancellation are respected.
+	contextFuncBinderFactory func(ctx context.Context) template.FuncMap
+	contextFuncBinderMu      sync.RWMutex
 )
 
 const (
@@ -135,15 +149,58 @@ func SetExtensionFuncMapFactory(factory func() template.FuncMap) {
 	})
 }
 
+// SetAllowEnvFunctions controls whether the sprig 'env' and 'expandenv' Go template
+// functions are available. Call this once after loading application config.
+// Defaults to false (deny) — env functions are stripped unless explicitly enabled.
+func SetAllowEnvFunctions(allow bool) {
+	allowEnvFunctionsMu.Lock()
+	allowEnvFunctionsFlag = allow
+	allowEnvFunctionsMu.Unlock()
+}
+
+// SetContextFuncBinderFactory registers a factory that produces context-aware
+// template.FuncMap entries. It is called once per template execution with the
+// current context so that functions like `cel` can respect cancellation and
+// timeouts. Call this during application initialization to avoid import cycles.
+func SetContextFuncBinderFactory(factory func(ctx context.Context) template.FuncMap) {
+	contextFuncBinderMu.Lock()
+	contextFuncBinderFactory = factory
+	contextFuncBinderMu.Unlock()
+}
+
+// getContextFuncBinder returns context-bound function overrides, or nil.
+func getContextFuncBinder(ctx context.Context) template.FuncMap {
+	contextFuncBinderMu.RLock()
+	factory := contextFuncBinderFactory
+	contextFuncBinderMu.RUnlock()
+	if factory == nil {
+		return nil
+	}
+	return factory(ctx)
+}
+
 // getExtensionFuncMap returns the extension function map from the factory.
-// Returns an empty FuncMap if no factory has been set.
+// When allowEnvFunctions is false (the default), the sprig 'env' and 'expandenv'
+// functions are removed to prevent templates from exfiltrating process secrets.
 func getExtensionFuncMap() template.FuncMap {
 	extensionFuncMapMu.RLock()
-	defer extensionFuncMapMu.RUnlock()
+	var fm template.FuncMap
 	if extensionFuncMapFactory != nil {
-		return extensionFuncMapFactory()
+		fm = extensionFuncMapFactory()
+	} else {
+		fm = make(template.FuncMap)
 	}
-	return make(template.FuncMap)
+	extensionFuncMapMu.RUnlock()
+
+	allowEnvFunctionsMu.RLock()
+	allow := allowEnvFunctionsFlag
+	allowEnvFunctionsMu.RUnlock()
+
+	if !allow {
+		delete(fm, "env")
+		delete(fm, "expandenv")
+	}
+	return fm
 }
 
 // NewService creates a new template service with all registered extension
@@ -463,6 +520,19 @@ func (s *Service) executeTemplate(ctx context.Context, tmpl *template.Template, 
 	lgr.V(2).Info("executing template with data",
 		"name", opts.Name,
 		"dataProvided", opts.Data != nil)
+
+	// Rebind context-aware functions (e.g. cel) on a clone of the cached
+	// template so that the current request's timeouts and cancellation are
+	// respected without mutating the shared cached instance (which would
+	// introduce a data race under concurrent execution).
+	if ctxFuncs := getContextFuncBinder(ctx); len(ctxFuncs) > 0 {
+		var cloneErr error
+		tmpl, cloneErr = tmpl.Clone()
+		if cloneErr != nil {
+			return "", fmt.Errorf("cloning template for context-aware funcs: %w", cloneErr)
+		}
+		tmpl = tmpl.Funcs(ctxFuncs)
+	}
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, opts.Data); err != nil {

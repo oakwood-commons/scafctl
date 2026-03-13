@@ -42,7 +42,7 @@ func CommandDelete(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *co
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
-			store, err := secrets.New()
+			store, err := newStoreFromContext(ctx)
 			if err != nil {
 				err := fmt.Errorf("failed to initialize secrets store: %w", err)
 				w.Errorf("%v", err)

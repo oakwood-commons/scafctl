@@ -1,9 +1,57 @@
-# Metadata provider — use CEL to extract a single field
+# Metadata Provider — Extract Single Fields with CEL
 #
 # The metadata provider always returns the full runtime metadata map.
-# To reference a single field, use CEL expressions in downstream resolvers.
+# Use CEL expressions in downstream resolvers to extract individual fields.
 #
-# Example CEL expression after resolving metadata:
-#   _.runtime-meta.solution.name    → solution name
-#   _.runtime-meta.version.buildVersion  → scafctl version
-#   _.runtime-meta.entrypoint       → "cli" or "api"
+# Run: scafctl run solution -f examples/providers/metadata-single-field.yaml
+# Run: scafctl run resolver -f examples/providers/metadata-single-field.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: metadata-single-field-example
+  version: 1.0.0
+  description: Extract individual fields from runtime metadata using CEL
+
+spec:
+  resolvers:
+    runtime_meta:
+      description: Full runtime metadata
+      type: any
+      resolve:
+        with:
+          - provider: metadata
+
+    solution_name:
+      description: Name of the currently-running solution
+      type: string
+      dependsOn:
+        - runtime_meta
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.runtime_meta.solution.name"
+
+    scafctl_version:
+      description: scafctl build version
+      type: string
+      dependsOn:
+        - runtime_meta
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.runtime_meta.version.buildVersion"
+
+    entrypoint:
+      description: Whether running as CLI or API
+      type: string
+      dependsOn:
+        - runtime_meta
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.runtime_meta.entrypoint"

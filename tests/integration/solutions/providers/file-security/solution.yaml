@@ -1,0 +1,76 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-file-security
+  version: 1.0.0
+  description: |
+    Security tests for the file provider.
+    Validates path traversal protection in write-tree operations.
+
+spec:
+  resolvers:
+    # Entries with a path traversal attempt via ".."
+    traversalEntries:
+      description: Static entries with path traversal
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - path: "../../etc/evil.txt"
+                  content: "should-not-be-written"
+
+    # Normal entries for baseline
+    safeEntries:
+      description: Normal safe entries
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - path: "safe.txt"
+                  content: "this-is-safe"
+
+  workflow:
+    actions:
+      write-traversal:
+        description: Attempt write-tree with path traversal — should fail
+        provider: file
+        inputs:
+          operation: write-tree
+          basePath: ./write-tree-sec-output
+          entries:
+            rslvr: traversalEntries
+
+      write-safe:
+        description: Write-tree with safe paths — should succeed
+        dependsOn: [write-traversal]
+        provider: file
+        inputs:
+          operation: write-tree
+          basePath: ./write-tree-sec-safe
+          entries:
+            rslvr: safeEntries
+
+  testing:
+    config:
+      skipBuiltins: [render-defaults]
+
+    cases:
+      _base:
+        description: Base template for file security tests
+        command: [run, solution]
+        args: ["-o", "json"]
+        tags: [provider, file, security]
+        cleanup:
+          - command: "rm -rf write-tree-sec-output write-tree-sec-safe"
+
+      path-traversal-blocked:
+        description: Verify write-tree blocks path traversal via ".."
+        extends: [_base]
+        assertions:
+          - expression: __exitCode != 0
+            message: "Write-tree with path traversal should fail"
+          - expression: __stderr.contains("traversal") || __stderr.contains("outside")
+            message: "Error should mention path traversal or escaping basePath"

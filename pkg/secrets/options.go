@@ -4,22 +4,27 @@
 package secrets
 
 import (
+	"os"
+	"strings"
+
 	"github.com/go-logr/logr"
 )
 
 // config holds the configuration for the secrets Store.
 type config struct {
-	secretsDir string
-	keyring    Keyring
-	logger     logr.Logger
+	secretsDir           string
+	keyring              Keyring
+	logger               logr.Logger
+	requireSecureKeyring bool
 }
 
 // defaultConfig returns a config with default values.
 func defaultConfig() *config {
 	return &config{
-		secretsDir: "", // Will be determined by platform if empty
-		keyring:    nil,
-		logger:     logr.Discard(),
+		secretsDir:           "", // Will be determined by platform if empty
+		keyring:              nil,
+		logger:               logr.Discard(),
+		requireSecureKeyring: strings.EqualFold(os.Getenv("SCAFCTL_REQUIRE_SECURE_KEYRING"), "true"),
 	}
 }
 
@@ -53,6 +58,16 @@ func WithKeyring(kr Keyring) Option {
 func WithLogger(logger logr.Logger) Option {
 	return func(c *config) {
 		c.logger = logger
+	}
+}
+
+// WithRequireSecureKeyring makes store initialization fail if the OS keyring
+// is unavailable and scafctl would have to fall back to an insecure file-based
+// or environment-variable-based master key. Enable this in production or shared
+// environments to prevent silent degradation of secret protection.
+func WithRequireSecureKeyring(require bool) Option {
+	return func(c *config) {
+		c.requireSecureKeyring = require
 	}
 }
 

@@ -510,8 +510,8 @@ func (h *Handler) ListCachedTokens(ctx context.Context) ([]*auth.CachedTokenInfo
 	if h.tokenCache != nil {
 		hasAccess, _ := h.secretStore.Exists(ctx, SecretKeyAccessToken)
 		if hasAccess {
-			_, cacheErr := h.tokenCache.Get(ctx, auth.FlowDeviceCode, auth.FingerprintHash(h.config.Hostname), defaultCacheKey)
-			if cacheErr != nil {
+			cached, cacheErr := h.tokenCache.Get(ctx, auth.FlowDeviceCode, auth.FingerprintHash(h.config.Hostname), defaultCacheKey)
+			if cacheErr != nil || cached == nil {
 				info := &auth.CachedTokenInfo{
 					Handler:   HandlerName,
 					TokenKind: "access",

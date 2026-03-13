@@ -49,6 +49,13 @@ type Settings struct {
 	NoColor        bool                `json:"noColor,omitempty" yaml:"noColor,omitempty" mapstructure:"noColor" doc:"Disable colored output"`
 	Quiet          bool                `json:"quiet,omitempty" yaml:"quiet,omitempty" mapstructure:"quiet" doc:"Suppress non-essential output"`
 	VersionCheck   *VersionCheckConfig `json:"versionCheck,omitempty" yaml:"versionCheck,omitempty" mapstructure:"versionCheck" doc:"Version check configuration"`
+
+	// RequireSecureKeyring when true causes scafctl to fail with an error if the
+	// OS keyring is unavailable and the secret store would fall back to an insecure
+	// file-based or environment-variable-based master key. Enable this in
+	// production or shared environments to prevent silent degradation of secret
+	// protection.
+	RequireSecureKeyring bool `json:"requireSecureKeyring,omitempty" yaml:"requireSecureKeyring,omitempty" mapstructure:"requireSecureKeyring" doc:"Fail if OS keyring is unavailable instead of falling back to insecure storage"`
 }
 
 // VersionCheckConfig holds version check configuration.
@@ -201,6 +208,19 @@ type HTTPClientConfig struct {
 
 	// Compression
 	EnableCompression *bool `json:"enableCompression,omitempty" yaml:"enableCompression,omitempty" mapstructure:"enableCompression" doc:"Enable automatic gzip compression"`
+
+	// AllowPrivateIPs controls whether HTTP requests to private, loopback, and
+	// link-local IP addresses are permitted. Checked against IP literals only
+	// (hostnames are not pre-resolved). When false (default), requests to RFC 1918
+	// ranges (10.x, 172.16.x, 192.168.x), loopback (127.x, ::1), link-local
+	// (169.254.x), and CGNAT (100.64.x) are blocked. Set to true to allow private
+	// network access (e.g., for on-premises endpoints or local development).
+	AllowPrivateIPs *bool `json:"allowPrivateIPs,omitempty" yaml:"allowPrivateIPs,omitempty" mapstructure:"allowPrivateIPs" doc:"Allow HTTP requests to private/loopback/link-local IP literals (default: false). Set true to allow private network access." example:"false"`
+
+	// MaxResponseBodySize is the maximum number of bytes the HTTP provider will
+	// read from a single response body. Prevents denial-of-service via unbounded
+	// responses from malicious or misconfigured servers. Defaults to 100 MB.
+	MaxResponseBodySize int64 `json:"maxResponseBodySize,omitempty" yaml:"maxResponseBodySize,omitempty" mapstructure:"maxResponseBodySize" doc:"Maximum HTTP response body size in bytes (default: 104857600)" maximum:"1073741824" example:"104857600"`
 }
 
 // HTTPClientCacheType constants define the supported HTTP cache types.
@@ -248,6 +268,13 @@ type GoTemplateConfig struct {
 
 	// EnableMetrics enables template metrics collection
 	EnableMetrics *bool `json:"enableMetrics,omitempty" yaml:"enableMetrics,omitempty" mapstructure:"enableMetrics" doc:"Enable template metrics"`
+
+	// AllowEnvFunctions enables the sprig 'env' and 'expandenv' template functions.
+	// When false (the default), these functions are removed from the template
+	// function map to prevent solution files from exfiltrating process secrets
+	// (e.g. GITHUB_TOKEN, AWS_SECRET_ACCESS_KEY) via {{ env "SECRET" }}.
+	// Set to true only if your solutions explicitly require reading env vars.
+	AllowEnvFunctions bool `json:"allowEnvFunctions,omitempty" yaml:"allowEnvFunctions,omitempty" mapstructure:"allowEnvFunctions" doc:"Allow sprig env/expandenv functions in Go templates (default: false). Enable only if solutions require reading env vars."`
 }
 
 // ResolverConfig holds resolver executor configuration.

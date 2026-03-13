@@ -1,16 +1,35 @@
-# Page number pagination
-# Increments a page number query parameter each request
-name: page-number-pagination
-provider: http
-inputs:
-  url: "https://api.example.com/products"
-  method: GET
-  pagination:
-    strategy: pageNumber
-    maxPages: 10
-    pageSize: 25
-    pageParam: "page"
-    pageSizeParam: "per_page"
-    startPage: 1
-    collectPath: "body.products"
-    stopWhen: "size(body.products) == 0"
+# HTTP Provider — Page Number Pagination
+#
+# Demonstrates pagination by incrementing a page number query parameter.
+#
+# Run: scafctl run solution -f examples/providers/http-pagination-page-number.yaml
+# Run: scafctl run resolver -f examples/providers/http-pagination-page-number.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: http-pagination-page-number-example
+  version: 1.0.0
+  description: Page number pagination increments page parameter each request
+
+spec:
+  resolvers:
+    products:
+      description: Products fetched via page number pagination
+      type: any
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: "https://api.example.com/products"
+              method: GET
+              pagination:
+                strategy: pageNumber
+                maxPages: 10
+                pageSize: 25
+                pageParam: "page"
+                pageSizeParam: "per_page"
+                startPage: 1
+                collectPath: "body.products"
+                stopWhen: "size(body.products) == 0"

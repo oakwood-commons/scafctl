@@ -1,0 +1,79 @@
+# Security Hardening Example
+# ==========================
+#
+# This solution demonstrates security features built into scafctl providers.
+# Each resolver illustrates a specific security control.
+#
+# Related documentation:
+#   - docs/tutorials/security-hardening.md
+#   - docs/tutorials/provider-reference.md (Security sections)
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: security-example
+  version: 1.0.0
+  description: Example demonstrating provider security features
+
+spec:
+  resolvers:
+    # -----------------------------------------------------------------------
+    # env provider: prefix-scoped listing prevents secret leakage
+    # -----------------------------------------------------------------------
+    app-config:
+      description: List only app-prefixed environment variables (safe)
+      resolve:
+        with:
+          - provider: env
+            inputs:
+              operation: list
+              prefix: "MY_APP_"
+
+    # -----------------------------------------------------------------------
+    # directory provider: bounded recursion and symlink safety
+    # -----------------------------------------------------------------------
+    project-files:
+      description: List project files with safe recursion limits
+      resolve:
+        with:
+          - provider: directory
+            inputs:
+              operation: list
+              path: .
+              recursive: true
+              maxDepth: 5
+              excludeHidden: true
+              filterGlob: "*.yaml"
+
+    # -----------------------------------------------------------------------
+    # exec provider: static command with shell-quoted dynamic args
+    # -----------------------------------------------------------------------
+    safe-exec:
+      description: Pass dynamic data via args (not in command string)
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "Hello, World!"
+      transform:
+        with:
+          - provider: exec
+            inputs:
+              command: echo
+              args:
+                - expr: "__self"
+
+  workflow:
+    actions:
+      # -----------------------------------------------------------------------
+      # file provider: write-tree with path safety
+      # -----------------------------------------------------------------------
+      write-output:
+        description: Write files — paths are validated to stay under basePath
+        provider: file
+        inputs:
+          operation: write-tree
+          basePath: ./output
+          entries:
+            rslvr: project-files

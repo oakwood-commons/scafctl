@@ -6,6 +6,7 @@ package catalog
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -75,7 +76,11 @@ func NewRemoteCatalog(cfg RemoteCatalogConfig) (*RemoteCatalog, error) {
 	// Set insecure for local development/testing
 	if cfg.Insecure {
 		client.Client = &http.Client{
-			Transport: &http.Transport{},
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true, //nolint:gosec // Opt-in via --insecure flag for local dev/testing only
+				},
+			},
 		}
 	}
 
