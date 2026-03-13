@@ -5,6 +5,7 @@ package hclprovider
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -126,7 +127,7 @@ func TestHCLProvider_Execute_Validate_WithPath(t *testing.T) {
 
 	data := output.Data.(map[string]any)
 	assert.True(t, data["valid"].(bool))
-	assert.Equal(t, "./outputs.tf", output.Metadata["filename"])
+	assert.Equal(t, "outputs.tf", filepath.Base(output.Metadata["filename"].(string)))
 }
 
 func TestHCLProvider_Execute_Validate_DryRun(t *testing.T) {
@@ -154,10 +155,10 @@ func TestHCLProvider_Execute_Validate_MultiFile(t *testing.T) {
 	mockReader := &MockFileReader{
 		ReadFileFunc: func(path string) ([]byte, error) {
 			files := map[string]string{
-				"./valid.tf":   `variable "x" { type = string }`,
-				"./invalid.tf": `this is not valid {{{`,
+				"valid.tf":   `variable "x" { type = string }`,
+				"invalid.tf": `this is not valid {{{`,
 			}
-			return []byte(files[path]), nil
+			return []byte(files[filepath.Base(path)]), nil
 		},
 	}
 	p := NewHCLProvider(WithFileReader(mockReader))
@@ -181,12 +182,12 @@ func TestHCLProvider_Execute_Validate_MultiFile(t *testing.T) {
 	// First file is valid
 	f0 := files[0].(map[string]any)
 	assert.True(t, f0["valid"].(bool))
-	assert.Equal(t, "./valid.tf", f0["filename"])
+	assert.Equal(t, "valid.tf", filepath.Base(f0["filename"].(string)))
 
 	// Second file is invalid
 	f1 := files[1].(map[string]any)
 	assert.False(t, f1["valid"].(bool))
-	assert.Equal(t, "./invalid.tf", f1["filename"])
+	assert.Equal(t, "invalid.tf", filepath.Base(f1["filename"].(string)))
 }
 
 func TestHCLProvider_Execute_Validate_MultiFileDryRun(t *testing.T) {

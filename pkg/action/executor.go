@@ -6,9 +6,11 @@ package action
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -50,6 +52,10 @@ type Executor struct {
 	// ioStreams provides terminal IO for providers that support streaming output.
 	// When set, providers can write output directly to the terminal in real-time.
 	ioStreams *provider.IOStreams
+
+	// cwd is the original working directory captured at executor creation time.
+	// Exposed as __cwd in action expressions for referencing the original CWD.
+	cwd string
 }
 
 // ExecutorOption configures the executor.
@@ -108,12 +114,25 @@ func WithIOStreams(streams *provider.IOStreams) ExecutorOption {
 	}
 }
 
+// WithCwd sets the original working directory for the executor.
+// This is exposed as __cwd in action expressions.
+func WithCwd(cwd string) ExecutorOption {
+	return func(e *Executor) {
+		e.cwd = cwd
+	}
+}
+
 // NewExecutor creates a new action executor with the given options.
+// It captures the current working directory at creation time for use as __cwd
+// in action expressions.
 func NewExecutor(opts ...ExecutorOption) *Executor {
+	cwd, _ := os.Getwd()
+
 	e := &Executor{
 		actionContext:  NewContext(),
 		gracePeriod:    settings.DefaultGracePeriod,
 		defaultTimeout: settings.DefaultActionTimeout,
+		cwd:            cwd,
 	}
 
 	for _, opt := range opts {
@@ -675,7 +694,8 @@ func (e *Executor) buildAdditionalVars(aliasMap map[string]string) map[string]an
 	namespace := e.actionContext.GetNamespace()
 
 	additionalVars := map[string]any{
-		"__actions": namespace,
+		celexp.VarActions: namespace,
+		celexp.VarCwd:     e.cwd,
 	}
 
 	// Add aliases as top-level variables

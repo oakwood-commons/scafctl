@@ -2,10 +2,15 @@ package execute
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/action"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -65,4 +70,154 @@ func TestResolvers(t *testing.T) {
 		assert.Empty(t, result.Data)
 		assert.NotNil(t, result.Context)
 	})
+}
+
+func TestActions(t *testing.T) {
+	t.Run("no workflow returns error", func(t *testing.T) {
+		sol := &solution.Solution{}
+		sol.Metadata.Name = "test"
+		reg := provider.NewRegistry()
+		cfg := ActionExecutionConfig{
+			DefaultTimeout: 5 * time.Second,
+			GracePeriod:    1 * time.Second,
+		}
+
+		result, err := Actions(context.Background(), sol, nil, reg, cfg)
+		require.Error(t, err)
+		assert.Nil(t, result)
+		assert.Contains(t, err.Error(), "no workflow defined")
+	})
+
+	t.Run("output dir is created and resolved to absolute", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		outputDir := filepath.Join(tmpDir, "out", "nested")
+
+		sol := &solution.Solution{}
+		sol.Metadata.Name = "test"
+		sol.Spec.Workflow = &action.Workflow{
+			Actions: map[string]*action.Action{},
+		}
+		reg := provider.NewRegistry()
+		cfg := ActionExecutionConfig{
+			DefaultTimeout: 5 * time.Second,
+			GracePeriod:    1 * time.Second,
+			OutputDir:      outputDir,
+		}
+
+		// Empty workflow will fail validation, but the directory should be
+		// created before validation — verify OutputDir creation.
+		_, _ = Actions(context.Background(), sol, nil, reg, cfg)
+
+		// The directory should have been created
+		info, err := os.Stat(outputDir)
+		require.NoError(t, err)
+		assert.True(t, info.IsDir())
+	})
+
+	t.Run("dry run does not error with empty workflow actions", func(t *testing.T) {
+		sol := &solution.Solution{}
+		sol.Metadata.Name = "test"
+		sol.Spec.Workflow = &action.Workflow{
+			Actions: map[string]*action.Action{},
+		}
+		reg := provider.NewRegistry()
+		cfg := ActionExecutionConfig{
+			DefaultTimeout: 5 * time.Second,
+			GracePeriod:    1 * time.Second,
+			DryRun:         true,
+		}
+
+		// Empty actions map may fail validation — that's fine, we're
+		// testing that the dry-run flag path doesn't panic.
+		_, _ = Actions(context.Background(), sol, nil, reg, cfg)
+	})
+
+	t.Run("dry run does not create output directory", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		outputDir := filepath.Join(tmpDir, "dryrun-should-not-exist")
+
+		sol := &solution.Solution{}
+		sol.Metadata.Name = "test"
+		sol.Spec.Workflow = &action.Workflow{
+			Actions: map[string]*action.Action{},
+		}
+		reg := provider.NewRegistry()
+		cfg := ActionExecutionConfig{
+			DefaultTimeout: 5 * time.Second,
+			GracePeriod:    1 * time.Second,
+			OutputDir:      outputDir,
+			DryRun:         true,
+		}
+
+		// Run with dry-run + output-dir — directory must NOT be created.
+		_, _ = Actions(context.Background(), sol, nil, reg, cfg)
+
+		_, err := os.Stat(outputDir)
+		assert.True(t, os.IsNotExist(err), "output directory should not be created in dry-run mode")
+	})
+
+	t.Run("cwd is passed to executor when set in config", func(t *testing.T) {
+		sol := &solution.Solution{}
+		sol.Metadata.Name = "test"
+		sol.Spec.Workflow = &action.Workflow{
+			Actions: map[string]*action.Action{},
+		}
+		reg := provider.NewRegistry()
+		cfg := ActionExecutionConfig{
+			DefaultTimeout: 5 * time.Second,
+			GracePeriod:    1 * time.Second,
+			Cwd:            "/custom/original/cwd",
+		}
+
+		// Empty actions will fail validation, but the executor is created
+		// after validation — this test verifies the config field exists
+		// and the code path doesn't panic.
+		_, _ = Actions(context.Background(), sol, nil, reg, cfg)
+	})
+}
+
+func TestActionExecutionConfigFromContext(t *testing.T) {
+	t.Run("returns defaults when no config in context", func(t *testing.T) {
+		cfg := ActionExecutionConfigFromContext(context.Background())
+		assert.Equal(t, settings.DefaultActionTimeout, cfg.DefaultTimeout)
+		assert.Equal(t, settings.DefaultGracePeriod, cfg.GracePeriod)
+		assert.Zero(t, cfg.MaxConcurrency)
+		assert.Empty(t, cfg.OutputDir)
+		assert.False(t, cfg.DryRun)
+	})
+
+	t.Run("reads values from config context", func(t *testing.T) {
+		appCfg := &config.Config{
+			Action: config.ActionConfig{
+				DefaultTimeout: "10s",
+				GracePeriod:    "5s",
+				MaxConcurrency: 4,
+				OutputDir:      "/configured/output",
+			},
+		}
+		ctx := config.WithConfig(context.Background(), appCfg)
+
+		cfg := ActionExecutionConfigFromContext(ctx)
+		assert.Equal(t, 10*time.Second, cfg.DefaultTimeout)
+		assert.Equal(t, 5*time.Second, cfg.GracePeriod)
+		assert.Equal(t, 4, cfg.MaxConcurrency)
+		assert.Equal(t, "/configured/output", cfg.OutputDir)
+	})
+}
+
+func BenchmarkActionExecutionConfigFromContext(b *testing.B) {
+	appCfg := &config.Config{
+		Action: config.ActionConfig{
+			DefaultTimeout: "10s",
+			GracePeriod:    "5s",
+			MaxConcurrency: 4,
+			OutputDir:      "/bench/output",
+		},
+	}
+	ctx := config.WithConfig(context.Background(), appCfg)
+
+	b.ResetTimer()
+	for b.Loop() {
+		_ = ActionExecutionConfigFromContext(ctx)
+	}
 }

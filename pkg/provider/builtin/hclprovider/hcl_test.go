@@ -5,6 +5,7 @@ package hclprovider
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -384,7 +385,7 @@ bucket="my-bucket"
 
 	meta := output.Metadata
 	assert.Equal(t, "format", meta["operation"])
-	assert.Equal(t, "./main.tf", meta["filename"])
+	assert.Equal(t, "main.tf", filepath.Base(meta["filename"].(string)))
 }
 
 func TestHCLProvider_Execute_Format_DryRun(t *testing.T) {

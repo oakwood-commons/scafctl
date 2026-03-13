@@ -6,6 +6,7 @@ package action
 import (
 	"context"
 	"errors"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -27,6 +28,9 @@ func TestNewExecutor(t *testing.T) {
 		assert.NotNil(t, executor.actionContext)
 		assert.Equal(t, 30*time.Second, executor.gracePeriod)
 		assert.Equal(t, 5*time.Minute, executor.defaultTimeout)
+
+		cwd, _ := os.Getwd()
+		assert.Equal(t, cwd, executor.cwd)
 	})
 
 	t.Run("with options", func(t *testing.T) {
@@ -49,6 +53,42 @@ func TestNewExecutor(t *testing.T) {
 		assert.Equal(t, 4, executor.maxConcurrency)
 		assert.Equal(t, 10*time.Second, executor.gracePeriod)
 		assert.Equal(t, 2*time.Minute, executor.defaultTimeout)
+	})
+
+	t.Run("WithCwd overrides default", func(t *testing.T) {
+		executor := NewExecutor(WithCwd("/custom/dir"))
+		assert.Equal(t, "/custom/dir", executor.cwd)
+	})
+}
+
+func TestExecutor_BuildAdditionalVars(t *testing.T) {
+	t.Run("includes __cwd", func(t *testing.T) {
+		executor := NewExecutor(WithCwd("/test/cwd"))
+		vars := executor.buildAdditionalVars(nil)
+
+		assert.Equal(t, "/test/cwd", vars["__cwd"])
+		assert.Contains(t, vars, "__actions")
+	})
+
+	t.Run("includes __cwd alongside aliases", func(t *testing.T) {
+		executor := NewExecutor(WithCwd("/project/root"))
+		executor.actionContext.MarkSucceeded("step1", map[string]any{"output": "val"})
+
+		aliases := map[string]string{"s1": "step1"}
+		vars := executor.buildAdditionalVars(aliases)
+
+		assert.Equal(t, "/project/root", vars["__cwd"])
+		assert.Contains(t, vars, "__actions")
+		assert.Contains(t, vars, "s1")
+	})
+
+	t.Run("__cwd is empty when not set", func(t *testing.T) {
+		executor := &Executor{
+			actionContext: NewContext(),
+		}
+		vars := executor.buildAdditionalVars(nil)
+
+		assert.Equal(t, "", vars["__cwd"])
 	})
 }
 

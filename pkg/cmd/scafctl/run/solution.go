@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -217,6 +218,9 @@ func (o *SolutionOptions) getEffectiveActionConfig(ctx context.Context) config.A
 		if !o.flagsChanged["max-action-concurrency"] {
 			result.MaxConcurrency = configValues.MaxConcurrency
 		}
+		if !o.flagsChanged["output-dir"] {
+			result.OutputDir = configValues.OutputDir
+		}
 	}
 
 	// GracePeriod always comes from config (no CLI flag)
@@ -228,13 +232,38 @@ func (o *SolutionOptions) getEffectiveActionConfig(ctx context.Context) config.A
 // Run executes the solution
 func (o *SolutionOptions) Run(ctx context.Context) error {
 	lgr := logger.FromContext(ctx)
+
+	// Apply config default for output-dir when the CLI flag wasn't explicitly set
+	if o.flagsChanged != nil && !o.flagsChanged["output-dir"] {
+		actionCfg := o.getEffectiveActionConfig(ctx)
+		if actionCfg.OutputDir != "" {
+			o.OutputDir = actionCfg.OutputDir
+		}
+	}
+
 	lgr.V(1).Info("running solution",
 		"file", o.File,
 		"output", o.Output,
 		"resolveAll", o.ResolveAll,
 		"progress", o.Progress,
 		"dryRun", o.DryRun,
-		"showMetrics", o.ShowMetrics)
+		"showMetrics", o.ShowMetrics,
+		"outputDir", o.OutputDir)
+
+	// Validate and prepare output directory before execution (fail-fast).
+	// In dry-run mode, resolve the path without creating the directory.
+	absOutputDir, err := o.resolveOutputDir(o.DryRun)
+	if err != nil {
+		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
+	}
+
+	// Capture the original working directory before prepareSolutionForExecution,
+	// which may os.Chdir into a bundle extraction directory. This ensures __cwd
+	// in action expressions reflects the user's actual working directory.
+	originalCwd, err := os.Getwd()
+	if err != nil {
+		return o.exitWithCode(ctx, fmt.Errorf("failed to get working directory: %w", err), exitcode.GeneralError)
+	}
 
 	// Prepare solution: load, set up registry, handle bundles
 	sol, reg, cleanup, err := o.prepareSolutionForExecution(ctx)
@@ -305,6 +334,14 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	actionCfg := o.getEffectiveActionConfig(ctx)
 
 	// Execute actions
+	// When --output-dir is set, inject it into the action execution context
+	// so providers in action mode resolve relative paths against the output directory.
+	// Resolvers already executed above with the original ctx (CWD-based).
+	actionCtx := ctx
+	if absOutputDir != "" {
+		actionCtx = provider.WithOutputDirectory(actionCtx, absOutputDir)
+	}
+
 	actionExecutor := action.NewExecutor(
 		action.WithRegistry(actionAdapter),
 		action.WithResolverData(resolverData),
@@ -313,9 +350,10 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		action.WithGracePeriod(actionCfg.GracePeriod),
 		action.WithMaxConcurrency(actionCfg.MaxConcurrency),
 		action.WithIOStreams(o.getActionIOStreams()),
+		action.WithCwd(originalCwd),
 	)
 
-	result, err := actionExecutor.Execute(ctx, sol.Spec.Workflow)
+	result, err := actionExecutor.Execute(actionCtx, sol.Spec.Workflow)
 	if err != nil && result != nil && result.FinalStatus != action.ExecutionPartialSuccess {
 		return o.exitWithCode(ctx, fmt.Errorf("action execution failed: %w", err), exitcode.ActionFailed)
 	}
@@ -488,6 +526,29 @@ func (o *SolutionOptions) getActionIOStreams() *provider.IOStreams {
 			ErrOut: o.IOStreams.ErrOut,
 		}
 	}
+}
+
+// resolveOutputDir validates and prepares the output directory.
+// Returns the absolute path if --output-dir was set, or empty string if not.
+// When dryRun is false, creates the directory if it doesn't exist.
+// When dryRun is true, only resolves to an absolute path without creating it.
+func (o *SolutionOptions) resolveOutputDir(dryRun bool) (string, error) {
+	if o.OutputDir == "" {
+		return "", nil
+	}
+
+	absDir, err := filepath.Abs(o.OutputDir)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve output directory %q: %w", o.OutputDir, err)
+	}
+
+	if !dryRun {
+		if err := os.MkdirAll(absDir, 0o755); err != nil {
+			return "", fmt.Errorf("failed to create output directory %q: %w", absDir, err)
+		}
+	}
+
+	return absDir, nil
 }
 
 // writeActionOutput writes the action execution results.

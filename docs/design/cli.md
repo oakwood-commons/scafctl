@@ -616,6 +616,10 @@ catalogs:
     url: oci://registry.example.com/scafctl
 settings:
   defaultCatalog: default
+action:
+  # Default output directory for action file operations
+  # CLI --output-dir flag overrides this setting
+  outputDir: "/path/to/output"
 ~~~
 
 ### Config Commands

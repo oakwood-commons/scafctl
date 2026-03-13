@@ -281,6 +281,11 @@ type ActionConfig struct {
 
 	// MaxConcurrency is the max concurrent actions (0 = unlimited)
 	MaxConcurrency int `json:"maxConcurrency,omitempty" yaml:"maxConcurrency,omitempty" mapstructure:"maxConcurrency" doc:"Max concurrent actions (0=unlimited)" example:"5" maximum:"100"`
+
+	// OutputDir is the default target directory for action file operations.
+	// When set, actions resolve relative paths against this directory instead of CWD.
+	// Can be overridden by the --output-dir CLI flag.
+	OutputDir string `json:"outputDir,omitempty" yaml:"outputDir,omitempty" mapstructure:"outputDir" doc:"Default target directory for action file operations" maxLength:"4096" example:"/tmp/output"`
 }
 
 // GlobalAuthConfig holds authentication handler configuration.

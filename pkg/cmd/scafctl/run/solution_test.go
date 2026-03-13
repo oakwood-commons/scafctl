@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -102,6 +103,64 @@ func TestCommandSolution_FlagDefaults(t *testing.T) {
 	showExecution, err := flags.GetBool("show-execution")
 	require.NoError(t, err)
 	assert.False(t, showExecution)
+
+	outputDir, err := flags.GetString("output-dir")
+	require.NoError(t, err)
+	assert.Empty(t, outputDir)
+}
+
+func TestSolutionOptions_getEffectiveActionConfig_OutputDir(t *testing.T) {
+	t.Parallel()
+
+	t.Run("config OutputDir used when flag not set", func(t *testing.T) {
+		t.Parallel()
+		appCfg := &config.Config{
+			Action: config.ActionConfig{
+				OutputDir: "/from/config",
+			},
+		}
+		ctx := config.WithConfig(context.Background(), appCfg)
+
+		opts := &SolutionOptions{}
+		opts.flagsChanged = map[string]bool{}
+
+		result := opts.getEffectiveActionConfig(ctx)
+		assert.Equal(t, "/from/config", result.OutputDir)
+	})
+
+	t.Run("CLI flag set skips config OutputDir", func(t *testing.T) {
+		t.Parallel()
+		appCfg := &config.Config{
+			Action: config.ActionConfig{
+				OutputDir: "/from/config",
+			},
+		}
+		ctx := config.WithConfig(context.Background(), appCfg)
+
+		opts := &SolutionOptions{}
+		opts.OutputDir = "/from/flag"
+		opts.flagsChanged = map[string]bool{"output-dir": true}
+
+		result := opts.getEffectiveActionConfig(ctx)
+		// When flag is explicitly set, getEffectiveActionConfig does NOT
+		// override with config — OutputDir stays at zero value because:
+		// - result is initialized without OutputDir
+		// - config override is skipped for changed flags
+		// The actual CLI value (o.OutputDir) is used directly in Run().
+		assert.Empty(t, result.OutputDir)
+	})
+
+	t.Run("empty config OutputDir returns empty", func(t *testing.T) {
+		t.Parallel()
+		appCfg := &config.Config{}
+		ctx := config.WithConfig(context.Background(), appCfg)
+
+		opts := &SolutionOptions{}
+		opts.flagsChanged = map[string]bool{}
+
+		result := opts.getEffectiveActionConfig(ctx)
+		assert.Empty(t, result.OutputDir)
+	})
 }
 
 func TestSolutionOptions_Run_NoFile(t *testing.T) {
@@ -804,4 +863,61 @@ spec:
 	err = opts.Run(ctx)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no workflow defined")
+}
+
+func TestSolutionOptions_resolveOutputDir(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty output dir returns empty string", func(t *testing.T) {
+		t.Parallel()
+		opts := &SolutionOptions{}
+		result, err := opts.resolveOutputDir(false)
+		require.NoError(t, err)
+		assert.Empty(t, result)
+	})
+
+	t.Run("resolves to absolute path and creates directory", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		target := filepath.Join(tmpDir, "new-output")
+
+		opts := &SolutionOptions{}
+		opts.OutputDir = target
+		result, err := opts.resolveOutputDir(false)
+		require.NoError(t, err)
+		assert.Equal(t, target, result)
+
+		info, statErr := os.Stat(target)
+		require.NoError(t, statErr)
+		assert.True(t, info.IsDir())
+	})
+
+	t.Run("dry run resolves path without creating directory", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		target := filepath.Join(tmpDir, "dryrun-no-create")
+
+		opts := &SolutionOptions{}
+		opts.OutputDir = target
+		result, err := opts.resolveOutputDir(true)
+		require.NoError(t, err)
+		assert.Equal(t, target, result)
+
+		_, statErr := os.Stat(target)
+		assert.True(t, os.IsNotExist(statErr), "directory should not be created in dry-run mode")
+	})
+}
+
+func BenchmarkSolutionOptions_resolveOutputDir(b *testing.B) {
+	tmpDir := b.TempDir()
+	target := filepath.Join(tmpDir, "bench-output")
+	opts := &SolutionOptions{}
+	opts.OutputDir = target
+
+	// Create once so the benchmark measures the resolve path, not mkdir
+	_ = os.MkdirAll(target, 0o755)
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = opts.resolveOutputDir(false)
+	}
 }

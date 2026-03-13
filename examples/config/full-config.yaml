@@ -254,6 +254,12 @@ action:
   # Default: 0
   maxConcurrency: 0
 
+  # Default target directory for action file operations
+  # When set, providers resolve relative paths against this directory instead of CWD.
+  # The CLI --output-dir flag overrides this setting.
+  # Default: "" (empty, uses current working directory)
+  # outputDir: "/path/to/output"
+
 # =============================================================================
 # Auth - Authentication handler configuration
 # =============================================================================

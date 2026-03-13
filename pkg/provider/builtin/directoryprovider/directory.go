@@ -228,7 +228,7 @@ func (p *DirectoryProvider) Execute(ctx context.Context, input any) (*provider.O
 		return nil, fmt.Errorf("%s: path is required and must be a string", ProviderName)
 	}
 
-	absPath, err := filepath.Abs(path)
+	absPath, err := provider.ResolvePath(ctx, path)
 	if err != nil {
 		return nil, fmt.Errorf("%s: invalid path: %w", ProviderName, err)
 	}
@@ -236,7 +236,7 @@ func (p *DirectoryProvider) Execute(ctx context.Context, input any) (*provider.O
 	lgr.V(1).Info("executing provider", "provider", ProviderName, "operation", operation, "path", path)
 
 	if dryRun := provider.DryRunFromContext(ctx); dryRun {
-		result, dryErr := p.executeDryRun(operation, absPath, inputs)
+		result, dryErr := p.executeDryRun(ctx, operation, absPath, inputs)
 		if dryErr != nil {
 			return nil, fmt.Errorf("%s: %w", ProviderName, dryErr)
 		}
@@ -253,7 +253,7 @@ func (p *DirectoryProvider) Execute(ctx context.Context, input any) (*provider.O
 	case "rmdir":
 		result, err = p.executeRmdir(absPath, inputs)
 	case "copy":
-		result, err = p.executeCopy(absPath, inputs)
+		result, err = p.executeCopy(ctx, absPath, inputs)
 	default:
 		return nil, fmt.Errorf("%s: unsupported operation: %s", ProviderName, operation)
 	}
@@ -698,13 +698,13 @@ func (p *DirectoryProvider) executeRmdir(absPath string, inputs map[string]any) 
 }
 
 // executeCopy copies a directory tree to a destination.
-func (p *DirectoryProvider) executeCopy(absPath string, inputs map[string]any) (*provider.Output, error) {
+func (p *DirectoryProvider) executeCopy(ctx context.Context, absPath string, inputs map[string]any) (*provider.Output, error) {
 	destination, ok := inputs["destination"].(string)
 	if !ok || destination == "" {
 		return nil, fmt.Errorf("destination is required for copy operation")
 	}
 
-	absDest, err := filepath.Abs(destination)
+	absDest, err := provider.ResolvePath(ctx, destination)
 	if err != nil {
 		return nil, fmt.Errorf("invalid destination path: %w", err)
 	}
@@ -801,7 +801,7 @@ func copyFile(src, dst string) error {
 
 // executeDryRun handles dry-run mode for mutating operations.
 // List is read-only and executes normally even in dry-run mode.
-func (p *DirectoryProvider) executeDryRun(operation, absPath string, inputs map[string]any) (*provider.Output, error) {
+func (p *DirectoryProvider) executeDryRun(ctx context.Context, operation, absPath string, inputs map[string]any) (*provider.Output, error) {
 	switch operation {
 	case "list":
 		// List is read-only, execute normally even in dry-run
@@ -840,8 +840,14 @@ func (p *DirectoryProvider) executeDryRun(operation, absPath string, inputs map[
 		}, nil
 
 	case "copy":
-		destination, _ := inputs["destination"].(string)
-		absDest, _ := filepath.Abs(destination)
+		destination, ok := inputs["destination"].(string)
+		if !ok || destination == "" {
+			return nil, fmt.Errorf("destination is required for copy operation")
+		}
+		absDest, err := provider.ResolvePath(ctx, destination)
+		if err != nil {
+			return nil, fmt.Errorf("resolving copy destination: %w", err)
+		}
 		return &provider.Output{
 			Data: map[string]any{
 				"success":     true,

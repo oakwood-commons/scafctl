@@ -275,10 +275,23 @@ func (p *ExecProvider) executeCommand(ctx context.Context, command string, input
 		stdin = strings.NewReader(stdinStr)
 	}
 
-	// Parse working directory
+	// Parse working directory.
+	// In action mode with output-dir: empty workingDir defaults to output-dir,
+	// relative workingDir resolves against output-dir.
 	var workingDir string
 	if dir, ok := inputs["workingDir"].(string); ok && dir != "" {
-		workingDir = dir
+		resolved, resolveErr := provider.ResolvePath(ctx, dir)
+		if resolveErr != nil {
+			return nil, fmt.Errorf("invalid workingDir: %w", resolveErr)
+		}
+		workingDir = resolved
+	} else {
+		// No explicit workingDir: default to output-dir when in action mode
+		if mode, modeOK := provider.ExecutionModeFromContext(ctx); modeOK && mode == provider.CapabilityAction {
+			if outputDir, dirOK := provider.OutputDirectoryFromContext(ctx); dirOK && outputDir != "" {
+				workingDir = outputDir
+			}
+		}
 	}
 
 	// Capture stdout and stderr into buffers.

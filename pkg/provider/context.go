@@ -19,6 +19,7 @@ const (
 	iterationContextKey contextKey = "scafctl.provider.iterationContext"
 	ioStreamsKey        contextKey = "scafctl.provider.ioStreams"
 	solutionMetadataKey contextKey = "scafctl.provider.solutionMetadata"
+	outputDirectoryKey  contextKey = "scafctl.provider.outputDirectory"
 )
 
 // SolutionMeta holds solution metadata fields made available to providers via context.
@@ -48,6 +49,20 @@ func WithSolutionMetadata(ctx context.Context, meta *SolutionMeta) context.Conte
 func SolutionMetadataFromContext(ctx context.Context) (*SolutionMeta, bool) {
 	meta, ok := ctx.Value(solutionMetadataKey).(*SolutionMeta)
 	return meta, ok
+}
+
+// WithOutputDirectory returns a new context with the output directory path attached.
+// When set, providers executing in action mode resolve relative paths against this directory
+// instead of the current working directory.
+func WithOutputDirectory(ctx context.Context, dir string) context.Context {
+	return context.WithValue(ctx, outputDirectoryKey, dir)
+}
+
+// OutputDirectoryFromContext retrieves the output directory from the context.
+// Returns the directory path and true if found, empty string and false otherwise.
+func OutputDirectoryFromContext(ctx context.Context) (string, bool) {
+	dir, ok := ctx.Value(outputDirectoryKey).(string)
+	return dir, ok
 }
 
 // IOStreams holds terminal IO writers for providers that support streaming output.

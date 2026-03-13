@@ -5045,6 +5045,221 @@ func TestIntegration_RunSolution_DryRun_YAML(t *testing.T) {
 }
 
 // ============================================================================
+// Output Directory Tests
+// ============================================================================
+
+func TestIntegration_RunSolution_OutputDir_ActionsWriteToOutputDir(t *testing.T) {
+	// Verifies that --output-dir causes actions to write files into the target
+	// directory while resolvers still read from CWD.
+	projectRoot := findProjectRoot()
+	outputDir := t.TempDir()
+	solutionDir := t.TempDir()
+
+	// Copy the solution and its source.txt into a temp working directory
+	srcDir := filepath.Join(projectRoot, "tests/integration/solutions/output-dir")
+	require.NoError(t, copyDir(srcDir, solutionDir))
+
+	stdout, stderr, exitCode := runScafctlInDir(t, solutionDir,
+		"run", "solution",
+		"-f", filepath.Join(solutionDir, "solution.yaml"),
+		"--output-dir", outputDir,
+	)
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstderr: %s", exitCode, stderr)
+
+	// Verify action outputs landed in --output-dir
+	assert.FileExists(t, filepath.Join(outputDir, "greeting.txt"))
+	assert.FileExists(t, filepath.Join(outputDir, "config/app.yaml"))
+	assert.FileExists(t, filepath.Join(outputDir, "cwd-info.txt"))
+	assert.FileExists(t, filepath.Join(outputDir, "copied-source.txt"))
+
+	// Verify greeting content
+	greeting, err := os.ReadFile(filepath.Join(outputDir, "greeting.txt"))
+	if assert.NoError(t, err) {
+		assert.Contains(t, string(greeting), "Hello from output-dir test")
+	}
+
+	// Verify config content
+	configContent, err := os.ReadFile(filepath.Join(outputDir, "config/app.yaml"))
+	if assert.NoError(t, err) {
+		assert.Contains(t, string(configContent), "name: output-dir-test")
+		assert.Contains(t, string(configContent), "version: 1.0.0")
+	}
+
+	// Verify __cwd reference is the working directory, not the output dir
+	cwdInfo, err := os.ReadFile(filepath.Join(outputDir, "cwd-info.txt"))
+	if assert.NoError(t, err) {
+		assert.Contains(t, string(cwdInfo), "cwd=")
+		assert.NotContains(t, string(cwdInfo), outputDir,
+			"__cwd should reference the original working directory, not the output directory")
+	}
+
+	// Verify resolver read from CWD: source.txt content was copied by action
+	copiedSource, err := os.ReadFile(filepath.Join(outputDir, "copied-source.txt"))
+	if assert.NoError(t, err) {
+		assert.Contains(t, string(copiedSource), "source file content for output-dir test")
+	}
+
+	// Verify files were NOT created in the solution directory (CWD)
+	assert.NoFileExists(t, filepath.Join(solutionDir, "greeting.txt"),
+		"action output should not land in CWD when --output-dir is set")
+	assert.NoFileExists(t, filepath.Join(solutionDir, "config/app.yaml"),
+		"action output should not land in CWD when --output-dir is set")
+}
+
+func TestIntegration_RunSolution_OutputDir_WithoutFlag_UsesCWD(t *testing.T) {
+	// Without --output-dir, actions should write to CWD (backward compatible)
+	projectRoot := findProjectRoot()
+	solutionDir := t.TempDir()
+
+	srcDir := filepath.Join(projectRoot, "tests/integration/solutions/output-dir")
+	require.NoError(t, copyDir(srcDir, solutionDir))
+
+	stdout, stderr, exitCode := runScafctlInDir(t, solutionDir,
+		"run", "solution",
+		"-f", filepath.Join(solutionDir, "solution.yaml"),
+	)
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstderr: %s", exitCode, stderr)
+
+	// Without --output-dir, files should land in CWD (solutionDir)
+	assert.FileExists(t, filepath.Join(solutionDir, "greeting.txt"))
+	assert.FileExists(t, filepath.Join(solutionDir, "config/app.yaml"))
+}
+
+func TestIntegration_RunSolution_OutputDir_AutoCreatesDirectory(t *testing.T) {
+	// --output-dir should auto-create the directory if it doesn't exist
+	projectRoot := findProjectRoot()
+	solutionDir := t.TempDir()
+	outputDir := filepath.Join(t.TempDir(), "nested", "output", "path")
+
+	srcDir := filepath.Join(projectRoot, "tests/integration/solutions/output-dir")
+	require.NoError(t, copyDir(srcDir, solutionDir))
+
+	_, stderr, exitCode := runScafctlInDir(t, solutionDir,
+		"run", "solution",
+		"-f", filepath.Join(solutionDir, "solution.yaml"),
+		"--output-dir", outputDir,
+	)
+
+	t.Logf("stderr: %s", stderr)
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstderr: %s", exitCode, stderr)
+
+	// Verify directory was auto-created and files written
+	assert.FileExists(t, filepath.Join(outputDir, "greeting.txt"))
+}
+
+func TestIntegration_RunSolution_OutputDir_AbsolutePath(t *testing.T) {
+	// Verify absolute output-dir paths work correctly
+	projectRoot := findProjectRoot()
+	solutionDir := t.TempDir()
+	outputDir := t.TempDir()
+
+	srcDir := filepath.Join(projectRoot, "tests/integration/solutions/output-dir")
+	require.NoError(t, copyDir(srcDir, solutionDir))
+
+	_, stderr, exitCode := runScafctlInDir(t, solutionDir,
+		"run", "solution",
+		"-f", filepath.Join(solutionDir, "solution.yaml"),
+		"--output-dir", outputDir,
+	)
+
+	t.Logf("stderr: %s", stderr)
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstderr: %s", exitCode, stderr)
+	assert.FileExists(t, filepath.Join(outputDir, "greeting.txt"))
+}
+
+func TestIntegration_RunSolution_OutputDir_RelativePath(t *testing.T) {
+	// Verify relative output-dir paths resolve against CWD
+	projectRoot := findProjectRoot()
+	solutionDir := t.TempDir()
+
+	srcDir := filepath.Join(projectRoot, "tests/integration/solutions/output-dir")
+	require.NoError(t, copyDir(srcDir, solutionDir))
+
+	_, stderr, exitCode := runScafctlInDir(t, solutionDir,
+		"run", "solution",
+		"-f", filepath.Join(solutionDir, "solution.yaml"),
+		"--output-dir", "my-output",
+	)
+
+	t.Logf("stderr: %s", stderr)
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstderr: %s", exitCode, stderr)
+
+	// Relative path should resolve against the CWD (solutionDir)
+	assert.FileExists(t, filepath.Join(solutionDir, "my-output", "greeting.txt"))
+
+	// Cleanup
+	os.RemoveAll(filepath.Join(solutionDir, "my-output"))
+}
+
+func TestIntegration_RunSolution_OutputDir_DryRun(t *testing.T) {
+	// Verify dry-run with --output-dir shows correct target paths
+	// and does NOT create the output directory as a side effect.
+	projectRoot := findProjectRoot()
+	solutionDir := t.TempDir()
+	outputDir := filepath.Join(t.TempDir(), "should-not-be-created")
+
+	srcDir := filepath.Join(projectRoot, "tests/integration/solutions/output-dir")
+	require.NoError(t, copyDir(srcDir, solutionDir))
+
+	stdout, stderr, exitCode := runScafctlInDir(t, solutionDir,
+		"run", "solution",
+		"-f", filepath.Join(solutionDir, "solution.yaml"),
+		"--output-dir", outputDir,
+		"--dry-run",
+	)
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstderr: %s", exitCode, stderr)
+
+	// Dry-run should not create the output directory itself
+	_, err := os.Stat(outputDir)
+	assert.True(t, os.IsNotExist(err),
+		"dry-run should not create the output directory")
+
+	// Should contain dry-run output
+	assert.Contains(t, stdout, "DRY RUN")
+}
+
+func TestIntegration_RunResolver_OutputDir_NoEffect(t *testing.T) {
+	// Verify --output-dir has no effect on resolvers
+	projectRoot := findProjectRoot()
+	solutionDir := t.TempDir()
+	outputDir := t.TempDir()
+
+	srcDir := filepath.Join(projectRoot, "tests/integration/solutions/output-dir")
+	require.NoError(t, copyDir(srcDir, solutionDir))
+
+	stdout, stderr, exitCode := runScafctlInDir(t, solutionDir,
+		"run", "resolver",
+		"-f", filepath.Join(solutionDir, "solution.yaml"),
+		"--output-dir", outputDir,
+		"-o", "json",
+	)
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstderr: %s", exitCode, stderr)
+
+	// Resolvers should still read from CWD successfully
+	assert.Contains(t, stdout, "Hello from output-dir test")
+	assert.Contains(t, stdout, "source file content for output-dir test")
+}
+
+func TestIntegration_RunSolution_OutputDir_HelpFlag(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "run", "solution", "--help")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "--output-dir")
+}
+
+// ============================================================================
 // Telemetry Flag Tests
 // ============================================================================
 

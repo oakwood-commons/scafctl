@@ -33,6 +33,10 @@ const (
 	// Access via __actions in CEL expressions to get results from completed actions.
 	// Example: __actions.build.results.exitCode
 	VarActions = "__actions"
+
+	// VarCwd is the variable name for the original working directory in action contexts.
+	// Access via __cwd in CEL expressions when --output-dir redirects action output.
+	VarCwd = "__cwd"
 )
 
 // BuildCELContext creates CEL environment options and variables for evaluation.

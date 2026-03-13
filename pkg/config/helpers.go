@@ -126,6 +126,7 @@ type ActionConfigValues struct {
 	DefaultTimeout time.Duration `json:"defaultTimeout" yaml:"defaultTimeout" doc:"Default per-action execution timeout"`
 	GracePeriod    time.Duration `json:"gracePeriod" yaml:"gracePeriod" doc:"Cancellation grace period"`
 	MaxConcurrency int           `json:"maxConcurrency" yaml:"maxConcurrency" doc:"Maximum concurrent action executions" maximum:"1000" example:"5"`
+	OutputDir      string        `json:"outputDir" yaml:"outputDir" doc:"Default target directory for action file operations"`
 }
 
 // ToActionValues converts ActionConfig to an ActionConfigValues struct.
@@ -153,5 +154,6 @@ func (a *ActionConfig) ToActionValues() (ActionConfigValues, error) {
 		DefaultTimeout: defaultTimeout,
 		GracePeriod:    gracePeriod,
 		MaxConcurrency: a.MaxConcurrency,
+		OutputDir:      a.OutputDir,
 	}, nil
 }

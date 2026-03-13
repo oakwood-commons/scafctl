@@ -6,6 +6,8 @@ package run
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -52,6 +54,11 @@ type ProviderOptions struct {
 
 	// Redact redacts sensitive fields in the output.
 	Redact bool
+
+	// OutputDir is the target directory for action file operations.
+	// When set and capability is action, providers resolve relative paths
+	// against this directory instead of CWD.
+	OutputDir string
 }
 
 // CommandProvider creates the 'run provider' subcommand
@@ -157,6 +164,7 @@ Examples:
 	cCmd.Flags().StringArrayVar(&options.PluginDirs, "plugin-dir", nil, "Directory to scan for plugin providers")
 	cCmd.Flags().BoolVar(&options.ShowMetrics, "show-metrics", false, "Show provider execution metrics after completion (output to stderr)")
 	cCmd.Flags().BoolVar(&options.Redact, "redact", false, "Redact sensitive fields in output")
+	cCmd.Flags().StringVar(&options.OutputDir, "output-dir", "", "Target directory for action file operations (applies when capability=action)")
 
 	// kvx output flags — default to JSON (not table) since provider output is unstructured
 	validFormats := kvx.BaseOutputFormats()
@@ -240,6 +248,23 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 	// Set up execution context
 	ctx = provider.WithExecutionMode(ctx, capability)
 	ctx = provider.WithDryRun(ctx, o.DryRun)
+
+	// Set output directory for action capabilities.
+	// In dry-run mode, resolve the path without creating the directory.
+	if o.OutputDir != "" && capability == provider.CapabilityAction {
+		absDir, err := filepath.Abs(o.OutputDir)
+		if err != nil {
+			w.Errorf("failed to resolve output directory %q: %v", o.OutputDir, err)
+			return exitcode.WithCode(err, exitcode.InvalidInput)
+		}
+		if !o.DryRun {
+			if err := os.MkdirAll(absDir, 0o755); err != nil {
+				w.Errorf("failed to create output directory %q: %v", absDir, err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
+		}
+		ctx = provider.WithOutputDirectory(ctx, absDir)
+	}
 
 	// Execute the provider
 	start := time.Now()

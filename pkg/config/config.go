@@ -167,6 +167,7 @@ func (m *Manager) setDefaults() {
 	m.v.SetDefault("action.defaultTimeout", settings.DefaultActionTimeout.String())
 	m.v.SetDefault("action.gracePeriod", settings.DefaultGracePeriod.String())
 	m.v.SetDefault("action.maxConcurrency", 0)
+	m.v.SetDefault("action.outputDir", "")
 
 	// Build defaults - all values from settings package
 	m.v.SetDefault("build.enableCache", true)

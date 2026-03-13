@@ -107,6 +107,9 @@ func (s *Server) registerSolutionTools() {
 			mcp.Description("Graph type to render: action (default, executable action graph), resolver (resolver dependency graph), action-deps (action dependency visualization)"),
 			mcp.Enum("action", "resolver", "action-deps"),
 		),
+		mcp.WithString("output_dir",
+			mcp.Description("Target directory for action output. When set, actions resolve relative paths against this directory instead of CWD. Resolvers always use CWD regardless of this setting."),
+		),
 	)
 	s.mcpServer.AddTool(renderSolutionTool, s.handleRenderSolution)
 
@@ -129,6 +132,9 @@ func (s *Server) registerSolutionTools() {
 		),
 		mcp.WithString("resolver",
 			mcp.Description("Debug a single resolver by name. Returns detailed pipeline info (resolve, transform, validate phases) for just this resolver and its dependencies."),
+		),
+		mcp.WithString("output_dir",
+			mcp.Description("Target directory for action output. Included for path preview purposes — resolvers always use CWD regardless of this setting."),
 		),
 	)
 	s.mcpServer.AddTool(previewResolversTool, s.handlePreviewResolvers)
@@ -157,6 +163,9 @@ func (s *Server) registerSolutionTools() {
 		),
 		mcp.WithBoolean("verbose",
 			mcp.Description("Include assertion details for ALL tests (not just failures). Useful for verifying why tests pass. Default: false"),
+		),
+		mcp.WithString("output_dir",
+			mcp.Description("Target directory for action output during test execution. When set, actions resolve relative paths against this directory instead of CWD."),
 		),
 	)
 	s.mcpServer.AddTool(runSolutionTestsTool, s.handleRunSolutionTests)
@@ -337,6 +346,7 @@ func (s *Server) handleRenderSolution(_ context.Context, request mcp.CallToolReq
 	}
 
 	graphType := request.GetString("graph_type", "action")
+	outputDir := request.GetString("output_dir", "")
 
 	// Parse params from arguments
 	var params map[string]any
@@ -406,9 +416,9 @@ func (s *Server) handleRenderSolution(_ context.Context, request mcp.CallToolReq
 	case "resolver":
 		return s.renderResolverGraph(sol, reg)
 	case "action-deps":
-		return s.renderActionDepsGraph(sol, params)
+		return s.renderActionDepsGraph(sol, params, outputDir)
 	default:
-		return s.renderActionGraph(sol, params)
+		return s.renderActionGraph(sol, params, outputDir)
 	}
 }
 
@@ -452,7 +462,7 @@ func (s *Server) renderResolverGraph(sol *solution.Solution, reg *provider.Regis
 }
 
 // renderActionGraph executes resolvers, builds, and renders the action graph.
-func (s *Server) renderActionGraph(sol *solution.Solution, params map[string]any) (*mcp.CallToolResult, error) { //nolint:unparam // error is always nil per MCP pattern
+func (s *Server) renderActionGraph(sol *solution.Solution, params map[string]any, outputDir string) (*mcp.CallToolResult, error) { //nolint:unparam // error is always nil per MCP pattern
 	if !sol.Spec.HasWorkflow() {
 		suggestion := "Add a spec.workflow section with actions to the solution"
 		if sol.Spec.HasResolvers() {
@@ -497,14 +507,16 @@ func (s *Server) renderActionGraph(sol *solution.Solution, params map[string]any
 	}
 
 	// Embed resolver data alongside the graph for a complete picture
-	if len(resolverData) > 0 {
+	if len(resolverData) > 0 || outputDir != "" {
 		type actionGraphWithResolvers struct {
 			Graph        json.RawMessage `json:"graph"`
-			ResolverData map[string]any  `json:"resolverData"`
+			ResolverData map[string]any  `json:"resolverData,omitempty"`
+			OutputDir    string          `json:"outputDir,omitempty"`
 		}
 		return mcp.NewToolResultJSON(actionGraphWithResolvers{
 			Graph:        json.RawMessage(rendered),
 			ResolverData: resolverData,
+			OutputDir:    outputDir,
 		})
 	}
 
@@ -512,7 +524,7 @@ func (s *Server) renderActionGraph(sol *solution.Solution, params map[string]any
 }
 
 // renderActionDepsGraph builds and returns the action dependency visualization.
-func (s *Server) renderActionDepsGraph(sol *solution.Solution, params map[string]any) (*mcp.CallToolResult, error) {
+func (s *Server) renderActionDepsGraph(sol *solution.Solution, params map[string]any, outputDir string) (*mcp.CallToolResult, error) {
 	if !sol.Spec.HasWorkflow() {
 		return newStructuredError(ErrCodeValidationError, "solution does not define a workflow",
 			WithSuggestion("Add a spec.workflow section with actions to the solution"),
@@ -544,9 +556,10 @@ func (s *Server) renderActionDepsGraph(sol *solution.Solution, params map[string
 	// Build response with ASCII and Mermaid diagrams
 	type vizResponse struct {
 		*action.GraphVisualization
-		Diagrams map[string]string `json:"diagrams,omitempty"`
+		Diagrams  map[string]string `json:"diagrams,omitempty"`
+		OutputDir string            `json:"outputDir,omitempty"`
 	}
-	resp := vizResponse{GraphVisualization: viz}
+	resp := vizResponse{GraphVisualization: viz, OutputDir: outputDir}
 
 	var asciiBuf bytes.Buffer
 	if err := viz.RenderASCII(&asciiBuf); err == nil {
@@ -576,6 +589,8 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 			WithSuggestion("Provide the path to a solution file"),
 		), nil
 	}
+
+	outputDir := request.GetString("output_dir", "")
 
 	// Parse params
 	var params map[string]any
@@ -834,6 +849,9 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 		response["filter"] = resolverFilter
 		response["total"] = len(resolvers)
 	}
+	if outputDir != "" {
+		response["outputDir"] = outputDir
+	}
 
 	result2, err := mcp.NewToolResultJSON(response)
 	if err != nil {
@@ -858,6 +876,7 @@ func (s *Server) handleRunSolutionTests(_ context.Context, request mcp.CallToolR
 
 	filter := request.GetString("filter", "")
 	tag := request.GetString("tag", "")
+	outputDir := request.GetString("output_dir", "")
 	skipBuiltins := false
 	if sb, ok := request.GetArguments()["skip_builtins"]; ok {
 		if b, ok := sb.(bool); ok {
@@ -975,7 +994,7 @@ func (s *Server) handleRunSolutionTests(_ context.Context, request mcp.CallToolR
 		items = append(items, item)
 	}
 
-	return mcp.NewToolResultJSON(map[string]any{
+	response := map[string]any{
 		"results": items,
 		"summary": map[string]any{
 			"total":    summary.Total,
@@ -985,7 +1004,12 @@ func (s *Server) handleRunSolutionTests(_ context.Context, request mcp.CallToolR
 			"skipped":  summary.Skipped,
 			"duration": summary.ElapsedDuration().String(),
 		},
-	})
+	}
+	if outputDir != "" {
+		response["outputDir"] = outputDir
+	}
+
+	return mcp.NewToolResultJSON(response)
 }
 
 // handleGetRunCommand analyzes a solution and returns the exact CLI command to run it.

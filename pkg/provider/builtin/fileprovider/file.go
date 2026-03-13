@@ -196,8 +196,8 @@ func (p *FileProvider) Execute(ctx context.Context, input any) (*provider.Output
 
 	lgr.V(1).Info("executing file operation", "provider", ProviderName, "operation", operation, "path", path)
 
-	// Convert to absolute path
-	absPath, err := filepath.Abs(path)
+	// Resolve path: in action mode with output-dir, resolves against output-dir; otherwise CWD
+	absPath, err := provider.ResolvePath(ctx, path)
 	if err != nil {
 		return nil, fmt.Errorf("%s: invalid path: %w", ProviderName, err)
 	}
@@ -334,7 +334,7 @@ func (p *FileProvider) executeWriteTreeDispatch(ctx context.Context, inputs map[
 		return nil, fmt.Errorf("%s: basePath is required for write-tree operation", ProviderName)
 	}
 
-	absBasePath, err := filepath.Abs(basePath)
+	absBasePath, err := provider.ResolvePath(ctx, basePath)
 	if err != nil {
 		return nil, fmt.Errorf("%s: invalid basePath: %w", ProviderName, err)
 	}

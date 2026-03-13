@@ -326,6 +326,7 @@ func TestActionConfig_ToActionValues(t *testing.T) {
 				DefaultTimeout: settings.DefaultActionTimeout,
 				GracePeriod:    settings.DefaultGracePeriod,
 				MaxConcurrency: 0,
+				OutputDir:      "",
 			},
 		},
 		{
@@ -334,11 +335,13 @@ func TestActionConfig_ToActionValues(t *testing.T) {
 				DefaultTimeout: "10m",
 				GracePeriod:    "1m",
 				MaxConcurrency: 3,
+				OutputDir:      "/custom/output",
 			},
 			want: ActionConfigValues{
 				DefaultTimeout: 10 * time.Minute,
 				GracePeriod:    1 * time.Minute,
 				MaxConcurrency: 3,
+				OutputDir:      "/custom/output",
 			},
 		},
 		{
@@ -360,6 +363,20 @@ func TestActionConfig_ToActionValues(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})
+	}
+}
+
+func BenchmarkActionConfig_ToActionValues(b *testing.B) {
+	cfg := ActionConfig{
+		DefaultTimeout: "10s",
+		GracePeriod:    "5s",
+		MaxConcurrency: 4,
+		OutputDir:      "/bench/output",
+	}
+
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = cfg.ToActionValues()
 	}
 }
 

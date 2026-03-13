@@ -1,0 +1,107 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: output-dir-integration
+  version: 1.0.0
+  description: |
+    Integration test for the --output-dir flag.
+    Verifies the phase-based directory model:
+    - Resolvers always operate in CWD (gathering data)
+    - Actions operate in the output directory (producing output)
+    - __cwd built-in variable provides the original working directory
+
+spec:
+  resolvers:
+    greeting:
+      description: Static greeting resolved from CWD context
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: Hello from output-dir test
+
+    template-data:
+      description: Data for template rendering
+      type: any
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                appName: output-dir-test
+                version: "1.0.0"
+
+    source-file:
+      description: Read a file from CWD (resolver phase)
+      type: any
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              operation: read
+              path: source.txt
+
+  workflow:
+    actions:
+      write-greeting:
+        description: Write greeting to output directory
+        provider: file
+        inputs:
+          operation: write
+          path: greeting.txt
+          content:
+            rslvr: greeting
+
+      write-config:
+        description: Write rendered config to output directory
+        provider: file
+        inputs:
+          operation: write
+          path: config/app.yaml
+          createDirs: true
+          content:
+            expr: '"name: " + _["template-data"].appName + "\nversion: " + _["template-data"].version'
+
+      write-cwd-reference:
+        description: Write __cwd reference to verify escape hatch
+        provider: file
+        inputs:
+          operation: write
+          path: cwd-info.txt
+          content:
+            expr: '"cwd=" + __cwd'
+
+      write-source-copy:
+        description: Copy source content read by resolver into output dir
+        provider: file
+        dependsOn: [write-greeting]
+        inputs:
+          operation: write
+          path: copied-source.txt
+          content:
+            rslvr: source-file
+
+  testing:
+    config:
+      skipBuiltins: [render-defaults, resolve-defaults]
+
+    cases:
+      resolver-reads-cwd:
+        description: Verify resolvers read from CWD not output-dir
+        command: [run, resolver]
+        args: ["-o", "json"]
+        files: ["source.txt"]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: "Hello from output-dir test"
+          - contains: "source file content"
+
+      resolver-ignores-output-dir:
+        description: Verify --output-dir has no effect on resolver execution
+        command: [run, resolver]
+        args: ["-o", "json", "--output-dir", "$TMPDIR/resolver-test"]
+        files: ["source.txt"]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: "source file content"
