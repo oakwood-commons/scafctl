@@ -985,6 +985,49 @@ func TestDirectoryProvider_DryRun_Copy(t *testing.T) {
 	assert.Contains(t, data["_message"].(string), "Would copy")
 }
 
+func TestDirectoryProvider_DryRun_Copy_TraversalError(t *testing.T) {
+	p := NewDirectoryProvider()
+	dir := t.TempDir()
+
+	ctx := context.Background()
+	ctx = provider.WithDryRun(ctx, true)
+	ctx = provider.WithExecutionMode(ctx, provider.CapabilityAction)
+	ctx = provider.WithOutputDirectory(ctx, "/tmp/output")
+
+	_, err := p.Execute(ctx, map[string]any{
+		"operation":   "copy",
+		"path":        dir,
+		"destination": "../../../etc/escape",
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "resolving copy destination")
+}
+
+func TestDirectoryProvider_DryRun_Copy_MissingDestination(t *testing.T) {
+	p := NewDirectoryProvider()
+	dir := t.TempDir()
+
+	ctx := provider.WithDryRun(context.Background(), true)
+
+	// No destination key
+	_, err := p.Execute(ctx, map[string]any{
+		"operation": "copy",
+		"path":      dir,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "destination is required")
+
+	// Empty destination
+	_, err = p.Execute(ctx, map[string]any{
+		"operation":   "copy",
+		"path":        dir,
+		"destination": "",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "destination is required")
+}
+
 // =============================================================================
 // Helper function tests
 // =============================================================================

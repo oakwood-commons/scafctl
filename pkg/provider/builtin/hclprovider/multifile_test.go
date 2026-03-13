@@ -6,6 +6,7 @@ package hclprovider
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -20,10 +21,10 @@ func TestHCLProvider_Execute_Parse_Paths(t *testing.T) {
 	mockReader := &MockFileReader{
 		ReadFileFunc: func(path string) ([]byte, error) {
 			files := map[string]string{
-				"./variables.tf": `variable "region" { type = string }`,
-				"./resources.tf": `resource "aws_instance" "web" { ami = "ami-123" }`,
+				"variables.tf": `variable "region" { type = string }`,
+				"resources.tf": `resource "aws_instance" "web" { ami = "ami-123" }`,
 			}
-			if c, ok := files[path]; ok {
+			if c, ok := files[filepath.Base(path)]; ok {
 				return []byte(c), nil
 			}
 			return nil, fmt.Errorf("file not found: %s", path)
@@ -180,15 +181,15 @@ func TestHCLProvider_Execute_Format_Paths(t *testing.T) {
 	mockReader := &MockFileReader{
 		ReadFileFunc: func(path string) ([]byte, error) {
 			files := map[string]string{
-				"./a.tf": `variable "x" {
+				"a.tf": `variable "x" {
 type=string
 }`,
-				"./b.tf": `variable "y" {
+				"b.tf": `variable "y" {
   type = string
 }
 `,
 			}
-			if c, ok := files[path]; ok {
+			if c, ok := files[filepath.Base(path)]; ok {
 				return []byte(c), nil
 			}
 			return nil, fmt.Errorf("file not found: %s", path)
@@ -214,7 +215,7 @@ type=string
 	// a.tf should have changed
 	f0 := files[0].(map[string]any)
 	assert.True(t, f0["changed"].(bool))
-	assert.Equal(t, "./a.tf", f0["filename"])
+	assert.Equal(t, "a.tf", filepath.Base(f0["filename"].(string)))
 	assert.NotEmpty(t, f0["formatted"])
 
 	// b.tf should not have changed (already formatted)

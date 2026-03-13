@@ -1,0 +1,1 @@
+source file content for output-dir test

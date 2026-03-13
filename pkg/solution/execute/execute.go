@@ -8,6 +8,8 @@ package execute
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/action"
@@ -16,6 +18,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 )
 
@@ -256,6 +259,152 @@ func ResolverExecutionConfigFromContext(ctx context.Context) ResolverExecutionCo
 		WarnValueSize:  values.WarnValueSize,
 		MaxValueSize:   values.MaxValueSize,
 		ValidateAll:    values.ValidateAll,
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Action Execution
+// ---------------------------------------------------------------------------
+
+// ActionExecutionConfig holds action execution parameters decoupled from CLI types.
+// This allows the MCP server and other consumers to configure action execution
+// without constructing CLI-specific scaffolding (IOStreams, flag sets, etc.).
+type ActionExecutionConfig struct {
+	// DefaultTimeout is the default timeout per action execution.
+	DefaultTimeout time.Duration `json:"defaultTimeout,omitempty" yaml:"defaultTimeout,omitempty" doc:"Default per-action execution timeout"`
+
+	// GracePeriod is the cancellation grace period.
+	GracePeriod time.Duration `json:"gracePeriod,omitempty" yaml:"gracePeriod,omitempty" doc:"Cancellation grace period"`
+
+	// MaxConcurrency limits concurrent action execution (0=unlimited).
+	MaxConcurrency int `json:"maxConcurrency,omitempty" yaml:"maxConcurrency,omitempty" doc:"Maximum concurrent actions" maximum:"1000"`
+
+	// OutputDir is the target directory for action output. When set, providers
+	// in action mode resolve relative paths against this directory instead of CWD.
+	// An empty string means actions use CWD (backward-compatible default).
+	OutputDir string `json:"outputDir,omitempty" yaml:"outputDir,omitempty" doc:"Target directory for action output" maxLength:"4096"`
+
+	// DryRun enables dry-run mode: providers return mock/no-op outputs
+	// instead of performing real side effects.
+	DryRun bool `json:"dryRun,omitempty" yaml:"dryRun,omitempty" doc:"Enable dry-run mode (providers return mock outputs)"`
+
+	// Cwd is the original working directory to expose as __cwd in action
+	// expressions. When empty, the executor captures os.Getwd() at creation time.
+	// Callers that change the working directory before creating the executor
+	// (e.g., bundle extraction) should set this explicitly.
+	Cwd string `json:"-" yaml:"-"`
+}
+
+// ActionExecutionResult wraps the action executor result with additional metadata.
+type ActionExecutionResult struct {
+	// Result is the underlying action execution result.
+	Result *action.ExecutionResult `json:"result" yaml:"result" doc:"Action execution result"`
+}
+
+// Actions runs the action execution pipeline on the given solution.
+// It accepts pre-resolved data from a prior resolver execution and a provider
+// registry. When cfg.OutputDir is set, providers executing in action mode
+// resolve relative paths against that directory instead of CWD.
+func Actions(
+	ctx context.Context,
+	sol *solution.Solution,
+	resolverData map[string]any,
+	reg *provider.Registry,
+	cfg ActionExecutionConfig,
+) (*ActionExecutionResult, error) {
+	lgr := logger.FromContext(ctx)
+
+	if !sol.Spec.HasWorkflow() {
+		return nil, fmt.Errorf("solution %q has no workflow defined", sol.Metadata.Name)
+	}
+
+	// Validate the workflow
+	adapter := &actionRegistryAdapter{registry: reg}
+	if err := action.ValidateWorkflow(sol.Spec.Workflow, adapter); err != nil {
+		return nil, fmt.Errorf("workflow validation failed: %w", err)
+	}
+
+	// Enable dry-run mode on the context when requested.
+	if cfg.DryRun {
+		ctx = provider.WithDryRun(ctx, true)
+	}
+
+	// Attach solution metadata to the context.
+	ctx = provider.WithSolutionMetadata(ctx, toSolutionMeta(sol))
+
+	// When OutputDir is set, resolve to an absolute path and inject it into
+	// the context for action-mode providers. Only create the directory when
+	// not in dry-run mode to avoid filesystem side effects.
+	if cfg.OutputDir != "" {
+		absDir, err := filepath.Abs(cfg.OutputDir)
+		if err != nil {
+			return nil, fmt.Errorf("resolving output directory: %w", err)
+		}
+		if !cfg.DryRun {
+			if err := os.MkdirAll(absDir, 0o755); err != nil {
+				return nil, fmt.Errorf("creating output directory: %w", err)
+			}
+		}
+		ctx = provider.WithOutputDirectory(ctx, absDir)
+	}
+
+	// Build executor options from config
+	executorOpts := []action.ExecutorOption{
+		action.WithRegistry(adapter),
+		action.WithResolverData(resolverData),
+		action.WithDefaultTimeout(cfg.DefaultTimeout),
+		action.WithGracePeriod(cfg.GracePeriod),
+	}
+	if cfg.MaxConcurrency > 0 {
+		executorOpts = append(executorOpts, action.WithMaxConcurrency(cfg.MaxConcurrency))
+	}
+	if cfg.Cwd != "" {
+		executorOpts = append(executorOpts, action.WithCwd(cfg.Cwd))
+	}
+
+	executor := action.NewExecutor(executorOpts...)
+
+	if lgr != nil {
+		lgr.V(1).Info("executing actions",
+			"actionCount", len(sol.Spec.Workflow.Actions),
+			"outputDir", cfg.OutputDir,
+			"dryRun", cfg.DryRun)
+	}
+
+	result, err := executor.Execute(ctx, sol.Spec.Workflow)
+	if err != nil && result != nil && result.FinalStatus != action.ExecutionPartialSuccess {
+		return nil, fmt.Errorf("action execution failed: %w", err)
+	}
+
+	return &ActionExecutionResult{
+		Result: result,
+	}, nil
+}
+
+// ActionExecutionConfigFromContext creates an ActionExecutionConfig from the
+// application config stored in context, providing sensible defaults.
+func ActionExecutionConfigFromContext(ctx context.Context) ActionExecutionConfig {
+	cfg := config.FromContext(ctx)
+	if cfg == nil {
+		return ActionExecutionConfig{
+			DefaultTimeout: settings.DefaultActionTimeout,
+			GracePeriod:    settings.DefaultGracePeriod,
+		}
+	}
+
+	values, err := cfg.Action.ToActionValues()
+	if err != nil {
+		return ActionExecutionConfig{
+			DefaultTimeout: settings.DefaultActionTimeout,
+			GracePeriod:    settings.DefaultGracePeriod,
+		}
+	}
+
+	return ActionExecutionConfig{
+		DefaultTimeout: values.DefaultTimeout,
+		GracePeriod:    values.GracePeriod,
+		MaxConcurrency: values.MaxConcurrency,
+		OutputDir:      values.OutputDir,
 	}
 }
 
