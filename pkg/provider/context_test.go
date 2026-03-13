@@ -247,3 +247,70 @@ func BenchmarkContextChaining(b *testing.B) {
 		ctx = WithResolverContext(ctx, resolverCtx)
 	}
 }
+
+func TestWithOutputDirectory_AndFromContext(t *testing.T) {
+	ctx := context.Background()
+	ctx = WithOutputDirectory(ctx, "/tmp/output")
+
+	dir, ok := OutputDirectoryFromContext(ctx)
+	assert.True(t, ok)
+	assert.Equal(t, "/tmp/output", dir)
+}
+
+func TestOutputDirectoryFromContext_NotSet(t *testing.T) {
+	ctx := context.Background()
+	dir, ok := OutputDirectoryFromContext(ctx)
+	assert.False(t, ok)
+	assert.Equal(t, "", dir)
+}
+
+func TestOutputDirectoryFromContext_WrongType(t *testing.T) {
+	ctx := context.Background()
+	ctx = context.WithValue(ctx, outputDirectoryKey, 12345)
+
+	dir, ok := OutputDirectoryFromContext(ctx)
+	assert.False(t, ok)
+	assert.Equal(t, "", dir)
+}
+
+func TestOutputDirectoryFromContext_EmptyString(t *testing.T) {
+	ctx := context.Background()
+	ctx = WithOutputDirectory(ctx, "")
+
+	dir, ok := OutputDirectoryFromContext(ctx)
+	assert.True(t, ok)
+	assert.Equal(t, "", dir)
+}
+
+func TestContextChaining_WithOutputDirectory(t *testing.T) {
+	ctx := context.Background()
+
+	ctx = WithExecutionMode(ctx, CapabilityAction)
+	ctx = WithDryRun(ctx, true)
+	ctx = WithOutputDirectory(ctx, "/tmp/output")
+
+	mode, ok := ExecutionModeFromContext(ctx)
+	assert.True(t, ok)
+	assert.Equal(t, CapabilityAction, mode)
+
+	assert.True(t, DryRunFromContext(ctx))
+
+	dir, ok := OutputDirectoryFromContext(ctx)
+	assert.True(t, ok)
+	assert.Equal(t, "/tmp/output", dir)
+}
+
+func BenchmarkWithOutputDirectory(b *testing.B) {
+	ctx := context.Background()
+	for i := 0; i < b.N; i++ {
+		_ = WithOutputDirectory(ctx, "/tmp/output")
+	}
+}
+
+func BenchmarkOutputDirectoryFromContext(b *testing.B) {
+	ctx := WithOutputDirectory(context.Background(), "/tmp/output")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = OutputDirectoryFromContext(ctx)
+	}
+}

@@ -438,7 +438,8 @@ func TestAlias_BuildAdditionalVars(t *testing.T) {
 		vars := executor.buildAdditionalVars(nil)
 
 		assert.Contains(t, vars, "__actions")
-		assert.Len(t, vars, 1)
+		assert.Contains(t, vars, "__cwd")
+		assert.Len(t, vars, 2)
 	})
 }
 

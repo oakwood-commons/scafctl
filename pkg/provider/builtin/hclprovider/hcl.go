@@ -352,7 +352,7 @@ func (p *HCLProvider) Execute(ctx context.Context, input any) (*provider.Output,
 	}
 
 	// Resolve source(s) for parse/format/validate.
-	sources, err := p.resolveSources(inputs)
+	sources, err := p.resolveSources(ctx, inputs)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", ProviderName, err)
 	}
@@ -381,7 +381,7 @@ type hclSource struct {
 
 // resolveSources resolves the input specification into one or more HCL source units.
 // Exactly one of content, path, paths, or dir must be provided.
-func (p *HCLProvider) resolveSources(inputs map[string]any) ([]hclSource, error) {
+func (p *HCLProvider) resolveSources(ctx context.Context, inputs map[string]any) ([]hclSource, error) {
 	content, hasContent := inputs["content"].(string)
 	path, hasPath := inputs["path"].(string)
 	rawPaths, hasPaths := inputs["paths"]
@@ -413,17 +413,21 @@ func (p *HCLProvider) resolveSources(inputs map[string]any) ([]hclSource, error)
 		return []hclSource{{filename: "input.tf", data: []byte(content)}}, nil
 
 	case hasPath:
-		data, err := p.fileReader.ReadFile(path)
+		absPath, resolveErr := provider.ResolvePath(ctx, path)
+		if resolveErr != nil {
+			return nil, fmt.Errorf("resolving path: %w", resolveErr)
+		}
+		data, err := p.fileReader.ReadFile(absPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read file %s: %w", path, err)
 		}
-		return []hclSource{{filename: path, data: data}}, nil
+		return []hclSource{{filename: absPath, data: data}}, nil
 
 	case hasPaths:
-		return p.resolvePathsList(rawPaths)
+		return p.resolvePathsList(ctx, rawPaths)
 
 	case hasDir:
-		return p.resolveDir(dir)
+		return p.resolveDir(ctx, dir)
 
 	default:
 		return nil, fmt.Errorf("one of 'content', 'path', 'paths', or 'dir' must be provided")
@@ -431,7 +435,7 @@ func (p *HCLProvider) resolveSources(inputs map[string]any) ([]hclSource, error)
 }
 
 // resolvePathsList reads multiple files from a paths array.
-func (p *HCLProvider) resolvePathsList(rawPaths any) ([]hclSource, error) {
+func (p *HCLProvider) resolvePathsList(ctx context.Context, rawPaths any) ([]hclSource, error) {
 	pathSlice, ok := rawPaths.([]any)
 	if !ok {
 		return nil, fmt.Errorf("'paths' must be an array of strings")
@@ -445,18 +449,26 @@ func (p *HCLProvider) resolvePathsList(rawPaths any) ([]hclSource, error) {
 		if !ok {
 			return nil, fmt.Errorf("each item in 'paths' must be a string, got %T", raw)
 		}
-		data, err := p.fileReader.ReadFile(filePath)
+		absPath, resolveErr := provider.ResolvePath(ctx, filePath)
+		if resolveErr != nil {
+			return nil, fmt.Errorf("resolving path %s: %w", filePath, resolveErr)
+		}
+		data, err := p.fileReader.ReadFile(absPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read file %s: %w", filePath, err)
 		}
-		sources = append(sources, hclSource{filename: filePath, data: data})
+		sources = append(sources, hclSource{filename: absPath, data: data})
 	}
 	return sources, nil
 }
 
 // resolveDir lists all .tf files in a directory and reads them.
-func (p *HCLProvider) resolveDir(dir string) ([]hclSource, error) {
-	files, err := p.fileReader.ListHCLFiles(dir)
+func (p *HCLProvider) resolveDir(ctx context.Context, dir string) ([]hclSource, error) {
+	absDir, resolveErr := provider.ResolvePath(ctx, dir)
+	if resolveErr != nil {
+		return nil, fmt.Errorf("resolving dir: %w", resolveErr)
+	}
+	files, err := p.fileReader.ListHCLFiles(absDir)
 	if err != nil {
 		return nil, fmt.Errorf("listing directory %s: %w", dir, err)
 	}

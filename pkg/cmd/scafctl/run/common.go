@@ -119,6 +119,11 @@ type sharedResolverOptions struct {
 	ResolverTimeout time.Duration
 	PhaseTimeout    time.Duration
 
+	// OutputDir is the target directory for action file operations.
+	// When set, actions resolve relative paths against this directory instead of CWD.
+	// Resolvers are unaffected and always use CWD.
+	OutputDir string
+
 	// kvx output integration (shared flags)
 	flags.KvxOutputFlags
 
@@ -494,6 +499,7 @@ func addSharedResolverFlags(cCmd *cobra.Command, o *sharedResolverOptions) {
 	cCmd.Flags().DurationVar(&o.ResolverTimeout, "resolver-timeout", settings.DefaultResolverTimeout, "Timeout per resolver")
 	cCmd.Flags().DurationVar(&o.PhaseTimeout, "phase-timeout", settings.DefaultPhaseTimeout, "Timeout per resolver phase")
 	cCmd.Flags().StringVar(&o.TestName, "test-name", "", "Test name for -o test output (derived from command and args when not set)")
+	cCmd.Flags().StringVar(&o.OutputDir, "output-dir", "", "Target directory for action file operations (actions resolve relative paths here instead of CWD)")
 }
 
 // writeMetrics outputs provider execution metrics to stderr
