@@ -871,7 +871,7 @@ func TestSolutionOptions_resolveOutputDir(t *testing.T) {
 	t.Run("empty output dir returns empty string", func(t *testing.T) {
 		t.Parallel()
 		opts := &SolutionOptions{}
-		result, err := opts.resolveOutputDir(false)
+		result, err := opts.resolveOutputDir(context.Background(), false)
 		require.NoError(t, err)
 		assert.Empty(t, result)
 	})
@@ -883,7 +883,7 @@ func TestSolutionOptions_resolveOutputDir(t *testing.T) {
 
 		opts := &SolutionOptions{}
 		opts.OutputDir = target
-		result, err := opts.resolveOutputDir(false)
+		result, err := opts.resolveOutputDir(context.Background(), false)
 		require.NoError(t, err)
 		assert.Equal(t, target, result)
 
@@ -899,7 +899,7 @@ func TestSolutionOptions_resolveOutputDir(t *testing.T) {
 
 		opts := &SolutionOptions{}
 		opts.OutputDir = target
-		result, err := opts.resolveOutputDir(true)
+		result, err := opts.resolveOutputDir(context.Background(), true)
 		require.NoError(t, err)
 		assert.Equal(t, target, result)
 
@@ -918,6 +918,6 @@ func BenchmarkSolutionOptions_resolveOutputDir(b *testing.B) {
 	_ = os.MkdirAll(target, 0o755)
 	b.ResetTimer()
 	for b.Loop() {
-		_, _ = opts.resolveOutputDir(false)
+		_, _ = opts.resolveOutputDir(context.Background(), false)
 	}
 }

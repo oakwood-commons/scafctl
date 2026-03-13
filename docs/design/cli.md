@@ -582,6 +582,7 @@ These flags are available on most commands:
 
 | Flag | Short | Description | Status |
 |------|-------|-------------|--------|
+| `--cwd` | `-C` | Change the working directory before executing the command (similar to `git -C`) | ✅ Implemented |
 | `--quiet` | `-q` | Suppress non-essential output | ✅ Implemented |
 | `--no-color` | | Disable colored output | ✅ Implemented |
 | `--config` | | Path to config file (default: `~/.scafctl/config.yaml`) | ✅ Implemented |

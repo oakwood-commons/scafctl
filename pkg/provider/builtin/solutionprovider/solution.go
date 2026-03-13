@@ -97,7 +97,7 @@ func (p *SolutionProvider) Execute(ctx context.Context, input any) (*provider.Ou
 	lgr := logger.FromContext(ctx)
 
 	// Resolve canonical name for ancestor tracking.
-	canonicalName := Canonicalize(in.Source)
+	canonicalName := Canonicalize(ctx, in.Source)
 
 	// Check circular references — always a hard error regardless of propagateErrors.
 	ctx, err := PushAncestor(ctx, canonicalName)

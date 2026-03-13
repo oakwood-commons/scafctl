@@ -35,6 +35,9 @@ func (s *Server) registerActionTools() {
 		mcp.WithString("action",
 			mcp.Description("Preview a specific action by name. If omitted, previews all actions."),
 		),
+		mcp.WithString("cwd",
+			mcp.Description("Working directory for path resolution. When set, relative paths (including the solution path itself) resolve against this directory instead of the process CWD."),
+		),
 	)
 	s.mcpServer.AddTool(previewActionTool, s.handlePreviewAction)
 }
@@ -50,6 +53,15 @@ func (s *Server) handlePreviewAction(_ context.Context, request mcp.CallToolRequ
 	}
 
 	actionFilter := request.GetString("action", "")
+	cwd := request.GetString("cwd", "")
+
+	ctx, err := s.contextWithCwd(cwd)
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("cwd"),
+			WithSuggestion("Provide a valid existing directory path"),
+		), nil
+	}
 
 	// Parse params
 	var params map[string]any
@@ -65,7 +77,7 @@ func (s *Server) handlePreviewAction(_ context.Context, request mcp.CallToolRequ
 	}
 
 	// Load solution
-	prepResult, err := prepare.Solution(s.ctx, path,
+	prepResult, err := prepare.Solution(ctx, path,
 		prepare.WithRegistry(s.registry),
 	)
 	if err != nil {
@@ -89,7 +101,7 @@ func (s *Server) handlePreviewAction(_ context.Context, request mcp.CallToolRequ
 	}
 
 	// Execute resolvers to get data for action inputs
-	resolverData, err := s.executeResolversForRender(sol, params)
+	resolverData, err := s.executeResolversForRender(ctx, sol, params)
 	if err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("resolver execution failed: %v", err),
 			WithSuggestion("Check resolver configurations with preview_resolvers. Missing parameters can be passed via the params field."),
@@ -98,7 +110,7 @@ func (s *Server) handlePreviewAction(_ context.Context, request mcp.CallToolRequ
 	}
 
 	// Build the action graph (this materializes inputs)
-	graph, err := action.BuildGraph(s.ctx, sol.Spec.Workflow, resolverData, nil)
+	graph, err := action.BuildGraph(ctx, sol.Spec.Workflow, resolverData, nil)
 	if err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to build action graph: %v", err),
 			WithSuggestion("Check action definitions and dependencies. Use lint_solution to find structural issues."),

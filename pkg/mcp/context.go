@@ -8,6 +8,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -125,4 +126,19 @@ func NewContext(opts ...ContextOption) context.Context {
 	ctx = writer.WithWriter(ctx, w)
 
 	return ctx
+}
+
+// contextWithCwd returns the server context with a working directory override.
+// If cwd is empty, the original context is returned unchanged. If cwd is
+// non-empty, it is resolved to an absolute path and validated as an existing
+// directory before being injected into the context.
+func (s *Server) contextWithCwd(cwd string) (context.Context, error) {
+	if cwd == "" {
+		return s.ctx, nil
+	}
+	absCwd, err := provider.ValidateDirectory(cwd)
+	if err != nil {
+		return nil, err
+	}
+	return provider.WithWorkingDirectory(s.ctx, absCwd), nil
 }

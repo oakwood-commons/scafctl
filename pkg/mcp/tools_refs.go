@@ -13,6 +13,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 )
 
 // registerRefsTools registers resolver reference extraction tools.
@@ -35,6 +36,9 @@ func (s *Server) registerRefsTools() {
 		mcp.WithString("type",
 			mcp.Description("Expression type: 'go-template' (default) or 'cel'"),
 		),
+		mcp.WithString("cwd",
+			mcp.Description("Working directory for path resolution. When set, relative file paths resolve against this directory instead of the process CWD."),
+		),
 	)
 	s.mcpServer.AddTool(extractRefssTool, s.handleExtractResolverRefs)
 }
@@ -44,6 +48,7 @@ func (s *Server) handleExtractResolverRefs(_ context.Context, request mcp.CallTo
 	text := request.GetString("text", "")
 	filePath := request.GetString("file", "")
 	exprType := request.GetString("type", "go-template")
+	cwd := request.GetString("cwd", "")
 
 	if text == "" && filePath == "" {
 		return newStructuredError(ErrCodeInvalidInput, "either 'text' or 'file' must be provided",
@@ -51,11 +56,26 @@ func (s *Server) handleExtractResolverRefs(_ context.Context, request mcp.CallTo
 		), nil
 	}
 
+	ctx, err := s.contextWithCwd(cwd)
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("cwd"),
+			WithSuggestion("Provide a valid existing directory path"),
+		), nil
+	}
+
 	source := "inline"
 	content := text
 	if filePath != "" {
+		// Resolve relative file path against the working directory
+		resolved, resolveErr := provider.AbsFromContext(ctx, filePath)
+		if resolveErr != nil {
+			return newStructuredError(ErrCodeInvalidInput, fmt.Sprintf("failed to resolve path: %v", resolveErr),
+				WithField("file"),
+			), nil
+		}
 		source = "file"
-		data, err := os.ReadFile(filePath)
+		data, err := os.ReadFile(resolved)
 		if err != nil {
 			return newStructuredError(ErrCodeNotFound, fmt.Sprintf("failed to read file %q: %v", filePath, err),
 				WithField("file"),
@@ -66,7 +86,6 @@ func (s *Server) handleExtractResolverRefs(_ context.Context, request mcp.CallTo
 	}
 
 	var resolverNames []string
-	var err error
 
 	switch exprType {
 	case "go-template":

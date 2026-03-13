@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 )
 
 type ancestorStackKey struct{}
@@ -58,7 +60,7 @@ func CheckDepth(ctx context.Context, maxDepth int) error {
 
 // Canonicalize normalizes a source reference into a canonical name for ancestor tracking.
 // File paths are resolved to absolute paths, catalog references and URLs are used as-is.
-func Canonicalize(source string) string {
+func Canonicalize(ctx context.Context, source string) string {
 	// URLs - use as-is
 	if strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://") {
 		return source
@@ -66,7 +68,7 @@ func Canonicalize(source string) string {
 
 	// Relative or absolute file paths - resolve to absolute
 	if strings.HasPrefix(source, ".") || strings.HasPrefix(source, "/") || strings.Contains(source, string(filepath.Separator)) {
-		abs, err := filepath.Abs(source)
+		abs, err := provider.AbsFromContext(ctx, source)
 		if err != nil {
 			return source // fallback to raw value
 		}
