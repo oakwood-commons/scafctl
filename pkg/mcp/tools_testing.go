@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/solution/inspect"
@@ -29,6 +30,9 @@ func (s *Server) registerTestingTools() {
 		mcp.WithString("path",
 			mcp.Required(),
 			mcp.Description("Path to the solution file to generate tests for"),
+		),
+		mcp.WithString("cwd",
+			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
 		),
 	)
 	s.mcpServer.AddTool(genTestTool, s.handleGenerateTestScaffold)
@@ -54,6 +58,9 @@ func (s *Server) registerTestingTools() {
 		mcp.WithBoolean("include_builtins",
 			mcp.Description("Include built-in tests (lint, parse). Default: false"),
 		),
+		mcp.WithString("cwd",
+			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
+		),
 	)
 	s.mcpServer.AddTool(listTestsTool, s.handleListTests)
 }
@@ -68,8 +75,17 @@ func (s *Server) handleGenerateTestScaffold(_ context.Context, request mcp.CallT
 			WithRelatedTools("inspect_solution"),
 		), nil
 	}
+	cwd := request.GetString("cwd", "")
 
-	sol, err := inspect.LoadSolution(s.ctx, path)
+	ctx, err := s.contextWithCwd(cwd)
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("cwd"),
+			WithSuggestion("Provide a valid existing directory path"),
+		), nil
+	}
+
+	sol, err := inspect.LoadSolution(ctx, path)
 	if err != nil {
 		return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("failed to load solution: %v", err),
 			WithField("path"),
@@ -164,6 +180,23 @@ func (s *Server) handleListTests(_ context.Context, request mcp.CallToolRequest)
 	path := request.GetString("path", ".")
 	filter := request.GetString("filter", "")
 	tag := request.GetString("tag", "")
+	cwd := request.GetString("cwd", "")
+
+	ctx, err := s.contextWithCwd(cwd)
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("cwd"),
+			WithSuggestion("Provide a valid existing directory path"),
+		), nil
+	}
+
+	// Resolve relative path against the working directory
+	path, err = provider.AbsFromContext(ctx, path)
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, fmt.Sprintf("failed to resolve path: %v", err),
+			WithField("path"),
+		), nil
+	}
 
 	solutions, err := soltesting.DiscoverSolutions(path)
 	if err != nil {

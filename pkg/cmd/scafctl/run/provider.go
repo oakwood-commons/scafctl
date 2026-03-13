@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -252,7 +251,7 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 	// Set output directory for action capabilities.
 	// In dry-run mode, resolve the path without creating the directory.
 	if o.OutputDir != "" && capability == provider.CapabilityAction {
-		absDir, err := filepath.Abs(o.OutputDir)
+		absDir, err := provider.AbsFromContext(ctx, o.OutputDir)
 		if err != nil {
 			w.Errorf("failed to resolve output directory %q: %v", o.OutputDir, err)
 			return exitcode.WithCode(err, exitcode.InvalidInput)

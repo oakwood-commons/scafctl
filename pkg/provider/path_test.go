@@ -281,3 +281,169 @@ func BenchmarkResolvePath_TraversalRejection(b *testing.B) {
 		_, _ = ResolvePath(ctx, "../../../etc/passwd")
 	}
 }
+
+// ── AbsFromContext tests ──
+
+func TestAbsFromContext_NoContextCWD(t *testing.T) {
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	result, err := AbsFromContext(ctx, "relative/path.txt")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(cwd, "relative/path.txt"), result)
+}
+
+func TestAbsFromContext_WithContextCWD(t *testing.T) {
+	ctx := context.Background()
+	ctx = WithWorkingDirectory(ctx, "/custom/cwd")
+
+	result, err := AbsFromContext(ctx, "relative/path.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "/custom/cwd/relative/path.txt", result)
+}
+
+func TestAbsFromContext_AbsolutePathIgnoresContextCWD(t *testing.T) {
+	ctx := context.Background()
+	ctx = WithWorkingDirectory(ctx, "/custom/cwd")
+
+	result, err := AbsFromContext(ctx, "/absolute/path.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "/absolute/path.txt", result)
+}
+
+func TestAbsFromContext_EmptyContextCWDFallsBack(t *testing.T) {
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	ctx = WithWorkingDirectory(ctx, "")
+
+	result, err := AbsFromContext(ctx, "relative/path.txt")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(cwd, "relative/path.txt"), result)
+}
+
+// ── GetWorkingDirectory tests ──
+
+func TestGetWorkingDirectory_NoContext(t *testing.T) {
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	result, err := GetWorkingDirectory(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, cwd, result)
+}
+
+func TestGetWorkingDirectory_WithContext(t *testing.T) {
+	ctx := context.Background()
+	ctx = WithWorkingDirectory(ctx, "/custom/cwd")
+
+	result, err := GetWorkingDirectory(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "/custom/cwd", result)
+}
+
+// ── ResolvePath with context CWD tests ──
+
+func TestResolvePath_WithContextCWD(t *testing.T) {
+	ctx := context.Background()
+	ctx = WithWorkingDirectory(ctx, "/custom/cwd")
+
+	result, err := ResolvePath(ctx, "subdir/file.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "/custom/cwd/subdir/file.txt", result)
+}
+
+func TestResolvePath_ActionModeOutputDirTakesPrecedenceOverContextCWD(t *testing.T) {
+	ctx := context.Background()
+	ctx = WithWorkingDirectory(ctx, "/custom/cwd")
+	ctx = WithExecutionMode(ctx, CapabilityAction)
+	ctx = WithOutputDirectory(ctx, "/output/dir")
+
+	result, err := ResolvePath(ctx, "subdir/file.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "/output/dir/subdir/file.txt", result)
+}
+
+// ── WorkingDirectory context round-trip tests ──
+
+func TestWorkingDirectoryFromContext_NotSet(t *testing.T) {
+	ctx := context.Background()
+	dir, ok := WorkingDirectoryFromContext(ctx)
+	assert.False(t, ok)
+	assert.Empty(t, dir)
+}
+
+func TestWorkingDirectoryFromContext_Set(t *testing.T) {
+	ctx := WithWorkingDirectory(context.Background(), "/my/dir")
+	dir, ok := WorkingDirectoryFromContext(ctx)
+	assert.True(t, ok)
+	assert.Equal(t, "/my/dir", dir)
+}
+
+// ── Benchmarks for context CWD ──
+
+func BenchmarkAbsFromContext_WithCWD(b *testing.B) {
+	ctx := WithWorkingDirectory(context.Background(), "/custom/cwd")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = AbsFromContext(ctx, "relative/path.txt")
+	}
+}
+
+func BenchmarkAbsFromContext_NoCWD(b *testing.B) {
+	ctx := context.Background()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = AbsFromContext(ctx, "relative/path.txt")
+	}
+}
+
+func BenchmarkGetWorkingDirectory_WithCWD(b *testing.B) {
+	ctx := WithWorkingDirectory(context.Background(), "/custom/cwd")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = GetWorkingDirectory(ctx)
+	}
+}
+
+// ── ValidateDirectory tests ──
+
+func TestValidateDirectory_Valid(t *testing.T) {
+	dir := t.TempDir()
+	result, err := ValidateDirectory(dir)
+	require.NoError(t, err)
+	assert.Equal(t, dir, result)
+}
+
+func TestValidateDirectory_NonExistent(t *testing.T) {
+	_, err := ValidateDirectory("/nonexistent-dir-12345")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not exist")
+}
+
+func TestValidateDirectory_FileNotDir(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "file.txt")
+	require.NoError(t, os.WriteFile(f, []byte("x"), 0o644))
+
+	_, err := ValidateDirectory(f)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not a directory")
+}
+
+func TestValidateDirectory_RelativePath(t *testing.T) {
+	// A relative path should be resolved to absolute
+	result, err := ValidateDirectory(".")
+	require.NoError(t, err)
+	assert.True(t, filepath.IsAbs(result))
+}
+
+func BenchmarkValidateDirectory(b *testing.B) {
+	dir := b.TempDir()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = ValidateDirectory(dir)
+	}
+}

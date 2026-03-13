@@ -35,6 +35,9 @@ func (s *Server) registerDryRunTools() {
 		mcp.WithObject("mock_data",
 			mcp.Description("Override specific resolver values with mock data instead of executing them. Keys are resolver names, values are the mock output. Useful for testing action behavior with specific resolver outputs without requiring real provider execution. Example: {\"api_url\": \"https://mock.example.com\", \"config\": {\"env\": \"test\"}}"),
 		),
+		mcp.WithString("cwd",
+			mcp.Description("Working directory for path resolution. When set, relative paths (including the solution path itself) resolve against this directory instead of the process CWD."),
+		),
 	)
 	s.mcpServer.AddTool(dryRunTool, s.handleDryRunSolution)
 }
@@ -46,6 +49,15 @@ func (s *Server) handleDryRunSolution(_ context.Context, request mcp.CallToolReq
 		return newStructuredError(ErrCodeInvalidInput, err.Error(),
 			WithField("path"),
 			WithSuggestion("Provide the path to a solution file, catalog name, or URL"),
+		), nil
+	}
+
+	cwd := request.GetString("cwd", "")
+	ctx, err := s.contextWithCwd(cwd)
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("cwd"),
+			WithSuggestion("Provide a valid existing directory path"),
 		), nil
 	}
 
@@ -75,7 +87,7 @@ func (s *Server) handleDryRunSolution(_ context.Context, request mcp.CallToolReq
 	}
 
 	// Load solution
-	prepResult, err := prepare.Solution(s.ctx, path,
+	prepResult, err := prepare.Solution(ctx, path,
 		prepare.WithRegistry(s.registry),
 	)
 	if err != nil {

@@ -1020,6 +1020,20 @@ scafctl test functional -f solution.yaml --dry-run
 This resolves `extends` chains, validates test names, and reports discovery results.
 Exits 0 if valid, exit code 3 if invalid.
 
+### Working Directory Override
+
+Use `--cwd` (`-C`) to run tests against solutions in a different directory:
+
+```bash
+# Run tests from a project in another directory
+scafctl --cwd /path/to/project test functional -f solution.yaml
+
+# Short form
+scafctl -C /path/to/project test functional
+```
+
+The sandbox copies files relative to the working directory, so test `files` entries resolve correctly against `--cwd`.
+
 ---
 
 ## Builtin Tests

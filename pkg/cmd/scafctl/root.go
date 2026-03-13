@@ -5,6 +5,7 @@ package scafctl
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"time"
 
@@ -40,6 +41,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/metrics"
 	"github.com/oakwood-commons/scafctl/pkg/profiler"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/telemetry"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -92,6 +94,7 @@ func Root(opts *RootOptions) *cobra.Command {
 	cliParams := settings.NewCliParams()
 	var (
 		configPath   = opts.ConfigPath
+		cwdFlag      string
 		debugFlag    bool
 		logFormat    = "console"
 		logFile      string
@@ -249,6 +252,18 @@ func Root(opts *RootOptions) *cobra.Command {
 			ctx = input.WithInput(ctx, in)
 			ctx = config.WithConfig(ctx, cfg)
 
+			// ── Resolve --cwd flag and inject into context ──
+			// This must happen before any path resolution so that downstream
+			// commands see the correct logical working directory.
+			if cwdFlag != "" {
+				absCwd, cwdErr := provider.ValidateDirectory(cwdFlag)
+				if cwdErr != nil {
+					w.ErrorWithExit(fmt.Sprintf("--cwd: %v", cwdErr))
+					return
+				}
+				ctx = provider.WithWorkingDirectory(ctx, absCwd)
+			}
+
 			// ── Initialize CEL subsystem from config ──
 			celValues := cfg.CEL.ToCELValues()
 			celexp.InitFromAppConfig(ctx, celexp.CELConfigInput{
@@ -388,6 +403,7 @@ func Root(opts *RootOptions) *cobra.Command {
 	cCmd.PersistentFlags().StringVar(&logFile, "log-file", "", "Write logs to a file instead of stderr")
 	cCmd.PersistentFlags().BoolVarP(&cliParams.IsQuiet, "quiet", "q", false, "Do not print additional information")
 	cCmd.PersistentFlags().BoolVar(&cliParams.NoColor, "no-color", false, "Disable color output")
+	cCmd.PersistentFlags().StringVarP(&cwdFlag, "cwd", "C", "", "Change the working directory before executing the command (similar to git -C)")
 	cCmd.PersistentFlags().StringVar(&configPath, "config", "", "Path to config file (default: ~/.scafctl/config.yaml)")
 	cCmd.PersistentFlags().String("pprof", "", "Enable profiling (options: memory, cpu)")
 	cCmd.PersistentFlags().String("pprof-output-dir", "./", "directory path to save the profiler.prof file (default: current working directory)")

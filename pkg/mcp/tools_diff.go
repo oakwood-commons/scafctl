@@ -31,6 +31,9 @@ func (s *Server) registerDiffTools() {
 			mcp.Required(),
 			mcp.Description("Path to the second solution file (e.g., the modified version)"),
 		),
+		mcp.WithString("cwd",
+			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
+		),
 	)
 	s.mcpServer.AddTool(diffSolutionTool, s.handleDiffSolution)
 }
@@ -51,8 +54,17 @@ func (s *Server) handleDiffSolution(_ context.Context, request mcp.CallToolReque
 			WithSuggestion("Provide two solution file paths to compare"),
 		), nil
 	}
+	cwd := request.GetString("cwd", "")
 
-	result, err := soldiff.CompareFiles(s.ctx, pathA, pathB)
+	ctx, err := s.contextWithCwd(cwd)
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("cwd"),
+			WithSuggestion("Provide a valid existing directory path"),
+		), nil
+	}
+
+	result, err := soldiff.CompareFiles(ctx, pathA, pathB)
 	if err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("diff failed: %v", err),
 			WithSuggestion("Check that both file paths exist and contain valid solution YAML"),

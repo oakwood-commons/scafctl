@@ -960,6 +960,22 @@ The server can stream structured log messages to connected clients in real-time 
 
 For clients that support the MCP roots capability, the server can discover workspace root directories, enabling workspace-aware file operations.
 
+### Working Directory (`cwd`) Parameter
+
+All tools that accept file paths support an optional `cwd` parameter. This sets the working directory for path resolution without changing the server process's CWD:
+
+```json
+{
+  "tool": "render_solution",
+  "arguments": {
+    "path": "solution.yaml",
+    "cwd": "/Users/me/projects/my-app"
+  }
+}
+```
+
+This is the MCP equivalent of the CLI `--cwd` (`-C`) flag. It allows AI agents to specify the project context when the MCP server runs from a different directory. See the [cwd design doc](../../design/cwd.md) for which tools support it and design details.
+
 ### Sampling and Elicitation
 
 The server supports two client interaction capabilities:

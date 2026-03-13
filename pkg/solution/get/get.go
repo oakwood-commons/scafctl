@@ -18,6 +18,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/fs"
 	"github.com/oakwood-commons/scafctl/pkg/httpc"
 	"github.com/oakwood-commons/scafctl/pkg/metrics"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
@@ -363,6 +364,16 @@ func (o *Getter) fromCatalog(ctx context.Context, nameWithVersion string) (*solu
 func (o *Getter) FromLocalFileSystem(ctx context.Context, path string) (*solution.Solution, error) {
 	if o.readFile == nil {
 		o.readFile = os.ReadFile
+	}
+
+	// Resolve relative paths against the context working directory (--cwd flag)
+	// so that callers don't need to resolve paths before calling this method.
+	if !pathlib.IsAbs(path) {
+		resolved, err := provider.AbsFromContext(ctx, path)
+		if err != nil {
+			return &solution.Solution{}, fmt.Errorf("resolving solution path %q: %w", path, err)
+		}
+		path = resolved
 	}
 
 	_, span := telemetry.Tracer(telemetry.TracerSolution).Start(ctx, "solution.FromLocalFileSystem",

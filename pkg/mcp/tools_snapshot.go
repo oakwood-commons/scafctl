@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 )
 
@@ -28,6 +29,9 @@ func (s *Server) registerSnapshotTools() {
 		),
 		mcp.WithString("format",
 			mcp.Description("Output detail level: 'summary' (default), 'resolvers' (include per-resolver data), 'full' (everything including raw values)"),
+		),
+		mcp.WithString("cwd",
+			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
 		),
 	)
 	s.mcpServer.AddTool(showSnapshotTool, s.handleShowSnapshot)
@@ -52,6 +56,9 @@ func (s *Server) registerSnapshotTools() {
 		mcp.WithBoolean("ignore_unchanged",
 			mcp.Description("Omit unchanged resolvers from the response. Default: true"),
 		),
+		mcp.WithString("cwd",
+			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
+		),
 	)
 	s.mcpServer.AddTool(diffSnapshotsTool, s.handleDiffSnapshots)
 }
@@ -66,6 +73,23 @@ func (s *Server) handleShowSnapshot(_ context.Context, request mcp.CallToolReque
 		), nil
 	}
 	format := request.GetString("format", "summary")
+	cwd := request.GetString("cwd", "")
+
+	ctx, err := s.contextWithCwd(cwd)
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("cwd"),
+			WithSuggestion("Provide a valid existing directory path"),
+		), nil
+	}
+
+	// Resolve relative snapshot path against the working directory
+	path, err = provider.AbsFromContext(ctx, path)
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, fmt.Sprintf("failed to resolve path: %v", err),
+			WithField("path"),
+		), nil
+	}
 
 	snapshot, err := resolver.LoadSnapshot(path)
 	if err != nil {
@@ -157,6 +181,29 @@ func (s *Server) handleDiffSnapshots(_ context.Context, request mcp.CallToolRequ
 	}
 
 	ignoreUnchanged := request.GetBool("ignore_unchanged", true)
+	cwd := request.GetString("cwd", "")
+
+	ctx, err := s.contextWithCwd(cwd)
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("cwd"),
+			WithSuggestion("Provide a valid existing directory path"),
+		), nil
+	}
+
+	// Resolve relative snapshot paths against the working directory
+	beforePath, err = provider.AbsFromContext(ctx, beforePath)
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, fmt.Sprintf("failed to resolve before path: %v", err),
+			WithField("before"),
+		), nil
+	}
+	afterPath, err = provider.AbsFromContext(ctx, afterPath)
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, fmt.Sprintf("failed to resolve after path: %v", err),
+			WithField("after"),
+		), nil
+	}
 
 	beforeSnap, err := resolver.LoadSnapshot(beforePath)
 	if err != nil {

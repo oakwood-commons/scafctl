@@ -4,10 +4,12 @@
 package catalog
 
 import (
+	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
+
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 )
 
 // ValidatePluginKind validates that the given kind string is a valid plugin kind
@@ -27,7 +29,7 @@ func ValidatePluginKind(kindStr string) (ArtifactKind, error) {
 // platformPaths maps platform strings (e.g., "linux/amd64") to file paths.
 // Returns an error if any platform is unsupported, path doesn't exist,
 // path is a directory, or file data is empty or unreadable.
-func ReadPlatformBinaries(platformPaths map[string]string) ([]PlatformBinary, error) {
+func ReadPlatformBinaries(ctx context.Context, platformPaths map[string]string) ([]PlatformBinary, error) {
 	if len(platformPaths) == 0 {
 		return nil, fmt.Errorf("no platform binaries provided")
 	}
@@ -43,7 +45,7 @@ func ReadPlatformBinaries(platformPaths map[string]string) ([]PlatformBinary, er
 			return nil, fmt.Errorf("unsupported platform %q; supported: %s", platform, strings.Join(SupportedPluginPlatforms, ", "))
 		}
 
-		absPath, err := filepath.Abs(binPath)
+		absPath, err := provider.AbsFromContext(ctx, binPath)
 		if err != nil {
 			return nil, fmt.Errorf("platform %q: invalid path %q: %w", platform, binPath, err)
 		}

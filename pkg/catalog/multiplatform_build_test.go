@@ -4,6 +4,7 @@
 package catalog
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -48,7 +49,7 @@ func TestReadPlatformBinaries(t *testing.T) {
 	require.NoError(t, os.WriteFile(darwinBin, []byte("darwin-binary-data"), 0o755))
 
 	t.Run("valid platforms", func(t *testing.T) {
-		result, err := ReadPlatformBinaries(map[string]string{
+		result, err := ReadPlatformBinaries(context.Background(), map[string]string{
 			"linux/amd64":  linuxBin,
 			"darwin/arm64": darwinBin,
 		})
@@ -63,7 +64,7 @@ func TestReadPlatformBinaries(t *testing.T) {
 	})
 
 	t.Run("unsupported platform", func(t *testing.T) {
-		_, err := ReadPlatformBinaries(map[string]string{
+		_, err := ReadPlatformBinaries(context.Background(), map[string]string{
 			"solaris/sparc": linuxBin,
 		})
 		require.Error(t, err)
@@ -71,7 +72,7 @@ func TestReadPlatformBinaries(t *testing.T) {
 	})
 
 	t.Run("missing file", func(t *testing.T) {
-		_, err := ReadPlatformBinaries(map[string]string{
+		_, err := ReadPlatformBinaries(context.Background(), map[string]string{
 			"linux/amd64": filepath.Join(dir, "nonexistent"),
 		})
 		require.Error(t, err)
@@ -79,7 +80,7 @@ func TestReadPlatformBinaries(t *testing.T) {
 	})
 
 	t.Run("directory instead of file", func(t *testing.T) {
-		_, err := ReadPlatformBinaries(map[string]string{
+		_, err := ReadPlatformBinaries(context.Background(), map[string]string{
 			"linux/amd64": dir,
 		})
 		require.Error(t, err)
@@ -87,7 +88,7 @@ func TestReadPlatformBinaries(t *testing.T) {
 	})
 
 	t.Run("empty path", func(t *testing.T) {
-		_, err := ReadPlatformBinaries(map[string]string{
+		_, err := ReadPlatformBinaries(context.Background(), map[string]string{
 			"linux/amd64": "",
 		})
 		require.Error(t, err)
@@ -95,7 +96,7 @@ func TestReadPlatformBinaries(t *testing.T) {
 	})
 
 	t.Run("empty map", func(t *testing.T) {
-		_, err := ReadPlatformBinaries(map[string]string{})
+		_, err := ReadPlatformBinaries(context.Background(), map[string]string{})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "no platform binaries")
 	})
@@ -104,7 +105,7 @@ func TestReadPlatformBinaries(t *testing.T) {
 		emptyFile := filepath.Join(dir, "empty")
 		require.NoError(t, os.WriteFile(emptyFile, nil, 0o755))
 
-		_, err := ReadPlatformBinaries(map[string]string{
+		_, err := ReadPlatformBinaries(context.Background(), map[string]string{
 			"linux/amd64": emptyFile,
 		})
 		require.Error(t, err)
@@ -120,7 +121,7 @@ func BenchmarkReadPlatformBinaries(b *testing.B) {
 	paths := map[string]string{"linux/amd64": binFile}
 
 	for b.Loop() {
-		_, _ = ReadPlatformBinaries(paths)
+		_, _ = ReadPlatformBinaries(context.Background(), paths)
 	}
 }
 

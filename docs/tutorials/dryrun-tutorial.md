@@ -161,6 +161,20 @@ if [ "$warnings" -gt 0 ]; then
 fi
 ```
 
+## Working Directory Override
+
+Use `--cwd` (`-C`) to run a dry-run against a solution in a different directory:
+
+```bash
+# Dry-run a solution from another directory
+scafctl --cwd /path/to/project dryrun -f solution.yaml
+
+# Short form
+scafctl -C /path/to/project dryrun -f solution.yaml -o json
+```
+
+All relative paths in the solution (file references, templates, etc.) resolve against the `--cwd` directory.
+
 ## See Also
 
 - [Snapshots Tutorial]({{< relref "snapshots-tutorial" >}}) — Capture and compare runtime execution state
