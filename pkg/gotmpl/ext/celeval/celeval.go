@@ -67,12 +67,18 @@ func CelFunc() gotmpl.ExtFunction {
 // For performance-sensitive templates, prefer pre-computing complex expressions
 // in CEL resolvers rather than using inline cel() calls in templates.
 func Cel(expr string, data any) (any, error) {
+	return CelWithContext(context.Background(), expr, data)
+}
+
+// CelWithContext evaluates a CEL expression with an explicit context so that
+// parent timeouts and cancellation signals are respected during evaluation.
+func CelWithContext(ctx context.Context, expr string, data any) (any, error) {
 	if expr == "" {
 		return nil, fmt.Errorf("cel: expression cannot be empty")
 	}
 
 	result, err := celexp.EvaluateExpression(
-		context.Background(),
+		ctx,
 		expr,
 		data,
 		nil,
@@ -82,4 +88,15 @@ func Cel(expr string, data any) (any, error) {
 	}
 
 	return result, nil
+}
+
+// CelFuncWithContext returns a template.FuncMap entry that binds the cel
+// function to the given context. Use this to ensure inline CEL evaluation
+// in templates respects the caller's timeout and cancellation.
+func CelFuncWithContext(ctx context.Context) template.FuncMap {
+	return template.FuncMap{
+		"cel": func(expr string, data any) (any, error) {
+			return CelWithContext(ctx, expr, data)
+		},
+	}
 }

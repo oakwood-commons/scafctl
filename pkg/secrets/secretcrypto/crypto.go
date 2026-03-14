@@ -25,7 +25,16 @@ const (
 	EncryptedHeader = "SCAFCTL-ENC-V1\n"
 
 	// PBKDF2Iterations is the number of PBKDF2 iterations used for key derivation.
-	PBKDF2Iterations = 100000
+	// Set to 600,000 per OWASP Password Storage Cheat Sheet (2023) recommendation
+	// for PBKDF2-HMAC-SHA256.
+	PBKDF2Iterations = 600000
+
+	// minPBKDF2Iterations is the minimum accepted iteration count when decrypting.
+	// Refusing files that declare a lower count prevents KDF-downgrade attacks
+	// where a tampered file drives brute-force cost close to zero.
+	// Set to 600 000 (matching PBKDF2Iterations) to prevent downgrade to
+	// weaker iteration counts from tampered export files.
+	minPBKDF2Iterations = 600000
 
 	// PBKDF2KeySize is the derived key length in bytes (256 bits).
 	PBKDF2KeySize = 32
@@ -107,6 +116,14 @@ func Decrypt(data []byte, password string) ([]byte, error) {
 	salt := data[:PBKDF2SaltSize]
 	iterationsBytes := data[PBKDF2SaltSize : PBKDF2SaltSize+4]
 	iterations := binary.BigEndian.Uint32(iterationsBytes)
+
+	// Reject suspiciously-low iteration counts to prevent KDF-downgrade attacks.
+	if iterations < minPBKDF2Iterations {
+		return nil, fmt.Errorf(
+			"refusing to decrypt: iteration count %d is below the minimum of %d (file may be tampered)",
+			iterations, minPBKDF2Iterations,
+		)
+	}
 	ciphertextB64 := data[PBKDF2SaltSize+4:]
 
 	// Decode base64

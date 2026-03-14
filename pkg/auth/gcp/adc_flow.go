@@ -54,7 +54,7 @@ func (h *Handler) adcLogin(ctx context.Context, opts auth.LoginOptions) (*auth.R
 	codeChallenge := oauth.GenerateCodeChallenge(codeVerifier)
 
 	// Start local callback server for OAuth redirect
-	callbackServer, err := oauth.StartCallbackServer(ctx, opts.CallbackPort)
+	callbackServer, err := oauth.StartCallbackServer(ctx, opts.CallbackPort, "")
 	if err != nil {
 		return nil, fmt.Errorf("starting callback server: %w", err)
 	}

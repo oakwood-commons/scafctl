@@ -53,7 +53,7 @@ func (h *Handler) authCodeLogin(ctx context.Context, opts auth.LoginOptions) (*a
 	}
 
 	// Start local callback server for OAuth redirect
-	callbackServer, err := oauth.StartCallbackServer(ctx, opts.CallbackPort)
+	callbackServer, err := oauth.StartCallbackServer(ctx, opts.CallbackPort, state)
 	if err != nil {
 		return nil, auth.NewError(HandlerName, "callback_server", fmt.Errorf("starting callback server: %w", err))
 	}

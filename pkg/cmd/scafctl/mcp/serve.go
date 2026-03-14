@@ -94,7 +94,7 @@ func CommandServe(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 	}
 
 	cmd.Flags().StringVar(&opts.Transport, "transport", "stdio", "Transport protocol (stdio, sse, http)")
-	cmd.Flags().StringVar(&opts.Addr, "addr", ":8080", "Listen address for SSE/HTTP transports")
+	cmd.Flags().StringVar(&opts.Addr, "addr", "127.0.0.1:8080", "Listen address for SSE/HTTP transports (defaults to loopback; use 0.0.0.0:8080 to bind all interfaces)")
 	cmd.Flags().StringVar(&opts.LogFile, "log-file", "", "Write server logs to file (default: stderr)")
 	cmd.Flags().BoolVar(&opts.Info, "info", false, "Print server capabilities as JSON and exit")
 	cmd.Flags().IntVar(&opts.WorkerPoolSize, "worker-pool-size", 0, "Stdio worker pool size (0 = SDK default)")

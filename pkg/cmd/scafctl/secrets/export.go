@@ -55,7 +55,7 @@ By default, internal secrets (scafctl.*) are excluded.`,
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
-			store, err := secrets.New()
+			store, err := newStoreFromContext(ctx)
 			if err != nil {
 				err := fmt.Errorf("failed to initialize secrets store: %w", err)
 				w.Errorf("%v", err)

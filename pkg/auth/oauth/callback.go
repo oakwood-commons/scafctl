@@ -30,6 +30,8 @@ type CallbackServer struct {
 	listener net.Listener
 	server   *http.Server
 	resultCh chan CallbackResult
+
+	expectedState string
 }
 
 // StartCallbackServer creates and starts a local HTTP server on a localhost
@@ -37,11 +39,16 @@ type CallbackServer struct {
 // the server binds to that specific port so the redirect URI is predictable
 // (useful when the app registration only allows specific redirect URIs).
 //
+// expectedState is the OAuth state parameter that must match the value returned
+// in the callback. If non-empty, the callback handler rejects responses whose
+// state does not match, preventing CSRF attacks. The state is set before the
+// server begins accepting connections to close any race window.
+//
 // The server waits for a single OAuth redirect, extracts the authorization
 // code (or error), and sends it on the channel returned by ResultChan().
 //
 // The caller is responsible for calling Close() when done.
-func StartCallbackServer(ctx context.Context, port int) (*CallbackServer, error) {
+func StartCallbackServer(ctx context.Context, port int, expectedState string) (*CallbackServer, error) {
 	addr := "localhost:0"
 	if port > 0 {
 		addr = fmt.Sprintf("localhost:%d", port)
@@ -60,9 +67,10 @@ func StartCallbackServer(ctx context.Context, port int) (*CallbackServer, error)
 	}
 
 	cs := &CallbackServer{
-		RedirectURI: fmt.Sprintf("http://localhost:%d", tcpAddr.Port),
-		listener:    listener,
-		resultCh:    make(chan CallbackResult, 1),
+		RedirectURI:   fmt.Sprintf("http://localhost:%d", tcpAddr.Port),
+		listener:      listener,
+		resultCh:      make(chan CallbackResult, 1),
+		expectedState: expectedState,
 	}
 
 	mux := http.NewServeMux()
@@ -107,6 +115,18 @@ func (cs *CallbackServer) handleCallback(w http.ResponseWriter, r *http.Request)
 		cs.resultCh <- CallbackResult{Err: fmt.Errorf("OAuth error: %s", errMsg)}
 		fmt.Fprintf(w, "<html><body><h1>Authentication Failed</h1><p>%s</p><p>You can close this window.</p></body></html>", html.EscapeString(errMsg)) //nolint:gosec // input is escaped
 		return
+	}
+
+	// Validate state parameter to prevent CSRF attacks.
+	// expectedState is set at construction before Serve() begins, so no
+	// synchronization is required.
+	if cs.expectedState != "" {
+		if r.URL.Query().Get("state") != cs.expectedState {
+			errMsg := "state parameter mismatch (possible CSRF attack)"
+			cs.resultCh <- CallbackResult{Err: fmt.Errorf("OAuth error: %s", errMsg)}
+			fmt.Fprintf(w, "<html><body><h1>Authentication Failed</h1><p>%s</p><p>You can close this window.</p></body></html>", html.EscapeString(errMsg)) //nolint:gosec // input is escaped
+			return
+		}
 	}
 
 	cs.resultCh <- CallbackResult{Code: code}

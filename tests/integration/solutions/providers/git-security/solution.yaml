@@ -1,0 +1,88 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-git-security
+  version: 1.0.0
+  description: |
+    Security tests for the git provider.
+    Validates credential isolation via netrc and input sanitization.
+
+spec:
+  resolvers:
+    sandboxDir:
+      description: Sandbox directory
+      resolve:
+        with:
+          - provider: env
+            inputs:
+              operation: get
+              name: SCAFCTL_SANDBOX_DIR
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "__self.value"
+
+    # Clone with credentials that contain whitespace (should fail)
+    cloneWithBadUsername:
+      description: Clone with whitespace in username should fail
+      dependsOn: [sandboxDir]
+      resolve:
+        with:
+          - provider: git
+            inputs:
+              operation: clone
+              repository: https://example.com/org/repo.git
+              path:
+                expr: "_.sandboxDir + '/bad-user-clone'"
+              username: "user name"
+              password: "valid-password"
+
+    # Clone with credentials that contain control characters (should fail)
+    cloneWithControlCharPassword:
+      description: Clone with control char in password should fail
+      dependsOn: [sandboxDir]
+      resolve:
+        with:
+          - provider: git
+            inputs:
+              operation: clone
+              repository: https://example.com/org/repo.git
+              path:
+                expr: "_.sandboxDir + '/control-char-clone'"
+              username: "validuser"
+              password: "pass\tword"
+
+  testing:
+    config:
+      # resolve-defaults: resolvers intentionally fail to test security validation
+      # render-defaults: solution has no workflow.actions section
+      skipBuiltins: [resolve-defaults, render-defaults]
+
+    cases:
+      _base:
+        description: Base template for git security tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [provider, git, security]
+
+      whitespace-in-username-rejected:
+        description: Verify whitespace in git username is rejected for netrc safety
+        extends: [_base]
+        args: ["cloneWithBadUsername", "-o", "json"]
+        assertions:
+          - expression: __exitCode != 0
+            message: "Clone with whitespace in username should fail"
+          - expression: __stderr.contains("whitespace") || __stderr.contains("control characters")
+            message: "Error should mention whitespace or control characters"
+
+      control-char-in-password-rejected:
+        description: Verify control characters in git password are rejected
+        extends: [_base]
+        args: ["cloneWithControlCharPassword", "-o", "json"]
+        assertions:
+          - expression: __exitCode != 0
+            message: "Clone with control char in password should fail"
+          - expression: __stderr.contains("whitespace") || __stderr.contains("control characters")
+            message: "Error should mention whitespace or control characters"

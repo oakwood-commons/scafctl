@@ -5,6 +5,8 @@ package plugin
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
@@ -15,6 +17,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// binaryDigest returns the sha256 digest string for the given bytes.
+func binaryDigest(data []byte) string {
+	return fmt.Sprintf("sha256:%x", sha256.Sum256(data))
+}
 
 // mockCatalog implements catalog.Catalog for testing.
 type mockCatalog struct {
@@ -43,7 +50,7 @@ func (m *mockCatalog) addArtifact(ref catalog.Reference, content []byte) {
 		content: content,
 		info: catalog.ArtifactInfo{
 			Reference: ref,
-			Digest:    "sha256:mockdigest-" + key,
+			Digest:    binaryDigest(content),
 			Catalog:   m.name,
 		},
 	}
@@ -150,7 +157,7 @@ func TestFetcher_FetchPlugins_CacheMiss_FetchFromCatalog(t *testing.T) {
 		{Name: "my-plugin", Kind: solution.PluginKindProvider, Version: "1.0.0"},
 	}
 	lock := []bundler.LockPlugin{
-		{Name: "my-plugin", Kind: "provider", Version: "1.0.0", Digest: "sha256:mockdigest-my-plugin@1.0.0", ResolvedFrom: "test"},
+		{Name: "my-plugin", Kind: "provider", Version: "1.0.0", Digest: binaryDigest([]byte("the-binary")), ResolvedFrom: "test"},
 	}
 
 	results, err := f.FetchPlugins(context.Background(), deps, lock)
@@ -263,8 +270,8 @@ func TestFetcher_FetchPlugins_MultiplePlugins(t *testing.T) {
 	}
 
 	lock := []bundler.LockPlugin{
-		{Name: "plugin-a", Kind: "provider", Version: "1.0.0", Digest: "sha256:mockdigest-plugin-a@1.0.0"},
-		{Name: "plugin-b", Kind: "provider", Version: "2.0.0", Digest: "sha256:mockdigest-plugin-b@2.0.0"},
+		{Name: "plugin-a", Kind: "provider", Version: "1.0.0", Digest: binaryDigest([]byte("binary-a"))},
+		{Name: "plugin-b", Kind: "provider", Version: "2.0.0", Digest: binaryDigest([]byte("binary-b"))},
 	}
 
 	results, err := f.FetchPlugins(context.Background(), deps, lock)

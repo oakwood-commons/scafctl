@@ -283,6 +283,17 @@ var KnownRules = map[string]RuleMeta{
 			"# Wrong (null resolver):\nresolvers:\n  my-resolver:\n\n# Correct:\nresolvers:\n  my-resolver:\n    resolve:\n      with:\n        - provider: static\n          inputs:\n            value: \"...\"",
 		},
 	},
+	"exec-command-injection": {
+		Rule:        "exec-command-injection",
+		Severity:    string(SeverityWarning),
+		Category:    "security",
+		Description: "The exec provider's 'command' input uses a dynamic expression or template, which risks command injection via shell metacharacters.",
+		Why:         "When command strings are built from resolved values, shell metacharacters in those values can escape the intended command and execute arbitrary code.",
+		Fix:         "Pass dynamic values via the 'args' input instead. Arguments are shell-quoted before being appended to the command, reducing injection risk.",
+		Examples: []string{
+			"# Wrong — dynamic value in command string:\nprovider: exec\ninputs:\n  command:\n    expr: \"'echo ' + _.userInput\"\n\n# Correct — static command, dynamic args:\nprovider: exec\ninputs:\n  command: echo\n  args:\n    - expr: \"_.userInput\"",
+		},
+	},
 }
 
 // ListRules returns all known lint rules sorted by severity (error > warning > info)

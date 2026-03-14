@@ -17,6 +17,10 @@ type GoTemplateConfigInput struct {
 	CacheSize int `json:"cacheSize" yaml:"cacheSize" doc:"Maximum number of compiled templates to cache" maximum:"100000" example:"10000"`
 	// EnableMetrics enables template cache metrics collection
 	EnableMetrics bool `json:"enableMetrics" yaml:"enableMetrics" doc:"Enable template cache metrics collection"`
+	// AllowEnvFunctions enables the sprig env/expandenv functions.
+	// When false (default), these functions are stripped from the template func map
+	// to prevent accidental or malicious env-var exfiltration.
+	AllowEnvFunctions bool `json:"allowEnvFunctions" yaml:"allowEnvFunctions" doc:"Allow sprig env/expandenv functions (default: false)"`
 }
 
 var (
@@ -73,9 +77,13 @@ func initFromAppConfigInternal(ctx context.Context, cfg GoTemplateConfigInput) {
 		return appConfigCache
 	})
 
+	// Configure env function availability
+	SetAllowEnvFunctions(cfg.AllowEnvFunctions)
+
 	lgr.V(1).Info("initialized Go template cache from app config",
 		"cacheSize", cacheSize,
-		"enableMetrics", cfg.EnableMetrics)
+		"enableMetrics", cfg.EnableMetrics,
+		"allowEnvFunctions", cfg.AllowEnvFunctions)
 }
 
 // ResetAppConfigForTesting resets the app config state for testing purposes.
@@ -85,6 +93,8 @@ func ResetAppConfigForTesting() {
 	appConfigInitialized = false
 	appConfigCache = nil
 	appConfigMu.Unlock()
+	// Reset env function flag to default (false) to prevent state leaking between tests
+	SetAllowEnvFunctions(false)
 	// Also reset the cache factory and default cache
 	cacheFactoryMu.Lock()
 	cacheFactoryInitialized = false

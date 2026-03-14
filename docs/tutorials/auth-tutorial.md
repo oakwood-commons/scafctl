@@ -779,11 +779,13 @@ scafctl auth login github --flow github-app
 
 The private key can be provided from multiple sources (checked in priority order):
 
-| Source | Config Field | Env Var |
-|--------|-------------|---------|
-| Inline PEM | `privateKey` | `SCAFCTL_GITHUB_APP_PRIVATE_KEY` |
-| File path | `privateKeyPath` | `SCAFCTL_GITHUB_APP_PRIVATE_KEY_PATH` |
-| Secret store | `privateKeySecretName` | — |
+| Source | Config Field | Env Var | Security |
+|--------|-------------|---------|----------|
+| Inline PEM | `privateKey` | `SCAFCTL_GITHUB_APP_PRIVATE_KEY` | ⚠️ Least secure — key visible in config/env |
+| File path | `privateKeyPath` | `SCAFCTL_GITHUB_APP_PRIVATE_KEY_PATH` | ✅ Good — key in a file with restricted permissions |
+| Secret store | `privateKeySecretName` | — | ✅ Best — key encrypted by OS keychain |
+
+> **Security recommendation:** Prefer `privateKeySecretName` (encrypted secret store) or `privateKeyPath` (file with `chmod 600`) over inline `privateKey`. When the inline method is used, scafctl logs a warning recommending a more secure alternative.
 
 **Inline PEM (CI/CD secret):**
 

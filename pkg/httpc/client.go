@@ -179,6 +179,22 @@ func NewClient(config *ClientConfig) *Client {
 		retryClient.HTTPClient.Transport = otelhttp.NewTransport(base)
 	}
 
+	// Validate redirect targets against private IP ranges when AllowPrivateIPs is
+	// false. net/http follows redirects automatically, so a public URL that 30x-
+	// redirects to a private IP literal (e.g. 169.254.169.254) would bypass the
+	// initial ValidateURLNotPrivate check without this hook.
+	retryClient.HTTPClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after %d redirects", len(via))
+		}
+		if !PrivateIPsAllowed(req.Context()) {
+			if err := ValidateURLNotPrivate(req.URL.String()); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	// Configure the HTTP client with caching if enabled
 	var httpClient *http.Client
 	var cache httpcache.Cache

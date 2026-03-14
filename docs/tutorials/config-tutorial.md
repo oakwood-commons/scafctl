@@ -202,6 +202,9 @@ Override paths with XDG environment variables or SCAFCTL_SECRETS_DIR.
 | `httpClient.timeout` | duration | `30s` | HTTP request timeout |
 | `httpClient.retry.maxRetries` | int | `3` | Max HTTP retries |
 | `httpClient.caching.enabled` | bool | `true` | Enable HTTP response caching |
+| `httpClient.maxResponseBodySize` | int | `104857600` | Max HTTP response body size (bytes, default 100 MB) |
+| `httpClient.allowPrivateIPs` | bool | `false` | Allow requests to private/loopback IPs (SSRF protection) |
+| `settings.requireSecureKeyring` | bool | `false` | Fail if OS keyring unavailable instead of insecure fallback |
 | `resolver.timeout` | duration | `5m` | Overall resolver timeout |
 | `resolver.concurrency` | int | `4` | Max parallel resolver execution |
 | `action.timeout` | duration | `10m` | Overall action timeout |

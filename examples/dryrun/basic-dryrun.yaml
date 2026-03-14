@@ -62,20 +62,18 @@ spec:
     actions:
       greet:
         description: Print greeting
-        with:
-          - provider: exec
-            inputs:
-              command: echo
-              args:
-                - "{{ .greeting }}"
+        provider: exec
+        inputs:
+          command: echo
+          args:
+            - "{{ .greeting }}"
 
       deploy:
         description: Deploy service to target
         dependsOn:
           - greet
-        with:
-          - provider: exec
-            inputs:
-              command: echo
-              args:
-                - "Deploying to {{ .endpoint }}"
+        provider: exec
+        inputs:
+          command: echo
+          args:
+            - "Deploying to {{ .endpoint }}"

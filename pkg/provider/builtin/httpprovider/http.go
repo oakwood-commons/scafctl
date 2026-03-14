@@ -650,6 +650,12 @@ func (p *HTTPProvider) execute(
 ) (*provider.Output, error) {
 	lgr := logger.FromContext(ctx)
 
+	if !privateIPsAllowed(ctx) {
+		if err := validateURLNotPrivate(urlStr); err != nil {
+			return nil, fmt.Errorf("%s: %w", ProviderName, err)
+		}
+	}
+
 	var bodyReader io.Reader
 	if bodyContent != "" {
 		bodyReader = strings.NewReader(bodyContent)
@@ -680,9 +686,15 @@ func (p *HTTPProvider) execute(
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	// Limit the response body size to prevent denial-of-service via unbounded
+	// responses. The limit is configurable via httpClient.maxResponseBodySize.
+	limit := maxResponseBodySize(ctx)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
 		return nil, fmt.Errorf("%s: failed to read response body: %w", ProviderName, err)
+	}
+	if int64(len(respBody)) > limit {
+		return nil, fmt.Errorf("%s: response body exceeds maximum size of %d bytes", ProviderName, limit)
 	}
 
 	respHeaders := make(map[string]any)

@@ -144,28 +144,15 @@ func TestEnvProvider_Execute_List(t *testing.T) {
 	mockOps.Set("HOME", "/home/user")
 	mockOps.Set("USER", "testuser")
 
+	// list without a prefix must be rejected
 	inputs := map[string]any{
 		"operation": "list",
 	}
 
 	output, err := p.Execute(ctx, inputs)
-	require.NoError(t, err)
-	require.NotNil(t, output)
-
-	data := output.Data.(map[string]any)
-	assert.Equal(t, "list", data["operation"])
-
-	variables := data["variables"].(map[string]string)
-	count := data["count"].(int)
-
-	assert.NotEmpty(t, variables)
-	assert.Equal(t, len(variables), count)
-	assert.Equal(t, 3, count)
-
-	// Verify we can find the variables we added
-	assert.Equal(t, "/usr/bin", variables["PATH"])
-	assert.Equal(t, "/home/user", variables["HOME"])
-	assert.Equal(t, "testuser", variables["USER"])
+	require.Error(t, err)
+	assert.Nil(t, output)
+	assert.Contains(t, err.Error(), "prefix is required")
 }
 
 func TestEnvProvider_Execute_List_WithPrefix(t *testing.T) {
