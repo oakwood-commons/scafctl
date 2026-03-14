@@ -44,7 +44,7 @@ Use --overwrite to replace existing secrets.`,
 			}
 			inputFile := args[0]
 
-			store, err := secrets.New()
+			store, err := newStoreFromContext(ctx)
 			if err != nil {
 				err := fmt.Errorf("failed to initialize secrets store: %w", err)
 				w.Errorf("%v", err)

@@ -66,6 +66,12 @@ func DefaultHTTPCacheDir() string {
 
 // Size limits
 const (
+	// DefaultMaxResponseBodySize is the maximum HTTP response body size the
+	// HTTP provider will read into memory (100 MB). This prevents denial of
+	// service via unbounded response bodies from malicious or misconfigured
+	// servers. Configurable per-deployment via httpClient.maxResponseBodySize.
+	DefaultMaxResponseBodySize int64 = 100 * 1024 * 1024
+
 	// DefaultMaxCacheFileSize is the maximum size for a single cached file (10MB).
 	DefaultMaxCacheFileSize = 10 * 1024 * 1024
 

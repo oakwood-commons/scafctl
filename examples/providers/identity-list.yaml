@@ -1,2 +1,25 @@
-# Identity provider - list available auth handlers
-operation: list
+# Identity Provider — List Available Auth Handlers
+#
+# Lists all available authentication handlers.
+#
+# Run: scafctl run solution -f examples/providers/identity-list.yaml
+# Run: scafctl run resolver -f examples/providers/identity-list.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: identity-list-example
+  version: 1.0.0
+  description: List available authentication handlers
+
+spec:
+  resolvers:
+    handlers:
+      description: Available auth handlers
+      type: any
+      resolve:
+        with:
+          - provider: identity
+            inputs:
+              operation: list

@@ -270,8 +270,12 @@ func (p *EnvProvider) executeSet(inputs map[string]any) (*provider.Output, error
 
 //nolint:unparam // Error return kept for consistent interface - may return errors in future
 func (p *EnvProvider) executeList(inputs map[string]any) (*provider.Output, error) {
-	envVars := make(map[string]string)
 	prefix, _ := inputs["prefix"].(string)
+	if prefix == "" {
+		return nil, fmt.Errorf("prefix is required for list operation: listing all environment variables without a scope would expose process secrets")
+	}
+
+	envVars := make(map[string]string)
 
 	// Get all environment variables
 	for _, env := range p.envOps.Environ() {

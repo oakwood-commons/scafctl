@@ -43,7 +43,7 @@ func CommandGet(_ *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
-			store, err := secrets.New()
+			store, err := newStoreFromContext(ctx)
 			if err != nil {
 				err := fmt.Errorf("failed to initialize secrets store: %w", err)
 				w.Errorf("%v", err)

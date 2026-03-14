@@ -117,7 +117,7 @@ spec:
             Content-Type: application/json
           body:
             expr: |
-              toJson({
+              json.marshal({
                 "tag_name": _.version,
                 "name": "Release " + _.version,
                 "draft": false,

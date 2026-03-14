@@ -5,6 +5,7 @@ package plugin
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 
 	"github.com/go-logr/logr"
@@ -185,6 +186,24 @@ func (f *Fetcher) fetchOne(ctx context.Context, dep solution.PluginDependency, l
 	data, info, err := f.catalogFetcher.FetchPlugin(ctx, dep.Name, kind, version, f.platform)
 	if err != nil {
 		return FetchResult{}, fmt.Errorf("fetching binary: %w", err)
+	}
+
+	// Verify the downloaded binary matches the expected digest before caching.
+	// Digest verification is mandatory to prevent supply chain attacks via
+	// compromised catalogs or man-in-the-middle attacks.
+	if expectedDigest == "" {
+		return FetchResult{}, fmt.Errorf(
+			"plugin %s@%s: no digest available for verification; "+
+				"run 'scafctl build solution' to generate a lock file with pinned digests",
+			dep.Name, version,
+		)
+	}
+	actualDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(data))
+	if actualDigest != expectedDigest {
+		return FetchResult{}, fmt.Errorf(
+			"plugin binary digest mismatch for %s@%s: expected %s, got %s (possible supply chain attack or corrupted download)",
+			dep.Name, version, expectedDigest, actualDigest,
+		)
 	}
 
 	// Write to cache

@@ -1,14 +1,33 @@
-# Link header pagination (RFC 8288)
-# Follows rel="next" links in the Link response header
-# Used by GitHub, GitLab, and many REST APIs
-name: link-header-pagination
-provider: http
-inputs:
-  url: "https://api.github.com/users/octocat/repos?per_page=30"
-  method: GET
-  headers:
-    Accept: "application/vnd.github+json"
-  pagination:
-    strategy: linkHeader
-    maxPages: 5
-    collectPath: "body"
+# HTTP Provider — Link Header Pagination (RFC 8288)
+#
+# Demonstrates pagination by following rel="next" links in the Link
+# response header. Used by GitHub, GitLab, and many REST APIs.
+#
+# Run: scafctl run solution -f examples/providers/http-pagination-link-header.yaml
+# Run: scafctl run resolver -f examples/providers/http-pagination-link-header.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: http-pagination-link-header-example
+  version: 1.0.0
+  description: Link header pagination (RFC 8288) follows rel="next" links
+
+spec:
+  resolvers:
+    repos:
+      description: GitHub repos fetched via Link header pagination
+      type: any
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: "https://api.github.com/users/octocat/repos?per_page=30"
+              method: GET
+              headers:
+                Accept: "application/vnd.github+json"
+              pagination:
+                strategy: linkHeader
+                maxPages: 5
+                collectPath: "body"

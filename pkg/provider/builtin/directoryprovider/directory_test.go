@@ -428,27 +428,22 @@ func TestDirectoryProvider_List_Checksum(t *testing.T) {
 	assert.Equal(t, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", entries[0]["checksum"])
 }
 
-func TestDirectoryProvider_List_Checksum_MD5(t *testing.T) {
+func TestDirectoryProvider_List_Checksum_MD5_Rejected(t *testing.T) {
 	p := NewDirectoryProvider()
 	ctx := context.Background()
 	dir := t.TempDir()
 
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "test.txt"), []byte("hello"), 0o644))
 
-	result, err := p.Execute(ctx, map[string]any{
+	_, err := p.Execute(ctx, map[string]any{
 		"operation":      "list",
 		"path":           dir,
 		"includeContent": true,
 		"checksum":       "md5",
 	})
 
-	require.NoError(t, err)
-	data := result.Data.(map[string]any)
-	entries := data["entries"].([]map[string]any)
-	require.Len(t, entries, 1)
-
-	assert.NotEmpty(t, entries[0]["checksum"])
-	assert.Equal(t, "md5", entries[0]["checksumAlgorithm"])
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported checksum algorithm: md5")
 }
 
 func TestDirectoryProvider_List_InvalidChecksum(t *testing.T) {
@@ -901,6 +896,60 @@ func TestDirectoryProvider_Copy_SourceNotDirectory(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not a directory")
+}
+
+func TestDirectoryProvider_Copy_SkipsSymlinksInSource(t *testing.T) {
+	p := NewDirectoryProvider()
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	srcDir := filepath.Join(dir, "source")
+	require.NoError(t, os.MkdirAll(srcDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "real.txt"), []byte("real"), 0o644))
+
+	// Create a symlink inside the source directory
+	secretFile := filepath.Join(dir, "secret.txt")
+	require.NoError(t, os.WriteFile(secretFile, []byte("secret data"), 0o644))
+	require.NoError(t, os.Symlink(secretFile, filepath.Join(srcDir, "link.txt")))
+
+	dstDir := filepath.Join(dir, "destination")
+	result, err := p.Execute(ctx, map[string]any{
+		"operation":   "copy",
+		"path":        srcDir,
+		"destination": dstDir,
+	})
+	require.NoError(t, err)
+	data := result.Data.(map[string]any)
+	assert.True(t, data["success"].(bool))
+
+	// The real file should be copied
+	content, err := os.ReadFile(filepath.Join(dstDir, "real.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "real", string(content))
+
+	// The symlink should NOT be copied
+	_, err = os.Lstat(filepath.Join(dstDir, "link.txt"))
+	assert.True(t, os.IsNotExist(err), "symlink should not have been copied to destination")
+}
+
+func TestCopyFile_RejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a real file and a symlink to it
+	realFile := filepath.Join(dir, "real.txt")
+	require.NoError(t, os.WriteFile(realFile, []byte("content"), 0o644))
+
+	symlinkFile := filepath.Join(dir, "link.txt")
+	require.NoError(t, os.Symlink(realFile, symlinkFile))
+
+	dst := filepath.Join(dir, "output.txt")
+	err := copyFile(symlinkFile, dst)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not a regular file")
+
+	// Destination should not have been created
+	_, statErr := os.Stat(dst)
+	assert.True(t, os.IsNotExist(statErr))
 }
 
 // =============================================================================

@@ -104,12 +104,14 @@ When you build a solution with `scafctl build solution`, plugin versions are pin
 - Content digest (sha256)
 - Source catalog
 
-When running with a lock file, scafctl uses the pinned versions exactly. **Without a lock file**, scafctl resolves from catalogs and emits a warning:
+When running with a lock file, scafctl uses the pinned versions exactly. **Without a lock file**, scafctl resolves from catalogs and **requires the catalog to provide a digest**. If no digest is available, the fetch fails:
 
 ```
-WARNING: resolving plugin without lock file — version may differ between runs.
-Run 'scafctl build solution' to pin plugin versions.
+plugin my-plugin@1.0.0: no digest available for verification;
+Run 'scafctl build solution' to generate a lock file with pinned digests
 ```
+
+This mandatory digest verification prevents supply chain attacks where a compromised catalog or man-in-the-middle attacker could serve a malicious binary. Always use lock files for production deployments.
 
 ## Catalog Chain
 

@@ -7,7 +7,6 @@ import (
 	"fmt"
 
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
-	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/input"
@@ -44,7 +43,7 @@ This is useful for:
 				return fmt.Errorf("writer not initialized in context")
 			}
 
-			store, err := secrets.New()
+			store, err := newStoreFromContext(ctx)
 			if err != nil {
 				err := fmt.Errorf("failed to initialize secrets store: %w", err)
 				w.Errorf("%v", err)

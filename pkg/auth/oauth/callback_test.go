@@ -16,7 +16,7 @@ import (
 
 func TestStartCallbackServer(t *testing.T) {
 	ctx := context.Background()
-	cs, err := StartCallbackServer(ctx, 0)
+	cs, err := StartCallbackServer(ctx, 0, "")
 	require.NoError(t, err)
 	defer cs.Close()
 
@@ -25,7 +25,7 @@ func TestStartCallbackServer(t *testing.T) {
 
 func TestCallbackServer_ReceivesCode(t *testing.T) {
 	ctx := context.Background()
-	cs, err := StartCallbackServer(ctx, 0)
+	cs, err := StartCallbackServer(ctx, 0, "")
 	require.NoError(t, err)
 	defer cs.Close()
 
@@ -46,7 +46,7 @@ func TestCallbackServer_ReceivesCode(t *testing.T) {
 
 func TestCallbackServer_ReceivesError(t *testing.T) {
 	ctx := context.Background()
-	cs, err := StartCallbackServer(ctx, 0)
+	cs, err := StartCallbackServer(ctx, 0, "")
 	require.NoError(t, err)
 	defer cs.Close()
 
@@ -68,7 +68,7 @@ func TestCallbackServer_ReceivesError(t *testing.T) {
 
 func TestCallbackServer_NoCode(t *testing.T) {
 	ctx := context.Background()
-	cs, err := StartCallbackServer(ctx, 0)
+	cs, err := StartCallbackServer(ctx, 0, "")
 	require.NoError(t, err)
 	defer cs.Close()
 
@@ -90,14 +90,14 @@ func TestCallbackServer_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
-	_, err := StartCallbackServer(ctx, 0)
+	_, err := StartCallbackServer(ctx, 0, "")
 	// Should fail because the context is already cancelled
 	assert.Error(t, err)
 }
 
 func TestCallbackServer_Close(t *testing.T) {
 	ctx := context.Background()
-	cs, err := StartCallbackServer(ctx, 0)
+	cs, err := StartCallbackServer(ctx, 0, "")
 	require.NoError(t, err)
 
 	err = cs.Close()
@@ -113,7 +113,7 @@ func TestCallbackServer_Close(t *testing.T) {
 
 func TestCallbackServer_HTMLEscapesErrors(t *testing.T) {
 	ctx := context.Background()
-	cs, err := StartCallbackServer(ctx, 0)
+	cs, err := StartCallbackServer(ctx, 0, "")
 	require.NoError(t, err)
 	defer cs.Close()
 
@@ -135,7 +135,7 @@ func TestStartCallbackServer_FixedPort(t *testing.T) {
 	ctx := context.Background()
 
 	// Use a fixed port; pick a high port unlikely to collide.
-	cs, err := StartCallbackServer(ctx, 18947)
+	cs, err := StartCallbackServer(ctx, 18947, "")
 	require.NoError(t, err)
 	defer cs.Close()
 
@@ -159,12 +159,92 @@ func TestStartCallbackServer_FixedPortAlreadyInUse(t *testing.T) {
 	ctx := context.Background()
 
 	// Bind a port first.
-	cs1, err := StartCallbackServer(ctx, 18948)
+	cs1, err := StartCallbackServer(ctx, 18948, "")
 	require.NoError(t, err)
 	defer cs1.Close()
 
 	// Second attempt on the same port should fail.
-	_, err = StartCallbackServer(ctx, 18948)
+	_, err = StartCallbackServer(ctx, 18948, "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "18948")
+}
+
+func TestCallbackServer_StateValidation_Matches(t *testing.T) {
+	ctx := context.Background()
+	cs, err := StartCallbackServer(ctx, 0, "random-state-123")
+	require.NoError(t, err)
+	defer cs.Close()
+
+	resp, err := http.Get(cs.RedirectURI + "/?code=test-code&state=random-state-123") //nolint:noctx // test code
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	select {
+	case result := <-cs.ResultChan():
+		assert.NoError(t, result.Err)
+		assert.Equal(t, "test-code", result.Code)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for callback result")
+	}
+}
+
+func TestCallbackServer_StateValidation_Mismatch(t *testing.T) {
+	ctx := context.Background()
+	cs, err := StartCallbackServer(ctx, 0, "expected-state")
+	require.NoError(t, err)
+	defer cs.Close()
+
+	resp, err := http.Get(cs.RedirectURI + "/?code=test-code&state=wrong-state") //nolint:noctx // test code
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	select {
+	case result := <-cs.ResultChan():
+		assert.Error(t, result.Err)
+		assert.Contains(t, result.Err.Error(), "state parameter mismatch")
+		assert.Empty(t, result.Code)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for callback result")
+	}
+}
+
+func TestCallbackServer_StateValidation_Missing(t *testing.T) {
+	ctx := context.Background()
+	cs, err := StartCallbackServer(ctx, 0, "expected-state")
+	require.NoError(t, err)
+	defer cs.Close()
+
+	// Code present but state missing from callback
+	resp, err := http.Get(cs.RedirectURI + "/?code=test-code") //nolint:noctx // test code
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	select {
+	case result := <-cs.ResultChan():
+		assert.Error(t, result.Err)
+		assert.Contains(t, result.Err.Error(), "state parameter mismatch")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for callback result")
+	}
+}
+
+func TestCallbackServer_NoExpectedState_SkipsValidation(t *testing.T) {
+	ctx := context.Background()
+	cs, err := StartCallbackServer(ctx, 0, "")
+	require.NoError(t, err)
+	defer cs.Close()
+
+	// Empty state skips validation — backward-compatible behavior
+	resp, err := http.Get(cs.RedirectURI + "/?code=test-code") //nolint:noctx // test code
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	select {
+	case result := <-cs.ResultChan():
+		assert.NoError(t, result.Err)
+		assert.Equal(t, "test-code", result.Code)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for callback result")
+	}
 }

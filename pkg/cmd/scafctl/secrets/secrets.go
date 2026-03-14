@@ -5,13 +5,26 @@
 package secrets
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
 )
+
+// newStoreFromContext creates a secrets.Store, honoring the RequireSecureKeyring
+// setting from the application config when available in ctx.
+func newStoreFromContext(ctx context.Context) (secrets.Store, error) {
+	var opts []secrets.Option
+	if cfg := config.FromContext(ctx); cfg != nil {
+		opts = append(opts, secrets.WithRequireSecureKeyring(cfg.Settings.RequireSecureKeyring))
+	}
+	return secrets.New(opts...)
+}
 
 // CommandSecrets creates the 'secrets' command.
 func CommandSecrets(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {

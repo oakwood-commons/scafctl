@@ -14,6 +14,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	gotmplext "github.com/oakwood-commons/scafctl/pkg/gotmpl/ext"
+	"github.com/oakwood-commons/scafctl/pkg/gotmpl/ext/celeval"
 	"github.com/oakwood-commons/scafctl/pkg/profiler"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
@@ -60,6 +61,10 @@ func run() error {
 	// Register Go template extension functions (sprig + custom) for the gotmpl package.
 	// This allows gotmpl.NewService(nil) to automatically include all extension functions.
 	gotmpl.SetExtensionFuncMapFactory(gotmplext.AllFuncMap)
+
+	// Register context-aware template function binder so that inline CEL
+	// evaluation in templates respects the caller's timeout and cancellation.
+	gotmpl.SetContextFuncBinderFactory(celeval.CelFuncWithContext)
 
 	cli := scafctl.Root(nil)
 	defer func() {

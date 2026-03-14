@@ -1,14 +1,34 @@
-# Cursor-based pagination (token extracted from response body)
-# Fetches all items by following the nextCursor token until null
-name: cursor-pagination
-provider: http
-inputs:
-  url: "https://api.example.com/items?limit=50"
-  method: GET
-  pagination:
-    strategy: cursor
-    maxPages: 10
-    nextTokenPath: "body.nextCursor"
-    nextTokenParam: "cursor"
-    collectPath: "body.items"
-    stopWhen: "size(body.items) == 0"
+# HTTP Provider — Cursor-Based Pagination
+#
+# Demonstrates cursor-based pagination where a token is extracted
+# from the response body to fetch subsequent pages.
+#
+# Run: scafctl run solution -f examples/providers/http-pagination-cursor.yaml
+# Run: scafctl run resolver -f examples/providers/http-pagination-cursor.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: http-pagination-cursor-example
+  version: 1.0.0
+  description: Cursor-based pagination follows nextCursor token until null
+
+spec:
+  resolvers:
+    paginated-items:
+      description: All items fetched via cursor-based pagination
+      type: any
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: "https://api.example.com/items?limit=50"
+              method: GET
+              pagination:
+                strategy: cursor
+                maxPages: 10
+                nextTokenPath: "body.nextCursor"
+                nextTokenParam: "cursor"
+                collectPath: "body.items"
+                stopWhen: "size(body.items) == 0"

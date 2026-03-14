@@ -830,6 +830,22 @@ func lintProviderInputsForStep(providerName string, inputs map[string]*spec.Valu
 			}
 		}
 	}
+
+	// Security rule: warn when exec provider's 'command' input uses a dynamic expression or
+	// template. Shell metacharacters in resolved values can cause command injection.
+	// Pass dynamic data via 'args' instead — args are shell-quoted before being appended
+	// to the command, which reduces injection risk compared to embedding dynamic values
+	// directly in the command string.
+	if providerName == "exec" {
+		if cmdVal, ok := inputs["command"]; ok && cmdVal != nil {
+			if cmdVal.Expr != nil || cmdVal.Tmpl != nil {
+				result.addFinding(SeverityWarning, "security", location+".inputs.command",
+					"exec provider 'command' uses a dynamic expression or template; shell metacharacters in resolved values may cause command injection",
+					"Pass dynamic values via the 'args' input instead — args are shell-quoted before being appended to the command, reducing injection risk",
+					"exec-command-injection")
+			}
+		}
+	}
 }
 
 // FilterBySeverity filters lint findings to only include those at or above

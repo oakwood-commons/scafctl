@@ -303,83 +303,104 @@ func TestGitProvider_Execute_DryRun_Status(t *testing.T) {
 	assert.Equal(t, true, data["_dryRun"])
 }
 
-func TestGitProvider_InjectCredentials_HTTPS(t *testing.T) {
+func TestGitProvider_CreateNetrcCredentials(t *testing.T) {
 	tests := []struct {
-		name     string
-		repoURL  string
-		username string
-		password string
-		expected string
+		name       string
+		repoURL    string
+		username   string
+		password   string
+		wantNilEnv bool // true for non-HTTP(S) URLs
 	}{
 		{
-			name:     "https URL",
+			name:     "https URL creates netrc",
 			repoURL:  "https://github.com/user/repo.git",
 			username: "testuser",
 			password: "testpass",
-			expected: "https://testuser:testpass@github.com/user/repo.git",
 		},
 		{
-			name:     "http URL",
-			repoURL:  "http://github.com/user/repo.git",
+			name:     "http URL creates netrc",
+			repoURL:  "http://internal.example.com/repo.git",
 			username: "testuser",
 			password: "testpass",
-			expected: "http://testuser:testpass@github.com/user/repo.git",
 		},
 		{
-			name:     "ssh URL unchanged",
-			repoURL:  "git@github.com:user/repo.git",
-			username: "testuser",
-			password: "testpass",
-			expected: "git@github.com:user/repo.git",
+			name:       "ssh URL returns nil env",
+			repoURL:    "git@github.com:user/repo.git",
+			username:   "testuser",
+			password:   "testpass",
+			wantNilEnv: true,
 		},
 		{
-			name:     "at-sign in username and password",
+			name:     "special characters in credentials written as-is",
 			repoURL:  "https://github.com/org/repo",
 			username: "user@corp",
-			password: "p@ss",
-			expected: "https://user%40corp:p%40ss@github.com/org/repo",
-		},
-		{
-			name:     "colon in password",
-			repoURL:  "https://github.com/org/repo",
-			username: "user",
-			password: "p:ss:word",
-			expected: "https://user:p%3Ass%3Aword@github.com/org/repo",
-		},
-		{
-			name:     "slash in password",
-			repoURL:  "https://github.com/org/repo",
-			username: "user",
-			password: "p/ss/word",
-			expected: "https://user:p%2Fss%2Fword@github.com/org/repo",
-		},
-		{
-			name:     "percent in credentials",
-			repoURL:  "https://github.com/org/repo",
-			username: "user%name",
-			password: "100%pass",
-			expected: "https://user%25name:100%25pass@github.com/org/repo",
-		},
-		{
-			name:     "space in credentials",
-			repoURL:  "https://github.com/org/repo",
-			username: "my user",
-			password: "my pass",
-			expected: "https://my%20user:my%20pass@github.com/org/repo",
-		},
-		{
-			name:     "special characters mix",
-			repoURL:  "https://github.com/org/repo",
-			username: "user+name",
 			password: "p@ss:w/rd%100",
-			expected: "https://user+name:p%40ss%3Aw%2Frd%25100@github.com/org/repo",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := injectCredentials(tt.repoURL, tt.username, tt.password)
-			assert.Equal(t, tt.expected, result)
+			env, cleanup, err := createNetrcCredentials(tt.repoURL, tt.username, tt.password)
+			require.NoError(t, err)
+			require.NotNil(t, cleanup)
+			defer cleanup()
+
+			if tt.wantNilEnv {
+				assert.Nil(t, env)
+				return
+			}
+
+			// Verify env is non-nil and HOME is overridden to the temp dir.
+			require.NotNil(t, env)
+			var homeDir string
+			for _, e := range env {
+				if len(e) > 5 && e[:5] == "HOME=" {
+					homeDir = e[5:]
+					break
+				}
+			}
+			require.NotEmpty(t, homeDir, "HOME must be set in credential env")
+
+			// Verify .netrc exists inside the temp HOME dir with correct permissions.
+			netrcPath := filepath.Join(homeDir, ".netrc")
+			info, err := os.Stat(netrcPath)
+			require.NoError(t, err, ".netrc file should exist")
+			assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(), ".netrc should be mode 0600")
+
+			// Verify .netrc content contains machine, login, and password lines.
+			content, err := os.ReadFile(netrcPath)
+			require.NoError(t, err)
+			contentStr := string(content)
+			assert.Contains(t, contentStr, "login "+tt.username)
+			assert.Contains(t, contentStr, "password "+tt.password)
+		})
+	}
+}
+
+func TestGitProvider_CreateNetrcCredentials_EmptyHostname(t *testing.T) {
+	_, _, err := createNetrcCredentials("https:///path", "user", "pass")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no hostname")
+}
+
+func TestGitProvider_CreateNetrcCredentials_WhitespaceRejection(t *testing.T) {
+	tests := []struct {
+		name     string
+		username string
+		password string
+		wantErr  string
+	}{
+		{"space in username", "user name", "pass", "username contains whitespace"},
+		{"tab in password", "user", "pass\tword", "password contains whitespace"},
+		{"newline in password", "user", "pass\nword", "password contains whitespace"},
+		{"newline in username", "user\nname", "pass", "username contains whitespace"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := createNetrcCredentials("https://github.com/org/repo.git", tt.username, tt.password)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
 		})
 	}
 }
@@ -430,7 +451,51 @@ func TestGitProvider_Execute_Tag_List(t *testing.T) {
 	assert.Nil(t, output)
 }
 
-func BenchmarkInjectCredentials(b *testing.B) {
+func TestApplyEnvOverrides(t *testing.T) {
+	t.Run("basic override", func(t *testing.T) {
+		base := []string{"HOME=/original", "PATH=/usr/bin"}
+		overrides := map[string]string{"HOME": "/tmp/fake"}
+		result := applyEnvOverrides(base, overrides)
+		assert.Contains(t, result, "HOME=/tmp/fake")
+		assert.Contains(t, result, "PATH=/usr/bin")
+		assert.NotContains(t, result, "HOME=/original")
+	})
+
+	t.Run("case-insensitive key matching", func(t *testing.T) {
+		// Simulates Windows where env may have mixed-case keys.
+		base := []string{"UserProfile=C:\\Users\\me", "Path=C:\\Windows"}
+		overrides := map[string]string{"USERPROFILE": "C:\\tmp"}
+		result := applyEnvOverrides(base, overrides)
+		assert.Contains(t, result, "USERPROFILE=C:\\tmp")
+		assert.NotContains(t, result, "UserProfile=C:\\Users\\me")
+		assert.Contains(t, result, "Path=C:\\Windows")
+	})
+
+	t.Run("no override leaves base intact", func(t *testing.T) {
+		base := []string{"A=1", "B=2"}
+		result := applyEnvOverrides(base, map[string]string{})
+		assert.ElementsMatch(t, base, result)
+	})
+
+	t.Run("adds new keys not in base", func(t *testing.T) {
+		base := []string{"A=1"}
+		overrides := map[string]string{"NEW_VAR": "val"}
+		result := applyEnvOverrides(base, overrides)
+		assert.Contains(t, result, "A=1")
+		assert.Contains(t, result, "NEW_VAR=val")
+	})
+}
+
+func BenchmarkApplyEnvOverrides(b *testing.B) {
+	base := []string{"HOME=/home/user", "PATH=/usr/bin", "UserProfile=C:\\Users\\user", "SHELL=/bin/zsh"}
+	overrides := map[string]string{"HOME": "/tmp/fake", "USERPROFILE": "C:\\tmp"}
+	b.ResetTimer()
+	for b.Loop() {
+		_ = applyEnvOverrides(base, overrides)
+	}
+}
+
+func BenchmarkCreateNetrcCredentials(b *testing.B) {
 	benchmarks := []struct {
 		name     string
 		repoURL  string
@@ -445,7 +510,10 @@ func BenchmarkInjectCredentials(b *testing.B) {
 	for _, bb := range benchmarks {
 		b.Run(bb.name, func(b *testing.B) {
 			for b.Loop() {
-				_ = injectCredentials(bb.repoURL, bb.username, bb.password)
+				_, cleanup, _ := createNetrcCredentials(bb.repoURL, bb.username, bb.password)
+				if cleanup != nil {
+					cleanup()
+				}
 			}
 		})
 	}

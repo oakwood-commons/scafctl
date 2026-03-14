@@ -301,6 +301,12 @@ func (p *HTTPProvider) doRequest(
 	method, urlStr, bodyContent string,
 	headers map[string]any,
 ) (*paginatedResponse, error) {
+	if !privateIPsAllowed(ctx) {
+		if err := validateURLNotPrivate(urlStr); err != nil {
+			return nil, fmt.Errorf("%s: %w", ProviderName, err)
+		}
+	}
+
 	var bodyReader io.Reader
 	if bodyContent != "" {
 		bodyReader = strings.NewReader(bodyContent)
@@ -331,9 +337,15 @@ func (p *HTTPProvider) doRequest(
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	// Limit the response body size to prevent denial-of-service via unbounded
+	// responses. The limit is configurable via httpClient.maxResponseBodySize.
+	limit := maxResponseBodySize(ctx)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+	if int64(len(respBody)) > limit {
+		return nil, fmt.Errorf("response body exceeds maximum size of %d bytes", limit)
 	}
 
 	respHeaders := make(map[string]any)
@@ -369,7 +381,7 @@ func (p *HTTPProvider) resolveNextPage(
 	case StrategyCursor:
 		return resolveCursorNext(ctx, currentURL, pagCfg, responseCtx)
 	case StrategyLinkHeader:
-		return resolveLinkHeaderNext(resp)
+		return resolveLinkHeaderNext(currentURL, resp)
 	case StrategyCustom:
 		return resolveCustomNext(ctx, currentURL, pagCfg, responseCtx)
 	default:
@@ -476,6 +488,9 @@ func resolveCursorNext(ctx context.Context, currentURL string, pagCfg *paginatio
 		if !ok || nextURL == "" {
 			return "", true, nil // No more pages
 		}
+		if err := validateNextURLHost(currentURL, nextURL); err != nil {
+			return "", true, err
+		}
 		return nextURL, false, nil
 	}
 
@@ -512,7 +527,7 @@ func resolveCursorNext(ctx context.Context, currentURL string, pagCfg *paginatio
 var linkHeaderRegex = regexp.MustCompile(`<([^>]+)>;\s*rel="next"`)
 
 // resolveLinkHeaderNext extracts the next URL from the Link response header (RFC 8288).
-func resolveLinkHeaderNext(resp *paginatedResponse) (string, bool, error) {
+func resolveLinkHeaderNext(currentURL string, resp *paginatedResponse) (string, bool, error) {
 	linkHeader, ok := resp.Headers["Link"]
 	if !ok {
 		return "", true, nil // No Link header = no more pages
@@ -541,7 +556,11 @@ func resolveLinkHeaderNext(resp *paginatedResponse) (string, bool, error) {
 		return "", true, nil // No rel="next" link
 	}
 
-	return matches[1], false, nil
+	nextURL := matches[1]
+	if err := validateNextURLHost(currentURL, nextURL); err != nil {
+		return "", true, err
+	}
+	return nextURL, false, nil
 }
 
 // resolveCustomNext uses CEL expressions to determine the next page URL.
@@ -558,6 +577,9 @@ func resolveCustomNext(ctx context.Context, currentURL string, pagCfg *paginatio
 		nextURL, ok := result.(string)
 		if !ok || nextURL == "" {
 			return "", true, nil
+		}
+		if err := validateNextURLHost(currentURL, nextURL); err != nil {
+			return "", true, err
 		}
 		return nextURL, false, nil
 	}

@@ -1,0 +1,71 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-env-security
+  version: 1.0.0
+  description: |
+    Security tests for the env provider.
+    Validates that list operation requires a prefix to prevent secret leakage.
+
+spec:
+  resolvers:
+    # list without prefix — should fail
+    listNoPrefixResolver:
+      description: Attempt to list all env vars without a prefix
+      resolve:
+        with:
+          - provider: env
+            inputs:
+              operation: list
+
+    # list with prefix — should succeed and only return prefixed vars
+    listWithPrefixResolver:
+      description: List env vars with prefix
+      resolve:
+        with:
+          - provider: env
+            inputs:
+              operation: list
+              prefix: "SCAFCTL_SEC_TEST_"
+
+  testing:
+    config:
+      # resolve-defaults: resolvers intentionally fail to test security
+      # render-defaults: solution has no workflow.actions section
+      skipBuiltins: [resolve-defaults, render-defaults]
+      env:
+        SCAFCTL_SEC_TEST_A: "value-a"
+        SCAFCTL_SEC_TEST_B: "value-b"
+        OTHER_SECRET_VAR: "should-not-appear"
+
+    cases:
+      _base:
+        description: Base template for env security tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [provider, env, security]
+
+      list-without-prefix-rejected:
+        description: Verify env list without prefix is rejected
+        extends: [_base]
+        args: ["listNoPrefixResolver", "-o", "json"]
+        assertions:
+          - expression: __exitCode != 0
+            message: "env list without prefix should fail"
+          - expression: __stderr.contains("prefix is required") || __stderr.contains("prefix")
+            message: "Error should mention prefix requirement"
+
+      list-with-prefix-scoped:
+        description: Verify env list with prefix returns only matching vars
+        extends: [_base]
+        args: ["listWithPrefixResolver", "-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+            message: "env list with prefix should succeed"
+          - expression: __output.listWithPrefixResolver.variables["SCAFCTL_SEC_TEST_A"] == "value-a"
+            message: "Prefixed var A should be present"
+          - expression: __output.listWithPrefixResolver.variables["SCAFCTL_SEC_TEST_B"] == "value-b"
+            message: "Prefixed var B should be present"
+          - expression: "!has(__output.listWithPrefixResolver.variables.OTHER_SECRET_VAR)"
+            message: "Non-prefixed variable should not appear"

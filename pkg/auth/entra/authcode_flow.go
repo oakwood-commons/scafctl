@@ -64,8 +64,14 @@ func (h *Handler) authCodeLogin(ctx context.Context, opts auth.LoginOptions) (*a
 	}
 	codeChallenge := oauth.GenerateCodeChallenge(codeVerifier)
 
+	// Generate random state for CSRF protection
+	state, err := oauth.GenerateCodeVerifier()
+	if err != nil {
+		return nil, auth.NewError(HandlerName, "state_generate", fmt.Errorf("generating state parameter: %w", err))
+	}
+
 	// Start local callback server for OAuth redirect
-	callbackServer, err := oauth.StartCallbackServer(ctx, opts.CallbackPort)
+	callbackServer, err := oauth.StartCallbackServer(ctx, opts.CallbackPort, state)
 	if err != nil {
 		return nil, auth.NewError(HandlerName, "callback_server", fmt.Errorf("starting callback server: %w", err))
 	}
@@ -75,13 +81,14 @@ func (h *Handler) authCodeLogin(ctx context.Context, opts auth.LoginOptions) (*a
 
 	// Build authorization URL
 	scopeStr := strings.Join(scopes, " ")
-	authURL := fmt.Sprintf("%s/%s/oauth2/v2.0/authorize?client_id=%s&redirect_uri=%s&response_type=code&scope=%s&code_challenge=%s&code_challenge_method=S256&prompt=select_account",
+	authURL := fmt.Sprintf("%s/%s/oauth2/v2.0/authorize?client_id=%s&redirect_uri=%s&response_type=code&scope=%s&code_challenge=%s&code_challenge_method=S256&state=%s&prompt=select_account",
 		h.config.GetAuthority(),
 		tenantID,
 		url.QueryEscape(h.config.ClientID),
 		url.QueryEscape(redirectURI),
 		url.QueryEscape(scopeStr),
 		url.QueryEscape(codeChallenge),
+		url.QueryEscape(state),
 	)
 
 	// Open browser

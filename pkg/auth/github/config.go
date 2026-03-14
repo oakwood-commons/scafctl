@@ -9,6 +9,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 )
 
@@ -120,12 +121,17 @@ const (
 //
 // Returns the PEM-encoded key bytes, or an error if no source provides a key.
 func (c *Config) GetPrivateKey(ctx context.Context, store secrets.Store) ([]byte, error) {
+	lgr := logger.FromContext(ctx)
+
 	// 1. Inline PEM (field or env var)
 	key := c.PrivateKey
 	if key == "" {
 		key = os.Getenv(EnvGitHubAppPrivateKey)
 	}
 	if key != "" {
+		lgr.Info("WARNING: GitHub App private key loaded from inline config or environment variable; " +
+			"prefer privateKeySecretName (secret store) or privateKeyPath (file) for better protection",
+		)
 		return []byte(key), nil
 	}
 

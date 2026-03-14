@@ -1,2 +1,25 @@
-# Static provider input - simple string value
-value: hello from file
+# Static Provider — Simple String Value
+#
+# Demonstrates the static provider returning a fixed value.
+#
+# Run: scafctl run solution -f examples/providers/static-hello.yaml
+# Run: scafctl run resolver -f examples/providers/static-hello.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: static-hello-example
+  version: 1.0.0
+  description: Simple static string value using the static provider
+
+spec:
+  resolvers:
+    greeting:
+      description: A static greeting message
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello from file

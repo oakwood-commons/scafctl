@@ -1,3 +1,29 @@
-# Identity provider - get Entra group memberships
-operation: groups
-handler: entra
+# Identity Provider — Get Entra Group Memberships
+#
+# Retrieves Entra (Azure AD) group memberships for the authenticated user.
+#
+# Prerequisites:
+#   scafctl auth login entra
+#
+# Run: scafctl run solution -f examples/providers/identity-groups.yaml
+# Run: scafctl run resolver -f examples/providers/identity-groups.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: identity-groups-example
+  version: 1.0.0
+  description: Get Entra group memberships for the authenticated user
+
+spec:
+  resolvers:
+    groups:
+      description: Entra group memberships
+      type: any
+      resolve:
+        with:
+          - provider: identity
+            inputs:
+              operation: groups
+              handler: entra

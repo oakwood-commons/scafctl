@@ -183,6 +183,7 @@ spec:
     # -------------------------------------------------------------------------
     regions:
       description: Deployment regions as list
+      type: list
       resolve:
         with:
           - provider: parameter

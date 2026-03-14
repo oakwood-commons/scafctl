@@ -107,7 +107,7 @@ func TestHTTPProvider_Execute_Poll_UntilConditionMet(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":           server.URL,
@@ -146,7 +146,7 @@ func TestHTTPProvider_Execute_Poll_FailWhen(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":           server.URL,
@@ -174,7 +174,7 @@ func TestHTTPProvider_Execute_Poll_MaxAttemptsExhausted(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":           server.URL,
@@ -205,7 +205,7 @@ func TestHTTPProvider_Execute_Poll_ContextCancelled(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(testContext(t), 2*time.Second)
 	defer cancel()
 
 	inputs := map[string]any{
@@ -241,7 +241,7 @@ func TestHTTPProvider_Execute_Poll_WithStringBody(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":    server.URL,

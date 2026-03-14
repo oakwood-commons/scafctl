@@ -1,18 +1,41 @@
-# HCL provider input - format poorly-formatted Terraform content to canonical style
-# The 'changed' field in the output indicates whether the formatter modified the content.
-operation: format
-content: |
-  variable "region" {
-  type=string
-  default="us-east-1"
-  description="AWS region for resources"
-  }
+# HCL Provider — Format Terraform Content
+#
+# Demonstrates formatting poorly-formatted Terraform content to canonical style.
+# The output 'changed' field indicates whether the formatter modified the content.
+#
+# Run: scafctl run solution -f examples/providers/hcl-format.yaml
+# Run: scafctl run resolver -f examples/providers/hcl-format.yaml
 
-  resource "aws_s3_bucket" "data" {
-  bucket="my-data-bucket"
-  force_destroy=true
-  tags={
-  Environment="prod"
-  Owner="team-platform"
-  }
-  }
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: hcl-format-example
+  version: 1.0.0
+  description: Format HCL/Terraform content to canonical style
+
+spec:
+  resolvers:
+    formatted:
+      description: Poorly-formatted Terraform content reformatted to canonical style
+      type: any
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              operation: format
+              content: |
+                variable "region" {
+                type=string
+                default="us-east-1"
+                description="AWS region for resources"
+                }
+
+                resource "aws_s3_bucket" "data" {
+                bucket="my-data-bucket"
+                force_destroy=true
+                tags={
+                Environment="prod"
+                Owner="team-platform"
+                }
+                }

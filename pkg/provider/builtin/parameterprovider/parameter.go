@@ -233,6 +233,12 @@ func (p *ParameterProvider) parseValue(ctx context.Context, value any) (any, err
 
 	// 3. HTTP protocol
 	if strings.HasPrefix(str, "http://") || strings.HasPrefix(str, "https://") {
+		// Block requests to private/loopback/link-local IP addresses unless explicitly permitted.
+		if !httpc.PrivateIPsAllowed(ctx) {
+			if err := httpc.ValidateURLNotPrivate(str); err != nil {
+				return nil, fmt.Errorf("resolver parameter URL blocked: %w", err)
+			}
+		}
 		resp, err := p.httpClient.Get(ctx, str)
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch URL %q: %w", str, err)

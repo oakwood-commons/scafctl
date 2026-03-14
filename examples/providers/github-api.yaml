@@ -1,13 +1,33 @@
-# HTTP provider input - GitHub API call with authentication
+# HTTP Provider — GitHub API with Authentication
+#
+# Demonstrates calling the GitHub API with automatic token injection.
 #
 # Prerequisites:
-#   - Run `scafctl auth login github` to authenticate first
+#   scafctl auth login github
 #
-# Usage:
-#   scafctl run provider http --input @examples/providers/github-api.yaml
-url: https://api.github.com/user
-method: GET
-headers:
-  Accept: application/json
-auth: github
-scope: "read:user"
+# Run: scafctl run solution -f examples/providers/github-api.yaml
+# Run: scafctl run resolver -f examples/providers/github-api.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: github-api-example
+  version: 1.0.0
+  description: GitHub API call with authentication via the http provider
+
+spec:
+  resolvers:
+    github-user:
+      description: Authenticated GitHub user profile
+      type: any
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: https://api.github.com/user
+              method: GET
+              headers:
+                Accept: application/json
+              auth: github
+              scope: "read:user"

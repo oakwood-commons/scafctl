@@ -19,9 +19,13 @@ import (
 )
 
 // simulateBrowserRedirect makes an HTTP GET to the callback server's redirect URI
-// with the given authorization code, simulating the browser redirect from Entra.
-func simulateBrowserRedirect(redirectURI, code string) error {
-	resp, err := http.Get(redirectURI + "/?code=" + url.QueryEscape(code)) //nolint:noctx // test helper
+// with the given authorization code and state, simulating the browser redirect from Entra.
+func simulateBrowserRedirect(redirectURI, code, state string) error {
+	u := redirectURI + "/?code=" + url.QueryEscape(code)
+	if state != "" {
+		u += "&state=" + url.QueryEscape(state)
+	}
+	resp, err := http.Get(u) //nolint:noctx // test helper
 	if err != nil {
 		return err
 	}
@@ -61,18 +65,19 @@ func TestAuthCodeLogin_Success(t *testing.T) {
 	BrowserOpener = func(ctx context.Context, authURL string) error {
 		capturedAuthURL = authURL
 
-		// Parse the redirect_uri from the auth URL to know where to send the code
+		// Parse the redirect_uri and state from the auth URL
 		parsed, err := url.Parse(authURL)
 		if err != nil {
 			return err
 		}
 		redirectURI := parsed.Query().Get("redirect_uri")
+		state := parsed.Query().Get("state")
 
 		// Simulate browser redirect with auth code (in a goroutine to avoid blocking)
 		go func() {
 			// Small delay to let the callback server start listening
 			time.Sleep(50 * time.Millisecond)
-			_ = simulateBrowserRedirect(redirectURI, "test-auth-code-123")
+			_ = simulateBrowserRedirect(redirectURI, "test-auth-code-123", state)
 		}()
 		return nil
 	}
@@ -138,9 +143,10 @@ func TestAuthCodeLogin_CustomTenantAndScopes(t *testing.T) {
 		capturedAuthURL = authURL
 		parsed, _ := url.Parse(authURL)
 		redirectURI := parsed.Query().Get("redirect_uri")
+		state := parsed.Query().Get("state")
 		go func() {
 			time.Sleep(50 * time.Millisecond)
-			_ = simulateBrowserRedirect(redirectURI, "test-code")
+			_ = simulateBrowserRedirect(redirectURI, "test-code", state)
 		}()
 		return nil
 	}
@@ -197,9 +203,10 @@ func TestAuthCodeLogin_OfflineAccessAlreadyPresent(t *testing.T) {
 		capturedAuthURL = authURL
 		parsed, _ := url.Parse(authURL)
 		redirectURI := parsed.Query().Get("redirect_uri")
+		state := parsed.Query().Get("state")
 		go func() {
 			time.Sleep(50 * time.Millisecond)
-			_ = simulateBrowserRedirect(redirectURI, "test-code")
+			_ = simulateBrowserRedirect(redirectURI, "test-code", state)
 		}()
 		return nil
 	}
@@ -343,9 +350,10 @@ func TestAuthCodeLogin_TokenExchangeFails(t *testing.T) {
 	BrowserOpener = func(ctx context.Context, authURL string) error {
 		parsed, _ := url.Parse(authURL)
 		redirectURI := parsed.Query().Get("redirect_uri")
+		state := parsed.Query().Get("state")
 		go func() {
 			time.Sleep(50 * time.Millisecond)
-			_ = simulateBrowserRedirect(redirectURI, "test-code")
+			_ = simulateBrowserRedirect(redirectURI, "test-code", state)
 		}()
 		return nil
 	}
@@ -383,9 +391,11 @@ func TestAuthCodeLogin_BrowserOpenFails_PrintsURL(t *testing.T) {
 	var callbackMessage string
 	var capturedRedirectURI string
 	originalOpener := BrowserOpener
+	var capturedState string
 	BrowserOpener = func(_ context.Context, authURL string) error {
 		parsed, _ := url.Parse(authURL)
 		capturedRedirectURI = parsed.Query().Get("redirect_uri")
+		capturedState = parsed.Query().Get("state")
 		return fmt.Errorf("no browser available")
 	}
 	defer func() { BrowserOpener = originalOpener }()
@@ -406,7 +416,7 @@ func TestAuthCodeLogin_BrowserOpenFails_PrintsURL(t *testing.T) {
 		for capturedRedirectURI == "" {
 			time.Sleep(50 * time.Millisecond)
 		}
-		_ = simulateBrowserRedirect(capturedRedirectURI, "manual-code")
+		_ = simulateBrowserRedirect(capturedRedirectURI, "manual-code", capturedState)
 	}()
 
 	ctx := context.Background()
@@ -443,9 +453,10 @@ func TestAuthCodeLogin_DefaultFlowIsInteractive(t *testing.T) {
 		browserCalled = true
 		parsed, _ := url.Parse(authURL)
 		redirectURI := parsed.Query().Get("redirect_uri")
+		state := parsed.Query().Get("state")
 		go func() {
 			time.Sleep(50 * time.Millisecond)
-			_ = simulateBrowserRedirect(redirectURI, "test-code")
+			_ = simulateBrowserRedirect(redirectURI, "test-code", state)
 		}()
 		return nil
 	}
@@ -517,9 +528,10 @@ func TestAuthCodeLogin_CustomCallbackPort(t *testing.T) {
 		capturedAuthURL = authURL
 		parsed, _ := url.Parse(authURL)
 		redirectURI := parsed.Query().Get("redirect_uri")
+		state := parsed.Query().Get("state")
 		go func() {
 			time.Sleep(50 * time.Millisecond)
-			_ = simulateBrowserRedirect(redirectURI, "port-test-code")
+			_ = simulateBrowserRedirect(redirectURI, "port-test-code", state)
 		}()
 		return nil
 	}

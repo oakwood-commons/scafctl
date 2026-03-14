@@ -1,0 +1,124 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-http-security
+  version: 1.0.0
+  description: |
+    Security tests for the HTTP provider.
+    Validates response body size limits and SSRF protection.
+
+spec:
+  resolvers:
+    # Response body that exceeds the configured limit (10 bytes)
+    oversizedResponse:
+      description: GET request returning a body larger than maxResponseBodySize
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url:
+                expr: "_.mockBaseUrl + '/api/large-body'"
+              method: GET
+
+    # Normal small response that is within the limit
+    smallResponse:
+      description: GET request returning a body smaller than maxResponseBodySize
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url:
+                expr: "_.mockBaseUrl + '/api/small-body'"
+              method: GET
+
+    # SSRF: request to a private IP literal should fail
+    ssrfBlocked:
+      description: Request to a private IP literal should be blocked
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: "http://169.254.169.254/latest/meta-data/"
+              method: GET
+
+    mockBaseUrl:
+      description: Base URL of mock server from env
+      resolve:
+        with:
+          - provider: env
+            inputs:
+              operation: get
+              name: MOCK_BASE_URL
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "__self.value"
+
+  testing:
+    config:
+      skipBuiltins: [resolve-defaults, render-defaults]
+      services:
+        - name: mock-api
+          type: http
+          portEnv: MOCK_HTTP_PORT
+          baseUrlEnv: MOCK_BASE_URL
+          routes:
+            - path: /api/large-body
+              method: GET
+              status: 200
+              body: "this-body-exceeds-the-10-byte-limit-and-should-be-rejected-by-the-provider"
+              headers:
+                Content-Type: text/plain
+            - path: /api/small-body
+              method: GET
+              status: 200
+              body: "ok"
+              headers:
+                Content-Type: text/plain
+
+    cases:
+      _base:
+        description: Base template for HTTP security tests
+        command: [run, resolver]
+        args: ["-o", "json", "--config", "config.yaml"]
+        tags: [provider, http, security]
+        # Write a config with a very small maxResponseBodySize (10 bytes)
+        # and allowPrivateIPs: true (so test servers on localhost are reachable)
+        init:
+          - command: "printf 'httpClient:\\n  allowPrivateIPs: true\\n  maxResponseBodySize: 10\\n' > config.yaml"
+
+      response-body-within-limit:
+        description: Small response within the configured maxResponseBodySize succeeds
+        extends: [_base]
+        tags: [smoke]
+        args: ["smallResponse", "-o", "json", "--config", "config.yaml"]
+        assertions:
+          - expression: __exitCode == 0
+            message: "Request with small response should succeed"
+          - expression: __output.smallResponse.body == "ok"
+            message: "Small response body should be returned"
+
+      response-body-exceeds-limit:
+        description: Response exceeding maxResponseBodySize is rejected
+        extends: [_base]
+        args: ["oversizedResponse", "-o", "json", "--config", "config.yaml"]
+        assertions:
+          - expression: __exitCode != 0
+            message: "Request with oversized response should fail"
+          - expression: __stderr.contains("exceeds maximum size")
+            message: "Error should mention size limit exceeded"
+
+      ssrf-private-ip-blocked:
+        description: Request to private/link-local IP is blocked when allowPrivateIPs is false
+        extends: [_base]
+        args: ["ssrfBlocked", "-o", "json", "--config", "config.yaml"]
+        # Override config to disallow private IPs
+        init:
+          - command: "printf 'httpClient:\\n  allowPrivateIPs: false\\n  maxResponseBodySize: 104857600\\n' > config.yaml"
+        assertions:
+          - expression: __exitCode != 0
+            message: "Request to 169.254.x should fail"
+          - expression: __stderr.contains("private") || __stderr.contains("blocked")
+            message: "Error should mention private IP blocking"

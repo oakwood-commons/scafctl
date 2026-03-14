@@ -47,8 +47,9 @@ func (c *CELConfig) ToCELValues() CELConfigValues {
 // GoTemplateConfigValues holds parsed Go template config values.
 // This avoids circular dependencies between config and gotmpl packages.
 type GoTemplateConfigValues struct {
-	CacheSize     int  `json:"cacheSize" yaml:"cacheSize" doc:"Template compilation cache size" maximum:"100000" example:"500"`
-	EnableMetrics bool `json:"enableMetrics" yaml:"enableMetrics" doc:"Enable template execution metrics"`
+	CacheSize         int  `json:"cacheSize" yaml:"cacheSize" doc:"Template compilation cache size" maximum:"100000" example:"500"`
+	EnableMetrics     bool `json:"enableMetrics" yaml:"enableMetrics" doc:"Enable template execution metrics"`
+	AllowEnvFunctions bool `json:"allowEnvFunctions" yaml:"allowEnvFunctions" doc:"Allow sprig env/expandenv functions"`
 }
 
 // ToGoTemplateValues converts GoTemplateConfig to a GoTemplateConfigValues struct.
@@ -65,8 +66,9 @@ func (g *GoTemplateConfig) ToGoTemplateValues() GoTemplateConfigValues {
 	}
 
 	return GoTemplateConfigValues{
-		CacheSize:     cacheSize,
-		EnableMetrics: enableMetrics,
+		CacheSize:         cacheSize,
+		EnableMetrics:     enableMetrics,
+		AllowEnvFunctions: g.AllowEnvFunctions,
 	}
 }
 

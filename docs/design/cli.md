@@ -31,6 +31,7 @@ scafctl <verb> <kind> <name[@version(or constraint)]> [flags]
 | `explain solution/provider` | ✅ Implemented | |
 | `config *` | ✅ Implemented | view, get, set, unset, add-catalog, remove-catalog, use-catalog, init, schema, validate |
 | `snapshot show/diff` | ✅ Implemented | |
+| `solution diff` | ✅ Implemented | Structural comparison of two solution files |
 | `secrets *` | ✅ Implemented | list, get, set, delete, exists, export, import, rotate |
 | `auth *` | ✅ Implemented | login, logout, status, token |
 | `resolver graph` | ❌ Removed | Use `render solution --graph` or `run resolver --graph` instead |
@@ -990,6 +991,7 @@ scafctl uses two distinct command grammar patterns:
 | `scafctl catalog inspect` | catalog | inspect |
 | `scafctl snapshot show` | snapshot | show |
 | `scafctl snapshot diff` | snapshot | diff |
+| `scafctl solution diff` | solution | diff |
 | `scafctl lint rules` | lint | rules |
 | `scafctl lint explain` | lint | explain |
 | `scafctl eval cel` | eval | cel |

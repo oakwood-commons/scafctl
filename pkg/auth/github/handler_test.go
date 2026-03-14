@@ -575,3 +575,55 @@ func TestHandler_Login_ScopesNotOverriddenByDefaults(t *testing.T) {
 	assert.Equal(t, customScopes, metadata.Scopes)
 	assert.NotEqual(t, []string{"gist", "read:org", "repo", "workflow"}, metadata.Scopes)
 }
+
+func TestHandler_ListCachedTokens_DirectAccessTokenWithoutCache(t *testing.T) {
+	// Regression test: after "auth login github" stores an access token directly
+	// in the secret store (without populating the token cache), ListCachedTokens
+	// must still return an entry for the access token.
+	store := secrets.NewMockStore()
+	ctx := context.Background()
+
+	handler, err := New(WithSecretStore(store))
+	require.NoError(t, err)
+
+	// Simulate what storeCredentials does during login: write the access token
+	// and metadata to the secret store but NOT into the token cache.
+	require.NoError(t, store.Set(ctx, SecretKeyAccessToken, []byte("gho_test_token")))
+
+	metaBytes, err := json.Marshal(&TokenMetadata{
+		Claims:    &auth.Claims{Issuer: "github.com", Subject: "testuser"},
+		SessionID: "sess-123",
+	})
+	require.NoError(t, err)
+	require.NoError(t, store.Set(ctx, SecretKeyMetadata, metaBytes))
+
+	results, err := handler.ListCachedTokens(ctx)
+	require.NoError(t, err)
+
+	// Should have exactly one entry (the access token; no refresh token stored)
+	require.Len(t, results, 1)
+	assert.Equal(t, "access", results[0].TokenKind)
+	assert.Equal(t, "Bearer", results[0].TokenType)
+	assert.Equal(t, HandlerName, results[0].Handler)
+	assert.Equal(t, "sess-123", results[0].SessionID)
+}
+
+func BenchmarkHandler_ListCachedTokens(b *testing.B) {
+	store := secrets.NewMockStore()
+	ctx := context.Background()
+
+	handler, err := New(WithSecretStore(store))
+	require.NoError(b, err)
+
+	require.NoError(b, store.Set(ctx, SecretKeyAccessToken, []byte("gho_bench_token")))
+	metaBytes, _ := json.Marshal(&TokenMetadata{
+		Claims:    &auth.Claims{Issuer: "github.com"},
+		SessionID: "bench-sess",
+	})
+	require.NoError(b, store.Set(ctx, SecretKeyMetadata, metaBytes))
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = handler.ListCachedTokens(ctx)
+	}
+}

@@ -135,9 +135,10 @@ spec:
           - provider: go-template
             inputs:
               template: |
-                {{ $yaml := toYaml .services }}
+                {{ $wrapped := dict "items" .services }}
+                {{ $yaml := toYaml $wrapped }}
                 {{ $parsed := fromYaml $yaml }}
-                Service count: {{ len $parsed }}
+                Service count: {{ len (index $parsed "items") }}
               name: yaml-demo
 
     # Runtime metadata via metadata provider (no inputs needed)

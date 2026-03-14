@@ -5,7 +5,6 @@ package directoryprovider
 
 import (
 	"context"
-	"crypto/md5" //nolint:gosec // MD5 is user-requested, not for security
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
@@ -92,8 +91,8 @@ func NewDirectoryProvider() *DirectoryProvider {
 					schemahelper.WithMaxLength(500)),
 				"excludeHidden": schemahelper.BoolProp("Exclude hidden files and directories (names starting with '.')",
 					schemahelper.WithDefault(false)),
-				"checksum": schemahelper.StringProp("Compute checksum for files (requires includeContent). Supported: md5, sha256, sha512",
-					schemahelper.WithEnum("md5", "sha256", "sha512")),
+				"checksum": schemahelper.StringProp("Compute checksum for files (requires includeContent). Supported: sha256, sha512",
+					schemahelper.WithEnum("sha256", "sha512")),
 				"createDirs": schemahelper.BoolProp("Create parent directories for mkdir (like mkdir -p)",
 					schemahelper.WithDefault(false)),
 				"destination": schemahelper.StringProp("Destination path for copy operation",
@@ -354,10 +353,10 @@ func parseListOptions(inputs map[string]any) (*listOptions, error) {
 
 	if v, ok := inputs["checksum"].(string); ok && v != "" {
 		switch v {
-		case "md5", "sha256", "sha512":
+		case "sha256", "sha512":
 			opts.checksum = v
 		default:
-			return nil, fmt.Errorf("unsupported checksum algorithm: %s (supported: md5, sha256, sha512)", v)
+			return nil, fmt.Errorf("unsupported checksum algorithm: %s (supported: sha256, sha512)", v)
 		}
 	}
 
@@ -623,8 +622,6 @@ func computeChecksum(path, algorithm string) (string, error) {
 
 	var h hash.Hash
 	switch algorithm {
-	case "md5":
-		h = md5.New() //nolint:gosec // MD5 is used for content identification, not security
 	case "sha256":
 		h = sha256.New()
 	case "sha512":
@@ -774,19 +771,35 @@ func copyDir(src, dst string) error {
 }
 
 // copyFile copies a single file from src to dst, preserving permissions.
+// It guards against symlink TOCTOU attacks by verifying the opened file
+// descriptor matches the pre-open Lstat result.
 func copyFile(src, dst string) error {
+	// Lstat to reject symlinks before opening.
+	lstatInfo, err := os.Lstat(src)
+	if err != nil {
+		return err
+	}
+	if !lstatInfo.Mode().IsRegular() {
+		return fmt.Errorf("source is not a regular file: %s", src)
+	}
+
 	srcFile, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer srcFile.Close()
 
-	srcInfo, err := srcFile.Stat()
+	// Stat the opened fd. If the path was swapped to a symlink between
+	// the Lstat and Open, the fd will point to a different inode.
+	openedInfo, err := srcFile.Stat()
 	if err != nil {
 		return err
 	}
+	if !os.SameFile(lstatInfo, openedInfo) {
+		return fmt.Errorf("source file changed between check and open (possible symlink attack): %s", src)
+	}
 
-	dstFile, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, srcInfo.Mode().Perm()) //nolint:gosec // G703: dst is a resolved output path from provider config
+	dstFile, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, lstatInfo.Mode().Perm()) //nolint:gosec // G703: dst is a resolved output path from provider config
 	if err != nil {
 		return err
 	}

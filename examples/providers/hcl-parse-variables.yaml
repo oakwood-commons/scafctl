@@ -1,17 +1,41 @@
-# HCL provider input - parse inline Terraform variable definitions
-content: |
-  variable "region" {
-    type        = string
-    default     = "us-east-1"
-    description = "AWS region for resources"
-  }
+# HCL Provider — Parse Terraform Variable Definitions
+#
+# Demonstrates parsing inline Terraform variable definitions
+# and extracting their types, defaults, and validation rules.
+#
+# Run: scafctl run solution -f examples/providers/hcl-parse-variables.yaml
+# Run: scafctl run resolver -f examples/providers/hcl-parse-variables.yaml
 
-  variable "environment" {
-    type    = string
-    default = "dev"
+apiVersion: scafctl.io/v1
+kind: Solution
 
-    validation {
-      condition     = contains(["dev", "staging", "prod"], var.environment)
-      error_message = "Must be one of: dev, staging, prod."
-    }
-  }
+metadata:
+  name: hcl-parse-variables-example
+  version: 1.0.0
+  description: Parse Terraform content to extract variable definitions
+
+spec:
+  resolvers:
+    variables:
+      description: Parsed Terraform variable definitions
+      type: any
+      resolve:
+        with:
+          - provider: hcl
+            inputs:
+              content: |
+                variable "region" {
+                  type        = string
+                  default     = "us-east-1"
+                  description = "AWS region for resources"
+                }
+
+                variable "environment" {
+                  type    = string
+                  default = "dev"
+
+                  validation {
+                    condition     = contains(["dev", "staging", "prod"], var.environment)
+                    error_message = "Must be one of: dev, staging, prod."
+                  }
+                }

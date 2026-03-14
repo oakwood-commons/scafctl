@@ -422,17 +422,18 @@ func TestIntegration_AuthCodeFlow_Success(t *testing.T) {
 	// Override browser opener to simulate the redirect
 	originalOpener := BrowserOpener
 	BrowserOpener = func(ctx context.Context, authURL string) error {
-		// Parse redirect_uri from the auth URL
+		// Parse redirect_uri and state from the auth URL
 		parsed, pErr := parseURLForTest(authURL)
 		if pErr != nil {
 			return pErr
 		}
 		redirectURI := parsed.Query().Get("redirect_uri")
+		state := parsed.Query().Get("state")
 
 		// Simulate the browser redirect with an auth code
 		go func() {
 			time.Sleep(50 * time.Millisecond)
-			_ = simulateBrowserRedirect(redirectURI, "integration-test-code")
+			_ = simulateBrowserRedirect(redirectURI, "integration-test-code", state)
 		}()
 		return nil
 	}
@@ -490,9 +491,10 @@ func TestIntegration_AuthCodeFlow_TokenExchangeError(t *testing.T) {
 			return pErr
 		}
 		redirectURI := parsed.Query().Get("redirect_uri")
+		state := parsed.Query().Get("state")
 		go func() {
 			time.Sleep(50 * time.Millisecond)
-			_ = simulateBrowserRedirect(redirectURI, "expired-code")
+			_ = simulateBrowserRedirect(redirectURI, "expired-code", state)
 		}()
 		return nil
 	}

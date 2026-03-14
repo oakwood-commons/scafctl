@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/celprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/debugprovider"
@@ -80,7 +81,11 @@ func registerAllToRegistry(ctx context.Context, reg *provider.Registry) error {
 	// Initialize secrets store for the secret provider.
 	// The keyring chain tries: OS keyring → SCAFCTL_SECRET_KEY env var → file-based key.
 	// If all backends fail, skip the secret provider but register everything else.
-	secretStore, err := secrets.New()
+	var secretOpts []secrets.Option
+	if cfg := config.FromContext(ctx); cfg != nil {
+		secretOpts = append(secretOpts, secrets.WithRequireSecureKeyring(cfg.Settings.RequireSecureKeyring))
+	}
+	secretStore, err := secrets.New(secretOpts...)
 	if err == nil {
 		providers = append(providers, secretprovider.NewSecretProvider(secretprovider.WithSecretStore(secretStore)))
 

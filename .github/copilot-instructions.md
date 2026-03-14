@@ -96,3 +96,4 @@ golangci-lint run --fix          # Run Linter and auto-fix issues
 **IMPORTANT**: Add benchmark tests for any new features or providers in `*_test.go` files using Go's `testing` package.
 **IMPORTANT**: After any change, run `task test:e2e` to ensure everything passes.
 **IMPORTANT**: Never use magic strings or numbers; always define constants or use settings for configuration values.
+**IMPORTANT**: Never commit or push any code without approval first

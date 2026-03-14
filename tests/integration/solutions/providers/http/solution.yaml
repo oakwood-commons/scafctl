@@ -146,8 +146,12 @@ spec:
       _base:
         description: Base template for HTTP provider tests
         command: [run, resolver]
-        args: ["-o", "json"]
+        args: ["-o", "json", "--config", "config.yaml"]
         tags: [provider, http]
+        # Write a per-sandbox scafctl config that allows private IPs so the mock
+        # HTTP server (127.0.0.1) is reachable during tests.
+        init:
+          - command: "printf 'httpClient:\\n  allowPrivateIPs: true\\n' > config.yaml"
         assertions:
           - expression: __exitCode == 0
 

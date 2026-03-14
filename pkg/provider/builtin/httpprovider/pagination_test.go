@@ -4,7 +4,6 @@
 package httpprovider
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -258,7 +257,7 @@ func TestResolveLinkHeaderNext_WithRelNext(t *testing.T) {
 			"Link": `<https://api.example.com/items?page=2>; rel="next", <https://api.example.com/items?page=5>; rel="last"`,
 		},
 	}
-	nextURL, stop, err := resolveLinkHeaderNext(resp)
+	nextURL, stop, err := resolveLinkHeaderNext("https://api.example.com/items?page=1", resp)
 	require.NoError(t, err)
 	assert.False(t, stop)
 	assert.Equal(t, "https://api.example.com/items?page=2", nextURL)
@@ -268,7 +267,7 @@ func TestResolveLinkHeaderNext_NoLinkHeader(t *testing.T) {
 	resp := &paginatedResponse{
 		Headers: map[string]any{},
 	}
-	_, stop, err := resolveLinkHeaderNext(resp)
+	_, stop, err := resolveLinkHeaderNext("https://api.example.com/items", resp)
 	require.NoError(t, err)
 	assert.True(t, stop)
 }
@@ -279,7 +278,7 @@ func TestResolveLinkHeaderNext_NoRelNext(t *testing.T) {
 			"Link": `<https://api.example.com/items?page=1>; rel="prev"`,
 		},
 	}
-	_, stop, err := resolveLinkHeaderNext(resp)
+	_, stop, err := resolveLinkHeaderNext("https://api.example.com/items?page=2", resp)
 	require.NoError(t, err)
 	assert.True(t, stop)
 }
@@ -293,7 +292,7 @@ func TestResolveLinkHeaderNext_MultipleHeaderValues(t *testing.T) {
 			},
 		},
 	}
-	nextURL, stop, err := resolveLinkHeaderNext(resp)
+	nextURL, stop, err := resolveLinkHeaderNext("https://api.example.com/items?page=2", resp)
 	require.NoError(t, err)
 	assert.False(t, stop)
 	assert.Equal(t, "https://api.example.com/items?page=3", nextURL)
@@ -415,7 +414,7 @@ func TestHTTPProvider_Pagination_Offset(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":    server.URL + "/items",
@@ -464,7 +463,7 @@ func TestHTTPProvider_Pagination_PageNumber(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":    server.URL + "/items?page=1&pageSize=2",
@@ -537,7 +536,7 @@ func TestHTTPProvider_Pagination_Cursor(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":    server.URL + "/items",
@@ -605,7 +604,7 @@ func TestHTTPProvider_Pagination_CursorNextURL(t *testing.T) {
 	serverURL = server.URL
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":    server.URL + "/items",
@@ -670,7 +669,7 @@ func TestHTTPProvider_Pagination_LinkHeader(t *testing.T) {
 	serverURL = server.URL
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":    server.URL + "/items?page=1",
@@ -734,7 +733,7 @@ func TestHTTPProvider_Pagination_Custom_NextURL(t *testing.T) {
 	serverURL = server.URL
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":    server.URL + "/api",
@@ -802,7 +801,7 @@ func TestHTTPProvider_Pagination_Custom_NextParams(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":    server.URL + "/api?start=0&count=2",
@@ -841,7 +840,7 @@ func TestHTTPProvider_Pagination_MaxPagesLimit(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":    server.URL,
@@ -887,7 +886,7 @@ func TestHTTPProvider_Pagination_StopWhen(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":    server.URL,
@@ -928,7 +927,7 @@ func TestHTTPProvider_Pagination_NoCollectPath(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":    server.URL,
@@ -964,7 +963,7 @@ func TestHTTPProvider_Pagination_EmptyResponse(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":    server.URL,
@@ -1007,7 +1006,7 @@ func TestHTTPProvider_Pagination_NonJSONResponse(t *testing.T) {
 	serverURL = server.URL
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":    server.URL,
@@ -1049,7 +1048,7 @@ func TestHTTPProvider_Pagination_HTTPErrorStopsGracefully(t *testing.T) {
 	serverURL = server.URL
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":    server.URL + "?page=1",
@@ -1104,7 +1103,7 @@ func TestHTTPProvider_Pagination_OutputIncludesPagesAndTotalItems(t *testing.T) 
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":    server.URL,
@@ -1138,7 +1137,7 @@ func TestHTTPProvider_NonPaginated_StillWorks(t *testing.T) {
 	defer server.Close()
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	ctx := testContext(t)
 
 	inputs := map[string]any{
 		"url":    server.URL,

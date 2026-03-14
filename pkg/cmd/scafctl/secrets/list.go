@@ -37,7 +37,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 				return fmt.Errorf("writer not initialized in context")
 			}
 
-			store, err := secrets.New()
+			store, err := newStoreFromContext(ctx)
 			if err != nil {
 				err := fmt.Errorf("failed to initialize secrets store: %w", err)
 				w.Errorf("%v", err)

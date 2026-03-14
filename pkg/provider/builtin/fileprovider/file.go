@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
@@ -79,6 +80,10 @@ func NewFileProvider() *FileProvider {
 					"Sprig functions are available. If omitted, the original entry path is used unchanged.",
 					schemahelper.WithExample("{{ .__fileDir }}/{{ .__fileStem }}"),
 					schemahelper.WithMaxLength(4096)),
+				"permissions": schemahelper.StringProp("Unix file permissions as an octal string (write and write-tree operations). Defaults to 0600 (owner read/write only).",
+					schemahelper.WithExample("0600"),
+					schemahelper.WithPattern(`^0[0-7]{3}$`),
+					schemahelper.WithMaxLength(4)),
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
@@ -271,6 +276,16 @@ func (p *FileProvider) executeWrite(absPath string, inputs map[string]any) (*pro
 
 	createDirs, _ := inputs["createDirs"].(bool)
 
+	// Parse permissions — default to 0600 (owner read/write only).
+	fileMode := os.FileMode(0o600)
+	if permStr, ok := inputs["permissions"].(string); ok && permStr != "" {
+		parsed, err := strconv.ParseUint(permStr, 8, 32)
+		if err != nil {
+			return nil, fmt.Errorf("invalid permissions %q: must be an octal string like \"0600\"", permStr)
+		}
+		fileMode = os.FileMode(parsed)
+	}
+
 	// Create parent directories if requested
 	if createDirs {
 		dir := filepath.Dir(absPath)
@@ -280,9 +295,11 @@ func (p *FileProvider) executeWrite(absPath string, inputs map[string]any) (*pro
 	}
 
 	// Write file
-	//nolint:gosec // 0644 is intentional for user-created files
-	if err := os.WriteFile(absPath, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(absPath, []byte(content), fileMode); err != nil {
 		return nil, fmt.Errorf("failed to write file: %w", err)
+	}
+	if err := os.Chmod(absPath, fileMode); err != nil {
+		return nil, fmt.Errorf("failed to set file permissions: %w", err)
 	}
 
 	return &provider.Output{
@@ -361,6 +378,16 @@ func (p *FileProvider) executeWriteTree(absBasePath string, inputs map[string]an
 
 	outputPathTmpl, _ := inputs["outputPath"].(string)
 
+	// Parse permissions — default to 0600 (owner read/write only).
+	fileMode := os.FileMode(0o600)
+	if permStr, ok := inputs["permissions"].(string); ok && permStr != "" {
+		parsed, err := strconv.ParseUint(permStr, 8, 32)
+		if err != nil {
+			return nil, fmt.Errorf("invalid permissions %q: must be an octal string like \"0600\"", permStr)
+		}
+		fileMode = os.FileMode(parsed)
+	}
+
 	var writtenPaths []string
 
 	for i, entry := range entries {
@@ -388,9 +415,11 @@ func (p *FileProvider) executeWriteTree(absBasePath string, inputs map[string]an
 		}
 
 		// Write file
-		//nolint:gosec // 0644 is intentional for user-created files
-		if err := os.WriteFile(absDest, []byte(entry.content), 0o644); err != nil {
+		if err := os.WriteFile(absDest, []byte(entry.content), fileMode); err != nil {
 			return nil, fmt.Errorf("failed to write %s: %w", outputPath, err)
+		}
+		if err := os.Chmod(absDest, fileMode); err != nil {
+			return nil, fmt.Errorf("failed to set permissions on %s: %w", outputPath, err)
 		}
 
 		writtenPaths = append(writtenPaths, outputPath)

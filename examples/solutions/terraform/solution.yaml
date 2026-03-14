@@ -27,6 +27,7 @@ spec:
 
     environments:
       description: Target deployment environments
+      type: list
       resolve:
         with:
           - provider: parameter

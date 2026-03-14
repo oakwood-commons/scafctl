@@ -66,6 +66,24 @@ func newStore(opts ...Option) (*store, error) {
 		s.keyringBackend = ck.Backend()
 	}
 
+	// Warn when falling back to an insecure backend — the master encryption key is stored
+	// in a plaintext file or environment variable rather than the OS keychain.
+	if s.keyringBackend == KeyringBackendFile || s.keyringBackend == KeyringBackendEnv {
+		if cfg.requireSecureKeyring {
+			return nil, fmt.Errorf(
+				"OS keyring is unavailable and settings.requireSecureKeyring is enabled; "+
+					"insecure keyring backend %q would be used — refusing to proceed. "+
+					"Ensure the OS keychain (Keychain/Credential Manager/Secret Service) is accessible, "+
+					"or set settings.requireSecureKeyring: false to allow insecure fallback",
+				s.keyringBackend,
+			)
+		}
+		s.logger.Info("WARNING: using insecure keyring backend; master key is not protected by OS keychain",
+			"backend", s.keyringBackend,
+			"recommendation", "ensure the OS keyring (Keychain/Credential Manager/Secret Service) is available for production use",
+		)
+	}
+
 	return s, nil
 }
 
@@ -97,8 +115,13 @@ func (s *store) initMasterKey() error {
 	}
 
 	if len(existingSecrets) > 0 {
-		s.logger.Info("found orphaned secrets due to missing master key, deleting",
-			"count", len(existingSecrets))
+		s.logger.Info("WARNING: found orphaned secrets due to missing master key — these secrets "+
+			"are no longer decryptable and will be deleted. This typically happens after an OS "+
+			"keychain reset or reinstall. Use 'scafctl secrets export' before clearing the keychain "+
+			"to create a recoverable backup.",
+			"count", len(existingSecrets),
+			"secretsDir", s.secretsDir,
+		)
 
 		if err := deleteAllSecrets(s.secretsDir); err != nil {
 			return fmt.Errorf("deleting orphaned secrets: %w", err)

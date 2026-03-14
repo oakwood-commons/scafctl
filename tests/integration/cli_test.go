@@ -426,7 +426,7 @@ func TestIntegration_RunProvider_DryRun(t *testing.T) {
 
 func TestIntegration_RunProvider_InputFile(t *testing.T) {
 	t.Parallel()
-	stdout, _, exitCode := runScafctl(t, "run", "provider", "static", "--input", "@examples/providers/static-hello.yaml")
+	stdout, _, exitCode := runScafctl(t, "run", "provider", "static", "--input", "@tests/files/provider-inputs/static-hello.yaml")
 
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "data")
@@ -558,7 +558,7 @@ func TestIntegration_RunProvider_HCL_Validate(t *testing.T) {
 func TestIntegration_RunProvider_HCL_Generate(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "run", "provider", "hcl",
-		"--input", "@examples/providers/hcl-generate.yaml",
+		"--input", "@tests/files/provider-inputs/hcl-generate.yaml",
 		"-o", "json")
 
 	assert.Equal(t, 0, exitCode)
@@ -568,7 +568,7 @@ func TestIntegration_RunProvider_HCL_Generate(t *testing.T) {
 func TestIntegration_RunProvider_HCL_GenerateJSON(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "run", "provider", "hcl",
-		"--input", "@examples/providers/hcl-generate-json.yaml",
+		"--input", "@tests/files/provider-inputs/hcl-generate-json.yaml",
 		"-o", "json")
 
 	assert.Equal(t, 0, exitCode)
@@ -6066,4 +6066,77 @@ func TestIntegration_CwdFlag_ShortFlag(t *testing.T) {
 
 	assert.Equal(t, 0, exitCode, "stderr: %s\nstdout: %s", stderr, stdout)
 	assert.Contains(t, stdout, "environment")
+}
+
+// ============================================================================
+// Solution Diff Command Tests
+// ============================================================================
+
+func TestIntegration_SolutionDiff_Table(t *testing.T) {
+	t.Parallel()
+	stdout, stderr, exitCode := runScafctl(t,
+		"solution", "diff",
+		"examples/soldiff/solution-v1.yaml",
+		"examples/soldiff/solution-v2.yaml",
+	)
+	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+	assert.Contains(t, stdout, "Solution Diff:")
+	assert.Contains(t, stdout, "metadata.version")
+	assert.Contains(t, stdout, "Summary:")
+}
+
+func TestIntegration_SolutionDiff_JSON(t *testing.T) {
+	t.Parallel()
+	stdout, stderr, exitCode := runScafctl(t,
+		"solution", "diff",
+		"examples/soldiff/solution-v1.yaml",
+		"examples/soldiff/solution-v2.yaml",
+		"-o", "json",
+	)
+	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &result))
+	assert.Contains(t, result, "changes")
+	assert.Contains(t, result, "summary")
+}
+
+func TestIntegration_SolutionDiff_YAML(t *testing.T) {
+	t.Parallel()
+	stdout, stderr, exitCode := runScafctl(t,
+		"solution", "diff",
+		"examples/soldiff/solution-v1.yaml",
+		"examples/soldiff/solution-v2.yaml",
+		"-o", "yaml",
+	)
+	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+	assert.Contains(t, stdout, "pathA:")
+	assert.Contains(t, stdout, "changes:")
+}
+
+func TestIntegration_SolutionDiff_MissingFile(t *testing.T) {
+	t.Parallel()
+	_, _, exitCode := runScafctl(t,
+		"solution", "diff",
+		"examples/soldiff/solution-v1.yaml",
+		"/nonexistent/solution.yaml",
+	)
+	assert.NotEqual(t, 0, exitCode)
+}
+
+func TestIntegration_SolutionDiff_NoArgs(t *testing.T) {
+	t.Parallel()
+	_, _, exitCode := runScafctl(t, "solution", "diff")
+	assert.NotEqual(t, 0, exitCode)
+}
+
+func TestIntegration_SolutionDiff_Alias(t *testing.T) {
+	t.Parallel()
+	stdout, stderr, exitCode := runScafctl(t,
+		"sol", "diff",
+		"examples/soldiff/solution-v1.yaml",
+		"examples/soldiff/solution-v2.yaml",
+	)
+	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+	assert.Contains(t, stdout, "Solution Diff:")
 }

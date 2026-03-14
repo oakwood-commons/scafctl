@@ -1,2 +1,28 @@
-# Identity provider - get claims from stored metadata
-operation: claims
+# Identity Provider — Get Claims from Stored Metadata
+#
+# Retrieves identity claims from the stored authentication metadata.
+#
+# Prerequisites:
+#   scafctl auth login github   (or)   scafctl auth login entra
+#
+# Run: scafctl run solution -f examples/providers/identity-claims.yaml
+# Run: scafctl run resolver -f examples/providers/identity-claims.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: identity-claims-example
+  version: 1.0.0
+  description: Get identity claims from stored authentication metadata
+
+spec:
+  resolvers:
+    claims:
+      description: Identity claims from stored metadata
+      type: any
+      resolve:
+        with:
+          - provider: identity
+            inputs:
+              operation: claims

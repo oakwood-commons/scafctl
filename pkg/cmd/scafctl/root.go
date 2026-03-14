@@ -33,6 +33,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/run"
 	secretscmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/snapshot"
+	solutioncmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/solution"
 	testcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/test"
 	vendorcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/vendor"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/version"
@@ -42,6 +43,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/metrics"
 	"github.com/oakwood-commons/scafctl/pkg/profiler"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/telemetry"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -276,9 +278,20 @@ func Root(opts *RootOptions) *cobra.Command {
 			// ── Initialize Go template cache from config ──
 			gtValues := cfg.GoTemplate.ToGoTemplateValues()
 			gotmpl.InitFromAppConfig(ctx, gotmpl.GoTemplateConfigInput{
-				CacheSize:     gtValues.CacheSize,
-				EnableMetrics: gtValues.EnableMetrics,
+				CacheSize:         gtValues.CacheSize,
+				EnableMetrics:     gtValues.EnableMetrics,
+				AllowEnvFunctions: gtValues.AllowEnvFunctions,
 			})
+
+			// Initialize shared secrets store with config-aware settings.
+			// Auth handlers that receive this store will not create their own.
+			sharedSecretStore, secretErr := secrets.New(
+				secrets.WithRequireSecureKeyring(cfg.Settings.RequireSecureKeyring),
+				secrets.WithLogger(*lgr),
+			)
+			if secretErr != nil {
+				lgr.V(1).Info("shared secrets store unavailable; auth handlers will create their own", "error", secretErr)
+			}
 
 			// Initialize auth registry with Entra handler
 			authRegistry := auth.NewRegistry()
@@ -291,6 +304,9 @@ func Root(opts *RootOptions) *cobra.Command {
 				}))
 			}
 			entraOpts = append(entraOpts, entra.WithLogger(*lgr))
+			if secretErr == nil {
+				entraOpts = append(entraOpts, entra.WithSecretStore(sharedSecretStore))
+			}
 			entraHandler, err := entra.New(entraOpts...)
 			if err != nil {
 				lgr.V(1).Info("warning: failed to initialize Entra auth handler", "error", err)
@@ -316,6 +332,9 @@ func Root(opts *RootOptions) *cobra.Command {
 				}))
 			}
 			ghOpts = append(ghOpts, ghauth.WithLogger(*lgr))
+			if secretErr == nil {
+				ghOpts = append(ghOpts, ghauth.WithSecretStore(sharedSecretStore))
+			}
 			ghHandler, err := ghauth.New(ghOpts...)
 			if err != nil {
 				lgr.V(1).Info("warning: failed to initialize GitHub auth handler", "error", err)
@@ -337,6 +356,9 @@ func Root(opts *RootOptions) *cobra.Command {
 				}))
 			}
 			gcpOpts = append(gcpOpts, gcpauth.WithLogger(*lgr))
+			if secretErr == nil {
+				gcpOpts = append(gcpOpts, gcpauth.WithSecretStore(sharedSecretStore))
+			}
 			gcpHandler, err := gcpauth.New(gcpOpts...)
 			if err != nil {
 				lgr.V(1).Info("warning: failed to initialize GCP auth handler", "error", err)
@@ -437,5 +459,6 @@ func Root(opts *RootOptions) *cobra.Command {
 	cCmd.AddCommand(testcmd.CommandTest(cliParams, ioStreams, settings.CliBinaryName))
 	cCmd.AddCommand(mcpcmd.CommandMCP(cliParams, ioStreams, settings.CliBinaryName))
 	cCmd.AddCommand(pluginscmd.CommandPlugins(cliParams, ioStreams, settings.CliBinaryName))
+	cCmd.AddCommand(solutioncmd.CommandSolution(cliParams, *ioStreams, settings.CliBinaryName))
 	return cCmd
 }
