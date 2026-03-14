@@ -17,6 +17,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
+	"github.com/oakwood-commons/scafctl/pkg/provider/detail"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
@@ -37,6 +38,10 @@ type ProviderOptions struct {
 
 	// InputParams are the provider input parameters (--input key=value or --input @file.yaml).
 	InputParams []string
+
+	// DynamicArgs are provider inputs from positional or dynamic-flag syntax
+	// (e.g. key=value or --key=value, captured after the provider name).
+	DynamicArgs []string
 
 	// Capability specifies which capability to execute.
 	// Defaults to the first capability declared by the provider.
@@ -89,14 +94,20 @@ providers in isolation. It accepts the provider name as a positional
 argument and provider inputs via --input flags.
 
 PROVIDER INPUTS:
-  Inputs are passed using --input flags in several formats:
-    --input key=value         Simple key-value pair
-    --input key=val1,val2     Multiple values become an array
-    --input @file.yaml        Load inputs from a YAML file
-    --input @file.json        Load inputs from a JSON file
+  Inputs can be passed in two equivalent ways:
 
-  Multiple --input flags can be combined. When the same key appears
-  in both a file and a flag, the flag value takes precedence.
+  1. Positional key=value (recommended):
+       key=value                After the provider name
+       @file.yaml               Load inputs from a file
+
+  2. Explicit --input flag:
+       --input key=value        Repeatable flag
+       --input key=val1,val2    Multiple values become an array
+       --input @file.yaml       Load inputs from a YAML file
+       --input @file.json       Load inputs from a JSON file
+
+  Both forms can be mixed. When the same key appears multiple
+  times, later values override earlier ones (last-wins).
 
 CAPABILITIES:
   Providers declare capabilities (from, transform, validation, action,
@@ -119,38 +130,40 @@ EXIT CODES:
   2  Validation failed (invalid inputs)
 
 Examples:
-  # Run the static provider with a simple value
+  # Positional key=value syntax (recommended)
+  scafctl run provider static value=hello
+  scafctl run provider http url=https://api.example.com method=GET
+  scafctl run provider env name=HOME -o json
+
+  # Explicit --input flag syntax
   scafctl run provider static --input value=hello
-
-  # Run the env provider to read an environment variable
-  scafctl run provider env --input name=HOME -o json
-
-  # Run the http provider with multiple inputs
   scafctl run provider http --input url=https://api.example.com --input method=GET
 
-  # Run the exec provider to execute a command
-  scafctl run provider exec --input command=echo --input args=hello
+  # Mix both forms freely
+  scafctl run provider http --input method=GET url=https://example.com timeout=30
 
   # Load inputs from a YAML file
   scafctl run provider http --input @inputs.yaml
+  scafctl run provider http @inputs.yaml
 
   # Run with a specific capability
   scafctl run provider validation --input value=test --capability validation
 
   # Dry-run to see what would be executed
-  scafctl run provider http --input url=https://example.com --dry-run
+  scafctl run provider http url=https://example.com --dry-run
 
   # Load plugin providers from a directory
-  scafctl run provider echo --input message=hello --plugin-dir ./plugins
+  scafctl run provider echo message=hello --plugin-dir ./plugins
 
   # Show execution metrics
-  scafctl run provider http --input url=https://example.com --show-metrics
+  scafctl run provider http url=https://example.com --show-metrics
 
   # Explore results interactively
-  scafctl run provider http --input url=https://api.example.com -i`,
-		Args: cobra.ExactArgs(1),
+  scafctl run provider http url=https://api.example.com -i`,
+		Args: cobra.MinimumNArgs(1),
 		PreRun: func(_ *cobra.Command, args []string) {
 			options.ProviderName = args[0]
+			options.DynamicArgs = args[1:]
 		},
 		RunE:         makeRunEFunc(cfg, "provider"),
 		SilenceUsage: true,
@@ -174,7 +187,86 @@ Examples:
 	cCmd.Flags().StringVarP(&options.Expression, "expression", "e", "",
 		"CEL expression to filter/transform output data (e.g., '_.data')")
 
+	setProviderHelpFunc(cCmd)
+
 	return cCmd
+}
+
+// setProviderHelpFunc installs a custom help function that appends dynamic
+// provider input documentation when a provider name is given.
+// For example, `scafctl run provider http --help` will show the standard
+// command help plus the HTTP provider's input parameters with types and descriptions.
+func setProviderHelpFunc(cmd *cobra.Command) {
+	defaultHelp := cmd.HelpFunc()
+	cmd.SetHelpFunc(func(c *cobra.Command, args []string) {
+		// Render the default help first
+		defaultHelp(c, args)
+
+		// Try to find the provider name from multiple sources.
+		// Cobra does not always pass positional args to the help function
+		// depending on how flags are parsed, so we check:
+		// 1. The remaining non-flag arguments after cobra parsing (most reliable)
+		// 2. os.Args as a fallback (scanning after "provider" subcommand)
+		providerName := extractProviderName(c.Flags().Args())
+		if providerName == "" {
+			providerName = extractProviderNameFromOSArgs()
+		}
+
+		// Look up the provider in the registry (best effort — don't fail help on errors)
+		reg, err := builtin.DefaultRegistry(c.Context())
+		if err != nil {
+			return
+		}
+
+		prov, ok := reg.Get(providerName)
+		if !ok {
+			return
+		}
+
+		helpText := detail.FormatProviderInputHelp(prov.Descriptor())
+		if helpText != "" {
+			fmt.Fprintln(c.OutOrStdout())
+			fmt.Fprint(c.OutOrStdout(), helpText)
+		}
+	})
+}
+
+// extractProviderName finds the provider name from command-line arguments,
+// skipping flags and the "help" argument itself.
+func extractProviderName(args []string) string {
+	for _, arg := range args {
+		// Skip flags
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		// Skip the "help" argument that cobra sometimes includes
+		if arg == "help" {
+			continue
+		}
+		return arg
+	}
+	return ""
+}
+
+// extractProviderNameFromOSArgs scans os.Args for a provider name following
+// the "provider" (or alias "prov"/"p") subcommand token. This is used as a
+// fallback when cobra's help function doesn't pass positional args.
+func extractProviderNameFromOSArgs() string {
+	args := os.Args
+	found := false
+	for _, arg := range args {
+		if found {
+			// Skip flags after "provider"
+			if strings.HasPrefix(arg, "-") {
+				continue
+			}
+			return arg
+		}
+		if arg == "provider" || arg == "prov" || arg == "p" {
+			found = true
+		}
+	}
+	return ""
 }
 
 // Run executes a single provider directly
@@ -225,8 +317,21 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 
 	desc := prov.Descriptor()
 
+	// Parse dynamic arguments (--key=value and key=value from argv)
+	extraParsed, err := flags.ParseDynamicInputArgs(o.DynamicArgs)
+	if err != nil {
+		err := fmt.Errorf("failed to parse input arguments: %w", err)
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
+	}
+
+	// Merge: --input values first, then dynamic args (last-wins on conflict)
+	allParams := make([]string, 0, len(o.InputParams)+len(extraParsed))
+	allParams = append(allParams, o.InputParams...)
+	allParams = append(allParams, extraParsed...)
+
 	// Parse input parameters
-	inputs, err := flags.ParseResolverFlags(o.InputParams)
+	inputs, err := flags.ParseResolverFlags(allParams)
 	if err != nil {
 		err := fmt.Errorf("failed to parse input parameters: %w", err)
 		w.Errorf("%v", err)
@@ -234,6 +339,18 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 	}
 
 	lgr.V(1).Info("parsed inputs", "count", len(inputs))
+
+	// Validate input keys against provider schema (early typo detection)
+	if desc.Schema != nil && len(desc.Schema.Properties) > 0 {
+		validKeys := make([]string, 0, len(desc.Schema.Properties))
+		for k := range desc.Schema.Properties {
+			validKeys = append(validKeys, k)
+		}
+		if err := flags.ValidateInputKeys(inputs, validKeys, fmt.Sprintf("provider %q", desc.Name)); err != nil {
+			w.Errorf("%v", err)
+			return exitcode.WithCode(err, exitcode.InvalidInput)
+		}
+	}
 
 	// Resolve capability
 	capability, err := o.resolveCapability(desc)

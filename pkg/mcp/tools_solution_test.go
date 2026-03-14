@@ -726,10 +726,12 @@ spec:
 		params := parsed["parameters"].([]any)
 		assert.Len(t, params, 2)
 
-		// Check command includes -r flags
+		// Check command includes positional key=value (resolver-only uses positional syntax)
 		cmd := parsed["command"].(string)
-		assert.Contains(t, cmd, "-r env=")
-		assert.Contains(t, cmd, "-r region=us-east-1")
+		assert.Contains(t, cmd, "env=")
+		assert.Contains(t, cmd, "region=us-east-1")
+		assert.NotContains(t, cmd, "-r env=")
+		assert.NotContains(t, cmd, "-r region=")
 	})
 
 	t.Run("empty solution returns error", func(t *testing.T) {

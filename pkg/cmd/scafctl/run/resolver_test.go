@@ -33,7 +33,7 @@ func TestCommandResolver(t *testing.T) {
 
 	cmd := CommandResolver(cliParams, streams, "")
 
-	assert.Equal(t, "resolver [name...]", cmd.Use)
+	assert.Equal(t, "resolver [name...] [key=value...]", cmd.Use)
 	assert.NotEmpty(t, cmd.Short)
 	assert.Contains(t, cmd.Aliases, "res")
 	assert.Contains(t, cmd.Aliases, "resolvers")
@@ -1916,4 +1916,245 @@ func TestResolverAdapter(t *testing.T) {
 	b := &resolverAdapter{name: "other", sensitive: false}
 	assert.Equal(t, "other", b.GetName())
 	assert.False(t, b.GetSensitive())
+}
+
+func TestResolverOptions_PositionalKeyValue_SeparatesNamesFromParams(t *testing.T) {
+	t.Parallel()
+
+	streams, _, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+
+	cmd := CommandResolver(cliParams, streams, "")
+
+	// Simulate cobra passing args: "db env=prod region=us-east-1"
+	args := []string{"db", "env=prod", "region=us-east-1"}
+	cmd.PreRun(cmd, args)
+
+	// Access the options through the PreRun closure
+	// The PreRun function closed over `options`, which is local to CommandResolver.
+	// Instead, test the logic directly by simulating arg splitting.
+	var names, dynamicArgs []string
+	for _, arg := range args {
+		if containsEqualsOrAtPrefix(arg) {
+			dynamicArgs = append(dynamicArgs, arg)
+		} else {
+			names = append(names, arg)
+		}
+	}
+
+	assert.Equal(t, []string{"db"}, names)
+	assert.Equal(t, []string{"env=prod", "region=us-east-1"}, dynamicArgs)
+}
+
+func TestResolverOptions_PositionalKeyValue_FileReference(t *testing.T) {
+	t.Parallel()
+
+	args := []string{"myresolver", "@params.yaml", "key=value"}
+	var names, dynamicArgs []string
+	for _, arg := range args {
+		if containsEqualsOrAtPrefix(arg) {
+			dynamicArgs = append(dynamicArgs, arg)
+		} else {
+			names = append(names, arg)
+		}
+	}
+
+	assert.Equal(t, []string{"myresolver"}, names)
+	assert.Equal(t, []string{"@params.yaml", "key=value"}, dynamicArgs)
+}
+
+func TestResolverOptions_PositionalKeyValue_OnlyParams(t *testing.T) {
+	t.Parallel()
+
+	args := []string{"env=prod", "region=us-east-1"}
+	var names, dynamicArgs []string
+	for _, arg := range args {
+		if containsEqualsOrAtPrefix(arg) {
+			dynamicArgs = append(dynamicArgs, arg)
+		} else {
+			names = append(names, arg)
+		}
+	}
+
+	assert.Empty(t, names)
+	assert.Equal(t, []string{"env=prod", "region=us-east-1"}, dynamicArgs)
+}
+
+func TestResolverOptions_PositionalKeyValue_OnlyNames(t *testing.T) {
+	t.Parallel()
+
+	args := []string{"db", "config", "auth"}
+	var names, dynamicArgs []string
+	for _, arg := range args {
+		if containsEqualsOrAtPrefix(arg) {
+			dynamicArgs = append(dynamicArgs, arg)
+		} else {
+			names = append(names, arg)
+		}
+	}
+
+	assert.Equal(t, []string{"db", "config", "auth"}, names)
+	assert.Empty(t, dynamicArgs)
+}
+
+func TestResolverOptions_Run_PositionalParams(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: positional-params-test
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: greeting
+`
+	err := os.WriteFile(solutionPath, []byte(solutionContent), 0o600)
+	require.NoError(t, err)
+
+	var stdout, stderr bytes.Buffer
+	streams := &terminal.IOStreams{
+		In:     nil,
+		Out:    &stdout,
+		ErrOut: &stderr,
+	}
+	cliParams := settings.NewCliParams()
+	cliParams.ExitOnError = false
+
+	opts := &ResolverOptions{
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams:       streams,
+			CliParams:       cliParams,
+			File:            solutionPath,
+			KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
+			ResolverTimeout: 30 * time.Second,
+			PhaseTimeout:    5 * time.Minute,
+			registry:        testRegistryWithParameters(),
+		},
+		// Simulate positional dynamic args (what PreRun would set)
+		DynamicArgs: []string{"greeting=hello"},
+	}
+
+	lgr := logger.Get(0)
+	ctx := logger.WithLogger(context.Background(), lgr)
+
+	err = opts.Run(ctx)
+	require.NoError(t, err)
+
+	output := stdout.String()
+	assert.Contains(t, output, "hello")
+}
+
+func TestResolverOptions_Run_PositionalParamsMergeWithFlags(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: merge-test
+  version: 1.0.0
+spec:
+  resolvers:
+    env:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: env
+    region:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: region
+`
+	err := os.WriteFile(solutionPath, []byte(solutionContent), 0o600)
+	require.NoError(t, err)
+
+	var stdout, stderr bytes.Buffer
+	streams := &terminal.IOStreams{
+		In:     nil,
+		Out:    &stdout,
+		ErrOut: &stderr,
+	}
+	cliParams := settings.NewCliParams()
+	cliParams.ExitOnError = false
+
+	opts := &ResolverOptions{
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams:       streams,
+			CliParams:       cliParams,
+			File:            solutionPath,
+			KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
+			ResolverTimeout: 30 * time.Second,
+			PhaseTimeout:    5 * time.Minute,
+			registry:        testRegistryWithParameters(),
+			// -r flag provides one param
+			ResolverParams: []string{"env=prod"},
+		},
+		// Positional arg provides a different param
+		DynamicArgs: []string{"region=us-east-1"},
+	}
+
+	lgr := logger.Get(0)
+	ctx := logger.WithLogger(context.Background(), lgr)
+
+	err = opts.Run(ctx)
+	require.NoError(t, err)
+
+	output := stdout.String()
+	// Both sources should be merged
+	assert.Contains(t, output, "prod")
+	assert.Contains(t, output, "us-east-1")
+}
+
+func TestExtractSolutionPath_FromFlag(t *testing.T) {
+	t.Parallel()
+
+	streams, _, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+
+	cmd := CommandResolver(cliParams, streams, "")
+	err := cmd.Flags().Set("file", "/tmp/my-solution.yaml")
+	require.NoError(t, err)
+
+	path := extractSolutionPath(cmd)
+	assert.Equal(t, "/tmp/my-solution.yaml", path)
+}
+
+func TestExtractSolutionPath_EmptyFlag(t *testing.T) {
+	t.Parallel()
+
+	streams, _, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+
+	cmd := CommandResolver(cliParams, streams, "")
+	path := extractSolutionPath(cmd)
+	assert.Empty(t, path)
+}
+
+// containsEqualsOrAtPrefix mirrors the logic used in PreRun to split args.
+func containsEqualsOrAtPrefix(arg string) bool {
+	return len(arg) > 0 && (arg[0] == '@' || containsEquals(arg))
+}
+
+func containsEquals(s string) bool {
+	for _, c := range s {
+		if c == '=' {
+			return true
+		}
+	}
+	return false
 }

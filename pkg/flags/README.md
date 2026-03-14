@@ -272,3 +272,17 @@ cmd := &cobra.Command{
 cmd.Flags().StringArrayVarP(&resolverPairs, "resolver", "r", []string{},
     "Resolver parameters in key=value format (repeatable)")
 ```
+
+## Input Key Validation
+
+Use `ValidateInputKeys` to check user-provided input keys against a known set of
+valid keys. Unknown keys produce an error with a "did you mean?" suggestion based
+on Levenshtein distance:
+
+```go
+inputs := map[string]any{"urll": "https://example.com", "method": "GET"}
+validKeys := []string{"url", "method", "headers", "body", "timeout"}
+
+err := flags.ValidateInputKeys(inputs, validKeys, `provider "http"`)
+// Error: provider "http" does not accept input "urll" — did you mean "url"? (valid inputs: body, headers, method, timeout, url)
+```

@@ -302,10 +302,10 @@ IMPORTANT: Choose the correct run command based on whether the solution has a wo
   • If the solution has spec.workflow.actions (i.e. it performs side-effects/actions):
       scafctl run solution -f ./<filename>.yaml -r key=value
   • If the solution has ONLY resolvers and NO spec.workflow section:
-      scafctl run resolver -f ./<filename>.yaml -r key=value
+      scafctl run resolver -f ./<filename>.yaml key=value
     'scafctl run solution' will FAIL if there is no workflow defined.
-Parameters are passed with -r/--resolver (NOT -p). Example:
-  scafctl run resolver -f ./%s.yaml -r param1=value1 -r param2=value2
+Parameters are passed with -r/--resolver or positional key=value (NOT -p). Example:
+  scafctl run resolver -f ./%s.yaml param1=value1 param2=value2
   scafctl run solution -f ./%s.yaml -r param1=value1 -r param2=value2
 
 After creating the solution file:

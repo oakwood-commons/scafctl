@@ -658,6 +658,25 @@ Supported formats:
 - `@file.yaml` - Load from file
 - `"key=value with spaces"` - Quoted values
 
+### Validating Input Keys Against a Schema
+
+When a command accepts dynamic `key=value` inputs and has a known set of valid keys
+(e.g. from a provider's JSON Schema or a solution's parameter resolvers), use
+`flags.ValidateInputKeys` for early detection of typos:
+
+```go
+import "github.com/oakwood-commons/scafctl/pkg/flags"
+
+// After parsing inputs and looking up valid keys
+validKeys := []string{"url", "method", "headers", "body", "timeout"}
+if err := flags.ValidateInputKeys(inputs, validKeys, `provider "http"`); err != nil {
+    // Error: provider "http" does not accept input "urll" — did you mean "url"?
+    return err
+}
+```
+
+This uses Levenshtein distance to suggest the closest valid key when a typo is detected.
+
 ### Hidden Flags
 
 ```go

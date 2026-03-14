@@ -556,3 +556,31 @@ func solutionMetaFromSolution(sol *solution.Solution) *provider.SolutionMeta {
 	}
 	return meta
 }
+
+// extractParameterKeys collects the CLI parameter keys accepted by a set of resolvers.
+// It scans all resolve-phase provider sources for the "parameter" provider and
+// extracts the literal "key" input value, which is the actual name the user
+// must pass via -r key=value.
+func extractParameterKeys(resolvers []*resolver.Resolver) []string {
+	seen := make(map[string]bool)
+	var keys []string
+	for _, r := range resolvers {
+		if r.Resolve == nil {
+			continue
+		}
+		for _, src := range r.Resolve.With {
+			if src.Provider != "parameter" {
+				continue
+			}
+			keyRef, ok := src.Inputs["key"]
+			if !ok || keyRef == nil || keyRef.Literal == nil {
+				continue
+			}
+			if s, ok := keyRef.Literal.(string); ok && s != "" && !seen[s] {
+				seen[s] = true
+				keys = append(keys, s)
+			}
+		}
+	}
+	return keys
+}

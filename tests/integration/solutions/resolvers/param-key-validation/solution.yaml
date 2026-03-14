@@ -1,0 +1,78 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-param-key-validation
+  version: 1.0.0
+  description: |
+    Functional tests for parameter key validation.
+    Verifies that unknown parameter keys are rejected with helpful error
+    messages and "did you mean?" suggestions.
+
+spec:
+  resolvers:
+    greeting:
+      description: A greeting message
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: name
+          - provider: static
+            inputs:
+              value: world
+
+    region:
+      description: Deployment region
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: region
+          - provider: static
+            inputs:
+              value: us-east-1
+
+  testing:
+    config:
+      skipBuiltins: [resolve-defaults, render-defaults]
+
+    cases:
+      _base:
+        description: Base template
+        command: [run, resolver]
+        args: ["-o", "json", "--hide-execution"]
+        tags: [validation, parameter]
+        assertions:
+          - expression: __exitCode == 0
+
+      valid-params:
+        description: Valid parameter keys are accepted
+        extends: [_base]
+        args: ["-o", "json", "--hide-execution", "-r", "name=Alice", "-r", "region=eu-west-1"]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.greeting == "Alice"
+          - expression: __output.region == "eu-west-1"
+
+      unknown-param-with-suggestion:
+        description: Unknown parameter key close to a valid one produces did-you-mean error
+        command: [run, resolver]
+        args: ["-o", "json", "--hide-execution", "-r", "namee=Alice"]
+        tags: [validation, parameter]
+        assertions:
+          - expression: __exitCode != 0
+          - expression: '__stderr.contains("does not accept input")'
+            message: "Should report unknown input key"
+          - expression: '__stderr.contains("did you mean")'
+            message: "Should suggest closest valid key"
+
+      unknown-param-no-suggestion:
+        description: Completely unknown parameter key produces error without suggestion
+        command: [run, resolver]
+        args: ["-o", "json", "--hide-execution", "-r", "zzzzz=value"]
+        tags: [validation, parameter]
+        assertions:
+          - expression: __exitCode != 0
+          - expression: '__stderr.contains("does not accept input")'
+            message: "Should report unknown input key"

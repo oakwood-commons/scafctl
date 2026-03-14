@@ -102,10 +102,11 @@ func TestMultiSink_Init_DelegatesToAllSinks(t *testing.T) {
 	info := logr.RuntimeInfo{CallDepth: 2}
 	ms.Init(info)
 
+	expected := logr.RuntimeInfo{CallDepth: 3} // multiSink increments CallDepth by 1
 	require.Len(t, a.initCalls, 1)
 	require.Len(t, b.initCalls, 1)
-	assert.Equal(t, info, a.initCalls[0])
-	assert.Equal(t, info, b.initCalls[0])
+	assert.Equal(t, expected, a.initCalls[0])
+	assert.Equal(t, expected, b.initCalls[0])
 }
 
 // ── Enabled ───────────────────────────────────────────────────────────────────

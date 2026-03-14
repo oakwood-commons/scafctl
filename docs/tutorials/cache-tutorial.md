@@ -287,6 +287,61 @@ scafctl config set build.enableCache false
 scafctl config set build.autoCacheRemoteArtifacts false
 ```
 
+## Artifact Cache TTL
+
+The artifact cache supports a time-to-live (TTL) setting that controls how long cached catalog artifacts remain valid. When an artifact's age exceeds the configured TTL, it is treated as a cache miss and is re-fetched from the catalog.
+
+### How TTL Works
+
+1. When a catalog artifact is fetched, scafctl stores it on disk along with creation-time metadata
+2. On subsequent requests, scafctl checks the artifact's age against the configured TTL
+3. If the artifact is older than the TTL, it is considered expired and re-fetched
+4. A TTL of zero (the default) means artifacts never expire
+
+### Configuring TTL
+
+Set the artifact cache TTL in the scafctl config file:
+
+```yaml
+catalog:
+  cacheTTL: 10m    # Artifacts expire after 10 minutes
+```
+
+Common TTL values:
+
+| Value | Meaning |
+|-------|---------|
+| `0` | Never expire (default) |
+| `5m` | 5 minutes |
+| `1h` | 1 hour |
+| `24h` | 1 day |
+| `168h` | 1 week |
+
+Set via CLI:
+
+```bash
+# Set a 1-hour TTL for artifact cache
+scafctl config set catalog.cacheTTL 1h
+
+# Disable TTL (never expire)
+scafctl config set catalog.cacheTTL 0
+```
+
+### When to Use TTL
+
+- **Active development**: Use a short TTL (e.g., `5m`) to pick up frequent catalog updates
+- **CI/CD pipelines**: Use a moderate TTL (e.g., `1h`) to balance freshness with performance
+- **Stable environments**: Use zero TTL or a long TTL (e.g., `168h`) for maximum cache benefit
+- **Offline use**: Use zero TTL so previously fetched artifacts remain available indefinitely
+
+### Manually Clearing Expired Artifacts
+
+Even with a TTL configured, expired artifacts remain on disk until replaced. To reclaim disk space:
+
+```bash
+scafctl cache clear --kind build --force
+```
+
 ## Next Steps
 
 - [Provider Reference](provider-reference.md) — Complete provider documentation

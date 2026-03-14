@@ -1,0 +1,23 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-null-resolver
+  version: 1.0.0
+  description: |
+    Tests that null resolver values produce clear validation
+    errors instead of nil pointer panics. Covers the case
+    where a YAML key exists but has no body (e.g., migrated
+    solutions with placeholder resolver types).
+
+spec:
+  resolvers:
+    validValue:
+      description: A resolver with a valid resolve block
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: Hello
+
+    nullValue:

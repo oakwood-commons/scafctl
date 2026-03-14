@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -15,9 +16,12 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
+	resolverdetail "github.com/oakwood-commons/scafctl/pkg/resolver/detail"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
+	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/solution/inspect"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
@@ -56,6 +60,10 @@ type ResolverOptions struct {
 
 	// HideExecution suppresses the __execution metadata from output.
 	HideExecution bool
+
+	// DynamicArgs are resolver parameters from positional key=value syntax
+	// (e.g. env=prod region=us-east-1, captured from positional args containing '=').
+	DynamicArgs []string
 }
 
 // CommandResolver creates the 'run resolver' subcommand
@@ -77,7 +85,7 @@ func CommandResolver(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 	}
 
 	cCmd := &cobra.Command{
-		Use:     "resolver [name...]",
+		Use:     "resolver [name...] [key=value...]",
 		Aliases: []string{"res", "resolvers"},
 		Short:   "Execute resolvers for debugging and inspection",
 		Long: `Execute resolvers from a solution without running actions.
@@ -129,11 +137,23 @@ SNAPSHOT MODE:
   debugging, testing, comparison, and audit trails.
 
 RESOLVER PARAMETERS:
-  Parameters can be passed using -r/--resolver flag in several formats:
-    key=value         Simple key-value pair
-    @file.yaml        Load parameters from YAML file
-    @file.json        Load parameters from JSON file
-    key=val1,val2     Multiple values become an array
+  Parameters can be passed in two equivalent ways:
+
+  1. Positional key=value (recommended):
+       key=value         After resolver names or on its own
+       @file.yaml        Load parameters from a file
+
+  2. Explicit -r/--resolver flag:
+       -r key=value      Repeatable flag
+       -r key=val1,val2  Multiple values become an array
+       -r @file.yaml     Load parameters from a YAML file
+       -r @file.json     Load parameters from a JSON file
+
+  Both forms can be mixed. When the same key appears multiple
+  times, later values override earlier ones (last-wins).
+
+  Bare words (without '=') are treated as resolver names.
+  Words containing '=' or starting with '@' are treated as parameters.
 
 OUTPUT FORMATS:
   table    Bordered table view (default when terminal)
@@ -155,8 +175,17 @@ Examples:
   # Run specific resolvers (with their dependencies)
   scafctl run resolver db config -f ./my-solution.yaml
 
-  # Run with parameters
+  # Run with parameters (positional key=value — recommended)
+  scafctl run resolver -f ./my-solution.yaml env=prod region=us-east1
+
+  # Run with parameters (explicit flag)
   scafctl run resolver -r env=prod -r region=us-east1
+
+  # Mix positional and flag parameters
+  scafctl run resolver -f ./my-solution.yaml -r env=prod region=us-east1
+
+  # Load parameters from a file (positional)
+  scafctl run resolver -f ./my-solution.yaml @params.yaml
 
   # JSON output for scripting
   scafctl run resolver -f ./my-solution.yaml -o json | jq .
@@ -197,8 +226,15 @@ Examples:
 			cCmd.Flags().Visit(func(f *pflag.Flag) {
 				options.flagsChanged[f.Name] = true
 			})
-			// Store positional args as resolver names
-			options.Names = args
+			// Split positional args: bare words are resolver names,
+			// args containing '=' or starting with '@' are dynamic parameters.
+			for _, arg := range args {
+				if strings.Contains(arg, "=") || strings.HasPrefix(arg, "@") {
+					options.DynamicArgs = append(options.DynamicArgs, arg)
+				} else {
+					options.Names = append(options.Names, arg)
+				}
+			}
 		},
 		RunE:         makeRunEFunc(cfg, "resolver"),
 		SilenceUsage: true,
@@ -216,6 +252,8 @@ Examples:
 	cCmd.Flags().StringVar(&options.SnapshotFile, "snapshot-file", "", "Snapshot output file (required with --snapshot)")
 	cCmd.Flags().BoolVar(&options.Redact, "redact", false, "Redact sensitive values in snapshot")
 	cCmd.Flags().BoolVar(&options.HideExecution, "hide-execution", false, "Suppress __execution metadata from output")
+
+	setResolverHelpFunc(cCmd)
 
 	return cCmd
 }
@@ -266,8 +304,19 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 	}
 	defer cleanup()
 
+	// Parse dynamic positional arguments (key=value and @file.yaml from argv)
+	extraParsed, err := flags.ParseDynamicInputArgs(o.DynamicArgs)
+	if err != nil {
+		return o.exitWithCode(ctx, fmt.Errorf("failed to parse positional parameters: %w", err), exitcode.ValidationFailed)
+	}
+
+	// Merge: -r flag values first, then positional args (last-wins on conflict)
+	allParams := make([]string, 0, len(o.ResolverParams)+len(extraParsed))
+	allParams = append(allParams, o.ResolverParams...)
+	allParams = append(allParams, extraParsed...)
+
 	// Parse resolver parameters
-	params, err := flags.ParseResolverFlags(o.ResolverParams)
+	params, err := flags.ParseResolverFlags(allParams)
 	if err != nil {
 		return o.exitWithCode(ctx, fmt.Errorf("failed to parse resolver parameters: %w", err), exitcode.ValidationFailed)
 	}
@@ -276,6 +325,17 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 
 	// Get all resolvers, then filter by names if specified
 	allResolvers := sol.Spec.ResolversToSlice()
+
+	// Validate parameter keys against parameter provider 'key' inputs (early typo detection)
+	if len(params) > 0 {
+		paramKeys := extractParameterKeys(allResolvers)
+		if len(paramKeys) > 0 {
+			if err := flags.ValidateInputKeys(params, paramKeys, "solution"); err != nil {
+				return o.exitWithCode(ctx, err, exitcode.InvalidInput)
+			}
+		}
+	}
+
 	var lookup resolver.DescriptorLookup
 	if reg != nil {
 		lookup = reg.DescriptorLookup()
@@ -575,3 +635,61 @@ type resolverAdapter struct {
 
 func (a *resolverAdapter) GetName() string    { return a.name }
 func (a *resolverAdapter) GetSensitive() bool { return a.sensitive }
+
+// setResolverHelpFunc installs a custom help function that appends dynamic
+// resolver input documentation when a solution file is available.
+// For example, `scafctl run resolver -f solution.yaml --help` will show the
+// standard command help plus the solution's resolver parameter table.
+func setResolverHelpFunc(cmd *cobra.Command) {
+	defaultHelp := cmd.HelpFunc()
+	cmd.SetHelpFunc(func(c *cobra.Command, args []string) {
+		// Render the default help first
+		defaultHelp(c, args)
+
+		// Try to determine the solution file path from the -f flag or auto-discovery
+		solutionPath := extractSolutionPath(c)
+		if solutionPath == "" {
+			return
+		}
+
+		// Load the solution (best effort — don't fail help on errors)
+		sol, err := inspect.LoadSolution(c.Context(), solutionPath)
+		if err != nil {
+			return
+		}
+
+		helpText := resolverdetail.FormatResolverInputHelp(sol)
+		if helpText != "" {
+			fmt.Fprintln(c.OutOrStdout())
+			fmt.Fprint(c.OutOrStdout(), helpText)
+		}
+	})
+}
+
+// extractSolutionPath determines the solution file path from:
+// 1. The -f/--file flag value (most reliable)
+// 2. os.Args as a fallback (scanning for -f flag)
+// 3. Auto-discovery in the current directory
+func extractSolutionPath(c *cobra.Command) string {
+	// Try the parsed flag value
+	if f := c.Flags().Lookup("file"); f != nil && f.Value.String() != "" {
+		return f.Value.String()
+	}
+
+	// Fallback: scan os.Args for -f or --file
+	osArgs := os.Args
+	for i, arg := range osArgs {
+		if (arg == "-f" || arg == "--file") && i+1 < len(osArgs) {
+			return osArgs[i+1]
+		}
+		if strings.HasPrefix(arg, "-f=") {
+			return strings.TrimPrefix(arg, "-f=")
+		}
+		if strings.HasPrefix(arg, "--file=") {
+			return strings.TrimPrefix(arg, "--file=")
+		}
+	}
+
+	// Final fallback: auto-discover solution file in the current directory
+	return get.NewGetter().FindSolution()
+}
