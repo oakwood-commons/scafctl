@@ -292,3 +292,91 @@ func BenchmarkMergeValue(b *testing.B) {
 		_ = MergeValue(existing, newVal)
 	}
 }
+
+func TestParseDynamicInputArgs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		args     []string
+		expected []string
+		wantErr  string
+	}{
+		{
+			name:     "empty args",
+			args:     []string{},
+			expected: []string{},
+		},
+		{
+			name:     "double-dash key=value stripped",
+			args:     []string{"--url=https://example.com", "--method=GET"},
+			expected: []string{"url=https://example.com", "method=GET"},
+		},
+		{
+			name:     "positional key=value passed through",
+			args:     []string{"url=https://example.com", "method=GET"},
+			expected: []string{"url=https://example.com", "method=GET"},
+		},
+		{
+			name:     "file reference passed through",
+			args:     []string{"@inputs.yaml"},
+			expected: []string{"@inputs.yaml"},
+		},
+		{
+			name:     "mixed forms",
+			args:     []string{"--url=https://example.com", "method=GET", "@extra.yaml"},
+			expected: []string{"url=https://example.com", "method=GET", "@extra.yaml"},
+		},
+		{
+			name:    "bare double-dash flag rejected",
+			args:    []string{"--verbose"},
+			wantErr: "must use --key=value syntax",
+		},
+		{
+			name:    "single-dash flag rejected",
+			args:    []string{"-k=v"},
+			wantErr: "single-dash flag",
+		},
+		{
+			name:    "single-dash bare flag rejected",
+			args:    []string{"-v"},
+			wantErr: "single-dash flag",
+		},
+		{
+			name:    "bare word rejected",
+			args:    []string{"something"},
+			wantErr: "unexpected argument",
+		},
+		{
+			name:     "value with equals sign preserved",
+			args:     []string{"--expr=a==b"},
+			expected: []string{"expr=a==b"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, err := ParseDynamicInputArgs(tt.args)
+
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func BenchmarkParseDynamicInputArgs(b *testing.B) {
+	args := []string{"--url=https://example.com", "--method=GET", "timeout=30", "@extra.yaml"}
+
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = ParseDynamicInputArgs(args)
+	}
+}

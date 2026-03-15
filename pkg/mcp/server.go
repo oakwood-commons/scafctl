@@ -235,7 +235,7 @@ Template Directory Rendering (directory → render-tree → write-tree pipeline)
 
 CLI Usage Reference (use these exact flags when suggesting commands to users):
   Run a solution:       scafctl run solution -f ./solution.yaml -r key=value
-  Run resolvers only:   scafctl run resolver -f ./solution.yaml -r key=value
+  Run resolvers only:   scafctl run resolver -f ./solution.yaml key=value
   Lint a solution:      scafctl lint -f ./solution.yaml
   Inspect a solution:   scafctl explain -f ./solution.yaml
   Run tests:            scafctl test functional -f ./solution.yaml
@@ -254,10 +254,11 @@ IMPORTANT — choosing between 'run solution' and 'run resolver':
   • Rule of thumb: if the solution YAML contains spec.workflow.actions → use 'run solution'.
     If it does NOT have spec.workflow → use 'run resolver'.
 
-IMPORTANT: Resolver parameters are passed with -r/--resolver, NOT -p. There is no -p flag.
+IMPORTANT: Resolver parameters are passed with -r/--resolver or positional key=value, NOT -p. There is no -p flag.
 Examples:
   scafctl run solution -f ./my-solution.yaml -r env=prod -r region=us-east1
   scafctl run solution my-catalog-solution -r inputText="Hello World" -r operation=uppercase
+  scafctl run resolver -f ./my-solution.yaml env=prod region=us-east1
   scafctl run resolver -f ./my-solution.yaml -r name=value
 
 IMPORTANT — file path references:

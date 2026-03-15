@@ -98,6 +98,50 @@ func ParseResolverFlags(values []string) (map[string]any, error) {
 	return result, nil
 }
 
+// ParseDynamicInputArgs normalises raw CLI arguments into key=value strings
+// suitable for ParseResolverFlags.
+//
+// Three forms are recognised:
+//
+//	--key=value    → strip the leading "--" → "key=value"
+//	key=value      → passed through unchanged
+//	@file.yaml     → passed through unchanged (file reference)
+//
+// A bare "--key" (no "=") is rejected because we cannot distinguish a
+// boolean flag from a flag that expects the next token as a value.
+// Single-dash forms ("-k=v") are also rejected to avoid collisions with
+// existing short flags.
+func ParseDynamicInputArgs(args []string) ([]string, error) {
+	out := make([]string, 0, len(args))
+	for _, a := range args {
+		switch {
+		case strings.HasPrefix(a, "--") && strings.Contains(a, "="):
+			// --key=value → key=value
+			out = append(out, strings.TrimPrefix(a, "--"))
+
+		case strings.HasPrefix(a, "--"):
+			// --key without "=" — ambiguous
+			return nil, fmt.Errorf("dynamic flag %q must use --key=value syntax (= is required)", a)
+
+		case strings.HasPrefix(a, "-"):
+			// -k or -k=v — reject to avoid short-flag collisions
+			return nil, fmt.Errorf("single-dash flag %q is not supported for dynamic inputs; use --key=value or key=value", a)
+
+		case strings.HasPrefix(a, "@"):
+			// @file.yaml — file reference, pass through
+			out = append(out, a)
+
+		case strings.Contains(a, "="):
+			// key=value positional — pass through
+			out = append(out, a)
+
+		default:
+			return nil, fmt.Errorf("unexpected argument %q: use key=value or --key=value for provider inputs", a)
+		}
+	}
+	return out, nil
+}
+
 // MergeValue merges a new value with an existing value, creating arrays as needed.
 // If existing is nil, returns newVal. If both are slices, concatenates them.
 // If existing is a scalar and newVal is provided, creates a slice.

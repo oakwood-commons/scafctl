@@ -211,7 +211,7 @@ tasks:
         SKIPPED=0
 
         # Directories/files that are intentionally invalid and should be skipped
-        EXCLUDE="bad-solution-yaml/|edge-cases/invalid-|lint-schema/unknown-field/|lint-schema/unknown-nested-field/|lint-schema/unknown-field.yaml"
+        EXCLUDE="bad-solution-yaml/|edge-cases/invalid-|edge-cases/null-resolver/|lint-schema/unknown-field/|lint-schema/unknown-nested-field/|lint-schema/unknown-field.yaml"
 
         {
           find examples/solutions -name '*.yaml'

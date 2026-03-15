@@ -132,7 +132,7 @@ func GenerateCLIExamples(desc *provider.Descriptor) []string {
 	for _, name := range requiredNames {
 		prop := desc.Schema.Properties[name]
 		placeholder := SchemaPlaceholder(name, prop)
-		inputFlags = append(inputFlags, fmt.Sprintf("--input %s=%s", name, placeholder))
+		inputFlags = append(inputFlags, fmt.Sprintf("%s=%s", name, placeholder))
 	}
 
 	var examples []string
@@ -159,7 +159,7 @@ func GenerateCLIExamples(desc *provider.Descriptor) []string {
 	}
 
 	// Add file-based input example
-	examples = append(examples, fmt.Sprintf("scafctl run provider %s --input @inputs.yaml", desc.Name))
+	examples = append(examples, fmt.Sprintf("scafctl run provider %s @inputs.yaml", desc.Name))
 
 	return examples
 }

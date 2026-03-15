@@ -60,9 +60,12 @@ func TestBuildRunCommand_ResolverOnlySolution(t *testing.T) {
 	assert.False(t, info.HasWorkflow)
 	// Only parameter-type resolvers listed
 	assert.Len(t, info.Parameters, 2)
-	// Command includes parameter flags
-	assert.Contains(t, info.Command, "-r env=prod")
-	assert.Contains(t, info.Command, "-r region=<value>")
+	// Command includes positional parameter values (resolver-only uses positional syntax)
+	assert.Contains(t, info.Command, "env=prod")
+	assert.Contains(t, info.Command, "region=<value>")
+	// Should NOT use -r flags for resolver-only solutions
+	assert.NotContains(t, info.Command, "-r env=")
+	assert.NotContains(t, info.Command, "-r region=")
 	// Non-parameter resolver not included
 	for _, p := range info.Parameters {
 		assert.NotEqual(t, "config", p.Name)

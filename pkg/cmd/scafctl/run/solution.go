@@ -295,6 +295,16 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 
 	lgr.V(1).Info("parsed parameters", "count", len(params))
 
+	// Validate parameter keys against parameter provider 'key' inputs (early typo detection)
+	if len(params) > 0 {
+		paramKeys := extractParameterKeys(sol.Spec.ResolversToSlice())
+		if len(paramKeys) > 0 {
+			if err := flags.ValidateInputKeys(params, paramKeys, "solution"); err != nil {
+				return o.exitWithCode(ctx, err, exitcode.InvalidInput)
+			}
+		}
+	}
+
 	// Dry run — execute resolvers in dry-run mode and show structured report
 	if o.DryRun {
 		return o.executeDryRun(ctx, sol, reg, params)

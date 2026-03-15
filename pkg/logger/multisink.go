@@ -19,6 +19,7 @@ func newMultiSink(sinks ...logr.LogSink) *multiSink {
 }
 
 func (m *multiSink) Init(info logr.RuntimeInfo) {
+	info.CallDepth++ // account for the extra frame added by multiSink.Info/Error
 	for _, s := range m.sinks {
 		s.Init(info)
 	}

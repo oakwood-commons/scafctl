@@ -357,6 +357,41 @@ func TestIntegration_RunProvider_Help(t *testing.T) {
 	assert.Contains(t, stdout, "--plugin-dir")
 }
 
+func TestIntegration_RunProvider_DynamicHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "run", "provider", "http", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	// Standard help sections should still appear
+	assert.Contains(t, stdout, "--input")
+	// Dynamic provider inputs section should appear
+	assert.Contains(t, stdout, "Provider Inputs (http):")
+	assert.Contains(t, stdout, "url")
+	assert.Contains(t, stdout, "(required)")
+	assert.Contains(t, stdout, "method")
+}
+
+func TestIntegration_RunProvider_DynamicHelpStatic(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "run", "provider", "static", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Provider Inputs (static):")
+	assert.Contains(t, stdout, "value")
+	assert.Contains(t, stdout, "(required)")
+}
+
+func TestIntegration_RunProvider_DynamicHelpUnknownProvider(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "run", "provider", "nonexistent", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	// Standard help should still show
+	assert.Contains(t, stdout, "--input")
+	// No dynamic section for unknown provider
+	assert.NotContains(t, stdout, "Provider Inputs")
+}
+
 func TestIntegration_RunProvider_Static(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "run", "provider", "static", "--input", "value=hello")
@@ -447,6 +482,81 @@ func TestIntegration_RunProvider_ShowMetrics(t *testing.T) {
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "metrics-test")
 	assert.Contains(t, stderr, "Provider Execution Metrics")
+}
+
+// ============================================================================
+// Run Provider — Positional Input Syntax Tests
+// ============================================================================
+
+func TestIntegration_RunProvider_PositionalKeyValue(t *testing.T) {
+	t.Parallel()
+	// value=hello  (positional key=value after provider name)
+	stdout, _, exitCode := runScafctl(t, "run", "provider", "static", "value=hello-positional")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "hello-positional")
+}
+
+func TestIntegration_RunProvider_MixedInputSyntax(t *testing.T) {
+	t.Parallel()
+	// Mix --input and positional key=value
+	stdout, _, exitCode := runScafctl(t, "run", "provider", "env",
+		"--input", "operation=get",
+		"name=PATH",
+	)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "data")
+}
+
+func TestIntegration_RunProvider_PositionalWithBuiltinFlag(t *testing.T) {
+	t.Parallel()
+	// Ensure built-in flags (-o) still work alongside positional args
+	stdout, _, exitCode := runScafctl(t, "run", "provider", "static", "value=flagtest", "-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "flagtest")
+	assert.Contains(t, stdout, "\"data\"")
+}
+
+func TestIntegration_RunProvider_PositionalFileRef(t *testing.T) {
+	t.Parallel()
+	// @file.yaml as positional arg
+	stdout, _, exitCode := runScafctl(t, "run", "provider", "static", "@tests/files/provider-inputs/static-hello.yaml")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "data")
+}
+
+func TestIntegration_RunProvider_PositionalMultipleInputs(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "run", "provider", "env", "operation=get", "name=PATH", "-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "\"data\"")
+}
+
+// ============================================================================
+// Run Provider — Unknown Input Key Validation Tests
+// ============================================================================
+
+func TestIntegration_RunProvider_UnknownInputKey(t *testing.T) {
+	t.Parallel()
+	// "valuee" is not a valid input for the static provider (should suggest "value")
+	_, stderr, exitCode := runScafctl(t, "run", "provider", "static", "valuee=hello")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "does not accept input")
+	assert.Contains(t, stderr, `did you mean "value"`)
+}
+
+func TestIntegration_RunProvider_UnknownInputKeyNoSuggestion(t *testing.T) {
+	t.Parallel()
+	// "zzzzz" is too far from any valid key
+	_, stderr, exitCode := runScafctl(t, "run", "provider", "static", "zzzzz=hello")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "does not accept input")
 }
 
 func TestIntegration_RunProvider_HCL(t *testing.T) {
@@ -600,7 +710,7 @@ func TestIntegration_GetProvider_CLIUsage(t *testing.T) {
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "CLI Usage:")
 	assert.Contains(t, stdout, "scafctl run provider http")
-	assert.Contains(t, stdout, "--input")
+	assert.Contains(t, stdout, "@inputs.yaml")
 }
 
 func TestIntegration_GetProvider_CLIUsageJSON(t *testing.T) {
@@ -680,6 +790,30 @@ func TestIntegration_RunSolution_BadSolutionYAML(t *testing.T) {
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "expected exactly one of rslvr, expr, or tmpl, but found")
 	assert.Contains(t, stderr, "line")
+}
+
+func TestIntegration_RunSolution_NullResolver(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t,
+		"run", "solution",
+		"-f", "tests/integration/solutions/edge-cases/null-resolver/solution.yaml",
+	)
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "null value")
+}
+
+func TestIntegration_Lint_NullResolver(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t,
+		"lint",
+		"-f", "tests/integration/solutions/edge-cases/null-resolver/solution.yaml",
+		"-o", "json",
+	)
+
+	// Lint returns exit code 1 because spec validation rejects the null resolver
+	assert.Equal(t, 1, exitCode)
+	assert.Contains(t, stderr, "null value")
 }
 
 func TestIntegration_RunSolution_DryRun(t *testing.T) {
@@ -5578,6 +5712,107 @@ spec:
 	assert.Contains(t, stdout, "legacy")
 }
 
+func TestIntegration_RunResolver_PositionalParams(t *testing.T) {
+	t.Parallel()
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolvers/parameters.yaml",
+		"-o", "json",
+		"--hide-execution",
+		"name=Alice",
+		"count=5",
+	)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstdout: %s\nstderr: %s", exitCode, stdout, stderr)
+	assert.Contains(t, stdout, "Alice")
+}
+
+func TestIntegration_RunResolver_PositionalMixedWithFlags(t *testing.T) {
+	t.Parallel()
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolvers/parameters.yaml",
+		"-o", "json",
+		"--hide-execution",
+		"-r", "name=Bob",
+		"count=3",
+	)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstdout: %s\nstderr: %s", exitCode, stdout, stderr)
+	assert.Contains(t, stdout, "Bob")
+}
+
+func TestIntegration_RunResolver_PositionalWithResolverNames(t *testing.T) {
+	t.Parallel()
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "resolver",
+		"name",
+		"-f", "examples/resolvers/parameters.yaml",
+		"-o", "json",
+		"--hide-execution",
+		"name=Charlie",
+	)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstdout: %s\nstderr: %s", exitCode, stdout, stderr)
+	assert.Contains(t, stdout, "Charlie")
+	// Should NOT contain "count" or "uppercase" since we only asked for "name"
+	assert.NotContains(t, stdout, "\"count\"")
+}
+
+func TestIntegration_RunResolver_DynamicHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolvers/parameters.yaml",
+		"--help",
+	)
+
+	assert.Equal(t, 0, exitCode)
+	// Should show standard help
+	assert.Contains(t, stdout, "Execute resolvers from a solution without running actions")
+	// Should show dynamic resolver help from the solution
+	assert.Contains(t, stdout, "Solution Resolvers")
+	assert.Contains(t, stdout, "PARAMETER")
+	assert.Contains(t, stdout, "name")
+}
+
+// ============================================================================
+// Run Resolver — Unknown Parameter Key Validation Tests
+// ============================================================================
+
+func TestIntegration_RunResolver_UnknownParamKey(t *testing.T) {
+	t.Parallel()
+	// "namee" is not a valid parameter (should suggest "name")
+	_, stderr, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolvers/parameters.yaml",
+		"namee=Alice",
+	)
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "does not accept input")
+	assert.Contains(t, stderr, `did you mean "name"`)
+}
+
+func TestIntegration_RunResolver_UnknownParamKeyNoSuggestion(t *testing.T) {
+	t.Parallel()
+	// "zzzzz" is too far from any valid parameter key
+	_, stderr, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolvers/parameters.yaml",
+		"zzzzz=value",
+	)
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "does not accept input")
+}
+
 // TestIntegration_Lint_UnreachableTestPath verifies unreachable-test-path lint rule detects bad test file references.
 func TestIntegration_Lint_UnreachableTestPath(t *testing.T) {
 	t.Parallel()
@@ -6112,6 +6347,22 @@ func TestIntegration_SolutionDiff_YAML(t *testing.T) {
 	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "pathA:")
 	assert.Contains(t, stdout, "changes:")
+}
+
+func TestIntegration_CacheInfo_ShowsArtifactCache(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	// Build a solution to populate the artifact cache
+	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+
+	// Cache info should report artifact data
+	stdout, _, exitCode2 := runScafctl(t, "cache", "info")
+	assert.Equal(t, 0, exitCode2)
+	// Verify the cache info output contains expected sections
+	assert.Contains(t, stdout, "Cache")
 }
 
 func TestIntegration_SolutionDiff_MissingFile(t *testing.T) {
