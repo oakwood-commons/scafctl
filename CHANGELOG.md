@@ -28,6 +28,17 @@ All notable changes to this project will be documented in this file.
 - *(deps)* Bump github.com/oakwood-commons/kvx from 0.4.0 to 0.6.0 (#92)
 - *(deps)* Bump goreleaser/goreleaser-action from 6 to 7 (#91)
 
+### 🚜 Refactor
+
+- [**breaking**] Remove all deprecated wrappers, aliases, and dead code (#117)
+  - Delete `pkg/cmd/scafctl/resolver/` package; use `run resolver` instead
+  - Delete forwarding wrappers in `pkg/cmd/scafctl/run/common.go`; callers use `pkg/solution/execute` directly
+  - Delete `pkg/cmd/scafctl/secrets/validation.go`; callers use `pkg/secrets` and `pkg/secrets/crypto` directly
+  - Delete type aliases from `cache/info.go`, `cache/clear.go`, `config/paths.go`, `get/resolver/refs.go`; callers use domain packages (`pkg/cache`, `pkg/paths`, `pkg/resolver/refs`)
+  - Remove deprecated wrappers from `get/celfunction/celfunction.go`; callers use `pkg/provider/detail` directly
+  - Delete dead `fallbackKeyring` struct from `pkg/secrets/keyring.go`
+  - Rename `ProviderDescriptor.Deprecated` → `ProviderDescriptor.IsDeprecated` (JSON tag `deprecated` preserved for wire compatibility)
+
 ### 🧪 Testing
 
 - Add solution integration tests for exclusive actions, forEach f… (#83)

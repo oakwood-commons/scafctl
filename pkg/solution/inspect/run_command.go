@@ -99,7 +99,13 @@ func BuildRunCommand(sol *solution.Solution, path string) (*RunCommandInfo, erro
 		if p.Example != nil {
 			exampleVal = fmt.Sprintf("%v", p.Example)
 		}
-		fullCommand += fmt.Sprintf(" -r %s=%s", p.Name, exampleVal)
+		if hasWorkflow {
+			// run solution uses -r flags
+			fullCommand += fmt.Sprintf(" -r %s=%s", p.Name, exampleVal)
+		} else {
+			// run resolver uses positional key=value
+			fullCommand += fmt.Sprintf(" %s=%s", p.Name, exampleVal)
+		}
 	}
 
 	return &RunCommandInfo{

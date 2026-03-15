@@ -28,18 +28,24 @@ This tutorial covers the `scafctl run provider` command — a tool for executing
 
 ## Basic Usage
 
-The `scafctl run provider` command takes a provider name as its only positional argument and provider inputs via `--input` flags.
+The `scafctl run provider` command takes a provider name as its first argument. Provider inputs can be passed as positional `key=value` arguments or via the traditional `--input` flag:
 
 ```bash
+# Positional key=value (recommended)
+scafctl run provider <provider-name> <key>=<value>
+
+# Explicit --input flag
 scafctl run provider <provider-name> --input <key>=<value>
 ```
+
+Both forms can be mixed freely. When the same key appears multiple times, later values override earlier ones.
 
 ### Your First Provider Execution
 
 Run the `static` provider to return a simple value:
 
 ```bash
-scafctl run provider static --input value=hello
+scafctl run provider static value=hello
 ```
 
 Output:
@@ -56,11 +62,15 @@ The output always contains a `data` field with the provider's return value. Addi
 
 ## Passing Inputs
 
-Inputs are passed using `--input` flags. Multiple inputs can be specified by repeating the flag.
+Inputs can be passed as positional `key=value` arguments or via the `--input` flag. Both forms can be combined.
 
 ### Simple Key-Value Pairs
 
 ```bash
+# Positional key=value (recommended)
+scafctl run provider http url=https://httpbin.org/get method=GET
+
+# Explicit --input flag
 scafctl run provider http --input url=https://httpbin.org/get --input method=GET
 ```
 
@@ -84,7 +94,7 @@ Output:
 Comma-separated values are automatically converted to arrays:
 
 ```bash
-scafctl run provider exec --input command=echo --input args=hello,world
+scafctl run provider exec command=echo args=hello,world
 ```
 
 ### Values Containing Commas
@@ -94,7 +104,7 @@ quotes inside the flag value. Use single quotes around the entire flag to preven
 shell interpretation:
 
 ```bash
-scafctl run provider cel --input 'expression="[1,2,3].map(x, x * 2)"'
+scafctl run provider cel 'expression="[1,2,3].map(x, x * 2)"'
 ```
 
 ### Multiple Values for the Same Key
@@ -102,7 +112,7 @@ scafctl run provider cel --input 'expression="[1,2,3].map(x, x * 2)"'
 Repeating the same key creates an array:
 
 ```bash
-scafctl run provider exec --input command=echo --input args=hello --input args=world
+scafctl run provider exec command=echo args=hello args=world
 ```
 
 ---
@@ -160,17 +170,43 @@ that key from the file:
 {{< tabs "runprov-mixed-input" >}}
 {{< tab "Bash" >}}
 ```bash
-scafctl run provider http --input @inputs.yaml --input timeout=30
+scafctl run provider http --input @inputs.yaml timeout=30
 ```
 {{< /tab >}}
 {{< tab "PowerShell" >}}
 ```powershell
-scafctl run provider http --input '@inputs.yaml' --input timeout=30
+scafctl run provider http --input '@inputs.yaml' timeout=30
 ```
 {{< /tab >}}
 {{< /tabs >}}
 
 This loads all values from `inputs.yaml` and adds `timeout=30`.
+
+---
+
+## Input Key Validation
+
+When you pass inputs, scafctl validates the input keys against the provider's
+schema. Unknown keys are rejected early with a helpful error message. If the
+key is close to a valid one (a likely typo), a suggestion is included:
+
+```bash
+# Typo in key name
+scafctl run provider http urll=https://example.com
+# Error: provider "http" does not accept input "urll" — did you mean "url"? (valid inputs: body, headers, method, timeout, url)
+
+# Completely unknown key
+scafctl run provider http unknown=value
+# Error: provider "http" does not accept input "unknown" (valid inputs: body, headers, method, timeout, url)
+```
+
+This validation also applies to resolver and solution parameters:
+
+```bash
+# Typo in parameter name
+scafctl run resolver -f solution.yaml envrionment=prod
+# Error: solution does not accept input "envrionment" — did you mean "environment"? (valid inputs: environment, region)
+```
 
 ---
 
@@ -190,7 +226,7 @@ By default, `scafctl run provider` uses the provider's first declared capability
 
 ```bash
 # Run a provider with a specific capability
-scafctl run provider cel --input expression="1 + 2" --capability transform
+scafctl run provider cel expression="1 + 2" --capability transform
 ```
 
 ### Viewing Available Capabilities
@@ -208,7 +244,7 @@ scafctl get provider cel
 Use `--dry-run` to see what would be executed without actually running the provider:
 
 ```bash
-scafctl run provider http --input url=https://example.com --dry-run
+scafctl run provider http url=https://example.com --dry-run
 ```
 
 The provider will return simulated output without performing any side effects (no HTTP request, no command execution, etc.).
@@ -221,16 +257,16 @@ The default output format is JSON. Use `-o` to change it:
 
 ```bash
 # JSON output (default)
-scafctl run provider static --input value=hello -o json
+scafctl run provider static value=hello -o json
 
 # YAML output
-scafctl run provider static --input value=hello -o yaml
+scafctl run provider static value=hello -o yaml
 
 # Table output
-scafctl run provider static --input value=hello -o table
+scafctl run provider static value=hello -o table
 
 # Quiet mode (exit code only)
-scafctl run provider static --input value=hello -o quiet
+scafctl run provider static value=hello -o quiet
 ```
 
 ### Interactive Mode
@@ -257,12 +293,12 @@ Filter or transform output using CEL expressions:
 {{< tabs "runprov-cel-expr" >}}
 {{< tab "Bash" >}}
 ```bash
-scafctl run provider http --input url=https://httpbin.org/get -e "_.data"
+scafctl run provider http url=https://httpbin.org/get -e "_.data"
 ```
 {{< /tab >}}
 {{< tab "PowerShell" >}}
 ```powershell
-scafctl run provider http --input url=https://httpbin.org/get -e '_.data'
+scafctl run provider http url=https://httpbin.org/get -e '_.data'
 ```
 {{< /tab >}}
 {{< /tabs >}}
@@ -272,7 +308,7 @@ scafctl run provider http --input url=https://httpbin.org/get -e '_.data'
 Use `--show-metrics` to display timing information:
 
 ```bash
-scafctl run provider http --input url=https://httpbin.org/get --show-metrics
+scafctl run provider http url=https://httpbin.org/get --show-metrics
 ```
 
 ---
@@ -283,10 +319,10 @@ Load providers from plugin executables using `--plugin-dir`:
 
 ```bash
 # Load plugins from a directory
-scafctl run provider echo --input message=hello --plugin-dir ./plugins
+scafctl run provider echo message=hello --plugin-dir ./plugins
 
 # Multiple plugin directories
-scafctl run provider my-plugin --input key=value --plugin-dir ./plugins --plugin-dir /opt/plugins
+scafctl run provider my-plugin key=value --plugin-dir ./plugins --plugin-dir /opt/plugins
 ```
 
 See the [Provider Development Guide](provider-development.md) for creating custom providers (including [plugin delivery](provider-development.md#delivering-as-a-plugin)).
@@ -309,6 +345,33 @@ scafctl get provider http
 
 This shows the provider's schema, capabilities, examples, and auto-generated CLI usage examples.
 
+### Dynamic Help for Provider Inputs
+
+When you run `--help` with a specific provider name, the help output automatically includes the provider's input parameters with types, required/optional status, defaults, and descriptions:
+
+```bash
+scafctl run provider http --help
+```
+
+At the end of the standard help text, you'll see a section like:
+
+```
+Provider Inputs (http):
+  body     string               Request body for POST/PUT/PATCH requests
+  headers  any                  HTTP headers as key-value pairs
+  method   string               HTTP method
+  timeout  integer              Request timeout in seconds
+  url      string   (required)  The URL to request
+```
+
+This works for any provider — just include the provider name before `--help`:
+
+```bash
+scafctl run provider env --help
+scafctl run provider static --help
+scafctl run provider file --help
+```
+
 ### Filter by Capability
 
 ```bash
@@ -328,53 +391,53 @@ scafctl get providers -i
 ### Read an Environment Variable
 
 ```bash
-scafctl run provider env --input operation=get --input name=HOME
+scafctl run provider env operation=get name=HOME
 ```
 
 ### Execute a Shell Command
 
 ```bash
-scafctl run provider exec --input command=date
+scafctl run provider exec command=date
 ```
 
 ### Read a File
 
 ```bash
-scafctl run provider file --input operation=read --input path=README.md
+scafctl run provider file operation=read path=README.md
 ```
 
 ### List a Directory
 
 ```bash
-scafctl run provider directory --input operation=list --input path=./pkg
+scafctl run provider directory operation=list path=./pkg
 ```
 
 ### Evaluate a CEL Expression
 
 ```bash
 # Simple expression (no commas)
-scafctl run provider cel --input expression="1 + 2"
+scafctl run provider cel expression="1 + 2"
 
 # Expressions with commas must be quoted to avoid CSV splitting
-scafctl run provider cel --input 'expression="[1,2,3].map(x, x * 2)"'
+scafctl run provider cel 'expression="[1,2,3].map(x, x * 2)"'
 ```
 
 ### Make an HTTP Request
 
 ```bash
-scafctl run provider http --input url=https://httpbin.org/get --input method=GET
+scafctl run provider http url=https://httpbin.org/get method=GET
 ```
 
 ### Get Git Repository Status
 
 ```bash
-scafctl run provider git --input operation=status --input path=.
+scafctl run provider git operation=status path=.
 ```
 
 ### Render a Go Template
 
 ```bash
-scafctl run provider go-template --input name=greeting --input 'template=Hello World'
+scafctl run provider go-template name=greeting 'template=Hello World'
 ```
 
 ### Redact Sensitive Output
@@ -383,7 +446,7 @@ Use `--redact` to mask sensitive values in the output. This example retrieves
 a secret (which must already exist in the scafctl secrets store):
 
 ```bash
-scafctl run provider secret --input operation=get --input name=my-secret --redact
+scafctl run provider secret operation=get name=my-secret --redact
 ```
 
 ---

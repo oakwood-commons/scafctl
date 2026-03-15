@@ -2,7 +2,9 @@
 # Demonstrates using CLI parameters with default values and type coercion.
 #
 # Run: scafctl run resolver -f parameters.yaml
+# Run: scafctl run resolver -f parameters.yaml name=Alice count=5
 # Run: scafctl run resolver -f parameters.yaml -r name=Alice -r count=5
+# Help: scafctl run resolver -f parameters.yaml --help
 
 apiVersion: scafctl.io/v1
 kind: Solution

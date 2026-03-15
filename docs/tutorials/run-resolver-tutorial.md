@@ -705,33 +705,76 @@ This lets you progressively narrow down which resolver is producing unexpected o
 
 ## Working with Parameters
 
-Pass parameters using `-r` flags, just like with `run solution`:
+Parameters can be passed in two equivalent ways:
+
+1. **Positional `key=value`** (recommended) — after resolver names or on their own
+2. **Explicit `-r` flag** — repeatable flag for each parameter
+
+Both forms can be mixed freely.
 
 {{< tabs "runres-params" >}}
 {{< tab "Bash" >}}
 ```bash
-# Key-value parameter
+# Positional key=value syntax (recommended)
+scafctl run resolver -f parameterized.yaml env=staging
+
+# Load parameters from file (positional)
+scafctl run resolver -f parameterized.yaml @params.yaml
+
+# Multiple positional parameters
+scafctl run resolver -f parameterized.yaml env=prod region=us-east1
+
+# Mix resolver names and parameters — bare words are names, key=value are params
+scafctl run resolver db auth -f parameterized.yaml env=prod
+
+# Explicit -r flag (still supported)
 scafctl run resolver -f parameterized.yaml -r env=staging
 
-# Load parameters from file
+# Load parameters from file with -r
 scafctl run resolver -f parameterized.yaml -r @params.yaml
 
-# Multiple parameters
-scafctl run resolver -f parameterized.yaml -r env=prod -r region=us-east1
+# Mix both forms (-r values and positional values are combined)
+scafctl run resolver -f parameterized.yaml -r env=prod region=us-east1
 ```
 {{< /tab >}}
 {{< tab "PowerShell" >}}
 ```powershell
-scafctl run resolver -f parameterized.yaml -r env=staging
+# Positional key=value syntax (recommended)
+scafctl run resolver -f parameterized.yaml env=staging
 
 # Load parameters from file — wrap @file in single quotes to avoid splatting operator
+scafctl run resolver -f parameterized.yaml '@params.yaml'
+
+# Multiple positional parameters
+scafctl run resolver -f parameterized.yaml env=prod region=us-east1
+
+# Mix resolver names and parameters
+scafctl run resolver db auth -f parameterized.yaml env=prod
+
+# Explicit -r flag (still supported)
+scafctl run resolver -f parameterized.yaml -r env=staging
+
+# Load parameters from file with -r
 scafctl run resolver -f parameterized.yaml -r '@params.yaml'
 
-# Multiple parameters
-scafctl run resolver -f parameterized.yaml -r env=prod -r region=us-east1
+# Mix both forms
+scafctl run resolver -f parameterized.yaml -r env=prod region=us-east1
 ```
 {{< /tab >}}
 {{< /tabs >}}
+
+### Dynamic Help Text
+
+When you specify a solution file with `--help`, the command shows the solution's
+resolver parameters alongside the standard help text:
+
+```bash
+scafctl run resolver -f param-demo.yaml --help
+```
+
+This appends a table showing which resolvers accept CLI parameters, their types,
+and descriptions — making it easy to discover what inputs a solution expects
+without reading the YAML file.
 
 ### Example with Parameter Provider
 
@@ -768,7 +811,7 @@ spec:
 ```
 
 ```bash
-scafctl run resolver -f param-demo.yaml -r environment=staging -o json --hide-execution
+scafctl run resolver -f param-demo.yaml environment=staging -o json --hide-execution
 ```
 
 Output:
@@ -778,6 +821,22 @@ Output:
   "config_url": "https://config.staging.example.com",
   "env": "staging"
 }
+```
+
+### Parameter Key Validation
+
+Parameter keys are validated against the solution's parameter-type resolver names.
+Unknown keys are rejected early with a helpful error message that suggests the
+closest valid key when a typo is detected:
+
+```bash
+# Typo: "envronment" instead of "environment"
+scafctl run resolver -f param-demo.yaml envronment=staging
+# Error: solution does not accept input "envronment" — did you mean "environment"?
+
+# Completely unknown key
+scafctl run resolver -f param-demo.yaml unknown=value
+# Error: solution does not accept input "unknown" (valid inputs: environment)
 ```
 
 ---
