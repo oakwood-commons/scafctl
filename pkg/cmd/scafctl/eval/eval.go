@@ -15,8 +15,9 @@ import (
 // CommandEval creates the 'eval' command group.
 func CommandEval(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
 	cCmd := &cobra.Command{
-		Use:   "eval",
-		Short: "Evaluate CEL expressions and Go templates",
+		Use:     "eval",
+		Aliases: []string{"e"},
+		Short:   "Evaluate CEL expressions and Go templates",
 		Long: `Evaluate and validate CEL expressions and Go templates in isolation.
 
 Useful for testing expressions and templates before using them in solutions.`,

@@ -1595,7 +1595,12 @@ if o.File == "" && name != "" {
 
 ## Global Flags
 
-These flags should be available on the root command and inherited by all subcommands:
+Global flags are available on all commands. Users can view them via `scafctl options`.
+They are defined as persistent flags on the root command in `root.go` and are **hidden from `--help` output** — instead, every command's help footer says:
+
+```
+Use "scafctl options" for a list of global command-line options (applies to all commands).
+```
 
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
@@ -1612,7 +1617,8 @@ These flags should be available on the root command and inherited by all subcomm
 
 ### Adding Global Flags
 
-Global flags are defined in `root.go`:
+Global flags are defined as persistent flags in `root.go`. The custom usage template ensures
+they are hidden from all `--help` output and only shown via `scafctl options`:
 
 ```go
 func Root() *cobra.Command {
@@ -1622,4 +1628,25 @@ func Root() *cobra.Command {
         "Path to config file (default: ~/.scafctl/config.yaml)")
     // ... existing flags
 }
+```
+
+### Command Groups
+
+Top-level commands are organized into named groups using Cobra's `AddGroup()` API.
+Groups are defined in `root.go` and each command is assigned via the `withGroup()` helper:
+
+| Group ID | Title | Commands |
+|----------|-------|----------|
+| `core` | Core Commands | run, render, lint, test |
+| `inspect` | Inspection Commands | eval, explain, get, snapshot, solution |
+| `scaffold` | Scaffolding Commands | new, build, bundle, catalog, vendor |
+| `config` | Configuration & Security Commands | auth, cache, config, secrets |
+| `plugin` | Plugin Commands | mcp, plugins |
+
+Commands without a group (e.g., completion, examples, help, options, version) appear under **Additional Commands**.
+
+When adding a new top-level command, assign it to the appropriate group:
+
+```go
+cCmd.AddCommand(withGroup(groupCore, myCmd.CommandMyCmd(cliParams, ioStreams, settings.CliBinaryName)))
 ```
