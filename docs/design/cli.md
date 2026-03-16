@@ -579,7 +579,7 @@ Outputs:
 
 ## Global Flags
 
-These flags are available on most commands:
+These flags are available on all commands. Run `scafctl options` to see them:
 
 | Flag | Short | Description | Status |
 |------|-------|-------------|--------|

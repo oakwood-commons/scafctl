@@ -16,6 +16,7 @@ import (
 func CommandBundle(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "bundle",
+		Aliases:      []string{"bun"},
 		Short:        "Inspect and manage solution bundles",
 		SilenceUsage: true,
 		Long: heredoc.Doc(`

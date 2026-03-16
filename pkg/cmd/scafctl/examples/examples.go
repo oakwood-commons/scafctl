@@ -16,6 +16,7 @@ import (
 func CommandExamples(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
 	cCmd := &cobra.Command{
 		Use:          "examples",
+		Aliases:      []string{"ex"},
 		Short:        "Browse and retrieve scafctl example configurations",
 		SilenceUsage: true,
 	}

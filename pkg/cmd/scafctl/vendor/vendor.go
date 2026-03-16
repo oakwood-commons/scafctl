@@ -15,6 +15,7 @@ import (
 func CommandVendor(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "vendor",
+		Aliases:      []string{"vend"},
 		Short:        "Manage vendored solution dependencies",
 		SilenceUsage: true,
 		Long: heredoc.Doc(`

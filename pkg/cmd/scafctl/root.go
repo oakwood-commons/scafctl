@@ -28,6 +28,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/lint"
 	mcpcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/mcp"
 	newcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/new"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/options"
 	pluginscmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/plugins"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/render"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/run"
@@ -51,6 +52,49 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
+)
+
+// rootUsageTemplate is a custom usage template that hides global (persistent)
+// flags from all commands and instead directs users to "scafctl options".
+// This is based on Cobra's default usage template with the inherited-flags
+// section replaced by a one-line pointer, matching kubectl's UX pattern.
+// Local flags (command-specific) are still shown on subcommands.
+const rootUsageTemplate = `Usage:{{if .Runnable}}
+  {{.UseLine}}{{end}}{{if .HasAvailableSubCommands}}
+  {{.CommandPath}} [command]{{end}}{{if gt (len .Aliases) 0}}
+
+Aliases:
+  {{.NameAndAliases}}{{end}}{{if .HasExample}}
+
+Examples:
+{{.Example}}{{end}}{{if .HasAvailableSubCommands}}{{$cmds := .Commands}}{{if eq (len .Groups) 0}}
+
+Available Commands:{{range $cmds}}{{if (or .IsAvailableCommand (eq .Name "help"))}}
+  {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}{{else}}{{range $group := .Groups}}
+
+{{.Title}}{{range $cmds}}{{if (and (eq .GroupID $group.ID) (or .IsAvailableCommand (eq .Name "help")))}}
+  {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}{{end}}{{if not .AllChildCommandsHaveGroup}}
+
+Additional Commands:{{range $cmds}}{{if (and (eq .GroupID "") (or .IsAvailableCommand (eq .Name "help")))}}
+  {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}{{end}}{{end}}{{end}}{{if .HasParent}}{{if .NonInheritedFlags.HasAvailableFlags}}
+
+Flags:
+{{.NonInheritedFlags.FlagUsages | trimTrailingWhitespaces}}{{end}}{{end}}{{if .HasHelpSubCommands}}
+
+Additional help topics:{{range .Commands}}{{if .IsAdditionalHelpTopicCommand}}
+  {{rpad .CommandPath .CommandPathPadding}} {{.Short}}{{end}}{{end}}{{end}}{{if .HasAvailableSubCommands}}
+
+Use "{{.CommandPath}} [command] --help" for more information about a command.{{end}}
+Use "{{.Root.Name}} options" for a list of global command-line options (applies to all commands).
+`
+
+// Command group IDs for organizing subcommands in help output.
+const (
+	groupCore     = "core"
+	groupInspect  = "inspect"
+	groupScaffold = "scaffold"
+	groupConfig   = "config"
+	groupPlugin   = "plugin"
 )
 
 // RootOptions configures a Root() invocation. All fields are optional;
@@ -419,6 +463,18 @@ func Root(opts *RootOptions) *cobra.Command {
 		},
 	}
 
+	cCmd.SetUsageTemplate(rootUsageTemplate)
+
+	// Command groups — organizes subcommands into logical categories
+	// in the help output, similar to kubectl's grouped help display.
+	cCmd.AddGroup(
+		&cobra.Group{ID: groupCore, Title: "Core Commands:"},
+		&cobra.Group{ID: groupInspect, Title: "Inspection Commands:"},
+		&cobra.Group{ID: groupScaffold, Title: "Scaffolding Commands:"},
+		&cobra.Group{ID: groupConfig, Title: "Configuration & Security Commands:"},
+		&cobra.Group{ID: groupPlugin, Title: "Plugin Commands:"},
+	)
+
 	cCmd.PersistentFlags().StringVar(&cliParams.MinLogLevel, "log-level", "none", "Set the log level (none, error, warn, info, debug, trace, or a numeric V-level)")
 	cCmd.PersistentFlags().BoolVarP(&debugFlag, "debug", "d", false, "Enable debug logging (shorthand for --log-level debug)")
 	cCmd.PersistentFlags().StringVar(&logFormat, "log-format", "console", "Set the log output format (console, json)")
@@ -438,27 +494,45 @@ func Root(opts *RootOptions) *cobra.Command {
 	if err := cCmd.PersistentFlags().MarkHidden("pprof-output-dir"); err != nil {
 		return nil
 	}
+	// Core Commands — primary workflows
+	cCmd.AddCommand(withGroup(groupCore, run.CommandRun(cliParams, ioStreams, settings.CliBinaryName)))
+	cCmd.AddCommand(withGroup(groupCore, render.CommandRender(cliParams, ioStreams, settings.CliBinaryName)))
+	cCmd.AddCommand(withGroup(groupCore, lint.CommandLint(cliParams, ioStreams, settings.CliBinaryName)))
+	cCmd.AddCommand(withGroup(groupCore, testcmd.CommandTest(cliParams, ioStreams, settings.CliBinaryName)))
+
+	// Inspection Commands — explore and understand solutions
+	cCmd.AddCommand(withGroup(groupInspect, get.CommandGet(cliParams, ioStreams, settings.CliBinaryName)))
+	cCmd.AddCommand(withGroup(groupInspect, explain.CommandExplain(cliParams, ioStreams, settings.CliBinaryName)))
+	cCmd.AddCommand(withGroup(groupInspect, eval.CommandEval(cliParams, ioStreams, settings.CliBinaryName)))
+	cCmd.AddCommand(withGroup(groupInspect, solutioncmd.CommandSolution(cliParams, *ioStreams, settings.CliBinaryName)))
+	cCmd.AddCommand(withGroup(groupInspect, snapshot.CommandSnapshot(cliParams, *ioStreams, settings.CliBinaryName)))
+
+	// Scaffolding Commands — create and package artifacts
+	cCmd.AddCommand(withGroup(groupScaffold, newcmd.CommandNew(cliParams, ioStreams, settings.CliBinaryName)))
+	cCmd.AddCommand(withGroup(groupScaffold, build.CommandBuild(cliParams, ioStreams, settings.CliBinaryName)))
+	cCmd.AddCommand(withGroup(groupScaffold, bundlecmd.CommandBundle(cliParams, ioStreams, settings.CliBinaryName)))
+	cCmd.AddCommand(withGroup(groupScaffold, vendorcmd.CommandVendor(cliParams, ioStreams, settings.CliBinaryName)))
+	cCmd.AddCommand(withGroup(groupScaffold, catalogcmd.CommandCatalog(cliParams, ioStreams, settings.CliBinaryName)))
+
+	// Configuration & Security Commands
+	cCmd.AddCommand(withGroup(groupConfig, configcmd.CommandConfig(cliParams, ioStreams, settings.CliBinaryName)))
+	cCmd.AddCommand(withGroup(groupConfig, secretscmd.CommandSecrets(cliParams, ioStreams, settings.CliBinaryName)))
+	cCmd.AddCommand(withGroup(groupConfig, authcmd.CommandAuth(cliParams, ioStreams, settings.CliBinaryName)))
+	cCmd.AddCommand(withGroup(groupConfig, cachecmd.CommandCache(cliParams, ioStreams, settings.CliBinaryName)))
+
+	// Plugin Commands
+	cCmd.AddCommand(withGroup(groupPlugin, pluginscmd.CommandPlugins(cliParams, ioStreams, settings.CliBinaryName)))
+	cCmd.AddCommand(withGroup(groupPlugin, mcpcmd.CommandMCP(cliParams, ioStreams, settings.CliBinaryName)))
+
+	// Other Commands (no group — shown under "Additional Commands:")
 	cCmd.AddCommand(version.CommandVersion(cliParams, ioStreams, settings.CliBinaryName))
-	cCmd.AddCommand(get.CommandGet(cliParams, ioStreams, settings.CliBinaryName))
-	cCmd.AddCommand(run.CommandRun(cliParams, ioStreams, settings.CliBinaryName))
-	cCmd.AddCommand(render.CommandRender(cliParams, ioStreams, settings.CliBinaryName))
-	cCmd.AddCommand(explain.CommandExplain(cliParams, ioStreams, settings.CliBinaryName))
-	cCmd.AddCommand(snapshot.CommandSnapshot(cliParams, *ioStreams, settings.CliBinaryName))
-	cCmd.AddCommand(configcmd.CommandConfig(cliParams, ioStreams, settings.CliBinaryName))
-	cCmd.AddCommand(secretscmd.CommandSecrets(cliParams, ioStreams, settings.CliBinaryName))
-	cCmd.AddCommand(authcmd.CommandAuth(cliParams, ioStreams, settings.CliBinaryName))
-	cCmd.AddCommand(lint.CommandLint(cliParams, ioStreams, settings.CliBinaryName))
-	cCmd.AddCommand(eval.CommandEval(cliParams, ioStreams, settings.CliBinaryName))
-	cCmd.AddCommand(newcmd.CommandNew(cliParams, ioStreams, settings.CliBinaryName))
 	cCmd.AddCommand(examplescmd.CommandExamples(cliParams, ioStreams, settings.CliBinaryName))
-	cCmd.AddCommand(build.CommandBuild(cliParams, ioStreams, settings.CliBinaryName))
-	cCmd.AddCommand(catalogcmd.CommandCatalog(cliParams, ioStreams, settings.CliBinaryName))
-	cCmd.AddCommand(cachecmd.CommandCache(cliParams, ioStreams, settings.CliBinaryName))
-	cCmd.AddCommand(bundlecmd.CommandBundle(cliParams, ioStreams, settings.CliBinaryName))
-	cCmd.AddCommand(vendorcmd.CommandVendor(cliParams, ioStreams, settings.CliBinaryName))
-	cCmd.AddCommand(testcmd.CommandTest(cliParams, ioStreams, settings.CliBinaryName))
-	cCmd.AddCommand(mcpcmd.CommandMCP(cliParams, ioStreams, settings.CliBinaryName))
-	cCmd.AddCommand(pluginscmd.CommandPlugins(cliParams, ioStreams, settings.CliBinaryName))
-	cCmd.AddCommand(solutioncmd.CommandSolution(cliParams, *ioStreams, settings.CliBinaryName))
+	cCmd.AddCommand(options.CommandOptions(cliParams, ioStreams, settings.CliBinaryName))
 	return cCmd
+}
+
+// withGroup sets the GroupID on a command and returns it for chaining.
+func withGroup(group string, cmd *cobra.Command) *cobra.Command {
+	cmd.GroupID = group
+	return cmd
 }

@@ -4,11 +4,13 @@
 package scafctl
 
 import (
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRoot_CommandProperties(t *testing.T) {
@@ -83,6 +85,85 @@ func TestRoot_HasVersionSubcommand(t *testing.T) {
 	}
 	if !found {
 		t.Error("Expected 'version' subcommand to be added")
+	}
+}
+
+func TestRoot_HasOptionsSubcommand(t *testing.T) {
+	t.Parallel()
+	cmd := Root(nil)
+	found := false
+	for _, sub := range cmd.Commands() {
+		if sub.Name() == "options" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Expected 'options' subcommand to be added")
+	}
+}
+
+func TestRoot_CommandGroups(t *testing.T) {
+	t.Parallel()
+	cmd := Root(nil)
+
+	groups := cmd.Groups()
+	if len(groups) == 0 {
+		t.Fatal("Expected command groups to be defined")
+	}
+
+	wantGroups := []string{"core", "inspect", "scaffold", "config", "plugin"}
+	gotIDs := make(map[string]bool)
+	for _, g := range groups {
+		gotIDs[g.ID] = true
+	}
+	for _, id := range wantGroups {
+		if !gotIDs[id] {
+			t.Errorf("Expected group %q to be defined", id)
+		}
+	}
+
+	// Verify key commands have group assignments.
+	subCmds := make(map[string]string)
+	for _, sub := range cmd.Commands() {
+		subCmds[sub.Name()] = sub.GroupID
+	}
+	wantAssignments := map[string]string{
+		"run":     "core",
+		"lint":    "core",
+		"get":     "inspect",
+		"explain": "inspect",
+		"new":     "scaffold",
+		"build":   "scaffold",
+		"config":  "config",
+		"auth":    "config",
+		"plugins": "plugin",
+		"mcp":     "plugin",
+	}
+	for name, wantGroup := range wantAssignments {
+		if got := subCmds[name]; got != wantGroup {
+			t.Errorf("command %q: GroupID = %q, want %q", name, got, wantGroup)
+		}
+	}
+}
+
+func TestRoot_UsageTemplateHidesGlobalFlags(t *testing.T) {
+	t.Parallel()
+	cmd := Root(nil)
+
+	// Verify the rendered root help omits flags and references "options".
+	var buf strings.Builder
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{"--help"})
+	err := cmd.Execute()
+	require.NoError(t, err)
+	output := buf.String()
+
+	if strings.Contains(output, "Global Flags:") {
+		t.Error("Root help output should not contain 'Global Flags:' section")
+	}
+	if !strings.Contains(output, `Use "scafctl options"`) {
+		t.Error("Root help output should reference 'scafctl options' command")
 	}
 }
 

@@ -155,6 +155,29 @@ func TestIntegration_Help(t *testing.T) {
 	assert.Contains(t, stdout, "run")
 	assert.Contains(t, stdout, "render")
 	assert.Contains(t, stdout, "get")
+	assert.Contains(t, stdout, `Use "scafctl options" for a list of global command-line options (applies to all commands).`)
+	assert.NotContains(t, stdout, "Global Flags:")
+
+	// Command groups
+	assert.Contains(t, stdout, "Core Commands:")
+	assert.Contains(t, stdout, "Inspection Commands:")
+	assert.Contains(t, stdout, "Scaffolding Commands:")
+	assert.Contains(t, stdout, "Configuration & Security Commands:")
+	assert.Contains(t, stdout, "Plugin Commands:")
+	assert.Contains(t, stdout, "Additional Commands:")
+}
+
+func TestIntegration_Options(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "options")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "The following options can be passed to any command:")
+	assert.Contains(t, stdout, "--log-level")
+	assert.Contains(t, stdout, "--quiet")
+	assert.Contains(t, stdout, "--no-color")
+	assert.Contains(t, stdout, "--config")
+	assert.Contains(t, stdout, "--cwd")
 }
 
 func TestIntegration_RunHelp(t *testing.T) {
@@ -5416,19 +5439,19 @@ func TestIntegration_LogLevel_Numeric(t *testing.T) {
 }
 
 // TestIntegration_OtelEndpoint_FlagRegistered confirms that --otel-endpoint is
-// listed in the root --help output.
+// listed in the options output.
 func TestIntegration_OtelEndpoint_FlagRegistered(t *testing.T) {
 	t.Parallel()
-	stdout, _, exitCode := runScafctl(t, "--help")
+	stdout, _, exitCode := runScafctl(t, "options")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "otel-endpoint")
 }
 
 // TestIntegration_OtelInsecure_FlagRegistered confirms that --otel-insecure is
-// listed in the root --help output.
+// listed in the options output.
 func TestIntegration_OtelInsecure_FlagRegistered(t *testing.T) {
 	t.Parallel()
-	stdout, _, exitCode := runScafctl(t, "--help")
+	stdout, _, exitCode := runScafctl(t, "options")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "otel-insecure")
 }
