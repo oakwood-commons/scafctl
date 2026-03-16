@@ -72,7 +72,11 @@ func TestClient_Get(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(DefaultConfig())
+	// Disable cache so each test gets a fresh response from the test server
+	// rather than a stale cached entry from a parallel test or previous run.
+	cfg := DefaultConfig()
+	cfg.EnableCache = false
+	client := NewClient(cfg)
 	ctx := context.Background()
 
 	resp, err := client.Get(ctx, server.URL)
@@ -99,7 +103,9 @@ func TestClient_Post(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(DefaultConfig())
+	cfg := DefaultConfig()
+	cfg.EnableCache = false
+	client := NewClient(cfg)
 	ctx := context.Background()
 
 	resp, err := client.Post(ctx, server.URL, "application/json", strings.NewReader(`{"test":"data"}`))
@@ -116,7 +122,10 @@ func TestClient_Put(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(DefaultConfig())
+	// Disable cache — see TestClient_Get for rationale.
+	cfg := DefaultConfig()
+	cfg.EnableCache = false
+	client := NewClient(cfg)
 	ctx := context.Background()
 
 	resp, err := client.Put(ctx, server.URL, "application/json", strings.NewReader(`{"update":"data"}`))
@@ -133,7 +142,10 @@ func TestClient_Delete(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(DefaultConfig())
+	// Disable cache — see TestClient_Get for rationale.
+	cfg := DefaultConfig()
+	cfg.EnableCache = false
+	client := NewClient(cfg)
 	ctx := context.Background()
 
 	resp, err := client.Delete(ctx, server.URL)

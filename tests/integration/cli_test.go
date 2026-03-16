@@ -378,6 +378,8 @@ func TestIntegration_RunProvider_Help(t *testing.T) {
 	assert.Contains(t, stdout, "--capability")
 	assert.Contains(t, stdout, "--dry-run")
 	assert.Contains(t, stdout, "--plugin-dir")
+	assert.Contains(t, stdout, "--on-conflict")
+	assert.Contains(t, stdout, "--backup")
 }
 
 func TestIntegration_RunProvider_DynamicHelp(t *testing.T) {
@@ -6413,4 +6415,198 @@ func TestIntegration_SolutionDiff_Alias(t *testing.T) {
 	)
 	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "Solution Diff:")
+}
+
+// ============================================================================
+// File Conflict Strategy Flag Tests
+// ============================================================================
+
+func TestIntegration_RunSolution_OnConflictFlag_Help(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "run", "solution", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "--on-conflict")
+	assert.Contains(t, stdout, "--backup")
+}
+
+func TestIntegration_RunSolution_OnConflictFlag_Invalid(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t, "run", "solution",
+		"-f", "examples/solutions/hello-world/solution.yaml",
+		"--on-conflict", "invalid-value",
+	)
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "invalid --on-conflict value")
+}
+
+func TestIntegration_RunProvider_OnConflictFlag_Invalid(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t, "run", "provider",
+		"static", "value=hello",
+		"--on-conflict", "bad-strategy",
+	)
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "invalid --on-conflict value")
+}
+
+// ============================================================================
+// File Conflict Strategy Behavior Tests
+// ============================================================================
+
+func TestIntegration_RunSolution_FileConflict_SkipPreservesFile(t *testing.T) {
+	t.Parallel()
+	projectRoot := findProjectRoot()
+	outputDir := t.TempDir()
+	solutionDir := t.TempDir()
+
+	srcDir := filepath.Join(projectRoot, "tests/integration/solutions/file-conflict")
+	require.NoError(t, copyDir(srcDir, solutionDir))
+
+	// Pre-create a target file for the `write-new` action which has NO explicit
+	// onConflict. The --on-conflict skip CLI flag should prevent overwriting it.
+	require.NoError(t, os.WriteFile(filepath.Join(outputDir, "new-file.txt"), []byte("original content"), 0o644))
+
+	stdout, stderr, exitCode := runScafctlInDir(t, solutionDir,
+		"run", "solution",
+		"-f", filepath.Join(solutionDir, "solution.yaml"),
+		"--output-dir", outputDir,
+		"--on-conflict", "skip",
+		"-o", "json",
+	)
+
+	assert.Equal(t, 0, exitCode, "stdout: %s\nstderr: %s", stdout, stderr)
+
+	// Skip: existing file should be preserved (CLI flag affects write-new which has no onConflict)
+	content, err := os.ReadFile(filepath.Join(outputDir, "new-file.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "original content", string(content))
+}
+
+func TestIntegration_RunSolution_FileConflict_OverwriteReplacesFile(t *testing.T) {
+	t.Parallel()
+	projectRoot := findProjectRoot()
+	outputDir := t.TempDir()
+	solutionDir := t.TempDir()
+
+	srcDir := filepath.Join(projectRoot, "tests/integration/solutions/file-conflict")
+	require.NoError(t, copyDir(srcDir, solutionDir))
+
+	// Pre-create a target file that will be overwritten
+	require.NoError(t, os.WriteFile(filepath.Join(outputDir, "new-file.txt"), []byte("old"), 0o644))
+
+	stdout, stderr, exitCode := runScafctlInDir(t, solutionDir,
+		"run", "solution",
+		"-f", filepath.Join(solutionDir, "solution.yaml"),
+		"--output-dir", outputDir,
+		"--on-conflict", "overwrite",
+		"-o", "json",
+	)
+
+	assert.Equal(t, 0, exitCode, "stdout: %s\nstderr: %s", stdout, stderr)
+
+	// Overwrite: file should have new content
+	content, err := os.ReadFile(filepath.Join(outputDir, "new-file.txt"))
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "Hello from conflict test")
+}
+
+func TestIntegration_RunSolution_FileConflict_ErrorOnExisting(t *testing.T) {
+	t.Parallel()
+	projectRoot := findProjectRoot()
+	outputDir := t.TempDir()
+	solutionDir := t.TempDir()
+
+	srcDir := filepath.Join(projectRoot, "tests/integration/solutions/file-conflict")
+	require.NoError(t, copyDir(srcDir, solutionDir))
+
+	// Pre-create a file that will cause the error strategy to fail
+	require.NoError(t, os.WriteFile(filepath.Join(outputDir, "new-file.txt"), []byte("existing"), 0o644))
+
+	_, stderr, exitCode := runScafctlInDir(t, solutionDir,
+		"run", "solution",
+		"-f", filepath.Join(solutionDir, "solution.yaml"),
+		"--output-dir", outputDir,
+		"--on-conflict", "error",
+		"-o", "json",
+	)
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "file already exists")
+}
+
+func TestIntegration_RunProvider_FileConflict_SkipUnchanged(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	target := filepath.Join(tmpDir, "test.txt")
+
+	// Write initial content
+	require.NoError(t, os.WriteFile(target, []byte("same content"), 0o644))
+
+	stdout, stderr, exitCode := runScafctl(t, "run", "provider",
+		"file",
+		"operation=write",
+		"path="+target,
+		"content=same content",
+		"--on-conflict", "skip-unchanged",
+		"-o", "json",
+	)
+
+	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+	assert.Contains(t, stdout, "unchanged")
+}
+
+func TestIntegration_RunProvider_FileConflict_Backup(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	target := filepath.Join(tmpDir, "test.txt")
+
+	require.NoError(t, os.WriteFile(target, []byte("original"), 0o644))
+
+	stdout, stderr, exitCode := runScafctl(t, "run", "provider",
+		"file",
+		"operation=write",
+		"path="+target,
+		"content=replacement",
+		"onConflict=overwrite",
+		"backup=true",
+		"-o", "json",
+	)
+
+	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+	assert.Contains(t, stdout, "backupPath")
+	assert.Contains(t, stdout, "overwritten")
+	assert.FileExists(t, target+".bak")
+}
+
+func TestIntegration_RunSolution_BackupFlag_CreatesBackupFile(t *testing.T) {
+	t.Parallel()
+	projectRoot := findProjectRoot()
+	outputDir := t.TempDir()
+	solutionDir := t.TempDir()
+
+	srcDir := filepath.Join(projectRoot, "tests/integration/solutions/file-conflict")
+	require.NoError(t, copyDir(srcDir, solutionDir))
+
+	// Pre-create a file so --backup has something to back up before overwriting
+	require.NoError(t, os.WriteFile(filepath.Join(outputDir, "new-file.txt"), []byte("old content"), 0o644))
+
+	stdout, stderr, exitCode := runScafctlInDir(t, solutionDir,
+		"run", "solution",
+		"-f", filepath.Join(solutionDir, "solution.yaml"),
+		"--output-dir", outputDir,
+		"--on-conflict", "overwrite",
+		"--backup",
+		"-o", "json",
+	)
+
+	assert.Equal(t, 0, exitCode, "stdout: %s\nstderr: %s", stdout, stderr)
+	assert.FileExists(t, filepath.Join(outputDir, "new-file.txt.bak"), "backup file should be created")
+
+	// Verify the original was replaced
+	content, err := os.ReadFile(filepath.Join(outputDir, "new-file.txt"))
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "Hello from conflict test")
 }

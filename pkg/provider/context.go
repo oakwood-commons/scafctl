@@ -21,6 +21,9 @@ const (
 	solutionMetadataKey contextKey = "scafctl.provider.solutionMetadata"
 	outputDirectoryKey  contextKey = "scafctl.provider.outputDirectory"
 	workingDirectoryKey contextKey = "scafctl.provider.workingDirectory"
+
+	conflictStrategyKey contextKey = "scafctl.provider.conflictStrategy"
+	backupKey           contextKey = "scafctl.provider.backup"
 )
 
 // SolutionMeta holds solution metadata fields made available to providers via context.
@@ -153,6 +156,30 @@ func WithParameters(ctx context.Context, parameters map[string]any) context.Cont
 func ParametersFromContext(ctx context.Context) (map[string]any, bool) {
 	params, ok := ctx.Value(parametersKey).(map[string]any)
 	return params, ok
+}
+
+// WithConflictStrategy returns a new context with the conflict strategy attached.
+func WithConflictStrategy(ctx context.Context, strategy string) context.Context {
+	return context.WithValue(ctx, conflictStrategyKey, strategy)
+}
+
+// ConflictStrategyFromContext retrieves the conflict strategy from the context.
+// Returns the strategy string and true if found, empty string and false otherwise.
+func ConflictStrategyFromContext(ctx context.Context) (string, bool) {
+	s, ok := ctx.Value(conflictStrategyKey).(string)
+	return s, ok
+}
+
+// WithBackup returns a new context with the backup flag attached.
+func WithBackup(ctx context.Context, backup bool) context.Context {
+	return context.WithValue(ctx, backupKey, backup)
+}
+
+// BackupFromContext retrieves the backup flag from the context.
+// Returns the backup flag and true if found, false and false otherwise.
+func BackupFromContext(ctx context.Context) (bool, bool) {
+	b, ok := ctx.Value(backupKey).(bool)
+	return b, ok
 }
 
 // IterationContext holds information about the current forEach iteration.

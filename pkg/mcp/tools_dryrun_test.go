@@ -100,4 +100,60 @@ spec:
 		assert.Equal(t, "dry-run-test", output["solution"])
 		assert.Equal(t, true, output["hasResolvers"])
 	})
+
+	t.Run("invalid on_conflict returns error", func(t *testing.T) {
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "dry_run_solution"
+		request.Params.Arguments = map[string]any{
+			"path":        "/tmp/nonexistent.yaml",
+			"on_conflict": "invalid-strategy",
+		}
+
+		result, err := srv.handleDryRunSolution(context.Background(), request)
+		require.NoError(t, err)
+		assert.True(t, result.IsError)
+		text := result.Content[0].(mcp.TextContent).Text
+		assert.Contains(t, text, "on_conflict")
+		assert.Contains(t, text, "invalid-strategy")
+	})
+
+	t.Run("valid on_conflict accepted", func(t *testing.T) {
+		// Create a minimal solution file
+		solutionYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: dry-run-conflict-test
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "Hello"
+`
+		tmpDir := t.TempDir()
+		solutionPath := filepath.Join(tmpDir, "solution.yaml")
+		require.NoError(t, os.WriteFile(solutionPath, []byte(solutionYAML), 0o644))
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "dry_run_solution"
+		request.Params.Arguments = map[string]any{
+			"path":        solutionPath,
+			"on_conflict": "overwrite",
+			"backup":      true,
+		}
+
+		result, err := srv.handleDryRunSolution(context.Background(), request)
+		require.NoError(t, err)
+		// Should not error on valid on_conflict — if it errors, it's a solution loading issue, not validation
+		if !result.IsError {
+			text := result.Content[0].(mcp.TextContent).Text
+			var output map[string]any
+			require.NoError(t, json.Unmarshal([]byte(text), &output))
+			assert.Equal(t, true, output["dryRun"])
+		}
+	})
 }

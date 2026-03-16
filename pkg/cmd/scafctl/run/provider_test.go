@@ -24,6 +24,20 @@ func TestCommandProvider(t *testing.T) {
 	assert.NotEmpty(t, cmd.Short)
 	assert.Contains(t, cmd.Aliases, "prov")
 	assert.Contains(t, cmd.Aliases, "p")
+
+	// Verify conflict strategy flags exist
+	flags := cmd.Flags()
+	assert.NotNil(t, flags.Lookup("on-conflict"))
+	assert.NotNil(t, flags.Lookup("backup"))
+
+	// Verify defaults
+	onConflict, err := flags.GetString("on-conflict")
+	assert.NoError(t, err)
+	assert.Empty(t, onConflict)
+
+	backup, err := flags.GetBool("backup")
+	assert.NoError(t, err)
+	assert.False(t, backup)
 }
 
 func TestExtractProviderName(t *testing.T) {

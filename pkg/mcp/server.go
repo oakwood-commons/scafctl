@@ -241,6 +241,19 @@ CLI Usage Reference (use these exact flags when suggesting commands to users):
   Run tests:            scafctl test functional -f ./solution.yaml
   Run tests (verbose):  scafctl test functional -f ./solution.yaml -v
 
+File Conflict Strategies:
+  When a solution writes files (file provider), use --on-conflict to control
+  behavior when targets already exist:
+    --on-conflict skip-unchanged  SHA256 compare; skip if identical (default)
+    --on-conflict overwrite       Always replace existing files
+    --on-conflict skip            Never write if file exists
+    --on-conflict error           Fail if file exists
+    --on-conflict append          Append content to existing file
+  Use --backup to create .bak backups before mutating existing files.
+  Examples:
+    scafctl run solution -f ./solution.yaml --on-conflict overwrite --backup
+    scafctl run provider file operation=write path=out.txt content=hello --on-conflict skip
+
 IMPORTANT — test CLI command:
   • The test command is 'scafctl test functional -f <file>', NOT 'scafctl test -f <file>'.
   • The 'functional' subcommand is REQUIRED. The -f flag belongs to the 'functional' subcommand.
