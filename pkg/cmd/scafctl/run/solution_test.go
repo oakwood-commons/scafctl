@@ -56,6 +56,8 @@ func TestCommandSolution(t *testing.T) {
 	assert.NotNil(t, flags.Lookup("resolver-timeout"))
 	assert.NotNil(t, flags.Lookup("phase-timeout"))
 	assert.NotNil(t, flags.Lookup("show-execution"))
+	assert.NotNil(t, flags.Lookup("on-conflict"))
+	assert.NotNil(t, flags.Lookup("backup"))
 }
 
 func TestCommandSolution_FlagDefaults(t *testing.T) {
@@ -103,6 +105,14 @@ func TestCommandSolution_FlagDefaults(t *testing.T) {
 	showExecution, err := flags.GetBool("show-execution")
 	require.NoError(t, err)
 	assert.False(t, showExecution)
+
+	onConflict, err := flags.GetString("on-conflict")
+	require.NoError(t, err)
+	assert.Empty(t, onConflict)
+
+	backup, err := flags.GetBool("backup")
+	require.NoError(t, err)
+	assert.False(t, backup)
 
 	outputDir, err := flags.GetString("output-dir")
 	require.NoError(t, err)
@@ -161,6 +171,35 @@ func TestSolutionOptions_getEffectiveActionConfig_OutputDir(t *testing.T) {
 		result := opts.getEffectiveActionConfig(ctx)
 		assert.Empty(t, result.OutputDir)
 	})
+}
+
+func TestSolutionOptions_Run_InvalidOnConflict(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	streams := &terminal.IOStreams{
+		In:     nil,
+		Out:    &stdout,
+		ErrOut: &stderr,
+	}
+	cliParams := settings.NewCliParams()
+	cliParams.ExitOnError = false
+
+	opts := &SolutionOptions{
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams: streams,
+			CliParams: cliParams,
+			File:      "./testdata/basic.yaml",
+		},
+		OnConflict: "invalid-strategy",
+	}
+
+	lgr := logger.Get(0)
+	ctx := logger.WithLogger(context.Background(), lgr)
+
+	err := opts.Run(ctx)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid --on-conflict value")
 }
 
 func TestSolutionOptions_Run_NoFile(t *testing.T) {

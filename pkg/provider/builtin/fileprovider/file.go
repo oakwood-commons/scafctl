@@ -5,6 +5,7 @@ package fileprovider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -72,6 +73,10 @@ func NewFileProvider() *FileProvider {
 						map[string]*jsonschema.Schema{
 							"path":    schemahelper.StringProp("Relative file path within basePath"),
 							"content": schemahelper.StringProp("File content to write"),
+							"onConflict": schemahelper.StringProp("Per-entry conflict resolution strategy override",
+								schemahelper.WithEnum("error", "overwrite", "skip", "skip-unchanged", "append")),
+							"dedupe": schemahelper.BoolProp("Per-entry deduplication override (only valid with append strategy)"),
+							"backup": schemahelper.BoolProp("Per-entry backup override"),
 						},
 					))),
 				"outputPath": schemahelper.StringProp("Go template for transforming each entry's output path before writing (write-tree only). "+
@@ -84,6 +89,27 @@ func NewFileProvider() *FileProvider {
 					schemahelper.WithExample("0600"),
 					schemahelper.WithPattern(`^0[0-7]{3}$`),
 					schemahelper.WithMaxLength(4)),
+				"onConflict": schemahelper.StringProp(
+					"Conflict resolution strategy when the target file already exists. "+
+						"Defaults to skip-unchanged when not overridden by the --on-conflict CLI flag.",
+					schemahelper.WithExample("skip-unchanged"),
+					schemahelper.WithEnum("error", "overwrite", "skip", "skip-unchanged", "append")),
+				"backup": schemahelper.BoolProp(
+					"Create a .bak backup of existing files before mutating them. " +
+						"Applies to overwrite, skip-unchanged (when content differs), and append (when content is appended)."),
+				"dedupe": schemahelper.BoolProp(
+					"When onConflict is append, perform line-level deduplication. "+
+						"Only lines not already present in the existing file are appended. "+
+						"Useful for files like .gitignore. "+
+						"Returns a validation error if set to true with any strategy other than append.",
+					schemahelper.WithExample(true),
+					schemahelper.WithDefault(false)),
+				"failFast": schemahelper.BoolProp(
+					"When onConflict is error and operation is write-tree, stop at the first "+
+						"conflicting file instead of collecting all conflicts into a single error. "+
+						"Has no effect on other strategies or the write operation.",
+					schemahelper.WithExample(false),
+					schemahelper.WithDefault(false)),
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
@@ -98,8 +124,29 @@ func NewFileProvider() *FileProvider {
 					"size":    schemahelper.IntProp("File size in bytes"),
 				}),
 				provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
-					"success": schemahelper.BoolProp("Whether the operation succeeded (for write/delete operations)"),
-					"path":    schemahelper.StringProp("Absolute path to the file"),
+					"success":      schemahelper.BoolProp("Whether the operation succeeded (for write/delete operations)"),
+					"path":         schemahelper.StringProp("Absolute path to the file (write operation)"),
+					"status":       schemahelper.StringProp("Outcome of the write operation (created, overwritten, skipped, unchanged, appended). The error strategy returns a Go error, not a status value."),
+					"backupPath":   schemahelper.StringProp("Path to the backup file, if one was created"),
+					"operation":    schemahelper.StringProp("Operation performed (write-tree)"),
+					"basePath":     schemahelper.StringProp("Absolute destination root directory (write-tree operation)"),
+					"paths":        schemahelper.ArrayProp("Relative paths of files that were written (write-tree operation)", schemahelper.WithItems(schemahelper.StringProp("Relative file path"))),
+					"filesWritten": schemahelper.IntProp("Total number of files written (created + overwritten + appended) for write-tree operation"),
+					"filesStatus": schemahelper.ArrayProp("Per-file status details (for write-tree operation)",
+						schemahelper.WithItems(schemahelper.ObjectProp(
+							"Status of a single file write within a write-tree operation",
+							nil,
+							map[string]*jsonschema.Schema{
+								"path":       schemahelper.StringProp("Relative path of the file"),
+								"status":     schemahelper.StringProp("Outcome of the write (created, overwritten, skipped, unchanged, appended). The error strategy returns a Go error, not a status value."),
+								"backupPath": schemahelper.StringProp("Path to the backup file, if one was created"),
+							},
+						))),
+					"created":     schemahelper.IntProp("Number of newly created files (write-tree summary)"),
+					"overwritten": schemahelper.IntProp("Number of overwritten files (write-tree summary)"),
+					"skipped":     schemahelper.IntProp("Number of skipped files (write-tree summary)"),
+					"unchanged":   schemahelper.IntProp("Number of unchanged files (write-tree summary)"),
+					"appended":    schemahelper.IntProp("Number of files with appended content (write-tree summary)"),
 				}),
 			},
 			Examples: []provider.Example{
@@ -209,7 +256,7 @@ func (p *FileProvider) Execute(ctx context.Context, input any) (*provider.Output
 
 	// Check for dry-run mode
 	if dryRun := provider.DryRunFromContext(ctx); dryRun {
-		result, err := p.executeDryRun(operation, absPath, inputs)
+		result, err := p.executeDryRun(ctx, operation, absPath, inputs)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", ProviderName, err)
 		}
@@ -222,7 +269,7 @@ func (p *FileProvider) Execute(ctx context.Context, input any) (*provider.Output
 	case "read":
 		result, err = p.executeRead(absPath)
 	case "write":
-		result, err = p.executeWrite(absPath, inputs)
+		result, err = p.executeWrite(ctx, absPath, inputs)
 	case "exists":
 		result, err = p.executeExists(absPath)
 	case "delete":
@@ -268,7 +315,9 @@ func (p *FileProvider) executeRead(absPath string) (*provider.Output, error) {
 	}, nil
 }
 
-func (p *FileProvider) executeWrite(absPath string, inputs map[string]any) (*provider.Output, error) {
+func (p *FileProvider) executeWrite(ctx context.Context, absPath string, inputs map[string]any) (*provider.Output, error) {
+	lgr := logger.FromContext(ctx)
+
 	content, ok := inputs["content"].(string)
 	if !ok {
 		return nil, fmt.Errorf("content is required for write operation")
@@ -286,7 +335,20 @@ func (p *FileProvider) executeWrite(absPath string, inputs map[string]any) (*pro
 		fileMode = os.FileMode(parsed)
 	}
 
-	// Create parent directories if requested
+	// Resolve conflict strategy and flags.
+	onConflictStr, _ := inputs["onConflict"].(string)
+	strategy := resolveConflictStrategy(ctx, "", onConflictStr)
+	backupFlag := resolveBackup(ctx, nil, boolPtrFromInputs(inputs, "backup"))
+	dedupeFlag := resolveDedupe(nil, boolPtrFromInputs(inputs, "dedupe"))
+
+	// Validate: dedupe only valid with append strategy.
+	if dedupeFlag && strategy != ConflictAppend {
+		return nil, fmt.Errorf("dedupe can only be used with append strategy, got %q", strategy)
+	}
+
+	lgr.V(1).Info("file write", "path", absPath, "strategy", string(strategy), "backup", backupFlag)
+
+	// Create parent directories if requested.
 	if createDirs {
 		dir := filepath.Dir(absPath)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -294,20 +356,103 @@ func (p *FileProvider) executeWrite(absPath string, inputs map[string]any) (*pro
 		}
 	}
 
-	// Write file
-	if err := os.WriteFile(absPath, []byte(content), fileMode); err != nil {
-		return nil, fmt.Errorf("failed to write file: %w", err)
-	}
-	if err := os.Chmod(absPath, fileMode); err != nil {
-		return nil, fmt.Errorf("failed to set file permissions: %w", err)
+	contentBytes := []byte(content)
+	outputData := map[string]any{
+		"success": true,
+		"path":    absPath,
 	}
 
-	return &provider.Output{
-		Data: map[string]any{
-			"success": true,
-			"path":    absPath,
-		},
-	}, nil
+	// Check if target file exists.
+	statInfo, statErr := os.Stat(absPath)
+	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		return nil, fmt.Errorf("failed to stat file %s: %w", absPath, statErr)
+	}
+	fileExists := statErr == nil
+
+	if fileExists && statInfo.IsDir() {
+		return nil, fmt.Errorf("path is a directory, not a file: %s", absPath)
+	}
+
+	if !fileExists {
+		// File does not exist — handle append empty content as no-op.
+		if strategy == ConflictAppend && len(contentBytes) == 0 {
+			outputData["status"] = string(StatusUnchanged)
+			return &provider.Output{Data: outputData}, nil
+		}
+		if err := writeFileWithMode(absPath, contentBytes, fileMode); err != nil {
+			return nil, err
+		}
+		outputData["status"] = string(StatusCreated)
+		return &provider.Output{Data: outputData}, nil
+	}
+
+	// File exists — apply conflict strategy.
+	switch strategy {
+	case ConflictError:
+		return nil, fmt.Errorf("file already exists: %s", absPath)
+
+	case ConflictSkip:
+		outputData["status"] = string(StatusSkipped)
+		return &provider.Output{Data: outputData}, nil
+
+	case ConflictSkipUnchanged:
+		match, err := contentMatchesFile(absPath, contentBytes)
+		if err != nil {
+			return nil, fmt.Errorf("content comparison failed: %w", err)
+		}
+		if match {
+			outputData["status"] = string(StatusUnchanged)
+			return &provider.Output{Data: outputData}, nil
+		}
+		if backupFlag {
+			bp, err := backupFile(absPath)
+			if err != nil {
+				return nil, fmt.Errorf("backup failed: %w", err)
+			}
+			outputData["backupPath"] = bp
+		}
+		if err := writeFileWithMode(absPath, contentBytes, fileMode); err != nil {
+			return nil, err
+		}
+		outputData["status"] = string(StatusOverwritten)
+		return &provider.Output{Data: outputData}, nil
+
+	case ConflictOverwrite:
+		if backupFlag {
+			bp, err := backupFile(absPath)
+			if err != nil {
+				return nil, fmt.Errorf("backup failed: %w", err)
+			}
+			outputData["backupPath"] = bp
+		}
+		if err := writeFileWithMode(absPath, contentBytes, fileMode); err != nil {
+			return nil, err
+		}
+		outputData["status"] = string(StatusOverwritten)
+		return &provider.Output{Data: outputData}, nil
+
+	case ConflictAppend:
+		if len(contentBytes) == 0 {
+			outputData["status"] = string(StatusUnchanged)
+			return &provider.Output{Data: outputData}, nil
+		}
+		if backupFlag {
+			bp, err := backupFile(absPath)
+			if err != nil {
+				return nil, fmt.Errorf("backup failed: %w", err)
+			}
+			outputData["backupPath"] = bp
+		}
+		status, err := appendToFile(absPath, contentBytes, fileMode, dedupeFlag)
+		if err != nil {
+			return nil, fmt.Errorf("append failed: %w", err)
+		}
+		outputData["status"] = string(status)
+		return &provider.Output{Data: outputData}, nil
+
+	default:
+		return nil, fmt.Errorf("unsupported conflict strategy: %s", strategy)
+	}
 }
 
 //nolint:unparam // Error return kept for consistent interface - may return errors in future
@@ -357,10 +502,10 @@ func (p *FileProvider) executeWriteTreeDispatch(ctx context.Context, inputs map[
 	}
 
 	if provider.DryRunFromContext(ctx) {
-		return p.executeDryRunWriteTree(absBasePath, inputs)
+		return p.executeDryRunWriteTree(ctx, absBasePath, inputs)
 	}
 
-	result, err := p.executeWriteTree(absBasePath, inputs)
+	result, err := p.executeWriteTree(ctx, absBasePath, inputs)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", ProviderName, err)
 	}
@@ -370,7 +515,9 @@ func (p *FileProvider) executeWriteTreeDispatch(ctx context.Context, inputs map[
 }
 
 // executeWriteTree writes an array of {path, content} entries to the filesystem under basePath.
-func (p *FileProvider) executeWriteTree(absBasePath string, inputs map[string]any) (*provider.Output, error) {
+func (p *FileProvider) executeWriteTree(ctx context.Context, absBasePath string, inputs map[string]any) (*provider.Output, error) {
+	lgr := logger.FromContext(ctx)
+
 	entries, err := p.parseWriteTreeEntries(inputs)
 	if err != nil {
 		return nil, err
@@ -388,8 +535,23 @@ func (p *FileProvider) executeWriteTree(absBasePath string, inputs map[string]an
 		fileMode = os.FileMode(parsed)
 	}
 
-	var writtenPaths []string
+	// Invocation-level conflict inputs.
+	invOnConflict, _ := inputs["onConflict"].(string)
+	invBackup := boolPtrFromInputs(inputs, "backup")
+	invDedupe := boolPtrFromInputs(inputs, "dedupe")
+	failFast, _ := inputs["failFast"].(bool)
 
+	// Phase 1: Resolve output paths, strategies, and validate.
+	type resolvedEntry struct {
+		outputPath string
+		absDest    string
+		content    string
+		strategy   ConflictStrategy
+		backup     bool
+		dedupe     bool
+	}
+
+	resolved := make([]resolvedEntry, 0, len(entries))
 	for i, entry := range entries {
 		outputPath := entry.path
 		if outputPathTmpl != "" {
@@ -400,46 +562,202 @@ func (p *FileProvider) executeWriteTree(absBasePath string, inputs map[string]an
 			outputPath = transformed
 		}
 
-		// Resolve absolute destination
 		absDest := filepath.Join(absBasePath, outputPath)
-
-		// Path traversal safety: ensure the destination is under basePath
 		if !isSubPath(absBasePath, absDest) {
 			return nil, fmt.Errorf("path traversal detected: entries[%d] path %q resolves outside basePath %q", i, outputPath, absBasePath)
 		}
 
-		// Create parent directories
-		dir := filepath.Dir(absDest)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return nil, fmt.Errorf("failed to create directories for %s: %w", outputPath, err)
+		strategy := resolveConflictStrategy(ctx, entry.onConflict, invOnConflict)
+		backup := resolveBackup(ctx, entry.backup, invBackup)
+		dedupe := resolveDedupe(entry.dedupe, invDedupe)
+
+		if dedupe && strategy != ConflictAppend {
+			return nil, fmt.Errorf("entries[%d] (%s): dedupe can only be used with append strategy, got %q", i, outputPath, strategy)
 		}
 
-		// Write file
-		if err := os.WriteFile(absDest, []byte(entry.content), fileMode); err != nil {
-			return nil, fmt.Errorf("failed to write %s: %w", outputPath, err)
-		}
-		if err := os.Chmod(absDest, fileMode); err != nil {
-			return nil, fmt.Errorf("failed to set permissions on %s: %w", outputPath, err)
-		}
-
-		writtenPaths = append(writtenPaths, outputPath)
+		resolved = append(resolved, resolvedEntry{
+			outputPath: outputPath,
+			absDest:    absDest,
+			content:    entry.content,
+			strategy:   strategy,
+			backup:     backup,
+			dedupe:     dedupe,
+		})
 	}
+
+	// Phase 2: Pre-scan for error strategy — runs unconditionally before any writes.
+	// In check-all mode (failFast=false): collect all conflicts and report them together.
+	// In failFast mode: stop on the first conflict to prevent partial writes.
+	// NOTE: Only ConflictError requires pre-scanning today. If a future strategy
+	// also needs pre-write validation, add it to this scan.
+	{
+		var conflictPaths []string
+		for _, re := range resolved {
+			if re.strategy == ConflictError {
+				_, statErr := os.Stat(re.absDest)
+				if statErr == nil {
+					if failFast {
+						return nil, fmt.Errorf("file already exists: %s", re.outputPath)
+					}
+					conflictPaths = append(conflictPaths, re.outputPath)
+				} else if !errors.Is(statErr, os.ErrNotExist) {
+					return nil, fmt.Errorf("failed to stat file %s: %w", re.absDest, statErr)
+				}
+			}
+		}
+		if len(conflictPaths) > 0 {
+			return nil, fmt.Errorf("files already exist: %s", strings.Join(conflictPaths, ", "))
+		}
+	}
+
+	// Phase 3: Write loop.
+	results := make([]FileWriteResult, 0, len(resolved))
+	var writtenPaths []string
+
+	for i, re := range resolved {
+		lgr.V(1).Info("file write", "path", re.absDest, "strategy", string(re.strategy), "backup", re.backup)
+
+		contentBytes := []byte(re.content)
+		result := FileWriteResult{Path: re.outputPath}
+
+		statInfo, statErr := os.Stat(re.absDest)
+		if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+			return nil, fmt.Errorf("entries[%d] (%s): failed to stat file: %w", i, re.outputPath, statErr)
+		}
+		fileExists := statErr == nil
+
+		if fileExists && statInfo.IsDir() {
+			return nil, fmt.Errorf("entries[%d] (%s): path is a directory, not a file: %s", i, re.outputPath, re.absDest)
+		}
+
+		if !fileExists {
+			if re.strategy == ConflictAppend && len(contentBytes) == 0 {
+				result.Status = StatusUnchanged
+			} else {
+				if err := ensureParentDir(re.absDest, re.outputPath); err != nil {
+					return nil, err
+				}
+				if err := writeFileWithMode(re.absDest, contentBytes, fileMode); err != nil {
+					return nil, fmt.Errorf("entries[%d] (%s): %w", i, re.outputPath, err)
+				}
+				result.Status = StatusCreated
+				writtenPaths = append(writtenPaths, re.outputPath)
+			}
+		} else {
+			switch re.strategy {
+			case ConflictError:
+				// Safety net: Phase 2 pre-scan should have already caught this.
+				return nil, fmt.Errorf("file already exists: %s", re.outputPath)
+
+			case ConflictSkip:
+				result.Status = StatusSkipped
+
+			case ConflictSkipUnchanged:
+				match, err := contentMatchesFile(re.absDest, contentBytes)
+				if err != nil {
+					return nil, fmt.Errorf("entries[%d] (%s): content comparison failed: %w", i, re.outputPath, err)
+				}
+				if match {
+					result.Status = StatusUnchanged
+				} else {
+					if re.backup {
+						bp, err := backupFile(re.absDest)
+						if err != nil {
+							return nil, fmt.Errorf("entries[%d] (%s): backup failed: %w", i, re.outputPath, err)
+						}
+						result.BackupPath = bp
+					}
+					if err := writeFileWithMode(re.absDest, contentBytes, fileMode); err != nil {
+						return nil, fmt.Errorf("entries[%d] (%s): %w", i, re.outputPath, err)
+					}
+					result.Status = StatusOverwritten
+					writtenPaths = append(writtenPaths, re.outputPath)
+				}
+
+			case ConflictOverwrite:
+				if re.backup {
+					bp, err := backupFile(re.absDest)
+					if err != nil {
+						return nil, fmt.Errorf("entries[%d] (%s): backup failed: %w", i, re.outputPath, err)
+					}
+					result.BackupPath = bp
+				}
+				if err := writeFileWithMode(re.absDest, contentBytes, fileMode); err != nil {
+					return nil, fmt.Errorf("entries[%d] (%s): %w", i, re.outputPath, err)
+				}
+				result.Status = StatusOverwritten
+				writtenPaths = append(writtenPaths, re.outputPath)
+
+			case ConflictAppend:
+				if len(contentBytes) == 0 {
+					result.Status = StatusUnchanged
+				} else {
+					if re.backup {
+						bp, err := backupFile(re.absDest)
+						if err != nil {
+							return nil, fmt.Errorf("entries[%d] (%s): backup failed: %w", i, re.outputPath, err)
+						}
+						result.BackupPath = bp
+					}
+					status, err := appendToFile(re.absDest, contentBytes, fileMode, re.dedupe)
+					if err != nil {
+						return nil, fmt.Errorf("entries[%d] (%s): append failed: %w", i, re.outputPath, err)
+					}
+					result.Status = status
+					if status == StatusAppended || status == StatusCreated {
+						writtenPaths = append(writtenPaths, re.outputPath)
+					}
+				}
+
+			default:
+				return nil, fmt.Errorf("entries[%d] (%s): unsupported conflict strategy: %s", i, re.outputPath, re.strategy)
+			}
+		}
+
+		results = append(results, result)
+	}
+
+	// Phase 4: Build output with summary counts.
+	counts := map[FileWriteStatus]int{}
+	filesStatus := make([]map[string]any, 0, len(results))
+	for _, r := range results {
+		counts[r.Status]++
+		entry := map[string]any{
+			"path":   r.Path,
+			"status": string(r.Status),
+		}
+		if r.BackupPath != "" {
+			entry["backupPath"] = r.BackupPath
+		}
+		filesStatus = append(filesStatus, entry)
+	}
+
+	filesWritten := counts[StatusCreated] + counts[StatusOverwritten] + counts[StatusAppended]
 
 	return &provider.Output{
 		Data: map[string]any{
 			"success":      true,
 			"operation":    "write-tree",
 			"basePath":     absBasePath,
-			"filesWritten": len(writtenPaths),
+			"filesWritten": filesWritten,
 			"paths":        writtenPaths,
+			"filesStatus":  filesStatus,
+			"created":      counts[StatusCreated],
+			"overwritten":  counts[StatusOverwritten],
+			"skipped":      counts[StatusSkipped],
+			"unchanged":    counts[StatusUnchanged],
+			"appended":     counts[StatusAppended],
 		},
 	}, nil
 }
 
 // writeTreeEntry holds a parsed entry for write-tree.
 type writeTreeEntry struct {
-	path    string
-	content string
+	path       string
+	content    string
+	onConflict string // optional per-entry override
+	dedupe     *bool  // optional per-entry override (pointer to distinguish unset from false)
+	backup     *bool  // optional per-entry override (pointer to distinguish unset from false)
 }
 
 // parseWriteTreeEntries parses and validates the entries input for write-tree.
@@ -479,7 +797,20 @@ func (p *FileProvider) parseWriteTreeEntries(inputs map[string]any) ([]writeTree
 			return nil, fmt.Errorf("entries[%d].content is required and must be a string", i)
 		}
 
-		result = append(result, writeTreeEntry{path: path, content: content})
+		entryOnConflict, _ := entry["onConflict"].(string)
+
+		// Validate per-entry onConflict if provided.
+		if entryOnConflict != "" && !ConflictStrategy(entryOnConflict).IsValid() {
+			return nil, fmt.Errorf("entries[%d].onConflict: invalid strategy %q (valid: error, overwrite, skip, skip-unchanged, append)", i, entryOnConflict)
+		}
+
+		result = append(result, writeTreeEntry{
+			path:       path,
+			content:    content,
+			onConflict: entryOnConflict,
+			dedupe:     boolPtrFromInputs(entry, "dedupe"),
+			backup:     boolPtrFromInputs(entry, "backup"),
+		})
 	}
 
 	return result, nil
@@ -535,8 +866,9 @@ func isSubPath(parent, child string) bool {
 	return !strings.HasPrefix(rel, "..") && rel != ".."
 }
 
-// executeDryRunWriteTree returns a dry-run preview for write-tree.
-func (p *FileProvider) executeDryRunWriteTree(absBasePath string, inputs map[string]any) (*provider.Output, error) {
+// executeDryRunWriteTree returns a dry-run preview for write-tree with planned
+// conflict resolution statuses per entry.
+func (p *FileProvider) executeDryRunWriteTree(ctx context.Context, absBasePath string, inputs map[string]any) (*provider.Output, error) {
 	entries, err := p.parseWriteTreeEntries(inputs)
 	if err != nil {
 		// In dry-run, still validate entries
@@ -545,7 +877,15 @@ func (p *FileProvider) executeDryRunWriteTree(absBasePath string, inputs map[str
 
 	outputPathTmpl, _ := inputs["outputPath"].(string)
 
+	// Invocation-level conflict inputs.
+	invOnConflict, _ := inputs["onConflict"].(string)
+	invBackup := boolPtrFromInputs(inputs, "backup")
+	invDedupe := boolPtrFromInputs(inputs, "dedupe")
+
 	var outputPaths []string
+	filesStatus := make([]map[string]any, 0, len(entries))
+	counts := map[FileWriteStatus]int{}
+
 	for i, entry := range entries {
 		outputPath := entry.path
 		if outputPathTmpl != "" {
@@ -555,23 +895,62 @@ func (p *FileProvider) executeDryRunWriteTree(absBasePath string, inputs map[str
 			}
 			outputPath = transformed
 		}
-		outputPaths = append(outputPaths, outputPath)
+
+		absDest := filepath.Join(absBasePath, outputPath)
+		if !isSubPath(absBasePath, absDest) {
+			return nil, fmt.Errorf("%s: path traversal detected: entries[%d] path %q resolves outside basePath %q", ProviderName, i, outputPath, absBasePath)
+		}
+		strategy := resolveConflictStrategy(ctx, entry.onConflict, invOnConflict)
+		backup := resolveBackup(ctx, entry.backup, invBackup)
+		dedupe := resolveDedupe(entry.dedupe, invDedupe)
+
+		if dedupe && strategy != ConflictAppend {
+			return nil, fmt.Errorf("%s: entries[%d] (%s): dedupe can only be used with append strategy, got %q", ProviderName, i, outputPath, strategy)
+		}
+
+		planned, err := computePlannedStatus(absDest, []byte(entry.content), strategy, dedupe)
+		if err != nil {
+			return nil, fmt.Errorf("%s: entries[%d] (%s): %w", ProviderName, i, outputPath, err)
+		}
+
+		statusEntry := map[string]any{
+			"path":           outputPath,
+			"_plannedStatus": string(planned),
+			"_strategy":      string(strategy),
+		}
+		if backup {
+			statusEntry["_backup"] = true
+		}
+		counts[planned]++
+		filesStatus = append(filesStatus, statusEntry)
+		if planned == StatusCreated || planned == StatusOverwritten || planned == StatusAppended {
+			outputPaths = append(outputPaths, outputPath)
+		}
 	}
+
+	filesWritten := counts[StatusCreated] + counts[StatusOverwritten] + counts[StatusAppended]
 
 	return &provider.Output{
 		Data: map[string]any{
 			"success":      true,
 			"operation":    "write-tree",
 			"basePath":     absBasePath,
-			"filesWritten": len(outputPaths),
+			"filesWritten": filesWritten,
 			"paths":        outputPaths,
+			"filesStatus":  filesStatus,
+			"created":      counts[StatusCreated],
+			"overwritten":  counts[StatusOverwritten],
+			"skipped":      counts[StatusSkipped],
+			"unchanged":    counts[StatusUnchanged],
+			"appended":     counts[StatusAppended],
+			"errored":      counts[StatusError],
 			"_dryRun":      true,
-			"_message":     fmt.Sprintf("Would write %d files under %s", len(outputPaths), absBasePath),
+			"_message":     fmt.Sprintf("Would write %d files under %s", filesWritten, absBasePath),
 		},
 	}, nil
 }
 
-func (p *FileProvider) executeDryRun(operation, absPath string, inputs map[string]any) (*provider.Output, error) {
+func (p *FileProvider) executeDryRun(ctx context.Context, operation, absPath string, inputs map[string]any) (*provider.Output, error) {
 	switch operation {
 	case "read":
 		return &provider.Output{
@@ -585,15 +964,38 @@ func (p *FileProvider) executeDryRun(operation, absPath string, inputs map[strin
 		}, nil
 
 	case "write":
-		content, _ := inputs["content"].(string)
-		return &provider.Output{
-			Data: map[string]any{
-				"success":  true,
-				"path":     absPath,
-				"_dryRun":  true,
-				"_message": fmt.Sprintf("Would write %d bytes to: %s", len(content), absPath),
-			},
-		}, nil
+		content, ok := inputs["content"].(string)
+		if !ok {
+			return nil, fmt.Errorf("content is required for write operation")
+		}
+
+		// Resolve conflict strategy and flags.
+		onConflictStr, _ := inputs["onConflict"].(string)
+		strategy := resolveConflictStrategy(ctx, "", onConflictStr)
+		backupFlag := resolveBackup(ctx, nil, boolPtrFromInputs(inputs, "backup"))
+		dedupeFlag := resolveDedupe(nil, boolPtrFromInputs(inputs, "dedupe"))
+
+		if dedupeFlag && strategy != ConflictAppend {
+			return nil, fmt.Errorf("dedupe can only be used with append strategy, got %q", strategy)
+		}
+
+		planned, err := computePlannedStatus(absPath, []byte(content), strategy, dedupeFlag)
+		if err != nil {
+			return nil, err
+		}
+
+		data := map[string]any{
+			"success":        true,
+			"path":           absPath,
+			"_dryRun":        true,
+			"_plannedStatus": string(planned),
+			"_strategy":      string(strategy),
+			"_message":       dryRunWriteMessage(planned, len(content), absPath),
+		}
+		if backupFlag {
+			data["_backup"] = true
+		}
+		return &provider.Output{Data: data}, nil
 
 	case "exists":
 		// Exists operation is read-only, so actually check
@@ -618,5 +1020,98 @@ func (p *FileProvider) executeDryRun(operation, absPath string, inputs map[strin
 
 	default:
 		return nil, fmt.Errorf("unsupported operation: %s", operation)
+	}
+}
+
+// dryRunWriteMessage returns a human-readable dry-run message that accurately
+// reflects what the write operation would do based on the planned status.
+func dryRunWriteMessage(planned FileWriteStatus, contentLen int, absPath string) string {
+	switch planned {
+	case StatusCreated:
+		return fmt.Sprintf("Would create %s (%d bytes)", absPath, contentLen)
+	case StatusOverwritten:
+		return fmt.Sprintf("Would overwrite %s (%d bytes)", absPath, contentLen)
+	case StatusSkipped:
+		return fmt.Sprintf("Would skip %s (file exists, strategy=skip)", absPath)
+	case StatusUnchanged:
+		return fmt.Sprintf("Would skip %s (content unchanged)", absPath)
+	case StatusAppended:
+		return fmt.Sprintf("Would append %d bytes to %s", contentLen, absPath)
+	case StatusError:
+		return fmt.Sprintf("Would error: file already exists: %s", absPath)
+	default:
+		return fmt.Sprintf("Would write %d bytes to: %s (planned: %s)", contentLen, absPath, planned)
+	}
+}
+
+// computePlannedStatus determines what status a file write would produce without
+// actually performing the write. Used by dry-run to preview conflict resolution.
+// Returns an error if os.Stat fails for reasons other than the file not existing.
+//
+// Performance note: for skip-unchanged and append+dedupe strategies this reads
+// the target file to compare content. When called in a write-tree loop the
+// cost is O(entries × file_size) for those strategies.
+func computePlannedStatus(absPath string, content []byte, strategy ConflictStrategy, dedupe bool) (FileWriteStatus, error) {
+	statInfo, statErr := os.Stat(absPath)
+	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		return "", fmt.Errorf("failed to stat file %s: %w", absPath, statErr)
+	}
+	fileExists := statErr == nil
+
+	if fileExists && statInfo.IsDir() {
+		return "", fmt.Errorf("path is a directory, not a file: %s", absPath)
+	}
+
+	if !fileExists {
+		if strategy == ConflictAppend && len(content) == 0 {
+			return StatusUnchanged, nil
+		}
+		return StatusCreated, nil
+	}
+
+	// File exists — compute planned status based on strategy.
+	switch strategy {
+	case ConflictError:
+		// Would error at runtime, report accurately so dry-run output is not misleading.
+		return StatusError, nil
+	case ConflictSkip:
+		return StatusSkipped, nil
+	case ConflictSkipUnchanged:
+		match, matchErr := contentMatchesFile(absPath, content)
+		if matchErr != nil {
+			return "", fmt.Errorf("content comparison failed for %s: %w", absPath, matchErr)
+		}
+		if match {
+			return StatusUnchanged, nil
+		}
+		return StatusOverwritten, nil
+	case ConflictOverwrite:
+		return StatusOverwritten, nil
+	case ConflictAppend:
+		if len(content) == 0 {
+			return StatusUnchanged, nil
+		}
+		if dedupe {
+			// Check if all lines already exist.
+			existing, readErr := os.ReadFile(absPath)
+			if readErr != nil {
+				return "", fmt.Errorf("read file for dedupe check %s: %w", absPath, readErr)
+			}
+			existingLines := strings.Split(string(existing), "\n")
+			seen := make(map[string]bool, len(existingLines))
+			for _, line := range existingLines {
+				seen[strings.TrimRight(line, "\r")] = true
+			}
+			newLines := strings.Split(string(content), "\n")
+			for _, line := range newLines {
+				if !seen[strings.TrimRight(line, "\r")] {
+					return StatusAppended, nil
+				}
+			}
+			return StatusUnchanged, nil
+		}
+		return StatusAppended, nil
+	default:
+		return "", fmt.Errorf("unsupported conflict strategy: %q", strategy)
 	}
 }

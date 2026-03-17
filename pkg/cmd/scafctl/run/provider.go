@@ -17,6 +17,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/fileprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/detail"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -63,6 +64,12 @@ type ProviderOptions struct {
 	// When set and capability is action, providers resolve relative paths
 	// against this directory instead of CWD.
 	OutputDir string
+
+	// OnConflict is the default conflict strategy for file writes.
+	OnConflict string
+
+	// Backup enables .bak backup creation before mutating existing files.
+	Backup bool
 }
 
 // CommandProvider creates the 'run provider' subcommand
@@ -177,6 +184,8 @@ Examples:
 	cCmd.Flags().BoolVar(&options.ShowMetrics, "show-metrics", false, "Show provider execution metrics after completion (output to stderr)")
 	cCmd.Flags().BoolVar(&options.Redact, "redact", false, "Redact sensitive fields in output")
 	cCmd.Flags().StringVar(&options.OutputDir, "output-dir", "", "Target directory for action file operations (applies when capability=action)")
+	cCmd.Flags().StringVar(&options.OnConflict, "on-conflict", "", "Conflict strategy for file writes (error|overwrite|skip|skip-unchanged|append)")
+	cCmd.Flags().BoolVar(&options.Backup, "backup", false, "Create .bak backups before mutating existing files")
 
 	// kvx output flags — default to JSON (not table) since provider output is unstructured
 	validFormats := kvx.BaseOutputFormats()
@@ -364,6 +373,19 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 	// Set up execution context
 	ctx = provider.WithExecutionMode(ctx, capability)
 	ctx = provider.WithDryRun(ctx, o.DryRun)
+
+	// Inject conflict strategy and backup into context for file providers
+	if o.OnConflict != "" {
+		if !fileprovider.ConflictStrategy(o.OnConflict).IsValid() {
+			err := fmt.Errorf("invalid --on-conflict value %q (valid: error, overwrite, skip, skip-unchanged, append)", o.OnConflict)
+			w.Errorf("%v", err)
+			return exitcode.WithCode(err, exitcode.InvalidInput)
+		}
+		ctx = provider.WithConflictStrategy(ctx, o.OnConflict)
+	}
+	if o.Backup {
+		ctx = provider.WithBackup(ctx, true)
+	}
 
 	// Set output directory for action capabilities.
 	// In dry-run mode, resolve the path without creating the directory.

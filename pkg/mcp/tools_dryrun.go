@@ -9,7 +9,9 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/dryrun"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/fileprovider"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 )
@@ -38,6 +40,13 @@ func (s *Server) registerDryRunTools() {
 		mcp.WithString("cwd",
 			mcp.Description("Working directory for path resolution. When set, relative paths (including the solution path itself) resolve against this directory instead of the process CWD."),
 		),
+		mcp.WithString("on_conflict",
+			mcp.Description("Default conflict strategy for file write actions. Controls what happens when a target file already exists. Valid values: error (fail if exists), overwrite (always replace), skip (never write if exists), skip-unchanged (overwrite only when content differs, default), append (add to end of file)."),
+			mcp.Enum("error", "overwrite", "skip", "skip-unchanged", "append"),
+		),
+		mcp.WithBoolean("backup",
+			mcp.Description("Create .bak backup files before overwriting existing files. Only applies to file provider write/write-tree actions that modify existing files."),
+		),
 	)
 	s.mcpServer.AddTool(dryRunTool, s.handleDryRunSolution)
 }
@@ -59,6 +68,21 @@ func (s *Server) handleDryRunSolution(_ context.Context, request mcp.CallToolReq
 			WithField("cwd"),
 			WithSuggestion("Provide a valid existing directory path"),
 		), nil
+	}
+
+	// Parse conflict strategy and backup options
+	onConflict := request.GetString("on_conflict", "")
+	if onConflict != "" {
+		if !fileprovider.ConflictStrategy(onConflict).IsValid() {
+			return newStructuredError(ErrCodeInvalidInput, fmt.Sprintf("invalid on_conflict value %q (valid: error, overwrite, skip, skip-unchanged, append)", onConflict),
+				WithField("on_conflict"),
+				WithSuggestion("Use one of: error, overwrite, skip, skip-unchanged, append"),
+			), nil
+		}
+		ctx = provider.WithConflictStrategy(ctx, onConflict)
+	}
+	if backup := request.GetBool("backup", false); backup {
+		ctx = provider.WithBackup(ctx, true)
 	}
 
 	// Parse params
@@ -115,15 +139,15 @@ func (s *Server) handleDryRunSolution(_ context.Context, request mcp.CallToolReq
 	// Send progress notifications during dry-run
 	progress := newProgressReporter(s, request)
 	progress.setTotal(3)
-	progress.report(s.ctx, 1, "Loaded solution, executing resolvers in dry-run mode")
+	progress.report(ctx, 1, "Loaded solution, executing resolvers in dry-run mode")
 
 	// Execute resolvers in dry-run mode
 	var resolverData map[string]any
 	if sol.Spec.HasResolvers() {
-		cfg := execute.ResolverExecutionConfigFromContext(s.ctx)
+		cfg := execute.ResolverExecutionConfigFromContext(ctx)
 		cfg.DryRun = true
 
-		result, err := execute.Resolvers(s.ctx, sol, params, reg, cfg)
+		result, err := execute.Resolvers(ctx, sol, params, reg, cfg)
 		if err != nil {
 			resolverData = make(map[string]any)
 		} else {
@@ -141,10 +165,10 @@ func (s *Server) handleDryRunSolution(_ context.Context, request mcp.CallToolReq
 		}
 	}
 
-	progress.report(s.ctx, 2, "Building action graph and generating report")
+	progress.report(ctx, 2, "Building action graph and generating report")
 
 	// Generate structured report
-	report, err := dryrun.Generate(s.ctx, sol, dryrun.Options{
+	report, err := dryrun.Generate(ctx, sol, dryrun.Options{
 		Params:       params,
 		Registry:     reg,
 		ResolverData: resolverData,
@@ -156,7 +180,7 @@ func (s *Server) handleDryRunSolution(_ context.Context, request mcp.CallToolReq
 		), nil
 	}
 
-	progress.report(s.ctx, 3, "Dry-run complete")
+	progress.report(ctx, 3, "Dry-run complete")
 
 	return mcp.NewToolResultJSON(report)
 }

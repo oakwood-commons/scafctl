@@ -1,0 +1,115 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: file-conflict-integration
+  version: 1.0.0
+  description: |
+    Integration test for file conflict strategies.
+    Writes files with various onConflict strategies to verify correct behavior
+    when target files already exist.
+
+spec:
+  resolvers:
+    greeting:
+      description: Static greeting for test
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: Hello from conflict test
+
+  workflow:
+    actions:
+      write-new:
+        description: Write a brand new file (all strategies should create it)
+        provider: file
+        inputs:
+          operation: write
+          path: new-file.txt
+          content:
+            rslvr: greeting
+
+      write-skip:
+        description: Write with skip strategy to an existing file
+        provider: file
+        inputs:
+          operation: write
+          path: skip-target.txt
+          content: "new content for skip"
+          onConflict: skip
+
+      write-overwrite:
+        description: Write with overwrite strategy to an existing file
+        provider: file
+        inputs:
+          operation: write
+          path: overwrite-target.txt
+          content: "overwritten content"
+          onConflict: overwrite
+
+      write-append:
+        description: Append content to an existing file
+        provider: file
+        inputs:
+          operation: write
+          path: append-target.txt
+          content: "appended line\n"
+          onConflict: append
+
+  testing:
+    config:
+      skipBuiltins: [render-defaults]
+
+    cases:
+      basic-run:
+        description: Verify solution workflow actions create files on first run
+        command: [run, solution]
+        args: ["-o", "json"]
+        cleanup:
+          - command: "rm -f new-file.txt skip-target.txt overwrite-target.txt append-target.txt"
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.status == "succeeded"
+            message: "Solution should succeed"
+          - expression: __output.actions["write-new"].status == "succeeded"
+            message: "write-new action should succeed"
+          - expression: __output.actions["write-new"].results.status == "created"
+            message: "write-new should create a new file"
+          - expression: __output.actions["write-skip"].status == "succeeded"
+            message: "write-skip action should succeed"
+          - expression: __output.actions["write-skip"].results.status == "created"
+            message: "write-skip should create on first run"
+          - expression: __output.actions["write-overwrite"].status == "succeeded"
+            message: "write-overwrite action should succeed"
+          - expression: __output.actions["write-overwrite"].results.status == "created"
+            message: "write-overwrite should create on first run"
+          - expression: __output.actions["write-append"].status == "succeeded"
+            message: "write-append action should succeed"
+          - expression: __output.actions["write-append"].results.status == "created"
+            message: "write-append should create on first run"
+
+      second-run-conflicts:
+        description: Verify conflict strategies on second run when files exist
+        command: [run, solution]
+        args: ["-o", "json"]
+        init:
+          - command: >-
+              printf '%s' 'Hello from conflict test' > new-file.txt &&
+              printf '%s' 'new content for skip' > skip-target.txt &&
+              printf '%s' 'overwritten content' > overwrite-target.txt &&
+              printf 'appended line\n' > append-target.txt
+        cleanup:
+          - command: "rm -f new-file.txt skip-target.txt overwrite-target.txt append-target.txt"
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.status == "succeeded"
+            message: "Second run should succeed"
+          - expression: __output.actions["write-new"].results.status == "unchanged"
+            message: "write-new with default skip-unchanged should be unchanged on identical re-run"
+          - expression: __output.actions["write-skip"].results.status == "skipped"
+            message: "write-skip should skip existing file"
+          - expression: __output.actions["write-overwrite"].results.status == "overwritten"
+            message: "write-overwrite should overwrite existing file"
+          - expression: __output.actions["write-append"].results.status == "appended"
+            message: "write-append should append to existing file"
