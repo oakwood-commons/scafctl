@@ -807,6 +807,178 @@ spec:
 		cmd := parsed["command"].(string)
 		assert.Contains(t, cmd, "-f ./my-solution.yaml", "bare filenames should get ./ prefix")
 	})
+
+	t.Run("on_conflict flag appended to command", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		solFile := filepath.Join(tmpDir, "conflict-test.yaml")
+		solContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: conflict-test
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "hello"
+  workflow:
+    actions:
+      write-file:
+        provider: file
+        inputs:
+          operation: write
+          path: out.txt
+          content:
+            rslvr: greeting
+`
+		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
+
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "get_run_command"
+		request.Params.Arguments = map[string]any{
+			"path":        solFile,
+			"on_conflict": "overwrite",
+		}
+
+		result, err := srv.handleGetRunCommand(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+		cmd := parsed["command"].(string)
+		assert.Contains(t, cmd, "--on-conflict overwrite")
+	})
+
+	t.Run("backup flag appended to command", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		solFile := filepath.Join(tmpDir, "backup-test.yaml")
+		solContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: backup-test
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "hello"
+  workflow:
+    actions:
+      write-file:
+        provider: file
+        inputs:
+          operation: write
+          path: out.txt
+          content:
+            rslvr: greeting
+`
+		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
+
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "get_run_command"
+		request.Params.Arguments = map[string]any{
+			"path":        solFile,
+			"on_conflict": "skip",
+			"backup":      true,
+		}
+
+		result, err := srv.handleGetRunCommand(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+		cmd := parsed["command"].(string)
+		assert.Contains(t, cmd, "--on-conflict skip")
+		assert.Contains(t, cmd, "--backup")
+	})
+
+	t.Run("on_conflict rejected for resolver-only solution", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		solFile := filepath.Join(tmpDir, "resolvers-only.yaml")
+		solContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: resolvers-only
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "hello"
+`
+		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
+
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "get_run_command"
+		request.Params.Arguments = map[string]any{
+			"path":        solFile,
+			"on_conflict": "overwrite",
+		}
+
+		result, err := srv.handleGetRunCommand(context.Background(), request)
+		require.NoError(t, err)
+		assert.True(t, result.IsError, "should return error for on_conflict with resolver-only solution")
+	})
+
+	t.Run("backup rejected for resolver-only solution", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		solFile := filepath.Join(tmpDir, "resolvers-only.yaml")
+		solContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: resolvers-only
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "hello"
+`
+		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
+
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "get_run_command"
+		request.Params.Arguments = map[string]any{
+			"path":   solFile,
+			"backup": true,
+		}
+
+		result, err := srv.handleGetRunCommand(context.Background(), request)
+		require.NoError(t, err)
+		assert.True(t, result.IsError, "should return error for backup with resolver-only solution")
+	})
 }
 
 func TestHandleRunSolutionTests(t *testing.T) {

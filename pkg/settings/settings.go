@@ -30,6 +30,15 @@ const (
 	DefaultGracePeriod = 30 * time.Second
 )
 
+// File conflict defaults
+const (
+	// DefaultConflictStrategy is the default conflict resolution strategy for file writes.
+	DefaultConflictStrategy = "skip-unchanged"
+
+	// DefaultMaxBackups is the maximum number of backup files (.bak, .bak.1, etc.) per source file.
+	DefaultMaxBackups = 5
+)
+
 // HTTP client defaults
 const (
 	// DefaultHTTPTimeout is the default timeout for HTTP requests.

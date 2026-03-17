@@ -19,6 +19,7 @@ import (
 	pkglint "github.com/oakwood-commons/scafctl/pkg/lint"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/fileprovider"
 	provdetail "github.com/oakwood-commons/scafctl/pkg/provider/detail"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
@@ -197,6 +198,13 @@ func (s *Server) registerSolutionTools() {
 		mcp.WithString("path",
 			mcp.Required(),
 			mcp.Description("Path to solution file, catalog name, or URL"),
+		),
+		mcp.WithString("on_conflict",
+			mcp.Description("Include --on-conflict flag in the generated command. Controls file write behavior when targets exist. Valid values: error, overwrite, skip, skip-unchanged, append."),
+			mcp.Enum("error", "overwrite", "skip", "skip-unchanged", "append"),
+		),
+		mcp.WithBoolean("backup",
+			mcp.Description("Include --backup flag in the generated command. Creates .bak backups before overwriting existing files."),
 		),
 		mcp.WithString("cwd",
 			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
@@ -1117,6 +1125,41 @@ func (s *Server) handleGetRunCommand(_ context.Context, request mcp.CallToolRequ
 			"error":       err.Error(),
 			"explanation": "Nothing to run — the solution needs either resolvers or a workflow section",
 		})
+	}
+
+	// Append conflict strategy flags to the command if requested.
+	// These flags only apply to 'run solution', not 'run resolver'.
+	onConflict := request.GetString("on_conflict", "")
+	backup := request.GetBool("backup", false)
+	if onConflict != "" {
+		if !fileprovider.ConflictStrategy(onConflict).IsValid() {
+			return newStructuredError(ErrCodeInvalidInput, fmt.Sprintf("invalid on_conflict value: %q", onConflict),
+				WithField("on_conflict"),
+				WithSuggestion("Use one of: error, overwrite, skip, skip-unchanged, append"),
+			), nil
+		}
+		if cmdInfo.Subcommand == "scafctl run solution" {
+			cmdInfo.Command += " --on-conflict " + onConflict
+		} else {
+			// The --on-conflict flag is not supported by 'run resolver'.
+			// Return a structured error so the caller knows the flag was ignored.
+			return newStructuredError(ErrCodeInvalidInput,
+				fmt.Sprintf("--on-conflict is not supported by %q; it only applies to 'scafctl run solution' (solutions with a workflow)", cmdInfo.Subcommand),
+				WithField("on_conflict"),
+				WithSuggestion("Remove on_conflict, or use a solution that has a workflow with file provider actions."),
+			), nil
+		}
+	}
+	if backup {
+		if cmdInfo.Subcommand == "scafctl run solution" {
+			cmdInfo.Command += " --backup"
+		} else {
+			return newStructuredError(ErrCodeInvalidInput,
+				fmt.Sprintf("--backup is not supported by %q; it only applies to 'scafctl run solution' (solutions with a workflow)", cmdInfo.Subcommand),
+				WithField("backup"),
+				WithSuggestion("Remove backup, or use a solution that has a workflow with file provider actions."),
+			), nil
+		}
 	}
 
 	// Build result with content annotations.

@@ -6,6 +6,17 @@ All notable changes to this project will be documented in this file.
 
 ### 🚀 Features
 
+- *(file)* [**breaking**] Add conflict resolution strategies to file provider (`onConflict` input with five strategies: `error`, `overwrite`, `skip`, `skip-unchanged`, `append`)
+- *(file)* [**breaking**] Change file provider default write behavior from silent-overwrite to `skip-unchanged` (SHA256 content comparison)
+- *(file)* [**breaking**] Change `filesWritten` semantics in `write-tree` output from `len(entries)` to `created + overwritten + appended` (files actually written to disk)
+- *(file)* Add `backup` input for `.bak` file creation before mutating existing files (overwrite, skip-unchanged when content differs, append)
+- *(file)* Add `append` strategy with `dedupe` option for line-level deduplication (e.g., `.gitignore` management)
+- *(file)* Add `failFast` input for `error` strategy in `write-tree` (default: collect all conflicts, then fail)
+- *(file)* Add per-file status reporting (`created`, `overwritten`, `skipped`, `unchanged`, `appended`) in `write` and `write-tree` outputs
+- *(file)* Add per-entry `onConflict`, `backup`, `dedupe` overrides in `write-tree` entries
+- *(cli)* Add `--on-conflict` flag to `run solution` and `run provider` commands
+- *(cli)* Add `--backup` flag to `run solution` and `run provider` commands
+- *(file)* Add conflict-aware dry-run with `_plannedStatus` and `_strategy` reporting
 - *(auth)* [**breaking**] Add builtin GitHub authentication handler (#78)
 - *(auth)* Add GCP authentication handler (#80)
 - Prepare codebase for MCP server integration (#81)

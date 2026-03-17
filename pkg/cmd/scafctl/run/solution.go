@@ -19,6 +19,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/flags"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/fileprovider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
@@ -45,6 +46,14 @@ type SolutionOptions struct {
 
 	// ShowExecution enables __execution metadata in output
 	ShowExecution bool
+
+	// OnConflict is the default conflict strategy for file writes.
+	// When set, it is injected into the execution context so file providers
+	// use it as their default instead of the built-in "skip-unchanged".
+	OnConflict string
+
+	// Backup enables .bak backup creation before mutating existing files.
+	Backup bool
 }
 
 // CommandSolution creates the 'run solution' subcommand
@@ -183,6 +192,10 @@ Examples:
 	cCmd.Flags().BoolVar(&options.DryRun, "dry-run", false, "Validate and show what would be executed without running")
 	cCmd.Flags().BoolVar(&options.ShowExecution, "show-execution", false, "Include __execution metadata in output (phases, timing, dependencies, providers)")
 
+	// File conflict strategy flags
+	cCmd.Flags().StringVar(&options.OnConflict, "on-conflict", "", "Conflict strategy for file writes (error|overwrite|skip|skip-unchanged|append)")
+	cCmd.Flags().BoolVar(&options.Backup, "backup", false, "Create .bak backups before mutating existing files")
+
 	return cCmd
 }
 
@@ -241,6 +254,13 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		}
 	}
 
+	// Validate --on-conflict flag value if provided
+	if o.OnConflict != "" {
+		if !fileprovider.ConflictStrategy(o.OnConflict).IsValid() {
+			return o.exitWithCode(ctx, fmt.Errorf("invalid --on-conflict value %q (valid: error, overwrite, skip, skip-unchanged, append)", o.OnConflict), exitcode.InvalidInput)
+		}
+	}
+
 	lgr.V(1).Info("running solution",
 		"file", o.File,
 		"output", o.Output,
@@ -248,7 +268,9 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		"progress", o.Progress,
 		"dryRun", o.DryRun,
 		"showMetrics", o.ShowMetrics,
-		"outputDir", o.OutputDir)
+		"outputDir", o.OutputDir,
+		"onConflict", o.OnConflict,
+		"backup", o.Backup)
 
 	// Validate and prepare output directory before execution (fail-fast).
 	// In dry-run mode, resolve the path without creating the directory.
@@ -305,9 +327,22 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		}
 	}
 
+	// Inject CLI overrides into context before dry-run or live execution,
+	// so both paths honour --output-dir, --on-conflict, and --backup.
+	actionCtx := ctx
+	if absOutputDir != "" {
+		actionCtx = provider.WithOutputDirectory(actionCtx, absOutputDir)
+	}
+	if o.OnConflict != "" {
+		actionCtx = provider.WithConflictStrategy(actionCtx, o.OnConflict)
+	}
+	if o.Backup {
+		actionCtx = provider.WithBackup(actionCtx, true)
+	}
+
 	// Dry run — execute resolvers in dry-run mode and show structured report
 	if o.DryRun {
-		return o.executeDryRun(ctx, sol, reg, params)
+		return o.executeDryRun(actionCtx, sol, reg, params)
 	}
 
 	// Execute resolvers if present
@@ -342,15 +377,6 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 
 	// Get effective action config (CLI flags override app config)
 	actionCfg := o.getEffectiveActionConfig(ctx)
-
-	// Execute actions
-	// When --output-dir is set, inject it into the action execution context
-	// so providers in action mode resolve relative paths against the output directory.
-	// Resolvers already executed above with the original ctx (CWD-based).
-	actionCtx := ctx
-	if absOutputDir != "" {
-		actionCtx = provider.WithOutputDirectory(actionCtx, absOutputDir)
-	}
 
 	actionExecutor := action.NewExecutor(
 		action.WithRegistry(actionAdapter),
