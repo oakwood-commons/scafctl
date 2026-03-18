@@ -19,7 +19,7 @@ import (
 // registerDryRunTools registers dry-run related MCP tools.
 func (s *Server) registerDryRunTools() {
 	dryRunTool := mcp.NewTool("dry_run_solution",
-		mcp.WithDescription("Perform a full dry-run of a solution: resolves all resolvers with providers in dry-run/mock mode (no side effects), then builds the action graph to show what each action WOULD do. Returns resolver outputs (mock values), action execution plan with materialized inputs, provider mock behaviors, and any warnings. Use this to understand the complete execution plan before actually running a solution."),
+		mcp.WithDescription("Perform a WhatIf dry-run of a solution: resolves all resolvers normally (they are side-effect-free), then builds the action graph and generates provider-specific WhatIf messages describing what each action WOULD do with the real resolver data. Returns the structured WhatIf report with action plan, phases, and any warnings."),
 		mcp.WithTitleAnnotation("Dry-Run Solution"),
 		mcp.WithToolIcons(toolIcons["dryrun"]),
 		mcp.WithReadOnlyHintAnnotation(false),
@@ -34,8 +34,8 @@ func (s *Server) registerDryRunTools() {
 		mcp.WithObject("params",
 			mcp.Description("Input parameters as key-value pairs for parameter-type resolvers"),
 		),
-		mcp.WithObject("mock_data",
-			mcp.Description("Override specific resolver values with mock data instead of executing them. Keys are resolver names, values are the mock output. Useful for testing action behavior with specific resolver outputs without requiring real provider execution. Example: {\"api_url\": \"https://mock.example.com\", \"config\": {\"env\": \"test\"}}"),
+		mcp.WithObject("resolver_overrides",
+			mcp.Description("Override specific resolver values instead of using the real resolved output. Keys are resolver names, values are the override values. Useful for testing action behavior with specific resolver outputs. Example: {\"api_url\": \"https://staging.example.com\", \"config\": {\"env\": \"test\"}}"),
 		),
 		mcp.WithString("cwd",
 			mcp.Description("Working directory for path resolution. When set, relative paths (including the solution path itself) resolve against this directory instead of the process CWD."),
@@ -46,6 +46,9 @@ func (s *Server) registerDryRunTools() {
 		),
 		mcp.WithBoolean("backup",
 			mcp.Description("Create .bak backup files before overwriting existing files. Only applies to file provider write/write-tree actions that modify existing files."),
+		),
+		mcp.WithBoolean("verbose",
+			mcp.Description("Include materialized inputs in the report for each action. Useful for debugging what values were resolved for each provider input."),
 		),
 	)
 	s.mcpServer.AddTool(dryRunTool, s.handleDryRunSolution)
@@ -87,7 +90,7 @@ func (s *Server) handleDryRunSolution(_ context.Context, request mcp.CallToolReq
 
 	// Parse params
 	var params map[string]any
-	var mockData map[string]any
+	var resolverOverrides map[string]any
 	args := request.GetArguments()
 	if p, ok := args["params"]; ok && p != nil {
 		if pm, ok := p.(map[string]any); ok {
@@ -99,13 +102,13 @@ func (s *Server) handleDryRunSolution(_ context.Context, request mcp.CallToolReq
 			), nil
 		}
 	}
-	if m, ok := args["mock_data"]; ok && m != nil {
+	if m, ok := args["resolver_overrides"]; ok && m != nil {
 		if mm, ok := m.(map[string]any); ok {
-			mockData = mm
+			resolverOverrides = mm
 		} else {
-			return newStructuredError(ErrCodeInvalidInput, "'mock_data' must be an object mapping resolver names to mock values",
-				WithField("mock_data"),
-				WithSuggestion("Provide mock_data as {\"resolver_name\": <value>}"),
+			return newStructuredError(ErrCodeInvalidInput, "'resolver_overrides' must be an object mapping resolver names to override values",
+				WithField("resolver_overrides"),
+				WithSuggestion("Provide resolver_overrides as {\"resolver_name\": <value>}"),
 			), nil
 		}
 	}
@@ -139,13 +142,13 @@ func (s *Server) handleDryRunSolution(_ context.Context, request mcp.CallToolReq
 	// Send progress notifications during dry-run
 	progress := newProgressReporter(s, request)
 	progress.setTotal(3)
-	progress.report(ctx, 1, "Loaded solution, executing resolvers in dry-run mode")
+	progress.report(ctx, 1, "Loaded solution, executing resolvers")
 
-	// Execute resolvers in dry-run mode
+	// Execute resolvers normally — resolver providers are side-effect-free,
+	// so we get real data for WhatIf message generation.
 	var resolverData map[string]any
 	if sol.Spec.HasResolvers() {
 		cfg := execute.ResolverExecutionConfigFromContext(ctx)
-		cfg.DryRun = true
 
 		result, err := execute.Resolvers(ctx, sol, params, reg, cfg)
 		if err != nil {
@@ -155,23 +158,24 @@ func (s *Server) handleDryRunSolution(_ context.Context, request mcp.CallToolReq
 		}
 	}
 
-	// Apply mock_data overrides — these take precedence over dry-run results
-	if len(mockData) > 0 {
+	// Apply resolver overrides — these take precedence over real resolved values
+	if len(resolverOverrides) > 0 {
 		if resolverData == nil {
 			resolverData = make(map[string]any)
 		}
-		for name, val := range mockData {
+		for name, val := range resolverOverrides {
 			resolverData[name] = val
 		}
 	}
 
-	progress.report(ctx, 2, "Building action graph and generating report")
+	progress.report(ctx, 2, "Building action graph and generating WhatIf report")
 
 	// Generate structured report
+	verbose := request.GetBool("verbose", false)
 	report, err := dryrun.Generate(ctx, sol, dryrun.Options{
-		Params:       params,
 		Registry:     reg,
 		ResolverData: resolverData,
+		Verbose:      verbose,
 	})
 	if err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("dry-run failed: %v", err),

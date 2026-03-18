@@ -850,8 +850,10 @@ func TestIntegration_RunSolution_DryRun(t *testing.T) {
 	)
 
 	assert.Equal(t, 0, exitCode)
-	// Dry run should show what would happen without executing
-	t.Logf("dry-run output: %s", stdout)
+	// WhatIf-style output with phase grouping
+	assert.Contains(t, stdout, "DRY RUN: What would happen")
+	assert.Contains(t, stdout, "What if:")
+	assert.Contains(t, stdout, "Phase 1:")
 }
 
 func TestIntegration_RunResolver_Basic(t *testing.T) {
@@ -874,7 +876,6 @@ func TestIntegration_RunResolver_Help(t *testing.T) {
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "Execute resolvers from a solution without running actions")
 	assert.Contains(t, stdout, "--skip-transform")
-	assert.Contains(t, stdout, "--dry-run")
 	assert.Contains(t, stdout, "--graph")
 	assert.Contains(t, stdout, "--snapshot")
 	assert.Contains(t, stdout, "--file")
@@ -982,21 +983,6 @@ func TestIntegration_RunResolver_SkipTransform(t *testing.T) {
 
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "__execution")
-}
-
-func TestIntegration_RunResolver_DryRun(t *testing.T) {
-	t.Parallel()
-	stdout, _, exitCode := runScafctl(t,
-		"run", "resolver",
-		"-f", "examples/resolver-demo.yaml",
-		"--dry-run",
-		"-o", "json",
-	)
-
-	assert.Equal(t, 0, exitCode)
-	assert.Contains(t, stdout, "dryRun")
-	assert.Contains(t, stdout, "executionPlan")
-	assert.Contains(t, stdout, "resolvers")
 }
 
 func TestIntegration_RunResolver_GraphASCII(t *testing.T) {
@@ -1222,19 +1208,6 @@ spec:
 	)
 
 	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
-}
-
-func TestIntegration_RunResolver_MutualExclusive_DryRunGraph(t *testing.T) {
-	t.Parallel()
-	_, stderr, exitCode := runScafctl(t,
-		"run", "resolver",
-		"-f", "examples/resolver-demo.yaml",
-		"--dry-run",
-		"--graph",
-	)
-
-	assert.NotEqual(t, 0, exitCode)
-	assert.Contains(t, stderr, "mutually exclusive")
 }
 
 func TestIntegration_RunResolver_SnapshotRequiresFile(t *testing.T) {
@@ -5167,9 +5140,9 @@ func TestIntegration_RunSolution_DryRun_EnhancedOutput(t *testing.T) {
 	)
 
 	assert.Equal(t, 0, exitCode)
-	// Enhanced dry-run includes solution info and action plan
-	assert.Contains(t, stdout, "DRY RUN")
-	assert.Contains(t, stdout, "ACTION PLAN")
+	// Enhanced dry-run includes WhatIf-style output
+	assert.Contains(t, stdout, "DRY RUN: What would happen")
+	assert.Contains(t, stdout, "What if:")
 }
 
 func TestIntegration_RunSolution_DryRun_JSON(t *testing.T) {
@@ -5187,6 +5160,20 @@ func TestIntegration_RunSolution_DryRun_JSON(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(stdout), &report))
 	assert.Equal(t, true, report["dryRun"])
 	assert.NotEmpty(t, report["solution"])
+	assert.Equal(t, true, report["hasWorkflow"])
+
+	// Verify actionPlan with WhatIf messages
+	actionPlan, ok := report["actionPlan"].([]any)
+	require.True(t, ok, "actionPlan should be an array")
+	require.NotEmpty(t, actionPlan)
+
+	act := actionPlan[0].(map[string]any)
+	assert.NotEmpty(t, act["wouldDo"])
+	assert.NotEmpty(t, act["provider"])
+
+	// MaterializedInputs should NOT be present without --verbose
+	_, hasMaterialized := act["materializedInputs"]
+	assert.False(t, hasMaterialized, "materializedInputs should not appear without --verbose")
 }
 
 func TestIntegration_RunSolution_DryRun_YAML(t *testing.T) {
@@ -5201,6 +5188,8 @@ func TestIntegration_RunSolution_DryRun_YAML(t *testing.T) {
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "dryRun: true")
 	assert.Contains(t, stdout, "solution:")
+	assert.Contains(t, stdout, "wouldDo:")
+	assert.Contains(t, stdout, "hasWorkflow: true")
 }
 
 // ============================================================================
@@ -5382,8 +5371,60 @@ func TestIntegration_RunSolution_OutputDir_DryRun(t *testing.T) {
 	assert.True(t, os.IsNotExist(err),
 		"dry-run should not create the output directory")
 
-	// Should contain dry-run output
-	assert.Contains(t, stdout, "DRY RUN")
+	// Should contain WhatIf dry-run output
+	assert.Contains(t, stdout, "DRY RUN: What would happen")
+}
+
+func TestIntegration_RunSolution_DryRun_Verbose(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t,
+		"run", "solution",
+		"-f", "examples/actions/hello-world.yaml",
+		"--dry-run",
+		"--verbose",
+		"-o", "json",
+	)
+
+	assert.Equal(t, 0, exitCode)
+
+	var report map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &report))
+
+	actionPlan, ok := report["actionPlan"].([]any)
+	require.True(t, ok, "actionPlan should be an array")
+	require.NotEmpty(t, actionPlan)
+
+	act := actionPlan[0].(map[string]any)
+	// Verbose mode should include materializedInputs
+	_, hasMaterialized := act["materializedInputs"]
+	assert.True(t, hasMaterialized, "--verbose should include materializedInputs")
+}
+
+func TestIntegration_RunSolution_DryRun_WhatIfMessages(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t,
+		"run", "solution",
+		"-f", "examples/dryrun/conditional-dryrun.yaml",
+		"--dry-run",
+		"-o", "json",
+	)
+
+	assert.Equal(t, 0, exitCode)
+
+	var report map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &report))
+
+	actionPlan, ok := report["actionPlan"].([]any)
+	require.True(t, ok)
+	require.NotEmpty(t, actionPlan)
+
+	// All actions should have provider-specific WhatIf messages
+	for _, a := range actionPlan {
+		act := a.(map[string]any)
+		wouldDo, _ := act["wouldDo"].(string)
+		assert.NotEmpty(t, wouldDo, "action %s should have a WhatIf message", act["name"])
+		assert.Contains(t, wouldDo, "Would execute", "exec provider WhatIf should contain 'Would execute'")
+	}
 }
 
 func TestIntegration_RunResolver_OutputDir_NoEffect(t *testing.T) {

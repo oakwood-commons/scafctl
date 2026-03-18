@@ -22,14 +22,14 @@ These concerns apply across resolvers, actions, providers, plugins, and solution
 | Secret Redaction | ✅ Implemented | `RedactedError`, `--redact` flag on snapshots |
 | Stateless Core | ✅ Implemented | Providers are stateless, no persistent state |
 | Error Model | ✅ Implemented | Rich error types with location, cause, context |
-| Determinism Rules | ✅ Implemented | Resolver purity enforced, `MockBehavior` declared |
+| Determinism Rules | ✅ Implemented | Resolver purity enforced, `WhatIf` functions declared |
 | Resolver DAG Visualization | ✅ Implemented | ASCII, DOT, Mermaid, JSON formats |
 | Action DAG Visualization | ✅ Implemented | ASCII, DOT, Mermaid, JSON formats via `--action-graph` |
 | Validation | ✅ Implemented | Schema, dependency, type validation |
 | Linting | ✅ Implemented | `scafctl lint` with error/warning/info severities |
 | Extensibility (Providers/Plugins) | ✅ Implemented | Plugin system for external providers |
 | Render vs Run Separation | ✅ Implemented | `scafctl render` vs `scafctl run` |
-| Dry-run Mode | ✅ Implemented | `--dry-run` flag, `DryRunFromContext()` |
+| Dry-run Mode | ✅ Implemented | `--dry-run` flag, `WhatIf` on Descriptor, `DryRunFromContext()` for provider-level |
 
 ---
 
@@ -70,9 +70,9 @@ Each provider must declare:
 - Input schema ✅ (`Schema` field)
 - Output shape ✅ (`OutputSchemas` field)
 - Supported operations (if applicable) ✅ (`Capabilities` field)
-- Determinism expectations ✅ (`MockBehavior` field)
+- Determinism expectations ✅ (`WhatIf` function)
 - Side-effect behavior ✅ (capability determines this)
-- A way to mock so solutions can be tested ✅ (`MockBehavior` field)
+- A way to mock so solutions can be tested ✅ (`WhatIf` function)
 
 Providers are treated as black boxes with explicit contracts.
 
@@ -183,7 +183,7 @@ Errors include:
 
 ### Non-Determinism
 
-If a provider is non-deterministic, it must declare this via `MockBehavior`.
+If a provider is non-deterministic, it must declare this via its `WhatIf` function.
 Providers like `exec` that have side effects are restricted to `CapabilityAction`.
 
 ---

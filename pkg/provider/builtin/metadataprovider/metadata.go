@@ -64,9 +64,8 @@ func (p *MetadataProvider) Descriptor() *provider.Descriptor {
 		Capabilities: []provider.Capability{
 			provider.CapabilityFrom,
 		},
-		Category:     "Core",
-		Tags:         []string{"metadata", "solution", "introspection", "runtime"},
-		MockBehavior: "Returns runtime metadata with current build version, arguments, working directory, entrypoint info, and solution metadata",
+		Category: "Core",
+		Tags:     []string{"metadata", "solution", "introspection", "runtime"},
 		Examples: []provider.Example{
 			{
 				Name:        "Runtime metadata",

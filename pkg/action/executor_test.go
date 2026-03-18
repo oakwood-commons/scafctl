@@ -826,11 +826,10 @@ type execMockProvider struct {
 
 func (p *execMockProvider) Descriptor() *provider.Descriptor {
 	return &provider.Descriptor{
-		Name:         p.name,
-		APIVersion:   "v1",
-		Version:      semver.MustParse("1.0.0"),
-		Description:  "Mock provider for testing",
-		MockBehavior: "Returns configured response",
+		Name:        p.name,
+		APIVersion:  "v1",
+		Version:     semver.MustParse("1.0.0"),
+		Description: "Mock provider for testing",
 		Schema: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
 			"name": schemahelper.StringProp("Test input"),
 		}),

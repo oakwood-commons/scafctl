@@ -10,6 +10,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/oakwood-commons/scafctl/pkg/logger"
 )
 
 // Provider is the core interface that all providers must implement.
@@ -81,9 +82,11 @@ type Descriptor struct {
 	// The function receives the raw inputs map and returns a slice of resolver names that are referenced.
 	ExtractDependencies func(inputs map[string]any) []string `json:"-" yaml:"-"`
 
-	// MockBehavior describes what the provider does during dry-run/mock execution.
-	// Should explain the simulated behavior without side effects.
-	MockBehavior string `json:"mockBehavior" yaml:"mockBehavior" doc:"Dry-run behavior description" minLength:"10" maxLength:"500" example:"Returns static mock data" required:"true"`
+	// WhatIf generates a human-readable description of what the provider would do
+	// with the given inputs, without executing. Optional — if nil, falls back to
+	// a generic message. In solution dry-run, receives the materialized inputs
+	// map (map[string]any), not the decoded struct that Execute may receive.
+	WhatIf func(ctx context.Context, input any) (string, error) `json:"-" yaml:"-"`
 
 	// Capabilities declares the execution contexts this provider supports.
 	// Determines where the provider can be used (from, transform, validation, etc.).
@@ -130,6 +133,23 @@ type Output struct {
 	// (e.g., stdout/stderr) directly to the terminal via IOStreams from context.
 	// When true, the CLI output layer should not re-print the streamed content.
 	Streamed bool `json:"streamed,omitempty" yaml:"streamed,omitempty" doc:"Whether output was already streamed to terminal"`
+}
+
+// DescribeWhatIf returns a human-readable description of what the provider would do.
+// Calls WhatIf if set, falls back to a generic message.
+func (d *Descriptor) DescribeWhatIf(ctx context.Context, input any) string {
+	if d.WhatIf != nil {
+		msg, err := d.WhatIf(ctx, input)
+		if err != nil {
+			lgr := logger.FromContext(ctx)
+			lgr.V(1).Info("WhatIf function returned error, falling back to generic message",
+				"provider", d.Name, "error", err)
+		} else if msg != "" {
+			return msg
+		}
+		// On error or empty result, fall through to generic message
+	}
+	return fmt.Sprintf("Would execute %s provider", d.Name)
 }
 
 // IsSensitiveField checks whether a field name is marked as sensitive in the descriptor.

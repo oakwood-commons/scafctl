@@ -93,10 +93,6 @@ type ResolverExecutionConfig struct {
 
 	// SkipTransform skips resolver transforms.
 	SkipTransform bool `json:"skipTransform,omitempty" yaml:"skipTransform,omitempty" doc:"Skip resolver transforms"`
-
-	// DryRun enables dry-run mode: providers return mock/no-op outputs
-	// instead of performing real side effects.
-	DryRun bool `json:"dryRun,omitempty" yaml:"dryRun,omitempty" doc:"Enable dry-run mode (providers return mock outputs)"`
 }
 
 // ResolverExecutionResult holds the structured output of resolver execution.
@@ -121,11 +117,6 @@ func Resolvers(
 	cfg ResolverExecutionConfig,
 ) (*ResolverExecutionResult, error) {
 	lgr := logger.FromContext(ctx)
-
-	// Enable dry-run mode on the context when requested.
-	if cfg.DryRun {
-		ctx = provider.WithDryRun(ctx, true)
-	}
 
 	// Attach solution metadata to the context so providers (e.g., metadata) can access it.
 	ctx = provider.WithSolutionMetadata(ctx, toSolutionMeta(sol))
@@ -283,10 +274,6 @@ type ActionExecutionConfig struct {
 	// An empty string means actions use CWD (backward-compatible default).
 	OutputDir string `json:"outputDir,omitempty" yaml:"outputDir,omitempty" doc:"Target directory for action output" maxLength:"4096"`
 
-	// DryRun enables dry-run mode: providers return mock/no-op outputs
-	// instead of performing real side effects.
-	DryRun bool `json:"dryRun,omitempty" yaml:"dryRun,omitempty" doc:"Enable dry-run mode (providers return mock outputs)"`
-
 	// Cwd is the original working directory to expose as __cwd in action
 	// expressions. When empty, the executor captures os.Getwd() at creation time.
 	// Callers that change the working directory before creating the executor
@@ -304,6 +291,11 @@ type ActionExecutionResult struct {
 // It accepts pre-resolved data from a prior resolver execution and a provider
 // registry. When cfg.OutputDir is set, providers executing in action mode
 // resolve relative paths against that directory instead of CWD.
+//
+// NOTE: This function performs real execution including filesystem changes
+// (e.g. creating OutputDir). For dry-run semantics, callers should use
+// dryrun.Generate instead — it builds the action graph and generates WhatIf
+// descriptions without invoking providers or creating directories.
 func Actions(
 	ctx context.Context,
 	sol *solution.Solution,
@@ -323,26 +315,18 @@ func Actions(
 		return nil, fmt.Errorf("workflow validation failed: %w", err)
 	}
 
-	// Enable dry-run mode on the context when requested.
-	if cfg.DryRun {
-		ctx = provider.WithDryRun(ctx, true)
-	}
-
 	// Attach solution metadata to the context.
 	ctx = provider.WithSolutionMetadata(ctx, toSolutionMeta(sol))
 
 	// When OutputDir is set, resolve to an absolute path and inject it into
-	// the context for action-mode providers. Only create the directory when
-	// not in dry-run mode to avoid filesystem side effects.
+	// the context for action-mode providers.
 	if cfg.OutputDir != "" {
 		absDir, err := provider.AbsFromContext(ctx, cfg.OutputDir)
 		if err != nil {
 			return nil, fmt.Errorf("resolving output directory: %w", err)
 		}
-		if !cfg.DryRun {
-			if err := os.MkdirAll(absDir, 0o755); err != nil {
-				return nil, fmt.Errorf("creating output directory: %w", err)
-			}
+		if err := os.MkdirAll(absDir, 0o755); err != nil {
+			return nil, fmt.Errorf("creating output directory: %w", err)
 		}
 		ctx = provider.WithOutputDirectory(ctx, absDir)
 	}
@@ -368,8 +352,7 @@ func Actions(
 	if lgr != nil {
 		lgr.V(1).Info("executing actions",
 			"actionCount", len(sol.Spec.Workflow.Actions),
-			"outputDir", cfg.OutputDir,
-			"dryRun", cfg.DryRun)
+			"outputDir", cfg.OutputDir)
 	}
 
 	result, err := executor.Execute(ctx, sol.Spec.Workflow)

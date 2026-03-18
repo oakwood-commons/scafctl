@@ -128,13 +128,24 @@ func NewHTTPProvider() *HTTPProvider {
 
 	return &HTTPProvider{
 		descriptor: &provider.Descriptor{
-			Name:         ProviderName,
-			DisplayName:  "HTTP Client",
-			APIVersion:   "v1",
-			Description:  "Makes HTTP/HTTPS requests to APIs and web services",
-			Version:      version,
-			Category:     "network",
-			MockBehavior: "Returns mock HTTP response with status 200 and placeholder body without making actual network request",
+			Name:        ProviderName,
+			DisplayName: "HTTP Client",
+			APIVersion:  "v1",
+			Description: "Makes HTTP/HTTPS requests to APIs and web services",
+			Version:     version,
+			Category:    "network",
+			WhatIf: func(_ context.Context, input any) (string, error) {
+				inputs, ok := input.(map[string]any)
+				if !ok {
+					return "", nil
+				}
+				method, _ := inputs[fieldMethod].(string)
+				if method == "" {
+					method = "GET"
+				}
+				url, _ := inputs[fieldURL].(string)
+				return fmt.Sprintf("Would send %s request to %s", method, url), nil
+			},
 			Capabilities: []provider.Capability{
 				provider.CapabilityFrom,
 				provider.CapabilityAction,

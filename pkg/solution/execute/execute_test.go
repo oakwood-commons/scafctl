@@ -114,48 +114,6 @@ func TestActions(t *testing.T) {
 		assert.True(t, info.IsDir())
 	})
 
-	t.Run("dry run does not error with empty workflow actions", func(t *testing.T) {
-		sol := &solution.Solution{}
-		sol.Metadata.Name = "test"
-		sol.Spec.Workflow = &action.Workflow{
-			Actions: map[string]*action.Action{},
-		}
-		reg := provider.NewRegistry()
-		cfg := ActionExecutionConfig{
-			DefaultTimeout: 5 * time.Second,
-			GracePeriod:    1 * time.Second,
-			DryRun:         true,
-		}
-
-		// Empty actions map may fail validation — that's fine, we're
-		// testing that the dry-run flag path doesn't panic.
-		_, _ = Actions(context.Background(), sol, nil, reg, cfg)
-	})
-
-	t.Run("dry run does not create output directory", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		outputDir := filepath.Join(tmpDir, "dryrun-should-not-exist")
-
-		sol := &solution.Solution{}
-		sol.Metadata.Name = "test"
-		sol.Spec.Workflow = &action.Workflow{
-			Actions: map[string]*action.Action{},
-		}
-		reg := provider.NewRegistry()
-		cfg := ActionExecutionConfig{
-			DefaultTimeout: 5 * time.Second,
-			GracePeriod:    1 * time.Second,
-			OutputDir:      outputDir,
-			DryRun:         true,
-		}
-
-		// Run with dry-run + output-dir — directory must NOT be created.
-		_, _ = Actions(context.Background(), sol, nil, reg, cfg)
-
-		_, err := os.Stat(outputDir)
-		assert.True(t, os.IsNotExist(err), "output directory should not be created in dry-run mode")
-	})
-
 	t.Run("cwd is passed to executor when set in config", func(t *testing.T) {
 		sol := &solution.Solution{}
 		sol.Metadata.Name = "test"
@@ -183,7 +141,6 @@ func TestActionExecutionConfigFromContext(t *testing.T) {
 		assert.Equal(t, settings.DefaultGracePeriod, cfg.GracePeriod)
 		assert.Zero(t, cfg.MaxConcurrency)
 		assert.Empty(t, cfg.OutputDir)
-		assert.False(t, cfg.DryRun)
 	})
 
 	t.Run("reads values from config context", func(t *testing.T) {

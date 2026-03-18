@@ -49,13 +49,13 @@ scafctl run solution -f solution.yaml --dry-run -o json
 
 Returns a structured JSON report with resolver values, action plan, phases, and warnings.
 
-### Dry-Run Resolvers Only
+### Dry-Run with Verbose Output
 
 ```bash
-scafctl run resolver -f solution.yaml --dry-run
+scafctl run solution -f solution.yaml --dry-run --verbose
 ```
 
-Resolves values without building an action plan — useful when you only care about resolver output.
+Adds materialized inputs to each action in the report, showing exactly what values were resolved for each provider.
 
 ## Example Walkthrough
 
@@ -74,7 +74,7 @@ scafctl run solution -f examples/dryrun/basic-dryrun.yaml --dry-run
 ```
 
 The output shows:
-- **Resolvers** — Each resolver's value (e.g., `greeting = "Hello, World!"`, `endpoint = "https://staging.example.com:8080"`)
+- **WhatIf messages** — Each action's provider-generated description of what it would do (e.g., `Would execute command echo Hello via bash`)
 - **Action Plan** — Execution order (`greet` in phase 1, `deploy` in phase 2 after `greet`)
 - **No side effects** — The `echo` commands are never executed
 
@@ -91,15 +91,23 @@ The JSON report contains:
   "dryRun": true,
   "solution": "dryrun-demo",
   "version": "1.0.0",
-  "hasResolvers": true,
   "hasWorkflow": true,
-  "resolvers": {
-    "greeting": { "value": "Hello, World!", "status": "resolved", "dryRun": true },
-    "endpoint": { "value": "https://staging.example.com:8080", "status": "resolved", "dryRun": true }
-  },
   "actionPlan": [
-    { "name": "greet", "provider": "exec", "phase": 1 },
-    { "name": "deploy", "provider": "exec", "phase": 2, "dependencies": ["greet"] }
+    {
+      "name": "greet",
+      "provider": "exec",
+      "wouldDo": "Would execute command echo Hello, World! via bash",
+      "phase": 1,
+      "section": "actions"
+    },
+    {
+      "name": "deploy",
+      "provider": "exec",
+      "wouldDo": "Would execute command ./deploy.sh via bash",
+      "phase": 2,
+      "section": "actions",
+      "dependencies": ["greet"]
+    }
   ],
   "totalActions": 2,
   "totalPhases": 2
@@ -121,15 +129,26 @@ This example shows how dry-run reports conditional (`when`) actions and `finally
 | `dryRun` | Always `true` |
 | `solution` | Solution name from metadata |
 | `version` | Solution version |
-| `hasResolvers` | Whether the solution defines resolvers |
 | `hasWorkflow` | Whether the solution defines a workflow |
-| `parameters` | Parameters that were (or would be) passed |
-| `resolvers` | Map of resolver name → `{value, status, dryRun}` |
-| `actionPlan` | Ordered list of planned actions with phase, provider, inputs, dependencies |
+| `actionPlan` | Ordered list of WhatIf actions with phase, provider, whatIf message, dependencies |
 | `totalActions` | Total number of actions |
 | `totalPhases` | Total execution phases |
-| `mockBehaviors` | What each provider does in dry-run mode |
-| `warnings` | Issues like unresolved values or graph build failures |
+| `warnings` | Issues like graph build failures |
+
+### WhatIf Action Fields
+
+| Field | Description |
+|-------|-------------|
+| `name` | Action name |
+| `provider` | Provider name |
+| `wouldDo` | Provider-generated description of what this action would do |
+| `phase` | Execution phase number |
+| `section` | Workflow section (`actions` or `finally`) |
+| `description` | Action description (if set) |
+| `dependencies` | Actions this depends on |
+| `when` | Conditional expression (if set) |
+| `materializedInputs` | Resolved inputs (only with `--verbose`) |
+| `deferredInputs` | Inputs deferred until runtime |
 
 ## Using with Snapshots
 

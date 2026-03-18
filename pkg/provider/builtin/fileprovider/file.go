@@ -34,13 +34,35 @@ func NewFileProvider() *FileProvider {
 
 	return &FileProvider{
 		descriptor: &provider.Descriptor{
-			Name:         "file",
-			DisplayName:  "File Provider",
-			Description:  "Provider for filesystem operations (read, write, exists, delete)",
-			APIVersion:   "v1",
-			Version:      version,
-			Category:     "filesystem",
-			MockBehavior: "Returns mock file content without reading actual filesystem",
+			Name:        "file",
+			DisplayName: "File Provider",
+			Description: "Provider for filesystem operations (read, write, exists, delete)",
+			APIVersion:  "v1",
+			Version:     version,
+			Category:    "filesystem",
+			WhatIf: func(_ context.Context, input any) (string, error) {
+				inputs, ok := input.(map[string]any)
+				if !ok {
+					return "", nil
+				}
+				operation, _ := inputs["operation"].(string)
+				path, _ := inputs["path"].(string)
+				switch operation {
+				case "write":
+					return fmt.Sprintf("Would write file %s", path), nil
+				case "delete":
+					return fmt.Sprintf("Would delete file %s", path), nil
+				case "read":
+					return fmt.Sprintf("Would read file %s", path), nil
+				case "exists":
+					return fmt.Sprintf("Would check if file exists: %s", path), nil
+				case "write-tree":
+					basePath, _ := inputs["basePath"].(string)
+					return fmt.Sprintf("Would write file tree to %s", basePath), nil
+				default:
+					return fmt.Sprintf("Would perform file %s on %s", operation, path), nil
+				}
+			},
 			Capabilities: []provider.Capability{
 				provider.CapabilityFrom,      // read, exists operations
 				provider.CapabilityAction,    // write, delete operations

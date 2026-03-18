@@ -80,7 +80,6 @@ func NewMyProvider() *MyProvider {
             },
             Capabilities: []provider.Capability{provider.CapabilityFrom},
             Category:     "utility",
-            MockBehavior: "Returns a mock result without actual processing",
         },
     }
     return p
@@ -94,6 +93,7 @@ func (p *MyProvider) Execute(ctx context.Context, input any) (*provider.Output, 
     inputs := input.(map[string]any)
     value := inputs["input"].(string)
     
+    // Check for dry-run mode (used by `run provider --dry-run`)
     if provider.DryRunFromContext(ctx) {
         return &provider.Output{
             Data: map[string]any{"result": "[DRY-RUN] Would process: " + value},
@@ -127,7 +127,6 @@ The `Descriptor` defines everything about your provider:
 | `Schema` | `*jsonschema.Schema` | Input schema |
 | `OutputSchemas` | `map[Capability]*jsonschema.Schema` | Output schemas per capability |
 | `Capabilities` | `[]Capability` | What operations the provider supports |
-| `MockBehavior` | `string` | Description of dry-run behavior |
 
 ### Optional Fields
 
@@ -137,6 +136,7 @@ The `Descriptor` defines everything about your provider:
 | `Decode` | `func(map[string]any) (any, error)` | Converts raw inputs to a typed struct (see [Using Typed Inputs](#using-typed-inputs-decode)). Not serialized (`json:"-"`). |
 | `ExtractDependencies` | `func(map[string]any) []string` | Custom dependency extraction for DAG ordering. If nil, the generic extraction logic is used. Providers should implement this when they have custom input formats that reference other resolvers (see [Extracting Dependencies](#extracting-dependencies)). Not serialized (`json:"-"`). |
 | `SensitiveFields` | `[]string` | Input fields to mask in logs, errors, and snapshots (max 50). You can check fields with `Descriptor.IsSensitiveField(name)`. |
+| `WhatIf` | `func(ctx context.Context, input any) (string, error)` | Generates a human-readable description of what the provider would do with given inputs, without executing. Used by `run solution --dry-run` to produce WhatIf messages. If nil, falls back to a generic message (`"Would execute {name} provider"`). Not serialized (`json:"-"`). |
 | `Category` | `string` | Provider category for grouping (max 50 chars). Existing categories: `"system"`, `"network"`, `"filesystem"`, `"data"`, `"validation"`, `"security"`, `"composition"`, `"Core"`. |
 | `Tags` | `[]string` | Searchable keywords for discovery and filtering (max 20 tags, each max 30 chars). |
 | `Icon` | `string` | Icon URL (format `uri`, max 500 chars). |
@@ -272,7 +272,7 @@ func (p *MyProvider) Execute(ctx context.Context, input any) (*provider.Output, 
         timeout = t
     }
 
-    // Check for dry-run mode
+    // Check for dry-run mode (used by `run provider --dry-run`)
     if provider.DryRunFromContext(ctx) {
         return &provider.Output{
             Data: map[string]any{"mocked": true},
@@ -300,6 +300,7 @@ Access context information:
 
 ```go
 // Check if this is a dry-run (returns bool)
+// Set by `run provider --dry-run`; providers should return mock data.
 isDryRun := provider.DryRunFromContext(ctx)
 
 // Get execution mode (from, transform, validation, action)
@@ -338,6 +339,10 @@ if ok {
 
 > **Note**: All context helpers except `DryRunFromContext` return a two-value
 > `(value, bool)` — the `bool` indicates whether the value was present in the context.
+>
+> **Dry-run mechanisms**: There are two dry-run approaches:
+> 1. **`DryRunFromContext(ctx)`** — Checked in `Execute()` when running via `run provider --dry-run`. Return mock data to avoid side effects.
+> 2. **`WhatIf` on `Descriptor`** — Called by `run solution --dry-run` to generate a human-readable description of what the provider would do. Providers are never executed during solution dry-run.
 
 ### Streaming Output
 
@@ -600,7 +605,22 @@ OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 
 ### 1. Handle Dry-Run Mode
 
-Always check for dry-run and return realistic mock data:
+Providers support two complementary dry-run mechanisms:
+
+**WhatIf (solution-level dry-run)**: Add a `WhatIf` function to your `Descriptor` for context-specific dry-run messages. This is used by `run solution --dry-run` — your provider's `Execute` method is never called.
+
+```go
+descriptor: &provider.Descriptor{
+    // ... other fields ...
+    WhatIf: func(ctx context.Context, input any) (string, error) {
+        inputs, _ := input.(map[string]any)
+        id, _ := inputs["id"].(string)
+        return fmt.Sprintf("Would create resource %s", id), nil
+    },
+}
+```
+
+**DryRunFromContext (provider-level dry-run)**: Check in `Execute()` for `run provider --dry-run`. Return mock data to avoid side effects:
 
 ```go
 if provider.DryRunFromContext(ctx) {
@@ -760,7 +780,6 @@ func NewRateLimitProvider() *RateLimitProvider {
                 }),
             },
             Capabilities: []provider.Capability{provider.CapabilityTransform},
-            MockBehavior: "Returns the value without enforcing rate limit",
             Examples: []provider.Example{
                 {
                     Name:        "Basic throttle",
@@ -790,6 +809,7 @@ func (p *RateLimitProvider) Execute(ctx context.Context, input any) (*provider.O
     value := inputs["value"]
     maxPerMin := int(inputs["maxPerMinute"].(int64))
     
+    // DryRunFromContext is checked when running via `run provider --dry-run`
     if provider.DryRunFromContext(ctx) {
         return &provider.Output{
             Data: map[string]any{
@@ -977,7 +997,6 @@ func (p *MyPlugin) GetProviderDescriptor(ctx context.Context, name string) (*pro
             },
             Category:     "custom",
             Tags:         []string{"custom", "example"},
-            MockBehavior: "Returns a mock output without processing",
         }, nil
     default:
         return nil, fmt.Errorf("unknown provider: %s", name)
@@ -989,6 +1008,7 @@ func (p *MyPlugin) ExecuteProvider(ctx context.Context, name string, input map[s
     case "my-custom-provider":
         value, _ := input["input"].(string)
         if provider.DryRunFromContext(ctx) {
+            // DryRunFromContext is checked when running via `run provider --dry-run`
             return &provider.Output{
                 Data: map[string]any{"output": "[DRY-RUN] Would process: " + value},
             }, nil
@@ -1001,12 +1021,27 @@ func (p *MyPlugin) ExecuteProvider(ctx context.Context, name string, input map[s
     }
 }
 
+// DescribeWhatIf returns a WhatIf message for solution-level dry-run.
+// This is called instead of ExecuteProvider when `run solution --dry-run` is used.
+func (p *MyPlugin) DescribeWhatIf(_ context.Context, name string, input map[string]any) (string, error) {
+    switch name {
+    case "my-custom-provider":
+        value, _ := input["input"].(string)
+        if value != "" {
+            return fmt.Sprintf("Would process %q", value), nil
+        }
+        return "Would process input", nil
+    default:
+        return "", fmt.Errorf("unknown provider: %s", name)
+    }
+}
+
 func main() {
     plugin.Serve(&MyPlugin{})
 }
 ```
 
-> **Key difference from builtin**: Each `GetProviderDescriptor` / `ExecuteProvider` call receives the provider name, allowing one plugin to expose multiple providers. The core logic (schemas, execution, dry-run) is identical.
+> **Key difference from builtin**: Each `GetProviderDescriptor` / `ExecuteProvider` / `DescribeWhatIf` call receives the provider name, allowing one plugin to expose multiple providers. The core logic (schemas, execution, dry-run) is identical.
 
 #### 3. Build and Install
 
@@ -1091,6 +1126,15 @@ func (p *MultiPlugin) ExecuteProvider(ctx context.Context, name string, input ma
     }
     return h.Execute(ctx, input)
 }
+
+func (p *MultiPlugin) DescribeWhatIf(_ context.Context, name string, input map[string]any) (string, error) {
+    h, ok := p.providers[name]
+    if !ok {
+        return "", fmt.Errorf("unknown provider: %s", name)
+    }
+    desc := h.Descriptor()
+    return desc.DescribeWhatIf(context.Background(), input), nil
+}
 ```
 
 ### gRPC Serialization
@@ -1100,13 +1144,15 @@ All `provider.Descriptor` fields are preserved over the gRPC round-trip:
 | Field | Transmitted |
 |-------|:----------:|
 | `Name`, `DisplayName`, `Description`, `Version` | ✅ |
-| `Category`, `Capabilities`, `APIVersion`, `MockBehavior` | ✅ |
+| `Category`, `Capabilities`, `APIVersion` | ✅ |
 | `Schema` (properties, types, required, defaults, patterns, examples, maxLength) | ✅ |
 | `OutputSchemas` (same sub-fields as Schema) | ✅ |
 | `SensitiveFields`, `Tags`, `Icon`, `Links`, `Examples`, `Maintainers` | ✅ |
 | `Deprecated`, `Beta` | ✅ |
 
-Fields **not** transmitted (Go-side only): `Decode`, `ExtractDependencies`.
+Fields **not** transmitted (Go-side only): `Decode`, `ExtractDependencies`, `WhatIf`.
+
+`WhatIf` is not serialized in the descriptor — instead, the `DescribeWhatIf` RPC is called at runtime to generate context-specific messages over gRPC.
 
 ### Plugin Discovery
 

@@ -52,7 +52,6 @@ func TestCommandResolver(t *testing.T) {
 
 	// Verify resolver-specific flags
 	assert.NotNil(t, ff.Lookup("skip-transform"))
-	assert.NotNil(t, ff.Lookup("dry-run"))
 
 	// Should NOT have solution-specific flags
 	assert.Nil(t, ff.Lookup("action-timeout"))
@@ -79,10 +78,6 @@ func TestCommandResolver_FlagDefaults(t *testing.T) {
 	skipTransform, err := ff.GetBool("skip-transform")
 	require.NoError(t, err)
 	assert.False(t, skipTransform)
-
-	dryRun, err := ff.GetBool("dry-run")
-	require.NoError(t, err)
-	assert.False(t, dryRun)
 
 	progress, err := ff.GetBool("progress")
 	require.NoError(t, err)
@@ -1328,164 +1323,6 @@ spec:
 	}
 }
 
-func TestResolverOptions_Run_DryRun(t *testing.T) {
-	t.Parallel()
-
-	tmpDir := t.TempDir()
-	solutionPath := filepath.Join(tmpDir, "solution.yaml")
-	solutionContent := `apiVersion: scafctl.io/v1
-kind: Solution
-metadata:
-  name: dry-run-test
-  version: 1.0.0
-spec:
-  resolvers:
-    env:
-      type: string
-      resolve:
-        with:
-          - provider: static
-            inputs:
-              value: production
-    greeting:
-      type: string
-      resolve:
-        with:
-          - provider: static
-            inputs:
-              value: hello
-      transform:
-        with:
-          - provider: cel
-            inputs:
-              expression: "'Hello from ' + _.env"
-`
-	err := os.WriteFile(solutionPath, []byte(solutionContent), 0o600)
-	require.NoError(t, err)
-
-	var stdout bytes.Buffer
-	streams := &terminal.IOStreams{
-		In:     nil,
-		Out:    &stdout,
-		ErrOut: &bytes.Buffer{},
-	}
-	cliParams := settings.NewCliParams()
-	cliParams.ExitOnError = false
-
-	opts := &ResolverOptions{
-		sharedResolverOptions: sharedResolverOptions{
-			IOStreams:       streams,
-			CliParams:       cliParams,
-			File:            solutionPath,
-			KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
-			ResolverTimeout: 30 * time.Second,
-			PhaseTimeout:    5 * time.Minute,
-			registry:        testRegistry(),
-		},
-		DryRun: true,
-	}
-
-	lgr := logger.Get(0)
-	ctx := logger.WithLogger(context.Background(), lgr)
-
-	err = opts.Run(ctx)
-	require.NoError(t, err)
-
-	output := stdout.String()
-
-	// Should show execution plan, not actual values
-	assert.Contains(t, output, "dryRun")
-	assert.Contains(t, output, "executionPlan")
-	assert.Contains(t, output, "resolvers")
-
-	// Should NOT contain resolved values (providers not called)
-	assert.NotContains(t, output, "production")
-	assert.NotContains(t, output, "Hello from")
-
-	// Parse and verify structure
-	var result map[string]any
-	err = json.Unmarshal([]byte(output), &result)
-	require.NoError(t, err)
-
-	assert.Equal(t, true, result["dryRun"])
-
-	plan := result["executionPlan"].(map[string]any)
-	assert.Equal(t, float64(2), plan["totalResolvers"])
-
-	activePhases := plan["activePhases"].([]any)
-	assert.Contains(t, activePhases, "resolve")
-	assert.Contains(t, activePhases, "transform")
-	assert.Contains(t, activePhases, "validate")
-
-	resolversInfo := result["resolvers"].(map[string]any)
-	assert.Contains(t, resolversInfo, "env")
-	assert.Contains(t, resolversInfo, "greeting")
-
-	greetingInfo := resolversInfo["greeting"].(map[string]any)
-	assert.Equal(t, "static", greetingInfo["provider"])
-	configuredPhases := greetingInfo["configuredPhases"].([]any)
-	assert.Contains(t, configuredPhases, "resolve")
-	assert.Contains(t, configuredPhases, "transform")
-}
-
-func TestBuildDryRunPlan(t *testing.T) {
-	t.Parallel()
-
-	resolvers := []*resolver.Resolver{
-		{
-			Name: "env",
-			Resolve: &resolver.ResolvePhase{
-				With: []resolver.ProviderSource{{Provider: "static"}},
-			},
-		},
-		{
-			Name: "db",
-			Resolve: &resolver.ResolvePhase{
-				With: []resolver.ProviderSource{{Provider: "cel"}},
-			},
-			Transform: &resolver.TransformPhase{},
-			Validate:  &resolver.ValidatePhase{},
-		},
-	}
-
-	phases := []*resolver.PhaseGroup{
-		{Phase: 1, Resolvers: []*resolver.Resolver{resolvers[0]}},
-		{Phase: 2, Resolvers: []*resolver.Resolver{resolvers[1]}},
-	}
-
-	t.Run("no skips", func(t *testing.T) {
-		t.Parallel()
-		plan := buildDryRunPlan(phases, resolvers, false, false)
-		assert.Equal(t, true, plan["dryRun"])
-
-		execPlan := plan["executionPlan"].(map[string]any)
-		activePhases := execPlan["activePhases"].([]string)
-		assert.Equal(t, []string{"resolve", "transform", "validate"}, activePhases)
-		skippedPhases := execPlan["skippedPhases"].([]string)
-		assert.Empty(t, skippedPhases)
-	})
-
-	t.Run("skip validation", func(t *testing.T) {
-		t.Parallel()
-		plan := buildDryRunPlan(phases, resolvers, false, true)
-		execPlan := plan["executionPlan"].(map[string]any)
-		activePhases := execPlan["activePhases"].([]string)
-		assert.Equal(t, []string{"resolve", "transform"}, activePhases)
-		skippedPhases := execPlan["skippedPhases"].([]string)
-		assert.Equal(t, []string{"validate"}, skippedPhases)
-	})
-
-	t.Run("skip transform", func(t *testing.T) {
-		t.Parallel()
-		plan := buildDryRunPlan(phases, resolvers, true, false)
-		execPlan := plan["executionPlan"].(map[string]any)
-		activePhases := execPlan["activePhases"].([]string)
-		assert.Equal(t, []string{"resolve"}, activePhases)
-		skippedPhases := execPlan["skippedPhases"].([]string)
-		assert.Equal(t, []string{"transform", "validate"}, skippedPhases)
-	})
-}
-
 func TestCommandResolver_GraphSnapshotFlagDefaults(t *testing.T) {
 	t.Parallel()
 
@@ -1538,7 +1375,7 @@ spec:
 	err := os.WriteFile(solutionPath, []byte(solutionContent), 0o600)
 	require.NoError(t, err)
 
-	makeOpts := func(dryRun, graph, snapshot bool) *ResolverOptions {
+	makeOpts := func(graph, snapshot bool) *ResolverOptions {
 		return &ResolverOptions{
 			sharedResolverOptions: sharedResolverOptions{
 				IOStreams:       &terminal.IOStreams{In: nil, Out: &bytes.Buffer{}, ErrOut: &bytes.Buffer{}},
@@ -1549,7 +1386,6 @@ spec:
 				PhaseTimeout:    5 * time.Minute,
 				registry:        testRegistry(),
 			},
-			DryRun:   dryRun,
 			Graph:    graph,
 			Snapshot: snapshot,
 		}
@@ -1558,30 +1394,16 @@ spec:
 	lgr := logger.Get(0)
 	ctx := logger.WithLogger(context.Background(), lgr)
 
-	t.Run("dry-run and graph", func(t *testing.T) {
-		t.Parallel()
-		err := makeOpts(true, true, false).Run(ctx)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "mutually exclusive")
-	})
-
-	t.Run("dry-run and snapshot", func(t *testing.T) {
-		t.Parallel()
-		err := makeOpts(true, false, true).Run(ctx)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "mutually exclusive")
-	})
-
 	t.Run("graph and snapshot", func(t *testing.T) {
 		t.Parallel()
-		err := makeOpts(false, true, true).Run(ctx)
+		err := makeOpts(true, true).Run(ctx)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "mutually exclusive")
 	})
 
 	t.Run("snapshot without file", func(t *testing.T) {
 		t.Parallel()
-		err := makeOpts(false, false, true).Run(ctx)
+		err := makeOpts(false, true).Run(ctx)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "--snapshot-file")
 	})

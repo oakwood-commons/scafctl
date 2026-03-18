@@ -76,13 +76,12 @@ func NewEnvProvider(opts ...Option) *EnvProvider {
 
 	p := &EnvProvider{
 		descriptor: &provider.Descriptor{
-			Name:         ProviderName,
-			DisplayName:  "Environment Variables",
-			APIVersion:   "v1",
-			Description:  "Provider for reading and setting environment variables",
-			Version:      version,
-			Category:     "system",
-			MockBehavior: "Returns mock environment variable value without accessing actual environment",
+			Name:        ProviderName,
+			DisplayName: "Environment Variables",
+			APIVersion:  "v1",
+			Description: "Provider for reading and setting environment variables",
+			Version:     version,
+			Category:    "system",
 			Capabilities: []provider.Capability{
 				provider.CapabilityFrom,
 			},
