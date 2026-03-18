@@ -88,13 +88,12 @@ func NewParameterProvider(opts ...Option) *ParameterProvider {
 
 	p := &ParameterProvider{
 		descriptor: &provider.Descriptor{
-			Name:         ProviderName,
-			DisplayName:  "CLI Parameters",
-			Description:  "Provider for accessing CLI parameters passed via -r/--resolver flags",
-			Version:      version,
-			APIVersion:   "v1",
-			Category:     "system",
-			MockBehavior: "Returns parameter value from context (same behavior in dry-run)",
+			Name:        ProviderName,
+			DisplayName: "CLI Parameters",
+			Description: "Provider for accessing CLI parameters passed via -r/--resolver flags",
+			Version:     version,
+			APIVersion:  "v1",
+			Category:    "system",
 			Capabilities: []provider.Capability{
 				provider.CapabilityFrom,
 			},

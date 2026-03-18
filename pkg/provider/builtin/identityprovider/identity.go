@@ -40,13 +40,12 @@ func NewIdentityProvider() *IdentityProvider {
 
 	return &IdentityProvider{
 		descriptor: &provider.Descriptor{
-			Name:         ProviderName,
-			DisplayName:  "Identity",
-			APIVersion:   "v1",
-			Description:  "Provides authentication identity information (claims, status, identity type) from auth handlers without exposing tokens or secrets",
-			Version:      version,
-			Category:     "security",
-			MockBehavior: "Returns mock identity information without accessing actual authentication state",
+			Name:        ProviderName,
+			DisplayName: "Identity",
+			APIVersion:  "v1",
+			Description: "Provides authentication identity information (claims, status, identity type) from auth handlers without exposing tokens or secrets",
+			Version:     version,
+			Category:    "security",
 			Capabilities: []provider.Capability{
 				provider.CapabilityFrom,
 			},

@@ -1,24 +1,26 @@
 # Dry-Run Basic Example
 #
-# Demonstrates how --dry-run shows what a solution execution would do
-# without performing any side effects.
+# Demonstrates how --dry-run generates a WhatIf report showing what a
+# solution execution would do without performing any side effects.
+# Resolvers execute normally (they are side-effect-free) and provide
+# real data for accurate WhatIf messages.
 #
 # Usage:
-#   # Dry-run the full solution (resolvers + action plan)
+#   # Dry-run the full solution (resolvers + WhatIf action plan)
 #   scafctl run solution -f examples/dryrun/basic-dryrun.yaml --dry-run
 #
 #   # Dry-run with JSON output for programmatic consumption
 #   scafctl run solution -f examples/dryrun/basic-dryrun.yaml --dry-run -o json
 #
-#   # Dry-run resolvers only
-#   scafctl run resolver -f examples/dryrun/basic-dryrun.yaml --dry-run
+#   # Dry-run with verbose mode (includes materialized inputs)
+#   scafctl run solution -f examples/dryrun/basic-dryrun.yaml --dry-run --verbose
 
 apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: dryrun-demo
   version: 1.0.0
-  description: Demonstrates dry-run with resolvers and actions
+  description: Demonstrates dry-run WhatIf with resolvers and actions
 
 spec:
   resolvers:

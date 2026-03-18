@@ -51,11 +51,10 @@ type mockProvider struct {
 func (m *mockProvider) Descriptor() *provider.Descriptor {
 	v, _ := semver.NewVersion("1.0.0")
 	return &provider.Descriptor{
-		Name:         m.name,
-		APIVersion:   "v1",
-		Version:      v,
-		Description:  "mock provider for testing purposes only",
-		MockBehavior: "returns mock output without side effects",
+		Name:        m.name,
+		APIVersion:  "v1",
+		Version:     v,
+		Description: "mock provider for testing purposes only",
 		Capabilities: []provider.Capability{
 			provider.CapabilityFrom,
 			provider.CapabilityAction,
@@ -111,7 +110,6 @@ func TestDescriptor(t *testing.T) {
 	assert.NotNil(t, desc.Version)
 	assert.Equal(t, "1.0.0", desc.Version.String())
 	assert.NotEmpty(t, desc.Description)
-	assert.NotEmpty(t, desc.MockBehavior)
 	assert.Contains(t, desc.Capabilities, provider.CapabilityFrom)
 	assert.Contains(t, desc.Capabilities, provider.CapabilityAction)
 	assert.NotNil(t, desc.Schema)

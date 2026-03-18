@@ -54,9 +54,18 @@ func (p *StaticProvider) Descriptor() *provider.Descriptor {
 			provider.CapabilityTransform,
 			provider.CapabilityAction,
 		},
-		Category:     "Core",
-		Tags:         []string{"static", "constant", "testing", "default"},
-		MockBehavior: "Returns the specified static value unchanged",
+		WhatIf: func(_ context.Context, input any) (string, error) {
+			inputs, ok := input.(map[string]any)
+			if !ok {
+				return "", nil
+			}
+			if val, ok := inputs["value"]; ok {
+				return fmt.Sprintf("Would return static value: %v", val), nil
+			}
+			return "Would return static value", nil
+		},
+		Category: "Core",
+		Tags:     []string{"static", "constant", "testing", "default"},
 		Examples: []provider.Example{
 			{
 				Name:        "String value",

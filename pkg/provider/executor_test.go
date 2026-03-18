@@ -43,7 +43,6 @@ func newMockExecutableProvider(name string, executeFunc func(ctx context.Context
 			APIVersion:   "v1",
 			Version:      version,
 			Description:  "Mock provider for testing",
-			MockBehavior: "Returns mock output for testing purposes",
 			Capabilities: []Capability{CapabilityFrom},
 			Schema: schemahelper.ObjectSchema([]string{"input1"}, map[string]*jsonschema.Schema{
 				"input1": schemahelper.StringProp(""),
@@ -503,7 +502,6 @@ func TestExecutor_Execute_WithDecode(t *testing.T) {
 			APIVersion:   "v1",
 			Version:      version,
 			Description:  "Test provider with decode function",
-			MockBehavior: "Returns mock output for testing",
 			Capabilities: []Capability{CapabilityFrom},
 			Schema: schemahelper.ObjectSchema([]string{"name", "count"}, map[string]*jsonschema.Schema{
 				"name":  schemahelper.StringProp(""),
@@ -567,7 +565,6 @@ func TestExecutor_Execute_WithDecodeError(t *testing.T) {
 			APIVersion:   "v1",
 			Version:      version,
 			Description:  "Test provider with failing decode",
-			MockBehavior: "Returns mock output for testing",
 			Capabilities: []Capability{CapabilityFrom},
 			Schema: schemahelper.ObjectSchema([]string{"name"}, map[string]*jsonschema.Schema{
 				"name": schemahelper.StringProp(""),
@@ -608,7 +605,6 @@ func TestExecutor_Execute_WithoutDecode(t *testing.T) {
 			APIVersion:   "v1",
 			Version:      version,
 			Description:  "Test provider without decode function",
-			MockBehavior: "Returns mock output for testing",
 			Capabilities: []Capability{CapabilityFrom},
 			Schema: schemahelper.ObjectSchema([]string{"value"}, map[string]*jsonschema.Schema{
 				"value": schemahelper.StringProp(""),
@@ -664,7 +660,6 @@ func TestExecutor_Execute_ContextCancellation(t *testing.T) {
 			APIVersion:   "v1",
 			Version:      version,
 			Description:  "Test provider that blocks",
-			MockBehavior: "Returns mock output for testing",
 			Capabilities: []Capability{CapabilityFrom},
 			Schema: schemahelper.ObjectSchema([]string{"input"}, map[string]*jsonschema.Schema{
 				"input": schemahelper.StringProp(""),

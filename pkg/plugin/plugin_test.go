@@ -18,6 +18,9 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // MockProviderPlugin implements ProviderPlugin for testing
@@ -67,6 +70,10 @@ func (m *MockProviderPlugin) ExecuteProvider(ctx context.Context, providerName s
 			"result": input,
 		},
 	}, nil
+}
+
+func (m *MockProviderPlugin) DescribeWhatIf(_ context.Context, providerName string, input map[string]any) (string, error) {
+	return fmt.Sprintf("Would execute %s provider", providerName), nil
 }
 
 func TestGRPCPlugin_ServerClient(t *testing.T) {
@@ -154,7 +161,6 @@ func TestDescriptorConversion(t *testing.T) {
 				Version:         semver.MustParse("2.3.4"),
 				Description:     "A fully-populated provider descriptor",
 				Category:        "network",
-				MockBehavior:    "Returns mock data without making real requests",
 				SensitiveFields: []string{"apiKey", "token"},
 				Tags:            []string{"http", "api", "network"},
 				Icon:            "https://example.com/icon.png",
@@ -214,7 +220,6 @@ func TestDescriptorConversion(t *testing.T) {
 
 			// Compare new metadata fields
 			assert.Equal(t, tt.descriptor.APIVersion, converted.APIVersion)
-			assert.Equal(t, tt.descriptor.MockBehavior, converted.MockBehavior)
 			assert.Equal(t, tt.descriptor.SensitiveFields, converted.SensitiveFields)
 			assert.Equal(t, tt.descriptor.Tags, converted.Tags)
 			assert.Equal(t, tt.descriptor.Icon, converted.Icon)
@@ -262,6 +267,36 @@ func TestDescriptorConversion(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDescribeWhatIf_MockInterfaceContract(t *testing.T) {
+	// Verify the mock's DescribeWhatIf returns a non-error description.
+	mock := &MockProviderPlugin{}
+
+	desc, err := mock.DescribeWhatIf(context.Background(), "test-provider", map[string]any{"input": "hello"})
+	require.NoError(t, err)
+	assert.Contains(t, desc, "Would execute test-provider provider")
+}
+
+// mockUnimplementedPluginServiceClient is a proto.PluginServiceClient that
+// returns codes.Unimplemented for DescribeWhatIf, simulating an older plugin.
+type mockUnimplementedPluginServiceClient struct {
+	proto.PluginServiceClient
+}
+
+func (m *mockUnimplementedPluginServiceClient) DescribeWhatIf(_ context.Context, _ *proto.DescribeWhatIfRequest, _ ...grpc.CallOption) (*proto.DescribeWhatIfResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DescribeWhatIf not implemented")
+}
+
+func TestGRPCClient_DescribeWhatIf_UnimplementedFallback(t *testing.T) {
+	// Exercise the real GRPCClient fallback: when the server returns
+	// codes.Unimplemented, the client should return ("", nil) so the
+	// caller can fall back to a generic WhatIf message.
+	client := &GRPCClient{client: &mockUnimplementedPluginServiceClient{}}
+
+	desc, err := client.DescribeWhatIf(context.Background(), "test-provider", map[string]any{"input": "hello"})
+	require.NoError(t, err)
+	assert.Empty(t, desc)
 }
 
 func TestProtoToDescriptor_InvalidSemver(t *testing.T) {

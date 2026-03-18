@@ -122,13 +122,6 @@ func (o *ProviderOptions) printProviderExplanation(w *writer.Writer, desc *provi
 	}
 	w.Plainln("")
 
-	// Mock behavior
-	if desc.MockBehavior != "" {
-		w.Infof("Mock Behavior")
-		w.Plainln(desc.MockBehavior)
-		w.Plainln("")
-	}
-
 	// Input schema
 	if desc.Schema != nil && len(desc.Schema.Properties) > 0 {
 		w.Infof("Input Schema")

@@ -992,7 +992,7 @@ Verification failed: 2 errors
 ### Implementation Notes
 
 - Reuses the static analysis walker from `pkg/solution/bundler`.
-- Dry-run resolve leverages the existing resolver execution engine with a `--dry-run` context flag that skips side effects.
+- Dry-run resolve executes resolvers normally (they are side-effect-free) and uses the WhatIf model for action descriptions.
 - Exit code 0 on success, 1 on verification failure.
 
 ---

@@ -36,12 +36,22 @@ func NewSleepProvider() *SleepProvider {
 
 	return &SleepProvider{
 		descriptor: &provider.Descriptor{
-			Name:         "sleep",
-			DisplayName:  "Sleep Provider",
-			APIVersion:   "v1",
-			Version:      version,
-			Description:  "Provides sleep/delay functionality for workflow control. Useful for rate limiting, waiting for external systems, or pacing workflow execution.",
-			MockBehavior: "Returns immediately without actual delay in dry-run mode",
+			Name:        "sleep",
+			DisplayName: "Sleep Provider",
+			APIVersion:  "v1",
+			Version:     version,
+			Description: "Provides sleep/delay functionality for workflow control. Useful for rate limiting, waiting for external systems, or pacing workflow execution.",
+			WhatIf: func(_ context.Context, input any) (string, error) {
+				inputs, ok := input.(map[string]any)
+				if !ok {
+					return "", nil
+				}
+				duration, _ := inputs["duration"].(string)
+				if duration != "" {
+					return fmt.Sprintf("Would sleep for %s", duration), nil
+				}
+				return "Would sleep for configured duration", nil
+			},
 			Capabilities: []provider.Capability{
 				provider.CapabilityFrom,
 				provider.CapabilityTransform,

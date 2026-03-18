@@ -1,18 +1,20 @@
 # Dry-Run with Conditional Actions
 #
-# Demonstrates how dry-run reports conditional (when) actions and
-# deferred inputs that can't be resolved until runtime.
+# Demonstrates how the WhatIf dry-run report shows conditional (when) actions,
+# multi-phase execution, and finally actions. Resolvers execute normally to
+# provide real data for materializing template expressions in inputs.
 #
 # Usage:
 #   scafctl run solution -f examples/dryrun/conditional-dryrun.yaml --dry-run
 #   scafctl run solution -f examples/dryrun/conditional-dryrun.yaml --dry-run -o json
+#   scafctl run solution -f examples/dryrun/conditional-dryrun.yaml --dry-run --verbose
 
 apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: conditional-dryrun-demo
   version: 1.0.0
-  description: Demonstrates dry-run with conditional actions and deferred inputs
+  description: Demonstrates dry-run WhatIf with conditional actions and multi-phase execution
 
 spec:
   resolvers:

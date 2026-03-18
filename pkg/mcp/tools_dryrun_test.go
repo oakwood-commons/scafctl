@@ -98,7 +98,235 @@ spec:
 
 		assert.Equal(t, true, output["dryRun"])
 		assert.Equal(t, "dry-run-test", output["solution"])
-		assert.Equal(t, true, output["hasResolvers"])
+		assert.Equal(t, false, output["hasWorkflow"])
+	})
+
+	t.Run("valid solution with workflow", func(t *testing.T) {
+		solutionYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: dry-run-workflow-test
+  version: 2.0.0
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "Hello"
+  workflow:
+    actions:
+      greet:
+        provider: exec
+        inputs:
+          command: echo
+          args:
+            - "{{ .greeting }}"
+`
+		tmpDir := t.TempDir()
+		solutionPath := filepath.Join(tmpDir, "solution.yaml")
+		require.NoError(t, os.WriteFile(solutionPath, []byte(solutionYAML), 0o644))
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "dry_run_solution"
+		request.Params.Arguments = map[string]any{
+			"path": solutionPath,
+		}
+
+		result, err := srv.handleDryRunSolution(context.Background(), request)
+		require.NoError(t, err)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		if result.IsError {
+			t.Logf("dry run returned error (may be expected in test env): %s", text)
+			return
+		}
+
+		var output map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &output))
+
+		assert.Equal(t, true, output["dryRun"])
+		assert.Equal(t, "dry-run-workflow-test", output["solution"])
+		assert.Equal(t, true, output["hasWorkflow"])
+
+		actionPlan, ok := output["actionPlan"].([]any)
+		require.True(t, ok, "actionPlan should be an array")
+		require.Len(t, actionPlan, 1)
+
+		act := actionPlan[0].(map[string]any)
+		assert.Equal(t, "greet", act["name"])
+		assert.Equal(t, "exec", act["provider"])
+		assert.Contains(t, act["wouldDo"], "Would execute via")
+	})
+
+	t.Run("resolver_overrides applied", func(t *testing.T) {
+		solutionYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: dry-run-overrides-test
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "Hello"
+  workflow:
+    actions:
+      greet:
+        provider: static
+        inputs:
+          value: "{{ .greeting }}"
+`
+		tmpDir := t.TempDir()
+		solutionPath := filepath.Join(tmpDir, "solution.yaml")
+		require.NoError(t, os.WriteFile(solutionPath, []byte(solutionYAML), 0o644))
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "dry_run_solution"
+		request.Params.Arguments = map[string]any{
+			"path": solutionPath,
+			"resolver_overrides": map[string]any{
+				"greeting": "Overridden!",
+			},
+		}
+
+		result, err := srv.handleDryRunSolution(context.Background(), request)
+		require.NoError(t, err)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		if result.IsError {
+			t.Logf("dry run returned error (may be expected in test env): %s", text)
+			return
+		}
+
+		var output map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &output))
+
+		assert.Equal(t, true, output["dryRun"])
+		assert.Equal(t, "dry-run-overrides-test", output["solution"])
+	})
+
+	t.Run("invalid resolver_overrides type returns error", func(t *testing.T) {
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "dry_run_solution"
+		request.Params.Arguments = map[string]any{
+			"path":               "/tmp/nonexistent.yaml",
+			"resolver_overrides": "not-an-object",
+		}
+
+		result, err := srv.handleDryRunSolution(context.Background(), request)
+		require.NoError(t, err)
+		assert.True(t, result.IsError)
+		text := result.Content[0].(mcp.TextContent).Text
+		assert.Contains(t, text, "resolver_overrides")
+	})
+
+	t.Run("verbose includes materializedInputs", func(t *testing.T) {
+		solutionYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: dry-run-verbose-test
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "Hello"
+  workflow:
+    actions:
+      greet:
+        provider: static
+        inputs:
+          value: "{{ .greeting }}"
+`
+		tmpDir := t.TempDir()
+		solutionPath := filepath.Join(tmpDir, "solution.yaml")
+		require.NoError(t, os.WriteFile(solutionPath, []byte(solutionYAML), 0o644))
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "dry_run_solution"
+		request.Params.Arguments = map[string]any{
+			"path":    solutionPath,
+			"verbose": true,
+		}
+
+		result, err := srv.handleDryRunSolution(context.Background(), request)
+		require.NoError(t, err)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		if result.IsError {
+			t.Logf("dry run returned error (may be expected in test env): %s", text)
+			return
+		}
+
+		var output map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &output))
+
+		assert.Equal(t, true, output["dryRun"])
+
+		actionPlan, ok := output["actionPlan"].([]any)
+		require.True(t, ok, "actionPlan should be an array")
+		require.NotEmpty(t, actionPlan)
+
+		act := actionPlan[0].(map[string]any)
+		_, hasMaterialized := act["materializedInputs"]
+		assert.True(t, hasMaterialized, "verbose should include materializedInputs")
+	})
+
+	t.Run("non-verbose excludes materializedInputs", func(t *testing.T) {
+		solutionYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: dry-run-nonverbose-test
+  version: 1.0.0
+spec:
+  workflow:
+    actions:
+      greet:
+        provider: static
+        inputs:
+          value: "hello"
+`
+		tmpDir := t.TempDir()
+		solutionPath := filepath.Join(tmpDir, "solution.yaml")
+		require.NoError(t, os.WriteFile(solutionPath, []byte(solutionYAML), 0o644))
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "dry_run_solution"
+		request.Params.Arguments = map[string]any{
+			"path":    solutionPath,
+			"verbose": false,
+		}
+
+		result, err := srv.handleDryRunSolution(context.Background(), request)
+		require.NoError(t, err)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		if result.IsError {
+			t.Logf("dry run returned error (may be expected in test env): %s", text)
+			return
+		}
+
+		var output map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &output))
+
+		actionPlan, ok := output["actionPlan"].([]any)
+		require.True(t, ok, "actionPlan should be an array")
+		require.NotEmpty(t, actionPlan)
+
+		act := actionPlan[0].(map[string]any)
+		_, hasMaterialized := act["materializedInputs"]
+		assert.False(t, hasMaterialized, "non-verbose should exclude materializedInputs")
 	})
 
 	t.Run("invalid on_conflict returns error", func(t *testing.T) {

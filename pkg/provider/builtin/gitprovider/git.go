@@ -51,12 +51,48 @@ func NewGitProvider() *GitProvider {
 	version, _ := semver.NewVersion("1.0.0")
 	return &GitProvider{
 		descriptor: &provider.Descriptor{
-			Name:         "git",
-			DisplayName:  "Git Provider",
-			APIVersion:   "v1",
-			Version:      version,
-			Description:  "Performs Git version control operations on local and remote repositories using the local git executable",
-			MockBehavior: "Returns mock git information without accessing actual git repository",
+			Name:        "git",
+			DisplayName: "Git Provider",
+			APIVersion:  "v1",
+			Version:     version,
+			Description: "Performs Git version control operations on local and remote repositories using the local git executable",
+			WhatIf: func(_ context.Context, input any) (string, error) {
+				inputs, ok := input.(map[string]any)
+				if !ok {
+					return "", nil
+				}
+				operation, _ := inputs[fieldOperation].(string)
+				path, _ := inputs[fieldPath].(string)
+				switch operation {
+				case "clone":
+					repo, _ := inputs[fieldRepository].(string)
+					msg := fmt.Sprintf("Would clone %s", repo)
+					if path != "" {
+						msg += fmt.Sprintf(" to %s", path)
+					}
+					if branch, ok := inputs[fieldBranch].(string); ok && branch != "" {
+						msg += fmt.Sprintf(" (branch: %s)", branch)
+					}
+					return msg, nil
+				case "commit":
+					message, _ := inputs[fieldMessage].(string)
+					return fmt.Sprintf("Would commit in %s with message: %s", path, message), nil
+				case "push":
+					branch, _ := inputs[fieldBranch].(string)
+					return fmt.Sprintf("Would push %s to branch %q", path, branch), nil
+				case "checkout":
+					branch, _ := inputs[fieldBranch].(string)
+					return fmt.Sprintf("Would checkout branch %q in %s", branch, path), nil
+				case "tag":
+					tag, _ := inputs[fieldTag].(string)
+					return fmt.Sprintf("Would create tag %q in %s", tag, path), nil
+				default:
+					if path != "" {
+						return fmt.Sprintf("Would perform git %s on %s", operation, path), nil
+					}
+					return fmt.Sprintf("Would perform git %s", operation), nil
+				}
+			},
 			Capabilities: []provider.Capability{
 				provider.CapabilityAction,
 				provider.CapabilityFrom,

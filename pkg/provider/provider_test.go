@@ -4,6 +4,8 @@
 package provider
 
 import (
+	"context"
+	"fmt"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
@@ -92,7 +94,6 @@ func TestDescriptor_Complete(t *testing.T) {
 				),
 			}),
 		},
-		MockBehavior: "Returns mock resource",
 		Capabilities: []Capability{CapabilityFrom, CapabilityAction},
 		Category:     "Testing",
 		Tags:         []string{"test", "mock"},
@@ -165,6 +166,56 @@ func TestJsonSchema_Pointers(t *testing.T) {
 	assert.Equal(t, 100.0, *prop.Maximum)
 }
 
+func TestDescriptor_DescribeWhatIf_WhatIfFunc(t *testing.T) {
+	t.Parallel()
+	d := &Descriptor{
+		Name: "test",
+		WhatIf: func(_ context.Context, input any) (string, error) {
+			m := input.(map[string]string)
+			return fmt.Sprintf("Would deploy %s", m["app"]), nil
+		},
+	}
+
+	msg := d.DescribeWhatIf(context.Background(), map[string]string{"app": "myapp"})
+	assert.Equal(t, "Would deploy myapp", msg)
+}
+
+func TestDescriptor_DescribeWhatIf_FallbackToGeneric(t *testing.T) {
+	t.Parallel()
+	d := &Descriptor{
+		Name: "myexec",
+	}
+
+	msg := d.DescribeWhatIf(context.Background(), nil)
+	assert.Equal(t, "Would execute myexec provider", msg)
+}
+
+func TestDescriptor_DescribeWhatIf_ErrorFallsThrough(t *testing.T) {
+	t.Parallel()
+	d := &Descriptor{
+		Name: "test",
+		WhatIf: func(_ context.Context, _ any) (string, error) {
+			return "", fmt.Errorf("failed to describe")
+		},
+	}
+
+	msg := d.DescribeWhatIf(context.Background(), nil)
+	assert.Equal(t, "Would execute test provider", msg)
+}
+
+func TestDescriptor_DescribeWhatIf_EmptyResultFallsThrough(t *testing.T) {
+	t.Parallel()
+	d := &Descriptor{
+		Name: "test",
+		WhatIf: func(_ context.Context, _ any) (string, error) {
+			return "", nil
+		},
+	}
+
+	msg := d.DescribeWhatIf(context.Background(), nil)
+	assert.Equal(t, "Would execute test provider", msg)
+}
+
 // Benchmarks
 
 func BenchmarkCapability_IsValid(b *testing.B) {
@@ -186,5 +237,30 @@ func BenchmarkDescriptor_Creation(b *testing.B) {
 			Schema:       schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{}),
 			Capabilities: []Capability{CapabilityFrom},
 		}
+	}
+}
+
+func BenchmarkDescriptor_DescribeWhatIf_WithFunc(b *testing.B) {
+	d := &Descriptor{
+		Name: "test",
+		WhatIf: func(_ context.Context, _ any) (string, error) {
+			return "Would do something", nil
+		},
+	}
+	ctx := context.Background()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = d.DescribeWhatIf(ctx, nil)
+	}
+}
+
+func BenchmarkDescriptor_DescribeWhatIf_Fallback(b *testing.B) {
+	d := &Descriptor{
+		Name: "test",
+	}
+	ctx := context.Background()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = d.DescribeWhatIf(ctx, nil)
 	}
 }

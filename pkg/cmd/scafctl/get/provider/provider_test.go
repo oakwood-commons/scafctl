@@ -43,7 +43,6 @@ func newMockProvider(name, description string, caps []provider.Capability) *mock
 			APIVersion:   "v1",
 			Version:      semver.MustParse("1.0.0"),
 			Capabilities: caps,
-			MockBehavior: "Returns mock data for testing",
 			Schema: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
 				"input": schemahelper.StringProp("Test input"),
 			}),
@@ -69,7 +68,6 @@ func newMockProviderFull() *mockProvider {
 			Category:     "network",
 			Tags:         []string{"http", "api", "rest"},
 			Icon:         "🌐",
-			MockBehavior: "Returns mock network data",
 			Beta:         true,
 			Schema: schemahelper.ObjectSchema([]string{"url"}, map[string]*jsonschema.Schema{
 				"url": schemahelper.StringProp("The URL to fetch",
@@ -500,9 +498,8 @@ func TestBuildProviderDetail(t *testing.T) {
 				Version:      semver.MustParse("1.0.0"),
 				Description:  "Test description",
 				Capabilities: []provider.Capability{provider.CapabilityFrom},
-				MockBehavior: "Test mock behavior",
 			},
-			checkKeys: []string{"name", "displayName", "apiVersion", "version", "description", "capabilities", "mockBehavior"},
+			checkKeys: []string{"name", "displayName", "apiVersion", "version", "description", "capabilities"},
 			checkVals: map[string]any{
 				"name":        "test",
 				"displayName": "Test Provider",
@@ -522,7 +519,6 @@ func TestBuildProviderDetail(t *testing.T) {
 				Category:     "network",
 				Tags:         []string{"tag1", "tag2"},
 				Icon:         "🔧",
-				MockBehavior: "Test mock behavior",
 				Beta:         true,
 			},
 			checkKeys: []string{"category", "tags", "icon", "beta"},
@@ -541,7 +537,6 @@ func TestBuildProviderDetail(t *testing.T) {
 				Version:      semver.MustParse("1.0.0"),
 				Description:  "Deprecated description",
 				Capabilities: []provider.Capability{provider.CapabilityFrom},
-				MockBehavior: "Test mock behavior",
 				IsDeprecated: true,
 			},
 			checkKeys: []string{"deprecated"},
@@ -558,7 +553,6 @@ func TestBuildProviderDetail(t *testing.T) {
 				Version:      semver.MustParse("1.0.0"),
 				Description:  "Has schema",
 				Capabilities: []provider.Capability{provider.CapabilityFrom},
-				MockBehavior: "Test mock behavior",
 				Schema: schemahelper.ObjectSchema([]string{"url"}, map[string]*jsonschema.Schema{
 					"url": schemahelper.StringProp("The URL"),
 				}),
@@ -574,7 +568,6 @@ func TestBuildProviderDetail(t *testing.T) {
 				Version:      semver.MustParse("1.0.0"),
 				Description:  "Has output schemas",
 				Capabilities: []provider.Capability{provider.CapabilityFrom},
-				MockBehavior: "Test mock behavior",
 				OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 					provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
 						"result": schemahelper.StringProp(""),
@@ -592,7 +585,6 @@ func TestBuildProviderDetail(t *testing.T) {
 				Version:      semver.MustParse("1.0.0"),
 				Description:  "Has links",
 				Capabilities: []provider.Capability{provider.CapabilityFrom},
-				MockBehavior: "Test mock behavior",
 				Links: []provider.Link{
 					{Name: "Docs", URL: "https://docs.example.com"},
 				},
@@ -608,7 +600,6 @@ func TestBuildProviderDetail(t *testing.T) {
 				Version:      semver.MustParse("1.0.0"),
 				Description:  "Has examples",
 				Capabilities: []provider.Capability{provider.CapabilityFrom},
-				MockBehavior: "Test mock behavior",
 				Examples: []provider.Example{
 					{Name: "Basic", Description: "Basic example", YAML: "key: value"},
 				},
@@ -624,7 +615,6 @@ func TestBuildProviderDetail(t *testing.T) {
 				Version:      semver.MustParse("1.0.0"),
 				Description:  "Has maintainers",
 				Capabilities: []provider.Capability{provider.CapabilityFrom},
-				MockBehavior: "Test mock behavior",
 				Maintainers: []provider.Contact{
 					{Name: "John Doe", Email: "john@example.com"},
 				},

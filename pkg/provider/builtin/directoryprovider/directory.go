@@ -59,8 +59,27 @@ func NewDirectoryProvider() *DirectoryProvider {
 			Version:     version,
 			Category:    "filesystem",
 			Tags:        []string{"directory", "filesystem", "listing", "glob", "scan"},
-			MockBehavior: "Returns mock directory listing without reading actual filesystem for list operations; " +
-				"reports intended action without modifying filesystem for mkdir/rmdir/copy",
+			WhatIf: func(_ context.Context, input any) (string, error) {
+				inputs, ok := input.(map[string]any)
+				if !ok {
+					return "", nil
+				}
+				operation, _ := inputs["operation"].(string)
+				path, _ := inputs["path"].(string)
+				switch operation {
+				case "mkdir":
+					return fmt.Sprintf("Would create directory %s", path), nil
+				case "rmdir":
+					return fmt.Sprintf("Would remove directory %s", path), nil
+				case "copy":
+					dest, _ := inputs["destination"].(string)
+					return fmt.Sprintf("Would copy directory %s to %s", path, dest), nil
+				case "list":
+					return fmt.Sprintf("Would list directory %s", path), nil
+				default:
+					return fmt.Sprintf("Would perform directory %s on %s", operation, path), nil
+				}
+			},
 			Capabilities: []provider.Capability{
 				provider.CapabilityFrom,   // list operation
 				provider.CapabilityAction, // mkdir, rmdir, copy operations

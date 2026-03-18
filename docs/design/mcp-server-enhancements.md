@@ -398,38 +398,30 @@ scafctl run solution -f ./solution.yaml --dry-run -r env=prod -o json  # machine
 package dryrun
 
 type Report struct {
-    Solution    string            `json:"solution"`
-    Version     string            `json:"version"`
-    Parameters  map[string]any    `json:"parameters"`
-    Resolvers   []ResolverPreview `json:"resolvers"`
-    Actions     []ActionPreview   `json:"actions"`
-    Graph       GraphInfo         `json:"graph"`
-    Validation  []ValidationIssue `json:"validation,omitempty"`
+    DryRun       bool           `json:"dryRun"`
+    Solution     string         `json:"solution"`
+    Version      string         `json:"version,omitempty"`
+    HasWorkflow  bool           `json:"hasWorkflow"`
+    ActionPlan   []WhatIfAction `json:"actionPlan,omitempty"`
+    TotalActions int            `json:"totalActions,omitempty"`
+    TotalPhases  int            `json:"totalPhases,omitempty"`
+    Warnings     []string       `json:"warnings,omitempty"`
 }
 
-type ResolverPreview struct {
-    Name         string   `json:"name"`
-    Provider     string   `json:"provider"`
-    Phase        int      `json:"phase"`
-    DependsOn    []string `json:"dependsOn,omitempty"`
-    MaterializedInputs map[string]any `json:"materializedInputs,omitempty"`
-    DeferredInputs     []string       `json:"deferredInputs,omitempty"`
-    Transforms   []string `json:"transforms,omitempty"`
+type WhatIfAction struct {
+    Name               string            `json:"name"`
+    Provider           string            `json:"provider"`
+    Description        string            `json:"description,omitempty"`
+    WhatIf             string            `json:"wouldDo"`
+    Phase              int               `json:"phase"`
+    Section            string            `json:"section"`
+    Dependencies       []string          `json:"dependencies,omitempty"`
+    When               string            `json:"when,omitempty"`
+    MaterializedInputs map[string]any    `json:"materializedInputs,omitempty"`
+    DeferredInputs     map[string]string `json:"deferredInputs,omitempty"`
 }
 
-type ActionPreview struct {
-    Name         string         `json:"name"`
-    Phase        int            `json:"phase"`
-    Provider     string         `json:"provider"`
-    MockBehavior string         `json:"mockBehavior"`
-    Inputs       map[string]any `json:"inputs,omitempty"`
-    DeferredInputs []string     `json:"deferredInputs,omitempty"`
-    ForEach      *ForEachMeta   `json:"forEach,omitempty"`
-    Retry        *RetryConfig   `json:"retry,omitempty"`
-    DependsOn    []string       `json:"dependsOn,omitempty"`
-}
-
-func Generate(ctx context.Context, sol *solution.Solution, params map[string]any) (*Report, error) { ... }
+func Generate(ctx context.Context, sol *solution.Solution, opts Options) (*Report, error) { ... }
 ```
 
 3. Update `scafctl run solution --dry-run` to call `dryrun.Generate()` and render via `kvx.OutputOptions`

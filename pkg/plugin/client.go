@@ -164,6 +164,11 @@ func (c *Client) ExecuteProvider(ctx context.Context, providerName string, input
 	return c.plugin.ExecuteProvider(ctx, providerName, input)
 }
 
+// DescribeWhatIf returns a human-readable description of what the provider would do
+func (c *Client) DescribeWhatIf(ctx context.Context, providerName string, input map[string]any) (string, error) {
+	return c.plugin.DescribeWhatIf(ctx, providerName, input)
+}
+
 // Kill terminates the plugin process
 func (c *Client) Kill() {
 	if c.pluginClient != nil {

@@ -43,12 +43,29 @@ func NewDebugProvider() *DebugProvider {
 	version, _ := semver.NewVersion("1.0.0")
 	return &DebugProvider{
 		descriptor: &provider.Descriptor{
-			Name:         "debug",
-			DisplayName:  "Debug Provider",
-			APIVersion:   "v1",
-			Version:      version,
-			Description:  "Provides debugging capabilities for inspecting resolver data during workflow execution. Outputs formatted data to stdout, stderr, or file. Supports optional CEL expressions to filter or transform data before output.",
-			MockBehavior: "Returns debug output (same behavior in dry-run as debug is side-effect free)",
+			Name:        "debug",
+			DisplayName: "Debug Provider",
+			APIVersion:  "v1",
+			Version:     version,
+			Description: "Provides debugging capabilities for inspecting resolver data during workflow execution. Outputs formatted data to stdout, stderr, or file. Supports optional CEL expressions to filter or transform data before output.",
+			WhatIf: func(_ context.Context, input any) (string, error) {
+				inputs, ok := input.(map[string]any)
+				if !ok {
+					return "", nil
+				}
+				dest, _ := inputs[fieldDestination].(string)
+				if dest == "" {
+					dest = "stdout"
+				}
+				outputFmt, _ := inputs[fieldFormat].(string)
+				if outputFmt == "" {
+					outputFmt = "json"
+				}
+				if expr, ok := inputs[fieldExpression].(string); ok && expr != "" {
+					return fmt.Sprintf("Would output CEL-filtered data in %s format to %s", outputFmt, dest), nil
+				}
+				return fmt.Sprintf("Would output resolver data in %s format to %s", outputFmt, dest), nil
+			},
 			Capabilities: []provider.Capability{
 				provider.CapabilityFrom,
 				provider.CapabilityTransform,

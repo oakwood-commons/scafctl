@@ -249,6 +249,10 @@ scafctl run provider http url=https://example.com --dry-run
 
 The provider will return simulated output without performing any side effects (no HTTP request, no command execution, etc.).
 
+{{% hint info %}}
+**Provider vs solution dry-run**: `run provider --dry-run` invokes the provider's `Execute()` method with a dry-run context flag, so the provider returns mock data. `run solution --dry-run` is different — it uses the WhatIf model where resolvers run normally and actions are never executed. See [Dry-Run & WhatIf design]({{< relref "/docs/design/dryrun-whatif" >}}) for details.
+{{% /hint %}}
+
 ---
 
 ## Output Formats

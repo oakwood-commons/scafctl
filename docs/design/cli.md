@@ -771,9 +771,6 @@ scafctl run resolver -f solution.yaml -o json --hide-execution
 # Skip transform and validation phases
 scafctl run resolver --skip-transform -f solution.yaml
 
-# Show execution plan without running
-scafctl run resolver --dry-run -f solution.yaml
-
 # Dependency graph (ASCII, DOT, Mermaid, or JSON)
 scafctl run resolver --graph -f solution.yaml
 scafctl run resolver --graph --graph-format=dot -f solution.yaml

@@ -30,13 +30,12 @@ func NewValidationProvider() *ValidationProvider {
 
 	return &ValidationProvider{
 		descriptor: &provider.Descriptor{
-			Name:         "validation",
-			DisplayName:  "Validation Provider",
-			Description:  "Provider for validation using regex patterns (match/notMatch) and CEL expressions",
-			APIVersion:   "v1",
-			Version:      version,
-			Category:     "validation",
-			MockBehavior: "Returns validation result (same behavior in dry-run as validation is side-effect free)",
+			Name:        "validation",
+			DisplayName: "Validation Provider",
+			Description: "Provider for validation using regex patterns (match/notMatch) and CEL expressions",
+			APIVersion:  "v1",
+			Version:     version,
+			Category:    "validation",
 			Capabilities: []provider.Capability{
 				provider.CapabilityValidation,
 				provider.CapabilityTransform,

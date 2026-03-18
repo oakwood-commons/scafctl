@@ -229,7 +229,8 @@ scafctl run solution -f solution.yaml --log-level 1
 
 ### Notes
 
-- All Providers must support mocking to enable dry-run execution for testing, planning, and verification without performing real side effects.
+- All action-capable providers should implement a `WhatIf` function on their `Descriptor` to generate context-specific messages describing what they would do with given inputs.
+- When `WhatIf` is not implemented, `DescribeWhatIf()` returns a generic message: "Would execute {provider} provider".
 
 ### Conceptual Flow
 
@@ -251,8 +252,9 @@ scafctl uses typed context keys to prevent collisions and provide type safety:
 
 - `executionModeKey` (unexported) - The provider capability (execution mode) being invoked (from, transform, validation, action, authentication) as `Capability`
   - Access via: `ExecutionModeFromContext(ctx)`
-- `dryRunKey` (unexported) - Boolean indicating whether this is a dry-run execution
+- `dryRunKey` (unexported) - Boolean indicating whether this is a dry-run execution (set by `run provider --dry-run` only)
   - Access via: `DryRunFromContext(ctx)`
+  - Not set during `run solution --dry-run` — solution-level dry-run uses the `WhatIf` function on the `Descriptor` instead (providers are never executed)
 - `resolverContextKey` (unexported) - The resolver context map containing all emitted resolver values
   - Access via: `ResolverContextFromContext(ctx)` returns `map[string]any`
 
@@ -265,24 +267,18 @@ Typed keys ensure external packages cannot accidentally use the same context key
 - Providers can use this to adjust behavior based on context (e.g., read-only vs mutation)
 - This enables providers to support multiple capabilities with context-aware behavior
 
-**Dry-Run Mode:**
+**WhatIf Descriptions:**
 
-- Dry-run mode is signaled for testing and planning without side effects
-- When dry-run is enabled, providers return mock/sample output instead of performing real operations
-- All providers must support dry-run mode
+- Dry-run uses a WhatIf model: resolvers execute normally (they are side-effect-free), and each action's provider generates a WhatIf message describing what it would do
+- Providers implement `WhatIf` on their `Descriptor` to generate context-specific descriptions from materialized inputs
+- The `DescribeWhatIf(ctx, input)` helper method on `Descriptor` provides a fallback chain: WhatIf func → generic message
+- Action providers are never invoked during dry-run — only their WhatIf descriptions are used
 
 **Implementation Pattern:**
 
 ~~~go
-// Provider implementation checks context for execution mode and dry-run
+// Provider implementation checks context for execution mode
 // Note: This example uses helper methods that represent implementation-specific logic.
-// Real providers would implement these based on their specific needs:
-//   - mockExecute: Returns mock Output for dry-run based on execution mode
-//   - executeGET: Performs read-only operations (e.g., HTTP GET), returns Output with fetched data
-//   - executeTransform: Transforms __self value, returns Output with transformed result
-//   - executeValidation: Validates input/state, returns Output with boolean in Data field
-//   - executeAuth: Handles authentication (token generation, validation), returns Output with auth data
-//   - executeMutation: Performs side-effect operations (e.g., HTTP POST/PUT/DELETE), returns Output with result
 func (p *APIProvider) Execute(ctx context.Context, input any) (Output, error) {
   // Extract execution mode using typed accessor
   execMode, ok := ExecutionModeFromContext(ctx)
@@ -303,33 +299,17 @@ func (p *APIProvider) Execute(ctx context.Context, input any) (Output, error) {
     return Output{}, fmt.Errorf("provider does not support capability: %s", execMode)
   }
   
-  // Check if dry-run mode is enabled using typed accessor
-  isDryRun := DryRunFromContext(ctx)
-  
-  if isDryRun {
-    // In dry-run mode, providers must avoid side effects and return a deterministic
-    // Output that represents what *would* happen. The mockExecute helper
-    // typically uses the provider's MockBehavior configuration to construct an
-    // appropriate mock response for the given execution mode.
-    return p.mockExecute(execMode, input)
-  }
-  
   // Adjust behavior based on execution mode
   switch execMode {
   case CapabilityFrom:
-    // Read-only operation for resolver context (fetch/read data)
     return p.executeGET(input)
   case CapabilityTransform:
-    // Transform operation receives input with __self and returns transformed result
     return p.executeTransform(input)
   case CapabilityValidation:
-    // Return boolean validation result in Output.Data
     return p.executeValidation(input)
   case CapabilityAuthentication:
-    // Handle authentication flows (token generation, credential validation, etc.)
     return p.executeAuth(input)
   case CapabilityAction:
-    // Allow mutations for action context (write/update/delete operations)
     return p.executeMutation(input)
   default:
     return Output{}, fmt.Errorf("unsupported execution mode: %s", execMode)
@@ -337,18 +317,32 @@ func (p *APIProvider) Execute(ctx context.Context, input any) (Output, error) {
 }
 ~~~
 
+**WhatIf Implementation:**
+
+Action-capable providers register a `WhatIf` function on their `Descriptor`:
+
+~~~go
+desc := &provider.Descriptor{
+    Name:         "my-provider",
+    WhatIf: func(ctx context.Context, input any) (string, error) {
+        inputs, _ := input.(map[string]any)
+        target, _ := inputs["target"].(string)
+        return fmt.Sprintf("Would deploy to %s", target), nil
+    },
+    // ...
+}
+~~~
+
 **Descriptor Declaration:**
 
-- `MockBehavior` - Documents what the provider returns during dry-run mode (required for all providers since dry-run support is mandatory)
+- `WhatIf` - Optional function that generates a context-specific description of what the provider would do with given inputs
 
 **Requirements:**
 
 - Providers must validate the execution mode matches one of their declared capabilities
 - Execution mode determines provider behavior (e.g., read-only vs mutation, data vs boolean return)
-- Mock output (in `Output.Data`) must conform to the same schema as real output (validated by `OutputSchemas` for the current capability)
-- Mock execution must be deterministic and predictable
-- Providers that cannot meaningfully mock (e.g., read-only queries) should return representative sample data
-- Side-effect providers must not perform any operations in dry-run mode
+- Action-capable providers should implement `WhatIf` for accurate dry-run descriptions
+- The `DescribeWhatIf(ctx, input)` method on `Descriptor` provides the fallback chain: WhatIf func → generic message
 - Warnings and metadata are optional but encouraged for providing execution context
 
 ---
@@ -539,7 +533,6 @@ type Descriptor struct {
   ExtractDependencies func(inputs map[string]any) []string `json:"-" yaml:"-"`
   
   // Execution behavior
-  MockBehavior string       `json:"mockBehavior" yaml:"mockBehavior" doc:"Dry-run behavior description" minLength:"10" maxLength:"500" required:"true"`
   Capabilities []Capability `json:"capabilities" yaml:"capabilities" doc:"Supported execution contexts" minItems:"1" required:"true"`
   
   // Catalog and distribution metadata
@@ -676,44 +669,6 @@ type Example struct {
 ~~~
 
 This interface is illustrative. The exact implementation may evolve, but the contract remains schema-first and explicit.
-
-### MockBehavior Field Guidance
-
-The `MockBehavior` field in `Descriptor` documents what the provider returns during dry-run mode. Mock implementations must be deterministic, predictable, and schema-compliant.
-
-**Examples by capability:**
-
-**CapabilityFrom** (data fetching):
-- `"Returns sample user object with id='mock-user-123', name='Mock User', email='mock@example.com'"`
-- `"Returns empty array [] when no mock data is configured"`
-- `"Returns last known cached value if available, otherwise returns placeholder data"`
-
-**CapabilityTransform** (data transformation):
-- `"Applies transformation logic to __self using the same code path as real execution"`
-- `"Returns __self unchanged to simulate identity transformation"`
-- `"Returns deterministic output based on input pattern (e.g., uppercased __self)"`
-
-**CapabilityValidation** (validation logic):
-- `"Returns true (valid) for all inputs in mock mode"`
-- `"Returns validation result based on input patterns without external checks"`
-- `"Performs local validation logic but skips remote API verification"`
-
-**CapabilityAuthentication** (authentication flows):
-- `"Returns mock JWT token 'mock.jwt.token' with standard claims"`
-- `"Returns success response without contacting authentication service"`
-- `"Returns cached credentials if available, otherwise returns placeholder token"`
-
-**CapabilityAction** (side-effect operations):
-- `"Returns success status without executing shell command"`
-- `"Returns simulated API response without making HTTP request"`
-- `"Logs intended operation and returns mock success result"`
-
-**Best Practices:**
-- Mock output must match `OutputSchemas` for the current capability exactly (same types and structure)
-- Use consistent, recognizable mock values (e.g., 'mock-' prefix for IDs)
-- Document what happens with different input variations
-- For transformations, prefer real logic over stubs when side-effect-free
-- For validations, document whether mocks return true, false, or conditional results
 
 ---
 
@@ -1462,8 +1417,8 @@ Providers receive and should respect standard Go context patterns:
 
 - **Dry-Run Flag** (`dryRunKey`): Boolean indicating mock execution
   - Access via: `DryRunFromContext(ctx)`
-  - When true, providers must avoid side effects and return mock data
-  - All providers must support dry-run mode
+  - Set by `run provider --dry-run`; providers should avoid side effects and return mock data
+  - Not set during `run solution --dry-run` — solution-level dry-run uses the `WhatIf` function on the `Descriptor` instead (providers are never executed)
 
 ### Standard Context Patterns
 
@@ -1553,38 +1508,12 @@ func (p *APIProvider) Execute(ctx context.Context, input any) (*Output, error) {
   }
   
   // Execute based on mode and dry-run flag
+  // DryRunFromContext is set by `run provider --dry-run`
   if isDryRun {
     return p.mockExecute(execMode, input)
   }
   
   return p.realExecute(ctx, execMode, input)
-}
-~~~
-  
-  isDryRun := DryRunFromContext(ctx)
-  if isDryRun {
-    return p.mockExecute(execMode, input)
-  }
-  
-  // Use logger from context
-  lgr := logger.FromContext(ctx)
-  lgr.V(1).Info("executing API call", "endpoint", p.endpoint)
-  
-  // Propagate context to HTTP request for cancellation/tracing
-  req, err := http.NewRequestWithContext(ctx, "GET", p.endpoint, nil)
-  if err != nil {
-    return nil, err
-  }
-  
-  // Check for cancellation before expensive operation
-  select {
-  case <-ctx.Done():
-    return nil, ctx.Err()
-  default:
-  }
-  
-  resp, err := p.client.Do(req)
-  // ...
 }
 ~~~
 

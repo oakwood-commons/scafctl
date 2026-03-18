@@ -259,13 +259,6 @@ func (o *Options) printProviderDetail(ctx context.Context, desc *provider.Descri
 		w.Plainlnf("%s %s", keyStyle("Tags:"), valueStyle(strings.Join(desc.Tags, ", ")))
 	}
 
-	// Mock behavior
-	if desc.MockBehavior != "" {
-		w.Plainln("")
-		w.Plainln(keyStyle("Mock Behavior:"))
-		w.Plainlnf("  %s", dimStyle(desc.MockBehavior))
-	}
-
 	// Schema properties
 	if desc.Schema != nil && len(desc.Schema.Properties) > 0 {
 		// Build required set

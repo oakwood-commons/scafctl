@@ -40,9 +40,6 @@ type ResolverOptions struct {
 	// returning raw resolved values.
 	SkipTransform bool
 
-	// DryRun shows the execution plan without running providers.
-	DryRun bool
-
 	// Graph renders the resolver dependency graph instead of executing.
 	Graph bool
 
@@ -114,11 +111,6 @@ SKIPPING PHASES:
   Use --skip-transform to skip both the transform and validation phases,
   returning only the raw resolved values. This is useful for inspecting
   what providers return before any transformation.
-
-DRY RUN:
-  Use --dry-run to show the execution plan without running any providers.
-  This displays the DAG-based execution phases, resolver dependencies,
-  provider types, and configured phases for each resolver.
 
 GRAPH MODE:
   Use --graph to visualize the resolver dependency graph without executing
@@ -193,9 +185,6 @@ Examples:
   # Skip transform and validation phases (raw resolved values)
   scafctl run resolver --skip-transform -f ./my-solution.yaml
 
-  # Show execution plan without running providers
-  scafctl run resolver --dry-run -f ./my-solution.yaml
-
   # Show resolver dependency graph (ASCII)
   scafctl run resolver --graph -f ./my-solution.yaml
 
@@ -245,7 +234,6 @@ Examples:
 
 	// Resolver-specific flags
 	cCmd.Flags().BoolVar(&options.SkipTransform, "skip-transform", false, "Skip transform and validation phases, returning raw resolved values")
-	cCmd.Flags().BoolVar(&options.DryRun, "dry-run", false, "Show execution plan without running providers")
 	cCmd.Flags().BoolVar(&options.Graph, "graph", false, "Show resolver dependency graph instead of executing")
 	cCmd.Flags().StringVar(&options.GraphFormat, "graph-format", "ascii", "Graph output format: ascii, dot, mermaid, json")
 	cCmd.Flags().BoolVar(&options.Snapshot, "snapshot", false, "Save execution snapshot instead of normal output")
@@ -266,7 +254,6 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		"output", o.Output,
 		"names", o.Names,
 		"skipTransform", o.SkipTransform,
-		"dryRun", o.DryRun,
 		"graph", o.Graph,
 		"snapshot", o.Snapshot,
 		"resolveAll", o.ResolveAll,
@@ -274,19 +261,9 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		"showMetrics", o.ShowMetrics)
 
 	// Validate mutually exclusive modes
-	modeCount := 0
-	if o.DryRun {
-		modeCount++
-	}
-	if o.Graph {
-		modeCount++
-	}
-	if o.Snapshot {
-		modeCount++
-	}
-	if modeCount > 1 {
+	if o.Graph && o.Snapshot {
 		return o.exitWithCode(ctx,
-			fmt.Errorf("--dry-run, --graph, and --snapshot are mutually exclusive"),
+			fmt.Errorf("--graph and --snapshot are mutually exclusive"),
 			exitcode.InvalidInput)
 	}
 
@@ -368,11 +345,6 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		return o.showResolverGraph(ctx, resolvers, reg)
 	}
 
-	// Dry run: show execution plan without running providers
-	if o.DryRun {
-		return o.showResolverDryRun(ctx, resolvers, reg)
-	}
-
 	// Snapshot mode: execute resolvers and save snapshot
 	if o.Snapshot {
 		return o.showResolverSnapshot(ctx, sol, resolvers, params, reg)
@@ -438,85 +410,6 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 	}
 
 	return o.writeResolverOutput(ctx, results, "scafctl run resolver")
-}
-
-// showResolverDryRun displays the execution plan without running providers
-func (o *ResolverOptions) showResolverDryRun(ctx context.Context, resolvers []*resolver.Resolver, reg *provider.Registry) error {
-	// Build execution phases from the resolver DAG
-	var lookup resolver.DescriptorLookup
-	if reg != nil {
-		lookup = reg.DescriptorLookup()
-	}
-	phases, err := resolver.BuildPhases(resolvers, lookup)
-	if err != nil {
-		return o.exitWithCode(ctx, fmt.Errorf("failed to build execution plan: %w", err), exitcode.InvalidInput)
-	}
-
-	// Build structured dry-run output
-	plan := buildDryRunPlan(phases, resolvers, o.SkipTransform, o.SkipValidation)
-
-	return o.writeResolverOutput(ctx, plan, "scafctl run resolver --dry-run")
-}
-
-// buildDryRunPlan constructs the structured execution plan for dry-run output
-func buildDryRunPlan(phases []*resolver.PhaseGroup, resolvers []*resolver.Resolver, skipTransform, skipValidation bool) map[string]any {
-	// Build phase list
-	phaseList := make([]map[string]any, 0, len(phases))
-	for _, pg := range phases {
-		resolverNames := make([]string, len(pg.Resolvers))
-		for i, r := range pg.Resolvers {
-			resolverNames[i] = r.Name
-		}
-		phaseList = append(phaseList, map[string]any{
-			"phase":     pg.Phase,
-			"resolvers": resolverNames,
-		})
-	}
-
-	// Determine active phases
-	activePhases := []string{"resolve"}
-	skippedPhases := []string{}
-	if !skipTransform {
-		activePhases = append(activePhases, "transform")
-	} else {
-		skippedPhases = append(skippedPhases, "transform", "validate")
-	}
-	if !skipValidation && !skipTransform {
-		activePhases = append(activePhases, "validate")
-	} else if skipValidation && !skipTransform {
-		skippedPhases = append(skippedPhases, "validate")
-	}
-
-	// Build per-resolver info
-	resolverInfo := make(map[string]any, len(resolvers))
-	for _, r := range resolvers {
-		deps := resolver.ExtractDependencies(r, nil)
-		configuredPhases := []string{"resolve"}
-		if r.Transform != nil {
-			configuredPhases = append(configuredPhases, "transform")
-		}
-		if r.Validate != nil {
-			configuredPhases = append(configuredPhases, "validate")
-		}
-
-		resolverInfo[r.Name] = map[string]any{
-			"provider":         execute.ResolverProviderName(r),
-			"dependencies":     deps,
-			"configuredPhases": configuredPhases,
-		}
-	}
-
-	return map[string]any{
-		"dryRun": true,
-		"executionPlan": map[string]any{
-			"totalResolvers": len(resolvers),
-			"totalPhases":    len(phases),
-			"activePhases":   activePhases,
-			"skippedPhases":  skippedPhases,
-			"phases":         phaseList,
-		},
-		"resolvers": resolverInfo,
-	}
 }
 
 // showResolverGraph renders the resolver dependency graph without executing providers

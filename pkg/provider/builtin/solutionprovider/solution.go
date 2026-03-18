@@ -602,13 +602,25 @@ func buildDescriptor() *provider.Descriptor {
 	version, _ := semver.NewVersion(Version)
 
 	return &provider.Descriptor{
-		Name:         ProviderName,
-		DisplayName:  "Solution Composition",
-		APIVersion:   "v1",
-		Version:      version,
-		Description:  "Executes a sub-solution and returns its results as a structured envelope",
-		Category:     "composition",
-		MockBehavior: "Returns a mock envelope with empty resolvers and success status without loading or executing the sub-solution",
+		Name:        ProviderName,
+		DisplayName: "Solution Composition",
+		APIVersion:  "v1",
+		Version:     version,
+		Description: "Executes a sub-solution and returns its results as a structured envelope",
+		Category:    "composition",
+		WhatIf: func(_ context.Context, input any) (string, error) {
+			var source string
+			switch v := input.(type) {
+			case *Input:
+				source = v.Source
+			case map[string]any:
+				source, _ = v["source"].(string)
+			}
+			if source != "" {
+				return fmt.Sprintf("Would execute solution %q", source), nil
+			}
+			return "Would execute sub-solution", nil
+		},
 		Capabilities: []provider.Capability{
 			provider.CapabilityFrom,
 			provider.CapabilityAction,

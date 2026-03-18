@@ -53,32 +53,59 @@ spec:
 
     cases:
       dryrun-resolves-values:
-        description: Verify dry-run resolves all values
+        description: Verify dry-run generates WhatIf messages with real resolver data
         command: [run, solution]
         args: ["--dry-run", "-o", "json"]
         tags: [dryrun, smoke]
         assertions:
           - expression: __exitCode == 0
-          - contains: "greeting"
-          - contains: "Hello from dry-run!"
+          - contains: "wouldDo"
+          - contains: "exec"
 
       dryrun-shows-actions:
-        description: Verify dry-run shows planned actions
+        description: Verify dry-run shows planned actions in WhatIf format
         command: [run, solution]
         args: ["--dry-run"]
         tags: [dryrun]
         assertions:
           - expression: __exitCode == 0
+          - contains: "DRY RUN: What would happen"
+          - contains: "What if:"
+          - contains: "Phase 1:"
 
-      dryrun-resolver-only:
-        description: Verify resolver-only dry-run works
-        command: [run, resolver]
-        args: ["--dry-run", "-o", "json"]
-        tags: [dryrun, resolver]
+      dryrun-verbose-json:
+        description: Verify --verbose includes materializedInputs in JSON output
+        command: [run, solution]
+        args: ["--dry-run", "--verbose", "-o", "json"]
+        tags: [dryrun, verbose]
         assertions:
           - expression: __exitCode == 0
-          - contains: "greeting"
-          - contains: "environment"
+          - contains: "materializedInputs"
+          - contains: "wouldDo"
+
+      dryrun-json-structure:
+        description: Verify JSON report has correct structure
+        command: [run, solution]
+        args: ["--dry-run", "-o", "json"]
+        tags: [dryrun, json]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: "\"dryRun\": true"
+          - contains: "\"hasWorkflow\": true"
+          - contains: "\"actionPlan\""
+          - contains: "\"totalActions\""
+          - contains: "\"totalPhases\""
+
+      dryrun-yaml-output:
+        description: Verify YAML output contains expected fields
+        command: [run, solution]
+        args: ["--dry-run", "-o", "yaml"]
+        tags: [dryrun, yaml]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: "dryRun: true"
+          - contains: "wouldDo:"
+          - contains: "hasWorkflow: true"
 
       dryrun-computed-resolver:
         description: Verify computed resolvers work in dry-run

@@ -207,19 +207,31 @@ var outputSchemaPreviewResolvers = json.RawMessage(`{
 var outputSchemaDryRun = json.RawMessage(`{
 	"type": "object",
 	"properties": {
-		"resolvers": { "type": "object", "description": "Resolver preview results" },
-		"actions": {
+		"dryRun": { "type": "boolean", "description": "Always true for dry-run reports" },
+		"solution": { "type": "string", "description": "Solution name" },
+		"version": { "type": "string", "description": "Solution version" },
+		"hasWorkflow": { "type": "boolean", "description": "Whether the solution has a workflow" },
+		"actionPlan": {
 			"type": "array",
-			"description": "Action execution plan",
+			"description": "Planned action execution with WhatIf descriptions",
 			"items": {
 				"type": "object",
 				"properties": {
 					"name": { "type": "string" },
 					"provider": { "type": "string" },
-					"would_execute": { "type": "boolean" },
-					"depends_on": { "type": "array", "items": { "type": "string" } }
+					"description": { "type": "string" },
+					"wouldDo": { "type": "string", "description": "Provider-generated description of what this action would do" },
+					"phase": { "type": "integer" },
+					"section": { "type": "string" },
+					"dependencies": { "type": "array", "items": { "type": "string" } },
+					"when": { "type": "string" },
+					"materializedInputs": { "type": "object" },
+					"deferredInputs": { "type": "object" }
 				}
 			}
-		}
+		},
+		"totalActions": { "type": "integer" },
+		"totalPhases": { "type": "integer" },
+		"warnings": { "type": "array", "items": { "type": "string" } }
 	}
 }`)

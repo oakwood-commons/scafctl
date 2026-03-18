@@ -97,8 +97,18 @@ func NewGitHubProvider(opts ...Option) *GitHubProvider {
 			Description: "Interact with GitHub via GraphQL (reads, issues, PRs, signed commits, branches, tags) " +
 				"and REST (releases). Uses the configured GitHub auth handler automatically. " +
 				"Commit operations use createCommitOnBranch for GPG-signed multi-file atomic commits.",
-			Category:     "data",
-			MockBehavior: "Returns mock data for the requested operation without making real API calls",
+			Category: "data",
+			WhatIf: func(_ context.Context, input any) (string, error) {
+				inputs, ok := input.(map[string]any)
+				if !ok {
+					return "", nil
+				}
+				operation, _ := inputs["operation"].(string)
+				owner, _ := inputs["owner"].(string)
+				repo, _ := inputs["repo"].(string)
+				target := owner + "/" + repo
+				return fmt.Sprintf("Would perform GitHub %s on %s", operation, target), nil
+			},
 			Capabilities: []provider.Capability{
 				provider.CapabilityFrom,
 				provider.CapabilityTransform,

@@ -270,11 +270,6 @@ func (r *Registry) validateDescriptor(desc *Descriptor) error {
 		return fmt.Errorf("provider description cannot be empty")
 	}
 
-	// MockBehavior is required (all providers must support dry-run)
-	if desc.MockBehavior == "" {
-		return fmt.Errorf("provider MockBehavior cannot be empty (all providers must support dry-run)")
-	}
-
 	// At least one capability is required
 	if len(desc.Capabilities) == 0 {
 		return fmt.Errorf("provider must declare at least one capability")

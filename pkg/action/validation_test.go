@@ -63,7 +63,6 @@ func mockActionProvider(name string) *mockProvider {
 			APIVersion:   "v1",
 			Version:      semver.MustParse("1.0.0"),
 			Description:  "Mock provider for testing",
-			MockBehavior: "Returns mock data",
 			Capabilities: []provider.Capability{provider.CapabilityAction},
 			Schema:       &jsonschema.Schema{Type: "object"},
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
@@ -81,7 +80,6 @@ func mockNonActionProvider(name string) *mockProvider {
 			APIVersion:   "v1",
 			Version:      semver.MustParse("1.0.0"),
 			Description:  "Mock provider for testing",
-			MockBehavior: "Returns mock data",
 			Capabilities: []provider.Capability{provider.CapabilityFrom},
 			Schema:       &jsonschema.Schema{Type: "object"},
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{

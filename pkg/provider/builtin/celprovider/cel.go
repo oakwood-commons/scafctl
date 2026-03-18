@@ -35,13 +35,27 @@ func NewCelProvider() *CelProvider {
 
 	return &CelProvider{
 		descriptor: &provider.Descriptor{
-			Name:         ProviderName,
-			DisplayName:  "CEL Provider",
-			APIVersion:   "v1",
-			Description:  "Transform and evaluate data using CEL (Common Expression Language) expressions with resolver data from context",
-			Version:      version,
-			Category:     "data",
-			MockBehavior: "Evaluates CEL expression and returns result (same behavior in dry-run as expressions are side-effect free)",
+			Name:        ProviderName,
+			DisplayName: "CEL Provider",
+			APIVersion:  "v1",
+			Description: "Transform and evaluate data using CEL (Common Expression Language) expressions with resolver data from context",
+			Version:     version,
+			Category:    "data",
+			WhatIf: func(_ context.Context, input any) (string, error) {
+				inputs, ok := input.(map[string]any)
+				if !ok {
+					return "", nil
+				}
+				expr, _ := inputs["expression"].(string)
+				if expr != "" {
+					const maxDisplay = 80
+					if len(expr) > maxDisplay {
+						expr = expr[:maxDisplay] + "..."
+					}
+					return fmt.Sprintf("Would evaluate CEL expression: %s", expr), nil
+				}
+				return "Would evaluate CEL expression", nil
+			},
 			Capabilities: []provider.Capability{
 				provider.CapabilityTransform,
 				provider.CapabilityAction,

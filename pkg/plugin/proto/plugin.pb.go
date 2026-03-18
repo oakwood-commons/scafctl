@@ -200,7 +200,6 @@ type ProviderDescriptor struct {
 	Schema          *Schema                `protobuf:"bytes,7,opt,name=schema,proto3" json:"schema,omitempty"`
 	OutputSchemas   map[string]*Schema     `protobuf:"bytes,8,rep,name=output_schemas,json=outputSchemas,proto3" json:"output_schemas,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // key is capability string (from, transform, validation, authentication, action)
 	ApiVersion      string                 `protobuf:"bytes,9,opt,name=api_version,json=apiVersion,proto3" json:"api_version,omitempty"`
-	MockBehavior    string                 `protobuf:"bytes,10,opt,name=mock_behavior,json=mockBehavior,proto3" json:"mock_behavior,omitempty"`
 	SensitiveFields []string               `protobuf:"bytes,11,rep,name=sensitive_fields,json=sensitiveFields,proto3" json:"sensitive_fields,omitempty"`
 	Tags            []string               `protobuf:"bytes,12,rep,name=tags,proto3" json:"tags,omitempty"`
 	Icon            string                 `protobuf:"bytes,13,opt,name=icon,proto3" json:"icon,omitempty"`
@@ -302,13 +301,6 @@ func (x *ProviderDescriptor) GetOutputSchemas() map[string]*Schema {
 func (x *ProviderDescriptor) GetApiVersion() string {
 	if x != nil {
 		return x.ApiVersion
-	}
-	return ""
-}
-
-func (x *ProviderDescriptor) GetMockBehavior() string {
-	if x != nil {
-		return x.MockBehavior
 	}
 	return ""
 }
@@ -800,6 +792,110 @@ func (x *ExecuteProviderResponse) GetError() string {
 	return ""
 }
 
+type DescribeWhatIfRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ProviderName  string                 `protobuf:"bytes,1,opt,name=provider_name,json=providerName,proto3" json:"provider_name,omitempty"`
+	Input         []byte                 `protobuf:"bytes,2,opt,name=input,proto3" json:"input,omitempty"` // JSON-encoded input map
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DescribeWhatIfRequest) Reset() {
+	*x = DescribeWhatIfRequest{}
+	mi := &file_plugin_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DescribeWhatIfRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DescribeWhatIfRequest) ProtoMessage() {}
+
+func (x *DescribeWhatIfRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DescribeWhatIfRequest.ProtoReflect.Descriptor instead.
+func (*DescribeWhatIfRequest) Descriptor() ([]byte, []int) {
+	return file_plugin_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *DescribeWhatIfRequest) GetProviderName() string {
+	if x != nil {
+		return x.ProviderName
+	}
+	return ""
+}
+
+func (x *DescribeWhatIfRequest) GetInput() []byte {
+	if x != nil {
+		return x.Input
+	}
+	return nil
+}
+
+type DescribeWhatIfResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Description   string                 `protobuf:"bytes,1,opt,name=description,proto3" json:"description,omitempty"` // Human-readable WhatIf description (empty if not implemented)
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`             // Empty if no error
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DescribeWhatIfResponse) Reset() {
+	*x = DescribeWhatIfResponse{}
+	mi := &file_plugin_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DescribeWhatIfResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DescribeWhatIfResponse) ProtoMessage() {}
+
+func (x *DescribeWhatIfResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DescribeWhatIfResponse.ProtoReflect.Descriptor instead.
+func (*DescribeWhatIfResponse) Descriptor() ([]byte, []int) {
+	return file_plugin_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *DescribeWhatIfResponse) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *DescribeWhatIfResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 type GetAuthHandlersRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -808,7 +904,7 @@ type GetAuthHandlersRequest struct {
 
 func (x *GetAuthHandlersRequest) Reset() {
 	*x = GetAuthHandlersRequest{}
-	mi := &file_plugin_proto_msgTypes[12]
+	mi := &file_plugin_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -820,7 +916,7 @@ func (x *GetAuthHandlersRequest) String() string {
 func (*GetAuthHandlersRequest) ProtoMessage() {}
 
 func (x *GetAuthHandlersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[12]
+	mi := &file_plugin_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -833,7 +929,7 @@ func (x *GetAuthHandlersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAuthHandlersRequest.ProtoReflect.Descriptor instead.
 func (*GetAuthHandlersRequest) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{12}
+	return file_plugin_proto_rawDescGZIP(), []int{14}
 }
 
 type GetAuthHandlersResponse struct {
@@ -845,7 +941,7 @@ type GetAuthHandlersResponse struct {
 
 func (x *GetAuthHandlersResponse) Reset() {
 	*x = GetAuthHandlersResponse{}
-	mi := &file_plugin_proto_msgTypes[13]
+	mi := &file_plugin_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -857,7 +953,7 @@ func (x *GetAuthHandlersResponse) String() string {
 func (*GetAuthHandlersResponse) ProtoMessage() {}
 
 func (x *GetAuthHandlersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[13]
+	mi := &file_plugin_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -870,7 +966,7 @@ func (x *GetAuthHandlersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAuthHandlersResponse.ProtoReflect.Descriptor instead.
 func (*GetAuthHandlersResponse) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{13}
+	return file_plugin_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *GetAuthHandlersResponse) GetHandlers() []*AuthHandlerInfo {
@@ -892,7 +988,7 @@ type AuthHandlerInfo struct {
 
 func (x *AuthHandlerInfo) Reset() {
 	*x = AuthHandlerInfo{}
-	mi := &file_plugin_proto_msgTypes[14]
+	mi := &file_plugin_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -904,7 +1000,7 @@ func (x *AuthHandlerInfo) String() string {
 func (*AuthHandlerInfo) ProtoMessage() {}
 
 func (x *AuthHandlerInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[14]
+	mi := &file_plugin_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -917,7 +1013,7 @@ func (x *AuthHandlerInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuthHandlerInfo.ProtoReflect.Descriptor instead.
 func (*AuthHandlerInfo) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{14}
+	return file_plugin_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *AuthHandlerInfo) GetName() string {
@@ -961,7 +1057,7 @@ type LoginRequest struct {
 
 func (x *LoginRequest) Reset() {
 	*x = LoginRequest{}
-	mi := &file_plugin_proto_msgTypes[15]
+	mi := &file_plugin_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -973,7 +1069,7 @@ func (x *LoginRequest) String() string {
 func (*LoginRequest) ProtoMessage() {}
 
 func (x *LoginRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[15]
+	mi := &file_plugin_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -986,7 +1082,7 @@ func (x *LoginRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LoginRequest.ProtoReflect.Descriptor instead.
 func (*LoginRequest) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{15}
+	return file_plugin_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *LoginRequest) GetHandlerName() string {
@@ -1040,7 +1136,7 @@ type LoginStreamMessage struct {
 
 func (x *LoginStreamMessage) Reset() {
 	*x = LoginStreamMessage{}
-	mi := &file_plugin_proto_msgTypes[16]
+	mi := &file_plugin_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1052,7 +1148,7 @@ func (x *LoginStreamMessage) String() string {
 func (*LoginStreamMessage) ProtoMessage() {}
 
 func (x *LoginStreamMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[16]
+	mi := &file_plugin_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1065,7 +1161,7 @@ func (x *LoginStreamMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LoginStreamMessage.ProtoReflect.Descriptor instead.
 func (*LoginStreamMessage) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{16}
+	return file_plugin_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *LoginStreamMessage) GetPayload() isLoginStreamMessage_Payload {
@@ -1135,7 +1231,7 @@ type DeviceCodePrompt struct {
 
 func (x *DeviceCodePrompt) Reset() {
 	*x = DeviceCodePrompt{}
-	mi := &file_plugin_proto_msgTypes[17]
+	mi := &file_plugin_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1147,7 +1243,7 @@ func (x *DeviceCodePrompt) String() string {
 func (*DeviceCodePrompt) ProtoMessage() {}
 
 func (x *DeviceCodePrompt) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[17]
+	mi := &file_plugin_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1160,7 +1256,7 @@ func (x *DeviceCodePrompt) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeviceCodePrompt.ProtoReflect.Descriptor instead.
 func (*DeviceCodePrompt) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{17}
+	return file_plugin_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *DeviceCodePrompt) GetUserCode() string {
@@ -1194,7 +1290,7 @@ type LoginResult struct {
 
 func (x *LoginResult) Reset() {
 	*x = LoginResult{}
-	mi := &file_plugin_proto_msgTypes[18]
+	mi := &file_plugin_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1206,7 +1302,7 @@ func (x *LoginResult) String() string {
 func (*LoginResult) ProtoMessage() {}
 
 func (x *LoginResult) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[18]
+	mi := &file_plugin_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1219,7 +1315,7 @@ func (x *LoginResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LoginResult.ProtoReflect.Descriptor instead.
 func (*LoginResult) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{18}
+	return file_plugin_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *LoginResult) GetClaims() *Claims {
@@ -1254,7 +1350,7 @@ type Claims struct {
 
 func (x *Claims) Reset() {
 	*x = Claims{}
-	mi := &file_plugin_proto_msgTypes[19]
+	mi := &file_plugin_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1266,7 +1362,7 @@ func (x *Claims) String() string {
 func (*Claims) ProtoMessage() {}
 
 func (x *Claims) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[19]
+	mi := &file_plugin_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1279,7 +1375,7 @@ func (x *Claims) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Claims.ProtoReflect.Descriptor instead.
 func (*Claims) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{19}
+	return file_plugin_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *Claims) GetIssuer() string {
@@ -1361,7 +1457,7 @@ type LogoutRequest struct {
 
 func (x *LogoutRequest) Reset() {
 	*x = LogoutRequest{}
-	mi := &file_plugin_proto_msgTypes[20]
+	mi := &file_plugin_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1373,7 +1469,7 @@ func (x *LogoutRequest) String() string {
 func (*LogoutRequest) ProtoMessage() {}
 
 func (x *LogoutRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[20]
+	mi := &file_plugin_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1386,7 +1482,7 @@ func (x *LogoutRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogoutRequest.ProtoReflect.Descriptor instead.
 func (*LogoutRequest) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{20}
+	return file_plugin_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *LogoutRequest) GetHandlerName() string {
@@ -1404,7 +1500,7 @@ type LogoutResponse struct {
 
 func (x *LogoutResponse) Reset() {
 	*x = LogoutResponse{}
-	mi := &file_plugin_proto_msgTypes[21]
+	mi := &file_plugin_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1416,7 +1512,7 @@ func (x *LogoutResponse) String() string {
 func (*LogoutResponse) ProtoMessage() {}
 
 func (x *LogoutResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[21]
+	mi := &file_plugin_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1429,7 +1525,7 @@ func (x *LogoutResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogoutResponse.ProtoReflect.Descriptor instead.
 func (*LogoutResponse) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{21}
+	return file_plugin_proto_rawDescGZIP(), []int{23}
 }
 
 type GetStatusRequest struct {
@@ -1441,7 +1537,7 @@ type GetStatusRequest struct {
 
 func (x *GetStatusRequest) Reset() {
 	*x = GetStatusRequest{}
-	mi := &file_plugin_proto_msgTypes[22]
+	mi := &file_plugin_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1453,7 +1549,7 @@ func (x *GetStatusRequest) String() string {
 func (*GetStatusRequest) ProtoMessage() {}
 
 func (x *GetStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[22]
+	mi := &file_plugin_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1466,7 +1562,7 @@ func (x *GetStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStatusRequest.ProtoReflect.Descriptor instead.
 func (*GetStatusRequest) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{22}
+	return file_plugin_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *GetStatusRequest) GetHandlerName() string {
@@ -1493,7 +1589,7 @@ type GetStatusResponse struct {
 
 func (x *GetStatusResponse) Reset() {
 	*x = GetStatusResponse{}
-	mi := &file_plugin_proto_msgTypes[23]
+	mi := &file_plugin_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1505,7 +1601,7 @@ func (x *GetStatusResponse) String() string {
 func (*GetStatusResponse) ProtoMessage() {}
 
 func (x *GetStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[23]
+	mi := &file_plugin_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1518,7 +1614,7 @@ func (x *GetStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStatusResponse.ProtoReflect.Descriptor instead.
 func (*GetStatusResponse) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{23}
+	return file_plugin_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *GetStatusResponse) GetAuthenticated() bool {
@@ -1596,7 +1692,7 @@ type GetTokenRequest struct {
 
 func (x *GetTokenRequest) Reset() {
 	*x = GetTokenRequest{}
-	mi := &file_plugin_proto_msgTypes[24]
+	mi := &file_plugin_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1608,7 +1704,7 @@ func (x *GetTokenRequest) String() string {
 func (*GetTokenRequest) ProtoMessage() {}
 
 func (x *GetTokenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[24]
+	mi := &file_plugin_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1621,7 +1717,7 @@ func (x *GetTokenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTokenRequest.ProtoReflect.Descriptor instead.
 func (*GetTokenRequest) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{24}
+	return file_plugin_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *GetTokenRequest) GetHandlerName() string {
@@ -1667,7 +1763,7 @@ type GetTokenResponse struct {
 
 func (x *GetTokenResponse) Reset() {
 	*x = GetTokenResponse{}
-	mi := &file_plugin_proto_msgTypes[25]
+	mi := &file_plugin_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1679,7 +1775,7 @@ func (x *GetTokenResponse) String() string {
 func (*GetTokenResponse) ProtoMessage() {}
 
 func (x *GetTokenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[25]
+	mi := &file_plugin_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1692,7 +1788,7 @@ func (x *GetTokenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTokenResponse.ProtoReflect.Descriptor instead.
 func (*GetTokenResponse) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{25}
+	return file_plugin_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *GetTokenResponse) GetAccessToken() string {
@@ -1753,7 +1849,7 @@ type ListCachedTokensRequest struct {
 
 func (x *ListCachedTokensRequest) Reset() {
 	*x = ListCachedTokensRequest{}
-	mi := &file_plugin_proto_msgTypes[26]
+	mi := &file_plugin_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1765,7 +1861,7 @@ func (x *ListCachedTokensRequest) String() string {
 func (*ListCachedTokensRequest) ProtoMessage() {}
 
 func (x *ListCachedTokensRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[26]
+	mi := &file_plugin_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1778,7 +1874,7 @@ func (x *ListCachedTokensRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListCachedTokensRequest.ProtoReflect.Descriptor instead.
 func (*ListCachedTokensRequest) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{26}
+	return file_plugin_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ListCachedTokensRequest) GetHandlerName() string {
@@ -1797,7 +1893,7 @@ type ListCachedTokensResponse struct {
 
 func (x *ListCachedTokensResponse) Reset() {
 	*x = ListCachedTokensResponse{}
-	mi := &file_plugin_proto_msgTypes[27]
+	mi := &file_plugin_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1809,7 +1905,7 @@ func (x *ListCachedTokensResponse) String() string {
 func (*ListCachedTokensResponse) ProtoMessage() {}
 
 func (x *ListCachedTokensResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[27]
+	mi := &file_plugin_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1822,7 +1918,7 @@ func (x *ListCachedTokensResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListCachedTokensResponse.ProtoReflect.Descriptor instead.
 func (*ListCachedTokensResponse) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{27}
+	return file_plugin_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *ListCachedTokensResponse) GetTokens() []*CachedTokenInfo {
@@ -1849,7 +1945,7 @@ type CachedTokenInfo struct {
 
 func (x *CachedTokenInfo) Reset() {
 	*x = CachedTokenInfo{}
-	mi := &file_plugin_proto_msgTypes[28]
+	mi := &file_plugin_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1861,7 +1957,7 @@ func (x *CachedTokenInfo) String() string {
 func (*CachedTokenInfo) ProtoMessage() {}
 
 func (x *CachedTokenInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[28]
+	mi := &file_plugin_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1874,7 +1970,7 @@ func (x *CachedTokenInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CachedTokenInfo.ProtoReflect.Descriptor instead.
 func (*CachedTokenInfo) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{28}
+	return file_plugin_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *CachedTokenInfo) GetHandler() string {
@@ -1949,7 +2045,7 @@ type PurgeExpiredTokensRequest struct {
 
 func (x *PurgeExpiredTokensRequest) Reset() {
 	*x = PurgeExpiredTokensRequest{}
-	mi := &file_plugin_proto_msgTypes[29]
+	mi := &file_plugin_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1961,7 +2057,7 @@ func (x *PurgeExpiredTokensRequest) String() string {
 func (*PurgeExpiredTokensRequest) ProtoMessage() {}
 
 func (x *PurgeExpiredTokensRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[29]
+	mi := &file_plugin_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1974,7 +2070,7 @@ func (x *PurgeExpiredTokensRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PurgeExpiredTokensRequest.ProtoReflect.Descriptor instead.
 func (*PurgeExpiredTokensRequest) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{29}
+	return file_plugin_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *PurgeExpiredTokensRequest) GetHandlerName() string {
@@ -1993,7 +2089,7 @@ type PurgeExpiredTokensResponse struct {
 
 func (x *PurgeExpiredTokensResponse) Reset() {
 	*x = PurgeExpiredTokensResponse{}
-	mi := &file_plugin_proto_msgTypes[30]
+	mi := &file_plugin_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2005,7 +2101,7 @@ func (x *PurgeExpiredTokensResponse) String() string {
 func (*PurgeExpiredTokensResponse) ProtoMessage() {}
 
 func (x *PurgeExpiredTokensResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[30]
+	mi := &file_plugin_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2018,7 +2114,7 @@ func (x *PurgeExpiredTokensResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PurgeExpiredTokensResponse.ProtoReflect.Descriptor instead.
 func (*PurgeExpiredTokensResponse) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{30}
+	return file_plugin_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *PurgeExpiredTokensResponse) GetPurgedCount() int32 {
@@ -2041,7 +2137,7 @@ const file_plugin_proto_rawDesc = "" +
 	"\x1dGetProviderDescriptorResponse\x12:\n" +
 	"\n" +
 	"descriptor\x18\x01 \x01(\v2\x1a.plugin.ProviderDescriptorR\n" +
-	"descriptor\"\xe8\x05\n" +
+	"descriptor\"\xc9\x05\n" +
 	"\x12ProviderDescriptor\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12!\n" +
 	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12 \n" +
@@ -2052,9 +2148,7 @@ const file_plugin_proto_rawDesc = "" +
 	"\x06schema\x18\a \x01(\v2\x0e.plugin.SchemaR\x06schema\x12T\n" +
 	"\x0eoutput_schemas\x18\b \x03(\v2-.plugin.ProviderDescriptor.OutputSchemasEntryR\routputSchemas\x12\x1f\n" +
 	"\vapi_version\x18\t \x01(\tR\n" +
-	"apiVersion\x12#\n" +
-	"\rmock_behavior\x18\n" +
-	" \x01(\tR\fmockBehavior\x12)\n" +
+	"apiVersion\x12)\n" +
 	"\x10sensitive_fields\x18\v \x03(\tR\x0fsensitiveFields\x12\x12\n" +
 	"\x04tags\x18\f \x03(\tR\x04tags\x12\x12\n" +
 	"\x04icon\x18\r \x01(\tR\x04icon\x12\"\n" +
@@ -2067,7 +2161,8 @@ const file_plugin_proto_rawDesc = "" +
 	"\x04beta\x18\x12 \x01(\bR\x04beta\x1aP\n" +
 	"\x12OutputSchemasEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12$\n" +
-	"\x05value\x18\x02 \x01(\v2\x0e.plugin.SchemaR\x05value:\x028\x01\",\n" +
+	"\x05value\x18\x02 \x01(\v2\x0e.plugin.SchemaR\x05value:\x028\x01J\x04\b\n" +
+	"\x10\v\",\n" +
 	"\x04Link\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x10\n" +
 	"\x03url\x18\x02 \x01(\tR\x03url\"S\n" +
@@ -2102,6 +2197,12 @@ const file_plugin_proto_rawDesc = "" +
 	"\adry_run\x18\x04 \x01(\bR\x06dryRun\"G\n" +
 	"\x17ExecuteProviderResponse\x12\x16\n" +
 	"\x06output\x18\x01 \x01(\fR\x06output\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"R\n" +
+	"\x15DescribeWhatIfRequest\x12#\n" +
+	"\rprovider_name\x18\x01 \x01(\tR\fproviderName\x12\x14\n" +
+	"\x05input\x18\x02 \x01(\fR\x05input\"P\n" +
+	"\x16DescribeWhatIfResponse\x12 \n" +
+	"\vdescription\x18\x01 \x01(\tR\vdescription\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\"\x18\n" +
 	"\x16GetAuthHandlersRequest\"N\n" +
 	"\x17GetAuthHandlersResponse\x123\n" +
@@ -2193,11 +2294,12 @@ const file_plugin_proto_rawDesc = "" +
 	"\x19PurgeExpiredTokensRequest\x12!\n" +
 	"\fhandler_name\x18\x01 \x01(\tR\vhandlerName\"?\n" +
 	"\x1aPurgeExpiredTokensResponse\x12!\n" +
-	"\fpurged_count\x18\x01 \x01(\x05R\vpurgedCount2\x94\x02\n" +
+	"\fpurged_count\x18\x01 \x01(\x05R\vpurgedCount2\xe5\x02\n" +
 	"\rPluginService\x12I\n" +
 	"\fGetProviders\x12\x1b.plugin.GetProvidersRequest\x1a\x1c.plugin.GetProvidersResponse\x12d\n" +
 	"\x15GetProviderDescriptor\x12$.plugin.GetProviderDescriptorRequest\x1a%.plugin.GetProviderDescriptorResponse\x12R\n" +
-	"\x0fExecuteProvider\x12\x1e.plugin.ExecuteProviderRequest\x1a\x1f.plugin.ExecuteProviderResponse2\x93\x04\n" +
+	"\x0fExecuteProvider\x12\x1e.plugin.ExecuteProviderRequest\x1a\x1f.plugin.ExecuteProviderResponse\x12O\n" +
+	"\x0eDescribeWhatIf\x12\x1d.plugin.DescribeWhatIfRequest\x1a\x1e.plugin.DescribeWhatIfResponse2\x93\x04\n" +
 	"\x12AuthHandlerService\x12R\n" +
 	"\x0fGetAuthHandlers\x12\x1e.plugin.GetAuthHandlersRequest\x1a\x1f.plugin.GetAuthHandlersResponse\x12;\n" +
 	"\x05Login\x12\x14.plugin.LoginRequest\x1a\x1a.plugin.LoginStreamMessage0\x01\x127\n" +
@@ -2219,7 +2321,7 @@ func file_plugin_proto_rawDescGZIP() []byte {
 	return file_plugin_proto_rawDescData
 }
 
-var file_plugin_proto_msgTypes = make([]protoimpl.MessageInfo, 33)
+var file_plugin_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
 var file_plugin_proto_goTypes = []any{
 	(*GetProvidersRequest)(nil),           // 0: plugin.GetProvidersRequest
 	(*GetProvidersResponse)(nil),          // 1: plugin.GetProvidersResponse
@@ -2233,66 +2335,70 @@ var file_plugin_proto_goTypes = []any{
 	(*Parameter)(nil),                     // 9: plugin.Parameter
 	(*ExecuteProviderRequest)(nil),        // 10: plugin.ExecuteProviderRequest
 	(*ExecuteProviderResponse)(nil),       // 11: plugin.ExecuteProviderResponse
-	(*GetAuthHandlersRequest)(nil),        // 12: plugin.GetAuthHandlersRequest
-	(*GetAuthHandlersResponse)(nil),       // 13: plugin.GetAuthHandlersResponse
-	(*AuthHandlerInfo)(nil),               // 14: plugin.AuthHandlerInfo
-	(*LoginRequest)(nil),                  // 15: plugin.LoginRequest
-	(*LoginStreamMessage)(nil),            // 16: plugin.LoginStreamMessage
-	(*DeviceCodePrompt)(nil),              // 17: plugin.DeviceCodePrompt
-	(*LoginResult)(nil),                   // 18: plugin.LoginResult
-	(*Claims)(nil),                        // 19: plugin.Claims
-	(*LogoutRequest)(nil),                 // 20: plugin.LogoutRequest
-	(*LogoutResponse)(nil),                // 21: plugin.LogoutResponse
-	(*GetStatusRequest)(nil),              // 22: plugin.GetStatusRequest
-	(*GetStatusResponse)(nil),             // 23: plugin.GetStatusResponse
-	(*GetTokenRequest)(nil),               // 24: plugin.GetTokenRequest
-	(*GetTokenResponse)(nil),              // 25: plugin.GetTokenResponse
-	(*ListCachedTokensRequest)(nil),       // 26: plugin.ListCachedTokensRequest
-	(*ListCachedTokensResponse)(nil),      // 27: plugin.ListCachedTokensResponse
-	(*CachedTokenInfo)(nil),               // 28: plugin.CachedTokenInfo
-	(*PurgeExpiredTokensRequest)(nil),     // 29: plugin.PurgeExpiredTokensRequest
-	(*PurgeExpiredTokensResponse)(nil),    // 30: plugin.PurgeExpiredTokensResponse
-	nil,                                   // 31: plugin.ProviderDescriptor.OutputSchemasEntry
-	nil,                                   // 32: plugin.Schema.ParametersEntry
+	(*DescribeWhatIfRequest)(nil),         // 12: plugin.DescribeWhatIfRequest
+	(*DescribeWhatIfResponse)(nil),        // 13: plugin.DescribeWhatIfResponse
+	(*GetAuthHandlersRequest)(nil),        // 14: plugin.GetAuthHandlersRequest
+	(*GetAuthHandlersResponse)(nil),       // 15: plugin.GetAuthHandlersResponse
+	(*AuthHandlerInfo)(nil),               // 16: plugin.AuthHandlerInfo
+	(*LoginRequest)(nil),                  // 17: plugin.LoginRequest
+	(*LoginStreamMessage)(nil),            // 18: plugin.LoginStreamMessage
+	(*DeviceCodePrompt)(nil),              // 19: plugin.DeviceCodePrompt
+	(*LoginResult)(nil),                   // 20: plugin.LoginResult
+	(*Claims)(nil),                        // 21: plugin.Claims
+	(*LogoutRequest)(nil),                 // 22: plugin.LogoutRequest
+	(*LogoutResponse)(nil),                // 23: plugin.LogoutResponse
+	(*GetStatusRequest)(nil),              // 24: plugin.GetStatusRequest
+	(*GetStatusResponse)(nil),             // 25: plugin.GetStatusResponse
+	(*GetTokenRequest)(nil),               // 26: plugin.GetTokenRequest
+	(*GetTokenResponse)(nil),              // 27: plugin.GetTokenResponse
+	(*ListCachedTokensRequest)(nil),       // 28: plugin.ListCachedTokensRequest
+	(*ListCachedTokensResponse)(nil),      // 29: plugin.ListCachedTokensResponse
+	(*CachedTokenInfo)(nil),               // 30: plugin.CachedTokenInfo
+	(*PurgeExpiredTokensRequest)(nil),     // 31: plugin.PurgeExpiredTokensRequest
+	(*PurgeExpiredTokensResponse)(nil),    // 32: plugin.PurgeExpiredTokensResponse
+	nil,                                   // 33: plugin.ProviderDescriptor.OutputSchemasEntry
+	nil,                                   // 34: plugin.Schema.ParametersEntry
 }
 var file_plugin_proto_depIdxs = []int32{
 	4,  // 0: plugin.GetProviderDescriptorResponse.descriptor:type_name -> plugin.ProviderDescriptor
 	8,  // 1: plugin.ProviderDescriptor.schema:type_name -> plugin.Schema
-	31, // 2: plugin.ProviderDescriptor.output_schemas:type_name -> plugin.ProviderDescriptor.OutputSchemasEntry
+	33, // 2: plugin.ProviderDescriptor.output_schemas:type_name -> plugin.ProviderDescriptor.OutputSchemasEntry
 	5,  // 3: plugin.ProviderDescriptor.links:type_name -> plugin.Link
 	6,  // 4: plugin.ProviderDescriptor.examples:type_name -> plugin.Example
 	7,  // 5: plugin.ProviderDescriptor.maintainers:type_name -> plugin.Contact
-	32, // 6: plugin.Schema.parameters:type_name -> plugin.Schema.ParametersEntry
-	14, // 7: plugin.GetAuthHandlersResponse.handlers:type_name -> plugin.AuthHandlerInfo
-	17, // 8: plugin.LoginStreamMessage.device_code_prompt:type_name -> plugin.DeviceCodePrompt
-	18, // 9: plugin.LoginStreamMessage.result:type_name -> plugin.LoginResult
-	19, // 10: plugin.LoginResult.claims:type_name -> plugin.Claims
-	19, // 11: plugin.GetStatusResponse.claims:type_name -> plugin.Claims
-	28, // 12: plugin.ListCachedTokensResponse.tokens:type_name -> plugin.CachedTokenInfo
+	34, // 6: plugin.Schema.parameters:type_name -> plugin.Schema.ParametersEntry
+	16, // 7: plugin.GetAuthHandlersResponse.handlers:type_name -> plugin.AuthHandlerInfo
+	19, // 8: plugin.LoginStreamMessage.device_code_prompt:type_name -> plugin.DeviceCodePrompt
+	20, // 9: plugin.LoginStreamMessage.result:type_name -> plugin.LoginResult
+	21, // 10: plugin.LoginResult.claims:type_name -> plugin.Claims
+	21, // 11: plugin.GetStatusResponse.claims:type_name -> plugin.Claims
+	30, // 12: plugin.ListCachedTokensResponse.tokens:type_name -> plugin.CachedTokenInfo
 	8,  // 13: plugin.ProviderDescriptor.OutputSchemasEntry.value:type_name -> plugin.Schema
 	9,  // 14: plugin.Schema.ParametersEntry.value:type_name -> plugin.Parameter
 	0,  // 15: plugin.PluginService.GetProviders:input_type -> plugin.GetProvidersRequest
 	2,  // 16: plugin.PluginService.GetProviderDescriptor:input_type -> plugin.GetProviderDescriptorRequest
 	10, // 17: plugin.PluginService.ExecuteProvider:input_type -> plugin.ExecuteProviderRequest
-	12, // 18: plugin.AuthHandlerService.GetAuthHandlers:input_type -> plugin.GetAuthHandlersRequest
-	15, // 19: plugin.AuthHandlerService.Login:input_type -> plugin.LoginRequest
-	20, // 20: plugin.AuthHandlerService.Logout:input_type -> plugin.LogoutRequest
-	22, // 21: plugin.AuthHandlerService.GetStatus:input_type -> plugin.GetStatusRequest
-	24, // 22: plugin.AuthHandlerService.GetToken:input_type -> plugin.GetTokenRequest
-	26, // 23: plugin.AuthHandlerService.ListCachedTokens:input_type -> plugin.ListCachedTokensRequest
-	29, // 24: plugin.AuthHandlerService.PurgeExpiredTokens:input_type -> plugin.PurgeExpiredTokensRequest
-	1,  // 25: plugin.PluginService.GetProviders:output_type -> plugin.GetProvidersResponse
-	3,  // 26: plugin.PluginService.GetProviderDescriptor:output_type -> plugin.GetProviderDescriptorResponse
-	11, // 27: plugin.PluginService.ExecuteProvider:output_type -> plugin.ExecuteProviderResponse
-	13, // 28: plugin.AuthHandlerService.GetAuthHandlers:output_type -> plugin.GetAuthHandlersResponse
-	16, // 29: plugin.AuthHandlerService.Login:output_type -> plugin.LoginStreamMessage
-	21, // 30: plugin.AuthHandlerService.Logout:output_type -> plugin.LogoutResponse
-	23, // 31: plugin.AuthHandlerService.GetStatus:output_type -> plugin.GetStatusResponse
-	25, // 32: plugin.AuthHandlerService.GetToken:output_type -> plugin.GetTokenResponse
-	27, // 33: plugin.AuthHandlerService.ListCachedTokens:output_type -> plugin.ListCachedTokensResponse
-	30, // 34: plugin.AuthHandlerService.PurgeExpiredTokens:output_type -> plugin.PurgeExpiredTokensResponse
-	25, // [25:35] is the sub-list for method output_type
-	15, // [15:25] is the sub-list for method input_type
+	12, // 18: plugin.PluginService.DescribeWhatIf:input_type -> plugin.DescribeWhatIfRequest
+	14, // 19: plugin.AuthHandlerService.GetAuthHandlers:input_type -> plugin.GetAuthHandlersRequest
+	17, // 20: plugin.AuthHandlerService.Login:input_type -> plugin.LoginRequest
+	22, // 21: plugin.AuthHandlerService.Logout:input_type -> plugin.LogoutRequest
+	24, // 22: plugin.AuthHandlerService.GetStatus:input_type -> plugin.GetStatusRequest
+	26, // 23: plugin.AuthHandlerService.GetToken:input_type -> plugin.GetTokenRequest
+	28, // 24: plugin.AuthHandlerService.ListCachedTokens:input_type -> plugin.ListCachedTokensRequest
+	31, // 25: plugin.AuthHandlerService.PurgeExpiredTokens:input_type -> plugin.PurgeExpiredTokensRequest
+	1,  // 26: plugin.PluginService.GetProviders:output_type -> plugin.GetProvidersResponse
+	3,  // 27: plugin.PluginService.GetProviderDescriptor:output_type -> plugin.GetProviderDescriptorResponse
+	11, // 28: plugin.PluginService.ExecuteProvider:output_type -> plugin.ExecuteProviderResponse
+	13, // 29: plugin.PluginService.DescribeWhatIf:output_type -> plugin.DescribeWhatIfResponse
+	15, // 30: plugin.AuthHandlerService.GetAuthHandlers:output_type -> plugin.GetAuthHandlersResponse
+	18, // 31: plugin.AuthHandlerService.Login:output_type -> plugin.LoginStreamMessage
+	23, // 32: plugin.AuthHandlerService.Logout:output_type -> plugin.LogoutResponse
+	25, // 33: plugin.AuthHandlerService.GetStatus:output_type -> plugin.GetStatusResponse
+	27, // 34: plugin.AuthHandlerService.GetToken:output_type -> plugin.GetTokenResponse
+	29, // 35: plugin.AuthHandlerService.ListCachedTokens:output_type -> plugin.ListCachedTokensResponse
+	32, // 36: plugin.AuthHandlerService.PurgeExpiredTokens:output_type -> plugin.PurgeExpiredTokensResponse
+	26, // [26:37] is the sub-list for method output_type
+	15, // [15:26] is the sub-list for method input_type
 	15, // [15:15] is the sub-list for extension type_name
 	15, // [15:15] is the sub-list for extension extendee
 	0,  // [0:15] is the sub-list for field type_name
@@ -2303,7 +2409,7 @@ func file_plugin_proto_init() {
 	if File_plugin_proto != nil {
 		return
 	}
-	file_plugin_proto_msgTypes[16].OneofWrappers = []any{
+	file_plugin_proto_msgTypes[18].OneofWrappers = []any{
 		(*LoginStreamMessage_DeviceCodePrompt)(nil),
 		(*LoginStreamMessage_Result)(nil),
 		(*LoginStreamMessage_Error)(nil),
@@ -2314,7 +2420,7 @@ func file_plugin_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_plugin_proto_rawDesc), len(file_plugin_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   33,
+			NumMessages:   35,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

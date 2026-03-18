@@ -22,6 +22,11 @@ type ProviderPlugin interface {
 
 	// ExecuteProvider executes a provider with the given input
 	ExecuteProvider(ctx context.Context, providerName string, input map[string]any) (*provider.Output, error)
+
+	// DescribeWhatIf returns a human-readable description of what the provider
+	// would do with the given inputs, without executing. Returns an empty string
+	// if the plugin does not implement WhatIf for this provider.
+	DescribeWhatIf(ctx context.Context, providerName string, input map[string]any) (string, error)
 }
 
 // AuthHandlerInfo holds static metadata about an auth handler exposed by a plugin.

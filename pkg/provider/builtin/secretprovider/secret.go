@@ -98,12 +98,27 @@ func NewSecretProvider(opts ...Option) *SecretProvider {
 
 	// Initialize descriptor
 	p.descriptor = &provider.Descriptor{
-		Name:         ProviderName,
-		DisplayName:  ProviderDisplayName,
-		APIVersion:   ProviderAPIVersion,
-		Version:      semver.MustParse("1.0.0"),
-		Description:  ProviderDescription,
-		MockBehavior: "Returns mock secret value without accessing actual encrypted storage",
+		Name:        ProviderName,
+		DisplayName: ProviderDisplayName,
+		APIVersion:  ProviderAPIVersion,
+		Version:     semver.MustParse("1.0.0"),
+		Description: ProviderDescription,
+		WhatIf: func(_ context.Context, input any) (string, error) {
+			inputs, ok := input.(map[string]any)
+			if !ok {
+				return "", nil
+			}
+			operation, _ := inputs[FieldOperation].(string)
+			name, _ := inputs[FieldName].(string)
+			switch operation {
+			case "get":
+				return fmt.Sprintf("Would retrieve secret %q", name), nil
+			case "list":
+				return "Would list available secrets", nil
+			default:
+				return fmt.Sprintf("Would perform secret %s", operation), nil
+			}
+		},
 		Capabilities: []provider.Capability{
 			provider.CapabilityFrom,
 		},

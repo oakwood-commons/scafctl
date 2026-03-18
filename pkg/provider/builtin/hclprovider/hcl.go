@@ -109,15 +109,36 @@ func NewHCLProvider(opts ...Option) *HCLProvider {
 	p := &HCLProvider{
 		fileReader: &osFileReader{},
 		descriptor: &provider.Descriptor{
-			Name:         ProviderName,
-			DisplayName:  "HCL",
-			Description:  "Processes HCL (HashiCorp Configuration Language) content. Supports parsing into structured data, formatting to canonical style, validating syntax, and generating HCL from structured input. Accepts single files, multiple paths, or a directory of .tf files.",
-			APIVersion:   "v1",
-			Version:      version,
-			Category:     "data",
-			Beta:         true,
-			Tags:         []string{"hcl", "terraform", "opentofu", "parse", "format", "validate", "generate", "config"},
-			MockBehavior: "Returns a mock structure appropriate to the requested operation",
+			Name:        ProviderName,
+			DisplayName: "HCL",
+			Description: "Processes HCL (HashiCorp Configuration Language) content. Supports parsing into structured data, formatting to canonical style, validating syntax, and generating HCL from structured input. Accepts single files, multiple paths, or a directory of .tf files.",
+			APIVersion:  "v1",
+			Version:     version,
+			Category:    "data",
+			Beta:        true,
+			Tags:        []string{"hcl", "terraform", "opentofu", "parse", "format", "validate", "generate", "config"},
+			WhatIf: func(_ context.Context, input any) (string, error) {
+				inputs, ok := input.(map[string]any)
+				if !ok {
+					return "", nil
+				}
+				operation, _ := inputs["operation"].(string)
+				if operation == "" {
+					operation = "parse"
+				}
+				var target string
+				if p, ok := inputs["path"].(string); ok && p != "" {
+					target = p
+				} else if d, ok := inputs["dir"].(string); ok && d != "" {
+					target = d
+				} else if _, ok := inputs["content"].(string); ok {
+					target = "inline content"
+				}
+				if target != "" {
+					return fmt.Sprintf("Would %s HCL from %s", operation, target), nil
+				}
+				return fmt.Sprintf("Would %s HCL", operation), nil
+			},
 			Capabilities: []provider.Capability{
 				provider.CapabilityFrom,
 				provider.CapabilityTransform,

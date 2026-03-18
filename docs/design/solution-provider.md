@@ -317,7 +317,7 @@ Each sub-solution runs in an isolated context. This is critical for correctness 
 |-------|-----------|-----------|
 | Logger | `logger.WithLogger(ctx, scoped)` | Scoped with sub-solution name prefix |
 | Writer | `writer.FromContext(ctx)` (pass through) | Sub-solution output goes to same terminal |
-| Dry-run | `provider.WithDryRun(ctx, flag)` | Consistent behavior |
+| Dry-run | N/A (actions are never invoked during dry-run) | WhatIf descriptions used instead |
 | Auth registry | `auth.WithRegistry(ctx, reg)` | Sub-solutions need the same auth |
 | App config | `config.WithConfig(ctx, cfg)` | Sub-solutions read the same config |
 | Ancestor stack | Custom context key | For recursion detection |
@@ -429,33 +429,22 @@ child-config:
             - cache-ttl
 ~~~
 
-### Dry Run
+### Dry Run (WhatIf)
 
-In dry-run mode, the provider **still loads the solution** (to validate the source is valid) but does not execute it. This catches typos in catalog names or file paths before real execution. The cost is one file read or HTTP request, which is acceptable.
+In dry-run mode, the solution provider's `WhatIf` function generates a description of what execution would do (e.g., `Would execute solution "infra-config@1.0.0"`). The provider is **not invoked** during dry-run — only its WhatIf description is included in the report.
 
-Returns a mock envelope:
+The WhatIf function extracts the `source` from the inputs to provide a context-specific message. When source information is unavailable, it falls back to a generic description.
+
+Example WhatIf output in the dry-run report:
 
 ~~~json
-// from capability:
+// action capability (in actionPlan):
 {
-  "resolvers": {},
-  "status": "success",
-  "errors": [],
-  "dryRun": true
-}
-
-// action capability:
-{
-  "resolvers": {},
-  "workflow": {
-    "finalStatus": "succeeded",
-    "failedActions": [],
-    "skippedActions": []
-  },
-  "status": "success",
-  "errors": [],
-  "dryRun": true,
-  "success": true
+  "name": "run-child",
+  "provider": "solution",
+  "wouldDo": "Would execute solution \"infra-config@1.0.0\"",
+  "phase": 1,
+  "section": "actions"
 }
 ~~~
 
@@ -799,7 +788,7 @@ Note: `action` capability requires a `success` boolean field in the output schem
 5. **Circular detection — direct:** A → A. Assert error message includes chain.
 6. **Circular detection — indirect:** A → B → A. Push "A" onto ancestor stack in context, then execute with source "A". Assert error.
 7. **Max depth exceeded:** Push 10 ancestors onto stack, execute with `maxDepth: 10`. Assert depth error.
-8. **Dry-run:** Set `DryRun(ctx, true)`. Assert mock envelope returned, loader still called (validates source), but resolvers not executed.
+8. **WhatIf:** Call `DescribeWhatIf(ctx, input)` with source set. Assert message contains the source name. Also test fallback when source is missing.
 9. **Context isolation:** Assert sub-solution does not see parent's resolver values or parameters.
 10. **Dynamic source:** `source` with CEL expression resolving to a catalog name. Assert correct solution is loaded.
 

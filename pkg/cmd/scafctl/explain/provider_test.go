@@ -87,8 +87,7 @@ func TestProviderOptions_Run(t *testing.T) {
 					provider.CapabilityFrom,
 					provider.CapabilityTransform,
 				},
-				Tags:         []string{"test", "mock"},
-				MockBehavior: "Returns test data",
+				Tags: []string{"test", "mock"},
 				Schema: schemahelper.ObjectSchema([]string{"input"}, map[string]*jsonschema.Schema{
 					"input": schemahelper.StringProp("Input value",
 						schemahelper.WithExample("example-value")),
@@ -143,7 +142,6 @@ func TestProviderOptions_Run(t *testing.T) {
 		assert.Contains(t, output, "testing")
 		assert.Contains(t, output, "from")
 		assert.Contains(t, output, "transform")
-		assert.Contains(t, output, "Returns test data")
 		assert.Contains(t, output, "input")
 		assert.Contains(t, output, "Basic Usage")
 		assert.Contains(t, output, "test, mock")
@@ -182,7 +180,6 @@ func TestProviderOptions_Run(t *testing.T) {
 				APIVersion:   "scafctl.io/v1",
 				Version:      version,
 				Capabilities: []provider.Capability{provider.CapabilityFrom},
-				MockBehavior: "Returns nothing",
 				Schema:       &jsonschema.Schema{Type: "object"},
 				OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 					provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
@@ -225,7 +222,6 @@ func TestProviderOptions_Run(t *testing.T) {
 				APIVersion:   "scafctl.io/v1",
 				Version:      version,
 				Capabilities: []provider.Capability{provider.CapabilityFrom},
-				MockBehavior: "Returns nothing",
 				Schema:       &jsonschema.Schema{Type: "object"},
 				OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 					provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
@@ -270,7 +266,6 @@ func TestLookupProvider(t *testing.T) {
 				APIVersion:   "scafctl.io/v1",
 				Version:      semver.MustParse("1.0.0"),
 				Capabilities: []provider.Capability{provider.CapabilityFrom},
-				MockBehavior: "Returns test data",
 				Schema:       &jsonschema.Schema{Type: "object"},
 				OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 					provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
