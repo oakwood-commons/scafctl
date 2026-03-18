@@ -28,11 +28,27 @@ func NewProviderWrapper(client *Client, providerName string) (*ProviderWrapper, 
 		return nil, fmt.Errorf("failed to get provider descriptor: %w", err)
 	}
 
-	return &ProviderWrapper{
+	w := &ProviderWrapper{
 		client:       client,
 		providerName: providerName,
 		descriptor:   desc,
-	}, nil
+	}
+
+	// Wire up WhatIf to call the plugin over gRPC
+	name := providerName
+	desc.WhatIf = func(ctx context.Context, input any) (string, error) {
+		var inputs map[string]any
+		if input != nil {
+			var ok bool
+			inputs, ok = input.(map[string]any)
+			if !ok {
+				return "", nil
+			}
+		}
+		return client.DescribeWhatIf(ctx, name, inputs)
+	}
+
+	return w, nil
 }
 
 // Descriptor returns the provider descriptor

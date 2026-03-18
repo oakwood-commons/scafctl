@@ -96,6 +96,18 @@ func (p *EchoPlugin) ExecuteProvider(ctx context.Context, providerName string, i
 	}, nil
 }
 
+// DescribeWhatIf returns a description of what the provider would do.
+func (p *EchoPlugin) DescribeWhatIf(_ context.Context, providerName string, input map[string]any) (string, error) {
+	if providerName != "echo" {
+		return "", fmt.Errorf("unknown provider: %s", providerName)
+	}
+	message, _ := input["message"].(string)
+	if message != "" {
+		return fmt.Sprintf("Would echo %q", message), nil
+	}
+	return "Would echo message", nil
+}
+
 func main() {
 	plugin.Serve(&EchoPlugin{})
 }

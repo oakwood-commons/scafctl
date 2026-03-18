@@ -692,7 +692,7 @@ The AI calls `inspect_solution` with `path: "solution.yaml"` and the response in
 | `get_config_paths` | List all XDG-compliant paths used by scafctl — config, data, cache, state, secrets, plugins, and runtime directories |
 | `validate_expressions` | Batch-validate multiple CEL expressions or Go templates — returns validity, errors, and referenced fields for each |
 | `get_version` | Return scafctl version, commit SHA, and build timestamp |
-| `dry_run_solution` | Dry-run a solution without executing providers. Use `mock_data` to inject custom mock values per resolver |
+| `dry_run_solution` | Dry-run a solution without executing action providers. Resolvers run normally; each action gets a provider-generated WhatIf description of what it would do |
 
 ## 8. Available Resources
 

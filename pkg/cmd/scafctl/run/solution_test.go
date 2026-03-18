@@ -22,6 +22,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -945,6 +946,69 @@ func TestSolutionOptions_resolveOutputDir(t *testing.T) {
 		_, statErr := os.Stat(target)
 		assert.True(t, os.IsNotExist(statErr), "directory should not be created in dry-run mode")
 	})
+}
+
+func TestSolutionOptions_Run_VerboseWithoutDryRun(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: verbose-test
+  version: 1.0.0
+spec:
+  resolvers:
+    val:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+  workflow:
+    actions:
+      greet:
+        provider: static
+        inputs:
+          value: world
+`
+	err := os.WriteFile(solutionPath, []byte(solutionContent), 0o600)
+	require.NoError(t, err)
+
+	var stdout bytes.Buffer
+	streams := &terminal.IOStreams{
+		In:     nil,
+		Out:    &stdout,
+		ErrOut: &bytes.Buffer{},
+	}
+	cliParams := settings.NewCliParams()
+	cliParams.ExitOnError = false
+
+	opts := &SolutionOptions{
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams:       streams,
+			CliParams:       cliParams,
+			File:            solutionPath,
+			KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
+			ResolverTimeout: 30 * time.Second,
+			PhaseTimeout:    5 * time.Minute,
+			registry:        testRegistry(),
+		},
+		Verbose: true, // --verbose without --dry-run
+	}
+
+	lgr := logger.Get(0)
+	ctx := logger.WithLogger(context.Background(), lgr)
+	w := writer.New(streams, cliParams)
+	ctx = writer.WithWriter(ctx, w)
+
+	// Run may error (action timeout etc) — we only care about the warning
+	_ = opts.Run(ctx)
+
+	output := stdout.String()
+	assert.Contains(t, output, "--verbose has no effect without --dry-run")
 }
 
 func BenchmarkSolutionOptions_resolveOutputDir(b *testing.B) {

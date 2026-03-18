@@ -5,7 +5,7 @@ weight: 25
 
 # Run Resolver Tutorial
 
-This tutorial covers the `scafctl run resolver` command — a debugging and inspection tool for executing resolvers without running actions. You'll learn how to run all resolvers, target specific resolvers, inspect execution metadata, skip phases, and use dry-run for planning.
+This tutorial covers the `scafctl run resolver` command — a debugging and inspection tool for executing resolvers without running actions. You'll learn how to run all resolvers, target specific resolvers, inspect execution metadata, skip phases, and visualize dependencies.
 
 ## Prerequisites
 
@@ -19,13 +19,12 @@ This tutorial covers the `scafctl run resolver` command — a debugging and insp
 2. [Run Specific Resolvers](#run-specific-resolvers)
 3. [Execution Metadata](#execution-metadata)
 4. [Skipping Phases](#skipping-phases)
-5. [Dry Run](#dry-run)
-6. [Dependency Graph](#dependency-graph)
-7. [Snapshots](#snapshots)
-8. [Output Formats](#output-formats)
-9. [Debugging Dependencies](#debugging-dependencies)
-10. [Working with Parameters](#working-with-parameters)
-11. [Common Workflows](#common-workflows)
+5. [Dependency Graph](#dependency-graph)
+6. [Snapshots](#snapshots)
+7. [Output Formats](#output-formats)
+8. [Debugging Dependencies](#debugging-dependencies)
+9. [Working with Parameters](#working-with-parameters)
+10. [Common Workflows](#common-workflows)
 
 ---
 
@@ -373,57 +372,6 @@ This reveals the provider returned `60000` — confirming the root cause is the 
 
 ---
 
-## Dry Run
-
-Use `--dry-run` to show the execution plan without running any providers:
-
-```bash
-scafctl run resolver --dry-run -f dep-demo.yaml -o json
-```
-
-This displays:
-- DAG-based execution phases (which resolvers run in which order)
-- Per-resolver dependencies, provider types, and configured phases
-- Active and skipped phases based on flags
-
-Example output:
-
-```json
-{
-  "dryRun": true,
-  "executionPlan": {
-    "totalResolvers": 3,
-    "totalPhases": 2,
-    "activePhases": ["resolve", "transform", "validate"],
-    "skippedPhases": [],
-    "phases": [
-      { "phase": 1, "resolvers": ["base_url", "unrelated"] },
-      { "phase": 2, "resolvers": ["endpoint"] }
-    ]
-  },
-  "resolvers": {
-    "base_url": {
-      "provider": "static",
-      "dependencies": [],
-      "configuredPhases": ["resolve"]
-    },
-    "endpoint": {
-      "provider": "static",
-      "dependencies": ["base_url"],
-      "configuredPhases": ["resolve", "transform"]
-    }
-  }
-}
-```
-
-Combine with skip flags to see what would be active:
-
-```bash
-scafctl run resolver --dry-run --skip-transform -f dep-demo.yaml -o json
-```
-
----
-
 ## Dependency Graph
 
 The `--graph` flag renders the resolver dependency graph **without executing any providers**. This is useful for understanding the structure and execution order of your resolvers.
@@ -580,7 +528,7 @@ scafctl run resolver endpoint unrelated -f dep-demo.yaml -o json `
 This is useful for generating focused dependency visualizations of a resolver subset without rendering the full solution graph.
 
 {{% hint info %}}
-`--graph` is mutually exclusive with `--dry-run` and `--snapshot`.
+`--graph` is mutually exclusive with `--snapshot`.
 {{% /hint %}}
 
 ---
@@ -618,7 +566,7 @@ Resolvers marked with `sensitive: true` will have their values replaced in the s
 - **Support**: Redacted snapshots can be shared without exposing secrets
 
 {{% hint info %}}
-`--snapshot` requires `--snapshot-file` to be specified. It is mutually exclusive with `--dry-run` and `--graph`.
+`--snapshot` requires `--snapshot-file` to be specified. It is mutually exclusive with `--graph`.
 {{% /hint %}}
 
 ---
@@ -870,10 +818,10 @@ scafctl run resolver --skip-transform -f dep-demo.yaml -o json --hide-execution
 
 ### Preview Execution Plan
 
-See what would happen without running anything:
+Use `--graph` to see the resolver execution plan without running anything:
 
 ```bash
-scafctl run resolver --dry-run -f dep-demo.yaml -o json
+scafctl run resolver --graph -f dep-demo.yaml
 ```
 
 ### Comparing Resolver Outputs
@@ -923,9 +871,6 @@ scafctl run resolver -f solution.yaml -o json --hide-execution
 
 # Skip transform and validation phases
 scafctl run resolver --skip-transform -f solution.yaml
-
-# Show execution plan without running
-scafctl run resolver --dry-run -f solution.yaml
 
 # Dependency graph (ASCII)
 scafctl run resolver --graph -f solution.yaml

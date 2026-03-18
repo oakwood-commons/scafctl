@@ -14,6 +14,8 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/plugin/proto"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -129,6 +131,31 @@ func (s *GRPCServer) ExecuteProvider(ctx context.Context, req *proto.ExecuteProv
 	}, nil
 }
 
+// DescribeWhatIf implements the DescribeWhatIf RPC
+func (s *GRPCServer) DescribeWhatIf(ctx context.Context, req *proto.DescribeWhatIfRequest) (*proto.DescribeWhatIfResponse, error) {
+	var input map[string]any
+	if len(req.Input) > 0 {
+		if err := json.Unmarshal(req.Input, &input); err != nil {
+			//nolint:nilerr // Error is communicated via response, not gRPC error
+			return &proto.DescribeWhatIfResponse{
+				Error: fmt.Sprintf("failed to decode input: %v", err),
+			}, nil
+		}
+	}
+
+	description, err := s.Impl.DescribeWhatIf(ctx, req.ProviderName, input)
+	if err != nil {
+		//nolint:nilerr // Error is communicated via response, not gRPC error
+		return &proto.DescribeWhatIfResponse{
+			Error: err.Error(),
+		}, nil
+	}
+
+	return &proto.DescribeWhatIfResponse{
+		Description: description,
+	}, nil
+}
+
 // GRPCClient implements the gRPC client for the plugin
 type GRPCClient struct {
 	client proto.PluginServiceClient
@@ -197,6 +224,33 @@ func (c *GRPCClient) ExecuteProvider(ctx context.Context, providerName string, i
 	return &output, nil
 }
 
+// DescribeWhatIf implements ProviderPlugin.DescribeWhatIf
+func (c *GRPCClient) DescribeWhatIf(ctx context.Context, providerName string, input map[string]any) (string, error) {
+	inputBytes, err := json.Marshal(input)
+	if err != nil {
+		return "", fmt.Errorf("failed to encode input: %w", err)
+	}
+
+	resp, err := c.client.DescribeWhatIf(ctx, &proto.DescribeWhatIfRequest{
+		ProviderName: providerName,
+		Input:        inputBytes,
+	})
+	if err != nil {
+		// Older plugins may not implement DescribeWhatIf — return empty
+		// so the caller falls back to a generic message.
+		if s, ok := status.FromError(err); ok && s.Code() == codes.Unimplemented {
+			return "", nil
+		}
+		return "", err
+	}
+
+	if resp.Error != "" {
+		return "", fmt.Errorf("DescribeWhatIf failed: %s", resp.Error)
+	}
+
+	return resp.Description, nil
+}
+
 // descriptorToProto converts provider.Descriptor to proto.ProviderDescriptor
 func descriptorToProto(desc *provider.Descriptor) *proto.ProviderDescriptor {
 	version := ""
@@ -211,7 +265,6 @@ func descriptorToProto(desc *provider.Descriptor) *proto.ProviderDescriptor {
 		Category:        desc.Category,
 		Capabilities:    make([]string, len(desc.Capabilities)),
 		ApiVersion:      desc.APIVersion,
-		MockBehavior:    desc.MockBehavior,
 		SensitiveFields: desc.SensitiveFields,
 		Tags:            desc.Tags,
 		Icon:            desc.Icon,
@@ -346,7 +399,6 @@ func protoToDescriptor(protoDesc *proto.ProviderDescriptor) (*provider.Descripto
 		Category:        protoDesc.Category,
 		Capabilities:    make([]provider.Capability, len(protoDesc.Capabilities)),
 		APIVersion:      protoDesc.ApiVersion,
-		MockBehavior:    protoDesc.MockBehavior,
 		SensitiveFields: protoDesc.SensitiveFields,
 		Tags:            protoDesc.Tags,
 		Icon:            protoDesc.Icon,

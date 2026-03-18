@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file.
 
 ### 🚀 Features
 
+- *(dryrun)* [**breaking**] Replace static `MockBehavior` string with dynamic `WhatIf` function on provider `Descriptor` for context-aware dry-run messages
+- *(dryrun)* [**breaking**] Remove resolver-level dry-run (`run resolver --dry-run` removed); use `run solution --dry-run` or `run resolver --graph` instead
+- *(dryrun)* [**breaking**] Resolvers now execute normally during dry-run (side-effect-free) instead of being mocked, providing real data for WhatIf messages
+- *(dryrun)* Add `--verbose` flag to `run solution --dry-run` to include materialized inputs in report
+- *(plugin)* Add `DescribeWhatIf` gRPC RPC so plugin providers generate WhatIf messages identical to builtin providers
+- *(mcp)* [**breaking**] Rename `mock_data` parameter to `resolver_overrides` in `dry_run_solution` MCP tool
 - *(file)* [**breaking**] Add conflict resolution strategies to file provider (`onConflict` input with five strategies: `error`, `overwrite`, `skip`, `skip-unchanged`, `append`)
 - *(file)* [**breaking**] Change file provider default write behavior from silent-overwrite to `skip-unchanged` (SHA256 content comparison)
 - *(file)* [**breaking**] Change `filesWritten` semantics in `write-tree` output from `len(entries)` to `created + overwritten + appended` (files actually written to disk)

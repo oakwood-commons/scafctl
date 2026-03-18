@@ -12,6 +12,10 @@ service PluginService {
   
   // ExecuteProvider executes a provider
   rpc ExecuteProvider(ExecuteProviderRequest) returns (ExecuteProviderResponse);
+
+  // DescribeWhatIf returns a human-readable description of what the provider
+  // would do with the given inputs, without executing.
+  rpc DescribeWhatIf(DescribeWhatIfRequest) returns (DescribeWhatIfResponse);
 }
 
 // AuthHandlerService is the auth handler plugin service.
@@ -63,7 +67,8 @@ message ProviderDescriptor {
   Schema schema = 7;
   map<string, Schema> output_schemas = 8;  // key is capability string (from, transform, validation, authentication, action)
   string api_version = 9;
-  string mock_behavior = 10;
+  reserved 10; // was mock_behavior, removed
+  reserved "mock_behavior";
   repeated string sensitive_fields = 11;
   repeated string tags = 12;
   string icon = 13;
@@ -118,6 +123,16 @@ message ExecuteProviderRequest {
 message ExecuteProviderResponse {
   bytes output = 1; // JSON-encoded output (ProviderOutput)
   string error = 2;  // Empty if no error
+}
+
+message DescribeWhatIfRequest {
+  string provider_name = 1;
+  bytes input = 2; // JSON-encoded input map
+}
+
+message DescribeWhatIfResponse {
+  string description = 1; // Human-readable WhatIf description (empty if not implemented)
+  string error = 2;       // Empty if no error
 }
 
 // ---- Auth Handler Messages ----

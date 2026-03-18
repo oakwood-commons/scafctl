@@ -15,8 +15,8 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
-	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 )
 
 // helpers
@@ -37,14 +37,13 @@ func (m *mockProvider) Execute(_ context.Context, _ any) (*provider.Output, erro
 	return nil, nil
 }
 
-func newMockProvider(name, mockBehavior string) *mockProvider {
+func newMockProvider(name string) *mockProvider {
 	return &mockProvider{
 		desc: &provider.Descriptor{
 			Name:         name,
 			APIVersion:   "v1",
 			Version:      semver.MustParse("1.0.0"),
 			Description:  fmt.Sprintf("Mock %s provider for testing", name),
-			MockBehavior: mockBehavior,
 			Capabilities: []provider.Capability{provider.CapabilityAction},
 			Schema: &jsonschema.Schema{
 				Type: "object",
@@ -64,6 +63,12 @@ func newMockProvider(name, mockBehavior string) *mockProvider {
 	}
 }
 
+func newMockProviderWithWhatIf(name string, whatIf func(context.Context, any) (string, error)) *mockProvider {
+	mp := newMockProvider(name)
+	mp.desc.WhatIf = whatIf
+	return mp
+}
+
 // basic fields
 
 func TestGenerate_BasicFields(t *testing.T) {
@@ -76,7 +81,6 @@ func TestGenerate_BasicFields(t *testing.T) {
 	assert.True(t, report.DryRun)
 	assert.Equal(t, "test-app", report.Solution)
 	assert.Equal(t, "2.5.0", report.Version)
-	assert.False(t, report.HasResolvers)
 	assert.False(t, report.HasWorkflow)
 }
 
@@ -86,82 +90,6 @@ func TestGenerate_NilVersion(t *testing.T) {
 	report, err := Generate(context.Background(), sol, Options{})
 	require.NoError(t, err)
 	assert.Equal(t, "", report.Version)
-}
-
-func TestGenerate_Parameters(t *testing.T) {
-	sol := minimalSolution("app")
-	params := map[string]any{"env": "dev", "count": 3}
-
-	report, err := Generate(context.Background(), sol, Options{Params: params})
-	require.NoError(t, err)
-	assert.Equal(t, params, report.Parameters)
-}
-
-// resolvers
-
-func TestGenerate_ResolversResolved(t *testing.T) {
-	sol := minimalSolution("app")
-	sol.Spec.Resolvers = map[string]*resolver.Resolver{
-		"name":   {},
-		"region": {},
-	}
-
-	data := map[string]any{
-		"name":   "my-app",
-		"region": "us-east-1",
-	}
-
-	report, err := Generate(context.Background(), sol, Options{ResolverData: data})
-	require.NoError(t, err)
-
-	assert.True(t, report.HasResolvers)
-	require.Len(t, report.Resolvers, 2)
-
-	nameRes := report.Resolvers["name"]
-	assert.Equal(t, "my-app", nameRes.Value)
-	assert.Equal(t, "resolved", nameRes.Status)
-	assert.True(t, nameRes.DryRun)
-}
-
-func TestGenerate_ResolverMissing(t *testing.T) {
-	sol := minimalSolution("app")
-	sol.Spec.Resolvers = map[string]*resolver.Resolver{
-		"name": {},
-	}
-
-	report, err := Generate(context.Background(), sol, Options{ResolverData: map[string]any{}})
-	require.NoError(t, err)
-
-	nameRes := report.Resolvers["name"]
-	assert.Equal(t, "not-resolved", nameRes.Status)
-	assert.True(t, nameRes.DryRun)
-	assert.Nil(t, nameRes.Value)
-
-	require.Len(t, report.Warnings, 1)
-	assert.Contains(t, report.Warnings[0], `resolver "name" did not produce a value`)
-}
-
-func TestGenerate_NilResolverData(t *testing.T) {
-	sol := minimalSolution("app")
-	sol.Spec.Resolvers = map[string]*resolver.Resolver{
-		"x": {},
-	}
-
-	report, err := Generate(context.Background(), sol, Options{})
-	require.NoError(t, err)
-
-	assert.Equal(t, "not-resolved", report.Resolvers["x"].Status)
-	assert.Len(t, report.Warnings, 1)
-}
-
-func TestGenerate_NoResolvers(t *testing.T) {
-	sol := minimalSolution("app")
-
-	report, err := Generate(context.Background(), sol, Options{})
-	require.NoError(t, err)
-
-	assert.False(t, report.HasResolvers)
-	assert.Empty(t, report.Resolvers)
 }
 
 // action plan
@@ -220,19 +148,10 @@ func TestGenerate_NoWorkflow(t *testing.T) {
 	assert.Zero(t, report.TotalActions)
 }
 
-// mock behaviors
+// whatif messages
 
-func TestGenerate_MockBehaviorsFromRegistry(t *testing.T) {
+func TestGenerate_WhatIfFromProvider(t *testing.T) {
 	sol := minimalSolution("app")
-	sol.Spec.Resolvers = map[string]*resolver.Resolver{
-		"name": {
-			Resolve: &resolver.ResolvePhase{
-				With: []resolver.ProviderSource{
-					{Provider: "parameter"},
-				},
-			},
-		},
-	}
 	sol.Spec.Workflow = &action.Workflow{
 		Actions: map[string]*action.Action{
 			"deploy": {Provider: "shell"},
@@ -240,19 +159,41 @@ func TestGenerate_MockBehaviorsFromRegistry(t *testing.T) {
 	}
 
 	reg := provider.NewRegistry(provider.WithAllowOverwrite(true))
-	require.NoError(t, reg.Register(newMockProvider("parameter", "Returns configured default value")))
-	require.NoError(t, reg.Register(newMockProvider("shell", "Echoes command without executing")))
+	require.NoError(t, reg.Register(newMockProvider("shell")))
 
 	report, err := Generate(context.Background(), sol, Options{Registry: reg})
 	require.NoError(t, err)
-
-	require.Len(t, report.MockBehaviors, 2)
-	assert.Equal(t, "parameter", report.MockBehaviors[0].Provider)
-	assert.Equal(t, "Returns configured default value", report.MockBehaviors[0].MockBehavior)
-	assert.Equal(t, "shell", report.MockBehaviors[1].Provider)
+	require.Len(t, report.ActionPlan, 1)
+	assert.Equal(t, "Would execute shell provider", report.ActionPlan[0].WhatIf)
 }
 
-func TestGenerate_NilRegistryNoMockBehaviors(t *testing.T) {
+func TestGenerate_WhatIfUsesWhatIfFunc(t *testing.T) {
+	sol := minimalSolution("app")
+	sol.Spec.Workflow = &action.Workflow{
+		Actions: map[string]*action.Action{
+			"deploy": {
+				Provider: "shell",
+				Inputs:   map[string]*spec.ValueRef{"command": {Literal: "./deploy.sh"}},
+			},
+		},
+	}
+
+	reg := provider.NewRegistry(provider.WithAllowOverwrite(true))
+	require.NoError(t, reg.Register(newMockProviderWithWhatIf("shell",
+		func(_ context.Context, input any) (string, error) {
+			inputs, _ := input.(map[string]any)
+			cmd, _ := inputs["command"].(string)
+			return fmt.Sprintf("Would execute %s", cmd), nil
+		},
+	)))
+
+	report, err := Generate(context.Background(), sol, Options{Registry: reg})
+	require.NoError(t, err)
+	require.Len(t, report.ActionPlan, 1)
+	assert.Equal(t, "Would execute ./deploy.sh", report.ActionPlan[0].WhatIf)
+}
+
+func TestGenerate_WhatIfFallbackNoRegistry(t *testing.T) {
 	sol := minimalSolution("app")
 	sol.Spec.Workflow = &action.Workflow{
 		Actions: map[string]*action.Action{
@@ -262,72 +203,79 @@ func TestGenerate_NilRegistryNoMockBehaviors(t *testing.T) {
 
 	report, err := Generate(context.Background(), sol, Options{})
 	require.NoError(t, err)
-	assert.Empty(t, report.MockBehaviors)
-}
-
-func TestGenerate_ActionMockBehaviorFromRegistry(t *testing.T) {
-	sol := minimalSolution("app")
-	sol.Spec.Workflow = &action.Workflow{
-		Actions: map[string]*action.Action{
-			"deploy": {Provider: "shell"},
-		},
-	}
-
-	reg := provider.NewRegistry(provider.WithAllowOverwrite(true))
-	require.NoError(t, reg.Register(newMockProvider("shell", "Echoes command")))
-
-	report, err := Generate(context.Background(), sol, Options{Registry: reg})
-	require.NoError(t, err)
 	require.Len(t, report.ActionPlan, 1)
-	assert.Equal(t, "Echoes command", report.ActionPlan[0].MockBehavior)
+	assert.Equal(t, "Would execute shell provider", report.ActionPlan[0].WhatIf)
 }
 
-// finally section
+// verbose mode
 
-func TestGenerate_FinallyProvidersInMockBehaviors(t *testing.T) {
+func TestGenerate_VerboseIncludesMaterializedInputs(t *testing.T) {
 	sol := minimalSolution("app")
 	sol.Spec.Workflow = &action.Workflow{
 		Actions: map[string]*action.Action{
-			"deploy": {Provider: "shell"},
-		},
-		Finally: map[string]*action.Action{
-			"cleanup": {Provider: "http"},
-		},
-	}
-
-	reg := provider.NewRegistry(provider.WithAllowOverwrite(true))
-	require.NoError(t, reg.Register(newMockProvider("shell", "mock shell behavior")))
-	require.NoError(t, reg.Register(newMockProvider("http", "mock http request")))
-
-	report, err := Generate(context.Background(), sol, Options{Registry: reg})
-	require.NoError(t, err)
-
-	providers := make(map[string]bool)
-	for _, mb := range report.MockBehaviors {
-		providers[mb.Provider] = true
-	}
-	assert.True(t, providers["shell"])
-	assert.True(t, providers["http"])
-}
-
-// empty provider filtered
-
-func TestGenerate_EmptyProviderFiltered(t *testing.T) {
-	sol := minimalSolution("app")
-	sol.Spec.Resolvers = map[string]*resolver.Resolver{
-		"name": {
-			Resolve: &resolver.ResolvePhase{
-				With: []resolver.ProviderSource{
-					{Provider: ""},
-				},
+			"deploy": {
+				Provider: "shell",
+				Inputs:   map[string]*spec.ValueRef{"command": {Literal: "echo hello"}},
 			},
 		},
 	}
 
-	reg := provider.NewRegistry(provider.WithAllowOverwrite(true))
-	report, err := Generate(context.Background(), sol, Options{Registry: reg})
+	report, err := Generate(context.Background(), sol, Options{Verbose: true})
 	require.NoError(t, err)
-	assert.Empty(t, report.MockBehaviors)
+	require.Len(t, report.ActionPlan, 1)
+	assert.NotEmpty(t, report.ActionPlan[0].MaterializedInputs)
+}
+
+func TestGenerate_NonVerboseExcludesMaterializedInputs(t *testing.T) {
+	sol := minimalSolution("app")
+	sol.Spec.Workflow = &action.Workflow{
+		Actions: map[string]*action.Action{
+			"deploy": {
+				Provider: "shell",
+				Inputs:   map[string]*spec.ValueRef{"command": {Literal: "echo hello"}},
+			},
+		},
+	}
+
+	report, err := Generate(context.Background(), sol, Options{Verbose: false})
+	require.NoError(t, err)
+	require.Len(t, report.ActionPlan, 1)
+	assert.Empty(t, report.ActionPlan[0].MaterializedInputs)
+}
+
+// warnings
+
+func TestGenerate_GraphBuildFailureWarning(t *testing.T) {
+	sol := minimalSolution("app")
+	sol.Spec.Workflow = &action.Workflow{
+		Actions: map[string]*action.Action{
+			"a": {Provider: "shell", DependsOn: []string{"b"}},
+			"b": {Provider: "shell", DependsOn: []string{"a"}},
+		},
+	}
+
+	report, err := Generate(context.Background(), sol, Options{})
+	require.NoError(t, err)
+	require.NotEmpty(t, report.Warnings)
+	assert.Contains(t, report.Warnings[0], "action graph build failed")
+}
+
+// describeWhatIf helper
+
+func TestDescribeWhatIf_NilRegistry(t *testing.T) {
+	msg := describeWhatIf(context.Background(), nil, "shell", nil)
+	assert.Equal(t, "Would execute shell provider", msg)
+}
+
+func TestDescribeWhatIf_EmptyProvider(t *testing.T) {
+	msg := describeWhatIf(context.Background(), nil, "", nil)
+	assert.Equal(t, "Would execute action", msg)
+}
+
+func TestDescribeWhatIf_UnknownProvider(t *testing.T) {
+	reg := provider.NewRegistry()
+	msg := describeWhatIf(context.Background(), reg, "nonexistent", nil)
+	assert.Equal(t, "Would execute nonexistent provider", msg)
 }
 
 // versionString
@@ -354,25 +302,6 @@ func BenchmarkGenerate_MinimalSolution(b *testing.B) {
 	}
 }
 
-func BenchmarkGenerate_WithResolvers(b *testing.B) {
-	sol := minimalSolution("bench-app")
-	sol.Spec.Resolvers = make(map[string]*resolver.Resolver, 20)
-	data := make(map[string]any, 20)
-	for i := 0; i < 20; i++ {
-		name := fmt.Sprintf("resolver_%d", i)
-		sol.Spec.Resolvers[name] = &resolver.Resolver{}
-		data[name] = fmt.Sprintf("value_%d", i)
-	}
-
-	opts := Options{ResolverData: data}
-	ctx := context.Background()
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, _ = Generate(ctx, sol, opts)
-	}
-}
-
 func BenchmarkGenerate_WithWorkflow(b *testing.B) {
 	sol := minimalSolution("bench-app")
 	sol.Spec.Workflow = &action.Workflow{
@@ -386,6 +315,36 @@ func BenchmarkGenerate_WithWorkflow(b *testing.B) {
 	}
 
 	opts := Options{}
+	ctx := context.Background()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = Generate(ctx, sol, opts)
+	}
+}
+
+func BenchmarkGenerate_WithWhatIf(b *testing.B) {
+	sol := minimalSolution("bench-app")
+	sol.Spec.Workflow = &action.Workflow{
+		Actions: make(map[string]*action.Action, 10),
+	}
+	for i := 0; i < 10; i++ {
+		sol.Spec.Workflow.Actions[fmt.Sprintf("action_%d", i)] = &action.Action{
+			Provider: "shell",
+			Inputs:   map[string]*spec.ValueRef{"command": {Literal: fmt.Sprintf("echo %d", i)}},
+		}
+	}
+
+	reg := provider.NewRegistry(provider.WithAllowOverwrite(true))
+	_ = reg.Register(newMockProviderWithWhatIf("shell",
+		func(_ context.Context, input any) (string, error) {
+			inputs, _ := input.(map[string]any)
+			cmd, _ := inputs["command"].(string)
+			return fmt.Sprintf("Would execute %s", cmd), nil
+		},
+	))
+
+	opts := Options{Registry: reg}
 	ctx := context.Background()
 
 	b.ResetTimer()

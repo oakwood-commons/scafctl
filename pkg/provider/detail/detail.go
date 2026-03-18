@@ -25,7 +25,6 @@ func BuildProviderDetail(desc provider.Descriptor) map[string]any {
 		"version":      desc.Version.String(),
 		"description":  desc.Description,
 		"capabilities": CapabilitiesToStrings(desc.Capabilities),
-		"mockBehavior": desc.MockBehavior,
 	}
 
 	if desc.Category != "" {

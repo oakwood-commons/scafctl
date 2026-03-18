@@ -22,6 +22,7 @@ const (
 	PluginService_GetProviders_FullMethodName          = "/plugin.PluginService/GetProviders"
 	PluginService_GetProviderDescriptor_FullMethodName = "/plugin.PluginService/GetProviderDescriptor"
 	PluginService_ExecuteProvider_FullMethodName       = "/plugin.PluginService/ExecuteProvider"
+	PluginService_DescribeWhatIf_FullMethodName        = "/plugin.PluginService/DescribeWhatIf"
 )
 
 // PluginServiceClient is the client API for PluginService service.
@@ -36,6 +37,9 @@ type PluginServiceClient interface {
 	GetProviderDescriptor(ctx context.Context, in *GetProviderDescriptorRequest, opts ...grpc.CallOption) (*GetProviderDescriptorResponse, error)
 	// ExecuteProvider executes a provider
 	ExecuteProvider(ctx context.Context, in *ExecuteProviderRequest, opts ...grpc.CallOption) (*ExecuteProviderResponse, error)
+	// DescribeWhatIf returns a human-readable description of what the provider
+	// would do with the given inputs, without executing.
+	DescribeWhatIf(ctx context.Context, in *DescribeWhatIfRequest, opts ...grpc.CallOption) (*DescribeWhatIfResponse, error)
 }
 
 type pluginServiceClient struct {
@@ -76,6 +80,16 @@ func (c *pluginServiceClient) ExecuteProvider(ctx context.Context, in *ExecutePr
 	return out, nil
 }
 
+func (c *pluginServiceClient) DescribeWhatIf(ctx context.Context, in *DescribeWhatIfRequest, opts ...grpc.CallOption) (*DescribeWhatIfResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DescribeWhatIfResponse)
+	err := c.cc.Invoke(ctx, PluginService_DescribeWhatIf_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PluginServiceServer is the server API for PluginService service.
 // All implementations must embed UnimplementedPluginServiceServer
 // for forward compatibility.
@@ -88,6 +102,9 @@ type PluginServiceServer interface {
 	GetProviderDescriptor(context.Context, *GetProviderDescriptorRequest) (*GetProviderDescriptorResponse, error)
 	// ExecuteProvider executes a provider
 	ExecuteProvider(context.Context, *ExecuteProviderRequest) (*ExecuteProviderResponse, error)
+	// DescribeWhatIf returns a human-readable description of what the provider
+	// would do with the given inputs, without executing.
+	DescribeWhatIf(context.Context, *DescribeWhatIfRequest) (*DescribeWhatIfResponse, error)
 	mustEmbedUnimplementedPluginServiceServer()
 }
 
@@ -106,6 +123,9 @@ func (UnimplementedPluginServiceServer) GetProviderDescriptor(context.Context, *
 }
 func (UnimplementedPluginServiceServer) ExecuteProvider(context.Context, *ExecuteProviderRequest) (*ExecuteProviderResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ExecuteProvider not implemented")
+}
+func (UnimplementedPluginServiceServer) DescribeWhatIf(context.Context, *DescribeWhatIfRequest) (*DescribeWhatIfResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DescribeWhatIf not implemented")
 }
 func (UnimplementedPluginServiceServer) mustEmbedUnimplementedPluginServiceServer() {}
 func (UnimplementedPluginServiceServer) testEmbeddedByValue()                       {}
@@ -182,6 +202,24 @@ func _PluginService_ExecuteProvider_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PluginService_DescribeWhatIf_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DescribeWhatIfRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PluginServiceServer).DescribeWhatIf(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PluginService_DescribeWhatIf_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PluginServiceServer).DescribeWhatIf(ctx, req.(*DescribeWhatIfRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PluginService_ServiceDesc is the grpc.ServiceDesc for PluginService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -200,6 +238,10 @@ var PluginService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ExecuteProvider",
 			Handler:    _PluginService_ExecuteProvider_Handler,
+		},
+		{
+			MethodName: "DescribeWhatIf",
+			Handler:    _PluginService_DescribeWhatIf_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -43,13 +43,37 @@ func NewGoTemplateProvider() *GoTemplateProvider {
 	return &GoTemplateProvider{
 		service: gotmpl.NewService(nil),
 		descriptor: &provider.Descriptor{
-			Name:         ProviderName,
-			DisplayName:  "Go Template Provider",
-			APIVersion:   "v1",
-			Description:  "Transform and render data using Go text/template syntax with resolver data from context. Supports single template rendering (operation: render) and batch directory tree rendering (operation: render-tree).",
-			Version:      version,
-			Category:     "data",
-			MockBehavior: "Returns a placeholder indicating the template was not executed (same as CEL provider dry-run behavior)",
+			Name:        ProviderName,
+			DisplayName: "Go Template Provider",
+			APIVersion:  "v1",
+			Description: "Transform and render data using Go text/template syntax with resolver data from context. Supports single template rendering (operation: render) and batch directory tree rendering (operation: render-tree).",
+			Version:     version,
+			Category:    "data",
+			WhatIf: func(_ context.Context, input any) (string, error) {
+				inputs, ok := input.(map[string]any)
+				if !ok {
+					return "", nil
+				}
+				operation, _ := inputs["operation"].(string)
+				if operation == "" {
+					operation = OperationRender
+				}
+				name, _ := inputs["name"].(string)
+				switch operation {
+				case OperationRender:
+					if name != "" {
+						return fmt.Sprintf("Would render template %q", name), nil
+					}
+					return "Would render Go template", nil
+				case OperationRenderTree:
+					if name != "" {
+						return fmt.Sprintf("Would render template tree %q", name), nil
+					}
+					return "Would render Go template tree", nil
+				default:
+					return fmt.Sprintf("Would perform Go template %s", operation), nil
+				}
+			},
 			Capabilities: []provider.Capability{
 				provider.CapabilityTransform,
 				provider.CapabilityAction,

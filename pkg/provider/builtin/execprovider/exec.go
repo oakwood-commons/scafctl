@@ -40,7 +40,31 @@ func NewExecProvider() *ExecProvider {
 				"Commands work identically on Linux, macOS, and Windows without requiring external shell binaries. " +
 				"Supports pipes, redirections, variable expansion, and common coreutils on all platforms. " +
 				"Optionally use external shells (bash, pwsh, cmd) for platform-specific features.",
-			MockBehavior: "Returns mock command output without executing actual shell command",
+			WhatIf: func(_ context.Context, input any) (string, error) {
+				inputs, ok := input.(map[string]any)
+				if !ok {
+					return "", nil
+				}
+				command, _ := inputs["command"].(string)
+				shell, _ := inputs["shell"].(string)
+				if shell == "" {
+					shell = "auto"
+				}
+				var args []string
+				if argsRaw, ok := inputs["args"]; ok && argsRaw != nil {
+					if argSlice, ok := argsRaw.([]any); ok {
+						for _, arg := range argSlice {
+							args = append(args, fmt.Sprint(arg))
+						}
+					}
+				}
+				fullCmd := shellexec.BuildFullCommand(command, args)
+				msg := fmt.Sprintf("Would execute via %s shell: %s", shell, fullCmd)
+				if workingDir, ok := inputs["workingDir"].(string); ok && workingDir != "" {
+					msg += fmt.Sprintf(" in directory: %s", workingDir)
+				}
+				return msg, nil
+			},
 			Capabilities: []provider.Capability{
 				provider.CapabilityAction, // Side effects (command execution)
 				provider.CapabilityFrom,   // Read-only commands

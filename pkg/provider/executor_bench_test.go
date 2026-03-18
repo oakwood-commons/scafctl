@@ -137,7 +137,6 @@ func BenchmarkExecutor_Execute_MixedInputs(b *testing.B) {
 			APIVersion:   "v1",
 			Version:      version,
 			Description:  "Test provider for benchmarking mixed inputs",
-			MockBehavior: "Returns mock output for benchmarking",
 			Capabilities: []Capability{CapabilityFrom},
 			Schema: schemahelper.ObjectSchema([]string{"literal", "rslvr", "expr", "template"}, map[string]*jsonschema.Schema{
 				"literal":  schemahelper.StringProp(""),
@@ -252,7 +251,6 @@ func BenchmarkExecutor_Execute_ComplexSchema(b *testing.B) {
 			APIVersion:   "v1",
 			Version:      version,
 			Description:  "Complex provider for benchmarking",
-			MockBehavior: "Returns mock output for benchmarking",
 			Capabilities: []Capability{CapabilityFrom, CapabilityTransform},
 			Schema: schemahelper.ObjectSchema([]string{"string1", "string2", "int1", "bool1", "float1"}, map[string]*jsonschema.Schema{
 				"string1":  schemahelper.StringProp(""),
@@ -356,7 +354,6 @@ func BenchmarkExecutionResult_Creation(b *testing.B) {
 			APIVersion:   "v1",
 			Version:      version,
 			Description:  "Test provider for benchmarking result creation",
-			MockBehavior: "Returns mock output for benchmarking",
 			Capabilities: []Capability{CapabilityFrom},
 			Schema:       schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{}),
 		},

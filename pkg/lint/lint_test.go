@@ -44,7 +44,6 @@ func newFakeProvider(name string, props map[string]*jsonschema.Schema) *fakeProv
 				provider.CapabilityFrom: {Type: "object"},
 			},
 			Description:  "Test provider",
-			MockBehavior: "Returns test data",
 			Capabilities: []provider.Capability{provider.CapabilityFrom},
 		},
 	}

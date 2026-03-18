@@ -29,10 +29,9 @@ type mockProvider struct {
 
 func (m *mockProvider) Descriptor() *provider.Descriptor {
 	return &provider.Descriptor{
-		Name:         m.name,
-		APIVersion:   "v1",
-		Description:  "Mock provider for testing",
-		MockBehavior: "Returns mock output for testing purposes",
+		Name:        m.name,
+		APIVersion:  "v1",
+		Description: "Mock provider for testing",
 	}
 }
 

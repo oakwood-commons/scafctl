@@ -44,6 +44,9 @@ type SolutionOptions struct {
 	MaxActionConcurrency int
 	DryRun               bool
 
+	// Verbose includes MaterializedInputs in dry-run reports.
+	Verbose bool
+
 	// ShowExecution enables __execution metadata in output
 	ShowExecution bool
 
@@ -190,6 +193,7 @@ Examples:
 	cCmd.Flags().DurationVar(&options.ActionTimeout, "action-timeout", settings.DefaultActionTimeout, "Default timeout per action")
 	cCmd.Flags().IntVar(&options.MaxActionConcurrency, "max-action-concurrency", 0, "Maximum concurrent actions (0=unlimited)")
 	cCmd.Flags().BoolVar(&options.DryRun, "dry-run", false, "Validate and show what would be executed without running")
+	cCmd.Flags().BoolVar(&options.Verbose, "verbose", false, "When combined with --dry-run, include materialized inputs in report")
 	cCmd.Flags().BoolVar(&options.ShowExecution, "show-execution", false, "Include __execution metadata in output (phases, timing, dependencies, providers)")
 
 	// File conflict strategy flags
@@ -345,6 +349,14 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		return o.executeDryRun(actionCtx, sol, reg, params)
 	}
 
+	// Warn if --verbose is used without --dry-run
+	if o.Verbose {
+		w := writer.FromContext(ctx)
+		if w != nil {
+			w.Warningf("--verbose has no effect without --dry-run")
+		}
+	}
+
 	// Execute resolvers if present
 	resolvers := sol.Spec.ResolversToSlice()
 
@@ -402,14 +414,14 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	return o.writeActionOutput(ctx, result, executionData)
 }
 
-// executeDryRun runs resolvers in dry-run mode and produces a structured report
-// showing what a full solution execution would do without side effects.
+// executeDryRun executes resolvers normally (they are side-effect-free) and
+// produces a structured WhatIf report showing what actions would do.
 func (o *SolutionOptions) executeDryRun(ctx context.Context, sol *solution.Solution, reg *provider.Registry, params map[string]any) error {
-	// Execute resolvers in dry-run mode to get preview data
+	// Execute resolvers normally — resolver providers are side-effect-free,
+	// so we get real data for WhatIf message generation.
 	var resolverData map[string]any
 	if sol.Spec.HasResolvers() {
 		cfg := ResolverExecutionConfigFromContext(ctx)
-		cfg.DryRun = true
 		result, err := ExecuteResolvers(ctx, sol, params, reg, cfg)
 		if err != nil {
 			// Non-fatal — report will include warnings
@@ -420,9 +432,9 @@ func (o *SolutionOptions) executeDryRun(ctx context.Context, sol *solution.Solut
 	}
 
 	report, err := dryrun.Generate(ctx, sol, dryrun.Options{
-		Params:       params,
 		Registry:     reg,
 		ResolverData: resolverData,
+		Verbose:      o.Verbose,
 	})
 	if err != nil {
 		return o.exitWithCode(ctx, fmt.Errorf("dry-run failed: %w", err), exitcode.GeneralError)
@@ -460,84 +472,59 @@ func (o *SolutionOptions) writeDryRunOutput(ctx context.Context, report *dryrun.
 	}
 }
 
-// writeDryRunTable renders a human-readable dry-run report to the terminal.
+// writeDryRunTable renders a human-readable WhatIf dry-run report to the terminal.
 func (o *SolutionOptions) writeDryRunTable(ctx context.Context, report *dryrun.Report) error {
 	w := writer.FromContext(ctx)
 	if w == nil {
 		return nil
 	}
 
-	w.Plainln("=== DRY RUN ===")
-	w.Plainln("")
-	w.Plainlnf("Solution:     %s", report.Solution)
+	// Header
+	version := ""
 	if report.Version != "" {
-		w.Plainlnf("Version:      %s", report.Version)
+		version = fmt.Sprintf(" (v%s)", report.Version)
 	}
-	w.Plainlnf("Has resolvers: %t", report.HasResolvers)
-	w.Plainlnf("Has workflow:  %t", report.HasWorkflow)
+	w.Plainlnf("=== DRY RUN: What would happen ===")
+	w.Plainln("")
+	w.Plainlnf("Solution: %s%s", report.Solution, version)
 
-	// Parameters
-	if len(report.Parameters) > 0 {
-		w.Plainln("")
-		w.Plainln("PARAMETERS:")
-		for k, v := range report.Parameters {
-			w.Plainlnf("  %s = %v", k, v)
-		}
-	}
-
-	// Resolvers
-	if len(report.Resolvers) > 0 {
-		w.Plainln("")
-		w.Plainln("RESOLVERS:")
-		for name, r := range report.Resolvers {
-			status := r.Status
-			if r.Value != nil {
-				w.Plainlnf("  %-30s [%s] = %v", name, status, r.Value)
-			} else {
-				w.Plainlnf("  %-30s [%s]", name, status)
-			}
-		}
-	}
-
-	// Action plan
+	// Action plan grouped by phase
 	if len(report.ActionPlan) > 0 {
 		w.Plainln("")
-		w.Plainlnf("ACTION PLAN (%d actions, %d phases):", report.TotalActions, report.TotalPhases)
 		currentPhase := -1
 		for _, act := range report.ActionPlan {
 			if act.Phase != currentPhase {
 				currentPhase = act.Phase
-				w.Plainlnf("\n  Phase %d:", currentPhase)
+				w.Plainlnf("Phase %d:", currentPhase)
 			}
-			w.Plainlnf("    %s (%s/%s)", act.Name, act.Section, act.Provider)
-			if act.Description != "" {
-				w.Plainlnf("      desc: %s", act.Description)
+			w.Plainlnf("  What if: [%s] %s", act.Name, act.WhatIf)
+			if act.When != "" {
+				w.Plainlnf("    (when: %s)", act.When)
 			}
 			if len(act.Dependencies) > 0 {
-				w.Plainlnf("      deps: %s", strings.Join(act.Dependencies, ", "))
+				w.Plainlnf("    (depends on: %s)", strings.Join(act.Dependencies, ", "))
 			}
-			if act.When != "" {
-				w.Plainlnf("      when: %s", act.When)
+			if len(act.DeferredInputs) > 0 {
+				for k, v := range act.DeferredInputs {
+					w.Plainlnf("    (deferred: %s = %s)", k, v)
+				}
 			}
-			if act.MockBehavior != "" {
-				w.Plainlnf("      mock: %s", act.MockBehavior)
+			if len(act.MaterializedInputs) > 0 {
+				w.Plainlnf("    Inputs:")
+				for k, v := range act.MaterializedInputs {
+					w.Plainlnf("      %s: %v", k, v)
+				}
 			}
 		}
-	}
-
-	// Mock behaviors
-	if len(report.MockBehaviors) > 0 {
+	} else if !report.HasWorkflow {
 		w.Plainln("")
-		w.Plainln("PROVIDER MOCK BEHAVIORS:")
-		for _, mb := range report.MockBehaviors {
-			w.Plainlnf("  %-20s %s", mb.Provider+":", mb.MockBehavior)
-		}
+		w.Plainln("No workflow defined.")
 	}
 
 	// Warnings
 	if len(report.Warnings) > 0 {
 		w.Plainln("")
-		w.Plainln("WARNINGS:")
+		w.Plainln("Warnings:")
 		for _, wn := range report.Warnings {
 			w.Plainlnf("  - %s", wn)
 		}
