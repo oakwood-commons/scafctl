@@ -155,11 +155,13 @@ func RunEnvVarChecks() []Check {
 // returned by a well-known HTTPS endpoint (cloudflare.com).
 // A skew > 5 minutes can cause token validation failures.
 func RunClockSkewCheck() Check {
-	const endpoint = "https://cloudflare.com"
-	const maxSkew = 5 * time.Minute
-	const timeout = 4 * time.Second
+	return runClockSkewCheck(&http.Client{Timeout: 4 * time.Second}, "https://cloudflare.com")
+}
 
-	client := &http.Client{Timeout: timeout}
+// runClockSkewCheck is the testable implementation of RunClockSkewCheck.
+func runClockSkewCheck(client *http.Client, endpoint string) Check {
+	const maxSkew = 5 * time.Minute
+
 	before := time.Now()
 	resp, err := client.Head(endpoint) //nolint:noctx // no context needed for a simple diagnostic probe
 	if err != nil {

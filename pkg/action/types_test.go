@@ -66,6 +66,7 @@ func TestActionStatus_IsTerminal(t *testing.T) {
 		{"skipped", StatusSkipped, true},
 		{"timeout", StatusTimeout, true},
 		{"cancelled", StatusCancelled, true},
+		{"unknown", ActionStatus("unknown"), false},
 	}
 
 	for _, tt := range tests {
@@ -272,4 +273,29 @@ func TestActionResult_JSONRoundTrip(t *testing.T) {
 
 	assert.Equal(t, original.Status, restored.Status)
 	assert.Equal(t, original.Inputs["command"], restored.Inputs["command"])
+}
+
+func TestResultSchemaMode_IsValid(t *testing.T) {
+	tests := []struct {
+		mode     ResultSchemaMode
+		expected bool
+	}{
+		{ResultSchemaModeError, true},
+		{ResultSchemaModeWarn, true},
+		{ResultSchemaModeIgnore, true},
+		{"", true},
+		{"invalid", false},
+		{"unknown", false},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.mode), func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.mode.IsValid())
+		})
+	}
+}
+
+func TestResultSchemaMode_OrDefault(t *testing.T) {
+	assert.Equal(t, ResultSchemaModeError, ResultSchemaMode("").OrDefault())
+	assert.Equal(t, ResultSchemaModeWarn, ResultSchemaModeWarn.OrDefault())
+	assert.Equal(t, ResultSchemaModeIgnore, ResultSchemaModeIgnore.OrDefault())
 }

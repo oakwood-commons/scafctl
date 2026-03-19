@@ -874,3 +874,11 @@ func TestGraphQLError(t *testing.T) {
 	empty := &GraphQLError{}
 	assert.Equal(t, "unknown GraphQL error", empty.Error())
 }
+
+func TestMapIssueStateForMutation(t *testing.T) {
+	assert.Equal(t, "OPEN", mapIssueStateForMutation("open"))
+	assert.Equal(t, "OPEN", mapIssueStateForMutation("OPEN"))
+	assert.Equal(t, "CLOSED", mapIssueStateForMutation("closed"))
+	assert.Equal(t, "CLOSED", mapIssueStateForMutation("CLOSED"))
+	assert.Equal(t, "OTHER", mapIssueStateForMutation("OTHER"))
+}

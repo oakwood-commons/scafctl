@@ -574,3 +574,111 @@ skipBuiltins:
 	assert.False(t, tc2.SkipBuiltins.All)
 	assert.Equal(t, []string{"lint", "parse"}, tc2.SkipBuiltins.Names)
 }
+
+func TestTestNamePattern(t *testing.T) {
+	pat := soltesting.TestNamePattern()
+	assert.NotNil(t, pat)
+	assert.True(t, pat.MatchString("my-test"))
+	assert.True(t, pat.MatchString("MyTest123"))
+	assert.False(t, pat.MatchString("-invalid"))
+	assert.False(t, pat.MatchString(""))
+}
+
+func TestTemplateNamePattern(t *testing.T) {
+	pat := soltesting.TemplateNamePattern()
+	assert.NotNil(t, pat)
+	assert.True(t, pat.MatchString("_myTemplate"))
+	assert.False(t, pat.MatchString("noUnderscore"))
+	assert.False(t, pat.MatchString("_"))
+}
+
+func TestSkipValue_MarshalUnmarshalYAML(t *testing.T) {
+	t.Run("static true", func(t *testing.T) {
+		original := soltesting.SkipValue{Static: true}
+		data, err := yaml.Marshal(original)
+		require.NoError(t, err)
+		var restored soltesting.SkipValue
+		require.NoError(t, yaml.Unmarshal(data, &restored))
+		assert.True(t, restored.Static)
+	})
+
+	t.Run("static false", func(t *testing.T) {
+		original := soltesting.SkipValue{}
+		data, err := yaml.Marshal(original)
+		require.NoError(t, err)
+		var restored soltesting.SkipValue
+		require.NoError(t, yaml.Unmarshal(data, &restored))
+		assert.False(t, restored.Static)
+	})
+}
+
+func TestSkipValue_MarshalUnmarshalJSON(t *testing.T) {
+	t.Run("static true", func(t *testing.T) {
+		original := soltesting.SkipValue{Static: true}
+		data, err := json.Marshal(original)
+		require.NoError(t, err)
+		var restored soltesting.SkipValue
+		require.NoError(t, json.Unmarshal(data, &restored))
+		assert.True(t, restored.Static)
+	})
+
+	t.Run("expression", func(t *testing.T) {
+		input := `"os == \"windows\""`
+		var sv soltesting.SkipValue
+		require.NoError(t, json.Unmarshal([]byte(input), &sv))
+		assert.False(t, sv.Static)
+		assert.Equal(t, `os == "windows"`, string(sv.Expression))
+	})
+}
+
+func TestSkipValue_String(t *testing.T) {
+	assert.Equal(t, "true", soltesting.SkipValue{Static: true}.String())
+	assert.Equal(t, "false", soltesting.SkipValue{}.String())
+	assert.Equal(t, "os == 'linux'", soltesting.SkipValue{Expression: "os == 'linux'"}.String())
+}
+
+func TestTestSuite_HasCases(t *testing.T) {
+	var ts *soltesting.TestSuite
+	assert.False(t, ts.HasCases())
+
+	ts = &soltesting.TestSuite{}
+	assert.False(t, ts.HasCases())
+
+	ts = &soltesting.TestSuite{Cases: map[string]*soltesting.TestCase{"t1": {}}}
+	assert.True(t, ts.HasCases())
+}
+
+func TestTestSuite_HasConfig(t *testing.T) {
+	var ts *soltesting.TestSuite
+	assert.False(t, ts.HasConfig())
+
+	ts = &soltesting.TestSuite{}
+	assert.False(t, ts.HasConfig())
+
+	ts = &soltesting.TestSuite{Config: &soltesting.TestConfig{}}
+	assert.True(t, ts.HasConfig())
+}
+
+func TestSkipValue_UnmarshalYAML_Expression(t *testing.T) {
+	input := `"os == 'linux'"`
+	var sv soltesting.SkipValue
+	require.NoError(t, yaml.Unmarshal([]byte(input), &sv))
+	assert.False(t, sv.Static)
+	assert.Equal(t, soltesting.SkipValue{Expression: "os == 'linux'"}, sv)
+}
+
+func TestSkipValue_UnmarshalYAML_InvalidType(t *testing.T) {
+	// A mapping/sequence is neither bool nor string, should error
+	input := `key: value`
+	var sv soltesting.SkipValue
+	err := yaml.Unmarshal([]byte(input), &sv)
+	// This should fail because a map isn't a valid skip value
+	require.Error(t, err)
+}
+
+func TestSkipValue_MarshalYAML_Expression(t *testing.T) {
+	sv := soltesting.SkipValue{Expression: "os == 'linux'"}
+	data, err := yaml.Marshal(sv)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "os == 'linux'")
+}

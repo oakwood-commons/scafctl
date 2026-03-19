@@ -7,6 +7,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -193,4 +194,35 @@ func BenchmarkResolveCatalogURL(b *testing.B) {
 	for b.Loop() {
 		_, _ = ResolveCatalogURL(ctx, "")
 	}
+}
+
+func TestInferKindFromLocalCatalog_Found(t *testing.T) {
+	tmpDir := t.TempDir()
+	cat, err := NewLocalCatalogAt(tmpDir, logr.Discard())
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	ref, err := ParseReference(ArtifactKindSolution, "my-sol@1.0.0")
+	require.NoError(t, err)
+	_, err = cat.Store(ctx, ref, []byte(`apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: my-sol
+  version: 1.0.0
+`), nil, nil, false)
+	require.NoError(t, err)
+
+	kind, err := InferKindFromLocalCatalog(ctx, cat, "my-sol", "1.0.0")
+	require.NoError(t, err)
+	assert.Equal(t, ArtifactKindSolution, kind)
+}
+
+func TestInferKindFromLocalCatalog_NotFound(t *testing.T) {
+	tmpDir := t.TempDir()
+	cat, err := NewLocalCatalogAt(tmpDir, logr.Discard())
+	require.NoError(t, err)
+
+	_, err = InferKindFromLocalCatalog(context.Background(), cat, "nonexistent", "")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
 }

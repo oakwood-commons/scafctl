@@ -651,3 +651,34 @@ func TestDescribeDataShape_NestedMap(t *testing.T) {
 	result := describeDataShape(data)
 	assert.Contains(t, result, "inner: map")
 }
+
+func TestDescribeType_AllKinds(t *testing.T) {
+	tests := []struct {
+		value    any
+		expected string
+	}{
+		{nil, "nil"},
+		{"hello", "string"},
+		{true, "bool"},
+		{int(1), "int"},
+		{int64(1), "int"},
+		{uint(1), "uint"},
+		{uint64(1), "uint"},
+		{float32(1.0), "float"},
+		{float64(1.0), "float"},
+		{map[string]any{}, "map"},
+		{[]string{"a"}, "list"},
+		{[2]int{1, 2}, "list"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.expected, func(t *testing.T) {
+			assert.Equal(t, tt.expected, describeType(tt.value))
+		})
+	}
+}
+
+func TestDescribeType_Struct(t *testing.T) {
+	type myStruct struct{ X int }
+	result := describeType(myStruct{X: 1})
+	assert.Contains(t, result, "myStruct")
+}

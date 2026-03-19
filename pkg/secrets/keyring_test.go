@@ -563,3 +563,18 @@ func TestNewDefaultKeyring(t *testing.T) {
 		assert.True(t, ok, "NewDefaultKeyring should return a *chainKeyring")
 	})
 }
+
+func TestKeyringError_Error_And_Unwrap(t *testing.T) {
+	cause := errors.New("underlying error")
+	ke := NewKeyringError("list", cause)
+	assert.Contains(t, ke.Error(), "keyring")
+	assert.Contains(t, ke.Error(), "list")
+	assert.Equal(t, cause, ke.Unwrap())
+}
+
+func TestCorruptedSecretError_Error_And_Unwrap(t *testing.T) {
+	cause := errors.New("parse error")
+	cs := NewCorruptedSecretError("mysecret", "json", cause)
+	assert.Contains(t, cs.Error(), "mysecret")
+	assert.Equal(t, cause, cs.Unwrap())
+}

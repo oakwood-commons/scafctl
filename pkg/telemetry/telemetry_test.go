@@ -177,3 +177,11 @@ func TestParseSampler(t *testing.T) {
 		})
 	}
 }
+
+func TestTracer(t *testing.T) {
+	tr := Tracer(TracerRoot)
+	assert.NotNil(t, tr)
+
+	tr2 := Tracer(TracerProvider)
+	assert.NotNil(t, tr2)
+}

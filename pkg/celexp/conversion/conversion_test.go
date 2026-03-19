@@ -474,3 +474,68 @@ func BenchmarkListToObjectSlice(b *testing.B) {
 		_, _ = ListToObjectSlice(out)
 	}
 }
+
+func evalCEL(t *testing.T, expr string) ref.Val {
+	t.Helper()
+	env, err := cel.NewEnv()
+	require.NoError(t, err)
+	ast, issues := env.Compile(expr)
+	require.Nil(t, issues)
+	prg, err := env.Program(ast)
+	require.NoError(t, err)
+	out, _, err := prg.Eval(map[string]interface{}{})
+	require.NoError(t, err)
+	return out
+}
+
+func TestCelValueToGo_Primitive(t *testing.T) {
+	out := evalCEL(t, "'hello'")
+	assert.Equal(t, "hello", CelValueToGo(out))
+}
+
+func TestCelValueToGo_Map(t *testing.T) {
+	out := evalCEL(t, "{'key': 'value', 'num': 42}")
+	result := CelValueToGo(out)
+	m, ok := result.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "value", m["key"])
+}
+
+func TestCelValueToGo_List(t *testing.T) {
+	out := evalCEL(t, "['a', 'b', 'c']")
+	result := CelValueToGo(out)
+	lst, ok := result.([]any)
+	require.True(t, ok)
+	assert.Len(t, lst, 3)
+	assert.Equal(t, "a", lst[0])
+}
+
+func TestCelValueToGo_NestedMap(t *testing.T) {
+	out := evalCEL(t, "{'outer': {'inner': 'value'}}")
+	result := CelValueToGo(out)
+	m, ok := result.(map[string]any)
+	require.True(t, ok)
+	inner, ok := m["outer"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "value", inner["inner"])
+}
+
+func TestGoToCelValue_String(t *testing.T) {
+	val := GoToCelValue("hello")
+	assert.Equal(t, "hello", val.Value())
+}
+
+func TestGoToCelValue_Int(t *testing.T) {
+	val := GoToCelValue(42)
+	assert.NotNil(t, val)
+}
+
+func TestGoToCelValue_Bool(t *testing.T) {
+	val := GoToCelValue(true)
+	assert.NotNil(t, val)
+}
+
+func TestGoToCelValue_Nil(t *testing.T) {
+	val := GoToCelValue(nil)
+	assert.NotNil(t, val)
+}

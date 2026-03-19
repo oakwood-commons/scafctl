@@ -537,6 +537,20 @@ func TestGlobalRegistry(t *testing.T) {
 		assert.Greater(t, count, 0)
 	})
 
+	t.Run("list by capability", func(t *testing.T) {
+		providers := ListByCapability(CapabilityFrom)
+		names := make([]string, len(providers))
+		for i, p := range providers {
+			names[i] = p.Descriptor().Name
+		}
+		assert.Contains(t, names, "global-test")
+	})
+
+	t.Run("list by category", func(t *testing.T) {
+		providers := ListByCategory("test-category")
+		assert.Empty(t, providers)
+	})
+
 	t.Run("get global registry", func(t *testing.T) {
 		gr := GetGlobalRegistry()
 		assert.NotNil(t, gr)
@@ -545,6 +559,22 @@ func TestGlobalRegistry(t *testing.T) {
 
 	// Clean up
 	ResetGlobalRegistry()
+}
+
+func TestRegistry_DescriptorLookup(t *testing.T) {
+	r := NewRegistry()
+	p := newMockProvider("lookup-test", "1.0.0", CapabilityFrom)
+	_ = r.Register(p)
+
+	lookup := r.DescriptorLookup()
+	assert.NotNil(t, lookup)
+
+	desc := lookup("lookup-test")
+	assert.NotNil(t, desc)
+	assert.Equal(t, "lookup-test", desc.Name)
+
+	nilDesc := lookup("nonexistent")
+	assert.Nil(t, nilDesc)
 }
 
 func TestValidateDescriptor(t *testing.T) {

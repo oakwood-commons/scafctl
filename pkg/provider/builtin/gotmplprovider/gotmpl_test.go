@@ -1017,3 +1017,180 @@ func TestGoTemplateProvider_RenderTree_UnsupportedOperation(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported operation")
 }
+
+func TestGoTemplateProvider_WhatIf_Operations(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+	desc := p.Descriptor()
+	require.NotNil(t, desc.WhatIf)
+
+	tests := []struct {
+		name     string
+		input    any
+		contains string
+	}{
+		{
+			name:     "render with name",
+			input:    map[string]any{"operation": "render", "name": "my-template"},
+			contains: "my-template",
+		},
+		{
+			name:     "render without name",
+			input:    map[string]any{"operation": "render"},
+			contains: "Go template",
+		},
+		{
+			name:     "render-tree with name",
+			input:    map[string]any{"operation": "render-tree", "name": "my-tree"},
+			contains: "my-tree",
+		},
+		{
+			name:     "render-tree without name",
+			input:    map[string]any{"operation": "render-tree"},
+			contains: "template tree",
+		},
+		{
+			name:     "default operation (empty string defaults to render)",
+			input:    map[string]any{"operation": "", "name": ""},
+			contains: "Go template",
+		},
+		{
+			name:     "non-map input returns empty",
+			input:    "not-a-map",
+			contains: "",
+		},
+		{
+			name:     "unknown operation",
+			input:    map[string]any{"operation": "generate"},
+			contains: "generate",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg, err := desc.WhatIf(ctx, tt.input)
+			require.NoError(t, err)
+			if tt.contains != "" {
+				assert.Contains(t, msg, tt.contains)
+			}
+		})
+	}
+}
+
+func TestExtractDependencies(t *testing.T) {
+	t.Run("empty inputs", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{})
+		assert.Empty(t, deps)
+	})
+
+	t.Run("rslvr in data with dot path", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"data": map[string]any{
+				"rslvr": "myresolver.field",
+			},
+		})
+		assert.Equal(t, []string{"myresolver"}, deps)
+	})
+
+	t.Run("rslvr in entries without dot", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"entries": map[string]any{
+				"rslvr": "simpleresolver",
+			},
+		})
+		assert.Equal(t, []string{"simpleresolver"}, deps)
+	})
+
+	t.Run("expr in data with CEL reference", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"data": map[string]any{
+				"expr": "_.myresolver + _.other",
+			},
+		})
+		assert.Contains(t, deps, "myresolver")
+		assert.Contains(t, deps, "other")
+	})
+
+	t.Run("template string with resolver references", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"template": "Hello {{ ._.config }}!",
+		})
+		assert.Contains(t, deps, "config")
+	})
+
+	t.Run("template key is non-string map (rslvr)", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"template": map[string]any{
+				"rslvr": "tplresolver",
+			},
+		})
+		assert.Contains(t, deps, "tplresolver")
+	})
+
+	t.Run("template string with custom delimiters", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"template":   "Hello [[ ._.mydata ]]!",
+			"leftDelim":  "[[",
+			"rightDelim": "]]",
+		})
+		assert.Contains(t, deps, "mydata")
+	})
+
+	t.Run("non-map value for entries key skipped", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"entries": "not-a-map",
+		})
+		assert.Empty(t, deps)
+	})
+
+	t.Run("deduplication", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"data": map[string]any{
+				"rslvr": "myresolver",
+			},
+			"template": "{{ ._.myresolver.field }}",
+		})
+		count := 0
+		for _, d := range deps {
+			if d == "myresolver" {
+				count++
+			}
+		}
+		assert.Equal(t, 1, count, "should deduplicate myresolver")
+	})
+}
+
+func TestExtractCELDeps(t *testing.T) {
+	t.Run("basic reference", func(t *testing.T) {
+		var found []string
+		extractCELDeps("_.config.host", func(name string) {
+			found = append(found, name)
+		})
+		assert.Equal(t, []string{"config"}, found)
+	})
+
+	t.Run("multiple references", func(t *testing.T) {
+		var found []string
+		extractCELDeps("_.alpha + _.beta", func(name string) {
+			found = append(found, name)
+		})
+		assert.Contains(t, found, "alpha")
+		assert.Contains(t, found, "beta")
+	})
+
+	t.Run("no references", func(t *testing.T) {
+		var found []string
+		extractCELDeps("someValue == 42", func(name string) {
+			found = append(found, name)
+		})
+		assert.Empty(t, found)
+	})
+
+	t.Run("short string no panic", func(t *testing.T) {
+		var found []string
+		extractCELDeps("_.", func(name string) {
+			found = append(found, name)
+		})
+		assert.Empty(t, found)
+	})
+}

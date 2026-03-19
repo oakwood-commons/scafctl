@@ -456,3 +456,25 @@ func TestConfig_Validate_WithNewConfigTypes(t *testing.T) {
 func ptrBool(b bool) *bool {
 	return &b
 }
+
+func TestGoTemplateConfig_ToGoTemplateValues(t *testing.T) {
+	// Default (zero value) - should use settings defaults
+	g := &GoTemplateConfig{}
+	v := g.ToGoTemplateValues()
+	assert.Equal(t, settings.DefaultGoTemplateCacheSize, v.CacheSize)
+	assert.True(t, v.EnableMetrics) // default is true when nil
+	assert.False(t, v.AllowEnvFunctions)
+
+	// With explicit values
+	cacheSize := 42
+	g2 := &GoTemplateConfig{
+		CacheSize:         cacheSize,
+		AllowEnvFunctions: true,
+	}
+	enableMetrics := false
+	g2.EnableMetrics = &enableMetrics
+	v2 := g2.ToGoTemplateValues()
+	assert.Equal(t, 42, v2.CacheSize)
+	assert.False(t, v2.EnableMetrics)
+	assert.True(t, v2.AllowEnvFunctions)
+}

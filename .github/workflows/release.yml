@@ -11,35 +11,75 @@ permissions:
   id-token: write  # Required for cosign keyless signing via OIDC
 
 jobs:
+  test:
+    name: Verify
+    runs-on: ubuntu-latest
+    env:
+      # Test-only key ("test-secret-key-for-ci-123456789") — not a real secret.
+      # Must be exactly 32 bytes when base64-decoded (AES-256 master key).
+      # Kept inline so CI works without external secrets on tag push.
+      SCAFCTL_SECRET_KEY: dGVzdC1zZWNyZXQta2V5LWZvci1jaS0xMjM0NTY3ODk=
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Install Task
+        uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2.0.0
+        with:
+          version: '3.x'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download dependencies
+        run: task mod
+
+      - name: Run tests
+        run: task test
+
+      - name: Run functional integration tests
+        run: task integration
+
   release:
     name: Create Release
+    needs: [test]
     runs-on: ubuntu-latest
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
       
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version-file: 'go.mod'
           cache: true
       
       - name: Install Task
-        uses: arduino/setup-task@v2
+        uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2.0.0
         with:
           version: '3.x'
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Install goreleaser
-        uses: goreleaser/goreleaser-action@v7
+        uses: goreleaser/goreleaser-action@ec59f474b9834571250b370d4735c50f8e2d1e29 # v7.0.0
         with:
           install-only: true
+          version: 'v2.14.3'
       
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
+
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@57aae528053a48a3f6235f2d9461b05fbcb7366d # v0.23.1
       
       - name: Run GoReleaser
         run: task release

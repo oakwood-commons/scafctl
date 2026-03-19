@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -394,4 +396,48 @@ func TestExtractClaims_NoIDToken(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, claims)
 	assert.Empty(t, claims.Subject)
+}
+
+func TestHandler_Capabilities(t *testing.T) {
+	store := secrets.NewMockStore()
+	h, err := New(WithSecretStore(store))
+	require.NoError(t, err)
+	caps := h.Capabilities()
+	assert.NotEmpty(t, caps)
+}
+
+func TestHandler_WithHTTPClientConfig(t *testing.T) {
+	cfg := &config.HTTPClientConfig{}
+	opt := WithHTTPClientConfig(cfg)
+	h := &Handler{}
+	opt(h)
+	assert.NotNil(t, h.httpClientConfig)
+}
+
+func TestHandler_WithLogger(t *testing.T) {
+	lgr := logr.Discard()
+	opt := WithLogger(lgr)
+	h := &Handler{}
+	opt(h)
+	assert.Equal(t, lgr, h.logger)
+}
+
+func TestEntraHandler_ListCachedTokens_Empty(t *testing.T) {
+	store := secrets.NewMockStore()
+	h, err := New(WithSecretStore(store))
+	require.NoError(t, err)
+
+	results, err := h.ListCachedTokens(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, results)
+}
+
+func TestEntraHandler_PurgeExpiredTokens(t *testing.T) {
+	store := secrets.NewMockStore()
+	h, err := New(WithSecretStore(store))
+	require.NoError(t, err)
+
+	n, err := h.PurgeExpiredTokens(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 0, n)
 }

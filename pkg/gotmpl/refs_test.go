@@ -6,6 +6,7 @@ package gotmpl
 import (
 	"context"
 	"testing"
+	"text/template/parse"
 
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/stretchr/testify/assert"
@@ -297,4 +298,64 @@ func TestService_GetReferences(t *testing.T) {
 			assert.ElementsMatch(t, tt.want, gotPaths)
 		})
 	}
+}
+
+func TestExtractBasePath(t *testing.T) {
+	t.Run("FieldNode returns dot-prefixed path", func(t *testing.T) {
+		node := &parse.FieldNode{Ident: []string{"Items"}}
+		result := extractBasePath(node)
+		assert.Equal(t, ".Items", result)
+	})
+
+	t.Run("VariableNode returns empty string", func(t *testing.T) {
+		node := &parse.VariableNode{Ident: []string{"$var"}}
+		result := extractBasePath(node)
+		assert.Equal(t, "", result)
+	})
+
+	t.Run("DotNode returns dot", func(t *testing.T) {
+		node := &parse.DotNode{}
+		result := extractBasePath(node)
+		assert.Equal(t, ".", result)
+	})
+
+	t.Run("Other node type returns empty string", func(t *testing.T) {
+		node := &parse.NilNode{}
+		result := extractBasePath(node)
+		assert.Equal(t, "", result)
+	})
+}
+
+func TestBuildFieldPath_Empty(t *testing.T) {
+	result := buildFieldPath(nil)
+	assert.Equal(t, "", result)
+}
+
+func TestBuildFieldPath_Single(t *testing.T) {
+	result := buildFieldPath([]string{"Name"})
+	assert.Equal(t, ".Name", result)
+}
+
+func TestWalkArg_ChainNode(t *testing.T) {
+	// {{(.User).Name}} produces a ChainNode in the template AST
+	refs, err := GetGoTemplateReferences("{{(.User).Name}}", "", "")
+	require.NoError(t, err)
+	paths := make([]string, len(refs))
+	for i, r := range refs {
+		paths[i] = r.Path
+	}
+	// ChainNode branch should extract the chained field path
+	assert.NotEmpty(t, refs)
+}
+
+func TestWalkArg_PipeNodeArg(t *testing.T) {
+	// {{(.Name)}} produces a PipeNode as a command argument (parenthesized sub-pipeline)
+	refs, err := GetGoTemplateReferences("{{(.Name)}}", "", "")
+	require.NoError(t, err)
+	paths := make([]string, len(refs))
+	for i, r := range refs {
+		paths[i] = r.Path
+	}
+	// The nested PipeNode branch should find .Name
+	assert.Contains(t, paths, ".Name")
 }

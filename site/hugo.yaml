@@ -19,6 +19,8 @@ module:
   mounts:
     - source: ../docs
       target: content/docs
+    - source: ../home
+      target: content
     - source: ../assets
       target: assets
     - source: ../layouts

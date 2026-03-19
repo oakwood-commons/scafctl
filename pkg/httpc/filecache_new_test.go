@@ -196,3 +196,15 @@ func TestClient_Close(t *testing.T) {
 	err := client.Close()
 	require.NoError(t, err)
 }
+
+func TestFileCache_Close_ErrorPath(t *testing.T) {
+	// Create a direct FileCache struct with a dir that doesn't exist + TTL set
+	// This forces CleanExpired to return an error, exercising the Close error path
+	cache := &FileCache{
+		dir:    "/nonexistent/path/for/close/err",
+		ttl:    10 * time.Minute,
+		logger: logr.Discard(),
+	}
+	err := cache.Close()
+	require.Error(t, err)
+}
