@@ -98,6 +98,9 @@ linters:
       - path: pkg/plugin/.*\.go
         linters:
           - revive
+      - path: pkg/terminal/format/format\.go
+        linters:
+          - revive
         text: "var-naming: avoid package names"
       - path: pkg/celexp/ext/filepath/filepath\.go
         linters:
