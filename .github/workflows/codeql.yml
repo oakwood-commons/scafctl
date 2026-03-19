@@ -11,10 +11,8 @@ on:
 jobs:
   analyze:
     name: Analyze
-    # Disabled until the repo is made public
-    if: false
     # Only run automatically for PRs from the same repo (not forks); push and schedule always run
-    # if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       actions: read
