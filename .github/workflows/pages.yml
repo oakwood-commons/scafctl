@@ -5,7 +5,9 @@ on:
     branches: [main]
     paths:
       - "docs/**"
-      - "hugo.yaml"
+      - "assets/**"
+      - "layouts/**"
+      - "site/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -44,6 +46,9 @@ jobs:
         with:
           go-version-file: 'go.mod'
           cache: true
+          cache-dependency-path: |
+            go.sum
+            site/go.sum
 
       - name: Setup Pages
         id: pages
@@ -55,6 +60,7 @@ jobs:
           HUGO_ENVIRONMENT: production
           TZ: America/Chicago
         run: |
+          cd site
           hugo \
             --gc \
             --minify \

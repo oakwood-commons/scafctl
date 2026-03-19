@@ -93,14 +93,14 @@ func (options *CmdOptionsVersion) PrintVersion(ctx context.Context) error {
 	}
 	lgr = logger.WithValues(lgr, "latest_version", latestVersion, "current_version", settings.VersionInformation.BuildVersion)
 	outOfDate := false
-	if latestVersion != "" && latestVersion != "<unable to determine>" {
+	if latestVersion != "" && latestVersion != "<unable to determine>" && settings.VersionInformation.BuildVersion != "" {
 		l, err := semver.NewVersion(latestVersion)
 		if err == nil {
 			c, err := semver.NewVersion(settings.VersionInformation.BuildVersion)
 			if err == nil {
 				outOfDate = l.GreaterThan(c)
 			} else {
-				lgr.V(1).Info(fmt.Sprintf("unable to parse latest version: %v", err))
+				lgr.V(1).Info(fmt.Sprintf("unable to parse current version: %v", err))
 			}
 		} else {
 			lgr.V(1).Info(fmt.Sprintf("unable to parse latest version: %v", err))

@@ -55,6 +55,8 @@ scafctl.exe~
 /public/
 /resources/_gen/
 .hugo_build.lock
+/site/.hugo_build.lock
+/site/resources/_gen/
 .venv/
 .DS_Store
 __debug*

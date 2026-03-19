@@ -1,0 +1,60 @@
+# Hugo Configuration for scafctl
+# Documentation: https://gohugo.io/getting-started/configuration/
+# Note: Hugo is run from this directory (site/) so that its go.mod is isolated
+# from the main project's go.mod. Paths in module mounts are relative to this
+# directory.
+
+baseURL: "https://oakwood-commons.github.io/scafctl/"
+languageCode: "en-us"
+title: "scafctl"
+enableRobotsTXT: true
+
+# Output to the root public/ directory (consumed by the GitHub Pages CI step)
+publishDir: "../public"
+
+# Use Hugo Modules for theme (no git submodule needed)
+module:
+  imports:
+    - path: github.com/alex-shpak/hugo-book
+  mounts:
+    - source: ../docs
+      target: content/docs
+    - source: ../assets
+      target: assets
+    - source: ../layouts
+      target: layouts
+
+# Repository information
+params:
+  description: "CLI tool using CEL for dynamic configuration evaluation and template processing"
+  github_repo: "https://github.com/oakwood-commons/scafctl"
+  github_project_repo: "https://github.com/oakwood-commons/scafctl"
+
+  # Book theme specific
+  BookMenuBundle: /menu
+  BookSection: docs
+  BookRepo: "https://github.com/oakwood-commons/scafctl"
+  BookEditLink: "https://github.com/oakwood-commons/scafctl/edit/main/{{ .Path }}"
+  BookDateFormat: "January 2, 2006"
+  BookSearch: true
+  BookComments: false
+  BookToC: true
+
+# Enable syntax highlighting
+markup:
+  highlight:
+    style: github-dark
+    lineNos: false
+    codeFences: true
+    guessSyntax: true
+  goldmark:
+    renderer:
+      unsafe: true
+
+# Menu structure
+menu:
+  before: []
+  after:
+    - name: "GitHub"
+      url: "https://github.com/oakwood-commons/scafctl"
+      weight: 10
