@@ -375,10 +375,10 @@ tasks:
       - go.sum
 
   test-cover:
-    desc: "Run unit tests"
+    desc: "Run unit tests with coverage"
     cmds:
       - |
-        go test ./... -cover
+        go test ./... -coverprofile=coverage.txt -covermode=atomic
     sources:
       - "**/*.go"
       - go.mod
