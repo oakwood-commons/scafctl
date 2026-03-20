@@ -245,3 +245,28 @@ func TestWithValuesWithNoValuesReturnsNewLogger(t *testing.T) {
 		t.Error("WithValues should return a new logger instance even with no values")
 	}
 }
+
+func TestIsDebugLevel(t *testing.T) {
+	if !IsDebugLevel("debug") {
+		t.Error("IsDebugLevel('debug') should return true")
+	}
+	if IsDebugLevel("info") {
+		t.Error("IsDebugLevel('info') should return false")
+	}
+	if IsDebugLevel("warn") {
+		t.Error("IsDebugLevel('warn') should return false")
+	}
+	if IsDebugLevel("invalid-level") {
+		t.Error("IsDebugLevel('invalid-level') should return false for invalid levels")
+	}
+}
+
+func TestDefaultOptions(t *testing.T) {
+	opts := DefaultOptions()
+	if opts.Format != FormatConsole {
+		t.Errorf("DefaultOptions().Format = %v, want %v", opts.Format, FormatConsole)
+	}
+	if !opts.Timestamps {
+		t.Error("DefaultOptions().Timestamps should be true")
+	}
+}

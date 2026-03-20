@@ -884,3 +884,25 @@ func TestFormatAvailableVersions(t *testing.T) {
 		{Reference: catalog.Reference{Name: "x", Version: v200}},
 	}))
 }
+
+func TestVendorFileNameFromRef(t *testing.T) {
+	v100 := semver.MustParse("1.0.0")
+
+	// ref with version, no info version needed
+	name := VendorFileNameFromRef("my-sol@1.0.0", catalog.ArtifactInfo{})
+	assert.Equal(t, "my-sol@1.0.0.yaml", name)
+
+	// ref without version, info provides version
+	name = VendorFileNameFromRef("my-sol", catalog.ArtifactInfo{
+		Reference: catalog.Reference{Version: v100},
+	})
+	assert.Equal(t, "my-sol@1.0.0.yaml", name)
+
+	// ref with slash gets sanitized
+	name = VendorFileNameFromRef("org/my-sol@1.0.0", catalog.ArtifactInfo{})
+	assert.Equal(t, "org_my-sol@1.0.0.yaml", name)
+
+	// ref already has .yaml extension
+	name = VendorFileNameFromRef("my-sol@1.0.0.yaml", catalog.ArtifactInfo{})
+	assert.Equal(t, "my-sol@1.0.0.yaml", name)
+}

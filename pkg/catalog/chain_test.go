@@ -10,6 +10,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -384,4 +385,48 @@ func TestChainCatalog_Fetch_NonNotFoundError(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []byte("good-binary"), content)
 	assert.Equal(t, "good", info.Catalog)
+}
+
+func TestBuildCatalogChain_NilConfig(t *testing.T) {
+	chain, err := BuildCatalogChain(nil, logr.Discard())
+	require.NoError(t, err)
+	require.NotNil(t, chain)
+}
+
+func TestBuildCatalogChain_WithEmptyConfig(t *testing.T) {
+	cfg := &config.Config{}
+	chain, err := BuildCatalogChain(cfg, logr.Discard())
+	require.NoError(t, err)
+	require.NotNil(t, chain)
+}
+
+func TestBuildCatalogChain_WithOCICatalog(t *testing.T) {
+	cfg := &config.Config{
+		Catalogs: []config.CatalogConfig{
+			{
+				Name: "test-remote",
+				Type: config.CatalogTypeOCI,
+				URL:  "registry.example.com",
+			},
+		},
+	}
+	// Creating a remote catalog with an invalid/unreachable registry should not fail at construction time
+	chain, err := BuildCatalogChain(cfg, logr.Discard())
+	require.NoError(t, err)
+	require.NotNil(t, chain)
+}
+
+func TestBuildCatalogChain_SkipsNonOCICatalog(t *testing.T) {
+	cfg := &config.Config{
+		Catalogs: []config.CatalogConfig{
+			{
+				Name: "local-only",
+				Type: "local", // Not OCI - should be skipped
+				URL:  "/some/path",
+			},
+		},
+	}
+	chain, err := BuildCatalogChain(cfg, logr.Discard())
+	require.NoError(t, err)
+	require.NotNil(t, chain)
 }

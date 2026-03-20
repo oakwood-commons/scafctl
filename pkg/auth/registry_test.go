@@ -98,3 +98,22 @@ func TestRegistry_ConcurrentAccess(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestRegistry_All(t *testing.T) {
+	r := NewRegistry()
+	h1 := NewMockHandler("handler1")
+	h2 := NewMockHandler("handler2")
+	_ = r.Register(h1)
+	_ = r.Register(h2)
+
+	all := r.All()
+	assert.Len(t, all, 2)
+	assert.Contains(t, all, "handler1")
+	assert.Contains(t, all, "handler2")
+}
+
+func TestRegistry_All_Empty(t *testing.T) {
+	r := NewRegistry()
+	all := r.All()
+	assert.Empty(t, all)
+}

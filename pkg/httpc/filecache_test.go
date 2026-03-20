@@ -537,3 +537,56 @@ func TestFileCache_ConcurrentDeleteAndRead(t *testing.T) {
 	hits, misses := cache.Stats()
 	assert.True(t, hits+misses >= 20, "Stats should reflect read operations")
 }
+
+func TestFileCache_CloseBasic(t *testing.T) {
+	tmpDir := filepath.Join(t.TempDir(), "test-cache")
+	config := &FileCacheConfig{
+		Dir:    tmpDir,
+		TTL:    50 * time.Millisecond,
+		Logger: logr.Discard(),
+	}
+	cache, err := NewFileCache(config)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	err = cache.Set(ctx, "key1", []byte("data"), 0)
+	require.NoError(t, err)
+
+	// Close should not return an error
+	err = cache.Close()
+	require.NoError(t, err)
+}
+
+func TestFileCache_CleanExpired_NoTTL(t *testing.T) {
+	// When TTL is 0, CleanExpired should return nil immediately
+	tmpDir := filepath.Join(t.TempDir(), "test-cache")
+	config := &FileCacheConfig{
+		Dir:    tmpDir,
+		TTL:    0, // no TTL
+		Logger: logr.Discard(),
+	}
+	cache, err := NewFileCache(config)
+	require.NoError(t, err)
+
+	err = cache.CleanExpired()
+	require.NoError(t, err)
+}
+
+func TestFileCache_CleanExpired_ReadDirError(t *testing.T) {
+	// When the cache directory doesn't exist, ReadDir errors
+	config := &FileCacheConfig{
+		Dir:    "/nonexistent/path/that/does/not/exist",
+		TTL:    5 * time.Minute,
+		Logger: logr.Discard(),
+	}
+	// Create directly since NewFileCache would create the dir
+	cache := &FileCache{
+		dir:    "/nonexistent/path/that/does/not/exist",
+		ttl:    5 * time.Minute,
+		logger: logr.Discard(),
+	}
+	_ = config
+
+	err := cache.CleanExpired()
+	require.Error(t, err)
+}

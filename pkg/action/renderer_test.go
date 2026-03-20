@@ -866,3 +866,24 @@ func TestRender_RetryWithMinimalConfig(t *testing.T) {
 	assert.Empty(t, action.Retry.InitialDelay)
 	assert.Empty(t, action.Retry.MaxDelay)
 }
+
+func TestRenderCondition_Nil(t *testing.T) {
+	result := renderCondition(nil)
+	assert.Nil(t, result)
+}
+
+func TestRenderCondition_NilExpr(t *testing.T) {
+	cond := &spec.Condition{Expr: nil}
+	result := renderCondition(cond)
+	assert.Nil(t, result)
+}
+
+func TestRenderCondition_WithExpr(t *testing.T) {
+	cond := rendererCondition("x == 1")
+	result := renderCondition(cond)
+	require.NotNil(t, result)
+	dv, ok := result.(*DeferredValue)
+	require.True(t, ok)
+	assert.Equal(t, "x == 1", dv.OriginalExpr)
+	assert.True(t, dv.Deferred)
+}

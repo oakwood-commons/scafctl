@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -463,3 +465,72 @@ func TestHandler_InjectAuth(t *testing.T) {
 
 // Compile-time check for interface implementation.
 var _ auth.Handler = (*Handler)(nil)
+
+func TestGCPHandler_Capabilities(t *testing.T) {
+	store := secrets.NewMockStore()
+	h, err := New(WithSecretStore(store))
+	require.NoError(t, err)
+	caps := h.Capabilities()
+	assert.NotEmpty(t, caps)
+}
+
+func TestGCPHandler_WithHTTPClientConfig(t *testing.T) {
+	cfg := &config.HTTPClientConfig{}
+	opt := WithHTTPClientConfig(cfg)
+	h := &Handler{}
+	opt(h)
+	assert.NotNil(t, h.httpClientConfig)
+}
+
+func TestGCPHandler_WithLogger(t *testing.T) {
+	lgr := logr.Discard()
+	opt := WithLogger(lgr)
+	h := &Handler{}
+	opt(h)
+	assert.Equal(t, lgr, h.logger)
+}
+
+func TestGCPHandler_ListCachedTokens_Empty(t *testing.T) {
+	store := secrets.NewMockStore()
+	h, err := New(WithSecretStore(store))
+	require.NoError(t, err)
+
+	results, err := h.ListCachedTokens(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, results)
+}
+
+func TestGCPHandler_ListCachedTokens_WithCache(t *testing.T) {
+	store := secrets.NewMockStore()
+	h, err := New(WithSecretStore(store))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+	t.Setenv("GOOGLE_EXTERNAL_ACCOUNT", "")
+
+	require.NoError(t, store.Set(ctx, SecretKeyRefreshToken, []byte("test-refresh")))
+
+	scope := "https://www.googleapis.com/auth/cloud-platform"
+	cachedToken := &auth.Token{
+		AccessToken: "list-test-token",
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(30 * time.Minute),
+		Scope:       scope,
+	}
+	require.NoError(t, h.tokenCache.Set(ctx, "", "_", scope, cachedToken))
+
+	results, err := h.ListCachedTokens(ctx)
+	require.NoError(t, err)
+	assert.Len(t, results, 2)
+}
+
+func TestGCPHandler_PurgeExpiredTokens(t *testing.T) {
+	store := secrets.NewMockStore()
+	h, err := New(WithSecretStore(store))
+	require.NoError(t, err)
+
+	n, err := h.PurgeExpiredTokens(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 0, n)
+}

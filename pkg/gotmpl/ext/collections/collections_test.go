@@ -181,3 +181,67 @@ func TestSelectFunc(t *testing.T) {
 	assert.NotEmpty(t, f.Examples)
 	assert.Contains(t, f.Func, "selectField")
 }
+
+func TestToMap_Nil(t *testing.T) {
+	result, ok := toMap(nil)
+	assert.False(t, ok)
+	assert.Nil(t, result)
+}
+
+func TestToMap_NativeMap(t *testing.T) {
+	input := map[string]any{"a": 1}
+	result, ok := toMap(input)
+	assert.True(t, ok)
+	assert.Equal(t, input, result)
+}
+
+func TestToMap_NonMap(t *testing.T) {
+	_, ok := toMap("not-a-map")
+	assert.False(t, ok)
+}
+
+func TestToMap_MapWithNonStringKey(t *testing.T) {
+	input := map[int]any{1: "a"}
+	_, ok := toMap(input)
+	assert.False(t, ok)
+}
+
+func TestToMap_TypedStringKeyMap(t *testing.T) {
+	type MyKey = string
+	input := map[MyKey]any{"k": "v"}
+	result, ok := toMap(input)
+	assert.True(t, ok)
+	assert.Equal(t, "v", result["k"])
+}
+
+func TestToSlice_Nil(t *testing.T) {
+	result, err := toSlice(nil)
+	assert.NoError(t, err)
+	assert.Nil(t, result)
+}
+
+func TestToSlice_Slice(t *testing.T) {
+	input := []any{"a", "b"}
+	result, err := toSlice(input)
+	assert.NoError(t, err)
+	assert.Equal(t, input, result)
+}
+
+func TestToSlice_NonSlice(t *testing.T) {
+	_, err := toSlice("not-a-slice")
+	assert.Error(t, err)
+}
+
+func TestToSlice_TypedSlice(t *testing.T) {
+	input := []string{"x", "y"}
+	result, err := toSlice(input)
+	assert.NoError(t, err)
+	assert.Equal(t, []any{"x", "y"}, result)
+}
+
+func TestToSlice_SliceOfMaps(t *testing.T) {
+	input := []map[string]any{{"a": 1}, {"b": 2}}
+	result, err := toSlice(input)
+	assert.NoError(t, err)
+	assert.Len(t, result, 2)
+}

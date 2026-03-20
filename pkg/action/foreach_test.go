@@ -406,3 +406,18 @@ type testProgressCallback struct {
 func (t *testProgressCallback) OnForEachProgress(_ string, _, _ int) {
 	t.forEachProgressCount++
 }
+
+func TestExpandForEachItems_NilForEach(t *testing.T) {
+	ctx := context.Background()
+	items, err := ExpandForEachItems(ctx, nil, nil)
+	assert.Error(t, err)
+	assert.Nil(t, items)
+}
+
+func TestExpandForEachItems_NilIn(t *testing.T) {
+	ctx := context.Background()
+	forEach := &spec.ForEachClause{In: nil}
+	items, err := ExpandForEachItems(ctx, forEach, nil)
+	assert.Error(t, err)
+	assert.Nil(t, items)
+}

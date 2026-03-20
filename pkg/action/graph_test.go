@@ -876,3 +876,70 @@ func TestExtractActionsRefsFromDeferred(t *testing.T) {
 		})
 	}
 }
+
+func TestGetFinallyActionsByPhase(t *testing.T) {
+	t.Run("negative phase returns nil", func(t *testing.T) {
+		g := &Graph{}
+		assert.Nil(t, g.GetFinallyActionsByPhase(-1))
+	})
+
+	t.Run("phase out of range returns nil", func(t *testing.T) {
+		g := &Graph{FinallyOrder: [][]string{{"action1"}}}
+		assert.Nil(t, g.GetFinallyActionsByPhase(5))
+	})
+
+	t.Run("valid phase with known actions", func(t *testing.T) {
+		action1 := &ExpandedAction{Action: &Action{Name: "cleanup"}, ExpandedName: "cleanup"}
+		g := &Graph{
+			FinallyOrder: [][]string{{"cleanup"}},
+			Actions:      map[string]*ExpandedAction{"cleanup": action1},
+		}
+		result := g.GetFinallyActionsByPhase(0)
+		assert.Len(t, result, 1)
+		assert.Equal(t, action1, result[0])
+	})
+
+	t.Run("valid phase with missing action", func(t *testing.T) {
+		g := &Graph{
+			FinallyOrder: [][]string{{"missing"}},
+			Actions:      map[string]*ExpandedAction{},
+		}
+		result := g.GetFinallyActionsByPhase(0)
+		assert.Empty(t, result)
+	})
+}
+
+func TestEvaluateForEachArray_TypeConversions(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("[]string array", func(t *testing.T) {
+		result, err := evaluateForEachArray(ctx, &spec.ForEachClause{
+			In: rslvrRef("names"),
+		}, map[string]any{"names": []string{"a", "b", "c"}})
+		require.NoError(t, err)
+		assert.Equal(t, []any{"a", "b", "c"}, result)
+	})
+
+	t.Run("[]int array", func(t *testing.T) {
+		result, err := evaluateForEachArray(ctx, &spec.ForEachClause{
+			In: rslvrRef("counts"),
+		}, map[string]any{"counts": []int{1, 2, 3}})
+		require.NoError(t, err)
+		assert.Equal(t, []any{1, 2, 3}, result)
+	})
+
+	t.Run("[]float64 array", func(t *testing.T) {
+		result, err := evaluateForEachArray(ctx, &spec.ForEachClause{
+			In: rslvrRef("floats"),
+		}, map[string]any{"floats": []float64{1.1, 2.2, 3.3}})
+		require.NoError(t, err)
+		assert.Equal(t, []any{1.1, 2.2, 3.3}, result)
+	})
+
+	t.Run("unsupported type returns error", func(t *testing.T) {
+		_, err := evaluateForEachArray(ctx, &spec.ForEachClause{
+			In: rslvrRef("mapval"),
+		}, map[string]any{"mapval": map[string]any{"key": "val"}})
+		assert.Error(t, err)
+	})
+}

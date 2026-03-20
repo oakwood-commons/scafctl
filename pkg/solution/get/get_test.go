@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/httpc"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/stretchr/testify/assert"
@@ -846,4 +847,68 @@ spec:
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "Failed reading file")
 	})
+}
+
+func TestWithAppConfig(t *testing.T) {
+	httpCfg := &config.HTTPClientConfig{}
+	logger := logr.Discard()
+	opt := WithAppConfig(httpCfg, logger)
+	g := &Getter{}
+	opt(g)
+	assert.NotNil(t, g.httpClient)
+	assert.Equal(t, logger, g.logger)
+}
+
+func TestMockGetter_GetWithBundle(t *testing.T) {
+	mg := &MockGetter{}
+	ctx := context.Background()
+	expectedSol := &solution.Solution{}
+	expectedBundle := []byte("bundle-data")
+
+	mg.On("GetWithBundle", ctx, "my-solution").Return(expectedSol, expectedBundle, nil)
+
+	sol, bundle, err := mg.GetWithBundle(ctx, "my-solution")
+	assert.NoError(t, err)
+	assert.Equal(t, expectedSol, sol)
+	assert.Equal(t, expectedBundle, bundle)
+	mg.AssertExpectations(t)
+}
+
+func TestMockGetter_GetWithBundle_NilSolution(t *testing.T) {
+	mg := &MockGetter{}
+	ctx := context.Background()
+
+	mg.On("GetWithBundle", ctx, "missing").Return(nil, nil, fmt.Errorf("not found"))
+
+	sol, bundle, err := mg.GetWithBundle(ctx, "missing")
+	assert.Error(t, err)
+	assert.Nil(t, sol)
+	assert.Nil(t, bundle)
+	mg.AssertExpectations(t)
+}
+
+func TestGetter_GetWithBundle_LocalFile(t *testing.T) {
+	const validSolutionYAML = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: bundle-test
+  version: 1.0.0
+`
+	tmpDir := t.TempDir()
+	solPath := tmpDir + "/solution.yaml"
+	require.NoError(t, os.WriteFile(solPath, []byte(validSolutionYAML), 0o600))
+
+	getter := NewGetter()
+	sol, bundleData, err := getter.GetWithBundle(context.Background(), solPath)
+	require.NoError(t, err)
+	require.NotNil(t, sol)
+	assert.Nil(t, bundleData) // local files have no bundle data
+}
+
+func TestGetter_GetWithBundle_EmptyPath(t *testing.T) {
+	getter := NewGetter()
+	sol, bundleData, err := getter.GetWithBundle(context.Background(), "")
+	assert.Error(t, err)
+	assert.Nil(t, sol)
+	assert.Nil(t, bundleData)
 }

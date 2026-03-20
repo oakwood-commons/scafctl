@@ -314,3 +314,79 @@ func BenchmarkOutputDirectoryFromContext(b *testing.B) {
 		_, _ = OutputDirectoryFromContext(ctx)
 	}
 }
+
+func TestWithSolutionMetadata_AndFromContext(t *testing.T) {
+	ctx := context.Background()
+	meta := &SolutionMeta{
+		Name:    "my-solution",
+		Version: "1.0.0",
+	}
+	ctx = WithSolutionMetadata(ctx, meta)
+
+	got, ok := SolutionMetadataFromContext(ctx)
+	assert.True(t, ok)
+	assert.Equal(t, meta, got)
+}
+
+func TestSolutionMetadataFromContext_NotSet(t *testing.T) {
+	_, ok := SolutionMetadataFromContext(context.Background())
+	assert.False(t, ok)
+}
+
+func TestWithIOStreams_AndFromContext(t *testing.T) {
+	ctx := context.Background()
+	streams := &IOStreams{}
+	ctx = WithIOStreams(ctx, streams)
+
+	got, ok := IOStreamsFromContext(ctx)
+	assert.True(t, ok)
+	assert.Equal(t, streams, got)
+}
+
+func TestIOStreamsFromContext_NotSet(t *testing.T) {
+	_, ok := IOStreamsFromContext(context.Background())
+	assert.False(t, ok)
+}
+
+func TestWithConflictStrategy_AndFromContext(t *testing.T) {
+	ctx := context.Background()
+	ctx = WithConflictStrategy(ctx, "overwrite")
+
+	got, ok := ConflictStrategyFromContext(ctx)
+	assert.True(t, ok)
+	assert.Equal(t, "overwrite", got)
+}
+
+func TestConflictStrategyFromContext_NotSet(t *testing.T) {
+	_, ok := ConflictStrategyFromContext(context.Background())
+	assert.False(t, ok)
+}
+
+func TestWithBackup_AndFromContext(t *testing.T) {
+	ctx := context.Background()
+	ctx = WithBackup(ctx, true)
+
+	got, ok := BackupFromContext(ctx)
+	assert.True(t, ok)
+	assert.True(t, got)
+}
+
+func TestBackupFromContext_NotSet(t *testing.T) {
+	_, ok := BackupFromContext(context.Background())
+	assert.False(t, ok)
+}
+
+func TestWithIterationContext_AndFromContext(t *testing.T) {
+	ctx := context.Background()
+	iterCtx := &IterationContext{Item: "hello", Index: 2}
+	ctx = WithIterationContext(ctx, iterCtx)
+
+	got, ok := IterationContextFromContext(ctx)
+	assert.True(t, ok)
+	assert.Equal(t, iterCtx, got)
+}
+
+func TestIterationContextFromContext_NotSet(t *testing.T) {
+	_, ok := IterationContextFromContext(context.Background())
+	assert.False(t, ok)
+}

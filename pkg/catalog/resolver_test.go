@@ -164,3 +164,150 @@ spec:
 		assert.Contains(t, err.Error(), "invalid solution reference")
 	})
 }
+
+func TestWithResolverArtifactCache(t *testing.T) {
+	tmpDir := t.TempDir()
+	cat, err := NewLocalCatalogAt(tmpDir, logr.Discard())
+	require.NoError(t, err)
+
+	// Use WithResolverArtifactCache and WithResolverNoCache options
+	resolver := NewSolutionResolver(cat, logr.Discard(),
+		WithResolverNoCache(true),
+	)
+	assert.NotNil(t, resolver)
+	assert.True(t, resolver.noCache)
+}
+
+func TestSolutionResolver_FetchSolution_WithCacheHit(t *testing.T) {
+	tmpDir := t.TempDir()
+	cat, err := NewLocalCatalogAt(tmpDir, logr.Discard())
+	require.NoError(t, err)
+
+	cachedContent := []byte("cached-solution-content")
+	mock := &mockCacher{content: cachedContent, hit: true}
+
+	resolver := NewSolutionResolver(cat, logr.Discard(), WithResolverArtifactCache(mock))
+	got, err := resolver.FetchSolution(context.Background(), "any-sol@1.0.0")
+	require.NoError(t, err)
+	assert.Equal(t, cachedContent, got)
+}
+
+func TestSolutionResolver_FetchSolution_WithCacheMissThenStore(t *testing.T) {
+	tmpDir := t.TempDir()
+	cat, err := NewLocalCatalogAt(tmpDir, logr.Discard())
+	require.NoError(t, err)
+
+	// Store a solution in catalog
+	content := []byte(`apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: cacheable-sol
+  version: 1.0.0
+spec:
+  resolvers: {}
+`)
+	ref, err := ParseReference(ArtifactKindSolution, "cacheable-sol@1.0.0")
+	require.NoError(t, err)
+	_, err = cat.Store(context.Background(), ref, content, nil, nil, false)
+	require.NoError(t, err)
+
+	mock := &mockCacher{hit: false}
+	resolver := NewSolutionResolver(cat, logr.Discard(), WithResolverArtifactCache(mock))
+	got, err := resolver.FetchSolution(context.Background(), "cacheable-sol@1.0.0")
+	require.NoError(t, err)
+	assert.Equal(t, content, got)
+}
+
+func TestSolutionResolver_FetchSolutionWithBundle(t *testing.T) {
+	t.Run("returns error for invalid reference", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cat, err := NewLocalCatalogAt(tmpDir, logr.Discard())
+		require.NoError(t, err)
+
+		resolver := NewSolutionResolver(cat, logr.Discard())
+		_, _, err = resolver.FetchSolutionWithBundle(context.Background(), "Invalid-Name@1.0.0")
+		assert.Error(t, err)
+	})
+
+	t.Run("returns error for non-existent solution", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cat, err := NewLocalCatalogAt(tmpDir, logr.Discard())
+		require.NoError(t, err)
+
+		resolver := NewSolutionResolver(cat, logr.Discard())
+		_, _, err = resolver.FetchSolutionWithBundle(context.Background(), "nonexistent@1.0.0")
+		assert.Error(t, err)
+	})
+
+	t.Run("fetches existing solution without bundle", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cat, err := NewLocalCatalogAt(tmpDir, logr.Discard())
+		require.NoError(t, err)
+
+		content := []byte(`apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: bundle-sol
+  version: 1.0.0
+spec:
+  resolvers: {}
+`)
+		ref, err := ParseReference(ArtifactKindSolution, "bundle-sol@1.0.0")
+		require.NoError(t, err)
+		_, err = cat.Store(context.Background(), ref, content, nil, nil, false)
+		require.NoError(t, err)
+
+		resolver := NewSolutionResolver(cat, logr.Discard())
+		got, bundle, err := resolver.FetchSolutionWithBundle(context.Background(), "bundle-sol@1.0.0")
+		require.NoError(t, err)
+		assert.Equal(t, content, got)
+		assert.Nil(t, bundle)
+	})
+
+	t.Run("cache hit returns stored content", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cat, err := NewLocalCatalogAt(tmpDir, logr.Discard())
+		require.NoError(t, err)
+
+		cachedContent := []byte("cached-content")
+		cachedBundle := []byte("cached-bundle")
+		mock := &mockCacher{content: cachedContent, bundle: cachedBundle, hit: true}
+
+		resolver := NewSolutionResolver(cat, logr.Discard(), WithResolverArtifactCache(mock))
+		got, gotBundle, err := resolver.FetchSolutionWithBundle(context.Background(), "any-sol@1.0.0")
+		require.NoError(t, err)
+		assert.Equal(t, cachedContent, got)
+		assert.Equal(t, cachedBundle, gotBundle)
+	})
+
+	t.Run("noCache skips cache", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cat, err := NewLocalCatalogAt(tmpDir, logr.Discard())
+		require.NoError(t, err)
+
+		mock := &mockCacher{hit: true} // would hit if cache were consulted
+		resolver := NewSolutionResolver(cat, logr.Discard(),
+			WithResolverArtifactCache(mock),
+			WithResolverNoCache(true),
+		)
+		// Should not use cache, so will fail with not-found
+		_, _, err = resolver.FetchSolutionWithBundle(context.Background(), "any-sol@1.0.0")
+		assert.Error(t, err)
+	})
+}
+
+// mockCacher is a simple ArtifactCacher for testing.
+type mockCacher struct {
+	content []byte
+	bundle  []byte
+	hit     bool
+	putErr  error
+}
+
+func (m *mockCacher) Get(_, _, _ string) ([]byte, []byte, bool, error) {
+	return m.content, m.bundle, m.hit, nil
+}
+
+func (m *mockCacher) Put(_, _, _, _ string, _, _ []byte) error {
+	return m.putErr
+}

@@ -81,3 +81,14 @@ func TestDiagnoseExpression_SizeComparison(t *testing.T) {
 	assert.Contains(t, result, "10 = 10")
 	assert.Contains(t, result, `Comparison "==" failed`)
 }
+
+func TestDiagnoseExpression_FallbackForInvalidExpr(t *testing.T) {
+	// An expression that's not a comparison and fails to evaluate (undefined reference)
+	celCtx := soltesting.BuildAssertionContext(&soltesting.CommandOutput{
+		Files: map[string]soltesting.FileInfo{},
+	})
+
+	result := soltesting.DiagnoseExpression(context.Background(), "undefined_variable_xyz", celCtx)
+	// Should trigger fallbackDiagnostic since the expression can't be compiled/evaluated
+	assert.Contains(t, result, "expected true, got false")
+}

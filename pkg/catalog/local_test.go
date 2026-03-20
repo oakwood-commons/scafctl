@@ -5,11 +5,14 @@ package catalog
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
+	digest "github.com/opencontainers/go-digest"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -692,4 +695,145 @@ func TestLocalCatalog_SaveLoad_RoundTrip(t *testing.T) {
 		// Verify annotations are preserved
 		assert.Equal(t, "custom-value", info.Annotations["custom-key"])
 	})
+}
+
+func TestIsTarMediaType(t *testing.T) {
+	assert.True(t, isTarMediaType(MediaTypeSolutionBundle))
+	assert.True(t, isTarMediaType(MediaTypeSolutionBundleSmallTar))
+	assert.False(t, isTarMediaType("application/json"))
+	assert.False(t, isTarMediaType(""))
+}
+
+func TestNewLocalCatalog(t *testing.T) {
+	// Override XDG path to use a temp dir
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	cat, err := NewLocalCatalog(logr.Discard())
+	require.NoError(t, err)
+	assert.NotNil(t, cat)
+}
+
+func TestLocalCatalog_TagForRef(t *testing.T) {
+	cat := newTestCatalog(t)
+	semVer := semver.MustParse("1.0.0")
+
+	tests := []struct {
+		name string
+		ref  Reference
+		want string
+	}{
+		{
+			name: "name only",
+			ref:  Reference{Kind: ArtifactKindSolution, Name: "my-sol"},
+			want: "solution/my-sol",
+		},
+		{
+			name: "with version",
+			ref:  Reference{Kind: ArtifactKindSolution, Name: "my-sol", Version: semVer},
+			want: "solution/my-sol:1.0.0",
+		},
+		{
+			name: "with digest",
+			ref:  Reference{Kind: ArtifactKindSolution, Name: "my-sol", Digest: "sha256:abc123"},
+			want: "solution/my-sol@sha256:abc123",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := cat.tagForRef(tt.ref)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestLocalCatalog_Prune_Empty(t *testing.T) {
+	ctx := context.Background()
+	cat := newTestCatalog(t)
+
+	result, err := cat.Prune(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.RemovedManifests)
+	assert.Equal(t, int64(0), result.ReclaimedBytes)
+}
+
+func TestLocalCatalog_Prune_WithArtifacts(t *testing.T) {
+	ctx := context.Background()
+	cat := newTestCatalog(t)
+
+	ref := Reference{
+		Kind:    ArtifactKindSolution,
+		Name:    "prune-sol",
+		Version: semver.MustParse("1.0.0"),
+	}
+	_, err := cat.Store(ctx, ref, []byte("content"), nil, nil, false)
+	require.NoError(t, err)
+
+	// Prune with live artifacts should not remove anything
+	result, err := cat.Prune(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.RemovedManifests)
+}
+
+func TestLocalCatalog_Prune_OrphanedBlob(t *testing.T) {
+	ctx := context.Background()
+	cat := newTestCatalog(t)
+
+	// Store a solution so the catalog has a valid index.json
+	ref := Reference{
+		Kind:    ArtifactKindSolution,
+		Name:    "keep-sol",
+		Version: semver.MustParse("1.0.0"),
+	}
+	_, err := cat.Store(ctx, ref, []byte("content"), nil, nil, false)
+	require.NoError(t, err)
+
+	// Create an orphaned blob (not referenced by any manifest)
+	blobsDir := cat.path + "/blobs/sha256"
+	orphanPath := blobsDir + "/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	require.NoError(t, os.WriteFile(orphanPath, []byte("orphan"), 0o600))
+
+	result, err := cat.Prune(ctx)
+	require.NoError(t, err)
+	// The orphaned blob should have been removed
+	assert.Equal(t, 1, result.RemovedBlobs)
+	assert.Greater(t, result.ReclaimedBytes, int64(0))
+}
+
+func TestLocalCatalog_Prune_OrphanedManifest(t *testing.T) {
+	ctx := context.Background()
+	cat := newTestCatalog(t)
+
+	// Store a solution so catalog is initialized
+	ref := Reference{
+		Kind:    ArtifactKindSolution,
+		Name:    "real-sol",
+		Version: semver.MustParse("1.0.0"),
+	}
+	_, err := cat.Store(ctx, ref, []byte("content"), nil, nil, false)
+	require.NoError(t, err)
+
+	// Inject a fake orphaned manifest entry into index.json
+	indexPath := cat.path + "/index.json"
+	data, err := os.ReadFile(indexPath)
+	require.NoError(t, err)
+
+	var index ocispec.Index
+	require.NoError(t, json.Unmarshal(data, &index))
+
+	// Add a fake manifest entry that has no corresponding tag
+	fakeDigest := "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	index.Manifests = append(index.Manifests, ocispec.Descriptor{
+		MediaType: ocispec.MediaTypeImageManifest,
+		Digest:    digest.Digest(fakeDigest),
+		Size:      42,
+	})
+	updatedData, err := json.MarshalIndent(index, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(indexPath, updatedData, 0o600))
+
+	result, err := cat.Prune(ctx)
+	require.NoError(t, err)
+	// The orphaned manifest entry should have been removed from index.json
+	assert.Equal(t, 1, result.RemovedManifests)
 }

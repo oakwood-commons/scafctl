@@ -4,6 +4,7 @@
 package celexp
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/google/cel-go/cel"
@@ -423,6 +424,77 @@ func TestVarDecl_ToEnvOption(t *testing.T) {
 	env, err := cel.NewEnv(envOpt)
 	require.NoError(t, err)
 	assert.NotNil(t, env)
+}
+
+func TestIsCompatibleType(t *testing.T) {
+	// nil CEL type - use string as go type, nil as cel type
+	compat, _ := isCompatibleType(reflect.TypeOf(""), nil)
+	assert.True(t, compat)
+
+	tests := []struct {
+		name       string
+		goValue    any
+		celType    *cel.Type
+		wantCompat bool
+	}{
+		{"int64 matches int", int64(1), cel.IntType, true},
+		{"int32 does not match int", int32(1), cel.IntType, false},
+		{"uint64 matches uint", uint64(1), cel.UintType, true},
+		{"float64 matches double", float64(1.0), cel.DoubleType, true},
+		{"bool matches bool", true, cel.BoolType, true},
+		{"string matches string", "hello", cel.StringType, true},
+		{"bytes matches bytes", []byte("hi"), cel.BytesType, true},
+		{"int does not match bytes", int64(1), cel.BytesType, false},
+		{"slice matches list", []string{"a"}, cel.ListType(cel.StringType), true},
+		{"int not list", int64(1), cel.ListType(cel.StringType), false},
+		{"map matches map", map[string]any{}, cel.MapType(cel.StringType, cel.AnyType), true},
+		{"int not map", int64(1), cel.MapType(cel.StringType, cel.AnyType), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			goType := reflect.TypeOf(tt.goValue)
+			compat, _ := isCompatibleType(goType, tt.celType)
+			assert.Equal(t, tt.wantCompat, compat)
+		})
+	}
+}
+
+func TestIsCompatibleType_DefaultBranches(t *testing.T) {
+	// OpaqueType creates a type string that doesn't match list/map prefix → hits default branches
+	opaqueType := cel.OpaqueType("myproto", cel.StringType)
+
+	t.Run("struct matches complex type", func(t *testing.T) {
+		type myStruct struct{ Field string }
+		goType := reflect.TypeOf(myStruct{})
+		compat, _ := isCompatibleType(goType, opaqueType)
+		assert.True(t, compat)
+	})
+
+	t.Run("map matches complex type", func(t *testing.T) {
+		goType := reflect.TypeOf(map[string]any{})
+		compat, _ := isCompatibleType(goType, opaqueType)
+		assert.True(t, compat)
+	})
+
+	t.Run("interface matches complex type", func(t *testing.T) {
+		goType := reflect.TypeOf((*interface{ Read([]byte) (int, error) })(nil)).Elem()
+		compat, _ := isCompatibleType(goType, opaqueType)
+		assert.True(t, compat)
+	})
+
+	t.Run("unsupported type returns false", func(t *testing.T) {
+		goType := reflect.TypeOf(int(0)) // int is not struct/map/interface
+		compat, msg := isCompatibleType(goType, opaqueType)
+		assert.False(t, compat)
+		assert.NotEmpty(t, msg)
+	})
+}
+
+func TestCelTypeToString(t *testing.T) {
+	assert.Equal(t, "any", celTypeToString(nil))
+	assert.Equal(t, "string", celTypeToString(cel.StringType))
+	assert.Equal(t, "int", celTypeToString(cel.IntType))
 }
 
 func BenchmarkValidateVars_Simple(b *testing.B) {

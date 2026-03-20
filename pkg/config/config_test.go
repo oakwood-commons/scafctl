@@ -243,6 +243,27 @@ func TestManager_ConfigPath(t *testing.T) {
 	assert.Equal(t, configPath, mgr.ConfigPath())
 }
 
+func TestManager_ConfigPath_WithoutLoad(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "my-config.yaml")
+
+	mgr := NewManager(configPath)
+	// Don't Load() — ConfigFileUsed() will be empty, so falls back to configPath
+	assert.Equal(t, configPath, mgr.ConfigPath())
+}
+
+func TestManager_ConfigPath_DefaultXDG(t *testing.T) {
+	t.Parallel()
+
+	// Use empty configPath so it falls back to the XDG path
+	mgr := NewManager("")
+	path := mgr.ConfigPath()
+	// Should return a non-empty path (XDG default)
+	assert.NotEmpty(t, path)
+}
+
 func TestManager_IsSet(t *testing.T) {
 	t.Parallel()
 
@@ -509,4 +530,102 @@ settings:
 	all := mgr.AllSettings()
 	assert.NotNil(t, all)
 	assert.NotEmpty(t, all)
+}
+
+func TestManager_Config(t *testing.T) {
+	mgr := NewManager("")
+	cfg, err := mgr.Load()
+	require.NoError(t, err)
+	assert.Equal(t, cfg, mgr.Config())
+}
+
+func TestGlobal_And_ResetGlobal(t *testing.T) {
+	ResetGlobal()
+	cfg, err := Global()
+	require.NoError(t, err)
+	assert.NotNil(t, cfg)
+
+	// Second call should return cached value
+	cfg2, err2 := Global()
+	require.NoError(t, err2)
+	assert.Equal(t, cfg, cfg2)
+
+	ResetGlobal()
+}
+
+func TestWithConfig_And_FromContext(t *testing.T) {
+	ctx := t.Context()
+	assert.Nil(t, FromContext(ctx))
+
+	cfg := &Config{}
+	ctx2 := WithConfig(ctx, cfg)
+	assert.Equal(t, cfg, FromContext(ctx2))
+}
+
+func TestManager_Set_AllBranches(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	mgr := NewManager(configPath)
+	_, err := mgr.Load()
+	require.NoError(t, err)
+
+	// logging.level with int value
+	mgr.Set("logging.level", 2)
+	assert.Equal(t, mgr.config.Logging.Level, "2")
+
+	// logging.format
+	mgr.Set("logging.format", "json")
+	assert.Equal(t, "json", mgr.config.Logging.Format)
+
+	// logging.timestamps
+	mgr.Set("logging.timestamps", true)
+	assert.True(t, mgr.config.Logging.Timestamps)
+
+	// logging.enableProfiling
+	mgr.Set("logging.enableProfiling", true)
+	assert.True(t, mgr.config.Logging.EnableProfiling)
+
+	// settings.quiet
+	mgr.Set("settings.quiet", true)
+	assert.True(t, mgr.config.Settings.Quiet)
+
+	// settings.defaultCatalog
+	mgr.Set("settings.defaultCatalog", "my-catalog")
+	assert.Equal(t, "my-catalog", mgr.config.Settings.DefaultCatalog)
+
+	// unknown key – should not panic
+	mgr.Set("unknown.key", "value")
+
+	// Set with nil config should not panic
+	mgr2 := NewManager(configPath)
+	mgr2.Set("logging.level", "debug")
+}
+
+func TestBuildConfig_IsCacheEnabled(t *testing.T) {
+	b := &BuildConfig{}
+	assert.True(t, b.IsCacheEnabled()) // default nil = true
+
+	f := false
+	b.EnableCache = &f
+	assert.False(t, b.IsCacheEnabled())
+
+	tr := true
+	b.EnableCache = &tr
+	assert.True(t, b.IsCacheEnabled())
+}
+
+func TestBuildConfig_IsAutoCacheRemoteArtifacts(t *testing.T) {
+	b := &BuildConfig{}
+	assert.True(t, b.IsAutoCacheRemoteArtifacts()) // default nil = true
+
+	f := false
+	b.AutoCacheRemoteArtifacts = &f
+	assert.False(t, b.IsAutoCacheRemoteArtifacts())
+
+	tr := true
+	b.AutoCacheRemoteArtifacts = &tr
+	assert.True(t, b.IsAutoCacheRemoteArtifacts())
 }

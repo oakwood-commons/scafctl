@@ -360,3 +360,35 @@ func TestMultipleMessages(t *testing.T) {
 	assert.True(t, strings.Contains(out, "Process completed"))
 	assert.True(t, strings.Contains(errBuf.String(), "But there was an error"))
 }
+
+func TestDebugOut(t *testing.T) {
+	w, _, errBuf := newTestWriter()
+	w.cliParams.NoColor = true
+
+	w.DebugOut("debug output message")
+	assert.Contains(t, errBuf.String(), "debug output message")
+}
+
+func TestDebugOut_Quiet(t *testing.T) {
+	w, _, errBuf := newTestWriter()
+	w.cliParams.IsQuiet = true
+
+	w.DebugOut("silent")
+	assert.Empty(t, errBuf.String())
+}
+
+func TestDebugOutf(t *testing.T) {
+	w, _, errBuf := newTestWriter()
+	w.cliParams.NoColor = true
+
+	w.DebugOutf("value=%d", 42)
+	assert.Contains(t, errBuf.String(), "value=42")
+}
+
+func TestDebugOutf_Quiet(t *testing.T) {
+	w, _, errBuf := newTestWriter()
+	w.cliParams.IsQuiet = true
+
+	w.DebugOutf("quiet value=%d", 99)
+	assert.Empty(t, errBuf.String())
+}
