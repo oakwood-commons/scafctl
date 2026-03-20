@@ -975,3 +975,32 @@ func TestValidateWorkflow_ComplexScenario(t *testing.T) {
 	err := ValidateWorkflow(w, reg)
 	assert.NoError(t, err)
 }
+
+func TestParseQuotedString(t *testing.T) {
+	assert.Equal(t, "", parseQuotedString(""))
+	assert.Equal(t, "", parseQuotedString("a"))
+	assert.Equal(t, "", parseQuotedString("abc")) // no quotes
+	assert.Equal(t, "hello", parseQuotedString(`"hello"`))
+	assert.Equal(t, "world", parseQuotedString(`'world'`))
+	assert.Equal(t, "", parseQuotedString(`"unclosed`))
+}
+
+func TestExtractRefsFromExpression_Nil(t *testing.T) {
+	refs := make(map[string]struct{})
+	extractRefsFromExpression(nil, refs)
+	assert.Empty(t, refs)
+}
+
+func TestExtractRefsFromExpression_NoActionsVar(t *testing.T) {
+	refs := make(map[string]struct{})
+	expr := celexp.Expression("1 + 1")
+	extractRefsFromExpression(&expr, refs)
+	assert.Empty(t, refs)
+}
+
+func TestExtractRefsFromExpression_WithActions(t *testing.T) {
+	refs := make(map[string]struct{})
+	expr := celexp.Expression(`__actions["build"].results`)
+	extractRefsFromExpression(&expr, refs)
+	assert.Contains(t, refs, "build")
+}

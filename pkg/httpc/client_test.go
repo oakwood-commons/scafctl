@@ -695,3 +695,180 @@ func TestMergeHTTPClientConfig_CircuitBreakerOverride(t *testing.T) {
 	assert.Equal(t, 10, merged.CircuitBreakerMaxFailures)
 	assert.Equal(t, "30s", merged.CircuitBreakerOpenTimeout) // From global
 }
+
+func TestBuildStatusCodeCheckRetry(t *testing.T) {
+	checkRetry := BuildStatusCodeCheckRetry([]int{503, 429})
+
+	tests := []struct {
+		name       string
+		statusCode int
+		wantRetry  bool
+	}{
+		{"should retry 503", 503, true},
+		{"should retry 429", 429, true},
+		{"should not retry 200", 200, false},
+		{"should not retry 404", 404, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := &http.Response{StatusCode: tt.statusCode}
+			got, err := checkRetry(context.Background(), resp, nil)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantRetry, got)
+		})
+	}
+}
+
+func TestBuildStatusCodeCheckRetry_NetworkError(t *testing.T) {
+	checkRetry := BuildStatusCodeCheckRetry(nil)
+	// network error → default policy handles it (may retry)
+	fakeErr := io.ErrUnexpectedEOF
+	// Provide a real response so DefaultRetryPolicy doesn't panic
+	resp := &http.Response{StatusCode: 200}
+	_, err := checkRetry(context.Background(), resp, fakeErr)
+	// No assertion on retry bool; just check it doesn't panic and returns no error
+	require.NoError(t, err)
+}
+
+func TestBuildNamedBackoff(t *testing.T) {
+	initial := 100 * time.Millisecond
+	maxDur := 5 * time.Second
+
+	tests := []struct {
+		strategy string
+		attempt  int
+		wantMin  time.Duration
+		wantMax  time.Duration
+	}{
+		{"none", 0, initial, initial},
+		{"none", 5, initial, initial},
+		{"linear", 0, initial, initial},
+		{"linear", 1, 2 * initial, maxDur},
+		{"exponential", 0, initial, 2 * initial},
+		{"exponential", 10, initial, maxDur},
+		{"unknown", 0, initial, initial},
+	}
+	for _, tt := range tests {
+		t.Run(tt.strategy+"_"+string(rune('0'+tt.attempt)), func(t *testing.T) {
+			backoff := BuildNamedBackoff(tt.strategy, initial, maxDur)
+			got := backoff(initial, maxDur, tt.attempt, nil)
+			assert.GreaterOrEqual(t, got, tt.wantMin)
+			assert.LessOrEqual(t, got, tt.wantMax)
+		})
+	}
+}
+
+func TestPrivateIPsAllowed_NoConfig(t *testing.T) {
+	ctx := context.Background()
+	assert.False(t, PrivateIPsAllowed(ctx))
+}
+
+func TestValidateURLNotPrivate(t *testing.T) {
+	tests := []struct {
+		url     string
+		wantErr bool
+	}{
+		{"https://example.com/api", false},
+		{"https://localhost/api", true},
+		{"https://127.0.0.1/api", true},
+		{"https://192.168.1.1/api", true},
+		{"https://10.0.0.1/api", true},
+		{"https://metadata.google.internal/api", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.url, func(t *testing.T) {
+			err := ValidateURLNotPrivate(tt.url)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestWrapCheckRetryWithMetrics_NilOriginal(t *testing.T) {
+	ctx := context.Background()
+	fn := wrapCheckRetryWithMetrics(nil)
+	// Pass a non-retryable 200 response so DefaultRetryPolicy doesn't panic
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Request:    &http.Request{Method: http.MethodGet},
+	}
+	retry, err := fn(ctx, resp, nil)
+	assert.NoError(t, err)
+	assert.False(t, retry)
+}
+
+func TestWrapCheckRetryWithMetrics_WithOriginal(t *testing.T) {
+	ctx := context.Background()
+	called := false
+	original := func(_ context.Context, _ *http.Response, _ error) (bool, error) {
+		called = true
+		return false, nil
+	}
+	fn := wrapCheckRetryWithMetrics(original)
+	retry, err := fn(ctx, nil, nil)
+	assert.NoError(t, err)
+	assert.False(t, retry)
+	assert.True(t, called)
+}
+
+func TestMergeHTTPClientConfig_AllFields(t *testing.T) {
+	enableCircuit := true
+	enableCompression := true
+	global := &config.HTTPClientConfig{}
+	perCatalog := &config.HTTPClientConfig{
+		RetryWaitMax:                      "5s",
+		CacheDir:                          "/tmp/cache",
+		CacheTTL:                          "1h",
+		CacheKeyPrefix:                    "myprefix",
+		MaxCacheFileSize:                  int64(1024),
+		CircuitBreakerHalfOpenMaxRequests: 3,
+		CircuitBreakerOpenTimeout:         "10s",
+		EnableCircuitBreaker:              &enableCircuit,
+		EnableCompression:                 &enableCompression,
+	}
+	merged := MergeHTTPClientConfig(global, perCatalog)
+	assert.Equal(t, "5s", merged.RetryWaitMax)
+	assert.Equal(t, "/tmp/cache", merged.CacheDir)
+	assert.Equal(t, "1h", merged.CacheTTL)
+	assert.Equal(t, "myprefix", merged.CacheKeyPrefix)
+	assert.Equal(t, int64(1024), merged.MaxCacheFileSize)
+	assert.Equal(t, 3, merged.CircuitBreakerHalfOpenMaxRequests)
+	assert.Equal(t, "10s", merged.CircuitBreakerOpenTimeout)
+	require.NotNil(t, merged.EnableCircuitBreaker)
+	assert.True(t, *merged.EnableCircuitBreaker)
+	require.NotNil(t, merged.EnableCompression)
+	assert.True(t, *merged.EnableCompression)
+}
+
+func TestNewClient_WithCustomHandlers(t *testing.T) {
+	// Covers the non-nil branches for CheckRetry, Backoff, ErrorHandler in NewClient
+	customCheckRetry := func(_ context.Context, _ *http.Response, _ error) (bool, error) {
+		return false, nil
+	}
+	customBackoff := func(minDur, _ time.Duration, _ int, _ *http.Response) time.Duration {
+		return minDur
+	}
+	customErrorHandler := func(resp *http.Response, err error, numTries int) (*http.Response, error) {
+		return resp, err
+	}
+
+	cfg := DefaultConfig()
+	cfg.CheckRetry = customCheckRetry
+	cfg.Backoff = customBackoff
+	cfg.ErrorHandler = customErrorHandler
+
+	client := NewClient(cfg)
+	require.NotNil(t, client)
+}
+
+func TestNewClient_WithLogger(t *testing.T) {
+	// Covers the Logger.GetSink() != nil branch
+	cfg := DefaultConfig()
+	cfg.Logger = logr.Discard()
+	// logr.Discard() has a sink (discard sink), so this covers the logger branch
+	client := NewClient(cfg)
+	require.NotNil(t, client)
+}

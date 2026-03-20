@@ -208,6 +208,54 @@ func TestInvalidateArtifact_NonExistent(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestArtifactCache_Get_ContentReadError(t *testing.T) {
+	// Simulate a readable meta but unreadable content file by creating a directory
+	// at the path where the content file should be, causing a read error.
+	dir := t.TempDir()
+	c := cache.NewArtifactCache(dir, 0)
+
+	// Put a valid entry first
+	err := c.Put("solution", "error-sol", "1.0.0", "sha256:abc", []byte("content"), nil)
+	require.NoError(t, err)
+
+	// Replace content file with a directory (unreadable as file)
+	entryDir := dir + "/solution/error-sol@1.0.0"
+	contentPath := entryDir + "/content"
+	require.NoError(t, os.Remove(contentPath))
+	require.NoError(t, os.MkdirAll(contentPath, 0o700))
+
+	_, _, ok, err := c.Get("solution", "error-sol", "1.0.0")
+	// Should get an error reading the content directory as a file
+	assert.Error(t, err)
+	assert.False(t, ok)
+}
+
+func TestArtifactCache_Put_WithBundle(t *testing.T) {
+	dir := t.TempDir()
+	c := cache.NewArtifactCache(dir, 0)
+
+	content := []byte("solution content")
+	bundleData := []byte("bundle data")
+
+	err := c.Put("solution", "with-bundle", "1.0.0", "sha256:xyz", content, bundleData)
+	require.NoError(t, err)
+
+	gotContent, gotBundle, ok, err := c.Get("solution", "with-bundle", "1.0.0")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, content, gotContent)
+	assert.Equal(t, bundleData, gotBundle)
+}
+
+func TestArtifactCache_Invalidate_OsRemoveAllError(t *testing.T) {
+	// Can't easily simulate os.RemoveAll error on macOS without root;
+	// just verify that invalidating a non-existent entry works.
+	dir := t.TempDir()
+	c := cache.NewArtifactCache(dir, 0)
+	err := c.Invalidate("solution", "nonexistent", "9.9.9")
+	assert.NoError(t, err)
+}
+
 func BenchmarkInvalidateArtifact(b *testing.B) {
 	dir := b.TempDir()
 	c := cache.NewArtifactCache(dir, time.Hour)

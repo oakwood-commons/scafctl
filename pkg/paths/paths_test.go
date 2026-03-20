@@ -354,3 +354,60 @@ func BenchmarkExpandHome(b *testing.B) {
 		_, _ = ExpandHome("~/some/path")
 	}
 }
+
+func TestAllPaths(t *testing.T) {
+	paths := AllPaths()
+	assert.NotEmpty(t, paths)
+	// Should include at minimum Config, Secrets, Data, Catalog, Cache, HTTP Cache, State
+	assert.GreaterOrEqual(t, len(paths), 5)
+	for _, p := range paths {
+		assert.NotEmpty(t, p.Name)
+		assert.NotEmpty(t, p.Description)
+	}
+}
+
+func TestIllustrativePaths_Linux(t *testing.T) {
+	paths := IllustrativePaths("linux")
+	assert.NotEmpty(t, paths)
+	for _, p := range paths {
+		assert.NotEmpty(t, p.Path)
+	}
+}
+
+func TestIllustrativePaths_Darwin(t *testing.T) {
+	paths := IllustrativePaths("darwin")
+	assert.NotEmpty(t, paths)
+}
+
+func TestIllustrativePaths_Windows(t *testing.T) {
+	paths := IllustrativePaths("windows")
+	assert.NotEmpty(t, paths)
+}
+
+func TestIllustrativePaths_Macos(t *testing.T) {
+	paths := IllustrativePaths("macos")
+	assert.NotEmpty(t, paths)
+}
+
+func TestIllustrativePaths_Unknown(t *testing.T) {
+	paths := IllustrativePaths("unknown-os")
+	assert.NotEmpty(t, paths)
+}
+
+func TestBuildCacheDir(t *testing.T) {
+	dir := BuildCacheDir()
+	assert.NotEmpty(t, dir)
+	assert.Contains(t, dir, BuildCacheDirName)
+}
+
+func TestPluginCacheDir(t *testing.T) {
+	dir := PluginCacheDir()
+	assert.NotEmpty(t, dir)
+	assert.Contains(t, dir, PluginCacheDirName)
+}
+
+func TestArtifactCacheDir(t *testing.T) {
+	dir := ArtifactCacheDir()
+	assert.NotEmpty(t, dir)
+	assert.Contains(t, dir, ArtifactCacheDirName)
+}

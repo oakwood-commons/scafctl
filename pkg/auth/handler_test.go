@@ -76,3 +76,21 @@ func TestToken_TimeUntilExpiry(t *testing.T) {
 		assert.InDelta(t, time.Hour.Seconds(), got.Seconds(), 1)
 	})
 }
+
+func TestCachedTokenInfo_TimeUntilExpiry(t *testing.T) {
+	t.Run("zero expiry", func(t *testing.T) {
+		c := &CachedTokenInfo{}
+		assert.Equal(t, time.Duration(0), c.TimeUntilExpiry())
+	})
+
+	t.Run("expired", func(t *testing.T) {
+		c := &CachedTokenInfo{ExpiresAt: time.Now().Add(-time.Hour)}
+		assert.Equal(t, time.Duration(0), c.TimeUntilExpiry())
+	})
+
+	t.Run("future", func(t *testing.T) {
+		c := &CachedTokenInfo{ExpiresAt: time.Now().Add(time.Hour)}
+		got := c.TimeUntilExpiry()
+		assert.InDelta(t, time.Hour.Seconds(), got.Seconds(), 1)
+	})
+}

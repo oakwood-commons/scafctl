@@ -202,3 +202,20 @@ func listTarEntries(t *testing.T, tarData []byte) []string {
 	}
 	return entries
 }
+
+func TestWithTarReadFileFunc(t *testing.T) {
+	called := false
+	opt := WithTarReadFileFunc(func(path string) ([]byte, error) {
+		called = true
+		return []byte("file content"), nil
+	})
+
+	cfg := &tarConfig{}
+	opt(cfg)
+	assert.NotNil(t, cfg.readFile)
+
+	data, err := cfg.readFile("/any/path")
+	assert.NoError(t, err)
+	assert.Equal(t, []byte("file content"), data)
+	assert.True(t, called)
+}

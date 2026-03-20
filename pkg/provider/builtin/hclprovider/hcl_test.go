@@ -422,3 +422,57 @@ func TestHCLProvider_Execute_Format_InvalidOperation(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported operation")
 }
+
+func TestHCLProvider_WhatIf_Operations(t *testing.T) {
+	p := NewHCLProvider()
+	ctx := context.Background()
+	desc := p.Descriptor()
+	require.NotNil(t, desc.WhatIf)
+
+	tests := []struct {
+		name     string
+		input    any
+		contains string
+	}{
+		{
+			name:     "parse with path",
+			input:    map[string]any{"operation": "parse", "path": "/tf/main.tf"},
+			contains: "/tf/main.tf",
+		},
+		{
+			name:     "format with dir",
+			input:    map[string]any{"operation": "format", "dir": "/tf/"},
+			contains: "/tf/",
+		},
+		{
+			name:     "validate with inline content",
+			input:    map[string]any{"operation": "validate", "content": `variable "x" {}`},
+			contains: "inline content",
+		},
+		{
+			name:     "generate without target",
+			input:    map[string]any{"operation": "generate"},
+			contains: "generate",
+		},
+		{
+			name:     "default operation (no op field)",
+			input:    map[string]any{"path": "/tf/vars.tf"},
+			contains: "/tf/vars.tf",
+		},
+		{
+			name:     "non-map input",
+			input:    "not-a-map",
+			contains: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg, err := desc.WhatIf(ctx, tt.input)
+			require.NoError(t, err)
+			if tt.contains != "" {
+				assert.Contains(t, msg, tt.contains)
+			}
+		})
+	}
+}

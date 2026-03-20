@@ -174,3 +174,28 @@ func TestNew(t *testing.T) {
 	assert.Equal(t, cliParams, input.cliParams)
 	assert.False(t, input.testMode)
 }
+
+func TestPasswordOptions_WithConfirmPrompt(t *testing.T) {
+	opts := NewPasswordOptions()
+	opts.WithConfirmPrompt("confirm: ")
+	assert.Equal(t, "confirm: ", opts.ConfirmPrompt)
+}
+
+func TestPasswordOptions_WithAllowEmpty(t *testing.T) {
+	opts := NewPasswordOptions()
+	opts.WithAllowEmpty(true)
+	assert.True(t, opts.AllowEmpty)
+}
+
+func TestLineOptions_WithAllowEmpty(t *testing.T) {
+	opts := NewLineOptions()
+	opts.WithAllowEmpty(false)
+	assert.False(t, opts.AllowEmpty)
+}
+
+func TestLineOptions_WithValidator(t *testing.T) {
+	opts := NewLineOptions()
+	validator := func(s string) error { return nil }
+	opts.WithValidator(validator)
+	assert.NotNil(t, opts.Validator)
+}

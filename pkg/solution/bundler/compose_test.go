@@ -586,3 +586,19 @@ spec:
 	require.NoError(t, err)
 	assert.Nil(t, result.Spec.Testing)
 }
+
+func TestIsLocalFilePath(t *testing.T) {
+	assert.True(t, IsLocalFilePath("./templates/file.txt"))
+	assert.True(t, IsLocalFilePath("relative/path"))
+	assert.False(t, IsLocalFilePath(""))
+	assert.False(t, IsLocalFilePath("https://example.com/file"))
+	assert.False(t, IsLocalFilePath("oci://registry/repo@sha256:abc"))
+	assert.False(t, IsLocalFilePath("name@1.2.3"))
+	assert.False(t, IsLocalFilePath("/absolute/path"))
+}
+
+func TestExtractResolverName(t *testing.T) {
+	assert.Equal(t, "myResolver", ExtractResolverName("myResolver.result"))
+	assert.Equal(t, "myResolver", ExtractResolverName("myResolver.nested.field"))
+	assert.Equal(t, "standalone", ExtractResolverName("standalone"))
+}

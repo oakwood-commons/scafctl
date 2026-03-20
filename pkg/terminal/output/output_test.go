@@ -10,6 +10,93 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 )
 
+func TestParseOutputFormat(t *testing.T) {
+	tests := []struct {
+		input     string
+		wantFmt   OutputFormat
+		wantFound bool
+	}{
+		{"auto", OutputFormatAuto, true},
+		{"", OutputFormatAuto, true},
+		{"table", OutputFormatTable, true},
+		{"list", OutputFormatList, true},
+		{"json", OutputFormatJSON, true},
+		{"yaml", OutputFormatYAML, true},
+		{"quiet", OutputFormatQuiet, true},
+		{"invalid", "", false},
+		{"JSON", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got, ok := ParseOutputFormat(tt.input)
+			if ok != tt.wantFound {
+				t.Errorf("ParseOutputFormat(%q) found=%v, want %v", tt.input, ok, tt.wantFound)
+			}
+			if got != tt.wantFmt {
+				t.Errorf("ParseOutputFormat(%q) = %v, want %v", tt.input, got, tt.wantFmt)
+			}
+		})
+	}
+}
+
+func TestBaseOutputFormats(t *testing.T) {
+	formats := BaseOutputFormats()
+	if len(formats) < 4 {
+		t.Errorf("BaseOutputFormats() returned %d formats, want at least 4", len(formats))
+	}
+}
+
+func TestIsStructuredFormat(t *testing.T) {
+	if !IsStructuredFormat(OutputFormatJSON) {
+		t.Error("JSON should be a structured format")
+	}
+	if !IsStructuredFormat(OutputFormatYAML) {
+		t.Error("YAML should be a structured format")
+	}
+	if IsStructuredFormat(OutputFormatTable) {
+		t.Error("table should not be a structured format")
+	}
+	if IsStructuredFormat(OutputFormatAuto) {
+		t.Error("auto should not be a structured format")
+	}
+}
+
+func TestIsKvxFormat(t *testing.T) {
+	if !IsKvxFormat(OutputFormatAuto) {
+		t.Error("auto should be a kvx format")
+	}
+	if !IsKvxFormat(OutputFormatTable) {
+		t.Error("table should be a kvx format")
+	}
+	if !IsKvxFormat(OutputFormatList) {
+		t.Error("list should be a kvx format")
+	}
+	if !IsKvxFormat("") {
+		t.Error("empty string should be a kvx format")
+	}
+	if IsKvxFormat(OutputFormatJSON) {
+		t.Error("json should not be a kvx format")
+	}
+}
+
+func TestIsQuietFormat(t *testing.T) {
+	if !IsQuietFormat(OutputFormatQuiet) {
+		t.Error("quiet should be a quiet format")
+	}
+	if IsQuietFormat(OutputFormatJSON) {
+		t.Error("json should not be a quiet format")
+	}
+}
+
+func TestOutputFormat_String(t *testing.T) {
+	if OutputFormatJSON.String() != "json" {
+		t.Errorf("got %q, want %q", OutputFormatJSON.String(), "json")
+	}
+	if OutputFormatTable.String() != "table" {
+		t.Errorf("got %q, want %q", OutputFormatTable.String(), "table")
+	}
+}
+
 func TestValidateCommands(t *testing.T) {
 	tests := []struct {
 		name    string

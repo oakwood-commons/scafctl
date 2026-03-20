@@ -45,6 +45,8 @@ signs:
       - "--output-certificate=${certificate}"
       - "--output-signature=${signature}"
       - "--yes"
+sboms:
+  - artifacts: archive
 homebrew_casks:
   - name: scafctl
     repository:

@@ -397,3 +397,82 @@ func TestType_Constants(t *testing.T) {
 	assert.Equal(t, Type("duration"), TypeDuration)
 	assert.Equal(t, Type("any"), TypeAny)
 }
+
+// TestCoerceType_Int_EdgeCases covers float32 whole number and unknown-type error for int
+func TestCoerceType_Int_EdgeCases(t *testing.T) {
+	// float32 with no decimal part should succeed
+	result, err := CoerceType(float32(10), TypeInt)
+	require.NoError(t, err)
+	assert.Equal(t, 10, result)
+
+	// unknown type → error
+	_, err = CoerceType(map[string]any{"k": "v"}, TypeInt)
+	assert.Error(t, err)
+}
+
+// TestCoerceType_Float_EdgeCases covers unknown-type error for float
+func TestCoerceType_Float_EdgeCases(t *testing.T) {
+	// uint8, uint16, uint32, uint64 via CoerceType path
+	result, err := CoerceType(uint8(7), TypeFloat)
+	require.NoError(t, err)
+	assert.Equal(t, 7.0, result)
+
+	result, err = CoerceType(uint16(8), TypeFloat)
+	require.NoError(t, err)
+	assert.Equal(t, 8.0, result)
+
+	result, err = CoerceType(uint32(9), TypeFloat)
+	require.NoError(t, err)
+	assert.Equal(t, 9.0, result)
+
+	result, err = CoerceType(uint64(10), TypeFloat)
+	require.NoError(t, err)
+	assert.Equal(t, 10.0, result)
+
+	// unknown type → error
+	_, err = CoerceType(map[string]any{"k": "v"}, TypeFloat)
+	assert.Error(t, err)
+}
+
+// TestCoerceType_Bool_EdgeCases covers int8/int16/int32/uint16/uint32 and unknown-type error for bool
+func TestCoerceType_Bool_EdgeCases(t *testing.T) {
+	result, err := CoerceType(int8(1), TypeBool)
+	require.NoError(t, err)
+	assert.Equal(t, true, result)
+
+	result, err = CoerceType(int16(0), TypeBool)
+	require.NoError(t, err)
+	assert.Equal(t, false, result)
+
+	result, err = CoerceType(int32(1), TypeBool)
+	require.NoError(t, err)
+	assert.Equal(t, true, result)
+
+	result, err = CoerceType(int64(0), TypeBool)
+	require.NoError(t, err)
+	assert.Equal(t, false, result)
+
+	result, err = CoerceType(uint16(1), TypeBool)
+	require.NoError(t, err)
+	assert.Equal(t, true, result)
+
+	result, err = CoerceType(uint32(0), TypeBool)
+	require.NoError(t, err)
+	assert.Equal(t, false, result)
+
+	result, err = CoerceType(uint64(1), TypeBool)
+	require.NoError(t, err)
+	assert.Equal(t, true, result)
+
+	result, err = CoerceType(float32(1.5), TypeBool)
+	require.NoError(t, err)
+	assert.Equal(t, true, result)
+
+	result, err = CoerceType(float32(0.0), TypeBool)
+	require.NoError(t, err)
+	assert.Equal(t, false, result)
+
+	// unknown type → error
+	_, err = CoerceType(map[string]any{"k": "v"}, TypeBool)
+	assert.Error(t, err)
+}

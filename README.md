@@ -3,8 +3,9 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/oakwood-commons/scafctl)](https://goreportcard.com/report/github.com/oakwood-commons/scafctl)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/oakwood-commons/scafctl)](https://github.com/oakwood-commons/scafctl/releases)
-[![CI](https://github.com/oakwood-commons/scafctl/actions/workflows/pr-checks.yml/badge.svg)](https://github.com/oakwood-commons/scafctl/actions/workflows/pr-checks.yml)
+[![CI](https://github.com/oakwood-commons/scafctl/actions/workflows/test.yml/badge.svg)](https://github.com/oakwood-commons/scafctl/actions/workflows/test.yml)
 [![codecov](https://codecov.io/gh/oakwood-commons/scafctl/graph/badge.svg)](https://codecov.io/gh/oakwood-commons/scafctl)
+[![Documentation](https://img.shields.io/badge/docs-github.io-blue)](https://oakwood-commons.github.io/scafctl/)
 
 > **Alpha** — scafctl is under active development. APIs and CLI commands may
 > change between releases. Breaking changes are documented in release notes.

@@ -304,3 +304,10 @@ func TestGroupsProviderCompileTimeCheck(t *testing.T) {
 
 	var _ auth.GroupsProvider = h
 }
+
+func TestTruncate(t *testing.T) {
+	assert.Equal(t, "hello", truncate("hello", 10))
+	assert.Equal(t, "hel...", truncate("hello world", 3))
+	assert.Equal(t, "hi", truncate("hi", 2))
+	assert.Equal(t, "...", truncate("abc", 0))
+}

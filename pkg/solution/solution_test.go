@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -386,4 +387,61 @@ func TestSolution_LoadFromBytes(t *testing.T) {
 		err := s.LoadFromBytes([]byte("{}"))
 		require.Error(t, err)
 	})
+}
+
+func TestBundle_IsEmpty(t *testing.T) {
+	b := Bundle{}
+	assert.True(t, b.IsEmpty())
+
+	b2 := Bundle{Include: []string{"something"}}
+	assert.False(t, b2.IsEmpty())
+}
+
+func TestPluginKind_IsValid(t *testing.T) {
+	assert.True(t, PluginKindProvider.IsValid())
+	assert.True(t, PluginKindAuthHandler.IsValid())
+	assert.False(t, PluginKind("invalid").IsValid())
+	assert.False(t, PluginKind("").IsValid())
+}
+
+func TestSolution_ToJSONPretty(t *testing.T) {
+	s := &Solution{}
+	s.Metadata.Name = "test-solution"
+	data, err := s.ToJSONPretty()
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "test-solution")
+	assert.Contains(t, string(data), "\n") // pretty-printed
+}
+
+func TestSolution_FromJSON(t *testing.T) {
+	s := &Solution{}
+	jsonData := `{"apiVersion":"scafctl.oakwood-commons.io/v1","kind":"Solution","metadata":{"name":"my-sol"}}`
+	err := s.FromJSON([]byte(jsonData))
+	require.NoError(t, err)
+	assert.Equal(t, "my-sol", s.Metadata.Name)
+}
+
+func TestSolution_FromJSON_Invalid(t *testing.T) {
+	s := &Solution{}
+	err := s.FromJSON([]byte("not json"))
+	require.Error(t, err)
+}
+
+func TestSolution_SourceMap_And_SetSourceMap(t *testing.T) {
+	s := &Solution{}
+	assert.Nil(t, s.SourceMap())
+
+	s.SetSourceMap(nil)
+	assert.Nil(t, s.SourceMap())
+}
+
+func TestSpec_HasTesting(t *testing.T) {
+	var sp *Spec
+	assert.False(t, sp.HasTesting())
+
+	sp = &Spec{}
+	assert.False(t, sp.HasTesting())
+
+	sp.Testing = &soltesting.TestSuite{}
+	assert.True(t, sp.HasTesting())
 }

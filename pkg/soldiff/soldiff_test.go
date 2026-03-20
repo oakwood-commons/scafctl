@@ -5,6 +5,7 @@ package soldiff
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	semver "github.com/Masterminds/semver/v3"
@@ -676,4 +677,46 @@ func BenchmarkCompare_ManyActions(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		Compare(a, bSol)
 	}
+}
+
+func TestCompareFiles_InvalidPathA(t *testing.T) {
+	ctx := context.Background()
+	_, err := CompareFiles(ctx, "/nonexistent/pathA.yaml", "/nonexistent/pathB.yaml")
+	require.Error(t, err)
+}
+
+func TestCompareFiles_InvalidPathB(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	pathA := tmpDir + "/solA.yaml"
+	content := []byte(`apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: sol-a
+  version: "1.0.0"
+`)
+	require.NoError(t, os.WriteFile(pathA, content, 0o600))
+	_, err := CompareFiles(ctx, pathA, "/nonexistent/pathB.yaml")
+	require.Error(t, err)
+}
+
+func TestCompareFiles_Valid(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+
+	solContent := []byte(`apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: my-sol
+  version: "1.0.0"
+`)
+	pathA := tmpDir + "/solA.yaml"
+	pathB := tmpDir + "/solB.yaml"
+	require.NoError(t, os.WriteFile(pathA, solContent, 0o600))
+	require.NoError(t, os.WriteFile(pathB, solContent, 0o600))
+
+	result, err := CompareFiles(ctx, pathA, pathB)
+	require.NoError(t, err)
+	assert.Equal(t, pathA, result.PathA)
+	assert.Equal(t, pathB, result.PathB)
 }

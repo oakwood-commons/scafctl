@@ -5,6 +5,8 @@ package settings
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestNewCliParams(t *testing.T) {
@@ -35,4 +37,22 @@ func TestNewCliParams(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDefaultHTTPCacheDir(t *testing.T) {
+	dir := DefaultHTTPCacheDir()
+	assert.Contains(t, dir, "scafctl")
+	assert.Contains(t, dir, "http-cache")
+}
+
+func TestDefaultBuildCacheDir(t *testing.T) {
+	dir := DefaultBuildCacheDir()
+	assert.Contains(t, dir, "scafctl")
+	assert.Contains(t, dir, "build-cache")
+}
+
+func TestDefaultPluginCacheDir(t *testing.T) {
+	dir := DefaultPluginCacheDir()
+	assert.Contains(t, dir, "scafctl")
+	assert.Contains(t, dir, "plugins")
 }

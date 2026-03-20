@@ -1626,3 +1626,57 @@ func TestExecutor_Execute_NilValueRefInput(t *testing.T) {
 	require.Error(t, execResult.Error)
 	assert.Contains(t, execResult.Error.Error(), "no value (nil)")
 }
+
+type noopProgressCallback struct{}
+
+func (n *noopProgressCallback) OnPhaseStart(_ int, _ []string)     {}
+func (n *noopProgressCallback) OnResolverComplete(_ string)        {}
+func (n *noopProgressCallback) OnResolverFailed(_ string, _ error) {}
+func (n *noopProgressCallback) OnResolverSkipped(_ string)         {}
+
+func TestWithProgressCallback(t *testing.T) {
+	reg := newMockRegistry()
+	cb := &noopProgressCallback{}
+	exec := NewExecutor(reg, WithProgressCallback(cb))
+	assert.NotNil(t, exec.progressCallback)
+}
+
+func TestWithSkipValidation(t *testing.T) {
+	reg := newMockRegistry()
+	exec := NewExecutor(reg, WithSkipValidation(true))
+	assert.True(t, exec.skipValidation)
+}
+
+func TestWithSkipTransform(t *testing.T) {
+	reg := newMockRegistry()
+	exec := NewExecutor(reg, WithSkipTransform(true))
+	assert.True(t, exec.skipTransform)
+}
+
+func TestResolverOptionsFromAppConfig(t *testing.T) {
+	cfg := ConfigInput{
+		Timeout:        30 * time.Second,
+		PhaseTimeout:   5 * time.Minute,
+		MaxConcurrency: 5,
+		WarnValueSize:  1024,
+		MaxValueSize:   10240,
+		ValidateAll:    true,
+	}
+	opts := OptionsFromAppConfig(cfg)
+	assert.Len(t, opts, 6)
+
+	reg := newMockRegistry()
+	exec := NewExecutor(reg, opts...)
+	assert.Equal(t, 30*time.Second, exec.timeout)
+	assert.Equal(t, 5*time.Minute, exec.phaseTimeout)
+	assert.Equal(t, 5, exec.maxConcurrency)
+	assert.Equal(t, int64(1024), exec.warnValueSize)
+	assert.Equal(t, int64(10240), exec.maxValueSize)
+	assert.True(t, exec.validateAll)
+}
+
+func TestResolverOptionsFromAppConfig_ZeroValues(t *testing.T) {
+	cfg := ConfigInput{}
+	opts := OptionsFromAppConfig(cfg)
+	assert.Empty(t, opts)
+}

@@ -706,3 +706,71 @@ func BenchmarkCompile_NoCache(b *testing.B) {
 		_, _ = expr.Compile(opts)
 	}
 }
+
+func TestFormatTypeForKey_AllTypes(t *testing.T) {
+	tests := []struct {
+		celType  *cel.Type
+		expected string
+	}{
+		{nil, "unknown"},
+		{cel.IntType, "int"},
+		{cel.UintType, "uint"},
+		{cel.DoubleType, "double"},
+		{cel.BoolType, "bool"},
+		{cel.StringType, "string"},
+		{cel.BytesType, "bytes"},
+		{cel.DurationType, "duration"},
+		{cel.TimestampType, "timestamp"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.expected, func(t *testing.T) {
+			result := formatTypeForKey(tt.celType)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestFormatTypeForKey_ComplexType(t *testing.T) {
+	// ListType is not one of the simple exact types - tests the default branch
+	listType := cel.ListType(cel.StringType)
+	result := formatTypeForKey(listType)
+	// Should return the string representation of the type
+	assert.NotEmpty(t, result)
+}
+
+func TestSerializeAST_VariousExprKinds(t *testing.T) {
+	// generateCacheKeyWithAST exercises serializeAST by compiling expressions.
+	// Must use WithASTBasedCaching(true) to actually call serializeAST.
+	cache := NewProgramCache(10, WithASTBasedCaching(true))
+	ctx := context.Background()
+	opts := []cel.EnvOption{
+		cel.Variable("x", cel.IntType),
+		cel.Variable("s", cel.StringType),
+		cel.Variable("m", cel.MapType(cel.StringType, cel.DynType)),
+		cel.Variable("items", cel.ListType(cel.StringType)),
+	}
+
+	tests := []string{
+		// IdentKind + LiteralKind + CallKind
+		"x + 1",
+		// SelectKind
+		"m.key",
+		// ListKind
+		"[1, 2, 3]",
+		// MapKind - map literal
+		"{'a': 1, 'b': 2}",
+		// CallKind member function
+		"s.contains('hello')",
+		// Comprehension (all, exists, filter, map)
+		"items.all(e, e.size() > 0)",
+		"items.exists(e, e == 'x')",
+		"items.filter(e, e != '')",
+	}
+
+	for _, expr := range tests {
+		t.Run(expr, func(t *testing.T) {
+			key := generateCacheKeyWithAST(ctx, cache, expr, opts, GetDefaultCostLimit())
+			assert.NotEmpty(t, key.key)
+		})
+	}
+}

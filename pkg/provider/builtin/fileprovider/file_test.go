@@ -2081,3 +2081,62 @@ func TestDryRun_Write_ErrorStrategy_Message(t *testing.T) {
 	assert.Equal(t, "error", data["_plannedStatus"])
 	assert.Contains(t, data["_message"].(string), "Would error")
 }
+
+func TestFileProvider_WhatIf_Operations(t *testing.T) {
+	p := NewFileProvider()
+	ctx := context.Background()
+	desc := p.Descriptor()
+	require.NotNil(t, desc.WhatIf)
+
+	tests := []struct {
+		name     string
+		input    any
+		contains string
+	}{
+		{
+			name:     "write",
+			input:    map[string]any{"operation": "write", "path": "/tmp/file.txt"},
+			contains: "/tmp/file.txt",
+		},
+		{
+			name:     "delete",
+			input:    map[string]any{"operation": "delete", "path": "/tmp/file.txt"},
+			contains: "/tmp/file.txt",
+		},
+		{
+			name:     "read",
+			input:    map[string]any{"operation": "read", "path": "/tmp/file.txt"},
+			contains: "/tmp/file.txt",
+		},
+		{
+			name:     "exists",
+			input:    map[string]any{"operation": "exists", "path": "/tmp/file.txt"},
+			contains: "/tmp/file.txt",
+		},
+		{
+			name:     "write-tree",
+			input:    map[string]any{"operation": "write-tree", "path": "/tmp", "basePath": "/tmp/output"},
+			contains: "/tmp/output",
+		},
+		{
+			name:     "default operation",
+			input:    map[string]any{"operation": "rename", "path": "/tmp/file.txt"},
+			contains: "rename",
+		},
+		{
+			name:     "non-map input",
+			input:    "not-a-map",
+			contains: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg, err := desc.WhatIf(ctx, tt.input)
+			require.NoError(t, err)
+			if tt.contains != "" {
+				assert.Contains(t, msg, tt.contains)
+			}
+		})
+	}
+}

@@ -929,3 +929,38 @@ func (c *recordingProgressCallback) OnFinallyComplete() {
 	defer c.mu.Unlock()
 	c.events = append(c.events, "finally_complete")
 }
+
+func TestWithIOStreams_ActionExecutor(t *testing.T) {
+	streams := &provider.IOStreams{}
+	e := NewExecutor(WithIOStreams(streams))
+	assert.Equal(t, streams, e.ioStreams)
+}
+
+func TestOptionsFromAppConfig(t *testing.T) {
+	cfg := ConfigInput{
+		DefaultTimeout: 5 * time.Minute,
+		GracePeriod:    30 * time.Second,
+		MaxConcurrency: 3,
+	}
+	opts := OptionsFromAppConfig(cfg)
+	assert.Len(t, opts, 3)
+
+	// Apply to executor and check
+	e := NewExecutor(opts...)
+	assert.Equal(t, 5*time.Minute, e.defaultTimeout)
+	assert.Equal(t, 30*time.Second, e.gracePeriod)
+	assert.Equal(t, 3, e.maxConcurrency)
+}
+
+func TestOptionsFromAppConfig_ZeroValues(t *testing.T) {
+	cfg := ConfigInput{}
+	opts := OptionsFromAppConfig(cfg)
+	assert.Empty(t, opts)
+}
+
+func TestExecutor_GetContext(t *testing.T) {
+	e := NewExecutor()
+	ctx := e.GetContext()
+	assert.NotNil(t, ctx)
+	assert.Equal(t, e.actionContext, ctx)
+}

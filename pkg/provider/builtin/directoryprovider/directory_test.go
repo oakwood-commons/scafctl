@@ -6,6 +6,7 @@ package directoryprovider
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1136,4 +1137,105 @@ func TestToInt(t *testing.T) {
 		_, err := toInt("42")
 		require.Error(t, err)
 	})
+
+	t.Run("json.Number", func(t *testing.T) {
+		v, err := toInt(json.Number("99"))
+		require.NoError(t, err)
+		assert.Equal(t, 99, v)
+	})
+
+	t.Run("json.Number invalid", func(t *testing.T) {
+		_, err := toInt(json.Number("not-a-number"))
+		require.Error(t, err)
+	})
+}
+
+func TestToInt64(t *testing.T) {
+	t.Run("int", func(t *testing.T) {
+		v, err := toInt64(42)
+		require.NoError(t, err)
+		assert.Equal(t, int64(42), v)
+	})
+
+	t.Run("int64", func(t *testing.T) {
+		v, err := toInt64(int64(42))
+		require.NoError(t, err)
+		assert.Equal(t, int64(42), v)
+	})
+
+	t.Run("float64", func(t *testing.T) {
+		v, err := toInt64(42.0)
+		require.NoError(t, err)
+		assert.Equal(t, int64(42), v)
+	})
+
+	t.Run("json.Number", func(t *testing.T) {
+		v, err := toInt64(json.Number("77"))
+		require.NoError(t, err)
+		assert.Equal(t, int64(77), v)
+	})
+
+	t.Run("json.Number invalid", func(t *testing.T) {
+		_, err := toInt64(json.Number("bad"))
+		require.Error(t, err)
+	})
+
+	t.Run("string fails", func(t *testing.T) {
+		_, err := toInt64("42")
+		require.Error(t, err)
+	})
+}
+
+func TestDirectoryProvider_WhatIf_Operations(t *testing.T) {
+	p := NewDirectoryProvider()
+	ctx := context.Background()
+	desc := p.Descriptor()
+	require.NotNil(t, desc.WhatIf)
+
+	tests := []struct {
+		name     string
+		input    any
+		contains string
+	}{
+		{
+			name:     "mkdir",
+			input:    map[string]any{"operation": "mkdir", "path": "/tmp/mydir"},
+			contains: "/tmp/mydir",
+		},
+		{
+			name:     "rmdir",
+			input:    map[string]any{"operation": "rmdir", "path": "/tmp/mydir"},
+			contains: "/tmp/mydir",
+		},
+		{
+			name:     "copy",
+			input:    map[string]any{"operation": "copy", "path": "/tmp/src", "destination": "/tmp/dst"},
+			contains: "/tmp/src",
+		},
+		{
+			name:     "list",
+			input:    map[string]any{"operation": "list", "path": "/tmp"},
+			contains: "/tmp",
+		},
+		{
+			name:     "default operation",
+			input:    map[string]any{"operation": "unknown", "path": "/tmp/x"},
+			contains: "unknown",
+		},
+		{
+			name:     "non-map input",
+			input:    "not-a-map",
+			contains: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg, err := desc.WhatIf(ctx, tt.input)
+			require.NoError(t, err)
+			if tt.contains != "" {
+				assert.Contains(t, msg, tt.contains)
+			}
+		})
+	}
 }

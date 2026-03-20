@@ -4,9 +4,11 @@
 package bundler
 
 import (
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestScafctlIgnore_BasicPatterns(t *testing.T) {
@@ -86,4 +88,24 @@ func TestNoopIgnoreChecker(t *testing.T) {
 	noop := &noopIgnoreChecker{}
 	assert.False(t, noop.IsIgnored("anything"))
 	assert.False(t, noop.IsIgnored("vendor/mod.go"))
+}
+
+func TestLoadScafctlIgnore_NoFileReturnsNoop(t *testing.T) {
+	tmpDir := t.TempDir()
+	checker, err := LoadScafctlIgnore(tmpDir)
+	require.NoError(t, err)
+	assert.NotNil(t, checker)
+	// Should be noop — nothing ignored
+	assert.False(t, checker.IsIgnored("anything.go"))
+}
+
+func TestLoadScafctlIgnoreFrom_WithPatterns(t *testing.T) {
+	tmpDir := t.TempDir()
+	ignoreFile := tmpDir + "/.scafctlignore"
+	require.NoError(t, os.WriteFile(ignoreFile, []byte("*.tmp\n# comment\nvendor/\n"), 0o644))
+
+	checker, err := LoadScafctlIgnoreFrom(ignoreFile)
+	require.NoError(t, err)
+	assert.True(t, checker.IsIgnored("file.tmp"))
+	assert.False(t, checker.IsIgnored("file.go"))
 }

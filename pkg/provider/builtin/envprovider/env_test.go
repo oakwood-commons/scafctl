@@ -460,3 +460,27 @@ func TestEnvProvider_Execute_Unset_Error(t *testing.T) {
 	assert.Nil(t, output)
 	assert.Contains(t, err.Error(), "failed to unset environment variable")
 }
+
+func TestDefaultEnvOps_LookupEnv(t *testing.T) {
+	d := &DefaultEnvOps{}
+	t.Setenv("TEST_LOOKUP_KEY", "test-value")
+	val, ok := d.LookupEnv("TEST_LOOKUP_KEY")
+	assert.True(t, ok)
+	assert.Equal(t, "test-value", val)
+
+	_, ok = d.LookupEnv("NON_EXISTENT_KEY_XYZ123")
+	assert.False(t, ok)
+}
+
+func TestDefaultEnvOps_Setenv(t *testing.T) {
+	d := &DefaultEnvOps{}
+	err := d.Setenv("TEST_SET_KEY", "set-value")
+	assert.NoError(t, err)
+}
+
+func TestDefaultEnvOps_Unsetenv(t *testing.T) {
+	d := &DefaultEnvOps{}
+	t.Setenv("TEST_UNSET_KEY", "unset-value")
+	err := d.Unsetenv("TEST_UNSET_KEY")
+	assert.NoError(t, err)
+}

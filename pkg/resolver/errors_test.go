@@ -282,3 +282,23 @@ func TestErrorsAs(t *testing.T) {
 		assert.Len(t, valErr.Failures, 1)
 	})
 }
+
+func TestIsForEachTypeError(t *testing.T) {
+	err := &ForEachTypeError{ResolverName: "myResolver", Step: 0, ActualType: "string"}
+	assert.True(t, IsForEachTypeError(err))
+	assert.False(t, IsForEachTypeError(errors.New("other error")))
+}
+
+func TestFailedResolver_Unwrap(t *testing.T) {
+	cause := errors.New("root cause")
+	fr := &FailedResolver{ResolverName: "test", Phase: 1, Err: cause}
+	assert.Equal(t, cause, fr.Unwrap())
+}
+
+func TestIsAggregatedExecutionError(t *testing.T) {
+	err := &AggregatedExecutionError{
+		Errors: []*FailedResolver{{ResolverName: "r1", Phase: 1, Err: errors.New("failed")}},
+	}
+	assert.True(t, IsAggregatedExecutionError(err))
+	assert.False(t, IsAggregatedExecutionError(errors.New("plain error")))
+}

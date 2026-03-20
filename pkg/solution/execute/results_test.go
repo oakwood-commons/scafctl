@@ -338,3 +338,26 @@ func TestRenderGraph_UnsupportedFormat(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported graph format")
 }
+
+func TestCalculateValueSize_String(t *testing.T) {
+	size := CalculateValueSize("hello")
+	assert.Greater(t, size, int64(0))
+}
+
+func TestCalculateValueSize_Map(t *testing.T) {
+	m := map[string]any{"key": "value", "num": 42}
+	size := CalculateValueSize(m)
+	assert.Greater(t, size, int64(0))
+}
+
+func TestCalculateValueSize_Nil(t *testing.T) {
+	size := CalculateValueSize(nil)
+	assert.Equal(t, int64(4), size) // "null" = 4 bytes
+}
+
+func TestCalculateValueSize_UnmarshalableType(t *testing.T) {
+	// channel can't be JSON-marshaled, should return 0
+	ch := make(chan int)
+	size := CalculateValueSize(ch)
+	assert.Equal(t, int64(0), size)
+}

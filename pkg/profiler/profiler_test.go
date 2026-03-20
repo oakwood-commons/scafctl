@@ -5,6 +5,7 @@ package profiler
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -248,4 +249,75 @@ func TestGoroutineStart(t *testing.T) {
 
 	profiler.cleanUp()
 	assert.Len(t, profiler.getFiles(), 0, "Expected files to be cleaned up")
+}
+
+func TestIntoContext(t *testing.T) {
+	ctx := context.Background()
+	list := &FunctionCallDetailsList{}
+	ctx2 := IntoContext(ctx, list)
+	assert.NotEqual(t, ctx, ctx2)
+
+	ctx3 := IntoContext(ctx2, list)
+	assert.Equal(t, ctx2, ctx3)
+}
+
+func TestFunctionCallDetailsFromCtx(t *testing.T) {
+	ctx := context.Background()
+	list := &FunctionCallDetailsList{}
+	ctx = IntoContext(ctx, list)
+
+	result := FunctionCallDetailsFromCtx(ctx)
+	assert.Equal(t, list, result)
+}
+
+func TestFunctionCallDetailsFromCtx_NotInContext(t *testing.T) {
+	ctx := context.Background()
+	result := FunctionCallDetailsFromCtx(ctx)
+	assert.NotNil(t, result)
+}
+
+func TestAddFunctionCallDetails(t *testing.T) {
+	ctx := context.Background()
+	list := &FunctionCallDetailsList{}
+	ctx = IntoContext(ctx, list)
+
+	details := FunctionCallDetails{
+		Package:              "pkg/test",
+		Name:                 "TestFunc",
+		DurationMilliseconds: 42,
+	}
+	AddFunctionCallDetails(ctx, details)
+	assert.Len(t, *list, 1)
+	assert.Equal(t, "TestFunc", (*list)[0].Name)
+}
+
+func TestAddFunctionCallDetails_NilContext(t *testing.T) {
+	AddFunctionCallDetails(context.TODO(), FunctionCallDetails{Name: "nilCtxFunc"})
+}
+
+func TestFunctionCallDetailsList_ToMap(t *testing.T) {
+	list := FunctionCallDetailsList{
+		{Package: "pkg/a", FileName: "a.go", Name: "FuncA", DurationMilliseconds: 10},
+	}
+	result := list.ToMap()
+	assert.Len(t, result, 1)
+	assert.Equal(t, "pkg/a", result[0]["package"])
+	assert.Equal(t, int64(10), result[0]["durationMilliseconds"])
+}
+
+func TestFunctionCallDetailsList_ToMap_Nil(t *testing.T) {
+	var list *FunctionCallDetailsList
+	assert.Nil(t, list.ToMap())
+}
+
+func TestGoroutineProfiler_Stop(t *testing.T) {
+	g := &goroutineProfiler{fileManager: &fileManager{}}
+	err := g.Stop()
+	assert.NoError(t, err)
+}
+
+func TestMemoryProfiler_Stop(t *testing.T) {
+	m := &memoryProfiler{fileManager: &fileManager{}}
+	err := m.Stop()
+	assert.NoError(t, err)
 }

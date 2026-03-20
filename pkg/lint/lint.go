@@ -704,7 +704,17 @@ func testFileReachable(solutionDir, entry string) bool {
 
 	// Plain path or directory: check if it exists on disk.
 	absPath := filepath.Join(solutionDir, cleaned)
-	_, err := os.Stat(absPath)
+	// Verify the resolved path is within solutionDir (defence-in-depth on top
+	// of the ".." and IsAbs guards above that already exclude traversal).
+	// Use filepath.Rel so that the check is correct when solutionDir is the
+	// filesystem root ("/") where cleanedBase+Sep would be "//" — a prefix
+	// that no normal path starts with, causing false negatives.
+	cleanedBase := filepath.Clean(solutionDir)
+	rel, relErr := filepath.Rel(cleanedBase, absPath)
+	if relErr != nil || strings.HasPrefix(rel, "..") {
+		return false
+	}
+	_, err := os.Stat(absPath) //nolint:gosec // path validated to be within solutionDir
 	return err == nil
 }
 

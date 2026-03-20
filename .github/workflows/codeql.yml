@@ -8,6 +8,10 @@ on:
   schedule:
     - cron: "0 6 * * 1" # Weekly on Monday at 06:00 UTC
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   analyze:
     name: Analyze
@@ -19,16 +23,17 @@ jobs:
       security-events: write
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version-file: go.mod
 
-      - uses: github/codeql-action/init@v3
+      - uses: github/codeql-action/init@b1bff81932f5cdfc8695c7752dcee935dcd061c8 # v4 (codeql-bundle-v2.25.0)
         with:
           languages: go
 
-      - uses: github/codeql-action/autobuild@v3
+      - name: Build
+        run: go build ./...
 
-      - uses: github/codeql-action/analyze@v3
+      - uses: github/codeql-action/analyze@b1bff81932f5cdfc8695c7752dcee935dcd061c8 # v4 (codeql-bundle-v2.25.0)

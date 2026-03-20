@@ -5,12 +5,17 @@ package lint
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/duration"
+	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
@@ -698,4 +703,343 @@ func BenchmarkLintNullResolver(b *testing.B) {
 	for b.Loop() {
 		_ = Solution(sol, "bench.yaml", reg)
 	}
+}
+
+func TestLintSchema_FileNotFound(t *testing.T) {
+	result := &Result{Findings: make([]*Finding, 0)}
+	lintSchema("/nonexistent/path/solution.yaml", result)
+	// Should silently skip when file cannot be read
+	assert.Empty(t, result.Findings)
+}
+
+func TestLintSchema_ValidYAML(t *testing.T) {
+	// Write a valid minimal YAML file (empty map)
+	tmpFile := filepath.Join(t.TempDir(), "solution.yaml")
+	require.NoError(t, os.WriteFile(tmpFile, []byte("name: test\nkind: Solution\napiVersion: v1\n"), 0o600))
+	result := &Result{Findings: make([]*Finding, 0)}
+	lintSchema(tmpFile, result)
+	// Might have findings or none, but should not panic
+}
+
+func TestLintSchema_InvalidYAML(t *testing.T) {
+	// Write invalid YAML
+	tmpFile := filepath.Join(t.TempDir(), "solution.yaml")
+	require.NoError(t, os.WriteFile(tmpFile, []byte("{\ninvalid: [yaml\n"), 0o600))
+	result := &Result{Findings: make([]*Finding, 0)}
+	lintSchema(tmpFile, result)
+	// Should silently skip invalid YAML
+	assert.Empty(t, result.Findings)
+}
+
+func TestLintExpressions_AllPaths(t *testing.T) {
+	tmplExpr := gotmpl.GoTemplatingContent("{{.InvalidTemplate")
+	celExpr := celexp.Expression("invalid === CEL")
+	celEmpty := celexp.Expression("")
+	tmplEmpty := gotmpl.GoTemplatingContent("")
+
+	inputs := map[string]*spec.ValueRef{
+		"nilVal":      nil,
+		"emptyExpr":   {Expr: &celEmpty},
+		"emptyTmpl":   {Tmpl: &tmplEmpty},
+		"invalidExpr": {Expr: &celExpr},
+		"invalidTmpl": {Tmpl: &tmplExpr},
+	}
+
+	result := &Result{Findings: make([]*Finding, 0)}
+	lintExpressions(inputs, "test.resolvers.myresolver", result)
+
+	// Should have findings for invalid CEL and invalid template
+	findingRules := make([]string, 0, len(result.Findings))
+	for _, f := range result.Findings {
+		findingRules = append(findingRules, f.RuleName)
+	}
+	assert.Contains(t, findingRules, "invalid-expression")
+	assert.Contains(t, findingRules, "invalid-template")
+}
+
+func TestLintSolution_NoResolversNoWorkflow(t *testing.T) {
+	reg := provider.NewRegistry()
+	sol := &solution.Solution{
+		Spec: solution.Spec{},
+	}
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "empty-solution")
+	require.Len(t, findings, 1)
+	assert.Equal(t, SeverityError, findings[0].Severity)
+}
+
+func TestLintResolverReservedName(t *testing.T) {
+	reg := provider.NewRegistry()
+	staticProv := newFakeProvider("static", map[string]*jsonschema.Schema{
+		"value": {Type: "string"},
+	})
+	_ = reg.Register(staticProv)
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"__actions": {
+					Type: "string",
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "static",
+							Inputs:   map[string]*spec.ValueRef{"value": {Literal: "x"}},
+						}},
+					},
+				},
+			},
+		},
+	}
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "reserved-name")
+	require.Len(t, findings, 1)
+	assert.Contains(t, findings[0].Message, "__actions")
+}
+
+func TestLintResolvers_NilResolvers(t *testing.T) {
+	reg := provider.NewRegistry()
+	// lintResolvers should early-return when Resolvers is nil
+	// Use a solution with a workflow only so we don't hit empty-solution
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"my-action": {
+						Name:        "my-action",
+						Description: "does something",
+						Provider:    "",
+					},
+				},
+			},
+		},
+	}
+	result := Solution(sol, "test.yaml", reg)
+	// No reserved-name or null-resolver findings expected
+	for _, f := range result.Findings {
+		assert.NotEqual(t, "reserved-name", f.RuleName)
+		assert.NotEqual(t, "null-resolver", f.RuleName)
+	}
+}
+
+func TestLintResolvers_MissingProviderInResolveStep(t *testing.T) {
+	reg := provider.NewRegistry()
+	// The provider "nonexistent" is not registered
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"data": {
+					Type:        "string",
+					Description: "fetches data",
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "nonexistent",
+							Inputs:   map[string]*spec.ValueRef{},
+						}},
+					},
+				},
+			},
+		},
+	}
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "missing-provider")
+	assert.NotEmpty(t, findings)
+}
+
+func TestLintResolverSelfReferences_MessageExprAndTmpl(t *testing.T) {
+	reg := provider.NewRegistry()
+	staticProv := newFakeProvider("static", map[string]*jsonschema.Schema{
+		"value": {Type: "string"},
+	})
+	_ = reg.Register(staticProv)
+
+	celExpr := celexp.Expression("_.myresolver.isValid()")
+	tmplExpr := gotmpl.GoTemplatingContent("{{_.myresolver}}")
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"myresolver": {
+					Type:        "string",
+					Description: "with self-refs",
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "static",
+							Inputs:   map[string]*spec.ValueRef{"value": {Literal: "x"}},
+						}},
+					},
+					Validate: &resolver.ValidatePhase{
+						With: []resolver.ProviderValidation{
+							{
+								Provider: "static",
+								Inputs:   map[string]*spec.ValueRef{"value": {Literal: "ok"}},
+								Message: &spec.ValueRef{
+									Expr: &celExpr,
+								},
+							},
+							{
+								Provider: "static",
+								Inputs:   map[string]*spec.ValueRef{"value": {Literal: "ok"}},
+								Message: &spec.ValueRef{
+									Tmpl: &tmplExpr,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "resolver-self-reference")
+	assert.GreaterOrEqual(t, len(findings), 2)
+}
+
+func TestLintWorkflow_FinallyWithForEach(t *testing.T) {
+	reg := provider.NewRegistry()
+	celExpr := celexp.Expression("['a','b']")
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"main": {
+						Name:        "main",
+						Description: "main action",
+					},
+				},
+				Finally: map[string]*action.Action{
+					"cleanup": {
+						Name:        "cleanup",
+						Description: "cleanup action",
+						ForEach: &spec.ForEachClause{
+							In: &spec.ValueRef{Expr: &celExpr},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "finally-with-foreach")
+	require.Len(t, findings, 1)
+	assert.Contains(t, findings[0].Location, "cleanup")
+}
+
+func TestLintAction_MissingProviderAndLongTimeout(t *testing.T) {
+	reg := provider.NewRegistry()
+
+	longTimeout := duration.New(15 * time.Minute)
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"deploy": {
+						Name:        "deploy",
+						Description: "deploys",
+						Provider:    "nonexistent-provider",
+						Timeout:     &longTimeout,
+					},
+				},
+			},
+		},
+	}
+
+	result := Solution(sol, "test.yaml", reg)
+
+	// Should have missing-provider finding
+	mpFindings := filterFindingsByRule(result, "missing-provider")
+	assert.NotEmpty(t, mpFindings)
+
+	// Should have long-timeout finding
+	ltFindings := filterFindingsByRule(result, "long-timeout")
+	assert.NotEmpty(t, ltFindings)
+}
+
+func TestLintProviderInputsForStep_EmptyProviderName(t *testing.T) {
+	reg := provider.NewRegistry()
+	result := &Result{Findings: make([]*Finding, 0)}
+	// providerName="" → early return → no findings
+	lintProviderInputsForStep("", map[string]*spec.ValueRef{"key": {Literal: "val"}}, "loc", result, reg)
+	assert.Empty(t, result.Findings)
+}
+
+func TestLintProviderInputsForStep_NilInputs(t *testing.T) {
+	reg := provider.NewRegistry()
+	result := &Result{Findings: make([]*Finding, 0)}
+	// inputs=nil → early return → no findings
+	lintProviderInputsForStep("static", nil, "loc", result, reg)
+	assert.Empty(t, result.Findings)
+}
+
+func TestLintProviderInputsForStep_AdditionalProperties(t *testing.T) {
+	// Provider schema allows additional properties → unknown keys are skipped
+	prov := &fakeProvider{
+		desc: &provider.Descriptor{
+			Name:       "flexible",
+			APIVersion: "v1",
+			Version:    semver.MustParse("1.0.0"),
+			Schema: &jsonschema.Schema{
+				Type: "object",
+				Properties: map[string]*jsonschema.Schema{
+					"known": {Type: "string"},
+				},
+				AdditionalProperties: &jsonschema.Schema{},
+			},
+			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+				provider.CapabilityFrom: {Type: "object"},
+			},
+			Description:  "flexible provider",
+			Capabilities: []provider.Capability{provider.CapabilityFrom},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(prov)
+
+	result := &Result{Findings: make([]*Finding, 0)}
+	lintProviderInputsForStep("flexible", map[string]*spec.ValueRef{
+		"unknown-key": {Literal: "value"},
+	}, "loc", result, reg)
+
+	// No unknown-provider-input should be reported because additionalProperties allows it
+	for _, f := range result.Findings {
+		assert.NotEqual(t, "unknown-provider-input", f.RuleName)
+	}
+}
+
+func TestLintProviderInputsForStep_ExecCommandInjection(t *testing.T) {
+	// Create an exec provider (or a provider named "exec")
+	celExpr := celexp.Expression("_.myresolver")
+	execProv := &fakeProvider{
+		desc: &provider.Descriptor{
+			Name:       "exec",
+			APIVersion: "v1",
+			Version:    semver.MustParse("1.0.0"),
+			Schema: &jsonschema.Schema{
+				Type: "object",
+				Properties: map[string]*jsonschema.Schema{
+					"command": {Type: "string"},
+					"args":    {Type: "array"},
+				},
+			},
+			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+				provider.CapabilityFrom: {Type: "object"},
+			},
+			Description:  "exec provider",
+			Capabilities: []provider.Capability{provider.CapabilityFrom},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(execProv)
+
+	result := &Result{Findings: make([]*Finding, 0)}
+	lintProviderInputsForStep("exec", map[string]*spec.ValueRef{
+		"command": {Expr: &celExpr},
+	}, "resolvers.myresolver.resolve.with[0]", result, reg)
+
+	findings := filterFindingsByRule(result, "exec-command-injection")
+	assert.Len(t, findings, 1)
 }

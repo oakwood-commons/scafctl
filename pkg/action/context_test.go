@@ -551,3 +551,19 @@ func TestCopyMap(t *testing.T) {
 		})
 	}
 }
+
+func TestContext_MarkStreamed(t *testing.T) {
+	ctx := NewContext()
+	ctx.MarkRunning("action1", nil)
+	ctx.MarkStreamed("action1")
+
+	result, ok := ctx.GetResult("action1")
+	assert.True(t, ok)
+	assert.True(t, result.Streamed)
+}
+
+func TestContext_MarkStreamed_NonExistent(t *testing.T) {
+	ctx := NewContext()
+	// Should not panic when action doesn't exist
+	ctx.MarkStreamed("nonexistent")
+}

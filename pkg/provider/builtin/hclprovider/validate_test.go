@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/hashicorp/hcl/v2"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -213,4 +214,21 @@ func TestHCLProvider_Execute_Validate_MultiFileDryRun(t *testing.T) {
 	assert.Equal(t, 0, data["error_count"])
 	assert.Empty(t, data["files"].([]any))
 	assert.Equal(t, "dry-run", output.Metadata["mode"])
+}
+
+func TestSeverityString(t *testing.T) {
+	tests := []struct {
+		input    hcl.DiagnosticSeverity
+		expected string
+	}{
+		{hcl.DiagError, "error"},
+		{hcl.DiagWarning, "warning"},
+		{hcl.DiagInvalid, "invalid"},
+		{hcl.DiagnosticSeverity(99), "unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.expected, func(t *testing.T) {
+			assert.Equal(t, tt.expected, severityString(tt.input))
+		})
+	}
 }

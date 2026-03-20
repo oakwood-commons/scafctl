@@ -13,6 +13,8 @@ module:
   mounts:
     - source: docs
       target: content/docs
+    - source: home
+      target: content
 
 # Repository information
 params:

@@ -6,6 +6,7 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -529,4 +530,45 @@ func TestCachedToken_Marshaling(t *testing.T) {
 	assert.Equal(t, cached.Fingerprint, decoded.Fingerprint)
 	assert.WithinDuration(t, cached.ExpiresAt, decoded.ExpiresAt, time.Millisecond)
 	assert.WithinDuration(t, cached.CachedAt, decoded.CachedAt, time.Millisecond)
+}
+
+func TestTokenCache_Prefix(t *testing.T) {
+	store := secrets.NewMockStore()
+	cache := NewTokenCache(store, testCachePrefix)
+	assert.Equal(t, testCachePrefix, cache.Prefix())
+}
+
+func TestTokenCache_Set_StoreError(t *testing.T) {
+	store := secrets.NewMockStore()
+	store.SetErr = fmt.Errorf("disk full")
+	cache := newTestCache(store)
+	ctx := context.Background()
+
+	err := cache.Set(ctx, FlowInteractive, FingerprintHash("client:tenant"), "scope", &Token{
+		AccessToken: "tok",
+		TokenType:   "Bearer",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to write cached token")
+}
+
+func TestTokenCache_Clear_ListError(t *testing.T) {
+	store := secrets.NewMockStore()
+	store.ListErr = fmt.Errorf("list failed")
+	cache := newTestCache(store)
+	ctx := context.Background()
+
+	err := cache.Clear(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to list secrets")
+}
+
+func TestTokenCache_PurgeExpired_ListError(t *testing.T) {
+	store := secrets.NewMockStore()
+	store.ListErr = fmt.Errorf("list failed")
+	cache := newTestCache(store)
+	ctx := context.Background()
+
+	_, err := cache.PurgeExpired(ctx)
+	require.Error(t, err)
 }

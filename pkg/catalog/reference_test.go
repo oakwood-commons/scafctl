@@ -489,3 +489,99 @@ func BenchmarkValidateAlias(b *testing.B) {
 		_ = ValidateAlias("production")
 	}
 }
+
+func TestArtifactKind_Plural(t *testing.T) {
+	assert.Equal(t, "solutions", ArtifactKindSolution.Plural())
+	assert.Equal(t, "providers", ArtifactKindProvider.Plural())
+	assert.Equal(t, "auth-handlers", ArtifactKindAuthHandler.Plural())
+	assert.Equal(t, "unknowns", ArtifactKind("unknown").Plural())
+}
+
+func TestParseArtifactKindFromPlural(t *testing.T) {
+	kind, ok := ParseArtifactKindFromPlural("solutions")
+	assert.True(t, ok)
+	assert.Equal(t, ArtifactKindSolution, kind)
+
+	kind, ok = ParseArtifactKindFromPlural("providers")
+	assert.True(t, ok)
+	assert.Equal(t, ArtifactKindProvider, kind)
+
+	kind, ok = ParseArtifactKindFromPlural("auth-handlers")
+	assert.True(t, ok)
+	assert.Equal(t, ArtifactKindAuthHandler, kind)
+
+	_, ok = ParseArtifactKindFromPlural("invalid")
+	assert.False(t, ok)
+}
+
+func TestAnnotationBuilder_SetTags(t *testing.T) {
+	b := NewAnnotationBuilder()
+	b.SetTags([]string{"alpha", "beta"})
+	annotations := b.Build()
+	assert.Equal(t, "alpha,beta", annotations[AnnotationTags])
+}
+
+func TestAnnotationBuilder_SetTags_Empty(t *testing.T) {
+	b := NewAnnotationBuilder()
+	b.SetTags(nil)
+	annotations := b.Build()
+	_, exists := annotations[AnnotationTags]
+	assert.False(t, exists)
+}
+
+func TestGetTags(t *testing.T) {
+	tags := GetTags(map[string]string{AnnotationTags: "x,y,z"})
+	assert.Equal(t, []string{"x", "y", "z"}, tags)
+}
+
+func TestGetTags_Empty(t *testing.T) {
+	tags := GetTags(map[string]string{})
+	assert.Nil(t, tags)
+}
+
+func TestNormalizeRegistryHost(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"docker.io", "docker.io"},
+		{"index.docker.io", "docker.io"},
+		{"registry-1.docker.io", "docker.io"},
+		{"ghcr.io", "ghcr.io"},
+		{"my-registry.example.com", "my-registry.example.com"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			assert.Equal(t, tt.expected, NormalizeRegistryHost(tt.input))
+		})
+	}
+}
+
+func TestRemoteReference_String(t *testing.T) {
+	tests := []struct {
+		name     string
+		ref      *RemoteReference
+		expected string
+	}{
+		{
+			name:     "full reference",
+			ref:      &RemoteReference{Registry: "ghcr.io", Repository: "my-org", Kind: ArtifactKindSolution, Name: "my-sol", Tag: "1.0.0"},
+			expected: "ghcr.io/my-org/solutions/my-sol@1.0.0",
+		},
+		{
+			name:     "no repository",
+			ref:      &RemoteReference{Registry: "ghcr.io", Kind: ArtifactKindSolution, Name: "my-sol"},
+			expected: "ghcr.io/solutions/my-sol",
+		},
+		{
+			name:     "no tag",
+			ref:      &RemoteReference{Registry: "ghcr.io", Repository: "my-org", Kind: ArtifactKindSolution, Name: "my-sol"},
+			expected: "ghcr.io/my-org/solutions/my-sol",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.ref.String())
+		})
+	}
+}

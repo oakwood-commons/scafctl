@@ -1,0 +1,21 @@
+coverage:
+  status:
+    project:
+      default:
+        # Fail the PR status check if total project coverage drops below 70%
+        target: 70%
+        # Allow up to 1% drop from the base commit before failing
+        threshold: 1%
+    patch:
+      default:
+        # Require at least 50% coverage on lines changed in the PR
+        target: 50%
+        threshold: 5%
+
+comment:
+  layout: "reach,diff,flags,tree"
+  behavior: default
+  require_changes: false
+  require_base: false
+  require_head: true
+  show_carryforward_flags: false

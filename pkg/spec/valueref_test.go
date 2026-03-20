@@ -396,6 +396,12 @@ func TestValueRef_ResolveWithIterationContext(t *testing.T) {
 }
 
 func TestValueRef_ReferencesVariable(t *testing.T) {
+	actionExpr := celexp.Expression("__actions.build.result")
+	nestedExpr := celexp.Expression("__actions")
+	noMatchExpr := celexp.Expression("_.env")
+	actionTmpl := gotmpl.GoTemplatingContent("{{.__actions.build.result}}")
+	noMatchTmpl := gotmpl.GoTemplatingContent("{{._.env}}")
+
 	tests := []struct {
 		name     string
 		vr       ValueRef
@@ -411,6 +417,36 @@ func TestValueRef_ReferencesVariable(t *testing.T) {
 		{
 			name:     "literal does not reference",
 			vr:       ValueRef{Literal: "test"},
+			varName:  "__actions",
+			expected: false,
+		},
+		{
+			name:     "expr references __actions top-level",
+			vr:       ValueRef{Expr: &actionExpr},
+			varName:  "__actions",
+			expected: true,
+		},
+		{
+			name:     "expr references __actions directly",
+			vr:       ValueRef{Expr: &nestedExpr},
+			varName:  "__actions",
+			expected: true,
+		},
+		{
+			name:     "expr does not reference __actions",
+			vr:       ValueRef{Expr: &noMatchExpr},
+			varName:  "__actions",
+			expected: false,
+		},
+		{
+			name:     "tmpl references __actions",
+			vr:       ValueRef{Tmpl: &actionTmpl},
+			varName:  "__actions",
+			expected: true,
+		},
+		{
+			name:     "tmpl does not reference __actions",
+			vr:       ValueRef{Tmpl: &noMatchTmpl},
 			varName:  "__actions",
 			expected: false,
 		},

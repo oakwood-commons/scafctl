@@ -321,3 +321,9 @@ func BenchmarkExport_YAML(b *testing.B) {
 		_, _ = Export(data, ExportOptions{Format: "yaml"})
 	}
 }
+
+func TestIsEncrypted(t *testing.T) {
+	assert.True(t, IsEncrypted([]byte(secretcrypto.EncryptedHeader+"rest")))
+	assert.False(t, IsEncrypted([]byte("plain text")))
+	assert.False(t, IsEncrypted([]byte{}))
+}

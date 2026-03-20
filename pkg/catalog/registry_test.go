@@ -150,3 +150,77 @@ func TestRegistry_SetCacheRemoteArtifacts(t *testing.T) {
 	reg.SetCacheRemoteArtifacts(false)
 	assert.False(t, reg.cacheRemoteArtifacts)
 }
+
+func TestRegistry_Local(t *testing.T) {
+	reg, local := newTestRegistry(t)
+	assert.Same(t, local, reg.Local())
+}
+
+func TestRegistry_Catalogs(t *testing.T) {
+	reg, local := newTestRegistry(t)
+
+	catalogs := reg.Catalogs()
+	require.Len(t, catalogs, 1)
+	assert.Equal(t, local.Name(), catalogs[0].Name())
+
+	remote := newTestCatalog(t)
+	reg.AddCatalog(remote)
+
+	catalogs = reg.Catalogs()
+	assert.Len(t, catalogs, 2)
+}
+
+func TestRegistry_Resolve_Found(t *testing.T) {
+	ctx := context.Background()
+	reg, local := newTestRegistry(t)
+
+	ref := Reference{
+		Kind:    ArtifactKindSolution,
+		Name:    "my-sol",
+		Version: semver.MustParse("1.0.0"),
+	}
+	_, err := local.Store(ctx, ref, []byte("content"), nil, nil, false)
+	require.NoError(t, err)
+
+	info, err := reg.Resolve(ctx, ref)
+	require.NoError(t, err)
+	assert.Equal(t, "my-sol", info.Reference.Name)
+}
+
+func TestRegistry_Resolve_NotFound(t *testing.T) {
+	ctx := context.Background()
+	reg, _ := newTestRegistry(t)
+
+	ref := Reference{
+		Kind:    ArtifactKindSolution,
+		Name:    "nonexistent",
+		Version: semver.MustParse("1.0.0"),
+	}
+
+	_, err := reg.Resolve(ctx, ref)
+	require.Error(t, err)
+	assert.True(t, IsArtifactNotFoundError(err))
+}
+
+func TestRegistry_List(t *testing.T) {
+	ctx := context.Background()
+	reg, local := newTestRegistry(t)
+
+	ref1 := Reference{Kind: ArtifactKindSolution, Name: "sol-a", Version: semver.MustParse("1.0.0")}
+	ref2 := Reference{Kind: ArtifactKindSolution, Name: "sol-b", Version: semver.MustParse("2.0.0")}
+	_, err := local.Store(ctx, ref1, []byte("content-a"), nil, nil, false)
+	require.NoError(t, err)
+	_, err = local.Store(ctx, ref2, []byte("content-b"), nil, nil, false)
+	require.NoError(t, err)
+
+	results, err := reg.List(ctx, ArtifactKindSolution, "")
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, len(results), 2)
+}
+
+func TestNewRegistry(t *testing.T) {
+	reg, err := NewRegistry(logr.Discard())
+	require.NoError(t, err)
+	require.NotNil(t, reg)
+	assert.NotNil(t, reg.Local())
+}

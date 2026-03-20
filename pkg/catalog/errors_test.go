@@ -105,3 +105,19 @@ func TestIsInvalidReference(t *testing.T) {
 		assert.False(t, IsInvalidReference(errors.New("other error")))
 	})
 }
+
+func TestPlatformNotFoundError_Error(t *testing.T) {
+	err := &PlatformNotFoundError{Platform: "linux/arm64", Available: []string{"linux/amd64", "darwin/amd64"}}
+	msg := err.Error()
+	assert.Contains(t, msg, "linux/arm64")
+	assert.Contains(t, msg, "available")
+
+	errNoAvail := &PlatformNotFoundError{Platform: "windows/amd64"}
+	assert.Contains(t, errNoAvail.Error(), "windows/amd64")
+	assert.NotContains(t, errNoAvail.Error(), "available")
+}
+
+func TestPlatformNotFoundError_Unwrap(t *testing.T) {
+	err := &PlatformNotFoundError{Platform: "linux/arm64"}
+	assert.ErrorIs(t, err, ErrPlatformNotFound)
+}

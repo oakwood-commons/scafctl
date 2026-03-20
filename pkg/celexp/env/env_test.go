@@ -185,3 +185,10 @@ func TestNew_NoDeclarations(t *testing.T) {
 
 	assert.Equal(t, "h", result.Value())
 }
+
+func TestNewWithWriter_NilWriter(t *testing.T) {
+	ctx := context.Background()
+	env, err := NewWithWriter(ctx, nil)
+	require.NoError(t, err)
+	require.NotNil(t, env)
+}

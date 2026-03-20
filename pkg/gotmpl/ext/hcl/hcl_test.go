@@ -248,3 +248,47 @@ func TestToHcl_StringEscaping(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, result, "message = \"hello \\\"world\\\"\"")
 }
+
+func TestFormatHclValue_AllKinds(t *testing.T) {
+	tests := []struct {
+		value    any
+		expected string
+	}{
+		{nil, "null"},
+		{"hello", `"hello"`},
+		{true, "true"},
+		{false, "false"},
+		{float64(3.14), "3.14"},
+		{float64(5.0), "5"},
+		{int(42), "42"},
+		{int64(99), "99"},
+		{uint(7), "7"},
+	}
+	for _, tt := range tests {
+		result := formatHclValue(tt.value)
+		assert.Equal(t, tt.expected, result)
+	}
+}
+
+func TestFormatHclValue_DefaultKind(t *testing.T) {
+	// Struct is a complex kind that falls through to the default
+	type myStruct struct{ X int }
+	result := formatHclValue(myStruct{X: 42})
+	// Should be a quoted string representation
+	assert.NotEmpty(t, result)
+}
+
+func TestIsListOfMaps_Empty(t *testing.T) {
+	assert.False(t, isListOfMaps(nil))
+	assert.False(t, isListOfMaps([]any{}))
+}
+
+func TestIsListOfMaps_AllMaps(t *testing.T) {
+	list := []any{map[string]any{"a": 1}, map[string]any{"b": 2}}
+	assert.True(t, isListOfMaps(list))
+}
+
+func TestIsListOfMaps_Mixed(t *testing.T) {
+	list := []any{map[string]any{"a": 1}, "not-a-map"}
+	assert.False(t, isListOfMaps(list))
+}

@@ -4,6 +4,7 @@
 package bundler
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -339,4 +340,11 @@ func TestDedupeOptions(t *testing.T) {
 	customRead := func(path string) ([]byte, error) { return nil, nil }
 	WithDedupeReadFileFunc(customRead)(cfg)
 	assert.NotNil(t, cfg.readFile)
+}
+
+func TestExtractBundleTarFromReader_ErrorOnBadData(t *testing.T) {
+	tmpDir := t.TempDir()
+	r := bytes.NewReader([]byte("not a tar"))
+	_, err := ExtractBundleTarFromReader(r, tmpDir)
+	assert.Error(t, err)
 }

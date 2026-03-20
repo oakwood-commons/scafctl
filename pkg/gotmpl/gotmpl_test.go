@@ -6,6 +6,7 @@ package gotmpl
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"text/template"
 
@@ -625,4 +626,82 @@ func BenchmarkValidateSyntax(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		ValidateSyntax("Hello {{ .Name }}, you have {{ len .Items }} items", "", "")
 	}
+}
+
+func TestSetExtensionFuncMapFactory(t *testing.T) {
+	// Reset after test
+	defer func() {
+		extensionFuncMapMu.Lock()
+		extensionFuncMapFactory = nil
+		extensionFuncMapMu.Unlock()
+		extensionFuncMapOnce = sync.Once{}
+	}()
+
+	called := false
+	SetExtensionFuncMapFactory(func() template.FuncMap {
+		called = true
+		return template.FuncMap{"myFunc": func() string { return "hello" }}
+	})
+
+	// Calling again should be a no-op (once)
+	SetExtensionFuncMapFactory(func() template.FuncMap {
+		return template.FuncMap{}
+	})
+
+	fm := getExtensionFuncMap()
+	assert.NotNil(t, fm)
+	_ = called // factory is called lazily by getExtensionFuncMap
+}
+
+func TestSetContextFuncBinderFactory(t *testing.T) {
+	// Save and restore
+	contextFuncBinderMu.Lock()
+	orig := contextFuncBinderFactory
+	contextFuncBinderMu.Unlock()
+	defer func() {
+		contextFuncBinderMu.Lock()
+		contextFuncBinderFactory = orig
+		contextFuncBinderMu.Unlock()
+	}()
+
+	SetContextFuncBinderFactory(func(ctx context.Context) template.FuncMap {
+		return template.FuncMap{"ctxFunc": func() string { return "ctx" }}
+	})
+
+	fm := getContextFuncBinder(context.Background())
+	assert.NotNil(t, fm)
+	assert.Contains(t, fm, "ctxFunc")
+}
+
+func TestNewServiceRaw(t *testing.T) {
+	svc := NewServiceRaw(nil)
+	assert.NotNil(t, svc)
+
+	svc2 := NewServiceRaw(template.FuncMap{"hello": func() string { return "world" }})
+	assert.NotNil(t, svc2)
+}
+
+func TestExtFunction_GetName(t *testing.T) {
+	f := ExtFunction{Name: "myFunc", Description: "A test function"}
+	assert.Equal(t, "myFunc", f.GetName())
+}
+
+func TestExtFunctionList_FuncMap(t *testing.T) {
+	sayHello := func() string { return "hello" }
+	sayBye := func() string { return "bye" }
+
+	list := ExtFunctionList{
+		{Name: "hello", Func: template.FuncMap{"hello": sayHello}},
+		{Name: "bye", Func: template.FuncMap{"bye": sayBye}},
+	}
+
+	fm := list.FuncMap()
+	assert.Contains(t, fm, "hello")
+	assert.Contains(t, fm, "bye")
+}
+
+func TestExtFunctionList_FuncMap_Empty(t *testing.T) {
+	list := ExtFunctionList{}
+	fm := list.FuncMap()
+	assert.Empty(t, fm)
 }

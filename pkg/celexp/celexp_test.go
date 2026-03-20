@@ -4,6 +4,7 @@
 package celexp
 
 import (
+	"context"
 	"testing"
 
 	"github.com/google/cel-go/cel"
@@ -324,5 +325,153 @@ func BenchmarkCompileAndEval(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		compiled, _ := expr.Compile(opts)
 		_, _ = compiled.Eval(vars)
+	}
+}
+
+func TestSetDefaultCostLimit(t *testing.T) {
+	orig := GetDefaultCostLimit()
+	defer defaultCostLimit.Store(orig)
+
+	SetDefaultCostLimit(999999)
+	assert.Equal(t, uint64(999999), GetDefaultCostLimit())
+
+	SetDefaultCostLimit(0)
+	assert.Equal(t, uint64(0), GetDefaultCostLimit())
+}
+
+func TestExtFunction_GetName(t *testing.T) {
+	f := ExtFunction{Name: "myFunc"}
+	assert.Equal(t, "myFunc", f.GetName())
+}
+
+func TestInitFromAppConfig(t *testing.T) {
+	ResetForTesting()
+	defer ResetForTesting()
+
+	ctx := context.Background()
+	cfg := CELConfigInput{
+		CacheSize:          100,
+		CostLimit:          500000,
+		UseASTBasedCaching: true,
+		EnableMetrics:      false,
+	}
+	InitFromAppConfig(ctx, cfg)
+
+	cache := GetAppConfigCache()
+	assert.NotNil(t, cache)
+
+	// Calling again should be a no-op (idempotent)
+	InitFromAppConfig(ctx, CELConfigInput{CacheSize: 999})
+	cache2 := GetAppConfigCache()
+	assert.Equal(t, cache, cache2)
+}
+
+func TestInitFromAppConfig_DisabledCostLimit(t *testing.T) {
+	ResetForTesting()
+	defer ResetForTesting()
+
+	ctx := context.Background()
+	cfg := CELConfigInput{
+		CacheSize: 50,
+		CostLimit: 0, // explicitly disable
+	}
+	InitFromAppConfig(ctx, cfg)
+	assert.NotNil(t, GetAppConfigCache())
+}
+
+func TestResetForTesting(t *testing.T) {
+	ctx := context.Background()
+	InitFromAppConfig(ctx, CELConfigInput{CacheSize: 10})
+	assert.NotNil(t, GetAppConfigCache())
+
+	ResetForTesting()
+	assert.Nil(t, GetAppConfigCache())
+}
+
+func TestSetEnvFactory(t *testing.T) {
+	// Save and restore original state
+	origFactory := envFactory
+	origInitialized := envFactoryInitialized
+	defer func() {
+		envFactoryMu.Lock()
+		envFactory = origFactory
+		envFactoryInitialized = origInitialized
+		envFactoryMu.Unlock()
+	}()
+
+	// Reset so SetEnvFactory will accept the new factory
+	envFactoryMu.Lock()
+	envFactory = nil
+	envFactoryInitialized = false
+	envFactoryMu.Unlock()
+
+	called := false
+	factory := func(ctx context.Context, opts ...cel.EnvOption) (*cel.Env, error) {
+		called = true
+		return cel.NewEnv(opts...)
+	}
+	SetEnvFactory(factory)
+
+	// Verify the factory was set
+	got := getEnvFactory()
+	assert.NotNil(t, got)
+	// Call it to verify it works
+	_, err := got(context.Background())
+	assert.NoError(t, err)
+	assert.True(t, called)
+
+	// Calling SetEnvFactory again should be a no-op (only-once semantics)
+	called2 := false
+	SetEnvFactory(func(ctx context.Context, opts ...cel.EnvOption) (*cel.Env, error) {
+		called2 = true
+		return cel.NewEnv(opts...)
+	})
+	assert.False(t, called2, "second SetEnvFactory call should be ignored")
+}
+
+func TestSetCacheFactory(t *testing.T) {
+	// Reset state so we can set it fresh
+	ResetForTesting()
+	defer ResetForTesting()
+
+	myCache := NewProgramCache(10)
+	factory := func() *ProgramCache { return myCache }
+
+	SetCacheFactory(factory)
+	got := getCacheFactory()
+	assert.NotNil(t, got)
+	assert.Equal(t, myCache, got())
+
+	// Second call should be a no-op
+	otherCache := NewProgramCache(5)
+	SetCacheFactory(func() *ProgramCache { return otherCache })
+	got2 := getCacheFactory()
+	assert.Equal(t, myCache, got2(), "second SetCacheFactory should be ignored")
+}
+
+func TestFormatCelType_Nil(t *testing.T) {
+	result := formatCelType(nil)
+	assert.Equal(t, "any", result)
+}
+
+func TestFormatCelType_KnownTypes(t *testing.T) {
+	tests := []struct {
+		t    *cel.Type
+		want string
+	}{
+		{cel.IntType, "int"},
+		{cel.UintType, "uint"},
+		{cel.DoubleType, "double"},
+		{cel.BoolType, "bool"},
+		{cel.StringType, "string"},
+		{cel.BytesType, "bytes"},
+		{cel.NullType, "null"},
+		{cel.TypeType, "type"},
+		{cel.ListType(cel.StringType), "list(string)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			assert.Equal(t, tt.want, formatCelType(tt.t))
+		})
 	}
 }

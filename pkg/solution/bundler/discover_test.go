@@ -350,3 +350,43 @@ func TestDiscoverySource_String(t *testing.T) {
 	assert.Equal(t, "static-analysis", fmt.Sprint(StaticAnalysis))
 	assert.Equal(t, "explicit-include", fmt.Sprint(ExplicitInclude))
 }
+
+func TestWithStatFunc(t *testing.T) {
+	called := false
+	opt := WithStatFunc(func(path string) (os.FileInfo, error) {
+		called = true
+		return nil, nil
+	})
+	cfg := &discoverConfig{}
+	opt(cfg)
+	assert.NotNil(t, cfg.statFunc)
+	cfg.statFunc("test")
+	assert.True(t, called)
+}
+
+func TestWithDiscoverReadFileFunc(t *testing.T) {
+	called := false
+	opt := WithDiscoverReadFileFunc(func(path string) ([]byte, error) {
+		called = true
+		return []byte("data"), nil
+	})
+	cfg := &discoverConfig{}
+	opt(cfg)
+	assert.NotNil(t, cfg.readFile)
+	data, _ := cfg.readFile("test")
+	assert.True(t, called)
+	assert.Equal(t, []byte("data"), data)
+}
+
+func TestWithWalkDirFunc(t *testing.T) {
+	called := false
+	opt := WithWalkDirFunc(func(root string, fn filepath.WalkFunc) error {
+		called = true
+		return nil
+	})
+	cfg := &discoverConfig{}
+	opt(cfg)
+	assert.NotNil(t, cfg.walkDir)
+	cfg.walkDir(".", nil)
+	assert.True(t, called)
+}

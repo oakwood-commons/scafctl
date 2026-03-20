@@ -951,3 +951,50 @@ func TestDecodeInput_Timeout(t *testing.T) {
 		assert.Contains(t, err.Error(), "timeout")
 	})
 }
+
+func TestBuildDescriptor_WhatIf(t *testing.T) {
+	p := New()
+	ctx := context.Background()
+	desc := p.Descriptor()
+	require.NotNil(t, desc.WhatIf)
+
+	t.Run("struct input with source", func(t *testing.T) {
+		src := "my-solution.yaml"
+		input := &Input{Source: src}
+		msg, err := desc.WhatIf(ctx, input)
+		require.NoError(t, err)
+		assert.Contains(t, msg, "my-solution.yaml")
+	})
+
+	t.Run("map input with source", func(t *testing.T) {
+		input := map[string]any{"source": "child.yaml"}
+		msg, err := desc.WhatIf(ctx, input)
+		require.NoError(t, err)
+		assert.Contains(t, msg, "child.yaml")
+	})
+
+	t.Run("map input without source", func(t *testing.T) {
+		input := map[string]any{}
+		msg, err := desc.WhatIf(ctx, input)
+		require.NoError(t, err)
+		assert.Contains(t, msg, "sub-solution")
+	})
+
+	t.Run("unknown input type", func(t *testing.T) {
+		msg, err := desc.WhatIf(ctx, 42)
+		require.NoError(t, err)
+		assert.Contains(t, msg, "sub-solution")
+	})
+}
+
+func TestExtractRefsFromValue_Default(t *testing.T) {
+	// nil and other non-string/non-map types hit the default branch
+	result := extractRefsFromValue(nil)
+	assert.Nil(t, result)
+
+	result = extractRefsFromValue(42)
+	assert.Nil(t, result)
+
+	result = extractRefsFromValue([]string{"a", "b"})
+	assert.Nil(t, result)
+}

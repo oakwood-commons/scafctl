@@ -105,3 +105,40 @@ func TestMockHandler_ImplementsInterface(t *testing.T) {
 	var handler Handler = NewMockHandler("test")
 	assert.NotNil(t, handler)
 }
+
+func TestMockHandler_SetNotAuthenticated(t *testing.T) {
+	mock := NewMockHandler("test")
+	mock.SetAuthenticated(nil)
+	mock.SetNotAuthenticated()
+
+	status, _ := mock.Status(context.Background())
+	assert.False(t, status.Authenticated)
+}
+
+func TestMockHandler_ListCachedTokens(t *testing.T) {
+	mock := NewMockHandler("test")
+	mock.ListCachedTokensResult = []*CachedTokenInfo{
+		{Handler: "test"},
+	}
+
+	tokens, err := mock.ListCachedTokens(context.Background())
+	assert.NoError(t, err)
+	assert.Len(t, tokens, 1)
+}
+
+func TestMockHandler_PurgeExpiredTokens(t *testing.T) {
+	mock := NewMockHandler("test")
+	mock.PurgeExpiredResult = 3
+
+	n, err := mock.PurgeExpiredTokens(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, 3, n)
+	assert.Equal(t, 1, mock.PurgeExpiredCalls)
+}
+
+func TestMockHandler_SupportedFlows_WithValue(t *testing.T) {
+	mock := NewMockHandler("test")
+	customFlows := []Flow{FlowInteractive}
+	mock.FlowsValue = customFlows
+	assert.Equal(t, customFlows, mock.SupportedFlows())
+}

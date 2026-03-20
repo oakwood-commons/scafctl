@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -626,4 +628,87 @@ func BenchmarkHandler_ListCachedTokens(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_, _ = handler.ListCachedTokens(ctx)
 	}
+}
+
+func TestGitHubHandler_Capabilities(t *testing.T) {
+	store := secrets.NewMockStore()
+	h, err := New(WithSecretStore(store))
+	require.NoError(t, err)
+	caps := h.Capabilities()
+	assert.NotEmpty(t, caps)
+}
+
+func TestGitHubHandler_WithHTTPClientConfig(t *testing.T) {
+	cfg := &config.HTTPClientConfig{}
+	opt := WithHTTPClientConfig(cfg)
+	h := &Handler{}
+	opt(h)
+	assert.NotNil(t, h.httpClientConfig)
+}
+
+func TestGitHubHandler_WithLogger(t *testing.T) {
+	lgr := logr.Discard()
+	opt := WithLogger(lgr)
+	h := &Handler{}
+	opt(h)
+	assert.Equal(t, lgr, h.logger)
+}
+
+func TestGitHubHandler_ListCachedTokens_Empty(t *testing.T) {
+	store := secrets.NewMockStore()
+	h, err := New(WithSecretStore(store))
+	require.NoError(t, err)
+
+	results, err := h.ListCachedTokens(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, results)
+}
+
+func TestGitHubHandler_PurgeExpiredTokens(t *testing.T) {
+	store := secrets.NewMockStore()
+	h, err := New(WithSecretStore(store))
+	require.NoError(t, err)
+
+	n, err := h.PurgeExpiredTokens(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 0, n)
+}
+
+func TestGetHostnameFromEnv_Empty(t *testing.T) {
+	t.Setenv(EnvGHHost, "")
+	assert.Empty(t, GetHostnameFromEnv())
+}
+
+func TestGetHostnameFromEnv_Set(t *testing.T) {
+	t.Setenv(EnvGHHost, "github.mycompany.com")
+	assert.Equal(t, "github.mycompany.com", GetHostnameFromEnv())
+}
+
+func TestGetPATFromEnv_GitHubToken(t *testing.T) {
+	t.Setenv(EnvGitHubToken, "ghp_test123")
+	t.Setenv(EnvGHToken, "")
+	assert.Equal(t, "ghp_test123", GetPATFromEnv())
+}
+
+func TestGetPATFromEnv_GHToken(t *testing.T) {
+	t.Setenv(EnvGitHubToken, "")
+	t.Setenv(EnvGHToken, "gh_test456")
+	assert.Equal(t, "gh_test456", GetPATFromEnv())
+}
+
+func TestGetPATFromEnv_GitHubTokenPrecedence(t *testing.T) {
+	t.Setenv(EnvGitHubToken, "ghp_primary")
+	t.Setenv(EnvGHToken, "gh_secondary")
+	assert.Equal(t, "ghp_primary", GetPATFromEnv())
+}
+
+func TestHasPATCredentials_True(t *testing.T) {
+	t.Setenv(EnvGitHubToken, "ghp_test")
+	assert.True(t, HasPATCredentials())
+}
+
+func TestHasPATCredentials_False(t *testing.T) {
+	t.Setenv(EnvGitHubToken, "")
+	t.Setenv(EnvGHToken, "")
+	assert.False(t, HasPATCredentials())
 }

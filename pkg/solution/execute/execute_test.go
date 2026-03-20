@@ -178,3 +178,50 @@ func BenchmarkActionExecutionConfigFromContext(b *testing.B) {
 		_ = ActionExecutionConfigFromContext(ctx)
 	}
 }
+
+func TestNewResolverRegistryAdapter(t *testing.T) {
+	reg := provider.NewRegistry()
+	adapter := NewResolverRegistryAdapter(reg)
+	require.NotNil(t, adapter)
+}
+
+func TestResolverRegistryAdapter_GetNotFound(t *testing.T) {
+	reg := provider.NewRegistry()
+	adapter := NewResolverRegistryAdapter(reg)
+	_, err := adapter.Get("nonexistent")
+	assert.Error(t, err)
+}
+
+func TestResolverRegistryAdapter_List(t *testing.T) {
+	reg := provider.NewRegistry()
+	adapter := NewResolverRegistryAdapter(reg)
+	list := adapter.List()
+	assert.NotNil(t, list)
+}
+
+func TestResolverRegistryAdapter_DescriptorLookup(t *testing.T) {
+	reg := provider.NewRegistry()
+	adapter := NewResolverRegistryAdapter(reg)
+	lookup := adapter.DescriptorLookup()
+	assert.NotNil(t, lookup)
+}
+
+func TestActionRegistryAdapter_GetAndHas(t *testing.T) {
+	reg := provider.NewRegistry()
+	adapter := &actionRegistryAdapter{registry: reg}
+
+	_, ok := adapter.Get("nonexistent")
+	assert.False(t, ok)
+
+	assert.False(t, adapter.Has("nonexistent"))
+}
+
+func TestResolversForPreview_NoResolvers(t *testing.T) {
+	ctx := context.Background()
+	sol := &solution.Solution{}
+	sol.Metadata.Name = "test"
+
+	result, err := ResolversForPreview(ctx, sol, nil, nil)
+	require.NoError(t, err)
+	assert.Empty(t, result)
+}

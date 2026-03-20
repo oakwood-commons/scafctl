@@ -571,3 +571,43 @@ func TestParseHCL_FullTerraformConfig(t *testing.T) {
 	tf := result["terraform"].(map[string]any)
 	assert.Equal(t, ">= 1.5.0", tf["required_version"])
 }
+
+func TestLabelOrEmpty(t *testing.T) {
+	labels := []string{"aws_instance", "web"}
+	assert.Equal(t, "aws_instance", labelOrEmpty(labels, 0))
+	assert.Equal(t, "web", labelOrEmpty(labels, 1))
+	// Out of range returns ""
+	assert.Equal(t, "", labelOrEmpty(labels, 2))
+	assert.Equal(t, "", labelOrEmpty([]string{}, 0))
+}
+
+func TestToAnySlice(t *testing.T) {
+	input := []string{"a", "b", "c"}
+	result := toAnySlice(input)
+	assert.Len(t, result, 3)
+	assert.Equal(t, "a", result[0])
+	assert.Equal(t, "b", result[1])
+	assert.Equal(t, "c", result[2])
+	// Empty slice
+	result2 := toAnySlice([]string{})
+	assert.Empty(t, result2)
+}
+
+func TestParseHCL_SubBlocksWithLabels(t *testing.T) {
+	// This exercises toAnySlice — sub-blocks with labels (lifecycle block)
+	t.Parallel()
+	hclContent := `
+resource "aws_instance" "web" {
+  ami = "ami-123"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+`
+	result, err := ParseHCL([]byte(hclContent), "test.tf")
+	require.NoError(t, err)
+	resources, ok := result["resources"].([]any)
+	require.True(t, ok)
+	require.NotEmpty(t, resources)
+}

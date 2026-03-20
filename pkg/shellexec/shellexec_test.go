@@ -6,6 +6,7 @@ package shellexec
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"runtime"
 	"strings"
@@ -390,4 +391,72 @@ func TestRun_EmbeddedShell_Conditionals(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.ExitCode)
 	assert.Equal(t, "yes\n", stdout.String())
+}
+
+func TestWithRunFunc_AndRunFuncFromContext(t *testing.T) {
+	ctx := context.Background()
+	called := false
+	mockFn := RunFunc(func(ctx context.Context, opts *RunOptions) (*RunResult, error) {
+		called = true
+		return &RunResult{ExitCode: 0}, nil
+	})
+
+	ctx = WithRunFunc(ctx, mockFn)
+	fn, ok := RunFuncFromContext(ctx)
+	assert.True(t, ok)
+	assert.NotNil(t, fn)
+
+	result, err := fn(ctx, &RunOptions{})
+	assert.NoError(t, err)
+	assert.True(t, called)
+	assert.Equal(t, 0, result.ExitCode)
+}
+
+func TestRunFuncFromContext_NotSet(t *testing.T) {
+	ctx := context.Background()
+	fn, ok := RunFuncFromContext(ctx)
+	assert.False(t, ok)
+	assert.Nil(t, fn)
+}
+
+func TestRunWithContext_UsesMock(t *testing.T) {
+	ctx := context.Background()
+	mockFn := RunFunc(func(ctx context.Context, opts *RunOptions) (*RunResult, error) {
+		return &RunResult{ExitCode: 42}, nil
+	})
+	ctx = WithRunFunc(ctx, mockFn)
+
+	result, err := RunWithContext(ctx, &RunOptions{Command: "echo hello"})
+	assert.NoError(t, err)
+	assert.Equal(t, 42, result.ExitCode)
+}
+
+func TestDevNull_Read(t *testing.T) {
+	d := devNull{}
+	buf := make([]byte, 10)
+	n, err := d.Read(buf)
+	assert.Equal(t, 0, n)
+	assert.Equal(t, io.EOF, err)
+}
+
+func TestDevNull_Write(t *testing.T) {
+	d := devNull{}
+	data := []byte("hello")
+	n, err := d.Write(data)
+	assert.Equal(t, len(data), n)
+	assert.NoError(t, err)
+}
+
+func TestDevNull_Close(t *testing.T) {
+	d := devNull{}
+	assert.NoError(t, d.Close())
+}
+
+func TestOpenHandler_DevNull(t *testing.T) {
+	ctx := context.Background()
+	rwc, err := openHandler(ctx, "/dev/null", 0, 0)
+	require.NoError(t, err)
+	assert.NotNil(t, rwc)
+	_, ok := rwc.(devNull)
+	assert.True(t, ok)
 }

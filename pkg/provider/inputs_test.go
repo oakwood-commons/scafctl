@@ -5,6 +5,7 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -737,4 +738,69 @@ func TestInputResolver_NormalizeInputMap(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestInputResolver_ResolveInputs_NilInputs(t *testing.T) {
+	// Tests the rawInputs == nil branch in ResolveInputs
+	schema := schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{})
+	resolver := NewInputResolver(context.Background(), schema, nil)
+	resolved, err := resolver.ResolveInputs(nil)
+	require.NoError(t, err)
+	assert.NotNil(t, resolved)
+}
+
+func TestInputResolver_ResolveInputs_NilSchema(t *testing.T) {
+	// Tests the nil schema path in ResolveInputs — pass-through literal inputs
+	resolver := NewInputResolver(context.Background(), nil, nil)
+	inputs := map[string]any{
+		"key1": "value1",
+		"key2": 42,
+	}
+	resolved, err := resolver.ResolveInputs(inputs)
+	require.NoError(t, err)
+	assert.Equal(t, "value1", resolved["key1"])
+	assert.Equal(t, 42, resolved["key2"])
+}
+
+func TestInputResolver_SecretCELError_MasksError(t *testing.T) {
+	// Tests that maskError is called when isSecret=true and CEL compile fails
+	schema := schemahelper.ObjectSchema([]string{"secretProp"}, map[string]*jsonschema.Schema{
+		"secretProp": schemahelper.StringProp(""),
+	})
+	resolver := NewInputResolver(context.Background(), schema, []string{"secretProp"})
+	inputs := map[string]any{
+		"secretProp": InputValue{Expr: celexp.Expression("this is not valid CEL syntax ===")},
+	}
+	_, err := resolver.ResolveInputs(inputs)
+	require.Error(t, err)
+	// Error should contain "operation failed (details redacted for security)"
+	assert.Contains(t, err.Error(), "operation failed (details redacted for security)")
+}
+
+func TestInputResolver_SecretTemplateError_MasksError(t *testing.T) {
+	// Tests that maskError is called when isSecret=true and template rendering fails
+	schema := schemahelper.ObjectSchema([]string{"secretProp"}, map[string]*jsonschema.Schema{
+		"secretProp": schemahelper.StringProp(""),
+	})
+	resolver := NewInputResolver(context.Background(), schema, []string{"secretProp"})
+	inputs := map[string]any{
+		"secretProp": InputValue{Tmpl: gotmpl.GoTemplatingContent("{{.undefined_function invalid")},
+	}
+	_, err := resolver.ResolveInputs(inputs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "operation failed (details redacted for security)")
+}
+
+func TestMaskError_NilInput(t *testing.T) {
+	// maskError with nil should return nil
+	result := maskError(nil)
+	assert.Nil(t, result)
+}
+
+func TestMaskError_WithError(t *testing.T) {
+	// maskError with an actual error should redact it
+	result := maskError(fmt.Errorf("sensitive data: password123"))
+	require.Error(t, result)
+	assert.Contains(t, result.Error(), "operation failed (details redacted for security)")
+	assert.NotContains(t, result.Error(), "password123")
 }
