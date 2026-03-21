@@ -13,6 +13,7 @@ You may want to set up your own OAuth client if:
 - You need specific OAuth consent screen branding or approval
 - You want full control over the client lifecycle and scopes
 
+> [!CAUTION]
 > **Note:** If you were previously seeing `invalid_grant - reauth related error (invalid_rapt)` errors, upgrading scafctl to the latest version resolves this — the native browser OAuth flow is no longer affected by gcloud's RAPT token expiry.
 
 ## Prerequisites
@@ -25,6 +26,8 @@ You may want to set up your own OAuth client if:
 
 Pick an existing project or create a new one to host the OAuth client:
 
+{{< tabs "gcp-custom-oauth-tutorial-cmd-1" >}}
+{{% tab "Bash" %}}
 ```bash
 # List existing projects
 gcloud projects list
@@ -35,11 +38,27 @@ gcloud projects create my-scafctl-project --name="scafctl OAuth"
 # Set your working project
 gcloud config set project my-scafctl-project
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# List existing projects
+gcloud projects list
+
+# Or create a new one
+gcloud projects create my-scafctl-project --name="scafctl OAuth"
+
+# Set your working project
+gcloud config set project my-scafctl-project
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## Step 2: Configure the OAuth Consent Screen
 
 Before creating an OAuth client, you must configure the consent screen. This defines what users see when they authenticate.
 
+{{< tabs "gcp-custom-oauth-tutorial-cmd-2" >}}
+{{% tab "Bash" %}}
 ```bash
 # Enable the required API
 gcloud services enable iap.googleapis.com
@@ -49,7 +68,21 @@ gcloud alpha iap oauth-brands create \
   --application_title="scafctl" \
   --support_email="your-email@example.com"
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Enable the required API
+gcloud services enable iap.googleapis.com
 
+# For an internal app (only users in your org):
+gcloud alpha iap oauth-brands create `
+  --application_title="scafctl" `
+  --support_email="your-email@example.com"
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+> [!CAUTION]
 > **Note:** If your project has never had an OAuth consent screen configured, you may need to set it up via the [Google Cloud Console](https://console.cloud.google.com/apis/credentials/consent) the first time. Choose **Internal** (org-only) or **External** (any Google account) depending on your use case.
 
 ### Console Alternative
@@ -70,12 +103,24 @@ If the `gcloud` commands above don't work for your setup (the consent screen API
 
 Create a **Desktop application** OAuth client:
 
+{{< tabs "gcp-custom-oauth-tutorial-cmd-3" >}}
+{{% tab "Bash" %}}
 ```bash
 gcloud alpha iap oauth-clients create \
   "projects/$(gcloud config get-value project)/brands/$(gcloud config get-value project)" \
   --display_name="scafctl-cli"
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+gcloud alpha iap oauth-clients create `
+  "projects/$(gcloud config get-value project)/brands/$(gcloud config get-value project)" `
+  --display_name="scafctl-cli"
+```
+{{% /tab %}}
+{{< /tabs >}}
 
+> [!NOTE]
 > **Note:** The `gcloud alpha iap oauth-clients` commands may have limited availability. The recommended approach is to use the Console.
 
 ### Console Approach (Recommended)
@@ -94,6 +139,7 @@ Client ID:     123456789-abc123def456.apps.googleusercontent.com
 Client Secret: GOCSPX-xxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
+> [!NOTE]
 > **Note:** Despite the name, the client secret for desktop OAuth apps is **not confidential** — it is embedded in the application. This is standard for public OAuth clients (see [Google's documentation](https://developers.google.com/identity/protocols/oauth2/native-app)).
 
 ## Step 4: Configure scafctl
@@ -115,27 +161,55 @@ auth:
 
 Then log in normally:
 
+{{< tabs "gcp-custom-oauth-tutorial-cmd-4" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl auth login gcp
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl auth login gcp
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Option B: CLI Flag (One-off)
 
 Pass the client ID directly on the command line:
 
+{{< tabs "gcp-custom-oauth-tutorial-cmd-5" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl auth login gcp --client-id "123456789-abc123def456.apps.googleusercontent.com"
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl auth login gcp --client-id "123456789-abc123def456.apps.googleusercontent.com"
+```
+{{% /tab %}}
+{{< /tabs >}}
 
+> [!NOTE]
 > **Note:** When using the `--client-id` flag without a config file, the client secret will be empty. This works for OAuth clients configured as public clients but may fail if Google requires the secret. The config file approach is preferred because it allows setting both `clientId` and `clientSecret`.
 
 ## Step 5: Authenticate
 
 With the custom client configured, run:
 
+{{< tabs "gcp-custom-oauth-tutorial-cmd-6" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl auth login gcp
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl auth login gcp
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 This will:
 
@@ -147,9 +221,18 @@ This will:
 
 ### Verify Authentication
 
+{{< tabs "gcp-custom-oauth-tutorial-cmd-7" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl auth status gcp
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl auth status gcp
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -186,9 +269,18 @@ auth:
 
 Or via the CLI:
 
+{{< tabs "gcp-custom-oauth-tutorial-cmd-8" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl auth login gcp --impersonate-service-account deploy@my-project.iam.gserviceaccount.com
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl auth login gcp --impersonate-service-account deploy@my-project.iam.gserviceaccount.com
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## Configuration Reference
 

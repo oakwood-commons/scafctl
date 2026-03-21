@@ -240,12 +240,9 @@ Visualization operates on rendered graphs, not runtime execution.
 
 ```bash
 # Resolver graph visualization
-scafctl render solution -f solution.yaml --graph
-scafctl render solution -f solution.yaml --graph --graph-format=dot
-scafctl render solution -f solution.yaml --graph --graph-format=mermaid
-
-# Standalone resolver graph
-scafctl resolver graph -f solution.yaml --format=mermaid
+scafctl run resolver -f solution.yaml --graph
+scafctl run resolver -f solution.yaml --graph --graph-format=dot
+scafctl run resolver -f solution.yaml --graph --graph-format=mermaid
 ```
 
 ---

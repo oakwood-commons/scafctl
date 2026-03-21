@@ -1,0 +1,187 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-action-auto-deps
+  version: 1.0.0
+  description: |
+    Functional tests for auto-inferred action dependencies.
+    Verifies that __actions references in CEL expressions and
+    Go templates automatically create dependency edges without
+    requiring explicit dependsOn declarations.
+
+spec:
+  workflow:
+    actions:
+      produce:
+        description: Produce a value
+        provider: cel
+        inputs:
+          expression: |
+            {"value": 42, "label": "produced"}
+
+      consume-expr:
+        description: Consume via CEL expression (no dependsOn)
+        provider: exec
+        inputs:
+          command:
+            expr: "'echo consumed ' + string(__actions.produce.results.value)"
+
+      consume-tmpl:
+        description: Consume via Go template (no dependsOn)
+        provider: exec
+        inputs:
+          command:
+            tmpl: "echo label={{ .__actions.produce.results.label }}"
+
+      consume-conditional:
+        description: Conditional action with when referencing __actions (no dependsOn)
+        provider: exec
+        when:
+          expr: "__actions.produce.results.value > 0"
+        inputs:
+          command:
+            expr: "'echo condition-passed'"
+
+      chain-end:
+        description: Chain end consuming earlier auto-dep action
+        provider: exec
+        inputs:
+          command:
+            expr: "'echo chained'"
+          env:
+            expr: '{"PREV_EXIT": string(__actions["consume-expr"].results.exitCode)}'
+
+    finally:
+      report:
+        description: Finally action referencing regular actions (auto-inferred)
+        provider: exec
+        inputs:
+          command:
+            expr: "'echo produce=' + __actions.produce.status + ' chain=' + __actions['chain-end'].status"
+
+  testing:
+    cases:
+      _run-base:
+        description: Base template for run tests
+        command: [run, solution]
+        args: ["-o", "json"]
+        tags: [action, auto-deps]
+        assertions:
+          - expression: __exitCode == 0
+
+      _render-base:
+        description: Base template for render tests
+        command: [render, solution]
+        args: ["-o", "json"]
+        tags: [action, auto-deps, render]
+        assertions:
+          - expression: __exitCode == 0
+
+      all-succeed:
+        description: All actions succeed with auto-inferred dependencies
+        extends: [_run-base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.status == "succeeded"
+            message: "Overall status should be succeeded"
+          - expression: __output.actions["produce"].status == "succeeded"
+          - expression: __output.actions["consume-expr"].status == "succeeded"
+          - expression: __output.actions["consume-tmpl"].status == "succeeded"
+          - expression: __output.actions["consume-conditional"].status == "succeeded"
+          - expression: __output.actions["chain-end"].status == "succeeded"
+
+      execution-order:
+        description: Auto-inferred dependencies create correct phase ordering
+        extends: [_render-base]
+        assertions:
+          - expression: __output.executionOrder[0].exists(a, a == "produce")
+            message: "produce must run first (depended on by consume-expr and consume-tmpl)"
+          - expression: '!__output.executionOrder[0].exists(a, a == "consume-expr")'
+            message: "consume-expr must not be in first phase"
+          - expression: '!__output.executionOrder[0].exists(a, a == "consume-tmpl")'
+            message: "consume-tmpl must not be in first phase"
+          - expression: '!__output.executionOrder[0].exists(a, a == "consume-conditional")'
+            message: "consume-conditional must not be in first phase (when condition depends on produce)"
+
+      cel-consume-output:
+        description: CEL expression consumer receives produced value
+        extends: [_run-base]
+        assertions:
+          - expression: __output.actions["consume-expr"].results.stdout.contains("consumed 42")
+            message: "Consumer should receive produced value via __actions reference"
+
+      tmpl-consume-output:
+        description: Go template consumer receives produced label
+        extends: [_run-base]
+        assertions:
+          - expression: __output.actions["consume-tmpl"].results.stdout.contains("label=produced")
+            message: "Template consumer should receive produced label via __actions reference"
+
+      parallel-consumers:
+        description: Independent consumers run in the same phase
+        extends: [_render-base]
+        assertions:
+          - expression: >
+              __output.executionOrder.exists(phase,
+                phase.exists(a, a == "consume-expr") && phase.exists(a, a == "consume-tmpl")
+              )
+            message: "consume-expr and consume-tmpl should run in the same phase (both only depend on produce)"
+
+      finally-runs:
+        description: Finally action successfully references regular action results
+        extends: [_run-base]
+        assertions:
+          - expression: __output.actions["report"].status == "succeeded"
+            message: "Finally action should succeed with auto-inferred dependencies"
+          - expression: __output.actions["report"].results.stdout.contains("produce=succeeded")
+            message: "Finally action should access produce status via __actions"
+
+      render-finally-cross-section-refs:
+        description: Finally action cross-section __actions refs appear in crossSectionRefs, not dependencies
+        extends: [_render-base]
+        assertions:
+          - expression: has(__output.actions["report"].crossSectionRefs)
+            message: "report should have crossSectionRefs (reads __actions.produce and __actions['chain-end'])"
+          - expression: __output.actions["report"].crossSectionRefs.exists(r, r == "produce")
+            message: "crossSectionRefs should contain produce"
+          - expression: __output.actions["report"].crossSectionRefs.exists(r, r == "chain-end")
+            message: "crossSectionRefs should contain chain-end"
+          - expression: "!has(__output.actions[\"report\"].dependsOn) || size(__output.actions[\"report\"].dependsOn) == 0"
+            message: "report dependsOn must be empty — cross-section refs are not scheduling deps"
+
+      when-auto-dep-runs:
+        description: Action with when condition referencing __actions executes after referenced action
+        extends: [_run-base]
+        assertions:
+          - expression: __output.actions["consume-conditional"].status == "succeeded"
+            message: "consume-conditional should succeed when produce.results.value > 0"
+          - expression: __output.actions["consume-conditional"].results.stdout.contains("condition-passed")
+            message: "consume-conditional should execute its command when condition is true"
+
+      when-auto-dep-phase-order:
+        description: when condition auto-dep produces correct phase ordering
+        extends: [_render-base]
+        assertions:
+          - expression: >
+              __output.executionOrder.exists(phase,
+                phase.exists(a, a == "produce")
+              )
+            message: "produce must appear in executionOrder"
+          - expression: >
+              __output.executionOrder.exists(phase,
+                phase.exists(a, a == "consume-conditional")
+              )
+            message: "consume-conditional must appear in executionOrder"
+          - expression: >
+              __output.executionOrder.filter(phase,
+                phase.exists(a, a == "produce")
+              ).size() == 1 &&
+              __output.executionOrder.filter(phase,
+                phase.exists(a, a == "consume-conditional")
+              ).size() == 1 &&
+              !__output.executionOrder.exists(phase,
+                phase.exists(a, a == "produce") &&
+                phase.exists(b, b == "consume-conditional")
+              )
+            message: "produce and consume-conditional must not share a phase (produce must precede consume-conditional)"

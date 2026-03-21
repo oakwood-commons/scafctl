@@ -18,6 +18,7 @@ Auth handlers can be delivered in two ways:
 | **Distribution** | Ships with scafctl releases | OCI catalog artifact (`kind: auth-handler`) or standalone binary |
 | **Interface** | `auth.Handler` (8 methods) | `plugin.AuthHandlerPlugin` (7 methods) |
 
+> [!WARNING]
 > **Prerequisite**: Read the [Extension Concepts](extension-concepts.md) page for terminology (provider vs auth handler vs plugin).
 
 ## Auth Handler Architecture
@@ -329,6 +330,7 @@ func (h *Handler) InjectAuth(ctx context.Context, req *http.Request, opts auth.T
 }
 ```
 
+> [!CAUTION]
 > **Convention**: All builtin auth handlers export a `HandlerName` constant, use functional options, defer secret store errors, and name the constructor `New(opts ...Option)`.
 
 ## Registering as a Builtin Auth Handler
@@ -360,6 +362,7 @@ if err != nil {
 ctx = auth.WithRegistry(ctx, authRegistry)
 ```
 
+> [!WARNING]
 > **Important**: Registration failures are logged at V(1), not fatal — the CLI still works for non-auth commands.
 
 ## Testing Your Auth Handler
@@ -461,6 +464,8 @@ func (m *MockSecretStore) Delete(key string) error {
 
 See `tests/integration/cli_test.go`. Auth-specific tests use the CLI:
 
+{{< tabs "auth-handler-development-cmd-1" >}}
+{{% tab "Bash" %}}
 ```bash
 # Login
 scafctl auth login --handler my-idp --flow device_code
@@ -474,6 +479,23 @@ scafctl auth token --handler my-idp
 # Logout
 scafctl auth logout --handler my-idp
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Login
+scafctl auth login --handler my-idp --flow device_code
+
+# Check status
+scafctl auth status --handler my-idp -o json
+
+# Get token
+scafctl auth token --handler my-idp
+
+# Logout
+scafctl auth logout --handler my-idp
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## Best Practices
 
@@ -605,16 +627,12 @@ Instead of compiling your auth handler into scafctl, you can ship it as a **plug
 
 ### Architecture
 
-```
-┌─────────────────────┐        gRPC        ┌──────────────────────┐
-│      scafctl        │◄──────────────────►│   Auth Handler       │
-│                     │                     │   Plugin             │
-│  - Discovers plugin │                     │  - Implements gRPC   │
-│  - Calls handler    │                     │  - Manages creds     │
-│  - Manages lifecycle│                     │  - Returns tokens    │
-└─────────────────────┘                     └──────────────────────┘
+```mermaid
+flowchart LR
+  A["scafctl<br/>- Discovers plugin<br/>- Calls handler<br/>- Manages lifecycle"] <-- "gRPC" --> B["Auth Handler Plugin<br/>- Implements gRPC<br/>- Manages creds<br/>- Returns tokens"]
 ```
 
+> [!NOTE]
 > **Key difference from provider plugins**: Auth handler plugins manage their own credential storage. The host calls `GetToken()` over gRPC and injects the returned token into `http.Request` headers locally.
 
 ### Plugin Interface
@@ -731,6 +749,8 @@ func main() {
 
 ### Build and Install
 
+{{< tabs "auth-handler-development-cmd-2" >}}
+{{% tab "Bash" %}}
 ```bash
 go build -o scafctl-auth-okta .
 
@@ -738,6 +758,18 @@ go build -o scafctl-auth-okta .
 mkdir -p "$(scafctl paths cache)/plugins"
 cp scafctl-auth-okta "$(scafctl paths cache)/plugins/"
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+go build -o scafctl-auth-okta .
+
+# Install to plugin cache
+$pluginDir = "$(scafctl paths cache)/plugins"
+New-Item -ItemType Directory -Force -Path $pluginDir
+Copy-Item scafctl-auth-okta $pluginDir
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Use in Solutions
 

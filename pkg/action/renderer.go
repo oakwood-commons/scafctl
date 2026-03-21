@@ -90,6 +90,11 @@ type RenderedAction struct {
 	// DependsOn lists action names that must complete first.
 	DependsOn []string `json:"dependsOn,omitempty" yaml:"dependsOn,omitempty" doc:"Dependency list" maxItems:"100"`
 
+	// CrossSectionRefs lists action names from the other workflow section that this action
+	// reads via __actions references. Informational only — does not affect phase scheduling.
+	// Populated for finally actions that read from workflow.actions via __actions.<name>.
+	CrossSectionRefs []string `json:"crossSectionRefs,omitempty" yaml:"crossSectionRefs,omitempty" doc:"Cross-section __actions references (informational)" maxItems:"100"`
+
 	// When contains the condition for execution.
 	// Can be a boolean (already evaluated) or a DeferredValue (requires runtime evaluation).
 	When any `json:"when,omitempty" yaml:"when,omitempty" doc:"Execution condition (bool or deferred)"`
@@ -257,14 +262,15 @@ func renderAction(action *ExpandedAction) *RenderedAction {
 	}
 
 	rendered := &RenderedAction{
-		Name:        action.ExpandedName,
-		Description: action.Description,
-		DisplayName: action.DisplayName,
-		Sensitive:   action.Sensitive,
-		Provider:    action.Provider,
-		DependsOn:   action.Dependencies,
-		Section:     action.Section,
-		Inputs:      buildRenderedInputs(action),
+		Name:             action.ExpandedName,
+		Description:      action.Description,
+		DisplayName:      action.DisplayName,
+		Sensitive:        action.Sensitive,
+		Provider:         action.Provider,
+		DependsOn:        action.Dependencies,
+		CrossSectionRefs: action.CrossSectionRefs,
+		Section:          action.Section,
+		Inputs:           buildRenderedInputs(action),
 	}
 
 	// Set original name if this is a forEach iteration

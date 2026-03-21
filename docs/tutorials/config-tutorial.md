@@ -11,16 +11,14 @@ This tutorial covers managing scafctl's application configuration using the `con
 
 scafctl uses a YAML configuration file to control application behavior including logging, HTTP client settings, resolver timeouts, catalog locations, and more.
 
-```
-┌──────────────────┐
-│  config init     │ ── Create config file
-│  config view     │ ── View current config
-│  config get/set  │ ── Read/write values
-│  config validate │ ── Validate config
-│  config schema   │ ── View JSON schema
-│  config paths    │ ── Show XDG paths
-└──────────────────┘
-```
+| Command | Description |
+|---------|-------------|
+| `config init` | Create config file |
+| `config view` | View current config |
+| `config get/set` | Read/write values |
+| `config validate` | Validate config |
+| `config schema` | View JSON schema |
+| `config paths` | Show XDG paths |
 
 ## Quick Start
 
@@ -28,6 +26,8 @@ scafctl uses a YAML configuration file to control application behavior including
 
 Create a new config file:
 
+{{< tabs "config-tutorial-cmd-1" >}}
+{{% tab "Bash" %}}
 ```bash
 # Create minimal config
 scafctl config init
@@ -41,11 +41,30 @@ scafctl config init --dry-run
 # Write to custom path
 scafctl config init --output ./my-config.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Create minimal config
+scafctl config init
+
+# Create with all options documented
+scafctl config init --full
+
+# Preview without writing
+scafctl config init --dry-run
+
+# Write to custom path
+scafctl config init --output ./my-config.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### 2. View Configuration
 
 See the current effective configuration:
 
+{{< tabs "config-tutorial-cmd-2" >}}
+{{% tab "Bash" %}}
 ```bash
 # Full config (YAML format)
 scafctl config view
@@ -59,14 +78,40 @@ scafctl config view -e '_.settings'
 # Interactive TUI explorer
 scafctl config view -i
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Full config (YAML format)
+scafctl config view
+
+# As JSON
+scafctl config view -o json
+
+# Filter with CEL expression
+scafctl config view -e '_.settings'
+
+# Interactive TUI explorer
+scafctl config view -i
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### 3. Show Config Sources
 
 See where each value comes from (file, environment, default):
 
+{{< tabs "config-tutorial-cmd-3" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl config show
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl config show
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## Getting and Setting Values
 
@@ -74,6 +119,8 @@ scafctl config show
 
 Use dot notation to read specific config values:
 
+{{< tabs "config-tutorial-cmd-4" >}}
+{{% tab "Bash" %}}
 ```bash
 # Get logging level
 scafctl config get logging.level
@@ -84,9 +131,25 @@ scafctl config get settings.defaultCatalog
 # Get HTTP timeout
 scafctl config get httpClient.timeout
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Get logging level
+scafctl config get logging.level
+
+# Get default catalog
+scafctl config get settings.defaultCatalog
+
+# Get HTTP timeout
+scafctl config get httpClient.timeout
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Write Values
 
+{{< tabs "config-tutorial-cmd-5" >}}
+{{% tab "Bash" %}}
 ```bash
 # Set logging level
 scafctl config set logging.level debug
@@ -100,9 +163,28 @@ scafctl config set resolver.concurrency 8
 # Enable a boolean
 scafctl config set httpClient.caching.enabled true
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Set logging level
+scafctl config set logging.level debug
+
+# Set HTTP timeout
+scafctl config set httpClient.timeout 60s
+
+# Set resolver concurrency
+scafctl config set resolver.concurrency 8
+
+# Enable a boolean
+scafctl config set httpClient.caching.enabled true
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Reset to Default
 
+{{< tabs "config-tutorial-cmd-6" >}}
+{{% tab "Bash" %}}
 ```bash
 # Reset a value to its default
 scafctl config unset logging.level
@@ -110,11 +192,24 @@ scafctl config unset logging.level
 # Reset HTTP configuration
 scafctl config unset httpClient.timeout
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Reset a value to its default
+scafctl config unset logging.level
+
+# Reset HTTP configuration
+scafctl config unset httpClient.timeout
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## Managing Catalogs
 
 ### Add a Catalog
 
+{{< tabs "config-tutorial-cmd-7" >}}
+{{% tab "Bash" %}}
 ```bash
 # Add a local filesystem catalog
 scafctl config add-catalog my-catalog --type filesystem --path ~/my-solutions
@@ -125,23 +220,57 @@ scafctl config add-catalog company --type oci --url ghcr.io/myorg/scafctl-catalo
 # Add and set as default
 scafctl config add-catalog primary --type filesystem --path ~/catalogs/main --default
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Add a local filesystem catalog
+scafctl config add-catalog my-catalog --type filesystem --path ~/my-solutions
+
+# Add an OCI registry catalog
+scafctl config add-catalog company --type oci --url ghcr.io/myorg/scafctl-catalog
+
+# Add and set as default
+scafctl config add-catalog primary --type filesystem --path ~/catalogs/main --default
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Remove a Catalog
 
+{{< tabs "config-tutorial-cmd-8" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl config remove-catalog my-catalog
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl config remove-catalog my-catalog
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Set Default Catalog
 
+{{< tabs "config-tutorial-cmd-9" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl config use-catalog my-catalog
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl config use-catalog my-catalog
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## Validation
 
 ### Validate Config File
 
+{{< tabs "config-tutorial-cmd-10" >}}
+{{% tab "Bash" %}}
 ```bash
 # Validate current config
 scafctl config validate
@@ -149,9 +278,22 @@ scafctl config validate
 # Validate a specific file
 scafctl config validate path/to/config.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Validate current config
+scafctl config validate
+
+# Validate a specific file
+scafctl config validate path/to/config.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### View Config Schema
 
+{{< tabs "config-tutorial-cmd-11" >}}
+{{% tab "Bash" %}}
 ```bash
 # Pretty-printed JSON Schema
 scafctl config schema
@@ -159,11 +301,24 @@ scafctl config schema
 # Minified (for piping)
 scafctl config schema --compact
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Pretty-printed JSON Schema
+scafctl config schema
+
+# Minified (for piping)
+scafctl config schema --compact
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## View System Paths
 
 See where scafctl stores files on your system:
 
+{{< tabs "config-tutorial-cmd-12" >}}
+{{% tab "Bash" %}}
 ```bash
 # Show all XDG paths
 scafctl config paths
@@ -174,6 +329,20 @@ scafctl config paths -o json
 # Show paths for a different platform
 scafctl config paths --platform linux
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Show all XDG paths
+scafctl config paths
+
+# As JSON
+scafctl config paths -o json
+
+# Show paths for a different platform
+scafctl config paths --platform linux
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Typical output:
 
@@ -226,9 +395,18 @@ The config file is located at the XDG config path:
 
 Override with the `--config` flag on any command:
 
+{{< tabs "config-tutorial-cmd-13" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution my-solution --config ./custom-config.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution my-solution --config ./custom-config.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## Examples
 
@@ -256,6 +434,8 @@ See [examples/config/full-config.yaml](../../examples/config/full-config.yaml) f
 
 ### Initial Setup
 
+{{< tabs "config-tutorial-cmd-14" >}}
+{{% tab "Bash" %}}
 ```bash
 # 1. Initialize config
 scafctl config init
@@ -267,9 +447,26 @@ scafctl config add-catalog local --type filesystem --path ~/scafctl-catalog --de
 scafctl config view
 scafctl config validate
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# 1. Initialize config
+scafctl config init
+
+# 2. Set up a catalog
+scafctl config add-catalog local --type filesystem --path ~/scafctl-catalog --default
+
+# 3. Verify
+scafctl config view
+scafctl config validate
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Switch Environments
 
+{{< tabs "config-tutorial-cmd-15" >}}
+{{% tab "Bash" %}}
 ```bash
 # Use staging catalog
 scafctl config use-catalog staging
@@ -280,6 +477,20 @@ scafctl config set logging.level debug
 # After debugging, reset
 scafctl config unset logging.level
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Use staging catalog
+scafctl config use-catalog staging
+
+# Increase logging for debugging
+scafctl config set logging.level debug
+
+# After debugging, reset
+scafctl config unset logging.level
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## Next Steps
 

@@ -32,6 +32,8 @@ Many scafctl commands accept a `-f` / `--file` flag to specify the solution file
 
 This means you can simply `cd` into a project directory and run commands without specifying the file:
 
+{{< tabs "auto-discovery-tutorial-cmd-1" >}}
+{{% tab "Bash" %}}
 ```bash
 # Instead of:
 scafctl run solution -f solution.yaml
@@ -39,6 +41,17 @@ scafctl run solution -f solution.yaml
 # Just run:
 scafctl run solution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Instead of:
+scafctl run solution -f solution.yaml
+
+# Just run:
+scafctl run solution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## How Auto-Discovery Works
 
@@ -105,6 +118,8 @@ Auto-discovery works with every command that accepts `-f`:
 
 ### Basic Usage — Run in Project Directory
 
+{{< tabs "auto-discovery-tutorial-cmd-2" >}}
+{{% tab "Bash" %}}
 ```bash
 # Given this project structure:
 # my-project/
@@ -117,9 +132,27 @@ scafctl run solution          # discovers ./solution.yaml
 scafctl lint                  # discovers ./solution.yaml
 scafctl test functional       # discovers ./solution.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Given this project structure:
+# my-project/
+# ├── solution.yaml
+# └── templates/
+#     └── config.yaml.tpl
+
+cd my-project
+scafctl run solution          # discovers ./solution.yaml
+scafctl lint                  # discovers ./solution.yaml
+scafctl test functional       # discovers ./solution.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Conventional Subfolder
 
+{{< tabs "auto-discovery-tutorial-cmd-3" >}}
+{{% tab "Bash" %}}
 ```bash
 # Given this project structure:
 # my-project/
@@ -131,9 +164,26 @@ scafctl test functional       # discovers ./solution.yaml
 cd my-project
 scafctl run solution          # discovers ./scafctl/solution.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Given this project structure:
+# my-project/
+# ├── scafctl/
+# │   └── solution.yaml
+# └── src/
+#     └── main.go
+
+cd my-project
+scafctl run solution          # discovers ./scafctl/solution.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Hidden Subfolder
 
+{{< tabs "auto-discovery-tutorial-cmd-4" >}}
+{{% tab "Bash" %}}
 ```bash
 # Given this project structure:
 # my-project/
@@ -144,11 +194,27 @@ scafctl run solution          # discovers ./scafctl/solution.yaml
 cd my-project
 scafctl lint                  # discovers ./.scafctl/solution.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Given this project structure:
+# my-project/
+# ├── .scafctl/
+# │   └── solution.yaml
+# └── README.md
+
+cd my-project
+scafctl lint                  # discovers ./.scafctl/solution.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Explicit `-f` Overrides Discovery
 
 When you specify `-f`, auto-discovery is skipped entirely:
 
+{{< tabs "auto-discovery-tutorial-cmd-5" >}}
+{{% tab "Bash" %}}
 ```bash
 # Use a specific file regardless of what's in the current directory
 scafctl run solution -f path/to/other-solution.yaml
@@ -162,11 +228,30 @@ scafctl run solution -f https://example.com/solution.yaml
 # Use a catalog name
 scafctl run solution -f my-solution@1.0.0
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Use a specific file regardless of what's in the current directory
+scafctl run solution -f path/to/other-solution.yaml
+
+# Use stdin
+cat solution.yaml | scafctl lint -f -
+
+# Use a URL
+scafctl run solution -f https://example.com/solution.yaml
+
+# Use a catalog name
+scafctl run solution -f my-solution@1.0.0
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## Interaction with `--cwd`
 
 When `--cwd` is set, auto-discovery searches relative to the specified directory instead of the process working directory:
 
+{{< tabs "auto-discovery-tutorial-cmd-6" >}}
+{{% tab "Bash" %}}
 ```bash
 # Discover solution inside another directory
 scafctl run solution --cwd /path/to/project
@@ -174,6 +259,17 @@ scafctl run solution --cwd /path/to/project
 # This is equivalent to:
 cd /path/to/project && scafctl run solution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Discover solution inside another directory
+scafctl run solution --cwd /path/to/project
+
+# This is equivalent to:
+cd /path/to/project; scafctl run solution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 All 18 candidate paths are resolved against the `--cwd` target.
 
@@ -192,9 +288,18 @@ Common causes:
 
 You can see the candidate paths scafctl checks with:
 
+{{< tabs "auto-discovery-tutorial-cmd-7" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl config paths
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl config paths
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## Best Practices
 

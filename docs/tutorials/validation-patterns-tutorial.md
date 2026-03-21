@@ -1,6 +1,6 @@
 ---
 title: "Validation Patterns Tutorial"
-weight: 17
+weight: 72
 ---
 
 # Validation Patterns Tutorial
@@ -11,16 +11,16 @@ Learn how to validate resolver outputs, enforce constraints on inputs, and use s
 
 scafctl offers multiple validation layers that work together to ensure configuration correctness:
 
-```
-┌─────────────────────────────────────────────┐
-│             Solution YAML                    │
-├─────────┬──────────┬──────────┬─────────────┤
-│  Lint   │  Schema  │ Validate │  Result     │
-│  Rules  │  Helper  │ Provider │  Schema     │
-│         │  Tags    │          │             │
-├─────────┴──────────┴──────────┴─────────────┤
-│      Runtime Validation (CEL + Regex)        │
-└─────────────────────────────────────────────┘
+```mermaid
+block-beta
+  columns 4
+  block:top:4
+    A["Solution YAML"]
+  end
+  B["Lint<br/>Rules"] C["Schema<br/>Helper Tags"] D["Validate<br/>Provider"] E["Result<br/>Schema"]
+  block:bottom:4
+    F["Runtime Validation (CEL + Regex)"]
+  end
 ```
 
 - **Schema helper tags** — provider-level input constraints (type, length, pattern, enum)
@@ -82,9 +82,18 @@ schema := schemahelper.ObjectSchema(
 
 When a resolver passes invalid input to this provider, the lint system catches it at analysis time:
 
+{{< tabs "validation-patterns-tutorial-cmd-1" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl lint my-solution.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl lint my-solution.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ```
 ERROR [invalid-provider-input-type] resolver 'deploy': input 'replicas' expects integer, got string
@@ -138,10 +147,13 @@ spec:
               message: "Must be a valid Kubernetes resource name"
 ```
 
-> **▶ Try it:**
-> ```bash
-> scafctl run solution regex-patterns.yaml
-> ```
+{{% details "▶ Try it" %}}
+Run this example
+
+```bash
+scafctl run solution regex-patterns.yaml
+```
+{{% /details %}}
 
 ### Pattern: CEL Expression Validation
 
@@ -195,6 +207,7 @@ spec:
               message: "Password must contain a special character"
 ```
 
+> [!NOTE]
 > **Tip:** `__self` refers to the resolver's current value inside validate and transform phases. Use `_` to access the full resolver data map for cross-field validation.
 
 ### Pattern: Cross-Field Validation
@@ -302,9 +315,18 @@ ERROR: action 'deploy' result does not match schema: property 'status' must be o
 
 `scafctl lint` catches issues without executing the solution:
 
+{{< tabs "validation-patterns-tutorial-cmd-2" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl lint my-solution.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl lint my-solution.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Key Validation Rules
 
@@ -320,6 +342,8 @@ scafctl lint my-solution.yaml
 | `permissive-result-schema` | info | `resultSchema` without `type` constraint |
 | `undefined-required-property` | error | Required property not defined in `properties` |
 
+{{< tabs "validation-patterns-tutorial-cmd-3" >}}
+{{% tab "Bash" %}}
 ```bash
 # Lint with auto-fix where possible
 scafctl lint --fix my-solution.yaml
@@ -327,6 +351,17 @@ scafctl lint --fix my-solution.yaml
 # Lint all solutions in a directory
 scafctl lint ./solutions/
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Lint with auto-fix where possible
+scafctl lint --fix my-solution.yaml
+
+# Lint all solutions in a directory
+scafctl lint ./solutions/
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ---
 
@@ -432,10 +467,20 @@ validate:
 
 When validation fails, scafctl provides structured error messages. Use the MCP `explain_error` tool or inspect the output directly:
 
+{{< tabs "validation-patterns-tutorial-cmd-4" >}}
+{{% tab "Bash" %}}
 ```bash
 # Run with verbose output to see validation details
 scafctl run solution my-solution.yaml -v 2
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Run with verbose output to see validation details
+scafctl run solution my-solution.yaml -v 2
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Common validation error patterns and their meaning:
 

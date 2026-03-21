@@ -103,10 +103,14 @@ spec:
         inputs:
           command: "echo 'Workflow completed, all cleanup finished'"
 
-      # Upload logs regardless of test outcome
+      # Upload logs regardless of test outcome.
+      # This finally action reads the run-tests result via __actions (cross-section reference).
+      # No dependsOn is needed — all main actions complete before finally begins.
+      # The reference to run-tests appears in crossSectionRefs on the rendered graph (informational).
       upload-logs:
-        description: Upload execution logs
+        description: Upload execution logs with test outcome
         displayName: Upload Logs
         provider: exec
         inputs:
-          command: "echo 'Uploading execution logs...'"
+          command:
+            expr: "'echo Uploading logs (tests: ' + string(__actions['run-tests'].status) + ')'"

@@ -11,14 +11,9 @@ This tutorial covers using `--dry-run` to preview what a solution execution woul
 
 Dry-run mode resolves all values and builds an action execution plan, but never executes actions. This gives you a complete picture of what *would* happen:
 
-```
-┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│   Solution   │     │  Dry-Run     │     │   Report     │
-│   (.yaml)    │ ──► │  Generator   │ ──► │  (resolvers, │
-│              │     │              │     │   actions,   │
-│              │     │  No side     │     │   phases)    │
-│              │     │  effects!    │     │              │
-└──────────────┘     └──────────────┘     └──────────────┘
+```mermaid
+flowchart LR
+  A["Solution<br/>(.yaml)"] --> B["Dry-Run Generator<br/>⚠️ No side effects!"] --> C["Report<br/>(resolvers, actions, phases)"]
 ```
 
 ## When to Use Dry-Run
@@ -35,25 +30,52 @@ Dry-run mode resolves all values and builds an action execution plan, but never 
 
 ### Dry-Run a Full Solution
 
+{{< tabs "dryrun-tutorial-cmd-1" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f solution.yaml --dry-run
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f solution.yaml --dry-run
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 This resolves all values and shows the action plan without executing any actions.
 
 ### Dry-Run with JSON Output
 
+{{< tabs "dryrun-tutorial-cmd-2" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f solution.yaml --dry-run -o json
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f solution.yaml --dry-run -o json
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Returns a structured JSON report with resolver values, action plan, phases, and warnings.
 
 ### Dry-Run with Verbose Output
 
+{{< tabs "dryrun-tutorial-cmd-3" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f solution.yaml --dry-run --verbose
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f solution.yaml --dry-run --verbose
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Adds materialized inputs to each action in the report, showing exactly what values were resolved for each provider.
 
@@ -69,9 +91,18 @@ This solution has four resolvers (`greeting`, `target`, `port`, `endpoint`) and 
 
 ### Step 2: Run Dry-Run
 
+{{< tabs "dryrun-tutorial-cmd-4" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f examples/dryrun/basic-dryrun.yaml --dry-run
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f examples/dryrun/basic-dryrun.yaml --dry-run
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 The output shows:
 - **WhatIf messages** — Each action's provider-generated description of what it would do (e.g., `Would execute command echo Hello via bash`)
@@ -80,9 +111,18 @@ The output shows:
 
 ### Step 3: JSON Output for Automation
 
+{{< tabs "dryrun-tutorial-cmd-5" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f examples/dryrun/basic-dryrun.yaml --dry-run -o json | jq .
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f examples/dryrun/basic-dryrun.yaml --dry-run -o json | ConvertFrom-Json
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 The JSON report contains:
 
@@ -116,9 +156,18 @@ The JSON report contains:
 
 ### Step 4: Conditional Actions
 
+{{< tabs "dryrun-tutorial-cmd-6" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f examples/dryrun/conditional-dryrun.yaml --dry-run -o json
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f examples/dryrun/conditional-dryrun.yaml --dry-run -o json
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 This example shows how dry-run reports conditional (`when`) actions and `finally` blocks. The action plan includes the `when` expression so you can see which conditions will be evaluated at runtime.
 
@@ -154,6 +203,8 @@ This example shows how dry-run reports conditional (`when`) actions and `finally
 
 Dry-run shows what *would* happen; snapshots capture what *did* happen. Combine them:
 
+{{< tabs "dryrun-tutorial-cmd-7" >}}
+{{% tab "Bash" %}}
 ```bash
 # Preview what will happen
 scafctl run solution -f solution.yaml --dry-run -o json > plan.json
@@ -163,11 +214,26 @@ scafctl run resolver -f solution.yaml --snapshot --snapshot-file=actual.json
 
 # Compare plan vs actual if needed
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Preview what will happen
+scafctl run solution -f solution.yaml --dry-run -o json > plan.json
+
+# Execute and capture the result
+scafctl run resolver -f solution.yaml --snapshot --snapshot-file=actual.json
+
+# Compare plan vs actual if needed
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## CI Pipeline Integration
 
 Use dry-run in CI to validate solutions without side effects:
 
+{{< tabs "dryrun-tutorial-cmd-8" >}}
+{{% tab "Bash" %}}
 ```bash
 # Verify all resolvers resolve successfully
 output=$(scafctl run solution -f solution.yaml --dry-run -o json)
@@ -179,11 +245,29 @@ if [ "$warnings" -gt 0 ]; then
   exit 1
 fi
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Verify all resolvers resolve successfully
+$output = scafctl run solution -f solution.yaml --dry-run -o json
+$parsed = $output | ConvertFrom-Json
+$warnings = $parsed.warnings.Count
+
+if ($warnings -gt 0) {
+  Write-Output "Dry-run reported warnings:"
+  $parsed.warnings
+  exit 1
+}
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## Working Directory Override
 
 Use `--cwd` (`-C`) to run a dry-run against a solution in a different directory:
 
+{{< tabs "dryrun-tutorial-cmd-9" >}}
+{{% tab "Bash" %}}
 ```bash
 # Dry-run a solution from another directory
 scafctl --cwd /path/to/project dryrun -f solution.yaml
@@ -191,6 +275,17 @@ scafctl --cwd /path/to/project dryrun -f solution.yaml
 # Short form
 scafctl -C /path/to/project dryrun -f solution.yaml -o json
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Dry-run a solution from another directory
+scafctl --cwd /path/to/project dryrun -f solution.yaml
+
+# Short form
+scafctl -C /path/to/project dryrun -f solution.yaml -o json
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 All relative paths in the solution (file references, templates, etc.) resolve against the `--cwd` directory.
 

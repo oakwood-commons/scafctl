@@ -13,16 +13,14 @@ By default, scafctl produces **no structured log output**. Only styled user mess
 
 When you need to see what's happening under the hood — debugging a solution, reporting a bug, or feeding structured logs to a log aggregation system — scafctl gives you full control over log verbosity, format, and destination.
 
-```
-┌──────────────────────────────────────────────────┐
-│  Default:     No logs, just styled output        │
-│  --debug:     Console-format debug logs          │
-│  --log-level: Named or numeric verbosity         │
-│  --log-format: console (default) or json         │
-│  --log-file:  Write logs to a file               │
-│  Env vars:    Override from CI/CD or scripts     │
-└──────────────────────────────────────────────────┘
-```
+| Flag | Description |
+|------|-------------|
+| *(default)* | No logs, just styled output |
+| `--debug` | Console-format debug logs |
+| `--log-level` | Named or numeric verbosity |
+| `--log-format` | `console` (default) or `json` |
+| `--log-file` | Write logs to a file |
+| Env vars | Override from CI/CD or scripts |
 
 ## Quick Start
 
@@ -30,6 +28,8 @@ When you need to see what's happening under the hood — debugging a solution, r
 
 Run any command — you'll see only styled user-facing messages:
 
+{{< tabs "logging-tutorial-cmd-1" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f solution.yaml
 # Output: styled results, errors show as ❌ messages
@@ -38,17 +38,41 @@ scafctl run solution -f invalid.yaml
 # Output: ❌ failed to load solution from 'invalid.yaml': ...
 # No JSON log noise on stderr
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f solution.yaml
+# Output: styled results, errors show as ❌ messages
+
+scafctl run solution -f invalid.yaml
+# Output: ❌ failed to load solution from 'invalid.yaml': ...
+# No JSON log noise on stderr
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Enable Debug Logging
 
 The quickest way to see what scafctl is doing:
 
+{{< tabs "logging-tutorial-cmd-2" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f solution.yaml --debug
 
 # or equivalently:
 scafctl run solution -f solution.yaml --log-level debug
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f solution.yaml --debug
+
+# or equivalently:
+scafctl run solution -f solution.yaml --log-level debug
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 This shows colored, human-readable logs on stderr alongside normal output:
 
@@ -72,6 +96,8 @@ scafctl supports both **named levels** (recommended) and **numeric V-levels** fo
 | `debug` | Verbose debugging | Troubleshooting solutions |
 | `trace` | Very verbose | Deep debugging |
 
+{{< tabs "logging-tutorial-cmd-3" >}}
+{{% tab "Bash" %}}
 ```bash
 # Show only errors
 scafctl run solution -f solution.yaml --log-level error
@@ -82,6 +108,20 @@ scafctl run solution -f solution.yaml --log-level info
 # Maximum verbosity
 scafctl run solution -f solution.yaml --log-level trace
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Show only errors
+scafctl run solution -f solution.yaml --log-level error
+
+# Show info and above
+scafctl run solution -f solution.yaml --log-level info
+
+# Maximum verbosity
+scafctl run solution -f solution.yaml --log-level trace
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Numeric V-Levels
 
@@ -93,6 +133,8 @@ For fine-grained control matching the internal `V()` levels used in the code:
 | `2` | `trace` | Internal data flow, template rendering |
 | `3` | _(no alias)_ | Ultra-verbose internals |
 
+{{< tabs "logging-tutorial-cmd-4" >}}
+{{% tab "Bash" %}}
 ```bash
 # Same as --log-level debug
 scafctl run solution -f solution.yaml --log-level 1
@@ -103,6 +145,20 @@ scafctl run solution -f solution.yaml --log-level 2
 # Ultra-verbose (no named alias)
 scafctl run solution -f solution.yaml --log-level 3
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Same as --log-level debug
+scafctl run solution -f solution.yaml --log-level 1
+
+# Same as --log-level trace
+scafctl run solution -f solution.yaml --log-level 2
+
+# Ultra-verbose (no named alias)
+scafctl run solution -f solution.yaml --log-level 3
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## Log Formats
 
@@ -110,11 +166,22 @@ scafctl run solution -f solution.yaml --log-level 3
 
 Human-readable, colored output. Best for terminal use:
 
+{{< tabs "logging-tutorial-cmd-5" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f solution.yaml --debug
 # or explicitly:
 scafctl run solution -f solution.yaml --log-level debug --log-format console
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f solution.yaml --debug
+# or explicitly:
+scafctl run solution -f solution.yaml --log-level debug --log-format console
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -127,9 +194,18 @@ Output:
 
 Structured JSON, ideal for log aggregation (Splunk, Datadog, ELK), piping to `jq`, or machine parsing:
 
+{{< tabs "logging-tutorial-cmd-6" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f solution.yaml --log-level info --log-format json
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f solution.yaml --log-level info --log-format json
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -141,26 +217,29 @@ Output:
 Filter with `jq`:
 
 {{< tabs "logging-json-filter" >}}
-{{< tab "Bash" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f solution.yaml --log-level debug --log-format json 2>&1 | jq 'select(.level == "error")'
 ```
 
+> [!NOTE]
 > **Note:** The above command uses [jq](https://jqlang.github.io/jq/), a command-line JSON processor. Install it separately if not already available.
-{{< /tab >}}
-{{< tab "PowerShell" >}}
+{{% /tab %}}
+{{% tab "PowerShell" %}}
 ```powershell
 scafctl run solution -f solution.yaml --log-level debug --log-format json 2>&1 |
   ForEach-Object { $_ | ConvertFrom-Json } |
   Where-Object { $_.level -eq 'error' }
 ```
-{{< /tab >}}
+{{% /tab %}}
 {{< /tabs >}}
 
 ## Log File Output
 
 Write logs to a file instead of (or in addition to) stderr:
 
+{{< tabs "logging-tutorial-cmd-7" >}}
+{{% tab "Bash" %}}
 ```bash
 # Logs go to file only; stderr shows just styled output
 scafctl run solution -f solution.yaml --log-level debug --log-file /tmp/scafctl.log
@@ -168,14 +247,34 @@ scafctl run solution -f solution.yaml --log-level debug --log-file /tmp/scafctl.
 # Logs go to BOTH file and stderr (combine with --debug)
 scafctl run solution -f solution.yaml --debug --log-file /tmp/scafctl.log
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Logs go to file only; stderr shows just styled output
+scafctl run solution -f solution.yaml --log-level debug --log-file /tmp/scafctl.log
+
+# Logs go to BOTH file and stderr (combine with --debug)
+scafctl run solution -f solution.yaml --debug --log-file /tmp/scafctl.log
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 When `--debug` and `--log-file` are used together, logs are written to both destinations. Without `--debug`, the file receives the logs and stderr stays clean.
 
 View the log file:
 
+{{< tabs "logging-tutorial-cmd-8" >}}
+{{% tab "Bash" %}}
 ```bash
 tail -f /tmp/scafctl.log
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+tail -f /tmp/scafctl.log
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## Environment Variables
 
@@ -190,6 +289,8 @@ Environment variables are useful for CI/CD pipelines, container environments, an
 
 ### Examples
 
+{{< tabs "logging-tutorial-cmd-9" >}}
+{{% tab "Bash" %}}
 ```bash
 # CI/CD: structured JSON logs for log aggregation
 export SCAFCTL_LOG_LEVEL=info
@@ -204,6 +305,24 @@ scafctl run solution -f solution.yaml
 # Quick debug in shell
 SCAFCTL_DEBUG=1 scafctl run solution -f solution.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# CI/CD: structured JSON logs for log aggregation
+$env:SCAFCTL_LOG_LEVEL = "info"
+$env:SCAFCTL_LOG_FORMAT = "json"
+scafctl run solution -f solution.yaml
+
+# Container: debug to a file
+$env:SCAFCTL_DEBUG = "1"
+$env:SCAFCTL_LOG_PATH = "/var/log/scafctl.log"
+scafctl run solution -f solution.yaml
+
+# Quick debug in shell
+SCAFCTL_DEBUG=1 scafctl run solution -f solution.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## Precedence
 
@@ -237,6 +356,8 @@ logging:
 
 Manage via CLI:
 
+{{< tabs "logging-tutorial-cmd-10" >}}
+{{% tab "Bash" %}}
 ```bash
 # Set persistent log level
 scafctl config set logging.level info
@@ -248,11 +369,28 @@ scafctl config set logging.format json
 scafctl config unset logging.level
 scafctl config unset logging.format
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Set persistent log level
+scafctl config set logging.level info
+
+# Set persistent format
+scafctl config set logging.format json
+
+# Reset to defaults
+scafctl config unset logging.level
+scafctl config unset logging.format
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## Common Workflows
 
 ### Debugging a Failing Solution
 
+{{< tabs "logging-tutorial-cmd-11" >}}
+{{% tab "Bash" %}}
 ```bash
 # Step 1: Run with debug to see what's happening
 scafctl run solution -f solution.yaml --debug
@@ -263,13 +401,37 @@ scafctl run solution -f solution.yaml --log-level trace
 # Step 3: Capture logs for a bug report
 scafctl run solution -f solution.yaml --log-level trace --log-format json --log-file debug.log 2>&1
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Step 1: Run with debug to see what's happening
+scafctl run solution -f solution.yaml --debug
+
+# Step 2: If you need even more detail
+scafctl run solution -f solution.yaml --log-level trace
+
+# Step 3: Capture logs for a bug report
+scafctl run solution -f solution.yaml --log-level trace --log-format json --log-file debug.log 2>&1
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### CI/CD Pipeline
 
+{{< tabs "logging-tutorial-cmd-12" >}}
+{{% tab "Bash" %}}
 ```bash
 # Fail-fast with only error logs in JSON for log aggregation
 scafctl run solution -f solution.yaml --log-level error --log-format json
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Fail-fast with only error logs in JSON for log aggregation
+scafctl run solution -f solution.yaml --log-level error --log-format json
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Or set via environment:
 
@@ -286,6 +448,8 @@ steps:
 
 Use `--log-file` to keep stderr clean while still capturing logs:
 
+{{< tabs "logging-tutorial-cmd-13" >}}
+{{% tab "Bash" %}}
 ```bash
 # Logs to file, styled output to stderr, data to stdout
 scafctl run solution -f solution.yaml --log-level debug --log-file /tmp/run.log -o json > results.json
@@ -293,11 +457,24 @@ scafctl run solution -f solution.yaml --log-level debug --log-file /tmp/run.log 
 # Review logs separately
 cat /tmp/run.log
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Logs to file, styled output to stderr, data to stdout
+scafctl run solution -f solution.yaml --log-level debug --log-file /tmp/run.log -o json > results.json
+
+# Review logs separately
+cat /tmp/run.log
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Temporary Debug Session
 
 Set and unset config for a debugging session:
 
+{{< tabs "logging-tutorial-cmd-14" >}}
+{{% tab "Bash" %}}
 ```bash
 # Enable debug temporarily via config
 scafctl config set logging.level debug
@@ -308,12 +485,35 @@ scafctl run solution -f solution.yaml
 # Reset when done
 scafctl config unset logging.level
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Enable debug temporarily via config
+scafctl config set logging.level debug
+
+# Run your commands...
+scafctl run solution -f solution.yaml
+
+# Reset when done
+scafctl config unset logging.level
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Or use the environment variable (no config changes needed):
 
+{{< tabs "logging-tutorial-cmd-15" >}}
+{{% tab "Bash" %}}
 ```bash
 SCAFCTL_DEBUG=1 scafctl run solution -f solution.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+SCAFCTL_DEBUG=1 scafctl run solution -f solution.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## OpenTelemetry Integration
 
@@ -348,10 +548,20 @@ Trace IDs only appear when **both** conditions are true:
 1. `--otel-endpoint` is set (or `OTEL_EXPORTER_OTLP_ENDPOINT` env var).
 2. A trace span is active at the time the log record is emitted.
 
+{{< tabs "logging-tutorial-cmd-16" >}}
+{{% tab "Bash" %}}
 ```bash
 OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4317 \
   scafctl run solution -f solution.yaml --log-level debug --log-format json
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4317 `
+  scafctl run solution -f solution.yaml --log-level debug --log-format json
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Local console-format logs (without `--log-format json`) do **not** include the
 trace/span IDs — they only appear in the OTLP log stream and in JSON format.

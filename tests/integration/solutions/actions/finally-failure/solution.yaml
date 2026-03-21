@@ -1,0 +1,70 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-action-finally-failure
+  version: 1.0.0
+  description: |
+    Verifies that finally actions with cross-section __actions references
+    still run when the referenced main action has a non-zero exit code.
+
+spec:
+  workflow:
+    actions:
+      failing-action:
+        description: Main action that exits non-zero
+        provider: exec
+        onError: continue
+        inputs:
+          command: "sh -c 'exit 1'"
+
+    finally:
+      report-failure:
+        description: Finally action that reads main action exit code via __actions
+        provider: exec
+        when:
+          expr: "__actions['failing-action'].results.success == false"
+        inputs:
+          command:
+            expr: "'echo failure-detected: exitCode=' + string(__actions['failing-action'].results.exitCode)"
+
+  testing:
+    cases:
+      _run-base:
+        description: Base template for finally failure tests
+        command: [run, solution]
+        args: ["-o", "json"]
+        tags: [action, finally, failure]
+        assertions:
+          - expression: __exitCode == 0
+
+      _render-base:
+        description: Base template for render tests
+        command: [render, solution]
+        args: ["-o", "json"]
+        tags: [action, finally, failure, render]
+        assertions:
+          - expression: __exitCode == 0
+
+      finally-runs-after-failure:
+        description: Finally action with cross-section ref runs when main action exits non-zero
+        extends: [_run-base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.actions["failing-action"].results.success == false
+            message: "Main action should have non-zero exit code"
+          - expression: __output.actions["report-failure"].status == "succeeded"
+            message: "Finally action must still run when main action fails"
+          - expression: __output.actions["report-failure"].results.stdout.contains("failure-detected")
+            message: "Finally action should detect the failure via __actions cross-section ref"
+
+      cross-section-ref-not-in-deps:
+        description: Cross-section ref from finally to failed main action is in crossSectionRefs not dependencies
+        extends: [_render-base]
+        assertions:
+          - expression: has(__output.actions["report-failure"].crossSectionRefs)
+            message: "report-failure should have crossSectionRefs"
+          - expression: __output.actions["report-failure"].crossSectionRefs.exists(r, r == "failing-action")
+            message: "crossSectionRefs should contain failing-action"
+          - expression: "!has(__output.actions[\"report-failure\"].dependsOn) || size(__output.actions[\"report-failure\"].dependsOn) == 0"
+            message: "dependsOn must be empty — cross-section refs are not scheduling deps"

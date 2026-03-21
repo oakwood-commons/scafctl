@@ -66,9 +66,18 @@ spec:
 
 Run it:
 
+{{< tabs "exec-provider-tutorial-cmd-1" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f simple-exec.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f simple-exec.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -113,6 +122,7 @@ actions:
 
 Unlike traditional exec implementations that require a special flag for shell features, the embedded shell handles all POSIX syntax by default.
 
+> [!TIP]
 > **Note:** The YAML snippets in the remaining sections show only the `actions:` block. To run them, place each snippet inside a complete solution file with `apiVersion`, `kind`, `metadata`, `spec.resolvers: {}`, and `spec.workflow` sections — like the `simple-exec.yaml` example above.
 
 ```yaml
@@ -196,6 +206,7 @@ actions:
 
 The `args` values are appended to the command after being single-quoted for safety (e.g., `echo 'Hello' 'World' 'with special chars: $HOME ; rm -rf /'`).
 
+> [!NOTE]
 > **Tip**: Use `args` when the values come from user input or resolved values to prevent shell injection. Use inline command strings when you want shell expansion.
 
 ---
@@ -440,6 +451,7 @@ actions:
       command: "rm -rf /tmp/myapp"
 ```
 
+> [!NOTE]
 > **Note**: On Windows, the Go-native coreutils are enabled by default. Set the `SCAFCTL_CORE_UTILS=false` environment variable to disable them if needed.
 
 ---

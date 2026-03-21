@@ -122,9 +122,18 @@ spec:
 
 ### Step 3: Run with `--output-dir`
 
+{{< tabs "output-dir-tutorial-cmd-1" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f solution.yaml --output-dir /tmp/demo-output
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f solution.yaml --output-dir /tmp/demo-output
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Step 4: Verify
 
@@ -217,9 +226,18 @@ Because resolvers always use CWD and actions use `--output-dir`, this effectivel
 
 Use `--dry-run` with `--output-dir` to preview what files would be written and where:
 
+{{< tabs "output-dir-tutorial-cmd-2" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f solution.yaml --output-dir /tmp/demo-output --dry-run
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f solution.yaml --output-dir /tmp/demo-output --dry-run
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 This resolves all values and shows the action plan but doesn't create any files or directories. Use this to verify paths before a real run.
 
@@ -229,6 +247,8 @@ This resolves all values and shows the action plan but doesn't create any files 
 
 The `--output-dir` flag also works with `run provider` when the capability is `action`:
 
+{{< tabs "output-dir-tutorial-cmd-3" >}}
+{{% tab "Bash" %}}
 ```bash
 # Write a file to the output directory using the file provider directly
 scafctl run provider file --capability action --output-dir /tmp/demo-output \
@@ -238,7 +258,22 @@ scafctl run provider file --capability action --output-dir /tmp/demo-output \
 cat /tmp/demo-output/hello.txt
 # Output: world
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Write a file to the output directory using the file provider directly
+scafctl run provider file --capability action --output-dir /tmp/demo-output `
+  -i '{"operation": "write", "path": "hello.txt", "content": "world"}'
 
+# Verify
+cat /tmp/demo-output/hello.txt
+# Output: world
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+{{< tabs "output-dir-tutorial-cmd-4" >}}
+{{% tab "Bash" %}}
 ```bash
 # Create a directory inside the output directory
 scafctl run provider directory --capability action --output-dir /tmp/demo-output \
@@ -247,14 +282,37 @@ scafctl run provider directory --capability action --output-dir /tmp/demo-output
 # Verify
 ls -la /tmp/demo-output/sub/nested
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Create a directory inside the output directory
+scafctl run provider directory --capability action --output-dir /tmp/demo-output `
+  -i '{"operation": "mkdir", "path": "sub/nested"}'
+
+# Verify
+ls -la /tmp/demo-output/sub/nested
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 The flag only applies when `--capability action` is used. Resolver-mode provider runs ignore `--output-dir`:
 
+{{< tabs "output-dir-tutorial-cmd-5" >}}
+{{% tab "Bash" %}}
 ```bash
 # --output-dir is ignored for resolver capability (reads from CWD)
 scafctl run provider file --capability resolver --output-dir /tmp/demo-output \
   -i '{"operation": "read", "path": "source.txt"}'
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# --output-dir is ignored for resolver capability (reads from CWD)
+scafctl run provider file --capability resolver --output-dir /tmp/demo-output `
+  -i '{"operation": "read", "path": "source.txt"}'
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ---
 
@@ -270,6 +328,8 @@ action:
 
 The CLI flag always overrides the configured default:
 
+{{< tabs "output-dir-tutorial-cmd-6" >}}
+{{% tab "Bash" %}}
 ```bash
 # Uses the configured default
 scafctl run solution -f solution.yaml
@@ -277,6 +337,17 @@ scafctl run solution -f solution.yaml
 # Overrides the configured default
 scafctl run solution -f solution.yaml --output-dir /tmp/override
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Uses the configured default
+scafctl run solution -f solution.yaml
+
+# Overrides the configured default
+scafctl run solution -f solution.yaml --output-dir /tmp/override
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ---
 
@@ -400,12 +471,23 @@ spec:
           path: cmd/server
 ```
 
+{{< tabs "output-dir-tutorial-cmd-7" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f solution.yaml --output-dir ./generated/my-service
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f solution.yaml --output-dir ./generated/my-service
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### CI/CD: Build Artifacts to a Staging Directory
 
+{{< tabs "output-dir-tutorial-cmd-8" >}}
+{{% tab "Bash" %}}
 ```bash
 # In a CI pipeline, write outputs to a staging dir
 scafctl run solution -f build.yaml --output-dir "$BUILD_DIR/artifacts"
@@ -413,6 +495,17 @@ scafctl run solution -f build.yaml --output-dir "$BUILD_DIR/artifacts"
 # Then upload or deploy from that directory
 aws s3 sync "$BUILD_DIR/artifacts" s3://my-bucket/
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# In a CI pipeline, write outputs to a staging dir
+scafctl run solution -f build.yaml --output-dir "$BUILD_DIR/artifacts"
+
+# Then upload or deploy from that directory
+aws s3 sync "$BUILD_DIR/artifacts" s3://my-bucket/
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Template Rendering with Source Separation
 
@@ -451,10 +544,20 @@ spec:
             tmpl: "{{ .template }}"
 ```
 
+{{< tabs "output-dir-tutorial-cmd-9" >}}
+{{% tab "Bash" %}}
 ```bash
 # Templates stay in source, rendered output goes elsewhere
 scafctl run solution -f solution.yaml --output-dir ./dist
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Templates stay in source, rendered output goes elsewhere
+scafctl run solution -f solution.yaml --output-dir ./dist
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ---
 

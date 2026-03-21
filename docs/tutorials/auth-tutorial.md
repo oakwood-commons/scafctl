@@ -62,6 +62,8 @@ scafctl currently supports the following auth handlers:
 
 You can always discover registered handlers and their capabilities at runtime:
 
+{{< tabs "auth-tutorial-cmd-1" >}}
+{{% tab "Bash" %}}
 ```bash
 # List all handlers with flows and capabilities
 scafctl auth list
@@ -69,6 +71,17 @@ scafctl auth list
 # Output as JSON for scripting
 scafctl auth list -o json
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# List all handlers with flows and capabilities
+scafctl auth list
+
+# Output as JSON for scripting
+scafctl auth list -o json
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ---
 
@@ -76,9 +89,18 @@ scafctl auth list -o json
 
 To authenticate with Microsoft Entra ID, use the `auth login` command:
 
+{{< tabs "auth-tutorial-cmd-2" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl auth login entra
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl auth login entra
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 By default, this opens your browser for an OAuth authorization code flow with PKCE — the same approach used by `az login`, `gh auth login`, and `gcloud auth login`:
 
@@ -102,9 +124,18 @@ By default, this opens your browser for an OAuth authorization code flow with PK
 
 If you are in a headless environment, over SSH, or the browser cannot open, use the device code flow:
 
+{{< tabs "auth-tutorial-cmd-3" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl auth login entra --flow device-code
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl auth login entra --flow device-code
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 This displays a code and URL for you to enter manually:
 
@@ -122,12 +153,24 @@ Waiting for authentication...
 
 Use `--skip-if-authenticated` to skip re-authentication if you're already logged in. The command exits `0` without prompting, making it safe to call at the start of scripts or CI jobs without disrupting an active session:
 
+{{< tabs "auth-tutorial-cmd-4" >}}
+{{% tab "Bash" %}}
 ```bash
 # Only login if not already authenticated
 scafctl auth login entra --skip-if-authenticated
 scafctl auth login github --skip-if-authenticated
 scafctl auth login gcp --skip-if-authenticated
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Only login if not already authenticated
+scafctl auth login entra --skip-if-authenticated
+scafctl auth login github --skip-if-authenticated
+scafctl auth login gcp --skip-if-authenticated
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 When already authenticated this prints a message and exits `0`. Without the flag, the command prompts for re-authentication (or warns if already authenticated but continues).
 
@@ -137,6 +180,8 @@ When already authenticated this prints a message and exits `0`. Without the flag
 
 By default, scafctl uses the "organizations" tenant (any work/school account). To authenticate with a specific tenant:
 
+{{< tabs "auth-tutorial-cmd-5" >}}
+{{% tab "Bash" %}}
 ```bash
 # Use a specific tenant ID
 scafctl auth login entra --tenant 08e70e8e-d05c-4449-a2c2-67bd0a9c4e79
@@ -144,30 +189,51 @@ scafctl auth login entra --tenant 08e70e8e-d05c-4449-a2c2-67bd0a9c4e79
 # Use a tenant domain
 scafctl auth login entra --tenant contoso.onmicrosoft.com
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Use a specific tenant ID
+scafctl auth login entra --tenant 08e70e8e-d05c-4449-a2c2-67bd0a9c4e79
+
+# Use a tenant domain
+scafctl auth login entra --tenant contoso.onmicrosoft.com
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Custom Client ID
 
 By default, scafctl uses the Azure CLI's public client ID (`04b07795-8ddb-461a-bbee-02f9e1bf7b46`). If your organization requires a custom app registration (e.g., for specific permissions or conditional access policies), use the `--client-id` flag:
 
+{{< tabs "auth-tutorial-cmd-6" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl auth login entra --client-id 12345678-abcd-1234-abcd-123456789abc
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl auth login entra --client-id 12345678-abcd-1234-abcd-123456789abc
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 The client ID used during login is persisted in your credential metadata so that subsequent token refreshes use the same client ID, even if your configuration file specifies a different one. This prevents token minting failures caused by a mismatch between the login client ID and the refresh client ID.
 
 You can also set a default client ID via the scafctl configuration file under `auth.entra.clientId`. Note that the `--client-id` flag at login time always takes precedence, and the stored client ID from login will be used for all future token refreshes.
 
+> [!WARNING]
 > **Important — Redirect URI registration:** When using a custom client ID with the
 > interactive (browser) login flow, the app registration must have `http://localhost`
 > registered as a redirect URI. Without it, Entra returns AADSTS500113 and the CLI
 > times out. In the Azure portal, go to **App registrations → your app →
 > Authentication → Add a platform → Mobile and desktop applications** and add
 > `http://localhost`.
->
+> 
 > If you cannot modify the app registration, use `--flow device-code` instead
 > (device code does not require a redirect URI), or use `--callback-port` to bind
 > the callback server to a specific port that matches a registered redirect URI:
->
+> 
 > ```bash
 > # If the app registration has http://localhost:8400 as a redirect URI
 > scafctl auth login entra --client-id 12345678-abcd-1234-abcd-123456789abc --callback-port 8400
@@ -179,9 +245,18 @@ By default, the interactive login flow starts a local HTTP server on a random
 (ephemeral) port. Some app registrations only allow specific redirect URIs. Use
 `--callback-port` to bind to a predictable port:
 
+{{< tabs "auth-tutorial-cmd-7" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl auth login entra --callback-port 8400
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl auth login entra --callback-port 8400
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 This makes the redirect URI `http://localhost:8400`, which must be registered in
 the app registration's **Authentication** settings.
@@ -190,14 +265,25 @@ the app registration's **Authentication** settings.
 
 The interactive login flow has a 5-minute default timeout. To extend it:
 
+{{< tabs "auth-tutorial-cmd-8" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl auth login entra --timeout 10m
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl auth login entra --timeout 10m
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Requesting Specific Scopes
 
 By default, login requests only basic scopes (`openid`, `profile`, `offline_access`). If your resolvers need access to specific APIs (e.g., Microsoft Graph), include the required scope during login to establish consent:
 
+{{< tabs "auth-tutorial-cmd-9" >}}
+{{% tab "Bash" %}}
 ```bash
 # Login with Microsoft Graph scope
 scafctl auth login entra --scope https://graph.microsoft.com/.default
@@ -205,9 +291,21 @@ scafctl auth login entra --scope https://graph.microsoft.com/.default
 # Login with Azure Resource Manager scope
 scafctl auth login entra --scope https://management.azure.com/.default
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Login with Microsoft Graph scope
+scafctl auth login entra --scope https://graph.microsoft.com/.default
+
+# Login with Azure Resource Manager scope
+scafctl auth login entra --scope https://management.azure.com/.default
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 This ensures your authentication session has consent for that API resource, preventing "consent required" errors when resolvers run. The refresh token obtained at login can then be used to mint access tokens for the consented resource.
 
+> [!NOTE]
 > **Note:** Login should target a single API resource at a time. If you need
 > tokens for multiple API resources, use separate `scafctl auth login` calls,
 > or rely on the refresh token to mint tokens for additional resources at
@@ -217,6 +315,8 @@ This ensures your authentication session has consent for that API resource, prev
 
 For non-interactive scenarios like CI/CD pipelines, use service principal authentication:
 
+{{< tabs "auth-tutorial-cmd-10" >}}
+{{% tab "Bash" %}}
 ```bash
 # Set credentials in environment variables
 export AZURE_CLIENT_ID="your-app-client-id"
@@ -229,6 +329,22 @@ scafctl auth login entra
 # Or explicitly specify the flow
 scafctl auth login entra --flow service-principal
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Set credentials in environment variables
+$env:AZURE_CLIENT_ID = "your-app-client-id"
+$env:AZURE_TENANT_ID = "your-tenant-id"
+$env:AZURE_CLIENT_SECRET = "your-client-secret"
+
+# Login with service principal (auto-detected from env vars)
+scafctl auth login entra
+
+# Or explicitly specify the flow
+scafctl auth login entra --flow service-principal
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 **Environment Variables:**
 
@@ -248,6 +364,8 @@ Workload Identity enables secretless authentication for workloads running on Kub
 
 When running inside a properly configured AKS pod, the Azure Workload Identity webhook automatically injects the required environment variables:
 
+{{< tabs "auth-tutorial-cmd-11" >}}
+{{% tab "Bash" %}}
 ```bash
 # Auto-detected when running in a configured pod
 scafctl auth login entra
@@ -255,6 +373,17 @@ scafctl auth login entra
 # Or explicitly specify the flow
 scafctl auth login entra --flow workload-identity
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Auto-detected when running in a configured pod
+scafctl auth login entra
+
+# Or explicitly specify the flow
+scafctl auth login entra --flow workload-identity
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 **Environment Variables (auto-injected by webhook):**
 
@@ -277,10 +406,20 @@ For development and testing outside of AKS, you can manually configure workload 
 
 1. **Register a new application** in the [Azure Portal](https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade):
 
-   ```bash
+{{< tabs "auth-tutorial-cmd-12" >}}
+{{% tab "Bash" %}}
+```bash
    # Using Azure CLI
    az ad app create --display-name "scafctl-workload-identity-test"
-   ```
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+   # Using Azure CLI
+   az ad app create --display-name "scafctl-workload-identity-test"
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 2. **Note the Application (client) ID** - you'll need this for `AZURE_CLIENT_ID`
 
@@ -299,7 +438,7 @@ The federated identity credential tells Entra ID to trust tokens from your Kuber
 1. **Get your Kubernetes cluster's OIDC issuer URL**:
 
    {{< tabs "auth-oidc-issuer" >}}
-   {{< tab "Bash" >}}
+   {{% tab "Bash" %}}
    ```bash
    # For AKS
    az aks show --name <cluster-name> --resource-group <rg-name> \
@@ -308,8 +447,8 @@ The federated identity credential tells Entra ID to trust tokens from your Kuber
    # For other clusters (e.g., kind, minikube with OIDC enabled)
    kubectl get --raw /.well-known/openid-configuration | jq -r '.issuer'
    ```
-   {{< /tab >}}
-   {{< tab "PowerShell" >}}
+   {{% /tab %}}
+   {{% tab "PowerShell" %}}
    ```powershell
    az aks show --name <cluster-name> --resource-group <rg-name> `
      --query "oidcIssuerProfile.issuerUrl" -o tsv
@@ -317,7 +456,7 @@ The federated identity credential tells Entra ID to trust tokens from your Kuber
    # For other clusters
    (kubectl get --raw /.well-known/openid-configuration | ConvertFrom-Json).issuer
    ```
-   {{< /tab >}}
+   {{% /tab %}}
    {{< /tabs >}}
 
 2. **Create the federated credential** via Azure Portal or CLI:
@@ -339,14 +478,28 @@ The federated identity credential tells Entra ID to trust tokens from your Kuber
 
    **Example for a service account named `scafctl-sa` in the `default` namespace:**
 
-   ```bash
+{{< tabs "auth-tutorial-cmd-13" >}}
+{{% tab "Bash" %}}
+```bash
    az ad app federated-credential create --id <application-id> --parameters '{
      "name": "scafctl-test-credential",
      "issuer": "https://oidc.example.com/abc123",
      "subject": "system:serviceaccount:default:scafctl-sa",
      "audiences": ["api://AzureADTokenExchange"]
    }'
-   ```
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+   az ad app federated-credential create --id <application-id> --parameters '{
+     "name": "scafctl-test-credential",
+     "issuer": "https://oidc.example.com/abc123",
+     "subject": "system:serviceaccount:default:scafctl-sa",
+     "audiences": ["api://AzureADTokenExchange"]
+   }'
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ##### Step 3: Create a Kubernetes Service Account and Generate Token
 
@@ -367,19 +520,34 @@ The federated identity credential tells Entra ID to trust tokens from your Kuber
 
 2. **Generate a token** using `kubectl create token`:
 
-   ```bash
+{{< tabs "auth-tutorial-cmd-14" >}}
+{{% tab "Bash" %}}
+```bash
    # Generate a token with the correct audience
    kubectl create token scafctl-sa \
      --namespace default \
      --audience "api://AzureADTokenExchange" \
      --duration 1h
-   ```
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+   # Generate a token with the correct audience
+   kubectl create token scafctl-sa `
+     --namespace default `
+     --audience "api://AzureADTokenExchange" `
+     --duration 1h
+```
+{{% /tab %}}
+{{< /tabs >}}
 
    **Important:** The `--audience` must match what you configured in the federated credential.
 
 3. **Save the token** to an environment variable or file:
 
-   ```bash
+{{< tabs "auth-tutorial-cmd-15" >}}
+{{% tab "Bash" %}}
+```bash
    # Save to environment variable
    export FEDERATED_TOKEN=$(kubectl create token scafctl-sa \
      --namespace default \
@@ -391,12 +559,31 @@ The federated identity credential tells Entra ID to trust tokens from your Kuber
      --namespace default \
      --audience "api://AzureADTokenExchange" \
      --duration 1h > /tmp/federated-token.txt
-   ```
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+   # Save to environment variable
+   $env:FEDERATED_TOKEN = $(kubectl create token scafctl-sa `
+     --namespace default `
+     --audience "api://AzureADTokenExchange" `
+     --duration 1h)
+
+   # Or save to a file
+   kubectl create token scafctl-sa `
+     --namespace default `
+     --audience "api://AzureADTokenExchange" `
+     --duration 1h > /tmp/federated-token.txt
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ##### Step 4: Authenticate with scafctl
 
 **Option A: Using the `--federated-token` flag (recommended for testing):**
 
+{{< tabs "auth-tutorial-cmd-16" >}}
+{{% tab "Bash" %}}
 ```bash
 export AZURE_CLIENT_ID="<your-application-client-id>"
 export AZURE_TENANT_ID="<your-tenant-id>"
@@ -404,9 +591,22 @@ export AZURE_TENANT_ID="<your-tenant-id>"
 # Pass the token directly
 scafctl auth login entra --flow workload-identity --federated-token "$FEDERATED_TOKEN"
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+$env:AZURE_CLIENT_ID = "<your-application-client-id>"
+$env:AZURE_TENANT_ID = "<your-tenant-id>"
+
+# Pass the token directly
+scafctl auth login entra --flow workload-identity --federated-token "$FEDERATED_TOKEN"
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 **Option B: Using the `AZURE_FEDERATED_TOKEN` environment variable:**
 
+{{< tabs "auth-tutorial-cmd-17" >}}
+{{% tab "Bash" %}}
 ```bash
 export AZURE_CLIENT_ID="<your-application-client-id>"
 export AZURE_TENANT_ID="<your-tenant-id>"
@@ -414,9 +614,22 @@ export AZURE_FEDERATED_TOKEN="$FEDERATED_TOKEN"
 
 scafctl auth login entra --flow workload-identity
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+$env:AZURE_CLIENT_ID = "<your-application-client-id>"
+$env:AZURE_TENANT_ID = "<your-tenant-id>"
+$env:AZURE_FEDERATED_TOKEN = "$FEDERATED_TOKEN"
+
+scafctl auth login entra --flow workload-identity
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 **Option C: Using a token file (simulates in-cluster behavior):**
 
+{{< tabs "auth-tutorial-cmd-18" >}}
+{{% tab "Bash" %}}
 ```bash
 export AZURE_CLIENT_ID="<your-application-client-id>"
 export AZURE_TENANT_ID="<your-tenant-id>"
@@ -424,9 +637,22 @@ export AZURE_FEDERATED_TOKEN_FILE="/tmp/federated-token.txt"
 
 scafctl auth login entra --flow workload-identity
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+$env:AZURE_CLIENT_ID = "<your-application-client-id>"
+$env:AZURE_TENANT_ID = "<your-tenant-id>"
+$env:AZURE_FEDERATED_TOKEN_FILE = "/tmp/federated-token.txt"
+
+scafctl auth login entra --flow workload-identity
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ##### Step 5: Verify Authentication
 
+{{< tabs "auth-tutorial-cmd-19" >}}
+{{% tab "Bash" %}}
 ```bash
 # Check auth status
 scafctl auth status entra
@@ -435,11 +661,25 @@ scafctl auth status entra
 # Handler   Status         Identity                          IdentityType         TokenFile
 # entra     Authenticated  Workload Identity (12345678...)   workload-identity    (direct token)
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Check auth status
+scafctl auth status entra
+
+# Output for workload identity:
+# Handler   Status         Identity                          IdentityType         TokenFile
+# entra     Authenticated  Workload Identity (12345678...)   workload-identity    (direct token)
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ##### Complete Example Script
 
 Here's a complete script for testing workload identity locally:
 
+{{< tabs "auth-tutorial-cmd-20" >}}
+{{% tab "Bash" %}}
 ```bash
 #!/bin/bash
 set -e
@@ -475,6 +715,44 @@ echo ""
 echo "Getting access token for Azure Resource Manager..."
 scafctl auth token entra --scope "https://management.azure.com/.default"
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+$ErrorActionPreference = "Stop"
+
+# Configuration - update these values
+$APP_CLIENT_ID = "12345678-1234-1234-1234-123456789012"
+$TENANT_ID = "your-tenant-id"
+$NAMESPACE = "default"
+$SERVICE_ACCOUNT = "scafctl-sa"
+
+# Generate a fresh token
+Write-Output "Generating service account token..."
+$FEDERATED_TOKEN = $(kubectl create token $SERVICE_ACCOUNT `
+  --namespace $NAMESPACE `
+  --audience "api://AzureADTokenExchange" `
+  --duration 1h)
+
+# Set environment variables
+$env:AZURE_CLIENT_ID = $APP_CLIENT_ID
+$env:AZURE_TENANT_ID = $TENANT_ID
+
+# Authenticate
+Write-Output "Authenticating with workload identity..."
+scafctl auth login entra --flow workload-identity --federated-token $FEDERATED_TOKEN
+
+# Verify
+Write-Output ""
+Write-Output "Authentication status:"
+scafctl auth status entra
+
+# Test token acquisition
+Write-Output ""
+Write-Output "Getting access token for Azure Resource Manager..."
+scafctl auth token entra --scope "https://management.azure.com/.default"
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ##### Flow Priority and Interaction with Stored Credentials
 
@@ -498,9 +776,18 @@ When WIF is active, the stored device-code refresh token (if any) is bypassed bu
 
 **Stale stored credentials**: if you want a clean slate after switching to WIF, explicitly remove the stored device-code session:
 
+{{< tabs "auth-tutorial-cmd-21" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl auth logout entra
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl auth logout entra
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 This removes the refresh token and cached access tokens without affecting WIF, which is entirely driven by environment variables.
 
@@ -516,19 +803,19 @@ This means the token's claims don't match the federated credential configuration
 - Verify the `audience` in both the federated credential and `kubectl create token` command
 
 {{< tabs "auth-decode-token" >}}
-{{< tab "Bash" >}}
+{{% tab "Bash" %}}
 ```bash
 # Decode the token to inspect its claims
 echo "$FEDERATED_TOKEN" | cut -d. -f2 | base64 -d 2>/dev/null | jq .
 ```
-{{< /tab >}}
-{{< tab "PowerShell" >}}
+{{% /tab %}}
+{{% tab "PowerShell" %}}
 ```powershell
 # Decode the token to inspect its claims
 $parts = $env:FEDERATED_TOKEN -split '\.'
 [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($parts[1] + '=' * (4 - $parts[1].Length % 4))) | ConvertFrom-Json
 ```
-{{< /tab >}}
+{{% /tab %}}
 {{< /tabs >}}
 
 Check these claims match your federated credential:
@@ -540,9 +827,18 @@ Check these claims match your federated credential:
 
 The token has expired. Generate a new one:
 
+{{< tabs "auth-tutorial-cmd-22" >}}
+{{% tab "Bash" %}}
 ```bash
 kubectl create token scafctl-sa --audience "api://AzureADTokenExchange" --duration 1h
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+kubectl create token scafctl-sa --audience "api://AzureADTokenExchange" --duration 1h
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 **Error: "workload identity not configured"**
 
@@ -559,7 +855,7 @@ echo "AZURE_FEDERATED_TOKEN: ${AZURE_FEDERATED_TOKEN:0:20}..." # First 20 chars
 Verify your cluster's OIDC configuration is accessible:
 
 {{< tabs "auth-oidc-discovery" >}}
-{{< tab "Bash" >}}
+{{% tab "Bash" %}}
 ```bash
 # Get the OIDC configuration
 curl -s "$(kubectl get --raw /.well-known/openid-configuration | jq -r '.issuer')/.well-known/openid-configuration" | jq .
@@ -567,13 +863,13 @@ curl -s "$(kubectl get --raw /.well-known/openid-configuration | jq -r '.issuer'
 # Get the JWKS (signing keys)
 curl -s "$(kubectl get --raw /.well-known/openid-configuration | jq -r '.jwks_uri')" | jq .
 ```
-{{< /tab >}}
-{{< tab "PowerShell" >}}
+{{% /tab %}}
+{{% tab "PowerShell" %}}
 ```powershell
 $issuer = (kubectl get --raw /.well-known/openid-configuration | ConvertFrom-Json).issuer
 Invoke-RestMethod "$issuer/.well-known/openid-configuration"
 ```
-{{< /tab >}}
+{{% /tab %}}
 {{< /tabs >}}
 
 ---
@@ -582,9 +878,18 @@ Invoke-RestMethod "$issuer/.well-known/openid-configuration"
 
 The default GitHub login flow opens your browser for OAuth Authorization Code + PKCE authentication — the same approach used by `gh auth login` and the Entra handler:
 
+{{< tabs "auth-tutorial-cmd-23" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl auth login github
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl auth login github
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 This initiates a browser-based login:
 
@@ -612,9 +917,18 @@ This initiates a browser-based login:
 
 By default, the interactive flow starts a local HTTP server on a random (ephemeral) port. Use `--callback-port` to bind to a predictable port:
 
+{{< tabs "auth-tutorial-cmd-24" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl auth login github --callback-port 8400
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl auth login github --callback-port 8400
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ---
 
@@ -622,9 +936,18 @@ scafctl auth login github --callback-port 8400
 
 For headless environments, SSH sessions, or when the browser cannot open, use the device code flow:
 
+{{< tabs "auth-tutorial-cmd-25" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl auth login github --flow device-code
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl auth login github --flow device-code
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 1. scafctl displays a code and URL
 2. Open the URL in your browser
@@ -653,9 +976,18 @@ Waiting for authentication...
 
 To authenticate with a GitHub Enterprise Server instance:
 
+{{< tabs "auth-tutorial-cmd-26" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl auth login github --hostname github.example.com
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl auth login github --hostname github.example.com
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 This adjusts all OAuth and API endpoints to use your GHES instance.
 
@@ -663,14 +995,25 @@ This adjusts all OAuth and API endpoints to use your GHES instance.
 
 By default, scafctl uses its own OAuth App client ID (`Ov23li6xn492GhPmt4YG`). If your organization requires a custom OAuth App:
 
+{{< tabs "auth-tutorial-cmd-27" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl auth login github --client-id your-custom-client-id
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl auth login github --client-id your-custom-client-id
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Requesting Specific Scopes
 
 By default, login requests `gist`, `read:org`, `repo`, and `workflow` scopes (matching the `gh` CLI). To request different scopes:
 
+{{< tabs "auth-tutorial-cmd-28" >}}
+{{% tab "Bash" %}}
 ```bash
 # Login with additional scopes
 scafctl auth login github --scope repo --scope read:org --scope write:packages
@@ -678,7 +1021,19 @@ scafctl auth login github --scope repo --scope read:org --scope write:packages
 # Or comma-separated
 scafctl auth login github --scope "repo,read:org,write:packages"
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Login with additional scopes
+scafctl auth login github --scope repo --scope read:org --scope write:packages
 
+# Or comma-separated
+scafctl auth login github --scope "repo,read:org,write:packages"
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+> [!WARNING]
 > **Important:** GitHub scopes are fixed at login time. Unlike Entra ID, GitHub's
 > OAuth token refresh does not support changing scopes per-request. The `--scope`
 > flag on `scafctl auth token github` is not supported. If you need different
@@ -688,9 +1043,18 @@ scafctl auth login github --scope "repo,read:org,write:packages"
 
 The device code flow has a 5-minute default timeout. To extend it:
 
+{{< tabs "auth-tutorial-cmd-29" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl auth login github --timeout 10m
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl auth login github --timeout 10m
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ---
 
@@ -698,6 +1062,8 @@ scafctl auth login github --timeout 10m
 
 For non-interactive scenarios like CI/CD pipelines, use a Personal Access Token:
 
+{{< tabs "auth-tutorial-cmd-30" >}}
+{{% tab "Bash" %}}
 ```bash
 # Set token in environment (GITHUB_TOKEN takes precedence)
 export GITHUB_TOKEN="ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
@@ -708,6 +1074,20 @@ scafctl auth login github
 # Or explicitly specify the flow
 scafctl auth login github --flow pat
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Set token in environment (GITHUB_TOKEN takes precedence)
+$env:GITHUB_TOKEN = "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# Login with PAT (auto-detected from env vars)
+scafctl auth login github
+
+# Or explicitly specify the flow
+scafctl auth login github --flow pat
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 **Environment Variables:**
 
@@ -760,10 +1140,20 @@ export SCAFCTL_GITHUB_APP_PRIVATE_KEY_PATH="/path/to/private-key.pem"
 
 ### Login
 
+{{< tabs "auth-tutorial-cmd-31" >}}
+{{% tab "Bash" %}}
 ```bash
 # Login with GitHub App (requires App credentials configured)
 scafctl auth login github --flow github-app
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Login with GitHub App (requires App credentials configured)
+scafctl auth login github --flow github-app
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Example Output
 
@@ -785,23 +1175,46 @@ The private key can be provided from multiple sources (checked in priority order
 | File path | `privateKeyPath` | `SCAFCTL_GITHUB_APP_PRIVATE_KEY_PATH` | ✅ Good — key in a file with restricted permissions |
 | Secret store | `privateKeySecretName` | — | ✅ Best — key encrypted by OS keychain |
 
+> [!WARNING]
 > **Security recommendation:** Prefer `privateKeySecretName` (encrypted secret store) or `privateKeyPath` (file with `chmod 600`) over inline `privateKey`. When the inline method is used, scafctl logs a warning recommending a more secure alternative.
 
 **Inline PEM (CI/CD secret):**
 
+{{< tabs "auth-tutorial-cmd-32" >}}
+{{% tab "Bash" %}}
 ```bash
 export SCAFCTL_GITHUB_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----
 MIIEpAIBAAKCAQEA...
 -----END RSA PRIVATE KEY-----"
 scafctl auth login github --flow github-app
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+$env:SCAFCTL_GITHUB_APP_PRIVATE_KEY = ""-----BEGIN"
+MIIEpAIBAAKCAQEA...
+-----END RSA PRIVATE KEY-----"
+scafctl auth login github --flow github-app
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 **File path:**
 
+{{< tabs "auth-tutorial-cmd-33" >}}
+{{% tab "Bash" %}}
 ```bash
 export SCAFCTL_GITHUB_APP_PRIVATE_KEY_PATH="/path/to/private-key.pem"
 scafctl auth login github --flow github-app
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+$env:SCAFCTL_GITHUB_APP_PRIVATE_KEY_PATH = "/path/to/private-key.pem"
+scafctl auth login github --flow github-app
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 **Secret store:**
 
@@ -818,9 +1231,18 @@ auth:
 
 The GitHub App flow works with GHES by setting `--hostname`:
 
+{{< tabs "auth-tutorial-cmd-34" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl auth login github --flow github-app --hostname github.example.com
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl auth login github --flow github-app --hostname github.example.com
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Notes
 - Installation tokens expire after 1 hour and are automatically cached
@@ -834,6 +1256,8 @@ scafctl auth login github --flow github-app --hostname github.example.com
 
 For local development, use the interactive browser OAuth flow:
 
+{{< tabs "auth-tutorial-cmd-35" >}}
+{{% tab "Bash" %}}
 ```bash
 # Login with GCP using browser OAuth (default — no gcloud required)
 scafctl auth login gcp
@@ -847,6 +1271,23 @@ scafctl auth login gcp --impersonate-service-account my-sa@my-project.iam.gservi
 # Login with a custom OAuth client ID (overrides the built-in default)
 scafctl auth login gcp --client-id YOUR_CLIENT_ID
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Login with GCP using browser OAuth (default — no gcloud required)
+scafctl auth login gcp
+
+# Login with specific scopes
+scafctl auth login gcp --scope https://www.googleapis.com/auth/bigquery
+
+# Login with service account impersonation
+scafctl auth login gcp --impersonate-service-account my-sa@my-project.iam.gserviceaccount.com
+
+# Login with a custom OAuth client ID (overrides the built-in default)
+scafctl auth login gcp --client-id YOUR_CLIENT_ID
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 This will:
 1. Start a local HTTP server
@@ -854,16 +1295,27 @@ This will:
 3. Exchange the authorization code for refresh + access tokens
 4. Store the refresh token in your system's secret store
 
+> [!NOTE]
 > **Note:** scafctl uses Google's well-known ADC client credentials by default — the same ones used by `gcloud auth application-default login`. No gcloud installation is required. To use a custom OAuth client, see [GCP Custom OAuth Client Setup](gcp-custom-oauth-tutorial.md).
 
 ## GCP gcloud ADC Fallback
 
 If you already have gcloud configured and prefer to use its existing credentials:
 
+{{< tabs "auth-tutorial-cmd-36" >}}
+{{% tab "Bash" %}}
 ```bash
 # Use existing gcloud Application Default Credentials
 scafctl auth login gcp --flow gcloud-adc
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Use existing gcloud Application Default Credentials
+scafctl auth login gcp --flow gcloud-adc
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 This reads the refresh token from `~/.config/gcloud/application_default_credentials.json` (produced by `gcloud auth application-default login`). Note that this flow is subject to your organization's RAPT re-authentication policies.
 
@@ -871,6 +1323,8 @@ This reads the refresh token from `~/.config/gcloud/application_default_credenti
 
 For non-interactive scenarios, use a service account key file:
 
+{{< tabs "auth-tutorial-cmd-37" >}}
+{{% tab "Bash" %}}
 ```bash
 # Point to your service account key JSON file
 export GOOGLE_APPLICATION_CREDENTIALS="/path/to/sa-key.json"
@@ -881,11 +1335,27 @@ scafctl auth login gcp
 # Or choose the flow explicitly
 scafctl auth login gcp --flow service-principal
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Point to your service account key JSON file
+$env:GOOGLE_APPLICATION_CREDENTIALS = "/path/to/sa-key.json"
+
+# Login with service account (auto-detected from env var)
+scafctl auth login gcp
+
+# Or choose the flow explicitly
+scafctl auth login gcp --flow service-principal
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## GCP Workload Identity Federation
 
 For Kubernetes and other cloud platforms:
 
+{{< tabs "auth-tutorial-cmd-38" >}}
+{{% tab "Bash" %}}
 ```bash
 # Point to external account JSON config
 export GOOGLE_EXTERNAL_ACCOUNT="/path/to/external-account.json"
@@ -896,15 +1366,39 @@ scafctl auth login gcp
 # Or explicitly
 scafctl auth login gcp --flow workload-identity
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Point to external account JSON config
+$env:GOOGLE_EXTERNAL_ACCOUNT = "/path/to/external-account.json"
+
+# Login (auto-detected)
+scafctl auth login gcp
+
+# Or explicitly
+scafctl auth login gcp --flow workload-identity
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## GCP Metadata Server (GCE/GKE/Cloud Run)
 
 On Google Compute Engine, GKE, and Cloud Run:
 
+{{< tabs "auth-tutorial-cmd-39" >}}
+{{% tab "Bash" %}}
 ```bash
 # Login via metadata server (auto-detected on GCE)
 scafctl auth login gcp --flow metadata
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Login via metadata server (auto-detected on GCE)
+scafctl auth login gcp --flow metadata
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ---
 
@@ -912,6 +1406,8 @@ scafctl auth login gcp --flow metadata
 
 To see your current authentication status:
 
+{{< tabs "auth-tutorial-cmd-40" >}}
+{{% tab "Bash" %}}
 ```bash
 # Show status for all handlers
 scafctl auth status
@@ -925,6 +1421,23 @@ scafctl auth status github
 # Output as JSON
 scafctl auth status -o json
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Show status for all handlers
+scafctl auth status
+
+# Show status for a specific handler
+scafctl auth status entra
+
+# Show GitHub auth status
+scafctl auth status github
+
+# Output as JSON
+scafctl auth status -o json
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Example Output
 
@@ -965,15 +1478,28 @@ gcp       Not Authenticated -          -        -         run 'scafctl auth logi
 
 Use `--exit-code` to make the command exit non-zero when any handler is not authenticated — handy in CI pre-flight checks:
 
+{{< tabs "auth-tutorial-cmd-41" >}}
+{{% tab "Bash" %}}
 ```bash
 # Fail the script if not authenticated
 scafctl auth status entra --exit-code || { echo "Not authenticated. Run: scafctl auth login entra"; exit 1; }
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Fail the script if not authenticated
+scafctl auth status entra --exit-code
+if ($LASTEXITCODE -ne 0) { Write-Output "Not authenticated. Run: scafctl auth login entra"; exit 1; }
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Proactive Expiry Warnings (--warn-within)
 
 Use `--warn-within <duration>` to exit non-zero if any authenticated token will expire within the given window. This catches near-expiry tokens **before** they cause a mid-job failure:
 
+{{< tabs "auth-tutorial-cmd-42" >}}
+{{% tab "Bash" %}}
 ```bash
 # Exit non-zero if any token expires within 10 minutes
 scafctl auth status --warn-within 10m
@@ -987,20 +1513,38 @@ scafctl auth status --exit-code --warn-within 15m || {
   exit 1
 }
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Exit non-zero if any token expires within 10 minutes
+scafctl auth status --warn-within 10m
+
+# Check a specific handler
+scafctl auth status entra --warn-within 1h
+
+# Combine with --exit-code for a full CI pre-flight check
+scafctl auth status --exit-code --warn-within 15m
+if ($LASTEXITCODE -ne 0) {
+  Write-Output "Auth pre-flight failed — not authenticated or token expiring soon"
+  exit 1
+}
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 The JSON output includes a `cachedTokens` field showing how many access tokens are in the cache for each handler — useful for verifying token cache health:
 
 {{< tabs "auth-cached-tokens" >}}
-{{< tab "Bash" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl auth status -o json | jq '.[].cachedTokens'
 ```
-{{< /tab >}}
-{{< tab "PowerShell" >}}
+{{% /tab %}}
+{{% tab "PowerShell" %}}
 ```powershell
 (scafctl auth status -o json | ConvertFrom-Json).cachedTokens
 ```
-{{< /tab >}}
+{{% /tab %}}
 {{< /tabs >}}
 
 ---
@@ -1009,6 +1553,8 @@ scafctl auth status -o json | jq '.[].cachedTokens'
 
 The `auth list` command shows metadata for all cached tokens (refresh tokens and access tokens) without revealing the actual token values:
 
+{{< tabs "auth-tutorial-cmd-43" >}}
+{{% tab "Bash" %}}
 ```bash
 # Show all cached tokens for all handlers
 scafctl auth list
@@ -1042,6 +1588,43 @@ scafctl auth list --purge-expired
 # Purge expired tokens for a specific handler
 scafctl auth list entra --purge-expired
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Show all cached tokens for all handlers
+scafctl auth list
+
+# Show cached tokens for a single handler
+scafctl auth list entra
+scafctl auth list github
+scafctl auth list gcp
+
+# Show only expired tokens
+scafctl auth list --expired-only
+
+# Show only valid tokens
+scafctl auth list --valid-only
+
+# Sort by expiry (soonest expiring first — useful for spotting tokens about to expire)
+scafctl auth list --sort expires-at
+
+# Sort by handler name
+scafctl auth list --sort handler
+
+# Sort by scope
+scafctl auth list --sort scope
+
+# Output as JSON for scripting
+scafctl auth list -o json
+
+# Remove all expired access tokens from the cache (refresh tokens and valid tokens are preserved)
+scafctl auth list --purge-expired
+
+# Purge expired tokens for a specific handler
+scafctl auth list entra --purge-expired
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 **Sort fields:**
 
@@ -1059,6 +1642,8 @@ The `getTokenCommand` column in the output shows the exact `scafctl auth token` 
 
 Over time the token cache can accumulate expired access tokens. Use `--purge-expired` to clean them up. Refresh tokens and still-valid access tokens are **not** affected:
 
+{{< tabs "auth-tutorial-cmd-44" >}}
+{{% tab "Bash" %}}
 ```bash
 # Remove expired cache entries across all handlers
 scafctl auth list --purge-expired
@@ -1069,6 +1654,20 @@ scafctl auth list --purge-expired
 # Purge only for a specific handler
 scafctl auth list gcp --purge-expired
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Remove expired cache entries across all handlers
+scafctl auth list --purge-expired
+# Output:
+# ✓ Purged 2 expired access token(s) from entra.
+# ✓ Purged 0 expired access token(s) from github.
+
+# Purge only for a specific handler
+scafctl auth list gcp --purge-expired
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 > `--purge-expired` cannot be combined with `--expired-only` or `--valid-only` (it exits early without listing).
 
@@ -1105,6 +1704,8 @@ spec:
 
 Run it (requires prior authentication via `scafctl auth login entra`):
 
+{{< tabs "auth-tutorial-cmd-45" >}}
+{{% tab "Bash" %}}
 ```bash
 # Login with Microsoft Graph scope for consent
 scafctl auth login entra --scope https://graph.microsoft.com/User.Read
@@ -1112,11 +1713,23 @@ scafctl auth login entra --scope https://graph.microsoft.com/User.Read
 # Then run the resolver
 scafctl run resolver -f graph-example.yaml -o json --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Login with Microsoft Graph scope for consent
+scafctl auth login entra --scope https://graph.microsoft.com/User.Read
 
+# Then run the resolver
+scafctl run resolver -f graph-example.yaml -o json --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+> [!CAUTION]
 > **Note:** If you see a "consent required" error, it means your login session
 > doesn't have consent for the requested API scope. Re-login with the `--scope`
 > flag to grant consent:
->
+> 
 > ```bash
 > scafctl auth login entra --scope https://graph.microsoft.com/User.Read
 > ```
@@ -1205,6 +1818,8 @@ spec:
 
 Run it (requires prior authentication):
 
+{{< tabs "auth-tutorial-cmd-46" >}}
+{{% tab "Bash" %}}
 ```bash
 # Login with GitHub
 scafctl auth login github
@@ -1212,6 +1827,17 @@ scafctl auth login github
 # Run the resolver
 scafctl run resolver -f github-repos.yaml -o json --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Login with GitHub
+scafctl auth login github
+
+# Run the resolver
+scafctl run resolver -f github-repos.yaml -o json --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### GitHub Enterprise Server API Example
 
@@ -1235,6 +1861,8 @@ spec:
 
 The `auth token` command retrieves a valid access token for debugging:
 
+{{< tabs "auth-tutorial-cmd-47" >}}
+{{% tab "Bash" %}}
 ```bash
 # Get a token for Microsoft Graph (Entra supports per-request scopes)
 scafctl auth token entra --scope "https://graph.microsoft.com/.default"
@@ -1245,7 +1873,22 @@ scafctl auth token github
 # Get a GCP token
 scafctl auth token gcp --scope "https://www.googleapis.com/auth/cloud-platform"
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Get a token for Microsoft Graph (Entra supports per-request scopes)
+scafctl auth token entra --scope "https://graph.microsoft.com/.default"
 
+# Get a GitHub token (uses scopes from login; --scope is not supported)
+scafctl auth token github
+
+# Get a GCP token
+scafctl auth token gcp --scope "https://www.googleapis.com/auth/cloud-platform"
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+> [!NOTE]
 > **Note:** The `--scope` flag is only supported on `auth token` for handlers
 > with the `scopes-on-token-request` capability (e.g., Entra ID and GCP). GitHub scopes
 > are fixed at login time — use `scafctl auth login github --scope <scope>` to
@@ -1260,32 +1903,63 @@ entra     https://graph.microsoft.com/.default        eyJ0eXAi...****      2026-
 
 The token is masked in table output for security. Use JSON output to get the full token:
 
+{{< tabs "auth-tutorial-cmd-48" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl auth token entra --scope "https://graph.microsoft.com/.default" -o json
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl auth token entra --scope "https://graph.microsoft.com/.default" -o json
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Token Caching
 
 Access tokens are cached to disk (encrypted) and reused if they have sufficient remaining validity:
 
+{{< tabs "auth-tutorial-cmd-49" >}}
+{{% tab "Bash" %}}
 ```bash
 # Get a token valid for at least 5 minutes
 scafctl auth token entra --scope "https://graph.microsoft.com/.default" --min-valid-for 5m
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Get a token valid for at least 5 minutes
+scafctl auth token entra --scope "https://graph.microsoft.com/.default" --min-valid-for 5m
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Force Refresh
 
 If you need a fresh token regardless of cache state (e.g., after permission changes), use `--force-refresh`:
 
+{{< tabs "auth-tutorial-cmd-50" >}}
+{{% tab "Bash" %}}
 ```bash
 # Force acquiring a new token, bypassing the cache
 scafctl auth token entra --scope "https://graph.microsoft.com/.default" --force-refresh
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Force acquiring a new token, bypassing the cache
+scafctl auth token entra --scope "https://graph.microsoft.com/.default" --force-refresh
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Printing the Raw Token (Scripting)
 
 Use `--raw` to print just the token value — ideal for shell scripting:
 
+{{< tabs "auth-tutorial-cmd-51" >}}
+{{% tab "Bash" %}}
 ```bash
 # Assign to a variable
 export TOKEN=$(scafctl auth token gcp --scope "https://www.googleapis.com/auth/cloud-platform" --raw)
@@ -1293,11 +1967,24 @@ export TOKEN=$(scafctl auth token gcp --scope "https://www.googleapis.com/auth/c
 # Use directly with curl
 curl -H "Authorization: Bearer $(scafctl auth token github --raw)" https://api.github.com/user
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Assign to a variable
+$env:TOKEN = $(scafctl auth token gcp --scope "https://www.googleapis.com/auth/cloud-platform" --raw)
+
+# Use directly with curl
+curl -H "Authorization: Bearer $(scafctl auth token github --raw)" https://api.github.com/user
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Shell Export (eval-compatible)
 
 Use `--export` to get a shell export statement you can `eval` into the current shell. The variable is named `<HANDLER>_TOKEN`:
 
+{{< tabs "auth-tutorial-cmd-52" >}}
+{{% tab "Bash" %}}
 ```bash
 # Add a GCP token to the current shell environment
 eval $(scafctl auth token gcp --scope "https://www.googleapis.com/auth/cloud-platform" --export)
@@ -1310,11 +1997,29 @@ echo $GITHUB_TOKEN
 eval $(scafctl auth token entra --scope "https://management.azure.com/.default" --export)
 echo $ENTRA_TOKEN
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Add a GCP token to the current shell environment
+Invoke-Expression $(scafctl auth token gcp --scope "https://www.googleapis.com/auth/cloud-platform" --export)
+Write-Output $GCP_TOKEN
+
+# Other handlers follow the same pattern
+Invoke-Expression $(scafctl auth token github --export)
+Write-Output $GITHUB_TOKEN
+
+Invoke-Expression $(scafctl auth token entra --scope "https://management.azure.com/.default" --export)
+Write-Output $ENTRA_TOKEN
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Emitting a Ready-to-Run curl Command
 
 Use `--curl` to print a `curl` command with the `Authorization` header already populated — great for quick API call reproduction without any `jq` piping:
 
+{{< tabs "auth-tutorial-cmd-53" >}}
+{{% tab "Bash" %}}
 ```bash
 # Emit a curl one-liner for Microsoft Graph
 scafctl auth token entra --scope "https://graph.microsoft.com/.default" \
@@ -1331,13 +2036,33 @@ scafctl auth token github --curl
 # Output:
 # curl -H "Authorization: Bearer ghp_..." "<URL>"
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Emit a curl one-liner for Microsoft Graph
+scafctl auth token entra --scope "https://graph.microsoft.com/.default" `
+  --curl --curl-url "https://graph.microsoft.com/v1.0/me"
+# Output:
+# curl -H "Authorization: Bearer eyJ..." "https://graph.microsoft.com/v1.0/me"
+
+# Emit a curl one-liner for GCP
+scafctl auth token gcp --scope "https://www.googleapis.com/auth/cloud-platform" `
+  --curl --curl-url "https://storage.googleapis.com/storage/v1/b?project=my-project"
+
+# Emit without a URL (useful to inspect — fills in a placeholder)
+scafctl auth token github --curl
+# Output:
+# curl -H "Authorization: Bearer ghp_..." "<URL>"
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Decoding the JWT (Header + Payload)
 
 Use `--decode` to inspect the full JWT structure — both the **header** and the **payload** — without needing an external decoder tool. Signature validation is intentionally skipped; this is for debugging only:
 
 {{< tabs "auth-jwt-decode" >}}
-{{< tab "Bash" >}}
+{{% tab "Bash" %}}
 ```bash
 # Decode and display the full JWT (header and payload)
 scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode
@@ -1346,8 +2071,8 @@ scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode
 scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode -o json \
   | jq '{alg: .header.alg, audience: .payload.aud, upn: .payload.upn, expires: .payload.exp_human}'
 ```
-{{< /tab >}}
-{{< tab "PowerShell" >}}
+{{% /tab %}}
+{{% tab "PowerShell" %}}
 ```powershell
 scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode
 
@@ -1355,7 +2080,7 @@ scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode
 $decoded = scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode -o json | ConvertFrom-Json
 $decoded | Select-Object @{N='alg';E={$_.header.alg}}, @{N='audience';E={$_.payload.aud}}, @{N='upn';E={$_.payload.upn}}, @{N='expires';E={$_.payload.exp_human}}
 ```
-{{< /tab >}}
+{{% /tab %}}
 {{< /tabs >}}
 
 Example output (table):
@@ -1390,10 +2115,20 @@ This is the single fastest way to check:
 
 Use `--clip` to copy the token directly to your clipboard without it appearing in your terminal (useful when pasting into browser DevTools or Postman):
 
+{{< tabs "auth-tutorial-cmd-54" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl auth token entra --scope "https://management.azure.com/.default" --clip
 # Output: ✓ Token copied to clipboard (expires in 58m42s).
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl auth token entra --scope "https://management.azure.com/.default" --clip
+# Output: ✓ Token copied to clipboard (expires in 58m42s).
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Inspecting Scoped Token Claims in Resolvers
 
@@ -1434,6 +2169,7 @@ When the access token is opaque (not a decodable JWT — common with Microsoft
 Graph tokens), `claims` will be `null` and a warning is emitted. Token metadata
 such as expiry and type is still returned.
 
+> [!CAUTION]
 > **Scope restriction:** The `scope` input is only valid for `claims` and
 > `status` operations. Using it with `groups` or `list` returns an error.
 
@@ -1442,7 +2178,7 @@ such as expiry and type is still returned.
 Get the full token for use with other tools:
 
 {{< tabs "auth-token-usage" >}}
-{{< tab "Bash" >}}
+{{% tab "Bash" %}}
 ```bash
 # Approach 1: --raw (simplest)
 curl -H "Authorization: Bearer $(scafctl auth token entra --scope 'https://graph.microsoft.com/.default' --raw)" \
@@ -1459,8 +2195,8 @@ curl -H "Authorization: Bearer $TOKEN" https://graph.microsoft.com/v1.0/me
 # GitHub API example
 curl -H "Authorization: Bearer $(scafctl auth token github --raw)" https://api.github.com/user/repos
 ```
-{{< /tab >}}
-{{< tab "PowerShell" >}}
+{{% /tab %}}
+{{% tab "PowerShell" %}}
 ```powershell
 # Approach 1: --raw (simplest)
 $token = scafctl auth token entra --scope 'https://graph.microsoft.com/.default' --raw
@@ -1470,7 +2206,7 @@ Invoke-RestMethod -Uri 'https://graph.microsoft.com/v1.0/me' -Headers @{ Authori
 $token = (scafctl auth token entra --scope 'https://graph.microsoft.com/.default' -o json | ConvertFrom-Json).accessToken
 Invoke-RestMethod -Uri 'https://graph.microsoft.com/v1.0/me' -Headers @{ Authorization = "Bearer $token" }
 ```
-{{< /tab >}}
+{{% /tab %}}
 {{< /tabs >}}
 
 ---
@@ -1551,6 +2287,8 @@ auth:
 
 To clear stored credentials:
 
+{{< tabs "auth-tutorial-cmd-55" >}}
+{{% tab "Bash" %}}
 ```bash
 # Logout from Entra ID
 scafctl auth logout entra
@@ -1571,6 +2309,30 @@ scafctl auth logout --all -y
 # Force clear credentials even if not currently logged in
 scafctl auth logout entra --force
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Logout from Entra ID
+scafctl auth logout entra
+
+# Logout from GitHub
+scafctl auth logout github
+
+# Logout from GCP
+scafctl auth logout gcp
+
+# Logout from all registered handlers at once (prompts for confirmation)
+scafctl auth logout --all
+
+# Skip the confirmation prompt (for scripts and CI)
+scafctl auth logout --all --yes
+scafctl auth logout --all -y
+
+# Force clear credentials even if not currently logged in
+scafctl auth logout entra --force
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 This removes:
 
@@ -1582,6 +2344,8 @@ This removes:
 
 Use `--dry-run` to see which credentials would be removed without actually removing them. Useful before running `--all` in a shared or production environment:
 
+{{< tabs "auth-tutorial-cmd-56" >}}
+{{% tab "Bash" %}}
 ```bash
 # Preview what would be removed for Entra
 scafctl auth logout entra --dry-run
@@ -1590,6 +2354,18 @@ scafctl auth logout entra --dry-run
 # Preview across all handlers
 scafctl auth logout --all --dry-run
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Preview what would be removed for Entra
+scafctl auth logout entra --dry-run
+# Output: [dry-run] Would log out from Microsoft Entra ID (cached tokens and refresh token would be removed).
+
+# Preview across all handlers
+scafctl auth logout --all --dry-run
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Example Output
 
@@ -1605,6 +2381,8 @@ The `auth diagnose` command (alias: `auth doctor`) runs a series of health check
 and reports any issues with your auth configuration. It's the first command to run
 when troubleshooting auth problems:
 
+{{< tabs "auth-tutorial-cmd-57" >}}
+{{% tab "Bash" %}}
 ```bash
 # Run all checks and print a human-readable report
 scafctl auth diagnose
@@ -1626,6 +2404,31 @@ scafctl auth diagnose entra --live-token
 # Output as JSON for automated pipelines
 scafctl auth diagnose -o json
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Run all checks and print a human-readable report
+scafctl auth diagnose
+
+# Alias
+scafctl auth doctor
+
+# Scope checks to a single handler (skips checks for the others)
+scafctl auth diagnose entra
+scafctl auth diagnose github
+scafctl auth diagnose gcp
+
+# Also attempt a live token fetch for each authenticated handler
+scafctl auth diagnose --live-token
+
+# Scope live-token check to one handler
+scafctl auth diagnose entra --live-token
+
+# Output as JSON for automated pipelines
+scafctl auth diagnose -o json
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### What It Checks
 
@@ -1667,6 +2470,8 @@ scafctl auth diagnose -o json
 
 ### Using in CI Preflight
 
+{{< tabs "auth-tutorial-cmd-58" >}}
+{{% tab "Bash" %}}
 ```bash
 # Verify end-to-end auth before running a pipeline
 scafctl auth diagnose --live-token
@@ -1675,6 +2480,18 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Verify end-to-end auth before running a pipeline
+scafctl auth diagnose --live-token
+if ($? -ne 0) {
+  Write-Output "Auth health check failed. Check 'scafctl auth diagnose' output."
+  exit 1
+}
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ---
 
@@ -1708,9 +2525,18 @@ credentials expired: please run 'scafctl auth login entra'
 
 Your refresh token has expired (typically after 90 days of inactivity). Log in again:
 
+{{< tabs "auth-tutorial-cmd-59" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl auth login entra
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl auth login entra
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Consent Required
 
@@ -1722,6 +2548,8 @@ consent required: please login with the required scope
 
 Your login session does not have consent for the API scope your resolver is requesting. Re-login with the `--scope` flag to grant consent:
 
+{{< tabs "auth-tutorial-cmd-60" >}}
+{{% tab "Bash" %}}
 ```bash
 # For Microsoft Graph APIs
 scafctl auth login entra --scope https://graph.microsoft.com/User.Read
@@ -1729,6 +2557,17 @@ scafctl auth login entra --scope https://graph.microsoft.com/User.Read
 # For Azure Resource Manager APIs
 scafctl auth login entra --scope https://management.azure.com/user_impersonation
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# For Microsoft Graph APIs
+scafctl auth login entra --scope https://graph.microsoft.com/User.Read
+
+# For Azure Resource Manager APIs
+scafctl auth login entra --scope https://management.azure.com/user_impersonation
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 The `--scope` flag tells Azure to request user consent for that specific API during the login flow.
 
@@ -1748,15 +2587,33 @@ This means the app registration does not have a redirect URI matching `http://lo
 
 2. **Use a specific port**: If the app registration only allows a specific URI like `http://localhost:8400`:
 
-   ```bash
+{{< tabs "auth-tutorial-cmd-61" >}}
+{{% tab "Bash" %}}
+```bash
    scafctl auth login entra --client-id YOUR_CLIENT_ID --callback-port 8400
-   ```
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+   scafctl auth login entra --client-id YOUR_CLIENT_ID --callback-port 8400
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 3. **Use device code flow**: Device code does not require a redirect URI:
 
-   ```bash
+{{< tabs "auth-tutorial-cmd-62" >}}
+{{% tab "Bash" %}}
+```bash
    scafctl auth login entra --client-id YOUR_CLIENT_ID --flow device-code
-   ```
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+   scafctl auth login entra --client-id YOUR_CLIENT_ID --flow device-code
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Login Times Out With No Error
 
@@ -1769,6 +2626,8 @@ checking redirect URI registration.
 
 If you're getting 401 errors but you're authenticated, you may be authenticated to the wrong tenant:
 
+{{< tabs "auth-tutorial-cmd-63" >}}
+{{% tab "Bash" %}}
 ```bash
 # Check current auth status
 scafctl auth status entra
@@ -1777,6 +2636,18 @@ scafctl auth status entra
 scafctl auth logout entra
 scafctl auth login entra --tenant correct-tenant-id
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Check current auth status
+scafctl auth status entra
+
+# Log out and log in to the correct tenant
+scafctl auth logout entra
+scafctl auth login entra --tenant correct-tenant-id
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Scope Issues
 
@@ -1792,7 +2663,7 @@ Use `--decode` on `auth token` to inspect JWT claims directly without needing an
 external tool or manual base64 decoding:
 
 {{< tabs "auth-troubleshoot-claims" >}}
-{{< tab "Bash" >}}
+{{% tab "Bash" %}}
 ```bash
 # Decode and display claims in table format (no signature validation)
 scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode
@@ -1800,8 +2671,8 @@ scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode
 # Output as JSON for further processing (e.g., with jq)
 scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode -o json | jq '.aud,.upn,.roles'
 ```
-{{< /tab >}}
-{{< tab "PowerShell" >}}
+{{% /tab %}}
+{{% tab "PowerShell" %}}
 ```powershell
 scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode
 
@@ -1809,7 +2680,7 @@ scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode
 $decoded = scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode -o json | ConvertFrom-Json
 $decoded.aud, $decoded.upn, $decoded.roles
 ```
-{{< /tab >}}
+{{% /tab %}}
 {{< /tabs >}}
 
 Unix timestamp fields (`exp`, `iat`, `nbf`, `auth_time`) are automatically augmented
@@ -1825,10 +2696,20 @@ Useful things to verify:
 
 Enable debug logging to see detailed auth information:
 
+{{< tabs "auth-tutorial-cmd-64" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl --log-level -1 auth status entra
 scafctl --log-level -1 run solution -f mysolution.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl --log-level -1 auth status entra
+scafctl --log-level -1 run solution -f mysolution.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Secret Store Issues
 
@@ -1853,10 +2734,20 @@ If you get 403 (Forbidden) errors on GitHub API calls:
 
 1. Check what scopes your token has: `scafctl auth status github`
 2. GitHub scopes are fixed at login time and cannot be changed per-request. Login again with the required scopes:
-   ```bash
+{{< tabs "auth-tutorial-cmd-65" >}}
+{{% tab "Bash" %}}
+```bash
    scafctl auth logout github
    scafctl auth login github --scope repo --scope read:org
-   ```
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+   scafctl auth logout github
+   scafctl auth login github --scope repo --scope read:org
+```
+{{% /tab %}}
+{{< /tabs >}}
 3. For PATs, ensure the token was created with sufficient scopes
 
 ### GitHub Enterprise Server: Connection Issues

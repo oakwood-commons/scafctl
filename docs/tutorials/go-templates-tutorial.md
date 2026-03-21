@@ -1,6 +1,6 @@
 ---
 title: "Go Templates Tutorial"
-weight: 60
+weight: 55
 ---
 
 # Go Templates Tutorial
@@ -46,11 +46,9 @@ scafctl supports Go templates in two ways:
 1. **`go-template` provider** — Render templates in resolvers and actions
 2. **`tmpl` field** — Use Go template syntax in provider inputs (alternative to `expr`)
 
-```
-┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│  Resolver    │ ──► │  Go Template │ ──► │  Rendered    │
-│  Data (_)    │     │  Provider    │     │  Output      │
-└──────────────┘     └──────────────┘     └──────────────┘
+```mermaid
+flowchart LR
+  A["Resolver<br/>Data (_)"] --> B["Go Template<br/>Provider"] --> C["Rendered<br/>Output"]
 ```
 
 **When to use Go templates vs CEL:**
@@ -97,9 +95,18 @@ spec:
 
 ### Step 2: Run It
 
+{{< tabs "go-templates-tutorial-cmd-1" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f template-basics.yaml -e _.greeting -o yaml --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f template-basics.yaml -e _.greeting -o yaml --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Step 3: Check the Output
 
@@ -115,6 +122,7 @@ Hello, World!
 - All resolver values are available at the template root — access them with `{{ .resolverName }}`.
 - The `-e _.greeting` flag filters the output to just the `greeting` resolver, and `-o yaml` renders it cleanly.
 
+> [!NOTE]
 > **Key point:** The `go-template` provider requires two inputs: `name` (an identifier for the template) and `template` (the Go template string to render).
 
 ---
@@ -193,10 +201,20 @@ The `environment` resolver tries the `parameter` provider first (looking for a `
 
 Run without passing any parameters — the environment defaults to `development`:
 
+{{< tabs "go-templates-tutorial-cmd-2" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f template-conditionals.yaml -e _.deployment_config -o yaml --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f template-conditionals.yaml -e _.deployment_config -o yaml --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
+> [!NOTE]
 > **Tip:** The `-e _.deployment_config` flag filters the output to just the `deployment_config` resolver, and `-o yaml` renders it cleanly.
 
 Output:
@@ -218,9 +236,18 @@ Since `"development"` doesn't match `"production"` or `"staging"`, the `{{ else 
 
 Pass `-r env=staging` to override the environment:
 
+{{< tabs "go-templates-tutorial-cmd-3" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f template-conditionals.yaml -r env=staging -e _.deployment_config -o yaml --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f template-conditionals.yaml -r env=staging -e _.deployment_config -o yaml --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -239,9 +266,18 @@ The `{{ else if eq .environment "staging" }}` branch is now active.
 
 ### Step 4: Switch to Production
 
+{{< tabs "go-templates-tutorial-cmd-4" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f template-conditionals.yaml -r env=production -e _.deployment_config -o yaml --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f template-conditionals.yaml -r env=production -e _.deployment_config -o yaml --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -322,9 +358,18 @@ spec:
 
 ### Step 2: Run It
 
+{{< tabs "go-templates-tutorial-cmd-5" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f template-loops.yaml -e _.service_report -o yaml --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f template-loops.yaml -e _.service_report -o yaml --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Step 3: Check the Output
 
@@ -425,9 +470,18 @@ spec:
 
 ### Step 2: Run It
 
+{{< tabs "go-templates-tutorial-cmd-6" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f template-maps.yaml -e _.feature_summary -o yaml --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f template-maps.yaml -e _.feature_summary -o yaml --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Step 3: Check the Output
 
@@ -444,6 +498,7 @@ enable_metrics: ON
 enable_tracing: ON
 ```
 
+> [!NOTE]
 > **Note:** Map iteration order is sorted alphabetically by key in Go templates.
 
 ### What You Learned
@@ -517,15 +572,33 @@ spec:
 
 First, check the untrimmed version:
 
+{{< tabs "go-templates-tutorial-cmd-7" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f template-whitespace.yaml -e _.without_trim -o yaml --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f template-whitespace.yaml -e _.without_trim -o yaml --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Then compare with the trimmed version:
 
+{{< tabs "go-templates-tutorial-cmd-8" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f template-whitespace.yaml -e _.with_trim -o yaml --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f template-whitespace.yaml -e _.with_trim -o yaml --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Step 3: Compare the Outputs
 
@@ -710,15 +783,33 @@ spec:
 
 ### Step 3: Run It
 
+{{< tabs "go-templates-tutorial-cmd-9" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f template-from-file.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f template-from-file.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Step 4: Verify the Output
 
+{{< tabs "go-templates-tutorial-cmd-10" >}}
+{{% tab "Bash" %}}
 ```bash
 cat /tmp/scafctl-demo/config.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+cat /tmp/scafctl-demo/config.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 You should see:
 
@@ -753,6 +844,7 @@ features:
 4. Setting `missingKey: "error"` ensures the render fails if any referenced variable is missing — catching typos early.
 5. The workflow action wrote the rendered output to disk.
 
+> [!NOTE]
 > **Tip:** See [template-render.yaml](../../examples/actions/template-render.yaml) for a more comprehensive file-based template example with timestamps and dynamic output paths.
 
 ---
@@ -761,6 +853,7 @@ features:
 
 By default, templates silently render `<no value>` when you reference a nested key that doesn't exist in the data. This can lead to broken output that's hard to debug. The `missingKey` option controls this behavior — and setting it to `"error"` is the best way to catch mistakes early.
 
+> [!NOTE]
 > **Note:** The `missingKey` option applies to keys missing *within* the data passed to the template (e.g., a map field that doesn't exist). It does not apply to missing resolvers — scafctl validates resolver references at build time and will reject the solution if a referenced resolver doesn't exist.
 
 ### Step 1: Create the Solution File
@@ -814,9 +907,18 @@ spec:
 
 First, comment out or remove the `strict_mode` resolver (it will cause a failure, which we'll explore in the next step). Then run:
 
+{{< tabs "go-templates-tutorial-cmd-11" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f template-missing-keys.yaml -e _.silent_mode -o yaml --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f template-missing-keys.yaml -e _.silent_mode -o yaml --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -830,9 +932,18 @@ The template rendered successfully, but the missing `owner` key silently became 
 
 Now add back the `strict_mode` resolver and run:
 
+{{< tabs "go-templates-tutorial-cmd-12" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f template-missing-keys.yaml -e _.strict_mode -o yaml --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f template-missing-keys.yaml -e _.strict_mode -o yaml --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 This time the command **fails** with an error telling you exactly which key is missing. Instead of silently producing broken output, `missingKey: "error"` catches the problem immediately.
 
@@ -854,9 +965,18 @@ Add the `owner` field to the `app` resolver's value:
 
 Re-run and both resolvers now succeed:
 
+{{< tabs "go-templates-tutorial-cmd-13" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f template-missing-keys.yaml -e _.strict_mode -o yaml --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f template-missing-keys.yaml -e _.strict_mode -o yaml --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ```yaml
 App: my-app, Owner: platform-team
@@ -929,9 +1049,18 @@ spec:
 
 ### Step 2: Run It
 
+{{< tabs "go-templates-tutorial-cmd-14" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f template-extra-data.yaml -e _.release_notes -o yaml --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f template-extra-data.yaml -e _.release_notes -o yaml --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Step 3: Check the Output
 
@@ -1006,9 +1135,18 @@ spec:
 
 ### Step 2: Run It
 
+{{< tabs "go-templates-tutorial-cmd-15" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f template-delimiters.yaml -e _.helm_values -o yaml --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f template-delimiters.yaml -e _.helm_values -o yaml --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Step 3: Check the Output
 
@@ -1087,9 +1225,18 @@ spec:
 
 ### Step 2: Run It
 
+{{< tabs "go-templates-tutorial-cmd-16" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f template-tmpl-field.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f template-tmpl-field.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Step 3: Observe the Output
 
@@ -1187,21 +1334,48 @@ spec:
 
 ### Step 2: Run It
 
+{{< tabs "go-templates-tutorial-cmd-17" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f template-foreach.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f template-foreach.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Step 3: Verify the Output
 
+{{< tabs "go-templates-tutorial-cmd-18" >}}
+{{% tab "Bash" %}}
 ```bash
 ls /tmp/scafctl-demo/services/
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+ls /tmp/scafctl-demo/services/
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 You'll see three files: `api.yaml`, `worker.yaml`, `gateway.yaml`. Each contains its own config:
 
+{{< tabs "go-templates-tutorial-cmd-19" >}}
+{{% tab "Bash" %}}
 ```bash
 cat /tmp/scafctl-demo/services/api.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+cat /tmp/scafctl-demo/services/api.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ```yaml
 # Auto-generated service config
@@ -1316,9 +1490,18 @@ spec:
 
 ### Step 3: Run It
 
+{{< tabs "go-templates-tutorial-cmd-20" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f solution.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f solution.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Result:
 - `templates/k8s/deployment.yaml.tpl` → `output/k8s/deployment.yaml` (rendered, `.tpl` stripped)
@@ -1463,15 +1646,33 @@ spec:
 
 ### Step 2: Run It
 
+{{< tabs "go-templates-tutorial-cmd-21" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f template-readme-generator.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f template-readme-generator.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Step 3: View the Result
 
+{{< tabs "go-templates-tutorial-cmd-22" >}}
+{{% tab "Bash" %}}
 ```bash
 cat /tmp/scafctl-demo/README.md
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+cat /tmp/scafctl-demo/README.md
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -1570,9 +1771,18 @@ spec:
 
 ### Step 2: Run It
 
+{{< tabs "go-templates-tutorial-cmd-23" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f template-sprig.yaml -e _.greeting -o yaml --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f template-sprig.yaml -e _.greeting -o yaml --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Step 3: Check the Output
 
@@ -1584,17 +1794,35 @@ The `upper` function uppercases the string, and `trunc 5` truncates it to 5 char
 
 Try the other resolvers:
 
+{{< tabs "go-templates-tutorial-cmd-24" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f template-sprig.yaml -e _.config -o yaml --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f template-sprig.yaml -e _.config -o yaml --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ```
 port=8080, tls=true, debug=false
 ```
 
+{{< tabs "go-templates-tutorial-cmd-25" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f template-sprig.yaml -e _.formatted -o yaml --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f template-sprig.yaml -e _.formatted -o yaml --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ```
 MyAppService
@@ -1607,6 +1835,7 @@ MyAppService
 - **`dict` and `merge`** — Create and merge maps for configuration defaults.
 - **String helpers** — `camelcase`, `snakecase`, `kebabcase`, `title`, `upper`, `lower`, `trim`, `replace`, and many more.
 
+> [!NOTE]
 > **Tip:** See the [Sprig documentation](https://masterminds.github.io/sprig/) for the full list of available functions grouped by category: strings, math, dates, lists, dicts, crypto, encoding, and more.
 
 ---
@@ -1658,9 +1887,18 @@ spec:
 
 ### Step 2: Run It
 
+{{< tabs "go-templates-tutorial-cmd-26" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f template-tohcl.yaml -e _.hclOutput -o yaml --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f template-tohcl.yaml -e _.hclOutput -o yaml --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Step 3: Check the Output
 
@@ -1741,9 +1979,18 @@ spec:
 
 ### Step 2: Run It
 
+{{< tabs "go-templates-tutorial-cmd-27" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f template-yaml.yaml -e _.yamlOutput -o yaml --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f template-yaml.yaml -e _.yamlOutput -o yaml --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Step 3: Check the Output
 
@@ -1798,10 +2045,20 @@ spec:
         name: slugify-demo
 ```
 
+{{< tabs "go-templates-tutorial-cmd-28" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f slugify-demo.yaml -e _.dns-label
 # Output: my-cool-project-v2
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f slugify-demo.yaml -e _.dns-label
+# Output: my-cool-project-v2
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Key behaviors
 
@@ -1975,38 +2232,84 @@ scafctl provides tools to explore all available Go template functions — both S
 
 List all available functions:
 
+{{< tabs "go-templates-tutorial-cmd-29" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl get go-template-functions
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl get go-template-functions
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Filter to custom functions only:
 
+{{< tabs "go-templates-tutorial-cmd-30" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl get go-template-functions --custom
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl get go-template-functions --custom
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Filter to Sprig functions only:
 
+{{< tabs "go-templates-tutorial-cmd-31" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl get go-template-functions --sprig
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl get go-template-functions --sprig
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Get details for a specific function:
 
+{{< tabs "go-templates-tutorial-cmd-32" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl get go-template-functions toHcl
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl get go-template-functions toHcl
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output as JSON:
 
+{{< tabs "go-templates-tutorial-cmd-33" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl get go-template-functions -o json
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl get go-template-functions -o json
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Using the MCP Server
 
 If you use an AI agent with the scafctl MCP server, you can ask:
 
+> [!NOTE]
 > **You:** "What Go template functions are available for data formatting?"
 
 The AI calls `list_go_template_functions` and returns a curated list of matching functions with descriptions and examples.
@@ -2076,6 +2379,7 @@ transform:
 
 Append the marker as an inline comment on any line that should be ignored. Only those lines are protected — the rest of the template renders normally.
 
+> [!NOTE]
 > **Note:** `line` and `start`/`end` are mutually exclusive within a single entry. Different entries can use different modes.
 
 ### Multiple Ignored Blocks
@@ -2125,10 +2429,20 @@ goTemplate:
 
 You can inspect cache statistics anytime:
 
+{{< tabs "go-templates-tutorial-cmd-34" >}}
+{{% tab "Bash" %}}
 ```bash
 # View cache stats via the CLI
 scafctl get config -e 'cfg.goTemplate'
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# View cache stats via the CLI
+scafctl get config -e 'cfg.goTemplate'
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Programmatically (for provider or plugin developers):
 

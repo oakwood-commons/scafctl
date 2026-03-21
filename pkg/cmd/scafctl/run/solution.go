@@ -504,6 +504,9 @@ func (o *SolutionOptions) writeDryRunTable(ctx context.Context, report *dryrun.R
 			if len(act.Dependencies) > 0 {
 				w.Plainlnf("    (depends on: %s)", strings.Join(act.Dependencies, ", "))
 			}
+			if len(act.CrossSectionRefs) > 0 {
+				w.Plainlnf("    (reads from: %s)", strings.Join(act.CrossSectionRefs, ", "))
+			}
 			if len(act.DeferredInputs) > 0 {
 				for k, v := range act.DeferredInputs {
 					w.Plainlnf("    (deferred: %s = %s)", k, v)

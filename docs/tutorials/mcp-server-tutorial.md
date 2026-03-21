@@ -1,6 +1,6 @@
 ---
 title: "MCP Server Tutorial"
-weight: 55
+weight: 65
 ---
 
 # MCP Server Tutorial
@@ -36,9 +36,18 @@ scafctl libraries (solution, provider, CEL, catalog, auth)
 
 Run the `--info` flag to confirm the server is built and can list its tools:
 
+{{< tabs "mcp-server-tutorial-cmd-1" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl mcp serve --info
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl mcp serve --info
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 You should see JSON output listing all available tools:
 
@@ -81,9 +90,18 @@ If this works, the MCP server is ready.
 
 You can start the server interactively for testing:
 
+{{< tabs "mcp-server-tutorial-cmd-2" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl mcp serve
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl mcp serve
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 The server listens on stdin/stdout for JSON-RPC 2.0 messages. Press `Ctrl+C` to stop. Normally, your AI client starts and stops the server automatically.
 
@@ -307,6 +325,7 @@ spec:
 
 No files needed — this tool lists the built-in providers.
 
+> [!NOTE]
 > **You:** "What solution providers are available?"
 
 The AI calls `list_providers` and returns something like:
@@ -341,6 +360,7 @@ provider name to see its full input schema and examples.
 
 Uses the `mcp-demo/solution.yaml` file created above.
 
+> [!NOTE]
 > **You:** "Explain what the greeting-service solution does"
 
 The AI calls `inspect_solution` with `path: "mcp-demo/solution.yaml"` and returns something like:
@@ -378,6 +398,7 @@ validation, and actions.
 
 Uses the `mcp-demo/solution.yaml` file created above.
 
+> [!NOTE]
 > **You:** "Validate my mcp-demo/solution.yaml file"
 
 The AI calls `lint_solution` with `file: "mcp-demo/solution.yaml"` and returns something like:
@@ -391,6 +412,7 @@ and 2 actions.
 
 To see what lint findings look like, you can also try validating the intentionally broken example:
 
+> [!NOTE]
 > **You:** "Lint the file examples/solutions/bad-solution-yaml/solution.yaml"
 
 The AI calls `lint_solution` and returns structured findings with severity, location, and descriptions for each issue.
@@ -399,8 +421,9 @@ The AI calls `lint_solution` and returns structured findings with severity, loca
 
 No files needed — you provide the expression and data inline.
 
+> [!NOTE]
 > **You:** "Evaluate this CEL expression with sample data: `_.items.filter(i, i.enabled).map(i, i.name)`"
->
+> 
 > Use this data: `{"items": [{"name": "alpha", "enabled": true}, {"name": "beta", "enabled": false}, {"name": "gamma", "enabled": true}]}`
 
 The AI calls `evaluate_cel` with the expression and data, and returns something like:
@@ -414,6 +437,7 @@ Type:   list(string)
 
 You can also test expressions used in your solution:
 
+> [!NOTE]
 > **You:** "Evaluate this: `_.style == "formal" ? "Good day, " + _.username + "." : "Hello, " + _.username + "!"` with data `{"style": "formal", "username": "Alice"}`"
 
 ```
@@ -425,6 +449,7 @@ Type:   string
 
 No files needed.
 
+> [!NOTE]
 > **You:** "What custom CEL functions can I use for string manipulation?"
 
 The AI calls `list_cel_functions` with `custom_only: true` and returns something like:
@@ -448,6 +473,7 @@ Use `evaluate_cel` to test any of these interactively.
 
 No files needed.
 
+> [!NOTE]
 > **You:** "What Go template functions are available for string manipulation?"
 
 The AI calls `list_go_template_functions` and returns something like:
@@ -476,6 +502,7 @@ Use `evaluate_go_template` to test any of these interactively.
 
 You can also filter to specific categories:
 
+> [!NOTE]
 > **You:** "List only the custom Go template functions"
 
 The AI calls `list_go_template_functions` with `custom_only: true` and returns the custom scafctl functions.
@@ -484,6 +511,7 @@ The AI calls `list_go_template_functions` with `custom_only: true` and returns t
 
 This tool queries your local catalog. If you haven't added solutions to the catalog yet, the result will be empty.
 
+> [!NOTE]
 > **You:** "What solutions are in my local catalog?"
 
 The AI calls `catalog_list` with `kind: "solution"` and returns something like:
@@ -509,6 +537,7 @@ Found 2 solutions in your local catalog:
 
 No files needed — this inspects your current auth state.
 
+> [!NOTE]
 > **You:** "Am I authenticated for any services?"
 
 The AI calls `auth_status` and returns something like:
@@ -535,6 +564,7 @@ Run `scafctl auth login <handler>` to authenticate.
 
 Uses the `mcp-demo/solution.yaml` file created above.
 
+> [!NOTE]
 > **You:** "Show me the action graph for mcp-demo/solution.yaml"
 
 The AI calls `render_solution` with `path: "mcp-demo/solution.yaml"` and `graph_type: "action"` and returns something like:
@@ -552,6 +582,7 @@ Execution order:
 
 You can also request the resolver dependency graph:
 
+> [!NOTE]
 > **You:** "Show me the resolver dependency graph for mcp-demo/solution.yaml"
 
 ```
@@ -570,6 +601,7 @@ Resolution order:
 
 No files needed — you specify the provider by name.
 
+> [!NOTE]
 > **You:** "What inputs does the `exec` provider accept?"
 
 The AI calls `get_provider_schema` with `name: "exec"` and returns structured JSON with:
@@ -609,44 +641,52 @@ These tools help AI agents write correct solution YAML by giving them access to 
 
 #### Get the Solution Schema
 
+> [!NOTE]
 > **You:** "What fields are valid in a solution YAML file?"
 
 The AI calls `get_solution_schema` and receives the full JSON Schema for the solution format — every field, type, validation rule, and description. This prevents the AI from inventing fields that don't exist.
 
 You can also ask about a specific section:
 
+> [!NOTE]
 > **You:** "What goes in the metadata section of a solution?"
 
 The AI calls `get_solution_schema` with `field: "metadata"` and returns just the metadata schema, showing fields like `name`, `version`, `description`, `tags`, etc. with their validation constraints.
 
 #### Explain a Kind
 
+> [!NOTE]
 > **You:** "What fields does a resolver have?"
 
 The AI calls `explain_kind` with `kind: "resolver"` and returns a structured breakdown of all resolver fields, including nested types, documentation, and validation tags.
 
 #### Browse Examples
 
+> [!NOTE]
 > **You:** "Show me example action configurations"
 
 The AI calls `list_examples` with `category: "actions"` to see all available action examples, then calls `get_example` with a specific path to read the example content. This gives it real, tested patterns to reference when writing new YAML.
 
+> [!NOTE]
 > **You:** "Show me how to set up a solution with parameters and validation"
 
 The AI calls `get_example` with `path: "solutions/email-notifier/solution.yaml"` to get a practical reference, then uses `get_solution_schema` to verify the structure.
 
 #### Explain a Concept
 
+> [!NOTE]
 > **You:** "What is a resolver and how does it work?"
 
 The AI calls `explain_concepts` with `name: "resolver"` and returns a detailed explanation including the concept summary, category, examples, and related concepts.
 
+> [!NOTE]
 > **You:** "What testing concepts does scafctl support?"
 
 The AI calls `explain_concepts` with `category: "testing"` and gets summaries for all testing-related concepts — functional testing, test sandbox, test scaffold, and test assertions.
 
 #### Inspect Solution File Dependencies
 
+> [!NOTE]
 > **You:** "What files does my solution depend on?"
 
 The AI calls `inspect_solution` with `path: "solution.yaml"` and the response includes a `fileDependencies` array listing all external files referenced by providers (e.g., template files loaded via `go-template`, HCL files via `hcl`), along with which resolver references each file.
@@ -676,7 +716,7 @@ The AI calls `inspect_solution` with `path: "solution.yaml"` and the response in
 | `list_examples` | List available scafctl example files with category filtering (solutions, resolvers, actions, providers, etc.) |
 | `list_providers` | List all providers with capability and category filtering |
 | `list_solutions` | List solutions from the local catalog with name filtering |
-| `preview_action` | Preview what each action in a workflow would do WITHOUT executing — shows materialized inputs, deferred values, phases, and dependencies |
+| `preview_action` | Preview what each action in a workflow would do WITHOUT executing — shows materialized inputs, deferred values, phases, dependencies, and cross-section references (`crossSectionRefs`) for finally actions reading main-section results |
 | `preview_resolvers` | Execute a solution's resolver chain and return each resolver's resolved value, output schema, and source positions. Use `resolver` param to focus on a single resolver and its dependencies |
 | `render_solution` | Render action, resolver, or action-deps graphs as structured JSON |
 | `run_solution_tests` | Execute functional tests defined in a solution and return structured results. Use `verbose=true` for full assertion details |
@@ -740,39 +780,84 @@ The prompts instruct the AI to:
 
 Print the full tool list and verify the server starts correctly:
 
+{{< tabs "mcp-server-tutorial-cmd-3" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl mcp serve --info
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl mcp serve --info
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Enable File Logging
 
 When the MCP server runs over stdio, application logs go to stderr by default. For persistent logs, use `--log-file`:
 
+{{< tabs "mcp-server-tutorial-cmd-4" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl mcp serve --log-file /tmp/scafctl-mcp.log
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl mcp serve --log-file /tmp/scafctl-mcp.log
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Then tail the log in another terminal:
 
+{{< tabs "mcp-server-tutorial-cmd-5" >}}
+{{% tab "Bash" %}}
 ```bash
 tail -f /tmp/scafctl-mcp.log
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+tail -f /tmp/scafctl-mcp.log
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Test with Raw JSON-RPC
 
 You can test the server manually by sending JSON-RPC messages:
 
+{{< tabs "mcp-server-tutorial-cmd-6" >}}
+{{% tab "Bash" %}}
 ```bash
 echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' | scafctl mcp serve
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+Write-Output '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' | scafctl mcp serve
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Debug Logging
 
 Enable verbose logging to see tool calls and responses:
 
+{{< tabs "mcp-server-tutorial-cmd-7" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl mcp serve --log-level debug --log-file /tmp/scafctl-mcp-debug.log
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl mcp serve --log-level debug --log-file /tmp/scafctl-mcp-debug.log
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## 11. Troubleshooting
 
@@ -780,9 +865,18 @@ scafctl mcp serve --log-level debug --log-file /tmp/scafctl-mcp-debug.log
 
 The AI client cannot find the `scafctl` binary. Ensure it's on your `$PATH`:
 
+{{< tabs "mcp-server-tutorial-cmd-8" >}}
+{{% tab "Bash" %}}
 ```bash
 which scafctl
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+which scafctl
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 If using a non-standard install location, use the full path in your MCP configuration:
 
@@ -815,6 +909,8 @@ Error: solution "my-solution" has no workflow defined; use 'scafctl run resolver
 
 This means the solution contains only resolvers and no `spec.workflow` section. Use `scafctl run resolver` instead:
 
+{{< tabs "mcp-server-tutorial-cmd-9" >}}
+{{% tab "Bash" %}}
 ```bash
 # For solutions with ONLY resolvers (no spec.workflow):
 scafctl run resolver -f ./my-solution.yaml -r key=value
@@ -822,6 +918,17 @@ scafctl run resolver -f ./my-solution.yaml -r key=value
 # For solutions WITH actions (spec.workflow.actions):
 scafctl run solution -f ./my-solution.yaml -r key=value
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# For solutions with ONLY resolvers (no spec.workflow):
+scafctl run resolver -f ./my-solution.yaml -r key=value
+
+# For solutions WITH actions (spec.workflow.actions):
+scafctl run solution -f ./my-solution.yaml -r key=value
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 The `create_solution` MCP prompt instructs the AI to suggest the correct command based on whether the generated solution includes a workflow.
 
@@ -829,6 +936,8 @@ The `create_solution` MCP prompt instructs the AI to suggest the correct command
 
 If a tool returns an auth error, set up authentication before starting the server:
 
+{{< tabs "mcp-server-tutorial-cmd-10" >}}
+{{% tab "Bash" %}}
 ```bash
 # Authenticate first
 scafctl auth login <provider>
@@ -836,6 +945,17 @@ scafctl auth login <provider>
 # Then start the server (or let the AI client start it)
 scafctl mcp serve
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Authenticate first
+scafctl auth login <provider>
+
+# Then start the server (or let the AI client start it)
+scafctl mcp serve
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 The MCP server inherits the same auth context as the CLI. If `scafctl run solution` works with your credentials, the MCP server will too.
 
@@ -882,6 +1002,8 @@ If you are behind a corporate proxy, ensure proxy environment variables are avai
 
 The MCP server supports three transport protocols:
 
+{{< tabs "mcp-server-tutorial-cmd-11" >}}
+{{% tab "Bash" %}}
 ```bash
 # Default: stdio (JSON-RPC 2.0 over stdin/stdout)
 scafctl mcp serve
@@ -892,6 +1014,20 @@ scafctl mcp serve --transport sse --addr :8080
 # HTTP: Streamable HTTP transport
 scafctl mcp serve --transport http --addr :8080
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Default: stdio (JSON-RPC 2.0 over stdin/stdout)
+scafctl mcp serve
+
+# SSE: Server-Sent Events over HTTP
+scafctl mcp serve --transport sse --addr :8080
+
+# HTTP: Streamable HTTP transport
+scafctl mcp serve --transport http --addr :8080
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 SSE and HTTP transports are useful for remote or multi-client scenarios where stdio is not available.
 
@@ -928,9 +1064,18 @@ The server includes built-in observability via hooks and middleware:
 
 Enable detailed logging with:
 
+{{< tabs "mcp-server-tutorial-cmd-12" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl mcp serve --log-file /tmp/scafctl-mcp.log
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl mcp serve --log-file /tmp/scafctl-mcp.log
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Auto-Completion
 
@@ -987,9 +1132,18 @@ The server supports two client interaction capabilities:
 
 For high-throughput scenarios, you can tune the stdio transport:
 
+{{< tabs "mcp-server-tutorial-cmd-13" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl mcp serve --worker-pool-size 4 --queue-size 200
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl mcp serve --worker-pool-size 4 --queue-size 200
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## 10. Protocol Features
 

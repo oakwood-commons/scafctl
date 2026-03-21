@@ -493,7 +493,7 @@ scafctl snapshot show --name baseline
 scafctl snapshot diff --from baseline --to current
 
 # Resolver dependency graph
-scafctl render solution -f solution.yaml --graph
+scafctl run resolver -f solution.yaml --graph
 
 # Configuration and secrets
 scafctl config show

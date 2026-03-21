@@ -55,9 +55,18 @@ spec:
 
 ### Step 2: Run the Solution
 
+{{< tabs "resolver-tutorial-cmd-1" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f hello.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f hello.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 ```
@@ -68,6 +77,7 @@ Output:
 ╰ _ ─────────── map: 1/1 ╯
 ```
 
+> [!NOTE]
 > **Tip**: Add `-o json` to get JSON output: `scafctl run resolver -f hello.yaml -o json`
 
 ### Understanding the Structure
@@ -121,9 +131,18 @@ spec:
 
 ### Step 2: Run with Parameters
 
+{{< tabs "resolver-tutorial-cmd-2" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f greet.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f greet.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -138,9 +157,18 @@ Output:
 
 Pass a parameter:
 
+{{< tabs "resolver-tutorial-cmd-3" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f greet.yaml -r user_name=Alice
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f greet.yaml -r user_name=Alice
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -166,17 +194,17 @@ region: us-west-2
 
 Run with the file:
 {{< tabs "resolver-param-file" >}}
-{{< tab "Bash" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f greet.yaml -r @params.yaml
 ```
-{{< /tab >}}
-{{< tab "PowerShell" >}}
+{{% /tab %}}
+{{% tab "PowerShell" %}}
 ```powershell
 # Wrap @file in single quotes to avoid splatting operator
 scafctl run resolver -f greet.yaml -r '@params.yaml'
 ```
-{{< /tab >}}
+{{% /tab %}}
 {{< /tabs >}}
 
 Output:
@@ -261,9 +289,18 @@ spec:
 
 ### Step 2: Run and Observe Phases
 
+{{< tabs "resolver-tutorial-cmd-4" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f config.yaml --progress
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f config.yaml --progress
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 The `--progress` flag shows how resolvers execute in phases based on dependencies:
 
@@ -323,9 +360,18 @@ spec:
 
 Run it:
 
+{{< tabs "resolver-tutorial-cmd-5" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f transform.yaml -o json --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f transform.yaml -o json --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -335,6 +381,7 @@ Output:
 }
 ```
 
+> [!NOTE]
 > **Tip**: `scafctl run resolver -o json` includes `__execution` metadata by default. Use `--hide-execution` for cleaner output. All examples in this tutorial use `--hide-execution`. See the [Run Resolver Tutorial](run-resolver-tutorial.md) for details on the execution metadata.
 
 The value was trimmed of whitespace, then lowercased — each transform step feeds into the next.
@@ -375,9 +422,18 @@ spec:
 
 Run it:
 
+{{< tabs "resolver-tutorial-cmd-6" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f enrich.yaml -o json --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f enrich.yaml -o json --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output (timestamp will vary):
 
@@ -433,9 +489,18 @@ spec:
 
 Run it with a valid port:
 
+{{< tabs "resolver-tutorial-cmd-7" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f validated-config.yaml -r port=8080 -o json --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f validated-config.yaml -r port=8080 -o json --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -447,9 +512,18 @@ Output:
 
 Run it with an invalid port to see the validation error:
 
+{{< tabs "resolver-tutorial-cmd-8" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f validated-config.yaml -r port=80
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f validated-config.yaml -r port=80
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -497,9 +571,18 @@ spec:
 
 Run it:
 
+{{< tabs "resolver-tutorial-cmd-9" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f email-validator.yaml -o json --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f email-validator.yaml -o json --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -511,9 +594,18 @@ Output:
 
 Now try an invalid value that fails **both** validations — not a valid email format **and** ends with `.test`:
 
+{{< tabs "resolver-tutorial-cmd-10" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f email-validator.yaml -r email="not-an-email.test" -o json --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f email-validator.yaml -r email="not-an-email.test" -o json --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -570,9 +662,18 @@ spec:
 
 Run it with `development` (default) — the `prod_secrets` resolver is skipped:
 
+{{< tabs "resolver-tutorial-cmd-11" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f conditional.yaml -o json --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f conditional.yaml -o json --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output (only `environment` is resolved; `prod_secrets` is skipped):
 
@@ -584,9 +685,18 @@ Output (only `environment` is resolved; `prod_secrets` is skipped):
 
 Run it with `production` — the `prod_secrets` resolver executes:
 
+{{< tabs "resolver-tutorial-cmd-12" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f conditional.yaml -r env=production -o json --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f conditional.yaml -r env=production -o json --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -629,9 +739,18 @@ spec:
 
 Run it:
 
+{{< tabs "resolver-tutorial-cmd-13" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f phase-condition.yaml -o json --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f phase-condition.yaml -o json --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -687,9 +806,18 @@ spec:
 
 Run it (the HTTP and file providers will fail, so it falls back to static):
 
+{{< tabs "resolver-tutorial-cmd-14" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f fallback.yaml -o json --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f fallback.yaml -o json --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -793,9 +921,18 @@ spec:
 
 Run it:
 
+{{< tabs "resolver-tutorial-cmd-15" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f http-example.yaml -o json --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f http-example.yaml -o json --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output (body and headers will vary):
 
@@ -845,10 +982,20 @@ spec:
 
 Run it (requires the `API_TOKEN` environment variable to be set):
 
+{{< tabs "resolver-tutorial-cmd-16" >}}
+{{% tab "Bash" %}}
 ```bash
 export API_TOKEN=your-token-here
 scafctl run resolver -f auth-api.yaml -o json
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+$env:API_TOKEN = "your-token-here"
+scafctl run resolver -f auth-api.yaml -o json
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ---
 
@@ -894,9 +1041,18 @@ spec:
                   : 'postgres://localhost:5432/app_dev'
 ```
 
+{{< tabs "resolver-tutorial-cmd-17" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f env-config.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f env-config.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -909,13 +1065,23 @@ Output:
 ╰ _ ─────────── map: 1/2 ╯
 ```
 
+> [!NOTE]
 > **Note**: Fields marked `sensitive: true` are shown as `[REDACTED]` in table output.
 
 Structured output (JSON, YAML) reveals sensitive values for machine consumption:
 
+{{< tabs "resolver-tutorial-cmd-18" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f env-config.yaml -o json --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f env-config.yaml -o json --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -928,10 +1094,20 @@ Output:
 
 Use `--show-sensitive` to reveal values in table output:
 
+{{< tabs "resolver-tutorial-cmd-19" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f env-config.yaml --show-sensitive
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f env-config.yaml --show-sensitive
+```
+{{% /tab %}}
+{{< /tabs >}}
 
+> [!NOTE]
 > **Sensitive Redaction Behavior**: Sensitive values are redacted in table/interactive output (human-facing) but revealed in JSON/YAML output (machine-facing), following the same model as Terraform. Use `--show-sensitive` to reveal values in all output formats.
 
 ### Pattern 2: Feature Toggles
@@ -974,9 +1150,18 @@ spec:
                 }
 ```
 
+{{< tabs "resolver-tutorial-cmd-20" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f feature-toggles.yaml -o json
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f feature-toggles.yaml -o json
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -1027,9 +1212,18 @@ spec:
               expression: "'postgres://app:' + _.db_password + '@db.example.com:5432/app'"
 ```
 
+{{< tabs "resolver-tutorial-cmd-21" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f secrets.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f secrets.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -1042,13 +1236,23 @@ Output:
 ╰ _ ──────────────── map: 1/2  ╯
 ```
 
+> [!NOTE]
 > **Note**: Both resolvers are marked `sensitive: true`, so their values are redacted in table output.
 
 Structured output reveals the actual values:
 
+{{< tabs "resolver-tutorial-cmd-22" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f secrets.yaml -o json --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f secrets.yaml -o json --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -1059,6 +1263,7 @@ Output:
 }
 ```
 
+> [!NOTE]
 > **Tip**: Use table output (the default) when sharing your screen or in CI logs to avoid accidentally exposing secrets. Use `-o json` or `-o yaml` when piping to downstream tools that need the actual values.
 
 ### Pattern 4: Multi-Stage Pipeline
@@ -1123,9 +1328,18 @@ spec:
               message: "No active users found"
 ```
 
+{{< tabs "resolver-tutorial-cmd-23" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f pipeline.yaml -o json
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f pipeline.yaml -o json
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -1186,16 +1400,16 @@ spec:
 Run it to see the result:
 
 {{< tabs "resolver-foreach-run" >}}
-{{< tab "Bash" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver doubled -f foreach-demo.yaml -o json
 ```
-{{< /tab >}}
-{{< tab "PowerShell" >}}
+{{% /tab %}}
+{{% tab "PowerShell" %}}
 ```powershell
 scafctl run resolver doubled -f foreach-demo.yaml -o json
 ```
-{{< /tab >}}
+{{% /tab %}}
 {{< /tabs >}}
 
 #### Filtering with `when` and `forEach`
@@ -1284,14 +1498,18 @@ With `filter: true` the output contains only matched items:
 
 Run it:
 
+{{< tabs "resolver-tutorial-cmd-24" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver activeUsers -f foreach-filter-demo.yaml -o json
 ```
-
+{{% /tab %}}
+{{% tab "PowerShell" %}}
 ```powershell
-# PowerShell
 scafctl run resolver activeUsers -f foreach-filter-demo.yaml -o json
 ```
+{{% /tab %}}
+{{< /tabs >}}
 
 #### `filter` vs `keepSkipped`
 
