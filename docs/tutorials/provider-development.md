@@ -17,6 +17,7 @@ Providers can be delivered in two ways:
 | **Distribution** | Ships with scafctl releases | OCI catalog artifact (`kind: provider`) or standalone binary |
 | **Interface** | `provider.Provider` (2 methods) | `plugin.ProviderPlugin` (3 methods) |
 
+> [!WARNING]
 > **Prerequisite**: Read the [Extension Concepts](extension-concepts.md) page for terminology (provider vs plugin vs auth handler).
 
 The bulk of this guide covers the `provider.Provider` interface used by both delivery models. The [Delivering as a Plugin](#delivering-as-a-plugin) section at the end covers the additional steps for the plugin model.
@@ -108,6 +109,7 @@ func (p *MyProvider) Execute(ctx context.Context, input any) (*provider.Output, 
 }
 ```
 
+> [!NOTE]
 > **Convention**: All built-in providers export a `ProviderName` constant, build the
 > descriptor in the constructor (not in `Descriptor()`), and name the constructor
 > `New<Name>Provider()` (e.g., `NewMyProvider`, `NewEnvProvider`).
@@ -337,9 +339,10 @@ if ok {
 }
 ```
 
+> [!CAUTION]
 > **Note**: All context helpers except `DryRunFromContext` return a two-value
 > `(value, bool)` — the `bool` indicates whether the value was present in the context.
->
+> 
 > **Dry-run mechanisms**: There are two dry-run approaches:
 > 1. **`DryRunFromContext(ctx)`** — Checked in `Execute()` when running via `run provider --dry-run`. Return mock data to avoid side effects.
 > 2. **`WhatIf` on `Descriptor`** — Called by `run solution --dry-run` to generate a human-readable description of what the provider would do. Providers are never executed during solution dry-run.
@@ -458,6 +461,7 @@ func DefaultRegistry(ctx context.Context) (*provider.Registry, error) {
 }
 ```
 
+> [!CAUTION]
 > **Note**: `DefaultRegistry` takes a `context.Context` and `Register()` returns an
 > `error`. Constructor names follow the `New<Name>Provider()` convention
 > (e.g., `NewEnvProvider`, `NewHTTPProvider`).
@@ -915,14 +919,9 @@ Instead of compiling your provider into the scafctl binary, you can ship it as a
 
 ### Architecture
 
-```
-┌─────────────────────┐        gRPC        ┌──────────────────────┐
-│      scafctl        │◄──────────────────►│    Your Plugin       │
-│                     │                     │                      │
-│  - Discovers plugin │                     │  - Implements gRPC   │
-│  - Calls providers  │                     │  - Exposes providers │
-│  - Manages lifecycle│                     │  - Handles execution │
-└─────────────────────┘                     └──────────────────────┘
+```mermaid
+flowchart LR
+  A["scafctl<br/>- Discovers plugin<br/>- Calls providers<br/>- Manages lifecycle"] <-- "gRPC" --> B["Your Plugin<br/>- Implements gRPC<br/>- Exposes providers<br/>- Handles execution"]
 ```
 
 Plugins use [hashicorp/go-plugin](https://github.com/hashicorp/go-plugin) with gRPC for communication.
@@ -948,11 +947,22 @@ type ProviderPlugin interface {
 
 #### 1. Create Plugin Directory
 
+{{< tabs "provider-development-cmd-1" >}}
+{{% tab "Bash" %}}
 ```bash
 mkdir my-plugin && cd my-plugin
 go mod init github.com/myorg/my-plugin
 go get github.com/oakwood-commons/scafctl
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+mkdir my-plugin; cd my-plugin
+go mod init github.com/myorg/my-plugin
+go get github.com/oakwood-commons/scafctl
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 #### 2. Implement the Plugin
 
@@ -1041,10 +1051,13 @@ func main() {
 }
 ```
 
+> [!NOTE]
 > **Key difference from builtin**: Each `GetProviderDescriptor` / `ExecuteProvider` / `DescribeWhatIf` call receives the provider name, allowing one plugin to expose multiple providers. The core logic (schemas, execution, dry-run) is identical.
 
 #### 3. Build and Install
 
+{{< tabs "provider-development-cmd-2" >}}
+{{% tab "Bash" %}}
 ```bash
 # Build
 go build -o scafctl-plugin-mine .
@@ -1053,6 +1066,19 @@ go build -o scafctl-plugin-mine .
 mkdir -p "$(scafctl paths cache)/plugins"
 cp scafctl-plugin-mine "$(scafctl paths cache)/plugins/"
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Build
+go build -o scafctl-plugin-mine .
+
+# Install to plugin cache
+$pluginDir = "$(scafctl paths cache)/plugins"
+New-Item -ItemType Directory -Force -Path $pluginDir
+Copy-Item scafctl-plugin-mine $pluginDir
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 #### 4. Use in Solutions
 
@@ -1076,9 +1102,18 @@ spec:
 
 **Via Local Installation**:
 
+{{< tabs "provider-development-cmd-3" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f my-solution.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f my-solution.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Multi-Provider Plugin
 
@@ -1165,6 +1200,8 @@ See the [Plugin Auto-Fetching Tutorial](plugin-auto-fetch-tutorial.md) for full 
 
 ### Plugin CLI Commands
 
+{{< tabs "provider-development-cmd-4" >}}
+{{% tab "Bash" %}}
 ```bash
 # Pre-fetch plugins declared in a solution
 scafctl plugins install -f my-solution.yaml
@@ -1175,9 +1212,25 @@ scafctl plugins list
 # Push to a remote registry
 scafctl catalog push my-plugin@1.0.0 --catalog ghcr.io/myorg
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Pre-fetch plugins declared in a solution
+scafctl plugins install -f my-solution.yaml
+
+# List cached plugin binaries
+scafctl plugins list
+
+# Push to a remote registry
+scafctl catalog push my-plugin@1.0.0 --catalog ghcr.io/myorg
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Plugin Debugging
 
+{{< tabs "provider-development-cmd-5" >}}
+{{% tab "Bash" %}}
 ```bash
 # Enable debug logging
 scafctl --log-level -1 run solution -f solution.yaml
@@ -1185,6 +1238,17 @@ scafctl --log-level -1 run solution -f solution.yaml
 # Run plugin directly (waits for gRPC connection)
 ./my-plugin
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Enable debug logging
+scafctl --log-level -1 run solution -f solution.yaml
+
+# Run plugin directly (waits for gRPC connection)
+./my-plugin
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 | Issue | Cause | Solution |
 |-------|-------|----------|

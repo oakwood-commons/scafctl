@@ -59,10 +59,19 @@ type ExpandedAction struct {
 	// ForEachMetadata contains expansion information if this action was expanded from a forEach.
 	ForEachMetadata *ForEachExpansionMetadata `json:"forEachMetadata,omitempty" yaml:"forEachMetadata,omitempty" doc:"ForEach expansion info"`
 
-	// Dependencies contains the effective dependencies for this expanded action.
-	// For regular actions, this matches DependsOn plus any implicit dependencies from __actions references.
+	// Dependencies contains the same-section scheduling dependencies for this expanded action.
+	// This includes explicit dependsOn entries and any __actions references that resolve to actions
+	// within the same section. Only same-section deps affect ExecutionOrder / FinallyOrder phase
+	// computation; use CrossSectionRefs for informational traceability of cross-section reads.
 	// For expanded forEach actions, this includes dependencies on all iterations of referenced forEach actions.
-	Dependencies []string `json:"dependencies" yaml:"dependencies" doc:"Effective dependencies for scheduling"`
+	Dependencies []string `json:"dependencies" yaml:"dependencies" doc:"Same-section scheduling dependencies"`
+
+	// CrossSectionRefs lists action names from a different section that this action reads via
+	// __actions references (e.g., a finally action reading results from a main actions action).
+	// These are informational only—they do not affect FinallyOrder or ExecutionOrder phase
+	// computation because cross-section ordering is guaranteed structurally (all main actions
+	// complete before any finally action runs).
+	CrossSectionRefs []string `json:"crossSectionRefs,omitempty" yaml:"crossSectionRefs,omitempty" doc:"Cross-section __actions references (informational, not scheduling deps)"`
 
 	// ExpandedExclusive contains the effective exclusive action names for this expanded action.
 	// For forEach base action references, this expands to all iterations (e.g., "deploy" → "deploy[0]", "deploy[1]").
@@ -221,11 +230,22 @@ func expandSection(
 		}
 	}
 
-	// Second pass: compute dependencies with rewriting for forEach expansions
+	// Build the set of action names that belong to this section for cross-section detection.
+	sectionNames := make(map[string]struct{}, len(expanded))
+	for name := range expanded {
+		sectionNames[name] = struct{}{}
+	}
+
+	// Second pass: compute dependencies with rewriting for forEach expansions.
+	// Only same-section deps are placed in Dependencies and the scheduling deps map.
+	// Cross-section __actions references are recorded in CrossSectionRefs (informational).
 	for name, expandedAction := range expanded {
-		effectiveDeps := computeEffectiveDependencies(expandedAction, forEachExpansions)
-		expandedAction.Dependencies = effectiveDeps
-		deps[name] = effectiveDeps
+		sameDeps, crossRefs := computeEffectiveDependencies(expandedAction, forEachExpansions, sectionNames)
+		expandedAction.Dependencies = sameDeps
+		if len(crossRefs) > 0 {
+			expandedAction.CrossSectionRefs = crossRefs
+		}
+		deps[name] = sameDeps
 	}
 
 	// Third pass: compute expanded exclusive references with forEach rewriting
@@ -369,43 +389,69 @@ func createExpandedAction(
 // computeEffectiveDependencies computes the effective dependencies for an expanded action.
 // This includes explicit dependsOn entries and implicit dependencies from __actions references.
 // Dependencies on forEach actions are rewritten to depend on all iterations.
+// computeEffectiveDependencies resolves all __actions references and explicit dependsOn entries
+// for an expanded action and partitions them into two groups:
+//
+//   - sameSectionDeps: references to actions within sectionNames — used for scheduling
+//     (fed into ExecutionOrder / FinallyOrder phase computation).
+//   - crossSectionRefs: references to actions outside sectionNames — informational only,
+//     recorded in CrossSectionRefs for traceability. Cross-section ordering is guaranteed
+//     structurally (all main actions complete before any finally action starts).
 func computeEffectiveDependencies(
 	expanded *ExpandedAction,
 	forEachExpansions map[string][]string,
-) []string {
-	depSet := sets.Set[string]{}
+	sectionNames map[string]struct{},
+) ([]string, []string) {
+	sameSet := sets.Set[string]{}
+	crossSet := sets.Set[string]{}
 
-	// Add explicit dependsOn entries
+	insertRef := func(ref string) {
+		if _, inSection := sectionNames[ref]; inSection {
+			sameSet.Insert(ref)
+		} else {
+			crossSet.Insert(ref)
+		}
+	}
+
+	insertRefs := func(rawRef string) {
+		if expandedNames, ok := forEachExpansions[rawRef]; ok {
+			for _, n := range expandedNames {
+				insertRef(n)
+			}
+		} else {
+			insertRef(rawRef)
+		}
+	}
+
+	// Add explicit dependsOn entries (validated upstream to be same-section, but route
+	// through insertRef so cross-section smuggled entries are still partitioned correctly).
 	if expanded.Action != nil {
 		for _, dep := range expanded.DependsOn {
-			// Check if this dependency was expanded by forEach
-			if expandedNames, ok := forEachExpansions[dep]; ok {
-				// Depend on all iterations
-				depSet.Insert(expandedNames...)
-			} else {
-				depSet.Insert(dep)
-			}
+			insertRefs(dep)
 		}
 	}
 
-	// Add implicit dependencies from __actions references in deferred inputs
+	// Add implicit dependencies from __actions references in deferred inputs.
 	for _, dv := range expanded.DeferredInputs {
-		refs := extractActionsRefsFromDeferred(dv)
-		for _, ref := range refs {
-			// Check if this dependency was expanded by forEach
-			if expandedNames, ok := forEachExpansions[ref]; ok {
-				// Depend on all iterations
-				depSet.Insert(expandedNames...)
-			} else {
-				depSet.Insert(ref)
-			}
+		for _, ref := range extractActionsRefsFromDeferred(dv) {
+			insertRefs(ref)
 		}
 	}
 
-	// Convert to sorted slice for deterministic order
-	deps := sets.List(depSet)
-	sort.Strings(deps)
-	return deps
+	// Add implicit dependencies from __actions references in the when condition.
+	// The when expression is evaluated at runtime (not deferred via DeferredInputs), so we
+	// extract its __actions references here to partition them into scheduling vs informational.
+	if expanded.Action != nil && expanded.When != nil && expanded.When.Expr != nil {
+		for _, ref := range parseActionsRefsForGraph(string(*expanded.When.Expr)) {
+			insertRefs(ref)
+		}
+	}
+
+	same := sets.List(sameSet)
+	sort.Strings(same)
+	cross := sets.List(crossSet)
+	sort.Strings(cross)
+	return same, cross
 }
 
 // computeExpandedExclusive computes the effective exclusive action names for an expanded action.

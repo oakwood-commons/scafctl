@@ -360,7 +360,8 @@ Check for common issues:
 - Circular dependencies in resolvers or actions
 - Invalid CEL expressions in when/expr fields
 - Type mismatches (resolver type vs actual value)
-- Missing dependsOn when referencing other resolvers/actions
+- Missing dependsOn when referencing other resolvers (same-section action dependencies are auto-inferred from __actions references)
+- Using dependsOn in workflow.finally to reference a workflow.actions action — this is a validation error; use __actions.<name> in inputs or when instead (the ref appears in crossSectionRefs on the rendered graph)
 
 7. Call preview_resolvers with path %q to check if resolvers execute successfully and produce expected values
 8. If the solution has tests, call run_solution_tests with path %q to verify test results
@@ -473,7 +474,8 @@ func (s *Server) handleAddActionPrompt(_ context.Context, request mcp.GetPromptR
 	}
 
 	featureHints := make([]string, 0, 6)
-	featureHints = append(featureHints, "dependsOn: list of action names this depends on")
+	featureHints = append(featureHints, "dependsOn: explicit ordering for same-section actions. If inputs or when already reference __actions.<name> within the same section, that dependency is auto-inferred and dependsOn is optional (still required for ordering without a data dependency)")
+	featureHints = append(featureHints, "dependsOn in workflow.finally: can only reference other finally actions—never actions in workflow.actions. To read results from a main action in finally, use __actions.<name> in inputs or when; the reference appears in crossSectionRefs on the rendered graph (informational only—cross-section ordering is guaranteed structurally)")
 	featureHints = append(featureHints, "when: CEL expression for conditional execution")
 	featureHints = append(featureHints, "onError: 'fail' (default) or 'continue'")
 	featureHints = append(featureHints, "retry: { maxAttempts, backoff: fixed|linear|exponential, initialDelay, maxDelay }")

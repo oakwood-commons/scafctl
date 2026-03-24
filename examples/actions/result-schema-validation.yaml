@@ -140,10 +140,6 @@ spec:
       summary:
         description: Create summary using validated action results
         provider: exec
-        dependsOn:
-          - fetch-user
-          - list-tags
-          - get-deployment-info
         inputs:
           command:
             expr: |

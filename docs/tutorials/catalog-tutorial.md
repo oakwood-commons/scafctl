@@ -1,6 +1,6 @@
 ---
 title: "Catalog Tutorial"
-weight: 70
+weight: 60
 ---
 
 # Catalog Tutorial
@@ -72,9 +72,18 @@ This solution accepts a `name` parameter (defaulting to "World") and produces a 
 
 ### Step 2: Build It into the Catalog
 
+{{< tabs "catalog-tutorial-cmd-1" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl build solution greeting.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl build solution greeting.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -90,9 +99,18 @@ The solution is now stored in your local catalog. The version (`1.0.0`) was read
 
 You can also specify the version on the command line, which overrides `metadata.version`:
 
+{{< tabs "catalog-tutorial-cmd-2" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl build solution greeting.yaml --version 1.0.1
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl build solution greeting.yaml --version 1.0.1
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -117,9 +135,18 @@ Once a solution is in the catalog, you can run it by name instead of providing a
 
 ### Step 1: Run by Name
 
+{{< tabs "catalog-tutorial-cmd-3" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f greeting -o yaml --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f greeting -o yaml --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -132,9 +159,18 @@ No file path needed — scafctl looked up `greeting` in the catalog and found th
 
 ### Step 2: Pass a Parameter
 
+{{< tabs "catalog-tutorial-cmd-4" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f greeting -o yaml --hide-execution -r name=Alice
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f greeting -o yaml --hide-execution -r name=Alice
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -147,9 +183,18 @@ name: Alice
 
 When you have multiple versions, you can pin to a specific one:
 
+{{< tabs "catalog-tutorial-cmd-5" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f greeting@1.0.0 -o yaml --hide-execution -r name=Bob
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f greeting@1.0.0 -o yaml --hide-execution -r name=Bob
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -162,9 +207,18 @@ name: Bob
 
 Use `-e` to extract just the value you care about:
 
+{{< tabs "catalog-tutorial-cmd-6" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f greeting -o yaml -e '_.message' -r name=Carol
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f greeting -o yaml -e '_.message' -r name=Carol
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -186,9 +240,18 @@ Hello, Carol!
 
 ### Step 1: List Everything in the Catalog
 
+{{< tabs "catalog-tutorial-cmd-7" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl catalog list -o yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl catalog list -o yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -209,17 +272,35 @@ Expected output:
 
 ### Step 2: Filter by Name
 
+{{< tabs "catalog-tutorial-cmd-8" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl catalog list --name greeting -o yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl catalog list --name greeting -o yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 This shows only artifacts with the name `greeting`.
 
 ### Step 3: Inspect a Specific Artifact
 
+{{< tabs "catalog-tutorial-cmd-9" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl catalog inspect greeting -o yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl catalog inspect greeting -o yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -243,9 +324,18 @@ Without a version, `inspect` shows the highest version. Pin a version with `gree
 
 ### Step 4: Use a CEL Expression to Extract Fields
 
+{{< tabs "catalog-tutorial-cmd-10" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl catalog inspect greeting -o yaml -e '_.annotations'
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl catalog inspect greeting -o yaml -e '_.annotations'
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -315,9 +405,18 @@ spec:
 
 ### Step 2: Build v2
 
+{{< tabs "catalog-tutorial-cmd-11" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl build solution greeting-v2.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl build solution greeting-v2.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -329,9 +428,18 @@ Expected output:
 
 ### Step 3: Verify Both Versions Exist
 
+{{< tabs "catalog-tutorial-cmd-12" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl catalog list --name greeting -o yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl catalog list --name greeting -o yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -352,9 +460,18 @@ Expected output:
 
 ### Step 4: Run Without a Version
 
+{{< tabs "catalog-tutorial-cmd-13" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f greeting -o yaml --hide-execution -r name=Alice
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f greeting -o yaml --hide-execution -r name=Alice
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -368,9 +485,18 @@ Without a version, scafctl runs the **highest semantic version** — in this cas
 
 ### Step 5: Pin to the Old Version
 
+{{< tabs "catalog-tutorial-cmd-14" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f greeting@1.0.0 -o yaml --hide-execution -r name=Alice
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f greeting@1.0.0 -o yaml --hide-execution -r name=Alice
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -383,9 +509,18 @@ The v1 solution doesn't have a timestamp — confirming you're running the origi
 
 ### Step 6: Try to Overwrite an Existing Version
 
+{{< tabs "catalog-tutorial-cmd-15" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl build solution greeting-v2.yaml --version 2.0.0
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl build solution greeting-v2.yaml --version 2.0.0
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -395,9 +530,18 @@ Expected output:
 
 Use `--force` to overwrite:
 
+{{< tabs "catalog-tutorial-cmd-16" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl build solution greeting-v2.yaml --version 2.0.0 --force
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl build solution greeting-v2.yaml --version 2.0.0 --force
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### What You Learned
 
@@ -412,9 +556,18 @@ scafctl build solution greeting-v2.yaml --version 2.0.0 --force
 
 ### Step 1: Delete a Specific Version
 
+{{< tabs "catalog-tutorial-cmd-17" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl catalog delete greeting@1.0.1 --kind solution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl catalog delete greeting@1.0.1 --kind solution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -426,9 +579,18 @@ You must specify both the name and version. The `--kind solution` flag tells sca
 
 ### Step 2: Verify It's Gone
 
+{{< tabs "catalog-tutorial-cmd-18" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl catalog list --name greeting -o yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl catalog list --name greeting -o yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 The `1.0.1` entry should no longer appear.
 
@@ -436,9 +598,18 @@ The `1.0.1` entry should no longer appear.
 
 After deleting artifacts, blob data may remain on disk. Clean it up:
 
+{{< tabs "catalog-tutorial-cmd-19" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl catalog prune
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl catalog prune
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -453,11 +624,22 @@ Expected output:
 
 Clean up the remaining test artifacts:
 
+{{< tabs "catalog-tutorial-cmd-20" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl catalog delete greeting@1.0.0 --kind solution
 scafctl catalog delete greeting@2.0.0 --kind solution
 scafctl catalog prune
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl catalog delete greeting@1.0.0 --kind solution
+scafctl catalog delete greeting@2.0.0 --kind solution
+scafctl catalog prune
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### What You Learned
 
@@ -476,15 +658,33 @@ The `save` and `load` commands let you transfer catalog artifacts between machin
 
 First, rebuild the greeting solution:
 
+{{< tabs "catalog-tutorial-cmd-21" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl build solution greeting.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl build solution greeting.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Step 2: Export to a Tar Archive
 
+{{< tabs "catalog-tutorial-cmd-22" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl catalog save greeting@1.0.0 -o greeting-v1.tar
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl catalog save greeting@1.0.0 -o greeting-v1.tar
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -498,24 +698,52 @@ The archive uses the standard **OCI Image Layout** format.
 
 Simulate receiving the tar on a different machine by deleting the local version:
 
+{{< tabs "catalog-tutorial-cmd-23" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl catalog delete greeting@1.0.0 --kind solution
 scafctl catalog prune
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl catalog delete greeting@1.0.0 --kind solution
+scafctl catalog prune
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Step 4: Verify It's Gone
 
+{{< tabs "catalog-tutorial-cmd-24" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl catalog list --name greeting -o yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl catalog list --name greeting -o yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output (empty or no greeting entries).
 
 ### Step 5: Import from the Tar Archive
 
+{{< tabs "catalog-tutorial-cmd-25" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl catalog load --input greeting-v1.tar
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl catalog load --input greeting-v1.tar
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -525,9 +753,18 @@ Expected output:
 
 ### Step 6: Confirm It Was Loaded
 
+{{< tabs "catalog-tutorial-cmd-26" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl catalog list --name greeting -o yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl catalog list --name greeting -o yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -542,9 +779,18 @@ Expected output:
 
 ### Step 7: Try Loading Again (Conflict)
 
+{{< tabs "catalog-tutorial-cmd-27" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl catalog load --input greeting-v1.tar
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl catalog load --input greeting-v1.tar
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -554,14 +800,25 @@ Expected output:
 
 Use `--force` to overwrite:
 
+{{< tabs "catalog-tutorial-cmd-28" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl catalog load --input greeting-v1.tar --force
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl catalog load --input greeting-v1.tar --force
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Air-Gapped Transfer Workflow
 
 Here's how the full workflow looks in practice:
 
+{{< tabs "catalog-tutorial-cmd-29" >}}
+{{% tab "Bash" %}}
 ```bash
 # On the connected machine:
 scafctl build solution deploy.yaml --version 1.0.0
@@ -572,6 +829,20 @@ cp deploy-v1.tar /Volumes/USB/
 scafctl catalog load --input /Volumes/USB/deploy-v1.tar
 scafctl run resolver -f deploy -o yaml --hide-execution -r env=prod
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# On the connected machine:
+scafctl build solution deploy.yaml --version 1.0.0
+scafctl catalog save deploy@1.0.0 -o deploy-v1.tar
+Copy-Item deploy-v1.tar /Volumes/USB/
+
+# Transfer USB to the air-gapped machine, then:
+scafctl catalog load --input /Volumes/USB/deploy-v1.tar
+scafctl run resolver -f deploy -o yaml --hide-execution -r env=prod
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### What You Learned
 
@@ -590,9 +861,18 @@ Tags let you create freeform aliases for specific versions. Common uses include 
 
 Make sure you have `greeting@1.0.0` in the catalog, then tag it:
 
+{{< tabs "catalog-tutorial-cmd-30" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl catalog tag greeting@1.0.0 stable
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl catalog tag greeting@1.0.0 stable
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -602,17 +882,35 @@ Expected output:
 
 ### Step 2: View the Tag in the Catalog
 
+{{< tabs "catalog-tutorial-cmd-31" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl catalog list --name greeting -o yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl catalog list --name greeting -o yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 The tag creates an alias that points to the same digest as the original version.
 
 ### Step 3: Tag for Different Environments
 
+{{< tabs "catalog-tutorial-cmd-32" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl catalog tag greeting@1.0.0 production
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl catalog tag greeting@1.0.0 production
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 You can create as many tags as needed. Tags are freeform strings — they cannot be valid semver versions (use `scafctl build` for that).
 
@@ -662,9 +960,18 @@ scafctl checks these credential locations in order:
 
 Make sure `greeting@1.0.0` is in your local catalog, then push it:
 
+{{< tabs "catalog-tutorial-cmd-33" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl catalog push greeting@1.0.0 --catalog ghcr.io/myorg/scafctl
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl catalog push greeting@1.0.0 --catalog ghcr.io/myorg/scafctl
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -678,9 +985,18 @@ The path structure is: `<registry>/<repository>/solutions/<name>:<version>`
 
 ### Step 3: Push with a Different Name
 
+{{< tabs "catalog-tutorial-cmd-34" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl catalog push greeting@1.0.0 --as hello-world --catalog ghcr.io/myorg/scafctl
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl catalog push greeting@1.0.0 --as hello-world --catalog ghcr.io/myorg/scafctl
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 This pushes the same artifact under a different name in the remote registry.
 
@@ -688,9 +1004,18 @@ This pushes the same artifact under a different name in the remote registry.
 
 On a different machine (or after deleting the local copy):
 
+{{< tabs "catalog-tutorial-cmd-35" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl catalog pull ghcr.io/myorg/scafctl/solutions/greeting@1.0.0
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl catalog pull ghcr.io/myorg/scafctl/solutions/greeting@1.0.0
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -700,34 +1025,72 @@ Expected output:
 
 The artifact is now in your local catalog. You can run it with:
 
+{{< tabs "catalog-tutorial-cmd-36" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f greeting -o yaml --hide-execution -r name=Alice
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f greeting -o yaml --hide-execution -r name=Alice
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Step 5: Pull with a Different Local Name
 
+{{< tabs "catalog-tutorial-cmd-37" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl catalog pull ghcr.io/myorg/scafctl/solutions/greeting@1.0.0 --as my-greeting
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl catalog pull ghcr.io/myorg/scafctl/solutions/greeting@1.0.0 --as my-greeting
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 This stores the artifact locally under the name `my-greeting`.
 
 ### Step 6: Delete from a Remote Registry
 
+{{< tabs "catalog-tutorial-cmd-38" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl catalog delete ghcr.io/myorg/scafctl/solutions/greeting@1.0.0
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl catalog delete ghcr.io/myorg/scafctl/solutions/greeting@1.0.0
+```
+{{% /tab %}}
+{{< /tabs >}}
 
+> [!NOTE]
 > **Note:** Not all registries support OCI DELETE. GitHub Container Registry (ghcr.io) requires deletion through the web interface at `https://github.com/orgs/YOUR_ORG/packages`. Docker Hub, Azure Container Registry, Harbor, and Amazon ECR support API-based deletion.
 
 ### Troubleshooting
 
 **403 Forbidden errors:**
 
+{{< tabs "catalog-tutorial-cmd-39" >}}
+{{% tab "Bash" %}}
 ```bash
 # Enable debug logging to see which auth config is being used
 scafctl catalog push greeting@1.0.0 --catalog ghcr.io/myorg -d
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Enable debug logging to see which auth config is being used
+scafctl catalog push greeting@1.0.0 --catalog ghcr.io/myorg -d
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Check that:
 1. Your token has `write:packages` scope
@@ -738,10 +1101,20 @@ Check that:
 
 For local testing with registries that don't use HTTPS:
 
+{{< tabs "catalog-tutorial-cmd-40" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl catalog push greeting@1.0.0 --catalog localhost:5000 --insecure
 scafctl catalog pull localhost:5000/solutions/greeting@1.0.0 --insecure
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl catalog push greeting@1.0.0 --catalog localhost:5000 --insecure
+scafctl catalog pull localhost:5000/solutions/greeting@1.0.0 --insecure
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Supported Registries
 
@@ -899,9 +1272,18 @@ The `deployment-template` resolver uses a **static path** (`templates/deployment
 
 ### Step 3: Preview What Gets Bundled
 
+{{< tabs "catalog-tutorial-cmd-41" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl build solution deploy-app/solution.yaml --dry-run
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl build solution deploy-app/solution.yaml --dry-run
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -925,9 +1307,18 @@ The dry-run shows:
 
 ### Step 4: Build the Solution
 
+{{< tabs "catalog-tutorial-cmd-42" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl build solution deploy-app/solution.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl build solution deploy-app/solution.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -940,9 +1331,18 @@ Expected output:
 
 ### Step 5: Run from the Catalog with Dev Config
 
+{{< tabs "catalog-tutorial-cmd-43" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f deploy-app -o yaml -e '_.["rendered-deployment"]' -r environment=dev
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f deploy-app -o yaml -e '_.["rendered-deployment"]' -r environment=dev
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -971,9 +1371,18 @@ spec:
 
 ### Step 6: Switch to Prod
 
+{{< tabs "catalog-tutorial-cmd-44" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f deploy-app -o yaml -e '_.["rendered-deployment"]' -r environment=prod
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f deploy-app -o yaml -e '_.["rendered-deployment"]' -r environment=prod
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -1111,9 +1520,18 @@ spec:
 
 ### Step 3: Preview the Bundle
 
+{{< tabs "catalog-tutorial-cmd-45" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl build solution nested-demo/parent.yaml --dry-run
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl build solution nested-demo/parent.yaml --dry-run
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -1131,10 +1549,20 @@ Notice that scafctl **recursively discovered** the child sub-solution (`sub/chil
 
 ### Step 4: Build and Run
 
+{{< tabs "catalog-tutorial-cmd-46" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl build solution nested-demo/parent.yaml
 scafctl run resolver -f nested-demo -o json
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl build solution nested-demo/parent.yaml
+scafctl run resolver -f nested-demo -o json
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### How It Works
 
@@ -1159,9 +1587,18 @@ After building a bundle, you can verify its integrity and examine its contents.
 
 ### Step 1: Verify the Bundle
 
+{{< tabs "catalog-tutorial-cmd-47" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl bundle verify deploy-app@1.0.0
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl bundle verify deploy-app@1.0.0
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -1181,9 +1618,18 @@ This checks that:
 
 See what files are inside the bundle without extracting them:
 
+{{< tabs "catalog-tutorial-cmd-48" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl bundle extract deploy-app@1.0.0 --list-only
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl bundle extract deploy-app@1.0.0 --list-only
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -1198,9 +1644,18 @@ Expected output:
 
 Extract the bundled files to inspect them:
 
+{{< tabs "catalog-tutorial-cmd-49" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl bundle extract deploy-app@1.0.0 --output-dir ./extracted
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl bundle extract deploy-app@1.0.0 --output-dir ./extracted
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Check the extracted files:
 
@@ -1223,9 +1678,18 @@ extracted/
 
 You can extract only the files needed by a specific resolver:
 
+{{< tabs "catalog-tutorial-cmd-50" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl bundle extract deploy-app@1.0.0 --resolver config --output-dir ./config-only
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl bundle extract deploy-app@1.0.0 --resolver config --output-dir ./config-only
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 This uses static analysis to determine which files the `config` resolver references.
 
@@ -1271,9 +1735,18 @@ metadata:
 
 ### Step 2: Build v2
 
+{{< tabs "catalog-tutorial-cmd-51" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl build solution deploy-app/solution.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl build solution deploy-app/solution.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -1288,40 +1761,88 @@ Notice it now bundles 4 files (the new staging config was picked up by `configs/
 
 ### Step 3: Compare the Two Versions
 
+{{< tabs "catalog-tutorial-cmd-52" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl bundle diff deploy-app@1.0.0 deploy-app@2.0.0
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl bundle diff deploy-app@1.0.0 deploy-app@2.0.0
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 The output shows files added, modified, and removed between the two versions.
 
 ### Step 4: Show Only File Changes
 
+{{< tabs "catalog-tutorial-cmd-53" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl bundle diff deploy-app@1.0.0 deploy-app@2.0.0 --files-only
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl bundle diff deploy-app@1.0.0 deploy-app@2.0.0 --files-only
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Step 5: Show Only Solution Structure Changes
 
+{{< tabs "catalog-tutorial-cmd-54" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl bundle diff deploy-app@1.0.0 deploy-app@2.0.0 --solution-only
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl bundle diff deploy-app@1.0.0 deploy-app@2.0.0 --solution-only
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 This shows only changes to the solution YAML itself (resolvers added/removed, actions changed, etc.).
 
 ### Step 6: Get Diff Output as YAML
 
+{{< tabs "catalog-tutorial-cmd-55" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl bundle diff deploy-app@1.0.0 deploy-app@2.0.0 -o yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl bundle diff deploy-app@1.0.0 deploy-app@2.0.0 -o yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Step 7: Clean Up
 
+{{< tabs "catalog-tutorial-cmd-56" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl catalog delete deploy-app@1.0.0 --kind solution
 scafctl catalog delete deploy-app@2.0.0 --kind solution
 scafctl catalog prune
 rm -rf deploy-app/
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl catalog delete deploy-app@1.0.0 --kind solution
+scafctl catalog delete deploy-app@2.0.0 --kind solution
+scafctl catalog prune
+rm -rf deploy-app/
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### What You Learned
 

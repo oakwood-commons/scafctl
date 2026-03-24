@@ -1,0 +1,37 @@
+{{- /* Render hook for links: resolves .md file references to proper Hugo page URLs */ -}}
+{{- $url := .Destination -}}
+{{- $text := .Text -}}
+{{- $title := .Title -}}
+
+{{- /* Detect external links */ -}}
+{{- $isExternal := or (hasPrefix $url "http://") (hasPrefix $url "https://") (hasPrefix $url "mailto:") -}}
+
+{{- if not $isExternal -}}
+  {{- /* Split anchor from URL */ -}}
+  {{- $anchor := "" -}}
+  {{- if strings.Contains $url "#" -}}
+    {{- $parts := split $url "#" -}}
+    {{- $url = index $parts 0 -}}
+    {{- $anchor = index $parts 1 -}}
+  {{- end -}}
+
+  {{- /* Resolve .md links to Hugo page paths */ -}}
+  {{- if strings.HasSuffix $url ".md" -}}
+    {{- with .Page.GetPage $url -}}
+      {{- $url = .RelPermalink -}}
+    {{- else -}}
+      {{- /* Fallback: keep original .md URL and warn so broken links surface during build */ -}}
+      {{- warnf "render-link: could not resolve .md link %q on page %q — check the file exists in Hugo's content tree" $url .Page.RelPermalink -}}
+    {{- end -}}
+  {{- end -}}
+
+  {{- /* Re-attach anchor */ -}}
+  {{- with $anchor -}}
+    {{- $url = printf "%s#%s" $url . -}}
+  {{- end -}}
+{{- end -}}
+
+<a href="{{ $url | safeURL }}"
+  {{- with $title }} title="{{ . }}"{{ end -}}
+  {{- if $isExternal }} target="_blank" rel="noopener noreferrer"{{ end -}}
+>{{ $text }}</a>

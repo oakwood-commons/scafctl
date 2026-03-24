@@ -32,9 +32,18 @@ Solution diffing answers the question: **"What structurally changed between two 
 
 ### Basic Comparison
 
+{{< tabs "soldiff-tutorial-cmd-1" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl solution diff solution-v1.yaml solution-v2.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl solution diff solution-v1.yaml solution-v2.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 ```
@@ -52,9 +61,18 @@ Summary: 5 total | 2 added | 0 removed | 3 changed
 
 ### JSON Output
 
+{{< tabs "soldiff-tutorial-cmd-2" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl solution diff solution-v1.yaml solution-v2.yaml -o json
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl solution diff solution-v1.yaml solution-v2.yaml -o json
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Returns structured JSON with `changes` array and `summary` object — useful for CI pipelines and programmatic processing.
 
@@ -74,9 +92,18 @@ cat examples/soldiff/solution-v2.yaml
 
 ### Step 2: Compare Them
 
+{{< tabs "soldiff-tutorial-cmd-3" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl solution diff examples/soldiff/solution-v1.yaml examples/soldiff/solution-v2.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl solution diff examples/soldiff/solution-v1.yaml examples/soldiff/solution-v2.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 The diff shows:
 - `metadata.version` changed from `1.0.0` to `2.0.0`
@@ -89,6 +116,8 @@ The diff shows:
 
 In a CI pipeline, use JSON output to assert no unexpected changes:
 
+{{< tabs "soldiff-tutorial-cmd-4" >}}
+{{% tab "Bash" %}}
 ```bash
 # Fail if any resolvers were removed
 diff_output=$(scafctl solution diff baseline.yaml current.yaml -o json)
@@ -98,6 +127,19 @@ if [ "$removed" -gt 0 ]; then
   exit 1
 fi
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Fail if any resolvers were removed
+$diff_output = scafctl solution diff baseline.yaml current.yaml -o json
+$parsed = $diff_output | ConvertFrom-Json
+if ($parsed.summary.removed -gt 0) {
+  Write-Output "ERROR: Resolvers were removed!"
+  exit 1
+}
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## What Gets Compared
 
@@ -138,6 +180,8 @@ for _, c := range result.Changes {
 
 Solution diff compares *structure* (YAML schema), while snapshot diff compares *runtime output* (resolver values, timing). Use both for comprehensive change analysis:
 
+{{< tabs "soldiff-tutorial-cmd-5" >}}
+{{% tab "Bash" %}}
 ```bash
 # 1. Compare structure
 scafctl solution diff v1.yaml v2.yaml
@@ -147,6 +191,19 @@ scafctl run resolver -f v1.yaml --snapshot --snapshot-file=before.json
 scafctl run resolver -f v2.yaml --snapshot --snapshot-file=after.json
 scafctl snapshot diff before.json after.json
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# 1. Compare structure
+scafctl solution diff v1.yaml v2.yaml
+
+# 2. Compare runtime behavior
+scafctl run resolver -f v1.yaml --snapshot --snapshot-file=before.json
+scafctl run resolver -f v2.yaml --snapshot --snapshot-file=after.json
+scafctl snapshot diff before.json after.json
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## See Also
 

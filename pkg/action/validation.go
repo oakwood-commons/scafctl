@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
@@ -438,11 +439,15 @@ func validateDependsOn(action *Action, section string, workflow *Workflow, errs 
 		}
 
 		if _, exists := validActions[dep]; !exists {
+			msg := fmt.Sprintf("dependency %q not found in %s section", dep, section)
+			if section == "finally" {
+				msg += fmt.Sprintf("; to read results from %q, reference it via __actions['%s'] in your inputs or when condition (dependencies are auto-inferred from __actions references)", dep, dep)
+			}
 			errs.AddError(&ValidationError{
 				Section:    section,
 				ActionName: action.Name,
 				Field:      "dependsOn",
-				Message:    fmt.Sprintf("dependency %q not found in %s section", dep, section),
+				Message:    msg,
 			})
 		}
 
@@ -517,35 +522,67 @@ func validateProvider(action *Action, section string, registry RegistryInterface
 	}
 }
 
-// validateActionsReferences validates __actions references in action inputs.
+// validateActionsReferences validates __actions references in action inputs and when condition.
+// Dependencies are automatically inferred from __actions references during graph
+// building, so only existence of the referenced action is validated here.
 func validateActionsReferences(action *Action, section string, workflow *Workflow, errs *AggregatedValidationError) {
-	// Rule 9: __actions.<name> references must be valid
-	refs := extractActionsReferences(action)
+	// Build a map from ref name -> the field that first introduces it, so each
+	// validation error names the correct source field ("inputs" or "when").
+	refField := make(map[string]string)
+
+	// Collect refs from inputs first.
+	inputRefs := make(map[string]struct{})
+	for _, valueRef := range action.Inputs {
+		extractRefsFromValueRef(valueRef, inputRefs)
+	}
+	for ref := range inputRefs {
+		refField[ref] = "inputs"
+	}
+
+	// Collect refs from when condition; only record the field if not already seen in inputs.
+	if action.When != nil && action.When.Expr != nil {
+		whenRefs := make(map[string]struct{})
+		extractRefsFromExpression(action.When.Expr, whenRefs)
+		for ref := range whenRefs {
+			if _, alreadyInInputs := refField[ref]; !alreadyInInputs {
+				refField[ref] = "when"
+			}
+		}
+	}
+
+	// Sort ref names for deterministic validation error ordering.
+	refs := make([]string, 0, len(refField))
+	for ref := range refField {
+		refs = append(refs, ref)
+	}
+	sort.Strings(refs)
 
 	for _, ref := range refs {
-		// For regular actions: referenced action must be in dependsOn
+		field := refField[ref]
+		// Self-references create an implicit cycle during graph building; catch them early.
+		if ref == action.Name {
+			errs.AddError(&ValidationError{
+				Section:    section,
+				ActionName: action.Name,
+				Field:      field,
+				Message:    fmt.Sprintf("__actions reference to %q: an action cannot reference itself", ref),
+			})
+			continue
+		}
+
+		// For regular actions: referenced action must exist in the actions section
 		if section == "actions" {
-			if !slices.Contains(action.DependsOn, ref) {
-				// Also check if the action exists at all
-				if _, exists := workflow.Actions[ref]; !exists {
-					errs.AddError(&ValidationError{
-						Section:    section,
-						ActionName: action.Name,
-						Field:      "inputs",
-						Message:    fmt.Sprintf("__actions reference to %q: action not found", ref),
-					})
-				} else {
-					errs.AddError(&ValidationError{
-						Section:    section,
-						ActionName: action.Name,
-						Field:      "inputs",
-						Message:    fmt.Sprintf("__actions reference to %q requires it to be listed in dependsOn", ref),
-					})
-				}
+			if _, exists := workflow.Actions[ref]; !exists {
+				errs.AddError(&ValidationError{
+					Section:    section,
+					ActionName: action.Name,
+					Field:      field,
+					Message:    fmt.Sprintf("__actions reference to %q: action not found", ref),
+				})
 			}
 		}
 
-		// For finally actions: referenced action must exist in regular actions or be in dependsOn
+		// For finally actions: referenced action must exist in regular actions or finally actions
 		if section == "finally" {
 			_, inActions := workflow.Actions[ref]
 			_, inFinally := workflow.Finally[ref]
@@ -554,47 +591,12 @@ func validateActionsReferences(action *Action, section string, workflow *Workflo
 				errs.AddError(&ValidationError{
 					Section:    section,
 					ActionName: action.Name,
-					Field:      "inputs",
+					Field:      field,
 					Message:    fmt.Sprintf("__actions reference to %q: action not found", ref),
 				})
 			}
-
-			// If referencing a finally action, it must be in dependsOn
-			if inFinally && !slices.Contains(action.DependsOn, ref) && ref != action.Name {
-				errs.AddError(&ValidationError{
-					Section:    section,
-					ActionName: action.Name,
-					Field:      "inputs",
-					Message:    fmt.Sprintf("__actions reference to finally action %q requires it to be listed in dependsOn", ref),
-				})
-			}
 		}
 	}
-}
-
-// extractActionsReferences extracts action names referenced via __actions from inputs and when condition.
-func extractActionsReferences(action *Action) []string {
-	refs := make(map[string]struct{})
-
-	// Extract from inputs
-	for _, valueRef := range action.Inputs {
-		if valueRef == nil {
-			continue
-		}
-		extractRefsFromValueRef(valueRef, refs)
-	}
-
-	// Extract from when condition
-	if action.When != nil && action.When.Expr != nil {
-		extractRefsFromExpression(action.When.Expr, refs)
-	}
-
-	// Convert to slice
-	result := make([]string, 0, len(refs))
-	for ref := range refs {
-		result = append(result, ref)
-	}
-	return result
 }
 
 // extractRefsFromValueRef extracts __actions references from a ValueRef.
@@ -659,18 +661,46 @@ func extractRefsFromTemplate(tmpl *gotmpl.GoTemplatingContent, refs map[string]s
 // parseActionsRefsFromString parses __actions.<name> patterns from a string.
 func parseActionsRefsFromString(s string, refs map[string]struct{}) {
 	// Pattern: __actions.actionName or __actions["actionName"]
-	// actionName can be followed by .field or ["field"]
+	// Occurrences inside single-quoted, double-quoted, or backtick-delimited string
+	// literals are skipped so that e.g. 'prefix_actions.build' in a CEL string does
+	// not produce a false dep.
 
-	// Simple pattern matching for __actions.name
+	const sentinel = "__actions"
 	idx := 0
-	for idx < len(s) {
-		// Find __actions
-		actionsIdx := strings.Index(s[idx:], "__actions")
-		if actionsIdx == -1 {
-			break
-		}
-		idx += actionsIdx + len("__actions")
+	quoteChar := byte(0) // 0 = not inside a quoted string
 
+	for idx < len(s) {
+		ch := s[idx]
+
+		// Track quote context; handle backslash-escaped quotes inside strings.
+		// Backtick strings are raw (no escape sequences), so only the closing
+		// backtick ends them.
+		if quoteChar == 0 {
+			if ch == '"' || ch == '\'' || ch == '`' {
+				quoteChar = ch
+				idx++
+				continue
+			}
+		} else {
+			// Backtick strings cannot contain escape sequences
+			if quoteChar != '`' && ch == '\\' && idx+1 < len(s) {
+				idx += 2 // skip escaped character (e.g. \", \')
+				continue
+			}
+			if ch == quoteChar {
+				quoteChar = 0
+			}
+			idx++
+			continue
+		}
+
+		// Only attempt matches outside quoted strings
+		if !strings.HasPrefix(s[idx:], sentinel) {
+			idx++
+			continue
+		}
+
+		idx += len(sentinel)
 		if idx >= len(s) {
 			break
 		}

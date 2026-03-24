@@ -25,6 +25,8 @@ OTLP endpoint every signal is exported for backend analysis.
 
 ### Flags (per-invocation)
 
+{{< tabs "telemetry-tutorial-cmd-1" >}}
+{{% tab "Bash" %}}
 ```bash
 # Point at a local OTel Collector
 scafctl run solution -f solution.yaml \
@@ -35,6 +37,20 @@ scafctl run solution -f solution.yaml \
 OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4317 \
   scafctl run solution -f solution.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Point at a local OTel Collector
+scafctl run solution -f solution.yaml `
+  --otel-endpoint localhost:4317 `
+  --otel-insecure          # disable TLS (development only)
+
+# Override with environment variable instead
+$env:OTEL_EXPORTER_OTLP_ENDPOINT = 'localhost:4317'
+scafctl run solution -f solution.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 | Flag | Env override | Default | Description |
 |------|-------------|---------|-------------|
@@ -60,6 +76,8 @@ any extra code).
 
 Control verbosity:
 
+{{< tabs "telemetry-tutorial-cmd-2" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f solution.yaml \
   --log-level debug \
@@ -67,6 +85,17 @@ scafctl run solution -f solution.yaml \
   --otel-endpoint localhost:4317 \
   --otel-insecure
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f solution.yaml `
+  --log-level debug `
+  --log-format json `
+  --otel-endpoint localhost:4317 `
+  --otel-insecure
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 See the [Logging Tutorial](logging-tutorial.md) for full flag reference.
 
@@ -98,11 +127,22 @@ Without `--otel-endpoint`, tracing is disabled (noop). To inspect traces locally
 run a local collector such as [otel-desktop-viewer](https://github.com/CtrlSpice/otel-desktop-viewer)
 or Jaeger and point scafctl at it:
 
+{{< tabs "telemetry-tutorial-cmd-3" >}}
+{{% tab "Bash" %}}
 ```bash
 # Start local Jaeger (see examples/telemetry/ for Docker Compose)
 OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4317 \
   scafctl run solution -f solution.yaml --otel-insecure
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Start local Jaeger (see examples/telemetry/ for Docker Compose)
+$env:OTEL_EXPORTER_OTLP_ENDPOINT = 'localhost:4317'
+scafctl run solution -f solution.yaml --otel-insecure
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Metrics
 
@@ -151,12 +191,24 @@ Services started:
 
 ### Run a traced command
 
+{{< tabs "telemetry-tutorial-cmd-4" >}}
+{{% tab "Bash" %}}
 ```bash
 OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4317 \
   scafctl run solution -f examples/actions/hello-world.yaml \
   --otel-insecure \
   --log-level debug
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+$env:OTEL_EXPORTER_OTLP_ENDPOINT = 'localhost:4317'
+scafctl run solution -f examples/actions/hello-world.yaml `
+  --otel-insecure `
+  --log-level debug
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### View traces in Jaeger
 
@@ -179,11 +231,22 @@ docker compose down
 Point scafctl at your organisation's OTLP endpoint (no `--otel-insecure` flag
 for TLS-enabled collectors):
 
+{{< tabs "telemetry-tutorial-cmd-5" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f solution.yaml \
   --otel-endpoint otel-collector.example.com:4317 \
   --log-level info
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f solution.yaml `
+  --otel-endpoint otel-collector.example.com:4317 `
+  --log-level info
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Use the environment variable in CI/CD pipelines instead of flags:
 

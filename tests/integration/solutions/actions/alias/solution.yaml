@@ -57,7 +57,6 @@ spec:
       verifyWithFullRef:
         description: Verify alias and __actions references return the same values
         provider: cel
-        dependsOn: [fetchConfiguration]
         inputs:
           expression: |
             {"aliasRegion": cfgAlias.region, "fullRefRegion": cfgFull.region}
