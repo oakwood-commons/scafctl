@@ -15,27 +15,42 @@ scafctl includes a built-in linter that checks solution YAML files for:
 - **Best practices** — Missing descriptions, unused resolvers, naming conventions
 - **Correctness** — Broken resolver references, invalid CEL expressions, circular dependencies
 
-```
-┌──────────────┐         ┌──────────────┐         ┌──────────────┐
-│  Solution    │  ────►  │  scafctl     │  ────►  │  Findings    │
-│  YAML        │         │    lint      │         │  (warnings,  │
-│              │         │              │         │   errors)    │
-└──────────────┘         └──────────────┘         └──────────────┘
+```mermaid
+flowchart LR
+  A["Solution<br/>YAML"] --> B["scafctl<br/>lint"] --> C["Findings<br/>(warnings, errors)"]
 ```
 
 ## 1. Linting a Solution
 
 ### Basic Lint
 
+{{< tabs "linting-tutorial-cmd-1" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl lint -f solution.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl lint -f solution.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 If your solution file is in a well-known location (`solution.yaml`, `scafctl.yaml`, etc. in the current directory or `scafctl/`/`.scafctl/` subdirectories), you can omit `-f`:
 
+{{< tabs "linting-tutorial-cmd-2" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl lint
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl lint
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output shows findings in a table with severity, rule, message, and location.
 
@@ -43,9 +58,18 @@ Output shows findings in a table with severity, rule, message, and location.
 
 Get structured results for CI/CD integration:
 
+{{< tabs "linting-tutorial-cmd-3" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl lint -f solution.yaml -o json
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl lint -f solution.yaml -o json
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ```json
 {
@@ -68,6 +92,8 @@ scafctl lint -f solution.yaml -o json
 
 For scripts and CI pipelines — exit code only:
 
+{{< tabs "linting-tutorial-cmd-4" >}}
+{{% tab "Bash" %}}
 ```bash
 if scafctl lint -f solution.yaml -o quiet; then
   echo "Lint passed"
@@ -76,6 +102,18 @@ else
   exit 1
 fi
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+if (scafctl lint -f solution.yaml -o quiet) {
+  Write-Output "Lint passed"
+} else {
+  Write-Output "Lint failed"
+  exit 1
+}
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## 2. Exploring Lint Rules
 
@@ -83,9 +121,18 @@ fi
 
 See all available lint rules:
 
+{{< tabs "linting-tutorial-cmd-5" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl lint rules
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl lint rules
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 This shows:
 
@@ -97,6 +144,8 @@ This shows:
 
 ### Filter by Format
 
+{{< tabs "linting-tutorial-cmd-6" >}}
+{{% tab "Bash" %}}
 ```bash
 # JSON output for tooling
 scafctl lint rules -o json
@@ -104,20 +153,49 @@ scafctl lint rules -o json
 # YAML output
 scafctl lint rules -o yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# JSON output for tooling
+scafctl lint rules -o json
+
+# YAML output
+scafctl lint rules -o yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## 3. Understanding a Rule
 
 Get detailed information about any lint rule:
 
+{{< tabs "linting-tutorial-cmd-7" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl lint explain <rule-id>
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl lint explain <rule-id>
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 For example:
 
+{{< tabs "linting-tutorial-cmd-8" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl lint explain missing-description
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl lint explain missing-description
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 This shows:
 
@@ -130,9 +208,18 @@ This shows:
 
 ### JSON Output
 
+{{< tabs "linting-tutorial-cmd-9" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl lint explain missing-description -o json
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl lint explain missing-description -o json
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## 4. Linting in CI/CD
 
@@ -152,6 +239,8 @@ scafctl lint explain missing-description -o json
 
 ### Pre-commit Hook
 
+{{< tabs "linting-tutorial-cmd-10" >}}
+{{% tab "Bash" %}}
 ```bash
 #!/bin/bash
 # .git/hooks/pre-commit
@@ -159,6 +248,20 @@ git diff --cached --name-only --diff-filter=ACM | grep 'solution.yaml$' | while 
   scafctl lint -f "$file" -o quiet || exit 1
 done
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# PowerShell equivalent
+# .git/hooks/pre-commit
+git diff --cached --name-only --diff-filter=ACM |
+  Select-String 'solution.yaml$' |
+  ForEach-Object {
+    scafctl lint -f $_.Line -o quiet
+    if ($LASTEXITCODE -ne 0) { exit 1 }
+  }
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Task Runner Integration
 
@@ -273,9 +376,18 @@ The `unreachable-test-path` rule detects `files` entries in test cases that refe
 
 For more details:
 
+{{< tabs "linting-tutorial-cmd-11" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl lint explain unreachable-test-path
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl lint explain unreachable-test-path
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## 6. Using Lint with the MCP Server
 

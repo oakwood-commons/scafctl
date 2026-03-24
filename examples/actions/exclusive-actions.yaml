@@ -81,6 +81,10 @@ spec:
 
     finally:
       # Always runs, reports final status regardless of errors.
+      # This finally action reads main-section results via __actions (cross-section references).
+      # No dependsOn is needed — all main actions complete before finally begins.
+      # The references to updateDatabase and migrateDatabase appear in crossSectionRefs
+      # on the rendered graph (informational only, not scheduling dependencies).
       auditLog:
         description: Write an audit log entry
         displayName: Audit Log

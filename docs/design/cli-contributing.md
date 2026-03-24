@@ -119,7 +119,7 @@ pkg/cmd/scafctl/
 │   └── progress.go      # Progress reporting
 ├── render/              # 'render' verb
 │   ├── render.go
-│   ├── solution.go      # 'render solution' (dry-run, --graph, --snapshot)
+│   ├── solution.go      # 'render solution' (dry-run, --action-graph, --snapshot)
 │   └── graph.go         # Graph rendering logic
 ├── build/               # 'build' verb (analogous to docker build)
 │   ├── build.go
@@ -1162,7 +1162,7 @@ This section tracks which commands from the design are implemented and what work
 | `get celfunction` | ✅ | Show CEL function details |
 | `run solution` | ✅ | Executes resolvers AND actions |
 | `run resolver` | ✅ | Executes resolvers only (for debugging and inspection) |
-| `render solution` | ✅ | Includes `--graph`, `--action-graph`, `--snapshot`, `--redact` flags |
+| `render solution` | ✅ | Includes `--action-graph`, `--snapshot`, `--redact` flags |
 | `build solution` | ✅ | Build solution into local catalog |
 | `catalog push` | ✅ | Push artifacts to remote catalog |
 | `catalog pull` | ✅ | Pull artifacts from remote catalog |
@@ -1225,7 +1225,7 @@ This section tracks which commands from the design are implemented and what work
 |---------|--------|--------|
 | `run workflow` | ✅ **Removed** | Merged into `run solution` (solution now runs resolvers + actions) |
 | `snapshot save` | ✅ **Removed** | Replaced with `render solution --snapshot` |
-| `resolver graph` | ✅ **Removed** | Replaced with `render solution --graph` |
+| `resolver graph` | ✅ **Removed** | Replaced with `run resolver --graph` |
 
 ### Code Changes Required
 
@@ -1280,10 +1280,10 @@ type RenderOptions struct {
 # Normal render (resolvers + action preview)
 scafctl render solution -f solution.yaml
 
-# Show dependency graph
-scafctl render solution -f solution.yaml --graph
-scafctl render solution -f solution.yaml --graph --graph-format dot | dot -Tpng > graph.png
-scafctl render solution -f solution.yaml --graph --graph-format mermaid
+# Show resolver dependency graph
+scafctl run resolver -f solution.yaml --graph
+scafctl run resolver -f solution.yaml --graph --graph-format dot | dot -Tpng > graph.png
+scafctl run resolver -f solution.yaml --graph --graph-format mermaid
 
 # Save snapshot
 scafctl render solution -f solution.yaml --snapshot output.json

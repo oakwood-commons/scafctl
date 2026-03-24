@@ -1510,50 +1510,6 @@ func TestIntegration_RenderSolutionYAML(t *testing.T) {
 // Snapshot feature tests moved to resolver tests since snapshot isn't on run solution
 
 // ============================================================================
-// Resolver Graph Tests
-// ============================================================================
-
-func TestIntegration_ResolverGraph(t *testing.T) {
-	t.Parallel()
-	stdout, _, exitCode := runScafctl(t,
-		"render", "solution",
-		"-f", "examples/actions/hello-world.yaml",
-		"--graph",
-	)
-
-	assert.Equal(t, 0, exitCode)
-	// Should show dependency relationships
-	assert.Contains(t, stdout, "Resolver Dependency Graph")
-	t.Logf("graph output: %s", stdout)
-}
-
-func TestIntegration_ResolverGraphMermaid(t *testing.T) {
-	t.Parallel()
-	stdout, _, exitCode := runScafctl(t,
-		"render", "solution",
-		"-f", "examples/actions/hello-world.yaml",
-		"--graph",
-		"--graph-format", "mermaid",
-	)
-
-	assert.Equal(t, 0, exitCode)
-	assert.Contains(t, stdout, "graph")
-}
-
-func TestIntegration_ResolverGraphJSON(t *testing.T) {
-	t.Parallel()
-	stdout, _, exitCode := runScafctl(t,
-		"render", "solution",
-		"-f", "examples/actions/hello-world.yaml",
-		"--graph",
-		"--graph-format", "json",
-	)
-
-	assert.Equal(t, 0, exitCode)
-	assert.Contains(t, stdout, "phases")
-}
-
-// ============================================================================
 // Action Graph Tests
 // ============================================================================
 
@@ -1570,6 +1526,20 @@ func TestIntegration_ActionGraph(t *testing.T) {
 	assert.Contains(t, stdout, "Action Dependency Graph")
 	assert.Contains(t, stdout, "Phase")
 	t.Logf("action graph output: %s", stdout)
+}
+
+// TestIntegration_RenderSolution_GraphFlagRemoved verifies that the legacy --graph
+// flag (removed in PR #145) is no longer accepted by "render solution".
+func TestIntegration_RenderSolution_GraphFlagRemoved(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t,
+		"render", "solution",
+		"-f", "examples/actions/hello-world.yaml",
+		"--graph",
+	)
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "unknown flag")
 }
 
 func TestIntegration_ActionGraphMermaid(t *testing.T) {
@@ -2662,8 +2632,8 @@ func TestIntegration_RenderSolution_FromCatalog_ByName(t *testing.T) {
 	_, _, exitCode := runScafctl(t, "build", "solution", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
 
-	// Render the solution graph from catalog by name (using --graph flag since resolver-demo has no workflow)
-	stdout, _, exitCode := runScafctl(t, "render", "solution", "-f", "resolver-demo", "--graph")
+	// Render the resolver graph from catalog by name
+	stdout, _, exitCode := runScafctl(t, "run", "resolver", "-f", "resolver-demo", "--graph")
 	assert.Equal(t, 0, exitCode)
 	// Should have graph output with resolver info
 	assert.Contains(t, stdout, "environment")

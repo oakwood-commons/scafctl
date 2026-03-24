@@ -11,6 +11,7 @@ Step-by-step guides for learning scafctl features.
 ## Getting Started
 
 - [Getting Started](getting-started.md) — Install scafctl and run your first solution
+- [Solution Scaffolding Tutorial](scaffolding-tutorial.md) — Create new solutions with `scafctl new solution`
 
 ## Core Tutorials
 
@@ -19,21 +20,23 @@ Step-by-step guides for learning scafctl features.
 - [Run Provider Tutorial](run-provider-tutorial.md) — Test providers in isolation
 - [Actions Tutorial](actions-tutorial.md) — Learn how to use actions for workflow automation
 - [Authentication Tutorial](auth-tutorial.md) — Set up authentication for your workflows
+- [Eval Tutorial](eval-tutorial.md) — Test CEL expressions and Go templates from the CLI
+- [Linting Tutorial](linting-tutorial.md) — Validate solutions, explore lint rules, and fix issues
 - [CEL Expressions Tutorial](cel-tutorial.md) — Master CEL expressions and extension functions
 - [Go Templates Tutorial](go-templates-tutorial.md) — Generate files with Go template rendering
 - [Catalog Tutorial](catalog-tutorial.md) — Store and manage solutions in your local catalog
+- [MCP Server Tutorial](mcp-server-tutorial.md) — Set up AI agent integration with VS Code Copilot, Claude, Cursor, and Windsurf
+- [Security Hardening](security-hardening.md) — Secure your solutions and workflows
+- [Validation Patterns Tutorial](validation-patterns-tutorial.md) — Input constraints, runtime validation, and common regex/CEL patterns
 - [Snapshots Tutorial](snapshots-tutorial.md) — Capture and compare execution snapshots
 - [Functional Testing Tutorial](functional-testing.md) — Write and run automated tests for your solutions
+
+## Operations & Configuration
+
 - [Configuration Tutorial](config-tutorial.md) — Manage application configuration
 - [Logging & Debugging Tutorial](logging-tutorial.md) — Control log verbosity, format, and output
+- [Telemetry Tutorial](telemetry-tutorial.md) — Ship traces and metrics to Jaeger / Prometheus
 - [Cache Tutorial](cache-tutorial.md) — Manage cached data and reclaim disk space
-
-## Developer Tools
-
-- [Solution Scaffolding Tutorial](scaffolding-tutorial.md) — Create new solutions with `scafctl new solution`
-- [Eval Tutorial](eval-tutorial.md) — Test CEL expressions and Go templates from the CLI
-- [Linting Tutorial](linting-tutorial.md) — Validate solutions, explore lint rules, and fix issues
-- [Validation Patterns Tutorial](validation-patterns-tutorial.md) — Input constraints, runtime validation, and common regex/CEL patterns
 
 ## Reference
 
@@ -50,7 +53,4 @@ Step-by-step guides for learning scafctl features.
 - [Auth Handler Development Guide](auth-handler-development.md) — Build custom auth handlers (builtin and plugin)
 - [Plugin Development Guide](plugin-development.md) — Plugin overview and discovery
 - [Plugin Auto-Fetching Tutorial](plugin-auto-fetch-tutorial.md) — Automatically fetch plugins from catalogs at runtime
-
-## AI Integration
-
-- [MCP Server Tutorial](mcp-server-tutorial.md) — Set up AI agent integration with VS Code Copilot, Claude, Cursor, and Windsurf
+- [Multi-Platform Plugin Build Tutorial](multi-platform-plugin-build.md) — Build plugins for multiple platforms

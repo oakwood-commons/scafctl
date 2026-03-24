@@ -53,9 +53,18 @@ spec:
 
 Run it:
 
+{{< tabs "directory-provider-tutorial-cmd-1" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f list-dir.yaml -o json --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f list-dir.yaml -o json --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output (entries will vary based on your directory contents):
 
@@ -107,6 +116,7 @@ The output also provides summary fields: `totalCount`, `fileCount`, `dirCount`, 
 
 Enable `recursive: true` to traverse subdirectories. Control the depth with `maxDepth` (default: 10, maximum: 50).
 
+> [!TIP]
 > **Note:** The YAML snippets in the remaining sections show only the `spec:` or `workflow:` portion. To run them, place each snippet inside a complete solution file with `apiVersion`, `kind`, and `metadata` sections — like the `list-dir.yaml` example above.
 
 ```yaml
@@ -124,6 +134,7 @@ spec:
               maxDepth: 5
 ```
 
+> [!NOTE]
 > **Tip:** Use `excludeHidden: true` to skip files and directories starting with `.` (e.g., `.git`, `.env`).
 
 ---
@@ -174,6 +185,7 @@ spec:
               filterRegex: "_test\\.go$"
 ```
 
+> [!CAUTION]
 > **Note:** `filterGlob` and `filterRegex` are mutually exclusive. The provider returns an error if both are specified.
 
 ---
@@ -231,6 +243,7 @@ spec:
 
 Each entry will include `checksum` and `checksumAlgorithm` fields.
 
+> [!NOTE]
 > **Note:** Checksums require `includeContent: true` since the file must be read to compute the hash.
 
 ---
@@ -260,9 +273,18 @@ spec:
 
 Run it:
 
+{{< tabs "directory-provider-tutorial-cmd-2" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f create-dirs.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f create-dirs.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 The command completes silently on success. Verify the directory was created:
 
@@ -289,6 +311,7 @@ workflow:
         force: true
 ```
 
+> [!WARNING]
 > **Warning:** `force: true` permanently deletes the directory and all its contents. Use `--dry-run` first to verify what would be removed.
 
 ---
@@ -316,9 +339,18 @@ Both `path` (source) and `destination` are required. The source must be an exist
 
 All mutating operations (`mkdir`, `rmdir`, `copy`) support dry-run mode. Use `--dry-run` to see what would happen without making changes:
 
+{{< tabs "directory-provider-tutorial-cmd-3" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f solution.yaml --dry-run
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f solution.yaml --dry-run
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 In dry-run mode, the provider returns the intended operation details without modifying the filesystem. The `list` operation runs normally since it is read-only.
 

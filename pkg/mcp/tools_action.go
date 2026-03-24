@@ -136,6 +136,7 @@ func (s *Server) handlePreviewAction(_ context.Context, request mcp.CallToolRequ
 		MaterializedInputs map[string]any      `json:"materializedInputs,omitempty"`
 		DeferredInputs     map[string]string   `json:"deferredInputs,omitempty"`
 		Dependencies       []string            `json:"dependencies,omitempty"`
+		CrossSectionRefs   []string            `json:"crossSectionRefs,omitempty"`
 		When               string              `json:"when,omitempty"`
 		Section            string              `json:"section"`
 		Phase              int                 `json:"phase"`
@@ -182,6 +183,7 @@ func (s *Server) handlePreviewAction(_ context.Context, request mcp.CallToolRequ
 			Provider:           ea.Provider,
 			MaterializedInputs: ea.MaterializedInputs,
 			Dependencies:       ea.Dependencies,
+			CrossSectionRefs:   ea.CrossSectionRefs,
 			Section:            ea.Section,
 			Phase:              phaseMap[name],
 		}

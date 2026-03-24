@@ -332,9 +332,18 @@ spec:
 
 Run it:
 
+{{< tabs "template-directory-rendering-cmd-1" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f solution.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f solution.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Inspect the output:
 
@@ -471,9 +480,18 @@ workflow:
 
 Use `--dry-run` to preview what would be written without touching the filesystem:
 
+{{< tabs "template-directory-rendering-cmd-2" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f solution.yaml --dry-run
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f solution.yaml --dry-run
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 The `write-tree` action will report all paths that *would* be written, including
 paths transformed by `outputPath`, without creating any files.

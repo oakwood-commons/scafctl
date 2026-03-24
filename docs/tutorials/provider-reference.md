@@ -7,6 +7,7 @@ weight: 110
 
 This document provides a reference for all built-in providers in scafctl.
 
+> [!TIP]
 > **Note:** All YAML examples in this reference show only the relevant resolver or action snippet. To use them, place each snippet inside a complete solution file with `apiVersion`, `kind`, `metadata`, and `spec` sections. See the [Getting Started](getting-started.md) tutorial for the full solution structure.
 
 ## Overview
@@ -804,6 +805,7 @@ transform:
           - line: "# scafctl:ignore"
 ```
 
+> [!NOTE]
 > **Note:** `line` and `start`/`end` are mutually exclusive within a single entry, but different entries can use different modes.
 
 The content between `start` and `end` markers (including the markers themselves) passes through unchanged. For `line` mode, the entire line containing the marker is preserved.
@@ -1324,6 +1326,7 @@ inspect its claims on demand.
 | `flow` | string | Auth flow that produced the token (when `scope` input was set) |
 | `sessionId` | string | Stable session identifier (when `scope` input was set) |
 
+> [!WARNING]
 > **Opaque tokens:** When `scope` is provided and the access token is not a
 > decodable JWT (e.g., encrypted Microsoft Graph tokens), claims will be `null`
 > and a warning is added to the output. Token metadata (expiry, type) is still
@@ -1503,9 +1506,18 @@ resolve:
 
 Usage:
 
+{{< tabs "provider-reference-cmd-1" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f sol.yaml -r environment=production
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f sol.yaml -r environment=production
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ---
 
@@ -1551,10 +1563,20 @@ resolve:
 
 Manage secrets via CLI:
 
+{{< tabs "provider-reference-cmd-2" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl secrets set api-key "my-secret-value"
 scafctl secrets list
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl secrets set api-key "my-secret-value"
+scafctl secrets list
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ---
 

@@ -196,7 +196,7 @@ actions:
 
 **Implementation Details:**
 - Constant: `VarActions = "__actions"` in `pkg/celexp/context.go`
-- Validation ensures `__actions` references only appear in actions with proper `dependsOn` declarations
+- Dependencies are automatically inferred from `__actions` references during workflow graph building
 - See `pkg/action/` for workflow execution implementation
 
 ---

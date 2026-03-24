@@ -65,6 +65,8 @@ Version constraints follow [semver](https://semver.org/) conventions:
 
 Use `scafctl plugins install` to download plugin binaries before running a solution:
 
+{{< tabs "plugin-auto-fetch-tutorial-cmd-1" >}}
+{{% tab "Bash" %}}
 ```bash
 # Install plugins for a solution
 scafctl plugins install -f solution.yaml
@@ -75,6 +77,20 @@ scafctl plugins install -f solution.yaml --platform linux/amd64
 # Use a custom cache directory
 scafctl plugins install -f solution.yaml --cache-dir /tmp/plugins
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Install plugins for a solution
+scafctl plugins install -f solution.yaml
+
+# Install for a specific platform (useful in CI)
+scafctl plugins install -f solution.yaml --platform linux/amd64
+
+# Use a custom cache directory
+scafctl plugins install -f solution.yaml --cache-dir /tmp/plugins
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 This is useful for:
 - **CI/CD**: Pre-fetch plugins in a setup step, then run solutions offline
@@ -85,6 +101,8 @@ This is useful for:
 
 View what's in your local plugin cache:
 
+{{< tabs "plugin-auto-fetch-tutorial-cmd-2" >}}
+{{% tab "Bash" %}}
 ```bash
 # Table view (default)
 scafctl plugins list
@@ -95,6 +113,20 @@ scafctl plugins list -o json
 # YAML output
 scafctl plugins list -o yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Table view (default)
+scafctl plugins list
+
+# JSON output
+scafctl plugins list -o json
+
+# YAML output
+scafctl plugins list -o yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## Lock Files for Reproducibility
 
@@ -158,6 +190,8 @@ $XDG_CACHE_HOME/scafctl/plugins/
 
 ### Managing the Cache
 
+{{< tabs "plugin-auto-fetch-tutorial-cmd-3" >}}
+{{% tab "Bash" %}}
 ```bash
 # List cached plugins
 scafctl plugins list
@@ -166,6 +200,18 @@ scafctl plugins list
 # To clear the entire cache:
 rm -rf ~/.cache/scafctl/plugins/
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# List cached plugins
+scafctl plugins list
+
+# Cache is at $env:LOCALAPPDATA\scafctl\plugins\ (Windows)
+# To clear the entire cache:
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\scafctl\plugins\"
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## Multi-Platform Support
 
@@ -182,10 +228,20 @@ When fetching, scafctl:
 
 ### Specifying a Target Platform
 
+{{< tabs "plugin-auto-fetch-tutorial-cmd-4" >}}
+{{% tab "Bash" %}}
 ```bash
 # Fetch for a different platform
 scafctl plugins install -f solution.yaml --platform linux/amd64
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Fetch for a different platform
+scafctl plugins install -f solution.yaml --platform linux/amd64
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 This is useful for cross-platform CI where you build on one architecture but deploy on another.
 
@@ -193,9 +249,18 @@ This is useful for cross-platform CI where you build on one architecture but dep
 
 When you run a solution that declares plugin dependencies:
 
+{{< tabs "plugin-auto-fetch-tutorial-cmd-5" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f solution.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f solution.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 The prepare phase automatically:
 1. Reads `bundle.plugins` from the solution
@@ -209,6 +274,8 @@ No explicit `plugins install` step is needed — but pre-fetching is recommended
 
 ## Example: End-to-End Workflow
 
+{{< tabs "plugin-auto-fetch-tutorial-cmd-6" >}}
+{{% tab "Bash" %}}
 ```bash
 # 1. Develop your solution with plugin dependencies
 cat > solution.yaml << 'EOF'
@@ -244,6 +311,45 @@ scafctl run solution -f solution.yaml
 # 5. Check what's cached
 scafctl plugins list
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# 1. Develop your solution with plugin dependencies
+@'
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: data-pipeline
+  version: 1.0.0
+spec:
+  resolvers:
+    data:
+      resolve:
+        with:
+          - provider: my-db-provider
+            inputs:
+              connection: "postgres://localhost/db"
+  bundle:
+    plugins:
+      - name: my-db-provider
+        kind: provider
+        version: "^2.0.0"
+'@ | Set-Content solution.yaml
+
+# 2. Build to create a lock file (pins plugin versions)
+scafctl build solution solution.yaml --version 1.0.0
+
+# 3. Pre-fetch plugins (optional but recommended)
+scafctl plugins install -f solution.yaml
+
+# 4. Run the solution (plugins loaded from cache)
+scafctl run solution -f solution.yaml
+
+# 5. Check what's cached
+scafctl plugins list
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## Troubleshooting
 
@@ -270,6 +376,8 @@ Error: resolved version 3.0.0 does not satisfy constraint ^1.0.0
 
 If a cached binary seems corrupt:
 
+{{< tabs "plugin-auto-fetch-tutorial-cmd-7" >}}
+{{% tab "Bash" %}}
 ```bash
 # Remove the specific plugin from cache
 rm -rf ~/.cache/scafctl/plugins/<plugin-name>/<version>/
@@ -277,3 +385,14 @@ rm -rf ~/.cache/scafctl/plugins/<plugin-name>/<version>/
 # Re-fetch
 scafctl plugins install -f solution.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Remove the specific plugin from cache
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\scafctl\plugins\<plugin-name>\<version>\"
+
+# Re-fetch
+scafctl plugins install -f solution.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}

@@ -11,11 +11,9 @@ This tutorial introduces the Actions feature in scafctl, which enables executing
 
 Actions are the execution phase of a scafctl solution. While **resolvers** compute and gather data, **actions** perform work based on that data.
 
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  Resolvers  │ ──► │   Actions   │ ──► │   Results   │
-│ (compute)   │     │  (execute)  │     │  (outputs)  │
-└─────────────┘     └─────────────┘     └─────────────┘
+```mermaid
+flowchart LR
+  A["Resolvers<br/>(compute)"] --> B["Actions<br/>(execute)"] --> C["Results<br/>(outputs)"]
 ```
 
 **Key Principles:**
@@ -60,9 +58,18 @@ spec:
 ```
 
 Run it:
+{{< tabs "actions-tutorial-cmd-1" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f hello-actions.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f hello-actions.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -107,9 +114,18 @@ This creates a linear chain: `build → test → deploy`
 
 Run it:
 
+{{< tabs "actions-tutorial-cmd-2" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f build-pipeline.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f build-pipeline.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -169,9 +185,18 @@ This creates a diamond pattern:
 
 Run it:
 
+{{< tabs "actions-tutorial-cmd-3" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f parallel.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f parallel.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output (build and test may appear in either order since they run in parallel):
 
@@ -182,6 +207,7 @@ Initializing...
 Deploying...
 ```
 
+> [!NOTE]
 > **Note**: When actions run in parallel, their output is prefixed with `[action-name]` to distinguish which action produced each line. Actions running alone (like `init` and `deploy`) don't get a prefix.
 
 ## Conditions (`when`)
@@ -245,9 +271,18 @@ spec:
 
 ### Run with Default (staging)
 
+{{< tabs "actions-tutorial-cmd-4" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f conditional-demo.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f conditional-demo.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -261,9 +296,18 @@ The `prod-deploy` action is skipped because the condition `_.environment == 'pro
 
 ### Run with Production
 
+{{< tabs "actions-tutorial-cmd-5" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f conditional-demo.yaml -r environment=prod
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f conditional-demo.yaml -r environment=prod
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -340,9 +384,18 @@ spec:
             expr: "'echo Verifying ' + string(size(_.targets)) + ' deployments...'"
 ```
 
+{{< tabs "actions-tutorial-cmd-6" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f foreach-demo.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f foreach-demo.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -405,9 +458,18 @@ spec:
           command: "echo 'Doing main work...'"
 ```
 
+{{< tabs "actions-tutorial-cmd-7" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f error-handling-demo.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f error-handling-demo.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -462,9 +524,18 @@ spec:
             expr: "'echo Hello, ' + __actions['fetch-user'].results.name + '!'"
 ```
 
+{{< tabs "actions-tutorial-cmd-8" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f results-demo.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f results-demo.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -589,9 +660,18 @@ spec:
           command: "echo 'Retry + timeout succeeded'"
 ```
 
+{{< tabs "actions-tutorial-cmd-9" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f retry-demo.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f retry-demo.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -713,9 +793,18 @@ Both database actions are eligible to run at the same time (neither depends on t
 
 Run it:
 
+{{< tabs "actions-tutorial-cmd-10" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f exclusive-demo.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f exclusive-demo.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Key Rules
 
@@ -733,6 +822,7 @@ scafctl run solution -f exclusive-demo.yaml
 - **Rate-limited APIs**: Prevent overwhelming an external service with concurrent requests
 - **File operations**: Two actions that read/write the same file or directory
 
+> [!NOTE]
 > **Tip:** Prefer `dependsOn` when there is a true data dependency (one action needs the output of another). Use `exclusive` when the dependency is only about shared resource access and the execution order does not matter.
 
 ---
@@ -794,9 +884,18 @@ spec:
           command: "echo Workflow complete, cleanup finished"
 ```
 
+{{< tabs "actions-tutorial-cmd-11" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f finally-demo.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f finally-demo.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -813,8 +912,31 @@ The finally actions run after all main actions complete. If `run-tests` failed, 
 ### Finally Rules
 
 - Finally actions run **after all main actions** (whether they succeeded or failed)
-- Finally actions can only depend on **other finally actions** (not main actions)
+- Finally actions can only use `dependsOn` to reference **other finally actions** — not main actions. Using `dependsOn: [main-action]` inside `finally` is a validation error.
+- To **read results from a main action** inside a finally action, use `__actions.<name>` in `inputs` or `when`. The scheduler does not need a dependency entry because structural ordering already guarantees all main actions finish first. The reference appears in `crossSectionRefs` on the rendered graph for traceability.
 - ForEach is **not allowed** in the finally section
+
+```yaml
+# ✅ Valid: read a main action result from finally via __actions
+finally:
+  upload-logs:
+    provider: exec
+    inputs:
+      command:
+        expr: "'echo upload: test outcome=' + string(__actions.run-tests.status)"
+
+# ✅ Valid: order two finally actions with dependsOn
+  notify:
+    provider: exec
+    dependsOn: [upload-logs]
+    inputs:
+      command: "echo done"
+
+# ❌ Invalid: dependsOn cannot cross sections
+  bad-action:
+    provider: exec
+    dependsOn: [run-tests]   # validation error: run-tests is in workflow.actions
+```
 
 ---
 
@@ -878,6 +1000,8 @@ See [Provider Reference](provider-reference.md) for complete provider documentat
 
 Run a solution (resolvers + actions):
 
+{{< tabs "actions-tutorial-cmd-12" >}}
+{{% tab "Bash" %}}
 ```bash
 # Basic execution
 scafctl run solution -f hello-world.yaml
@@ -903,11 +1027,42 @@ scafctl run resolver -f conditional-demo.yaml -r environment=staging --hide-exec
 # Run specific resolvers for inspection
 scafctl run resolver config -f conditional-demo.yaml -r environment=staging --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Basic execution
+scafctl run solution -f hello-world.yaml
+
+# Run with progress output
+scafctl run solution -f hello-world.yaml --progress
+
+# JSON output (for scripts/pipelines)
+scafctl run solution -f hello-world.yaml -o json
+
+# Override resolver values
+scafctl run solution -f conditional-demo.yaml -r environment=prod
+
+# Limit parallel actions
+scafctl run solution -f foreach-demo.yaml --max-action-concurrency=2
+
+# Dry-run (show plan without executing)
+scafctl run solution -f hello-world.yaml --dry-run
+
+# Run resolvers only (skip actions, for debugging)
+scafctl run resolver -f conditional-demo.yaml -r environment=staging --hide-execution
+
+# Run specific resolvers for inspection
+scafctl run resolver config -f conditional-demo.yaml -r environment=staging --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Render Mode
 
 Generate an executor-ready artifact:
 
+{{< tabs "actions-tutorial-cmd-13" >}}
+{{% tab "Bash" %}}
 ```bash
 # Render to JSON (default)
 scafctl render solution -f hello-world.yaml
@@ -918,11 +1073,27 @@ scafctl render solution -f hello-world.yaml -o yaml
 # Write to file
 scafctl render solution -f hello-world.yaml -o json > graph.json
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Render to JSON (default)
+scafctl render solution -f hello-world.yaml
+
+# Render to YAML
+scafctl render solution -f hello-world.yaml -o yaml
+
+# Write to file
+scafctl render solution -f hello-world.yaml -o json > graph.json
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Working Directory Override
 
 Use `--cwd` (`-C`) to run solutions from a different directory. All file paths in actions (reads, writes, exec commands) resolve against the specified directory:
 
+{{< tabs "actions-tutorial-cmd-14" >}}
+{{% tab "Bash" %}}
 ```bash
 # Run a solution in a different project directory
 scafctl --cwd /path/to/project run solution -f solution.yaml
@@ -930,6 +1101,17 @@ scafctl --cwd /path/to/project run solution -f solution.yaml
 # Combine with --output-dir: resolvers read from --cwd, actions write to --output-dir
 scafctl -C /path/to/project run solution -f solution.yaml --output-dir /tmp/output
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Run a solution in a different project directory
+scafctl --cwd /path/to/project run solution -f solution.yaml
+
+# Combine with --output-dir: resolvers read from --cwd, actions write to --output-dir
+scafctl -C /path/to/project run solution -f solution.yaml --output-dir /tmp/output
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 The rendered output includes:
 - Expanded actions (ForEach iterations)

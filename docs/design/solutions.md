@@ -352,8 +352,10 @@ All dependencies are inferred and validated.
 ### Action Dependencies
 
 - Declared explicitly with `dependsOn`
-- Must form a DAG
+- Inferred automatically from `__actions.<name>` references in inputs and `when` conditions
+- Must form a DAG (within each section)
 - Cycles are rejected
+- `dependsOn` in `workflow.finally` can only reference other finally actions — to read results from a main action, use `__actions.<name>` in inputs or `when` (the reference appears in `crossSectionRefs` on the rendered graph, not in `dependencies`)
 
 Resolvers never depend on actions.
 
@@ -548,8 +550,10 @@ spec:
       actionName:
         # Same fields as actions, except:
         # - No forEach allowed
-        # - Cannot dependsOn regular actions
-        # - Has implicit dependency on all regular actions
+        # - dependsOn can only reference other finally actions
+        # - To read main action results, use __actions.<name> in inputs/when
+        #   (appears in crossSectionRefs on rendered graph, not dependencies)
+        # - All main actions complete before any finally action starts
 ~~~
 
 ### Metadata Fields

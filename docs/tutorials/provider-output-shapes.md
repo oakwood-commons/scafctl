@@ -1,6 +1,6 @@
 ---
 title: "Provider Output Shapes"
-weight: 18
+weight: 74
 ---
 
 # Provider Output Shapes
@@ -11,18 +11,12 @@ Quick reference for what each built-in provider returns in resolver output — t
 
 When a resolver uses a provider, the resolved value becomes accessible to other resolvers. The **output shape** determines what fields are available:
 
-```
-┌─────────────────────┐         ┌──────────────────┐
-│ Resolver: api_data  │         │ Resolver: summary │
-│ provider: http      │  ───►   │ expr: _.api_data  │
-│ output: {           │         │   .body.items     │
-│   body: {...}       │         │   | size()        │
-│   statusCode: 200   │         └──────────────────┘
-│   headers: {...}    │
-│ }                   │
-└─────────────────────┘
+```mermaid
+flowchart LR
+  A["Resolver: api_data<br/>provider: http<br/>output: body, statusCode, headers"] --> B["Resolver: summary<br/>expr: _.api_data<br/>.body.items | size()"]
 ```
 
+> [!NOTE]
 > **Tip:** Use the MCP tool `get_provider_output_shape` to query output schemas programmatically, or `get_provider_schema` for full provider documentation.
 
 ---
@@ -237,6 +231,8 @@ Varies by operation — parse returns structured data, format/validate return st
 
 ### CLI
 
+{{< tabs "provider-output-shapes-cmd-1" >}}
+{{% tab "Bash" %}}
 ```bash
 # View full provider info including output schemas
 scafctl get provider http -o json
@@ -244,6 +240,17 @@ scafctl get provider http -o json
 # View all providers
 scafctl get providers
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# View full provider info including output schemas
+scafctl get provider http -o json
+
+# View all providers
+scafctl get providers
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### MCP Tools
 

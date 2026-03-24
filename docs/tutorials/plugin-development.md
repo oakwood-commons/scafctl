@@ -5,6 +5,7 @@ weight: 130
 
 # Plugin Development Guide
 
+> [!NOTE]
 > **This page is an overview.** Detailed plugin development instructions are now part of each extension type's development guide.
 
 ## What is a Plugin?
@@ -20,14 +21,9 @@ scafctl supports two types of plugins:
 
 ## Architecture
 
-```
-┌─────────────────────┐        gRPC        ┌──────────────────────┐
-│      scafctl        │◄──────────────────►│    Your Plugin       │
-│                     │                     │                      │
-│  - Discovers plugin │                     │  - Implements gRPC   │
-│  - Calls extension  │                     │  - Exposes handlers  │
-│  - Manages lifecycle│                     │  - Handles execution │
-└─────────────────────┘                     └──────────────────────┘
+```mermaid
+flowchart LR
+  A["scafctl<br/>- Discovers plugin<br/>- Calls extension<br/>- Manages lifecycle"] <-- "gRPC" --> B["Your Plugin<br/>- Implements gRPC<br/>- Exposes handlers<br/>- Handles execution"]
 ```
 
 Each plugin binary exposes **one** extension type (provider OR auth handler). The handshake cookie determines which type the host expects.
@@ -49,13 +45,26 @@ scafctl resolves plugins through two mechanisms:
 
 2. **Directory Scanning** — For local development, place plugin binaries in the plugin cache:
 
-   ```bash
+{{< tabs "plugin-development-cmd-1" >}}
+{{% tab "Bash" %}}
+```bash
    mkdir -p "$(scafctl paths cache)/plugins"
    cp my-plugin "$(scafctl paths cache)/plugins/"
-   ```
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+   $pluginDir = "$(scafctl paths cache)/plugins"
+   New-Item -ItemType Directory -Force -Path $pluginDir
+   Copy-Item my-plugin $pluginDir
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## Plugin CLI Commands
 
+{{< tabs "plugin-development-cmd-2" >}}
+{{% tab "Bash" %}}
 ```bash
 # Pre-fetch plugins declared in a solution
 scafctl plugins install -f my-solution.yaml
@@ -66,6 +75,20 @@ scafctl plugins list
 # Push to a remote registry
 scafctl catalog push my-plugin@1.0.0 --catalog ghcr.io/myorg
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Pre-fetch plugins declared in a solution
+scafctl plugins install -f my-solution.yaml
+
+# List cached plugin binaries
+scafctl plugins list
+
+# Push to a remote registry
+scafctl catalog push my-plugin@1.0.0 --catalog ghcr.io/myorg
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## Next Steps
 

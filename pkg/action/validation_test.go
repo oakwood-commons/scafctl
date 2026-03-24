@@ -489,7 +489,7 @@ func TestValidateWorkflow_ActionsReferences(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
-	t.Run("__actions reference without dependsOn", func(t *testing.T) {
+	t.Run("__actions reference without dependsOn is valid (auto-inferred)", func(t *testing.T) {
 		w := &Workflow{
 			Actions: map[string]*Action{
 				"build": {Provider: "shell"},
@@ -502,8 +502,7 @@ func TestValidateWorkflow_ActionsReferences(t *testing.T) {
 			},
 		}
 		err := ValidateWorkflow(w, nil)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "requires it to be listed in dependsOn")
+		assert.NoError(t, err)
 	})
 
 	t.Run("__actions reference to nonexistent action", func(t *testing.T) {
@@ -540,7 +539,7 @@ func TestValidateWorkflow_ActionsReferences(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
-	t.Run("finally __actions reference to finally requires dependsOn", func(t *testing.T) {
+	t.Run("finally __actions reference to finally without dependsOn is valid (auto-inferred)", func(t *testing.T) {
 		w := &Workflow{
 			Finally: map[string]*Action{
 				"cleanup1": {Provider: "shell"},
@@ -553,11 +552,10 @@ func TestValidateWorkflow_ActionsReferences(t *testing.T) {
 			},
 		}
 		err := ValidateWorkflow(w, nil)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "requires it to be listed in dependsOn")
+		assert.NoError(t, err)
 	})
 
-	t.Run("template __actions reference", func(t *testing.T) {
+	t.Run("template __actions reference without dependsOn is valid (auto-inferred)", func(t *testing.T) {
 		w := &Workflow{
 			Actions: map[string]*Action{
 				"build": {Provider: "shell"},
@@ -570,8 +568,83 @@ func TestValidateWorkflow_ActionsReferences(t *testing.T) {
 			},
 		}
 		err := ValidateWorkflow(w, nil)
+		assert.NoError(t, err)
+	})
+
+	t.Run("self-reference in actions section is rejected", func(t *testing.T) {
+		w := &Workflow{
+			Actions: map[string]*Action{
+				"deploy": {
+					Provider: "shell",
+					Inputs: map[string]*spec.ValueRef{
+						"status": {Expr: celExpr("__actions.deploy.results.status")},
+					},
+				},
+			},
+		}
+		err := ValidateWorkflow(w, nil)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "requires it to be listed in dependsOn")
+		assert.Contains(t, err.Error(), "cannot reference itself")
+	})
+
+	t.Run("self-reference in finally section is rejected", func(t *testing.T) {
+		w := &Workflow{
+			Finally: map[string]*Action{
+				"cleanup": {
+					Provider: "shell",
+					Inputs: map[string]*spec.ValueRef{
+						"status": {Expr: celExpr("__actions.cleanup.results.status")},
+					},
+				},
+			},
+		}
+		err := ValidateWorkflow(w, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "cannot reference itself")
+	})
+
+	t.Run("finally __actions reference to nonexistent action is rejected", func(t *testing.T) {
+		w := &Workflow{
+			Finally: map[string]*Action{
+				"cleanup": {
+					Provider: "shell",
+					Inputs: map[string]*spec.ValueRef{
+						"status": {Expr: celExpr("__actions.nonexistent.results.status")},
+					},
+				},
+			},
+		}
+		err := ValidateWorkflow(w, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "action not found")
+	})
+
+	t.Run("self-reference via when condition in actions section is rejected", func(t *testing.T) {
+		w := &Workflow{
+			Actions: map[string]*Action{
+				"deploy": {
+					Provider: "shell",
+					When:     &spec.Condition{Expr: celExpr("__actions.deploy.results.status == 'success'")},
+				},
+			},
+		}
+		err := ValidateWorkflow(w, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "cannot reference itself")
+	})
+
+	t.Run("when condition referencing another valid action is accepted", func(t *testing.T) {
+		w := &Workflow{
+			Actions: map[string]*Action{
+				"build": {Provider: "shell"},
+				"deploy": {
+					Provider: "shell",
+					When:     &spec.Condition{Expr: celExpr("__actions.build.results.status == 'success'")},
+				},
+			},
+		}
+		err := ValidateWorkflow(w, nil)
+		assert.NoError(t, err)
 	})
 }
 
@@ -840,6 +913,46 @@ func TestParseActionsRefsFromString(t *testing.T) {
 			name:     "no __actions reference",
 			input:    "some.other.path",
 			expected: []string{},
+		},
+		{
+			name:     "reference inside double-quoted string is ignored",
+			input:    `"__actions.build.results are ready"`,
+			expected: []string{},
+		},
+		{
+			name:     "reference inside single-quoted string is ignored",
+			input:    `'__actions.build.results are ready'`,
+			expected: []string{},
+		},
+		{
+			name:     "real ref after quoted false-positive",
+			input:    `"ignore __actions.fake.x" + __actions.real.results`,
+			expected: []string{"real"},
+		},
+		{
+			name:     "mixed real and quoted refs",
+			input:    `__actions.producer.results.value > 0 ? "__actions.commented.out" : __actions.consumer.inputs.x`,
+			expected: []string{"producer", "consumer"},
+		},
+		{
+			name:     "backslash-escaped quote does not end string",
+			input:    `"prefix \"__actions.fake.x\" end" + __actions.real.results`,
+			expected: []string{"real"},
+		},
+		{
+			name:     "reference inside backtick string is ignored",
+			input:    "`__actions.build.results are ready`",
+			expected: []string{},
+		},
+		{
+			name:     "real ref after backtick false-positive",
+			input:    "`ignore __actions.fake.x` + __actions.real.results",
+			expected: []string{"real"},
+		},
+		{
+			name:     "backslash inside backtick does not escape",
+			input:    "`test \\__actions.fake.x` + __actions.real.results",
+			expected: []string{"real"},
 		},
 	}
 

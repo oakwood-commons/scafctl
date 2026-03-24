@@ -61,9 +61,18 @@ spec:
 
 Run it:
 
+{{< tabs "hcl-provider-tutorial-cmd-1" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f parse-hcl.yaml -o json
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f parse-hcl.yaml -o json
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Expected output:
 
@@ -958,6 +967,8 @@ The HCL provider extracts the following Terraform/OpenTofu block types:
 
 You can also run the HCL provider directly from the command line:
 
+{{< tabs "hcl-provider-tutorial-cmd-2" >}}
+{{% tab "Bash" %}}
 ```bash
 # Parse a file
 scafctl run provider hcl path=./main.tf -o json
@@ -980,22 +991,50 @@ scafctl run provider hcl operation=validate path=./main.tf -o json
 # Validate a directory
 scafctl run provider hcl operation=validate dir=./terraform -o json
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Parse a file
+scafctl run provider hcl path=./main.tf -o json
+
+# Parse a directory
+scafctl run provider hcl dir=./terraform -o json
+
+# Format inline HCL
+scafctl run provider hcl operation=format 'content=variable "x" { type=string }' -o json
+
+# Format a file
+scafctl run provider hcl operation=format path=./main.tf -o json
+
+# Format all files in a directory
+scafctl run provider hcl operation=format dir=./terraform -o json
+
+# Validate a file
+scafctl run provider hcl operation=validate path=./main.tf -o json
+
+# Validate a directory
+scafctl run provider hcl operation=validate dir=./terraform -o json
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 {{< tabs "hcl-file-input" >}}
-{{< tab "Bash" >}}
+{{% tab "Bash" %}}
 ```bash
 # Use a pre-built example input file
 scafctl run provider hcl --input @examples/providers/hcl-format.yaml -o json
 ```
-{{< /tab >}}
-{{< tab "PowerShell" >}}
+{{% /tab %}}
+{{% tab "PowerShell" %}}
 ```powershell
 # Wrap @file in single quotes to avoid splatting operator
 scafctl run provider hcl --input '@examples/providers/hcl-format.yaml' -o json
 ```
-{{< /tab >}}
+{{% /tab %}}
 {{< /tabs >}}
 
+{{< tabs "hcl-provider-tutorial-cmd-3" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run provider hcl path=./main.tf --dry-run
 
@@ -1005,6 +1044,19 @@ scafctl run provider hcl operation=format path=./main.tf --dry-run
 # Dry run (validate)
 scafctl run provider hcl operation=validate path=./main.tf --dry-run
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run provider hcl path=./main.tf --dry-run
+
+# Dry run (format)
+scafctl run provider hcl operation=format path=./main.tf --dry-run
+
+# Dry run (validate)
+scafctl run provider hcl operation=validate path=./main.tf --dry-run
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Dry-run returns an empty structure without reading or modifying anything. For `parse`:
 

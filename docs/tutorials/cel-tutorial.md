@@ -16,15 +16,14 @@ CEL is used throughout scafctl for dynamic evaluation:
 - **Conditions** — Conditionally skip actions with `when`
 - **forEach** — Generate iteration lists dynamically
 
-```
-┌──────────────┐         ┌──────────────┐         ┌──────────────┐
-│  Resolver    │  ─ _ ─► │     CEL      │  ────►  │   Result     │
-│  Data        │         │  Expression  │         │   Value      │
-└──────────────┘         └──────────────┘         └──────────────┘
+```mermaid
+flowchart LR
+  A["Resolver<br/>Data"] -- "_ namespace" --> B["CEL<br/>Expression"] --> C["Result<br/>Value"]
 ```
 
 **Key principle:** In CEL expressions, all resolved values are available under the `_` namespace (e.g., `_.appName`, `_.config.port`).
 
+> [!NOTE]
 > **Hands-on:** Every section in this tutorial links to a runnable example file. Look for the **▶ Try it** callouts to run the examples yourself.
 
 ## Quick Start
@@ -53,9 +52,18 @@ spec:
 
 Run it:
 
+{{< tabs "cel-tutorial-cmd-1" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f cel-basics.yaml -o json --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f cel-basics.yaml -o json --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -65,12 +73,16 @@ Output:
 }
 ```
 
+> [!NOTE]
 > **Tip**: `run resolver -o json` includes `__execution` metadata by default. Use `--hide-execution` for cleaner output. All examples in this tutorial use `--hide-execution`. See the [Run Resolver Tutorial](run-resolver-tutorial.md) for details.
 
-> **▶ Try it:** The complete example with more expressions is at [cel-basics.yaml](../../examples/resolvers/cel-basics.yaml):
-> ```bash
-> scafctl run resolver -f examples/resolvers/cel-basics.yaml -o json --hide-execution
-> ```
+{{% details "▶ Try it" %}}
+The complete example with more expressions is at [cel-basics.yaml](../../examples/resolvers/cel-basics.yaml)
+
+```bash
+scafctl run resolver -f examples/resolvers/cel-basics.yaml -o json --hide-execution
+```
+{{% /details %}}
 
 String literals use single quotes inside the expression. Numbers, booleans, and lists are written normally:
 
@@ -122,9 +134,18 @@ spec:
 
 Run it:
 
+{{< tabs "cel-tutorial-cmd-2" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run resolver -f cel-refs.yaml -o json --hide-execution
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f cel-refs.yaml -o json --hide-execution
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -136,7 +157,10 @@ Output:
 }
 ```
 
-> **▶ Try it:** This example is also in [cel-basics.yaml](../../examples/resolvers/cel-basics.yaml) — it includes operators, string operations, list comprehensions, and more.
+{{% details "▶ Try it" %}}
+This example is also in [cel-basics.yaml](../../examples/resolvers/cel-basics.yaml) — it includes operators, string operations, list comprehensions, and more.
+
+{{% /details %}}
 
 ### 3. Using `expr` in Inputs
 
@@ -265,10 +289,13 @@ size("hello")                         // 5
 "Hello %s, you are %d".format(["Alice", 30])  // "Hello Alice, you are 30"
 ```
 
-> **▶ Try it:** All the operators, string, list, and map operations above are runnable in [cel-builtins.yaml](../../examples/resolvers/cel-builtins.yaml):
-> ```bash
-> scafctl run resolver -f examples/resolvers/cel-builtins.yaml -o json --hide-execution
-> ```
+{{% details "▶ Try it" %}}
+All the operators, string, list, and map operations above are runnable in [cel-builtins.yaml](../../examples/resolvers/cel-builtins.yaml)
+
+```bash
+scafctl run resolver -f examples/resolvers/cel-builtins.yaml -o json --hide-execution
+```
+{{% /details %}}
 
 ---
 
@@ -276,10 +303,13 @@ size("hello")                         // 5
 
 scafctl extends CEL with project-specific functions for arrays, maps, strings, regex, filepath, GUID, sorting, time, marshalling, and debugging.
 
-> **▶ Try it:** All custom extension functions are demonstrated in a single runnable file — [cel-extensions.yaml](../../examples/resolvers/cel-extensions.yaml):
-> ```bash
-> scafctl run resolver -f examples/resolvers/cel-extensions.yaml -o json --hide-execution
-> ```
+{{% details "▶ Try it" %}}
+All custom extension functions are demonstrated in a single runnable file — [cel-extensions.yaml](../../examples/resolvers/cel-extensions.yaml)
+
+```bash
+scafctl run resolver -f examples/resolvers/cel-extensions.yaml -o json --hide-execution
+```
+{{% /details %}}
 
 ### Arrays
 
@@ -783,19 +813,25 @@ cel.bind(base, _.host + ":" + string(_.port),
 )
 ```
 
-> **▶ Try it:** Encoders, math, optionals, sets, and bindings are all runnable in [cel-builtins.yaml](../../examples/resolvers/cel-builtins.yaml):
-> ```bash
-> scafctl run resolver -f examples/resolvers/cel-builtins.yaml -o json --hide-execution
-> ```
+{{% details "▶ Try it" %}}
+Encoders, math, optionals, sets, and bindings are all runnable in [cel-builtins.yaml](../../examples/resolvers/cel-builtins.yaml)
+
+```bash
+scafctl run resolver -f examples/resolvers/cel-builtins.yaml -o json --hide-execution
+```
+{{% /details %}}
 
 ---
 
 ## Common Patterns
 
-> **▶ Try it:** All the patterns below are combined into one runnable file — [cel-common-patterns.yaml](../../examples/resolvers/cel-common-patterns.yaml):
-> ```bash
-> scafctl run resolver -f examples/resolvers/cel-common-patterns.yaml -o json --hide-execution
-> ```
+{{% details "▶ Try it" %}}
+All the patterns below are combined into one runnable file — [cel-common-patterns.yaml](../../examples/resolvers/cel-common-patterns.yaml)
+
+```bash
+scafctl run resolver -f examples/resolvers/cel-common-patterns.yaml -o json --hide-execution
+```
+{{% /details %}}
 
 ### Conditional Configuration
 
@@ -898,10 +934,13 @@ deployments:
             })
 ```
 
-> **▶ Try it:** For more data transformation patterns (filtering, aggregation, enrichment, serialization), see [cel-transforms.yaml](../../examples/resolvers/cel-transforms.yaml):
-> ```bash
-> scafctl run resolver -f examples/resolvers/cel-transforms.yaml -o json --hide-execution
-> ```
+{{% details "▶ Try it" %}}
+For more data transformation patterns (filtering, aggregation, enrichment, serialization), see [cel-transforms.yaml](../../examples/resolvers/cel-transforms.yaml)
+
+```bash
+scafctl run resolver -f examples/resolvers/cel-transforms.yaml -o json --hide-execution
+```
+{{% /details %}}
 
 ## Function Reference
 

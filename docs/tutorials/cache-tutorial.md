@@ -31,9 +31,18 @@ The cache uses XDG Base Directory paths:
 
 You can view actual paths on your system with:
 
+{{< tabs "cache-tutorial-cmd-1" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl config paths
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl config paths
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## Viewing Cache Information
 
@@ -41,9 +50,18 @@ scafctl config paths
 
 See how much disk space the cache is using:
 
+{{< tabs "cache-tutorial-cmd-2" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl cache info
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl cache info
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 ```
@@ -59,9 +77,18 @@ Total: 2.4 MB (157 files)
 
 Get cache info as JSON for scripting:
 
+{{< tabs "cache-tutorial-cmd-3" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl cache info -o json
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl cache info -o json
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 ```json
@@ -96,9 +123,18 @@ Output:
 
 Remove all cached content:
 
+{{< tabs "cache-tutorial-cmd-4" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl cache clear
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl cache clear
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 You'll be prompted to confirm:
 ```
@@ -116,9 +152,18 @@ Output after confirmation:
 
 Use `--force` to skip the confirmation prompt:
 
+{{< tabs "cache-tutorial-cmd-5" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl cache clear --force
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl cache clear --force
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 This is useful in scripts or CI/CD pipelines.
 
@@ -126,6 +171,8 @@ This is useful in scripts or CI/CD pipelines.
 
 Clear only a specific type of cache using `--kind`:
 
+{{< tabs "cache-tutorial-cmd-6" >}}
+{{% tab "Bash" %}}
 ```bash
 # Clear only HTTP cache
 scafctl cache clear --kind http
@@ -136,11 +183,27 @@ scafctl cache clear --kind build
 # Clear all caches (default)
 scafctl cache clear --kind all
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Clear only HTTP cache
+scafctl cache clear --kind http
+
+# Clear only build cache
+scafctl cache clear --kind build
+
+# Clear all caches (default)
+scafctl cache clear --kind all
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Clear by Pattern
 
 Clear cache entries matching a specific pattern:
 
+{{< tabs "cache-tutorial-cmd-7" >}}
+{{% tab "Bash" %}}
 ```bash
 # Clear all entries with "github" in the name
 scafctl cache clear --name "*github*"
@@ -148,6 +211,17 @@ scafctl cache clear --name "*github*"
 # Clear entries starting with "api"
 scafctl cache clear --name "api*"
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Clear all entries with "github" in the name
+scafctl cache clear --name "*github*"
+
+# Clear entries starting with "api"
+scafctl cache clear --name "api*"
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 The pattern supports glob wildcards (`*`, `?`).
 
@@ -155,9 +229,18 @@ The pattern supports glob wildcards (`*`, `?`).
 
 Get structured output for scripting:
 
+{{< tabs "cache-tutorial-cmd-8" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl cache clear --force -o json
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl cache clear --force -o json
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 ```json
@@ -175,9 +258,18 @@ Output:
 
 If an HTTP provider is returning outdated data, clear the HTTP cache:
 
+{{< tabs "cache-tutorial-cmd-9" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl cache clear --kind http --force
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl cache clear --kind http --force
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Then re-run your solution to fetch fresh data.
 
@@ -185,6 +277,8 @@ Then re-run your solution to fetch fresh data.
 
 Check cache size and clear if needed:
 
+{{< tabs "cache-tutorial-cmd-10" >}}
+{{% tab "Bash" %}}
 ```bash
 # Check size
 scafctl cache info
@@ -192,6 +286,17 @@ scafctl cache info
 # Clear if too large
 scafctl cache clear --force
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Check size
+scafctl cache info
+
+# Clear if too large
+scafctl cache clear --force
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Automated Cleanup in CI/CD
 
@@ -210,6 +315,8 @@ Add cache cleanup to your CI/CD pipeline:
 
 Before running a critical deployment, ensure fresh data:
 
+{{< tabs "cache-tutorial-cmd-11" >}}
+{{% tab "Bash" %}}
 ```bash
 #!/bin/bash
 # deploy.sh
@@ -220,6 +327,20 @@ scafctl cache clear --force
 # Run deployment
 scafctl run solution deploy -r env=production
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# PowerShell equivalent
+# deploy.sh
+
+# Clear all caches for fresh data
+scafctl cache clear --force
+
+# Run deployment
+scafctl run solution deploy -r env=production
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## Command Reference
 
@@ -254,6 +375,8 @@ The build cache enables incremental builds by fingerprinting all build inputs (s
 
 ### Controlling Build Cache
 
+{{< tabs "cache-tutorial-cmd-12" >}}
+{{% tab "Bash" %}}
 ```bash
 # Build with cache (default)
 scafctl build solution my-solution.yaml
@@ -264,6 +387,20 @@ scafctl build solution my-solution.yaml --no-cache
 # Clear build cache
 scafctl cache clear --kind build --force
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Build with cache (default)
+scafctl build solution my-solution.yaml
+
+# Force a full rebuild, bypassing cache
+scafctl build solution my-solution.yaml --no-cache
+
+# Clear build cache
+scafctl cache clear --kind build --force
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Configuration
 
@@ -279,6 +416,8 @@ build:
 
 Set configuration via CLI:
 
+{{< tabs "cache-tutorial-cmd-13" >}}
+{{% tab "Bash" %}}
 ```bash
 # Disable build cache globally
 scafctl config set build.enableCache false
@@ -286,6 +425,17 @@ scafctl config set build.enableCache false
 # Disable remote artifact auto-caching
 scafctl config set build.autoCacheRemoteArtifacts false
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Disable build cache globally
+scafctl config set build.enableCache false
+
+# Disable remote artifact auto-caching
+scafctl config set build.autoCacheRemoteArtifacts false
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## Artifact Cache TTL
 
@@ -319,6 +469,8 @@ Common TTL values:
 
 Set via CLI:
 
+{{< tabs "cache-tutorial-cmd-14" >}}
+{{% tab "Bash" %}}
 ```bash
 # Set a 1-hour TTL for artifact cache
 scafctl config set catalog.cacheTTL 1h
@@ -326,6 +478,17 @@ scafctl config set catalog.cacheTTL 1h
 # Disable TTL (never expire)
 scafctl config set catalog.cacheTTL 0
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Set a 1-hour TTL for artifact cache
+scafctl config set catalog.cacheTTL 1h
+
+# Disable TTL (never expire)
+scafctl config set catalog.cacheTTL 0
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### When to Use TTL
 
@@ -338,9 +501,18 @@ scafctl config set catalog.cacheTTL 0
 
 Even with a TTL configured, expired artifacts remain on disk until replaced. To reclaim disk space:
 
+{{< tabs "cache-tutorial-cmd-15" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl cache clear --kind build --force
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl cache clear --kind build --force
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## Next Steps
 

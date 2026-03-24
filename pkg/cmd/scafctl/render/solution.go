@@ -61,7 +61,6 @@ type SolutionOptions struct {
 	NoCache         bool
 
 	// Mode flags (mutually exclusive)
-	Graph        bool   // --graph: Show resolver dependency graph
 	ActionGraph  bool   // --action-graph: Show action dependency graph
 	GraphFormat  string // --graph-format: Graph format (ascii, dot, mermaid, json)
 	Snapshot     bool   // --snapshot: Save execution snapshot
@@ -87,29 +86,20 @@ func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 	cCmd := &cobra.Command{
 		Use:     "solution",
 		Aliases: []string{"sol", "s", "solutions"},
-		Short:   "Render a solution's action graph, dependency graph, or snapshot",
-		Long: `Render a solution as an executor-ready action graph, dependency graph, or snapshot.
+		Short:   "Render a solution's action graph or snapshot",
+		Long: `Render a solution as an executor-ready action graph or snapshot.
+
+NOTE: Resolver dependency graph visualization has moved to 'scafctl run resolver --graph'.
 
 DEFAULT MODE (action graph):
   Resolves all defined resolvers, then builds the action graph with materialized
   inputs where possible. Expressions referencing __actions are preserved as
   deferred expressions for runtime evaluation.
 
-GRAPH MODE (--graph):
-  Visualizes the resolver dependency graph showing execution phases, parallelization
-  opportunities, and dependencies. Useful for understanding resolver execution order.
-  
-  Supported formats:
-    ascii   - Human-readable ASCII art (default)
-    dot     - Graphviz DOT format (pipe to 'dot' command)
-    mermaid - Mermaid diagram syntax
-    json    - Machine-readable JSON format
-
 ACTION GRAPH MODE (--action-graph):
   Visualizes the action dependency graph showing execution phases, parallel actions,
   finally blocks, and dependencies. Useful for understanding action execution order.
-  
-  Supported formats are the same as --graph.
+  Use --graph-format to control the output format (ascii, dot, mermaid, json).
 
 SNAPSHOT MODE (--snapshot):
   Executes resolvers and saves the execution state to a snapshot file for
@@ -125,15 +115,6 @@ Examples:
 
   # Render action graph as YAML
   scafctl render solution -f ./solution.yaml -o yaml
-
-  # Show resolver dependency graph (ASCII)
-  scafctl render solution -f ./solution.yaml --graph
-
-  # Generate PNG graph using Graphviz
-  scafctl render solution -f ./solution.yaml --graph --graph-format=dot | dot -Tpng > graph.png
-
-  # Generate Mermaid diagram
-  scafctl render solution -f ./solution.yaml --graph --graph-format=mermaid
 
   # Show action dependency graph (ASCII)
   scafctl render solution -f ./solution.yaml --action-graph
@@ -181,9 +162,6 @@ Examples:
 
 			// Validate mutually exclusive modes
 			modeCount := 0
-			if options.Graph {
-				modeCount++
-			}
 			if options.ActionGraph {
 				modeCount++
 			}
@@ -191,7 +169,7 @@ Examples:
 				modeCount++
 			}
 			if modeCount > 1 {
-				err := fmt.Errorf("--graph, --action-graph, and --snapshot are mutually exclusive")
+				err := fmt.Errorf("--action-graph and --snapshot are mutually exclusive")
 				writeSolutionError(options, err.Error())
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
@@ -204,7 +182,17 @@ Examples:
 			}
 
 			// Validate output format
-			if options.Output != "" && !options.Graph && !options.ActionGraph {
+			if options.ActionGraph && options.flagsChanged["output"] {
+				err := fmt.Errorf("--output is not applicable with --action-graph; use --graph-format to control the output format")
+				writeSolutionError(options, err.Error())
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
+			if options.ActionGraph && options.flagsChanged["output-file"] {
+				err := fmt.Errorf("--output-file is not applicable with --action-graph; graph output is written directly to stdout")
+				writeSolutionError(options, err.Error())
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
+			if options.Output != "" && !options.ActionGraph {
 				err = output.ValidateOutputType(options.Output, ValidOutputTypes)
 				if err != nil {
 					writeSolutionError(options, err.Error())
@@ -229,7 +217,6 @@ Examples:
 	cCmd.Flags().BoolVar(&options.NoCache, "no-cache", false, "Bypass the artifact cache and fetch directly from the catalog")
 
 	// Graph mode flags
-	cCmd.Flags().BoolVar(&options.Graph, "graph", false, "Show resolver dependency graph instead of action graph")
 	cCmd.Flags().BoolVar(&options.ActionGraph, "action-graph", false, "Show action dependency graph (ASCII, DOT, Mermaid, JSON)")
 	cCmd.Flags().StringVar(&options.GraphFormat, "graph-format", "ascii", "Graph output format: ascii, dot, mermaid, json")
 
@@ -255,9 +242,6 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	lgr := logger.FromContext(ctx)
 
 	// Route to appropriate mode
-	if o.Graph {
-		return o.runGraph(ctx, *lgr)
-	}
 	if o.ActionGraph {
 		return o.runActionGraphVisualization(ctx, *lgr)
 	}
@@ -346,40 +330,6 @@ func (o *SolutionOptions) runActionGraph(ctx context.Context, lgr logr.Logger) e
 
 	// Write output
 	return o.writeOutput(ctx, rendered)
-}
-
-// runGraph renders the resolver dependency graph (--graph mode)
-func (o *SolutionOptions) runGraph(ctx context.Context, lgr logr.Logger) error {
-	lgr.V(1).Info("rendering dependency graph",
-		"file", o.File,
-		"format", o.GraphFormat)
-
-	// Load the solution
-	sol, err := o.loadSolution(ctx)
-	if err != nil {
-		return o.exitWithCode(err, exitcode.FileNotFound)
-	}
-
-	if !sol.Spec.HasResolvers() {
-		return o.exitWithCode(fmt.Errorf("solution does not define any resolvers"), exitcode.ValidationFailed)
-	}
-
-	resolvers := sol.Spec.ResolversToSlice()
-	lgr.V(1).Info("building dependency graph", "resolvers", len(resolvers))
-
-	// Build dependency graph
-	graph, err := resolver.BuildGraph(resolvers, nil)
-	if err != nil {
-		return o.exitWithCode(fmt.Errorf("failed to build dependency graph: %w", err), exitcode.RenderFailed)
-	}
-
-	lgr.V(1).Info("graph built successfully",
-		"nodes", len(graph.Nodes),
-		"phases", len(graph.Phases),
-		"maxParallelism", graph.Stats.MaxParallelism)
-
-	// Render the graph
-	return o.renderGraph(graph, graph)
 }
 
 // runActionGraphVisualization renders the action graph visualization (--action-graph mode)

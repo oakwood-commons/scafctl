@@ -26,7 +26,7 @@ scafctl <verb> <kind> <name[@version(or constraint)]> [flags]
 |---------|--------|-------|
 | `run solution` | ✅ Implemented | Requires workflow (errors if no workflow defined; use `run resolver` for resolver-only) |
 | `run resolver` | ✅ Implemented | Resolver-only execution for debugging and inspection |
-| `render solution` | ✅ Implemented | Includes graph and snapshot modes |
+| `render solution` | ✅ Implemented | Includes action-graph and snapshot modes |
 | `get solution/provider/resolver` | ✅ Implemented | |
 | `explain solution/provider` | ✅ Implemented | |
 | `config *` | ✅ Implemented | view, get, set, unset, add-catalog, remove-catalog, use-catalog, init, schema, validate |
@@ -34,7 +34,7 @@ scafctl <verb> <kind> <name[@version(or constraint)]> [flags]
 | `solution diff` | ✅ Implemented | Structural comparison of two solution files |
 | `secrets *` | ✅ Implemented | list, get, set, delete, exists, export, import, rotate |
 | `auth *` | ✅ Implemented | login, logout, status, token |
-| `resolver graph` | ❌ Removed | Use `render solution --graph` or `run resolver --graph` instead |
+| `resolver graph` | ❌ Removed | Use `run resolver --graph` instead |
 | `build solution` | ✅ Implemented | Catalog feature |
 | `catalog list/inspect/delete/prune` | ✅ Implemented | Catalog management |
 | `catalog save/load` | ✅ Implemented | Offline distribution |
@@ -337,24 +337,6 @@ scafctl render solution example \
 ### Render Options
 
 The `render` command supports additional modes for debugging and testing:
-
-#### Dependency Graph
-
-Visualize resolver dependencies without executing:
-
-~~~bash
-# ASCII art (default)
-scafctl render solution -f solution.yaml --graph
-
-# Graphviz DOT format (pipe to dot command)
-scafctl render solution -f solution.yaml --graph --graph-format dot | dot -Tpng > graph.png
-
-# Mermaid diagram syntax
-scafctl render solution -f solution.yaml --graph --graph-format mermaid
-
-# JSON for automation
-scafctl render solution -f solution.yaml --graph --graph-format json
-~~~
 
 #### Execution Snapshots
 
@@ -749,7 +731,7 @@ scafctl auth logout entra
 ## Resolver Commands
 
 > **Note**: The standalone `scafctl resolver graph` command has been removed.
-> Use `scafctl render solution --graph` or `scafctl run resolver --graph` instead.
+> Use `scafctl run resolver --graph` instead.
 
 ### Running Resolvers
 

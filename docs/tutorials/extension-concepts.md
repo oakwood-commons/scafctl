@@ -22,19 +22,10 @@ This page defines the core terminology and links to the detailed development gui
 
 ## Extension Matrix
 
-```
-                    ┌──────────────────────┬──────────────────────┐
-                    │      Builtin         │       Plugin         │
-┌───────────────────┼──────────────────────┼──────────────────────┤
-│                   │ Compiled into scafctl│ Standalone gRPC      │
-│   Provider        │ 16 built-in providers│ binary; auto-fetched │
-│                   │ (http, cel, exec...) │ from OCI catalogs    │
-├───────────────────┼──────────────────────┼──────────────────────┤
-│                   │ Compiled into scafctl│ Standalone gRPC      │
-│   Auth Handler    │ 3 built-in handlers  │ binary; auto-fetched │
-│                   │ (entra, github, gcp) │ from OCI catalogs    │
-└───────────────────┴──────────────────────┴──────────────────────┘
-```
+| | **Builtin** | **Plugin** |
+|---|---|---|
+| **Provider** | Compiled into scafctl; 16 built-in providers (http, cel, exec...) | Standalone gRPC binary; auto-fetched from OCI catalogs |
+| **Auth Handler** | Compiled into scafctl; 3 built-in handlers (entra, github, gcp) | Standalone gRPC binary; auto-fetched from OCI catalogs |
 
 ## When to Choose Builtin vs Plugin
 

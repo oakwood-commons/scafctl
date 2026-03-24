@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -63,18 +65,6 @@ func TestCommandSolution(t *testing.T) {
 				require.NotNil(t, flag)
 				assert.Equal(t, "o", flag.Shorthand)
 				assert.Equal(t, "json", flag.DefValue)
-			},
-		},
-		{
-			name: "has_graph_flag",
-			validate: func(t *testing.T) {
-				ioStreams, _, _ := terminal.NewTestIOStreams()
-				cliParams := &settings.Run{}
-				cmd := CommandSolution(cliParams, ioStreams, "render")
-
-				flag := cmd.Flags().Lookup("graph")
-				require.NotNil(t, flag)
-				assert.Equal(t, "false", flag.DefValue)
 			},
 		},
 		{
@@ -476,4 +466,56 @@ func TestSolutionOptions_TimeoutDefaults(t *testing.T) {
 	phaseTimeout := cmd.Flags().Lookup("phase-timeout")
 	require.NotNil(t, phaseTimeout)
 	assert.Equal(t, "5m0s", phaseTimeout.DefValue)
+}
+
+// TestSolutionOptions_ModeValidation exercises the three validation error paths
+// in the RunE callback: mutual exclusion, snapshot-file requirement, and
+// --output incompatibility with --action-graph.
+func TestSolutionOptions_ModeValidation(t *testing.T) {
+	// Path to a small real solution file so the command has a valid -f value.
+	// The validation errors are returned before solution loading occurs.
+	solutionFile := "../../../../tests/integration/solutions/actions/auto-deps/solution.yaml"
+	if _, err := os.Stat(solutionFile); err != nil {
+		t.Fatalf("test fixture not found at %s: %v", solutionFile, err)
+	}
+
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{
+			name:    "action-graph and snapshot are mutually exclusive",
+			args:    []string{"-f", solutionFile, "--action-graph", "--snapshot", "--snapshot-file=" + filepath.Join(t.TempDir(), "snap.json")},
+			wantErr: "--action-graph and --snapshot are mutually exclusive",
+		},
+		{
+			name:    "snapshot without snapshot-file is rejected",
+			args:    []string{"-f", solutionFile, "--snapshot"},
+			wantErr: "--snapshot-file is required when using --snapshot",
+		},
+		{
+			name:    "output flag incompatible with action-graph",
+			args:    []string{"-f", solutionFile, "--action-graph", "--output=yaml"},
+			wantErr: "--output is not applicable with --action-graph",
+		},
+		{
+			name:    "output-file flag incompatible with action-graph",
+			args:    []string{"-f", solutionFile, "--action-graph", "--output-file=out.json"},
+			wantErr: "--output-file is not applicable with --action-graph",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ioStreams, _, _ := terminal.NewTestIOStreams()
+			cliParams := &settings.Run{}
+			cmd := CommandSolution(cliParams, ioStreams, "render")
+			cmd.SetArgs(tc.args)
+
+			err := cmd.Execute()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
 }

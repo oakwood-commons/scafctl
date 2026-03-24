@@ -476,3 +476,126 @@ func TestGraphVisualization_ComplexGraph(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, strings.HasPrefix(buf.String(), "graph LR"))
 }
+
+func TestBuildVisualization_CrossSectionEdges(t *testing.T) {
+	graph := &Graph{
+		Actions: map[string]*ExpandedAction{
+			"build": {ExpandedName: "build", Dependencies: nil, Section: "actions"},
+			"test":  {ExpandedName: "test", Dependencies: []string{"build"}, Section: "actions"},
+			"report": {
+				ExpandedName:     "report",
+				Dependencies:     []string{},
+				CrossSectionRefs: []string{"test"},
+				Section:          "finally",
+			},
+		},
+		ExecutionOrder: [][]string{{"build"}, {"test"}},
+		FinallyOrder:   [][]string{{"report"}},
+	}
+
+	viz := BuildVisualization(graph)
+
+	// Same-section edges only
+	require.Len(t, viz.Edges, 1)
+	assert.Equal(t, "test", viz.Edges[0].From)
+	assert.Equal(t, "build", viz.Edges[0].To)
+
+	// Cross-section edges
+	require.Len(t, viz.CrossSectionEdges, 1)
+	assert.Equal(t, "report", viz.CrossSectionEdges[0].From)
+	assert.Equal(t, "test", viz.CrossSectionEdges[0].To)
+	assert.Equal(t, "reads", viz.CrossSectionEdges[0].Label)
+	assert.True(t, viz.CrossSectionEdges[0].CrossSection)
+
+	// Stats
+	assert.InDelta(t, 1.0/3.0, viz.Stats.AvgDependencies, 0.01) // 1 dep / 3 actions
+	assert.InDelta(t, 1.0/3.0, viz.Stats.AvgCrossSectionRefs, 0.01)
+}
+
+func TestGraphVisualization_RenderASCII_CrossSectionRefs(t *testing.T) {
+	graph := &Graph{
+		Actions: map[string]*ExpandedAction{
+			"build": {ExpandedName: "build", Section: "actions"},
+			"report": {
+				ExpandedName:     "report",
+				CrossSectionRefs: []string{"build"},
+				Section:          "finally",
+			},
+		},
+		ExecutionOrder: [][]string{{"build"}},
+		FinallyOrder:   [][]string{{"report"}},
+	}
+
+	viz := BuildVisualization(graph)
+	var buf bytes.Buffer
+	err := viz.RenderASCII(&buf)
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.Contains(t, output, "reads from:")
+	assert.Contains(t, output, "~ build")
+}
+
+func TestGraphVisualization_RenderDOT_CrossSectionRefs(t *testing.T) {
+	graph := &Graph{
+		Actions: map[string]*ExpandedAction{
+			"build": {ExpandedName: "build", Section: "actions"},
+			"report": {
+				ExpandedName:     "report",
+				CrossSectionRefs: []string{"build"},
+				Section:          "finally",
+			},
+		},
+		ExecutionOrder: [][]string{{"build"}},
+		FinallyOrder:   [][]string{{"report"}},
+	}
+
+	viz := BuildVisualization(graph)
+	var buf bytes.Buffer
+	err := viz.RenderDOT(&buf)
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.Contains(t, output, "Cross-section references")
+	assert.Contains(t, output, `style=dashed`)
+	assert.Contains(t, output, `"report" -> "build"`)
+}
+
+func TestGraphVisualization_RenderMermaid_CrossSectionRefs(t *testing.T) {
+	graph := &Graph{
+		Actions: map[string]*ExpandedAction{
+			"build": {ExpandedName: "build", Section: "actions"},
+			"report": {
+				ExpandedName:     "report",
+				CrossSectionRefs: []string{"build"},
+				Section:          "finally",
+			},
+		},
+		ExecutionOrder: [][]string{{"build"}},
+		FinallyOrder:   [][]string{{"report"}},
+	}
+
+	viz := BuildVisualization(graph)
+	var buf bytes.Buffer
+	err := viz.RenderMermaid(&buf)
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.Contains(t, output, "-.->|reads|")
+}
+
+func TestGraphVisualization_GetCrossSectionRefs(t *testing.T) {
+	viz := &GraphVisualization{
+		CrossSectionEdges: []*VisualizationEdge{
+			{From: "report", To: "build", Label: "reads", CrossSection: true},
+			{From: "report", To: "test", Label: "reads", CrossSection: true},
+		},
+	}
+
+	refs := viz.getCrossSectionRefs("report")
+	assert.Len(t, refs, 2)
+	assert.Equal(t, []string{"build", "test"}, refs)
+
+	// No refs for unknown action
+	assert.Empty(t, viz.getCrossSectionRefs("unknown"))
+}

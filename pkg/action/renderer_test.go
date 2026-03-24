@@ -452,9 +452,10 @@ func TestRender_WithFinallySection(t *testing.T) {
 				Section:      "actions",
 			},
 			"cleanup": {
-				Action:       &Action{Name: "cleanup", Provider: "shell"},
-				ExpandedName: "cleanup",
-				Section:      "finally",
+				Action:           &Action{Name: "cleanup", Provider: "shell"},
+				ExpandedName:     "cleanup",
+				Section:          "finally",
+				CrossSectionRefs: []string{"build"},
 			},
 			"notify": {
 				Action:       &Action{Name: "notify", Provider: "http"},
@@ -482,6 +483,10 @@ func TestRender_WithFinallySection(t *testing.T) {
 	assert.Equal(t, "actions", rendered.Actions["build"].Section)
 	assert.Equal(t, "finally", rendered.Actions["cleanup"].Section)
 	assert.Equal(t, "finally", rendered.Actions["notify"].Section)
+
+	// Check CrossSectionRefs round-trip
+	assert.Equal(t, []string{"build"}, rendered.Actions["cleanup"].CrossSectionRefs)
+	assert.Empty(t, rendered.Actions["build"].CrossSectionRefs)
 }
 
 func TestRender_WithSensitiveFlag(t *testing.T) {

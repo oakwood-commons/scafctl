@@ -583,7 +583,7 @@ The primary use case is AI-assisted solution authoring — helping users create 
 | `lint_solution` | Validate a solution file | Yes |
 | `list_providers` | List available providers and their schemas | Yes |
 | `get_provider_schema` | Get JSON Schema for a provider's inputs | Yes |
-| `render_solution` | Render action graph without executing | Yes |
+| `render_solution` | Render action graph without executing (includes `crossSectionRefs` for finally→main references) | Yes |
 | `list_cel_functions` | List all available CEL functions (built-in + scafctl custom) | Yes |
 | `list_go_template_functions` | List all available Go template extension functions (Sprig + custom) | Yes |
 | `evaluate_cel` | Test a CEL expression against sample data | Yes |

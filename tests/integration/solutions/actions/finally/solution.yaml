@@ -37,8 +37,13 @@ spec:
 
     finally:
       cleanupDb:
-        description: Always clean up database
+        description: Always clean up database — reads main action result via __actions (cross-section ref)
         provider: exec
+        # No dependsOn needed — cross-section ordering is guaranteed structurally.
+        # __actions.setupDb in the when condition is recorded in crossSectionRefs on the
+        # rendered graph (informational). The when condition is always true so the action runs.
+        when:
+          expr: "__actions.setupDb.status == 'succeeded' || __actions.setupDb.status != 'succeeded'"
         inputs:
           command:
             expr: "'echo Dropping database ' + _.dbName"
@@ -95,3 +100,14 @@ spec:
         assertions:
           - expression: __output.actions["cleanupDb"].results.stdout.contains("Dropping database test_db")
             message: "Cleanup should reference the database name"
+
+      render-cross-section-refs:
+        description: Verify finally action that reads __actions.<main> has crossSectionRefs in rendered graph
+        extends: [_render-base]
+        assertions:
+          - expression: has(__output.actions["cleanupDb"].crossSectionRefs)
+            message: "cleanupDb should have crossSectionRefs (reads __actions.setupDb in when)"
+          - expression: __output.actions["cleanupDb"].crossSectionRefs.exists(r, r == "setupDb")
+            message: "crossSectionRefs should contain setupDb"
+          - expression: "!has(__output.actions[\"cleanupDb\"].dependsOn) || size(__output.actions[\"cleanupDb\"].dependsOn) == 0"
+            message: "cleanupDb dependsOn must be empty — cross-section refs are not scheduling deps"

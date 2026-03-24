@@ -19,6 +19,8 @@ Think of it as a way to define "what you want" (data + operations) in YAML, and 
 
 ## Installation
 
+{{< tabs "getting-started-cmd-1" >}}
+{{% tab "Bash" %}}
 ```bash
 # Build from source
 go build -ldflags "-s -w" -o scafctl ./cmd/scafctl/scafctl.go
@@ -26,6 +28,17 @@ go build -ldflags "-s -w" -o scafctl ./cmd/scafctl/scafctl.go
 # Move to PATH
 mv scafctl /usr/local/bin/
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Build from source
+go build -ldflags "-s -w" -o scafctl ./cmd/scafctl/scafctl.go
+
+# Move to PATH (macOS/Linux)
+Move-Item -Force ./scafctl /usr/local/bin/scafctl
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## Quick Start
 
@@ -61,9 +74,18 @@ spec:
 
 Run it:
 
+{{< tabs "getting-started-cmd-2" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f hello.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f hello.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -76,11 +98,12 @@ This solution has two parts:
 - **Resolver** (`greeting`) — gathers a value using the `static` provider
 - **Action** (`say-hello`) — runs a shell command that references the resolver via `_.greeting`
 
+> [!NOTE]
 > **Want to go deeper with resolvers?** The [Resolver Tutorial](resolver-tutorial.md) covers parameters, dependencies, transforms, validation, and more.
 
 ### 2. Action Dependencies
 
-Actions can depend on other actions and access their results. Create a new file called `action-deps.yaml`:
+Actions can depend on other actions and access their results. scafctl automatically infers dependencies from `__actions` references in CEL expressions and Go templates. Create a new file called `action-deps.yaml`:
 
 ```yaml
 apiVersion: scafctl.io/v1
@@ -98,20 +121,28 @@ spec:
           url: https://httpbin.org/get
 
       process:
-        dependsOn: [fetch-data]
         provider: exec
         inputs:
           command:
             expr: "'echo Got status: ' + string(__actions['fetch-data'].results.statusCode)"
 ```
 
-The `process` action uses `dependsOn` to wait for `fetch-data` to complete, then accesses its results via the `__actions` namespace.
+Because `process` references `__actions['fetch-data']`, scafctl automatically determines that `process` depends on `fetch-data` and schedules it to run after `fetch-data` completes. You can still use `dependsOn` to declare dependencies that aren't expressed via `__actions` references (e.g., ordering actions that don't consume each other's results).
 
 Run it:
 
+{{< tabs "getting-started-cmd-3" >}}
+{{% tab "Bash" %}}
 ```bash
 scafctl run solution -f action-deps.yaml
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f action-deps.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 Output:
 
@@ -187,6 +218,8 @@ See [Provider Reference](provider-reference.md) for full documentation.
 
 ## Common Commands
 
+{{< tabs "getting-started-cmd-4" >}}
+{{% tab "Bash" %}}
 ```bash
 # Run a solution from file
 scafctl run solution -f solution.yaml
@@ -206,33 +239,33 @@ scafctl run solution -f solution.yaml --dry-run
 # Render without executing
 scafctl render solution -f solution.yaml
 
-# Show dependency graph
-scafctl render solution --graph -f solution.yaml
+# Show resolver dependency graph
+scafctl run resolver --graph -f solution.yaml
 
 # List available providers
 scafctl get provider
 
-# Explain a provider
-scafctl explain provider http
+# Get details about a specific provider
+scafctl get provider http
 
 # Pass parameters
 scafctl run solution -f solution.yaml -r key1=value1 -r key2=value2
 
 # Interactive output exploration
-scafctl render solution -f solution.yaml -i
+scafctl run resolver -f solution.yaml -i
 
 # JSON/YAML output
 scafctl render solution -f solution.yaml -o json
 
 # Scaffold a new solution
-scafctl new solution --name my-app --output my-app.yaml
+scafctl new solution --name my-app --description "My application scaffold" --output my-app.yaml
 
 # Browse and download examples
 scafctl examples list
 scafctl examples get resolvers/hello-world.yaml -o hello.yaml
 
 # Evaluate a CEL expression
-scafctl eval cel '"hello".upperAscii()'
+scafctl eval cel --expression '"hello".upperAscii()'
 
 # Validate a solution file
 scafctl lint -f solution.yaml
@@ -243,6 +276,66 @@ scafctl lint rules
 # Explain a lint rule
 scafctl lint explain <rule-id>
 ```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Run a solution from file
+scafctl run solution -f solution.yaml
+
+# Run a solution from catalog (by name)
+scafctl run solution my-solution
+
+# Build a solution to local catalog
+scafctl build solution solution.yaml --version 1.0.0
+
+# List cataloged solutions
+scafctl catalog list
+
+# Dry-run (show what would happen)
+scafctl run solution -f solution.yaml --dry-run
+
+# Render without executing
+scafctl render solution -f solution.yaml
+
+# Show resolver dependency graph
+scafctl run resolver --graph -f solution.yaml
+
+# List available providers
+scafctl get provider
+
+# Get details about a specific provider
+scafctl get provider http
+
+# Pass parameters
+scafctl run solution -f solution.yaml -r key1=value1 -r key2=value2
+
+# Interactive output exploration
+scafctl run resolver -f solution.yaml -i
+
+# JSON/YAML output
+scafctl render solution -f solution.yaml -o json
+
+# Scaffold a new solution
+scafctl new solution --name my-app --description "My application scaffold" --output my-app.yaml
+
+# Browse and download examples
+scafctl examples list
+scafctl examples get resolvers/hello-world.yaml -o hello.yaml
+
+# Evaluate a CEL expression
+scafctl eval cel --expression '"hello".upperAscii()'
+
+# Validate a solution file
+scafctl lint -f solution.yaml
+
+# List lint rules
+scafctl lint rules
+
+# Explain a lint rule
+scafctl lint explain <rule-id>
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ## Next Steps
 

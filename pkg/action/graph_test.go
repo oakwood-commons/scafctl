@@ -5,6 +5,7 @@ package action
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
@@ -283,6 +284,73 @@ func TestBuildGraph_ImplicitDependencies(t *testing.T) {
 	require.Len(t, graph.ExecutionOrder, 2)
 	assert.Equal(t, []string{"task_a"}, graph.ExecutionOrder[0])
 	assert.Equal(t, []string{"task_b"}, graph.ExecutionOrder[1])
+}
+
+func TestBuildGraph_ImplicitDependencies_WhenCondition(t *testing.T) {
+	ctx := context.Background()
+	w := &Workflow{
+		Actions: map[string]*Action{
+			"task_a": {
+				Provider: "shell",
+			},
+			"task_b": {
+				Provider: "shell",
+				// References task_a in when condition, no explicit dependsOn
+				When: &spec.Condition{Expr: graphCelExpr("__actions.task_a.results.status == 'success'")},
+			},
+		},
+	}
+
+	graph, err := BuildGraph(ctx, w, nil, nil)
+	require.NoError(t, err)
+
+	// task_b should have implicit dependency on task_a inferred from when condition
+	taskB := graph.Actions["task_b"]
+	assert.Contains(t, taskB.Dependencies, "task_a")
+
+	// Should have two phases: task_a must run before task_b
+	require.Len(t, graph.ExecutionOrder, 2)
+	assert.Equal(t, []string{"task_a"}, graph.ExecutionOrder[0])
+	assert.Equal(t, []string{"task_b"}, graph.ExecutionOrder[1])
+}
+
+func TestBuildGraph_WhenCondition_ForEachDependency(t *testing.T) {
+	// When a when condition references a forEach action, the dependency should be
+	// rewritten to all iterations of that action.
+	ctx := context.Background()
+	resolverData := map[string]any{
+		"regions": []any{"us-east", "eu-west"},
+	}
+
+	w := &Workflow{
+		Actions: map[string]*Action{
+			"deploy": {
+				Provider: "shell",
+				ForEach: &spec.ForEachClause{
+					Item: "region",
+					In:   rslvrRef("regions"),
+				},
+			},
+			"notify": {
+				Provider: "shell",
+				// when references the forEach base action name
+				When: &spec.Condition{Expr: graphCelExpr("__actions.deploy.results.status == 'success'")},
+			},
+		},
+	}
+
+	graph, err := BuildGraph(ctx, w, resolverData, nil)
+	require.NoError(t, err)
+
+	// notify should depend on both forEach iterations
+	notify := graph.Actions["notify"]
+	assert.Contains(t, notify.Dependencies, "deploy[0]")
+	assert.Contains(t, notify.Dependencies, "deploy[1]")
+
+	// deploy iterations must run before notify
+	require.Len(t, graph.ExecutionOrder, 2)
+	assert.ElementsMatch(t, []string{"deploy[0]", "deploy[1]"}, graph.ExecutionOrder[0])
+	assert.Equal(t, []string{"notify"}, graph.ExecutionOrder[1])
 }
 
 func TestBuildGraph_ForEachExpansion(t *testing.T) {
@@ -942,4 +1010,125 @@ func TestEvaluateForEachArray_TypeConversions(t *testing.T) {
 		}, map[string]any{"mapval": map[string]any{"key": "val"}})
 		assert.Error(t, err)
 	})
+}
+
+// TestBuildGraph_Finally_WhenCondition_AutoDep verifies that a finally action with
+// a when condition referencing __actions.<name> from the main section has the
+// reference recorded in CrossSectionRefs (not Dependencies), since cross-section
+// ordering is guaranteed structurally and does not affect FinallyOrder phase
+// computation.
+func TestBuildGraph_Finally_WhenCondition_AutoDep(t *testing.T) {
+	ctx := context.Background()
+	w := &Workflow{
+		Actions: map[string]*Action{
+			"build": {Provider: "shell"},
+		},
+		Finally: map[string]*Action{
+			"report": {
+				Provider: "shell",
+				// when references a regular action — dependency is auto-inferred
+				When: &spec.Condition{Expr: graphCelExpr("__actions.build.status == 'succeeded'")},
+				Inputs: map[string]*spec.ValueRef{
+					"message": literalRef("done"),
+				},
+			},
+		},
+	}
+
+	graph, err := BuildGraph(ctx, w, nil, nil)
+	require.NoError(t, err)
+
+	// report's Dependencies must be empty — "build" is in a different section and
+	// cross-section ordering is guaranteed structurally, not via FinallyOrder phases.
+	report := graph.Actions["report"]
+	require.NotNil(t, report)
+	assert.Empty(t, report.Dependencies,
+		"finally action Dependencies must not contain cross-section refs")
+
+	// "build" must appear in CrossSectionRefs instead (informational traceability)
+	assert.Contains(t, report.CrossSectionRefs, "build",
+		"finally action with when referencing __actions.build should record build in CrossSectionRefs")
+
+	// FinallyOrder must still have exactly one phase containing report
+	require.Len(t, graph.FinallyOrder, 1)
+	assert.Contains(t, graph.FinallyOrder[0], "report")
+}
+
+// TestBuildGraph_Finally_WhenCondition_IntraSection verifies that a finally action
+// with a when condition referencing another finally action produces correct
+// intra-section phase ordering.
+func TestBuildGraph_Finally_WhenCondition_IntraSection(t *testing.T) {
+	ctx := context.Background()
+	w := &Workflow{
+		Finally: map[string]*Action{
+			"cleanup-a": {Provider: "shell"},
+			"cleanup-b": {
+				Provider: "shell",
+				// when references another finally action — dep must produce phase ordering
+				When: &spec.Condition{Expr: graphCelExpr("__actions['cleanup-a'].status == 'succeeded'")},
+				Inputs: map[string]*spec.ValueRef{
+					"message": literalRef("b done"),
+				},
+			},
+		},
+	}
+
+	graph, err := BuildGraph(ctx, w, nil, nil)
+	require.NoError(t, err)
+
+	cleanupB := graph.Actions["cleanup-b"]
+	require.NotNil(t, cleanupB)
+	assert.Contains(t, cleanupB.Dependencies, "cleanup-a",
+		"intra-finally when condition dep should be auto-inferred")
+
+	// cleanup-a must be scheduled before cleanup-b
+	require.Len(t, graph.FinallyOrder, 2)
+	assert.Equal(t, []string{"cleanup-a"}, graph.FinallyOrder[0])
+	assert.Equal(t, []string{"cleanup-b"}, graph.FinallyOrder[1])
+}
+
+// BenchmarkBuildGraph_AutoDeps measures the cost of auto-dependency inference
+// for a workflow with many actions each referencing __actions in their inputs.
+func BenchmarkBuildGraph_AutoDeps(b *testing.B) {
+	ctx := context.Background()
+
+	// Build a workflow where each action depends on the previous via __actions refs
+	// (linear chain of 50 actions).
+	const n = 50
+	actions := make(map[string]*Action, n)
+	for i := 0; i < n; i++ {
+		name := fmt.Sprintf("action-%02d", i)
+		a := &Action{Provider: "shell"}
+		if i > 0 {
+			prevName := fmt.Sprintf("action-%02d", i-1)
+			a.Inputs = map[string]*spec.ValueRef{
+				"prev_result": graphExprRef("__actions." + prevName + ".results.output"),
+			}
+		} else {
+			a.Inputs = map[string]*spec.ValueRef{
+				"command": literalRef("echo start"),
+			}
+		}
+		actions[name] = a
+	}
+
+	w := &Workflow{Actions: actions}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := BuildGraph(ctx, w, nil, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkParseActionsRefsForGraph measures the cost of the string-scanner
+// reference extractor on a realistic multi-reference expression.
+func BenchmarkParseActionsRefsForGraph(b *testing.B) {
+	expr := `__actions.build.results.artifact + " " + __actions.test.results.summary + " " + __actions["deploy"].results.status`
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = parseActionsRefsForGraph(expr)
+	}
 }

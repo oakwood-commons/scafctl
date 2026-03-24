@@ -291,8 +291,9 @@ inputs:
 
 ### Rules
 
-- `__actions.<name>` may only reference declared dependencies
-- Referencing a non-dependency is a validation error
+- `__actions.<name>` must reference existing actions in the workflow
+- Dependencies are automatically inferred from `__actions` references during graph building. If your inputs or `when` condition reference `__actions.<name>`, an explicit `dependsOn: [<name>]` is not required for same-section ordering—the scheduler adds it automatically. Use `dependsOn` explicitly only for ordering without a data dependency.
+- `dependsOn` in `workflow.finally` cannot cross sections. To read results from a regular action inside a `finally` action, use `__actions.<name>` in inputs or `when`. The reference is **not** added to `dependencies` (which drives `FinallyOrder` phase computation) because cross-section ordering is guaranteed structurally—all main actions complete before any finally action starts. The reference is instead recorded in `crossSectionRefs` on the rendered graph for traceability.
 - In render mode, expressions referencing `__actions` are preserved as deferred expressions
 - External executors must be CEL-capable to evaluate deferred expressions
 
@@ -837,7 +838,7 @@ spec:
 
 ### Cross-Section References
 
-Finally actions can read from regular actions but cannot depend on them:
+Finally actions can read from regular actions but cannot declare a scheduling `dependsOn` on them.
 
 ~~~yaml
 spec:
@@ -850,7 +851,10 @@ spec:
 
     finally:
       report:
-        # ✅ Valid: Reference results/status via expressions
+        # ✅ Valid: Reference results/status via expressions.
+        # "deploy" appears in crossSectionRefs on the rendered graph (informational).
+        # It does NOT appear in dependencies because cross-section ordering is
+        # guaranteed structurally — all main actions complete first.
         provider: slack
         inputs:
           message:
@@ -859,12 +863,23 @@ spec:
             expr: __actions.deploy.error  # Available if deploy failed
 
       cleanup:
-        # ❌ Invalid: Cannot dependsOn regular actions
-        # dependsOn: [deploy]  # This would be a validation error
+        # ❌ Invalid: Cannot use dependsOn to reference regular actions from finally.
+        # dependsOn: [deploy]  # Validation error: dep not found in finally section
         provider: exec
         inputs:
           command: "rm -rf /tmp/build"
 ~~~
+
+#### `dependencies` vs `crossSectionRefs` in the rendered graph
+
+The rendered `ActionGraph` distinguishes two categories of relationships for a `finally` action:
+
+| Field | Content | Used for scheduling? |
+|---|---|---|
+| `dependencies` | Same-section `__actions` refs + explicit `dependsOn` | ✅ Yes — drives `FinallyOrder` phase ordering |
+| `crossSectionRefs` | `__actions` refs pointing at actions in `workflow.actions` | ❌ No — informational only |
+
+Cross-section ordering does not need to appear in `FinallyOrder` because the executor already guarantees all main actions finish before the finally section begins. Recording them in `crossSectionRefs` preserves traceability (e.g. for graph visualisation and audit) without introducing phantom in-degrees into the phase scheduler.
 
 ### Execution Order
 
@@ -963,6 +978,7 @@ After rendering, scafctl emits a graph that contains only concrete inputs and ex
     "cleanup": {
       "provider": "shell",
       "section": "finally",
+      "crossSectionRefs": ["deploy"],
       "inputs": {
         "command": "rm -rf /tmp/build"
       }
@@ -1030,6 +1046,7 @@ actions:
   cleanup:
     provider: exec
     section: finally
+    crossSectionRefs: [deploy]
     inputs:
       command: rm -rf /tmp/build
 
@@ -1066,6 +1083,7 @@ actions:
 - `executionOrder` is an array of phases, where each phase is an array of action names that can execute concurrently
 - `finallyOrder` is a separate array of phases for finally actions
 - Finally actions include `"section": "finally"` in the rendered output
+- Finally actions that read from `workflow.actions` via `__actions` references include `crossSectionRefs` listing those action names (informational — does not affect `FinallyOrder` phase computation)
 
 ---
 
@@ -1094,12 +1112,13 @@ The following are validated at parse/load time:
 3. Action names containing `[` or `]` are reserved (used for forEach expansion)
 4. Action names must be unique across both `workflow.actions` and `workflow.finally` sections
 5. `dependsOn` in `workflow.actions` must reference existing actions in `workflow.actions`
-6. `dependsOn` in `workflow.finally` must reference existing actions in `workflow.finally` only (cannot depend on regular actions)
+6. `dependsOn` in `workflow.finally` must reference existing actions in `workflow.finally` only (cannot depend on regular actions via `dependsOn`). To read results from a regular action inside a `finally` action, reference it via `__actions.<name>` in inputs or `when` — the reference is recorded in `crossSectionRefs` on the rendered graph for traceability; cross-section ordering is guaranteed structurally.
 7. `dependsOn` must not create cycles (within each section)
 8. Provider must exist and have `CapabilityAction`
-9. `__actions.<name>` references in expressions/templates must reference:
-   - In `workflow.actions`: actions in `dependsOn` (same section)
-   - In `workflow.finally`: any regular action OR finally actions in `dependsOn`
+9. `__actions.<name>` references in expressions/templates must reference existing actions:
+   - In `workflow.actions`: must reference actions defined in `workflow.actions`
+   - In `workflow.finally`: must reference actions defined in `workflow.actions` or `workflow.finally`
+   - Same-section `__actions` references are automatically added to `dependencies` during graph building (`dependsOn` is optional for those). Cross-section references (a `finally` action reading from `workflow.actions`) are recorded in `crossSectionRefs` only — they do not appear in `dependencies`. Use `dependsOn` explicitly only for same-section ordering without a data dependency.
 10. `forEach` is only allowed in `workflow.actions`, not in `workflow.finally`
 11. `retry.maxAttempts` must be >= 1
 12. `timeout` must be a valid duration

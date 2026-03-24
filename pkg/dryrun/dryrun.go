@@ -46,6 +46,7 @@ type WhatIfAction struct {
 	Phase              int               `json:"phase" yaml:"phase" doc:"Execution phase number" maximum:"100" example:"1"`
 	Section            string            `json:"section" yaml:"section" doc:"Workflow section (actions or finally)" maxLength:"16" example:"actions"`
 	Dependencies       []string          `json:"dependencies,omitempty" yaml:"dependencies,omitempty" doc:"Action dependencies" maxItems:"100"`
+	CrossSectionRefs   []string          `json:"crossSectionRefs,omitempty" yaml:"crossSectionRefs,omitempty" doc:"Cross-section action references (informational, not scheduling)" maxItems:"100"`
 	When               string            `json:"when,omitempty" yaml:"when,omitempty" doc:"Conditional expression" maxLength:"2048" example:"_.enabled == true"`
 	MaterializedInputs map[string]any    `json:"materializedInputs,omitempty" yaml:"materializedInputs,omitempty" doc:"Inputs resolved at plan time (only with --verbose)"`
 	DeferredInputs     map[string]string `json:"deferredInputs,omitempty" yaml:"deferredInputs,omitempty" doc:"Inputs deferred until runtime"`
@@ -115,12 +116,13 @@ func Generate(ctx context.Context, sol *solution.Solution, opts Options) (*Repor
 			for _, name := range names {
 				ea := graph.Actions[name]
 				entry := WhatIfAction{
-					Name:         name,
-					Provider:     ea.Provider,
-					Description:  ea.Description,
-					Dependencies: ea.Dependencies,
-					Section:      ea.Section,
-					Phase:        phaseMap[name],
+					Name:             name,
+					Provider:         ea.Provider,
+					Description:      ea.Description,
+					Dependencies:     ea.Dependencies,
+					CrossSectionRefs: ea.CrossSectionRefs,
+					Section:          ea.Section,
+					Phase:            phaseMap[name],
 				}
 
 				if ea.When != nil && ea.When.Expr != nil {
