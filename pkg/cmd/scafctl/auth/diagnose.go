@@ -21,6 +21,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// clockSkewCheckFunc is the function used to perform the clock skew check.
+// Tests can replace this to avoid real network calls.
+var clockSkewCheckFunc = diagnose.RunClockSkewCheck
+
 // CommandDiagnose creates the 'auth diagnose' command.
 func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
 	var outputFlags flags.KvxOutputFlags
@@ -163,7 +167,7 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 			}
 
 			// ── 3.5. Clock skew ───────────────────────────────────────────────
-			addCheck(diagnose.RunClockSkewCheck())
+			addCheck(clockSkewCheckFunc())
 
 			// ── 4. Handler authentication status & token health ───────────────
 			// When a handler name is provided, scope checks to that handler only.
