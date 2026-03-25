@@ -60,7 +60,7 @@ require (
 	ivan.dev/httpcache v0.1.1
 	k8s.io/apimachinery v0.35.2
 	mvdan.cc/sh/moreinterp v0.0.0-20260208152214-f980f5eeab64
-	mvdan.cc/sh/v3 v3.12.0
+	mvdan.cc/sh/v3 v3.13.0
 	oras.land/oras-go/v2 v2.6.0
 	sigs.k8s.io/yaml v1.6.0
 )
