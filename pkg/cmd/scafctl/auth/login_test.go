@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -24,6 +25,7 @@ func newTestContext(t *testing.T) (context.Context, *bytes.Buffer) {
 	ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
 	w := writer.New(ioStreams, settings.NewCliParams())
 	ctx := writer.WithWriter(context.Background(), w)
+	ctx = logger.WithLogger(ctx, logger.GetNoopLogger())
 	return ctx, &buf
 }
 
