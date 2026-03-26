@@ -374,6 +374,36 @@ tasks:
       - go.mod
       - go.sum
 
+  bench:
+    desc: "Run all benchmark tests"
+    aliases: [b]
+    vars:
+      BENCH_PATTERN: '{{ .BENCH_PATTERN | default "." }}'
+      BENCH_TIME: '{{ .BENCH_TIME | default "1s" }}'
+      BENCH_COUNT: '{{ .BENCH_COUNT | default "1" }}'
+      BENCH_PKG: '{{ .BENCH_PKG | default "./..." }}'
+    cmds:
+      - |
+        go test -run='^$' -bench='{{.BENCH_PATTERN}}' -benchmem -benchtime={{.BENCH_TIME}} -count={{.BENCH_COUNT}} {{.BENCH_PKG}}
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+
+  bench:ci:
+    desc: "Run benchmarks for CI comparison (higher count for statistical significance)"
+    vars:
+      BENCH_TIME: '{{ .BENCH_TIME | default "1s" }}'
+      BENCH_COUNT: '{{ .BENCH_COUNT | default "6" }}'
+      BENCH_PKG: '{{ .BENCH_PKG | default "./..." }}'
+    cmds:
+      - |
+        go test -run='^$' -bench='.' -benchmem -benchtime={{.BENCH_TIME}} -count={{.BENCH_COUNT}} -timeout=30m {{.BENCH_PKG}}
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+
   test-cover:
     desc: "Run unit tests with coverage"
     cmds:
