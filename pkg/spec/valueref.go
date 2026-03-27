@@ -5,6 +5,7 @@ package spec
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -88,6 +89,120 @@ func (v *ValueRef) UnmarshalYAML(node *yaml.Node) error {
 	default:
 		return fmt.Errorf("unsupported YAML node kind: %v", node.Kind)
 	}
+}
+
+// MarshalYAML implements custom YAML marshalling for ValueRef.
+// This is required to survive the deepCopySolution YAML round-trip used in compose/bundling.
+// Without it, the Literal field (tagged yaml:"-") would be silently dropped during marshaling.
+func (v ValueRef) MarshalYAML() (any, error) {
+	if v.Literal != nil {
+		return v.Literal, nil
+	}
+	if v.Resolver != nil {
+		return map[string]any{"rslvr": *v.Resolver}, nil
+	}
+	if v.Expr != nil {
+		return map[string]any{"expr": string(*v.Expr)}, nil
+	}
+	if v.Tmpl != nil {
+		return map[string]any{"tmpl": string(*v.Tmpl)}, nil
+	}
+	return nil, nil
+}
+
+// MarshalJSON implements custom JSON marshalling for ValueRef.
+// Mirrors MarshalYAML to ensure consistent serialization across formats.
+func (v ValueRef) MarshalJSON() ([]byte, error) {
+	if v.Literal != nil {
+		return json.Marshal(v.Literal)
+	}
+	if v.Resolver != nil {
+		return json.Marshal(map[string]any{"rslvr": *v.Resolver})
+	}
+	if v.Expr != nil {
+		return json.Marshal(map[string]any{"expr": string(*v.Expr)})
+	}
+	if v.Tmpl != nil {
+		return json.Marshal(map[string]any{"tmpl": string(*v.Tmpl)})
+	}
+	return []byte("null"), nil
+}
+
+// UnmarshalJSON implements custom JSON unmarshalling for ValueRef.
+// Mirrors UnmarshalYAML to ensure consistent deserialization across formats.
+func (v *ValueRef) UnmarshalJSON(data []byte) error {
+	// Clear all fields to avoid stale state when reusing a ValueRef instance.
+	*v = ValueRef{}
+
+	// Check if the data is a JSON object containing known keys.
+	// We use json.RawMessage to detect key presence before typed decoding,
+	// so that malformed refs like {"expr": {}} error instead of silently
+	// becoming literals.
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(data, &obj) == nil {
+		_, hasRslvr := obj["rslvr"]
+		_, hasExpr := obj["expr"]
+		_, hasTmpl := obj["tmpl"]
+
+		knownCount := 0
+		if hasRslvr {
+			knownCount++
+		}
+		if hasExpr {
+			knownCount++
+		}
+		if hasTmpl {
+			knownCount++
+		}
+
+		if knownCount > 1 {
+			var found []string
+			if hasRslvr {
+				found = append(found, "rslvr")
+			}
+			if hasExpr {
+				found = append(found, "expr")
+			}
+			if hasTmpl {
+				found = append(found, "tmpl")
+			}
+			return fmt.Errorf("invalid value ref: expected exactly one of rslvr, expr, or tmpl, but found [%s]", strings.Join(found, ", "))
+		}
+
+		if knownCount == 1 {
+			// Known key is present — decode into typed struct.
+			// If the value has the wrong type (e.g. {"expr": {}}), this will
+			// return an error instead of silently treating it as a literal.
+			var raw struct {
+				Resolver *string                     `json:"rslvr"`
+				Expr     *celexp.Expression          `json:"expr"`
+				Tmpl     *gotmpl.GoTemplatingContent `json:"tmpl"`
+			}
+			if err := json.Unmarshal(data, &raw); err != nil {
+				return fmt.Errorf("invalid value ref: %w", err)
+			}
+			// Reject null values for known keys (e.g. {"rslvr": null}).
+			// This matches UnmarshalYAML behavior where rslvr:null would be
+			// treated as a literal map, not a typed ref with a nil value.
+			if raw.Resolver == nil && raw.Expr == nil && raw.Tmpl == nil {
+				return fmt.Errorf("invalid value ref: known key has null value")
+			}
+			v.Resolver = raw.Resolver
+			v.Expr = raw.Expr
+			v.Tmpl = raw.Tmpl
+			return nil
+		}
+
+		// Object with no known keys — fall through to literal.
+	}
+
+	// Not an object, or object without known keys — treat as literal.
+	var literal any
+	if err := json.Unmarshal(data, &literal); err != nil {
+		return err
+	}
+	v.Literal = literal
+	return nil
 }
 
 // IterationContext holds the context for forEach iteration variables.
