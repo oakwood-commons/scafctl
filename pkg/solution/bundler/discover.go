@@ -449,9 +449,14 @@ func walkActionInputs(actions map[string]*actionpkg.Action, localFiles *[]string
 		}
 		switch a.Provider {
 		case "file":
-			if path := extractLiteralString(a.Inputs, "path"); path != "" {
-				if isLocalPath(path) {
-					*localFiles = append(*localFiles, path)
+			// Only bundle paths for read operations. Non-read operations
+			// (write/delete/exists) are outputs or runtime checks and are
+			// intentionally excluded from bundling.
+			if op := extractLiteralString(a.Inputs, "operation"); op == "" || op == "read" {
+				if path := extractLiteralString(a.Inputs, "path"); path != "" {
+					if isLocalPath(path) {
+						*localFiles = append(*localFiles, path)
+					}
 				}
 			}
 		case "solution":

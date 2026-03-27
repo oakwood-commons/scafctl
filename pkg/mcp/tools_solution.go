@@ -415,6 +415,14 @@ func (s *Server) handleRenderSolution(_ context.Context, request mcp.CallToolReq
 		}
 	}
 
+	// Capture caller's CWD before prepare.Solution may os.Chdir to a bundle temp dir
+	originalCwd, err := provider.GetWorkingDirectory(ctx)
+	if err != nil {
+		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to get working directory: %v", err),
+			WithSuggestion("This is an internal error — please report it"),
+		), nil
+	}
+
 	// Load solution via prepare.Solution
 	prepResult, err := prepare.Solution(ctx, path,
 		prepare.WithRegistry(s.registry),
@@ -454,6 +462,16 @@ func (s *Server) handleRenderSolution(_ context.Context, request mcp.CallToolReq
 		defer prepResult.Cleanup()
 	}
 
+	// If bundle extraction changed the process CWD, pin the resolver context
+	// to the bundle dir so file reads resolve within the extracted bundle,
+	// not against any caller-provided cwd override.
+	if bundleCwd, cwdErr := os.Getwd(); cwdErr == nil && bundleCwd != originalCwd {
+		ctx = provider.WithWorkingDirectory(ctx, bundleCwd)
+	}
+
+	// Separate action context resolves paths against the caller's CWD.
+	actionCtx := provider.WithWorkingDirectory(ctx, originalCwd)
+
 	sol := prepResult.Solution
 	reg := prepResult.Registry
 
@@ -469,9 +487,9 @@ func (s *Server) handleRenderSolution(_ context.Context, request mcp.CallToolReq
 	case "resolver":
 		return s.renderResolverGraph(sol, reg)
 	case "action-deps":
-		return s.renderActionDepsGraph(ctx, sol, params, outputDir)
+		return s.renderActionDepsGraph(ctx, actionCtx, sol, params, outputDir)
 	default:
-		return s.renderActionGraph(ctx, sol, params, outputDir)
+		return s.renderActionGraph(ctx, actionCtx, sol, params, outputDir)
 	}
 }
 
@@ -515,7 +533,7 @@ func (s *Server) renderResolverGraph(sol *solution.Solution, reg *provider.Regis
 }
 
 // renderActionGraph executes resolvers, builds, and renders the action graph.
-func (s *Server) renderActionGraph(ctx context.Context, sol *solution.Solution, params map[string]any, outputDir string) (*mcp.CallToolResult, error) { //nolint:unparam // error is always nil per MCP pattern
+func (s *Server) renderActionGraph(resolverCtx, actionCtx context.Context, sol *solution.Solution, params map[string]any, outputDir string) (*mcp.CallToolResult, error) { //nolint:unparam // error is always nil per MCP pattern
 	if !sol.Spec.HasWorkflow() {
 		suggestion := "Add a spec.workflow section with actions to the solution"
 		if sol.Spec.HasResolvers() {
@@ -528,7 +546,7 @@ func (s *Server) renderActionGraph(ctx context.Context, sol *solution.Solution, 
 	}
 
 	// Execute resolvers to get data for action inputs
-	resolverData, err := s.executeResolversForRender(ctx, sol, params)
+	resolverData, err := s.executeResolversForRender(resolverCtx, sol, params)
 	if err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("resolver execution failed: %v", err),
 			WithSuggestion("Check resolver configuration with preview_resolvers"),
@@ -537,7 +555,7 @@ func (s *Server) renderActionGraph(ctx context.Context, sol *solution.Solution, 
 	}
 
 	// Build the action graph
-	graph, err := action.BuildGraph(ctx, sol.Spec.Workflow, resolverData, nil)
+	graph, err := action.BuildGraph(actionCtx, sol.Spec.Workflow, resolverData, nil)
 	if err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to build action graph: %v", err),
 			WithSuggestion("Check action dependencies and provider configurations"),
@@ -577,7 +595,7 @@ func (s *Server) renderActionGraph(ctx context.Context, sol *solution.Solution, 
 }
 
 // renderActionDepsGraph builds and returns the action dependency visualization.
-func (s *Server) renderActionDepsGraph(ctx context.Context, sol *solution.Solution, params map[string]any, outputDir string) (*mcp.CallToolResult, error) {
+func (s *Server) renderActionDepsGraph(resolverCtx, actionCtx context.Context, sol *solution.Solution, params map[string]any, outputDir string) (*mcp.CallToolResult, error) {
 	if !sol.Spec.HasWorkflow() {
 		return newStructuredError(ErrCodeValidationError, "solution does not define a workflow",
 			WithSuggestion("Add a spec.workflow section with actions to the solution"),
@@ -586,7 +604,7 @@ func (s *Server) renderActionDepsGraph(ctx context.Context, sol *solution.Soluti
 	}
 
 	// Execute resolvers to get data for action inputs
-	resolverData, err := s.executeResolversForRender(ctx, sol, params)
+	resolverData, err := s.executeResolversForRender(resolverCtx, sol, params)
 	if err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("resolver execution failed: %v", err),
 			WithSuggestion("Check resolver configuration with preview_resolvers"),
@@ -595,7 +613,7 @@ func (s *Server) renderActionDepsGraph(ctx context.Context, sol *solution.Soluti
 	}
 
 	// Build the action graph
-	graph, err := action.BuildGraph(ctx, sol.Spec.Workflow, resolverData, nil)
+	graph, err := action.BuildGraph(actionCtx, sol.Spec.Workflow, resolverData, nil)
 	if err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to build action graph: %v", err),
 			WithSuggestion("Check action dependencies and provider configurations"),

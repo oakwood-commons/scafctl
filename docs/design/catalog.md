@@ -295,10 +295,23 @@ Flow:
 3. Fetch artifact if not cached
 4. Check and load required plugins
 5. Load solution YAML
-6. Resolve resolvers
-7. Render or execute actions
+6. Resolve resolvers (CWD is the bundle extraction directory)
+7. Execute actions (relative paths resolve against the **caller's CWD**)
 
 Catalog resolution is a read-only operation.
+
+### Working Directory Handling
+
+Catalog solutions with bundles are extracted to a temporary directory, and
+`os.Chdir` moves the process CWD there so resolvers can read bundled template
+files. Before this `os.Chdir`, the original caller CWD is captured. During the
+action execution phase, the caller's CWD is injected into the context via
+`provider.WithWorkingDirectory`, so file-writing actions resolve relative paths
+against the caller's directory — matching the behaviour of local `-f` file runs.
+
+When `--output-dir` is set, it takes precedence over the caller CWD for action
+path resolution. See [Output Directory](./output-dir.md) and
+[Working Directory](./cwd.md) for details.
 
 ---
 

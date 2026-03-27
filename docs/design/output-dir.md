@@ -166,6 +166,7 @@ When `--output-dir` is specified, the directory is automatically created (includ
 | `__cwd` escape hatch | Injected as built-in variable for action expressions needing original CWD. |
 | Exec default workingDir | Empty workingDir in action mode defaults to output-dir. |
 | Backward compatible | No `--output-dir` → all paths resolve via CWD, exactly as before. |
+| Catalog CWD | Catalog solutions inject the caller's CWD into the action context so relative paths resolve against the caller's directory, not the temporary bundle extraction directory. |
 | Auto-create | `os.MkdirAll` before execution starts. Fail-fast on error. |
 
 ---

@@ -1,0 +1,100 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: catalog-cwd-test
+  version: 1.0.0
+  description: |
+    Integration test for catalog solution CWD resolution.
+    When run from a catalog (bare name), relative paths in file write actions
+    should resolve against the caller's CWD — matching local -f file behaviour.
+
+bundle:
+  include:
+    - data/**
+
+spec:
+  resolvers:
+    greeting:
+      description: Static greeting message
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: Hello from catalog-cwd test
+
+    config-data:
+      description: Static config data
+      type: any
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                appName: catalog-cwd-test
+                version: "1.0.0"
+
+    bundle-data:
+      description: Read bundled file to verify bundle extraction
+      type: any
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              operation: read
+              path: data/info.txt
+
+  workflow:
+    actions:
+      write-greeting:
+        description: Write greeting to relative path (should land in caller CWD)
+        provider: file
+        inputs:
+          operation: write
+          path: catalog-output.txt
+          content:
+            rslvr: greeting
+
+      write-config:
+        description: Write nested file using relative path
+        provider: file
+        inputs:
+          operation: write
+          path: sub/config.yaml
+          createDirs: true
+          content:
+            expr: '"app: " + _["config-data"].appName + "\nversion: " + _["config-data"].version'
+
+      write-cwd-ref:
+        description: Write __cwd reference for verification
+        provider: file
+        inputs:
+          operation: write
+          path: cwd-ref.txt
+          content:
+            expr: '"cwd=" + __cwd'
+
+      write-bundled:
+        description: Write bundled file content to verify bundle extraction round-trip
+        provider: file
+        inputs:
+          operation: write
+          path: bundled-output.txt
+          content:
+            expr: '_["bundle-data"].content'
+
+  testing:
+    config:
+      skipBuiltins: [render-defaults, resolve-defaults]
+
+    cases:
+      resolvers-work:
+        description: Verify resolvers produce expected values
+        command: [run, resolver]
+        args: ["-o", "json"]
+        files: ["data/**"]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: "Hello from catalog-cwd test"
+          - contains: "catalog-cwd-test"
+          - contains: "bundled info content"

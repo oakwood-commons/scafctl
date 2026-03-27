@@ -5430,6 +5430,109 @@ func TestIntegration_RunSolution_OutputDir_HelpFlag(t *testing.T) {
 }
 
 // ============================================================================
+// Catalog CWD Resolution Tests
+// ============================================================================
+
+func TestIntegration_RunSolution_CatalogWritesToCallerCWD(t *testing.T) {
+	// When running a catalog solution (bare name) without --output-dir,
+	// file write actions with relative paths should land in the caller's CWD,
+	// NOT in the temporary bundle extraction directory.
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+
+	projectRoot := findProjectRoot()
+
+	// Build the catalog-cwd solution into the local catalog
+	_, stderr, exitCode := runScafctlInDir(t, filepath.Join(projectRoot, "tests/integration/solutions/catalog-cwd"),
+		"build", "solution", "solution.yaml", "--version", "1.0.0", "--force",
+	)
+	require.Equalf(t, 0, exitCode, "build failed: %s", stderr)
+
+	// Run by bare name from a fresh temp working directory
+	workDir := t.TempDir()
+	stdout, stderr, exitCode := runScafctlInDir(t, workDir,
+		"run", "solution", "catalog-cwd-test",
+	)
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstderr: %s", exitCode, stderr)
+
+	// Verify action outputs landed in the caller's CWD
+	assert.FileExists(t, filepath.Join(workDir, "catalog-output.txt"))
+	assert.FileExists(t, filepath.Join(workDir, "sub/config.yaml"))
+	assert.FileExists(t, filepath.Join(workDir, "cwd-ref.txt"))
+
+	// Verify greeting content
+	greeting, err := os.ReadFile(filepath.Join(workDir, "catalog-output.txt"))
+	if assert.NoError(t, err) {
+		assert.Contains(t, string(greeting), "Hello from catalog-cwd test")
+	}
+
+	// Verify nested config content
+	configContent, err := os.ReadFile(filepath.Join(workDir, "sub/config.yaml"))
+	if assert.NoError(t, err) {
+		assert.Contains(t, string(configContent), "app: catalog-cwd-test")
+		assert.Contains(t, string(configContent), "version: 1.0.0")
+	}
+
+	// Verify __cwd points to workDir, not a temp bundle directory
+	cwdRef, err := os.ReadFile(filepath.Join(workDir, "cwd-ref.txt"))
+	if assert.NoError(t, err) {
+		assert.Contains(t, string(cwdRef), "cwd="+workDir,
+			"__cwd should reference the caller's CWD, not a bundle temp dir")
+	}
+
+	// Verify bundled file content was correctly extracted and written
+	assert.FileExists(t, filepath.Join(workDir, "bundled-output.txt"))
+	bundledContent, err := os.ReadFile(filepath.Join(workDir, "bundled-output.txt"))
+	if assert.NoError(t, err) {
+		assert.Equal(t, "bundled info content\n", string(bundledContent),
+			"bundled file content should match original data/info.txt, not the solution YAML")
+	}
+}
+
+func TestIntegration_RunSolution_CatalogOutputDirOverridesCWD(t *testing.T) {
+	// When --output-dir is set, it should still override even for catalog runs.
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+
+	projectRoot := findProjectRoot()
+
+	// Build the catalog-cwd solution into the local catalog
+	_, stderr, exitCode := runScafctlInDir(t, filepath.Join(projectRoot, "tests/integration/solutions/catalog-cwd"),
+		"build", "solution", "solution.yaml", "--version", "1.0.0", "--force",
+	)
+	require.Equalf(t, 0, exitCode, "build failed: %s", stderr)
+
+	// Run by bare name with --output-dir
+	workDir := t.TempDir()
+	outputDir := t.TempDir()
+	stdout, stderr, exitCode := runScafctlInDir(t, workDir,
+		"run", "solution", "catalog-cwd-test",
+		"--output-dir", outputDir,
+	)
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstderr: %s", exitCode, stderr)
+
+	// Verify action outputs landed in --output-dir, not CWD
+	assert.FileExists(t, filepath.Join(outputDir, "catalog-output.txt"))
+	assert.FileExists(t, filepath.Join(outputDir, "sub/config.yaml"))
+	assert.FileExists(t, filepath.Join(outputDir, "cwd-ref.txt"))
+	assert.FileExists(t, filepath.Join(outputDir, "bundled-output.txt"))
+
+	// Verify files did NOT land in the caller's CWD
+	assert.NoFileExists(t, filepath.Join(workDir, "catalog-output.txt"),
+		"action output should not land in CWD when --output-dir is set")
+	assert.NoFileExists(t, filepath.Join(workDir, "sub/config.yaml"),
+		"action output should not land in CWD when --output-dir is set")
+}
+
+// ============================================================================
 // Telemetry Flag Tests
 // ============================================================================
 

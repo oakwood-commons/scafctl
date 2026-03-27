@@ -6,6 +6,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/dryrun"
@@ -113,6 +114,14 @@ func (s *Server) handleDryRunSolution(_ context.Context, request mcp.CallToolReq
 		}
 	}
 
+	// Capture caller's CWD before prepare.Solution may os.Chdir to a bundle temp dir
+	originalCwd, err := provider.GetWorkingDirectory(ctx)
+	if err != nil {
+		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to get working directory: %v", err),
+			WithSuggestion("This is an internal error — please report it"),
+		), nil
+	}
+
 	// Load solution
 	prepResult, err := prepare.Solution(ctx, path,
 		prepare.WithRegistry(s.registry),
@@ -127,6 +136,16 @@ func (s *Server) handleDryRunSolution(_ context.Context, request mcp.CallToolReq
 	if prepResult.Cleanup != nil {
 		defer prepResult.Cleanup()
 	}
+
+	// If bundle extraction changed the process CWD, pin the resolver context
+	// to the bundle dir so file reads resolve within the extracted bundle,
+	// not against any caller-provided cwd override.
+	if bundleCwd, cwdErr := os.Getwd(); cwdErr == nil && bundleCwd != originalCwd {
+		ctx = provider.WithWorkingDirectory(ctx, bundleCwd)
+	}
+
+	// Separate action context resolves paths against the caller's CWD.
+	actionCtx := provider.WithWorkingDirectory(ctx, originalCwd)
 
 	sol := prepResult.Solution
 	reg := prepResult.Registry
@@ -172,7 +191,7 @@ func (s *Server) handleDryRunSolution(_ context.Context, request mcp.CallToolReq
 
 	// Generate structured report
 	verbose := request.GetBool("verbose", false)
-	report, err := dryrun.Generate(ctx, sol, dryrun.Options{
+	report, err := dryrun.Generate(actionCtx, sol, dryrun.Options{
 		Registry:     reg,
 		ResolverData: resolverData,
 		Verbose:      verbose,

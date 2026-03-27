@@ -344,6 +344,13 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		actionCtx = provider.WithBackup(actionCtx, true)
 	}
 
+	// Ensure actions resolve relative paths against the caller's original working
+	// directory rather than the process CWD, which may have been changed to a
+	// temporary bundle extraction directory for catalog solutions. This aligns
+	// catalog runs with local -f behaviour: files land in the caller's CWD unless
+	// --output-dir is explicitly specified (which takes precedence in ResolvePath).
+	actionCtx = provider.WithWorkingDirectory(actionCtx, originalCwd)
+
 	// Dry run — execute resolvers in dry-run mode and show structured report
 	if o.DryRun {
 		return o.executeDryRun(actionCtx, sol, reg, params)

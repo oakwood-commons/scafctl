@@ -270,3 +270,77 @@ func BenchmarkLocalCatalog_Fetch(b *testing.B) {
 		_, _, _ = cat.Fetch(ctx, ref)
 	}
 }
+
+func TestLocalCatalog_StoreDedup_FetchWithBundle_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	cat := newTestCatalog(t)
+	ctx := context.Background()
+
+	ref := testRef("dedup-roundtrip", "1.0.0")
+	ref.Kind = ArtifactKindSolution
+
+	solutionYAML := []byte("apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: test\n")
+
+	// Build a small tar with one file (simulating what CreateDeduplicatedBundle does)
+	var smallTarBuf bytes.Buffer
+	tw := tar.NewWriter(&smallTarBuf)
+	fileContent := []byte("hello from bundle")
+	require.NoError(t, tw.WriteHeader(&tar.Header{
+		Name: "data/info.txt",
+		Size: int64(len(fileContent)),
+		Mode: 0o644,
+	}))
+	_, err := tw.Write(fileContent)
+	require.NoError(t, err)
+	require.NoError(t, tw.Close())
+
+	// Build a manifest JSON pointing to layer 2 (small tar)
+	manifestJSON := []byte(fmt.Sprintf(`{
+		"version": 2,
+		"root": ".",
+		"files": [
+			{"path": "data/info.txt", "size": %d, "digest": "sha256:abc", "layer": 2}
+		]
+	}`, len(fileContent)))
+
+	_, err = cat.StoreDedup(ctx, ref, solutionYAML, manifestJSON, smallTarBuf.Bytes(), nil, nil, false)
+	require.NoError(t, err)
+
+	// FetchWithBundle should reassemble and return correct content
+	content, bundleData, info, err := cat.FetchWithBundle(ctx, ref)
+	require.NoError(t, err)
+	assert.Equal(t, solutionYAML, content)
+	assert.Equal(t, ref.Name, info.Reference.Name)
+	require.NotNil(t, bundleData, "bundle data should not be nil")
+
+	// Extract the file from the reassembled tar and verify its content
+	extracted, err := extractFileFromTar(bundleData, "data/info.txt")
+	require.NoError(t, err)
+	assert.Equal(t, fileContent, extracted, "extracted bundle file should match original content, not solution YAML")
+}
+
+func BenchmarkLocalCatalog_ReassembleDedup(b *testing.B) {
+	tmpDir := b.TempDir()
+	cat, err := NewLocalCatalogAt(tmpDir, logr.Discard())
+	require.NoError(b, err)
+	ctx := context.Background()
+
+	ref := testRef("bench-dedup", "1.0.0")
+	ref.Kind = ArtifactKindSolution
+
+	var smallTarBuf bytes.Buffer
+	tw := tar.NewWriter(&smallTarBuf)
+	require.NoError(b, tw.WriteHeader(&tar.Header{Name: "data/f.txt", Size: 5, Mode: 0o644}))
+	_, _ = tw.Write([]byte("hello"))
+	require.NoError(b, tw.Close())
+
+	manifestJSON := []byte(`{"version":2,"root":".","files":[{"path":"data/f.txt","size":5,"digest":"sha256:abc","layer":2}]}`)
+	_, err = cat.StoreDedup(ctx, ref, []byte("sol"), manifestJSON, smallTarBuf.Bytes(), nil, nil, false)
+	require.NoError(b, err)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _, _, _ = cat.FetchWithBundle(ctx, ref)
+	}
+}

@@ -327,6 +327,14 @@ func (c *LocalCatalog) reassembleDedup(ctx context.Context, ociManifest ocispec.
 	// Write the manifest as a v1-compatible manifest (downgrade version)
 	v1Manifest := bundleManifest
 	v1Manifest.Version = 1
+	// Deep-copy Files to avoid mutating bundleManifest via shared slice backing array
+	v1Manifest.Files = make([]struct {
+		Path   string `json:"path"`
+		Size   int64  `json:"size"`
+		Digest string `json:"digest"`
+		Layer  int    `json:"layer"`
+	}, len(bundleManifest.Files))
+	copy(v1Manifest.Files, bundleManifest.Files)
 	// Zero out layer fields for v1
 	for i := range v1Manifest.Files {
 		v1Manifest.Files[i].Layer = 0

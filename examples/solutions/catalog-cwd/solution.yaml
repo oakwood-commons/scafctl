@@ -1,0 +1,78 @@
+# Catalog CWD Example
+# Demonstrates that catalog solutions write files to the caller's CWD by
+# default, matching the behaviour of local -f file runs. This aligns with
+# how npm init, cargo init, and cookiecutter work — they scaffold into the
+# directory you run them from.
+#
+# Build into local catalog:
+#   cd examples/solutions/catalog-cwd
+#   scafctl build solution solution.yaml --version 1.0.0
+#
+# Run from any directory (files land in your current directory):
+#   mkdir /tmp/my-project && cd /tmp/my-project
+#   scafctl run solution catalog-cwd-demo
+#
+# Run with --output-dir override:
+#   scafctl run solution catalog-cwd-demo --output-dir /tmp/output
+#
+# Verify:
+#   cat /tmp/my-project/README.md
+#   cat /tmp/my-project/config/settings.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: catalog-cwd-demo
+  version: 1.0.0
+  description: |
+    Demonstrates catalog solution CWD resolution. When run from the catalog,
+    file-writing actions resolve relative paths against the caller's working
+    directory — matching local -f file runs.
+
+bundle:
+  include:
+    - data/**
+
+spec:
+  resolvers:
+    project_name:
+      description: Project name
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: my-project
+
+    bundled-license:
+      description: Read license template from bundle
+      type: any
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              operation: read
+              path: data/license-header.txt
+
+  workflow:
+    actions:
+      write-readme:
+        description: Write README to caller's CWD
+        provider: file
+        inputs:
+          operation: write
+          path: README.md
+          content:
+            expr: '"# " + _.project_name + "\n\nScaffolded by scafctl catalog-cwd-demo.\n"'
+
+
+      write-config:
+        description: Write config with bundled data
+        provider: file
+        inputs:
+          operation: write
+          path: config/settings.yaml
+          createDirs: true
+          content:
+            expr: |
+              "# " + string(_["bundled-license"].content) + "\nproject:\n  name: " + _.project_name + "\n  version: 0.1.0\n"
