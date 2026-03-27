@@ -390,3 +390,117 @@ func TestWithWalkDirFunc(t *testing.T) {
 	cfg.walkDir(".", nil)
 	assert.True(t, called)
 }
+
+func TestDiscoverFiles_SkipsActionWritePaths(t *testing.T) {
+	// File write actions produce output files — their paths should not be
+	// treated as source files to bundle. Only read paths should be discovered.
+	sol := &solution.Solution{}
+	err := sol.UnmarshalFromBytes([]byte(`
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test
+  version: 1.0.0
+spec:
+  resolvers:
+    data:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+  workflow:
+    actions:
+      write-output:
+        provider: file
+        inputs:
+          operation: write
+          path: "output.txt"
+          content:
+            rslvr: data
+      delete-file:
+        provider: file
+        inputs:
+          operation: delete
+          path: "temp.txt"
+`))
+	require.NoError(t, err)
+
+	result, err := DiscoverFiles(sol, t.TempDir())
+	require.NoError(t, err)
+	assert.Empty(t, result.LocalFiles, "write/delete action paths must not be bundled")
+}
+
+func TestDiscoverFiles_IncludesActionReadPaths(t *testing.T) {
+	// File read actions in the workflow DO need their paths bundled.
+	tmpDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "input.txt"), []byte("data"), 0o644))
+
+	sol := &solution.Solution{}
+	err := sol.UnmarshalFromBytes([]byte(`
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test
+  version: 1.0.0
+spec:
+  resolvers:
+    data:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+  workflow:
+    actions:
+      read-input:
+        provider: file
+        inputs:
+          operation: read
+          path: "input.txt"
+`))
+	require.NoError(t, err)
+
+	result, err := DiscoverFiles(sol, tmpDir)
+	require.NoError(t, err)
+	require.Len(t, result.LocalFiles, 1)
+	assert.Equal(t, "input.txt", result.LocalFiles[0].RelPath)
+}
+
+func BenchmarkWalkActionInputs(b *testing.B) {
+	sol := &solution.Solution{}
+	err := sol.UnmarshalFromBytes([]byte(`
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: bench
+  version: 1.0.0
+spec:
+  workflow:
+    actions:
+      write-a:
+        provider: file
+        inputs:
+          operation: write
+          path: "a.txt"
+          content:
+            rslvr: data
+      write-b:
+        provider: file
+        inputs:
+          operation: write
+          path: "b.txt"
+          content:
+            rslvr: data
+      read-c:
+        provider: file
+        inputs:
+          operation: read
+          path: "c.txt"
+`))
+	require.NoError(b, err)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		analyzeProviderInputs(sol)
+	}
+}

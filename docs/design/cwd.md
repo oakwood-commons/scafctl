@@ -136,3 +136,35 @@ The `--cwd` value is validated at entry point (CLI root or MCP `contextWithCwd`)
 3. Verified to be a directory (not a file)
 
 Invalid values produce a clear error before any command logic executes.
+
+---
+
+## Catalog Solution CWD
+
+When running a catalog solution (bare name), the bundle is extracted to a temporary
+directory and the process CWD is changed there so resolvers can read bundled files.
+
+However, file-writing **actions** need to resolve relative paths against the
+caller's original working directory — not the temporary bundle directory. The CLI
+injects the caller's CWD into the action execution context via
+`provider.WithWorkingDirectory(actionCtx, originalCwd)`. This ensures
+`AbsFromContext` resolves relative action paths against the caller's CWD, matching
+the behaviour of local `-f` file runs.
+
+```
+Catalog run:  scafctl run solution my-app
+
+1. User is in /projects/my-app (caller CWD)
+2. Bundle extracted to /tmp/scafctl-bundle-xyz/
+3. os.Chdir(/tmp/scafctl-bundle-xyz/)   ← resolvers read bundled files here
+4. originalCwd captured as /projects/my-app
+5. actionCtx = WithWorkingDirectory(ctx, originalCwd)
+6. Actions resolve "./output" → /projects/my-app/output  ← correct
+```
+
+This aligns with how tools like `npm init`, `cargo init`, and `cookiecutter` work
+— they scaffold into the directory you run them from, regardless of where the
+template source lives.
+
+When `--output-dir` is specified, it takes precedence over the context CWD for
+action path resolution (unchanged behaviour).
