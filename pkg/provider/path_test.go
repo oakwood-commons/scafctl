@@ -367,6 +367,29 @@ func TestResolvePath_ActionModeOutputDirTakesPrecedenceOverContextCWD(t *testing
 	assert.Equal(t, "/output/dir/subdir/file.txt", result)
 }
 
+func TestResolvePath_ActionModeContextCWDUsedWithoutOutputDir(t *testing.T) {
+	// Simulates a catalog solution run without --output-dir: action mode is set,
+	// context working directory is the caller's CWD, but no output directory.
+	// ResolvePath should resolve against the context CWD (not os.Getwd).
+	ctx := context.Background()
+	ctx = WithWorkingDirectory(ctx, "/caller/project")
+	ctx = WithExecutionMode(ctx, CapabilityAction)
+
+	result, err := ResolvePath(ctx, "output/file.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "/caller/project/output/file.txt", result)
+}
+
+func BenchmarkResolvePath_ActionModeContextCWDNoOutputDir(b *testing.B) {
+	ctx := context.Background()
+	ctx = WithWorkingDirectory(ctx, "/caller/project")
+	ctx = WithExecutionMode(ctx, CapabilityAction)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = ResolvePath(ctx, "output/file.txt")
+	}
+}
+
 // ── WorkingDirectory context round-trip tests ──
 
 func TestWorkingDirectoryFromContext_NotSet(t *testing.T) {

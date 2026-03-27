@@ -6,10 +6,12 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/action"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
 )
@@ -76,6 +78,14 @@ func (s *Server) handlePreviewAction(_ context.Context, request mcp.CallToolRequ
 		}
 	}
 
+	// Capture caller's CWD before prepare.Solution may os.Chdir to a bundle temp dir
+	originalCwd, err := provider.GetWorkingDirectory(ctx)
+	if err != nil {
+		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to get working directory: %v", err),
+			WithSuggestion("This is an internal error — please report it"),
+		), nil
+	}
+
 	// Load solution
 	prepResult, err := prepare.Solution(ctx, path,
 		prepare.WithRegistry(s.registry),
@@ -90,6 +100,16 @@ func (s *Server) handlePreviewAction(_ context.Context, request mcp.CallToolRequ
 	if prepResult.Cleanup != nil {
 		defer prepResult.Cleanup()
 	}
+
+	// If bundle extraction changed the process CWD, pin the resolver context
+	// to the bundle dir so file reads resolve within the extracted bundle,
+	// not against any caller-provided cwd override.
+	if bundleCwd, cwdErr := os.Getwd(); cwdErr == nil && bundleCwd != originalCwd {
+		ctx = provider.WithWorkingDirectory(ctx, bundleCwd)
+	}
+
+	// Separate action context resolves paths against the caller's CWD.
+	actionCtx := provider.WithWorkingDirectory(ctx, originalCwd)
 
 	sol := prepResult.Solution
 
@@ -110,7 +130,7 @@ func (s *Server) handlePreviewAction(_ context.Context, request mcp.CallToolRequ
 	}
 
 	// Build the action graph (this materializes inputs)
-	graph, err := action.BuildGraph(ctx, sol.Spec.Workflow, resolverData, nil)
+	graph, err := action.BuildGraph(actionCtx, sol.Spec.Workflow, resolverData, nil)
 	if err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to build action graph: %v", err),
 			WithSuggestion("Check action definitions and dependencies. Use lint_solution to find structural issues."),

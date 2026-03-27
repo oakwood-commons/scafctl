@@ -151,6 +151,7 @@ The build command walks the parsed solution YAML and extracts literal file paths
 - Catalog references (e.g., `deploy-to-k8s@2.0.0`) and URLs (`https://...`) are excluded.
 - Absolute paths are rejected during build with a clear error — bundled solutions must use relative paths.
 - Discovered paths are resolved relative to the bundle root (the directory containing the solution YAML).
+- Both resolvers and workflow actions are analyzed. For the `file` provider, only `read` operations are bundled — `write` actions produce output paths that should not be treated as bundle inputs.
 
 **Recursive discovery for sub-solutions:** When a sub-solution is discovered via the `solution` provider, the build command recursively analyzes the sub-solution's YAML for its own local file references. All paths are normalized relative to the parent solution's bundle root.
 
