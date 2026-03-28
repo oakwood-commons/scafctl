@@ -1,0 +1,126 @@
+name: Benchmark
+
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    name: Benchmark Comparison
+    # Only run on PRs from the same repo (not forks)
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    env:
+      SCAFCTL_SECRET_KEY: dGVzdC1zZWNyZXQta2V5LWZvci1jaS0xMjM0NTY3ODk=
+      BENCH_COUNT: 6
+      BENCH_TIME: 1s
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Install benchstat
+        run: go install golang.org/x/perf/cmd/benchstat@latest
+
+      - name: Run benchmarks on PR branch
+        run: |
+          go test -run='^$' -bench='.' -benchmem -benchtime="${BENCH_TIME}" -count="${BENCH_COUNT}" -timeout=30m ./... | tee pr-bench.txt
+
+      - name: Checkout base branch
+        run: git checkout "${{ github.event.pull_request.base.sha }}"
+
+      - name: Run benchmarks on base branch
+        run: |
+          go test -run='^$' -bench='.' -benchmem -benchtime="${BENCH_TIME}" -count="${BENCH_COUNT}" -timeout=30m ./... | tee base-bench.txt
+
+      - name: Compare benchmarks
+        id: benchstat
+        run: |
+          set +e
+          RESULT=$(benchstat base-bench.txt pr-bench.txt 2>&1)
+          EMPTY=false
+          if [ -z "$RESULT" ] || echo "$RESULT" | grep -q 'no data'; then
+            EMPTY=true
+          fi
+          echo "empty=$EMPTY" >> "$GITHUB_OUTPUT"
+          echo "result<<BENCHSTAT_RESULT_EOF_7f3a9b" >> "$GITHUB_OUTPUT"
+          echo "$RESULT" >> "$GITHUB_OUTPUT"
+          echo "BENCHSTAT_RESULT_EOF_7f3a9b" >> "$GITHUB_OUTPUT"
+          set -e
+
+      - name: Post benchmark comparison
+        if: steps.benchstat.outputs.empty != 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const marker = '<!-- benchmark-comparison -->';
+            const result = process.env.BENCHSTAT_RESULT || 'No results available';
+            const count = process.env.BENCH_COUNT || '6';
+            const benchTime = process.env.BENCH_TIME || '1s';
+            const body = [
+              marker,
+              '## Benchmark Comparison',
+              '',
+              '<details>',
+              '<summary>Click to expand benchmark results</summary>',
+              '',
+              '```',
+              result,
+              '```',
+              '',
+              '</details>',
+              '',
+              '> **How to read**: `~` means no significant change, `+` means regression, `-` means improvement. `p`-value ≥ 0.05 means the difference is not statistically significant.',
+              '>',
+              '> Benchmarks ran with `-count=' + count + '` and `-benchtime=' + benchTime + '`.',
+            ].join('\n');
+
+            // Find and update existing comment, or create new one
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c => c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+        env:
+          BENCHSTAT_RESULT: ${{ steps.benchstat.outputs.result }}
+          BENCH_COUNT: ${{ env.BENCH_COUNT }}
+          BENCH_TIME: ${{ env.BENCH_TIME }}
