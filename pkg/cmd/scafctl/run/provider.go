@@ -374,6 +374,14 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 	ctx = provider.WithExecutionMode(ctx, capability)
 	ctx = provider.WithDryRun(ctx, o.DryRun)
 
+	// Inject IOStreams so streaming providers (exec, message, etc.) can write to the terminal.
+	if o.IOStreams != nil {
+		ctx = provider.WithIOStreams(ctx, &provider.IOStreams{
+			Out:    o.IOStreams.Out,
+			ErrOut: o.IOStreams.ErrOut,
+		})
+	}
+
 	// Inject conflict strategy and backup into context for file providers
 	if o.OnConflict != "" {
 		if !fileprovider.ConflictStrategy(o.OnConflict).IsValid() {

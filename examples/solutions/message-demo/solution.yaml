@@ -1,0 +1,101 @@
+# Message Demo Solution
+#
+# A complete solution demonstrating the message provider in a realistic
+# workflow with resolvers, actions, and rich terminal output.
+#
+# Run: scafctl run solution -f examples/solutions/message-demo/solution.yaml -r environment=production
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: message-demo
+  version: 1.0.0
+  description: Demonstrates the message provider in a complete solution workflow with styled terminal output
+
+spec:
+  resolvers:
+    environment:
+      description: Target deployment environment
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: environment
+          - provider: static
+            inputs:
+              value: staging
+
+    config:
+      description: Application configuration
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                appName: demo-service
+                version: 3.1.0
+                healthEndpoint: /health
+                port: 8080
+
+  workflow:
+    actions:
+      start-banner:
+        description: Display deployment start banner
+        provider: message
+        inputs:
+          message:
+            tmpl: "Starting deployment of {{ .config.appName }} v{{ .config.version }} to {{ .environment }}"
+          label: "step 1/4"
+          style:
+            icon: "\U0001F680"
+            color: cyan
+
+      validate-env:
+        description: Validate environment and show status
+        dependsOn: [start-banner]
+        provider: message
+        inputs:
+          message:
+            expr: |
+              _.environment in ['staging', 'production']
+                ? 'Environment validated: ' + _.environment
+                : 'Invalid environment: ' + _.environment
+          label: "step 2/4"
+          type:
+            expr: |
+              _.environment in ['staging', 'production']
+                ? 'success'
+                : 'error'
+
+      show-config:
+        description: Display deployment configuration
+        dependsOn: [validate-env]
+        provider: message
+        inputs:
+          message:
+            tmpl: "Deploying {{ .config.appName }} on port {{ .config.port }}"
+          label: "step 3/4"
+          style:
+            color: "#87CEEB"
+            icon: "\U0001F4E6"
+
+      critical-notice:
+        description: Critical notice always shown even with --quiet
+        dependsOn: [show-config]
+        provider: message
+        inputs:
+          message: "Ensure database migrations are applied before this deployment"
+          type: warning
+          quiet: force
+
+      deploy-complete:
+        description: Show deployment completion
+        dependsOn: [critical-notice]
+        provider: message
+        inputs:
+          message:
+            tmpl: "Deployment of {{ .config.appName }} to {{ .environment }} completed successfully"
+          label: "step 4/4"
+          type: success

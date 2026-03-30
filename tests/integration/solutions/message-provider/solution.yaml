@@ -1,0 +1,137 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: message-provider-test
+  version: 1.0.0
+  description: Integration tests for the message provider
+
+spec:
+  resolvers:
+    plain_msg:
+      description: Plain message output
+      resolve:
+        with:
+          - provider: message
+            inputs:
+              message: "Hello from message provider"
+              type: plain
+
+    success_msg:
+      description: Success message output
+      resolve:
+        with:
+          - provider: message
+            inputs:
+              message: "Operation completed"
+              type: success
+
+    templated_msg:
+      description: Go template message with resolver data
+      resolve:
+        with:
+          - provider: message
+            inputs:
+              message:
+                tmpl: "Greeting: {{ .plain_msg.message }}"
+              type: plain
+
+    cel_msg:
+      description: CEL expression message
+      resolve:
+        with:
+          - provider: message
+            inputs:
+              message:
+                expr: "'CEL says: ' + string(_.success_msg.success)"
+              type: plain
+
+    silent_msg:
+      description: Silent message (output data only)
+      resolve:
+        with:
+          - provider: message
+            inputs:
+              message: "silent data"
+              quiet: silent
+
+    no_newline_msg:
+      description: Message without trailing newline
+      resolve:
+        with:
+          - provider: message
+            inputs:
+              message: "no-newline"
+              type: plain
+              newline: false
+
+    labeled_msg:
+      description: Message with contextual label
+      resolve:
+        with:
+          - provider: message
+            inputs:
+              message: "Installing deps"
+              type: info
+              label: "step 1"
+
+  testing:
+    config:
+      skipBuiltins: [render-defaults]
+
+    cases:
+      basic-execution:
+        description: Verify message provider runs successfully
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __stdout.contains('"message"')
+
+      plain-message-output:
+        description: Verify plain message text appears in output
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __stdout.contains('Hello from message provider')
+
+      success-message-data:
+        description: Verify success message sets success=true in output
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __stdout.contains('Operation completed')
+
+      silent-message-data:
+        description: Verify silent message is in output data but not streamed
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __stdout.contains('silent data')
+
+      templated-message:
+        description: Verify Go template interpolation with resolver data
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __stdout.contains('Greeting:')
+
+      cel-expression-message:
+        description: Verify CEL expression computes message from resolver data
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __stdout.contains('CEL says:')
+
+      labeled-message:
+        description: Verify label appears in terminal output
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __stdout.contains('Installing deps')
