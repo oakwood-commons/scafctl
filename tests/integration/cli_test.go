@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -96,11 +97,24 @@ func runScafctl(t *testing.T, args ...string) (stdout, stderr string, exitCode i
 
 func runScafctlInDir(t *testing.T, dir string, args ...string) (stdout, stderr string, exitCode int) {
 	t.Helper()
+	return runScafctlWithStdinInDir(t, dir, nil, args...)
+}
+
+func runScafctlWithStdin(t *testing.T, stdin io.Reader, args ...string) (stdout, stderr string, exitCode int) {
+	t.Helper()
+	return runScafctlWithStdinInDir(t, findProjectRoot(), stdin, args...)
+}
+
+func runScafctlWithStdinInDir(t *testing.T, dir string, stdin io.Reader, args ...string) (stdout, stderr string, exitCode int) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, binaryPath, args...)
 	cmd.Dir = dir
+	if stdin != nil {
+		cmd.Stdin = stdin
+	}
 
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
@@ -6744,4 +6758,133 @@ func TestIntegration_RunSolution_BackupFlag_CreatesBackupFile(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join(outputDir, "new-file.txt"))
 	require.NoError(t, err)
 	assert.Contains(t, string(content), "Hello from conflict test")
+}
+
+// ============================================================================
+// Stdin Parameter Tests (@-)
+// ============================================================================
+
+func TestIntegration_RunResolver_StdinParamsYAML(t *testing.T) {
+	t.Parallel()
+	stdin := strings.NewReader("name: StdinAlice\ncount: 7\n")
+	stdout, stderr, exitCode := runScafctlWithStdin(t, stdin,
+		"run", "resolver",
+		"-f", "examples/resolvers/parameters.yaml",
+		"-o", "json",
+		"--hide-execution",
+		"-r", "@-",
+	)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstdout: %s\nstderr: %s", exitCode, stdout, stderr)
+	assert.Contains(t, stdout, "StdinAlice")
+}
+
+func TestIntegration_RunResolver_StdinParamsJSON(t *testing.T) {
+	t.Parallel()
+	stdin := strings.NewReader(`{"name": "StdinBob", "count": 3}`)
+	stdout, stderr, exitCode := runScafctlWithStdin(t, stdin,
+		"run", "resolver",
+		"-f", "examples/resolvers/parameters.yaml",
+		"-o", "json",
+		"--hide-execution",
+		"-r", "@-",
+	)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstdout: %s\nstderr: %s", exitCode, stdout, stderr)
+	assert.Contains(t, stdout, "StdinBob")
+}
+
+func TestIntegration_RunResolver_StdinParamsPositional(t *testing.T) {
+	t.Parallel()
+	stdin := strings.NewReader("name: StdinCharlie\n")
+	stdout, stderr, exitCode := runScafctlWithStdin(t, stdin,
+		"run", "resolver",
+		"-f", "examples/resolvers/parameters.yaml",
+		"-o", "json",
+		"--hide-execution",
+		"@-",
+	)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstdout: %s\nstderr: %s", exitCode, stdout, stderr)
+	assert.Contains(t, stdout, "StdinCharlie")
+}
+
+func TestIntegration_RunResolver_StdinConflictWithFileStdin(t *testing.T) {
+	t.Parallel()
+	stdin := strings.NewReader("name: test\n")
+	_, stderr, exitCode := runScafctlWithStdin(t, stdin,
+		"run", "resolver",
+		"-f", "-",
+		"-r", "@-",
+	)
+
+	assert.NotEqual(t, 0, exitCode, "expected non-zero exit code\nstderr: %s", stderr)
+	assert.Contains(t, stderr, "cannot use both -f - and @-")
+}
+
+func TestIntegration_RunSolution_StdinParams(t *testing.T) {
+	t.Parallel()
+	// Scaffold a solution with a workflow, then run it with @- stdin params
+	tmpDir := t.TempDir()
+	outFile := filepath.Join(tmpDir, "solution.yaml")
+
+	_, _, exitCode := runScafctl(t, "new", "solution", "-n", "stdin-test", "--description", "Stdin test", "-o", outFile)
+	require.Equal(t, 0, exitCode)
+
+	stdin := strings.NewReader(`{"inputName": "StdinWorld"}`)
+	stdout, stderr, exitCode := runScafctlWithStdin(t, stdin,
+		"run", "solution",
+		"-f", outFile,
+		"-r", "@-",
+		"-o", "json",
+	)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstdout: %s\nstderr: %s", exitCode, stdout, stderr)
+	// Verify the solution ran successfully — the scaffolded solution echoes output
+	assert.Contains(t, stdout, `"status": "succeeded"`)
+}
+
+func TestIntegration_RunSolution_StdinConflictWithFileStdin(t *testing.T) {
+	t.Parallel()
+	stdin := strings.NewReader("inputName: test\n")
+	_, stderr, exitCode := runScafctlWithStdin(t, stdin,
+		"run", "solution",
+		"-f", "-",
+		"-r", "@-",
+	)
+
+	assert.NotEqual(t, 0, exitCode, "expected non-zero exit code\nstderr: %s", stderr)
+	assert.Contains(t, stderr, "cannot use both -f - and @-")
+}
+
+func TestIntegration_RunResolver_StdinMixedWithFileRef(t *testing.T) {
+	t.Parallel()
+	// Create a param file with one key, pipe another via stdin
+	tmpDir := t.TempDir()
+	paramFile := filepath.Join(tmpDir, "params.yaml")
+	err := os.WriteFile(paramFile, []byte("name: FromFile\n"), 0o600)
+	require.NoError(t, err)
+
+	stdin := strings.NewReader("count: 7\n")
+	stdout, stderr, exitCode := runScafctlWithStdin(t, stdin,
+		"run", "resolver",
+		"-f", "examples/resolvers/parameters.yaml",
+		"-o", "json",
+		"--hide-execution",
+		"-r", "@"+paramFile,
+		"-r", "@-",
+	)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstdout: %s\nstderr: %s", exitCode, stdout, stderr)
+	assert.Contains(t, stdout, "FromFile")
 }

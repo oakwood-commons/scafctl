@@ -256,6 +256,18 @@ scafctl run resolver -f examples/resolvers/parameters.yaml \
   -r uppercase=true
 ```
 
+### Load Parameters from a File
+```bash
+# Load all parameters from a YAML or JSON file
+scafctl run resolver -f examples/resolvers/parameters.yaml -r @params.yaml
+```
+
+### Pipe Parameters from Stdin
+```bash
+# Pipe YAML or JSON parameters via stdin using @-
+echo '{"name": "Bob", "count": 5}' | scafctl run resolver -f examples/resolvers/parameters.yaml -r @-
+```
+
 ### Interactive Mode
 ```bash
 # Explore output in a TUI (navigate, search, filter)

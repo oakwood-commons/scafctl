@@ -1,0 +1,74 @@
+# Test: Resolver parameters from stdin via @-
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: stdin-params-test
+  version: 1.0.0
+  description: Tests reading resolver parameters from stdin using @-
+
+spec:
+  resolvers:
+    greeting:
+      description: Greeting from stdin parameter
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: greeting
+
+    name:
+      description: Name from stdin parameter
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: name
+
+    message:
+      description: Combined message
+      type: string
+      dependsOn: [greeting, name]
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: message
+              template: "{{ .greeting }}, {{ .name }}!"
+
+  testing:
+    config:
+      skipBuiltins: [resolve-defaults, render-defaults]
+
+    cases:
+      _base:
+        description: Base template for stdin-params tests
+        command: [run, resolver]
+        args: ["-o", "json", "--hide-execution"]
+        tags: [parameter, stdin]
+        assertions:
+          - expression: __exitCode == 0
+
+      basic-params:
+        description: Verify parameters resolve correctly via -r flags
+        extends: [_base]
+        args: ["-r", "greeting=Hello", "-r", "name=World"]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.greeting == "Hello"
+            message: "greeting should resolve to Hello"
+          - expression: __output.name == "World"
+            message: "name should resolve to World"
+          - expression: '__output.message == "Hello, World!"'
+            message: "message should combine greeting and name"
+
+      different-values:
+        description: Verify with different parameter values
+        extends: [_base]
+        args: ["-r", "greeting=Hi", "-r", "name=Alice"]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.greeting == "Hi"
+          - expression: __output.name == "Alice"
+          - expression: '__output.message == "Hi, Alice!"'

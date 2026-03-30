@@ -6,6 +6,7 @@ package flags
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -190,6 +191,325 @@ func TestParseResolverFlags_FileRefError(t *testing.T) {
 	_, err := ParseResolverFlags([]string{"@/nonexistent/file.yaml"})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to read parameter file")
+}
+
+func TestLoadParameterReader(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected map[string]any
+		wantErr  string
+	}{
+		{
+			name:  "valid yaml",
+			input: "key1: value1\nkey2: 123\n",
+			expected: map[string]any{
+				"key1": "value1",
+				"key2": 123,
+			},
+		},
+		{
+			name:  "valid json",
+			input: `{"key1": "value1", "key2": 123}`,
+			expected: map[string]any{
+				"key1": "value1",
+				"key2": 123, // YAML parser is tried first and parses ints as int
+			},
+		},
+		{
+			name:  "nested yaml",
+			input: "nested:\n  key: value\n",
+			expected: map[string]any{
+				"nested": map[string]any{
+					"key": "value",
+				},
+			},
+		},
+		{
+			name:    "empty input",
+			input:   "",
+			wantErr: "no data received from stdin",
+		},
+		{
+			name:    "whitespace-only input",
+			input:   "\n  \n\t\n",
+			wantErr: "no data received from stdin",
+		},
+		{
+			name:    "invalid data",
+			input:   "{{{{invalid",
+			wantErr: "failed to parse stdin as YAML or JSON",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := strings.NewReader(tt.input)
+			result, err := LoadParameterReader(r, "stdin")
+
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestParseResolverFlagsWithStdin(t *testing.T) {
+	t.Parallel()
+
+	t.Run("reads parameters from stdin via @-", func(t *testing.T) {
+		t.Parallel()
+
+		stdin := strings.NewReader("greeting: hello\nname: world\n")
+		result, err := ParseResolverFlagsWithStdin([]string{"@-"}, stdin)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]any{
+			"greeting": "hello",
+			"name":     "world",
+		}, result)
+	})
+
+	t.Run("stdin JSON", func(t *testing.T) {
+		t.Parallel()
+
+		stdin := strings.NewReader(`{"env": "prod", "count": 42}`)
+		result, err := ParseResolverFlagsWithStdin([]string{"@-"}, stdin)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]any{
+			"env":   "prod",
+			"count": 42, // YAML parser is tried first
+		}, result)
+	})
+
+	t.Run("mixes @- with key=value", func(t *testing.T) {
+		t.Parallel()
+
+		stdin := strings.NewReader("fromStdin: yes\n")
+		result, err := ParseResolverFlagsWithStdin([]string{"cli=value", "@-"}, stdin)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]any{
+			"cli":       "value",
+			"fromStdin": "yes",
+		}, result)
+	})
+
+	t.Run("mixes @- with @file", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		filePath := filepath.Join(tmpDir, "params.yaml")
+		err := os.WriteFile(filePath, []byte("fileKey: fileValue\n"), 0o600)
+		require.NoError(t, err)
+
+		stdin := strings.NewReader("stdinKey: stdinValue\n")
+		result, err := ParseResolverFlagsWithStdin([]string{"@" + filePath, "@-"}, stdin)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]any{
+			"fileKey":  "fileValue",
+			"stdinKey": "stdinValue",
+		}, result)
+	})
+
+	t.Run("errors on duplicate @-", func(t *testing.T) {
+		t.Parallel()
+
+		stdin := strings.NewReader("key: value\n")
+		_, err := ParseResolverFlagsWithStdin([]string{"@-", "@-"}, stdin)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "@- can only be specified once")
+	})
+
+	t.Run("errors when stdin is nil", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := ParseResolverFlagsWithStdin([]string{"@-"}, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "@- requires stdin but no stdin is available")
+	})
+
+	t.Run("no @- passes through to ParseResolverFlags behavior", func(t *testing.T) {
+		t.Parallel()
+
+		result, err := ParseResolverFlagsWithStdin([]string{"key=value"}, nil)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]any{"key": "value"}, result)
+	})
+
+	t.Run("stdin merges with overlapping keys from CLI", func(t *testing.T) {
+		t.Parallel()
+
+		stdin := strings.NewReader("key: fromStdin\n")
+		result, err := ParseResolverFlagsWithStdin([]string{"key=fromCLI", "@-"}, stdin)
+		require.NoError(t, err)
+		// Both values merged into array since key appears twice
+		assert.Equal(t, map[string]any{
+			"key": []any{"fromCLI", "fromStdin"},
+		}, result)
+	})
+
+	t.Run("key=@- reads raw stdin as value", func(t *testing.T) {
+		t.Parallel()
+
+		stdin := strings.NewReader("hello world\n")
+		result, err := ParseResolverFlagsWithStdin([]string{"message=@-"}, stdin)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]any{
+			"message": "hello world",
+		}, result)
+	})
+
+	t.Run("key=@- trims single trailing newline", func(t *testing.T) {
+		t.Parallel()
+
+		stdin := strings.NewReader("line1\nline2\n")
+		result, err := ParseResolverFlagsWithStdin([]string{"content=@-"}, stdin)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]any{
+			"content": "line1\nline2",
+		}, result)
+	})
+
+	t.Run("key=@- with other key=value params", func(t *testing.T) {
+		t.Parallel()
+
+		stdin := strings.NewReader("piped data\n")
+		result, err := ParseResolverFlagsWithStdin([]string{"name=test", "body=@-"}, stdin)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]any{
+			"name": "test",
+			"body": "piped data",
+		}, result)
+	})
+
+	t.Run("key=@- errors on nil stdin", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := ParseResolverFlagsWithStdin([]string{"msg=@-"}, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "@- requires stdin but no stdin is available")
+	})
+
+	t.Run("key=@- errors on empty stdin", func(t *testing.T) {
+		t.Parallel()
+
+		stdin := strings.NewReader("")
+		_, err := ParseResolverFlagsWithStdin([]string{"msg=@-"}, stdin)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no data received from stdin")
+	})
+
+	t.Run("key=@- conflicts with standalone @-", func(t *testing.T) {
+		t.Parallel()
+
+		stdin := strings.NewReader("data\n")
+		_, err := ParseResolverFlagsWithStdin([]string{"msg=@-", "@-"}, stdin)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "@- can only be specified once")
+	})
+
+	t.Run("standalone @- then key=@- conflicts", func(t *testing.T) {
+		t.Parallel()
+
+		stdin := strings.NewReader("key: value\n")
+		_, err := ParseResolverFlagsWithStdin([]string{"@-", "msg=@-"}, stdin)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "@- can only be specified once")
+	})
+
+	t.Run("key=@file reads raw file content", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		filePath := filepath.Join(tmpDir, "content.txt")
+		err := os.WriteFile(filePath, []byte("file content here\n"), 0o600)
+		require.NoError(t, err)
+
+		result, err := ParseResolverFlagsWithStdin([]string{"data=@" + filePath}, nil)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]any{
+			"data": "file content here",
+		}, result)
+	})
+
+	t.Run("key=@file errors on missing file", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := ParseResolverFlagsWithStdin([]string{"data=@/nonexistent/file.txt"}, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to read file")
+	})
+
+	t.Run("key=@file with key=@- together", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		filePath := filepath.Join(tmpDir, "content.txt")
+		err := os.WriteFile(filePath, []byte("from file\n"), 0o600)
+		require.NoError(t, err)
+
+		stdin := strings.NewReader("from stdin\n")
+		result, err := ParseResolverFlagsWithStdin([]string{"file=@" + filePath, "pipe=@-"}, stdin)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]any{
+			"file": "from file",
+			"pipe": "from stdin",
+		}, result)
+	})
+}
+
+func TestParseValueRef(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input  string
+		key    string
+		ref    string
+		wantOK bool
+	}{
+		{"key=@-", "key", "-", true},
+		{"msg=@/path/to/file.txt", "msg", "/path/to/file.txt", true},
+		{"key=value", "", "", false},  // no @ in value
+		{"key=@", "", "", false},      // @ alone — too short (need at least @X)
+		{"@-", "", "", false},         // standalone, no =
+		{"@file.yaml", "", "", false}, // standalone file ref
+		{"noequals", "", "", false},   // no = sign
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			t.Parallel()
+
+			key, ref, ok := parseValueRef(tt.input)
+			assert.Equal(t, tt.wantOK, ok, "ok mismatch")
+			if ok {
+				assert.Equal(t, tt.key, key)
+				assert.Equal(t, tt.ref, ref)
+			}
+		})
+	}
+}
+
+func TestContainsStdinRef(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, ContainsStdinRef([]string{"key=value", "@-"}))
+	assert.True(t, ContainsStdinRef([]string{"@-"}))
+	assert.True(t, ContainsStdinRef([]string{"msg=@-"}))
+	assert.True(t, ContainsStdinRef([]string{"key=value", "body=@-"}))
+	assert.False(t, ContainsStdinRef([]string{"key=value"}))
+	assert.False(t, ContainsStdinRef([]string{"@file.yaml"}))
+	assert.False(t, ContainsStdinRef([]string{"key=@file.txt"}))
+	assert.False(t, ContainsStdinRef([]string{}))
+	assert.False(t, ContainsStdinRef(nil))
 }
 
 func TestMergeValue(t *testing.T) {
@@ -378,5 +698,48 @@ func BenchmarkParseDynamicInputArgs(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		_, _ = ParseDynamicInputArgs(args)
+	}
+}
+
+func BenchmarkLoadParameterReader(b *testing.B) {
+	data := "key1: value1\nkey2: 123\nnested:\n  a: b\n"
+	for b.Loop() {
+		r := strings.NewReader(data)
+		_, _ = LoadParameterReader(r, "stdin")
+	}
+}
+
+func BenchmarkParseResolverFlagsWithStdin(b *testing.B) {
+	data := "stdinKey: stdinValue\nother: 42\n"
+	for b.Loop() {
+		r := strings.NewReader(data)
+		_, _ = ParseResolverFlagsWithStdin([]string{"key=value", "@-"}, r)
+	}
+}
+
+func BenchmarkParseResolverFlagsWithStdin_ValueRef(b *testing.B) {
+	for b.Loop() {
+		r := strings.NewReader("hello world\n")
+		_, _ = ParseResolverFlagsWithStdin([]string{"key=value", "msg=@-"}, r)
+	}
+}
+
+func BenchmarkParseValueRef(b *testing.B) {
+	for b.Loop() {
+		parseValueRef("message=@-")
+	}
+}
+
+func BenchmarkContainsStdinRef(b *testing.B) {
+	values := []string{"key1=value1", "key2=value2", "@file.yaml", "@-"}
+	for b.Loop() {
+		_ = ContainsStdinRef(values)
+	}
+}
+
+func BenchmarkContainsStdinRef_ValueRef(b *testing.B) {
+	values := []string{"key1=value1", "key2=value2", "msg=@-"}
+	for b.Loop() {
+		_ = ContainsStdinRef(values)
 	}
 }

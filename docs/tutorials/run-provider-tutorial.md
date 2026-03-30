@@ -211,6 +211,25 @@ scafctl run provider http --input '@inputs.yaml'
 {{% /tab %}}
 {{< /tabs >}}
 
+### Read Inputs from Stdin
+
+Use `@-` to pipe inputs from stdin as YAML or JSON:
+
+{{< tabs "runprov-stdin-input" >}}
+{{% tab "Bash" %}}
+```bash
+echo '{"url": "https://api.example.com", "method": "GET"}' | scafctl run provider http --input @-
+cat inputs.yaml | scafctl run provider http @-
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+'{"url": "https://api.example.com", "method": "GET"}' | scafctl run provider http --input '@-'
+Get-Content inputs.yaml | scafctl run provider http '@-'
+```
+{{% /tab %}}
+{{< /tabs >}}
+
 Output:
 
 ```json

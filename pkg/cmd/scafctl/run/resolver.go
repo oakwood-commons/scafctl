@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -147,16 +148,24 @@ RESOLVER PARAMETERS:
 
   1. Positional key=value (recommended):
        key=value         After resolver names or on its own
-       @file.yaml        Load parameters from a file
+       key=@-            Read raw stdin as value for key
+       key=@file         Read raw file content as value for key
+       @file.yaml        Load parameters from a file (parsed as YAML/JSON)
+       @-                Read parameters from stdin (parsed as YAML/JSON)
 
   2. Explicit -r/--resolver flag:
        -r key=value      Repeatable flag
        -r key=val1,val2  Multiple values become an array
+       -r key=@-         Read raw stdin as value for key
+       -r key=@file      Read raw file content as value for key
        -r @file.yaml     Load parameters from a YAML file
        -r @file.json     Load parameters from a JSON file
+       -r @-             Read parameters from stdin (YAML or JSON)
 
   Both forms can be mixed. When the same key appears multiple
   times, later values override earlier ones (last-wins).
+
+  Note: @- cannot be combined with -f - (both read from stdin).
 
   Bare words (without '=') are treated as resolver names (or the solution
   reference if -f is not provided — see SOLUTION SOURCE above).
@@ -202,6 +211,18 @@ Examples:
 
   # Load parameters from a file (positional)
   scafctl run resolver -f ./my-solution.yaml @params.yaml
+
+  # Load parameters from stdin (pipe YAML or JSON)
+  echo '{"env": "prod"}' | scafctl run resolver -f ./my-solution.yaml @-
+
+  # Pipe parameters from another command
+  cat params.yaml | scafctl run resolver -f ./my-solution.yaml -r @-
+
+  # Pipe raw stdin into a single parameter
+  echo hello | scafctl run resolver -f ./my-solution.yaml message=@-
+
+  # Read a file's raw content into a parameter
+  scafctl run resolver -f ./my-solution.yaml body=@content.txt
 
   # JSON output for scripting
   scafctl run resolver -f ./my-solution.yaml -o json | jq .
@@ -311,6 +332,14 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 			exitcode.InvalidInput)
 	}
 
+	// Detect @- / -f - conflict early: stdin can only be consumed once.
+	// Check both -r flags and positional dynamic args before anything reads stdin.
+	if o.File == "-" && (flags.ContainsStdinRef(o.ResolverParams) || flags.ContainsStdinRef(o.DynamicArgs)) {
+		return o.exitWithCode(ctx,
+			fmt.Errorf("cannot use both -f - and @-: stdin can only be read once"),
+			exitcode.InvalidInput)
+	}
+
 	// Prepare solution: load, set up registry, handle bundles
 	sol, reg, cleanup, err := o.prepareSolutionForExecution(ctx)
 	if err != nil {
@@ -329,8 +358,12 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 	allParams = append(allParams, o.ResolverParams...)
 	allParams = append(allParams, extraParsed...)
 
-	// Parse resolver parameters
-	params, err := flags.ParseResolverFlags(allParams)
+	// Parse resolver parameters (pass stdin for @- support)
+	var stdinReader io.Reader
+	if o.IOStreams != nil {
+		stdinReader = o.IOStreams.In
+	}
+	params, err := flags.ParseResolverFlagsWithStdin(allParams, stdinReader)
 	if err != nil {
 		return o.exitWithCode(ctx, fmt.Errorf("failed to parse resolver parameters: %w", err), exitcode.ValidationFailed)
 	}

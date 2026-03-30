@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -102,9 +103,14 @@ To execute resolvers only without actions (for debugging/inspection), use:
 RESOLVER PARAMETERS:
   Parameters can be passed using -r/--resolver flag in several formats:
     key=value         Simple key-value pair
+    key=@-            Read raw stdin as value for key
+    key=@file         Read raw file content as value for key
     @file.yaml        Load parameters from YAML file  
     @file.json        Load parameters from JSON file
+    @-                Read parameters from stdin (YAML or JSON)
     key=val1,val2     Multiple values become an array
+
+  Note: @- cannot be combined with -f - (both read from stdin).
 
 EXECUTION ORDER:
   1. Parse and validate solution (must have workflow)
@@ -151,6 +157,15 @@ Examples:
 
   # Run with parameters
   scafctl run solution -r env=prod -r region=us-east1
+
+  # Load parameters from stdin (pipe YAML or JSON)
+  echo '{"env": "prod"}' | scafctl run solution -f ./my-solution.yaml -r @-
+
+  # Pipe raw stdin into a single parameter
+  echo hello | scafctl run solution -f ./my-solution.yaml -r message=@-
+
+  # Read a file's raw content into a parameter
+  scafctl run solution -f ./my-solution.yaml -r body=@content.txt
 
   # Dry run (validate and show what would execute)
   scafctl run solution -f ./my-solution.yaml --dry-run
@@ -276,6 +291,13 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		"onConflict", o.OnConflict,
 		"backup", o.Backup)
 
+	// Detect @- / -f - conflict early: stdin can only be consumed once
+	if o.File == "-" && flags.ContainsStdinRef(o.ResolverParams) {
+		return o.exitWithCode(ctx,
+			fmt.Errorf("cannot use both -f - and @-: stdin can only be read once"),
+			exitcode.InvalidInput)
+	}
+
 	// Validate and prepare output directory before execution (fail-fast).
 	// In dry-run mode, resolve the path without creating the directory.
 	absOutputDir, err := o.resolveOutputDir(ctx, o.DryRun)
@@ -313,8 +335,12 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		return o.exitWithCode(ctx, fmt.Errorf("workflow validation failed: %w", err), exitcode.ValidationFailed)
 	}
 
-	// Parse resolver parameters
-	params, err := flags.ParseResolverFlags(o.ResolverParams)
+	// Parse resolver parameters (pass stdin for @- support)
+	var stdinReader io.Reader
+	if o.IOStreams != nil {
+		stdinReader = o.IOStreams.In
+	}
+	params, err := flags.ParseResolverFlagsWithStdin(o.ResolverParams, stdinReader)
 	if err != nil {
 		return o.exitWithCode(ctx, fmt.Errorf("failed to parse resolver parameters: %w", err), exitcode.ValidationFailed)
 	}

@@ -324,6 +324,40 @@ scafctl run solution example \
 
 Validation errors are reported immediately with helpful messages.
 
+#### Parameter File References (@file)
+
+Load all parameters from a YAML or JSON file using the `@` prefix:
+
+~~~bash
+# Load from a YAML file
+scafctl run resolver -f solution.yaml -r @params.yaml
+
+# Load from a JSON file
+scafctl run resolver -f solution.yaml -r @params.json
+
+# Mix file and inline parameters
+scafctl run resolver -f solution.yaml -r @defaults.yaml -r env=prod
+~~~
+
+#### Stdin Parameters (@-)
+
+Read all parameters from stdin as YAML or JSON using `@-`, following the same convention as curl:
+
+~~~bash
+# Pipe JSON from echo
+echo '{"env": "prod", "region": "us-east1"}' | scafctl run resolver -f solution.yaml -r @-
+
+# Pipe from a file via cat
+cat params.yaml | scafctl run solution example -r @-
+
+# Use as positional argument
+echo '{"env": "prod"}' | scafctl run resolver -f solution.yaml @-
+~~~
+
+**Restrictions:**
+- `@-` can only appear once (stdin is consumed on first read)
+- `@-` cannot be combined with `-f -` (both read from stdin)
+
 ---
 
 ## Rendering With Parameters

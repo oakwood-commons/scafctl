@@ -484,7 +484,7 @@ func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context)
 // addSharedResolverFlags adds common resolver flags to a cobra command.
 func addSharedResolverFlags(cCmd *cobra.Command, o *sharedResolverOptions) {
 	cCmd.Flags().StringVarP(&o.File, "file", "f", "", "Solution file path or catalog name (auto-discovered if not provided, use '-' for stdin)")
-	cCmd.Flags().StringArrayVarP(&o.ResolverParams, "resolver", "r", nil, "Resolver parameters (key=value or @file.yaml)")
+	cCmd.Flags().StringArrayVarP(&o.ResolverParams, "resolver", "r", nil, "Resolver parameters (key=value, key=@- for raw stdin, @file.yaml, or @- for stdin)")
 	flags.AddKvxOutputFlagsToStruct(cCmd, &o.KvxOutputFlags)
 
 	cCmd.Flags().BoolVar(&o.ResolveAll, "resolve-all", false, "Execute all resolvers regardless of action requirements")

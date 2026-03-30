@@ -1343,9 +1343,18 @@ Resolver parameters support multiple input forms.
 
 ### Stdin Input
 
+Single parameter from stdin:
 ~~~bash
 cat config.json | scafctl run solution example -r config=-
 ~~~
+
+All parameters from stdin using `@-` (YAML or JSON):
+~~~bash
+echo '{"env": "prod", "region": "us-east1"}' | scafctl run resolver -f solution.yaml -r @-
+cat params.yaml | scafctl run solution example -r @-
+~~~
+
+> **Note:** `@-` cannot be combined with `-f -` since both consume stdin. Uses the same `@file` convention as `@params.yaml`.
 
 ### File References
 

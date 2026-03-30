@@ -263,8 +263,12 @@ func (s *Server) handleCreateSolutionPrompt(_ context.Context, request mcp.GetPr
 		featureList = features
 	}
 
-	prompt := fmt.Sprintf(`You are creating a new scafctl solution named %q.
-Description: %s
+	prompt := strings.NewReplacer(
+		"{name}", name,
+		"{description}", description,
+		"{features}", featureList,
+	).Replace(`You are creating a new scafctl solution named "{name}".
+Description: {description}
 
 IMPORTANT: Before writing any YAML, you MUST use these tools to understand the correct schema:
 
@@ -273,7 +277,7 @@ IMPORTANT: Before writing any YAML, you MUST use these tools to understand the c
 3. Call get_example with path "solutions/email-notifier/solution.yaml" for a practical reference
 4. Call get_example with path "solutions/comprehensive/solution.yaml" for a comprehensive reference
 
-Requested features: %s
+Requested features: {features}
 
 Follow these rules when creating the solution:
 - apiVersion MUST be "scafctl.io/v1"
@@ -304,15 +308,21 @@ IMPORTANT: Choose the correct run command based on whether the solution has a wo
   • If the solution has ONLY resolvers and NO spec.workflow section:
       scafctl run resolver -f ./<filename>.yaml key=value
     'scafctl run solution' will FAIL if there is no workflow defined.
-Parameters are passed with -r/--resolver or positional key=value (NOT -p). Example:
-  scafctl run resolver -f ./%s.yaml param1=value1 param2=value2
-  scafctl run solution -f ./%s.yaml -r param1=value1 -r param2=value2
+Parameters are passed with -r/--resolver or positional key=value (NOT -p).
+Parameters can also be loaded from files (-r @file.yaml), piped from stdin (-r @-),
+or read as raw content into a single key (key=@- for stdin, key=@file for files).
+Example:
+  scafctl run resolver -f ./{name}.yaml param1=value1 param2=value2
+  scafctl run solution -f ./{name}.yaml -r param1=value1 -r param2=value2
+  echo '{"param1": "value1"}' | scafctl run resolver -f ./{name}.yaml -r @-
+  echo hello | scafctl run resolver -f ./{name}.yaml -r message=@-
+  scafctl run resolver -f ./{name}.yaml body=@content.txt
 
 After creating the solution file:
 1. Call lint_solution to validate the YAML structure
 2. Call preview_resolvers to verify the resolver chain produces expected values
 3. Call get_run_command to show the user the exact command to run it
-4. If the solution has tests, call run_solution_tests to verify they pass`, name, description, featureList, name, name)
+4. If the solution has tests, call run_solution_tests to verify they pass`)
 
 	return &mcp.GetPromptResult{
 		Description: fmt.Sprintf("Create a new scafctl solution: %s", name),

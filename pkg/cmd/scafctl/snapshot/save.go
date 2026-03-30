@@ -11,6 +11,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
+	"github.com/oakwood-commons/scafctl/pkg/flags"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
@@ -70,14 +71,14 @@ func CommandSave(_ *settings.Run, ioStreams terminal.IOStreams, binaryName strin
 
 	cmd.Flags().StringVarP(&opts.OutputFile, "output", "o", "", "Output snapshot file (required)")
 	cmd.Flags().BoolVar(&opts.Redact, "redact", false, "Redact sensitive values in snapshot")
-	cmd.Flags().StringArrayVarP(&opts.Parameters, "resolver", "r", []string{}, "Resolver parameters (key=value)")
+	cmd.Flags().StringArrayVarP(&opts.Parameters, "resolver", "r", []string{}, "Resolver parameters (key=value, key=@- for raw stdin, @file.yaml, or @- for stdin)")
 
 	_ = cmd.MarkFlagRequired("output")
 
 	return cmd
 }
 
-func runSave(ctx context.Context, opts *SaveOptions, _ terminal.IOStreams) error {
+func runSave(ctx context.Context, opts *SaveOptions, ioStreams terminal.IOStreams) error {
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
 
@@ -117,16 +118,11 @@ func runSave(ctx context.Context, opts *SaveOptions, _ terminal.IOStreams) error
 	}
 
 	// Parse parameters
-	params := make(map[string]any)
-	for _, param := range opts.Parameters {
-		// Simple key=value parsing (could be enhanced with flags.ParseKeyValueCSV)
-		var key, value string
-		if _, err := fmt.Sscanf(param, "%[^=]=%s", &key, &value); err != nil {
-			err := fmt.Errorf("invalid parameter format '%s': expected key=value", param)
-			writeErr(err)
-			return exitcode.WithCode(err, exitcode.InvalidInput)
-		}
-		params[key] = value
+	params, err := flags.ParseResolverFlagsWithStdin(opts.Parameters, ioStreams.In)
+	if err != nil {
+		err = fmt.Errorf("failed to parse resolver parameters: %w", err)
+		writeErr(err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
 	lgr.V(-1).Info("executing resolvers",

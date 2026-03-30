@@ -6,6 +6,7 @@ package run
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -105,13 +106,19 @@ PROVIDER INPUTS:
 
   1. Positional key=value (recommended):
        key=value                After the provider name
-       @file.yaml               Load inputs from a file
+       key=@-                   Read raw stdin as value for key
+       key=@file                Read raw file content as value for key
+       @file.yaml               Load inputs from a file (parsed as YAML/JSON)
+       @-                       Read inputs from stdin (parsed as YAML/JSON)
 
   2. Explicit --input flag:
        --input key=value        Repeatable flag
        --input key=val1,val2    Multiple values become an array
+       --input key=@-           Read raw stdin as value for key
+       --input key=@file        Read raw file content as value for key
        --input @file.yaml       Load inputs from a YAML file
        --input @file.json       Load inputs from a JSON file
+       --input @-               Read inputs from stdin (YAML or JSON)
 
   Both forms can be mixed. When the same key appears multiple
   times, later values override earlier ones (last-wins).
@@ -153,6 +160,16 @@ Examples:
   scafctl run provider http --input @inputs.yaml
   scafctl run provider http @inputs.yaml
 
+  # Load inputs from stdin (pipe YAML or JSON)
+  echo '{"url": "https://example.com"}' | scafctl run provider http --input @-
+
+  # Pipe raw stdin into a single key
+  echo hello | scafctl run provider message message=@-
+  cat body.txt | scafctl run provider http url=https://example.com body=@-
+
+  # Read a file's raw content into a key
+  scafctl run provider message message=@greeting.txt
+
   # Run with a specific capability
   scafctl run provider validation --input value=test --capability validation
 
@@ -177,7 +194,7 @@ Examples:
 	}
 
 	// Provider input flags
-	cCmd.Flags().StringArrayVar(&options.InputParams, "input", nil, "Provider input parameters (key=value or @file.yaml)")
+	cCmd.Flags().StringArrayVar(&options.InputParams, "input", nil, "Provider input parameters (key=value, key=@- for raw stdin, @file.yaml, or @- for stdin)")
 	cCmd.Flags().StringVar(&options.Capability, "capability", "", "Capability to execute (default: first declared capability)")
 	cCmd.Flags().BoolVar(&options.DryRun, "dry-run", false, "Show what would be executed without running the provider")
 	cCmd.Flags().StringArrayVar(&options.PluginDirs, "plugin-dir", nil, "Directory to scan for plugin providers")
@@ -339,8 +356,12 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 	allParams = append(allParams, o.InputParams...)
 	allParams = append(allParams, extraParsed...)
 
-	// Parse input parameters
-	inputs, err := flags.ParseResolverFlags(allParams)
+	// Parse input parameters (pass stdin for @- support)
+	var stdinReader io.Reader
+	if o.IOStreams != nil {
+		stdinReader = o.IOStreams.In
+	}
+	inputs, err := flags.ParseResolverFlagsWithStdin(allParams, stdinReader)
 	if err != nil {
 		err := fmt.Errorf("failed to parse input parameters: %w", err)
 		w.Errorf("%v", err)
