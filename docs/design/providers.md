@@ -1117,6 +1117,75 @@ resolve:
 
 ---
 
+### message
+
+Outputs styled, feature-rich terminal messages during solution execution. Supports built-in message types (success, warning, error, info, debug, plain), custom formatting with colors and icons via lipgloss, destination control (stdout/stderr), and configurable `--quiet` mode behavior. For dynamic interpolation, use the framework's `tmpl:` or `expr:` ValueRef on the `message` input.
+
+**Capabilities:** `action`, `from`
+
+**Input Fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `message` | string | — | Message text. Use `tmpl:` or `expr:` ValueRef for dynamic content. |
+| `type` | enum | `info` | `success`, `warning`, `error`, `info`, `debug`, `plain` |
+| `label` | string | — | Contextual prefix rendered as dimmed `[label]` between icon and message |
+| `style` | object | — | Custom formatting that merges on top of type defaults: `color`, `bold`, `italic`, `icon` |
+| `destination` | enum | `stdout` | `stdout` or `stderr` |
+| `quiet` | enum | `respect` | `respect` (suppressed in quiet), `force` (always), `silent` (data only) |
+| `newline` | bool | `true` | Whether to append trailing newline |
+
+~~~yaml
+# Built-in type styling
+resolve:
+  with:
+    - provider: message
+      inputs:
+        message: "Deployment completed successfully"
+        type: success
+
+# Custom styling with icon
+resolve:
+  with:
+    - provider: message
+      inputs:
+        message: "Starting pipeline"
+        style:
+          color: "#FF5733"
+          bold: true
+          icon: "\U0001F680"
+
+# Go template interpolation via tmpl: ValueRef
+resolve:
+  with:
+    - provider: message
+      inputs:
+        message:
+          tmpl: "Deploying {{ .appName }} to {{ .environment }}"
+        type: info
+
+# CEL expression via expr: ValueRef
+resolve:
+  with:
+    - provider: message
+      inputs:
+        message:
+          expr: "'Processed ' + string(size(_.items)) + ' items'"
+        type: success
+
+# Force display in quiet mode
+resolve:
+  with:
+    - provider: message
+      inputs:
+        message: "CRITICAL: Migration required"
+        type: error
+        quiet: force
+        destination: stderr
+~~~
+
+---
+
 ### sleep
 
 Introduces delays for testing and rate-limiting scenarios.

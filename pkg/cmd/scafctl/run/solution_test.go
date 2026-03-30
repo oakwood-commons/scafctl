@@ -996,7 +996,7 @@ spec:
 			PhaseTimeout:    5 * time.Minute,
 			registry:        testRegistry(),
 		},
-		Verbose: true, // --verbose without --dry-run
+		Verbose: true, // --verbose without --dry-run should not warn
 	}
 
 	lgr := logger.Get(0)
@@ -1004,11 +1004,11 @@ spec:
 	w := writer.New(streams, cliParams)
 	ctx = writer.WithWriter(ctx, w)
 
-	// Run may error (action timeout etc) — we only care about the warning
+	// Run may error (action timeout etc) — we care that no warning is emitted
 	_ = opts.Run(ctx)
 
 	output := stdout.String()
-	assert.Contains(t, output, "--verbose has no effect without --dry-run")
+	assert.NotContains(t, output, "--verbose has no effect")
 }
 
 func BenchmarkSolutionOptions_resolveOutputDir(b *testing.B) {

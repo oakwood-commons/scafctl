@@ -43,6 +43,7 @@ Step-by-step guides for learning scafctl features.
 - [Exec Provider Tutorial](exec-provider-tutorial.md) — Cross-platform shell execution with embedded and external shells
 - [Directory Provider Tutorial](directory-provider-tutorial.md) — Listing, scanning, and managing directories
 - [HCL Provider Tutorial](hcl-provider-tutorial.md) — Parse, format, validate, and generate Terraform/OpenTofu HCL configuration files
+- [Message Provider Tutorial](message-provider-tutorial.md) — Rich terminal output with styled messages, templates, and quiet-mode control
 - [Provider Output Shapes](provider-output-shapes.md) — Quick reference for provider output data shapes
 - [Provider Reference](provider-reference.md) — Complete documentation for all built-in providers
 
