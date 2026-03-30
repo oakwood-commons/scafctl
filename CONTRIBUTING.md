@@ -96,6 +96,35 @@ go test -coverprofile=coverage.out ./...
 go tool cover -html=coverage.out
 ```
 
+### 3b. Run Benchmarks
+
+```bash
+# Run all benchmarks (quick, single iteration)
+task bench
+
+# Run benchmarks for a specific package
+task bench BENCH_PKG=./pkg/resolver/...
+
+# Run benchmarks with higher count for comparison
+task bench BENCH_COUNT=6
+
+# Run benchmarks matching a pattern
+task bench BENCH_PATTERN=BenchmarkRedact
+
+# CI-style run (5 iterations, 20m timeout) for statistical comparison
+task bench:ci
+
+# Compare benchmarks between branches (manual)
+git stash && go test -bench=. -benchmem -count=6 ./... > base.txt && git stash pop
+go test -bench=. -benchmem -count=6 ./... > pr.txt
+benchstat base.txt pr.txt
+```
+
+All new features and providers should include benchmark tests in `*_test.go` files.
+Use `b.Loop()` (not `for i := 0; i < b.N; i++`) for benchmark loops.
+Always call `b.ReportAllocs()` before `b.ResetTimer()` in every benchmark function.
+Benchmark-only files should use the `*_benchmark_test.go` naming convention.
+
 ### 4. Lint Your Code
 
 ```bash

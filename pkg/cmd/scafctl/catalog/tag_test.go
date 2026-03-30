@@ -7,7 +7,10 @@ import (
 	"testing"
 
 	catalogpkg "github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestIsValidTagChar(t *testing.T) {
@@ -19,5 +22,134 @@ func TestIsValidTagChar(t *testing.T) {
 	invalid := []rune{'/', ':', ' ', '@', '#', '!', '(', ')'}
 	for _, ch := range invalid {
 		assert.False(t, catalogpkg.IsValidTagChar(ch), "expected %q to be invalid", string(ch))
+	}
+}
+
+func TestCommandTag(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandTag(cliParams, ioStreams, "scafctl/catalog")
+
+	require.NotNil(t, cmd)
+	assert.Equal(t, "tag <name@version> <alias>", cmd.Use)
+	assert.NotEmpty(t, cmd.Short)
+	assert.NotNil(t, cmd.RunE)
+}
+
+func TestCommandTag_Flags(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandTag(cliParams, ioStreams, "scafctl/catalog")
+
+	flagTests := []struct {
+		name     string
+		defValue string
+	}{
+		{"catalog", ""},
+		{"kind", ""},
+		{"insecure", "false"},
+	}
+
+	for _, tt := range flagTests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			f := cmd.Flags().Lookup(tt.name)
+			require.NotNil(t, f, "flag %q should exist", tt.name)
+			assert.Equal(t, tt.defValue, f.DefValue, "flag %q default value", tt.name)
+		})
+	}
+}
+
+func TestCommandTag_CatalogFlagShorthand(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandTag(cliParams, ioStreams, "scafctl/catalog")
+
+	f := cmd.Flags().ShorthandLookup("c")
+	require.NotNil(t, f, "shorthand -c should exist")
+	assert.Equal(t, "catalog", f.Name)
+}
+
+func TestCommandTag_RequiresTwoArgs(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"no args", []string{}},
+		{"one arg", []string{"my-solution@1.0.0"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c := CommandTag(settings.NewCliParams(), ioStreams, "scafctl/catalog")
+			c.SetArgs(tt.args)
+			err := c.Execute()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "accepts 2 arg(s)")
+		})
+	}
+}
+
+func TestCommandTag_InvalidAlias_SemverVersion(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandTag(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(newCatalogTestCtx(t))
+	// Semver versions are not valid aliases
+	cmd.SetArgs([]string{"my-solution@1.0.0", "2.0.0"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+}
+
+func TestCommandTag_MissingVersion(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandTag(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(newCatalogTestCtx(t))
+	// No version in reference
+	cmd.SetArgs([]string{"my-solution", "stable"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "version required")
+}
+
+func TestCommandTag_InvalidKind(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandTag(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(newCatalogTestCtx(t))
+	cmd.SetArgs([]string{"my-solution@1.0.0", "stable", "--kind", "not-a-valid-kind"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid kind")
+}
+
+func BenchmarkCommandTag(b *testing.B) {
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		CommandTag(cliParams, ioStreams, "scafctl/catalog")
 	}
 }
