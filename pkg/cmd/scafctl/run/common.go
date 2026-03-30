@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -412,6 +413,26 @@ func (o *sharedResolverOptions) executeResolvers(
 
 	// Attach solution metadata to the context so providers (e.g., metadata) can access it.
 	ctx = provider.WithSolutionMetadata(ctx, solutionMetaFromSolution(sol))
+
+	// Inject IOStreams so streaming providers (message, exec, etc.) can write to the terminal
+	// during resolver execution. For structured output modes (json/yaml), route provider
+	// stdout to stderr to avoid corrupting the data envelope on stdout.
+	// For quiet mode, discard all provider output to honour the --quiet contract.
+	if o.IOStreams != nil {
+		providerOut := o.IOStreams.Out
+		providerErr := o.IOStreams.ErrOut
+		switch strings.ToLower(o.Output) {
+		case "json", "yaml":
+			providerOut = o.IOStreams.ErrOut
+		case "quiet":
+			providerOut = io.Discard
+			providerErr = io.Discard
+		}
+		ctx = provider.WithIOStreams(ctx, &provider.IOStreams{
+			Out:    providerOut,
+			ErrOut: providerErr,
+		})
+	}
 
 	// Execute resolvers
 	resultCtx, err := executor.Execute(ctx, resolvers, params)

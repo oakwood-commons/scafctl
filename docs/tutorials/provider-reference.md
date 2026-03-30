@@ -38,6 +38,7 @@ Providers are execution primitives used by resolvers and actions. Each provider 
 | [hcl](#hcl) | ✅ | ✅ | ❌ | ❌ |
 | [http](#http) | ✅ | ✅ | ❌ | ✅ |
 | [identity](#identity) | ✅ | ❌ | ❌ | ❌ |
+| [message](#message) | ❌ | ✅ | ❌ | ✅ |
 | [metadata](#metadata) | ✅ | ❌ | ❌ | ❌ |
 | [parameter](#parameter) | ✅ | ❌ | ❌ | ❌ |
 | [secret](#secret) | ✅ | ❌ | ❌ | ❌ |
@@ -1464,6 +1465,107 @@ resolvers:
               "Running " + _.runtime_meta.solution.name +
               " v" + _.runtime_meta.solution.version +
               " via " + _.runtime_meta.entrypoint
+```
+
+---
+
+## message
+
+Outputs styled terminal messages with built-in types, custom formatting via lipgloss, destination control, and respects `--quiet` and `--no-color` flags. For dynamic interpolation, use the framework's `tmpl:` or `expr:` ValueRef on the `message` input — the provider does not handle templating internally.
+
+### Capabilities
+
+`action`
+
+### Inputs
+
+| Field | Type | Required | Description |
+|-------|------|:--------:|-------------|
+| `message` | string | ✅ | Message text to output. Use `tmpl:` or `expr:` ValueRef for dynamic interpolation. |
+| `type` | string | ❌ | Message type: `success`, `warning`, `error`, `info` (default), `debug`, `plain` |
+| `label` | string | ❌ | Contextual prefix rendered as dimmed `[label]` between icon and message (e.g., `step 2/5`) |
+| `style` | object | ❌ | Custom formatting that merges on top of type defaults: `color` (hex or named), `bold`, `italic`, `icon` |
+| `destination` | string | ❌ | Output target: `stdout` (default) or `stderr` |
+| `newline` | bool | ❌ | Append trailing newline (default: `true`) |
+
+### Output
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `success` | bool | Always `true` on success |
+| `message` | string | Rendered message text |
+
+### Examples
+
+**Built-in type styling:**
+
+```yaml
+resolvers:
+  step1:
+    resolve:
+      with:
+        - provider: message
+          inputs:
+            message: "Build succeeded"
+            type: success
+```
+
+**Custom style with icon:**
+
+```yaml
+resolvers:
+  deploy:
+    resolve:
+      with:
+        - provider: message
+          inputs:
+            message: "Starting pipeline"
+            style:
+              color: "#FF5733"
+              bold: true
+              icon: "\U0001F680"
+```
+
+**Go template interpolation via `tmpl:` ValueRef:**
+
+```yaml
+resolvers:
+  config:
+    resolve:
+      with:
+        - provider: static
+          inputs:
+            value:
+              appName: my-service
+              version: 2.0.0
+  deploy-msg:
+    resolve:
+      with:
+        - provider: message
+          inputs:
+            message:
+              tmpl: "Deploying {{ .config.appName }} v{{ .config.version }}"
+            type: info
+```
+
+**CEL expression via `expr:` ValueRef:**
+
+```yaml
+resolvers:
+  items:
+    resolve:
+      with:
+        - provider: static
+          inputs:
+            value: [a, b, c]
+  status:
+    resolve:
+      with:
+        - provider: message
+          inputs:
+            message:
+              expr: "'Processed ' + string(size(_.items)) + ' items'"
+            type: success
 ```
 
 ---

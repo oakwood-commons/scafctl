@@ -1043,3 +1043,67 @@ func TestLintProviderInputsForStep_ExecCommandInjection(t *testing.T) {
 	findings := filterFindingsByRule(result, "exec-command-injection")
 	assert.Len(t, findings, 1)
 }
+
+func TestLintTemplateUnderscorePrefix(t *testing.T) {
+	tests := []struct {
+		name        string
+		tmpl        string
+		expectError bool
+		errorCount  int
+	}{
+		{
+			name:        "underscore prefix triggers error",
+			tmpl:        "{{ ._.config.appName }}",
+			expectError: true,
+			errorCount:  1,
+		},
+		{
+			name:        "multiple underscore refs same resolver",
+			tmpl:        "{{ ._.config.appName }} {{ ._.config.version }}",
+			expectError: true,
+			errorCount:  1, // deduplicated per resolver name
+		},
+		{
+			name:        "multiple different underscore refs",
+			tmpl:        "{{ ._.config.appName }} {{ ._.env }}",
+			expectError: true,
+			errorCount:  2,
+		},
+		{
+			name:        "direct access - no error",
+			tmpl:        "{{ .config.appName }}",
+			expectError: false,
+		},
+		{
+			name:        "no dot-underscore - no error",
+			tmpl:        "plain text with no templates",
+			expectError: false,
+		},
+		{
+			name:        "__self is not flagged",
+			tmpl:        "{{ .__self }}",
+			expectError: false,
+		},
+		{
+			name:        "__actions is not flagged",
+			tmpl:        "{{ .__actions.build.result }}",
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := &Result{Findings: make([]*Finding, 0)}
+			lintTemplateUnderscorePrefix(tt.tmpl, "resolvers.msg.resolve.with[0].inputs.message", result)
+			findings := filterFindingsByRule(result, "tmpl-underscore-prefix")
+			if tt.expectError {
+				assert.Len(t, findings, tt.errorCount)
+				if len(findings) > 0 {
+					assert.Equal(t, SeverityError, findings[0].Severity)
+				}
+			} else {
+				assert.Empty(t, findings)
+			}
+		})
+	}
+}

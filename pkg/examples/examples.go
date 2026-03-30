@@ -289,6 +289,9 @@ func DescriptionFromPath(path string) string {
 		"providers/identity-scoped-claims.yaml":      "Identity provider — get claims from a scoped access token",
 		"providers/identity-scoped-status.yaml":      "Identity provider — check scoped token status and metadata",
 		"providers/metadata-full.yaml":               "Metadata provider — returns runtime metadata about scafctl and the current solution",
+		"providers/message-types.yaml":               "Message provider — all six built-in message types (success, warning, error, info, debug, plain)",
+		"providers/message-custom-style.yaml":        "Message provider — custom colors, bold, italic, icons, and newline control",
+		"providers/message-dynamic.yaml":             "Message provider — Go template interpolation and CEL expression messages",
 		"providers/metadata-single-field.yaml":       "Metadata provider — use CEL to extract a single field from runtime metadata",
 		"providers/security-example.yaml":            "Security hardening patterns across providers",
 	}

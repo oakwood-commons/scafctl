@@ -225,6 +225,13 @@ Varies by operation — parse returns structured data, format/validate return st
 | validation | `valid` | bool | Always `true` on success |
 | | `details` | string | `"all validations passed"` |
 
+### `message`
+
+| Capability | Fields | Type | Description |
+|-----------|--------|------|-------------|
+| action | `success` | bool | Always `true` on success |
+| | `message` | string | Rendered message text |
+
 ---
 
 ## Discovering Output Shapes

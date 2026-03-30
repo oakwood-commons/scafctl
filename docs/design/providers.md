@@ -526,7 +526,7 @@ type Descriptor struct {
   // Optional - if nil, the generic extraction logic is used which handles:
   // - ValueRef.Resolver references
   // - CEL expressions (_.resolverName patterns)
-  // - Go templates ({{._.resolverName}} patterns with default delimiters)
+  // - Go templates ({{.resolverName}} patterns with default delimiters)
   // Providers should implement this when they have custom input formats that may
   // contain resolver references, such as templates with custom delimiters.
   // The function receives the raw inputs map and returns resolver names that this input depends on.
@@ -1113,6 +1113,65 @@ resolve:
         message: "Current value"
         value:
           rslvr: someResolver
+~~~
+
+---
+
+### message
+
+Outputs styled, feature-rich terminal messages during solution execution. Supports built-in message types (success, warning, error, info, debug, plain), custom formatting with colors and icons via lipgloss, destination control (stdout/stderr), and respects `--quiet` and `--no-color` flags. For dynamic interpolation, use the framework's `tmpl:` or `expr:` ValueRef on the `message` input.
+
+**Capabilities:** `action`
+
+**Input Fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `message` | string | — | Message text. Use `tmpl:` or `expr:` ValueRef for dynamic content. |
+| `type` | enum | `info` | `success`, `warning`, `error`, `info`, `debug`, `plain` |
+| `label` | string | — | Contextual prefix rendered as dimmed `[label]` between icon and message |
+| `style` | object | — | Custom formatting that merges on top of type defaults: `color`, `bold`, `italic`, `icon` |
+| `destination` | enum | `stdout` | `stdout` or `stderr` |
+| `newline` | bool | `true` | Whether to append trailing newline |
+
+~~~yaml
+# Built-in type styling
+resolve:
+  with:
+    - provider: message
+      inputs:
+        message: "Deployment completed successfully"
+        type: success
+
+# Custom styling with icon
+resolve:
+  with:
+    - provider: message
+      inputs:
+        message: "Starting pipeline"
+        style:
+          color: "#FF5733"
+          bold: true
+          icon: "\U0001F680"
+
+# Go template interpolation via tmpl: ValueRef
+resolve:
+  with:
+    - provider: message
+      inputs:
+        message:
+          tmpl: "Deploying {{ .appName }} to {{ .environment }}"
+        type: info
+
+# CEL expression via expr: ValueRef
+resolve:
+  with:
+    - provider: message
+      inputs:
+        message:
+          expr: "'Processed ' + string(size(_.items)) + ' items'"
+        type: success
+
 ~~~
 
 ---

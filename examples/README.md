@@ -52,7 +52,7 @@ scafctl examples list -o json
 |-----------|-------------|
 | [actions/](actions/) | Workflow automation with actions |
 | [exec/](exec/) | Exec provider shell execution patterns |
-| [providers/](providers/) | Provider-specific solution examples (http, exec, hcl, github, identity, metadata) |
+| [providers/](providers/) | Provider-specific solution examples (http, exec, hcl, github, identity, message, metadata) |
 | [resolvers/](resolvers/) | Dynamic value resolution patterns |
 | [solutions/](solutions/) | Complete end-to-end solution examples |
 | [snapshots/](snapshots/) | Execution snapshot capture and comparison |
@@ -156,6 +156,7 @@ Complete solutions demonstrating real-world use cases.
 | [tested-solution/](solutions/tested-solution/) | Functional testing features: assertions, inheritance, tags, watch mode |
 | [scaffold-demo/](solutions/scaffold-demo/) | Test scaffolding with `scafctl test init` — generates starter test suites |
 | [github-auth/](solutions/github-auth/) | GitHub authentication — identity, API calls, and status checks |
+| [message-demo/](solutions/message-demo/) | Message provider — styled terminal output with templates |
 
 ---
 

@@ -257,7 +257,10 @@ Sensitive fields are declared on the Descriptor (see [Mark Sensitive Data](#4-ma
 
 ## Execute Method
 
-The `Execute` method receives validated inputs and returns an `Output`:
+The `Execute` method receives validated inputs and returns an `Output`.
+
+> [!IMPORTANT]
+> **Inputs are pre-resolved by the framework.** When users write `tmpl:`, `expr:`, or `rslvr:` ValueRefs on any input field, the framework evaluates them **before** calling your provider. Your `Execute` method always receives plain, already-resolved values (strings, numbers, maps, etc.). **Do not** implement Go template or CEL evaluation inside your provider — that's the framework's job. See [Don't Duplicate ValueRef Handling](#6-dont-duplicate-valueref-handling).
 
 ```go
 func (p *MyProvider) Execute(ctx context.Context, input any) (*provider.Output, error) {
@@ -688,6 +691,33 @@ resolve:
     },
 },
 ```
+
+### 6. Don't Duplicate ValueRef Handling
+
+The scafctl framework provides a universal **ValueRef** system that allows users to use `tmpl:` (Go templates), `expr:` (CEL expressions), or `rslvr:` (resolver references) on **any** provider input field. The framework evaluates these before calling your provider and automatically detects resolver dependencies from the references — users don't even need `dependsOn`.
+
+**Do not** implement Go template parsing or CEL evaluation inside your provider. Your `Execute` method receives already-resolved plain values.
+
+```yaml
+# Users can write this for ANY provider — the framework handles it:
+resolvers:
+  greeting:
+    resolve:
+      with:
+        - provider: my-provider
+          inputs:
+            # tmpl: ValueRef — framework evaluates, provider receives plain string
+            url:
+              tmpl: "https://api.example.com/{{ .environment }}/data"
+            # expr: ValueRef — framework evaluates, provider receives plain string
+            query:
+              expr: "'status=' + _.filterMode"
+            # rslvr: ValueRef — framework resolves, provider receives the value
+            token:
+              rslvr: apiToken
+```
+
+In your provider's `Execute`, all three inputs arrive as plain strings. The framework also auto-detects that this resolver depends on `environment`, `filterMode`, and `apiToken` — no manual `dependsOn` required.
 
 ## Directory Structure
 
