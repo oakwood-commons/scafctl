@@ -236,6 +236,7 @@ Template Directory Rendering (directory → render-tree → write-tree pipeline)
 CLI Usage Reference (use these exact flags when suggesting commands to users):
   Run a solution:       scafctl run solution -f ./solution.yaml -r key=value
   Run resolvers only:   scafctl run resolver -f ./solution.yaml key=value
+  Run resolvers (catalog): scafctl run resolver my-catalog-solution key=value
   Lint a solution:      scafctl lint -f ./solution.yaml
   Inspect a solution:   scafctl explain -f ./solution.yaml
   Run tests:            scafctl test functional -f ./solution.yaml
@@ -273,6 +274,8 @@ Examples:
   scafctl run solution my-catalog-solution -r inputText="Hello World" -r operation=uppercase
   scafctl run resolver -f ./my-solution.yaml env=prod region=us-east1
   scafctl run resolver -f ./my-solution.yaml -r name=value
+  scafctl run resolver my-catalog-solution env=prod region=us-east1
+  scafctl run resolver my-catalog-solution@1.2.3 db config
 
 IMPORTANT — file path references:
   When mentioning solution filenames in responses, ALWAYS use a "./" prefix for

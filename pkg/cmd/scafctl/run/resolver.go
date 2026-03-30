@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
+	"github.com/oakwood-commons/scafctl/pkg/filepath"
 	"github.com/oakwood-commons/scafctl/pkg/flags"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -82,7 +83,7 @@ func CommandResolver(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 	}
 
 	cCmd := &cobra.Command{
-		Use:     "resolver [name...] [key=value...]",
+		Use:     "resolver [name[@version]] [resolver-name...] [key=value...]",
 		Aliases: []string{"res", "resolvers"},
 		Short:   "Execute resolvers for debugging and inspection",
 		Long: `Execute resolvers from a solution without running actions.
@@ -96,15 +97,28 @@ execution metadata: phase numbers, timing, provider info, dependencies, the
 resolver dependency graph, provider usage summary, and an aggregate summary.
 Use --hide-execution to suppress this metadata for cleaner output.
 
+SOLUTION SOURCE:
+  Solutions can be loaded from:
+  - Local catalog: Use the solution name (e.g., "my-app" or "my-app@1.2.3")
+  - Local file: Use -f flag or provide a path with separators (e.g., "./solution.yaml")
+  - URL: Provide an HTTP(S) URL, either via -f/--file or as the first positional argument
+  - Auto-discovery: If no source is specified, searches for solution.yaml in current directory
+
+  When -f/--file is not provided, the first positional argument is used as
+  the solution reference (catalog name, file path, or URL). This matches
+  the behavior of 'scafctl run solution'.
+
 RESOLVER SELECTION:
-  Pass resolver names as positional arguments to execute only specific
-  resolvers and their transitive dependencies. When no names are provided,
-  all resolvers in the solution are executed.
+  Pass resolver names as positional arguments (after the solution reference)
+  to execute only specific resolvers and their transitive dependencies.
+  When no names are provided, all resolvers in the solution are executed.
 
   Examples:
-    scafctl run resolver                    Execute all resolvers
-    scafctl run resolver db config          Execute 'db', 'config', and their deps
-    scafctl run resolver auth -f sol.yaml   Execute 'auth' and its deps
+    scafctl run resolver                           Execute all resolvers (auto-discovery)
+    scafctl run resolver my-app                    Execute all resolvers from catalog
+    scafctl run resolver my-app@1.2.3              Execute all resolvers from catalog version
+    scafctl run resolver my-app db config          Execute 'db', 'config', and their deps
+    scafctl run resolver db config -f sol.yaml     Execute 'db', 'config', and their deps
 
 SKIPPING PHASES:
   Use --skip-validation to skip the validation phase of all resolvers.
@@ -144,7 +158,8 @@ RESOLVER PARAMETERS:
   Both forms can be mixed. When the same key appears multiple
   times, later values override earlier ones (last-wins).
 
-  Bare words (without '=') are treated as resolver names.
+  Bare words (without '=') are treated as resolver names (or the solution
+  reference if -f is not provided — see SOLUTION SOURCE above).
   Words containing '=' or starting with '@' are treated as parameters.
 
 OUTPUT FORMATS:
@@ -161,6 +176,15 @@ EXIT CODES:
   4  File not found
 
 Examples:
+  # Run all resolvers from catalog by name (latest version)
+  scafctl run resolver my-app
+
+  # Run all resolvers from specific catalog version
+  scafctl run resolver my-app@1.2.3
+
+  # Run specific resolvers from catalog
+  scafctl run resolver my-app db config
+
   # Run all resolvers from a solution file
   scafctl run resolver -f ./my-solution.yaml
 
@@ -217,10 +241,23 @@ Examples:
 			})
 			// Split positional args: bare words are resolver names,
 			// args containing '=' or starting with '@' are dynamic parameters.
+			// When -f/--file is not explicitly set, the first bare word is
+			// treated as the solution reference (catalog name, file path, etc.),
+			// matching "run solution" behavior.
+			fileExplicit := options.flagsChanged["file"]
 			for _, arg := range args {
-				if strings.Contains(arg, "=") || strings.HasPrefix(arg, "@") {
+				switch {
+				case !fileExplicit && options.File == "" && filepath.IsURL(arg):
+					// URL solution references (may contain '=' in query params)
+					options.File = arg
+					fileExplicit = true
+				case strings.Contains(arg, "=") || strings.HasPrefix(arg, "@"):
 					options.DynamicArgs = append(options.DynamicArgs, arg)
-				} else {
+				case !fileExplicit && options.File == "":
+					// First bare word becomes the solution reference
+					options.File = arg
+					fileExplicit = true // only the first one
+				default:
 					options.Names = append(options.Names, arg)
 				}
 			}
