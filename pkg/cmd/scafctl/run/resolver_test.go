@@ -33,7 +33,7 @@ func TestCommandResolver(t *testing.T) {
 
 	cmd := CommandResolver(cliParams, streams, "")
 
-	assert.Equal(t, "resolver [name...] [key=value...]", cmd.Use)
+	assert.Equal(t, "resolver [name[@version]] [resolver-name...] [key=value...]", cmd.Use)
 	assert.NotEmpty(t, cmd.Short)
 	assert.Contains(t, cmd.Aliases, "res")
 	assert.Contains(t, cmd.Aliases, "resolvers")
@@ -1748,13 +1748,15 @@ func TestResolverOptions_PositionalKeyValue_SeparatesNamesFromParams(t *testing.
 
 	cmd := CommandResolver(cliParams, streams, "")
 
+	// When -f is set, bare words are resolver names
+	err := cmd.Flags().Set("file", "./sol.yaml")
+	require.NoError(t, err)
+
 	// Simulate cobra passing args: "db env=prod region=us-east-1"
 	args := []string{"db", "env=prod", "region=us-east-1"}
 	cmd.PreRun(cmd, args)
 
-	// Access the options through the PreRun closure
-	// The PreRun function closed over `options`, which is local to CommandResolver.
-	// Instead, test the logic directly by simulating arg splitting.
+	// Test the logic directly by simulating arg splitting (with -f set).
 	var names, dynamicArgs []string
 	for _, arg := range args {
 		if containsEqualsOrAtPrefix(arg) {
@@ -1805,17 +1807,22 @@ func TestResolverOptions_PositionalKeyValue_OnlyParams(t *testing.T) {
 func TestResolverOptions_PositionalKeyValue_OnlyNames(t *testing.T) {
 	t.Parallel()
 
+	// Without -f, first bare word is solution ref, rest are resolver names
 	args := []string{"db", "config", "auth"}
+	var solutionRef string
 	var names, dynamicArgs []string
 	for _, arg := range args {
 		if containsEqualsOrAtPrefix(arg) {
 			dynamicArgs = append(dynamicArgs, arg)
+		} else if solutionRef == "" {
+			solutionRef = arg
 		} else {
 			names = append(names, arg)
 		}
 	}
 
-	assert.Equal(t, []string{"db", "config", "auth"}, names)
+	assert.Equal(t, "db", solutionRef)
+	assert.Equal(t, []string{"config", "auth"}, names)
 	assert.Empty(t, dynamicArgs)
 }
 
@@ -1965,6 +1972,201 @@ func TestExtractSolutionPath_EmptyFlag(t *testing.T) {
 	cmd := CommandResolver(cliParams, streams, "")
 	path := extractSolutionPath(cmd)
 	assert.Empty(t, path)
+}
+
+func TestResolverArgs_CatalogNameAsFirstArg(t *testing.T) {
+	t.Parallel()
+
+	// Without -f, first bare word is the solution reference
+	ref, names, dynamicArgs := splitResolverArgs(
+		[]string{"my-app", "db", "config", "env=prod"},
+		false, // -f not set
+	)
+	assert.Equal(t, "my-app", ref)
+	assert.Equal(t, []string{"db", "config"}, names)
+	assert.Equal(t, []string{"env=prod"}, dynamicArgs)
+}
+
+func TestResolverArgs_CatalogNameWithVersion(t *testing.T) {
+	t.Parallel()
+
+	// Catalog name with @version should become the solution reference
+	ref, names, dynamicArgs := splitResolverArgs(
+		[]string{"my-app@1.2.3", "db"},
+		false,
+	)
+	// my-app@1.2.3 doesn't start with @ and doesn't contain =,
+	// so it's a bare word and becomes the solution ref
+	assert.Equal(t, "my-app@1.2.3", ref)
+	assert.Equal(t, []string{"db"}, names)
+	assert.Empty(t, dynamicArgs)
+}
+
+func TestResolverArgs_WithFileFlagAllBareWordsAreNames(t *testing.T) {
+	t.Parallel()
+
+	// With -f set, all bare words are resolver names
+	ref, names, dynamicArgs := splitResolverArgs(
+		[]string{"db", "config", "auth"},
+		true, // -f was set
+	)
+	assert.Empty(t, ref)
+	assert.Equal(t, []string{"db", "config", "auth"}, names)
+	assert.Empty(t, dynamicArgs)
+}
+
+func TestResolverArgs_OnlyCatalogName(t *testing.T) {
+	t.Parallel()
+
+	// Just a catalog name, no resolver filters
+	ref, names, dynamicArgs := splitResolverArgs(
+		[]string{"sln-starter-kit"},
+		false,
+	)
+	assert.Equal(t, "sln-starter-kit", ref)
+	assert.Empty(t, names)
+	assert.Empty(t, dynamicArgs)
+}
+
+func TestResolverArgs_CatalogNameWithParams(t *testing.T) {
+	t.Parallel()
+
+	// Catalog name + key=value params, no resolver name filters
+	ref, names, dynamicArgs := splitResolverArgs(
+		[]string{"sln-starter-kit", "env=prod", "region=us-east-1"},
+		false,
+	)
+	assert.Equal(t, "sln-starter-kit", ref)
+	assert.Empty(t, names)
+	assert.Equal(t, []string{"env=prod", "region=us-east-1"}, dynamicArgs)
+}
+
+func TestResolverArgs_OnlyParamsNoFile(t *testing.T) {
+	t.Parallel()
+
+	// Only key=value params — no solution ref, no names (auto-discovery)
+	ref, names, dynamicArgs := splitResolverArgs(
+		[]string{"env=prod"},
+		false,
+	)
+	assert.Empty(t, ref)
+	assert.Empty(t, names)
+	assert.Equal(t, []string{"env=prod"}, dynamicArgs)
+}
+
+func TestResolverArgs_NoArgs(t *testing.T) {
+	t.Parallel()
+
+	// No args at all (auto-discovery)
+	ref, names, dynamicArgs := splitResolverArgs(
+		[]string{},
+		false,
+	)
+	assert.Empty(t, ref)
+	assert.Empty(t, names)
+	assert.Empty(t, dynamicArgs)
+}
+
+func TestResolverArgs_PreRun_CatalogName(t *testing.T) {
+	t.Parallel()
+
+	streams, _, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+
+	cmd := CommandResolver(cliParams, streams, "")
+
+	// Simulate: scafctl run resolver sln-starter-kit db config
+	args := []string{"sln-starter-kit", "db", "config"}
+	cmd.PreRun(cmd, args)
+
+	// After PreRun, the file flag should be set to the catalog name
+	path := extractSolutionPath(cmd)
+	assert.Equal(t, "sln-starter-kit", path)
+}
+
+func TestResolverArgs_PreRun_CatalogNameWithVersion(t *testing.T) {
+	t.Parallel()
+
+	streams, _, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+
+	cmd := CommandResolver(cliParams, streams, "")
+
+	// Simulate: scafctl run resolver sln-starter-kit@1.2.0
+	args := []string{"sln-starter-kit@1.2.0"}
+	cmd.PreRun(cmd, args)
+
+	path := extractSolutionPath(cmd)
+	assert.Equal(t, "sln-starter-kit@1.2.0", path)
+}
+
+func TestResolverArgs_PreRun_FileFlagTakesPrecedence(t *testing.T) {
+	t.Parallel()
+
+	streams, _, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+
+	cmd := CommandResolver(cliParams, streams, "")
+
+	// Set -f explicitly
+	err := cmd.Flags().Set("file", "./my-solution.yaml")
+	require.NoError(t, err)
+
+	// Simulate: scafctl run resolver -f ./my-solution.yaml db config
+	args := []string{"db", "config"}
+	cmd.PreRun(cmd, args)
+
+	// -f should take precedence, bare words are resolver names
+	path := extractSolutionPath(cmd)
+	assert.Equal(t, "./my-solution.yaml", path)
+}
+
+func TestResolverArgs_PreRun_URLWithQueryParams(t *testing.T) {
+	t.Parallel()
+
+	streams, _, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+
+	cmd := CommandResolver(cliParams, streams, "")
+
+	// URL with '=' in query string should be treated as solution reference, not key=value
+	args := []string{"https://example.com/solution.yaml?token=abc123", "db"}
+	cmd.PreRun(cmd, args)
+
+	path := extractSolutionPath(cmd)
+	assert.Equal(t, "https://example.com/solution.yaml?token=abc123", path)
+}
+
+func TestResolverArgs_PreRun_URLWithMultipleQueryParams(t *testing.T) {
+	t.Parallel()
+
+	streams, _, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+
+	cmd := CommandResolver(cliParams, streams, "")
+
+	// Signed URL with multiple query params
+	args := []string{"https://storage.example.com/sol.yaml?sig=abc&exp=123", "env=prod"}
+	cmd.PreRun(cmd, args)
+
+	path := extractSolutionPath(cmd)
+	assert.Equal(t, "https://storage.example.com/sol.yaml?sig=abc&exp=123", path)
+}
+
+// splitResolverArgs mirrors the new PreRun logic: when fileExplicit is false,
+// the first bare word becomes the solution reference.
+func splitResolverArgs(args []string, fileExplicit bool) (solutionRef string, names, dynamicArgs []string) {
+	for _, arg := range args {
+		if containsEqualsOrAtPrefix(arg) {
+			dynamicArgs = append(dynamicArgs, arg)
+		} else if !fileExplicit && solutionRef == "" {
+			solutionRef = arg
+			fileExplicit = true
+		} else {
+			names = append(names, arg)
+		}
+	}
+	return solutionRef, names, dynamicArgs
 }
 
 // containsEqualsOrAtPrefix mirrors the logic used in PreRun to split args.
