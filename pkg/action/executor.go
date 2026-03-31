@@ -16,7 +16,6 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/telemetry"
-	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -105,9 +104,9 @@ func WithDefaultTimeout(d time.Duration) ExecutorOption {
 }
 
 // WithIOStreams sets the terminal IO streams for provider output streaming.
-// When set, providers that support streaming (e.g., exec) can write output
-// directly to the terminal in real-time. For parallel actions, each action
-// gets a prefixed writer to attribute output clearly.
+// When set, providers that support streaming (e.g., exec, message) can write
+// output directly to the terminal in real-time. All actions share the same
+// raw streams; use the message provider for structured terminal output.
 func WithIOStreams(streams *provider.IOStreams) ExecutorOption {
 	return func(e *Executor) {
 		e.ioStreams = streams
@@ -410,12 +409,6 @@ func (e *Executor) executePhase(ctx context.Context, graph *Graph, actionNames [
 		return nil
 	}
 
-	// Determine if this is a parallel phase (multiple actions)
-	isParallel := len(actionsToRun) > 1
-
-	// Build per-action IOStreams for parallel phases using PrefixedWriter
-	actionIOStreams := e.buildActionIOStreams(actionsToRun, isParallel)
-
 	// Determine concurrency limit
 	concurrency := len(actionsToRun)
 	if e.maxConcurrency > 0 && concurrency > e.maxConcurrency {
@@ -447,10 +440,10 @@ func (e *Executor) executePhase(ctx context.Context, graph *Graph, actionNames [
 				return
 			}
 
-			// Inject per-action IOStreams into context
+			// Inject IOStreams into context for streaming providers
 			actionCtx := ctx
-			if streams, ok := actionIOStreams[actionName]; ok {
-				actionCtx = provider.WithIOStreams(ctx, streams)
+			if e.ioStreams != nil {
+				actionCtx = provider.WithIOStreams(ctx, e.ioStreams)
 			}
 
 			// Execute the action
@@ -476,30 +469,6 @@ func (e *Executor) executePhase(ctx context.Context, graph *Graph, actionNames [
 	}
 
 	return nil
-}
-
-// buildActionIOStreams creates per-action IO streams. For parallel phases (multiple actions),
-// each action gets a PrefixedWriter so output is clearly attributed. For single-action
-// phases, the raw IOStreams are used directly for clean, unprefixed output.
-func (e *Executor) buildActionIOStreams(actionNames []string, isParallel bool) map[string]*provider.IOStreams {
-	streams := make(map[string]*provider.IOStreams, len(actionNames))
-
-	if e.ioStreams == nil {
-		return streams
-	}
-
-	for _, name := range actionNames {
-		if isParallel {
-			streams[name] = &provider.IOStreams{
-				Out:    terminal.NewPrefixedWriter(e.ioStreams.Out, name),
-				ErrOut: terminal.NewPrefixedWriter(e.ioStreams.ErrOut, name),
-			}
-		} else {
-			streams[name] = e.ioStreams
-		}
-	}
-
-	return streams
 }
 
 // executeAction executes a single action with retry, timeout, and error handling.

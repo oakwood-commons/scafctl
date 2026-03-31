@@ -294,6 +294,17 @@ var KnownRules = map[string]RuleMeta{
 			"# Wrong — dynamic value in command string:\nprovider: exec\ninputs:\n  command:\n    expr: \"'echo ' + _.userInput\"\n\n# Correct — static command, dynamic args:\nprovider: exec\ninputs:\n  command: echo\n  args:\n    - expr: \"_.userInput\"",
 		},
 	},
+	"tmpl-underscore-prefix": {
+		Rule:        "tmpl-underscore-prefix",
+		Severity:    string(SeverityError),
+		Category:    "template",
+		Description: "A Go template uses '{{ ._.resolverName }}' which is not supported. Use '{{ .resolverName }}' instead.",
+		Why:         "Go templates spread resolver data at the top level, so resolvers are accessed directly with '{{ .resolverName }}'. The '._' prefix is a CEL convention ('_.resolverName') that does not apply to Go templates. Using '._' in a Go template will cause a runtime error.",
+		Fix:         "Replace '{{ ._.resolverName }}' with '{{ .resolverName }}'. In Go templates, access resolvers directly. Use '._' only in CEL expressions (expr:).",
+		Examples: []string{
+			"# Wrong:\ntmpl: \"Deploying {{ ._.config.appName }}\"\n\n# Correct:\ntmpl: \"Deploying {{ .config.appName }}\"",
+		},
+	},
 }
 
 // ListRules returns all known lint rules sorted by severity (error > warning > info)

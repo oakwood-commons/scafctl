@@ -1,0 +1,75 @@
+# Message Provider — Basic Message Types
+#
+# Demonstrates the message provider outputting different message types
+# with built-in styling (icons and colors).
+#
+# Run: scafctl run resolver -f examples/providers/message-types.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: message-types-example
+  version: 1.0.0
+  description: Demonstrates all built-in message types with their default styling
+
+spec:
+  resolvers:
+    success-msg:
+      description: Output a success message
+      resolve:
+        with:
+          - provider: message
+            inputs:
+              message: "Deployment completed successfully"
+              type: success
+
+    warning-msg:
+      description: Output a warning message
+      dependsOn: [success-msg]
+      resolve:
+        with:
+          - provider: message
+            inputs:
+              message: "API version v1 is deprecated, please upgrade to v2"
+              type: warning
+
+    error-msg:
+      description: Output an error message to stderr
+      dependsOn: [warning-msg]
+      resolve:
+        with:
+          - provider: message
+            inputs:
+              message: "Failed to connect to backup service"
+              type: error
+              destination: stderr
+
+    info-msg:
+      description: Output an informational message (default type)
+      dependsOn: [error-msg]
+      resolve:
+        with:
+          - provider: message
+            inputs:
+              message: "Processing 42 items in batch mode"
+
+    debug-msg:
+      description: Output a debug message
+      dependsOn: [info-msg]
+      resolve:
+        with:
+          - provider: message
+            inputs:
+              message: "Cache hit ratio: 0.95"
+              type: debug
+
+    plain-msg:
+      description: Output a plain message without any styling
+      dependsOn: [debug-msg]
+      resolve:
+        with:
+          - provider: message
+            inputs:
+              message: "--- Process complete ---"
+              type: plain

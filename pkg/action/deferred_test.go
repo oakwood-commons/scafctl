@@ -204,12 +204,18 @@ func TestMaterialize(t *testing.T) {
 			},
 		},
 		{
-			name:         "tmpl without __actions - evaluates immediately",
-			valueRef:     &spec.ValueRef{Tmpl: ptr(gotmpl.GoTemplatingContent(`Env: {{ ._.env }}`))},
+			name:         "tmpl without __actions - evaluates immediately (direct access)",
+			valueRef:     &spec.ValueRef{Tmpl: ptr(gotmpl.GoTemplatingContent(`Env: {{ .env }}`))},
 			resolverData: map[string]any{"env": "staging"},
 			checkResult: func(t *testing.T, result any) {
 				assert.Equal(t, "Env: staging", result)
 			},
+		},
+		{
+			name:         "tmpl without __actions - underscore prefix errors",
+			valueRef:     &spec.ValueRef{Tmpl: ptr(gotmpl.GoTemplatingContent(`Env: {{ ._.env }}`))},
+			resolverData: map[string]any{"env": "staging"},
+			expectError:  true,
 		},
 		{
 			name:         "tmpl with __actions - returns deferred",

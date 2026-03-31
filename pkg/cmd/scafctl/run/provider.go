@@ -6,6 +6,7 @@ package run
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -373,6 +374,26 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 	// Set up execution context
 	ctx = provider.WithExecutionMode(ctx, capability)
 	ctx = provider.WithDryRun(ctx, o.DryRun)
+
+	// Inject IOStreams so streaming providers (exec, message, etc.) can write to the terminal.
+	// For structured output modes (json/yaml), route provider stdout to stderr to
+	// avoid corrupting the structured envelope that kvx writes to stdout.
+	// For quiet mode, discard all provider output to honour the --quiet contract.
+	if o.IOStreams != nil {
+		providerOut := o.IOStreams.Out
+		providerErr := o.IOStreams.ErrOut
+		switch strings.ToLower(o.Output) {
+		case "json", "yaml":
+			providerOut = o.IOStreams.ErrOut
+		case "quiet":
+			providerOut = io.Discard
+			providerErr = io.Discard
+		}
+		ctx = provider.WithIOStreams(ctx, &provider.IOStreams{
+			Out:    providerOut,
+			ErrOut: providerErr,
+		})
+	}
 
 	// Inject conflict strategy and backup into context for file providers
 	if o.OnConflict != "" {

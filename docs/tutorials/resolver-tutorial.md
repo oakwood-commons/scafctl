@@ -977,7 +977,7 @@ spec:
               url: https://httpbin.org/headers
               headers:
                 Authorization:
-                  tmpl: "Bearer {{._.api_token}}"
+                  tmpl: "Bearer {{.api_token}}"
 ```
 
 Run it (requires the `API_TOKEN` environment variable to be set):

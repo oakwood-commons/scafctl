@@ -936,6 +936,141 @@ func TestWithIOStreams_ActionExecutor(t *testing.T) {
 	assert.Equal(t, streams, e.ioStreams)
 }
 
+func TestExecutor_IOStreamsInjectedIntoActionContext(t *testing.T) {
+	// Verify that IOStreams set on the executor are propagated to actions
+	// via the provider context, so streaming providers can write output.
+	var receivedStreams *provider.IOStreams
+
+	registry := newExecMockRegistry()
+	registry.register(&execMockProvider{
+		name: "streaming-provider",
+		execute: func(ctx context.Context, _ any) (*provider.Output, error) {
+			if streams, ok := provider.IOStreamsFromContext(ctx); ok {
+				receivedStreams = streams
+			}
+			return &provider.Output{Data: map[string]any{"success": true}}, nil
+		},
+	})
+
+	streams := &provider.IOStreams{
+		Out:    os.Stdout,
+		ErrOut: os.Stderr,
+	}
+	executor := NewExecutor(
+		WithRegistry(registry),
+		WithIOStreams(streams),
+		WithDefaultTimeout(5*time.Second),
+	)
+
+	workflow := &Workflow{
+		Actions: map[string]*Action{
+			"stream-action": {
+				Provider: "streaming-provider",
+			},
+		},
+	}
+
+	result, err := executor.Execute(context.Background(), workflow)
+	require.NoError(t, err)
+	assert.Equal(t, ExecutionSucceeded, result.FinalStatus)
+	assert.NotNil(t, receivedStreams, "IOStreams should be injected into action context")
+	assert.Equal(t, streams, receivedStreams, "Action should receive the same IOStreams as the executor")
+}
+
+func TestExecutor_NoIOStreams_NilContext(t *testing.T) {
+	// Verify that when no IOStreams are set on the executor,
+	// actions do not receive IOStreams in their context.
+	var hasStreams bool
+
+	registry := newExecMockRegistry()
+	registry.register(&execMockProvider{
+		name: "check-provider",
+		execute: func(ctx context.Context, _ any) (*provider.Output, error) {
+			_, hasStreams = provider.IOStreamsFromContext(ctx)
+			return &provider.Output{Data: map[string]any{"success": true}}, nil
+		},
+	})
+
+	executor := NewExecutor(
+		WithRegistry(registry),
+		WithDefaultTimeout(5*time.Second),
+	)
+
+	workflow := &Workflow{
+		Actions: map[string]*Action{
+			"check-action": {
+				Provider: "check-provider",
+			},
+		},
+	}
+
+	result, err := executor.Execute(context.Background(), workflow)
+	require.NoError(t, err)
+	assert.Equal(t, ExecutionSucceeded, result.FinalStatus)
+	assert.False(t, hasStreams, "IOStreams should not be in context when not set on executor")
+}
+
+func TestExecutor_IOStreamsSharedAcrossParallelActions(t *testing.T) {
+	// Verify that all parallel actions in a phase share the same IOStreams
+	// when set on the executor (no per-action PrefixedWriter).
+	var collectedStreams sync.Map
+
+	registry := newExecMockRegistry()
+	registry.register(&execMockProvider{
+		name: "parallel-provider",
+		execute: func(ctx context.Context, input any) (*provider.Output, error) {
+			if streams, ok := provider.IOStreamsFromContext(ctx); ok {
+				inputs := input.(map[string]any)
+				name := inputs["name"].(string)
+				collectedStreams.Store(name, streams)
+			}
+			return &provider.Output{Data: map[string]any{"success": true}}, nil
+		},
+	})
+
+	streams := &provider.IOStreams{
+		Out:    os.Stdout,
+		ErrOut: os.Stderr,
+	}
+	executor := NewExecutor(
+		WithRegistry(registry),
+		WithIOStreams(streams),
+		WithDefaultTimeout(5*time.Second),
+	)
+
+	// Two independent actions → both run in parallel in the same phase
+	workflow := &Workflow{
+		Actions: map[string]*Action{
+			"action-1": {
+				Provider: "parallel-provider",
+				Inputs: map[string]*spec.ValueRef{
+					"name": {Literal: "action-1"},
+				},
+			},
+			"action-2": {
+				Provider: "parallel-provider",
+				Inputs: map[string]*spec.ValueRef{
+					"name": {Literal: "action-2"},
+				},
+			},
+		},
+	}
+
+	result, err := executor.Execute(context.Background(), workflow)
+	require.NoError(t, err)
+	assert.Equal(t, ExecutionSucceeded, result.FinalStatus)
+
+	// Both actions should have received the same IOStreams pointer
+	s1, ok1 := collectedStreams.Load("action-1")
+	s2, ok2 := collectedStreams.Load("action-2")
+	assert.True(t, ok1, "action-1 should have received IOStreams")
+	assert.True(t, ok2, "action-2 should have received IOStreams")
+	if ok1 && ok2 {
+		assert.Same(t, s1.(*provider.IOStreams), s2.(*provider.IOStreams),
+			"Parallel actions should share the same IOStreams (no PrefixedWriter)")
+	}
+}
+
 func TestOptionsFromAppConfig(t *testing.T) {
 	cfg := ConfigInput{
 		DefaultTimeout: 5 * time.Minute,
