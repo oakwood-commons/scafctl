@@ -97,7 +97,7 @@ func TestMessageProvider_Execute_AllMessageTypes(t *testing.T) {
 
 			data := out.Data.(map[string]any)
 			assert.True(t, data["success"].(bool))
-			assert.Equal(t, "test message", data["message"])
+			assert.Contains(t, data["message"].(string), "test message")
 		})
 	}
 }
@@ -111,8 +111,8 @@ func TestMessageProvider_Execute_TypeStyling_NoColor(t *testing.T) {
 		"type":    "success",
 	})
 	require.NoError(t, err)
-	// With noColor, styling is stripped but the icon is still present (it's Unicode, not ANSI).
-	assert.Equal(t, "\u2705 styled\n", stdout.String())
+	// In noColor mode, default type icons are omitted (consistent with terminal/output).
+	assert.Equal(t, "styled\n", stdout.String())
 }
 
 func TestMessageProvider_Execute_TypeStyling_WithColor(t *testing.T) {
@@ -131,6 +131,22 @@ func TestMessageProvider_Execute_TypeStyling_WithColor(t *testing.T) {
 			assert.Contains(t, stdout.String(), "styled")
 		})
 	}
+}
+
+func TestMessageProvider_Execute_OutputDataNoANSI(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, _, _ := testCtx(t, &settings.Run{NoColor: false})
+
+	out, err := p.Execute(ctx, map[string]any{
+		"message": "deploy finished",
+		"type":    "success",
+	})
+	require.NoError(t, err)
+	data := out.Data.(map[string]any)
+	msg := data["message"].(string)
+	// Output data must never contain ANSI escape codes, even when terminal uses color.
+	assert.NotContains(t, msg, "\x1b[")
+	assert.Contains(t, msg, "deploy finished")
 }
 
 func TestMessageProvider_Execute_CustomStyle(t *testing.T) {
@@ -196,7 +212,7 @@ func TestMessageProvider_Execute_NoColor_StyleIconStillApplied(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	// Icons are Unicode, not ANSI — they should appear even with noColor.
+	// Explicit style.icon is still honored in noColor mode.
 	assert.Equal(t, "\U0001F680 with icon\n", stdout.String())
 }
 
@@ -212,7 +228,7 @@ func TestMessageProvider_Execute_NoColor_StyleIconDisabled(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	// Empty icon override disables the icon even in noColor mode.
+	// Empty icon override disables the icon.
 	assert.Equal(t, "no icon\n", stdout.String())
 }
 
@@ -225,8 +241,8 @@ func TestMessageProvider_Execute_UnknownTypeFallsBackToInfo(t *testing.T) {
 		"type":    "nonexistent",
 	})
 	require.NoError(t, err)
-	// Unknown type should fall back to info defaults (💡 icon).
-	assert.Equal(t, "\U0001F4A1 unknown type\n", stdout.String())
+	// In noColor mode, default type icons are omitted.
+	assert.Equal(t, "unknown type\n", stdout.String())
 }
 
 func TestMessageProvider_Execute_StyleMergesOnType(t *testing.T) {
@@ -327,8 +343,8 @@ func TestMessageProvider_Execute_Label_WithTypeIcon(t *testing.T) {
 		"label":   "deploy",
 	})
 	require.NoError(t, err)
-	// noColor: icon + label + message
-	assert.Equal(t, "\u2705 [deploy] Deploying service\n", stdout.String())
+	// noColor: no default icon + label + message
+	assert.Equal(t, "[deploy] Deploying service\n", stdout.String())
 }
 
 func TestMessageProvider_Execute_Label_WithColor(t *testing.T) {
@@ -454,7 +470,7 @@ func TestMessageProvider_Execute_QuietRespect(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, stdout.String())
 	assert.False(t, out.Streamed)
-	// Message still available in output data.
+	// Rendered message still available in output data.
 	data := out.Data.(map[string]any)
 	assert.Equal(t, "should be suppressed", data["message"])
 }
@@ -527,12 +543,11 @@ func TestMessageProvider_Execute_DryRun_NoMessage(t *testing.T) {
 	ctx, _, _ := testCtx(t, nil)
 	ctx = provider.WithDryRun(ctx, true)
 
-	out, err := p.Execute(ctx, map[string]any{
+	_, err := p.Execute(ctx, map[string]any{
 		"type": "info",
 	})
-	require.NoError(t, err)
-	data := out.Data.(map[string]any)
-	assert.Contains(t, data["message"].(string), "<dynamic>")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "'message' must be provided")
 }
 
 func TestMessageProvider_Execute_NoIOStreams(t *testing.T) {
@@ -550,8 +565,8 @@ func TestMessageProvider_Execute_NoIOStreams(t *testing.T) {
 	data := out.Data.(map[string]any)
 	assert.Equal(t, "will succeed without streaming", data["message"])
 	assert.True(t, data["success"].(bool))
-	// Streamed should still be true since writeToTerminal was called (just no-oped).
-	assert.True(t, out.Streamed)
+	// Streamed should be false since no IOStreams were available.
+	assert.False(t, out.Streamed)
 }
 
 func TestMessageProvider_Execute_PlainMessage_NoSettings(t *testing.T) {

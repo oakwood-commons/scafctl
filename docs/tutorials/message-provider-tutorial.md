@@ -274,7 +274,7 @@ resolvers:
 
 ## Newline Control
 
-The `newline` field (default: `true`) is folded into the rendered output via lipgloss, so the terminal writer does a single `fmt.Fprint` unconditionally:
+The `newline` field (default: `true`) appends a trailing newline to the rendered output, so the terminal writer does a single `fmt.Fprint` unconditionally:
 
 ```yaml
 resolvers:
@@ -337,3 +337,20 @@ scafctl run provider message --input message="Hello" -o json
 # Dry-run
 scafctl run provider message --input message="Hello" --dry-run
 ```
+
+## Shell Eval / Piping
+
+Solutions that produce shell-eval output work cleanly with `run solution` — action
+output is never prefixed with labels, so it's always pipe-safe:
+
+```bash
+eval "$(scafctl run solution -f ./proxy.yaml)"
+scafctl run solution -f ./proxy.yaml | Invoke-Expression   # PowerShell
+```
+
+For debugging multi-action workflows, use `--progress` to see action
+start/complete events or `--show-execution` for full metadata.
+
+> **Note:** When using structured output modes (`-o json`, `-o yaml`, `-o quiet`),
+> terminal messages are redirected to stderr so they don't corrupt the structured
+> envelope on stdout.

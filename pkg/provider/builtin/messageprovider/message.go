@@ -60,7 +60,9 @@ const (
 	fieldStyleIcon   = "icon"
 )
 
-// Message type constants matching pkg/terminal/output message types.
+// Message type constants used by the message provider. These conceptually align
+// with the standard terminal output levels but are not a 1:1 mapping to
+// pkg/terminal/output message type definitions.
 const (
 	typeSuccess = "success"
 	typeWarning = "warning"
@@ -91,6 +93,13 @@ const maxLabelLength = 100
 
 // labelStyle renders the label prefix in dimmed text.
 var labelStyle = lipgloss.NewStyle().Faint(true)
+
+// messageOutputSchema is shared between CapabilityAction and CapabilityFrom since
+// both return the same {success, message} shape.
+var messageOutputSchema = schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+	"success": schemahelper.BoolProp("Whether the message was output successfully"),
+	"message": schemahelper.StringProp("The rendered message text (plain text, no ANSI codes)"),
+})
 
 // MessageProvider outputs styled, feature-rich terminal messages during solution execution.
 type MessageProvider struct {
@@ -137,7 +146,7 @@ func NewMessageProvider() *MessageProvider {
 				provider.CapabilityAction,
 				provider.CapabilityFrom,
 			},
-			Schema: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+			Schema: schemahelper.ObjectSchema([]string{fieldMessage}, map[string]*jsonschema.Schema{
 				fieldMessage: schemahelper.StringProp(
 					"The message text to output. For dynamic interpolation, use tmpl: or expr: ValueRef on this input instead of passing templates directly.",
 					schemahelper.WithExample("Deployment completed successfully"),
@@ -164,12 +173,10 @@ func NewMessageProvider() *MessageProvider {
 							schemahelper.WithMaxLength(*ptrs.IntPtr(20)),
 						),
 						fieldStyleBold: schemahelper.BoolProp(
-							"Whether to render the message in bold.",
-							schemahelper.WithDefault(false),
+							"Whether to render the message in bold. When omitted, inherits from the type default (e.g., success and debug types default to bold).",
 						),
 						fieldStyleItalic: schemahelper.BoolProp(
-							"Whether to render the message in italic.",
-							schemahelper.WithDefault(false),
+							"Whether to render the message in italic. When omitted, inherits from the type default.",
 						),
 						fieldStyleIcon: schemahelper.StringProp(
 							"Custom icon or emoji prefix for the message (e.g., '🚀', '📦', '→'). Overrides the type's default icon. Set to empty string to disable the icon entirely.",
@@ -191,18 +198,13 @@ func NewMessageProvider() *MessageProvider {
 					schemahelper.WithMaxLength(*ptrs.IntPtr(10)),
 				),
 				fieldNewline: schemahelper.BoolProp(
-					"Whether to append a trailing newline after the message. Integrated into the rendered output via lipgloss styling.",
+					"Whether to append a trailing newline after the message.",
 					schemahelper.WithDefault(true),
 				),
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
-				provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
-					"success": schemahelper.BoolProp("Whether the message was output successfully"),
-					"message": schemahelper.StringProp("The rendered message text (without styling/ANSI codes)"),
-				}),
-				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
-					"message": schemahelper.StringProp("The rendered message text (without styling/ANSI codes)"),
-				}),
+				provider.CapabilityAction: messageOutputSchema,
+				provider.CapabilityFrom:   messageOutputSchema,
 			},
 			Examples: []provider.Example{
 				{
@@ -277,15 +279,15 @@ func (p *MessageProvider) Execute(ctx context.Context, input any) (*provider.Out
 	}
 	lgr := logger.FromContext(ctx)
 
-	// Check for dry-run mode.
-	if provider.DryRunFromContext(ctx) {
-		return p.executeDryRun(inputs)
-	}
-
-	// Resolve the message text.
+	// Resolve the message text (required for both normal and dry-run execution).
 	msgStr, ok := inputs[fieldMessage].(string)
 	if !ok || msgStr == "" {
 		return nil, fmt.Errorf("%s: 'message' must be provided", ProviderName)
+	}
+
+	// Check for dry-run mode.
+	if provider.DryRunFromContext(ctx) {
+		return p.executeDryRun(inputs)
 	}
 
 	// Get configuration fields.
@@ -305,17 +307,23 @@ func (p *MessageProvider) Execute(ctx context.Context, input any) (*provider.Out
 	// Determine if we should actually write to terminal.
 	shouldWrite := p.shouldWrite(quietMode, isQuiet)
 
-	// Format the message with styling. The newline is folded into the rendered
-	// output so the writer can do a single unconditional fmt.Fprint.
+	// Format the message for terminal output.
 	styled := p.formatMessage(msgStr, msgType, inputs, noColor, newline)
+
+	// Build a plain-text version for output data (no ANSI codes, no trailing newline).
+	// The newline is a terminal-output concern; structured data should not embed it.
+	plain := p.formatMessage(msgStr, msgType, inputs, true, false)
 
 	// Write to the terminal if appropriate.
 	streamed := false
 	if shouldWrite {
-		if err := p.writeToTerminal(ctx, styled, dest); err != nil {
-			return nil, fmt.Errorf("%s: failed to write output: %w", ProviderName, err)
+		ioStreams, ok := provider.IOStreamsFromContext(ctx)
+		if ok && ioStreams != nil {
+			if err := p.writeToTerminal(ioStreams, styled, dest); err != nil {
+				return nil, fmt.Errorf("%s: failed to write output: %w", ProviderName, err)
+			}
+			streamed = true
 		}
-		streamed = true
 	}
 
 	lgr.V(1).Info("Message output",
@@ -328,7 +336,7 @@ func (p *MessageProvider) Execute(ctx context.Context, input any) (*provider.Out
 	return &provider.Output{
 		Data: map[string]any{
 			"success": true,
-			"message": msgStr,
+			"message": plain,
 		},
 		Streamed: streamed,
 	}, nil
@@ -358,9 +366,11 @@ func (p *MessageProvider) formatMessage(text, msgType string, inputs map[string]
 	}
 
 	// Merge style overrides on top (even in noColor — we need icon resolution).
+	hasExplicitIcon := false
 	if styleMap, ok := inputs[fieldStyle].(map[string]any); ok {
 		if icon, ok := styleMap[fieldStyleIcon].(string); ok {
 			ms.icon = icon // empty string disables the icon
+			hasExplicitIcon = true
 		}
 		if !noColor {
 			if color, ok := styleMap[fieldStyleColor].(string); ok {
@@ -373,6 +383,12 @@ func (p *MessageProvider) formatMessage(text, msgType string, inputs map[string]
 				ms.italic = italic
 			}
 		}
+	}
+
+	// In noColor mode, omit the default type icon (consistent with pkg/terminal/output)
+	// but still honor an explicit style.icon override.
+	if noColor && !hasExplicitIcon {
+		ms.icon = ""
 	}
 
 	if noColor {
@@ -420,19 +436,9 @@ func (p *MessageProvider) formatMessage(text, msgType string, inputs map[string]
 	return styled
 }
 
-// writeToTerminal writes the fully-rendered message to the appropriate terminal
-// stream. The message already contains any trailing newline from the formatting
-// step, so a single fmt.Fprint is used unconditionally.
-// If IOStreams are not available in the context, the message is silently skipped
-// (the rendered text is still returned in the output data).
-func (p *MessageProvider) writeToTerminal(ctx context.Context, msg, dest string) error {
-	ioStreams, ok := provider.IOStreamsFromContext(ctx)
-	if !ok || ioStreams == nil {
-		// No IOStreams in context — skip writing but don't fail.
-		// The rendered message is still available in the output data.
-		return nil
-	}
-
+// writeToTerminal writes the fully-rendered message to the appropriate stream.
+// The caller is responsible for verifying IOStreams are available before calling.
+func (p *MessageProvider) writeToTerminal(ioStreams *provider.IOStreams, msg, dest string) error {
 	var w io.Writer
 	switch dest {
 	case destStderr:

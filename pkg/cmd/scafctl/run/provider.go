@@ -396,9 +396,16 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 	ctx = provider.WithDryRun(ctx, o.DryRun)
 
 	// Inject IOStreams so streaming providers (exec, message, etc.) can write to the terminal.
+	// For structured output modes (json/yaml/quiet), route provider stdout to stderr to
+	// avoid corrupting the structured envelope that kvx writes to stdout.
 	if o.IOStreams != nil {
+		providerOut := o.IOStreams.Out
+		switch strings.ToLower(o.Output) {
+		case "json", "yaml", "quiet":
+			providerOut = o.IOStreams.ErrOut
+		}
 		ctx = provider.WithIOStreams(ctx, &provider.IOStreams{
-			Out:    o.IOStreams.Out,
+			Out:    providerOut,
 			ErrOut: o.IOStreams.ErrOut,
 		})
 	}

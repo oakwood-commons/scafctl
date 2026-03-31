@@ -45,7 +45,8 @@ type SolutionOptions struct {
 	MaxActionConcurrency int
 	DryRun               bool
 
-	// Verbose includes MaterializedInputs in dry-run reports.
+	// Verbose enables additional detail in output. In dry-run mode, includes
+	// materialized inputs. In normal execution, shows condition-based skips.
 	Verbose bool
 
 	// ShowExecution enables __execution metadata in output
@@ -208,7 +209,7 @@ Examples:
 	cCmd.Flags().DurationVar(&options.ActionTimeout, "action-timeout", settings.DefaultActionTimeout, "Default timeout per action")
 	cCmd.Flags().IntVar(&options.MaxActionConcurrency, "max-action-concurrency", 0, "Maximum concurrent actions (0=unlimited)")
 	cCmd.Flags().BoolVar(&options.DryRun, "dry-run", false, "Validate and show what would be executed without running")
-	cCmd.Flags().BoolVar(&options.Verbose, "verbose", false, "When combined with --dry-run, include materialized inputs in report")
+	cCmd.Flags().BoolVar(&options.Verbose, "verbose", false, "Show additional execution detail (skipped actions, materialized inputs in dry-run)")
 	cCmd.Flags().BoolVar(&options.ShowExecution, "show-execution", false, "Include __execution metadata in output (phases, timing, dependencies, providers)")
 
 	// File conflict strategy flags
@@ -380,14 +381,6 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// Dry run — execute resolvers in dry-run mode and show structured report
 	if o.DryRun {
 		return o.executeDryRun(actionCtx, sol, reg, params)
-	}
-
-	// Warn if --verbose is used without --dry-run
-	if o.Verbose {
-		w := writer.FromContext(ctx)
-		if w != nil {
-			w.Warningf("--verbose has no effect without --dry-run")
-		}
 	}
 
 	// Execute resolvers if present
@@ -636,12 +629,18 @@ func (o *SolutionOptions) writeActionOutput(ctx context.Context, result *action.
 // writeActionOutputDefault writes the default/table output for action execution.
 // Actions that already streamed to the terminal are skipped. For non-streamed actions,
 // any stdout/stderr from the results is printed. Failed/skipped actions show a status line.
+// When verbose is enabled, a status line for every action is written to stderr.
 func (o *SolutionOptions) writeActionOutputDefault(ctx context.Context, result *action.ExecutionResult) error {
 	w := writer.FromContext(ctx)
 	if w == nil {
 		return nil
 	}
 	for name, ar := range result.Actions {
+		// Verbose: show a status line for every action on stderr
+		if o.Verbose {
+			o.writeVerboseActionStatus(w, name, ar)
+		}
+
 		// Skip actions that already streamed their output to the terminal
 		if ar.Streamed {
 			// If the action failed despite streaming, show the error
@@ -669,13 +668,36 @@ func (o *SolutionOptions) writeActionOutputDefault(ctx context.Context, result *
 			}
 			w.Errorf("Error [%s]: %s", name, ar.Error)
 		case action.StatusSkipped:
-			w.WarnStderrf("Skipped [%s]: %s", name, ar.SkipReason)
+			// Dependency failures always show; condition skips only in verbose
+			// (already handled above via writeVerboseActionStatus).
+			if ar.SkipReason != action.SkipReasonCondition {
+				w.WarnStderrf("Skipped [%s]: %s", name, ar.SkipReason)
+			}
 		case action.StatusPending, action.StatusRunning, action.StatusCancelled:
 			// These statuses should not appear in final results; ignore.
 		}
 	}
 
 	return nil
+}
+
+// writeVerboseActionStatus writes a single action status line to stderr.
+func (o *SolutionOptions) writeVerboseActionStatus(w *writer.Writer, name string, ar *action.ActionResult) {
+	dur := ar.Duration()
+	switch ar.Status {
+	case action.StatusSucceeded:
+		w.PlainStderrf("  ✓ %s (%s)", name, dur)
+	case action.StatusSkipped:
+		w.PlainStderrf("  ○ %s (skipped: %s)", name, ar.SkipReason)
+	case action.StatusFailed:
+		w.PlainStderrf("  ✗ %s (failed: %s)", name, ar.Error)
+	case action.StatusTimeout:
+		w.PlainStderrf("  ✗ %s (timeout)", name)
+	case action.StatusCancelled:
+		w.PlainStderrf("  ○ %s (cancelled)", name)
+	case action.StatusPending, action.StatusRunning:
+		// Should not appear in final results; ignore.
+	}
 }
 
 // writeActionOutputStructured writes action results as JSON or YAML (the full execution envelope).

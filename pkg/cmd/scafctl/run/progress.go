@@ -24,6 +24,7 @@ type ProgressReporter struct {
 	barStarts  map[string]time.Time
 	barPhases  map[string]int
 	barElapsed map[string]time.Duration // Store calculated elapsed time on completion
+	barFailed  map[string]bool          // Track whether an aborted bar was a failure (vs skip)
 	total      int
 	startTime  time.Time
 	writer     io.Writer
@@ -44,6 +45,7 @@ func NewProgressReporter(writer io.Writer, total int) *ProgressReporter {
 		barStarts:  make(map[string]time.Time),
 		barPhases:  make(map[string]int),
 		barElapsed: make(map[string]time.Duration),
+		barFailed:  make(map[string]bool),
 		total:      total,
 		startTime:  time.Now(),
 		writer:     writer,
@@ -71,10 +73,27 @@ func (p *ProgressReporter) StartPhase(phaseNum int, resolverNames []string) {
 			return "" // Show nothing while in progress
 		})
 
+		// Build a status decorator that distinguishes completion, failure, and skip.
+		resolverStatus := name // Capture for closure
+		statusDecorator := decor.Any(func(s decor.Statistics) string {
+			if s.Completed {
+				return "✓ "
+			}
+			if s.Aborted {
+				if p.barFailed[resolverStatus] {
+					return "✗ "
+				}
+				return "⊘ "
+			}
+			// In-progress spinner frames
+			frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+			return frames[int(time.Since(p.barStarts[resolverStatus]).Milliseconds()/80)%len(frames)] + " "
+		}, decor.WCSyncSpace)
+
 		bar := p.progress.AddBar(1,
 			mpb.PrependDecorators(
 				decor.Name(fmt.Sprintf("[%d] %s", phaseNum, name), decor.WCSyncSpaceR),
-				decor.OnComplete(decor.Spinner([]string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}, decor.WCSyncSpace), "✓ "),
+				statusDecorator,
 			),
 			mpb.AppendDecorators(elapsedOnComplete),
 			mpb.BarFillerClearOnComplete(),
@@ -103,6 +122,7 @@ func (p *ProgressReporter) Failed(resolverName string, _ error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	p.barFailed[resolverName] = true
 	if bar, ok := p.bars[resolverName]; ok {
 		bar.Abort(false)
 	}
@@ -114,7 +134,7 @@ func (p *ProgressReporter) Skipped(resolverName string) {
 	defer p.mu.Unlock()
 
 	if bar, ok := p.bars[resolverName]; ok {
-		bar.SetTotal(0, true)
+		bar.Abort(false)
 	}
 }
 
