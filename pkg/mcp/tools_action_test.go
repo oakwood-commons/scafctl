@@ -99,7 +99,7 @@ spec:
         provider: exec
         inputs:
           command:
-            tmpl: "echo {{ .resolvers.greeting }}"
+            tmpl: "echo {{ .greeting }}"
 `), 0o644)
 		require.NoError(t, err)
 

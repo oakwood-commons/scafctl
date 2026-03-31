@@ -305,15 +305,20 @@ func TestValueRef_Resolve_Tmpl(t *testing.T) {
 	}{
 		{
 			name:        "simple variable",
-			tmpl:        "{{ ._.environment }}",
+			tmpl:        "{{ .environment }}",
 			expected:    "production",
 			expectError: false,
 		},
 		{
 			name:        "multiple variables",
-			tmpl:        "{{ ._.environment }}-{{ ._.region }}",
+			tmpl:        "{{ .environment }}-{{ .region }}",
 			expected:    "production-us-west-2",
 			expectError: false,
+		},
+		{
+			name:        "underscore prefix not supported",
+			tmpl:        "{{ ._.environment }}",
+			expectError: true,
 		},
 	}
 

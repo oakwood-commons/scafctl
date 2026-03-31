@@ -119,6 +119,31 @@ func TestWarnStderr_Quiet(t *testing.T) {
 	assert.Empty(t, errBuf.String())
 }
 
+func TestPlainStderr(t *testing.T) {
+	w, outBuf, errBuf := newTestWriter()
+
+	w.PlainStderr("diagnostic output")
+	assert.Empty(t, outBuf.String(), "PlainStderr should not write to stdout")
+	assert.Contains(t, errBuf.String(), "diagnostic output")
+	assert.NotContains(t, errBuf.String(), "⚠️", "PlainStderr should not add warning styling")
+}
+
+func TestPlainStderrf(t *testing.T) {
+	w, outBuf, errBuf := newTestWriter()
+
+	w.PlainStderrf("step %d: %s", 1, "completed")
+	assert.Empty(t, outBuf.String(), "PlainStderrf should not write to stdout")
+	assert.Contains(t, errBuf.String(), "step 1: completed")
+}
+
+func TestPlainStderr_Quiet(t *testing.T) {
+	w, _, errBuf := newTestWriter()
+	w.cliParams.IsQuiet = true
+
+	w.PlainStderr("diagnostic output")
+	assert.Empty(t, errBuf.String())
+}
+
 func TestError(t *testing.T) {
 	w, _, errBuf := newTestWriter()
 

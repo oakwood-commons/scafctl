@@ -271,10 +271,14 @@ func (v *ValueRef) ResolveWithIterationContext(ctx context.Context, resolverData
 
 	// Go template
 	if v.Tmpl != nil {
-		templateData := map[string]any{
-			"_":      resolverData,
-			"__self": self,
+		// Spread resolver data at the top level so templates can use
+		// {{ .resolverName }} directly. The "._" prefix is a CEL convention
+		// and is not supported in Go templates.
+		templateData := make(map[string]any, len(resolverData)+4)
+		for k, val := range resolverData {
+			templateData[k] = val
 		}
+		templateData["__self"] = self
 		// Also add iteration variables at top level for template convenience
 		if iterCtx != nil {
 			templateData["__item"] = iterCtx.Item
@@ -287,8 +291,9 @@ func (v *ValueRef) ResolveWithIterationContext(ctx context.Context, resolverData
 			}
 		}
 		result, err := gotmpl.Execute(ctx, gotmpl.TemplateOptions{
-			Content: string(*v.Tmpl),
-			Data:    templateData,
+			Content:    string(*v.Tmpl),
+			Data:       templateData,
+			MissingKey: gotmpl.MissingKeyError,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to execute template: %w", err)

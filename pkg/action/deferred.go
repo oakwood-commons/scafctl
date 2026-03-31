@@ -48,16 +48,20 @@ func (d *DeferredValue) Evaluate(ctx context.Context, resolverData, additionalVa
 	}
 
 	if d.OriginalTmpl != "" {
-		// For templates, merge resolver data with additional vars at the template data level
-		templateData := map[string]any{
-			"_": resolverData,
+		// Spread resolver data at the top level so templates can use
+		// {{ .resolverName }} directly. The "._" prefix is a CEL convention
+		// and is not supported in Go templates.
+		templateData := make(map[string]any, len(resolverData)+len(additionalVars))
+		for k, v := range resolverData {
+			templateData[k] = v
 		}
 		for k, v := range additionalVars {
 			templateData[k] = v
 		}
 		result, err := gotmpl.Execute(ctx, gotmpl.TemplateOptions{
-			Content: d.OriginalTmpl,
-			Data:    templateData,
+			Content:    d.OriginalTmpl,
+			Data:       templateData,
+			MissingKey: gotmpl.MissingKeyError,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to execute deferred template: %w", err)

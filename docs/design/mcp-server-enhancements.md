@@ -128,7 +128,7 @@ scafctl eval cel --expression 'has(config.timeout)' --file config.json
 ```
 scafctl eval template --template '{{ .name | upper }}' --var name=hello
 scafctl eval template --template-file deploy.tmpl --data '{"env": "prod"}'
-scafctl eval template --template '{{ ._.config.host }}' --file resolvers.json
+scafctl eval template --template '{{ .config.host }}' --file resolvers.json
 ```
 
 **File:** `pkg/cmd/scafctl/eval/template.go`

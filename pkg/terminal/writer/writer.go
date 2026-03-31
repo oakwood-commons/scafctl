@@ -210,6 +210,23 @@ func (w *Writer) Plainlnf(format string, args ...any) {
 	w.Plainln(fmt.Sprintf(format, args...))
 }
 
+// PlainStderr writes a plain message to stderr without any styling.
+// Use this for diagnostic output that must not corrupt structured stdout
+// but also does not warrant warning/error formatting.
+// Respects --quiet flag only.
+func (w *Writer) PlainStderr(msg string) {
+	if w.cliParams.IsQuiet {
+		return
+	}
+	fmt.Fprintln(w.ioStreams.ErrOut, msg)
+}
+
+// PlainStderrf writes a formatted plain message to stderr without any styling.
+// Respects --quiet flag only.
+func (w *Writer) PlainStderrf(format string, args ...any) {
+	w.PlainStderr(fmt.Sprintf(format, args...))
+}
+
 // IOStreams returns the underlying IOStreams.
 // Useful when you need direct access to the streams for structured output.
 func (w *Writer) IOStreams() *terminal.IOStreams {

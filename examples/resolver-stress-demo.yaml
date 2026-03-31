@@ -417,7 +417,7 @@ spec:
             inputs:
               # Using Go template (tmpl:) instead of CEL expression
               value:
-                tmpl: "api.{{ ._.environment }}.{{ ._.base_domain }}"
+                tmpl: "api.{{ .environment }}.{{ .base_domain }}"
               expression: "'api.' + _.environment + '.' + _.base_domain"
       validate:
         with:

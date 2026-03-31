@@ -1,0 +1,47 @@
+# Message Provider — Templated and Dynamic Messages
+#
+# Demonstrates tmpl: and expr: ValueRef for dynamic message generation
+# using resolver data. The framework auto-detects dependencies.
+#
+# Run: scafctl run resolver -f examples/providers/message-dynamic.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: message-dynamic-example
+  version: 1.0.0
+  description: Demonstrates templated and CEL-based dynamic messages
+
+spec:
+  resolvers:
+    config:
+      description: Simulated configuration data
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                appName: my-service
+                version: 2.5.0
+                replicas: 3
+
+    go-template-msg:
+      description: Message using Go template interpolation with resolver data
+      resolve:
+        with:
+          - provider: message
+            inputs:
+              message:
+                tmpl: "Deploying {{ .config.appName }} v{{ .config.version }} with {{ .config.replicas }} replicas"
+              type: info
+
+    cel-expression-msg:
+      description: Message using CEL expression for dynamic text
+      resolve:
+        with:
+          - provider: message
+            inputs:
+              message:
+                expr: "'Application ' + _.config.appName + ' (v' + _.config.version + ') is ready for deployment'"
+              type: success

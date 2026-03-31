@@ -1,0 +1,82 @@
+# Message Provider — Custom Styling
+#
+# Demonstrates the message provider with custom styling. Style fields merge on
+# top of the type defaults — only the fields you specify are overridden.
+# Use type: plain for fully custom styling with no inherited defaults.
+#
+# Run: scafctl run resolver -f examples/providers/message-custom-style.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: message-custom-style-example
+  version: 1.0.0
+  description: Demonstrates custom message styling with colors, icons, and formatting
+
+spec:
+  resolvers:
+    rocket-msg:
+      description: Success type with custom icon (color and bold inherited from success)
+      resolve:
+        with:
+          - provider: message
+            inputs:
+              message: "Starting deployment pipeline"
+              type: success
+              style:
+                icon: "\U0001F680"
+
+    package-msg:
+      description: Fully custom style using plain type as base
+      dependsOn: [rocket-msg]
+      resolve:
+        with:
+          - provider: message
+            inputs:
+              message: "Installing dependencies"
+              type: plain
+              style:
+                color: "green"
+                icon: "\U0001F4E6"
+
+    italic-msg:
+      description: Info type with added italic styling
+      dependsOn: [package-msg]
+      resolve:
+        with:
+          - provider: message
+            inputs:
+              message: "Tip: Use --verbose for detailed output"
+              type: info
+              style:
+                italic: true
+
+    bold-red:
+      description: Error type with custom icon override
+      dependsOn: [italic-msg]
+      resolve:
+        with:
+          - provider: message
+            inputs:
+              message: "CRITICAL: Service health check failed"
+              type: error
+              style:
+                icon: "\U0001F6A8"
+
+    no-newline-msgs:
+      description: Messages without trailing newlines for inline output
+      dependsOn: [bold-red]
+      resolve:
+        with:
+          - provider: message
+            inputs:
+              message: "Status: "
+              type: plain
+              newline: false
+          - provider: message
+            inputs:
+              message: "READY"
+              style:
+                color: "green"
+                bold: true

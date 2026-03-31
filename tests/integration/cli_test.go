@@ -562,6 +562,27 @@ func TestIntegration_RunProvider_PositionalMultipleInputs(t *testing.T) {
 }
 
 // ============================================================================
+// Run Provider — Message Provider Tests
+// ============================================================================
+
+func TestIntegration_RunProvider_Message(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "run", "provider", "message", "--input", "message=hello from message provider", "--input", "type=plain", "-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "hello from message provider")
+	assert.Contains(t, stdout, "\"success\"")
+}
+
+func TestIntegration_RunProvider_MessageDryRun(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "run", "provider", "message", "--input", "message=dry run test", "--input", "type=info", "--dry-run", "-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "[dry-run]")
+}
+
+// ============================================================================
 // Run Provider — Unknown Input Key Validation Tests
 // ============================================================================
 

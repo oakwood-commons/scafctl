@@ -1,0 +1,80 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: lint-tmpl-underscore
+  version: 1.0.0
+  description: |
+    Tests that scafctl lint detects the unsupported {{ ._.resolverName }}
+    syntax in Go templates and reports the tmpl-underscore-prefix rule.
+
+spec:
+  resolvers:
+    config:
+      description: Static config resolver
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                appName: my-app
+
+    greeting:
+      description: Greeting using underscore prefix (should trigger lint error)
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                tmpl: "Hello from {{ ._.config.appName }}"
+
+  testing:
+    config:
+      # lint: solution intentionally has tmpl-underscore-prefix lint error
+      # resolve-defaults: tmpl value is a literal string (not resolved as template here)
+      skipBuiltins: [lint, resolve-defaults, render-defaults]
+
+    cases:
+      underscore-prefix-detected:
+        description: Lint should report tmpl-underscore-prefix for ._.config usage
+        command: [lint]
+        args: ["-o", "json"]
+        tags: [template, lint, negative]
+        expectFailure: true
+        assertions:
+          - expression: __exitCode != 0
+            message: "Solution with ._ prefix in Go template should fail lint"
+          - expression: __output.errorCount >= 1
+            message: "At least one error should be reported"
+          - expression: >
+              __output.findings.exists(f, f.ruleName == "tmpl-underscore-prefix")
+            message: "A tmpl-underscore-prefix finding should be present"
+
+      underscore-prefix-severity:
+        description: tmpl-underscore-prefix findings should have error severity
+        command: [lint]
+        args: ["-o", "json"]
+        tags: [template, lint, negative]
+        expectFailure: true
+        assertions:
+          - expression: >
+              __output.findings.exists(f,
+                f.ruleName == "tmpl-underscore-prefix" && f.severity == "error")
+            message: "tmpl-underscore-prefix findings should have error severity"
+          - expression: >
+              __output.findings.exists(f,
+                f.ruleName == "tmpl-underscore-prefix" && f.category == "template")
+            message: "tmpl-underscore-prefix findings should have template category"
+
+      underscore-prefix-suggestion:
+        description: Finding should suggest replacing ._.config with .config
+        command: [lint]
+        args: ["-o", "json"]
+        tags: [template, lint, negative]
+        expectFailure: true
+        assertions:
+          - expression: >
+              __output.findings.exists(f,
+                f.ruleName == "tmpl-underscore-prefix" &&
+                f.suggestion.contains(".config"))
+            message: "Finding should suggest the correct syntax"
