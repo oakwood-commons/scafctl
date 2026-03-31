@@ -4,6 +4,7 @@
 package flags
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -395,7 +396,7 @@ func TestParseResolverFlagsWithStdin(t *testing.T) {
 
 		_, err := ParseResolverFlagsWithStdin([]string{"msg=@-"}, nil)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "@- requires stdin but no stdin is available")
+		assert.Contains(t, err.Error(), "msg=@- requires stdin but no stdin is available")
 	})
 
 	t.Run("key=@- errors on empty stdin", func(t *testing.T) {
@@ -413,7 +414,7 @@ func TestParseResolverFlagsWithStdin(t *testing.T) {
 		stdin := strings.NewReader("data\n")
 		_, err := ParseResolverFlagsWithStdin([]string{"msg=@-", "@-"}, stdin)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "@- can only be specified once")
+		assert.Contains(t, err.Error(), "stdin can only be read once")
 	})
 
 	t.Run("standalone @- then key=@- conflicts", func(t *testing.T) {
@@ -422,7 +423,7 @@ func TestParseResolverFlagsWithStdin(t *testing.T) {
 		stdin := strings.NewReader("key: value\n")
 		_, err := ParseResolverFlagsWithStdin([]string{"@-", "msg=@-"}, stdin)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "@- can only be specified once")
+		assert.Contains(t, err.Error(), "stdin has already been consumed")
 	})
 
 	t.Run("key=@file reads raw file content", func(t *testing.T) {
@@ -464,6 +465,105 @@ func TestParseResolverFlagsWithStdin(t *testing.T) {
 			"pipe": "from stdin",
 		}, result)
 	})
+
+	t.Run("key=@- whitespace-only stdin errors", func(t *testing.T) {
+		t.Parallel()
+
+		stdin := strings.NewReader("   \n  \n")
+		_, err := ParseResolverFlagsWithStdin([]string{"msg=@-"}, stdin)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no data received from stdin")
+	})
+
+	t.Run("key=@- trims \\r\\n line ending", func(t *testing.T) {
+		t.Parallel()
+
+		stdin := strings.NewReader("windows line\r\n")
+		result, err := ParseResolverFlagsWithStdin([]string{"msg=@-"}, stdin)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]any{
+			"msg": "windows line",
+		}, result)
+	})
+
+	t.Run("key=@file errors on empty file", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		filePath := filepath.Join(tmpDir, "empty.txt")
+		err := os.WriteFile(filePath, []byte(""), 0o600)
+		require.NoError(t, err)
+
+		_, err = ParseResolverFlagsWithStdin([]string{"data=@" + filePath}, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no data received from file")
+	})
+
+	t.Run("key=@file trims \\r\\n line ending", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		filePath := filepath.Join(tmpDir, "crlf.txt")
+		err := os.WriteFile(filePath, []byte("windows content\r\n"), 0o600)
+		require.NoError(t, err)
+
+		result, err := ParseResolverFlagsWithStdin([]string{"data=@" + filePath}, nil)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]any{
+			"data": "windows content",
+		}, result)
+	})
+
+	t.Run("key=@file with standalone @params.yaml mixed", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		rawFile := filepath.Join(tmpDir, "raw.txt")
+		err := os.WriteFile(rawFile, []byte("raw content\n"), 0o600)
+		require.NoError(t, err)
+
+		paramsFile := filepath.Join(tmpDir, "params.yaml")
+		err = os.WriteFile(paramsFile, []byte("env: prod\n"), 0o600)
+		require.NoError(t, err)
+
+		result, err := ParseResolverFlagsWithStdin([]string{"body=@" + rawFile, "@" + paramsFile}, nil)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]any{
+			"body": "raw content",
+			"env":  "prod",
+		}, result)
+	})
+
+	t.Run("key=@- exceeds max raw read size", func(t *testing.T) {
+		t.Parallel()
+
+		// Create a reader just over the 1 MiB limit
+		bigData := make([]byte, maxRawReadSize+1)
+		for i := range bigData {
+			bigData[i] = 'x'
+		}
+		stdin := bytes.NewReader(bigData)
+		_, err := ParseResolverFlagsWithStdin([]string{"data=@-"}, stdin)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "exceeds maximum raw read size")
+	})
+
+	t.Run("key=@file exceeds max raw read size", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		bigFile := filepath.Join(tmpDir, "big.txt")
+		bigData := make([]byte, maxRawReadSize+1)
+		for i := range bigData {
+			bigData[i] = 'y'
+		}
+		err := os.WriteFile(bigFile, bigData, 0o600)
+		require.NoError(t, err)
+
+		_, err = ParseResolverFlagsWithStdin([]string{"data=@" + bigFile}, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "exceeds maximum raw read size")
+	})
 }
 
 func TestParseValueRef(t *testing.T) {
@@ -477,6 +577,7 @@ func TestParseValueRef(t *testing.T) {
 	}{
 		{"key=@-", "key", "-", true},
 		{"msg=@/path/to/file.txt", "msg", "/path/to/file.txt", true},
+		{"a==@-", "a", "=@-", false},  // value is =@- which starts with = not @
 		{"key=value", "", "", false},  // no @ in value
 		{"key=@", "", "", false},      // @ alone — too short (need at least @X)
 		{"@-", "", "", false},         // standalone, no =
@@ -672,6 +773,21 @@ func TestParseDynamicInputArgs(t *testing.T) {
 			args:     []string{"--expr=a==b"},
 			expected: []string{"expr=a==b"},
 		},
+		{
+			name:     "key=@- passed through",
+			args:     []string{"msg=@-"},
+			expected: []string{"msg=@-"},
+		},
+		{
+			name:     "double-dash key=@file stripped and passed through",
+			args:     []string{"--body=@/tmp/data.txt"},
+			expected: []string{"body=@/tmp/data.txt"},
+		},
+		{
+			name:     "@- stdin ref passed through",
+			args:     []string{"@-"},
+			expected: []string{"@-"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -710,16 +826,17 @@ func BenchmarkLoadParameterReader(b *testing.B) {
 }
 
 func BenchmarkParseResolverFlagsWithStdin(b *testing.B) {
-	data := "stdinKey: stdinValue\nother: 42\n"
+	data := []byte("stdinKey: stdinValue\nother: 42\n")
 	for b.Loop() {
-		r := strings.NewReader(data)
+		r := bytes.NewReader(data)
 		_, _ = ParseResolverFlagsWithStdin([]string{"key=value", "@-"}, r)
 	}
 }
 
 func BenchmarkParseResolverFlagsWithStdin_ValueRef(b *testing.B) {
+	data := []byte("hello world\n")
 	for b.Loop() {
-		r := strings.NewReader("hello world\n")
+		r := bytes.NewReader(data)
 		_, _ = ParseResolverFlagsWithStdin([]string{"key=value", "msg=@-"}, r)
 	}
 }

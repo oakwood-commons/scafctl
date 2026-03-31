@@ -223,6 +223,25 @@ Get-Content params.yaml | scafctl run resolver -f greet.yaml -r '@-'
 {{% /tab %}}
 {{< /tabs >}}
 
+To pipe raw text into a single parameter key, use `key=@-`:
+{{< tabs "resolver-param-raw-stdin" >}}
+{{% tab "Bash" %}}
+```bash
+# Raw stdin into a single key (not parsed as YAML/JSON)
+echo Charlie | scafctl run resolver -f greet.yaml -r user_name=@-
+
+# Read a file's content into a key
+scafctl run resolver -f greet.yaml -r user_name=@name.txt
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+'Charlie' | scafctl run resolver -f greet.yaml -r 'user_name=@-'
+scafctl run resolver -f greet.yaml -r 'user_name=@name.txt'
+```
+{{% /tab %}}
+{{< /tabs >}}
+
 Output:
 
 ```

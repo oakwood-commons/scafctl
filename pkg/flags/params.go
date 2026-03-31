@@ -16,6 +16,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// maxRawReadSize is the maximum number of bytes that readRawReader and
+// readRawFile will consume. This prevents accidental OOM when a user
+// points key=@- at an unbounded stream or key=@/dev/zero at a device.
+const maxRawReadSize = 1 << 20 // 1 MiB
+
 // parseYAMLOrJSON tries to unmarshal data as YAML first, then JSON.
 // The source parameter is used in error messages to identify the input origin.
 func parseYAMLOrJSON(data []byte, source string) (map[string]any, error) {
@@ -91,25 +96,46 @@ func parseValueRef(s string) (key, ref string, ok bool) {
 
 // readRawReader reads all content from an io.Reader as a raw string, trimming
 // one trailing newline (to match shell pipe behavior like echo).
+// Reads at most maxRawReadSize bytes to prevent unbounded memory growth.
 func readRawReader(r io.Reader, source string) (string, error) {
-	data, err := io.ReadAll(r)
+	limited := io.LimitReader(r, maxRawReadSize+1)
+	data, err := io.ReadAll(limited)
 	if err != nil {
 		return "", fmt.Errorf("failed to read from %s: %w", source, err)
+	}
+	if int64(len(data)) > maxRawReadSize {
+		return "", fmt.Errorf("%s exceeds maximum raw read size (%d bytes)", source, maxRawReadSize)
 	}
 	if len(bytes.TrimSpace(data)) == 0 {
 		return "", fmt.Errorf("no data received from %s", source)
 	}
-	// Trim a single trailing newline for shell usability (echo adds \n).
-	return strings.TrimSuffix(string(data), "\n"), nil
+	// Trim a single trailing \r\n or \n for shell usability (echo adds a newline).
+	s := strings.TrimSuffix(string(data), "\n")
+	s = strings.TrimSuffix(s, "\r")
+	return s, nil
 }
 
 // readRawFile reads a file's content as a raw string, trimming one trailing newline.
+// Returns an error if the file is empty or exceeds maxRawReadSize.
 func readRawFile(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to read file %q: %w", path, err)
+	}
+	if info.Size() > maxRawReadSize {
+		return "", fmt.Errorf("file %q exceeds maximum raw read size (%d bytes)", path, maxRawReadSize)
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("failed to read file %q: %w", path, err)
 	}
-	return strings.TrimSuffix(string(data), "\n"), nil
+	if len(bytes.TrimSpace(data)) == 0 {
+		return "", fmt.Errorf("no data received from file %q", path)
+	}
+	// Trim a single trailing \r\n or \n for shell usability.
+	s := strings.TrimSuffix(string(data), "\n")
+	s = strings.TrimSuffix(s, "\r")
+	return s, nil
 }
 
 // ParseResolverFlags parses -r flag values, handling both key=value syntax
@@ -179,10 +205,10 @@ func ParseResolverFlagsWithStdin(values []string, stdin io.Reader) (map[string]a
 			// key=@- or key=@file — read raw content for a single key
 			if ref == "-" {
 				if stdinUsed {
-					return nil, fmt.Errorf("@- can only be specified once (stdin can only be read once)")
+					return nil, fmt.Errorf("%s=@-: stdin has already been consumed (stdin can only be read once)", key)
 				}
 				if stdin == nil {
-					return nil, fmt.Errorf("@- requires stdin but no stdin is available")
+					return nil, fmt.Errorf("%s=@- requires stdin but no stdin is available", key)
 				}
 				stdinUsed = true
 				raw, err := readRawReader(stdin, "stdin")

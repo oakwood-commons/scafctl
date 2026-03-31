@@ -1,10 +1,10 @@
-# Test: Resolver parameters from stdin via @-
+# Test: Resolver parameters from stdin via @- and key=@- / key=@file
 apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: stdin-params-test
   version: 1.0.0
-  description: Tests reading resolver parameters from stdin using @-
+  description: Tests reading resolver parameters from stdin using @- and key=@-
 
 spec:
   resolvers:

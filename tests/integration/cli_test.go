@@ -6888,3 +6888,139 @@ func TestIntegration_RunResolver_StdinMixedWithFileRef(t *testing.T) {
 	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstdout: %s\nstderr: %s", exitCode, stdout, stderr)
 	assert.Contains(t, stdout, "FromFile")
 }
+
+// ============================================================================
+// Raw Stdin Parameter Tests (key=@-)
+// ============================================================================
+
+func TestIntegration_RunResolver_RawStdinParam(t *testing.T) {
+	t.Parallel()
+	stdin := strings.NewReader("StdinRawAlice\n")
+	stdout, stderr, exitCode := runScafctlWithStdin(t, stdin,
+		"run", "resolver",
+		"-f", "tests/integration/solutions/resolvers/stdin-params/solution.yaml",
+		"-o", "json",
+		"--hide-execution",
+		"-r", "greeting=Hello",
+		"-r", "name=@-",
+	)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstdout: %s\nstderr: %s", exitCode, stdout, stderr)
+	assert.Contains(t, stdout, "StdinRawAlice")
+	assert.Contains(t, stdout, "Hello, StdinRawAlice!")
+}
+
+func TestIntegration_RunResolver_RawFileParam(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	contentFile := filepath.Join(tmpDir, "name.txt")
+	err := os.WriteFile(contentFile, []byte("FileContentBob\n"), 0o600)
+	require.NoError(t, err)
+
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "tests/integration/solutions/resolvers/stdin-params/solution.yaml",
+		"-o", "json",
+		"--hide-execution",
+		"-r", "greeting=Hi",
+		"-r", "name=@"+contentFile,
+	)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstdout: %s\nstderr: %s", exitCode, stdout, stderr)
+	assert.Contains(t, stdout, "FileContentBob")
+	assert.Contains(t, stdout, "Hi, FileContentBob!")
+}
+
+func TestIntegration_RunProvider_RawStdinParam(t *testing.T) {
+	t.Parallel()
+	stdin := strings.NewReader("Hello from stdin\n")
+	stdout, stderr, exitCode := runScafctlWithStdin(t, stdin,
+		"run", "provider", "message",
+		"message=@-",
+	)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstdout: %s\nstderr: %s", exitCode, stdout, stderr)
+}
+
+func TestIntegration_RunProvider_RawFileParam(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	contentFile := filepath.Join(tmpDir, "msg.txt")
+	err := os.WriteFile(contentFile, []byte("Hello from file\n"), 0o600)
+	require.NoError(t, err)
+
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "provider", "message",
+		"message=@"+contentFile,
+	)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstdout: %s\nstderr: %s", exitCode, stdout, stderr)
+}
+
+func TestIntegration_RunResolver_RawStdinConflictWithStandaloneAt(t *testing.T) {
+	t.Parallel()
+	stdin := strings.NewReader("raw data\n")
+	_, stderr, exitCode := runScafctlWithStdin(t, stdin,
+		"run", "resolver",
+		"-f", "tests/integration/solutions/resolvers/stdin-params/solution.yaml",
+		"-o", "json",
+		"--hide-execution",
+		"-r", "name=@-",
+		"-r", "@-",
+	)
+
+	assert.NotEqual(t, 0, exitCode, "expected non-zero exit code\nstderr: %s", stderr)
+	assert.Contains(t, stderr, "@- can only be specified once")
+}
+
+func TestIntegration_RunResolver_RawStdinWithOtherParams(t *testing.T) {
+	t.Parallel()
+	stdin := strings.NewReader("World\n")
+	stdout, stderr, exitCode := runScafctlWithStdin(t, stdin,
+		"run", "resolver",
+		"-f", "tests/integration/solutions/resolvers/stdin-params/solution.yaml",
+		"-o", "json",
+		"--hide-execution",
+		"-r", "greeting=Hey",
+		"-r", "name=@-",
+	)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstdout: %s\nstderr: %s", exitCode, stdout, stderr)
+	assert.Contains(t, stdout, "World")
+	assert.Contains(t, stdout, "Hey, World!")
+}
+
+func TestIntegration_RunResolver_RawFileAndStdinMixed(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	contentFile := filepath.Join(tmpDir, "greeting.txt")
+	err := os.WriteFile(contentFile, []byte("Howdy\n"), 0o600)
+	require.NoError(t, err)
+
+	stdin := strings.NewReader("Partner\n")
+	stdout, stderr, exitCode := runScafctlWithStdin(t, stdin,
+		"run", "resolver",
+		"-f", "tests/integration/solutions/resolvers/stdin-params/solution.yaml",
+		"-o", "json",
+		"--hide-execution",
+		"-r", "greeting=@"+contentFile,
+		"-r", "name=@-",
+	)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstdout: %s\nstderr: %s", exitCode, stdout, stderr)
+	assert.Contains(t, stdout, "Howdy")
+	assert.Contains(t, stdout, "Partner")
+	assert.Contains(t, stdout, "Howdy, Partner!")
+}

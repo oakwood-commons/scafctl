@@ -230,6 +230,41 @@ Get-Content inputs.yaml | scafctl run provider http '@-'
 {{% /tab %}}
 {{< /tabs >}}
 
+### Pipe Raw Content into a Single Input
+
+Use `key=@-` to read raw stdin into a specific input key, or `key=@file` to read a file's content:
+
+{{< tabs "runprov-raw-stdin" >}}
+{{% tab "Bash" %}}
+```bash
+# Pipe raw text into the message input
+echo hello | scafctl run provider message message=@-
+
+# Pipe a request body from stdin
+cat body.json | scafctl run provider http url=https://api.example.com body=@-
+
+# Read a file's raw content into an input
+scafctl run provider message message=@greeting.txt
+scafctl run provider http url=https://api.example.com body=@request.json
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Pipe raw text into the message input
+'hello' | scafctl run provider message 'message=@-'
+
+# Pipe a request body from stdin
+Get-Content body.json | scafctl run provider http 'url=https://api.example.com' 'body=@-'
+
+# Read a file's raw content into an input
+scafctl run provider message 'message=@greeting.txt'
+scafctl run provider http 'url=https://api.example.com' 'body=@request.json'
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+> **Note:** A single trailing newline is trimmed automatically. `key=@-` reads raw text — it does not parse YAML/JSON.
+
 Output:
 
 ```json

@@ -266,6 +266,13 @@ scafctl run resolver -f examples/resolvers/parameters.yaml -r @params.yaml
 ```bash
 # Pipe YAML or JSON parameters via stdin using @-
 echo '{"name": "Bob", "count": 5}' | scafctl run resolver -f examples/resolvers/parameters.yaml -r @-
+
+# Pipe raw stdin into a single parameter key using key=@-
+echo hello | scafctl run provider message message=@-
+echo hello | scafctl run resolver -f examples/resolvers/parameters.yaml -r name=@-
+
+# Read a file's content into a parameter key using key=@file
+scafctl run resolver -f examples/resolvers/parameters.yaml -r name=@name.txt
 ```
 
 ### Interactive Mode
