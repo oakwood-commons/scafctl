@@ -63,7 +63,7 @@ func RegisterEvalEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefix st
 		}
 
 		result, err := celexp.EvaluateExpression(ctx, input.Body.Expression, input.Body.Data, nil,
-			celexp.WithCostLimit(settings.DefaultAPIFilterCostLimit))
+			celexp.WithCostLimit(settings.DefaultAPIEvalCostLimit))
 		if err != nil {
 			return nil, huma.NewError(http.StatusBadRequest, fmt.Sprintf("CEL evaluation failed: %v", err))
 		}

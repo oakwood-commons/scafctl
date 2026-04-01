@@ -9,6 +9,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
@@ -20,7 +21,7 @@ func (s *Server) InitAPI() {
 		apiVersion = settings.DefaultAPIVersion
 	}
 
-	cfg := BuildHumaConfig(apiVersion)
+	cfg := BuildHumaConfig(apiVersion, s.cfg)
 	s.api = humachi.New(s.router, cfg)
 }
 
@@ -28,11 +29,13 @@ func (s *Server) InitAPI() {
 // schemes, and documentation paths. It is exported so that standalone spec
 // generators (CLI openapi command, MCP tools) produce an identical spec to the
 // live server, including all security scheme definitions.
-func BuildHumaConfig(apiVersion string) huma.Config {
+// appCfg is optional; when non-nil, OpenAPI server entries are derived from the
+// active APIServer configuration (host, port, TLS) instead of hard-coded defaults.
+func BuildHumaConfig(apiVersion string, appCfg *config.Config) huma.Config {
 	cfg := huma.DefaultConfig("scafctl API", settings.VersionInformation.BuildVersion)
 
 	configureOpenAPIInfo(&cfg)
-	configureOpenAPIServers(&cfg)
+	configureOpenAPIServers(&cfg, appCfg)
 	configureSecuritySchemes(&cfg)
 	configureDocsPaths(&cfg, apiVersion)
 
@@ -54,10 +57,39 @@ func configureOpenAPIInfo(cfg *huma.Config) {
 	}
 }
 
-// configureOpenAPIServers adds default and localhost server entries.
-func configureOpenAPIServers(cfg *huma.Config) {
+// configureOpenAPIServers adds OpenAPI server entries.
+// When appCfg is provided, the server URL is derived from the active host, port,
+// and TLS settings; otherwise a localhost default is used.
+func configureOpenAPIServers(cfg *huma.Config, appCfg *config.Config) {
+	if appCfg != nil && len(appCfg.APIServer.OpenAPI.Servers) > 0 {
+		for _, s := range appCfg.APIServer.OpenAPI.Servers {
+			cfg.Servers = append(cfg.Servers, &huma.Server{URL: s.URL, Description: s.Description})
+		}
+		return
+	}
+
+	host := settings.DefaultAPIHost
+	port := settings.DefaultAPIPort
+	scheme := "http"
+
+	if appCfg != nil {
+		if appCfg.APIServer.Host != "" {
+			host = appCfg.APIServer.Host
+		}
+		if appCfg.APIServer.Port != 0 {
+			port = appCfg.APIServer.Port
+		}
+		if appCfg.APIServer.TLS.Enabled {
+			scheme = "https"
+		}
+	}
+
+	if host == "0.0.0.0" || host == "::" {
+		host = "localhost"
+	}
+
 	cfg.Servers = []*huma.Server{
-		{URL: fmt.Sprintf("http://localhost:%d", settings.DefaultAPIPort), Description: "Local development"},
+		{URL: fmt.Sprintf("%s://%s:%d", scheme, host, port), Description: "Local development"},
 	}
 }
 

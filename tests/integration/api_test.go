@@ -22,6 +22,9 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/api"
 	"github.com/oakwood-commons/scafctl/pkg/api/endpoints"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/fileprovider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/staticprovider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
@@ -35,9 +38,14 @@ func setupTestServer(t testing.TB) *httptest.Server {
 		},
 	}
 
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(staticprovider.New()))
+	require.NoError(t, reg.Register(fileprovider.NewFileProvider()))
+
 	srv, err := api.NewServer(
 		api.WithServerConfig(cfg),
 		api.WithServerVersion("test-dev"),
+		api.WithServerRegistry(reg),
 	)
 	require.NoError(t, err)
 
@@ -167,11 +175,15 @@ func TestAPI_ProvidersEndpoint_Filter(t *testing.T) {
 	e, ts := setupExpect(t)
 	defer ts.Close()
 
-	e.GET("/v1/providers").
-		WithQuery("filter", `item.name=="write-new"`).
+	obj := e.GET("/v1/providers").
+		WithQuery("filter", `item.name=="static"`).
 		Expect().
 		Status(http.StatusOK).
-		JSON().Object().NotEmpty()
+		JSON().Object()
+
+	items := obj.Value("items").Array()
+	items.Length().IsEqual(1)
+	items.Value(0).Object().Value("name").IsEqual("static")
 }
 
 // TestAPI_AdminInfoEndpoint verifies admin info returns server metadata.
@@ -376,20 +388,15 @@ func TestAPI_ProviderSchema_NotFound(t *testing.T) {
 }
 
 // TestAPI_ProvidersEndpoint_InvalidFilter verifies that an invalid CEL filter
-// returns 400 when there are items to filter. With no providers registered
-// the filter is not evaluated (no items to iterate), so we test via catalogs
-// or accept 200 when the provider list is empty.
+// returns 400 when there are items to filter against.
 func TestAPI_ProvidersEndpoint_InvalidFilter(t *testing.T) {
 	e, ts := setupExpect(t)
 	defer ts.Close()
 
-	// With an empty provider registry the filter expression is never evaluated
-	// because there are no items, so the response is 200 with an empty list.
-	// This validates that the endpoint handles the empty-list + filter case gracefully.
 	e.GET("/v1/providers").
 		WithQuery("filter", "???invalid-cel").
 		Expect().
-		Status(http.StatusOK)
+		Status(http.StatusBadRequest)
 }
 
 // TestAPI_ProvidersEndpoint_PaginationResponse verifies pagination metadata structure.

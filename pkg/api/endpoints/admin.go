@@ -77,6 +77,7 @@ func RegisterAdminEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefix s
 		Description:  "Hot-reloads configuration without restarting the server.",
 		Tags:         []string{"Admin"},
 		MaxBodyBytes: settings.DefaultAPIAdminMaxBodyBytes,
+		Errors:       []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusTooManyRequests, http.StatusNotImplemented, http.StatusInternalServerError},
 	}, hctx, http.StatusOK), func(_ context.Context, _ *struct{}) (*AdminReloadResponse, error) {
 		// TODO: implement config hot-reload
 		return nil, huma.NewError(http.StatusNotImplemented, "configuration reload is not yet implemented")
@@ -90,6 +91,7 @@ func RegisterAdminEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefix s
 		Description:  "Clears CEL, template, and HTTP caches.",
 		Tags:         []string{"Admin"},
 		MaxBodyBytes: settings.DefaultAPIAdminMaxBodyBytes,
+		Errors:       []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusTooManyRequests, http.StatusNotImplemented, http.StatusInternalServerError},
 	}, hctx, http.StatusOK), func(_ context.Context, _ *struct{}) (*AdminClearCacheResponse, error) {
 		// TODO: implement cache clearing
 		return nil, huma.NewError(http.StatusNotImplemented, "cache clearing is not yet implemented")

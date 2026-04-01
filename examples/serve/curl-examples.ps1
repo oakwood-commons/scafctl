@@ -22,7 +22,7 @@ Write-Host "`n`n=== Providers ==="
 Invoke-RestMethod -Uri "$Base/v1/providers"
 
 Write-Host "`n`n=== Providers (filtered) ==="
-Invoke-RestMethod -Uri "$Base/v1/providers?filter=item.name==%22write-new%22"
+Invoke-RestMethod -Uri "$Base/v1/providers?filter=item.name==%22file%22"
 
 Write-Host "`n`n=== Eval CEL ==="
 Invoke-RestMethod -Uri "$Base/v1/eval/cel" -Method Post `
@@ -41,4 +41,4 @@ Write-Host "`n`n=== Admin Info ==="
 Invoke-RestMethod -Uri "$Base/v1/admin/info"
 
 Write-Host "`n`n=== OpenAPI Spec ==="
-(Invoke-WebRequest -Uri "$Base/v1/openapi").Content.Split("`n") | Select-Object -First 20
+(Invoke-WebRequest -Uri "$Base/v1/openapi.json").Content.Split("`n") | Select-Object -First 20

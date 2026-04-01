@@ -101,7 +101,7 @@ func TestRegisterHealthEndpoints_NilProviderRegistry(t *testing.T) {
 func TestRegisterAllForExport_NoPanic(t *testing.T) {
 	_, testAPI := humatest.New(t)
 	assert.NotPanics(t, func() {
-		RegisterAllForExport(testAPI)
+		RegisterAllForExport(testAPI, "", nil)
 	})
 }
 

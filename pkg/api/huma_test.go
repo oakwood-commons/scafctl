@@ -13,7 +13,7 @@ import (
 )
 
 func TestBuildHumaConfig(t *testing.T) {
-	cfg := BuildHumaConfig(settings.DefaultAPIVersion)
+	cfg := BuildHumaConfig(settings.DefaultAPIVersion, nil)
 
 	assert.NotNil(t, cfg.Info)
 	assert.Equal(t, "scafctl API", cfg.Info.Title)
@@ -22,14 +22,14 @@ func TestBuildHumaConfig(t *testing.T) {
 }
 
 func TestConfigureSecuritySchemes(t *testing.T) {
-	cfg := BuildHumaConfig("v1")
+	cfg := BuildHumaConfig("v1", nil)
 	assert.NotNil(t, cfg.Components)
 	assert.NotNil(t, cfg.Components.SecuritySchemes)
 	assert.Contains(t, cfg.Components.SecuritySchemes, "oauth2")
 }
 
 func TestConfigureOpenAPIServers(t *testing.T) {
-	cfg := BuildHumaConfig("v1")
+	cfg := BuildHumaConfig("v1", nil)
 	assert.NotEmpty(t, cfg.Servers)
 	assert.Contains(t, cfg.Servers[0].URL, fmt.Sprintf("%d", settings.DefaultAPIPort))
 }
@@ -50,6 +50,6 @@ func TestServer_API_PanicsBeforeInitAPI(t *testing.T) {
 
 func BenchmarkBuildHumaConfig(b *testing.B) {
 	for b.Loop() {
-		BuildHumaConfig("v1")
+		BuildHumaConfig("v1", nil)
 	}
 }

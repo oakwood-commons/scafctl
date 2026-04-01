@@ -1,4 +1,5 @@
 {
-  "success": true,
-  "message": "configuration reloaded successfully"
+  "title": "Not Implemented",
+  "status": 501,
+  "detail": "configuration reload is not yet implemented"
 }

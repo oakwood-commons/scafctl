@@ -69,7 +69,7 @@ func RegisterProviderEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 		if hctx.ProviderRegistry == nil {
 			resp := &ProviderListResponse{}
 			resp.Body.Items = []ProviderListItem{}
-			resp.Body.Pagination = api.NewPaginationInfo(0, 1, 100)
+			resp.Body.Pagination = api.NewPaginationInfo(0, input.Page, input.PerPage)
 			return resp, nil
 		}
 

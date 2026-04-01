@@ -7,6 +7,7 @@ import (
 	"compress/gzip"
 	"io"
 	"net/http"
+	"strings"
 )
 
 // SecurityHeaders returns middleware that sets standard security headers.
@@ -15,7 +16,14 @@ func SecurityHeaders(tlsEnabled bool) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("X-Content-Type-Options", "nosniff")
 			w.Header().Set("X-Frame-Options", "DENY")
-			w.Header().Set("Content-Security-Policy", "default-src 'none'")
+			// Huma serves its interactive docs UI (Swagger/Elements) at /{version}/docs.
+			// That page loads scripts and styles from external CDNs, so we relax the CSP
+			// only for that path to avoid breaking the docs while keeping API routes strict.
+			if strings.HasSuffix(r.URL.Path, "/docs") || strings.HasSuffix(r.URL.Path, "/docs/") {
+				w.Header().Set("Content-Security-Policy", "default-src 'self' https:; script-src 'self' 'unsafe-inline' https:; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: https:; connect-src 'self' https:")
+			} else {
+				w.Header().Set("Content-Security-Policy", "default-src 'none'")
+			}
 			w.Header().Set("X-XSS-Protection", "0")
 			w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 			w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")

@@ -12,6 +12,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/oakwood-commons/scafctl/pkg/api"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
@@ -55,9 +56,14 @@ func RegisterAll(humaAPI huma.API, router *chi.Mux, hctx *api.HandlerContext) {
 
 // RegisterAllForExport registers all endpoints on a Huma API for
 // OpenAPI spec generation without starting the server.
-func RegisterAllForExport(humaAPI huma.API) {
-	prefix := fmt.Sprintf("/%s", settings.DefaultAPIVersion)
-	hctx := &api.HandlerContext{}
+// It accepts an apiVersion so the exported spec matches the configured version,
+// and an optional config so operation Security reflects auth settings.
+func RegisterAllForExport(humaAPI huma.API, apiVersion string, cfg *config.Config) {
+	if apiVersion == "" {
+		apiVersion = settings.DefaultAPIVersion
+	}
+	prefix := fmt.Sprintf("/%s", apiVersion)
+	hctx := &api.HandlerContext{Config: cfg}
 
 	RegisterHealthEndpoints(humaAPI, hctx)
 	RegisterSolutionEndpoints(humaAPI, hctx, prefix)

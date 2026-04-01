@@ -270,7 +270,7 @@ The API server is configured via the `apiServer` section in the scafctl config f
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `host` | string | `0.0.0.0` | Bind address |
+| `host` | string | `127.0.0.1` | Bind address |
 | `port` | int | `8080` | Listen port |
 | `apiVersion` | string | `v1` | URL path version prefix |
 | `requestTimeout` | string | `30s` | Per-request timeout |

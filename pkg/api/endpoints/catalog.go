@@ -80,7 +80,11 @@ func RegisterCatalogEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefix
 	},
 	) (*CatalogListResponse, error) {
 		if hctx.Config == nil {
-			return &CatalogListResponse{}, nil
+			pagination := api.NewPaginationInfo(0, input.Page, input.PerPage)
+			resp := &CatalogListResponse{}
+			resp.Body.Items = []CatalogListItem{}
+			resp.Body.Pagination = pagination
+			return resp, nil
 		}
 
 		items := make([]CatalogListItem, 0, len(hctx.Config.Catalogs))

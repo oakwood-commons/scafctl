@@ -35,7 +35,6 @@ func HandleValidationError(_ context.Context, fieldName, message string) error {
 	detail := &huma.ErrorDetail{
 		Message:  message,
 		Location: fieldName,
-		Value:    fieldName,
 	}
 	return huma.NewError(http.StatusUnprocessableEntity, fmt.Sprintf("validation failed: %s", message), detail)
 }

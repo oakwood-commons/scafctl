@@ -55,7 +55,7 @@ func CommandServe(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			authentication for orchestrator integration.
 
 			OpenAPI documentation is served at /{version}/docs and the spec
-			at /{version}/openapi.
+			at /{version}/openapi.json.
 		`),
 		Example: heredoc.Doc(`
 			# Start the API server with defaults (port 8080)
@@ -76,7 +76,7 @@ func CommandServe(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 		},
 	}
 
-	cmd.Flags().StringVar(&opts.Host, "host", "", "Host to bind to (default from config or 0.0.0.0)")
+	cmd.Flags().StringVar(&opts.Host, "host", "", "Host to bind to (default from config or 127.0.0.1)")
 	cmd.Flags().IntVar(&opts.Port, "port", 0, "Port to listen on (default from config or 8080)")
 	cmd.Flags().StringVar(&opts.TLSCert, "tls-cert", "", "Path to TLS certificate")
 	cmd.Flags().StringVar(&opts.TLSKey, "tls-key", "", "Path to TLS private key")

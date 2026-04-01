@@ -1,7 +1,7 @@
 # scafctl API server configuration example
 # All fields are optional — defaults are used when omitted.
 apiServer:
-  host: "0.0.0.0"
+  host: "127.0.0.1"   # use 0.0.0.0 to expose publicly
   port: 8080
   apiVersion: "v1"
   shutdownTimeout: "30s"

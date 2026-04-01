@@ -96,6 +96,7 @@ const (
 	groupScaffold = "scaffold"
 	groupConfig   = "config"
 	groupPlugin   = "plugin"
+	groupServer   = "server"
 )
 
 // RootOptions configures a Root() invocation. All fields are optional;
@@ -474,6 +475,7 @@ func Root(opts *RootOptions) *cobra.Command {
 		&cobra.Group{ID: groupScaffold, Title: "Scaffolding Commands:"},
 		&cobra.Group{ID: groupConfig, Title: "Configuration & Security Commands:"},
 		&cobra.Group{ID: groupPlugin, Title: "Plugin Commands:"},
+		&cobra.Group{ID: groupServer, Title: "Server Commands:"},
 	)
 
 	cCmd.PersistentFlags().StringVar(&cliParams.MinLogLevel, "log-level", "none", "Set the log level (none, error, warn, info, debug, trace, or a numeric V-level)")
@@ -524,7 +526,9 @@ func Root(opts *RootOptions) *cobra.Command {
 	// Plugin Commands
 	cCmd.AddCommand(withGroup(groupPlugin, pluginscmd.CommandPlugins(cliParams, ioStreams, settings.CliBinaryName)))
 	cCmd.AddCommand(withGroup(groupPlugin, mcpcmd.CommandMCP(cliParams, ioStreams, settings.CliBinaryName)))
-	cCmd.AddCommand(withGroup(groupPlugin, servecmd.CommandServe(cliParams, ioStreams, settings.CliBinaryName)))
+
+	// Server Commands
+	cCmd.AddCommand(withGroup(groupServer, servecmd.CommandServe(cliParams, ioStreams, settings.CliBinaryName)))
 
 	// Other Commands (no group — shown under "Additional Commands:")
 	cCmd.AddCommand(version.CommandVersion(cliParams, ioStreams, settings.CliBinaryName))

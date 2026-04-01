@@ -80,7 +80,7 @@ New `APIServerConfig` struct:
 
 ```go
 type APIServerConfig struct {
-    Host            string                    `json:"host"            yaml:"host"            doc:"Host to bind to"                                       example:"0.0.0.0"`
+    Host            string                    `json:"host"            yaml:"host"            doc:"Host to bind to"                                       example:"127.0.0.1"`
     Port            int                       `json:"port"            yaml:"port"            doc:"Port to listen on"                                     example:"8080"  maximum:"65535"`
     APIVersion      string                    `json:"apiVersion"      yaml:"apiVersion"      doc:"API version prefix"                                    example:"v1"`
     ShutdownTimeout string                    `json:"shutdownTimeout" yaml:"shutdownTimeout" doc:"Graceful shutdown timeout"                              example:"30s"`
@@ -120,7 +120,7 @@ type APIServerConfig struct {
 ```go
 const (
     DefaultAPIPort            = 8080
-    DefaultAPIHost            = "0.0.0.0"
+    DefaultAPIHost            = "127.0.0.1"
     DefaultAPIVersion         = "v1"
     DefaultShutdownTimeout    = "30s"
     DefaultRequestTimeout     = "60s"
@@ -143,7 +143,7 @@ func (s *Server) configureDocsPaths(humaConfig *huma.Config, apiVersion string)
 
 - Security scheme: OAuth2 with Entra client ID scope (`api://{clientID}/.default`)
 - Uses `humachi.New(apiRouter, humaConfig)` adapter
-- Configures docs path at `/{version}/docs` and OpenAPI at `/{version}/openapi`
+- Configures docs path at `/{version}/docs` and OpenAPI at `/{version}/openapi.json`
 - Default format: `application/json`
 
 **Reference:** jqapi `Server.buildHumaConfig()`, `Server.InitAPI()`
@@ -177,7 +177,7 @@ Returns the API route group (`chi.Router`) with heavy middleware applied. Health
 |-------|-----------|---------|
 | 1 | CORS | Cross-Origin Resource Sharing (if enabled) |
 | 2 | Timeout | Enforce request timeouts (prevents resource exhaustion) |
-| 3 | Max Concurrent Connections | Connection exhaustion protection |
+| 3 | Max Concurrent Requests | Request throttling (chi Throttle) |
 | 4 | Method-Allowed | 405 enforcement before auth (per RFC 7231) |
 | 5 | Authentication | Entra OIDC JWT validation |
 | 6 | Rate Limiting | Per-IP rate limiting (global + per-endpoint) |
@@ -217,7 +217,7 @@ Create `pkg/api/middleware/security.go`:
 
 - Security headers: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Strict-Transport-Security` (when TLS), `Content-Security-Policy`
 - Request size limits: reject requests exceeding `MaxRequestSize`
-- Max concurrent connections: semaphore-based connection limiting
+- Max concurrent requests: chi Throttle-based in-flight request limiting
 
 *Can be developed in parallel with Step 2.2.*
 
@@ -562,7 +562,7 @@ Pattern follows `pkg/cmd/scafctl/mcp/serve.go` (dependency injection from Cobra 
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--host` | `0.0.0.0` | Host to bind to |
+| `--host` | `127.0.0.1` | Host to bind to |
 | `--port` | `8080` | Port to listen on (1-65535) |
 | `--tls-cert` | | Path to TLS certificate |
 | `--tls-key` | | Path to TLS private key |
@@ -780,6 +780,7 @@ Create `pkg/mcp/tools_api.go`:
 | Admin authorization: role-based or localhost-only | When Entra auth is enabled, admin endpoints require `admin` role claim. When auth is disabled, admin endpoints are restricted to localhost. Defense in depth |
 | Audit log body redaction | Request bodies logged in audit entries have sensitive fields (`password`, `secret`, `token`, `key`, `credential`) redacted to `[REDACTED]`. Prevents OWASP-listed credential leakage |
 | CEL filter cost limit | API filter expressions use `WithCostLimit(settings.DefaultAPIFilterCostLimit)` (10,000) — lower than CLI default (1,000,000) — to prevent DoS via expensive user-supplied expressions |
+| CEL eval cost limit | The eval endpoint uses `WithCostLimit(settings.DefaultAPIEvalCostLimit)` (100,000) — higher than the filter limit because eval is the primary use-case, but still bounded |
 | Port type: `int` | Config and CLI flags use `int` for the port field, enabling numeric validation (1-65535). String-based port is error-prone |
 ---
 

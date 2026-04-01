@@ -5,6 +5,7 @@ package mcp
 
 import (
 	"context"
+	"sort"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
@@ -46,11 +47,11 @@ func (s *Server) registerAPITools() {
 // handleGetOpenAPISpec generates the full OpenAPI spec without starting the server.
 func (s *Server) handleGetOpenAPISpec(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	router := chi.NewRouter()
-	apiVersion := settings.DefaultAPIVersion
-	humaConfig := api.BuildHumaConfig(apiVersion)
+	apiVersion := s.apiVersion()
+	humaConfig := api.BuildHumaConfig(apiVersion, s.config)
 
 	humaAPI := humachi.New(router, humaConfig)
-	endpoints.RegisterAllForExport(humaAPI)
+	endpoints.RegisterAllForExport(humaAPI, apiVersion, s.config)
 
 	spec := humaAPI.OpenAPI()
 	return mcp.NewToolResultJSON(spec)
@@ -59,11 +60,11 @@ func (s *Server) handleGetOpenAPISpec(_ context.Context, _ mcp.CallToolRequest) 
 // handleListAPIEndpoints returns a summary of all API endpoints.
 func (s *Server) handleListAPIEndpoints(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	router := chi.NewRouter()
-	apiVersion := settings.DefaultAPIVersion
-	humaConfig := api.BuildHumaConfig(apiVersion)
+	apiVersion := s.apiVersion()
+	humaConfig := api.BuildHumaConfig(apiVersion, s.config)
 
 	humaAPI := humachi.New(router, humaConfig)
-	endpoints.RegisterAllForExport(humaAPI)
+	endpoints.RegisterAllForExport(humaAPI, apiVersion, s.config)
 
 	spec := humaAPI.OpenAPI()
 
@@ -96,8 +97,24 @@ func (s *Server) handleListAPIEndpoints(_ context.Context, _ mcp.CallToolRequest
 		addOp("options", item.Options)
 	}
 
+	// Sort by path then method for stable, deterministic output.
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Path != result[j].Path {
+			return result[i].Path < result[j].Path
+		}
+		return result[i].Method < result[j].Method
+	})
+
 	return mcp.NewToolResultJSON(map[string]any{
 		"count":     len(result),
 		"endpoints": result,
 	})
+}
+
+// apiVersion returns the configured API version or the default.
+func (s *Server) apiVersion() string {
+	if s.config != nil && s.config.APIServer.APIVersion != "" {
+		return s.config.APIServer.APIVersion
+	}
+	return settings.DefaultAPIVersion
 }

@@ -120,9 +120,28 @@ func TestExtractIP_XForwardedFor(t *testing.T) {
 	assert.Equal(t, "10.0.0.1", ip)
 }
 
+// TestExtractIP_XForwardedFor_TrimsWhitespace verifies leading/trailing spaces
+// are stripped from the first XFF entry (common with multi-proxy setups).
+func TestExtractIP_XForwardedFor_TrimsWhitespace(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Forwarded-For", " 10.0.0.1 , 10.0.0.2")
+
+	ip := extractIP(req, true)
+	assert.Equal(t, "10.0.0.1", ip)
+}
+
 func TestExtractIP_XRealIP(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Real-IP", "10.0.0.5")
+
+	ip := extractIP(req, true)
+	assert.Equal(t, "10.0.0.5", ip)
+}
+
+// TestExtractIP_XRealIP_TrimsWhitespace verifies X-Real-IP whitespace is stripped.
+func TestExtractIP_XRealIP_TrimsWhitespace(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Real-IP", " 10.0.0.5 ")
 
 	ip := extractIP(req, true)
 	assert.Equal(t, "10.0.0.5", ip)
@@ -134,6 +153,16 @@ func TestExtractIP_RemoteAddr(t *testing.T) {
 
 	ip := extractIP(req, false)
 	assert.Equal(t, "192.168.1.1", ip)
+}
+
+// TestExtractIP_RemoteAddr_IPv6 verifies that IPv6 RemoteAddr (e.g. "[::1]:port")
+// is parsed correctly using net.SplitHostPort so brackets are stripped.
+func TestExtractIP_RemoteAddr_IPv6(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "[::1]:54321"
+
+	ip := extractIP(req, false)
+	assert.Equal(t, "::1", ip)
 }
 
 // TestExtractIP_IgnoresXFFWhenTrustProxyFalse verifies that X-Forwarded-For is

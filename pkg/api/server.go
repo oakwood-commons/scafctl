@@ -212,6 +212,11 @@ func (s *Server) HandlerCtx() *HandlerContext {
 
 // Start starts the HTTP server and blocks until shutdown.
 func (s *Server) Start() error {
+	// Cancel the server context when Start returns so background goroutines
+	// (e.g. rate-limit cleanup) are stopped on all exit paths, including
+	// early TLS validation failures.
+	defer s.cancel()
+
 	apiCfg := s.cfg.APIServer
 
 	host := apiCfg.Host
@@ -247,11 +252,6 @@ func (s *Server) Start() error {
 			MinVersion:   tls.VersionTLS12,
 		}
 	}
-
-	// Ensure context is cancelled when Start returns so the shutdown goroutine
-	// exits even if ListenAndServe returns a non-ErrServerClosed error (e.g.
-	// "address already in use") before a signal is received.
-	defer s.cancel()
 
 	// Graceful shutdown goroutine
 	shutdownDone := make(chan error, 1)

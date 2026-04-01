@@ -45,7 +45,7 @@ func RegisterHealthEndpoints(humaAPI huma.API, hctx *api.HandlerContext) {
 			{Href: fmt.Sprintf("/%s/catalogs", apiVersion), Rel: "catalogs"},
 			{Href: fmt.Sprintf("/%s/schemas", apiVersion), Rel: "schemas"},
 			{Href: fmt.Sprintf("/%s/docs", apiVersion), Rel: "docs"},
-			{Href: fmt.Sprintf("/%s/openapi", apiVersion), Rel: "openapi"},
+			{Href: fmt.Sprintf("/%s/openapi.json", apiVersion), Rel: "openapi"},
 		}
 		return resp, nil
 	})

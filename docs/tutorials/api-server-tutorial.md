@@ -10,7 +10,7 @@ scafctl includes a built-in REST API server that exposes all major CLI features 
 ## Starting the Server
 
 ```bash
-# Start with defaults (port 8080, host 0.0.0.0)
+# Start with defaults (port 8080, host 127.0.0.1)
 scafctl serve
 
 # Start on a custom port
@@ -29,7 +29,7 @@ The server reads its configuration from the `apiServer` section of the scafctl c
 
 ```yaml
 apiServer:
-  host: "0.0.0.0"
+  host: "127.0.0.1"   # use 0.0.0.0 to expose publicly
   port: 8080
   apiVersion: "v1"
   shutdownTimeout: "30s"
@@ -117,7 +117,7 @@ CLI flags override configuration file values.
 | GET | `/v1/schemas/{name}` | Get a specific schema |
 | POST | `/v1/schemas/validate` | Validate data against a schema |
 | GET | `/v1/config` | Get current configuration |
-| GET | `/v1/config/settings` | Get scafctl settings |
+| GET | `/v1/settings` | Get scafctl settings |
 | GET | `/v1/snapshots` | List snapshots |
 | GET | `/v1/snapshots/{id}` | Get a specific snapshot |
 
@@ -148,7 +148,7 @@ scafctl serve openapi
 scafctl serve openapi --format yaml --output openapi.yaml
 ```
 
-The spec is also served at `/{version}/openapi` when the server is running.
+The spec is also served at `/{version}/openapi.json` when the server is running.
 
 ## Authentication
 

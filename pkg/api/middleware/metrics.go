@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -74,9 +75,15 @@ func Metrics() func(http.Handler) http.Handler {
 			next.ServeHTTP(sw, r)
 
 			duration := time.Since(start).Seconds()
+			// Use the chi route pattern (e.g. "/v1/snapshots/{id}") instead of
+			// the raw URL path to avoid unbounded high-cardinality labels.
+			routePattern := r.URL.Path
+			if rctx := chi.RouteContext(r.Context()); rctx != nil && rctx.RoutePattern() != "" {
+				routePattern = rctx.RoutePattern()
+			}
 			attrs := []attribute.KeyValue{
 				attribute.String("method", r.Method),
-				attribute.String("path", r.URL.Path),
+				attribute.String("path", routePattern),
 				attribute.String("status_code", strconv.Itoa(sw.status)),
 			}
 

@@ -4,7 +4,9 @@
 package api
 
 import (
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -18,7 +20,7 @@ func TestNewPaginationInfo(t *testing.T) {
 		wantPages   int
 		wantHasMore bool
 	}{
-		{"first of two pages", 25, 1, 10, 3, true},
+		{"first of three pages", 25, 1, 10, 3, true},
 		{"last page", 25, 3, 10, 3, false},
 		{"exactly one page", 10, 1, 10, 1, false},
 		{"empty", 0, 1, 10, 0, false},
@@ -75,4 +77,17 @@ func BenchmarkNewPaginationInfo(b *testing.B) {
 	for b.Loop() {
 		NewPaginationInfo(1000, 5, 100)
 	}
+}
+
+func TestSetLastModified(t *testing.T) {
+	rec := httptest.NewRecorder()
+	now := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
+	SetLastModified(rec, now)
+	assert.Equal(t, "Wed, 01 Apr 2026 12:00:00 GMT", rec.Header().Get("Last-Modified"))
+}
+
+func TestSetLastModified_ZeroTime(t *testing.T) {
+	rec := httptest.NewRecorder()
+	SetLastModified(rec, time.Time{})
+	assert.NotEmpty(t, rec.Header().Get("Last-Modified"))
 }

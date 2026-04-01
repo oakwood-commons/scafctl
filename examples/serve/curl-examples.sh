@@ -23,7 +23,7 @@ echo -e "\n\n=== Providers ==="
 curl -s "$BASE/v1/providers"
 
 echo -e "\n\n=== Providers (filtered) ==="
-curl -s "$BASE/v1/providers?filter=item.name==%22write-new%22"
+curl -s "$BASE/v1/providers?filter=item.name==%22file%22"
 
 echo -e "\n\n=== Eval CEL ==="
 curl -s -X POST "$BASE/v1/eval/cel" \
@@ -42,4 +42,4 @@ echo -e "\n\n=== Admin Info ==="
 curl -s "$BASE/v1/admin/info"
 
 echo -e "\n\n=== OpenAPI Spec ==="
-curl -s "$BASE/v1/openapi" | head -20
+curl -s "$BASE/v1/openapi.json" | head -20

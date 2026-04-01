@@ -219,3 +219,47 @@ func BenchmarkSolutionRunEndpoint(b *testing.B) {
 		testAPI.Post("/v1/solutions/run", `{"path": "/nonexistent.yaml"}`)
 	}
 }
+
+// ── Direct unit tests for unexported helpers ──
+
+func TestRejectUnsafePath_Direct(t *testing.T) {
+	tests := []struct {
+		path    string
+		wantErr bool
+	}{
+		{"../secrets", true},
+		{"foo/../../etc/passwd", true},
+		{"/absolute/path", true},
+		{"~/home-relative", true},
+		{"relative/safe/path", false},
+		{"just-a-name", false},
+		{"subdir/nested", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			err := rejectUnsafePath(tt.path, "test-op")
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+// TestSolutionRun_UnsafeOutputDir_ViaURL passes a valid HTTP URL for path so that
+// requireURLPath succeeds, then verifies rejectUnsafePath blocks the unsafe outputDir.
+func TestSolutionRun_UnsafeOutputDir_ViaURL(t *testing.T) {
+	unsafe := []string{"/etc/passwd", "../secret", "~/evil"}
+	for _, tc := range unsafe {
+		t.Run(tc, func(t *testing.T) {
+			_, testAPI := humatest.New(t)
+			hctx := newTestHandlerContext(t)
+			RegisterSolutionEndpoints(testAPI, hctx, "/v1")
+
+			body := strings.NewReader(`{"path":"https://example.com/solution.yaml","outputDir":"` + tc + `"}`)
+			resp := testAPI.Post("/v1/solutions/run", body, "Content-Type: application/json")
+			assert.Equal(t, http.StatusBadRequest, resp.Code, "expected 400 for unsafe outputDir %q", tc)
+		})
+	}
+}

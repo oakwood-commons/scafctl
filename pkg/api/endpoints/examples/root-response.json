@@ -9,6 +9,6 @@
     { "href": "/v1/catalogs", "rel": "catalogs" },
     { "href": "/v1/schemas", "rel": "schemas" },
     { "href": "/v1/docs", "rel": "docs" },
-    { "href": "/v1/openapi", "rel": "openapi" }
+    { "href": "/v1/openapi.json", "rel": "openapi" }
   ]
 }

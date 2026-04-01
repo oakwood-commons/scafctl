@@ -86,12 +86,12 @@ func AuditLog(lgr logr.Logger, trustProxy bool) func(http.Handler) http.Handler 
 }
 
 // redactBody attempts to parse the body as JSON and redact sensitive fields.
-// If the body is not valid JSON, it is returned as-is (non-JSON bodies are
-// unlikely to contain structured secrets in key-value form).
+// Non-JSON bodies are fully redacted to prevent leaking secrets in
+// form-encoded or plaintext payloads.
 func redactBody(body []byte) string {
 	var data map[string]any
 	if err := json.Unmarshal(body, &data); err != nil {
-		return string(body)
+		return "<non-JSON body redacted>"
 	}
 	redactMap(data)
 	redacted, err := json.Marshal(data)

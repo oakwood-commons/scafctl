@@ -442,9 +442,9 @@ func (b *BuildConfig) IsAutoCacheRemoteArtifacts() bool {
 
 // APIServerConfig holds REST API server configuration.
 type APIServerConfig struct {
-	Host            string               `json:"host,omitempty" yaml:"host,omitempty" mapstructure:"host" doc:"Host to bind to" example:"0.0.0.0" maxLength:"253"`
+	Host            string               `json:"host,omitempty" yaml:"host,omitempty" mapstructure:"host" doc:"Host to bind to (defaults to 127.0.0.1; use 0.0.0.0 to expose publicly)" example:"127.0.0.1" maxLength:"253"`
 	Port            int                  `json:"port,omitempty" yaml:"port,omitempty" mapstructure:"port" doc:"Port to listen on" example:"8080" minimum:"1" maximum:"65535"`
-	APIVersion      string               `json:"apiVersion,omitempty" yaml:"apiVersion,omitempty" mapstructure:"apiVersion" doc:"API version prefix" example:"v1" maxLength:"10"`
+	APIVersion      string               `json:"apiVersion,omitempty" yaml:"apiVersion,omitempty" mapstructure:"apiVersion" doc:"API version prefix (e.g. v1, v2)" example:"v1" maxLength:"10" pattern:"^v[0-9]+$" patternDescription:"must be 'v' followed by one or more digits (e.g. v1, v2)"`
 	ShutdownTimeout string               `json:"shutdownTimeout,omitempty" yaml:"shutdownTimeout,omitempty" mapstructure:"shutdownTimeout" doc:"Graceful shutdown timeout" example:"30s" maxLength:"20"`
 	RequestTimeout  string               `json:"requestTimeout,omitempty" yaml:"requestTimeout,omitempty" mapstructure:"requestTimeout" doc:"Default request timeout" example:"60s" maxLength:"20"`
 	BodyReadTimeout string               `json:"bodyReadTimeout,omitempty" yaml:"bodyReadTimeout,omitempty" mapstructure:"bodyReadTimeout" doc:"Default body read timeout for Huma operations" example:"15s" maxLength:"20"`
@@ -454,11 +454,11 @@ type APIServerConfig struct {
 	RateLimit       APIRateLimitConfig   `json:"rateLimit,omitempty" yaml:"rateLimit,omitempty" mapstructure:"rateLimit" doc:"Rate limiting configuration"`
 	Auth            APIAuthConfig        `json:"auth,omitempty" yaml:"auth,omitempty" mapstructure:"auth" doc:"Authentication configuration"`
 	Compression     APICompressionConfig `json:"compression,omitempty" yaml:"compression,omitempty" mapstructure:"compression" doc:"Response compression configuration"`
-	OpenAPI         APIOpenAPIConfig     `json:"openAPI,omitempty" yaml:"openAPI,omitempty" mapstructure:"openAPI" doc:"OpenAPI specification configuration (reserved for future use — not yet wired into server setup)"`
+	OpenAPI         APIOpenAPIConfig     `json:"openAPI,omitempty" yaml:"openAPI,omitempty" mapstructure:"openAPI" doc:"OpenAPI specification configuration (Servers field is wired; Title, Description, and other fields are reserved for future use)"`
 	Profiler        APIProfilerConfig    `json:"profiler,omitempty" yaml:"profiler,omitempty" mapstructure:"profiler" doc:"Profiler configuration (reserved for future use — not yet wired into server setup)"`
 	Audit           APIAuditConfig       `json:"audit,omitempty" yaml:"audit,omitempty" mapstructure:"audit" doc:"Audit logging configuration"`
 	Tracing         APITracingConfig     `json:"tracing,omitempty" yaml:"tracing,omitempty" mapstructure:"tracing" doc:"OpenTelemetry tracing configuration"`
-	MaxConcurrent   int                  `json:"maxConcurrent,omitempty" yaml:"maxConcurrent,omitempty" mapstructure:"maxConcurrent" doc:"Maximum concurrent connections" maximum:"100000" example:"1000"`
+	MaxConcurrent   int                  `json:"maxConcurrent,omitempty" yaml:"maxConcurrent,omitempty" mapstructure:"maxConcurrent" doc:"Maximum concurrent in-flight requests (chi Throttle, not TCP connections)" maximum:"100000" example:"1000"`
 }
 
 // APITLSConfig holds TLS configuration for the API server.

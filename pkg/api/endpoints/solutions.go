@@ -125,7 +125,7 @@ func requireURLPath(path, opName string) error {
 func rejectUnsafePath(path, opName string) error {
 	if strings.Contains(path, "..") || filepath.IsAbs(path) || strings.HasPrefix(path, "~") {
 		return huma.NewError(http.StatusBadRequest,
-			fmt.Sprintf("%s: path must be a relative path that does not contain '..'", opName))
+			fmt.Sprintf("%s: must be a relative path that does not contain '..'", opName))
 	}
 	return nil
 }

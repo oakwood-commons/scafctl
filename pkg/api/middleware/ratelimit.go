@@ -6,7 +6,10 @@ package middleware
 import (
 	"context"
 	"fmt"
+	"math"
+	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -33,7 +36,13 @@ func RateLimit(ctx context.Context, maxRequests int, window time.Duration, trust
 
 			if !allowed {
 				// RFC 7231 §7.1.3 requires Retry-After to be an integer number of seconds.
-				w.Header().Set("Retry-After", fmt.Sprintf("%d", int(window.Seconds())))
+				// Use the remaining time until resetAt (when the earliest request expires)
+				// rather than the full window, so clients wait only as long as necessary.
+				retryAfterSec := int(math.Ceil(time.Until(resetAt).Seconds()))
+				if retryAfterSec < 1 {
+					retryAfterSec = 1
+				}
+				w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfterSec))
 				writeJSONError(w, `{"title":"Too Many Requests","status":429,"detail":"rate limit exceeded"}`, http.StatusTooManyRequests)
 				return
 			}
@@ -133,24 +142,21 @@ func (l *ipRateLimiter) cleanup(ctx context.Context) {
 func extractIP(r *http.Request, trustProxy bool) string {
 	if trustProxy {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			// Take the left-most IP (client IP); safe only with a sanitizing proxy.
-			for i := 0; i < len(xff); i++ {
-				if xff[i] == ',' {
-					return xff[:i]
-				}
-			}
-			return xff
+			// Take the left-most IP (client IP); trim spaces from proxy-added padding.
+			// Safe only when a sanitizing proxy sets this header.
+			parts := strings.SplitN(xff, ",", 2)
+			return strings.TrimSpace(parts[0])
 		}
-		if xrip := r.Header.Get("X-Real-IP"); xrip != "" {
+		if xrip := strings.TrimSpace(r.Header.Get("X-Real-IP")); xrip != "" {
 			return xrip
 		}
 	}
-	// Strip port from RemoteAddr.
-	addr := r.RemoteAddr
-	for i := len(addr) - 1; i >= 0; i-- {
-		if addr[i] == ':' {
-			return addr[:i]
-		}
+	// Strip port from RemoteAddr using net.SplitHostPort to correctly handle
+	// both IPv4 ("1.2.3.4:port") and IPv6 ("[::1]:port") formats.
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		// No port present (unusual); use address as-is.
+		return r.RemoteAddr
 	}
-	return addr
+	return host
 }

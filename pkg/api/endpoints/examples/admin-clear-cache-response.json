@@ -1,4 +1,5 @@
 {
-  "success": true,
-  "message": "all caches cleared"
+  "title": "Not Implemented",
+  "status": 501,
+  "detail": "cache clearing is not yet implemented"
 }

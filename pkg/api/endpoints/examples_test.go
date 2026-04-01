@@ -93,8 +93,6 @@ func TestAddExamples_AllOperationsHaveResponseExamples(t *testing.T) {
 		{"solution-render", http.MethodPost},
 		{"solution-test", http.MethodPost},
 		{"admin-info", http.MethodGet},
-		{"admin-reload-config", http.MethodPost},
-		{"admin-clear-cache", http.MethodPost},
 		{"get-config", http.MethodGet},
 		{"get-settings", http.MethodGet},
 		{"list-snapshots", http.MethodGet},

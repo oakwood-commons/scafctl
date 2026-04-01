@@ -129,6 +129,15 @@ func RegisterSchemaEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefix 
 			return nil, huma.NewError(http.StatusBadRequest, "data is required")
 		}
 
+		// Default to "solution" when schema is not specified; reject unknown schemas.
+		schemaName := input.Body.Schema
+		if schemaName == "" {
+			schemaName = "solution"
+		}
+		if schemaName != "solution" {
+			return nil, api.NotFoundError("schema", schemaName)
+		}
+
 		violations, err := schema.ValidateSolutionAgainstSchema(input.Body.Data)
 		if err != nil {
 			return nil, huma.NewError(http.StatusBadRequest, fmt.Sprintf("validation failed: %v", err))

@@ -4,6 +4,8 @@
 package middleware
 
 import (
+	"bytes"
+	"compress/gzip"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,7 +13,16 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+// flusherRecorder wraps httptest.ResponseRecorder and implements http.Flusher.
+type flusherRecorder struct {
+	*httptest.ResponseRecorder
+	flushed bool
+}
+
+func (f *flusherRecorder) Flush() { f.flushed = true }
 
 func TestSecurityHeaders(t *testing.T) {
 	tests := []struct {
@@ -89,6 +100,59 @@ func TestGzipResponseWriter(t *testing.T) {
 	assert.Equal(t, 4, n)
 
 	assert.NotNil(t, gzw.Header())
+}
+
+func TestGzipResponseWriter_Flush_WithGzipWriter(t *testing.T) {
+	var buf bytes.Buffer
+	gzw, err := gzip.NewWriterLevel(&buf, gzip.BestSpeed)
+	require.NoError(t, err)
+
+	rec := httptest.NewRecorder()
+	w := &GzipResponseWriter{Writer: gzw, ResponseWriter: rec}
+	w.Flush() // should not panic; gzip.Writer implements Flush() error
+}
+
+func TestGzipResponseWriter_Flush_PropagatesResponseFlusher(t *testing.T) {
+	var buf bytes.Buffer
+	gzw, err := gzip.NewWriterLevel(&buf, gzip.BestSpeed)
+	require.NoError(t, err)
+
+	fr := &flusherRecorder{ResponseRecorder: httptest.NewRecorder()}
+	w := &GzipResponseWriter{Writer: gzw, ResponseWriter: fr}
+	w.Flush()
+	assert.True(t, fr.flushed)
+}
+
+func TestGzipResponseWriter_Flush_NoFlusher(t *testing.T) {
+	// io.Discard does not implement Flush() and ResponseRecorder is not an http.Flusher.
+	w := &GzipResponseWriter{Writer: io.Discard, ResponseWriter: httptest.NewRecorder()}
+	w.Flush() // should not panic
+}
+
+func TestGzipResponseWriter_Close_WithCloser(t *testing.T) {
+	var buf bytes.Buffer
+	gzw, err := gzip.NewWriterLevel(&buf, gzip.BestSpeed)
+	require.NoError(t, err)
+
+	w := &GzipResponseWriter{Writer: gzw, ResponseWriter: httptest.NewRecorder()}
+	err = w.Close()
+	assert.NoError(t, err)
+}
+
+func TestGzipResponseWriter_Close_WithoutCloser(t *testing.T) {
+	// io.Discard does not implement io.Closer.
+	w := &GzipResponseWriter{Writer: io.Discard, ResponseWriter: httptest.NewRecorder()}
+	err := w.Close()
+	assert.NoError(t, err)
+}
+
+func TestGzipEncoderFunc(t *testing.T) {
+	var buf bytes.Buffer
+	w := GzipEncoderFunc(&buf, gzip.DefaultCompression)
+	require.NotNil(t, w)
+	n, err := w.Write([]byte("hello gzip"))
+	assert.NoError(t, err)
+	assert.Equal(t, 10, n)
 }
 
 func BenchmarkSecurityHeaders(b *testing.B) {

@@ -127,7 +127,8 @@ const (
 	DefaultAPIPort = 8080
 
 	// DefaultAPIHost is the default host for the API server.
-	DefaultAPIHost = "0.0.0.0"
+	// Binds to localhost only; use --host 0.0.0.0 or config to expose publicly.
+	DefaultAPIHost = "127.0.0.1"
 
 	// DefaultAPIVersion is the default API version prefix.
 	DefaultAPIVersion = "v1"
@@ -153,12 +154,17 @@ const (
 	// DefaultAPIRateLimitWindow is the default rate limit window.
 	DefaultAPIRateLimitWindow = "1m"
 
-	// DefaultAPIMaxConcurrentConns is the default max concurrent connections.
-	DefaultAPIMaxConcurrentConns = 1000
+	// DefaultAPIMaxConcurrentRequests is the default max concurrent in-flight requests (chi Throttle).
+	DefaultAPIMaxConcurrentRequests = 1000
 
 	// DefaultAPIFilterCostLimit is the CEL cost limit for API filter expressions.
 	// Lower than the CLI default (1,000,000) to prevent DoS via user-supplied expressions.
 	DefaultAPIFilterCostLimit uint64 = 10000
+
+	// DefaultAPIEvalCostLimit is the CEL cost limit for the eval endpoint.
+	// Higher than the filter limit because eval is the primary use-case, but
+	// still bounded to protect the server from expensive expressions.
+	DefaultAPIEvalCostLimit uint64 = 100000
 
 	// DefaultAPIBodyReadTimeout is the default timeout for reading request bodies.
 	DefaultAPIBodyReadTimeout = "15s"

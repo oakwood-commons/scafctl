@@ -993,6 +993,8 @@ tasks:
     deps: [build]
     desc: "Integration tests (API + CLI + solution functional)"
     run: once
+    env:
+      CGO_ENABLED: "1"
     cmds:
       - go test -race -count=1 ./tests/integration/ -run "TestAPI_"
       - go test -race -count=1 ./tests/integration/ -run "TestIntegration_"

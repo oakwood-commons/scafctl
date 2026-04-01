@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -87,6 +88,7 @@ func RegisterExplainEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefix
 		for name := range sol.Spec.Resolvers {
 			resolverNames = append(resolverNames, name)
 		}
+		sort.Strings(resolverNames)
 
 		resp := &ExplainResponse{}
 		resp.Body.Name = sol.Metadata.Name

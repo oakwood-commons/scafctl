@@ -62,7 +62,7 @@ The API server can be fully configured via the scafctl config file:
 
 ```yaml
 apiServer:
-  host: "0.0.0.0"
+  host: "127.0.0.1"   # use 0.0.0.0 to expose publicly
   port: 8080
   apiVersion: "v1"
   shutdownTimeout: "30s"
@@ -120,10 +120,10 @@ curl -X POST http://localhost:8080/v1/solutions/dryrun \
 curl http://localhost:8080/v1/providers
 
 # Get provider details
-curl http://localhost:8080/v1/providers/write-new
+curl http://localhost:8080/v1/providers/file
 
 # Get provider JSON schema
-curl http://localhost:8080/v1/providers/write-new/schema
+curl http://localhost:8080/v1/providers/file/schema
 ```
 
 ### CEL & Template Evaluation
@@ -212,7 +212,7 @@ The API automatically generates OpenAPI documentation:
 open http://localhost:8080/v1/docs
 
 # Get OpenAPI spec
-curl http://localhost:8080/v1/openapi
+curl http://localhost:8080/v1/openapi.json
 
 # Export OpenAPI spec without starting the server
 scafctl serve openapi --format json --output openapi.json

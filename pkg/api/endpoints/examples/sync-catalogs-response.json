@@ -1,5 +1,5 @@
 {
   "success": true,
-  "message": "2 catalogs synced successfully",
-  "catalogs": 2
+  "message": "catalog sync is not yet implemented",
+  "catalogs": 0
 }

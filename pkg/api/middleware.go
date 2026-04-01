@@ -21,12 +21,13 @@ import (
 
 // SetupMiddleware configures the middleware stack on the root router.
 //
-// Global middleware (logging, recovery, request ID) runs for every request,
-// including health probes and Prometheus metrics.
+// Global middleware (logging, recovery, request ID, strip-slashes) runs for
+// every request, including health probes and the /metrics endpoint.
 //
 // API-specific middleware (authentication, rate limiting, security headers,
-// compression, etc.) is scoped to versioned paths (e.g. /v1/*) via
-// makeVersionedOnly so that health probes and /metrics are never blocked.
+// compression, metrics instrumentation, etc.) is scoped to versioned paths
+// (e.g. /v1/*) via makeVersionedOnly so that health probes and /metrics are
+// never blocked or instrumented by the per-request Metrics() middleware.
 //
 // Because Huma is backed by the same root router, every route registered with
 // huma.Register runs through the full middleware chain assembled here.
@@ -84,10 +85,10 @@ func SetupMiddleware(ctx context.Context, router *chi.Mux, cfg *config.APIServer
 	reqTimeout := parseTimeoutOrDefault(cfg.RequestTimeout, settings.DefaultAPIRequestTimeout)
 	router.Use(makeVersionedOnly(chimiddleware.Timeout(reqTimeout)))
 
-	// 3. Max concurrent connections
+	// 3. Max concurrent in-flight requests (chi Throttle)
 	maxConns := cfg.MaxConcurrent
 	if maxConns <= 0 {
-		maxConns = settings.DefaultAPIMaxConcurrentConns
+		maxConns = settings.DefaultAPIMaxConcurrentRequests
 	}
 	router.Use(makeVersionedOnly(chimiddleware.Throttle(maxConns)))
 

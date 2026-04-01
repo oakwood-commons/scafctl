@@ -6,11 +6,15 @@ package api
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -111,8 +115,14 @@ func TestServer_InitAPI(t *testing.T) {
 }
 
 func TestServer_Start_PortZero(t *testing.T) {
+	// Allocate a free port so the test doesn't collide with port 8080.
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	freePort := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+
 	cfg := &config.Config{
-		APIServer: config.APIServerConfig{Host: "127.0.0.1", Port: 0},
+		APIServer: config.APIServerConfig{Host: "127.0.0.1", Port: freePort},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	srv, err := NewServer(WithServerConfig(cfg), WithServerContext(ctx))
@@ -137,6 +147,35 @@ func BenchmarkNewServer(b *testing.B) {
 	for b.Loop() {
 		_, _ = NewServer(WithServerConfig(cfg))
 	}
+}
+
+func TestWithServerLogger(t *testing.T) {
+	lgr := logr.Discard()
+	srv, err := NewServer(WithServerLogger(lgr))
+	require.NoError(t, err)
+	assert.NotNil(t, srv)
+}
+
+func TestWithServerRegistry(t *testing.T) {
+	reg := provider.NewRegistry()
+	srv, err := NewServer(WithServerRegistry(reg))
+	require.NoError(t, err)
+	assert.NotNil(t, srv)
+}
+
+func TestWithServerAuthRegistry(t *testing.T) {
+	reg := auth.NewRegistry()
+	srv, err := NewServer(WithServerAuthRegistry(reg))
+	require.NoError(t, err)
+	assert.NotNil(t, srv)
+}
+
+func TestServer_Context(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	srv, err := NewServer(WithServerContext(ctx))
+	require.NoError(t, err)
+	assert.NotNil(t, srv.Context())
 }
 
 func BenchmarkParseTimeoutOrDefault(b *testing.B) {

@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/oakwood-commons/scafctl/pkg/api"
 	"github.com/oakwood-commons/scafctl/pkg/api/endpoints"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -65,13 +66,19 @@ func runOpenAPI(cmd *cobra.Command, format, output string) error {
 	// Create a minimal router + Huma API for spec generation.
 	// BuildHumaConfig mirrors the live server config including security schemes.
 	router := chi.NewRouter()
+
+	// Derive API version from loaded config so the export matches the live server.
+	cfg := config.FromContext(cmd.Context())
 	apiVersion := settings.DefaultAPIVersion
-	humaConfig := api.BuildHumaConfig(apiVersion)
+	if cfg != nil && cfg.APIServer.APIVersion != "" {
+		apiVersion = cfg.APIServer.APIVersion
+	}
+	humaConfig := api.BuildHumaConfig(apiVersion, cfg)
 
 	humaAPI := humachi.New(router, humaConfig)
 
 	// Register all endpoints for export
-	endpoints.RegisterAllForExport(humaAPI)
+	endpoints.RegisterAllForExport(humaAPI, apiVersion, cfg)
 
 	// Get the OpenAPI spec
 	spec := humaAPI.OpenAPI()

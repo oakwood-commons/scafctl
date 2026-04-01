@@ -57,9 +57,10 @@ func TestRedactBody(t *testing.T) {
 			absent:   []string{"my-key"},
 		},
 		{
-			name:     "non-JSON body returned as-is",
+			name:     "non-JSON body redacted",
 			body:     `not json at all`,
-			contains: []string{"not json at all"},
+			contains: []string{"<non-JSON body redacted>"},
+			absent:   []string{"not json at all"},
 		},
 		{
 			name:     "no sensitive fields unchanged",
