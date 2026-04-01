@@ -656,6 +656,7 @@ Supported formats:
 - `key=value` - Simple key-value
 - `key=val1,key=val2` - Multiple values (becomes array)
 - `@file.yaml` - Load from file
+- `@-` - Read parameters from stdin (YAML or JSON)
 - `"key=value with spaces"` - Quoted values
 
 ### Validating Input Keys Against a Schema

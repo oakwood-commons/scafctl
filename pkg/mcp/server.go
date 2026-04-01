@@ -269,6 +269,8 @@ IMPORTANT — choosing between 'run solution' and 'run resolver':
     If it does NOT have spec.workflow → use 'run resolver'.
 
 IMPORTANT: Resolver parameters are passed with -r/--resolver or positional key=value, NOT -p. There is no -p flag.
+Parameters can also be loaded from files (@file.yaml), piped from stdin (@-), or read as raw
+content into a single key (key=@- for stdin, key=@file for files).
 Examples:
   scafctl run solution -f ./my-solution.yaml -r env=prod -r region=us-east1
   scafctl run solution my-catalog-solution -r inputText="Hello World" -r operation=uppercase
@@ -276,6 +278,12 @@ Examples:
   scafctl run resolver -f ./my-solution.yaml -r name=value
   scafctl run resolver my-catalog-solution env=prod region=us-east1
   scafctl run resolver my-catalog-solution@1.2.3 db config
+  scafctl run resolver -f ./my-solution.yaml -r @params.yaml
+  echo '{"env": "prod"}' | scafctl run resolver -f ./my-solution.yaml -r @-
+  cat params.yaml | scafctl run solution -f ./my-solution.yaml -r @-
+  echo hello | scafctl run provider message message=@-
+  echo hello | scafctl run resolver -f ./my-solution.yaml -r message=@-
+  scafctl run resolver -f ./my-solution.yaml body=@content.txt
 
 IMPORTANT — file path references:
   When mentioning solution filenames in responses, ALWAYS use a "./" prefix for

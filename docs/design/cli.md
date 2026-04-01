@@ -324,6 +324,59 @@ scafctl run solution example \
 
 Validation errors are reported immediately with helpful messages.
 
+#### Parameter File References (@file)
+
+Load all parameters from a YAML or JSON file using the `@` prefix:
+
+~~~bash
+# Load from a YAML file
+scafctl run resolver -f solution.yaml -r @params.yaml
+
+# Load from a JSON file
+scafctl run resolver -f solution.yaml -r @params.json
+
+# Mix file and inline parameters
+scafctl run resolver -f solution.yaml -r @defaults.yaml -r env=prod
+~~~
+
+#### Stdin Parameters (@-)
+
+Read all parameters from stdin as YAML or JSON using `@-`, following the same convention as curl:
+
+~~~bash
+# Pipe JSON from echo
+echo '{"env": "prod", "region": "us-east1"}' | scafctl run resolver -f solution.yaml -r @-
+
+# Pipe from a file via cat
+cat params.yaml | scafctl run solution example -r @-
+
+# Use as positional argument
+echo '{"env": "prod"}' | scafctl run resolver -f solution.yaml @-
+~~~
+
+#### Per-Key Stdin and File References (key=@-  /  key=@file)
+
+Assign raw content from stdin or a file directly to a single key. Unlike standalone `@-` (which parses YAML/JSON into multiple keys), `key=@-` reads stdin as a raw string value:
+
+~~~bash
+# Pipe raw text into a single parameter
+echo hello | scafctl run provider message message=@-
+echo hello | scafctl run resolver -f solution.yaml -r message=@-
+
+# Read a file's raw content into a parameter
+scafctl run provider http url=https://example.com body=@request.json
+scafctl run resolver -f solution.yaml -r config=@defaults.txt
+
+# Mix with other parameter forms
+scafctl run resolver -f solution.yaml -r name=Alice body=@template.txt
+~~~
+
+> A single trailing newline is trimmed automatically (matching shell `echo` behavior).
+
+**Restrictions:**
+- `@-` can only appear once (stdin is consumed on first read) — this applies across both standalone `@-` and `key=@-`
+- `@-` cannot be combined with `-f -` (both read from stdin)
+
 ---
 
 ## Rendering With Parameters

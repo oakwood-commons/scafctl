@@ -207,7 +207,7 @@ Examples:
 
 	// File and output flags
 	cCmd.Flags().StringVarP(&options.File, "file", "f", "", "Solution file path (auto-discovered if not provided, use '-' for stdin)")
-	cCmd.Flags().StringArrayVarP(&options.ResolverParams, "resolver", "r", nil, "Resolver parameters (key=value or @file.yaml)")
+	cCmd.Flags().StringArrayVarP(&options.ResolverParams, "resolver", "r", nil, "Resolver parameters (key=value, key=@- for raw stdin, @file.yaml, or @- for stdin)")
 	cCmd.Flags().StringVarP(&options.Output, "output", "o", "json", fmt.Sprintf("Output format: %s", strings.Join(ValidOutputTypes, ", ")))
 	cCmd.Flags().StringVar(&options.OutputFile, "output-file", "", "Write output to file instead of stdout")
 	cCmd.Flags().BoolVar(&options.Compact, "compact", false, "Compact output (JSON only, no pretty-printing)")
@@ -240,6 +240,14 @@ func (o *SolutionOptions) getEffectiveResolverConfig(ctx context.Context) solren
 // Run executes the render solution command
 func (o *SolutionOptions) Run(ctx context.Context) error {
 	lgr := logger.FromContext(ctx)
+
+	// Detect @- / -f - conflict early: stdin can only be consumed once.
+	if o.File == "-" && flags.ContainsStdinRef(o.ResolverParams) {
+		return o.exitWithCode(
+			fmt.Errorf("cannot use both -f - and @-: stdin can only be read once"),
+			exitcode.InvalidInput,
+		)
+	}
 
 	// Route to appropriate mode
 	if o.ActionGraph {
@@ -287,7 +295,11 @@ func (o *SolutionOptions) runActionGraph(ctx context.Context, lgr logr.Logger) e
 	if sol.Spec.HasResolvers() {
 		lgr.V(1).Info("resolving resolvers for action inputs")
 
-		params, err := flags.ParseResolverFlags(o.ResolverParams)
+		var stdinReader io.Reader
+		if o.IOStreams != nil {
+			stdinReader = o.IOStreams.In
+		}
+		params, err := flags.ParseResolverFlagsWithStdin(o.ResolverParams, stdinReader)
 		if err != nil {
 			return o.exitWithCode(fmt.Errorf("failed to parse resolver parameters: %w", err), exitcode.ValidationFailed)
 		}
@@ -360,7 +372,11 @@ func (o *SolutionOptions) runActionGraphVisualization(ctx context.Context, lgr l
 	if sol.Spec.HasResolvers() {
 		lgr.V(1).Info("resolving resolvers for action inputs")
 
-		params, err := flags.ParseResolverFlags(o.ResolverParams)
+		var stdinReader io.Reader
+		if o.IOStreams != nil {
+			stdinReader = o.IOStreams.In
+		}
+		params, err := flags.ParseResolverFlagsWithStdin(o.ResolverParams, stdinReader)
 		if err != nil {
 			return o.exitWithCode(fmt.Errorf("failed to parse resolver parameters: %w", err), exitcode.ValidationFailed)
 		}
@@ -406,7 +422,11 @@ func (o *SolutionOptions) runSnapshot(ctx context.Context, lgr logr.Logger) erro
 	}
 
 	// Parse resolver parameters
-	params, err := flags.ParseResolverFlags(o.ResolverParams)
+	var stdinReader io.Reader
+	if o.IOStreams != nil {
+		stdinReader = o.IOStreams.In
+	}
+	params, err := flags.ParseResolverFlagsWithStdin(o.ResolverParams, stdinReader)
 	if err != nil {
 		return o.exitWithCode(fmt.Errorf("failed to parse resolver parameters: %w", err), exitcode.ValidationFailed)
 	}

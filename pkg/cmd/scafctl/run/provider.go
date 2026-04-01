@@ -340,8 +340,12 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 	allParams = append(allParams, o.InputParams...)
 	allParams = append(allParams, extraParsed...)
 
-	// Parse input parameters
-	inputs, err := flags.ParseResolverFlags(allParams)
+	// Parse input parameters (pass stdin for @- support)
+	var stdinReader io.Reader
+	if o.IOStreams != nil {
+		stdinReader = o.IOStreams.In
+	}
+	inputs, err := flags.ParseResolverFlagsWithStdin(allParams, stdinReader)
 	if err != nil {
 		err := fmt.Errorf("failed to parse input parameters: %w", err)
 		w.Errorf("%v", err)

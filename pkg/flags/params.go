@@ -4,15 +4,34 @@
 package flags
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
+
+// maxRawReadSize is the maximum number of bytes that readRawReader and
+// readRawFile will consume. This prevents accidental OOM when a user
+// points key=@- at an unbounded stream or key=@/dev/zero at a device.
+const maxRawReadSize = 1 << 20 // 1 MiB
+
+// parseYAMLOrJSON tries to unmarshal data as YAML first, then JSON.
+// The source parameter is used in error messages to identify the input origin.
+func parseYAMLOrJSON(data []byte, source string) (map[string]any, error) {
+	result := make(map[string]any)
+	if yamlErr := yaml.Unmarshal(data, &result); yamlErr != nil {
+		if jsonErr := json.Unmarshal(data, &result); jsonErr != nil {
+			return nil, fmt.Errorf("failed to parse %s as YAML or JSON: %w", source, errors.Join(yamlErr, jsonErr))
+		}
+	}
+	return result, nil
+}
 
 // LoadParameterFile loads parameters from a YAML or JSON file.
 // The file format is auto-detected based on extension, or by trying
@@ -36,15 +55,98 @@ func LoadParameterFile(path string) (map[string]any, error) {
 			return nil, fmt.Errorf("failed to parse JSON parameter file %q: %w", path, err)
 		}
 	default:
-		// Try YAML first, then JSON
-		if yamlErr := yaml.Unmarshal(data, &result); yamlErr != nil {
-			if jsonErr := json.Unmarshal(data, &result); jsonErr != nil {
-				return nil, fmt.Errorf("failed to parse parameter file %q (tried YAML and JSON): %w", path, errors.Join(yamlErr, jsonErr))
-			}
-		}
+		return parseYAMLOrJSON(data, fmt.Sprintf("parameter file %q", path))
 	}
 
 	return result, nil
+}
+
+// LoadParameterReader loads parameters from an io.Reader containing YAML or JSON.
+// It tries YAML first, then JSON, matching the behavior of LoadParameterFile
+// for files with unknown extensions. The source parameter is used in error
+// messages to identify the input origin (e.g., "stdin").
+func LoadParameterReader(r io.Reader, source string) (map[string]any, error) {
+	// Protect against unbounded streams (e.g., piping from a long-running process)
+	// by limiting the maximum number of bytes we will read.
+	limited := io.LimitReader(r, maxRawReadSize+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read parameters from %s: %w", source, err)
+	}
+
+	if int64(len(data)) > maxRawReadSize {
+		return nil, fmt.Errorf("parameters from %s exceed maximum allowed size (%d bytes)", source, maxRawReadSize)
+	}
+
+	if len(bytes.TrimSpace(data)) == 0 {
+		return nil, fmt.Errorf("no data received from %s", source)
+	}
+
+	return parseYAMLOrJSON(data, source)
+}
+
+// parseValueRef checks if a key=value string has an @-reference in the value
+// position (e.g. "key=@-" or "key=@file.txt"). Returns the key, the reference
+// (without the @ prefix), and true if it matches. Returns false for standalone
+// @-references or plain key=value pairs.
+func parseValueRef(s string) (key, ref string, ok bool) {
+	idx := strings.Index(s, "=")
+	if idx < 0 {
+		return "", "", false
+	}
+	key = s[:idx]
+	// Enforce non-empty key with no whitespace, matching other parsers.
+	if key == "" || strings.ContainsAny(key, " \t\r\n") {
+		return "", "", false
+	}
+	val := s[idx+1:]
+	if !strings.HasPrefix(val, "@") || len(val) < 2 {
+		return "", "", false
+	}
+	return key, val[1:], true
+}
+
+// readRawReader reads all content from an io.Reader as a raw string, trimming
+// one trailing newline (to match shell pipe behavior like echo).
+// Reads at most maxRawReadSize bytes to prevent unbounded memory growth.
+func readRawReader(r io.Reader, source string) (string, error) {
+	limited := io.LimitReader(r, maxRawReadSize+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return "", fmt.Errorf("failed to read from %s: %w", source, err)
+	}
+	if int64(len(data)) > maxRawReadSize {
+		return "", fmt.Errorf("%s exceeds maximum raw read size (%d bytes)", source, maxRawReadSize)
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return "", fmt.Errorf("no data received from %s", source)
+	}
+	// Trim a single trailing \r\n or \n for shell usability (echo adds a newline).
+	s := strings.TrimSuffix(string(data), "\n")
+	s = strings.TrimSuffix(s, "\r")
+	return s, nil
+}
+
+// readRawFile reads a file's content as a raw string, trimming one trailing newline.
+// Returns an error if the file is empty or exceeds maxRawReadSize.
+func readRawFile(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to read file %q: %w", path, err)
+	}
+	// For regular files, fail fast if the declared size already exceeds the limit.
+	if info.Mode().IsRegular() && info.Size() > maxRawReadSize {
+		return "", fmt.Errorf("file %q exceeds maximum raw read size (%d bytes)", path, maxRawReadSize)
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to read file %q: %w", path, err)
+	}
+	defer f.Close()
+
+	// Delegate to readRawReader to enforce a hard read limit and consistent trimming.
+	return readRawReader(f, fmt.Sprintf("file %q", path))
 }
 
 // ParseResolverFlags parses -r flag values, handling both key=value syntax
@@ -58,19 +160,79 @@ func LoadParameterFile(path string) (map[string]any, error) {
 //
 // Multiple values for the same key are automatically combined into an array.
 func ParseResolverFlags(values []string) (map[string]any, error) {
+	return ParseResolverFlagsWithStdin(values, nil)
+}
+
+// ParseResolverFlagsWithStdin parses -r flag values like ParseResolverFlags,
+// but additionally supports @- to read parameters from stdin as YAML or JSON.
+//
+// Supported formats:
+//   - key=value: Simple key-value pair
+//   - key=value1,value2: Multiple values (becomes an array)
+//   - key=@-: Read raw stdin content as the value for key
+//   - key=@file: Read raw file content as the value for key
+//   - @file.yaml: Load all parameters from a YAML file
+//   - @file.json: Load all parameters from a JSON file
+//   - @-: Read all parameters from stdin (YAML or JSON)
+//
+// The @- token (both standalone and in key=@-) may only appear once.
+// If stdin is nil and @- is used, an error is returned.
+// Multiple values for the same key are automatically combined into an array.
+func ParseResolverFlagsWithStdin(values []string, stdin io.Reader) (map[string]any, error) {
 	result := make(map[string]any)
+	stdinUsed := false
 
 	for _, v := range values {
 		if strings.HasPrefix(v, "@") {
-			// Load from file
-			filePath := strings.TrimPrefix(v, "@")
-			fileParams, err := LoadParameterFile(filePath)
-			if err != nil {
-				return nil, err
+			ref := strings.TrimPrefix(v, "@")
+
+			if ref == "-" {
+				// Read from stdin
+				if stdinUsed {
+					return nil, fmt.Errorf("@- can only be specified once (stdin can only be read once)")
+				}
+				if stdin == nil {
+					return nil, fmt.Errorf("@- requires stdin but no stdin is available")
+				}
+				stdinUsed = true
+				stdinParams, err := LoadParameterReader(stdin, "stdin")
+				if err != nil {
+					return nil, err
+				}
+				for k, val := range stdinParams {
+					result[k] = MergeValue(result[k], val)
+				}
+			} else {
+				// Load from file
+				fileParams, err := LoadParameterFile(ref)
+				if err != nil {
+					return nil, err
+				}
+				for k, val := range fileParams {
+					result[k] = MergeValue(result[k], val)
+				}
 			}
-			// Merge file params into result
-			for k, val := range fileParams {
-				result[k] = MergeValue(result[k], val)
+		} else if key, ref, ok := parseValueRef(v); ok {
+			// key=@- or key=@file — read raw content for a single key
+			if ref == "-" {
+				if stdinUsed {
+					return nil, fmt.Errorf("%s=@-: stdin has already been consumed (stdin can only be read once)", key)
+				}
+				if stdin == nil {
+					return nil, fmt.Errorf("%s=@- requires stdin but no stdin is available", key)
+				}
+				stdinUsed = true
+				raw, err := readRawReader(stdin, "stdin")
+				if err != nil {
+					return nil, err
+				}
+				result[key] = MergeValue(result[key], raw)
+			} else {
+				raw, err := readRawFile(ref)
+				if err != nil {
+					return nil, err
+				}
+				result[key] = MergeValue(result[key], raw)
 			}
 		} else {
 			// Parse key=value using ParseKeyValueCSV
@@ -140,6 +302,21 @@ func ParseDynamicInputArgs(args []string) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// ContainsStdinRef returns true if any of the values contain the @- token
+// (either standalone or as key=@-), indicating that stdin will be consumed.
+func ContainsStdinRef(values []string) bool {
+	for _, v := range values {
+		if v == "@-" {
+			return true
+		}
+		// Check for key=@- in value position
+		if _, ref, ok := parseValueRef(v); ok && ref == "-" {
+			return true
+		}
+	}
+	return false
 }
 
 // MergeValue merges a new value with an existing value, creating arrays as needed.

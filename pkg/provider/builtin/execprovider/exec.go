@@ -73,7 +73,7 @@ func NewExecProvider() *ExecProvider {
 			Schema: schemahelper.ObjectSchema([]string{"command"}, map[string]*jsonschema.Schema{
 				"command": schemahelper.StringProp("Command to execute. Supports POSIX shell syntax including pipes (|), redirections (>, >>), variable expansion ($VAR), command substitution ($(cmd)), and conditionals by default",
 					schemahelper.WithExample("echo hello | tr a-z A-Z"),
-					schemahelper.WithMaxLength(1000)),
+					schemahelper.WithMaxLength(100000)),
 				"args": schemahelper.ArrayProp("Additional arguments appended to the command. Arguments are automatically shell-quoted for safety",
 					schemahelper.WithMaxItems(100)),
 				"stdin": schemahelper.StringProp("Standard input to provide to the command",

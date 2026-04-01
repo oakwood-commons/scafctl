@@ -499,7 +499,7 @@ scafctl snapshot save -f solution.yaml --output shareable.json --redact
 | `--ignore-fields` | diff | Comma-separated fields to ignore |
 | `--output` | save, diff | Output file path |
 | `--redact` | save, render | Redact sensitive resolver values |
-| `-r key=value` | save | Pass resolver parameters |
+| `-r key=value` | save | Pass resolver parameters (also supports `@file.yaml` and `@-` for stdin) |
 
 ## Using Snapshots with the MCP Server
 

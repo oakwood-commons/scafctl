@@ -172,7 +172,7 @@ resolvers:
 	err = runSave(testCtx, opts, ioStreams)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid parameter format")
+	assert.Contains(t, err.Error(), "failed to parse resolver parameters")
 }
 
 func TestRunSave_Success(t *testing.T) {
