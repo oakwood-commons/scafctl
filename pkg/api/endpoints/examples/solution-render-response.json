@@ -1,0 +1,10 @@
+{
+  "resolverData": {
+    "greeting": "Hello, World!"
+  },
+  "validation": {
+    "valid": true,
+    "hasResolvers": true,
+    "hasWorkflow": true
+  }
+}

@@ -1,0 +1,4 @@
+{
+  "solutionA": "apiVersion: scafctl.io/v1beta1\nkind: Solution\nmetadata:\n  name: my-solution\nspec:\n  resolvers:\n    greeting:\n      provider: static\n      with:\n        value: Hello\n",
+  "solutionB": "apiVersion: scafctl.io/v1beta1\nkind: Solution\nmetadata:\n  name: my-solution\n  description: Updated solution\nspec:\n  resolvers:\n    greeting:\n      provider: static\n      with:\n        value: Hello, World!\n"
+}

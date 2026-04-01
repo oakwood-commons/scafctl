@@ -1,0 +1,14 @@
+{
+  "name": "solution",
+  "schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "apiVersion": { "type": "string" },
+      "kind": { "type": "string", "const": "Solution" },
+      "metadata": { "type": "object" },
+      "spec": { "type": "object" }
+    },
+    "required": ["apiVersion", "kind", "metadata", "spec"]
+  }
+}

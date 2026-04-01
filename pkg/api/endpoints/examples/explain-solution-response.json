@@ -1,0 +1,9 @@
+{
+  "name": "hello-world",
+  "description": "A simple hello world solution",
+  "resolverCount": 1,
+  "hasWorkflow": false,
+  "hasActions": false,
+  "resolvers": ["greeting"],
+  "tags": []
+}

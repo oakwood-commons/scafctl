@@ -152,9 +152,13 @@ func TestGetDefaultCacheStats(t *testing.T) {
 
 func TestClearDefaultCache(t *testing.T) {
 	t.Run("clears all cached entries", func(t *testing.T) {
-		// Add some entries
+		// Add some entries and guarantee a cache hit by compiling the same expression twice.
+		opts := []cel.EnvOption{cel.Variable("x", cel.IntType)}
 		expr1 := Expression("x + 1")
-		_, err := expr1.Compile([]cel.EnvOption{cel.Variable("x", cel.IntType)})
+		_, err := expr1.Compile(opts)
+		require.NoError(t, err)
+		// Second compile of the same expression produces a cache hit.
+		_, err = expr1.Compile(opts)
 		require.NoError(t, err)
 
 		expr2 := Expression("y * 2")

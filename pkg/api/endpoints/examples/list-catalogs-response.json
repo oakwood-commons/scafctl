@@ -1,0 +1,21 @@
+{
+  "items": [
+    {
+      "name": "default",
+      "type": "local",
+      "path": "/home/user/.config/scafctl/catalogs/default"
+    },
+    {
+      "name": "team-templates",
+      "type": "git",
+      "url": "https://github.com/org/templates.git"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "per_page": 100,
+    "total_items": 2,
+    "total_pages": 1,
+    "has_more": false
+  }
+}

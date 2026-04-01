@@ -61,3 +61,6 @@ scafctl.exe~
 .DS_Store
 __debug*
 /refs/
+.gocache/*
+.cache/*
+.tool/*

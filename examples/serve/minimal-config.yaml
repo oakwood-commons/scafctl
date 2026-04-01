@@ -1,0 +1,15 @@
+# Minimal API server configuration for local development.
+# No authentication, no TLS, audit logging disabled.
+apiServer:
+  host: "127.0.0.1"
+  port: 8080
+  apiVersion: "v1"
+  shutdownTimeout: "30s"
+  requestTimeout: "60s"
+  maxRequestSize: 10485760
+  compression:
+    level: 6
+  rateLimit:
+    global:
+      maxRequests: 100
+      window: "1m"

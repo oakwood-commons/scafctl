@@ -59,6 +59,7 @@ scafctl examples list -o json
 | [catalog/](catalog/) | Catalog bundling and registry examples |
 | [config/](config/) | Configuration file examples |
 | [eval/](eval/) | CEL and Go template evaluation data and templates |
+| [serve/](serve/) | REST API server configuration and curl examples |
 | [plugins/](plugins/) | go-plugin source code examples (see note below) |
 | [mcp/](mcp/) | MCP server configurations for AI clients |
 
@@ -191,6 +192,22 @@ Application configuration file examples.
 |---------|-------------|
 | [minimal-config.yaml](config/minimal-config.yaml) | Minimal configuration |
 | [full-config.yaml](config/full-config.yaml) | Full configuration with all options |
+| [api-server-config.yaml](config/api-server-config.yaml) | API server configuration |
+| [api-server-README.md](config/api-server-README.md) | API server configuration guide |
+
+---
+
+## Serve Examples
+
+REST API server configuration and usage examples.
+
+| Example | Description |
+|---------|-------------|
+| [README.md](serve/README.md) | Overview and quickstart |
+| [minimal-config.yaml](serve/minimal-config.yaml) | Minimal server configuration |
+| [production-config.yaml](serve/production-config.yaml) | Production-ready server configuration |
+| [curl-examples.sh](serve/curl-examples.sh) | Curl examples (bash) |
+| [curl-examples.ps1](serve/curl-examples.ps1) | Curl examples (PowerShell) |
 
 ---
 

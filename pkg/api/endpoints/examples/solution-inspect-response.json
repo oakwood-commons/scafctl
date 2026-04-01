@@ -1,0 +1,16 @@
+{
+  "name": "hello-world",
+  "displayName": "Hello World",
+  "version": "1.0.0",
+  "description": "A simple hello world solution",
+  "category": "example",
+  "path": "./examples/solutions/hello-world/solution.yaml",
+  "resolvers": [
+    {
+      "name": "greeting",
+      "provider": "static",
+      "description": "Provides a greeting message"
+    }
+  ],
+  "tags": ["example", "hello-world"]
+}

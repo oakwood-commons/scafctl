@@ -37,6 +37,11 @@ Architecture and design documentation for scafctl.
 - [MCP Server Enhancements](mcp-server-enhancements.md) — Enhanced tools, prompts, resources, and CLI parity
 - [MCP Server Implementation Guide](mcp-server-implementation-guide.md) — Implementation patterns and conventions
 
+## REST API
+
+- [API Surface](api-surface.md) — REST API endpoint reference and design
+- [Web API Implementation Plan](web-api-implementation-plan.md) — Implementation plan and architecture
+
 ## Auth & Infrastructure
 
 - [Entra Auth Implementation](entra-auth-implementation.md) — Microsoft Entra ID authentication

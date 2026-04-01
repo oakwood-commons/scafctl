@@ -1,0 +1,12 @@
+{
+  "items": [
+    { "name": "solution" }
+  ],
+  "pagination": {
+    "page": 1,
+    "per_page": 100,
+    "total_items": 1,
+    "total_pages": 1,
+    "has_more": false
+  }
+}

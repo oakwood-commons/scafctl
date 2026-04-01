@@ -1,9 +1,22 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
 version: "3"
 
 vars:
   NAME: "scafctl"
   DESCRIPTION: "A configuration discovery and scaffolding tool written in go"
+  DEFAULT_GO_VERSION: "1.26.0"
+  GOIMPORTS_VERSION: "v0.42.0"
+  GOFUMPT_VERSION: "v0.9.2"
+  GOLANGCI_LINT_VERSION: "v2.10.1"
+  GOVULNCHECK_VERSION: "v1.1.4"
+  TOOLS: "{{.ROOT_DIR | toSlash}}/.tool"
+  TOOLS_BIN: "{{.TOOLS}}"
+  DIST: "{{.ROOT_DIR | toSlash }}/dist"
+  PATH_SEP: "{{ if eq OS `windows` }};{{ else }}:{{ end }}"
+  TOOLS_PATH: "{{.TOOLS_BIN}}{{.PATH_SEP}}{{.DIST}}{{.PATH_SEP}}{{ env `PATH` }}"
   OUTPUT_FILE: "{{.NAME}}{{exeExt}}"
+  MAIN_PACKAGE: ./cmd/scafctl/scafctl.go
   GIT_EVENT: "{{ .GIT_EVENT | default `pull_request` }}"
   GIT_REF: "{{ .GIT_REF | default `main` }}"
   BUILD_VERSION:
@@ -11,27 +24,18 @@ vars:
       GIT_EVENT={{.GIT_EVENT}}
       GIT_REF={{.GIT_REF}}
       if [[ "${GIT_EVENT}" == "push" && "${GIT_REF}" =~ ^refs/tags/ ]]; then
-          # If this is a push event and a tag, aka a release in the pipeline, then use the tag from the event, stripped of the 'vV' prefix
           tag="${GIT_REF#refs/tags/}"
-
           if [[ ! "${tag}" =~ ^v ]]; then
               echo "ERROR: Build version tag '${tag}' does not start with 'v' or 'V'" >&2
               exit 1
           fi
-
           BUILD_VERSION="${tag#[vV]}"
       else
           git fetch --tags --quiet || true
-
-          # Get latest semver-style tag.  The grep command filters out pre-release (-beta, -rc, etc.) tags, so we don't end up with v0.0.1-beta.5-alpha20251119
           LATEST_TAG="$(git tag -l "v[0-9]*.[0-9]*.[0-9]*" --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 | sed 's/^[vV]//')"
-
-          # Fallback to 0.0.1 if no valid tags found.  This can happen in new repos with no tags yet.
           if [ -z "$LATEST_TAG" ]; then
               LATEST_TAG="0.0.1"
           fi
-
-          # PR or local build, use alpha and date versioning.  Example 0.81.0-alpha20251119
           BUILD_VERSION="${LATEST_TAG}-alpha$(date +%Y%m%d)"
       fi
       echo "${BUILD_VERSION}"
@@ -48,24 +52,24 @@ vars:
           awk '/^go[[:space:]]+/ {print $2; exit}' go.mod | tr -d '\r'
         fi
       else
-        echo "1.26"
+        echo "{{.DEFAULT_GO_VERSION}}"
       fi
   GOTOOLCHAIN: "go{{.GO_VERSION}}"
   BUILD_COMMIT:
     sh: git rev-parse HEAD || echo "nightly"
+  GIT_SHA:
+    sh: git rev-parse --short=12 HEAD || echo "unknown"
   GIT_URL:
     sh: git remote get-url origin || echo "https://github.com"
   IS_SHALLOW:
     sh: git rev-parse --is-shallow-repository 2>/dev/null || echo "false"
-  # Set CONTAINER_REGISTRY env var to your OCI registry (e.g., ghcr.io/oakwood-commons)
   CONTAINER_REGISTRY: '{{ .CONTAINER_REGISTRY | default "" }}'
   CONTAINER_REGISTRY_NAMESPACE: '{{ .CONTAINER_REGISTRY_NAMESPACE | default `cloud-platform` }}'
   BASE_CONTAINER_IMAGE: "registry.access.redhat.com/ubi10/ubi-minimal:10.0-1758699349@sha256:649f7ce8082531148ac5e45b61612046a21e36648ab096a77e6ba0c94428cf60"
   BUILD_DATE: '{{ now | date "2006-01-02T15:04:05Z07:00" }}'
+  DATE: '{{ now | date "2006.01.02" }}'
   SERVER_CONFIG_FILE: "{{.ROOT_DIR | toSlash}}/tests/files/serverConfig.json"
-  DIST: "{{.ROOT_DIR | toSlash }}/dist"
   FIX_PATH: "{{ if eq OS `windows` }}PATH='C:/tools/git/usr/bin;C:/Program Files/Git/usr/bin/;{{ env `path` }}'{{ else }}:{{ end }}"
-  # Set these env vars for deployment targets (optional, not needed for local development)
   PREPROD_URL: '{{ .PREPROD_URL | default "" }}'
   PROD_URL: '{{ .PROD_URL | default "" }}'
   FIXED_ROOT:
@@ -79,18 +83,34 @@ vars:
       go env -C / GOARCH
   BUILD_PATH_VER: "{{ if eq .GOARCH `amd64` }}v1{{ else }}v8.0{{ end }}"
   SCAFCTL_DIST_PATH: "dist/scafctl_{{ .GOOS }}_{{ .GOARCH }}_{{ .BUILD_PATH_VER }}/scafctl"
-  LDFLAGS: '-ldflags "-s -w -X main.BuildTime={{.BUILD_DATE}} -X main.BuildVersion={{.BUILD_VERSION}} -X main.Commit={{.BUILD_COMMIT}}"'
+  LDFLAGS: >-
+    -X main.BuildTime={{.BUILD_DATE}}
+    -X main.BuildVersion={{.BUILD_VERSION}}
+    -X main.Commit={{.BUILD_COMMIT}}
   GIT_BRANCH:
     sh: git rev-parse --abbrev-ref HEAD || echo "unknown"
+  BENCH_FILE: "bench/{{.DATE}}.{{.GIT_SHA}}.txt"
+  BENCH_BASELINE: "bench/baseline.txt"
+  COVER: "{{.ROOT_DIR | toSlash }}/cover"
+  DEFAULT_GOCACHE: "{{.ROOT_DIR | toSlash}}/.gocache"
 
 env:
   CGO_ENABLED: "0"
   TASK_USE_BASH: "true"
   GOTOOLCHAIN: "{{.GOTOOLCHAIN}}"
+  GOCACHE: "{{ env `GOCACHE` | default .DEFAULT_GOCACHE }}"
+  GOWORK: "off"
+  GOLANGCI_LINT_CACHE: "{{.ROOT_DIR}}/.cache/golangci-lint"
+  GOBIN: "{{.TOOLS_BIN}}"
 
 tasks:
+  # ──────────────────────────────────────────────────────────────────────────────
+  # Cleaning
+  # ──────────────────────────────────────────────────────────────────────────────
+
   clean:
     desc: "Clean build artifacts, caches, and temporary files"
+    silent: true
     cmds:
       - |
         echo "🧹 Cleaning build artifacts and caches..."
@@ -113,6 +133,31 @@ tasks:
         find ./ -name "Thumbs.db" -type f -delete
         find ./ -name "coverage.*" -type f -delete
 
+  clean:cache:
+    desc: "Clean only Go caches (preserves build artifacts)"
+    silent: true
+    cmds:
+      - |
+        echo "🧹 Cleaning Go caches..."
+        go clean -cache -testcache -fuzzcache
+        echo "✅ Go caches cleaned"
+
+  clean:build:
+    desc: "Clean only build artifacts (preserves caches)"
+    silent: true
+    cmds:
+      - |
+        echo "🧹 Cleaning build artifacts..."
+        rm -rf dist/
+        rm -rf build/
+        rm -rf bin/
+        rm -rf .task/
+        echo "✅ Build artifacts cleaned"
+
+  # ──────────────────────────────────────────────────────────────────────────────
+  # Info
+  # ──────────────────────────────────────────────────────────────────────────────
+
   default:
     aliases:
       - info
@@ -131,6 +176,7 @@ tasks:
         echo "  task           # Prints this info section"
         echo "  task test      # Tests the code"
         echo "  task build     # Builds the code"
+        echo "  task ci        # Full CI pipeline"
         echo
         echo "Variables and Values:"
         echo "  NAME:                         {{ .NAME }}"
@@ -143,6 +189,8 @@ tasks:
         echo "  BUILD_TAG:                    {{ .BUILD_TAG }}"
         echo "  OUTPUT_FILE:                  {{ .OUTPUT_FILE }}"
         echo "  BUILD_COMMIT:                 {{ .BUILD_COMMIT }}"
+        echo "  GIT_SHA:                      {{ .GIT_SHA }}"
+        echo "  GIT_BRANCH:                   {{ .GIT_BRANCH }}"
         echo "  GIT_URL:                      {{ .GIT_URL }}"
         echo "  IS_SHALLOW:                   {{ .IS_SHALLOW }}"
         echo "  CONTAINER_REGISTRY:           {{ .CONTAINER_REGISTRY }}"
@@ -151,15 +199,22 @@ tasks:
         echo "  BUILD_DATE:                   {{ .BUILD_DATE }}"
         echo "  SERVER_CONFIG_FILE:           {{ .SERVER_CONFIG_FILE }}"
         echo "  DIST:                         {{ .DIST }}"
+        echo "  COVER:                        {{ .COVER }}"
+        echo "  BENCH_FILE:                   {{ .BENCH_FILE }}"
+        echo "  BENCH_BASELINE:               {{ .BENCH_BASELINE }}"
         echo "  PREPROD_URL:                  {{ .PREPROD_URL }}"
         echo "  PROD_URL:                     {{ .PROD_URL }}"
         echo "  FIXED_ROOT:                   {{ .FIXED_ROOT }}"
         echo "  GOOS:                         {{ .GOOS }}"
         echo "  GOARCH:                       {{ .GOARCH }}"
         echo "  BUILD_PATH_VER:               {{ .BUILD_PATH_VER }}"
-        echo "  SCAFCTL_DIST_PATH:             {{ .SCAFCTL_DIST_PATH }}"
+        echo "  SCAFCTL_DIST_PATH:            {{ .SCAFCTL_DIST_PATH }}"
         echo "  LDFLAGS:                      {{ .LDFLAGS }}"
         echo "------------------------------------------------------------"
+
+  # ──────────────────────────────────────────────────────────────────────────────
+  # Git
+  # ──────────────────────────────────────────────────────────────────────────────
 
   git-unshallow-clone:
     desc: Checks if the repository is shallow and unshallow if needed
@@ -178,25 +233,224 @@ tasks:
     requires:
       vars: [IS_SHALLOW]
 
+  # ──────────────────────────────────────────────────────────────────────────────
+  # Modules
+  # ──────────────────────────────────────────────────────────────────────────────
+
   mod:
     desc: Downloads and tidy Go modules (only if needed)
+    silent: true
     sources:
       - go.mod
       - go.sum
     cmds:
+      - go mod download
       - go mod tidy
+
+  mod:update:
+    desc: "Upgrade all direct and indirect dependencies"
+    silent: true
+    cmds:
+      - go get -u ./...
+      - go mod tidy
+
+  mod:check:
+    desc: "Check if go.mod and go.sum are in sync (fails if go mod tidy is needed)"
+    silent: true
+    cmds:
+      - task: mod:tidy:check
+
+  mod:tidy:check:
+    desc: "Ensure go.mod and go.sum are tidy without modifying the working tree"
+    silent: true
+    cmds:
+      - |
+        set -e
+        cp go.mod go.mod.bak
+        cp go.sum go.sum.bak
+
+        go mod tidy > /dev/null 2>&1
+
+        if diff -q go.mod go.mod.bak > /dev/null 2>&1 && diff -q go.sum go.sum.bak > /dev/null 2>&1; then
+          echo "✅ go.mod and go.sum are tidy"
+          rm -f go.mod.bak go.sum.bak
+          exit 0
+        fi
+
+        mv go.mod.bak go.mod
+        mv go.sum.bak go.sum
+        echo "❌ go.mod and go.sum need tidying"
+        echo "Run 'task mod' or 'go mod tidy' to fix."
+        exit 1
+
+  mod:verify:
+    desc: "Verify Go module integrity and checksums"
+    silent: true
+    cmds:
+      - go mod verify
       - go mod download
 
+  # ──────────────────────────────────────────────────────────────────────────────
+  # Tool Installation
+  # ──────────────────────────────────────────────────────────────────────────────
+
+  install-tools:
+    desc: "Install all development tools (Go)"
+    silent: true
+    deps: [install-tools:go]
+    cmds:
+      - echo "✅ All development tools installed"
+
+  install-tools:go:
+    desc: "Install Go tooling dependencies (linters, formatters, etc.)"
+    silent: true
+    run: once
+    env:
+      GOBIN: "{{.TOOLS_BIN}}"
+      PATH: "{{.TOOLS_PATH}}:{{ env `PATH` }}"
+    cmds:
+      - |
+        set -e
+        export PATH="{{.TOOLS_PATH}}:$PATH"
+
+        mkdir -p "{{.TOOLS_BIN}}"
+
+        install_tool() {
+          local name="$1"
+          local pkg="$2"
+
+          if ! command -v "$name" >/dev/null 2>&1; then
+            echo "[install] $name"
+            go install "$pkg"
+          fi
+        }
+
+        install_tool golangci-lint "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_LINT_VERSION}}"
+        install_tool benchstat "golang.org/x/perf/cmd/benchstat@latest"
+        install_tool govulncheck "golang.org/x/vuln/cmd/govulncheck@{{.GOVULNCHECK_VERSION}}"
+        install_tool gofumpt "mvdan.cc/gofumpt@{{.GOFUMPT_VERSION}}"
+        install_tool goimports "golang.org/x/tools/cmd/goimports@{{.GOIMPORTS_VERSION}}"
+
+  # ──────────────────────────────────────────────────────────────────────────────
+  # Formatting
+  # ──────────────────────────────────────────────────────────────────────────────
+
+  format:
+    desc: "Auto-format Go code (goimports + gofumpt) and tidy modules"
+    deps: [install-tools]
+    silent: true
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+    cmds:
+      - |
+        set -e
+        export PATH="{{.TOOLS_PATH}}:$PATH"
+
+        echo "Formatting Go files..."
+        find . -type f -name '*.go' \
+          -not -path './.cache/*' \
+          -not -path './.task/*' \
+          -not -path './.gocache/*' \
+          -not -path './.tool/*' \
+          -print0 \
+          | xargs -0 goimports -w
+
+        find . \
+          -type d \( -name .gocache -o -name .cache -o -name .task -o -name .tool \) -prune -false \
+          -o -type f -name '*.go' -print \
+          | xargs gofumpt -w -extra
+
+        go mod tidy
+
+        echo "✅ Formatting complete"
+
+  format:check:
+    desc: "Check if Go code is properly formatted (fails if formatting is needed)"
+    deps: [install-tools]
+    silent: true
+    sources:
+      - "**/*.go"
+    cmds:
+      - |
+        set -e
+        export PATH="{{.TOOLS_PATH}}:$PATH"
+
+        changes=0
+
+        UNFORMATTED=$(find . \
+          -type d \( -name .gocache -o -name .cache -o -name .task -o -name .tool \) -prune -false \
+          -o -type f -name '*.go' -print0 \
+          | xargs -0 goimports -l 2>/dev/null || true)
+
+        if [ -n "$UNFORMATTED" ]; then
+          echo "❌ goimports formatting issues:"
+          echo "$UNFORMATTED"
+          changes=1
+        fi
+
+        UNFORMATTED=$(find . \
+          -type d \( -name .gocache -o -name .cache -o -name .task -o -name .tool \) -prune -false \
+          -o -type f -name '*.go' -print0 \
+          | xargs -0 gofumpt -l -extra 2>/dev/null || true)
+
+        if [ -n "$UNFORMATTED" ]; then
+          echo "❌ gofumpt formatting issues:"
+          echo "$UNFORMATTED"
+          changes=1
+        fi
+
+        if [ "$changes" -ne 0 ]; then
+          echo "Run 'task format' to apply formatting."
+          exit 1
+        fi
+        echo "✅ Code formatting is correct"
+
+  # ──────────────────────────────────────────────────────────────────────────────
+  # Linting & Static Analysis
+  # ──────────────────────────────────────────────────────────────────────────────
+
   lint:
-    desc: Runs golangci-lint
+    desc: "Runs golangci-lint (fails if any linting issues are found)"
     aliases: [l]
+    silent: true
+    deps: [install-tools]
     sources:
       - "./**/*.go"
       - .golangci.yml
     cmds:
       - |
-        go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.10.1
-        golangci-lint run --timeout 10m0s
+        set -e
+        export PATH="{{.TOOLS_PATH}}:$PATH"
+
+        echo "Running golangci-lint..."
+        mkdir -p "{{.GOLANGCI_LINT_CACHE}}"
+        golangci-lint run ./... --config .golangci.yml --timeout 10m0s
+        echo "✅ No linting issues found"
+
+  vet:
+    desc: "Run go vet (static checks from the Go toolchain)"
+    silent: true
+    sources:
+      - "./**/*.go"
+      - go.mod
+      - go.sum
+    cmds:
+      - go vet ./...
+
+  lint:fix:
+    desc: "Runs golangci-lint and fixes any issues"
+    deps: [install-tools]
+    silent: true
+    sources:
+      - "./**/*.go"
+      - .golangci.yml
+    cmds:
+      - |
+        export PATH="{{.TOOLS_PATH}}:$PATH"
+        mkdir -p "{{.GOLANGCI_LINT_CACHE}}"
+        golangci-lint run --fix
 
   lint:solutions:
     deps: [build]
@@ -210,7 +464,6 @@ tasks:
         PASSED=0
         SKIPPED=0
 
-        # Directories/files that are intentionally invalid and should be skipped
         EXCLUDE="bad-solution-yaml/|edge-cases/invalid-|edge-cases/null-resolver/|lint-schema/unknown-field/|lint-schema/unknown-nested-field/|lint-schema/unknown-field.yaml|lint-tmpl-underscore/"
 
         {
@@ -230,7 +483,6 @@ tasks:
           fi
         done
 
-        # The while loop runs in a subshell due to the pipe, so we re-run to get the exit code
         FAIL_COUNT=$(
           {
             find examples/solutions -name '*.yaml'
@@ -273,46 +525,95 @@ tasks:
         echo ""
         echo "All solution files passed lint ✓"
 
-  lint:fix:
-    desc: Runs golangci-lint and fixes any issues
-    sources:
-      - "./**/*.go"
-      - .golangci.yml
+  # ──────────────────────────────────────────────────────────────────────────────
+  # Security
+  # ──────────────────────────────────────────────────────────────────────────────
+
+  vulncheck:
+    desc: "Check for known vulnerabilities in dependencies (requires Go 1.18+)"
+    silent: true
+    deps: [install-tools]
     cmds:
       - |
-        golangci-lint run --fix
+        export PATH="{{.TOOLS_PATH}}:$PATH"
+        govulncheck ./...
+        mkdir -p .task
+        touch .task/vulncheck.stamp
+    generates:
+      - ".task/vulncheck.stamp"
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
 
-  update-tools:
-    desc: "Update Go tooling dependencies (e.g., linters, generators)"
+  security:scan:
+    desc: "Comprehensive security scan (gosec + govulncheck + mod verify)"
+    silent: true
+    deps: [install-tools]
     cmds:
-      - "go install github.com/go-delve/delve/cmd/dlv@latest"
-      - "go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest"
-      - "go install golang.org/x/tools/gopls@latest"
-      - "go install github.com/google/go-containerregistry/cmd/crane@latest"
-      - "go install golang.org/dl/go{{.GO_VERSION}}@latest"
+      - |
+        set -e
+        echo "🔒 Running comprehensive security scan..."
+
+        echo ""
+        echo "✅ Step 1/3: Module Verification"
+        echo "   - Verifying module checksums..."
+        task mod:verify
+
+        echo ""
+        echo "✅ Step 2/3: Vulnerability Check"
+        echo "   - Scanning for known vulnerabilities..."
+        task vulncheck
+
+        echo ""
+        echo "✅ Step 3/3: Static Security Analysis"
+        echo "   - Running gosec (if available)..."
+
+        if command -v gosec >/dev/null 2>&1; then
+          gosec -quiet ./...
+          echo "   ✅ gosec completed"
+        else
+          echo "   ⚠️  gosec not found - skipping (install: go install github.com/securecodewarrior/gosec/v2/cmd/gosec@latest)"
+        fi
+
+        echo ""
+        echo "=========================================="
+        echo "✅ Security Scan Completed!"
+        echo "=========================================="
+
+  # ──────────────────────────────────────────────────────────────────────────────
+  # Build
+  # ──────────────────────────────────────────────────────────────────────────────
 
   build:
     deps: [mod, git-unshallow-clone]
     desc: "Build the CLI"
+    silent: true
     sources:
       - "**/*.go"
       - pkg/cmd/scafctl/update/updater/updater.ps1
       - go.mod
       - go.sum
+    generates:
+      - "{{.DIST}}/{{.OUTPUT_FILE}}"
     cmds:
-      - |
-        GOOS={{.GOOS}} GOARCH={{.GOARCH}} go build {{.LDFLAGS}} -v -o {{.DIST}}/{{.OUTPUT_FILE}} ./cmd/scafctl/scafctl.go
+      - mkdir -p {{.DIST}}
+      - >
+        GOOS={{.GOOS}} GOARCH={{.GOARCH}} go build
+        -ldflags '-s -w {{.LDFLAGS}}'
+        -trimpath
+        -o {{.DIST}}/{{.OUTPUT_FILE}} {{.MAIN_PACKAGE}}
 
   build-container-image:
     deps: [mod, git-unshallow-clone]
-    desc: "Build the CLI"
+    desc: "Build the container image layer"
     sources:
       - "**/*.go"
       - go.mod
       - go.sum
     exclude:
       - "**/*_test.go"
-      - .task/build-args.txt    # captures vars that should bust cache (see first cmd)
+      - .task/build-args.txt
     vars:
       CGO_ENABLED: "0"
       GOOS: "linux"
@@ -320,11 +621,13 @@ tasks:
       OUTPUT_FILE: "{{.NAME}}"
     cmds:
       - mkdir -p {{.DIST}}/home/default
-      - GOOS={{.GOOS}} GOARCH={{.GOARCH}} go build {{.LDFLAGS}} -v -o {{.DIST}}/home/default/{{.OUTPUT_FILE}} ./cmd/scafctl/scafctl.go
+      - >
+        GOOS={{.GOOS}} GOARCH={{.GOARCH}} go build
+        -ldflags '-s -w {{.LDFLAGS}}' -trimpath
+        -o {{.DIST}}/home/default/{{.OUTPUT_FILE}} {{.MAIN_PACKAGE}}
       - cd {{.DIST}}
       - |
         {{ if eq OS `windows` }}
-          ## tar --owner=0 --group=0 --mode=0775 -C {{.DIST}}/ -cvf {{.DIST}}/{{.OUTPUT_FILE}}.tar home/default --force-local
           tar -c -v -f "{{.DIST}}/{{.OUTPUT_FILE}}.tar"
         {{ else }}#
           tar --owner=0 --group=0 --mode=0775 -C {{.DIST}}/ -cvf {{.DIST}}/{{.OUTPUT_FILE}}.tar home/default
@@ -360,19 +663,240 @@ tasks:
     deps: [build]
     desc: "Run the API server"
     cmds:
-      - |
-        "{{.DIST}}/{{.OUTPUT_FILE}} run server -c {{.SERVER_CONFIG_FILE}}"
+      - '{{.DIST}}/{{.OUTPUT_FILE}} serve'
+
+  # ──────────────────────────────────────────────────────────────────────────────
+  # Testing
+  # ──────────────────────────────────────────────────────────────────────────────
 
   test:
-    desc: Runs test suite
+    desc: "Runs test suite"
     aliases: [t]
+    env:
+      GOFLAGS: '{{.GOFLAGS | default "-count=1"}}'
+      GOTESTFLAGS: '{{.GOTESTFLAGS | default "-shuffle=on"}}'
     cmds:
-      - |
-        go test ./...
+      - go test $GOTESTFLAGS -timeout 10m ./...
     sources:
       - "**/*.go"
       - go.mod
       - go.sum
+
+  test-cover:
+    desc: "Run unit tests with coverage profile"
+    silent: true
+    env:
+      GOFLAGS: '{{.GOFLAGS | default "-count=1"}}'
+      GOTESTFLAGS: '{{.GOTESTFLAGS | default "-shuffle=on"}}'
+    cmds:
+      - mkdir -p {{.COVER}}
+      - go test $GOTESTFLAGS ./... -coverprofile={{.COVER}}/cover.out -covermode=atomic
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+
+  test:race:
+    desc: "Run tests with race detector enabled"
+    env:
+      GOFLAGS: '{{.GOFLAGS | default "-count=1"}}'
+      GOTESTFLAGS: '{{.GOTESTFLAGS | default "-shuffle=on"}}'
+    cmds:
+      - go test $GOTESTFLAGS -race -timeout 10m ./...
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+
+  test:leaks:
+    desc: "Run tests with Go 1.26 goroutine leak profile enabled"
+    env:
+      GOFLAGS: '{{.GOFLAGS | default "-count=1"}}'
+      GOTESTFLAGS: '{{.GOTESTFLAGS | default "-shuffle=on"}}'
+      GOEXPERIMENT: goroutineleakprofile
+    cmds:
+      - go test $GOTESTFLAGS -timeout 10m ./...
+
+  # ──────────────────────────────────────────────────────────────────────────────
+  # Fuzz Testing
+  # ──────────────────────────────────────────────────────────────────────────────
+
+  fuzz:
+    desc: "Run fuzz tests (default: 30s per test, use FUZZTIME to customize)"
+    silent: true
+    vars:
+      FUZZTIME: '{{ .FUZZTIME | default "30s" }}'
+      FUZZTEST: '{{ .FUZZTEST | default "" }}'
+    cmds:
+      - |
+        set -e
+        echo "🔀 Running fuzz tests ({{.FUZZTIME}} per test)..."
+        echo ""
+
+        FUZZ_PATTERN="${FUZZTEST:-Fuzz}"
+
+        FUZZ_PKGS=$(grep -r -l "func Fuzz" --include="*_test.go" . 2>/dev/null | xargs -I{} dirname {} | sort -u || true)
+
+        if [ -z "$FUZZ_PKGS" ]; then
+          echo "⚠️  No fuzz tests found"
+          exit 0
+        fi
+
+        for pkg in $FUZZ_PKGS; do
+          echo "📦 Package: $pkg"
+          FUZZ_TESTS=$(grep -h "^func Fuzz" "$pkg"/*_test.go 2>/dev/null | sed 's/func \(Fuzz[^(]*\).*/\1/' || true)
+
+          for test in $FUZZ_TESTS; do
+            if echo "$test" | grep -q "$FUZZ_PATTERN"; then
+              echo "   🧪 Running $test..."
+              go test -fuzz="^${test}$" -fuzztime={{.FUZZTIME}} "$pkg" 2>&1 | sed 's/^/      /'
+            fi
+          done
+          echo ""
+        done
+
+        echo "✅ Fuzz testing completed"
+
+  fuzz:quick:
+    desc: "Quick fuzz test run (10s per test)"
+    silent: true
+    cmds:
+      - task: fuzz
+        vars:
+          FUZZTIME: "10s"
+
+  fuzz:long:
+    desc: "Extended fuzz test run (5m per test)"
+    silent: true
+    cmds:
+      - task: fuzz
+        vars:
+          FUZZTIME: "5m"
+
+  # ──────────────────────────────────────────────────────────────────────────────
+  # Coverage
+  # ──────────────────────────────────────────────────────────────────────────────
+
+  coverage:
+    desc: "Generate test coverage profile"
+    silent: true
+    cmds:
+      - mkdir -p {{.COVER}}
+      - go test ./... -coverprofile={{.COVER}}/cover.out -covermode=atomic -coverpkg=./...
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+
+  coverage:report:
+    desc: "Print detailed test coverage report per-file"
+    silent: true
+    deps: [coverage]
+    cmds:
+      - go tool cover -func={{.COVER}}/cover.out
+    sources:
+      - "{{.COVER}}/cover.out"
+
+  coverage:check:
+    desc: "Check if test coverage meets minimum threshold (default: 50.0%)"
+    silent: true
+    deps: [coverage]
+    vars:
+      COVERAGE_THRESHOLD: '{{ .COVERAGE_THRESHOLD | default "50.0" }}'
+    cmds:
+      - |
+        set -e
+        TOTAL=$(go tool cover -func={{.COVER}}/cover.out | tail -1 | awk '{print $3}' | tr -d '%')
+        echo "Total coverage: ${TOTAL}%"
+        echo "Threshold:      {{.COVERAGE_THRESHOLD}}%"
+        if awk "BEGIN {exit !(${TOTAL} < {{.COVERAGE_THRESHOLD}})}"; then
+          echo "❌ Coverage ${TOTAL}% is below threshold {{.COVERAGE_THRESHOLD}}%"
+          exit 1
+        fi
+        echo "✅ Coverage meets threshold"
+    sources:
+      - "{{.COVER}}/cover.out"
+
+  coverage:html:
+    desc: "Generate HTML coverage report and open in browser"
+    silent: true
+    deps: [coverage]
+    cmds:
+      - go tool cover -html={{.COVER}}/cover.out -o {{.COVER}}/coverage.html
+      - |
+        echo "✅ HTML report generated at {{.COVER}}/coverage.html"
+        if command -v open >/dev/null 2>&1; then
+          open {{.COVER}}/coverage.html
+        elif command -v xdg-open >/dev/null 2>&1; then
+          xdg-open {{.COVER}}/coverage.html
+        fi
+    generates:
+      - "{{.COVER}}/coverage.html"
+
+  coverage:race:
+    desc: "Generate test coverage with race detector enabled"
+    silent: true
+    cmds:
+      - mkdir -p {{.COVER}}
+      - go test -race -coverprofile={{.COVER}}/coverage-race.out ./...
+      - go tool cover -func={{.COVER}}/coverage-race.out | tail -1
+    generates:
+      - "{{.COVER}}/coverage-race.out"
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+
+  coverage:quick:
+    desc: "Quick coverage check for rapid iteration (runs tests and shows summary)"
+    silent: true
+    cmds:
+      - mkdir -p {{.COVER}}
+      - go test -short -coverprofile={{.COVER}}/coverage-quick.out ./...
+      - go tool cover -func={{.COVER}}/coverage-quick.out | tail -1
+    generates:
+      - "{{.COVER}}/coverage-quick.out"
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+
+  coverage:baseline:
+    desc: "Save current coverage as baseline for future comparisons"
+    silent: true
+    deps: [coverage]
+    cmds:
+      - |
+        set -e
+        TOTAL=$(go tool cover -func={{.COVER}}/cover.out | tail -1 | awk '{print $3}' | tr -d '%')
+        echo "$TOTAL" > {{.COVER}}/baseline.txt
+        echo "✅ Baseline saved: ${TOTAL}%"
+    generates:
+      - "{{.COVER}}/baseline.txt"
+
+  coverage:diff:
+    desc: "Show coverage change compared to saved baseline"
+    silent: true
+    deps: [coverage]
+    cmds:
+      - |
+        set -e
+        if [ ! -f "{{.COVER}}/baseline.txt" ]; then
+          echo "⚠️  Baseline not found at {{.COVER}}/baseline.txt"
+          echo "   Run 'task coverage:baseline' to create one"
+          exit 1
+        fi
+        BASELINE=$(cat {{.COVER}}/baseline.txt)
+        CURRENT=$(go tool cover -func={{.COVER}}/cover.out | tail -1 | awk '{print $3}' | tr -d '%')
+        DIFF=$(awk "BEGIN {printf \"%.1f\", ${CURRENT} - ${BASELINE}}")
+        echo "📊 Coverage comparison:"
+        echo "   Baseline: ${BASELINE}%"
+        echo "   Current:  ${CURRENT}%"
+        echo "   Change:   ${DIFF}%"
+
+  # ──────────────────────────────────────────────────────────────────────────────
+  # Benchmarks
+  # ──────────────────────────────────────────────────────────────────────────────
 
   bench:
     desc: "Run all benchmark tests"
@@ -404,23 +928,362 @@ tasks:
       - go.mod
       - go.sum
 
-  test-cover:
-    desc: "Run unit tests with coverage"
+  benchmark:
+    desc: "Run benchmarks with -count=6 and save to bench/, then compare against baseline"
+    silent: true
+    generates:
+      - "{{.BENCH_FILE}}"
+      - "{{.BENCH_BASELINE}}"
+    cmds:
+      - task: benchmark:save
+      - task: benchmark:baseline
+      - task: benchmark:compare
+
+  benchmark:save:
+    desc: "Run benchmarks with -count=6 and save results to bench/ (timestamped)"
+    generates:
+      - "{{.BENCH_FILE}}"
+    silent: true
     cmds:
       - |
-        go test ./... -coverprofile=coverage.txt -covermode=atomic
-    sources:
-      - "**/*.go"
-      - go.mod
-      - go.sum
+        echo "Creating new Benchmark to {{.BENCH_FILE}}"
+        mkdir -p bench
+        go test ./... -bench=. -benchmem -run=^$ -count=6 \
+          -benchtime=50ms 2>&1 | \
+          grep -v "^time=" | \
+          grep -v "level=WARN" | \
+          grep -v "level=ERROR" | \
+          grep -v "level=INFO" | \
+          grep -v "level=DEBUG" > "{{.BENCH_FILE}}"
+
+  benchmark:baseline:
+    desc: "Save latest benchmark results as baseline"
+    silent: true
+    cmds:
+      - |
+        if [ -z "{{.BENCH_FILE}}" ]; then
+          echo "No benchmark files found. Run 'task benchmark:save' first"
+          exit 1
+        fi
+        cp -f "{{.BENCH_FILE}}" "{{.BENCH_BASELINE}}"
+        echo "✅ Baseline saved to {{.BENCH_BASELINE}}"
+
+  benchmark:compare:
+    desc: "Compare latest benchmark results against baseline using benchstat"
+    silent: true
+    deps: [install-tools]
+    cmds:
+      - |
+        export PATH="{{.TOOLS_PATH}}:$PATH"
+        if [ ! -f "{{.BENCH_BASELINE}}" ]; then
+          echo "No baseline found. Run 'task benchmark:baseline' first or use 'task benchmark' to create one automatically"
+          exit 1
+        fi
+        if [ -z "{{.BENCH_FILE}}" ]; then
+          echo "No benchmark files found. Run 'task benchmark:save' first"
+          exit 1
+        fi
+        benchstat {{.BENCH_BASELINE}} "{{.BENCH_FILE}}"
+
+  # ──────────────────────────────────────────────────────────────────────────────
+  # Integration & E2E Tests
+  # ──────────────────────────────────────────────────────────────────────────────
+
+  integration:
+    deps: [build]
+    desc: "Integration tests (API + CLI + solution functional)"
+    run: once
+    env:
+      CGO_ENABLED: "1"
+    cmds:
+      - go test -race -count=1 ./tests/integration/ -run "TestAPI_"
+      - go test -race -count=1 ./tests/integration/ -run "TestIntegration_"
+      - '{{.DIST}}/{{.OUTPUT_FILE}} test functional --tests-path "{{.FIXED_ROOT}}/tests/integration/solutions" --no-color -q --concurrency 10'
 
   test:e2e:
     deps: [info, git-unshallow-clone, lint]
-    desc: "Run end-to-end tests"
+    desc: "Run end-to-end tests (lint + coverage + solutions + integration)"
     cmds:
       - task: test-cover
       - task: lint:solutions
       - task: integration
+
+  # ──────────────────────────────────────────────────────────────────────────────
+  # Load Testing (k6)
+  # ──────────────────────────────────────────────────────────────────────────────
+
+  test:load:smoke:
+    desc: "Run k6 smoke test (quick validation)"
+    dir: "{{.ROOT_DIR}}"
+    cmds:
+      - |
+        echo "🔍 Running k6 smoke test..."
+        if ! command -v k6 &> /dev/null; then
+          echo "❌ k6 is not installed. Install: https://k6.io/docs/get-started/installation/"
+          exit 1
+        fi
+        k6 run e2e/load/k6-smoke-test.js
+
+  test:load:sustained:
+    desc: "Run k6 sustained load test (1000 RPS for 5m)"
+    dir: "{{.ROOT_DIR}}"
+    cmds:
+      - |
+        echo "🔥 Running k6 sustained load test (1000 RPS for 5 minutes)..."
+        if ! command -v k6 &> /dev/null; then
+          echo "❌ k6 is not installed. Install: https://k6.io/docs/get-started/installation/"
+          exit 1
+        fi
+        mkdir -p e2e/load/results
+        k6 run e2e/load/k6-load-test.js
+
+  test:load:custom:
+    desc: "Run k6 load test with custom parameters (VUS, RPS, DURATION)"
+    dir: "{{.ROOT_DIR}}"
+    cmds:
+      - |
+        echo "🔥 Running k6 load test with custom parameters..."
+        echo "   VUS={{.VUS | default "50"}}, RPS={{.RPS | default "100"}}, DURATION={{.DURATION | default "1m"}}"
+        if ! command -v k6 &> /dev/null; then
+          echo "❌ k6 is not installed. Install: https://k6.io/docs/get-started/installation/"
+          exit 1
+        fi
+        mkdir -p e2e/load/results
+        VUS={{.VUS | default "50"}} RPS={{.RPS | default "100"}} DURATION={{.DURATION | default "1m"}} k6 run e2e/load/k6-load-test.js
+
+  # ──────────────────────────────────────────────────────────────────────────────
+  # Nightly Performance Regression
+  # ──────────────────────────────────────────────────────────────────────────────
+
+  perf:nightly:
+    desc: "Run full nightly performance regression suite (k6 load + Go benchmarks)"
+    dir: "{{.ROOT_DIR}}"
+    silent: true
+    cmds:
+      - |
+        set -e
+        echo "╔══════════════════════════════════════════════════════════════╗"
+        echo "║        scafctl Nightly Performance Regression Suite        ║"
+        echo "╚══════════════════════════════════════════════════════════════╝"
+        echo ""
+      - task: perf:nightly:k6
+      - |
+        echo ""
+        echo "────────────────────────────────────────────────────"
+        echo ""
+      - task: perf:nightly:bench
+      - |
+        echo ""
+        echo "✅ Nightly performance regression suite completed."
+
+  perf:nightly:k6:
+    desc: "Run k6 nightly regression test with optional OpenTelemetry export"
+    dir: "{{.ROOT_DIR}}"
+    silent: true
+    vars:
+      RPS: '{{ .RPS | default "200" }}'
+      DURATION: '{{ .DURATION | default "2m" }}'
+      VUS: '{{ .VUS | default "20" }}'
+      OTEL_SERVICE_NAME: '{{ .OTEL_SERVICE_NAME | default "scafctl-nightly-perf" }}'
+    cmds:
+      - |
+        set -e
+        echo "🌙 Running k6 nightly regression test..."
+        echo "   RPS={{.RPS}}, Duration={{.DURATION}}, VUs={{.VUS}}"
+        echo ""
+
+        if ! command -v k6 &> /dev/null; then
+          echo "❌ k6 is not installed. Install: https://k6.io/docs/get-started/installation/"
+          exit 1
+        fi
+
+        export OTEL_SERVICE_NAME="{{.OTEL_SERVICE_NAME}}"
+        export OTEL_EXPORTER_OTLP_PROTOCOL="${OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}"
+
+        K6_OUT_FLAG=""
+        if [ -n "${OTEL_EXPORTER_OTLP_ENDPOINT:-}" ]; then
+          K6_OUT_FLAG="--out opentelemetry"
+          echo "   OTel export: ${OTEL_EXPORTER_OTLP_ENDPOINT}"
+        else
+          K6_RESULTS="e2e/load/results/nightly-$(date +%Y%m%d-%H%M%S).json"
+          mkdir -p e2e/load/results
+          K6_OUT_FLAG="--out json=${K6_RESULTS}"
+          echo "   OTel export: disabled (set OTEL_EXPORTER_OTLP_ENDPOINT to enable)"
+          echo "   JSON output: ${K6_RESULTS}"
+        fi
+
+        GIT_SHA="{{.GIT_SHA}}" \
+        GIT_BRANCH="{{.GIT_BRANCH}}" \
+        RPS="{{.RPS}}" \
+        DURATION="{{.DURATION}}" \
+        VUS="{{.VUS}}" \
+          k6 run ${K6_OUT_FLAG} e2e/load/k6-nightly-regression.js
+
+  perf:nightly:bench:
+    desc: "Run Go benchmarks for nightly regression (saves timestamped results)"
+    dir: "{{.ROOT_DIR}}"
+    silent: true
+    deps: [install-tools]
+    cmds:
+      - |
+        set -e
+        echo "🔬 Running Go benchmarks for nightly regression..."
+        mkdir -p bench
+
+        BENCH_OUT="bench/nightly-{{.DATE}}.{{.GIT_SHA}}.txt"
+        echo "   Output: ${BENCH_OUT}"
+
+        go test ./... -bench=. -benchmem -run=^$ -count=6 \
+          -benchtime=50ms 2>&1 | \
+          grep -v "^time=" | \
+          grep -v "level=WARN" | \
+          grep -v "level=ERROR" | \
+          grep -v "level=INFO" | \
+          grep -v "level=DEBUG" > "${BENCH_OUT}"
+
+        cp -f "${BENCH_OUT}" bench/nightly-latest.txt
+
+        echo "   ✅ Benchmarks saved"
+
+  perf:nightly:ci:
+    desc: "CI-mode nightly regression (builds server, starts it, runs k6, shuts down)"
+    dir: "{{.ROOT_DIR}}"
+    silent: true
+    vars:
+      RPS: '{{ .RPS | default "200" }}'
+      DURATION: '{{ .DURATION | default "2m" }}'
+      VUS: '{{ .VUS | default "20" }}'
+      SERVER_PORT: '{{ .SERVER_PORT | default "8080" }}'
+    cmds:
+      - |
+        set -e
+        echo "🤖 Running nightly regression in CI mode..."
+        echo ""
+
+        if ! command -v k6 &> /dev/null; then
+          echo "❌ k6 is not installed."
+          exit 1
+        fi
+
+        BINARY="{{.DIST}}/{{.OUTPUT_FILE}}"
+        if [ ! -f "${BINARY}" ]; then
+          echo "❌ Server binary not found at ${BINARY}."
+          echo "   Run 'task build' first."
+          exit 1
+        fi
+
+        echo "   Starting server on 127.0.0.1:{{.SERVER_PORT}}..."
+        ${BINARY} serve --port "{{.SERVER_PORT}}" &
+        SERVER_PID=$!
+
+        cleanup() {
+          echo "   Stopping server (PID: ${SERVER_PID})..."
+          kill "${SERVER_PID}" 2>/dev/null || true
+          wait "${SERVER_PID}" 2>/dev/null || true
+        }
+        trap cleanup EXIT INT TERM
+
+        echo "   Waiting for server to be ready..."
+        RETRIES=30
+        while [ ${RETRIES} -gt 0 ]; do
+          if curl -sf http://127.0.0.1:{{.SERVER_PORT}}/health > /dev/null 2>&1; then
+            echo "   ✅ Server is ready"
+            break
+          fi
+          RETRIES=$((RETRIES - 1))
+          sleep 1
+        done
+
+        if [ ${RETRIES} -eq 0 ]; then
+          echo "   ❌ Server failed to start within 30 seconds"
+          exit 1
+        fi
+
+        echo ""
+        BASE_URL="http://127.0.0.1:{{.SERVER_PORT}}" \
+        RPS="{{.RPS}}" \
+        DURATION="{{.DURATION}}" \
+        VUS="{{.VUS}}" \
+        GIT_SHA="{{.GIT_SHA}}" \
+        GIT_BRANCH="{{.GIT_BRANCH}}" \
+          task perf:nightly:k6
+
+        echo ""
+        echo "   ✅ Nightly regression completed"
+
+  # ──────────────────────────────────────────────────────────────────────────────
+  # CI Pipeline
+  # ──────────────────────────────────────────────────────────────────────────────
+
+  ci:
+    desc: "Comprehensive CI pipeline — all checks, tests, linting, coverage, and build"
+    vars:
+      COVERAGE_THRESHOLD: '{{ .COVERAGE_THRESHOLD | default "50.0" }}'
+    silent: true
+    cmds:
+      - |
+        set -e
+
+        echo "=========================================="
+        echo "🚀 Starting CI Pipeline"
+        echo "=========================================="
+
+        echo ""
+        echo "✅ Step 1/9: Module Dependencies Check"
+        echo "   - Checking go.mod and go.sum are in sync..."
+        task mod:check
+
+        echo ""
+        echo "✅ Step 2/9: Module Verification"
+        echo "   - Verifying module integrity and checksums..."
+        task mod:verify
+
+        echo ""
+        echo "✅ Step 3/9: Code Formatting Check"
+        echo "   - Checking code formatting (goimports + gofumpt)..."
+        task format:check
+
+        echo ""
+        echo "✅ Step 4/9: Go Vet"
+        echo "   - Running go vet..."
+        task vet
+
+        echo ""
+        echo "✅ Step 5/9: Linting"
+        echo "   - Running golangci-lint..."
+        task lint
+
+        echo ""
+        echo "✅ Step 6/9: Tests"
+        echo "   - Running test suite..."
+        task test
+
+        echo ""
+        echo "✅ Step 7/9: Test Coverage"
+        echo "   - Running coverage check (threshold: {{.COVERAGE_THRESHOLD}}%)..."
+        COVERAGE_THRESHOLD="{{.COVERAGE_THRESHOLD}}" task coverage:check
+
+        echo ""
+        echo "✅ Step 8/9: Solution Lint"
+        echo "   - Linting solution files..."
+        task lint:solutions
+
+        echo ""
+        echo "✅ Step 9/9: Integration Tests"
+        echo "   - Running API, CLI, and solution integration tests..."
+        task integration
+
+        echo ""
+        echo "=========================================="
+        echo "✅ CI Pipeline Completed Successfully!"
+        echo "=========================================="
+        echo ""
+        echo "💡 Optional: Run 'task vulncheck' to check for vulnerabilities"
+        echo "💡 Optional: Run 'task fuzz' to run fuzz tests"
+
+  # ──────────────────────────────────────────────────────────────────────────────
+  # Release & Tagging
+  # ──────────────────────────────────────────────────────────────────────────────
 
   release:
     desc: "Release the product"
@@ -438,133 +1301,6 @@ tasks:
       - defer:
           task: publish-datasource
     silent: true
-
-  tag:
-    # deps: [lint]
-    desc: "Create a signed version tag and push only that tag (use DRYRUN=true to simulate)."
-    silent: true
-    vars:
-      DRYRUN: '{{.DRYRUN | default "false"}}'
-    cmds:
-      - |
-        {{ .FIX_PATH }}
-
-        current_branch="{{ .GIT_BRANCH }}"
-        version="{{ .CLI_ARGS }}"
-        dryrun="{{ .DRYRUN }}"
-
-        # Require a version arg
-        if [ -z "$version" ]; then
-          echo "Missing version. Usage: task tag -- v1.2.3 or v1.2.3-beta.1"
-          exit 1
-        fi
-
-        # Normalize: allow with or without leading v
-        if [[ "$version" =~ ^v ]]; then
-          version="${version:1}"
-        fi
-
-        # Identify beta vs release by presence of "-beta.<n>"
-        if [[ "$version" == *-beta.* ]]; then
-          is_beta="true"
-        else
-          is_beta="false"
-        fi
-
-        # Strict semver regexes
-        release_regex='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
-        beta_regex='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-beta\.(0|[1-9][0-9]*)$'
-
-        # Validate and enforce branch policy
-        if [ "$is_beta" = "true" ]; then
-          if [[ ! "$version" =~ $beta_regex ]]; then
-            echo "Invalid beta tag: '$version'"
-            echo "Format must be: vMAJOR.MINOR.PATCH-beta.NUM (example: v1.0.0-beta.44)"
-            exit 1
-          fi
-          if [ "$current_branch" = "main" ]; then
-            echo "Beta tags are not allowed on 'main'. Current branch: '$current_branch'"
-            exit 1
-          fi
-        else
-          if [[ ! "$version" =~ $release_regex ]]; then
-            echo "Invalid release tag: '$version'"
-            echo "Format must be: vMAJOR.MINOR.PATCH (example: v1.2.3)"
-            exit 1
-          fi
-          if [ "$current_branch" != "main" ]; then
-            echo "Release tags must be created on 'main'. Current branch: '$current_branch'"
-            exit 1
-          fi
-        fi
-
-        tag_name="v$version"
-
-        # Prevent accidental retag
-        if git rev-parse "$tag_name" >/dev/null 2>&1; then
-          echo "Tag '$tag_name' already exists. Aborting."
-          exit 1
-        fi
-
-        releaseMessage="Release $tag_name on branch $current_branch"
-
-        if [ "$dryrun" = "true" ]; then
-          echo "[DRYRUN] Would create signed tag '$tag_name' with message: $releaseMessage"
-          echo "[DRYRUN] Would push only this tag to origin"
-          exit 0
-        fi
-
-        # Preflight for signing (helpful error if not configured)
-        # if ! git tag -s -m "signature check" --local-user "$(git config user.signingkey)" --dry-run "$tag_name" 2>/dev/null; then
-        #   echo "GPG signing appears not configured for git."
-        #   echo "Set user.signingkey and ensure your key is available, or configure commit/tag signing."
-        #   exit 1
-        # fi
-
-        # Create a signed annotated tag
-        git tag -s "$tag_name" -m "$releaseMessage"
-        if [ $? -ne 0 ]; then
-          echo "Failed to create a signed tag. Check your GPG setup."
-          exit 1
-        fi
-
-        # Push only this specific tag (not all tags)
-        git push origin "$tag_name"
-        if [ $? -ne 0 ]; then
-          echo "Failed to push tag '$tag_name' to origin."
-          exit 1
-        fi
-
-        echo "Tagged and pushed '$tag_name' successfully."
-
-  generate-index:
-    desc: "Generate index.html from README.md and dist/ archives"
-    cmds:
-      - cd scripts && go build -o {{.DIST}}/generate_index generate_index.go
-      - '{{.DIST}}/generate_index {{.DIST}}'
-      - rm -f {{.DIST}}/generate_index
-    sources:
-      - README.md
-      - scripts/generate_index.go
-    generates:
-      - '{{.DIST}}/index.html'
-
-  upload-release:
-    desc: "Upload dist/ release artifacts (index.html, archives, SHA256SUMS) to a GCS bucket"
-    vars:
-      GCS_BUCKET: '{{ .GCS_BUCKET | default (env "GCS_BUCKET") | default "" }}'
-      GCS_PREFIX: '{{ .GCS_PREFIX | default (env "GCS_PREFIX") | default "" }}'
-    env:
-      GCS_BUCKET: '{{.GCS_BUCKET}}'
-      GCS_PREFIX: '{{.GCS_PREFIX}}'
-      UPLOAD_DIST_DIR: '{{.DIST}}'
-    cmds:
-      - cd scripts && go run upload_release.go
-    preconditions:
-      - sh: 'test -f {{.DIST}}/index.html'
-        msg: "dist/index.html not found. Run 'task generate-index' first."
-      - sh: 'test -n "{{.GCS_BUCKET}}"'
-        msg: "GCS_BUCKET is required. Set via env var or: task upload-release GCS_BUCKET=my-bucket"
 
   release-local:
     desc: "Build a local snapshot release with goreleaser and generate index.html (does not publish)"
@@ -611,9 +1347,130 @@ tasks:
         echo ""
         echo "Dry run complete. Config is valid."
 
-  integration:
-    deps: [build]
-    desc: "Integration tests"
-    run: once
+  tag:
+    desc: "Create a signed version tag and push only that tag (use DRYRUN=true to simulate)"
+    silent: true
+    vars:
+      DRYRUN: '{{.DRYRUN | default "false"}}'
     cmds:
-      - '{{.DIST}}/{{.OUTPUT_FILE}} test functional --tests-path "{{.FIXED_ROOT}}/tests/integration/solutions" --no-color -q --concurrency 10'
+      - |
+        {{ .FIX_PATH }}
+
+        current_branch="{{ .GIT_BRANCH }}"
+        version="{{ .CLI_ARGS }}"
+        dryrun="{{ .DRYRUN }}"
+
+        if [ -z "$version" ]; then
+          echo "Missing version. Usage: task tag -- v1.2.3 or v1.2.3-beta.1"
+          exit 1
+        fi
+
+        if [[ "$version" =~ ^v ]]; then
+          version="${version:1}"
+        fi
+
+        if [[ "$version" == *-beta.* ]]; then
+          is_beta="true"
+        else
+          is_beta="false"
+        fi
+
+        release_regex='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+        beta_regex='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-beta\.(0|[1-9][0-9]*)$'
+
+        if [ "$is_beta" = "true" ]; then
+          if [[ ! "$version" =~ $beta_regex ]]; then
+            echo "Invalid beta tag: '$version'"
+            echo "Format must be: vMAJOR.MINOR.PATCH-beta.NUM (example: v1.0.0-beta.44)"
+            exit 1
+          fi
+          if [ "$current_branch" = "main" ]; then
+            echo "Beta tags are not allowed on 'main'. Current branch: '$current_branch'"
+            exit 1
+          fi
+        else
+          if [[ ! "$version" =~ $release_regex ]]; then
+            echo "Invalid release tag: '$version'"
+            echo "Format must be: vMAJOR.MINOR.PATCH (example: v1.2.3)"
+            exit 1
+          fi
+          if [ "$current_branch" != "main" ]; then
+            echo "Release tags must be created on 'main'. Current branch: '$current_branch'"
+            exit 1
+          fi
+        fi
+
+        tag_name="v$version"
+
+        if git rev-parse "$tag_name" >/dev/null 2>&1; then
+          echo "Tag '$tag_name' already exists. Aborting."
+          exit 1
+        fi
+
+        releaseMessage="Release $tag_name on branch $current_branch"
+
+        if [ "$dryrun" = "true" ]; then
+          echo "[DRYRUN] Would create signed tag '$tag_name' with message: $releaseMessage"
+          echo "[DRYRUN] Would push only this tag to origin"
+          exit 0
+        fi
+
+        git tag -s "$tag_name" -m "$releaseMessage"
+        if [ $? -ne 0 ]; then
+          echo "Failed to create a signed tag. Check your GPG setup."
+          exit 1
+        fi
+
+        git push origin "$tag_name"
+        if [ $? -ne 0 ]; then
+          echo "Failed to push tag '$tag_name' to origin."
+          exit 1
+        fi
+
+        echo "Tagged and pushed '$tag_name' successfully."
+
+  # ──────────────────────────────────────────────────────────────────────────────
+  # Utilities
+  # ──────────────────────────────────────────────────────────────────────────────
+
+  generate-index:
+    desc: "Generate index.html from README.md and dist/ archives"
+    cmds:
+      - cd scripts && go build -o {{.DIST}}/generate_index generate_index.go
+      - '{{.DIST}}/generate_index {{.DIST}}'
+      - rm -f {{.DIST}}/generate_index
+    sources:
+      - README.md
+      - scripts/generate_index.go
+    generates:
+      - '{{.DIST}}/index.html'
+
+  upload-release:
+    desc: "Upload dist/ release artifacts (index.html, archives, SHA256SUMS) to a GCS bucket"
+    vars:
+      GCS_BUCKET: '{{ .GCS_BUCKET | default (env "GCS_BUCKET") | default "" }}'
+      GCS_PREFIX: '{{ .GCS_PREFIX | default (env "GCS_PREFIX") | default "" }}'
+    env:
+      GCS_BUCKET: '{{.GCS_BUCKET}}'
+      GCS_PREFIX: '{{.GCS_PREFIX}}'
+      UPLOAD_DIST_DIR: '{{.DIST}}'
+    cmds:
+      - cd scripts && go run upload_release.go
+    preconditions:
+      - sh: 'test -f {{.DIST}}/index.html'
+        msg: "dist/index.html not found. Run 'task generate-index' first."
+      - sh: 'test -n "{{.GCS_BUCKET}}"'
+        msg: "GCS_BUCKET is required. Set via env var or: task upload-release GCS_BUCKET=my-bucket"
+
+  hooks:setup:
+    desc: "Setup Git pre-commit hooks for code quality checks"
+    silent: true
+    cmds:
+      - |
+        if command -v lefthook >/dev/null 2>&1; then
+          lefthook install
+          echo "✅ Git hooks installed (lefthook)"
+        else
+          echo "⚠️  lefthook not found - skipping hook setup"
+          echo "   Install: go install github.com/evilmartians/lefthook@latest"
+        fi

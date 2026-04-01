@@ -1,0 +1,21 @@
+{
+  "changes": [
+    {
+      "field": "metadata.description",
+      "type": "added",
+      "newValue": "Updated solution"
+    },
+    {
+      "field": "spec.resolvers.greeting.with.value",
+      "type": "changed",
+      "oldValue": "Hello",
+      "newValue": "Hello, World!"
+    }
+  ],
+  "summary": {
+    "total": 2,
+    "added": 1,
+    "removed": 0,
+    "changed": 1
+  }
+}

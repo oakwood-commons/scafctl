@@ -118,6 +118,10 @@ linters:
         linters:
           - revive
         text: "var-naming: avoid package names"
+      - path: pkg/api/.*\.go
+        linters:
+          - revive
+        text: "var-naming: avoid meaningless package names"
 formatters:
   enable:
     - gofumpt

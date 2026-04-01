@@ -1,0 +1,16 @@
+{
+  "dryRun": true,
+  "solution": "hello-world",
+  "version": "1.0.0",
+  "hasWorkflow": true,
+  "actionPlan": [
+    {
+      "name": "create-greeting",
+      "provider": "write-new",
+      "description": "Create greeting.txt",
+      "wouldDo": "Would create file greeting.txt with content 'Hello, World!'"
+    }
+  ],
+  "totalActions": 1,
+  "totalPhases": 1
+}

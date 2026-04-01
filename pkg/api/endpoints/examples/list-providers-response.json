@@ -1,0 +1,25 @@
+{
+  "items": [
+    {
+      "name": "http",
+      "version": "1.0.0",
+      "capabilities": ["resolve"],
+      "category": "network",
+      "description": "Fetches data from HTTP endpoints"
+    },
+    {
+      "name": "write-new",
+      "version": "1.0.0",
+      "capabilities": ["action"],
+      "category": "filesystem",
+      "description": "Creates new files from templates"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "per_page": 100,
+    "total_items": 2,
+    "total_pages": 1,
+    "has_more": false
+  }
+}

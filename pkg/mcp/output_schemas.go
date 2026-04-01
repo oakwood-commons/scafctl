@@ -235,3 +235,29 @@ var outputSchemaDryRun = json.RawMessage(`{
 		"warnings": { "type": "array", "items": { "type": "string" } }
 	}
 }`)
+
+// outputSchemaOpenAPISpec is the output schema for get_openapi_spec.
+var outputSchemaOpenAPISpec = json.RawMessage(`{
+	"type": "object",
+	"description": "Full OpenAPI 3.1 specification for the scafctl REST API"
+}`)
+
+// outputSchemaAPIEndpoints is the output schema for list_api_endpoints.
+var outputSchemaAPIEndpoints = json.RawMessage(`{
+	"type": "object",
+	"properties": {
+		"count": { "type": "integer", "description": "Number of endpoints" },
+		"endpoints": {
+			"type": "array",
+			"items": {
+				"type": "object",
+				"properties": {
+					"method": { "type": "string" },
+					"path": { "type": "string" },
+					"summary": { "type": "string" },
+					"tags": { "type": "array", "items": { "type": "string" } }
+				}
+			}
+		}
+	}
+}`)

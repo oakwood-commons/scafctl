@@ -1,0 +1,8 @@
+{
+  "resolverData": {
+    "greeting": "Hello, World!"
+  },
+  "actionResult": {
+    "filesCreated": ["greeting.txt"]
+  }
+}
