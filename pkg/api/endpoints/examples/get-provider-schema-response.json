@@ -1,0 +1,15 @@
+{
+  "name": "http",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "url": { "type": "string", "description": "URL to fetch" },
+      "method": { "type": "string", "default": "GET" },
+      "headers": {
+        "type": "object",
+        "additionalProperties": { "type": "string" }
+      }
+    },
+    "required": ["url"]
+  }
+}

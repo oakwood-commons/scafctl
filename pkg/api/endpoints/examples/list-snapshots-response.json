@@ -1,0 +1,10 @@
+{
+  "items": [],
+  "pagination": {
+    "page": 1,
+    "per_page": 100,
+    "total_items": 0,
+    "total_pages": 0,
+    "has_more": false
+  }
+}

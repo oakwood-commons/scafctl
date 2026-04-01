@@ -7024,3 +7024,49 @@ func TestIntegration_RunResolver_RawFileAndStdinMixed(t *testing.T) {
 	assert.Contains(t, stdout, "Partner")
 	assert.Contains(t, stdout, "Howdy, Partner!")
 }
+
+// ── REST API Server (serve) commands ──
+
+func TestIntegration_ServeHelp(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "serve", "--help")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Start the scafctl REST API server")
+	assert.Contains(t, stdout, "--port")
+	assert.Contains(t, stdout, "--host")
+	assert.Contains(t, stdout, "--enable-tls")
+}
+
+func TestIntegration_ServeOpenAPIHelp(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "serve", "openapi", "--help")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Generate the full OpenAPI specification")
+	assert.Contains(t, stdout, "--format")
+	assert.Contains(t, stdout, "--output")
+}
+
+func TestIntegration_ServeOpenAPI_JSON(t *testing.T) {
+	stdout, stderr, exitCode := runScafctl(t, "serve", "openapi", "--format", "json")
+	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+	assert.Contains(t, stdout, "openapi")
+	assert.Contains(t, stdout, "scafctl API")
+	assert.Contains(t, stdout, "/health")
+}
+
+func TestIntegration_ServeOpenAPI_YAML(t *testing.T) {
+	stdout, stderr, exitCode := runScafctl(t, "serve", "openapi", "--format", "yaml")
+	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+	assert.Contains(t, stdout, "openapi:")
+	assert.Contains(t, stdout, "scafctl API")
+}
+
+func TestIntegration_ServeOpenAPI_ToFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	outFile := filepath.Join(tmpDir, "openapi.json")
+	_, stderr, exitCode := runScafctl(t, "serve", "openapi", "--format", "json", "--output", outFile)
+	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+	assert.FileExists(t, outFile)
+
+	data, err := os.ReadFile(outFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "scafctl API")
+}

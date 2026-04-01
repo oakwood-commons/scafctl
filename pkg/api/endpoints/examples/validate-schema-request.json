@@ -1,0 +1,9 @@
+{
+  "schema": "solution",
+  "data": {
+    "apiVersion": "scafctl.io/v1beta1",
+    "kind": "Solution",
+    "metadata": { "name": "my-solution" },
+    "spec": { "resolvers": {} }
+  }
+}

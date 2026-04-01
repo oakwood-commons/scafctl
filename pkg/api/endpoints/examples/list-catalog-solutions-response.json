@@ -1,0 +1,21 @@
+{
+  "items": [
+    {
+      "name": "go-service",
+      "version": "1.0.0",
+      "catalog": "default"
+    },
+    {
+      "name": "react-app",
+      "version": "2.1.0",
+      "catalog": "default"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "per_page": 100,
+    "total_items": 2,
+    "total_pages": 1,
+    "has_more": false
+  }
+}

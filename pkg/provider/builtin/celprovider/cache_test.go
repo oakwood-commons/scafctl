@@ -7,7 +7,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/celexp/env"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/stretchr/testify/assert"
@@ -17,10 +16,6 @@ import (
 // TestCelProvider_Execute_CacheUtilization verifies that the CEL provider
 // uses the global cache and that repeated evaluations hit the cache
 func TestCelProvider_Execute_CacheUtilization(t *testing.T) {
-	// Register factories (normally done at app startup)
-	celexp.SetEnvFactory(env.New)
-	celexp.SetCacheFactory(env.GlobalCache)
-
 	cache := env.GlobalCache()
 	require.NotNil(t, cache, "Global cache should be initialized")
 
@@ -83,10 +78,6 @@ func TestCelProvider_Execute_CacheUtilization(t *testing.T) {
 // TestCelProvider_Execute_CacheDifferentExpressions verifies that different
 // expressions result in different cache entries
 func TestCelProvider_Execute_CacheDifferentExpressions(t *testing.T) {
-	// Register factories (normally done at app startup)
-	celexp.SetEnvFactory(env.New)
-	celexp.SetCacheFactory(env.GlobalCache)
-
 	cache := env.GlobalCache()
 	require.NotNil(t, cache, "Global cache should be initialized")
 

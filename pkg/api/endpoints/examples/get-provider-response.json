@@ -1,0 +1,15 @@
+{
+  "name": "http",
+  "version": "1.0.0",
+  "capabilities": ["resolve"],
+  "category": "network",
+  "description": "Fetches data from HTTP endpoints",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "url": { "type": "string", "description": "URL to fetch" },
+      "method": { "type": "string", "default": "GET" }
+    },
+    "required": ["url"]
+  }
+}

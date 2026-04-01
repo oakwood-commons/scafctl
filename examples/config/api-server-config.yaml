@@ -1,0 +1,51 @@
+# scafctl API server configuration example
+# All fields are optional — defaults are used when omitted.
+apiServer:
+  host: "127.0.0.1"   # use 0.0.0.0 to expose publicly
+  port: 8080
+  apiVersion: "v1"
+  shutdownTimeout: "30s"
+  requestTimeout: "60s"
+  maxRequestSize: 10485760  # 10 MB
+  maxConcurrent: 1000
+
+  tls:
+    enabled: false
+    cert: ""
+    key: ""
+
+  cors:
+    enabled: true
+    allowedOrigins:
+      - "*"
+    allowedMethods:
+      - "GET"
+      - "POST"
+      - "PUT"
+      - "DELETE"
+      - "OPTIONS"
+    allowedHeaders:
+      - "Content-Type"
+      - "Authorization"
+      - "X-Request-ID"
+    maxAge: 3600
+
+  rateLimit:
+    global:
+      maxRequests: 100
+      window: "1m"
+
+  auth:
+    azureOIDC:
+      enabled: false
+      tenantId: ""
+      clientId: ""
+
+  compression:
+    level: 6
+
+  audit:
+    enabled: true
+
+  tracing:
+    enabled: false

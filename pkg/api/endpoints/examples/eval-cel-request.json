@@ -1,0 +1,7 @@
+{
+  "expression": "size(name) > 3 && age >= 18",
+  "data": {
+    "name": "Alice",
+    "age": 25
+  }
+}

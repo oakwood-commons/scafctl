@@ -121,6 +121,68 @@ const (
 	DefaultGoTemplateCacheSize = 10000
 )
 
+// API server defaults
+const (
+	// DefaultAPIPort is the default port for the API server.
+	DefaultAPIPort = 8080
+
+	// DefaultAPIHost is the default host for the API server.
+	// Binds to localhost only; use --host 0.0.0.0 or config to expose publicly.
+	DefaultAPIHost = "127.0.0.1"
+
+	// DefaultAPIVersion is the default API version prefix.
+	DefaultAPIVersion = "v1"
+
+	// DefaultAPIShutdownTimeout is the default graceful shutdown timeout.
+	DefaultAPIShutdownTimeout = "30s"
+
+	// DefaultAPIRequestTimeout is the default request timeout.
+	DefaultAPIRequestTimeout = "60s"
+
+	// DefaultAPIMaxRequestSize is the default maximum request body size in bytes (10MB).
+	DefaultAPIMaxRequestSize int64 = 10 * 1024 * 1024
+
+	// DefaultAPICompressionLevel is the default gzip compression level.
+	DefaultAPICompressionLevel = 6
+
+	// DefaultAPICORSMaxAge is the default CORS max age in seconds.
+	DefaultAPICORSMaxAge = 3600
+
+	// DefaultAPIRateLimitMaxRequests is the default rate limit max requests.
+	DefaultAPIRateLimitMaxRequests = 100
+
+	// DefaultAPIRateLimitWindow is the default rate limit window.
+	DefaultAPIRateLimitWindow = "1m"
+
+	// DefaultAPIMaxConcurrentRequests is the default max concurrent in-flight requests (chi Throttle).
+	DefaultAPIMaxConcurrentRequests = 1000
+
+	// DefaultAPIFilterCostLimit is the CEL cost limit for API filter expressions.
+	// Lower than the CLI default (1,000,000) to prevent DoS via user-supplied expressions.
+	DefaultAPIFilterCostLimit uint64 = 10000
+
+	// DefaultAPIEvalCostLimit is the CEL cost limit for the eval endpoint.
+	// Higher than the filter limit because eval is the primary use-case, but
+	// still bounded to protect the server from expensive expressions.
+	DefaultAPIEvalCostLimit uint64 = 100000
+
+	// DefaultAPIBodyReadTimeout is the default timeout for reading request bodies.
+	DefaultAPIBodyReadTimeout = "15s"
+
+	// DefaultAPIOperationMaxBodyBytes is the default per-operation max body size (1 MiB).
+	// This is the Huma-level limit; the chi middleware limit (MaxRequestSize) is the outer bound.
+	DefaultAPIOperationMaxBodyBytes int64 = 1 << 20
+
+	// DefaultAPIAdminMaxBodyBytes is the max body size for admin endpoints (1 KiB).
+	// Admin POST endpoints have empty or tiny bodies.
+	DefaultAPIAdminMaxBodyBytes int64 = 1024
+
+	// DefaultAPIEvalTimeout is the maximum wall-clock time allowed for a single
+	// CEL or Go-template evaluation request. Prevents CPU exhaustion from
+	// expensive user-supplied expressions.
+	DefaultAPIEvalTimeout = 30 * time.Second
+)
+
 // Circuit breaker defaults
 const (
 	// DefaultCircuitBreakerMaxFailures is the number of consecutive failures before opening the circuit.

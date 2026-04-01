@@ -1,0 +1,8 @@
+{
+  "validation": {
+    "valid": true,
+    "hasResolvers": true,
+    "hasWorkflow": true,
+    "errors": []
+  }
+}
