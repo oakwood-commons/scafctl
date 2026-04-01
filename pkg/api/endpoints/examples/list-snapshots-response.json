@@ -1,0 +1,16 @@
+{
+  "items": [
+    {
+      "id": "snap-20260331-abc123",
+      "solution": "hello-world",
+      "createdAt": "2026-03-31T10:30:00Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "per_page": 100,
+    "total_items": 1,
+    "total_pages": 1,
+    "has_more": false
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "status": "healthy",
+  "version": "1.2.0",
+  "uptime": "2h30m15s",
+  "components": [
+    { "name": "providers", "status": "ok" }
+  ]
+}

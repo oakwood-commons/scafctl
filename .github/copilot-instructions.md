@@ -42,7 +42,18 @@ See `pkg/httpc/README.md`
 
 - Use `tests/integration/cli_test.go` for integration tests of CLI commands.
 - Always add new commands to the CLI integration tests.
-- Always create solution integration tests in `tests/integration/solutions` whenever a something is updated or a new feature, provider, or command is added.
+
+### Solution integration tests
+
+- Use `tests/integration/solutions/` for integration tests of **non-API** features (providers, resolvers, actions, plugins, solutions, etc.).
+- Always create solution integration tests whenever a non-API feature, provider, or command is added or updated.
+- Solution integration tests **cannot** test API/server features — use API integration tests instead.
+
+### API integration tests
+
+- Use `tests/integration/api_test.go` for integration tests of **API/server** features (REST endpoints, middleware, auth, rate limiting, etc.).
+- Always add new API endpoints to the API integration tests.
+- API features must **only** be tested here, not in solution integration tests.
 
 ### `settings` Package
 
@@ -97,3 +108,111 @@ golangci-lint run --fix          # Run Linter and auto-fix issues
 **IMPORTANT**: After any change, run `task test:e2e` to ensure everything passes.
 **IMPORTANT**: Never use magic strings or numbers; always define constants or use settings for configuration values.
 **IMPORTANT**: Never commit or push any code without approval first
+
+---
+paths:
+  - "**/*.go"
+  - "**/go.mod"
+  - "**/go.sum"
+---
+- **gofmt/goimports**: Auto-format `.go` files after edit
+- **go vet**: Run static analysis after editing `.go` files
+- **staticcheck**: Run extended static checks on modified packages
+
+## Formatting
+
+- **gofmt** and **goimports** are mandatory — no style debates
+
+## Design Principles
+
+- Accept interfaces, return structs
+- Keep interfaces small (1-3 methods)
+
+## Error Handling
+
+Always wrap errors with context:
+
+```go
+if err != nil {
+    return fmt.Errorf("failed to create user: %w", err)
+}
+```
+
+## Functional Options
+
+```go
+type Option func(*Server)
+
+func WithPort(port int) Option {
+    return func(s *Server) { s.port = port }
+}
+
+func NewServer(opts ...Option) *Server {
+    s := &Server{port: 8080}
+    for _, opt := range opts {
+        opt(s)
+    }
+    return s
+}
+```
+
+## Small Interfaces
+
+Define interfaces where they are used, not where they are implemented.
+
+## Dependency Injection
+
+Use constructor functions to inject dependencies:
+
+```go
+func NewUserService(repo UserRepository, logger Logger) *UserService {
+    return &UserService{repo: repo, logger: logger}
+}
+```
+
+## Secret Management
+
+```go
+apiKey := os.Getenv("OPENAI_API_KEY")
+if apiKey == "" {
+    log.Fatal("OPENAI_API_KEY not configured")
+}
+```
+
+## Security Scanning
+
+- Use **gosec** for static security analysis:
+  ```bash
+  gosec ./...
+  ```
+
+## Context & Timeouts
+
+Always use `context.Context` for timeout control:
+
+```go
+ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+defer cancel()
+```
+
+## Framework
+
+Use the standard `go test` with **table-driven tests**.
+
+## Race Detection
+
+Always run with the `-race` flag:
+
+```bash
+go test -race ./...
+```
+
+## Coverage
+
+```bash
+go test -cover ./...
+```
+
+## Reference
+
+See skill: `golang-patterns` for comprehensive Go idioms and patterns.

@@ -33,6 +33,8 @@ Step-by-step guides for learning scafctl features.
 
 ## Operations & Configuration
 
+- [API Server Tutorial](api-server-tutorial.md) — Architecture and endpoint reference for the REST API
+- [Serve Tutorial](serve-tutorial.md) — Start and configure the REST API server
 - [Configuration Tutorial](config-tutorial.md) — Manage application configuration
 - [Logging & Debugging Tutorial](logging-tutorial.md) — Control log verbosity, format, and output
 - [Telemetry Tutorial](telemetry-tutorial.md) — Ship traces and metrics to Jaeger / Prometheus

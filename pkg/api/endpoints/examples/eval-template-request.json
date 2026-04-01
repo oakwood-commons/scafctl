@@ -1,0 +1,8 @@
+{
+  "template": "Hello, {{.name}}! You have {{.count}} items.",
+  "data": {
+    "name": "Alice",
+    "count": 42
+  },
+  "name": "greeting"
+}

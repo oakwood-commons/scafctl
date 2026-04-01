@@ -55,6 +55,7 @@ Runnable examples are located in the [`/examples`](https://github.com/oakwood-co
 - [`examples/snapshots/`](https://github.com/oakwood-commons/scafctl/tree/main/examples/snapshots) — Snapshot examples
 - [`examples/solutions/`](https://github.com/oakwood-commons/scafctl/tree/main/examples/solutions) — Complete solution examples
 - [`examples/plugins/`](https://github.com/oakwood-commons/scafctl/tree/main/examples/plugins) — Plugin examples
+- [`examples/serve/`](https://github.com/oakwood-commons/scafctl/tree/main/examples/serve) — REST API server examples
 
 Browse examples from the CLI:
 

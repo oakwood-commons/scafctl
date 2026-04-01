@@ -1,0 +1,5 @@
+{
+  "path": "./examples/solutions/hello-world/solution.yaml",
+  "dryRun": false,
+  "verbose": true
+}

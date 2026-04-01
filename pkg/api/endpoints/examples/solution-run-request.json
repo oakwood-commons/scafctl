@@ -1,0 +1,7 @@
+{
+  "path": "./examples/solutions/hello-world/solution.yaml",
+  "params": {
+    "name": "World"
+  },
+  "outputDir": "/tmp/scafctl-output"
+}

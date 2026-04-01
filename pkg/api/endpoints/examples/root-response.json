@@ -1,0 +1,14 @@
+{
+  "name": "scafctl API",
+  "version": "1.2.0",
+  "links": [
+    { "href": "/health", "rel": "health" },
+    { "href": "/v1/solutions/lint", "rel": "lint" },
+    { "href": "/v1/providers", "rel": "providers" },
+    { "href": "/v1/eval/cel", "rel": "eval-cel" },
+    { "href": "/v1/catalogs", "rel": "catalogs" },
+    { "href": "/v1/schemas", "rel": "schemas" },
+    { "href": "/v1/docs", "rel": "docs" },
+    { "href": "/v1/openapi", "rel": "openapi" }
+  ]
+}

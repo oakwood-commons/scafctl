@@ -1,0 +1,19 @@
+{
+  "file": "./examples/solutions/hello-world/solution.yaml",
+  "findings": [
+    {
+      "severity": "warning",
+      "category": "best-practice",
+      "location": "spec.resolvers.greeting",
+      "message": "Resolver has no description",
+      "suggestion": "Add a description to document the resolver's purpose",
+      "ruleName": "resolver-description",
+      "line": 7,
+      "column": 5,
+      "sourceFile": "solution.yaml"
+    }
+  ],
+  "errorCount": 0,
+  "warnCount": 1,
+  "infoCount": 0
+}

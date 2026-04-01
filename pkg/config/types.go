@@ -24,6 +24,7 @@ type Config struct {
 	Action     ActionConfig     `json:"action,omitempty" yaml:"action,omitempty" mapstructure:"action" doc:"Action executor configuration"`
 	Auth       GlobalAuthConfig `json:"auth,omitempty" yaml:"auth,omitempty" mapstructure:"auth" doc:"Authentication handler configuration"`
 	Build      BuildConfig      `json:"build,omitempty" yaml:"build,omitempty" mapstructure:"build" doc:"Build command configuration"`
+	APIServer  APIServerConfig  `json:"apiServer,omitempty" yaml:"apiServer,omitempty" mapstructure:"apiServer" doc:"REST API server configuration"`
 }
 
 // CatalogConfig represents a single catalog configuration.
@@ -437,4 +438,101 @@ func (b *BuildConfig) IsAutoCacheRemoteArtifacts() bool {
 		return true
 	}
 	return *b.AutoCacheRemoteArtifacts
+}
+
+// APIServerConfig holds REST API server configuration.
+type APIServerConfig struct {
+	Host            string               `json:"host,omitempty" yaml:"host,omitempty" mapstructure:"host" doc:"Host to bind to" example:"0.0.0.0" maxLength:"253"`
+	Port            int                  `json:"port,omitempty" yaml:"port,omitempty" mapstructure:"port" doc:"Port to listen on" example:"8080" minimum:"1" maximum:"65535"`
+	APIVersion      string               `json:"apiVersion,omitempty" yaml:"apiVersion,omitempty" mapstructure:"apiVersion" doc:"API version prefix" example:"v1" maxLength:"10"`
+	ShutdownTimeout string               `json:"shutdownTimeout,omitempty" yaml:"shutdownTimeout,omitempty" mapstructure:"shutdownTimeout" doc:"Graceful shutdown timeout" example:"30s" maxLength:"20"`
+	RequestTimeout  string               `json:"requestTimeout,omitempty" yaml:"requestTimeout,omitempty" mapstructure:"requestTimeout" doc:"Default request timeout" example:"60s" maxLength:"20"`
+	BodyReadTimeout string               `json:"bodyReadTimeout,omitempty" yaml:"bodyReadTimeout,omitempty" mapstructure:"bodyReadTimeout" doc:"Default body read timeout for Huma operations" example:"15s" maxLength:"20"`
+	MaxRequestSize  int64                `json:"maxRequestSize,omitempty" yaml:"maxRequestSize,omitempty" mapstructure:"maxRequestSize" doc:"Maximum request body size in bytes" maximum:"1073741824" example:"10485760"`
+	TLS             APITLSConfig         `json:"tls,omitempty" yaml:"tls,omitempty" mapstructure:"tls" doc:"TLS configuration"`
+	CORS            APICORSConfig        `json:"cors,omitempty" yaml:"cors,omitempty" mapstructure:"cors" doc:"CORS configuration"`
+	RateLimit       APIRateLimitConfig   `json:"rateLimit,omitempty" yaml:"rateLimit,omitempty" mapstructure:"rateLimit" doc:"Rate limiting configuration"`
+	Auth            APIAuthConfig        `json:"auth,omitempty" yaml:"auth,omitempty" mapstructure:"auth" doc:"Authentication configuration"`
+	Compression     APICompressionConfig `json:"compression,omitempty" yaml:"compression,omitempty" mapstructure:"compression" doc:"Response compression configuration"`
+	OpenAPI         APIOpenAPIConfig     `json:"openAPI,omitempty" yaml:"openAPI,omitempty" mapstructure:"openAPI" doc:"OpenAPI specification configuration (reserved for future use — not yet wired into server setup)"`
+	Profiler        APIProfilerConfig    `json:"profiler,omitempty" yaml:"profiler,omitempty" mapstructure:"profiler" doc:"Profiler configuration (reserved for future use — not yet wired into server setup)"`
+	Audit           APIAuditConfig       `json:"audit,omitempty" yaml:"audit,omitempty" mapstructure:"audit" doc:"Audit logging configuration"`
+	Tracing         APITracingConfig     `json:"tracing,omitempty" yaml:"tracing,omitempty" mapstructure:"tracing" doc:"OpenTelemetry tracing configuration"`
+	MaxConcurrent   int                  `json:"maxConcurrent,omitempty" yaml:"maxConcurrent,omitempty" mapstructure:"maxConcurrent" doc:"Maximum concurrent connections" maximum:"100000" example:"1000"`
+}
+
+// APITLSConfig holds TLS configuration for the API server.
+type APITLSConfig struct {
+	Enabled bool   `json:"enabled,omitempty" yaml:"enabled,omitempty" mapstructure:"enabled" doc:"Enable TLS"`
+	Cert    string `json:"cert,omitempty" yaml:"cert,omitempty" mapstructure:"cert" doc:"Path to TLS certificate file" maxLength:"4096" example:"/etc/ssl/cert.pem"`
+	Key     string `json:"key,omitempty" yaml:"key,omitempty" mapstructure:"key" doc:"Path to TLS private key file" maxLength:"4096" example:"/etc/ssl/key.pem"`
+}
+
+// APICORSConfig holds CORS configuration for the API server.
+type APICORSConfig struct {
+	Enabled        bool     `json:"enabled,omitempty" yaml:"enabled,omitempty" mapstructure:"enabled" doc:"Enable CORS"`
+	AllowedOrigins []string `json:"allowedOrigins,omitempty" yaml:"allowedOrigins,omitempty" mapstructure:"allowedOrigins" doc:"Allowed origins" maxItems:"50"`
+	AllowedMethods []string `json:"allowedMethods,omitempty" yaml:"allowedMethods,omitempty" mapstructure:"allowedMethods" doc:"Allowed HTTP methods" maxItems:"10"`
+	AllowedHeaders []string `json:"allowedHeaders,omitempty" yaml:"allowedHeaders,omitempty" mapstructure:"allowedHeaders" doc:"Allowed headers" maxItems:"50"`
+	MaxAge         int      `json:"maxAge,omitempty" yaml:"maxAge,omitempty" mapstructure:"maxAge" doc:"Max age for CORS preflight in seconds" maximum:"86400" example:"3600"`
+}
+
+// APIRateLimitConfig holds rate limiting configuration.
+type APIRateLimitConfig struct {
+	Global    *APIRateLimitEntry            `json:"global,omitempty" yaml:"global,omitempty" mapstructure:"global" doc:"Global rate limit"`
+	Endpoints map[string]*APIRateLimitEntry `json:"endpoints,omitempty" yaml:"endpoints,omitempty" mapstructure:"endpoints" doc:"Per-endpoint rate limits (reserved for future use — not yet applied by the middleware stack)"`
+}
+
+// APIRateLimitEntry defines a rate limit rule.
+type APIRateLimitEntry struct {
+	MaxRequests int    `json:"maxRequests" yaml:"maxRequests" mapstructure:"maxRequests" doc:"Maximum requests in window" maximum:"100000" example:"100"`
+	Window      string `json:"window" yaml:"window" mapstructure:"window" doc:"Time window for rate limit" example:"1m" maxLength:"20"`
+	TrustProxy  bool   `json:"trustProxy,omitempty" yaml:"trustProxy,omitempty" mapstructure:"trustProxy" doc:"Trust X-Forwarded-For and X-Real-IP proxy headers for client IP identification. Only enable when a trusted reverse proxy sanitizes these headers; otherwise clients can spoof their IP to bypass rate limiting."`
+}
+
+// APIAuthConfig holds API authentication configuration.
+type APIAuthConfig struct {
+	AzureOIDC APIAzureOIDCConfig `json:"azureOIDC,omitempty" yaml:"azureOIDC,omitempty" mapstructure:"azureOIDC" doc:"Azure AD OIDC configuration"`
+}
+
+// APIAzureOIDCConfig holds Azure AD OIDC configuration.
+type APIAzureOIDCConfig struct {
+	Enabled  bool   `json:"enabled,omitempty" yaml:"enabled,omitempty" mapstructure:"enabled" doc:"Enable Entra OIDC authentication"`
+	TenantID string `json:"tenantId,omitempty" yaml:"tenantId,omitempty" mapstructure:"tenantId" doc:"Azure AD tenant ID" maxLength:"36" example:"00000000-0000-0000-0000-000000000000"`
+	ClientID string `json:"clientId,omitempty" yaml:"clientId,omitempty" mapstructure:"clientId" doc:"Azure AD client ID" maxLength:"36" example:"00000000-0000-0000-0000-000000000000"`
+}
+
+// APICompressionConfig holds response compression configuration.
+type APICompressionConfig struct {
+	Level int `json:"level,omitempty" yaml:"level,omitempty" mapstructure:"level" doc:"Compression level (0-9, 0=disabled)" maximum:"9" example:"6"`
+}
+
+// APIOpenAPIConfig holds OpenAPI specification configuration.
+type APIOpenAPIConfig struct {
+	Servers     []APIOpenAPIServerConfig `json:"servers,omitempty" yaml:"servers,omitempty" mapstructure:"servers" doc:"OpenAPI server entries" maxItems:"10"`
+	Title       string                   `json:"title,omitempty" yaml:"title,omitempty" mapstructure:"title" doc:"API title" maxLength:"200" example:"scafctl API"`
+	Description string                   `json:"description,omitempty" yaml:"description,omitempty" mapstructure:"description" doc:"API description" maxLength:"2000"`
+}
+
+// APIOpenAPIServerConfig holds a single OpenAPI server entry.
+type APIOpenAPIServerConfig struct {
+	URL         string `json:"url" yaml:"url" mapstructure:"url" doc:"Server URL" maxLength:"2048" example:"https://api.example.com"`
+	Description string `json:"description,omitempty" yaml:"description,omitempty" mapstructure:"description" doc:"Server description" maxLength:"500"`
+}
+
+// APIProfilerConfig holds profiler configuration for the API server.
+type APIProfilerConfig struct {
+	Enabled         bool `json:"enabled,omitempty" yaml:"enabled,omitempty" mapstructure:"enabled" doc:"Enable pprof profiler endpoints"`
+	AllowUnauthProd bool `json:"allowUnauthProd,omitempty" yaml:"allowUnauthProd,omitempty" mapstructure:"allowUnauthProd" doc:"Allow unauthenticated profiler access in production"`
+}
+
+// APIAuditConfig holds audit logging configuration.
+type APIAuditConfig struct {
+	Enabled    bool `json:"enabled,omitempty" yaml:"enabled,omitempty" mapstructure:"enabled" doc:"Enable audit logging"`
+	TrustProxy bool `json:"trustProxy,omitempty" yaml:"trustProxy,omitempty" mapstructure:"trustProxy" doc:"Trust X-Forwarded-For and X-Real-IP proxy headers for client IP in audit logs. Only enable when a trusted reverse proxy sanitizes these headers; otherwise clients can spoof their source IP in audit records."`
+}
+
+// APITracingConfig holds OpenTelemetry tracing configuration for the API server.
+type APITracingConfig struct {
+	Enabled bool `json:"enabled,omitempty" yaml:"enabled,omitempty" mapstructure:"enabled" doc:"Enable OpenTelemetry tracing"`
 }

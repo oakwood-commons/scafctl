@@ -100,5 +100,7 @@ Enable file logging for troubleshooting:
 | `list_providers` | List providers with filtering |
 | `list_solutions` | List catalog solutions |
 | `render_solution` | Render action/resolver graphs |
+| `get_openapi_spec` | Generate full OpenAPI specification for the REST API |
+| `list_api_endpoints` | List all REST API endpoints with method, path, and summary |
 
 For the full tutorial, see the [MCP Server Tutorial](../../docs/tutorials/mcp-server-tutorial.md).

@@ -33,6 +33,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/render"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/run"
 	secretscmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/secrets"
+	servecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/serve"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/snapshot"
 	solutioncmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/solution"
 	testcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/test"
@@ -523,6 +524,7 @@ func Root(opts *RootOptions) *cobra.Command {
 	// Plugin Commands
 	cCmd.AddCommand(withGroup(groupPlugin, pluginscmd.CommandPlugins(cliParams, ioStreams, settings.CliBinaryName)))
 	cCmd.AddCommand(withGroup(groupPlugin, mcpcmd.CommandMCP(cliParams, ioStreams, settings.CliBinaryName)))
+	cCmd.AddCommand(withGroup(groupPlugin, servecmd.CommandServe(cliParams, ioStreams, settings.CliBinaryName)))
 
 	// Other Commands (no group — shown under "Additional Commands:")
 	cCmd.AddCommand(version.CommandVersion(cliParams, ioStreams, settings.CliBinaryName))

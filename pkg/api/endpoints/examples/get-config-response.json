@@ -1,0 +1,19 @@
+{
+  "settings": {
+    "defaultCatalog": "default",
+    "noColor": false,
+    "quiet": false
+  },
+  "catalogs": [
+    {
+      "name": "default",
+      "type": "local",
+      "path": "/home/user/.config/scafctl/catalogs/default"
+    }
+  ],
+  "apiServer": {
+    "host": "0.0.0.0",
+    "port": 8080,
+    "apiVersion": "v1"
+  }
+}
