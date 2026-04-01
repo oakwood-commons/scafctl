@@ -885,6 +885,18 @@ scafctl run resolver -f parameterized.yaml env=staging
 # Load parameters from file (positional)
 scafctl run resolver -f parameterized.yaml @params.yaml
 
+# Load parameters from stdin (pipe YAML or JSON)
+echo '{"env": "prod"}' | scafctl run resolver -f parameterized.yaml @-
+
+# Pipe parameters from another command
+cat params.yaml | scafctl run resolver -f parameterized.yaml -r @-
+
+# Pipe raw stdin into a single parameter
+echo hello | scafctl run resolver -f parameterized.yaml message=@-
+
+# Read a file's raw content into a parameter
+scafctl run resolver -f parameterized.yaml body=@content.txt
+
 # Multiple positional parameters
 scafctl run resolver -f parameterized.yaml env=prod region=us-east1
 
@@ -908,6 +920,18 @@ scafctl run resolver -f parameterized.yaml env=staging
 
 # Load parameters from file — wrap @file in single quotes to avoid splatting operator
 scafctl run resolver -f parameterized.yaml '@params.yaml'
+
+# Load parameters from stdin (pipe YAML or JSON)
+'{"env": "prod"}' | scafctl run resolver -f parameterized.yaml '@-'
+
+# Pipe parameters from another command
+Get-Content params.yaml | scafctl run resolver -f parameterized.yaml -r '@-'
+
+# Pipe raw stdin into a single parameter
+'hello' | scafctl run resolver -f parameterized.yaml 'message=@-'
+
+# Read a file's raw content into a parameter
+scafctl run resolver -f parameterized.yaml 'body=@content.txt'
 
 # Multiple positional parameters
 scafctl run resolver -f parameterized.yaml env=prod region=us-east1

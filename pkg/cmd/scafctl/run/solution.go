@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -284,6 +285,13 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
 	}
 
+	// Detect @- / -f - conflict early: stdin can only be consumed once.
+	if o.File == "-" && flags.ContainsStdinRef(o.ResolverParams) {
+		return o.exitWithCode(ctx,
+			fmt.Errorf("cannot use both -f - and @-: stdin can only be read once"),
+			exitcode.InvalidInput)
+	}
+
 	// Capture the original working directory before prepareSolutionForExecution,
 	// which may os.Chdir into a bundle extraction directory. This ensures __cwd
 	// in action expressions reflects the user's actual working directory.
@@ -314,8 +322,12 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		return o.exitWithCode(ctx, fmt.Errorf("workflow validation failed: %w", err), exitcode.ValidationFailed)
 	}
 
-	// Parse resolver parameters
-	params, err := flags.ParseResolverFlags(o.ResolverParams)
+	// Parse resolver parameters (pass stdin for @- support)
+	var stdinReader io.Reader
+	if o.IOStreams != nil {
+		stdinReader = o.IOStreams.In
+	}
+	params, err := flags.ParseResolverFlagsWithStdin(o.ResolverParams, stdinReader)
 	if err != nil {
 		return o.exitWithCode(ctx, fmt.Errorf("failed to parse resolver parameters: %w", err), exitcode.ValidationFailed)
 	}
