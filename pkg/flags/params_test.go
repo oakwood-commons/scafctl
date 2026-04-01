@@ -264,6 +264,83 @@ func TestLoadParameterReader(t *testing.T) {
 	}
 }
 
+func TestLoadParameterReader_ExceedsMaxSize(t *testing.T) {
+	t.Parallel()
+
+	// Create a reader just over the max limit
+	bigData := make([]byte, maxRawReadSize+1)
+	for i := range bigData {
+		bigData[i] = 'x'
+	}
+	r := bytes.NewReader(bigData)
+	_, err := LoadParameterReader(r, "stdin")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exceed maximum allowed size")
+}
+
+func TestReadRawFile_DelegatesToReadRawReader(t *testing.T) {
+	t.Parallel()
+
+	t.Run("reads file and trims trailing newline", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		f := filepath.Join(tmpDir, "test.txt")
+		err := os.WriteFile(f, []byte("hello world\n"), 0o600)
+		require.NoError(t, err)
+
+		result, err := readRawFile(f)
+		require.NoError(t, err)
+		assert.Equal(t, "hello world", result)
+	})
+
+	t.Run("reads file and trims CRLF", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		f := filepath.Join(tmpDir, "test.txt")
+		err := os.WriteFile(f, []byte("hello\r\n"), 0o600)
+		require.NoError(t, err)
+
+		result, err := readRawFile(f)
+		require.NoError(t, err)
+		assert.Equal(t, "hello", result)
+	})
+
+	t.Run("errors on empty file", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		f := filepath.Join(tmpDir, "empty.txt")
+		err := os.WriteFile(f, []byte(""), 0o600)
+		require.NoError(t, err)
+
+		_, err = readRawFile(f)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no data received from")
+	})
+
+	t.Run("errors on nonexistent file", func(t *testing.T) {
+		t.Parallel()
+		_, err := readRawFile("/nonexistent/file.txt")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to read file")
+	})
+
+	t.Run("errors on oversized regular file", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		f := filepath.Join(tmpDir, "big.txt")
+		bigData := make([]byte, maxRawReadSize+1)
+		for i := range bigData {
+			bigData[i] = 'z'
+		}
+		err := os.WriteFile(f, bigData, 0o600)
+		require.NoError(t, err)
+
+		_, err = readRawFile(f)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "exceeds maximum raw read size")
+	})
+}
+
 func TestParseResolverFlagsWithStdin(t *testing.T) {
 	t.Parallel()
 
@@ -583,6 +660,11 @@ func TestParseValueRef(t *testing.T) {
 		{"@-", "", "", false},         // standalone, no =
 		{"@file.yaml", "", "", false}, // standalone file ref
 		{"noequals", "", "", false},   // no = sign
+		{"=@-", "", "", false},        // empty key
+		{"=@file.txt", "", "", false}, // empty key with file ref
+		{" key=@-", "", "", false},    // leading whitespace in key
+		{"key =@-", "", "", false},    // trailing whitespace in key
+		{"k\tey=@-", "", "", false},   // tab in key
 	}
 
 	for _, tt := range tests {
@@ -858,5 +940,14 @@ func BenchmarkContainsStdinRef_ValueRef(b *testing.B) {
 	values := []string{"key1=value1", "key2=value2", "msg=@-"}
 	for b.Loop() {
 		_ = ContainsStdinRef(values)
+	}
+}
+
+func BenchmarkReadRawFile(b *testing.B) {
+	tmpDir := b.TempDir()
+	f := filepath.Join(tmpDir, "bench.txt")
+	_ = os.WriteFile(f, []byte("benchmark content\n"), 0o600)
+	for b.Loop() {
+		_, _ = readRawFile(f)
 	}
 }

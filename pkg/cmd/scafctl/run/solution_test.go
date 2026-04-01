@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -1022,5 +1023,120 @@ func BenchmarkSolutionOptions_resolveOutputDir(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		_, _ = opts.resolveOutputDir(context.Background(), false)
+	}
+}
+
+func TestWriteVerboseActionStatus(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	end := now.Add(1 * time.Second)
+
+	tests := []struct {
+		name     string
+		result   *action.ActionResult
+		contains string
+	}{
+		{
+			name: "succeeded",
+			result: &action.ActionResult{
+				Status:    action.StatusSucceeded,
+				StartTime: &now,
+				EndTime:   &end,
+			},
+			contains: "✓ test-action",
+		},
+		{
+			name: "skipped",
+			result: &action.ActionResult{
+				Status:     action.StatusSkipped,
+				SkipReason: action.SkipReasonCondition,
+			},
+			contains: "○ test-action (skipped: condition)",
+		},
+		{
+			name: "failed",
+			result: &action.ActionResult{
+				Status: action.StatusFailed,
+				Error:  "something broke",
+			},
+			contains: "✗ test-action (failed: something broke)",
+		},
+		{
+			name: "timeout",
+			result: &action.ActionResult{
+				Status: action.StatusTimeout,
+			},
+			contains: "✗ test-action (timeout)",
+		},
+		{
+			name: "cancelled",
+			result: &action.ActionResult{
+				Status: action.StatusCancelled,
+			},
+			contains: "○ test-action (cancelled)",
+		},
+		{
+			name: "pending ignored",
+			result: &action.ActionResult{
+				Status: action.StatusPending,
+			},
+			contains: "",
+		},
+		{
+			name: "running ignored",
+			result: &action.ActionResult{
+				Status: action.StatusRunning,
+			},
+			contains: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var stderr bytes.Buffer
+			streams := &terminal.IOStreams{
+				In:     nil,
+				Out:    &bytes.Buffer{},
+				ErrOut: &stderr,
+			}
+			cliParams := settings.NewCliParams()
+			w := writer.New(streams, cliParams)
+			opts := &SolutionOptions{}
+
+			opts.writeVerboseActionStatus(w, "test-action", tt.result)
+
+			if tt.contains == "" {
+				assert.Empty(t, stderr.String())
+			} else {
+				assert.Contains(t, stderr.String(), tt.contains)
+			}
+		})
+	}
+}
+
+func BenchmarkWriteVerboseActionStatus(b *testing.B) {
+	now := time.Now()
+	end := now.Add(1 * time.Second)
+	ar := &action.ActionResult{
+		Status:    action.StatusSucceeded,
+		StartTime: &now,
+		EndTime:   &end,
+	}
+
+	streams := &terminal.IOStreams{
+		In:     nil,
+		Out:    io.Discard,
+		ErrOut: io.Discard,
+	}
+	cliParams := settings.NewCliParams()
+	w := writer.New(streams, cliParams)
+	opts := &SolutionOptions{}
+
+	b.ResetTimer()
+	for b.Loop() {
+		opts.writeVerboseActionStatus(w, "bench-action", ar)
 	}
 }

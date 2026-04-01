@@ -10,6 +10,10 @@ import (
 
 // BenchmarkEncrypt benchmarks the encryption function with various payload sizes.
 func BenchmarkEncrypt(b *testing.B) {
+	if testing.Short() {
+		b.Skip("skipping slow crypto benchmark in short mode")
+	}
+
 	key, err := generateMasterKey()
 	if err != nil {
 		b.Fatal(err)
@@ -48,6 +52,10 @@ func BenchmarkEncrypt(b *testing.B) {
 
 // BenchmarkDecrypt benchmarks the decryption function with various payload sizes.
 func BenchmarkDecrypt(b *testing.B) {
+	if testing.Short() {
+		b.Skip("skipping slow crypto benchmark in short mode")
+	}
+
 	key, err := generateMasterKey()
 	if err != nil {
 		b.Fatal(err)
@@ -91,6 +99,10 @@ func BenchmarkDecrypt(b *testing.B) {
 
 // BenchmarkEncryptDecrypt benchmarks the full round-trip.
 func BenchmarkEncryptDecrypt(b *testing.B) {
+	if testing.Short() {
+		b.Skip("skipping slow crypto benchmark in short mode")
+	}
+
 	key, err := generateMasterKey()
 	if err != nil {
 		b.Fatal(err)
@@ -133,6 +145,10 @@ func BenchmarkEncryptDecrypt(b *testing.B) {
 
 // BenchmarkStoreSetGet benchmarks the Store.Set and Store.Get operations.
 func BenchmarkStoreSetGet(b *testing.B) {
+	if testing.Short() {
+		b.Skip("skipping slow crypto store benchmark in short mode")
+	}
+
 	tmpDir := b.TempDir()
 	keyring := NewMockKeyring()
 

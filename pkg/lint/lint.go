@@ -20,8 +20,10 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
+	resolverRefs "github.com/oakwood-commons/scafctl/pkg/resolver/refs"
 	"github.com/oakwood-commons/scafctl/pkg/schema"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
@@ -493,13 +495,49 @@ func lintExpressions(inputs map[string]*spec.ValueRef, location string, result *
 		}
 
 		if val.Tmpl != nil && string(*val.Tmpl) != "" {
-			if err := validateTemplateSyntax(string(*val.Tmpl)); err != nil {
+			tmplStr := string(*val.Tmpl)
+			if err := validateTemplateSyntax(tmplStr); err != nil {
 				result.addFinding(SeverityError, "template", inputLoc,
 					fmt.Sprintf("invalid Go template: %v", err),
 					"Fix the template syntax",
 					"invalid-template")
 			}
+
+			// Check for _.resolverName pattern in Go templates (should be .resolverName)
+			lintTemplateUnderscorePrefix(tmplStr, inputLoc, result)
 		}
+	}
+}
+
+// lintTemplateUnderscorePrefix flags when a Go template uses {{ ._.resolverName }}
+// which is not supported — the correct syntax is {{ .resolverName }}.
+// Uses Go template AST parsing to avoid false positives from literal text.
+func lintTemplateUnderscorePrefix(tmpl, location string, result *Result) {
+	refs, err := gotmpl.GetGoTemplateReferences(tmpl, "", "")
+	if err != nil {
+		return // Template parse errors are caught by validateTemplateSyntax
+	}
+	seen := make(map[string]bool)
+	for _, ref := range refs {
+		// Check for paths starting with "._.something" — the underscore-root pattern.
+		// Skip paths starting with ".__" (e.g., .__self, .__actions) which are legitimate.
+		if !strings.HasPrefix(ref.Path, "._") || strings.HasPrefix(ref.Path, ".__") {
+			continue
+		}
+		// Extract the resolver name: "._.config.host" → "config"
+		parts := strings.SplitN(strings.TrimPrefix(ref.Path, "._"), ".", 3)
+		if len(parts) < 2 || parts[1] == "" {
+			continue
+		}
+		name := parts[1]
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		result.addFinding(SeverityError, "template", location,
+			fmt.Sprintf("Go template uses '{{ ._.%s }}' which is not supported — use '{{ .%s }}' instead (the '._' prefix is a CEL convention)", name, name),
+			fmt.Sprintf("Replace '._.%s' with '.%s' in the template", name, name),
+			"tmpl-underscore-prefix")
 	}
 }
 
@@ -536,6 +574,18 @@ func collectReferencedResolvers(sol *solution.Solution) map[string]bool {
 				scanExpressionForResolverRefs(string(*vr.Expr), resolverRefPattern, refs)
 			}
 			if vr.Tmpl != nil {
+				// Use the Go template AST to extract references, which handles
+				// both {{ .resolverName }} and {{ ._.resolverName }} patterns.
+				tmplRefs, err := gotmpl.GetGoTemplateReferences(string(*vr.Tmpl), "", "")
+				if err == nil {
+					for _, ref := range tmplRefs {
+						name := resolverRefs.ExtractResolverName(ref.Path)
+						if name != "" {
+							refs[name] = true
+						}
+					}
+				}
+				// Also scan with regex as a fallback
 				scanExpressionForResolverRefs(string(*vr.Tmpl), resolverRefPattern, refs)
 			}
 			if vr.Literal != nil {

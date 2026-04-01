@@ -50,7 +50,6 @@ const (
 	fieldLabel       = "label"
 	fieldStyle       = "style"
 	fieldDestination = "destination"
-	fieldQuiet       = "quiet"
 	fieldNewline     = "newline"
 
 	// Style sub-fields.
@@ -72,13 +71,6 @@ const (
 	typePlain   = "plain"
 )
 
-// Quiet mode constants.
-const (
-	quietRespect = "respect"
-	quietForce   = "force"
-	quietSilent  = "silent"
-)
-
 // Destination constants.
 const (
 	destStdout = "stdout"
@@ -94,8 +86,7 @@ const maxLabelLength = 100
 // labelStyle renders the label prefix in dimmed text.
 var labelStyle = lipgloss.NewStyle().Faint(true)
 
-// messageOutputSchema is shared between CapabilityAction and CapabilityFrom since
-// both return the same {success, message} shape.
+// messageOutputSchema defines the output shape for the message provider.
 var messageOutputSchema = schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
 	"success": schemahelper.BoolProp("Whether the message was output successfully"),
 	"message": schemahelper.StringProp("The rendered message text (plain text, no ANSI codes)"),
@@ -115,7 +106,7 @@ func NewMessageProvider() *MessageProvider {
 			DisplayName: "Message Provider",
 			APIVersion:  "v1",
 			Version:     version,
-			Description: "Outputs styled, feature-rich terminal messages during solution execution. Supports message types (success, warning, error, info, debug, plain), custom formatting with colors and icons via lipgloss, and configurable quiet-mode behavior. Use the framework's tmpl: or expr: ValueRef on the message input for dynamic interpolation.",
+			Description: "Outputs styled, feature-rich terminal messages during solution execution. Supports message types (success, warning, error, info, debug, plain), custom formatting with colors and icons via lipgloss, and respects --quiet and --no-color flags. Use the framework's tmpl: or expr: ValueRef on the message input for dynamic interpolation.",
 			Category:    "utility",
 			Tags:        []string{"output", "message", "terminal", "logging", "display"},
 			WhatIf: func(_ context.Context, input any) (string, error) {
@@ -144,7 +135,6 @@ func NewMessageProvider() *MessageProvider {
 			},
 			Capabilities: []provider.Capability{
 				provider.CapabilityAction,
-				provider.CapabilityFrom,
 			},
 			Schema: schemahelper.ObjectSchema([]string{fieldMessage}, map[string]*jsonschema.Schema{
 				fieldMessage: schemahelper.StringProp(
@@ -191,12 +181,7 @@ func NewMessageProvider() *MessageProvider {
 					schemahelper.WithDefault(destStdout),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(10)),
 				),
-				fieldQuiet: schemahelper.StringProp(
-					"Controls behavior in --quiet mode. 'respect': message is suppressed in quiet mode (default). 'force': message is always shown, even in quiet mode. 'silent': message is never shown (only available in output data).",
-					schemahelper.WithEnum(quietRespect, quietForce, quietSilent),
-					schemahelper.WithDefault(quietRespect),
-					schemahelper.WithMaxLength(*ptrs.IntPtr(10)),
-				),
+
 				fieldNewline: schemahelper.BoolProp(
 					"Whether to append a trailing newline after the message.",
 					schemahelper.WithDefault(true),
@@ -204,7 +189,6 @@ func NewMessageProvider() *MessageProvider {
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 				provider.CapabilityAction: messageOutputSchema,
-				provider.CapabilityFrom:   messageOutputSchema,
 			},
 			Examples: []provider.Example{
 				{
@@ -250,17 +234,6 @@ inputs:
     bold: true
     icon: "🚀"`,
 				},
-				{
-					Name:        "Force message in quiet mode",
-					Description: "Output a critical message that is always shown, even with --quiet",
-					YAML: `name: critical-notice
-provider: message
-inputs:
-  message: "CRITICAL: Database migration required before proceeding"
-  type: error
-  quiet: force
-  destination: stderr`,
-				},
 			},
 		},
 	}
@@ -293,7 +266,6 @@ func (p *MessageProvider) Execute(ctx context.Context, input any) (*provider.Out
 	// Get configuration fields.
 	msgType := stringField(inputs, fieldType, typeInfo)
 	dest := stringField(inputs, fieldDestination, destStdout)
-	quietMode := stringField(inputs, fieldQuiet, quietRespect)
 	newline := boolField(inputs, fieldNewline, true)
 
 	// Get settings from context for quiet/noColor.
@@ -304,9 +276,6 @@ func (p *MessageProvider) Execute(ctx context.Context, input any) (*provider.Out
 		isQuiet = runSettings.IsQuiet
 	}
 
-	// Determine if we should actually write to terminal.
-	shouldWrite := p.shouldWrite(quietMode, isQuiet)
-
 	// Format the message for terminal output.
 	styled := p.formatMessage(msgStr, msgType, inputs, noColor, newline)
 
@@ -314,9 +283,9 @@ func (p *MessageProvider) Execute(ctx context.Context, input any) (*provider.Out
 	// The newline is a terminal-output concern; structured data should not embed it.
 	plain := p.formatMessage(msgStr, msgType, inputs, true, false)
 
-	// Write to the terminal if appropriate.
+	// Write to the terminal unless suppressed by --quiet.
 	streamed := false
-	if shouldWrite {
+	if !isQuiet {
 		ioStreams, ok := provider.IOStreamsFromContext(ctx)
 		if ok && ioStreams != nil {
 			if err := p.writeToTerminal(ioStreams, styled, dest); err != nil {
@@ -329,8 +298,7 @@ func (p *MessageProvider) Execute(ctx context.Context, input any) (*provider.Out
 	lgr.V(1).Info("Message output",
 		fieldType, msgType,
 		fieldDestination, dest,
-		fieldQuiet, quietMode,
-		"written", shouldWrite,
+		"written", !isQuiet,
 	)
 
 	return &provider.Output{
@@ -340,18 +308,6 @@ func (p *MessageProvider) Execute(ctx context.Context, input any) (*provider.Out
 		},
 		Streamed: streamed,
 	}, nil
-}
-
-// shouldWrite determines whether the message should be written to the terminal.
-func (p *MessageProvider) shouldWrite(quietMode string, isQuiet bool) bool {
-	switch quietMode {
-	case quietForce:
-		return true
-	case quietSilent:
-		return false
-	default: // quietRespect
-		return !isQuiet
-	}
 }
 
 // formatMessage applies styling to the message text. It starts with the type
@@ -448,7 +404,7 @@ func (p *MessageProvider) writeToTerminal(ioStreams *provider.IOStreams, msg, de
 	}
 
 	if w == nil {
-		return nil
+		return fmt.Errorf("no writer available for destination %q", dest)
 	}
 
 	_, err := fmt.Fprint(w, msg)

@@ -526,7 +526,7 @@ type Descriptor struct {
   // Optional - if nil, the generic extraction logic is used which handles:
   // - ValueRef.Resolver references
   // - CEL expressions (_.resolverName patterns)
-  // - Go templates ({{._.resolverName}} patterns with default delimiters)
+  // - Go templates ({{.resolverName}} patterns with default delimiters)
   // Providers should implement this when they have custom input formats that may
   // contain resolver references, such as templates with custom delimiters.
   // The function receives the raw inputs map and returns resolver names that this input depends on.
@@ -1119,9 +1119,9 @@ resolve:
 
 ### message
 
-Outputs styled, feature-rich terminal messages during solution execution. Supports built-in message types (success, warning, error, info, debug, plain), custom formatting with colors and icons via lipgloss, destination control (stdout/stderr), and configurable `--quiet` mode behavior. For dynamic interpolation, use the framework's `tmpl:` or `expr:` ValueRef on the `message` input.
+Outputs styled, feature-rich terminal messages during solution execution. Supports built-in message types (success, warning, error, info, debug, plain), custom formatting with colors and icons via lipgloss, destination control (stdout/stderr), and respects `--quiet` and `--no-color` flags. For dynamic interpolation, use the framework's `tmpl:` or `expr:` ValueRef on the `message` input.
 
-**Capabilities:** `action`, `from`
+**Capabilities:** `action`
 
 **Input Fields:**
 
@@ -1132,7 +1132,6 @@ Outputs styled, feature-rich terminal messages during solution execution. Suppor
 | `label` | string | — | Contextual prefix rendered as dimmed `[label]` between icon and message |
 | `style` | object | — | Custom formatting that merges on top of type defaults: `color`, `bold`, `italic`, `icon` |
 | `destination` | enum | `stdout` | `stdout` or `stderr` |
-| `quiet` | enum | `respect` | `respect` (suppressed in quiet), `force` (always), `silent` (data only) |
 | `newline` | bool | `true` | Whether to append trailing newline |
 
 ~~~yaml
@@ -1173,15 +1172,6 @@ resolve:
           expr: "'Processed ' + string(size(_.items)) + ' items'"
         type: success
 
-# Force display in quiet mode
-resolve:
-  with:
-    - provider: message
-      inputs:
-        message: "CRITICAL: Migration required"
-        type: error
-        quiet: force
-        destination: stderr
 ~~~
 
 ---

@@ -970,7 +970,7 @@ inputs:
 ```yaml
 inputs:
   message:
-    tmpl: "Deploying {{ ._.project }} to {{ ._.environment }}"
+    tmpl: "Deploying {{ .project }} to {{ .environment }}"
 ```
 
 ---

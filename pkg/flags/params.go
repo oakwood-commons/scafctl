@@ -66,9 +66,16 @@ func LoadParameterFile(path string) (map[string]any, error) {
 // for files with unknown extensions. The source parameter is used in error
 // messages to identify the input origin (e.g., "stdin").
 func LoadParameterReader(r io.Reader, source string) (map[string]any, error) {
-	data, err := io.ReadAll(r)
+	// Protect against unbounded streams (e.g., piping from a long-running process)
+	// by limiting the maximum number of bytes we will read.
+	limited := io.LimitReader(r, maxRawReadSize+1)
+	data, err := io.ReadAll(limited)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read parameters from %s: %w", source, err)
+	}
+
+	if int64(len(data)) > maxRawReadSize {
+		return nil, fmt.Errorf("parameters from %s exceed maximum allowed size (%d bytes)", source, maxRawReadSize)
 	}
 
 	if len(bytes.TrimSpace(data)) == 0 {
@@ -87,11 +94,16 @@ func parseValueRef(s string) (key, ref string, ok bool) {
 	if idx < 0 {
 		return "", "", false
 	}
+	key = s[:idx]
+	// Enforce non-empty key with no whitespace, matching other parsers.
+	if key == "" || strings.ContainsAny(key, " \t\r\n") {
+		return "", "", false
+	}
 	val := s[idx+1:]
 	if !strings.HasPrefix(val, "@") || len(val) < 2 {
 		return "", "", false
 	}
-	return s[:idx], val[1:], true
+	return key, val[1:], true
 }
 
 // readRawReader reads all content from an io.Reader as a raw string, trimming
@@ -122,20 +134,19 @@ func readRawFile(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to read file %q: %w", path, err)
 	}
-	if info.Size() > maxRawReadSize {
+	// For regular files, fail fast if the declared size already exceeds the limit.
+	if info.Mode().IsRegular() && info.Size() > maxRawReadSize {
 		return "", fmt.Errorf("file %q exceeds maximum raw read size (%d bytes)", path, maxRawReadSize)
 	}
-	data, err := os.ReadFile(path)
+
+	f, err := os.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("failed to read file %q: %w", path, err)
 	}
-	if len(bytes.TrimSpace(data)) == 0 {
-		return "", fmt.Errorf("no data received from file %q", path)
-	}
-	// Trim a single trailing \r\n or \n for shell usability.
-	s := strings.TrimSuffix(string(data), "\n")
-	s = strings.TrimSuffix(s, "\r")
-	return s, nil
+	defer f.Close()
+
+	// Delegate to readRawReader to enforce a hard read limit and consistent trimming.
+	return readRawReader(f, fmt.Sprintf("file %q", path))
 }
 
 // ParseResolverFlags parses -r flag values, handling both key=value syntax

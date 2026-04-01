@@ -38,7 +38,7 @@ Providers are execution primitives used by resolvers and actions. Each provider 
 | [hcl](#hcl) | ✅ | ✅ | ❌ | ❌ |
 | [http](#http) | ✅ | ✅ | ❌ | ✅ |
 | [identity](#identity) | ✅ | ❌ | ❌ | ❌ |
-| [message](#message) | ✅ | ❌ | ❌ | ✅ |
+| [message](#message) | ❌ | ✅ | ❌ | ✅ |
 | [metadata](#metadata) | ✅ | ❌ | ❌ | ❌ |
 | [parameter](#parameter) | ✅ | ❌ | ❌ | ❌ |
 | [secret](#secret) | ✅ | ❌ | ❌ | ❌ |
@@ -1471,11 +1471,11 @@ resolvers:
 
 ## message
 
-Outputs styled terminal messages with built-in types, custom formatting via lipgloss, destination control, and configurable quiet-mode behavior. For dynamic interpolation, use the framework's `tmpl:` or `expr:` ValueRef on the `message` input — the provider does not handle templating internally.
+Outputs styled terminal messages with built-in types, custom formatting via lipgloss, destination control, and respects `--quiet` and `--no-color` flags. For dynamic interpolation, use the framework's `tmpl:` or `expr:` ValueRef on the `message` input — the provider does not handle templating internally.
 
 ### Capabilities
 
-`from`, `action`
+`action`
 
 ### Inputs
 
@@ -1486,7 +1486,6 @@ Outputs styled terminal messages with built-in types, custom formatting via lipg
 | `label` | string | ❌ | Contextual prefix rendered as dimmed `[label]` between icon and message (e.g., `step 2/5`) |
 | `style` | object | ❌ | Custom formatting that merges on top of type defaults: `color` (hex or named), `bold`, `italic`, `icon` |
 | `destination` | string | ❌ | Output target: `stdout` (default) or `stderr` |
-| `quiet` | string | ❌ | Quiet behavior: `respect` (default), `force`, `silent` |
 | `newline` | bool | ❌ | Append trailing newline (default: `true`) |
 
 ### Output
@@ -1567,21 +1566,6 @@ resolvers:
             message:
               expr: "'Processed ' + string(size(_.items)) + ' items'"
             type: success
-```
-
-**Force display in quiet mode:**
-
-```yaml
-resolvers:
-  critical:
-    resolve:
-      with:
-        - provider: message
-          inputs:
-            message: "CRITICAL: Migration required"
-            type: error
-            quiet: force
-            destination: stderr
 ```
 
 ---

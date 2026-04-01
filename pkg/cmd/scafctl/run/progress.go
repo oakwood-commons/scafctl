@@ -66,7 +66,10 @@ func (p *ProgressReporter) StartPhase(phaseNum int, resolverNames []string) {
 		resolverName := name // Capture for closure
 		elapsedOnComplete := decor.Any(func(s decor.Statistics) string {
 			if s.Completed {
-				if elapsed, ok := p.barElapsed[resolverName]; ok {
+				p.mu.Lock()
+				elapsed, ok := p.barElapsed[resolverName]
+				p.mu.Unlock()
+				if ok {
 					return format.Duration(elapsed)
 				}
 			}
@@ -80,14 +83,20 @@ func (p *ProgressReporter) StartPhase(phaseNum int, resolverNames []string) {
 				return "✓ "
 			}
 			if s.Aborted {
-				if p.barFailed[resolverStatus] {
+				p.mu.Lock()
+				failed := p.barFailed[resolverStatus]
+				p.mu.Unlock()
+				if failed {
 					return "✗ "
 				}
 				return "⊘ "
 			}
 			// In-progress spinner frames
+			p.mu.Lock()
+			start := p.barStarts[resolverStatus]
+			p.mu.Unlock()
 			frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-			return frames[int(time.Since(p.barStarts[resolverStatus]).Milliseconds()/80)%len(frames)] + " "
+			return frames[int(time.Since(start).Milliseconds()/80)%len(frames)] + " "
 		}, decor.WCSyncSpace)
 
 		bar := p.progress.AddBar(1,

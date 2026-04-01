@@ -229,7 +229,7 @@ Varies by operation — parse returns structured data, format/validate return st
 
 | Capability | Fields | Type | Description |
 |-----------|--------|------|-------------|
-| from / action | `success` | bool | Always `true` on success |
+| action | `success` | bool | Always `true` on success |
 | | `message` | string | Rendered message text |
 
 ---

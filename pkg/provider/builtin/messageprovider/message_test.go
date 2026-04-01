@@ -38,7 +38,7 @@ func TestNewMessageProvider(t *testing.T) {
 	assert.Equal(t, "Message Provider", p.Descriptor().DisplayName)
 	assert.Equal(t, "v1", p.Descriptor().APIVersion)
 	assert.Contains(t, p.Descriptor().Capabilities, provider.CapabilityAction)
-	assert.Contains(t, p.Descriptor().Capabilities, provider.CapabilityFrom)
+	assert.NotContains(t, p.Descriptor().Capabilities, provider.CapabilityFrom)
 	assert.Equal(t, "utility", p.Descriptor().Category)
 	assert.NotEmpty(t, p.Descriptor().Examples)
 }
@@ -458,14 +458,13 @@ func TestMessageProvider_Execute_NewlineFalse_CustomStyle(t *testing.T) {
 	assert.NotContains(t, stdout.String(), "\n")
 }
 
-func TestMessageProvider_Execute_QuietRespect(t *testing.T) {
+func TestMessageProvider_Execute_QuietSuppressed(t *testing.T) {
 	p := NewMessageProvider()
 	ctx, stdout, _ := testCtx(t, &settings.Run{IsQuiet: true, NoColor: true})
 
 	out, err := p.Execute(ctx, map[string]any{
 		"message": "should be suppressed",
 		"type":    "plain",
-		"quiet":   "respect",
 	})
 	require.NoError(t, err)
 	assert.Empty(t, stdout.String())
@@ -475,37 +474,7 @@ func TestMessageProvider_Execute_QuietRespect(t *testing.T) {
 	assert.Equal(t, "should be suppressed", data["message"])
 }
 
-func TestMessageProvider_Execute_QuietForce(t *testing.T) {
-	p := NewMessageProvider()
-	ctx, stdout, _ := testCtx(t, &settings.Run{IsQuiet: true, NoColor: true})
-
-	out, err := p.Execute(ctx, map[string]any{
-		"message": "always shown",
-		"type":    "plain",
-		"quiet":   "force",
-	})
-	require.NoError(t, err)
-	assert.Equal(t, "always shown\n", stdout.String())
-	assert.True(t, out.Streamed)
-}
-
-func TestMessageProvider_Execute_QuietSilent(t *testing.T) {
-	p := NewMessageProvider()
-	ctx, stdout, _ := testCtx(t, &settings.Run{IsQuiet: false, NoColor: true})
-
-	out, err := p.Execute(ctx, map[string]any{
-		"message": "data only",
-		"type":    "plain",
-		"quiet":   "silent",
-	})
-	require.NoError(t, err)
-	assert.Empty(t, stdout.String())
-	assert.False(t, out.Streamed)
-	data := out.Data.(map[string]any)
-	assert.Equal(t, "data only", data["message"])
-}
-
-func TestMessageProvider_Execute_QuietDefault_NotQuiet(t *testing.T) {
+func TestMessageProvider_Execute_NotQuiet(t *testing.T) {
 	p := NewMessageProvider()
 	ctx, stdout, _ := testCtx(t, &settings.Run{IsQuiet: false, NoColor: true})
 
@@ -548,6 +517,54 @@ func TestMessageProvider_Execute_DryRun_NoMessage(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "'message' must be provided")
+}
+
+func TestMessageProvider_Execute_DryRun_WithLabel(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, stdout, _ := testCtx(t, nil)
+	ctx = provider.WithDryRun(ctx, true)
+
+	out, err := p.Execute(ctx, map[string]any{
+		"message": "deploy now",
+		"type":    "info",
+		"label":   "step 1",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, stdout.String())
+
+	data := out.Data.(map[string]any)
+	assert.Contains(t, data["message"].(string), "[dry-run]")
+	assert.Contains(t, data["message"].(string), "[step 1]")
+}
+
+func TestMessageProvider_Execute_NilWriter(t *testing.T) {
+	p := NewMessageProvider()
+	// Create IOStreams with nil Out to trigger the nil writer error path.
+	ctx := logger.WithLogger(context.Background(), logger.Get(0))
+	ctx = settings.IntoContext(ctx, &settings.Run{NoColor: true})
+	ctx = provider.WithIOStreams(ctx, &provider.IOStreams{Out: nil, ErrOut: nil})
+
+	_, err := p.Execute(ctx, map[string]any{
+		"message": "should fail",
+		"type":    "plain",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no writer available")
+}
+
+func TestMessageProvider_Execute_NilStderrWriter(t *testing.T) {
+	p := NewMessageProvider()
+	ctx := logger.WithLogger(context.Background(), logger.Get(0))
+	ctx = settings.IntoContext(ctx, &settings.Run{NoColor: true})
+	ctx = provider.WithIOStreams(ctx, &provider.IOStreams{Out: &bytes.Buffer{}, ErrOut: nil})
+
+	_, err := p.Execute(ctx, map[string]any{
+		"message":     "should fail",
+		"type":        "plain",
+		"destination": "stderr",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no writer available")
 }
 
 func TestMessageProvider_Execute_NoIOStreams(t *testing.T) {
@@ -640,28 +657,6 @@ func TestMessageProvider_WhatIf(t *testing.T) {
 			if tt.contains != "" {
 				assert.Contains(t, msg, tt.contains)
 			}
-		})
-	}
-}
-
-func TestShouldWrite(t *testing.T) {
-	p := NewMessageProvider()
-	tests := []struct {
-		quiet   string
-		isQuiet bool
-		want    bool
-	}{
-		{quietRespect, false, true},
-		{quietRespect, true, false},
-		{quietForce, false, true},
-		{quietForce, true, true},
-		{quietSilent, false, false},
-		{quietSilent, true, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.quiet+"_quiet="+boolStr(tt.isQuiet), func(t *testing.T) {
-			got := p.shouldWrite(tt.quiet, tt.isQuiet)
-			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -790,11 +785,4 @@ func BenchmarkExecuteWithLabel(b *testing.B) {
 		stdout.Reset()
 		_, _ = p.Execute(ctx, input)
 	}
-}
-
-func boolStr(b bool) string {
-	if b {
-		return "true"
-	}
-	return "false"
 }

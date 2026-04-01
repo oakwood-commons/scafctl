@@ -156,7 +156,7 @@ Complete solutions demonstrating real-world use cases.
 | [tested-solution/](solutions/tested-solution/) | Functional testing features: assertions, inheritance, tags, watch mode |
 | [scaffold-demo/](solutions/scaffold-demo/) | Test scaffolding with `scafctl test init` — generates starter test suites |
 | [github-auth/](solutions/github-auth/) | GitHub authentication — identity, API calls, and status checks |
-| [message-demo/](solutions/message-demo/) | Message provider — styled terminal output with templates and quiet control |
+| [message-demo/](solutions/message-demo/) | Message provider — styled terminal output with templates |
 
 ---
 
@@ -254,25 +254,6 @@ scafctl run resolver -f examples/resolvers/parameters.yaml \
   -r name=Bob \
   -r count=5 \
   -r uppercase=true
-```
-
-### Load Parameters from a File
-```bash
-# Load all parameters from a YAML or JSON file
-scafctl run resolver -f examples/resolvers/parameters.yaml -r @params.yaml
-```
-
-### Pipe Parameters from Stdin
-```bash
-# Pipe YAML or JSON parameters via stdin using @-
-echo '{"name": "Bob", "count": 5}' | scafctl run resolver -f examples/resolvers/parameters.yaml -r @-
-
-# Pipe raw stdin into a single parameter key using key=@-
-echo hello | scafctl run provider message message=@-
-echo hello | scafctl run resolver -f examples/resolvers/parameters.yaml -r name=@-
-
-# Read a file's content into a parameter key using key=@file
-scafctl run resolver -f examples/resolvers/parameters.yaml -r name=@name.txt
 ```
 
 ### Interactive Mode

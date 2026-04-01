@@ -211,7 +211,7 @@ tasks:
         SKIPPED=0
 
         # Directories/files that are intentionally invalid and should be skipped
-        EXCLUDE="bad-solution-yaml/|edge-cases/invalid-|edge-cases/null-resolver/|lint-schema/unknown-field/|lint-schema/unknown-nested-field/|lint-schema/unknown-field.yaml"
+        EXCLUDE="bad-solution-yaml/|edge-cases/invalid-|edge-cases/null-resolver/|lint-schema/unknown-field/|lint-schema/unknown-nested-field/|lint-schema/unknown-field.yaml|lint-tmpl-underscore/"
 
         {
           find examples/solutions -name '*.yaml'
@@ -369,6 +369,36 @@ tasks:
     cmds:
       - |
         go test ./...
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+
+  bench:
+    desc: "Run all benchmark tests"
+    aliases: [b]
+    vars:
+      BENCH_PATTERN: '{{ .BENCH_PATTERN | default "." }}'
+      BENCH_TIME: '{{ .BENCH_TIME | default "1s" }}'
+      BENCH_COUNT: '{{ .BENCH_COUNT | default "1" }}'
+      BENCH_PKG: '{{ .BENCH_PKG | default "./..." }}'
+    cmds:
+      - |
+        go test -run='^$' -bench='{{.BENCH_PATTERN}}' -benchmem -benchtime={{.BENCH_TIME}} -count={{.BENCH_COUNT}} {{.BENCH_PKG}}
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+
+  bench:ci:
+    desc: "Run benchmarks for CI comparison (higher count for statistical significance)"
+    vars:
+      BENCH_TIME: '{{ .BENCH_TIME | default "1s" }}'
+      BENCH_COUNT: '{{ .BENCH_COUNT | default "5" }}'
+      BENCH_PKG: '{{ .BENCH_PKG | default "./..." }}'
+    cmds:
+      - |
+        go test -run='^$' -bench='.' -benchmem -benchtime={{.BENCH_TIME}} -count={{.BENCH_COUNT}} -short -timeout=20m {{.BENCH_PKG}}
     sources:
       - "**/*.go"
       - go.mod

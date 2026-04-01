@@ -81,18 +81,9 @@ spec:
             color: "#87CEEB"
             icon: "\U0001F4E6"
 
-      critical-notice:
-        description: Critical notice always shown even with --quiet
-        dependsOn: [show-config]
-        provider: message
-        inputs:
-          message: "Ensure database migrations are applied before this deployment"
-          type: warning
-          quiet: force
-
       deploy-complete:
         description: Show deployment completion
-        dependsOn: [critical-notice]
+        dependsOn: [show-config]
         provider: message
         inputs:
           message:

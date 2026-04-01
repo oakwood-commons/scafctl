@@ -1345,7 +1345,7 @@ Resolver parameters support multiple input forms.
 
 Single parameter from stdin:
 ~~~bash
-cat config.json | scafctl run solution example -r config=-
+cat config.json | scafctl run solution example -r config=@-
 ~~~
 
 All parameters from stdin using `@-` (YAML or JSON):

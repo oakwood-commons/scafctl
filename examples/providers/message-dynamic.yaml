@@ -45,25 +45,3 @@ spec:
               message:
                 expr: "'Application ' + _.config.appName + ' (v' + _.config.version + ') is ready for deployment'"
               type: success
-
-    quiet-modes:
-      description: Demonstrates quiet mode behavior
-      resolve:
-        with:
-          # This message is suppressed with --quiet
-          - provider: message
-            inputs:
-              message: "This message respects --quiet (suppressed in quiet mode)"
-              type: info
-              quiet: respect
-          # This message is always shown, even with --quiet
-          - provider: message
-            inputs:
-              message: "This critical notice is always shown"
-              type: warning
-              quiet: force
-          # This message is never shown, only available in output data
-          - provider: message
-            inputs:
-              message: "This silent message is only in output data"
-              quiet: silent

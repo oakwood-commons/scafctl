@@ -163,7 +163,7 @@ RESOLVER PARAMETERS:
        -r @-             Read parameters from stdin (YAML or JSON)
 
   Both forms can be mixed. When the same key appears multiple
-  times, later values override earlier ones (last-wins).
+  times, values are merged into an array rather than replaced.
 
   Note: @- cannot be combined with -f - (both read from stdin).
 
