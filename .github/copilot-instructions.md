@@ -60,6 +60,7 @@ See `pkg/httpc/README.md`
 ## Conventions
 
 - **Commits**: Use [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/#specification)
+- **Signing**: All commits must be GPG/SSH signed (`-S`) and include DCO sign-off (`-s`)
 - **Errors**: Return errors with `fmt.Errorf("context: %w", err)`, don't panic
 - **Testing**: Use `testify/assert`, mocks in `mock.go` files
 - **Breaking changes**: Allowed—this app is not in production. Note when doing so.
@@ -107,6 +108,7 @@ golangci-lint run --fix          # Run Linter and auto-fix issues
 **IMPORTANT**: Add benchmark tests for any new features or providers in `*_test.go` files using Go's `testing` package.
 **IMPORTANT**: After any change, run `task test:e2e` to ensure everything passes.
 **IMPORTANT**: Never use magic strings or numbers; always define constants or use settings for configuration values.
+**IMPORTANT**: Never run `git commit`, `git push`, or `git commit --amend` unless the user explicitly asks. Only generate commit messages — let the user execute the commit.
 **IMPORTANT**: Never commit or push any code without approval first
 
 ---
@@ -216,3 +218,4 @@ go test -cover ./...
 ## Reference
 
 See skill: `golang-patterns` for comprehensive Go idioms and patterns.
+See skill: `golang-testing` for testing patterns, benchmarks, fuzzing, and coverage.
