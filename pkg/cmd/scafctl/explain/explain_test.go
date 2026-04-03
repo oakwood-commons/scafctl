@@ -33,7 +33,7 @@ func TestCommandExplain(t *testing.T) {
 		// Has solution subcommand for explaining specific solution instances
 		subCmds := cmd.Commands()
 		assert.Len(t, subCmds, 1)
-		assert.Equal(t, "solution [path]", subCmds[0].Use)
+		assert.Equal(t, "solution [name[@version]]", subCmds[0].Use)
 	})
 
 	t.Run("explain command requires kind argument", func(t *testing.T) {

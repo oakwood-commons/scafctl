@@ -43,7 +43,7 @@ func TestCommandSolution(t *testing.T) {
 
 		cmd := CommandSolution(cliParams, ioStreams, "scafctl/explain")
 
-		assert.Equal(t, "solution [path]", cmd.Use)
+		assert.Equal(t, "solution [name[@version]]", cmd.Use)
 		assert.Contains(t, cmd.Aliases, "solutions")
 		assert.Contains(t, cmd.Aliases, "sol")
 		assert.Contains(t, cmd.Aliases, "s")
@@ -51,7 +51,7 @@ func TestCommandSolution(t *testing.T) {
 		assert.NotEmpty(t, cmd.Long)
 	})
 
-	t.Run("has path flag", func(t *testing.T) {
+	t.Run("has file flag", func(t *testing.T) {
 		outBuf := &bytes.Buffer{}
 		errBuf := &bytes.Buffer{}
 		ioStreams := &terminal.IOStreams{
@@ -62,9 +62,9 @@ func TestCommandSolution(t *testing.T) {
 
 		cmd := CommandSolution(cliParams, ioStreams, "scafctl/explain")
 
-		flag := cmd.Flags().Lookup("path")
+		flag := cmd.Flags().Lookup("file")
 		require.NotNil(t, flag)
-		assert.Equal(t, "p", flag.Shorthand)
+		assert.Equal(t, "f", flag.Shorthand)
 	})
 }
 
@@ -298,7 +298,7 @@ func TestSolutionOptions_Run_WithMock(t *testing.T) {
 		options := &SolutionOptions{
 			IOStreams: ioStreams,
 			CliParams: &settings.Run{NoColor: true},
-			Path:      "/path/to/solution.yaml",
+			File:      "/path/to/solution.yaml",
 		}
 
 		// Note: We can't easily inject the getter into Run() without refactoring,

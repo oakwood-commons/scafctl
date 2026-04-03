@@ -16,6 +16,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
+	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
@@ -40,7 +41,7 @@ func CommandUpdate(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 	}
 
 	cmd := &cobra.Command{
-		Use:          "update [solution-path]",
+		Use:          "update",
 		Short:        "Update vendored dependencies",
 		SilenceUsage: true,
 		Long: heredoc.Doc(`
@@ -55,11 +56,11 @@ func CommandUpdate(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 			Use --lock-only to update the lock file without re-vendoring files.
 
 			Examples:
-			  # Update all vendored dependencies
+			  # Update all vendored dependencies (auto-discover solution)
 			  scafctl vendor update
 
 			  # Update from a specific solution file
-			  scafctl vendor update ./my-solution.yaml
+			  scafctl vendor update -f ./my-solution.yaml
 
 			  # Preview updates without making changes
 			  scafctl vendor update --dry-run
@@ -70,17 +71,20 @@ func CommandUpdate(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 			  # Update lock file only (don't re-vendor files)
 			  scafctl vendor update --lock-only
 		`),
-		Args: cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) > 0 {
-				opts.SolutionPath = args[0]
-			} else {
-				opts.SolutionPath = "./solution.yaml"
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if opts.SolutionPath == "" {
+				getter := get.NewGetter()
+				opts.SolutionPath = getter.FindSolution()
+				if opts.SolutionPath == "" {
+					opts.SolutionPath = "./solution.yaml"
+				}
 			}
 			return runVendorUpdate(cmd.Context(), opts)
 		},
 	}
 
+	cmd.Flags().StringVarP(&opts.SolutionPath, "file", "f", "", "Path to the solution file (auto-discovered if not provided)")
 	cmd.Flags().StringSliceVar(&opts.Dependencies, "dependency", nil, "Update only this dependency (repeatable)")
 	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "Show what would be updated without making changes")
 	cmd.Flags().BoolVar(&opts.LockOnly, "lock-only", false, "Update lock file without re-vendoring files")
@@ -90,6 +94,20 @@ func CommandUpdate(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 }
 
 func runVendorUpdate(ctx context.Context, opts *UpdateOptions) error {
+	lgr := logger.FromContext(ctx)
+
+	localCatalog, err := catalog.NewLocalCatalog(*lgr)
+	if err != nil {
+		w := writer.FromContext(ctx)
+		w.Errorf("failed to open catalog: %v", err)
+		return exitcode.WithCode(err, exitcode.CatalogError)
+	}
+
+	fetcher := &bundler.LocalCatalogFetcherAdapter{Catalog: localCatalog}
+	return runVendorUpdateWithFetcher(ctx, opts, fetcher)
+}
+
+func runVendorUpdateWithFetcher(ctx context.Context, opts *UpdateOptions, fetcher bundler.CatalogFetcher) error {
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
 
@@ -128,15 +146,6 @@ func runVendorUpdate(ctx context.Context, opts *UpdateOptions) error {
 	lgr.V(1).Info("loaded lock file", "path", lockPath,
 		"deps", len(existingLock.Dependencies),
 		"plugins", len(existingLock.Plugins))
-
-	// Create catalog fetcher
-	localCatalog, err := catalog.NewLocalCatalog(*lgr)
-	if err != nil {
-		w.Errorf("failed to open catalog: %v", err)
-		return exitcode.WithCode(err, exitcode.CatalogError)
-	}
-
-	fetcher := &bundler.LocalCatalogFetcherAdapter{Catalog: localCatalog}
 
 	// Filter dependencies if --dependency was specified
 	deps := existingLock.Dependencies

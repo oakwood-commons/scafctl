@@ -24,6 +24,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
+	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
@@ -59,6 +60,10 @@ type SolutionOptions struct {
 
 	// Backup enables .bak backup creation before mutating existing files.
 	Backup bool
+
+	// positionalPathErr is set in PreRun when the user passes a local file
+	// path as a positional argument instead of using -f/--file.
+	positionalPathErr error
 }
 
 // CommandSolution creates the 'run solution' subcommand
@@ -86,10 +91,14 @@ func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 		Long: `Execute a solution by running resolvers and then actions in dependency order.
 
 Solutions can be loaded from:
-- Local catalog: Use the solution name (e.g., "my-app" or "my-app@1.2.3")
-- Local file: Use -f flag or provide a path with separators (e.g., "./solution.yaml")
-- URL: Use -f flag with an HTTP(S) URL
+- Local catalog: Use the solution name as a positional argument (e.g., "my-app" or "my-app@1.2.3")
+- Local file: Use -f/--file flag (e.g., -f ./solution.yaml)
+- Stdin: Use -f - to read from stdin
+- URL: Use an HTTP(S) URL either as a positional argument or with -f/--file
 - Auto-discovery: If no source is specified, searches for solution.yaml in current directory
+
+NOTE: Positional arguments accept catalog names, remote registry refs, and URLs.
+Local file paths must use -f/--file.
 
 The solution MUST define a workflow with actions. If no workflow is defined,
 the command will error and suggest using 'scafctl run resolver' instead.
@@ -178,10 +187,15 @@ Examples:
 			cCmd.Flags().Visit(func(f *pflag.Flag) {
 				options.flagsChanged[f.Name] = true
 			})
-			// If a positional argument is provided (solution name), use it as the file
-			// unless -f/--file was explicitly set
-			if len(args) > 0 && options.File == "" {
-				options.File = args[0]
+			// If a positional argument is provided, it must be a catalog/registry
+			// reference. Local file paths require -f/--file. Providing both
+			// -f/--file and a positional arg is also an error.
+			if len(args) > 0 {
+				if err := get.ValidatePositionalRef(args[0], options.File, "scafctl run solution"); err != nil {
+					options.positionalPathErr = err
+				} else {
+					options.File = args[0]
+				}
 			}
 		},
 		RunE:         makeRunEFunc(cfg, "solution"),
@@ -250,6 +264,11 @@ func (o *SolutionOptions) getEffectiveActionConfig(ctx context.Context) config.A
 
 // Run executes the solution
 func (o *SolutionOptions) Run(ctx context.Context) error {
+	// Fail early if PreRun detected a local file path as positional arg
+	if o.positionalPathErr != nil {
+		return o.exitWithCode(ctx, o.positionalPathErr, exitcode.InvalidInput)
+	}
+
 	lgr := logger.FromContext(ctx)
 
 	// Apply config default for output-dir when the CLI flag wasn't explicitly set

@@ -3,6 +3,13 @@ description: "Fetch PR review comments for the current branch, triage them, fix 
 name: "pr-reviewer"
 tools: [read, edit, search, execute, todo]
 argument-hint: "Optional: PR number or 'resolve' to auto-resolve addressed comments"
+handoffs:
+  - label: "Fix build errors"
+    prompt: "Fix any build or lint errors introduced while addressing PR comments."
+    agent: "go-build-resolver"
+  - label: "Generate commit message"
+    prompt: "Generate a commit message for the PR review fixes."
+    agent: "commit-message"
 ---
 You are a PR review comment handler for the **scafctl** project. You fetch review comments from the PR matching the current branch, triage them, implement fixes, and respond/resolve threads.
 
