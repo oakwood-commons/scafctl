@@ -29,6 +29,7 @@ type Server struct {
 	authReg   *auth.Registry
 	config    *config.Config
 	version   string
+	name      string
 
 	// sseServer is the SSE transport server (nil for stdio).
 	sseServer *server.SSEServer
@@ -45,6 +46,7 @@ type serverConfig struct {
 	authReg         *auth.Registry
 	config          *config.Config
 	version         string
+	name            string
 	ctx             context.Context
 	paginationLimit int
 	workerPoolSize  int
@@ -84,6 +86,14 @@ func WithServerConfig(cfg *config.Config) ServerOption {
 func WithServerVersion(version string) ServerOption {
 	return func(c *serverConfig) {
 		c.version = version
+	}
+}
+
+// WithServerName sets the server name (defaults to "scafctl").
+// Used for MCP ServerInfo identity when scafctl is embedded in another CLI.
+func WithServerName(name string) ServerOption {
+	return func(c *serverConfig) {
+		c.name = name
 	}
 }
 
@@ -315,6 +325,7 @@ Tool Latency Guide (helps optimize tool selection):
 func NewServer(opts ...ServerOption) (*Server, error) {
 	cfg := &serverConfig{
 		version: "dev",
+		name:    "scafctl",
 	}
 	for _, opt := range opts {
 		opt(cfg)
@@ -341,6 +352,7 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 	s := &Server{
 		ctx:      mcpCtx,
 		version:  cfg.version,
+		name:     cfg.name,
 		registry: cfg.registry,
 		authReg:  cfg.authReg,
 		config:   cfg.config,
@@ -384,7 +396,7 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 
 	// Create the mcp-go server
 	s.mcpServer = server.NewMCPServer(
-		"scafctl",
+		cfg.name,
 		cfg.version,
 		serverOpts...,
 	)
@@ -516,7 +528,7 @@ func (s *Server) Info() ([]byte, error) {
 	}
 
 	info := serverInfo{
-		Name:    "scafctl",
+		Name:    s.name,
 		Version: s.version,
 	}
 

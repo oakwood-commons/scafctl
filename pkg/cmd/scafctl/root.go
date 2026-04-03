@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/MakeNowJust/heredoc/v2"
@@ -117,6 +118,23 @@ type RootOptions struct {
 
 	// ConfigPath overrides the --config flag default.
 	ConfigPath string
+
+	// BinaryName overrides the default "scafctl" identity everywhere:
+	// command Use field, help text, env var prefix, solution file discovery,
+	// cache paths, MCP server name, HTTP User-Agent, and telemetry service name.
+	// When empty, defaults to settings.CliBinaryName ("scafctl").
+	BinaryName string
+
+	// PreRunHook is called within PersistentPreRun after scafctl's standard
+	// setup (config, logger, auth, telemetry) is complete but before the
+	// command's own RunE executes. The context on cmd is fully initialized.
+	// When nil, no additional hook runs.
+	PreRunHook func(cmd *cobra.Command, args []string) error
+
+	// VersionExtra is additional version info displayed alongside scafctl's
+	// own version. When non-nil, the version command shows both the
+	// embedder's and scafctl's versions.
+	VersionExtra *settings.VersionInfo
 }
 
 // NewRootOptions returns a RootOptions with production defaults
@@ -150,6 +168,14 @@ func Root(opts *RootOptions) *cobra.Command {
 		telShutdown  func(context.Context) error
 	)
 
+	// Resolve binary name: use caller-provided or default to settings.CliBinaryName ("scafctl").
+	binaryName := settings.CliBinaryName
+	if opts.BinaryName != "" {
+		binaryName = opts.BinaryName
+	}
+	envPrefix := strings.ToUpper(binaryName)
+	cliParams.BinaryName = binaryName
+
 	// Resolve IOStreams: use caller-provided or default to OS streams.
 	ioStreams := opts.IOStreams
 	if ioStreams == nil {
@@ -163,7 +189,7 @@ func Root(opts *RootOptions) *cobra.Command {
 	}
 
 	cCmd := &cobra.Command{
-		Use:   "scafctl",
+		Use:   binaryName,
 		Short: "A configuration discovery and scaffolding tool",
 		Long: heredoc.Doc(`
 			A configuration discovery and scaffolding tool
@@ -193,9 +219,9 @@ func Root(opts *RootOptions) *cobra.Command {
 			resolvedLogLevel := cliParams.MinLogLevel // flag value or default
 			if !cCmd.Flags().Changed("log-level") {
 				// Flag not explicitly set — check env vars, then config
-				if envLevel := os.Getenv("SCAFCTL_LOG_LEVEL"); envLevel != "" {
+				if envLevel := os.Getenv(envPrefix + "_LOG_LEVEL"); envLevel != "" {
 					resolvedLogLevel = envLevel
-				} else if envDebug := os.Getenv("SCAFCTL_DEBUG"); envDebug != "" && envDebug != "0" && envDebug != "false" {
+				} else if envDebug := os.Getenv(envPrefix + "_DEBUG"); envDebug != "" && envDebug != "0" && envDebug != "false" {
 					resolvedLogLevel = logger.LevelDebug
 				} else if cfg.Logging.Level != "" {
 					resolvedLogLevel = cfg.Logging.Level
@@ -210,7 +236,7 @@ func Root(opts *RootOptions) *cobra.Command {
 			// Resolve log format with precedence: flag > env > config > default ("console")
 			resolvedFormat := logFormat // flag value or default
 			if !cCmd.Flags().Changed("log-format") {
-				if envFormat := os.Getenv("SCAFCTL_LOG_FORMAT"); envFormat != "" {
+				if envFormat := os.Getenv(envPrefix + "_LOG_FORMAT"); envFormat != "" {
 					resolvedFormat = envFormat
 				} else if cfg.Logging.Format != "" {
 					resolvedFormat = cfg.Logging.Format
@@ -220,7 +246,7 @@ func Root(opts *RootOptions) *cobra.Command {
 			// Resolve log file with precedence: flag > env > default (empty = stderr)
 			resolvedLogFile := logFile
 			if !cCmd.Flags().Changed("log-file") {
-				if envPath := os.Getenv("SCAFCTL_LOG_PATH"); envPath != "" {
+				if envPath := os.Getenv(envPrefix + "_LOG_PATH"); envPath != "" {
 					resolvedLogFile = envPath
 				}
 			}
@@ -240,7 +266,7 @@ func Root(opts *RootOptions) *cobra.Command {
 				resolvedOtelInsecure = otelInsecure
 			}
 			// Service name: CLI has no override flag; config file > default (binary name)
-			serviceName := settings.CliBinaryName
+			serviceName := binaryName
 			if cfg.Telemetry.ServiceName != "" {
 				serviceName = cfg.Telemetry.ServiceName
 			}
@@ -419,7 +445,7 @@ func Root(opts *RootOptions) *cobra.Command {
 			cCmd.SetContext(ctx)
 
 			// Only validate args for the root command itself, not subcommands
-			if cCmd.Use == "scafctl" {
+			if cCmd.Use == binaryName {
 				err := output.ValidateCommands(args)
 				if err != nil {
 					w.ErrorWithExit(err.Error())
@@ -432,6 +458,14 @@ func Root(opts *RootOptions) *cobra.Command {
 				_ = cCmd.PersistentFlags().MarkHidden("pprof")                   // First try to set hidden to ensure it exists
 				cCmd.PersistentFlags().Lookup("pprof").Hidden = false            //nolint:staticcheck // intentional
 				cCmd.PersistentFlags().Lookup("pprof-output-dir").Hidden = false //nolint:staticcheck // intentional
+			}
+
+			// Call embedder's pre-run hook after all standard setup is complete.
+			if opts.PreRunHook != nil {
+				if hookErr := opts.PreRunHook(cCmd, args); hookErr != nil {
+					w.ErrorWithExit(hookErr.Error())
+					return
+				}
 			}
 
 			if cCmd.Flags().Changed("pprof") {
@@ -498,42 +532,42 @@ func Root(opts *RootOptions) *cobra.Command {
 		return nil
 	}
 	// Core Commands — primary workflows
-	cCmd.AddCommand(withGroup(groupCore, run.CommandRun(cliParams, ioStreams, settings.CliBinaryName)))
-	cCmd.AddCommand(withGroup(groupCore, render.CommandRender(cliParams, ioStreams, settings.CliBinaryName)))
-	cCmd.AddCommand(withGroup(groupCore, lint.CommandLint(cliParams, ioStreams, settings.CliBinaryName)))
-	cCmd.AddCommand(withGroup(groupCore, testcmd.CommandTest(cliParams, ioStreams, settings.CliBinaryName)))
+	cCmd.AddCommand(withGroup(groupCore, run.CommandRun(cliParams, ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupCore, render.CommandRender(cliParams, ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupCore, lint.CommandLint(cliParams, ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupCore, testcmd.CommandTest(cliParams, ioStreams, binaryName)))
 
 	// Inspection Commands — explore and understand solutions
-	cCmd.AddCommand(withGroup(groupInspect, get.CommandGet(cliParams, ioStreams, settings.CliBinaryName)))
-	cCmd.AddCommand(withGroup(groupInspect, explain.CommandExplain(cliParams, ioStreams, settings.CliBinaryName)))
-	cCmd.AddCommand(withGroup(groupInspect, eval.CommandEval(cliParams, ioStreams, settings.CliBinaryName)))
-	cCmd.AddCommand(withGroup(groupInspect, solutioncmd.CommandSolution(cliParams, *ioStreams, settings.CliBinaryName)))
-	cCmd.AddCommand(withGroup(groupInspect, snapshot.CommandSnapshot(cliParams, *ioStreams, settings.CliBinaryName)))
+	cCmd.AddCommand(withGroup(groupInspect, get.CommandGet(cliParams, ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupInspect, explain.CommandExplain(cliParams, ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupInspect, eval.CommandEval(cliParams, ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupInspect, solutioncmd.CommandSolution(cliParams, *ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupInspect, snapshot.CommandSnapshot(cliParams, *ioStreams, binaryName)))
 
 	// Scaffolding Commands — create and package artifacts
-	cCmd.AddCommand(withGroup(groupScaffold, newcmd.CommandNew(cliParams, ioStreams, settings.CliBinaryName)))
-	cCmd.AddCommand(withGroup(groupScaffold, build.CommandBuild(cliParams, ioStreams, settings.CliBinaryName)))
-	cCmd.AddCommand(withGroup(groupScaffold, bundlecmd.CommandBundle(cliParams, ioStreams, settings.CliBinaryName)))
-	cCmd.AddCommand(withGroup(groupScaffold, vendorcmd.CommandVendor(cliParams, ioStreams, settings.CliBinaryName)))
-	cCmd.AddCommand(withGroup(groupScaffold, catalogcmd.CommandCatalog(cliParams, ioStreams, settings.CliBinaryName)))
+	cCmd.AddCommand(withGroup(groupScaffold, newcmd.CommandNew(cliParams, ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupScaffold, build.CommandBuild(cliParams, ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupScaffold, bundlecmd.CommandBundle(cliParams, ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupScaffold, vendorcmd.CommandVendor(cliParams, ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupScaffold, catalogcmd.CommandCatalog(cliParams, ioStreams, binaryName)))
 
 	// Configuration & Security Commands
-	cCmd.AddCommand(withGroup(groupConfig, configcmd.CommandConfig(cliParams, ioStreams, settings.CliBinaryName)))
-	cCmd.AddCommand(withGroup(groupConfig, secretscmd.CommandSecrets(cliParams, ioStreams, settings.CliBinaryName)))
-	cCmd.AddCommand(withGroup(groupConfig, authcmd.CommandAuth(cliParams, ioStreams, settings.CliBinaryName)))
-	cCmd.AddCommand(withGroup(groupConfig, cachecmd.CommandCache(cliParams, ioStreams, settings.CliBinaryName)))
+	cCmd.AddCommand(withGroup(groupConfig, configcmd.CommandConfig(cliParams, ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupConfig, secretscmd.CommandSecrets(cliParams, ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupConfig, authcmd.CommandAuth(cliParams, ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupConfig, cachecmd.CommandCache(cliParams, ioStreams, binaryName)))
 
 	// Plugin Commands
-	cCmd.AddCommand(withGroup(groupPlugin, pluginscmd.CommandPlugins(cliParams, ioStreams, settings.CliBinaryName)))
-	cCmd.AddCommand(withGroup(groupPlugin, mcpcmd.CommandMCP(cliParams, ioStreams, settings.CliBinaryName)))
+	cCmd.AddCommand(withGroup(groupPlugin, pluginscmd.CommandPlugins(cliParams, ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupPlugin, mcpcmd.CommandMCP(cliParams, ioStreams, binaryName)))
 
 	// Server Commands
-	cCmd.AddCommand(withGroup(groupServer, servecmd.CommandServe(cliParams, ioStreams, settings.CliBinaryName)))
+	cCmd.AddCommand(withGroup(groupServer, servecmd.CommandServe(cliParams, ioStreams, binaryName)))
 
 	// Other Commands (no group — shown under "Additional Commands:")
-	cCmd.AddCommand(version.CommandVersion(cliParams, ioStreams, settings.CliBinaryName))
-	cCmd.AddCommand(examplescmd.CommandExamples(cliParams, ioStreams, settings.CliBinaryName))
-	cCmd.AddCommand(options.CommandOptions(cliParams, ioStreams, settings.CliBinaryName))
+	cCmd.AddCommand(version.CommandVersion(cliParams, ioStreams, binaryName, opts.VersionExtra))
+	cCmd.AddCommand(examplescmd.CommandExamples(cliParams, ioStreams, binaryName))
+	cCmd.AddCommand(options.CommandOptions(cliParams, ioStreams, binaryName))
 	return cCmd
 }
 

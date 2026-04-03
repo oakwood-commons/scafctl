@@ -5,6 +5,8 @@
 package cache
 
 import (
+	"fmt"
+
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -15,7 +17,7 @@ import (
 func CommandCache(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "cache",
-		Short:        "Manage the scafctl cache",
+		Short:        fmt.Sprintf("Manage the %s cache", path),
 		SilenceUsage: true,
 		Long: heredoc.Doc(`
 			Manage the scafctl cache.
