@@ -8,22 +8,29 @@ See our [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Getting Started
 
-### Developer Certificate of Origin (DCO)
+### Developer Certificate of Origin (DCO) & Commit Signing
 
-All contributions must be signed off per the [Developer Certificate of Origin](https://developercertificate.org/).
-This certifies you have the right to submit the contribution under the project's license.
+All commits must be:
+1. **GPG/SSH signed** (`-S`) — verifies commit author identity
+2. **DCO signed-off** (`-s`) — certifies you have the right to submit the contribution under the project's license per the [Developer Certificate of Origin](https://developercertificate.org/)
 
-Sign commits with `-s`:
+Sign commits with both `-s` and `-S`:
 
 ```bash
-git commit -s -m "feat(provider): add new provider"
+git commit -s -S -m "feat(provider): add new provider"
 ```
 
 If you forget, amend the last commit:
 
 ```bash
-git commit --amend -s --no-edit
+git commit --amend -s -S --no-edit
 ```
+
+> **Tip**: To sign all commits automatically, configure Git once:
+> ```bash
+> git config --global commit.gpgSign true
+> git config --global user.signingkey <YOUR_KEY_ID>
+> ```
 
 ### Getting Help and Support Expectations
 
