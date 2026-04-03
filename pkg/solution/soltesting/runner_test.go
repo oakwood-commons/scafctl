@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -668,7 +669,7 @@ func TestSummarize(t *testing.T) {
 
 func TestReportTableEmpty(t *testing.T) {
 	var buf strings.Builder
-	err := reportTable(nil, &buf, false, 0)
+	err := reportTable(nil, &buf, false, 0, false)
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "No tests found")
 }
@@ -680,7 +681,7 @@ func TestReportTableBasic(t *testing.T) {
 	}
 
 	var buf strings.Builder
-	err := reportTable(results, &buf, false, 0)
+	err := reportTable(results, &buf, false, 0, false)
 	require.NoError(t, err)
 
 	output := buf.String()
@@ -709,7 +710,7 @@ func TestReportTableVerbose(t *testing.T) {
 	}
 
 	var buf strings.Builder
-	err := reportTable(results, &buf, true, 0)
+	err := reportTable(results, &buf, true, 0, false)
 	require.NoError(t, err)
 
 	output := buf.String()
@@ -942,4 +943,204 @@ func TestRunnerGlobalTimeout(t *testing.T) {
 	require.Len(t, results, 1)
 	// Test should fail or error due to timeout
 	assert.NotEqual(t, StatusPass, results[0].Status)
+}
+
+// ── reportTable with progressShown tests ─────────────────────────────────────
+
+func TestReportTable_ProgressShown_SkipsTableRows(t *testing.T) {
+	results := []TestResult{
+		{Solution: "sol", Test: "test-a", Status: StatusPass, Duration: 50 * time.Millisecond},
+		{Solution: "sol", Test: "test-b", Status: StatusPass, Duration: 60 * time.Millisecond},
+	}
+
+	var buf strings.Builder
+	err := reportTable(results, &buf, false, 0, true)
+	require.NoError(t, err)
+
+	output := buf.String()
+	// Should NOT contain the table header or per-test rows
+	assert.NotContains(t, output, "SOLUTION")
+	assert.NotContains(t, output, "TEST")
+	assert.NotContains(t, output, "STATUS")
+	assert.NotContains(t, output, "DURATION")
+	assert.NotContains(t, output, "test-a")
+	assert.NotContains(t, output, "test-b")
+	// Should contain the summary line
+	assert.Contains(t, output, "2 passed, 0 failed")
+}
+
+func TestReportTable_ProgressShown_ShowsFailures(t *testing.T) {
+	results := []TestResult{
+		{Solution: "sol", Test: "pass", Status: StatusPass, Duration: 50 * time.Millisecond},
+		{
+			Solution: "sol", Test: "fail", Status: StatusFail, Duration: 60 * time.Millisecond, Message: "exit code mismatch",
+			Assertions: []AssertionResult{
+				{Type: "exitCode", Input: "expected 1 got 0", Passed: false, Message: "exit code assertion failed"},
+			},
+		},
+	}
+
+	var buf strings.Builder
+	err := reportTable(results, &buf, false, 0, true)
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.Contains(t, output, "Failures:")
+	assert.Contains(t, output, "sol/fail: exit code mismatch")
+	assert.Contains(t, output, "[exitCode] expected 1 got 0: exit code assertion failed")
+	assert.Contains(t, output, "1 passed, 1 failed")
+}
+
+func TestReportTable_ProgressShown_ShowsSummary(t *testing.T) {
+	results := []TestResult{
+		{Solution: "sol", Test: "t1", Status: StatusPass, Duration: 10 * time.Millisecond},
+		{Solution: "sol", Test: "t2", Status: StatusSkip},
+	}
+
+	var buf strings.Builder
+	err := reportTable(results, &buf, false, 500*time.Millisecond, true)
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.Contains(t, output, "1 passed, 0 failed, 0 errors, 1 skipped (500ms)")
+}
+
+func TestReportTable_ProgressShown_VerboseAssertionCounts(t *testing.T) {
+	results := []TestResult{
+		{
+			Solution: "sol", Test: "fail-test", Status: StatusFail, Duration: 50 * time.Millisecond,
+			Message: "assertion failed",
+			Assertions: []AssertionResult{
+				{Passed: true},
+				{Passed: false, Type: "expr", Input: "__exitCode == 0", Message: "got 1"},
+				{Passed: true},
+			},
+		},
+	}
+
+	var buf strings.Builder
+	err := reportTable(results, &buf, true, 0, true)
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.Contains(t, output, "Failures:")
+	assert.Contains(t, output, "(2/3)")
+}
+
+func TestReportTable_NoProgress_FullTable(t *testing.T) {
+	results := []TestResult{
+		{Solution: "sol", Test: "test-x", Status: StatusPass, Duration: 100 * time.Millisecond},
+	}
+
+	var buf strings.Builder
+	err := reportTable(results, &buf, false, 0, false)
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.Contains(t, output, "SOLUTION")
+	assert.Contains(t, output, "test-x")
+	assert.Contains(t, output, "PASS")
+	assert.Contains(t, output, "1 passed")
+}
+
+// ── reportFailures tests ─────────────────────────────────────────────────────
+
+func TestReportFailures_NoFailures(t *testing.T) {
+	results := []TestResult{
+		{Solution: "sol", Test: "pass", Status: StatusPass},
+	}
+
+	var buf strings.Builder
+	reportFailures(results, &buf, false)
+	assert.Empty(t, buf.String(), "no output expected when all tests pass")
+}
+
+func TestReportFailures_WithVerboseAssertionCounts(t *testing.T) {
+	results := []TestResult{
+		{
+			Solution: "sol", Test: "fail", Status: StatusFail, Message: "boom",
+			Assertions: []AssertionResult{
+				{Passed: true},
+				{Passed: false, Type: "regex", Input: "expected.*", Message: "no match"},
+			},
+		},
+	}
+
+	var buf strings.Builder
+	reportFailures(results, &buf, true)
+
+	output := buf.String()
+	assert.Contains(t, output, "Failures:")
+	assert.Contains(t, output, "sol/fail: boom (1/2)")
+	assert.Contains(t, output, "[regex] expected.*: no match")
+}
+
+// ── reportSummaryLine tests ──────────────────────────────────────────────────
+
+func TestReportSummaryLine(t *testing.T) {
+	results := []TestResult{
+		{Solution: "s", Test: "a", Status: StatusPass, Duration: 50 * time.Millisecond},
+		{Solution: "s", Test: "b", Status: StatusFail, Duration: 30 * time.Millisecond},
+		{Solution: "s", Test: "c", Status: StatusError, Duration: 10 * time.Millisecond},
+		{Solution: "s", Test: "d", Status: StatusSkip},
+	}
+
+	var buf strings.Builder
+	reportSummaryLine(results, &buf, 200*time.Millisecond)
+
+	output := buf.String()
+	assert.Contains(t, output, "1 passed, 1 failed, 1 errors, 1 skipped (200ms)")
+}
+
+func TestReportSummaryLine_WallDurationOverride(t *testing.T) {
+	results := []TestResult{
+		{Solution: "s", Test: "a", Status: StatusPass, Duration: 50 * time.Millisecond},
+	}
+
+	var buf strings.Builder
+	reportSummaryLine(results, &buf, 1*time.Second)
+
+	output := buf.String()
+	// Wall duration (1s) should override summed duration (50ms)
+	assert.Contains(t, output, "1.00s")
+}
+
+// ── Benchmarks ───────────────────────────────────────────────────────────────
+
+func BenchmarkReportTable_Full(b *testing.B) {
+	results := make([]TestResult, 20)
+	for i := range results {
+		results[i] = TestResult{
+			Solution: "bench-sol",
+			Test:     fmt.Sprintf("test-%d", i),
+			Status:   StatusPass,
+			Duration: time.Duration(i+1) * time.Millisecond,
+		}
+	}
+	var buf strings.Builder
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		buf.Reset()
+		_ = reportTable(results, &buf, false, 500*time.Millisecond, false)
+	}
+}
+
+func BenchmarkReportTable_ProgressShown(b *testing.B) {
+	results := make([]TestResult, 20)
+	for i := range results {
+		results[i] = TestResult{
+			Solution: "bench-sol",
+			Test:     fmt.Sprintf("test-%d", i),
+			Status:   StatusPass,
+			Duration: time.Duration(i+1) * time.Millisecond,
+		}
+	}
+	var buf strings.Builder
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		buf.Reset()
+		_ = reportTable(results, &buf, false, 500*time.Millisecond, true)
+	}
 }

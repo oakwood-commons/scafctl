@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/terminal/format"
@@ -15,13 +16,14 @@ import (
 	"github.com/vbauerster/mpb/v8/decor"
 )
 
+var runSpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
 // ProgressReporter outputs execution progress using mpb.
 // It provides visual feedback during resolver execution by displaying
 // progress bars for each resolver in the current phase.
 type ProgressReporter struct {
 	progress   *mpb.Progress
 	bars       map[string]*mpb.Bar
-	barStarts  map[string]time.Time
 	barPhases  map[string]int
 	barElapsed map[string]time.Duration // Store calculated elapsed time on completion
 	barFailed  map[string]bool          // Track whether an aborted bar was a failure (vs skip)
@@ -38,11 +40,11 @@ func NewProgressReporter(writer io.Writer, total int) *ProgressReporter {
 		mpb.WithOutput(writer),
 		mpb.WithWidth(40),
 		mpb.WithRefreshRate(100*time.Millisecond),
+		mpb.PopCompletedMode(),
 	)
 	return &ProgressReporter{
 		progress:   p,
 		bars:       make(map[string]*mpb.Bar),
-		barStarts:  make(map[string]time.Time),
 		barPhases:  make(map[string]int),
 		barElapsed: make(map[string]time.Duration),
 		barFailed:  make(map[string]bool),
@@ -59,7 +61,6 @@ func (p *ProgressReporter) StartPhase(phaseNum int, resolverNames []string) {
 	defer p.mu.Unlock()
 
 	for _, name := range resolverNames {
-		p.barStarts[name] = time.Now()
 		p.barPhases[name] = phaseNum
 
 		// Create a decorator that shows elapsed time on completion (reads from barElapsed map)
@@ -77,7 +78,9 @@ func (p *ProgressReporter) StartPhase(phaseNum int, resolverNames []string) {
 		})
 
 		// Build a status decorator that distinguishes completion, failure, and skip.
+		// Uses an atomic counter for spinner frame selection instead of wall-clock time.
 		resolverStatus := name // Capture for closure
+		var spinCount atomic.Uint64
 		statusDecorator := decor.Any(func(s decor.Statistics) string {
 			if s.Completed {
 				return "✓ "
@@ -91,12 +94,9 @@ func (p *ProgressReporter) StartPhase(phaseNum int, resolverNames []string) {
 				}
 				return "⊘ "
 			}
-			// In-progress spinner frames
-			p.mu.Lock()
-			start := p.barStarts[resolverStatus]
-			p.mu.Unlock()
-			frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-			return frames[int(time.Since(start).Milliseconds()/80)%len(frames)] + " "
+			// In-progress spinner
+			idx := spinCount.Add(1) - 1
+			return runSpinnerFrames[idx%uint64(len(runSpinnerFrames))] + " "
 		}, decor.WCSyncSpace)
 
 		bar := p.progress.AddBar(1,
@@ -112,14 +112,12 @@ func (p *ProgressReporter) StartPhase(phaseNum int, resolverNames []string) {
 }
 
 // Complete marks a resolver as successfully completed.
-func (p *ProgressReporter) Complete(resolverName string) {
+// elapsed is the pure execution time measured by the caller.
+func (p *ProgressReporter) Complete(resolverName string, elapsed time.Duration) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// Calculate and store elapsed time at the moment of completion
-	if startTime, ok := p.barStarts[resolverName]; ok {
-		p.barElapsed[resolverName] = time.Since(startTime)
-	}
+	p.barElapsed[resolverName] = elapsed
 
 	if bar, ok := p.bars[resolverName]; ok {
 		bar.Increment()
@@ -175,8 +173,8 @@ func (c *ProgressCallback) OnPhaseStart(phaseNum int, resolverNames []string) {
 }
 
 // OnResolverComplete is called when a resolver completes successfully.
-func (c *ProgressCallback) OnResolverComplete(resolverName string) {
-	c.reporter.Complete(resolverName)
+func (c *ProgressCallback) OnResolverComplete(resolverName string, elapsed time.Duration) {
+	c.reporter.Complete(resolverName, elapsed)
 }
 
 // OnResolverFailed is called when a resolver fails.

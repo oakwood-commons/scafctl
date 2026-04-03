@@ -1018,7 +1018,40 @@ terraform-scaffold   temporarily-disabled        render solution                
 
 ## Output
 
-### Table (default)
+### Interactive Progress (default, TTY)
+
+When running on a TTY terminal, tests show animated spinners that resolve to
+final status lines as each test completes. Completed tests scroll upward
+(via mpb's `PopCompletedMode`) while active tests animate at the bottom.
+
+After all tests complete, only failure details and a summary line are printed —
+the per-test table is **not** repeated since the progress lines already showed
+each result. This eliminates the previous duplication where every test appeared
+twice with mismatched durations.
+
+All durations shown in progress lines use `TestResult.Duration` (the pure
+execution time measured inside the runner), ensuring consistency between
+progress output and structured (JSON/YAML) output.
+
+~~~
+ ✓ terraform-scaffold :: builtin:parse               pass   1ms
+ ✓ terraform-scaffold :: builtin:lint                 pass   45ms
+ ✓ terraform-scaffold :: renders-dev-defaults         pass   12ms
+ ✗ terraform-scaffold :: renders-prod-override        fail   15ms
+ ✓ terraform-scaffold :: rejects-invalid-env          pass   8ms
+ ⊘ terraform-scaffold :: temporarily-disabled         skip
+
+Failures:
+  terraform-scaffold/renders-prod-override: exit code mismatch
+    [exitCode] expected 1 got 0: exit code assertion failed
+
+5 passed, 1 failed, 0 errors, 1 skipped (121ms)
+~~~
+
+### Table (non-TTY / `--no-progress`)
+
+When progress output is disabled (piped output, `--no-progress` flag, or
+non-table output format), the full per-test table is shown as the only view:
 
 ~~~
 SOLUTION             TEST                        STATUS   DURATION

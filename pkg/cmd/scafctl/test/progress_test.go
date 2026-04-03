@@ -383,3 +383,117 @@ func BenchmarkFmtDuration(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkMPBTestProgress_Lifecycle(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		var buf bytes.Buffer
+		p := NewMPBTestProgress(&buf)
+		p.OnTestStart("sol", "test-1")
+		p.OnTestComplete(soltesting.TestResult{
+			Solution: "sol",
+			Test:     "test-1",
+			Status:   soltesting.StatusPass,
+			Duration: 50 * time.Millisecond,
+		})
+		p.Wait()
+	}
+}
+
+// ── MPBTestProgress decorator logic tests ─────────────────────────────────────
+
+func TestMPBTestProgress_SkipResult_StoredCorrectly(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	p := NewMPBTestProgress(&buf)
+
+	p.OnTestStart("sol", "skip-test")
+	p.OnTestComplete(soltesting.TestResult{
+		Solution: "sol",
+		Test:     "skip-test",
+		Status:   soltesting.StatusSkip,
+		Duration: 0,
+	})
+
+	key := p.barKey("sol", "skip-test")
+	v, ok := p.results.Load(key)
+	require.True(t, ok, "result should be stored after completion")
+	r := v.(*soltesting.TestResult)
+	assert.Equal(t, soltesting.StatusSkip, r.Status)
+
+	elapsed, ok := p.barElapsed.Load(key)
+	require.True(t, ok)
+	assert.Equal(t, time.Duration(0), elapsed.(time.Duration))
+
+	p.Wait()
+}
+
+func TestMPBTestProgress_FailResult_StoredCorrectly(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	p := NewMPBTestProgress(&buf)
+
+	p.OnTestStart("sol", "fail-test")
+	p.OnTestComplete(soltesting.TestResult{
+		Solution: "sol",
+		Test:     "fail-test",
+		Status:   soltesting.StatusFail,
+		Duration: 100 * time.Millisecond,
+	})
+
+	key := p.barKey("sol", "fail-test")
+	v, ok := p.results.Load(key)
+	require.True(t, ok)
+	r := v.(*soltesting.TestResult)
+	assert.Equal(t, soltesting.StatusFail, r.Status)
+
+	p.Wait()
+}
+
+func TestMPBTestProgress_ErrorResult_StoredCorrectly(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	p := NewMPBTestProgress(&buf)
+
+	p.OnTestStart("sol", "err-test")
+	p.OnTestComplete(soltesting.TestResult{
+		Solution: "sol",
+		Test:     "err-test",
+		Status:   soltesting.StatusError,
+		Duration: 5 * time.Millisecond,
+	})
+
+	key := p.barKey("sol", "err-test")
+	v, ok := p.results.Load(key)
+	require.True(t, ok)
+	r := v.(*soltesting.TestResult)
+	assert.Equal(t, soltesting.StatusError, r.Status)
+
+	p.Wait()
+}
+
+func TestMPBTestProgress_PassResult_StoredCorrectly(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	p := NewMPBTestProgress(&buf)
+
+	p.OnTestStart("sol", "pass-test")
+	p.OnTestComplete(soltesting.TestResult{
+		Solution: "sol",
+		Test:     "pass-test",
+		Status:   soltesting.StatusPass,
+		Duration: 50 * time.Millisecond,
+	})
+
+	key := p.barKey("sol", "pass-test")
+	v, ok := p.results.Load(key)
+	require.True(t, ok)
+	r := v.(*soltesting.TestResult)
+	assert.Equal(t, soltesting.StatusPass, r.Status)
+
+	elapsed, ok := p.barElapsed.Load(key)
+	require.True(t, ok)
+	assert.Equal(t, 50*time.Millisecond, elapsed.(time.Duration))
+
+	p.Wait()
+}

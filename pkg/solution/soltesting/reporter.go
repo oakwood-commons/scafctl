@@ -60,12 +60,20 @@ func Summarize(results []TestResult) ResultSummary {
 // For quiet format it writes nothing.
 // The elapsed parameter, when > 0, overrides the summed individual durations
 // in the summary line with the actual wall-clock time.
-func ReportResults(results []TestResult, opts *kvx.OutputOptions, verbose bool, elapsed time.Duration) error {
+// When progress is non-nil and format is table, only failures and the summary
+// line are printed — per-test rows were already shown by the progress callback.
+func ReportResults(results []TestResult, opts *kvx.OutputOptions, verbose bool, elapsed time.Duration, progress TestProgressCallback) error {
 	switch {
 	case kvx.IsQuietFormat(opts.Format):
 		return nil
-	case kvx.IsKvxFormat(opts.Format):
-		return reportTable(results, opts.IOStreams.Out, verbose, elapsed)
+	case opts.Format == kvx.OutputFormatTable || opts.Format == kvx.OutputFormatAuto || opts.Format == "":
+		progressShown := progress != nil
+		return reportTable(results, opts.IOStreams.Out, verbose, elapsed, progressShown)
+	case opts.Format == kvx.OutputFormatList:
+		// List format falls back to table for test results since test output
+		// is inherently tabular.
+		progressShown := progress != nil
+		return reportTable(results, opts.IOStreams.Out, verbose, elapsed, progressShown)
 	default:
 		// JSON / YAML
 		return opts.Write(buildReportData(results, elapsed))
@@ -129,12 +137,28 @@ func buildReportData(results []TestResult, elapsed time.Duration) reportData {
 }
 
 // reportTable writes a human-readable table to w.
-func reportTable(results []TestResult, w io.Writer, verbose bool, elapsed time.Duration) error {
+// When progressShown is true, per-test rows are omitted (they were already
+// displayed by the progress callback) and only failures + summary are shown.
+func reportTable(results []TestResult, w io.Writer, verbose bool, elapsed time.Duration, progressShown bool) error {
 	if len(results) == 0 {
 		fmt.Fprintln(w, "No tests found.")
 		return nil
 	}
 
+	// When progress was not shown, render the full per-test table.
+	if !progressShown {
+		reportTableRows(results, w, verbose)
+	}
+
+	// Always show failure details and summary.
+	reportFailures(results, w, verbose)
+	reportSummaryLine(results, w, elapsed)
+
+	return nil
+}
+
+// reportTableRows writes column headers and one row per test result.
+func reportTableRows(results []TestResult, w io.Writer, verbose bool) {
 	// Compute column widths
 	solW, testW := 8, 4 // min widths for "SOLUTION" and "TEST"
 	for _, r := range results {
@@ -165,8 +189,11 @@ func reportTable(results []TestResult, w io.Writer, verbose bool, elapsed time.D
 			fmt.Fprintf(w, "%-*s  %-*s  %-8s  %s\n", solW, r.Solution, testW, r.Test, status, dur)
 		}
 	}
+}
 
-	// Failure/error details
+// reportFailures writes detailed failure/error information.
+// When verbose is true, assertion counts are included in each failure entry.
+func reportFailures(results []TestResult, w io.Writer, verbose bool) {
 	var failures []TestResult
 	for _, r := range results {
 		if r.Status == StatusFail || r.Status == StatusError {
@@ -174,28 +201,39 @@ func reportTable(results []TestResult, w io.Writer, verbose bool, elapsed time.D
 		}
 	}
 
-	if len(failures) > 0 {
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, "Failures:")
-		for _, f := range failures {
+	if len(failures) == 0 {
+		return
+	}
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Failures:")
+	for _, f := range failures {
+		if verbose {
+			counts := formatAssertionCounts(f.Assertions)
+			if counts != "" {
+				fmt.Fprintf(w, "  %s/%s: %s %s\n", f.Solution, f.Test, f.Message, counts)
+			} else {
+				fmt.Fprintf(w, "  %s/%s: %s\n", f.Solution, f.Test, f.Message)
+			}
+		} else {
 			fmt.Fprintf(w, "  %s/%s: %s\n", f.Solution, f.Test, f.Message)
-			for _, a := range f.Assertions {
-				if !a.Passed {
-					fmt.Fprintf(w, "    [%s] %s: %s\n", a.Type, a.Input, a.Message)
-				}
+		}
+		for _, a := range f.Assertions {
+			if !a.Passed {
+				fmt.Fprintf(w, "    [%s] %s: %s\n", a.Type, a.Input, a.Message)
 			}
 		}
 	}
+}
 
-	// Summary
+// reportSummaryLine writes the one-line summary (e.g. "5 passed, 1 failed, ...").
+func reportSummaryLine(results []TestResult, w io.Writer, elapsed time.Duration) {
 	summary := Summarize(results)
 	summary.WallDuration = elapsed
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "%d passed, %d failed, %d errors, %d skipped (%s)\n",
 		summary.Passed, summary.Failed, summary.Errors, summary.Skipped,
 		format.Duration(summary.ElapsedDuration()))
-
-	return nil
 }
 
 // listEntry holds test information for list display.

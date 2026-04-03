@@ -1629,10 +1629,10 @@ func TestExecutor_Execute_NilValueRefInput(t *testing.T) {
 
 type noopProgressCallback struct{}
 
-func (n *noopProgressCallback) OnPhaseStart(_ int, _ []string)     {}
-func (n *noopProgressCallback) OnResolverComplete(_ string)        {}
-func (n *noopProgressCallback) OnResolverFailed(_ string, _ error) {}
-func (n *noopProgressCallback) OnResolverSkipped(_ string)         {}
+func (n *noopProgressCallback) OnPhaseStart(_ int, _ []string)               {}
+func (n *noopProgressCallback) OnResolverComplete(_ string, _ time.Duration) {}
+func (n *noopProgressCallback) OnResolverFailed(_ string, _ error)           {}
+func (n *noopProgressCallback) OnResolverSkipped(_ string)                   {}
 
 func TestWithProgressCallback(t *testing.T) {
 	reg := newMockRegistry()
