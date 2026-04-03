@@ -26,7 +26,7 @@ func TestCommandBuildSolution_Structure(t *testing.T) {
 
 	cmd := CommandBuildSolution(cliParams, ioStreams, "build")
 
-	assert.Equal(t, "solution [file]", cmd.Use)
+	assert.Equal(t, "solution", cmd.Use)
 	assert.Contains(t, cmd.Aliases, "sol")
 	assert.Contains(t, cmd.Aliases, "s")
 	assert.Contains(t, cmd.Short, "Build a solution")
@@ -75,7 +75,7 @@ func TestCommandBuildSolution_RequiresArgs(t *testing.T) {
 
 	err := cmd.Execute()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "accepts 1 arg")
+	assert.Contains(t, err.Error(), "no -f/--file specified")
 }
 
 func TestRunBuildSolution_FileNotFound(t *testing.T) {

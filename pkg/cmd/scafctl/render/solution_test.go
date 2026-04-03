@@ -35,7 +35,7 @@ func TestCommandSolution(t *testing.T) {
 				cliParams := &settings.Run{}
 				cmd := CommandSolution(cliParams, ioStreams, "render")
 
-				assert.Equal(t, "solution", cmd.Use)
+				assert.Equal(t, "solution [name[@version]]", cmd.Use)
 				assert.Contains(t, cmd.Aliases, "sol")
 				assert.Contains(t, cmd.Aliases, "s")
 				assert.Contains(t, cmd.Aliases, "solutions")
@@ -518,4 +518,67 @@ func TestSolutionOptions_ModeValidation(t *testing.T) {
 			assert.Contains(t, err.Error(), tc.wantErr)
 		})
 	}
+}
+
+// TestCommandSolution_PositionalArgValidation covers the ValidatePositionalRef
+// branches added by the -f/--file standardisation work.
+func TestCommandSolution_PositionalArgValidation(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{
+			name:    "relative path rejected",
+			args:    []string{"./solution.yaml"},
+			wantErr: "local file paths must use -f/--file flag",
+		},
+		{
+			name:    "yaml extension rejected",
+			args:    []string{"solution.yaml"},
+			wantErr: "local file paths must use -f/--file flag",
+		},
+		{
+			name:    "absolute path rejected",
+			args:    []string{"/tmp/solution.yaml"},
+			wantErr: "local file paths must use -f/--file flag",
+		},
+		{
+			name:    "both -f and positional arg rejected",
+			args:    []string{"-f", "solution.yaml", "my-catalog-app"},
+			wantErr: "cannot use both -f/--file",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ioStreams, _, _ := terminal.NewTestIOStreams()
+			cliParams := &settings.Run{}
+			cmd := CommandSolution(cliParams, ioStreams, "render")
+			cmd.SetArgs(tc.args)
+
+			err := cmd.Execute()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
+func TestCommandSolution_InvalidOutputFormat(t *testing.T) {
+	t.Parallel()
+	solutionFile := "../../../../tests/integration/solutions/actions/auto-deps/solution.yaml"
+	if _, err := os.Stat(solutionFile); err != nil {
+		t.Skip("test fixture not available")
+	}
+
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cliParams := &settings.Run{}
+	cmd := CommandSolution(cliParams, ioStreams, "render")
+	cmd.SetArgs([]string{"-f", solutionFile, "-o", "invalid-format"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid-format")
 }

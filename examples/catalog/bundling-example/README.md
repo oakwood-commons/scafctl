@@ -28,13 +28,13 @@ bundling-example/
 See what files would be included:
 
 ```bash
-scafctl build solution examples/catalog/bundling-example/solution.yaml --dry-run
+scafctl build solution -f examples/catalog/bundling-example/solution.yaml --dry-run
 ```
 
 ### 2. Build to Catalog
 
 ```bash
-scafctl build solution examples/catalog/bundling-example/solution.yaml --version 1.0.0
+scafctl build solution -f examples/catalog/bundling-example/solution.yaml --version 1.0.0
 ```
 
 ### 3. Verify the Bundle
