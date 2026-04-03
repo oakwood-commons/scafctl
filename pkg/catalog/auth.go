@@ -15,15 +15,18 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
+	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"oras.land/oras-go/v2/registry/remote/auth"
 )
 
 // CredentialStore provides OCI registry credentials from docker config.
-// It supports both static credentials and docker credential helpers.
+// It supports both static credentials and docker credential helpers,
+// with a fallback to scafctl's native credential store.
 type CredentialStore struct {
-	configPath string
-	config     *dockerConfig
-	logger     logr.Logger
+	configPath  string
+	config      *dockerConfig
+	nativeStore *NativeCredentialStore
+	logger      logr.Logger
 }
 
 // dockerConfig represents the structure of ~/.docker/config.json
@@ -57,9 +60,20 @@ type credHelperResponse struct {
 func NewCredentialStore(logger logr.Logger) (*CredentialStore, error) {
 	configPath := findDockerConfig()
 
+	// Initialize an encrypted secrets store for the native credential store.
+	// Errors are non-fatal: the native store degrades gracefully to plaintext JSON.
+	var nativeStore *NativeCredentialStore
+	if ss, err := secrets.New(secrets.WithLogger(logger)); err == nil {
+		nativeStore = NewNativeCredentialStoreWithSecretsStore(ss)
+	} else {
+		logger.V(1).Info("secrets store unavailable; native credentials will be stored as plaintext", "error", err)
+		nativeStore = NewNativeCredentialStore()
+	}
+
 	store := &CredentialStore{
-		configPath: configPath,
-		logger:     logger.WithName("credential-store"),
+		configPath:  configPath,
+		nativeStore: nativeStore,
+		logger:      logger.WithName("credential-store"),
 	}
 
 	// Load config if it exists
@@ -164,6 +178,12 @@ func (c *CredentialStore) Credential(ctx context.Context, host string) (auth.Cre
 	}
 
 	if c.config == nil {
+		// No Docker config available, try native credential store
+		host = normalizeRegistryHost(host)
+		if nativeCred := c.credentialFromNativeStore(host); nativeCred.Username != "" {
+			c.logger.V(1).Info("using native credential store", "host", host)
+			return nativeCred, nil
+		}
 		return auth.EmptyCredential, nil
 	}
 
@@ -211,6 +231,12 @@ func (c *CredentialStore) Credential(ctx context.Context, host string) (auth.Cre
 			c.logger.V(1).Info("using static auth entry with scheme", "host", hostWithScheme)
 			return cred, nil
 		}
+	}
+
+	// Fall back to scafctl native credential store
+	if nativeCred := c.credentialFromNativeStore(host); nativeCred.Username != "" {
+		c.logger.V(1).Info("using native credential store", "host", host)
+		return nativeCred, nil
 	}
 
 	c.logger.V(1).Info("no credentials found, using anonymous auth", "host", host)
@@ -296,12 +322,43 @@ func (c *CredentialStore) credentialFromHelper(ctx context.Context, helper, host
 // normalizeRegistryHost normalizes registry hostnames for lookup.
 // This handles Docker Hub's special casing.
 func normalizeRegistryHost(host string) string {
-	// Docker Hub uses various hostnames
-	switch host {
-	case "docker.io", "registry-1.docker.io", "index.docker.io":
+	// Strip URL scheme so callers storing "ghcr.io" and credential helpers
+	// sending "https://ghcr.io" resolve to the same canonical key.
+	stripped := strings.TrimPrefix(strings.TrimPrefix(host, "https://"), "http://")
+
+	// Docker Hub uses various hostnames and URL forms; map to the canonical
+	// credential-helper key (https://index.docker.io/v1/) that Docker expects.
+	switch stripped {
+	case "docker.io", "registry-1.docker.io", "index.docker.io",
+		"index.docker.io/v1/", "index.docker.io/v1":
 		return "https://index.docker.io/v1/"
-	default:
-		return host
+	}
+
+	// For all other registries, return the scheme-stripped form so that
+	// "ghcr.io" (stored on login) and "https://ghcr.io" (sent by Docker) match.
+	return stripped
+}
+
+// credentialFromNativeStore checks the scafctl native credential store.
+func (c *CredentialStore) credentialFromNativeStore(host string) auth.Credential {
+	if c.nativeStore == nil {
+		return auth.EmptyCredential
+	}
+
+	cred, err := c.nativeStore.GetCredential(host)
+	if err != nil {
+		c.logger.V(1).Info("native credential store read failed",
+			"host", host,
+			"error", err.Error())
+		return auth.EmptyCredential
+	}
+	if cred == nil {
+		return auth.EmptyCredential
+	}
+
+	return auth.Credential{
+		Username: cred.Username,
+		Password: cred.Password,
 	}
 }
 

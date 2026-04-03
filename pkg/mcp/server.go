@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"strings"
 
 	"github.com/go-logr/logr"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -329,6 +330,11 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 	}
 	for _, opt := range opts {
 		opt(cfg)
+	}
+
+	// Guard against empty server name.
+	if strings.TrimSpace(cfg.name) == "" {
+		cfg.name = "scafctl"
 	}
 
 	// Build the MCP context for tool handlers

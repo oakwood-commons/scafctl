@@ -4,6 +4,8 @@
 package settings
 
 import (
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -128,7 +130,9 @@ func TestHTTPCacheDirFor(t *testing.T) {
 	dir := HTTPCacheDirFor("mycli")
 	assert.Contains(t, dir, "mycli")
 	assert.Contains(t, dir, "http-cache")
-	assert.NotContains(t, dir, "scafctl")
+	// Verify the app directory segment is "mycli", not "scafctl".
+	parts := strings.Split(dir, string(filepath.Separator))
+	assert.NotContains(t, parts, "scafctl")
 }
 
 func TestBuildCacheDirFor(t *testing.T) {
@@ -136,7 +140,9 @@ func TestBuildCacheDirFor(t *testing.T) {
 	dir := BuildCacheDirFor("mycli")
 	assert.Contains(t, dir, "mycli")
 	assert.Contains(t, dir, "build-cache")
-	assert.NotContains(t, dir, "scafctl")
+	// Verify the app directory segment is "mycli", not "scafctl".
+	parts := strings.Split(dir, string(filepath.Separator))
+	assert.NotContains(t, parts, "scafctl")
 }
 
 func TestPluginCacheDirFor(t *testing.T) {
@@ -144,7 +150,9 @@ func TestPluginCacheDirFor(t *testing.T) {
 	dir := PluginCacheDirFor("mycli")
 	assert.Contains(t, dir, "mycli")
 	assert.Contains(t, dir, "plugins")
-	assert.NotContains(t, dir, "scafctl")
+	// Verify the app directory segment is "mycli", not "scafctl".
+	parts := strings.Split(dir, string(filepath.Separator))
+	assert.NotContains(t, parts, "scafctl")
 }
 
 func TestRootSolutionFolders_MatchesDefault(t *testing.T) {
@@ -155,4 +163,49 @@ func TestRootSolutionFolders_MatchesDefault(t *testing.T) {
 func TestSolutionFileNames_MatchesDefault(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, SolutionFileNamesFor(CliBinaryName), SolutionFileNames)
+}
+
+func TestSanitizeBinaryName(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "simple name", raw: "mycli", want: "mycli"},
+		{name: "with hyphen", raw: "my-cli", want: "my-cli"},
+		{name: "with path", raw: "/usr/bin/mycli", want: "mycli"},
+		{name: "with extension", raw: "mycli.exe", want: "mycli"},
+		{name: "path and extension", raw: "/usr/local/bin/my-tool.exe", want: "my-tool"},
+		{name: "spaces replaced", raw: "my cli", want: "my_cli"},
+		{name: "empty string", raw: "", want: CliBinaryName},
+		{name: "dot only", raw: ".", want: CliBinaryName},
+		{name: "path separators only", raw: "///", want: CliBinaryName},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, SanitizeBinaryName(tt.raw))
+		})
+	}
+}
+
+func TestSafeEnvPrefix(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		binaryName string
+		want       string
+	}{
+		{name: "simple", binaryName: "scafctl", want: "SCAFCTL"},
+		{name: "with hyphen", binaryName: "my-cli", want: "MY_CLI"},
+		{name: "with dot", binaryName: "my.cli", want: "MY_CLI"},
+		{name: "already upper", binaryName: "MYCLI", want: "MYCLI"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, SafeEnvPrefix(tt.binaryName))
+		})
+	}
 }

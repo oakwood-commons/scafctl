@@ -126,6 +126,9 @@ func runServe(ctx context.Context, opts *ServeOptions) error {
 		mcpserver.WithServerContext(ctx),
 		mcpserver.WithServerVersion(settings.VersionInformation.BuildVersion),
 	}
+	if s, ok := settings.FromContext(ctx); ok && s.BinaryName != "" {
+		serverOpts = append(serverOpts, mcpserver.WithServerName(s.BinaryName))
+	}
 	if cfg != nil {
 		serverOpts = append(serverOpts, mcpserver.WithServerConfig(cfg))
 	}

@@ -4,6 +4,7 @@
 package scafctl
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -301,6 +302,19 @@ func TestRoot_BinaryName_EnvPrefix(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// TestRoot_BinaryName_EnvPrefix_Hyphen verifies that hyphens in BinaryName are
+// normalized to underscores in the env var prefix so POSIX shells can export them.
+func TestRoot_BinaryName_EnvPrefix_Hyphen(t *testing.T) {
+	t.Setenv("MY_CLI_LOG_LEVEL", "debug")
+
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := Root(&RootOptions{IOStreams: ioStreams, BinaryName: "my-cli"})
+	cmd.SetArgs([]string{"version"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+}
+
 // TestRoot_PreRunHook_Called verifies that PreRunHook is invoked during PersistentPreRun.
 func TestRoot_PreRunHook_Called(t *testing.T) {
 	hookCalled := false
@@ -357,4 +371,35 @@ func TestNewRootOptions_NewFields(t *testing.T) {
 	assert.Equal(t, "", opts.BinaryName)
 	assert.Nil(t, opts.PreRunHook)
 	assert.Nil(t, opts.VersionExtra)
+}
+
+// TestRoot_PreRunHook_Error verifies that PreRunHook errors are surfaced.
+func TestRoot_PreRunHook_Error(t *testing.T) {
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	exitCalled := false
+	cmd := Root(&RootOptions{
+		IOStreams: ioStreams,
+		ExitFunc:  func(code int) { exitCalled = true },
+		PreRunHook: func(cmd *cobra.Command, args []string) error {
+			return fmt.Errorf("hook failed")
+		},
+	})
+	cmd.SetArgs([]string{"version"})
+
+	_ = cmd.Execute()
+	assert.True(t, exitCalled, "ExitFunc should be called when PreRunHook returns an error")
+}
+
+// TestRoot_BinaryName_Sanitized verifies that BinaryName with path/extension is sanitized.
+func TestRoot_BinaryName_Sanitized(t *testing.T) {
+	t.Parallel()
+	cmd := Root(&RootOptions{BinaryName: "/usr/bin/my-tool.exe"})
+	assert.Equal(t, "my-tool", cmd.Use)
+}
+
+// TestRoot_BinaryName_Empty verifies that empty BinaryName falls back to default.
+func TestRoot_BinaryName_Empty(t *testing.T) {
+	t.Parallel()
+	cmd := Root(&RootOptions{BinaryName: ""})
+	assert.Equal(t, "scafctl", cmd.Use)
 }

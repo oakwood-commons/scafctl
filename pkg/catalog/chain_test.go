@@ -10,6 +10,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -388,14 +389,14 @@ func TestChainCatalog_Fetch_NonNotFoundError(t *testing.T) {
 }
 
 func TestBuildCatalogChain_NilConfig(t *testing.T) {
-	chain, err := BuildCatalogChain(nil, logr.Discard())
+	chain, err := BuildCatalogChain(nil, nil, logr.Discard())
 	require.NoError(t, err)
 	require.NotNil(t, chain)
 }
 
 func TestBuildCatalogChain_WithEmptyConfig(t *testing.T) {
 	cfg := &config.Config{}
-	chain, err := BuildCatalogChain(cfg, logr.Discard())
+	chain, err := BuildCatalogChain(cfg, nil, logr.Discard())
 	require.NoError(t, err)
 	require.NotNil(t, chain)
 }
@@ -411,7 +412,7 @@ func TestBuildCatalogChain_WithOCICatalog(t *testing.T) {
 		},
 	}
 	// Creating a remote catalog with an invalid/unreachable registry should not fail at construction time
-	chain, err := BuildCatalogChain(cfg, logr.Discard())
+	chain, err := BuildCatalogChain(cfg, nil, logr.Discard())
 	require.NoError(t, err)
 	require.NotNil(t, chain)
 }
@@ -426,7 +427,102 @@ func TestBuildCatalogChain_SkipsNonOCICatalog(t *testing.T) {
 			},
 		},
 	}
-	chain, err := BuildCatalogChain(cfg, logr.Discard())
+	chain, err := BuildCatalogChain(cfg, nil, logr.Discard())
 	require.NoError(t, err)
 	require.NotNil(t, chain)
+}
+
+// TestBuildCatalogChain_WithAuthProvider tests that an OCI catalog with an AuthProvider
+// configured uses the corresponding handler from the registry.
+func TestBuildCatalogChain_WithAuthProvider(t *testing.T) {
+	t.Parallel()
+
+	mock := auth.NewMockHandler("quay")
+	mock.GetTokenResult = &auth.Token{AccessToken: "fake-token", TokenType: "Bearer"}
+
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(mock))
+
+	cfg := &config.Config{
+		Catalogs: []config.CatalogConfig{
+			{
+				Name:         "quay-catalog",
+				Type:         config.CatalogTypeOCI,
+				URL:          "quay.io",
+				AuthProvider: "quay",
+				AuthScope:    "repository:myorg/myrepo:pull",
+			},
+		},
+	}
+
+	chain, err := BuildCatalogChain(cfg, registry, logr.Discard())
+	require.NoError(t, err)
+	require.NotNil(t, chain)
+}
+
+// TestBuildCatalogChain_WithAuthProviderNotFound tests that a missing auth provider
+// does not fail the entire chain build - it is silently skipped.
+func TestBuildCatalogChain_WithAuthProviderNotFound(t *testing.T) {
+	t.Parallel()
+
+	emptyRegistry := auth.NewRegistry()
+
+	cfg := &config.Config{
+		Catalogs: []config.CatalogConfig{
+			{
+				Name:         "private-catalog",
+				Type:         config.CatalogTypeOCI,
+				URL:          "registry.example.io",
+				AuthProvider: "nonexistent-handler",
+			},
+		},
+	}
+
+	// Should succeed (warning logged but not an error)
+	chain, err := BuildCatalogChain(cfg, emptyRegistry, logr.Discard())
+	require.NoError(t, err)
+	require.NotNil(t, chain)
+}
+
+// TestNewRemoteCatalog_WithAuthHandlerNoCredStore tests NewRemoteCatalog when only
+// an auth handler is provided (no credential store).
+func TestNewRemoteCatalog_WithAuthHandlerNoCredStore(t *testing.T) {
+	t.Parallel()
+
+	mock := auth.NewMockHandler("test-handler")
+	mock.GetTokenResult = &auth.Token{AccessToken: "my-token", TokenType: "Bearer"}
+
+	cat, err := NewRemoteCatalog(RemoteCatalogConfig{
+		Name:        "test",
+		Registry:    "registry.example.io",
+		Repository:  "",
+		AuthHandler: mock,
+		AuthScope:   "",
+		Logger:      logr.Discard(),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, cat)
+}
+
+// TestNewRemoteCatalog_WithAuthHandlerAndCredStore tests that the composite credential
+// function is set when both AuthHandler and CredentialStore are provided.
+func TestNewRemoteCatalog_WithAuthHandlerAndCredStore(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	mock := auth.NewMockHandler("test-handler")
+	mock.GetTokenResult = &auth.Token{AccessToken: "my-token", TokenType: "Bearer"}
+
+	credStore, err := NewCredentialStore(logr.Discard())
+	require.NoError(t, err)
+
+	cat, err := NewRemoteCatalog(RemoteCatalogConfig{
+		Name:            "test",
+		Registry:        "registry.example.io",
+		Repository:      "",
+		AuthHandler:     mock,
+		CredentialStore: credStore,
+		Logger:          logr.Discard(),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, cat)
 }

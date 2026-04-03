@@ -14,6 +14,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/httpc"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1018,4 +1019,63 @@ func BenchmarkIsCatalogReference(b *testing.B) {
 			IsCatalogReference(input)
 		}
 	}
+}
+
+func TestWithSolutionDiscovery(t *testing.T) {
+	t.Parallel()
+	folders := []string{"mycli", ".mycli", ""}
+	fileNames := []string{"solution.yaml", "mycli.yaml"}
+
+	g := NewGetter(WithSolutionDiscovery(folders, fileNames))
+	assert.Equal(t, folders, g.solutionFolders)
+	assert.Equal(t, fileNames, g.solutionFileNames)
+}
+
+func TestNewGetterFromContext_NilContext(t *testing.T) {
+	t.Parallel()
+	//nolint:staticcheck // SA1012: intentionally testing nil context handling
+	g := NewGetterFromContext(nil)
+	// Should fall back to defaults
+	assert.Equal(t, settings.RootSolutionFolders, g.solutionFolders)
+	assert.Equal(t, settings.SolutionFileNames, g.solutionFileNames)
+}
+
+func TestNewGetterFromContext_NoSettings(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	g := NewGetterFromContext(ctx)
+	// No settings in context — should use defaults
+	assert.Equal(t, settings.RootSolutionFolders, g.solutionFolders)
+	assert.Equal(t, settings.SolutionFileNames, g.solutionFileNames)
+}
+
+func TestNewGetterFromContext_DefaultBinaryName(t *testing.T) {
+	t.Parallel()
+	run := &settings.Run{BinaryName: "scafctl"}
+	ctx := settings.IntoContext(context.Background(), run)
+	g := NewGetterFromContext(ctx)
+	// BinaryName matches default — should not override
+	assert.Equal(t, settings.RootSolutionFolders, g.solutionFolders)
+	assert.Equal(t, settings.SolutionFileNames, g.solutionFileNames)
+}
+
+func TestNewGetterFromContext_CustomBinaryName(t *testing.T) {
+	t.Parallel()
+	run := &settings.Run{BinaryName: "mycli"}
+	ctx := settings.IntoContext(context.Background(), run)
+	g := NewGetterFromContext(ctx)
+	// BinaryName is custom — should override
+	assert.Equal(t, settings.SolutionFoldersFor("mycli"), g.solutionFolders)
+	assert.Equal(t, settings.SolutionFileNamesFor("mycli"), g.solutionFileNames)
+}
+
+func TestNewGetterFromContext_WithAdditionalOpts(t *testing.T) {
+	t.Parallel()
+	run := &settings.Run{BinaryName: "mycli"}
+	ctx := settings.IntoContext(context.Background(), run)
+	lgr := logr.Discard()
+	g := NewGetterFromContext(ctx, WithLogger(lgr))
+	// Should have custom folders AND the logger option applied
+	assert.Equal(t, settings.SolutionFoldersFor("mycli"), g.solutionFolders)
+	assert.NotNil(t, g.logger)
 }

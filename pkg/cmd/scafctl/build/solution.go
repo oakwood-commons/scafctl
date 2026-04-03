@@ -104,7 +104,7 @@ func CommandBuildSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if options.File == "" {
-				getter := get.NewGetter()
+				getter := get.NewGetterFromContext(cmd.Context())
 				options.File = getter.FindSolution()
 				if options.File == "" {
 					err := fmt.Errorf("no -f/--file specified and no solution file found in default locations")

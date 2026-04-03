@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/MakeNowJust/heredoc/v2"
@@ -15,6 +14,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/auth/entra"
 	gcpauth "github.com/oakwood-commons/scafctl/pkg/auth/gcp"
 	ghauth "github.com/oakwood-commons/scafctl/pkg/auth/github"
+	customoauth2 "github.com/oakwood-commons/scafctl/pkg/auth/oauth2"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	authcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/auth"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/build"
@@ -22,6 +22,7 @@ import (
 	cachecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/cache"
 	catalogcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/catalog"
 	configcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/config"
+	credhelpercmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/credentialhelper"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/eval"
 	examplescmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/examples"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/explain"
@@ -119,9 +120,10 @@ type RootOptions struct {
 	// ConfigPath overrides the --config flag default.
 	ConfigPath string
 
-	// BinaryName overrides the default "scafctl" identity everywhere:
-	// command Use field, help text, env var prefix, solution file discovery,
-	// cache paths, MCP server name, HTTP User-Agent, and telemetry service name.
+	// BinaryName overrides the default CLI binary name used by this command
+	// tree: root command Use field, subcommand Short descriptions, env var
+	// prefix, telemetry service name, and version output. Solution discovery
+	// and cache paths are wired through settings.Run.BinaryName.
 	// When empty, defaults to settings.CliBinaryName ("scafctl").
 	BinaryName string
 
@@ -171,9 +173,9 @@ func Root(opts *RootOptions) *cobra.Command {
 	// Resolve binary name: use caller-provided or default to settings.CliBinaryName ("scafctl").
 	binaryName := settings.CliBinaryName
 	if opts.BinaryName != "" {
-		binaryName = opts.BinaryName
+		binaryName = settings.SanitizeBinaryName(opts.BinaryName)
 	}
-	envPrefix := strings.ToUpper(binaryName)
+	envPrefix := settings.SafeEnvPrefix(binaryName)
 	cliParams.BinaryName = binaryName
 
 	// Resolve IOStreams: use caller-provided or default to OS streams.
@@ -440,6 +442,31 @@ func Root(opts *RootOptions) *cobra.Command {
 				}
 			}
 
+			// Register custom OAuth2 handlers from config
+			for _, customCfg := range cfg.Auth.CustomOAuth2 {
+				if validateErr := customoauth2.ValidateConfig(customCfg); validateErr != nil {
+					lgr.V(1).Info("warning: skipping invalid custom OAuth2 handler", "name", customCfg.Name, "error", validateErr)
+					continue
+				}
+				if authRegistry.Has(customCfg.Name) {
+					lgr.V(1).Info("warning: custom OAuth2 handler name conflicts with built-in handler, skipping", "name", customCfg.Name)
+					continue
+				}
+				var customOpts []customoauth2.Option
+				customOpts = append(customOpts, customoauth2.WithLogger(*lgr))
+				if secretErr == nil {
+					customOpts = append(customOpts, customoauth2.WithSecretStore(sharedSecretStore))
+				}
+				customHandler, err := customoauth2.New(customCfg, customOpts...)
+				if err != nil {
+					lgr.V(1).Info("warning: failed to initialize custom OAuth2 handler", "name", customCfg.Name, "error", err)
+				} else {
+					if regErr := authRegistry.Register(customHandler); regErr != nil {
+						lgr.V(1).Info("warning: failed to register custom OAuth2 handler", "name", customCfg.Name, "error", regErr)
+					}
+				}
+			}
+
 			ctx = auth.WithRegistry(ctx, authRegistry)
 
 			cCmd.SetContext(ctx)
@@ -556,6 +583,7 @@ func Root(opts *RootOptions) *cobra.Command {
 	cCmd.AddCommand(withGroup(groupConfig, secretscmd.CommandSecrets(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupConfig, authcmd.CommandAuth(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupConfig, cachecmd.CommandCache(cliParams, ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupConfig, credhelpercmd.CommandCredentialHelper(cliParams, ioStreams, binaryName)))
 
 	// Plugin Commands
 	cCmd.AddCommand(withGroup(groupPlugin, pluginscmd.CommandPlugins(cliParams, ioStreams, binaryName)))

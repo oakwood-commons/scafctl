@@ -6,6 +6,8 @@ package settings
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/adrg/xdg"
@@ -14,6 +16,30 @@ import (
 const (
 	CliBinaryName = "scafctl"
 )
+
+// safeNameRe matches characters that are NOT alphanumeric, underscore, hyphen, or dot.
+var safeNameRe = regexp.MustCompile(`[^A-Za-z0-9._-]`)
+
+// SanitizeBinaryName normalizes a raw binary name into a safe identifier.
+// It strips directory components and extensions, replaces unsafe characters
+// with underscores, and falls back to CliBinaryName when the result is empty.
+func SanitizeBinaryName(raw string) string {
+	name := filepath.Base(raw)
+	name = strings.TrimSuffix(name, filepath.Ext(name))
+	name = safeNameRe.ReplaceAllString(name, "_")
+	name = strings.Trim(name, "_")
+	if name == "" || name == "." {
+		return CliBinaryName
+	}
+	return name
+}
+
+// SafeEnvPrefix returns an environment variable prefix derived from a binary name.
+// It upper-cases the name and replaces non-alphanumeric characters with underscores.
+func SafeEnvPrefix(binaryName string) string {
+	replacer := strings.NewReplacer("-", "_", ".", "_")
+	return strings.ToUpper(replacer.Replace(binaryName))
+}
 
 // Timeout defaults
 const (
@@ -65,7 +91,11 @@ const (
 )
 
 // HTTPCacheDirFor returns the HTTP cache directory for the given binary name.
+// An empty binaryName defaults to CliBinaryName.
 func HTTPCacheDirFor(binaryName string) string {
+	if binaryName == "" {
+		binaryName = CliBinaryName
+	}
 	return filepath.Join(xdg.CacheHome, binaryName, "http-cache")
 }
 
@@ -201,7 +231,11 @@ const (
 )
 
 // BuildCacheDirFor returns the build cache directory for the given binary name.
+// An empty binaryName defaults to CliBinaryName.
 func BuildCacheDirFor(binaryName string) string {
+	if binaryName == "" {
+		binaryName = CliBinaryName
+	}
 	return filepath.Join(xdg.CacheHome, binaryName, "build-cache")
 }
 
@@ -215,7 +249,11 @@ func DefaultBuildCacheDir() string {
 }
 
 // PluginCacheDirFor returns the plugin cache directory for the given binary name.
+// An empty binaryName defaults to CliBinaryName.
 func PluginCacheDirFor(binaryName string) string {
+	if binaryName == "" {
+		binaryName = CliBinaryName
+	}
 	return filepath.Join(xdg.CacheHome, binaryName, "plugins")
 }
 
@@ -290,7 +328,7 @@ type Run struct {
 	IsQuiet            bool               `json:"isQuiet" yaml:"isQuiet" doc:"Whether to suppress non-essential output"`
 	NoColor            bool               `json:"noColor" yaml:"noColor" doc:"Whether to disable colored output"`
 	ExitOnError        bool               `json:"exitOnError" yaml:"exitOnError" doc:"Whether to exit on error"`
-	BinaryName         string             `json:"binaryName" yaml:"binaryName" doc:"Runtime binary name for the CLI"`
+	BinaryName         string             `json:"binaryName" yaml:"binaryName" doc:"Runtime binary name for the CLI" maxLength:"64" example:"scafctl"`
 }
 
 // NewCliParams initializes and returns a pointer to a Run struct with default CLI parameters.

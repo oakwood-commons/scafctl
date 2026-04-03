@@ -11,6 +11,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -97,7 +98,7 @@ func runInstall(ctx context.Context, opts *InstallOptions) error {
 	// Auto-discover solution file if not provided
 	filePath := opts.File
 	if filePath == "" {
-		filePath = get.NewGetter().FindSolution()
+		filePath = get.NewGetterFromContext(ctx).FindSolution()
 	}
 	if filePath == "" {
 		err := fmt.Errorf("no solution path provided and no solution file found in default locations; use --file (-f)")
@@ -133,7 +134,7 @@ func runInstall(ctx context.Context, opts *InstallOptions) error {
 		chainLogger = logr.Discard()
 	}
 
-	chain, err := catalog.BuildCatalogChain(appCfg, chainLogger)
+	chain, err := catalog.BuildCatalogChain(appCfg, auth.RegistryFromContext(ctx), chainLogger)
 	if err != nil {
 		w.Errorf("failed to build catalog chain: %v", err)
 		return exitcode.WithCode(err, exitcode.CatalogError)
