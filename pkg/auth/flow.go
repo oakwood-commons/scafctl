@@ -32,6 +32,8 @@ func ParseFlow(flowStr, handlerName string) (Flow, error) {
 		return FlowGcloudADC, nil
 	case "github_app", "github-app", "githubapp", "app":
 		return FlowGitHubApp, nil
+	case "client_credentials", "client-credentials", "clientcredentials", "cc":
+		return FlowClientCredentials, nil
 	default:
 		switch handlerName {
 		case "github":

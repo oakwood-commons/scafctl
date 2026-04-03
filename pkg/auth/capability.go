@@ -35,6 +35,9 @@ const (
 	// server to a specific port via --callback-port. Handlers that use the
 	// authorization code + PKCE flow (Entra, GCP) advertise this capability.
 	CapCallbackPort Capability = "callback_port"
+
+	// CapFlowOverride indicates the handler supports runtime flow selection via --flow.
+	CapFlowOverride Capability = "flow_override"
 )
 
 // HasCapability checks if a set of capabilities includes the specified capability.

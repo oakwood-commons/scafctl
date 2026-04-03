@@ -2761,6 +2761,52 @@ If you can't connect to your GHES instance:
 
 ---
 
+## Custom OAuth2 Handlers
+
+You can add OAuth2 handlers for any service by configuring them in your
+`~/.config/scafctl/config.yaml`:
+
+```yaml
+auth:
+  customOAuth2:
+    - name: quay
+      displayName: "Quay.io"
+      tokenURL: "https://quay.io/oauth/token"
+      clientID: "your-app-client-id"
+      clientSecret: "your-app-client-secret"
+      defaultFlow: client_credentials
+      scopes:
+        - "repo:read"
+      registry: "quay.io"
+      registryUsername: "$oauthtoken"
+```
+
+Once configured, custom handlers work exactly like built-in handlers:
+
+```bash
+# Login
+scafctl auth login quay
+
+# Check status
+scafctl auth status quay
+
+# Logout
+scafctl auth logout quay
+
+# Auto-detected for catalog login (via the 'registry' field)
+scafctl catalog login quay.io
+```
+
+Custom handlers support all three OAuth2 flows:
+- **Interactive** (authorization code + PKCE) — requires `authorizeURL`
+- **Device code** (RFC 8628) — requires `deviceAuthURL`  
+- **Client credentials** — requires `clientSecret`
+
+For advanced configurations including token exchange and identity
+verification, see [examples/auth/custom-oauth2-config.md](../../examples/auth/custom-oauth2-config.md).
+
+---
+
 ## Next Steps
 
 - [CEL Expressions Tutorial](cel-tutorial.md) — Master CEL expressions and extension functions

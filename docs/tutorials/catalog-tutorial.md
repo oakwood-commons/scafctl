@@ -926,7 +926,92 @@ You can create as many tags as needed. Tags are freeform strings — they cannot
 
 scafctl supports pushing and pulling artifacts to/from OCI-compliant container registries like GitHub Container Registry (ghcr.io), Docker Hub, Azure Container Registry, and others.
 
-### Step 1: Set Up Authentication
+### Native Authentication (No Docker Required)
+
+scafctl provides built-in registry authentication — no Docker or Podman installation needed. This is the recommended approach for most users.
+
+**Cloud registries (GitHub, GCP, Azure):**
+
+Authenticate with your cloud provider's auth handler, then bridge the credentials to the registry:
+
+```bash
+# GitHub Container Registry
+scafctl auth login github
+scafctl catalog login ghcr.io
+
+# Google Artifact Registry / Container Registry
+scafctl auth login gcp
+scafctl catalog login us-docker.pkg.dev
+
+# Azure Container Registry
+scafctl auth login entra
+scafctl catalog login myacr.azurecr.io
+```
+
+**Direct credentials (any registry):**
+
+For registries that use tokens or passwords directly (Docker Hub, Quay.io, self-hosted):
+
+```bash
+# Using a token via stdin
+echo "YOUR_TOKEN" | scafctl catalog login quay.io --username myorg+deployer --password-stdin
+
+# Using a token from an environment variable (CI/automation)
+scafctl catalog login quay.io --username admin --password-env REGISTRY_PASSWORD
+```
+
+**Config-based automatic authentication:**
+
+For catalogs defined in your scafctl config, set `authProvider` to enable automatic authentication without a separate login step:
+
+```yaml
+# ~/.config/scafctl/config.yaml
+catalogs:
+  - name: company-registry
+    registry: ghcr.io
+    repository: myorg/scafctl
+    authProvider: github
+```
+
+With this config, `scafctl catalog pull` and `scafctl catalog push` automatically use your GitHub auth session — no `catalog login` needed.
+
+**Docker/Podman interop:**
+
+If you also need Docker or Podman to access the same credentials, add `--write-registry-auth`:
+
+```bash
+scafctl catalog login ghcr.io --write-registry-auth
+```
+
+This writes credentials to both scafctl's native store and the container auth file.
+
+**Combined auth and catalog login:**
+
+You can authenticate and bridge to a registry in a single command using `--registry` on `auth login`:
+
+```bash
+scafctl auth login github --registry ghcr.io
+```
+
+**Removing credentials:**
+
+```bash
+# Remove credentials for a specific registry
+scafctl catalog logout ghcr.io
+
+# Remove all stored registry credentials
+scafctl catalog logout --all
+```
+
+scafctl resolves credentials in this order:
+
+| Priority | Source |
+|----------|--------|
+| 1 | Docker/Podman config files |
+| 2 | scafctl native credential store (`~/.config/scafctl/registries.json`) |
+| 3 | Dynamic auth handler bridge (if `authProvider` is configured) |
+
+### Step 1: Set Up Authentication (Docker/Podman Alternative)
 
 scafctl reads container credentials from the same locations as Docker and Podman. The easiest way to authenticate is with Docker or Podman's login command.
 

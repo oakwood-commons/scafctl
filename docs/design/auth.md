@@ -565,6 +565,55 @@ This design:
 
 ---
 
+## Custom OAuth2 Auth Handlers
+
+scafctl supports user-defined OAuth2 auth handlers for any OAuth2-compliant service. Each custom handler is configured in `auth.customOAuth2[]` and behaves like a built-in handler, supporting:
+
+- **Authorization code + PKCE** — interactive browser-based login
+- **Device code (RFC 8628)** — CLI-friendly flow for headless environments
+- **Client credentials (RFC 6749 §4.4)** — machine-to-machine authentication
+- **Token exchange** — optional post-login pipeline to convert an OAuth2 token to a registry-specific token (e.g., GCP Artifact Registry, Quay.io)
+- **Token verification** — optional identity extraction from a userinfo endpoint
+
+### Configuration
+
+```yaml
+auth:
+  customOAuth2:
+    - name: quay              # unique handler name
+      displayName: "Quay.io"  # human-readable label
+      tokenURL: "https://quay.io/oauth/token"
+      clientID: "app-client-id"
+      clientSecret: "app-client-secret"  # required for client_credentials
+      defaultFlow: client_credentials    # interactive | device_code | client_credentials
+      scopes: ["repo:read"]
+      registry: "quay.io"               # auto-inferred for catalog login
+      registryUsername: "$oauthtoken"    # OCI username convention
+      tokenExchange:                     # optional token exchange pipeline
+        url: "https://quay.io/v2/token"
+        method: GET
+        tokenJSONPath: "token"
+        usernameJSONPath: "username"
+        requestBody: '{"hostname":"{{.Hostname}}"}'
+      verifyURL: "https://quay.io/api/v1/user/"
+      identityFields:
+        username: "username"
+        email: "email"
+        name: "name"
+```
+
+### Registration
+
+Custom handlers are registered at startup from config. Name conflicts with built-in handlers (`github`, `entra`, `gcp`) are rejected. Each handler creates its own token cache under `scafctl.auth.oauth2.<name>.token.*` in the secrets store.
+
+### Registry Auto-Detection
+
+When a custom handler specifies a `registry` field, `InferAuthHandler()` will automatically select that handler for `scafctl catalog login` against matching registries.
+
+See [examples/auth/custom-oauth2-config.md](../../examples/auth/custom-oauth2-config.md) for configuration examples.
+
+---
+
 ## Future Enhancements
 
 ### Auth Claims Provider

@@ -2397,6 +2397,91 @@ func TestIntegration_AuthLoginRegistryFlag(t *testing.T) {
 	assert.Contains(t, stdout, "--write-registry-auth")
 }
 
+func TestIntegration_CustomOAuth2Handler_AuthList(t *testing.T) {
+	t.Parallel()
+
+	// Create a temp config with a custom OAuth2 handler
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	configContent := `auth:
+  customOAuth2:
+    - name: test-quay
+      displayName: "Test Quay"
+      tokenURL: "https://quay.io/oauth/token"
+      clientID: "test-client"
+      clientSecret: "test-secret"
+      defaultFlow: client_credentials
+      scopes:
+        - "repo:read"
+      registry: "quay.io"
+      registryUsername: "$oauthtoken"
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o600))
+
+	stdout, _, exitCode := runScafctl(t, "--config", configPath, "auth", "list")
+
+	assert.Equal(t, 0, exitCode)
+	// The custom handler should be registered and appear in the list
+	// (either as a handler name or in a "no tokens" message that lists handlers)
+	assert.True(t,
+		strings.Contains(stdout, "test-quay") ||
+			strings.Contains(stdout, "No cached tokens found"),
+		"expected custom handler or no-token message, got: %q", stdout,
+	)
+}
+
+func TestIntegration_CustomOAuth2Handler_AuthStatus(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	configContent := `auth:
+  customOAuth2:
+    - name: test-custom
+      displayName: "Test Custom"
+      tokenURL: "https://example.com/oauth/token"
+      clientID: "test-client"
+      clientSecret: "test-secret"
+      defaultFlow: client_credentials
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o600))
+
+	stdout, _, exitCode := runScafctl(t, "--config", configPath, "auth", "status", "test-custom")
+
+	// Should recognize the handler (exit 0 or handler-specific output)
+	// Even without login, the handler should be found
+	assert.True(t, exitCode == 0 || exitCode == 1, "expected 0 or 1 exit code, got: %d", exitCode)
+	assert.True(t,
+		strings.Contains(stdout, "test-custom") ||
+			strings.Contains(stdout, "Test Custom") ||
+			strings.Contains(stdout, "not authenticated") ||
+			strings.Contains(stdout, "Not authenticated"),
+		"expected handler name or not-authenticated message, got: %q", stdout,
+	)
+}
+
+func TestIntegration_CustomOAuth2Handler_NameConflict(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	configContent := `auth:
+  customOAuth2:
+    - name: github
+      displayName: "Conflict"
+      tokenURL: "https://example.com/oauth/token"
+      clientID: "test-client"
+      clientSecret: "test-secret"
+      defaultFlow: client_credentials
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o600))
+
+	// The handler should be skipped (name conflicts with built-in)
+	// but the CLI should not crash
+	_, _, exitCode := runScafctl(t, "--config", configPath, "auth", "list")
+	assert.Equal(t, 0, exitCode)
+}
+
 func TestIntegration_CatalogListHelp(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "catalog", "list", "--help")

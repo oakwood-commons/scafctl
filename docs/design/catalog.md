@@ -156,7 +156,34 @@ All artifacts follow semantic versioning (e.g., `artifact@1.2.3`). Version tags 
 
 ### Authentication
 
-Authentication to remote catalogs leverages standard OCI registry authentication mechanisms (Docker config, credential helpers, token authentication).
+Authentication to remote catalogs supports two modes:
+
+**Native authentication (recommended):** scafctl provides built-in registry authentication through its auth handler framework, requiring no Docker or Podman installation. Credentials are stored in scafctl's native credential store (`~/.config/scafctl/registries.json`).
+
+Credential resolution order:
+
+| Priority | Source | Description |
+|----------|--------|-------------|
+| 1 | Docker/Podman config | Standard container auth files (`~/.docker/config.json`, etc.) |
+| 2 | Native credential store | scafctl-managed credentials from `catalog login` |
+| 3 | Auth handler bridge | Dynamic token injection when `authProvider` is configured on a catalog |
+
+**Auth handler bridge:** For cloud registries (GitHub, GCP, Azure), scafctl can bridge an authenticated auth handler session to registry credentials. This works in two ways:
+
+- **Explicit:** `scafctl auth login github && scafctl catalog login ghcr.io` stores credentials in the native store
+- **Dynamic:** Setting `authProvider: github` on a catalog config enables automatic token injection at pull/push time — no separate login step needed
+
+The bridge converts auth handler tokens to registry-specific credentials:
+
+| Registry | Auth Handler | Username Convention |
+|----------|-------------|---------------------|
+| ghcr.io | github | `<github-username>` |
+| *.pkg.dev, gcr.io | gcp | `oauth2accesstoken` |
+| *.azurecr.io | entra | `00000000-0000-0000-0000-000000000000` |
+
+**Docker/Podman interop:** The `--write-registry-auth` flag on `catalog login` writes credentials to both the native store and the container auth file, enabling seamless interop with Docker and Podman.
+
+**Legacy authentication:** Standard OCI registry authentication mechanisms (Docker config, credential helpers, token authentication) continue to work as before.
 
 ### Discovery
 

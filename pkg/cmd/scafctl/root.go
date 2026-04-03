@@ -14,6 +14,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/auth/entra"
 	gcpauth "github.com/oakwood-commons/scafctl/pkg/auth/gcp"
 	ghauth "github.com/oakwood-commons/scafctl/pkg/auth/github"
+	customoauth2 "github.com/oakwood-commons/scafctl/pkg/auth/oauth2"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	authcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/auth"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/build"
@@ -411,6 +412,31 @@ func Root(opts *RootOptions) *cobra.Command {
 			} else {
 				if regErr := authRegistry.Register(gcpHandler); regErr != nil {
 					lgr.V(1).Info("warning: failed to register GCP auth handler", "error", regErr)
+				}
+			}
+
+			// Register custom OAuth2 handlers from config
+			for _, customCfg := range cfg.Auth.CustomOAuth2 {
+				if validateErr := customoauth2.ValidateConfig(customCfg); validateErr != nil {
+					lgr.V(1).Info("warning: skipping invalid custom OAuth2 handler", "name", customCfg.Name, "error", validateErr)
+					continue
+				}
+				if authRegistry.Has(customCfg.Name) {
+					lgr.V(1).Info("warning: custom OAuth2 handler name conflicts with built-in handler, skipping", "name", customCfg.Name)
+					continue
+				}
+				var customOpts []customoauth2.Option
+				customOpts = append(customOpts, customoauth2.WithLogger(*lgr))
+				if secretErr == nil {
+					customOpts = append(customOpts, customoauth2.WithSecretStore(sharedSecretStore))
+				}
+				customHandler, err := customoauth2.New(customCfg, customOpts...)
+				if err != nil {
+					lgr.V(1).Info("warning: failed to initialize custom OAuth2 handler", "name", customCfg.Name, "error", err)
+				} else {
+					if regErr := authRegistry.Register(customHandler); regErr != nil {
+						lgr.V(1).Info("warning: failed to register custom OAuth2 handler", "name", customCfg.Name, "error", regErr)
+					}
 				}
 			}
 
