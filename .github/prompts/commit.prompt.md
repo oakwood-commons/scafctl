@@ -1,8 +1,8 @@
 ---
-description: "Generate a conventional commit message from staged or recent changes. Outputs the message only — does not run git commit."
+description: "scafctl: Generate a conventional commit message from staged or recent changes. Outputs the message only -- does not run git commit."
 agent: "commit-message"
 ---
-Analyze the current changes and generate a conventional commit message. **Output the message only — do not commit.**
+Analyze the current changes and generate a conventional commit message. **Output the message only -- do not commit.**
 
 1. Check `git diff --cached --stat` for staged changes (fall back to `git diff --stat`)
 2. Read the actual diff to understand what changed

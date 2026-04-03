@@ -1,5 +1,5 @@
 ---
-description: "Fix Go build errors, go vet warnings, and linter issues with minimal surgical changes."
+description: "scafctl: Fix Go build errors, go vet warnings, and linter issues with minimal surgical changes."
 agent: "go-build-resolver"
 ---
 Diagnose and fix the current Go build errors:
