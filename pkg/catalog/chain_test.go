@@ -388,14 +388,14 @@ func TestChainCatalog_Fetch_NonNotFoundError(t *testing.T) {
 }
 
 func TestBuildCatalogChain_NilConfig(t *testing.T) {
-	chain, err := BuildCatalogChain(nil, logr.Discard())
+	chain, err := BuildCatalogChain(nil, nil, logr.Discard())
 	require.NoError(t, err)
 	require.NotNil(t, chain)
 }
 
 func TestBuildCatalogChain_WithEmptyConfig(t *testing.T) {
 	cfg := &config.Config{}
-	chain, err := BuildCatalogChain(cfg, logr.Discard())
+	chain, err := BuildCatalogChain(cfg, nil, logr.Discard())
 	require.NoError(t, err)
 	require.NotNil(t, chain)
 }
@@ -411,7 +411,7 @@ func TestBuildCatalogChain_WithOCICatalog(t *testing.T) {
 		},
 	}
 	// Creating a remote catalog with an invalid/unreachable registry should not fail at construction time
-	chain, err := BuildCatalogChain(cfg, logr.Discard())
+	chain, err := BuildCatalogChain(cfg, nil, logr.Discard())
 	require.NoError(t, err)
 	require.NotNil(t, chain)
 }
@@ -426,7 +426,7 @@ func TestBuildCatalogChain_SkipsNonOCICatalog(t *testing.T) {
 			},
 		},
 	}
-	chain, err := BuildCatalogChain(cfg, logr.Discard())
+	chain, err := BuildCatalogChain(cfg, nil, logr.Discard())
 	require.NoError(t, err)
 	require.NotNil(t, chain)
 }

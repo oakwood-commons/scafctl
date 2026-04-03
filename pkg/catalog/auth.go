@@ -19,11 +19,13 @@ import (
 )
 
 // CredentialStore provides OCI registry credentials from docker config.
-// It supports both static credentials and docker credential helpers.
+// It supports both static credentials and docker credential helpers,
+// with a fallback to scafctl's native credential store.
 type CredentialStore struct {
-	configPath string
-	config     *dockerConfig
-	logger     logr.Logger
+	configPath  string
+	config      *dockerConfig
+	nativeStore *NativeCredentialStore
+	logger      logr.Logger
 }
 
 // dockerConfig represents the structure of ~/.docker/config.json
@@ -58,8 +60,9 @@ func NewCredentialStore(logger logr.Logger) (*CredentialStore, error) {
 	configPath := findDockerConfig()
 
 	store := &CredentialStore{
-		configPath: configPath,
-		logger:     logger.WithName("credential-store"),
+		configPath:  configPath,
+		nativeStore: NewNativeCredentialStore(),
+		logger:      logger.WithName("credential-store"),
 	}
 
 	// Load config if it exists
@@ -164,6 +167,12 @@ func (c *CredentialStore) Credential(ctx context.Context, host string) (auth.Cre
 	}
 
 	if c.config == nil {
+		// No Docker config available, try native credential store
+		host = normalizeRegistryHost(host)
+		if nativeCred := c.credentialFromNativeStore(host); nativeCred.Username != "" {
+			c.logger.V(1).Info("using native credential store", "host", host)
+			return nativeCred, nil
+		}
 		return auth.EmptyCredential, nil
 	}
 
@@ -211,6 +220,12 @@ func (c *CredentialStore) Credential(ctx context.Context, host string) (auth.Cre
 			c.logger.V(1).Info("using static auth entry with scheme", "host", hostWithScheme)
 			return cred, nil
 		}
+	}
+
+	// Fall back to scafctl native credential store
+	if nativeCred := c.credentialFromNativeStore(host); nativeCred.Username != "" {
+		c.logger.V(1).Info("using native credential store", "host", host)
+		return nativeCred, nil
 	}
 
 	c.logger.V(1).Info("no credentials found, using anonymous auth", "host", host)
@@ -302,6 +317,29 @@ func normalizeRegistryHost(host string) string {
 		return "https://index.docker.io/v1/"
 	default:
 		return host
+	}
+}
+
+// credentialFromNativeStore checks the scafctl native credential store.
+func (c *CredentialStore) credentialFromNativeStore(host string) auth.Credential {
+	if c.nativeStore == nil {
+		return auth.EmptyCredential
+	}
+
+	cred, err := c.nativeStore.GetCredential(host)
+	if err != nil {
+		c.logger.V(1).Info("native credential store read failed",
+			"host", host,
+			"error", err.Error())
+		return auth.EmptyCredential
+	}
+	if cred == nil {
+		return auth.EmptyCredential
+	}
+
+	return auth.Credential{
+		Username: cred.Username,
+		Password: cred.Password,
 	}
 }
 

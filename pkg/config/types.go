@@ -29,13 +29,15 @@ type Config struct {
 
 // CatalogConfig represents a single catalog configuration.
 type CatalogConfig struct {
-	Name       string            `json:"name" yaml:"name" mapstructure:"name" doc:"Catalog name" example:"internal" maxLength:"255"`
-	Type       string            `json:"type" yaml:"type" mapstructure:"type" doc:"Catalog type" example:"filesystem" maxLength:"50"`
-	Path       string            `json:"path,omitempty" yaml:"path,omitempty" mapstructure:"path" doc:"Path for filesystem catalogs" maxLength:"4096" example:"~/.config/scafctl/catalog"`
-	URL        string            `json:"url,omitempty" yaml:"url,omitempty" mapstructure:"url" doc:"URL for remote catalogs" maxLength:"2048" example:"https://catalog.example.com"`
-	Auth       *AuthConfig       `json:"auth,omitempty" yaml:"auth,omitempty" mapstructure:"auth" doc:"Authentication configuration"`
-	Metadata   map[string]string `json:"metadata,omitempty" yaml:"metadata,omitempty" mapstructure:"metadata" doc:"Additional metadata"`
-	HTTPClient *HTTPClientConfig `json:"httpClient,omitempty" yaml:"httpClient,omitempty" mapstructure:"httpClient" doc:"Per-catalog HTTP client overrides (inherits from global)"`
+	Name         string            `json:"name" yaml:"name" mapstructure:"name" doc:"Catalog name" example:"internal" maxLength:"255"`
+	Type         string            `json:"type" yaml:"type" mapstructure:"type" doc:"Catalog type" example:"filesystem" maxLength:"50"`
+	Path         string            `json:"path,omitempty" yaml:"path,omitempty" mapstructure:"path" doc:"Path for filesystem catalogs" maxLength:"4096" example:"~/.config/scafctl/catalog"`
+	URL          string            `json:"url,omitempty" yaml:"url,omitempty" mapstructure:"url" doc:"URL for remote catalogs" maxLength:"2048" example:"https://catalog.example.com"`
+	Auth         *AuthConfig       `json:"auth,omitempty" yaml:"auth,omitempty" mapstructure:"auth" doc:"Authentication configuration"`
+	AuthProvider string            `json:"authProvider,omitempty" yaml:"authProvider,omitempty" mapstructure:"authProvider" doc:"Auth handler name for automatic token injection (e.g. github, gcp, entra)" maxLength:"64" example:"github"`
+	AuthScope    string            `json:"authScope,omitempty" yaml:"authScope,omitempty" mapstructure:"authScope" doc:"OAuth scope for auth provider token requests" maxLength:"1024" example:"https://management.azure.com/.default"`
+	Metadata     map[string]string `json:"metadata,omitempty" yaml:"metadata,omitempty" mapstructure:"metadata" doc:"Additional metadata"`
+	HTTPClient   *HTTPClientConfig `json:"httpClient,omitempty" yaml:"httpClient,omitempty" mapstructure:"httpClient" doc:"Per-catalog HTTP client overrides (inherits from global)"`
 }
 
 // AuthConfig holds authentication settings for a catalog.
@@ -330,6 +332,9 @@ type GlobalAuthConfig struct {
 
 	// GCP contains Google Cloud Platform authentication configuration.
 	GCP *GCPAuthConfig `json:"gcp,omitempty" yaml:"gcp,omitempty" mapstructure:"gcp" doc:"Google Cloud Platform authentication configuration"`
+
+	// CustomOAuth2 contains user-defined OAuth2 auth handlers.
+	CustomOAuth2 []CustomOAuth2Config `json:"customOAuth2,omitempty" yaml:"customOAuth2,omitempty" mapstructure:"customOAuth2" doc:"User-defined OAuth2 auth handlers for any OAuth2 service" maxItems:"20"`
 }
 
 // EntraAuthConfig contains Entra-specific configuration.
@@ -535,4 +540,71 @@ type APIAuditConfig struct {
 // APITracingConfig holds OpenTelemetry tracing configuration for the API server.
 type APITracingConfig struct {
 	Enabled bool `json:"enabled,omitempty" yaml:"enabled,omitempty" mapstructure:"enabled" doc:"Enable OpenTelemetry tracing"`
+}
+
+// CustomOAuth2Config defines a user-configurable OAuth2 auth handler.
+// Each entry registers as its own named auth.Handler, usable for any OAuth2 service
+// (OCI registries, APIs, providers, etc.).
+type CustomOAuth2Config struct {
+	// Name is the handler identifier, used as: scafctl auth login <name>
+	// Must not conflict with built-in handler names (github, gcp, entra).
+	Name        string `json:"name" yaml:"name" mapstructure:"name" doc:"Handler name (used as CLI argument)" maxLength:"64" example:"quay"`
+	DisplayName string `json:"displayName,omitempty" yaml:"displayName,omitempty" mapstructure:"displayName" doc:"Human-readable display name" maxLength:"128" example:"Quay.io"`
+
+	// OAuth2 endpoints
+	AuthorizeURL  string `json:"authorizeURL,omitempty" yaml:"authorizeURL,omitempty" mapstructure:"authorizeURL" doc:"OAuth2 authorization endpoint (required for interactive flow)" maxLength:"2048" example:"https://quay.io/oauth/authorize"`
+	TokenURL      string `json:"tokenURL" yaml:"tokenURL" mapstructure:"tokenURL" doc:"OAuth2 token endpoint" maxLength:"2048" example:"https://quay.io/oauth/access_token"`
+	DeviceAuthURL string `json:"deviceAuthURL,omitempty" yaml:"deviceAuthURL,omitempty" mapstructure:"deviceAuthURL" doc:"OAuth2 device authorization endpoint (required for device_code flow)" maxLength:"2048" example:"https://sso.example.com/device/code"`
+
+	// Client credentials
+	ClientID     string `json:"clientID" yaml:"clientID" mapstructure:"clientID" doc:"OAuth2 client ID" maxLength:"256"`
+	ClientSecret string `json:"clientSecret,omitempty" yaml:"clientSecret,omitempty" mapstructure:"clientSecret" doc:"OAuth2 client secret (required for client_credentials flow)" maxLength:"256"` //nolint:gosec // G117: config field, not a hardcoded credential
+
+	// Flow configuration
+	Scopes                 []string `json:"scopes,omitempty" yaml:"scopes,omitempty" mapstructure:"scopes" doc:"Default OAuth scopes" maxItems:"20"`
+	DefaultFlow            string   `json:"defaultFlow,omitempty" yaml:"defaultFlow,omitempty" mapstructure:"defaultFlow" doc:"Default OAuth2 flow (interactive, device_code, client_credentials)" maxLength:"32" example:"interactive"`
+	CallbackPort           int      `json:"callbackPort,omitempty" yaml:"callbackPort,omitempty" mapstructure:"callbackPort" doc:"Local callback port for interactive flow (0 = random)" maximum:"65535" example:"8080"`
+	DeviceCodePollInterval int      `json:"deviceCodePollInterval,omitempty" yaml:"deviceCodePollInterval,omitempty" mapstructure:"deviceCodePollInterval" doc:"Polling interval in seconds for device_code flow (0 = server default)" maximum:"30" example:"5"`
+
+	// Token verification
+	VerifyURL      string                `json:"verifyURL,omitempty" yaml:"verifyURL,omitempty" mapstructure:"verifyURL" doc:"Token verification endpoint (optional)" maxLength:"2048" example:"https://quay.io/api/v1/user/"`
+	IdentityFields *IdentityFieldMapping `json:"identityFields,omitempty" yaml:"identityFields,omitempty" mapstructure:"identityFields" doc:"Field mapping from verify response to identity claims"`
+
+	// Registry association (optional, only for OCI registry auth)
+	Registry         string `json:"registry,omitempty" yaml:"registry,omitempty" mapstructure:"registry" doc:"OCI registry host for auto-detection (optional, registry-only)" maxLength:"253" example:"quay.io"`
+	RegistryUsername string `json:"registryUsername,omitempty" yaml:"registryUsername,omitempty" mapstructure:"registryUsername" doc:"Username for registry auth (optional, default: oauth2accesstoken)" maxLength:"256"`
+
+	// Token exchange (optional secondary credential derivation)
+	TokenExchange *TokenExchangeConfig `json:"tokenExchange,omitempty" yaml:"tokenExchange,omitempty" mapstructure:"tokenExchange" doc:"Optional secondary API call to derive a service-specific credential from the OAuth2 token"`
+}
+
+// TokenExchangeConfig defines a secondary API call that the OAuth2 handler executes after
+// initial authentication. The primary OAuth2 token is injected as a Bearer token in the
+// Authorization header. The response is parsed to extract a derived credential.
+//
+// This is fully generic — not coupled to registries or any specific service type:
+//   - Quay.io: OAuth2 token → POST /api/v1/user/apptoken → app token
+//   - API gateway: OAuth2 token → POST /v1/keys/generate → scoped API key
+//   - Vault-like: OAuth2 token → POST /v1/auth/jwt/login → dynamic secret
+//
+// Note: This is a configurable credential derivation step, not an implementation
+// of RFC 8693 (OAuth 2.0 Token Exchange).
+type TokenExchangeConfig struct {
+	// URL is the API endpoint to call to derive a secondary token.
+	URL string `json:"url" yaml:"url" mapstructure:"url" doc:"API endpoint to derive a secondary credential" maxLength:"2048" example:"https://quay.io/api/v1/user/apptoken"`
+	// Method is the HTTP method (default: POST).
+	Method string `json:"method,omitempty" yaml:"method,omitempty" mapstructure:"method" doc:"HTTP method (default: POST)" maxLength:"10" example:"POST"`
+	// RequestBody is the JSON body to send. Supports Go template variables: {{.Hostname}}, {{.Username}}.
+	RequestBody string `json:"requestBody,omitempty" yaml:"requestBody,omitempty" mapstructure:"requestBody" doc:"JSON request body (Go template, optional)" maxLength:"4096"`
+	// TokenJSONPath is the dot-notation path to extract the derived token from the JSON response.
+	TokenJSONPath string `json:"tokenJSONPath" yaml:"tokenJSONPath" mapstructure:"tokenJSONPath" doc:"JSON path to the derived token in the response" maxLength:"256" example:"token.token"`
+	// UsernameJSONPath optionally extracts a username from the response.
+	UsernameJSONPath string `json:"usernameJSONPath,omitempty" yaml:"usernameJSONPath,omitempty" mapstructure:"usernameJSONPath" doc:"JSON path to username in response (optional)" maxLength:"256"`
+}
+
+// IdentityFieldMapping maps fields in a token verification response to identity claims.
+type IdentityFieldMapping struct {
+	Username string `json:"username,omitempty" yaml:"username,omitempty" mapstructure:"username" doc:"JSON field for username" maxLength:"128" example:"username"`
+	Email    string `json:"email,omitempty" yaml:"email,omitempty" mapstructure:"email" doc:"JSON field for email" maxLength:"128" example:"email"`
+	Name     string `json:"name,omitempty" yaml:"name,omitempty" mapstructure:"name" doc:"JSON field for display name" maxLength:"128"`
 }

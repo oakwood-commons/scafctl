@@ -133,7 +133,7 @@ func runInstall(ctx context.Context, opts *InstallOptions) error {
 		chainLogger = logr.Discard()
 	}
 
-	chain, err := catalog.BuildCatalogChain(appCfg, chainLogger)
+	chain, err := catalog.BuildCatalogChain(appCfg, nil, chainLogger)
 	if err != nil {
 		w.Errorf("failed to build catalog chain: %v", err)
 		return exitcode.WithCode(err, exitcode.CatalogError)
