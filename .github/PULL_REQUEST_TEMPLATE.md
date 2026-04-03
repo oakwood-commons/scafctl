@@ -21,4 +21,4 @@ Closes #
 - [ ] I have added/updated tests for my changes
 - [ ] `go test ./...` passes
 - [ ] `golangci-lint run` passes
-- [ ] I have signed off my commits (`git commit -s`)
+- [ ] I have signed off my commits (`git commit -s -S`)
