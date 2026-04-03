@@ -85,3 +85,9 @@ Use `gh issue create` with:
 ```
 
 Use `--body-file` for complex markdown to avoid shell escaping issues.
+
+## Markdown Rules
+
+When writing issue bodies:
+- Use tilde fences (`~~~`) instead of backtick fences when code blocks contain backticks
+- Use only ASCII characters -- `--` not em dashes, straight quotes not curly quotes, `...` not ellipsis characters

@@ -1,5 +1,5 @@
 ---
-description: "Run Go code review on recent changes. Checks for idiomatic Go, security, error handling, concurrency, and scafctl conventions."
+description: "scafctl: Run Go code review on recent changes. Checks for idiomatic Go, security, error handling, concurrency, and scafctl conventions."
 agent: "go-reviewer"
 ---
 Review the current Go code changes for:
@@ -9,4 +9,4 @@ Review the current Go code changes for:
 - Code quality (function length, nesting depth, idiomatic patterns)
 - scafctl conventions (Writer usage, kvx output, struct tags, business logic placement)
 
-Run `go vet ./...` and `golangci-lint run` first, then review the code.
+Run `go vet ./...` and `task lint` first, then review the code.
