@@ -300,7 +300,7 @@ spec:
 EOF
 
 # 2. Build to create a lock file (pins plugin versions)
-scafctl build solution solution.yaml --version 1.0.0
+scafctl build solution -f solution.yaml --version 1.0.0
 
 # 3. Pre-fetch plugins (optional but recommended)
 scafctl plugins install -f solution.yaml
@@ -337,7 +337,7 @@ spec:
 '@ | Set-Content solution.yaml
 
 # 2. Build to create a lock file (pins plugin versions)
-scafctl build solution solution.yaml --version 1.0.0
+scafctl build solution -f solution.yaml --version 1.0.0
 
 # 3. Pre-fetch plugins (optional but recommended)
 scafctl plugins install -f solution.yaml

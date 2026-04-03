@@ -80,7 +80,7 @@ Add a `scafctl catalog tag` command to create full references:
 
 ```bash
 # Build locally
-scafctl build solution deploy.yaml --version 1.0.0
+scafctl build solution -f deploy.yaml --version 1.0.0
 
 # Tag with full remote reference
 scafctl catalog tag deploy@1.0.0 ghcr.io/myorg/solutions/deploy:1.0.0

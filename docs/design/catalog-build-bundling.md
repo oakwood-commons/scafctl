@@ -70,7 +70,7 @@ my-solution/
   workflow.yaml        # ← Not included in build
 ```
 
-After `scafctl build solution ./solution.yaml && scafctl catalog push ...`, a consumer running `scafctl run solution my-solution@1.0.0` on a different machine will get file-not-found errors for every local reference, and network errors for unavailable catalog dependencies.
+After `scafctl build solution -f ./solution.yaml && scafctl catalog push ...`, a consumer running `scafctl run solution my-solution@1.0.0` on a different machine will get file-not-found errors for every local reference, and network errors for unavailable catalog dependencies.
 
 ---
 
@@ -343,7 +343,7 @@ The `bundle` section sits at the top level alongside `metadata`, `catalog`, `com
 The `scafctl build solution` command gains the following behavior:
 
 ```
-scafctl build solution ./my-solution.yaml
+scafctl build solution -f ./my-solution.yaml
 ```
 
 1. **Parse** the solution YAML.
@@ -374,7 +374,7 @@ scafctl build solution ./my-solution.yaml
 #### Dry-Run Output
 
 ```bash
-$ scafctl build solution ./solution.yaml --dry-run
+$ scafctl build solution -f ./solution.yaml --dry-run
 
 Bundle analysis for ./solution.yaml:
 
@@ -878,7 +878,7 @@ workflow:
 ### Build
 
 ```bash
-$ scafctl build solution ./solution.yaml
+$ scafctl build solution -f ./solution.yaml
 
   Composed 2 files into solution
   Bundled 7 files (15.5 KB)
@@ -1244,15 +1244,12 @@ Re-resolve and update vendored dependencies without a full rebuild, enabling qui
 ### Command Specification
 
 ```bash
-scafctl vendor update [solution-path]
+scafctl vendor update [-f solution-path]
 ```
-
-| Argument | Description |
-|----------|-------------|
-| `[solution-path]` | Path to solution YAML (default: `./solution.yaml`) |
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `-f` | `auto-discover` | Path to solution YAML file; if omitted, auto-discover a solution file and fall back to `./solution.yaml` only when discovery finds nothing |
 | `--dependency` | — | Update only this dependency (repeatable); if omitted, update all |
 | `--dry-run` | `false` | Show what would be updated without making changes |
 | `--lock-only` | `false` | Update `solution.lock` without re-vendoring files |

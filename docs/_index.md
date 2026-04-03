@@ -32,7 +32,7 @@ spec:
 ```
 
 ```bash
-scafctl run solution hello.yaml -o yaml
+scafctl run solution -f hello.yaml -o yaml
 # greeting: "Hello, world!"
 ```
 

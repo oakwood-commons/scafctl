@@ -47,7 +47,7 @@ func TestCmdOptionsVersion_GetSolutionWithGetter(t *testing.T) {
 				NoColor: true,
 			},
 			Output: "json",
-			Path:   "/path/to/solution.yaml",
+			File:   "/path/to/solution.yaml",
 		}
 
 		err := options.GetSolutionWithGetter(context.Background(), mockGetter)
@@ -84,7 +84,7 @@ func TestCmdOptionsVersion_GetSolutionWithGetter(t *testing.T) {
 				NoColor: true,
 			},
 			Output: "yaml",
-			Path:   "https://example.com/solution.yaml",
+			File:   "https://example.com/solution.yaml",
 		}
 
 		err := options.GetSolutionWithGetter(context.Background(), mockGetter)
@@ -121,7 +121,7 @@ func TestCmdOptionsVersion_GetSolutionWithGetter(t *testing.T) {
 				NoColor: true,
 			},
 			Output: "json",
-			Path:   "",
+			File:   "",
 		}
 
 		err := options.GetSolutionWithGetter(context.Background(), mockGetter)
@@ -152,7 +152,7 @@ func TestCmdOptionsVersion_GetSolutionWithGetter(t *testing.T) {
 				NoColor: true,
 			},
 			Output: "json",
-			Path:   "/invalid/path",
+			File:   "/invalid/path",
 		}
 
 		w := writer.New(ioStreams, options.CliParams)
@@ -194,7 +194,7 @@ func TestCmdOptionsVersion_GetSolutionWithGetter(t *testing.T) {
 				NoColor: true,
 			},
 			Output: "json",
-			Path:   "/path/to/solution.yaml",
+			File:   "/path/to/solution.yaml",
 		}
 
 		err := options.GetSolutionWithGetter(context.Background(), mockGetter)
@@ -236,7 +236,7 @@ func TestCmdOptionsVersion_GetSolutionWithGetter(t *testing.T) {
 			IOStreams: ioStreams,
 			CliParams: cliParams,
 			Output:    "json",
-			Path:      "/path/to/solution.yaml",
+			File:      "/path/to/solution.yaml",
 		}
 
 		err := options.GetSolutionWithGetter(ctx, mockGetter)
@@ -274,7 +274,7 @@ func TestCmdOptionsVersion_GetSolutionWithGetter(t *testing.T) {
 				NoColor: true,
 			},
 			Output: "yaml",
-			Path:   "/path/to/complex.yaml",
+			File:   "/path/to/complex.yaml",
 		}
 
 		err := options.GetSolutionWithGetter(context.Background(), mockGetter)
@@ -303,10 +303,74 @@ func TestCmdOptionsVersion_GetSolution(t *testing.T) {
 				NoColor: true,
 			},
 			Output: "json",
-			Path:   "/nonexistent/solution.yaml",
+			File:   "/nonexistent/solution.yaml",
 		}
 
 		err := options.GetSolution(context.Background())
 		require.Error(t, err)
 	})
+}
+
+// TestCommandSolution_Validation tests the RunE validation branches in CommandSolution:
+// positional path rejection, -f+positional conflict, and invalid output type.
+func TestCommandSolution_Validation(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{
+			name:    "rejects relative path as positional arg",
+			args:    []string{"./solution.yaml"},
+			wantErr: "local file paths must use -f/--file flag",
+		},
+		{
+			name:    "rejects yaml extension as positional arg",
+			args:    []string{"solution.yaml"},
+			wantErr: "local file paths must use -f/--file flag",
+		},
+		{
+			name:    "rejects absolute path as positional arg",
+			args:    []string{"/tmp/my-solution.yaml"},
+			wantErr: "local file paths must use -f/--file flag",
+		},
+		{
+			name:    "rejects both -f and positional arg",
+			args:    []string{"-f", "solution.yaml", "my-catalog"},
+			wantErr: "cannot use both -f/--file",
+		},
+		{
+			name:    "rejects invalid output type",
+			args:    []string{"-f", "solution.yaml", "-o", "xml"},
+			wantErr: "xml",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			outBuf := &bytes.Buffer{}
+			errBuf := &bytes.Buffer{}
+			ioStreams := &terminal.IOStreams{Out: outBuf, ErrOut: errBuf}
+			cliParams := &settings.Run{NoColor: true}
+			cmd := CommandSolution(cliParams, ioStreams, "get")
+			cmd.SetArgs(tc.args)
+
+			err := cmd.Execute()
+			require.Error(t, err)
+			// Error may be in err.Error() or written to stderr
+			combinedOutput := err.Error() + errBuf.String()
+			assert.Contains(t, combinedOutput, tc.wantErr)
+		})
+	}
+}
+
+func BenchmarkCommandSolution_Structure(b *testing.B) {
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		CommandSolution(cliParams, ioStreams, "get")
+	}
 }

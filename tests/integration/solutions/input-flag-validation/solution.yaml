@@ -1,0 +1,48 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: input-flag-validation
+  version: 1.0.0
+  description: |
+    Tests that the uniform -f/--file input pattern works correctly.
+    Verifies auto-discovery, explicit -f flag, and positional arg rejection.
+
+spec:
+  resolvers:
+    greeting:
+      description: Static greeting for input flag validation
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: validated
+
+  testing:
+    config:
+      skipBuiltins: [render-defaults]
+
+    cases:
+      resolve-with-auto-inject:
+        description: Verify resolver works with auto-injected -f flag
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [input-flag, smoke]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.greeting == "validated"
+
+      lint-with-auto-inject:
+        description: Verify lint works with auto-injected -f flag
+        command: [lint]
+        tags: [input-flag, smoke]
+        assertions:
+          - expression: __exitCode == 0
+
+      explain-with-auto-inject:
+        description: Verify explain works with auto-injected -f flag
+        command: [explain, solution]
+        tags: [input-flag]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: "input-flag-validation"
