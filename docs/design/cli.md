@@ -81,6 +81,36 @@ scafctl run solution "example@>=1.0 <2.0"  # planned
 scafctl run solution "example@^1.2"         # planned
 ~~~
 
+### File Paths vs. Catalog References
+
+When a command accepts both a positional name argument and a `-f`/`--file` flag, the CLI distinguishes catalog references from local file paths:
+
+| Input | Interpretation | Example |
+|-------|---------------|---------|
+| Bare name | Catalog reference | `my-app`, `deploy` |
+| Versioned name | Catalog reference | `my-app@1.0.0`, `deploy@^1.2` |
+| Registry reference | Catalog reference | `ghcr.io/org/sol:v1`, `localhost:5000/sol` |
+| URL | Remote reference | `https://example.com/sol.yaml` |
+| Starts with `/` or `.` | **Rejected** — use `-f` | `/tmp/sol.yaml`, `./sol.yaml` |
+| Ends with `.yaml`, `.yml`, `.json` | **Rejected** — use `-f` | `solution.yaml` |
+| Path with separators, non-hostname first segment | **Rejected** — use `-f` | `configs/solution`, `relative/path/sol` |
+| Windows path | **Rejected** — use `-f` | `C:\dir\sol`, `dir\sol` |
+
+To pass a local file path, always use the `-f`/`--file` flag:
+
+~~~bash
+# Correct: file via -f flag
+scafctl run solution -f ./solution.yaml
+
+# Correct: catalog reference as positional arg
+scafctl run solution my-app@1.0.0
+
+# Error: local file path as positional arg
+scafctl run solution solution.yaml   # rejected with helpful error
+~~~
+
+This separation keeps the CLI unambiguous — positional arguments are always catalog/registry lookups while `-f` is always a file path.
+
 ---
 
 ## Running a Solution
@@ -434,13 +464,13 @@ Build a solution for the local catalog (analogous to `docker build`):
 
 ~~~bash
 # Build a solution from file
-scafctl build solution ./solution.yaml --version 1.0.0
+scafctl build solution -f ./solution.yaml --version 1.0.0
 
 # Build using version from metadata
-scafctl build solution ./solution.yaml
+scafctl build solution -f ./solution.yaml
 
 # Overwrite existing version
-scafctl build solution ./solution.yaml --version 1.0.0 --force
+scafctl build solution -f ./solution.yaml --version 1.0.0 --force
 ~~~
 
 The build process validates, resolves dependencies, bundles local files, vendors catalog dependencies, and packages artifacts into the local catalog. See [catalog-build-bundling.md](../design/catalog-build-bundling.md) for the full bundling design.
@@ -449,19 +479,19 @@ Additional build flags:
 
 ~~~bash
 # Dry-run: show what would be bundled without building
-scafctl build solution ./solution.yaml --dry-run
+scafctl build solution -f ./solution.yaml --dry-run
 
 # Skip file bundling (legacy single-layer artifact)
-scafctl build solution ./solution.yaml --no-bundle
+scafctl build solution -f ./solution.yaml --no-bundle
 
 # Skip vendoring catalog dependencies
-scafctl build solution ./solution.yaml --no-vendor
+scafctl build solution -f ./solution.yaml --no-vendor
 
 # Set max bundle size
-scafctl build solution ./solution.yaml --bundle-max-size 100MB
+scafctl build solution -f ./solution.yaml --bundle-max-size 100MB
 
 # Re-resolve and update the lock file
-scafctl build solution ./solution.yaml --update-lock
+scafctl build solution -f ./solution.yaml --update-lock
 ~~~
 
 ### Publishing Artifacts

@@ -25,7 +25,7 @@ echo "YOUR_TOKEN" | podman login ghcr.io -u YOUR_USERNAME --password-stdin
 
 ```bash
 # Build the example solution
-scafctl build solution examples/resolver-demo.yaml --version 1.0.0
+scafctl build solution -f examples/resolver-demo.yaml --version 1.0.0
 
 # Verify it's in the local catalog
 scafctl catalog list
@@ -82,7 +82,7 @@ jobs:
       - name: Build and Push
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
-          scafctl build solution solution.yaml --version $VERSION
+          scafctl build solution -f solution.yaml --version $VERSION
           scafctl catalog push my-solution@$VERSION --catalog ghcr.io/${{ github.repository_owner }}/scafctl
 ```
 

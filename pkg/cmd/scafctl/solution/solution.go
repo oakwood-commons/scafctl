@@ -26,11 +26,14 @@ func CommandSolution(cliParams *settings.Run, ioStreams terminal.IOStreams, bina
 		`),
 		Example: heredoc.Docf(`
 			# Compare two solution files
-			$ %s solution diff v1.yaml v2.yaml
+			$ %s solution diff -f v1.yaml -f v2.yaml
 
 			# Compare with JSON output
-			$ %s solution diff v1.yaml v2.yaml -o json
-		`, binaryName, binaryName),
+			$ %s solution diff -f v1.yaml -f v2.yaml -o json
+
+			# Compare catalog versions
+			$ %s solution diff my-app@1.0.0 my-app@2.0.0
+		`, binaryName, binaryName, binaryName),
 	}
 
 	cmd.AddCommand(CommandDiff(cliParams, ioStreams, binaryName))

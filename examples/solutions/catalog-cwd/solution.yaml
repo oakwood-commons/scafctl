@@ -6,7 +6,7 @@
 #
 # Build into local catalog:
 #   cd examples/solutions/catalog-cwd
-#   scafctl build solution solution.yaml --version 1.0.0
+#   scafctl build solution -f solution.yaml --version 1.0.0
 #
 # Run from any directory (files land in your current directory):
 #   mkdir /tmp/my-project && cd /tmp/my-project

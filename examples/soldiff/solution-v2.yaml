@@ -5,7 +5,7 @@
 # updated action. Compare against solution-v1.yaml to see the diff.
 #
 # Usage:
-#   scafctl solution diff examples/soldiff/solution-v1.yaml examples/soldiff/solution-v2.yaml
+#   scafctl solution diff -f examples/soldiff/solution-v1.yaml -f examples/soldiff/solution-v2.yaml
 
 apiVersion: scafctl.io/v1
 kind: Solution

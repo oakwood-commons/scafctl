@@ -315,9 +315,9 @@ go test -count=10 ./...                      # Flaky test detection
 - Use meaningful test names that describe the scenario
 - Use `testify/assert` and `testify/require` for assertions
 - Place mocks in `mock.go` files
+- Try not to test private functions directly (test through public API)
 
 **DON'T:**
-- Test private functions directly (test through public API)
 - Use `time.Sleep()` in tests (use channels or conditions)
 - Ignore flaky tests (fix or remove them)
 - Mock everything (prefer integration tests when possible)

@@ -6,10 +6,10 @@
 #
 # Usage:
 #   # Compare the two solutions
-#   scafctl solution diff examples/soldiff/solution-v1.yaml examples/soldiff/solution-v2.yaml
+#   scafctl solution diff -f examples/soldiff/solution-v1.yaml -f examples/soldiff/solution-v2.yaml
 #
 #   # Output as JSON
-#   scafctl solution diff examples/soldiff/solution-v1.yaml examples/soldiff/solution-v2.yaml -o json
+#   scafctl solution diff -f examples/soldiff/solution-v1.yaml -f examples/soldiff/solution-v2.yaml -o json
 
 apiVersion: scafctl.io/v1
 kind: Solution

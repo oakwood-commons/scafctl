@@ -310,6 +310,77 @@ func (o *Getter) fromCatalogWithBundle(ctx context.Context, nameWithVersion stri
 	return &sol, nil, nil
 }
 
+// ValidatePositionalRef validates a positional CLI argument intended to be a
+// catalog or registry reference. Returns an error if:
+//   - fileFlag is non-empty (both -f/--file and a positional arg were provided)
+//   - arg looks like a local file path rather than a catalog/registry name
+//
+// cmdUsage is included in the error message to suggest the correct invocation
+// (e.g., "scafctl explain solution").
+func ValidatePositionalRef(arg, fileFlag, cmdUsage string) error {
+	if fileFlag != "" {
+		return fmt.Errorf("cannot use both -f/--file and a positional argument")
+	}
+	if !IsCatalogReference(arg) {
+		return fmt.Errorf("local file paths must use -f/--file flag: %s -f %s", cmdUsage, arg)
+	}
+	return nil
+}
+
+// IsCatalogReference returns true when s looks like a catalog name or remote
+// registry reference rather than a local file path. The check is intentionally
+// conservative: when in doubt it returns false so callers are guided to use
+// -f/--file instead of silently treating a filesystem path as a catalog lookup.
+//
+// Returns false (local file path) when:
+//   - s starts with "/" (absolute path)
+//   - s starts with "." (relative path like ./foo or ../bar)
+//   - s ends with ".yaml", ".yml", or ".json" (file extension)
+//   - s starts with a Windows drive letter (e.g., "C:\dir\sol" or "C:/dir/sol")
+//   - s contains a backslash (Windows path separator)
+//   - s contains "/" but the first path segment does not look like a hostname
+//     (i.e., does not contain "." or ":") — catches relative paths like
+//     "configs/solution" that lack a leading "./" but are still local
+//
+// Returns true (catalog / remote reference) for:
+//   - bare names ("my-app"), versioned names ("my-app@1.0.0")
+//   - registry refs where the first segment is hostname-like ("ghcr.io/org/sol:v1",
+//     "localhost:5000/sol")
+//   - URLs ("https://...", "oci://...")
+func IsCatalogReference(s string) bool {
+	if strings.HasPrefix(s, "/") || strings.HasPrefix(s, ".") {
+		return false
+	}
+	// URLs are not local file paths — they are handled by get.Getter.
+	if strings.Contains(s, "://") {
+		return true
+	}
+	lower := strings.ToLower(s)
+	if strings.HasSuffix(lower, ".yaml") || strings.HasSuffix(lower, ".yml") || strings.HasSuffix(lower, ".json") {
+		return false
+	}
+	// Windows absolute paths (e.g., "C:\dir\sol" or "C:/dir/sol").
+	if len(s) >= 2 && s[1] == ':' {
+		return false
+	}
+	// Any remaining backslash is a Windows path separator → local path.
+	if strings.Contains(s, "\\") {
+		return false
+	}
+	// Strings containing "/" without "://" are either registry refs or relative
+	// local paths. Distinguish them by the first path segment: registry hostnames
+	// always contain "." (ghcr.io) or ":" (localhost:5000), while plain directory
+	// names (configs, relative, mydir) do not.
+	if strings.Contains(s, "/") {
+		firstSegment := strings.SplitN(s, "/", 2)[0]
+		if strings.Contains(firstSegment, ".") || strings.Contains(firstSegment, ":") {
+			return true
+		}
+		return false
+	}
+	return true
+}
+
 // isBareName returns true if the path is a bare name suitable for catalog lookup.
 // A bare name has no path separators (/, \) and is not a URL.
 func (o *Getter) isBareName(path string) bool {

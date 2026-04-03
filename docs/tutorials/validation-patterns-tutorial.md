@@ -151,7 +151,7 @@ spec:
 Run this example
 
 ```bash
-scafctl run solution regex-patterns.yaml
+scafctl run solution -f regex-patterns.yaml
 ```
 {{% /details %}}
 
@@ -471,13 +471,13 @@ When validation fails, scafctl provides structured error messages. Use the MCP `
 {{% tab "Bash" %}}
 ```bash
 # Run with verbose output to see validation details
-scafctl run solution my-solution.yaml -v 2
+scafctl run solution -f my-solution.yaml -v 2
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
 # Run with verbose output to see validation details
-scafctl run solution my-solution.yaml -v 2
+scafctl run solution -f my-solution.yaml -v 2
 ```
 {{% /tab %}}
 {{< /tabs >}}

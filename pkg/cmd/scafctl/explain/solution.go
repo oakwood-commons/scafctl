@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
@@ -18,7 +20,7 @@ import (
 type SolutionOptions struct {
 	IOStreams *terminal.IOStreams
 	CliParams *settings.Run
-	Path      string
+	File      string
 }
 
 // CommandSolution creates the 'explain solution' subcommand
@@ -26,7 +28,7 @@ func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 	options := &SolutionOptions{}
 
 	cCmd := &cobra.Command{
-		Use:     "solution [path]",
+		Use:     "solution [name[@version]]",
 		Aliases: []string{"solutions", "sol", "s"},
 		Short:   "Explain a solution's metadata and structure",
 		Long: `Show detailed documentation for a solution including its metadata,
@@ -39,24 +41,40 @@ The output includes:
   - Required parameters summary
   - Catalog and visibility information
 
+Solutions can be loaded from:
+  - Catalog name or remote registry ref: Use as positional argument (e.g., "my-app")
+  - URL: Use as positional argument or with -f/--file (e.g., "https://example.com/my-solution.yaml")
+  - Local file: Use -f/--file flag (e.g., -f ./my-solution.yaml)
+  - Auto-discovery: If no source is specified, searches for solution.yaml
+
+NOTE: Positional arguments accept catalog names, remote registry refs, and URLs.
+Local file paths must use -f/--file.
+
 Examples:
   # Explain a solution from a file
-  scafctl explain solution ./my-solution.yaml
+  scafctl explain solution -f ./my-solution.yaml
+
+  # Explain a solution from catalog
+  scafctl explain solution my-app
 
   # Explain using default file discovery
-  scafctl explain solution
-
-  # Explain a solution from a URL
-  scafctl explain solution https://example.com/solution.yaml`,
+  scafctl explain solution`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cCmd *cobra.Command, args []string) error {
-			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
+			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Name())
 			ctx := settings.IntoContext(cCmd.Context(), cliParams)
 
 			options.IOStreams = ioStreams
 			options.CliParams = cliParams
 
+			w := writer.New(ioStreams, cliParams)
+
 			if len(args) > 0 {
-				options.Path = args[0]
+				if err := get.ValidatePositionalRef(args[0], options.File, "scafctl explain solution"); err != nil {
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.InvalidInput)
+				}
+				options.File = args[0]
 			}
 
 			return options.Run(ctx)
@@ -64,7 +82,7 @@ Examples:
 		SilenceUsage: true,
 	}
 
-	cCmd.Flags().StringVarP(&options.Path, "path", "p", "", "Path to the solution file (local file or URL)")
+	cCmd.Flags().StringVarP(&options.File, "file", "f", "", "Path to the solution file (local file, URL, or '-' for stdin)")
 
 	return cCmd
 }
@@ -73,7 +91,7 @@ Examples:
 func (o *SolutionOptions) Run(ctx context.Context) error {
 	w := writer.New(o.IOStreams, o.CliParams)
 
-	sol, err := LoadSolution(ctx, o.Path)
+	sol, err := LoadSolution(ctx, o.File)
 	if err != nil {
 		w.Errorf("%v", err)
 		return err

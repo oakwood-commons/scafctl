@@ -63,6 +63,10 @@ type ResolverOptions struct {
 	// DynamicArgs are resolver parameters from positional key=value syntax
 	// (e.g. env=prod region=us-east-1, captured from positional args containing '=').
 	DynamicArgs []string
+
+	// positionalPathErr is set in PreRun when the user passes a local file
+	// path as a positional argument instead of using -f/--file.
+	positionalPathErr error
 }
 
 // CommandResolver creates the 'run resolver' subcommand
@@ -263,8 +267,8 @@ Examples:
 			// Split positional args: bare words are resolver names,
 			// args containing '=' or starting with '@' are dynamic parameters.
 			// When -f/--file is not explicitly set, the first bare word is
-			// treated as the solution reference (catalog name, file path, etc.),
-			// matching "run solution" behavior.
+			// treated as the solution reference (catalog name or registry ref).
+			// Local file paths must use -f/--file.
 			fileExplicit := options.flagsChanged["file"]
 			for _, arg := range args {
 				switch {
@@ -275,8 +279,13 @@ Examples:
 				case strings.Contains(arg, "=") || strings.HasPrefix(arg, "@"):
 					options.DynamicArgs = append(options.DynamicArgs, arg)
 				case !fileExplicit && options.File == "":
-					// First bare word becomes the solution reference
-					options.File = arg
+					// First bare word becomes the solution reference — must be
+					// a catalog name or registry ref, not a local file path.
+					if err := get.ValidatePositionalRef(arg, "", "scafctl run resolver"); err != nil {
+						options.positionalPathErr = err
+					} else {
+						options.File = arg
+					}
 					fileExplicit = true // only the first one
 				default:
 					options.Names = append(options.Names, arg)
@@ -306,6 +315,11 @@ Examples:
 
 // Run executes the resolver-only flow
 func (o *ResolverOptions) Run(ctx context.Context) error {
+	// Fail early if PreRun detected a local file path as positional arg
+	if o.positionalPathErr != nil {
+		return o.exitWithCode(ctx, o.positionalPathErr, exitcode.InvalidInput)
+	}
+
 	lgr := logger.FromContext(ctx)
 	lgr.V(1).Info("running resolver",
 		"file", o.File,

@@ -19,6 +19,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/builder"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
+	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
@@ -56,7 +57,7 @@ func CommandBuildSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams
 	}
 
 	cmd := &cobra.Command{
-		Use:          "solution [file]",
+		Use:          "solution",
 		Aliases:      []string{"sol", "s"},
 		Short:        "Build a solution into the local catalog",
 		SilenceUsage: true,
@@ -79,31 +80,45 @@ func CommandBuildSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams
 			Use --dry-run to see what would be bundled without storing.
 
 			Examples:
-			  # Build solution using version from metadata
-			  scafctl build solution ./my-solution.yaml
+			  # Build solution using version from metadata (auto-discovery)
+			  scafctl build solution
+
+			  # Build solution from a specific file
+			  scafctl build solution -f ./my-solution.yaml
 
 			  # Build with explicit version (overrides metadata)
-			  scafctl build solution ./solution.yaml --version 1.0.0
+			  scafctl build solution -f ./solution.yaml --version 1.0.0
 
 			  # Build with explicit name
-			  scafctl build solution ./solution.yaml --name my-solution --version 1.0.0
+			  scafctl build solution -f ./solution.yaml --name my-solution --version 1.0.0
 
 			  # Overwrite existing version
-			  scafctl build solution ./solution.yaml --version 1.0.0 --force
+			  scafctl build solution -f ./solution.yaml --version 1.0.0 --force
 
 			  # Preview what would be bundled
-			  scafctl build solution ./solution.yaml --dry-run
+			  scafctl build solution -f ./solution.yaml --dry-run
 
 			  # Build without bundling
-			  scafctl build solution ./solution.yaml --no-bundle
+			  scafctl build solution -f ./solution.yaml --no-bundle
 		`),
-		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			options.File = args[0]
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if options.File == "" {
+				getter := get.NewGetter()
+				options.File = getter.FindSolution()
+				if options.File == "" {
+					err := fmt.Errorf("no -f/--file specified and no solution file found in default locations")
+					if w := writer.FromContext(cmd.Context()); w != nil {
+						w.Errorf("%v", err)
+					}
+					return exitcode.WithCode(err, exitcode.InvalidInput)
+				}
+			}
 			return runBuildSolution(cmd.Context(), options)
 		},
 	}
 
+	cmd.Flags().StringVarP(&options.File, "file", "f", "", "Path to the solution file (auto-discovered if not provided)")
 	cmd.Flags().StringVar(&options.Name, "name", "", "Artifact name (default: extracted from solution metadata)")
 	cmd.Flags().StringVar(&options.Version, "version", "", "Semantic version (default: extracted from solution metadata)")
 	cmd.Flags().BoolVar(&options.Force, "force", false, "Overwrite existing version")

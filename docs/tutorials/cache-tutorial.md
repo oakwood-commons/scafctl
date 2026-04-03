@@ -379,10 +379,10 @@ The build cache enables incremental builds by fingerprinting all build inputs (s
 {{% tab "Bash" %}}
 ```bash
 # Build with cache (default)
-scafctl build solution my-solution.yaml
+scafctl build solution -f my-solution.yaml
 
 # Force a full rebuild, bypassing cache
-scafctl build solution my-solution.yaml --no-cache
+scafctl build solution -f my-solution.yaml --no-cache
 
 # Clear build cache
 scafctl cache clear --kind build --force
@@ -391,10 +391,10 @@ scafctl cache clear --kind build --force
 {{% tab "PowerShell" %}}
 ```powershell
 # Build with cache (default)
-scafctl build solution my-solution.yaml
+scafctl build solution -f my-solution.yaml
 
 # Force a full rebuild, bypassing cache
-scafctl build solution my-solution.yaml --no-cache
+scafctl build solution -f my-solution.yaml --no-cache
 
 # Clear build cache
 scafctl cache clear --kind build --force

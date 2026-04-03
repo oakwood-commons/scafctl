@@ -30,18 +30,19 @@ type CmdOptionsVersion struct {
 	IOStreams *terminal.IOStreams
 	CliParams *settings.Run
 	Output    string
-	Path      string
+	File      string
 	NoCache   bool
 }
 
 func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
 	options := &CmdOptionsVersion{}
 	cCmd := &cobra.Command{
-		Use:     "solution",
+		Use:     "solution [name[@version]]",
 		Aliases: []string{"sol", "SOL", "Solution", "solutions"},
 		Short:   fmt.Sprintf("Gets %s solutions", settings.CliBinaryName),
+		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cCmd *cobra.Command, args []string) error {
-			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
+			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Name())
 			ctx := settings.IntoContext(cCmd.Context(), cliParams)
 
 			lgr := logger.FromContext(ctx)
@@ -50,19 +51,21 @@ func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 			options.IOStreams = ioStreams
 			options.CliParams = cliParams
 
-			err := output.ValidateCommands(args)
-			if err != nil {
-				output.NewWriteMessageOptions(
-					options.IOStreams,
-					output.MessageTypeError,
-					options.CliParams.NoColor,
-					options.CliParams.ExitOnError,
-				).WriteMessage(err.Error())
-
-				return exitcode.WithCode(err, exitcode.InvalidInput)
+			// Handle positional catalog name argument
+			if len(args) > 0 {
+				if err := get.ValidatePositionalRef(args[0], options.File, "scafctl get solution"); err != nil {
+					output.NewWriteMessageOptions(
+						options.IOStreams,
+						output.MessageTypeError,
+						options.CliParams.NoColor,
+						options.CliParams.ExitOnError,
+					).WriteMessage(err.Error())
+					return exitcode.WithCode(err, exitcode.InvalidInput)
+				}
+				options.File = args[0]
 			}
 
-			err = output.ValidateOutputType(options.Output, ValidOutputTypes)
+			err := output.ValidateOutputType(options.Output, ValidOutputTypes)
 			if err != nil {
 				output.NewWriteMessageOptions(
 					options.IOStreams,
@@ -78,7 +81,7 @@ func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 		SilenceUsage: true,
 	}
 	cCmd.PersistentFlags().StringVarP(&options.Output, "output", "o", "", fmt.Sprintf("Output format. One of: (%s)", strings.Join(ValidOutputTypes, ", ")))
-	cCmd.PersistentFlags().StringVarP(&options.Path, "path", "p", "", "Path to the solution. This can be a local file path or a URL. If not provided, the command will attempt to locate a solution file in default locations.")
+	cCmd.PersistentFlags().StringVarP(&options.File, "file", "f", "", "Path to the solution. This can be a local file path or a URL. If not provided, the command will attempt to locate a solution file in default locations.")
 	cCmd.PersistentFlags().BoolVar(&options.NoCache, "no-cache", false, "Bypass the artifact cache and fetch directly from the catalog")
 	return cCmd
 }
@@ -113,7 +116,7 @@ func (o *CmdOptionsVersion) GetSolution(ctx context.Context) error {
 func (o *CmdOptionsVersion) GetSolutionWithGetter(ctx context.Context, getter get.Interface) error {
 	w := writer.FromContext(ctx)
 
-	sol, err := getter.Get(ctx, o.Path)
+	sol, err := getter.Get(ctx, o.File)
 	if err != nil {
 		if w != nil {
 			w.Errorf("%v", err)

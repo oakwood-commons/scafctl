@@ -12,6 +12,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -84,7 +85,7 @@ func TestCommandDiff_TableOutput(t *testing.T) {
 
 	out, ioStreams := makeIOStreams()
 	cmd := CommandDiff(&settings.Run{}, ioStreams, "scafctl")
-	cmd.SetArgs([]string{fileA, fileB})
+	cmd.SetArgs([]string{"-f", fileA, "-f", fileB})
 
 	err := cmd.Execute()
 	require.NoError(t, err)
@@ -105,7 +106,7 @@ func TestCommandDiff_JSONOutput(t *testing.T) {
 
 	out, ioStreams := makeIOStreams()
 	cmd := CommandDiff(&settings.Run{}, ioStreams, "scafctl")
-	cmd.SetArgs([]string{fileA, fileB, "-o", "json"})
+	cmd.SetArgs([]string{"-f", fileA, "-f", fileB, "-o", "json"})
 
 	err := cmd.Execute()
 	require.NoError(t, err)
@@ -126,7 +127,7 @@ func TestCommandDiff_YAMLOutput(t *testing.T) {
 
 	out, ioStreams := makeIOStreams()
 	cmd := CommandDiff(&settings.Run{}, ioStreams, "scafctl")
-	cmd.SetArgs([]string{fileA, fileB, "-o", "yaml"})
+	cmd.SetArgs([]string{"-f", fileA, "-f", fileB, "-o", "yaml"})
 
 	err := cmd.Execute()
 	require.NoError(t, err)
@@ -144,7 +145,7 @@ func TestCommandDiff_InvalidFormat(t *testing.T) {
 
 	_, ioStreams := makeIOStreams()
 	cmd := CommandDiff(&settings.Run{}, ioStreams, "scafctl")
-	cmd.SetArgs([]string{fileA, fileB, "-o", "invalid"})
+	cmd.SetArgs([]string{"-f", fileA, "-f", fileB, "-o", "invalid"})
 
 	err := cmd.Execute()
 	require.Error(t, err)
@@ -157,7 +158,7 @@ func TestCommandDiff_MissingFile(t *testing.T) {
 
 	_, ioStreams := makeIOStreams()
 	cmd := CommandDiff(&settings.Run{}, ioStreams, "scafctl")
-	cmd.SetArgs([]string{fileA, "/nonexistent/file.yaml"})
+	cmd.SetArgs([]string{"-f", fileA, "-f", "/nonexistent/file.yaml"})
 
 	err := cmd.Execute()
 	require.Error(t, err)
@@ -171,7 +172,7 @@ func TestCommandDiff_IdenticalSolutions(t *testing.T) {
 
 	out, ioStreams := makeIOStreams()
 	cmd := CommandDiff(&settings.Run{}, ioStreams, "scafctl")
-	cmd.SetArgs([]string{fileA, fileB})
+	cmd.SetArgs([]string{"-f", fileA, "-f", fileB})
 
 	err := cmd.Execute()
 	require.NoError(t, err)
@@ -183,7 +184,7 @@ func TestCommandDiff_WrongArgCount(t *testing.T) {
 	t.Parallel()
 	_, ioStreams := makeIOStreams()
 	cmd := CommandDiff(&settings.Run{}, ioStreams, "scafctl")
-	cmd.SetArgs([]string{"only-one.yaml"})
+	cmd.SetArgs([]string{"-f", "only-one.yaml"})
 
 	err := cmd.Execute()
 	require.Error(t, err)
@@ -213,11 +214,13 @@ func BenchmarkCommandDiff_Table(b *testing.B) {
 	require.NoError(b, os.WriteFile(fileA, []byte(solutionV1), 0o644))
 	require.NoError(b, os.WriteFile(fileB, []byte(solutionV2), 0o644))
 
+	b.ReportAllocs()
+	b.ResetTimer()
 	for b.Loop() {
 		out := &bytes.Buffer{}
 		ioStreams := terminal.IOStreams{In: os.Stdin, Out: out, ErrOut: out}
 		cmd := CommandDiff(&settings.Run{}, ioStreams, "scafctl")
-		cmd.SetArgs([]string{fileA, fileB})
+		cmd.SetArgs([]string{"-f", fileA, "-f", fileB})
 		_ = cmd.Execute()
 	}
 }
@@ -229,11 +232,105 @@ func BenchmarkCommandDiff_JSON(b *testing.B) {
 	require.NoError(b, os.WriteFile(fileA, []byte(solutionV1), 0o644))
 	require.NoError(b, os.WriteFile(fileB, []byte(solutionV2), 0o644))
 
+	b.ReportAllocs()
+	b.ResetTimer()
 	for b.Loop() {
 		out := &bytes.Buffer{}
 		ioStreams := terminal.IOStreams{In: os.Stdin, Out: out, ErrOut: out}
 		cmd := CommandDiff(&settings.Run{}, ioStreams, "scafctl")
-		cmd.SetArgs([]string{fileA, fileB, "-o", "json"})
+		cmd.SetArgs([]string{"-f", fileA, "-f", fileB, "-o", "json"})
 		_ = cmd.Execute()
 	}
+}
+
+// ── resolveDiffSlotOrder tests ──────────────────────────────────────
+
+// newTestDiffFlags builds a FlagSet that mirrors the diff command's flags.
+func newTestDiffFlags() *pflag.FlagSet {
+	fs := pflag.NewFlagSet("diff", pflag.ContinueOnError)
+	fs.StringArrayP("file", "f", nil, "")
+	fs.StringP("output", "o", "table", "")
+	return fs
+}
+
+func TestResolveDiffSlotOrder(t *testing.T) {
+	fs := newTestDiffFlags()
+
+	tests := []struct {
+		name    string
+		osArgs  []string
+		files   []string
+		posArgs []string
+		wantA   string
+		wantB   string
+	}{
+		{
+			name:   "two -f flags",
+			osArgs: []string{"scafctl", "solution", "diff", "-f", "old.yaml", "-f", "new.yaml"},
+			files:  []string{"old.yaml", "new.yaml"},
+			wantA:  "old.yaml",
+			wantB:  "new.yaml",
+		},
+		{
+			name:    "two positional catalog refs",
+			osArgs:  []string{"scafctl", "solution", "diff", "my-app@1.0.0", "my-app@2.0.0"},
+			posArgs: []string{"my-app@1.0.0", "my-app@2.0.0"},
+			wantA:   "my-app@1.0.0",
+			wantB:   "my-app@2.0.0",
+		},
+		{
+			name:    "file first then catalog",
+			osArgs:  []string{"scafctl", "solution", "diff", "-f", "modified.yaml", "my-app@1.0.0"},
+			files:   []string{"modified.yaml"},
+			posArgs: []string{"my-app@1.0.0"},
+			wantA:   "modified.yaml",
+			wantB:   "my-app@1.0.0",
+		},
+		{
+			name:    "catalog first then file",
+			osArgs:  []string{"scafctl", "solution", "diff", "my-app@1.0.0", "-f", "modified.yaml"},
+			files:   []string{"modified.yaml"},
+			posArgs: []string{"my-app@1.0.0"},
+			wantA:   "my-app@1.0.0",
+			wantB:   "modified.yaml",
+		},
+		{
+			name:   "with output flag",
+			osArgs: []string{"scafctl", "solution", "diff", "-f", "a.yaml", "-f", "b.yaml", "-o", "json"},
+			files:  []string{"a.yaml", "b.yaml"},
+			wantA:  "a.yaml",
+			wantB:  "b.yaml",
+		},
+		{
+			// Regression: shorthand -o was not looked up via ShorthandLookup,
+			// so its value token could be misread as a positional source,
+			// inverting the A/B order when the catalog ref shared the flag value.
+			name:    "shorthand output flag before mixed file and catalog",
+			osArgs:  []string{"scafctl", "solution", "diff", "-o", "json", "-f", "a.yaml", "json"},
+			files:   []string{"a.yaml"},
+			posArgs: []string{"json"},
+			wantA:   "a.yaml",
+			wantB:   "json",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sources := resolveDiffSlotOrder(tt.osArgs, fs, tt.files, tt.posArgs)
+			require.Len(t, sources, 2)
+			assert.Equal(t, tt.wantA, sources[0].Value, "slot A")
+			assert.Equal(t, tt.wantB, sources[1].Value, "slot B")
+		})
+	}
+}
+
+func TestCommandDiff_RejectsPositionalFilePaths(t *testing.T) {
+	t.Parallel()
+	_, ioStreams := makeIOStreams()
+	cmd := CommandDiff(&settings.Run{}, ioStreams, "scafctl")
+	cmd.SetArgs([]string{"./solution.yaml", "my-app@1.0.0"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "local file paths must use -f/--file flag")
 }

@@ -85,10 +85,10 @@ The `soldiff` package powers the `solution diff` CLI command:
 
 ```bash
 # Compare two solution files
-scafctl solution diff v1/solution.yaml v2/solution.yaml
+scafctl solution diff -f v1/solution.yaml -f v2/solution.yaml
 
 # Output as JSON
-scafctl solution diff v1/solution.yaml v2/solution.yaml -o json
+scafctl solution diff -f v1/solution.yaml -f v2/solution.yaml -o json
 ```
 
 ## Testing

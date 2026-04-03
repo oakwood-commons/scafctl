@@ -75,12 +75,12 @@ This solution accepts a `name` parameter (defaulting to "World") and produces a 
 {{< tabs "catalog-tutorial-cmd-1" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl build solution greeting.yaml
+scafctl build solution -f greeting.yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl build solution greeting.yaml
+scafctl build solution -f greeting.yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -102,12 +102,12 @@ You can also specify the version on the command line, which overrides `metadata.
 {{< tabs "catalog-tutorial-cmd-2" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl build solution greeting.yaml --version 1.0.1
+scafctl build solution -f greeting.yaml --version 1.0.1
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl build solution greeting.yaml --version 1.0.1
+scafctl build solution -f greeting.yaml --version 1.0.1
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -122,7 +122,7 @@ Expected output:
 
 ### What You Learned
 
-- `scafctl build solution FILE` packages a solution YAML into the local OCI catalog
+- `scafctl build solution -f FILE` packages a solution YAML into the local OCI catalog
 - The name and version come from `metadata.name` and `metadata.version` by default
 - Use `--version` to override the version at build time
 - Use `--name` to override the name at build time
@@ -408,12 +408,12 @@ spec:
 {{< tabs "catalog-tutorial-cmd-11" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl build solution greeting-v2.yaml
+scafctl build solution -f greeting-v2.yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl build solution greeting-v2.yaml
+scafctl build solution -f greeting-v2.yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -512,12 +512,12 @@ The v1 solution doesn't have a timestamp — confirming you're running the origi
 {{< tabs "catalog-tutorial-cmd-15" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl build solution greeting-v2.yaml --version 2.0.0
+scafctl build solution -f greeting-v2.yaml --version 2.0.0
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl build solution greeting-v2.yaml --version 2.0.0
+scafctl build solution -f greeting-v2.yaml --version 2.0.0
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -533,12 +533,12 @@ Use `--force` to overwrite:
 {{< tabs "catalog-tutorial-cmd-16" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl build solution greeting-v2.yaml --version 2.0.0 --force
+scafctl build solution -f greeting-v2.yaml --version 2.0.0 --force
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl build solution greeting-v2.yaml --version 2.0.0 --force
+scafctl build solution -f greeting-v2.yaml --version 2.0.0 --force
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -661,12 +661,12 @@ First, rebuild the greeting solution:
 {{< tabs "catalog-tutorial-cmd-21" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl build solution greeting.yaml
+scafctl build solution -f greeting.yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl build solution greeting.yaml
+scafctl build solution -f greeting.yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -821,7 +821,7 @@ Here's how the full workflow looks in practice:
 {{% tab "Bash" %}}
 ```bash
 # On the connected machine:
-scafctl build solution deploy.yaml --version 1.0.0
+scafctl build solution -f deploy.yaml --version 1.0.0
 scafctl catalog save deploy@1.0.0 -o deploy-v1.tar
 cp deploy-v1.tar /Volumes/USB/
 
@@ -833,7 +833,7 @@ scafctl run resolver -f deploy -o yaml --hide-execution -r env=prod
 {{% tab "PowerShell" %}}
 ```powershell
 # On the connected machine:
-scafctl build solution deploy.yaml --version 1.0.0
+scafctl build solution -f deploy.yaml --version 1.0.0
 scafctl catalog save deploy@1.0.0 -o deploy-v1.tar
 Copy-Item deploy-v1.tar /Volumes/USB/
 
@@ -1275,12 +1275,12 @@ The `deployment-template` resolver uses a **static path** (`templates/deployment
 {{< tabs "catalog-tutorial-cmd-41" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl build solution deploy-app/solution.yaml --dry-run
+scafctl build solution -f deploy-app/solution.yaml --dry-run
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl build solution deploy-app/solution.yaml --dry-run
+scafctl build solution -f deploy-app/solution.yaml --dry-run
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1310,12 +1310,12 @@ The dry-run shows:
 {{< tabs "catalog-tutorial-cmd-42" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl build solution deploy-app/solution.yaml
+scafctl build solution -f deploy-app/solution.yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl build solution deploy-app/solution.yaml
+scafctl build solution -f deploy-app/solution.yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1523,12 +1523,12 @@ spec:
 {{< tabs "catalog-tutorial-cmd-45" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl build solution nested-demo/parent.yaml --dry-run
+scafctl build solution -f nested-demo/parent.yaml --dry-run
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl build solution nested-demo/parent.yaml --dry-run
+scafctl build solution -f nested-demo/parent.yaml --dry-run
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1552,13 +1552,13 @@ Notice that scafctl **recursively discovered** the child sub-solution (`sub/chil
 {{< tabs "catalog-tutorial-cmd-46" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl build solution nested-demo/parent.yaml
+scafctl build solution -f nested-demo/parent.yaml
 scafctl run resolver -f nested-demo -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl build solution nested-demo/parent.yaml
+scafctl build solution -f nested-demo/parent.yaml
 scafctl run resolver -f nested-demo -o json
 ```
 {{% /tab %}}
@@ -1738,12 +1738,12 @@ metadata:
 {{< tabs "catalog-tutorial-cmd-51" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl build solution deploy-app/solution.yaml
+scafctl build solution -f deploy-app/solution.yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl build solution deploy-app/solution.yaml
+scafctl build solution -f deploy-app/solution.yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}

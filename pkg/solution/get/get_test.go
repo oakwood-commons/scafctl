@@ -912,3 +912,110 @@ func TestGetter_GetWithBundle_EmptyPath(t *testing.T) {
 	assert.Nil(t, sol)
 	assert.Nil(t, bundleData)
 }
+
+func TestValidatePositionalRef(t *testing.T) {
+	tests := []struct {
+		name     string
+		arg      string
+		fileFlag string
+		wantErr  string
+	}{
+		{"catalog name passes", "my-app", "", ""},
+		{"versioned name passes", "my-app@1.0.0", "", ""},
+		{"file flag conflict", "my-app", "existing.yaml", "cannot use both -f/--file"},
+		{"local path rejected", "./solution.yaml", "", "local file paths must use -f/--file flag"},
+		{"yaml extension rejected", "solution.yaml", "", "local file paths must use -f/--file flag"},
+		{"error includes cmd usage", "../foo.yaml", "", "scafctl test cmd -f ../foo.yaml"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidatePositionalRef(tt.arg, tt.fileFlag, "scafctl test cmd")
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+func BenchmarkValidatePositionalRef(b *testing.B) {
+	args := []string{"my-app", "./solution.yaml", "solution.yaml", "my-app@1.0.0"}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		for _, arg := range args {
+			_ = ValidatePositionalRef(arg, "", "scafctl run solution")
+		}
+	}
+}
+
+func TestIsCatalogReference(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected bool
+	}{
+		// Catalog/registry refs (should return true)
+		{"bare name", "my-app", true},
+		{"versioned name", "my-app@1.0.0", true},
+		{"registry ref", "ghcr.io/myorg/solutions/app:2.0", true},
+		{"https URL", "https://example.com/solution.yaml", true},
+		{"stdin marker", "-", true},
+		{"bare name with dash", "deploy-to-k8s", true},
+		{"name with underscore", "my_app", true},
+		{"localhost registry", "localhost:5000/sol", true},
+		{"oci URL", "oci://registry.example.com/sol:v1", true},
+		{"nested registry ref", "registry.example.com/org/sol:v1", true},
+
+		// Local file paths (should return false)
+		{"absolute path", "/tmp/solution.yaml", false},
+		{"relative dot path", "./solution.yaml", false},
+		{"relative parent path", "../sol.yaml", false},
+		{"yaml extension", "solution.yaml", false},
+		{"yml extension", "solution.yml", false},
+		{"json extension", "config.json", false},
+		{"uppercase yaml", "Solution.YAML", false},
+		{"dot only start", ".", false},
+		{"dot-dot start", "..", false},
+
+		// Relative paths without leading "./" — still local (not catalog refs)
+		{"relative path no dot", "configs/solution", false},
+		{"relative path nested", "relative/path/to/solution", false},
+		{"relative path with yaml", "configs/solution.yaml", false},
+
+		// Windows paths (should return false)
+		{"windows absolute backslash", `C:\dir\sol`, false},
+		{"windows absolute slash", "C:/dir/sol", false},
+		{"bare backslash path", `dir\sol`, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsCatalogReference(tt.input)
+			assert.Equal(t, tt.expected, got, "IsCatalogReference(%q)", tt.input)
+		})
+	}
+}
+
+func BenchmarkIsCatalogReference(b *testing.B) {
+	inputs := []string{
+		"my-app",
+		"my-app@1.0.0",
+		"ghcr.io/myorg/solutions/app:2.0",
+		"./solution.yaml",
+		"/tmp/solution.yaml",
+		"solution.yaml",
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		for _, input := range inputs {
+			IsCatalogReference(input)
+		}
+	}
+}

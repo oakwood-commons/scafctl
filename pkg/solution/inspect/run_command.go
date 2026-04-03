@@ -16,7 +16,7 @@ import (
 // CLI, MCP, and future API consumers.
 type RunCommandInfo struct {
 	// Command is the full CLI command string with all flags.
-	Command string `json:"command" yaml:"command" doc:"Full CLI command to run the solution" maxLength:"2048" example:"scafctl run solution ./my-solution.yaml -r name=hello"`
+	Command string `json:"command" yaml:"command" doc:"Full CLI command to run the solution" maxLength:"2048" example:"scafctl run solution -f ./my-solution.yaml -r name=hello"`
 
 	// Subcommand is the base command (e.g., "scafctl run solution").
 	Subcommand string `json:"subcommand" yaml:"subcommand" doc:"Base CLI subcommand" maxLength:"128" example:"scafctl run solution"`

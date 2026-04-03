@@ -84,7 +84,7 @@ func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 	options := &SolutionOptions{}
 
 	cCmd := &cobra.Command{
-		Use:     "solution",
+		Use:     "solution [name[@version]]",
 		Aliases: []string{"sol", "s", "solutions"},
 		Short:   "Render a solution's action graph or snapshot",
 		Long: `Render a solution as an executor-ready action graph or snapshot.
@@ -128,8 +128,12 @@ Examples:
   # Save snapshot with sensitive data redacted
   scafctl render solution -f ./solution.yaml --snapshot --snapshot-file=snapshot.json --redact
 
+  # Render solution from catalog by name
+  scafctl render solution my-app
+
   # Render with parameters
   scafctl render solution -f ./solution.yaml -r env=prod`,
+		Args: cobra.MaximumNArgs(1),
 		PreRun: func(cCmd *cobra.Command, _ []string) {
 			// Track which flags were explicitly set by the user
 			options.flagsChanged = make(map[string]bool)
@@ -138,7 +142,7 @@ Examples:
 			})
 		},
 		RunE: func(cCmd *cobra.Command, args []string) error {
-			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
+			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Name())
 			ctx := settings.IntoContext(cCmd.Context(), cliParams)
 
 			lgr := logger.FromContext(cCmd.Context())
@@ -154,10 +158,13 @@ Examples:
 			options.IOStreams = ioStreams
 			options.CliParams = cliParams
 
-			err := output.ValidateCommands(args)
-			if err != nil {
-				writeSolutionError(options, err.Error())
-				return exitcode.WithCode(err, exitcode.InvalidInput)
+			// Handle positional catalog name argument
+			if len(args) > 0 {
+				if err := get.ValidatePositionalRef(args[0], options.File, "scafctl render solution"); err != nil {
+					writeSolutionError(options, err.Error())
+					return exitcode.WithCode(err, exitcode.InvalidInput)
+				}
+				options.File = args[0]
 			}
 
 			// Validate mutually exclusive modes
@@ -193,7 +200,7 @@ Examples:
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 			if options.Output != "" && !options.ActionGraph {
-				err = output.ValidateOutputType(options.Output, ValidOutputTypes)
+				err := output.ValidateOutputType(options.Output, ValidOutputTypes)
 				if err != nil {
 					writeSolutionError(options, err.Error())
 					return exitcode.WithCode(err, exitcode.InvalidInput)

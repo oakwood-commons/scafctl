@@ -18,7 +18,7 @@
 #   scafctl run resolver -f examples/solutions/nested-bundle/parent.yaml
 #
 # Bundle build (includes all nested files automatically):
-#   scafctl build solution examples/solutions/nested-bundle/parent.yaml --dry-run
+#   scafctl build solution -f examples/solutions/nested-bundle/parent.yaml --dry-run
 
 apiVersion: scafctl.io/v1
 kind: Solution
