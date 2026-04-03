@@ -1,5 +1,5 @@
 ---
-description: "Run Go tests with race detection and check coverage. Reports failures and coverage gaps."
+description: "scafctl: Run Go tests with race detection, check coverage, and diagnose failures via go-build-resolver."
 agent: "go-build-resolver"
 ---
 Run the Go test suite and report results:

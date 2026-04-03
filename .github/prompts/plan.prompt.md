@@ -1,5 +1,5 @@
 ---
-description: "Create an implementation plan for a scafctl feature. Produces a structured blueprint with architecture decisions, task breakdown, interface design, and testing strategy."
+description: "scafctl: Create an implementation plan for a scafctl feature. Produces a structured blueprint with architecture decisions, task breakdown, interface design, and testing strategy."
 agent: "planner"
 argument-hint: "Describe the feature to plan (e.g., 'Add OAuth auth handler')"
 ---

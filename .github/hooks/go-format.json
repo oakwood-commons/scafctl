@@ -1,0 +1,11 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "type": "command",
+        "command": ".github/hooks/scripts/go-format.sh",
+        "timeout": 10
+      }
+    ]
+  }
+}

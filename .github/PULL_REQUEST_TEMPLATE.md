@@ -20,5 +20,5 @@ Closes #
 - [ ] My commits follow conventional commit format
 - [ ] I have added/updated tests for my changes
 - [ ] `go test ./...` passes
-- [ ] `golangci-lint run` passes
+- [ ] `task lint` passes
 - [ ] I have signed off my commits (`git commit -s -S`)
