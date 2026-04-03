@@ -10,6 +10,7 @@ import (
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
+	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -79,7 +80,13 @@ func runCatalogLogout(ctx context.Context, opts *LogoutOptions) error {
 		return fmt.Errorf("writer not initialized in context")
 	}
 
-	nativeStore := catalog.NewNativeCredentialStore()
+	// Explicitly initialise secrets store so encrypted passwords are deleted on logout.
+	var nativeStore *catalog.NativeCredentialStore
+	if ss, ssErr := secrets.New(); ssErr == nil {
+		nativeStore = catalog.NewNativeCredentialStoreWithSecretsStore(ss)
+	} else {
+		nativeStore = catalog.NewNativeCredentialStore()
+	}
 
 	if opts.All {
 		return logoutAll(w, nativeStore)
@@ -103,7 +110,7 @@ func logoutAll(w *writer.Writer, nativeStore *catalog.NativeCredentialStore) err
 
 	// Clean up container auth entries first
 	for host, entry := range creds {
-		if entry.ContainerAuth {
+		if entry.ContainerAuthFile != "" {
 			if containerErr := nativeStore.DeleteContainerAuth(host); containerErr != nil {
 				w.Warningf("Failed to clean container auth for %s: %v", host, containerErr)
 			}
@@ -121,23 +128,23 @@ func logoutAll(w *writer.Writer, nativeStore *catalog.NativeCredentialStore) err
 }
 
 func logoutRegistry(w *writer.Writer, nativeStore *catalog.NativeCredentialStore, registry string) error {
-	// Check if credential exists
-	creds, err := nativeStore.ListCredentialEntries()
+	// Use GetCredential so that registry host normalisation (e.g. stripping
+	// https://) is handled consistently, avoiding false "not found" errors when
+	// the caller passes a non-canonical form like "https://ghcr.io".
+	entry, err := nativeStore.GetCredential(registry)
 	if err != nil {
-		err = fmt.Errorf("failed to list credentials: %w", err)
+		err = fmt.Errorf("failed to look up credentials for %s: %w", registry, err)
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
-
-	entry, exists := creds[registry]
-	if !exists {
+	if entry == nil {
 		err := fmt.Errorf("no credentials stored for %s", registry)
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
 	// Clean up container auth if it was written there
-	if entry.ContainerAuth {
+	if entry.ContainerAuthFile != "" {
 		if containerErr := nativeStore.DeleteContainerAuth(registry); containerErr != nil {
 			w.Warningf("Failed to clean container auth for %s: %v", registry, containerErr)
 		}

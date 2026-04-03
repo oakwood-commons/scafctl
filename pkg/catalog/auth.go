@@ -15,6 +15,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
+	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"oras.land/oras-go/v2/registry/remote/auth"
 )
 
@@ -59,9 +60,19 @@ type credHelperResponse struct {
 func NewCredentialStore(logger logr.Logger) (*CredentialStore, error) {
 	configPath := findDockerConfig()
 
+	// Initialize an encrypted secrets store for the native credential store.
+	// Errors are non-fatal: the native store degrades gracefully to plaintext JSON.
+	var nativeStore *NativeCredentialStore
+	if ss, err := secrets.New(secrets.WithLogger(logger)); err == nil {
+		nativeStore = NewNativeCredentialStoreWithSecretsStore(ss)
+	} else {
+		logger.V(1).Info("secrets store unavailable; native credentials will be stored as plaintext", "error", err)
+		nativeStore = NewNativeCredentialStore()
+	}
+
 	store := &CredentialStore{
 		configPath:  configPath,
-		nativeStore: NewNativeCredentialStore(),
+		nativeStore: nativeStore,
 		logger:      logger.WithName("credential-store"),
 	}
 
@@ -311,13 +322,21 @@ func (c *CredentialStore) credentialFromHelper(ctx context.Context, helper, host
 // normalizeRegistryHost normalizes registry hostnames for lookup.
 // This handles Docker Hub's special casing.
 func normalizeRegistryHost(host string) string {
-	// Docker Hub uses various hostnames
-	switch host {
-	case "docker.io", "registry-1.docker.io", "index.docker.io":
+	// Strip URL scheme so callers storing "ghcr.io" and credential helpers
+	// sending "https://ghcr.io" resolve to the same canonical key.
+	stripped := strings.TrimPrefix(strings.TrimPrefix(host, "https://"), "http://")
+
+	// Docker Hub uses various hostnames and URL forms; map to the canonical
+	// credential-helper key (https://index.docker.io/v1/) that Docker expects.
+	switch stripped {
+	case "docker.io", "registry-1.docker.io", "index.docker.io",
+		"index.docker.io/v1/", "index.docker.io/v1":
 		return "https://index.docker.io/v1/"
-	default:
-		return host
 	}
+
+	// For all other registries, return the scheme-stripped form so that
+	// "ghcr.io" (stored on login) and "https://ghcr.io" (sent by Docker) match.
+	return stripped
 }
 
 // credentialFromNativeStore checks the scafctl native credential store.

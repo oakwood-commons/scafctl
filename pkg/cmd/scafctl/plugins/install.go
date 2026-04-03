@@ -11,6 +11,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -133,7 +134,7 @@ func runInstall(ctx context.Context, opts *InstallOptions) error {
 		chainLogger = logr.Discard()
 	}
 
-	chain, err := catalog.BuildCatalogChain(appCfg, nil, chainLogger)
+	chain, err := catalog.BuildCatalogChain(appCfg, auth.RegistryFromContext(ctx), chainLogger)
 	if err != nil {
 		w.Errorf("failed to build catalog chain: %v", err)
 		return exitcode.WithCode(err, exitcode.CatalogError)

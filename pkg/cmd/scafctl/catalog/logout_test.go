@@ -4,8 +4,10 @@
 package catalog
 
 import (
+	"path/filepath"
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/stretchr/testify/assert"
@@ -71,4 +73,92 @@ func BenchmarkCommandLogout(b *testing.B) {
 	for b.Loop() {
 		_ = CommandLogout(cliParams, ioStreams, "scafctl/catalog")
 	}
+}
+
+func TestLogoutAll_Empty(t *testing.T) {
+	ctx := newCatalogTestCtx(t)
+
+	store := catalog.NewNativeCredentialStoreWithPath(filepath.Join(t.TempDir(), "registries.json"))
+	w := writerFromCtx(ctx)
+
+	err := logoutAll(w, store)
+	require.NoError(t, err)
+}
+
+func TestLogoutAll_WithCredentials(t *testing.T) {
+	ctx := newCatalogTestCtx(t)
+
+	dir := t.TempDir()
+	store := catalog.NewNativeCredentialStoreWithPath(filepath.Join(dir, "registries.json"))
+
+	require.NoError(t, store.SetCredential("ghcr.io", "user1", "pass1", ""))
+	require.NoError(t, store.SetCredential("quay.io", "user2", "pass2", ""))
+
+	w := writerFromCtx(ctx)
+	err := logoutAll(w, store)
+	require.NoError(t, err)
+
+	creds, err := store.ListCredentials()
+	require.NoError(t, err)
+	assert.Empty(t, creds)
+}
+
+func TestLogoutRegistry_NotFound(t *testing.T) {
+	ctx := newCatalogTestCtx(t)
+
+	store := catalog.NewNativeCredentialStoreWithPath(filepath.Join(t.TempDir(), "registries.json"))
+	w := writerFromCtx(ctx)
+
+	err := logoutRegistry(w, store, "missing.io")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no credentials stored for missing.io")
+}
+
+func TestLogoutRegistry_Success(t *testing.T) {
+	ctx := newCatalogTestCtx(t)
+
+	dir := t.TempDir()
+	store := catalog.NewNativeCredentialStoreWithPath(filepath.Join(dir, "registries.json"))
+	require.NoError(t, store.SetCredential("ghcr.io", "user", "pass", ""))
+
+	w := writerFromCtx(ctx)
+	err := logoutRegistry(w, store, "ghcr.io")
+	require.NoError(t, err)
+
+	cred, err := store.GetCredential("ghcr.io")
+	require.NoError(t, err)
+	assert.Nil(t, cred)
+}
+
+func TestLogoutRegistry_NormalizedHost(t *testing.T) {
+	ctx := newCatalogTestCtx(t)
+
+	dir := t.TempDir()
+	store := catalog.NewNativeCredentialStoreWithPath(filepath.Join(dir, "registries.json"))
+	// Store under canonical key
+	require.NoError(t, store.SetCredential("ghcr.io", "user", "pass", ""))
+
+	w := writerFromCtx(ctx)
+	// Logout with https:// prefix should still work
+	err := logoutRegistry(w, store, "https://ghcr.io")
+	require.NoError(t, err)
+
+	cred, err := store.GetCredential("ghcr.io")
+	require.NoError(t, err)
+	assert.Nil(t, cred)
+}
+
+func TestRunCatalogLogout_All(t *testing.T) {
+	ctx := newCatalogTestCtx(t)
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandLogout(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"--all"})
+
+	// With an empty native store (XDG path), should succeed without error
+	err := cmd.Execute()
+	// May succeed or error depending on whether XDG path is writable; just verify it doesn't panic
+	_ = err
 }

@@ -19,6 +19,13 @@ const RegistryUsernameDefault = "oauth2accesstoken"
 // ACR uses a zero-GUID as the username when authenticating with an Entra token.
 const RegistryUsernameACR = "00000000-0000-0000-0000-000000000000"
 
+// RegistryUsernameProvider is an optional interface for auth handlers that declare
+// a custom registry username convention. BridgeAuthToRegistry checks for this
+// interface via type assertion on the default (non-built-in) path.
+type RegistryUsernameProvider interface {
+	RegistryUsername() string
+}
+
 // builtinHandlerNames contains the names of built-in auth handlers.
 // Used for name conflict detection when registering custom OAuth2 handlers.
 var builtinHandlerNames = []string{"github", "gcp", "entra"}
@@ -72,7 +79,14 @@ func registryUsername(ctx context.Context, handler auth.Handler, _ string) (stri
 		return RegistryUsernameDefault, nil
 
 	default:
-		// Generic OAuth2 handlers use "oauth2accesstoken" by default
+		// Check if the handler provides a custom registry username override
+		// (e.g., "$oauthtoken" for Quay.io configured via CustomOAuth2Config.RegistryUsername).
+		if p, ok := handler.(RegistryUsernameProvider); ok {
+			if username := p.RegistryUsername(); username != "" {
+				return username, nil
+			}
+		}
+		// Generic OAuth2 handlers default to oauth2accesstoken
 		return RegistryUsernameDefault, nil
 	}
 }

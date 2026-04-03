@@ -7,7 +7,7 @@
 #   scafctl auth login github    # Authenticate with GitHub
 #
 # With authProvider set, 'scafctl catalog pull' and 'scafctl catalog push'
-# automatically use your GitHub auth session — no 'catalog login' needed.
+# automatically use your GitHub auth session -- no 'catalog login' needed.
 
 apiVersion: scafctl.dev/v1
 kind: Config
@@ -16,25 +16,25 @@ metadata:
 
 # Catalog configuration with automatic auth
 catalogs:
-  # GitHub Container Registry — auto-bridges GitHub auth handler
+  # GitHub Container Registry -- auto-bridges GitHub auth handler
   - name: company-solutions
-    registry: ghcr.io
-    repository: myorg/scafctl
+    type: oci
+    url: oci://ghcr.io/myorg/scafctl
     authProvider: github
 
-  # Google Artifact Registry — auto-bridges GCP auth handler
+  # Google Artifact Registry -- auto-bridges GCP auth handler
   - name: gcp-solutions
-    registry: us-docker.pkg.dev
-    repository: my-project/scafctl/solutions
+    type: oci
+    url: oci://us-docker.pkg.dev/my-project/scafctl/solutions
     authProvider: gcp
 
-  # Azure Container Registry — auto-bridges Entra auth handler
+  # Azure Container Registry -- auto-bridges Entra auth handler
   - name: azure-solutions
-    registry: myacr.azurecr.io
-    repository: scafctl
+    type: oci
+    url: oci://myacr.azurecr.io/scafctl
     authProvider: entra
 
-  # Public registry — no auth needed
+  # Public registry -- no auth needed
   - name: community
-    registry: ghcr.io
-    repository: scafctl-community/catalog
+    type: oci
+    url: oci://ghcr.io/scafctl-community/catalog

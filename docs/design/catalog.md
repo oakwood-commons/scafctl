@@ -171,7 +171,7 @@ Credential resolution order:
 **Auth handler bridge:** For cloud registries (GitHub, GCP, Azure), scafctl can bridge an authenticated auth handler session to registry credentials. This works in two ways:
 
 - **Explicit:** `scafctl auth login github && scafctl catalog login ghcr.io` stores credentials in the native store
-- **Dynamic:** Setting `authProvider: github` on a catalog config enables automatic token injection at pull/push time — no separate login step needed
+- **Dynamic:** Setting `authProvider: github` on a catalog config enables automatic token injection at pull/push time -- no separate login step needed
 
 The bridge converts auth handler tokens to registry-specific credentials:
 
@@ -334,7 +334,7 @@ Catalog solutions with bundles are extracted to a temporary directory, and
 files. Before this `os.Chdir`, the original caller CWD is captured. During the
 action execution phase, the caller's CWD is injected into the context via
 `provider.WithWorkingDirectory`, so file-writing actions resolve relative paths
-against the caller's directory — matching the behaviour of local `-f` file runs.
+against the caller's directory -- matching the behaviour of local `-f` file runs.
 
 When `--output-dir` is set, it takes precedence over the caller CWD for action
 path resolution. See [Output Directory](./output-dir.md) and

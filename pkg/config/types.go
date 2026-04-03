@@ -5,7 +5,11 @@
 // It supports configuration files, environment variables, and CLI flag overrides.
 package config
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
+)
 
 // CurrentConfigVersion is the current config file version.
 const CurrentConfigVersion = 1
@@ -562,9 +566,9 @@ type CustomOAuth2Config struct {
 
 	// Flow configuration
 	Scopes                 []string `json:"scopes,omitempty" yaml:"scopes,omitempty" mapstructure:"scopes" doc:"Default OAuth scopes" maxItems:"20"`
-	DefaultFlow            string   `json:"defaultFlow,omitempty" yaml:"defaultFlow,omitempty" mapstructure:"defaultFlow" doc:"Default OAuth2 flow (interactive, device_code, client_credentials)" maxLength:"32" example:"interactive"`
-	CallbackPort           int      `json:"callbackPort,omitempty" yaml:"callbackPort,omitempty" mapstructure:"callbackPort" doc:"Local callback port for interactive flow (0 = random)" maximum:"65535" example:"8080"`
-	DeviceCodePollInterval int      `json:"deviceCodePollInterval,omitempty" yaml:"deviceCodePollInterval,omitempty" mapstructure:"deviceCodePollInterval" doc:"Polling interval in seconds for device_code flow (0 = server default)" maximum:"30" example:"5"`
+	DefaultFlow            string   `json:"defaultFlow,omitempty" yaml:"defaultFlow,omitempty" mapstructure:"defaultFlow" doc:"Default OAuth2 flow (interactive, device_code, client_credentials)" enum:"interactive,device_code,client_credentials" maxLength:"32" example:"interactive"`
+	CallbackPort           int      `json:"callbackPort,omitempty" yaml:"callbackPort,omitempty" mapstructure:"callbackPort" doc:"Local callback port for interactive flow (0 = random)" minimum:"0" maximum:"65535" example:"8080"`
+	DeviceCodePollInterval int      `json:"deviceCodePollInterval,omitempty" yaml:"deviceCodePollInterval,omitempty" mapstructure:"deviceCodePollInterval" doc:"Polling interval in seconds for device_code flow (0 = server default)" minimum:"0" maximum:"30" example:"5"`
 
 	// Token verification
 	VerifyURL      string                `json:"verifyURL,omitempty" yaml:"verifyURL,omitempty" mapstructure:"verifyURL" doc:"Token verification endpoint (optional)" maxLength:"2048" example:"https://quay.io/api/v1/user/"`
@@ -595,7 +599,7 @@ type TokenExchangeConfig struct {
 	// Method is the HTTP method (default: POST).
 	Method string `json:"method,omitempty" yaml:"method,omitempty" mapstructure:"method" doc:"HTTP method (default: POST)" maxLength:"10" example:"POST"`
 	// RequestBody is the JSON body to send. Supports Go template variables: {{.Hostname}}, {{.Username}}.
-	RequestBody string `json:"requestBody,omitempty" yaml:"requestBody,omitempty" mapstructure:"requestBody" doc:"JSON request body (Go template, optional)" maxLength:"4096"`
+	RequestBody gotmpl.GoTemplatingContent `json:"requestBody,omitempty" yaml:"requestBody,omitempty" mapstructure:"requestBody" doc:"JSON request body (Go template, optional)" maxLength:"4096"`
 	// TokenJSONPath is the dot-notation path to extract the derived token from the JSON response.
 	TokenJSONPath string `json:"tokenJSONPath" yaml:"tokenJSONPath" mapstructure:"tokenJSONPath" doc:"JSON path to the derived token in the response" maxLength:"256" example:"token.token"`
 	// UsernameJSONPath optionally extracts a username from the response.

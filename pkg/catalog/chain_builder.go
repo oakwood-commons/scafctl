@@ -13,7 +13,8 @@ import (
 
 // BuildCatalogChain creates a ChainCatalog from the application configuration.
 // It always includes the local catalog first, then adds configured remote
-// catalogs of type "oci". Returns the chain and a cleanup function.
+// catalogs of type "oci". It returns the constructed chain catalog and any
+// error encountered during initialization.
 // If authRegistry is provided, catalogs with an authProvider field will use
 // the corresponding auth handler for dynamic token injection.
 func BuildCatalogChain(cfg *config.Config, authRegistry *auth.Registry, logger logr.Logger) (*ChainCatalog, error) {

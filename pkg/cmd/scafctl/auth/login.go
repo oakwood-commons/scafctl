@@ -18,6 +18,7 @@ import (
 	ghauth "github.com/oakwood-commons/scafctl/pkg/auth/github"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
+	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	skvx "github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
@@ -231,17 +232,42 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 				loginErr = loginGitHub(ctx, w, flow, hostname, clientID, callbackPort, timeout, scopes, force, skipIfAuthenticated)
 			case "gcp":
 				loginErr = loginGCP(ctx, w, flow, clientID, impersonateServiceAccount, callbackPort, timeout, scopes, force, skipIfAuthenticated)
-			default:
+			case "entra":
 				loginErr = loginEntra(ctx, w, flow, tenantID, clientID, callbackPort, timeout, federatedToken, flowStr, scopes, force, skipIfAuthenticated)
+			default:
+				// Generic custom OAuth2 handler (e.g. quay, custom IdP).
+				// Use the handler already resolved from the registry; no built-in
+				// flow-detection or provider-specific overrides apply.
+				loginErr = loginGeneric(ctx, w, handler, handlerName, flow, callbackPort, timeout, scopes, force, skipIfAuthenticated)
 			}
 
 			if loginErr != nil {
 				return loginErr
 			}
 
-			// Post-login registry bridge
+			// Post-login registry bridge.
+			// Re-create the handler with the same overrides used during login so that
+			// token retrieval uses the correct clientID fingerprint and refresh token.
 			if registry != "" {
-				return bridgeAuthToRegistryPostLogin(ctx, w, handler, handlerName, registry, registryScope, writeRegistryAuth)
+				var bridgeHandler auth.Handler
+				var bridgeErr error
+				switch handlerName {
+				case "github":
+					bridgeHandler, bridgeErr = getGitHubHandlerWithOverrides(ctx, hostname, clientID)
+				case "gcp":
+					bridgeHandler, bridgeErr = getGCPHandlerWithOverrides(ctx, clientID, impersonateServiceAccount)
+				case "entra":
+					bridgeHandler, bridgeErr = getEntraHandlerWithOverrides(ctx, tenantID, clientID)
+				default:
+					// Custom OAuth2 handlers have no CLI overrides; re-use the
+					// handler resolved at the start of this command.
+					bridgeHandler = handler
+				}
+				if bridgeErr != nil {
+					// Fall back to the pre-login handler rather than failing outright.
+					bridgeHandler = handler
+				}
+				return bridgeAuthToRegistryPostLogin(ctx, w, bridgeHandler, handlerName, registry, registryScope, writeRegistryAuth)
 			}
 
 			return nil
@@ -424,6 +450,31 @@ func loginEntra(ctx context.Context, w *writer.Writer, flow auth.Flow, tenantID,
 	}
 
 	return executeLogin(ctx, w, handler, flow, tenantID, callbackPort, timeout, scopes)
+}
+
+// loginGeneric handles the login flow for custom (non-built-in) OAuth2 handlers.
+// It uses the handler already resolved from the auth registry so provider-specific
+// overrides (tenantID, hostname, etc.) do not apply.
+func loginGeneric(ctx context.Context, w *writer.Writer, handler auth.Handler, handlerName string, flow auth.Flow, callbackPort int, timeout time.Duration, scopes []string, force, skipIfAuthenticated bool) error {
+	// Pre-login check; skip for client_credentials since it is non-interactive.
+	preLogin, err := auth.PreLoginCheck(ctx, handler, flow, force, skipIfAuthenticated, auth.FlowClientCredentials)
+	if err != nil {
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
+	}
+	switch preLogin.Action {
+	case auth.PreLoginProceed:
+		// Continue with login
+	case auth.PreLoginSkip:
+		w.Infof("Already authenticated as %s — skipping login.", preLogin.Identity)
+		return nil
+	case auth.PreLoginAlreadyAuthenticated:
+		w.Warningf("Already authenticated as %s.", preLogin.Identity)
+		w.Warningf("Use 'scafctl auth logout %s' to sign out first, or use --force to re-authenticate.", handlerName)
+		w.Info("")
+	}
+
+	return executeLogin(ctx, w, handler, flow, "", callbackPort, timeout, scopes)
 }
 
 // executeLogin runs the common login logic for any auth handler.
@@ -694,17 +745,29 @@ func bridgeAuthToRegistryPostLogin(ctx context.Context, w *writer.Writer, handle
 		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
-	nativeStore := catalog.NewNativeCredentialStore()
-	if err := nativeStore.SetCredential(registry, username, password, writeRegistryAuth); err != nil {
+	// Explicitly initialise a secrets store so password encryption honours the
+	// same backend as the CLI's shared store. Errors are non-fatal.
+	var nativeStore *catalog.NativeCredentialStore
+	if ss, ssErr := secrets.New(); ssErr == nil {
+		nativeStore = catalog.NewNativeCredentialStoreWithSecretsStore(ss)
+	} else {
+		nativeStore = catalog.NewNativeCredentialStore()
+	}
+
+	containerAuthFile := ""
+	if writeRegistryAuth {
+		if writtenPath, containerErr := nativeStore.WriteContainerAuth(registry, username, password); containerErr != nil {
+			w.Warningf("Failed to write container auth file: %v", containerErr)
+			w.Warning("Docker/Podman interop may not work.")
+		} else {
+			containerAuthFile = writtenPath
+		}
+	}
+
+	if err := nativeStore.SetCredential(registry, username, password, containerAuthFile); err != nil {
 		err = fmt.Errorf("failed to store registry credentials: %w", err)
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.GeneralError)
-	}
-
-	if writeRegistryAuth {
-		if containerErr := nativeStore.WriteContainerAuth(registry, username, password); containerErr != nil {
-			w.Warningf("Failed to write container auth file: %v", containerErr)
-		}
 	}
 
 	w.Infof("Registry credentials stored for %s (via %s handler)", registry, handlerName)

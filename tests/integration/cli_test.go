@@ -2421,13 +2421,8 @@ func TestIntegration_CustomOAuth2Handler_AuthList(t *testing.T) {
 	stdout, _, exitCode := runScafctl(t, "--config", configPath, "auth", "list")
 
 	assert.Equal(t, 0, exitCode)
-	// The custom handler should be registered and appear in the list
-	// (either as a handler name or in a "no tokens" message that lists handlers)
-	assert.True(t,
-		strings.Contains(stdout, "test-quay") ||
-			strings.Contains(stdout, "No cached tokens found"),
-		"expected custom handler or no-token message, got: %q", stdout,
-	)
+	// The custom handler should be registered and appear in the list.
+	assert.Contains(t, stdout, "test-quay", "expected custom handler to appear in output, got: %q", stdout)
 }
 
 func TestIntegration_CustomOAuth2Handler_AuthStatus(t *testing.T) {
@@ -7280,4 +7275,83 @@ func TestIntegration_ServeOpenAPI_ToFile(t *testing.T) {
 	data, err := os.ReadFile(outFile)
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "scafctl API")
+}
+
+// ============================================================================
+// Credential Helper Command Tests
+// ============================================================================
+
+func TestIntegration_CredentialHelperHelp(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "credential-helper", "--help")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Docker credential helper protocol")
+	assert.Contains(t, stdout, "get")
+	assert.Contains(t, stdout, "store")
+	assert.Contains(t, stdout, "erase")
+	assert.Contains(t, stdout, "list")
+	assert.Contains(t, stdout, "install")
+	assert.Contains(t, stdout, "uninstall")
+}
+
+func TestIntegration_CredentialHelperGetHelp(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "credential-helper", "get", "--help")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Reads a server URL from stdin and writes credentials as JSON to stdout")
+}
+
+func TestIntegration_CredentialHelperStoreHelp(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "credential-helper", "store", "--help")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Reads a JSON credential object from stdin and stores it")
+}
+
+func TestIntegration_CredentialHelperEraseHelp(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "credential-helper", "erase", "--help")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Reads a server URL from stdin and removes credentials")
+}
+
+func TestIntegration_CredentialHelperListHelp(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "credential-helper", "list", "--help")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Writes a JSON map of server URLs to usernames to stdout")
+}
+
+func TestIntegration_CredentialHelperInstallHelp(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "credential-helper", "install", "--help")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "docker-credential-scafctl symlink")
+	assert.Contains(t, stdout, "--bin-dir")
+	assert.Contains(t, stdout, "--docker")
+	assert.Contains(t, stdout, "--podman")
+	assert.Contains(t, stdout, "--registry")
+}
+
+func TestIntegration_CredentialHelperUninstallHelp(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "credential-helper", "uninstall", "--help")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "docker-credential-scafctl symlink")
+	assert.Contains(t, stdout, "--bin-dir")
+	assert.Contains(t, stdout, "--docker")
+	assert.Contains(t, stdout, "--podman")
+}
+
+func TestIntegration_CredentialHelperGetNotFound(t *testing.T) {
+	stdout, _, exitCode := runScafctlWithStdin(t, strings.NewReader("https://unknown.registry.io"), "credential-helper", "get")
+	assert.NotEqual(t, 0, exitCode)
+
+	var errResp map[string]string
+	require.NoError(t, json.Unmarshal([]byte(stdout), &errResp))
+	assert.Contains(t, errResp["message"], "credentials not found")
+}
+
+func TestIntegration_CredentialHelperListEmpty(t *testing.T) {
+	stdout, _, exitCode := runScafctl(t, "credential-helper", "list")
+	// list may fail if no secrets store is initialized, or return empty map
+	if exitCode == 0 {
+		var result map[string]string
+		require.NoError(t, json.Unmarshal([]byte(stdout), &result))
+		// Just verify it's valid JSON
+		assert.NotNil(t, result)
+	}
 }

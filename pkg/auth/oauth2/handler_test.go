@@ -20,7 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newTestOAuthServer(t *testing.T) *httptest.Server {
+func newTestOAuthServer(t testing.TB) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
@@ -96,7 +96,7 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func newTestHandler(t *testing.T, srv *httptest.Server, cfgOverride func(*config.CustomOAuth2Config)) (*Handler, *secrets.MockStore) {
+func newTestHandler(t testing.TB, srv *httptest.Server, cfgOverride func(*config.CustomOAuth2Config)) (*Handler, *secrets.MockStore) {
 	t.Helper()
 	store := secrets.NewMockStore()
 	cfg := config.CustomOAuth2Config{Name: "test-provider", DisplayName: "Test Provider", TokenURL: srv.URL + "/token", ClientID: "test-client-id", Scopes: []string{"read", "write"}}
@@ -494,8 +494,144 @@ func TestHandler_verifyToken_Unauthorized(t *testing.T) {
 	assert.Contains(t, err.Error(), "HTTP 401")
 }
 
+func TestHandler_RegistryUsername(t *testing.T) {
+	srv := newTestOAuthServer(t)
+	defer srv.Close()
+	h, _ := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+		cfg.RegistryUsername = "preset-user"
+	})
+	assert.Equal(t, "preset-user", h.RegistryUsername())
+}
+
+func TestTokenEndpointError_Error(t *testing.T) {
+	tests := []struct {
+		name string
+		e    tokenEndpointError
+		want string
+	}{
+		{
+			name: "with description",
+			e:    tokenEndpointError{ErrorCode: "invalid_grant", Description: "token expired"},
+			want: "invalid_grant: token expired",
+		},
+		{
+			name: "code only",
+			e:    tokenEndpointError{ErrorCode: "access_denied"},
+			want: "access_denied",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.e.Error())
+		})
+	}
+}
+
+func TestHandler_StoreDerivedToken_PersistsUsername(t *testing.T) {
+	srv := newTestOAuthServer(t)
+	defer srv.Close()
+	h, _ := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+		cfg.ClientSecret = "ts"
+		cfg.TokenExchange = &config.TokenExchangeConfig{
+			URL:              srv.URL + "/exchange",
+			TokenJSONPath:    "token",
+			UsernameJSONPath: "username",
+		}
+	})
+
+	ctx := context.Background()
+
+	// Login to get a token, which triggers token exchange via the /exchange endpoint
+	_, err := h.Login(ctx, auth.LoginOptions{Flow: auth.FlowClientCredentials})
+	require.NoError(t, err)
+
+	// The exchange server returns username "exchange-user"
+	// After a process restart (new Handler with same store), loadDerivedToken should restore it
+	assert.Equal(t, "exchange-user", h.RegistryUsername())
+}
+
+func TestHandler_GetToken_WithDerivedToken_RestoresUsername(t *testing.T) {
+	srv := newTestOAuthServer(t)
+	defer srv.Close()
+	store := secrets.NewMockStore()
+	cfg := config.CustomOAuth2Config{
+		Name:         "test-exchange",
+		TokenURL:     srv.URL + "/token",
+		ClientID:     "tc",
+		ClientSecret: "ts",
+		TokenExchange: &config.TokenExchangeConfig{
+			URL:              srv.URL + "/exchange",
+			TokenJSONPath:    "token",
+			UsernameJSONPath: "username",
+		},
+	}
+	h, err := New(cfg, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	// Login - stores derived token + username
+	_, loginErr := h.Login(ctx, auth.LoginOptions{Flow: auth.FlowClientCredentials})
+	require.NoError(t, loginErr)
+	assert.Equal(t, "exchange-user", h.RegistryUsername())
+
+	// Reset in-memory username to simulate process restart
+	h.cfg.RegistryUsername = ""
+	assert.Empty(t, h.RegistryUsername())
+
+	// GetToken should load derived token and restore username
+	token, err := h.GetToken(ctx, auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "exchanged-token", token.AccessToken)
+	assert.Equal(t, "exchange-user", h.RegistryUsername())
+}
+
+func TestHandler_Login_WithTokenExchange_PersistsUsername(t *testing.T) {
+	srv := newTestOAuthServer(t)
+	defer srv.Close()
+	h, _ := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+		cfg.ClientSecret = "ts"
+		cfg.TokenExchange = &config.TokenExchangeConfig{
+			URL:              srv.URL + "/exchange",
+			TokenJSONPath:    "token",
+			UsernameJSONPath: "username",
+		}
+	})
+
+	ctx := context.Background()
+	_, err := h.Login(ctx, auth.LoginOptions{Flow: auth.FlowClientCredentials})
+	require.NoError(t, err)
+
+	// Username extracted from exchange response should be persisted in config
+	assert.Equal(t, "exchange-user", h.RegistryUsername())
+}
+
+func TestHandler_Logout_ClearsDerivedUsername(t *testing.T) {
+	srv := newTestOAuthServer(t)
+	defer srv.Close()
+	h, _ := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+		cfg.ClientSecret = "ts"
+		cfg.TokenExchange = &config.TokenExchangeConfig{
+			URL:              srv.URL + "/exchange",
+			TokenJSONPath:    "token",
+			UsernameJSONPath: "username",
+		}
+	})
+
+	ctx := context.Background()
+	_, err := h.Login(ctx, auth.LoginOptions{Flow: auth.FlowClientCredentials})
+	require.NoError(t, err)
+
+	require.NoError(t, h.Logout(ctx))
+
+	// After logout, loading derived token should fail
+	token, loadErr := h.loadDerivedToken(ctx)
+	assert.Nil(t, token)
+	assert.Error(t, loadErr)
+}
+
 func BenchmarkHandler_ClientCredentialsLogin(b *testing.B) {
-	srv := newTestOAuthServer(&testing.T{})
+	srv := newTestOAuthServer(b)
 	defer srv.Close()
 	store := secrets.NewMockStore()
 	cfg := config.CustomOAuth2Config{Name: "bench", TokenURL: srv.URL + "/token", ClientID: "bc", ClientSecret: "bs"}
@@ -509,7 +645,7 @@ func BenchmarkHandler_ClientCredentialsLogin(b *testing.B) {
 }
 
 func BenchmarkHandler_GetToken_Cached(b *testing.B) {
-	srv := newTestOAuthServer(&testing.T{})
+	srv := newTestOAuthServer(b)
 	defer srv.Close()
 	store := secrets.NewMockStore()
 	cfg := config.CustomOAuth2Config{Name: "bench", TokenURL: srv.URL + "/token", ClientID: "bc", ClientSecret: "bs"}

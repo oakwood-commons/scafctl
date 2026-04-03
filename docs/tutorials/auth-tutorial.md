@@ -102,7 +102,7 @@ scafctl auth login entra
 {{% /tab %}}
 {{< /tabs >}}
 
-By default, this opens your browser for an OAuth authorization code flow with PKCE — the same approach used by `az login`, `gh auth login`, and `gcloud auth login`:
+By default, this opens your browser for an OAuth authorization code flow with PKCE -- the same approach used by `az login`, `gh auth login`, and `gcloud auth login`:
 
 1. scafctl starts a local HTTP server on an ephemeral port
 2. Your browser opens to the Microsoft login page
@@ -223,7 +223,7 @@ The client ID used during login is persisted in your credential metadata so that
 You can also set a default client ID via the scafctl configuration file under `auth.entra.clientId`. Note that the `--client-id` flag at login time always takes precedence, and the stored client ID from login will be used for all future token refreshes.
 
 > [!WARNING]
-> **Important — Redirect URI registration:** When using a custom client ID with the
+> **Important -- Redirect URI registration:** When using a custom client ID with the
 > interactive (browser) login flow, the app registration must have `http://localhost`
 > registered as a redirect URI. Without it, Entra returns AADSTS500113 and the CLI
 > times out. In the Azure portal, go to **App registrations → your app →
@@ -768,7 +768,7 @@ The Entra handler selects which flow to use based on what is available at runtim
 
 When WIF is active, the stored device-code refresh token (if any) is bypassed but **not deleted**. The two credential types live in completely separate storage:
 
-- WIF is entirely env-var driven — no reads or writes to `scafctl.auth.entra.refresh_token`
+- WIF is entirely env-var driven -- no reads or writes to `scafctl.auth.entra.refresh_token`
 - A prior device-code session silently coexists in the secret store while WIF is active
 - `scafctl auth list` will display both the WIF-sourced access tokens and any stored refresh token
 
@@ -876,7 +876,7 @@ Invoke-RestMethod "$issuer/.well-known/openid-configuration"
 
 ## GitHub Interactive Flow (Browser OAuth + PKCE)
 
-The default GitHub login flow opens your browser for OAuth Authorization Code + PKCE authentication — the same approach used by `gh auth login` and the Entra handler:
+The default GitHub login flow opens your browser for OAuth Authorization Code + PKCE authentication -- the same approach used by `gh auth login` and the Entra handler:
 
 {{< tabs "auth-tutorial-cmd-23" >}}
 {{% tab "Bash" %}}
@@ -1095,7 +1095,7 @@ scafctl auth login github --flow pat
 |----------|-------------|----------|
 | `GITHUB_TOKEN` | GitHub personal access token or Actions token | 1 (highest) |
 | `GH_TOKEN` | GitHub personal access token (gh CLI convention) | 2 |
-| `GH_HOST` | GitHub hostname for Enterprise Server | — |
+| `GH_HOST` | GitHub hostname for Enterprise Server | -- |
 
 **Notes:**
 - In GitHub Actions, `GITHUB_TOKEN` is automatically injected
@@ -1171,9 +1171,9 @@ The private key can be provided from multiple sources (checked in priority order
 
 | Source | Config Field | Env Var | Security |
 |--------|-------------|---------|----------|
-| Inline PEM | `privateKey` | `SCAFCTL_GITHUB_APP_PRIVATE_KEY` | ⚠️ Least secure — key visible in config/env |
-| File path | `privateKeyPath` | `SCAFCTL_GITHUB_APP_PRIVATE_KEY_PATH` | ✅ Good — key in a file with restricted permissions |
-| Secret store | `privateKeySecretName` | — | ✅ Best — key encrypted by OS keychain |
+| Inline PEM | `privateKey` | `SCAFCTL_GITHUB_APP_PRIVATE_KEY` | ⚠️ Least secure -- key visible in config/env |
+| File path | `privateKeyPath` | `SCAFCTL_GITHUB_APP_PRIVATE_KEY_PATH` | ✅ Good -- key in a file with restricted permissions |
+| Secret store | `privateKeySecretName` | -- | ✅ Best -- key encrypted by OS keychain |
 
 > [!WARNING]
 > **Security recommendation:** Prefer `privateKeySecretName` (encrypted secret store) or `privateKeyPath` (file with `chmod 600`) over inline `privateKey`. When the inline method is used, scafctl logs a warning recommending a more secure alternative.
@@ -1259,7 +1259,7 @@ For local development, use the interactive browser OAuth flow:
 {{< tabs "auth-tutorial-cmd-35" >}}
 {{% tab "Bash" %}}
 ```bash
-# Login with GCP using browser OAuth (default — no gcloud required)
+# Login with GCP using browser OAuth (default -- no gcloud required)
 scafctl auth login gcp
 
 # Login with specific scopes
@@ -1274,7 +1274,7 @@ scafctl auth login gcp --client-id YOUR_CLIENT_ID
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-# Login with GCP using browser OAuth (default — no gcloud required)
+# Login with GCP using browser OAuth (default -- no gcloud required)
 scafctl auth login gcp
 
 # Login with specific scopes
@@ -1296,7 +1296,7 @@ This will:
 4. Store the refresh token in your system's secret store
 
 > [!NOTE]
-> **Note:** scafctl uses Google's well-known ADC client credentials by default — the same ones used by `gcloud auth application-default login`. No gcloud installation is required. To use a custom OAuth client, see [GCP Custom OAuth Client Setup](gcp-custom-oauth-tutorial.md).
+> **Note:** scafctl uses Google's well-known ADC client credentials by default -- the same ones used by `gcloud auth application-default login`. No gcloud installation is required. To use a custom OAuth client, see [GCP Custom OAuth Client Setup](gcp-custom-oauth-tutorial.md).
 
 ## GCP gcloud ADC Fallback
 
@@ -1476,7 +1476,7 @@ gcp       Not Authenticated -          -        -         run 'scafctl auth logi
 
 ### Scripting with --exit-code
 
-Use `--exit-code` to make the command exit non-zero when any handler is not authenticated — handy in CI pre-flight checks:
+Use `--exit-code` to make the command exit non-zero when any handler is not authenticated -- handy in CI pre-flight checks:
 
 {{< tabs "auth-tutorial-cmd-41" >}}
 {{% tab "Bash" %}}
@@ -1509,7 +1509,7 @@ scafctl auth status entra --warn-within 1h
 
 # Combine with --exit-code for a full CI pre-flight check
 scafctl auth status --exit-code --warn-within 15m || {
-  echo "Auth pre-flight failed — not authenticated or token expiring soon"
+  echo "Auth pre-flight failed -- not authenticated or token expiring soon"
   exit 1
 }
 ```
@@ -1525,14 +1525,14 @@ scafctl auth status entra --warn-within 1h
 # Combine with --exit-code for a full CI pre-flight check
 scafctl auth status --exit-code --warn-within 15m
 if ($LASTEXITCODE -ne 0) {
-  Write-Output "Auth pre-flight failed — not authenticated or token expiring soon"
+  Write-Output "Auth pre-flight failed -- not authenticated or token expiring soon"
   exit 1
 }
 ```
 {{% /tab %}}
 {{< /tabs >}}
 
-The JSON output includes a `cachedTokens` field showing how many access tokens are in the cache for each handler — useful for verifying token cache health:
+The JSON output includes a `cachedTokens` field showing how many access tokens are in the cache for each handler -- useful for verifying token cache health:
 
 {{< tabs "auth-cached-tokens" >}}
 {{% tab "Bash" %}}
@@ -1570,7 +1570,7 @@ scafctl auth list --expired-only
 # Show only valid tokens
 scafctl auth list --valid-only
 
-# Sort by expiry (soonest expiring first — useful for spotting tokens about to expire)
+# Sort by expiry (soonest expiring first -- useful for spotting tokens about to expire)
 scafctl auth list --sort expires-at
 
 # Sort by handler name
@@ -1605,7 +1605,7 @@ scafctl auth list --expired-only
 # Show only valid tokens
 scafctl auth list --valid-only
 
-# Sort by expiry (soonest expiring first — useful for spotting tokens about to expire)
+# Sort by expiry (soonest expiring first -- useful for spotting tokens about to expire)
 scafctl auth list --sort expires-at
 
 # Sort by handler name
@@ -1800,7 +1800,7 @@ spec:
 ### GitHub API Example
 
 Use the GitHub auth handler to authenticate API requests. Note that `scope` is not
-needed for GitHub — scopes are fixed at login time:
+needed for GitHub -- scopes are fixed at login time:
 
 ```yaml
 spec:
@@ -1891,7 +1891,7 @@ scafctl auth token gcp --scope "https://www.googleapis.com/auth/cloud-platform"
 > [!NOTE]
 > **Note:** The `--scope` flag is only supported on `auth token` for handlers
 > with the `scopes-on-token-request` capability (e.g., Entra ID and GCP). GitHub scopes
-> are fixed at login time — use `scafctl auth login github --scope <scope>` to
+> are fixed at login time -- use `scafctl auth login github --scope <scope>` to
 > change them.
 
 ### Example Output
@@ -1956,7 +1956,7 @@ scafctl auth token entra --scope "https://graph.microsoft.com/.default" --force-
 
 ### Printing the Raw Token (Scripting)
 
-Use `--raw` to print just the token value — ideal for shell scripting:
+Use `--raw` to print just the token value -- ideal for shell scripting:
 
 {{< tabs "auth-tutorial-cmd-51" >}}
 {{% tab "Bash" %}}
@@ -2016,7 +2016,7 @@ Write-Output $ENTRA_TOKEN
 
 ### Emitting a Ready-to-Run curl Command
 
-Use `--curl` to print a `curl` command with the `Authorization` header already populated — great for quick API call reproduction without any `jq` piping:
+Use `--curl` to print a `curl` command with the `Authorization` header already populated -- great for quick API call reproduction without any `jq` piping:
 
 {{< tabs "auth-tutorial-cmd-53" >}}
 {{% tab "Bash" %}}
@@ -2031,7 +2031,7 @@ scafctl auth token entra --scope "https://graph.microsoft.com/.default" \
 scafctl auth token gcp --scope "https://www.googleapis.com/auth/cloud-platform" \
   --curl --curl-url "https://storage.googleapis.com/storage/v1/b?project=my-project"
 
-# Emit without a URL (useful to inspect — fills in a placeholder)
+# Emit without a URL (useful to inspect -- fills in a placeholder)
 scafctl auth token github --curl
 # Output:
 # curl -H "Authorization: Bearer ghp_..." "<URL>"
@@ -2049,7 +2049,7 @@ scafctl auth token entra --scope "https://graph.microsoft.com/.default" `
 scafctl auth token gcp --scope "https://www.googleapis.com/auth/cloud-platform" `
   --curl --curl-url "https://storage.googleapis.com/storage/v1/b?project=my-project"
 
-# Emit without a URL (useful to inspect — fills in a placeholder)
+# Emit without a URL (useful to inspect -- fills in a placeholder)
 scafctl auth token github --curl
 # Output:
 # curl -H "Authorization: Bearer ghp_..." "<URL>"
@@ -2059,7 +2059,7 @@ scafctl auth token github --curl
 
 ### Decoding the JWT (Header + Payload)
 
-Use `--decode` to inspect the full JWT structure — both the **header** and the **payload** — without needing an external decoder tool. Signature validation is intentionally skipped; this is for debugging only:
+Use `--decode` to inspect the full JWT structure -- both the **header** and the **payload** -- without needing an external decoder tool. Signature validation is intentionally skipped; this is for debugging only:
 
 {{< tabs "auth-jwt-decode" >}}
 {{% tab "Bash" %}}
@@ -2067,7 +2067,7 @@ Use `--decode` to inspect the full JWT structure — both the **header** and the
 # Decode and display the full JWT (header and payload)
 scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode
 
-# Output as JSON — filter with jq
+# Output as JSON -- filter with jq
 scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode -o json \
   | jq '{alg: .header.alg, audience: .payload.aud, upn: .payload.upn, expires: .payload.exp_human}'
 ```
@@ -2076,7 +2076,7 @@ scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode
 ```powershell
 scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode
 
-# Output as JSON — use ConvertFrom-Json to filter
+# Output as JSON -- use ConvertFrom-Json to filter
 $decoded = scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode -o json | ConvertFrom-Json
 $decoded | Select-Object @{N='alg';E={$_.header.alg}}, @{N='audience';E={$_.payload.aud}}, @{N='upn';E={$_.payload.upn}}, @{N='expires';E={$_.payload.exp_human}}
 ```
@@ -2101,7 +2101,7 @@ payload.exp_human     2026-02-19T22:13:20Z
 payload.iat_human     2026-02-19T21:13:20Z
 ```
 
-The header section tells you the signing algorithm (`alg`), key ID (`kid`), and token type (`typ`) — useful for confirming which key was used and troubleshooting signature or algorithm policy issues.
+The header section tells you the signing algorithm (`alg`), key ID (`kid`), and token type (`typ`) -- useful for confirming which key was used and troubleshooting signature or algorithm policy issues.
 
 Unix timestamp fields (`exp`, `iat`, `nbf`, `auth_time`) are automatically augmented with a `_human` counterpart in RFC 3339 format.
 
@@ -2134,7 +2134,7 @@ scafctl auth token entra --scope "https://management.azure.com/.default" --clip
 
 The `identity` provider's `scope` input lets you mint a fresh access token for a
 specific OAuth scope inside a resolver and inspect the claims or metadata parsed
-from its JWT — without ever exposing the token value. This is useful for
+from its JWT -- without ever exposing the token value. This is useful for
 preflight checks, per-API identity auditing, and debugging consent errors.
 
 ```yaml
@@ -2165,7 +2165,7 @@ resolve:
 | Usable inside a resolver pipeline | ❌ | ✅ |
 | Dry-run support | N/A | ✅ |
 
-When the access token is opaque (not a decodable JWT — common with Microsoft
+When the access token is opaque (not a decodable JWT -- common with Microsoft
 Graph tokens), `claims` will be `null` and a warning is emitted. Token metadata
 such as expiry and type is still returned.
 
@@ -2273,7 +2273,7 @@ auth:
 
 | Field | Description | Default |
 |-------|-------------|---------|
-| `auth.gcp.clientId` | OAuth 2.0 client ID | *(empty — uses gcloud ADC)* |
+| `auth.gcp.clientId` | OAuth 2.0 client ID | *(empty -- uses gcloud ADC)* |
 | `auth.gcp.clientSecret` | OAuth 2.0 client secret | *(empty)* |
 | `auth.gcp.defaultScopes` | Scopes requested during login | `openid`, `cloud-platform` |
 | `auth.gcp.impersonateServiceAccount` | Service account to impersonate | *(empty)* |
@@ -2439,21 +2439,21 @@ scafctl auth diagnose -o json
 | `env` | Relevant environment variables (`AZURE_*`, `GITHUB_TOKEN`, `GOOGLE_*`) |
 | `clock-skew` | System clock is validated against an external time source; warns if skew exceeds 5 minutes (clock skew causes token validation failures) |
 | `handler` | Each handler's authentication status; hints for unauthenticated handlers |
-| `cache` | Token cache health — count and number of expired cached tokens |
+| `cache` | Token cache health -- count and number of expired cached tokens |
 | `live` | *(Only with `--live-token`)* Performs an actual `GetToken` call to confirm end-to-end flow |
 
 ### Example Output
 
 ```
 ✅ [ok]   auth registry: registered handlers: [entra gcp github]
-⚠️  [warn] config file: config file not found — using built-in defaults
-✅ [ok]   env GITHUB_TOKEN: GitHub personal access token — set
+⚠️  [warn] config file: config file not found -- using built-in defaults
+✅ [ok]   env GITHUB_TOKEN: GitHub personal access token -- set
 ✅ [ok]   env gcp: gcloud ADC: gcloud Application Default Credentials file found
 ✅ [ok]   entra: authenticated: authenticated as "user@example.com", expires in 58m
 ⚠️  [warn] entra: token cache: 3 cached token(s), 1 expired
 ✅ [ok]   gcp: authenticated: authenticated as "gcloud ADC (application default credentials)"
 ✅ [ok]   gcp: token cache: 1 cached token(s)
-⚠️  [warn] github: authenticated: not authenticated — run 'scafctl auth login github'
+⚠️  [warn] github: authenticated: not authenticated -- run 'scafctl auth login github'
 
 ⚠️ Diagnostics complete: 3 warning(s), 5 ok (no failures)
 ```
@@ -2618,7 +2618,7 @@ This means the app registration does not have a redirect URI matching `http://lo
 ### Login Times Out With No Error
 
 If `scafctl auth login entra` times out after 5 minutes with no error in the
-terminal, the most common cause is the AADSTS500113 error above — check the
+terminal, the most common cause is the AADSTS500113 error above -- check the
 browser tab for an error message. The improved timeout message will now suggest
 checking redirect URI registration.
 
@@ -2687,10 +2687,10 @@ Unix timestamp fields (`exp`, `iat`, `nbf`, `auth_time`) are automatically augme
 with a `_human` RFC 3339 counterpart so you can read them without converting.
 
 Useful things to verify:
-- `aud` — correct audience for the API you're calling
-- `scp` / `roles` — scopes or app roles granted
-- `exp_human` — actual token expiry in human-readable form
-- `upn` / `unique_name` / `preferred_username` — the authenticated identity
+- `aud` -- correct audience for the API you're calling
+- `scp` / `roles` -- scopes or app roles granted
+- `exp_human` -- actual token expiry in human-readable form
+- `upn` / `unique_name` / `preferred_username` -- the authenticated identity
 
 ### Debug Logging
 
@@ -2798,9 +2798,9 @@ scafctl catalog login quay.io
 ```
 
 Custom handlers support all three OAuth2 flows:
-- **Interactive** (authorization code + PKCE) — requires `authorizeURL`
-- **Device code** (RFC 8628) — requires `deviceAuthURL`  
-- **Client credentials** — requires `clientSecret`
+- **Interactive** (authorization code + PKCE) -- requires `authorizeURL`
+- **Device code** (RFC 8628) -- requires `deviceAuthURL`  
+- **Client credentials** -- requires `clientSecret`
 
 For advanced configurations including token exchange and identity
 verification, see [examples/auth/custom-oauth2-config.md](../../examples/auth/custom-oauth2-config.md).
@@ -2809,7 +2809,7 @@ verification, see [examples/auth/custom-oauth2-config.md](../../examples/auth/cu
 
 ## Next Steps
 
-- [CEL Expressions Tutorial](cel-tutorial.md) — Master CEL expressions and extension functions
-- [Go Templates Tutorial](go-templates-tutorial.md) — Generate files with Go template rendering
-- [Resolver Tutorial](resolver-tutorial.md) — More HTTP examples in resolver pipelines
-- [Provider Reference](provider-reference.md) — Complete provider documentation
+- [CEL Expressions Tutorial](cel-tutorial.md) -- Master CEL expressions and extension functions
+- [Go Templates Tutorial](go-templates-tutorial.md) -- Generate files with Go template rendering
+- [Resolver Tutorial](resolver-tutorial.md) -- More HTTP examples in resolver pipelines
+- [Provider Reference](provider-reference.md) -- Complete provider documentation

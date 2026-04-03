@@ -15,6 +15,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
+	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -134,18 +135,28 @@ func runDirectCredentialLogin(ctx context.Context, w *writer.Writer, opts *Login
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
-	nativeStore := catalog.NewNativeCredentialStore()
-	if err := nativeStore.SetCredential(opts.Registry, opts.Username, password, opts.WriteRegistryAuth); err != nil {
+	// Explicitly initialise secrets store so encryption is available.
+	var nativeStore *catalog.NativeCredentialStore
+	if ss, ssErr := secrets.New(); ssErr == nil {
+		nativeStore = catalog.NewNativeCredentialStoreWithSecretsStore(ss)
+	} else {
+		nativeStore = catalog.NewNativeCredentialStore()
+	}
+
+	containerAuthFile := ""
+	if opts.WriteRegistryAuth {
+		if writtenPath, containerErr := nativeStore.WriteContainerAuth(opts.Registry, opts.Username, password); containerErr != nil {
+			w.Warningf("Failed to write container auth file: %v", containerErr)
+			w.Warning("Docker/Podman interop may not work.")
+		} else {
+			containerAuthFile = writtenPath
+		}
+	}
+
+	if err := nativeStore.SetCredential(opts.Registry, opts.Username, password, containerAuthFile); err != nil {
 		err = fmt.Errorf("failed to store credentials: %w", err)
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.GeneralError)
-	}
-
-	if opts.WriteRegistryAuth {
-		if containerErr := nativeStore.WriteContainerAuth(opts.Registry, opts.Username, password); containerErr != nil {
-			w.Warningf("Failed to write container auth file: %v", containerErr)
-			w.Warning("Credentials were saved to the scafctl native store. Docker/Podman interop may not work.")
-		}
 	}
 
 	w.Infof("Login succeeded for %s", opts.Registry)
@@ -187,18 +198,28 @@ func runAuthHandlerLogin(ctx context.Context, w *writer.Writer, opts *LoginOptio
 		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
-	nativeStore := catalog.NewNativeCredentialStore()
-	if err := nativeStore.SetCredential(opts.Registry, username, password, opts.WriteRegistryAuth); err != nil {
+	// Explicitly initialise secrets store so encryption is available.
+	var nativeStore *catalog.NativeCredentialStore
+	if ss, ssErr := secrets.New(); ssErr == nil {
+		nativeStore = catalog.NewNativeCredentialStoreWithSecretsStore(ss)
+	} else {
+		nativeStore = catalog.NewNativeCredentialStore()
+	}
+
+	containerAuthFile := ""
+	if opts.WriteRegistryAuth {
+		if writtenPath, containerErr := nativeStore.WriteContainerAuth(opts.Registry, username, password); containerErr != nil {
+			w.Warningf("Failed to write container auth file: %v", containerErr)
+			w.Warning("Docker/Podman interop may not work.")
+		} else {
+			containerAuthFile = writtenPath
+		}
+	}
+
+	if err := nativeStore.SetCredential(opts.Registry, username, password, containerAuthFile); err != nil {
 		err = fmt.Errorf("failed to store credentials: %w", err)
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.GeneralError)
-	}
-
-	if opts.WriteRegistryAuth {
-		if containerErr := nativeStore.WriteContainerAuth(opts.Registry, username, password); containerErr != nil {
-			w.Warningf("Failed to write container auth file: %v", containerErr)
-			w.Warning("Credentials were saved to the scafctl native store. Docker/Podman interop may not work.")
-		}
 	}
 
 	// Display success with identity info

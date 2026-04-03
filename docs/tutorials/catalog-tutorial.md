@@ -155,7 +155,7 @@ message: Hello, World!
 name: World
 ```
 
-No file path needed — scafctl looked up `greeting` in the catalog and found the highest version.
+No file path needed -- scafctl looked up `greeting` in the catalog and found the highest version.
 
 ### Step 2: Pass a Parameter
 
@@ -481,7 +481,7 @@ name: Alice
 timestamp: "2026-02-17T10:05:00Z"
 ```
 
-Without a version, scafctl runs the **highest semantic version** — in this case `2.0.0`.
+Without a version, scafctl runs the **highest semantic version** -- in this case `2.0.0`.
 
 ### Step 5: Pin to the Old Version
 
@@ -505,7 +505,7 @@ message: Hello, Alice!
 name: Alice
 ```
 
-The v1 solution doesn't have a timestamp — confirming you're running the original version.
+The v1 solution doesn't have a timestamp -- confirming you're running the original version.
 
 ### Step 6: Try to Overwrite an Existing Version
 
@@ -644,7 +644,7 @@ scafctl catalog prune
 ### What You Learned
 
 - `scafctl catalog delete NAME@VERSION --kind solution` removes a single version
-- You must specify the version — this prevents accidental bulk deletion
+- You must specify the version -- this prevents accidental bulk deletion
 - `scafctl catalog prune` removes orphaned blobs and reclaims disk space
 - Always prune after deleting to free up storage
 
@@ -652,7 +652,7 @@ scafctl catalog prune
 
 ## Exporting and Importing
 
-The `save` and `load` commands let you transfer catalog artifacts between machines — useful for air-gapped environments where there's no network access to a registry.
+The `save` and `load` commands let you transfer catalog artifacts between machines -- useful for air-gapped environments where there's no network access to a registry.
 
 ### Step 1: Build a Solution to Export
 
@@ -912,7 +912,7 @@ scafctl catalog tag greeting@1.0.0 production
 {{% /tab %}}
 {{< /tabs >}}
 
-You can create as many tags as needed. Tags are freeform strings — they cannot be valid semver versions (use `scafctl build` for that).
+You can create as many tags as needed. Tags are freeform strings -- they cannot be valid semver versions (use `scafctl build` for that).
 
 ### What You Learned
 
@@ -928,7 +928,7 @@ scafctl supports pushing and pulling artifacts to/from OCI-compliant container r
 
 ### Native Authentication (No Docker Required)
 
-scafctl provides built-in registry authentication — no Docker or Podman installation needed. This is the recommended approach for most users.
+scafctl provides built-in registry authentication -- no Docker or Podman installation needed. This is the recommended approach for most users.
 
 **Cloud registries (GitHub, GCP, Azure):**
 
@@ -968,12 +968,12 @@ For catalogs defined in your scafctl config, set `authProvider` to enable automa
 # ~/.config/scafctl/config.yaml
 catalogs:
   - name: company-registry
-    registry: ghcr.io
-    repository: myorg/scafctl
+    type: oci
+    url: oci://ghcr.io/myorg/scafctl
     authProvider: github
 ```
 
-With this config, `scafctl catalog pull` and `scafctl catalog push` automatically use your GitHub auth session — no `catalog login` needed.
+With this config, `scafctl catalog pull` and `scafctl catalog push` automatically use your GitHub auth session -- no `catalog login` needed.
 
 **Docker/Podman interop:**
 
@@ -1351,9 +1351,9 @@ spec:
                 rslvr: config
 ```
 
-Notice the `bundle.include` section — this is needed because `config` uses a **dynamic path** (computed via CEL expression at runtime). scafctl can't statically discover which config files to bundle, so you tell it to include all YAML files under `configs/`.
+Notice the `bundle.include` section -- this is needed because `config` uses a **dynamic path** (computed via CEL expression at runtime). scafctl can't statically discover which config files to bundle, so you tell it to include all YAML files under `configs/`.
 
-The `deployment-template` resolver uses a **static path** (`templates/deployment.yaml`), so scafctl discovers it automatically — no `bundle.include` entry needed.
+The `deployment-template` resolver uses a **static path** (`templates/deployment.yaml`), so scafctl discovers it automatically -- no `bundle.include` entry needed.
 
 ### Step 3: Preview What Gets Bundled
 
@@ -1386,9 +1386,9 @@ Bundle analysis for deploy-app/solution.yaml:
 ```
 
 The dry-run shows:
-- **Static analysis discovered** — files scafctl found by analyzing your resolvers
-- **Explicit includes** — files matched by your `bundle.include` patterns
-- **Dynamic paths** — warnings about paths that can't be statically resolved
+- **Static analysis discovered** -- files scafctl found by analyzing your resolvers
+- **Explicit includes** -- files matched by your `bundle.include` patterns
+- **Dynamic paths** -- warnings about paths that can't be statically resolved
 
 ### Step 4: Build the Solution
 
@@ -1494,7 +1494,7 @@ spec:
             - containerPort: 8080
 ```
 
-The config values (namespace, replicas, image) changed based on the environment file — all loaded from the bundled files inside the catalog artifact.
+The config values (namespace, replicas, image) changed based on the environment file -- all loaded from the bundled files inside the catalog artifact.
 
 ### Step 7: Add Exclude Patterns
 
@@ -1517,13 +1517,13 @@ Now any file ending in `_test.yaml` will be excluded, even if it matches an incl
 - Dynamic paths (CEL expressions, Go templates) require explicit `bundle.include` patterns
 - `--dry-run` shows exactly what would be bundled, including warnings for dynamic paths
 - `bundle.exclude` filters out files that match include patterns (e.g., test files)
-- Bundled solutions are self-contained — all file dependencies travel with the artifact
+- Bundled solutions are self-contained -- all file dependencies travel with the artifact
 
 ---
 
 ## Nested Bundle Support
 
-When a parent solution references sub-solutions via the `solution` provider, scafctl automatically discovers and bundles the sub-solution files recursively. This means nested solutions are fully self-contained — everything a sub-solution needs is included in the parent's bundle.
+When a parent solution references sub-solutions via the `solution` provider, scafctl automatically discovers and bundles the sub-solution files recursively. This means nested solutions are fully self-contained -- everything a sub-solution needs is included in the parent's bundle.
 
 ### Step 1: Create the Project Structure
 
@@ -1630,7 +1630,7 @@ Bundle analysis for nested-demo/parent.yaml:
 💡 Dry run: would build nested-demo@1.0.0
 ```
 
-Notice that scafctl **recursively discovered** the child sub-solution (`sub/child.yaml`) and its file dependency (`sub/templates/greeting.tmpl`). No `bundle.include` is needed — the solution provider reference is detected by static analysis.
+Notice that scafctl **recursively discovered** the child sub-solution (`sub/child.yaml`) and its file dependency (`sub/templates/greeting.tmpl`). No `bundle.include` is needed -- the solution provider reference is detected by static analysis.
 
 ### Step 4: Build and Run
 
@@ -1651,15 +1651,15 @@ scafctl run resolver -f nested-demo -o json
 
 ### How It Works
 
-1. **Static analysis** — `scafctl build` parses the parent solution and finds the `solution` provider reference to `./sub/child.yaml`
-2. **Recursive discovery** — It then parses `sub/child.yaml` and discovers its own file dependencies (`templates/greeting.tmpl`)
-3. **Path normalization** — All paths are normalized relative to the parent bundle root (`sub/templates/greeting.tmpl` not `templates/greeting.tmpl`)
-4. **Circular reference detection** — If solution A references B and B references A, the build fails with a clear error
+1. **Static analysis** -- `scafctl build` parses the parent solution and finds the `solution` provider reference to `./sub/child.yaml`
+2. **Recursive discovery** -- It then parses `sub/child.yaml` and discovers its own file dependencies (`templates/greeting.tmpl`)
+3. **Path normalization** -- All paths are normalized relative to the parent bundle root (`sub/templates/greeting.tmpl` not `templates/greeting.tmpl`)
+4. **Circular reference detection** -- If solution A references B and B references A, the build fails with a clear error
 
 ### What You Learned
 
 - Sub-solutions referenced via the `solution` provider are automatically discovered during `build`
-- All nested file dependencies are included in the parent bundle — no extra `bundle.include` needed
+- All nested file dependencies are included in the parent bundle -- no extra `bundle.include` needed
 - Path normalization ensures sub-solution paths resolve correctly within the bundle
 - Circular sub-solution references are detected and reported at build time
 - `--dry-run` shows the full recursive file tree
@@ -1942,15 +1942,15 @@ rm -rf deploy-app/
 
 When using AI agents (VS Code Copilot, Claude, Cursor), the MCP server provides catalog tools:
 
-- **`catalog_list`** — List catalog entries filtered by kind and name
-- **`catalog_inspect`** — Get detailed metadata for a specific catalog artifact — version, kind, digest, created timestamp, and dependency list
+- **`catalog_list`** -- List catalog entries filtered by kind and name
+- **`catalog_inspect`** -- Get detailed metadata for a specific catalog artifact -- version, kind, digest, created timestamp, and dependency list
 
 The AI can inspect catalog artifacts, look up solution versions, and help you manage your catalog.
 
 ## Next Steps
 
-- [Go Templates Tutorial](go-templates-tutorial.md) — Generate structured text with Go templates
-- [Snapshots Tutorial](snapshots-tutorial.md) — Capture and compare execution snapshots
-- [Functional Testing Tutorial](functional-testing.md) — Write and run automated tests
-- [Configuration Tutorial](config-tutorial.md) — Manage application configuration
-- [MCP Server Tutorial](mcp-server-tutorial.md) — AI-assisted catalog management
+- [Go Templates Tutorial](go-templates-tutorial.md) -- Generate structured text with Go templates
+- [Snapshots Tutorial](snapshots-tutorial.md) -- Capture and compare execution snapshots
+- [Functional Testing Tutorial](functional-testing.md) -- Write and run automated tests
+- [Configuration Tutorial](config-tutorial.md) -- Manage application configuration
+- [MCP Server Tutorial](mcp-server-tutorial.md) -- AI-assisted catalog management

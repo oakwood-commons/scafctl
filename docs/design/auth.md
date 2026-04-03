@@ -95,9 +95,9 @@ Each handler declares a set of capabilities that describe which features it supp
 | `federated_token` | Supports federated token input (workload identity) | ✅ | ❌ | ✅ |
 | `callback_port` | Supports `--callback-port` for fixed OAuth redirect URI | ✅ | ❌ | ✅ |
 
-**Why capabilities matter**: GitHub's OAuth does not support changing scopes on token refresh — scopes are fixed at login time. Entra ID supports requesting different resource scopes per token request. Instead of hardcoding these differences in CLI commands, each handler declares its capabilities, and the CLI validates flags accordingly.
+**Why capabilities matter**: GitHub's OAuth does not support changing scopes on token refresh -- scopes are fixed at login time. Entra ID supports requesting different resource scopes per token request. Instead of hardcoding these differences in CLI commands, each handler declares its capabilities, and the CLI validates flags accordingly.
 
-This design makes plugin-loaded auth handlers work without CLI code changes — a plugin handler declares its capabilities, and the CLI dynamically adapts.
+This design makes plugin-loaded auth handlers work without CLI code changes -- a plugin handler declares its capabilities, and the CLI dynamically adapts.
 
 **Example**: Running `scafctl auth token github --scope repo` returns an error:
 > the "github" auth handler does not support per-request scopes; scopes are fixed at login time. Use 'scafctl auth login github --scope <scope>' to change scopes
@@ -137,10 +137,10 @@ This establishes a local identity context for future runs.
 The default interactive flow uses OAuth 2.0 Authorization Code with PKCE. It opens a browser to the Entra authorize endpoint and listens on a local HTTP server for the redirect callback:
 
 ~~~bash
-# Default — uses ephemeral port
+# Default -- uses ephemeral port
 scafctl auth login entra
 
-# Fixed port — for app registrations with specific redirect URIs
+# Fixed port -- for app registrations with specific redirect URIs
 scafctl auth login entra --callback-port 8400
 ~~~
 
@@ -247,7 +247,7 @@ Behavior:
 - Exchanges token using OAuth2 client assertion grant
 - No user interaction required
 - Tokens are cached like other flows
-- **Highest priority**: takes precedence over all other flows — stored refresh tokens (device code) and service principal credentials are bypassed when WIF env vars are present
+- **Highest priority**: takes precedence over all other flows -- stored refresh tokens (device code) and service principal credentials are bypassed when WIF env vars are present
 
 ### Flow Priority
 
@@ -265,7 +265,7 @@ Only the first matching flow is used.
 
 WIF and the device-code refresh token are **completely independent** and stored separately:
 
-- WIF reads only environment variables and the projected token file — it never reads, writes, or modifies `scafctl.auth.entra.refresh_token`
+- WIF reads only environment variables and the projected token file -- it never reads, writes, or modifies `scafctl.auth.entra.refresh_token`
 - Running `scafctl auth login entra` with WIF env vars present does **not** clear or replace any stored refresh token
 - A refresh token from a prior device-code login may silently coexist in the secret store while WIF is active; `scafctl auth list` will display both
 
@@ -293,7 +293,7 @@ This removes the refresh token and access token cache without affecting WIF, whi
 
 Entra ID issues a **new refresh token value** on every use of an existing refresh token (this is called rolling or rotating refresh tokens). Key points:
 
-- The **lifetime** of a refresh token is 90 days, measured as a **sliding window** — each successful use resets the 90-day clock
+- The **lifetime** of a refresh token is 90 days, measured as a **sliding window** -- each successful use resets the 90-day clock
 - The old token value is invalidated and the new value is atomically stored in the secret store
 - This rotation is transparent to the user; from scafctl's perspective the session simply continues
 - A refresh token that has not been used for 90 consecutive days will expire and require re-authentication
@@ -381,7 +381,7 @@ For the GitHub handler:
 | `scafctl.auth.github.metadata` | Token metadata (claims, hostname, client ID, expiry) |
 | `scafctl.auth.github.token.<flow>.<fingerprint>.<scope-hash>` | Cached access tokens partitioned by flow, config identity, and scope |
 
-The cache key encodes the authentication flow (e.g., `device_code`, `workload_identity`, `service_principal`), a config identity fingerprint, and the scope. The fingerprint is a truncated SHA-256 hash of the core identity fields for the current configuration (e.g., `clientID:tenantID` for Entra, `hostname` for GitHub). The scope hash is a base64url-encoded representation of the scope string. This three-segment key prevents cross-flow cache contamination — a token acquired via one authentication flow will never be served when a different flow is active — and prevents cross-config contamination — switching configurations (e.g., different tenant IDs, client IDs, or WIF audiences) results in a cache miss rather than serving stale tokens from the previous configuration.
+The cache key encodes the authentication flow (e.g., `device_code`, `workload_identity`, `service_principal`), a config identity fingerprint, and the scope. The fingerprint is a truncated SHA-256 hash of the core identity fields for the current configuration (e.g., `clientID:tenantID` for Entra, `hostname` for GitHub). The scope hash is a base64url-encoded representation of the scope string. This three-segment key prevents cross-flow cache contamination -- a token acquired via one authentication flow will never be served when a different flow is active -- and prevents cross-config contamination -- switching configurations (e.g., different tenant IDs, client IDs, or WIF audiences) results in a cache miss rather than serving stale tokens from the previous configuration.
 
 The metadata includes the `clientId` used during login so that token refreshes always use the same client ID that originally obtained the refresh token, regardless of what client ID is in the current configuration.
 
@@ -569,11 +569,11 @@ This design:
 
 scafctl supports user-defined OAuth2 auth handlers for any OAuth2-compliant service. Each custom handler is configured in `auth.customOAuth2[]` and behaves like a built-in handler, supporting:
 
-- **Authorization code + PKCE** — interactive browser-based login
-- **Device code (RFC 8628)** — CLI-friendly flow for headless environments
-- **Client credentials (RFC 6749 §4.4)** — machine-to-machine authentication
-- **Token exchange** — optional post-login pipeline to convert an OAuth2 token to a registry-specific token (e.g., GCP Artifact Registry, Quay.io)
-- **Token verification** — optional identity extraction from a userinfo endpoint
+- **Authorization code + PKCE** -- interactive browser-based login
+- **Device code (RFC 8628)** -- CLI-friendly flow for headless environments
+- **Client credentials (RFC 6749 §4.4)** -- machine-to-machine authentication
+- **Token exchange** -- optional post-login pipeline to convert an OAuth2 token to a registry-specific token (e.g., GCP Artifact Registry, Quay.io)
+- **Token verification** -- optional identity extraction from a userinfo endpoint
 
 ### Configuration
 

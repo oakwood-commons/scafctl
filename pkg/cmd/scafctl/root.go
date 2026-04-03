@@ -22,6 +22,7 @@ import (
 	cachecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/cache"
 	catalogcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/catalog"
 	configcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/config"
+	credhelpercmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/credentialhelper"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/eval"
 	examplescmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/examples"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/explain"
@@ -548,6 +549,7 @@ func Root(opts *RootOptions) *cobra.Command {
 	cCmd.AddCommand(withGroup(groupConfig, secretscmd.CommandSecrets(cliParams, ioStreams, settings.CliBinaryName)))
 	cCmd.AddCommand(withGroup(groupConfig, authcmd.CommandAuth(cliParams, ioStreams, settings.CliBinaryName)))
 	cCmd.AddCommand(withGroup(groupConfig, cachecmd.CommandCache(cliParams, ioStreams, settings.CliBinaryName)))
+	cCmd.AddCommand(withGroup(groupConfig, credhelpercmd.CommandCredentialHelper(cliParams, ioStreams, settings.CliBinaryName)))
 
 	// Plugin Commands
 	cCmd.AddCommand(withGroup(groupPlugin, pluginscmd.CommandPlugins(cliParams, ioStreams, settings.CliBinaryName)))

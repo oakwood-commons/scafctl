@@ -16,13 +16,13 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"text/template"
 	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/auth/oauth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 )
 
@@ -32,6 +32,7 @@ const (
 	secretKeyMetadataSuffix = "metadata"             //nolint:gosec // key suffix, not credential
 	tokenCacheSuffix        = "token."               //nolint:gosec // key suffix, not credential
 	derivedTokenSuffix      = "derived_token"        //nolint:gosec // key suffix, not credential
+	derivedUsernameSuffix   = "derived_username"     //nolint:gosec // key suffix, not credential
 	defaultTimeout          = 5 * time.Minute
 	defaultPollInterval     = 5
 	maxResponseBody         = 1 << 20
@@ -103,6 +104,12 @@ func (h *Handler) DisplayName() string {
 	}
 	return h.cfg.Name
 }
+
+// RegistryUsername returns the configured OCI registry username convention for
+// this handler (e.g. "$oauthtoken" for Quay.io). An empty string means the
+// caller should use the default convention. This implements the optional
+// catalog.RegistryUsernameProvider interface consumed by BridgeAuthToRegistry.
+func (h *Handler) RegistryUsername() string { return h.cfg.RegistryUsername }
 
 // SupportedFlows returns the flows this handler supports based on config.
 func (h *Handler) SupportedFlows() []auth.Flow {
@@ -176,12 +183,15 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 	}
 
 	// Token exchange (optional post-flow pipeline)
+	expiresAt := time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
 	if h.cfg.TokenExchange != nil {
 		derived, exchangeErr := h.executeTokenExchange(ctx, tokenResp.AccessToken)
 		if exchangeErr != nil {
 			return nil, auth.NewError(h.cfg.Name, "token_exchange", exchangeErr)
 		}
-		if storeErr := h.storeDerivedToken(ctx, derived, flow, scopes); storeErr != nil {
+		// Use the primary token's expiry for the derived token since the exchange
+		// response does not carry its own expiry.
+		if storeErr := h.storeDerivedToken(ctx, derived, expiresAt, flow, scopes); storeErr != nil {
 			h.logger.V(1).Info("failed to cache derived token", "error", storeErr)
 		}
 	}
@@ -198,7 +208,6 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 		claims = &auth.Claims{}
 	}
 
-	expiresAt := time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
 	if storeErr := h.storeTokens(ctx, tokenResp, claims, expiresAt, flow, scopes); storeErr != nil {
 		h.logger.V(1).Info("failed to store tokens", "error", storeErr)
 	}
@@ -217,7 +226,7 @@ func (h *Handler) Logout(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("clear token cache: %w", err))
 		}
 	}
-	for _, suffix := range []string{secretKeyRefreshSuffix, secretKeyMetadataSuffix, derivedTokenSuffix} {
+	for _, suffix := range []string{secretKeyRefreshSuffix, secretKeyMetadataSuffix, derivedTokenSuffix, derivedUsernameSuffix} {
 		if err := h.secretStore.Delete(ctx, h.secretKey(suffix)); err != nil {
 			errs = append(errs, err)
 		}
@@ -290,7 +299,7 @@ func (h *Handler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.T
 			}
 			if h.cfg.TokenExchange != nil {
 				if derived, exchangeErr := h.executeTokenExchange(ctx, tokenResp.AccessToken); exchangeErr == nil {
-					_ = h.storeDerivedToken(ctx, derived, flow, strings.Split(scope, " "))
+					_ = h.storeDerivedToken(ctx, derived, token.ExpiresAt, flow, strings.Split(scope, " "))
 				}
 			}
 			return token, nil
@@ -552,18 +561,18 @@ func (h *Handler) executeTokenExchange(ctx context.Context, primaryToken string)
 
 	var bodyReader io.Reader
 	if exc.RequestBody != "" {
-		tmpl, err := template.New("exchange").Parse(exc.RequestBody)
-		if err != nil {
-			return nil, fmt.Errorf("parse exchange request body template: %w", err)
+		result, tmplErr := gotmpl.Execute(ctx, gotmpl.TemplateOptions{
+			Name:    "exchange-request-body",
+			Content: string(exc.RequestBody),
+			Data: map[string]string{
+				"Hostname": h.cfg.Registry,
+				"Username": h.cfg.RegistryUsername,
+			},
+		})
+		if tmplErr != nil {
+			return nil, fmt.Errorf("render exchange request body: %w", tmplErr)
 		}
-		var buf bytes.Buffer
-		if err := tmpl.Execute(&buf, map[string]string{
-			"Hostname": h.cfg.Registry,
-			"Username": h.cfg.RegistryUsername,
-		}); err != nil {
-			return nil, fmt.Errorf("render exchange request body: %w", err)
-		}
-		bodyReader = &buf
+		bodyReader = bytes.NewBufferString(result.Output)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, exc.URL, bodyReader)
@@ -606,8 +615,10 @@ func (h *Handler) executeTokenExchange(ctx context.Context, primaryToken string)
 
 	result := &exchangeResult{Token: token}
 	if exc.UsernameJSONPath != "" {
-		if username, extractErr := extractJSONPath(respData, exc.UsernameJSONPath); extractErr == nil {
+		if username, extractErr := extractJSONPath(respData, exc.UsernameJSONPath); extractErr == nil && username != "" {
 			result.Username = username
+			// Persist the extracted username so BridgeAuthToRegistry uses it for registry auth.
+			h.cfg.RegistryUsername = username
 		}
 	}
 	return result, nil
@@ -681,11 +692,11 @@ func (h *Handler) storeTokens(ctx context.Context, resp *tokenResponse, claims *
 	return nil
 }
 
-func (h *Handler) storeDerivedToken(ctx context.Context, result *exchangeResult, flow auth.Flow, scopes []string) error {
+func (h *Handler) storeDerivedToken(ctx context.Context, result *exchangeResult, expiresAt time.Time, flow auth.Flow, scopes []string) error {
 	token := &auth.Token{
 		AccessToken: result.Token,
 		TokenType:   defaultTokenType,
-		ExpiresAt:   time.Now().Add(1 * time.Hour),
+		ExpiresAt:   expiresAt,
 		Scope:       strings.Join(scopes, " "),
 		Flow:        flow,
 	}
@@ -693,7 +704,16 @@ func (h *Handler) storeDerivedToken(ctx context.Context, result *exchangeResult,
 	if err != nil {
 		return fmt.Errorf("marshal derived token: %w", err)
 	}
-	return h.secretStore.Set(ctx, h.secretKey(derivedTokenSuffix), data)
+	if setErr := h.secretStore.Set(ctx, h.secretKey(derivedTokenSuffix), data); setErr != nil {
+		return setErr
+	}
+	// Persist the extracted username so it survives process restarts.
+	if result.Username != "" {
+		if setErr := h.secretStore.Set(ctx, h.secretKey(derivedUsernameSuffix), []byte(result.Username)); setErr != nil {
+			h.logger.V(1).Info("failed to persist derived username", "error", setErr)
+		}
+	}
+	return nil
 }
 
 func (h *Handler) loadDerivedToken(ctx context.Context) (*auth.Token, error) {
@@ -704,6 +724,11 @@ func (h *Handler) loadDerivedToken(ctx context.Context) (*auth.Token, error) {
 	var token auth.Token
 	if err := json.Unmarshal(data, &token); err != nil {
 		return nil, err
+	}
+	// Restore the derived username so BridgeAuthToRegistry uses the correct
+	// username even when the token was loaded from cache across process restarts.
+	if usernameData, usernameErr := h.secretStore.Get(ctx, h.secretKey(derivedUsernameSuffix)); usernameErr == nil && len(usernameData) > 0 {
+		h.cfg.RegistryUsername = string(usernameData)
 	}
 	return &token, nil
 }

@@ -212,7 +212,7 @@ func TestCredentialStore_Credential_FallbackToNativeStore(t *testing.T) {
 
 	// Set up native credential store with a credential
 	nativeStore := NewNativeCredentialStoreWithPath(filepath.Join(t.TempDir(), "registries.json"))
-	require.NoError(t, nativeStore.SetCredential("ghcr.io", "nativeuser", "nativepass", false))
+	require.NoError(t, nativeStore.SetCredential("ghcr.io", "nativeuser", "nativepass", ""))
 
 	store := &CredentialStore{
 		logger:      logr.Discard(),
@@ -234,7 +234,7 @@ func TestCredentialStore_Credential_DockerAuthTakesPriority(t *testing.T) {
 
 	// Set up native credential store
 	nativeStore := NewNativeCredentialStoreWithPath(filepath.Join(t.TempDir(), "registries.json"))
-	require.NoError(t, nativeStore.SetCredential("ghcr.io", "nativeuser", "nativepass", false))
+	require.NoError(t, nativeStore.SetCredential("ghcr.io", "nativeuser", "nativepass", ""))
 
 	store := &CredentialStore{
 		logger:      logr.Discard(),
@@ -259,7 +259,7 @@ func TestCredentialStore_Credential_NativeStoreFallbackWhenNoDockerConfig(t *tes
 
 	// Set up native credential store
 	nativeStore := NewNativeCredentialStoreWithPath(filepath.Join(t.TempDir(), "registries.json"))
-	require.NoError(t, nativeStore.SetCredential("ghcr.io", "nativeuser", "nativepass", false))
+	require.NoError(t, nativeStore.SetCredential("ghcr.io", "nativeuser", "nativepass", ""))
 
 	// No Docker config at all
 	store := &CredentialStore{
