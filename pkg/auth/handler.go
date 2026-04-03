@@ -84,6 +84,10 @@ const (
 	// A JWT is minted from the App's private key and exchanged for a short-lived
 	// installation access token.
 	FlowGitHubApp Flow = "github_app"
+
+	// FlowClientCredentials is OAuth 2.0 client credentials grant (RFC 6749 §4.4).
+	// Non-interactive, uses client_id + client_secret.
+	FlowClientCredentials Flow = "client_credentials"
 )
 
 // DefaultMinValidFor is the default minimum validity duration for tokens.

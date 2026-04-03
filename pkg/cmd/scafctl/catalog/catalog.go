@@ -40,6 +40,8 @@ func CommandCatalog(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 	cmd.AddCommand(CommandPush(cliParams, ioStreams, path))
 	cmd.AddCommand(CommandPull(cliParams, ioStreams, path))
 	cmd.AddCommand(CommandTag(cliParams, ioStreams, path))
+	cmd.AddCommand(CommandLogin(cliParams, ioStreams, path))
+	cmd.AddCommand(CommandLogout(cliParams, ioStreams, path))
 
 	return cmd
 }

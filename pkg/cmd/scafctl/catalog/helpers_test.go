@@ -21,3 +21,8 @@ func newCatalogTestCtx(tb testing.TB) context.Context {
 	w := writer.New(ioStreams, settings.NewCliParams())
 	return writer.WithWriter(context.Background(), w)
 }
+
+// writerFromCtx retrieves the Writer from a test context.
+func writerFromCtx(ctx context.Context) *writer.Writer {
+	return writer.FromContext(ctx)
+}

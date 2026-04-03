@@ -17,6 +17,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
+	scafctlauth "github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/opencontainers/go-digest"
 	"github.com/opencontainers/image-spec/specs-go"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -50,6 +51,14 @@ type RemoteCatalogConfig struct {
 	// CredentialStore provides authentication credentials
 	CredentialStore *CredentialStore
 
+	// AuthHandler provides dynamic token injection for this catalog.
+	// When set, if the CredentialStore has no credentials for the registry,
+	// the handler's token is bridged to OCI registry credentials.
+	AuthHandler scafctlauth.Handler
+
+	// AuthScope is the OAuth scope for auth handler token requests.
+	AuthScope string
+
 	// Insecure allows HTTP connections (for testing)
 	Insecure bool
 
@@ -70,7 +79,48 @@ func NewRemoteCatalog(cfg RemoteCatalogConfig) (*RemoteCatalog, error) {
 	}
 
 	if cfg.CredentialStore != nil {
-		client.Credential = cfg.CredentialStore.CredentialFunc()
+		baseCredFunc := cfg.CredentialStore.CredentialFunc()
+		if cfg.AuthHandler != nil {
+			// Composite credential function: try static credentials first,
+			// fall back to dynamic auth handler bridge
+			client.Credential = func(ctx context.Context, host string) (auth.Credential, error) {
+				cred, err := baseCredFunc(ctx, host)
+				if err == nil && cred != auth.EmptyCredential {
+					return cred, nil
+				}
+				// Fall back to auth handler bridge
+				username, password, bridgeErr := BridgeAuthToRegistry(ctx, cfg.AuthHandler, host, cfg.AuthScope)
+				if bridgeErr != nil {
+					cfg.Logger.V(1).Info("auth handler bridge failed, using anonymous",
+						"handler", cfg.AuthHandler.Name(),
+						"host", host,
+						"error", bridgeErr.Error())
+					return auth.EmptyCredential, nil
+				}
+				return auth.Credential{
+					Username: username,
+					Password: password,
+				}, nil
+			}
+		} else {
+			client.Credential = baseCredFunc
+		}
+	} else if cfg.AuthHandler != nil {
+		// No credential store, use auth handler directly
+		client.Credential = func(ctx context.Context, host string) (auth.Credential, error) {
+			username, password, bridgeErr := BridgeAuthToRegistry(ctx, cfg.AuthHandler, host, cfg.AuthScope)
+			if bridgeErr != nil {
+				cfg.Logger.V(1).Info("auth handler bridge failed, using anonymous",
+					"handler", cfg.AuthHandler.Name(),
+					"host", host,
+					"error", bridgeErr.Error())
+				return auth.EmptyCredential, nil //nolint:nilerr // graceful degradation to anonymous auth
+			}
+			return auth.Credential{
+				Username: username,
+				Password: password,
+			}, nil
+		}
 	}
 
 	// Set insecure for local development/testing
