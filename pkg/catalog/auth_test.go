@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/base64"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -203,6 +204,74 @@ func TestCredentialStore_Credential_NotFound(t *testing.T) {
 	cred, err := store.Credential(context.Background(), "notshareable.example.com")
 	require.NoError(t, err)
 	assert.Empty(t, cred.Username)
+}
+
+func TestCredentialStore_Credential_FallbackToNativeStore(t *testing.T) {
+	t.Setenv("SCAFCTL_REGISTRY_USERNAME", "")
+	t.Setenv("SCAFCTL_REGISTRY_PASSWORD", "")
+
+	// Set up native credential store with a credential
+	nativeStore := NewNativeCredentialStoreWithPath(filepath.Join(t.TempDir(), "registries.json"))
+	require.NoError(t, nativeStore.SetCredential("ghcr.io", "nativeuser", "nativepass", ""))
+
+	store := &CredentialStore{
+		logger:      logr.Discard(),
+		nativeStore: nativeStore,
+		config: &dockerConfig{
+			Auths: map[string]dockerAuthEntry{},
+		},
+	}
+
+	cred, err := store.Credential(context.Background(), "ghcr.io")
+	require.NoError(t, err)
+	assert.Equal(t, "nativeuser", cred.Username)
+	assert.Equal(t, "nativepass", cred.Password)
+}
+
+func TestCredentialStore_Credential_DockerAuthTakesPriority(t *testing.T) {
+	t.Setenv("SCAFCTL_REGISTRY_USERNAME", "")
+	t.Setenv("SCAFCTL_REGISTRY_PASSWORD", "")
+
+	// Set up native credential store
+	nativeStore := NewNativeCredentialStoreWithPath(filepath.Join(t.TempDir(), "registries.json"))
+	require.NoError(t, nativeStore.SetCredential("ghcr.io", "nativeuser", "nativepass", ""))
+
+	store := &CredentialStore{
+		logger:      logr.Discard(),
+		nativeStore: nativeStore,
+		config: &dockerConfig{
+			Auths: map[string]dockerAuthEntry{
+				"ghcr.io": {Username: "dockeruser", Password: "dockerpass"},
+			},
+		},
+	}
+
+	// Docker auth should take priority over native store
+	cred, err := store.Credential(context.Background(), "ghcr.io")
+	require.NoError(t, err)
+	assert.Equal(t, "dockeruser", cred.Username)
+	assert.Equal(t, "dockerpass", cred.Password)
+}
+
+func TestCredentialStore_Credential_NativeStoreFallbackWhenNoDockerConfig(t *testing.T) {
+	t.Setenv("SCAFCTL_REGISTRY_USERNAME", "")
+	t.Setenv("SCAFCTL_REGISTRY_PASSWORD", "")
+
+	// Set up native credential store
+	nativeStore := NewNativeCredentialStoreWithPath(filepath.Join(t.TempDir(), "registries.json"))
+	require.NoError(t, nativeStore.SetCredential("ghcr.io", "nativeuser", "nativepass", ""))
+
+	// No Docker config at all
+	store := &CredentialStore{
+		logger:      logr.Discard(),
+		nativeStore: nativeStore,
+		config:      nil,
+	}
+
+	cred, err := store.Credential(context.Background(), "ghcr.io")
+	require.NoError(t, err)
+	assert.Equal(t, "nativeuser", cred.Username)
+	assert.Equal(t, "nativepass", cred.Password)
 }
 
 func TestFindDockerConfig_DockerConfigEnv(t *testing.T) {

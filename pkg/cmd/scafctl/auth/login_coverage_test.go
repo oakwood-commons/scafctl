@@ -5,10 +5,13 @@ package auth
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -371,4 +374,166 @@ func BenchmarkDisplayLoginResult(b *testing.B) {
 		buf.Reset()
 		_ = displayLoginResult(w, result, auth.FlowInteractive)
 	}
+}
+
+func TestCommandLogin_CustomHandler_Success(t *testing.T) {
+	// Tests the loginGeneric() path (non-built-in handler named "quay")
+	ctx, buf := newTestContext(t)
+
+	mock := auth.NewMockHandler("quay")
+	mock.SetNotAuthenticated()
+	mock.LoginResult = &auth.Result{
+		Claims:    &auth.Claims{Email: "robot@quay.io"},
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandLogin(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"quay"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	require.Len(t, mock.LoginCalls, 1)
+	assert.Contains(t, buf.String(), "Authentication successful")
+}
+
+func TestCommandLogin_CustomHandler_AlreadyAuthenticated(t *testing.T) {
+	// loginGeneric should print a warning when already authenticated
+	ctx, buf := newTestContext(t)
+
+	mock := auth.NewMockHandler("quay")
+	mock.SetAuthenticated(&auth.Claims{Email: "robot@quay.io"})
+	mock.LoginResult = &auth.Result{Claims: &auth.Claims{Email: "robot@quay.io"}}
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandLogin(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"quay"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	// Should still call Login (PreLoginAlreadyAuthenticated just warns)
+	require.Len(t, mock.LoginCalls, 1)
+	out := buf.String()
+	assert.Contains(t, out, "Already authenticated")
+}
+
+func TestCommandLogin_CustomHandler_SkipIfAuthenticated(t *testing.T) {
+	ctx, buf := newTestContext(t)
+
+	mock := auth.NewMockHandler("quay")
+	mock.SetAuthenticated(&auth.Claims{Email: "robot@quay.io"})
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandLogin(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"quay", "--skip-if-authenticated"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	// Should NOT call Login since skip-if-authenticated is set
+	assert.Empty(t, mock.LoginCalls)
+	assert.Contains(t, buf.String(), "skipping login")
+}
+
+func TestCommandLogin_CustomHandler_Force(t *testing.T) {
+	ctx, buf := newTestContext(t)
+
+	mock := auth.NewMockHandler("quay")
+	mock.SetAuthenticated(&auth.Claims{Email: "robot@quay.io"})
+	mock.LoginResult = &auth.Result{Claims: &auth.Claims{Email: "robot@quay.io"}}
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandLogin(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"quay", "--force"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	require.Len(t, mock.LoginCalls, 1)
+}
+
+// TestBridgeAuthToRegistryPostLogin_Success verifies that credentials are stored
+// after a successful token bridge.
+func TestBridgeAuthToRegistryPostLogin_Success(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	ctx, buf := newTestContext(t)
+	w := writer.New(terminal.NewIOStreams(nil, buf, buf, false), settings.NewCliParams())
+
+	mock := auth.NewMockHandler("quay")
+	mock.GetTokenResult = &auth.Token{
+		AccessToken: "fake-registry-token",
+		TokenType:   "Bearer",
+	}
+
+	err := bridgeAuthToRegistryPostLogin(ctx, w, mock, "quay", "quay.io", "", false)
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "Registry credentials stored for quay.io")
+
+	// Verify the credential is written to the isolated native store.
+	// Use the same secrets backend to retrieve the encrypted password.
+	ss, err := secrets.New()
+	require.NoError(t, err)
+	store := catalog.NewNativeCredentialStoreWithSecretsStore(ss)
+	cred, err := store.GetCredential("quay.io")
+	require.NoError(t, err)
+	require.NotNil(t, cred)
+	assert.Equal(t, "fake-registry-token", cred.Password)
+}
+
+// TestBridgeAuthToRegistryPostLogin_GetTokenError verifies that a GetToken failure
+// is propagated as an error.
+func TestBridgeAuthToRegistryPostLogin_GetTokenError(t *testing.T) {
+	ctx, buf := newTestContext(t)
+	w := writer.New(terminal.NewIOStreams(nil, buf, buf, false), settings.NewCliParams())
+
+	mock := auth.NewMockHandler("quay")
+	mock.GetTokenErr = fmt.Errorf("token exchange failed")
+
+	err := bridgeAuthToRegistryPostLogin(ctx, w, mock, "quay", "quay.io", "", false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to bridge quay auth to registry quay.io")
+}
+
+// TestCommandLogin_WithRegistryBridge tests the --registry flag path after successful login.
+func TestCommandLogin_WithRegistryBridge(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	ctx, buf := newTestContext(t)
+
+	mock := auth.NewMockHandler("quay")
+	mock.SetNotAuthenticated()
+	mock.LoginResult = &auth.Result{
+		Claims: &auth.Claims{Email: "robot@quay.io"},
+	}
+	mock.GetTokenResult = &auth.Token{
+		AccessToken: "fake-oci-token",
+		TokenType:   "Bearer",
+	}
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandLogin(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"quay", "--registry", "quay.io"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "Registry credentials stored for quay.io")
 }
