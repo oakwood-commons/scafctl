@@ -44,8 +44,9 @@ type RegistryInterface interface {
 type ProgressCallback interface {
 	// OnPhaseStart is called when a new execution phase begins
 	OnPhaseStart(phaseNum int, resolverNames []string)
-	// OnResolverComplete is called when a resolver completes successfully
-	OnResolverComplete(resolverName string)
+	// OnResolverComplete is called when a resolver completes successfully.
+	// elapsed is the pure execution time of the resolver.
+	OnResolverComplete(resolverName string, elapsed time.Duration)
 	// OnResolverFailed is called when a resolver fails
 	OnResolverFailed(resolverName string, err error)
 	// OnResolverSkipped is called when a resolver is skipped due to when condition
@@ -389,7 +390,9 @@ func (e *Executor) executePhase(ctx context.Context, phase *PhaseGroup, failedRe
 				return
 			}
 
+			resolverStart := time.Now()
 			skipped, err := e.executeResolver(phaseCtx, r, phase.Phase)
+			resolverElapsed := time.Since(resolverStart)
 			switch {
 			case err != nil:
 				if e.progressCallback != nil {
@@ -404,7 +407,7 @@ func (e *Executor) executePhase(ctx context.Context, phase *PhaseGroup, failedRe
 			default:
 				// Resolver completed successfully
 				if e.progressCallback != nil {
-					e.progressCallback.OnResolverComplete(r.Name)
+					e.progressCallback.OnResolverComplete(r.Name, resolverElapsed)
 				}
 				resultChan <- resolverResult{resolverName: r.Name}
 			}

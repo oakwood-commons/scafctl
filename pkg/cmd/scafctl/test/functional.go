@@ -255,7 +255,14 @@ func runFunctional(ctx context.Context, opts *FunctionalOptions) error {
 	outputOpts.Format = format
 	outputOpts.Ctx = ctx
 
-	if err := soltesting.ReportResults(results, outputOpts, opts.Verbose, elapsed); err != nil {
+	// When stdout is not a terminal (e.g. redirected to a file), include
+	// per-test rows in the report even if progress was shown on stderr.
+	reportProgress := runner.Progress
+	if !kvx.IsTerminal(opts.IOStreams.Out) {
+		reportProgress = nil
+	}
+
+	if err := soltesting.ReportResults(results, outputOpts, opts.Verbose, elapsed, reportProgress); err != nil {
 		if w != nil {
 			w.Errorf("reporting failed: %s", err)
 		}
@@ -379,7 +386,14 @@ func runWatchMode(ctx context.Context, opts *FunctionalOptions, w *writer.Writer
 				outputOpts.Format = format
 				outputOpts.Ctx = ctx
 
-				if reportErr := soltesting.ReportResults(results, outputOpts, opts.Verbose, elapsed); reportErr != nil {
+				// When stdout is not a terminal, include per-test rows
+				// in the report even if progress was shown on stderr.
+				watchReportProgress := runner.Progress
+				if !kvx.IsTerminal(opts.IOStreams.Out) {
+					watchReportProgress = nil
+				}
+
+				if reportErr := soltesting.ReportResults(results, outputOpts, opts.Verbose, elapsed, watchReportProgress); reportErr != nil {
 					if w != nil {
 						w.Errorf("[watch] reporting failed: %s", reportErr)
 					}

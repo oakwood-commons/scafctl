@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
@@ -27,11 +28,10 @@ var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 // in sync.Map fields that are safe for concurrent lock-free reads.
 type MPBTestProgress struct {
 	progress *mpb.Progress
-	// mu protects bars and barStarts only. It must NOT be held when mpb's
+	// mu protects bars only. It must NOT be held when mpb's
 	// render goroutine might call decorator closures.
-	mu        sync.Mutex
-	bars      map[string]*mpb.Bar
-	barStarts map[string]time.Time
+	mu   sync.Mutex
+	bars map[string]*mpb.Bar
 	// results and barElapsed are read by decorator closures from mpb's render
 	// goroutine, so they use sync.Map to avoid lock ordering issues.
 	results    sync.Map // key → *soltesting.TestResult
@@ -44,11 +44,11 @@ func NewMPBTestProgress(w io.Writer) *MPBTestProgress {
 		mpb.WithOutput(w),
 		mpb.WithWidth(0),
 		mpb.WithRefreshRate(100*time.Millisecond),
+		mpb.PopCompletedMode(),
 	)
 	return &MPBTestProgress{
-		progress:  p,
-		bars:      make(map[string]*mpb.Bar),
-		barStarts: make(map[string]time.Time),
+		progress: p,
+		bars:     make(map[string]*mpb.Bar),
 	}
 }
 
@@ -60,14 +60,16 @@ func (p *MPBTestProgress) barKey(solution, test string) string {
 func (p *MPBTestProgress) OnTestStart(solution, test string) {
 	key := p.barKey(solution, test)
 
-	p.mu.Lock()
-	p.barStarts[key] = time.Now()
-	p.mu.Unlock()
-
 	// Elapsed time — shown only after completion.
 	// Reads from sync.Map; no mutex needed.
+	// Suppresses duration for skipped tests (typically 0).
 	elapsedDecor := decor.Any(func(s decor.Statistics) string {
 		if s.Completed || s.Aborted {
+			if v, ok := p.results.Load(key); ok {
+				if r, ok := v.(*soltesting.TestResult); ok && r.Status == soltesting.StatusSkip {
+					return ""
+				}
+			}
 			if v, ok := p.barElapsed.Load(key); ok {
 				if d, ok := v.(time.Duration); ok {
 					return fmtDuration(d)
@@ -90,15 +92,36 @@ func (p *MPBTestProgress) OnTestStart(solution, test string) {
 		return ""
 	})
 
+	// Icon decorator — driven by actual test result status so that
+	// skipped tests render ⊘ instead of the generic ✓ completion icon.
+	// Reads from sync.Map; no mutex needed.
+	var spinCount atomic.Uint64
+	iconDecor := decor.Any(func(s decor.Statistics) string {
+		if s.Completed || s.Aborted {
+			if v, ok := p.results.Load(key); ok {
+				if r, ok := v.(*soltesting.TestResult); ok {
+					switch r.Status {
+					case soltesting.StatusPass:
+						return "✓ "
+					case soltesting.StatusFail, soltesting.StatusError:
+						return "✗ "
+					case soltesting.StatusSkip:
+						return "⊘ "
+					}
+				}
+			}
+			if s.Aborted {
+				return "✗ "
+			}
+			return "✓ "
+		}
+		idx := spinCount.Add(1) - 1
+		return spinnerFrames[idx%uint64(len(spinnerFrames))] + " "
+	}, decor.WCSyncSpace)
+
 	bar := p.progress.AddBar(1,
 		mpb.PrependDecorators(
-			decor.OnAbort(
-				decor.OnComplete(
-					decor.Spinner(spinnerFrames, decor.WCSyncSpace),
-					"✓ ",
-				),
-				"✗ ",
-			),
+			iconDecor,
 			decor.Name(key, decor.WCSyncSpaceR),
 		),
 		mpb.AppendDecorators(statusDecor, decor.Name("  "), elapsedDecor),
@@ -111,22 +134,16 @@ func (p *MPBTestProgress) OnTestStart(solution, test string) {
 }
 
 // OnTestComplete records the result and marks the bar finished.
+// Invariant: sync.Map stores (result, elapsed) MUST happen before the bar
+// state transition (Increment/Abort) so decorator closures see the data
+// when mpb's render goroutine reads it.
 func (p *MPBTestProgress) OnTestComplete(result soltesting.TestResult) {
 	key := p.barKey(result.Solution, result.Test)
 	resultCopy := result
 
 	// Store result and elapsed in sync.Map so decorators can read lock-free.
 	p.results.Store(key, &resultCopy)
-
-	p.mu.Lock()
-	start, hasStart := p.barStarts[key]
-	p.mu.Unlock()
-
-	if hasStart {
-		p.barElapsed.Store(key, time.Since(start))
-	} else {
-		p.barElapsed.Store(key, result.Duration)
-	}
+	p.barElapsed.Store(key, result.Duration)
 
 	p.mu.Lock()
 	bar, ok := p.bars[key]
