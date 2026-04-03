@@ -2336,6 +2336,65 @@ func TestIntegration_CatalogHelp(t *testing.T) {
 	assert.Contains(t, stdout, "list")
 	assert.Contains(t, stdout, "inspect")
 	assert.Contains(t, stdout, "delete")
+	assert.Contains(t, stdout, "login")
+	assert.Contains(t, stdout, "logout")
+}
+
+func TestIntegration_CatalogLoginHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "catalog", "login", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Authenticate to an OCI registry")
+	assert.Contains(t, stdout, "--auth-provider")
+	assert.Contains(t, stdout, "--scope")
+	assert.Contains(t, stdout, "--username")
+	assert.Contains(t, stdout, "--password-stdin")
+	assert.Contains(t, stdout, "--password-env")
+	assert.Contains(t, stdout, "--write-registry-auth")
+}
+
+func TestIntegration_CatalogLoginRequiresArg(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t, "catalog", "login")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "accepts 1 arg(s)")
+}
+
+func TestIntegration_CatalogLogoutHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "catalog", "logout", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Remove stored credentials")
+	assert.Contains(t, stdout, "--all")
+}
+
+func TestIntegration_CatalogLogoutRequiresRegistryOrAll(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t, "catalog", "logout")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "specify a registry or use --all")
+}
+
+func TestIntegration_CatalogLogoutNonExistent(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t, "catalog", "logout", "nonexistent.example.com")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "no credentials stored")
+}
+
+func TestIntegration_AuthLoginRegistryFlag(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "auth", "login", "github", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "--registry")
+	assert.Contains(t, stdout, "--registry-scope")
+	assert.Contains(t, stdout, "--write-registry-auth")
 }
 
 func TestIntegration_CatalogListHelp(t *testing.T) {

@@ -339,3 +339,43 @@ func BenchmarkNativeCredentialStore_List(b *testing.B) {
 		_, _ = store.ListCredentials()
 	}
 }
+
+func TestNativeCredentialStore_ListCredentialEntries(t *testing.T) {
+	store := NewNativeCredentialStoreWithPath(filepath.Join(t.TempDir(), "registries.json"))
+	require.NoError(t, store.SetCredential("ghcr.io", "user1", "pass1", true))
+	require.NoError(t, store.SetCredential("quay.io", "user2", "pass2", false))
+
+	entries, err := store.ListCredentialEntries()
+	require.NoError(t, err)
+	assert.Len(t, entries, 2)
+
+	ghcr := entries["ghcr.io"]
+	assert.Equal(t, "user1", ghcr.Username)
+	assert.Equal(t, "pass1", ghcr.Password)
+	assert.True(t, ghcr.ContainerAuth)
+
+	quay := entries["quay.io"]
+	assert.Equal(t, "user2", quay.Username)
+	assert.Equal(t, "pass2", quay.Password)
+	assert.False(t, quay.ContainerAuth)
+}
+
+func TestNativeCredentialStore_ListCredentialEntries_Empty(t *testing.T) {
+	store := NewNativeCredentialStoreWithPath(filepath.Join(t.TempDir(), "registries.json"))
+
+	entries, err := store.ListCredentialEntries()
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+}
+
+func BenchmarkNativeCredentialStore_ListEntries(b *testing.B) {
+	store := NewNativeCredentialStoreWithPath(filepath.Join(b.TempDir(), "registries.json"))
+	for i := 0; i < 10; i++ {
+		_ = store.SetCredential("registry"+string(rune('0'+i))+".io", "user", "pass", false)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = store.ListCredentialEntries()
+	}
+}

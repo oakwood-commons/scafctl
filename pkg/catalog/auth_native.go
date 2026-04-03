@@ -142,6 +142,24 @@ func (s *NativeCredentialStore) ListCredentials() (map[string]string, error) {
 	return result, nil
 }
 
+// ListCredentialEntries returns all stored registry hosts and their full credential entries.
+func (s *NativeCredentialStore) ListCredentialEntries() (map[string]NativeCredential, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	creds, err := s.load()
+	if err != nil {
+		return nil, fmt.Errorf("load native credentials: %w", err)
+	}
+
+	result := make(map[string]NativeCredential, len(creds.Registries))
+	for host, cred := range creds.Registries {
+		result[host] = cred
+	}
+
+	return result, nil
+}
+
 // DeleteAll removes all stored credentials.
 func (s *NativeCredentialStore) DeleteAll() error {
 	s.mu.Lock()

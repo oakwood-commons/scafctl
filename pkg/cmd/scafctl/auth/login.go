@@ -16,6 +16,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/auth/entra"
 	gcpauth "github.com/oakwood-commons/scafctl/pkg/auth/gcp"
 	ghauth "github.com/oakwood-commons/scafctl/pkg/auth/github"
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -38,6 +39,9 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 		callbackPort              int
 		force                     bool
 		skipIfAuthenticated       bool
+		registry                  string
+		registryScope             string
+		writeRegistryAuth         bool
 	)
 
 	cmd := &cobra.Command{
@@ -221,14 +225,26 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 			}
 
 			// Route to handler-specific login logic
+			var loginErr error
 			switch handlerName {
 			case "github":
-				return loginGitHub(ctx, w, flow, hostname, clientID, callbackPort, timeout, scopes, force, skipIfAuthenticated)
+				loginErr = loginGitHub(ctx, w, flow, hostname, clientID, callbackPort, timeout, scopes, force, skipIfAuthenticated)
 			case "gcp":
-				return loginGCP(ctx, w, flow, clientID, impersonateServiceAccount, callbackPort, timeout, scopes, force, skipIfAuthenticated)
+				loginErr = loginGCP(ctx, w, flow, clientID, impersonateServiceAccount, callbackPort, timeout, scopes, force, skipIfAuthenticated)
 			default:
-				return loginEntra(ctx, w, flow, tenantID, clientID, callbackPort, timeout, federatedToken, flowStr, scopes, force, skipIfAuthenticated)
+				loginErr = loginEntra(ctx, w, flow, tenantID, clientID, callbackPort, timeout, federatedToken, flowStr, scopes, force, skipIfAuthenticated)
 			}
+
+			if loginErr != nil {
+				return loginErr
+			}
+
+			// Post-login registry bridge
+			if registry != "" {
+				return bridgeAuthToRegistryPostLogin(ctx, w, handler, handlerName, registry, registryScope, writeRegistryAuth)
+			}
+
+			return nil
 		},
 	}
 
@@ -243,6 +259,9 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "Re-authenticate even if already logged in (logs out first)")
 	cmd.Flags().BoolVar(&skipIfAuthenticated, "skip-if-authenticated", false, "Exit successfully without re-authenticating if already logged in (idempotent for scripts)")
 	cmd.Flags().IntVar(&callbackPort, "callback-port", 0, "Fixed port for the OAuth callback server (e.g. 8400); the redirect URI becomes http://localhost:<port>. Register this URI in your app registration. 0 = ephemeral (default).")
+	cmd.Flags().StringVar(&registry, "registry", "", "OCI registry to bridge auth credentials to after login (e.g. ghcr.io)")
+	cmd.Flags().StringVar(&registryScope, "registry-scope", "", "OAuth scope for registry credential bridging")
+	cmd.Flags().BoolVar(&writeRegistryAuth, "write-registry-auth", false, "Also write bridged credentials to container auth file (Docker/Podman interop)")
 
 	return cmd
 }
@@ -663,4 +682,31 @@ func displayLoginResult(w *writer.Writer, result *auth.Result, flow auth.Flow) e
 // Delegates to auth.ParseFlow in the shared auth package.
 func parseFlow(flowStr, handlerName string) (auth.Flow, error) {
 	return auth.ParseFlow(flowStr, handlerName)
+}
+
+// bridgeAuthToRegistryPostLogin bridges the authenticated handler's token
+// to OCI registry credentials and stores them in the native credential store.
+func bridgeAuthToRegistryPostLogin(ctx context.Context, w *writer.Writer, handler auth.Handler, handlerName, registry, scope string, writeRegistryAuth bool) error {
+	username, password, err := catalog.BridgeAuthToRegistry(ctx, handler, registry, scope)
+	if err != nil {
+		err = fmt.Errorf("failed to bridge %s auth to registry %s: %w", handlerName, registry, err)
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
+	}
+
+	nativeStore := catalog.NewNativeCredentialStore()
+	if err := nativeStore.SetCredential(registry, username, password, writeRegistryAuth); err != nil {
+		err = fmt.Errorf("failed to store registry credentials: %w", err)
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
+	}
+
+	if writeRegistryAuth {
+		if containerErr := nativeStore.WriteContainerAuth(registry, username, password); containerErr != nil {
+			w.Warningf("Failed to write container auth file: %v", containerErr)
+		}
+	}
+
+	w.Infof("Registry credentials stored for %s (via %s handler)", registry, handlerName)
+	return nil
 }
