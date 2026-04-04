@@ -29,7 +29,7 @@ This tutorial covers the `scafctl run resolver` command — a debugging and insp
 ---
 
 > [!NOTE]
-> **A note on `__execution` metadata**: When using JSON or YAML output, `run resolver` automatically includes an `__execution` key containing execution metadata (timing, dependency graph, provider stats). Throughout this tutorial, examples use `--hide-execution` to keep output focused on resolver values. See [Execution Metadata](#execution-metadata) for details on this feature.
+> **A note on `__execution` metadata**: By default, `run resolver` output contains only resolver values. Pass `--show-execution` to include an `__execution` key with execution metadata (timing, dependency graph, provider stats). For `run solution`, execution metadata is also opt-in via `--show-execution`. See [Execution Metadata](#execution-metadata) for details on this feature.
 
 ## Run All Resolvers
 
@@ -75,12 +75,12 @@ spec:
 {{< tabs "run-resolver-tutorial-cmd-1" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f demo.yaml --hide-execution
+scafctl run resolver -f demo.yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f demo.yaml --hide-execution
+scafctl run resolver -f demo.yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -100,12 +100,12 @@ region       us-west-2
 {{< tabs "run-resolver-tutorial-cmd-2" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f demo.yaml -o json --hide-execution
+scafctl run resolver -f demo.yaml -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f demo.yaml -o json --hide-execution
+scafctl run resolver -f demo.yaml -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -134,12 +134,12 @@ Pass resolver names as positional arguments to execute only those resolvers (plu
 {{< tabs "run-resolver-tutorial-cmd-3" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver environment -f demo.yaml -o json --hide-execution
+scafctl run resolver environment -f demo.yaml -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver environment -f demo.yaml -o json --hide-execution
+scafctl run resolver environment -f demo.yaml -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -157,12 +157,12 @@ Output:
 {{< tabs "run-resolver-tutorial-cmd-4" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver environment region -f demo.yaml -o json --hide-execution
+scafctl run resolver environment region -f demo.yaml -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver environment region -f demo.yaml -o json --hide-execution
+scafctl run resolver environment region -f demo.yaml -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -222,12 +222,12 @@ Running just `endpoint` automatically includes `base_url` (its dependency):
 {{< tabs "run-resolver-tutorial-cmd-5" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver endpoint -f dep-demo.yaml -o json --hide-execution
+scafctl run resolver endpoint -f dep-demo.yaml -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver endpoint -f dep-demo.yaml -o json --hide-execution
+scafctl run resolver endpoint -f dep-demo.yaml -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -270,17 +270,17 @@ Output:
 
 ## Execution Metadata
 
-By default, `run resolver` includes a `__execution` key in the output alongside the resolver values. The `__execution` key is a structured object with named sections, designed to be extensible for future additions (e.g. timeline). Use `--hide-execution` to suppress it when you only need the resolved values.
+By default, `run resolver` outputs only resolver values. Pass `--show-execution` to add a `__execution` key alongside the resolver values. The `__execution` key is a structured object with named sections, designed to be extensible for future additions.
 
 {{< tabs "run-resolver-tutorial-cmd-7" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f dep-demo.yaml -o json
+scafctl run resolver -f dep-demo.yaml -o json --show-execution
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f dep-demo.yaml -o json
+scafctl run resolver -f dep-demo.yaml -o json --show-execution
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -353,7 +353,104 @@ scafctl run resolver endpoint -f dep-demo.yaml -o json
 The `__execution` section only includes metadata for the requested resolvers and their dependencies.
 
 > [!NOTE]
-> **Tip**: Use `--hide-execution` to suppress `__execution` when you only need the resolved values. For `run solution`, execution metadata is opt-in via `--show-execution`.
+> **Tip**: Pass `--show-execution` to include `__execution` metadata when you need timing, dependency graph, or provider stats. For `run solution`, execution metadata is also opt-in via `--show-execution`.
+
+---
+
+## Pre-Execution Plan (`__plan`)
+
+Before any resolver runs, `scafctl` builds an execution plan from the dependency graph and injects it into the resolver context as `__plan`. This gives every resolver access to topology data -- phase assignment, effective dependencies, and dependency count -- for every other resolver, **before execution begins**.
+
+This is useful for:
+
+- Conditional execution based on topology (e.g., skip a resolver if another has no deps)
+- Validating expected dependency structure (guard against misconfiguration)
+- Including phase metadata in resolver output for observability
+
+### Shape of `__plan`
+
+`__plan` is a map keyed by resolver name. Each entry has three fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `phase` | int | Execution phase number (1-based) |
+| `dependsOn` | list(string) | Effective dependency names |
+| `dependencyCount` | int | Number of effective dependencies |
+
+### Using `__plan` in a `when` Condition
+
+~~~yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: plan-aware
+  version: 1.0.0
+spec:
+  resolvers:
+    base_url:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: https://api.example.com
+
+    endpoint:
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.base_url + '/v2/data'"
+
+    # Only resolve if endpoint actually has dependencies
+    # (guards against misconfiguration where endpoint was made standalone)
+    endpoint_info:
+      type: string
+      when:
+        expr: "__plan['endpoint'].dependencyCount > 0"
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >-
+                'endpoint runs in phase ' + string(__plan['endpoint'].phase) +
+                ' and depends on: ' + __plan['endpoint'].dependsOn[0]
+~~~
+
+Run it:
+
+{{< tabs "run-resolver-tutorial-plan-1" >}}
+{{% tab "Bash" %}}
+```bash
+scafctl run resolver -f plan-aware.yaml -o json
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f plan-aware.yaml -o json
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+Output:
+
+```json
+{
+  "base_url": "https://api.example.com",
+  "endpoint": "https://api.example.com/v2/data",
+  "endpoint_info": "endpoint runs in phase 2 and depends on: base_url"
+}
+```
+
+`endpoint_info` resolved because `__plan['endpoint'].dependencyCount > 0` was `true`.
+
+### `__plan` is Pre-Execution
+
+`__plan` is computed from the static dependency graph **before any resolver runs** -- it reflects the declared structure, not runtime values. Use it for topology checks. For runtime values from other resolvers, use `_` (e.g., `_.base_url`).
+
+> [!NOTE]
+> See `examples/resolvers/plan-aware.yaml` for a complete working example.
 
 ---
 
@@ -396,12 +493,12 @@ Running the resolver fails because the transformed value (`68000`) exceeds the v
 {{< tabs "run-resolver-tutorial-cmd-9" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f phases-demo.yaml -o json --hide-execution
+scafctl run resolver -f phases-demo.yaml -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f phases-demo.yaml -o json --hide-execution
+scafctl run resolver -f phases-demo.yaml -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -421,12 +518,12 @@ Use `--skip-validation` to bypass the validation phase and see the actual value:
 {{< tabs "run-resolver-tutorial-cmd-10" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver --skip-validation -f phases-demo.yaml -o json --hide-execution
+scafctl run resolver --skip-validation -f phases-demo.yaml -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver --skip-validation -f phases-demo.yaml -o json --hide-execution
+scafctl run resolver --skip-validation -f phases-demo.yaml -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -448,12 +545,12 @@ Use `--skip-transform` to see the raw resolved value before any transformations:
 {{< tabs "run-resolver-tutorial-cmd-11" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver --skip-transform -f phases-demo.yaml -o json --hide-execution
+scafctl run resolver --skip-transform -f phases-demo.yaml -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver --skip-transform -f phases-demo.yaml -o json --hide-execution
+scafctl run resolver --skip-transform -f phases-demo.yaml -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -736,13 +833,13 @@ The command supports all standard output formats:
 {{% tab "Bash" %}}
 ```bash
 # Table (default) — human-readable bordered table
-scafctl run resolver -f demo.yaml --hide-execution
+scafctl run resolver -f demo.yaml
 
 # JSON — for scripting and piping
-scafctl run resolver -f demo.yaml -o json --hide-execution
+scafctl run resolver -f demo.yaml -o json
 
 # YAML — for configuration contexts
-scafctl run resolver -f demo.yaml -o yaml --hide-execution
+scafctl run resolver -f demo.yaml -o yaml
 
 # Quiet — suppress output (useful for exit code checks)
 scafctl run resolver -f demo.yaml -o quiet
@@ -757,13 +854,13 @@ scafctl run resolver -f demo.yaml -e '_.environment'
 {{% tab "PowerShell" %}}
 ```powershell
 # Table (default) — human-readable bordered table
-scafctl run resolver -f demo.yaml --hide-execution
+scafctl run resolver -f demo.yaml
 
 # JSON — for scripting and piping
-scafctl run resolver -f demo.yaml -o json --hide-execution
+scafctl run resolver -f demo.yaml -o json
 
 # YAML — for configuration contexts
-scafctl run resolver -f demo.yaml -o yaml --hide-execution
+scafctl run resolver -f demo.yaml -o yaml
 
 # Quiet — suppress output (useful for exit code checks)
 scafctl run resolver -f demo.yaml -o quiet
@@ -838,12 +935,12 @@ scafctl run resolver --graph -f dep-demo.yaml
 {{< tabs "run-resolver-tutorial-cmd-20" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver endpoint -f dep-demo.yaml -o json --hide-execution
+scafctl run resolver endpoint -f dep-demo.yaml -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver endpoint -f dep-demo.yaml -o json --hide-execution
+scafctl run resolver endpoint -f dep-demo.yaml -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -853,12 +950,12 @@ scafctl run resolver endpoint -f dep-demo.yaml -o json --hide-execution
 {{< tabs "run-resolver-tutorial-cmd-21" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver base_url -f dep-demo.yaml -o json --hide-execution
+scafctl run resolver base_url -f dep-demo.yaml -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver base_url -f dep-demo.yaml -o json --hide-execution
+scafctl run resolver base_url -f dep-demo.yaml -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1010,12 +1107,12 @@ spec:
 {{< tabs "run-resolver-tutorial-cmd-23" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f param-demo.yaml environment=staging -o json --hide-execution
+scafctl run resolver -f param-demo.yaml environment=staging -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f param-demo.yaml environment=staging -o json --hide-execution
+scafctl run resolver -f param-demo.yaml environment=staging -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1090,12 +1187,12 @@ Isolate a failing resolver and its dependencies:
 {{< tabs "run-resolver-tutorial-cmd-26" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver endpoint -f dep-demo.yaml -o json --hide-execution
+scafctl run resolver endpoint -f dep-demo.yaml -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver endpoint -f dep-demo.yaml -o json --hide-execution
+scafctl run resolver endpoint -f dep-demo.yaml -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1107,12 +1204,12 @@ Skip transforms to see what providers actually return:
 {{< tabs "run-resolver-tutorial-cmd-27" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver --skip-transform -f dep-demo.yaml -o json --hide-execution
+scafctl run resolver --skip-transform -f dep-demo.yaml -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver --skip-transform -f dep-demo.yaml -o json --hide-execution
+scafctl run resolver --skip-transform -f dep-demo.yaml -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1140,20 +1237,20 @@ scafctl run resolver --graph -f dep-demo.yaml
 {{% tab "Bash" %}}
 ```bash
 # Get current values
-scafctl run resolver -f param-demo.yaml -r environment=production -o json --hide-execution > current.json
+scafctl run resolver -f param-demo.yaml -r environment=production -o json > current.json
 
 # Change parameters and compare
-scafctl run resolver -f param-demo.yaml -r environment=staging -o json --hide-execution > staging.json
+scafctl run resolver -f param-demo.yaml -r environment=staging -o json > staging.json
 diff current.json staging.json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
 # Get current values
-scafctl run resolver -f param-demo.yaml -r environment=production -o json --hide-execution > current.json
+scafctl run resolver -f param-demo.yaml -r environment=production -o json > current.json
 
 # Change parameters and compare
-scafctl run resolver -f param-demo.yaml -r environment=staging -o json --hide-execution > staging.json
+scafctl run resolver -f param-demo.yaml -r environment=staging -o json > staging.json
 diff current.json staging.json
 ```
 {{% /tab %}}
@@ -1193,16 +1290,16 @@ Metrics are displayed on stderr after execution completes.
 {{% tab "Bash" %}}
 ```bash
 # All resolvers
-scafctl run resolver -f solution.yaml --hide-execution
+scafctl run resolver -f solution.yaml
 
 # Named resolvers (with dependencies)
-scafctl run resolver db config -f solution.yaml --hide-execution
+scafctl run resolver db config -f solution.yaml
 
-# JSON output (includes __execution metadata by default)
+# JSON output (resolver values only, no execution metadata)
 scafctl run resolver -f solution.yaml -o json
 
-# JSON output without __execution metadata
-scafctl run resolver -f solution.yaml -o json --hide-execution
+# JSON output with __execution metadata (phases, timing, providers)
+scafctl run resolver -f solution.yaml -o json
 
 # Skip transform and validation phases
 scafctl run resolver --skip-transform -f solution.yaml
@@ -1234,16 +1331,16 @@ scafctl run res -f solution.yaml
 {{% tab "PowerShell" %}}
 ```powershell
 # All resolvers
-scafctl run resolver -f solution.yaml --hide-execution
+scafctl run resolver -f solution.yaml
 
 # Named resolvers (with dependencies)
-scafctl run resolver db config -f solution.yaml --hide-execution
+scafctl run resolver db config -f solution.yaml
 
-# JSON output (includes __execution metadata by default)
+# JSON output (resolver values only, no execution metadata)
 scafctl run resolver -f solution.yaml -o json
 
-# JSON output without __execution metadata
-scafctl run resolver -f solution.yaml -o json --hide-execution
+# JSON output with __execution metadata (phases, timing, providers)
+scafctl run resolver -f solution.yaml -o json
 
 # Skip transform and validation phases
 scafctl run resolver --skip-transform -f solution.yaml

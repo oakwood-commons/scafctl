@@ -138,12 +138,12 @@ Once a solution is in the catalog, you can run it by name instead of providing a
 {{< tabs "catalog-tutorial-cmd-3" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f greeting -o yaml --hide-execution
+scafctl run resolver -f greeting -o yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f greeting -o yaml --hide-execution
+scafctl run resolver -f greeting -o yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -162,12 +162,12 @@ No file path needed -- scafctl looked up `greeting` in the catalog and found the
 {{< tabs "catalog-tutorial-cmd-4" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f greeting -o yaml --hide-execution -r name=Alice
+scafctl run resolver -f greeting -o yaml -r name=Alice
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f greeting -o yaml --hide-execution -r name=Alice
+scafctl run resolver -f greeting -o yaml -r name=Alice
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -186,12 +186,12 @@ When you have multiple versions, you can pin to a specific one:
 {{< tabs "catalog-tutorial-cmd-5" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f greeting@1.0.0 -o yaml --hide-execution -r name=Bob
+scafctl run resolver -f greeting@1.0.0 -o yaml -r name=Bob
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f greeting@1.0.0 -o yaml --hide-execution -r name=Bob
+scafctl run resolver -f greeting@1.0.0 -o yaml -r name=Bob
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -463,12 +463,12 @@ Expected output:
 {{< tabs "catalog-tutorial-cmd-13" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f greeting -o yaml --hide-execution -r name=Alice
+scafctl run resolver -f greeting -o yaml -r name=Alice
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f greeting -o yaml --hide-execution -r name=Alice
+scafctl run resolver -f greeting -o yaml -r name=Alice
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -488,12 +488,12 @@ Without a version, scafctl runs the **highest semantic version** -- in this case
 {{< tabs "catalog-tutorial-cmd-14" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f greeting@1.0.0 -o yaml --hide-execution -r name=Alice
+scafctl run resolver -f greeting@1.0.0 -o yaml -r name=Alice
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f greeting@1.0.0 -o yaml --hide-execution -r name=Alice
+scafctl run resolver -f greeting@1.0.0 -o yaml -r name=Alice
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -827,7 +827,7 @@ cp deploy-v1.tar /Volumes/USB/
 
 # Transfer USB to the air-gapped machine, then:
 scafctl catalog load --input /Volumes/USB/deploy-v1.tar
-scafctl run resolver -f deploy -o yaml --hide-execution -r env=prod
+scafctl run resolver -f deploy -o yaml -r env=prod
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
@@ -839,7 +839,7 @@ Copy-Item deploy-v1.tar /Volumes/USB/
 
 # Transfer USB to the air-gapped machine, then:
 scafctl catalog load --input /Volumes/USB/deploy-v1.tar
-scafctl run resolver -f deploy -o yaml --hide-execution -r env=prod
+scafctl run resolver -f deploy -o yaml -r env=prod
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1113,12 +1113,12 @@ The artifact is now in your local catalog. You can run it with:
 {{< tabs "catalog-tutorial-cmd-36" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f greeting -o yaml --hide-execution -r name=Alice
+scafctl run resolver -f greeting -o yaml -r name=Alice
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f greeting -o yaml --hide-execution -r name=Alice
+scafctl run resolver -f greeting -o yaml -r name=Alice
 ```
 {{% /tab %}}
 {{< /tabs >}}

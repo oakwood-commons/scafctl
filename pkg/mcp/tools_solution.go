@@ -16,6 +16,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	pkglint "github.com/oakwood-commons/scafctl/pkg/lint"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
@@ -205,6 +206,9 @@ func (s *Server) registerSolutionTools() {
 		),
 		mcp.WithBoolean("backup",
 			mcp.Description("Include --backup flag in the generated command. Creates .bak backups before overwriting existing files."),
+		),
+		mcp.WithBoolean("show_execution",
+			mcp.Description("Include --show-execution flag in the generated command. Adds __execution metadata (timing, phases, providers) to the output. Useful when debugging resolver performance or building execution-aware pipelines."),
 		),
 		mcp.WithString("cwd",
 			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
@@ -932,6 +936,11 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 	if outputDir != "" {
 		response["outputDir"] = outputDir
 	}
+	// Include __plan topology: phase, dependsOn, dependencyCount for each resolver.
+	// This lets AI agents understand execution order without re-parsing the YAML.
+	if planRaw, ok := result.Context.Get(celexp.VarPlan); ok {
+		response["plan"] = planRaw
+	}
 
 	result2, err := mcp.NewToolResultJSON(response)
 	if err != nil {
@@ -1178,6 +1187,9 @@ func (s *Server) handleGetRunCommand(_ context.Context, request mcp.CallToolRequ
 				WithSuggestion("Remove backup, or use a solution that has a workflow with file provider actions."),
 			), nil
 		}
+	}
+	if request.GetBool("show_execution", false) {
+		cmdInfo.Command += " --show-execution"
 	}
 
 	// Build result with content annotations.

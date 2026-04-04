@@ -148,9 +148,9 @@ func (p *CelProvider) Execute(ctx context.Context, input any) (*provider.Output,
 	}
 
 	// Extract standard special variables from resolver data and make them top-level CEL variables.
-	// These include __self, __item, __index.
+	// These include __self, __item, __index, and __plan (pre-execution topology).
 	if resolverData != nil {
-		for _, key := range []string{celexp.VarSelf, celexp.VarItem, celexp.VarIndex} {
+		for _, key := range []string{celexp.VarSelf, celexp.VarItem, celexp.VarIndex, celexp.VarPlan} {
 			if value, ok := resolverData[key]; ok {
 				additionalVars[key] = value
 				delete(resolverData, key)

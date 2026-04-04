@@ -14,6 +14,8 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestVersionCmdOptions_PrintVersion(t *testing.T) {
@@ -161,25 +163,13 @@ func TestVersionCmdOptions_PrintVersion_WithVersionExtra(t *testing.T) {
 	}
 
 	err := options.PrintVersion(ctx)
-	if err != nil {
-		t.Fatalf("PrintVersion() error = %v", err)
-	}
+	require.NoError(t, err)
 
 	output := out.String()
-	// Should contain embedder info
-	if !strings.Contains(output, "mycli") {
-		t.Errorf("output should contain embedder binary name 'mycli', got: %s", output)
-	}
-	if !strings.Contains(output, "v2.0.0") {
-		t.Errorf("output should contain embedder version 'v2.0.0', got: %s", output)
-	}
-	if !strings.Contains(output, "embed789") {
-		t.Errorf("output should contain embedder commit 'embed789', got: %s", output)
-	}
-	// Should still contain scafctl version info
-	if !strings.Contains(output, "1.0.0") {
-		t.Errorf("output should contain scafctl version '1.0.0', got: %s", output)
-	}
+	assert.Contains(t, output, "mycli")
+	assert.Contains(t, output, "v2.0.0")
+	assert.Contains(t, output, "embed789")
+	assert.Contains(t, output, "1.0.0")
 }
 
 func TestVersionCmdOptions_PrintVersion_JSONWithVersionExtra(t *testing.T) {
@@ -212,18 +202,11 @@ func TestVersionCmdOptions_PrintVersion_JSONWithVersionExtra(t *testing.T) {
 	}
 
 	err := options.PrintVersion(ctx)
-	if err != nil {
-		t.Fatalf("PrintVersion() error = %v", err)
-	}
+	require.NoError(t, err)
 
 	output := out.String()
-	// JSON output should contain embedder block
-	if !strings.Contains(output, "embedder") {
-		t.Errorf("JSON output should contain 'embedder' key, got: %s", output)
-	}
-	if !strings.Contains(output, "mycli") {
-		t.Errorf("JSON output should contain embedder name 'mycli', got: %s", output)
-	}
+	assert.Contains(t, output, "embedder")
+	assert.Contains(t, output, "mycli")
 }
 
 func TestNewVersionDetails_WithVersionExtra(t *testing.T) {
@@ -236,31 +219,20 @@ func TestNewVersionDetails_WithVersionExtra(t *testing.T) {
 	details := newVersionDetails("1.0.0", "mycli", extra)
 
 	embedder, ok := details["embedder"].(map[string]any)
-	if !ok {
-		t.Fatal("expected 'embedder' key in details")
-	}
-	if embedder["name"] != "mycli" {
-		t.Errorf("embedder name = %v, want 'mycli'", embedder["name"])
-	}
-	if embedder["version"] != "v2.0.0" {
-		t.Errorf("embedder version = %v, want 'v2.0.0'", embedder["version"])
-	}
+	require.True(t, ok, "expected 'embedder' key in details")
+	assert.Equal(t, "mycli", embedder["name"])
+	assert.Equal(t, "v2.0.0", embedder["version"])
 }
 
 func TestNewVersionDetails_WithoutVersionExtra(t *testing.T) {
 	t.Parallel()
 	details := newVersionDetails("1.0.0", "scafctl", nil)
-
-	if _, ok := details["embedder"]; ok {
-		t.Error("expected no 'embedder' key when VersionExtra is nil")
-	}
+	assert.NotContains(t, details, "embedder")
 }
 
 func TestCommandVersion_UsesPath(t *testing.T) {
 	t.Parallel()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	cmd := CommandVersion(&settings.Run{}, ioStreams, "mycli", nil)
-	if !strings.Contains(cmd.Short, "mycli") {
-		t.Errorf("Short should contain path 'mycli', got: %s", cmd.Short)
-	}
+	assert.Contains(t, cmd.Short, "mycli")
 }

@@ -1,0 +1,117 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-action-execution-context
+  version: 1.0.0
+  description: |
+    Functional tests for __execution metadata in action CEL context.
+    Verifies that __execution is injected after resolver execution and
+    that actions can gate on resolver status, phase, and summary fields.
+    Uses expr: ValueRefs in action inputs (the correct access pattern
+    for __execution -- the cel provider only has resolver data scope).
+
+spec:
+  resolvers:
+    static_value:
+      description: Always-succeeding resolver (phase 1)
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+
+    dep_value:
+      description: Resolver depending on static_value (phase 2)
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.static_value + '-world'"
+
+  workflow:
+    actions:
+      # Prints phase count from __execution to stdout
+      capture-summary:
+        description: Print resolver phase count and resolver count
+        provider: exec
+        inputs:
+          command:
+            expr: >
+              'echo phase_count=' + string(__execution['summary']['phaseCount']) +
+              ' resolver_count=' + string(__execution['summary']['resolverCount'])
+
+      # Only runs when static_value succeeded (status == "success")
+      on-success:
+        description: Runs when static_value resolved successfully
+        provider: exec
+        dependsOn: [capture-summary]
+        when:
+          expr: "__execution['resolvers']['static_value']['status'] == 'success'"
+        inputs:
+          command: "echo on_success=ran"
+
+      # Only runs when static_value did NOT succeed (should be skipped)
+      on-failure:
+        description: Skipped because static_value always succeeds
+        provider: exec
+        dependsOn: [capture-summary]
+        when:
+          expr: "__execution['resolvers']['static_value']['status'] != 'success'"
+        inputs:
+          command: "echo on_failure=ran"
+
+      # Prints static_value's phase from __execution
+      capture-phase:
+        description: Print static_value phase from __execution
+        provider: exec
+        dependsOn: [on-success, on-failure]
+        inputs:
+          command:
+            expr: "'echo static_value_phase=' + string(__execution['resolvers']['static_value']['phase'])"
+
+  testing:
+    config:
+      skipBuiltins: []
+
+    cases:
+      _base:
+        description: Base template for __execution action tests
+        command: [run, solution]
+        args: []
+        tags: [action, execution]
+        assertions:
+          - expression: __exitCode == 0
+
+      execution-summary-fields:
+        description: __execution.summary contains phaseCount and resolverCount
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: __stdout.contains("phase_count=2")
+            message: "__execution summary.phaseCount should be 2 (2 resolver phases)"
+          - expression: __stdout.contains("resolver_count=2")
+            message: "__execution summary.resolverCount should be 2"
+
+      execution-gate-on-success:
+        description: on-success action runs when resolver succeeded
+        extends: [_base]
+        assertions:
+          - expression: __stdout.contains("on_success=ran")
+            message: "on-success should run because static_value always succeeds"
+
+      execution-gate-on-failure-skipped:
+        description: on-failure action is skipped when resolver succeeded
+        extends: [_base]
+        assertions:
+          - expression: "!(__stdout.contains(\"on_failure=ran\"))"
+            message: "on-failure should be skipped because static_value succeeded"
+
+      execution-phase-available:
+        description: static_value phase is accessible from __execution in actions
+        extends: [_base]
+        assertions:
+          - expression: __stdout.contains("static_value_phase=1")
+            message: "static_value should be in phase 1 (no dependencies)"

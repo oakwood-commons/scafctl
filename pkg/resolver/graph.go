@@ -450,10 +450,11 @@ type GraphStats struct {
 // when available for more accurate dependency detection.
 func BuildGraph(resolvers []*Resolver, lookup DescriptorLookup) (*Graph, error) {
 	// Build phases first
-	phases, err := BuildPhases(resolvers, lookup)
+	buildResult, err := BuildPhases(resolvers, lookup)
 	if err != nil {
 		return nil, fmt.Errorf("build phases: %w", err)
 	}
+	phases := buildResult.Phases
 
 	graph := &Graph{
 		Nodes:  make([]*GraphNode, 0, len(resolvers)),

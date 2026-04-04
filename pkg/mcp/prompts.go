@@ -293,6 +293,11 @@ Follow these rules when creating the solution:
 - Always validate user inputs using the validate phase with the validation provider
 - Use dependsOn for ordering (both resolvers and actions)
 - Use when clauses (CEL expressions) for conditional execution
+- CEL context variables available in resolver when/inputs: _ (resolved values), __plan (pre-execution topology)
+  - __plan["resolverName"].phase, __plan["resolverName"].dependsOn, __plan["resolverName"].dependencyCount
+- CEL context variables available in action when/inputs: _ (resolved values), __execution (resolver metadata), __actions (prior action results)
+  - Gate actions on resolver outcomes: __execution["resolvers"]["name"]["status"] == "success"
+  - Access phase count: __execution["summary"]["phaseCount"]
 - For exec provider actions: the input field is "command" (string), NOT "cmd". Always use get_provider_schema to verify required fields.
 
 NEVER invent fields that don't exist in the schema. Only use fields documented in the JSON Schema.
