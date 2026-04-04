@@ -21,7 +21,7 @@ func CommandGet(cliParams *settings.Run, ioStreams *terminal.IOStreams, path str
 	cCmd := &cobra.Command{
 		Use:          "get",
 		Aliases:      []string{"g"},
-		Short:        fmt.Sprintf("Gets %s things", settings.CliBinaryName),
+		Short:        fmt.Sprintf("Gets %s things", path),
 		SilenceUsage: true,
 	}
 	cCmd.AddCommand(authhandler.CommandAuthHandler(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))

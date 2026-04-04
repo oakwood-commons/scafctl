@@ -46,11 +46,13 @@ type BundleAwareCatalogResolver interface {
 }
 
 type Getter struct {
-	readFile        fs.ReadFileFunc
-	statFunc        fs.StatFunc
-	httpClient      *httpc.Client
-	logger          logr.Logger
-	catalogResolver CatalogResolver
+	readFile          fs.ReadFileFunc
+	statFunc          fs.StatFunc
+	httpClient        *httpc.Client
+	logger            logr.Logger
+	catalogResolver   CatalogResolver
+	solutionFolders   []string
+	solutionFileNames []string
 }
 
 // Option defines a function type that modifies a Getter instance.
@@ -102,6 +104,16 @@ func WithCatalogResolver(resolver CatalogResolver) Option {
 	}
 }
 
+// WithSolutionDiscovery overrides the default solution folder and file name
+// lists used by FindSolution. Pass the result of settings.SolutionFoldersFor
+// and settings.SolutionFileNamesFor to search for <binaryName>.yaml etc.
+func WithSolutionDiscovery(folders, fileNames []string) Option {
+	return func(g *Getter) {
+		g.solutionFolders = folders
+		g.solutionFileNames = fileNames
+	}
+}
+
 // WithAppConfig returns an Option that configures the HTTP client using the application configuration.
 // It creates an HTTP client with settings from the provided config.HTTPClientConfig.
 // The logger is used for HTTP client logging.
@@ -118,10 +130,12 @@ func WithAppConfig(cfg *config.HTTPClientConfig, logger logr.Logger) Option {
 // the behavior of the Getter.
 func NewGetter(opts ...Option) *Getter {
 	g := &Getter{
-		readFile:   os.ReadFile,
-		statFunc:   os.Stat,
-		httpClient: httpc.NewClient(nil), // Use default HTTP client
-		logger:     logr.Discard(),       // Use discard logger by default
+		readFile:          os.ReadFile,
+		statFunc:          os.Stat,
+		httpClient:        httpc.NewClient(nil), // Use default HTTP client
+		logger:            logr.Discard(),       // Use discard logger by default
+		solutionFolders:   settings.RootSolutionFolders,
+		solutionFileNames: settings.SolutionFileNames,
 	}
 
 	// Apply all options
@@ -130,6 +144,23 @@ func NewGetter(opts ...Option) *Getter {
 	}
 
 	return g
+}
+
+// NewGetterFromContext creates a Getter using the binary name from settings.Run
+// in the context to configure solution discovery paths. If the context does not
+// contain settings or the binary name matches the default, no override is applied.
+// Additional options are applied after the context-derived configuration.
+func NewGetterFromContext(ctx context.Context, opts ...Option) *Getter {
+	var ctxOpts []Option
+	if ctx != nil {
+		if s, ok := settings.FromContext(ctx); ok && s.BinaryName != "" && s.BinaryName != settings.CliBinaryName {
+			ctxOpts = append(ctxOpts, WithSolutionDiscovery(
+				settings.SolutionFoldersFor(s.BinaryName),
+				settings.SolutionFileNamesFor(s.BinaryName),
+			))
+		}
+	}
+	return NewGetter(append(ctxOpts, opts...)...)
 }
 
 // Interface defines methods for retrieving a Solution from different sources.
@@ -554,8 +585,8 @@ func (o *Getter) FromURL(ctx context.Context, url string) (*solution.Solution, e
 // and solution file names. It returns the full path to the first solution file found using the
 // provided stat function. If no solution file is found, it returns an empty string.
 func (o *Getter) FindSolution() string {
-	for _, folder := range settings.RootSolutionFolders {
-		for _, filename := range settings.SolutionFileNames {
+	for _, folder := range o.solutionFolders {
+		for _, filename := range o.solutionFileNames {
 			fullPath := filepath.NormalizeFilePath(pathlib.Join(folder, filename))
 			if filepath.PathExists(fullPath, o.statFunc) {
 				return fullPath

@@ -4,10 +4,13 @@
 package scafctl
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -256,4 +259,147 @@ func TestRoot_CwdFlagExists(t *testing.T) {
 	require.NotNil(t, flag)
 	// The default cwd should be empty (resolved at runtime)
 	_ = strings.TrimSpace(flag.DefValue)
+}
+
+// TestRoot_BinaryName_Default verifies that omitting BinaryName defaults to "scafctl".
+func TestRoot_BinaryName_Default(t *testing.T) {
+	t.Parallel()
+	cmd := Root(nil)
+	assert.Equal(t, "scafctl", cmd.Use)
+}
+
+// TestRoot_BinaryName_Custom verifies that BinaryName overrides the root command Use.
+func TestRoot_BinaryName_Custom(t *testing.T) {
+	t.Parallel()
+	cmd := Root(&RootOptions{BinaryName: "mycli"})
+	assert.Equal(t, "mycli", cmd.Use)
+}
+
+// TestRoot_BinaryName_SubcommandShorts verifies that subcommand Short descriptions
+// reflect the custom binary name instead of "scafctl".
+func TestRoot_BinaryName_SubcommandShorts(t *testing.T) {
+	t.Parallel()
+	cmd := Root(&RootOptions{BinaryName: "mycli"})
+
+	for _, sub := range cmd.Commands() {
+		if sub.Name() == "help" || sub.Short == "" {
+			continue
+		}
+		assert.NotContains(t, sub.Short, "scafctl",
+			"subcommand %q Short should not contain 'scafctl' when BinaryName is 'mycli'", sub.Name())
+	}
+}
+
+// TestRoot_BinaryName_EnvPrefix verifies that env var prefix derives from BinaryName.
+func TestRoot_BinaryName_EnvPrefix(t *testing.T) {
+	t.Setenv("MYCLI_LOG_LEVEL", "debug")
+
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := Root(&RootOptions{IOStreams: ioStreams, BinaryName: "mycli"})
+	cmd.SetArgs([]string{"version"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+}
+
+// TestRoot_BinaryName_EnvPrefix_Hyphen verifies that hyphens in BinaryName are
+// normalized to underscores in the env var prefix so POSIX shells can export them.
+func TestRoot_BinaryName_EnvPrefix_Hyphen(t *testing.T) {
+	t.Setenv("MY_CLI_LOG_LEVEL", "debug")
+
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := Root(&RootOptions{IOStreams: ioStreams, BinaryName: "my-cli"})
+	cmd.SetArgs([]string{"version"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+}
+
+// TestRoot_PreRunHook_Called verifies that PreRunHook is invoked during PersistentPreRun.
+func TestRoot_PreRunHook_Called(t *testing.T) {
+	hookCalled := false
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := Root(&RootOptions{
+		IOStreams: ioStreams,
+		PreRunHook: func(cmd *cobra.Command, args []string) error {
+			hookCalled = true
+			return nil
+		},
+	})
+	cmd.SetArgs([]string{"version"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.True(t, hookCalled, "PreRunHook should have been called")
+}
+
+// TestRoot_PreRunHook_Nil verifies that nil PreRunHook is a no-op.
+func TestRoot_PreRunHook_Nil(t *testing.T) {
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := Root(&RootOptions{IOStreams: ioStreams, PreRunHook: nil})
+	cmd.SetArgs([]string{"version"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+}
+
+// TestRoot_VersionExtra verifies that VersionExtra is passed to the version command.
+func TestRoot_VersionExtra(t *testing.T) {
+	ioStreams, out, _ := terminal.NewTestIOStreams()
+	cmd := Root(&RootOptions{
+		IOStreams:  ioStreams,
+		BinaryName: "mycli",
+		VersionExtra: &settings.VersionInfo{
+			Commit:       "abc123",
+			BuildVersion: "v2.0.0",
+			BuildTime:    "2026-01-01T00:00:00Z",
+		},
+	})
+	cmd.SetArgs([]string{"version"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	output := out.String()
+	assert.Contains(t, output, "mycli")
+	assert.Contains(t, output, "v2.0.0")
+}
+
+// TestNewRootOptions_NewFields verifies new fields have correct zero values.
+func TestNewRootOptions_NewFields(t *testing.T) {
+	t.Parallel()
+	opts := NewRootOptions()
+	assert.Equal(t, "", opts.BinaryName)
+	assert.Nil(t, opts.PreRunHook)
+	assert.Nil(t, opts.VersionExtra)
+}
+
+// TestRoot_PreRunHook_Error verifies that PreRunHook errors are surfaced.
+func TestRoot_PreRunHook_Error(t *testing.T) {
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	exitCalled := false
+	cmd := Root(&RootOptions{
+		IOStreams: ioStreams,
+		ExitFunc:  func(code int) { exitCalled = true },
+		PreRunHook: func(cmd *cobra.Command, args []string) error {
+			return fmt.Errorf("hook failed")
+		},
+	})
+	cmd.SetArgs([]string{"version"})
+
+	_ = cmd.Execute()
+	assert.True(t, exitCalled, "ExitFunc should be called when PreRunHook returns an error")
+}
+
+// TestRoot_BinaryName_Sanitized verifies that BinaryName with path/extension is sanitized.
+func TestRoot_BinaryName_Sanitized(t *testing.T) {
+	t.Parallel()
+	cmd := Root(&RootOptions{BinaryName: "/usr/bin/my-tool.exe"})
+	assert.Equal(t, "my-tool", cmd.Use)
+}
+
+// TestRoot_BinaryName_Empty verifies that empty BinaryName falls back to default.
+func TestRoot_BinaryName_Empty(t *testing.T) {
+	t.Parallel()
+	cmd := Root(&RootOptions{BinaryName: ""})
+	assert.Equal(t, "scafctl", cmd.Use)
 }

@@ -140,7 +140,7 @@ func runFunctional(ctx context.Context, opts *FunctionalOptions) error {
 		testsPath = opts.File
 	}
 	if testsPath == "" {
-		testsPath = get.NewGetter().FindSolution()
+		testsPath = get.NewGetterFromContext(ctx).FindSolution()
 	}
 	if testsPath == "" {
 		err := fmt.Errorf("no solution path provided and no solution file found in default locations; use --file (-f) or --tests-path")

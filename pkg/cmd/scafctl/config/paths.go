@@ -40,7 +40,7 @@ func CommandPaths(cliParams *settings.Run, ioStreams *terminal.IOStreams, path s
 
 	cCmd := &cobra.Command{
 		Use:   "paths",
-		Short: "Show XDG-compliant paths used by scafctl",
+		Short: fmt.Sprintf("Show XDG-compliant paths used by %s", strings.SplitN(path, "/", 2)[0]),
 		Long: heredoc.Doc(`
 			Display all paths used by scafctl.
 

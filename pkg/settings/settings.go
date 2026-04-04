@@ -6,6 +6,8 @@ package settings
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/adrg/xdg"
@@ -14,6 +16,30 @@ import (
 const (
 	CliBinaryName = "scafctl"
 )
+
+// safeNameRe matches characters that are NOT alphanumeric, underscore, hyphen, or dot.
+var safeNameRe = regexp.MustCompile(`[^A-Za-z0-9._-]`)
+
+// SanitizeBinaryName normalizes a raw binary name into a safe identifier.
+// It strips directory components and extensions, replaces unsafe characters
+// with underscores, and falls back to CliBinaryName when the result is empty.
+func SanitizeBinaryName(raw string) string {
+	name := filepath.Base(raw)
+	name = strings.TrimSuffix(name, filepath.Ext(name))
+	name = safeNameRe.ReplaceAllString(name, "_")
+	name = strings.Trim(name, "_")
+	if name == "" || name == "." {
+		return CliBinaryName
+	}
+	return name
+}
+
+// SafeEnvPrefix returns an environment variable prefix derived from a binary name.
+// It upper-cases the name and replaces non-alphanumeric characters with underscores.
+func SafeEnvPrefix(binaryName string) string {
+	replacer := strings.NewReplacer("-", "_", ".", "_")
+	return strings.ToUpper(replacer.Replace(binaryName))
+}
 
 // Timeout defaults
 const (
@@ -64,13 +90,22 @@ const (
 	DefaultArtifactCacheTTL = 24 * time.Hour
 )
 
+// HTTPCacheDirFor returns the HTTP cache directory for the given binary name.
+// An empty binaryName defaults to CliBinaryName.
+func HTTPCacheDirFor(binaryName string) string {
+	if binaryName == "" {
+		binaryName = CliBinaryName
+	}
+	return filepath.Join(xdg.CacheHome, binaryName, "http-cache")
+}
+
 // DefaultHTTPCacheDir returns the default directory for HTTP cache.
 // Uses XDG Base Directory Specification:
 //   - Linux: ~/.cache/scafctl/http-cache/
 //   - macOS: ~/.cache/scafctl/http-cache/
 //   - Windows: %LOCALAPPDATA%\cache\scafctl\http-cache\
 func DefaultHTTPCacheDir() string {
-	return filepath.Join(xdg.CacheHome, "scafctl", "http-cache")
+	return HTTPCacheDirFor(CliBinaryName)
 }
 
 // Size limits
@@ -195,13 +230,31 @@ const (
 	DefaultCircuitBreakerHalfOpenRequests = 1
 )
 
+// BuildCacheDirFor returns the build cache directory for the given binary name.
+// An empty binaryName defaults to CliBinaryName.
+func BuildCacheDirFor(binaryName string) string {
+	if binaryName == "" {
+		binaryName = CliBinaryName
+	}
+	return filepath.Join(xdg.CacheHome, binaryName, "build-cache")
+}
+
 // DefaultBuildCacheDir returns the default directory for build cache.
 // Uses XDG Base Directory Specification:
 //   - Linux: ~/.cache/scafctl/build-cache/
 //   - macOS: ~/.cache/scafctl/build-cache/
 //   - Windows: %LOCALAPPDATA%\cache\scafctl\build-cache\
 func DefaultBuildCacheDir() string {
-	return filepath.Join(xdg.CacheHome, "scafctl", "build-cache")
+	return BuildCacheDirFor(CliBinaryName)
+}
+
+// PluginCacheDirFor returns the plugin cache directory for the given binary name.
+// An empty binaryName defaults to CliBinaryName.
+func PluginCacheDirFor(binaryName string) string {
+	if binaryName == "" {
+		binaryName = CliBinaryName
+	}
+	return filepath.Join(xdg.CacheHome, binaryName, "plugins")
 }
 
 // DefaultPluginCacheDir returns the default directory for cached plugin binaries.
@@ -210,23 +263,38 @@ func DefaultBuildCacheDir() string {
 //   - macOS: ~/.cache/scafctl/plugins/
 //   - Windows: %LOCALAPPDATA%\cache\scafctl\plugins\
 func DefaultPluginCacheDir() string {
-	return filepath.Join(xdg.CacheHome, "scafctl", "plugins")
+	return PluginCacheDirFor(CliBinaryName)
+}
+
+// SolutionFoldersFor returns the solution folder search paths for the given binary name.
+func SolutionFoldersFor(binaryName string) []string {
+	return []string{
+		binaryName,
+		fmt.Sprintf(".%s", binaryName),
+		"",
+	}
+}
+
+// SolutionFileNamesFor returns the solution file names for the given binary name.
+func SolutionFileNamesFor(binaryName string) []string {
+	return []string{
+		"solution.yaml",
+		"solution.yml",
+		fmt.Sprintf("%s.yaml", binaryName),
+		fmt.Sprintf("%s.yml", binaryName),
+		"solution.json",
+		fmt.Sprintf("%s.json", binaryName),
+	}
+}
+
+// HTTPCacheKeyPrefixFor returns the HTTP cache key prefix for the given binary name.
+func HTTPCacheKeyPrefixFor(binaryName string) string {
+	return binaryName + ":"
 }
 
 var (
-	RootSolutionFolders = []string{
-		CliBinaryName,
-		fmt.Sprintf(".%s", CliBinaryName),
-		"",
-	}
-	SolutionFileNames = []string{
-		"solution.yaml",
-		"solution.yml",
-		fmt.Sprintf("%s.yaml", CliBinaryName),
-		fmt.Sprintf("%s.yml", CliBinaryName),
-		"solution.json",
-		fmt.Sprintf("%s.json", CliBinaryName),
-	}
+	RootSolutionFolders = SolutionFoldersFor(CliBinaryName)
+	SolutionFileNames   = SolutionFileNamesFor(CliBinaryName)
 )
 
 var VersionInformation = VersionInfo{
@@ -260,6 +328,7 @@ type Run struct {
 	IsQuiet            bool               `json:"isQuiet" yaml:"isQuiet" doc:"Whether to suppress non-essential output"`
 	NoColor            bool               `json:"noColor" yaml:"noColor" doc:"Whether to disable colored output"`
 	ExitOnError        bool               `json:"exitOnError" yaml:"exitOnError" doc:"Whether to exit on error"`
+	BinaryName         string             `json:"binaryName" yaml:"binaryName" doc:"Runtime binary name for the CLI" maxLength:"64" example:"scafctl"`
 }
 
 // NewCliParams initializes and returns a pointer to a Run struct with default CLI parameters.

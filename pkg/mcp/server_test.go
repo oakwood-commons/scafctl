@@ -53,6 +53,35 @@ func TestNewServer(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "v0.1.0", srv.version)
 	})
+
+	t.Run("default server name", func(t *testing.T) {
+		srv, err := NewServer()
+		require.NoError(t, err)
+		assert.Equal(t, "scafctl", srv.name)
+	})
+
+	t.Run("custom server name", func(t *testing.T) {
+		srv, err := NewServer(WithServerName("mycli"))
+		require.NoError(t, err)
+		assert.Equal(t, "mycli", srv.name)
+	})
+}
+
+func TestServerInfo_CustomName(t *testing.T) {
+	srv, err := NewServer(WithServerName("mycli"), WithServerVersion("v1.0.0"))
+	require.NoError(t, err)
+
+	info, err := srv.Info()
+	require.NoError(t, err)
+
+	var parsed struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+	}
+	err = json.Unmarshal(info, &parsed)
+	require.NoError(t, err)
+	assert.Equal(t, "mycli", parsed.Name)
+	assert.Equal(t, "v1.0.0", parsed.Version)
 }
 
 func TestServerInfo(t *testing.T) {

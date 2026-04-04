@@ -44,7 +44,12 @@ func (s *Server) discoverSolutionFiles(ctx context.Context) []string {
 	var files []string
 
 	// 1. Use the canonical CLI discovery logic (searches CWD-relative paths)
-	getter := solutionget.NewGetter(solutionget.WithLogger(s.logger))
+	solutionFolders := settings.SolutionFoldersFor(s.name)
+	solutionFileNames := settings.SolutionFileNamesFor(s.name)
+	getter := solutionget.NewGetter(
+		solutionget.WithLogger(s.logger),
+		solutionget.WithSolutionDiscovery(solutionFolders, solutionFileNames),
+	)
 	if found := getter.FindSolution(); found != "" {
 		files = append(files, found)
 	}
@@ -52,8 +57,8 @@ func (s *Server) discoverSolutionFiles(ctx context.Context) []string {
 	// 2. Also search MCP workspace roots using the same file name patterns
 	roots := s.discoverWorkspaceRoots(ctx)
 	for _, root := range roots {
-		for _, folder := range settings.RootSolutionFolders {
-			for _, filename := range settings.SolutionFileNames {
+		for _, folder := range solutionFolders {
+			for _, filename := range solutionFileNames {
 				fullPath := filepath.Join(root, folder, filename)
 				if filepath.PathExists(fullPath, nil) {
 					// Deduplicate against already-found files

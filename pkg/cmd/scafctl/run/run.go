@@ -16,7 +16,7 @@ func CommandRun(cliParams *settings.Run, ioStreams *terminal.IOStreams, path str
 	cCmd := &cobra.Command{
 		Use:     "run",
 		Aliases: []string{"r"},
-		Short:   fmt.Sprintf("Runs %s solutions, resolvers, and providers", settings.CliBinaryName),
+		Short:   fmt.Sprintf("Runs %s solutions, resolvers, and providers", path),
 		Long: `Run executes solutions, resolvers, or individual providers.
 
 Resolvers within the same dependency phase execute concurrently for optimal performance.

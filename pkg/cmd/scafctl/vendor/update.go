@@ -74,7 +74,7 @@ func CommandUpdate(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if opts.SolutionPath == "" {
-				getter := get.NewGetter()
+				getter := get.NewGetterFromContext(cmd.Context())
 				opts.SolutionPath = getter.FindSolution()
 				if opts.SolutionPath == "" {
 					opts.SolutionPath = "./solution.yaml"

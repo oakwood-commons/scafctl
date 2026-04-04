@@ -79,7 +79,7 @@ func runInit(ctx context.Context, opts *InitOptions) error {
 	// Auto-discover solution file if not provided
 	filePath := opts.File
 	if filePath == "" {
-		filePath = get.NewGetter().FindSolution()
+		filePath = get.NewGetterFromContext(ctx).FindSolution()
 	}
 	if filePath == "" {
 		err := fmt.Errorf("no solution path provided and no solution file found in default locations; use --file (-f)")

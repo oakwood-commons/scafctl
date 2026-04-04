@@ -131,3 +131,136 @@ func TestVersionCmdOptions_PrintVersion(t *testing.T) {
 		})
 	}
 }
+
+func TestVersionCmdOptions_PrintVersion_WithVersionExtra(t *testing.T) {
+	orig := settings.VersionInformation
+	defer func() { settings.VersionInformation = orig }()
+
+	settings.VersionInformation = settings.VersionInfo{
+		BuildVersion: "1.0.0",
+		Commit:       "abc123",
+		BuildTime:    "2024-06-01T00:00:00Z",
+	}
+
+	ioStreams, out, _ := terminal.NewTestIOStreams()
+	w := writer.New(ioStreams, &settings.Run{})
+	ctx := writer.WithWriter(context.Background(), w)
+
+	options := &CmdOptionsVersion{
+		IOStreams:  ioStreams,
+		CliParams:  &settings.Run{},
+		BinaryName: "mycli",
+		VersionExtra: &settings.VersionInfo{
+			BuildVersion: "v2.0.0",
+			Commit:       "embed789",
+			BuildTime:    "2026-01-01T00:00:00Z",
+		},
+		GetLatestVersion: func(ctx context.Context) (string, error) {
+			return "1.0.0", nil
+		},
+	}
+
+	err := options.PrintVersion(ctx)
+	if err != nil {
+		t.Fatalf("PrintVersion() error = %v", err)
+	}
+
+	output := out.String()
+	// Should contain embedder info
+	if !strings.Contains(output, "mycli") {
+		t.Errorf("output should contain embedder binary name 'mycli', got: %s", output)
+	}
+	if !strings.Contains(output, "v2.0.0") {
+		t.Errorf("output should contain embedder version 'v2.0.0', got: %s", output)
+	}
+	if !strings.Contains(output, "embed789") {
+		t.Errorf("output should contain embedder commit 'embed789', got: %s", output)
+	}
+	// Should still contain scafctl version info
+	if !strings.Contains(output, "1.0.0") {
+		t.Errorf("output should contain scafctl version '1.0.0', got: %s", output)
+	}
+}
+
+func TestVersionCmdOptions_PrintVersion_JSONWithVersionExtra(t *testing.T) {
+	orig := settings.VersionInformation
+	defer func() { settings.VersionInformation = orig }()
+
+	settings.VersionInformation = settings.VersionInfo{
+		BuildVersion: "1.0.0",
+		Commit:       "abc123",
+		BuildTime:    "2024-06-01T00:00:00Z",
+	}
+
+	ioStreams, out, _ := terminal.NewTestIOStreams()
+	w := writer.New(ioStreams, &settings.Run{})
+	ctx := writer.WithWriter(context.Background(), w)
+
+	options := &CmdOptionsVersion{
+		IOStreams:  ioStreams,
+		CliParams:  &settings.Run{},
+		Output:     "json",
+		BinaryName: "mycli",
+		VersionExtra: &settings.VersionInfo{
+			BuildVersion: "v2.0.0",
+			Commit:       "embed789",
+			BuildTime:    "2026-01-01T00:00:00Z",
+		},
+		GetLatestVersion: func(ctx context.Context) (string, error) {
+			return "1.0.0", nil
+		},
+	}
+
+	err := options.PrintVersion(ctx)
+	if err != nil {
+		t.Fatalf("PrintVersion() error = %v", err)
+	}
+
+	output := out.String()
+	// JSON output should contain embedder block
+	if !strings.Contains(output, "embedder") {
+		t.Errorf("JSON output should contain 'embedder' key, got: %s", output)
+	}
+	if !strings.Contains(output, "mycli") {
+		t.Errorf("JSON output should contain embedder name 'mycli', got: %s", output)
+	}
+}
+
+func TestNewVersionDetails_WithVersionExtra(t *testing.T) {
+	t.Parallel()
+	extra := &settings.VersionInfo{
+		BuildVersion: "v2.0.0",
+		Commit:       "embed789",
+		BuildTime:    "2026-01-01T00:00:00Z",
+	}
+	details := newVersionDetails("1.0.0", "mycli", extra)
+
+	embedder, ok := details["embedder"].(map[string]any)
+	if !ok {
+		t.Fatal("expected 'embedder' key in details")
+	}
+	if embedder["name"] != "mycli" {
+		t.Errorf("embedder name = %v, want 'mycli'", embedder["name"])
+	}
+	if embedder["version"] != "v2.0.0" {
+		t.Errorf("embedder version = %v, want 'v2.0.0'", embedder["version"])
+	}
+}
+
+func TestNewVersionDetails_WithoutVersionExtra(t *testing.T) {
+	t.Parallel()
+	details := newVersionDetails("1.0.0", "scafctl", nil)
+
+	if _, ok := details["embedder"]; ok {
+		t.Error("expected no 'embedder' key when VersionExtra is nil")
+	}
+}
+
+func TestCommandVersion_UsesPath(t *testing.T) {
+	t.Parallel()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandVersion(&settings.Run{}, ioStreams, "mycli", nil)
+	if !strings.Contains(cmd.Short, "mycli") {
+		t.Errorf("Short should contain path 'mycli', got: %s", cmd.Short)
+	}
+}

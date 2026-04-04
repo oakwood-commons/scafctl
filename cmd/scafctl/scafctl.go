@@ -8,13 +8,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/oakwood-commons/scafctl/pkg/celexp"
-	"github.com/oakwood-commons/scafctl/pkg/celexp/env"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
-	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
-	gotmplext "github.com/oakwood-commons/scafctl/pkg/gotmpl/ext"
-	"github.com/oakwood-commons/scafctl/pkg/gotmpl/ext/celeval"
 	"github.com/oakwood-commons/scafctl/pkg/profiler"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
@@ -50,21 +45,8 @@ func main() {
 }
 
 func run() error {
-	// Register env.New as the environment factory for celexp package.
-	// This allows celexp to use environments with all extensions without circular dependency.
-	celexp.SetEnvFactory(env.New)
-
-	// Register env.GlobalCache as the cache factory for celexp package.
-	// This allows celexp to automatically use the global cache when no cache is specified.
-	celexp.SetCacheFactory(env.GlobalCache)
-
-	// Register Go template extension functions (sprig + custom) for the gotmpl package.
-	// This allows gotmpl.NewService(nil) to automatically include all extension functions.
-	gotmpl.SetExtensionFuncMapFactory(gotmplext.AllFuncMap)
-
-	// Register context-aware template function binder so that inline CEL
-	// evaluation in templates respects the caller's timeout and cancellation.
-	gotmpl.SetContextFuncBinderFactory(celeval.CelFuncWithContext)
+	// Register all default factories (CEL env/cache, Go template extensions).
+	scafctl.RegisterDefaults()
 
 	cli := scafctl.Root(nil)
 	defer func() {

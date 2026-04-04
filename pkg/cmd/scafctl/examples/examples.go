@@ -17,7 +17,7 @@ func CommandExamples(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 	cCmd := &cobra.Command{
 		Use:          "examples",
 		Aliases:      []string{"ex"},
-		Short:        "Browse and retrieve scafctl example configurations",
+		Short:        fmt.Sprintf("Browse and retrieve %s example configurations", path),
 		SilenceUsage: true,
 	}
 

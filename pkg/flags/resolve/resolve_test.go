@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/flags/resolve"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -122,6 +123,39 @@ func TestResolveValue_HTTP(t *testing.T) {
 		bytes, ok := result.([]byte)
 		require.True(t, ok)
 		assert.Equal(t, testContent, bytes)
+	})
+}
+
+func TestResolveValue_HTTP_UserAgent(t *testing.T) {
+	t.Run("default User-Agent", func(t *testing.T) {
+		var gotUA string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotUA = r.Header.Get("User-Agent")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("ok"))
+		}))
+		defer srv.Close()
+
+		ctx := context.Background()
+		_, err := resolve.ResolveValue(ctx, "test", srv.URL)
+		require.NoError(t, err)
+		assert.Equal(t, "scafctl-flags-resolver/1.0", gotUA)
+	})
+
+	t.Run("custom BinaryName in context", func(t *testing.T) {
+		var gotUA string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotUA = r.Header.Get("User-Agent")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("ok"))
+		}))
+		defer srv.Close()
+
+		run := &settings.Run{BinaryName: "mycli"}
+		ctx := settings.IntoContext(context.Background(), run)
+		_, err := resolve.ResolveValue(ctx, "test", srv.URL)
+		require.NoError(t, err)
+		assert.Equal(t, "mycli-flags-resolver/1.0", gotUA)
 	})
 }
 
