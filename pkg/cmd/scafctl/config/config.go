@@ -18,7 +18,7 @@ func CommandConfig(cliParams *settings.Run, ioStreams *terminal.IOStreams, path 
 	cCmd := &cobra.Command{
 		Use:     "config",
 		Aliases: []string{"cfg"},
-		Short:   "Manage scafctl configuration",
+		Short:   fmt.Sprintf("Manage %s configuration", path),
 		Long: heredoc.Doc(`
 			View and manage scafctl configuration.
 

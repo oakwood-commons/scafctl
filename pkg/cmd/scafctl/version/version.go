@@ -34,14 +34,16 @@ type CmdOptionsVersion struct {
 	CliParams        *settings.Run
 	Output           string
 	GetLatestVersion GetLatestVersionFunc
+	BinaryName       string
+	VersionExtra     *settings.VersionInfo
 }
 
-func CommandVersion(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
+func CommandVersion(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string, versionExtra *settings.VersionInfo) *cobra.Command {
 	options := &CmdOptionsVersion{}
 	cCmd := &cobra.Command{
 		Use:     "version",
 		Aliases: []string{"v"},
-		Short:   fmt.Sprintf("Prints the %s version", settings.CliBinaryName),
+		Short:   fmt.Sprintf("Prints the %s version", path),
 		RunE: func(cCmd *cobra.Command, args []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
 			ctx := settings.IntoContext(cCmd.Context(), cliParams)
@@ -51,6 +53,8 @@ func CommandVersion(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 
 			options.IOStreams = ioStreams
 			options.CliParams = cliParams
+			options.BinaryName = path
+			options.VersionExtra = versionExtra
 
 			// Get writer from parent context or create new one
 			w := writer.FromContext(cCmd.Context())
@@ -107,12 +111,17 @@ func (options *CmdOptionsVersion) PrintVersion(ctx context.Context) error {
 		}
 	}
 	if outOfDate {
-		lgr.V(0).Info("A newer version of scafctl is available. Please consider updating to the latest version.")
+		lgr.V(0).Info(fmt.Sprintf("A newer version of %s is available. Please consider updating to the latest version.", options.BinaryName))
 	}
-	verDetails := newVersionDetails(latestVersion)
+	verDetails := newVersionDetails(latestVersion, options.BinaryName, options.VersionExtra)
 	customOutputFn := func(_ *terminal.IOStreams, data map[string]any) error {
 		if w != nil {
-			w.Plainf("\n%s        %s\n", styles.SuccessStyle.Render("Version:"), settings.VersionInformation.BuildVersion)
+			if options.VersionExtra != nil {
+				w.Plainf("\n%s %s version %s\n", styles.SuccessStyle.Render("Embedder:"), options.BinaryName, options.VersionExtra.BuildVersion)
+				w.Plainf("%s  %s\n", styles.SuccessStyle.Render("  Commit:"), options.VersionExtra.Commit)
+				w.Plainf("%s  %s\n\n", styles.SuccessStyle.Render("  Built:"), options.VersionExtra.BuildTime)
+			}
+			w.Plainf("%s        %s\n", styles.SuccessStyle.Render("Version:"), settings.VersionInformation.BuildVersion)
 			w.Plainf("%s %s\n", styles.SuccessStyle.Render("Latest Version:"), data["latestVersion"])
 			w.Plainf("%s         %s\n", styles.SuccessStyle.Render("Commit:"), settings.VersionInformation.Commit)
 			w.Plainf("%s     %s\n\n", styles.SuccessStyle.Render("Build Time:"), settings.VersionInformation.BuildTime)
@@ -171,12 +180,21 @@ func GetLatestVersion(ctx context.Context) (string, error) {
 	return strings.TrimPrefix(release.TagName, "v"), nil
 }
 
-func newVersionDetails(latestVersion string) map[string]any {
-	return map[string]any{
+func newVersionDetails(latestVersion, binaryName string, versionExtra *settings.VersionInfo) map[string]any {
+	details := map[string]any{
 		"version":        settings.VersionInformation.BuildVersion,
 		"commit":         settings.VersionInformation.Commit,
 		"buildTime":      settings.VersionInformation.BuildTime,
 		"latestVersion":  latestVersion,
 		"updateRequired": (settings.VersionInformation.BuildVersion != latestVersion),
 	}
+	if versionExtra != nil {
+		details["embedder"] = map[string]any{
+			"name":      binaryName,
+			"version":   versionExtra.BuildVersion,
+			"commit":    versionExtra.Commit,
+			"buildTime": versionExtra.BuildTime,
+		}
+	}
+	return details
 }

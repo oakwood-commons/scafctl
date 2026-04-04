@@ -16,7 +16,7 @@ func CommandRender(cliParams *settings.Run, ioStreams *terminal.IOStreams, path 
 	cCmd := &cobra.Command{
 		Use:     "render",
 		Aliases: []string{"rn"},
-		Short:   fmt.Sprintf("Renders %s artifacts for external execution", settings.CliBinaryName),
+		Short:   fmt.Sprintf("Renders %s artifacts for external execution", path),
 		Long: `Render produces executor-ready artifacts from solutions.
 
 The render command outputs action graphs as JSON or YAML that can be consumed

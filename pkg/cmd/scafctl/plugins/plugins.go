@@ -5,6 +5,8 @@
 package plugins
 
 import (
+	"fmt"
+
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -15,7 +17,7 @@ import (
 func CommandPlugins(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "plugins",
-		Short:        "Manage scafctl plugins",
+		Short:        fmt.Sprintf("Manage %s plugins", path),
 		SilenceUsage: true,
 		Long: heredoc.Doc(`
 			Manage scafctl plugins.

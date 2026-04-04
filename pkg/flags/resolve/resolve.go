@@ -123,7 +123,11 @@ func fetchURL(ctx context.Context, urlStr string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	req.Header.Set("User-Agent", "scafctl-flags-resolver/1.0")
+	userAgentName := settings.CliBinaryName
+	if s, ok := settings.FromContext(ctx); ok && s.BinaryName != "" {
+		userAgentName = s.BinaryName
+	}
+	req.Header.Set("User-Agent", userAgentName+"-flags-resolver/1.0")
 
 	resp, err := defaultFlagHTTPClient.Do(req)
 	if err != nil {

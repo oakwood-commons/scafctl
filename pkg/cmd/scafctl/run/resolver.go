@@ -668,5 +668,5 @@ func extractSolutionPath(c *cobra.Command) string {
 	}
 
 	// Final fallback: auto-discover solution file in the current directory
-	return get.NewGetter().FindSolution()
+	return get.NewGetterFromContext(c.Context()).FindSolution()
 }

@@ -16,7 +16,7 @@ import (
 func CommandNew(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
 	cCmd := &cobra.Command{
 		Use:   "new",
-		Short: "Create new scafctl resources",
+		Short: fmt.Sprintf("Create new %s resources", path),
 		Long: `Create new solutions, templates, and other scafctl resources from scratch.
 
 Generates well-structured YAML scaffolds with best practices built in.`,
