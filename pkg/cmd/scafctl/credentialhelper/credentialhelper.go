@@ -23,27 +23,27 @@ import (
 )
 
 // CommandCredentialHelper returns the credential-helper command group.
-func CommandCredentialHelper(_ *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
+func CommandCredentialHelper(_ *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "credential-helper",
 		Short: "Docker/Podman credential helper protocol",
-		Long: `Implements the Docker credential helper protocol, exposing scafctl's
+		Long: fmt.Sprintf(`Implements the Docker credential helper protocol, exposing %[1]s's
 encrypted credential store (AES-256-GCM) to Docker, Podman, Buildah,
 and any OCI client.
 
-Configure Docker to use scafctl as a credential helper:
-  scafctl credential-helper install --docker
+Configure Docker to use %[1]s as a credential helper:
+  %[1]s credential-helper install --docker
 
 Or add manually to ~/.docker/config.json:
-  { "credsStore": "scafctl" }`,
+  { "credsStore": "%[1]s" }`, path),
 	}
 
 	cmd.AddCommand(commandGet())
 	cmd.AddCommand(commandStore())
 	cmd.AddCommand(commandErase())
 	cmd.AddCommand(commandList())
-	cmd.AddCommand(commandInstall(ioStreams))
-	cmd.AddCommand(commandUninstall(ioStreams))
+	cmd.AddCommand(commandInstall(ioStreams, path))
+	cmd.AddCommand(commandUninstall(ioStreams, path))
 
 	return cmd
 }

@@ -39,6 +39,7 @@ var ValidOutputTypes = kvx.BaseOutputFormats()
 
 // SolutionOptions holds configuration for the run solution command
 type SolutionOptions struct {
+	BinaryName string
 	sharedResolverOptions
 
 	// Action execution options
@@ -79,6 +80,7 @@ func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 			return options.Output
 		},
 		setIOStreamFn: func(ios *terminal.IOStreams, cli *settings.Run) {
+			options.BinaryName = cli.BinaryName
 			options.IOStreams = ios
 			options.CliParams = cli
 		},
@@ -88,7 +90,7 @@ func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 		Use:     "solution [name[@version]]",
 		Aliases: []string{"sol", "s", "solutions"},
 		Short:   "Run a solution by executing resolvers and actions",
-		Long: `Execute a solution by running resolvers and then actions in dependency order.
+		Long: strings.ReplaceAll(`Execute a solution by running resolvers and then actions in dependency order.
 
 Solutions can be loaded from:
 - Local catalog: Use the solution name as a positional argument (e.g., "my-app" or "my-app@1.2.3")
@@ -179,7 +181,7 @@ Examples:
   scafctl run solution --progress
 
   # Include resolver execution metadata in output
-  scafctl run solution --show-execution -f ./my-solution.yaml -o json`,
+  scafctl run solution --show-execution -f ./my-solution.yaml -o json`, settings.CliBinaryName, cliParams.BinaryName),
 		Args: cobra.MaximumNArgs(1),
 		PreRun: func(cCmd *cobra.Command, args []string) {
 			// Track which flags were explicitly set by the user
@@ -191,7 +193,7 @@ Examples:
 			// reference. Local file paths require -f/--file. Providing both
 			// -f/--file and a positional arg is also an error.
 			if len(args) > 0 {
-				if err := get.ValidatePositionalRef(args[0], options.File, "scafctl run solution"); err != nil {
+				if err := get.ValidatePositionalRef(args[0], options.File, cliParams.BinaryName+" run solution"); err != nil {
 					options.positionalPathErr = err
 				} else {
 					options.File = args[0]
@@ -264,6 +266,10 @@ func (o *SolutionOptions) getEffectiveActionConfig(ctx context.Context) config.A
 
 // Run executes the solution
 func (o *SolutionOptions) Run(ctx context.Context) error {
+	if o.BinaryName == "" {
+		o.BinaryName = settings.CliBinaryName
+	}
+
 	// Fail early if PreRun detected a local file path as positional arg
 	if o.positionalPathErr != nil {
 		return o.exitWithCode(ctx, o.positionalPathErr, exitcode.InvalidInput)
@@ -332,7 +338,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// Use 'scafctl run resolver' for resolver-only solutions.
 	if !sol.Spec.HasWorkflow() {
 		return o.exitWithCode(ctx,
-			fmt.Errorf("solution %q has no workflow defined; use 'scafctl run resolver' to execute resolvers without actions", sol.Metadata.Name),
+			fmt.Errorf("solution %q has no workflow defined; use '%s run resolver' to execute resolvers without actions", sol.Metadata.Name, o.BinaryName),
 			exitcode.InvalidInput)
 	}
 

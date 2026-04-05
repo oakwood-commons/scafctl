@@ -23,8 +23,9 @@ import (
 
 // Options holds configuration for the get cel-functions command
 type Options struct {
-	IOStreams *terminal.IOStreams
-	CliParams *settings.Run
+	BinaryName string
+	IOStreams  *terminal.IOStreams
+	CliParams  *settings.Run
 
 	// kvx output integration
 	flags.KvxOutputFlags
@@ -82,6 +83,7 @@ Examples:
 
 			options.IOStreams = ioStreams
 			options.CliParams = cliParams
+			options.BinaryName = cliParams.BinaryName
 
 			if len(args) > 0 {
 				return options.RunGetFunction(ctx, args[0])
@@ -101,7 +103,7 @@ Examples:
 		"CEL expression to filter/transform output data")
 
 	// Filter flags
-	cCmd.Flags().BoolVar(&options.Custom, "custom", false, "Show only custom scafctl functions")
+	cCmd.Flags().BoolVar(&options.Custom, "custom", false, fmt.Sprintf("Show only custom %s functions", cliParams.BinaryName))
 	cCmd.Flags().BoolVar(&options.BuiltIn, "builtin", false, "Show only built-in cel-go functions")
 
 	return cCmd
@@ -136,6 +138,10 @@ func (o *Options) getFunctions() celexp.ExtFunctionList {
 
 // RunListFunctions lists all CEL extension functions
 func (o *Options) RunListFunctions(ctx context.Context) error {
+	if o.BinaryName == "" {
+		o.BinaryName = settings.CliBinaryName
+	}
+
 	funcs := o.getFunctions()
 
 	// Populate function names via CEL env introspection
@@ -328,8 +334,8 @@ func (o *Options) writeOutput(ctx context.Context, data any) error {
 		o.Expression,
 		kvx.WithOutputContext(ctx),
 		kvx.WithOutputNoColor(o.CliParams.NoColor),
-		kvx.WithOutputAppName("scafctl get cel-functions"),
-		kvx.WithOutputHelp("scafctl get cel-functions", []string{
+		kvx.WithOutputAppName(o.BinaryName+" get cel-functions"),
+		kvx.WithOutputHelp(o.BinaryName+" get cel-functions", []string{
 			"CEL Extension Functions Viewer",
 			"",
 			"Navigate: ↑↓ arrows | Back: ← | Enter: →",

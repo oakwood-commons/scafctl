@@ -6,6 +6,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -19,7 +20,10 @@ func CommandConfig(cliParams *settings.Run, ioStreams *terminal.IOStreams, path 
 		Use:     "config",
 		Aliases: []string{"cfg"},
 		Short:   fmt.Sprintf("Manage %s configuration", path),
-		Long: heredoc.Doc(`
+		Long: strings.NewReplacer(
+			settings.CliBinaryName, cliParams.BinaryName,
+			settings.SafeEnvPrefix(settings.CliBinaryName), settings.SafeEnvPrefix(cliParams.BinaryName),
+		).Replace(heredoc.Doc(`
 			View and manage scafctl configuration.
 
 			Configuration follows the XDG Base Directory Specification:
@@ -33,7 +37,7 @@ func CommandConfig(cliParams *settings.Run, ioStreams *terminal.IOStreams, path 
 			For nested keys, use underscores (e.g., SCAFCTL_SETTINGS_NOCOLOR).
 
 			Use 'scafctl config paths' to see all resolved paths.
-		`),
+		`)),
 		SilenceUsage: true,
 	}
 

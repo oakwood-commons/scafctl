@@ -5,6 +5,7 @@ package auth
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/MakeNowJust/heredoc/v2"
@@ -27,7 +28,7 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 	cmd := &cobra.Command{
 		Use:   "status [handler]",
 		Short: "Show authentication status",
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			Show the current authentication status for auth handlers.
 
 			If no handler is specified, shows status for all registered handlers.
@@ -56,7 +57,7 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 
 			  # Exit non-zero if any token expires within 10 minutes (pre-flight check)
 			  scafctl auth status --warn-within 10m
-		`),
+		`), settings.CliBinaryName, cliParams.BinaryName),
 		SilenceUsage: true,
 		Args:         cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -98,7 +99,7 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 				}
 
 				if !status.Authenticated {
-					result["hint"] = fmt.Sprintf("run 'scafctl auth login %s' to authenticate", handlerName)
+					result["hint"] = fmt.Sprintf("run '%s auth login %s' to authenticate", cliParams.BinaryName, handlerName)
 				}
 
 				// Add identity type
@@ -166,7 +167,7 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 				outputFlags.Expression,
 				kvx.WithOutputContext(ctx),
 				kvx.WithOutputNoColor(cliParams.NoColor),
-				kvx.WithOutputAppName("scafctl auth status"),
+				kvx.WithOutputAppName(cliParams.BinaryName+" auth status"),
 			)
 			outputOpts.IOStreams = ioStreams
 

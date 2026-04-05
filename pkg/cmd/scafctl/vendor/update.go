@@ -7,6 +7,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
@@ -24,6 +25,7 @@ import (
 
 // UpdateOptions holds options for the vendor update command.
 type UpdateOptions struct {
+	BinaryName   string
 	SolutionPath string
 	Dependencies []string
 	DryRun       bool
@@ -44,7 +46,7 @@ func CommandUpdate(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 		Use:          "update",
 		Short:        "Update vendored dependencies",
 		SilenceUsage: true,
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			Re-resolve and update vendored dependencies without a full rebuild.
 
 			Parses the solution YAML and lock file, re-resolves catalog references
@@ -70,7 +72,7 @@ func CommandUpdate(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 
 			  # Update lock file only (don't re-vendor files)
 			  scafctl vendor update --lock-only
-		`),
+		`), settings.CliBinaryName, cliParams.BinaryName),
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if opts.SolutionPath == "" {
@@ -80,6 +82,7 @@ func CommandUpdate(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 					opts.SolutionPath = "./solution.yaml"
 				}
 			}
+			opts.BinaryName = cliParams.BinaryName
 			return runVendorUpdate(cmd.Context(), opts)
 		},
 	}
@@ -94,6 +97,10 @@ func CommandUpdate(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 }
 
 func runVendorUpdate(ctx context.Context, opts *UpdateOptions) error {
+	if opts.BinaryName == "" {
+		opts.BinaryName = settings.CliBinaryName
+	}
+
 	lgr := logger.FromContext(ctx)
 
 	localCatalog, err := catalog.NewLocalCatalog(*lgr)
@@ -139,7 +146,7 @@ func runVendorUpdateWithFetcher(ctx context.Context, opts *UpdateOptions, fetche
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 	if existingLock == nil {
-		w.Errorf("no lock file found at %s; run 'scafctl build solution' first", lockPath)
+		w.Errorf("no lock file found at %s; run '%s build solution' first", lockPath, opts.BinaryName)
 		return exitcode.Errorf("no lock file")
 	}
 

@@ -28,6 +28,7 @@ var supportedPlatforms = paths.SupportedPlatforms
 
 // PathsOptions holds options for the config paths command.
 type PathsOptions struct {
+	BinaryName     string
 	IOStreams      *terminal.IOStreams
 	CliParams      *settings.Run
 	KvxOutputFlags flags.KvxOutputFlags
@@ -41,7 +42,10 @@ func CommandPaths(cliParams *settings.Run, ioStreams *terminal.IOStreams, path s
 	cCmd := &cobra.Command{
 		Use:   "paths",
 		Short: fmt.Sprintf("Show XDG-compliant paths used by %s", strings.SplitN(path, "/", 2)[0]),
-		Long: heredoc.Doc(`
+		Long: strings.NewReplacer(
+			settings.CliBinaryName, cliParams.BinaryName,
+			settings.SafeEnvPrefix(settings.CliBinaryName), settings.SafeEnvPrefix(cliParams.BinaryName),
+		).Replace(heredoc.Doc(`
 			Display all paths used by scafctl.
 
 			scafctl follows the XDG Base Directory Specification for storing
@@ -73,7 +77,7 @@ func CommandPaths(cliParams *settings.Run, ioStreams *terminal.IOStreams, path s
 
 			  # Output as YAML
 			  scafctl config paths -o yaml
-		`),
+		`)),
 		Args: cobra.NoArgs,
 		RunE: func(cCmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
@@ -91,6 +95,7 @@ func CommandPaths(cliParams *settings.Run, ioStreams *terminal.IOStreams, path s
 
 			opts.IOStreams = ioStreams
 			opts.CliParams = cliParams
+			opts.BinaryName = cliParams.BinaryName
 
 			return opts.Run(ctx)
 		},
@@ -105,6 +110,10 @@ func CommandPaths(cliParams *settings.Run, ioStreams *terminal.IOStreams, path s
 
 // Run executes the config paths command.
 func (o *PathsOptions) Run(ctx context.Context) error {
+	if o.BinaryName == "" {
+		o.BinaryName = settings.CliBinaryName
+	}
+
 	w := writer.FromContext(ctx)
 	if w == nil {
 		return fmt.Errorf("writer not initialized in context")
@@ -153,7 +162,7 @@ func (o *PathsOptions) Run(ctx context.Context) error {
 	}
 
 	// Table output
-	w.Infof("scafctl Paths")
+	w.Infof("%s Paths", o.BinaryName)
 	w.Plain("")
 
 	if isIllustrative {

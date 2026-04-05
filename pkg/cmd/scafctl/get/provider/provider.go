@@ -31,8 +31,9 @@ var providerSchemaJSON []byte
 
 // Options holds configuration for the get provider command
 type Options struct {
-	IOStreams *terminal.IOStreams
-	CliParams *settings.Run
+	BinaryName string
+	IOStreams  *terminal.IOStreams
+	CliParams  *settings.Run
 
 	// kvx output integration
 	flags.KvxOutputFlags
@@ -53,7 +54,7 @@ func CommandProvider(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 		Use:     "provider [name]",
 		Aliases: []string{"providers", "prov", "p"},
 		Short:   "List or get provider information",
-		Long: `List all registered providers or get details about a specific provider.
+		Long: strings.ReplaceAll(`List all registered providers or get details about a specific provider.
 
 Without arguments, prints a simple list of provider names and descriptions.
 Use -i/--interactive to launch a rich kvx TUI for browsing, filtering, and
@@ -90,13 +91,14 @@ Examples:
   scafctl get provider http
 
   # Get provider details as JSON
-  scafctl get provider http -o json`,
+  scafctl get provider http -o json`, settings.CliBinaryName, cliParams.BinaryName),
 		RunE: func(cCmd *cobra.Command, args []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
 			ctx := settings.IntoContext(cCmd.Context(), cliParams)
 
 			options.IOStreams = ioStreams
 			options.CliParams = cliParams
+			options.BinaryName = cliParams.BinaryName
 
 			if len(args) > 0 {
 				return options.RunGetProvider(ctx, args[0])
@@ -124,6 +126,10 @@ Examples:
 
 // RunListProviders lists all providers
 func (o *Options) RunListProviders(ctx context.Context) error {
+	if o.BinaryName == "" {
+		o.BinaryName = settings.CliBinaryName
+	}
+
 	reg := o.getRegistry(ctx)
 	providers := reg.ListProviders()
 
@@ -468,7 +474,7 @@ func (o *Options) writeOutput(ctx context.Context, data any) error {
 		o.Expression,
 		kvx.WithOutputContext(ctx),
 		kvx.WithOutputNoColor(o.CliParams.NoColor),
-		kvx.WithOutputAppName("scafctl get provider"),
+		kvx.WithOutputAppName(o.BinaryName+" get provider"),
 		kvx.WithOutputDisplaySchemaJSON(providerSchemaJSON),
 	)
 	kvxOpts.IOStreams = o.IOStreams

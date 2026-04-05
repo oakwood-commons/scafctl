@@ -7,6 +7,7 @@ package secrets
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/config"
@@ -32,7 +33,7 @@ func CommandSecrets(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 		Use:     "secrets",
 		Aliases: []string{"secret"},
 		Short:   "Manage encrypted secrets",
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			Securely manage encrypted secrets for authentication and configuration.
 
 			Secrets are encrypted with AES-256-GCM and stored in XDG-compliant locations:
@@ -43,9 +44,9 @@ func CommandSecrets(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 			The master encryption key is stored in your OS keychain for security.
 
 			Internal secrets:
-			  Secret names starting with "scafctl." are used internally (e.g. auth tokens).
+			  Secret names starting with the binary name followed by "." are used internally (e.g. auth tokens).
 			  By default they are hidden. Use --all on subcommands to include them.
-		`),
+		`), settings.CliBinaryName, cliParams.BinaryName),
 		SilenceUsage: true,
 	}
 

@@ -6,6 +6,7 @@ package cache
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -19,7 +20,7 @@ func CommandCache(cliParams *settings.Run, ioStreams *terminal.IOStreams, path s
 		Use:          "cache",
 		Short:        fmt.Sprintf("Manage the %s cache", path),
 		SilenceUsage: true,
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			Manage the scafctl cache.
 
 			The cache stores HTTP responses to reduce network requests.
@@ -28,7 +29,7 @@ func CommandCache(cliParams *settings.Run, ioStreams *terminal.IOStreams, path s
 			  - Linux: ~/.cache/scafctl/
 			  - macOS: ~/.cache/scafctl/
 			  - Windows: %LOCALAPPDATA%\cache\scafctl\
-		`),
+		`), settings.CliBinaryName, cliParams.BinaryName),
 	}
 
 	cmd.AddCommand(CommandClear(cliParams, ioStreams, path))

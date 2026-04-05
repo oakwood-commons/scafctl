@@ -47,6 +47,7 @@ func TestSearchConfigFile(t *testing.T) {
 	t.Run("returns error when file does not exist", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		t.Setenv("XDG_CONFIG_HOME", tmpDir)
+		t.Setenv("XDG_CONFIG_DIRS", tmpDir)
 		xdg.Reload()
 		defer xdg.Reload()
 

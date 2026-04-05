@@ -23,8 +23,9 @@ import (
 
 // Options holds configuration for the get go-template-functions command
 type Options struct {
-	IOStreams *terminal.IOStreams
-	CliParams *settings.Run
+	BinaryName string
+	IOStreams  *terminal.IOStreams
+	CliParams  *settings.Run
 
 	// kvx output integration
 	flags.KvxOutputFlags
@@ -82,6 +83,7 @@ Examples:
 
 			options.IOStreams = ioStreams
 			options.CliParams = cliParams
+			options.BinaryName = cliParams.BinaryName
 
 			if len(args) > 0 {
 				return options.RunGetFunction(ctx, args[0])
@@ -101,7 +103,7 @@ Examples:
 		"CEL expression to filter/transform output data")
 
 	// Filter flags
-	cCmd.Flags().BoolVar(&options.Custom, "custom", false, "Show only custom scafctl functions")
+	cCmd.Flags().BoolVar(&options.Custom, "custom", false, fmt.Sprintf("Show only custom %s functions", cliParams.BinaryName))
 	cCmd.Flags().BoolVar(&options.Sprig, "sprig", false, "Show only sprig library functions")
 
 	return cCmd
@@ -136,6 +138,10 @@ func (o *Options) getFunctions() gotmpl.ExtFunctionList {
 
 // RunListFunctions lists all Go template extension functions
 func (o *Options) RunListFunctions(ctx context.Context) error {
+	if o.BinaryName == "" {
+		o.BinaryName = settings.CliBinaryName
+	}
+
 	funcs := o.getFunctions()
 
 	// Interactive mode
@@ -305,8 +311,8 @@ func (o *Options) writeOutput(ctx context.Context, data any) error {
 		o.Expression,
 		kvx.WithOutputContext(ctx),
 		kvx.WithOutputNoColor(o.CliParams.NoColor),
-		kvx.WithOutputAppName("scafctl get go-template-functions"),
-		kvx.WithOutputHelp("scafctl get go-template-functions", []string{
+		kvx.WithOutputAppName(o.BinaryName+" get go-template-functions"),
+		kvx.WithOutputHelp(o.BinaryName+" get go-template-functions", []string{
 			"Go Template Extension Functions Viewer",
 			"",
 			"Navigate: ↑↓ arrows | Back: ← | Enter: →",

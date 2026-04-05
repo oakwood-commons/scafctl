@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
@@ -56,11 +57,12 @@ func FilterBySeverity(result *Result, minSeverity string) *Result {
 
 // Options holds command flags and settings.
 type Options struct {
-	File      string
-	Output    string
-	Severity  string
-	CliParams *settings.Run
-	IOStreams *terminal.IOStreams
+	BinaryName string
+	File       string
+	Output     string
+	Severity   string
+	CliParams  *settings.Run
+	IOStreams  *terminal.IOStreams
 }
 
 // CommandLint creates the lint command.
@@ -106,7 +108,7 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 			  yaml    YAML output
 			  quiet   Exit code only (0=clean, 1=issues found)
 		`),
-		Example: heredoc.Doc(`
+		Example: strings.ReplaceAll(heredoc.Doc(`
 			# Lint a solution file
 			scafctl lint -f ./solution.yaml
 
@@ -115,12 +117,14 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 
 			# Output as JSON for CI integration
 			scafctl lint -f ./solution.yaml -o json
-		`),
+		`), settings.CliBinaryName, cliParams.BinaryName),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Use)
 			ctx := settings.IntoContext(cmd.Context(), cliParams)
 			lgr := logger.FromContext(cmd.Context())
 			ctx = logger.WithLogger(ctx, lgr)
+
+			options.BinaryName = cliParams.BinaryName
 
 			return runLint(ctx, options)
 		},
@@ -139,6 +143,10 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 }
 
 func runLint(ctx context.Context, opts *Options) error {
+	if opts.BinaryName == "" {
+		opts.BinaryName = settings.CliBinaryName
+	}
+
 	lgr := logger.FromContext(ctx)
 
 	// Set up getter with catalog resolver for bare name resolution
@@ -177,7 +185,7 @@ func runLint(ctx context.Context, opts *Options) error {
 		"",
 		kvx.WithOutputContext(ctx),
 		kvx.WithOutputNoColor(opts.CliParams.NoColor),
-		kvx.WithOutputAppName("scafctl lint"),
+		kvx.WithOutputAppName(opts.BinaryName+" lint"),
 	)
 	kvxOpts.IOStreams = opts.IOStreams
 

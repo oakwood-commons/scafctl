@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 )
 
@@ -44,18 +45,24 @@ type ParamInfo struct {
 
 // BuildRunCommand analyzes a solution and returns the exact CLI command to run it,
 // including any parameter-type resolvers that need values passed via -r flags.
+// The binaryName parameter is used in the generated command (e.g., "scafctl" or a
+// custom name when scafctl is embedded as a library).
 // Returns nil and an error message if the solution has nothing to run.
-func BuildRunCommand(sol *solution.Solution, path string) (*RunCommandInfo, error) {
+func BuildRunCommand(sol *solution.Solution, path, binaryName string) (*RunCommandInfo, error) {
+	if binaryName == "" {
+		binaryName = settings.CliBinaryName
+	}
+
 	hasResolvers := sol.Spec.HasResolvers()
 	hasWorkflow := sol.Spec.HasWorkflow()
 
 	var command, explanation string
 	switch {
 	case hasWorkflow:
-		command = "scafctl run solution"
+		command = binaryName + " run solution"
 		explanation = "Solution has a workflow with actions — use 'run solution'"
 	case hasResolvers:
-		command = "scafctl run resolver"
+		command = binaryName + " run resolver"
 		explanation = "Solution has resolvers but no workflow — use 'run resolver'"
 	default:
 		return nil, fmt.Errorf("solution has neither resolvers nor a workflow")

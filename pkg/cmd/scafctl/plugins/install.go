@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/go-logr/logr"
@@ -36,7 +37,7 @@ type InstallOptions struct {
 }
 
 // CommandInstall creates the install subcommand.
-func CommandInstall(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
+func CommandInstall(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
 	opts := &InstallOptions{
 		CliParams: cliParams,
 		IOStreams: ioStreams,
@@ -46,7 +47,7 @@ func CommandInstall(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ st
 		Use:          "install",
 		Short:        "Pre-fetch plugin binaries declared in a solution",
 		SilenceUsage: true,
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			Pre-fetch and cache plugin binaries declared in a solution's
 			bundle.plugins section.
 
@@ -64,7 +65,7 @@ func CommandInstall(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ st
 
 			  # Use a custom cache directory
 			  scafctl plugins install -f solution.yaml --cache-dir /tmp/plugins
-		`),
+		`), settings.CliBinaryName, cliParams.BinaryName),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			w := writer.FromContext(cmd.Context())
 			if w == nil {
@@ -83,7 +84,7 @@ func CommandInstall(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ st
 
 	cmd.Flags().StringVarP(&opts.File, "file", "f", "", "Path to solution file (auto-discovered if not provided)")
 	cmd.Flags().StringVar(&opts.Platform, "platform", "", "Target platform (default: current, e.g., linux/amd64)")
-	cmd.Flags().StringVar(&opts.CacheDir, "cache-dir", "", "Plugin cache directory (default: $XDG_CACHE_HOME/scafctl/plugins/)")
+	cmd.Flags().StringVar(&opts.CacheDir, "cache-dir", "", fmt.Sprintf("Plugin cache directory (default: $XDG_CACHE_HOME/%s/plugins/)", path))
 
 	return cmd
 }

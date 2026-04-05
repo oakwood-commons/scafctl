@@ -105,7 +105,7 @@ func CommandDiff(cliParams *settings.Run, ioStreams terminal.IOStreams, binaryNa
 
 			// Validate positional args are catalog references
 			for _, arg := range args {
-				if err := get.ValidatePositionalRef(arg, "", "scafctl solution diff"); err != nil {
+				if err := get.ValidatePositionalRef(arg, "", binaryName+" solution diff"); err != nil {
 					w.Errorf("%v", err)
 					return exitcode.WithCode(err, exitcode.InvalidInput)
 				}

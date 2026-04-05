@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
@@ -22,6 +23,7 @@ import (
 
 // GetOptions holds options for the config get command.
 type GetOptions struct {
+	BinaryName string
 	IOStreams  *terminal.IOStreams
 	CliParams  *settings.Run
 	ConfigPath string
@@ -34,12 +36,14 @@ type GetOptions struct {
 //
 //nolint:dupl // Cobra command boilerplate is intentionally similar across commands
 func CommandGet(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
-	opts := &GetOptions{}
+	opts := &GetOptions{
+		BinaryName: cliParams.BinaryName,
+	}
 
 	cCmd := &cobra.Command{
 		Use:   "get <key>",
 		Short: "Get a configuration value",
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			Get a specific configuration value by key.
 
 			Uses dot notation for nested values (e.g., settings.noColor).
@@ -53,7 +57,7 @@ func CommandGet(cliParams *settings.Run, ioStreams *terminal.IOStreams, path str
 
 			  # Get all catalogs as JSON
 			  scafctl config get catalogs -o json
-		`),
+		`), settings.CliBinaryName, cliParams.BinaryName),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cCmd *cobra.Command, args []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
@@ -90,12 +94,16 @@ func CommandGet(cliParams *settings.Run, ioStreams *terminal.IOStreams, path str
 
 // Run executes the config get command.
 func (o *GetOptions) Run(ctx context.Context) error {
+	if o.BinaryName == "" {
+		o.BinaryName = settings.CliBinaryName
+	}
+
 	w := writer.FromContext(ctx)
 	if w == nil {
 		return fmt.Errorf("writer not initialized in context")
 	}
 
-	mgr := appconfig.NewManager(o.ConfigPath)
+	mgr := appconfig.NewManager(o.ConfigPath, appconfig.ManagerOptionsFromContext(ctx)...)
 	_, err := mgr.Load()
 	if err != nil {
 		w.Errorf("%v", err)
@@ -119,7 +127,7 @@ func (o *GetOptions) writeOutput(ctx context.Context, data any) error {
 		o.Expression,
 		kvx.WithOutputContext(ctx),
 		kvx.WithOutputNoColor(o.CliParams.NoColor),
-		kvx.WithOutputAppName("scafctl config get"),
+		kvx.WithOutputAppName(o.BinaryName+" config get"),
 	)
 	kvxOpts.IOStreams = o.IOStreams
 

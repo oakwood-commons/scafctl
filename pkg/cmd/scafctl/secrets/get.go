@@ -17,7 +17,7 @@ import (
 )
 
 // CommandGet creates the 'secrets get' command.
-func CommandGet(_ *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
+func CommandGet(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
 	var (
 		outputFormat string
 		noNewline    bool
@@ -38,7 +38,8 @@ func CommandGet(_ *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra
 			name := args[0]
 
 			// Validate name
-			if err := secrets.ValidateSecretName(name, allFlag); err != nil {
+			prefix := secrets.InternalSecretPrefixFor(cliParams.BinaryName)
+			if err := secrets.ValidateSecretNameFor(name, allFlag, prefix); err != nil {
 				w.Errorf("%v", err)
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}

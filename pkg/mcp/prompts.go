@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
+
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
 // resolvePathArg detects whether a prompt argument contains file content
@@ -44,12 +46,23 @@ Solution content provided inline:
 	return "<solution_file_path>", inlineNote
 }
 
+// replaceName substitutes the configured binary name for "scafctl" in prompt text.
+func (s *Server) replaceName(text string) string {
+	if s.name == settings.CliBinaryName {
+		return text
+	}
+
+	return strings.ReplaceAll(text, settings.CliBinaryName, s.name)
+}
+
 // registerPrompts registers all MCP prompts on the server.
 func (s *Server) registerPrompts() {
+	replaceName := s.replaceName
+
 	// create_solution prompt
 	s.mcpServer.AddPrompt(
 		mcp.NewPrompt("create_solution",
-			mcp.WithPromptDescription("Guide for creating a new scafctl solution YAML file from scratch. Provides the solution schema, examples, and step-by-step instructions."),
+			mcp.WithPromptDescription(replaceName("Guide for creating a new scafctl solution YAML file from scratch. Provides the solution schema, examples, and step-by-step instructions.")),
 			mcp.WithPromptIcons(promptIcons["create"]),
 			mcp.WithArgument("name",
 				mcp.ArgumentDescription("Name for the new solution (lowercase, hyphens allowed, e.g., 'my-solution')"),
@@ -69,7 +82,7 @@ func (s *Server) registerPrompts() {
 	// debug_solution prompt
 	s.mcpServer.AddPrompt(
 		mcp.NewPrompt("debug_solution",
-			mcp.WithPromptDescription("Help debug a scafctl solution that isn't working as expected. Inspects the solution, lints it, and suggests fixes."),
+			mcp.WithPromptDescription(replaceName("Help debug a scafctl solution that isn't working as expected. Inspects the solution, lints it, and suggests fixes.")),
 			mcp.WithPromptIcons(promptIcons["debug"]),
 			mcp.WithArgument("path",
 				mcp.ArgumentDescription("Path to the solution file to debug"),
@@ -117,7 +130,7 @@ func (s *Server) registerPrompts() {
 	// update_solution prompt
 	s.mcpServer.AddPrompt(
 		mcp.NewPrompt("update_solution",
-			mcp.WithPromptDescription("Guide for modifying an existing scafctl solution. Inspects the current state, makes targeted changes, then validates with lint and preview."),
+			mcp.WithPromptDescription(replaceName("Guide for modifying an existing scafctl solution. Inspects the current state, makes targeted changes, then validates with lint and preview.")),
 			mcp.WithPromptIcons(promptIcons["guide"]),
 			mcp.WithArgument("path",
 				mcp.ArgumentDescription("Path to the existing solution file to modify"),
@@ -134,7 +147,7 @@ func (s *Server) registerPrompts() {
 	// add_tests prompt
 	s.mcpServer.AddPrompt(
 		mcp.NewPrompt("add_tests",
-			mcp.WithPromptDescription("Guide for writing functional tests for a scafctl solution. Walks through test schema, assertions, snapshots, and test patterns."),
+			mcp.WithPromptDescription(replaceName("Guide for writing functional tests for a scafctl solution. Walks through test schema, assertions, snapshots, and test patterns.")),
 			mcp.WithPromptIcons(promptIcons["create"]),
 			mcp.WithArgument("path",
 				mcp.ArgumentDescription("Path to the solution file to add tests to"),
@@ -150,7 +163,7 @@ func (s *Server) registerPrompts() {
 	// compose_solution prompt
 	s.mcpServer.AddPrompt(
 		mcp.NewPrompt("compose_solution",
-			mcp.WithPromptDescription("Guide for designing a multi-file composed solution using scafctl's composition system. Breaks a solution into reusable partial YAML files that get merged at build time."),
+			mcp.WithPromptDescription(replaceName("Guide for designing a multi-file composed solution using scafctl's composition system. Breaks a solution into reusable partial YAML files that get merged at build time.")),
 			mcp.WithPromptIcons(promptIcons["guide"]),
 			mcp.WithArgument("path",
 				mcp.ArgumentDescription("Path to the root solution file (or directory for a new composed solution)"),
@@ -167,7 +180,7 @@ func (s *Server) registerPrompts() {
 	// fix_lint prompt
 	s.mcpServer.AddPrompt(
 		mcp.NewPrompt("fix_lint",
-			mcp.WithPromptDescription("Guide for fixing lint findings in a scafctl solution. Lints the solution, explains each finding, and applies targeted fixes in priority order (errors first, then warnings)."),
+			mcp.WithPromptDescription(replaceName("Guide for fixing lint findings in a scafctl solution. Lints the solution, explains each finding, and applies targeted fixes in priority order (errors first, then warnings).")),
 			mcp.WithPromptIcons(promptIcons["debug"]),
 			mcp.WithArgument("path",
 				mcp.ArgumentDescription("Path to the solution file to fix"),
@@ -183,7 +196,7 @@ func (s *Server) registerPrompts() {
 	// prepare_execution prompt
 	s.mcpServer.AddPrompt(
 		mcp.NewPrompt("prepare_execution",
-			mcp.WithPromptDescription("Prepare a scafctl solution for execution. Validates, previews, and generates the exact CLI command — without actually running it. Use this when you're ready to run a solution but want to verify everything first."),
+			mcp.WithPromptDescription(replaceName("Prepare a scafctl solution for execution. Validates, previews, and generates the exact CLI command — without actually running it. Use this when you're ready to run a solution but want to verify everything first.")),
 			mcp.WithPromptIcons(promptIcons["guide"]),
 			mcp.WithArgument("path",
 				mcp.ArgumentDescription("Path to the solution file to prepare for execution"),
@@ -199,7 +212,7 @@ func (s *Server) registerPrompts() {
 	// analyze_execution prompt
 	s.mcpServer.AddPrompt(
 		mcp.NewPrompt("analyze_execution",
-			mcp.WithPromptDescription("Analyze a completed scafctl execution by inspecting the snapshot. Identifies failures, regressions, and suggests fixes. Optionally compares against a known-good snapshot."),
+			mcp.WithPromptDescription(replaceName("Analyze a completed scafctl execution by inspecting the snapshot. Identifies failures, regressions, and suggests fixes. Optionally compares against a known-good snapshot.")),
 			mcp.WithPromptIcons(promptIcons["analyze"]),
 			mcp.WithArgument("snapshot_path",
 				mcp.ArgumentDescription("Path to the snapshot JSON file from the failed or unexpected run"),
@@ -218,7 +231,7 @@ func (s *Server) registerPrompts() {
 	// migrate_solution prompt
 	s.mcpServer.AddPrompt(
 		mcp.NewPrompt("migrate_solution",
-			mcp.WithPromptDescription("Guide for structurally refactoring a scafctl solution. Supports adding composition, extracting templates, splitting into multiple files, adding tests, and upgrading to newer patterns."),
+			mcp.WithPromptDescription(replaceName("Guide for structurally refactoring a scafctl solution. Supports adding composition, extracting templates, splitting into multiple files, adding tests, and upgrading to newer patterns.")),
 			mcp.WithPromptIcons(promptIcons["guide"]),
 			mcp.WithArgument("path",
 				mcp.ArgumentDescription("Path to the solution file to migrate"),
@@ -238,7 +251,7 @@ func (s *Server) registerPrompts() {
 	// optimize_solution prompt
 	s.mcpServer.AddPrompt(
 		mcp.NewPrompt("optimize_solution",
-			mcp.WithPromptDescription("Analyze a scafctl solution for performance, readability, and quality improvements. Identifies parallelization opportunities, unnecessary dependencies, naming issues, and missing test coverage."),
+			mcp.WithPromptDescription(replaceName("Analyze a scafctl solution for performance, readability, and quality improvements. Identifies parallelization opportunities, unnecessary dependencies, naming issues, and missing test coverage.")),
 			mcp.WithPromptIcons(promptIcons["analyze"]),
 			mcp.WithArgument("path",
 				mcp.ArgumentDescription("Path to the solution file to optimize"),
@@ -325,13 +338,13 @@ After creating the solution file:
 4. If the solution has tests, call run_solution_tests to verify they pass`)
 
 	return &mcp.GetPromptResult{
-		Description: fmt.Sprintf("Create a new scafctl solution: %s", name),
+		Description: s.replaceName(fmt.Sprintf("Create a new scafctl solution: %s", name)),
 		Messages: []mcp.PromptMessage{
 			{
 				Role: mcp.RoleUser,
 				Content: mcp.TextContent{
 					Type: "text",
-					Text: prompt,
+					Text: s.replaceName(prompt),
 				},
 			},
 		},
@@ -384,7 +397,7 @@ Check for common issues:
 				Role: mcp.RoleUser,
 				Content: mcp.TextContent{
 					Type: "text",
-					Text: prompt,
+					Text: s.replaceName(prompt),
 				},
 			},
 		},
@@ -587,7 +600,7 @@ IMPORTANT:
 				Role: mcp.RoleUser,
 				Content: mcp.TextContent{
 					Type: "text",
-					Text: prompt,
+					Text: s.replaceName(prompt),
 				},
 			},
 		},
@@ -684,7 +697,7 @@ IMPORTANT:
 				Role: mcp.RoleUser,
 				Content: mcp.TextContent{
 					Type: "text",
-					Text: prompt,
+					Text: s.replaceName(prompt),
 				},
 			},
 		},
@@ -776,7 +789,7 @@ SUB-SOLUTION COMPOSITION (alternative to compose partials):
 				Role: mcp.RoleUser,
 				Content: mcp.TextContent{
 					Type: "text",
-					Text: prompt,
+					Text: s.replaceName(prompt),
 				},
 			},
 		},
@@ -868,7 +881,7 @@ IMPORTANT:
 				Role: mcp.RoleUser,
 				Content: mcp.TextContent{
 					Type: "text",
-					Text: prompt,
+					Text: s.replaceName(prompt),
 				},
 			},
 		},
@@ -947,7 +960,7 @@ highlight them clearly so the user can make an informed decision.`, pathRef, inl
 				Role: mcp.RoleUser,
 				Content: mcp.TextContent{
 					Type: "text",
-					Text: prompt,
+					Text: s.replaceName(prompt),
 				},
 			},
 		},
@@ -1112,7 +1125,7 @@ CRITICAL RULES:
 				Role: mcp.RoleUser,
 				Content: mcp.TextContent{
 					Type: "text",
-					Text: prompt,
+					Text: s.replaceName(prompt),
 				},
 			},
 		},
@@ -1235,7 +1248,7 @@ IMPORTANT:
 				Role: mcp.RoleUser,
 				Content: mcp.TextContent{
 					Type: "text",
-					Text: prompt,
+					Text: s.replaceName(prompt),
 				},
 			},
 		},

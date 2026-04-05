@@ -32,7 +32,8 @@ func CommandExists(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *co
 			name := args[0]
 
 			// Validate name
-			if err := secrets.ValidateSecretName(name, allFlag); err != nil {
+			prefix := secrets.InternalSecretPrefixFor(cliParams.BinaryName)
+			if err := secrets.ValidateSecretNameFor(name, allFlag, prefix); err != nil {
 				w.Errorf("%v", err)
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
