@@ -81,7 +81,7 @@ func registerAllToRegistry(ctx context.Context, reg *provider.Registry) error {
 	}
 
 	// Initialize secrets store for the secret provider.
-	// The keyring chain tries: OS keyring → SCAFCTL_SECRET_KEY env var → file-based key.
+	// The keyring chain tries: OS keyring → env var → file-based key.
 	// If all backends fail, skip the secret provider but register everything else.
 	var secretOpts []secrets.Option
 	if cfg := config.FromContext(ctx); cfg != nil {
@@ -94,10 +94,10 @@ func registerAllToRegistry(ctx context.Context, reg *provider.Registry) error {
 		// Warn the user if we fell back to a less-secure backend
 		backend := secretStore.KeyringBackend()
 		if backend == secrets.KeyringBackendFile {
-			warnUser(ctx, " Secret store using file-based key storage. For better security, configure an OS keyring or set SCAFCTL_SECRET_KEY.")
+			warnUser(ctx, fmt.Sprintf(" Secret store using file-based key storage. For better security, configure an OS keyring or set %s.", secrets.EnvSecretKey))
 		}
 	} else {
-		warnUser(ctx, fmt.Sprintf(" Secret provider unavailable: %v. Secret features will be disabled. Set SCAFCTL_SECRET_KEY to enable.", err))
+		warnUser(ctx, fmt.Sprintf(" Secret provider unavailable: %v. Secret features will be disabled. Set %s to enable.", err, secrets.EnvSecretKey))
 	}
 
 	var errs []error

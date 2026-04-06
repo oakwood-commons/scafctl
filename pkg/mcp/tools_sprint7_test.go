@@ -11,6 +11,8 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
 // --- Phase 3B: migrate_solution prompt ---
@@ -254,9 +256,10 @@ func TestHandleGetVersion(t *testing.T) {
 // --- Phase 5C: Latency hints in serverInstructions ---
 
 func TestServerInstructionsContainLatencyGuide(t *testing.T) {
-	assert.Contains(t, serverInstructions, "Tool Latency Guide")
-	assert.Contains(t, serverInstructions, "Instant")
-	assert.Contains(t, serverInstructions, "Fast")
-	assert.Contains(t, serverInstructions, "Variable")
-	assert.Contains(t, serverInstructions, "get_version")
+	instructions := serverInstructions(settings.CliBinaryName)
+	assert.Contains(t, instructions, "Tool Latency Guide")
+	assert.Contains(t, instructions, "Instant")
+	assert.Contains(t, instructions, "Fast")
+	assert.Contains(t, instructions, "Variable")
+	assert.Contains(t, instructions, "get_version")
 }

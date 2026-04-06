@@ -42,7 +42,7 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 	cmd := &cobra.Command{
 		Use:   "token <handler>",
 		Short: "Get an access token (for debugging)",
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			Get an access token from an auth handler.
 
 			This command is primarily for debugging and testing. It retrieves
@@ -97,7 +97,7 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 
 			  # Export the token as a shell variable (eval-compatible)
 			  eval $(scafctl auth token gcp --scope "https://www.googleapis.com/auth/cloud-platform" --export)
-		`),
+		`), settings.CliBinaryName, cliParams.BinaryName),
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -132,8 +132,8 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			if len(scopes) > 0 && !auth.HasCapability(caps, auth.CapScopesOnTokenRequest) {
 				err := fmt.Errorf(
 					"the %q auth handler does not support per-request scopes; "+
-						"scopes are fixed at login time. Use 'scafctl auth login %s --scope <scope>' to change scopes",
-					handlerName, handlerName,
+						"scopes are fixed at login time. Use '%s auth login %s --scope <scope>' to change scopes",
+					handlerName, cliParams.BinaryName, handlerName,
 				)
 				w.Errorf("%v", err)
 				return exitcode.WithCode(err, exitcode.InvalidInput)
@@ -236,7 +236,7 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 					outputFlags.Expression,
 					kvx.WithOutputContext(ctx),
 					kvx.WithOutputNoColor(cliParams.NoColor),
-					kvx.WithOutputAppName("scafctl auth token --decode"),
+					kvx.WithOutputAppName(cliParams.BinaryName+" auth token --decode"),
 				)
 				outputOpts.IOStreams = ioStreams
 				return outputOpts.Write(decoded)
@@ -262,7 +262,7 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 				outputFlags.Expression,
 				kvx.WithOutputContext(ctx),
 				kvx.WithOutputNoColor(cliParams.NoColor),
-				kvx.WithOutputAppName("scafctl auth token"),
+				kvx.WithOutputAppName(cliParams.BinaryName+" auth token"),
 			)
 			outputOpts.IOStreams = ioStreams
 
@@ -279,7 +279,7 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 	cmd.Flags().BoolVar(&decode, "decode", false, "Decode and display JWT header and claims from the access token (no signature validation); use -o json for full structured output")
 	cmd.Flags().BoolVar(&curl, "curl", false, "Emit a ready-to-run curl command with the token injected")
 	cmd.Flags().StringVar(&curlURL, "curl-url", "", "URL to embed in the --curl output (default: '<URL>' placeholder)")
-	cmd.Flags().BoolVar(&exportToken, "export", false, "Output a shell export statement: eval $(scafctl auth token ... --export)")
+	cmd.Flags().BoolVar(&exportToken, "export", false, fmt.Sprintf("Output a shell export statement: eval $(%s auth token ... --export)", cliParams.BinaryName))
 	flags.AddKvxOutputFlagsToStruct(cmd, &outputFlags)
 
 	return cmd

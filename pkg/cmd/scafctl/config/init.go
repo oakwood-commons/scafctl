@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -25,6 +26,7 @@ var configTemplates embed.FS
 
 // InitOptions holds options for the config init command.
 type InitOptions struct {
+	BinaryName string
 	IOStreams  *terminal.IOStreams
 	CliParams  *settings.Run
 	ConfigPath string
@@ -43,7 +45,7 @@ func CommandInit(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 	cCmd := &cobra.Command{
 		Use:   "init",
 		Short: "Initialize a configuration file",
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			Initialize a scafctl configuration file.
 
 			By default, creates a minimal configuration file at ~/.scafctl/config.yaml.
@@ -66,7 +68,7 @@ func CommandInit(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 
 			  # Overwrite existing config
 			  scafctl config init --force
-		`),
+		`), settings.CliBinaryName, cliParams.BinaryName),
 		Args: cobra.NoArgs,
 		RunE: func(cCmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
@@ -84,6 +86,7 @@ func CommandInit(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 
 			opts.IOStreams = ioStreams
 			opts.CliParams = cliParams
+			opts.BinaryName = cliParams.BinaryName
 
 			// Get config path from parent command context
 			if configFlag := cCmd.Root().Flag("config"); configFlag != nil && configFlag.Value.String() != "" {
@@ -97,7 +100,7 @@ func CommandInit(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 
 	cCmd.Flags().BoolVar(&opts.Full, "full", false, "Generate full config with all options documented")
 	cCmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "Preview config without writing to file")
-	cCmd.Flags().StringVarP(&opts.Output, "output", "o", "", "Output file path (default: ~/.scafctl/config.yaml)")
+	cCmd.Flags().StringVarP(&opts.Output, "output", "o", "", fmt.Sprintf("Output file path (default: ~/.%s/config.yaml)", cliParams.BinaryName))
 	cCmd.Flags().BoolVar(&opts.Force, "force", false, "Overwrite existing config file")
 
 	return cCmd
@@ -105,6 +108,10 @@ func CommandInit(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 
 // Run executes the config init command.
 func (o *InitOptions) Run(ctx context.Context) error {
+	if o.BinaryName == "" {
+		o.BinaryName = settings.CliBinaryName
+	}
+
 	w := writer.FromContext(ctx)
 	if w == nil {
 		return fmt.Errorf("writer not initialized in context")
@@ -174,7 +181,7 @@ func (o *InitOptions) Run(ctx context.Context) error {
 	if o.Full {
 		w.Infof("Full config with all options. Edit as needed.\n")
 	} else {
-		w.Infof("Minimal config created. Use 'scafctl config init --full' for all options.\n")
+		w.Infof("Minimal config created. Use '%s config init --full' for all options.\n", o.BinaryName)
 	}
 
 	return nil

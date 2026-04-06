@@ -137,6 +137,19 @@ type RootOptions struct {
 	// own version. When non-nil, the version command shows both the
 	// embedder's and scafctl's versions.
 	VersionExtra *settings.VersionInfo
+
+	// ConfigDefaults is an optional YAML byte slice providing embedder-level
+	// configuration defaults. These are merged after scafctl's built-in
+	// defaults but before the user's config file, environment variables,
+	// and CLI flags.
+	//
+	// Merge precedence (lowest to highest):
+	//  1. scafctl built-in defaults (setDefaults)
+	//  2. ConfigDefaults (this field)
+	//  3. User config file (~/.config/<binary>/config.yaml)
+	//  4. Environment variables
+	//  5. CLI flags
+	ConfigDefaults []byte
 }
 
 // NewRootOptions returns a RootOptions with production defaults
@@ -200,7 +213,15 @@ func Root(opts *RootOptions) *cobra.Command {
 		SilenceErrors: true,
 		PersistentPreRun: func(cCmd *cobra.Command, args []string) {
 			// Load configuration first (before logger setup so config can influence log level)
-			mgr := config.NewManager(configPath)
+			// Build config manager options from RootOptions.
+			var configOpts []config.ManagerOption
+			if len(opts.ConfigDefaults) > 0 {
+				configOpts = append(configOpts, config.WithBaseConfig(opts.ConfigDefaults))
+			}
+			if envPrefix != config.EnvPrefix {
+				configOpts = append(configOpts, config.WithEnvPrefix(envPrefix))
+			}
+			mgr := config.NewManager(configPath, configOpts...)
 			cfg, err := mgr.Load()
 			if err != nil {
 				// Use stderr directly since writer isn't set up yet
@@ -327,6 +348,7 @@ func Root(opts *RootOptions) *cobra.Command {
 			ctx = writer.WithWriter(ctx, w)
 			ctx = input.WithInput(ctx, in)
 			ctx = config.WithConfig(ctx, cfg)
+			ctx = config.WithManagerOptions(ctx, configOpts)
 
 			// ── Resolve --cwd flag and inject into context ──
 			// This must happen before any path resolution so that downstream

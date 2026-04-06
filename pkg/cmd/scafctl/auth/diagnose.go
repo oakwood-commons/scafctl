@@ -5,6 +5,7 @@ package auth
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/MakeNowJust/heredoc/v2"
@@ -34,7 +35,7 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 		Use:     "diagnose",
 		Aliases: []string{"doctor"},
 		Short:   "Run auth diagnostics and report any issues",
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			Run a series of diagnostic checks on the authentication configuration
 			and report any issues found.
 
@@ -64,7 +65,7 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 
 			  # Output diagnostics as JSON
 			  scafctl auth diagnose -o json
-		`),
+		`), settings.CliBinaryName, cliParams.BinaryName),
 		SilenceUsage: true,
 		Args:         cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -211,7 +212,7 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 						Category: "handler",
 						Name:     fmt.Sprintf("%s: authenticated", name),
 						Status:   diagnose.StatusWarn,
-						Message:  fmt.Sprintf("not authenticated — run 'scafctl auth login %s'", name),
+						Message:  fmt.Sprintf("not authenticated — run '%s auth login %s'", cliParams.BinaryName, name),
 					})
 					continue
 				}
@@ -270,7 +271,7 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 						Category: "live",
 						Name:     fmt.Sprintf("%s: live token", name),
 						Status:   diagnose.StatusInfo,
-						Message:  "handler requires --scope for token fetch; use 'scafctl auth token " + name + " --scope <scope>' to test manually",
+						Message:  "handler requires --scope for token fetch; use '" + cliParams.BinaryName + " auth token " + name + " --scope <scope>' to test manually",
 					})
 				} else if liveToken {
 					_, err := handler.GetToken(ctx, authpkg.TokenOptions{
@@ -340,7 +341,7 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 					outputFlags.Expression,
 					kvx.WithOutputContext(ctx),
 					kvx.WithOutputNoColor(cliParams.NoColor),
-					kvx.WithOutputAppName("scafctl auth diagnose"),
+					kvx.WithOutputAppName(cliParams.BinaryName+" auth diagnose"),
 				)
 				outputOpts.IOStreams = ioStreams
 				return outputOpts.Write(results)

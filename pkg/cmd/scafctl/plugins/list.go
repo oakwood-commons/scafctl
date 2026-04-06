@@ -6,6 +6,7 @@ package plugins
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
@@ -19,14 +20,15 @@ import (
 
 // ListOptions holds options for the list command.
 type ListOptions struct {
-	CliParams *settings.Run
-	IOStreams *terminal.IOStreams
-	CacheDir  string
+	BinaryName string
+	CliParams  *settings.Run
+	IOStreams  *terminal.IOStreams
+	CacheDir   string
 	flags.KvxOutputFlags
 }
 
 // CommandList creates the list subcommand.
-func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
+func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
 	opts := &ListOptions{
 		CliParams: cliParams,
 		IOStreams: ioStreams,
@@ -37,7 +39,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 		Aliases:      []string{"ls"},
 		Short:        "List cached plugin binaries",
 		SilenceUsage: true,
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			List all plugin binaries stored in the local plugin cache.
 
 			Shows the name, version, platform, size, and path for each
@@ -49,7 +51,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 
 			  # List in JSON format
 			  scafctl plugins list -o json
-		`),
+		`), settings.CliBinaryName, cliParams.BinaryName),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			w := writer.FromContext(cmd.Context())
 			if w == nil {
@@ -58,17 +60,23 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			ctx := writer.WithWriter(cmd.Context(), w)
 			kvxOpts := flags.ToKvxOutputOptions(&opts.KvxOutputFlags, kvx.WithIOStreams(ioStreams))
 
+			opts.BinaryName = cliParams.BinaryName
+
 			return runList(ctx, opts, kvxOpts)
 		},
 	}
 
-	cmd.Flags().StringVar(&opts.CacheDir, "cache-dir", "", "Plugin cache directory (default: $XDG_CACHE_HOME/scafctl/plugins/)")
+	cmd.Flags().StringVar(&opts.CacheDir, "cache-dir", "", fmt.Sprintf("Plugin cache directory (default: $XDG_CACHE_HOME/%s/plugins/)", path))
 	flags.AddKvxOutputFlagsToStruct(cmd, &opts.KvxOutputFlags)
 
 	return cmd
 }
 
 func runList(ctx context.Context, opts *ListOptions, kvxOpts *kvx.OutputOptions) error {
+	if opts.BinaryName == "" {
+		opts.BinaryName = settings.CliBinaryName
+	}
+
 	w := writer.FromContext(ctx)
 	if w == nil {
 		return fmt.Errorf("writer not initialized in context")
@@ -82,7 +90,7 @@ func runList(ctx context.Context, opts *ListOptions, kvxOpts *kvx.OutputOptions)
 	}
 
 	if len(cached) == 0 {
-		w.Infof("No plugins cached. Use 'scafctl plugins install' to fetch plugins.")
+		w.Infof("No plugins cached. Use '%s plugins install' to fetch plugins.", opts.BinaryName)
 		return nil
 	}
 

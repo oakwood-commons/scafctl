@@ -56,8 +56,9 @@ var authHandlerSchema = []byte(`{
 
 // Options holds configuration for the get authhandler command.
 type Options struct {
-	IOStreams *terminal.IOStreams
-	CliParams *settings.Run
+	BinaryName string
+	IOStreams  *terminal.IOStreams
+	CliParams  *settings.Run
 
 	flags.KvxOutputFlags
 }
@@ -70,7 +71,7 @@ func CommandAuthHandler(cliParams *settings.Run, ioStreams *terminal.IOStreams, 
 		Use:     "authhandler [name]",
 		Aliases: []string{"authhandlers", "ah", "auth-handler", "auth-handlers", "handlers", "handler"},
 		Short:   "List or get auth handler information",
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			List all registered auth handlers or get details about a specific handler.
 
 			Without arguments, lists all registered authentication handlers
@@ -97,13 +98,14 @@ func CommandAuthHandler(cliParams *settings.Run, ioStreams *terminal.IOStreams, 
 
 			  # Get handler details as YAML
 			  scafctl get authhandler github -o yaml
-		`),
+		`), settings.CliBinaryName, cliParams.BinaryName),
 		RunE: func(cCmd *cobra.Command, args []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
 			ctx := settings.IntoContext(cCmd.Context(), cliParams)
 
 			options.IOStreams = ioStreams
 			options.CliParams = cliParams
+			options.BinaryName = cliParams.BinaryName
 
 			if len(args) > 0 {
 				return options.RunGetHandler(ctx, args[0])
@@ -119,6 +121,10 @@ func CommandAuthHandler(cliParams *settings.Run, ioStreams *terminal.IOStreams, 
 
 // RunListHandlers lists all registered auth handlers.
 func (o *Options) RunListHandlers(ctx context.Context) error {
+	if o.BinaryName == "" {
+		o.BinaryName = settings.CliBinaryName
+	}
+
 	handlerNames := auth.ListHandlers(ctx)
 	if len(handlerNames) == 0 {
 		err := fmt.Errorf("no auth handlers registered")
@@ -227,8 +233,8 @@ func (o *Options) writeOutput(ctx context.Context, data any) error {
 		o.Expression,
 		kvx.WithOutputContext(ctx),
 		kvx.WithOutputNoColor(o.CliParams.NoColor),
-		kvx.WithOutputAppName("scafctl get authhandler"),
-		kvx.WithOutputHelp("scafctl get authhandler", []string{
+		kvx.WithOutputAppName(o.BinaryName+" get authhandler"),
+		kvx.WithOutputHelp(o.BinaryName+" get authhandler", []string{
 			"Auth Handler Viewer",
 			"",
 			"Navigate: ↑↓ arrows | Back: ← | Enter: →",

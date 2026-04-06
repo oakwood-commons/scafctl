@@ -87,7 +87,7 @@ func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 		Use:     "solution [name[@version]]",
 		Aliases: []string{"sol", "s", "solutions"},
 		Short:   "Render a solution's action graph or snapshot",
-		Long: `Render a solution as an executor-ready action graph or snapshot.
+		Long: strings.ReplaceAll(`Render a solution as an executor-ready action graph or snapshot.
 
 NOTE: Resolver dependency graph visualization has moved to 'scafctl run resolver --graph'.
 
@@ -132,7 +132,7 @@ Examples:
   scafctl render solution my-app
 
   # Render with parameters
-  scafctl render solution -f ./solution.yaml -r env=prod`,
+  scafctl render solution -f ./solution.yaml -r env=prod`, settings.CliBinaryName, cliParams.BinaryName),
 		Args: cobra.MaximumNArgs(1),
 		PreRun: func(cCmd *cobra.Command, _ []string) {
 			// Track which flags were explicitly set by the user
@@ -160,7 +160,7 @@ Examples:
 
 			// Handle positional catalog name argument
 			if len(args) > 0 {
-				if err := get.ValidatePositionalRef(args[0], options.File, "scafctl render solution"); err != nil {
+				if err := get.ValidatePositionalRef(args[0], options.File, cliParams.BinaryName+" render solution"); err != nil {
 					writeSolutionError(options, err.Error())
 					return exitcode.WithCode(err, exitcode.InvalidInput)
 				}

@@ -338,5 +338,6 @@ func NewCliParams() *Run {
 		IsQuiet:     false,
 		NoColor:     false,
 		ExitOnError: true,
+		BinaryName:  CliBinaryName,
 	}
 }

@@ -53,7 +53,7 @@ func CommandVersion(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 
 			options.IOStreams = ioStreams
 			options.CliParams = cliParams
-			options.BinaryName = path
+			options.BinaryName = cliParams.BinaryName
 			options.VersionExtra = versionExtra
 
 			// Get writer from parent context or create new one

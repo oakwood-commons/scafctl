@@ -32,6 +32,7 @@ import (
 
 // ResolverOptions holds configuration for the run resolver command
 type ResolverOptions struct {
+	BinaryName string
 	sharedResolverOptions
 
 	// Names is the list of resolver names to execute (positional args).
@@ -82,6 +83,7 @@ func CommandResolver(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 			return options.Output
 		},
 		setIOStreamFn: func(ios *terminal.IOStreams, cli *settings.Run) {
+			options.BinaryName = cli.BinaryName
 			options.IOStreams = ios
 			options.CliParams = cli
 		},
@@ -91,7 +93,7 @@ func CommandResolver(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 		Use:     "resolver [name[@version]] [resolver-name...] [key=value...]",
 		Aliases: []string{"res", "resolvers"},
 		Short:   "Execute resolvers for debugging and inspection",
-		Long: `Execute resolvers from a solution without running actions.
+		Long: strings.ReplaceAll(`Execute resolvers from a solution without running actions.
 
 This command is designed for debugging and inspecting resolver execution.
 It loads a solution file and executes only the resolvers, skipping the
@@ -256,7 +258,7 @@ Examples:
   scafctl run resolver --progress -f ./my-solution.yaml
 
   # Show provider metrics
-  scafctl run resolver --show-metrics -f ./my-solution.yaml`,
+  scafctl run resolver --show-metrics -f ./my-solution.yaml`, settings.CliBinaryName, cliParams.BinaryName),
 		Args: cobra.ArbitraryArgs,
 		PreRun: func(cCmd *cobra.Command, args []string) {
 			// Track which flags were explicitly set by the user
@@ -281,7 +283,7 @@ Examples:
 				case !fileExplicit && options.File == "":
 					// First bare word becomes the solution reference — must be
 					// a catalog name or registry ref, not a local file path.
-					if err := get.ValidatePositionalRef(arg, "", "scafctl run resolver"); err != nil {
+					if err := get.ValidatePositionalRef(arg, "", cliParams.BinaryName+" run resolver"); err != nil {
 						options.positionalPathErr = err
 					} else {
 						options.File = arg
@@ -315,6 +317,10 @@ Examples:
 
 // Run executes the resolver-only flow
 func (o *ResolverOptions) Run(ctx context.Context) error {
+	if o.BinaryName == "" {
+		o.BinaryName = settings.CliBinaryName
+	}
+
 	// Fail early if PreRun detected a local file path as positional arg
 	if o.positionalPathErr != nil {
 		return o.exitWithCode(ctx, o.positionalPathErr, exitcode.InvalidInput)
@@ -494,7 +500,7 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		return o.generateTestOutput(ctx, []string{"run", "resolver"}, o.Names, results)
 	}
 
-	return o.writeResolverOutput(ctx, results, "scafctl run resolver")
+	return o.writeResolverOutput(ctx, results, o.BinaryName+" run resolver")
 }
 
 // showResolverGraph renders the resolver dependency graph without executing providers

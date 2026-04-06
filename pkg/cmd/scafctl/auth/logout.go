@@ -5,6 +5,7 @@ package auth
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -27,7 +28,7 @@ func CommandLogout(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 	cmd := &cobra.Command{
 		Use:   "logout [handler]",
 		Short: "Clear authentication credentials",
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			Clear stored authentication credentials for an auth handler.
 
 			This removes the stored refresh token, clears any cached access tokens,
@@ -61,7 +62,7 @@ func CommandLogout(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 		  scafctl auth logout --all --dry-run
 
 		  # Log out from all handlers, skipping the confirmation prompt
-		  scafctl auth logout --all --yes	`),
+		  scafctl auth logout --all --yes	`), settings.CliBinaryName, cliParams.BinaryName),
 		SilenceUsage: true,
 		Args: func(_ *cobra.Command, args []string) error {
 			if all && len(args) > 0 {

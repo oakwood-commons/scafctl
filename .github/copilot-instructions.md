@@ -62,6 +62,16 @@ The project uses `task` (go-task/task) for builds and linting. **Always use `tas
 - **No magic values**: Always define constants or use settings for configuration values
 - **Git safety**: Never run `git commit`, `git push`, or `git commit --amend` unless the user explicitly asks. Never commit or push without approval first
 
+## Embedder Contract
+
+scafctl is used as a **library by external CLIs**. Every new feature must be consumable by embedders via `RootOptions` or domain package APIs.
+
+- **No hardcoded "scafctl"**: Use `settings.CliBinaryName` constant or read from `settings.Run.BinaryName` in context. Never hardcode the binary name in user-facing strings (descriptions, error messages, paths, env var prefixes)
+- **`RootOptions` is the embedder API surface**: New CLI-level capabilities must be exposed as fields on `RootOptions` with sensible defaults that preserve existing behavior when unset
+- **Domain packages must be binary-name-aware**: Functions that produce paths, env vars, cache keys, or display strings must accept a name parameter or read from context -- never assume the binary is called "scafctl"
+- **MCP server must respect embedder identity**: The MCP server name, tool descriptions, and capabilities must use the configured binary name
+- **Test embedder scenarios**: When adding new configurable behavior, include a test that exercises it with a non-default binary name (e.g., `"mycli"`)
+
 ## Security Scanning
 
 ```bash

@@ -24,6 +24,7 @@ import (
 
 // ExtractOptions holds options for the bundle extract command.
 type ExtractOptions struct {
+	BinaryName  string
 	ArtifactRef string
 	OutputDir   string
 	Resolvers   []string
@@ -46,7 +47,7 @@ func CommandExtract(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ st
 		Use:          "extract <artifact-ref>",
 		Short:        "Extract files from a bundled solution artifact",
 		SilenceUsage: true,
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			Extract files from a bundled solution artifact, optionally filtering
 			by resolver, action, or glob patterns.
 
@@ -72,10 +73,11 @@ func CommandExtract(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ st
 
 			  # Flatten directory structure
 			  scafctl bundle extract my-solution@1.0.0 --flatten
-		`),
+		`), settings.CliBinaryName, cliParams.BinaryName),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.ArtifactRef = args[0]
+			opts.BinaryName = cliParams.BinaryName
 			return runExtract(cmd.Context(), opts)
 		},
 	}
@@ -91,6 +93,10 @@ func CommandExtract(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ st
 }
 
 func runExtract(ctx context.Context, opts *ExtractOptions) error {
+	if opts.BinaryName == "" {
+		opts.BinaryName = settings.CliBinaryName
+	}
+
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
 
@@ -124,7 +130,7 @@ func runExtract(ctx context.Context, opts *ExtractOptions) error {
 	}
 
 	// Extract to temp dir first
-	tmpDir, err := os.MkdirTemp("", "scafctl-extract-*")
+	tmpDir, err := os.MkdirTemp("", opts.BinaryName+"-extract-*")
 	if err != nil {
 		return fmt.Errorf("creating temp dir: %w", err)
 	}

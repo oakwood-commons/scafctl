@@ -21,6 +21,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
 const (
@@ -34,22 +35,21 @@ var ErrNoGcloudADCConfigured = errors.New("no gcloud ADC credentials configured"
 
 // formatGcloudTokenError converts a raw OAuth error response into a clear, actionable error.
 // It handles well-known error codes (e.g. invalid_grant / invalid_rapt) with remediation hints.
-func formatGcloudTokenError(errResp TokenErrorResponse) error {
+func formatGcloudTokenError(errResp TokenErrorResponse, binaryName string) error {
 	if errResp.Error == "invalid_grant" {
-		// invalid_rapt means Google requires re-authentication (Re-Authentication Proof Token).
-		// This is common with corporate/org accounts that enforce periodic re-auth or
-		// conditional access policies.
 		if strings.Contains(errResp.ErrorDescription, "invalid_rapt") {
 			return fmt.Errorf(
-				"gcloud ADC credentials require re-authentication (invalid_rapt): " +
-					"a security policy requires you to reauthenticate. " +
-					"Run: scafctl auth login gcp",
+				"gcloud ADC credentials require re-authentication (invalid_rapt): "+
+					"a security policy requires you to reauthenticate. "+
+					"Run: %s auth login gcp",
+				binaryName,
 			)
 		}
 		return fmt.Errorf(
 			"gcloud ADC credentials have expired or been revoked (%s). "+
-				"Run: scafctl auth login gcp",
+				"Run: %s auth login gcp",
 			errResp.ErrorDescription,
+			binaryName,
 		)
 	}
 	return fmt.Errorf("gcloud ADC token refresh failed: %s - %s", errResp.Error, errResp.ErrorDescription)
@@ -131,7 +131,7 @@ func (h *Handler) gcloudADCLogin(ctx context.Context, opts auth.LoginOptions) (*
 	creds, err := LoadGcloudADCCredentials()
 	if err != nil {
 		if errors.Is(err, ErrNoGcloudADCConfigured) {
-			return nil, fmt.Errorf("no gcloud ADC credentials found; run 'gcloud auth application-default login' or configure a client ID for scafctl")
+			return nil, fmt.Errorf("no gcloud ADC credentials found; run 'gcloud auth application-default login' or configure a client ID for %s", settings.BinaryNameFromContext(ctx))
 		}
 		return nil, fmt.Errorf("loading gcloud ADC credentials: %w", err)
 	}
@@ -152,7 +152,7 @@ func (h *Handler) gcloudADCLogin(ctx context.Context, opts auth.LoginOptions) (*
 	if resp.StatusCode != 200 {
 		var errResp TokenErrorResponse
 		_ = json.NewDecoder(resp.Body).Decode(&errResp)
-		return nil, formatGcloudTokenError(errResp)
+		return nil, formatGcloudTokenError(errResp, settings.BinaryNameFromContext(ctx))
 	}
 
 	var tokenResp TokenResponse
@@ -244,7 +244,7 @@ func (h *Handler) getGcloudADCToken(ctx context.Context, opts auth.TokenOptions)
 	if resp.StatusCode != 200 {
 		var errResp TokenErrorResponse
 		_ = json.NewDecoder(resp.Body).Decode(&errResp)
-		return nil, formatGcloudTokenError(errResp)
+		return nil, formatGcloudTokenError(errResp, settings.BinaryNameFromContext(ctx))
 	}
 
 	var tokenResp TokenResponse
@@ -261,7 +261,9 @@ func (h *Handler) getGcloudADCToken(ctx context.Context, opts auth.TokenOptions)
 		Flow:        auth.FlowGcloudADC,
 	}
 
-	lgr.V(1).Info("acquired token via gcloud ADC fallback; to use scafctl-managed credentials run: scafctl auth login gcp")
+	binaryName := settings.BinaryNameFromContext(ctx)
+	lgr.V(1).Info("acquired token via gcloud ADC fallback",
+		"hint", fmt.Sprintf("to use %s-managed credentials run: %s auth login gcp", binaryName, binaryName))
 	if err := h.tokenCache.Set(ctx, auth.FlowGcloudADC, fingerprint, opts.Scope, token); err != nil {
 		lgr.V(1).Info("failed to cache gcloud ADC token", "error", err)
 	}

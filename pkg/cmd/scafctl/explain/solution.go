@@ -70,7 +70,7 @@ Examples:
 			w := writer.New(ioStreams, cliParams)
 
 			if len(args) > 0 {
-				if err := get.ValidatePositionalRef(args[0], options.File, "scafctl explain solution"); err != nil {
+				if err := get.ValidatePositionalRef(args[0], options.File, cliParams.BinaryName+" explain solution"); err != nil {
 					w.Errorf("%v", err)
 					return exitcode.WithCode(err, exitcode.InvalidInput)
 				}

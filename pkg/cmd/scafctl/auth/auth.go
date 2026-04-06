@@ -5,6 +5,7 @@ package auth
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -18,7 +19,7 @@ func CommandAuth(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 		Use:     "auth",
 		Aliases: []string{"authenticate"},
 		Short:   "Manage authentication",
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			Manage authentication for scafctl.
 
 			Authentication handlers manage identity verification and token acquisition
@@ -35,7 +36,7 @@ func CommandAuth(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 			Use 'scafctl auth logout <handler>' to clear credentials.
 			Use 'scafctl auth token <handler>' to retrieve a token value (for debugging).
 			Use 'scafctl auth diagnose' to run health checks and troubleshoot issues.
-		`),
+		`), settings.CliBinaryName, cliParams.BinaryName),
 		SilenceUsage: true,
 	}
 

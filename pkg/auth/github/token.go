@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
 // TokenMetadata stores information about the stored credentials.
@@ -65,7 +66,7 @@ func (h *Handler) mintToken(ctx context.Context, scope string) (*auth.Token, err
 
 	// Use the client ID that was used during login
 	if metadata.ClientID == "" {
-		return nil, fmt.Errorf("stored credentials are missing client ID, please re-authenticate with 'scafctl auth login github': %w", auth.ErrNotAuthenticated)
+		return nil, fmt.Errorf("stored credentials are missing client ID, please re-authenticate with '%s auth login github': %w", settings.BinaryNameFromContext(ctx), auth.ErrNotAuthenticated)
 	}
 
 	// Refresh the token
