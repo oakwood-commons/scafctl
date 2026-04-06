@@ -2771,10 +2771,11 @@ auth:
   customOAuth2:
     - name: quay
       displayName: "Quay.io"
-      tokenURL: "https://quay.io/oauth/token"
+      authorizeURL: "https://quay.io/oauth/authorize"
+      tokenURL: "https://quay.io/oauth/access_token"
       clientID: "your-app-client-id"
-      clientSecret: "your-app-client-secret"
-      defaultFlow: client_credentials
+      defaultFlow: interactive
+      responseType: token    # Quay only supports implicit grant (response_type=token)
       scopes:
         - "repo:read"
       registry: "quay.io"
@@ -2798,7 +2799,7 @@ scafctl catalog login quay.io
 ```
 
 Custom handlers support all three OAuth2 flows:
-- **Interactive** (authorization code + PKCE) -- requires `authorizeURL`
+- **Interactive** (authorization code + PKCE) -- requires `authorizeURL`. Set `responseType: token` for implicit grant servers. Set `disablePKCE: true` for servers that support auth code but reject PKCE parameters
 - **Device code** (RFC 8628) -- requires `deviceAuthURL`  
 - **Client credentials** -- requires `clientSecret`
 
