@@ -162,6 +162,46 @@ This example is also in [cel-basics.yaml](../../examples/resolvers/cel-basics.ya
 
 {{% /details %}}
 
+#### Bracket Notation for Hyphenated Names
+
+CEL supports two syntaxes for accessing resolver values:
+
+- **Dot notation:** `_.resolverName` -- works for camelCase and snake_case names
+- **Bracket notation:** `_["resolver-name"]` -- works for all names, required for hyphens
+
+Hyphens in resolver names conflict with the CEL minus operator, so dot notation
+(`_.api-endpoint`) will not work. Use bracket notation instead:
+
+~~~yaml
+spec:
+  resolvers:
+    api-endpoint:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "https://api.example.com"
+
+    url:
+      type: string
+      dependsOn: [api-endpoint]
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              # Bracket notation required for hyphenated names
+              expression: '_["api-endpoint"] + "/v1/users"'
+~~~
+
+Both notations can be mixed in a single expression:
+
+~~~yaml
+expression: '_["api-endpoint"] + "/" + _.version'
+~~~
+
+> **Tip:** Prefer `camelCase` or `snake_case` for resolver names to use the simpler dot notation everywhere.
+
 ### 3. Using `expr` in Inputs
 
 The `expr` field can be used on any provider input for dynamic values. For example, in your solution's `workflow.actions` section:

@@ -505,3 +505,51 @@ func BenchmarkCheckValueSizes(b *testing.B) {
 		_ = opts.checkValueSizes(data, lgr)
 	}
 }
+
+// ── ResolverParametersHelp shared constant tests ──────────────────────────────
+
+func TestResolverParametersHelp_EmbeddedInCommands(t *testing.T) {
+	t.Parallel()
+
+	streams, _, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+
+	resolverCmd := CommandResolver(cliParams, streams, "")
+	solutionCmd := CommandSolution(cliParams, streams, "")
+
+	// run resolver uses the full help (with positional params)
+	assert.Contains(t, resolverCmd.Long, ResolverParametersHelp,
+		"run resolver Long description should contain ResolverParametersHelp")
+
+	// run solution uses the flag-only help (no positional params)
+	assert.Contains(t, solutionCmd.Long, ResolverParametersFlagHelp,
+		"run solution Long description should contain ResolverParametersFlagHelp")
+	assert.NotContains(t, solutionCmd.Long, "Positional key=value",
+		"run solution should not advertise positional key=value parameters")
+}
+
+func TestResolverParametersHelp_ContainsStdinConventions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		pattern string
+	}{
+		{"positional key=value", "key=value"},
+		{"stdin raw value", "key=@-"},
+		{"stdin parsed", "@-"},
+		{"file raw value", "key=@file"},
+		{"file parsed YAML", "@file.yaml"},
+		{"flag key=value", "-r key=value"},
+		{"flag stdin", "-r @-"},
+		{"array merge", "merged into an array"},
+		{"stdin conflict note", "@- cannot be combined with -f -"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Contains(t, ResolverParametersHelp, tt.pattern)
+		})
+	}
+}

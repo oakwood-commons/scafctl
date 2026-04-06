@@ -100,6 +100,54 @@ func makeRunEFunc(cfg runCommandConfig, cmdUse string) func(*cobra.Command, []st
 	}
 }
 
+// ResolverParametersHelp is the help text block for resolver parameter
+// passing conventions including positional args, used by run resolver.
+const ResolverParametersHelp = `RESOLVER PARAMETERS:
+  Parameters can be passed in two equivalent ways:
+
+  1. Positional key=value (recommended):
+       key=value         After resolver names or on its own
+       key=@-            Read raw stdin as value for key
+       key=@file         Read raw file content as value for key
+       @file.yaml        Load parameters from a file (parsed as YAML/JSON)
+       @-                Read parameters from stdin (parsed as YAML/JSON)
+
+  2. Explicit -r/--resolver flag:
+       -r key=value      Repeatable flag
+       -r key=val1,val2  Multiple values become an array
+       -r key=@-         Read raw stdin as value for key
+       -r key=@file      Read raw file content as value for key
+       -r @file.yaml     Load parameters from a YAML file
+       -r @file.json     Load parameters from a JSON file
+       -r @-             Read parameters from stdin (YAML or JSON)
+
+  Both forms can be mixed. When the same key appears multiple
+  times, values are merged into an array rather than replaced.
+
+  Note: @- cannot be combined with -f - (both read from stdin).
+
+  Bare words (without '=') are treated as resolver names (or the solution
+  reference if -f is not provided — see SOLUTION SOURCE above).
+  Words containing '=' or starting with '@' are treated as parameters.`
+
+// ResolverParametersFlagHelp is the flag-only help text block for resolver
+// parameter passing, used by run solution (which does not accept positional
+// key=value parameters).
+const ResolverParametersFlagHelp = `RESOLVER PARAMETERS:
+  Parameters are passed using the -r/--resolver flag:
+    -r key=value      Repeatable flag
+    -r key=val1,val2  Multiple values become an array
+    -r key=@-         Read raw stdin as value for key
+    -r key=@file      Read raw file content as value for key
+    -r @file.yaml     Load parameters from a YAML file
+    -r @file.json     Load parameters from a JSON file
+    -r @-             Read parameters from stdin (YAML or JSON)
+
+  When the same key appears multiple times, values are merged
+  into an array rather than replaced.
+
+  Note: @- cannot be combined with -f - (both read from stdin).`
+
 // sharedResolverOptions holds the resolver-specific fields shared between
 // the run solution and run resolver commands.
 type sharedResolverOptions struct {

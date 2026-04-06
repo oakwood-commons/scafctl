@@ -110,12 +110,7 @@ The execution proceeds in two phases:
 To execute resolvers only without actions (for debugging/inspection), use:
   scafctl run resolver
 
-RESOLVER PARAMETERS:
-  Parameters can be passed using -r/--resolver flag in several formats:
-    key=value         Simple key-value pair
-    @file.yaml        Load parameters from YAML file  
-    @file.json        Load parameters from JSON file
-    key=val1,val2     Multiple values become an array
+` + ResolverParametersFlagHelp + `
 
 EXECUTION ORDER:
   1. Parse and validate solution (must have workflow)
@@ -162,6 +157,18 @@ Examples:
 
   # Run with parameters
   scafctl run solution -r env=prod -r region=us-east1
+
+  # Load parameters from a YAML file
+  scafctl run solution -f ./my-solution.yaml -r @params.yaml
+
+  # Load parameters from stdin (pipe YAML or JSON)
+  echo '{"env": "prod"}' | scafctl run solution -f ./my-solution.yaml -r @-
+
+  # Pipe raw stdin into a single parameter
+  echo hello | scafctl run solution -f ./my-solution.yaml -r message=@-
+
+  # Read a file's raw content into a parameter
+  scafctl run solution -f ./my-solution.yaml -r body=@content.txt
 
   # Dry run (validate and show what would execute)
   scafctl run solution -f ./my-solution.yaml --dry-run
