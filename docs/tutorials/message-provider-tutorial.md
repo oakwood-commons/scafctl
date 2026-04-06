@@ -249,7 +249,7 @@ spec:
 
 Output: `💡 Deploying my-service v2.0.0`
 
-> **Note:** Go templates access resolver data directly with `{{ .resolverName }}`. In CEL expressions, use the `_` prefix: `_.resolverName`.
+> **Note:** Go templates access resolver data directly with `{{ .resolverName }}`. In CEL expressions, use the `_` prefix: `_.resolverName` (dot notation) or `_["resolver-name"]` (bracket notation, required for hyphenated names).
 
 ### CEL Expressions via `expr:`
 

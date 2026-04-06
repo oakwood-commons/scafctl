@@ -149,33 +149,7 @@ SNAPSHOT MODE:
   capture resolver values, timing, phases, parameters, and metadata for
   debugging, testing, comparison, and audit trails.
 
-RESOLVER PARAMETERS:
-  Parameters can be passed in two equivalent ways:
-
-  1. Positional key=value (recommended):
-       key=value         After resolver names or on its own
-       key=@-            Read raw stdin as value for key
-       key=@file         Read raw file content as value for key
-       @file.yaml        Load parameters from a file (parsed as YAML/JSON)
-       @-                Read parameters from stdin (parsed as YAML/JSON)
-
-  2. Explicit -r/--resolver flag:
-       -r key=value      Repeatable flag
-       -r key=val1,val2  Multiple values become an array
-       -r key=@-         Read raw stdin as value for key
-       -r key=@file      Read raw file content as value for key
-       -r @file.yaml     Load parameters from a YAML file
-       -r @file.json     Load parameters from a JSON file
-       -r @-             Read parameters from stdin (YAML or JSON)
-
-  Both forms can be mixed. When the same key appears multiple
-  times, values are merged into an array rather than replaced.
-
-  Note: @- cannot be combined with -f - (both read from stdin).
-
-  Bare words (without '=') are treated as resolver names (or the solution
-  reference if -f is not provided — see SOLUTION SOURCE above).
-  Words containing '=' or starting with '@' are treated as parameters.
+` + ResolverParametersHelp + `
 
 OUTPUT FORMATS:
   table    Bordered table view (default when terminal)

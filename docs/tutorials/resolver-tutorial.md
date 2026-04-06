@@ -258,6 +258,8 @@ Output:
 ## Resolver Dependencies
 
 Resolvers can reference other resolvers using `_.resolver_name` syntax in CEL expressions.
+For names with hyphens, use bracket notation: `_["resolver-name"]`. See the
+[CEL tutorial](cel-tutorial.md) for details.
 
 ### Step 1: Create a Solution with Dependencies
 
