@@ -23,12 +23,12 @@ require (
 	github.com/google/cel-go v0.27.0
 	github.com/google/go-cmp v0.7.0
 	github.com/google/jsonschema-go v0.4.2
-	github.com/google/pprof v0.0.0-20260302011040-a15ffb7f9dcc
+	github.com/google/pprof v0.0.0-20260402051712-545e8a4df936
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/go-plugin v1.7.0
 	github.com/hashicorp/go-retryablehttp v0.7.8
 	github.com/hashicorp/hcl/v2 v2.24.0
-	github.com/mark3labs/mcp-go v0.46.0
+	github.com/mark3labs/mcp-go v0.47.0
 	github.com/oakwood-commons/kvx v0.7.5
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
@@ -42,22 +42,22 @@ require (
 	github.com/zclconf/go-cty v1.18.0
 	go.opentelemetry.io/contrib/bridges/otellogr v0.17.0
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.67.0
-	go.opentelemetry.io/otel v1.42.0
-	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc v0.18.0
-	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.42.0
-	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.42.0
-	go.opentelemetry.io/otel/exporters/prometheus v0.64.0
-	go.opentelemetry.io/otel/log v0.18.0
-	go.opentelemetry.io/otel/metric v1.42.0
-	go.opentelemetry.io/otel/sdk v1.42.0
-	go.opentelemetry.io/otel/sdk/log v0.18.0
-	go.opentelemetry.io/otel/sdk/metric v1.42.0
-	go.opentelemetry.io/otel/trace v1.42.0
+	go.opentelemetry.io/otel v1.43.0
+	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc v0.19.0
+	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.43.0
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.43.0
+	go.opentelemetry.io/otel/exporters/prometheus v0.65.0
+	go.opentelemetry.io/otel/log v0.19.0
+	go.opentelemetry.io/otel/metric v1.43.0
+	go.opentelemetry.io/otel/sdk v1.43.0
+	go.opentelemetry.io/otel/sdk/log v0.19.0
+	go.opentelemetry.io/otel/sdk/metric v1.43.0
+	go.opentelemetry.io/otel/trace v1.43.0
 	golang.org/x/crypto v0.49.0
 	golang.org/x/term v0.41.0
 	golang.org/x/text v0.35.0
-	google.golang.org/genproto/googleapis/api v0.0.0-20260319201613-d00831a3d3e7
-	google.golang.org/grpc v1.79.3
+	google.golang.org/genproto/googleapis/api v0.0.0-20260401024825-9d38bb4040a9
+	google.golang.org/grpc v1.80.0
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
 	ivan.dev/httpcache v0.1.1
@@ -110,7 +110,7 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
-	github.com/go-playground/validator/v10 v10.30.1 // indirect
+	github.com/go-playground/validator/v10 v10.30.2 // indirect
 	github.com/go-redis/cache/v8 v8.4.4 // indirect
 	github.com/go-redis/redis/v8 v8.11.5 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
@@ -136,7 +136,7 @@ require (
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/mattn/go-runewidth v0.0.21 // indirect
+	github.com/mattn/go-runewidth v0.0.22 // indirect
 	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/go-wordwrap v1.0.1 // indirect
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
@@ -184,7 +184,7 @@ require (
 	github.com/yudai/golcs v0.0.0-20170316035057-ecda9a501e82 // indirect
 	go.mongodb.org/mongo-driver/v2 v2.5.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
-	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.42.0 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.43.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.10.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
@@ -195,7 +195,7 @@ require (
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/tools v0.43.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260319201613-d00831a3d3e7 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260401024825-9d38bb4040a9 // indirect
 	moul.io/http2curl/v2 v2.3.0 // indirect
 )
 
