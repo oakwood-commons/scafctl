@@ -44,17 +44,18 @@ type Server struct {
 type ServerOption func(*serverConfig)
 
 type serverConfig struct {
-	logger          *logr.Logger
-	registry        *provider.Registry
-	authReg         *auth.Registry
-	config          *config.Config
-	version         string
-	name            string
-	ctx             context.Context
-	paginationLimit int
-	workerPoolSize  int
-	queueSize       int
-	errorLogger     *log.Logger
+	logger                   *logr.Logger
+	registry                 *provider.Registry
+	authReg                  *auth.Registry
+	config                   *config.Config
+	version                  string
+	name                     string
+	ctx                      context.Context
+	paginationLimit          int
+	workerPoolSize           int
+	queueSize                int
+	errorLogger              *log.Logger
+	supplementalInstructions string
 }
 
 // WithServerLogger sets the logger for the MCP server.
@@ -133,6 +134,30 @@ func WithQueueSize(size int) ServerOption {
 func WithErrorLog(lgr *log.Logger) ServerOption {
 	return func(c *serverConfig) {
 		c.errorLogger = lgr
+	}
+}
+
+// WithSupplementalInstructions appends additional instruction text to the
+// server instructions returned to AI agents during initialization.
+// Embedders use this to provide routing guidance for their custom tools.
+//
+// The supplemental text is appended after the base server instructions,
+// separated by a blank line. Binary-name substitution is automatically
+// applied when the server name differs from the default.
+//
+// Example:
+//
+//	srv, err := mcp.NewServer(
+//		mcp.WithServerName("mycli"),
+//		mcp.WithSupplementalInstructions(`
+//	This server includes domain-specific migration tools.
+//	Use migration tools ONLY when working with legacy solution files.
+//	For new solutions, use only the core tools above.
+//	`),
+//	)
+func WithSupplementalInstructions(instructions string) ServerOption {
+	return func(c *serverConfig) {
+		c.supplementalInstructions = instructions
 	}
 }
 
@@ -358,6 +383,20 @@ func serverInstructions(name string) string {
 	return strings.ReplaceAll(serverInstructionsTemplate, settings.CliBinaryName, name)
 }
 
+// buildInstructions combines the base server instructions with optional
+// supplemental instructions from embedders. Binary-name substitution is
+// applied to supplemental text when the server name differs from the default.
+func buildInstructions(name, supplemental string) string {
+	base := serverInstructions(name)
+	if supplemental == "" {
+		return base
+	}
+	if name != settings.CliBinaryName {
+		supplemental = strings.ReplaceAll(supplemental, settings.CliBinaryName, name)
+	}
+	return base + "\n\n" + supplemental
+}
+
 // NewServer creates a new MCP server with all tools and resources registered.
 func NewServer(opts ...ServerOption) (*Server, error) {
 	cfg := &serverConfig{
@@ -421,7 +460,7 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 		server.WithPromptCapabilities(true),
 		server.WithRecovery(),
 		server.WithResourceRecovery(),
-		server.WithInstructions(serverInstructions(cfg.name)),
+		server.WithInstructions(buildInstructions(cfg.name, cfg.supplementalInstructions)),
 		// Enable advanced protocol capabilities
 		server.WithLogging(),
 		server.WithRoots(),
