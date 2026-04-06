@@ -111,7 +111,7 @@ func (options *CmdOptionsVersion) PrintVersion(ctx context.Context) error {
 		}
 	}
 	if outOfDate {
-		lgr.V(0).Info(fmt.Sprintf("A newer version of %s is available. Please consider updating to the latest version.", options.BinaryName))
+		lgr.V(0).Info("a newer version is available, consider updating", "binary", options.BinaryName)
 	}
 	verDetails := newVersionDetails(latestVersion, options.BinaryName, options.VersionExtra)
 	customOutputFn := func(_ *terminal.IOStreams, data map[string]any) error {

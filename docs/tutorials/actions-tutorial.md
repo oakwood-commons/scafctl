@@ -594,6 +594,109 @@ With the alias `config`, you can write `config.results.region` instead of `__act
 
 ---
 
+## Resolver Execution Metadata (`__execution`)
+
+After resolvers run and before any action executes, the full resolver execution metadata is available in every action's CEL context as `__execution`. This lets actions gate on resolver outcomes, surface timing data, or adapt behavior based on how the resolver phase completed.
+
+### Shape of `__execution`
+
+`__execution` mirrors the `--show-execution` output structure:
+
+| Field | Description |
+|---|---|
+| `__execution["resolvers"]["name"].status` | Resolver outcome: `"success"`, `"failed"`, or `"skipped"` |
+| `__execution["resolvers"]["name"].phase` | Execution phase number (int) |
+| `__execution["resolvers"]["name"].duration` | Duration string, e.g. `"3ms"` |
+| `__execution["resolvers"]["name"].dependencyCount` | Number of dependencies |
+| `__execution["summary"].phaseCount` | Total number of resolver phases |
+| `__execution["summary"].resolverCount` | Number of resolvers that executed |
+| `__execution["summary"].totalDuration` | Total resolver execution duration |
+
+### Gate an Action on Resolver Success
+
+~~~yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: execution-aware-demo
+  version: 1.0.0
+spec:
+  resolvers:
+    environment:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: staging
+
+    deploy_target:
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.environment + '-cluster'"
+
+  workflow:
+    actions:
+      print-summary:
+        provider: message
+        inputs:
+          message:
+            expr: >
+              'Deploying to ' + _.environment +
+              ' -- resolver phases: ' + string(__execution['summary']['phaseCount'])
+          type: info
+
+      non-prod-deploy:
+        provider: message
+        dependsOn: [print-summary]
+        when:
+          expr: "_.environment != 'production'"
+        inputs:
+          message:
+            expr: >
+              'Deploying to ' + _.deploy_target +
+              ' (phase 1 resolver: environment, phase 2: deploy_target)'
+          type: success
+~~~
+
+Run it:
+
+{{< tabs "actions-tutorial-execution-1" >}}
+{{% tab "Bash" %}}
+```bash
+scafctl run solution -f execution-aware-demo.yaml
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution -f execution-aware-demo.yaml
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+Output (staging environment, non-production path):
+
+```
+Deploying to staging -- resolver phases: 2
+Deploying to staging-cluster (phase 1 resolver: environment, phase 2: deploy_target)
+Resolver phases: 2 | environment resolved in phase 1, deploy_target in phase 2
+```
+
+### `__execution` vs `__actions`
+
+| Variable | Available | Contents |
+|---|---|---|
+| `__execution` | All actions (always) | Resolver execution metadata |
+| `__actions["name"]` | Downstream actions only | Results from previously completed actions |
+
+> [!NOTE]
+> See `examples/solutions/execution-aware-actions/solution.yaml` for a complete working example.
+
+---
+
 ## Retry
 
 Actions can automatically retry on failure with configurable backoff strategies.
@@ -1022,10 +1125,10 @@ scafctl run solution -f foreach-demo.yaml --max-action-concurrency=2
 scafctl run solution -f hello-world.yaml --dry-run
 
 # Run resolvers only (skip actions, for debugging)
-scafctl run resolver -f conditional-demo.yaml -r environment=staging --hide-execution
+scafctl run resolver -f conditional-demo.yaml -r environment=staging
 
 # Run specific resolvers for inspection
-scafctl run resolver config -f conditional-demo.yaml -r environment=staging --hide-execution
+scafctl run resolver config -f conditional-demo.yaml -r environment=staging
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
@@ -1049,10 +1152,10 @@ scafctl run solution -f foreach-demo.yaml --max-action-concurrency=2
 scafctl run solution -f hello-world.yaml --dry-run
 
 # Run resolvers only (skip actions, for debugging)
-scafctl run resolver -f conditional-demo.yaml -r environment=staging --hide-execution
+scafctl run resolver -f conditional-demo.yaml -r environment=staging
 
 # Run specific resolvers for inspection
-scafctl run resolver config -f conditional-demo.yaml -r environment=staging --hide-execution
+scafctl run resolver config -f conditional-demo.yaml -r environment=staging
 ```
 {{% /tab %}}
 {{< /tabs >}}

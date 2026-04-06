@@ -2,8 +2,8 @@
 # Demonstrates basic CEL expressions, literal types, and resolver references.
 # This is the "Quick Start" companion for the CEL tutorial.
 #
-# Run: scafctl run resolver -f examples/resolvers/cel-basics.yaml -o json --hide-execution
-# Run: scafctl run resolver -f examples/resolvers/cel-basics.yaml -o yaml --hide-execution
+# Run: scafctl run resolver -f examples/resolvers/cel-basics.yaml -o json
+# Run: scafctl run resolver -f examples/resolvers/cel-basics.yaml -o yaml
 
 apiVersion: scafctl.io/v1
 kind: Solution

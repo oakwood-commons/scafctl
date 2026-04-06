@@ -1,0 +1,108 @@
+# Execution-Aware Actions Example
+# Demonstrates using __execution in action when conditions and inputs.
+#
+# After resolvers run, the full execution metadata is available in actions as
+# __execution. This lets you gate actions on resolver execution outcomes:
+#
+#   __execution["resolvers"]["name"].status   -- "success" | "failed" | "skipped"
+#   __execution["resolvers"]["name"].phase    -- execution phase number
+#   __execution["resolvers"]["name"].duration -- duration string e.g. "3ms"
+#   __execution["summary"].phaseCount        -- total number of phases
+#   __execution["summary"].resolverCount     -- number of resolvers that ran
+#
+# Run: scafctl run solution -f examples/solutions/execution-aware-actions/solution.yaml
+# With show-execution output: add --show-execution to see the full metadata
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: execution-aware-actions
+  version: 1.0.0
+  description: Shows how to use __execution metadata in action when conditions and inputs
+
+spec:
+  resolvers:
+    environment:
+      description: Target deployment environment
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            onError: continue
+            inputs:
+              key: environment
+          - provider: static
+            inputs:
+              value: staging
+
+    app_version:
+      description: Application version
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "2.5.0"
+
+    # A second-phase resolver that depends on environment
+    deploy_target:
+      description: Deployment target derived from environment
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.environment + '-cluster'"
+
+  workflow:
+    actions:
+      # Always runs -- shows basic resolver info from __execution
+      print-summary:
+        description: Print a deployment summary using resolver execution metadata
+        provider: message
+        inputs:
+          message:
+            expr: >
+              'Deploying ' + _.app_version + ' to ' + _.environment +
+              ' -- resolver phases: ' + string(__execution['summary']['phaseCount'])
+          type: info
+
+      # Only runs in the 'production' environment
+      prod-gate:
+        description: Gate that only runs when environment is production
+        provider: message
+        dependsOn: [print-summary]
+        when:
+          expr: "_.environment == 'production'"
+        inputs:
+          message: "Running production-only checks..."
+          type: warning
+
+      # Runs when prod-gate was SKIPPED (i.e., non-production)
+      # Demonstrates __execution combined with action status
+      non-prod-deploy:
+        description: Deploy to non-production target
+        provider: message
+        dependsOn: [print-summary]
+        when:
+          expr: "_.environment != 'production'"
+        inputs:
+          message:
+            expr: >
+              'Deploying to ' + _.deploy_target +
+              ' (resolver phase count: ' + string(__execution['summary']['phaseCount']) + ')'
+          type: success
+
+      # Show resolver phase metadata from __execution
+      show-phases:
+        description: Display resolver execution phase information
+        provider: message
+        dependsOn: [prod-gate, non-prod-deploy]
+        inputs:
+          message:
+            expr: >
+              'environment resolved in phase ' +
+              string(__execution['resolvers']['environment']['phase']) +
+              ', deploy_target in phase ' +
+              string(__execution['resolvers']['deploy_target']['phase'])
+          type: info

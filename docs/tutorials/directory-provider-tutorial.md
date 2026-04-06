@@ -56,12 +56,12 @@ Run it:
 {{< tabs "directory-provider-tutorial-cmd-1" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f list-dir.yaml -o json --hide-execution
+scafctl run resolver -f list-dir.yaml -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f list-dir.yaml -o json --hide-execution
+scafctl run resolver -f list-dir.yaml -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}

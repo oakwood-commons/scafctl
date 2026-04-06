@@ -253,6 +253,31 @@ CLI Usage Reference (use these exact flags when suggesting commands to users):
   Run tests:            scafctl test functional -f ./solution.yaml
   Run tests (verbose):  scafctl test functional -f ./solution.yaml -v
 
+Execution Metadata Flags:
+  Both 'run resolver' and 'run solution' support --show-execution to include
+  structured metadata in output. Off by default (clean output is the default).
+    --show-execution     Add '__execution' key with timing, phases, providers
+  Examples:
+    scafctl run resolver -f ./solution.yaml -o json --show-execution
+    scafctl run solution -f ./solution.yaml --show-execution
+
+CEL Context Variables (available in resolver conditions, inputs, and action when/inputs):
+  _            Map of resolved resolver values (e.g., _.environment, _.config.port)
+  __plan       Pre-execution resolver topology (available in resolvers, populated before any resolver runs):
+                 __plan["resolverName"].phase           -- execution phase (1-based int)
+                 __plan["resolverName"].dependsOn       -- dependency list (list of strings)
+                 __plan["resolverName"].dependencyCount -- number of dependencies (int)
+  __execution  Resolver execution metadata (available in actions, populated after resolvers complete):
+                 __execution["resolvers"]["name"].status   -- "success", "failed", or "skipped"
+                 __execution["resolvers"]["name"].phase    -- phase number (int)
+                 __execution["resolvers"]["name"].duration -- e.g. "3ms"
+                 __execution["summary"].phaseCount        -- total resolver phases
+                 __execution["summary"].resolverCount     -- number of resolvers that ran
+                 __execution["summary"].totalDuration     -- total resolver execution time
+  __actions    Downstream action results (available in actions, keyed by action name):
+                 __actions["name"].results -- action output
+                 __actions["name"].status  -- "succeeded", "failed", "skipped"
+
 File Conflict Strategies:
   When a solution writes files (file provider), use --on-conflict to control
   behavior when targets already exist:

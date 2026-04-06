@@ -304,52 +304,52 @@ func (v *ValueRef) ResolveWithIterationContext(ctx context.Context, resolverData
 	return nil, fmt.Errorf("empty value reference")
 }
 
-// ReferencesVariable checks if the ValueRef references a specific variable name.
-// This is useful for detecting references to __actions, __self, __item, etc.
-// For expressions, it checks both top-level variables (like __actions, __self)
-// and underscore-prefixed variables (like _.environment).
-func (v *ValueRef) ReferencesVariable(varName string) bool {
+// ReferencedVariables returns the set of all variable names referenced by this ValueRef.
+// It collects top-level variables, underscore-prefixed variables, and template references
+// in a single pass. Use this instead of calling ReferencesVariable multiple times to
+// avoid redundant expression parsing.
+func (v *ValueRef) ReferencedVariables() map[string]struct{} {
+	vars := make(map[string]struct{})
 	if v == nil {
-		return false
+		return vars
 	}
 
 	if v.Expr != nil {
-		// Check top-level variables (for __actions, __self, __item, __index)
-		topLevelVars, err := v.Expr.RequiredVariables(context.TODO())
-		if err == nil {
-			for _, vn := range topLevelVars {
-				if vn == varName {
-					return true
-				}
+		if topLevel, err := v.Expr.RequiredVariables(context.TODO()); err == nil {
+			for _, vn := range topLevel {
+				vars[vn] = struct{}{}
 			}
 		}
-
-		// Also check underscore-prefixed variables (for _.resolver references)
-		underscoreVars, err := v.Expr.GetUnderscoreVariables(context.TODO())
-		if err == nil {
-			for _, vn := range underscoreVars {
-				if vn == varName {
-					return true
-				}
+		if underscore, err := v.Expr.GetUnderscoreVariables(context.TODO()); err == nil {
+			for _, vn := range underscore {
+				vars[vn] = struct{}{}
 			}
 		}
 	}
 
 	if v.Tmpl != nil {
-		refs, err := gotmpl.GetGoTemplateReferences(string(*v.Tmpl), "", "")
-		if err == nil {
+		if refs, err := gotmpl.GetGoTemplateReferences(string(*v.Tmpl), "", ""); err == nil {
 			for _, ref := range refs {
-				// Template paths start with "." (e.g., ".__actions.build.results")
-				// Strip the leading dot for comparison
 				path := strings.TrimPrefix(ref.Path, ".")
-				// Check if the path equals the variable name or starts with it followed by a dot
-				// e.g., for varName "__actions", match paths like "__actions" or "__actions.build.results"
-				if path == varName || strings.HasPrefix(path, varName+".") {
-					return true
+				// Extract the root variable name (before the first dot)
+				if idx := strings.Index(path, "."); idx >= 0 {
+					vars[path[:idx]] = struct{}{}
+				} else {
+					vars[path] = struct{}{}
 				}
 			}
 		}
 	}
 
-	return false
+	return vars
+}
+
+// ReferencesVariable checks if the ValueRef references a specific variable name.
+// This is useful for detecting references to __actions, __self, __item, etc.
+// For expressions, it checks both top-level variables (like __actions, __self)
+// and underscore-prefixed variables (like _.environment).
+func (v *ValueRef) ReferencesVariable(varName string) bool {
+	vars := v.ReferencedVariables()
+	_, ok := vars[varName]
+	return ok
 }

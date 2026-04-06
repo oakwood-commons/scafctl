@@ -1,0 +1,144 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-resolver-plan
+  version: 1.0.0
+  description: |
+    Functional tests for __plan pre-execution topology data.
+    Verifies that __plan is injected before execution and contains
+    correct phase, dependsOn, and dependencyCount for each resolver.
+
+spec:
+  resolvers:
+    base_url:
+      description: Base URL (phase 1, no dependencies)
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: https://api.example.com
+
+    region:
+      description: Region (phase 1, no dependencies)
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: us-east-1
+
+    endpoint:
+      description: Full endpoint (phase 2, depends on base_url)
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.base_url + '/v2'"
+
+    # Uses __plan to verify topology before resolving
+    plan_phase:
+      description: Phase number of 'endpoint' from __plan
+      type: int
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "__plan['endpoint'].phase"
+
+    plan_dep_count:
+      description: Dependency count of 'endpoint' from __plan
+      type: int
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "__plan['endpoint'].dependencyCount"
+
+    plan_base_url_phase:
+      description: Phase of base_url from __plan (should be 1 -- no deps)
+      type: int
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "__plan['base_url'].phase"
+
+    # Conditional resolver: only runs when endpoint has dependencies
+    conditional_on_plan:
+      description: Only resolves when endpoint has at least one dependency
+      type: string
+      when:
+        expr: "__plan['endpoint'].dependencyCount > 0"
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "endpoint-has-deps"
+
+    # Conditional resolver: only runs when base_url has NO dependencies
+    standalone_check:
+      description: Only resolves when base_url has no dependencies
+      type: string
+      when:
+        expr: "__plan['base_url'].dependencyCount == 0"
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "base_url-is-standalone"
+
+  testing:
+    config:
+      skipBuiltins: [render-defaults]
+
+    cases:
+      _base:
+        description: Base template for __plan tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [resolver, plan]
+        assertions:
+          - expression: __exitCode == 0
+
+      plan-phase-assignment:
+        description: endpoint should be in phase 2 (depends on base_url which is phase 1)
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.plan_phase == 2
+            message: "endpoint should be assigned to phase 2"
+          - expression: __output.plan_base_url_phase == 1
+            message: "base_url should be assigned to phase 1 (no dependencies)"
+
+      plan-dependency-count:
+        description: endpoint.dependencyCount should be 1
+        extends: [_base]
+        assertions:
+          - expression: __output.plan_dep_count == 1
+            message: "endpoint should report 1 dependency"
+
+      plan-conditional-with-deps:
+        description: conditional_on_plan resolves when endpoint has deps
+        extends: [_base]
+        assertions:
+          - expression: __output.conditional_on_plan == "endpoint-has-deps"
+            message: "conditional_on_plan should resolve when dependencyCount > 0"
+
+      plan-conditional-standalone:
+        description: standalone_check resolves when base_url has no deps
+        extends: [_base]
+        assertions:
+          - expression: __output.standalone_check == "base_url-is-standalone"
+            message: "standalone_check should resolve when base_url.dependencyCount == 0"
+
+      plan-available-pre-execution:
+        description: Verify __plan values are available even for phase-1 resolvers
+        extends: [_base]
+        assertions:
+          - expression: __output.plan_base_url_phase == 1
+            message: "__plan should be available before base_url runs (phase 1)"
+          - expression: __output.plan_dep_count == 1
+            message: "__plan dependency count should reflect static topology"

@@ -2,8 +2,8 @@
 # Demonstrates real-world patterns: conditionals, string interpolation,
 # map building, default merging, list transforms, and resource generation.
 #
-# Run: scafctl run resolver -f examples/resolvers/cel-common-patterns.yaml -o json --hide-execution
-# Run: scafctl run resolver -f examples/resolvers/cel-common-patterns.yaml -o yaml --hide-execution
+# Run: scafctl run resolver -f examples/resolvers/cel-common-patterns.yaml -o json
+# Run: scafctl run resolver -f examples/resolvers/cel-common-patterns.yaml -o yaml
 
 apiVersion: scafctl.io/v1
 kind: Solution

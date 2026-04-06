@@ -228,18 +228,23 @@ func (e *Executor) Execute(ctx context.Context, resolvers []*Resolver, params ma
 	lookup := e.registry.DescriptorLookup()
 
 	// Build execution phases
-	phases, err := BuildPhases(resolvers, lookup)
+	buildResult, err := BuildPhases(resolvers, lookup)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		return ctx, fmt.Errorf("failed to build execution phases: %w", err)
 	}
 
-	lgr.V(1).Info("resolver execution plan", "phases", len(phases))
+	lgr.V(1).Info("resolver execution plan", "phases", len(buildResult.Phases))
 
 	// Create resolver context
 	resolverCtx := NewContext()
 	ctx = WithContext(ctx, resolverCtx)
+
+	// Inject pre-execution plan topology as __plan so resolvers can reference
+	// phase number, dependency list, and dependency count in when conditions
+	// and provider inputs before any resolver executes.
+	resolverCtx.Set(celexp.VarPlan, buildResult.Plan.ToMap())
 
 	// Add parameters to context for parameter provider
 	ctx = provider.WithParameters(ctx, params)
@@ -256,16 +261,12 @@ func (e *Executor) Execute(ctx context.Context, resolvers []*Resolver, params ma
 		aggregatedError = &AggregatedExecutionError{}
 	}
 
-	// Build dependency map for all resolvers (used in validate-all mode)
-	depsMap := make(map[string][]string)
-	for _, phase := range phases {
-		for _, r := range phase.Resolvers {
-			depsMap[r.Name] = extractDependencies(r, lookup)
-		}
-	}
+	// Build dependency map for all resolvers (used in validate-all mode).
+	// Re-use the deps map already computed by BuildPhases.
+	depsMap := buildResult.Deps
 
 	// Execute phases sequentially
-	for _, phase := range phases {
+	for _, phase := range buildResult.Phases {
 		lgr.V(1).Info("executing resolver phase",
 			"phase", phase.Phase,
 			"resolvers", len(phase.Resolvers))
@@ -293,7 +294,7 @@ func (e *Executor) Execute(ctx context.Context, resolvers []*Resolver, params ma
 		}
 	}
 
-	lgr.V(1).Info("resolver execution complete", "total_phases", len(phases))
+	lgr.V(1).Info("resolver execution complete", "total_phases", len(buildResult.Phases))
 
 	// In validate-all mode, return aggregated error if there were any failures
 	if e.validateAll && aggregatedError != nil && aggregatedError.HasErrors() {
@@ -724,8 +725,16 @@ func (e *Executor) evaluateCondition(ctx context.Context, cond *Condition) (bool
 	// Get resolver data for CEL evaluation
 	data := resolverCtx.ToMap()
 
+	// Promote __plan to a top-level CEL variable so when conditions can use
+	// __plan["resolverName"].phase rather than _["__plan"]["resolverName"]["phase"].
+	additionalVars := map[string]any{}
+	if plan, ok := data[celexp.VarPlan]; ok {
+		additionalVars[celexp.VarPlan] = plan
+		delete(data, celexp.VarPlan)
+	}
+
 	// Evaluate the CEL expression
-	result, err := celexp.EvaluateExpression(ctx, string(*cond.Expr), data, nil)
+	result, err := celexp.EvaluateExpression(ctx, string(*cond.Expr), data, additionalVars)
 	if err != nil {
 		return false, fmt.Errorf("condition evaluation failed: %w", err)
 	}
@@ -752,9 +761,14 @@ func (e *Executor) evaluateConditionWithSelf(ctx context.Context, cond *Conditio
 	// Get resolver data for CEL evaluation
 	data := resolverCtx.ToMap()
 
-	// Pass __self as an additional variable so it's available as a top-level CEL variable
+	// Pass __self as an additional variable so it's available as a top-level CEL variable.
+	// Also promote __plan so until: conditions can reference topology data.
 	additionalVars := map[string]any{
 		celexp.VarSelf: self,
+	}
+	if plan, ok := data[celexp.VarPlan]; ok {
+		additionalVars[celexp.VarPlan] = plan
+		delete(data, celexp.VarPlan)
 	}
 
 	// Evaluate the CEL expression

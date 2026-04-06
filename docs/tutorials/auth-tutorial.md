@@ -1711,7 +1711,7 @@ Run it (requires prior authentication via `scafctl auth login entra`):
 scafctl auth login entra --scope https://graph.microsoft.com/User.Read
 
 # Then run the resolver
-scafctl run resolver -f graph-example.yaml -o json --hide-execution
+scafctl run resolver -f graph-example.yaml -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
@@ -1720,7 +1720,7 @@ scafctl run resolver -f graph-example.yaml -o json --hide-execution
 scafctl auth login entra --scope https://graph.microsoft.com/User.Read
 
 # Then run the resolver
-scafctl run resolver -f graph-example.yaml -o json --hide-execution
+scafctl run resolver -f graph-example.yaml -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1825,7 +1825,7 @@ Run it (requires prior authentication):
 scafctl auth login github
 
 # Run the resolver
-scafctl run resolver -f github-repos.yaml -o json --hide-execution
+scafctl run resolver -f github-repos.yaml -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
@@ -1834,7 +1834,7 @@ scafctl run resolver -f github-repos.yaml -o json --hide-execution
 scafctl auth login github
 
 # Run the resolver
-scafctl run resolver -f github-repos.yaml -o json --hide-execution
+scafctl run resolver -f github-repos.yaml -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}

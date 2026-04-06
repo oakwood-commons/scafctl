@@ -1,0 +1,80 @@
+# Plan-Aware Resolvers Example
+# Demonstrates using __plan to conditionally execute resolvers based on
+# pre-execution topology data (phase, dependencies, dependency count).
+#
+# __plan is injected before any resolver executes. Each resolver can access
+# its own or any other resolver's topology using __plan["resolverName"]:
+#
+#   __plan["resolverName"].phase           -- execution phase number (1-based)
+#   __plan["resolverName"].dependsOn       -- effective dependency list
+#   __plan["resolverName"].dependencyCount -- number of dependencies
+#
+# Run: scafctl run resolver -f plan-aware.yaml -o json
+# Run with debug: scafctl run resolver -f plan-aware.yaml -o json --show-execution
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: plan-aware-example
+  version: 1.0.0
+  description: Shows how resolvers can reference __plan topology data
+
+spec:
+  resolvers:
+    # Phase 1: no dependencies
+    base_url:
+      description: Base API URL
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: https://api.example.com
+
+    # Phase 1: no dependencies
+    region:
+      description: Deployment region
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: us-east-1
+
+    # Phase 2: depends on base_url
+    endpoint:
+      description: Full API endpoint
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.base_url + '/v2/data'"
+
+    # Only resolves when it has at least one dependency (guards against
+    # misconfiguration where this resolver was inadvertently made standalone)
+    dependent_check:
+      description: Verifies that this resolver executes after its dependencies
+      type: string
+      when:
+        expr: "__plan['endpoint'].dependencyCount > 0"
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >-
+                'endpoint is in phase ' + string(__plan['endpoint'].phase) +
+                ' with ' + string(__plan['endpoint'].dependencyCount) + ' dep(s)'
+
+    # Only resolve expensive config when running in a late phase
+    # (i.e., only when other resolvers actually depend on this one)
+    phase_summary:
+      description: Summary of the execution plan phases
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >-
+                'base_url: phase ' + string(__plan['base_url'].phase) +
+                ', endpoint: phase ' + string(__plan['endpoint'].phase)

@@ -180,6 +180,7 @@ func TestSanitizeBinaryName(t *testing.T) {
 		{name: "spaces replaced", raw: "my cli", want: "my_cli"},
 		{name: "empty string", raw: "", want: CliBinaryName},
 		{name: "dot only", raw: ".", want: CliBinaryName},
+		{name: "double dot", raw: "..", want: CliBinaryName},
 		{name: "path separators only", raw: "///", want: CliBinaryName},
 	}
 	for _, tt := range tests {

@@ -16,6 +16,46 @@ type PhaseGroup struct {
 	Resolvers []*Resolver `json:"resolvers" yaml:"resolvers" doc:"Resolvers in this phase" minItems:"1"`
 }
 
+// Plan holds pre-execution static topology data for a single resolver.
+// It is populated after DAG construction and before any resolver executes.
+type Plan struct {
+	Phase           int      `json:"phase"           yaml:"phase"           doc:"Execution phase number (1-based)" minimum:"1"`
+	DependsOn       []string `json:"dependsOn"       yaml:"dependsOn"       doc:"Effective dependencies after provider extraction" maxItems:"1000"`
+	DependencyCount int      `json:"dependencyCount" yaml:"dependencyCount" doc:"Number of effective dependencies" minimum:"0"`
+}
+
+// PlanData is a pre-execution snapshot of resolver topology, keyed by resolver name.
+// It is injected into the resolver context as __plan before any resolver executes,
+// making topology data available in when conditions and provider inputs.
+type PlanData map[string]Plan
+
+// ToMap converts PlanData into a map[string]any suitable for injection into the
+// resolver CEL context. Each Plan is converted to a map[string]any with
+// keys "phase", "dependsOn", and "dependencyCount".
+func (p PlanData) ToMap() map[string]any {
+	out := make(map[string]any, len(p))
+	for name, rp := range p {
+		deps := rp.DependsOn
+		if deps == nil {
+			deps = []string{}
+		}
+		out[name] = map[string]any{
+			"phase":           rp.Phase,
+			"dependsOn":       deps,
+			"dependencyCount": rp.DependencyCount,
+		}
+	}
+	return out
+}
+
+// BuildResult is the output of BuildPhases, bundling the phase groups with the
+// pre-execution plan topology so callers can inject __plan without re-computing deps.
+type BuildResult struct {
+	Phases []*PhaseGroup       `json:"phases" yaml:"phases" doc:"Execution phase groups"`
+	Plan   PlanData            `json:"plan"   yaml:"plan"   doc:"Pre-execution resolver topology snapshot"`
+	Deps   map[string][]string `json:"-"      yaml:"-"      doc:"Effective dependency map (reusable by callers)"`
+}
+
 // resolverDagObject implements the dag.Object interface for resolvers
 type resolverDagObject struct {
 	resolver *Resolver
@@ -56,9 +96,14 @@ func (r *resolverObjectsWithLookup) DagItems() []dag.Object {
 // Phase numbers are 1-based, with phase 1 being root resolvers (no dependencies).
 // If lookup is provided, provider-specific ExtractDependencies functions will be used
 // when available for more accurate dependency detection.
-func BuildPhases(resolvers []*Resolver, lookup DescriptorLookup) ([]*PhaseGroup, error) {
+// The returned BuildResult includes both the phase groups and PlanData — a static
+// topology snapshot that can be injected as __plan before execution begins.
+func BuildPhases(resolvers []*Resolver, lookup DescriptorLookup) (*BuildResult, error) {
 	if len(resolvers) == 0 {
-		return []*PhaseGroup{}, nil
+		return &BuildResult{
+			Phases: []*PhaseGroup{},
+			Plan:   PlanData{},
+		}, nil
 	}
 
 	// Build dependency map
@@ -131,7 +176,27 @@ func BuildPhases(resolvers []*Resolver, lookup DescriptorLookup) ([]*PhaseGroup,
 		return nil, fmt.Errorf("not all resolvers were grouped into phases; missing: %v", missing)
 	}
 
-	return phases, nil
+	// Build PlanData from the computed phases and deps map
+	plan := make(PlanData, len(resolvers))
+	for _, pg := range phases {
+		for _, r := range pg.Resolvers {
+			d := deps[r.Name]
+			if d == nil {
+				d = []string{}
+			}
+			plan[r.Name] = Plan{
+				Phase:           pg.Phase,
+				DependsOn:       d,
+				DependencyCount: len(d),
+			}
+		}
+	}
+
+	return &BuildResult{
+		Phases: phases,
+		Plan:   plan,
+		Deps:   deps,
+	}, nil
 }
 
 // GetPhaseForResolver returns the phase number for a given resolver name

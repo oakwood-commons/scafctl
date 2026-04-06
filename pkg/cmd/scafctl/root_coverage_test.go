@@ -317,6 +317,7 @@ func TestRoot_BinaryName_EnvPrefix_Hyphen(t *testing.T) {
 
 // TestRoot_PreRunHook_Called verifies that PreRunHook is invoked during PersistentPreRun.
 func TestRoot_PreRunHook_Called(t *testing.T) {
+	t.Parallel()
 	hookCalled := false
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	cmd := Root(&RootOptions{
@@ -335,6 +336,7 @@ func TestRoot_PreRunHook_Called(t *testing.T) {
 
 // TestRoot_PreRunHook_Nil verifies that nil PreRunHook is a no-op.
 func TestRoot_PreRunHook_Nil(t *testing.T) {
+	t.Parallel()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	cmd := Root(&RootOptions{IOStreams: ioStreams, PreRunHook: nil})
 	cmd.SetArgs([]string{"version"})
@@ -345,6 +347,7 @@ func TestRoot_PreRunHook_Nil(t *testing.T) {
 
 // TestRoot_VersionExtra verifies that VersionExtra is passed to the version command.
 func TestRoot_VersionExtra(t *testing.T) {
+	t.Parallel()
 	ioStreams, out, _ := terminal.NewTestIOStreams()
 	cmd := Root(&RootOptions{
 		IOStreams:  ioStreams,
@@ -375,6 +378,7 @@ func TestNewRootOptions_NewFields(t *testing.T) {
 
 // TestRoot_PreRunHook_Error verifies that PreRunHook errors are surfaced.
 func TestRoot_PreRunHook_Error(t *testing.T) {
+	t.Parallel()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	exitCalled := false
 	cmd := Root(&RootOptions{

@@ -11,7 +11,7 @@
 # Setting `keepSkipped: true` retains nil entries so the output array remains
 # index-aligned with the input array.
 #
-# Run: scafctl run resolver -f examples/resolvers/foreach-filter.yaml -o json --hide-execution
+# Run: scafctl run resolver -f examples/resolvers/foreach-filter.yaml -o json
 
 apiVersion: scafctl.io/v1
 kind: Solution

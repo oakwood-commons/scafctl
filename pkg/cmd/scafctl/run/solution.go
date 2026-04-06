@@ -421,9 +421,15 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// Get effective action config (CLI flags override app config)
 	actionCfg := o.getEffectiveActionConfig(ctx)
 
+	// Build execution metadata before constructing the action executor so it can be
+	// injected as __execution into action when conditions and provider inputs,
+	// regardless of whether --show-execution is set for resolver output display.
+	resolverExecutionData := execute.BuildExecutionData(resolverCtx, resolvers, resolverElapsed)
+
 	actionExecutor := action.NewExecutor(
 		action.WithRegistry(actionAdapter),
 		action.WithResolverData(resolverData),
+		action.WithExecutionData(resolverExecutionData),
 		action.WithProgressCallback(actionProgressCallback),
 		action.WithDefaultTimeout(actionCfg.DefaultTimeout),
 		action.WithGracePeriod(actionCfg.GracePeriod),
@@ -437,10 +443,10 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		return o.exitWithCode(ctx, fmt.Errorf("action execution failed: %w", err), exitcode.ActionFailed)
 	}
 
-	// Build and write output
+	// Build and write output — only include __execution in output when --show-execution is set
 	var executionData map[string]any
 	if o.ShowExecution {
-		executionData = execute.BuildExecutionData(resolverCtx, resolvers, resolverElapsed)
+		executionData = resolverExecutionData
 	}
 	return o.writeActionOutput(ctx, result, executionData)
 }

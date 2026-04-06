@@ -5,7 +5,6 @@ package test
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -28,7 +27,7 @@ SUBCOMMANDS:
 Functional tests validate that solutions behave correctly by executing
 scafctl commands against them and checking the output. Tests are defined
 inline in solution YAML under spec.testing.cases or in separate test files
-under a tests/ directory.`, strings.SplitN(path, "/", 2)[0]),
+under a tests/ directory.`, path),
 		SilenceUsage: true,
 	}
 

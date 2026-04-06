@@ -4,6 +4,7 @@
 package resolver
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -511,7 +512,7 @@ func TestBuildPhases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			phases, err := BuildPhases(tt.resolvers, nil)
+			result, err := BuildPhases(tt.resolvers, nil)
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -519,12 +520,206 @@ func TestBuildPhases(t *testing.T) {
 			}
 
 			require.NoError(t, err)
-			require.NotNil(t, phases)
+			require.NotNil(t, result)
 
 			if tt.validate != nil {
-				tt.validate(t, phases)
+				tt.validate(t, result.Phases)
 			}
 		})
+	}
+}
+
+func TestBuildPhases_PlanData(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		resolvers []*Resolver
+		wantErr   bool
+		validate  func(t *testing.T, plan PlanData)
+	}{
+		{
+			name:      "empty resolvers returns empty plan",
+			resolvers: []*Resolver{},
+			validate: func(t *testing.T, plan PlanData) {
+				assert.Empty(t, plan)
+			},
+		},
+		{
+			name: "root resolver has phase 1 and no deps",
+			resolvers: []*Resolver{
+				{
+					Name: "root",
+					Resolve: &ResolvePhase{
+						With: []ProviderSource{
+							{Provider: "static", Inputs: map[string]*ValueRef{"value": {Literal: "v"}}},
+						},
+					},
+				},
+			},
+			validate: func(t *testing.T, plan PlanData) {
+				require.Contains(t, plan, "root")
+				rp := plan["root"]
+				assert.Equal(t, 1, rp.Phase)
+				assert.Empty(t, rp.DependsOn)
+				assert.Equal(t, 0, rp.DependencyCount)
+			},
+		},
+		{
+			name: "dependent resolver reflects correct phase and deps",
+			resolvers: []*Resolver{
+				{
+					Name: "base",
+					Resolve: &ResolvePhase{
+						With: []ProviderSource{
+							{Provider: "static", Inputs: map[string]*ValueRef{"value": {Literal: "b"}}},
+						},
+					},
+				},
+				{
+					Name: "child",
+					Resolve: &ResolvePhase{
+						With: []ProviderSource{
+							{Provider: "cel", Inputs: map[string]*ValueRef{"value": {Resolver: stringPtr("base")}}},
+						},
+					},
+				},
+			},
+			validate: func(t *testing.T, plan PlanData) {
+				require.Contains(t, plan, "base")
+				require.Contains(t, plan, "child")
+
+				basePlan := plan["base"]
+				assert.Equal(t, 1, basePlan.Phase)
+				assert.Empty(t, basePlan.DependsOn)
+				assert.Equal(t, 0, basePlan.DependencyCount)
+
+				childPlan := plan["child"]
+				assert.Equal(t, 2, childPlan.Phase)
+				assert.Equal(t, []string{"base"}, childPlan.DependsOn)
+				assert.Equal(t, 1, childPlan.DependencyCount)
+			},
+		},
+		{
+			name: "three-level chain phases are correct",
+			resolvers: []*Resolver{
+				{
+					Name: "l1",
+					Resolve: &ResolvePhase{
+						With: []ProviderSource{
+							{Provider: "static", Inputs: map[string]*ValueRef{"value": {Literal: "l1"}}},
+						},
+					},
+				},
+				{
+					Name: "l2",
+					Resolve: &ResolvePhase{
+						With: []ProviderSource{
+							{Provider: "cel", Inputs: map[string]*ValueRef{"value": {Resolver: stringPtr("l1")}}},
+						},
+					},
+				},
+				{
+					Name: "l3",
+					Resolve: &ResolvePhase{
+						With: []ProviderSource{
+							{Provider: "cel", Inputs: map[string]*ValueRef{"value": {Resolver: stringPtr("l2")}}},
+						},
+					},
+				},
+			},
+			validate: func(t *testing.T, plan PlanData) {
+				assert.Equal(t, 1, plan["l1"].Phase)
+				assert.Equal(t, 2, plan["l2"].Phase)
+				assert.Equal(t, 3, plan["l3"].Phase)
+				assert.Equal(t, 0, plan["l1"].DependencyCount)
+				assert.Equal(t, 1, plan["l2"].DependencyCount)
+				assert.Equal(t, 1, plan["l3"].DependencyCount)
+			},
+		},
+		{
+			name: "parallel resolvers share the same phase in plan",
+			resolvers: []*Resolver{
+				{
+					Name: "a",
+					Resolve: &ResolvePhase{
+						With: []ProviderSource{
+							{Provider: "static", Inputs: map[string]*ValueRef{"value": {Literal: "a"}}},
+						},
+					},
+				},
+				{
+					Name: "b",
+					Resolve: &ResolvePhase{
+						With: []ProviderSource{
+							{Provider: "static", Inputs: map[string]*ValueRef{"value": {Literal: "b"}}},
+						},
+					},
+				},
+				{
+					Name: "c",
+					Resolve: &ResolvePhase{
+						With: []ProviderSource{
+							{
+								Provider: "cel",
+								Inputs: map[string]*ValueRef{
+									"a": {Resolver: stringPtr("a")},
+									"b": {Resolver: stringPtr("b")},
+								},
+							},
+						},
+					},
+				},
+			},
+			validate: func(t *testing.T, plan PlanData) {
+				assert.Equal(t, 1, plan["a"].Phase)
+				assert.Equal(t, 1, plan["b"].Phase)
+				assert.Equal(t, 2, plan["c"].Phase)
+				assert.Equal(t, 2, plan["c"].DependencyCount)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result, err := BuildPhases(tt.resolvers, nil)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			tt.validate(t, result.Plan)
+		})
+	}
+}
+
+func BenchmarkBuildPhases_WithPlan(b *testing.B) {
+	resolvers := make([]*Resolver, 0, 10)
+	resolvers = append(resolvers, &Resolver{
+		Name: "root",
+		Resolve: &ResolvePhase{
+			With: []ProviderSource{{Provider: "static", Inputs: map[string]*ValueRef{"value": {Literal: "v"}}}},
+		},
+	})
+	for i := 1; i < 10; i++ {
+		prev := resolvers[i-1].Name
+		resolvers = append(resolvers, &Resolver{
+			Name: fmt.Sprintf("r%d", i),
+			Resolve: &ResolvePhase{
+				With: []ProviderSource{
+					{Provider: "cel", Inputs: map[string]*ValueRef{"value": {Resolver: &prev}}},
+				},
+			},
+		})
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = BuildPhases(resolvers, nil)
 	}
 }
 
@@ -669,9 +864,9 @@ func TestGetResolversInPhase(t *testing.T) {
 }
 
 func TestBuildPhases_EmptyResolvers(t *testing.T) {
-	phases, err := BuildPhases([]*Resolver{}, nil)
+	result, err := BuildPhases([]*Resolver{}, nil)
 	require.NoError(t, err)
-	assert.Empty(t, phases)
+	assert.Empty(t, result.Phases)
 }
 
 func TestBuildPhases_StandaloneResolver(t *testing.T) {
@@ -682,11 +877,11 @@ func TestBuildPhases_StandaloneResolver(t *testing.T) {
 		},
 	}
 
-	phases, err := BuildPhases(resolvers, nil)
+	result, err := BuildPhases(resolvers, nil)
 	require.NoError(t, err)
-	assert.Len(t, phases, 1)
-	assert.Equal(t, 1, phases[0].Phase)
-	assert.Len(t, phases[0].Resolvers, 1)
+	assert.Len(t, result.Phases, 1)
+	assert.Equal(t, 1, result.Phases[0].Phase)
+	assert.Len(t, result.Phases[0].Resolvers, 1)
 }
 
 func TestResolverDagObject_GetDependencyKeys(t *testing.T) {

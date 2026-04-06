@@ -827,11 +827,11 @@ scafctl run resolver -f solution.yaml
 # Run specific resolvers (with their transitive dependencies)
 scafctl run resolver db config -f solution.yaml
 
-# JSON output (includes __execution metadata by default)
+# JSON output (resolver values only, no execution metadata)
 scafctl run resolver -f solution.yaml -o json
 
-# JSON output without __execution metadata
-scafctl run resolver -f solution.yaml -o json --hide-execution
+# JSON output with __execution metadata (phases, timing, providers)
+scafctl run resolver -f solution.yaml -o json
 
 # Skip transform and validation phases
 scafctl run resolver --skip-transform -f solution.yaml

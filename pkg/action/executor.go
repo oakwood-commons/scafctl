@@ -30,6 +30,11 @@ type Executor struct {
 	// resolverData contains resolved data from the resolver phase
 	resolverData map[string]any
 
+	// executionData contains resolver execution metadata (phases, timing, providers).
+	// When set, it is injected as __execution into action when conditions and inputs,
+	// allowing actions to inspect how resolvers ran (status, duration, phase, etc.).
+	executionData map[string]any
+
 	// actionContext manages the __actions namespace
 	actionContext *Context
 
@@ -71,6 +76,15 @@ func WithRegistry(registry RegistryInterface) ExecutorOption {
 func WithResolverData(data map[string]any) ExecutorOption {
 	return func(e *Executor) {
 		e.resolverData = data
+	}
+}
+
+// WithExecutionData sets the resolver execution metadata for action contexts.
+// When set, the data is injected as __execution into action when conditions and
+// provider inputs, allowing actions to read resolver status, duration, and phase.
+func WithExecutionData(data map[string]any) ExecutorOption {
+	return func(e *Executor) {
+		e.executionData = data
 	}
 }
 
@@ -665,6 +679,12 @@ func (e *Executor) buildAdditionalVars(aliasMap map[string]string) map[string]an
 	additionalVars := map[string]any{
 		celexp.VarActions: namespace,
 		celexp.VarCwd:     e.cwd,
+	}
+
+	// Inject resolver execution metadata when available so action when conditions
+	// and provider inputs can read __execution.resolvers.<name>.status, duration, etc.
+	if e.executionData != nil {
+		additionalVars[celexp.VarExecution] = e.executionData
 	}
 
 	// Add aliases as top-level variables

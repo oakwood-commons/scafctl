@@ -1099,3 +1099,64 @@ func TestExecutor_GetContext(t *testing.T) {
 	assert.NotNil(t, ctx)
 	assert.Equal(t, e.actionContext, ctx)
 }
+
+func TestWithExecutionData(t *testing.T) {
+	t.Parallel()
+
+	execData := map[string]any{
+		"resolvers": map[string]any{
+			"myResolver": map[string]any{
+				"status":   "success",
+				"duration": "1.2s",
+				"phase":    float64(1),
+			},
+		},
+	}
+
+	e := NewExecutor(WithExecutionData(execData))
+	assert.Equal(t, execData, e.executionData)
+}
+
+func TestWithExecutionData_NilSafe(t *testing.T) {
+	t.Parallel()
+
+	e := NewExecutor()
+	assert.Nil(t, e.executionData)
+
+	// buildAdditionalVars should not include __execution when nil
+	vars := e.buildAdditionalVars(nil)
+	_, hasExecution := vars["__execution"]
+	assert.False(t, hasExecution, "__execution should not be injected when executionData is nil")
+}
+
+func TestBuildAdditionalVars_InjectsExecution(t *testing.T) {
+	t.Parallel()
+
+	execData := map[string]any{
+		"resolvers": map[string]any{
+			"build": map[string]any{"status": "success"},
+		},
+	}
+
+	e := NewExecutor(WithExecutionData(execData))
+	vars := e.buildAdditionalVars(nil)
+
+	execution, ok := vars["__execution"]
+	assert.True(t, ok, "__execution should be present when executionData is set")
+	assert.Equal(t, execData, execution)
+}
+
+func TestBuildAdditionalVars_ExecutionDoesNotOverrideActions(t *testing.T) {
+	t.Parallel()
+
+	execData := map[string]any{"resolvers": map[string]any{}}
+
+	e := NewExecutor(WithExecutionData(execData))
+	vars := e.buildAdditionalVars(nil)
+
+	// both __actions and __execution must coexist
+	_, hasActions := vars["__actions"]
+	_, hasExecution := vars["__execution"]
+	assert.True(t, hasActions)
+	assert.True(t, hasExecution)
+}

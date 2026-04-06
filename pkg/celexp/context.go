@@ -37,6 +37,17 @@ const (
 	// VarCwd is the variable name for the original working directory in action contexts.
 	// Access via __cwd in CEL expressions when --output-dir redirects action output.
 	VarCwd = "__cwd"
+
+	// VarExecution is the variable name for resolver execution metadata in action contexts.
+	// Available via __execution when --show-execution was used or when injected explicitly.
+	// Example: __execution.resolvers.myResolver.status
+	VarExecution = "__execution"
+
+	// VarPlan is the variable name for pre-execution resolver topology data.
+	// Injected before any resolver runs so resolvers can reference phase, dependsOn,
+	// and dependencyCount for any resolver in when conditions and provider inputs.
+	// Example: __plan["myResolver"].phase
+	VarPlan = "__plan"
 )
 
 // BuildCELContext creates CEL environment options and variables for evaluation.

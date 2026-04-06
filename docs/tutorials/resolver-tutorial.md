@@ -398,12 +398,12 @@ Run it:
 {{< tabs "resolver-tutorial-cmd-5" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f transform.yaml -o json --hide-execution
+scafctl run resolver -f transform.yaml -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f transform.yaml -o json --hide-execution
+scafctl run resolver -f transform.yaml -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -417,7 +417,7 @@ Output:
 ```
 
 > [!NOTE]
-> **Tip**: `scafctl run resolver -o json` includes `__execution` metadata by default. Use `--hide-execution` for cleaner output. All examples in this tutorial use `--hide-execution`. See the [Run Resolver Tutorial](run-resolver-tutorial.md) for details on the execution metadata.
+> **Tip**: `scafctl run resolver -o json` outputs only resolver values by default. Pass `--show-execution` to include `__execution` metadata (phases, timing, provider info). 
 
 The value was trimmed of whitespace, then lowercased — each transform step feeds into the next.
 
@@ -460,12 +460,12 @@ Run it:
 {{< tabs "resolver-tutorial-cmd-6" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f enrich.yaml -o json --hide-execution
+scafctl run resolver -f enrich.yaml -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f enrich.yaml -o json --hide-execution
+scafctl run resolver -f enrich.yaml -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -527,12 +527,12 @@ Run it with a valid port:
 {{< tabs "resolver-tutorial-cmd-7" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f validated-config.yaml -r port=8080 -o json --hide-execution
+scafctl run resolver -f validated-config.yaml -r port=8080 -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f validated-config.yaml -r port=8080 -o json --hide-execution
+scafctl run resolver -f validated-config.yaml -r port=8080 -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -609,12 +609,12 @@ Run it:
 {{< tabs "resolver-tutorial-cmd-9" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f email-validator.yaml -o json --hide-execution
+scafctl run resolver -f email-validator.yaml -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f email-validator.yaml -o json --hide-execution
+scafctl run resolver -f email-validator.yaml -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -632,12 +632,12 @@ Now try an invalid value that fails **both** validations — not a valid email f
 {{< tabs "resolver-tutorial-cmd-10" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f email-validator.yaml -r email="not-an-email.test" -o json --hide-execution
+scafctl run resolver -f email-validator.yaml -r email="not-an-email.test" -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f email-validator.yaml -r email="not-an-email.test" -o json --hide-execution
+scafctl run resolver -f email-validator.yaml -r email="not-an-email.test" -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -700,12 +700,12 @@ Run it with `development` (default) — the `prod_secrets` resolver is skipped:
 {{< tabs "resolver-tutorial-cmd-11" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f conditional.yaml -o json --hide-execution
+scafctl run resolver -f conditional.yaml -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f conditional.yaml -o json --hide-execution
+scafctl run resolver -f conditional.yaml -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -723,12 +723,12 @@ Run it with `production` — the `prod_secrets` resolver executes:
 {{< tabs "resolver-tutorial-cmd-12" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f conditional.yaml -r env=production -o json --hide-execution
+scafctl run resolver -f conditional.yaml -r env=production -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f conditional.yaml -r env=production -o json --hide-execution
+scafctl run resolver -f conditional.yaml -r env=production -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -777,12 +777,12 @@ Run it:
 {{< tabs "resolver-tutorial-cmd-13" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f phase-condition.yaml -o json --hide-execution
+scafctl run resolver -f phase-condition.yaml -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f phase-condition.yaml -o json --hide-execution
+scafctl run resolver -f phase-condition.yaml -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -844,12 +844,12 @@ Run it (the HTTP and file providers will fail, so it falls back to static):
 {{< tabs "resolver-tutorial-cmd-14" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f fallback.yaml -o json --hide-execution
+scafctl run resolver -f fallback.yaml -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f fallback.yaml -o json --hide-execution
+scafctl run resolver -f fallback.yaml -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -959,12 +959,12 @@ Run it:
 {{< tabs "resolver-tutorial-cmd-15" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f http-example.yaml -o json --hide-execution
+scafctl run resolver -f http-example.yaml -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f http-example.yaml -o json --hide-execution
+scafctl run resolver -f http-example.yaml -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1108,12 +1108,12 @@ Structured output (JSON, YAML) reveals sensitive values for machine consumption:
 {{< tabs "resolver-tutorial-cmd-18" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f env-config.yaml -o json --hide-execution
+scafctl run resolver -f env-config.yaml -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f env-config.yaml -o json --hide-execution
+scafctl run resolver -f env-config.yaml -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1279,12 +1279,12 @@ Structured output reveals the actual values:
 {{< tabs "resolver-tutorial-cmd-22" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f secrets.yaml -o json --hide-execution
+scafctl run resolver -f secrets.yaml -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f secrets.yaml -o json --hide-execution
+scafctl run resolver -f secrets.yaml -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}

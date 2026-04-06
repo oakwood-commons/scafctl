@@ -570,6 +570,71 @@ spec:
 		require.NoError(t, err)
 		assert.True(t, result.IsError)
 	})
+
+	t.Run("response includes __plan topology", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		solFile := filepath.Join(tmpDir, "plan-preview.yaml")
+		solContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: plan-preview
+  version: 1.0.0
+spec:
+  resolvers:
+    base:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: root
+    derived:
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.base + '-derived'"
+`
+		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
+
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "preview_resolvers"
+		request.Params.Arguments = map[string]any{
+			"path": solFile,
+		}
+
+		result, err := srv.handlePreviewResolvers(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+
+		// __plan topology should be present in the response
+		plan, ok := parsed["plan"]
+		assert.True(t, ok, "plan should be present in preview_resolvers response")
+		require.NotNil(t, plan)
+
+		planMap, ok := plan.(map[string]any)
+		require.True(t, ok, "plan should be map[string]any")
+		assert.Contains(t, planMap, "base", "plan should contain base resolver")
+		assert.Contains(t, planMap, "derived", "plan should contain derived resolver")
+
+		basePlan, ok := planMap["base"].(map[string]any)
+		require.True(t, ok, "base plan entry should be map[string]any")
+		assert.Equal(t, float64(1), basePlan["phase"], "base should be in phase 1")
+		assert.Equal(t, float64(0), basePlan["dependencyCount"], "base should have no dependencies")
+
+		derivedPlan, ok := planMap["derived"].(map[string]any)
+		require.True(t, ok, "derived plan entry should be map[string]any")
+		assert.Equal(t, float64(2), derivedPlan["phase"], "derived should be in phase 2")
+		assert.Equal(t, float64(1), derivedPlan["dependencyCount"], "derived should have 1 dependency")
+	})
 }
 
 func TestHandleGetRunCommand(t *testing.T) {
@@ -978,6 +1043,90 @@ spec:
 		result, err := srv.handleGetRunCommand(context.Background(), request)
 		require.NoError(t, err)
 		assert.True(t, result.IsError, "should return error for backup with resolver-only solution")
+	})
+
+	t.Run("show_execution flag appended to command", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		solFile := filepath.Join(tmpDir, "show-execution-test.yaml")
+		solContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: show-execution-test
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "hello"
+`
+		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
+
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "get_run_command"
+		request.Params.Arguments = map[string]any{
+			"path":           solFile,
+			"show_execution": true,
+		}
+
+		result, err := srv.handleGetRunCommand(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+		cmd, ok := parsed["command"].(string)
+		require.True(t, ok, "command should be a string")
+		assert.Contains(t, cmd, "--show-execution", "show_execution=true should add --show-execution flag")
+	})
+
+	t.Run("show_execution false omits flag", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		solFile := filepath.Join(tmpDir, "no-show-execution.yaml")
+		solContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: no-show-execution
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "hello"
+`
+		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
+
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "get_run_command"
+		request.Params.Arguments = map[string]any{
+			"path":           solFile,
+			"show_execution": false,
+		}
+
+		result, err := srv.handleGetRunCommand(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+		cmd, ok := parsed["command"].(string)
+		require.True(t, ok, "command should be a string")
+		assert.NotContains(t, cmd, "--show-execution", "show_execution=false should not add --show-execution flag")
 	})
 }
 
