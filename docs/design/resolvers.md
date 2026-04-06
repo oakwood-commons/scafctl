@@ -328,8 +328,19 @@ Resolver names must follow these rules:
 
 - `camelCase` - **Recommended best practice**
 - `snake_case` - Acceptable
-- `kebab-case` - Acceptable
+- `kebab-case` - Acceptable (but see CEL note below)
 - Any combination of alphanumeric characters, underscores, and hyphens
+
+**CEL and naming:**
+
+Names with hyphens (e.g., `api-endpoint`) require bracket notation in CEL
+expressions because the hyphen is parsed as a minus operator. For example:
+
+- `_.apiEndpoint` -- dot notation works for camelCase and snake_case names
+- `_["api-endpoint"]` -- bracket notation is required for hyphenated names
+
+Bracket notation works for all names, but dot notation is simpler. To avoid
+this friction, prefer `camelCase` or `snake_case` for resolver names.
 
 **Examples:**
 
