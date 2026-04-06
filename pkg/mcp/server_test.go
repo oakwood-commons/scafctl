@@ -6,12 +6,14 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -198,5 +200,54 @@ func TestMergeContext(t *testing.T) {
 		default:
 			// expected
 		}
+	})
+}
+
+func TestBuildInstructions(t *testing.T) {
+	t.Run("empty supplemental returns base only", func(t *testing.T) {
+		result := buildInstructions(settings.CliBinaryName, "")
+		assert.Equal(t, serverInstructionsTemplate, result)
+	})
+
+	t.Run("supplemental is appended", func(t *testing.T) {
+		supplemental := "Use domain tools for legacy files."
+		result := buildInstructions(settings.CliBinaryName, supplemental)
+		assert.Contains(t, result, serverInstructionsTemplate)
+		assert.Contains(t, result, supplemental)
+		assert.True(t, strings.HasSuffix(result, supplemental))
+		assert.Contains(t, result, "\n\n"+supplemental)
+	})
+
+	t.Run("binary name substitution in supplemental", func(t *testing.T) {
+		supplemental := "Run " + settings.CliBinaryName + " solve to execute."
+		result := buildInstructions("mycli", supplemental)
+		assert.Contains(t, result, "Run mycli solve to execute.")
+		assert.NotContains(t, result, "Run "+settings.CliBinaryName+" solve to execute.")
+	})
+
+	t.Run("no substitution when using default name", func(t *testing.T) {
+		supplemental := "Run " + settings.CliBinaryName + " solve to execute."
+		result := buildInstructions(settings.CliBinaryName, supplemental)
+		assert.Contains(t, result, "Run "+settings.CliBinaryName+" solve to execute.")
+	})
+}
+
+func TestWithSupplementalInstructions(t *testing.T) {
+	t.Run("sets field on config", func(t *testing.T) {
+		cfg := &serverConfig{}
+		opt := WithSupplementalInstructions("extra guidance")
+		opt(cfg)
+		assert.Equal(t, "extra guidance", cfg.supplementalInstructions)
+	})
+
+	t.Run("server created with supplemental instructions", func(t *testing.T) {
+		supplemental := "Use migration tools for legacy solutions."
+		srv, err := NewServer(
+			WithServerName("mycli"),
+			WithSupplementalInstructions(supplemental),
+		)
+		require.NoError(t, err)
+		require.NotNil(t, srv)
+		assert.Equal(t, "mycli", srv.name)
 	})
 }
