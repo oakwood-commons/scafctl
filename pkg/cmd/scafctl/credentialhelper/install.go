@@ -14,20 +14,21 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 )
 
 const (
-	// symlinkName is the name of the Docker credential helper symlink.
-	symlinkName = "docker-credential-" + settings.CliBinaryName
-
 	// defaultBinDir is the default directory for the symlink.
 	defaultBinDir = "~/.local/bin"
 )
 
-func commandInstall(ioStreams *terminal.IOStreams) *cobra.Command {
+// credHelperName returns the Docker credential helper symlink name for the given binary.
+func credHelperName(binaryName string) string {
+	return "docker-credential-" + binaryName
+}
+
+func commandInstall(_ *terminal.IOStreams, path string) *cobra.Command {
 	var (
 		binDir   string
 		docker   bool
@@ -37,12 +38,12 @@ func commandInstall(ioStreams *terminal.IOStreams) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "install",
-		Short: "Install scafctl as a Docker/Podman credential helper",
-		Long: `Creates a docker-credential-scafctl symlink and optionally configures
-Docker or Podman to use scafctl as the credential store.
+		Short: fmt.Sprintf("Install %s as a Docker/Podman credential helper", path),
+		Long: fmt.Sprintf(`Creates a %s symlink and optionally configures
+Docker or Podman to use %s as the credential store.
 
 The symlink is placed in --bin-dir (default ~/.local/bin) and must be on
-your PATH for Docker/Podman to discover it.`,
+your PATH for Docker/Podman to discover it.`, credHelperName(path), path),
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -50,12 +51,13 @@ your PATH for Docker/Podman to discover it.`,
 			ctx := cmd.Context()
 			w := writer.FromContext(ctx)
 
+			helperName := credHelperName(path)
 			resolvedBinDir := expandHome(binDir)
 
 			// Find the scafctl binary
 			scafctlPath, err := findScafctlBinary()
 			if err != nil {
-				return fmt.Errorf("locate scafctl binary: %w", err)
+				return fmt.Errorf("locate %s binary: %w", path, err)
 			}
 
 			// Create bin dir if needed
@@ -64,7 +66,7 @@ your PATH for Docker/Podman to discover it.`,
 			}
 
 			// Create (or replace) the symlink
-			linkPath := filepath.Join(resolvedBinDir, symlinkName)
+			linkPath := filepath.Join(resolvedBinDir, helperName)
 			if err := createSymlink(scafctlPath, linkPath); err != nil {
 				return fmt.Errorf("create symlink: %w", err)
 			}
@@ -73,7 +75,7 @@ your PATH for Docker/Podman to discover it.`,
 			// Optionally configure Docker
 			if docker {
 				dockerConfig := dockerConfigPath()
-				if err := updateContainerConfig(dockerConfig, registry, ioStreams); err != nil {
+				if err := updateContainerConfig(dockerConfig, registry, path); err != nil {
 					return fmt.Errorf("update Docker config %s: %w", dockerConfig, err)
 				}
 				w.Successf("Updated %s\n", dockerConfig)
@@ -82,13 +84,13 @@ your PATH for Docker/Podman to discover it.`,
 			// Optionally configure Podman
 			if podman {
 				podmanConfig := podmanConfigPath()
-				if err := updateContainerConfig(podmanConfig, registry, ioStreams); err != nil {
+				if err := updateContainerConfig(podmanConfig, registry, path); err != nil {
 					return fmt.Errorf("update Podman config %s: %w", podmanConfig, err)
 				}
 				w.Successf("Updated %s\n", podmanConfig)
 			}
 
-			w.Infof("\nVerify with: %s list\n", symlinkName)
+			w.Infof("\nVerify with: %s list\n", helperName)
 			return nil
 		},
 	}
@@ -101,7 +103,7 @@ your PATH for Docker/Podman to discover it.`,
 	return cmd
 }
 
-func commandUninstall(ioStreams *terminal.IOStreams) *cobra.Command {
+func commandUninstall(_ *terminal.IOStreams, path string) *cobra.Command {
 	var (
 		binDir   string
 		docker   bool
@@ -111,9 +113,9 @@ func commandUninstall(ioStreams *terminal.IOStreams) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "uninstall",
-		Short: "Remove scafctl credential helper integration",
-		Long: `Removes the docker-credential-scafctl symlink and optionally removes
-scafctl entries from Docker or Podman configuration.`,
+		Short: fmt.Sprintf("Remove %s credential helper integration", path),
+		Long: fmt.Sprintf(`Removes the %s symlink and optionally removes
+%s entries from Docker or Podman configuration.`, credHelperName(path), path),
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -122,7 +124,7 @@ scafctl entries from Docker or Podman configuration.`,
 			w := writer.FromContext(ctx)
 
 			resolvedBinDir := expandHome(binDir)
-			linkPath := filepath.Join(resolvedBinDir, symlinkName)
+			linkPath := filepath.Join(resolvedBinDir, credHelperName(path))
 
 			// Remove symlink only when the path is actually a symlink.
 			// Refusing to remove regular files mirrors the safety checks in createSymlink.
@@ -145,7 +147,7 @@ scafctl entries from Docker or Podman configuration.`,
 			// Optionally clean Docker config
 			if docker {
 				dockerConfig := dockerConfigPath()
-				if err := removeFromContainerConfig(dockerConfig, registry, ioStreams); err != nil {
+				if err := removeFromContainerConfig(dockerConfig, registry, path); err != nil {
 					return fmt.Errorf("update Docker config %s: %w", dockerConfig, err)
 				}
 				w.Successf("Cleaned %s\n", dockerConfig)
@@ -154,7 +156,7 @@ scafctl entries from Docker or Podman configuration.`,
 			// Optionally clean Podman config
 			if podman {
 				podmanConfig := podmanConfigPath()
-				if err := removeFromContainerConfig(podmanConfig, registry, ioStreams); err != nil {
+				if err := removeFromContainerConfig(podmanConfig, registry, path); err != nil {
 					return fmt.Errorf("update Podman config %s: %w", podmanConfig, err)
 				}
 				w.Successf("Cleaned %s\n", podmanConfig)
@@ -165,8 +167,8 @@ scafctl entries from Docker or Podman configuration.`,
 	}
 
 	cmd.Flags().StringVar(&binDir, "bin-dir", defaultBinDir, "Directory where the symlink was installed")
-	cmd.Flags().BoolVar(&docker, "docker", false, "Remove scafctl entries from ~/.docker/config.json")
-	cmd.Flags().BoolVar(&podman, "podman", false, "Remove scafctl entries from Podman containers/auth.json")
+	cmd.Flags().BoolVar(&docker, "docker", false, fmt.Sprintf("Remove %s entries from ~/.docker/config.json", path))
+	cmd.Flags().BoolVar(&podman, "podman", false, fmt.Sprintf("Remove %s entries from Podman containers/auth.json", path))
 	cmd.Flags().StringVar(&registry, "registry", "", "Remove per-registry credHelper instead of global credsStore")
 
 	return cmd
@@ -239,8 +241,8 @@ func podmanConfigPath() string {
 	return filepath.Join(home, ".config", "containers", "auth.json")
 }
 
-// updateContainerConfig updates a Docker/Podman config file to use scafctl.
-func updateContainerConfig(configPath, registry string, _ *terminal.IOStreams) error {
+// updateContainerConfig updates a Docker/Podman config file to use the given binary as credential helper.
+func updateContainerConfig(configPath, registry, binaryName string) error {
 	cfg, err := readContainerConfig(configPath)
 	if err != nil {
 		return err
@@ -252,18 +254,18 @@ func updateContainerConfig(configPath, registry string, _ *terminal.IOStreams) e
 		if !ok {
 			credHelpers = make(map[string]interface{})
 		}
-		credHelpers[registry] = settings.CliBinaryName
+		credHelpers[registry] = binaryName
 		cfg["credHelpers"] = credHelpers
 	} else {
 		// Global credsStore
-		cfg["credsStore"] = settings.CliBinaryName
+		cfg["credsStore"] = binaryName
 	}
 
 	return writeContainerConfig(configPath, cfg)
 }
 
-// removeFromContainerConfig removes scafctl entries from a Docker/Podman config.
-func removeFromContainerConfig(configPath, registry string, _ *terminal.IOStreams) error {
+// removeFromContainerConfig removes credential helper entries from a Docker/Podman config.
+func removeFromContainerConfig(configPath, registry, binaryName string) error {
 	cfg, err := readContainerConfig(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -280,7 +282,7 @@ func removeFromContainerConfig(configPath, registry string, _ *terminal.IOStream
 			}
 		}
 	} else {
-		if store, ok := cfg["credsStore"].(string); ok && store == settings.CliBinaryName {
+		if store, ok := cfg["credsStore"].(string); ok && store == binaryName {
 			delete(cfg, "credsStore")
 		}
 	}

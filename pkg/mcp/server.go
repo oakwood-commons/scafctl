@@ -13,11 +13,13 @@ import (
 	"strings"
 
 	"github.com/go-logr/logr"
+
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
 // Server wraps the mcp-go MCPServer and holds shared dependencies
@@ -134,7 +136,7 @@ func WithErrorLog(lgr *log.Logger) ServerOption {
 	}
 }
 
-const serverInstructions = `scafctl is a CLI tool for managing infrastructure solutions using CEL expressions, 
+const serverInstructionsTemplate = `scafctl is a CLI tool for managing infrastructure solutions using CEL expressions, 
 Go templates, and a provider-based architecture. This MCP server exposes tools 
 for inspecting solutions, validating configurations, evaluating CEL expressions, 
 browsing the solution catalog, previewing resolver outputs, and running functional tests.
@@ -347,11 +349,20 @@ Tool Latency Guide (helps optimize tool selection):
     preview_resolvers, preview_action, dry_run_solution, render_solution,
     run_solution_tests`
 
+// serverInstructions returns the MCP server instructions with the binary name
+// substituted for all "scafctl" references.
+func serverInstructions(name string) string {
+	if name == settings.CliBinaryName {
+		return serverInstructionsTemplate
+	}
+	return strings.ReplaceAll(serverInstructionsTemplate, settings.CliBinaryName, name)
+}
+
 // NewServer creates a new MCP server with all tools and resources registered.
 func NewServer(opts ...ServerOption) (*Server, error) {
 	cfg := &serverConfig{
 		version: "dev",
-		name:    "scafctl",
+		name:    settings.CliBinaryName,
 	}
 	for _, opt := range opts {
 		opt(cfg)
@@ -359,7 +370,7 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 
 	// Guard against empty server name.
 	if strings.TrimSpace(cfg.name) == "" {
-		cfg.name = "scafctl"
+		cfg.name = settings.CliBinaryName
 	}
 
 	// Build the MCP context for tool handlers
@@ -373,6 +384,15 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 	if cfg.authReg != nil {
 		ctxOpts = append(ctxOpts, WithAuthRegistry(cfg.authReg))
 	}
+	// Inject settings with BinaryName so domain packages can access the
+	// configured binary name via settings.BinaryNameFromContext.
+	// IsQuiet and NoColor are true because MCP output goes through JSON-RPC,
+	// not the terminal — terminal formatting must be suppressed.
+	ctxOpts = append(ctxOpts, WithSettings(&settings.Run{
+		IsQuiet:    true,
+		NoColor:    true,
+		BinaryName: cfg.name,
+	}))
 	mcpCtx := NewContext(ctxOpts...)
 
 	// If a parent context was provided, layer its cancellation
@@ -401,7 +421,7 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 		server.WithPromptCapabilities(true),
 		server.WithRecovery(),
 		server.WithResourceRecovery(),
-		server.WithInstructions(serverInstructions),
+		server.WithInstructions(serverInstructions(cfg.name)),
 		// Enable advanced protocol capabilities
 		server.WithLogging(),
 		server.WithRoots(),

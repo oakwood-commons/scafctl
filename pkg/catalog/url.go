@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
 // ParseCatalogURL parses a catalog URL into registry and repository parts,
@@ -106,7 +107,8 @@ func ResolveCatalogURL(ctx context.Context, catalogFlag string) (string, error) 
 
 	cat, ok := cfg.GetDefaultCatalog()
 	if !ok {
-		return "", fmt.Errorf("no --catalog specified and no default catalog configured\n\nTo set a default catalog:\n  scafctl config add-catalog <name> --type oci --url <registry-url> --default\n\nOr specify one explicitly:\n  scafctl catalog push <artifact> --catalog <registry-url>")
+		bin := settings.BinaryNameFromContext(ctx)
+		return "", fmt.Errorf("no --catalog specified and no default catalog configured\n\nTo set a default catalog:\n  %s config add-catalog <name> --type oci --url <registry-url> --default\n\nOr specify one explicitly:\n  %s catalog push <artifact> --catalog <registry-url>", bin, bin)
 	}
 
 	url := catalogURLFromCatalogConfig(cat)
@@ -126,7 +128,7 @@ func lookupCatalogURLFromConfig(ctx context.Context, name string) (string, error
 
 	cat, ok := cfg.GetCatalog(name)
 	if !ok {
-		return "", fmt.Errorf("catalog %q not found in configuration\n\nTo add it:\n  scafctl config add-catalog %s --type oci --url <registry-url>", name, name)
+		return "", fmt.Errorf("catalog %q not found in configuration\n\nTo add it:\n  %s config add-catalog %s --type oci --url <registry-url>", name, settings.BinaryNameFromContext(ctx), name)
 	}
 
 	url := catalogURLFromCatalogConfig(cat)

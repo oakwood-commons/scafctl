@@ -137,7 +137,7 @@ func TestReadWriteContainerConfig(t *testing.T) {
 func TestUpdateContainerConfig(t *testing.T) {
 	t.Run("global credsStore", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "config.json")
-		require.NoError(t, updateContainerConfig(path, "", nil))
+		require.NoError(t, updateContainerConfig(path, "", settings.CliBinaryName))
 
 		data, err := os.ReadFile(path)
 		require.NoError(t, err)
@@ -149,7 +149,7 @@ func TestUpdateContainerConfig(t *testing.T) {
 
 	t.Run("per-registry credHelper", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "config.json")
-		require.NoError(t, updateContainerConfig(path, "ghcr.io", nil))
+		require.NoError(t, updateContainerConfig(path, "ghcr.io", settings.CliBinaryName))
 
 		data, err := os.ReadFile(path)
 		require.NoError(t, err)
@@ -169,7 +169,7 @@ func TestRemoveFromContainerConfig(t *testing.T) {
 		cfg := map[string]interface{}{"credsStore": settings.CliBinaryName}
 		require.NoError(t, writeContainerConfig(path, cfg))
 
-		require.NoError(t, removeFromContainerConfig(path, "", nil))
+		require.NoError(t, removeFromContainerConfig(path, "", settings.CliBinaryName))
 
 		got, err := readContainerConfig(path)
 		require.NoError(t, err)
@@ -182,7 +182,7 @@ func TestRemoveFromContainerConfig(t *testing.T) {
 		cfg := map[string]interface{}{"credsStore": "desktop"}
 		require.NoError(t, writeContainerConfig(path, cfg))
 
-		require.NoError(t, removeFromContainerConfig(path, "", nil))
+		require.NoError(t, removeFromContainerConfig(path, "", settings.CliBinaryName))
 
 		got, err := readContainerConfig(path)
 		require.NoError(t, err)
@@ -196,7 +196,7 @@ func TestRemoveFromContainerConfig(t *testing.T) {
 		}
 		require.NoError(t, writeContainerConfig(path, cfg))
 
-		require.NoError(t, removeFromContainerConfig(path, "ghcr.io", nil))
+		require.NoError(t, removeFromContainerConfig(path, "ghcr.io", settings.CliBinaryName))
 
 		got, err := readContainerConfig(path)
 		require.NoError(t, err)
@@ -212,7 +212,7 @@ func TestRemoveFromContainerConfig(t *testing.T) {
 		}
 		require.NoError(t, writeContainerConfig(path, cfg))
 
-		require.NoError(t, removeFromContainerConfig(path, "ghcr.io", nil))
+		require.NoError(t, removeFromContainerConfig(path, "ghcr.io", settings.CliBinaryName))
 
 		got, err := readContainerConfig(path)
 		require.NoError(t, err)
@@ -222,7 +222,7 @@ func TestRemoveFromContainerConfig(t *testing.T) {
 
 	t.Run("nonexistent file is no-op", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "nonexistent", "config.json")
-		err := removeFromContainerConfig(path, "", nil)
+		err := removeFromContainerConfig(path, "", settings.CliBinaryName)
 		assert.NoError(t, err)
 	})
 }
@@ -253,7 +253,7 @@ func TestPodmanConfigPath(t *testing.T) {
 
 func TestCommandInstall_Structure(t *testing.T) {
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := commandInstall(ioStreams)
+	cmd := commandInstall(ioStreams, "scafctl")
 
 	require.NotNil(t, cmd)
 	assert.Equal(t, "install", cmd.Use)
@@ -267,7 +267,7 @@ func TestCommandInstall_Structure(t *testing.T) {
 
 func TestCommandUninstall_Structure(t *testing.T) {
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := commandUninstall(ioStreams)
+	cmd := commandUninstall(ioStreams, "scafctl")
 
 	require.NotNil(t, cmd)
 	assert.Equal(t, "uninstall", cmd.Use)
@@ -279,13 +279,13 @@ func TestCommandUninstall_Structure(t *testing.T) {
 
 func TestCommandUninstall_RefusesNonSymlink(t *testing.T) {
 	dir := t.TempDir()
-	linkPath := filepath.Join(dir, symlinkName)
+	linkPath := filepath.Join(dir, credHelperName("scafctl"))
 
 	// Create a regular file at the symlink path
 	require.NoError(t, os.WriteFile(linkPath, []byte("not a symlink"), 0o644))
 
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := commandUninstall(ioStreams)
+	cmd := commandUninstall(ioStreams, "scafctl")
 	cmd.SetContext(newInstallTestCtx())
 	cmd.SetArgs([]string{"--bin-dir", dir})
 
@@ -302,7 +302,7 @@ func TestCommandUninstall_NonExistentSymlink(t *testing.T) {
 	dir := t.TempDir()
 
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := commandUninstall(ioStreams)
+	cmd := commandUninstall(ioStreams, "scafctl")
 	cmd.SetContext(newInstallTestCtx())
 	cmd.SetArgs([]string{"--bin-dir", dir})
 

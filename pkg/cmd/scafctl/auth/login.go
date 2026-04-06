@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/MakeNowJust/heredoc/v2"
@@ -27,7 +28,7 @@ import (
 )
 
 // CommandLogin creates the 'auth login' command.
-func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Command {
+func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Command {
 	var (
 		tenantID                  string
 		clientID                  string
@@ -48,7 +49,7 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 	cmd := &cobra.Command{
 		Use:   "login <handler>",
 		Short: "Authenticate with an auth handler",
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			Authenticate with an authentication handler.
 
 			For the 'entra' handler, this supports multiple authentication flows:
@@ -157,7 +158,7 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 
 			  # Login with GCP and specific scopes
 			  scafctl auth login gcp --scope https://www.googleapis.com/auth/bigquery
-		`),
+		`), settings.CliBinaryName, cliParams.BinaryName),
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -229,16 +230,16 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 			var loginErr error
 			switch handlerName {
 			case "github":
-				loginErr = loginGitHub(ctx, w, flow, hostname, clientID, callbackPort, timeout, scopes, force, skipIfAuthenticated)
+				loginErr = loginGitHub(ctx, w, cliParams.BinaryName, flow, hostname, clientID, callbackPort, timeout, scopes, force, skipIfAuthenticated)
 			case "gcp":
-				loginErr = loginGCP(ctx, w, flow, clientID, impersonateServiceAccount, callbackPort, timeout, scopes, force, skipIfAuthenticated)
+				loginErr = loginGCP(ctx, w, cliParams.BinaryName, flow, clientID, impersonateServiceAccount, callbackPort, timeout, scopes, force, skipIfAuthenticated)
 			case "entra":
-				loginErr = loginEntra(ctx, w, flow, tenantID, clientID, callbackPort, timeout, federatedToken, flowStr, scopes, force, skipIfAuthenticated)
+				loginErr = loginEntra(ctx, w, cliParams.BinaryName, flow, tenantID, clientID, callbackPort, timeout, federatedToken, flowStr, scopes, force, skipIfAuthenticated)
 			default:
 				// Generic custom OAuth2 handler (e.g. quay, custom IdP).
 				// Use the handler already resolved from the registry; no built-in
 				// flow-detection or provider-specific overrides apply.
-				loginErr = loginGeneric(ctx, w, handler, handlerName, flow, callbackPort, timeout, scopes, force, skipIfAuthenticated)
+				loginErr = loginGeneric(ctx, w, cliParams.BinaryName, handler, handlerName, flow, callbackPort, timeout, scopes, force, skipIfAuthenticated)
 			}
 
 			if loginErr != nil {
@@ -293,7 +294,7 @@ func CommandLogin(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 }
 
 // loginGitHub handles the login flow for the GitHub auth handler.
-func loginGitHub(ctx context.Context, w *writer.Writer, flow auth.Flow, hostname, clientID string, callbackPort int, timeout time.Duration, scopes []string, force, skipIfAuthenticated bool) error {
+func loginGitHub(ctx context.Context, w *writer.Writer, binaryName string, flow auth.Flow, hostname, clientID string, callbackPort int, timeout time.Duration, scopes []string, force, skipIfAuthenticated bool) error {
 	// Auto-detect flow from available credentials.
 	// Skip PAT auto-detection when user provides --scope flags, since scopes
 	// only apply to the device code / interactive flows (PAT scopes are fixed at creation).
@@ -333,15 +334,15 @@ func loginGitHub(ctx context.Context, w *writer.Writer, flow auth.Flow, hostname
 		return nil
 	case auth.PreLoginAlreadyAuthenticated:
 		w.Warningf("Already authenticated as %s.", preLogin.Identity)
-		w.Warning("Use 'scafctl auth logout github' to sign out first, or use --force to re-authenticate.")
+		w.Warningf("Use '%s auth logout github' to sign out first, or use --force to re-authenticate.", binaryName)
 		w.Info("")
 	}
 
-	return executeLogin(ctx, w, handler, flow, "", callbackPort, timeout, scopes)
+	return executeLogin(ctx, w, binaryName, handler, flow, "", callbackPort, timeout, scopes)
 }
 
 // loginGCP handles the login flow for the GCP auth handler.
-func loginGCP(ctx context.Context, w *writer.Writer, flow auth.Flow, clientID, impersonateServiceAccount string, callbackPort int, timeout time.Duration, scopes []string, force, skipIfAuthenticated bool) error {
+func loginGCP(ctx context.Context, w *writer.Writer, binaryName string, flow auth.Flow, clientID, impersonateServiceAccount string, callbackPort int, timeout time.Duration, scopes []string, force, skipIfAuthenticated bool) error {
 	// Auto-detect flow based on available credentials (highest priority first)
 	detection := auth.DetectFlow(flow, []auth.CredentialDetector{
 		{
@@ -383,15 +384,15 @@ func loginGCP(ctx context.Context, w *writer.Writer, flow auth.Flow, clientID, i
 		return nil
 	case auth.PreLoginAlreadyAuthenticated:
 		w.Warningf("Already authenticated as %s.", preLogin.Identity)
-		w.Warning("Use 'scafctl auth logout gcp' to sign out first, or use --force to re-authenticate.")
+		w.Warningf("Use '%s auth logout gcp' to sign out first, or use --force to re-authenticate.", binaryName)
 		w.Info("")
 	}
 
-	return executeLogin(ctx, w, handler, flow, "", callbackPort, timeout, scopes)
+	return executeLogin(ctx, w, binaryName, handler, flow, "", callbackPort, timeout, scopes)
 }
 
 // loginEntra handles the login flow for the Entra auth handler.
-func loginEntra(ctx context.Context, w *writer.Writer, flow auth.Flow, tenantID, clientID string, callbackPort int, timeout time.Duration, federatedToken, flowStr string, scopes []string, force, skipIfAuthenticated bool) error {
+func loginEntra(ctx context.Context, w *writer.Writer, binaryName string, flow auth.Flow, tenantID, clientID string, callbackPort int, timeout time.Duration, federatedToken, flowStr string, scopes []string, force, skipIfAuthenticated bool) error {
 	// If --federated-token is provided, set the env var for workload identity
 	if federatedToken != "" {
 		if err := os.Setenv(entra.EnvAzureFederatedToken, federatedToken); err != nil {
@@ -445,17 +446,17 @@ func loginEntra(ctx context.Context, w *writer.Writer, flow auth.Flow, tenantID,
 		return nil
 	case auth.PreLoginAlreadyAuthenticated:
 		w.Warningf("Already authenticated as %s.", preLogin.Identity)
-		w.Warning("Use 'scafctl auth logout entra' to sign out first, or use --force to re-authenticate.")
+		w.Warningf("Use '%s auth logout entra' to sign out first, or use --force to re-authenticate.", binaryName)
 		w.Info("")
 	}
 
-	return executeLogin(ctx, w, handler, flow, tenantID, callbackPort, timeout, scopes)
+	return executeLogin(ctx, w, binaryName, handler, flow, tenantID, callbackPort, timeout, scopes)
 }
 
 // loginGeneric handles the login flow for custom (non-built-in) OAuth2 handlers.
 // It uses the handler already resolved from the auth registry so provider-specific
 // overrides (tenantID, hostname, etc.) do not apply.
-func loginGeneric(ctx context.Context, w *writer.Writer, handler auth.Handler, handlerName string, flow auth.Flow, callbackPort int, timeout time.Duration, scopes []string, force, skipIfAuthenticated bool) error {
+func loginGeneric(ctx context.Context, w *writer.Writer, binaryName string, handler auth.Handler, handlerName string, flow auth.Flow, callbackPort int, timeout time.Duration, scopes []string, force, skipIfAuthenticated bool) error {
 	// Pre-login check; skip for client_credentials since it is non-interactive.
 	preLogin, err := auth.PreLoginCheck(ctx, handler, flow, force, skipIfAuthenticated, auth.FlowClientCredentials)
 	if err != nil {
@@ -470,17 +471,17 @@ func loginGeneric(ctx context.Context, w *writer.Writer, handler auth.Handler, h
 		return nil
 	case auth.PreLoginAlreadyAuthenticated:
 		w.Warningf("Already authenticated as %s.", preLogin.Identity)
-		w.Warningf("Use 'scafctl auth logout %s' to sign out first, or use --force to re-authenticate.", handlerName)
+		w.Warningf("Use '%s auth logout %s' to sign out first, or use --force to re-authenticate.", binaryName, handlerName)
 		w.Info("")
 	}
 
-	return executeLogin(ctx, w, handler, flow, "", callbackPort, timeout, scopes)
+	return executeLogin(ctx, w, binaryName, handler, flow, "", callbackPort, timeout, scopes)
 }
 
 // executeLogin runs the common login logic for any auth handler.
 // For device-code flows on a terminal, it uses the kvx status screen TUI.
 // All other flows (and non-terminal output) use plain text output.
-func executeLogin(ctx context.Context, w *writer.Writer, handler auth.Handler, flow auth.Flow, tenantID string, callbackPort int, timeout time.Duration, scopes []string) error {
+func executeLogin(ctx context.Context, w *writer.Writer, binaryName string, handler auth.Handler, flow auth.Flow, tenantID string, callbackPort int, timeout time.Duration, scopes []string) error {
 	// Set up cancellation handling
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -499,7 +500,7 @@ func executeLogin(ctx context.Context, w *writer.Writer, handler auth.Handler, f
 
 	// Use kvx status TUI for device-code flows when running in a terminal.
 	if flow == auth.FlowDeviceCode && skvx.IsTerminal(ioStreams.Out) {
-		return executeLoginWithStatusTUI(ctx, w, handler, flow, tenantID, callbackPort, timeout, scopes, ioStreams)
+		return executeLoginWithStatusTUI(ctx, w, binaryName, handler, flow, tenantID, callbackPort, timeout, scopes, ioStreams)
 	}
 
 	// Plain-text login path (non-terminal, or non-device-code flows).
@@ -544,6 +545,7 @@ func executeLogin(ctx context.Context, w *writer.Writer, handler auth.Handler, f
 func executeLoginWithStatusTUI(
 	ctx context.Context,
 	w *writer.Writer,
+	binaryName string,
 	handler auth.Handler,
 	flow auth.Flow,
 	tenantID string,
@@ -662,7 +664,7 @@ func executeLoginWithStatusTUI(
 	}
 
 	cfg := tui.DefaultConfig()
-	cfg.AppName = "scafctl"
+	cfg.AppName = binaryName
 	cfg.DisplaySchema = schema
 	cfg.Done = done
 

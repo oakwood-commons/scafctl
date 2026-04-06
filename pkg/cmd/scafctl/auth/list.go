@@ -37,7 +37,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 	cmd := &cobra.Command{
 		Use:   "list [handler]",
 		Short: "Show cached refresh and access token metadata",
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			Show metadata for all cached tokens (refresh and minted access tokens).
 
 			By default all registered auth handlers are queried. When a handler name
@@ -79,7 +79,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			  # Remove expired access tokens from the cache (keeps valid tokens and the refresh token)
 			  scafctl auth list --purge-expired
 			  scafctl auth list entra --purge-expired
-			`),
+			`), settings.CliBinaryName, cliParams.BinaryName),
 		Aliases:      []string{"ls"},
 		SilenceUsage: true,
 		Args:         cobra.MaximumNArgs(1),
@@ -176,7 +176,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 				}
 
 				for _, t := range tokens {
-					results = append(results, cachedTokenInfoToMap(t))
+					results = append(results, cachedTokenInfoToMap(t, cliParams.BinaryName))
 				}
 			}
 
@@ -218,7 +218,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 				outputFlags.Expression,
 				kvx.WithOutputContext(ctx),
 				kvx.WithOutputNoColor(cliParams.NoColor),
-				kvx.WithOutputAppName("scafctl auth list"),
+				kvx.WithOutputAppName(cliParams.BinaryName+" auth list"),
 			)
 			outputOpts.IOStreams = ioStreams
 
@@ -269,7 +269,7 @@ func sortTokenResults(results []map[string]any, field string) error {
 }
 
 // cachedTokenInfoToMap converts a CachedTokenInfo into a map suitable for kvx output.
-func cachedTokenInfoToMap(t *auth.CachedTokenInfo) map[string]any {
+func cachedTokenInfoToMap(t *auth.CachedTokenInfo, binaryName string) map[string]any {
 	row := map[string]any{
 		"handler":   t.Handler,
 		"tokenKind": t.TokenKind,
@@ -302,9 +302,9 @@ func cachedTokenInfoToMap(t *auth.CachedTokenInfo) map[string]any {
 	// used internally and have no direct retrieval command.
 	if t.TokenKind == "access" {
 		if t.Scope != "" {
-			row["getTokenCommand"] = fmt.Sprintf("scafctl auth token %s --scope %q --raw", t.Handler, t.Scope)
+			row["getTokenCommand"] = fmt.Sprintf("%s auth token %s --scope %q --raw", binaryName, t.Handler, t.Scope)
 		} else {
-			row["getTokenCommand"] = fmt.Sprintf("scafctl auth token %s --raw", t.Handler)
+			row["getTokenCommand"] = fmt.Sprintf("%s auth token %s --raw", binaryName, t.Handler)
 		}
 	}
 

@@ -29,8 +29,9 @@ import (
 
 // ProviderOptions holds configuration for the run provider command
 type ProviderOptions struct {
-	IOStreams *terminal.IOStreams
-	CliParams *settings.Run
+	BinaryName string
+	IOStreams  *terminal.IOStreams
+	CliParams  *settings.Run
 
 	// kvx output integration
 	cmdflags.KvxOutputFlags
@@ -88,6 +89,7 @@ func CommandProvider(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 		setIOStreamFn: func(ios *terminal.IOStreams, cli *settings.Run) {
 			options.IOStreams = ios
 			options.CliParams = cli
+			options.BinaryName = cli.BinaryName
 		},
 	}
 
@@ -95,7 +97,7 @@ func CommandProvider(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 		Use:     "provider <name>",
 		Aliases: []string{"prov", "p"},
 		Short:   "Execute a single provider directly",
-		Long: `Execute a provider directly without a solution or resolver file.
+		Long: strings.ReplaceAll(`Execute a provider directly without a solution or resolver file.
 
 This command is useful for testing, debugging, and exploring individual
 providers in isolation. It accepts the provider name as a positional
@@ -167,7 +169,7 @@ Examples:
   scafctl run provider http url=https://example.com --show-metrics
 
   # Explore results interactively
-  scafctl run provider http url=https://api.example.com -i`,
+  scafctl run provider http url=https://api.example.com -i`, settings.CliBinaryName, cliParams.BinaryName),
 		Args: cobra.MinimumNArgs(1),
 		PreRun: func(_ *cobra.Command, args []string) {
 			options.ProviderName = args[0]
@@ -281,6 +283,10 @@ func extractProviderNameFromOSArgs() string {
 
 // Run executes a single provider directly
 func (o *ProviderOptions) Run(ctx context.Context) error {
+	if o.BinaryName == "" {
+		o.BinaryName = settings.CliBinaryName
+	}
+
 	lgr := logger.FromContext(ctx)
 	lgr.V(1).Info("running provider",
 		"name", o.ProviderName,
@@ -320,7 +326,7 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 	// Look up the provider
 	prov, ok := reg.Get(o.ProviderName)
 	if !ok {
-		err := fmt.Errorf("provider %q not found (use 'scafctl get providers' to list available providers)", o.ProviderName)
+		err := fmt.Errorf("provider %q not found (use '%s get providers' to list available providers)", o.ProviderName, o.BinaryName)
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.FileNotFound)
 	}
@@ -543,8 +549,8 @@ func (o *ProviderOptions) writeOutput(ctx context.Context, output map[string]any
 		o.Expression,
 		kvx.WithOutputContext(ctx),
 		kvx.WithOutputNoColor(o.CliParams.NoColor),
-		kvx.WithOutputAppName("scafctl run provider"),
-		kvx.WithOutputHelp("scafctl run provider", []string{
+		kvx.WithOutputAppName(o.BinaryName+" run provider"),
+		kvx.WithOutputHelp(o.BinaryName+" run provider", []string{
 			"Provider Output Viewer",
 			"",
 			"Navigate: ↑↓ arrows | Back: ← | Enter: →",

@@ -6,6 +6,7 @@ package catalog
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
@@ -43,7 +44,7 @@ func CommandPush(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 	cmd := &cobra.Command{
 		Use:   "push <name[@version]>",
 		Short: "Push an artifact to a remote registry",
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			Push a catalog artifact to a remote OCI registry.
 
 			The artifact must exist in the local catalog. Use 'scafctl build'
@@ -73,7 +74,7 @@ func CommandPush(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 
 			  # Force overwrite existing
 			  scafctl catalog push my-solution@1.0.0 --force
-		`),
+		`), settings.CliBinaryName, cliParams.BinaryName),
 
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,

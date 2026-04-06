@@ -24,6 +24,7 @@ import (
 
 // LoginOptions holds options for the catalog login command.
 type LoginOptions struct {
+	BinaryName        string
 	Registry          string
 	AuthProvider      string
 	Scope             string
@@ -45,7 +46,7 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 	cmd := &cobra.Command{
 		Use:   "login <registry>",
 		Short: "Authenticate to an OCI registry",
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			Authenticate to an OCI registry for catalog operations.
 
 			This command stores credentials for registry access without requiring
@@ -91,10 +92,11 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 
 			  # Login and also write to container auth file (Docker/Podman interop)
 			  scafctl catalog login ghcr.io --write-registry-auth
-		`),
+		`), settings.CliBinaryName, cliParams.BinaryName),
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			options.BinaryName = cliParams.BinaryName
 			options.Registry = args[0]
 			return runCatalogLogin(cmd.Context(), options)
 		},
@@ -111,6 +113,10 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 }
 
 func runCatalogLogin(ctx context.Context, opts *LoginOptions) error {
+	if opts.BinaryName == "" {
+		opts.BinaryName = settings.CliBinaryName
+	}
+
 	w := writer.FromContext(ctx)
 	if w == nil {
 		return fmt.Errorf("writer not initialized in context")
@@ -185,7 +191,7 @@ func runAuthHandlerLogin(ctx context.Context, w *writer.Writer, opts *LoginOptio
 	// Get handler from registry
 	handler, err := auth.GetHandler(ctx, handlerName)
 	if err != nil {
-		err = fmt.Errorf("auth handler %q not available (did you run 'scafctl auth login %s'?): %w", handlerName, handlerName, err)
+		err = fmt.Errorf("auth handler %q not available (did you run '%s auth login %s'?): %w", handlerName, opts.BinaryName, handlerName, err)
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.GeneralError)
 	}

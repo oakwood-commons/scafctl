@@ -21,6 +21,7 @@ import (
 
 // ExplainOptions holds options for the lint explain command.
 type ExplainOptions struct {
+	BinaryName     string
 	IOStreams      *terminal.IOStreams
 	CliParams      *settings.Run
 	KvxOutputFlags flags.KvxOutputFlags
@@ -62,6 +63,7 @@ func CommandExplainRule(cliParams *settings.Run, ioStreams *terminal.IOStreams, 
 
 			opts.IOStreams = ioStreams
 			opts.CliParams = cliParams
+			opts.BinaryName = cliParams.BinaryName
 
 			return opts.Run(ctx, args[0])
 		},
@@ -75,6 +77,10 @@ func CommandExplainRule(cliParams *settings.Run, ioStreams *terminal.IOStreams, 
 
 // Run executes the lint explain command.
 func (o *ExplainOptions) Run(ctx context.Context, ruleName string) error {
+	if o.BinaryName == "" {
+		o.BinaryName = settings.CliBinaryName
+	}
+
 	w := writer.FromContext(ctx)
 	if w == nil {
 		return fmt.Errorf("writer not initialized in context")
@@ -82,7 +88,7 @@ func (o *ExplainOptions) Run(ctx context.Context, ruleName string) error {
 
 	rule, found := GetRule(ruleName)
 	if !found {
-		err := fmt.Errorf("unknown rule %q; run 'scafctl lint rules' to see available rules", ruleName)
+		err := fmt.Errorf("unknown rule %q; run '%s lint rules' to see available rules", ruleName, o.BinaryName)
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}

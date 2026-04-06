@@ -15,3 +15,13 @@ Commands are **thin wiring only** -- they parse flags, call domain packages, and
 - Use `cobra.Command` for command definition and flag binding
 - Wire up `settings.Run` parameters from flags
 - Always add new commands to CLI integration tests (`tests/integration/cli_test.go`)
+
+## Embedder Awareness
+
+scafctl is used as a library by external CLIs. Commands must not assume the binary is called "scafctl".
+
+- Read the binary name from `settings.Run.BinaryName` (via context), not a hardcoded string
+- Subcommand `Short`/`Long` descriptions must use the configured app name, not "scafctl"
+- New `RootOptions` fields need doc comments explaining the default behavior when unset
+- Environment variable prefixes come from `settings.SafeEnvPrefix()` -- never hardcode `SCAFCTL_`
+- New CLI-level features (config layers, hooks, customization points) must be wirable through `RootOptions`

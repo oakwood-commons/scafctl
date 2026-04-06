@@ -123,7 +123,7 @@ func TestFormatGcloudTokenError_InvalidRapt(t *testing.T) {
 	err := formatGcloudTokenError(TokenErrorResponse{
 		Error:            "invalid_grant",
 		ErrorDescription: "reauth related error (invalid_rapt)",
-	})
+	}, "scafctl")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "re-authentication")
 	assert.Contains(t, err.Error(), "invalid_rapt")
@@ -136,7 +136,7 @@ func TestFormatGcloudTokenError_InvalidGrantOther(t *testing.T) {
 	err := formatGcloudTokenError(TokenErrorResponse{
 		Error:            "invalid_grant",
 		ErrorDescription: "Token has been expired or revoked",
-	})
+	}, "scafctl")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "expired or been revoked")
 	assert.Contains(t, err.Error(), "Token has been expired or revoked")
@@ -148,7 +148,7 @@ func TestFormatGcloudTokenError_OtherError(t *testing.T) {
 	err := formatGcloudTokenError(TokenErrorResponse{
 		Error:            "access_denied",
 		ErrorDescription: "the client is not authorized",
-	})
+	}, "scafctl")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "access_denied")
 	assert.Contains(t, err.Error(), "the client is not authorized")

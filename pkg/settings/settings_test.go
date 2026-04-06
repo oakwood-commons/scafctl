@@ -28,6 +28,7 @@ func TestNewCliParams(t *testing.T) {
 				IsQuiet:     false,
 				NoColor:     false,
 				ExitOnError: true,
+				BinaryName:  CliBinaryName,
 			},
 		},
 	}

@@ -53,7 +53,7 @@ func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 
 			// Handle positional catalog name argument
 			if len(args) > 0 {
-				if err := get.ValidatePositionalRef(args[0], options.File, "scafctl get solution"); err != nil {
+				if err := get.ValidatePositionalRef(args[0], options.File, cliParams.BinaryName+" get solution"); err != nil {
 					output.NewWriteMessageOptions(
 						options.IOStreams,
 						output.MessageTypeError,

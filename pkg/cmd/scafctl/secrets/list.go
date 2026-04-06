@@ -29,7 +29,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List secrets",
-		Long:  "List the names of all stored secrets. By default, internal scafctl.* secrets are excluded. Use --all to include them.",
+		Long:  fmt.Sprintf("List the names of all stored secrets. By default, internal %s.* secrets are excluded. Use --all to include them.", cliParams.BinaryName),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			w := writer.FromContext(ctx)
@@ -52,7 +52,8 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			}
 
 			// Filter secrets based on --all flag
-			filtered := secrets.FilterSecrets(names, opts.All)
+			prefix := secrets.InternalSecretPrefixFor(cliParams.BinaryName)
+			filtered := secrets.FilterSecretsFor(names, opts.All, prefix)
 
 			// Prepare output with kvx flags
 			kvxOpts := flags.ToKvxOutputOptions(&opts.KvxOutputFlags, kvx.WithIOStreams(ioStreams))

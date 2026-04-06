@@ -88,6 +88,14 @@ if apiKey == "" {
 - **gofmt** and **goimports** are mandatory -- no style debates
 - Never use magic strings or numbers; always define constants or use settings
 
+## Embedder-Safe Design
+
+scafctl is consumed as a library by external CLIs. Code must not assume the binary name.
+
+- Use `settings.CliBinaryName` or `settings.Run.BinaryName` instead of hardcoding `"scafctl"`
+- Functions producing paths, cache keys, or env vars must accept a name parameter or read from context
+- When adding `settings.*For(binaryName)` helpers, guard against empty `binaryName` by falling back to `CliBinaryName`
+
 ## Reference
 
 See skill: `golang-patterns` for comprehensive Go idioms and patterns.

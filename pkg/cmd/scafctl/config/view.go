@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
@@ -22,6 +23,7 @@ import (
 
 // ViewOptions holds options for the config view command.
 type ViewOptions struct {
+	BinaryName string
 	IOStreams  *terminal.IOStreams
 	CliParams  *settings.Run
 	ConfigPath string
@@ -30,13 +32,15 @@ type ViewOptions struct {
 }
 
 // CommandView creates the 'config view' command.
+//
+//nolint:dupl // Cobra command boilerplate is intentionally similar across commands
 func CommandView(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
 	opts := &ViewOptions{}
 
 	cCmd := &cobra.Command{
 		Use:   "view",
 		Short: "View current configuration",
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			Display the current configuration.
 
 			Shows all settings from the config file merged with environment overrides.
@@ -50,7 +54,7 @@ func CommandView(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 
 			  # View specific section using CEL
 			  scafctl config view -e '_.catalogs'
-		`),
+		`), settings.CliBinaryName, cliParams.BinaryName),
 		RunE: func(cCmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
 			ctx := settings.IntoContext(cCmd.Context(), cliParams)
@@ -67,6 +71,7 @@ func CommandView(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 
 			opts.IOStreams = ioStreams
 			opts.CliParams = cliParams
+			opts.BinaryName = cliParams.BinaryName
 
 			// Get config path from parent command context
 			if configFlag := cCmd.Root().Flag("config"); configFlag != nil && configFlag.Value.String() != "" {
@@ -87,12 +92,16 @@ func CommandView(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 
 // Run executes the config view command.
 func (o *ViewOptions) Run(ctx context.Context) error {
+	if o.BinaryName == "" {
+		o.BinaryName = settings.CliBinaryName
+	}
+
 	w := writer.FromContext(ctx)
 	if w == nil {
 		return fmt.Errorf("writer not initialized in context")
 	}
 
-	mgr := appconfig.NewManager(o.ConfigPath)
+	mgr := appconfig.NewManager(o.ConfigPath, appconfig.ManagerOptionsFromContext(ctx)...)
 	cfg, err := mgr.Load()
 	if err != nil {
 		w.Errorf("%v", err)
@@ -116,7 +125,7 @@ func (o *ViewOptions) writeOutput(ctx context.Context, data any) error {
 		o.Expression,
 		kvx.WithOutputContext(ctx),
 		kvx.WithOutputNoColor(o.CliParams.NoColor),
-		kvx.WithOutputAppName("scafctl config view"),
+		kvx.WithOutputAppName(o.BinaryName+" config view"),
 	)
 	kvxOpts.IOStreams = o.IOStreams
 

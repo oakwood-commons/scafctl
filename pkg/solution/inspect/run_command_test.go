@@ -21,7 +21,7 @@ func TestBuildRunCommand_WorkflowSolution(t *testing.T) {
 		},
 	}
 
-	info, err := BuildRunCommand(sol, "solutions/deploy.yaml")
+	info, err := BuildRunCommand(sol, "solutions/deploy.yaml", "scafctl")
 	require.NoError(t, err)
 
 	assert.Equal(t, "scafctl run solution", info.Subcommand)
@@ -52,7 +52,7 @@ func TestBuildRunCommand_ResolverOnlySolution(t *testing.T) {
 		},
 	}
 
-	info, err := BuildRunCommand(sol, "/abs/path/solution.yaml")
+	info, err := BuildRunCommand(sol, "/abs/path/solution.yaml", "scafctl")
 	require.NoError(t, err)
 
 	assert.Equal(t, "scafctl run resolver", info.Subcommand)
@@ -75,7 +75,7 @@ func TestBuildRunCommand_ResolverOnlySolution(t *testing.T) {
 func TestBuildRunCommand_EmptySolution(t *testing.T) {
 	sol := &solution.Solution{}
 
-	info, err := BuildRunCommand(sol, "empty.yaml")
+	info, err := BuildRunCommand(sol, "empty.yaml", "scafctl")
 
 	assert.Nil(t, info)
 	assert.Error(t, err)
@@ -102,7 +102,7 @@ func TestBuildRunCommand_PathPrefixing(t *testing.T) {
 				"x": {Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "cel"}}}},
 			}
 
-			info, err := BuildRunCommand(sol, tt.path)
+			info, err := BuildRunCommand(sol, tt.path, "scafctl")
 			require.NoError(t, err)
 			assert.Contains(t, info.Command, tt.expectInCmd)
 		})
@@ -120,8 +120,9 @@ func BenchmarkBuildRunCommand(b *testing.B) {
 		Actions: map[string]*action.Action{"deploy": {}},
 	}
 
+	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		BuildRunCommand(sol, "solution.yaml") //nolint:errcheck
+	for b.Loop() {
+		BuildRunCommand(sol, "solution.yaml", "scafctl") //nolint:errcheck
 	}
 }

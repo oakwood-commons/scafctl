@@ -6,6 +6,7 @@ package newcmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -17,9 +18,9 @@ func CommandNew(cliParams *settings.Run, ioStreams *terminal.IOStreams, path str
 	cCmd := &cobra.Command{
 		Use:   "new",
 		Short: fmt.Sprintf("Create new %s resources", path),
-		Long: `Create new solutions, templates, and other scafctl resources from scratch.
+		Long: strings.ReplaceAll(`Create new solutions, templates, and other scafctl resources from scratch.
 
-Generates well-structured YAML scaffolds with best practices built in.`,
+Generates well-structured YAML scaffolds with best practices built in.`, settings.CliBinaryName, cliParams.BinaryName),
 		SilenceUsage: true,
 	}
 

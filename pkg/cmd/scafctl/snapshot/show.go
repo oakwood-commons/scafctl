@@ -20,6 +20,7 @@ import (
 
 // ShowOptions holds options for the show command
 type ShowOptions struct {
+	BinaryName   string
 	SnapshotFile string
 	Format       string
 	Verbose      bool
@@ -54,6 +55,7 @@ func CommandShow(_ *settings.Run, ioStreams terminal.IOStreams, binaryName strin
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.SnapshotFile = args[0]
+			opts.BinaryName = binaryName
 			return runShow(cmd.Context(), opts, ioStreams)
 		},
 	}
@@ -65,6 +67,10 @@ func CommandShow(_ *settings.Run, ioStreams terminal.IOStreams, binaryName strin
 }
 
 func runShow(ctx context.Context, opts *ShowOptions, ioStreams terminal.IOStreams) error {
+	if opts.BinaryName == "" {
+		opts.BinaryName = settings.CliBinaryName
+	}
+
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
 
@@ -128,7 +134,7 @@ func showSummary(snapshot *resolver.Snapshot, opts *ShowOptions, w *writer.Write
 	// Metadata
 	w.Plainlnf("Solution:        %s (v%s)", snapshot.Metadata.Solution, snapshot.Metadata.Version)
 	w.Plainlnf("Timestamp:       %s", snapshot.Metadata.Timestamp.Format("2006-01-02 15:04:05"))
-	w.Plainlnf("scafctl Version: %s", snapshot.Metadata.ScafctlVersion)
+	w.Plainlnf("%s Version: %s", opts.BinaryName, snapshot.Metadata.ScafctlVersion)
 	w.Plainlnf("Total Duration:  %s", snapshot.Metadata.TotalDuration)
 	w.Plainlnf("Overall Status:  %s\n", snapshot.Metadata.Status)
 

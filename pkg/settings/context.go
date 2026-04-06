@@ -24,3 +24,12 @@ func FromContext(ctx context.Context) (*Run, bool) {
 	s, ok := val.(*Run)
 	return s, ok
 }
+
+// BinaryNameFromContext returns the configured binary name from context.
+// Returns CliBinaryName when settings are absent or BinaryName is empty.
+func BinaryNameFromContext(ctx context.Context) string {
+	if s, ok := FromContext(ctx); ok && s.BinaryName != "" {
+		return s.BinaryName
+	}
+	return CliBinaryName
+}

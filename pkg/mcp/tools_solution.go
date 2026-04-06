@@ -23,6 +23,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/fileprovider"
 	provdetail "github.com/oakwood-commons/scafctl/pkg/provider/detail"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 	"github.com/oakwood-commons/scafctl/pkg/solution/inspect"
@@ -1146,7 +1147,7 @@ func (s *Server) handleGetRunCommand(_ context.Context, request mcp.CallToolRequ
 		), nil
 	}
 
-	cmdInfo, err := inspect.BuildRunCommand(sol, path)
+	cmdInfo, err := inspect.BuildRunCommand(sol, path, settings.BinaryNameFromContext(ctx))
 	if err != nil {
 		return mcp.NewToolResultJSON(map[string]any{
 			"error":       err.Error(),
@@ -1165,24 +1166,24 @@ func (s *Server) handleGetRunCommand(_ context.Context, request mcp.CallToolRequ
 				WithSuggestion("Use one of: error, overwrite, skip, skip-unchanged, append"),
 			), nil
 		}
-		if cmdInfo.Subcommand == "scafctl run solution" {
+		if cmdInfo.HasWorkflow {
 			cmdInfo.Command += " --on-conflict " + onConflict
 		} else {
 			// The --on-conflict flag is not supported by 'run resolver'.
 			// Return a structured error so the caller knows the flag was ignored.
 			return newStructuredError(ErrCodeInvalidInput,
-				fmt.Sprintf("--on-conflict is not supported by %q; it only applies to 'scafctl run solution' (solutions with a workflow)", cmdInfo.Subcommand),
+				fmt.Sprintf("--on-conflict is not supported by %q; it only applies to 'run solution' (solutions with a workflow)", cmdInfo.Subcommand),
 				WithField("on_conflict"),
 				WithSuggestion("Remove on_conflict, or use a solution that has a workflow with file provider actions."),
 			), nil
 		}
 	}
 	if backup {
-		if cmdInfo.Subcommand == "scafctl run solution" {
+		if cmdInfo.HasWorkflow {
 			cmdInfo.Command += " --backup"
 		} else {
 			return newStructuredError(ErrCodeInvalidInput,
-				fmt.Sprintf("--backup is not supported by %q; it only applies to 'scafctl run solution' (solutions with a workflow)", cmdInfo.Subcommand),
+				fmt.Sprintf("--backup is not supported by %q; it only applies to 'run solution' (solutions with a workflow)", cmdInfo.Subcommand),
 				WithField("backup"),
 				WithSuggestion("Remove backup, or use a solution that has a workflow with file provider actions."),
 			), nil

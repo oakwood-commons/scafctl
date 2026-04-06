@@ -4,6 +4,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -35,26 +36,55 @@ var (
 	globalConfigErr         error
 )
 
+// ManagerOption configures a Manager.
+type ManagerOption func(*Manager)
+
+// WithBaseConfig sets an embedded configuration layer that is merged after
+// built-in defaults but before the user's config file. This allows embedders
+// to ship organization-specific defaults without overwriting user config.
+// The bytes must be valid YAML.
+func WithBaseConfig(data []byte) ManagerOption {
+	return func(m *Manager) {
+		m.baseConfig = data
+	}
+}
+
+// WithEnvPrefix overrides the default environment variable prefix ("SCAFCTL").
+// The prefix is normalized to a safe env var format (upper-cased, hyphens/dots replaced with underscores).
+func WithEnvPrefix(prefix string) ManagerOption {
+	return func(m *Manager) {
+		m.envPrefix = settings.SafeEnvPrefix(prefix)
+	}
+}
+
 // Manager handles configuration loading and access.
 type Manager struct {
 	v          *viper.Viper
 	configPath string
+	baseConfig []byte
+	envPrefix  string
 	config     *Config
 }
 
 // NewManager creates a new configuration manager.
 // If configPath is empty, the XDG-compliant default path will be used.
-func NewManager(configPath string) *Manager {
+func NewManager(configPath string, opts ...ManagerOption) *Manager {
+	m := &Manager{
+		configPath: configPath,
+		envPrefix:  EnvPrefix,
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+
 	v := viper.New()
 	v.SetConfigType(DefaultConfigFileType)
-	v.SetEnvPrefix(EnvPrefix)
+	v.SetEnvPrefix(m.envPrefix)
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
+	m.v = v
 
-	return &Manager{
-		v:          v,
-		configPath: configPath,
-	}
+	return m
 }
 
 // Load loads the configuration from file and environment.
@@ -75,14 +105,23 @@ func (m *Manager) Load() (*Config, error) {
 	// Set defaults
 	m.setDefaults()
 
-	// Try to read config file (not an error if it doesn't exist)
-	if err := m.v.ReadInConfig(); err != nil {
+	// Merge embedder base config (after defaults, before user file)
+	if len(m.baseConfig) > 0 {
+		if err := m.v.MergeConfig(bytes.NewReader(m.baseConfig)); err != nil {
+			return nil, fmt.Errorf("failed to merge base config: %w", err)
+		}
+	}
+
+	// Read user config file (not an error if it doesn't exist).
+	// MergeInConfig is used unconditionally so that when a base config layer
+	// is present the user file merges on top rather than replacing it.
+	// When no base config exists MergeInConfig behaves identically to
+	// ReadInConfig.
+	if err := m.v.MergeInConfig(); err != nil {
 		var configFileNotFoundError viper.ConfigFileNotFoundError
-		// Return error for parse errors but not for missing files
 		if !errors.As(err, &configFileNotFoundError) && !os.IsNotExist(err) {
 			return nil, fmt.Errorf("failed to read config file: %w", err)
 		}
-		// File doesn't exist - that's OK, we'll use defaults
 	}
 
 	// Unmarshal into struct

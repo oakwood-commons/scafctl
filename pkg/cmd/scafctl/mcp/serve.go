@@ -42,10 +42,10 @@ func CommandServe(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start the MCP server",
-		Long: heredoc.Doc(`
+		Long: fmt.Sprintf(heredoc.Doc(`
 			Start the Model Context Protocol (MCP) server for AI agent integration.
 
-			The MCP server exposes scafctl capabilities as tools that AI agents can discover
+			The MCP server exposes %[1]s capabilities as tools that AI agents can discover
 			and invoke programmatically. It supports multiple transport protocols:
 
 			  - stdio: JSON-RPC 2.0 over stdin/stdout (default)
@@ -56,9 +56,9 @@ func CommandServe(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 
 			  {
 			    "servers": {
-			      "scafctl": {
+			      "%[1]s": {
 			        "type": "stdio",
-			        "command": "scafctl",
+			        "command": "%[1]s",
 			        "args": ["mcp", "serve"]
 			      }
 			    }
@@ -66,27 +66,27 @@ func CommandServe(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 
 			Use --info to print the server's capabilities and exit (useful for debugging):
 
-			  scafctl mcp serve --info
-		`),
-		Example: heredoc.Doc(`
+			  %[1]s mcp serve --info
+		`), cliParams.BinaryName),
+		Example: fmt.Sprintf(heredoc.Doc(`
 			# Start the MCP server (stdio transport)
-			scafctl mcp serve
+			%[1]s mcp serve
 
 			# Start with SSE transport on port 8080
-			scafctl mcp serve --transport sse --addr :8080
+			%[1]s mcp serve --transport sse --addr :8080
 
 			# Start with streamable HTTP transport
-			scafctl mcp serve --transport http --addr :8080
+			%[1]s mcp serve --transport http --addr :8080
 
 			# Print server capabilities as JSON and exit
-			scafctl mcp serve --info
+			%[1]s mcp serve --info
 
 			# Start with file-based logging for debugging
-			scafctl mcp serve --log-file /tmp/scafctl-mcp.log
+			%[1]s mcp serve --log-file /tmp/%[1]s-mcp.log
 
 			# Tune stdio worker pool and queue
-			scafctl mcp serve --worker-pool-size 4 --queue-size 200
-		`),
+			%[1]s mcp serve --worker-pool-size 4 --queue-size 200
+		`), cliParams.BinaryName),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runServe(cmd.Context(), opts)

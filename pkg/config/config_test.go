@@ -629,3 +629,84 @@ func TestBuildConfig_IsAutoCacheRemoteArtifacts(t *testing.T) {
 	b.AutoCacheRemoteArtifacts = &tr
 	assert.True(t, b.IsAutoCacheRemoteArtifacts())
 }
+
+func TestManager_Load_WithBaseConfig(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "nonexistent", "config.yaml")
+
+	baseConfig := []byte(`
+logging:
+  level: info
+settings:
+  quiet: true
+`)
+
+	mgr := NewManager(configPath, WithBaseConfig(baseConfig))
+	cfg, err := mgr.Load()
+
+	require.NoError(t, err)
+	assert.Equal(t, "info", cfg.Logging.Level)
+	assert.True(t, cfg.Settings.Quiet)
+	// Built-in defaults should still be present for unset fields
+	assert.Equal(t, "local", cfg.Settings.DefaultCatalog)
+}
+
+func TestManager_Load_BaseConfig_UserFileOverrides(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	baseConfig := []byte(`
+logging:
+  level: info
+settings:
+  quiet: true
+`)
+
+	userConfig := `
+logging:
+  level: warn
+`
+	err := os.WriteFile(configPath, []byte(userConfig), 0o600)
+	require.NoError(t, err)
+
+	mgr := NewManager(configPath, WithBaseConfig(baseConfig))
+	cfg, err := mgr.Load()
+
+	require.NoError(t, err)
+	// User config wins over base config
+	assert.Equal(t, "warn", cfg.Logging.Level)
+	// Base config value preserved where user didn't override
+	assert.True(t, cfg.Settings.Quiet)
+}
+
+func TestManager_Load_BaseConfig_InvalidYAML(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "nonexistent", "config.yaml")
+
+	baseConfig := []byte(`{invalid: yaml: [`)
+
+	mgr := NewManager(configPath, WithBaseConfig(baseConfig))
+	_, err := mgr.Load()
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to merge base config")
+}
+
+func TestManager_WithEnvPrefix(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "nonexistent", "config.yaml")
+
+	mgr := NewManager(configPath, WithEnvPrefix("MYCLI"))
+	cfg, err := mgr.Load()
+
+	require.NoError(t, err)
+	assert.NotNil(t, cfg)
+}

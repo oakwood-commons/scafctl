@@ -15,3 +15,4 @@ MCP tool handlers are **thin wrappers** -- they parse tool inputs, call domain p
 - Use `mcp.With*HintAnnotation()` for tool metadata (read-only, destructive, idempotent)
 - Return `mcp.NewToolResultText()` or `mcp.NewToolResultError()` -- never panic
 - Always add Huma-style parameter descriptions and constraints
+- Tool descriptions and server name must use the configured binary name (`s.name`), not hardcoded "scafctl"
