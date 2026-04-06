@@ -149,7 +149,7 @@ SNAPSHOT MODE:
   capture resolver values, timing, phases, parameters, and metadata for
   debugging, testing, comparison, and audit trails.
 
-` + ResolverParametersHelp + `
+`+ResolverParametersHelp+`
 
 OUTPUT FORMATS:
   table    Bordered table view (default when terminal)
