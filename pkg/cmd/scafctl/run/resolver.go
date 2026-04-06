@@ -57,8 +57,8 @@ type ResolverOptions struct {
 	// Redact redacts sensitive values in the snapshot.
 	Redact bool
 
-	// HideExecution suppresses the __execution metadata from output.
-	HideExecution bool
+	// ShowExecution includes the __execution metadata in output.
+	ShowExecution bool
 
 	// DynamicArgs are resolver parameters from positional key=value syntax
 	// (e.g. env=prod region=us-east-1, captured from positional args containing '=').
@@ -97,10 +97,10 @@ This command is designed for debugging and inspecting resolver execution.
 It loads a solution file and executes only the resolvers, skipping the
 action/workflow phase entirely.
 
-By default, the output includes a __execution key containing per-resolver
-execution metadata: phase numbers, timing, provider info, dependencies, the
-resolver dependency graph, provider usage summary, and an aggregate summary.
-Use --hide-execution to suppress this metadata for cleaner output.
+By default, output contains only the resolved values. Pass --show-execution
+to include a __execution key with per-resolver metadata: phase numbers,
+timing, provider info, dependencies, the resolver dependency graph, provider
+usage summary, and an aggregate summary.
 
 SOLUTION SOURCE:
   Solutions can be loaded from:
@@ -306,7 +306,7 @@ Examples:
 	cCmd.Flags().BoolVar(&options.Snapshot, "snapshot", false, "Save execution snapshot instead of normal output")
 	cCmd.Flags().StringVar(&options.SnapshotFile, "snapshot-file", "", "Snapshot output file (required with --snapshot)")
 	cCmd.Flags().BoolVar(&options.Redact, "redact", false, "Redact sensitive values in snapshot")
-	cCmd.Flags().BoolVar(&options.HideExecution, "hide-execution", false, "Suppress __execution metadata from output")
+	cCmd.Flags().BoolVar(&options.ShowExecution, "show-execution", false, "Include __execution metadata (phases, timing, dependencies, providers) in output")
 
 	setResolverHelpFunc(cCmd)
 
@@ -330,7 +330,8 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		"snapshot", o.Snapshot,
 		"resolveAll", o.ResolveAll,
 		"progress", o.Progress,
-		"showMetrics", o.ShowMetrics)
+		"showMetrics", o.ShowMetrics,
+		"showExecution", o.ShowExecution)
 
 	// Validate mutually exclusive modes
 	if o.Graph && o.Snapshot {
@@ -456,8 +457,8 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		return o.exitWithCode(ctx, err, exitcode.ValidationFailed)
 	}
 
-	// Include __execution metadata unless --hide-execution is set
-	if !o.HideExecution {
+	// Include __execution metadata only when --show-execution is set
+	if o.ShowExecution {
 		executionData := execute.BuildExecutionData(resolverCtx, resolvers, elapsed)
 
 		// Build and embed the resolver dependency graph

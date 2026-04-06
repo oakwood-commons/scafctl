@@ -45,7 +45,7 @@ spec:
       _base:
         description: Base template for stdin-params tests
         command: [run, resolver]
-        args: ["-o", "json", "--hide-execution"]
+        args: ["-o", "json"]
         tags: [parameter, stdin]
         assertions:
           - expression: __exitCode == 0

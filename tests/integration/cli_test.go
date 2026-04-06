@@ -986,25 +986,26 @@ func TestIntegration_RunResolver_ExecutionMetadataAlwaysIncluded(t *testing.T) {
 	)
 
 	assert.Equal(t, 0, exitCode)
-	// __execution metadata is always included in run resolver output
+	// By default, __execution is NOT included (clean output is the default)
+	assert.NotContains(t, stdout, "__execution")
+}
+
+func TestIntegration_RunResolver_ShowExecution(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"--show-execution",
+		"-o", "json",
+	)
+
+	assert.Equal(t, 0, exitCode)
+	// --show-execution adds __execution metadata to output
 	assert.Contains(t, stdout, "__execution")
 	assert.Contains(t, stdout, "resolvers")
 	assert.Contains(t, stdout, "summary")
 	assert.Contains(t, stdout, "totalDuration")
 	assert.Contains(t, stdout, "phaseCount")
-}
-
-func TestIntegration_RunResolver_HideExecution(t *testing.T) {
-	t.Parallel()
-	stdout, _, exitCode := runScafctl(t,
-		"run", "resolver",
-		"-f", "examples/resolver-demo.yaml",
-		"--hide-execution",
-		"-o", "json",
-	)
-
-	assert.Equal(t, 0, exitCode)
-	assert.NotContains(t, stdout, "__execution")
 }
 
 func TestIntegration_RunResolver_SkipTransform(t *testing.T) {
@@ -1017,7 +1018,38 @@ func TestIntegration_RunResolver_SkipTransform(t *testing.T) {
 	)
 
 	assert.Equal(t, 0, exitCode)
-	assert.Contains(t, stdout, "__execution")
+	// skip-transform should not affect whether __execution is present (it is not, by default)
+	assert.NotContains(t, stdout, "__execution")
+}
+
+func TestIntegration_RunResolver_PlanDataInjected(t *testing.T) {
+	t.Parallel()
+	// plan-aware.yaml uses __plan in a when: condition and in a CEL expression.
+	// The resolver 'endpoint_info' only resolves when __plan['endpoint'].dependencyCount > 0.
+	stdout, _, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolvers/plan-aware.yaml",
+		"-o", "json",
+	)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0\nstdout: %s", stdout)
+	// __plan-conditional resolver should have resolved
+	assert.Contains(t, stdout, "dependent_check")
+	// The resolved value embeds phase info from __plan
+	assert.Contains(t, stdout, "phase")
+}
+
+func TestIntegration_RunResolver_PlanDataNotInOutput(t *testing.T) {
+	t.Parallel()
+	// __plan is an internal injection variable -- it must not appear in the clean output
+	stdout, _, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolvers/plan-aware.yaml",
+		"-o", "json",
+	)
+
+	assert.Equal(t, 0, exitCode)
+	assert.NotContains(t, stdout, `"__plan"`)
 }
 
 func TestIntegration_RunResolver_GraphASCII(t *testing.T) {
@@ -1080,6 +1112,7 @@ func TestIntegration_RunResolver_ExecutionIncludesGraphAndProviderSummary(t *tes
 		"run", "resolver",
 		"-f", "examples/resolver-demo.yaml",
 		"-o", "json",
+		"--show-execution",
 	)
 
 	assert.Equal(t, 0, exitCode)
@@ -1203,7 +1236,6 @@ spec:
 		"run", "resolver",
 		"-f", solutionPath,
 		"-o", "json",
-		"--hide-execution",
 	)
 
 	assert.Equal(t, 0, exitCode)
@@ -1263,12 +1295,29 @@ func TestIntegration_RunSolution_ShowExecution(t *testing.T) {
 		"run", "resolver",
 		"-f", "examples/resolver-demo.yaml",
 		"-o", "json",
+		"--show-execution",
 	)
 
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "__execution")
 	assert.Contains(t, stdout, "resolvers")
 	assert.Contains(t, stdout, "summary")
+}
+
+func TestIntegration_RunSolution_ExecutionContextInActions(t *testing.T) {
+	t.Parallel()
+	// execution-aware-actions uses __execution in action when: conditions and inputs.
+	// non-prod-deploy runs (staging != production) and its message input uses __execution.
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "solution",
+		"-f", "examples/solutions/execution-aware-actions/solution.yaml",
+	)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0\nstdout: %s\nstderr: %s", stdout, stderr)
+	// non-prod-deploy should have run (default environment is staging != production)
+	assert.Contains(t, stdout, "staging-cluster")
+	// prod-gate should have been skipped
+	assert.NotContains(t, stdout, "production-only checks")
 }
 
 func TestIntegration_RunSolution_ConditionalRetry(t *testing.T) {
@@ -5869,7 +5918,7 @@ spec:
 `
 	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
 
-	stdout, stderr, exitCode := runScafctl(t, "run", "resolver", "-f", solutionFile, "-e", "_.meta", "-o", "json", "--hide-execution")
+	stdout, stderr, exitCode := runScafctl(t, "run", "resolver", "-f", solutionFile, "-e", "_.meta", "-o", "json")
 	t.Logf("stdout: %s", stdout)
 	t.Logf("stderr: %s", stderr)
 
@@ -5920,7 +5969,7 @@ spec:
 `
 	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
 
-	stdout, stderr, exitCode := runScafctl(t, "run", "resolver", "-f", solutionFile, "-e", "_.slugified", "-o", "json", "--hide-execution")
+	stdout, stderr, exitCode := runScafctl(t, "run", "resolver", "-f", solutionFile, "-e", "_.slugified", "-o", "json")
 	t.Logf("stdout: %s", stdout)
 	t.Logf("stderr: %s", stderr)
 
@@ -5967,7 +6016,7 @@ spec:
 `
 	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
 
-	stdout, stderr, exitCode := runScafctl(t, "run", "resolver", "-f", solutionFile, "-e", "_.count", "-o", "json", "--hide-execution")
+	stdout, stderr, exitCode := runScafctl(t, "run", "resolver", "-f", solutionFile, "-e", "_.count", "-o", "json")
 	t.Logf("stdout: %s", stdout)
 	t.Logf("stderr: %s", stderr)
 
@@ -6016,7 +6065,7 @@ spec:
 `
 	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
 
-	stdout, stderr, exitCode := runScafctl(t, "run", "resolver", "-f", solutionFile, "-e", "_.names", "-o", "json", "--hide-execution")
+	stdout, stderr, exitCode := runScafctl(t, "run", "resolver", "-f", solutionFile, "-e", "_.names", "-o", "json")
 	t.Logf("stdout: %s", stdout)
 	t.Logf("stderr: %s", stderr)
 
@@ -6031,7 +6080,6 @@ func TestIntegration_RunResolver_PositionalParams(t *testing.T) {
 		"run", "resolver",
 		"-f", "examples/resolvers/parameters.yaml",
 		"-o", "json",
-		"--hide-execution",
 		"name=Alice",
 		"count=5",
 	)
@@ -6048,7 +6096,6 @@ func TestIntegration_RunResolver_PositionalMixedWithFlags(t *testing.T) {
 		"run", "resolver",
 		"-f", "examples/resolvers/parameters.yaml",
 		"-o", "json",
-		"--hide-execution",
 		"-r", "name=Bob",
 		"count=3",
 	)
@@ -6066,7 +6113,6 @@ func TestIntegration_RunResolver_PositionalWithResolverNames(t *testing.T) {
 		"name",
 		"-f", "examples/resolvers/parameters.yaml",
 		"-o", "json",
-		"--hide-execution",
 		"name=Charlie",
 	)
 	t.Logf("stdout: %s", stdout)
@@ -6977,7 +7023,6 @@ func TestIntegration_RunResolver_StdinParamsYAML(t *testing.T) {
 		"run", "resolver",
 		"-f", "examples/resolvers/parameters.yaml",
 		"-o", "json",
-		"--hide-execution",
 		"-r", "@-",
 	)
 	t.Logf("stdout: %s", stdout)
@@ -6994,7 +7039,6 @@ func TestIntegration_RunResolver_StdinParamsJSON(t *testing.T) {
 		"run", "resolver",
 		"-f", "examples/resolvers/parameters.yaml",
 		"-o", "json",
-		"--hide-execution",
 		"-r", "@-",
 	)
 	t.Logf("stdout: %s", stdout)
@@ -7011,7 +7055,6 @@ func TestIntegration_RunResolver_StdinParamsPositional(t *testing.T) {
 		"run", "resolver",
 		"-f", "examples/resolvers/parameters.yaml",
 		"-o", "json",
-		"--hide-execution",
 		"@-",
 	)
 	t.Logf("stdout: %s", stdout)
@@ -7084,7 +7127,6 @@ func TestIntegration_RunResolver_StdinMixedWithFileRef(t *testing.T) {
 		"run", "resolver",
 		"-f", "examples/resolvers/parameters.yaml",
 		"-o", "json",
-		"--hide-execution",
 		"-r", "@"+paramFile,
 		"-r", "@-",
 	)
@@ -7106,7 +7148,6 @@ func TestIntegration_RunResolver_RawStdinParam(t *testing.T) {
 		"run", "resolver",
 		"-f", "tests/integration/solutions/resolvers/stdin-params/solution.yaml",
 		"-o", "json",
-		"--hide-execution",
 		"-r", "greeting=Hello",
 		"-r", "name=@-",
 	)
@@ -7129,7 +7170,6 @@ func TestIntegration_RunResolver_RawFileParam(t *testing.T) {
 		"run", "resolver",
 		"-f", "tests/integration/solutions/resolvers/stdin-params/solution.yaml",
 		"-o", "json",
-		"--hide-execution",
 		"-r", "greeting=Hi",
 		"-r", "name=@"+contentFile,
 	)
@@ -7178,7 +7218,6 @@ func TestIntegration_RunResolver_RawStdinConflictWithStandaloneAt(t *testing.T) 
 		"run", "resolver",
 		"-f", "tests/integration/solutions/resolvers/stdin-params/solution.yaml",
 		"-o", "json",
-		"--hide-execution",
 		"-r", "name=@-",
 		"-r", "@-",
 	)
@@ -7194,7 +7233,6 @@ func TestIntegration_RunResolver_RawStdinWithOtherParams(t *testing.T) {
 		"run", "resolver",
 		"-f", "tests/integration/solutions/resolvers/stdin-params/solution.yaml",
 		"-o", "json",
-		"--hide-execution",
 		"-r", "greeting=Hey",
 		"-r", "name=@-",
 	)
@@ -7218,7 +7256,6 @@ func TestIntegration_RunResolver_RawFileAndStdinMixed(t *testing.T) {
 		"run", "resolver",
 		"-f", "tests/integration/solutions/resolvers/stdin-params/solution.yaml",
 		"-o", "json",
-		"--hide-execution",
 		"-r", "greeting=@"+contentFile,
 		"-r", "name=@-",
 	)

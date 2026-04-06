@@ -812,19 +812,23 @@ func buildAliasNames(sections ...map[string]*Action) []string {
 	return aliases
 }
 
-// referencesActionsOrAlias checks if a ValueRef references __actions, __cwd, or any action alias.
+// referencesActionsOrAlias checks if a ValueRef references __actions, __cwd, __execution, or any action alias.
 // If any is true, the value must be deferred until runtime when action results and executor context are available.
 func referencesActionsOrAlias(v *spec.ValueRef, aliasNames []string) bool {
-	if v.ReferencesVariable(celexp.VarActions) {
+	vars := v.ReferencedVariables()
+
+	if _, ok := vars[celexp.VarActions]; ok {
 		return true
 	}
-
-	if v.ReferencesVariable(celexp.VarCwd) {
+	if _, ok := vars[celexp.VarCwd]; ok {
+		return true
+	}
+	if _, ok := vars[celexp.VarExecution]; ok {
 		return true
 	}
 
 	for _, alias := range aliasNames {
-		if v.ReferencesVariable(alias) {
+		if _, ok := vars[alias]; ok {
 			return true
 		}
 	}

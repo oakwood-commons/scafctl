@@ -41,7 +41,7 @@ spec:
       _base:
         description: Base template
         command: [run, resolver]
-        args: ["-o", "json", "--hide-execution"]
+        args: ["-o", "json"]
         tags: [validation, parameter]
         assertions:
           - expression: __exitCode == 0
@@ -49,7 +49,7 @@ spec:
       valid-params:
         description: Valid parameter keys are accepted
         extends: [_base]
-        args: ["-o", "json", "--hide-execution", "-r", "name=Alice", "-r", "region=eu-west-1"]
+        args: ["-o", "json", "-r", "name=Alice", "-r", "region=eu-west-1"]
         assertions:
           - expression: __exitCode == 0
           - expression: __output.greeting == "Alice"
@@ -58,7 +58,7 @@ spec:
       unknown-param-with-suggestion:
         description: Unknown parameter key close to a valid one produces did-you-mean error
         command: [run, resolver]
-        args: ["-o", "json", "--hide-execution", "-r", "namee=Alice"]
+        args: ["-o", "json", "-r", "namee=Alice"]
         tags: [validation, parameter]
         assertions:
           - expression: __exitCode != 0
@@ -70,7 +70,7 @@ spec:
       unknown-param-no-suggestion:
         description: Completely unknown parameter key produces error without suggestion
         command: [run, resolver]
-        args: ["-o", "json", "--hide-execution", "-r", "zzzzz=value"]
+        args: ["-o", "json", "-r", "zzzzz=value"]
         tags: [validation, parameter]
         assertions:
           - expression: __exitCode != 0

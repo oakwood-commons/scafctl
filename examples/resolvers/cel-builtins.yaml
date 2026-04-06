@@ -2,8 +2,8 @@
 # Demonstrates built-in CEL functions: math, encoders, sets, optionals,
 # bindings, string operations, and list comprehensions.
 #
-# Run: scafctl run resolver -f examples/resolvers/cel-builtins.yaml -o json --hide-execution
-# Run: scafctl run resolver -f examples/resolvers/cel-builtins.yaml -o yaml --hide-execution
+# Run: scafctl run resolver -f examples/resolvers/cel-builtins.yaml -o json
+# Run: scafctl run resolver -f examples/resolvers/cel-builtins.yaml -o yaml
 
 apiVersion: scafctl.io/v1
 kind: Solution

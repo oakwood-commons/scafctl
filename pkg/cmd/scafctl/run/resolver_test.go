@@ -55,7 +55,6 @@ func TestCommandResolver(t *testing.T) {
 
 	// Should NOT have solution-specific flags
 	assert.Nil(t, ff.Lookup("action-timeout"))
-	assert.Nil(t, ff.Lookup("show-execution"))
 }
 
 func TestCommandResolver_FlagDefaults(t *testing.T) {
@@ -477,6 +476,7 @@ spec:
 			PhaseTimeout:    5 * time.Minute,
 			registry:        testRegistry(),
 		},
+		ShowExecution: true,
 	}
 
 	lgr := logger.Get(0)
@@ -522,7 +522,7 @@ spec:
 	assert.Equal(t, float64(1), summary["resolverCount"])
 }
 
-func TestResolverOptions_Run_HideExecution(t *testing.T) {
+func TestResolverOptions_Run_ShowExecution(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
@@ -530,7 +530,7 @@ func TestResolverOptions_Run_HideExecution(t *testing.T) {
 	solutionContent := `apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
-  name: hide-execution-test
+  name: show-execution-test
   version: 1.0.0
 spec:
   resolvers:
@@ -563,7 +563,7 @@ spec:
 			PhaseTimeout:    5 * time.Minute,
 			registry:        testRegistry(),
 		},
-		HideExecution: true,
+		ShowExecution: true,
 	}
 
 	lgr := logger.Get(0)
@@ -574,7 +574,7 @@ spec:
 
 	output := stdout.String()
 	assert.Contains(t, output, "hello")
-	assert.NotContains(t, output, "__execution", "__execution should not be present when --hide-execution is set")
+	assert.Contains(t, output, "__execution", "__execution should be present when --show-execution is set")
 
 	// Parse JSON to validate structure
 	var result map[string]any
@@ -582,7 +582,7 @@ spec:
 	require.NoError(t, err)
 
 	_, hasExecution := result["__execution"]
-	assert.False(t, hasExecution, "__execution key should not exist in output")
+	assert.True(t, hasExecution, "__execution key should exist in output when --show-execution is set")
 
 	// Resolver values should still be present
 	assert.Equal(t, "hello", result["greeting"])
@@ -681,7 +681,7 @@ spec:
 			PhaseTimeout:    5 * time.Minute,
 			registry:        testRegistry(),
 		},
-		HideExecution: true,
+		ShowExecution: true,
 	}
 
 	lgr := logger.Get(0)
@@ -762,7 +762,7 @@ spec:
 			PhaseTimeout:    5 * time.Minute,
 			registry:        testRegistry(),
 		},
-		HideExecution: true,
+		ShowExecution: true,
 	}
 
 	lgr := logger.Get(0)
@@ -826,7 +826,7 @@ spec:
 			PhaseTimeout:    5 * time.Minute,
 			registry:        testRegistry(),
 		},
-		HideExecution: true,
+		ShowExecution: true,
 	}
 
 	lgr := logger.Get(0)
@@ -1287,6 +1287,7 @@ spec:
 			registry:        testRegistry(),
 		},
 		SkipTransform: true,
+		ShowExecution: true,
 	}
 
 	lgr := logger.Get(0)
@@ -1456,6 +1457,7 @@ spec:
 			PhaseTimeout:    5 * time.Minute,
 			registry:        testRegistry(),
 		},
+		ShowExecution: true,
 	}
 
 	lgr := logger.Get(0)

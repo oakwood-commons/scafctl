@@ -28,7 +28,7 @@ func SanitizeBinaryName(raw string) string {
 	name = strings.TrimSuffix(name, filepath.Ext(name))
 	name = safeNameRe.ReplaceAllString(name, "_")
 	name = strings.Trim(name, "_")
-	if name == "" || name == "." {
+	if name == "" || name == "." || name == ".." {
 		return CliBinaryName
 	}
 	return name
@@ -93,9 +93,7 @@ const (
 // HTTPCacheDirFor returns the HTTP cache directory for the given binary name.
 // An empty binaryName defaults to CliBinaryName.
 func HTTPCacheDirFor(binaryName string) string {
-	if binaryName == "" {
-		binaryName = CliBinaryName
-	}
+	binaryName = SanitizeBinaryName(binaryName)
 	return filepath.Join(xdg.CacheHome, binaryName, "http-cache")
 }
 
@@ -233,9 +231,7 @@ const (
 // BuildCacheDirFor returns the build cache directory for the given binary name.
 // An empty binaryName defaults to CliBinaryName.
 func BuildCacheDirFor(binaryName string) string {
-	if binaryName == "" {
-		binaryName = CliBinaryName
-	}
+	binaryName = SanitizeBinaryName(binaryName)
 	return filepath.Join(xdg.CacheHome, binaryName, "build-cache")
 }
 
@@ -251,9 +247,7 @@ func DefaultBuildCacheDir() string {
 // PluginCacheDirFor returns the plugin cache directory for the given binary name.
 // An empty binaryName defaults to CliBinaryName.
 func PluginCacheDirFor(binaryName string) string {
-	if binaryName == "" {
-		binaryName = CliBinaryName
-	}
+	binaryName = SanitizeBinaryName(binaryName)
 	return filepath.Join(xdg.CacheHome, binaryName, "plugins")
 }
 

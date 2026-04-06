@@ -98,12 +98,12 @@ spec:
 {{< tabs "go-templates-tutorial-cmd-1" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f template-basics.yaml -e _.greeting -o yaml --hide-execution
+scafctl run resolver -f template-basics.yaml -e _.greeting -o yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f template-basics.yaml -e _.greeting -o yaml --hide-execution
+scafctl run resolver -f template-basics.yaml -e _.greeting -o yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -204,12 +204,12 @@ Run without passing any parameters — the environment defaults to `development`
 {{< tabs "go-templates-tutorial-cmd-2" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f template-conditionals.yaml -e _.deployment_config -o yaml --hide-execution
+scafctl run resolver -f template-conditionals.yaml -e _.deployment_config -o yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f template-conditionals.yaml -e _.deployment_config -o yaml --hide-execution
+scafctl run resolver -f template-conditionals.yaml -e _.deployment_config -o yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -239,12 +239,12 @@ Pass `-r env=staging` to override the environment:
 {{< tabs "go-templates-tutorial-cmd-3" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f template-conditionals.yaml -r env=staging -e _.deployment_config -o yaml --hide-execution
+scafctl run resolver -f template-conditionals.yaml -r env=staging -e _.deployment_config -o yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f template-conditionals.yaml -r env=staging -e _.deployment_config -o yaml --hide-execution
+scafctl run resolver -f template-conditionals.yaml -r env=staging -e _.deployment_config -o yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -269,12 +269,12 @@ The `{{ else if eq .environment "staging" }}` branch is now active.
 {{< tabs "go-templates-tutorial-cmd-4" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f template-conditionals.yaml -r env=production -e _.deployment_config -o yaml --hide-execution
+scafctl run resolver -f template-conditionals.yaml -r env=production -e _.deployment_config -o yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f template-conditionals.yaml -r env=production -e _.deployment_config -o yaml --hide-execution
+scafctl run resolver -f template-conditionals.yaml -r env=production -e _.deployment_config -o yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -361,12 +361,12 @@ spec:
 {{< tabs "go-templates-tutorial-cmd-5" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f template-loops.yaml -e _.service_report -o yaml --hide-execution
+scafctl run resolver -f template-loops.yaml -e _.service_report -o yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f template-loops.yaml -e _.service_report -o yaml --hide-execution
+scafctl run resolver -f template-loops.yaml -e _.service_report -o yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -473,12 +473,12 @@ spec:
 {{< tabs "go-templates-tutorial-cmd-6" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f template-maps.yaml -e _.feature_summary -o yaml --hide-execution
+scafctl run resolver -f template-maps.yaml -e _.feature_summary -o yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f template-maps.yaml -e _.feature_summary -o yaml --hide-execution
+scafctl run resolver -f template-maps.yaml -e _.feature_summary -o yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -575,12 +575,12 @@ First, check the untrimmed version:
 {{< tabs "go-templates-tutorial-cmd-7" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f template-whitespace.yaml -e _.without_trim -o yaml --hide-execution
+scafctl run resolver -f template-whitespace.yaml -e _.without_trim -o yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f template-whitespace.yaml -e _.without_trim -o yaml --hide-execution
+scafctl run resolver -f template-whitespace.yaml -e _.without_trim -o yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -590,12 +590,12 @@ Then compare with the trimmed version:
 {{< tabs "go-templates-tutorial-cmd-8" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f template-whitespace.yaml -e _.with_trim -o yaml --hide-execution
+scafctl run resolver -f template-whitespace.yaml -e _.with_trim -o yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f template-whitespace.yaml -e _.with_trim -o yaml --hide-execution
+scafctl run resolver -f template-whitespace.yaml -e _.with_trim -o yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -910,12 +910,12 @@ First, comment out or remove the `strict_mode` resolver (it will cause a failure
 {{< tabs "go-templates-tutorial-cmd-11" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f template-missing-keys.yaml -e _.silent_mode -o yaml --hide-execution
+scafctl run resolver -f template-missing-keys.yaml -e _.silent_mode -o yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f template-missing-keys.yaml -e _.silent_mode -o yaml --hide-execution
+scafctl run resolver -f template-missing-keys.yaml -e _.silent_mode -o yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -935,12 +935,12 @@ Now add back the `strict_mode` resolver and run:
 {{< tabs "go-templates-tutorial-cmd-12" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f template-missing-keys.yaml -e _.strict_mode -o yaml --hide-execution
+scafctl run resolver -f template-missing-keys.yaml -e _.strict_mode -o yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f template-missing-keys.yaml -e _.strict_mode -o yaml --hide-execution
+scafctl run resolver -f template-missing-keys.yaml -e _.strict_mode -o yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -968,12 +968,12 @@ Re-run and both resolvers now succeed:
 {{< tabs "go-templates-tutorial-cmd-13" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f template-missing-keys.yaml -e _.strict_mode -o yaml --hide-execution
+scafctl run resolver -f template-missing-keys.yaml -e _.strict_mode -o yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f template-missing-keys.yaml -e _.strict_mode -o yaml --hide-execution
+scafctl run resolver -f template-missing-keys.yaml -e _.strict_mode -o yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1052,12 +1052,12 @@ spec:
 {{< tabs "go-templates-tutorial-cmd-14" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f template-extra-data.yaml -e _.release_notes -o yaml --hide-execution
+scafctl run resolver -f template-extra-data.yaml -e _.release_notes -o yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f template-extra-data.yaml -e _.release_notes -o yaml --hide-execution
+scafctl run resolver -f template-extra-data.yaml -e _.release_notes -o yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1138,12 +1138,12 @@ spec:
 {{< tabs "go-templates-tutorial-cmd-15" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f template-delimiters.yaml -e _.helm_values -o yaml --hide-execution
+scafctl run resolver -f template-delimiters.yaml -e _.helm_values -o yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f template-delimiters.yaml -e _.helm_values -o yaml --hide-execution
+scafctl run resolver -f template-delimiters.yaml -e _.helm_values -o yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1774,12 +1774,12 @@ spec:
 {{< tabs "go-templates-tutorial-cmd-23" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f template-sprig.yaml -e _.greeting -o yaml --hide-execution
+scafctl run resolver -f template-sprig.yaml -e _.greeting -o yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f template-sprig.yaml -e _.greeting -o yaml --hide-execution
+scafctl run resolver -f template-sprig.yaml -e _.greeting -o yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1797,12 +1797,12 @@ Try the other resolvers:
 {{< tabs "go-templates-tutorial-cmd-24" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f template-sprig.yaml -e _.config -o yaml --hide-execution
+scafctl run resolver -f template-sprig.yaml -e _.config -o yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f template-sprig.yaml -e _.config -o yaml --hide-execution
+scafctl run resolver -f template-sprig.yaml -e _.config -o yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1814,12 +1814,12 @@ port=8080, tls=true, debug=false
 {{< tabs "go-templates-tutorial-cmd-25" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f template-sprig.yaml -e _.formatted -o yaml --hide-execution
+scafctl run resolver -f template-sprig.yaml -e _.formatted -o yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f template-sprig.yaml -e _.formatted -o yaml --hide-execution
+scafctl run resolver -f template-sprig.yaml -e _.formatted -o yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1890,12 +1890,12 @@ spec:
 {{< tabs "go-templates-tutorial-cmd-26" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f template-tohcl.yaml -e _.hclOutput -o yaml --hide-execution
+scafctl run resolver -f template-tohcl.yaml -e _.hclOutput -o yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f template-tohcl.yaml -e _.hclOutput -o yaml --hide-execution
+scafctl run resolver -f template-tohcl.yaml -e _.hclOutput -o yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1982,12 +1982,12 @@ spec:
 {{< tabs "go-templates-tutorial-cmd-27" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f template-yaml.yaml -e _.yamlOutput -o yaml --hide-execution
+scafctl run resolver -f template-yaml.yaml -e _.yamlOutput -o yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f template-yaml.yaml -e _.yamlOutput -o yaml --hide-execution
+scafctl run resolver -f template-yaml.yaml -e _.yamlOutput -o yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}
