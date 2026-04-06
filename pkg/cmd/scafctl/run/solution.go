@@ -112,7 +112,7 @@ The execution proceeds in two phases:
 To execute resolvers only without actions (for debugging/inspection), use:
   scafctl run resolver
 
-` + ResolverParametersFlagHelp + `
+`+ResolverParametersFlagHelp+`
 
 EXECUTION ORDER:
   1. Parse and validate solution (must have workflow)
