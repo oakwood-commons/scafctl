@@ -569,6 +569,8 @@ type CustomOAuth2Config struct {
 	DefaultFlow            string   `json:"defaultFlow,omitempty" yaml:"defaultFlow,omitempty" mapstructure:"defaultFlow" doc:"Default OAuth2 flow (interactive, device_code, client_credentials)" enum:"interactive,device_code,client_credentials" maxLength:"32" example:"interactive"`
 	CallbackPort           int      `json:"callbackPort,omitempty" yaml:"callbackPort,omitempty" mapstructure:"callbackPort" doc:"Local callback port for interactive flow (0 = random)" minimum:"0" maximum:"65535" example:"8080"`
 	DeviceCodePollInterval int      `json:"deviceCodePollInterval,omitempty" yaml:"deviceCodePollInterval,omitempty" mapstructure:"deviceCodePollInterval" doc:"Polling interval in seconds for device_code flow (0 = server default)" minimum:"0" maximum:"30" example:"5"`
+	DisablePKCE            bool     `json:"disablePKCE,omitempty" yaml:"disablePKCE,omitempty" mapstructure:"disablePKCE" doc:"Disable PKCE for servers that reject code_challenge parameters"`
+	ResponseType           string   `json:"responseType,omitempty" yaml:"responseType,omitempty" mapstructure:"responseType" doc:"OAuth2 response type: code (default) or token (implicit grant)" enum:"code,token" maxLength:"16" example:"token"`
 
 	// Token verification
 	VerifyURL      string                `json:"verifyURL,omitempty" yaml:"verifyURL,omitempty" mapstructure:"verifyURL" doc:"Token verification endpoint (optional)" maxLength:"2048" example:"https://quay.io/api/v1/user/"`

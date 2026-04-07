@@ -69,6 +69,11 @@ func WithLogger(lgr logr.Logger) Option {
 
 // New creates a new generic OAuth2 auth handler from a CustomOAuth2Config.
 func New(cfg config.CustomOAuth2Config, opts ...Option) (*Handler, error) {
+	// Implicit grant flow does not use PKCE.
+	if cfg.ResponseType == "token" {
+		cfg.DisablePKCE = true
+	}
+
 	h := &Handler{
 		cfg:    cfg,
 		logger: logr.Discard(),
@@ -364,11 +369,19 @@ func (h *Handler) authCodeLogin(ctx context.Context, scopes []string, callbackPo
 		return nil, fmt.Errorf("authorizeURL is required for interactive flow")
 	}
 
-	verifier, err := oauth.GenerateCodeVerifier()
-	if err != nil {
-		return nil, fmt.Errorf("generate PKCE verifier: %w", err)
+	// Implicit grant flow (response_type=token) uses a different callback mechanism.
+	if h.cfg.ResponseType == "token" {
+		return h.implicitGrantLogin(ctx, scopes, callbackPort)
 	}
-	challenge := oauth.GenerateCodeChallenge(verifier)
+
+	var verifier string
+	if !h.cfg.DisablePKCE {
+		var err error
+		verifier, err = oauth.GenerateCodeVerifier()
+		if err != nil {
+			return nil, fmt.Errorf("generate PKCE verifier: %w", err)
+		}
+	}
 
 	state, err := oauth.GenerateCodeVerifier()
 	if err != nil {
@@ -390,8 +403,11 @@ func (h *Handler) authCodeLogin(ctx context.Context, scopes []string, callbackPo
 	q.Set("client_id", h.cfg.ClientID)
 	q.Set("redirect_uri", callbackServer.RedirectURI)
 	q.Set("state", state)
-	q.Set("code_challenge", challenge)
-	q.Set("code_challenge_method", "S256")
+	if !h.cfg.DisablePKCE {
+		challenge := oauth.GenerateCodeChallenge(verifier)
+		q.Set("code_challenge", challenge)
+		q.Set("code_challenge_method", "S256")
+	}
 	if len(scopes) > 0 {
 		q.Set("scope", strings.Join(scopes, " "))
 	}
@@ -414,11 +430,14 @@ func (h *Handler) authCodeLogin(ctx context.Context, scopes []string, callbackPo
 
 func (h *Handler) exchangeAuthCode(ctx context.Context, code, redirectURI, codeVerifier string, scopes []string) (*tokenResponse, error) {
 	data := url.Values{
-		"grant_type":    {"authorization_code"},
-		"code":          {code},
-		"redirect_uri":  {redirectURI},
-		"client_id":     {h.cfg.ClientID},
-		"code_verifier": {codeVerifier},
+		"grant_type":   {"authorization_code"},
+		"code":         {code},
+		"redirect_uri": {redirectURI},
+		"client_id":    {h.cfg.ClientID},
+	}
+	// codeVerifier is empty when h.cfg.DisablePKCE is true (set by authCodeLogin).
+	if codeVerifier != "" {
+		data.Set("code_verifier", codeVerifier)
 	}
 	if h.cfg.ClientSecret != "" {
 		data.Set("client_secret", h.cfg.ClientSecret)
@@ -427,6 +446,68 @@ func (h *Handler) exchangeAuthCode(ctx context.Context, code, redirectURI, codeV
 		data.Set("scope", strings.Join(scopes, " "))
 	}
 	return h.postTokenEndpoint(ctx, data)
+}
+
+// ---------- flow: implicit grant (response_type=token) ----------
+
+func (h *Handler) implicitGrantLogin(ctx context.Context, scopes []string, callbackPort int) (*tokenResponse, error) {
+	state, err := oauth.GenerateCodeVerifier()
+	if err != nil {
+		return nil, fmt.Errorf("generate state: %w", err)
+	}
+
+	callbackServer, err := oauth.StartImplicitCallbackServer(ctx, callbackPort, state)
+	if err != nil {
+		return nil, fmt.Errorf("start callback server: %w", err)
+	}
+	defer callbackServer.Close()
+
+	authURL, err := url.Parse(h.cfg.AuthorizeURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse authorizeURL: %w", err)
+	}
+	q := authURL.Query()
+	q.Set("response_type", "token")
+	q.Set("client_id", h.cfg.ClientID)
+	q.Set("redirect_uri", callbackServer.RedirectURI)
+	q.Set("state", state)
+	if len(scopes) > 0 {
+		q.Set("scope", strings.Join(scopes, " "))
+	}
+	authURL.RawQuery = q.Encode()
+
+	if openErr := oauth.OpenBrowser(ctx, authURL.String()); openErr != nil {
+		h.logger.V(1).Info("failed to open browser", "url", authURL.String(), "error", openErr)
+	}
+
+	select {
+	case result := <-callbackServer.ResultChan():
+		if result.Err != nil {
+			return nil, fmt.Errorf("callback error: %w", result.Err)
+		}
+		resp := &tokenResponse{
+			AccessToken: result.AccessToken,
+			TokenType:   result.TokenType,
+		}
+		if resp.TokenType == "" {
+			resp.TokenType = defaultTokenType
+		}
+		if result.ExpiresIn != "" {
+			var expiresIn int
+			if _, scanErr := fmt.Sscanf(result.ExpiresIn, "%d", &expiresIn); scanErr == nil {
+				resp.ExpiresIn = expiresIn
+			} else {
+				h.logger.V(1).Info("failed to parse expires_in from implicit grant, defaulting to 3600", "value", result.ExpiresIn, "error", scanErr)
+				resp.ExpiresIn = 3600
+			}
+		} else {
+			h.logger.V(1).Info("expires_in not provided by implicit grant server, defaulting to 3600")
+			resp.ExpiresIn = 3600
+		}
+		return resp, nil
+	case <-ctx.Done():
+		return nil, auth.ErrTimeout
+	}
 }
 
 // ---------- flow: device code (RFC 8628) ----------
@@ -888,7 +969,24 @@ func ValidateConfig(cfg config.CustomOAuth2Config) error {
 	if cfg.Name == "" {
 		return fmt.Errorf("custom OAuth2 handler: name is required")
 	}
-	if cfg.TokenURL == "" {
+
+	// Validate responseType early so unknown values are rejected before
+	// field-presence checks that depend on the response type.
+	switch cfg.ResponseType {
+	case "", "code":
+		// default authorization code flow
+	case "token":
+		if cfg.AuthorizeURL == "" {
+			return fmt.Errorf("custom OAuth2 handler %q: authorizeURL is required when responseType is token", cfg.Name)
+		}
+		if cfg.DefaultFlow != "" && cfg.DefaultFlow != "interactive" {
+			return fmt.Errorf("custom OAuth2 handler %q: implicit grant (responseType=token) only supports interactive flow, got defaultFlow=%q", cfg.Name, cfg.DefaultFlow)
+		}
+	default:
+		return fmt.Errorf("custom OAuth2 handler %q: unknown responseType %q (valid: code, token)", cfg.Name, cfg.ResponseType)
+	}
+
+	if cfg.TokenURL == "" && cfg.ResponseType != "token" {
 		return fmt.Errorf("custom OAuth2 handler %q: tokenURL is required", cfg.Name)
 	}
 	if cfg.ClientID == "" {

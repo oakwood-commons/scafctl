@@ -6,7 +6,9 @@ package oauth
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -244,6 +246,220 @@ func TestCallbackServer_NoExpectedState_SkipsValidation(t *testing.T) {
 	case result := <-cs.ResultChan():
 		assert.NoError(t, result.Err)
 		assert.Equal(t, "test-code", result.Code)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for callback result")
+	}
+}
+
+// ---------- implicit grant callback tests ----------
+
+func TestStartImplicitCallbackServer(t *testing.T) {
+	ctx := context.Background()
+	cs, err := StartImplicitCallbackServer(ctx, 0, "")
+	require.NoError(t, err)
+	defer cs.Close()
+
+	assert.Contains(t, cs.RedirectURI, "http://localhost:")
+}
+
+func TestImplicitCallbackServer_ServesHTMLPage(t *testing.T) {
+	ctx := context.Background()
+	cs, err := StartImplicitCallbackServer(ctx, 0, "")
+	require.NoError(t, err)
+	defer cs.Close()
+
+	resp, err := http.Get(cs.RedirectURI + "/") //nolint:noctx // test code
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Contains(t, string(body), "window.location.hash")
+	assert.Contains(t, string(body), "/token")
+}
+
+func TestImplicitCallbackServer_ReceivesToken(t *testing.T) {
+	ctx := context.Background()
+	cs, err := StartImplicitCallbackServer(ctx, 0, "")
+	require.NoError(t, err)
+	defer cs.Close()
+
+	// Simulate the JavaScript POSTing the fragment data
+	tokenData := "access_token=test-implicit-token&token_type=Bearer&expires_in=3600"
+	resp, err := http.Post(cs.RedirectURI+"/token", "application/x-www-form-urlencoded", strings.NewReader(tokenData)) //nolint:noctx // test code
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	select {
+	case result := <-cs.ResultChan():
+		assert.NoError(t, result.Err)
+		assert.Equal(t, "test-implicit-token", result.AccessToken)
+		assert.Equal(t, "Bearer", result.TokenType)
+		assert.Equal(t, "3600", result.ExpiresIn)
+		assert.Empty(t, result.Code)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for callback result")
+	}
+}
+
+func TestImplicitCallbackServer_MissingToken(t *testing.T) {
+	ctx := context.Background()
+	cs, err := StartImplicitCallbackServer(ctx, 0, "")
+	require.NoError(t, err)
+	defer cs.Close()
+
+	// POST with no access_token
+	resp, err := http.Post(cs.RedirectURI+"/token", "application/x-www-form-urlencoded", strings.NewReader("token_type=Bearer")) //nolint:noctx // test code
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	select {
+	case result := <-cs.ResultChan():
+		assert.Error(t, result.Err)
+		assert.Contains(t, result.Err.Error(), "no access_token")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for callback result")
+	}
+}
+
+func TestImplicitCallbackServer_OAuthError(t *testing.T) {
+	ctx := context.Background()
+	cs, err := StartImplicitCallbackServer(ctx, 0, "")
+	require.NoError(t, err)
+	defer cs.Close()
+
+	errorData := "error=access_denied&error_description=user+cancelled"
+	resp, err := http.Post(cs.RedirectURI+"/token", "application/x-www-form-urlencoded", strings.NewReader(errorData)) //nolint:noctx // test code
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	select {
+	case result := <-cs.ResultChan():
+		assert.Error(t, result.Err)
+		assert.Contains(t, result.Err.Error(), "access_denied")
+		assert.Contains(t, result.Err.Error(), "user cancelled")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for callback result")
+	}
+}
+
+func TestImplicitCallbackServer_StateValidation_Matches(t *testing.T) {
+	ctx := context.Background()
+	cs, err := StartImplicitCallbackServer(ctx, 0, "my-state-123")
+	require.NoError(t, err)
+	defer cs.Close()
+
+	tokenData := "access_token=tok&token_type=Bearer&state=my-state-123"
+	resp, err := http.Post(cs.RedirectURI+"/token", "application/x-www-form-urlencoded", strings.NewReader(tokenData)) //nolint:noctx // test code
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	select {
+	case result := <-cs.ResultChan():
+		assert.NoError(t, result.Err)
+		assert.Equal(t, "tok", result.AccessToken)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for callback result")
+	}
+}
+
+func TestImplicitCallbackServer_StateValidation_Mismatch(t *testing.T) {
+	ctx := context.Background()
+	cs, err := StartImplicitCallbackServer(ctx, 0, "expected-state")
+	require.NoError(t, err)
+	defer cs.Close()
+
+	tokenData := "access_token=tok&token_type=Bearer&state=wrong-state"
+	resp, err := http.Post(cs.RedirectURI+"/token", "application/x-www-form-urlencoded", strings.NewReader(tokenData)) //nolint:noctx // test code
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+
+	select {
+	case result := <-cs.ResultChan():
+		assert.Error(t, result.Err)
+		assert.Contains(t, result.Err.Error(), "state parameter mismatch")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for callback result")
+	}
+}
+
+func TestImplicitCallbackServer_StateOmittedByServer(t *testing.T) {
+	ctx := context.Background()
+	cs, err := StartImplicitCallbackServer(ctx, 0, "my-state")
+	require.NoError(t, err)
+	defer cs.Close()
+
+	// Server omits state from fragment — should be accepted per RFC 6749 §4.2.2
+	tokenData := "access_token=tok&token_type=Bearer"
+	resp, err := http.Post(cs.RedirectURI+"/token", "application/x-www-form-urlencoded", strings.NewReader(tokenData)) //nolint:noctx // test code
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	select {
+	case result := <-cs.ResultChan():
+		assert.NoError(t, result.Err)
+		assert.Equal(t, "tok", result.AccessToken)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for callback result")
+	}
+}
+
+func TestImplicitCallbackServer_RejectsGET(t *testing.T) {
+	ctx := context.Background()
+	cs, err := StartImplicitCallbackServer(ctx, 0, "")
+	require.NoError(t, err)
+	defer cs.Close()
+
+	resp, err := http.Get(cs.RedirectURI + "/token?access_token=tok") //nolint:noctx // test code
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
+}
+
+func TestImplicitCallbackServer_RejectsCrossOrigin(t *testing.T) {
+	ctx := context.Background()
+	cs, err := StartImplicitCallbackServer(ctx, 0, "")
+	require.NoError(t, err)
+	defer cs.Close()
+
+	tokenData := "access_token=tok&token_type=Bearer"
+	req, err := http.NewRequest(http.MethodPost, cs.RedirectURI+"/token", strings.NewReader(tokenData)) //nolint:noctx // test code
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://evil.example.com")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+}
+
+func TestImplicitCallbackServer_AllowsSameOrigin(t *testing.T) {
+	ctx := context.Background()
+	cs, err := StartImplicitCallbackServer(ctx, 0, "")
+	require.NoError(t, err)
+	defer cs.Close()
+
+	tokenData := "access_token=tok&token_type=Bearer"
+	req, err := http.NewRequest(http.MethodPost, cs.RedirectURI+"/token", strings.NewReader(tokenData)) //nolint:noctx // test code
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", cs.RedirectURI)
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	select {
+	case result := <-cs.ResultChan():
+		assert.NoError(t, result.Err)
+		assert.Equal(t, "tok", result.AccessToken)
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for callback result")
 	}

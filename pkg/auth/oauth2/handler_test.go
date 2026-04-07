@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -430,6 +431,11 @@ func TestValidateConfig(t *testing.T) {
 		{name: "exchange bad method", cfg: config.CustomOAuth2Config{Name: "t", TokenURL: "https://x.com/token", ClientID: "c", ClientSecret: "s", DefaultFlow: "client_credentials", TokenExchange: &config.TokenExchangeConfig{URL: "https://x.com/e", TokenJSONPath: "t", Method: "DELETE"}}, wantErr: "tokenExchange.method must be"},
 		{name: "valid minimal", cfg: config.CustomOAuth2Config{Name: "t", TokenURL: "https://x.com/token", ClientID: "c", ClientSecret: "s"}},
 		{name: "valid full", cfg: config.CustomOAuth2Config{Name: "t", TokenURL: "https://x.com/token", ClientID: "c", AuthorizeURL: "https://x.com/a", DeviceAuthURL: "https://x.com/d", ClientSecret: "s", CallbackPort: 8080, TokenExchange: &config.TokenExchangeConfig{URL: "https://x.com/e", TokenJSONPath: "t", Method: "POST"}}},
+		{name: "responseType token valid", cfg: config.CustomOAuth2Config{Name: "t", TokenURL: "https://x.com/token", ClientID: "c", AuthorizeURL: "https://x.com/a", ResponseType: "token"}},
+		{name: "responseType token no authorizeURL", cfg: config.CustomOAuth2Config{Name: "t", ClientID: "c", ResponseType: "token"}, wantErr: "authorizeURL is required when responseType is token"},
+		{name: "responseType token no tokenURL ok", cfg: config.CustomOAuth2Config{Name: "t", ClientID: "c", AuthorizeURL: "https://x.com/a", ResponseType: "token"}},
+		{name: "responseType invalid", cfg: config.CustomOAuth2Config{Name: "t", TokenURL: "https://x.com/token", ClientID: "c", ResponseType: "bad"}, wantErr: "unknown responseType"},
+		{name: "responseType token with device_code flow", cfg: config.CustomOAuth2Config{Name: "t", ClientID: "c", AuthorizeURL: "https://x.com/a", ResponseType: "token", DefaultFlow: "device_code"}, wantErr: "implicit grant (responseType=token) only supports interactive flow"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -628,6 +634,135 @@ func TestHandler_Logout_ClearsDerivedUsername(t *testing.T) {
 	token, loadErr := h.loadDerivedToken(ctx)
 	assert.Nil(t, token)
 	assert.Error(t, loadErr)
+}
+
+func TestHandler_ExchangeAuthCode_PKCEEnabled(t *testing.T) {
+	var capturedForm url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, r.ParseForm())
+		capturedForm = r.PostForm
+		writeJSON(w, tokenResponse{AccessToken: "tok", TokenType: "Bearer", ExpiresIn: 3600})
+	}))
+	defer srv.Close()
+
+	h, _ := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+		cfg.AuthorizeURL = srv.URL + "/authorize"
+	})
+
+	_, err := h.exchangeAuthCode(context.Background(), "test-code", "http://localhost:9999", "test-verifier", nil)
+	require.NoError(t, err)
+
+	assert.Equal(t, "test-verifier", capturedForm.Get("code_verifier"), "code_verifier should be sent when PKCE is enabled")
+}
+
+func TestHandler_ExchangeAuthCode_PKCEDisabled(t *testing.T) {
+	var capturedForm url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, r.ParseForm())
+		capturedForm = r.PostForm
+		writeJSON(w, tokenResponse{AccessToken: "tok", TokenType: "Bearer", ExpiresIn: 3600})
+	}))
+	defer srv.Close()
+
+	h, _ := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+		cfg.AuthorizeURL = srv.URL + "/authorize"
+		cfg.DisablePKCE = true
+	})
+
+	// When PKCE is disabled, verifier is empty string — exchangeAuthCode should skip code_verifier
+	_, err := h.exchangeAuthCode(context.Background(), "test-code", "http://localhost:9999", "", nil)
+	require.NoError(t, err)
+
+	assert.Empty(t, capturedForm.Get("code_verifier"), "code_verifier must not be sent when PKCE is disabled")
+	_, hasKey := capturedForm["code_verifier"]
+	assert.False(t, hasKey, "code_verifier key must be absent from form when PKCE is disabled")
+}
+
+func TestNew_ResponseTypeToken_ImpliesDisablePKCE(t *testing.T) {
+	srv := newTestOAuthServer(t)
+	defer srv.Close()
+	h, _ := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+		cfg.AuthorizeURL = srv.URL + "/authorize"
+		cfg.ResponseType = "token"
+	})
+	assert.True(t, h.cfg.DisablePKCE, "DisablePKCE should be auto-implied when ResponseType is token")
+}
+
+func TestNew_ResponseTypeCode_PreservesDisablePKCE(t *testing.T) {
+	srv := newTestOAuthServer(t)
+	defer srv.Close()
+	h, _ := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+		cfg.AuthorizeURL = srv.URL + "/authorize"
+		// ResponseType "" (default) should not force DisablePKCE
+	})
+	assert.False(t, h.cfg.DisablePKCE)
+}
+
+func TestHandler_ImplicitGrantLogin_RequiresAuthorizeURL(t *testing.T) {
+	srv := newTestOAuthServer(t)
+	defer srv.Close()
+	h, _ := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+		cfg.ResponseType = "token"
+		cfg.AuthorizeURL = "" // missing
+	})
+
+	_, err := h.authCodeLogin(context.Background(), nil, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "authorizeURL is required")
+}
+
+func TestHandler_ImplicitGrantLogin_ContextCancelled(t *testing.T) {
+	srv := newTestOAuthServer(t)
+	defer srv.Close()
+	h, _ := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+		cfg.AuthorizeURL = "https://example.com/authorize"
+		cfg.ResponseType = "token"
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	_, err := h.implicitGrantLogin(ctx, nil, 0)
+	// Should fail with context cancelled (server can't start or times out)
+	assert.Error(t, err)
+}
+
+func BenchmarkHandler_ExchangeAuthCode(b *testing.B) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, tokenResponse{AccessToken: "tok", TokenType: "Bearer", ExpiresIn: 3600})
+	}))
+	defer srv.Close()
+
+	store := secrets.NewMockStore()
+	cfg := config.CustomOAuth2Config{Name: "bench", TokenURL: srv.URL + "/token", ClientID: "bc", AuthorizeURL: srv.URL + "/auth"}
+	h, _ := New(cfg, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := h.exchangeAuthCode(ctx, "code", "http://localhost:9999", "verifier", nil); err != nil {
+			b.Fatalf("exchangeAuthCode failed: %v", err)
+		}
+	}
+}
+
+func BenchmarkHandler_ExchangeAuthCode_PKCEDisabled(b *testing.B) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, tokenResponse{AccessToken: "tok", TokenType: "Bearer", ExpiresIn: 3600})
+	}))
+	defer srv.Close()
+
+	store := secrets.NewMockStore()
+	cfg := config.CustomOAuth2Config{Name: "bench", TokenURL: srv.URL + "/token", ClientID: "bc", AuthorizeURL: srv.URL + "/auth", DisablePKCE: true}
+	h, _ := New(cfg, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := h.exchangeAuthCode(ctx, "code", "http://localhost:9999", "", nil); err != nil {
+			b.Fatalf("exchangeAuthCode failed: %v", err)
+		}
+	}
 }
 
 func BenchmarkHandler_ClientCredentialsLogin(b *testing.B) {
