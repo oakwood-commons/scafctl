@@ -582,10 +582,12 @@ auth:
   customOAuth2:
     - name: quay              # unique handler name
       displayName: "Quay.io"  # human-readable label
-      tokenURL: "https://quay.io/oauth/token"
+      authorizeURL: "https://quay.io/oauth/authorize"
       clientID: "app-client-id"
       clientSecret: "app-client-secret"  # required for client_credentials
-      defaultFlow: client_credentials    # interactive | device_code | client_credentials
+      defaultFlow: interactive           # interactive | device_code | client_credentials
+      responseType: token                # implicit grant (Quay only supports response_type=token)
+      disablePKCE: true                  # auto-implied by responseType: token
       scopes: ["repo:read"]
       registry: "quay.io"               # auto-inferred for catalog login
       registryUsername: "$oauthtoken"    # OCI username convention
