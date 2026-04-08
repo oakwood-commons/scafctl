@@ -44,6 +44,26 @@ func LooksLikeCatalogURL(s string) bool {
 	return strings.Contains(s, ".") || strings.Contains(s, ":")
 }
 
+// LooksLikeRemoteReference returns true if the reference appears to be a remote
+// registry reference. Remote references contain a registry host with a dot
+// (e.g., "ghcr.io"), a port (e.g., "localhost:5000"), or start with "oci://".
+// Plain paths like "configs/solution" return false.
+func LooksLikeRemoteReference(ref string) bool {
+	ref = strings.TrimPrefix(ref, "oci://")
+
+	if strings.HasPrefix(ref, "localhost") {
+		return true
+	}
+
+	parts := strings.SplitN(ref, "/", 2)
+	if len(parts) < 2 {
+		return false
+	}
+
+	host := parts[0]
+	return strings.Contains(host, ".") || strings.Contains(host, ":")
+}
+
 // InferKindFromLocalCatalog searches the local catalog to determine an artifact's kind.
 // It tries each known artifact kind in order and returns the first match.
 func InferKindFromLocalCatalog(ctx context.Context, localCatalog *LocalCatalog, name, version string) (ArtifactKind, error) {

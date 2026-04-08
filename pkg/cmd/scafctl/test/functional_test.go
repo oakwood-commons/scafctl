@@ -19,7 +19,7 @@ func TestCommandFunctional(t *testing.T) {
 	cmd := CommandFunctional(cliParams, ioStreams, "scafctl/test")
 
 	require.NotNil(t, cmd)
-	assert.Equal(t, "functional", cmd.Use)
+	assert.Equal(t, "functional [reference]", cmd.Use)
 	assert.Contains(t, cmd.Aliases, "func")
 	assert.Contains(t, cmd.Aliases, "fn")
 	assert.NotEmpty(t, cmd.Short)

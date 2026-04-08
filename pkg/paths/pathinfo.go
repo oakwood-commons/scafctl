@@ -116,46 +116,48 @@ func IllustrativePaths(platform string) []PathInfo {
 		return strings.Join(parts, sep)
 	}
 
+	name := AppName()
+
 	return []PathInfo{
 		{
 			Name:        "Config",
-			Path:        join(configHome, "scafctl", "config.yaml"),
+			Path:        join(configHome, name, "config.yaml"),
 			Description: "Configuration file",
 			XDGVariable: "XDG_CONFIG_HOME",
 		},
 		{
 			Name:        "Secrets",
-			Path:        join(dataHome, "scafctl", "secrets"),
+			Path:        join(dataHome, name, "secrets"),
 			Description: "Encrypted secrets storage",
 			XDGVariable: "XDG_DATA_HOME",
 		},
 		{
 			Name:        "Data",
-			Path:        join(dataHome, "scafctl"),
+			Path:        join(dataHome, name),
 			Description: "User data directory",
 			XDGVariable: "XDG_DATA_HOME",
 		},
 		{
 			Name:        "Catalog",
-			Path:        join(dataHome, "scafctl", "catalog"),
+			Path:        join(dataHome, name, "catalog"),
 			Description: "Default local catalog",
 			XDGVariable: "XDG_DATA_HOME",
 		},
 		{
 			Name:        "Cache",
-			Path:        join(cacheHome, "scafctl"),
+			Path:        join(cacheHome, name),
 			Description: "Cache directory",
 			XDGVariable: "XDG_CACHE_HOME",
 		},
 		{
 			Name:        "HTTP Cache",
-			Path:        join(cacheHome, "scafctl", "http-cache"),
+			Path:        join(cacheHome, name, "http-cache"),
 			Description: "HTTP response cache",
 			XDGVariable: "XDG_CACHE_HOME",
 		},
 		{
 			Name:        "State",
-			Path:        join(stateHome, "scafctl"),
+			Path:        join(stateHome, name),
 			Description: "State data (logs, history)",
 			XDGVariable: "XDG_STATE_HOME",
 		},

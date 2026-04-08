@@ -127,6 +127,20 @@ func TestRemoteCatalog_buildRepositoryPath(t *testing.T) {
 			ref:        Reference{Kind: ArtifactKindAuthHandler, Name: "my-auth"},
 			expected:   "ghcr.io/org/repo/auth-handlers/my-auth",
 		},
+		{
+			name:       "kindless Docker-style with repository",
+			registry:   "ghcr.io",
+			repository: "myorg",
+			ref:        Reference{Name: "starter-kit"},
+			expected:   "ghcr.io/myorg/starter-kit",
+		},
+		{
+			name:       "kindless Docker-style without repository",
+			registry:   "ghcr.io",
+			repository: "",
+			ref:        Reference{Name: "starter-kit"},
+			expected:   "ghcr.io/starter-kit",
+		},
 	}
 
 	for _, tc := range tests {

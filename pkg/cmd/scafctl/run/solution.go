@@ -467,18 +467,15 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 // executeDryRun executes resolvers normally (they are side-effect-free) and
 // produces a structured WhatIf report showing what actions would do.
 func (o *SolutionOptions) executeDryRun(ctx context.Context, sol *solution.Solution, reg *provider.Registry, params map[string]any) error {
-	// Execute resolvers normally — resolver providers are side-effect-free,
-	// so we get real data for WhatIf message generation.
-	var resolverData map[string]any
-	if sol.Spec.HasResolvers() {
-		cfg := ResolverExecutionConfigFromContext(ctx)
-		result, err := ExecuteResolvers(ctx, sol, params, reg, cfg)
-		if err != nil {
-			// Non-fatal — report will include warnings
-			resolverData = make(map[string]any)
-		} else {
-			resolverData = result.Data
-		}
+	// Execute resolvers via the shared method so that IOStreams, progress
+	// callbacks, and CLI-flag-driven config are wired identically to the
+	// live execution path. Resolver providers are side-effect-free, so we
+	// get real data for WhatIf message generation safely.
+	resolvers := sol.Spec.ResolversToSlice()
+	resolverData, _, err := o.executeResolvers(ctx, sol, resolvers, params, reg)
+	if err != nil {
+		// Non-fatal — report will include warnings about missing resolver data.
+		resolverData = make(map[string]any)
 	}
 
 	report, err := dryrun.Generate(ctx, sol, dryrun.Options{

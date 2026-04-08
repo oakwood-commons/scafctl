@@ -21,6 +21,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
+	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	resolverRefs "github.com/oakwood-commons/scafctl/pkg/resolver/refs"
@@ -864,7 +865,7 @@ func lintProviderInputsForStep(providerName string, inputs map[string]*spec.Valu
 				}
 				result.addFinding(SeverityError, "provider", inputLoc,
 					fmt.Sprintf("unknown input %q for provider %q", key, providerName),
-					fmt.Sprintf("Check the provider's accepted inputs. Run: scafctl explain provider %s", providerName),
+					fmt.Sprintf("Check the provider's accepted inputs. Run: %s explain provider %s", paths.AppName(), providerName),
 					"unknown-provider-input")
 				continue
 			}

@@ -5,9 +5,11 @@ package builder
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/oakwood-commons/scafctl/pkg/cache"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
@@ -20,6 +22,15 @@ type StoreOptions struct {
 
 	// Source is the path to the solution file, recorded as an annotation.
 	Source string `json:"source,omitempty" yaml:"source,omitempty" doc:"Source file path for annotation"`
+
+	// ArtifactCacheDir is the path to the artifact cache directory.
+	// When non-empty, the corresponding artifact cache entry is invalidated
+	// after a successful store to prevent stale reads on subsequent runs.
+	ArtifactCacheDir string `json:"-" yaml:"-" doc:"Artifact cache directory path"`
+
+	// ArtifactCacheTTL is the TTL for the artifact cache.
+	// Required when ArtifactCacheDir is set.
+	ArtifactCacheTTL time.Duration `json:"-" yaml:"-" doc:"Artifact cache TTL"`
 }
 
 // StoreResult holds the outcome of a store operation.
@@ -35,6 +46,10 @@ type StoreResult struct {
 // choosing between dedup (v2) and traditional (v1) storage based on the build
 // result. It also writes a build cache entry when applicable.
 func StoreSolutionArtifact(ctx context.Context, localCatalog *catalog.LocalCatalog, name string, version *semver.Version, content []byte, br *BuildResult, opts StoreOptions) (*StoreResult, error) {
+	if version == nil {
+		return nil, fmt.Errorf("version is required")
+	}
+
 	lgr := logger.FromContext(ctx)
 
 	ref := catalog.Reference{
@@ -74,6 +89,17 @@ func StoreSolutionArtifact(ctx context.Context, localCatalog *catalog.LocalCatal
 		"name", info.Reference.Name,
 		"version", info.Reference.Version.String(),
 		"digest", info.Digest)
+
+	// Invalidate the artifact cache entry so subsequent runs fetch the
+	// freshly built artifact instead of a stale cached version.
+	if opts.ArtifactCacheDir != "" {
+		versionStr := version.String()
+		if cacheErr := cache.InvalidateArtifact(opts.ArtifactCacheDir, opts.ArtifactCacheTTL, string(catalog.ArtifactKindSolution), name, versionStr); cacheErr != nil {
+			lgr.V(1).Info("failed to invalidate artifact cache (non-fatal)", "error", cacheErr)
+		} else {
+			lgr.V(1).Info("invalidated artifact cache entry", "name", name, "version", versionStr)
+		}
+	}
 
 	// Write build cache entry after successful store
 	if br != nil && br.BuildFingerprint != "" && br.BuildCacheDir != "" {

@@ -14,6 +14,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
@@ -30,6 +31,7 @@ type SolutionOptions struct {
 	File            string
 	Name            string
 	Version         string
+	Tag             string
 	Force           bool
 	NoBundle        bool
 	NoVendor        bool
@@ -61,7 +63,7 @@ func CommandBuildSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams
 		Aliases:      []string{"sol", "s"},
 		Short:        "Build a solution into the local catalog",
 		SilenceUsage: true,
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			Build a solution file into the local catalog.
 
 			The solution is packaged as an OCI artifact with the specified name and version.
@@ -92,6 +94,12 @@ func CommandBuildSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams
 			  # Build with explicit name
 			  scafctl build solution -f ./solution.yaml --name my-solution --version 1.0.0
 
+			  # Build with a tag (shorthand for --name and --version)
+			  scafctl build solution -f ./solution.yaml -t my-solution@1.0.0
+
+			  # Build with a full remote reference (for push later)
+			  scafctl build solution -t ghcr.io/myorg/solutions/my-solution@1.0.0
+
 			  # Overwrite existing version
 			  scafctl build solution -f ./solution.yaml --version 1.0.0 --force
 
@@ -100,9 +108,49 @@ func CommandBuildSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams
 
 			  # Build without bundling
 			  scafctl build solution -f ./solution.yaml --no-bundle
-		`),
+		`), settings.CliBinaryName, cliParams.BinaryName),
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			// Parse -t/--tag if provided: supports both "name@version" and
+			// full remote refs like "registry/repo/solutions/name@version".
+			if options.Tag != "" {
+				if options.Name != "" || options.Version != "" {
+					err := fmt.Errorf("--tag cannot be used together with --name or --version")
+					if w := writer.FromContext(cmd.Context()); w != nil {
+						w.Errorf("%v", err)
+					}
+					return exitcode.WithCode(err, exitcode.InvalidInput)
+				}
+
+				if catalog.LooksLikeRemoteReference(options.Tag) {
+					// Full remote reference
+					remoteRef, err := catalog.ParseRemoteReference(options.Tag)
+					if err != nil {
+						if w := writer.FromContext(cmd.Context()); w != nil {
+							w.Errorf("invalid tag %q: %v", options.Tag, err)
+						}
+						return exitcode.WithCode(err, exitcode.InvalidInput)
+					}
+					options.Name = remoteRef.Name
+					if remoteRef.Tag != "" {
+						options.Version = remoteRef.Tag
+					}
+				} else {
+					// Local name@version
+					ref, err := catalog.ParseReference(catalog.ArtifactKindSolution, options.Tag)
+					if err != nil {
+						if w := writer.FromContext(cmd.Context()); w != nil {
+							w.Errorf("invalid tag %q: %v", options.Tag, err)
+						}
+						return exitcode.WithCode(err, exitcode.InvalidInput)
+					}
+					options.Name = ref.Name
+					if ref.Version != nil {
+						options.Version = ref.Version.String()
+					}
+				}
+			}
+
 			if options.File == "" {
 				getter := get.NewGetterFromContext(cmd.Context())
 				options.File = getter.FindSolution()
@@ -119,9 +167,10 @@ func CommandBuildSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams
 	}
 
 	cmd.Flags().StringVarP(&options.File, "file", "f", "", "Path to the solution file (auto-discovered if not provided)")
+	cmd.Flags().StringVarP(&options.Tag, "tag", "t", "", "Artifact reference as name@version (shorthand for --name and --version)")
 	cmd.Flags().StringVar(&options.Name, "name", "", "Artifact name (default: extracted from solution metadata)")
 	cmd.Flags().StringVar(&options.Version, "version", "", "Semantic version (default: extracted from solution metadata)")
-	cmd.Flags().BoolVar(&options.Force, "force", false, "Overwrite existing version")
+	cmd.Flags().BoolVar(&options.Force, "force", false, "Overwrite existing version in catalog")
 	cmd.Flags().BoolVar(&options.NoBundle, "no-bundle", false, "Skip bundling entirely (store only the solution YAML)")
 	cmd.Flags().BoolVar(&options.NoVendor, "no-vendor", false, "Skip catalog dependency vendoring")
 	cmd.Flags().StringVar(&options.BundleMaxSize, "bundle-max-size", "50MB", "Maximum total size for bundled files")
@@ -167,15 +216,31 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 	}
 
 	// Determine version (priority: --version flag > metadata.version)
-	version, overrides, err := solution.ResolveArtifactVersion(opts.Version, sol.Metadata.Version)
+	version, _, err := solution.ResolveArtifactVersion(opts.Version, sol.Metadata.Version)
 	if err != nil {
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
-	if overrides {
-		w.Warningf("--version %s overrides metadata version %s", version.String(), sol.Metadata.Version.String())
-	} else if opts.Version == "" && sol.Metadata.Version != nil {
-		lgr.V(1).Info("using version from solution metadata", "version", version.String())
+
+	// Stamp resolved name and version into the solution so the stored
+	// artifact always carries the authoritative values.
+	needsReserialization := false
+	if sol.Metadata.Name != name {
+		lgr.V(1).Info("stamping artifact name into solution", "from", sol.Metadata.Name, "to", name)
+		sol.Metadata.Name = name
+		needsReserialization = true
+	}
+	if sol.Metadata.Version == nil || !sol.Metadata.Version.Equal(version) {
+		lgr.V(1).Info("stamping artifact version into solution", "from", sol.Metadata.Version, "to", version.String())
+		sol.Metadata.Version = version
+		needsReserialization = true
+	}
+	if needsReserialization {
+		content, err = sol.ToYAML()
+		if err != nil {
+			w.Errorf("failed to serialize stamped solution: %v", err)
+			return exitcode.WithCode(err, exitcode.GeneralError)
+		}
 	}
 
 	// === Bundle pipeline ===
@@ -223,8 +288,10 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 
 	// Store the artifact (handles dedup vs traditional, plus build cache)
 	storeResult, err := builder.StoreSolutionArtifact(ctx, localCatalog, name, version, content, br, builder.StoreOptions{
-		Force:  opts.Force,
-		Source: opts.File,
+		Force:            opts.Force,
+		Source:           opts.File,
+		ArtifactCacheDir: paths.ArtifactCacheDir(),
+		ArtifactCacheTTL: settings.DefaultArtifactCacheTTL,
 	})
 	if err != nil {
 		if catalog.IsExists(err) {

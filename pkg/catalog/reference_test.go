@@ -340,6 +340,42 @@ func TestParseRemoteReference(t *testing.T) {
 			wantErr: true,
 			errMsg:  "must include registry and repository",
 		},
+		{
+			name:           "Docker-style kindless with @ version",
+			input:          "ghcr.io/myorg/starter-kit@2.1.0",
+			wantRegistry:   "ghcr.io",
+			wantRepository: "myorg",
+			wantKind:       "",
+			wantName:       "starter-kit",
+			wantTag:        "2.1.0",
+		},
+		{
+			name:           "Docker-style kindless with : tag",
+			input:          "ghcr.io/myorg/starter-kit:latest",
+			wantRegistry:   "ghcr.io",
+			wantRepository: "myorg",
+			wantKind:       "",
+			wantName:       "starter-kit",
+			wantTag:        "latest",
+		},
+		{
+			name:           "Docker-style kindless no tag",
+			input:          "ghcr.io/myorg/starter-kit",
+			wantRegistry:   "ghcr.io",
+			wantRepository: "myorg",
+			wantKind:       "",
+			wantName:       "starter-kit",
+			wantTag:        "",
+		},
+		{
+			name:           "Docker-style deep repo path no kind",
+			input:          "ghcr.io/org/team/project/my-solution@3.0.0",
+			wantRegistry:   "ghcr.io",
+			wantRepository: "org/team/project",
+			wantKind:       "",
+			wantName:       "my-solution",
+			wantTag:        "3.0.0",
+		},
 	}
 
 	for _, tt := range tests {
@@ -577,6 +613,16 @@ func TestRemoteReference_String(t *testing.T) {
 			name:     "no tag",
 			ref:      &RemoteReference{Registry: "ghcr.io", Repository: "my-org", Kind: ArtifactKindSolution, Name: "my-sol"},
 			expected: "ghcr.io/my-org/solutions/my-sol",
+		},
+		{
+			name:     "kindless Docker-style with tag",
+			ref:      &RemoteReference{Registry: "ghcr.io", Repository: "my-org", Name: "starter-kit", Tag: "2.0.0"},
+			expected: "ghcr.io/my-org/starter-kit@2.0.0",
+		},
+		{
+			name:     "kindless Docker-style no tag",
+			ref:      &RemoteReference{Registry: "ghcr.io", Repository: "my-org", Name: "starter-kit"},
+			expected: "ghcr.io/my-org/starter-kit",
 		},
 	}
 	for _, tt := range tests {

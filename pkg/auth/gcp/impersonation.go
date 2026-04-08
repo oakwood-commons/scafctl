@@ -16,6 +16,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
 const (
@@ -89,8 +90,8 @@ func (h *Handler) impersonateServiceAccount(ctx context.Context, sourceToken, ta
 		if resp.StatusCode == http.StatusUnauthorized {
 			return nil, fmt.Errorf(
 				"impersonation failed: source identity is not authenticated (401): %s. "+
-					"Re-authenticate with: scafctl auth login gcp",
-				msg)
+					"Re-authenticate with: %s auth login gcp",
+				msg, settings.BinaryNameFromContext(ctx))
 		}
 		return nil, fmt.Errorf("impersonation failed (status %d): %s", resp.StatusCode, msg)
 	}

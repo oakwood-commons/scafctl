@@ -603,6 +603,8 @@ tasks:
         -ldflags '-s -w {{.LDFLAGS}}'
         -trimpath
         -o {{.DIST}}/{{.OUTPUT_FILE}} {{.MAIN_PACKAGE}}
+      - cmd: codesign --force --sign - {{.DIST}}/{{.OUTPUT_FILE}}
+        platforms: [darwin]
 
   build-container-image:
     deps: [mod, git-unshallow-clone]

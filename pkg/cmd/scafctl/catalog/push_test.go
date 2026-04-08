@@ -20,7 +20,7 @@ func TestCommandPush(t *testing.T) {
 	cmd := CommandPush(cliParams, ioStreams, "scafctl/catalog")
 
 	require.NotNil(t, cmd)
-	assert.Equal(t, "push <name[@version]>", cmd.Use)
+	assert.Equal(t, "push <reference>", cmd.Use)
 	assert.NotEmpty(t, cmd.Short)
 	assert.NotNil(t, cmd.RunE)
 }

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 )
 
@@ -122,7 +123,7 @@ func FetchAndExtract(ctx context.Context, cat *catalog.LocalCatalog, refStr stri
 	var manifest *BundleManifest
 
 	if len(bundleData) > 0 {
-		tmpDir, err := os.MkdirTemp("", "scafctl-diff-*")
+		tmpDir, err := os.MkdirTemp("", paths.AppName()+"-diff-*")
 		if err != nil {
 			return nil, nil, err
 		}

@@ -173,15 +173,30 @@ func (c *RemoteCatalog) getRepository(ref Reference) (*remote.Repository, error)
 	return repo, nil
 }
 
+// RepositoryPath returns the full OCI repository path for an artifact reference.
+// This is useful for displaying the resolved path in CLI output.
+func (c *RemoteCatalog) RepositoryPath(ref Reference) string {
+	return c.buildRepositoryPath(ref)
+}
+
 // buildRepositoryPath builds the full repository path for an artifact.
+// When the reference has a known Kind, the pluralized kind segment is included
+// (e.g., ghcr.io/myorg/scafctl/solutions/my-solution). When Kind is empty
+// (Docker-style refs), the kind segment is omitted
+// (e.g., ghcr.io/myorg/my-solution).
+//
+// The catalog URL should NOT include the kind segment — configure the catalog
+// with the base path (e.g., "fcr.ford.com/cloud-chassis") and the kind
+// ("solutions", "providers") is appended automatically.
 func (c *RemoteCatalog) buildRepositoryPath(ref Reference) string {
-	// Format: registry/repository/kind/name
-	// e.g., ghcr.io/myorg/scafctl/solutions/my-solution
 	parts := []string{c.registry}
 	if c.repository != "" {
 		parts = append(parts, c.repository)
 	}
-	parts = append(parts, ref.Kind.Plural(), ref.Name)
+	if ref.Kind != "" {
+		parts = append(parts, ref.Kind.Plural())
+	}
+	parts = append(parts, ref.Name)
 
 	return strings.Join(parts, "/")
 }

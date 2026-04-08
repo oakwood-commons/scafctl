@@ -254,11 +254,12 @@ func TestSolution_Validate(t *testing.T) {
 		assert.Contains(t, err.Error(), "metadata.name")
 	})
 
-	t.Run("missing version", func(t *testing.T) {
+	t.Run("missing version gets default", func(t *testing.T) {
 		s := &Solution{APIVersion: DefaultAPIVersion, Kind: SolutionKind, Metadata: Metadata{Name: "x"}}
+		s.ApplyDefaults()
 		err := s.Validate()
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "metadata.version")
+		require.NoError(t, err)
+		assert.Equal(t, "0.0.0-dev", s.Metadata.Version.String())
 	})
 
 	t.Run("invalid visibility", func(t *testing.T) {

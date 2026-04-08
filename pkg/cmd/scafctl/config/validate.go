@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	appconfig "github.com/oakwood-commons/scafctl/pkg/config"
@@ -35,7 +36,7 @@ func CommandValidate(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 	cCmd := &cobra.Command{
 		Use:   "validate [file]",
 		Short: "Validate a configuration file",
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			Validate a scafctl configuration file.
 
 			Checks that the configuration file is valid YAML and conforms
@@ -53,7 +54,7 @@ func CommandValidate(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 
 			  # Validate with verbose output
 			  scafctl config validate --log-level -1
-		`),
+		`), settings.CliBinaryName, cliParams.BinaryName),
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cCmd *cobra.Command, args []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)

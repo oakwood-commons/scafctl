@@ -58,7 +58,7 @@ func CommandClear(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 		Aliases:      []string{"clean", "rm"},
 		Short:        "Clear cached content",
 		SilenceUsage: true,
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			Clear cached content from the scafctl cache.
 
 			By default, clears all cached content. Use --kind to clear a specific
@@ -86,7 +86,7 @@ func CommandClear(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 
 			  # Show what would be cleared (JSON output)
 			  scafctl cache clear -o json
-		`),
+		`), settings.CliBinaryName, cliParams.BinaryName),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			kvxOpts := flags.ToKvxOutputOptions(&options.KvxOutputFlags, kvx.WithIOStreams(ioStreams))
 			return runClear(cmd.Context(), options, kvxOpts)

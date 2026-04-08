@@ -45,12 +45,22 @@ type BundleAwareCatalogResolver interface {
 	FetchSolutionWithBundle(ctx context.Context, nameWithVersion string) (content, bundleData []byte, err error)
 }
 
+// RemoteResolver resolves Docker-style OCI remote references (e.g.,
+// "ghcr.io/myorg/starter-kit@1.0.0"). Implementations are responsible for
+// registry authentication and fetching.
+type RemoteResolver interface {
+	// FetchRemoteSolution fetches a solution from a remote OCI reference.
+	// The ref is the full remote reference string (e.g., "ghcr.io/myorg/starter-kit@1.0.0").
+	FetchRemoteSolution(ctx context.Context, ref string) (content, bundleData []byte, err error)
+}
+
 type Getter struct {
 	readFile          fs.ReadFileFunc
 	statFunc          fs.StatFunc
 	httpClient        *httpc.Client
 	logger            logr.Logger
 	catalogResolver   CatalogResolver
+	remoteResolver    RemoteResolver
 	solutionFolders   []string
 	solutionFileNames []string
 }
@@ -101,6 +111,15 @@ func WithLogger(logger logr.Logger) Option {
 func WithCatalogResolver(resolver CatalogResolver) Option {
 	return func(g *Getter) {
 		g.catalogResolver = resolver
+	}
+}
+
+// WithRemoteResolver returns an Option that sets the remote resolver for the Getter.
+// When a remote resolver is set, the Getter will attempt to resolve Docker-style
+// OCI references (e.g., "ghcr.io/myorg/starter-kit@1.0.0") from remote registries.
+func WithRemoteResolver(resolver RemoteResolver) Option {
+	return func(g *Getter) {
+		g.remoteResolver = resolver
 	}
 }
 
@@ -244,6 +263,17 @@ func (o *Getter) Get(ctx context.Context, path string) (*solution.Solution, erro
 		return o.FromURL(ctx, path)
 	}
 
+	// Check if this is a Docker-style OCI remote reference (e.g., ghcr.io/myorg/starter-kit@1.0.0).
+	// Remote references have a registry hostname (contains "." or ":") in the first path segment.
+	if o.remoteResolver != nil && IsCatalogReference(path) && strings.Contains(path, "/") {
+		o.logger.V(1).Info("attempting to resolve from remote registry", "ref", path)
+		sol, err := o.fromRemoteRef(ctx, path)
+		if err == nil {
+			return sol, nil
+		}
+		return nil, fmt.Errorf("failed to resolve remote reference %q: %w", path, err)
+	}
+
 	sol, fileErr := o.FromLocalFileSystem(ctx, path)
 	if fileErr == nil {
 		return sol, nil
@@ -302,6 +332,16 @@ func (o *Getter) GetWithBundle(ctx context.Context, path string) (*solution.Solu
 	if filepath.IsURL(path) {
 		sol, err := o.FromURL(ctx, path)
 		return sol, nil, err
+	}
+
+	// Check if this is a Docker-style OCI remote reference
+	if o.remoteResolver != nil && IsCatalogReference(path) && strings.Contains(path, "/") {
+		o.logger.V(1).Info("attempting to resolve with bundle from remote registry", "ref", path)
+		sol, bundleData, err := o.fromRemoteRefWithBundle(ctx, path)
+		if err == nil {
+			return sol, bundleData, nil
+		}
+		return nil, nil, fmt.Errorf("failed to resolve remote reference %q: %w", path, err)
 	}
 
 	sol, err := o.FromLocalFileSystem(ctx, path)
@@ -445,6 +485,40 @@ func (o *Getter) fromCatalog(ctx context.Context, nameWithVersion string) (*solu
 	// Mark the solution as coming from catalog
 	sol.SetPath(fmt.Sprintf("catalog:%s", nameWithVersion))
 	return &sol, nil
+}
+
+// fromRemoteRef resolves a Docker-style OCI remote reference (e.g., ghcr.io/myorg/starter-kit@1.0.0)
+// using the configured RemoteResolver.
+func (o *Getter) fromRemoteRef(ctx context.Context, ref string) (*solution.Solution, error) {
+	content, _, err := o.remoteResolver.FetchRemoteSolution(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+
+	sol := solution.Solution{}
+	if err := sol.LoadFromBytes(content); err != nil {
+		return nil, fmt.Errorf("failed to parse solution from remote: %w", err)
+	}
+
+	sol.SetPath(fmt.Sprintf("remote:%s", ref))
+	return &sol, nil
+}
+
+// fromRemoteRefWithBundle resolves a Docker-style OCI remote reference and returns
+// the solution together with optional bundle data.
+func (o *Getter) fromRemoteRefWithBundle(ctx context.Context, ref string) (*solution.Solution, []byte, error) {
+	content, bundleData, err := o.remoteResolver.FetchRemoteSolution(ctx, ref)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	sol := solution.Solution{}
+	if err := sol.LoadFromBytes(content); err != nil {
+		return nil, nil, fmt.Errorf("failed to parse solution from remote: %w", err)
+	}
+
+	sol.SetPath(fmt.Sprintf("remote:%s", ref))
+	return &sol, bundleData, nil
 }
 
 // FromLocalFileSystem reads a solution from the local filesystem at the specified path.

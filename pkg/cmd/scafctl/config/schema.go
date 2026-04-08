@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -32,7 +33,7 @@ func CommandSchema(cliParams *settings.Run, ioStreams *terminal.IOStreams, path 
 	cCmd := &cobra.Command{
 		Use:   "schema",
 		Short: "Output JSON Schema for config file",
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			Output the JSON Schema for the scafctl configuration file.
 
 			The schema can be used by editors and IDEs for autocompletion
@@ -52,7 +53,7 @@ func CommandSchema(cliParams *settings.Run, ioStreams *terminal.IOStreams, path 
 			at the top of ~/.scafctl/config.yaml:
 
 			  # yaml-language-server: $schema=~/.scafctl/config-schema.json
-		`),
+		`), settings.CliBinaryName, cliParams.BinaryName),
 		RunE: func(cCmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
 			ctx := settings.IntoContext(cCmd.Context(), cliParams)

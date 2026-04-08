@@ -6,7 +6,6 @@ package catalog
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/cache"
@@ -169,8 +168,8 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 	}
 
 	// Pull from remote
-	displayRef := formatRemoteRef(*remoteRef)
-	w.Infof("Pulling %s...", displayRef)
+	repoPath := remoteCatalog.RepositoryPath(ref)
+	w.Infof("Pulling %s@%s from %s...", ref.Name, ref.Version.String(), repoPath)
 
 	result, err := remoteCatalog.CopyTo(ctx, ref, localCatalog, copyOpts)
 	if err != nil {
@@ -214,23 +213,4 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 	}
 
 	return nil
-}
-
-// formatRemoteRef formats a remote reference for display.
-func formatRemoteRef(ref catalog.RemoteReference) string {
-	var sb strings.Builder
-	sb.WriteString(ref.Registry)
-	if ref.Repository != "" {
-		sb.WriteString("/")
-		sb.WriteString(ref.Repository)
-	}
-	sb.WriteString("/")
-	sb.WriteString(string(ref.Kind))
-	sb.WriteString("/")
-	sb.WriteString(ref.Name)
-	if ref.Tag != "" {
-		sb.WriteString("@")
-		sb.WriteString(ref.Tag)
-	}
-	return sb.String()
 }

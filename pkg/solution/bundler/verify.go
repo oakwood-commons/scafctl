@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-logr/logr"
 
+	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 )
 
@@ -75,7 +76,7 @@ func verifyNoBundleCase(sol *solution.Solution, result *VerifyResult, lgr logr.L
 
 // verifyWithBundle extracts bundleData into a temp directory and runs all verification checks.
 func verifyWithBundle(_ context.Context, sol *solution.Solution, bundleData []byte, result *VerifyResult, lgr logr.Logger) (*VerifyResult, error) {
-	tmpDir, err := os.MkdirTemp("", "scafctl-verify-*")
+	tmpDir, err := os.MkdirTemp("", paths.AppName()+"-verify-*")
 	if err != nil {
 		return nil, fmt.Errorf("creating temp directory: %w", err)
 	}

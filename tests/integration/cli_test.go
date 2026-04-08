@@ -2265,19 +2265,19 @@ func TestIntegration_BuildSolution_UsesMetadataVersion(t *testing.T) {
 	assert.Contains(t, stdout, "1.0.0")
 }
 
-func TestIntegration_BuildSolution_VersionOverrideWarning(t *testing.T) {
+func TestIntegration_BuildSolution_VersionStamping(t *testing.T) {
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
 	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
-	// Build with different version than metadata - should warn
+	// Build with different version than metadata - should stamp and succeed
 	stdout, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "9.9.9")
 
 	assert.Equal(t, 0, exitCode)
-	// Should warn about overriding metadata version
-	assert.Contains(t, stdout, "overrides metadata version")
+	// Should succeed with the stamped version
 	assert.Contains(t, stdout, "9.9.9")
+	assert.Contains(t, stdout, "Built")
 }
 
 func TestIntegration_BuildSolution_FileNotFound(t *testing.T) {

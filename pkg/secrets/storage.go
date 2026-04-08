@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/oakwood-commons/scafctl/pkg/paths"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
 const (
@@ -25,21 +26,21 @@ const (
 
 	// filePermissions is the permission mode for secret files (rw-------).
 	filePermissions = 0o600
-
-	// secretsDirEnvVar is the environment variable to override the secrets directory.
-	secretsDirEnvVar = "SCAFCTL_SECRETS_DIR" //nolint:gosec // This is not a credential
 )
+
+// secretsDirEnvVar returns the environment variable name to override the secrets directory.
+// The variable name is derived from the configured binary name (e.g., SCAFCTL_SECRETS_DIR).
+func secretsDirEnvVar() string {
+	return settings.SafeEnvPrefix(paths.AppName()) + "_SECRETS_DIR"
+}
 
 // getSecretsDir returns the secrets directory path.
 // The directory is determined in the following order:
-//  1. SCAFCTL_SECRETS_DIR environment variable (if set)
-//  2. XDG-compliant path via paths.SecretsDir():
-//     - Linux: ~/.local/share/scafctl/secrets/
-//     - macOS: ~/.local/share/scafctl/secrets/
-//     - Windows: %LOCALAPPDATA%\scafctl\secrets\
+//  1. <BINARY>_SECRETS_DIR environment variable (if set)
+//  2. XDG-compliant path via paths.SecretsDir()
 func getSecretsDir() (string, error) {
 	// Check environment variable override first
-	if envDir := os.Getenv(secretsDirEnvVar); envDir != "" {
+	if envDir := os.Getenv(secretsDirEnvVar()); envDir != "" {
 		return envDir, nil
 	}
 

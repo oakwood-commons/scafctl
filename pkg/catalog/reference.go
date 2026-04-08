@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/oakwood-commons/scafctl/pkg/paths"
 )
 
 // ParseReference parses a reference string into a Reference struct.
@@ -331,7 +332,7 @@ func ValidateAlias(alias string) error {
 
 	// Must not be a valid semver version (those should be created via build)
 	if _, err := ParseReference(ArtifactKindSolution, "x@"+alias); err == nil {
-		return fmt.Errorf("alias %q looks like a semver version; use 'scafctl build' to create versioned artifacts", alias)
+		return fmt.Errorf("alias %q looks like a semver version; use '%s build' to create versioned artifacts", alias, paths.AppName())
 	}
 
 	// OCI tag constraints: must match [a-zA-Z0-9_.-]+
