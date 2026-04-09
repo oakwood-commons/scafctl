@@ -251,7 +251,7 @@ func runDeleteRemote(ctx context.Context, opts *DeleteOptions) error {
 
 	// Delete from remote
 	repoPath := remoteCatalog.RepositoryPath(ref)
-	w.Infof("Deleting %s@%s from %s...", ref.Name, ref.Version.String(), repoPath)
+	w.Infof("Deleting %s@%s from %s...", ref.Name, ref.VersionOrDigest(), repoPath)
 
 	if err := remoteCatalog.Delete(ctx, ref); err != nil {
 		if catalog.IsNotFound(err) {
@@ -270,7 +270,7 @@ func runDeleteRemote(ctx context.Context, opts *DeleteOptions) error {
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
-	w.Successf("Deleted %s@%s from %s", ref.Name, ref.Version.String(), repoPath)
+	w.Successf("Deleted %s@%s from %s", ref.Name, ref.VersionOrDigest(), repoPath)
 
 	return nil
 }

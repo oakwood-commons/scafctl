@@ -44,15 +44,15 @@ func CommandSchema(cliParams *settings.Run, ioStreams *terminal.IOStreams, path 
 			  scafctl config schema
 
 			  # Save schema to a file
-			  scafctl config schema > ~/.scafctl/config-schema.json
+			  scafctl config schema > ~/.config/scafctl/config-schema.json
 
 			  # Output compact schema (no indentation)
 			  scafctl config schema --compact
 
 			To enable schema validation in your config file, add this comment
-			at the top of ~/.scafctl/config.yaml:
+			at the top of ~/.config/scafctl/config.yaml:
 
-			  # yaml-language-server: $schema=~/.scafctl/config-schema.json
+			  # yaml-language-server: $schema=~/.config/scafctl/config-schema.json
 		`), settings.CliBinaryName, cliParams.BinaryName),
 		RunE: func(cCmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)

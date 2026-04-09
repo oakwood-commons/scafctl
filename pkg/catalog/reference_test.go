@@ -463,6 +463,36 @@ func TestRemoteReference_ToReference(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "latest tag treated as no version",
+			remote: RemoteReference{
+				Kind: ArtifactKindSolution,
+				Name: "my-solution",
+				Tag:  "latest",
+			},
+			wantKind: ArtifactKindSolution,
+			wantName: "my-solution",
+		},
+		{
+			name: "Latest tag case-insensitive",
+			remote: RemoteReference{
+				Kind: ArtifactKindSolution,
+				Name: "my-solution",
+				Tag:  "Latest",
+			},
+			wantKind: ArtifactKindSolution,
+			wantName: "my-solution",
+		},
+		{
+			name: "LATEST tag case-insensitive",
+			remote: RemoteReference{
+				Kind: ArtifactKindSolution,
+				Name: "my-solution",
+				Tag:  "LATEST",
+			},
+			wantKind: ArtifactKindSolution,
+			wantName: "my-solution",
+		},
 	}
 
 	for _, tt := range tests {

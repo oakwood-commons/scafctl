@@ -44,7 +44,7 @@ func CommandTags(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 	}
 
 	cmd := &cobra.Command{
-		Use:   "tags <registry/repository/kind/name>",
+		Use:   "tags <registry/repository[/kind]/name>",
 		Short: "List tags for a remote artifact",
 		Long: heredoc.Docf(`
 			List all tags (versions and aliases) for an artifact in a remote OCI registry.
@@ -52,11 +52,18 @@ func CommandTags(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			The reference should include the full path to the artifact without a version:
 			  <registry>/<repository>/<kind>/<name>
 
+			The kind segment may be omitted for Docker-style repositories where the
+			artifact lives directly under the repository path. Use --kind to specify
+			the artifact kind when it is not part of the path.
+
 			Returns both semver version tags and alias tags (e.g., "stable", "latest").
 
 			Examples:
-			  # List tags for a remote solution
+			  # List tags for a remote solution (kind in path)
 			  %[1]s catalog tags ghcr.io/myorg/scafctl/solutions/my-solution
+
+			  # List tags for a Docker-style ref (kind omitted)
+			  %[1]s catalog tags ghcr.io/myorg/my-solution
 
 			  # List tags with explicit kind
 			  %[1]s catalog tags ghcr.io/myorg/my-solution --kind solution
@@ -92,19 +99,25 @@ func runTags(ctx context.Context, opts *TagsOptions, outputOpts *kvx.OutputOptio
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
-	// Override kind if specified
+	// Validate --kind early
 	if opts.Kind != "" {
-		kind, ok := catalog.ParseArtifactKind(opts.Kind)
-		if !ok {
+		if _, ok := catalog.ParseArtifactKind(opts.Kind); !ok {
 			w.Errorf("invalid kind %q: must be 'solution', 'provider', or 'auth-handler'", opts.Kind)
 			return exitcode.Errorf("invalid kind")
 		}
-		remoteRef.Kind = kind
+	}
+
+	// Apply --kind only when the parsed reference has no kind segment.
+	// For Docker-style refs where kind is already in the path, --kind is
+	// metadata only and must not inject an extra path segment.
+	refKind := remoteRef.Kind
+	if opts.Kind != "" && refKind == "" {
+		refKind, _ = catalog.ParseArtifactKind(opts.Kind)
 	}
 
 	// Convert to reference (ignore version/tag from the input)
 	ref := catalog.Reference{
-		Kind: remoteRef.Kind,
+		Kind: refKind,
 		Name: remoteRef.Name,
 	}
 

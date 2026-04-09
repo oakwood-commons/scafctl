@@ -196,7 +196,8 @@ func runAuthHandlerLogin(ctx context.Context, w *writer.Writer, opts *LoginOptio
 	if scope == "" {
 		if cfg := config.FromContext(ctx); cfg != nil {
 			for _, cat := range cfg.Catalogs {
-				if strings.Contains(cat.URL, opts.Registry) && cat.AuthScope != "" {
+				catRegistry, _ := catalog.ParseCatalogURL(cat.URL)
+				if catRegistry == opts.Registry && cat.AuthScope != "" {
 					scope = cat.AuthScope
 					break
 				}

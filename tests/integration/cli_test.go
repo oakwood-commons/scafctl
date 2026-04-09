@@ -3308,6 +3308,81 @@ func TestIntegration_CatalogTag_MoveAlias(t *testing.T) {
 	assert.Contains(t, stdout, "2.0.0")
 }
 
+// Catalog Tags Tests
+
+func TestIntegration_CatalogTagsHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "catalog", "tags", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "List all tags")
+	assert.Contains(t, stdout, "--kind")
+	assert.Contains(t, stdout, "--insecure")
+}
+
+func TestIntegration_CatalogTags_RequiresArg(t *testing.T) {
+	t.Parallel()
+	_, _, exitCode := runScafctl(t, "catalog", "tags")
+
+	assert.NotEqual(t, 0, exitCode)
+}
+
+// Catalog Attach Tests
+
+func TestIntegration_CatalogAttachHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "catalog", "attach", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "attach")
+}
+
+// Catalog Remote Tests
+
+func TestIntegration_CatalogRemoteHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "catalog", "remote", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "remote")
+	assert.Contains(t, stdout, "add")
+	assert.Contains(t, stdout, "remove")
+	assert.Contains(t, stdout, "list")
+}
+
+func TestIntegration_CatalogRemoteAddHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "catalog", "remote", "add", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Add a new remote catalog")
+	assert.Contains(t, stdout, "--auth-provider")
+}
+
+func TestIntegration_CatalogRemoteRemoveHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "catalog", "remote", "remove", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "remove")
+}
+
+func TestIntegration_CatalogRemoteListHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "catalog", "remote", "list", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "list")
+}
+
+func TestIntegration_CatalogRemoteList_Empty(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+	_, _, exitCode := runScafctl(t, "catalog", "remote", "list")
+	assert.Equal(t, 0, exitCode)
+}
+
 // =============================================================================
 // Cache Command Tests
 // =============================================================================

@@ -268,7 +268,7 @@ func (r *RemoteReference) ToReference() (Reference, error) {
 		Name: r.Name,
 	}
 
-	if r.Tag == "" {
+	if r.Tag == "" || strings.EqualFold(r.Tag, "latest") {
 		return ref, nil
 	}
 

@@ -475,7 +475,7 @@ func (o *Getter) tryLocalCatalogForRef(ctx context.Context, path string) (*solut
 	o.logger.V(1).Info("checking local catalog before remote fetch", "ref", path, "nameVersion", nameVer)
 	sol, err := o.fromCatalog(ctx, nameVer)
 	if err != nil {
-		o.logger.V(1).Info("not found in local catalog, fetching from remote", "ref", path)
+		o.logger.V(1).Info("local catalog lookup failed, falling back to remote", "ref", path, "error", err.Error())
 		return nil, false
 	}
 	o.logger.V(1).Info("resolved from local catalog (skipping remote fetch)", "ref", path)
@@ -494,7 +494,7 @@ func (o *Getter) tryLocalCatalogForRefWithBundle(ctx context.Context, path strin
 	o.logger.V(1).Info("checking local catalog before remote fetch", "ref", path, "nameVersion", nameVer)
 	sol, bundleData, err := o.fromCatalogWithBundle(ctx, nameVer)
 	if err != nil {
-		o.logger.V(1).Info("not found in local catalog, fetching from remote", "ref", path)
+		o.logger.V(1).Info("local catalog lookup failed, falling back to remote", "ref", path, "error", err.Error())
 		return nil, nil, false
 	}
 	o.logger.V(1).Info("resolved from local catalog (skipping remote fetch)", "ref", path, "hasBundle", len(bundleData) > 0)

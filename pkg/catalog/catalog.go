@@ -112,6 +112,18 @@ func (r Reference) HasDigest() bool {
 	return r.Digest != ""
 }
 
+// VersionOrDigest returns a display string for the reference identifier.
+// Prefers Version.String() when set, falls back to Digest, then "unknown".
+func (r Reference) VersionOrDigest() string {
+	if r.Version != nil {
+		return r.Version.String()
+	}
+	if r.Digest != "" {
+		return r.Digest
+	}
+	return "unknown"
+}
+
 // ArtifactInfo contains metadata about a stored artifact.
 type ArtifactInfo struct {
 	// Reference is the artifact identifier.

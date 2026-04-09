@@ -102,21 +102,20 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 	var registry, repository string
 	var err error
 
+	// Validate --kind early (used for local tagging after pull)
+	if opts.Kind != "" {
+		if _, ok := catalog.ParseArtifactKind(opts.Kind); !ok {
+			w.Errorf("invalid kind %q: must be 'solution', 'provider', or 'auth-handler'", opts.Kind)
+			return exitcode.Errorf("invalid kind")
+		}
+	}
+
 	if looksLikeRemoteReference(opts.Reference) {
 		// Full remote reference: ghcr.io/myorg/solutions/my-solution@1.0.0
 		remoteRef, parseErr := catalog.ParseRemoteReference(opts.Reference)
 		if parseErr != nil {
 			w.Errorf("invalid reference: %v", parseErr)
 			return exitcode.WithCode(parseErr, exitcode.InvalidInput)
-		}
-
-		if opts.Kind != "" {
-			kind, ok := catalog.ParseArtifactKind(opts.Kind)
-			if !ok {
-				w.Errorf("invalid kind %q: must be 'solution', 'provider', or 'auth-handler'", opts.Kind)
-				return exitcode.Errorf("invalid kind")
-			}
-			remoteRef.Kind = kind
 		}
 
 		ref, err = remoteRef.ToReference()
@@ -138,12 +137,7 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 
 		var artifactKind catalog.ArtifactKind
 		if opts.Kind != "" {
-			kind, ok := catalog.ParseArtifactKind(opts.Kind)
-			if !ok {
-				w.Errorf("invalid kind %q: must be 'solution', 'provider', or 'auth-handler'", opts.Kind)
-				return exitcode.Errorf("invalid kind")
-			}
-			artifactKind = kind
+			artifactKind, _ = catalog.ParseArtifactKind(opts.Kind) // already validated above
 		}
 
 		ref = catalog.Reference{
@@ -214,12 +208,6 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 	}
 	ref = info.Reference
 
-	// Default kind to solution when not specified (kindless refs like "name@1.0.0")
-	// to ensure local catalog tags are well-formed (e.g., "solution/name:1.0.0" not "/name:1.0.0").
-	if ref.Kind == "" {
-		ref.Kind = catalog.ArtifactKindSolution
-	}
-
 	// Create local catalog
 	localCatalog, err := catalog.NewLocalCatalog(*lgr)
 	if err != nil {
@@ -241,7 +229,7 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 
 	// Pull from remote
 	repoPath := remoteCatalog.RepositoryPath(ref)
-	w.Infof("Pulling %s@%s from %s...", ref.Name, ref.Version.String(), repoPath)
+	w.Infof("Pulling %s@%s from %s...", ref.Name, ref.VersionOrDigest(), repoPath)
 
 	result, err := remoteCatalog.CopyTo(ctx, ref, localCatalog, copyOpts)
 	if err != nil {
@@ -254,6 +242,16 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
+	// Apply kind for local tagging after the remote fetch is complete.
+	// --kind overrides, otherwise default kindless refs to "solution" so
+	// local tags are well-formed (e.g., "solution/name:1.0.0" not "/name:1.0.0").
+	if opts.Kind != "" && ref.Kind == "" {
+		ref.Kind, _ = catalog.ParseArtifactKind(opts.Kind) // already validated above
+	}
+	if ref.Kind == "" {
+		ref.Kind = catalog.ArtifactKindSolution
+	}
+
 	// Build display name
 	displayName := ref.Name
 	if opts.TargetName != "" {
@@ -262,7 +260,7 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 
 	w.Successf("Pulled %s@%s (%s)",
 		displayName,
-		ref.Version.String(),
+		ref.VersionOrDigest(),
 		format.Bytes(result.Size))
 
 	// When --no-cache is set, invalidate any stale artifact cache entry so that
