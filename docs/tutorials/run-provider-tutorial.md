@@ -311,22 +311,22 @@ key is close to a valid one (a likely typo), a suggestion is included:
 ```bash
 # Typo in key name
 scafctl run provider http urll=https://example.com
-# Error: provider "http" does not accept input "urll" — did you mean "url"? (valid inputs: body, headers, method, timeout, url)
+# Error: provider "http" does not accept input "urll" — did you mean "url"? (valid inputs: authProvider, autoParseJson, body, headers, method, pagination, poll, retry, scope, timeout, url)
 
 # Completely unknown key
 scafctl run provider http unknown=value
-# Error: provider "http" does not accept input "unknown" (valid inputs: body, headers, method, timeout, url)
+# Error: provider "http" does not accept input "unknown" (valid inputs: authProvider, autoParseJson, body, headers, method, pagination, poll, retry, scope, timeout, url)
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
 # Typo in key name
 scafctl run provider http urll=https://example.com
-# Error: provider "http" does not accept input "urll" — did you mean "url"? (valid inputs: body, headers, method, timeout, url)
+# Error: provider "http" does not accept input "urll" — did you mean "url"? (valid inputs: authProvider, autoParseJson, body, headers, method, pagination, poll, retry, scope, timeout, url)
 
 # Completely unknown key
 scafctl run provider http unknown=value
-# Error: provider "http" does not accept input "unknown" (valid inputs: body, headers, method, timeout, url)
+# Error: provider "http" does not accept input "unknown" (valid inputs: authProvider, autoParseJson, body, headers, method, pagination, poll, retry, scope, timeout, url)
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -598,11 +598,17 @@ At the end of the standard help text, you'll see a section like:
 
 ```
 Provider Inputs (http):
-  body     string               Request body for POST/PUT/PATCH requests
-  headers  any                  HTTP headers as key-value pairs
-  method   string               HTTP method
-  timeout  integer              Request timeout in seconds
-  url      string   (required)  The URL to request
+  authProvider   string                Authentication provider to use for this request
+  autoParseJson  boolean               When true and the response Content-Type is application/json, automatically parse the body into a structured object
+  body           string                Request body for POST/PUT/PATCH requests
+  headers        any                   HTTP headers as key-value pairs
+  method         string                HTTP method
+  pagination     object                Pagination configuration for automatically following paginated API responses
+  poll           object                Polling configuration for re-executing the request until a condition is met
+  retry          any                   Retry configuration for transient failures
+  scope          string                OAuth scope for authentication
+  timeout        integer               Request timeout in seconds
+  url            string   (required)   The URL to request
 ```
 
 This works for any provider — just include the provider name before `--help`:

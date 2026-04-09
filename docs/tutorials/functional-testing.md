@@ -23,6 +23,7 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: my-solution
+  version: 1.0.0
 spec:
   resolvers:
     greeting:
@@ -35,9 +36,9 @@ spec:
 
   testing:
     cases:
-      render-basic:
-        description: Verify solution renders successfully
-        command: [render, solution]
+      run-basic:
+        description: Verify resolvers run successfully
+        command: [run, resolver]
         assertions:
           - expression: __exitCode == 0
           - contains: greeting
@@ -76,13 +77,19 @@ scafctl test functional
 Expected output:
 
 ```
-SOLUTION       TEST              STATUS   DURATION
-my-solution    builtin:lint      PASS     12ms
-my-solution    builtin:parse     PASS     1ms
-my-solution    render-basic      PASS     8ms
+SOLUTION       TEST                      STATUS   DURATION
+my-solution    builtin:parse             PASS     0µs
+my-solution    builtin:lint              PASS     12ms
+my-solution    builtin:resolve-defaults  PASS     10ms
+my-solution    run-basic                 PASS     8ms
 
-3 passed, 0 failed, 0 errors, 0 skipped (21ms)
+4 passed, 0 failed, 0 errors, 0 skipped (30ms)
 ```
+
+> [!NOTE]
+> The builtin tests (`builtin:parse`, `builtin:lint`, `builtin:resolve-defaults`) run automatically.
+> Solutions without a `workflow` section will also see a `builtin:render-defaults` test that fails
+> since `render solution` requires a workflow. This is expected for resolver-only solutions.
 
 Each test specifies a `command` (the scafctl subcommand to run) and one or more
 `assertions` to validate the output. The runner automatically injects
@@ -874,6 +881,7 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: my-solution
+  version: 1.0.0
 compose:
   - resolvers/environment.yaml
   - tests/smoke.yaml
@@ -1458,6 +1466,7 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: my-solution
+  version: 1.0.0
 compose:
   - tests/*.yaml
 spec:

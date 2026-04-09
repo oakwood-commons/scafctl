@@ -1,8 +1,3 @@
-# Message Demo Solution
-#
-# A complete solution demonstrating the message provider in a realistic
-# workflow with resolvers, actions, and rich terminal output.
-#
 # Run: scafctl run solution -f examples/solutions/message-demo/solution.yaml -r environment=production
 
 apiVersion: scafctl.io/v1
@@ -11,7 +6,9 @@ kind: Solution
 metadata:
   name: message-demo
   version: 1.0.0
-  description: Demonstrates the message provider in a complete solution workflow with styled terminal output
+  description: |
+    Message provider in a complete solution workflow with styled terminal
+    output. Demonstrates resolvers, actions, and rich terminal messaging.
 
 spec:
   resolvers:

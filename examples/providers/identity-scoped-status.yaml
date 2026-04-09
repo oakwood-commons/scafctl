@@ -1,11 +1,4 @@
-# Identity Provider — Check Scoped Token Status
-#
-# Mints (or retrieves from cache) an access token for the given scope
-# and returns token metadata (expiry, flow, type) along with identity
-# details parsed from the JWT.
-#
-# Prerequisites:
-#   scafctl auth login entra
+# Prerequisites: scafctl auth login entra
 #
 # Run: scafctl run solution -f examples/providers/identity-scoped-status.yaml
 # Run: scafctl run resolver -f examples/providers/identity-scoped-status.yaml
@@ -16,7 +9,9 @@ kind: Solution
 metadata:
   name: identity-scoped-status-example
   version: 1.0.0
-  description: Check scoped token status and metadata
+  description: |
+    Check scoped token status and metadata. Mints or retrieves a cached
+    access token and returns expiry, flow, type, and JWT identity details.
 
 spec:
   resolvers:

@@ -1,5 +1,5 @@
-# Example solution for the MCP Server Tutorial.
-# Copy to your project: mkdir -p mcp-demo && cp examples/mcp/tutorial-solution.yaml mcp-demo/solution.yaml
+# Copy to project: mkdir -p mcp-demo && cp examples/mcp/tutorial-solution.yaml mcp-demo/solution.yaml
+
 apiVersion: scafctl.io/v1
 kind: Solution
 

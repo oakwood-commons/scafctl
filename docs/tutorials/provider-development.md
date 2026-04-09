@@ -13,7 +13,7 @@ Providers can be delivered in two ways:
 |---|---|---|
 | **Where it lives** | Compiled into the scafctl binary | Separate executable (any language with gRPC) |
 | **Registration** | `registry.Register(...)` in `builtin.go` | Discovered at runtime from plugin cache or catalog |
-| **Crash isolation** | Shares process with scafctl | Isolated process — plugin crash doesn't take down CLI |
+| **Crash isolation** | Shares process with scafctl | Isolated process -- plugin crash doesn't take down CLI |
 | **Distribution** | Ships with scafctl releases | OCI catalog artifact (`kind: provider`) or standalone binary |
 | **Interface** | `provider.Provider` (2 methods) | `plugin.ProviderPlugin` (3 methods) |
 
@@ -260,7 +260,7 @@ Sensitive fields are declared on the Descriptor (see [Mark Sensitive Data](#4-ma
 The `Execute` method receives validated inputs and returns an `Output`.
 
 > [!IMPORTANT]
-> **Inputs are pre-resolved by the framework.** When users write `tmpl:`, `expr:`, or `rslvr:` ValueRefs on any input field, the framework evaluates them **before** calling your provider. Your `Execute` method always receives plain, already-resolved values (strings, numbers, maps, etc.). **Do not** implement Go template or CEL evaluation inside your provider — that's the framework's job. See [Don't Duplicate ValueRef Handling](#6-dont-duplicate-valueref-handling).
+> **Inputs are pre-resolved by the framework.** When users write `tmpl:`, `expr:`, or `rslvr:` ValueRefs on any input field, the framework evaluates them **before** calling your provider. Your `Execute` method always receives plain, already-resolved values (strings, numbers, maps, etc.). **Do not** implement Go template or CEL evaluation inside your provider -- that's the framework's job. See [Don't Duplicate ValueRef Handling](#6-dont-duplicate-valueref-handling).
 
 ```go
 func (p *MyProvider) Execute(ctx context.Context, input any) (*provider.Output, error) {
@@ -328,7 +328,7 @@ iterCtx, ok := provider.IterationContextFromContext(ctx)
 if ok {
     currentItem := iterCtx.Item    // Current element
     currentIndex := iterCtx.Index  // Zero-based index
-    // iterCtx.ItemAlias / iterCtx.IndexAlias — custom variable names if set
+    // iterCtx.ItemAlias / iterCtx.IndexAlias -- custom variable names if set
 }
 
 // Get logger
@@ -344,11 +344,11 @@ if ok {
 
 > [!CAUTION]
 > **Note**: All context helpers except `DryRunFromContext` return a two-value
-> `(value, bool)` — the `bool` indicates whether the value was present in the context.
+> `(value, bool)` -- the `bool` indicates whether the value was present in the context.
 > 
 > **Dry-run mechanisms**: There are two dry-run approaches:
-> 1. **`DryRunFromContext(ctx)`** — Checked in `Execute()` when running via `run provider --dry-run`. Return mock data to avoid side effects.
-> 2. **`WhatIf` on `Descriptor`** — Called by `run solution --dry-run` to generate a human-readable description of what the provider would do. Providers are never executed during solution dry-run.
+> 1. **`DryRunFromContext(ctx)`** -- Checked in `Execute()` when running via `run provider --dry-run`. Return mock data to avoid side effects.
+> 2. **`WhatIf` on `Descriptor`** -- Called by `run solution --dry-run` to generate a human-readable description of what the provider would do. Providers are never executed during solution dry-run.
 
 ### Streaming Output
 
@@ -358,15 +358,15 @@ real-time feedback during long-running operations.
 
 To stream output:
 
-1. **Get IO streams from context** — `provider.IOStreamsFromContext(ctx)` returns
+1. **Get IO streams from context** -- `provider.IOStreamsFromContext(ctx)` returns
    `(*IOStreams, bool)`. The `IOStreams` has `Out` and `ErrOut` writers. It may not
    be available when the CLI is rendering structured output (JSON/YAML), so always
    check the `bool`.
 
-2. **Write to both the capture buffer and the terminal** — Use `io.MultiWriter` to
+2. **Write to both the capture buffer and the terminal** -- Use `io.MultiWriter` to
    write to both your internal buffer (for `Output.Data`) and the terminal writer.
 
-3. **Set `Streamed: true`** on the returned `Output` — This tells the CLI layer not
+3. **Set `Streamed: true`** on the returned `Output` -- This tells the CLI layer not
    to re-print the data that was already streamed.
 
 ```go
@@ -382,7 +382,7 @@ func (p *MyProvider) Execute(ctx context.Context, input any) (*provider.Output, 
         streamed = true
     }
 
-    // Write output — goes to both buffer and terminal
+    // Write output -- goes to both buffer and terminal
     fmt.Fprintln(out, "Hello, World!")
 
     return &provider.Output{
@@ -614,7 +614,7 @@ OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 
 Providers support two complementary dry-run mechanisms:
 
-**WhatIf (solution-level dry-run)**: Add a `WhatIf` function to your `Descriptor` for context-specific dry-run messages. This is used by `run solution --dry-run` — your provider's `Execute` method is never called.
+**WhatIf (solution-level dry-run)**: Add a `WhatIf` function to your `Descriptor` for context-specific dry-run messages. This is used by `run solution --dry-run` -- your provider's `Execute` method is never called.
 
 ```go
 descriptor: &provider.Descriptor{
@@ -694,30 +694,30 @@ resolve:
 
 ### 6. Don't Duplicate ValueRef Handling
 
-The scafctl framework provides a universal **ValueRef** system that allows users to use `tmpl:` (Go templates), `expr:` (CEL expressions), or `rslvr:` (resolver references) on **any** provider input field. The framework evaluates these before calling your provider and automatically detects resolver dependencies from the references — users don't even need `dependsOn`.
+The scafctl framework provides a universal **ValueRef** system that allows users to use `tmpl:` (Go templates), `expr:` (CEL expressions), or `rslvr:` (resolver references) on **any** provider input field. The framework evaluates these before calling your provider and automatically detects resolver dependencies from the references -- users don't even need `dependsOn`.
 
 **Do not** implement Go template parsing or CEL evaluation inside your provider. Your `Execute` method receives already-resolved plain values.
 
 ```yaml
-# Users can write this for ANY provider — the framework handles it:
+# Users can write this for ANY provider -- the framework handles it:
 resolvers:
   greeting:
     resolve:
       with:
         - provider: my-provider
           inputs:
-            # tmpl: ValueRef — framework evaluates, provider receives plain string
+            # tmpl: ValueRef -- framework evaluates, provider receives plain string
             url:
               tmpl: "https://api.example.com/{{ .environment }}/data"
-            # expr: ValueRef — framework evaluates, provider receives plain string
+            # expr: ValueRef -- framework evaluates, provider receives plain string
             query:
               expr: "'status=' + _.filterMode"
-            # rslvr: ValueRef — framework resolves, provider receives the value
+            # rslvr: ValueRef -- framework resolves, provider receives the value
             token:
               rslvr: apiToken
 ```
 
-In your provider's `Execute`, all three inputs arrive as plain strings. The framework also auto-detects that this resolver depends on `environment`, `filterMode`, and `apiToken` — no manual `dependsOn` required.
+In your provider's `Execute`, all three inputs arrive as plain strings. The framework also auto-detects that this resolver depends on `environment`, `filterMode`, and `apiToken` -- no manual `dependsOn` required.
 
 ## Directory Structure
 
@@ -922,7 +922,7 @@ When adding a provider to the scafctl codebase as a built-in, you **must**:
              - expression: __output.basic.result == "Processed: hello"
    ```
 
-3. **Add documentation** — tutorial in `docs/tutorials/`, examples in `examples/providers/`.
+3. **Add documentation** -- tutorial in `docs/tutorials/`, examples in `examples/providers/`.
 4. **Update the provider reference** documentation.
 
 Every existing built-in provider has a corresponding functional test directory under
@@ -940,7 +940,7 @@ excellent templates for structuring your own functional tests.
 
 ## Delivering as a Plugin
 
-Instead of compiling your provider into the scafctl binary, you can ship it as a **plugin** — a standalone executable that communicates with scafctl over gRPC. This lets you:
+Instead of compiling your provider into the scafctl binary, you can ship it as a **plugin** -- a standalone executable that communicates with scafctl over gRPC. This lets you:
 
 - Use any language that supports gRPC
 - Isolate plugin crashes from the main process
@@ -1217,14 +1217,14 @@ All `provider.Descriptor` fields are preserved over the gRPC round-trip:
 
 Fields **not** transmitted (Go-side only): `Decode`, `ExtractDependencies`, `WhatIf`.
 
-`WhatIf` is not serialized in the descriptor — instead, the `DescribeWhatIf` RPC is called at runtime to generate context-specific messages over gRPC.
+`WhatIf` is not serialized in the descriptor -- instead, the `DescribeWhatIf` RPC is called at runtime to generate context-specific messages over gRPC.
 
 ### Plugin Discovery
 
 scafctl resolves plugins through two mechanisms:
 
-1. **Catalog Auto-Fetch** — Declared in `bundle.plugins`, fetched from OCI registries, cached locally.
-2. **Directory Scanning** — For local dev, plugins at `$XDG_CACHE_HOME/scafctl/plugins/` are discovered automatically.
+1. **Catalog Auto-Fetch** -- Declared in `bundle.plugins`, fetched from OCI registries, cached locally.
+2. **Directory Scanning** -- For local dev, plugins at `$XDG_CACHE_HOME/scafctl/plugins/` are discovered automatically.
 
 See the [Plugin Auto-Fetching Tutorial](plugin-auto-fetch-tutorial.md) for full details on catalog-based distribution.
 
@@ -1290,14 +1290,14 @@ scafctl --log-level -1 run solution -f solution.yaml
 ### Plugin Security
 
 1. **Process isolation**: Plugins run in separate processes
-2. **Credential handling**: Use `SensitiveFields` and `schemahelper.WithWriteOnly()` — fields are transmitted so the host masks them in logs
+2. **Credential handling**: Use `SensitiveFields` and `schemahelper.WithWriteOnly()` -- fields are transmitted so the host masks them in logs
 3. **Handshake validation**: Protocol includes version handshake
 4. **Input validation**: Always validate inputs even after schema validation
 
 ## Next Steps
 
-- [Extension Concepts](extension-concepts.md) — Provider vs Auth Handler vs Plugin terminology
-- [Auth Handler Development Guide](auth-handler-development.md) — Build custom auth handlers (builtin and plugin)
-- [Plugin Auto-Fetching Tutorial](plugin-auto-fetch-tutorial.md) — How consumers auto-fetch your plugin at runtime
-- [Provider Reference](provider-reference.md) — Built-in provider examples
-- [Contributing Guidelines](../CONTRIBUTING.md) — Code standards
+- [Extension Concepts](extension-concepts.md) -- Provider vs Auth Handler vs Plugin terminology
+- [Auth Handler Development Guide](auth-handler-development.md) -- Build custom auth handlers (builtin and plugin)
+- [Plugin Auto-Fetching Tutorial](plugin-auto-fetch-tutorial.md) -- How consumers auto-fetch your plugin at runtime
+- [Provider Reference](provider-reference.md) -- Built-in provider examples
+- [Contributing Guidelines](https://github.com/oakwood-commons/scafctl/blob/main/CONTRIBUTING.md) -- Code standards

@@ -1,12 +1,9 @@
-# Security Hardening Example
-# ==========================
-#
-# This solution demonstrates security features built into scafctl providers.
-# Each resolver illustrates a specific security control.
+# Run: scafctl run solution -f examples/providers/security-example.yaml
+# Run: scafctl run resolver -f examples/providers/security-example.yaml
 #
 # Related documentation:
 #   - docs/tutorials/security-hardening.md
-#   - docs/tutorials/provider-reference.md (Security sections)
+#   - docs/tutorials/provider-reference.md
 
 apiVersion: scafctl.io/v1
 kind: Solution
@@ -19,7 +16,13 @@ metadata:
 spec:
   resolvers:
     # -----------------------------------------------------------------------
-    # env provider: prefix-scoped listing prevents secret leakage
+    # 1. env provider -- prefix-scoped listing prevents secret leakage
+    #
+    # Without a prefix, `operation: list` would dump every env var, including
+    # secrets like DATABASE_URL or AWS_SECRET_ACCESS_KEY. The `prefix` field
+    # restricts output to a known namespace. The `name` field is POSIX-validated
+    # (^[A-Za-z_][A-Za-z0-9_]*$) and capped at 256 chars, preventing injection
+    # via crafted variable names.
     # -----------------------------------------------------------------------
     app-config:
       description: List only app-prefixed environment variables (safe)
@@ -31,7 +34,14 @@ spec:
               prefix: "MY_APP_"
 
     # -----------------------------------------------------------------------
-    # directory provider: bounded recursion and symlink safety
+    # 2. directory provider -- bounded recursion and symlink safety
+    #
+    # Security controls:
+    #   maxDepth (1-50, default 10)  -- caps recursion to prevent DoS on deep trees
+    #   excludeHidden                -- skips dotfiles (.env, .git, .ssh)
+    #   maxFileSize (default 1 MB)   -- skips oversized files when includeContent is true
+    #   filterGlob / filterRegex     -- limits returned entries (regex max 500 chars)
+    #   symlinks are always skipped  -- prevents symlink-escape attacks
     # -----------------------------------------------------------------------
     project-files:
       description: List project files with safe recursion limits
@@ -47,33 +57,164 @@ spec:
               filterGlob: "*.yaml"
 
     # -----------------------------------------------------------------------
-    # exec provider: static command with shell-quoted dynamic args
+    # 3. exec provider -- shell injection prevention via args
+    #
+    # SAFE: `args` are individually shell-quoted with ShellQuote() which wraps
+    #   each value in single quotes and escapes embedded quotes ('it'\''s').
+    #   This prevents metacharacter injection regardless of input content.
+    #
+    # UNSAFE (DO NOT DO THIS):
+    #   command:
+    #     expr: "'echo ' + userInput"
+    #   Concatenating dynamic data into the command string allows injection.
+    #   A value like "; rm -rf /" would be executed as a separate command.
+    #
+    # Additional controls:
+    #   timeout (0-3600s)  -- enforced via context.WithTimeout at OS level
+    #   shell: auto        -- uses embedded POSIX interpreter (no external shell needed)
+    #   workingDir         -- restricts where the command executes
     # -----------------------------------------------------------------------
     safe-exec:
-      description: Pass dynamic data via args (not in command string)
+      description: Execute with timeout and embedded POSIX shell
       resolve:
-        with:
-          - provider: static
-            inputs:
-              value: "Hello, World!"
-      transform:
         with:
           - provider: exec
             inputs:
               command: echo
               args:
-                - expr: "__self"
+                - "Hello; echo THIS_IS_NOT_INJECTED"
+              timeout: 30
+              shell: auto
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: __self.stdout.trim()
+
+    # -----------------------------------------------------------------------
+    # 4. http provider -- SSRF protection and request safety
+    #
+    # Built-in SSRF blocklist (enabled by default):
+    #   Blocked: 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16,
+    #            169.254.0.0/16, 100.64.0.0/10 (CGNAT), ::1, fc00::/7, fe80::/10
+    #   Each redirect target is also validated against the blocklist.
+    #   Max 10 redirects before failure.
+    #
+    # Additional controls:
+    #   timeout (0-300s, default 30)   -- prevents hanging requests
+    #   url pattern (^https?://.*)     -- rejects non-HTTP schemes
+    #   response body size limit       -- configurable, prevents memory exhaustion
+    #   pagination host validation     -- next-page URLs must stay on the original host
+    #   TLS verification               -- enabled by default (InsecureSkipVerify=false)
+    #   authProvider                   -- auto-injects OAuth token with freshness buffer
+    # -----------------------------------------------------------------------
+    safe-http:
+      description: Fetch from a public URL with timeout and SSRF protection
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: https://httpbin.org/get
+              method: GET
+              timeout: 10
+              autoParseJson: true
+          - provider: static
+            inputs:
+              value: "httpbin unavailable"
+
+    # -----------------------------------------------------------------------
+    # 5. validation provider -- input sanitization with sandboxed CEL
+    #
+    # Regex patterns (match / notMatch) are capped at 1000 chars to limit ReDoS.
+    # CEL expressions run in a sandbox with:
+    #   cost limit: 1,000,000 operations (prevents infinite loops)
+    #   no I/O:     no filesystem, network, or exec functions
+    #   no reflection: cannot escape the sandbox
+    #   context cancellation: respects parent timeout
+    # -----------------------------------------------------------------------
+    validated-input:
+      description: Validate a value using regex and sandboxed CEL
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "my-safe-project"
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              match: "^[a-z][a-z0-9-]{2,62}$"
+              notMatch: "--"
+              expression: '!__self.endsWith("-")'
+              message: "Project name must be lowercase, 3-63 chars, no consecutive or trailing dashes"
+
+    # -----------------------------------------------------------------------
+    # 6. secret provider -- encrypted credential storage
+    #
+    # Secrets are encrypted at rest with AES-256-GCM. The master key is stored
+    # in the OS keyring (macOS Keychain, Linux Secret Service, Windows Credential
+    # Manager). Secret names are validated (^[a-zA-Z0-9._-]+$) to prevent
+    # path traversal or injection.
+    #
+    # The `required: false` + `fallback` pattern provides safe degradation
+    # without exposing whether a secret exists.
+    # -----------------------------------------------------------------------
+    api-key:
+      description: Retrieve an API key with safe fallback
+      resolve:
+        with:
+          - provider: secret
+            inputs:
+              operation: get
+              name: example.api-key
+              required: false
+              fallback: "not-configured"
 
   workflow:
     actions:
       # -----------------------------------------------------------------------
-      # file provider: write-tree with path safety
+      # 7. file provider -- path traversal prevention and restrictive permissions
+      #
+      # For write-tree, every entry path is validated against basePath:
+      #   - Relative paths with ../ that escape basePath are rejected
+      #   - Symlinks are resolved via EvalSymlinks before containment check
+      #   - isSubPath() uses filepath.Rel() to verify containment
+      #
+      # Default permissions are 0600 (owner read/write only).
+      # The onConflict strategy controls behavior when files already exist.
+      # backup: true creates a .bak copy before any mutation.
       # -----------------------------------------------------------------------
       write-output:
-        description: Write files — paths are validated to stay under basePath
+        description: Write files with path safety and restrictive permissions
         provider: file
         inputs:
           operation: write-tree
           basePath: ./output
+          onConflict: skip-unchanged
+          backup: true
           entries:
-            rslvr: project-files
+            - path: summary.txt
+              content: "Security example completed successfully"
+              permissions: "0600"
+            - path: config/settings.json
+              content: '{"secure": true}'
+              permissions: "0600"
+
+      # -----------------------------------------------------------------------
+      # 8. exec action with dynamic args and timeout
+      #
+      # The args field safely quotes dynamic resolver data -- even values
+      # containing shell metacharacters like "; rm -rf /" are treated as
+      # a single argument, not executed. The timeout is enforced at the OS
+      # level via context.WithTimeout(). If the command exceeds the deadline,
+      # the process is killed and context.DeadlineExceeded is returned.
+      # -----------------------------------------------------------------------
+      timed-command:
+        description: Run a command with safe dynamic args and timeout
+        provider: exec
+        dependsOn: [write-output]
+        inputs:
+          command: echo
+          args:
+            - rslvr: safe-exec
+          timeout: 10

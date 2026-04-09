@@ -1,15 +1,12 @@
-# Template Functions Demo
-#
-# Demonstrates the custom Go template functions available in scafctl:
-#   slugify, toDnsString, where, selectField, cel, toHcl, toYaml, fromYaml
-#
 apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: template-functions-demo
   version: 1.0.0
   displayName: Template Functions Demo
-  description: Demonstrates scafctl custom Go template functions
+  description: |
+    Demonstrates the custom Go template functions available in scafctl:
+    slugify, toDnsString, where, selectField, cel, toHcl, toYaml, fromYaml.
   category: demo
   tags:
     - templates

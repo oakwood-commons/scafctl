@@ -1,20 +1,13 @@
-# Transform Pipeline Example
-# Shows multi-step data transformation with filtering and mapping.
-#
 # Run: scafctl run resolver -f transform-pipeline.yaml
-#
-# This example demonstrates:
-# - Multi-step transformation
-# - Using __self to reference the current value
-# - Filtering and mapping data
-# - Aggregation
 
 apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: transform-pipeline
   version: 1.0.0
-  description: Multi-step data transformation pipeline
+  description: |
+    Multi-step data transformation pipeline. Demonstrates chaining
+    transforms with __self references, filtering, mapping, and aggregation.
 
 spec:
   resolvers:

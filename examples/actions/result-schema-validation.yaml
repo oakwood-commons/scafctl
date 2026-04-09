@@ -1,11 +1,3 @@
-# Result Schema Validation Example
-# Demonstrates using resultSchema to validate action outputs using JSON Schema.
-# This feature enables self-documenting actions and catches
-# result mismatches early at runtime.
-#
-# Uses JSON Schema 2020-12 for validation.
-# See: https://json-schema.org/
-#
 # Run: scafctl run solution -f examples/actions/result-schema-validation.yaml
 
 apiVersion: scafctl.io/v1
@@ -13,7 +5,10 @@ kind: Solution
 metadata:
   name: result-schema-validation
   version: 1.0.0
-  description: Example demonstrating result schema validation for actions
+  description: |
+    Result schema validation for actions using JSON Schema 2020-12.
+    Enables self-documenting actions and catches result mismatches
+    early at runtime.
 
 spec:
   resolvers:

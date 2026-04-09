@@ -1,8 +1,4 @@
-# Custom error messages — replace default error text with user-friendly messages.
-# The messages.error field supports static strings, CEL expressions, and Go templates.
-#
 # Run: scafctl run solution -f examples/resolvers/messages.yaml -r port=80 -o json
-# (Port 80 will trigger the validation error with the custom message)
 
 apiVersion: scafctl.io/v1
 kind: Solution
@@ -22,14 +18,13 @@ spec:
         with:
           - provider: parameter
             inputs:
-              name: port
+              key: port
       validate:
         with:
           - provider: validation
             inputs:
-              rules:
-                - expr: "int(__self) >= 1024 && int(__self) <= 65535"
-                  message: port out of allowed range
+              expression: "int(__self) >= 1024 && int(__self) <= 65535"
+              message: port out of allowed range
 
     environment:
       description: Deployment environment
@@ -40,11 +35,10 @@ spec:
         with:
           - provider: parameter
             inputs:
-              name: environment
+              key: environment
       validate:
         with:
           - provider: validation
             inputs:
-              rules:
-                - expr: '__self in ["dev", "staging", "production"]'
-                  message: must be dev, staging, or production
+              expression: '__self in ["dev", "staging", "production"]'
+              message: must be dev, staging, or production

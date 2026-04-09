@@ -1,33 +1,19 @@
-# Parameters Example
-# Demonstrates using CLI parameters with default values and type coercion.
-#
-# Basic usage:
-#   scafctl run resolver -f parameters.yaml
-#   scafctl run resolver -f parameters.yaml name=Alice count=5
-#   scafctl run resolver -f parameters.yaml -r name=Alice -r count=5
-#
-# Load parameters from a YAML/JSON file:
-#   scafctl run resolver -f parameters.yaml @params.yaml
-#   scafctl run resolver -f parameters.yaml -r @params.yaml
-#
-# Read parameters from stdin (parsed as YAML or JSON):
-#   echo '{"name": "Alice", "count": 5}' | scafctl run resolver -f parameters.yaml @-
-#   echo '{"name": "Alice"}' | scafctl run resolver -f parameters.yaml -r @-
-#
-# Pipe raw stdin into a single parameter:
-#   echo Alice | scafctl run resolver -f parameters.yaml name=@-
-#
-# Read a file's raw content into a single parameter:
-#   scafctl run resolver -f parameters.yaml name=@name.txt
-#
-# Help: scafctl run resolver -f parameters.yaml --help
+# Run: scafctl run resolver -f parameters.yaml
+# Run: scafctl run resolver -f parameters.yaml -r name=Alice -r count=5
+# Run: scafctl run resolver -f parameters.yaml -r @params.yaml
+# Run: echo '{"name": "Alice", "count": 5}' | scafctl run resolver -f parameters.yaml -r @-
+# Run: echo Alice | scafctl run resolver -f parameters.yaml name=@-
+# Run: scafctl run resolver -f parameters.yaml name=@name.txt
 
 apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: parameters-example
   version: 1.0.0
-  description: Using CLI parameters with defaults
+  description: |
+    CLI parameter usage with default values and type coercion.
+    Demonstrates positional args, -r flag, @file loading, @- stdin,
+    and raw stdin piping into individual parameters.
 
 spec:
   resolvers:

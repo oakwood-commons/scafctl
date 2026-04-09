@@ -1,25 +1,13 @@
-# Plugin Auto-Fetch Example
-#
-# This solution demonstrates declaring plugin dependencies that are
-# automatically fetched from catalogs at runtime.
-#
 # Prerequisites:
 #   1. Build and publish the echo plugin to a catalog:
 #      cd examples/plugins/echo && go build -o echo-provider .
 #      scafctl catalog push provider echo-provider --version 1.0.0 --binary echo-provider
-#
 #   2. Or run without real plugins to see the resolution flow:
 #      scafctl plugins install -f examples/plugins/auto-fetch-solution.yaml
 #
-# Usage:
-#   # Pre-fetch plugins
-#   scafctl plugins install -f examples/plugins/auto-fetch-solution.yaml
-#
-#   # List cached plugins
-#   scafctl plugins list
-#
-#   # Run the solution (auto-fetches if not cached)
-#   scafctl run solution -f examples/plugins/auto-fetch-solution.yaml
+# Run: scafctl plugins install -f examples/plugins/auto-fetch-solution.yaml
+# Run: scafctl plugins list
+# Run: scafctl run solution -f examples/plugins/auto-fetch-solution.yaml
 
 apiVersion: scafctl.io/v1
 kind: Solution
@@ -27,7 +15,9 @@ kind: Solution
 metadata:
   name: auto-fetch-demo
   version: 1.0.0
-  description: Demonstrates automatic plugin fetching from catalogs
+  description: |
+    Automatic plugin fetching from catalogs at runtime. Declares plugin
+    dependencies that are resolved and cached on first use.
 
 spec:
   resolvers:

@@ -1,17 +1,13 @@
-# Resolver Demo
-# A comprehensive example showing resolver features.
-#
-# Run all resolvers:     scafctl run resolver -f resolver-demo.yaml
-# Run specific resolver: scafctl run resolver environment -f resolver-demo.yaml
-# Verbose debugging:     scafctl run resolver --verbose -f resolver-demo.yaml
-# Full solution:         scafctl run resolver -f resolver-demo.yaml
+# Run: scafctl run resolver -f resolver-demo.yaml
+# Run: scafctl run resolver environment -f resolver-demo.yaml
+# Run: scafctl run resolver --verbose -f resolver-demo.yaml
 
 apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: resolver-demo
   version: 1.0.0
-  description: Comprehensive resolver demonstration
+  description: Comprehensive resolver demonstration with multiple provider types
 
 spec:
   resolvers:

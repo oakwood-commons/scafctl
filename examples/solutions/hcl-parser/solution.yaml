@@ -65,7 +65,7 @@ spec:
           - provider: cel
             inputs:
               expression: |
-                resolvers.tfConfig.variables.map(v, v.name)
+                _.tfConfig.variables.map(v, v.name)
 
     resourceSummary:
       description: Build a summary of resources with type and name
@@ -74,7 +74,7 @@ spec:
           - provider: cel
             inputs:
               expression: |
-                resolvers.tfConfig.resources.map(r, r.type + "." + r.name)
+                _.tfConfig.resources.map(r, r.type + "." + r.name)
 
     requiredVersion:
       description: Extract the required Terraform version
@@ -82,4 +82,4 @@ spec:
         with:
           - provider: cel
             inputs:
-              expression: resolvers.tfConfig.terraform.required_version
+              expression: _.tfConfig.terraform.required_version

@@ -697,14 +697,14 @@ When running resolvers normally, the dependency graph and a provider usage summa
 {{< tabs "run-resolver-tutorial-cmd-15" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f dep-demo.yaml -o json -e '_.__execution.dependencyGraph'
-scafctl run resolver -f dep-demo.yaml -o json -e '_.__execution.providerSummary'
+scafctl run resolver -f dep-demo.yaml -o json --show-execution -e '_.__execution.dependencyGraph'
+scafctl run resolver -f dep-demo.yaml -o json --show-execution -e '_.__execution.providerSummary'
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f dep-demo.yaml -o json -e '_.__execution.dependencyGraph'
-scafctl run resolver -f dep-demo.yaml -o json -e '_.__execution.providerSummary'
+scafctl run resolver -f dep-demo.yaml -o json --show-execution -e '_.__execution.dependencyGraph'
+scafctl run resolver -f dep-demo.yaml -o json --show-execution -e '_.__execution.providerSummary'
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -722,25 +722,25 @@ The `dependencyGraph` in `__execution` includes a `diagrams` field with pre-rend
 {{% tab "Bash" %}}
 ```bash
 # Extract the Mermaid diagram
-scafctl run resolver -f dep-demo.yaml -o json -e '_.__execution.dependencyGraph.diagrams.mermaid'
+scafctl run resolver -f dep-demo.yaml -o json --show-execution -e '_.__execution.dependencyGraph.diagrams.mermaid'
 
 # Extract the DOT diagram and render with Graphviz
-scafctl run resolver -f dep-demo.yaml -o json -e '_.__execution.dependencyGraph.diagrams.dot' | dot -Tpng > graph.png
+scafctl run resolver -f dep-demo.yaml -o json --show-execution -e '_.__execution.dependencyGraph.diagrams.dot' | dot -Tpng > graph.png
 
 # Extract the ASCII diagram
-scafctl run resolver -f dep-demo.yaml -o json -e '_.__execution.dependencyGraph.diagrams.ascii'
+scafctl run resolver -f dep-demo.yaml -o json --show-execution -e '_.__execution.dependencyGraph.diagrams.ascii'
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
 # Extract the Mermaid diagram
-scafctl run resolver -f dep-demo.yaml -o json -e '_.__execution.dependencyGraph.diagrams.mermaid'
+scafctl run resolver -f dep-demo.yaml -o json --show-execution -e '_.__execution.dependencyGraph.diagrams.mermaid'
 
 # Extract the DOT diagram and render with Graphviz
-scafctl run resolver -f dep-demo.yaml -o json -e '_.__execution.dependencyGraph.diagrams.dot' | dot -Tpng -o graph.png
+scafctl run resolver -f dep-demo.yaml -o json --show-execution -e '_.__execution.dependencyGraph.diagrams.dot' | dot -Tpng -o graph.png
 
 # Extract the ASCII diagram
-scafctl run resolver -f dep-demo.yaml -o json -e '_.__execution.dependencyGraph.diagrams.ascii'
+scafctl run resolver -f dep-demo.yaml -o json --show-execution -e '_.__execution.dependencyGraph.diagrams.ascii'
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -751,13 +751,13 @@ You can also extract diagrams when running only specific resolvers:
 {{% tab "Bash" %}}
 ```bash
 # Get the Mermaid diagram for just endpoint and unrelated (and their deps)
-scafctl run resolver endpoint unrelated -f dep-demo.yaml -o json \
+scafctl run resolver endpoint unrelated -f dep-demo.yaml -o json --show-execution \
   -e '_.__execution.dependencyGraph.diagrams.mermaid'
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver endpoint unrelated -f dep-demo.yaml -o json `
+scafctl run resolver endpoint unrelated -f dep-demo.yaml -o json --show-execution `
   -e '_.__execution.dependencyGraph.diagrams.mermaid'
 ```
 {{% /tab %}}

@@ -1,7 +1,3 @@
-# Static Provider — Simple String Value
-#
-# Demonstrates the static provider returning a fixed value.
-#
 # Run: scafctl run solution -f examples/providers/static-hello.yaml
 # Run: scafctl run resolver -f examples/providers/static-hello.yaml
 

@@ -1,7 +1,3 @@
-# HTTP Provider — Page Number Pagination
-#
-# Demonstrates pagination by incrementing a page number query parameter.
-#
 # Run: scafctl run solution -f examples/providers/http-pagination-page-number.yaml
 # Run: scafctl run resolver -f examples/providers/http-pagination-page-number.yaml
 
@@ -11,7 +7,7 @@ kind: Solution
 metadata:
   name: http-pagination-page-number-example
   version: 1.0.0
-  description: Page number pagination increments page parameter each request
+  description: Page number pagination increments a page query parameter each request
 
 spec:
   resolvers:

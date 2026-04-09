@@ -1,19 +1,14 @@
-# Feature Flags Example
-# Demonstrates feature toggles with remote fallback to local defaults.
-#
 # Run: scafctl run resolver -f feature-flags.yaml
-#
-# This example shows:
-# - Fetching flags from remote API with fallback
-# - Computing derived configuration from flags
-# - Conditional resolver execution based on flags
 
 apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: feature-flags
   version: 1.0.0
-  description: Feature toggle pattern with fallbacks
+  description: |
+    Feature toggle pattern with fallbacks. Demonstrates fetching flags from
+    a remote API with fallback to local defaults, computing derived
+    configuration from flags, and conditional resolver execution.
 
 spec:
   resolvers:

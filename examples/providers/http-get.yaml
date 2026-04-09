@@ -1,7 +1,3 @@
-# HTTP Provider — Simple GET Request
-#
-# Demonstrates a basic HTTP GET request using the http provider.
-#
 # Run: scafctl run solution -f examples/providers/http-get.yaml
 # Run: scafctl run resolver -f examples/providers/http-get.yaml
 

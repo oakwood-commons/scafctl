@@ -755,3 +755,48 @@ func TestBuildFunctionHints_NotEmpty(t *testing.T) {
 	assert.Contains(t, hints, "regex.match")
 	assert.Contains(t, hints, "regex.replace")
 }
+
+func TestStructToMap(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    any
+		expected any
+		wantErr  bool
+	}{
+		{
+			name: "struct to map",
+			input: struct {
+				Name  string `json:"name"`
+				Count int    `json:"count"`
+			}{Name: "test", Count: 42},
+			expected: map[string]any{"name": "test", "count": float64(42)},
+		},
+		{
+			name: "slice of structs",
+			input: []struct {
+				V string `json:"v"`
+			}{{V: "a"}, {V: "b"}},
+			expected: []any{map[string]any{"v": "a"}, map[string]any{"v": "b"}},
+		},
+		{
+			name:     "nil input",
+			input:    nil,
+			expected: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result, err := StructToMap(tt.input)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
