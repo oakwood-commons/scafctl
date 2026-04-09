@@ -98,6 +98,20 @@ func TestParseReference(t *testing.T) {
 			errMsg:  "invalid version",
 		},
 		{
+			name:     "latest resolves to no version",
+			kind:     ArtifactKindSolution,
+			input:    "my-solution@latest",
+			wantName: "my-solution",
+			wantVer:  "",
+		},
+		{
+			name:     "LATEST case-insensitive",
+			kind:     ArtifactKindSolution,
+			input:    "my-solution@LATEST",
+			wantName: "my-solution",
+			wantVer:  "",
+		},
+		{
 			name:    "multiple @ symbols",
 			kind:    ArtifactKindSolution,
 			input:   "my@solution@1.0.0",
@@ -479,13 +493,15 @@ func TestValidateAlias(t *testing.T) {
 		wantErr string
 	}{
 		{name: "valid alias - stable", alias: "stable"},
-		{name: "valid alias - latest", alias: "latest"},
 		{name: "valid alias - production", alias: "production"},
 		{name: "valid alias - with dots", alias: "v1.release"},
 		{name: "valid alias - with hyphens", alias: "pre-release"},
 		{name: "valid alias - with underscores", alias: "staging_v2"},
 		{name: "valid alias - uppercase", alias: "STABLE"},
 		{name: "empty alias", alias: "", wantErr: "cannot be empty"},
+		{name: "latest is reserved", alias: "latest", wantErr: "reserved"},
+		{name: "LATEST is reserved", alias: "LATEST", wantErr: "reserved"},
+		{name: "numeric only - rejected", alias: "100", wantErr: "purely numeric"},
 		{name: "semver version - rejected", alias: "1.0.0", wantErr: "looks like a semver version"},
 		{name: "semver with prerelease - rejected", alias: "1.2.3-alpha.1", wantErr: "looks like a semver version"},
 		{name: "contains slash", alias: "foo/bar", wantErr: "invalid character"},

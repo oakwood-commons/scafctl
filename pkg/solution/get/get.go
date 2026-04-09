@@ -266,6 +266,11 @@ func (o *Getter) Get(ctx context.Context, path string) (*solution.Solution, erro
 	// Check if this is a Docker-style OCI remote reference (e.g., ghcr.io/myorg/starter-kit@1.0.0).
 	// Remote references have a registry hostname (contains "." or ":") in the first path segment.
 	if o.remoteResolver != nil && IsCatalogReference(path) && strings.Contains(path, "/") {
+		// Docker-like behavior: check local catalog first, fall back to remote.
+		if sol, ok := o.tryLocalCatalogForRef(ctx, path); ok {
+			return sol, nil
+		}
+
 		o.logger.V(1).Info("attempting to resolve from remote registry", "ref", path)
 		sol, err := o.fromRemoteRef(ctx, path)
 		if err == nil {
@@ -336,6 +341,11 @@ func (o *Getter) GetWithBundle(ctx context.Context, path string) (*solution.Solu
 
 	// Check if this is a Docker-style OCI remote reference
 	if o.remoteResolver != nil && IsCatalogReference(path) && strings.Contains(path, "/") {
+		// Docker-like behavior: check local catalog first, fall back to remote.
+		if sol, bundleData, ok := o.tryLocalCatalogForRefWithBundle(ctx, path); ok {
+			return sol, bundleData, nil
+		}
+
 		o.logger.V(1).Info("attempting to resolve with bundle from remote registry", "ref", path)
 		sol, bundleData, err := o.fromRemoteRefWithBundle(ctx, path)
 		if err == nil {
@@ -450,6 +460,81 @@ func IsCatalogReference(s string) bool {
 		return false
 	}
 	return true
+}
+
+// tryLocalCatalogForRef checks the local catalog for a remote reference before
+// fetching from the remote registry. Returns the solution and true if found.
+func (o *Getter) tryLocalCatalogForRef(ctx context.Context, path string) (*solution.Solution, bool) {
+	if o.catalogResolver == nil {
+		return nil, false
+	}
+	nameVer := extractNameVersionFromRef(path)
+	if nameVer == "" {
+		return nil, false
+	}
+	o.logger.V(1).Info("checking local catalog before remote fetch", "ref", path, "nameVersion", nameVer)
+	sol, err := o.fromCatalog(ctx, nameVer)
+	if err != nil {
+		o.logger.V(1).Info("not found in local catalog, fetching from remote", "ref", path)
+		return nil, false
+	}
+	o.logger.V(1).Info("resolved from local catalog (skipping remote fetch)", "ref", path)
+	return sol, true
+}
+
+// tryLocalCatalogForRefWithBundle is like tryLocalCatalogForRef but also returns bundle data.
+func (o *Getter) tryLocalCatalogForRefWithBundle(ctx context.Context, path string) (*solution.Solution, []byte, bool) {
+	if o.catalogResolver == nil {
+		return nil, nil, false
+	}
+	nameVer := extractNameVersionFromRef(path)
+	if nameVer == "" {
+		return nil, nil, false
+	}
+	o.logger.V(1).Info("checking local catalog before remote fetch", "ref", path, "nameVersion", nameVer)
+	sol, bundleData, err := o.fromCatalogWithBundle(ctx, nameVer)
+	if err != nil {
+		o.logger.V(1).Info("not found in local catalog, fetching from remote", "ref", path)
+		return nil, nil, false
+	}
+	o.logger.V(1).Info("resolved from local catalog (skipping remote fetch)", "ref", path, "hasBundle", len(bundleData) > 0)
+	return sol, bundleData, true
+}
+
+// extractNameVersionFromRef extracts a "name@version" string from a Docker-style
+// remote reference like "ghcr.io/myorg/solutions/hello-world@0.1.0". Returns
+// "hello-world@0.1.0" for local catalog lookup. Returns empty string if the
+// reference cannot be parsed (no "/" or no name segment).
+func extractNameVersionFromRef(ref string) string {
+	ref = strings.TrimPrefix(ref, "oci://")
+
+	// Split off version (@tag or :tag after last /)
+	var tag string
+	if atIdx := strings.LastIndex(ref, "@"); atIdx != -1 {
+		tag = ref[atIdx+1:]
+		ref = ref[:atIdx]
+	} else if colonIdx := strings.LastIndex(ref, ":"); colonIdx != -1 {
+		slashIdx := strings.LastIndex(ref, "/")
+		if slashIdx != -1 && colonIdx > slashIdx {
+			tag = ref[colonIdx+1:]
+			ref = ref[:colonIdx]
+		}
+	}
+
+	// Name is the last path segment
+	lastSlash := strings.LastIndex(ref, "/")
+	if lastSlash == -1 {
+		return ""
+	}
+	name := ref[lastSlash+1:]
+	if name == "" {
+		return ""
+	}
+
+	if tag != "" {
+		return name + "@" + tag
+	}
+	return name
 }
 
 // isBareName returns true if the path is a bare name suitable for catalog lookup.

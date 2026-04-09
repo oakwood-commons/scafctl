@@ -865,7 +865,7 @@ func (r *Runner) runInitSteps(ctx context.Context, steps []InitStep, workDir str
 }
 
 // buildEnvMap builds the environment variable map for a test.
-// Precedence: process env → testConfig.env → testCase.env → SCAFCTL_SANDBOX_DIR.
+// Precedence: process env → testConfig.env → testCase.env → <BINARY>_SANDBOX_DIR.
 func (r *Runner) buildEnvMap(tc *TestCase, testConfig *TestConfig, sandboxPath string) map[string]any {
 	env := make(map[string]any)
 

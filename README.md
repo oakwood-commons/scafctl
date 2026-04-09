@@ -270,10 +270,10 @@ The catalog system lets you publish, version, and share solutions using OCI-comp
 scafctl build solution -f solution.yaml
 
 # Push to a registry
-scafctl catalog push my-solution@1.0.0 --registry ghcr.io/myorg
+scafctl catalog push my-solution@1.0.0 --catalog ghcr.io/myorg
 
-# Pull and inspect
-scafctl catalog pull my-solution@1.0.0
+# Pull from a configured catalog
+scafctl catalog pull my-solution@1.0.0 --catalog my-registry
 scafctl catalog inspect my-solution@1.0.0
 
 # List local catalog entries
@@ -299,8 +299,8 @@ scafctl config get defaultOutput
 scafctl config unset defaultOutput
 
 # Manage catalog registries
-scafctl config add-catalog my-registry --url ghcr.io/myorg
-scafctl config remove-catalog my-registry
+scafctl catalog remote add my-registry --type oci --url oci://ghcr.io/myorg
+scafctl catalog remote remove my-registry
 ```
 
 See the [Configuration Tutorial](docs/tutorials/config-tutorial.md).

@@ -42,7 +42,10 @@ func CommandTag(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string
 			Create an alias tag for an existing catalog artifact.
 
 			Tags are freeform aliases that point to a specific version of an artifact.
-			Common uses include marking releases as "stable", "latest", or "production".
+			Common uses include marking releases as "stable" or "production".
+
+			Note: "latest" is reserved and auto-resolves to the highest semver version.
+			It cannot be used as a manual alias.
 
 			The source artifact must exist and have a version specified.
 			The alias must not be a valid semver version (use 'scafctl build' for that).
@@ -54,8 +57,8 @@ func CommandTag(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string
 			  # Tag a solution as stable
 			  scafctl catalog tag my-solution@1.0.0 stable
 
-			  # Tag as latest
-			  scafctl catalog tag my-solution@2.0.0 latest
+			  # Tag for production
+			  scafctl catalog tag my-solution@1.0.0 production
 
 			  # Tag in a remote registry
 			  scafctl catalog tag my-solution@1.0.0 production --catalog ghcr.io/myorg
@@ -113,7 +116,9 @@ func runTag(ctx context.Context, opts *TagOptions) error {
 			return exitcode.Errorf("invalid kind")
 		}
 		artifactKind = kind
-	} else {
+	} else if opts.Catalog == "" {
+		// Only infer from local catalog when tagging locally.
+		// Remote tagging doesn't need kind (buildRepositoryPath doesn't use it).
 		artifactKind, err = catalog.InferKindFromLocalCatalog(ctx, localCatalog, name, version)
 		if err != nil {
 			w.Errorf("failed to infer artifact kind: %v", err)
@@ -135,7 +140,8 @@ func runTag(ctx context.Context, opts *TagOptions) error {
 	}
 
 	// Tag locally
-	if err := localCatalog.Tag(ctx, ref, opts.Alias); err != nil {
+	oldVersion, err := localCatalog.Tag(ctx, ref, opts.Alias)
+	if err != nil {
 		if catalog.IsNotFound(err) {
 			w.Errorf("artifact %q not found in local catalog", opts.Reference)
 			return exitcode.WithCode(err, exitcode.FileNotFound)
@@ -144,6 +150,9 @@ func runTag(ctx context.Context, opts *TagOptions) error {
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
+	if oldVersion != "" {
+		w.Warningf("Moved %q from %s → %s", opts.Alias, oldVersion, ref.Version.String())
+	}
 	w.Successf("Tagged %s@%s as %q", ref.Name, ref.Version.String(), opts.Alias)
 
 	return nil
@@ -169,12 +178,18 @@ func runTagRemote(ctx context.Context, opts *TagOptions, ref catalog.Reference) 
 		lgr.V(1).Info("failed to create credential store, using anonymous auth", "error", err.Error())
 	}
 
+	// Resolve auth handler for automatic token bridging
+	authHandler := resolveAuthHandler(ctx, registry, opts.Catalog)
+	authScope := resolveAuthScope(ctx, opts.Catalog)
+
 	// Create remote catalog
 	remoteCatalog, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
 		Name:            registry,
 		Registry:        registry,
 		Repository:      repository,
 		CredentialStore: credStore,
+		AuthHandler:     authHandler,
+		AuthScope:       authScope,
 		Insecure:        opts.Insecure,
 		Logger:          *lgr,
 	})
@@ -186,7 +201,8 @@ func runTagRemote(ctx context.Context, opts *TagOptions, ref catalog.Reference) 
 	// Tag in remote
 	w.Infof("Tagging %s@%s as %q in %s...", ref.Name, ref.Version.String(), opts.Alias, catalogURL)
 
-	if err := remoteCatalog.Tag(ctx, ref, opts.Alias); err != nil {
+	oldVersion, err := remoteCatalog.Tag(ctx, ref, opts.Alias)
+	if err != nil {
 		if catalog.IsNotFound(err) {
 			w.Errorf("artifact not found in remote registry")
 			return exitcode.WithCode(err, exitcode.FileNotFound)
@@ -195,6 +211,9 @@ func runTagRemote(ctx context.Context, opts *TagOptions, ref catalog.Reference) 
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
+	if oldVersion != "" {
+		w.Warningf("Moved %q from previous artifact to %s", opts.Alias, ref.Version.String())
+	}
 	w.Successf("Tagged %s@%s as %q in %s", ref.Name, ref.Version.String(), opts.Alias, catalogURL)
 
 	return nil

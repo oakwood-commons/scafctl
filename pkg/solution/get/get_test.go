@@ -1538,3 +1538,170 @@ func TestGetter_Get_CombinedCatalogFileError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "also not found on file system")
 }
+
+func TestExtractNameVersionFromRef(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		ref      string
+		expected string
+	}{
+		{"full ref with @version", "ghcr.io/myorg/solutions/hello-world@1.0.0", "hello-world@1.0.0"},
+		{"full ref with :tag", "ghcr.io/myorg/solutions/hello-world:1.0.0", "hello-world@1.0.0"},
+		{"oci:// prefix", "oci://ghcr.io/myorg/solutions/hello-world@2.0.0", "hello-world@2.0.0"},
+		{"no version", "ghcr.io/myorg/solutions/hello-world", "hello-world"},
+		{"two-segment ref", "ghcr.io/hello-world@1.0.0", "hello-world@1.0.0"},
+		{"localhost with port", "localhost:5000/my-app@0.1.0", "my-app@0.1.0"},
+		{"no slash", "hello-world@1.0.0", ""},
+		{"empty", "", ""},
+		{"trailing slash", "ghcr.io/myorg/solutions/@1.0.0", ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			result := extractNameVersionFromRef(tc.ref)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+}
+
+func TestGetter_Get_RegistryRef_LocalFirst(t *testing.T) {
+	t.Parallel()
+
+	validSolutionYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: hello-world
+  version: 1.0.0
+spec:
+  resolvers: {}
+`
+
+	t.Run("returns local catalog hit without calling remote", func(t *testing.T) {
+		t.Parallel()
+
+		catalogMock := &mockCatalogResolver{
+			solutions: map[string][]byte{
+				"hello-world@1.0.0": []byte(validSolutionYAML),
+			},
+		}
+		remoteMock := &mockRemoteResolver{
+			solutions: map[string][]byte{},
+			err:       fmt.Errorf("should not be called"),
+		}
+
+		getter := NewGetter(
+			WithCatalogResolver(catalogMock),
+			WithRemoteResolver(remoteMock),
+		)
+
+		sol, err := getter.Get(context.Background(), "ghcr.io/myorg/solutions/hello-world@1.0.0")
+		require.NoError(t, err)
+		assert.Equal(t, "hello-world", sol.Metadata.Name)
+	})
+
+	t.Run("falls back to remote on local catalog miss", func(t *testing.T) {
+		t.Parallel()
+
+		catalogMock := &mockCatalogResolver{
+			solutions: map[string][]byte{}, // empty — not in local catalog
+		}
+		remoteMock := &mockRemoteResolver{
+			solutions: map[string][]byte{
+				"ghcr.io/myorg/solutions/hello-world@1.0.0": []byte(validSolutionYAML),
+			},
+		}
+
+		getter := NewGetter(
+			WithCatalogResolver(catalogMock),
+			WithRemoteResolver(remoteMock),
+		)
+
+		sol, err := getter.Get(context.Background(), "ghcr.io/myorg/solutions/hello-world@1.0.0")
+		require.NoError(t, err)
+		assert.Equal(t, "hello-world", sol.Metadata.Name)
+	})
+
+	t.Run("returns remote error when both miss", func(t *testing.T) {
+		t.Parallel()
+
+		catalogMock := &mockCatalogResolver{
+			solutions: map[string][]byte{},
+		}
+		remoteMock := &mockRemoteResolver{
+			solutions: map[string][]byte{},
+		}
+
+		getter := NewGetter(
+			WithCatalogResolver(catalogMock),
+			WithRemoteResolver(remoteMock),
+		)
+
+		_, err := getter.Get(context.Background(), "ghcr.io/myorg/solutions/hello-world@1.0.0")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to resolve remote reference")
+	})
+}
+
+func TestGetter_GetWithBundle_RegistryRef_LocalFirst(t *testing.T) {
+	t.Parallel()
+
+	validSolutionYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: hello-world
+  version: 1.0.0
+spec:
+  resolvers: {}
+`
+
+	t.Run("returns local catalog hit with bundle", func(t *testing.T) {
+		t.Parallel()
+
+		bundleMock := &mockBundleAwareCatalogResolver{
+			solutions: map[string][]byte{"hello-world@1.0.0": []byte(validSolutionYAML)},
+			bundles:   map[string][]byte{"hello-world@1.0.0": []byte("bundle-tar")},
+		}
+		remoteMock := &mockRemoteResolver{
+			err: fmt.Errorf("should not be called"),
+		}
+
+		getter := NewGetter(
+			WithCatalogResolver(bundleMock),
+			WithRemoteResolver(remoteMock),
+		)
+
+		sol, bundleData, err := getter.GetWithBundle(context.Background(), "ghcr.io/myorg/solutions/hello-world@1.0.0")
+		require.NoError(t, err)
+		assert.Equal(t, "hello-world", sol.Metadata.Name)
+		assert.Equal(t, []byte("bundle-tar"), bundleData)
+	})
+
+	t.Run("falls back to remote on local miss", func(t *testing.T) {
+		t.Parallel()
+
+		catalogMock := &mockCatalogResolver{
+			solutions: map[string][]byte{},
+		}
+		remoteMock := &mockRemoteResolver{
+			solutions: map[string][]byte{
+				"ghcr.io/myorg/solutions/hello-world@1.0.0": []byte(validSolutionYAML),
+			},
+			bundleData: map[string][]byte{
+				"ghcr.io/myorg/solutions/hello-world@1.0.0": []byte("remote-bundle"),
+			},
+		}
+
+		getter := NewGetter(
+			WithCatalogResolver(catalogMock),
+			WithRemoteResolver(remoteMock),
+		)
+
+		sol, bundleData, err := getter.GetWithBundle(context.Background(), "ghcr.io/myorg/solutions/hello-world@1.0.0")
+		require.NoError(t, err)
+		assert.Equal(t, "hello-world", sol.Metadata.Name)
+		assert.Equal(t, []byte("remote-bundle"), bundleData)
+	})
+}

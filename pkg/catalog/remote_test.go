@@ -4,6 +4,7 @@
 package catalog
 
 import (
+	"sort"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
@@ -104,28 +105,28 @@ func TestRemoteCatalog_buildRepositoryPath(t *testing.T) {
 			registry:   "ghcr.io",
 			repository: "myorg/scafctl",
 			ref:        Reference{Kind: ArtifactKindSolution, Name: "my-solution"},
-			expected:   "ghcr.io/myorg/scafctl/solutions/my-solution",
+			expected:   "ghcr.io/myorg/scafctl/my-solution",
 		},
 		{
 			name:       "path without repository",
 			registry:   "ghcr.io",
 			repository: "",
 			ref:        Reference{Kind: ArtifactKindSolution, Name: "my-solution"},
-			expected:   "ghcr.io/solutions/my-solution",
+			expected:   "ghcr.io/my-solution",
 		},
 		{
 			name:       "provider artifact",
 			registry:   "registry.example.com",
 			repository: "team/artifacts",
 			ref:        Reference{Kind: ArtifactKindProvider, Name: "my-provider"},
-			expected:   "registry.example.com/team/artifacts/providers/my-provider",
+			expected:   "registry.example.com/team/artifacts/my-provider",
 		},
 		{
 			name:       "auth-handler artifact",
 			registry:   "ghcr.io",
 			repository: "org/repo",
 			ref:        Reference{Kind: ArtifactKindAuthHandler, Name: "my-auth"},
-			expected:   "ghcr.io/org/repo/auth-handlers/my-auth",
+			expected:   "ghcr.io/org/repo/my-auth",
 		},
 		{
 			name:       "kindless Docker-style with repository",
@@ -219,6 +220,38 @@ func TestRemoteCatalog_getRepository(t *testing.T) {
 	repo, err := cat.getRepository(ref)
 	require.NoError(t, err)
 	require.NotNil(t, repo)
+}
+
+func TestTagInfo_sorting(t *testing.T) {
+	t.Parallel()
+
+	tags := []TagInfo{
+		{Tag: "stable", IsSemver: false},
+		{Tag: "1.0.0", IsSemver: true, Version: "1.0.0"},
+		{Tag: "latest", IsSemver: false},
+		{Tag: "2.0.0", IsSemver: true, Version: "2.0.0"},
+		{Tag: "1.5.0", IsSemver: true, Version: "1.5.0"},
+	}
+
+	// Apply the same sort as ListTags
+	sort.Slice(tags, func(i, j int) bool {
+		if tags[i].IsSemver != tags[j].IsSemver {
+			return tags[i].IsSemver
+		}
+		if tags[i].IsSemver {
+			vi, _ := semver.NewVersion(tags[i].Version)
+			vj, _ := semver.NewVersion(tags[j].Version)
+			return vi.GreaterThan(vj)
+		}
+		return tags[i].Tag < tags[j].Tag
+	})
+
+	// Semver first (descending), then aliases (alphabetical)
+	assert.Equal(t, "2.0.0", tags[0].Tag)
+	assert.Equal(t, "1.5.0", tags[1].Tag)
+	assert.Equal(t, "1.0.0", tags[2].Tag)
+	assert.Equal(t, "latest", tags[3].Tag)
+	assert.Equal(t, "stable", tags[4].Tag)
 }
 
 // Benchmarks

@@ -47,8 +47,11 @@ func CommandCatalog(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 	cmd.AddCommand(CommandPush(cliParams, ioStreams, path))
 	cmd.AddCommand(CommandPull(cliParams, ioStreams, path))
 	cmd.AddCommand(CommandTag(cliParams, ioStreams, path))
+	cmd.AddCommand(CommandTags(cliParams, ioStreams, path))
 	cmd.AddCommand(CommandLogin(cliParams, ioStreams, path))
 	cmd.AddCommand(CommandLogout(cliParams, ioStreams, path))
+	cmd.AddCommand(CommandRemote(cliParams, ioStreams, path))
+	cmd.AddCommand(CommandAttach(cliParams, ioStreams, path))
 
 	return cmd
 }
@@ -83,7 +86,7 @@ func hintOnAuthError(ctx context.Context, w *writer.Writer, registry string, err
 //  1. Catalog config authProvider field (when catalogFlag resolves to a named catalog)
 //  2. InferAuthHandler (built-in + custom OAuth2 mappings)
 //
-// Returns nil if no handler is found or the handler isn't authenticated.
+// Returns nil if no handler can be resolved or the handler cannot be loaded.
 // This is best-effort — push/pull/delete still work via credential store alone.
 func resolveAuthHandler(ctx context.Context, registry, catalogFlag string) auth.Handler {
 	var handlerName string
@@ -122,4 +125,15 @@ func resolveAuthHandler(ctx context.Context, registry, catalogFlag string) auth.
 	}
 
 	return handler
+}
+
+// resolveAuthScope returns the authScope configured for the named catalog, if any.
+func resolveAuthScope(ctx context.Context, catalogFlag string) string {
+	cfg := config.FromContext(ctx)
+	if catalogFlag != "" && cfg != nil {
+		if cat, ok := cfg.GetCatalog(catalogFlag); ok {
+			return cat.AuthScope
+		}
+	}
+	return ""
 }

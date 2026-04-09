@@ -12,7 +12,9 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/sbom"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/format"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -30,6 +32,7 @@ type PushOptions struct {
 	Kind       string // Artifact kind override (--kind)
 	Force      bool   // Overwrite existing (--force)
 	Insecure   bool   // Allow HTTP (--insecure)
+	SBOM       bool   // Auto-generate and attach SBOM (--sbom)
 	CliParams  *settings.Run
 	IOStreams  *terminal.IOStreams
 }
@@ -96,6 +99,7 @@ func CommandPush(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 	cmd.Flags().StringVar(&options.Kind, "kind", "", "Artifact kind override (solution, provider, auth-handler)")
 	cmd.Flags().BoolVarP(&options.Force, "force", "f", false, "Overwrite existing artifact in remote")
 	cmd.Flags().BoolVar(&options.Insecure, "insecure", false, "Allow insecure HTTP connections")
+	cmd.Flags().BoolVar(&options.SBOM, "sbom", false, "Auto-generate and attach an SPDX SBOM after pushing")
 
 	return cmd
 }
@@ -293,5 +297,58 @@ func runPush(ctx context.Context, opts *PushOptions) error {
 		ref.Version.String(),
 		format.Bytes(result.Size))
 
+	// Auto-generate and attach SBOM if requested
+	if opts.SBOM {
+		if err := attachSBOM(ctx, opts, localCatalog, remoteCatalog, ref); err != nil {
+			w.Warningf("SBOM attachment failed: %v", err)
+			// Non-fatal: the push itself succeeded
+		}
+	}
+
+	return nil
+}
+
+// attachSBOM generates an SPDX SBOM from the local solution content and
+// attaches it as a referrer to the pushed remote artifact.
+func attachSBOM(ctx context.Context, opts *PushOptions, localCatalog *catalog.LocalCatalog, remoteCatalog *catalog.RemoteCatalog, ref catalog.Reference) error {
+	w := writer.FromContext(ctx)
+
+	// Only solutions get SBOMs (providers/auth-handlers are opaque binaries)
+	if ref.Kind != catalog.ArtifactKindSolution && ref.Kind != "" {
+		w.Infof("SBOM generation skipped: only solution artifacts support SBOM")
+		return nil
+	}
+
+	// Fetch the solution content from local catalog
+	contentData, _, err := localCatalog.Fetch(ctx, ref)
+	if err != nil {
+		return fmt.Errorf("failed to fetch local content for SBOM: %w", err)
+	}
+
+	// Parse solution
+	var sol solution.Solution
+	if err := sol.UnmarshalFromBytes(contentData); err != nil {
+		return fmt.Errorf("failed to parse solution for SBOM: %w", err)
+	}
+
+	// Generate SBOM
+	sbomData, err := sbom.Generate(&sol, sbom.GenerateOptions{
+		BinaryName: opts.CliParams.BinaryName,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to generate SBOM: %w", err)
+	}
+
+	// Attach to remote
+	w.Infof("Attaching SBOM to %s@%s...", ref.Name, ref.Version.String())
+
+	desc, err := remoteCatalog.Attach(ctx, ref, sbom.MediaType, sbomData, map[string]string{
+		"org.opencontainers.image.title": fmt.Sprintf("%s-%s.spdx.json", ref.Name, ref.Version.String()),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to attach SBOM: %w", err)
+	}
+
+	w.Successf("SBOM attached (%s)", desc.Digest.String())
 	return nil
 }

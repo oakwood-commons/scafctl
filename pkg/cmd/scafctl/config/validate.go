@@ -42,7 +42,8 @@ func CommandValidate(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 			Checks that the configuration file is valid YAML and conforms
 			to the expected schema. Reports any errors found.
 
-			By default, validates the config file at ~/.scafctl/config.yaml.
+			By default, validates the config file at
+			$XDG_CONFIG_HOME/scafctl/config.yaml (or ~/.config/scafctl/config.yaml).
 			Specify a file path to validate a different file.
 
 			Examples:

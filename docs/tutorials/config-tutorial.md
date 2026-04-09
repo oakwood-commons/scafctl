@@ -212,25 +212,31 @@ scafctl config unset httpClient.timeout
 {{% tab "Bash" %}}
 ```bash
 # Add a local filesystem catalog
-scafctl config add-catalog my-catalog --type filesystem --path ~/my-solutions
+scafctl catalog remote add my-catalog --type filesystem --path ~/my-solutions
 
 # Add an OCI registry catalog
-scafctl config add-catalog company --type oci --url ghcr.io/myorg/scafctl-catalog
+scafctl catalog remote add company --type oci --url oci://ghcr.io/myorg/scafctl-catalog
 
 # Add and set as default
-scafctl config add-catalog primary --type filesystem --path ~/catalogs/main --default
+scafctl catalog remote add primary --type filesystem --path ~/catalogs/main --default
+
+# Add with auth provider for automatic token injection
+scafctl catalog remote add corp --type oci --url oci://registry.example.com/artifacts --auth-provider github
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
 # Add a local filesystem catalog
-scafctl config add-catalog my-catalog --type filesystem --path ~/my-solutions
+scafctl catalog remote add my-catalog --type filesystem --path ~/my-solutions
 
 # Add an OCI registry catalog
-scafctl config add-catalog company --type oci --url ghcr.io/myorg/scafctl-catalog
+scafctl catalog remote add company --type oci --url oci://ghcr.io/myorg/scafctl-catalog
 
 # Add and set as default
-scafctl config add-catalog primary --type filesystem --path ~/catalogs/main --default
+scafctl catalog remote add primary --type filesystem --path ~/catalogs/main --default
+
+# Add with auth provider for automatic token injection
+scafctl catalog remote add corp --type oci --url oci://registry.example.com/artifacts --auth-provider github
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -240,12 +246,12 @@ scafctl config add-catalog primary --type filesystem --path ~/catalogs/main --de
 {{< tabs "config-tutorial-cmd-8" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl config remove-catalog my-catalog
+scafctl catalog remote remove my-catalog
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl config remove-catalog my-catalog
+scafctl catalog remote remove my-catalog
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -255,12 +261,12 @@ scafctl config remove-catalog my-catalog
 {{< tabs "config-tutorial-cmd-9" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl config use-catalog my-catalog
+scafctl catalog remote set-default my-catalog
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl config use-catalog my-catalog
+scafctl catalog remote set-default my-catalog
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -441,7 +447,7 @@ See [examples/config/full-config.yaml](../../examples/config/full-config.yaml) f
 scafctl config init
 
 # 2. Set up a catalog
-scafctl config add-catalog local --type filesystem --path ~/scafctl-catalog --default
+scafctl catalog remote add local --type filesystem --path ~/scafctl-catalog --default
 
 # 3. Verify
 scafctl config view
@@ -454,7 +460,7 @@ scafctl config validate
 scafctl config init
 
 # 2. Set up a catalog
-scafctl config add-catalog local --type filesystem --path ~/scafctl-catalog --default
+scafctl catalog remote add local --type filesystem --path ~/scafctl-catalog --default
 
 # 3. Verify
 scafctl config view
@@ -469,7 +475,7 @@ scafctl config validate
 {{% tab "Bash" %}}
 ```bash
 # Use staging catalog
-scafctl config use-catalog staging
+scafctl catalog remote set-default staging
 
 # Increase logging for debugging
 scafctl config set logging.level debug
@@ -481,7 +487,7 @@ scafctl config unset logging.level
 {{% tab "PowerShell" %}}
 ```powershell
 # Use staging catalog
-scafctl config use-catalog staging
+scafctl catalog remote set-default staging
 
 # Increase logging for debugging
 scafctl config set logging.level debug

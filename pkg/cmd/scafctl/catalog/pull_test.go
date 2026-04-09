@@ -20,7 +20,7 @@ func TestCommandPull(t *testing.T) {
 	cmd := CommandPull(cliParams, ioStreams, "scafctl/catalog")
 
 	require.NotNil(t, cmd)
-	assert.Equal(t, "pull <registry/repository/kind/name[@version]>", cmd.Use)
+	assert.Equal(t, "pull <reference>", cmd.Use)
 	assert.NotEmpty(t, cmd.Short)
 	assert.NotNil(t, cmd.RunE)
 }
@@ -36,6 +36,7 @@ func TestCommandPull_Flags(t *testing.T) {
 		name     string
 		defValue string
 	}{
+		{"catalog", ""},
 		{"as", ""},
 		{"kind", ""},
 		{"force", "false"},
@@ -89,7 +90,8 @@ func TestCommandPull_InvalidReference(t *testing.T) {
 
 	err := cmd.Execute()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid reference")
+	// Short names without --catalog fall through to catalog resolution
+	assert.Contains(t, err.Error(), "no --catalog specified")
 }
 
 func TestCommandPull_InvalidKind(t *testing.T) {

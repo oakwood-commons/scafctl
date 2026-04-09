@@ -2531,10 +2531,11 @@ func TestIntegration_CatalogListHelp(t *testing.T) {
 	stdout, _, exitCode := runScafctl(t, "catalog", "list", "--help")
 
 	assert.Equal(t, 0, exitCode)
-	assert.Contains(t, stdout, "List all artifacts")
+	assert.Contains(t, stdout, "List artifacts")
 	assert.Contains(t, stdout, "--kind")
 	assert.Contains(t, stdout, "--name")
 	assert.Contains(t, stdout, "--output")
+	assert.Contains(t, stdout, "--catalog")
 }
 
 func TestIntegration_CatalogList_Empty(t *testing.T) {

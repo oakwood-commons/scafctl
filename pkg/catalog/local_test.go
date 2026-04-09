@@ -384,7 +384,7 @@ func TestLocalCatalog_Tag(t *testing.T) {
 		require.NoError(t, err)
 
 		// Tag as stable
-		err = cat.Tag(ctx, ref, "stable")
+		_, err = cat.Tag(ctx, ref, "stable")
 		require.NoError(t, err)
 
 		// The alias should resolve to the same digest as the original
@@ -409,15 +409,17 @@ func TestLocalCatalog_Tag(t *testing.T) {
 		require.NoError(t, err)
 
 		// Tag with multiple aliases
-		require.NoError(t, cat.Tag(ctx, ref, "latest"))
-		require.NoError(t, cat.Tag(ctx, ref, "production"))
+		_, err = cat.Tag(ctx, ref, "dev")
+		require.NoError(t, err)
+		_, err = cat.Tag(ctx, ref, "production")
+		require.NoError(t, err)
 
 		// Both should resolve
-		latestDesc, err := cat.store.Resolve(ctx, "solution/my-solution:latest")
+		devDesc, err := cat.store.Resolve(ctx, "solution/my-solution:dev")
 		require.NoError(t, err)
 		prodDesc, err := cat.store.Resolve(ctx, "solution/my-solution:production")
 		require.NoError(t, err)
-		assert.Equal(t, latestDesc.Digest, prodDesc.Digest)
+		assert.Equal(t, devDesc.Digest, prodDesc.Digest)
 	})
 
 	t.Run("moves alias to new version", func(t *testing.T) {
@@ -431,7 +433,7 @@ func TestLocalCatalog_Tag(t *testing.T) {
 		}
 		_, err := cat.Store(ctx, ref1, []byte("v1-content"), nil, nil, false)
 		require.NoError(t, err)
-		err = cat.Tag(ctx, ref1, "stable")
+		_, err = cat.Tag(ctx, ref1, "stable")
 		require.NoError(t, err)
 
 		// Store v2.0.0
@@ -444,8 +446,9 @@ func TestLocalCatalog_Tag(t *testing.T) {
 		require.NoError(t, err)
 
 		// Re-tag stable to v2
-		err = cat.Tag(ctx, ref2, "stable")
+		oldVersion, err := cat.Tag(ctx, ref2, "stable")
 		require.NoError(t, err)
+		assert.Equal(t, "1.0.0", oldVersion)
 
 		// Stable should now point to v2's digest
 		v2Desc, err := cat.store.Resolve(ctx, "solution/my-solution:2.0.0")
@@ -464,7 +467,7 @@ func TestLocalCatalog_Tag(t *testing.T) {
 			Version: semver.MustParse("1.0.0"),
 		}
 
-		err := cat.Tag(ctx, ref, "stable")
+		_, err := cat.Tag(ctx, ref, "stable")
 		require.Error(t, err)
 		assert.True(t, IsNotFound(err))
 	})
@@ -480,7 +483,7 @@ func TestLocalCatalog_Tag(t *testing.T) {
 		_, err := cat.Store(ctx, ref, []byte("binary"), nil, nil, false)
 		require.NoError(t, err)
 
-		err = cat.Tag(ctx, ref, "stable")
+		_, err = cat.Tag(ctx, ref, "stable")
 		require.NoError(t, err)
 
 		// Verify

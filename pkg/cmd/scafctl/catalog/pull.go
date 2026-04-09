@@ -23,7 +23,8 @@ import (
 
 // PullOptions holds options for the pull command.
 type PullOptions struct {
-	Reference  string // Remote artifact reference
+	Reference  string // Artifact reference (short name or full remote)
+	Catalog    string // Source catalog (URL or config name, --catalog)
 	TargetName string // Optional local name (--as)
 	Kind       string // Artifact kind override (--kind)
 	Force      bool   // Overwrite existing (--force)
@@ -41,34 +42,40 @@ func CommandPull(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 	}
 
 	cmd := &cobra.Command{
-		Use:   "pull <registry/repository/kind/name[@version]>",
+		Use:   "pull <reference>",
 		Short: "Pull an artifact from a remote registry",
-		Long: heredoc.Doc(`
+		Long: heredoc.Docf(`
 			Pull a catalog artifact from a remote OCI registry to the local catalog.
 
-			The reference should include the full path to the artifact:
-			  <registry>/<repository>/<kind>/<name>[@version]
+			References can be:
+			  - Short name:    my-solution@1.0.0  (requires --catalog or default catalog)
+			  - Full remote:   ghcr.io/myorg/solutions/my-solution@1.0.0
 
-			Where:
-			  - registry: The OCI registry (e.g., ghcr.io)
-			  - repository: The repository path (e.g., myorg/scafctl)
-			  - kind: The artifact kind (solutions or plugins)
-			  - name: The artifact name
-			  - version: Optional version (defaults to latest)
+			If no version is specified, the latest version is pulled.
+
+			When using a short name, the source registry is resolved in this order:
+			  1. --catalog flag (URL or configured catalog name)
+			  2. Default catalog from config
 
 			Examples:
-			  # Pull a solution
-			  scafctl catalog pull ghcr.io/myorg/scafctl/solutions/my-solution@1.0.0
+			  # Pull using the configured default catalog
+			  %[1]s catalog pull my-solution
 
-			  # Pull the latest version
-			  scafctl catalog pull ghcr.io/myorg/scafctl/solutions/my-solution
+			  # Pull a specific version from the default catalog
+			  %[1]s catalog pull my-solution@1.0.0
+
+			  # Pull from a named catalog
+			  %[1]s catalog pull my-solution --catalog myregistry
+
+			  # Pull using a full remote reference
+			  %[1]s catalog pull ghcr.io/myorg/solutions/my-solution@1.0.0
 
 			  # Pull with a different local name
-			  scafctl catalog pull ghcr.io/myorg/scafctl/solutions/my-solution@1.0.0 --as local-solution
+			  %[1]s catalog pull my-solution@1.0.0 --as local-solution
 
 			  # Force overwrite existing
-			  scafctl catalog pull ghcr.io/myorg/scafctl/solutions/my-solution@1.0.0 --force
-		`),
+			  %[1]s catalog pull my-solution@1.0.0 --force
+		`, settings.CliBinaryName),
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -77,6 +84,7 @@ func CommandPull(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 		},
 	}
 
+	cmd.Flags().StringVarP(&options.Catalog, "catalog", "c", "", catalogFlagUsage)
 	cmd.Flags().StringVar(&options.TargetName, "as", "", "Store with a different local name")
 	cmd.Flags().StringVar(&options.Kind, "kind", "", "Artifact kind override (solution, provider, auth-handler)")
 	cmd.Flags().BoolVarP(&options.Force, "force", "f", false, "Overwrite existing local artifact")
@@ -90,21 +98,80 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
 
-	// Parse remote reference
-	remoteRef, err := catalog.ParseRemoteReference(opts.Reference)
-	if err != nil {
-		w.Errorf("invalid reference: %v", err)
-		return exitcode.WithCode(err, exitcode.InvalidInput)
-	}
+	var ref catalog.Reference
+	var registry, repository string
+	var err error
 
-	// Override kind if specified
-	if opts.Kind != "" {
-		kind, ok := catalog.ParseArtifactKind(opts.Kind)
-		if !ok {
-			w.Errorf("invalid kind %q: must be 'solution', 'provider', or 'auth-handler'", opts.Kind)
-			return exitcode.Errorf("invalid kind")
+	if looksLikeRemoteReference(opts.Reference) {
+		// Full remote reference: ghcr.io/myorg/solutions/my-solution@1.0.0
+		remoteRef, parseErr := catalog.ParseRemoteReference(opts.Reference)
+		if parseErr != nil {
+			w.Errorf("invalid reference: %v", parseErr)
+			return exitcode.WithCode(parseErr, exitcode.InvalidInput)
 		}
-		remoteRef.Kind = kind
+
+		if opts.Kind != "" {
+			kind, ok := catalog.ParseArtifactKind(opts.Kind)
+			if !ok {
+				w.Errorf("invalid kind %q: must be 'solution', 'provider', or 'auth-handler'", opts.Kind)
+				return exitcode.Errorf("invalid kind")
+			}
+			remoteRef.Kind = kind
+		}
+
+		ref, err = remoteRef.ToReference()
+		if err != nil {
+			w.Errorf("invalid reference: %v", err)
+			return exitcode.WithCode(err, exitcode.InvalidInput)
+		}
+
+		registry = remoteRef.Registry
+		repository = remoteRef.Repository
+
+		if opts.Catalog != "" {
+			w.Errorf("cannot use --catalog with a full remote reference")
+			return exitcode.Errorf("conflicting options")
+		}
+	} else {
+		// Short name: my-solution or my-solution@1.0.0
+		name, version := catalog.ParseNameVersion(opts.Reference)
+
+		var artifactKind catalog.ArtifactKind
+		if opts.Kind != "" {
+			kind, ok := catalog.ParseArtifactKind(opts.Kind)
+			if !ok {
+				w.Errorf("invalid kind %q: must be 'solution', 'provider', or 'auth-handler'", opts.Kind)
+				return exitcode.Errorf("invalid kind")
+			}
+			artifactKind = kind
+		}
+
+		ref = catalog.Reference{
+			Kind: artifactKind,
+			Name: name,
+		}
+
+		if version != "" {
+			ref, err = catalog.ParseReference(ref.Kind, opts.Reference)
+			if err != nil {
+				w.Errorf("invalid reference: %v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
+		}
+
+		// Resolve catalog URL from flag, config name, or default
+		catalogURL, resolveErr := catalog.ResolveCatalogURL(ctx, opts.Catalog)
+		if resolveErr != nil {
+			w.Errorf("%v", resolveErr)
+			return exitcode.WithCode(resolveErr, exitcode.InvalidInput)
+		}
+
+		registry, repository = catalog.ParseCatalogURL(catalogURL)
+		if registry == "" {
+			resolveErr = fmt.Errorf("invalid catalog URL: %s", catalogURL)
+			w.Errorf("%v", resolveErr)
+			return exitcode.WithCode(resolveErr, exitcode.InvalidInput)
+		}
 	}
 
 	// Create credential store
@@ -113,12 +180,18 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 		lgr.V(1).Info("failed to create credential store, using anonymous auth", "error", err.Error())
 	}
 
+	// Resolve auth handler for automatic token bridging
+	authHandler := resolveAuthHandler(ctx, registry, opts.Catalog)
+	authScope := resolveAuthScope(ctx, opts.Catalog)
+
 	// Create remote catalog
 	remoteCatalog, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
-		Name:            remoteRef.Registry,
-		Registry:        remoteRef.Registry,
-		Repository:      remoteRef.Repository,
+		Name:            registry,
+		Registry:        registry,
+		Repository:      repository,
 		CredentialStore: credStore,
+		AuthHandler:     authHandler,
+		AuthScope:       authScope,
 		Insecure:        opts.Insecure,
 		Logger:          *lgr,
 	})
@@ -126,13 +199,6 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 		err = fmt.Errorf("failed to create remote catalog: %w", err)
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.CatalogError)
-	}
-
-	// Convert to local reference
-	ref, err := remoteRef.ToReference()
-	if err != nil {
-		w.Errorf("invalid reference: %v", err)
-		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
 	// Resolve to get actual version if not specified

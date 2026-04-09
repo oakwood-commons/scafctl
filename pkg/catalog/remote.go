@@ -9,7 +9,6 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"sort"
 	"strings"
@@ -19,7 +18,6 @@ import (
 	"github.com/go-logr/logr"
 	scafctlauth "github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/opencontainers/go-digest"
-	"github.com/opencontainers/image-spec/specs-go"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/content"
@@ -160,7 +158,7 @@ func (c *RemoteCatalog) Repository() string {
 
 // getRepository creates a remote.Repository for an artifact.
 func (c *RemoteCatalog) getRepository(ref Reference) (*remote.Repository, error) {
-	// Build full repository path: registry/repository/kind/name
+	// Build full repository path: registry/repository/name
 	repoPath := c.buildRepositoryPath(ref)
 
 	repo, err := remote.NewRepository(repoPath)
@@ -179,22 +177,17 @@ func (c *RemoteCatalog) RepositoryPath(ref Reference) string {
 	return c.buildRepositoryPath(ref)
 }
 
-// buildRepositoryPath builds the full repository path for an artifact.
-// When the reference has a known Kind, the pluralized kind segment is included
-// (e.g., ghcr.io/myorg/scafctl/solutions/my-solution). When Kind is empty
-// (Docker-style refs), the kind segment is omitted
-// (e.g., ghcr.io/myorg/my-solution).
+// buildRepositoryPath builds the full OCI repository path for an artifact.
+// The path is: registry/repository/name — the catalog URL is used as-is with
+// no automatic kind segment appended. Configure your catalog URL to point
+// directly to where artifacts are stored.
 //
-// The catalog URL should NOT include the kind segment — configure the catalog
-// with the base path (e.g., "fcr.ford.com/cloud-chassis") and the kind
-// ("solutions", "providers") is appended automatically.
+// For example, if solutions live at registry.example.com/team/solutions,
+// configure the catalog URL as "oci://registry.example.com/team/solutions".
 func (c *RemoteCatalog) buildRepositoryPath(ref Reference) string {
 	parts := []string{c.registry}
 	if c.repository != "" {
 		parts = append(parts, c.repository)
-	}
-	if ref.Kind != "" {
-		parts = append(parts, ref.Kind.Plural())
 	}
 	parts = append(parts, ref.Name)
 
@@ -286,30 +279,14 @@ func (c *RemoteCatalog) Store(ctx context.Context, ref Reference, content, bundl
 		layers = append(layers, bundleDesc)
 	}
 
-	// Create manifest
-	manifest := ocispec.Manifest{
-		Versioned: specs.Versioned{
-			SchemaVersion: 2,
-		},
-		MediaType:   ocispec.MediaTypeImageManifest,
-		Config:      configDesc,
-		Layers:      layers,
-		Annotations: annotations,
-	}
-
-	manifestData, err := json.Marshal(manifest)
+	// Pack and push the OCI manifest
+	manifestDesc, err := oras.PackManifest(ctx, repo, oras.PackManifestVersion1_1, MediaTypeForKind(ref.Kind), oras.PackManifestOptions{
+		Layers:              layers,
+		ManifestAnnotations: annotations,
+		ConfigDescriptor:    &configDesc,
+	})
 	if err != nil {
-		return ArtifactInfo{}, fmt.Errorf("failed to marshal manifest: %w", err)
-	}
-
-	manifestDesc := ocispec.Descriptor{
-		MediaType: ocispec.MediaTypeImageManifest,
-		Digest:    digest.FromBytes(manifestData),
-		Size:      int64(len(manifestData)),
-	}
-
-	if err := repo.Push(ctx, manifestDesc, bytes.NewReader(manifestData)); err != nil {
-		return ArtifactInfo{}, fmt.Errorf("failed to push manifest: %w", err)
+		return ArtifactInfo{}, fmt.Errorf("failed to pack manifest: %w", err)
 	}
 
 	// Tag the manifest with version
@@ -347,16 +324,10 @@ func (c *RemoteCatalog) Fetch(ctx context.Context, ref Reference) ([]byte, Artif
 		return nil, ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
 	}
 
-	// Fetch manifest
-	manifestReader, err := repo.Fetch(ctx, manifestDesc)
+	// Fetch manifest with digest verification
+	manifestData, err := content.FetchAll(ctx, repo, manifestDesc)
 	if err != nil {
 		return nil, ArtifactInfo{}, fmt.Errorf("failed to fetch manifest: %w", err)
-	}
-	defer manifestReader.Close()
-
-	manifestData, err := io.ReadAll(manifestReader)
-	if err != nil {
-		return nil, ArtifactInfo{}, fmt.Errorf("failed to read manifest: %w", err)
 	}
 
 	var manifest ocispec.Manifest
@@ -368,17 +339,10 @@ func (c *RemoteCatalog) Fetch(ctx context.Context, ref Reference) ([]byte, Artif
 		return nil, ArtifactInfo{}, fmt.Errorf("manifest has no content layers")
 	}
 
-	// Fetch content layer
-	contentDesc := manifest.Layers[0]
-	contentReader, err := repo.Fetch(ctx, contentDesc)
+	// Fetch content layer with digest verification
+	contentData, err := content.FetchAll(ctx, repo, manifest.Layers[0])
 	if err != nil {
 		return nil, ArtifactInfo{}, fmt.Errorf("failed to fetch content: %w", err)
-	}
-	defer contentReader.Close()
-
-	contentData, err := io.ReadAll(contentReader)
-	if err != nil {
-		return nil, ArtifactInfo{}, fmt.Errorf("failed to read content: %w", err)
 	}
 
 	// Parse annotations for metadata
@@ -416,16 +380,10 @@ func (c *RemoteCatalog) FetchWithBundle(ctx context.Context, ref Reference) ([]b
 		return nil, nil, ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
 	}
 
-	// Fetch manifest
-	manifestReader, err := repo.Fetch(ctx, manifestDesc)
+	// Fetch manifest with digest verification
+	manifestData, err := content.FetchAll(ctx, repo, manifestDesc)
 	if err != nil {
 		return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to fetch manifest: %w", err)
-	}
-	defer manifestReader.Close()
-
-	manifestData, err := io.ReadAll(manifestReader)
-	if err != nil {
-		return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to read manifest: %w", err)
 	}
 
 	var manifest ocispec.Manifest
@@ -437,31 +395,18 @@ func (c *RemoteCatalog) FetchWithBundle(ctx context.Context, ref Reference) ([]b
 		return nil, nil, ArtifactInfo{}, fmt.Errorf("manifest has no content layers")
 	}
 
-	// Fetch content layer
-	contentDesc := manifest.Layers[0]
-	contentReader, err := repo.Fetch(ctx, contentDesc)
+	// Fetch content layer with digest verification
+	contentData, err := content.FetchAll(ctx, repo, manifest.Layers[0])
 	if err != nil {
 		return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to fetch content: %w", err)
-	}
-	defer contentReader.Close()
-
-	contentData, err := io.ReadAll(contentReader)
-	if err != nil {
-		return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to read content: %w", err)
 	}
 
 	// Fetch bundle layer if present
 	var bundleData []byte
 	if len(manifest.Layers) > 1 && manifest.Layers[1].MediaType == MediaTypeSolutionBundle {
-		bundleReader, err := repo.Fetch(ctx, manifest.Layers[1])
+		bundleData, err = content.FetchAll(ctx, repo, manifest.Layers[1])
 		if err != nil {
 			return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to fetch bundle: %w", err)
-		}
-		defer bundleReader.Close()
-
-		bundleData, err = io.ReadAll(bundleReader)
-		if err != nil {
-			return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to read bundle: %w", err)
 		}
 	}
 
@@ -562,6 +507,12 @@ func (c *RemoteCatalog) List(ctx context.Context, kind ArtifactKind, name string
 			return nil, err
 		}
 
+		// If kind wasn't specified, try to resolve it from manifest annotations
+		// of the first version. All versions share the same kind.
+		if kind == "" && len(versions) > 0 {
+			kind = c.resolveKindFromManifest(ctx, ref, versions[0])
+		}
+
 		var infos []ArtifactInfo
 		for _, v := range versions {
 			infos = append(infos, ArtifactInfo{
@@ -576,6 +527,89 @@ func (c *RemoteCatalog) List(ctx context.Context, kind ArtifactKind, name string
 	// This would require registry-specific catalog API
 	c.logger.V(1).Info("listing all artifacts not supported for remote catalogs")
 	return nil, nil
+}
+
+// resolveKindFromManifest fetches the manifest for a specific version and reads
+// the artifact kind from OCI annotations. This is a best-effort operation;
+// failures are logged and an empty kind is returned.
+func (c *RemoteCatalog) resolveKindFromManifest(ctx context.Context, ref Reference, version *semver.Version) ArtifactKind {
+	vRef := Reference{Name: ref.Name, Version: version}
+	repo, err := c.getRepository(vRef)
+	if err != nil {
+		return ""
+	}
+
+	desc, err := repo.Resolve(ctx, version.String())
+	if err != nil {
+		c.logger.V(1).Info("failed to resolve manifest for kind detection", "error", err.Error())
+		return ""
+	}
+
+	manifestData, err := content.FetchAll(ctx, repo, desc)
+	if err != nil {
+		c.logger.V(1).Info("failed to fetch manifest for kind detection", "error", err.Error())
+		return ""
+	}
+
+	var manifest struct {
+		Annotations map[string]string `json:"annotations"`
+	}
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		return ""
+	}
+
+	if kindStr, ok := manifest.Annotations[AnnotationArtifactType]; ok {
+		return ArtifactKind(kindStr)
+	}
+	return ""
+}
+
+// TagInfo represents a single tag in a remote OCI repository.
+type TagInfo struct {
+	Tag      string `json:"tag" yaml:"tag"`
+	IsSemver bool   `json:"isSemver" yaml:"isSemver"`
+	Version  string `json:"version,omitempty" yaml:"version,omitempty"`
+}
+
+// ListTags returns all tags (semver versions and aliases) for an artifact
+// in the remote registry.
+func (c *RemoteCatalog) ListTags(ctx context.Context, ref Reference) ([]TagInfo, error) {
+	repo, err := c.getRepository(ref)
+	if err != nil {
+		return nil, err
+	}
+
+	var tags []TagInfo
+
+	err = repo.Tags(ctx, "", func(rawTags []string) error {
+		for _, tag := range rawTags {
+			info := TagInfo{Tag: tag}
+			if v, parseErr := semver.NewVersion(tag); parseErr == nil {
+				info.IsSemver = true
+				info.Version = v.String()
+			}
+			tags = append(tags, info)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list tags for %q: %w", ref.Name, err)
+	}
+
+	// Sort: semver tags first (descending), then aliases alphabetically
+	sort.Slice(tags, func(i, j int) bool {
+		if tags[i].IsSemver != tags[j].IsSemver {
+			return tags[i].IsSemver
+		}
+		if tags[i].IsSemver {
+			vi, _ := semver.NewVersion(tags[i].Version)
+			vj, _ := semver.NewVersion(tags[j].Version)
+			return vi.GreaterThan(vj)
+		}
+		return tags[i].Tag < tags[j].Tag
+	})
+
+	return tags, nil
 }
 
 // Exists checks if an artifact exists in the catalog.
@@ -617,23 +651,32 @@ func (c *RemoteCatalog) Delete(ctx context.Context, ref Reference) error {
 	return nil
 }
 
-// Tag creates an alias tag for an existing artifact in the remote registry.
-func (c *RemoteCatalog) Tag(ctx context.Context, ref Reference, alias string) error {
+// Tag creates an alias tag for an existing remote artifact.
+// Returns a non-empty string if the alias already existed pointing to a different digest.
+func (c *RemoteCatalog) Tag(ctx context.Context, ref Reference, alias string) (string, error) {
 	repo, err := c.getRepository(ref)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	// Resolve the source artifact
 	tag := c.tagForRef(ref)
 	desc, err := repo.Resolve(ctx, tag)
 	if err != nil {
-		return &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
+		return "", &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
+	}
+
+	// Check if alias already exists and points to a different artifact
+	var oldVersion string
+	if oldDesc, resolveErr := repo.Resolve(ctx, alias); resolveErr == nil {
+		if oldDesc.Digest != desc.Digest {
+			oldVersion = oldDesc.Digest.String()
+		}
 	}
 
 	// Tag with alias
 	if err := repo.Tag(ctx, desc, alias); err != nil {
-		return fmt.Errorf("failed to tag artifact: %w", err)
+		return "", fmt.Errorf("failed to tag artifact: %w", err)
 	}
 
 	c.logger.V(1).Info("tagged artifact",
@@ -641,7 +684,7 @@ func (c *RemoteCatalog) Tag(ctx context.Context, ref Reference, alias string) er
 		"source", tag,
 		"alias", alias)
 
-	return nil
+	return oldVersion, nil
 }
 
 // tagForRef returns the tag string for a reference.
@@ -781,6 +824,99 @@ func (c *RemoteCatalog) CopyFrom(ctx context.Context, source *LocalCatalog, ref 
 		Size:      desc.Size,
 		Catalog:   c.name,
 	}, nil
+}
+
+// ReferrerInfo describes an artifact attached to a subject via OCI referrers.
+type ReferrerInfo struct {
+	// ArtifactType is the media type or artifactType of the referrer.
+	ArtifactType string `json:"artifactType" yaml:"artifactType"`
+
+	// Digest is the referrer manifest digest.
+	Digest string `json:"digest" yaml:"digest"`
+
+	// Size is the referrer manifest size.
+	Size int64 `json:"size" yaml:"size"`
+
+	// Annotations from the referrer manifest.
+	Annotations map[string]string `json:"annotations,omitempty" yaml:"annotations,omitempty"`
+}
+
+// Attach pushes an artifact that references (is attached to) a subject artifact
+// via the OCI referrers mechanism. The subject is identified by ref; the
+// attachment is described by artifactType and its raw bytes.
+func (c *RemoteCatalog) Attach(ctx context.Context, ref Reference, artifactType string, data []byte, annotations map[string]string) (ocispec.Descriptor, error) {
+	repo, err := c.getRepository(ref)
+	if err != nil {
+		return ocispec.Descriptor{}, err
+	}
+
+	// Resolve subject descriptor
+	tag := c.tagForRef(ref)
+	subjectDesc, err := repo.Resolve(ctx, tag)
+	if err != nil {
+		return ocispec.Descriptor{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
+	}
+
+	// Push the attachment data as a layer
+	layerDesc := ocispec.Descriptor{
+		MediaType: artifactType,
+		Digest:    digest.FromBytes(data),
+		Size:      int64(len(data)),
+	}
+	if err := repo.Push(ctx, layerDesc, bytes.NewReader(data)); err != nil {
+		return ocispec.Descriptor{}, fmt.Errorf("failed to push attachment blob: %w", err)
+	}
+
+	// Pack manifest with Subject pointing to the resolved artifact
+	manifestDesc, err := oras.PackManifest(ctx, repo, oras.PackManifestVersion1_1, artifactType, oras.PackManifestOptions{
+		Subject:             &subjectDesc,
+		Layers:              []ocispec.Descriptor{layerDesc},
+		ManifestAnnotations: annotations,
+	})
+	if err != nil {
+		return ocispec.Descriptor{}, fmt.Errorf("failed to pack attachment manifest: %w", err)
+	}
+
+	c.logger.V(1).Info("attached artifact",
+		"subject", ref.String(),
+		"artifactType", artifactType,
+		"digest", manifestDesc.Digest.String())
+
+	return manifestDesc, nil
+}
+
+// Referrers lists all artifacts that reference the given subject artifact.
+// If artifactType is non-empty, only referrers matching that type are returned.
+func (c *RemoteCatalog) Referrers(ctx context.Context, ref Reference, artifactType string) ([]ReferrerInfo, error) {
+	repo, err := c.getRepository(ref)
+	if err != nil {
+		return nil, err
+	}
+
+	// Resolve subject descriptor
+	tag := c.tagForRef(ref)
+	subjectDesc, err := repo.Resolve(ctx, tag)
+	if err != nil {
+		return nil, &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
+	}
+
+	var infos []ReferrerInfo
+	err = repo.Referrers(ctx, subjectDesc, artifactType, func(referrers []ocispec.Descriptor) error {
+		for _, desc := range referrers {
+			infos = append(infos, ReferrerInfo{
+				ArtifactType: desc.ArtifactType,
+				Digest:       desc.Digest.String(),
+				Size:         desc.Size,
+				Annotations:  desc.Annotations,
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list referrers: %w", err)
+	}
+
+	return infos, nil
 }
 
 // Ensure RemoteCatalog implements Catalog interface.

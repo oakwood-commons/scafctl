@@ -117,6 +117,11 @@ type ArtifactInfo struct {
 	// Reference is the artifact identifier.
 	Reference Reference `json:"reference" yaml:"reference" doc:"Artifact reference"`
 
+	// Tag is the OCI tag label (e.g. "1.0.0", "stable", "latest").
+	// For version tags this matches Reference.Version; for aliases it holds
+	// the alias string.
+	Tag string `json:"tag" yaml:"tag" doc:"OCI tag label"`
+
 	// Digest is the content digest (sha256:...).
 	Digest string `json:"digest" yaml:"digest" doc:"Content digest"`
 

@@ -19,6 +19,34 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// authStatusSchema controls table column display: handler, authenticated, email/username,
+// and expiresIn are visible; other fields are hidden in table view but included in json/yaml.
+var authStatusSchema = []byte(`{
+	"type": "array",
+	"items": {
+		"type": "object",
+		"required": ["handler", "displayName", "authenticated"],
+		"properties": {
+			"handler":        { "type": "string", "title": "Handler", "maxLength": 20 },
+			"displayName":    { "type": "string", "title": "Name" },
+			"authenticated":  { "type": "boolean", "title": "Auth" },
+			"email":          { "type": "string", "title": "Email" },
+			"username":       { "type": "string", "title": "Username" },
+			"expiresIn":      { "type": "string", "title": "Expires In" },
+			"identityType":   { "type": "string", "deprecated": true },
+			"clientId":       { "type": "string", "deprecated": true },
+			"tokenFile":      { "type": "string", "deprecated": true },
+			"name":           { "type": "string", "deprecated": true },
+			"tenantId":       { "type": "string", "deprecated": true },
+			"expiresAt":      { "type": "string", "deprecated": true },
+			"lastRefresh":    { "type": "string", "deprecated": true },
+			"scopes":         { "type": "array", "deprecated": true },
+			"cachedTokens":   { "type": "integer", "deprecated": true },
+			"hint":           { "type": "string", "deprecated": true }
+		}
+	}
+}`)
+
 // CommandStatus creates the 'auth status' command.
 func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
 	var outputFlags flags.KvxOutputFlags
@@ -92,27 +120,40 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 					continue
 				}
 
+				// Always include all columns so kvx detects a homogeneous
+				// array and renders a proper columnar table. The schema
+				// controls which columns are visible in table vs json/yaml.
 				result := map[string]any{
 					"handler":       handlerName,
 					"displayName":   handler.DisplayName(),
 					"authenticated": status.Authenticated,
+					"email":         "",
+					"username":      "",
+					"expiresIn":     "",
+					"hint":          "",
+					"identityType":  "",
+					"clientId":      "",
+					"tokenFile":     "",
+					"name":          "",
+					"tenantId":      "",
+					"expiresAt":     "",
+					"lastRefresh":   "",
+					"scopes":        []string{},
+					"cachedTokens":  0,
 				}
 
 				if !status.Authenticated {
 					result["hint"] = fmt.Sprintf("run '%s auth login %s' to authenticate", cliParams.BinaryName, handlerName)
 				}
 
-				// Add identity type
 				if status.IdentityType != "" {
 					result["identityType"] = string(status.IdentityType)
 				}
 
-				// For service principal/workload identity, show client ID
 				if status.ClientID != "" {
 					result["clientId"] = status.ClientID
 				}
 
-				// For workload identity, show token file path
 				if status.IdentityType == auth.IdentityTypeWorkloadIdentity && status.TokenFile != "" {
 					result["tokenFile"] = status.TokenFile
 				}
@@ -161,15 +202,11 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
-			outputOpts := flags.NewKvxOutputOptionsFromFlags(
-				outputFlags.Output,
-				outputFlags.Interactive,
-				outputFlags.Expression,
-				kvx.WithOutputContext(ctx),
-				kvx.WithOutputNoColor(cliParams.NoColor),
-				kvx.WithOutputAppName(cliParams.BinaryName+" auth status"),
+			outputOpts := flags.ToKvxOutputOptions(&outputFlags,
+				kvx.WithIOStreams(ioStreams),
+				kvx.WithOutputColumnOrder([]string{"handler", "displayName", "authenticated", "email", "username", "expiresIn"}),
+				kvx.WithOutputSchemaJSON(authStatusSchema),
 			)
-			outputOpts.IOStreams = ioStreams
 
 			if err := outputOpts.Write(results); err != nil {
 				return err
