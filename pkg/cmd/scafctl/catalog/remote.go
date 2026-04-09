@@ -56,6 +56,7 @@ type RemoteAddOptions struct {
 	Path         string
 	URL          string
 	SetDefault   bool
+	Force        bool
 	AuthProvider string
 	AuthScope    string
 }
@@ -108,6 +109,7 @@ func commandRemoteAdd(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ 
 	cmd.Flags().StringVarP(&opts.Path, "path", "p", "", "Path for filesystem catalogs")
 	cmd.Flags().StringVarP(&opts.URL, "url", "u", "", "URL for remote catalogs (oci, http)")
 	cmd.Flags().BoolVar(&opts.SetDefault, "default", false, "Set as default catalog")
+	cmd.Flags().BoolVarP(&opts.Force, "force", "f", false, "Overwrite if catalog already exists")
 	cmd.Flags().StringVar(&opts.AuthProvider, "auth-provider", "", "Auth handler for automatic token injection (e.g. github, gcp, entra)")
 	cmd.Flags().StringVar(&opts.AuthScope, "auth-scope", "", "OAuth scope for auth provider token requests")
 
@@ -155,8 +157,16 @@ func runRemoteAdd(ctx context.Context, opts *RemoteAddOptions) error {
 	}
 
 	if err := cfg.AddCatalog(cat); err != nil {
-		w.Errorf("%v", err)
-		return exitcode.WithCode(err, exitcode.CatalogError)
+		if !opts.Force {
+			w.Errorf("%v", err)
+			return exitcode.WithCode(err, exitcode.CatalogError)
+		}
+		// Force: remove existing and re-add
+		_ = cfg.RemoveCatalog(opts.Name)
+		if err := cfg.AddCatalog(cat); err != nil {
+			w.Errorf("%v", err)
+			return exitcode.WithCode(err, exitcode.CatalogError)
+		}
 	}
 
 	if opts.SetDefault {
