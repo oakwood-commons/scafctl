@@ -78,7 +78,7 @@ Expected output:
 
 ```json
 {
-  "data": {
+  "config": {
     "check": [],
     "data": [],
     "import": [],
@@ -97,15 +97,11 @@ Expected output:
         "type": "string"
       }
     ]
-  },
-  "metadata": {
-    "bytes": 102,
-    "filename": "input.tf"
   }
 }
 ```
 
-All block types are represented in the output — empty arrays/maps for types not present in the input, and populated entries for those that are.
+All block types are represented in the output — empty arrays/maps for types not present in the input, and populated entries for those that are. The output key matches the resolver name (`config` in this case).
 
 ---
 

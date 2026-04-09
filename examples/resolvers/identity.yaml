@@ -1,7 +1,4 @@
-# Identity Provider Examples
-#
-# Prerequisites:
-#   - Run `scafctl auth login entra` or `scafctl auth login github` to authenticate first
+# Prerequisites: scafctl auth login entra (or scafctl auth login github)
 #
 # Run: scafctl run resolver -f identity.yaml
 

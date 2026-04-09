@@ -34,13 +34,13 @@ Evaluate a simple expression:
 {{< tabs "eval-tutorial-cmd-1" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl eval cel "1 + 2"
+scafctl eval cel --expression "1 + 2"
 # 3
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl eval cel "1 + 2"
+scafctl eval cel --expression "1 + 2"
 # 3
 ```
 {{% /tab %}}
@@ -51,13 +51,13 @@ String operations:
 {{< tabs "eval-tutorial-cmd-2" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl eval cel '"hello".upperAscii()'
+scafctl eval cel --expression '"hello".upperAscii()'
 # HELLO
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl eval cel '"hello".upperAscii()'
+scafctl eval cel --expression '"hello".upperAscii()'
 # HELLO
 ```
 {{% /tab %}}
@@ -70,14 +70,14 @@ Pass JSON data to the expression via `--data`:
 {{< tabs "eval-tutorial-cmd-3" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl eval cel '_.name + " is " + string(_.age)' \
+scafctl eval cel --expression '_.name + " is " + string(_.age)' \
   --data '{"name": "Alice", "age": 30}'
 # Alice is 30
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl eval cel '_.name + " is " + string(_.age)' `
+scafctl eval cel --expression '_.name + " is " + string(_.age)' `
   --data '{"name": "Alice", "age": 30}'
 # Alice is 30
 ```
@@ -105,8 +105,8 @@ cat > data.json << 'EOF'
 EOF
 
 # Filter active items
-scafctl eval cel '_.items.filter(i, i.active).map(i, i.name)' --data-file data.json
-# ["item-a", "item-c"]
+scafctl eval cel --expression '_.items.filter(i, i.active).map(i, i.name)' --file data.json
+# [item-a item-c]
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
@@ -123,8 +123,8 @@ scafctl eval cel '_.items.filter(i, i.active).map(i, i.name)' --data-file data.j
 '@ | Set-Content -Path data.json
 
 # Filter active items
-scafctl eval cel '_.items.filter(i, i.active).map(i, i.name)' --data-file data.json
-# ["item-a", "item-c"]
+scafctl eval cel --expression '_.items.filter(i, i.active).map(i, i.name)' --file data.json
+# [item-a item-c]
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -137,19 +137,19 @@ Use `-o` to control output format:
 {{% tab "Bash" %}}
 ```bash
 # JSON output
-scafctl eval cel '{"greeting": "hello", "count": 42}' -o json
+scafctl eval cel --expression '{"greeting": "hello", "count": 42}' -o json
 
 # YAML output
-scafctl eval cel '{"greeting": "hello", "count": 42}' -o yaml
+scafctl eval cel --expression '{"greeting": "hello", "count": 42}' -o yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
 # JSON output
-scafctl eval cel '{"greeting": "hello", "count": 42}' -o json
+scafctl eval cel --expression '{"greeting": "hello", "count": 42}' -o json
 
 # YAML output
-scafctl eval cel '{"greeting": "hello", "count": 42}' -o yaml
+scafctl eval cel --expression '{"greeting": "hello", "count": 42}' -o yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -162,27 +162,27 @@ Test scafctl's custom CEL extension functions:
 {{% tab "Bash" %}}
 ```bash
 # String functions
-scafctl eval cel '"hello-world".toCamelCase()'
-# helloWorld
+scafctl eval cel --expression '"hello".upperAscii()'
+# HELLO
 
-scafctl eval cel '"hello-world".toPascalCase()'
-# HelloWorld
+scafctl eval cel --expression '"HELLO".lowerAscii()'
+# hello
 
-# List the available CEL functions
-scafctl eval cel 'true' --list-functions
+scafctl eval cel --expression '"hello-world".replace("-", " ")'
+# hello world
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
 # String functions
-scafctl eval cel '"hello-world".toCamelCase()'
-# helloWorld
+scafctl eval cel --expression '"hello".upperAscii()'
+# HELLO
 
-scafctl eval cel '"hello-world".toPascalCase()'
-# HelloWorld
+scafctl eval cel --expression '"HELLO".lowerAscii()'
+# hello
 
-# List the available CEL functions
-scafctl eval cel 'true' --list-functions
+scafctl eval cel --expression '"hello-world".replace("-", " ")'
+# hello world
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -199,14 +199,14 @@ Render a template with inline data:
 {{< tabs "eval-tutorial-cmd-7" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl eval template '{{.name}} has {{.count}} items' \
+scafctl eval template --template '{{.name}} has {{.count}} items' \
   --data '{"name": "project", "count": 5}'
 # project has 5 items
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl eval template '{{.name}} has {{.count}} items' `
+scafctl eval template --template '{{.name}} has {{.count}} items' `
   --data '{"name": "project", "count": 5}'
 # project has 5 items
 ```
@@ -253,12 +253,12 @@ Combine template files with data files:
 {{< tabs "eval-tutorial-cmd-9" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl eval template --template-file config.tmpl --data-file values.json
+scafctl eval template --template-file config.tmpl --file values.json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl eval template --template-file config.tmpl --data-file values.json
+scafctl eval template --template-file config.tmpl --file values.json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -271,15 +271,15 @@ Save rendered output to a file:
 {{% tab "Bash" %}}
 ```bash
 scafctl eval template --template-file config.tmpl \
-  --data-file values.json \
-  --output generated-config.yaml
+  --file values.json \
+  -o json > generated-config.yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
 scafctl eval template --template-file config.tmpl `
-  --data-file values.json `
-  --output generated-config.yaml
+  --file values.json `
+  -o json > generated-config.yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -412,11 +412,11 @@ When building a new resolver, iterate quickly with `eval cel`:
 {{% tab "Bash" %}}
 ```bash
 # 1. Start with simple expression
-scafctl eval cel '"Hello, " + _.name' --data '{"name": "World"}'
+scafctl eval cel --expression '"Hello, " + _.name' --data '{"name": "World"}'
 
 # 2. Add complexity
-scafctl eval cel '_.items.filter(i, i.enabled).map(i, i.name).join(", ")' \
-  --data-file real-data.json
+scafctl eval cel --expression '_.items.filter(i, i.enabled).map(i, i.name).join(", ")' \
+  --file real-data.json
 
 # 3. Once working, copy to solution YAML
 ```
@@ -424,11 +424,11 @@ scafctl eval cel '_.items.filter(i, i.enabled).map(i, i.name).join(", ")' \
 {{% tab "PowerShell" %}}
 ```powershell
 # 1. Start with simple expression
-scafctl eval cel '"Hello, " + _.name' --data '{"name": "World"}'
+scafctl eval cel --expression '"Hello, " + _.name' --data '{"name": "World"}'
 
 # 2. Add complexity
-scafctl eval cel '_.items.filter(i, i.enabled).map(i, i.name).join(", ")' `
-  --data-file real-data.json
+scafctl eval cel --expression '_.items.filter(i, i.enabled).map(i, i.name).join(", ")' `
+  --file real-data.json
 
 # 3. Once working, copy to solution YAML
 ```
@@ -446,7 +446,7 @@ Preview template output before integrating into actions:
 scafctl eval template --template-file deploy.tmpl --data '{"env": "staging", "replicas": 3}'
 
 # Test with real resolver output (from a snapshot)
-scafctl eval template --template-file deploy.tmpl --data-file snapshot.json
+scafctl eval template --template-file deploy.tmpl --file snapshot.json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
@@ -455,7 +455,7 @@ scafctl eval template --template-file deploy.tmpl --data-file snapshot.json
 scafctl eval template --template-file deploy.tmpl --data '{"env": "staging", "replicas": 3}'
 
 # Test with real resolver output (from a snapshot)
-scafctl eval template --template-file deploy.tmpl --data-file snapshot.json
+scafctl eval template --template-file deploy.tmpl --file snapshot.json
 ```
 {{% /tab %}}
 {{< /tabs >}}

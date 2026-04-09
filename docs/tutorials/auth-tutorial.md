@@ -2804,7 +2804,7 @@ Custom handlers support all three OAuth2 flows:
 - **Client credentials** -- requires `clientSecret`
 
 For advanced configurations including token exchange and identity
-verification, see [examples/auth/custom-oauth2-config.md](../../examples/auth/custom-oauth2-config.md).
+verification, see [examples/auth/custom-oauth2-config.md](https://github.com/oakwood-commons/scafctl/blob/main/examples/auth/custom-oauth2-config.md).
 
 ---
 

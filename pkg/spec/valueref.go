@@ -228,9 +228,9 @@ func (v *ValueRef) ResolveWithIterationContext(ctx context.Context, resolverData
 		return nil, nil
 	}
 
-	// Literal value
+	// Literal value — resolve any nested ValueRef patterns in maps/arrays
 	if v.Literal != nil {
-		return v.Literal, nil
+		return resolveNestedValueRefs(ctx, v.Literal, resolverData, self, iterCtx)
 	}
 
 	// Resolver reference
@@ -341,6 +341,11 @@ func (v *ValueRef) ReferencedVariables() map[string]struct{} {
 		}
 	}
 
+	// Scan Literal maps/arrays for nested ValueRef patterns (expr/tmpl)
+	if v.Literal != nil {
+		collectNestedReferencedVariables(v.Literal, vars)
+	}
+
 	return vars
 }
 
@@ -352,4 +357,118 @@ func (v *ValueRef) ReferencesVariable(varName string) bool {
 	vars := v.ReferencedVariables()
 	_, ok := vars[varName]
 	return ok
+}
+
+// valueRefKeys are the recognized keys for a ValueRef map pattern.
+var valueRefKeys = map[string]struct{}{
+	"rslvr": {},
+	"expr":  {},
+	"tmpl":  {},
+}
+
+// collectNestedReferencedVariables recursively scans a literal value for
+// nested ValueRef patterns and collects their referenced variable names.
+func collectNestedReferencedVariables(val any, vars map[string]struct{}) {
+	switch v := val.(type) {
+	case map[string]any:
+		if isValueRefMap(v) {
+			vr, err := parseNestedValueRef(v)
+			if err != nil {
+				return
+			}
+			for name := range vr.ReferencedVariables() {
+				vars[name] = struct{}{}
+			}
+			return
+		}
+		for _, elem := range v {
+			collectNestedReferencedVariables(elem, vars)
+		}
+	case []any:
+		for _, elem := range v {
+			collectNestedReferencedVariables(elem, vars)
+		}
+	}
+}
+
+// isValueRefMap checks whether m is a map with exactly one key from {rslvr, expr, tmpl}
+// and no other keys. This identifies inline ValueRef patterns in nested structures.
+func isValueRefMap(m map[string]any) bool {
+	if len(m) != 1 {
+		return false
+	}
+	for k := range m {
+		_, ok := valueRefKeys[k]
+		return ok
+	}
+	return false
+}
+
+// parseNestedValueRef converts a map that passes isValueRefMap into a ValueRef.
+func parseNestedValueRef(m map[string]any) (*ValueRef, error) {
+	if v, ok := m["rslvr"]; ok {
+		s, ok := v.(string)
+		if !ok {
+			return nil, fmt.Errorf("rslvr value must be a string, got %T", v)
+		}
+		return &ValueRef{Resolver: &s}, nil
+	}
+	if v, ok := m["expr"]; ok {
+		s, ok := v.(string)
+		if !ok {
+			return nil, fmt.Errorf("expr value must be a string, got %T", v)
+		}
+		e := celexp.Expression(s)
+		return &ValueRef{Expr: &e}, nil
+	}
+	if v, ok := m["tmpl"]; ok {
+		s, ok := v.(string)
+		if !ok {
+			return nil, fmt.Errorf("tmpl value must be a string, got %T", v)
+		}
+		t := gotmpl.GoTemplatingContent(s)
+		return &ValueRef{Tmpl: &t}, nil
+	}
+	return nil, fmt.Errorf("no recognized ValueRef key in map")
+}
+
+// resolveNestedValueRefs recursively walks a value and resolves any inline
+// ValueRef patterns ({rslvr: X}, {expr: X}, {tmpl: X}) found in maps or arrays.
+// Non-ValueRef values are returned unchanged.
+func resolveNestedValueRefs(ctx context.Context, val any, resolverData map[string]any, self any, iterCtx *IterationContext) (any, error) {
+	switch v := val.(type) {
+	case map[string]any:
+		// Check if this map itself is a ValueRef pattern
+		if isValueRefMap(v) {
+			vr, err := parseNestedValueRef(v)
+			if err != nil {
+				return nil, fmt.Errorf("invalid nested value ref: %w", err)
+			}
+			return vr.ResolveWithIterationContext(ctx, resolverData, self, iterCtx)
+		}
+		// Otherwise walk the map values
+		result := make(map[string]any, len(v))
+		for key, elem := range v {
+			resolved, err := resolveNestedValueRefs(ctx, elem, resolverData, self, iterCtx)
+			if err != nil {
+				return nil, fmt.Errorf("key %q: %w", key, err)
+			}
+			result[key] = resolved
+		}
+		return result, nil
+
+	case []any:
+		result := make([]any, len(v))
+		for i, elem := range v {
+			resolved, err := resolveNestedValueRefs(ctx, elem, resolverData, self, iterCtx)
+			if err != nil {
+				return nil, fmt.Errorf("index %d: %w", i, err)
+			}
+			result[i] = resolved
+		}
+		return result, nil
+
+	default:
+		return val, nil
+	}
 }

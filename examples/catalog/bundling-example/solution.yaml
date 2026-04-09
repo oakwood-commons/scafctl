@@ -1,22 +1,15 @@
-# Bundling Example Solution
-#
-# This solution demonstrates advanced bundle configuration:
-# - Explicit include patterns for dynamically-loaded files
-# - Exclude patterns to filter out test files
-# - Static file references (auto-discovered)
-# - Dynamic file paths (require explicit includes)
-#
-# Usage:
-#   scafctl build solution -f examples/catalog/bundling-example/solution.yaml --dry-run
-#   scafctl build solution -f examples/catalog/bundling-example/solution.yaml --version 1.0.0
-#   scafctl run resolver bundling-example -r environment=dev
+# Build: scafctl build solution -f examples/catalog/bundling-example/solution.yaml --dry-run
+# Build: scafctl build solution -f examples/catalog/bundling-example/solution.yaml --version 1.0.0
+# Run:   scafctl run resolver bundling-example -r environment=dev
 
 apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: bundling-example
   version: 1.0.0
-  description: Demonstrates bundle configuration with include/exclude patterns
+  description: |
+    Advanced bundle configuration with include/exclude patterns, static
+    file references (auto-discovered), and dynamic file paths (explicit includes).
 
 # Bundle configuration controls what files are packaged
 bundle:

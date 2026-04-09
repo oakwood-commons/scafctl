@@ -1,19 +1,16 @@
-# Dependencies Example
-# Shows how resolvers can depend on each other and execute in phases.
-#
 # Run: scafctl run resolver -f dependencies.yaml --progress
-#
-# Execution order:
-#   Phase 1: environment, region (no dependencies, run in parallel)
-#   Phase 2: port, hostname (depend on phase 1)
-#   Phase 3: config (depends on phase 1 and 2)
 
 apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: dependencies-example
   version: 1.0.0
-  description: Resolver dependencies and execution phases
+  description: |
+    Resolver dependencies and execution phases. Resolvers depend on each
+    other and execute in parallel within phases:
+      Phase 1: environment, region (no dependencies)
+      Phase 2: port, hostname (depend on phase 1)
+      Phase 3: config (depends on phase 1 and 2)
 
 spec:
   resolvers:

@@ -3,6 +3,7 @@ kind: Solution
 metadata:
   name: child-solution
   version: 1.0.0
+  description: Child solution consumed by composition/parent.yaml via the solution provider
 spec:
   resolvers:
     greeting:

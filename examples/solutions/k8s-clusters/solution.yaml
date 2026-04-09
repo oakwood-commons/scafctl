@@ -1,27 +1,17 @@
-# Kubernetes Clusters Example
-# Reads a Go template from a file, iterates over 10 Kubernetes cluster
-# definitions, renders a unique manifest per cluster, and writes each to disk.
-#
-# This demonstrates:
-# - Reading a template from an external file (file provider)
-# - Resolver-level forEach transform to render a template per array item
-# - Using go-template provider with __item data in forEach transforms
-# - forEach iteration over an array of objects in actions
-# - Writing unique files per iteration with the file provider
-# - CEL expressions for dynamic path construction and array indexing
-#
 # Run: scafctl run solution -f examples/solutions/k8s-clusters/solution.yaml
 #
-# After running, check the output:
-#   ls ./output/
-#   cat ./output/us-east-prod/manifest.yaml
+# After running: ls ./output/ && cat ./output/us-east-prod/manifest.yaml
 
 apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: k8s-clusters
   version: 1.0.0
-  description: Generate Kubernetes manifests for multiple clusters from a shared template
+  description: |
+    Generate Kubernetes manifests for multiple clusters from a shared template.
+    Demonstrates reading a Go template from file, resolver-level forEach to
+    render per array item, forEach iteration in actions, and writing unique
+    files per iteration with dynamic path construction.
 
 spec:
   resolvers:

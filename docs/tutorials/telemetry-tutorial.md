@@ -5,7 +5,7 @@ weight: 96
 
 # Telemetry Tutorial
 
-scafctl emits **all three OpenTelemetry signals** — logs, traces, and metrics.
+scafctl emits **all three OpenTelemetry signals** -- logs, traces, and metrics.
 By default, telemetry is silent (noop providers). When you point scafctl at an
 OTLP endpoint every signal is exported for backend analysis.
 
@@ -69,7 +69,7 @@ sink is a `multiSink` that fans out to:
 1. **slog handler** → stderr (text or JSON via `--log-format`)
 2. **otellogr bridge** → OTel `LoggerProvider` → OTLP when `--otel-endpoint` is set
 
-When no OTLP endpoint is configured, only the slog handler is active — no OTel
+When no OTLP endpoint is configured, only the slog handler is active -- no OTel
 log records are emitted to stderr. When an active span is in scope, the OTLP log
 record carries the `trace_id` and `span_id` automatically (correlation without
 any extra code).
@@ -277,6 +277,6 @@ Every span, metric, and log record produced by scafctl includes:
 
 ## Next Steps
 
-- [Logging Tutorial](logging-tutorial.md) — Log levels, formats, and file output
-- [MCP Server Tutorial](mcp-server-tutorial.md) — Host the MCP server and scrape `/metrics`
-- [examples/telemetry/README.md](../../examples/telemetry/README.md) — Local Jaeger + Collector setup
+- [Logging Tutorial](logging-tutorial.md) -- Log levels, formats, and file output
+- [MCP Server Tutorial](mcp-server-tutorial.md) -- Host the MCP server and scrape `/metrics`
+- [examples/telemetry/README.md](https://github.com/oakwood-commons/scafctl/blob/main/examples/telemetry/README.md) -- Local Jaeger + Collector setup

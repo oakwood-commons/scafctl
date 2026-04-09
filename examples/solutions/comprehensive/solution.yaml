@@ -182,8 +182,8 @@ spec:
     # Uses: parameter with CSV, cel for transformation
     # -------------------------------------------------------------------------
     regions:
-      description: Deployment regions as list
-      type: list
+      description: Deployment regions
+      type: any
       resolve:
         with:
           - provider: parameter
@@ -191,22 +191,14 @@ spec:
               key: regions
           - provider: static
             inputs:
-              value: "us-east-1,us-west-2"
-      transform:
-        with:
-          # Split CSV into array
-          - provider: cel
-            inputs:
-              expression: "__self.split(\",\").map(r, r.trim())"
-          # Filter out empty strings
-          - provider: cel
-            inputs:
-              expression: "__self.filter(r, r.size() > 0)"
+              value:
+                - us-east-1
+                - us-west-2
       validate:
         with:
           - provider: validation
             inputs:
-              expression: "__self.size() > 0 && __self.size() <= 5"
+              expression: "size(__self) > 0 && size(__self) <= 5"
             message: "Must specify 1-5 regions"
 
     # -------------------------------------------------------------------------
@@ -249,7 +241,7 @@ spec:
               key: dryRun
           - provider: static
             inputs:
-              value: false
+              value: true
       validate:
         with:
           - provider: validation
@@ -341,8 +333,7 @@ spec:
           env:
             IMAGE_TAG:
               expr: "\"myregistry.io/\" + _.appName + \":\" + _.version"
-            BUILD_TIME:
-              expr: "string(now())"
+            BUILD_TIME: "build-time"
             GIT_COMMIT:
               rslvr: gitCommit
 
@@ -357,7 +348,8 @@ spec:
 
         forEach:
           item: __region
-          in: _.regions
+          in:
+            expr: "_.regions"
 
         inputs:
           operation: mkdir
@@ -375,7 +367,8 @@ spec:
 
         forEach:
           item: __region
-          in: _.regions
+          in:
+            expr: "_.regions"
 
         inputs:
           operation: write
@@ -395,7 +388,8 @@ spec:
 
         forEach:
           item: __region
-          in: _.regions
+          in:
+            expr: "_.regions"
 
         inputs:
           operation: write
@@ -423,16 +417,14 @@ spec:
             # Template value
           # Expression creating JSON body
           body:
-            expr: |
-              toJson({
-                "app": _.appName,
-                "version": _.version,
-                "environment": _.environment,
-                "regions": _.regions,
-                "timestamp": string(now()),
-                "commit": _.gitCommit,
-                "branch": _.gitBranch
-              })
+            tmpl: |
+              {
+                "app": "{{ .appName }}",
+                "version": "{{ .version }}",
+                "environment": "{{ .environment }}",
+                "commit": "{{ .gitCommit }}",
+                "branch": "{{ .gitBranch }}"
+              }
 
       # -------------------------------------------------------------------------
       # Action 6: Action with results for downstream consumption
@@ -447,7 +439,8 @@ spec:
 
         forEach:
           item: __region
-          in: _.regions
+          in:
+            expr: "_.regions"
 
         inputs:
           command:
@@ -501,7 +494,7 @@ spec:
         when:
           expr: "_.environment == \"staging\" || _.environment == \"dev\""
         inputs:
-          command: "npm run smoke-test"
+          command: "echo 'Running smoke tests...'"
           env:
             TEST_ENV:
               rslvr: environment
@@ -519,22 +512,21 @@ spec:
         inputs:
           operation: write
           path: ./output/deployment-report.json
+          createDirs: true
           content:
-            expr: |
+            tmpl: |
               {
                 "deployment": {
-                  "app": _.appName,
-                  "version": _.version,
-                  "environment": _.environment,
-                  "regions": _.regions,
-                  "replicas": _.replicas,
-                  "dryRun": _.dryRun
+                  "app": "{{ .appName }}",
+                  "version": "{{ .version }}",
+                  "environment": "{{ .environment }}",
+                  "replicas": {{ .replicas }},
+                  "dryRun": {{ .dryRun }}
                 },
                 "git": {
-                  "branch": _.gitBranch,
-                  "commit": _.gitCommit
+                  "branch": "{{ .gitBranch }}",
+                  "commit": "{{ .gitCommit }}"
                 },
-                "timestamp": string(now()),
                 "status": "completed"
               }
 
@@ -561,7 +553,7 @@ spec:
               - Commit: {{ .gitCommit }}
 
               ## Status
-              Deployment completed successfully at {{ .timestamp }}
+              Deployment completed successfully
 
       # -------------------------------------------------------------------------
       # Action 11: Cleanup action that always runs

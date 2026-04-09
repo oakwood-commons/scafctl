@@ -1,37 +1,18 @@
-# Snapshot Diff Example
-# Shows how to compare two snapshots to detect changes between runs.
-# Useful for regression testing and before/after verification.
-#
-# Usage:
-#   # Create baseline snapshot
-#   scafctl render solution -f examples/snapshots/snapshot-diff.yaml \
-#     -r env=staging --snapshot --snapshot-file=/tmp/snap-staging.json
-#
-#   # Create comparison snapshot with different parameters
-#   scafctl render solution -f examples/snapshots/snapshot-diff.yaml \
-#     -r env=production --snapshot --snapshot-file=/tmp/snap-prod.json
-#
-#   # Compare the two snapshots
-#   scafctl snapshot diff /tmp/snap-staging.json /tmp/snap-prod.json
-#
-#   # Ignore timing differences
-#   scafctl snapshot diff /tmp/snap-staging.json /tmp/snap-prod.json \
-#     --ignore-fields duration,providerCalls
-#
-#   # Show only changed resolvers
-#   scafctl snapshot diff /tmp/snap-staging.json /tmp/snap-prod.json \
-#     --ignore-unchanged
-#
-#   # Output as JSON for CI pipelines
-#   scafctl snapshot diff /tmp/snap-staging.json /tmp/snap-prod.json \
-#     --format json
+# Run: scafctl render solution -f examples/snapshots/snapshot-diff.yaml -r env=staging --snapshot --snapshot-file=/tmp/snap-staging.json
+# Run: scafctl render solution -f examples/snapshots/snapshot-diff.yaml -r env=production --snapshot --snapshot-file=/tmp/snap-prod.json
+# Run: scafctl snapshot diff /tmp/snap-staging.json /tmp/snap-prod.json
+# Run: scafctl snapshot diff /tmp/snap-staging.json /tmp/snap-prod.json --ignore-fields duration,providerCalls
+# Run: scafctl snapshot diff /tmp/snap-staging.json /tmp/snap-prod.json --ignore-unchanged
+# Run: scafctl snapshot diff /tmp/snap-staging.json /tmp/snap-prod.json --format json
 
 apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: snapshot-diff-demo
   version: 1.0.0
-  description: Demonstrates snapshot comparison for detecting changes
+  description: |
+    Compare two snapshots to detect changes between runs. Useful for
+    regression testing and before/after verification.
 
 spec:
   resolvers:

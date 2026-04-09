@@ -1,8 +1,3 @@
-# Message Provider — Templated and Dynamic Messages
-#
-# Demonstrates tmpl: and expr: ValueRef for dynamic message generation
-# using resolver data. The framework auto-detects dependencies.
-#
 # Run: scafctl run resolver -f examples/providers/message-dynamic.yaml
 
 apiVersion: scafctl.io/v1
@@ -11,7 +6,9 @@ kind: Solution
 metadata:
   name: message-dynamic-example
   version: 1.0.0
-  description: Demonstrates templated and CEL-based dynamic messages
+  description: |
+    Templated and CEL-based dynamic message generation using resolver data.
+    The framework auto-detects dependencies from tmpl: and expr: ValueRefs.
 
 spec:
   resolvers:

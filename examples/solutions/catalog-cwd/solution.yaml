@@ -1,23 +1,6 @@
-# Catalog CWD Example
-# Demonstrates that catalog solutions write files to the caller's CWD by
-# default, matching the behaviour of local -f file runs. This aligns with
-# how npm init, cargo init, and cookiecutter work — they scaffold into the
-# directory you run them from.
-#
-# Build into local catalog:
-#   cd examples/solutions/catalog-cwd
-#   scafctl build solution -f solution.yaml --version 1.0.0
-#
-# Run from any directory (files land in your current directory):
-#   mkdir /tmp/my-project && cd /tmp/my-project
-#   scafctl run solution catalog-cwd-demo
-#
-# Run with --output-dir override:
-#   scafctl run solution catalog-cwd-demo --output-dir /tmp/output
-#
-# Verify:
-#   cat /tmp/my-project/README.md
-#   cat /tmp/my-project/config/settings.yaml
+# Build: cd examples/solutions/catalog-cwd && scafctl build solution -f solution.yaml --version 1.0.0
+# Run:   mkdir /tmp/my-project && cd /tmp/my-project && scafctl run solution catalog-cwd-demo
+# Run:   scafctl run solution catalog-cwd-demo --output-dir /tmp/output
 
 apiVersion: scafctl.io/v1
 kind: Solution

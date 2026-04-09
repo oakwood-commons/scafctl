@@ -1,10 +1,4 @@
-# HTTP Provider — OData / Microsoft Graph Pagination
-#
-# Demonstrates pagination by following @odata.nextLink URL from the
-# response body. Common for Microsoft Graph, Dynamics 365, and OData APIs.
-#
-# Prerequisites:
-#   scafctl auth login entra --scope https://graph.microsoft.com/.default
+# Prerequisites: scafctl auth login entra --scope https://graph.microsoft.com/.default
 #
 # Run: scafctl run solution -f examples/providers/http-pagination-odata.yaml
 # Run: scafctl run resolver -f examples/providers/http-pagination-odata.yaml
@@ -15,7 +9,9 @@ kind: Solution
 metadata:
   name: http-pagination-odata-example
   version: 1.0.0
-  description: OData pagination follows @odata.nextLink URLs
+  description: |
+    OData pagination follows @odata.nextLink URLs from the response body.
+    Common for Microsoft Graph, Dynamics 365, and OData APIs.
 
 spec:
   resolvers:

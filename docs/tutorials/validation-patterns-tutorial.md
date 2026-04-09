@@ -116,6 +116,7 @@ apiVersion: scafctl.io/v1alpha1
 kind: Solution
 metadata:
   name: regex-validation-demo
+  version: 1.0.0
 spec:
   resolvers:
     - name: email
@@ -165,6 +166,7 @@ apiVersion: scafctl.io/v1alpha1
 kind: Solution
 metadata:
   name: cel-validation-demo
+  version: 1.0.0
 spec:
   resolvers:
     - name: port
@@ -219,6 +221,7 @@ apiVersion: scafctl.io/v1alpha1
 kind: Solution
 metadata:
   name: cross-field-validation
+  version: 1.0.0
 spec:
   resolvers:
     - name: min_replicas
@@ -260,6 +263,7 @@ apiVersion: scafctl.io/v1alpha1
 kind: Solution
 metadata:
   name: result-schema-demo
+  version: 1.0.0
 spec:
   resolvers:
     - name: config

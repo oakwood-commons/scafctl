@@ -1,26 +1,13 @@
-# File Provider — Conflict Strategies
-#
-# Demonstrates all five conflict strategies, per-entry overrides in write-tree,
-# and append with line-level deduplication for .gitignore management.
-#
-# Setup (creates files to demonstrate conflicts):
+# Setup:
 #   mkdir -p /tmp/conflict-demo
 #   echo "old config" > /tmp/conflict-demo/config.yaml
 #   echo "old readme" > /tmp/conflict-demo/README.md
 #   echo "keep me"    > /tmp/conflict-demo/LICENSE
 #   printf "dist/\n.env\n" > /tmp/conflict-demo/.gitignore
 #
-# Run:
-#   scafctl run solution -f examples/providers/file-conflict-strategies.yaml \
-#     --output-dir /tmp/conflict-demo -o json
-#
-# Dry-run (preview without writing):
-#   scafctl run solution -f examples/providers/file-conflict-strategies.yaml \
-#     --output-dir /tmp/conflict-demo --dry-run -o json
-#
-# CLI flag override (force error on all conflicts):
-#   scafctl run solution -f examples/providers/file-conflict-strategies.yaml \
-#     --output-dir /tmp/conflict-demo --on-conflict error
+# Run: scafctl run solution -f examples/providers/file-conflict-strategies.yaml --output-dir /tmp/conflict-demo -o json
+# Run: scafctl run solution -f examples/providers/file-conflict-strategies.yaml --output-dir /tmp/conflict-demo --dry-run -o json
+# Run: scafctl run solution -f examples/providers/file-conflict-strategies.yaml --output-dir /tmp/conflict-demo --on-conflict error
 
 apiVersion: scafctl.io/v1
 kind: Solution
@@ -29,8 +16,9 @@ metadata:
   name: file-conflict-strategies-demo
   version: 1.0.0
   description: |
-    Demonstrates the file provider's conflict resolution strategies:
-    skip-unchanged, overwrite, skip, error, and append (with dedupe).
+    File provider conflict resolution strategies: skip-unchanged, overwrite,
+    skip, error, and append (with line-level deduplication). Includes
+    per-entry overrides in write-tree.
 
 spec:
   resolvers:

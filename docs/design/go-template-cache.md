@@ -88,14 +88,14 @@ gotmpl.InitFromAppConfig(ctx, gotmpl.GoTemplateConfigInput{
 })
 ```
 
-This function is idempotent — only the first call takes effect.
+This function is idempotent -- only the first call takes effect.
 
 ### Defaults
 
 | Setting | Default | Source |
 |---------|---------|--------|
 | `cacheSize` | 10,000 | `pkg/settings.DefaultGoTemplateCacheSize` |
-| `enableMetrics` | `true` | — |
+| `enableMetrics` | `true` | -- |
 
 ## API
 
@@ -123,12 +123,12 @@ This function is idempotent — only the first call takes effect.
 
 ## Testing
 
-- `cache_test.go` — Unit tests for all cache operations, concurrency, eviction behavior
-- `cache_benchmark_test.go` — Performance benchmarks for Get/Put under contention
-- `appconfig_test.go` — Tests for `InitFromAppConfig` idempotency and reset
+- `cache_test.go` -- Unit tests for all cache operations, concurrency, eviction behavior
+- `cache_benchmark_test.go` -- Performance benchmarks for Get/Put under contention
+- `appconfig_test.go` -- Tests for `InitFromAppConfig` idempotency and reset
 
 ## Related
 
-- [CEL Cache](cel.md) — Similar LRU cache for compiled CEL programs
-- [Go Templates Tutorial](../tutorials/go-templates-tutorial.md) — End-user guide
-- [pkg/gotmpl/README.md](../../pkg/gotmpl/README.md) — Package documentation
+- [CEL Cache](cel.md) -- Similar LRU cache for compiled CEL programs
+- [Go Templates Tutorial](../tutorials/go-templates-tutorial.md) -- End-user guide
+- [pkg/gotmpl/README.md](https://github.com/oakwood-commons/scafctl/blob/main/pkg/gotmpl/README.md) -- Package documentation

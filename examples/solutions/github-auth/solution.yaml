@@ -1,14 +1,7 @@
-# GitHub Authentication Examples
-#
-# Demonstrates using GitHub authentication with resolvers and actions.
-# Shows the identity provider with the GitHub handler and authenticated
-# HTTP requests to the GitHub API.
-#
-# Prerequisites:
-#   - Run `scafctl auth login github` to authenticate first
+# Prerequisites: scafctl auth login github
 #
 # Run: scafctl run solution -f examples/solutions/github-auth/solution.yaml
-# Run resolvers only: scafctl run resolver -f examples/solutions/github-auth/solution.yaml
+# Run: scafctl run resolver -f examples/solutions/github-auth/solution.yaml
 
 apiVersion: scafctl.io/v1
 kind: Solution

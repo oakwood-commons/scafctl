@@ -202,13 +202,10 @@ Output (build and test may appear in either order since they run in parallel):
 
 ```
 Initializing...
-[build] Building...
-[test] Testing...
+Building...
+Testing...
 Deploying...
 ```
-
-> [!NOTE]
-> **Note**: When actions run in parallel, their output is prefixed with `[action-name]` to distinguish which action produced each line. Actions running alone (like `init` and `deploy`) don't get a prefix.
 
 ## Conditions (`when`)
 
@@ -401,13 +398,13 @@ Output:
 
 ```
 Building version v1.2.3...
-[deploy[0]] Deploying v1.2.3 to server1.example.com
-[deploy[1]] Deploying v1.2.3 to server2.example.com
-[deploy[2]] Deploying v1.2.3 to server3.example.com
+Deploying v1.2.3 to server1.example.com
+Deploying v1.2.3 to server2.example.com
+Deploying v1.2.3 to server3.example.com
 Verifying 3 deployments...
 ```
 
-The `deploy` action expands into `deploy[0]`, `deploy[1]`, `deploy[2]` — one per target. With `concurrency: 2`, at most two deploy iterations run in parallel. The `verify` action waits for all iterations to complete.
+The `deploy` action expands into three iterations -- one per target. With `concurrency: 2`, at most two deploy iterations run in parallel. The `verify` action waits for all iterations to complete. Note that servers may appear in a different order due to parallel execution.
 
 ### ForEach Options
 
@@ -680,10 +677,11 @@ scafctl run solution -f execution-aware-demo.yaml
 Output (staging environment, non-production path):
 
 ```
-Deploying to staging -- resolver phases: 2
-Deploying to staging-cluster (phase 1 resolver: environment, phase 2: deploy_target)
-Resolver phases: 2 | environment resolved in phase 1, deploy_target in phase 2
+💡 Deploying to staging -- resolver phases: 2
+✅ Deploying to staging-cluster (phase 1 resolver: environment, phase 2: deploy_target)
 ```
+
+The emoji prefixes come from the `message` provider's `type` field (`info` and `success`).
 
 ### `__execution` vs `__actions`
 

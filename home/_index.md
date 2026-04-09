@@ -34,6 +34,7 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: hello
+  version: 1.0.0
 spec:
   resolvers:
     greeting:
@@ -48,7 +49,7 @@ spec:
 Run it:
 
 ```bash
-scafctl run solution -f hello.yaml -o yaml
+scafctl run resolver -f hello.yaml -o yaml
 # greeting: Hello, world!
 ```
 

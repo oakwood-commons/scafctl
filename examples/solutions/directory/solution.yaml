@@ -1,3 +1,5 @@
+# Run: cd examples/solutions/directory && scafctl run solution -f solution.yaml
+
 apiVersion: scafctl.io/v1
 kind: Solution
 
@@ -12,9 +14,6 @@ metadata:
   version: 1.0.0
 
 spec:
-  # ============================================================================
-  # RESOLVERS: Directory listing and scanning
-  # ============================================================================
   resolvers:
     # -------------------------------------------------------------------------
     # Example 1: Simple flat directory listing

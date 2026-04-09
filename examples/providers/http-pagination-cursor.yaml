@@ -1,8 +1,3 @@
-# HTTP Provider — Cursor-Based Pagination
-#
-# Demonstrates cursor-based pagination where a token is extracted
-# from the response body to fetch subsequent pages.
-#
 # Run: scafctl run solution -f examples/providers/http-pagination-cursor.yaml
 # Run: scafctl run resolver -f examples/providers/http-pagination-cursor.yaml
 
@@ -12,7 +7,9 @@ kind: Solution
 metadata:
   name: http-pagination-cursor-example
   version: 1.0.0
-  description: Cursor-based pagination follows nextCursor token until null
+  description: |
+    Cursor-based pagination where a token is extracted from the response
+    body to fetch subsequent pages until the cursor is null.
 
 spec:
   resolvers:

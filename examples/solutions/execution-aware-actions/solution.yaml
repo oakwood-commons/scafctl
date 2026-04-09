@@ -1,24 +1,19 @@
-# Execution-Aware Actions Example
-# Demonstrates using __execution in action when conditions and inputs.
-#
-# After resolvers run, the full execution metadata is available in actions as
-# __execution. This lets you gate actions on resolver execution outcomes:
-#
-#   __execution["resolvers"]["name"].status   -- "success" | "failed" | "skipped"
-#   __execution["resolvers"]["name"].phase    -- execution phase number
-#   __execution["resolvers"]["name"].duration -- duration string e.g. "3ms"
-#   __execution["summary"].phaseCount        -- total number of phases
-#   __execution["summary"].resolverCount     -- number of resolvers that ran
-#
 # Run: scafctl run solution -f examples/solutions/execution-aware-actions/solution.yaml
-# With show-execution output: add --show-execution to see the full metadata
+# Run: scafctl run solution -f examples/solutions/execution-aware-actions/solution.yaml --show-execution
 
 apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: execution-aware-actions
   version: 1.0.0
-  description: Shows how to use __execution metadata in action when conditions and inputs
+  description: |
+    Using __execution metadata in action when conditions and inputs.
+    After resolvers run, the full execution metadata is available via __execution:
+      __execution["resolvers"]["name"].status   -- "success" | "failed" | "skipped"
+      __execution["resolvers"]["name"].phase    -- execution phase number
+      __execution["resolvers"]["name"].duration -- duration string
+      __execution["summary"].phaseCount         -- total number of phases
+      __execution["summary"].resolverCount      -- number of resolvers that ran
 
 spec:
   resolvers:

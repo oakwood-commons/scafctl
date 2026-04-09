@@ -100,8 +100,8 @@ Data files and templates for use with `scafctl eval` commands.
 
 | Example | Description | Run |
 |---------|-------------|-----|
-| [cel-data.json](eval/cel-data.json) | Sample data for CEL expression evaluation | `scafctl eval cel '_.items.filter(i, i.active).map(i, i.name)' --data-file examples/eval/cel-data.json` |
-| [deployment.tmpl](eval/deployment.tmpl) | Kubernetes deployment template | `scafctl eval template --template-file examples/eval/deployment.tmpl --data-file examples/eval/template-data.json` |
+| [cel-data.json](eval/cel-data.json) | Sample data for CEL expression evaluation | `scafctl eval cel --expression '_.items.filter(i, i.active).map(i, i.name)' --file examples/eval/cel-data.json` |
+| [deployment.tmpl](eval/deployment.tmpl) | Kubernetes deployment template | `scafctl eval template --template-file examples/eval/deployment.tmpl --file examples/eval/template-data.json` |
 | [template-data.json](eval/template-data.json) | Data for Go template rendering | Used with `deployment.tmpl` above |
 
 ---

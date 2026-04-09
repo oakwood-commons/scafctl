@@ -1,26 +1,7 @@
-# Resolver Stress Demo
-# A comprehensive example with 58 resolvers across 4+ execution phases.
-# Demonstrates validation, long-running operations, transforms, and complex dependencies.
-#
 # Run: scafctl run resolver -f resolver-stress-demo.yaml
-# Run with progress: scafctl run resolver -f resolver-stress-demo.yaml --progress
-# Run with verbose logging: scafctl run resolver -f resolver-stress-demo.yaml --log-level 1
-# Run with parameter: scafctl run resolver -f resolver-stress-demo.yaml -r deployment_mode=canary
-#
-# Execution phases:
-#   Phase 1: Base infrastructure (environment, regions, credentials) - 20 resolvers
-#   Phase 2: Service configurations - 14+ resolvers  
-#   Phase 3: Integration and networking - 12+ resolvers
-#   Phase 4: Final aggregated configurations - 12+ resolvers
-#
-# Providers demonstrated:
-#   - static: Static values
-#   - cel: CEL expressions with dependencies
-#   - http: HTTP requests to httpbin.org (including custom headers)
-#   - git: Git repository operations
-#   - sleep: Deliberate delays
-#   - validation: Value validation
-#   - go-template: Go text/template rendering
+# Run: scafctl run resolver -f resolver-stress-demo.yaml --progress
+# Run: scafctl run resolver -f resolver-stress-demo.yaml --log-level 1
+# Run: scafctl run resolver -f resolver-stress-demo.yaml -r deployment_mode=canary
 #
 # Features demonstrated:
 #
@@ -64,7 +45,10 @@ kind: Solution
 metadata:
   name: resolver-stress-demo
   version: 2.0.0
-  description: Stress test with 50+ resolvers, 4+ phases, multiple providers, transforms, and validation
+  description: |
+    Stress test with 50+ resolvers across 4+ execution phases. Demonstrates
+    validation, long-running operations, transforms, complex dependencies,
+    and multiple providers (static, cel, http, git, sleep, validation, go-template).
 
 spec:
   resolvers:

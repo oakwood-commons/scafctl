@@ -1,7 +1,3 @@
-# HCL Provider — Validate Terraform Syntax
-#
-# Demonstrates validating HCL syntax and returning diagnostics.
-#
 # Run: scafctl run solution -f examples/providers/hcl-validate.yaml
 # Run: scafctl run resolver -f examples/providers/hcl-validate.yaml
 

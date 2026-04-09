@@ -1,11 +1,3 @@
-# Go Template Extension Functions Example
-# Demonstrates custom Go template extension functions provided by scafctl.
-# Includes toHcl for HCL generation and toYaml/fromYaml/mustToYaml/mustFromYaml
-# for YAML serialization (these were removed from Sprig v3.3.0).
-#
-# The `data` input merges its fields into the root template context.
-# To pass a map to toHcl/toYaml, nest it under a named key (e.g., data.config → .config).
-#
 # Run: scafctl run resolver -f examples/resolvers/go-template-extensions.yaml -o json
 # Run: scafctl run resolver -f examples/resolvers/go-template-extensions.yaml -o yaml
 
@@ -14,7 +6,11 @@ kind: Solution
 metadata:
   name: go-template-extensions-showcase
   version: 1.0.0
-  description: Demonstrates custom Go template extension functions
+  description: |
+    Custom Go template extension functions provided by scafctl. Covers
+    toHcl for HCL generation and toYaml/fromYaml/mustToYaml/mustFromYaml
+    for YAML serialization. The data input merges fields into the root
+    template context.
 
 spec:
   resolvers:

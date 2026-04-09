@@ -1119,7 +1119,7 @@ All tools that accept file paths support an optional `cwd` parameter. This sets 
 }
 ```
 
-This is the MCP equivalent of the CLI `--cwd` (`-C`) flag. It allows AI agents to specify the project context when the MCP server runs from a different directory. See the [cwd design doc](../../design/cwd.md) for which tools support it and design details.
+This is the MCP equivalent of the CLI `--cwd` (`-C`) flag. It allows AI agents to specify the project context when the MCP server runs from a different directory. See the [cwd design doc]({{< relref "/docs/design/cwd" >}}) for which tools support it and design details.
 
 ### Sampling and Elicitation
 

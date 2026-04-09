@@ -1,7 +1,3 @@
-# CEL Built-in Functions Example
-# Demonstrates built-in CEL functions: math, encoders, sets, optionals,
-# bindings, string operations, and list comprehensions.
-#
 # Run: scafctl run resolver -f examples/resolvers/cel-builtins.yaml -o json
 # Run: scafctl run resolver -f examples/resolvers/cel-builtins.yaml -o yaml
 
@@ -10,7 +6,10 @@ kind: Solution
 metadata:
   name: cel-builtins
   version: 1.0.0
-  description: Built-in CEL functions and standard library showcase
+  description: |
+    Built-in CEL functions and standard library showcase. Covers math,
+    encoders, sets, optionals, bindings, string operations, and list
+    comprehensions.
 
 spec:
   resolvers:

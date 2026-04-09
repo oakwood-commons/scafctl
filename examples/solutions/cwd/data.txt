@@ -1,1 +1,1 @@
-content from data.txt
+sample data from data.txt

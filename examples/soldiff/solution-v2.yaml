@@ -1,18 +1,14 @@
-# Solution Diff Examples — Version 2
-#
-# This file represents an updated version of the solution with
-# structural changes: a modified resolver, a new resolver, and an
-# updated action. Compare against solution-v1.yaml to see the diff.
-#
-# Usage:
-#   scafctl solution diff -f examples/soldiff/solution-v1.yaml -f examples/soldiff/solution-v2.yaml
+# Run: scafctl solution diff -f examples/soldiff/solution-v1.yaml -f examples/soldiff/solution-v2.yaml
 
 apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: soldiff-demo
   version: 2.0.0
-  description: Updated version with scaling and monitoring changes
+  description: |
+    Updated version with scaling and monitoring changes. Compare against
+    solution-v1.yaml to see a modified resolver, a new resolver, and an
+    updated action.
 
 spec:
   resolvers:

@@ -1,25 +1,16 @@
-# Redacted Snapshot Example
-# Demonstrates creating snapshots with sensitive values redacted.
-# Useful for sharing snapshots without exposing secrets.
-#
-# Usage:
-#   # Create a snapshot with sensitive values redacted
-#   scafctl render solution -f examples/snapshots/redacted-snapshot.yaml \
-#     --snapshot --snapshot-file=/tmp/redacted.json --redact
-#
-#   # Compare redacted vs non-redacted
-#   scafctl render solution -f examples/snapshots/redacted-snapshot.yaml \
-#     --snapshot --snapshot-file=/tmp/full.json
-#
-#   scafctl snapshot show /tmp/redacted.json
-#   scafctl snapshot show /tmp/full.json
+# Run: scafctl render solution -f examples/snapshots/redacted-snapshot.yaml --snapshot --snapshot-file=/tmp/redacted.json --redact
+# Run: scafctl render solution -f examples/snapshots/redacted-snapshot.yaml --snapshot --snapshot-file=/tmp/full.json
+# Run: scafctl snapshot show /tmp/redacted.json
+# Run: scafctl snapshot show /tmp/full.json
 
 apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: redacted-snapshot-demo
   version: 1.0.0
-  description: Demonstrates snapshot redaction for sensitive data
+  description: |
+    Create snapshots with sensitive values redacted. Useful for sharing
+    snapshots without exposing secrets.
 
 spec:
   resolvers:

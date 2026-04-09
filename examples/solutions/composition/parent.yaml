@@ -1,24 +1,14 @@
-# Solution Composition Example
-#
-# This parent solution demonstrates the `solution` provider, which enables
-# composing multiple solutions together. The parent loads a child solution,
-# passes parameters to it, and consumes the child's resolver values.
-#
-# Usage:
-#   scafctl run resolver -f examples/solutions/composition/parent.yaml
-#
-# The child solution (child.yaml) resolves:
-#   - greeting: a static string "hello from child"
-#   - echo-param: echoes back the 'message' parameter
-#
-# The parent receives these as a structured envelope containing:
-#   { resolvers: { greeting: "...", echo-param: "..." }, status: "success", errors: [] }
+# Run: scafctl run resolver -f examples/solutions/composition/parent.yaml
 
 apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: composition-example
   version: 1.0.0
+  description: |
+    Solution composition via the solution provider. The parent loads a child
+    solution, passes parameters, and consumes the child's resolver values
+    as a structured envelope: { resolvers: {...}, status: "success", errors: [] }
 spec:
   resolvers:
     # Use the solution provider to load and execute a child solution.
@@ -61,4 +51,4 @@ spec:
         with:
           - provider: cel
             inputs:
-              expression: "_.child_data.resolvers.echo_param"
+              expression: "_.child_data.resolvers['echo-param']"

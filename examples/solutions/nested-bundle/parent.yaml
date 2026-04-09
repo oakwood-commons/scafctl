@@ -1,37 +1,21 @@
-# Nested Bundle Example — Parent Solution
-#
-# Demonstrates nested bundle support where a parent solution references a
-# sub-solution that itself has local file dependencies. When built, the
-# bundler recursively discovers all files referenced by sub-solutions and
-# includes them in the parent bundle.
-#
-# Directory structure:
-#   nested-bundle/
-#     parent.yaml              ← this file
-#     parent-config.yaml       ← static file ref from parent
-#     sub/
-#       child.yaml             ← sub-solution
-#       templates/
-#         greeting.tmpl        ← file ref from child
-#
-# Usage:
-#   scafctl run resolver -f examples/solutions/nested-bundle/parent.yaml
-#
-# Bundle build (includes all nested files automatically):
-#   scafctl build solution -f examples/solutions/nested-bundle/parent.yaml --dry-run
+# Run:   scafctl run resolver -f examples/solutions/nested-bundle/parent.yaml
+# Build: scafctl build solution -f examples/solutions/nested-bundle/parent.yaml --dry-run
 
 apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: nested-bundle-example
   version: 1.0.0
-  description: Demonstrates nested bundle support for sub-solutions
+  description: |
+    Nested bundle support where a parent solution references a sub-solution
+    with its own file dependencies. The bundler recursively discovers all
+    files referenced by sub-solutions and includes them in the parent bundle.
 
 spec:
   resolvers:
     # Parent reads a local config file — auto-discovered for bundling.
     config:
-      type: string
+      type: any
       description: "Parent configuration"
       resolve:
         with:

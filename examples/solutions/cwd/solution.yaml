@@ -36,4 +36,4 @@ spec:
           operation: write
           path: result.txt
           content:
-            expr: '"greeting=" + _.greeting + "\ndata=" + _["local-data"]'
+            expr: '"greeting=" + _.greeting + "\ndata=" + _["local-data"].content'

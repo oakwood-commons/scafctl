@@ -5,6 +5,7 @@ package catalog
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
@@ -124,5 +125,11 @@ func runInspect(ctx context.Context, opts *InspectOptions, outputOpts *kvx.Outpu
 		Annotations: info.Annotations,
 	}
 
-	return outputOpts.Write(detail)
+	// Convert struct to map[string]any so CEL expressions can access fields.
+	detailMap, err := kvx.StructToMap(detail)
+	if err != nil {
+		return fmt.Errorf("failed to normalize artifact detail: %w", err)
+	}
+
+	return outputOpts.Write(detailMap)
 }

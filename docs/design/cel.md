@@ -588,7 +588,7 @@ wg.Wait()
 
 ## Reference Materials
 
-- **CEL Package Documentation:** [`pkg/celexp/README.md`](../../pkg/celexp/README.md)
+- **CEL Package Documentation:** [`pkg/celexp/README.md`](https://github.com/oakwood-commons/scafctl/blob/main/pkg/celexp/README.md)
 - **Resolver Design:** [`docs/design/resolvers.md`](./resolvers.md)
 - **CEL Specification:** [github.com/google/cel-spec](https://github.com/google/cel-spec)
 - **CEL Go Implementation:** [github.com/google/cel-go](https://github.com/google/cel-go)

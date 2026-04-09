@@ -1,25 +1,17 @@
-# Template Rendering Example
-# A real-world workflow that reads a Go template from the filesystem,
-# renders it with configuration data, and writes the output to a file.
-#
-# This demonstrates:
-# - Using the file provider to read template files
-# - Using the go-template provider to render templates
-# - Using the file provider in an action to write rendered output
-# - Chaining resolvers with dependencies
-# - Using CEL expressions to build dynamic paths
-#
 # Run: scafctl run solution -f examples/actions/template-render.yaml
 #
-# After running, check the output:
-#   cat /tmp/scafctl-demo/config.yaml
+# After running: cat /tmp/scafctl-demo/config.yaml
 
 apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: template-render
   version: 1.0.0
-  description: Real-world example of reading, rendering, and writing templates
+  description: |
+    Real-world workflow that reads a Go template from the filesystem,
+    renders it with configuration data, and writes the output. Demonstrates
+    file provider, go-template provider, chained resolver dependencies,
+    and CEL expressions for dynamic paths.
 
 spec:
   resolvers:

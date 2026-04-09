@@ -15,7 +15,7 @@ spec:
   resolvers:
     # Local file reference — auto-discovered by the parent bundler.
     greeting_template:
-      type: string
+      type: any
       description: "Greeting template content"
       resolve:
         with:
