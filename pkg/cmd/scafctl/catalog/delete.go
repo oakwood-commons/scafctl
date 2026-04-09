@@ -240,6 +240,7 @@ func runDeleteRemote(ctx context.Context, opts *DeleteOptions) error {
 		Repository:      repository,
 		CredentialStore: credStore,
 		AuthHandler:     authHandler,
+		AuthScope:       resolveAuthScope(ctx, opts.Catalog),
 		Insecure:        opts.Insecure,
 		Logger:          *lgr,
 	})

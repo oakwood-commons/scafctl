@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 )
 
@@ -117,7 +118,7 @@ func Generate(sol *solution.Solution, opts GenerateOptions) ([]byte, error) {
 
 	binaryName := opts.BinaryName
 	if binaryName == "" {
-		binaryName = "scafctl"
+		binaryName = settings.CliBinaryName
 	}
 
 	namespace := opts.Namespace
