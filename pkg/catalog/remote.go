@@ -178,16 +178,20 @@ func (c *RemoteCatalog) RepositoryPath(ref Reference) string {
 }
 
 // buildRepositoryPath builds the full OCI repository path for an artifact.
-// The path is: registry/repository/name — the catalog URL is used as-is with
-// no automatic kind segment appended. Configure your catalog URL to point
-// directly to where artifacts are stored.
+// The path includes the pluralized kind segment for namespace isolation:
 //
-// For example, if solutions live at registry.example.com/team/solutions,
-// configure the catalog URL as "oci://registry.example.com/team/solutions".
+//	registry/repository/solutions/name
+//	registry/repository/providers/name
+//	registry/repository/auth-handlers/name
+//
+// When kind is empty, the kind segment is omitted (used for kindless lookups).
 func (c *RemoteCatalog) buildRepositoryPath(ref Reference) string {
 	parts := []string{c.registry}
 	if c.repository != "" {
 		parts = append(parts, c.repository)
+	}
+	if ref.Kind != "" {
+		parts = append(parts, ref.Kind.Plural())
 	}
 	parts = append(parts, ref.Name)
 
@@ -501,16 +505,15 @@ func (c *RemoteCatalog) listVersions(ctx context.Context, ref Reference) ([]*sem
 func (c *RemoteCatalog) List(ctx context.Context, kind ArtifactKind, name string) ([]ArtifactInfo, error) {
 	// If name is specified, list versions of that artifact
 	if name != "" {
+		// When kind is not specified, search across all kind paths
+		if kind == "" {
+			return c.listAcrossKinds(ctx, name)
+		}
+
 		ref := Reference{Kind: kind, Name: name}
 		versions, err := c.listVersions(ctx, ref)
 		if err != nil {
 			return nil, err
-		}
-
-		// If kind wasn't specified, try to resolve it from manifest annotations
-		// of the first version. All versions share the same kind.
-		if kind == "" && len(versions) > 0 {
-			kind = c.resolveKindFromManifest(ctx, ref, versions[0])
 		}
 
 		var infos []ArtifactInfo
@@ -529,39 +532,28 @@ func (c *RemoteCatalog) List(ctx context.Context, kind ArtifactKind, name string
 	return nil, nil
 }
 
-// resolveKindFromManifest fetches the manifest for a specific version and reads
-// the artifact kind from OCI annotations. This is a best-effort operation;
-// failures are logged and an empty kind is returned.
-func (c *RemoteCatalog) resolveKindFromManifest(ctx context.Context, ref Reference, version *semver.Version) ArtifactKind {
-	vRef := Reference{Name: ref.Name, Version: version}
-	repo, err := c.getRepository(vRef)
-	if err != nil {
-		return ""
+// listAcrossKinds searches for an artifact name across all kind paths
+// (solutions/, providers/, auth-handlers/) and returns combined results.
+func (c *RemoteCatalog) listAcrossKinds(ctx context.Context, name string) ([]ArtifactInfo, error) {
+	kinds := []ArtifactKind{ArtifactKindSolution, ArtifactKindProvider, ArtifactKindAuthHandler}
+	var allInfos []ArtifactInfo
+
+	for _, k := range kinds {
+		ref := Reference{Kind: k, Name: name}
+		versions, err := c.listVersions(ctx, ref)
+		if err != nil {
+			c.logger.V(1).Info("no artifacts found under kind", "kind", k, "name", name)
+			continue
+		}
+		for _, v := range versions {
+			allInfos = append(allInfos, ArtifactInfo{
+				Reference: Reference{Kind: k, Name: name, Version: v},
+				Catalog:   c.name,
+			})
+		}
 	}
 
-	desc, err := repo.Resolve(ctx, version.String())
-	if err != nil {
-		c.logger.V(1).Info("failed to resolve manifest for kind detection", "error", err.Error())
-		return ""
-	}
-
-	manifestData, err := content.FetchAll(ctx, repo, desc)
-	if err != nil {
-		c.logger.V(1).Info("failed to fetch manifest for kind detection", "error", err.Error())
-		return ""
-	}
-
-	var manifest struct {
-		Annotations map[string]string `json:"annotations"`
-	}
-	if err := json.Unmarshal(manifestData, &manifest); err != nil {
-		return ""
-	}
-
-	if kindStr, ok := manifest.Annotations[AnnotationArtifactType]; ok {
-		return ArtifactKind(kindStr)
-	}
-	return ""
+	return allInfos, nil
 }
 
 // TagInfo represents a single tag in a remote OCI repository.
