@@ -74,11 +74,11 @@ scafctl run solution -f solution.yaml --log-level debug
 {{% /tab %}}
 {{< /tabs >}}
 
-This shows colored, human-readable logs on stderr alongside normal output:
+This shows structured logs on stderr alongside normal output:
 
 ```
-2026-01-15T10:30:00.000-0500    DEBUG   run/solution.go:326     running solution {"file": "solution.yaml", ...}
-2026-01-15T10:30:00.001-0500    DEBUG   get/get.go:347  Reading solution from local filesystem  {"path": "solution.yaml"}
+timestamp=2026-01-15T10:30:00.000-05:00 level=DEBUG+3 source=run/solution.go:326 message="running solution" file=solution.yaml ...
+timestamp=2026-01-15T10:30:00.001-05:00 level=DEBUG+3 source=get/get.go:347 message="Reading solution from local filesystem" path=solution.yaml
 ```
 
 ## Log Levels
@@ -186,8 +186,8 @@ scafctl run solution -f solution.yaml --log-level debug --log-format console
 Output:
 
 ```
-2026-01-15T10:30:00.000-0500    DEBUG   run/solution.go:326     running solution {"file": "solution.yaml", ...}
-2026-01-15T10:30:00.001-0500    ERROR   get/get.go:360  Failed to unmarshal     {"error": "..."}
+timestamp=2026-01-15T10:30:00.000-05:00 level=DEBUG+3 source=run/solution.go:326 message="running solution" file=solution.yaml ...
+timestamp=2026-01-15T10:30:00.001-05:00 level=ERROR source=get/get.go:360 message="Failed to unmarshal" error=...
 ```
 
 ### JSON Format

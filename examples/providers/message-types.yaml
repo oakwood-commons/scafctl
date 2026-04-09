@@ -1,8 +1,3 @@
-# Message Provider — Basic Message Types
-#
-# Demonstrates the message provider outputting different message types
-# with built-in styling (icons and colors).
-#
 # Run: scafctl run resolver -f examples/providers/message-types.yaml
 
 apiVersion: scafctl.io/v1
@@ -11,7 +6,7 @@ kind: Solution
 metadata:
   name: message-types-example
   version: 1.0.0
-  description: Demonstrates all built-in message types with their default styling
+  description: All built-in message types with their default styling (icons and colors)
 
 spec:
   resolvers:

@@ -182,6 +182,11 @@ func BuildYAML(name, description, version string, features map[string]bool, prov
 				b.WriteString("            inputs:\n")
 				b.WriteString("              operation: get\n")
 				b.WriteString("              name: MY_ENV_VAR\n")
+				b.WriteString("      transform:\n")
+				b.WriteString("        with:\n")
+				b.WriteString("          - provider: cel\n")
+				b.WriteString("            inputs:\n")
+				b.WriteString("              expression: \"__self.exists ? string(__self.value) : 'default-env-value'\"\n")
 			case "file":
 				b.WriteString("    # File content\n")
 				b.WriteString("    file-content:\n")
@@ -239,11 +244,12 @@ func BuildYAML(name, description, version string, features map[string]bool, prov
 			b.WriteString("        description: \"A simple action\"\n")
 			b.WriteString("        inputs:\n")
 			b.WriteString("          command: echo\n")
-			b.WriteString("          args:\n")
 			if features["transforms"] {
-				b.WriteString("            - expr: '\"Hello, \" + _.inputName + \" - processed: \" + _.processed'\n")
+				b.WriteString("          args:\n")
+				b.WriteString("            expr: \"['Hello, ' + _.inputName + ' - processed: ' + _.processed]\"\n")
 			} else {
-				b.WriteString("            - expr: '\"Hello, \" + _.inputName'\n")
+				b.WriteString("          args:\n")
+				b.WriteString("            expr: \"['Hello, ' + _.inputName]\"\n")
 			}
 		}
 	}

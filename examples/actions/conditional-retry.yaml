@@ -1,15 +1,3 @@
-# Conditional Retry Example
-# Demonstrates the retryIf expression for conditional retry logic.
-#
-# The retryIf field accepts a CEL expression that determines whether to retry
-# based on the error context. The __error variable provides:
-#   - __error.message: The error message
-#   - __error.type: Error type ("http", "exec", "timeout", "validation", "unknown")
-#   - __error.statusCode: HTTP status code (0 for non-HTTP errors)
-#   - __error.exitCode: Command exit code (0 for non-exec errors)
-#   - __error.attempt: Current attempt number (1-based)
-#   - __error.maxAttempts: Maximum retry attempts configured
-#
 # Run: scafctl run solution -f examples/actions/conditional-retry.yaml
 
 apiVersion: scafctl.io/v1
@@ -17,7 +5,10 @@ kind: Solution
 metadata:
   name: conditional-retry
   version: 1.0.0
-  description: Conditional retry with retryIf expressions
+  description: |
+    Conditional retry with retryIf CEL expressions. The __error variable provides:
+    message, type (http/exec/timeout/validation/unknown), statusCode, exitCode,
+    attempt (1-based), and maxAttempts.
 
 spec:
   resolvers: {}

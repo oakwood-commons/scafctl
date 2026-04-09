@@ -1,8 +1,3 @@
-# HCL Provider — Generate Terraform HCL
-#
-# Demonstrates generating HCL from structured block data.
-# Produces standard .tf format output.
-#
 # Run: scafctl run solution -f examples/providers/hcl-generate.yaml
 # Run: scafctl run resolver -f examples/providers/hcl-generate.yaml
 
@@ -12,7 +7,7 @@ kind: Solution
 metadata:
   name: hcl-generate-example
   version: 1.0.0
-  description: Generate Terraform HCL from structured block data
+  description: Generate Terraform HCL (.tf) from structured block data
 
 spec:
   resolvers:

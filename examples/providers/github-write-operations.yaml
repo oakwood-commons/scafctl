@@ -1,13 +1,5 @@
-# GitHub Provider — Write Operations Reference
-#
-# Demonstrates GitHub provider write operations: issues, PRs, commits,
-# branches, tags, and releases. Commits are automatically GPG-signed
-# via createCommitOnBranch.
-#
+# Prerequisites: scafctl auth login github
 # Warning: Write operations modify real repositories. Use with care.
-#
-# Prerequisites:
-#   scafctl auth login github
 #
 # Run: scafctl run solution -f examples/providers/github-write-operations.yaml
 # Run: scafctl run resolver -f examples/providers/github-write-operations.yaml
@@ -18,7 +10,9 @@ kind: Solution
 metadata:
   name: github-write-operations-example
   version: 1.0.0
-  description: GitHub provider write operations reference
+  description: |
+    GitHub provider write operations: issues, PRs, commits, branches, tags,
+    and releases. Commits are automatically GPG-signed via createCommitOnBranch.
 
 spec:
   resolvers:

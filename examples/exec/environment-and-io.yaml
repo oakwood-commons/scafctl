@@ -1,6 +1,3 @@
-# Environment, Stdin, and Timeout Example
-# Demonstrates environment variables, stdin piping, and timeout handling.
-#
 # Run: scafctl run solution -f examples/exec/environment-and-io.yaml
 
 apiVersion: scafctl.io/v1
@@ -8,7 +5,7 @@ kind: Solution
 metadata:
   name: exec-environment-io
   version: 1.0.0
-  description: Environment variables, stdin, and timeout handling
+  description: Environment variables, stdin piping, and timeout handling
 
 spec:
   resolvers:
@@ -67,13 +64,15 @@ spec:
           command: "echo 'Starting...'; sleep 1; echo 'Done!'"
           timeout: 5
 
-      # Combining env with resolved values
+      # Combining env with resolved values using rslvr, expr, and tmpl
       resolved-env:
         description: Use resolved values in environment variables
         provider: exec
         dependsOn: [timeout-example]
         inputs:
-          command: "echo \"Deploying $APP_NAME\""
+          command: 'echo "Deploying $APP_NAME to $DEPLOY_URL"'
           env:
             APP_NAME:
-              expr: "_.app_name"
+              rslvr: app-name
+            DEPLOY_URL:
+              tmpl: 'https://{{ index . "app-name" }}.example.com'

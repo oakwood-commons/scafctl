@@ -1,11 +1,6 @@
-# Conditional Execution Example
-# Demonstrates when conditions for conditional action execution.
-#
-# Run with different environments:
-#   scafctl run solution -f examples/actions/conditional-execution.yaml -r environment=prod
-#   scafctl run solution -f examples/actions/conditional-execution.yaml -r environment=staging
-#
 # Run: scafctl run solution -f examples/actions/conditional-execution.yaml
+# Run: scafctl run solution -f examples/actions/conditional-execution.yaml -r environment=prod
+# Run: scafctl run solution -f examples/actions/conditional-execution.yaml -r environment=staging
 
 apiVersion: scafctl.io/v1
 kind: Solution

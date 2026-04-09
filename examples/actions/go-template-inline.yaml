@@ -1,25 +1,16 @@
-# Go Template Rendering Example
-# Demonstrates using Go templates inline (without external files) for
-# generating structured text output from resolver data.
-#
-# This example shows:
-# - Inline Go templates in resolver transforms
-# - Conditional rendering with {{if}}/{{else}}
-# - Looping with {{range}}
-# - Using the tmpl field for dynamic inputs
-# - Custom delimiters
-#
 # Run: scafctl run solution -f examples/actions/go-template-inline.yaml
 #
-# After running, check the output:
-#   cat /tmp/scafctl-demo/readme.md
+# After running: cat /tmp/scafctl-demo/readme.md
 
 apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: go-template-inline
   version: 1.0.0
-  description: Demonstrates inline Go template rendering patterns
+  description: |
+    Inline Go template rendering patterns. Demonstrates conditional
+    rendering, looping with range, tmpl field for dynamic inputs,
+    and custom delimiters -- all without external template files.
 
 spec:
   resolvers:

@@ -1,22 +1,14 @@
-# Solution Diff Examples
-#
-# Compare two solution files structurally to see what changed.
-# This is useful for reviewing changes before deploying, debugging
-# configuration drift, or validating refactors.
-#
-# Usage:
-#   # Compare the two solutions
-#   scafctl solution diff -f examples/soldiff/solution-v1.yaml -f examples/soldiff/solution-v2.yaml
-#
-#   # Output as JSON
-#   scafctl solution diff -f examples/soldiff/solution-v1.yaml -f examples/soldiff/solution-v2.yaml -o json
+# Run: scafctl solution diff -f examples/soldiff/solution-v1.yaml -f examples/soldiff/solution-v2.yaml
+# Run: scafctl solution diff -f examples/soldiff/solution-v1.yaml -f examples/soldiff/solution-v2.yaml -o json
 
 apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: soldiff-demo
   version: 1.0.0
-  description: Baseline version of a solution for diff demonstration
+  description: |
+    Baseline solution for diff demonstration. Compare structurally against
+    solution-v2.yaml to review changes before deploying.
 
 spec:
   resolvers:

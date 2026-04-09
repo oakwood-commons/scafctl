@@ -1,16 +1,6 @@
-# Output Directory Example
-# Demonstrates the phase-based directory model:
-# - Resolvers gather data from CWD (current working directory)
-# - Actions produce output in --output-dir (when set)
-# - __cwd provides the original working directory as an escape hatch
+# Run: scafctl run solution -f examples/solutions/output-dir/solution.yaml --output-dir /tmp/output-dir-demo
 #
-# Run:
-#   scafctl run solution -f examples/solutions/output-dir/solution.yaml --output-dir /tmp/output-dir-demo
-#
-# Verify:
-#   cat /tmp/output-dir-demo/greeting.txt
-#   cat /tmp/output-dir-demo/config/app.yaml
-#   cat /tmp/output-dir-demo/cwd-reference.txt
+# Verify: cat /tmp/output-dir-demo/greeting.txt
 
 apiVersion: scafctl.io/v1
 kind: Solution
@@ -89,6 +79,7 @@ spec:
         inputs:
           operation: write
           path: config/app.yaml
+          createDirs: true
           content:
             expr: >-
               "# Auto-generated project configuration\n" +

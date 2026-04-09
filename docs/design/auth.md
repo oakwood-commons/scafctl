@@ -612,7 +612,7 @@ Custom handlers are registered at startup from config. Name conflicts with built
 
 When a custom handler specifies a `registry` field, `InferAuthHandler()` will automatically select that handler for `scafctl catalog login` against matching registries.
 
-See [examples/auth/custom-oauth2-config.md](../../examples/auth/custom-oauth2-config.md) for configuration examples.
+See [examples/auth/custom-oauth2-config.md](https://github.com/oakwood-commons/scafctl/blob/main/examples/auth/custom-oauth2-config.md) for configuration examples.
 
 ---
 

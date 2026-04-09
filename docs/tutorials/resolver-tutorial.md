@@ -188,8 +188,6 @@ For complex parameter sets, use a parameter file:
 Create `params.yaml`:
 ```yaml
 user_name: Charlie
-environment: production
-region: us-west-2
 ```
 
 Run with the file:
@@ -231,12 +229,16 @@ To pipe raw text into a single parameter key, use `key=@-`:
 echo Charlie | scafctl run resolver -f greet.yaml -r user_name=@-
 
 # Read a file's content into a key
+echo -n "Charlie" > name.txt
 scafctl run resolver -f greet.yaml -r user_name=@name.txt
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
 'Charlie' | scafctl run resolver -f greet.yaml -r 'user_name=@-'
+
+# Create the file first
+Set-Content -NoNewline -Path name.txt -Value 'Charlie'
 scafctl run resolver -f greet.yaml -r 'user_name=@name.txt'
 ```
 {{% /tab %}}
@@ -342,10 +344,13 @@ scafctl run resolver -f config.yaml --progress
 The `--progress` flag shows how resolvers execute in phases based on dependencies:
 
 ```
-Phase 1: environment, port
-Phase 2: base_url
-Phase 3: config
+[1] environment  ✓   <time>
+[1] port         ✓   <time>
+[2] base_url     ✓   <time>
+[3] config       ✓   <time>
 ```
+
+Phase numbers in brackets show concurrent execution groups. Resolvers in the same phase run concurrently.
 
 ### Dependency Rules
 
@@ -1418,7 +1423,7 @@ metadata:
 spec:
   resolvers:
     doubled:
-      type: '[]int'
+      type: array
       resolve:
         with:
           - provider: static
@@ -1477,9 +1482,9 @@ forEach:
 
 ---
 
-### Resolve Phase `forEach` with `filter`
+### Transform Phase `forEach` with Filtering
 
-For resolvers that produce arrays by resolving each element individually, use `forEach` directly in the `resolve` phase. This is useful when you want to iterate over an existing array and resolve a value for each item using provider logic or `when` conditions:
+To filter an array produced by a resolver, use `forEach` in the transform phase with a `when` condition:
 
 Save this as `foreach-filter-demo.yaml`:
 
@@ -1493,7 +1498,7 @@ metadata:
 spec:
   resolvers:
     allUsers:
-      type: '[]object'
+      type: array
       resolve:
         with:
           - provider: static
@@ -1504,33 +1509,35 @@ spec:
                 - {name: Carol, active: true}
 
     activeUsers:
-      type: '[]object'
+      type: array
       resolve:
-        forEach:
-          items:
-            expr: allUsers       # source array (evaluates allUsers resolver)
-          as: user               # alias for each element
-          filter: true           # remove nil results from output
-          resolve:
-            with:
-              - provider: static
-                when:
-                  expr: 'user.active == true'
-                inputs:
-                  value:
-                    expr: user
+        with:
+          - provider: cel
+            inputs:
+              expression: _.allUsers
+      transform:
+        with:
+          - provider: cel
+            forEach:
+              item: user
+            when:
+              expr: 'user.active == true'
+            inputs:
+              expression: 'user'
 ```
 
-Without `filter: true` the output would include `nil` for Bob:
+By default, items where the `when` condition is `false` are removed from the output array. The result contains only matched items:
 
-```
-[{name: Alice, active: true}, nil, {name: Carol, active: true}]
+```json
+[{"name": "Alice", "active": true}, {"name": "Carol", "active": true}]
 ```
 
-With `filter: true` the output contains only matched items:
+To retain `nil` entries for skipped items (preserving index alignment), set `keepSkipped: true`:
 
-```
-[{name: Alice, active: true}, {name: Carol, active: true}]
+```yaml
+forEach:
+  item: user
+  keepSkipped: true    # output: [{...Alice...}, nil, {...Carol...}]
 ```
 
 Run it:
@@ -1547,14 +1554,6 @@ scafctl run resolver activeUsers -f foreach-filter-demo.yaml -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
-
-#### `filter` vs `keepSkipped`
-
-| | `resolve.forEach` with `filter: true` | `transform.with.forEach` with `keepSkipped: true` |
-|-|--------------------------------------|--------------------------------------------------|
-| **Phase** | Resolve | Transform |
-| **Default** | Keep nil (index-aligned) | Remove nil (auto-filter) |
-| **Opt-in** | `filter: true` removes nil | `keepSkipped: true` retains nil |
 
 ---
 

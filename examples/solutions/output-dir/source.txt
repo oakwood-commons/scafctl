@@ -1,3 +1,1 @@
-This is a source file in the current working directory.
-It is read by the resolver phase (which always operates in CWD)
-and its content is used by actions that write to the output directory.
+Welcome to the output directory demo

@@ -1,16 +1,6 @@
-# Shell Types Example
-# Demonstrates using different shell interpreters with the exec provider.
-#
-# Shell types:
-#   auto (default) — Embedded POSIX shell, works on all platforms without external binaries
-#   sh             — Alias for auto
-#   bash           — External bash from PATH  (Linux/macOS, or Windows with bash installed)
-#   pwsh           — External PowerShell Core  (all platforms where pwsh is installed)
-#   cmd            — External cmd.exe          (Windows only)
-#
 # Run: scafctl run solution -f examples/exec/shell-types.yaml
 #
-# Note: The bash and pwsh examples require those shells to be installed.
+# Note: bash and pwsh examples require those shells to be installed.
 #       The cmd example only works on Windows.
 
 apiVersion: scafctl.io/v1
@@ -18,7 +8,9 @@ kind: Solution
 metadata:
   name: exec-shell-types
   version: 1.0.0
-  description: Using different shell interpreters
+  description: |
+    Different shell interpreters with the exec provider:
+    auto (default, embedded POSIX), sh, bash, pwsh, cmd.
 
 spec:
   resolvers: {}

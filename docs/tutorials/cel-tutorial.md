@@ -778,13 +778,13 @@ out.nil(someExpression)
 ## Encoders
 
 ```cel
-// Base64 encode
-base64.encode("hello")
-// → "aGVsbG8="
+// Base64 encode (requires bytes literal)
+base64.encode(b"hello")
+// -> "aGVsbG8="
 
-// Base64 decode
-base64.decode("aGVsbG8=")
-// → "hello"
+// Base64 decode (returns bytes, wrap in string() to get text)
+string(base64.decode("aGVsbG8="))
+// -> "hello"
 ```
 
 ## Math

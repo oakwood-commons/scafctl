@@ -108,11 +108,22 @@ func (o *ViewOptions) Run(ctx context.Context) error {
 		return exitcode.WithCode(err, exitcode.ConfigError)
 	}
 
-	// Include config file path in output
+	// Include config file path in output.
+	// Convert structs to maps via JSON round-trip so CEL expressions can access fields.
+	settingsMap, err := kvx.StructToMap(cfg.Settings)
+	if err != nil {
+		return fmt.Errorf("failed to normalize settings: %w", err)
+	}
+
+	catalogsList, err := kvx.StructToMap(cfg.Catalogs)
+	if err != nil {
+		return fmt.Errorf("failed to normalize catalogs: %w", err)
+	}
+
 	output := map[string]any{
 		"configFile": mgr.ConfigPath(),
-		"catalogs":   cfg.Catalogs,
-		"settings":   cfg.Settings,
+		"catalogs":   catalogsList,
+		"settings":   settingsMap,
 	}
 
 	return o.writeOutput(ctx, output)

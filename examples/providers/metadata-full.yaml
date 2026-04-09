@@ -1,14 +1,3 @@
-# Metadata Provider — Runtime Metadata
-#
-# The metadata provider returns runtime information about scafctl and the
-# current solution. It requires no inputs and automatically returns:
-#   - version: scafctl build version info (buildVersion, commit, buildTime)
-#   - args: CLI arguments passed to scafctl
-#   - cwd: current working directory
-#   - entrypoint: "cli" or "api"
-#   - command: the command path (e.g. scafctl/run/solution)
-#   - solution: metadata of the currently-running solution
-#
 # Run: scafctl run solution -f examples/providers/metadata-full.yaml
 # Run: scafctl run resolver -f examples/providers/metadata-full.yaml
 
@@ -18,7 +7,9 @@ kind: Solution
 metadata:
   name: metadata-full-example
   version: 1.0.0
-  description: Returns all runtime metadata about scafctl and the current solution
+  description: |
+    Runtime metadata about scafctl and the current solution. Returns
+    version info, CLI args, cwd, entrypoint, command path, and solution metadata.
 
 spec:
   resolvers:

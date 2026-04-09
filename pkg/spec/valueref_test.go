@@ -1036,3 +1036,211 @@ func BenchmarkValueRef_UnmarshalJSON(b *testing.B) {
 		})
 	}
 }
+
+func TestValueRef_Resolve_NestedValueRefs(t *testing.T) {
+	ctx := context.Background()
+	resolverData := map[string]any{
+		"app-name":    "my-service",
+		"environment": "production",
+		"port":        int64(8080),
+	}
+
+	tests := []struct {
+		name        string
+		literal     any
+		expected    any
+		expectError bool
+		errContains string
+	}{
+		{
+			name: "nested rslvr in map",
+			literal: map[string]any{
+				"APP_NAME": map[string]any{"rslvr": "app-name"},
+				"STATIC":   "literal-value",
+			},
+			expected: map[string]any{
+				"APP_NAME": "my-service",
+				"STATIC":   "literal-value",
+			},
+		},
+		{
+			name: "nested expr in map",
+			literal: map[string]any{
+				"GREETING": map[string]any{"expr": "'Hello ' + _['app-name']"},
+			},
+			expected: map[string]any{
+				"GREETING": "Hello my-service",
+			},
+		},
+		{
+			name: "nested tmpl in map",
+			literal: map[string]any{
+				"URL": map[string]any{"tmpl": "https://{{ .environment }}.example.com"},
+			},
+			expected: map[string]any{
+				"URL": "https://production.example.com",
+			},
+		},
+		{
+			name: "nested rslvr in array",
+			literal: []any{
+				map[string]any{"rslvr": "app-name"},
+				"static-value",
+				map[string]any{"expr": "string(_.port)"},
+			},
+			expected: []any{
+				"my-service",
+				"static-value",
+				"8080",
+			},
+		},
+		{
+			name: "deeply nested value refs",
+			literal: map[string]any{
+				"outer": map[string]any{
+					"inner": map[string]any{"rslvr": "environment"},
+				},
+			},
+			expected: map[string]any{
+				"outer": map[string]any{
+					"inner": "production",
+				},
+			},
+		},
+		{
+			name: "plain map without value ref keys passes through",
+			literal: map[string]any{
+				"host": "localhost",
+				"port": 3000,
+			},
+			expected: map[string]any{
+				"host": "localhost",
+				"port": 3000,
+			},
+		},
+		{
+			name:     "scalar literal passes through",
+			literal:  "hello",
+			expected: "hello",
+		},
+		{
+			name: "rslvr with non-string value errors",
+			literal: map[string]any{
+				"BAD": map[string]any{"rslvr": 123},
+			},
+			expectError: true,
+			errContains: "rslvr value must be a string",
+		},
+		{
+			name: "rslvr referencing non-existent resolver errors",
+			literal: map[string]any{
+				"MISSING": map[string]any{"rslvr": "nonexistent"},
+			},
+			expectError: true,
+			errContains: "not found",
+		},
+		{
+			name: "map with rslvr and extra keys is not a value ref",
+			literal: map[string]any{
+				"rslvr": "app-name",
+				"extra": "value",
+			},
+			expected: map[string]any{
+				"rslvr": "app-name",
+				"extra": "value",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vr := ValueRef{Literal: tt.literal}
+			result, err := vr.Resolve(ctx, resolverData, nil)
+
+			if tt.expectError {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestValueRef_ReferencedVariables_NestedValueRefs(t *testing.T) {
+	tests := []struct {
+		name     string
+		literal  any
+		expected map[string]struct{}
+	}{
+		{
+			name: "nested expr references _",
+			literal: map[string]any{
+				"APP": map[string]any{"expr": "_['app-name']"},
+			},
+			expected: map[string]struct{}{"_": {}, "app-name": {}},
+		},
+		{
+			name: "nested expr references __actions",
+			literal: map[string]any{
+				"STATUS": map[string]any{"expr": "__actions.build.status"},
+			},
+			expected: map[string]struct{}{"__actions": {}},
+		},
+		{
+			name: "nested tmpl references",
+			literal: map[string]any{
+				"URL": map[string]any{"tmpl": "{{ .environment }}"},
+			},
+			expected: map[string]struct{}{"environment": {}},
+		},
+		{
+			name: "nested rslvr has no variable references",
+			literal: map[string]any{
+				"VAL": map[string]any{"rslvr": "env"},
+			},
+			expected: map[string]struct{}{},
+		},
+		{
+			name: "plain literal has no references",
+			literal: map[string]any{
+				"host": "localhost",
+			},
+			expected: map[string]struct{}{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vr := ValueRef{Literal: tt.literal}
+			vars := vr.ReferencedVariables()
+			assert.Equal(t, tt.expected, vars)
+		})
+	}
+}
+
+func BenchmarkValueRef_Resolve_NestedValueRefs(b *testing.B) {
+	ctx := context.Background()
+	resolverData := map[string]any{
+		"app-name":    "my-service",
+		"environment": "production",
+	}
+
+	vr := ValueRef{
+		Literal: map[string]any{
+			"APP_NAME": map[string]any{"rslvr": "app-name"},
+			"ENV":      map[string]any{"expr": "_.environment"},
+			"STATIC":   "literal",
+		},
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, err := vr.Resolve(ctx, resolverData, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}

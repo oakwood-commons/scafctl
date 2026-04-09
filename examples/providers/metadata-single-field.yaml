@@ -1,8 +1,3 @@
-# Metadata Provider — Extract Single Fields with CEL
-#
-# The metadata provider always returns the full runtime metadata map.
-# Use CEL expressions in downstream resolvers to extract individual fields.
-#
 # Run: scafctl run solution -f examples/providers/metadata-single-field.yaml
 # Run: scafctl run resolver -f examples/providers/metadata-single-field.yaml
 

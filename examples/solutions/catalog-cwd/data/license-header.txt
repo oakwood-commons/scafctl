@@ -1,1 +1,1 @@
-Apache-2.0 Licensed
+Copyright (c) 2026 Example Corp. All rights reserved.

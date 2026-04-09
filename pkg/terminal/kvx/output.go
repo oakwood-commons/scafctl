@@ -448,3 +448,18 @@ func (o *OutputOptions) WriteTo(w io.Writer, data any) error {
 	oCopy.IOStreams = ioStreams
 	return oCopy.Write(data)
 }
+
+// StructToMap converts a struct (or slice of structs) to a map[string]any
+// (or []any) via a JSON round-trip. This ensures field names match JSON tags
+// and the resulting value is compatible with CEL expression evaluation.
+func StructToMap(v any) (any, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal to JSON: %w", err)
+	}
+	var result any
+	if err := json.Unmarshal(b, &result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal from JSON: %w", err)
+	}
+	return result, nil
+}

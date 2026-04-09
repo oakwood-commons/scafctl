@@ -1,20 +1,6 @@
-# Template Directory Rendering Example
+# Run: scafctl run solution -f examples/solutions/template-directory/solution.yaml
 #
-# Demonstrates the complete directory→render→write pipeline:
-# 1. Read a directory tree of .tpl template files (directory provider)
-# 2. Batch-render all templates with shared variables (go-template render-tree)
-# 3. Write all rendered files preserving structure, stripping .tpl extension
-#    (file provider write-tree with outputPath)
-#
-# This is the recommended pattern for scaffolding projects that use a directory
-# of templates spanning multiple subdirectories.
-#
-# Run:
-#   scafctl run solution -f examples/solutions/template-directory/solution.yaml
-#
-# After running, check the output:
-#   find ./output -type f
-#   cat ./output/k8s/deployment.yaml
+# After running: find ./output -type f && cat ./output/k8s/deployment.yaml
 
 apiVersion: scafctl.io/v1
 kind: Solution
