@@ -3191,8 +3191,9 @@ func TestIntegration_CatalogPull_InvalidReference(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
 	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
 
-	// Pull with invalid reference (no registry)
+	// Pull with invalid reference (no registry, no default catalog configured)
 	_, stderr, exitCode := runScafctl(t, "catalog", "pull", "just-a-name")
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "invalid")

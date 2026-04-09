@@ -1,4 +1,3 @@
-package sbom
 // Copyright 2025-2026 Oakwood Commons
 // SPDX-License-Identifier: Apache-2.0
 
@@ -213,8 +212,9 @@ func BenchmarkGenerate(b *testing.B) {
 		},
 	}
 
+	b.ReportAllocs()
 	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		_, _ = Generate(sol, GenerateOptions{ContentDigest: "abc123"})
 	}
 }

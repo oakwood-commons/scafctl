@@ -75,7 +75,7 @@ func CommandPull(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 
 			  # Force overwrite existing
 			  %[1]s catalog pull my-solution@1.0.0 --force
-		`, settings.CliBinaryName),
+		`, cliParams.BinaryName),
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -213,6 +213,12 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 	ref = info.Reference
+
+	// Default kind to solution when not specified (kindless refs like "name@1.0.0")
+	// to ensure local catalog tags are well-formed (e.g., "solution/name:1.0.0" not "/name:1.0.0").
+	if ref.Kind == "" {
+		ref.Kind = catalog.ArtifactKindSolution
+	}
 
 	// Create local catalog
 	localCatalog, err := catalog.NewLocalCatalog(*lgr)

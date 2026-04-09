@@ -63,7 +63,7 @@ func CommandTags(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 
 			  # Output as JSON
 			  %[1]s catalog tags ghcr.io/myorg/scafctl/solutions/my-solution -o json
-		`, settings.CliBinaryName),
+		`, cliParams.BinaryName),
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {

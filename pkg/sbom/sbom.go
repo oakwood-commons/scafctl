@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/solution"
@@ -121,8 +122,11 @@ func Generate(sol *solution.Solution, opts GenerateOptions) ([]byte, error) {
 
 	namespace := opts.Namespace
 	if namespace == "" {
-		namespace = fmt.Sprintf("https://scafctl.dev/spdx/%s/%s/%s",
-			name, version, shortHash(name+version+time.Now().UTC().String()))
+		// Build a deterministic namespace from stable inputs (name, version, content digest)
+		// so identical content produces identical SBOMs.
+		hashInput := name + version + opts.ContentDigest + opts.BundleDigest
+		namespace = fmt.Sprintf("https://spdx.org/spdxdocs/%s-%s-%s",
+			binaryName, name, shortHash(hashInput))
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -153,7 +157,7 @@ func Generate(sol *solution.Solution, opts GenerateOptions) ([]byte, error) {
 	if opts.ContentDigest != "" {
 		rootPkg.Checksums = append(rootPkg.Checksums, Checksum{
 			Algorithm: "SHA256",
-			Value:     opts.ContentDigest,
+			Value:     normalizeDigest(opts.ContentDigest),
 		})
 	}
 
@@ -177,7 +181,7 @@ func Generate(sol *solution.Solution, opts GenerateOptions) ([]byte, error) {
 		}
 		bundlePkg.Checksums = append(bundlePkg.Checksums, Checksum{
 			Algorithm: "SHA256",
-			Value:     opts.BundleDigest,
+			Value:     normalizeDigest(opts.BundleDigest),
 		})
 		doc.Packages = append(doc.Packages, bundlePkg)
 		doc.Relationships = append(doc.Relationships, Relationship{
@@ -261,4 +265,10 @@ func sanitizeSPDXID(s string) string {
 		}
 	}
 	return string(out)
+}
+
+// normalizeDigest strips the "sha256:" prefix from OCI-style digests,
+// returning only the raw hex value required by SPDX checksum fields.
+func normalizeDigest(d string) string {
+	return strings.TrimPrefix(d, "sha256:")
 }

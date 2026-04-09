@@ -106,7 +106,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 
 			  # Output as JSON
 			  %[1]s catalog list -o json
-		`, settings.CliBinaryName),
+		`, cliParams.BinaryName),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			kvxOpts := flags.ToKvxOutputOptions(&options.KvxOutputFlags,
 				kvx.WithIOStreams(ioStreams),
