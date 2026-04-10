@@ -254,11 +254,12 @@ func TestSolution_Validate(t *testing.T) {
 		assert.Contains(t, err.Error(), "metadata.name")
 	})
 
-	t.Run("missing version", func(t *testing.T) {
+	t.Run("missing version gets default", func(t *testing.T) {
 		s := &Solution{APIVersion: DefaultAPIVersion, Kind: SolutionKind, Metadata: Metadata{Name: "x"}}
+		s.ApplyDefaults()
 		err := s.Validate()
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "metadata.version")
+		require.NoError(t, err)
+		assert.Equal(t, "0.0.0-dev", s.Metadata.Version.String())
 	})
 
 	t.Run("invalid visibility", func(t *testing.T) {
@@ -444,4 +445,95 @@ func TestSpec_HasTesting(t *testing.T) {
 
 	sp.Testing = &soltesting.TestSuite{}
 	assert.True(t, sp.HasTesting())
+}
+
+func TestDefaultVersion(t *testing.T) {
+	t.Parallel()
+
+	v := DefaultVersion()
+	require.NotNil(t, v)
+	assert.Equal(t, "0.0.0-dev", v.String())
+
+	// Verify it returns a distinct copy (mutating one doesn't affect the other)
+	v2 := DefaultVersion()
+	assert.Equal(t, v, v2)
+	assert.NotSame(t, v, v2, "DefaultVersion must return distinct pointers")
+
+	// Mutate v and verify v2 is unchanged
+	*v, _ = v.SetPrerelease("mutated")
+	assert.Equal(t, "0.0.0-dev", v2.String(), "mutating one copy must not affect the other")
+}
+
+func TestSolution_RawContent(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil when not loaded from bytes", func(t *testing.T) {
+		t.Parallel()
+		s := &Solution{}
+		assert.Nil(t, s.RawContent())
+	})
+
+	t.Run("preserves original YAML", func(t *testing.T) {
+		t.Parallel()
+		yaml := []byte(`apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test-solution
+spec: {}
+`)
+		s := &Solution{}
+		require.NoError(t, s.FromYAML(yaml))
+
+		raw := s.RawContent()
+		assert.Equal(t, yaml, raw)
+	})
+
+	t.Run("returns a copy not a reference", func(t *testing.T) {
+		t.Parallel()
+		yaml := []byte(`apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test-solution
+spec: {}
+`)
+		s := &Solution{}
+		require.NoError(t, s.FromYAML(yaml))
+
+		raw1 := s.RawContent()
+		raw2 := s.RawContent()
+		raw1[0] = 'X'
+		assert.NotEqual(t, raw1, raw2, "mutating one copy should not affect the other")
+	})
+
+	t.Run("preserves original JSON", func(t *testing.T) {
+		t.Parallel()
+		jsonData := []byte(`{"apiVersion":"scafctl.io/v1","kind":"Solution","metadata":{"name":"test"}}`)
+		s := &Solution{}
+		require.NoError(t, s.FromJSON(jsonData))
+
+		raw := s.RawContent()
+		assert.Equal(t, jsonData, raw)
+	})
+}
+
+func TestSolution_ApplyDefaults_SetsDefaultVersion(t *testing.T) {
+	t.Parallel()
+
+	s := &Solution{}
+	s.ApplyDefaults()
+
+	require.NotNil(t, s.Metadata.Version)
+	assert.Equal(t, "0.0.0-dev", s.Metadata.Version.String())
+}
+
+func TestSolution_ApplyDefaults_PreservesExistingVersion(t *testing.T) {
+	t.Parallel()
+
+	s := &Solution{
+		Metadata: Metadata{
+			Version: semver.MustParse("1.2.3"),
+		},
+	}
+	s.ApplyDefaults()
+	assert.Equal(t, "1.2.3", s.Metadata.Version.String())
 }

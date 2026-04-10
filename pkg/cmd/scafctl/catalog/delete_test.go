@@ -76,6 +76,34 @@ func TestCommandDelete_RequiresExactlyOneArg(t *testing.T) {
 	assert.Contains(t, err.Error(), "accepts 1 arg(s)")
 }
 
+func TestCommandDelete_VersionRequired(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandDelete(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(newCatalogTestCtx(t))
+	cmd.SetArgs([]string{"my-solution"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "version required")
+}
+
+func TestCommandDelete_InvalidKind(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandDelete(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(newCatalogTestCtx(t))
+	cmd.SetArgs([]string{"my-solution@1.0.0", "--kind", "bogus"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid kind")
+}
+
 func TestLooksLikeRemoteReference(t *testing.T) {
 	t.Parallel()
 

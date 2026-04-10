@@ -207,6 +207,56 @@ func TestGenerate_WhatIfFallbackNoRegistry(t *testing.T) {
 	assert.Equal(t, "Would execute shell provider", report.ActionPlan[0].WhatIf)
 }
 
+// resolver references in action inputs
+
+func TestGenerate_ResolverRefInActionInputs(t *testing.T) {
+	rslvrName := "environment"
+	sol := minimalSolution("app")
+	sol.Spec.Workflow = &action.Workflow{
+		Actions: map[string]*action.Action{
+			"deploy": {
+				Provider: "shell",
+				Inputs:   map[string]*spec.ValueRef{"target": {Resolver: &rslvrName}},
+			},
+		},
+	}
+
+	resolverData := map[string]any{
+		"environment": "production",
+	}
+
+	report, err := Generate(context.Background(), sol, Options{
+		ResolverData: resolverData,
+		Verbose:      true,
+	})
+	require.NoError(t, err)
+	require.Len(t, report.ActionPlan, 1)
+	assert.Equal(t, "production", report.ActionPlan[0].MaterializedInputs["target"],
+		"rslvr: reference should resolve to the resolver data value")
+}
+
+func TestGenerate_ResolverRefMissingData(t *testing.T) {
+	rslvrName := "missing"
+	sol := minimalSolution("app")
+	sol.Spec.Workflow = &action.Workflow{
+		Actions: map[string]*action.Action{
+			"deploy": {
+				Provider: "shell",
+				Inputs:   map[string]*spec.ValueRef{"target": {Resolver: &rslvrName}},
+			},
+		},
+	}
+
+	// Empty resolver data — the rslvr: reference cannot resolve
+	report, err := Generate(context.Background(), sol, Options{
+		ResolverData: map[string]any{},
+	})
+	// Graph build should fail (materialization error) and surface as a warning
+	require.NoError(t, err, "Generate should not fail — graph errors become warnings")
+	require.NotNil(t, report, "Generate should return a report when graph errors are downgraded to warnings")
+	require.NotEmpty(t, report.Warnings, "missing resolver data should be surfaced as a warning")
+}
+
 // verbose mode
 
 func TestGenerate_VerboseIncludesMaterializedInputs(t *testing.T) {

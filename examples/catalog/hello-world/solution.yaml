@@ -1,0 +1,48 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: hello-world
+  version: 0.1.0
+  description: A simple hello world solution for testing build and publish
+
+spec:
+  resolvers:
+    greeting:
+      description: Who to greet
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: greeting
+          - provider: static
+            inputs:
+              value: world
+
+  workflow:
+    actions:
+      say-hello:
+        description: Print hello message
+        provider: message
+        inputs:
+          message:
+            tmpl: "Hello, {{ .greeting }}!"
+          type: success
+
+  testing:
+    cases:
+      default-greeting:
+        description: Verify default greeting is "Hello, world!"
+        command: [run, solution]
+        assertions:
+          - contains: "Hello, world!"
+          - expression: __exitCode == 0
+
+      custom-greeting:
+        description: Verify custom greeting parameter
+        command: [run, solution]
+        args: ["-r", "greeting=scafctl"]
+        assertions:
+          - contains: "Hello, scafctl!"
+          - expression: __exitCode == 0

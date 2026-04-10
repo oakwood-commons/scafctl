@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	exampleslib "github.com/oakwood-commons/scafctl/pkg/examples"
@@ -34,7 +35,7 @@ func CommandGet(cliParams *settings.Run, ioStreams *terminal.IOStreams, path str
 	cCmd := &cobra.Command{
 		Use:   "get <example-path>",
 		Short: "Get the contents of an example",
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			Retrieve and display the contents of an example configuration file.
 
 			The example-path is the relative path shown by 'scafctl examples list'.
@@ -48,7 +49,7 @@ func CommandGet(cliParams *settings.Run, ioStreams *terminal.IOStreams, path str
 
 			  # View a provider example
 			  scafctl examples get resolvers/cel-basics.yaml
-		`),
+		`), settings.CliBinaryName, cliParams.BinaryName),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Use)

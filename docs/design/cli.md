@@ -721,13 +721,13 @@ Convenience commands for catalog configuration:
 
 ~~~bash
 # Add a catalog
-scafctl config add-catalog internal --type=oci --url=oci://registry.example.com/scafctl
+scafctl catalog remote add internal --type oci --url oci://registry.example.com/scafctl
 
 # Remove a catalog
-scafctl config remove-catalog internal
+scafctl catalog remote remove internal
 
 # Set the default catalog
-scafctl config use-catalog internal
+scafctl catalog remote set-default internal
 ~~~
 
 ### Environment Variables

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/oakwood-commons/scafctl/pkg/paths"
 )
 
 // ParseReference parses a reference string into a Reference struct.
@@ -62,6 +63,12 @@ func ParseReference(kind ArtifactKind, input string) (Reference, error) {
 			}
 		}
 		ref.Digest = versionOrDigest
+		return ref, nil
+	}
+
+	// "latest" is a virtual alias that resolves to the highest semver version.
+	// Treat it as no version specified so the resolver picks the newest.
+	if strings.EqualFold(versionOrDigest, "latest") {
 		return ref, nil
 	}
 
@@ -261,7 +268,7 @@ func (r *RemoteReference) ToReference() (Reference, error) {
 		Name: r.Name,
 	}
 
-	if r.Tag == "" {
+	if r.Tag == "" || strings.EqualFold(r.Tag, "latest") {
 		return ref, nil
 	}
 
@@ -329,9 +336,19 @@ func ValidateAlias(alias string) error {
 		return fmt.Errorf("alias tag cannot be empty")
 	}
 
+	// "latest" is a reserved virtual alias (auto-resolves to highest semver)
+	if strings.EqualFold(alias, "latest") {
+		return fmt.Errorf("alias %q is reserved; it automatically resolves to the highest semver version", alias)
+	}
+
+	// Must not be purely numeric (confusing with versions)
+	if isNumericOnly(alias) {
+		return fmt.Errorf("alias %q is purely numeric and could be confused with a version; use a descriptive name like 'v%s' instead", alias, alias)
+	}
+
 	// Must not be a valid semver version (those should be created via build)
 	if _, err := ParseReference(ArtifactKindSolution, "x@"+alias); err == nil {
-		return fmt.Errorf("alias %q looks like a semver version; use 'scafctl build' to create versioned artifacts", alias)
+		return fmt.Errorf("alias %q looks like a semver version; use '%s build solution' to create versioned artifacts", alias, paths.AppName())
 	}
 
 	// OCI tag constraints: must match [a-zA-Z0-9_.-]+
@@ -355,4 +372,14 @@ func IsValidTagChar(ch rune) bool {
 		(ch >= 'A' && ch <= 'Z') ||
 		(ch >= '0' && ch <= '9') ||
 		ch == '_' || ch == '.' || ch == '-'
+}
+
+// isNumericOnly returns true if the string contains only digits.
+func isNumericOnly(s string) bool {
+	for _, ch := range s {
+		if ch < '0' || ch > '9' {
+			return false
+		}
+	}
+	return true
 }

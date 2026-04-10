@@ -57,6 +57,9 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			  The auth handler is auto-detected from the registry host or can be
 			  specified with --auth-provider.
 
+			  OAuth scope is auto-detected from the matching catalog remote's
+			  authScope field when --scope is not provided. Use --scope to override.
+
 			  Requires prior authentication: scafctl auth login <handler>
 
 			Mode 2 — Direct credentials:
@@ -103,7 +106,7 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 	}
 
 	cmd.Flags().StringVar(&options.AuthProvider, "auth-provider", "", "Auth handler name (e.g. github, gcp, entra). Auto-detected for known registries.")
-	cmd.Flags().StringVar(&options.Scope, "scope", "", "OAuth scope for auth provider token requests")
+	cmd.Flags().StringVar(&options.Scope, "scope", "", "OAuth scope for auth provider token requests (auto-detected from catalog config's authScope if not set)")
 	cmd.Flags().StringVar(&options.Username, "username", "", "Username for direct credential login (triggers direct mode)")
 	cmd.Flags().BoolVar(&options.PasswordStdin, "password-stdin", false, "Read password from stdin (required with --username)")
 	cmd.Flags().StringVar(&options.PasswordEnv, "password-env", "", "Read password from named environment variable (alternative to --password-stdin)")
@@ -188,6 +191,20 @@ func runAuthHandlerLogin(ctx context.Context, w *writer.Writer, opts *LoginOptio
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
+	// Resolve scope from catalog config if not provided via --scope
+	scope := opts.Scope
+	if scope == "" {
+		if cfg := config.FromContext(ctx); cfg != nil {
+			for _, cat := range cfg.Catalogs {
+				catRegistry, _ := catalog.ParseCatalogURL(cat.URL)
+				if catRegistry == opts.Registry && cat.AuthScope != "" {
+					scope = cat.AuthScope
+					break
+				}
+			}
+		}
+	}
+
 	// Get handler from registry
 	handler, err := auth.GetHandler(ctx, handlerName)
 	if err != nil {
@@ -197,7 +214,7 @@ func runAuthHandlerLogin(ctx context.Context, w *writer.Writer, opts *LoginOptio
 	}
 
 	// Bridge auth handler token to registry credentials
-	username, password, err := catalog.BridgeAuthToRegistry(ctx, handler, opts.Registry, opts.Scope)
+	username, password, err := catalog.BridgeAuthToRegistry(ctx, handler, opts.Registry, scope)
 	if err != nil {
 		err = fmt.Errorf("failed to bridge auth to registry: %w", err)
 		w.Errorf("%v", err)

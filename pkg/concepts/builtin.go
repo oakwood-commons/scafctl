@@ -195,7 +195,7 @@ Files not declared in the list are NOT available in the sandbox. If a test fails
 
 The scaffold also auto-populates the 'files' list based on static analysis of provider inputs (e.g., file provider paths, template references).
 
-Use 'scafctl test init -f solution.yaml' (CLI) or 'generate_test_scaffold' (MCP) to generate.`,
+Use the CLI test init command or 'generate_test_scaffold' (MCP) to generate.`,
 		SeeAlso: []string{"functional-testing", "test-sandbox"},
 	},
 	{

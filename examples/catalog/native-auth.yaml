@@ -23,16 +23,20 @@ catalogs:
     authProvider: github
 
   # Google Artifact Registry -- auto-bridges GCP auth handler
+  # authScope is used by both dynamic auth and 'catalog login' (auto-detected)
   - name: gcp-solutions
     type: oci
-    url: oci://us-docker.pkg.dev/my-project/scafctl/solutions
+    url: oci://us-docker.pkg.dev/my-project/scafctl
     authProvider: gcp
+    authScope: https://www.googleapis.com/auth/cloud-platform
 
   # Azure Container Registry -- auto-bridges Entra auth handler
+  # authScope is auto-detected by 'catalog login' when --scope is not provided
   - name: azure-solutions
     type: oci
     url: oci://myacr.azurecr.io/scafctl
     authProvider: entra
+    authScope: https://management.azure.com/.default
 
   # Public registry -- no auth needed
   - name: community

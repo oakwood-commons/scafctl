@@ -7,14 +7,36 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/adrg/xdg"
 )
 
-const (
-	// AppName is the application name used in XDG paths.
-	AppName = "scafctl"
+// appName is the application name used in XDG paths.
+// Defaults to "scafctl" but can be overridden by embedders via SetAppName.
+var (
+	appName     = "scafctl"
+	appNameOnce sync.Once
+)
 
+// AppName returns the current application name used in XDG paths.
+func AppName() string {
+	return appName
+}
+
+// SetAppName overrides the application name used in all XDG path functions.
+// It must be called once, before any path functions are used (typically during
+// CLI initialization). Subsequent calls are no-ops. An empty name is ignored.
+func SetAppName(name string) {
+	if name == "" {
+		return
+	}
+	appNameOnce.Do(func() {
+		appName = name
+	})
+}
+
+const (
 	// ConfigFileName is the default config file name.
 	ConfigFileName = "config.yaml"
 
@@ -47,7 +69,7 @@ const (
 //   - macOS: ~/.config/scafctl/config.yaml
 //   - Windows: %LOCALAPPDATA%\scafctl\config.yaml
 func ConfigFile() (string, error) {
-	return xdg.ConfigFile(filepath.Join(AppName, ConfigFileName))
+	return xdg.ConfigFile(filepath.Join(appName, ConfigFileName))
 }
 
 // SearchConfigFile searches for the config file in XDG config paths.
@@ -57,14 +79,14 @@ func ConfigFile() (string, error) {
 //  1. $XDG_CONFIG_HOME/scafctl/config.yaml
 //  2. $XDG_CONFIG_DIRS/scafctl/config.yaml (each directory in order)
 func SearchConfigFile() (string, error) {
-	return xdg.SearchConfigFile(filepath.Join(AppName, ConfigFileName))
+	return xdg.SearchConfigFile(filepath.Join(appName, ConfigFileName))
 }
 
 // ConfigDir returns the path to the config directory.
 //
 // Returns: $XDG_CONFIG_HOME/scafctl/
 func ConfigDir() string {
-	return filepath.Join(xdg.ConfigHome, AppName)
+	return filepath.Join(xdg.ConfigHome, appName)
 }
 
 // SecretsDir returns the path to the secrets directory.
@@ -82,7 +104,7 @@ func ConfigDir() string {
 func SecretsDir() (string, error) {
 	// xdg.DataFile creates parent directories and returns the full path
 	// We use a placeholder file path to ensure the directory is created
-	path, err := xdg.DataFile(filepath.Join(AppName, SecretsDirName, ".keep"))
+	path, err := xdg.DataFile(filepath.Join(appName, SecretsDirName, ".keep"))
 	if err != nil {
 		return "", err
 	}
@@ -94,21 +116,21 @@ func SecretsDir() (string, error) {
 //
 // Returns: $XDG_DATA_HOME/scafctl/secrets/
 func SecretsDirPath() string {
-	return filepath.Join(xdg.DataHome, AppName, SecretsDirName)
+	return filepath.Join(xdg.DataHome, appName, SecretsDirName)
 }
 
 // DataDir returns the path to the data directory.
 //
 // Returns: $XDG_DATA_HOME/scafctl/
 func DataDir() string {
-	return filepath.Join(xdg.DataHome, AppName)
+	return filepath.Join(xdg.DataHome, appName)
 }
 
 // CacheDir returns the path to the cache directory.
 //
 // Returns: $XDG_CACHE_HOME/scafctl/
 func CacheDir() string {
-	return filepath.Join(xdg.CacheHome, AppName)
+	return filepath.Join(xdg.CacheHome, appName)
 }
 
 // HTTPCacheDir returns the path to the HTTP cache directory.
@@ -120,7 +142,7 @@ func CacheDir() string {
 //   - macOS: ~/.cache/scafctl/http-cache/
 //   - Windows: %LOCALAPPDATA%\cache\scafctl\http-cache\
 func HTTPCacheDir() string {
-	return filepath.Join(xdg.CacheHome, AppName, HTTPCacheDirName)
+	return filepath.Join(xdg.CacheHome, appName, HTTPCacheDirName)
 }
 
 // CatalogDir returns the default path to the local catalog directory.
@@ -132,7 +154,7 @@ func HTTPCacheDir() string {
 //   - macOS: ~/.local/share/scafctl/catalog/
 //   - Windows: %LOCALAPPDATA%\scafctl\catalog\
 func CatalogDir() string {
-	return filepath.Join(xdg.DataHome, AppName, CatalogDirName)
+	return filepath.Join(xdg.DataHome, appName, CatalogDirName)
 }
 
 // StateDir returns the path to the state directory.
@@ -145,7 +167,7 @@ func CatalogDir() string {
 //   - macOS: ~/.local/state/scafctl/
 //   - Windows: %LOCALAPPDATA%\scafctl\
 func StateDir() string {
-	return filepath.Join(xdg.StateHome, AppName)
+	return filepath.Join(xdg.StateHome, appName)
 }
 
 // BuildCacheDir returns the default path to the build cache directory.
@@ -157,7 +179,7 @@ func StateDir() string {
 //   - macOS: ~/.cache/scafctl/build-cache/
 //   - Windows: %LOCALAPPDATA%\cache\scafctl\build-cache\
 func BuildCacheDir() string {
-	return filepath.Join(xdg.CacheHome, AppName, BuildCacheDirName)
+	return filepath.Join(xdg.CacheHome, appName, BuildCacheDirName)
 }
 
 // PluginCacheDir returns the default path to the plugin cache directory.
@@ -169,7 +191,7 @@ func BuildCacheDir() string {
 //   - macOS: ~/.cache/scafctl/plugins/
 //   - Windows: %LOCALAPPDATA%\cache\scafctl\plugins\
 func PluginCacheDir() string {
-	return filepath.Join(xdg.CacheHome, AppName, PluginCacheDirName)
+	return filepath.Join(xdg.CacheHome, appName, PluginCacheDirName)
 }
 
 // ArtifactCacheDir returns the default path to the artifact cache directory.
@@ -183,7 +205,7 @@ func PluginCacheDir() string {
 //   - macOS: ~/.cache/scafctl/artifact/
 //   - Windows: %LOCALAPPDATA%\cache\scafctl\artifact\
 func ArtifactCacheDir() string {
-	return filepath.Join(xdg.CacheHome, AppName, ArtifactCacheDirName)
+	return filepath.Join(xdg.CacheHome, appName, ArtifactCacheDirName)
 }
 
 // RuntimeDir returns the path to the runtime directory.
@@ -191,7 +213,7 @@ func ArtifactCacheDir() string {
 //
 // Returns: $XDG_RUNTIME_DIR/scafctl/
 func RuntimeDir() string {
-	return filepath.Join(xdg.RuntimeDir, AppName)
+	return filepath.Join(xdg.RuntimeDir, appName)
 }
 
 // HomeDir returns the user's home directory path.

@@ -15,6 +15,7 @@ import (
 	"github.com/hashicorp/go-retryablehttp"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/metrics"
+	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
@@ -63,7 +64,7 @@ type ClientConfig struct {
 	// CacheType specifies the type of cache to use (memory or filesystem)
 	CacheType CacheType
 	// CacheDir is the directory to use for filesystem cache (only used when CacheType is filesystem)
-	// Defaults to ~/.scafctl/http-cache
+	// Defaults to paths.HTTPCacheDir()
 	CacheDir string
 	// CacheTTL is the time-to-live for cached responses
 	CacheTTL time.Duration
@@ -205,7 +206,7 @@ func NewClient(config *ClientConfig) *Client {
 		case CacheTypeFilesystem:
 			cacheDir := config.CacheDir
 			if cacheDir == "" {
-				cacheDir = "~/.scafctl/http-cache"
+				cacheDir = paths.HTTPCacheDir()
 			}
 			fileCacheConfig := &FileCacheConfig{
 				Dir:       cacheDir,

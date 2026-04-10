@@ -5,7 +5,7 @@ tools: [read, edit, search, execute, todo]
 argument-hint: "Optional: PR number or 'resolve' to auto-resolve addressed comments"
 handoffs:
   - label: "Apply fixes"
-    prompt: "Apply the approved code fixes from the triage above. After fixing, run go build ./... and go vet ./... to verify no errors were introduced. Then run task test:e2e to make sure everything passes. Finally, reply to each addressed PR review thread confirming the fix and mark it resolved. Skip threads we disagree with. Do not commit."
+    prompt: "Apply the approved code fixes from the triage above. After fixing, run go build ./... and go vet ./... to verify no errors were introduced. Then run task test:e2e to make sure everything passes. Finally, reply to each addressed PR review thread confirming the fix and mark it resolved. For threads you disagree with, explain reasoning and resolve anyway. Do not commit."
     agent: "pr-reviewer"
   - label: "Generate commit message"
     prompt: "Generate a commit message for the fixes just applied."
@@ -60,7 +60,7 @@ For each unresolved review thread, classify it:
 | **Question** | Reviewer asked a question -- answer it |
 | **Nit/Style** | Minor style preference -- fix if trivial, otherwise explain |
 | **Already addressed** | Fixed in a subsequent commit -- respond and resolve |
-| **Disagree** | Explain reasoning, suggest alternative |
+| **Disagree** | Explain reasoning in reply and resolve |
 | **Outdated** | Code has changed, comment no longer applies -- note and resolve |
 
 Present the triage summary to the user:
@@ -122,12 +122,12 @@ Response templates:
 - **Fixed**: "Fixed in `<brief description>`. Thanks!"
 - **Question answered**: "<answer>"
 - **Nit accepted**: "Good catch, fixed."
-- **Disagree**: "<reasoning>. Happy to discuss further."
+- **Disagree**: "<reasoning>. Happy to discuss further." (resolve the thread)
 - **Outdated**: "This was addressed in a subsequent change -- the code now does X."
 
 ## Hard Constraints
 
-- **NEVER** resolve threads without user approval
+- **ALWAYS** resolve all threads after responding -- including disagreements
 - **NEVER** respond to comments without user approval
 - **NEVER** dismiss reviews
 - **NEVER** run `git commit` or `git push` -- only make code changes

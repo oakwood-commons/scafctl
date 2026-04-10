@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -519,7 +520,16 @@ func (c *LocalCatalog) listLocked(ctx context.Context, kind ArtifactKind, name s
 				continue
 			}
 
-			results = append(results, c.infoFromAnnotations(ref, desc, annotations))
+			info := c.infoFromAnnotations(ref, desc, annotations)
+			// Extract the tag label from the OCI tag.
+			// Digest-pinned references use '@' and must preserve the full
+			// digest value (e.g., "sha256:..."), while version/alias tags use ':'.
+			if idx := strings.LastIndex(tag, "@"); idx >= 0 {
+				info.Tag = tag[idx+1:]
+			} else if idx := strings.LastIndex(tag, ":"); idx >= 0 {
+				info.Tag = tag[idx+1:]
+			}
+			results = append(results, info)
 		}
 		return nil
 	})
@@ -671,8 +681,9 @@ func (c *LocalCatalog) infoFromAnnotations(ref Reference, desc ocispec.Descripto
 
 // Tag creates an alias tag for an existing artifact.
 // The source reference must have a version or digest to resolve.
-// The alias is a freeform string (e.g., "latest", "stable", "production").
-func (c *LocalCatalog) Tag(ctx context.Context, ref Reference, alias string) error {
+// The alias is a freeform string (e.g., "stable", "production").
+// Returns the previous version string if the alias already existed (empty otherwise).
+func (c *LocalCatalog) Tag(ctx context.Context, ref Reference, alias string) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -680,14 +691,25 @@ func (c *LocalCatalog) Tag(ctx context.Context, ref Reference, alias string) err
 	tag := c.tagForRef(ref)
 	desc, err := c.store.Resolve(ctx, tag)
 	if err != nil {
-		return &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
+		return "", &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
 	}
 
 	// Build alias tag in the same format: kind/name:alias
 	aliasTag := fmt.Sprintf("%s/%s:%s", ref.Kind, ref.Name, alias)
 
+	// Check if alias already exists and points to a different artifact
+	var oldVersion string
+	if oldDesc, resolveErr := c.store.Resolve(ctx, aliasTag); resolveErr == nil {
+		if oldDesc.Digest != desc.Digest {
+			// Find the version of the old artifact
+			if annotations, annErr := c.getManifestAnnotations(ctx, oldDesc); annErr == nil {
+				oldVersion = annotations[AnnotationVersion]
+			}
+		}
+	}
+
 	if err := c.store.Tag(ctx, desc, aliasTag); err != nil {
-		return fmt.Errorf("failed to tag artifact: %w", err)
+		return "", fmt.Errorf("failed to tag artifact: %w", err)
 	}
 
 	c.logger.V(1).Info("tagged artifact",
@@ -695,7 +717,7 @@ func (c *LocalCatalog) Tag(ctx context.Context, ref Reference, alias string) err
 		"source", tag,
 		"alias", alias)
 
-	return nil
+	return oldVersion, nil
 }
 
 // PruneResult contains statistics from a prune operation.

@@ -98,6 +98,20 @@ func TestParseReference(t *testing.T) {
 			errMsg:  "invalid version",
 		},
 		{
+			name:     "latest resolves to no version",
+			kind:     ArtifactKindSolution,
+			input:    "my-solution@latest",
+			wantName: "my-solution",
+			wantVer:  "",
+		},
+		{
+			name:     "LATEST case-insensitive",
+			kind:     ArtifactKindSolution,
+			input:    "my-solution@LATEST",
+			wantName: "my-solution",
+			wantVer:  "",
+		},
+		{
 			name:    "multiple @ symbols",
 			kind:    ArtifactKindSolution,
 			input:   "my@solution@1.0.0",
@@ -340,6 +354,42 @@ func TestParseRemoteReference(t *testing.T) {
 			wantErr: true,
 			errMsg:  "must include registry and repository",
 		},
+		{
+			name:           "Docker-style kindless with @ version",
+			input:          "ghcr.io/myorg/starter-kit@2.1.0",
+			wantRegistry:   "ghcr.io",
+			wantRepository: "myorg",
+			wantKind:       "",
+			wantName:       "starter-kit",
+			wantTag:        "2.1.0",
+		},
+		{
+			name:           "Docker-style kindless with : tag",
+			input:          "ghcr.io/myorg/starter-kit:latest",
+			wantRegistry:   "ghcr.io",
+			wantRepository: "myorg",
+			wantKind:       "",
+			wantName:       "starter-kit",
+			wantTag:        "latest",
+		},
+		{
+			name:           "Docker-style kindless no tag",
+			input:          "ghcr.io/myorg/starter-kit",
+			wantRegistry:   "ghcr.io",
+			wantRepository: "myorg",
+			wantKind:       "",
+			wantName:       "starter-kit",
+			wantTag:        "",
+		},
+		{
+			name:           "Docker-style deep repo path no kind",
+			input:          "ghcr.io/org/team/project/my-solution@3.0.0",
+			wantRegistry:   "ghcr.io",
+			wantRepository: "org/team/project",
+			wantKind:       "",
+			wantName:       "my-solution",
+			wantTag:        "3.0.0",
+		},
 	}
 
 	for _, tt := range tests {
@@ -413,6 +463,36 @@ func TestRemoteReference_ToReference(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "latest tag treated as no version",
+			remote: RemoteReference{
+				Kind: ArtifactKindSolution,
+				Name: "my-solution",
+				Tag:  "latest",
+			},
+			wantKind: ArtifactKindSolution,
+			wantName: "my-solution",
+		},
+		{
+			name: "Latest tag case-insensitive",
+			remote: RemoteReference{
+				Kind: ArtifactKindSolution,
+				Name: "my-solution",
+				Tag:  "Latest",
+			},
+			wantKind: ArtifactKindSolution,
+			wantName: "my-solution",
+		},
+		{
+			name: "LATEST tag case-insensitive",
+			remote: RemoteReference{
+				Kind: ArtifactKindSolution,
+				Name: "my-solution",
+				Tag:  "LATEST",
+			},
+			wantKind: ArtifactKindSolution,
+			wantName: "my-solution",
+		},
 	}
 
 	for _, tt := range tests {
@@ -443,13 +523,15 @@ func TestValidateAlias(t *testing.T) {
 		wantErr string
 	}{
 		{name: "valid alias - stable", alias: "stable"},
-		{name: "valid alias - latest", alias: "latest"},
 		{name: "valid alias - production", alias: "production"},
 		{name: "valid alias - with dots", alias: "v1.release"},
 		{name: "valid alias - with hyphens", alias: "pre-release"},
 		{name: "valid alias - with underscores", alias: "staging_v2"},
 		{name: "valid alias - uppercase", alias: "STABLE"},
 		{name: "empty alias", alias: "", wantErr: "cannot be empty"},
+		{name: "latest is reserved", alias: "latest", wantErr: "reserved"},
+		{name: "LATEST is reserved", alias: "LATEST", wantErr: "reserved"},
+		{name: "numeric only - rejected", alias: "100", wantErr: "purely numeric"},
 		{name: "semver version - rejected", alias: "1.0.0", wantErr: "looks like a semver version"},
 		{name: "semver with prerelease - rejected", alias: "1.2.3-alpha.1", wantErr: "looks like a semver version"},
 		{name: "contains slash", alias: "foo/bar", wantErr: "invalid character"},
@@ -578,10 +660,66 @@ func TestRemoteReference_String(t *testing.T) {
 			ref:      &RemoteReference{Registry: "ghcr.io", Repository: "my-org", Kind: ArtifactKindSolution, Name: "my-sol"},
 			expected: "ghcr.io/my-org/solutions/my-sol",
 		},
+		{
+			name:     "kindless Docker-style with tag",
+			ref:      &RemoteReference{Registry: "ghcr.io", Repository: "my-org", Name: "starter-kit", Tag: "2.0.0"},
+			expected: "ghcr.io/my-org/starter-kit@2.0.0",
+		},
+		{
+			name:     "kindless Docker-style no tag",
+			ref:      &RemoteReference{Registry: "ghcr.io", Repository: "my-org", Name: "starter-kit"},
+			expected: "ghcr.io/my-org/starter-kit",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.expected, tt.ref.String())
 		})
+	}
+}
+
+func TestReference_VersionOrDigest(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		ref      Reference
+		expected string
+	}{
+		{
+			name:     "with version",
+			ref:      Reference{Kind: ArtifactKindSolution, Name: "sol", Version: semver.MustParse("1.2.3")},
+			expected: "1.2.3",
+		},
+		{
+			name:     "with digest only",
+			ref:      Reference{Kind: ArtifactKindSolution, Name: "sol", Digest: "sha256:abc123"},
+			expected: "sha256:abc123",
+		},
+		{
+			name:     "version takes precedence over digest",
+			ref:      Reference{Kind: ArtifactKindSolution, Name: "sol", Version: semver.MustParse("1.0.0"), Digest: "sha256:abc123"},
+			expected: "1.0.0",
+		},
+		{
+			name:     "neither version nor digest",
+			ref:      Reference{Kind: ArtifactKindSolution, Name: "sol"},
+			expected: "unknown",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, tt.ref.VersionOrDigest())
+		})
+	}
+}
+
+func BenchmarkReference_VersionOrDigest(b *testing.B) {
+	ref := Reference{Kind: ArtifactKindSolution, Name: "sol", Version: semver.MustParse("1.2.3")}
+	b.ResetTimer()
+	for b.Loop() {
+		ref.VersionOrDigest()
 	}
 }
