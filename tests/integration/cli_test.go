@@ -2266,19 +2266,19 @@ func TestIntegration_BuildSolution_UsesMetadataVersion(t *testing.T) {
 	assert.Contains(t, stdout, "1.0.0")
 }
 
-func TestIntegration_BuildSolution_VersionOverrideWarning(t *testing.T) {
+func TestIntegration_BuildSolution_VersionStamping(t *testing.T) {
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
 	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
-	// Build with different version than metadata - should warn
+	// Build with different version than metadata - should stamp and succeed
 	stdout, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "9.9.9")
 
 	assert.Equal(t, 0, exitCode)
-	// Should warn about overriding metadata version
-	assert.Contains(t, stdout, "overrides metadata version")
+	// Should succeed with the stamped version
 	assert.Contains(t, stdout, "9.9.9")
+	assert.Contains(t, stdout, "Built")
 }
 
 func TestIntegration_BuildSolution_FileNotFound(t *testing.T) {
@@ -2532,10 +2532,11 @@ func TestIntegration_CatalogListHelp(t *testing.T) {
 	stdout, _, exitCode := runScafctl(t, "catalog", "list", "--help")
 
 	assert.Equal(t, 0, exitCode)
-	assert.Contains(t, stdout, "List all artifacts")
+	assert.Contains(t, stdout, "List artifacts")
 	assert.Contains(t, stdout, "--kind")
 	assert.Contains(t, stdout, "--name")
 	assert.Contains(t, stdout, "--output")
+	assert.Contains(t, stdout, "--catalog")
 }
 
 func TestIntegration_CatalogList_Empty(t *testing.T) {
@@ -3191,8 +3192,9 @@ func TestIntegration_CatalogPull_InvalidReference(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
 	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
 
-	// Pull with invalid reference (no registry)
+	// Pull with invalid reference (no registry, no default catalog configured)
 	_, stderr, exitCode := runScafctl(t, "catalog", "pull", "just-a-name")
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "invalid")
@@ -3305,6 +3307,81 @@ func TestIntegration_CatalogTag_MoveAlias(t *testing.T) {
 	stdout, _, exitCode = runScafctl(t, "catalog", "tag", "resolver-demo@2.0.0", "stable")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "2.0.0")
+}
+
+// Catalog Tags Tests
+
+func TestIntegration_CatalogTagsHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "catalog", "tags", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "List all tags")
+	assert.Contains(t, stdout, "--kind")
+	assert.Contains(t, stdout, "--insecure")
+}
+
+func TestIntegration_CatalogTags_RequiresArg(t *testing.T) {
+	t.Parallel()
+	_, _, exitCode := runScafctl(t, "catalog", "tags")
+
+	assert.NotEqual(t, 0, exitCode)
+}
+
+// Catalog Attach Tests
+
+func TestIntegration_CatalogAttachHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "catalog", "attach", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "attach")
+}
+
+// Catalog Remote Tests
+
+func TestIntegration_CatalogRemoteHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "catalog", "remote", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "remote")
+	assert.Contains(t, stdout, "add")
+	assert.Contains(t, stdout, "remove")
+	assert.Contains(t, stdout, "list")
+}
+
+func TestIntegration_CatalogRemoteAddHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "catalog", "remote", "add", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Add a new remote catalog")
+	assert.Contains(t, stdout, "--auth-provider")
+}
+
+func TestIntegration_CatalogRemoteRemoveHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "catalog", "remote", "remove", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "remove")
+}
+
+func TestIntegration_CatalogRemoteListHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "catalog", "remote", "list", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "list")
+}
+
+func TestIntegration_CatalogRemoteList_Empty(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+	_, _, exitCode := runScafctl(t, "catalog", "remote", "list")
+	assert.Equal(t, 0, exitCode)
 }
 
 // =============================================================================

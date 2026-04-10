@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
@@ -22,7 +23,7 @@ import (
 )
 
 // CommandOpenAPI creates the `scafctl serve openapi` subcommand.
-func CommandOpenAPI(_ *settings.Run, _ *terminal.IOStreams) *cobra.Command {
+func CommandOpenAPI(cliParams *settings.Run, _ *terminal.IOStreams) *cobra.Command {
 	var (
 		format string
 		output string
@@ -31,14 +32,14 @@ func CommandOpenAPI(_ *settings.Run, _ *terminal.IOStreams) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "openapi",
 		Short: "Export OpenAPI specification",
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			Generate the full OpenAPI specification for the scafctl REST API
 			without starting the server.
 
 			The specification includes all endpoints, request/response schemas,
 			authentication schemes, and documentation.
-		`),
-		Example: heredoc.Doc(`
+		`), settings.CliBinaryName, cliParams.BinaryName),
+		Example: strings.ReplaceAll(heredoc.Doc(`
 			# Export as JSON to stdout
 			scafctl serve openapi
 
@@ -47,7 +48,7 @@ func CommandOpenAPI(_ *settings.Run, _ *terminal.IOStreams) *cobra.Command {
 
 			# Export as JSON to a file
 			scafctl serve openapi --format json --output openapi.json
-		`),
+		`), settings.CliBinaryName, cliParams.BinaryName),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runOpenAPI(cmd, format, output)

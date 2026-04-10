@@ -23,6 +23,17 @@ const (
 	SolutionKind = "Solution"
 )
 
+// defaultVersion is the placeholder version applied when metadata.version is
+// omitted from the solution file. The real version is assigned at build time
+// via `scafctl build solution`.
+var defaultVersion = semver.MustParse("0.0.0-dev")
+
+// DefaultVersion returns a copy of the default placeholder version.
+func DefaultVersion() *semver.Version {
+	v := *defaultVersion
+	return &v
+}
+
 // Solution represents a Kubernetes-style declarative unit of behavior in scafctl.
 // It follows the apiVersion/kind pattern and separates concerns into metadata, spec, and catalog sections.
 //
@@ -79,6 +90,10 @@ type Solution struct {
 	// sourceMap maps logical YAML paths to source positions (line/column).
 	// It is populated during FromYAML when the solution is loaded from YAML bytes.
 	sourceMap *sourcepos.SourceMap `json:"-" yaml:"-"`
+
+	// rawContent stores the original bytes used to parse this solution.
+	// It preserves the original formatting for round-trip fidelity.
+	rawContent []byte `json:"-" yaml:"-"`
 }
 
 // Metadata contains the descriptive information about a solution.
@@ -213,7 +228,11 @@ func (s *Solution) ToJSONPretty() ([]byte, error) {
 // FromJSON unmarshals the provided JSON data into the Solution struct.
 // It returns an error if the unmarshalling fails.
 func (s *Solution) FromJSON(data []byte) error {
-	return json.Unmarshal(data, s)
+	if err := json.Unmarshal(data, s); err != nil {
+		return err
+	}
+	s.rawContent = append([]byte(nil), data...)
+	return nil
 }
 
 // ToYAML serializes the Solution struct into YAML format.
@@ -229,6 +248,8 @@ func (s *Solution) FromYAML(data []byte) error {
 	if err := yaml.Unmarshal(data, s); err != nil {
 		return err
 	}
+
+	s.rawContent = append([]byte(nil), data...)
 
 	// Build source map for line/column tracking.
 	// This is a best-effort operation; parsing errors are non-fatal since we
@@ -282,6 +303,18 @@ func (s *Solution) GetPath() string {
 	return s.path
 }
 
+// RawContent returns a copy of the original bytes used to parse this solution.
+// It preserves the original formatting for round-trip fidelity.
+// Returns nil if the solution was not loaded from bytes.
+func (s *Solution) RawContent() []byte {
+	if s.rawContent == nil {
+		return nil
+	}
+	out := make([]byte, len(s.rawContent))
+	copy(out, s.rawContent)
+	return out
+}
+
 // SetPath sets the path for the Solution.
 // It updates the internal path field with the provided value.
 func (s *Solution) SetPath(path string) {
@@ -320,6 +353,10 @@ func (s *Solution) ApplyDefaults() {
 	if s.Kind == "" {
 		s.Kind = SolutionKind
 	}
+	if s.Metadata.Version == nil {
+		v := *defaultVersion
+		s.Metadata.Version = &v
+	}
 	if s.Catalog.Visibility == "" {
 		s.Catalog.Visibility = "private"
 	}
@@ -342,9 +379,6 @@ func (s *Solution) Validate() error {
 	}
 	if s.Metadata.Name == "" {
 		problems = append(problems, "metadata.name is required")
-	}
-	if s.Metadata.Version == nil {
-		problems = append(problems, "metadata.version is required")
 	}
 
 	if vis := s.Catalog.Visibility; vis != "" {

@@ -6,6 +6,7 @@ package serve
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/api"
@@ -41,7 +42,7 @@ func CommandServe(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start the REST API server",
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			Start the scafctl REST API server.
 
 			The API server exposes all major scafctl features as REST endpoints:
@@ -56,8 +57,8 @@ func CommandServe(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 
 			OpenAPI documentation is served at /{version}/docs and the spec
 			at /{version}/openapi.json.
-		`),
-		Example: heredoc.Doc(`
+		`), settings.CliBinaryName, cliParams.BinaryName),
+		Example: strings.ReplaceAll(heredoc.Doc(`
 			# Start the API server with defaults (port 8080)
 			scafctl serve
 
@@ -69,7 +70,7 @@ func CommandServe(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 
 			# Export OpenAPI spec without starting the server
 			scafctl serve openapi --format yaml --output openapi.yaml
-		`),
+		`), settings.CliBinaryName, cliParams.BinaryName),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runServe(cmd.Context(), opts)

@@ -940,6 +940,7 @@ scafctl auth login github
 scafctl catalog login ghcr.io
 
 # Google Artifact Registry / Container Registry
+# Scope is auto-detected from catalog config's authScope field
 scafctl auth login gcp
 scafctl catalog login us-docker.pkg.dev
 
@@ -962,7 +963,7 @@ scafctl catalog login quay.io --username admin --password-env REGISTRY_PASSWORD
 
 **Config-based automatic authentication:**
 
-For catalogs defined in your scafctl config, set `authProvider` to enable automatic authentication without a separate login step:
+For catalogs defined in your scafctl config, set `authProvider` to enable automatic authentication without a separate login step. For handlers that require an OAuth scope (GCP, Entra), set `authScope` on the catalog -- `catalog login` will auto-detect it:
 
 ```yaml
 # ~/.config/scafctl/config.yaml
@@ -971,6 +972,12 @@ catalogs:
     type: oci
     url: oci://ghcr.io/myorg/scafctl
     authProvider: github
+
+  - name: gcp-registry
+    type: oci
+    url: oci://us-docker.pkg.dev/my-project/scafctl
+    authProvider: gcp
+    authScope: https://www.googleapis.com/auth/cloud-platform
 ```
 
 With this config, `scafctl catalog pull` and `scafctl catalog push` automatically use your GitHub auth session -- no `catalog login` needed.

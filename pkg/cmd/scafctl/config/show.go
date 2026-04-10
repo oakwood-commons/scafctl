@@ -38,7 +38,10 @@ func CommandShow(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 	cCmd := &cobra.Command{
 		Use:   "show",
 		Short: "Show effective configuration with sources",
-		Long: heredoc.Doc(`
+		Long: strings.NewReplacer(
+			settings.CliBinaryName, cliParams.BinaryName,
+			settings.SafeEnvPrefix(settings.CliBinaryName), settings.SafeEnvPrefix(cliParams.BinaryName),
+		).Replace(heredoc.Doc(`
 			Show the effective configuration including where each value comes from.
 
 			Displays the merged configuration from all sources:
@@ -55,7 +58,7 @@ func CommandShow(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 
 			  # Show config for a specific config file
 			  scafctl config show --config ./my-config.yaml
-		`),
+		`)),
 		Args: cobra.NoArgs,
 		RunE: func(cCmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
@@ -178,10 +181,10 @@ func redactEnvValue(key, value string) string {
 	return value
 }
 
-// findEnvOverrides finds SCAFCTL_ environment variables.
+// findEnvOverrides finds environment variables with the configured binary name prefix.
 func (o *ShowOptions) findEnvOverrides() []envOverride {
 	var overrides []envOverride
-	prefix := appconfig.EnvPrefix + "_"
+	prefix := settings.SafeEnvPrefix(o.CliParams.BinaryName) + "_"
 
 	for _, env := range os.Environ() {
 		parts := strings.SplitN(env, "=", 2)

@@ -226,3 +226,86 @@ func TestInferKindFromLocalCatalog_NotFound(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }
+
+func TestLooksLikeRemoteReference(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		ref      string
+		expected bool
+	}{
+		{
+			name:     "simple name is not remote",
+			ref:      "my-solution@1.0.0",
+			expected: false,
+		},
+		{
+			name:     "localhost prefix is remote",
+			ref:      "localhost:5000/solutions/my-solution@1.0.0",
+			expected: true,
+		},
+		{
+			name:     "localhost without port is remote",
+			ref:      "localhost/solutions/my-solution",
+			expected: true,
+		},
+		{
+			name:     "host with dot is remote",
+			ref:      "ghcr.io/myorg/scafctl/solutions/my-solution@1.0.0",
+			expected: true,
+		},
+		{
+			name:     "host with port is remote",
+			ref:      "registry:5000/solutions/my-solution@1.0.0",
+			expected: true,
+		},
+		{
+			name:     "oci scheme prefix is remote",
+			ref:      "oci://ghcr.io/myorg/solutions/my-solution@1.0.0",
+			expected: true,
+		},
+		{
+			name:     "docker registry is remote",
+			ref:      "docker.io/myorg/my-solution@1.0.0",
+			expected: true,
+		},
+		{
+			name:     "no slash is not remote",
+			ref:      "my-solution",
+			expected: false,
+		},
+		{
+			name:     "path without dot host is not remote",
+			ref:      "myorg/my-solution",
+			expected: false,
+		},
+		{
+			name:     "empty string is not remote",
+			ref:      "",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := LooksLikeRemoteReference(tt.ref)
+			assert.Equal(t, tt.expected, result, "LooksLikeRemoteReference(%q)", tt.ref)
+		})
+	}
+}
+
+func BenchmarkLooksLikeRemoteReference(b *testing.B) {
+	refs := []string{
+		"my-solution@1.0.0",
+		"ghcr.io/myorg/scafctl/solutions/my-solution@1.0.0",
+		"localhost:5000/solutions/my-solution",
+	}
+	b.ResetTimer()
+	for b.Loop() {
+		for _, ref := range refs {
+			LooksLikeRemoteReference(ref)
+		}
+	}
+}

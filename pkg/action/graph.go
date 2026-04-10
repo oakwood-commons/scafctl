@@ -73,6 +73,11 @@ type ExpandedAction struct {
 	// complete before any finally action runs).
 	CrossSectionRefs []string `json:"crossSectionRefs,omitempty" yaml:"crossSectionRefs,omitempty" doc:"Cross-section __actions references (informational, not scheduling deps)"`
 
+	// WhenSkipped is true when the action's when condition was evaluated at graph-build
+	// time (because it only references resolver data, not __actions/aliases) and returned
+	// false. The executor skips this action without re-evaluating the condition.
+	WhenSkipped bool `json:"whenSkipped,omitempty" yaml:"whenSkipped,omitempty" doc:"Action pre-skipped by when condition during graph building"`
+
 	// ExpandedExclusive contains the effective exclusive action names for this expanded action.
 	// For forEach base action references, this expands to all iterations (e.g., "deploy" → "deploy[0]", "deploy[1]").
 	ExpandedExclusive []string `json:"expandedExclusive,omitempty" yaml:"expandedExclusive,omitempty" doc:"Effective exclusive action names (post-forEach expansion)"`
@@ -327,6 +332,20 @@ func createExpandedAction(
 			Index:        index,
 			Item:         item,
 		}
+	}
+
+	// Early when-condition evaluation: if the action has a when condition that
+	// only references resolver data (not __actions, __cwd, __execution, or aliases),
+	// evaluate it now. If false, skip input materialization entirely — the action
+	// will be skipped at execution time anyway.
+	if !opts.SkipInputMaterialization && action.When != nil && !conditionReferencesActions(action.When, aliasNames) {
+		shouldRun, err := action.When.Evaluate(ctx, resolverData)
+		if err == nil && !shouldRun {
+			expanded.WhenSkipped = true
+			return expanded, nil
+		}
+		// If evaluation fails, fall through to normal materialization —
+		// the executor will re-evaluate and surface the error in context.
 	}
 
 	// Materialize inputs unless skipped
@@ -830,6 +849,35 @@ func referencesActionsOrAlias(v *spec.ValueRef, aliasNames []string) bool {
 	for _, alias := range aliasNames {
 		if _, ok := vars[alias]; ok {
 			return true
+		}
+	}
+
+	return false
+}
+
+// conditionReferencesActions checks if a Condition's expression references
+// __actions, __cwd, __execution, or any action alias — meaning it cannot
+// be evaluated at graph-build time and must be deferred to the executor.
+func conditionReferencesActions(when *spec.Condition, aliasNames []string) bool {
+	if when == nil || when.Expr == nil {
+		return false
+	}
+
+	vars, err := when.Expr.RequiredVariables(context.TODO())
+	if err != nil {
+		// If we can't parse, assume it references actions (safe fallback).
+		return true
+	}
+
+	for _, v := range vars {
+		switch v {
+		case celexp.VarActions, celexp.VarCwd, celexp.VarExecution:
+			return true
+		}
+		for _, alias := range aliasNames {
+			if v == alias {
+				return true
+			}
 		}
 	}
 

@@ -4,13 +4,16 @@
 package auth
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -18,6 +21,36 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
+
+// authStatusSchema controls table column display: handler, authenticated, email/username,
+// and expiresIn are visible; other fields are hidden in table view but included in json/yaml.
+var authStatusSchema = []byte(`{
+	"type": "array",
+	"items": {
+		"type": "object",
+		"required": ["handler", "type", "status"],
+		"properties": {
+			"handler":        { "type": "string", "title": "Handler", "maxLength": 20 },
+			"type":           { "type": "string", "title": "Type", "maxLength": 10 },
+			"status":         { "type": "string", "title": "Status", "maxLength": 30 },
+			"displayName":    { "type": "string", "title": "Name", "maxLength": 20 },
+			"email":          { "type": "string", "title": "Email" },
+			"username":       { "type": "string", "title": "Username" },
+			"expiresIn":      { "type": "string", "title": "Expires In" },
+			"authenticated":  { "type": "boolean", "deprecated": true },
+			"identityType":   { "type": "string", "deprecated": true },
+			"clientId":       { "type": "string", "deprecated": true },
+			"tokenFile":      { "type": "string", "deprecated": true },
+			"name":           { "type": "string", "deprecated": true },
+			"tenantId":       { "type": "string", "deprecated": true },
+			"expiresAt":      { "type": "string", "deprecated": true },
+			"lastRefresh":    { "type": "string", "deprecated": true },
+			"scopes":         { "type": "array", "deprecated": true },
+			"cachedTokens":   { "type": "integer", "deprecated": true },
+			"hint":           { "type": "string", "deprecated": true }
+		}
+	}
+}`)
 
 // CommandStatus creates the 'auth status' command.
 func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
@@ -92,27 +125,52 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 					continue
 				}
 
+				// Always include all columns so kvx detects a homogeneous
+				// array and renders a proper columnar table. The schema
+				// controls which columns are visible in table vs json/yaml.
+				// Derive a human-readable status string
+				statusStr := "valid"
+				if !status.Authenticated {
+					if status.Reason != "" {
+						statusStr = status.Reason
+					} else {
+						statusStr = "not logged in"
+					}
+				}
+
 				result := map[string]any{
 					"handler":       handlerName,
 					"displayName":   handler.DisplayName(),
+					"type":          "handler",
+					"status":        statusStr,
 					"authenticated": status.Authenticated,
+					"email":         "",
+					"username":      "",
+					"expiresIn":     "",
+					"hint":          "",
+					"identityType":  "",
+					"clientId":      "",
+					"tokenFile":     "",
+					"name":          "",
+					"tenantId":      "",
+					"expiresAt":     "",
+					"lastRefresh":   "",
+					"scopes":        []string{},
+					"cachedTokens":  0,
 				}
 
 				if !status.Authenticated {
 					result["hint"] = fmt.Sprintf("run '%s auth login %s' to authenticate", cliParams.BinaryName, handlerName)
 				}
 
-				// Add identity type
 				if status.IdentityType != "" {
 					result["identityType"] = string(status.IdentityType)
 				}
 
-				// For service principal/workload identity, show client ID
 				if status.ClientID != "" {
 					result["clientId"] = status.ClientID
 				}
 
-				// For workload identity, show token file path
 				if status.IdentityType == auth.IdentityTypeWorkloadIdentity && status.TokenFile != "" {
 					result["tokenFile"] = status.TokenFile
 				}
@@ -161,15 +219,16 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
-			outputOpts := flags.NewKvxOutputOptionsFromFlags(
-				outputFlags.Output,
-				outputFlags.Interactive,
-				outputFlags.Expression,
-				kvx.WithOutputContext(ctx),
-				kvx.WithOutputNoColor(cliParams.NoColor),
-				kvx.WithOutputAppName(cliParams.BinaryName+" auth status"),
+			// Append catalog rows for remote catalogs from config.
+			if len(args) == 0 {
+				results = appendCatalogStatus(ctx, cliParams, results)
+			}
+
+			outputOpts := flags.ToKvxOutputOptions(&outputFlags,
+				kvx.WithIOStreams(ioStreams),
+				kvx.WithOutputColumnOrder([]string{"handler", "type", "status", "displayName", "email", "username", "expiresIn"}),
+				kvx.WithOutputSchemaJSON(authStatusSchema),
 			)
-			outputOpts.IOStreams = ioStreams
 
 			if err := outputOpts.Write(results); err != nil {
 				return err
@@ -210,4 +269,87 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 	cmd.Flags().BoolVar(&exitCodeFlag, "exit-code", false, "Exit non-zero if any handler is not authenticated (useful for scripting)")
 	cmd.Flags().DurationVar(&warnWithin, "warn-within", 0, "Exit non-zero if any authenticated handler's token expires within this duration (e.g. 10m, 1h)")
 	return cmd
+}
+
+// appendCatalogStatus adds a row for each remote (OCI) catalog from config,
+// showing which auth handler it uses and whether that handler is authenticated.
+func appendCatalogStatus(ctx context.Context, cliParams *settings.Run, results []map[string]any) []map[string]any {
+	cfg := config.FromContext(ctx)
+	if cfg == nil {
+		return results
+	}
+
+	for _, cat := range cfg.Catalogs {
+		if cat.Type != "oci" || cat.URL == "" {
+			continue
+		}
+
+		registryHost, _ := catalog.ParseCatalogURL(cat.URL)
+
+		// Determine which auth handler this catalog uses.
+		handlerName := cat.AuthProvider
+		if handlerName == "" {
+			handlerName = catalog.InferAuthHandler(registryHost, cfg.Auth.CustomOAuth2)
+		}
+
+		var statusStr string
+		displayName := cat.Name
+		authenticated := false
+
+		switch handlerName {
+		case "":
+			statusStr = "no handler"
+		default:
+			handler, err := auth.GetHandler(ctx, handlerName)
+			if err != nil {
+				statusStr = "handler not loaded"
+				break
+			}
+
+			status, err := handler.Status(ctx)
+			if err != nil {
+				statusStr = "check failed"
+				break
+			}
+
+			authenticated = status.Authenticated
+			switch {
+			case status.Authenticated:
+				statusStr = "valid"
+			case status.Reason != "":
+				statusStr = status.Reason
+			default:
+				statusStr = "not logged in"
+			}
+		}
+
+		result := map[string]any{
+			"handler":       handlerName,
+			"displayName":   displayName,
+			"type":          "catalog",
+			"status":        statusStr,
+			"authenticated": authenticated,
+			"email":         "",
+			"username":      "",
+			"expiresIn":     "",
+			"hint":          "",
+			"identityType":  "",
+			"clientId":      "",
+			"tokenFile":     "",
+			"name":          "",
+			"tenantId":      "",
+			"expiresAt":     "",
+			"lastRefresh":   "",
+			"scopes":        []string{},
+			"cachedTokens":  0,
+		}
+
+		if !authenticated {
+			result["hint"] = fmt.Sprintf("run '%s catalog login %s' to authenticate", cliParams.BinaryName, registryHost)
+		}
+
+		results = append(results, result)
+	}
+
+	return results
 }

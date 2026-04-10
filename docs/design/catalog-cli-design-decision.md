@@ -230,7 +230,7 @@ scafctl catalog pull ghcr.io/myorg/custom-path/deploy:1.0.0
 
 ### Rationale
 
-Option B offers the lowest learning curve, least typing after initial setup, and requires no new commands. It integrates naturally with the existing `scafctl config add-catalog` / `scafctl config use-catalog` CLI. Kind inference from local catalog metadata ensures correctness without user-facing complexity.
+Option B offers the lowest learning curve, least typing after initial setup, and requires no new commands. It integrates naturally with the existing `scafctl catalog remote add` / `scafctl catalog remote set-default` CLI. Kind inference from local catalog metadata ensures correctness without user-facing complexity.
 
 ### Implementation Summary
 
@@ -249,7 +249,7 @@ Resolution logic (in `resolveCatalogURL`):
 
 ```bash
 # One-time setup: configure a default catalog
-scafctl config add-catalog ghcr --type oci --url ghcr.io/myorg --default
+scafctl catalog remote add ghcr --type oci --url oci://ghcr.io/myorg --default
 
 # Push (uses default catalog, infers kind from local metadata)
 scafctl catalog push deploy@1.0.0

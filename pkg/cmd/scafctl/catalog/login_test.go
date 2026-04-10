@@ -9,6 +9,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -300,4 +301,91 @@ func TestRunAuthHandlerLogin_InferredRegistryGHCR(t *testing.T) {
 	err := runAuthHandlerLogin(ctx, w, opts)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to bridge auth to registry")
+}
+
+func TestRunAuthHandlerLogin_ScopeAutoDetectedFromConfig(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	ctx := newCatalogTestCtx(t)
+
+	// Add catalog config with authScope to context
+	cfg := &config.Config{
+		Catalogs: []config.CatalogConfig{
+			{
+				Name:      "gcp-catalog",
+				Type:      "oci",
+				URL:       "oci://us-docker.pkg.dev/my-project/scafctl",
+				AuthScope: "https://www.googleapis.com/auth/cloud-platform",
+			},
+		},
+	}
+	ctx = config.WithConfig(ctx, cfg)
+
+	mock := auth.NewMockHandler("gcp")
+	mock.GetTokenResult = &auth.Token{
+		AccessToken: "fake-gcp-token",
+		TokenType:   "Bearer",
+	}
+
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(mock))
+	ctx = auth.WithRegistry(ctx, registry)
+
+	w := writerFromCtx(ctx)
+
+	opts := &LoginOptions{
+		Registry:     "us-docker.pkg.dev",
+		AuthProvider: "gcp",
+		// Scope intentionally empty -- should be auto-detected from config
+	}
+
+	err := runAuthHandlerLogin(ctx, w, opts)
+	require.NoError(t, err)
+
+	// Verify the scope was auto-detected and passed to the handler
+	require.Len(t, mock.GetTokenCalls, 1)
+	assert.Equal(t, "https://www.googleapis.com/auth/cloud-platform", mock.GetTokenCalls[0].Scope)
+}
+
+func TestRunAuthHandlerLogin_ExplicitScopeOverridesConfig(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	ctx := newCatalogTestCtx(t)
+
+	cfg := &config.Config{
+		Catalogs: []config.CatalogConfig{
+			{
+				Name:      "gcp-catalog",
+				Type:      "oci",
+				URL:       "oci://us-docker.pkg.dev/my-project/scafctl",
+				AuthScope: "https://www.googleapis.com/auth/cloud-platform",
+			},
+		},
+	}
+	ctx = config.WithConfig(ctx, cfg)
+
+	mock := auth.NewMockHandler("gcp")
+	mock.GetTokenResult = &auth.Token{
+		AccessToken: "fake-gcp-token",
+		TokenType:   "Bearer",
+	}
+
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(mock))
+	ctx = auth.WithRegistry(ctx, registry)
+
+	w := writerFromCtx(ctx)
+
+	opts := &LoginOptions{
+		Registry:     "us-docker.pkg.dev",
+		AuthProvider: "gcp",
+		Scope:        "https://custom.scope/override",
+	}
+
+	err := runAuthHandlerLogin(ctx, w, opts)
+	require.NoError(t, err)
+
+	// Explicit --scope should take precedence over config authScope
+	require.Len(t, mock.GetTokenCalls, 1)
+	assert.Equal(t, "https://custom.scope/override", mock.GetTokenCalls[0].Scope)
 }

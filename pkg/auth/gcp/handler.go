@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -289,14 +290,34 @@ func (h *Handler) Status(ctx context.Context) (*auth.Status, error) {
 	if !exists {
 		// Check for gcloud ADC credentials as fallback
 		if HasGcloudADCCredentials() {
-			return &auth.Status{
+			status := &auth.Status{
 				Authenticated: true,
 				Claims: &auth.Claims{
 					Issuer: "https://accounts.google.com",
 					Name:   "gcloud ADC (application default credentials)",
 				},
 				IdentityType: auth.IdentityTypeUser,
-			}, nil
+			}
+
+			// Probe with a token refresh to detect expired RAPT or revoked credentials.
+			// This is a single HTTP call and only runs for gcloud ADC fallback.
+			_, tokenErr := h.getGcloudADCToken(ctx, auth.TokenOptions{
+				Scope: "https://www.googleapis.com/auth/cloud-platform",
+			})
+			if tokenErr != nil {
+				status.Authenticated = false
+				errMsg := tokenErr.Error()
+				switch {
+				case strings.Contains(errMsg, "invalid_rapt"):
+					status.Reason = "expired (RAPT policy)"
+				case strings.Contains(errMsg, "invalid_grant"):
+					status.Reason = "expired or revoked"
+				default:
+					status.Reason = "token refresh failed"
+				}
+			}
+
+			return status, nil
 		}
 		return &auth.Status{Authenticated: false}, nil
 	}

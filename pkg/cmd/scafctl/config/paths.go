@@ -187,7 +187,7 @@ func (o *PathsOptions) Run(ctx context.Context) error {
 
 	w.Plain("")
 	if !isIllustrative {
-		w.Plainf("Override paths with XDG environment variables or SCAFCTL_SECRETS_DIR.\n")
+		w.Plainf("Override paths with XDG environment variables or %s_SECRETS_DIR.\n", settings.SafeEnvPrefix(o.BinaryName))
 	}
 
 	return nil

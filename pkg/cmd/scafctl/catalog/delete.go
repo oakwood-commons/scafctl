@@ -230,12 +230,17 @@ func runDeleteRemote(ctx context.Context, opts *DeleteOptions) error {
 		lgr.V(1).Info("failed to create credential store, using anonymous auth", "error", err.Error())
 	}
 
+	// Resolve auth handler for automatic token bridging
+	authHandler := resolveAuthHandler(ctx, registry, opts.Catalog)
+
 	// Create remote catalog
 	remoteCatalog, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
 		Name:            registry,
 		Registry:        registry,
 		Repository:      repository,
 		CredentialStore: credStore,
+		AuthHandler:     authHandler,
+		AuthScope:       resolveAuthScope(ctx, opts.Catalog),
 		Insecure:        opts.Insecure,
 		Logger:          *lgr,
 	})
@@ -245,7 +250,8 @@ func runDeleteRemote(ctx context.Context, opts *DeleteOptions) error {
 	}
 
 	// Delete from remote
-	w.Infof("Deleting %s@%s from %s...", ref.Name, ref.Version.String(), registry)
+	repoPath := remoteCatalog.RepositoryPath(ref)
+	w.Infof("Deleting %s@%s from %s...", ref.Name, ref.VersionOrDigest(), repoPath)
 
 	if err := remoteCatalog.Delete(ctx, ref); err != nil {
 		if catalog.IsNotFound(err) {
@@ -260,10 +266,11 @@ func runDeleteRemote(ctx context.Context, opts *DeleteOptions) error {
 			return exitcode.WithCode(err, exitcode.CatalogError)
 		}
 		w.Errorf("failed to delete artifact: %v", err)
+		hintOnAuthError(ctx, w, registry, err)
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
-	w.Successf("Deleted %s@%s from %s", ref.Name, ref.Version.String(), registry)
+	w.Successf("Deleted %s@%s from %s", ref.Name, ref.VersionOrDigest(), repoPath)
 
 	return nil
 }
@@ -272,21 +279,5 @@ func runDeleteRemote(ctx context.Context, opts *DeleteOptions) error {
 // Remote references contain a registry host with a dot (e.g., "ghcr.io", "docker.io")
 // or start with "oci://", "localhost:", or contain a port.
 func looksLikeRemoteReference(ref string) bool {
-	ref = strings.TrimPrefix(ref, "oci://")
-
-	// Check for common registry patterns
-	if strings.HasPrefix(ref, "localhost") {
-		return true
-	}
-
-	// Split by / and check if first part looks like a host
-	parts := strings.SplitN(ref, "/", 2)
-	if len(parts) < 2 {
-		return false
-	}
-
-	host := parts[0]
-
-	// If host contains a dot or colon (port), it's likely a registry
-	return strings.Contains(host, ".") || strings.Contains(host, ":")
+	return catalog.LooksLikeRemoteReference(ref)
 }

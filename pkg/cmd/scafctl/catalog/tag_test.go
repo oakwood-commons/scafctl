@@ -144,6 +144,64 @@ func TestCommandTag_InvalidKind(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid kind")
 }
 
+func TestCommandTag_RemoteSkipsKindInference(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandTag(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(newCatalogTestCtx(t))
+	// With --catalog set, kind inference from local catalog is skipped.
+	// This will fail at catalog URL resolution (no config), not at kind inference.
+	cmd.SetArgs([]string{"nonexistent@1.0.0", "stable", "--catalog", "my-registry"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	// Should NOT contain "failed to infer artifact kind" — kind inference is skipped for remote
+	assert.NotContains(t, err.Error(), "failed to infer artifact kind")
+}
+
+func TestCommandTag_ReservedLatestAlias(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandTag(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(newCatalogTestCtx(t))
+	cmd.SetArgs([]string{"my-solution@1.0.0", "latest"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+}
+
+func TestCommandTag_NumericAlias(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandTag(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(newCatalogTestCtx(t))
+	cmd.SetArgs([]string{"my-solution@1.0.0", "123"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "purely numeric")
+}
+
+func TestCommandTag_InvalidCharAlias(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandTag(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(newCatalogTestCtx(t))
+	cmd.SetArgs([]string{"my-solution@1.0.0", "bad/alias"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid character")
+}
+
 func BenchmarkCommandTag(b *testing.B) {
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()

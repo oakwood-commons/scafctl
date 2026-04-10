@@ -13,8 +13,10 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
+	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
@@ -24,27 +26,28 @@ import (
 
 // FunctionalOptions holds configuration for the test functional command.
 type FunctionalOptions struct {
-	IOStreams       *terminal.IOStreams
-	CliParams       *settings.Run
-	File            string
-	TestsPath       string
-	Output          string
-	ReportFile      string
-	UpdateSnapshots bool
-	Sequential      bool
-	Concurrency     int
-	SkipBuiltins    bool
-	TestTimeout     time.Duration
-	Timeout         time.Duration
-	Filter          []string
-	Tag             []string
-	Solution        []string
-	DryRun          bool
-	FailFast        bool
-	Verbose         bool
-	KeepSandbox     bool
-	NoProgress      bool
-	Watch           bool
+	IOStreams         *terminal.IOStreams
+	CliParams         *settings.Run
+	File              string
+	TestsPath         string
+	Output            string
+	ReportFile        string
+	UpdateSnapshots   bool
+	Sequential        bool
+	Concurrency       int
+	SkipBuiltins      bool
+	TestTimeout       time.Duration
+	Timeout           time.Duration
+	Filter            []string
+	Tag               []string
+	Solution          []string
+	DryRun            bool
+	FailFast          bool
+	Verbose           bool
+	KeepSandbox       bool
+	NoProgress        bool
+	Watch             bool
+	positionalPathErr error
 }
 
 // CommandFunctional creates the 'test functional' subcommand.
@@ -52,46 +55,60 @@ func CommandFunctional(cliParams *settings.Run, ioStreams *terminal.IOStreams, p
 	opts := &FunctionalOptions{}
 
 	cCmd := &cobra.Command{
-		Use:     "functional",
+		Use:     "functional [reference]",
 		Aliases: []string{"func", "fn"},
 		Short:   "Run functional tests against solutions",
-		Long: `Run functional tests defined in solution YAML files.
+		Long: fmt.Sprintf(`Run functional tests defined in solution YAML files.
 
-Tests execute scafctl commands in isolated sandboxes and validate output
+Tests execute %[1]s commands in isolated sandboxes and validate output
 using CEL expressions, regex matching, substring checks, and golden-file
 snapshots.
 
 Examples:
   # Auto-discover solution in current directory
-  scafctl test functional
+  %[1]s test functional
 
   # Run all tests in a solution
-  scafctl test functional -f ./solution.yaml
+  %[1]s test functional -f ./solution.yaml
+
+  # Run tests from a catalog or remote registry reference
+  %[1]s test functional my-solution@1.0.0
+  %[1]s test functional ghcr.io/myorg/solutions/my-solution@1.0.0
 
   # Run tests from a directory
-  scafctl test functional --tests-path ./solutions/
+  %[1]s test functional --tests-path ./solutions/
 
   # Run with filters
-  scafctl test functional -f ./solution.yaml --filter "render-*" --tag smoke
+  %[1]s test functional -f ./solution.yaml --filter "render-*" --tag smoke
 
   # Update snapshots
-  scafctl test functional -f ./solution.yaml --update-snapshots
+  %[1]s test functional -f ./solution.yaml --update-snapshots
 
   # Run sequentially with verbose output
-  scafctl test functional -f ./solution.yaml --sequential -v
+  %[1]s test functional -f ./solution.yaml --sequential -v
 
   # Generate JUnit report
-  scafctl test functional -f ./solution.yaml --report-file results.xml
+  %[1]s test functional -f ./solution.yaml --report-file results.xml
 
   # Dry run (validate only)
-  scafctl test functional -f ./solution.yaml --dry-run
+  %[1]s test functional -f ./solution.yaml --dry-run
 
   # Watch mode - re-run on file changes
-  scafctl test functional -f ./solution.yaml --watch
-  scafctl test functional -f ./solution.yaml --watch --tag smoke`,
+  %[1]s test functional -f ./solution.yaml --watch
+  %[1]s test functional -f ./solution.yaml --watch --tag smoke`, cliParams.BinaryName),
 		SilenceUsage: true,
+		Args:         cobra.MaximumNArgs(1),
+		PreRun: func(_ *cobra.Command, args []string) {
+			if len(args) > 0 {
+				if err := get.ValidatePositionalRef(args[0], opts.File, cliParams.BinaryName+" test functional"); err != nil {
+					opts.positionalPathErr = err
+				} else {
+					opts.File = args[0]
+				}
+			}
+		},
 		RunE: func(cCmd *cobra.Command, _ []string) error {
-			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
+			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Name())
 			ctx := settings.IntoContext(cCmd.Context(), cliParams)
 
 			opts.IOStreams = ioStreams
@@ -133,8 +150,13 @@ func runFunctional(ctx context.Context, opts *FunctionalOptions) error {
 		w = writer.New(opts.IOStreams, opts.CliParams)
 	}
 
+	if opts.positionalPathErr != nil {
+		w.Errorf("%s", opts.positionalPathErr)
+		return exitcode.WithCode(opts.positionalPathErr, exitcode.InvalidInput)
+	}
+
 	// Determine the path to discover solutions from.
-	// Priority: --tests-path > -f > auto-discover
+	// Priority: --tests-path > -f/positional arg > auto-discover
 	testsPath := opts.TestsPath
 	if testsPath == "" {
 		testsPath = opts.File
@@ -148,6 +170,45 @@ func runFunctional(ctx context.Context, opts *FunctionalOptions) error {
 			w.Errorf("%s", err)
 		}
 		return exitcode.WithCode(err, exitcode.InvalidInput)
+	}
+
+	// If the path is a catalog/remote reference (and not a local file/directory),
+	// fetch the solution to a temp file.
+	if get.IsCatalogReference(testsPath) && !fileExists(testsPath) {
+		w.Infof("Fetching %s...", testsPath)
+		getter := prepare.NewDefaultGetter(ctx, false)
+		sol, getErr := getter.Get(ctx, testsPath)
+		if getErr != nil {
+			w.Errorf("failed to fetch solution %q: %v", testsPath, getErr)
+			return exitcode.WithCode(getErr, exitcode.CatalogError)
+		}
+		solName := sol.Metadata.Name
+		if sol.Metadata.Version != nil {
+			solName += "@" + sol.Metadata.Version.String()
+		}
+		w.Infof("Resolved %s", solName)
+
+		rawContent := sol.RawContent()
+		if len(rawContent) == 0 {
+			var marshalErr error
+			rawContent, marshalErr = sol.ToYAML()
+			if marshalErr != nil {
+				return fmt.Errorf("failed to marshal solution: %w", marshalErr)
+			}
+		}
+
+		tmpFile, tmpErr := os.CreateTemp("", paths.AppName()+"-test-*.yaml")
+		if tmpErr != nil {
+			return fmt.Errorf("failed to create temp file: %w", tmpErr)
+		}
+		defer os.Remove(tmpFile.Name())
+		if _, writeErr := tmpFile.Write(rawContent); writeErr != nil {
+			return fmt.Errorf("failed to write temp file: %w", writeErr)
+		}
+		if closeErr := tmpFile.Close(); closeErr != nil {
+			return fmt.Errorf("failed to close temp file: %w", closeErr)
+		}
+		testsPath = tmpFile.Name()
 	}
 
 	// Watch mode — delegate to the watcher loop.
@@ -422,4 +483,15 @@ func runWatchMode(ctx context.Context, opts *FunctionalOptions, w *writer.Writer
 		return nil
 	}
 	return err
+}
+
+// fileExists returns true if the given path exists on the local filesystem.
+// Returns false only for non-existence; other errors (e.g. permission) are
+// treated as existence to avoid misrouting inaccessible local paths.
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true
+	}
+	return !os.IsNotExist(err)
 }

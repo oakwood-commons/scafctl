@@ -173,6 +173,12 @@ Credential resolution order:
 - **Explicit:** `scafctl auth login github && scafctl catalog login ghcr.io` stores credentials in the native store
 - **Dynamic:** Setting `authProvider: github` on a catalog config enables automatic token injection at pull/push time -- no separate login step needed
 
+When using `catalog login` with an auth handler bridge, the OAuth scope is resolved in this order:
+
+1. `--scope` flag (explicit override)
+2. `authScope` field from the matching catalog remote config
+3. Handler default (if the handler provides one)
+
 The bridge converts auth handler tokens to registry-specific credentials:
 
 | Registry | Auth Handler | Username Convention |

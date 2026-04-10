@@ -6,6 +6,9 @@ package test
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -103,6 +106,57 @@ func TestRunFunctional_InvalidFile(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestRunFunctional_PositionalPathError verifies that a pre-set positional path
+// error is surfaced as an error return.
+func TestRunFunctional_PositionalPathError(t *testing.T) {
+	ctx, _ := newFuncTestCtx(t)
+
+	opts := &FunctionalOptions{
+		IOStreams:         terminal.NewIOStreams(nil, nil, nil, false),
+		CliParams:         settings.NewCliParams(),
+		positionalPathErr: fmt.Errorf("ambiguous reference: use --file or a catalog reference"),
+	}
+
+	err := runFunctional(ctx, opts)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ambiguous reference")
+}
+
+// TestRunFunctional_DryRun verifies that dry-run mode works with a valid solution.
+func TestRunFunctional_DryRun(t *testing.T) {
+	ctx, buf := newFuncTestCtx(t)
+
+	// Create a minimal solution with a test
+	tmpDir := t.TempDir()
+	solFile := filepath.Join(tmpDir, "solution.yaml")
+	content := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: dry-run-test
+  version: 1.0.0
+spec:
+  testing:
+    tests:
+      - name: hello
+        command: echo hello
+        assertions:
+          - type: contains
+            value: hello
+`
+	require.NoError(t, os.WriteFile(solFile, []byte(content), 0o600))
+
+	opts := &FunctionalOptions{
+		IOStreams: terminal.NewIOStreams(nil, buf, buf, false),
+		CliParams: settings.NewCliParams(),
+		File:      solFile,
+		DryRun:    true,
+		Output:    "quiet",
+	}
+
+	err := runFunctional(ctx, opts)
+	require.NoError(t, err)
+}
+
 // TestRunFunctional_NilWriter verifies runFunctional works even when the writer
 // is not injected in context (uses fallback path).
 func TestRunFunctional_NilWriter(t *testing.T) {
@@ -122,6 +176,26 @@ func TestRunFunctional_NilWriter(t *testing.T) {
 	// Should not panic — fallback writer is created
 	err := runFunctional(ctx, opts)
 	require.NoError(t, err, "should succeed finding 0 solutions in empty dir")
+}
+
+// TestRunFunctional_SequentialAndSkipBuiltins verifies that sequential and skip-builtins
+// options are plumbed through without error.
+func TestRunFunctional_SequentialAndSkipBuiltins(t *testing.T) {
+	ctx, buf := newFuncTestCtx(t)
+
+	tmpDir := t.TempDir()
+
+	opts := &FunctionalOptions{
+		IOStreams:    terminal.NewIOStreams(nil, buf, buf, false),
+		CliParams:    settings.NewCliParams(),
+		TestsPath:    tmpDir,
+		Sequential:   true,
+		SkipBuiltins: true,
+		NoProgress:   true,
+	}
+
+	err := runFunctional(ctx, opts)
+	require.NoError(t, err)
 }
 
 // ── CommandFunctional additional tests ────────────────────────────────────────

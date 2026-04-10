@@ -5,10 +5,13 @@ package builder
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/cache"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/format"
 	"github.com/stretchr/testify/assert"
@@ -179,4 +182,122 @@ func TestStoreSolutionArtifact_WithBuildResultTar(t *testing.T) {
 		[]byte("solution-content"), br, StoreOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, "tar-sol", result.Info.Reference.Name)
+}
+
+func TestStoreSolutionArtifact_InvalidatesArtifactCache(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	cat, err := catalog.NewLocalCatalogAt(tmpDir, logr.Discard())
+	require.NoError(t, err)
+
+	// Pre-populate the artifact cache with a stale entry
+	artifactCacheDir := filepath.Join(t.TempDir(), "artifact-cache")
+	ttl := time.Hour
+	ac := cache.NewArtifactCache(artifactCacheDir, ttl)
+	require.NoError(t, ac.Put("solution", "cached-sol", "1.0.0", "", []byte("stale-content"), nil))
+
+	// Verify stale entry exists
+	content, _, ok, err := ac.Get("solution", "cached-sol", "1.0.0")
+	require.NoError(t, err)
+	require.True(t, ok, "stale cache entry should exist before store")
+	assert.Equal(t, []byte("stale-content"), content)
+
+	// Store a new artifact with cache invalidation enabled
+	result, err := StoreSolutionArtifact(ctx, cat, "cached-sol", semver.MustParse("1.0.0"),
+		[]byte("fresh-content"), nil, StoreOptions{
+			ArtifactCacheDir: artifactCacheDir,
+			ArtifactCacheTTL: ttl,
+		})
+	require.NoError(t, err)
+	assert.Equal(t, "cached-sol", result.Info.Reference.Name)
+
+	// Verify artifact cache entry was invalidated
+	_, _, ok, err = ac.Get("solution", "cached-sol", "1.0.0")
+	require.NoError(t, err)
+	assert.False(t, ok, "artifact cache entry should be invalidated after store")
+}
+
+func TestStoreSolutionArtifact_NoCacheDirSkipsInvalidation(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	cat, err := catalog.NewLocalCatalogAt(tmpDir, logr.Discard())
+	require.NoError(t, err)
+
+	// Empty ArtifactCacheDir — should not panic or error
+	result, err := StoreSolutionArtifact(ctx, cat, "no-cache", semver.MustParse("1.0.0"),
+		[]byte("content"), nil, StoreOptions{ArtifactCacheDir: ""})
+	require.NoError(t, err)
+	assert.Equal(t, "no-cache", result.Info.Reference.Name)
+}
+
+func TestStoreSolutionArtifact_WithBuildFingerprint(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	cat, err := catalog.NewLocalCatalogAt(tmpDir, logr.Discard())
+	require.NoError(t, err)
+
+	buildCacheDir := filepath.Join(t.TempDir(), "build-cache")
+
+	br := &BuildResult{
+		TarData:          []byte("tar"),
+		BuildFingerprint: "abc123",
+		BuildCacheDir:    buildCacheDir,
+		InputFileCount:   5,
+	}
+	result, err := StoreSolutionArtifact(ctx, cat, "fp-sol", semver.MustParse("2.0.0"),
+		[]byte("content"), br, StoreOptions{Source: "test.yaml"})
+	require.NoError(t, err)
+	assert.Equal(t, "fp-sol", result.Info.Reference.Name)
+	assert.True(t, result.CacheWritten)
+}
+
+func TestStoreSolutionArtifact_NilVersionReturnsError(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	cat, err := catalog.NewLocalCatalogAt(tmpDir, logr.Discard())
+	require.NoError(t, err)
+
+	_, err = StoreSolutionArtifact(ctx, cat, "nil-ver-sol", nil,
+		[]byte("content"), nil, StoreOptions{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "version is required")
+}
+
+func TestStoreSolutionArtifact_NoBuildFingerprint(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	cat, err := catalog.NewLocalCatalogAt(tmpDir, logr.Discard())
+	require.NoError(t, err)
+
+	// BuildResult with empty fingerprint — should not write build cache
+	br := &BuildResult{TarData: []byte("tar")}
+	result, err := StoreSolutionArtifact(ctx, cat, "no-fp", semver.MustParse("1.0.0"),
+		[]byte("content"), br, StoreOptions{})
+	require.NoError(t, err)
+	assert.False(t, result.CacheWritten)
+}
+
+func TestStoreSolutionArtifact_ForceOverwrite(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	cat, err := catalog.NewLocalCatalogAt(tmpDir, logr.Discard())
+	require.NoError(t, err)
+
+	version := semver.MustParse("1.0.0")
+
+	// Store first time
+	_, err = StoreSolutionArtifact(ctx, cat, "force-test", version,
+		[]byte("v1-content"), nil, StoreOptions{})
+	require.NoError(t, err)
+
+	// Store again without force — should fail
+	_, err = StoreSolutionArtifact(ctx, cat, "force-test", version,
+		[]byte("v2-content"), nil, StoreOptions{Force: false})
+	require.Error(t, err)
+
+	// Store again with force — should succeed
+	result, err := StoreSolutionArtifact(ctx, cat, "force-test", version,
+		[]byte("v3-content"), nil, StoreOptions{Force: true})
+	require.NoError(t, err)
+	assert.Equal(t, "force-test", result.Info.Reference.Name)
 }

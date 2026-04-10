@@ -293,7 +293,8 @@ func TestFromUrl(t *testing.T) {
 	})
 
 	t.Run("validation failure", func(t *testing.T) {
-		invalidSolutionJSON := `{"apiVersion":"scafctl.io/v1","kind":"Solution","metadata":{"name":"x"}}`
+		// Missing metadata.name triggers validation error
+		invalidSolutionJSON := `{"apiVersion":"scafctl.io/v1","kind":"Solution","metadata":{}}`
 
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
@@ -338,8 +339,9 @@ func TestFromLocalFileSystem(t *testing.T) {
 	})
 
 	t.Run("validation failure", func(t *testing.T) {
+		// Missing metadata.name triggers validation error
 		customReadFile := func(name string) ([]byte, error) {
-			return []byte(`{"apiVersion":"scafctl.io/v1","kind":"Solution","metadata":{"name":"x"}}`), nil
+			return []byte(`{"apiVersion":"scafctl.io/v1","kind":"Solution","metadata":{}}`), nil
 		}
 
 		getter := NewGetter(WithReadFile(customReadFile))
@@ -593,6 +595,23 @@ func (m *mockCatalogResolver) FetchSolution(_ context.Context, nameWithVersion s
 		return content, nil
 	}
 	return nil, fmt.Errorf("solution not found: %s", nameWithVersion)
+}
+
+// mockRemoteResolver implements RemoteResolver for testing
+type mockRemoteResolver struct {
+	solutions  map[string][]byte
+	bundleData map[string][]byte
+	err        error
+}
+
+func (m *mockRemoteResolver) FetchRemoteSolution(_ context.Context, ref string) ([]byte, []byte, error) {
+	if m.err != nil {
+		return nil, nil, m.err
+	}
+	if content, ok := m.solutions[ref]; ok {
+		return content, m.bundleData[ref], nil
+	}
+	return nil, nil, fmt.Errorf("remote solution not found: %s", ref)
 }
 
 func TestWithCatalogResolver(t *testing.T) {
@@ -1078,4 +1097,611 @@ func TestNewGetterFromContext_WithAdditionalOpts(t *testing.T) {
 	// Should have custom folders AND the logger option applied
 	assert.Equal(t, settings.SolutionFoldersFor("mycli"), g.solutionFolders)
 	assert.NotNil(t, g.logger)
+}
+
+func TestWithRemoteResolver(t *testing.T) {
+	t.Parallel()
+	mock := &mockRemoteResolver{
+		solutions: map[string][]byte{"ghcr.io/org/sol@1.0.0": []byte("content")},
+	}
+
+	option := WithRemoteResolver(mock)
+	require.NotNil(t, option)
+
+	getter := &Getter{}
+	option(getter)
+
+	assert.Equal(t, mock, getter.remoteResolver)
+}
+
+func TestGetter_Get_RemoteRef(t *testing.T) {
+	t.Parallel()
+
+	validSolution := []byte(`
+metadata:
+  name: remote-sol
+  version: 1.0.0
+spec:
+  resolvers: {}
+`)
+
+	t.Run("resolves Docker-style remote ref", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockRemoteResolver{
+			solutions: map[string][]byte{
+				"ghcr.io/myorg/starter-kit@1.0.0": validSolution,
+			},
+		}
+		getter := NewGetter(WithRemoteResolver(mock))
+		sol, err := getter.Get(context.Background(), "ghcr.io/myorg/starter-kit@1.0.0")
+		require.NoError(t, err)
+		assert.Equal(t, "remote-sol", sol.Metadata.Name)
+		assert.Equal(t, "remote:ghcr.io/myorg/starter-kit@1.0.0", sol.GetPath())
+	})
+
+	t.Run("remote ref error returns wrapped error", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockRemoteResolver{
+			err: fmt.Errorf("network timeout"),
+		}
+		getter := NewGetter(WithRemoteResolver(mock))
+		_, err := getter.Get(context.Background(), "ghcr.io/myorg/starter-kit@1.0.0")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to resolve remote reference")
+		assert.Contains(t, err.Error(), "network timeout")
+	})
+
+	t.Run("falls through to file system without remote resolver", func(t *testing.T) {
+		t.Parallel()
+		// No remote resolver configured — should not panic, should fall through
+		getter := NewGetter()
+		_, err := getter.Get(context.Background(), "ghcr.io/myorg/starter-kit@1.0.0")
+		require.Error(t, err)
+		// Should be a file system error since no remote resolver and this isn't a file
+	})
+}
+
+// mockBundleAwareCatalogResolver implements BundleAwareCatalogResolver for testing.
+type mockBundleAwareCatalogResolver struct {
+	solutions map[string][]byte
+	bundles   map[string][]byte
+	err       error
+	fetchErr  error
+	bundleErr error
+}
+
+func (m *mockBundleAwareCatalogResolver) FetchSolution(_ context.Context, nameWithVersion string) ([]byte, error) {
+	if m.fetchErr != nil {
+		return nil, m.fetchErr
+	}
+	if content, ok := m.solutions[nameWithVersion]; ok {
+		return content, nil
+	}
+	return nil, fmt.Errorf("solution not found: %s", nameWithVersion)
+}
+
+func (m *mockBundleAwareCatalogResolver) FetchSolutionWithBundle(_ context.Context, nameWithVersion string) ([]byte, []byte, error) {
+	if m.err != nil {
+		return nil, nil, m.err
+	}
+	if m.bundleErr != nil {
+		return nil, nil, m.bundleErr
+	}
+	content, ok := m.solutions[nameWithVersion]
+	if !ok {
+		return nil, nil, fmt.Errorf("solution not found: %s", nameWithVersion)
+	}
+	return content, m.bundles[nameWithVersion], nil
+}
+
+func TestGetter_fromCatalogWithBundle(t *testing.T) {
+	t.Parallel()
+
+	validSolutionYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: bundle-sol
+  version: 1.0.0
+spec:
+  resolvers: {}
+`
+
+	t.Run("bundle-aware resolver returns content and bundle", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockBundleAwareCatalogResolver{
+			solutions: map[string][]byte{
+				"bundle-sol@1.0.0": []byte(validSolutionYAML),
+			},
+			bundles: map[string][]byte{
+				"bundle-sol@1.0.0": []byte("fake-bundle-tar"),
+			},
+		}
+
+		getter := NewGetter(WithCatalogResolver(mock))
+		sol, bundleData, err := getter.fromCatalogWithBundle(context.Background(), "bundle-sol@1.0.0")
+
+		require.NoError(t, err)
+		assert.Equal(t, "bundle-sol", sol.Metadata.Name)
+		assert.Equal(t, []byte("fake-bundle-tar"), bundleData)
+		assert.Equal(t, "catalog:bundle-sol@1.0.0", sol.GetPath())
+	})
+
+	t.Run("bundle-aware resolver returns content without bundle", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockBundleAwareCatalogResolver{
+			solutions: map[string][]byte{
+				"no-bundle-sol": []byte(validSolutionYAML),
+			},
+		}
+
+		getter := NewGetter(WithCatalogResolver(mock))
+		sol, bundleData, err := getter.fromCatalogWithBundle(context.Background(), "no-bundle-sol")
+
+		require.NoError(t, err)
+		assert.NotNil(t, sol)
+		assert.Nil(t, bundleData)
+	})
+
+	t.Run("bundle-aware resolver error", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockBundleAwareCatalogResolver{
+			err: fmt.Errorf("fetch failed"),
+		}
+
+		getter := NewGetter(WithCatalogResolver(mock))
+		_, _, err := getter.fromCatalogWithBundle(context.Background(), "bad-sol")
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "fetch failed")
+	})
+
+	t.Run("bundle-aware resolver returns invalid content", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockBundleAwareCatalogResolver{
+			solutions: map[string][]byte{
+				"broken": []byte("not valid yaml: {{{"),
+			},
+		}
+
+		getter := NewGetter(WithCatalogResolver(mock))
+		_, _, err := getter.fromCatalogWithBundle(context.Background(), "broken")
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to parse solution from catalog")
+	})
+
+	t.Run("falls back to basic resolver when not bundle-aware", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockCatalogResolver{
+			solutions: map[string][]byte{
+				"basic-sol": []byte(validSolutionYAML),
+			},
+		}
+
+		getter := NewGetter(WithCatalogResolver(mock))
+		sol, bundleData, err := getter.fromCatalogWithBundle(context.Background(), "basic-sol")
+
+		require.NoError(t, err)
+		assert.Equal(t, "bundle-sol", sol.Metadata.Name) // name from the YAML content
+		assert.Nil(t, bundleData)
+		assert.Equal(t, "catalog:basic-sol", sol.GetPath())
+	})
+
+	t.Run("basic resolver error", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockCatalogResolver{
+			err: fmt.Errorf("catalog unavailable"),
+		}
+
+		getter := NewGetter(WithCatalogResolver(mock))
+		_, _, err := getter.fromCatalogWithBundle(context.Background(), "bad-sol")
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "catalog unavailable")
+	})
+
+	t.Run("basic resolver returns invalid content", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockCatalogResolver{
+			solutions: map[string][]byte{
+				"broken": []byte("{{invalid}}"),
+			},
+		}
+
+		getter := NewGetter(WithCatalogResolver(mock))
+		_, _, err := getter.fromCatalogWithBundle(context.Background(), "broken")
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to parse solution from catalog")
+	})
+}
+
+func TestGetter_GetWithBundle_CatalogResolution(t *testing.T) {
+	t.Parallel()
+
+	validSolutionYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: cat-bundle-sol
+  version: 1.0.0
+spec:
+  resolvers: {}
+`
+
+	t.Run("resolves bare name from bundle-aware catalog", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockBundleAwareCatalogResolver{
+			solutions: map[string][]byte{
+				"cat-bundle-sol": []byte(validSolutionYAML),
+			},
+			bundles: map[string][]byte{
+				"cat-bundle-sol": []byte("bundle-data"),
+			},
+		}
+
+		getter := NewGetter(WithCatalogResolver(mock))
+		sol, bundleData, err := getter.GetWithBundle(context.Background(), "cat-bundle-sol")
+
+		require.NoError(t, err)
+		assert.Equal(t, "cat-bundle-sol", sol.Metadata.Name)
+		assert.Equal(t, []byte("bundle-data"), bundleData)
+	})
+
+	t.Run("versioned catalog lookup fails returns error directly", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockBundleAwareCatalogResolver{
+			err: fmt.Errorf("not found"),
+		}
+
+		getter := NewGetter(WithCatalogResolver(mock))
+		_, _, err := getter.GetWithBundle(context.Background(), "missing@1.0.0")
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not found")
+	})
+
+	t.Run("resolves URL path", func(t *testing.T) {
+		t.Parallel()
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(validSolutionYAML))
+		}))
+		defer server.Close()
+
+		cfg := httpc.DefaultConfig()
+		cfg.EnableCache = false
+		cfg.RetryMax = 0
+		getter := NewGetter(WithHTTPClient(httpc.NewClient(cfg)))
+		sol, bundleData, err := getter.GetWithBundle(context.Background(), server.URL)
+
+		require.NoError(t, err)
+		assert.NotNil(t, sol)
+		assert.Nil(t, bundleData)
+	})
+}
+
+func TestGetter_GetWithBundle_RemoteResolution(t *testing.T) {
+	t.Parallel()
+
+	validSolutionYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: remote-bundle-sol
+  version: 1.0.0
+spec:
+  resolvers: {}
+`
+
+	t.Run("resolves remote ref with bundle", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockRemoteResolver{
+			solutions: map[string][]byte{
+				"ghcr.io/myorg/starter-kit@1.0.0": []byte(validSolutionYAML),
+			},
+			bundleData: map[string][]byte{
+				"ghcr.io/myorg/starter-kit@1.0.0": []byte("remote-bundle"),
+			},
+		}
+
+		getter := NewGetter(WithRemoteResolver(mock))
+		sol, bundleData, err := getter.GetWithBundle(context.Background(), "ghcr.io/myorg/starter-kit@1.0.0")
+
+		require.NoError(t, err)
+		assert.Equal(t, "remote-bundle-sol", sol.Metadata.Name)
+		assert.Equal(t, []byte("remote-bundle"), bundleData)
+	})
+
+	t.Run("remote resolver error returns wrapped error", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockRemoteResolver{
+			err: fmt.Errorf("connection refused"),
+		}
+
+		getter := NewGetter(WithRemoteResolver(mock))
+		_, _, err := getter.GetWithBundle(context.Background(), "ghcr.io/myorg/fail@1.0.0")
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to resolve remote reference")
+	})
+
+	t.Run("remote resolver returns invalid content", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockRemoteResolver{
+			solutions: map[string][]byte{
+				"ghcr.io/myorg/bad@1.0.0": []byte("{{invalid content}}"),
+			},
+		}
+
+		getter := NewGetter(WithRemoteResolver(mock))
+		_, _, err := getter.GetWithBundle(context.Background(), "ghcr.io/myorg/bad@1.0.0")
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to parse solution from remote")
+	})
+}
+
+func TestGetter_fromRemoteRefWithBundle(t *testing.T) {
+	t.Parallel()
+
+	validSolutionYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: remote-ref-sol
+  version: 2.0.0
+spec:
+  resolvers: {}
+`
+
+	t.Run("success with bundle", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockRemoteResolver{
+			solutions: map[string][]byte{
+				"ghcr.io/org/sol@2.0.0": []byte(validSolutionYAML),
+			},
+			bundleData: map[string][]byte{
+				"ghcr.io/org/sol@2.0.0": []byte("tar-data"),
+			},
+		}
+
+		getter := NewGetter(WithRemoteResolver(mock))
+		sol, bundleData, err := getter.fromRemoteRefWithBundle(context.Background(), "ghcr.io/org/sol@2.0.0")
+
+		require.NoError(t, err)
+		assert.Equal(t, "remote-ref-sol", sol.Metadata.Name)
+		assert.Equal(t, []byte("tar-data"), bundleData)
+		assert.Equal(t, "remote:ghcr.io/org/sol@2.0.0", sol.GetPath())
+	})
+
+	t.Run("success without bundle", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockRemoteResolver{
+			solutions: map[string][]byte{
+				"ghcr.io/org/sol@2.0.0": []byte(validSolutionYAML),
+			},
+		}
+
+		getter := NewGetter(WithRemoteResolver(mock))
+		sol, bundleData, err := getter.fromRemoteRefWithBundle(context.Background(), "ghcr.io/org/sol@2.0.0")
+
+		require.NoError(t, err)
+		assert.NotNil(t, sol)
+		assert.Nil(t, bundleData)
+	})
+
+	t.Run("fetch error", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockRemoteResolver{
+			err: fmt.Errorf("auth denied"),
+		}
+
+		getter := NewGetter(WithRemoteResolver(mock))
+		_, _, err := getter.fromRemoteRefWithBundle(context.Background(), "ghcr.io/org/sol@2.0.0")
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "auth denied")
+	})
+
+	t.Run("invalid solution content", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockRemoteResolver{
+			solutions: map[string][]byte{
+				"ghcr.io/org/bad@1.0.0": []byte("not yaml"),
+			},
+		}
+
+		getter := NewGetter(WithRemoteResolver(mock))
+		_, _, err := getter.fromRemoteRefWithBundle(context.Background(), "ghcr.io/org/bad@1.0.0")
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to parse solution from remote")
+	})
+}
+
+func TestGetter_Get_CombinedCatalogFileError(t *testing.T) {
+	t.Parallel()
+
+	// When catalog fails for a bare name (without @), and file also fails,
+	// the error should mention both failures
+	mock := &mockCatalogResolver{
+		err: fmt.Errorf("catalog offline"),
+	}
+
+	getter := NewGetter(
+		WithCatalogResolver(mock),
+		WithReadFile(func(name string) ([]byte, error) {
+			return nil, fmt.Errorf("file not found")
+		}),
+	)
+
+	_, err := getter.Get(context.Background(), "my-solution")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "also not found on file system")
+}
+
+func TestExtractNameVersionFromRef(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		ref      string
+		expected string
+	}{
+		{"full ref with @version", "ghcr.io/myorg/solutions/hello-world@1.0.0", "hello-world@1.0.0"},
+		{"full ref with :tag", "ghcr.io/myorg/solutions/hello-world:1.0.0", "hello-world@1.0.0"},
+		{"oci:// prefix", "oci://ghcr.io/myorg/solutions/hello-world@2.0.0", "hello-world@2.0.0"},
+		{"no version", "ghcr.io/myorg/solutions/hello-world", "hello-world"},
+		{"two-segment ref", "ghcr.io/hello-world@1.0.0", "hello-world@1.0.0"},
+		{"localhost with port", "localhost:5000/my-app@0.1.0", "my-app@0.1.0"},
+		{"no slash", "hello-world@1.0.0", ""},
+		{"empty", "", ""},
+		{"trailing slash", "ghcr.io/myorg/solutions/@1.0.0", ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			result := extractNameVersionFromRef(tc.ref)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+}
+
+func TestGetter_Get_RegistryRef_LocalFirst(t *testing.T) {
+	t.Parallel()
+
+	validSolutionYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: hello-world
+  version: 1.0.0
+spec:
+  resolvers: {}
+`
+
+	t.Run("returns local catalog hit without calling remote", func(t *testing.T) {
+		t.Parallel()
+
+		catalogMock := &mockCatalogResolver{
+			solutions: map[string][]byte{
+				"hello-world@1.0.0": []byte(validSolutionYAML),
+			},
+		}
+		remoteMock := &mockRemoteResolver{
+			solutions: map[string][]byte{},
+			err:       fmt.Errorf("should not be called"),
+		}
+
+		getter := NewGetter(
+			WithCatalogResolver(catalogMock),
+			WithRemoteResolver(remoteMock),
+		)
+
+		sol, err := getter.Get(context.Background(), "ghcr.io/myorg/solutions/hello-world@1.0.0")
+		require.NoError(t, err)
+		assert.Equal(t, "hello-world", sol.Metadata.Name)
+	})
+
+	t.Run("falls back to remote on local catalog miss", func(t *testing.T) {
+		t.Parallel()
+
+		catalogMock := &mockCatalogResolver{
+			solutions: map[string][]byte{}, // empty — not in local catalog
+		}
+		remoteMock := &mockRemoteResolver{
+			solutions: map[string][]byte{
+				"ghcr.io/myorg/solutions/hello-world@1.0.0": []byte(validSolutionYAML),
+			},
+		}
+
+		getter := NewGetter(
+			WithCatalogResolver(catalogMock),
+			WithRemoteResolver(remoteMock),
+		)
+
+		sol, err := getter.Get(context.Background(), "ghcr.io/myorg/solutions/hello-world@1.0.0")
+		require.NoError(t, err)
+		assert.Equal(t, "hello-world", sol.Metadata.Name)
+	})
+
+	t.Run("returns remote error when both miss", func(t *testing.T) {
+		t.Parallel()
+
+		catalogMock := &mockCatalogResolver{
+			solutions: map[string][]byte{},
+		}
+		remoteMock := &mockRemoteResolver{
+			solutions: map[string][]byte{},
+		}
+
+		getter := NewGetter(
+			WithCatalogResolver(catalogMock),
+			WithRemoteResolver(remoteMock),
+		)
+
+		_, err := getter.Get(context.Background(), "ghcr.io/myorg/solutions/hello-world@1.0.0")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to resolve remote reference")
+	})
+}
+
+func TestGetter_GetWithBundle_RegistryRef_LocalFirst(t *testing.T) {
+	t.Parallel()
+
+	validSolutionYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: hello-world
+  version: 1.0.0
+spec:
+  resolvers: {}
+`
+
+	t.Run("returns local catalog hit with bundle", func(t *testing.T) {
+		t.Parallel()
+
+		bundleMock := &mockBundleAwareCatalogResolver{
+			solutions: map[string][]byte{"hello-world@1.0.0": []byte(validSolutionYAML)},
+			bundles:   map[string][]byte{"hello-world@1.0.0": []byte("bundle-tar")},
+		}
+		remoteMock := &mockRemoteResolver{
+			err: fmt.Errorf("should not be called"),
+		}
+
+		getter := NewGetter(
+			WithCatalogResolver(bundleMock),
+			WithRemoteResolver(remoteMock),
+		)
+
+		sol, bundleData, err := getter.GetWithBundle(context.Background(), "ghcr.io/myorg/solutions/hello-world@1.0.0")
+		require.NoError(t, err)
+		assert.Equal(t, "hello-world", sol.Metadata.Name)
+		assert.Equal(t, []byte("bundle-tar"), bundleData)
+	})
+
+	t.Run("falls back to remote on local miss", func(t *testing.T) {
+		t.Parallel()
+
+		catalogMock := &mockCatalogResolver{
+			solutions: map[string][]byte{},
+		}
+		remoteMock := &mockRemoteResolver{
+			solutions: map[string][]byte{
+				"ghcr.io/myorg/solutions/hello-world@1.0.0": []byte(validSolutionYAML),
+			},
+			bundleData: map[string][]byte{
+				"ghcr.io/myorg/solutions/hello-world@1.0.0": []byte("remote-bundle"),
+			},
+		}
+
+		getter := NewGetter(
+			WithCatalogResolver(catalogMock),
+			WithRemoteResolver(remoteMock),
+		)
+
+		sol, bundleData, err := getter.GetWithBundle(context.Background(), "ghcr.io/myorg/solutions/hello-world@1.0.0")
+		require.NoError(t, err)
+		assert.Equal(t, "hello-world", sol.Metadata.Name)
+		assert.Equal(t, []byte("remote-bundle"), bundleData)
+	})
 }

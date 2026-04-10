@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 )
 
@@ -104,7 +105,7 @@ func BuildProviderDetail(desc provider.Descriptor) map[string]any {
 }
 
 // GenerateCLIExamples auto-generates CLI usage examples from the provider's schema.
-// It builds "scafctl run provider <name>" commands using required fields and
+// It builds "<binary> run provider <name>" commands using required fields and
 // type-appropriate placeholder values.
 func GenerateCLIExamples(desc *provider.Descriptor) []string {
 	if desc.Schema == nil || len(desc.Schema.Properties) == 0 {
@@ -136,19 +137,21 @@ func GenerateCLIExamples(desc *provider.Descriptor) []string {
 
 	var examples []string
 
+	binName := paths.AppName()
+
 	// Example with required fields only
 	if len(inputFlags) > 0 {
-		cmd := fmt.Sprintf("scafctl run provider %s %s", desc.Name, strings.Join(inputFlags, " "))
+		cmd := fmt.Sprintf("%s run provider %s %s", binName, desc.Name, strings.Join(inputFlags, " "))
 		examples = append(examples, cmd)
 	} else {
 		// No required fields - show a minimal example
-		examples = append(examples, fmt.Sprintf("scafctl run provider %s", desc.Name))
+		examples = append(examples, fmt.Sprintf("%s run provider %s", binName, desc.Name))
 	}
 
 	// If multiple capabilities, show an example with --capability for non-first capabilities
 	if len(desc.Capabilities) > 1 {
 		for _, cap := range desc.Capabilities[1:] {
-			baseCmdParts := []string{fmt.Sprintf("scafctl run provider %s", desc.Name)}
+			baseCmdParts := []string{fmt.Sprintf("%s run provider %s", binName, desc.Name)}
 			if len(inputFlags) > 0 {
 				baseCmdParts = append(baseCmdParts, inputFlags...)
 			}
@@ -158,7 +161,7 @@ func GenerateCLIExamples(desc *provider.Descriptor) []string {
 	}
 
 	// Add file-based input example
-	examples = append(examples, fmt.Sprintf("scafctl run provider %s @inputs.yaml", desc.Name))
+	examples = append(examples, fmt.Sprintf("%s run provider %s @inputs.yaml", binName, desc.Name))
 
 	return examples
 }

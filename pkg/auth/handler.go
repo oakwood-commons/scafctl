@@ -131,6 +131,7 @@ const (
 // Status represents the current authentication state.
 type Status struct {
 	Authenticated bool         `json:"authenticated" yaml:"authenticated" doc:"Whether the user is currently authenticated"`
+	Reason        string       `json:"reason,omitempty" yaml:"reason,omitempty" doc:"Why the handler is not authenticated (empty when authenticated)" maxLength:"256"`
 	Claims        *Claims      `json:"claims,omitempty" yaml:"claims,omitempty" doc:"Identity claims from the current session"`
 	ExpiresAt     time.Time    `json:"expiresAt,omitempty" yaml:"expiresAt,omitempty" doc:"Time the authentication expires"`
 	LastRefresh   time.Time    `json:"lastRefresh,omitempty" yaml:"lastRefresh,omitempty" doc:"Time the token was last refreshed"`

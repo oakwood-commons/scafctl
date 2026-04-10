@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/paths"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/shellexec"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting/mockexec"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting/mockserver"
@@ -863,7 +865,7 @@ func (r *Runner) runInitSteps(ctx context.Context, steps []InitStep, workDir str
 }
 
 // buildEnvMap builds the environment variable map for a test.
-// Precedence: process env → testConfig.env → testCase.env → SCAFCTL_SANDBOX_DIR.
+// Precedence: process env → testConfig.env → testCase.env → <BINARY>_SANDBOX_DIR.
 func (r *Runner) buildEnvMap(tc *TestCase, testConfig *TestConfig, sandboxPath string) map[string]any {
 	env := make(map[string]any)
 
@@ -880,7 +882,7 @@ func (r *Runner) buildEnvMap(tc *TestCase, testConfig *TestConfig, sandboxPath s
 	}
 
 	// Always set sandbox dir
-	env["SCAFCTL_SANDBOX_DIR"] = sandboxPath
+	env[settings.SafeEnvPrefix(paths.AppName())+"_SANDBOX_DIR"] = sandboxPath
 
 	return env
 }

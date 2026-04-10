@@ -45,6 +45,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/metrics"
+	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/profiler"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
@@ -190,6 +191,7 @@ func Root(opts *RootOptions) *cobra.Command {
 	}
 	envPrefix := settings.SafeEnvPrefix(binaryName)
 	cliParams.BinaryName = binaryName
+	paths.SetAppName(binaryName)
 
 	// Resolve IOStreams: use caller-provided or default to OS streams.
 	ioStreams := opts.IOStreams
@@ -568,7 +570,7 @@ func Root(opts *RootOptions) *cobra.Command {
 	cCmd.PersistentFlags().BoolVarP(&cliParams.IsQuiet, "quiet", "q", false, "Do not print additional information")
 	cCmd.PersistentFlags().BoolVar(&cliParams.NoColor, "no-color", false, "Disable color output")
 	cCmd.PersistentFlags().StringVarP(&cwdFlag, "cwd", "C", "", "Change the working directory before executing the command (similar to git -C)")
-	cCmd.PersistentFlags().StringVar(&configPath, "config", "", "Path to config file (default: ~/.scafctl/config.yaml)")
+	cCmd.PersistentFlags().StringVar(&configPath, "config", "", fmt.Sprintf("Path to config file (default: $XDG_CONFIG_HOME/%s/config.yaml or ~/.config/%s/config.yaml)", binaryName, binaryName))
 	cCmd.PersistentFlags().String("pprof", "", "Enable profiling (options: memory, cpu)")
 	cCmd.PersistentFlags().String("pprof-output-dir", "./", "directory path to save the profiler.prof file (default: current working directory)")
 	cCmd.PersistentFlags().String("otel-endpoint", "", "OpenTelemetry OTLP exporter endpoint (e.g. localhost:4317). Overrides OTEL_EXPORTER_OTLP_ENDPOINT")

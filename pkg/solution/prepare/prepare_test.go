@@ -5,6 +5,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
@@ -250,4 +251,93 @@ func TestWriteMetrics_Empty(t *testing.T) {
 	var buf bytes.Buffer
 	writeMetrics(&buf)
 	assert.Empty(t, buf.String())
+}
+
+func TestWriteMetrics_WithData(t *testing.T) {
+	// Enable global metrics, record some executions, then verify output
+	provider.GlobalMetrics.Enable()
+	defer func() {
+		provider.GlobalMetrics.Reset()
+		provider.GlobalMetrics.Disable()
+	}()
+
+	// Record some metrics
+	provider.GlobalMetrics.Record(context.Background(), "test-provider-a", 100*time.Millisecond, true)
+	provider.GlobalMetrics.Record(context.Background(), "test-provider-a", 200*time.Millisecond, false)
+	provider.GlobalMetrics.Record(context.Background(), "test-provider-b", 50*time.Millisecond, true)
+
+	var buf bytes.Buffer
+	writeMetrics(&buf)
+
+	output := buf.String()
+	assert.Contains(t, output, "Provider Execution Metrics:")
+	assert.Contains(t, output, "test-provider-a")
+	assert.Contains(t, output, "test-provider-b")
+	// Provider A: 2 total, 1 success, 1 failure
+	assert.Contains(t, output, "50.0%") // 1/2 success rate for provider A
+}
+
+func TestSolution_WithMetricsEnabled(t *testing.T) {
+	sol := minimalSolution()
+	getter := &mockGetter{sol: sol}
+	metricsOut := &bytes.Buffer{}
+
+	result, err := Solution(context.Background(), "test.yaml",
+		WithGetter(getter),
+		WithMetrics(metricsOut),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Cleanup should call writeMetrics
+	result.Cleanup()
+	// No provider executions, so metrics output may be empty
+}
+
+func TestSolution_WithCustomRegistry(t *testing.T) {
+	sol := minimalSolution()
+	getter := &mockGetter{sol: sol}
+	reg := provider.NewRegistry()
+
+	result, err := Solution(context.Background(), "test.yaml",
+		WithGetter(getter),
+		WithRegistry(reg),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, reg, result.Registry)
+	result.Cleanup()
+}
+
+func TestSolution_InvalidStdin(t *testing.T) {
+	stdinReader := strings.NewReader("{{invalid yaml content here")
+
+	result, err := Solution(context.Background(), "-",
+		WithStdin(stdinReader),
+	)
+	assert.Error(t, err)
+	assert.Nil(t, result)
+}
+
+func TestSolution_WithPlugins(t *testing.T) {
+	// Solution with plugins but no plugin fetcher — plugins should be skipped
+	sol := minimalSolution()
+	sol.Bundle.Plugins = []solution.PluginDependency{
+		{Name: "test-plugin", Version: "1.0.0"},
+	}
+	getter := &mockGetter{sol: sol}
+
+	result, err := Solution(context.Background(), "test.yaml",
+		WithGetter(getter),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	result.Cleanup()
+}
+
+func TestLoadSolutionWithBundle_InvalidStdin(t *testing.T) {
+	getter := &mockGetter{}
+	stdin := strings.NewReader("{{not valid")
+	_, _, err := loadSolutionWithBundle(context.Background(), getter, "-", stdin)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to parse solution from stdin")
 }

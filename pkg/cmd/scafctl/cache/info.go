@@ -6,6 +6,7 @@ package cache
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	cachelib "github.com/oakwood-commons/scafctl/pkg/cache"
@@ -38,7 +39,7 @@ func CommandInfo(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 		Aliases:      []string{"status", "show"},
 		Short:        "Show cache information",
 		SilenceUsage: true,
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			Display information about scafctl cache usage.
 
 			Shows the size and file count for each cache directory.
@@ -49,7 +50,7 @@ func CommandInfo(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 
 			  # Show cache info as JSON
 			  scafctl cache info -o json
-		`),
+		`), settings.CliBinaryName, cliParams.BinaryName),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			kvxOpts := flags.ToKvxOutputOptions(&options.KvxOutputFlags, kvx.WithIOStreams(ioStreams))
 			return runInfo(cmd.Context(), options, kvxOpts)

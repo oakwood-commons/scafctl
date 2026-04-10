@@ -45,6 +45,7 @@ func TestCommandBuildSolution_Flags(t *testing.T) {
 	}{
 		{"name", ""},
 		{"version", ""},
+		{"tag", ""},
 		{"force", "false"},
 		{"no-bundle", "false"},
 		{"no-vendor", "false"},
@@ -76,6 +77,48 @@ func TestCommandBuildSolution_RequiresArgs(t *testing.T) {
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no -f/--file specified")
+}
+
+func TestCommandBuildSolution_TagConflictsWithName(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+	cmd := CommandBuildSolution(cliParams, ioStreams, "build")
+	w := writer.New(ioStreams, cliParams)
+	cmd.SetContext(writer.WithWriter(t.Context(), w))
+	cmd.SetArgs([]string{"-f", "solution.yaml", "--tag", "my-sol@1.0.0", "--name", "other"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--tag cannot be used together")
+}
+
+func TestCommandBuildSolution_TagConflictsWithVersion(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+	cmd := CommandBuildSolution(cliParams, ioStreams, "build")
+	w := writer.New(ioStreams, cliParams)
+	cmd.SetContext(writer.WithWriter(t.Context(), w))
+	cmd.SetArgs([]string{"-f", "solution.yaml", "--tag", "my-sol@1.0.0", "--version", "2.0.0"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--tag cannot be used together")
+}
+
+func TestCommandBuildSolution_TagShorthand(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cliParams := &settings.Run{}
+	cmd := CommandBuildSolution(cliParams, ioStreams, "build")
+
+	f := cmd.Flags().ShorthandLookup("t")
+	require.NotNil(t, f, "shorthand -t should exist")
+	assert.Equal(t, "tag", f.Name)
 }
 
 func TestRunBuildSolution_FileNotFound(t *testing.T) {

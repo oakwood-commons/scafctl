@@ -19,6 +19,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/cache"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
@@ -164,7 +165,7 @@ func Solution(ctx context.Context, path string, opts ...Option) (*Result, error)
 	// Get or create the solution getter
 	getter := cfg.getter
 	if getter == nil {
-		getter = newDefaultGetter(ctx, cfg.noCache)
+		getter = NewDefaultGetter(ctx, cfg.noCache)
 	}
 
 	// Load the solution (with bundle if available)
@@ -308,9 +309,9 @@ func Solution(ctx context.Context, path string, opts ...Option) (*Result, error)
 	}, nil
 }
 
-// newDefaultGetter creates a default solution getter with catalog resolution support.
+// NewDefaultGetter creates a default solution getter with catalog and remote resolution support.
 // When noCache is true, the artifact cache is disabled so the catalog is always queried directly.
-func newDefaultGetter(ctx context.Context, noCache bool) get.Interface {
+func NewDefaultGetter(ctx context.Context, noCache bool) get.Interface {
 	lgr := logger.FromContext(ctx)
 
 	var getterOpts []get.Option
@@ -332,6 +333,66 @@ func newDefaultGetter(ctx context.Context, noCache bool) get.Interface {
 		} else {
 			lgr.V(1).Info("catalog not available for solution resolution", "error", err)
 		}
+
+		// Wire up remote resolver for Docker-style OCI references
+		credStore, credErr := catalog.NewCredentialStore(*lgr)
+		if credErr != nil {
+			lgr.V(1).Info("credential store not available for remote resolution", "error", credErr)
+		}
+		remoteResolver := catalog.NewRemoteSolutionResolver(catalog.RemoteSolutionResolverConfig{
+			CredentialStore: credStore,
+			AuthHandlerFunc: func(registry string) auth.Handler {
+				cfg := config.FromContext(ctx)
+
+				// Check catalog config for an explicit authProvider matching this registry.
+				if cfg != nil {
+					for _, cat := range cfg.Catalogs {
+						if cat.URL == "" || cat.AuthProvider == "" {
+							continue
+						}
+						host, _ := catalog.ParseCatalogURL(cat.URL)
+						if host == registry {
+							if h, err := auth.GetHandler(ctx, cat.AuthProvider); err == nil {
+								return h
+							}
+						}
+					}
+				}
+
+				// Fall back to inference from registry host.
+				var customHandlers []config.CustomOAuth2Config
+				if cfg != nil {
+					customHandlers = cfg.Auth.CustomOAuth2
+				}
+				handlerName := catalog.InferAuthHandler(registry, customHandlers)
+				if handlerName == "" {
+					return nil
+				}
+				h, err := auth.GetHandler(ctx, handlerName)
+				if err != nil {
+					return nil
+				}
+				return h
+			},
+			AuthScopeFunc: func(registry string) string {
+				cfg := config.FromContext(ctx)
+				if cfg == nil {
+					return ""
+				}
+				for _, cat := range cfg.Catalogs {
+					if cat.URL == "" || cat.AuthScope == "" {
+						continue
+					}
+					host, _ := catalog.ParseCatalogURL(cat.URL)
+					if host == registry {
+						return cat.AuthScope
+					}
+				}
+				return ""
+			},
+			Logger: *lgr,
+		})
+		getterOpts = append(getterOpts, get.WithRemoteResolver(remoteResolver))
 	}
 
 	return get.NewGetter(getterOpts...)
@@ -369,7 +430,7 @@ func loadSolutionWithBundle(ctx context.Context, getter get.Interface, path stri
 		if lgr != nil {
 			lgr.V(1).Info("extracting solution bundle", "size", len(bundleData))
 		}
-		tmpDir, err := os.MkdirTemp("", "scafctl-bundle-*")
+		tmpDir, err := os.MkdirTemp("", paths.AppName()+"-bundle-*")
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to create temp directory for bundle: %w", err)
 		}

@@ -20,7 +20,7 @@ import (
 func TestGetSecretsDir(t *testing.T) {
 	t.Run("uses environment variable override", func(t *testing.T) {
 		customDir := "/custom/secrets/dir"
-		t.Setenv(secretsDirEnvVar, customDir)
+		t.Setenv(secretsDirEnvVar(), customDir)
 
 		dir, err := getSecretsDir()
 		require.NoError(t, err)
@@ -29,13 +29,13 @@ func TestGetSecretsDir(t *testing.T) {
 
 	t.Run("returns XDG-compliant path when no env var", func(t *testing.T) {
 		// Ensure env var is not set
-		t.Setenv(secretsDirEnvVar, "")
+		t.Setenv(secretsDirEnvVar(), "")
 
 		dir, err := getSecretsDir()
 		require.NoError(t, err)
 
 		// Check that it contains expected path components
-		assert.Contains(t, dir, "scafctl")
+		assert.Contains(t, dir, paths.AppName())
 		assert.Contains(t, dir, paths.SecretsDirName)
 
 		// Platform-specific checks
@@ -51,7 +51,7 @@ func TestGetSecretsDir(t *testing.T) {
 				assert.True(t, strings.HasPrefix(dir, filepath.Join(home, ".local", "share")))
 			}
 		case "windows":
-			assert.Contains(t, dir, "scafctl")
+			assert.Contains(t, dir, paths.AppName())
 		}
 	})
 
@@ -62,13 +62,13 @@ func TestGetSecretsDir(t *testing.T) {
 
 		customData := t.TempDir()
 		t.Setenv("XDG_DATA_HOME", customData)
-		t.Setenv(secretsDirEnvVar, "") // Ensure override is not set
+		t.Setenv(secretsDirEnvVar(), "") // Ensure override is not set
 		xdg.Reload()
 		defer xdg.Reload()
 
 		dir, err := getSecretsDir()
 		require.NoError(t, err)
-		assert.Equal(t, filepath.Join(customData, "scafctl", paths.SecretsDirName), dir)
+		assert.Equal(t, filepath.Join(customData, paths.AppName(), paths.SecretsDirName), dir)
 	})
 }
 

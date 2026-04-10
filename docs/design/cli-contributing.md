@@ -1182,9 +1182,9 @@ This section tracks which commands from the design are implemented and what work
 | `config get` | ✅ | Get specific config value |
 | `config set` | ✅ | Set config value |
 | `config unset` | ✅ | Remove config value |
-| `config add-catalog` | ✅ | Add catalog configuration |
-| `config remove-catalog` | ✅ | Remove catalog |
-| `config use-catalog` | ✅ | Set default catalog |
+| `catalog remote add` | ✅ | Add catalog configuration |
+| `catalog remote remove` | ✅ | Remove catalog |
+| `catalog remote set-default` | ✅ | Set default catalog |
 | `config init` | ✅ | Initialize configuration |
 | `config schema` | ✅ | Show config schema |
 | `config validate` | ✅ | Validate config file |

@@ -19,7 +19,7 @@ func TestConfigFile(t *testing.T) {
 	t.Run("returns path containing app name and config file", func(t *testing.T) {
 		path, err := ConfigFile()
 		require.NoError(t, err)
-		assert.Contains(t, path, AppName)
+		assert.Contains(t, path, AppName())
 		assert.Contains(t, path, ConfigFileName)
 		assert.True(t, filepath.IsAbs(path), "path should be absolute")
 	})
@@ -33,7 +33,7 @@ func TestConfigFile(t *testing.T) {
 		path, err := ConfigFile()
 		require.NoError(t, err)
 		assert.True(t, strings.HasPrefix(path, tmpDir), "path should start with XDG_CONFIG_HOME")
-		assert.Equal(t, filepath.Join(tmpDir, AppName, ConfigFileName), path)
+		assert.Equal(t, filepath.Join(tmpDir, AppName(), ConfigFileName), path)
 
 		// Verify directory was created
 		dirPath := filepath.Dir(path)
@@ -62,7 +62,7 @@ func TestSearchConfigFile(t *testing.T) {
 		defer xdg.Reload()
 
 		// Create the config file
-		configDir := filepath.Join(tmpDir, AppName)
+		configDir := filepath.Join(tmpDir, AppName())
 		err := os.MkdirAll(configDir, 0o700)
 		require.NoError(t, err)
 
@@ -80,7 +80,7 @@ func TestSearchConfigFile(t *testing.T) {
 func TestConfigDir(t *testing.T) {
 	t.Run("returns path containing app name", func(t *testing.T) {
 		path := ConfigDir()
-		assert.Contains(t, path, AppName)
+		assert.Contains(t, path, AppName())
 		assert.True(t, filepath.IsAbs(path), "path should be absolute")
 	})
 
@@ -91,7 +91,7 @@ func TestConfigDir(t *testing.T) {
 		defer xdg.Reload()
 
 		path := ConfigDir()
-		assert.Equal(t, filepath.Join(tmpDir, AppName), path)
+		assert.Equal(t, filepath.Join(tmpDir, AppName()), path)
 	})
 }
 
@@ -104,7 +104,7 @@ func TestSecretsDir(t *testing.T) {
 
 		path, err := SecretsDir()
 		require.NoError(t, err)
-		assert.Contains(t, path, AppName)
+		assert.Contains(t, path, AppName())
 		assert.Contains(t, path, SecretsDirName)
 		assert.True(t, filepath.IsAbs(path), "path should be absolute")
 
@@ -123,7 +123,7 @@ func TestSecretsDir(t *testing.T) {
 		path, err := SecretsDir()
 		require.NoError(t, err)
 		assert.True(t, strings.HasPrefix(path, tmpDir), "path should start with XDG_DATA_HOME")
-		assert.Equal(t, filepath.Join(tmpDir, AppName, SecretsDirName), path)
+		assert.Equal(t, filepath.Join(tmpDir, AppName(), SecretsDirName), path)
 	})
 }
 
@@ -135,7 +135,7 @@ func TestSecretsDirPath(t *testing.T) {
 		defer xdg.Reload()
 
 		path := SecretsDirPath()
-		assert.Equal(t, filepath.Join(tmpDir, AppName, SecretsDirName), path)
+		assert.Equal(t, filepath.Join(tmpDir, AppName(), SecretsDirName), path)
 
 		// Directory should NOT exist (not created)
 		_, err := os.Stat(path)
@@ -146,7 +146,7 @@ func TestSecretsDirPath(t *testing.T) {
 func TestDataDir(t *testing.T) {
 	t.Run("returns path containing app name", func(t *testing.T) {
 		path := DataDir()
-		assert.Contains(t, path, AppName)
+		assert.Contains(t, path, AppName())
 		assert.True(t, filepath.IsAbs(path), "path should be absolute")
 	})
 
@@ -157,14 +157,14 @@ func TestDataDir(t *testing.T) {
 		defer xdg.Reload()
 
 		path := DataDir()
-		assert.Equal(t, filepath.Join(tmpDir, AppName), path)
+		assert.Equal(t, filepath.Join(tmpDir, AppName()), path)
 	})
 }
 
 func TestCacheDir(t *testing.T) {
 	t.Run("returns path containing app name", func(t *testing.T) {
 		path := CacheDir()
-		assert.Contains(t, path, AppName)
+		assert.Contains(t, path, AppName())
 		assert.True(t, filepath.IsAbs(path), "path should be absolute")
 	})
 
@@ -175,14 +175,14 @@ func TestCacheDir(t *testing.T) {
 		defer xdg.Reload()
 
 		path := CacheDir()
-		assert.Equal(t, filepath.Join(tmpDir, AppName), path)
+		assert.Equal(t, filepath.Join(tmpDir, AppName()), path)
 	})
 }
 
 func TestHTTPCacheDir(t *testing.T) {
 	t.Run("returns path containing app name and http-cache", func(t *testing.T) {
 		path := HTTPCacheDir()
-		assert.Contains(t, path, AppName)
+		assert.Contains(t, path, AppName())
 		assert.Contains(t, path, HTTPCacheDirName)
 		assert.True(t, filepath.IsAbs(path), "path should be absolute")
 	})
@@ -194,14 +194,14 @@ func TestHTTPCacheDir(t *testing.T) {
 		defer xdg.Reload()
 
 		path := HTTPCacheDir()
-		assert.Equal(t, filepath.Join(tmpDir, AppName, HTTPCacheDirName), path)
+		assert.Equal(t, filepath.Join(tmpDir, AppName(), HTTPCacheDirName), path)
 	})
 }
 
 func TestCatalogDir(t *testing.T) {
 	t.Run("returns path containing app name and catalog", func(t *testing.T) {
 		path := CatalogDir()
-		assert.Contains(t, path, AppName)
+		assert.Contains(t, path, AppName())
 		assert.Contains(t, path, CatalogDirName)
 		assert.True(t, filepath.IsAbs(path), "path should be absolute")
 	})
@@ -213,14 +213,14 @@ func TestCatalogDir(t *testing.T) {
 		defer xdg.Reload()
 
 		path := CatalogDir()
-		assert.Equal(t, filepath.Join(tmpDir, AppName, CatalogDirName), path)
+		assert.Equal(t, filepath.Join(tmpDir, AppName(), CatalogDirName), path)
 	})
 }
 
 func TestStateDir(t *testing.T) {
 	t.Run("returns path containing app name", func(t *testing.T) {
 		path := StateDir()
-		assert.Contains(t, path, AppName)
+		assert.Contains(t, path, AppName())
 		assert.True(t, filepath.IsAbs(path), "path should be absolute")
 	})
 
@@ -231,14 +231,14 @@ func TestStateDir(t *testing.T) {
 		defer xdg.Reload()
 
 		path := StateDir()
-		assert.Equal(t, filepath.Join(tmpDir, AppName), path)
+		assert.Equal(t, filepath.Join(tmpDir, AppName()), path)
 	})
 }
 
 func TestRuntimeDir(t *testing.T) {
 	t.Run("returns path containing app name", func(t *testing.T) {
 		path := RuntimeDir()
-		assert.Contains(t, path, AppName)
+		assert.Contains(t, path, AppName())
 		assert.True(t, filepath.IsAbs(path), "path should be absolute")
 	})
 
@@ -249,7 +249,7 @@ func TestRuntimeDir(t *testing.T) {
 		defer xdg.Reload()
 
 		path := RuntimeDir()
-		assert.Equal(t, filepath.Join(tmpDir, AppName), path)
+		assert.Equal(t, filepath.Join(tmpDir, AppName()), path)
 	})
 }
 
@@ -272,7 +272,7 @@ func TestPlatformDefaults(t *testing.T) {
 			assert.Contains(t, path, ".config")
 		case "windows":
 			// Windows uses LOCALAPPDATA
-			assert.Contains(t, path, AppName)
+			assert.Contains(t, path, AppName())
 		}
 	})
 
@@ -284,7 +284,7 @@ func TestPlatformDefaults(t *testing.T) {
 		case "linux":
 			assert.Contains(t, path, ".cache")
 		case "windows":
-			assert.Contains(t, path, AppName)
+			assert.Contains(t, path, AppName())
 		}
 	})
 }
