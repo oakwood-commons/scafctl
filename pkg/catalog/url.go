@@ -51,16 +51,17 @@ func LooksLikeCatalogURL(s string) bool {
 func LooksLikeRemoteReference(ref string) bool {
 	ref = strings.TrimPrefix(ref, "oci://")
 
-	if strings.HasPrefix(ref, "localhost") {
+	parts := strings.SplitN(ref, "/", 2)
+	host := parts[0]
+
+	if host == "localhost" || strings.HasPrefix(host, "localhost:") {
 		return true
 	}
 
-	parts := strings.SplitN(ref, "/", 2)
 	if len(parts) < 2 {
 		return false
 	}
 
-	host := parts[0]
 	return strings.Contains(host, ".") || strings.Contains(host, ":")
 }
 

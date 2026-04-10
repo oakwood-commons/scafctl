@@ -521,8 +521,12 @@ func (c *LocalCatalog) listLocked(ctx context.Context, kind ArtifactKind, name s
 			}
 
 			info := c.infoFromAnnotations(ref, desc, annotations)
-			// Extract the tag label from the OCI tag (part after ':')
-			if idx := strings.LastIndex(tag, ":"); idx >= 0 {
+			// Extract the tag label from the OCI tag.
+			// Digest-pinned references use '@' and must preserve the full
+			// digest value (e.g., "sha256:..."), while version/alias tags use ':'.
+			if idx := strings.LastIndex(tag, "@"); idx >= 0 {
+				info.Tag = tag[idx+1:]
+			} else if idx := strings.LastIndex(tag, ":"); idx >= 0 {
 				info.Tag = tag[idx+1:]
 			}
 			results = append(results, info)

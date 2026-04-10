@@ -131,6 +131,13 @@ func CommandBuildSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams
 						}
 						return exitcode.WithCode(err, exitcode.InvalidInput)
 					}
+					if remoteRef.Kind != "" && remoteRef.Kind != catalog.ArtifactKindSolution {
+						err := fmt.Errorf("--tag references kind %q but this command builds solutions", remoteRef.Kind)
+						if w := writer.FromContext(cmd.Context()); w != nil {
+							w.Errorf("%v", err)
+						}
+						return exitcode.WithCode(err, exitcode.InvalidInput)
+					}
 					options.Name = remoteRef.Name
 					if remoteRef.Tag != "" {
 						options.Version = remoteRef.Tag
@@ -141,6 +148,16 @@ func CommandBuildSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams
 					if err != nil {
 						if w := writer.FromContext(cmd.Context()); w != nil {
 							w.Errorf("invalid tag %q: %v", options.Tag, err)
+						}
+						return exitcode.WithCode(err, exitcode.InvalidInput)
+					}
+					// Reject @latest — build requires a concrete version (from
+					// metadata or explicit flag). ParseReference normalizes
+					// "latest" to nil, which would silently drop the user's intent.
+					if ref.Version == nil && strings.Contains(options.Tag, "@") {
+						err := fmt.Errorf("--tag %q: 'latest' is not a valid build version; specify a concrete semver", options.Tag)
+						if w := writer.FromContext(cmd.Context()); w != nil {
+							w.Errorf("%v", err)
 						}
 						return exitcode.WithCode(err, exitcode.InvalidInput)
 					}
@@ -167,7 +184,7 @@ func CommandBuildSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams
 	}
 
 	cmd.Flags().StringVarP(&options.File, "file", "f", "", "Path to the solution file (auto-discovered if not provided)")
-	cmd.Flags().StringVarP(&options.Tag, "tag", "t", "", "Artifact reference as name@version (shorthand for --name and --version)")
+	cmd.Flags().StringVarP(&options.Tag, "tag", "t", "", "Artifact reference as name[@version] or full remote ref (version defaults to solution metadata if omitted)")
 	cmd.Flags().StringVar(&options.Name, "name", "", "Artifact name (default: extracted from solution metadata)")
 	cmd.Flags().StringVar(&options.Version, "version", "", "Semantic version (default: extracted from solution metadata)")
 	cmd.Flags().BoolVar(&options.Force, "force", false, "Overwrite existing version in catalog")

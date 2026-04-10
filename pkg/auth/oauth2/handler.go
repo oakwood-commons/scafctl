@@ -253,7 +253,7 @@ func (h *Handler) Status(ctx context.Context) (*auth.Status, error) {
 		return &auth.Status{Authenticated: false}, nil //nolint:nilerr // metadata absence is not an error for status
 	}
 	if meta.ExpiresAt.Before(time.Now()) {
-		return &auth.Status{Authenticated: false, Claims: meta.Claims}, nil
+		return &auth.Status{Authenticated: false, Reason: "session expired", Claims: meta.Claims}, nil
 	}
 	return &auth.Status{
 		Authenticated: true,

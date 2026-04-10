@@ -332,6 +332,7 @@ func (h *Handler) Status(ctx context.Context) (*auth.Status, error) {
 	if !metadata.RefreshTokenExpiresAt.IsZero() && time.Now().After(metadata.RefreshTokenExpiresAt) {
 		return &auth.Status{
 			Authenticated: false,
+			Reason:        "session expired",
 			Claims:        metadata.Claims,
 		}, nil
 	}

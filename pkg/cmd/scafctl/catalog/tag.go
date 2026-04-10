@@ -99,15 +99,13 @@ func runTag(ctx context.Context, opts *TagOptions) error {
 		return exitcode.Errorf("version required")
 	}
 
-	// Create local catalog
-	localCatalog, err := catalog.NewLocalCatalog(*lgr)
-	if err != nil {
-		err = fmt.Errorf("failed to open local catalog: %w", err)
-		w.Errorf("%v", err)
-		return exitcode.WithCode(err, exitcode.CatalogError)
+	// Reject digest references — tagging requires a semver source version.
+	if catalog.IsValidDigest(version) {
+		w.Error("digest references cannot be tagged; use a semver version (e.g., 'my-solution@1.0.0')")
+		return exitcode.Errorf("digest not supported for tagging")
 	}
 
-	// Determine artifact kind
+	// Determine artifact kind from --kind flag if provided.
 	var artifactKind catalog.ArtifactKind
 	if opts.Kind != "" {
 		kind, ok := catalog.ParseArtifactKind(opts.Kind)
@@ -116,15 +114,6 @@ func runTag(ctx context.Context, opts *TagOptions) error {
 			return exitcode.Errorf("invalid kind")
 		}
 		artifactKind = kind
-	} else if opts.Catalog == "" {
-		// Only infer from local catalog when tagging locally.
-		// Remote tagging doesn't need kind (buildRepositoryPath doesn't use it).
-		artifactKind, err = catalog.InferKindFromLocalCatalog(ctx, localCatalog, name, version)
-		if err != nil {
-			w.Errorf("failed to infer artifact kind: %v", err)
-			w.Infof("Hint: use --kind to specify the artifact kind explicitly")
-			return exitcode.WithCode(err, exitcode.InvalidInput)
-		}
 	}
 
 	// Build reference
@@ -134,9 +123,32 @@ func runTag(ctx context.Context, opts *TagOptions) error {
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
-	// Check if this is a remote tag operation
+	// Remote tag operation — no local catalog needed.
 	if opts.Catalog != "" {
 		return runTagRemote(ctx, opts, ref)
+	}
+
+	// Local tagging: create local catalog and infer kind if not specified.
+	localCatalog, err := catalog.NewLocalCatalog(*lgr)
+	if err != nil {
+		err = fmt.Errorf("failed to open local catalog: %w", err)
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.CatalogError)
+	}
+
+	if artifactKind == "" {
+		artifactKind, err = catalog.InferKindFromLocalCatalog(ctx, localCatalog, name, version)
+		if err != nil {
+			w.Errorf("failed to infer artifact kind: %v", err)
+			w.Infof("Hint: use --kind to specify the artifact kind explicitly")
+			return exitcode.WithCode(err, exitcode.InvalidInput)
+		}
+		// Re-parse reference with the inferred kind.
+		ref, err = catalog.ParseReference(artifactKind, opts.Reference)
+		if err != nil {
+			w.Errorf("invalid reference %q: %v", opts.Reference, err)
+			return exitcode.WithCode(err, exitcode.InvalidInput)
+		}
 	}
 
 	// Tag locally

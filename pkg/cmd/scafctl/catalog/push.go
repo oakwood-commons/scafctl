@@ -242,6 +242,7 @@ func runPush(ctx context.Context, opts *PushOptions) error {
 
 	// Resolve auth handler for automatic token bridging
 	authHandler := resolveAuthHandler(ctx, registry, opts.Catalog)
+	authScope := resolveAuthScope(ctx, opts.Catalog)
 
 	// Create remote catalog
 	remoteCatalog, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
@@ -250,6 +251,7 @@ func runPush(ctx context.Context, opts *PushOptions) error {
 		Repository:      repository,
 		CredentialStore: credStore,
 		AuthHandler:     authHandler,
+		AuthScope:       authScope,
 		Insecure:        opts.Insecure,
 		Logger:          *lgr,
 	})

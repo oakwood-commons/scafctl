@@ -21,6 +21,11 @@ type RemoteSolutionResolverConfig struct {
 	// automatic token bridging. May return nil if no handler is available.
 	AuthHandlerFunc func(registry string) scafctlauth.Handler
 
+	// AuthScopeFunc returns an OAuth scope for a given registry host.
+	// When set, the scope is passed to RemoteCatalogConfig.AuthScope so
+	// handlers like GCP/Entra can request appropriately scoped tokens.
+	AuthScopeFunc func(registry string) string
+
 	// Insecure allows HTTP connections to registries (for testing).
 	Insecure bool
 
@@ -34,6 +39,7 @@ type RemoteSolutionResolverConfig struct {
 type RemoteSolutionResolver struct {
 	credStore       *CredentialStore
 	authHandlerFunc func(registry string) scafctlauth.Handler
+	authScopeFunc   func(registry string) string
 	insecure        bool
 	logger          logr.Logger
 }
@@ -43,6 +49,7 @@ func NewRemoteSolutionResolver(cfg RemoteSolutionResolverConfig) *RemoteSolution
 	return &RemoteSolutionResolver{
 		credStore:       cfg.CredentialStore,
 		authHandlerFunc: cfg.AuthHandlerFunc,
+		authScopeFunc:   cfg.AuthScopeFunc,
 		insecure:        cfg.Insecure,
 		logger:          cfg.Logger.WithName("remote-solution-resolver"),
 	}
@@ -66,10 +73,14 @@ func (r *RemoteSolutionResolver) FetchRemoteSolution(ctx context.Context, rawRef
 		refKind = ArtifactKindSolution
 	}
 
-	// Resolve auth handler for this registry if available
+	// Resolve auth handler and scope for this registry if available
 	var authHandler scafctlauth.Handler
 	if r.authHandlerFunc != nil {
 		authHandler = r.authHandlerFunc(remoteRef.Registry)
+	}
+	var authScope string
+	if r.authScopeFunc != nil {
+		authScope = r.authScopeFunc(remoteRef.Registry)
 	}
 
 	remoteCatalog, err := NewRemoteCatalog(RemoteCatalogConfig{
@@ -78,6 +89,7 @@ func (r *RemoteSolutionResolver) FetchRemoteSolution(ctx context.Context, rawRef
 		Repository:      remoteRef.Repository,
 		CredentialStore: r.credStore,
 		AuthHandler:     authHandler,
+		AuthScope:       authScope,
 		Insecure:        r.insecure,
 		Logger:          r.logger,
 	})

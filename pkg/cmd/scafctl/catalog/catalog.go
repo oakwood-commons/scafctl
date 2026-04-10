@@ -127,13 +127,34 @@ func resolveAuthHandler(ctx context.Context, registry, catalogFlag string) auth.
 	return handler
 }
 
-// resolveAuthScope returns the authScope configured for the named catalog, if any.
+// resolveAuthScope returns the authScope configured for the named catalog, or
+// by matching the registry host against configured catalogs.
 func resolveAuthScope(ctx context.Context, catalogFlag string) string {
 	cfg := config.FromContext(ctx)
-	if catalogFlag != "" && cfg != nil {
-		if cat, ok := cfg.GetCatalog(catalogFlag); ok {
+	if cfg == nil {
+		return ""
+	}
+
+	// Try named catalog first.
+	if catalogFlag != "" {
+		if cat, ok := cfg.GetCatalog(catalogFlag); ok && cat.AuthScope != "" {
 			return cat.AuthScope
 		}
 	}
+
+	// Fall back: match by registry host from catalogFlag (when it's a URL).
+	if catalogFlag != "" && catalog.LooksLikeCatalogURL(catalogFlag) {
+		host, _ := catalog.ParseCatalogURL(catalogFlag)
+		for _, cat := range cfg.Catalogs {
+			if cat.URL == "" || cat.AuthScope == "" {
+				continue
+			}
+			catHost, _ := catalog.ParseCatalogURL(cat.URL)
+			if catHost == host {
+				return cat.AuthScope
+			}
+		}
+	}
+
 	return ""
 }
