@@ -19,7 +19,7 @@ func TestRateLimit_AllowsWithinLimit(t *testing.T) {
 	}))
 
 	for i := 0; i < 5; i++ {
-		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/test", nil)
 		req.RemoteAddr = "192.168.1.1:1234"
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
@@ -33,7 +33,7 @@ func TestRateLimit_RejectsOverLimit(t *testing.T) {
 	}))
 
 	for i := 0; i < 2; i++ {
-		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/test", nil)
 		req.RemoteAddr = "192.168.1.1:1234"
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
@@ -41,7 +41,7 @@ func TestRateLimit_RejectsOverLimit(t *testing.T) {
 	}
 
 	// Third request should be rejected
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/test", nil)
 	req.RemoteAddr = "192.168.1.1:1234"
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -54,7 +54,7 @@ func TestRateLimit_SetsHeaders(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/test", nil)
 	req.RemoteAddr = "192.168.1.100:1234"
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -71,7 +71,7 @@ func TestRateLimit_HeadersDecrementRemaining(t *testing.T) {
 	}))
 
 	for i := 0; i < 3; i++ {
-		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/test", nil)
 		req.RemoteAddr = "192.168.1.200:1234"
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
@@ -83,7 +83,7 @@ func TestRateLimit_HeadersDecrementRemaining(t *testing.T) {
 	}
 
 	// Fourth request - rejected, remaining should be 0
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/test", nil)
 	req.RemoteAddr = "192.168.1.200:1234"
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -98,14 +98,14 @@ func TestRateLimit_DifferentIPs(t *testing.T) {
 	}))
 
 	// First IP
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/test", nil)
 	req.RemoteAddr = "192.168.1.1:1234"
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
 	// Second IP should also succeed
-	req = httptest.NewRequest(http.MethodGet, "/test", nil)
+	req = httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/test", nil)
 	req.RemoteAddr = "192.168.1.2:1234"
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -113,7 +113,7 @@ func TestRateLimit_DifferentIPs(t *testing.T) {
 }
 
 func TestExtractIP_XForwardedFor(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-For", "10.0.0.1, 10.0.0.2")
 
 	ip := extractIP(req, true)
@@ -123,7 +123,7 @@ func TestExtractIP_XForwardedFor(t *testing.T) {
 // TestExtractIP_XForwardedFor_TrimsWhitespace verifies leading/trailing spaces
 // are stripped from the first XFF entry (common with multi-proxy setups).
 func TestExtractIP_XForwardedFor_TrimsWhitespace(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-For", " 10.0.0.1 , 10.0.0.2")
 
 	ip := extractIP(req, true)
@@ -131,7 +131,7 @@ func TestExtractIP_XForwardedFor_TrimsWhitespace(t *testing.T) {
 }
 
 func TestExtractIP_XRealIP(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 	req.Header.Set("X-Real-IP", "10.0.0.5")
 
 	ip := extractIP(req, true)
@@ -140,7 +140,7 @@ func TestExtractIP_XRealIP(t *testing.T) {
 
 // TestExtractIP_XRealIP_TrimsWhitespace verifies X-Real-IP whitespace is stripped.
 func TestExtractIP_XRealIP_TrimsWhitespace(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 	req.Header.Set("X-Real-IP", " 10.0.0.5 ")
 
 	ip := extractIP(req, true)
@@ -148,7 +148,7 @@ func TestExtractIP_XRealIP_TrimsWhitespace(t *testing.T) {
 }
 
 func TestExtractIP_RemoteAddr(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 	req.RemoteAddr = "192.168.1.1:54321"
 
 	ip := extractIP(req, false)
@@ -158,7 +158,7 @@ func TestExtractIP_RemoteAddr(t *testing.T) {
 // TestExtractIP_RemoteAddr_IPv6 verifies that IPv6 RemoteAddr (e.g. "[::1]:port")
 // is parsed correctly using net.SplitHostPort so brackets are stripped.
 func TestExtractIP_RemoteAddr_IPv6(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 	req.RemoteAddr = "[::1]:54321"
 
 	ip := extractIP(req, false)
@@ -168,7 +168,7 @@ func TestExtractIP_RemoteAddr_IPv6(t *testing.T) {
 // TestExtractIP_IgnoresXFFWhenTrustProxyFalse verifies that X-Forwarded-For is
 // ignored when trustProxy is false, preventing clients from spoofing their IP.
 func TestExtractIP_IgnoresXFFWhenTrustProxyFalse(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 	req.RemoteAddr = "192.168.1.1:54321"
 	req.Header.Set("X-Forwarded-For", "10.0.0.1")
 
@@ -180,7 +180,7 @@ func BenchmarkRateLimit(b *testing.B) {
 	handler := RateLimit(b.Context(), 100000, time.Minute, false)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
-	req := httptest.NewRequest(http.MethodGet, "/bench", nil)
+	req := httptest.NewRequestWithContext(b.Context(), http.MethodGet, "/bench", nil)
 	req.RemoteAddr = "192.168.1.1:1234"
 
 	for b.Loop() {

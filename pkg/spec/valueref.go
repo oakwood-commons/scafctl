@@ -366,9 +366,21 @@ var valueRefKeys = map[string]struct{}{
 	"tmpl":  {},
 }
 
+// maxNestedValueRefDepth is the maximum recursion depth for resolving nested
+// ValueRef patterns in literal maps/arrays. This prevents stack overflow from
+// pathologically deep structures.
+const maxNestedValueRefDepth = 32
+
 // collectNestedReferencedVariables recursively scans a literal value for
 // nested ValueRef patterns and collects their referenced variable names.
 func collectNestedReferencedVariables(val any, vars map[string]struct{}) {
+	collectNestedReferencedVariablesDepth(val, vars, 0)
+}
+
+func collectNestedReferencedVariablesDepth(val any, vars map[string]struct{}, depth int) {
+	if depth > maxNestedValueRefDepth {
+		return
+	}
 	switch v := val.(type) {
 	case map[string]any:
 		if isValueRefMap(v) {
@@ -382,11 +394,11 @@ func collectNestedReferencedVariables(val any, vars map[string]struct{}) {
 			return
 		}
 		for _, elem := range v {
-			collectNestedReferencedVariables(elem, vars)
+			collectNestedReferencedVariablesDepth(elem, vars, depth+1)
 		}
 	case []any:
 		for _, elem := range v {
-			collectNestedReferencedVariables(elem, vars)
+			collectNestedReferencedVariablesDepth(elem, vars, depth+1)
 		}
 	}
 }
@@ -397,11 +409,12 @@ func isValueRefMap(m map[string]any) bool {
 	if len(m) != 1 {
 		return false
 	}
+	// Single-element map: extract the only key directly.
 	for k := range m {
 		_, ok := valueRefKeys[k]
 		return ok
 	}
-	return false
+	return false // unreachable, but satisfies the compiler
 }
 
 // parseNestedValueRef converts a map that passes isValueRefMap into a ValueRef.
@@ -436,6 +449,13 @@ func parseNestedValueRef(m map[string]any) (*ValueRef, error) {
 // ValueRef patterns ({rslvr: X}, {expr: X}, {tmpl: X}) found in maps or arrays.
 // Non-ValueRef values are returned unchanged.
 func resolveNestedValueRefs(ctx context.Context, val any, resolverData map[string]any, self any, iterCtx *IterationContext) (any, error) {
+	return resolveNestedValueRefsDepth(ctx, val, resolverData, self, iterCtx, 0)
+}
+
+func resolveNestedValueRefsDepth(ctx context.Context, val any, resolverData map[string]any, self any, iterCtx *IterationContext, depth int) (any, error) {
+	if depth > maxNestedValueRefDepth {
+		return nil, fmt.Errorf("nested value ref exceeds maximum depth of %d", maxNestedValueRefDepth)
+	}
 	switch v := val.(type) {
 	case map[string]any:
 		// Check if this map itself is a ValueRef pattern
@@ -449,7 +469,7 @@ func resolveNestedValueRefs(ctx context.Context, val any, resolverData map[strin
 		// Otherwise walk the map values
 		result := make(map[string]any, len(v))
 		for key, elem := range v {
-			resolved, err := resolveNestedValueRefs(ctx, elem, resolverData, self, iterCtx)
+			resolved, err := resolveNestedValueRefsDepth(ctx, elem, resolverData, self, iterCtx, depth+1)
 			if err != nil {
 				return nil, fmt.Errorf("key %q: %w", key, err)
 			}
@@ -460,7 +480,7 @@ func resolveNestedValueRefs(ctx context.Context, val any, resolverData map[strin
 	case []any:
 		result := make([]any, len(v))
 		for i, elem := range v {
-			resolved, err := resolveNestedValueRefs(ctx, elem, resolverData, self, iterCtx)
+			resolved, err := resolveNestedValueRefsDepth(ctx, elem, resolverData, self, iterCtx, depth+1)
 			if err != nil {
 				return nil, fmt.Errorf("index %d: %w", i, err)
 			}

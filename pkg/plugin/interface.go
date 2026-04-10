@@ -5,11 +5,42 @@ package plugin
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 )
+
+// ProviderConfig holds host-side configuration sent to a provider once
+// after plugin load via the ConfigureProvider RPC.
+type ProviderConfig struct {
+	// Quiet suppresses non-essential output.
+	Quiet bool `json:"quiet" yaml:"quiet" doc:"Whether non-essential output is suppressed."`
+	// NoColor disables colored output.
+	NoColor bool `json:"noColor" yaml:"noColor" doc:"Whether colored output is disabled."`
+	// BinaryName is the CLI binary name (e.g. "scafctl" or an embedder name).
+	BinaryName string `json:"binaryName" yaml:"binaryName" doc:"The CLI binary name." maxLength:"128" example:"scafctl"`
+	// HostServiceID is the GRPCBroker service ID for HostService callbacks.
+	// Plugins use this to dial back into the host for secrets, auth, etc.
+	HostServiceID uint32 `json:"hostServiceId,omitempty" yaml:"hostServiceId,omitempty" doc:"GRPCBroker service ID for HostService callbacks."`
+	// Settings holds extensible key-value configuration. Values are JSON-encoded.
+	Settings map[string]json.RawMessage `json:"settings,omitempty" yaml:"settings,omitempty" doc:"Extensible JSON-encoded settings."`
+}
+
+// StreamChunk represents one chunk from a streaming provider execution.
+// Exactly one field is non-nil per chunk.
+type StreamChunk struct {
+	// Stdout holds raw stdout bytes (nil when this is not a stdout chunk).
+	Stdout []byte `json:"stdout,omitempty" yaml:"stdout,omitempty" doc:"Raw stdout bytes."`
+	// Stderr holds raw stderr bytes (nil when this is not a stderr chunk).
+	Stderr []byte `json:"stderr,omitempty" yaml:"stderr,omitempty" doc:"Raw stderr bytes."`
+	// Result holds the final execution result (non-nil only for the last chunk).
+	Result *provider.Output `json:"result,omitempty" yaml:"result,omitempty" doc:"Final execution result."`
+	// Error holds a terminal error string (non-empty only for the last chunk on failure).
+	Error string `json:"error,omitempty" yaml:"error,omitempty" doc:"Terminal error message." maxLength:"4096"`
+}
 
 // ProviderPlugin is the interface that plugins must implement
 // This wraps the provider.Provider interface for plugin communication
@@ -20,14 +51,35 @@ type ProviderPlugin interface {
 	// GetProviderDescriptor returns metadata for a specific provider
 	GetProviderDescriptor(ctx context.Context, providerName string) (*provider.Descriptor, error)
 
+	// ConfigureProvider sends host-side configuration to a named provider once
+	// after plugin load. Implementations store the config internally for
+	// subsequent Execute calls. Plugins that do not need configuration may
+	// return nil.
+	ConfigureProvider(ctx context.Context, providerName string, cfg ProviderConfig) error
+
 	// ExecuteProvider executes a provider with the given input
 	ExecuteProvider(ctx context.Context, providerName string, input map[string]any) (*provider.Output, error)
+
+	// ExecuteProviderStream executes a provider that produces incremental
+	// output. The callback is invoked for each chunk; the final chunk carries
+	// the Result (or Error). Plugins that do not support streaming may return
+	// ErrStreamingNotSupported.
+	ExecuteProviderStream(ctx context.Context, providerName string, input map[string]any, cb func(StreamChunk)) error
 
 	// DescribeWhatIf returns a human-readable description of what the provider
 	// would do with the given inputs, without executing. Returns an empty string
 	// if the plugin does not implement WhatIf for this provider.
 	DescribeWhatIf(ctx context.Context, providerName string, input map[string]any) (string, error)
+
+	// ExtractDependencies returns resolver dependency names from the given
+	// inputs. Plugins that do not implement custom extraction should return
+	// nil. The host falls back to generic extraction when the result is nil.
+	ExtractDependencies(ctx context.Context, providerName string, inputs map[string]any) ([]string, error)
 }
+
+// ErrStreamingNotSupported is returned by ExecuteProviderStream when the plugin
+// does not support streaming execution.
+var ErrStreamingNotSupported = errors.New("streaming execution not supported")
 
 // AuthHandlerInfo holds static metadata about an auth handler exposed by a plugin.
 type AuthHandlerInfo struct {

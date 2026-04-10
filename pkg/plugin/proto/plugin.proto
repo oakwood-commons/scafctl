@@ -10,12 +10,46 @@ service PluginService {
   // GetProviderDescriptor returns metadata for a specific provider
   rpc GetProviderDescriptor(GetProviderDescriptorRequest) returns (GetProviderDescriptorResponse);
   
+  // ConfigureProvider sends host-side configuration to a provider once after
+  // plugin load. Providers store this internally for subsequent Execute calls.
+  rpc ConfigureProvider(ConfigureProviderRequest) returns (ConfigureProviderResponse);
+
   // ExecuteProvider executes a provider
   rpc ExecuteProvider(ExecuteProviderRequest) returns (ExecuteProviderResponse);
+
+  // ExecuteProviderStream executes a provider that produces incremental output.
+  // The server sends zero or more OutputChunk messages followed by exactly one
+  // Result message.
+  rpc ExecuteProviderStream(ExecuteProviderRequest) returns (stream ExecuteProviderStreamChunk);
 
   // DescribeWhatIf returns a human-readable description of what the provider
   // would do with the given inputs, without executing.
   rpc DescribeWhatIf(DescribeWhatIfRequest) returns (DescribeWhatIfResponse);
+
+  // ExtractDependencies returns resolver dependency names from the provider's
+  // inputs. Called during dependency graph construction. Plugins that do not
+  // implement custom extraction should return an empty list (the host falls
+  // back to generic extraction).
+  rpc ExtractDependencies(ExtractDependenciesRequest) returns (ExtractDependenciesResponse);
+}
+
+// HostService is a callback service that plugins can invoke on the host.
+// The host registers this service via the go-plugin GRPCBroker, allowing
+// plugins to access host-side resources that cannot be serialized.
+service HostService {
+  // GetSecret retrieves a secret value from the host's secret store.
+  rpc GetSecret(GetSecretRequest) returns (GetSecretResponse);
+  // SetSecret stores a secret value in the host's secret store.
+  rpc SetSecret(SetSecretRequest) returns (SetSecretResponse);
+  // DeleteSecret removes a secret from the host's secret store.
+  rpc DeleteSecret(DeleteSecretRequest) returns (DeleteSecretResponse);
+  // ListSecrets lists secret names from the host's secret store.
+  rpc ListSecrets(ListSecretsRequest) returns (ListSecretsResponse);
+
+  // GetAuthIdentity retrieves identity claims from the host's auth registry.
+  rpc GetAuthIdentity(GetAuthIdentityRequest) returns (GetAuthIdentityResponse);
+  // ListAuthHandlers lists available auth handlers on the host.
+  rpc ListAuthHandlers(ListAuthHandlersRequest) returns (ListAuthHandlersResponse);
 }
 
 // AuthHandlerService is the auth handler plugin service.
@@ -77,6 +111,16 @@ message ProviderDescriptor {
   repeated Contact maintainers = 16;
   bool deprecated = 17;
   bool beta = 18;
+  // raw_schema is the full jsonschema.Schema input schema serialized as JSON.
+  // Preferred over the structured Schema field for lossless round-tripping.
+  bytes raw_schema = 19;
+  // raw_output_schemas carries full jsonschema.Schema output schemas as JSON,
+  // keyed by capability string. Preferred over the structured output_schemas.
+  map<string, bytes> raw_output_schemas = 20;
+  // has_extract_dependencies indicates this provider implements custom
+  // ExtractDependencies logic (so the host should call the RPC instead of
+  // falling back to generic extraction).
+  bool has_extract_dependencies = 21;
 }
 
 // Link represents a named hyperlink.
@@ -111,13 +155,77 @@ message Parameter {
   int32 max_length = 6;
   string pattern = 7;
   string pattern_description = 8;
+  int32 min_length = 9;
+  double minimum = 10;
+  double maximum = 11;
+  double exclusive_minimum = 12;
+  double exclusive_maximum = 13;
+  repeated bytes enum_values = 14; // JSON-encoded enum entries
+  string format = 15;
+  int32 min_items = 16;
+  int32 max_items = 17;
+  bool has_minimum = 18; // disambiguate zero from unset
+  bool has_maximum = 19;
+  bool has_exclusive_minimum = 20;
+  bool has_exclusive_maximum = 21;
 }
 
 message ExecuteProviderRequest {
   string provider_name = 1;
   bytes input = 2; // JSON-encoded input map
-  bytes context = 3; // JSON-encoded context data
+  bytes context = 3; // JSON-encoded context data (resolver context)
   bool dry_run = 4;
+  string execution_mode = 5; // Capability string: "from", "transform", "validation", "authentication", "action"
+  string working_directory = 6; // Logical CWD for path resolution
+  string output_directory = 7; // Output directory for action-mode file writes
+  string conflict_strategy = 8; // File conflict strategy
+  bool backup = 9; // Whether to create backups before overwriting
+  IterationContext iteration_context = 10; // forEach iteration state
+  bytes parameters = 11; // JSON-encoded CLI parameter map
+  SolutionMeta solution_metadata = 12; // Solution-level metadata
+}
+
+// ConfigureProviderRequest sends host configuration to a plugin provider.
+// Called once after plugin load, before any ExecuteProvider calls.
+message ConfigureProviderRequest {
+  string provider_name = 1;
+  bool quiet = 2;
+  bool no_color = 3;
+  string binary_name = 4;
+  uint32 host_service_id = 5; // GRPCBroker service ID for HostService callbacks
+  map<string, bytes> settings = 6; // Extensible JSON-encoded key-value settings
+}
+
+message ConfigureProviderResponse {
+  string error = 1; // Empty if no error
+}
+
+// SolutionMeta carries solution-level metadata to plugin providers.
+message SolutionMeta {
+  string name = 1;
+  string version = 2;
+  string display_name = 3;
+  string description = 4;
+  string category = 5;
+  repeated string tags = 6;
+}
+
+// IterationContext carries forEach iteration state to plugin providers.
+message IterationContext {
+  bytes item = 1; // JSON-encoded current element
+  int32 index = 2;
+  string item_alias = 3;
+  string index_alias = 4;
+}
+
+// ExecuteProviderStreamChunk is a streaming response chunk.
+// Exactly one of the fields is set per message.
+message ExecuteProviderStreamChunk {
+  oneof chunk {
+    bytes stdout = 1; // Raw stdout bytes
+    bytes stderr = 2; // Raw stderr bytes
+    ExecuteProviderResponse result = 3; // Final result (last message)
+  }
 }
 
 message ExecuteProviderResponse {
@@ -133,6 +241,16 @@ message DescribeWhatIfRequest {
 message DescribeWhatIfResponse {
   string description = 1; // Human-readable WhatIf description (empty if not implemented)
   string error = 2;       // Empty if no error
+}
+
+message ExtractDependenciesRequest {
+  string provider_name = 1;
+  bytes inputs = 2; // JSON-encoded map[string]any
+}
+
+message ExtractDependenciesResponse {
+  repeated string dependencies = 1;
+  string error = 2;
 }
 
 // ---- Auth Handler Messages ----
@@ -257,4 +375,59 @@ message PurgeExpiredTokensRequest {
 
 message PurgeExpiredTokensResponse {
   int32 purged_count = 1;
+}
+
+// ---- Host Service Messages (plugin → host callbacks) ----
+
+message GetSecretRequest {
+  string name = 1;
+}
+
+message GetSecretResponse {
+  string value = 1;
+  bool found = 2;
+  string error = 3;
+}
+
+message SetSecretRequest {
+  string name = 1;
+  string value = 2;
+}
+
+message SetSecretResponse {
+  string error = 1;
+}
+
+message DeleteSecretRequest {
+  string name = 1;
+}
+
+message DeleteSecretResponse {
+  string error = 1;
+}
+
+message ListSecretsRequest {
+  string pattern = 1; // Optional regex pattern for filtering
+}
+
+message ListSecretsResponse {
+  repeated string names = 1;
+  string error = 2;
+}
+
+message GetAuthIdentityRequest {
+  string handler_name = 1; // Empty for default handler
+  string scope = 2;
+}
+
+message GetAuthIdentityResponse {
+  Claims claims = 1;
+  string error = 2;
+}
+
+message ListAuthHandlersRequest {}
+
+message ListAuthHandlersResponse {
+  repeated string handler_names = 1;
+  string default_handler = 2;
 }

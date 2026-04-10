@@ -18,7 +18,7 @@ func TestAuditLog(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest(http.MethodPost, "/test", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/test", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -112,7 +112,7 @@ func TestAuditLog_RedactsBody(t *testing.T) {
 	}))
 
 	body := `{"username":"alice","password":"s3cret"}`
-	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/test", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -123,7 +123,7 @@ func BenchmarkAuditLog(b *testing.B) {
 	handler := AuditLog(logr.Discard(), false)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
-	req := httptest.NewRequest(http.MethodGet, "/bench", nil)
+	req := httptest.NewRequestWithContext(b.Context(), http.MethodGet, "/bench", nil)
 
 	for b.Loop() {
 		rec := httptest.NewRecorder()

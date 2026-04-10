@@ -38,6 +38,12 @@ settings:
   # Default: false
   quiet: false
 
+  # Disable the official OCI catalog (ghcr.io/oakwood-commons) from being
+  # appended to the catalog chain. When true, only explicitly configured
+  # catalogs are used for plugin and solution resolution.
+  # Default: false
+  disableOfficialCatalog: false
+
   # Require OS keyring for secret storage. When true, scafctl will fail
   # instead of falling back to insecure file-based or env-var-based master
   # key storage. Enable this in production or shared CI/CD environments.

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -316,11 +317,19 @@ func (p *DebugProvider) writeOutput(ctx context.Context, output, destination, fi
 
 	switch destination {
 	case "stdout":
-		fmt.Fprintln(os.Stdout, output)
+		out := io.Writer(os.Stdout)
+		if ioStreams, ok := provider.IOStreamsFromContext(ctx); ok && ioStreams != nil && ioStreams.Out != nil {
+			out = ioStreams.Out
+		}
+		fmt.Fprintln(out, output)
 		return nil
 
 	case "stderr":
-		fmt.Fprintln(os.Stderr, output)
+		errOut := io.Writer(os.Stderr)
+		if ioStreams, ok := provider.IOStreamsFromContext(ctx); ok && ioStreams != nil && ioStreams.ErrOut != nil {
+			errOut = ioStreams.ErrOut
+		}
+		fmt.Fprintln(errOut, output)
 		return nil
 
 	case "file":

@@ -281,8 +281,13 @@ func extractDepsFromProviderInputs(providerName string, inputs map[string]*Value
 		}
 	}
 
-	// Call the provider's ExtractDependencies function
+	// Call the provider's ExtractDependencies function.
+	// A nil return signals that extraction failed (e.g. plugin RPC error)
+	// and generic extraction should be used instead.
 	providerDeps := desc.ExtractDependencies(rawInputs)
+	if providerDeps == nil {
+		return false
+	}
 	for _, dep := range providerDeps {
 		deps[dep] = true
 	}

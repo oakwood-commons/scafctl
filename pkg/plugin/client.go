@@ -124,12 +124,32 @@ type Client struct {
 	name         string
 }
 
+// ClientOption configures plugin client creation.
+type ClientOption func(*clientOptions)
+
+type clientOptions struct {
+	hostDeps *HostServiceDeps
+}
+
+// WithHostDeps provides host-side dependencies (secrets, auth) that are
+// exposed to the plugin via the HostService gRPC callback server.
+func WithHostDeps(deps *HostServiceDeps) ClientOption {
+	return func(o *clientOptions) {
+		o.hostDeps = deps
+	}
+}
+
 // NewClient creates a new plugin client
-func NewClient(pluginPath string) (*Client, error) {
+func NewClient(pluginPath string, opts ...ClientOption) (*Client, error) {
+	var o clientOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+
 	raw, client, err := connectPlugin(pluginPath, pluginConfig{
 		handshake:  HandshakeConfig,
 		pluginName: PluginName,
-		grpcPlugin: &GRPCPlugin{},
+		grpcPlugin: &GRPCPlugin{HostDeps: o.hostDeps},
 	})
 	if err != nil {
 		return nil, err
@@ -164,9 +184,24 @@ func (c *Client) ExecuteProvider(ctx context.Context, providerName string, input
 	return c.plugin.ExecuteProvider(ctx, providerName, input)
 }
 
+// ConfigureProvider sends host-side configuration to a named provider.
+func (c *Client) ConfigureProvider(ctx context.Context, providerName string, cfg ProviderConfig) error {
+	return c.plugin.ConfigureProvider(ctx, providerName, cfg)
+}
+
+// ExecuteProviderStream executes a provider with streaming output.
+func (c *Client) ExecuteProviderStream(ctx context.Context, providerName string, input map[string]any, cb func(StreamChunk)) error {
+	return c.plugin.ExecuteProviderStream(ctx, providerName, input, cb)
+}
+
 // DescribeWhatIf returns a human-readable description of what the provider would do
 func (c *Client) DescribeWhatIf(ctx context.Context, providerName string, input map[string]any) (string, error) {
 	return c.plugin.DescribeWhatIf(ctx, providerName, input)
+}
+
+// ExtractDependencies returns resolver dependency names from the provider's inputs.
+func (c *Client) ExtractDependencies(ctx context.Context, providerName string, inputs map[string]any) ([]string, error) {
+	return c.plugin.ExtractDependencies(ctx, providerName, inputs)
 }
 
 // Kill terminates the plugin process
@@ -187,8 +222,10 @@ func (c *Client) Path() string {
 }
 
 // Discover discovers plugins from the given directories
-func Discover(pluginDirs []string) ([]*Client, error) {
-	return discoverExecutables(pluginDirs, NewClient)
+func Discover(pluginDirs []string, opts ...ClientOption) ([]*Client, error) {
+	return discoverExecutables(pluginDirs, func(path string) (*Client, error) {
+		return NewClient(path, opts...)
+	})
 }
 
 // ---- Auth Handler Client ----

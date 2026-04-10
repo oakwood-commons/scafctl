@@ -63,6 +63,11 @@ type Settings struct {
 	// production or shared environments to prevent silent degradation of secret
 	// protection.
 	RequireSecureKeyring bool `json:"requireSecureKeyring,omitempty" yaml:"requireSecureKeyring,omitempty" mapstructure:"requireSecureKeyring" doc:"Fail if OS keyring is unavailable instead of falling back to insecure storage"`
+
+	// DisableOfficialCatalog prevents the official OCI catalog from being
+	// appended to the catalog chain. When true, only explicitly configured
+	// catalogs are used for plugin resolution.
+	DisableOfficialCatalog bool `json:"disableOfficialCatalog,omitempty" yaml:"disableOfficialCatalog,omitempty" mapstructure:"disableOfficialCatalog" doc:"Do not append the official catalog to the catalog chain"`
 }
 
 // VersionCheckConfig holds version check configuration.

@@ -9,6 +9,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
 // BuildCatalogChain creates a ChainCatalog from the application configuration.
@@ -29,10 +30,13 @@ func BuildCatalogChain(cfg *config.Config, authRegistry *auth.Registry, logger l
 	}
 
 	// Add configured remote catalogs
+	var credStore *CredentialStore
 	if cfg != nil {
-		credStore, credErr := NewCredentialStore(logger)
+		cs, credErr := NewCredentialStore(logger)
 		if credErr != nil {
 			logger.V(1).Info("credential store not available, remote catalogs will use anonymous auth", "error", credErr)
+		} else {
+			credStore = cs
 		}
 
 		for _, catCfg := range cfg.Catalogs {
@@ -73,6 +77,27 @@ func BuildCatalogChain(cfg *config.Config, authRegistry *auth.Registry, logger l
 				continue
 			}
 			catalogs = append(catalogs, remoteCat)
+		}
+	}
+
+	// Append the official catalog as the last resort unless disabled.
+	// credStore may be nil when no config is loaded or credential setup failed;
+	// NewRemoteCatalog treats nil CredentialStore as anonymous auth, which is
+	// sufficient because the official catalog is a public OCI registry.
+	disableOfficial := cfg != nil && cfg.Settings.DisableOfficialCatalog
+	if !disableOfficial {
+		officialRegistry, officialRepo := ParseCatalogURL(settings.OfficialCatalogURL)
+		officialCat, officialErr := NewRemoteCatalog(RemoteCatalogConfig{
+			Name:            settings.OfficialCatalogName,
+			Registry:        officialRegistry,
+			Repository:      officialRepo,
+			CredentialStore: credStore,
+			Logger:          logger,
+		})
+		if officialErr != nil {
+			logger.V(1).Info("official catalog not available", "error", officialErr)
+		} else {
+			catalogs = append(catalogs, officialCat)
 		}
 	}
 

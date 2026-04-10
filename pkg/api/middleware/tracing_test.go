@@ -23,7 +23,7 @@ func TestTracing_PassesThrough(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/test", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -35,7 +35,7 @@ func BenchmarkTracing(b *testing.B) {
 	handler := Tracing()(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
-	req := httptest.NewRequest(http.MethodGet, "/bench", nil)
+	req := httptest.NewRequestWithContext(b.Context(), http.MethodGet, "/bench", nil)
 	for b.Loop() {
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)

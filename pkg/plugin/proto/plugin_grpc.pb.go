@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.0
 // - protoc             v6.33.1
-// source: plugin.proto
+// source: pkg/plugin/proto/plugin.proto
 
 package proto
 
@@ -21,8 +21,11 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	PluginService_GetProviders_FullMethodName          = "/plugin.PluginService/GetProviders"
 	PluginService_GetProviderDescriptor_FullMethodName = "/plugin.PluginService/GetProviderDescriptor"
+	PluginService_ConfigureProvider_FullMethodName     = "/plugin.PluginService/ConfigureProvider"
 	PluginService_ExecuteProvider_FullMethodName       = "/plugin.PluginService/ExecuteProvider"
+	PluginService_ExecuteProviderStream_FullMethodName = "/plugin.PluginService/ExecuteProviderStream"
 	PluginService_DescribeWhatIf_FullMethodName        = "/plugin.PluginService/DescribeWhatIf"
+	PluginService_ExtractDependencies_FullMethodName   = "/plugin.PluginService/ExtractDependencies"
 )
 
 // PluginServiceClient is the client API for PluginService service.
@@ -35,11 +38,23 @@ type PluginServiceClient interface {
 	GetProviders(ctx context.Context, in *GetProvidersRequest, opts ...grpc.CallOption) (*GetProvidersResponse, error)
 	// GetProviderDescriptor returns metadata for a specific provider
 	GetProviderDescriptor(ctx context.Context, in *GetProviderDescriptorRequest, opts ...grpc.CallOption) (*GetProviderDescriptorResponse, error)
+	// ConfigureProvider sends host-side configuration to a provider once after
+	// plugin load. Providers store this internally for subsequent Execute calls.
+	ConfigureProvider(ctx context.Context, in *ConfigureProviderRequest, opts ...grpc.CallOption) (*ConfigureProviderResponse, error)
 	// ExecuteProvider executes a provider
 	ExecuteProvider(ctx context.Context, in *ExecuteProviderRequest, opts ...grpc.CallOption) (*ExecuteProviderResponse, error)
+	// ExecuteProviderStream executes a provider that produces incremental output.
+	// The server sends zero or more OutputChunk messages followed by exactly one
+	// Result message.
+	ExecuteProviderStream(ctx context.Context, in *ExecuteProviderRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ExecuteProviderStreamChunk], error)
 	// DescribeWhatIf returns a human-readable description of what the provider
 	// would do with the given inputs, without executing.
 	DescribeWhatIf(ctx context.Context, in *DescribeWhatIfRequest, opts ...grpc.CallOption) (*DescribeWhatIfResponse, error)
+	// ExtractDependencies returns resolver dependency names from the provider's
+	// inputs. Called during dependency graph construction. Plugins that do not
+	// implement custom extraction should return an empty list (the host falls
+	// back to generic extraction).
+	ExtractDependencies(ctx context.Context, in *ExtractDependenciesRequest, opts ...grpc.CallOption) (*ExtractDependenciesResponse, error)
 }
 
 type pluginServiceClient struct {
@@ -70,6 +85,16 @@ func (c *pluginServiceClient) GetProviderDescriptor(ctx context.Context, in *Get
 	return out, nil
 }
 
+func (c *pluginServiceClient) ConfigureProvider(ctx context.Context, in *ConfigureProviderRequest, opts ...grpc.CallOption) (*ConfigureProviderResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ConfigureProviderResponse)
+	err := c.cc.Invoke(ctx, PluginService_ConfigureProvider_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *pluginServiceClient) ExecuteProvider(ctx context.Context, in *ExecuteProviderRequest, opts ...grpc.CallOption) (*ExecuteProviderResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ExecuteProviderResponse)
@@ -80,10 +105,39 @@ func (c *pluginServiceClient) ExecuteProvider(ctx context.Context, in *ExecutePr
 	return out, nil
 }
 
+func (c *pluginServiceClient) ExecuteProviderStream(ctx context.Context, in *ExecuteProviderRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ExecuteProviderStreamChunk], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &PluginService_ServiceDesc.Streams[0], PluginService_ExecuteProviderStream_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ExecuteProviderRequest, ExecuteProviderStreamChunk]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type PluginService_ExecuteProviderStreamClient = grpc.ServerStreamingClient[ExecuteProviderStreamChunk]
+
 func (c *pluginServiceClient) DescribeWhatIf(ctx context.Context, in *DescribeWhatIfRequest, opts ...grpc.CallOption) (*DescribeWhatIfResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DescribeWhatIfResponse)
 	err := c.cc.Invoke(ctx, PluginService_DescribeWhatIf_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pluginServiceClient) ExtractDependencies(ctx context.Context, in *ExtractDependenciesRequest, opts ...grpc.CallOption) (*ExtractDependenciesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ExtractDependenciesResponse)
+	err := c.cc.Invoke(ctx, PluginService_ExtractDependencies_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -100,11 +154,23 @@ type PluginServiceServer interface {
 	GetProviders(context.Context, *GetProvidersRequest) (*GetProvidersResponse, error)
 	// GetProviderDescriptor returns metadata for a specific provider
 	GetProviderDescriptor(context.Context, *GetProviderDescriptorRequest) (*GetProviderDescriptorResponse, error)
+	// ConfigureProvider sends host-side configuration to a provider once after
+	// plugin load. Providers store this internally for subsequent Execute calls.
+	ConfigureProvider(context.Context, *ConfigureProviderRequest) (*ConfigureProviderResponse, error)
 	// ExecuteProvider executes a provider
 	ExecuteProvider(context.Context, *ExecuteProviderRequest) (*ExecuteProviderResponse, error)
+	// ExecuteProviderStream executes a provider that produces incremental output.
+	// The server sends zero or more OutputChunk messages followed by exactly one
+	// Result message.
+	ExecuteProviderStream(*ExecuteProviderRequest, grpc.ServerStreamingServer[ExecuteProviderStreamChunk]) error
 	// DescribeWhatIf returns a human-readable description of what the provider
 	// would do with the given inputs, without executing.
 	DescribeWhatIf(context.Context, *DescribeWhatIfRequest) (*DescribeWhatIfResponse, error)
+	// ExtractDependencies returns resolver dependency names from the provider's
+	// inputs. Called during dependency graph construction. Plugins that do not
+	// implement custom extraction should return an empty list (the host falls
+	// back to generic extraction).
+	ExtractDependencies(context.Context, *ExtractDependenciesRequest) (*ExtractDependenciesResponse, error)
 	mustEmbedUnimplementedPluginServiceServer()
 }
 
@@ -121,11 +187,20 @@ func (UnimplementedPluginServiceServer) GetProviders(context.Context, *GetProvid
 func (UnimplementedPluginServiceServer) GetProviderDescriptor(context.Context, *GetProviderDescriptorRequest) (*GetProviderDescriptorResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetProviderDescriptor not implemented")
 }
+func (UnimplementedPluginServiceServer) ConfigureProvider(context.Context, *ConfigureProviderRequest) (*ConfigureProviderResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ConfigureProvider not implemented")
+}
 func (UnimplementedPluginServiceServer) ExecuteProvider(context.Context, *ExecuteProviderRequest) (*ExecuteProviderResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ExecuteProvider not implemented")
 }
+func (UnimplementedPluginServiceServer) ExecuteProviderStream(*ExecuteProviderRequest, grpc.ServerStreamingServer[ExecuteProviderStreamChunk]) error {
+	return status.Error(codes.Unimplemented, "method ExecuteProviderStream not implemented")
+}
 func (UnimplementedPluginServiceServer) DescribeWhatIf(context.Context, *DescribeWhatIfRequest) (*DescribeWhatIfResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DescribeWhatIf not implemented")
+}
+func (UnimplementedPluginServiceServer) ExtractDependencies(context.Context, *ExtractDependenciesRequest) (*ExtractDependenciesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ExtractDependencies not implemented")
 }
 func (UnimplementedPluginServiceServer) mustEmbedUnimplementedPluginServiceServer() {}
 func (UnimplementedPluginServiceServer) testEmbeddedByValue()                       {}
@@ -184,6 +259,24 @@ func _PluginService_GetProviderDescriptor_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PluginService_ConfigureProvider_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ConfigureProviderRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PluginServiceServer).ConfigureProvider(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PluginService_ConfigureProvider_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PluginServiceServer).ConfigureProvider(ctx, req.(*ConfigureProviderRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _PluginService_ExecuteProvider_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ExecuteProviderRequest)
 	if err := dec(in); err != nil {
@@ -202,6 +295,17 @@ func _PluginService_ExecuteProvider_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PluginService_ExecuteProviderStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ExecuteProviderRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(PluginServiceServer).ExecuteProviderStream(m, &grpc.GenericServerStream[ExecuteProviderRequest, ExecuteProviderStreamChunk]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type PluginService_ExecuteProviderStreamServer = grpc.ServerStreamingServer[ExecuteProviderStreamChunk]
+
 func _PluginService_DescribeWhatIf_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DescribeWhatIfRequest)
 	if err := dec(in); err != nil {
@@ -216,6 +320,24 @@ func _PluginService_DescribeWhatIf_Handler(srv interface{}, ctx context.Context,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PluginServiceServer).DescribeWhatIf(ctx, req.(*DescribeWhatIfRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PluginService_ExtractDependencies_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExtractDependenciesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PluginServiceServer).ExtractDependencies(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PluginService_ExtractDependencies_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PluginServiceServer).ExtractDependencies(ctx, req.(*ExtractDependenciesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -236,6 +358,10 @@ var PluginService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _PluginService_GetProviderDescriptor_Handler,
 		},
 		{
+			MethodName: "ConfigureProvider",
+			Handler:    _PluginService_ConfigureProvider_Handler,
+		},
+		{
 			MethodName: "ExecuteProvider",
 			Handler:    _PluginService_ExecuteProvider_Handler,
 		},
@@ -243,9 +369,331 @@ var PluginService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "DescribeWhatIf",
 			Handler:    _PluginService_DescribeWhatIf_Handler,
 		},
+		{
+			MethodName: "ExtractDependencies",
+			Handler:    _PluginService_ExtractDependencies_Handler,
+		},
+	},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "ExecuteProviderStream",
+			Handler:       _PluginService_ExecuteProviderStream_Handler,
+			ServerStreams: true,
+		},
+	},
+	Metadata: "pkg/plugin/proto/plugin.proto",
+}
+
+const (
+	HostService_GetSecret_FullMethodName        = "/plugin.HostService/GetSecret"
+	HostService_SetSecret_FullMethodName        = "/plugin.HostService/SetSecret"
+	HostService_DeleteSecret_FullMethodName     = "/plugin.HostService/DeleteSecret"
+	HostService_ListSecrets_FullMethodName      = "/plugin.HostService/ListSecrets"
+	HostService_GetAuthIdentity_FullMethodName  = "/plugin.HostService/GetAuthIdentity"
+	HostService_ListAuthHandlers_FullMethodName = "/plugin.HostService/ListAuthHandlers"
+)
+
+// HostServiceClient is the client API for HostService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// HostService is a callback service that plugins can invoke on the host.
+// The host registers this service via the go-plugin GRPCBroker, allowing
+// plugins to access host-side resources that cannot be serialized.
+type HostServiceClient interface {
+	// GetSecret retrieves a secret value from the host's secret store.
+	GetSecret(ctx context.Context, in *GetSecretRequest, opts ...grpc.CallOption) (*GetSecretResponse, error)
+	// SetSecret stores a secret value in the host's secret store.
+	SetSecret(ctx context.Context, in *SetSecretRequest, opts ...grpc.CallOption) (*SetSecretResponse, error)
+	// DeleteSecret removes a secret from the host's secret store.
+	DeleteSecret(ctx context.Context, in *DeleteSecretRequest, opts ...grpc.CallOption) (*DeleteSecretResponse, error)
+	// ListSecrets lists secret names from the host's secret store.
+	ListSecrets(ctx context.Context, in *ListSecretsRequest, opts ...grpc.CallOption) (*ListSecretsResponse, error)
+	// GetAuthIdentity retrieves identity claims from the host's auth registry.
+	GetAuthIdentity(ctx context.Context, in *GetAuthIdentityRequest, opts ...grpc.CallOption) (*GetAuthIdentityResponse, error)
+	// ListAuthHandlers lists available auth handlers on the host.
+	ListAuthHandlers(ctx context.Context, in *ListAuthHandlersRequest, opts ...grpc.CallOption) (*ListAuthHandlersResponse, error)
+}
+
+type hostServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewHostServiceClient(cc grpc.ClientConnInterface) HostServiceClient {
+	return &hostServiceClient{cc}
+}
+
+func (c *hostServiceClient) GetSecret(ctx context.Context, in *GetSecretRequest, opts ...grpc.CallOption) (*GetSecretResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetSecretResponse)
+	err := c.cc.Invoke(ctx, HostService_GetSecret_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hostServiceClient) SetSecret(ctx context.Context, in *SetSecretRequest, opts ...grpc.CallOption) (*SetSecretResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetSecretResponse)
+	err := c.cc.Invoke(ctx, HostService_SetSecret_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hostServiceClient) DeleteSecret(ctx context.Context, in *DeleteSecretRequest, opts ...grpc.CallOption) (*DeleteSecretResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteSecretResponse)
+	err := c.cc.Invoke(ctx, HostService_DeleteSecret_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hostServiceClient) ListSecrets(ctx context.Context, in *ListSecretsRequest, opts ...grpc.CallOption) (*ListSecretsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListSecretsResponse)
+	err := c.cc.Invoke(ctx, HostService_ListSecrets_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hostServiceClient) GetAuthIdentity(ctx context.Context, in *GetAuthIdentityRequest, opts ...grpc.CallOption) (*GetAuthIdentityResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetAuthIdentityResponse)
+	err := c.cc.Invoke(ctx, HostService_GetAuthIdentity_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hostServiceClient) ListAuthHandlers(ctx context.Context, in *ListAuthHandlersRequest, opts ...grpc.CallOption) (*ListAuthHandlersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListAuthHandlersResponse)
+	err := c.cc.Invoke(ctx, HostService_ListAuthHandlers_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// HostServiceServer is the server API for HostService service.
+// All implementations must embed UnimplementedHostServiceServer
+// for forward compatibility.
+//
+// HostService is a callback service that plugins can invoke on the host.
+// The host registers this service via the go-plugin GRPCBroker, allowing
+// plugins to access host-side resources that cannot be serialized.
+type HostServiceServer interface {
+	// GetSecret retrieves a secret value from the host's secret store.
+	GetSecret(context.Context, *GetSecretRequest) (*GetSecretResponse, error)
+	// SetSecret stores a secret value in the host's secret store.
+	SetSecret(context.Context, *SetSecretRequest) (*SetSecretResponse, error)
+	// DeleteSecret removes a secret from the host's secret store.
+	DeleteSecret(context.Context, *DeleteSecretRequest) (*DeleteSecretResponse, error)
+	// ListSecrets lists secret names from the host's secret store.
+	ListSecrets(context.Context, *ListSecretsRequest) (*ListSecretsResponse, error)
+	// GetAuthIdentity retrieves identity claims from the host's auth registry.
+	GetAuthIdentity(context.Context, *GetAuthIdentityRequest) (*GetAuthIdentityResponse, error)
+	// ListAuthHandlers lists available auth handlers on the host.
+	ListAuthHandlers(context.Context, *ListAuthHandlersRequest) (*ListAuthHandlersResponse, error)
+	mustEmbedUnimplementedHostServiceServer()
+}
+
+// UnimplementedHostServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedHostServiceServer struct{}
+
+func (UnimplementedHostServiceServer) GetSecret(context.Context, *GetSecretRequest) (*GetSecretResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetSecret not implemented")
+}
+func (UnimplementedHostServiceServer) SetSecret(context.Context, *SetSecretRequest) (*SetSecretResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetSecret not implemented")
+}
+func (UnimplementedHostServiceServer) DeleteSecret(context.Context, *DeleteSecretRequest) (*DeleteSecretResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteSecret not implemented")
+}
+func (UnimplementedHostServiceServer) ListSecrets(context.Context, *ListSecretsRequest) (*ListSecretsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListSecrets not implemented")
+}
+func (UnimplementedHostServiceServer) GetAuthIdentity(context.Context, *GetAuthIdentityRequest) (*GetAuthIdentityResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetAuthIdentity not implemented")
+}
+func (UnimplementedHostServiceServer) ListAuthHandlers(context.Context, *ListAuthHandlersRequest) (*ListAuthHandlersResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListAuthHandlers not implemented")
+}
+func (UnimplementedHostServiceServer) mustEmbedUnimplementedHostServiceServer() {}
+func (UnimplementedHostServiceServer) testEmbeddedByValue()                     {}
+
+// UnsafeHostServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to HostServiceServer will
+// result in compilation errors.
+type UnsafeHostServiceServer interface {
+	mustEmbedUnimplementedHostServiceServer()
+}
+
+func RegisterHostServiceServer(s grpc.ServiceRegistrar, srv HostServiceServer) {
+	// If the following call panics, it indicates UnimplementedHostServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&HostService_ServiceDesc, srv)
+}
+
+func _HostService_GetSecret_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSecretRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).GetSecret(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_GetSecret_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).GetSecret(ctx, req.(*GetSecretRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HostService_SetSecret_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetSecretRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).SetSecret(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_SetSecret_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).SetSecret(ctx, req.(*SetSecretRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HostService_DeleteSecret_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteSecretRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).DeleteSecret(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_DeleteSecret_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).DeleteSecret(ctx, req.(*DeleteSecretRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HostService_ListSecrets_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListSecretsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).ListSecrets(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_ListSecrets_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).ListSecrets(ctx, req.(*ListSecretsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HostService_GetAuthIdentity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetAuthIdentityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).GetAuthIdentity(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_GetAuthIdentity_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).GetAuthIdentity(ctx, req.(*GetAuthIdentityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HostService_ListAuthHandlers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListAuthHandlersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).ListAuthHandlers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_ListAuthHandlers_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).ListAuthHandlers(ctx, req.(*ListAuthHandlersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// HostService_ServiceDesc is the grpc.ServiceDesc for HostService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var HostService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "plugin.HostService",
+	HandlerType: (*HostServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GetSecret",
+			Handler:    _HostService_GetSecret_Handler,
+		},
+		{
+			MethodName: "SetSecret",
+			Handler:    _HostService_SetSecret_Handler,
+		},
+		{
+			MethodName: "DeleteSecret",
+			Handler:    _HostService_DeleteSecret_Handler,
+		},
+		{
+			MethodName: "ListSecrets",
+			Handler:    _HostService_ListSecrets_Handler,
+		},
+		{
+			MethodName: "GetAuthIdentity",
+			Handler:    _HostService_GetAuthIdentity_Handler,
+		},
+		{
+			MethodName: "ListAuthHandlers",
+			Handler:    _HostService_ListAuthHandlers_Handler,
+		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "plugin.proto",
+	Metadata: "pkg/plugin/proto/plugin.proto",
 }
 
 const (
@@ -599,5 +1047,5 @@ var AuthHandlerService_ServiceDesc = grpc.ServiceDesc{
 			ServerStreams: true,
 		},
 	},
-	Metadata: "plugin.proto",
+	Metadata: "pkg/plugin/proto/plugin.proto",
 }

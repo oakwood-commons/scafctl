@@ -8,6 +8,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1108,5 +1109,71 @@ func BenchmarkIsTransitiveDependency(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		IsTransitiveDependency(resolvers, "a", "f")
+	}
+}
+
+func TestExtractDepsFromProviderInputs_NilFallback(t *testing.T) {
+	rslvrRef := "dep-resolver"
+	inputs := map[string]*ValueRef{
+		"key": {Resolver: &rslvrRef},
+	}
+
+	tests := []struct {
+		name     string
+		lookup   DescriptorLookup
+		wantUsed bool
+		wantDeps []string
+	}{
+		{
+			name: "nil return signals fallback",
+			lookup: func(_ string) *provider.Descriptor {
+				return &provider.Descriptor{
+					ExtractDependencies: func(_ map[string]any) []string {
+						return nil // simulate RPC failure
+					},
+				}
+			},
+			wantUsed: false,
+		},
+		{
+			name: "empty slice means provider handled it with no deps",
+			lookup: func(_ string) *provider.Descriptor {
+				return &provider.Descriptor{
+					ExtractDependencies: func(_ map[string]any) []string {
+						return []string{}
+					},
+				}
+			},
+			wantUsed: true,
+			wantDeps: []string{},
+		},
+		{
+			name: "non-nil deps are collected",
+			lookup: func(_ string) *provider.Descriptor {
+				return &provider.Descriptor{
+					ExtractDependencies: func(_ map[string]any) []string {
+						return []string{"from-plugin"}
+					},
+				}
+			},
+			wantUsed: true,
+			wantDeps: []string{"from-plugin"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deps := make(map[string]bool)
+			used := extractDepsFromProviderInputs("test-provider", inputs, deps, tt.lookup)
+			assert.Equal(t, tt.wantUsed, used)
+
+			if tt.wantDeps != nil {
+				gotDeps := make([]string, 0, len(deps))
+				for d := range deps {
+					gotDeps = append(gotDeps, d)
+				}
+				assert.ElementsMatch(t, tt.wantDeps, gotDeps)
+			}
+		})
 	}
 }

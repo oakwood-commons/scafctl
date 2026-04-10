@@ -16,17 +16,26 @@ scafctl supports two types of plugins:
 
 | Plugin Type | Artifact Kind | Interface | Guide |
 |-------------|---------------|-----------|-------|
-| **Provider Plugin** | `provider` | `plugin.ProviderPlugin` (3 methods) | [Provider Development Guide — Delivering as a Plugin](provider-development.md#delivering-as-a-plugin) |
-| **Auth Handler Plugin** | `auth-handler` | `plugin.AuthHandlerPlugin` (7 methods) | [Auth Handler Development Guide — Delivering as a Plugin](auth-handler-development.md#delivering-as-a-plugin) |
+| **Provider Plugin** | `provider` | `plugin.ProviderPlugin` (7 methods) | [Provider Development Guide -- Delivering as a Plugin](provider-development.md#delivering-as-a-plugin) |
+| **Auth Handler Plugin** | `auth-handler` | `plugin.AuthHandlerPlugin` (7 methods) | [Auth Handler Development Guide -- Delivering as a Plugin](auth-handler-development.md#delivering-as-a-plugin) |
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  A["scafctl<br/>- Discovers plugin<br/>- Calls extension<br/>- Manages lifecycle"] <-- "gRPC" --> B["Your Plugin<br/>- Implements gRPC<br/>- Exposes handlers<br/>- Handles execution"]
+  A["scafctl<br/>- Discovers plugin<br/>- Configures providers<br/>- Calls extensions<br/>- Manages lifecycle"] <-- "gRPC" --> B["Your Plugin<br/>- Implements gRPC<br/>- Exposes handlers<br/>- Handles execution<br/>- Calls HostService"]
 ```
 
 Each plugin binary exposes **one** extension type (provider OR auth handler). The handshake cookie determines which type the host expects.
+
+### Plugin Lifecycle
+
+1. **Discovery** -- scafctl finds the plugin binary (via catalog auto-fetch or directory scanning)
+2. **Load** -- scafctl starts the plugin process and negotiates protocol version
+3. **Configure** -- scafctl calls `ConfigureProvider` once per provider with host settings (quiet, color, binary name, HostService broker ID)
+4. **Execute** -- scafctl invokes providers as needed (unary or streaming)
+5. **Callbacks** -- plugins can call back to the host for secrets and auth tokens via the `HostService` gRPC service
+6. **Shutdown** -- scafctl terminates the plugin process when done
 
 ## Plugin Discovery
 

@@ -40,7 +40,7 @@ func TestSecurityHeaders(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 			}))
 
-			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, req)
 
@@ -63,7 +63,7 @@ func TestMaxBodySize_WithinLimit(t *testing.T) {
 	}))
 
 	body := strings.NewReader("small body")
-	req := httptest.NewRequest(http.MethodPost, "/", body)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", body)
 	req.ContentLength = int64(body.Len())
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -77,7 +77,7 @@ func TestMaxBodySize_ExceedsLimit(t *testing.T) {
 	}))
 
 	body := strings.NewReader("this body is way too large for the limit")
-	req := httptest.NewRequest(http.MethodPost, "/", body)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", body)
 	req.ContentLength = int64(body.Len())
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -159,7 +159,7 @@ func BenchmarkSecurityHeaders(b *testing.B) {
 	handler := SecurityHeaders(true)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
-	req := httptest.NewRequest(http.MethodGet, "/bench", nil)
+	req := httptest.NewRequestWithContext(b.Context(), http.MethodGet, "/bench", nil)
 
 	for b.Loop() {
 		rec := httptest.NewRecorder()

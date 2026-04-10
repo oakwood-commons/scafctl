@@ -25,9 +25,12 @@ import (
 
 // MockProviderPlugin implements ProviderPlugin for testing
 type MockProviderPlugin struct {
-	providers   []string
-	descriptors map[string]*provider.Descriptor
-	execFunc    func(ctx context.Context, name string, input map[string]any) (*provider.Output, error)
+	providers       []string
+	descriptors     map[string]*provider.Descriptor
+	execFunc        func(ctx context.Context, name string, input map[string]any) (*provider.Output, error)
+	extractDepsFunc func(ctx context.Context, name string, inputs map[string]any) ([]string, error)
+	configureErr    error
+	lastConfig      *ProviderConfig
 }
 
 func (m *MockProviderPlugin) GetProviders(ctx context.Context) ([]string, error) {
@@ -74,6 +77,22 @@ func (m *MockProviderPlugin) ExecuteProvider(ctx context.Context, providerName s
 
 func (m *MockProviderPlugin) DescribeWhatIf(_ context.Context, providerName string, input map[string]any) (string, error) {
 	return fmt.Sprintf("Would execute %s provider", providerName), nil
+}
+
+func (m *MockProviderPlugin) ConfigureProvider(_ context.Context, _ string, cfg ProviderConfig) error {
+	m.lastConfig = &cfg
+	return m.configureErr
+}
+
+func (m *MockProviderPlugin) ExecuteProviderStream(_ context.Context, _ string, _ map[string]any, _ func(StreamChunk)) error {
+	return ErrStreamingNotSupported
+}
+
+func (m *MockProviderPlugin) ExtractDependencies(ctx context.Context, name string, inputs map[string]any) ([]string, error) {
+	if m.extractDepsFunc != nil {
+		return m.extractDepsFunc(ctx, name, inputs)
+	}
+	return nil, nil
 }
 
 func TestGRPCPlugin_ServerClient(t *testing.T) {

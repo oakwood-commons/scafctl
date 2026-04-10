@@ -369,7 +369,8 @@ Tool Latency Guide (helps optimize tool selection):
     inspect_solution, lint_solution, diff_solution, list_catalog, catalog_inspect,
     list_examples, get_example, scaffold_solution, extract_resolver_refs,
     generate_test_scaffold, list_tests, show_snapshot, diff_snapshots,
-    get_config, evaluate_go_template, validate_expressions
+    get_config, evaluate_go_template, validate_expressions, list_plugins,
+    get_plugin_cache_path
   🌐 Variable (may use network or execute code):
     preview_resolvers, preview_action, dry_run_solution, render_solution,
     run_solution_tests`
@@ -704,6 +705,9 @@ func (s *Server) registerTools() {
 
 	// Catalog multi-platform tools (list platforms, build plugin)
 	s.registerCatalogMultiPlatformTools()
+
+	// Plugin cache tools (list, cache path)
+	s.registerPluginTools()
 
 	// Version tool
 	s.registerVersionTools()

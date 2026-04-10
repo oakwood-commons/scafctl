@@ -108,6 +108,28 @@ func (p *EchoPlugin) DescribeWhatIf(_ context.Context, providerName string, inpu
 	return "Would echo message", nil
 }
 
+// ConfigureProvider stores host-side configuration. The echo plugin does not
+// require any configuration, so this is a no-op.
+//
+//nolint:revive // ctx and cfg required by interface
+func (p *EchoPlugin) ConfigureProvider(_ context.Context, _ string, _ plugin.ProviderConfig) error {
+	return nil
+}
+
+// ExecuteProviderStream is not supported by the echo plugin.
+//
+//nolint:revive // all params required by interface
+func (p *EchoPlugin) ExecuteProviderStream(_ context.Context, _ string, _ map[string]any, _ func(plugin.StreamChunk)) error {
+	return plugin.ErrStreamingNotSupported
+}
+
+// ExtractDependencies is not implemented by the echo plugin (generic fallback is used).
+//
+//nolint:revive // all params required by interface
+func (p *EchoPlugin) ExtractDependencies(_ context.Context, _ string, _ map[string]any) ([]string, error) {
+	return nil, nil
+}
+
 func main() {
 	plugin.Serve(&EchoPlugin{})
 }
