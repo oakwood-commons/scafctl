@@ -45,7 +45,7 @@ func TestRegisterAll_MetricsRouteRegistered(t *testing.T) {
 	hctx := newTestHandlerContext(t)
 	RegisterAll(testAPI, router, hctx)
 
-	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	// Prometheus handler returns 200 for /metrics.
@@ -58,7 +58,7 @@ func TestRegisterAll_NotFoundHandler(t *testing.T) {
 	hctx := newTestHandlerContext(t)
 	RegisterAll(testAPI, router, hctx)
 
-	req := httptest.NewRequest(http.MethodGet, "/this-does-not-exist-anywhere", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/this-does-not-exist-anywhere", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusNotFound, rec.Code)
@@ -73,7 +73,7 @@ func TestRegisterAll_MethodNotAllowedHandler(t *testing.T) {
 
 	// Add a GET route and then send a DELETE which should return 405.
 	router.Get("/probe", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	req := httptest.NewRequest(http.MethodDelete, "/probe", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodDelete, "/probe", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)

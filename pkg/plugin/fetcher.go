@@ -256,7 +256,7 @@ func Paths(results []FetchResult) []string {
 // the provider registry. Unlike RegisterPluginProviders (which discovers
 // plugins from directories), this loads specific binaries by path.
 // Returns the created clients (caller should Kill() them on cleanup).
-func RegisterFetchedPlugins(ctx context.Context, registry *provider.Registry, results []FetchResult) ([]*Client, error) {
+func RegisterFetchedPlugins(ctx context.Context, registry *provider.Registry, results []FetchResult, cfg *ProviderConfig, clientOpts ...ClientOption) ([]*Client, error) {
 	var clients []*Client
 
 	for _, r := range results {
@@ -265,7 +265,7 @@ func RegisterFetchedPlugins(ctx context.Context, registry *provider.Registry, re
 			continue
 		}
 
-		client, err := NewClient(r.Path)
+		client, err := NewClient(r.Path, clientOpts...)
 		if err != nil {
 			// Kill any clients we've already started
 			for _, c := range clients {
@@ -290,6 +290,14 @@ func RegisterFetchedPlugins(ctx context.Context, registry *provider.Registry, re
 			}
 			if err := registry.Register(wrapper); err != nil {
 				continue
+			}
+			if cfg != nil {
+				if err := wrapper.Configure(ctx, *cfg); err != nil {
+					lgr := logr.FromContextOrDiscard(ctx)
+					lgr.V(1).Info("failed to configure plugin provider",
+						"provider", providerName,
+						"error", err)
+				}
 			}
 		}
 

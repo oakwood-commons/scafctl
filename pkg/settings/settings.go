@@ -15,6 +15,14 @@ import (
 
 const (
 	CliBinaryName = "scafctl"
+
+	// OfficialCatalogURL is the default OCI catalog where official plugin
+	// artifacts are published.
+	OfficialCatalogURL = "oci://ghcr.io/oakwood-commons"
+
+	// OfficialCatalogName is the display name used for the official catalog
+	// entry in the catalog chain.
+	OfficialCatalogName = "official"
 )
 
 // safeNameRe matches characters that are NOT alphanumeric, underscore, hyphen, or dot.

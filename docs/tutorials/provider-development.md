@@ -958,7 +958,7 @@ Plugins use [hashicorp/go-plugin](https://github.com/hashicorp/go-plugin) with g
 
 ### Plugin Interface
 
-Plugins implement `plugin.ProviderPlugin` (3 methods):
+Plugins implement `plugin.ProviderPlugin` (7 methods):
 
 ```go
 type ProviderPlugin interface {
@@ -968,10 +968,49 @@ type ProviderPlugin interface {
     // GetProviderDescriptor returns metadata for a specific provider
     GetProviderDescriptor(ctx context.Context, name string) (*provider.Descriptor, error)
 
+    // ConfigureProvider receives host-side configuration once after plugin load.
+    // Store the config internally for subsequent Execute calls.
+    ConfigureProvider(ctx context.Context, providerName string, cfg plugin.ProviderConfig) error
+
     // ExecuteProvider executes a provider with the given input
     ExecuteProvider(ctx context.Context, name string, input map[string]any) (*provider.Output, error)
+
+    // ExecuteProviderStream executes with incremental output (stdout/stderr chunks).
+    // Return plugin.ErrStreamingNotSupported if not implemented.
+    ExecuteProviderStream(ctx context.Context, name string, input map[string]any, cb func(plugin.StreamChunk)) error
+
+    // DescribeWhatIf returns a human-readable description of what the provider
+    // would do with the given inputs, without executing.
+    DescribeWhatIf(ctx context.Context, name string, input map[string]any) (string, error)
+
+    // ExtractDependencies returns resolver dependency names from inputs.
+    // Return nil to let the host use generic extraction.
+    ExtractDependencies(ctx context.Context, name string, inputs map[string]any) ([]string, error)
 }
 ```
+
+### ProviderConfig
+
+After plugin load, scafctl calls `ConfigureProvider` once per provider with host-side settings:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `Quiet` | `bool` | Suppress non-essential output |
+| `NoColor` | `bool` | Disable colored output |
+| `BinaryName` | `string` | CLI binary name (e.g. "scafctl" or an embedder name) |
+| `HostServiceID` | `uint32` | GRPCBroker service ID for HostService callbacks (see below) |
+| `Settings` | `map[string]json.RawMessage` | Extensible JSON key-value settings |
+
+### HostService Callbacks
+
+Plugins that need host-side resources can access the **HostService** callback service, which provides:
+
+- **GetSecret / SetSecret / DeleteSecret** -- access the host's secret store
+- **ListSecrets(pattern)** -- list secret names, optionally filtered by a regex pattern (max 256 characters)
+- **GetAuthIdentity** -- retrieve identity claims from the host's auth registry
+- **ListAuthHandlers** -- list available auth handlers
+
+The host registers HostService via the go-plugin GRPCBroker during plugin startup. Plugins receive the broker service ID in `ProviderConfig.HostServiceID` from the `ConfigureProvider` call. Use this ID to dial the HostService via the broker.
 
 ### Quick Start
 
@@ -1011,7 +1050,9 @@ import (
     "github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 )
 
-type MyPlugin struct{}
+type MyPlugin struct {
+    cfg plugin.ProviderConfig // stored from ConfigureProvider
+}
 
 func (p *MyPlugin) GetProviders(ctx context.Context) ([]string, error) {
     return []string{"my-custom-provider"}, nil
@@ -1043,12 +1084,16 @@ func (p *MyPlugin) GetProviderDescriptor(ctx context.Context, name string) (*pro
     }
 }
 
+func (p *MyPlugin) ConfigureProvider(_ context.Context, _ string, cfg plugin.ProviderConfig) error {
+    p.cfg = cfg
+    return nil
+}
+
 func (p *MyPlugin) ExecuteProvider(ctx context.Context, name string, input map[string]any) (*provider.Output, error) {
     switch name {
     case "my-custom-provider":
         value, _ := input["input"].(string)
         if provider.DryRunFromContext(ctx) {
-            // DryRunFromContext is checked when running via `run provider --dry-run`
             return &provider.Output{
                 Data: map[string]any{"output": "[DRY-RUN] Would process: " + value},
             }, nil
@@ -1061,8 +1106,10 @@ func (p *MyPlugin) ExecuteProvider(ctx context.Context, name string, input map[s
     }
 }
 
-// DescribeWhatIf returns a WhatIf message for solution-level dry-run.
-// This is called instead of ExecuteProvider when `run solution --dry-run` is used.
+func (p *MyPlugin) ExecuteProviderStream(_ context.Context, _ string, _ map[string]any, _ func(plugin.StreamChunk)) error {
+    return plugin.ErrStreamingNotSupported
+}
+
 func (p *MyPlugin) DescribeWhatIf(_ context.Context, name string, input map[string]any) (string, error) {
     switch name {
     case "my-custom-provider":
@@ -1076,13 +1123,17 @@ func (p *MyPlugin) DescribeWhatIf(_ context.Context, name string, input map[stri
     }
 }
 
+func (p *MyPlugin) ExtractDependencies(_ context.Context, _ string, _ map[string]any) ([]string, error) {
+    return nil, nil // Use generic extraction
+}
+
 func main() {
     plugin.Serve(&MyPlugin{})
 }
 ```
 
 > [!NOTE]
-> **Key difference from builtin**: Each `GetProviderDescriptor` / `ExecuteProvider` / `DescribeWhatIf` call receives the provider name, allowing one plugin to expose multiple providers. The core logic (schemas, execution, dry-run) is identical.
+> **Key difference from builtin**: Each RPC call receives the provider name, allowing one plugin to expose multiple providers. Methods like `ConfigureProvider`, `ExecuteProviderStream`, and `ExtractDependencies` can return no-op responses when not needed -- the host handles fallbacks gracefully.
 
 #### 3. Build and Install
 
@@ -1152,6 +1203,7 @@ A single plugin can expose multiple providers:
 ```go
 type MultiPlugin struct {
     providers map[string]ProviderHandler
+    cfg       plugin.ProviderConfig
 }
 
 type ProviderHandler interface {
@@ -1184,12 +1236,21 @@ func (p *MultiPlugin) GetProviderDescriptor(ctx context.Context, name string) (*
     return h.Descriptor(), nil
 }
 
+func (p *MultiPlugin) ConfigureProvider(_ context.Context, _ string, cfg plugin.ProviderConfig) error {
+    p.cfg = cfg
+    return nil
+}
+
 func (p *MultiPlugin) ExecuteProvider(ctx context.Context, name string, input map[string]any) (*provider.Output, error) {
     h, ok := p.providers[name]
     if !ok {
         return nil, fmt.Errorf("unknown provider: %s", name)
     }
     return h.Execute(ctx, input)
+}
+
+func (p *MultiPlugin) ExecuteProviderStream(_ context.Context, _ string, _ map[string]any, _ func(plugin.StreamChunk)) error {
+    return plugin.ErrStreamingNotSupported
 }
 
 func (p *MultiPlugin) DescribeWhatIf(_ context.Context, name string, input map[string]any) (string, error) {
@@ -1200,24 +1261,32 @@ func (p *MultiPlugin) DescribeWhatIf(_ context.Context, name string, input map[s
     desc := h.Descriptor()
     return desc.DescribeWhatIf(context.Background(), input), nil
 }
+
+func (p *MultiPlugin) ExtractDependencies(_ context.Context, _ string, _ map[string]any) ([]string, error) {
+    return nil, nil
+}
 ```
 
 ### gRPC Serialization
 
-All `provider.Descriptor` fields are preserved over the gRPC round-trip:
+All `provider.Descriptor` fields are preserved over the gRPC round-trip. Schemas are transmitted as raw JSON bytes for lossless round-tripping, with a structured fallback for older plugins.
 
 | Field | Transmitted |
 |-------|:----------:|
-| `Name`, `DisplayName`, `Description`, `Version` | ✅ |
-| `Category`, `Capabilities`, `APIVersion` | ✅ |
-| `Schema` (properties, types, required, defaults, patterns, examples, maxLength) | ✅ |
-| `OutputSchemas` (same sub-fields as Schema) | ✅ |
-| `SensitiveFields`, `Tags`, `Icon`, `Links`, `Examples`, `Maintainers` | ✅ |
-| `Deprecated`, `Beta` | ✅ |
+| `Name`, `DisplayName`, `Description`, `Version` | via proto fields |
+| `Category`, `Capabilities`, `APIVersion` | via proto fields |
+| `Schema` (full `jsonschema.Schema`) | via raw JSON bytes (lossless) |
+| `OutputSchemas` (full `jsonschema.Schema` per capability) | via raw JSON bytes (lossless) |
+| `SensitiveFields`, `Tags`, `Icon`, `Links`, `Examples`, `Maintainers` | via proto fields |
+| `Deprecated`, `Beta` | via proto fields |
 
-Fields **not** transmitted (Go-side only): `Decode`, `ExtractDependencies`, `WhatIf`.
+Go-side function pointers are **not** serialized in the descriptor -- they are handled via dedicated RPCs:
 
-`WhatIf` is not serialized in the descriptor -- instead, the `DescribeWhatIf` RPC is called at runtime to generate context-specific messages over gRPC.
+| Function Pointer | RPC Equivalent |
+|------------------|----------------|
+| `WhatIf` | `DescribeWhatIf` RPC |
+| `ExtractDependencies` | `ExtractDependencies` RPC (only called when plugin sets `has_extract_dependencies`) |
+| `Decode` | Not applicable over gRPC (host uses raw `map[string]any`) |
 
 ### Plugin Discovery
 

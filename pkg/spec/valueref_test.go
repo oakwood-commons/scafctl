@@ -6,6 +6,7 @@ package spec
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
@@ -1149,6 +1150,39 @@ func TestValueRef_Resolve_NestedValueRefs(t *testing.T) {
 				"rslvr": "app-name",
 				"extra": "value",
 			},
+		},
+		{
+			name: "nesting at exactly max depth succeeds",
+			literal: func() any {
+				// Build a structure exactly maxNestedValueRefDepth levels deep.
+				// Each level is a plain map (not a ValueRef), so depth increments
+				// once per level. The leaf is a ValueRef at depth == maxNestedValueRefDepth.
+				var cur any = map[string]any{"rslvr": "app-name"}
+				for i := range maxNestedValueRefDepth {
+					cur = map[string]any{fmt.Sprintf("l%d", i): cur}
+				}
+				return cur
+			}(),
+			expected: func() any {
+				var cur any = "my-service"
+				for i := range maxNestedValueRefDepth {
+					cur = map[string]any{fmt.Sprintf("l%d", i): cur}
+				}
+				return cur
+			}(),
+		},
+		{
+			name: "nesting beyond max depth returns error",
+			literal: func() any {
+				// One level deeper than maxNestedValueRefDepth triggers the guard.
+				var cur any = map[string]any{"rslvr": "app-name"}
+				for i := range maxNestedValueRefDepth + 1 {
+					cur = map[string]any{fmt.Sprintf("l%d", i): cur}
+				}
+				return cur
+			}(),
+			expectError: true,
+			errContains: fmt.Sprintf("nested value ref exceeds maximum depth of %d", maxNestedValueRefDepth),
 		},
 	}
 

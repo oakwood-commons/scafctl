@@ -16,7 +16,7 @@ func TestRequestLogging(t *testing.T) {
 	handler := RequestLogging(logr.Discard())(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/test", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
@@ -51,7 +51,7 @@ func BenchmarkRequestLogging(b *testing.B) {
 	handler := RequestLogging(logr.Discard())(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
-	req := httptest.NewRequest(http.MethodGet, "/bench", nil)
+	req := httptest.NewRequestWithContext(b.Context(), http.MethodGet, "/bench", nil)
 	for b.Loop() {
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)

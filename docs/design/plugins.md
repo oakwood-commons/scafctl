@@ -117,65 +117,84 @@ This mirrors patterns used by Terraform, Vault, Nomad, and Packer.
 
 scafctl uses go-plugin with gRPC-based handshake.
 
-Protocol buffer definition for plugin communication.
+Protocol buffer definition for plugin communication (abridged -- see `pkg/plugin/proto/plugin.proto` for full definition).
 
 ```protobuf
 syntax = "proto3";
 package plugin;
 option go_package = "github.com/oakwood-commons/scafctl/pkg/plugin/proto";
 
-// PluginService is the main plugin service
+// PluginService is the provider plugin service.
 service PluginService {
-  // GetProviders returns all providers exposed by this plugin
   rpc GetProviders(GetProvidersRequest) returns (GetProvidersResponse);
-  
-  // GetProviderDescriptor returns metadata for a specific provider
   rpc GetProviderDescriptor(GetProviderDescriptorRequest) returns (GetProviderDescriptorResponse);
-  
-  // ExecuteProvider executes a provider
+  rpc ConfigureProvider(ConfigureProviderRequest) returns (ConfigureProviderResponse);
   rpc ExecuteProvider(ExecuteProviderRequest) returns (ExecuteProviderResponse);
+  rpc ExecuteProviderStream(ExecuteProviderRequest) returns (stream ExecuteProviderStreamChunk);
+  rpc DescribeWhatIf(DescribeWhatIfRequest) returns (DescribeWhatIfResponse);
+  rpc ExtractDependencies(ExtractDependenciesRequest) returns (ExtractDependenciesResponse);
 }
 
-message GetProvidersRequest {}
-
-message GetProvidersResponse {
-  repeated string provider_names = 1;
+// HostService is a callback service that plugins can invoke on the host.
+// Registered via the go-plugin GRPCBroker so plugins can access host-side
+// resources (secrets, auth) that cannot be serialized.
+service HostService {
+  rpc GetSecret(GetSecretRequest) returns (GetSecretResponse);
+  rpc SetSecret(SetSecretRequest) returns (SetSecretResponse);
+  rpc DeleteSecret(DeleteSecretRequest) returns (DeleteSecretResponse);
+  rpc ListSecrets(ListSecretsRequest) returns (ListSecretsResponse);
+  rpc GetAuthIdentity(GetAuthIdentityRequest) returns (GetAuthIdentityResponse);
+  rpc ListAuthHandlers(ListAuthHandlersRequest) returns (ListAuthHandlersResponse);
 }
+```
 
-message GetProviderDescriptorRequest {
-  string provider_name = 1;
-}
+### RPC Lifecycle
 
-message GetProviderDescriptorResponse {
-  ProviderDescriptor descriptor = 1;
-}
+| Phase | RPC | Direction | When |
+|-------|-----|-----------|------|
+| Discovery | `GetProviders` | host -> plugin | On plugin load |
+| Schema | `GetProviderDescriptor` | host -> plugin | After discovery |
+| Configuration | `ConfigureProvider` | host -> plugin | Once after load, before any execution |
+| Execution | `ExecuteProvider` | host -> plugin | On provider invocation |
+| Streaming | `ExecuteProviderStream` | host -> plugin | When IOStreams are available |
+| Dry-run | `DescribeWhatIf` | host -> plugin | During `run solution --dry-run` |
+| Dependencies | `ExtractDependencies` | host -> plugin | During DAG construction |
+| Callbacks | `HostService.*` | plugin -> host | Anytime during execution |
 
-message ProviderDescriptor {
-  string name = 1;
-  string description = 2;
-  Schema schema = 3;
-}
+### ConfigureProvider
 
-message Schema {
-  map<string, Parameter> parameters = 1;
-}
+Called once after plugin load with host-side configuration:
 
-message Parameter {
-  string type = 1;
-  bool required = 2;
-  string description = 3;
-  bytes default_value = 4; // JSON-encoded
-}
+- `quiet` / `no_color` -- terminal output preferences
+- `binary_name` -- the CLI binary name (e.g. "scafctl" or an embedder name)
+- `settings` -- extensible key-value JSON settings
+- `host_service_id` -- GRPCBroker service ID for HostService callbacks
 
-message ExecuteProviderRequest {
-  string provider_name = 1;
-  bytes input = 2; // JSON-encoded input map
-}
+### HostService Callbacks
 
-message ExecuteProviderResponse {
-  bytes output = 1; // JSON-encoded output
-  string error = 2;  // Empty if no error
-}
+Plugins that need host-side resources (secrets, auth tokens) use the `HostService` callback service. The host registers this service via the go-plugin GRPCBroker during plugin startup.
+
+| Callback | Purpose |
+|----------|---------|
+| `GetSecret` / `SetSecret` / `DeleteSecret` / `ListSecrets` | Access the host's secret store |
+| `GetAuthIdentity` | Retrieve identity claims from the host's auth registry |
+| `ListAuthHandlers` | List available auth handlers on the host |
+
+Plugins access HostService via a client injected during `ConfigureProvider`.
+
+### Schema Round-Trip
+
+Provider descriptors carry both structured `Schema`/`OutputSchemas` fields and raw JSON bytes (`raw_schema`, `raw_output_schemas`). The raw bytes are preferred for lossless round-tripping of `jsonschema.Schema`; the structured fields serve as a backward-compatible fallback for older plugins.
+
+### Official Catalog
+
+scafctl appends an official OCI catalog (`ghcr.io/oakwood-commons`) to the catalog chain by default. This provides access to officially maintained provider and auth handler plugins.
+
+To disable:
+
+```yaml
+settings:
+  disableOfficialCatalog: true
 ```
 
 Conceptually:
@@ -192,7 +211,14 @@ The plugin process lifecycle is managed entirely by scafctl.
 
 ## Plugin Capabilities
 
-Today, plugins are intended to expose providers.
+Plugins expose providers that support the full provider lifecycle:
+
+- **Discovery**: Advertise provider names and descriptors
+- **Configuration**: Receive host-side settings (quiet, color, binary name)
+- **Execution**: Synchronous and streaming execution modes
+- **Dry-run**: Describe what would happen without executing (WhatIf)
+- **Dependency extraction**: Custom dependency graph participation
+- **Host callbacks**: Access secrets and auth tokens from the host
 
 Future capability types may include:
 
@@ -236,8 +262,8 @@ When a provider is used:
 
 1. scafctl resolves all inputs
 2. scafctl validates inputs against the provider schema
-3. scafctl invokes the provider via gRPC
-4. The plugin executes provider logic
+3. scafctl invokes the provider via gRPC (streaming when IOStreams are available, otherwise unary)
+4. The plugin executes provider logic (optionally calling HostService for secrets/auth)
 5. Provider returns `ProviderOutput` containing data, warnings, and metadata
 6. scafctl validates output against the provider's output schema for the current capability
 7. scafctl continues orchestration

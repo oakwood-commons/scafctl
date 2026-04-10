@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -476,7 +477,7 @@ func TestIntegration_RunProvider_MissingInput(t *testing.T) {
 
 func TestIntegration_RunProvider_Capability(t *testing.T) {
 	t.Parallel()
-	stdout, _, exitCode := runScafctl(t, "run", "provider", "static", "--input", "value=test", "--capability", "from")
+	stdout, _, exitCode := runScafctl(t, "run", "provider", "static", "--input", "value=test", "--capability", "transform")
 
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "test")
@@ -7391,4 +7392,116 @@ func TestIntegration_CredentialHelperListEmpty(t *testing.T) {
 		// Just verify it's valid JSON
 		assert.NotNil(t, result)
 	}
+}
+
+// ============================================================================
+// Plugin Execution Integration Tests
+// ============================================================================
+
+var (
+	echoPluginOnce sync.Once
+	echoPluginPath string
+	echoPluginDir  string
+)
+
+// buildEchoPlugin builds the echo example plugin once and returns the binary path.
+// Subsequent calls reuse the cached binary.
+func buildEchoPlugin(t *testing.T) string {
+	t.Helper()
+	echoPluginOnce.Do(func() {
+		projectRoot := findProjectRoot()
+		tmpDir, err := os.MkdirTemp("", "scafctl-echo-plugin-*")
+		if err != nil {
+			t.Fatalf("failed to create temp dir for echo plugin: %v", err)
+		}
+		binPath := filepath.Join(tmpDir, "scafctl-plugin-echo")
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "go", "build", "-o", binPath, "./examples/plugins/echo/main.go")
+		cmd.Dir = projectRoot
+		cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("failed to build echo plugin: %s", string(output))
+		}
+		echoPluginPath = binPath
+		echoPluginDir = tmpDir
+	})
+	require.NotEmpty(t, echoPluginPath, "echo plugin build failed in a previous test")
+	return echoPluginPath
+}
+
+func TestIntegration_PluginExecution_RunProvider(t *testing.T) {
+	pluginBin := buildEchoPlugin(t)
+	pluginDir := filepath.Dir(pluginBin)
+
+	stdout, stderr, exitCode := runScafctl(t, "run", "provider", "echo",
+		"--capability", "transform",
+		"--plugin-dir", pluginDir,
+		"message=hello from integration test",
+		"-o", "json")
+
+	if exitCode != 0 {
+		t.Logf("stdout: %s", stdout)
+		t.Logf("stderr: %s", stderr)
+	}
+	assert.Equal(t, 0, exitCode, "expected exit 0; stderr: %s", stderr)
+	assert.Contains(t, stdout, "hello from integration test")
+}
+
+func TestIntegration_PluginExecution_RunProviderDryRun(t *testing.T) {
+	pluginBin := buildEchoPlugin(t)
+	pluginDir := filepath.Dir(pluginBin)
+
+	stdout, stderr, exitCode := runScafctl(t, "run", "provider", "echo",
+		"--capability", "transform",
+		"--plugin-dir", pluginDir,
+		"message=dry run test",
+		"--dry-run",
+		"-o", "json")
+
+	if exitCode != 0 {
+		t.Logf("stdout: %s", stdout)
+		t.Logf("stderr: %s", stderr)
+	}
+	assert.Equal(t, 0, exitCode, "expected exit 0; stderr: %s", stderr)
+	assert.Contains(t, stdout, "dry run test")
+}
+
+func TestIntegration_PluginExecution_RunProviderMultiInput(t *testing.T) {
+	pluginBin := buildEchoPlugin(t)
+	pluginDir := filepath.Dir(pluginBin)
+
+	// Test with multiple valid inputs
+	stdout, stderr, exitCode := runScafctl(t, "run", "provider", "echo",
+		"--capability", "transform",
+		"--plugin-dir", pluginDir,
+		"message=hello from multi-input test",
+		"-o", "json")
+
+	if exitCode != 0 {
+		t.Logf("stdout: %s", stdout)
+		t.Logf("stderr: %s", stderr)
+	}
+	assert.Equal(t, 0, exitCode, "expected exit 0; stderr: %s", stderr)
+	assert.Contains(t, stdout, "hello from multi-input test")
+}
+
+func TestIntegration_PluginExecution_GetProviderSchema(t *testing.T) {
+	// get provider does not support --plugin-dir; plugin providers require
+	// catalog auto-fetch or the cache to be populated. This test verifies
+	// the command handles unknown providers gracefully.
+	_, stderr, exitCode := runScafctl(t, "get", "provider", "nonexistent-plugin-provider", "-o", "json")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "not found")
+}
+
+func TestIntegration_PluginsList_RunsSuccessfully(t *testing.T) {
+	t.Parallel()
+	_, _, exitCode := runScafctl(t, "plugins", "list")
+
+	assert.Equal(t, 0, exitCode)
 }

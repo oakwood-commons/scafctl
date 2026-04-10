@@ -117,7 +117,7 @@ func TestHandler_ReturnsHTTPHandler(t *testing.T) {
 	require.NotNil(t, h)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", nil)
 	h.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)

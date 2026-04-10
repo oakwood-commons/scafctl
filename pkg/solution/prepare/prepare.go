@@ -44,6 +44,8 @@ type prepareConfig struct {
 	pluginFetcher *plugin.Fetcher
 	lockPlugins   []bundler.LockPlugin
 	noCache       bool
+	pluginCfg     *plugin.ProviderConfig
+	clientOpts    []plugin.ClientOption
 }
 
 // WithGetter provides a custom solution getter. If not set, one is created
@@ -108,6 +110,22 @@ func WithLockPlugins(plugins []bundler.LockPlugin) Option {
 func WithNoCache() Option {
 	return func(c *prepareConfig) {
 		c.noCache = true
+	}
+}
+
+// WithPluginConfig provides configuration that is sent to plugin providers
+// after registration via ConfigureProvider. If not set, plugins use defaults.
+func WithPluginConfig(cfg *plugin.ProviderConfig) Option {
+	return func(c *prepareConfig) {
+		c.pluginCfg = cfg
+	}
+}
+
+// WithClientOptions provides options for plugin client creation, such as
+// host-side dependencies (secrets, auth) for callback services.
+func WithClientOptions(opts ...plugin.ClientOption) Option {
+	return func(c *prepareConfig) {
+		c.clientOpts = append(c.clientOpts, opts...)
 	}
 }
 
@@ -224,7 +242,7 @@ func Solution(ctx context.Context, path string, opts ...Option) (*Result, error)
 			return nil, fmt.Errorf("auto-fetching plugins: %w", fetchErr)
 		}
 
-		clients, regErr := plugin.RegisterFetchedPlugins(ctx, reg, fetchResults)
+		clients, regErr := plugin.RegisterFetchedPlugins(ctx, reg, fetchResults, cfg.pluginCfg, cfg.clientOpts...)
 		if regErr != nil {
 			cleanup()
 			return nil, fmt.Errorf("registering fetched plugins: %w", regErr)
