@@ -323,9 +323,11 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 			NoColor:    o.CliParams.NoColor,
 			BinaryName: o.CliParams.BinaryName,
 		}
-		if err := plugin.RegisterPluginProviders(ctx, reg, o.PluginDirs, pluginCfg); err != nil {
+		clients, err := plugin.RegisterPluginProviders(ctx, reg, o.PluginDirs, pluginCfg)
+		if err != nil {
 			w.Warningf("failed to load some plugins: %v", err)
 		}
+		defer plugin.KillAll(clients)
 	}
 
 	// Look up the provider

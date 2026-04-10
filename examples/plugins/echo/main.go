@@ -130,6 +130,13 @@ func (p *EchoPlugin) ExtractDependencies(_ context.Context, _ string, _ map[stri
 	return nil, nil
 }
 
+// StopProvider is a no-op for the echo plugin.
+//
+//nolint:revive // all params required by interface
+func (p *EchoPlugin) StopProvider(_ context.Context, _ string) error {
+	return nil
+}
+
 func main() {
 	plugin.Serve(&EchoPlugin{})
 }
