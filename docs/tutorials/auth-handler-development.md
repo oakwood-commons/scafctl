@@ -16,7 +16,7 @@ Auth handlers can be delivered in two ways:
 | **Credential storage** | Uses `pkg/secrets` (OS keychain) | Plugin manages its own credential storage |
 | **Crash isolation** | Shares process with scafctl | Isolated process — plugin crash doesn't take down CLI |
 | **Distribution** | Ships with scafctl releases | OCI catalog artifact (`kind: auth-handler`) or standalone binary |
-| **Interface** | `auth.Handler` (8 methods) | `plugin.AuthHandlerPlugin` (7 methods) |
+| **Interface** | `auth.Handler` (8 methods) | `plugin.AuthHandlerPlugin` (9 methods) |
 
 > [!WARNING]
 > **Prerequisite**: Read the [Extension Concepts](extension-concepts.md) page for terminology (provider vs auth handler vs plugin).
@@ -644,6 +644,11 @@ type AuthHandlerPlugin interface {
     // GetAuthHandlers returns metadata for all auth handlers in this plugin.
     GetAuthHandlers(ctx context.Context) ([]AuthHandlerInfo, error)
 
+    // ConfigureAuthHandler sends host-side configuration to a named handler
+    // once after plugin load. Receives quiet/noColor/binaryName/settings,
+    // the HostService broker ID, and protocol version.
+    ConfigureAuthHandler(ctx context.Context, handlerName string, cfg ProviderConfig) error
+
     // Login initiates authentication. The callback relays device-code prompts.
     Login(ctx context.Context, handlerName string, req LoginRequest,
           deviceCodeCb func(DeviceCodePrompt)) (*LoginResponse, error)
@@ -662,6 +667,10 @@ type AuthHandlerPlugin interface {
 
     // PurgeExpiredTokens removes expired tokens. Returns count removed.
     PurgeExpiredTokens(ctx context.Context, handlerName string) (int, error)
+
+    // StopAuthHandler requests graceful shutdown of a named handler.
+    // Return nil if not implemented.
+    StopAuthHandler(ctx context.Context, handlerName string) error
 }
 ```
 
@@ -740,6 +749,16 @@ func (p *OktaPlugin) ListCachedTokens(ctx context.Context, name string) ([]*auth
 
 func (p *OktaPlugin) PurgeExpiredTokens(ctx context.Context, name string) (int, error) {
     return 0, nil
+}
+
+func (p *OktaPlugin) ConfigureAuthHandler(ctx context.Context, name string, cfg plugin.ProviderConfig) error {
+    // Store host-side config (binary name, settings, etc.) for later use
+    return nil
+}
+
+func (p *OktaPlugin) StopAuthHandler(ctx context.Context, name string) error {
+    // Release resources for the named handler
+    return nil
 }
 
 func main() {

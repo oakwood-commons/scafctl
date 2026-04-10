@@ -15,7 +15,7 @@ Providers can be delivered in two ways:
 | **Registration** | `registry.Register(...)` in `builtin.go` | Discovered at runtime from plugin cache or catalog |
 | **Crash isolation** | Shares process with scafctl | Isolated process -- plugin crash doesn't take down CLI |
 | **Distribution** | Ships with scafctl releases | OCI catalog artifact (`kind: provider`) or standalone binary |
-| **Interface** | `provider.Provider` (2 methods) | `plugin.ProviderPlugin` (3 methods) |
+| **Interface** | `provider.Provider` (2 methods) | `plugin.ProviderPlugin` (8 methods) |
 
 > [!WARNING]
 > **Prerequisite**: Read the [Extension Concepts](extension-concepts.md) page for terminology (provider vs plugin vs auth handler).
@@ -958,7 +958,7 @@ Plugins use [hashicorp/go-plugin](https://github.com/hashicorp/go-plugin) with g
 
 ### Plugin Interface
 
-Plugins implement `plugin.ProviderPlugin` (7 methods):
+Plugins implement `plugin.ProviderPlugin` (8 methods):
 
 ```go
 type ProviderPlugin interface {
@@ -986,6 +986,10 @@ type ProviderPlugin interface {
     // ExtractDependencies returns resolver dependency names from inputs.
     // Return nil to let the host use generic extraction.
     ExtractDependencies(ctx context.Context, name string, inputs map[string]any) ([]string, error)
+
+    // StopProvider requests graceful shutdown of a running provider execution.
+    // providerName may be empty to stop all providers. Return nil if not implemented.
+    StopProvider(ctx context.Context, providerName string) error
 }
 ```
 
@@ -1008,7 +1012,8 @@ Plugins that need host-side resources can access the **HostService** callback se
 - **GetSecret / SetSecret / DeleteSecret** -- access the host's secret store
 - **ListSecrets(pattern)** -- list secret names, optionally filtered by a regex pattern (max 256 characters)
 - **GetAuthIdentity** -- retrieve identity claims from the host's auth registry
-- **ListAuthHandlers** -- list available auth handlers
+- **ListAuthHandlers** -- list available auth handlers (filtered by AllowedAuthHandlers)
+- **GetAuthToken** -- retrieve a valid access token from the host's auth registry
 
 The host registers HostService via the go-plugin GRPCBroker during plugin startup. Plugins receive the broker service ID in `ProviderConfig.HostServiceID` from the `ConfigureProvider` call. Use this ID to dial the HostService via the broker.
 
@@ -1125,6 +1130,10 @@ func (p *MyPlugin) DescribeWhatIf(_ context.Context, name string, input map[stri
 
 func (p *MyPlugin) ExtractDependencies(_ context.Context, _ string, _ map[string]any) ([]string, error) {
     return nil, nil // Use generic extraction
+}
+
+func (p *MyPlugin) StopProvider(_ context.Context, _ string) error {
+    return nil // No graceful shutdown needed
 }
 
 func main() {
