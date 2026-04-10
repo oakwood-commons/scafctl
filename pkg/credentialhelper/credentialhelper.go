@@ -102,7 +102,7 @@ func (h *Helper) Store(ctx context.Context, cred *Credential) error {
 	if cred.ServerURL == "" {
 		return fmt.Errorf("ServerURL is required")
 	}
-	data, err := json.Marshal(cred)
+	data, err := json.Marshal(cred) //nolint:gosec // G117: required by Docker credential helper protocol
 	if err != nil {
 		return fmt.Errorf("marshal credential: %w", err)
 	}

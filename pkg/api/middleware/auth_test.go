@@ -55,7 +55,7 @@ func TestAzureOIDCAuth_MissingAuthHeader(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/test", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -71,7 +71,7 @@ func TestAzureOIDCAuth_InvalidAuthHeaderFormat(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/test", nil)
 	req.Header.Set("Authorization", "Basic dXNlcjpwYXNz")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -88,7 +88,7 @@ func TestAzureOIDCAuth_InvalidToken(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/test", nil)
 	req.Header.Set("Authorization", "Bearer not-a-valid-jwt")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -126,7 +126,7 @@ func BenchmarkAzureOIDCAuth_MissingHeader(b *testing.B) {
 	}))
 
 	for b.Loop() {
-		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req := httptest.NewRequestWithContext(b.Context(), http.MethodGet, "/test", nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 	}
@@ -231,7 +231,7 @@ func TestAzureOIDCAuth_TokenMissingKid(t *testing.T) {
 	tokenStr, err := token.SignedString(privKey)
 	require.NoError(t, err)
 
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/test", nil)
 	req.Header.Set("Authorization", "Bearer "+tokenStr)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)

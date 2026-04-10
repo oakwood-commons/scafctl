@@ -318,7 +318,12 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 	// Load plugin providers if requested
 	if len(o.PluginDirs) > 0 {
 		lgr.V(1).Info("loading plugin providers", "dirs", o.PluginDirs)
-		if err := plugin.RegisterPluginProviders(reg, o.PluginDirs); err != nil {
+		pluginCfg := &plugin.ProviderConfig{
+			Quiet:      o.CliParams.IsQuiet,
+			NoColor:    o.CliParams.NoColor,
+			BinaryName: o.CliParams.BinaryName,
+		}
+		if err := plugin.RegisterPluginProviders(ctx, reg, o.PluginDirs, pluginCfg); err != nil {
 			w.Warningf("failed to load some plugins: %v", err)
 		}
 	}

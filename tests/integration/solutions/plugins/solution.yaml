@@ -4,7 +4,7 @@ kind: Solution
 metadata:
   name: plugin-deps-test
   version: 1.0.0
-  description: Solution for testing plugin CLI commands
+  description: Solution for testing plugin CLI commands and plugin protocol
 
 spec:
   resolvers:
@@ -34,6 +34,13 @@ spec:
       plugins-list-empty:
         description: Verify plugins list works with empty cache
         command: [plugins, list]
+        injectFile: false
+        assertions:
+          - expression: __exitCode == 0
+
+      plugins-install-help:
+        description: Verify plugins install help works
+        command: [plugins, install, --help]
         injectFile: false
         assertions:
           - expression: __exitCode == 0

@@ -81,7 +81,7 @@ func commandGet() *cobra.Command {
 			if err != nil {
 				return writeError(os.Stdout, err.Error())
 			}
-			return json.NewEncoder(os.Stdout).Encode(cred)
+			return json.NewEncoder(os.Stdout).Encode(cred) //nolint:gosec // G117: required by Docker credential helper protocol
 		},
 	}
 }

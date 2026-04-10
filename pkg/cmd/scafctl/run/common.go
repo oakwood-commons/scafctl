@@ -19,6 +19,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -540,6 +541,13 @@ func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context)
 	}
 	if o.ShowMetrics && o.IOStreams != nil {
 		opts = append(opts, prepare.WithMetrics(o.IOStreams.ErrOut))
+	}
+	if o.CliParams != nil {
+		opts = append(opts, prepare.WithPluginConfig(&plugin.ProviderConfig{
+			Quiet:      o.CliParams.IsQuiet,
+			NoColor:    o.CliParams.NoColor,
+			BinaryName: o.CliParams.BinaryName,
+		}))
 	}
 
 	result, err := prepare.Solution(ctx, o.File, opts...)
