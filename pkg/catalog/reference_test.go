@@ -677,3 +677,49 @@ func TestRemoteReference_String(t *testing.T) {
 		})
 	}
 }
+
+func TestReference_VersionOrDigest(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		ref      Reference
+		expected string
+	}{
+		{
+			name:     "with version",
+			ref:      Reference{Kind: ArtifactKindSolution, Name: "sol", Version: semver.MustParse("1.2.3")},
+			expected: "1.2.3",
+		},
+		{
+			name:     "with digest only",
+			ref:      Reference{Kind: ArtifactKindSolution, Name: "sol", Digest: "sha256:abc123"},
+			expected: "sha256:abc123",
+		},
+		{
+			name:     "version takes precedence over digest",
+			ref:      Reference{Kind: ArtifactKindSolution, Name: "sol", Version: semver.MustParse("1.0.0"), Digest: "sha256:abc123"},
+			expected: "1.0.0",
+		},
+		{
+			name:     "neither version nor digest",
+			ref:      Reference{Kind: ArtifactKindSolution, Name: "sol"},
+			expected: "unknown",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, tt.ref.VersionOrDigest())
+		})
+	}
+}
+
+func BenchmarkReference_VersionOrDigest(b *testing.B) {
+	ref := Reference{Kind: ArtifactKindSolution, Name: "sol", Version: semver.MustParse("1.2.3")}
+	b.ResetTimer()
+	for b.Loop() {
+		ref.VersionOrDigest()
+	}
+}

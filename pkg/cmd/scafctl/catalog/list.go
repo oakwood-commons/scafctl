@@ -179,7 +179,11 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 				}
 				remoteArtifacts, remoteErr := listRemoteArtifacts(ctx, remoteOpts, kind)
 				if remoteErr != nil {
-					lgr.V(1).Info("failed to list from remote catalog", "catalog", catCfg.Name, "error", remoteErr.Error())
+					w.Warningf("failed to list from remote catalog %q: %v", catCfg.Name, remoteErr)
+					if catalogURL, resolveErr := catalog.ResolveCatalogURL(ctx, catCfg.Name); resolveErr == nil {
+						registry, _ := catalog.ParseCatalogURL(catalogURL)
+						hintOnAuthError(ctx, w, registry, remoteErr)
+					}
 					continue
 				}
 				artifacts = append(artifacts, remoteArtifacts...)

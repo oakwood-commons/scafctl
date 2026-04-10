@@ -84,6 +84,30 @@ func TestCommandList_InvalidKind(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestCommandList_AllVersionsFlag(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandList(cliParams, ioStreams, "scafctl/catalog")
+
+	f := cmd.Flags().Lookup("all-versions")
+	require.NotNil(t, f, "all-versions flag should exist")
+	assert.Equal(t, "false", f.DefValue)
+}
+
+func TestCommandList_NameFlag(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandList(cliParams, ioStreams, "scafctl/catalog")
+
+	f := cmd.Flags().Lookup("name")
+	require.NotNil(t, f, "name flag should exist")
+	assert.Equal(t, "", f.DefValue)
+}
+
 func TestArtifactListSchema_ValidJSON(t *testing.T) {
 	t.Parallel()
 

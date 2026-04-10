@@ -348,7 +348,7 @@ func ValidateAlias(alias string) error {
 
 	// Must not be a valid semver version (those should be created via build)
 	if _, err := ParseReference(ArtifactKindSolution, "x@"+alias); err == nil {
-		return fmt.Errorf("alias %q looks like a semver version; use '%s build' to create versioned artifacts", alias, paths.AppName())
+		return fmt.Errorf("alias %q looks like a semver version; use '%s build solution' to create versioned artifacts", alias, paths.AppName())
 	}
 
 	// OCI tag constraints: must match [a-zA-Z0-9_.-]+

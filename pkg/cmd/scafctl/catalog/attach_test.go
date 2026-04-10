@@ -68,3 +68,76 @@ func TestCommandAttach_ExactArgs(t *testing.T) {
 	err := cmd.Execute()
 	assert.Error(t, err)
 }
+
+func TestCommandAttach_MissingVersion(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandAttach(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(newCatalogTestCtx(t))
+	cmd.SetArgs([]string{"my-solution", "--file", "sbom.json", "--type", "application/spdx+json"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "version required")
+}
+
+func TestCommandAttach_FileFlagShorthand(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandAttach(cliParams, ioStreams, "scafctl/catalog")
+
+	f := cmd.Flags().ShorthandLookup("f")
+	require.NotNil(t, f, "shorthand -f should exist")
+	assert.Equal(t, "file", f.Name)
+}
+
+func TestCommandAttach_TypeFlagShorthand(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandAttach(cliParams, ioStreams, "scafctl/catalog")
+
+	f := cmd.Flags().ShorthandLookup("t")
+	require.NotNil(t, f, "shorthand -t should exist")
+	assert.Equal(t, "type", f.Name)
+}
+
+func TestCommandAttach_CatalogFlagShorthand(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandAttach(cliParams, ioStreams, "scafctl/catalog")
+
+	f := cmd.Flags().ShorthandLookup("c")
+	require.NotNil(t, f, "shorthand -c should exist")
+	assert.Equal(t, "catalog", f.Name)
+}
+
+func TestCommandAttach_FileNotFound(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandAttach(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(newCatalogTestCtx(t))
+	cmd.SetArgs([]string{"my-solution@1.0.0", "--file", "/nonexistent/file.json", "--type", "application/spdx+json", "--catalog", "ghcr.io/myorg"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+}
+
+func BenchmarkCommandAttach(b *testing.B) {
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		CommandAttach(cliParams, ioStreams, "scafctl/catalog")
+	}
+}

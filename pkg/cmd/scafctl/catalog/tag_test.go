@@ -174,6 +174,34 @@ func TestCommandTag_ReservedLatestAlias(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestCommandTag_NumericAlias(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandTag(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(newCatalogTestCtx(t))
+	cmd.SetArgs([]string{"my-solution@1.0.0", "123"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "purely numeric")
+}
+
+func TestCommandTag_InvalidCharAlias(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandTag(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(newCatalogTestCtx(t))
+	cmd.SetArgs([]string{"my-solution@1.0.0", "bad/alias"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid character")
+}
+
 func BenchmarkCommandTag(b *testing.B) {
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()

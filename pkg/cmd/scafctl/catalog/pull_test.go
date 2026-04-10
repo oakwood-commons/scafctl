@@ -108,6 +108,57 @@ func TestCommandPull_InvalidKind(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid kind")
 }
 
+func TestCommandPull_CatalogFlagShorthand(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandPull(cliParams, ioStreams, "scafctl/catalog")
+
+	f := cmd.Flags().ShorthandLookup("c")
+	require.NotNil(t, f, "shorthand -c should exist")
+	assert.Equal(t, "catalog", f.Name)
+}
+
+func TestCommandPull_NoCacheFlag(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandPull(cliParams, ioStreams, "scafctl/catalog")
+
+	f := cmd.Flags().Lookup("no-cache")
+	require.NotNil(t, f, "no-cache flag should exist")
+	assert.Equal(t, "false", f.DefValue)
+}
+
+func TestCommandPull_AsFlag(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandPull(cliParams, ioStreams, "scafctl/catalog")
+
+	f := cmd.Flags().Lookup("as")
+	require.NotNil(t, f, "as flag should exist")
+	assert.Equal(t, "", f.DefValue)
+}
+
+func TestCommandPull_ShortNameNoCatalog(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandPull(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(newCatalogTestCtx(t))
+	// Short name without --catalog and no config
+	cmd.SetArgs([]string{"my-solution@1.0.0"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no --catalog specified")
+}
+
 func BenchmarkCommandPull(b *testing.B) {
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()

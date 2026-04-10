@@ -9,6 +9,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -52,6 +53,55 @@ func TestNewRemoteCatalog(t *testing.T) {
 		assert.NotNil(t, cat)
 		assert.Equal(t, "localhost:5000", cat.Registry())
 	})
+
+	t.Run("with auth handler only", func(t *testing.T) {
+		t.Parallel()
+		handler := auth.NewMockHandler("test-handler")
+		handler.GetTokenResult = &auth.Token{AccessToken: "test-token"}
+		cat, err := NewRemoteCatalog(RemoteCatalogConfig{
+			Name:        "test",
+			Registry:    "ghcr.io",
+			Repository:  "org/repo",
+			AuthHandler: handler,
+			AuthScope:   "repo:read",
+			Logger:      logr.Discard(),
+		})
+		require.NoError(t, err)
+		assert.NotNil(t, cat)
+		assert.NotNil(t, cat.client.Credential)
+	})
+
+	t.Run("with credential store and auth handler", func(t *testing.T) {
+		t.Parallel()
+		handler := auth.NewMockHandler("test-handler")
+		credStore := &CredentialStore{}
+		cat, err := NewRemoteCatalog(RemoteCatalogConfig{
+			Name:            "test",
+			Registry:        "ghcr.io",
+			Repository:      "org/repo",
+			CredentialStore: credStore,
+			AuthHandler:     handler,
+			Logger:          logr.Discard(),
+		})
+		require.NoError(t, err)
+		assert.NotNil(t, cat)
+		assert.NotNil(t, cat.client.Credential)
+	})
+
+	t.Run("with credential store only", func(t *testing.T) {
+		t.Parallel()
+		credStore := &CredentialStore{}
+		cat, err := NewRemoteCatalog(RemoteCatalogConfig{
+			Name:            "test",
+			Registry:        "ghcr.io",
+			Repository:      "org/repo",
+			CredentialStore: credStore,
+			Logger:          logr.Discard(),
+		})
+		require.NoError(t, err)
+		assert.NotNil(t, cat)
+		assert.NotNil(t, cat.client.Credential)
+	})
 }
 
 func TestRemoteCatalog_Name(t *testing.T) {
@@ -88,6 +138,54 @@ func TestRemoteCatalog_Repository(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "org/repo", cat.Repository())
+}
+
+func TestRemoteCatalog_RepositoryPath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		registry   string
+		repository string
+		ref        Reference
+		expected   string
+	}{
+		{
+			name:       "solution with repository",
+			registry:   "ghcr.io",
+			repository: "myorg/scafctl",
+			ref:        Reference{Kind: ArtifactKindSolution, Name: "my-sol"},
+			expected:   "ghcr.io/myorg/scafctl/solutions/my-sol",
+		},
+		{
+			name:       "provider without repository",
+			registry:   "ghcr.io",
+			repository: "",
+			ref:        Reference{Kind: ArtifactKindProvider, Name: "my-prov"},
+			expected:   "ghcr.io/providers/my-prov",
+		},
+		{
+			name:       "kindless ref",
+			registry:   "ghcr.io",
+			repository: "myorg",
+			ref:        Reference{Name: "starter-kit"},
+			expected:   "ghcr.io/myorg/starter-kit",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cat, err := NewRemoteCatalog(RemoteCatalogConfig{
+				Name:       "test",
+				Registry:   tc.registry,
+				Repository: tc.repository,
+				Logger:     logr.Discard(),
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tc.expected, cat.RepositoryPath(tc.ref))
+		})
+	}
 }
 
 func TestRemoteCatalog_buildRepositoryPath(t *testing.T) {

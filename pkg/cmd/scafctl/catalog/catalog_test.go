@@ -5,6 +5,7 @@ package catalog
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	appconfig "github.com/oakwood-commons/scafctl/pkg/config"
@@ -12,6 +13,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestResolveAuthScope_FromNamedCatalog(t *testing.T) {
@@ -128,6 +130,66 @@ func TestResolveAuthHandler_FromCatalogConfig(t *testing.T) {
 	// github handler may or may not be loadable in test environment,
 	// but the function should at least try (not panic)
 	_ = resolveAuthHandler(ctx, "ghcr.io", "gh-registry")
+}
+
+func TestCommandCatalog_HasSubcommands(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandCatalog(cliParams, ioStreams, "scafctl/catalog")
+
+	require.NotNil(t, cmd)
+	assert.Equal(t, "catalog", cmd.Use)
+
+	// Verify expected subcommands exist
+	expectedSubs := []string{"list", "pull", "push", "delete", "login", "logout", "remote", "inspect", "tags", "tag", "attach"}
+	for _, name := range expectedSubs {
+		found := false
+		for _, sub := range cmd.Commands() {
+			if sub.Name() == name {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "expected subcommand %q", name)
+	}
+}
+
+func TestHintOnAuthError_401(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+	w := writer.New(ioStreams, settings.NewCliParams())
+	ctx := writer.WithWriter(context.Background(), w)
+
+	testErr := fmt.Errorf("request failed: 401 Unauthorized")
+	hintOnAuthError(ctx, w, "ghcr.io", testErr)
+	assert.Contains(t, outBuf.String(), "catalog login")
+}
+
+func TestHintOnAuthError_403(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+	w := writer.New(ioStreams, settings.NewCliParams())
+	ctx := writer.WithWriter(context.Background(), w)
+
+	testErr := fmt.Errorf("request failed: 403 Forbidden")
+	hintOnAuthError(ctx, w, "ghcr.io", testErr)
+	assert.Contains(t, outBuf.String(), "catalog login")
+}
+
+func TestHintOnAuthError_NonAuthError(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+	w := writer.New(ioStreams, settings.NewCliParams())
+	ctx := writer.WithWriter(context.Background(), w)
+
+	testErr := fmt.Errorf("network timeout")
+	hintOnAuthError(ctx, w, "ghcr.io", testErr)
+	assert.Empty(t, outBuf.String(), "should not print hint for non-auth errors")
 }
 
 func testIOStreams() *terminal.IOStreams {

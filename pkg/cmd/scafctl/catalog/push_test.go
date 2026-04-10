@@ -104,6 +104,32 @@ func TestCommandPush_InvalidKind(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid kind")
 }
 
+func TestCommandPush_SBOMFlag(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandPush(cliParams, ioStreams, "scafctl/catalog")
+
+	f := cmd.Flags().Lookup("sbom")
+	require.NotNil(t, f, "sbom flag should exist")
+	assert.Equal(t, "false", f.DefValue)
+}
+
+func TestCommandPush_LocalRefNoCatalog(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandPush(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(newCatalogTestCtx(t))
+	// Local name without --catalog and no config — should fail
+	cmd.SetArgs([]string{"my-solution@1.0.0"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+}
+
 func BenchmarkCommandPush(b *testing.B) {
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
