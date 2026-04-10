@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/hashicorp/go-plugin"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
@@ -122,6 +123,11 @@ type Client struct {
 	plugin       ProviderPlugin
 	path         string
 	name         string
+
+	// descriptorCache caches GetProviderDescriptor results to avoid redundant
+	// RPCs for the same provider within a single client lifecycle.
+	mu              sync.RWMutex
+	descriptorCache map[string]*provider.Descriptor
 }
 
 // ClientOption configures plugin client creation.
@@ -174,9 +180,33 @@ func (c *Client) GetProviders(ctx context.Context) ([]string, error) {
 	return c.plugin.GetProviders(ctx)
 }
 
-// GetProviderDescriptor returns metadata for a specific provider
+// GetProviderDescriptor returns metadata for a specific provider.
+// The result is cached for the lifetime of the client.
+//
+// Note: concurrent callers for the same uncached provider may both issue an
+// RPC (classic check-then-act). This is benign because descriptors are
+// immutable — the second writer simply overwrites with an identical value.
 func (c *Client) GetProviderDescriptor(ctx context.Context, providerName string) (*provider.Descriptor, error) {
-	return c.plugin.GetProviderDescriptor(ctx, providerName)
+	c.mu.RLock()
+	if desc, ok := c.descriptorCache[providerName]; ok {
+		c.mu.RUnlock()
+		return desc, nil
+	}
+	c.mu.RUnlock()
+
+	desc, err := c.plugin.GetProviderDescriptor(ctx, providerName)
+	if err != nil {
+		return nil, err
+	}
+
+	c.mu.Lock()
+	if c.descriptorCache == nil {
+		c.descriptorCache = make(map[string]*provider.Descriptor)
+	}
+	c.descriptorCache[providerName] = desc
+	c.mu.Unlock()
+
+	return desc, nil
 }
 
 // ExecuteProvider executes a provider with the given input
@@ -239,11 +269,16 @@ type AuthHandlerClient struct {
 }
 
 // NewAuthHandlerClient creates a new auth handler plugin client.
-func NewAuthHandlerClient(pluginPath string) (*AuthHandlerClient, error) {
+func NewAuthHandlerClient(pluginPath string, opts ...ClientOption) (*AuthHandlerClient, error) {
+	var o clientOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+
 	raw, client, err := connectPlugin(pluginPath, pluginConfig{
 		handshake:  AuthHandlerHandshakeConfig,
 		pluginName: AuthHandlerPluginName,
-		grpcPlugin: &AuthHandlerGRPCPlugin{},
+		grpcPlugin: &AuthHandlerGRPCPlugin{HostDeps: o.hostDeps},
 	})
 	if err != nil {
 		return nil, err
@@ -288,6 +323,25 @@ func (c *AuthHandlerClient) GetToken(ctx context.Context, handlerName string, re
 	return c.plugin.GetToken(ctx, handlerName, req)
 }
 
+// ConfigureAuthHandler delegates to the plugin's ConfigureAuthHandler.
+func (c *AuthHandlerClient) ConfigureAuthHandler(ctx context.Context, handlerName string, cfg ProviderConfig) error {
+	return c.plugin.ConfigureAuthHandler(ctx, handlerName, cfg)
+}
+
+// StopAuthHandler delegates to the plugin's StopAuthHandler.
+func (c *AuthHandlerClient) StopAuthHandler(ctx context.Context, handlerName string) error {
+	return c.plugin.StopAuthHandler(ctx, handlerName)
+}
+
+// HostServiceID returns the broker service ID of the HostService callback server.
+// Returns 0 if no HostService was registered.
+func (c *AuthHandlerClient) HostServiceID() uint32 {
+	if gc, ok := c.plugin.(*AuthHandlerGRPCClient); ok {
+		return gc.hostServiceID
+	}
+	return 0
+}
+
 // Kill terminates the plugin process.
 func (c *AuthHandlerClient) Kill() {
 	if c.pluginClient != nil {
@@ -306,6 +360,8 @@ func (c *AuthHandlerClient) Path() string {
 }
 
 // DiscoverAuthHandlers discovers auth handler plugins from the given directories.
-func DiscoverAuthHandlers(pluginDirs []string) ([]*AuthHandlerClient, error) {
-	return discoverExecutables(pluginDirs, NewAuthHandlerClient)
+func DiscoverAuthHandlers(pluginDirs []string, opts ...ClientOption) ([]*AuthHandlerClient, error) {
+	return discoverExecutables(pluginDirs, func(path string) (*AuthHandlerClient, error) {
+		return NewAuthHandlerClient(path, opts...)
+	})
 }

@@ -23,10 +23,29 @@ type ProviderWrapper struct {
 	mu           sync.RWMutex
 }
 
+// wrapperConfig holds configuration for NewProviderWrapper.
+type wrapperConfig struct {
+	ctx context.Context
+}
+
+// WrapperOption configures NewProviderWrapper.
+type WrapperOption func(*wrapperConfig)
+
+// WithContext sets the context used during wrapper initialisation (e.g. for
+// the initial GetProviderDescriptor RPC). Defaults to context.Background().
+func WithContext(ctx context.Context) WrapperOption {
+	return func(c *wrapperConfig) { c.ctx = ctx }
+}
+
 // NewProviderWrapper creates a new provider wrapper for a plugin provider
-func NewProviderWrapper(client *Client, providerName string) (*ProviderWrapper, error) {
+func NewProviderWrapper(client *Client, providerName string, opts ...WrapperOption) (*ProviderWrapper, error) {
+	wCfg := wrapperConfig{ctx: context.Background()}
+	for _, o := range opts {
+		o(&wCfg)
+	}
+
 	// Get the descriptor to validate the provider exists
-	desc, err := client.GetProviderDescriptor(context.Background(), providerName)
+	desc, err := client.GetProviderDescriptor(wCfg.ctx, providerName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get provider descriptor: %w", err)
 	}
@@ -184,28 +203,34 @@ func (w *ProviderWrapper) ExecuteStream(ctx context.Context, input any, cb func(
 // RegisterPluginProviders discovers plugins and registers them with the provider registry.
 // After registration, each wrapper is configured with the provided ProviderConfig.
 // If cfg is nil, configuration is skipped (providers will use defaults).
-func RegisterPluginProviders(ctx context.Context, registry *provider.Registry, pluginDirs []string, cfg *ProviderConfig, clientOpts ...ClientOption) error {
+// Returns the created clients; the caller should defer calling KillAll(clients)
+// to clean up plugin processes on exit.
+func RegisterPluginProviders(ctx context.Context, registry *provider.Registry, pluginDirs []string, cfg *ProviderConfig, clientOpts ...ClientOption) ([]*Client, error) {
 	// Discover plugins
 	clients, err := Discover(pluginDirs, clientOpts...)
 	if err != nil {
-		return fmt.Errorf("failed to discover plugins: %w", err)
+		return nil, fmt.Errorf("failed to discover plugins: %w", err)
 	}
 
 	// Register providers from each plugin
 	for _, client := range clients {
 		providers, err := client.GetProviders(ctx)
 		if err != nil {
+			logger.FromContext(ctx).V(1).Info("failed to get providers from plugin", "plugin", client.Name(), "error", err)
 			client.Kill()
 			continue
 		}
 
+		lgr := logger.FromContext(ctx)
 		for _, providerName := range providers {
-			wrapper, err := NewProviderWrapper(client, providerName)
+			wrapper, err := NewProviderWrapper(client, providerName, WithContext(ctx))
 			if err != nil {
+				lgr.V(1).Info("failed to create provider wrapper", "provider", providerName, "plugin", client.Name(), "error", err)
 				continue
 			}
 
 			if err := registry.Register(wrapper); err != nil {
+				lgr.V(1).Info("failed to register plugin provider", "provider", providerName, "plugin", client.Name(), "error", err)
 				continue
 			}
 
@@ -221,5 +246,15 @@ func RegisterPluginProviders(ctx context.Context, registry *provider.Registry, p
 		}
 	}
 
-	return nil
+	return clients, nil
+}
+
+// KillAll terminates all plugin processes in the given client list.
+// This is safe to call with a nil or empty slice.
+func KillAll(clients []*Client) {
+	for _, c := range clients {
+		if c != nil {
+			c.Kill()
+		}
+	}
 }

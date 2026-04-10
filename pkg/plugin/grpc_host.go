@@ -60,6 +60,10 @@ type HostServiceDeps struct {
 	// AuthHandlersFunc returns available auth handler names and the default handler.
 	// May be nil if auth is unavailable.
 	AuthHandlersFunc func(ctx context.Context) (handlers []string, defaultHandler string, err error) `json:"-" yaml:"-" doc:"Auth handlers callback (not serialized)."`
+	// AuthTokenFunc retrieves a valid access token from the host's auth registry.
+	// Plugins call this for authenticated HTTP requests and token refresh on 401.
+	// May be nil if auth is unavailable.
+	AuthTokenFunc func(ctx context.Context, handler, scope string, minValidFor int64, forceRefresh bool) (*proto.GetAuthTokenResponse, error) `json:"-" yaml:"-" doc:"Auth token callback (not serialized)."`
 }
 
 // isSecretAllowed checks whether the given secret name is within the allowed
@@ -274,10 +278,54 @@ func (h *HostServiceServer) ListAuthHandlers(ctx context.Context, _ *proto.ListA
 		return &proto.ListAuthHandlersResponse{}, nil
 	}
 
+	// Filter handlers to only those allowed for this plugin. This prevents
+	// plugins from discovering handler names they are not permitted to use.
+	if len(h.Deps.AllowedAuthHandlers) > 0 {
+		allowed := make(map[string]struct{}, len(h.Deps.AllowedAuthHandlers))
+		for _, a := range h.Deps.AllowedAuthHandlers {
+			allowed[a] = struct{}{}
+		}
+		filtered := make([]string, 0, len(handlers))
+		for _, name := range handlers {
+			if _, ok := allowed[name]; ok {
+				filtered = append(filtered, name)
+			}
+		}
+		handlers = filtered
+		// Redact default handler if not in allowed set
+		if _, ok := allowed[defaultHandler]; !ok {
+			defaultHandler = ""
+		}
+	}
+
 	return &proto.ListAuthHandlersResponse{
 		HandlerNames:   handlers,
 		DefaultHandler: defaultHandler,
 	}, nil
+}
+
+// GetAuthToken implements HostService.GetAuthToken
+func (h *HostServiceServer) GetAuthToken(ctx context.Context, req *proto.GetAuthTokenRequest) (*proto.GetAuthTokenResponse, error) {
+	if h.Deps.AuthTokenFunc == nil {
+		return &proto.GetAuthTokenResponse{
+			Error: "auth token service not available",
+		}, nil
+	}
+
+	if !h.Deps.isAuthHandlerAllowed(req.HandlerName) {
+		return &proto.GetAuthTokenResponse{
+			Error: fmt.Sprintf("access denied: auth handler %q is not in the allowed set", req.HandlerName),
+		}, nil
+	}
+
+	resp, err := h.Deps.AuthTokenFunc(ctx, req.HandlerName, req.Scope, req.MinValidForSeconds, req.ForceRefresh)
+	if err != nil {
+		return &proto.GetAuthTokenResponse{
+			Error: fmt.Sprintf("get auth token: %v", err),
+		}, nil
+	}
+
+	return resp, nil
 }
 
 // HostServiceClient wraps the HostService gRPC client (used by plugins).
@@ -361,4 +409,21 @@ func (c *HostServiceClient) ListAuthHandlers(ctx context.Context) (handlers []st
 		return nil, "", fmt.Errorf("host ListAuthHandlers: %w", err)
 	}
 	return resp.HandlerNames, resp.DefaultHandler, nil
+}
+
+// GetAuthToken retrieves a valid access token from the host's auth registry.
+func (c *HostServiceClient) GetAuthToken(ctx context.Context, handler, scope string, minValidFor int64, forceRefresh bool) (*proto.GetAuthTokenResponse, error) {
+	resp, err := c.client.GetAuthToken(ctx, &proto.GetAuthTokenRequest{
+		HandlerName:        handler,
+		Scope:              scope,
+		MinValidForSeconds: minValidFor,
+		ForceRefresh:       forceRefresh,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("host GetAuthToken: %w", err)
+	}
+	if resp.Error != "" {
+		return nil, fmt.Errorf("host GetAuthToken: %s", resp.Error)
+	}
+	return resp, nil
 }
