@@ -499,6 +499,13 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 	defer span.End()
 
 	// Evaluate condition if present
+	if action.WhenSkipped {
+		e.actionContext.MarkSkipped(actionName, SkipReasonCondition)
+		if e.progressCallback != nil {
+			e.progressCallback.OnActionSkipped(actionName, string(SkipReasonCondition))
+		}
+		return nil
+	}
 	if action.When != nil {
 		additionalVars := e.buildAdditionalVars(graph.AliasMap)
 		shouldRun, err := action.When.EvaluateWithAdditionalVars(ctx, e.resolverData, additionalVars)

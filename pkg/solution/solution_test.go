@@ -454,9 +454,14 @@ func TestDefaultVersion(t *testing.T) {
 	require.NotNil(t, v)
 	assert.Equal(t, "0.0.0-dev", v.String())
 
-	// Verify it returns a copy (mutating one doesn't affect the other)
+	// Verify it returns a distinct copy (mutating one doesn't affect the other)
 	v2 := DefaultVersion()
 	assert.Equal(t, v, v2)
+	assert.NotSame(t, v, v2, "DefaultVersion must return distinct pointers")
+
+	// Mutate v and verify v2 is unchanged
+	*v, _ = v.SetPrerelease("mutated")
+	assert.Equal(t, "0.0.0-dev", v2.String(), "mutating one copy must not affect the other")
 }
 
 func TestSolution_RawContent(t *testing.T) {

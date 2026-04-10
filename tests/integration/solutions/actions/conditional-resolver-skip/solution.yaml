@@ -1,0 +1,94 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-action-conditional-resolver-skip
+  version: 1.0.0
+  description: |
+    Regression test for action input materialization with conditional resolvers.
+    When a resolver is skipped (its when condition is false), actions that reference
+    the skipped resolver's data in their inputs must also be skipped if their own
+    when condition depends on the same resolver and evaluates to false.
+    Previously this caused a "no such key" error during input materialization.
+
+spec:
+  resolvers:
+    environment:
+      description: Target environment
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "dev"
+
+    # Only resolves when environment is "prod"
+    prodCredentials:
+      description: Production credentials (only in prod)
+      when:
+        expr: '_.environment == "prod"'
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "secret-prod-creds"
+
+  workflow:
+    actions:
+      setup:
+        description: Always-run setup
+        provider: exec
+        inputs:
+          command: "echo Setup complete"
+
+      prodDeploy:
+        description: Only runs in production, references prodCredentials
+        provider: exec
+        dependsOn: [setup]
+        when:
+          expr: '_.environment == "prod"'
+        inputs:
+          command:
+            expr: '"echo Deploying with " + _.prodCredentials'
+
+      devDeploy:
+        description: Only runs in dev
+        provider: exec
+        dependsOn: [setup]
+        when:
+          expr: '_.environment == "dev"'
+        inputs:
+          command: "echo Deploying to dev"
+
+  testing:
+    cases:
+      _run-base:
+        description: Base template
+        command: [run, solution]
+        args: ["-o", "json"]
+        tags: [action, conditional, regression]
+        assertions:
+          - expression: __exitCode == 0
+
+      no-materialization-error:
+        description: Action referencing skipped resolver data does not cause error
+        extends: [_run-base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.status == "succeeded"
+            message: "Solution should succeed without materialization errors"
+
+      prod-deploy-skipped:
+        description: prodDeploy is skipped when environment is dev
+        extends: [_run-base]
+        assertions:
+          - expression: __output.actions["prodDeploy"].status == "skipped"
+            message: "prodDeploy should be skipped in dev environment"
+          - expression: __output.actions["prodDeploy"].skipReason == "condition"
+            message: "Skip reason should be condition"
+
+      dev-deploy-runs:
+        description: devDeploy runs when environment is dev
+        extends: [_run-base]
+        assertions:
+          - expression: __output.actions["devDeploy"].status == "succeeded"
+            message: "devDeploy should succeed in dev environment"

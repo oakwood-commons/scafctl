@@ -1123,6 +1123,247 @@ func BenchmarkBuildGraph_AutoDeps(b *testing.B) {
 	}
 }
 
+func TestConditionReferencesActions(t *testing.T) {
+	tests := []struct {
+		name       string
+		when       *spec.Condition
+		aliases    []string
+		wantResult bool
+	}{
+		{
+			name:       "nil condition",
+			when:       nil,
+			wantResult: false,
+		},
+		{
+			name:       "nil expr",
+			when:       &spec.Condition{Expr: nil},
+			wantResult: false,
+		},
+		{
+			name:       "resolver-only expression",
+			when:       &spec.Condition{Expr: graphCelExpr("_.environment == 'prod'")},
+			wantResult: false,
+		},
+		{
+			name:       "references __actions",
+			when:       &spec.Condition{Expr: graphCelExpr("__actions.build.results.status == 'success'")},
+			wantResult: true,
+		},
+		{
+			name:       "references __cwd",
+			when:       &spec.Condition{Expr: graphCelExpr("__cwd == '/tmp'")},
+			wantResult: true,
+		},
+		{
+			name:       "references __execution",
+			when:       &spec.Condition{Expr: graphCelExpr("__execution.dryRun == true")},
+			wantResult: true,
+		},
+		{
+			name:       "references alias",
+			when:       &spec.Condition{Expr: graphCelExpr("myalias.results.status == 'success'")},
+			aliases:    []string{"myalias"},
+			wantResult: true,
+		},
+		{
+			name:       "alias not in list",
+			when:       &spec.Condition{Expr: graphCelExpr("myalias.results.status == 'success'")},
+			aliases:    []string{"otheralias"},
+			wantResult: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := conditionReferencesActions(tc.when, tc.aliases)
+			assert.Equal(t, tc.wantResult, got)
+		})
+	}
+}
+
+func TestBuildGraph_WhenSkipped_ResolverOnlyConditionFalse(t *testing.T) {
+	ctx := context.Background()
+	w := &Workflow{
+		Actions: map[string]*Action{
+			"deploy": {
+				Provider: "shell",
+				When:     &spec.Condition{Expr: graphCelExpr("_.environment == 'prod'")},
+				Inputs: map[string]*spec.ValueRef{
+					"command": graphExprRef("_.deploy_cmd"),
+				},
+			},
+		},
+	}
+
+	// Resolver data where environment != 'prod' → condition is false
+	resolverData := map[string]any{
+		"environment": "dev",
+	}
+
+	graph, err := BuildGraph(ctx, w, resolverData, nil)
+	require.NoError(t, err)
+	require.Contains(t, graph.Actions, "deploy")
+
+	action := graph.Actions["deploy"]
+	assert.True(t, action.WhenSkipped, "action should be pre-skipped when resolver-only condition is false")
+	assert.Empty(t, action.MaterializedInputs, "inputs should not be materialized for pre-skipped action")
+	assert.Empty(t, action.DeferredInputs)
+}
+
+func TestBuildGraph_WhenSkipped_ResolverOnlyConditionTrue(t *testing.T) {
+	ctx := context.Background()
+	w := &Workflow{
+		Actions: map[string]*Action{
+			"deploy": {
+				Provider: "shell",
+				When:     &spec.Condition{Expr: graphCelExpr("_.environment == 'prod'")},
+				Inputs: map[string]*spec.ValueRef{
+					"command": literalRef("kubectl apply"),
+				},
+			},
+		},
+	}
+
+	// Resolver data where environment == 'prod' → condition is true
+	resolverData := map[string]any{
+		"environment": "prod",
+	}
+
+	graph, err := BuildGraph(ctx, w, resolverData, nil)
+	require.NoError(t, err)
+	require.Contains(t, graph.Actions, "deploy")
+
+	action := graph.Actions["deploy"]
+	assert.False(t, action.WhenSkipped, "action should NOT be pre-skipped when condition is true")
+	assert.Equal(t, "kubectl apply", action.MaterializedInputs["command"])
+}
+
+func TestBuildGraph_WhenSkipped_ActionsRefNotEvaluatedAtBuildTime(t *testing.T) {
+	ctx := context.Background()
+	w := &Workflow{
+		Actions: map[string]*Action{
+			"build": {
+				Provider: "shell",
+				Inputs: map[string]*spec.ValueRef{
+					"command": literalRef("go build"),
+				},
+			},
+			"deploy": {
+				Provider:  "shell",
+				DependsOn: []string{"build"},
+				When:      &spec.Condition{Expr: graphCelExpr("__actions.build.results.status == 'success'")},
+				Inputs: map[string]*spec.ValueRef{
+					"command": literalRef("kubectl apply"),
+				},
+			},
+		},
+	}
+
+	graph, err := BuildGraph(ctx, w, nil, nil)
+	require.NoError(t, err)
+	require.Contains(t, graph.Actions, "deploy")
+
+	action := graph.Actions["deploy"]
+	assert.False(t, action.WhenSkipped, "action with __actions ref should NOT be pre-evaluated")
+	assert.Equal(t, "kubectl apply", action.MaterializedInputs["command"])
+}
+
+func TestBuildGraph_WhenSkipped_MissingResolverKeyFallsThrough(t *testing.T) {
+	ctx := context.Background()
+	w := &Workflow{
+		Actions: map[string]*Action{
+			"deploy": {
+				Provider: "shell",
+				When:     &spec.Condition{Expr: graphCelExpr("_.missing_key == 'prod'")},
+				Inputs: map[string]*spec.ValueRef{
+					"command": literalRef("echo hello"),
+				},
+			},
+		},
+	}
+
+	// Resolver data that doesn't have 'missing_key' — Evaluate will error.
+	// Should fall through to normal materialization.
+	resolverData := map[string]any{
+		"other": "value",
+	}
+
+	graph, err := BuildGraph(ctx, w, resolverData, nil)
+	require.NoError(t, err)
+	require.Contains(t, graph.Actions, "deploy")
+
+	action := graph.Actions["deploy"]
+	assert.False(t, action.WhenSkipped, "should fall through when evaluation fails")
+	assert.Equal(t, "echo hello", action.MaterializedInputs["command"])
+}
+
+func TestBuildGraph_WhenSkipped_PreventsInputMaterializationError(t *testing.T) {
+	// This is the core bug scenario: action has a when condition referencing
+	// resolver data, AND inputs that also reference resolver data from a
+	// resolver that was skipped (so the key doesn't exist).
+	// Without the fix, this would fail with "no such key" during input materialization.
+	ctx := context.Background()
+	w := &Workflow{
+		Actions: map[string]*Action{
+			"deploy": {
+				Provider: "shell",
+				When:     &spec.Condition{Expr: graphCelExpr("_.should_deploy == true")},
+				Inputs: map[string]*spec.ValueRef{
+					// This references a key that doesn't exist in resolver data.
+					// Without early when-skip, this would cause a materialization error.
+					"command": graphExprRef("_.nonexistent_deploy_config"),
+				},
+			},
+		},
+	}
+
+	// should_deploy is false → action should be pre-skipped
+	// nonexistent_deploy_config doesn't exist → would error without the fix
+	resolverData := map[string]any{
+		"should_deploy": false,
+	}
+
+	graph, err := BuildGraph(ctx, w, resolverData, nil)
+	require.NoError(t, err, "should not error when when-condition is false and inputs reference missing keys")
+	require.Contains(t, graph.Actions, "deploy")
+
+	action := graph.Actions["deploy"]
+	assert.True(t, action.WhenSkipped)
+	assert.Empty(t, action.MaterializedInputs)
+}
+
+func TestBuildGraph_WhenSkipped_ForEachAction(t *testing.T) {
+	ctx := context.Background()
+	w := &Workflow{
+		Actions: map[string]*Action{
+			"deploy": {
+				Provider: "shell",
+				When:     &spec.Condition{Expr: graphCelExpr("_.enabled == true")},
+				ForEach: &spec.ForEachClause{
+					In: &spec.ValueRef{Literal: []any{"a", "b", "c"}},
+				},
+				Inputs: map[string]*spec.ValueRef{
+					"command": literalRef("echo deploy"),
+				},
+			},
+		},
+	}
+
+	resolverData := map[string]any{
+		"enabled": false,
+	}
+
+	graph, err := BuildGraph(ctx, w, resolverData, nil)
+	require.NoError(t, err)
+
+	// All forEach iterations should be pre-skipped
+	for name, action := range graph.Actions {
+		assert.True(t, action.WhenSkipped, "forEach iteration %s should be pre-skipped", name)
+		assert.Empty(t, action.MaterializedInputs)
+	}
+}
+
 // BenchmarkParseActionsRefsForGraph measures the cost of the string-scanner
 // reference extractor on a realistic multi-reference expression.
 func BenchmarkParseActionsRefsForGraph(b *testing.B) {
