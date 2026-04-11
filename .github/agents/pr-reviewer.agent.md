@@ -102,7 +102,7 @@ After all fixes are applied:
 ```bash
 gh api graphql -f query='
   mutation($threadId: ID!, $body: String!) {
-    addPullRequestReviewThread(input: {pullRequestReviewThreadId: $threadId, body: $body}) {
+    addPullRequestReviewComment(input: {pullRequestReviewThreadId: $threadId, body: $body}) {
       comment { id }
     }
   }' -f threadId=<THREAD_ID> -f body="<response>"

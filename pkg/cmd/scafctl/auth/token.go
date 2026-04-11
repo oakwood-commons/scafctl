@@ -99,7 +99,7 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			  eval $(scafctl auth token gcp --scope "https://www.googleapis.com/auth/cloud-platform" --export)
 		`), settings.CliBinaryName, cliParams.BinaryName),
 		SilenceUsage: true,
-		Args:         cobra.ExactArgs(1),
+		Args:         flags.RequireArg("handler", cliParams.BinaryName+" auth token gcp"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			w := writer.FromContext(ctx)

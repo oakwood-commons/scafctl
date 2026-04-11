@@ -2409,7 +2409,7 @@ func TestIntegration_CatalogLoginRequiresArg(t *testing.T) {
 	_, stderr, exitCode := runScafctl(t, "catalog", "login")
 
 	assert.NotEqual(t, 0, exitCode)
-	assert.Contains(t, stderr, "accepts 1 arg(s)")
+	assert.Contains(t, stderr, "missing required argument: <registry>")
 }
 
 func TestIntegration_CatalogLogoutHelp(t *testing.T) {

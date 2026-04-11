@@ -11,18 +11,21 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/cache"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
 
-var ValidOutputTypes = []string{"json", "yaml"}
+var ValidOutputTypes = []string{"json", "yaml", "table"}
 
 type GetLatestVersionFunc func(ctx context.Context) (string, error)
 
@@ -124,7 +127,25 @@ func (o *CmdOptionsVersion) GetSolutionWithGetter(ctx context.Context, getter ge
 		return exitcode.WithCode(err, exitcode.FileNotFound)
 	}
 
-	err = output.WriteOutput(o.IOStreams, o.Output, sol, nil)
+	// For json/yaml, use the direct output writer. For table or default,
+	// use kvx which provides table rendering.
+	switch o.Output {
+	case "json", "yaml":
+		err = output.WriteOutput(o.IOStreams, o.Output, sol, nil)
+	default:
+		// Default / table: use kvx for structured table output
+		kvxOpts := flags.NewKvxOutputOptionsFromFlags(
+			"auto",
+			false,
+			"",
+			kvx.WithOutputContext(ctx),
+			kvx.WithOutputNoColor(o.CliParams.NoColor),
+			kvx.WithOutputAppName(o.CliParams.BinaryName+" get solution"),
+		)
+		kvxOpts.IOStreams = o.IOStreams
+		err = kvxOpts.Write(newSolutionSummary(sol))
+	}
+
 	if err != nil {
 		if w != nil {
 			w.Errorf("%v", err)
@@ -132,4 +153,37 @@ func (o *CmdOptionsVersion) GetSolutionWithGetter(ctx context.Context, getter ge
 		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 	return nil
+}
+
+// solutionSummary is a display-friendly representation of a solution.
+type solutionSummary struct {
+	Name        string `json:"name" yaml:"name"`
+	Version     string `json:"version" yaml:"version"`
+	DisplayName string `json:"displayName,omitempty" yaml:"displayName,omitempty"`
+	Description string `json:"description,omitempty" yaml:"description,omitempty"`
+	Resolvers   int    `json:"resolvers" yaml:"resolvers"`
+	Actions     int    `json:"actions" yaml:"actions"`
+}
+
+func newSolutionSummary(sol *solution.Solution) *solutionSummary {
+	version := ""
+	if sol.Metadata.Version != nil {
+		version = sol.Metadata.Version.String()
+	}
+	resolverCount := 0
+	if sol.Spec.Resolvers != nil {
+		resolverCount = len(sol.Spec.Resolvers)
+	}
+	actionCount := 0
+	if sol.Spec.Workflow != nil && sol.Spec.Workflow.Actions != nil {
+		actionCount = len(sol.Spec.Workflow.Actions)
+	}
+	return &solutionSummary{
+		Name:        sol.Metadata.Name,
+		Version:     version,
+		DisplayName: sol.Metadata.DisplayName,
+		Description: sol.Metadata.Description,
+		Resolvers:   resolverCount,
+		Actions:     actionCount,
+	}
 }

@@ -71,6 +71,7 @@ func CommandServe(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			# Export OpenAPI spec without starting the server
 			scafctl serve openapi --format yaml --output openapi.yaml
 		`), settings.CliBinaryName, cliParams.BinaryName),
+		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runServe(cmd.Context(), opts)

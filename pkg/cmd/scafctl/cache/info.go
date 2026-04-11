@@ -51,6 +51,7 @@ func CommandInfo(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			  # Show cache info as JSON
 			  scafctl cache info -o json
 		`), settings.CliBinaryName, cliParams.BinaryName),
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			kvxOpts := flags.ToKvxOutputOptions(&options.KvxOutputFlags, kvx.WithIOStreams(ioStreams))
 			return runInfo(cmd.Context(), options, kvxOpts)

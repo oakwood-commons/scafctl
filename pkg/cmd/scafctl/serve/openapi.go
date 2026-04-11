@@ -49,6 +49,7 @@ func CommandOpenAPI(cliParams *settings.Run, _ *terminal.IOStreams) *cobra.Comma
 			# Export as JSON to a file
 			scafctl serve openapi --format json --output openapi.json
 		`), settings.CliBinaryName, cliParams.BinaryName),
+		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runOpenAPI(cmd, format, output)

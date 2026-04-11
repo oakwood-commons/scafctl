@@ -52,6 +52,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 			  # List in JSON format
 			  scafctl plugins list -o json
 		`), settings.CliBinaryName, cliParams.BinaryName),
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			w := writer.FromContext(cmd.Context())
 			if w == nil {

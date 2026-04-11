@@ -1,0 +1,131 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build",
+      "type": "shell",
+      "command": "task",
+      "args": ["build"],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": ["$go"],
+      "detail": "Build scafctl binary"
+    },
+    {
+      "label": "test",
+      "type": "shell",
+      "command": "task",
+      "args": ["test"],
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "problemMatcher": ["$go"],
+      "detail": "Run all unit tests"
+    },
+    {
+      "label": "test:e2e",
+      "type": "shell",
+      "command": "task",
+      "args": ["test:e2e"],
+      "group": "test",
+      "problemMatcher": ["$go"],
+      "detail": "Run unit + integration tests"
+    },
+    {
+      "label": "test:race",
+      "type": "shell",
+      "command": "task",
+      "args": ["test:race"],
+      "group": "test",
+      "problemMatcher": ["$go"],
+      "detail": "Run tests with race detector"
+    },
+    {
+      "label": "lint",
+      "type": "shell",
+      "command": "task",
+      "args": ["lint"],
+      "problemMatcher": ["$go"],
+      "detail": "Run golangci-lint (pinned version)"
+    },
+    {
+      "label": "lint:fix",
+      "type": "shell",
+      "command": "task",
+      "args": ["lint:fix"],
+      "problemMatcher": ["$go"],
+      "detail": "Run golangci-lint with auto-fix"
+    },
+    {
+      "label": "vet",
+      "type": "shell",
+      "command": "task",
+      "args": ["vet"],
+      "problemMatcher": ["$go"],
+      "detail": "Run go vet"
+    },
+    {
+      "label": "format",
+      "type": "shell",
+      "command": "task",
+      "args": ["format"],
+      "detail": "Run gofumpt + goimports"
+    },
+    {
+      "label": "coverage",
+      "type": "shell",
+      "command": "task",
+      "args": ["coverage"],
+      "group": "test",
+      "problemMatcher": ["$go"],
+      "detail": "Run tests with coverage"
+    },
+    {
+      "label": "coverage:html",
+      "type": "shell",
+      "command": "task",
+      "args": ["coverage:html"],
+      "group": "test",
+      "detail": "Generate and open HTML coverage report"
+    },
+    {
+      "label": "bench",
+      "type": "shell",
+      "command": "task",
+      "args": ["bench"],
+      "problemMatcher": ["$go"],
+      "detail": "Run benchmarks"
+    },
+    {
+      "label": "vulncheck",
+      "type": "shell",
+      "command": "task",
+      "args": ["vulncheck"],
+      "detail": "Run govulncheck"
+    },
+    {
+      "label": "security:scan",
+      "type": "shell",
+      "command": "task",
+      "args": ["security:scan"],
+      "detail": "Run gosec security scanner"
+    },
+    {
+      "label": "clean",
+      "type": "shell",
+      "command": "task",
+      "args": ["clean"],
+      "detail": "Clean build artifacts and caches"
+    },
+    {
+      "label": "mod",
+      "type": "shell",
+      "command": "task",
+      "args": ["mod"],
+      "detail": "Run go mod tidy + verify"
+    }
+  ]
+}
