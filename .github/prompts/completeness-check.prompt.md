@@ -1,6 +1,6 @@
 ---
 description: "scafctl: Check if staged changes have corresponding docs, tutorials, examples, integration tests, and MCP tools."
-agent: "Explore"
+agent: "agent"
 argument-hint: "Optional: specific area to check"
 ---
 Review staged changes and check if supporting artifacts exist:
