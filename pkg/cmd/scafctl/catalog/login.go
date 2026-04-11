@@ -206,8 +206,9 @@ func runAuthHandlerLogin(ctx context.Context, w *writer.Writer, opts *LoginOptio
 		}
 	}
 
-	// Fall back to default scope for known registries (e.g. *.pkg.dev → cloud-platform)
-	if scope == "" {
+	// Fall back to default scope for known GCP registries (e.g. *.pkg.dev → cloud-platform).
+	// Only apply when the handler is "gcp" to avoid injecting GCP scopes into custom auth flows.
+	if scope == "" && handlerName == "gcp" {
 		scope = catalog.InferDefaultScope(opts.Registry)
 	}
 

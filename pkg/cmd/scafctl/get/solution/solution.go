@@ -134,8 +134,12 @@ func (o *CmdOptionsVersion) GetSolutionWithGetter(ctx context.Context, getter ge
 		err = output.WriteOutput(o.IOStreams, o.Output, sol, nil)
 	default:
 		// Default / table: use kvx for structured table output
+		format := o.Output
+		if format == "" {
+			format = "auto"
+		}
 		kvxOpts := flags.NewKvxOutputOptionsFromFlags(
-			"auto",
+			format,
 			false,
 			"",
 			kvx.WithOutputContext(ctx),
