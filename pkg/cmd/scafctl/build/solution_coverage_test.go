@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/adrg/xdg"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
@@ -54,6 +55,10 @@ func TestCommandBuildSolution_Flags(t *testing.T) {
 		{"dedupe", "true"},
 		{"dedupe-threshold", "4KB"},
 		{"no-cache", "false"},
+		{"skip-lint", "false"},
+		{"skip-tests", "false"},
+		{"ignore-preflight", "false"},
+		{"allow-dev-version", "false"},
 	}
 
 	for _, tc := range flagTests {
@@ -187,6 +192,219 @@ spec: {}
 
 	err := runBuildSolution(ctx, opts)
 	require.Error(t, err)
+	assert.Contains(t, err.Error(), "dev version not allowed")
+}
+
+func TestRunBuildSolution_NoVersion_AllowDevVersion(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	solFile := filepath.Join(dir, "solution.yaml")
+	content := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test-solution
+spec: {}
+`
+	require.NoError(t, os.WriteFile(solFile, []byte(content), 0o600))
+
+	var buf bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
+	w := writer.New(ioStreams, settings.NewCliParams())
+	ctx := writer.WithWriter(t.Context(), w)
+
+	opts := &SolutionOptions{
+		File:            solFile,
+		IOStreams:       ioStreams,
+		CliParams:       settings.NewCliParams(),
+		AllowDevVersion: true,
+		DryRun:          true, BundleMaxSize: "50MB",
+	}
+
+	// With AllowDevVersion + DryRun, the build should proceed past the version check
+	err := runBuildSolution(ctx, opts)
+	require.NoError(t, err)
+}
+
+func TestRunBuildSolution_PreflightBlocked(t *testing.T) {
+	t.Parallel()
+
+	// Create a solution with a version but an empty spec so lint blocks it.
+	dir := t.TempDir()
+	solFile := filepath.Join(dir, "solution.yaml")
+	content := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test-solution
+  version: 1.0.0
+spec: {}
+`
+	require.NoError(t, os.WriteFile(solFile, []byte(content), 0o600))
+
+	var buf bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
+	w := writer.New(ioStreams, settings.NewCliParams())
+	ctx := writer.WithWriter(t.Context(), w)
+
+	opts := &SolutionOptions{
+		File:          solFile,
+		IOStreams:     ioStreams,
+		CliParams:     settings.NewCliParams(),
+		SkipTests:     true,
+		BundleMaxSize: "50MB",
+	}
+
+	err := runBuildSolution(ctx, opts)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pre-flight checks failed")
+}
+
+func TestRunBuildSolution_PreflightSkipLint(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	xdg.Reload()
+	t.Cleanup(xdg.Reload)
+
+	dir := t.TempDir()
+	solFile := filepath.Join(dir, "solution.yaml")
+	content := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test-solution
+  version: 1.0.0
+spec: {}
+`
+	require.NoError(t, os.WriteFile(solFile, []byte(content), 0o600))
+
+	var buf bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
+	w := writer.New(ioStreams, settings.NewCliParams())
+	ctx := writer.WithWriter(t.Context(), w)
+
+	opts := &SolutionOptions{
+		File:          solFile,
+		IOStreams:     ioStreams,
+		CliParams:     settings.NewCliParams(),
+		SkipLint:      true,
+		SkipTests:     true,
+		BundleMaxSize: "50MB",
+	}
+
+	// With lint and tests skipped, preflight runs but skips both checks.
+	// Subsequent pipeline steps may fail; we only care about the preflight path.
+	_ = runBuildSolution(ctx, opts)
+	output := buf.String()
+	assert.Contains(t, output, "lint: skipped")
+	assert.Contains(t, output, "tests: skipped")
+}
+
+func TestRunBuildSolution_PreflightIgnored(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	xdg.Reload()
+	t.Cleanup(xdg.Reload)
+
+	dir := t.TempDir()
+	solFile := filepath.Join(dir, "solution.yaml")
+	content := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test-solution
+  version: 1.0.0
+spec: {}
+`
+	require.NoError(t, os.WriteFile(solFile, []byte(content), 0o600))
+
+	var buf bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
+	w := writer.New(ioStreams, settings.NewCliParams())
+	ctx := writer.WithWriter(t.Context(), w)
+
+	opts := &SolutionOptions{
+		File:            solFile,
+		IOStreams:       ioStreams,
+		CliParams:       settings.NewCliParams(),
+		SkipTests:       true,
+		IgnorePreflight: true,
+		BundleMaxSize:   "50MB",
+	}
+
+	// With IgnorePreflight, lint errors become warnings and the build is not blocked.
+	// Subsequent pipeline steps may fail; we only care about the preflight path.
+	_ = runBuildSolution(ctx, opts)
+	output := buf.String()
+	assert.Contains(t, output, "lint:")
+	assert.NotContains(t, output, "build blocked")
+}
+
+func TestRunBuildSolution_DryRunSkipsPreflight(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	solFile := filepath.Join(dir, "solution.yaml")
+	content := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test-solution
+  version: 1.0.0
+spec: {}
+`
+	require.NoError(t, os.WriteFile(solFile, []byte(content), 0o600))
+
+	var buf bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
+	w := writer.New(ioStreams, settings.NewCliParams())
+	ctx := writer.WithWriter(t.Context(), w)
+
+	opts := &SolutionOptions{
+		File:          solFile,
+		IOStreams:     ioStreams,
+		CliParams:     settings.NewCliParams(),
+		DryRun:        true,
+		BundleMaxSize: "50MB",
+	}
+
+	// Dry-run should skip preflight entirely — no lint/tests messages in output.
+	err := runBuildSolution(ctx, opts)
+	require.NoError(t, err)
+	output := buf.String()
+	assert.NotContains(t, output, "lint:")
+	assert.NotContains(t, output, "tests:")
+	assert.Contains(t, output, "Dry run:")
+}
+
+func TestRunBuildSolution_DevVersionErrorMessage(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	solFile := filepath.Join(dir, "solution.yaml")
+	content := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test-solution
+spec: {}
+`
+	require.NoError(t, os.WriteFile(solFile, []byte(content), 0o600))
+
+	var buf bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
+	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(t.Context(), w)
+
+	opts := &SolutionOptions{
+		File:      solFile,
+		IOStreams: ioStreams,
+		CliParams: cliParams,
+	}
+
+	err := runBuildSolution(ctx, opts)
+	require.Error(t, err)
+	// The error message should use the configured binary name, not "scafctl"
+	assert.Contains(t, buf.String(), "mycli build solution --allow-dev-version")
 }
 
 func TestPrintDryRunOutput_StaticFiles(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"strings"
@@ -32,6 +33,7 @@ type RemoteCatalog struct {
 	registry   string
 	repository string
 	client     *auth.Client
+	insecure   bool
 	logger     logr.Logger
 }
 
@@ -137,6 +139,7 @@ func NewRemoteCatalog(cfg RemoteCatalogConfig) (*RemoteCatalog, error) {
 		registry:   cfg.Registry,
 		repository: cfg.Repository,
 		client:     client,
+		insecure:   cfg.Insecure,
 		logger:     cfg.Logger.WithName("remote-catalog").WithValues("catalog", cfg.Name),
 	}, nil
 }
@@ -618,6 +621,10 @@ func (c *RemoteCatalog) Exists(ctx context.Context, ref Reference) (bool, error)
 }
 
 // Delete removes an artifact from the catalog.
+//
+// The method first attempts a standard OCI delete by digest. If the registry
+// rejects it because the manifest still has tags (e.g., GCP Artifact Registry
+// returns 400 "dangling tag"), it retries by deleting via the tag reference.
 func (c *RemoteCatalog) Delete(ctx context.Context, ref Reference) error {
 	repo, err := c.getRepository(ref)
 	if err != nil {
@@ -633,14 +640,83 @@ func (c *RemoteCatalog) Delete(ctx context.Context, ref Reference) error {
 
 	// Delete the manifest (this may not be supported by all registries)
 	if err := repo.Delete(ctx, desc); err != nil {
+		errStr := err.Error()
+
+		// GCP Artifact Registry rejects digest-based DELETE when the manifest
+		// still has a tag. Retry by deleting via the tag reference, which
+		// removes both the tag and the manifest in one operation.
+		if (strings.Contains(errStr, "dangling tag") || strings.Contains(errStr, "still referenced")) && ref.Version != nil {
+			c.logger.V(1).Info("digest delete rejected (tagged manifest), retrying with tag reference",
+				"tag", tag, "digest", desc.Digest.String())
+
+			if deleteErr := c.deleteByTag(ctx, ref, tag); deleteErr != nil {
+				return fmt.Errorf("failed to delete artifact by tag after digest rejection: %w", deleteErr)
+			}
+
+			c.logger.V(1).Info("deleted artifact via tag reference",
+				"name", ref.Name,
+				"tag", tag)
+
+			return nil
+		}
+
 		return fmt.Errorf("failed to delete artifact: %w", err)
 	}
 
 	c.logger.V(1).Info("deleted artifact",
 		"name", ref.Name,
-		"version", ref.Version.String())
+		"version", ref.VersionOrDigest())
 
 	return nil
+}
+
+// deleteByTag issues an HTTP DELETE using the tag reference instead of the
+// digest. Some registries (GCP Artifact Registry) require this when the
+// manifest is still tagged.
+func (c *RemoteCatalog) deleteByTag(ctx context.Context, ref Reference, tag string) error {
+	// Build the OCI repository name (without registry host).
+	parts := []string{}
+	if c.repository != "" {
+		parts = append(parts, c.repository)
+	}
+	if ref.Kind != "" {
+		parts = append(parts, ref.Kind.Plural())
+	}
+	parts = append(parts, ref.Name)
+	repoName := strings.Join(parts, "/")
+
+	// Try HTTPS first, fall back to HTTP if insecure.
+	schemes := []string{"https"}
+	if c.insecure {
+		schemes = append(schemes, "http")
+	}
+
+	var lastErr error
+	for _, scheme := range schemes {
+		deleteURL := fmt.Sprintf("%s://%s/v2/%s/manifests/%s", scheme, c.registry, repoName, tag)
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodDelete, deleteURL, nil)
+		if err != nil {
+			return fmt.Errorf("failed to create delete request: %w", err)
+		}
+
+		resp, err := c.client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		status := resp.StatusCode
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+
+		if status == http.StatusOK || status == http.StatusAccepted || status == http.StatusNoContent {
+			return nil
+		}
+		return fmt.Errorf("delete by tag returned status %d", status)
+	}
+
+	return fmt.Errorf("delete by tag request failed: %w", lastErr)
 }
 
 // Tag creates an alias tag for an existing remote artifact.

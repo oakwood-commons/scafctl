@@ -202,27 +202,27 @@ func runDeleteRemote(ctx context.Context, opts *DeleteOptions) error {
 			}
 			artifactKind = kind
 		} else {
-			// Try to infer from local catalog
+			// Try to infer from local catalog first, then fall back to remote
 			localCatalog, localErr := catalog.NewLocalCatalog(*lgr)
 			if localErr == nil {
 				artifactKind, err = catalog.InferKindFromLocalCatalog(ctx, localCatalog, name, version)
-				if err != nil {
-					w.Errorf("could not infer artifact kind: %v", err)
-					w.Infof("Hint: use --kind to specify the artifact kind explicitly")
-					return exitcode.WithCode(err, exitcode.InvalidInput)
-				}
-			} else {
-				w.Errorf("could not infer artifact kind (local catalog unavailable)")
-				w.Infof("Hint: use --kind to specify the artifact kind explicitly")
-				return exitcode.Errorf("kind required")
+			}
+			if artifactKind == "" {
+				// Local inference failed or unavailable; defer to remote inference
+				// after the remote catalog is created (see below).
+				lgr.V(1).Info("local kind inference failed, will try remote",
+					"localErr", localErr, "inferErr", err)
 			}
 		}
 
-		ref, err = catalog.ParseReference(artifactKind, opts.Reference)
-		if err != nil {
-			w.Errorf("invalid reference: %v", err)
-			return exitcode.WithCode(err, exitcode.InvalidInput)
+		if artifactKind != "" {
+			ref, err = catalog.ParseReference(artifactKind, opts.Reference)
+			if err != nil {
+				w.Errorf("invalid reference: %v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
 		}
+		// When artifactKind is empty, ref will be set after remote inference below.
 	}
 
 	// Create credential store
@@ -248,6 +248,34 @@ func runDeleteRemote(ctx context.Context, opts *DeleteOptions) error {
 	if err != nil {
 		w.Errorf("failed to create remote catalog: %v", err)
 		return exitcode.WithCode(err, exitcode.CatalogError)
+	}
+
+	// If kind is still unknown (short-reference path where ParseReference was
+	// skipped because no --kind was provided and local inference failed),
+	// infer from the remote catalog by probing each artifact kind.
+	if ref.Kind == "" {
+		// Use already-parsed ref fields when available (full remote ref path),
+		// otherwise parse from the raw reference string (short ref path).
+		infName, infVersion := ref.Name, ""
+		if ref.Version != nil {
+			infVersion = ref.Version.String()
+		} else if ref.Digest != "" {
+			infVersion = ref.Digest
+		}
+		if infName == "" {
+			infName, infVersion = catalog.ParseNameVersion(opts.Reference)
+		}
+		inferredKind, inferErr := catalog.InferKindFromRemote(ctx, remoteCatalog, infName, infVersion)
+		if inferErr != nil {
+			w.Errorf("could not infer artifact kind: %v", inferErr)
+			w.Infof("Hint: use --kind to specify the artifact kind explicitly")
+			return exitcode.WithCode(inferErr, exitcode.InvalidInput)
+		}
+		ref, err = catalog.ParseReference(inferredKind, opts.Reference)
+		if err != nil {
+			w.Errorf("invalid reference: %v", err)
+			return exitcode.WithCode(err, exitcode.InvalidInput)
+		}
 	}
 
 	// Delete from remote

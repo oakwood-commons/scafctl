@@ -11,5 +11,6 @@ Follow these phases **in order** -- do not skip ahead:
 2. **Early exit**: If there are **zero unresolved threads**, report that and stop -- do not triage or apply fixes
 3. **Triage**: For each unresolved comment, assess whether it's a legit problem with the code. Present the triage summary with recommendations and **stop here** -- the user will click "Apply fixes" to approve
 4. **Apply fixes**: Fix the code, verify build (`go build ./...`, `go vet ./...`), run tests (`task test:e2e`), then respond to and resolve each addressed thread
-5. If you disagree with a comment: **explain your reasoning in the reply and resolve it anyway** -- do not leave threads open
-6. **Do not commit** -- I will handle that
+5. **Coverage check**: After fixes pass, run coverage on changed packages (`go test -coverprofile=... ./pkg/changed/...`) and compare patch coverage. If any changed file has patch coverage below 60%, add tests to cover the new/modified lines before responding to threads
+6. If you disagree with a comment: **explain your reasoning in the reply and resolve it anyway** -- do not leave threads open
+7. **Do not commit** -- I will handle that
