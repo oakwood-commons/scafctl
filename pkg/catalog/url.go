@@ -102,6 +102,51 @@ func InferKindFromLocalCatalog(ctx context.Context, localCatalog *LocalCatalog, 
 	return "", fmt.Errorf("artifact %q not found in local catalog", name)
 }
 
+// InferKindFromRemote resolves an artifact's kind by trying each known kind
+// against the remote catalog. For each kind it attempts to resolve the tag;
+// the first successful resolve wins. This avoids fetching the full manifest
+// and works even when the artifact has no scafctl-specific annotations.
+//
+// If no known kind matches, it returns an error rather than guessing a
+// fallback kind.
+func InferKindFromRemote(ctx context.Context, remoteCatalog *RemoteCatalog, name, version string) (ArtifactKind, error) {
+	kinds := []ArtifactKind{
+		ArtifactKindSolution,
+		ArtifactKindProvider,
+		ArtifactKindAuthHandler,
+	}
+
+	var lastErr error
+	for _, kind := range kinds {
+		ref := Reference{
+			Kind: kind,
+			Name: name,
+		}
+
+		if version != "" {
+			parsedRef, err := ParseReference(kind, name+"@"+version)
+			if err != nil {
+				continue
+			}
+			ref = parsedRef
+		}
+
+		exists, err := remoteCatalog.Exists(ctx, ref)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if exists {
+			return kind, nil
+		}
+	}
+
+	if lastErr != nil {
+		return "", fmt.Errorf("failed to query remote catalog for %q: %w", name, lastErr)
+	}
+	return "", fmt.Errorf("artifact %q not found in remote catalog", name)
+}
+
 // ResolveCatalogURL resolves a catalog URL from a flag value or config defaults.
 //
 // Resolution order:

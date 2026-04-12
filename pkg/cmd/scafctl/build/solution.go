@@ -16,6 +16,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/builder"
@@ -40,6 +41,10 @@ type SolutionOptions struct {
 	DryRun          bool
 	Dedupe          bool
 	DedupeThreshold string
+	SkipLint        bool
+	SkipTests       bool
+	IgnorePreflight bool
+	AllowDevVersion bool
 	CliParams       *settings.Run
 	IOStreams       *terminal.IOStreams
 
@@ -195,6 +200,10 @@ func CommandBuildSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams
 	cmd.Flags().BoolVar(&options.Dedupe, "dedupe", true, "Enable content-addressable deduplication")
 	cmd.Flags().StringVar(&options.DedupeThreshold, "dedupe-threshold", "4KB", "Minimum file size for individual layer extraction (smaller files are tarred together)")
 	cmd.Flags().BoolVar(&options.NoCache, "no-cache", false, "Skip build cache and force a full rebuild")
+	cmd.Flags().BoolVar(&options.SkipLint, "skip-lint", false, "Skip lint pre-flight check")
+	cmd.Flags().BoolVar(&options.SkipTests, "skip-tests", false, "Skip functional test pre-flight check")
+	cmd.Flags().BoolVar(&options.IgnorePreflight, "ignore-preflight", false, "Run pre-flight checks but proceed even if they fail")
+	cmd.Flags().BoolVar(&options.AllowDevVersion, "allow-dev-version", false, "Allow build without metadata.version set")
 
 	return cmd
 }
@@ -239,6 +248,17 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
+	// Block dev version unless explicitly allowed
+	if version.Equal(solution.DefaultVersion()) && !opts.AllowDevVersion {
+		w.Errorf("metadata.version is not set (resolved to %s)", version.String())
+		binaryName := settings.BinaryNameFromContext(ctx)
+		if opts.CliParams != nil && opts.CliParams.BinaryName != "" {
+			binaryName = opts.CliParams.BinaryName
+		}
+		w.Infof("Set metadata.version, pass --version, or use %s build solution --allow-dev-version to build anyway", binaryName)
+		return exitcode.Errorf("dev version not allowed")
+	}
+
 	// Stamp resolved name and version into the solution so the stored
 	// artifact always carries the authoritative values.
 	needsReserialization := false
@@ -257,6 +277,45 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 		if err != nil {
 			w.Errorf("failed to serialize stamped solution: %v", err)
 			return exitcode.WithCode(err, exitcode.GeneralError)
+		}
+	}
+
+	// === Pre-flight checks ===
+	if !opts.DryRun {
+		var reg *provider.Registry
+		if !opts.SkipLint {
+			var regErr error
+			reg, regErr = builtin.DefaultRegistry(ctx)
+			if regErr != nil {
+				reg = provider.GetGlobalRegistry()
+			}
+		}
+
+		var binaryPath string
+		if !opts.SkipTests {
+			binaryPath, _ = os.Executable()
+		}
+
+		pfResult, pfErr := builder.RunPreflight(ctx, &sol, opts.File, builder.PreflightOptions{
+			SkipLint:        opts.SkipLint,
+			SkipTests:       opts.SkipTests,
+			IgnorePreflight: opts.IgnorePreflight,
+			BinaryPath:      binaryPath,
+			Registry:        reg,
+			Logger:          *lgr,
+		})
+		if pfErr != nil {
+			w.Errorf("pre-flight checks failed: %v", pfErr)
+			return exitcode.WithCode(pfErr, exitcode.GeneralError)
+		}
+
+		for _, msg := range pfResult.Messages {
+			w.Infof("  %s", msg)
+		}
+
+		if pfResult.Blocked {
+			w.Error("build blocked by pre-flight checks (use --skip-lint/--skip-tests to skip, or --ignore-preflight to override)")
+			return exitcode.Errorf("pre-flight checks failed")
 		}
 	}
 
