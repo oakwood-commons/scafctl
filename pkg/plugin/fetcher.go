@@ -284,7 +284,7 @@ func RegisterFetchedPlugins(ctx context.Context, registry *provider.Registry, re
 		}
 
 		for _, providerName := range providers {
-			wrapper, err := NewProviderWrapper(client, providerName)
+			wrapper, err := NewProviderWrapper(client, providerName, WithContext(ctx))
 			if err != nil {
 				continue
 			}
@@ -310,7 +310,7 @@ func RegisterFetchedPlugins(ctx context.Context, registry *provider.Registry, re
 // RegisterFetchedAuthHandlerPlugins loads and registers fetched auth handler
 // plugin binaries into the auth registry. Returns the created clients
 // (caller should Kill() them on cleanup).
-func RegisterFetchedAuthHandlerPlugins(ctx context.Context, registry *auth.Registry, results []FetchResult) ([]*AuthHandlerClient, error) {
+func RegisterFetchedAuthHandlerPlugins(ctx context.Context, registry *auth.Registry, results []FetchResult, cfg *ProviderConfig, clientOpts ...ClientOption) ([]*AuthHandlerClient, error) {
 	var clients []*AuthHandlerClient
 
 	for _, r := range results {
@@ -318,7 +318,7 @@ func RegisterFetchedAuthHandlerPlugins(ctx context.Context, registry *auth.Regis
 			continue
 		}
 
-		client, err := NewAuthHandlerClient(r.Path)
+		client, err := NewAuthHandlerClient(r.Path, clientOpts...)
 		if err != nil {
 			for _, c := range clients {
 				c.Kill()
@@ -335,12 +335,7 @@ func RegisterFetchedAuthHandlerPlugins(ctx context.Context, registry *auth.Regis
 			return nil, fmt.Errorf("getting auth handlers from plugin %s: %w", r.Name, err)
 		}
 
-		for _, info := range handlers {
-			wrapper := NewAuthHandlerWrapper(client, info)
-			if err := registry.Register(wrapper); err != nil {
-				continue
-			}
-		}
+		configureAndRegisterAuthHandlers(ctx, registry, client, handlers, cfg)
 
 		clients = append(clients, client)
 	}

@@ -5,6 +5,7 @@ package plugin
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,8 +13,11 @@ import (
 
 	"github.com/hashicorp/go-plugin"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/plugin/proto"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -26,21 +30,44 @@ const (
 type AuthHandlerGRPCPlugin struct {
 	plugin.Plugin
 	Impl AuthHandlerPlugin
+	// HostDeps holds host-side dependencies for the HostService callback server.
+	// Set by the host before starting the plugin. Nil on the plugin side.
+	HostDeps *HostServiceDeps
 }
 
 // GRPCServer registers the auth handler gRPC server.
 //
 //nolint:revive // broker is required by go-plugin interface
 func (p *AuthHandlerGRPCPlugin) GRPCServer(broker *plugin.GRPCBroker, s *grpc.Server) error {
-	proto.RegisterAuthHandlerServiceServer(s, &AuthHandlerGRPCServer{Impl: p.Impl})
+	proto.RegisterAuthHandlerServiceServer(s, &AuthHandlerGRPCServer{Impl: p.Impl, broker: broker})
 	return nil
 }
 
 // GRPCClient returns the auth handler gRPC client.
-//
-//nolint:revive // ctx and broker are required by go-plugin interface
+// If HostDeps is non-nil, a HostService gRPC server is started via the broker.
 func (p *AuthHandlerGRPCPlugin) GRPCClient(ctx context.Context, broker *plugin.GRPCBroker, c *grpc.ClientConn) (any, error) {
-	return &AuthHandlerGRPCClient{client: proto.NewAuthHandlerServiceClient(c)}, nil
+	var hostServiceID uint32
+	if p.HostDeps != nil {
+		hostServiceID = broker.NextId()
+		deps := p.HostDeps
+		lgr := logger.FromContext(ctx)
+		// AcceptAndServe blocks until the broker connection is closed, which
+		// happens automatically when the plugin client is killed (Kill()).
+		// The goroutine therefore does not leak.
+		go func() {
+			broker.AcceptAndServe(hostServiceID, func(opts []grpc.ServerOption) *grpc.Server {
+				s := grpc.NewServer(opts...)
+				proto.RegisterHostServiceServer(s, &HostServiceServer{Deps: *deps})
+				return s
+			})
+			lgr.V(1).Info("auth handler HostService broker stopped", "serviceID", hostServiceID)
+		}()
+	}
+	return &AuthHandlerGRPCClient{
+		client:        proto.NewAuthHandlerServiceClient(c),
+		broker:        broker,
+		hostServiceID: hostServiceID,
+	}, nil
 }
 
 // ---- gRPC Server (runs inside the plugin process) ----
@@ -48,7 +75,8 @@ func (p *AuthHandlerGRPCPlugin) GRPCClient(ctx context.Context, broker *plugin.G
 // AuthHandlerGRPCServer implements the gRPC server for auth handler plugins.
 type AuthHandlerGRPCServer struct {
 	proto.UnimplementedAuthHandlerServiceServer
-	Impl AuthHandlerPlugin
+	Impl   AuthHandlerPlugin
+	broker *plugin.GRPCBroker
 }
 
 // GetAuthHandlers implements the GetAuthHandlers RPC.
@@ -185,11 +213,48 @@ func (s *AuthHandlerGRPCServer) PurgeExpiredTokens(ctx context.Context, req *pro
 	}, nil
 }
 
+// ConfigureAuthHandler implements the ConfigureAuthHandler RPC.
+func (s *AuthHandlerGRPCServer) ConfigureAuthHandler(ctx context.Context, req *proto.ConfigureAuthHandlerRequest) (*proto.ConfigureAuthHandlerResponse, error) {
+	settings := make(map[string]json.RawMessage, len(req.Settings))
+	for k, v := range req.Settings {
+		settings[k] = json.RawMessage(v)
+	}
+
+	cfg := ProviderConfig{
+		Quiet:      req.Quiet,
+		NoColor:    req.NoColor,
+		BinaryName: req.BinaryName,
+		Settings:   settings,
+	}
+	if req.HostServiceId != 0 && s.broker != nil {
+		cfg.HostServiceID = req.HostServiceId
+	}
+
+	if err := s.Impl.ConfigureAuthHandler(ctx, req.HandlerName, cfg); err != nil {
+		//nolint:nilerr // Error is communicated via response, not gRPC error
+		return &proto.ConfigureAuthHandlerResponse{Error: err.Error()}, nil
+	}
+	return &proto.ConfigureAuthHandlerResponse{
+		ProtocolVersion: PluginProtocolVersion,
+	}, nil
+}
+
+// StopAuthHandler implements the StopAuthHandler RPC.
+func (s *AuthHandlerGRPCServer) StopAuthHandler(ctx context.Context, req *proto.StopAuthHandlerRequest) (*proto.StopAuthHandlerResponse, error) {
+	if err := s.Impl.StopAuthHandler(ctx, req.HandlerName); err != nil {
+		//nolint:nilerr // Error is communicated via response, not gRPC error
+		return &proto.StopAuthHandlerResponse{Error: err.Error()}, nil
+	}
+	return &proto.StopAuthHandlerResponse{}, nil
+}
+
 // ---- gRPC Client (runs in the scafctl host process) ----
 
 // AuthHandlerGRPCClient implements AuthHandlerPlugin by calling the gRPC service.
 type AuthHandlerGRPCClient struct {
-	client proto.AuthHandlerServiceClient
+	client        proto.AuthHandlerServiceClient
+	broker        *plugin.GRPCBroker
+	hostServiceID uint32
 }
 
 // GetAuthHandlers implements AuthHandlerPlugin.GetAuthHandlers.
@@ -310,6 +375,53 @@ func (c *AuthHandlerGRPCClient) PurgeExpiredTokens(ctx context.Context, handlerN
 		return 0, err
 	}
 	return int(resp.PurgedCount), nil
+}
+
+// ConfigureAuthHandler implements AuthHandlerPlugin.ConfigureAuthHandler.
+func (c *AuthHandlerGRPCClient) ConfigureAuthHandler(ctx context.Context, handlerName string, cfg ProviderConfig) error {
+	protoSettings := make(map[string][]byte, len(cfg.Settings))
+	for k, v := range cfg.Settings {
+		protoSettings[k] = []byte(v)
+	}
+
+	resp, err := c.client.ConfigureAuthHandler(ctx, &proto.ConfigureAuthHandlerRequest{
+		HandlerName:     handlerName,
+		Quiet:           cfg.Quiet,
+		NoColor:         cfg.NoColor,
+		BinaryName:      cfg.BinaryName,
+		HostServiceId:   c.hostServiceID,
+		Settings:        protoSettings,
+		ProtocolVersion: PluginProtocolVersion,
+	})
+	if err != nil {
+		// Older plugins may not implement ConfigureAuthHandler.
+		if s, ok := status.FromError(err); ok && s.Code() == codes.Unimplemented {
+			return nil
+		}
+		return err
+	}
+	if resp.Error != "" {
+		return fmt.Errorf("configure auth handler failed: %s", resp.Error)
+	}
+	return nil
+}
+
+// StopAuthHandler implements AuthHandlerPlugin.StopAuthHandler.
+func (c *AuthHandlerGRPCClient) StopAuthHandler(ctx context.Context, handlerName string) error {
+	resp, err := c.client.StopAuthHandler(ctx, &proto.StopAuthHandlerRequest{
+		HandlerName: handlerName,
+	})
+	if err != nil {
+		// Older plugins may not implement StopAuthHandler.
+		if s, ok := status.FromError(err); ok && s.Code() == codes.Unimplemented {
+			return nil
+		}
+		return err
+	}
+	if resp.Error != "" {
+		return fmt.Errorf("stop auth handler failed: %s", resp.Error)
+	}
+	return nil
 }
 
 // ---- Conversion helpers ----

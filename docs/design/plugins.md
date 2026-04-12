@@ -133,6 +133,20 @@ service PluginService {
   rpc ExecuteProviderStream(ExecuteProviderRequest) returns (stream ExecuteProviderStreamChunk);
   rpc DescribeWhatIf(DescribeWhatIfRequest) returns (DescribeWhatIfResponse);
   rpc ExtractDependencies(ExtractDependenciesRequest) returns (ExtractDependenciesResponse);
+  rpc StopProvider(StopProviderRequest) returns (StopProviderResponse);
+}
+
+// AuthHandlerService is the auth handler plugin service.
+service AuthHandlerService {
+  rpc GetAuthHandlers(GetAuthHandlersRequest) returns (GetAuthHandlersResponse);
+  rpc ConfigureAuthHandler(ConfigureAuthHandlerRequest) returns (ConfigureAuthHandlerResponse);
+  rpc Login(LoginRequest) returns (LoginResponse);
+  rpc Logout(LogoutRequest) returns (LogoutResponse);
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+  rpc GetToken(GetTokenRequest) returns (GetTokenResponse);
+  rpc ListCachedTokens(ListCachedTokensRequest) returns (ListCachedTokensResponse);
+  rpc PurgeExpiredTokens(PurgeExpiredTokensRequest) returns (PurgeExpiredTokensResponse);
+  rpc StopAuthHandler(StopAuthHandlerRequest) returns (StopAuthHandlerResponse);
 }
 
 // HostService is a callback service that plugins can invoke on the host.
@@ -145,6 +159,7 @@ service HostService {
   rpc ListSecrets(ListSecretsRequest) returns (ListSecretsResponse);
   rpc GetAuthIdentity(GetAuthIdentityRequest) returns (GetAuthIdentityResponse);
   rpc ListAuthHandlers(ListAuthHandlersRequest) returns (ListAuthHandlersResponse);
+  rpc GetAuthToken(GetAuthTokenRequest) returns (GetAuthTokenResponse);
 }
 ```
 
@@ -159,7 +174,23 @@ service HostService {
 | Streaming | `ExecuteProviderStream` | host -> plugin | When IOStreams are available |
 | Dry-run | `DescribeWhatIf` | host -> plugin | During `run solution --dry-run` |
 | Dependencies | `ExtractDependencies` | host -> plugin | During DAG construction |
+| Shutdown | `StopProvider` | host -> plugin | During cancellation or cleanup |
 | Callbacks | `HostService.*` | plugin -> host | Anytime during execution |
+
+### Auth Handler RPC Lifecycle
+
+| Phase | RPC | Direction | When |
+|-------|-----|-----------|------|
+| Discovery | `GetAuthHandlers` | host -> plugin | On plugin load |
+| Configuration | `ConfigureAuthHandler` | host -> plugin | Once after load, before any auth calls |
+| Authentication | `Login` | host -> plugin | On `auth login` |
+| Authentication | `Logout` | host -> plugin | On `auth logout` |
+| Authentication | `GetStatus` | host -> plugin | On `auth status` |
+| Token | `GetToken` | host -> plugin | On token request |
+| Token | `ListCachedTokens` | host -> plugin | On cache listing |
+| Token | `PurgeExpiredTokens` | host -> plugin | On cache cleanup |
+| Shutdown | `StopAuthHandler` | host -> plugin | During cancellation or cleanup |
+| Callbacks | `HostService.*` | plugin -> host | Anytime during handler operations |
 
 ### ConfigureProvider
 
@@ -169,6 +200,24 @@ Called once after plugin load with host-side configuration:
 - `binary_name` -- the CLI binary name (e.g. "scafctl" or an embedder name)
 - `settings` -- extensible key-value JSON settings
 - `host_service_id` -- GRPCBroker service ID for HostService callbacks
+- `protocol_version` -- the host's plugin protocol version for feature detection
+
+### ConfigureAuthHandler
+
+Called once after auth handler plugin load, using the same configuration model as `ConfigureProvider`:
+
+- `handler_name` -- which auth handler to configure (multi-handler plugins)
+- `quiet` / `no_color` -- terminal output preferences
+- `binary_name` -- the CLI binary name (e.g. "scafctl" or an embedder name)
+- `settings` -- extensible key-value JSON settings
+- `host_service_id` -- GRPCBroker service ID for HostService callbacks
+- `protocol_version` -- the host's plugin protocol version for feature detection
+
+The response includes a `protocol_version` field and optional `diagnostics` (repeated `Diagnostic` messages) for structured warning/error reporting.
+
+### StopAuthHandler
+
+Called during CLI shutdown or context cancellation to allow auth handler plugins to release resources gracefully. The RPC carries only the `handler_name`. If the plugin does not implement `StopAuthHandler` (older plugins), the host silently ignores the `Unimplemented` gRPC status.
 
 ### HostService Callbacks
 
@@ -178,9 +227,30 @@ Plugins that need host-side resources (secrets, auth tokens) use the `HostServic
 |----------|---------|
 | `GetSecret` / `SetSecret` / `DeleteSecret` / `ListSecrets` | Access the host's secret store |
 | `GetAuthIdentity` | Retrieve identity claims from the host's auth registry |
-| `ListAuthHandlers` | List available auth handlers on the host |
+| `ListAuthHandlers` | List available auth handlers (filtered by AllowedAuthHandlers) |
+| `GetAuthToken` | Retrieve a valid access token from the host's auth registry |
 
 Plugins access HostService via a client injected during `ConfigureProvider`.
+
+### Diagnostics and Exit Codes
+
+The `ExecuteProviderResponse` carries structured `Diagnostic` messages alongside the output. Each diagnostic includes a severity level, a summary, an optional detail string, and an optional attribute path. This allows plugins to report multiple warnings or errors in a single response.
+
+An `exit_code` field on the response enables plugins to propagate typed exit codes back to the host. The host maps these to scafctl's `exitcode.ExitError` type so that callers can distinguish between different failure modes.
+
+### Streaming Fallback
+
+When IOStreams are available in the execution context, scafctl attempts `ExecuteProviderStream` first. If the plugin returns `ErrStreamingNotSupported`, the host transparently falls back to unary `ExecuteProvider`. This allows plugins to opt into streaming incrementally without breaking non-streaming hosts.
+
+### Protocol Version Negotiation
+
+scafctl sends a `protocol_version` field in both the `ConfigureProvider` and `ConfigureAuthHandler` requests. The current version is defined by the `PluginProtocolVersion` constant. Plugins can inspect this value to enable or disable features based on the host's capabilities. The plugin may return its own protocol version in the response for the host to check.
+
+This is separate from the hashicorp/go-plugin handshake `ProtocolVersion`, which gates basic RPC compatibility. The plugin protocol version enables finer-grained feature detection after the connection is established.
+
+### Descriptor Caching
+
+The plugin client caches provider descriptors after the first `GetProviderDescriptor` call to avoid repeated gRPC round-trips. The cache is protected by a `sync.RWMutex` for safe concurrent access. Descriptors are immutable once loaded.
 
 ### Schema Round-Trip
 
@@ -211,7 +281,9 @@ The plugin process lifecycle is managed entirely by scafctl.
 
 ## Plugin Capabilities
 
-Plugins expose providers that support the full provider lifecycle:
+Plugins expose providers or auth handlers that support full lifecycles:
+
+**Provider plugins** support:
 
 - **Discovery**: Advertise provider names and descriptors
 - **Configuration**: Receive host-side settings (quiet, color, binary name)
@@ -219,6 +291,14 @@ Plugins expose providers that support the full provider lifecycle:
 - **Dry-run**: Describe what would happen without executing (WhatIf)
 - **Dependency extraction**: Custom dependency graph participation
 - **Host callbacks**: Access secrets and auth tokens from the host
+
+**Auth handler plugins** support:
+
+- **Discovery**: Advertise handler names, flows, and capabilities
+- **Configuration**: Receive host-side settings and HostService access
+- **Authentication**: Login, logout, and status checking
+- **Token management**: Token retrieval, cache listing, and expiry purging
+- **Host callbacks**: Access secrets and auth identity from the host
 
 Future capability types may include:
 

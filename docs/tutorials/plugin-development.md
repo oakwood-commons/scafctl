@@ -16,8 +16,8 @@ scafctl supports two types of plugins:
 
 | Plugin Type | Artifact Kind | Interface | Guide |
 |-------------|---------------|-----------|-------|
-| **Provider Plugin** | `provider` | `plugin.ProviderPlugin` (7 methods) | [Provider Development Guide -- Delivering as a Plugin](provider-development.md#delivering-as-a-plugin) |
-| **Auth Handler Plugin** | `auth-handler` | `plugin.AuthHandlerPlugin` (7 methods) | [Auth Handler Development Guide -- Delivering as a Plugin](auth-handler-development.md#delivering-as-a-plugin) |
+| **Provider Plugin** | `provider` | `plugin.ProviderPlugin` (8 methods) | [Provider Development Guide -- Delivering as a Plugin](provider-development.md#delivering-as-a-plugin) |
+| **Auth Handler Plugin** | `auth-handler` | `plugin.AuthHandlerPlugin` (9 methods) | [Auth Handler Development Guide -- Delivering as a Plugin](auth-handler-development.md#delivering-as-a-plugin) |
 
 ## Architecture
 

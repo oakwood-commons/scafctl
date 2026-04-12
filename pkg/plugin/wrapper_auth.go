@@ -163,28 +163,60 @@ func (w *AuthHandlerWrapper) Client() *AuthHandlerClient {
 	return w.client
 }
 
+// configureAndRegisterAuthHandlers configures each handler with host-side
+// settings (when cfg is non-nil) and registers it in the auth registry.
+func configureAndRegisterAuthHandlers(ctx context.Context, registry *auth.Registry, client *AuthHandlerClient, handlers []AuthHandlerInfo, cfg *ProviderConfig) {
+	lgr := logger.FromContext(ctx)
+	for _, info := range handlers {
+		if cfg != nil {
+			hostCfg := *cfg
+			hostCfg.HostServiceID = client.HostServiceID()
+			if cfgErr := client.ConfigureAuthHandler(ctx, info.Name, hostCfg); cfgErr != nil {
+				lgr.Info("failed to configure auth handler plugin",
+					"handler", info.Name,
+					"error", cfgErr)
+			}
+		}
+
+		wrapper := NewAuthHandlerWrapper(client, info)
+		if err := registry.Register(wrapper); err != nil {
+			lgr.V(1).Info("failed to register auth handler", "handler", info.Name, "error", err)
+			continue
+		}
+	}
+}
+
 // RegisterAuthHandlerPlugins discovers auth handler plugins and registers them
-// with the auth registry.
-func RegisterAuthHandlerPlugins(registry *auth.Registry, pluginDirs []string) error {
-	clients, err := DiscoverAuthHandlers(pluginDirs)
+// with the auth registry. Returns the created clients (caller should Kill() them
+// on cleanup).
+func RegisterAuthHandlerPlugins(ctx context.Context, registry *auth.Registry, pluginDirs []string, cfg *ProviderConfig, clientOpts ...ClientOption) ([]*AuthHandlerClient, error) {
+	clients, err := DiscoverAuthHandlers(pluginDirs, clientOpts...)
 	if err != nil {
-		return fmt.Errorf("failed to discover auth handler plugins: %w", err)
+		return nil, fmt.Errorf("failed to discover auth handler plugins: %w", err)
 	}
 
+	var allClients []*AuthHandlerClient
+
 	for _, client := range clients {
-		handlers, err := client.GetAuthHandlers(context.Background())
+		handlers, err := client.GetAuthHandlers(ctx)
 		if err != nil {
 			client.Kill()
 			continue
 		}
 
-		for _, info := range handlers {
-			wrapper := NewAuthHandlerWrapper(client, info)
-			if err := registry.Register(wrapper); err != nil {
-				continue
-			}
-		}
+		configureAndRegisterAuthHandlers(ctx, registry, client, handlers, cfg)
+		allClients = append(allClients, client)
 	}
 
-	return nil
+	return allClients, nil
+}
+
+// KillAllAuthHandlers terminates all auth handler plugin processes in the given client list.
+// This is safe to call with a nil or empty slice.
+func KillAllAuthHandlers(clients []*AuthHandlerClient) {
+	for _, c := range clients {
+		if c != nil {
+			c.Kill()
+		}
+	}
 }

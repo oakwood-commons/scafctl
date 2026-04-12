@@ -26,6 +26,7 @@ const (
 	PluginService_ExecuteProviderStream_FullMethodName = "/plugin.PluginService/ExecuteProviderStream"
 	PluginService_DescribeWhatIf_FullMethodName        = "/plugin.PluginService/DescribeWhatIf"
 	PluginService_ExtractDependencies_FullMethodName   = "/plugin.PluginService/ExtractDependencies"
+	PluginService_StopProvider_FullMethodName          = "/plugin.PluginService/StopProvider"
 )
 
 // PluginServiceClient is the client API for PluginService service.
@@ -55,6 +56,10 @@ type PluginServiceClient interface {
 	// implement custom extraction should return an empty list (the host falls
 	// back to generic extraction).
 	ExtractDependencies(ctx context.Context, in *ExtractDependenciesRequest, opts ...grpc.CallOption) (*ExtractDependenciesResponse, error)
+	// StopProvider requests graceful shutdown of a running provider execution.
+	// The host calls this when the user cancels an operation (e.g. Ctrl+C).
+	// Plugins should abort in-flight work and return promptly.
+	StopProvider(ctx context.Context, in *StopProviderRequest, opts ...grpc.CallOption) (*StopProviderResponse, error)
 }
 
 type pluginServiceClient struct {
@@ -144,6 +149,16 @@ func (c *pluginServiceClient) ExtractDependencies(ctx context.Context, in *Extra
 	return out, nil
 }
 
+func (c *pluginServiceClient) StopProvider(ctx context.Context, in *StopProviderRequest, opts ...grpc.CallOption) (*StopProviderResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StopProviderResponse)
+	err := c.cc.Invoke(ctx, PluginService_StopProvider_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PluginServiceServer is the server API for PluginService service.
 // All implementations must embed UnimplementedPluginServiceServer
 // for forward compatibility.
@@ -171,6 +186,10 @@ type PluginServiceServer interface {
 	// implement custom extraction should return an empty list (the host falls
 	// back to generic extraction).
 	ExtractDependencies(context.Context, *ExtractDependenciesRequest) (*ExtractDependenciesResponse, error)
+	// StopProvider requests graceful shutdown of a running provider execution.
+	// The host calls this when the user cancels an operation (e.g. Ctrl+C).
+	// Plugins should abort in-flight work and return promptly.
+	StopProvider(context.Context, *StopProviderRequest) (*StopProviderResponse, error)
 	mustEmbedUnimplementedPluginServiceServer()
 }
 
@@ -201,6 +220,9 @@ func (UnimplementedPluginServiceServer) DescribeWhatIf(context.Context, *Describ
 }
 func (UnimplementedPluginServiceServer) ExtractDependencies(context.Context, *ExtractDependenciesRequest) (*ExtractDependenciesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ExtractDependencies not implemented")
+}
+func (UnimplementedPluginServiceServer) StopProvider(context.Context, *StopProviderRequest) (*StopProviderResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method StopProvider not implemented")
 }
 func (UnimplementedPluginServiceServer) mustEmbedUnimplementedPluginServiceServer() {}
 func (UnimplementedPluginServiceServer) testEmbeddedByValue()                       {}
@@ -342,6 +364,24 @@ func _PluginService_ExtractDependencies_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PluginService_StopProvider_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StopProviderRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PluginServiceServer).StopProvider(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PluginService_StopProvider_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PluginServiceServer).StopProvider(ctx, req.(*StopProviderRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PluginService_ServiceDesc is the grpc.ServiceDesc for PluginService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -373,6 +413,10 @@ var PluginService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "ExtractDependencies",
 			Handler:    _PluginService_ExtractDependencies_Handler,
 		},
+		{
+			MethodName: "StopProvider",
+			Handler:    _PluginService_StopProvider_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
@@ -391,6 +435,7 @@ const (
 	HostService_ListSecrets_FullMethodName      = "/plugin.HostService/ListSecrets"
 	HostService_GetAuthIdentity_FullMethodName  = "/plugin.HostService/GetAuthIdentity"
 	HostService_ListAuthHandlers_FullMethodName = "/plugin.HostService/ListAuthHandlers"
+	HostService_GetAuthToken_FullMethodName     = "/plugin.HostService/GetAuthToken"
 )
 
 // HostServiceClient is the client API for HostService service.
@@ -413,6 +458,9 @@ type HostServiceClient interface {
 	GetAuthIdentity(ctx context.Context, in *GetAuthIdentityRequest, opts ...grpc.CallOption) (*GetAuthIdentityResponse, error)
 	// ListAuthHandlers lists available auth handlers on the host.
 	ListAuthHandlers(ctx context.Context, in *ListAuthHandlersRequest, opts ...grpc.CallOption) (*ListAuthHandlersResponse, error)
+	// GetAuthToken retrieves a valid access token from the host's auth registry.
+	// Plugins use this for authenticated HTTP requests and token refresh on 401.
+	GetAuthToken(ctx context.Context, in *GetAuthTokenRequest, opts ...grpc.CallOption) (*GetAuthTokenResponse, error)
 }
 
 type hostServiceClient struct {
@@ -483,6 +531,16 @@ func (c *hostServiceClient) ListAuthHandlers(ctx context.Context, in *ListAuthHa
 	return out, nil
 }
 
+func (c *hostServiceClient) GetAuthToken(ctx context.Context, in *GetAuthTokenRequest, opts ...grpc.CallOption) (*GetAuthTokenResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetAuthTokenResponse)
+	err := c.cc.Invoke(ctx, HostService_GetAuthToken_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // HostServiceServer is the server API for HostService service.
 // All implementations must embed UnimplementedHostServiceServer
 // for forward compatibility.
@@ -503,6 +561,9 @@ type HostServiceServer interface {
 	GetAuthIdentity(context.Context, *GetAuthIdentityRequest) (*GetAuthIdentityResponse, error)
 	// ListAuthHandlers lists available auth handlers on the host.
 	ListAuthHandlers(context.Context, *ListAuthHandlersRequest) (*ListAuthHandlersResponse, error)
+	// GetAuthToken retrieves a valid access token from the host's auth registry.
+	// Plugins use this for authenticated HTTP requests and token refresh on 401.
+	GetAuthToken(context.Context, *GetAuthTokenRequest) (*GetAuthTokenResponse, error)
 	mustEmbedUnimplementedHostServiceServer()
 }
 
@@ -530,6 +591,9 @@ func (UnimplementedHostServiceServer) GetAuthIdentity(context.Context, *GetAuthI
 }
 func (UnimplementedHostServiceServer) ListAuthHandlers(context.Context, *ListAuthHandlersRequest) (*ListAuthHandlersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListAuthHandlers not implemented")
+}
+func (UnimplementedHostServiceServer) GetAuthToken(context.Context, *GetAuthTokenRequest) (*GetAuthTokenResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetAuthToken not implemented")
 }
 func (UnimplementedHostServiceServer) mustEmbedUnimplementedHostServiceServer() {}
 func (UnimplementedHostServiceServer) testEmbeddedByValue()                     {}
@@ -660,6 +724,24 @@ func _HostService_ListAuthHandlers_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _HostService_GetAuthToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetAuthTokenRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).GetAuthToken(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_GetAuthToken_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).GetAuthToken(ctx, req.(*GetAuthTokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // HostService_ServiceDesc is the grpc.ServiceDesc for HostService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -691,19 +773,25 @@ var HostService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "ListAuthHandlers",
 			Handler:    _HostService_ListAuthHandlers_Handler,
 		},
+		{
+			MethodName: "GetAuthToken",
+			Handler:    _HostService_GetAuthToken_Handler,
+		},
 	},
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "pkg/plugin/proto/plugin.proto",
 }
 
 const (
-	AuthHandlerService_GetAuthHandlers_FullMethodName    = "/plugin.AuthHandlerService/GetAuthHandlers"
-	AuthHandlerService_Login_FullMethodName              = "/plugin.AuthHandlerService/Login"
-	AuthHandlerService_Logout_FullMethodName             = "/plugin.AuthHandlerService/Logout"
-	AuthHandlerService_GetStatus_FullMethodName          = "/plugin.AuthHandlerService/GetStatus"
-	AuthHandlerService_GetToken_FullMethodName           = "/plugin.AuthHandlerService/GetToken"
-	AuthHandlerService_ListCachedTokens_FullMethodName   = "/plugin.AuthHandlerService/ListCachedTokens"
-	AuthHandlerService_PurgeExpiredTokens_FullMethodName = "/plugin.AuthHandlerService/PurgeExpiredTokens"
+	AuthHandlerService_GetAuthHandlers_FullMethodName      = "/plugin.AuthHandlerService/GetAuthHandlers"
+	AuthHandlerService_ConfigureAuthHandler_FullMethodName = "/plugin.AuthHandlerService/ConfigureAuthHandler"
+	AuthHandlerService_Login_FullMethodName                = "/plugin.AuthHandlerService/Login"
+	AuthHandlerService_Logout_FullMethodName               = "/plugin.AuthHandlerService/Logout"
+	AuthHandlerService_GetStatus_FullMethodName            = "/plugin.AuthHandlerService/GetStatus"
+	AuthHandlerService_GetToken_FullMethodName             = "/plugin.AuthHandlerService/GetToken"
+	AuthHandlerService_ListCachedTokens_FullMethodName     = "/plugin.AuthHandlerService/ListCachedTokens"
+	AuthHandlerService_PurgeExpiredTokens_FullMethodName   = "/plugin.AuthHandlerService/PurgeExpiredTokens"
+	AuthHandlerService_StopAuthHandler_FullMethodName      = "/plugin.AuthHandlerService/StopAuthHandler"
 )
 
 // AuthHandlerServiceClient is the client API for AuthHandlerService service.
@@ -714,6 +802,10 @@ const (
 type AuthHandlerServiceClient interface {
 	// GetAuthHandlers returns metadata for all auth handlers exposed by this plugin.
 	GetAuthHandlers(ctx context.Context, in *GetAuthHandlersRequest, opts ...grpc.CallOption) (*GetAuthHandlersResponse, error)
+	// ConfigureAuthHandler sends host-side configuration to the plugin once after load.
+	// Carries quiet/noColor/binaryName, extensible settings, HostService broker ID,
+	// and the plugin protocol version for feature detection.
+	ConfigureAuthHandler(ctx context.Context, in *ConfigureAuthHandlerRequest, opts ...grpc.CallOption) (*ConfigureAuthHandlerResponse, error)
 	// Login initiates authentication. Returns a stream: zero or more DeviceCodePrompt
 	// messages followed by exactly one LoginResult message.
 	Login(ctx context.Context, in *LoginRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LoginStreamMessage], error)
@@ -727,6 +819,9 @@ type AuthHandlerServiceClient interface {
 	ListCachedTokens(ctx context.Context, in *ListCachedTokensRequest, opts ...grpc.CallOption) (*ListCachedTokensResponse, error)
 	// PurgeExpiredTokens removes expired tokens for the named handler.
 	PurgeExpiredTokens(ctx context.Context, in *PurgeExpiredTokensRequest, opts ...grpc.CallOption) (*PurgeExpiredTokensResponse, error)
+	// StopAuthHandler requests graceful shutdown of a running auth handler operation.
+	// handler_name may be empty to stop all handlers.
+	StopAuthHandler(ctx context.Context, in *StopAuthHandlerRequest, opts ...grpc.CallOption) (*StopAuthHandlerResponse, error)
 }
 
 type authHandlerServiceClient struct {
@@ -741,6 +836,16 @@ func (c *authHandlerServiceClient) GetAuthHandlers(ctx context.Context, in *GetA
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetAuthHandlersResponse)
 	err := c.cc.Invoke(ctx, AuthHandlerService_GetAuthHandlers_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authHandlerServiceClient) ConfigureAuthHandler(ctx context.Context, in *ConfigureAuthHandlerRequest, opts ...grpc.CallOption) (*ConfigureAuthHandlerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ConfigureAuthHandlerResponse)
+	err := c.cc.Invoke(ctx, AuthHandlerService_ConfigureAuthHandler_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -816,6 +921,16 @@ func (c *authHandlerServiceClient) PurgeExpiredTokens(ctx context.Context, in *P
 	return out, nil
 }
 
+func (c *authHandlerServiceClient) StopAuthHandler(ctx context.Context, in *StopAuthHandlerRequest, opts ...grpc.CallOption) (*StopAuthHandlerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StopAuthHandlerResponse)
+	err := c.cc.Invoke(ctx, AuthHandlerService_StopAuthHandler_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AuthHandlerServiceServer is the server API for AuthHandlerService service.
 // All implementations must embed UnimplementedAuthHandlerServiceServer
 // for forward compatibility.
@@ -824,6 +939,10 @@ func (c *authHandlerServiceClient) PurgeExpiredTokens(ctx context.Context, in *P
 type AuthHandlerServiceServer interface {
 	// GetAuthHandlers returns metadata for all auth handlers exposed by this plugin.
 	GetAuthHandlers(context.Context, *GetAuthHandlersRequest) (*GetAuthHandlersResponse, error)
+	// ConfigureAuthHandler sends host-side configuration to the plugin once after load.
+	// Carries quiet/noColor/binaryName, extensible settings, HostService broker ID,
+	// and the plugin protocol version for feature detection.
+	ConfigureAuthHandler(context.Context, *ConfigureAuthHandlerRequest) (*ConfigureAuthHandlerResponse, error)
 	// Login initiates authentication. Returns a stream: zero or more DeviceCodePrompt
 	// messages followed by exactly one LoginResult message.
 	Login(*LoginRequest, grpc.ServerStreamingServer[LoginStreamMessage]) error
@@ -837,6 +956,9 @@ type AuthHandlerServiceServer interface {
 	ListCachedTokens(context.Context, *ListCachedTokensRequest) (*ListCachedTokensResponse, error)
 	// PurgeExpiredTokens removes expired tokens for the named handler.
 	PurgeExpiredTokens(context.Context, *PurgeExpiredTokensRequest) (*PurgeExpiredTokensResponse, error)
+	// StopAuthHandler requests graceful shutdown of a running auth handler operation.
+	// handler_name may be empty to stop all handlers.
+	StopAuthHandler(context.Context, *StopAuthHandlerRequest) (*StopAuthHandlerResponse, error)
 	mustEmbedUnimplementedAuthHandlerServiceServer()
 }
 
@@ -849,6 +971,9 @@ type UnimplementedAuthHandlerServiceServer struct{}
 
 func (UnimplementedAuthHandlerServiceServer) GetAuthHandlers(context.Context, *GetAuthHandlersRequest) (*GetAuthHandlersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetAuthHandlers not implemented")
+}
+func (UnimplementedAuthHandlerServiceServer) ConfigureAuthHandler(context.Context, *ConfigureAuthHandlerRequest) (*ConfigureAuthHandlerResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ConfigureAuthHandler not implemented")
 }
 func (UnimplementedAuthHandlerServiceServer) Login(*LoginRequest, grpc.ServerStreamingServer[LoginStreamMessage]) error {
 	return status.Error(codes.Unimplemented, "method Login not implemented")
@@ -867,6 +992,9 @@ func (UnimplementedAuthHandlerServiceServer) ListCachedTokens(context.Context, *
 }
 func (UnimplementedAuthHandlerServiceServer) PurgeExpiredTokens(context.Context, *PurgeExpiredTokensRequest) (*PurgeExpiredTokensResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PurgeExpiredTokens not implemented")
+}
+func (UnimplementedAuthHandlerServiceServer) StopAuthHandler(context.Context, *StopAuthHandlerRequest) (*StopAuthHandlerResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method StopAuthHandler not implemented")
 }
 func (UnimplementedAuthHandlerServiceServer) mustEmbedUnimplementedAuthHandlerServiceServer() {}
 func (UnimplementedAuthHandlerServiceServer) testEmbeddedByValue()                            {}
@@ -903,6 +1031,24 @@ func _AuthHandlerService_GetAuthHandlers_Handler(srv interface{}, ctx context.Co
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(AuthHandlerServiceServer).GetAuthHandlers(ctx, req.(*GetAuthHandlersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthHandlerService_ConfigureAuthHandler_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ConfigureAuthHandlerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthHandlerServiceServer).ConfigureAuthHandler(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthHandlerService_ConfigureAuthHandler_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthHandlerServiceServer).ConfigureAuthHandler(ctx, req.(*ConfigureAuthHandlerRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1008,6 +1154,24 @@ func _AuthHandlerService_PurgeExpiredTokens_Handler(srv interface{}, ctx context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuthHandlerService_StopAuthHandler_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StopAuthHandlerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthHandlerServiceServer).StopAuthHandler(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthHandlerService_StopAuthHandler_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthHandlerServiceServer).StopAuthHandler(ctx, req.(*StopAuthHandlerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AuthHandlerService_ServiceDesc is the grpc.ServiceDesc for AuthHandlerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1018,6 +1182,10 @@ var AuthHandlerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetAuthHandlers",
 			Handler:    _AuthHandlerService_GetAuthHandlers_Handler,
+		},
+		{
+			MethodName: "ConfigureAuthHandler",
+			Handler:    _AuthHandlerService_ConfigureAuthHandler_Handler,
 		},
 		{
 			MethodName: "Logout",
@@ -1038,6 +1206,10 @@ var AuthHandlerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PurgeExpiredTokens",
 			Handler:    _AuthHandlerService_PurgeExpiredTokens_Handler,
+		},
+		{
+			MethodName: "StopAuthHandler",
+			Handler:    _AuthHandlerService_StopAuthHandler_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

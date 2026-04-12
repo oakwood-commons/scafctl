@@ -46,6 +46,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/metrics"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/profiler"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
@@ -151,6 +152,11 @@ type RootOptions struct {
 	//  4. Environment variables
 	//  5. CLI flags
 	ConfigDefaults []byte
+
+	// AuthPluginDirs specifies directories to scan for auth handler plugin
+	// binaries. Discovered plugins are registered in the auth.Registry
+	// alongside built-in handlers during PersistentPreRunE.
+	AuthPluginDirs []string
 }
 
 // NewRootOptions returns a RootOptions with production defaults
@@ -175,13 +181,14 @@ func Root(opts *RootOptions) *cobra.Command {
 	// Per-invocation state — no package-level mutable variables.
 	cliParams := settings.NewCliParams()
 	var (
-		configPath   = opts.ConfigPath
-		cwdFlag      string
-		debugFlag    bool
-		logFormat    = "console"
-		logFile      string
-		otelInsecure bool
-		telShutdown  func(context.Context) error
+		configPath        = opts.ConfigPath
+		cwdFlag           string
+		debugFlag         bool
+		logFormat         = "console"
+		logFile           string
+		otelInsecure      bool
+		telShutdown       func(context.Context) error
+		authPluginClients []*plugin.AuthHandlerClient
 	)
 
 	// Resolve binary name: use caller-provided or default to settings.CliBinaryName ("scafctl").
@@ -491,6 +498,21 @@ func Root(opts *RootOptions) *cobra.Command {
 				}
 			}
 
+			// Register auth handler plugins if directories are configured
+			if len(opts.AuthPluginDirs) > 0 {
+				lgr.V(1).Info("loading auth handler plugins", "dirs", opts.AuthPluginDirs)
+				pluginCfg := &plugin.ProviderConfig{
+					Quiet:      cliParams.IsQuiet,
+					NoColor:    cliParams.NoColor,
+					BinaryName: binaryName,
+				}
+				authClients, authPluginErr := plugin.RegisterAuthHandlerPlugins(ctx, authRegistry, opts.AuthPluginDirs, pluginCfg)
+				if authPluginErr != nil {
+					w.Warningf("failed to load some auth handler plugins: %v", authPluginErr)
+				}
+				authPluginClients = authClients
+			}
+
 			ctx = auth.WithRegistry(ctx, authRegistry)
 
 			cCmd.SetContext(ctx)
@@ -499,6 +521,7 @@ func Root(opts *RootOptions) *cobra.Command {
 			if cCmd.Use == binaryName {
 				err := output.ValidateCommands(args)
 				if err != nil {
+					plugin.KillAllAuthHandlers(authPluginClients)
 					w.ErrorWithExit(err.Error())
 					return
 				}
@@ -514,6 +537,7 @@ func Root(opts *RootOptions) *cobra.Command {
 			// Call embedder's pre-run hook after all standard setup is complete.
 			if opts.PreRunHook != nil {
 				if hookErr := opts.PreRunHook(cCmd, args); hookErr != nil {
+					plugin.KillAllAuthHandlers(authPluginClients)
 					w.ErrorWithExit(hookErr.Error())
 					return
 				}
@@ -524,6 +548,7 @@ func Root(opts *RootOptions) *cobra.Command {
 				profilePath, _ := cCmd.Flags().GetString("pprof-output-dir")
 				p, err := profiler.GetProfiler(profileType, profilePath, lgr)
 				if err != nil {
+					plugin.KillAllAuthHandlers(authPluginClients)
 					w.ErrorWithExitf("Error starting profiler: %v", err)
 					return
 				}
@@ -539,6 +564,7 @@ func Root(opts *RootOptions) *cobra.Command {
 			}
 		},
 		PersistentPostRun: func(_ *cobra.Command, _ []string) {
+			plugin.KillAllAuthHandlers(authPluginClients)
 			if telShutdown != nil {
 				shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()

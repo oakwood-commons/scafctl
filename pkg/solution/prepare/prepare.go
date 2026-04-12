@@ -252,7 +252,7 @@ func Solution(ctx context.Context, path string, opts ...Option) (*Result, error)
 
 		// Register auth handler plugins if auth registry is available
 		if cfg.authRegistry != nil {
-			authClients, authRegErr := plugin.RegisterFetchedAuthHandlerPlugins(ctx, cfg.authRegistry, fetchResults)
+			authClients, authRegErr := plugin.RegisterFetchedAuthHandlerPlugins(ctx, cfg.authRegistry, fetchResults, cfg.pluginCfg, cfg.clientOpts...)
 			if authRegErr != nil {
 				cleanup()
 				return nil, fmt.Errorf("registering fetched auth handler plugins: %w", authRegErr)

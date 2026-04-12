@@ -17,13 +17,18 @@ import (
 
 // MockAuthHandlerPlugin implements AuthHandlerPlugin for testing.
 type MockAuthHandlerPlugin struct {
-	handlers   []AuthHandlerInfo
-	loginFunc  func(ctx context.Context, name string, req LoginRequest, cb func(DeviceCodePrompt)) (*LoginResponse, error)
-	logoutFunc func(ctx context.Context, name string) error
-	statusFunc func(ctx context.Context, name string) (*auth.Status, error)
-	tokenFunc  func(ctx context.Context, name string, req TokenRequest) (*TokenResponse, error)
-	listFunc   func(ctx context.Context, name string) ([]*auth.CachedTokenInfo, error)
-	purgeFunc  func(ctx context.Context, name string) (int, error)
+	handlers     []AuthHandlerInfo
+	loginFunc    func(ctx context.Context, name string, req LoginRequest, cb func(DeviceCodePrompt)) (*LoginResponse, error)
+	logoutFunc   func(ctx context.Context, name string) error
+	statusFunc   func(ctx context.Context, name string) (*auth.Status, error)
+	tokenFunc    func(ctx context.Context, name string, req TokenRequest) (*TokenResponse, error)
+	listFunc     func(ctx context.Context, name string) ([]*auth.CachedTokenInfo, error)
+	purgeFunc    func(ctx context.Context, name string) (int, error)
+	configureErr error
+	lastConfig   *ProviderConfig
+	stopErr      error
+	stopCalled   bool
+	stopHandler  string
 }
 
 func (m *MockAuthHandlerPlugin) GetAuthHandlers(ctx context.Context) ([]AuthHandlerInfo, error) {
@@ -120,6 +125,19 @@ func (m *MockAuthHandlerPlugin) PurgeExpiredTokens(ctx context.Context, handlerN
 		return m.purgeFunc(ctx, handlerName)
 	}
 	return 0, nil
+}
+
+//nolint:revive // all params required by interface
+func (m *MockAuthHandlerPlugin) ConfigureAuthHandler(_ context.Context, _ string, cfg ProviderConfig) error {
+	m.lastConfig = &cfg
+	return m.configureErr
+}
+
+//nolint:revive // all params required by interface
+func (m *MockAuthHandlerPlugin) StopAuthHandler(_ context.Context, handlerName string) error {
+	m.stopCalled = true
+	m.stopHandler = handlerName
+	return m.stopErr
 }
 
 func TestAuthHandlerGRPC_GetAuthHandlers(t *testing.T) {
@@ -513,4 +531,160 @@ func TestAuthHandlerWrapper_Interface(t *testing.T) {
 func TestNilClaimsConversion(t *testing.T) {
 	assert.Nil(t, claimsToProto(nil))
 	assert.Nil(t, protoToClaims(nil))
+}
+
+// ── ConfigureAuthHandler gRPC server/client tests ─────────────────────────────
+
+func TestAuthHandlerGRPCServer_ConfigureAuthHandler(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		configureErr error
+		wantErr      string
+	}{
+		{
+			name: "success",
+		},
+		{
+			name:         "plugin returns error",
+			configureErr: assert.AnError,
+			wantErr:      assert.AnError.Error(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mock := &MockAuthHandlerPlugin{
+				configureErr: tt.configureErr,
+			}
+			server := &AuthHandlerGRPCServer{Impl: mock}
+
+			resp, err := server.ConfigureAuthHandler(context.Background(), &proto.ConfigureAuthHandlerRequest{
+				HandlerName:     "test-handler",
+				Quiet:           true,
+				NoColor:         true,
+				BinaryName:      "mycli",
+				ProtocolVersion: PluginProtocolVersion,
+				Settings: map[string][]byte{
+					"timeout": []byte(`30`),
+				},
+			})
+			require.NoError(t, err)
+
+			if tt.wantErr != "" {
+				assert.Contains(t, resp.Error, tt.wantErr)
+				return
+			}
+
+			assert.Empty(t, resp.Error)
+			assert.Equal(t, PluginProtocolVersion, resp.ProtocolVersion)
+			require.NotNil(t, mock.lastConfig)
+			assert.True(t, mock.lastConfig.Quiet)
+			assert.True(t, mock.lastConfig.NoColor)
+			assert.Equal(t, "mycli", mock.lastConfig.BinaryName)
+			assert.Contains(t, mock.lastConfig.Settings, "timeout")
+		})
+	}
+}
+
+func TestAuthHandlerGRPCServer_ConfigureAuthHandler_NoBroker(t *testing.T) {
+	t.Parallel()
+
+	mock := &MockAuthHandlerPlugin{}
+	server := &AuthHandlerGRPCServer{Impl: mock}
+
+	resp, err := server.ConfigureAuthHandler(context.Background(), &proto.ConfigureAuthHandlerRequest{
+		HandlerName:   "test-handler",
+		HostServiceId: 99,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, resp.Error)
+	// Without a broker, HostServiceID should not be passed through.
+	require.NotNil(t, mock.lastConfig)
+	assert.Equal(t, uint32(0), mock.lastConfig.HostServiceID)
+}
+
+// ── StopAuthHandler gRPC server/client tests ──────────────────────────────────
+
+func TestAuthHandlerGRPCServer_StopAuthHandler(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		stopErr error
+		wantErr string
+	}{
+		{
+			name: "success",
+		},
+		{
+			name:    "plugin returns error",
+			stopErr: assert.AnError,
+			wantErr: assert.AnError.Error(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mock := &MockAuthHandlerPlugin{
+				stopErr: tt.stopErr,
+			}
+			server := &AuthHandlerGRPCServer{Impl: mock}
+
+			resp, err := server.StopAuthHandler(context.Background(), &proto.StopAuthHandlerRequest{
+				HandlerName: "test-handler",
+			})
+			require.NoError(t, err)
+
+			if tt.wantErr != "" {
+				assert.Contains(t, resp.Error, tt.wantErr)
+				return
+			}
+
+			assert.Empty(t, resp.Error)
+			assert.True(t, mock.stopCalled)
+			assert.Equal(t, "test-handler", mock.stopHandler)
+		})
+	}
+}
+
+// ── KillAllAuthHandlers tests ─────────────────────────────────────────────────
+
+func TestKillAllAuthHandlers_NilSlice(t *testing.T) {
+	t.Parallel()
+	KillAllAuthHandlers(nil)
+}
+
+func TestKillAllAuthHandlers_EmptySlice(t *testing.T) {
+	t.Parallel()
+	KillAllAuthHandlers([]*AuthHandlerClient{})
+}
+
+// ── AuthHandlerClient.HostServiceID tests ─────────────────────────────────────
+
+func TestAuthHandlerClient_HostServiceID_NonGRPC(t *testing.T) {
+	t.Parallel()
+
+	// When the underlying plugin is not a GRPCClient, HostServiceID returns 0.
+	client := &AuthHandlerClient{
+		plugin: &MockAuthHandlerPlugin{},
+	}
+	assert.Equal(t, uint32(0), client.HostServiceID())
+}
+
+func TestAuthHandlerClient_HostServiceID_GRPCClient(t *testing.T) {
+	t.Parallel()
+
+	grpcClient := &AuthHandlerGRPCClient{
+		hostServiceID: 42,
+	}
+	client := &AuthHandlerClient{
+		plugin: grpcClient,
+	}
+	assert.Equal(t, uint32(42), client.HostServiceID())
 }

@@ -95,6 +95,10 @@ func (m *MockProviderPlugin) ExtractDependencies(ctx context.Context, name strin
 	return nil, nil
 }
 
+func (m *MockProviderPlugin) StopProvider(_ context.Context, _ string) error {
+	return nil
+}
+
 func TestGRPCPlugin_ServerClient(t *testing.T) {
 	mock := &MockProviderPlugin{}
 

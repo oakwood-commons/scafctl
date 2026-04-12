@@ -93,7 +93,7 @@ Phases 9–10 of the MCP server design — executing solutions through the MCP s
 - Catalog chain resolution — local-first, then remote OCI catalogs (`pkg/catalog/chain.go`, `pkg/catalog/chain_builder.go`)
 - `scafctl plugins install` and `scafctl plugins list` CLI commands (`pkg/cmd/scafctl/plugins/`)
 - Wired into solution execution via `prepare.Solution()` options
-- Auth handler plugin runtime: `AuthHandlerPlugin` interface, gRPC service (`AuthHandlerService` with 7 RPCs), client/server/wrapper (`pkg/plugin/grpc_auth.go`, `pkg/plugin/wrapper_auth.go`), fetcher integration (`RegisterFetchedAuthHandlerPlugins`), preparation pipeline (`prepare.WithAuthRegistry`)
+- Auth handler plugin runtime: `AuthHandlerPlugin` interface (9 methods), gRPC service (`AuthHandlerService` with 9 RPCs including `ConfigureAuthHandler` and `StopAuthHandler`), client/server/wrapper (`pkg/plugin/grpc_auth.go`, `pkg/plugin/wrapper_auth.go`), fetcher integration (`RegisterFetchedAuthHandlerPlugins`), preparation pipeline (`prepare.WithAuthRegistry`), HostService broker access, protocol version negotiation
 
 ### GCP Auth Handler Documentation
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/plugin/proto"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
@@ -810,12 +811,13 @@ func TestHostServiceServer_AuthHandlerRestriction(t *testing.T) {
 	assert.Contains(t, resp.Error, "access denied")
 	assert.False(t, called)
 
-	// Empty handler (default) is always allowed
+	// Empty handler is denied when an allowlist is configured (prevents
+	// bypassing the restriction via the default handler).
 	called = false
 	resp, err = server.GetAuthIdentity(ctx, &proto.GetAuthIdentityRequest{HandlerName: "", Scope: "read"})
 	require.NoError(t, err)
-	assert.Empty(t, resp.Error)
-	assert.True(t, called)
+	assert.Contains(t, resp.Error, "access denied")
+	assert.False(t, called)
 }
 
 func TestHostServiceServer_SecretNameValidation(t *testing.T) {
@@ -980,4 +982,314 @@ func BenchmarkValidateSecretName(b *testing.B) {
 			_ = validateSecretName("../etc/passwd")
 		}
 	})
+}
+
+func TestExitCode_RoundTrip(t *testing.T) {
+	tests := []struct {
+		name         string
+		execErr      error
+		wantExitCode int32
+		wantErrMsg   string
+	}{
+		{
+			name:         "ExitError with ActionFailed code",
+			execErr:      exitcode.WithCode(fmt.Errorf("deploy failed"), exitcode.ActionFailed),
+			wantExitCode: int32(exitcode.ActionFailed),
+			wantErrMsg:   "deploy failed",
+		},
+		{
+			name:         "ExitError with ValidationFailed code",
+			execErr:      exitcode.WithCode(fmt.Errorf("bad input"), exitcode.ValidationFailed),
+			wantExitCode: int32(exitcode.ValidationFailed),
+			wantErrMsg:   "bad input",
+		},
+		{
+			name:         "plain error gets GeneralError code",
+			execErr:      fmt.Errorf("something went wrong"),
+			wantExitCode: int32(exitcode.GeneralError),
+			wantErrMsg:   "something went wrong",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &MockProviderPlugin{
+				execFunc: func(_ context.Context, _ string, _ map[string]any) (*provider.Output, error) {
+					return nil, tt.execErr
+				},
+			}
+			server := &GRPCServer{Impl: mock}
+
+			inputBytes, err := json.Marshal(map[string]any{"key": "value"})
+			require.NoError(t, err)
+
+			resp, err := server.ExecuteProvider(context.Background(), &proto.ExecuteProviderRequest{
+				ProviderName: "test-provider",
+				Input:        inputBytes,
+			})
+			require.NoError(t, err, "gRPC-level error should be nil")
+			assert.NotEmpty(t, resp.Error)
+			assert.Equal(t, tt.wantExitCode, resp.ExitCode)
+			assert.Contains(t, resp.Error, tt.wantErrMsg)
+			assert.NotEmpty(t, resp.Diagnostics, "diagnostics should be populated")
+			assert.Equal(t, proto.Diagnostic_ERROR, resp.Diagnostics[0].Severity)
+		})
+	}
+}
+
+func TestExitCode_ClientReconstruction(t *testing.T) {
+	// Test that the client reconstructs ExitError from the response
+	mock := &MockProviderPlugin{
+		execFunc: func(_ context.Context, _ string, _ map[string]any) (*provider.Output, error) {
+			return nil, exitcode.WithCode(fmt.Errorf("action failed"), exitcode.ActionFailed)
+		},
+	}
+	server := &GRPCServer{Impl: mock}
+
+	inputBytes, err := json.Marshal(map[string]any{"key": "value"})
+	require.NoError(t, err)
+
+	resp, err := server.ExecuteProvider(context.Background(), &proto.ExecuteProviderRequest{
+		ProviderName: "test-provider",
+		Input:        inputBytes,
+	})
+	require.NoError(t, err)
+
+	// Simulate client-side reconstruction
+	assert.NotEmpty(t, resp.Error)
+	assert.Equal(t, int32(exitcode.ActionFailed), resp.ExitCode)
+
+	// Verify the client would reconstruct an ExitError
+	clientErr := fmt.Errorf("provider execution failed: %s", resp.Error)
+	if resp.ExitCode != 0 {
+		clientErr = exitcode.WithCode(clientErr, int(resp.ExitCode))
+	}
+	assert.Equal(t, exitcode.ActionFailed, exitcode.GetCode(clientErr))
+}
+
+func TestDiagnostics_ErrorConversion(t *testing.T) {
+	tests := []struct {
+		name  string
+		diags []*proto.Diagnostic
+		want  string
+	}{
+		{
+			name:  "nil diagnostics",
+			diags: nil,
+			want:  "",
+		},
+		{
+			name: "error with detail",
+			diags: []*proto.Diagnostic{
+				{
+					Severity: proto.Diagnostic_ERROR,
+					Summary:  "validation failed",
+					Detail:   "field 'url' is required",
+				},
+			},
+			want: "validation failed: field 'url' is required",
+		},
+		{
+			name: "error with attribute and detail",
+			diags: []*proto.Diagnostic{
+				{
+					Severity:  proto.Diagnostic_ERROR,
+					Summary:   "invalid value",
+					Detail:    "must be a valid URL",
+					Attribute: "config.url",
+				},
+			},
+			want: "invalid value: must be a valid URL (attribute: config.url)",
+		},
+		{
+			name: "error with attribute but no detail",
+			diags: []*proto.Diagnostic{
+				{
+					Severity:  proto.Diagnostic_ERROR,
+					Summary:   "missing field",
+					Attribute: "config.url",
+				},
+			},
+			want: "missing field (attribute: config.url)",
+		},
+		{
+			name: "warnings only produce no error",
+			diags: []*proto.Diagnostic{
+				{
+					Severity: proto.Diagnostic_WARNING,
+					Summary:  "deprecated field",
+				},
+			},
+			want: "",
+		},
+		{
+			name: "multiple errors joined",
+			diags: []*proto.Diagnostic{
+				{
+					Severity: proto.Diagnostic_ERROR,
+					Summary:  "error one",
+				},
+				{
+					Severity: proto.Diagnostic_ERROR,
+					Summary:  "error two",
+				},
+			},
+			want: "error one\nerror two",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := diagnosticsToError(context.Background(), tt.diags)
+			if tt.want == "" {
+				assert.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.Equal(t, tt.want, err.Error())
+			}
+		})
+	}
+}
+
+func TestDiagnostics_ErrorToDiagnostics(t *testing.T) {
+	t.Run("nil error", func(t *testing.T) {
+		assert.Nil(t, errorToDiagnostics(nil))
+	})
+
+	t.Run("plain error", func(t *testing.T) {
+		diags := errorToDiagnostics(fmt.Errorf("something failed"))
+		require.Len(t, diags, 1)
+		assert.Equal(t, proto.Diagnostic_ERROR, diags[0].Severity)
+		assert.Equal(t, "something failed", diags[0].Summary)
+		assert.Empty(t, diags[0].Detail)
+	})
+
+	t.Run("ExitError includes code description", func(t *testing.T) {
+		diags := errorToDiagnostics(exitcode.WithCode(fmt.Errorf("timeout"), exitcode.TimeoutError))
+		require.Len(t, diags, 1)
+		assert.Equal(t, proto.Diagnostic_ERROR, diags[0].Severity)
+		assert.Contains(t, diags[0].Detail, "exit code 9")
+		assert.Contains(t, diags[0].Detail, "timeout")
+	})
+}
+
+func TestListAuthHandlers_Filtered(t *testing.T) {
+	tests := []struct {
+		name            string
+		allHandlers     []string
+		defaultHandler  string
+		allowedHandlers []string
+		wantHandlers    []string
+		wantDefault     string
+	}{
+		{
+			name:            "no restrictions returns all",
+			allHandlers:     []string{"entra", "gcp", "github"},
+			defaultHandler:  "entra",
+			allowedHandlers: nil,
+			wantHandlers:    []string{"entra", "gcp", "github"},
+			wantDefault:     "entra",
+		},
+		{
+			name:            "filters to allowed set",
+			allHandlers:     []string{"entra", "gcp", "github"},
+			defaultHandler:  "entra",
+			allowedHandlers: []string{"entra", "github"},
+			wantHandlers:    []string{"entra", "github"},
+			wantDefault:     "entra",
+		},
+		{
+			name:            "redacts default when not allowed",
+			allHandlers:     []string{"entra", "gcp", "github"},
+			defaultHandler:  "gcp",
+			allowedHandlers: []string{"entra"},
+			wantHandlers:    []string{"entra"},
+			wantDefault:     "",
+		},
+		{
+			name:            "empty allowed with restrictions returns none",
+			allHandlers:     []string{"entra", "gcp"},
+			defaultHandler:  "entra",
+			allowedHandlers: []string{"nonexistent"},
+			wantHandlers:    []string{},
+			wantDefault:     "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := &HostServiceServer{
+				Deps: HostServiceDeps{
+					AllowedAuthHandlers: tt.allowedHandlers,
+					AuthHandlersFunc: func(_ context.Context) ([]string, string, error) {
+						return tt.allHandlers, tt.defaultHandler, nil
+					},
+				},
+			}
+
+			resp, err := server.ListAuthHandlers(context.Background(), &proto.ListAuthHandlersRequest{})
+			require.NoError(t, err)
+
+			if len(tt.wantHandlers) == 0 {
+				assert.Empty(t, resp.HandlerNames)
+			} else {
+				assert.Equal(t, tt.wantHandlers, resp.HandlerNames)
+			}
+			assert.Equal(t, tt.wantDefault, resp.DefaultHandler)
+		})
+	}
+}
+
+func TestDescriptorCache(t *testing.T) {
+	callCount := 0
+	mock := &MockProviderPlugin{
+		descriptors: map[string]*provider.Descriptor{
+			"cached-provider": {
+				Name:        "cached-provider",
+				DisplayName: "Cached",
+				Description: "Test descriptor caching",
+				APIVersion:  "v1",
+			},
+		},
+	}
+	// Wrap mock to count calls
+	originalGetDesc := mock.GetProviderDescriptor
+	countingPlugin := &countingDescriptorPlugin{
+		ProviderPlugin: mock,
+		getDescFn:      originalGetDesc,
+		callCount:      &callCount,
+	}
+
+	client := &Client{
+		plugin: countingPlugin,
+		name:   "test",
+	}
+
+	// First call should hit the plugin
+	desc1, err := client.GetProviderDescriptor(context.Background(), "cached-provider")
+	require.NoError(t, err)
+	assert.Equal(t, "cached-provider", desc1.Name)
+	assert.Equal(t, 1, callCount)
+
+	// Second call should return cached result
+	desc2, err := client.GetProviderDescriptor(context.Background(), "cached-provider")
+	require.NoError(t, err)
+	assert.Equal(t, "cached-provider", desc2.Name)
+	assert.Equal(t, 1, callCount, "second call should use cache")
+
+	// Different provider should still call plugin
+	_, _ = client.GetProviderDescriptor(context.Background(), "other-provider")
+	assert.Equal(t, 2, callCount, "different provider should hit plugin")
+}
+
+// countingDescriptorPlugin wraps ProviderPlugin to count GetProviderDescriptor calls.
+type countingDescriptorPlugin struct {
+	ProviderPlugin
+	getDescFn func(ctx context.Context, name string) (*provider.Descriptor, error)
+	callCount *int
+}
+
+func (c *countingDescriptorPlugin) GetProviderDescriptor(ctx context.Context, name string) (*provider.Descriptor, error) {
+	*c.callCount++
+	return c.getDescFn(ctx, name)
 }

@@ -31,6 +31,11 @@ service PluginService {
   // implement custom extraction should return an empty list (the host falls
   // back to generic extraction).
   rpc ExtractDependencies(ExtractDependenciesRequest) returns (ExtractDependenciesResponse);
+
+  // StopProvider requests graceful shutdown of a running provider execution.
+  // The host calls this when the user cancels an operation (e.g. Ctrl+C).
+  // Plugins should abort in-flight work and return promptly.
+  rpc StopProvider(StopProviderRequest) returns (StopProviderResponse);
 }
 
 // HostService is a callback service that plugins can invoke on the host.
@@ -50,12 +55,20 @@ service HostService {
   rpc GetAuthIdentity(GetAuthIdentityRequest) returns (GetAuthIdentityResponse);
   // ListAuthHandlers lists available auth handlers on the host.
   rpc ListAuthHandlers(ListAuthHandlersRequest) returns (ListAuthHandlersResponse);
+  // GetAuthToken retrieves a valid access token from the host's auth registry.
+  // Plugins use this for authenticated HTTP requests and token refresh on 401.
+  rpc GetAuthToken(GetAuthTokenRequest) returns (GetAuthTokenResponse);
 }
 
 // AuthHandlerService is the auth handler plugin service.
 service AuthHandlerService {
   // GetAuthHandlers returns metadata for all auth handlers exposed by this plugin.
   rpc GetAuthHandlers(GetAuthHandlersRequest) returns (GetAuthHandlersResponse);
+
+  // ConfigureAuthHandler sends host-side configuration to the plugin once after load.
+  // Carries quiet/noColor/binaryName, extensible settings, HostService broker ID,
+  // and the plugin protocol version for feature detection.
+  rpc ConfigureAuthHandler(ConfigureAuthHandlerRequest) returns (ConfigureAuthHandlerResponse);
 
   // Login initiates authentication. Returns a stream: zero or more DeviceCodePrompt
   // messages followed by exactly one LoginResult message.
@@ -75,6 +88,10 @@ service AuthHandlerService {
 
   // PurgeExpiredTokens removes expired tokens for the named handler.
   rpc PurgeExpiredTokens(PurgeExpiredTokensRequest) returns (PurgeExpiredTokensResponse);
+
+  // StopAuthHandler requests graceful shutdown of a running auth handler operation.
+  // handler_name may be empty to stop all handlers.
+  rpc StopAuthHandler(StopAuthHandlerRequest) returns (StopAuthHandlerResponse);
 }
 
 message GetProvidersRequest {}
@@ -194,10 +211,17 @@ message ConfigureProviderRequest {
   string binary_name = 4;
   uint32 host_service_id = 5; // GRPCBroker service ID for HostService callbacks
   map<string, bytes> settings = 6; // Extensible JSON-encoded key-value settings
+  // protocol_version is the host's plugin protocol version. Plugins can use
+  // this to detect feature availability and fail clearly on incompatible hosts.
+  int32 protocol_version = 7;
 }
 
 message ConfigureProviderResponse {
   string error = 1; // Empty if no error
+  repeated Diagnostic diagnostics = 2;
+  // protocol_version is the plugin's protocol version. The host can use this
+  // to detect feature availability. If unset (0), the plugin predates version negotiation.
+  int32 protocol_version = 3;
 }
 
 // SolutionMeta carries solution-level metadata to plugin providers.
@@ -228,9 +252,31 @@ message ExecuteProviderStreamChunk {
   }
 }
 
+// Diagnostic represents a single warning or error from a provider execution,
+// following the Terraform diagnostic pattern. Providers can return multiple
+// diagnostics alongside a result.
+message Diagnostic {
+  enum Severity {
+    INVALID = 0;
+    ERROR = 1;
+    WARNING = 2;
+  }
+  Severity severity = 1;
+  string summary = 2;     // Short one-line description (always present)
+  string detail = 3;      // Optional multi-line explanation
+  string attribute = 4;   // Optional dotted attribute path (e.g. "config.url")
+}
+
 message ExecuteProviderResponse {
   bytes output = 1; // JSON-encoded output (ProviderOutput)
-  string error = 2;  // Empty if no error
+  string error = 2;  // Empty if no error (DEPRECATED: prefer diagnostics)
+  // exit_code carries the provider's exit code so that ExitError semantics
+  // survive the RPC boundary. 0 = success, non-zero mirrors exitcode constants.
+  // Only meaningful when error is non-empty.
+  int32 exit_code = 3;
+  // diagnostics carries structured warnings and errors from the provider.
+  // When present, prefer these over the flat error string.
+  repeated Diagnostic diagnostics = 4;
 }
 
 message DescribeWhatIfRequest {
@@ -241,6 +287,7 @@ message DescribeWhatIfRequest {
 message DescribeWhatIfResponse {
   string description = 1; // Human-readable WhatIf description (empty if not implemented)
   string error = 2;       // Empty if no error
+  repeated Diagnostic diagnostics = 3;
 }
 
 message ExtractDependenciesRequest {
@@ -251,6 +298,18 @@ message ExtractDependenciesRequest {
 message ExtractDependenciesResponse {
   repeated string dependencies = 1;
   string error = 2;
+  repeated Diagnostic diagnostics = 3;
+}
+
+// StopProviderRequest asks the plugin to gracefully stop any in-flight
+// execution for the named provider.
+message StopProviderRequest {
+  string provider_name = 1; // Empty means stop all providers
+}
+
+// StopProviderResponse acknowledges the stop request.
+message StopProviderResponse {
+  string error = 1; // Empty if no error
 }
 
 // ---- Auth Handler Messages ----
@@ -376,7 +435,33 @@ message PurgeExpiredTokensRequest {
 message PurgeExpiredTokensResponse {
   int32 purged_count = 1;
 }
+// ConfigureAuthHandlerRequest carries host-side configuration to auth handler plugins.
+message ConfigureAuthHandlerRequest {
+  string handler_name = 1;         // Auth handler to configure (empty = all)
+  bool   quiet = 2;                // Suppress non-essential output
+  bool   no_color = 3;             // Disable colored output
+  string binary_name = 4;          // CLI binary name (e.g. "scafctl" or embedder name)
+  map<string, bytes> settings = 5; // Extensible JSON key-value settings
+  uint32 host_service_id = 6;      // GRPCBroker service ID for HostService callbacks
+  int32  protocol_version = 7;     // Host plugin protocol version for feature detection
+}
 
+// ConfigureAuthHandlerResponse acknowledges configuration.
+message ConfigureAuthHandlerResponse {
+  string error = 1;                // Non-empty on failure
+  int32  protocol_version = 2;     // Plugin's own protocol version
+  repeated Diagnostic diagnostics = 3; // Structured diagnostics
+}
+
+// StopAuthHandlerRequest asks the plugin to gracefully stop operations.
+message StopAuthHandlerRequest {
+  string handler_name = 1;         // Handler to stop (empty = all)
+}
+
+// StopAuthHandlerResponse acknowledges shutdown.
+message StopAuthHandlerResponse {
+  string error = 1;                // Non-empty on failure
+}
 // ---- Host Service Messages (plugin → host callbacks) ----
 
 message GetSecretRequest {
@@ -430,4 +515,22 @@ message ListAuthHandlersRequest {}
 message ListAuthHandlersResponse {
   repeated string handler_names = 1;
   string default_handler = 2;
+}
+
+// GetAuthTokenRequest asks the host for a valid access token. Plugins use
+// this for authenticated HTTP requests and transparent token refresh.
+message GetAuthTokenRequest {
+  string handler_name = 1;    // Auth handler name (empty for default)
+  string scope = 2;           // OAuth scope
+  int64 min_valid_for_seconds = 3; // Minimum remaining validity (0 = any valid token)
+  bool force_refresh = 4;     // Force a token refresh
+}
+
+// GetAuthTokenResponse carries the token back to the plugin.
+message GetAuthTokenResponse {
+  string access_token = 1;
+  string token_type = 2;      // e.g. "Bearer"
+  int64 expires_at_unix = 3;  // When the token expires (unix seconds)
+  string scope = 4;
+  string error = 5;
 }

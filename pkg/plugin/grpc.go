@@ -9,11 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"sync"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/hashicorp/go-plugin"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/plugin/proto"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -131,9 +133,12 @@ func (s *GRPCServer) ExecuteProvider(ctx context.Context, req *proto.ExecuteProv
 	output, err := s.Impl.ExecuteProvider(ctx, req.ProviderName, input)
 	if err != nil {
 		//nolint:nilerr // Error is communicated via response, not gRPC error
-		return &proto.ExecuteProviderResponse{
-			Error: err.Error(),
-		}, nil
+		resp := &proto.ExecuteProviderResponse{
+			Error:    err.Error(),
+			ExitCode: safeIntToInt32(exitcode.GetCode(err)),
+		}
+		resp.Diagnostics = errorToDiagnostics(err)
+		return resp, nil
 	}
 
 	// Encode output
@@ -171,7 +176,9 @@ func (s *GRPCServer) ConfigureProvider(ctx context.Context, req *proto.Configure
 		}, nil
 	}
 
-	return &proto.ConfigureProviderResponse{}, nil
+	return &proto.ConfigureProviderResponse{
+		ProtocolVersion: PluginProtocolVersion,
+	}, nil
 }
 
 // unmarshalIterationContext deserializes a proto.IterationContext and injects
@@ -208,6 +215,69 @@ func unmarshalSolutionMeta(ctx context.Context, meta *proto.SolutionMeta) contex
 		Category:    meta.Category,
 		Tags:        meta.Tags,
 	})
+}
+
+// safeIntToInt32 converts an int to int32 with clamping to prevent overflow.
+func safeIntToInt32(v int) int32 {
+	if v > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	if v < math.MinInt32 {
+		return math.MinInt32
+	}
+	return int32(v) //nolint:gosec // bounds checked above
+}
+
+// errorToDiagnostics converts an error into a slice of proto Diagnostics.
+// If the error is an ExitError, the summary includes the exit code description.
+func errorToDiagnostics(err error) []*proto.Diagnostic {
+	if err == nil {
+		return nil
+	}
+	d := &proto.Diagnostic{
+		Severity: proto.Diagnostic_ERROR,
+		Summary:  err.Error(),
+	}
+	var exitErr *exitcode.ExitError
+	if errors.As(err, &exitErr) {
+		d.Detail = fmt.Sprintf("exit code %d: %s", exitErr.Code, exitcode.Description(exitErr.Code))
+	}
+	return []*proto.Diagnostic{d}
+}
+
+// diagnosticsToError converts proto Diagnostics into a Go error. Returns nil
+// when there are no ERROR-level diagnostics. Warnings are logged but do not
+// produce an error.
+func diagnosticsToError(ctx context.Context, diags []*proto.Diagnostic) error {
+	if len(diags) == 0 {
+		return nil
+	}
+	var errs []error
+	lgr := logger.FromContext(ctx)
+	for _, d := range diags {
+		switch d.Severity {
+		case proto.Diagnostic_ERROR:
+			summary := d.Summary
+			if summary == "" {
+				summary = "unknown error (empty diagnostic summary)"
+			}
+			switch {
+			case d.Attribute != "" && d.Detail != "":
+				errs = append(errs, fmt.Errorf("%s: %s (attribute: %s)", summary, d.Detail, d.Attribute))
+			case d.Attribute != "":
+				errs = append(errs, fmt.Errorf("%s (attribute: %s)", summary, d.Attribute))
+			case d.Detail != "":
+				errs = append(errs, fmt.Errorf("%s: %s", summary, d.Detail))
+			default:
+				errs = append(errs, errors.New(summary))
+			}
+		case proto.Diagnostic_WARNING:
+			lgr.V(1).Info("plugin warning", "summary", d.Summary, "detail", d.Detail, "attribute", d.Attribute)
+		case proto.Diagnostic_INVALID:
+			lgr.V(1).Info("plugin diagnostic with invalid severity", "summary", d.Summary, "detail", d.Detail, "attribute", d.Attribute)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // applyRequestContext decodes context data, iteration context, parameters,
@@ -357,7 +427,9 @@ func (s *GRPCServer) ExecuteProviderStream(req *proto.ExecuteProviderRequest, st
 		return stream.Send(&proto.ExecuteProviderStreamChunk{
 			Chunk: &proto.ExecuteProviderStreamChunk_Result{
 				Result: &proto.ExecuteProviderResponse{
-					Error: err.Error(),
+					Error:       err.Error(),
+					ExitCode:    safeIntToInt32(exitcode.GetCode(err)),
+					Diagnostics: errorToDiagnostics(err),
 				},
 			},
 		})
@@ -416,6 +488,15 @@ func (s *GRPCServer) ExtractDependencies(ctx context.Context, req *proto.Extract
 	}, nil
 }
 
+// StopProvider implements the StopProvider RPC
+func (s *GRPCServer) StopProvider(ctx context.Context, req *proto.StopProviderRequest) (*proto.StopProviderResponse, error) {
+	if err := s.Impl.StopProvider(ctx, req.ProviderName); err != nil {
+		//nolint:nilerr // Error is communicated via response, not gRPC error
+		return &proto.StopProviderResponse{Error: err.Error()}, nil
+	}
+	return &proto.StopProviderResponse{}, nil
+}
+
 // GRPCClient implements the gRPC client for the plugin
 type GRPCClient struct {
 	client        proto.PluginServiceClient
@@ -469,7 +550,16 @@ func (c *GRPCClient) ExecuteProvider(ctx context.Context, providerName string, i
 	}
 
 	if resp.Error != "" {
-		return nil, fmt.Errorf("provider execution failed: %s", resp.Error)
+		err := fmt.Errorf("provider execution failed: %s", resp.Error)
+		// Prefer diagnostics for richer context, fall back to plain error
+		if diagErr := diagnosticsToError(ctx, resp.Diagnostics); diagErr != nil {
+			err = diagErr
+		}
+		// Reconstruct ExitError when the plugin transmitted a non-zero exit code
+		if resp.ExitCode != 0 {
+			return nil, exitcode.WithCode(err, int(resp.ExitCode))
+		}
+		return nil, err
 	}
 
 	// Decode output
@@ -489,12 +579,13 @@ func (c *GRPCClient) ConfigureProvider(ctx context.Context, providerName string,
 	}
 
 	resp, err := c.client.ConfigureProvider(ctx, &proto.ConfigureProviderRequest{
-		ProviderName:  providerName,
-		HostServiceId: c.hostServiceID,
-		Quiet:         cfg.Quiet,
-		NoColor:       cfg.NoColor,
-		BinaryName:    cfg.BinaryName,
-		Settings:      protoSettings,
+		ProviderName:    providerName,
+		HostServiceId:   c.hostServiceID,
+		Quiet:           cfg.Quiet,
+		NoColor:         cfg.NoColor,
+		BinaryName:      cfg.BinaryName,
+		Settings:        protoSettings,
+		ProtocolVersion: PluginProtocolVersion,
 	})
 	if err != nil {
 		// Older plugins may not implement ConfigureProvider.
@@ -554,7 +645,16 @@ func (c *GRPCClient) ExecuteProviderStream(ctx context.Context, providerName str
 		case *proto.ExecuteProviderStreamChunk_Result:
 			if v.Result.Error != "" {
 				cb(StreamChunk{Error: v.Result.Error})
-				return fmt.Errorf("provider execution failed: %s", v.Result.Error)
+				err := fmt.Errorf("provider execution failed: %s", v.Result.Error)
+				// Prefer diagnostics for richer context, fall back to plain error
+				if diagErr := diagnosticsToError(ctx, v.Result.Diagnostics); diagErr != nil {
+					err = diagErr
+				}
+				// Reconstruct ExitError when the plugin transmitted a non-zero exit code
+				if v.Result.ExitCode != 0 {
+					return exitcode.WithCode(err, int(v.Result.ExitCode))
+				}
+				return err
 			}
 			var output provider.Output
 			if err := json.Unmarshal(v.Result.Output, &output); err != nil {
@@ -721,6 +821,24 @@ func (c *GRPCClient) ExtractDependencies(ctx context.Context, providerName strin
 	}
 
 	return resp.Dependencies, nil
+}
+
+// StopProvider implements ProviderPlugin.StopProvider
+func (c *GRPCClient) StopProvider(ctx context.Context, providerName string) error {
+	resp, err := c.client.StopProvider(ctx, &proto.StopProviderRequest{
+		ProviderName: providerName,
+	})
+	if err != nil {
+		// Older plugins may not implement StopProvider.
+		if s, ok := status.FromError(err); ok && s.Code() == codes.Unimplemented {
+			return nil
+		}
+		return err
+	}
+	if resp.Error != "" {
+		return fmt.Errorf("stop provider failed: %s", resp.Error)
+	}
+	return nil
 }
 
 // protoSchemaToJSON converts a proto.Schema to a jsonschema.Schema (structured
