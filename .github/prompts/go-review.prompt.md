@@ -8,5 +8,6 @@ Review the current Go code changes for:
 - Concurrency issues (goroutine leaks, race conditions, deadlocks)
 - Code quality (function length, nesting depth, idiomatic patterns)
 - scafctl conventions (Writer usage, kvx output, struct tags, business logic placement)
+- **Test coverage**: Run `go test -coverprofile` on changed packages and flag any changed file with patch coverage below 60%. List uncovered lines and recommend specific tests to add.
 
 Run `go vet ./...` and `task lint` first, then review the code.

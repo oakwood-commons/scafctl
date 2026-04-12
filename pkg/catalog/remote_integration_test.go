@@ -217,7 +217,14 @@ func (r *fakeOCIRegistry) handleManifests(w http.ResponseWriter, req *http.Reque
 
 	case http.MethodDelete:
 		r.mu.Lock()
-		key := repo + ":" + ref
+		// Resolve tag to digest if needed
+		resolvedRef := ref
+		if repoTags, ok := r.tags[repo]; ok {
+			if d, found := repoTags[ref]; found {
+				resolvedRef = d
+			}
+		}
+		key := repo + ":" + resolvedRef
 		if _, ok := r.manifests[key]; !ok {
 			r.mu.Unlock()
 			w.WriteHeader(http.StatusNotFound)
@@ -227,7 +234,7 @@ func (r *fakeOCIRegistry) handleManifests(w http.ResponseWriter, req *http.Reque
 		// Remove tag references pointing to this digest
 		if repoTags, ok := r.tags[repo]; ok {
 			for t, d := range repoTags {
-				if d == ref {
+				if d == resolvedRef {
 					delete(repoTags, t)
 				}
 			}
@@ -826,4 +833,184 @@ func BenchmarkRemoteCatalog_StoreAndFetch(b *testing.B) {
 		_, _ = cat.Store(ctx, ref, content, nil, nil, true)
 		_, _, _ = cat.Fetch(ctx, ref)
 	}
+}
+
+func TestInferKindFromRemote_Found(t *testing.T) {
+	t.Parallel()
+	cat, ts := newTestRemoteCatalog(t)
+	defer ts.Close()
+
+	ctx := t.Context()
+
+	// Store a solution artifact
+	ref := Reference{
+		Kind:    ArtifactKindSolution,
+		Name:    "my-sol",
+		Version: semver.MustParse("1.0.0"),
+	}
+	_, err := cat.Store(ctx, ref, []byte("sol data"), nil, nil, false)
+	require.NoError(t, err)
+
+	// Infer kind from remote
+	kind, err := InferKindFromRemote(ctx, cat, "my-sol", "1.0.0")
+	require.NoError(t, err)
+	assert.Equal(t, ArtifactKindSolution, kind)
+}
+
+func TestInferKindFromRemote_NotFound(t *testing.T) {
+	t.Parallel()
+	cat, ts := newTestRemoteCatalog(t)
+	defer ts.Close()
+
+	_, err := InferKindFromRemote(t.Context(), cat, "ghost", "1.0.0")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found in remote catalog")
+}
+
+func TestInferKindFromRemote_Provider(t *testing.T) {
+	t.Parallel()
+	cat, ts := newTestRemoteCatalog(t)
+	defer ts.Close()
+
+	ctx := t.Context()
+
+	// Store a provider artifact
+	ref := Reference{
+		Kind:    ArtifactKindProvider,
+		Name:    "my-provider",
+		Version: semver.MustParse("2.0.0"),
+	}
+	_, err := cat.Store(ctx, ref, []byte("provider data"), nil, nil, false)
+	require.NoError(t, err)
+
+	kind, err := InferKindFromRemote(ctx, cat, "my-provider", "2.0.0")
+	require.NoError(t, err)
+	assert.Equal(t, ArtifactKindProvider, kind)
+}
+
+func TestRemoteCatalog_Delete_TagFallback(t *testing.T) {
+	t.Parallel()
+
+	// Create a fake registry that rejects DELETE-by-digest with a "dangling tag" error
+	// but accepts DELETE-by-tag.
+	reg := newFakeOCIRegistry()
+	origHandler := reg.handler()
+
+	wrapper := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Intercept DELETE on manifests with a digest reference
+		if r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/manifests/sha256:") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"errors":[{"code":"MANIFEST_INVALID","message":"google manifest dangling tag: Manifest is still referenced by one or more tags"}]}`)) //nolint:errcheck
+			return
+		}
+		origHandler.ServeHTTP(w, r)
+	})
+
+	ts := httptest.NewTLSServer(wrapper)
+	defer ts.Close()
+
+	host := strings.TrimPrefix(ts.URL, "https://")
+	cat, err := NewRemoteCatalog(RemoteCatalogConfig{
+		Name:       "gcp-test",
+		Registry:   host,
+		Repository: "myorg/artifacts",
+		Insecure:   true,
+		Logger:     logr.Discard(),
+	})
+	require.NoError(t, err)
+	cat.client.Client = ts.Client()
+
+	ctx := t.Context()
+	ref := Reference{
+		Kind:    ArtifactKindSolution,
+		Name:    "tagged-sol",
+		Version: semver.MustParse("1.0.0"),
+	}
+
+	// Store an artifact
+	_, err = cat.Store(ctx, ref, []byte("tagged data"), nil, nil, false)
+	require.NoError(t, err)
+
+	// Delete should succeed via tag fallback
+	err = cat.Delete(ctx, ref)
+	require.NoError(t, err)
+}
+
+func TestRemoteCatalog_Delete_DigestRef(t *testing.T) {
+	t.Parallel()
+	cat, ts := newTestRemoteCatalog(t)
+	defer ts.Close()
+
+	ctx := t.Context()
+	ref := Reference{
+		Kind:    ArtifactKindSolution,
+		Name:    "digest-sol",
+		Version: semver.MustParse("1.0.0"),
+	}
+
+	// Store an artifact
+	info, err := cat.Store(ctx, ref, []byte("digest data"), nil, nil, false)
+	require.NoError(t, err)
+
+	// Delete using a digest-based reference (Version == nil)
+	digestRef := Reference{
+		Kind:   ArtifactKindSolution,
+		Name:   "digest-sol",
+		Digest: info.Digest,
+	}
+	err = cat.Delete(ctx, digestRef)
+	require.NoError(t, err)
+}
+
+func TestRemoteCatalog_Delete_DanglingTag_DigestRef_NoFallback(t *testing.T) {
+	t.Parallel()
+
+	// Create a fake registry that rejects digest DELETE with "dangling tag".
+	// Since ref.Version is nil, the fallback should NOT fire and we get the original error.
+	reg := newFakeOCIRegistry()
+	origHandler := reg.handler()
+
+	wrapper := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/manifests/sha256:") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"errors":[{"code":"MANIFEST_INVALID","message":"dangling tag still referenced"}]}`)) //nolint:errcheck
+			return
+		}
+		origHandler.ServeHTTP(w, r)
+	})
+
+	ts := httptest.NewTLSServer(wrapper)
+	defer ts.Close()
+
+	host := strings.TrimPrefix(ts.URL, "https://")
+	cat, err := NewRemoteCatalog(RemoteCatalogConfig{
+		Name:       "digest-test",
+		Registry:   host,
+		Repository: "myorg/artifacts",
+		Insecure:   true,
+		Logger:     logr.Discard(),
+	})
+	require.NoError(t, err)
+	cat.client.Client = ts.Client()
+
+	ctx := t.Context()
+
+	// Store with version
+	storeRef := Reference{
+		Kind:    ArtifactKindSolution,
+		Name:    "digest-sol",
+		Version: semver.MustParse("1.0.0"),
+	}
+	info, err := cat.Store(ctx, storeRef, []byte("data"), nil, nil, false)
+	require.NoError(t, err)
+
+	// Delete with digest-only ref (Version == nil) -- tag fallback should NOT fire
+	digestRef := Reference{
+		Kind:   ArtifactKindSolution,
+		Name:   "digest-sol",
+		Digest: info.Digest,
+	}
+	err = cat.Delete(ctx, digestRef)
+	require.Error(t, err, "digest-based delete should not trigger tag fallback")
+	assert.Contains(t, err.Error(), "failed to delete artifact")
 }
