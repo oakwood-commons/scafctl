@@ -40,6 +40,8 @@ type mockPluginServiceClient struct {
 	describeWhatIfErr         error
 	extractDependenciesResp   *proto.ExtractDependenciesResponse
 	extractDependenciesErr    error
+	stopProviderResp          *proto.StopProviderResponse
+	stopProviderErr           error
 	executeProviderStreamFunc func(ctx context.Context, req *proto.ExecuteProviderRequest) (proto.PluginService_ExecuteProviderStreamClient, error)
 }
 
@@ -73,6 +75,10 @@ func (m *mockPluginServiceClient) ExecuteProviderStream(ctx context.Context, req
 		return m.executeProviderStreamFunc(ctx, req)
 	}
 	return nil, status.Error(codes.Unimplemented, "streaming not supported")
+}
+
+func (m *mockPluginServiceClient) StopProvider(_ context.Context, _ *proto.StopProviderRequest, _ ...grpc.CallOption) (*proto.StopProviderResponse, error) {
+	return m.stopProviderResp, m.stopProviderErr
 }
 
 // --- Mock gRPC stream client ---
@@ -142,6 +148,8 @@ type mockHostServiceClient struct {
 	getAuthIdentityErr   error
 	listAuthHandlersResp *proto.ListAuthHandlersResponse
 	listAuthHandlersErr  error
+	getAuthTokenResp     *proto.GetAuthTokenResponse
+	getAuthTokenErr      error
 }
 
 func (m *mockHostServiceClient) GetSecret(_ context.Context, _ *proto.GetSecretRequest, _ ...grpc.CallOption) (*proto.GetSecretResponse, error) {
@@ -166,6 +174,10 @@ func (m *mockHostServiceClient) GetAuthIdentity(_ context.Context, _ *proto.GetA
 
 func (m *mockHostServiceClient) ListAuthHandlers(_ context.Context, _ *proto.ListAuthHandlersRequest, _ ...grpc.CallOption) (*proto.ListAuthHandlersResponse, error) {
 	return m.listAuthHandlersResp, m.listAuthHandlersErr
+}
+
+func (m *mockHostServiceClient) GetAuthToken(_ context.Context, _ *proto.GetAuthTokenRequest, _ ...grpc.CallOption) (*proto.GetAuthTokenResponse, error) {
+	return m.getAuthTokenResp, m.getAuthTokenErr
 }
 
 // --- streamingMockPlugin wraps MockProviderPlugin with real streaming ---
@@ -1618,4 +1630,298 @@ func BenchmarkGRPCClient_ExecuteProvider(b *testing.B) {
 	for b.Loop() {
 		_, _ = client.ExecuteProvider(ctx, "test", map[string]any{"k": "v"})
 	}
+}
+
+// --- StopProvider tests ---
+
+func TestGRPCClient_StopProvider_Success(t *testing.T) {
+	mock := &mockPluginServiceClient{
+		stopProviderResp: &proto.StopProviderResponse{},
+	}
+	client := &GRPCClient{client: mock}
+
+	err := client.StopProvider(context.Background(), "test-provider")
+	assert.NoError(t, err)
+}
+
+func TestGRPCClient_StopProvider_Error(t *testing.T) {
+	mock := &mockPluginServiceClient{
+		stopProviderResp: &proto.StopProviderResponse{Error: "shutdown failed"},
+	}
+	client := &GRPCClient{client: mock}
+
+	err := client.StopProvider(context.Background(), "test-provider")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "shutdown failed")
+}
+
+func TestGRPCClient_StopProvider_Unimplemented(t *testing.T) {
+	mock := &mockPluginServiceClient{
+		stopProviderErr: status.Error(codes.Unimplemented, "not implemented"),
+	}
+	client := &GRPCClient{client: mock}
+
+	err := client.StopProvider(context.Background(), "test-provider")
+	assert.NoError(t, err, "unimplemented should be treated as no-op")
+}
+
+func TestGRPCClient_StopProvider_RPCError(t *testing.T) {
+	mock := &mockPluginServiceClient{
+		stopProviderErr: status.Error(codes.Unavailable, "connection lost"),
+	}
+	client := &GRPCClient{client: mock}
+
+	err := client.StopProvider(context.Background(), "")
+	assert.Error(t, err)
+}
+
+func TestGRPCServer_StopProvider(t *testing.T) {
+	mock := &MockProviderPlugin{}
+	server := &GRPCServer{Impl: mock}
+
+	resp, err := server.StopProvider(context.Background(), &proto.StopProviderRequest{
+		ProviderName: "test-provider",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, resp.Error)
+}
+
+// --- GetAuthToken tests ---
+
+func TestHostServiceServer_GetAuthToken_Success(t *testing.T) {
+	deps := HostServiceDeps{
+		AllowedAuthHandlers: []string{"github"},
+		AuthTokenFunc: func(_ context.Context, handler, scope string, minValidFor int64, forceRefresh bool) (*proto.GetAuthTokenResponse, error) {
+			return &proto.GetAuthTokenResponse{
+				AccessToken:   "tok-123",
+				TokenType:     "Bearer",
+				ExpiresAtUnix: 1700000000,
+				Scope:         scope,
+			}, nil
+		},
+	}
+	server := &HostServiceServer{Deps: deps}
+
+	resp, err := server.GetAuthToken(context.Background(), &proto.GetAuthTokenRequest{
+		HandlerName:        "github",
+		Scope:              "repo",
+		MinValidForSeconds: 60,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "tok-123", resp.AccessToken)
+	assert.Equal(t, "Bearer", resp.TokenType)
+	assert.Empty(t, resp.Error)
+}
+
+func TestHostServiceServer_GetAuthToken_NotAvailable(t *testing.T) {
+	server := &HostServiceServer{Deps: HostServiceDeps{}}
+
+	resp, err := server.GetAuthToken(context.Background(), &proto.GetAuthTokenRequest{
+		HandlerName: "github",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, resp.Error, "not available")
+}
+
+func TestHostServiceServer_GetAuthToken_Denied(t *testing.T) {
+	deps := HostServiceDeps{
+		AllowedAuthHandlers: []string{"azure"},
+		AuthTokenFunc: func(_ context.Context, _, _ string, _ int64, _ bool) (*proto.GetAuthTokenResponse, error) {
+			t.Fatal("should not be called")
+			return nil, nil
+		},
+	}
+	server := &HostServiceServer{Deps: deps}
+
+	resp, err := server.GetAuthToken(context.Background(), &proto.GetAuthTokenRequest{
+		HandlerName: "github",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, resp.Error, "access denied")
+}
+
+func TestHostServiceServer_GetAuthToken_FuncError(t *testing.T) {
+	deps := HostServiceDeps{
+		AllowedAuthHandlers: []string{"github"},
+		AuthTokenFunc: func(_ context.Context, _, _ string, _ int64, _ bool) (*proto.GetAuthTokenResponse, error) {
+			return nil, errors.New("token refresh failed")
+		},
+	}
+	server := &HostServiceServer{Deps: deps}
+
+	resp, err := server.GetAuthToken(context.Background(), &proto.GetAuthTokenRequest{
+		HandlerName: "github",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, resp.Error, "token refresh failed")
+}
+
+func TestHostServiceServer_GetAuthToken_EmptyHandlerDeniedWithAllowlist(t *testing.T) {
+	deps := HostServiceDeps{
+		AllowedAuthHandlers: []string{"github"},
+		AuthTokenFunc: func(_ context.Context, _, _ string, _ int64, _ bool) (*proto.GetAuthTokenResponse, error) {
+			t.Fatal("should not be called for empty handler when allowlist is configured")
+			return nil, nil
+		},
+	}
+	server := &HostServiceServer{Deps: deps}
+
+	resp, err := server.GetAuthToken(context.Background(), &proto.GetAuthTokenRequest{
+		HandlerName: "",
+		Scope:       "repo",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, resp.Error, "access denied")
+}
+
+func TestHostServiceServer_GetAuthToken_EmptyHandlerAllowedWithoutAllowlist(t *testing.T) {
+	deps := HostServiceDeps{
+		AuthTokenFunc: func(_ context.Context, handler, scope string, _ int64, _ bool) (*proto.GetAuthTokenResponse, error) {
+			return &proto.GetAuthTokenResponse{
+				AccessToken: "default-tok",
+				TokenType:   "Bearer",
+				Scope:       scope,
+			}, nil
+		},
+	}
+	server := &HostServiceServer{Deps: deps}
+
+	resp, err := server.GetAuthToken(context.Background(), &proto.GetAuthTokenRequest{
+		HandlerName: "",
+		Scope:       "repo",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, resp.Error)
+	assert.Equal(t, "default-tok", resp.AccessToken)
+}
+
+func TestHostServiceClient_GetAuthToken_Success(t *testing.T) {
+	mock := &mockHostServiceClient{
+		getAuthTokenResp: &proto.GetAuthTokenResponse{
+			AccessToken: "tok-456",
+			TokenType:   "Bearer",
+		},
+	}
+	client := &HostServiceClient{client: mock}
+
+	resp, err := client.GetAuthToken(context.Background(), "github", "repo", 60, false)
+	require.NoError(t, err)
+	assert.Equal(t, "tok-456", resp.AccessToken)
+}
+
+func TestHostServiceClient_GetAuthToken_RPCError(t *testing.T) {
+	mock := &mockHostServiceClient{
+		getAuthTokenErr: status.Error(codes.Unavailable, "connection lost"),
+	}
+	client := &HostServiceClient{client: mock}
+
+	_, err := client.GetAuthToken(context.Background(), "github", "repo", 0, false)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "host GetAuthToken")
+}
+
+func TestHostServiceClient_GetAuthToken_ResponseError(t *testing.T) {
+	mock := &mockHostServiceClient{
+		getAuthTokenResp: &proto.GetAuthTokenResponse{
+			Error: "access denied",
+		},
+	}
+	client := &HostServiceClient{client: mock}
+
+	_, err := client.GetAuthToken(context.Background(), "github", "repo", 0, false)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "access denied")
+}
+
+// --- KillAll tests ---
+
+func TestKillAll_NilSlice(t *testing.T) {
+	// Should not panic on nil
+	KillAll(nil)
+}
+
+func TestKillAll_EmptySlice(t *testing.T) {
+	// Should not panic on empty
+	KillAll([]*Client{})
+}
+
+// --- Protocol version tests ---
+
+func TestGRPCClient_ConfigureProvider_SendsProtocolVersion(t *testing.T) {
+	mock := &mockPluginServiceClient{
+		configureProviderResp: &proto.ConfigureProviderResponse{},
+	}
+	client := &GRPCClient{client: mock}
+
+	err := client.ConfigureProvider(context.Background(), "test", ProviderConfig{
+		BinaryName: "scafctl",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, mock.lastConfigureReq)
+	assert.Equal(t, PluginProtocolVersion, mock.lastConfigureReq.ProtocolVersion)
+}
+
+// --- WrapperOption tests ---
+
+func TestNewProviderWrapper_WithContext(t *testing.T) {
+	mock := &MockProviderPlugin{}
+	client := &Client{plugin: mock, name: "test-plugin"}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wrapper, err := NewProviderWrapper(client, "test-provider", WithContext(ctx))
+	require.NoError(t, err)
+	assert.Equal(t, "test-provider", wrapper.Descriptor().Name)
+}
+
+func TestNewProviderWrapper_WithContext_Nil(t *testing.T) {
+	mock := &MockProviderPlugin{}
+	client := &Client{plugin: mock, name: "test-plugin"}
+
+	// Verify the nil guard: a nil context should not panic; falls back to context.Background().
+	var nilCtx context.Context //nolint:staticcheck // intentionally testing nil context guard
+	wrapper, err := NewProviderWrapper(client, "test-provider", WithContext(nilCtx))
+	require.NoError(t, err)
+	assert.Equal(t, "test-provider", wrapper.Descriptor().Name)
+}
+
+// --- Descriptor caching tests ---
+
+func TestClient_DescriptorCache_HitOnSecondCall(t *testing.T) {
+	callCount := 0
+	mock := &MockProviderPlugin{
+		descriptors: map[string]*provider.Descriptor{
+			"test-provider": {
+				Name: "test-provider",
+			},
+		},
+	}
+	// Wrap the mock to count calls
+	wrapper := &descriptorCountingPlugin{MockProviderPlugin: mock, count: &callCount}
+	client := &Client{plugin: wrapper, name: "test-plugin"}
+
+	ctx := context.Background()
+
+	desc1, err := client.GetProviderDescriptor(ctx, "test-provider")
+	require.NoError(t, err)
+	assert.Equal(t, "test-provider", desc1.Name)
+	assert.Equal(t, 1, callCount)
+
+	// Second call should hit cache
+	desc2, err := client.GetProviderDescriptor(ctx, "test-provider")
+	require.NoError(t, err)
+	assert.Equal(t, desc1, desc2)
+	assert.Equal(t, 1, callCount, "second call should hit cache, not invoke RPC")
+}
+
+// descriptorCountingPlugin wraps MockProviderPlugin and counts GetProviderDescriptor calls.
+type descriptorCountingPlugin struct {
+	*MockProviderPlugin
+	count *int
+}
+
+func (d *descriptorCountingPlugin) GetProviderDescriptor(ctx context.Context, name string) (*provider.Descriptor, error) {
+	*d.count++
+	return d.MockProviderPlugin.GetProviderDescriptor(ctx, name)
 }

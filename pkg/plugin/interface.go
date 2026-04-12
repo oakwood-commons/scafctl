@@ -75,6 +75,11 @@ type ProviderPlugin interface {
 	// inputs. Plugins that do not implement custom extraction should return
 	// nil. The host falls back to generic extraction when the result is nil.
 	ExtractDependencies(ctx context.Context, providerName string, inputs map[string]any) ([]string, error)
+
+	// StopProvider requests graceful shutdown of a running provider execution.
+	// providerName may be empty to stop all providers. Plugins that do not
+	// support graceful shutdown may return nil immediately.
+	StopProvider(ctx context.Context, providerName string) error
 }
 
 // ErrStreamingNotSupported is returned by ExecuteProviderStream when the plugin
@@ -142,6 +147,11 @@ type AuthHandlerPlugin interface {
 	// GetAuthHandlers returns metadata for all auth handlers exposed by this plugin.
 	GetAuthHandlers(ctx context.Context) ([]AuthHandlerInfo, error)
 
+	// ConfigureAuthHandler sends host-side configuration to the plugin once
+	// after load. Implementations store the config internally for subsequent
+	// calls. Plugins that do not need configuration may return nil.
+	ConfigureAuthHandler(ctx context.Context, handlerName string, cfg ProviderConfig) error
+
 	// Login initiates authentication for the named handler.
 	// The callback, if non-nil, is invoked when the plugin sends a device-code prompt.
 	Login(ctx context.Context, handlerName string, req LoginRequest, deviceCodeCb func(DeviceCodePrompt)) (*LoginResponse, error)
@@ -163,6 +173,11 @@ type AuthHandlerPlugin interface {
 	// Returns the number of tokens removed and an error if the handler
 	// does not support token purging.
 	PurgeExpiredTokens(ctx context.Context, handlerName string) (int, error)
+
+	// StopAuthHandler requests graceful shutdown of a running auth handler
+	// operation. handlerName may be empty to stop all handlers. Plugins that
+	// do not support graceful shutdown may return nil immediately.
+	StopAuthHandler(ctx context.Context, handlerName string) error
 }
 
 // HandshakeConfig is used to verify provider plugin compatibility.
@@ -171,6 +186,10 @@ var HandshakeConfig = &HandshakeConfigData{
 	MagicCookieKey:   "SCAFCTL_PLUGIN",
 	MagicCookieValue: "scafctl_provider_plugin",
 }
+
+// PluginProtocolVersion is the current plugin protocol version exchanged
+// during ConfigureProvider. Plugins compare this to detect feature availability.
+const PluginProtocolVersion int32 = 2
 
 // AuthHandlerHandshakeConfig is used to verify auth handler plugin compatibility.
 var AuthHandlerHandshakeConfig = &HandshakeConfigData{
