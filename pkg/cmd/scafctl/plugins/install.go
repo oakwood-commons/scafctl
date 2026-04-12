@@ -66,6 +66,7 @@ func CommandInstall(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 			  # Use a custom cache directory
 			  scafctl plugins install -f solution.yaml --cache-dir /tmp/plugins
 		`), settings.CliBinaryName, cliParams.BinaryName),
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			w := writer.FromContext(cmd.Context())
 			if w == nil {

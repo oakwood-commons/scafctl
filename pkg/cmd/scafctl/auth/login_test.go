@@ -54,7 +54,7 @@ func TestCommandLogin_MissingHandler(t *testing.T) {
 
 	err := cmd.Execute()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "accepts 1 arg(s)")
+	assert.Contains(t, err.Error(), "missing required argument: <handler>")
 }
 
 func TestCommandLogin_Success(t *testing.T) {

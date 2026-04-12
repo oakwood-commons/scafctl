@@ -214,3 +214,27 @@ func BenchmarkBridgeAuthToRegistry(b *testing.B) {
 		_, _, _ = BridgeAuthToRegistry(ctx, mock, "ghcr.io", "")
 	}
 }
+
+func TestInferDefaultScope(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		registry string
+		want     string
+	}{
+		{"us-central1-docker.pkg.dev", "https://www.googleapis.com/auth/cloud-platform"},
+		{"gcr.io", "https://www.googleapis.com/auth/cloud-platform"},
+		{"us.gcr.io", "https://www.googleapis.com/auth/cloud-platform"},
+		{"ghcr.io", ""},
+		{"myregistry.azurecr.io", ""},
+		{"docker.io", ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.registry, func(t *testing.T) {
+			t.Parallel()
+			got := InferDefaultScope(tc.registry)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}

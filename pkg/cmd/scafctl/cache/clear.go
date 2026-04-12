@@ -87,6 +87,7 @@ func CommandClear(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			  # Show what would be cleared (JSON output)
 			  scafctl cache clear -o json
 		`), settings.CliBinaryName, cliParams.BinaryName),
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			kvxOpts := flags.ToKvxOutputOptions(&options.KvxOutputFlags, kvx.WithIOStreams(ioStreams))
 			return runClear(cmd.Context(), options, kvxOpts)

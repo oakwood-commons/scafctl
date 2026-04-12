@@ -247,6 +247,82 @@ func TestCmdOptionsVersion_GetSolutionWithGetter(t *testing.T) {
 		assert.Contains(t, outBuf.String(), "context-solution")
 	})
 
+	t.Run("default output does not crash", func(t *testing.T) {
+		mockGetter := &solutionget.MockGetter{}
+		expectedSolution := &solutionpkg.Solution{
+			APIVersion: "scafctl.io/v1",
+			Kind:       "Solution",
+			Metadata: solutionpkg.Metadata{
+				Name: "default-output-solution",
+			},
+		}
+
+		mockGetter.On("Get", mock.Anything, "/path/to/solution.yaml").
+			Return(expectedSolution, nil)
+
+		outBuf := &bytes.Buffer{}
+		errBuf := &bytes.Buffer{}
+		ioStreams := &terminal.IOStreams{
+			Out:    outBuf,
+			ErrOut: errBuf,
+		}
+
+		options := &CmdOptionsVersion{
+			IOStreams: ioStreams,
+			CliParams: &settings.Run{
+				NoColor:    true,
+				BinaryName: "scafctl",
+			},
+			Output: "",
+			File:   "/path/to/solution.yaml",
+		}
+
+		err := options.GetSolutionWithGetter(context.Background(), mockGetter)
+		require.NoError(t, err)
+		mockGetter.AssertExpectations(t)
+
+		assert.NotEmpty(t, outBuf.String())
+		assert.Contains(t, outBuf.String(), "default-output-solution")
+	})
+
+	t.Run("table output does not crash", func(t *testing.T) {
+		mockGetter := &solutionget.MockGetter{}
+		expectedSolution := &solutionpkg.Solution{
+			APIVersion: "scafctl.io/v1",
+			Kind:       "Solution",
+			Metadata: solutionpkg.Metadata{
+				Name: "table-output-solution",
+			},
+		}
+
+		mockGetter.On("Get", mock.Anything, "/path/to/solution.yaml").
+			Return(expectedSolution, nil)
+
+		outBuf := &bytes.Buffer{}
+		errBuf := &bytes.Buffer{}
+		ioStreams := &terminal.IOStreams{
+			Out:    outBuf,
+			ErrOut: errBuf,
+		}
+
+		options := &CmdOptionsVersion{
+			IOStreams: ioStreams,
+			CliParams: &settings.Run{
+				NoColor:    true,
+				BinaryName: "scafctl",
+			},
+			Output: "table",
+			File:   "/path/to/solution.yaml",
+		}
+
+		err := options.GetSolutionWithGetter(context.Background(), mockGetter)
+		require.NoError(t, err)
+		mockGetter.AssertExpectations(t)
+
+		assert.NotEmpty(t, outBuf.String())
+		assert.Contains(t, outBuf.String(), "table-output-solution")
+	})
+
 	t.Run("solution with complex data", func(t *testing.T) {
 		mockGetter := &solutionget.MockGetter{}
 		expectedSolution := &solutionpkg.Solution{

@@ -9,6 +9,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -57,7 +58,7 @@ func CommandDelete(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 			  # Delete from a configured catalog
 			  scafctl catalog delete my-solution@1.0.0 --catalog myregistry
 		`),
-		Args: cobra.ExactArgs(1),
+		Args: flags.RequireArg("name@version", cliParams.BinaryName+" catalog delete my-solution@1.0.0"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			options.Reference = args[0]
 			return runDelete(cmd.Context(), options)

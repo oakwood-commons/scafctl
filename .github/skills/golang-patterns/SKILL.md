@@ -355,20 +355,7 @@ func join(parts []string) string {
 
 ## Struct Tags
 
-Always add JSON/YAML tags. Use [Huma validation tags](https://huma.rocks/features/request-validation/#validation-tags):
-- All fields: `doc`
-- Strings: `maxLength`, `example`, `pattern`, `patternDescription`
-- Integers: `maximum`, `example`
-- Arrays: `maxItems` (no `example`)
-- Objects/maps: no `example` tag
-
-```go
-type Provider struct {
-    Name    string `json:"name" yaml:"name" doc:"Provider name" maxLength:"128" example:"redis"`
-    Version string `json:"version" yaml:"version" doc:"Semantic version" pattern:"^v?\\d+\\.\\d+\\.\\d+$" patternDescription:"semver format" example:"1.0.0"`
-    Port    int    `json:"port" yaml:"port" doc:"Listen port" maximum:"65535" example:"8080"`
-}
-```
+See `.github/instructions/go-conventions.instructions.md` for the full struct tag and Huma validation tag rules.
 
 ## Anti-Patterns to Avoid
 

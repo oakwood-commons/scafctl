@@ -74,6 +74,7 @@ func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 			  # Pipe to file
 			  scafctl new solution -n my-deploy -d "Deploy" > my-deploy.yaml
 		`),
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Use)
 			ctx := settings.IntoContext(cmd.Context(), cliParams)

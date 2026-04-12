@@ -1,6 +1,6 @@
 ---
 description: "Documentation and examples conventions for scafctl. Use when creating or updating docs, tutorials, or examples."
-applyTo: "**/*.go"
+applyTo: "{docs,examples,pkg/docs,pkg/examples}/**"
 ---
 
 # Documentation & Examples

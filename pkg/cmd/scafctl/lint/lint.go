@@ -61,6 +61,7 @@ type Options struct {
 	File       string
 	Output     string
 	Severity   string
+	Expression string
 	CliParams  *settings.Run
 	IOStreams  *terminal.IOStreams
 }
@@ -118,6 +119,7 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 			# Output as JSON for CI integration
 			scafctl lint -f ./solution.yaml -o json
 		`), settings.CliBinaryName, cliParams.BinaryName),
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Use)
 			ctx := settings.IntoContext(cmd.Context(), cliParams)
@@ -133,6 +135,7 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 
 	cmd.Flags().StringVarP(&options.File, "file", "f", "", "Solution file path (auto-discovered if not provided, use '-' for stdin)")
 	cmd.Flags().StringVarP(&options.Output, "output", "o", "table", "Output format: table, json, yaml, quiet")
+	cmd.Flags().StringVarP(&options.Expression, "expression", "e", "", "CEL expression to filter/transform output data (e.g., '_.findings')")
 	cmd.Flags().StringVar(&options.Severity, "severity", "info", "Minimum severity to report: error, warning, info")
 
 	lintPath := fmt.Sprintf("%s/%s", path, cmd.Use)
@@ -182,7 +185,7 @@ func runLint(ctx context.Context, opts *Options) error {
 	kvxOpts := flags.NewKvxOutputOptionsFromFlags(
 		opts.Output,
 		false,
-		"",
+		opts.Expression,
 		kvx.WithOutputContext(ctx),
 		kvx.WithOutputNoColor(opts.CliParams.NoColor),
 		kvx.WithOutputAppName(opts.BinaryName+" lint"),

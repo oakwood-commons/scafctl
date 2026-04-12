@@ -79,6 +79,7 @@ func CommandBuildPlugin(cliParams *settings.Run, ioStreams *terminal.IOStreams, 
 			  scafctl build plugin --name aws-provider --kind provider --version 1.0.0 \
 			    --platform linux/amd64=./dist/aws-provider --force
 		`),
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runBuildPlugin(cmd.Context(), options)
 		},

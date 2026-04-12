@@ -201,8 +201,8 @@ func TestSolution_ToJSON(t *testing.T) {
 						assert.Contains(t, string(data), tt.solution.Metadata.Version.String())
 					}
 				} else {
-					// When Version is nil, it should still be present in JSON (not omitempty)
-					assert.Contains(t, string(data), "version")
+					// When Version is nil and omitempty, it should be absent from JSON
+					assert.NotContains(t, string(data), "version")
 				}
 			}
 		})
@@ -345,9 +345,8 @@ func TestSolution_ToYAML(t *testing.T) {
 						assert.Contains(t, string(data), tt.solution.Metadata.Version.String())
 					}
 				} else {
-					// When Version is nil, check YAML representation
-					// YAML will show "version: null" or similar
-					assert.Contains(t, string(data), "version")
+					// When Version is nil and omitempty, it should be absent from YAML
+					assert.NotContains(t, string(data), "version")
 				}
 			}
 		})

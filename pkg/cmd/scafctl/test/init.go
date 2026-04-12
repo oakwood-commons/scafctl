@@ -52,6 +52,7 @@ Examples:
 
   # Pipe into a compose file
   scafctl test init -f solution.yaml >> solution-tests.yaml`,
+		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cCmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)

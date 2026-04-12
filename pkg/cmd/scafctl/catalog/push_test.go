@@ -87,7 +87,7 @@ func TestCommandPush_RequiresExactlyOneArg(t *testing.T) {
 
 	err := cmd.Execute()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "accepts 1 arg(s)")
+	assert.Contains(t, err.Error(), "missing required argument: <name@version>")
 }
 
 func TestCommandPush_InvalidKind(t *testing.T) {

@@ -62,6 +62,7 @@ Examples:
 
   # Output as JSON
   scafctl test list -f ./solution.yaml -o json`,
+		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cCmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)

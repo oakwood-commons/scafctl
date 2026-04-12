@@ -169,7 +169,11 @@ func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Re
 				"reserved-name")
 		}
 
-		if !referencedResolvers[name] {
+		// A resolver with a validate block exists for its side effect (aborting
+		// execution on validation failure), so it is "used" even if no other
+		// resolver or action references it.
+		hasValidation := res.Validate != nil && len(res.Validate.With) > 0
+		if !referencedResolvers[name] && !hasValidation {
 			result.addFinding(SeverityWarning, "usage", location,
 				fmt.Sprintf("resolver '%s' is defined but never referenced", name),
 				"Remove unused resolver or reference it in actions/other resolvers",

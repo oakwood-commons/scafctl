@@ -102,8 +102,9 @@ type Metadata struct {
 	// Name is the unique identifier for the solution (e.g., "gcp-basic")
 	Name string `json:"name" yaml:"name" doc:"The unique name of the solution" minLength:"3" maxLength:"60" example:"gcp-basic" pattern:"^[a-z0-9]([a-z0-9-]+[a-z0-9])?$"`
 
-	// Version is the semantic version of the solution
-	Version *semver.Version `json:"version" yaml:"version" doc:"The version of the solution" example:"1.0.0" pattern:"^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$"`
+	// Version is the semantic version of the solution.
+	// Optional for local development; required for catalog publishing (build/push).
+	Version *semver.Version `json:"version,omitempty" yaml:"version,omitempty" doc:"The version of the solution" example:"1.0.0" pattern:"^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$" required:"false"`
 
 	// DisplayName is the human-readable name of the solution
 	DisplayName string `json:"displayName,omitempty" yaml:"displayName,omitempty" doc:"The display name of the solution" minLength:"3" maxLength:"80" example:"Basic GCP Solution" pattern:"^(.)+$" required:"false"`

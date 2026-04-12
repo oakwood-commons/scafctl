@@ -13,6 +13,7 @@ import (
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
@@ -96,7 +97,7 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			  # Login and also write to container auth file (Docker/Podman interop)
 			  scafctl catalog login ghcr.io --write-registry-auth
 		`), settings.CliBinaryName, cliParams.BinaryName),
-		Args:         cobra.ExactArgs(1),
+		Args:         flags.RequireArg("registry", cliParams.BinaryName+" catalog login ghcr.io"),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			options.BinaryName = cliParams.BinaryName
@@ -203,6 +204,12 @@ func runAuthHandlerLogin(ctx context.Context, w *writer.Writer, opts *LoginOptio
 				}
 			}
 		}
+	}
+
+	// Fall back to default scope for known GCP registries (e.g. *.pkg.dev → cloud-platform).
+	// Only apply when the handler is "gcp" to avoid injecting GCP scopes into custom auth flows.
+	if scope == "" && handlerName == "gcp" {
+		scope = catalog.InferDefaultScope(opts.Registry)
 	}
 
 	// Get handler from registry
