@@ -44,6 +44,7 @@ func CommandVersion(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 		Use:     "version",
 		Aliases: []string{"v"},
 		Short:   fmt.Sprintf("Prints the %s version", path),
+		Args:    cobra.NoArgs,
 		RunE: func(cCmd *cobra.Command, args []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
 			ctx := settings.IntoContext(cCmd.Context(), cliParams)

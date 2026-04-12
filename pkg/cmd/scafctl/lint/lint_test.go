@@ -43,6 +43,7 @@ func TestCommandLint_Flags(t *testing.T) {
 	}{
 		{"file", "file", ""},
 		{"output", "output", "table"},
+		{"expression", "expression", ""},
 		{"severity", "severity", "info"},
 	}
 	for _, tt := range tests {

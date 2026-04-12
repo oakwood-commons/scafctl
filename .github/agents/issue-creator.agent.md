@@ -30,7 +30,7 @@ Clarify what the user wants. Ask brief follow-up questions if the request is amb
 
 ### Phase 2: Explore
 
-Search the codebase to gather technical context:
+Search the codebase to gather technical context. Use the `Explore` subagent for fast, targeted searches when you need to find patterns across multiple packages:
 - Which files, packages, and layers would be affected?
 - Existing patterns, interfaces, or types that are relevant?
 - Similar implementations to reference?

@@ -67,6 +67,7 @@ func CommandCEL(cliParams *settings.Run, ioStreams *terminal.IOStreams, path str
 			  # Output as JSON
 			  scafctl eval cel --expression '1 + 2' -o json
 		`),
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Use)
 			ctx := settings.IntoContext(cmd.Context(), cliParams)

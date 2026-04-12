@@ -13,6 +13,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/duration"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
@@ -438,4 +439,67 @@ func TestAddFinding_NoSourceMap(t *testing.T) {
 	result.addFinding(SeverityWarning, "usage", "resolvers.foo", "msg", "", "test-rule")
 	require.Len(t, result.Findings, 1)
 	assert.Equal(t, 0, result.Findings[0].Line)
+}
+
+func TestLintResolvers_ValidateBlockNotFlaggedUnused(t *testing.T) {
+	// A resolver with a validate block should not be flagged as unused,
+	// even if it is not referenced by any other resolver or action.
+	reg := provider.NewRegistry()
+	fp := newFakeProvider("static", nil)
+	require.NoError(t, reg.Register(fp))
+	vp := newFakeProvider("validation", nil)
+	require.NoError(t, reg.Register(vp))
+
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"versionValidated": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "static"},
+				},
+			},
+			Validate: &resolver.ValidatePhase{
+				With: []resolver.ProviderValidation{
+					{Provider: "validation"},
+				},
+			},
+		},
+	}
+
+	referencedResolvers := collectReferencedResolvers(sol)
+	result := &Result{}
+	lintResolvers(sol, result, reg, referencedResolvers)
+
+	for _, f := range result.Findings {
+		assert.NotEqual(t, "unused-resolver", f.RuleName,
+			"resolver with validate block should not be flagged as unused")
+	}
+}
+
+func TestLintResolvers_NoValidateBlockFlaggedUnused(t *testing.T) {
+	// A resolver without a validate block that is not referenced should be flagged.
+	reg := provider.NewRegistry()
+	fp := newFakeProvider("static", nil)
+	require.NoError(t, reg.Register(fp))
+
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"unreferenced": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "static"},
+				},
+			},
+		},
+	}
+
+	referencedResolvers := collectReferencedResolvers(sol)
+	result := &Result{}
+	lintResolvers(sol, result, reg, referencedResolvers)
+
+	rules := make([]string, 0, len(result.Findings))
+	for _, f := range result.Findings {
+		rules = append(rules, f.RuleName)
+	}
+	assert.Contains(t, rules, "unused-resolver")
 }

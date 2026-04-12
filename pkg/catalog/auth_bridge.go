@@ -116,6 +116,18 @@ func InferAuthHandler(registryHost string, customHandlers []config.CustomOAuth2C
 	return ""
 }
 
+// InferDefaultScope returns the default OAuth scope for a known registry host.
+// Returns empty string if no default scope is known for the registry.
+func InferDefaultScope(registryHost string) string {
+	switch {
+	case strings.HasSuffix(registryHost, ".pkg.dev"),
+		registryHost == "gcr.io",
+		strings.HasSuffix(registryHost, ".gcr.io"):
+		return "https://www.googleapis.com/auth/cloud-platform"
+	}
+	return ""
+}
+
 // IsBuiltinHandlerName returns true if the name conflicts with a built-in handler.
 func IsBuiltinHandlerName(name string) bool {
 	for _, builtin := range builtinHandlerNames {

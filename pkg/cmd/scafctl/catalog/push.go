@@ -10,6 +10,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/sbom"
@@ -86,7 +87,7 @@ func CommandPush(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			  scafctl catalog push my-solution@1.0.0 --force
 		`), settings.CliBinaryName, cliParams.BinaryName),
 
-		Args:         cobra.ExactArgs(1),
+		Args:         flags.RequireArg("name@version", cliParams.BinaryName+" catalog push my-solution@1.0.0"),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			options.Reference = args[0]

@@ -18,6 +18,7 @@ import (
 	gcpauth "github.com/oakwood-commons/scafctl/pkg/auth/gcp"
 	ghauth "github.com/oakwood-commons/scafctl/pkg/auth/github"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -160,7 +161,7 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 			  scafctl auth login gcp --scope https://www.googleapis.com/auth/bigquery
 		`), settings.CliBinaryName, cliParams.BinaryName),
 		SilenceUsage: true,
-		Args:         cobra.ExactArgs(1),
+		Args:         flags.RequireArg("handler", cliParams.BinaryName+" auth login gcp"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			w := writer.FromContext(ctx)

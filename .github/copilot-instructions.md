@@ -5,31 +5,12 @@ Go-based CLI tool using CEL (Common Expression Language) for dynamic configurati
 
 ## Key Patterns
 
-### CLI Output (`pkg/terminal/writer/`)
-
-Use **Writer** for all terminal output -- **never** use `fmt.Fprintf` directly.
-- Get via `writer.FromContext(ctx)`
-- Respects `--quiet` and `--no-color` flags automatically
-- For testing, use `writer.WithExitFunc()` to capture exit calls
-
-### Data Output (`pkg/terminal/kvx/`)
-Commands returning structured data should use **kvx** with `OutputOptions`:
-- Default to **table** view; support `-o` flag for `table`, `json`, `yaml`, `quiet`
-- Use `kvx.NewOutputOptions(ioStreams)` then `opts.Write(data)`
-- Supports `--interactive` for TUI and `--expression` for CEL filtering
-
-### HTTP Client
-See `pkg/httpc/README.md`
-
-### Paths
-- Use xdg paths via the `pkg/paths` package
-
-### Configuration
-- Use `pkg/settings` for storing defaults and managing settings
-- Use `pkg/config/` for storing, loading, and managing application configuration
-
-### CEL
-Use `celexp.EvaluateExpression()` from `pkg/celexp/context.go`. For CEL provider, prefer the `expression` field over `expr`.
+- **CLI Output**: Use `writer.FromContext(ctx)` -- never `fmt.Fprintf` directly. See `pkg/terminal/writer/`
+- **Data Output**: Use `kvx.OutputOptions` for structured table/json/yaml/quiet output. See `pkg/terminal/kvx/`
+- **HTTP Client**: See `pkg/httpc/README.md`
+- **Paths**: Use xdg paths via `pkg/paths`
+- **Configuration**: `pkg/settings` for defaults, `pkg/config/` for app configuration
+- **CEL**: Use `celexp.EvaluateExpression()`. Prefer `expression` field over `expr`
 
 ## Conventions
 
@@ -66,11 +47,9 @@ The project uses `task` (go-task/task) for builds and linting. **Always use `tas
 
 scafctl is used as a **library by external CLIs**. Every new feature must be consumable by embedders via `RootOptions` or domain package APIs.
 
-- **No hardcoded "scafctl"**: Use `settings.CliBinaryName` constant or read from `settings.Run.BinaryName` in context. Never hardcode the binary name in user-facing strings (descriptions, error messages, paths, env var prefixes)
-- **`RootOptions` is the embedder API surface**: New CLI-level capabilities must be exposed as fields on `RootOptions` with sensible defaults that preserve existing behavior when unset
-- **Domain packages must be binary-name-aware**: Functions that produce paths, env vars, cache keys, or display strings must accept a name parameter or read from context -- never assume the binary is called "scafctl"
-- **MCP server must respect embedder identity**: The MCP server name, tool descriptions, and capabilities must use the configured binary name
-- **Test embedder scenarios**: When adding new configurable behavior, include a test that exercises it with a non-default binary name (e.g., `"mycli"`)
+- **No hardcoded "scafctl"**: Use `settings.CliBinaryName` or `settings.Run.BinaryName` in context
+- **`RootOptions` is the embedder API surface**: New CLI-level capabilities must be exposed as fields with sensible defaults
+- **Test embedder scenarios**: Include a test with a non-default binary name (e.g., `"mycli"`)
 
 ## Security Scanning
 

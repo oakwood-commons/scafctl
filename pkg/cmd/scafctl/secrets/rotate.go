@@ -36,6 +36,7 @@ This is useful for:
   - Periodic key rotation for security compliance
   - After suspected key compromise
   - Before sharing a device or system`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			w := writer.FromContext(ctx)

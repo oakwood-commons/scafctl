@@ -87,6 +87,7 @@ func CommandServe(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			# Tune stdio worker pool and queue
 			%[1]s mcp serve --worker-pool-size 4 --queue-size 200
 		`), cliParams.BinaryName),
+		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runServe(cmd.Context(), opts)

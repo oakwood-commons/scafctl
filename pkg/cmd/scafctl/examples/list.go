@@ -55,6 +55,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 			  # List available categories
 			  scafctl examples list --category ""
 		`),
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Use)
 			ctx := settings.IntoContext(cmd.Context(), cliParams)

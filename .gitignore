@@ -31,6 +31,7 @@ go.work.sum
 # .idea/
 .vscode/*
 !.vscode/*.example
+!.vscode/tasks.json
 
 /local
 /temp
@@ -43,6 +44,7 @@ go.work.sum
 /logs
 scafctl.log
 scafctl.exe~
+scafctl
 /modules
 /env
 **/ca-key.pem
@@ -64,3 +66,4 @@ __debug*
 .gocache/*
 .cache/*
 .tool/*
+issues/

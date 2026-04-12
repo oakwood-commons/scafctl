@@ -101,11 +101,11 @@ After all fixes are applied:
 **To reply to a thread:**
 ```bash
 gh api graphql -f query='
-  mutation($threadId: ID!, $body: String!) {
-    addPullRequestReviewThread(input: {pullRequestReviewThreadId: $threadId, body: $body}) {
+  mutation($id: ID!, $body: String!) {
+    addPullRequestReviewThreadReply(input: {pullRequestReviewThreadId: $id, body: $body}) {
       comment { id }
     }
-  }' -f threadId=<THREAD_ID> -f body="<response>"
+  }' -f id=<THREAD_ID> -f body="<response>"
 ```
 
 **To resolve a thread:**

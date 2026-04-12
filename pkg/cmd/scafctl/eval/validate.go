@@ -61,6 +61,7 @@ func CommandValidate(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 			  # Output as JSON
 			  scafctl eval validate --expression '{{ .name' --type go-template -o json
 		`),
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Use)
 			ctx := settings.IntoContext(cmd.Context(), cliParams)
