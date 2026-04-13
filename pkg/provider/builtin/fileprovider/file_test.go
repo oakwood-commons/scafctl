@@ -330,7 +330,7 @@ func TestFileProvider_Execute_DryRun_Write(t *testing.T) {
 	assert.True(t, data["_dryRun"].(bool))
 	assert.Contains(t, data["_message"], "Would create")
 	assert.Equal(t, "created", data["_plannedStatus"])
-	assert.Equal(t, "skip-unchanged", data["_strategy"])
+	assert.Equal(t, "error", data["_strategy"])
 }
 
 func TestFileProvider_DryRun_Write_PlannedStatus(t *testing.T) {
@@ -1087,8 +1087,9 @@ func TestFileProvider_WriteTree_DryRun_PlannedStatuses(t *testing.T) {
 
 		ctx := provider.WithDryRun(context.Background(), true)
 		inputs := map[string]any{
-			"operation": "write-tree",
-			"basePath":  tmpDir,
+			"operation":  "write-tree",
+			"basePath":   tmpDir,
+			"onConflict": "skip-unchanged",
 			"entries": []any{
 				map[string]any{"path": "same.txt", "content": "same"},
 				map[string]any{"path": "different.txt", "content": "new"},
@@ -1246,8 +1247,9 @@ func TestFileProvider_WriteTree_Overwrite(t *testing.T) {
 
 	ctx := context.Background()
 	inputs := map[string]any{
-		"operation": "write-tree",
-		"basePath":  tmpDir,
+		"operation":  "write-tree",
+		"basePath":   tmpDir,
+		"onConflict": "overwrite",
 		"entries": []any{
 			map[string]any{"path": "existing.txt", "content": "new content"},
 		},
@@ -1854,8 +1856,9 @@ func TestWriteTree_SummaryCounts(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "different.txt"), []byte("old"), 0o600))
 
 	result, err := p.Execute(context.Background(), map[string]any{
-		"operation": "write-tree",
-		"basePath":  tmpDir,
+		"operation":  "write-tree",
+		"basePath":   tmpDir,
+		"onConflict": "skip-unchanged",
 		"entries": []any{
 			map[string]any{"path": "same.txt", "content": "same"},
 			map[string]any{"path": "different.txt", "content": "new"},

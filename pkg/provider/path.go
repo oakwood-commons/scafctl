@@ -71,8 +71,12 @@ func ValidateDirectory(dir string) (string, error) {
 }
 
 // AbsFromContext resolves a relative path to an absolute path using the context
-// working directory. If no working directory is set in the context, it falls back
-// to filepath.Abs (which uses os.Getwd()).
+// working directory. Resolution priority:
+//  1. If the path is absolute, return it cleaned.
+//  2. If a working directory is set in context (via WithWorkingDirectory), use it.
+//  3. If a solution directory is set in context (via WithSolutionDirectory), use it.
+//     This ensures resolver-phase paths resolve relative to the solution file location.
+//  4. Fall back to filepath.Abs (which uses os.Getwd()).
 //
 // Note: this function does NOT perform path containment/traversal validation.
 // If the caller needs to restrict resolved paths within a specific directory,
@@ -84,6 +88,9 @@ func AbsFromContext(ctx context.Context, path string) (string, error) {
 	}
 	if cwd, ok := WorkingDirectoryFromContext(ctx); ok && cwd != "" {
 		return filepath.Join(cwd, path), nil
+	}
+	if solDir, ok := SolutionDirectoryFromContext(ctx); ok && solDir != "" {
+		return filepath.Join(solDir, path), nil
 	}
 	return filepath.Abs(path)
 }

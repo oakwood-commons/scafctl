@@ -43,18 +43,21 @@ func TestNewExecProvider(t *testing.T) {
 	assert.NotEmpty(t, desc.Schema.Properties["shell"].Enum, "shell should have an enum constraint")
 
 	// Verify output schemas
-	for _, cap := range []provider.Capability{provider.CapabilityAction, provider.CapabilityFrom, provider.CapabilityTransform} {
+	// From and Transform return AnyProp (string by default, object with expand: true)
+	for _, cap := range []provider.Capability{provider.CapabilityFrom, provider.CapabilityTransform} {
 		schema := desc.OutputSchemas[cap]
 		require.NotNil(t, schema, "output schema for %s", cap)
-		require.NotNil(t, schema.Properties)
-		assert.Equal(t, "string", schema.Properties["stdout"].Type)
-		assert.Equal(t, "string", schema.Properties["stderr"].Type)
-		assert.Equal(t, "integer", schema.Properties["exitCode"].Type)
-		assert.Equal(t, "string", schema.Properties["command"].Type)
-		assert.Equal(t, "string", schema.Properties["shell"].Type)
 	}
-	// Action capability additionally has 'success'
-	assert.Equal(t, "boolean", desc.OutputSchemas[provider.CapabilityAction].Properties["success"].Type)
+	// Action capability returns a full object schema
+	actionSchema := desc.OutputSchemas[provider.CapabilityAction]
+	require.NotNil(t, actionSchema)
+	require.NotNil(t, actionSchema.Properties)
+	assert.Equal(t, "string", actionSchema.Properties["stdout"].Type)
+	assert.Equal(t, "string", actionSchema.Properties["stderr"].Type)
+	assert.Equal(t, "integer", actionSchema.Properties["exitCode"].Type)
+	assert.Equal(t, "string", actionSchema.Properties["command"].Type)
+	assert.Equal(t, "string", actionSchema.Properties["shell"].Type)
+	assert.Equal(t, "boolean", actionSchema.Properties["success"].Type)
 }
 
 func TestExecProvider_Execute_SimpleCommand(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	stdfilepath "path/filepath"
 	"strings"
 	"time"
 
@@ -347,6 +348,16 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		return o.exitWithCode(ctx, err, exitcode.FileNotFound)
 	}
 	defer cleanup()
+
+	// Set the solution directory for resolver path resolution.
+	// Only applied when --base-dir is explicitly provided.
+	if o.BaseDir != "" {
+		absBaseDir, baseDirErr := stdfilepath.Abs(o.BaseDir)
+		if baseDirErr != nil {
+			return o.exitWithCode(ctx, fmt.Errorf("--base-dir: %w", baseDirErr), exitcode.InvalidInput)
+		}
+		ctx = provider.WithSolutionDirectory(ctx, absBaseDir)
+	}
 
 	// Parse dynamic positional arguments (key=value and @file.yaml from argv)
 	extraParsed, err := flags.ParseDynamicInputArgs(o.DynamicArgs)

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1679,4 +1680,94 @@ func TestResolverOptionsFromAppConfig_ZeroValues(t *testing.T) {
 	cfg := ConfigInput{}
 	opts := OptionsFromAppConfig(cfg)
 	assert.Empty(t, opts)
+}
+
+func TestExecutor_ValidatePhase_WhenWithSelf(t *testing.T) {
+	registry := newMockRegistry()
+
+	// Register providers
+	err := registry.Register(&mockProvider{
+		name: "static",
+		executeFunc: func(_ context.Context, inputs map[string]any) (*provider.Output, error) {
+			return &provider.Output{Data: inputs["value"]}, nil
+		},
+	})
+	require.NoError(t, err)
+
+	err = registry.Register(&mockProvider{
+		name: "validation",
+		executeFunc: func(_ context.Context, inputs map[string]any) (*provider.Output, error) {
+			return nil, fmt.Errorf("validation failed: %v", inputs["message"])
+		},
+	})
+	require.NoError(t, err)
+
+	t.Run("__self available in validate when condition", func(t *testing.T) {
+		executor := NewExecutor(registry)
+
+		// Resolver with non-empty value and when condition checking __self
+		selfExpr := celexp.Expression(`__self != ""`)
+		resolvers := []*Resolver{
+			{
+				Name: "myParam",
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{
+						{
+							Provider: "static",
+							Inputs:   map[string]*ValueRef{"value": {Literal: "hello"}},
+						},
+					},
+				},
+				Validate: &ValidatePhase{
+					When: &Condition{Expr: &selfExpr},
+					With: []ProviderValidation{
+						{
+							Provider: "validation",
+							Inputs:   map[string]*ValueRef{"message": {Literal: "must match pattern"}},
+						},
+					},
+				},
+			},
+		}
+
+		ctx := context.Background()
+		_, err := executor.Execute(ctx, resolvers, nil)
+		// Validation should run (when condition is true because __self is "hello")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "must match pattern")
+	})
+
+	t.Run("__self skips validation when empty", func(t *testing.T) {
+		executor := NewExecutor(registry)
+
+		// Resolver with empty value and when condition checking __self
+		selfExpr := celexp.Expression(`__self != ""`)
+		resolvers := []*Resolver{
+			{
+				Name: "myParam",
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{
+						{
+							Provider: "static",
+							Inputs:   map[string]*ValueRef{"value": {Literal: ""}},
+						},
+					},
+				},
+				Validate: &ValidatePhase{
+					When: &Condition{Expr: &selfExpr},
+					With: []ProviderValidation{
+						{
+							Provider: "validation",
+							Inputs:   map[string]*ValueRef{"message": {Literal: "should not fire"}},
+						},
+					},
+				},
+			},
+		}
+
+		ctx := context.Background()
+		_, err := executor.Execute(ctx, resolvers, nil)
+		// Validation should be SKIPPED (when condition is false because __self is "")
+		require.NoError(t, err)
+	})
 }

@@ -56,11 +56,20 @@ type SolutionOptions struct {
 
 	// OnConflict is the default conflict strategy for file writes.
 	// When set, it is injected into the execution context so file providers
-	// use it as their default instead of the built-in "skip-unchanged".
+	// use it as their default instead of the built-in "error".
 	OnConflict string
+
+	// Force overrides --on-conflict to "skip-unchanged", allowing re-runs of
+	// solutions that produce identical files without errors.
+	Force bool
 
 	// Backup enables .bak backup creation before mutating existing files.
 	Backup bool
+
+	// ActionNames is the list of action names to execute selectively.
+	// When set, only the specified actions and their transitive dependsOn
+	// dependencies are executed. Finally actions always run.
+	ActionNames []string
 
 	// positionalPathErr is set in PreRun when the user passes a local file
 	// path as a positional argument instead of using -f/--file.
@@ -158,6 +167,10 @@ Examples:
   # Run solution from file
   scafctl run solution -f ./my-solution.yaml
 
+  # Run only specific actions (and their transitive dependencies)
+  scafctl run solution -f ./my-solution.yaml --action lint
+  scafctl run solution -f ./my-solution.yaml --action lint --action test
+
   # Run with parameters
   scafctl run solution -r env=prod -r region=us-east1
 
@@ -220,9 +233,11 @@ Examples:
 	cCmd.Flags().IntVar(&options.MaxActionConcurrency, "max-action-concurrency", 0, "Maximum concurrent actions (0=unlimited)")
 	cCmd.Flags().BoolVar(&options.DryRun, "dry-run", false, "Validate and show what would be executed without running")
 	cCmd.Flags().BoolVar(&options.ShowExecution, "show-execution", false, "Include __execution metadata in output (phases, timing, dependencies, providers)")
+	cCmd.Flags().StringSliceVar(&options.ActionNames, "action", nil, "Run only the named action(s) and their transitive dependencies (repeatable)")
 
 	// File conflict strategy flags
-	cCmd.Flags().StringVar(&options.OnConflict, "on-conflict", "", "Conflict strategy for file writes (error|overwrite|skip|skip-unchanged|append)")
+	cCmd.Flags().StringVar(&options.OnConflict, "on-conflict", "", "Conflict strategy for file writes (error|overwrite|skip|skip-unchanged|append) (default: error)")
+	cCmd.Flags().BoolVar(&options.Force, "force", false, "Overwrite existing files (shorthand for --on-conflict skip-unchanged)")
 	cCmd.Flags().BoolVar(&options.Backup, "backup", false, "Create .bak backups before mutating existing files")
 
 	return cCmd
@@ -292,6 +307,11 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		}
 	}
 
+	// --force overrides --on-conflict to skip-unchanged
+	if o.Force {
+		o.OnConflict = "skip-unchanged"
+	}
+
 	// Validate --on-conflict flag value if provided
 	if o.OnConflict != "" {
 		if !fileprovider.ConflictStrategy(o.OnConflict).IsValid() {
@@ -339,6 +359,17 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	}
 	defer cleanup()
 
+	// Set the solution directory for resolver path resolution.
+	// Only applied when --base-dir is explicitly provided. Without it,
+	// resolver paths resolve from CWD (the historical default).
+	if o.BaseDir != "" {
+		absBaseDir, baseDirErr := filepath.Abs(o.BaseDir)
+		if baseDirErr != nil {
+			return o.exitWithCode(ctx, fmt.Errorf("--base-dir: %w", baseDirErr), exitcode.InvalidInput)
+		}
+		ctx = provider.WithSolutionDirectory(ctx, absBaseDir)
+	}
+
 	actionAdapter := &actionRegistryAdapter{registry: reg}
 
 	// Require a workflow — run solution is for executing actions.
@@ -352,6 +383,19 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// Validate the workflow
 	if err := action.ValidateWorkflow(sol.Spec.Workflow, actionAdapter); err != nil {
 		return o.exitWithCode(ctx, fmt.Errorf("workflow validation failed: %w", err), exitcode.ValidationFailed)
+	}
+
+	// Apply --action filter: keep only the specified actions and their transitive deps.
+	// Finally actions are always preserved. Filtering happens on the original workflow
+	// before graph building so that pruned actions never enter the DAG.
+	workflow := sol.Spec.Workflow
+	if len(o.ActionNames) > 0 {
+		filtered, filterErr := action.FilterWorkflowActions(workflow, o.ActionNames)
+		if filterErr != nil {
+			return o.exitWithCode(ctx, filterErr, exitcode.InvalidInput)
+		}
+		workflow = filtered
+		lgr.V(1).Info("action filter applied", "targets", o.ActionNames, "remaining", len(workflow.Actions))
 	}
 
 	// Parse resolver parameters (pass stdin for @- support)
@@ -396,9 +440,12 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// --output-dir is explicitly specified (which takes precedence in ResolvePath).
 	actionCtx = provider.WithWorkingDirectory(actionCtx, originalCwd)
 
-	// Dry run — execute resolvers in dry-run mode and show structured report
+	// Dry run — execute resolvers with ctx (solution-dir aware, no working-dir
+	// override) so resolver paths resolve relative to the solution file. The
+	// action-phase WhatIf report uses actionCtx which has the working-dir
+	// override for accurate output-dir resolution.
 	if o.DryRun {
-		return o.executeDryRun(actionCtx, sol, reg, params)
+		return o.executeDryRun(ctx, sol, reg, params, workflow)
 	}
 
 	// Execute resolvers if present
@@ -415,7 +462,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	resolverElapsed := time.Since(start)
 
 	// Build action graph
-	graph, err := action.BuildGraph(ctx, sol.Spec.Workflow, resolverData, nil)
+	graph, err := action.BuildGraph(ctx, workflow, resolverData, nil)
 	if err != nil {
 		return o.exitWithCode(ctx, fmt.Errorf("failed to build action graph: %w", err), exitcode.InvalidInput)
 	}
@@ -451,7 +498,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		action.WithCwd(originalCwd),
 	)
 
-	result, err := actionExecutor.Execute(actionCtx, sol.Spec.Workflow)
+	result, err := actionExecutor.Execute(actionCtx, workflow)
 	if err != nil && result != nil && result.FinalStatus != action.ExecutionPartialSuccess {
 		return o.exitWithCode(ctx, fmt.Errorf("action execution failed: %w", err), exitcode.ActionFailed)
 	}
@@ -466,7 +513,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 
 // executeDryRun executes resolvers normally (they are side-effect-free) and
 // produces a structured WhatIf report showing what actions would do.
-func (o *SolutionOptions) executeDryRun(ctx context.Context, sol *solution.Solution, reg *provider.Registry, params map[string]any) error {
+func (o *SolutionOptions) executeDryRun(ctx context.Context, sol *solution.Solution, reg *provider.Registry, params map[string]any, workflow *action.Workflow) error {
 	// Execute resolvers via the shared method so that IOStreams, progress
 	// callbacks, and CLI-flag-driven config are wired identically to the
 	// live execution path. Resolver providers are side-effect-free, so we
@@ -482,6 +529,7 @@ func (o *SolutionOptions) executeDryRun(ctx context.Context, sol *solution.Solut
 		Registry:     reg,
 		ResolverData: resolverData,
 		Verbose:      o.Verbose,
+		Workflow:     workflow,
 	})
 	if err != nil {
 		return o.exitWithCode(ctx, fmt.Errorf("dry-run failed: %w", err), exitcode.GeneralError)

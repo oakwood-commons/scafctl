@@ -96,22 +96,11 @@ func NewExecProvider() *ExecProvider {
 					schemahelper.WithDefault("auto"),
 					schemahelper.WithExample("auto"),
 					schemahelper.WithMaxLength(10)),
+				"expand": schemahelper.BoolProp("Return full result map (stdout, stderr, exitCode, etc.) instead of trimmed stdout string. Default: false in resolver/transform mode, always true in action mode"),
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
-				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
-					"stdout":   schemahelper.StringProp("Standard output from the command"),
-					"stderr":   schemahelper.StringProp("Standard error output from the command"),
-					"exitCode": schemahelper.IntProp("Command exit code"),
-					"command":  schemahelper.StringProp("The full command that was executed"),
-					"shell":    schemahelper.StringProp("The shell interpreter that was used"),
-				}),
-				provider.CapabilityTransform: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
-					"stdout":   schemahelper.StringProp("Standard output from the command"),
-					"stderr":   schemahelper.StringProp("Standard error output from the command"),
-					"exitCode": schemahelper.IntProp("Command exit code"),
-					"command":  schemahelper.StringProp("The full command that was executed"),
-					"shell":    schemahelper.StringProp("The shell interpreter that was used"),
-				}),
+				provider.CapabilityFrom:      schemahelper.AnyProp("Trimmed stdout string by default; full result map (stdout, stderr, exitCode, command, shell) when expand: true"),
+				provider.CapabilityTransform: schemahelper.AnyProp("Trimmed stdout string by default; full result map (stdout, stderr, exitCode, command, shell) when expand: true"),
 				provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
 					"success":  schemahelper.BoolProp("Whether the command succeeded (exit code 0)"),
 					"stdout":   schemahelper.StringProp("Standard output from the command"),
@@ -359,15 +348,31 @@ func (p *ExecProvider) executeCommand(ctx context.Context, command string, input
 	// Build full command string for output
 	fullCmd := shellexec.BuildFullCommand(command, args)
 
+	fullResult := map[string]any{
+		"stdout":   stdout.String(),
+		"stderr":   stderr.String(),
+		"exitCode": result.ExitCode,
+		"success":  result.ExitCode == 0,
+		"command":  fullCmd,
+		"shell":    string(result.Shell),
+	}
+
+	// In resolver/transform mode (not action), return trimmed stdout as a plain string
+	// unless expand: true is explicitly set. This eliminates the need for a separate
+	// transform step in the common case.
+	expand, _ := inputs["expand"].(bool)
+	if !expand {
+		if mode, modeOK := provider.ExecutionModeFromContext(ctx); modeOK &&
+			(mode == provider.CapabilityFrom || mode == provider.CapabilityTransform) {
+			return &provider.Output{
+				Data:     strings.TrimSpace(stdout.String()),
+				Streamed: streamed,
+			}, nil
+		}
+	}
+
 	return &provider.Output{
-		Data: map[string]any{
-			"stdout":   stdout.String(),
-			"stderr":   stderr.String(),
-			"exitCode": result.ExitCode,
-			"success":  result.ExitCode == 0,
-			"command":  fullCmd,
-			"shell":    string(result.Shell),
-		},
+		Data:     fullResult,
 		Streamed: streamed,
 	}, nil
 }

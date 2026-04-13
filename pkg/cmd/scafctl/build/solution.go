@@ -6,6 +6,7 @@ package build
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -184,11 +185,20 @@ func CommandBuildSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams
 					return exitcode.WithCode(err, exitcode.InvalidInput)
 				}
 			}
+
+			// Stdin requires --no-bundle: there is no local directory to discover files from.
+			if options.File == "-" && !options.NoBundle {
+				if w := writer.FromContext(cmd.Context()); w != nil {
+					w.Infof("stdin input implies --no-bundle (no local directory for file discovery)")
+				}
+				options.NoBundle = true
+			}
+
 			return runBuildSolution(cmd.Context(), options)
 		},
 	}
 
-	cmd.Flags().StringVarP(&options.File, "file", "f", "", "Path to the solution file (auto-discovered if not provided)")
+	cmd.Flags().StringVarP(&options.File, "file", "f", "", "Path to the solution file (auto-discovered if not provided, use '-' for stdin)")
 	cmd.Flags().StringVarP(&options.Tag, "tag", "t", "", "Artifact reference as name[@version] or full remote ref (version defaults to solution metadata if omitted)")
 	cmd.Flags().StringVar(&options.Name, "name", "", "Artifact name (default: extracted from solution metadata)")
 	cmd.Flags().StringVar(&options.Version, "version", "", "Semantic version (default: extracted from solution metadata)")
@@ -212,11 +222,25 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
 
-	// Read solution file
-	content, err := os.ReadFile(opts.File)
-	if err != nil {
-		w.Errorf("failed to read solution file: %v", err)
-		return exitcode.WithCode(err, exitcode.FileNotFound)
+	// Read solution file (or stdin)
+	var content []byte
+	var err error
+	if opts.File == "-" {
+		stdinReader := io.Reader(os.Stdin)
+		if opts.IOStreams != nil && opts.IOStreams.In != nil {
+			stdinReader = opts.IOStreams.In
+		}
+		content, err = io.ReadAll(stdinReader)
+		if err != nil {
+			w.Errorf("failed to read from stdin: %v", err)
+			return exitcode.WithCode(err, exitcode.GeneralError)
+		}
+	} else {
+		content, err = os.ReadFile(opts.File)
+		if err != nil {
+			w.Errorf("failed to read solution file: %v", err)
+			return exitcode.WithCode(err, exitcode.FileNotFound)
+		}
 	}
 
 	// Parse solution to extract metadata
@@ -226,16 +250,29 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
-	// Determine bundle root (directory containing the solution file)
-	absFile, err := provider.AbsFromContext(ctx, opts.File)
-	if err != nil {
-		w.Errorf("failed to resolve path: %v", err)
-		return exitcode.WithCode(err, exitcode.InvalidInput)
+	// Determine bundle root (directory containing the solution file, or cwd for stdin)
+	var bundleRoot string
+	if opts.File == "-" {
+		bundleRoot, err = os.Getwd()
+		if err != nil {
+			w.Errorf("failed to determine working directory: %v", err)
+			return exitcode.WithCode(err, exitcode.GeneralError)
+		}
+	} else {
+		absFile, absErr := provider.AbsFromContext(ctx, opts.File)
+		if absErr != nil {
+			w.Errorf("failed to resolve path: %v", absErr)
+			return exitcode.WithCode(absErr, exitcode.InvalidInput)
+		}
+		bundleRoot = filepath.Dir(absFile)
 	}
-	bundleRoot := filepath.Dir(absFile)
 
 	// Determine artifact name (priority: --name flag > metadata.name > filename)
-	name, err := solution.ResolveArtifactName(opts.Name, sol.Metadata.Name, opts.File)
+	fileHint := opts.File
+	if fileHint == "-" {
+		fileHint = "" // stdin has no filename to derive a name from
+	}
+	name, err := solution.ResolveArtifactName(opts.Name, sol.Metadata.Name, fileHint)
 	if err != nil {
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.InvalidInput)

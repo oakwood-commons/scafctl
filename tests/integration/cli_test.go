@@ -799,6 +799,48 @@ func TestIntegration_RunSolution_HelloWorld(t *testing.T) {
 	assert.Contains(t, stdout, "Hello from Actions!")
 }
 
+func TestIntegration_RunAction_HelloWorld(t *testing.T) {
+	t.Parallel()
+	// 'run action greet' should execute only the 'greet' action
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "action", "greet",
+		"-f", "examples/actions/hello-world.yaml",
+	)
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d", exitCode)
+	assert.Contains(t, stdout, "Hello from Actions!")
+}
+
+func TestIntegration_RunAction_UnknownName(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t,
+		"run", "action", "nonexistent",
+		"-f", "examples/actions/hello-world.yaml",
+	)
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "not found")
+}
+
+func TestIntegration_RunSolution_ActionFlag(t *testing.T) {
+	t.Parallel()
+	// --action flag on run solution should also work
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "solution",
+		"-f", "examples/actions/hello-world.yaml",
+		"--action", "greet",
+	)
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d", exitCode)
+	assert.Contains(t, stdout, "Hello from Actions!")
+}
+
 func TestIntegration_RunSolution_NoWorkflowErrors(t *testing.T) {
 	t.Parallel()
 	// resolver-demo.yaml has resolvers but no workflow section
@@ -2397,8 +2439,8 @@ func TestIntegration_CatalogLoginHelp(t *testing.T) {
 	assert.Contains(t, stdout, "--auth-provider")
 	assert.Contains(t, stdout, "--scope")
 	assert.Contains(t, stdout, "--username")
-	assert.Contains(t, stdout, "--password-stdin")
-	assert.Contains(t, stdout, "--password-env")
+	assert.Contains(t, stdout, "--password")
+	assert.Contains(t, stdout, "@-")
 	assert.Contains(t, stdout, "--write-registry-auth")
 }
 
