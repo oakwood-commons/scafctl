@@ -79,7 +79,7 @@ func CommandInspectSolution(cliParams *settings.Run, ioStreams *terminal.IOStrea
 			opts.CliParams = cliParams
 			opts.BinaryName = binaryName
 
-			w := writer.New(ioStreams, cliParams)
+			w := writer.FromContext(ctx)
 
 			if len(args) > 0 {
 				if err := get.ValidatePositionalRef(args[0], opts.File, binaryName+" inspect solution"); err != nil {

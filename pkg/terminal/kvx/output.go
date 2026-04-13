@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/oakwood-commons/kvx/pkg/core"
 	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"gopkg.in/yaml.v3"
@@ -71,8 +70,10 @@ func BaseOutputFormats() []string {
 	}
 }
 
-// IsStructuredFormat returns true if the format is meant for piping (json/yaml/mermaid).
-// These formats should not use interactive or table output.
+// IsStructuredFormat returns true if the format produces machine-readable or
+// text-only output (json, yaml, mermaid) rather than interactive TUI or
+// bordered table output. Mermaid is included because it is a piping-friendly
+// plain-text format even though Write() routes it through the kvx renderer.
 func IsStructuredFormat(format OutputFormat) bool {
 	return format == OutputFormatJSON || format == OutputFormatYAML || format == OutputFormatMermaid
 }
@@ -320,9 +321,8 @@ func (o *OutputOptions) Write(data any) error {
 		return o.writeKvx(data)
 	}
 
-	// Mermaid is classified as a structured format (IsStructuredFormat == true)
-	// but renders via kvx rather than JSON/YAML serialization, so we route it
-	// to writeKvx before the writeStructured fallback.
+	// Mermaid produces plain text via the kvx renderer (not JSON/YAML serialization),
+	// so route it to writeKvx even though IsStructuredFormat reports true.
 	if o.Format == OutputFormatMermaid {
 		return o.writeKvx(data)
 	}
@@ -346,16 +346,10 @@ func (o *OutputOptions) writeKvx(data any) error {
 		// Silently fall back to JSON for non-interactive piped output.
 		// Apply Where then Expression (same order as writeStructured).
 		outputData := data
-		if o.Where != "" {
-			engine, engineErr := core.New()
-			if engineErr != nil {
-				return fmt.Errorf("failed to create CEL engine for where filter: %w", engineErr)
-			}
-			filtered, whereErr := engine.EvaluateWhere(o.Where, outputData)
-			if whereErr != nil {
-				return fmt.Errorf("where filter failed: %w", whereErr)
-			}
-			outputData = filtered
+		var filterErr error
+		outputData, filterErr = applyWhereFilter(o.Where, outputData)
+		if filterErr != nil {
+			return filterErr
 		}
 		if o.Expression != "" {
 			ctx := o.Ctx
@@ -445,16 +439,10 @@ func (o *OutputOptions) writeStructured(data any) error {
 	outputData := data
 
 	// Apply per-item Where filter before expression/serialization
-	if o.Where != "" {
-		engine, engineErr := core.New()
-		if engineErr != nil {
-			return fmt.Errorf("failed to create CEL engine for where filter: %w", engineErr)
-		}
-		filtered, whereErr := engine.EvaluateWhere(o.Where, outputData)
-		if whereErr != nil {
-			return fmt.Errorf("where filter failed: %w", whereErr)
-		}
-		outputData = filtered
+	var err error
+	outputData, err = applyWhereFilter(o.Where, outputData)
+	if err != nil {
+		return err
 	}
 
 	// Apply expression filter if provided

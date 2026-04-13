@@ -41,6 +41,7 @@ func AddKvxOutputFlags(cmd *cobra.Command, outputFormat *string, interactive *bo
 }
 
 // AddKvxOutputFlagsWithWhere adds kvx-enabled output flags including the --where per-item filter.
+// It also registers a PreRunE hook that validates the output format before the command runs.
 func AddKvxOutputFlagsWithWhere(cmd *cobra.Command, outputFormat *string, interactive *bool, expression, where *string) {
 	validFormats := kvx.BaseOutputFormats()
 
@@ -56,6 +57,24 @@ func AddKvxOutputFlagsWithWhere(cmd *cobra.Command, outputFormat *string, intera
 	if where != nil {
 		cmd.Flags().StringVarP(where, "where", "w", "",
 			"Per-item CEL boolean filter for list data (e.g., '_.enabled')")
+	}
+
+	// Chain a PreRunE that validates the output format flag.
+	// Cobra uses else-if between PreRunE and PreRun, so if we set PreRunE we
+	// must also call any existing PreRun/PreRunE to avoid swallowing them.
+	existingE := cmd.PreRunE
+	existingPre := cmd.PreRun
+	cmd.PreRunE = func(cmd *cobra.Command, args []string) error {
+		if err := ValidateKvxOutputFormat(*outputFormat); err != nil {
+			return err
+		}
+		if existingE != nil {
+			return existingE(cmd, args)
+		}
+		if existingPre != nil {
+			existingPre(cmd, args)
+		}
+		return nil
 	}
 }
 

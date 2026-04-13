@@ -18,6 +18,23 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 )
 
+// applyWhereFilter applies a per-item CEL boolean filter to data.
+// Returns the original data unchanged if where is empty.
+func applyWhereFilter(where string, data any) (any, error) {
+	if where == "" {
+		return data, nil
+	}
+	engine, err := core.New()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create CEL engine for where filter: %w", err)
+	}
+	filtered, err := engine.EvaluateWhere(where, data)
+	if err != nil {
+		return nil, fmt.Errorf("where filter failed: %w", err)
+	}
+	return filtered, nil
+}
+
 // ViewerOptions configures the kvx viewer
 type ViewerOptions struct {
 	// Ctx is the context for CEL expression evaluation.
@@ -219,16 +236,9 @@ func View(data any, opts ...Option) error {
 	}
 
 	// Apply per-item Where filter before Expression (consistent with writeStructured).
-	if options.Where != "" {
-		engine, engineErr := core.New()
-		if engineErr != nil {
-			return fmt.Errorf("failed to create CEL engine for where filter: %w", engineErr)
-		}
-		filtered, whereErr := engine.EvaluateWhere(options.Where, root)
-		if whereErr != nil {
-			return fmt.Errorf("where filter failed: %w", whereErr)
-		}
-		root = filtered
+	root, err = applyWhereFilter(options.Where, root)
+	if err != nil {
+		return err
 	}
 
 	// Apply CEL expression filter if provided
@@ -329,7 +339,9 @@ func renderTree(root any, options *ViewerOptions) error {
 
 // renderMermaid outputs data as a Mermaid flowchart diagram.
 func renderMermaid(root any, options *ViewerOptions) error {
-	output := tui.Render(root, tui.FormatMermaid, tui.TableOptions{})
+	output := tui.Render(root, tui.FormatMermaid, tui.TableOptions{
+		NoColor: options.NoColor,
+	})
 	fmt.Fprint(options.Out, output)
 	return nil
 }
@@ -341,47 +353,9 @@ func runInteractive(root any, options *ViewerOptions) error {
 		return fmt.Errorf("failed to setup CEL provider: %w", err)
 	}
 
-	cfg := tui.DefaultConfig()
-	cfg.AppName = options.AppName
-	cfg.NoColor = options.NoColor
-	cfg.Width = options.Width
-	cfg.Height = options.Height
-
-	if options.Theme != "" {
-		cfg.ThemeName = options.Theme
-	}
-
-	if options.HelpTitle != "" {
-		cfg.HelpAboutTitle = options.HelpTitle
-	}
-	if len(options.HelpLines) > 0 {
-		cfg.HelpAboutLines = options.HelpLines
-	}
-
-	if options.InitialExpr != "" {
-		cfg.InitialExpr = options.InitialExpr
-	}
-
-	// Apply display schema (x-kvx-* extensions) for rich card-list and detail views.
-	// Also merge any derived column hints with programmatic hints.
-	if len(options.DisplaySchemaJSON) > 0 {
-		schemaHints, displaySchema, err := tui.ParseSchemaWithDisplay(options.DisplaySchemaJSON)
-		if err == nil {
-			if displaySchema != nil {
-				cfg.DisplaySchema = displaySchema
-			}
-			// Merge schema-derived hints: programmatic hints take precedence
-			if len(schemaHints) > 0 {
-				merged := make(map[string]tui.ColumnHint, len(schemaHints))
-				for k, v := range schemaHints {
-					merged[k] = v
-				}
-				for k, v := range options.ColumnHints {
-					merged[k] = v
-				}
-				options.ColumnHints = merged
-			}
-		}
+	cfg, err := buildTUIConfig(options)
+	if err != nil {
+		return err
 	}
 
 	teaOpts := make([]tea.ProgramOption, 0)
@@ -442,16 +416,9 @@ func Snapshot(data any, opts ...Option) (string, error) {
 	}
 
 	// Apply per-item Where filter before Expression (consistent with writeStructured).
-	if options.Where != "" {
-		engine, engineErr := core.New()
-		if engineErr != nil {
-			return "", fmt.Errorf("failed to create CEL engine for where filter: %w", engineErr)
-		}
-		filtered, whereErr := engine.EvaluateWhere(options.Where, root)
-		if whereErr != nil {
-			return "", fmt.Errorf("where filter failed: %w", whereErr)
-		}
-		root = filtered
+	root, err = applyWhereFilter(options.Where, root)
+	if err != nil {
+		return "", err
 	}
 
 	// Apply CEL expression filter if provided
@@ -466,21 +433,22 @@ func Snapshot(data any, opts ...Option) (string, error) {
 		}
 	}
 
-	cfg, cfgErr := buildSnapshotConfig(options)
+	cfg, cfgErr := buildTUIConfig(options)
 	if cfgErr != nil {
-		return "", fmt.Errorf("failed to build snapshot config: %w", cfgErr)
+		return "", fmt.Errorf("failed to build TUI config: %w", cfgErr)
 	}
+	cfg.HideFooter = true
 	return tui.RenderSnapshot(root, cfg), nil
 }
 
-// buildSnapshotConfig creates a tui.Config from ViewerOptions for snapshot rendering.
-func buildSnapshotConfig(options *ViewerOptions) (tui.Config, error) {
+// buildTUIConfig creates a tui.Config from ViewerOptions.
+// This is shared between runInteractive and Snapshot to avoid duplication.
+func buildTUIConfig(options *ViewerOptions) (tui.Config, error) {
 	cfg := tui.DefaultConfig()
 	cfg.AppName = options.AppName
 	cfg.NoColor = options.NoColor
 	cfg.Width = options.Width
 	cfg.Height = options.Height
-	cfg.HideFooter = true
 
 	if options.Theme != "" {
 		cfg.ThemeName = options.Theme
@@ -495,14 +463,26 @@ func buildSnapshotConfig(options *ViewerOptions) (tui.Config, error) {
 		cfg.InitialExpr = options.InitialExpr
 	}
 
-	// Apply display schema if provided
+	// Apply display schema (x-kvx-* extensions) for rich card-list and detail views.
+	// Also merge any derived column hints with programmatic hints.
 	if len(options.DisplaySchemaJSON) > 0 {
-		_, displaySchema, err := tui.ParseSchemaWithDisplay(options.DisplaySchemaJSON)
+		schemaHints, displaySchema, err := tui.ParseSchemaWithDisplay(options.DisplaySchemaJSON)
 		if err != nil {
 			return tui.Config{}, fmt.Errorf("failed to parse display schema: %w", err)
 		}
 		if displaySchema != nil {
 			cfg.DisplaySchema = displaySchema
+		}
+		// Merge schema-derived hints: programmatic hints take precedence
+		if len(schemaHints) > 0 {
+			merged := make(map[string]tui.ColumnHint, len(schemaHints))
+			for k, v := range schemaHints {
+				merged[k] = v
+			}
+			for k, v := range options.ColumnHints {
+				merged[k] = v
+			}
+			options.ColumnHints = merged
 		}
 	}
 

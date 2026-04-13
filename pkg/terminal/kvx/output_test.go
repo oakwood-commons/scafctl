@@ -934,3 +934,56 @@ func TestStructToMap(t *testing.T) {
 		})
 	}
 }
+
+func TestOutputOptions_Write_KvxNonTTY_WithWhere(t *testing.T) {
+	// Tests the non-TTY auto-fallback path in writeKvx with Where filter
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatAuto
+	opts.Where = "_.active"
+
+	data := []map[string]any{
+		{"name": "keep", "active": true},
+		{"name": "drop", "active": false},
+	}
+	err := opts.Write(data)
+	require.NoError(t, err)
+	assert.Contains(t, out.String(), "keep")
+	assert.NotContains(t, out.String(), "drop")
+}
+
+func TestOutputOptions_Write_KvxNonTTY_WithWhereAndExpression(t *testing.T) {
+	// Tests the non-TTY auto-fallback path with both Where and Expression
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatTable
+	opts.Where = "_.active"
+	opts.Expression = "_"
+
+	data := []map[string]any{
+		{"name": "alpha", "active": true},
+		{"name": "beta", "active": false},
+	}
+	err := opts.Write(data)
+	require.NoError(t, err)
+	assert.Contains(t, out.String(), "alpha")
+	assert.NotContains(t, out.String(), "beta")
+}
+
+func TestOutputOptions_Write_KvxNonTTY_InvalidWhere(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatAuto
+	opts.Where = "invalid((syntax"
+
+	data := []map[string]any{{"name": "test"}}
+	err := opts.Write(data)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "where filter failed")
+}

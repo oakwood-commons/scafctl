@@ -14,7 +14,7 @@ import (
 
 // CommandInfo holds structured metadata about a single CLI command.
 type CommandInfo struct {
-	Name        string   `json:"name" yaml:"name" doc:"Full command path" maxLength:"256" example:"run solution"`
+	Name        string   `json:"name" yaml:"name" doc:"Full command path including root" maxLength:"256" example:"mycli run solution"`
 	Short       string   `json:"short" yaml:"short" doc:"Short description" maxLength:"512" example:"Run a solution workflow"`
 	Group       string   `json:"group" yaml:"group" doc:"Command group" maxLength:"64" example:"core"`
 	Aliases     []string `json:"aliases,omitempty" yaml:"aliases,omitempty" doc:"Command aliases" maxItems:"10"`

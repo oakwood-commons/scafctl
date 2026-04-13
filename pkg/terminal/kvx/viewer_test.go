@@ -171,6 +171,59 @@ func TestSnapshot_WithThemeAndHelp(t *testing.T) {
 	assert.NotEmpty(t, result)
 }
 
+func TestBuildTUIConfig_ValidDisplaySchema(t *testing.T) {
+	schema := []byte(`{
+		"type": "object",
+		"properties": {
+			"name": {"type": "string", "title": "Name"}
+		},
+		"x-kvx-icon": "name",
+		"x-kvx-detail": {
+			"sections": [
+				{"title": "Info", "fields": ["name"], "layout": "inline"}
+			]
+		}
+	}`)
+
+	options := DefaultViewerOptions()
+	options.DisplaySchemaJSON = schema
+
+	cfg, err := buildTUIConfig(options)
+	require.NoError(t, err)
+	assert.NotNil(t, cfg.DisplaySchema)
+}
+
+func TestBuildTUIConfig_InvalidDisplaySchema(t *testing.T) {
+	schema := []byte(`{"x-kvx-detail": {"sections": [{"fields": ["key"], "layout": "invalid"}]}}`)
+
+	options := DefaultViewerOptions()
+	options.DisplaySchemaJSON = schema
+
+	_, err := buildTUIConfig(options)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "display schema")
+}
+
+func TestBuildTUIConfig_MergesColumnHints(t *testing.T) {
+	schema := []byte(`{
+		"type": "object",
+		"properties": {
+			"name": {"type": "string", "title": "Display Name", "maxLength": 50}
+		}
+	}`)
+
+	options := DefaultViewerOptions()
+	options.DisplaySchemaJSON = schema
+	options.ColumnHints = map[string]tui.ColumnHint{
+		"name": {MaxWidth: 30, Priority: 5},
+	}
+
+	_, err := buildTUIConfig(options)
+	require.NoError(t, err)
+	// Programmatic hints should take precedence
+	assert.Equal(t, 30, options.ColumnHints["name"].MaxWidth)
+}
+
 func BenchmarkSnapshot(b *testing.B) {
 	data := make([]map[string]any, 20)
 	for i := range data {
@@ -185,4 +238,30 @@ func BenchmarkSnapshot(b *testing.B) {
 	for b.Loop() {
 		_, _ = Snapshot(data, WithNoColor(true), WithDimensions(120, 40))
 	}
+}
+
+func TestApplyWhereFilter_Empty(t *testing.T) {
+	data := []map[string]any{{"name": "a"}}
+	result, err := applyWhereFilter("", data)
+	require.NoError(t, err)
+	assert.Equal(t, data, result)
+}
+
+func TestApplyWhereFilter_Filters(t *testing.T) {
+	data := []map[string]any{
+		{"name": "keep", "ok": true},
+		{"name": "drop", "ok": false},
+	}
+	result, err := applyWhereFilter("_.ok", data)
+	require.NoError(t, err)
+	filtered, ok := result.([]any)
+	require.True(t, ok)
+	require.Len(t, filtered, 1)
+}
+
+func TestApplyWhereFilter_InvalidExpr(t *testing.T) {
+	data := []map[string]any{{"name": "a"}}
+	_, err := applyWhereFilter("invalid((", data)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "where filter failed")
 }
