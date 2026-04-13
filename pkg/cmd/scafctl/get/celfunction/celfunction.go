@@ -5,6 +5,7 @@ package celfunction
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,9 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
+
+//go:embed celfunction_schema.json
+var celFunctionSchemaJSON []byte
 
 // FunctionSummary is the table-friendly output for function listing.
 type FunctionSummary struct {
@@ -164,8 +168,8 @@ func (o *Options) RunListFunctions(ctx context.Context) error {
 		}
 	}
 
-	// Build output data
-	if o.Output == "json" || o.Output == "yaml" {
+	// Full data for json/yaml and interactive TUI
+	if o.Output == "json" || o.Output == "yaml" || o.Interactive {
 		output := celdetail.BuildFunctionList(funcs)
 		return o.writeOutput(ctx, output)
 	}
@@ -303,14 +307,8 @@ func (o *Options) writeOutput(ctx context.Context, data any) error {
 		kvx.WithOutputContext(ctx),
 		kvx.WithOutputNoColor(o.CliParams.NoColor),
 		kvx.WithOutputAppName(o.BinaryName+" get cel-functions"),
-		kvx.WithOutputHelp(o.BinaryName+" get cel-functions", []string{
-			"CEL Extension Functions Viewer",
-			"",
-			"Navigate: ↑↓ arrows | Back: ← | Enter: →",
-			"Search: / or F3 | Expression: F6",
-			"Copy path: F5 | Quit: q or F10",
-		}),
 		kvx.WithIOStreams(o.IOStreams),
+		kvx.WithOutputDisplaySchemaJSON(celFunctionSchemaJSON),
 		kvx.WithOutputColumnOrder([]string{"name", "description"}),
 		kvx.WithOutputColumnHints(map[string]tui.ColumnHint{
 			"name":          {MaxWidth: 25, Priority: 10},

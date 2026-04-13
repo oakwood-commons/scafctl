@@ -84,7 +84,8 @@ func ValidateKvxOutputFormat(format string) error {
 
 // ToKvxOutputOptions converts flag values to OutputOptions for writing output.
 // This creates a fully configured OutputOptions instance from flag values.
-// If the output format is unrecognized, it defaults to auto.
+// If the output format is unrecognized, it silently defaults to auto.
+// Use [ValidateKvxOutputFormat] in the command's RunE to reject invalid formats early.
 func ToKvxOutputOptions(flags *KvxOutputFlags, opts ...kvx.OutputOption) *kvx.OutputOptions {
 	kvxOpts := &kvx.OutputOptions{
 		Interactive: flags.Interactive,

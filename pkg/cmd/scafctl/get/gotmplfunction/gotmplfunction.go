@@ -5,6 +5,7 @@ package gotmplfunction
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,9 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
+
+//go:embed gotmplfunction_schema.json
+var gotmplFunctionSchemaJSON []byte
 
 // FunctionSummary is the table-friendly output for function listing.
 type FunctionSummary struct {
@@ -157,8 +161,8 @@ func (o *Options) RunListFunctions(ctx context.Context) error {
 		}
 	}
 
-	// Build output data
-	if o.Output == "json" || o.Output == "yaml" {
+	// Full data for json/yaml and interactive TUI
+	if o.Output == "json" || o.Output == "yaml" || o.Interactive {
 		output := gotmpldetail.BuildFunctionList(funcs)
 		return o.writeOutput(ctx, output)
 	}
@@ -280,14 +284,8 @@ func (o *Options) writeOutput(ctx context.Context, data any) error {
 		kvx.WithOutputContext(ctx),
 		kvx.WithOutputNoColor(o.CliParams.NoColor),
 		kvx.WithOutputAppName(o.BinaryName+" get go-template-functions"),
-		kvx.WithOutputHelp(o.BinaryName+" get go-template-functions", []string{
-			"Go Template Extension Functions Viewer",
-			"",
-			"Navigate: ↑↓ arrows | Back: ← | Enter: →",
-			"Search: / or F3 | Expression: F6",
-			"Copy path: F5 | Quit: q or F10",
-		}),
 		kvx.WithIOStreams(o.IOStreams),
+		kvx.WithOutputDisplaySchemaJSON(gotmplFunctionSchemaJSON),
 		kvx.WithOutputColumnOrder([]string{"name", "description"}),
 		kvx.WithOutputColumnHints(map[string]tui.ColumnHint{
 			"name":          {MaxWidth: 25, Priority: 10},

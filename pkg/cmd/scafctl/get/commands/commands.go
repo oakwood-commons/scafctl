@@ -4,6 +4,7 @@
 package commands
 
 import (
+	_ "embed"
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
@@ -16,6 +17,9 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
+
+//go:embed commands_schema.json
+var commandsSchemaJSON []byte
 
 // CommandSummary is the table-friendly output for command listing.
 type CommandSummary struct {
@@ -93,10 +97,7 @@ func CommandCommands(cliParams *settings.Run, ioStreams *terminal.IOStreams, bin
 				kvx.WithOutputNoColor(cliParams.NoColor),
 				kvx.WithOutputAppName(binaryName+" get commands"),
 				kvx.WithIOStreams(ioStreams),
-				kvx.WithOutputHelp("Commands", []string{
-					"Search: / or F3 | Expression: F6",
-					"Copy path: F5 | Quit: q or F10",
-				}),
+				kvx.WithOutputDisplaySchemaJSON(commandsSchemaJSON),
 				kvx.WithOutputColumnOrder([]string{"name", "short"}),
 				kvx.WithOutputColumnHints(map[string]tui.ColumnHint{
 					"name":      {MaxWidth: 35, Priority: 10},
@@ -107,8 +108,8 @@ func CommandCommands(cliParams *settings.Run, ioStreams *terminal.IOStreams, bin
 				}),
 			)
 
-			// Full data for json/yaml, flat summary for table
-			if opts.Output == "json" || opts.Output == "yaml" {
+			// Full data for json/yaml and interactive TUI, flat summary for table
+			if opts.Output == "json" || opts.Output == "yaml" || opts.Interactive {
 				return kvxOpts.Write(commands)
 			}
 

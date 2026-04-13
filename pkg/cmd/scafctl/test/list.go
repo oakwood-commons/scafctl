@@ -141,6 +141,7 @@ func runList(ctx context.Context, opts *ListOptions) error {
 	outputOpts := flags.ToKvxOutputOptions(&opts.KvxOutputFlags,
 		kvx.WithIOStreams(opts.IOStreams),
 		kvx.WithOutputContext(ctx),
+		kvx.WithOutputNoColor(opts.CliParams.NoColor),
 	)
 
 	return soltesting.ReportList(solutions, outputOpts, opts.IncludeBuiltins)

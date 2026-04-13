@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CEL Extension Functions",
+  "description": "Schema for CEL extension functions with display extensions",
+  "type": "array",
+
+  "x-kvx-icon": "f(x)",
+  "x-kvx-collectionTitle": "CEL Functions",
+
+  "x-kvx-list": {
+    "titleField": "name",
+    "subtitleField": "description",
+    "subtitleMaxLines": 1,
+    "badgeFields": ["custom"]
+  },
+
+  "x-kvx-detail": {
+    "titleField": "name",
+    "hiddenFields": [],
+    "sections": [
+      {
+        "title": "",
+        "fields": ["name", "custom"],
+        "layout": "inline"
+      },
+      {
+        "title": "Description",
+        "fields": ["description"],
+        "layout": "paragraph"
+      },
+      {
+        "title": "Function Names",
+        "fields": ["functionNames"],
+        "layout": "tags"
+      },
+      {
+        "title": "Examples",
+        "fields": ["examples"],
+        "layout": "table"
+      },
+      {
+        "title": "Links",
+        "fields": ["links"],
+        "layout": "tags"
+      }
+    ]
+  },
+
+  "items": {
+    "type": "object",
+    "required": ["name"],
+    "properties": {
+      "name": {
+        "type": "string",
+        "title": "Name",
+        "description": "Extension function name"
+      },
+      "custom": {
+        "type": "boolean",
+        "title": "Custom",
+        "description": "Whether this is a custom scafctl extension"
+      },
+      "description": {
+        "type": "string",
+        "title": "Description",
+        "description": "Human-readable summary of the function"
+      },
+      "functionNames": {
+        "type": "array",
+        "items": { "type": "string" },
+        "title": "Function Names",
+        "description": "Individual function names provided by this extension"
+      },
+      "examples": {
+        "type": "array",
+        "title": "Examples",
+        "description": "Usage examples"
+      },
+      "links": {
+        "type": "array",
+        "items": { "type": "string" },
+        "title": "Links",
+        "description": "Documentation links"
+      }
+    }
+  }
+}

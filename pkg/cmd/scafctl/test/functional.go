@@ -320,6 +320,7 @@ func runFunctional(ctx context.Context, opts *FunctionalOptions) error {
 	outputOpts := flags.ToKvxOutputOptions(&opts.KvxOutputFlags,
 		kvx.WithIOStreams(opts.IOStreams),
 		kvx.WithOutputContext(ctx),
+		kvx.WithOutputNoColor(opts.CliParams.NoColor),
 	)
 
 	// When stdout is not a terminal (e.g. redirected to a file), include

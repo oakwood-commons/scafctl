@@ -290,6 +290,14 @@ func WithIOStreams(ioStreams *terminal.IOStreams) OutputOption {
 	return func(o *OutputOptions) { o.IOStreams = ioStreams }
 }
 
+// Snapshot renders a non-interactive snapshot of the TUI and returns it as a string.
+// This produces the same visual output as interactive mode but without blocking for input,
+// making it suitable for golden file tests and non-TTY environments.
+func (o *OutputOptions) Snapshot(data any) (string, error) {
+	kvxOpts := o.buildViewerOptions()
+	return Snapshot(data, kvxOpts...)
+}
+
 // Write outputs data in the configured format with kvx support.
 // It handles automatic fallback to JSON when output is piped,
 // CEL expression filtering, and interactive TUI mode.
@@ -336,15 +344,26 @@ func (o *OutputOptions) writeKvx(data any) error {
 			return fmt.Errorf("interactive mode requires a terminal; use -o json or -o yaml for piped output")
 		}
 		// Silently fall back to JSON for non-interactive piped output.
-		// Apply CEL expression filter if provided (same as structured output path).
+		// Apply Where then Expression (same order as writeStructured).
 		outputData := data
+		if o.Where != "" {
+			engine, engineErr := core.New()
+			if engineErr != nil {
+				return fmt.Errorf("failed to create CEL engine for where filter: %w", engineErr)
+			}
+			filtered, whereErr := engine.EvaluateWhere(o.Where, outputData)
+			if whereErr != nil {
+				return fmt.Errorf("where filter failed: %w", whereErr)
+			}
+			outputData = filtered
+		}
 		if o.Expression != "" {
 			ctx := o.Ctx
 			if ctx == nil {
 				ctx = context.Background()
 			}
 			var err error
-			outputData, err = EvaluateExpression(ctx, o.Expression, data)
+			outputData, err = EvaluateExpression(ctx, o.Expression, outputData)
 			if err != nil {
 				return fmt.Errorf("expression evaluation failed: %w", err)
 			}
@@ -353,11 +372,11 @@ func (o *OutputOptions) writeKvx(data any) error {
 	}
 
 	// Build kvx options
-	kvxOpts := []Option{
-		WithNoColor(o.NoColor),
+	kvxOpts := o.buildViewerOptions()
+	kvxOpts = append(kvxOpts,
 		WithIO(o.IOStreams.In, o.IOStreams.Out),
 		WithInteractive(o.Interactive),
-	}
+	)
 
 	// Pass layout based on output format
 	switch o.Format {
@@ -373,6 +392,16 @@ func (o *OutputOptions) writeKvx(data any) error {
 		// Auto and empty use default layout (auto).
 		// JSON/YAML/Quiet/Test are handled upstream and should not reach here,
 		// but are listed for exhaustiveness.
+	}
+
+	return View(data, kvxOpts...)
+}
+
+// buildViewerOptions converts OutputOptions fields into viewer Option slice.
+// This is shared between writeKvx and Snapshot to avoid duplication.
+func (o *OutputOptions) buildViewerOptions() []Option {
+	kvxOpts := []Option{
+		WithNoColor(o.NoColor),
 	}
 
 	// Pass context for CEL expression evaluation (enables debug.out, etc.)
@@ -408,7 +437,7 @@ func (o *OutputOptions) writeKvx(data any) error {
 		kvxOpts = append(kvxOpts, WithDisplaySchemaJSON(o.DisplaySchemaJSON))
 	}
 
-	return View(data, kvxOpts...)
+	return kvxOpts
 }
 
 // writeStructured handles JSON/YAML output with optional expression and where filtering.

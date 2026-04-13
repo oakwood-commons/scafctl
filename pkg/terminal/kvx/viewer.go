@@ -218,20 +218,7 @@ func View(data any, opts ...Option) error {
 		return fmt.Errorf("failed to load data: %w", err)
 	}
 
-	// Apply CEL expression filter if provided
-	if options.Expression != "" {
-		// Use context from options, or fall back to Background
-		ctx := options.Ctx
-		if ctx == nil {
-			ctx = context.Background()
-		}
-		root, err = EvaluateWithScafctlCEL(ctx, options.Expression, root)
-		if err != nil {
-			return fmt.Errorf("expression evaluation failed: %w", err)
-		}
-	}
-
-	// Apply per-item Where filter if provided
+	// Apply per-item Where filter before Expression (consistent with writeStructured).
 	if options.Where != "" {
 		engine, engineErr := core.New()
 		if engineErr != nil {
@@ -242,6 +229,18 @@ func View(data any, opts ...Option) error {
 			return fmt.Errorf("where filter failed: %w", whereErr)
 		}
 		root = filtered
+	}
+
+	// Apply CEL expression filter if provided
+	if options.Expression != "" {
+		ctx := options.Ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		root, err = EvaluateWithScafctlCEL(ctx, options.Expression, root)
+		if err != nil {
+			return fmt.Errorf("expression evaluation failed: %w", err)
+		}
 	}
 
 	// Interactive mode: launch TUI
@@ -426,4 +425,86 @@ func RenderList(data any, noColor bool) (string, error) {
 	}
 
 	return tui.RenderList(root, noColor), nil
+}
+
+// Snapshot renders a non-interactive snapshot of the TUI and returns it as a string.
+// This produces the same visual output as interactive mode but without blocking for input,
+// making it suitable for tests and non-TTY environments.
+func Snapshot(data any, opts ...Option) (string, error) {
+	options := DefaultViewerOptions()
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	root, err := core.LoadObject(data)
+	if err != nil {
+		return "", fmt.Errorf("failed to load data: %w", err)
+	}
+
+	// Apply per-item Where filter before Expression (consistent with writeStructured).
+	if options.Where != "" {
+		engine, engineErr := core.New()
+		if engineErr != nil {
+			return "", fmt.Errorf("failed to create CEL engine for where filter: %w", engineErr)
+		}
+		filtered, whereErr := engine.EvaluateWhere(options.Where, root)
+		if whereErr != nil {
+			return "", fmt.Errorf("where filter failed: %w", whereErr)
+		}
+		root = filtered
+	}
+
+	// Apply CEL expression filter if provided
+	if options.Expression != "" {
+		ctx := options.Ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		root, err = EvaluateWithScafctlCEL(ctx, options.Expression, root)
+		if err != nil {
+			return "", fmt.Errorf("expression evaluation failed: %w", err)
+		}
+	}
+
+	cfg, cfgErr := buildSnapshotConfig(options)
+	if cfgErr != nil {
+		return "", fmt.Errorf("failed to build snapshot config: %w", cfgErr)
+	}
+	return tui.RenderSnapshot(root, cfg), nil
+}
+
+// buildSnapshotConfig creates a tui.Config from ViewerOptions for snapshot rendering.
+func buildSnapshotConfig(options *ViewerOptions) (tui.Config, error) {
+	cfg := tui.DefaultConfig()
+	cfg.AppName = options.AppName
+	cfg.NoColor = options.NoColor
+	cfg.Width = options.Width
+	cfg.Height = options.Height
+	cfg.HideFooter = true
+
+	if options.Theme != "" {
+		cfg.ThemeName = options.Theme
+	}
+	if options.HelpTitle != "" {
+		cfg.HelpAboutTitle = options.HelpTitle
+	}
+	if len(options.HelpLines) > 0 {
+		cfg.HelpAboutLines = options.HelpLines
+	}
+	if options.InitialExpr != "" {
+		cfg.InitialExpr = options.InitialExpr
+	}
+
+	// Apply display schema if provided
+	if len(options.DisplaySchemaJSON) > 0 {
+		_, displaySchema, err := tui.ParseSchemaWithDisplay(options.DisplaySchemaJSON)
+		if err != nil {
+			return tui.Config{}, fmt.Errorf("failed to parse display schema: %w", err)
+		}
+		if displaySchema != nil {
+			cfg.DisplaySchema = displaySchema
+		}
+	}
+
+	return cfg, nil
 }

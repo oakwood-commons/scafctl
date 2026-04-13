@@ -79,8 +79,9 @@ func walkCommands(cmd *cobra.Command, parentPath, parentGroup string, leafOnly b
 
 // countFlags counts the number of flags visible on a command.
 // This uses Flags().VisitAll which avoids triggering mergePersistentFlags
-// (can panic on shorthand conflicts). The count includes persistent flags
-// inherited from parents.
+// (can panic on shorthand conflicts). The count covers only flags that
+// have already been added to the command's FlagSet; persistent flags
+// from parent commands are included only if Cobra has already merged them.
 func countFlags(cmd *cobra.Command) int {
 	n := 0
 	cmd.Flags().VisitAll(func(_ *pflag.Flag) { n++ })

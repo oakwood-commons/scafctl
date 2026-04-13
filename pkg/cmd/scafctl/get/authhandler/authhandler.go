@@ -5,6 +5,7 @@ package authhandler
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -53,6 +54,9 @@ var authHandlerSchema = []byte(`{
 		}
 	}
 }`)
+
+//go:embed authhandler_schema.json
+var authHandlerDisplaySchemaJSON []byte
 
 // HandlerSummary is the table-friendly output for auth handler listing.
 type HandlerSummary struct {
@@ -142,7 +146,7 @@ func (o *Options) RunListHandlers(ctx context.Context) error {
 		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
-	useFullOutput := o.Output == "json" || o.Output == "yaml"
+	useFullOutput := o.Output == "json" || o.Output == "yaml" || o.Interactive
 
 	var results []map[string]any
 	var summaries []HandlerSummary
@@ -260,13 +264,7 @@ func (o *Options) writeOutput(ctx context.Context, data any) error {
 		kvx.WithOutputContext(ctx),
 		kvx.WithOutputNoColor(o.CliParams.NoColor),
 		kvx.WithOutputAppName(o.BinaryName+" get authhandler"),
-		kvx.WithOutputHelp(o.BinaryName+" get authhandler", []string{
-			"Auth Handler Viewer",
-			"",
-			"Navigate: ↑↓ arrows | Back: ← | Enter: →",
-			"Search: / or F3 | Expression: F6",
-			"Copy path: F5 | Quit: q or F10",
-		}),
+		kvx.WithOutputDisplaySchemaJSON(authHandlerDisplaySchemaJSON),
 		// Column order: Display Name first, then Name, Capabilities, Flows.
 		// JSON Schema does not define ordering, so it is set explicitly here.
 		kvx.WithOutputColumnOrder([]string{"displayName", "name", "capabilities", "flows"}),
