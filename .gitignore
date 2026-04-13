@@ -44,7 +44,7 @@ go.work.sum
 /logs
 scafctl.log
 scafctl.exe~
-scafctl
+/scafctl
 /modules
 /env
 **/ca-key.pem
@@ -67,3 +67,8 @@ __debug*
 .cache/*
 .tool/*
 issues/
+# Bubble Tea debug logs
+tea_debug.log
+
+# Bubble Tea debug logs
+tea_debug.log

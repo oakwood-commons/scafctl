@@ -301,6 +301,12 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 	}
 
 	lgr := logger.FromContext(ctx)
+
+	// Global --verbose implies --show-execution for resolvers
+	if o.CliParams != nil && o.CliParams.Verbose {
+		o.ShowExecution = true
+	}
+
 	lgr.V(1).Info("running resolver",
 		"file", o.File,
 		"output", o.Output,

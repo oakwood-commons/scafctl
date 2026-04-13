@@ -329,6 +329,7 @@ type Run struct {
 	EntryPointSettings EntryPointSettings `json:"entryPointSettings" yaml:"entryPointSettings" doc:"Entry point configuration"`
 	IsQuiet            bool               `json:"isQuiet" yaml:"isQuiet" doc:"Whether to suppress non-essential output"`
 	NoColor            bool               `json:"noColor" yaml:"noColor" doc:"Whether to disable colored output"`
+	Verbose            bool               `json:"verbose" yaml:"verbose" doc:"Whether to enable verbose output"`
 	ExitOnError        bool               `json:"exitOnError" yaml:"exitOnError" doc:"Whether to exit on error"`
 	BinaryName         string             `json:"binaryName" yaml:"binaryName" doc:"Runtime binary name for the CLI" maxLength:"64" example:"scafctl"`
 }

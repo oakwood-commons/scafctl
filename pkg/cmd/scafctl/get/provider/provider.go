@@ -5,7 +5,6 @@ package provider
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	_ "embed"
 
 	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -23,7 +23,6 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
 //go:embed provider_schema.json
@@ -108,20 +107,26 @@ Examples:
 		SilenceUsage: true,
 	}
 
-	// Add output flags - default is simple list, -i launches custom TUI
-	validFormats := []string{"table", "json", "yaml", "quiet"}
-	cCmd.Flags().StringVarP(&options.Output, "output", "o", "",
-		fmt.Sprintf("Output format: %s", strings.Join(validFormats, ", ")))
-	cCmd.Flags().BoolVarP(&options.Interactive, "interactive", "i", false,
-		"Launch interactive TUI for browsing providers")
-	cCmd.Flags().StringVarP(&options.Expression, "expression", "e", "",
-		"CEL expression to filter/transform output data")
+	// Add kvx output flags (-o, -i, -e, -w)
+	flags.AddKvxOutputFlagsToStruct(cCmd, &options.KvxOutputFlags)
 
 	// Filter flags
 	cCmd.Flags().StringVar(&options.Capability, "capability", "", "Filter by capability (from, transform, validation, action)")
 	cCmd.Flags().StringVar(&options.Category, "category", "", "Filter by category")
 
 	return cCmd
+}
+
+// Summary is the table-friendly output for provider listing.
+type Summary struct {
+	Name         string `json:"name" yaml:"name" required:"true"`
+	DisplayName  string `json:"displayName" yaml:"displayName"`
+	Version      string `json:"version" yaml:"version"`
+	Category     string `json:"category" yaml:"category"`
+	Capabilities string `json:"capabilities" yaml:"capabilities"`
+	Description  string `json:"description" yaml:"description"`
+	Deprecated   bool   `json:"deprecated" yaml:"deprecated"`
+	Beta         bool   `json:"beta" yaml:"beta"`
 }
 
 // RunListProviders lists all providers
@@ -136,24 +141,19 @@ func (o *Options) RunListProviders(ctx context.Context) error {
 	// Apply filters
 	filtered := o.filterProviders(providers)
 
-	// Default (no -o flag and not interactive): simple list
-	if o.Output == "" && !o.Interactive {
-		return o.printSimpleList(ctx, filtered)
-	}
-
-	// Build output data for explicit output formats (-o table/json/yaml/quiet)
-	output := make([]map[string]any, 0, len(filtered))
+	// Build structured output for kvx
+	output := make([]Summary, 0, len(filtered))
 	for _, p := range filtered {
 		desc := p.Descriptor()
-		output = append(output, map[string]any{
-			"name":         desc.Name,
-			"displayName":  desc.DisplayName,
-			"version":      desc.Version.String(),
-			"description":  desc.Description,
-			"capabilities": CapabilitiesToStrings(desc.Capabilities),
-			"category":     desc.Category,
-			"deprecated":   desc.IsDeprecated,
-			"beta":         desc.Beta,
+		output = append(output, Summary{
+			Name:         desc.Name,
+			DisplayName:  desc.DisplayName,
+			Version:      desc.Version.String(),
+			Description:  desc.Description,
+			Capabilities: strings.Join(CapabilitiesToStrings(desc.Capabilities), ", "),
+			Category:     desc.Category,
+			Deprecated:   desc.IsDeprecated,
+			Beta:         desc.Beta,
 		})
 	}
 
@@ -175,7 +175,7 @@ func (o *Options) RunGetProvider(ctx context.Context, name string) error {
 	desc := p.Descriptor()
 
 	// Default: custom formatted view (unless -o is specified)
-	if o.Output == "" && !o.Interactive {
+	if (o.Output == "auto" || o.Output == "") && !o.Interactive {
 		return o.printProviderDetail(ctx, desc)
 	}
 
@@ -372,19 +372,6 @@ func (o *Options) printProviderDetail(ctx context.Context, desc *provider.Descri
 	return nil
 }
 
-// printSimpleList outputs providers as a simple list for non-interactive mode.
-func (o *Options) printSimpleList(ctx context.Context, providers []provider.Provider) error {
-	w := writer.FromContext(ctx)
-	if w == nil {
-		return nil
-	}
-	for _, p := range providers {
-		desc := p.Descriptor()
-		w.Plainlnf("%-20s %s", desc.Name, desc.Description)
-	}
-	return nil
-}
-
 // filterProviders applies capability and category filters
 func (o *Options) filterProviders(providers []provider.Provider) []provider.Provider {
 	if o.Capability == "" && o.Category == "" {
@@ -462,50 +449,24 @@ func (o *Options) getRegistry(ctx context.Context) *provider.Registry {
 
 // writeOutput writes the output using kvx
 func (o *Options) writeOutput(ctx context.Context, data any) error {
-	// Handle quiet output specially - just print names
-	if o.Output == "quiet" {
-		return o.writeQuietOutput(ctx, data)
-	}
-
 	// Use the shared kvx output infrastructure with display schema for rich TUI rendering
-	kvxOpts := flags.NewKvxOutputOptionsFromFlags(
-		o.Output,
-		o.Interactive,
-		o.Expression,
+	kvxOpts := flags.ToKvxOutputOptions(&o.KvxOutputFlags,
 		kvx.WithOutputContext(ctx),
 		kvx.WithOutputNoColor(o.CliParams.NoColor),
 		kvx.WithOutputAppName(o.BinaryName+" get provider"),
 		kvx.WithOutputDisplaySchemaJSON(providerSchemaJSON),
+		kvx.WithIOStreams(o.IOStreams),
+		kvx.WithOutputColumnOrder([]string{"name", "description"}),
+		kvx.WithOutputColumnHints(map[string]tui.ColumnHint{
+			"name":         {MaxWidth: 20, Priority: 10},
+			"displayName":  {Hidden: true},
+			"version":      {Hidden: true},
+			"category":     {Hidden: true},
+			"capabilities": {Hidden: true},
+			"deprecated":   {Hidden: true},
+			"beta":         {Hidden: true},
+		}),
 	)
-	kvxOpts.IOStreams = o.IOStreams
 
 	return kvxOpts.Write(data)
-}
-
-// writeQuietOutput prints just the provider names
-func (o *Options) writeQuietOutput(ctx context.Context, data any) error {
-	w := writer.FromContext(ctx)
-	if w == nil {
-		return nil
-	}
-	switch v := data.(type) {
-	case []map[string]any:
-		for _, item := range v {
-			if name, ok := item["name"].(string); ok {
-				w.Plainln(name)
-			}
-		}
-	case map[string]any:
-		if name, ok := v["name"].(string); ok {
-			w.Plainln(name)
-		} else {
-			// Single provider detail - output as yaml for quiet mode
-			data, _ := yaml.Marshal(v)
-			w.Plainln(string(data))
-		}
-	default:
-		data, _ := json.MarshalIndent(v, "", "  ")
-		w.Plainln(string(data))
-	}
-	return nil
 }

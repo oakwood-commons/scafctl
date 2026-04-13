@@ -7,11 +7,12 @@
 package proto
 
 import (
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
+
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -4422,77 +4423,80 @@ func file_pkg_plugin_proto_plugin_proto_rawDescGZIP() []byte {
 	return file_pkg_plugin_proto_plugin_proto_rawDescData
 }
 
-var file_pkg_plugin_proto_plugin_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_pkg_plugin_proto_plugin_proto_msgTypes = make([]protoimpl.MessageInfo, 66)
-var file_pkg_plugin_proto_plugin_proto_goTypes = []any{
-	(Diagnostic_Severity)(0),              // 0: plugin.Diagnostic.Severity
-	(*GetProvidersRequest)(nil),           // 1: plugin.GetProvidersRequest
-	(*GetProvidersResponse)(nil),          // 2: plugin.GetProvidersResponse
-	(*GetProviderDescriptorRequest)(nil),  // 3: plugin.GetProviderDescriptorRequest
-	(*GetProviderDescriptorResponse)(nil), // 4: plugin.GetProviderDescriptorResponse
-	(*ProviderDescriptor)(nil),            // 5: plugin.ProviderDescriptor
-	(*Link)(nil),                          // 6: plugin.Link
-	(*Example)(nil),                       // 7: plugin.Example
-	(*Contact)(nil),                       // 8: plugin.Contact
-	(*Schema)(nil),                        // 9: plugin.Schema
-	(*Parameter)(nil),                     // 10: plugin.Parameter
-	(*ExecuteProviderRequest)(nil),        // 11: plugin.ExecuteProviderRequest
-	(*ConfigureProviderRequest)(nil),      // 12: plugin.ConfigureProviderRequest
-	(*ConfigureProviderResponse)(nil),     // 13: plugin.ConfigureProviderResponse
-	(*SolutionMeta)(nil),                  // 14: plugin.SolutionMeta
-	(*IterationContext)(nil),              // 15: plugin.IterationContext
-	(*ExecuteProviderStreamChunk)(nil),    // 16: plugin.ExecuteProviderStreamChunk
-	(*Diagnostic)(nil),                    // 17: plugin.Diagnostic
-	(*ExecuteProviderResponse)(nil),       // 18: plugin.ExecuteProviderResponse
-	(*DescribeWhatIfRequest)(nil),         // 19: plugin.DescribeWhatIfRequest
-	(*DescribeWhatIfResponse)(nil),        // 20: plugin.DescribeWhatIfResponse
-	(*ExtractDependenciesRequest)(nil),    // 21: plugin.ExtractDependenciesRequest
-	(*ExtractDependenciesResponse)(nil),   // 22: plugin.ExtractDependenciesResponse
-	(*StopProviderRequest)(nil),           // 23: plugin.StopProviderRequest
-	(*StopProviderResponse)(nil),          // 24: plugin.StopProviderResponse
-	(*GetAuthHandlersRequest)(nil),        // 25: plugin.GetAuthHandlersRequest
-	(*GetAuthHandlersResponse)(nil),       // 26: plugin.GetAuthHandlersResponse
-	(*AuthHandlerInfo)(nil),               // 27: plugin.AuthHandlerInfo
-	(*LoginRequest)(nil),                  // 28: plugin.LoginRequest
-	(*LoginStreamMessage)(nil),            // 29: plugin.LoginStreamMessage
-	(*DeviceCodePrompt)(nil),              // 30: plugin.DeviceCodePrompt
-	(*LoginResult)(nil),                   // 31: plugin.LoginResult
-	(*Claims)(nil),                        // 32: plugin.Claims
-	(*LogoutRequest)(nil),                 // 33: plugin.LogoutRequest
-	(*LogoutResponse)(nil),                // 34: plugin.LogoutResponse
-	(*GetStatusRequest)(nil),              // 35: plugin.GetStatusRequest
-	(*GetStatusResponse)(nil),             // 36: plugin.GetStatusResponse
-	(*GetTokenRequest)(nil),               // 37: plugin.GetTokenRequest
-	(*GetTokenResponse)(nil),              // 38: plugin.GetTokenResponse
-	(*ListCachedTokensRequest)(nil),       // 39: plugin.ListCachedTokensRequest
-	(*ListCachedTokensResponse)(nil),      // 40: plugin.ListCachedTokensResponse
-	(*CachedTokenInfo)(nil),               // 41: plugin.CachedTokenInfo
-	(*PurgeExpiredTokensRequest)(nil),     // 42: plugin.PurgeExpiredTokensRequest
-	(*PurgeExpiredTokensResponse)(nil),    // 43: plugin.PurgeExpiredTokensResponse
-	(*ConfigureAuthHandlerRequest)(nil),   // 44: plugin.ConfigureAuthHandlerRequest
-	(*ConfigureAuthHandlerResponse)(nil),  // 45: plugin.ConfigureAuthHandlerResponse
-	(*StopAuthHandlerRequest)(nil),        // 46: plugin.StopAuthHandlerRequest
-	(*StopAuthHandlerResponse)(nil),       // 47: plugin.StopAuthHandlerResponse
-	(*GetSecretRequest)(nil),              // 48: plugin.GetSecretRequest
-	(*GetSecretResponse)(nil),             // 49: plugin.GetSecretResponse
-	(*SetSecretRequest)(nil),              // 50: plugin.SetSecretRequest
-	(*SetSecretResponse)(nil),             // 51: plugin.SetSecretResponse
-	(*DeleteSecretRequest)(nil),           // 52: plugin.DeleteSecretRequest
-	(*DeleteSecretResponse)(nil),          // 53: plugin.DeleteSecretResponse
-	(*ListSecretsRequest)(nil),            // 54: plugin.ListSecretsRequest
-	(*ListSecretsResponse)(nil),           // 55: plugin.ListSecretsResponse
-	(*GetAuthIdentityRequest)(nil),        // 56: plugin.GetAuthIdentityRequest
-	(*GetAuthIdentityResponse)(nil),       // 57: plugin.GetAuthIdentityResponse
-	(*ListAuthHandlersRequest)(nil),       // 58: plugin.ListAuthHandlersRequest
-	(*ListAuthHandlersResponse)(nil),      // 59: plugin.ListAuthHandlersResponse
-	(*GetAuthTokenRequest)(nil),           // 60: plugin.GetAuthTokenRequest
-	(*GetAuthTokenResponse)(nil),          // 61: plugin.GetAuthTokenResponse
-	nil,                                   // 62: plugin.ProviderDescriptor.OutputSchemasEntry
-	nil,                                   // 63: plugin.ProviderDescriptor.RawOutputSchemasEntry
-	nil,                                   // 64: plugin.Schema.ParametersEntry
-	nil,                                   // 65: plugin.ConfigureProviderRequest.SettingsEntry
-	nil,                                   // 66: plugin.ConfigureAuthHandlerRequest.SettingsEntry
-}
+var (
+	file_pkg_plugin_proto_plugin_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+	file_pkg_plugin_proto_plugin_proto_msgTypes  = make([]protoimpl.MessageInfo, 66)
+	file_pkg_plugin_proto_plugin_proto_goTypes   = []any{
+		(Diagnostic_Severity)(0),              // 0: plugin.Diagnostic.Severity
+		(*GetProvidersRequest)(nil),           // 1: plugin.GetProvidersRequest
+		(*GetProvidersResponse)(nil),          // 2: plugin.GetProvidersResponse
+		(*GetProviderDescriptorRequest)(nil),  // 3: plugin.GetProviderDescriptorRequest
+		(*GetProviderDescriptorResponse)(nil), // 4: plugin.GetProviderDescriptorResponse
+		(*ProviderDescriptor)(nil),            // 5: plugin.ProviderDescriptor
+		(*Link)(nil),                          // 6: plugin.Link
+		(*Example)(nil),                       // 7: plugin.Example
+		(*Contact)(nil),                       // 8: plugin.Contact
+		(*Schema)(nil),                        // 9: plugin.Schema
+		(*Parameter)(nil),                     // 10: plugin.Parameter
+		(*ExecuteProviderRequest)(nil),        // 11: plugin.ExecuteProviderRequest
+		(*ConfigureProviderRequest)(nil),      // 12: plugin.ConfigureProviderRequest
+		(*ConfigureProviderResponse)(nil),     // 13: plugin.ConfigureProviderResponse
+		(*SolutionMeta)(nil),                  // 14: plugin.SolutionMeta
+		(*IterationContext)(nil),              // 15: plugin.IterationContext
+		(*ExecuteProviderStreamChunk)(nil),    // 16: plugin.ExecuteProviderStreamChunk
+		(*Diagnostic)(nil),                    // 17: plugin.Diagnostic
+		(*ExecuteProviderResponse)(nil),       // 18: plugin.ExecuteProviderResponse
+		(*DescribeWhatIfRequest)(nil),         // 19: plugin.DescribeWhatIfRequest
+		(*DescribeWhatIfResponse)(nil),        // 20: plugin.DescribeWhatIfResponse
+		(*ExtractDependenciesRequest)(nil),    // 21: plugin.ExtractDependenciesRequest
+		(*ExtractDependenciesResponse)(nil),   // 22: plugin.ExtractDependenciesResponse
+		(*StopProviderRequest)(nil),           // 23: plugin.StopProviderRequest
+		(*StopProviderResponse)(nil),          // 24: plugin.StopProviderResponse
+		(*GetAuthHandlersRequest)(nil),        // 25: plugin.GetAuthHandlersRequest
+		(*GetAuthHandlersResponse)(nil),       // 26: plugin.GetAuthHandlersResponse
+		(*AuthHandlerInfo)(nil),               // 27: plugin.AuthHandlerInfo
+		(*LoginRequest)(nil),                  // 28: plugin.LoginRequest
+		(*LoginStreamMessage)(nil),            // 29: plugin.LoginStreamMessage
+		(*DeviceCodePrompt)(nil),              // 30: plugin.DeviceCodePrompt
+		(*LoginResult)(nil),                   // 31: plugin.LoginResult
+		(*Claims)(nil),                        // 32: plugin.Claims
+		(*LogoutRequest)(nil),                 // 33: plugin.LogoutRequest
+		(*LogoutResponse)(nil),                // 34: plugin.LogoutResponse
+		(*GetStatusRequest)(nil),              // 35: plugin.GetStatusRequest
+		(*GetStatusResponse)(nil),             // 36: plugin.GetStatusResponse
+		(*GetTokenRequest)(nil),               // 37: plugin.GetTokenRequest
+		(*GetTokenResponse)(nil),              // 38: plugin.GetTokenResponse
+		(*ListCachedTokensRequest)(nil),       // 39: plugin.ListCachedTokensRequest
+		(*ListCachedTokensResponse)(nil),      // 40: plugin.ListCachedTokensResponse
+		(*CachedTokenInfo)(nil),               // 41: plugin.CachedTokenInfo
+		(*PurgeExpiredTokensRequest)(nil),     // 42: plugin.PurgeExpiredTokensRequest
+		(*PurgeExpiredTokensResponse)(nil),    // 43: plugin.PurgeExpiredTokensResponse
+		(*ConfigureAuthHandlerRequest)(nil),   // 44: plugin.ConfigureAuthHandlerRequest
+		(*ConfigureAuthHandlerResponse)(nil),  // 45: plugin.ConfigureAuthHandlerResponse
+		(*StopAuthHandlerRequest)(nil),        // 46: plugin.StopAuthHandlerRequest
+		(*StopAuthHandlerResponse)(nil),       // 47: plugin.StopAuthHandlerResponse
+		(*GetSecretRequest)(nil),              // 48: plugin.GetSecretRequest
+		(*GetSecretResponse)(nil),             // 49: plugin.GetSecretResponse
+		(*SetSecretRequest)(nil),              // 50: plugin.SetSecretRequest
+		(*SetSecretResponse)(nil),             // 51: plugin.SetSecretResponse
+		(*DeleteSecretRequest)(nil),           // 52: plugin.DeleteSecretRequest
+		(*DeleteSecretResponse)(nil),          // 53: plugin.DeleteSecretResponse
+		(*ListSecretsRequest)(nil),            // 54: plugin.ListSecretsRequest
+		(*ListSecretsResponse)(nil),           // 55: plugin.ListSecretsResponse
+		(*GetAuthIdentityRequest)(nil),        // 56: plugin.GetAuthIdentityRequest
+		(*GetAuthIdentityResponse)(nil),       // 57: plugin.GetAuthIdentityResponse
+		(*ListAuthHandlersRequest)(nil),       // 58: plugin.ListAuthHandlersRequest
+		(*ListAuthHandlersResponse)(nil),      // 59: plugin.ListAuthHandlersResponse
+		(*GetAuthTokenRequest)(nil),           // 60: plugin.GetAuthTokenRequest
+		(*GetAuthTokenResponse)(nil),          // 61: plugin.GetAuthTokenResponse
+		nil,                                   // 62: plugin.ProviderDescriptor.OutputSchemasEntry
+		nil,                                   // 63: plugin.ProviderDescriptor.RawOutputSchemasEntry
+		nil,                                   // 64: plugin.Schema.ParametersEntry
+		nil,                                   // 65: plugin.ConfigureProviderRequest.SettingsEntry
+		nil,                                   // 66: plugin.ConfigureAuthHandlerRequest.SettingsEntry
+	}
+)
+
 var file_pkg_plugin_proto_plugin_proto_depIdxs = []int32{
 	5,  // 0: plugin.GetProviderDescriptorResponse.descriptor:type_name -> plugin.ProviderDescriptor
 	9,  // 1: plugin.ProviderDescriptor.schema:type_name -> plugin.Schema

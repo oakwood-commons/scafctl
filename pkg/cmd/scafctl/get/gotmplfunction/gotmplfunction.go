@@ -5,10 +5,12 @@ package gotmplfunction
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"path/filepath"
 	"strings"
 
+	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
@@ -20,6 +22,16 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
+
+//go:embed gotmplfunction_schema.json
+var gotmplFunctionSchemaJSON []byte
+
+// FunctionSummary is the table-friendly output for function listing.
+type FunctionSummary struct {
+	Name        string `json:"name" yaml:"name" required:"true"`
+	Description string `json:"description" yaml:"description"`
+	Custom      bool   `json:"custom" yaml:"custom"`
+}
 
 // Options holds configuration for the get go-template-functions command
 type Options struct {
@@ -93,14 +105,8 @@ Examples:
 		SilenceUsage: true,
 	}
 
-	// Add output flags
-	validFormats := []string{"table", "json", "yaml", "quiet"}
-	cCmd.Flags().StringVarP(&options.Output, "output", "o", "",
-		fmt.Sprintf("Output format: %s", strings.Join(validFormats, ", ")))
-	cCmd.Flags().BoolVarP(&options.Interactive, "interactive", "i", false,
-		"Launch interactive TUI for browsing functions")
-	cCmd.Flags().StringVarP(&options.Expression, "expression", "e", "",
-		"CEL expression to filter/transform output data")
+	// Add kvx output flags (-o, -i, -e, -w)
+	flags.AddKvxOutputFlagsToStruct(cCmd, &options.KvxOutputFlags)
 
 	// Filter flags
 	cCmd.Flags().BoolVar(&options.Custom, "custom", false, fmt.Sprintf("Show only custom %s functions", cliParams.BinaryName))
@@ -155,15 +161,22 @@ func (o *Options) RunListFunctions(ctx context.Context) error {
 		}
 	}
 
-	// Default (no -o flag): simple list
-	if o.Output == "" && !o.Interactive {
-		return o.printSimpleList(ctx, funcs)
+	// Full data for json/yaml and interactive TUI
+	if o.Output == "json" || o.Output == "yaml" || o.Interactive {
+		output := gotmpldetail.BuildFunctionList(funcs)
+		return o.writeOutput(ctx, output)
 	}
 
-	// Build output data
-	output := gotmpldetail.BuildFunctionList(funcs)
-
-	return o.writeOutput(ctx, output)
+	// Table-friendly summary for auto/table/quiet
+	summaries := make([]FunctionSummary, 0, len(funcs))
+	for _, fn := range funcs {
+		summaries = append(summaries, FunctionSummary{
+			Name:        fn.Name,
+			Description: fn.Description,
+			Custom:      fn.Custom,
+		})
+	}
+	return o.writeOutput(ctx, summaries)
 }
 
 // RunGetFunction gets details about a specific function
@@ -188,46 +201,12 @@ func (o *Options) RunGetFunction(ctx context.Context, name string) error {
 	}
 
 	// Default: custom formatted view
-	if o.Output == "" && !o.Interactive {
+	if (o.Output == "auto" || o.Output == "") && !o.Interactive {
 		return o.printFunctionDetail(ctx, found)
 	}
 
 	output := gotmpldetail.BuildFunctionDetail(found)
 	return o.writeOutput(ctx, output)
-}
-
-// printSimpleList prints a simple list of function names and descriptions
-func (o *Options) printSimpleList(ctx context.Context, funcs gotmpl.ExtFunctionList) error {
-	w := writer.FromContext(ctx)
-	if w == nil {
-		return nil
-	}
-	noColor := w.NoColor()
-
-	for _, fn := range funcs {
-		name := fn.Name
-		if !noColor {
-			if fn.Custom {
-				name = "\033[1;32m" + name + "\033[0m" // Bold green for custom
-			} else {
-				name = "\033[1;94m" + name + "\033[0m" // Bold blue for sprig
-			}
-		}
-
-		desc := fn.Description
-		if len(desc) > 80 {
-			desc = desc[:77] + "..."
-		}
-		w.Plainlnf("  %s", name)
-		if desc != "" {
-			dimDesc := desc
-			if !noColor {
-				dimDesc = "\033[2m" + desc + "\033[0m"
-			}
-			w.Plainlnf("    %s", dimDesc)
-		}
-	}
-	return nil
 }
 
 // printFunctionDetail prints a nicely formatted function detail view
@@ -301,47 +280,21 @@ func (o *Options) printFunctionDetail(ctx context.Context, fn *gotmpl.ExtFunctio
 
 // writeOutput writes the output using kvx
 func (o *Options) writeOutput(ctx context.Context, data any) error {
-	if o.Output == "quiet" {
-		return o.writeQuietOutput(ctx, data)
-	}
-
-	kvxOpts := flags.NewKvxOutputOptionsFromFlags(
-		o.Output,
-		o.Interactive,
-		o.Expression,
+	kvxOpts := flags.ToKvxOutputOptions(&o.KvxOutputFlags,
 		kvx.WithOutputContext(ctx),
 		kvx.WithOutputNoColor(o.CliParams.NoColor),
 		kvx.WithOutputAppName(o.BinaryName+" get go-template-functions"),
-		kvx.WithOutputHelp(o.BinaryName+" get go-template-functions", []string{
-			"Go Template Extension Functions Viewer",
-			"",
-			"Navigate: ↑↓ arrows | Back: ← | Enter: →",
-			"Search: / or F3 | Expression: F6",
-			"Copy path: F5 | Quit: q or F10",
+		kvx.WithIOStreams(o.IOStreams),
+		kvx.WithOutputDisplaySchemaJSON(gotmplFunctionSchemaJSON),
+		kvx.WithOutputColumnOrder([]string{"name", "description"}),
+		kvx.WithOutputColumnHints(map[string]tui.ColumnHint{
+			"name":          {MaxWidth: 25, Priority: 10},
+			"custom":        {Hidden: true},
+			"functionNames": {Hidden: true},
+			"links":         {Hidden: true},
+			"examples":      {Hidden: true},
 		}),
 	)
-	kvxOpts.IOStreams = o.IOStreams
 
 	return kvxOpts.Write(data)
-}
-
-// writeQuietOutput prints just the function names
-func (o *Options) writeQuietOutput(ctx context.Context, data any) error {
-	w := writer.FromContext(ctx)
-	if w == nil {
-		return nil
-	}
-	switch v := data.(type) {
-	case []map[string]any:
-		for _, item := range v {
-			if name, ok := item["name"].(string); ok {
-				w.Plainln(name)
-			}
-		}
-	case map[string]any:
-		if name, ok := v["name"].(string); ok {
-			w.Plainln(name)
-		}
-	}
-	return nil
 }

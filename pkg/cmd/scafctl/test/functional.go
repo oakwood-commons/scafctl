@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -30,7 +31,6 @@ type FunctionalOptions struct {
 	CliParams         *settings.Run
 	File              string
 	TestsPath         string
-	Output            string
 	ReportFile        string
 	UpdateSnapshots   bool
 	Sequential        bool
@@ -48,6 +48,9 @@ type FunctionalOptions struct {
 	NoProgress        bool
 	Watch             bool
 	positionalPathErr error
+
+	// kvx output integration
+	flags.KvxOutputFlags
 }
 
 // CommandFunctional creates the 'test functional' subcommand.
@@ -113,6 +116,7 @@ Examples:
 
 			opts.IOStreams = ioStreams
 			opts.CliParams = cliParams
+			opts.Verbose = cliParams.Verbose
 
 			return runFunctional(ctx, opts)
 		},
@@ -121,7 +125,10 @@ Examples:
 	// Register flags
 	cCmd.Flags().StringVarP(&opts.File, "file", "f", "", "Solution file path (auto-discovered if not provided)")
 	cCmd.Flags().StringVar(&opts.TestsPath, "tests-path", "", "Path to directory containing solution files with tests")
-	cCmd.Flags().StringVarP(&opts.Output, "output", "o", "table", "Output format: table, json, yaml, quiet")
+	// Add kvx output flags (-o, -i, -e) but not -w (conflicts with --watch)
+	flags.AddKvxOutputFlags(cCmd, &opts.Output, &opts.Interactive, &opts.Expression)
+	// Add --where without -w short form to avoid conflict with --watch
+	cCmd.Flags().StringVar(&opts.Where, "where", "", "Per-item CEL boolean filter for list data (e.g., '_.enabled')")
 	cCmd.Flags().StringVar(&opts.ReportFile, "report-file", "", "Path to write JUnit XML report")
 	cCmd.Flags().BoolVar(&opts.UpdateSnapshots, "update-snapshots", false, "Update golden files instead of comparing")
 	cCmd.Flags().BoolVar(&opts.Sequential, "sequential", false, "Run tests sequentially (no concurrency)")
@@ -134,7 +141,6 @@ Examples:
 	cCmd.Flags().StringArrayVar(&opts.Solution, "solution", nil, "Filter by solution name glob pattern (can be repeated)")
 	cCmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "Validate tests without executing commands")
 	cCmd.Flags().BoolVar(&opts.FailFast, "fail-fast", false, "Stop remaining tests on first failure")
-	cCmd.Flags().BoolVarP(&opts.Verbose, "verbose", "v", false, "Enable verbose output (assertion counts, details)")
 	cCmd.Flags().BoolVar(&opts.KeepSandbox, "keep-sandbox", false, "Keep sandbox directories after test execution")
 	cCmd.Flags().BoolVar(&opts.NoProgress, "no-progress", false, "Disable live progress output during test execution")
 	cCmd.Flags().BoolVarP(&opts.Watch, "watch", "w", false, "Watch solution files for changes and re-run affected tests")
@@ -311,10 +317,11 @@ func runFunctional(ctx context.Context, opts *FunctionalOptions) error {
 	}
 
 	// Report results
-	format, _ := kvx.ParseOutputFormat(opts.Output)
-	outputOpts := kvx.NewOutputOptions(opts.IOStreams)
-	outputOpts.Format = format
-	outputOpts.Ctx = ctx
+	outputOpts := flags.ToKvxOutputOptions(&opts.KvxOutputFlags,
+		kvx.WithIOStreams(opts.IOStreams),
+		kvx.WithOutputContext(ctx),
+		kvx.WithOutputNoColor(opts.CliParams.NoColor),
+	)
 
 	// When stdout is not a terminal (e.g. redirected to a file), include
 	// per-test rows in the report even if progress was shown on stderr.
