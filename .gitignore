@@ -67,3 +67,8 @@ __debug*
 .cache/*
 .tool/*
 issues/
+# Bubble Tea debug logs
+tea_debug.log
+
+# Bubble Tea debug logs
+tea_debug.log
