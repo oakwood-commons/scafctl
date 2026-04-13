@@ -8,6 +8,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get/authhandler"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get/celfunction"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get/commands"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get/gotmplfunction"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get/provider"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get/resolver"
@@ -30,5 +31,6 @@ func CommandGet(cliParams *settings.Run, ioStreams *terminal.IOStreams, path str
 	cCmd.AddCommand(resolver.CommandResolver(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
 	cCmd.AddCommand(celfunction.CommandCelFunction(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
 	cCmd.AddCommand(gotmplfunction.CommandGotmplFunction(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
+	cCmd.AddCommand(commands.CommandCommands(cliParams, ioStreams, path))
 	return cCmd
 }

@@ -27,7 +27,7 @@ type ShowOptions struct {
 }
 
 // CommandShow creates the snapshot show command
-func CommandShow(_ *settings.Run, ioStreams terminal.IOStreams, binaryName string) *cobra.Command {
+func CommandShow(cliParams *settings.Run, ioStreams terminal.IOStreams, binaryName string) *cobra.Command {
 	opts := &ShowOptions{}
 
 	cmd := &cobra.Command{
@@ -56,12 +56,12 @@ func CommandShow(_ *settings.Run, ioStreams terminal.IOStreams, binaryName strin
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.SnapshotFile = args[0]
 			opts.BinaryName = binaryName
+			opts.Verbose = cliParams.Verbose
 			return runShow(cmd.Context(), opts, ioStreams)
 		},
 	}
 
 	cmd.Flags().StringVarP(&opts.Format, "format", "f", "summary", "Output format: summary, json, resolvers")
-	cmd.Flags().BoolVarP(&opts.Verbose, "verbose", "v", false, "Show detailed information")
 
 	return cmd
 }

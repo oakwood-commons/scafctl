@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
@@ -24,11 +25,13 @@ type ListOptions struct {
 	CliParams       *settings.Run
 	File            string
 	TestsPath       string
-	Output          string
 	IncludeBuiltins bool
 	Filter          []string
 	Tag             []string
 	Solution        []string
+
+	// kvx output integration
+	flags.KvxOutputFlags
 }
 
 // CommandList creates the 'test list' subcommand.
@@ -78,7 +81,7 @@ Examples:
 	// Register flags
 	cCmd.Flags().StringVarP(&opts.File, "file", "f", "", "Solution file path (auto-discovered if not provided)")
 	cCmd.Flags().StringVar(&opts.TestsPath, "tests-path", "", "Path to directory containing solution files with tests")
-	cCmd.Flags().StringVarP(&opts.Output, "output", "o", "table", "Output format: table, json, yaml, quiet")
+	flags.AddKvxOutputFlagsToStruct(cCmd, &opts.KvxOutputFlags)
 	cCmd.Flags().BoolVar(&opts.IncludeBuiltins, "include-builtins", false, "Include builtin tests in the listing")
 	cCmd.Flags().StringArrayVar(&opts.Filter, "filter", nil, "Filter tests by name glob pattern (can be repeated)")
 	cCmd.Flags().StringArrayVar(&opts.Tag, "tag", nil, "Filter tests by tag (can be repeated)")
@@ -135,10 +138,10 @@ func runList(ctx context.Context, opts *ListOptions) error {
 	}
 
 	// Report
-	format, _ := kvx.ParseOutputFormat(opts.Output)
-	outputOpts := kvx.NewOutputOptions(opts.IOStreams)
-	outputOpts.Format = format
-	outputOpts.Ctx = ctx
+	outputOpts := flags.ToKvxOutputOptions(&opts.KvxOutputFlags,
+		kvx.WithIOStreams(opts.IOStreams),
+		kvx.WithOutputContext(ctx),
+	)
 
 	return soltesting.ReportList(solutions, outputOpts, opts.IncludeBuiltins)
 }

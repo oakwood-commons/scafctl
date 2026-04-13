@@ -5,7 +5,6 @@ package provider
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -23,7 +22,6 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
 //go:embed provider_schema.json
@@ -108,14 +106,8 @@ Examples:
 		SilenceUsage: true,
 	}
 
-	// Add output flags - default is simple list, -i launches custom TUI
-	validFormats := []string{"table", "json", "yaml", "quiet"}
-	cCmd.Flags().StringVarP(&options.Output, "output", "o", "",
-		fmt.Sprintf("Output format: %s", strings.Join(validFormats, ", ")))
-	cCmd.Flags().BoolVarP(&options.Interactive, "interactive", "i", false,
-		"Launch interactive TUI for browsing providers")
-	cCmd.Flags().StringVarP(&options.Expression, "expression", "e", "",
-		"CEL expression to filter/transform output data")
+	// Add kvx output flags (-o, -i, -e, -w)
+	flags.AddKvxOutputFlagsToStruct(cCmd, &options.KvxOutputFlags)
 
 	// Filter flags
 	cCmd.Flags().StringVar(&options.Capability, "capability", "", "Filter by capability (from, transform, validation, action)")
@@ -136,8 +128,8 @@ func (o *Options) RunListProviders(ctx context.Context) error {
 	// Apply filters
 	filtered := o.filterProviders(providers)
 
-	// Default (no -o flag and not interactive): simple list
-	if o.Output == "" && !o.Interactive {
+	// Default (auto format and not interactive): simple list
+	if o.Output == "auto" && !o.Interactive {
 		return o.printSimpleList(ctx, filtered)
 	}
 
@@ -175,7 +167,7 @@ func (o *Options) RunGetProvider(ctx context.Context, name string) error {
 	desc := p.Descriptor()
 
 	// Default: custom formatted view (unless -o is specified)
-	if o.Output == "" && !o.Interactive {
+	if o.Output == "auto" && !o.Interactive {
 		return o.printProviderDetail(ctx, desc)
 	}
 
@@ -462,50 +454,14 @@ func (o *Options) getRegistry(ctx context.Context) *provider.Registry {
 
 // writeOutput writes the output using kvx
 func (o *Options) writeOutput(ctx context.Context, data any) error {
-	// Handle quiet output specially - just print names
-	if o.Output == "quiet" {
-		return o.writeQuietOutput(ctx, data)
-	}
-
 	// Use the shared kvx output infrastructure with display schema for rich TUI rendering
-	kvxOpts := flags.NewKvxOutputOptionsFromFlags(
-		o.Output,
-		o.Interactive,
-		o.Expression,
+	kvxOpts := flags.ToKvxOutputOptions(&o.KvxOutputFlags,
 		kvx.WithOutputContext(ctx),
 		kvx.WithOutputNoColor(o.CliParams.NoColor),
 		kvx.WithOutputAppName(o.BinaryName+" get provider"),
 		kvx.WithOutputDisplaySchemaJSON(providerSchemaJSON),
+		kvx.WithIOStreams(o.IOStreams),
 	)
-	kvxOpts.IOStreams = o.IOStreams
 
 	return kvxOpts.Write(data)
-}
-
-// writeQuietOutput prints just the provider names
-func (o *Options) writeQuietOutput(ctx context.Context, data any) error {
-	w := writer.FromContext(ctx)
-	if w == nil {
-		return nil
-	}
-	switch v := data.(type) {
-	case []map[string]any:
-		for _, item := range v {
-			if name, ok := item["name"].(string); ok {
-				w.Plainln(name)
-			}
-		}
-	case map[string]any:
-		if name, ok := v["name"].(string); ok {
-			w.Plainln(name)
-		} else {
-			// Single provider detail - output as yaml for quiet mode
-			data, _ := yaml.Marshal(v)
-			w.Plainln(string(data))
-		}
-	default:
-		data, _ := json.MarshalIndent(v, "", "  ")
-		w.Plainln(string(data))
-	}
-	return nil
 }

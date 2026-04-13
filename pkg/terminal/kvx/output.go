@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/oakwood-commons/kvx/pkg/core"
 	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"gopkg.in/yaml.v3"
@@ -41,6 +42,12 @@ const (
 	// The command is executed normally and the result is used to derive CEL assertions,
 	// write a snapshot golden file to testdata/, and emit test YAML to stdout.
 	OutputFormatTest OutputFormat = "test"
+
+	// OutputFormatTree renders data as an ASCII tree structure
+	OutputFormatTree OutputFormat = "tree"
+
+	// OutputFormatMermaid renders data as a Mermaid flowchart diagram
+	OutputFormatMermaid OutputFormat = "mermaid"
 )
 
 // String returns the string representation of the output format.
@@ -55,6 +62,8 @@ func BaseOutputFormats() []string {
 		string(OutputFormatAuto),
 		string(OutputFormatTable),
 		string(OutputFormatList),
+		string(OutputFormatTree),
+		string(OutputFormatMermaid),
 		string(OutputFormatJSON),
 		string(OutputFormatYAML),
 		string(OutputFormatQuiet),
@@ -62,16 +71,16 @@ func BaseOutputFormats() []string {
 	}
 }
 
-// IsStructuredFormat returns true if the format is meant for piping (json/yaml).
+// IsStructuredFormat returns true if the format is meant for piping (json/yaml/mermaid).
 // These formats should not use interactive or table output.
 func IsStructuredFormat(format OutputFormat) bool {
-	return format == OutputFormatJSON || format == OutputFormatYAML
+	return format == OutputFormatJSON || format == OutputFormatYAML || format == OutputFormatMermaid
 }
 
-// IsKvxFormat returns true if the format uses kvx visual output (auto, table, or list).
+// IsKvxFormat returns true if the format uses kvx visual output (auto, table, list, or tree).
 // These formats render human-readable output to the terminal.
 func IsKvxFormat(format OutputFormat) bool {
-	return format == OutputFormatAuto || format == OutputFormatTable || format == OutputFormatList || format == ""
+	return format == OutputFormatAuto || format == OutputFormatTable || format == OutputFormatList || format == OutputFormatTree || format == ""
 }
 
 // IsAutoFormat returns true if the format uses automatic layout selection.
@@ -107,6 +116,10 @@ func ParseOutputFormat(s string) (OutputFormat, bool) {
 		return OutputFormatQuiet, true
 	case "test":
 		return OutputFormatTest, true
+	case "tree":
+		return OutputFormatTree, true
+	case "mermaid":
+		return OutputFormatMermaid, true
 	default:
 		return "", false
 	}
@@ -132,6 +145,10 @@ type OutputOptions struct {
 
 	// Expression is a CEL expression to filter/transform output data
 	Expression string `json:"expression,omitempty" yaml:"expression,omitempty" doc:"CEL expression to filter output" example:"_.database" maxLength:"4096"`
+
+	// Where is a per-item CEL boolean filter applied to list data before rendering.
+	// Each item is tested individually; only items where the expression evaluates to true are kept.
+	Where string `json:"where,omitempty" yaml:"where,omitempty" doc:"Per-item CEL filter for list data" example:"_.enabled" maxLength:"4096"`
 
 	// NoColor disables colored output
 	NoColor bool `json:"noColor,omitempty" yaml:"noColor,omitempty" doc:"Disable colored output"`
@@ -295,14 +312,25 @@ func (o *OutputOptions) Write(data any) error {
 		return o.writeKvx(data)
 	}
 
+	// Mermaid is classified as a structured format (IsStructuredFormat == true)
+	// but renders via kvx rather than JSON/YAML serialization, so we route it
+	// to writeKvx before the writeStructured fallback.
+	if o.Format == OutputFormatMermaid {
+		return o.writeKvx(data)
+	}
+
 	// For structured formats (json/yaml), apply expression filter if provided
 	return o.writeStructured(data)
 }
 
 // writeKvx handles table and interactive output using kvx.
 func (o *OutputOptions) writeKvx(data any) error {
+	// Tree and mermaid are text formats that should render regardless of TTY.
+	// Only table/list/auto/interactive need a terminal.
+	isTTYRequired := o.Format != OutputFormatTree && o.Format != OutputFormatMermaid
+
 	// Check terminal requirement for table/interactive output
-	if !IsTerminal(o.IOStreams.Out) {
+	if isTTYRequired && !IsTerminal(o.IOStreams.Out) {
 		// Auto-fallback to JSON when piped (unless interactive was explicitly requested)
 		if o.Interactive {
 			return fmt.Errorf("interactive mode requires a terminal; use -o json or -o yaml for piped output")
@@ -337,6 +365,10 @@ func (o *OutputOptions) writeKvx(data any) error {
 		kvxOpts = append(kvxOpts, WithLayout("list"))
 	case OutputFormatTable:
 		kvxOpts = append(kvxOpts, WithLayout("table"))
+	case OutputFormatTree:
+		kvxOpts = append(kvxOpts, WithLayout("tree"))
+	case OutputFormatMermaid:
+		kvxOpts = append(kvxOpts, WithLayout("mermaid"))
 	case OutputFormatAuto, OutputFormatJSON, OutputFormatYAML, OutputFormatQuiet, OutputFormatTest:
 		// Auto and empty use default layout (auto).
 		// JSON/YAML/Quiet/Test are handled upstream and should not reach here,
@@ -350,6 +382,9 @@ func (o *OutputOptions) writeKvx(data any) error {
 
 	if o.Expression != "" {
 		kvxOpts = append(kvxOpts, WithExpression(o.Expression))
+	}
+	if o.Where != "" {
+		kvxOpts = append(kvxOpts, WithWhere(o.Where))
 	}
 	if o.AppName != "" {
 		kvxOpts = append(kvxOpts, WithAppName(o.AppName))
@@ -376,10 +411,24 @@ func (o *OutputOptions) writeKvx(data any) error {
 	return View(data, kvxOpts...)
 }
 
-// writeStructured handles JSON/YAML output with optional expression filtering.
+// writeStructured handles JSON/YAML output with optional expression and where filtering.
 func (o *OutputOptions) writeStructured(data any) error {
-	// Apply expression filter if provided
 	outputData := data
+
+	// Apply per-item Where filter before expression/serialization
+	if o.Where != "" {
+		engine, engineErr := core.New()
+		if engineErr != nil {
+			return fmt.Errorf("failed to create CEL engine for where filter: %w", engineErr)
+		}
+		filtered, whereErr := engine.EvaluateWhere(o.Where, outputData)
+		if whereErr != nil {
+			return fmt.Errorf("where filter failed: %w", whereErr)
+		}
+		outputData = filtered
+	}
+
+	// Apply expression filter if provided
 	if o.Expression != "" {
 		// Use context from options, or fall back to Background
 		ctx := o.Ctx
@@ -387,7 +436,7 @@ func (o *OutputOptions) writeStructured(data any) error {
 			ctx = context.Background()
 		}
 		var err error
-		outputData, err = EvaluateExpression(ctx, o.Expression, data)
+		outputData, err = EvaluateExpression(ctx, o.Expression, outputData)
 		if err != nil {
 			return fmt.Errorf("expression evaluation failed: %w", err)
 		}
@@ -398,7 +447,7 @@ func (o *OutputOptions) writeStructured(data any) error {
 		return o.writeJSON(outputData)
 	case OutputFormatYAML:
 		return o.writeYAML(outputData)
-	case OutputFormatTable, OutputFormatAuto, OutputFormatList, OutputFormatQuiet, OutputFormatTest:
+	case OutputFormatTable, OutputFormatAuto, OutputFormatList, OutputFormatTree, OutputFormatMermaid, OutputFormatQuiet, OutputFormatTest:
 		// These formats are handled upstream (writeKvx or command-level test generation),
 		// and should not reach writeStructured.
 		return fmt.Errorf("unexpected output format in writeStructured: %s", o.Format)

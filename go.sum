@@ -279,8 +279,8 @@ github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822/go.mod h1:+n7T8m
 github.com/nxadm/tail v1.4.4/go.mod h1:kenIhsEOeOJmVchQTgglprH7qJGnHDVpk1VPCcaMI8A=
 github.com/nxadm/tail v1.4.8 h1:nPr65rt6Y5JFSKQO7qToXr7pePgD6Gwiw05lkbyAQTE=
 github.com/nxadm/tail v1.4.8/go.mod h1:+ncqLTQzXmGhMZNUePPaPqPvBxHAIsmXswZKocGu+AU=
-github.com/oakwood-commons/kvx v0.7.5 h1:hmYm/Pn7TTyIOcv/WaYtUmp6CU0owh+3QVxCYhrxZBo=
-github.com/oakwood-commons/kvx v0.7.5/go.mod h1:Fo7pM0ImwzOSTK130H9HZv9NG49/5O/awu23oB8MkMs=
+github.com/oakwood-commons/kvx v0.8.0 h1:pzDN6/1a9hraJ2iVMTDehJKflZ6k1XYuq47xWcrkNJQ=
+github.com/oakwood-commons/kvx v0.8.0/go.mod h1:Fo7pM0ImwzOSTK130H9HZv9NG49/5O/awu23oB8MkMs=
 github.com/oklog/run v1.2.0 h1:O8x3yXwah4A73hJdlrwo/2X6J62gE5qTMusH0dvz60E=
 github.com/oklog/run v1.2.0/go.mod h1:mgDbKRSwPhJfesJ4PntqFUbKQRZ50NgmZTSPlFA0YFk=
 github.com/onsi/ginkgo v1.6.0/go.mod h1:lLunBs/Ym6LB5Z9jYTR76FiuTmxDTDusOGeTQH+WWjE=

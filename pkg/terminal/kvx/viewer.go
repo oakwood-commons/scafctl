@@ -49,6 +49,9 @@ type ViewerOptions struct {
 	// Expression is a CEL expression to filter/transform data before display
 	Expression string `json:"expression,omitempty" yaml:"expression,omitempty" doc:"CEL expression to filter/transform output data" example:"_.database" maxLength:"4096"`
 
+	// Where is a per-item CEL boolean filter applied to list data
+	Where string `json:"where,omitempty" yaml:"where,omitempty" doc:"Per-item CEL filter for list data" example:"_.enabled" maxLength:"4096"`
+
 	// Interactive enables the interactive TUI mode
 	Interactive bool `json:"interactive,omitempty" yaml:"interactive,omitempty" doc:"Launch interactive TUI for data exploration"`
 
@@ -153,9 +156,14 @@ func WithTheme(theme string) Option {
 }
 
 // WithLayout sets the rendering layout for non-interactive display.
-// Valid values: "auto" (default), "table", "list".
+// Valid values: "auto" (default), "table", "list", "tree", "mermaid".
 func WithLayout(layout string) Option {
 	return func(o *ViewerOptions) { o.Layout = layout }
+}
+
+// WithWhere sets a per-item CEL boolean filter for list data.
+func WithWhere(where string) Option {
+	return func(o *ViewerOptions) { o.Where = where }
 }
 
 // WithInitialExpr sets an initial expression for TUI
@@ -223,6 +231,19 @@ func View(data any, opts ...Option) error {
 		}
 	}
 
+	// Apply per-item Where filter if provided
+	if options.Where != "" {
+		engine, engineErr := core.New()
+		if engineErr != nil {
+			return fmt.Errorf("failed to create CEL engine for where filter: %w", engineErr)
+		}
+		filtered, whereErr := engine.EvaluateWhere(options.Where, root)
+		if whereErr != nil {
+			return fmt.Errorf("where filter failed: %w", whereErr)
+		}
+		root = filtered
+	}
+
 	// Interactive mode: launch TUI
 	if options.Interactive {
 		if !IsTerminal(options.Out) {
@@ -235,6 +256,10 @@ func View(data any, opts ...Option) error {
 	switch options.Layout {
 	case "list":
 		return renderList(root, options)
+	case "tree":
+		return renderTree(root, options)
+	case "mermaid":
+		return renderMermaid(root, options)
 	default:
 		// "auto", "table", and empty all use table rendering.
 		// The upstream tui.RenderTable with ColumnarMode "auto" (default)
@@ -290,6 +315,22 @@ func resolveColumnHints(schemaJSON []byte, programmatic map[string]tui.ColumnHin
 // renderList outputs data as a key-value list (non-interactive).
 func renderList(root any, options *ViewerOptions) error {
 	output := tui.RenderList(root, options.NoColor)
+	fmt.Fprint(options.Out, output)
+	return nil
+}
+
+// renderTree outputs data as an ASCII tree structure.
+func renderTree(root any, options *ViewerOptions) error {
+	output := tui.Render(root, tui.FormatTree, tui.TableOptions{
+		NoColor: options.NoColor,
+	})
+	fmt.Fprint(options.Out, output)
+	return nil
+}
+
+// renderMermaid outputs data as a Mermaid flowchart diagram.
+func renderMermaid(root any, options *ViewerOptions) error {
+	output := tui.Render(root, tui.FormatMermaid, tui.TableOptions{})
 	fmt.Fprint(options.Out, output)
 	return nil
 }

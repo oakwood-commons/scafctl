@@ -275,7 +275,7 @@ func TestIntegration_GetCelFunctionsQuiet(t *testing.T) {
 	stdout, _, exitCode := runScafctl(t, "get", "cel-functions", "-o", "quiet")
 
 	assert.Equal(t, 0, exitCode)
-	assert.Contains(t, stdout, "map.merge")
+	assert.Empty(t, stdout, "quiet format should suppress all output")
 }
 
 func TestIntegration_GetCelFunctionDetail(t *testing.T) {
@@ -337,9 +337,7 @@ func TestIntegration_GetGoTemplateFunctionsQuiet(t *testing.T) {
 	stdout, _, exitCode := runScafctl(t, "get", "go-template-functions", "-o", "quiet")
 
 	assert.Equal(t, 0, exitCode)
-	assert.Contains(t, stdout, "toHcl")
-	assert.Contains(t, stdout, "toYaml")
-	assert.Contains(t, stdout, "fromYaml")
+	assert.Empty(t, stdout, "quiet format should suppress all output")
 }
 
 func TestIntegration_GetGoTemplateFunctionDetail(t *testing.T) {
@@ -7581,4 +7579,78 @@ func TestIntegration_PluginsList_RunsSuccessfully(t *testing.T) {
 	_, _, exitCode := runScafctl(t, "plugins", "list")
 
 	assert.Equal(t, 0, exitCode)
+}
+
+// ============================================================================
+// Get Commands Tests
+// ============================================================================
+
+func TestIntegration_GetCommands(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "commands", "-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "run solution")
+	assert.Contains(t, stdout, "get provider")
+}
+
+func TestIntegration_GetCommands_LeafOnly(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "commands", "--leaf", "-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "get provider")
+	// Parent commands should not appear as standalone entries when --leaf is set
+	assert.NotRegexp(t, `"name"\s*:\s*"scafctl get"`, stdout)
+	assert.NotRegexp(t, `"name"\s*:\s*"scafctl run"`, stdout)
+}
+
+// ============================================================================
+// Solution Inspect Tests
+// ============================================================================
+
+func TestIntegration_SolutionInspect_JSON(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t,
+		"solution", "inspect",
+		"-f", "examples/resolver-demo.yaml",
+		"-o", "json",
+	)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "\"name\"")
+	assert.Contains(t, stdout, "\"resolvers\"")
+	assert.Contains(t, stdout, "\"hasResolvers\"")
+}
+
+func TestIntegration_SolutionInspect_YAML(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t,
+		"solution", "inspect",
+		"-f", "examples/resolver-demo.yaml",
+		"-o", "yaml",
+	)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "name:")
+	assert.Contains(t, stdout, "hasResolvers:")
+}
+
+func TestIntegration_SolutionInspect_InvalidFile(t *testing.T) {
+	t.Parallel()
+	_, _, exitCode := runScafctl(t, "solution", "inspect", "-f", "/nonexistent.yaml")
+
+	assert.NotEqual(t, 0, exitCode)
+}
+
+func TestIntegration_SolutionInspect_Alias(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t,
+		"sol", "info",
+		"-f", "examples/resolver-demo.yaml",
+		"-o", "json",
+	)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "\"name\"")
 }

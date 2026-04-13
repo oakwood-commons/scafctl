@@ -15,7 +15,7 @@ import (
 // KvxOutputFlags holds the flag values for kvx-enabled output.
 // This struct is typically embedded in command options structs.
 type KvxOutputFlags struct {
-	// Output specifies the output format (auto, table, list, json, yaml, quiet)
+	// Output specifies the output format (auto, table, list, tree, mermaid, json, yaml, quiet)
 	Output string `json:"output,omitempty" yaml:"output,omitempty" doc:"Output format" example:"auto" maxLength:"10"`
 
 	// Interactive enables the kvx TUI for data exploration
@@ -23,6 +23,9 @@ type KvxOutputFlags struct {
 
 	// Expression is a CEL expression to filter/transform output
 	Expression string `json:"expression,omitempty" yaml:"expression,omitempty" doc:"CEL expression to filter output" example:"_.database" maxLength:"4096"`
+
+	// Where is a per-item CEL boolean filter applied to list data
+	Where string `json:"where,omitempty" yaml:"where,omitempty" doc:"Per-item CEL filter for list data" example:"_.enabled" maxLength:"4096"`
 }
 
 // AddKvxOutputFlags adds kvx-enabled output flags to a command.
@@ -34,6 +37,11 @@ type KvxOutputFlags struct {
 //   - interactive: Pointer to store the interactive mode value (default: false)
 //   - expression: Pointer to store the CEL expression value (default: "")
 func AddKvxOutputFlags(cmd *cobra.Command, outputFormat *string, interactive *bool, expression *string) {
+	AddKvxOutputFlagsWithWhere(cmd, outputFormat, interactive, expression, nil)
+}
+
+// AddKvxOutputFlagsWithWhere adds kvx-enabled output flags including the --where per-item filter.
+func AddKvxOutputFlagsWithWhere(cmd *cobra.Command, outputFormat *string, interactive *bool, expression, where *string) {
 	validFormats := kvx.BaseOutputFormats()
 
 	cmd.Flags().StringVarP(outputFormat, "output", "o", "auto",
@@ -44,12 +52,17 @@ func AddKvxOutputFlags(cmd *cobra.Command, outputFormat *string, interactive *bo
 
 	cmd.Flags().StringVarP(expression, "expression", "e", "",
 		"CEL expression to filter/transform output data (e.g., '_.items.filter(x, x.enabled)')")
+
+	if where != nil {
+		cmd.Flags().StringVarP(where, "where", "w", "",
+			"Per-item CEL boolean filter for list data (e.g., '_.enabled')")
+	}
 }
 
 // AddKvxOutputFlagsToStruct adds kvx-enabled output flags to a command using a KvxOutputFlags struct.
 // This is a convenience function when using the KvxOutputFlags struct directly.
 func AddKvxOutputFlagsToStruct(cmd *cobra.Command, flags *KvxOutputFlags) {
-	AddKvxOutputFlags(cmd, &flags.Output, &flags.Interactive, &flags.Expression)
+	AddKvxOutputFlagsWithWhere(cmd, &flags.Output, &flags.Interactive, &flags.Expression, &flags.Where)
 }
 
 // ValidateKvxOutputFormat validates the output format string.
@@ -71,10 +84,12 @@ func ValidateKvxOutputFormat(format string) error {
 
 // ToKvxOutputOptions converts flag values to OutputOptions for writing output.
 // This creates a fully configured OutputOptions instance from flag values.
+// If the output format is unrecognized, it defaults to auto.
 func ToKvxOutputOptions(flags *KvxOutputFlags, opts ...kvx.OutputOption) *kvx.OutputOptions {
 	kvxOpts := &kvx.OutputOptions{
 		Interactive: flags.Interactive,
 		Expression:  flags.Expression,
+		Where:       flags.Where,
 		PrettyPrint: true,
 	}
 

@@ -39,10 +39,6 @@ func TestCommandShow(t *testing.T) {
 	require.NotNil(t, formatFlag, "format flag should exist")
 	assert.Equal(t, "f", formatFlag.Shorthand)
 	assert.Equal(t, "summary", formatFlag.DefValue)
-
-	verboseFlag := cmd.Flags().Lookup("verbose")
-	require.NotNil(t, verboseFlag, "verbose flag should exist")
-	assert.Equal(t, "v", verboseFlag.Shorthand)
 }
 
 func TestRunShow_MissingFile(t *testing.T) {

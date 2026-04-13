@@ -148,9 +148,8 @@ func TestRunListFunctions_QuietOutput(t *testing.T) {
 	err := opts.RunListFunctions(ctx)
 	require.NoError(t, err)
 
-	output := buf.String()
-	assert.Contains(t, output, "testFunc")
-	assert.Contains(t, output, "sprigFunc")
+	// Quiet mode suppresses all output
+	assert.Empty(t, buf.String())
 }
 
 func TestRunListFunctions_JSONOutput(t *testing.T) {
@@ -357,48 +356,6 @@ func TestPrintFunctionDetail_SprigFunction(t *testing.T) {
 }
 
 // ── writeQuietOutput tests ────────────────────────────────────────────────────
-
-func TestWriteQuietOutput_List(t *testing.T) {
-	t.Parallel()
-
-	ctx, buf, opts := newGotmplCtx(t)
-
-	data := []map[string]any{
-		{"name": "funcA"},
-		{"name": "funcB"},
-	}
-
-	err := opts.writeQuietOutput(ctx, data)
-	require.NoError(t, err)
-
-	output := buf.String()
-	assert.Contains(t, output, "funcA")
-	assert.Contains(t, output, "funcB")
-}
-
-func TestWriteQuietOutput_SingleItem(t *testing.T) {
-	t.Parallel()
-
-	ctx, buf, opts := newGotmplCtx(t)
-
-	data := map[string]any{"name": "singleFunc"}
-
-	err := opts.writeQuietOutput(ctx, data)
-	require.NoError(t, err)
-
-	output := buf.String()
-	assert.Contains(t, output, "singleFunc")
-}
-
-func TestWriteQuietOutput_UnknownType(t *testing.T) {
-	t.Parallel()
-
-	ctx, _, opts := newGotmplCtx(t)
-
-	// Passing an unsupported type — should not panic or error
-	err := opts.writeQuietOutput(ctx, "unexpected string data")
-	require.NoError(t, err)
-}
 
 // ── Benchmark tests ───────────────────────────────────────────────────────────
 

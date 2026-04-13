@@ -93,14 +93,8 @@ Examples:
 		SilenceUsage: true,
 	}
 
-	// Add output flags
-	validFormats := []string{"table", "json", "yaml", "quiet"}
-	cCmd.Flags().StringVarP(&options.Output, "output", "o", "",
-		fmt.Sprintf("Output format: %s", strings.Join(validFormats, ", ")))
-	cCmd.Flags().BoolVarP(&options.Interactive, "interactive", "i", false,
-		"Launch interactive TUI for browsing functions")
-	cCmd.Flags().StringVarP(&options.Expression, "expression", "e", "",
-		"CEL expression to filter/transform output data")
+	// Add kvx output flags (-o, -i, -e, -w)
+	flags.AddKvxOutputFlagsToStruct(cCmd, &options.KvxOutputFlags)
 
 	// Filter flags
 	cCmd.Flags().BoolVar(&options.Custom, "custom", false, fmt.Sprintf("Show only custom %s functions", cliParams.BinaryName))
@@ -155,8 +149,8 @@ func (o *Options) RunListFunctions(ctx context.Context) error {
 		}
 	}
 
-	// Default (no -o flag): simple list
-	if o.Output == "" && !o.Interactive {
+	// Default (auto format): simple list
+	if o.Output == "auto" && !o.Interactive {
 		return o.printSimpleList(ctx, funcs)
 	}
 
@@ -188,7 +182,7 @@ func (o *Options) RunGetFunction(ctx context.Context, name string) error {
 	}
 
 	// Default: custom formatted view
-	if o.Output == "" && !o.Interactive {
+	if o.Output == "auto" && !o.Interactive {
 		return o.printFunctionDetail(ctx, found)
 	}
 
@@ -301,14 +295,7 @@ func (o *Options) printFunctionDetail(ctx context.Context, fn *gotmpl.ExtFunctio
 
 // writeOutput writes the output using kvx
 func (o *Options) writeOutput(ctx context.Context, data any) error {
-	if o.Output == "quiet" {
-		return o.writeQuietOutput(ctx, data)
-	}
-
-	kvxOpts := flags.NewKvxOutputOptionsFromFlags(
-		o.Output,
-		o.Interactive,
-		o.Expression,
+	kvxOpts := flags.ToKvxOutputOptions(&o.KvxOutputFlags,
 		kvx.WithOutputContext(ctx),
 		kvx.WithOutputNoColor(o.CliParams.NoColor),
 		kvx.WithOutputAppName(o.BinaryName+" get go-template-functions"),
@@ -319,29 +306,8 @@ func (o *Options) writeOutput(ctx context.Context, data any) error {
 			"Search: / or F3 | Expression: F6",
 			"Copy path: F5 | Quit: q or F10",
 		}),
+		kvx.WithIOStreams(o.IOStreams),
 	)
-	kvxOpts.IOStreams = o.IOStreams
 
 	return kvxOpts.Write(data)
-}
-
-// writeQuietOutput prints just the function names
-func (o *Options) writeQuietOutput(ctx context.Context, data any) error {
-	w := writer.FromContext(ctx)
-	if w == nil {
-		return nil
-	}
-	switch v := data.(type) {
-	case []map[string]any:
-		for _, item := range v {
-			if name, ok := item["name"].(string); ok {
-				w.Plainln(name)
-			}
-		}
-	case map[string]any:
-		if name, ok := v["name"].(string); ok {
-			w.Plainln(name)
-		}
-	}
-	return nil
 }
