@@ -27,6 +27,7 @@ import (
 	examplescmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/examples"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/explain"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get"
+	inspectcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/inspect"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/lint"
 	mcpcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/mcp"
 	newcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/new"
@@ -619,6 +620,7 @@ func Root(opts *RootOptions) *cobra.Command {
 	cCmd.AddCommand(withGroup(groupInspect, get.CommandGet(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupInspect, explain.CommandExplain(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupInspect, eval.CommandEval(cliParams, ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupInspect, inspectcmd.CommandInspect(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupInspect, solutioncmd.CommandSolution(cliParams, *ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupInspect, snapshot.CommandSnapshot(cliParams, *ioStreams, binaryName)))
 

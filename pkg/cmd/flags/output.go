@@ -33,7 +33,7 @@ type KvxOutputFlags struct {
 //
 // Parameters:
 //   - cmd: The cobra command to add flags to
-//   - outputFormat: Pointer to store the output format value (default: "table")
+//   - outputFormat: Pointer to store the output format value (default: "auto")
 //   - interactive: Pointer to store the interactive mode value (default: false)
 //   - expression: Pointer to store the CEL expression value (default: "")
 func AddKvxOutputFlags(cmd *cobra.Command, outputFormat *string, interactive *bool, expression *string) {
@@ -69,7 +69,7 @@ func AddKvxOutputFlagsToStruct(cmd *cobra.Command, flags *KvxOutputFlags) {
 // Returns an error if the format is not a valid output format.
 func ValidateKvxOutputFormat(format string) error {
 	if format == "" {
-		return nil // Empty defaults to table
+		return nil // Empty defaults to auto
 	}
 
 	validFormats := kvx.BaseOutputFormats()

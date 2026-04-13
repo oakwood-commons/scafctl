@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	celdetail "github.com/oakwood-commons/scafctl/pkg/celexp/detail"
 	"github.com/oakwood-commons/scafctl/pkg/celexp/ext"
@@ -20,6 +21,13 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
+
+// FunctionSummary is the table-friendly output for function listing.
+type FunctionSummary struct {
+	Name        string `json:"name" yaml:"name" required:"true"`
+	Description string `json:"description" yaml:"description"`
+	Custom      bool   `json:"custom" yaml:"custom"`
+}
 
 // Options holds configuration for the get cel-functions command
 type Options struct {
@@ -156,15 +164,22 @@ func (o *Options) RunListFunctions(ctx context.Context) error {
 		}
 	}
 
-	// Default (auto format): simple list
-	if o.Output == "auto" && !o.Interactive {
-		return o.printSimpleList(ctx, funcs)
+	// Build output data
+	if o.Output == "json" || o.Output == "yaml" {
+		output := celdetail.BuildFunctionList(funcs)
+		return o.writeOutput(ctx, output)
 	}
 
-	// Build output data
-	output := celdetail.BuildFunctionList(funcs)
-
-	return o.writeOutput(ctx, output)
+	// Table-friendly summary for auto/table/quiet
+	summaries := make([]FunctionSummary, 0, len(funcs))
+	for _, fn := range funcs {
+		summaries = append(summaries, FunctionSummary{
+			Name:        fn.Name,
+			Description: fn.Description,
+			Custom:      fn.Custom,
+		})
+	}
+	return o.writeOutput(ctx, summaries)
 }
 
 // RunGetFunction gets details about a specific function
@@ -196,46 +211,12 @@ func (o *Options) RunGetFunction(ctx context.Context, name string) error {
 	}
 
 	// Default: custom formatted view
-	if o.Output == "auto" && !o.Interactive {
+	if (o.Output == "auto" || o.Output == "") && !o.Interactive {
 		return o.printFunctionDetail(ctx, found)
 	}
 
 	output := celdetail.BuildFunctionDetail(found)
 	return o.writeOutput(ctx, output)
-}
-
-// printSimpleList prints a simple list of function names and descriptions
-func (o *Options) printSimpleList(ctx context.Context, funcs celexp.ExtFunctionList) error {
-	w := writer.FromContext(ctx)
-	if w == nil {
-		return nil
-	}
-	noColor := w.NoColor()
-
-	for _, fn := range funcs {
-		name := fn.Name
-		if !noColor {
-			if fn.Custom {
-				name = "\033[1;32m" + name + "\033[0m" // Bold green for custom
-			} else {
-				name = "\033[1;94m" + name + "\033[0m" // Bold blue for built-in
-			}
-		}
-
-		desc := fn.Description
-		if len(desc) > 80 {
-			desc = desc[:77] + "..."
-		}
-		w.Plainlnf("  %s", name)
-		if desc != "" {
-			dimDesc := desc
-			if !noColor {
-				dimDesc = "\033[2m" + desc + "\033[0m"
-			}
-			w.Plainlnf("    %s", dimDesc)
-		}
-	}
-	return nil
 }
 
 // printFunctionDetail prints a nicely formatted function detail view
@@ -330,6 +311,14 @@ func (o *Options) writeOutput(ctx context.Context, data any) error {
 			"Copy path: F5 | Quit: q or F10",
 		}),
 		kvx.WithIOStreams(o.IOStreams),
+		kvx.WithOutputColumnOrder([]string{"name", "description"}),
+		kvx.WithOutputColumnHints(map[string]tui.ColumnHint{
+			"name":          {MaxWidth: 25, Priority: 10},
+			"custom":        {Hidden: true},
+			"functionNames": {Hidden: true},
+			"links":         {Hidden: true},
+			"examples":      {Hidden: true},
+		}),
 	)
 
 	return kvxOpts.Write(data)

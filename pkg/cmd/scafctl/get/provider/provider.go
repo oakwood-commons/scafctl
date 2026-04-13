@@ -12,6 +12,7 @@ import (
 	_ "embed"
 
 	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -116,6 +117,18 @@ Examples:
 	return cCmd
 }
 
+// Summary is the table-friendly output for provider listing.
+type Summary struct {
+	Name         string `json:"name" yaml:"name" required:"true"`
+	DisplayName  string `json:"displayName" yaml:"displayName"`
+	Version      string `json:"version" yaml:"version"`
+	Category     string `json:"category" yaml:"category"`
+	Capabilities string `json:"capabilities" yaml:"capabilities"`
+	Description  string `json:"description" yaml:"description"`
+	Deprecated   bool   `json:"deprecated" yaml:"deprecated"`
+	Beta         bool   `json:"beta" yaml:"beta"`
+}
+
 // RunListProviders lists all providers
 func (o *Options) RunListProviders(ctx context.Context) error {
 	if o.BinaryName == "" {
@@ -128,24 +141,19 @@ func (o *Options) RunListProviders(ctx context.Context) error {
 	// Apply filters
 	filtered := o.filterProviders(providers)
 
-	// Default (auto format and not interactive): simple list
-	if o.Output == "auto" && !o.Interactive {
-		return o.printSimpleList(ctx, filtered)
-	}
-
-	// Build output data for explicit output formats (-o table/json/yaml/quiet)
-	output := make([]map[string]any, 0, len(filtered))
+	// Build structured output for kvx
+	output := make([]Summary, 0, len(filtered))
 	for _, p := range filtered {
 		desc := p.Descriptor()
-		output = append(output, map[string]any{
-			"name":         desc.Name,
-			"displayName":  desc.DisplayName,
-			"version":      desc.Version.String(),
-			"description":  desc.Description,
-			"capabilities": CapabilitiesToStrings(desc.Capabilities),
-			"category":     desc.Category,
-			"deprecated":   desc.IsDeprecated,
-			"beta":         desc.Beta,
+		output = append(output, Summary{
+			Name:         desc.Name,
+			DisplayName:  desc.DisplayName,
+			Version:      desc.Version.String(),
+			Description:  desc.Description,
+			Capabilities: strings.Join(CapabilitiesToStrings(desc.Capabilities), ", "),
+			Category:     desc.Category,
+			Deprecated:   desc.IsDeprecated,
+			Beta:         desc.Beta,
 		})
 	}
 
@@ -167,7 +175,7 @@ func (o *Options) RunGetProvider(ctx context.Context, name string) error {
 	desc := p.Descriptor()
 
 	// Default: custom formatted view (unless -o is specified)
-	if o.Output == "auto" && !o.Interactive {
+	if (o.Output == "auto" || o.Output == "") && !o.Interactive {
 		return o.printProviderDetail(ctx, desc)
 	}
 
@@ -364,19 +372,6 @@ func (o *Options) printProviderDetail(ctx context.Context, desc *provider.Descri
 	return nil
 }
 
-// printSimpleList outputs providers as a simple list for non-interactive mode.
-func (o *Options) printSimpleList(ctx context.Context, providers []provider.Provider) error {
-	w := writer.FromContext(ctx)
-	if w == nil {
-		return nil
-	}
-	for _, p := range providers {
-		desc := p.Descriptor()
-		w.Plainlnf("%-20s %s", desc.Name, desc.Description)
-	}
-	return nil
-}
-
 // filterProviders applies capability and category filters
 func (o *Options) filterProviders(providers []provider.Provider) []provider.Provider {
 	if o.Capability == "" && o.Category == "" {
@@ -461,6 +456,16 @@ func (o *Options) writeOutput(ctx context.Context, data any) error {
 		kvx.WithOutputAppName(o.BinaryName+" get provider"),
 		kvx.WithOutputDisplaySchemaJSON(providerSchemaJSON),
 		kvx.WithIOStreams(o.IOStreams),
+		kvx.WithOutputColumnOrder([]string{"name", "description"}),
+		kvx.WithOutputColumnHints(map[string]tui.ColumnHint{
+			"name":         {MaxWidth: 20, Priority: 10},
+			"displayName":  {Hidden: true},
+			"version":      {Hidden: true},
+			"category":     {Hidden: true},
+			"capabilities": {Hidden: true},
+			"deprecated":   {Hidden: true},
+			"beta":         {Hidden: true},
+		}),
 	)
 
 	return kvxOpts.Write(data)

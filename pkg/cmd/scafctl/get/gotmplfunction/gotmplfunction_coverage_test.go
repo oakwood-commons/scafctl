@@ -268,46 +268,6 @@ func TestRunGetFunction_JSONOutput(t *testing.T) {
 	assert.Contains(t, output, "testFunc")
 }
 
-// ── printSimpleList tests ─────────────────────────────────────────────────────
-
-func TestPrintSimpleList_NoColor(t *testing.T) {
-	t.Parallel()
-
-	ctx, buf, opts := newGotmplCtx(t)
-
-	funcs := gotmpl.ExtFunctionList{
-		{Name: "funcOne", Description: "First function", Custom: true},
-		{Name: "funcTwo", Description: "Second function", Custom: false},
-	}
-
-	err := opts.printSimpleList(ctx, funcs)
-	require.NoError(t, err)
-
-	output := buf.String()
-	assert.Contains(t, output, "funcOne")
-	assert.Contains(t, output, "funcTwo")
-	assert.Contains(t, output, "First function")
-}
-
-func TestPrintSimpleList_TruncatesLongDescription(t *testing.T) {
-	t.Parallel()
-
-	ctx, buf, opts := newGotmplCtx(t)
-
-	longDesc := "This is a very long description that exceeds 80 characters in total and should be truncated by the print function when rendering"
-	funcs := gotmpl.ExtFunctionList{
-		{Name: "myFunc", Description: longDesc, Custom: true},
-	}
-
-	err := opts.printSimpleList(ctx, funcs)
-	require.NoError(t, err)
-
-	output := buf.String()
-	assert.Contains(t, output, "myFunc")
-	// Description should be truncated with "..."
-	assert.Contains(t, output, "...")
-}
-
 // ── printFunctionDetail tests ─────────────────────────────────────────────────
 
 func TestPrintFunctionDetail_NoColor(t *testing.T) {

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/adrg/xdg"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
@@ -21,6 +22,7 @@ func TestHandleListPlugins(t *testing.T) {
 	t.Run("returns empty when no plugins cached", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		t.Setenv("XDG_CACHE_HOME", tmpDir)
+		xdg.Reload()
 
 		srv, err := NewServer(WithServerVersion("test"))
 		require.NoError(t, err)
@@ -39,6 +41,7 @@ func TestHandleListPlugins(t *testing.T) {
 
 	t.Run("returns plugins when cache populated", func(t *testing.T) {
 		t.Setenv("XDG_CACHE_HOME", t.TempDir())
+		xdg.Reload()
 
 		// Create cache structure under an isolated plugin cache dir
 		cacheDir := paths.PluginCacheDir()

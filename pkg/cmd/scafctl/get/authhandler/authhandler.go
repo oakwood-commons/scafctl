@@ -54,6 +54,14 @@ var authHandlerSchema = []byte(`{
 	}
 }`)
 
+// HandlerSummary is the table-friendly output for auth handler listing.
+type HandlerSummary struct {
+	DisplayName  string `json:"displayName" yaml:"displayName"`
+	Name         string `json:"name" yaml:"name" required:"true"`
+	Capabilities string `json:"capabilities" yaml:"capabilities"`
+	Flows        string `json:"flows" yaml:"flows"`
+}
+
 // Options holds configuration for the get authhandler command.
 type Options struct {
 	BinaryName string
@@ -134,7 +142,17 @@ func (o *Options) RunListHandlers(ctx context.Context) error {
 		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
-	results := make([]map[string]any, 0, len(handlerNames))
+	useFullOutput := o.Output == "json" || o.Output == "yaml"
+
+	var results []map[string]any
+	var summaries []HandlerSummary
+	if useFullOutput {
+		results = make([]map[string]any, 0, len(handlerNames))
+	} else {
+		summaries = make([]HandlerSummary, 0, len(handlerNames))
+	}
+
+	loaded := 0
 	for _, name := range handlerNames {
 		handler, err := auth.GetHandler(ctx, name)
 		if err != nil {
@@ -143,10 +161,15 @@ func (o *Options) RunListHandlers(ctx context.Context) error {
 			}
 			continue
 		}
-		results = append(results, buildHandlerRow(handler))
+		loaded++
+		if useFullOutput {
+			results = append(results, buildHandlerRow(handler))
+		} else {
+			summaries = append(summaries, buildHandlerSummary(handler))
+		}
 	}
 
-	if len(results) == 0 {
+	if loaded == 0 {
 		err := fmt.Errorf("no auth handlers could be loaded")
 		if w := writer.FromContext(ctx); w != nil {
 			w.Errorf("%v", err)
@@ -154,7 +177,10 @@ func (o *Options) RunListHandlers(ctx context.Context) error {
 		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
-	return o.writeOutput(ctx, results)
+	if useFullOutput {
+		return o.writeOutput(ctx, results)
+	}
+	return o.writeOutput(ctx, summaries)
 }
 
 // RunGetHandler shows details for a single named auth handler.
@@ -276,4 +302,26 @@ func buildHandlerRow(handler auth.Handler) map[string]any {
 // buildHandlerDetail builds a fully detailed map for a single handler.
 func buildHandlerDetail(handler auth.Handler) map[string]any {
 	return buildHandlerRow(handler)
+}
+
+// buildHandlerSummary builds a flat summary for table view.
+func buildHandlerSummary(handler auth.Handler) HandlerSummary {
+	flows := handler.SupportedFlows()
+	flowStrs := make([]string, len(flows))
+	for i, f := range flows {
+		flowStrs[i] = string(f)
+	}
+
+	caps := handler.Capabilities()
+	capStrs := make([]string, len(caps))
+	for i, c := range caps {
+		capStrs[i] = string(c)
+	}
+
+	return HandlerSummary{
+		Name:         handler.Name(),
+		DisplayName:  handler.DisplayName(),
+		Flows:        strings.Join(flowStrs, ", "),
+		Capabilities: strings.Join(capStrs, ", "),
+	}
 }

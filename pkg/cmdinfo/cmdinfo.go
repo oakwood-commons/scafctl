@@ -16,7 +16,7 @@ import (
 type CommandInfo struct {
 	Name        string   `json:"name" yaml:"name" doc:"Full command path" maxLength:"256" example:"run solution"`
 	Short       string   `json:"short" yaml:"short" doc:"Short description" maxLength:"512" example:"Run a solution workflow"`
-	Group       string   `json:"group,omitempty" yaml:"group,omitempty" doc:"Command group" maxLength:"64" example:"core"`
+	Group       string   `json:"group" yaml:"group" doc:"Command group" maxLength:"64" example:"core"`
 	Aliases     []string `json:"aliases,omitempty" yaml:"aliases,omitempty" doc:"Command aliases" maxItems:"10"`
 	Deprecated  bool     `json:"deprecated,omitempty" yaml:"deprecated,omitempty" doc:"Whether the command is deprecated"`
 	HasChildren bool     `json:"hasChildren,omitempty" yaml:"hasChildren,omitempty" doc:"Whether the command has subcommands"`
