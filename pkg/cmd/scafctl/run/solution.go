@@ -83,6 +83,7 @@ func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 			options.BinaryName = cli.BinaryName
 			options.IOStreams = ios
 			options.CliParams = cli
+			options.Verbose = cli.Verbose
 		},
 	}
 
@@ -218,7 +219,6 @@ Examples:
 	cCmd.Flags().DurationVar(&options.ActionTimeout, "action-timeout", settings.DefaultActionTimeout, "Default timeout per action")
 	cCmd.Flags().IntVar(&options.MaxActionConcurrency, "max-action-concurrency", 0, "Maximum concurrent actions (0=unlimited)")
 	cCmd.Flags().BoolVar(&options.DryRun, "dry-run", false, "Validate and show what would be executed without running")
-	cCmd.Flags().BoolVar(&options.Verbose, "verbose", false, "Show additional execution detail (skipped actions, materialized inputs in dry-run)")
 	cCmd.Flags().BoolVar(&options.ShowExecution, "show-execution", false, "Include __execution metadata in output (phases, timing, dependencies, providers)")
 
 	// File conflict strategy flags

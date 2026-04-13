@@ -27,6 +27,7 @@ import (
 	examplescmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/examples"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/explain"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get"
+	inspectcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/inspect"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/lint"
 	mcpcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/mcp"
 	newcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/new"
@@ -594,6 +595,7 @@ func Root(opts *RootOptions) *cobra.Command {
 	cCmd.PersistentFlags().StringVar(&logFormat, "log-format", "console", "Set the log output format (console, json)")
 	cCmd.PersistentFlags().StringVar(&logFile, "log-file", "", "Write logs to a file instead of stderr")
 	cCmd.PersistentFlags().BoolVarP(&cliParams.IsQuiet, "quiet", "q", false, "Do not print additional information")
+	cCmd.PersistentFlags().BoolVar(&cliParams.Verbose, "verbose", false, "Enable verbose output across all commands")
 	cCmd.PersistentFlags().BoolVar(&cliParams.NoColor, "no-color", false, "Disable color output")
 	cCmd.PersistentFlags().StringVarP(&cwdFlag, "cwd", "C", "", "Change the working directory before executing the command (similar to git -C)")
 	cCmd.PersistentFlags().StringVar(&configPath, "config", "", fmt.Sprintf("Path to config file (default: $XDG_CONFIG_HOME/%s/config.yaml or ~/.config/%s/config.yaml)", binaryName, binaryName))
@@ -618,6 +620,7 @@ func Root(opts *RootOptions) *cobra.Command {
 	cCmd.AddCommand(withGroup(groupInspect, get.CommandGet(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupInspect, explain.CommandExplain(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupInspect, eval.CommandEval(cliParams, ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupInspect, inspectcmd.CommandInspect(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupInspect, solutioncmd.CommandSolution(cliParams, *ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupInspect, snapshot.CommandSnapshot(cliParams, *ioStreams, binaryName)))
 

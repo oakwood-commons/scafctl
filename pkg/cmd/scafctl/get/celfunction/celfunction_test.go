@@ -138,9 +138,8 @@ func TestRunListFunctions_Quiet(t *testing.T) {
 	err := opts.RunListFunctions(ctx)
 	require.NoError(t, err)
 
-	output := buf.String()
-	assert.Contains(t, output, "test.custom")
-	assert.Contains(t, output, "test.builtin")
+	// Quiet mode suppresses all output
+	assert.Empty(t, buf.String())
 }
 
 func TestRunGetFunction_Found(t *testing.T) {

@@ -177,3 +177,65 @@ func TestKvxOutputFlags_Zero_Value(t *testing.T) {
 	opts := ToKvxOutputOptions(&flags)
 	assert.Equal(t, kvx.OutputFormatAuto, opts.Format)
 }
+
+func TestAddKvxOutputFlags_PreRunE_RejectsInvalid(t *testing.T) {
+	t.Parallel()
+	f := &KvxOutputFlags{}
+	cmd := &cobra.Command{Use: "test", RunE: func(_ *cobra.Command, _ []string) error { return nil }}
+	AddKvxOutputFlagsToStruct(cmd, f)
+
+	cmd.SetArgs([]string{"-o", "bogus"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid output format")
+}
+
+func TestAddKvxOutputFlags_PreRunE_AcceptsValid(t *testing.T) {
+	t.Parallel()
+	f := &KvxOutputFlags{}
+	ran := false
+	cmd := &cobra.Command{Use: "test", RunE: func(_ *cobra.Command, _ []string) error {
+		ran = true
+		return nil
+	}}
+	AddKvxOutputFlagsToStruct(cmd, f)
+
+	cmd.SetArgs([]string{"-o", "json"})
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.True(t, ran)
+}
+
+func TestAddKvxOutputFlags_PreRunE_ChainsExisting(t *testing.T) {
+	t.Parallel()
+	f := &KvxOutputFlags{}
+	preRan := false
+	cmd := &cobra.Command{
+		Use:     "test",
+		PreRunE: func(_ *cobra.Command, _ []string) error { preRan = true; return nil },
+		RunE:    func(_ *cobra.Command, _ []string) error { return nil },
+	}
+	AddKvxOutputFlagsToStruct(cmd, f)
+
+	cmd.SetArgs([]string{"-o", "yaml"})
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.True(t, preRan, "existing PreRunE should have been called")
+}
+
+func TestAddKvxOutputFlags_PreRunE_ChainsExistingPreRun(t *testing.T) {
+	t.Parallel()
+	f := &KvxOutputFlags{}
+	preRan := false
+	cmd := &cobra.Command{
+		Use:    "test",
+		PreRun: func(_ *cobra.Command, _ []string) { preRan = true },
+		RunE:   func(_ *cobra.Command, _ []string) error { return nil },
+	}
+	AddKvxOutputFlagsToStruct(cmd, f)
+
+	cmd.SetArgs([]string{"-o", "json"})
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.True(t, preRan, "existing PreRun should have been called via chained PreRunE")
+}

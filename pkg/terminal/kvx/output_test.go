@@ -45,7 +45,9 @@ func TestBaseOutputFormats(t *testing.T) {
 	assert.Contains(t, formats, "yaml")
 	assert.Contains(t, formats, "quiet")
 	assert.Contains(t, formats, "test")
-	assert.Len(t, formats, 7)
+	assert.Contains(t, formats, "tree")
+	assert.Contains(t, formats, "mermaid")
+	assert.Len(t, formats, 9)
 }
 
 func TestIsStructuredFormat(t *testing.T) {
@@ -58,6 +60,7 @@ func TestIsStructuredFormat(t *testing.T) {
 		{OutputFormatList, false},
 		{OutputFormatJSON, true},
 		{OutputFormatYAML, true},
+		{OutputFormatMermaid, true},
 		{OutputFormatQuiet, false},
 	}
 
@@ -76,6 +79,7 @@ func TestIsKvxFormat(t *testing.T) {
 		{OutputFormatAuto, true},
 		{OutputFormatTable, true},
 		{OutputFormatList, true},
+		{OutputFormatTree, true},
 		{"", true},
 		{OutputFormatJSON, false},
 		{OutputFormatYAML, false},
@@ -123,6 +127,8 @@ func TestParseOutputFormat(t *testing.T) {
 		{"yaml", OutputFormatYAML, true},
 		{"quiet", OutputFormatQuiet, true},
 		{"test", OutputFormatTest, true},
+		{"tree", OutputFormatTree, true},
+		{"mermaid", OutputFormatMermaid, true},
 		{"invalid", "", false},
 		{"JSON", "", false},
 	}
@@ -700,6 +706,134 @@ func TestView_Interactive_NonTTY(t *testing.T) {
 	assert.Contains(t, err.Error(), "interactive mode requires a terminal")
 }
 
+func TestView_NonInteractive_Tree(t *testing.T) {
+	out := &bytes.Buffer{}
+	data := map[string]any{"name": "scafctl", "version": "1.0"}
+	err := View(data, WithIO(strings.NewReader(""), out), WithLayout("tree"), WithNoColor(true))
+	require.NoError(t, err)
+	assert.Contains(t, out.String(), "scafctl")
+}
+
+func TestView_NonInteractive_Mermaid(t *testing.T) {
+	out := &bytes.Buffer{}
+	data := map[string]any{"name": "scafctl", "version": "1.0"}
+	err := View(data, WithIO(strings.NewReader(""), out), WithLayout("mermaid"))
+	require.NoError(t, err)
+	assert.NotEmpty(t, out.String())
+}
+
+func TestView_WithWhere(t *testing.T) {
+	out := &bytes.Buffer{}
+	data := []map[string]any{
+		{"name": "alice", "enabled": true},
+		{"name": "bob", "enabled": false},
+	}
+	err := View(data,
+		WithIO(strings.NewReader(""), out),
+		WithWhere("_.enabled == true"),
+		WithNoColor(true),
+	)
+	require.NoError(t, err)
+	output := out.String()
+	assert.Contains(t, output, "alice")
+	assert.NotContains(t, output, "bob")
+}
+
+func TestView_WithWhere_InvalidExpression(t *testing.T) {
+	out := &bytes.Buffer{}
+	data := []map[string]any{{"name": "test"}}
+	err := View(data,
+		WithIO(strings.NewReader(""), out),
+		WithWhere("invalid((syntax"),
+		WithNoColor(true),
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "where filter failed")
+}
+
+func TestOutputOptions_Write_Mermaid(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatMermaid
+
+	data := map[string]any{"name": "test", "version": "1.0"}
+	err := opts.Write(data)
+
+	require.NoError(t, err)
+	assert.NotEmpty(t, out.String())
+}
+
+func TestOutputOptions_Write_Tree(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatTree
+
+	data := map[string]any{"name": "test", "version": "1.0"}
+	err := opts.Write(data)
+
+	require.NoError(t, err)
+	assert.Contains(t, out.String(), "test")
+}
+
+func TestOutputOptions_Write_JSON_WithWhere(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatJSON
+	opts.Where = "_.enabled == true"
+
+	data := []map[string]any{
+		{"name": "alice", "enabled": true},
+		{"name": "bob", "enabled": false},
+	}
+	err := opts.Write(data)
+
+	require.NoError(t, err)
+	output := out.String()
+	assert.Contains(t, output, "alice")
+	assert.NotContains(t, output, "bob")
+}
+
+func TestOutputOptions_Write_YAML_WithWhere(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatYAML
+	opts.Where = "_.enabled == true"
+
+	data := []map[string]any{
+		{"name": "keep", "enabled": true},
+		{"name": "drop", "enabled": false},
+	}
+	err := opts.Write(data)
+
+	require.NoError(t, err)
+	output := out.String()
+	assert.Contains(t, output, "keep")
+	assert.NotContains(t, output, "drop")
+}
+
+func TestOutputOptions_Write_JSON_WithWhere_InvalidExpression(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatJSON
+	opts.Where = "invalid((syntax"
+
+	data := []map[string]any{{"name": "test"}}
+	err := opts.Write(data)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "where filter failed")
+}
+
 func TestResolveColumnHints_BothEmpty(t *testing.T) {
 	result := resolveColumnHints(nil, nil)
 	assert.Nil(t, result)
@@ -799,4 +933,57 @@ func TestStructToMap(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestOutputOptions_Write_KvxNonTTY_WithWhere(t *testing.T) {
+	// Tests the non-TTY auto-fallback path in writeKvx with Where filter
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatAuto
+	opts.Where = "_.active"
+
+	data := []map[string]any{
+		{"name": "keep", "active": true},
+		{"name": "drop", "active": false},
+	}
+	err := opts.Write(data)
+	require.NoError(t, err)
+	assert.Contains(t, out.String(), "keep")
+	assert.NotContains(t, out.String(), "drop")
+}
+
+func TestOutputOptions_Write_KvxNonTTY_WithWhereAndExpression(t *testing.T) {
+	// Tests the non-TTY auto-fallback path with both Where and Expression
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatTable
+	opts.Where = "_.active"
+	opts.Expression = "_"
+
+	data := []map[string]any{
+		{"name": "alpha", "active": true},
+		{"name": "beta", "active": false},
+	}
+	err := opts.Write(data)
+	require.NoError(t, err)
+	assert.Contains(t, out.String(), "alpha")
+	assert.NotContains(t, out.String(), "beta")
+}
+
+func TestOutputOptions_Write_KvxNonTTY_InvalidWhere(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatAuto
+	opts.Where = "invalid((syntax"
+
+	data := []map[string]any{{"name": "test"}}
+	err := opts.Write(data)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "where filter failed")
 }

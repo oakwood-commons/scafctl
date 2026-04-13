@@ -51,7 +51,6 @@ func TestCommandFunctional_Flags(t *testing.T) {
 		{"solution", "solution"},
 		{"dry-run", "dry-run"},
 		{"fail-fast", "fail-fast"},
-		{"verbose", "verbose"},
 		{"keep-sandbox", "keep-sandbox"},
 		{"no-progress", "no-progress"},
 		{"watch", "watch"},
@@ -75,7 +74,6 @@ func TestCommandFunctional_Shorthands(t *testing.T) {
 		"f": "file",
 		"o": "output",
 		"j": "concurrency",
-		"v": "verbose",
 		"w": "watch",
 	}
 

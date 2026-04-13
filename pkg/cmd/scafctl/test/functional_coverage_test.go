@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -150,7 +151,9 @@ spec:
 		CliParams: settings.NewCliParams(),
 		File:      solFile,
 		DryRun:    true,
-		Output:    "quiet",
+		KvxOutputFlags: flags.KvxOutputFlags{
+			Output: "quiet",
+		},
 	}
 
 	err := runFunctional(ctx, opts)

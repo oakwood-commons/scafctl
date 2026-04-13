@@ -8,6 +8,7 @@ package proto
 
 import (
 	context "context"
+
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
@@ -203,24 +204,31 @@ type UnimplementedPluginServiceServer struct{}
 func (UnimplementedPluginServiceServer) GetProviders(context.Context, *GetProvidersRequest) (*GetProvidersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetProviders not implemented")
 }
+
 func (UnimplementedPluginServiceServer) GetProviderDescriptor(context.Context, *GetProviderDescriptorRequest) (*GetProviderDescriptorResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetProviderDescriptor not implemented")
 }
+
 func (UnimplementedPluginServiceServer) ConfigureProvider(context.Context, *ConfigureProviderRequest) (*ConfigureProviderResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ConfigureProvider not implemented")
 }
+
 func (UnimplementedPluginServiceServer) ExecuteProvider(context.Context, *ExecuteProviderRequest) (*ExecuteProviderResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ExecuteProvider not implemented")
 }
+
 func (UnimplementedPluginServiceServer) ExecuteProviderStream(*ExecuteProviderRequest, grpc.ServerStreamingServer[ExecuteProviderStreamChunk]) error {
 	return status.Error(codes.Unimplemented, "method ExecuteProviderStream not implemented")
 }
+
 func (UnimplementedPluginServiceServer) DescribeWhatIf(context.Context, *DescribeWhatIfRequest) (*DescribeWhatIfResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DescribeWhatIf not implemented")
 }
+
 func (UnimplementedPluginServiceServer) ExtractDependencies(context.Context, *ExtractDependenciesRequest) (*ExtractDependenciesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ExtractDependencies not implemented")
 }
+
 func (UnimplementedPluginServiceServer) StopProvider(context.Context, *StopProviderRequest) (*StopProviderResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StopProvider not implemented")
 }
@@ -577,21 +585,27 @@ type UnimplementedHostServiceServer struct{}
 func (UnimplementedHostServiceServer) GetSecret(context.Context, *GetSecretRequest) (*GetSecretResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetSecret not implemented")
 }
+
 func (UnimplementedHostServiceServer) SetSecret(context.Context, *SetSecretRequest) (*SetSecretResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetSecret not implemented")
 }
+
 func (UnimplementedHostServiceServer) DeleteSecret(context.Context, *DeleteSecretRequest) (*DeleteSecretResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteSecret not implemented")
 }
+
 func (UnimplementedHostServiceServer) ListSecrets(context.Context, *ListSecretsRequest) (*ListSecretsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListSecrets not implemented")
 }
+
 func (UnimplementedHostServiceServer) GetAuthIdentity(context.Context, *GetAuthIdentityRequest) (*GetAuthIdentityResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetAuthIdentity not implemented")
 }
+
 func (UnimplementedHostServiceServer) ListAuthHandlers(context.Context, *ListAuthHandlersRequest) (*ListAuthHandlersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListAuthHandlers not implemented")
 }
+
 func (UnimplementedHostServiceServer) GetAuthToken(context.Context, *GetAuthTokenRequest) (*GetAuthTokenResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetAuthToken not implemented")
 }
@@ -972,27 +986,35 @@ type UnimplementedAuthHandlerServiceServer struct{}
 func (UnimplementedAuthHandlerServiceServer) GetAuthHandlers(context.Context, *GetAuthHandlersRequest) (*GetAuthHandlersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetAuthHandlers not implemented")
 }
+
 func (UnimplementedAuthHandlerServiceServer) ConfigureAuthHandler(context.Context, *ConfigureAuthHandlerRequest) (*ConfigureAuthHandlerResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ConfigureAuthHandler not implemented")
 }
+
 func (UnimplementedAuthHandlerServiceServer) Login(*LoginRequest, grpc.ServerStreamingServer[LoginStreamMessage]) error {
 	return status.Error(codes.Unimplemented, "method Login not implemented")
 }
+
 func (UnimplementedAuthHandlerServiceServer) Logout(context.Context, *LogoutRequest) (*LogoutResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Logout not implemented")
 }
+
 func (UnimplementedAuthHandlerServiceServer) GetStatus(context.Context, *GetStatusRequest) (*GetStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetStatus not implemented")
 }
+
 func (UnimplementedAuthHandlerServiceServer) GetToken(context.Context, *GetTokenRequest) (*GetTokenResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetToken not implemented")
 }
+
 func (UnimplementedAuthHandlerServiceServer) ListCachedTokens(context.Context, *ListCachedTokensRequest) (*ListCachedTokensResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListCachedTokens not implemented")
 }
+
 func (UnimplementedAuthHandlerServiceServer) PurgeExpiredTokens(context.Context, *PurgeExpiredTokensRequest) (*PurgeExpiredTokensResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PurgeExpiredTokens not implemented")
 }
+
 func (UnimplementedAuthHandlerServiceServer) StopAuthHandler(context.Context, *StopAuthHandlerRequest) (*StopAuthHandlerResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StopAuthHandler not implemented")
 }

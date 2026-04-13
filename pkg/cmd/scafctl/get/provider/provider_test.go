@@ -191,7 +191,7 @@ func TestOptions_RunListProviders(t *testing.T) {
 				return reg
 			},
 			options: &Options{
-				KvxOutputFlags: flags.KvxOutputFlags{Output: "quiet"},
+				KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
 			},
 			wantErr: false,
 			checkOutput: func(t *testing.T, output string) {
@@ -211,7 +211,7 @@ func TestOptions_RunListProviders(t *testing.T) {
 			},
 			options: &Options{
 				Capability:     "from",
-				KvxOutputFlags: flags.KvxOutputFlags{Output: "quiet"},
+				KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
 			},
 			wantErr: false,
 			checkOutput: func(t *testing.T, output string) {
@@ -233,7 +233,7 @@ func TestOptions_RunListProviders(t *testing.T) {
 			},
 			options: &Options{
 				Category:       "network",
-				KvxOutputFlags: flags.KvxOutputFlags{Output: "quiet"},
+				KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
 			},
 			wantErr: false,
 			checkOutput: func(t *testing.T, output string) {
@@ -247,11 +247,12 @@ func TestOptions_RunListProviders(t *testing.T) {
 				return provider.NewRegistry(provider.WithAllowOverwrite(true))
 			},
 			options: &Options{
-				KvxOutputFlags: flags.KvxOutputFlags{Output: "quiet"},
+				KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
 			},
 			wantErr: false,
 			checkOutput: func(t *testing.T, output string) {
-				assert.Empty(t, output)
+				// Empty registry produces an empty JSON array
+				assert.Contains(t, output, "[]")
 			},
 		},
 	}
@@ -303,7 +304,7 @@ func TestOptions_RunGetProvider(t *testing.T) {
 				return reg
 			},
 			options: &Options{
-				KvxOutputFlags: flags.KvxOutputFlags{Output: "quiet"},
+				KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
 			},
 			wantErr: false,
 			checkOutput: func(t *testing.T, output string) {
@@ -332,11 +333,10 @@ func TestOptions_RunGetProvider(t *testing.T) {
 				return reg
 			},
 			options: &Options{
-				KvxOutputFlags: flags.KvxOutputFlags{Output: "quiet"},
+				KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
 			},
 			wantErr: false,
 			checkOutput: func(t *testing.T, output string) {
-				// In quiet mode with a single provider that has a name, only the name is printed
 				assert.Contains(t, output, "full-provider")
 			},
 		},
@@ -748,61 +748,4 @@ func TestOptions_getRegistry(t *testing.T) {
 		result := options.getRegistry(context.Background())
 		assert.NotNil(t, result)
 	})
-}
-
-func TestOptions_writeQuietOutput(t *testing.T) {
-	tests := []struct {
-		name        string
-		data        any
-		checkOutput func(t *testing.T, output string)
-	}{
-		{
-			name: "list_of_providers",
-			data: []map[string]any{
-				{"name": "provider-1"},
-				{"name": "provider-2"},
-			},
-			checkOutput: func(t *testing.T, output string) {
-				assert.Contains(t, output, "provider-1")
-				assert.Contains(t, output, "provider-2")
-			},
-		},
-		{
-			name: "single_provider_with_name",
-			data: map[string]any{
-				"name":        "single-provider",
-				"description": "A single provider",
-			},
-			checkOutput: func(t *testing.T, output string) {
-				assert.Contains(t, output, "single-provider")
-			},
-		},
-		{
-			name: "single_provider_without_name",
-			data: map[string]any{
-				"description": "No name field",
-			},
-			checkOutput: func(t *testing.T, output string) {
-				assert.Contains(t, output, "description")
-			},
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			var outBuf bytes.Buffer
-			ioStreams := &terminal.IOStreams{
-				Out: &outBuf,
-			}
-			options := &Options{
-				IOStreams: ioStreams,
-			}
-
-			w := writer.New(ioStreams, &settings.Run{})
-			ctx := writer.WithWriter(context.Background(), w)
-			err := options.writeQuietOutput(ctx, tc.data)
-			require.NoError(t, err)
-			tc.checkOutput(t, outBuf.String())
-		})
-	}
 }
