@@ -52,13 +52,13 @@ func TestMessageProvider_Execute_InvalidInput(t *testing.T) {
 	assert.Contains(t, err.Error(), "expected map[string]any")
 }
 
-func TestMessageProvider_Execute_MissingMessage(t *testing.T) {
+func TestMessageProvider_Execute_MissingMessageAndData(t *testing.T) {
 	p := NewMessageProvider()
 	ctx, _, _ := testCtx(t, nil)
 
 	_, err := p.Execute(ctx, map[string]any{})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "'message' must be provided")
+	assert.Contains(t, err.Error(), "either 'data' or 'message' must be provided")
 }
 
 func TestMessageProvider_Execute_PlainMessage(t *testing.T) {
@@ -507,7 +507,7 @@ func TestMessageProvider_Execute_DryRun(t *testing.T) {
 	assert.Contains(t, data["message"].(string), "stderr")
 }
 
-func TestMessageProvider_Execute_DryRun_NoMessage(t *testing.T) {
+func TestMessageProvider_Execute_DryRun_NoMessageOrData(t *testing.T) {
 	p := NewMessageProvider()
 	ctx, _, _ := testCtx(t, nil)
 	ctx = provider.WithDryRun(ctx, true)
@@ -516,7 +516,7 @@ func TestMessageProvider_Execute_DryRun_NoMessage(t *testing.T) {
 		"type": "info",
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "'message' must be provided")
+	assert.Contains(t, err.Error(), "either 'data' or 'message' must be provided")
 }
 
 func TestMessageProvider_Execute_DryRun_WithLabel(t *testing.T) {
@@ -648,6 +648,28 @@ func TestMessageProvider_WhatIf(t *testing.T) {
 			name:     "invalid input type",
 			input:    "not-a-map",
 			contains: "",
+		},
+		{
+			name:     "data mode basic",
+			input:    map[string]any{"data": []any{"a", "b"}},
+			contains: "Would render data as auto",
+		},
+		{
+			name: "data mode with display",
+			input: map[string]any{
+				"data":    []any{"a"},
+				"display": map[string]any{"list": map[string]any{"titleField": "name"}},
+			},
+			contains: "with display schema",
+		},
+		{
+			name: "data mode with label",
+			input: map[string]any{
+				"data":   []any{"a"},
+				"format": "table",
+				"label":  "Results",
+			},
+			contains: "[Results]",
 		},
 	}
 	for _, tt := range tests {
@@ -781,6 +803,693 @@ func BenchmarkExecuteWithLabel(b *testing.B) {
 	}
 
 	b.ResetTimer()
+	for b.Loop() {
+		stdout.Reset()
+		_, _ = p.Execute(ctx, input)
+	}
+}
+
+// --- Data mode tests ---
+
+func TestMessageProvider_Execute_DataMode_DefaultTable(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, stdout, _ := testCtx(t, &settings.Run{NoColor: true})
+
+	data := []map[string]any{
+		{"name": "Alice", "role": "admin"},
+		{"name": "Bob", "role": "operator"},
+	}
+
+	out, err := p.Execute(ctx, map[string]any{
+		"data": data,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	assert.True(t, out.Streamed)
+
+	// Default output wraps data.
+	outputMap, ok := out.Data.(map[string]any)
+	require.True(t, ok)
+	assert.True(t, outputMap["success"].(bool))
+	assert.Equal(t, data, outputMap["data"])
+
+	// Should have rendered something to stdout.
+	assert.NotEmpty(t, stdout.String())
+	assert.Contains(t, stdout.String(), "Alice")
+	assert.Contains(t, stdout.String(), "Bob")
+}
+
+func TestMessageProvider_Execute_DataMode_WithLabel(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, stdout, _ := testCtx(t, &settings.Run{NoColor: true})
+
+	data := []map[string]any{
+		{"name": "Alice"},
+	}
+
+	out, err := p.Execute(ctx, map[string]any{
+		"data":  data,
+		"label": "Team Members",
+	})
+	require.NoError(t, err)
+	assert.True(t, out.Streamed)
+	assert.Contains(t, stdout.String(), "Alice")
+}
+
+func TestMessageProvider_Execute_DataMode_TableFormat(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, stdout, _ := testCtx(t, &settings.Run{NoColor: true})
+
+	data := []map[string]any{
+		{"name": "Alice", "role": "admin"},
+	}
+
+	out, err := p.Execute(ctx, map[string]any{
+		"data":   data,
+		"format": "table",
+	})
+	require.NoError(t, err)
+	assert.True(t, out.Streamed)
+	assert.Contains(t, stdout.String(), "Alice")
+}
+
+func TestMessageProvider_Execute_DataMode_ListFormat(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, stdout, _ := testCtx(t, &settings.Run{NoColor: true})
+
+	data := map[string]any{
+		"name": "Alice",
+		"role": "admin",
+	}
+
+	out, err := p.Execute(ctx, map[string]any{
+		"data":   data,
+		"format": "list",
+	})
+	require.NoError(t, err)
+	assert.True(t, out.Streamed)
+	assert.NotEmpty(t, stdout.String())
+}
+
+func TestMessageProvider_Execute_DataMode_TreeFormat(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, stdout, _ := testCtx(t, &settings.Run{NoColor: true})
+
+	data := map[string]any{
+		"root": map[string]any{
+			"child1": "value1",
+			"child2": "value2",
+		},
+	}
+
+	out, err := p.Execute(ctx, map[string]any{
+		"data":   data,
+		"format": "tree",
+	})
+	require.NoError(t, err)
+	assert.True(t, out.Streamed)
+	assert.NotEmpty(t, stdout.String())
+}
+
+func TestMessageProvider_Execute_DataMode_MermaidFormat(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, stdout, _ := testCtx(t, &settings.Run{NoColor: true})
+
+	data := map[string]any{
+		"root": map[string]any{
+			"child": "value",
+		},
+	}
+
+	out, err := p.Execute(ctx, map[string]any{
+		"data":   data,
+		"format": "mermaid",
+	})
+	require.NoError(t, err)
+	assert.True(t, out.Streamed)
+	assert.NotEmpty(t, stdout.String())
+}
+
+func TestMessageProvider_Execute_DataMode_JSONFormat(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, stdout, _ := testCtx(t, &settings.Run{NoColor: true})
+
+	data := []map[string]any{
+		{"name": "Alice", "role": "admin"},
+	}
+
+	out, err := p.Execute(ctx, map[string]any{
+		"data":   data,
+		"format": "json",
+	})
+	require.NoError(t, err)
+	assert.True(t, out.Streamed)
+	assert.Contains(t, stdout.String(), `"name"`)
+	assert.Contains(t, stdout.String(), `"Alice"`)
+}
+
+func TestMessageProvider_Execute_DataMode_YAMLFormat(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, stdout, _ := testCtx(t, &settings.Run{NoColor: true})
+
+	data := []map[string]any{
+		{"name": "Alice"},
+	}
+
+	out, err := p.Execute(ctx, map[string]any{
+		"data":   data,
+		"format": "yaml",
+	})
+	require.NoError(t, err)
+	assert.True(t, out.Streamed)
+	assert.Contains(t, stdout.String(), "name: Alice")
+}
+
+func TestMessageProvider_Execute_DataMode_QuietFormat(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, stdout, _ := testCtx(t, &settings.Run{NoColor: true})
+
+	data := []map[string]any{{"name": "Alice"}}
+
+	out, err := p.Execute(ctx, map[string]any{
+		"data":   data,
+		"format": "quiet",
+	})
+	require.NoError(t, err)
+	assert.False(t, out.Streamed)
+	assert.Empty(t, stdout.String())
+
+	// Data is still in output even when quiet.
+	outputMap := out.Data.(map[string]any)
+	assert.True(t, outputMap["success"].(bool))
+}
+
+func TestMessageProvider_Execute_DataMode_QuietFromSettings(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, stdout, _ := testCtx(t, &settings.Run{IsQuiet: true, NoColor: true})
+
+	data := []map[string]any{{"name": "Alice"}}
+
+	out, err := p.Execute(ctx, map[string]any{
+		"data": data,
+	})
+	require.NoError(t, err)
+	assert.False(t, out.Streamed)
+	assert.Empty(t, stdout.String())
+}
+
+func TestMessageProvider_Execute_DataMode_ExpandTrue(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, _, _ := testCtx(t, &settings.Run{NoColor: true})
+
+	data := []map[string]any{
+		{"name": "Alice", "role": "admin"},
+	}
+
+	out, err := p.Execute(ctx, map[string]any{
+		"data":   data,
+		"expand": true,
+	})
+	require.NoError(t, err)
+
+	// With expand: true, output IS the raw data.
+	outData, ok := out.Data.([]map[string]any)
+	require.True(t, ok)
+	assert.Len(t, outData, 1)
+	assert.Equal(t, "Alice", outData[0]["name"])
+}
+
+func TestMessageProvider_Execute_DataMode_ExpandFalse(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, _, _ := testCtx(t, &settings.Run{NoColor: true})
+
+	data := map[string]any{"name": "Alice"}
+
+	out, err := p.Execute(ctx, map[string]any{
+		"data":   data,
+		"expand": false,
+	})
+	require.NoError(t, err)
+
+	// With expand: false, output is wrapped.
+	outputMap, ok := out.Data.(map[string]any)
+	require.True(t, ok)
+	assert.True(t, outputMap["success"].(bool))
+	assert.Equal(t, data, outputMap["data"])
+}
+
+func TestMessageProvider_Execute_DataMode_ColumnOrder(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, stdout, _ := testCtx(t, &settings.Run{NoColor: true})
+
+	data := []map[string]any{
+		{"name": "Alice", "role": "admin", "email": "alice@test.com"},
+	}
+
+	out, err := p.Execute(ctx, map[string]any{
+		"data":        data,
+		"columnOrder": []any{"name", "email", "role"},
+	})
+	require.NoError(t, err)
+	assert.True(t, out.Streamed)
+	assert.Contains(t, stdout.String(), "Alice")
+}
+
+func TestMessageProvider_Execute_DataMode_WithDisplaySchema(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, stdout, _ := testCtx(t, &settings.Run{NoColor: true})
+
+	data := []map[string]any{
+		{"name": "my-project", "type": "compute", "env": "prod"},
+	}
+
+	out, err := p.Execute(ctx, map[string]any{
+		"data": data,
+		"display": map[string]any{
+			"collectionTitle": "Projects",
+			"list": map[string]any{
+				"titleField":    "name",
+				"subtitleField": "type",
+				"badgeFields":   []any{"env"},
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, out.Streamed)
+	assert.NotEmpty(t, stdout.String())
+}
+
+func TestMessageProvider_Execute_DataMode_DetailView(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, stdout, _ := testCtx(t, &settings.Run{NoColor: true})
+
+	data := map[string]any{
+		"name":    "my-app",
+		"version": "1.0.0",
+		"status":  "running",
+	}
+
+	out, err := p.Execute(ctx, map[string]any{
+		"data": data,
+		"display": map[string]any{
+			"detail": map[string]any{
+				"titleField": "name",
+				"sections": []any{
+					map[string]any{
+						"title":  "Info",
+						"fields": []any{"name", "version"},
+					},
+					map[string]any{
+						"title":  "Status",
+						"fields": []any{"status"},
+						"layout": "inline",
+					},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, out.Streamed)
+	assert.NotEmpty(t, stdout.String())
+}
+
+func TestMessageProvider_Execute_DataMode_ColumnHints(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, stdout, _ := testCtx(t, &settings.Run{NoColor: true})
+
+	data := []map[string]any{
+		{"name": "Alice", "role": "admin", "secret": "hidden"},
+	}
+
+	out, err := p.Execute(ctx, map[string]any{
+		"data": data,
+		"columnHints": map[string]any{
+			"properties": map[string]any{
+				"name": map[string]any{
+					"x-kvx-header": "Full Name",
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, out.Streamed)
+	assert.Contains(t, stdout.String(), "Alice")
+}
+
+func TestMessageProvider_Execute_DataMode_DryRun(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, stdout, _ := testCtx(t, nil)
+	ctx = provider.WithDryRun(ctx, true)
+
+	inputData := []map[string]any{{"name": "Alice"}}
+	out, err := p.Execute(ctx, map[string]any{
+		"data":   inputData,
+		"format": "table",
+		"label":  "Users",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, stdout.String())
+
+	outputMap := out.Data.(map[string]any)
+	assert.True(t, outputMap["success"].(bool))
+	assert.Equal(t, inputData, outputMap["data"])
+	assert.Contains(t, out.Metadata["description"].(string), "[dry-run]")
+	assert.Contains(t, out.Metadata["description"].(string), "table")
+	assert.Contains(t, out.Metadata["description"].(string), "[Users]")
+}
+
+func TestMessageProvider_Execute_DataMode_DryRunWithDisplay(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, _, _ := testCtx(t, nil)
+	ctx = provider.WithDryRun(ctx, true)
+
+	inputData := []map[string]any{{"name": "Alice"}}
+	out, err := p.Execute(ctx, map[string]any{
+		"data": inputData,
+		"display": map[string]any{
+			"list": map[string]any{"titleField": "name"},
+		},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.Metadata["description"].(string), "display schema")
+	outputMap := out.Data.(map[string]any)
+	assert.Equal(t, inputData, outputMap["data"])
+}
+
+func TestMessageProvider_Execute_DataMode_DryRunExpand(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, _, _ := testCtx(t, nil)
+	ctx = provider.WithDryRun(ctx, true)
+
+	inputData := []map[string]any{{"name": "Alice"}}
+	out, err := p.Execute(ctx, map[string]any{
+		"data":   inputData,
+		"expand": true,
+	})
+	require.NoError(t, err)
+	// expand=true returns raw data directly, not wrapped.
+	assert.Equal(t, inputData, out.Data)
+}
+
+// --- Error cases for data mode ---
+
+func TestMessageProvider_Execute_DataAndMessage_MutuallyExclusive(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, _, _ := testCtx(t, nil)
+
+	_, err := p.Execute(ctx, map[string]any{
+		"message": "hello",
+		"data":    []map[string]any{{"name": "Alice"}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "'data' and 'message' are mutually exclusive")
+}
+
+func TestMessageProvider_Execute_DisplayWithoutData(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, _, _ := testCtx(t, nil)
+
+	_, err := p.Execute(ctx, map[string]any{
+		"message": "hello",
+		"display": map[string]any{"list": map[string]any{"titleField": "name"}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "'display' requires 'data' to be set")
+}
+
+func TestMessageProvider_Execute_FormatWithoutData(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, _, _ := testCtx(t, nil)
+
+	_, err := p.Execute(ctx, map[string]any{
+		"message": "hello",
+		"format":  "table",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "'format' requires 'data' to be set")
+}
+
+func TestMessageProvider_Execute_ColumnHintsWithoutData(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, _, _ := testCtx(t, nil)
+
+	_, err := p.Execute(ctx, map[string]any{
+		"message":     "hello",
+		"columnHints": map[string]any{"properties": map[string]any{}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "'columnHints' requires 'data' to be set")
+}
+
+func TestMessageProvider_Execute_ColumnOrderWithoutData(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, _, _ := testCtx(t, nil)
+
+	_, err := p.Execute(ctx, map[string]any{
+		"message":     "hello",
+		"columnOrder": []any{"name"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "'columnOrder' requires 'data' to be set")
+}
+
+func TestMessageProvider_Execute_ExpandWithoutData(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, _, _ := testCtx(t, nil)
+
+	_, err := p.Execute(ctx, map[string]any{
+		"message": "hello",
+		"expand":  true,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "'expand' requires 'data' to be set")
+}
+
+func TestMessageProvider_Execute_DataMode_NoIOStreams(t *testing.T) {
+	p := NewMessageProvider()
+	ctx := logger.WithLogger(context.Background(), logger.Get(0))
+	ctx = settings.IntoContext(ctx, &settings.Run{})
+
+	out, err := p.Execute(ctx, map[string]any{
+		"data": []map[string]any{{"name": "Alice"}},
+	})
+	require.NoError(t, err)
+	assert.NotNil(t, out)
+	assert.False(t, out.Streamed, "should not stream when IOStreams are nil")
+	assert.Equal(t, map[string]any{
+		"success": true,
+		"data":    []map[string]any{{"name": "Alice"}},
+	}, out.Data)
+}
+
+func TestMessageProvider_Execute_DataMode_DisplayWrongType(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, _, _ := testCtx(t, &settings.Run{})
+
+	_, err := p.Execute(ctx, map[string]any{
+		"data":    []map[string]any{{"name": "Alice"}},
+		"display": "not-a-map",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "'display' must be an object")
+}
+
+func TestMessageProvider_Execute_DataMode_DestinationStderr(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, stdout, stderr := testCtx(t, &settings.Run{NoColor: true})
+
+	_, err := p.Execute(ctx, map[string]any{
+		"data":        []map[string]any{{"name": "Alice"}},
+		"format":      "json",
+		"destination": "stderr",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, stdout.String(), "stdout should be empty when destination is stderr")
+	assert.Contains(t, stderr.String(), "Alice")
+}
+
+func TestMessageProvider_Execute_DataMode_AppNameEmbedder(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, stdout, _ := testCtx(t, &settings.Run{NoColor: true, BinaryName: "mycli"})
+
+	_, err := p.Execute(ctx, map[string]any{
+		"data": []map[string]any{{"name": "Alice"}},
+	})
+	require.NoError(t, err)
+	// The rendered output should use the embedder binary name, not hardcoded "scafctl".
+	output := stdout.String()
+	assert.NotContains(t, output, "scafctl")
+}
+
+func TestMessageProvider_Execute_DataMode_ColumnHintsWrongType(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, _, _ := testCtx(t, &settings.Run{})
+
+	_, err := p.Execute(ctx, map[string]any{
+		"data":        []map[string]any{{"name": "Alice"}},
+		"columnHints": "not-a-map",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "'columnHints' must be an object")
+}
+
+func TestMessageProvider_Execute_DataMode_NoIOStreams_WithExpand(t *testing.T) {
+	p := NewMessageProvider()
+	ctx := logger.WithLogger(context.Background(), logger.Get(0))
+	ctx = settings.IntoContext(ctx, &settings.Run{})
+
+	out, err := p.Execute(ctx, map[string]any{
+		"data":   []map[string]any{{"name": "Alice"}},
+		"expand": true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []map[string]any{{"name": "Alice"}}, out.Data)
+	assert.False(t, out.Streamed)
+}
+
+func TestMessageProvider_Execute_DataMode_DisplayAndColumnHints(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, stdout, _ := testCtx(t, &settings.Run{NoColor: true})
+
+	data := []map[string]any{
+		{"name": "Alice", "role": "admin", "secret": "hidden"},
+	}
+
+	out, err := p.Execute(ctx, map[string]any{
+		"data": data,
+		"display": map[string]any{
+			"collectionTitle": "Users",
+			"list": map[string]any{
+				"titleField": "name",
+			},
+		},
+		"columnHints": map[string]any{
+			"properties": map[string]any{
+				"name": map[string]any{
+					"x-kvx-header": "Full Name",
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, out.Streamed)
+	assert.NotEmpty(t, stdout.String())
+}
+
+func TestMessageProvider_Execute_DataMode_ColumnOrderNonString(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, _, _ := testCtx(t, &settings.Run{NoColor: true})
+
+	_, err := p.Execute(ctx, map[string]any{
+		"data":        []map[string]any{{"name": "Alice"}},
+		"columnOrder": []any{"name", 42},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "columnOrder[1] must be a string")
+}
+
+func TestMessageProvider_Execute_DataMode_DisplayWithLabel(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, stdout, _ := testCtx(t, &settings.Run{NoColor: true})
+
+	data := []map[string]any{{"name": "Alice"}}
+
+	out, err := p.Execute(ctx, map[string]any{
+		"data":  data,
+		"label": "Team",
+		"display": map[string]any{
+			"list": map[string]any{"titleField": "name"},
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, out.Streamed)
+	assert.NotEmpty(t, stdout.String())
+}
+
+// --- Data mode benchmarks ---
+
+func BenchmarkExecute_DataMode_Table(b *testing.B) {
+	p := NewMessageProvider()
+	ctx := logger.WithLogger(context.Background(), logger.Get(0))
+	ctx = settings.IntoContext(ctx, &settings.Run{NoColor: true})
+	stdout := &bytes.Buffer{}
+	ctx = provider.WithIOStreams(ctx, &provider.IOStreams{Out: stdout, ErrOut: &bytes.Buffer{}})
+
+	data := make([]map[string]any, 10)
+	for i := range data {
+		data[i] = map[string]any{
+			"name":  "item-" + string(rune('A'+i)),
+			"value": i * 10,
+			"type":  "compute",
+		}
+	}
+	input := map[string]any{"data": data}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		stdout.Reset()
+		_, _ = p.Execute(ctx, input)
+	}
+}
+
+func BenchmarkExecute_DataMode_Display(b *testing.B) {
+	p := NewMessageProvider()
+	ctx := logger.WithLogger(context.Background(), logger.Get(0))
+	ctx = settings.IntoContext(ctx, &settings.Run{NoColor: true})
+	stdout := &bytes.Buffer{}
+	ctx = provider.WithIOStreams(ctx, &provider.IOStreams{Out: stdout, ErrOut: &bytes.Buffer{}})
+
+	data := make([]map[string]any, 10)
+	for i := range data {
+		data[i] = map[string]any{
+			"name":  "project-" + string(rune('A'+i)),
+			"type":  "compute",
+			"env":   "production",
+			"value": i * 10,
+		}
+	}
+	input := map[string]any{
+		"data": data,
+		"display": map[string]any{
+			"collectionTitle": "Projects",
+			"list": map[string]any{
+				"titleField":    "name",
+				"subtitleField": "type",
+				"badgeFields":   []any{"env"},
+			},
+		},
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		stdout.Reset()
+		_, _ = p.Execute(ctx, input)
+	}
+}
+
+func BenchmarkExecute_DataMode_JSON(b *testing.B) {
+	p := NewMessageProvider()
+	ctx := logger.WithLogger(context.Background(), logger.Get(0))
+	ctx = settings.IntoContext(ctx, &settings.Run{NoColor: true})
+	stdout := &bytes.Buffer{}
+	ctx = provider.WithIOStreams(ctx, &provider.IOStreams{Out: stdout, ErrOut: &bytes.Buffer{}})
+
+	data := make([]map[string]any, 10)
+	for i := range data {
+		data[i] = map[string]any{
+			"name":  "item-" + string(rune('A'+i)),
+			"value": i * 10,
+		}
+	}
+	input := map[string]any{"data": data, "format": "json"}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
 	for b.Loop() {
 		stdout.Reset()
 		_, _ = p.Execute(ctx, input)
