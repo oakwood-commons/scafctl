@@ -35,6 +35,7 @@ func TestValidationProvider_Descriptor(t *testing.T) {
 	assert.Contains(t, desc.Schema.Properties, "match")
 	assert.Contains(t, desc.Schema.Properties, "notMatch")
 	assert.Contains(t, desc.Schema.Properties, "expression")
+	assert.Contains(t, desc.Schema.Properties, "failWhen")
 	assert.NotNil(t, desc.OutputSchemas[provider.CapabilityValidation].Properties)
 }
 
@@ -250,4 +251,131 @@ func TestValidationProvider_Execute_ExpressionReturnsNonBoolean(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "must return boolean")
+}
+
+// ── failWhen tests ──
+
+func TestValidationProvider_Execute_FailWhen_ConditionTrue(t *testing.T) {
+	t.Parallel()
+	p := NewValidationProvider()
+
+	ctx := context.Background()
+	inputs := map[string]any{
+		"value":    map[string]any{"statusCode": 401},
+		"failWhen": "__self.statusCode == 401",
+		"message":  "Authentication failed (HTTP 401)",
+	}
+
+	result, err := p.Execute(ctx, inputs)
+
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "Authentication failed (HTTP 401)")
+}
+
+func TestValidationProvider_Execute_FailWhen_ConditionFalse(t *testing.T) {
+	t.Parallel()
+	p := NewValidationProvider()
+
+	ctx := context.Background()
+	inputs := map[string]any{
+		"value":    map[string]any{"statusCode": 200},
+		"failWhen": "__self.statusCode == 401",
+		"message":  "Authentication failed (HTTP 401)",
+	}
+
+	result, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	data := result.Data.(map[string]any)
+	assert.True(t, data["valid"].(bool))
+}
+
+func TestValidationProvider_Execute_FailWhen_DefaultMessage(t *testing.T) {
+	t.Parallel()
+	p := NewValidationProvider()
+
+	ctx := context.Background()
+	inputs := map[string]any{
+		"value":    "bad",
+		"failWhen": "__self == 'bad'",
+	}
+
+	result, err := p.Execute(ctx, inputs)
+
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "error condition met")
+	assert.Contains(t, err.Error(), "__self == 'bad'")
+}
+
+func TestValidationProvider_Execute_FailWhen_WithRegex(t *testing.T) {
+	t.Parallel()
+	p := NewValidationProvider()
+
+	// failWhen can be combined with match/notMatch (regex checks first, then failWhen)
+	ctx := context.Background()
+	inputs := map[string]any{
+		"value":    "test-service",
+		"match":    "^[a-z-]+$",
+		"failWhen": "__self == 'test-service'",
+		"message":  "test-service is reserved",
+	}
+
+	result, err := p.Execute(ctx, inputs)
+
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "test-service is reserved")
+}
+
+func TestValidationProvider_Execute_FailWhen_MutuallyExclusiveWithExpression(t *testing.T) {
+	t.Parallel()
+	p := NewValidationProvider()
+
+	ctx := context.Background()
+	inputs := map[string]any{
+		"value":      "test",
+		"expression": "__self != ''",
+		"failWhen":   "__self == ''",
+	}
+
+	result, err := p.Execute(ctx, inputs)
+
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "mutually exclusive")
+}
+
+func TestValidationProvider_Execute_FailWhen_NonBooleanResult(t *testing.T) {
+	t.Parallel()
+	p := NewValidationProvider()
+
+	ctx := context.Background()
+	inputs := map[string]any{
+		"value":    "test",
+		"failWhen": "__self + '-suffix'",
+	}
+
+	result, err := p.Execute(ctx, inputs)
+
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "must return boolean")
+}
+
+func TestValidationProvider_Execute_NoCriteria_IncludesFailWhen(t *testing.T) {
+	t.Parallel()
+	p := NewValidationProvider()
+
+	ctx := context.Background()
+	inputs := map[string]any{
+		"value": "test",
+	}
+
+	_, err := p.Execute(ctx, inputs)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failWhen")
 }

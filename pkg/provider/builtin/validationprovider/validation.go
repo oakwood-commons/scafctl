@@ -49,8 +49,11 @@ func NewValidationProvider() *ValidationProvider {
 				"notMatch": schemahelper.StringProp("Regex pattern that must NOT match the value",
 					schemahelper.WithExample("^test-"),
 					schemahelper.WithMaxLength(1000)),
-				"expression": schemahelper.StringProp("CEL expression that must evaluate to true (has access to __self for the value being validated and _ for resolver data)",
+				"expression": schemahelper.StringProp("CEL expression that must evaluate to true for validation to pass (has access to __self and _ for resolver data). Mutually exclusive with failWhen",
 					schemahelper.WithExample("__self in _.allowedEnvironments"),
+					schemahelper.WithMaxLength(1000)),
+				"failWhen": schemahelper.StringProp("CEL expression that triggers a validation failure when true (has access to __self and _ for resolver data). Reads naturally for error conditions. Mutually exclusive with expression",
+					schemahelper.WithExample("__self.statusCode == 401"),
 					schemahelper.WithMaxLength(1000)),
 				"message": schemahelper.StringProp("Custom error message to display when validation fails",
 					schemahelper.WithExample("Value must be a valid email address"),
@@ -114,6 +117,15 @@ inputs:
   match: "^[a-z0-9-]+$"
   expression: "__self.size() <= 50"`,
 				},
+				{
+					Name:        "Error-condition validation with failWhen",
+					Description: "Fail validation when an error condition is true (reads naturally for error checks)",
+					YAML: `name: validate-auth
+provider: validation
+inputs:
+  failWhen: "__self.statusCode == 401"
+  message: "Authentication failed (HTTP 401). Run: scafctl auth login entra"`,
+				},
 			},
 		},
 	}
@@ -172,10 +184,16 @@ func (p *ValidationProvider) Execute(ctx context.Context, input any) (*provider.
 	matchPattern, _ := inputs["match"].(string)
 	notMatchPattern, _ := inputs["notMatch"].(string)
 	expression, _ := inputs["expression"].(string)
+	failWhen, _ := inputs["failWhen"].(string)
+
+	// expression and failWhen are mutually exclusive
+	if expression != "" && failWhen != "" {
+		return nil, fmt.Errorf("%s: 'expression' and 'failWhen' are mutually exclusive -- use one or the other", ProviderName)
+	}
 
 	// At least one validation criterion is required
-	if matchPattern == "" && notMatchPattern == "" && expression == "" {
-		return nil, fmt.Errorf("%s: at least one of 'match', 'notMatch', or 'expression' is required", ProviderName)
+	if matchPattern == "" && notMatchPattern == "" && expression == "" && failWhen == "" {
+		return nil, fmt.Errorf("%s: at least one of 'match', 'notMatch', 'expression', or 'failWhen' is required", ProviderName)
 	}
 
 	// Validate with match pattern (requires string value)
@@ -217,24 +235,50 @@ func (p *ValidationProvider) Execute(ctx context.Context, input any) (*provider.
 	}
 
 	// Validate with CEL expression (works with any type)
-	if expression != "" {
+	// expression: pass when true; failWhen: fail when true
+	celExpr := expression
+	invertResult := false
+	if failWhen != "" {
+		celExpr = failWhen
+		invertResult = true
+	}
+	if celExpr != "" {
 		// Use EvaluateExpression with resolver data under _ and value as __self
-		result, err := celexp.EvaluateExpression(ctx, expression, resolverData, map[string]any{
+		result, err := celexp.EvaluateExpression(ctx, celExpr, resolverData, map[string]any{
 			celexp.VarSelf: valueAny,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("%s: expression evaluation failed: %w", ProviderName, err)
+			fieldName := "expression"
+			if invertResult {
+				fieldName = "failWhen"
+			}
+			return nil, fmt.Errorf("%s: %s evaluation failed: %w", ProviderName, fieldName, err)
 		}
 
 		// Check result type
-		valid, ok := result.(bool)
+		boolResult, ok := result.(bool)
 		if !ok {
-			return nil, fmt.Errorf("%s: expression must return boolean, got %T", ProviderName, result)
+			fieldName := "expression"
+			if invertResult {
+				fieldName = "failWhen"
+			}
+			return nil, fmt.Errorf("%s: %s must return boolean, got %T", ProviderName, fieldName, result)
+		}
+
+		// For failWhen, invert: fail when expression is true
+		valid := boolResult
+		if invertResult {
+			valid = !boolResult
 		}
 
 		if !valid {
 			// Get custom message from inputs if provided
-			message := fmt.Sprintf("expression evaluated to false: %s", expression)
+			var message string
+			if invertResult {
+				message = fmt.Sprintf("error condition met: %s", celExpr)
+			} else {
+				message = fmt.Sprintf("expression evaluated to false: %s", celExpr)
+			}
 			if customMsg, ok := inputs["message"].(string); ok && customMsg != "" {
 				message = customMsg
 			}

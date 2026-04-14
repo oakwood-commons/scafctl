@@ -12,15 +12,16 @@ import (
 type contextKey string
 
 const (
-	executionModeKey    contextKey = "scafctl.provider.executionMode"
-	dryRunKey           contextKey = "scafctl.provider.dryRun"
-	resolverContextKey  contextKey = "scafctl.provider.resolverContext"
-	parametersKey       contextKey = "scafctl.provider.parameters"
-	iterationContextKey contextKey = "scafctl.provider.iterationContext"
-	ioStreamsKey        contextKey = "scafctl.provider.ioStreams"
-	solutionMetadataKey contextKey = "scafctl.provider.solutionMetadata"
-	outputDirectoryKey  contextKey = "scafctl.provider.outputDirectory"
-	workingDirectoryKey contextKey = "scafctl.provider.workingDirectory"
+	executionModeKey     contextKey = "scafctl.provider.executionMode"
+	dryRunKey            contextKey = "scafctl.provider.dryRun"
+	resolverContextKey   contextKey = "scafctl.provider.resolverContext"
+	parametersKey        contextKey = "scafctl.provider.parameters"
+	iterationContextKey  contextKey = "scafctl.provider.iterationContext"
+	ioStreamsKey         contextKey = "scafctl.provider.ioStreams"
+	solutionMetadataKey  contextKey = "scafctl.provider.solutionMetadata"
+	outputDirectoryKey   contextKey = "scafctl.provider.outputDirectory"
+	workingDirectoryKey  contextKey = "scafctl.provider.workingDirectory"
+	solutionDirectoryKey contextKey = "scafctl.provider.solutionDirectory"
 
 	conflictStrategyKey contextKey = "scafctl.provider.conflictStrategy"
 	backupKey           contextKey = "scafctl.provider.backup"
@@ -82,6 +83,20 @@ func WithWorkingDirectory(ctx context.Context, dir string) context.Context {
 // When not set, callers should fall back to os.Getwd().
 func WorkingDirectoryFromContext(ctx context.Context) (string, bool) {
 	dir, ok := ctx.Value(workingDirectoryKey).(string)
+	return dir, ok
+}
+
+// WithSolutionDirectory returns a new context with the solution file's parent directory.
+// When set, resolver-phase path resolution uses this as the base for relative paths
+// instead of the process CWD, ensuring consistent behaviour between local and bundled execution.
+func WithSolutionDirectory(ctx context.Context, dir string) context.Context {
+	return context.WithValue(ctx, solutionDirectoryKey, dir)
+}
+
+// SolutionDirectoryFromContext retrieves the solution file's parent directory.
+// Returns the directory path and true if found, empty string and false otherwise.
+func SolutionDirectoryFromContext(ctx context.Context) (string, bool) {
+	dir, ok := ctx.Value(solutionDirectoryKey).(string)
 	return dir, ok
 }
 

@@ -955,10 +955,10 @@ For registries that use tokens or passwords directly (Docker Hub, Quay.io, self-
 
 ```bash
 # Using a token via stdin
-echo "YOUR_TOKEN" | scafctl catalog login quay.io --username myorg+deployer --password-stdin
+echo "YOUR_TOKEN" | scafctl catalog login quay.io --username myorg+deployer --password @-
 
-# Using a token from an environment variable (CI/automation)
-scafctl catalog login quay.io --username admin --password-env REGISTRY_PASSWORD
+# Using a token directly (CI/automation)
+scafctl catalog login quay.io --username admin --password "$REGISTRY_PASSWORD"
 ```
 
 **Config-based automatic authentication:**

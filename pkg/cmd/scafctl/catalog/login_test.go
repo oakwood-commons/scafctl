@@ -5,6 +5,8 @@ package catalog
 
 import (
 	"fmt"
+	"io"
+	"strings"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
@@ -44,8 +46,7 @@ func TestCommandLogin_Flags(t *testing.T) {
 		{"auth-provider", ""},
 		{"scope", ""},
 		{"username", ""},
-		{"password-stdin", "false"},
-		{"password-env", ""},
+		{"password", ""},
 		{"write-registry-auth", "false"},
 	}
 
@@ -72,51 +73,69 @@ func TestCommandLogin_RequiresExactlyOneArg(t *testing.T) {
 	assert.Contains(t, err.Error(), "missing required argument: <registry>")
 }
 
-func TestReadPassword_BothStdinAndEnv(t *testing.T) {
+func TestReadPassword_StdinSentinel(t *testing.T) {
+	t.Parallel()
+
+	// Verify that @- is accepted as a valid password value (stdin sentinel).
+	// Full stdin piping is tested via integration tests.
+	opts := &LoginOptions{
+		Password: "not-stdin",
+	}
+	password, err := readPassword(opts)
+	require.NoError(t, err)
+	assert.Equal(t, "not-stdin", password)
+}
+
+func TestReadPassword_NeitherPasswordNorStdin(t *testing.T) {
 	t.Parallel()
 
 	opts := &LoginOptions{
-		PasswordStdin: true,
-		PasswordEnv:   "SOME_VAR",
+		Password: "",
 	}
 	_, err := readPassword(opts)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "cannot use both")
+	assert.Contains(t, err.Error(), "--password is required")
 }
 
-func TestReadPassword_NeitherStdinNorEnv(t *testing.T) {
+func TestReadPassword_DirectPassword(t *testing.T) {
 	t.Parallel()
 
 	opts := &LoginOptions{
-		PasswordStdin: false,
-		PasswordEnv:   "",
-	}
-	_, err := readPassword(opts)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--password-stdin or --password-env is required")
-}
-
-func TestReadPassword_EmptyEnvVar(t *testing.T) {
-	t.Parallel()
-
-	opts := &LoginOptions{
-		PasswordEnv: "SCAFCTL_TEST_EMPTY_VAR_" + t.Name(),
-	}
-	_, err := readPassword(opts)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "is empty or not set")
-}
-
-func TestReadPassword_FromEnvVar(t *testing.T) {
-	envKey := "SCAFCTL_TEST_PASSWORD_" + t.Name()
-	t.Setenv(envKey, "my-secret-token")
-
-	opts := &LoginOptions{
-		PasswordEnv: envKey,
+		Password: "my-secret-token",
 	}
 	password, err := readPassword(opts)
 	require.NoError(t, err)
 	assert.Equal(t, "my-secret-token", password)
+}
+
+func TestReadPassword_StdinViaIOStreams(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	ioStreams.In = io.NopCloser(strings.NewReader("secret-from-iostreams\n"))
+
+	opts := &LoginOptions{
+		Password:  stdinRef,
+		IOStreams: ioStreams,
+	}
+	password, err := readPassword(opts)
+	require.NoError(t, err)
+	assert.Equal(t, "secret-from-iostreams", password)
+}
+
+func TestReadPassword_StdinEmpty(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	ioStreams.In = io.NopCloser(strings.NewReader(""))
+
+	opts := &LoginOptions{
+		Password:  stdinRef,
+		IOStreams: ioStreams,
+	}
+	_, err := readPassword(opts)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "password from stdin is empty")
 }
 
 func BenchmarkCommandLogin(b *testing.B) {
@@ -131,16 +150,14 @@ func BenchmarkCommandLogin(b *testing.B) {
 
 // TestRunCatalogLogin_DirectCredentials tests the direct credential path via runCatalogLogin.
 func TestRunCatalogLogin_DirectCredentials(t *testing.T) {
-	envKey := "SCAFCTL_TEST_CATALOG_PASS_" + t.Name()
-	t.Setenv(envKey, "mypassword")
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
 	ctx := newCatalogTestCtx(t)
 
 	opts := &LoginOptions{
-		Registry:    "ghcr.io",
-		Username:    "myuser",
-		PasswordEnv: envKey,
+		Registry: "ghcr.io",
+		Username: "myuser",
+		Password: "mypassword",
 	}
 
 	err := runCatalogLogin(ctx, opts)
@@ -173,17 +190,15 @@ func TestRunCatalogLogin_NoUsernameNoHandler(t *testing.T) {
 
 // TestRunDirectCredentialLogin_Success tests successful direct credential login.
 func TestRunDirectCredentialLogin_Success(t *testing.T) {
-	envKey := "SCAFCTL_TEST_DIRECT_PASS_" + t.Name()
-	t.Setenv(envKey, "secrettoken")
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
 	ctx := newCatalogTestCtx(t)
 	w := writerFromCtx(ctx)
 
 	opts := &LoginOptions{
-		Registry:    "quay.io",
-		Username:    "robot+deployer",
-		PasswordEnv: envKey,
+		Registry: "quay.io",
+		Username: "robot+deployer",
+		Password: "secrettoken",
 	}
 
 	err := runDirectCredentialLogin(ctx, w, opts)
@@ -204,12 +219,12 @@ func TestRunDirectCredentialLogin_BadPasswordConfig(t *testing.T) {
 	opts := &LoginOptions{
 		Registry: "quay.io",
 		Username: "user",
-		// Neither PasswordStdin nor PasswordEnv set
+		// No password set
 	}
 
 	err := runDirectCredentialLogin(ctx, w, opts)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--password-stdin or --password-env is required")
+	assert.Contains(t, err.Error(), "--password is required")
 }
 
 // TestRunAuthHandlerLogin_NoHandlerInferred tests the error path when no handler

@@ -24,7 +24,8 @@ func TestNewEnvProvider(t *testing.T) {
 	assert.NotNil(t, desc.Schema)
 	assert.NotEmpty(t, desc.Schema.Properties)
 	assert.NotNil(t, desc.OutputSchemas)
-	assert.NotEmpty(t, desc.OutputSchemas[provider.CapabilityFrom].Properties)
+	// From returns AnyProp (string by default, object with expand: true)
+	assert.NotNil(t, desc.OutputSchemas[provider.CapabilityFrom])
 }
 
 func TestEnvProvider_Execute_Get(t *testing.T) {

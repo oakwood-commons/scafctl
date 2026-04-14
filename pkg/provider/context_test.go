@@ -390,3 +390,17 @@ func TestIterationContextFromContext_NotSet(t *testing.T) {
 	_, ok := IterationContextFromContext(context.Background())
 	assert.False(t, ok)
 }
+
+func TestWithSolutionDirectory_AndFromContext(t *testing.T) {
+	ctx := context.Background()
+	ctx = WithSolutionDirectory(ctx, "/projects/my-solution")
+
+	got, ok := SolutionDirectoryFromContext(ctx)
+	assert.True(t, ok)
+	assert.Equal(t, "/projects/my-solution", got)
+}
+
+func TestSolutionDirectoryFromContext_NotSet(t *testing.T) {
+	_, ok := SolutionDirectoryFromContext(context.Background())
+	assert.False(t, ok)
+}

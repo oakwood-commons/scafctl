@@ -25,6 +25,24 @@ go test -race ./...
 go test -cover ./...
 ```
 
+### Coverage Targets
+
+| Code Type | Package Target | Patch Target |
+|-----------|---------------|-------------|
+| Domain packages (`pkg/...`) | 80%+ | 80%+ |
+| CLI commands (`pkg/cmd/...`) | 65%+ | 70%+ |
+| Critical business logic | 90%+ | 100% |
+| Generated code | Exclude | Exclude |
+
+### Patch Coverage (CRITICAL)
+
+Every PR must have **70%+ patch coverage** (percentage of new/changed lines covered by tests). This is enforced by Codecov.
+
+- When adding new code, write tests for it in the same PR
+- CLI command files (`pkg/cmd/`) are the most common offenders -- test RunE logic via integration tests or by extracting testable functions
+- Never submit a new file with 0% coverage; at minimum test the happy path and one error path
+- If a function is hard to test (e.g., cobra RunE with complex setup), extract the core logic into a helper function and test that
+
 ## Benchmarks
 
 Add benchmark tests for any new features or providers:

@@ -1291,9 +1291,9 @@ func (e *Executor) executeValidatePhase(ctx context.Context, resolverName string
 	// Get resolver context from context
 	resolverCtx, _ := FromContext(ctx)
 
-	// Check phase-level when condition
+	// Check phase-level when condition (with __self so conditions can reference the resolved value)
 	if phase.When != nil {
-		shouldExecute, err := e.evaluateCondition(ctx, phase.When)
+		shouldExecute, err := e.evaluateConditionWithSelf(ctx, phase.When, value)
 		if err != nil {
 			return providerCallCount, fmt.Errorf("failed to evaluate validate phase when condition: %w", err)
 		}

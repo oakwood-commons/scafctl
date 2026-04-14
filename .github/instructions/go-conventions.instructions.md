@@ -36,52 +36,14 @@ if err != nil {
 - Accept interfaces, return structs
 - Keep interfaces small (1-3 methods)
 - Define interfaces where they are used, not where they are implemented
-
-## Dependency Injection
-
-Use constructor functions to inject dependencies:
-
-```go
-func NewUserService(repo UserRepository, logger Logger) *UserService {
-    return &UserService{repo: repo, logger: logger}
-}
-```
-
-## Functional Options
-
-```go
-type Option func(*Server)
-
-func WithPort(port int) Option {
-    return func(s *Server) { s.port = port }
-}
-
-func NewServer(opts ...Option) *Server {
-    s := &Server{port: 8080}
-    for _, opt := range opts {
-        opt(s)
-    }
-    return s
-}
-```
-
-## Context & Timeouts
-
-Always use `context.Context` for timeout control:
-
-```go
-ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-defer cancel()
-```
+- Use constructor functions for dependency injection
+- Use functional options pattern (`WithX(val) Option`) for configurable constructors
+- Always pass `context.Context` as first parameter for timeout/cancellation control
+- No package-level mutable state
 
 ## Secret Management
 
-```go
-apiKey := os.Getenv("OPENAI_API_KEY")
-if apiKey == "" {
-    log.Fatal("OPENAI_API_KEY not configured")
-}
-```
+Read secrets from environment variables -- never hardcode.
 
 ## Formatting
 
@@ -95,7 +57,3 @@ scafctl is consumed as a library by external CLIs. Code must not assume the bina
 - Use `settings.CliBinaryName` or `settings.Run.BinaryName` instead of hardcoding `"scafctl"`
 - Functions producing paths, cache keys, or env vars must accept a name parameter or read from context
 - When adding `settings.*For(binaryName)` helpers, guard against empty `binaryName` by falling back to `CliBinaryName`
-
-## Reference
-
-See skill: `golang-patterns` for comprehensive Go idioms and patterns.

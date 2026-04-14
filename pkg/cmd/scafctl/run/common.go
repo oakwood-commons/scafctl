@@ -174,6 +174,11 @@ type sharedResolverOptions struct {
 	// Resolvers are unaffected and always use CWD.
 	OutputDir string
 
+	// BaseDir overrides the base directory for resolver path resolution.
+	// When set, resolver-phase relative paths resolve from this directory
+	// instead of CWD. Use "." to explicitly set CWD.
+	BaseDir string
+
 	// kvx output integration (shared flags)
 	flags.KvxOutputFlags
 
@@ -577,6 +582,7 @@ func addSharedResolverFlags(cCmd *cobra.Command, o *sharedResolverOptions) {
 	cCmd.Flags().DurationVar(&o.PhaseTimeout, "phase-timeout", settings.DefaultPhaseTimeout, "Timeout per resolver phase")
 	cCmd.Flags().StringVar(&o.TestName, "test-name", "", "Test name for -o test output (derived from command and args when not set)")
 	cCmd.Flags().StringVar(&o.OutputDir, "output-dir", "", "Target directory for action file operations (actions resolve relative paths here instead of CWD)")
+	cCmd.Flags().StringVar(&o.BaseDir, "base-dir", "", "Override base directory for resolver path resolution (when unset, paths resolve from CWD)")
 }
 
 // writeMetrics outputs provider execution metrics to stderr
