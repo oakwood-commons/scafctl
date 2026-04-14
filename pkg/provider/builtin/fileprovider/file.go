@@ -419,7 +419,8 @@ func (p *FileProvider) executeWrite(ctx context.Context, absPath string, inputs 
 			outputData["status"] = string(StatusUnchanged)
 			return &provider.Output{Data: outputData}, nil
 		}
-		return nil, &FileConflictError{Changed: []string{absPath}}
+		userPath, _ := inputs["path"].(string)
+		return nil, &FileConflictError{Changed: []string{userPath}}
 
 	case ConflictSkip:
 		outputData["status"] = string(StatusSkipped)

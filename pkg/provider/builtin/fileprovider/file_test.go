@@ -1420,6 +1420,47 @@ func TestWrite_ExistingFile_Error(t *testing.T) {
 	assert.Equal(t, "old", string(content))
 }
 
+func TestWrite_ExistingFile_Error_IdenticalContent_ReturnsUnchanged(t *testing.T) {
+	t.Parallel()
+	p := NewFileProvider()
+	tmpDir := t.TempDir()
+	target := filepath.Join(tmpDir, "exists.txt")
+	require.NoError(t, os.WriteFile(target, []byte("same content"), 0o600))
+
+	result, err := p.Execute(context.Background(), map[string]any{
+		"operation":  "write",
+		"path":       target,
+		"content":    "same content",
+		"onConflict": "error",
+	})
+
+	require.NoError(t, err)
+	data := result.Data.(map[string]any)
+	assert.Equal(t, "unchanged", data["status"])
+}
+
+func TestWrite_ExistingFile_Error_ReturnsFileConflictError(t *testing.T) {
+	t.Parallel()
+	p := NewFileProvider()
+	tmpDir := t.TempDir()
+	target := filepath.Join(tmpDir, "exists.txt")
+	require.NoError(t, os.WriteFile(target, []byte("old content"), 0o600))
+
+	_, err := p.Execute(context.Background(), map[string]any{
+		"operation":  "write",
+		"path":       target,
+		"content":    "different content",
+		"onConflict": "error",
+	})
+
+	require.Error(t, err)
+	var conflictErr *FileConflictError
+	require.ErrorAs(t, err, &conflictErr)
+	assert.Len(t, conflictErr.Changed, 1)
+	// Should contain the user-facing path, not an absolute path
+	assert.Equal(t, target, conflictErr.Changed[0])
+}
+
 func TestWrite_ExistingFile_Skip(t *testing.T) {
 	t.Parallel()
 	p := NewFileProvider()

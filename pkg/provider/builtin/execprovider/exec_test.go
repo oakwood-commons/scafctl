@@ -627,3 +627,108 @@ func TestExecProvider_Execute_MultilineCommand(t *testing.T) {
 	assert.Equal(t, "line1\nline2\n", data["stdout"])
 	assert.Equal(t, 0, data["exitCode"])
 }
+
+func TestExecProvider_Execute_DefaultTrimmedStringInFromMode(t *testing.T) {
+	p := NewExecProvider()
+	ctx := provider.WithExecutionMode(context.Background(), provider.CapabilityFrom)
+
+	inputs := map[string]any{
+		"command": "echo",
+		"args":    []any{"hello world"},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	// In from mode without expand, should return trimmed stdout string
+	data, ok := output.Data.(string)
+	require.True(t, ok, "expected string, got %T", output.Data)
+	assert.Equal(t, "hello world", data)
+}
+
+func TestExecProvider_Execute_DefaultTrimmedStringInTransformMode(t *testing.T) {
+	p := NewExecProvider()
+	ctx := provider.WithExecutionMode(context.Background(), provider.CapabilityTransform)
+
+	inputs := map[string]any{
+		"command": "echo",
+		"args":    []any{"hello world"},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	// In transform mode without expand, should return trimmed stdout string
+	data, ok := output.Data.(string)
+	require.True(t, ok, "expected string, got %T", output.Data)
+	assert.Equal(t, "hello world", data)
+}
+
+func TestExecProvider_Execute_ExpandTrue_ReturnsFullMap(t *testing.T) {
+	p := NewExecProvider()
+	ctx := provider.WithExecutionMode(context.Background(), provider.CapabilityFrom)
+
+	inputs := map[string]any{
+		"command": "echo",
+		"args":    []any{"hello"},
+		"expand":  true,
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	// With expand: true, should return full map even in from mode
+	data, ok := output.Data.(map[string]any)
+	require.True(t, ok, "expected map, got %T", output.Data)
+	assert.Equal(t, "hello\n", data["stdout"])
+	assert.Equal(t, 0, data["exitCode"])
+	assert.Equal(t, true, data["success"])
+}
+
+func TestExecProvider_Execute_ActionMode_ReturnsFullMap(t *testing.T) {
+	p := NewExecProvider()
+	ctx := provider.WithExecutionMode(context.Background(), provider.CapabilityAction)
+
+	inputs := map[string]any{
+		"command": "echo",
+		"args":    []any{"hello"},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	// Action mode always returns the full map
+	data, ok := output.Data.(map[string]any)
+	require.True(t, ok, "expected map, got %T", output.Data)
+	assert.Equal(t, "hello\n", data["stdout"])
+	assert.Equal(t, 0, data["exitCode"])
+	assert.Equal(t, true, data["success"])
+}
+
+func TestExecProvider_Execute_NoExecutionMode_ReturnsFullMap(t *testing.T) {
+	p := NewExecProvider()
+	ctx := context.Background() // No execution mode set
+
+	inputs := map[string]any{
+		"command": "echo",
+		"args":    []any{"hello"},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	// No execution mode = falls through to full map
+	data, ok := output.Data.(map[string]any)
+	require.True(t, ok, "expected map, got %T", output.Data)
+	assert.Equal(t, "hello\n", data["stdout"])
+}

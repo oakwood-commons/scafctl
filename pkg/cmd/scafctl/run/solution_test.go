@@ -1140,3 +1140,51 @@ func BenchmarkWriteVerboseActionStatus(b *testing.B) {
 		opts.writeVerboseActionStatus(w, "bench-action", ar)
 	}
 }
+
+func TestSolutionOptions_Run_ForceOverridesOnConflict(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	streams := &terminal.IOStreams{
+		In:     nil,
+		Out:    &stdout,
+		ErrOut: &stderr,
+	}
+	cliParams := settings.NewCliParams()
+	cliParams.ExitOnError = false
+
+	opts := &SolutionOptions{
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams: streams,
+			CliParams: cliParams,
+			File:      "/nonexistent/solution.yaml",
+		},
+		Force: true,
+	}
+
+	lgr := logger.Get(0)
+	ctx := logger.WithLogger(context.Background(), lgr)
+
+	// Will fail for missing file, but Force should have set OnConflict
+	_ = opts.Run(ctx)
+	assert.Equal(t, "skip-unchanged", opts.OnConflict)
+}
+
+func TestCommandSolution_ForceAndActionFlags(t *testing.T) {
+	t.Parallel()
+
+	streams, _, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+
+	cmd := CommandSolution(cliParams, streams, "")
+	flags := cmd.Flags()
+
+	// Verify --force flag exists with correct default
+	forceFlag := flags.Lookup("force")
+	require.NotNil(t, forceFlag)
+	assert.Equal(t, "false", forceFlag.DefValue)
+
+	// Verify --action flag exists
+	actionFlag := flags.Lookup("action")
+	require.NotNil(t, actionFlag)
+}

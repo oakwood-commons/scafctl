@@ -237,7 +237,7 @@ Examples:
 
 	// File conflict strategy flags
 	cCmd.Flags().StringVar(&options.OnConflict, "on-conflict", "", "Conflict strategy for file writes (error|overwrite|skip|skip-unchanged|append) (default: error)")
-	cCmd.Flags().BoolVar(&options.Force, "force", false, "Overwrite existing files (shorthand for --on-conflict skip-unchanged)")
+	cCmd.Flags().BoolVar(&options.Force, "force", false, "Skip unchanged files and write only new or modified content (shorthand for --on-conflict skip-unchanged)")
 	cCmd.Flags().BoolVar(&options.Backup, "backup", false, "Create .bak backups before mutating existing files")
 
 	return cCmd
