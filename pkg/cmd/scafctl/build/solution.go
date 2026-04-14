@@ -333,7 +333,14 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 			binaryPath, _ = os.Executable()
 		}
 
-		pfResult, pfErr := builder.RunPreflight(ctx, &sol, opts.File, builder.PreflightOptions{
+		// For stdin builds, pass empty path so preflight skips file-based test
+		// discovery (there is no local file to discover tests from).
+		preflightPath := opts.File
+		if preflightPath == "-" {
+			preflightPath = ""
+		}
+
+		pfResult, pfErr := builder.RunPreflight(ctx, &sol, preflightPath, builder.PreflightOptions{
 			SkipLint:        opts.SkipLint,
 			SkipTests:       opts.SkipTests,
 			IgnorePreflight: opts.IgnorePreflight,

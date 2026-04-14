@@ -248,13 +248,21 @@ func (p *ValidationProvider) Execute(ctx context.Context, input any) (*provider.
 			celexp.VarSelf: valueAny,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("%s: expression evaluation failed: %w", ProviderName, err)
+			fieldName := "expression"
+			if invertResult {
+				fieldName = "failWhen"
+			}
+			return nil, fmt.Errorf("%s: %s evaluation failed: %w", ProviderName, fieldName, err)
 		}
 
 		// Check result type
 		boolResult, ok := result.(bool)
 		if !ok {
-			return nil, fmt.Errorf("%s: expression must return boolean, got %T", ProviderName, result)
+			fieldName := "expression"
+			if invertResult {
+				fieldName = "failWhen"
+			}
+			return nil, fmt.Errorf("%s: %s must return boolean, got %T", ProviderName, fieldName, result)
 		}
 
 		// For failWhen, invert: fail when expression is true

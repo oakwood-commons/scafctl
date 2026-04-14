@@ -440,12 +440,12 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// --output-dir is explicitly specified (which takes precedence in ResolvePath).
 	actionCtx = provider.WithWorkingDirectory(actionCtx, originalCwd)
 
-	// Dry run — execute resolvers with ctx (solution-dir aware, no working-dir
-	// override) so resolver paths resolve relative to the solution file. The
+	// Dry run — execute resolvers with ctx (CWD by default, or base-dir when
+	// --base-dir is explicitly set) so resolver paths resolve accordingly. The
 	// action-phase WhatIf report uses actionCtx which has the working-dir
 	// override for accurate output-dir resolution.
 	if o.DryRun {
-		return o.executeDryRun(ctx, sol, reg, params, workflow)
+		return o.executeDryRun(ctx, actionCtx, sol, reg, params, workflow)
 	}
 
 	// Execute resolvers if present
@@ -513,29 +513,34 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 
 // executeDryRun executes resolvers normally (they are side-effect-free) and
 // produces a structured WhatIf report showing what actions would do.
-func (o *SolutionOptions) executeDryRun(ctx context.Context, sol *solution.Solution, reg *provider.Registry, params map[string]any, workflow *action.Workflow) error {
+//
+// resolverCtx is used for resolver execution (solution-dir aware, no working-dir
+// override) so resolver paths resolve relative to the solution file.
+// actionCtx carries CLI overrides (output-dir, on-conflict, backup, working-dir)
+// so that dryrun.Generate / WhatIf sees the same context as real execution.
+func (o *SolutionOptions) executeDryRun(resolverCtx, actionCtx context.Context, sol *solution.Solution, reg *provider.Registry, params map[string]any, workflow *action.Workflow) error {
 	// Execute resolvers via the shared method so that IOStreams, progress
 	// callbacks, and CLI-flag-driven config are wired identically to the
 	// live execution path. Resolver providers are side-effect-free, so we
 	// get real data for WhatIf message generation safely.
 	resolvers := sol.Spec.ResolversToSlice()
-	resolverData, _, err := o.executeResolvers(ctx, sol, resolvers, params, reg)
+	resolverData, _, err := o.executeResolvers(resolverCtx, sol, resolvers, params, reg)
 	if err != nil {
 		// Non-fatal — report will include warnings about missing resolver data.
 		resolverData = make(map[string]any)
 	}
 
-	report, err := dryrun.Generate(ctx, sol, dryrun.Options{
+	report, err := dryrun.Generate(actionCtx, sol, dryrun.Options{
 		Registry:     reg,
 		ResolverData: resolverData,
 		Verbose:      o.Verbose,
 		Workflow:     workflow,
 	})
 	if err != nil {
-		return o.exitWithCode(ctx, fmt.Errorf("dry-run failed: %w", err), exitcode.GeneralError)
+		return o.exitWithCode(resolverCtx, fmt.Errorf("dry-run failed: %w", err), exitcode.GeneralError)
 	}
 
-	return o.writeDryRunOutput(ctx, report)
+	return o.writeDryRunOutput(resolverCtx, report)
 }
 
 // writeDryRunOutput renders a dry-run report in the requested output format.
@@ -636,6 +641,9 @@ func (o *SolutionOptions) writeDryRunTable(ctx context.Context, report *dryrun.R
 // stream output directly to the terminal. For json/yaml/quiet/test, no streams are
 // provided so all output is captured and serialized.
 func (o *SolutionOptions) getActionIOStreams() *provider.IOStreams {
+	if o.IOStreams == nil {
+		return nil
+	}
 	switch o.Output {
 	case "json", "yaml", "quiet", "test":
 		// Structured output modes: don't stream, capture everything for serialization

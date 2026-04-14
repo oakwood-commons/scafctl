@@ -99,8 +99,8 @@ func NewExecProvider() *ExecProvider {
 				"expand": schemahelper.BoolProp("Return full result map (stdout, stderr, exitCode, etc.) instead of trimmed stdout string. Default: false in resolver/transform mode, always true in action mode"),
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
-				provider.CapabilityFrom:      schemahelper.AnyProp("Trimmed stdout string by default; full result map (stdout, stderr, exitCode, command, shell) when expand: true"),
-				provider.CapabilityTransform: schemahelper.AnyProp("Trimmed stdout string by default; full result map (stdout, stderr, exitCode, command, shell) when expand: true"),
+				provider.CapabilityFrom:      schemahelper.AnyProp("Trimmed stdout string by default; full result map (stdout, stderr, exitCode, success, command, shell) when expand: true"),
+				provider.CapabilityTransform: schemahelper.AnyProp("Trimmed stdout string by default; full result map (stdout, stderr, exitCode, success, command, shell) when expand: true"),
 				provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
 					"success":  schemahelper.BoolProp("Whether the command succeeded (exit code 0)"),
 					"stdout":   schemahelper.StringProp("Standard output from the command"),

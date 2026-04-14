@@ -420,6 +420,9 @@ func (p *FileProvider) executeWrite(ctx context.Context, absPath string, inputs 
 			return &provider.Output{Data: outputData}, nil
 		}
 		userPath, _ := inputs["path"].(string)
+		if userPath == "" {
+			userPath = absPath
+		}
 		return nil, &FileConflictError{Changed: []string{userPath}}
 
 	case ConflictSkip:

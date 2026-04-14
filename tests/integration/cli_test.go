@@ -841,6 +841,73 @@ func TestIntegration_RunSolution_ActionFlag(t *testing.T) {
 	assert.Contains(t, stdout, "Hello from Actions!")
 }
 
+func TestIntegration_RunAction_MultiActionFiltering(t *testing.T) {
+	t.Parallel()
+
+	// Create a multi-action workflow in a temp dir to test filtering
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: multi-action-test
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "filtered-test"
+  workflow:
+    actions:
+      setup:
+        description: Setup step
+        provider: message
+        inputs:
+          message: "SETUP_RAN"
+          type: info
+      build:
+        description: Build step (depends on setup)
+        dependsOn: [setup]
+        provider: message
+        inputs:
+          message: "BUILD_RAN"
+          type: info
+      test:
+        description: Test step (depends on build)
+        dependsOn: [build]
+        provider: message
+        inputs:
+          message: "TEST_RAN"
+          type: info
+      deploy:
+        description: Deploy step (should NOT run)
+        provider: message
+        inputs:
+          message: "DEPLOY_RAN"
+          type: info
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+
+	// Run only "test" action — should include setup + build (transitive deps) but NOT deploy
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "action", "test",
+		"-f", solutionPath,
+	)
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d", exitCode)
+	assert.Contains(t, stdout, "SETUP_RAN", "transitive dep 'setup' should run")
+	assert.Contains(t, stdout, "BUILD_RAN", "transitive dep 'build' should run")
+	assert.Contains(t, stdout, "TEST_RAN", "target 'test' should run")
+	assert.NotContains(t, stdout, "DEPLOY_RAN", "unselected 'deploy' should NOT run")
+}
+
 func TestIntegration_RunSolution_NoWorkflowErrors(t *testing.T) {
 	t.Parallel()
 	// resolver-demo.yaml has resolvers but no workflow section

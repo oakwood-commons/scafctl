@@ -87,16 +87,17 @@ func TestCommandAction_FlagDefaults(t *testing.T) {
 	assert.False(t, backup)
 }
 
-func TestCommandAction_PreRun_ArgParsing(t *testing.T) {
+func TestParseActionArgs(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name        string
-		args        []string
-		fileFlag    string
-		wantNames   []string
-		wantDynamic []string
-		wantFile    string
+		name         string
+		args         []string
+		fileExplicit bool
+		initialFile  string
+		wantNames    []string
+		wantDynamic  []string
+		wantFile     string
 	}{
 		{
 			name:      "bare words are action names",
@@ -122,10 +123,11 @@ func TestCommandAction_PreRun_ArgParsing(t *testing.T) {
 			wantNames: []string{"lint"},
 		},
 		{
-			name:      "URL ignored when -f is set",
-			args:      []string{"https://example.com/solution.yaml"},
-			fileFlag:  "other.yaml",
-			wantNames: []string{"https://example.com/solution.yaml"},
+			name:         "URL ignored when -f is set",
+			args:         []string{"https://example.com/solution.yaml"},
+			fileExplicit: true,
+			initialFile:  "other.yaml",
+			wantNames:    []string{"https://example.com/solution.yaml"},
 		},
 		{
 			name:        "mixed args",
@@ -143,23 +145,18 @@ func TestCommandAction_PreRun_ArgParsing(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			streams, _, _ := terminal.NewTestIOStreams()
-			cliParams := settings.NewCliParams()
-
-			cmd := CommandAction(cliParams, streams, "")
-
-			if tc.fileFlag != "" {
-				require.NoError(t, cmd.Flags().Set("file", tc.fileFlag))
+			opts := &ActionOptions{}
+			if tc.initialFile != "" {
+				opts.File = tc.initialFile
 			}
 
-			// Execute PreRun
-			cmd.PreRun(cmd, tc.args)
+			parseActionArgs(tc.args, opts, tc.fileExplicit)
 
-			// Access options through the command's RunE closure
-			// We need to get the ActionOptions from the command
-			// Since PreRun modifies the options captured in the closure,
-			// we can verify via the command execution behavior.
-			// For now, test via the command itself.
+			assert.Equal(t, tc.wantNames, opts.Names)
+			assert.Equal(t, tc.wantDynamic, opts.DynamicArgs)
+			if tc.wantFile != "" {
+				assert.Equal(t, tc.wantFile, opts.File)
+			}
 		})
 	}
 }
@@ -286,7 +283,7 @@ func TestActionOptions_getActionIOStreams(t *testing.T) {
 		assert.Nil(t, opts.getActionIOStreams())
 	})
 
-	t.Run("non-nil IOStreams returns provider IOStreams", func(t *testing.T) {
+	t.Run("default output returns provider IOStreams", func(t *testing.T) {
 		t.Parallel()
 
 		var stdout, stderr bytes.Buffer
@@ -297,6 +294,19 @@ func TestActionOptions_getActionIOStreams(t *testing.T) {
 		require.NotNil(t, result)
 		assert.NotNil(t, result.Out)
 		assert.NotNil(t, result.ErrOut)
+	})
+
+	t.Run("structured output suppresses IOStreams", func(t *testing.T) {
+		t.Parallel()
+
+		for _, format := range []string{"json", "yaml", "quiet", "test"} {
+			var stdout, stderr bytes.Buffer
+			opts := &ActionOptions{}
+			opts.IOStreams = &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
+			opts.Output = format
+
+			assert.Nil(t, opts.getActionIOStreams(), "output=%s should suppress IOStreams", format)
+		}
 	})
 }
 

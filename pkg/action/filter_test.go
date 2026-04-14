@@ -115,3 +115,24 @@ func TestFilterWorkflowActions_NilWorkflow(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, result)
 }
+
+func TestFilterWorkflowActions_MissingDependency(t *testing.T) {
+	t.Parallel()
+
+	// Action "build" depends on "missing" which doesn't exist in the workflow.
+	// collectDeps should skip missing deps without adding nil entries.
+	w := &Workflow{
+		Actions: map[string]*Action{
+			"build": {Name: "build", DependsOn: []string{"missing"}},
+		},
+	}
+
+	result, err := FilterWorkflowActions(w, []string{"build"})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Should only contain "build", not "missing"
+	assert.Len(t, result.Actions, 1)
+	assert.NotNil(t, result.Actions["build"])
+	assert.Nil(t, result.Actions["missing"], "missing dep should not appear in filtered actions")
+}

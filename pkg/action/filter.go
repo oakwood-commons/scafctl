@@ -53,11 +53,11 @@ func FilterWorkflowActions(w *Workflow, targetNames []string) (*Workflow, error)
 		if needed[name] {
 			return
 		}
-		needed[name] = true
 		a, exists := w.Actions[name]
 		if !exists || a == nil {
 			return
 		}
+		needed[name] = true
 		for _, dep := range a.DependsOn {
 			collectDeps(dep)
 		}

@@ -37,9 +37,9 @@ const (
 	ErrorBehaviorContinue = spec.OnErrorContinue
 )
 
-// Condition is an alias to spec.Condition for backward compatibility.
-// Note: The resolver package uses a custom Condition that only wraps the expr field,
-// keeping backward compatibility with existing resolver YAML files.
+// Condition is a resolver-specific condition type with custom YAML/JSON unmarshalling.
+// Unlike spec.Condition, this type only wraps the expr field, keeping backward
+// compatibility with existing resolver YAML files.
 //
 // Supported YAML/JSON forms:
 //   - String shorthand: when: "_.environment == 'prod'"

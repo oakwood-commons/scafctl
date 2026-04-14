@@ -1457,7 +1457,7 @@ func TestWrite_ExistingFile_Error_ReturnsFileConflictError(t *testing.T) {
 	var conflictErr *FileConflictError
 	require.ErrorAs(t, err, &conflictErr)
 	assert.Len(t, conflictErr.Changed, 1)
-	// Should contain the user-facing path, not an absolute path
+	// Should contain the path provided in inputs
 	assert.Equal(t, target, conflictErr.Changed[0])
 }
 

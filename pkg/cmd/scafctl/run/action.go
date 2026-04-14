@@ -135,23 +135,8 @@ Examples:
 			cCmd.Flags().Visit(func(f *pflag.Flag) {
 				options.flagsChanged[f.Name] = true
 			})
-			// Split positional args: bare words are action names,
-			// args containing '=' or starting with '@' are parameters.
-			// Unlike run solution/resolver, bare names are always treated as action
-			// names -- use -f/--file for solution file or catalog references.
-			// Only URLs (http(s)://, oci://) are auto-detected as solution refs.
 			fileExplicit := options.flagsChanged["file"]
-			for _, arg := range args {
-				switch {
-				case !fileExplicit && options.File == "" && pkgfilepath.IsURL(arg):
-					options.File = arg
-					fileExplicit = true
-				case strings.Contains(arg, "=") || strings.HasPrefix(arg, "@"):
-					options.DynamicArgs = append(options.DynamicArgs, arg)
-				default:
-					options.Names = append(options.Names, arg)
-				}
-			}
+			parseActionArgs(args, options, fileExplicit)
 		},
 		RunE:         makeRunEFunc(cfg, "action"),
 		SilenceUsage: true,
@@ -172,6 +157,23 @@ Examples:
 	cCmd.Flags().BoolVar(&options.Backup, "backup", false, "Create .bak backups before mutating existing files")
 
 	return cCmd
+}
+
+// parseActionArgs splits positional args into action names and dynamic parameters.
+// Bare words are action names, args containing '=' or starting with '@' are parameters.
+// Only URLs (http(s)://, oci://) are auto-detected as solution refs when no -f flag is set.
+func parseActionArgs(args []string, options *ActionOptions, fileExplicit bool) {
+	for _, arg := range args {
+		switch {
+		case !fileExplicit && options.File == "" && pkgfilepath.IsURL(arg):
+			options.File = arg
+			fileExplicit = true
+		case strings.Contains(arg, "=") || strings.HasPrefix(arg, "@"):
+			options.DynamicArgs = append(options.DynamicArgs, arg)
+		default:
+			options.Names = append(options.Names, arg)
+		}
+	}
 }
 
 // getEffectiveActionConfig returns action config values, using app config
@@ -340,8 +342,9 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 
 	// Dry run — execute resolvers with ctx (solution-dir aware, no working-dir
 	// override) so resolver paths resolve relative to the solution file.
+	// Pass actionCtx so WhatIf generation sees CLI overrides (output-dir, etc.).
 	if o.DryRun {
-		return o.executeDryRun(ctx, sol, reg, params, workflow)
+		return o.executeDryRun(ctx, actionCtx, sol, reg, params, workflow)
 	}
 
 	// Execute resolvers
@@ -407,13 +410,13 @@ func (o *ActionOptions) exitWithCode(ctx context.Context, err error, code int) e
 
 // executeDryRun delegates to SolutionOptions.executeDryRun which runs
 // resolvers (side-effect-free) and produces a structured WhatIf report.
-func (o *ActionOptions) executeDryRun(ctx context.Context, sol *solution.Solution, reg *provider.Registry, params map[string]any, workflow *action.Workflow) error {
+func (o *ActionOptions) executeDryRun(resolverCtx, actionCtx context.Context, sol *solution.Solution, reg *provider.Registry, params map[string]any, workflow *action.Workflow) error {
 	s := &SolutionOptions{
 		sharedResolverOptions: o.sharedResolverOptions,
 		Verbose:               o.Verbose,
 		ShowExecution:         o.ShowExecution,
 	}
-	return s.executeDryRun(ctx, sol, reg, params, workflow)
+	return s.executeDryRun(resolverCtx, actionCtx, sol, reg, params, workflow)
 }
 
 // resolveOutputDir validates and creates the output directory.
@@ -434,12 +437,9 @@ func (o *ActionOptions) writeActionOutput(ctx context.Context, result *action.Ex
 }
 
 // getActionIOStreams returns an IOStreams for the action executor.
+// Delegates to SolutionOptions.getActionIOStreams to apply the same
+// output-format gating (structured formats suppress streaming).
 func (o *ActionOptions) getActionIOStreams() *provider.IOStreams {
-	if o.IOStreams == nil {
-		return nil
-	}
-	return &provider.IOStreams{
-		Out:    o.IOStreams.Out,
-		ErrOut: o.IOStreams.ErrOut,
-	}
+	s := &SolutionOptions{sharedResolverOptions: o.sharedResolverOptions}
+	return s.getActionIOStreams()
 }
