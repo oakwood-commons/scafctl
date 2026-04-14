@@ -103,16 +103,10 @@ func NewEnvProvider(opts ...Option) *EnvProvider {
 				"prefix": schemahelper.StringProp("Filter environment variables by prefix (only for list operation)",
 					schemahelper.WithMaxLength(*ptrs.IntPtr(256)),
 					schemahelper.WithExample("AWS_")),
+				"expand": schemahelper.BoolProp("Return full result map (operation, name, value, exists) instead of just the value string. Default: false in resolver/transform mode, always true in action mode"),
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
-				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
-					"operation": schemahelper.StringProp("Operation that was performed", schemahelper.WithExample("get")),
-					"name":      schemahelper.StringProp("Name of the environment variable (for get, set, unset operations)", schemahelper.WithExample("HOME")),
-					"value":     schemahelper.StringProp("Value of the environment variable (for get operation)", schemahelper.WithExample("/home/user")),
-					"exists":    schemahelper.BoolProp("Whether the variable exists (for get operation)", schemahelper.WithExample(true)),
-					"variables": schemahelper.AnyProp("Map of environment variables (for list operation)", schemahelper.WithExample(map[string]string{"HOME": "/home/user", "PATH": "/usr/bin"})),
-					"count":     schemahelper.IntProp("Number of variables (for list operation)", schemahelper.WithExample(10)),
-				}),
+				provider.CapabilityFrom: schemahelper.AnyProp("Value string by default; full result map (operation, name, value, exists) when expand: true"),
 			},
 			Examples: []provider.Example{
 				{
@@ -196,7 +190,7 @@ func (p *EnvProvider) Execute(ctx context.Context, input any) (*provider.Output,
 
 	switch operation {
 	case "get":
-		result, err = p.executeGet(inputs)
+		result, err = p.executeGet(ctx, inputs)
 	case "set":
 		result, err = p.executeSet(inputs)
 	case "list":
@@ -216,7 +210,7 @@ func (p *EnvProvider) Execute(ctx context.Context, input any) (*provider.Output,
 	return result, nil
 }
 
-func (p *EnvProvider) executeGet(inputs map[string]any) (*provider.Output, error) {
+func (p *EnvProvider) executeGet(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
 	name, ok := inputs["name"].(string)
 	if !ok || name == "" {
 		return nil, fmt.Errorf("name is required for get operation")
@@ -227,6 +221,16 @@ func (p *EnvProvider) executeGet(inputs map[string]any) (*provider.Output, error
 		// Use default value if provided
 		if defaultValue, ok := inputs["default"].(string); ok {
 			value = defaultValue
+		}
+	}
+
+	// In resolver/transform mode, return just the value string unless expand: true.
+	// This eliminates the need for a separate CEL transform step.
+	expand, _ := inputs["expand"].(bool)
+	if !expand {
+		if mode, modeOK := provider.ExecutionModeFromContext(ctx); modeOK &&
+			(mode == provider.CapabilityFrom || mode == provider.CapabilityTransform) {
+			return &provider.Output{Data: value}, nil
 		}
 	}
 

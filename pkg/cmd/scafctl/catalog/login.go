@@ -4,9 +4,9 @@
 package catalog
 
 import (
-	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -23,6 +23,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// stdinRef is the sentinel value that triggers reading from stdin,
+// matching the project-wide @- convention (see pkg/flags/params.go).
+const stdinRef = "@-"
+
+// maxPasswordReadSize is the maximum number of bytes read from stdin for a password.
+const maxPasswordReadSize = 1 << 16 // 64 KiB
+
 // LoginOptions holds options for the catalog login command.
 type LoginOptions struct {
 	BinaryName        string
@@ -30,8 +37,7 @@ type LoginOptions struct {
 	AuthProvider      string
 	Scope             string
 	Username          string
-	PasswordStdin     bool
-	PasswordEnv       string
+	Password          string //nolint:gosec // CLI input field, not a hardcoded credential
 	WriteRegistryAuth bool
 	CliParams         *settings.Run
 	IOStreams         *terminal.IOStreams
@@ -64,8 +70,8 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			  Requires prior authentication: scafctl auth login <handler>
 
 			Mode 2 — Direct credentials:
-			  Authenticates with a username and password/token. The password is read
-			  from stdin (--password-stdin) or an environment variable (--password-env).
+			  Authenticates with a username and password/token. The password is provided
+			  directly via --password or from stdin with --password @-.
 
 			Auto-detected registries:
 			  - ghcr.io           → github handler
@@ -89,10 +95,10 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			  scafctl catalog login quay.io --auth-provider quay
 
 			  # Login with direct credentials (e.g. Docker Hub, robot accounts)
-			  echo TOKEN | scafctl catalog login quay.io --username myorg+deployer --password-stdin
+			  echo TOKEN | scafctl catalog login quay.io --username myorg+deployer --password @-
 
-			  # Login with password from environment variable (CI/automation)
-			  scafctl catalog login quay.io --username admin --password-env REGISTRY_PASSWORD
+			  # Login with password provided directly (CI/automation)
+			  scafctl catalog login quay.io --username admin --password "$REGISTRY_PASSWORD"
 
 			  # Login and also write to container auth file (Docker/Podman interop)
 			  scafctl catalog login ghcr.io --write-registry-auth
@@ -109,8 +115,7 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 	cmd.Flags().StringVar(&options.AuthProvider, "auth-provider", "", "Auth handler name (e.g. github, gcp, entra). Auto-detected for known registries.")
 	cmd.Flags().StringVar(&options.Scope, "scope", "", "OAuth scope for auth provider token requests (auto-detected from catalog config's authScope if not set)")
 	cmd.Flags().StringVar(&options.Username, "username", "", "Username for direct credential login (triggers direct mode)")
-	cmd.Flags().BoolVar(&options.PasswordStdin, "password-stdin", false, "Read password from stdin (required with --username)")
-	cmd.Flags().StringVar(&options.PasswordEnv, "password-env", "", "Read password from named environment variable (alternative to --password-stdin)")
+	cmd.Flags().StringVar(&options.Password, "password", "", `Password for direct credential login (use @- to read from stdin)`)
 	cmd.Flags().BoolVar(&options.WriteRegistryAuth, "write-registry-auth", false, "Also write credentials to container auth file for Docker/Podman interop")
 
 	return cmd
@@ -187,7 +192,7 @@ func runAuthHandlerLogin(ctx context.Context, w *writer.Writer, opts *LoginOptio
 	}
 
 	if handlerName == "" {
-		err := fmt.Errorf("no auth handler found for %q — use --username/--password-stdin for direct credentials, or --auth-provider to specify a handler", opts.Registry)
+		err := fmt.Errorf("no auth handler found for %q — use --username/--password for direct credentials, or --auth-provider to specify a handler", opts.Registry)
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
@@ -266,34 +271,37 @@ func runAuthHandlerLogin(ctx context.Context, w *writer.Writer, opts *LoginOptio
 	return nil
 }
 
-// readPassword reads the password from stdin or an environment variable.
+// readPassword resolves the password value. When the value is the @-
+// sentinel it reads a single line from stdin, following the project-wide
+// @- convention (see pkg/flags/params.go).
 func readPassword(opts *LoginOptions) (string, error) {
-	if opts.PasswordStdin && opts.PasswordEnv != "" {
-		return "", fmt.Errorf("cannot use both --password-stdin and --password-env")
+	if opts.Password == "" {
+		return "", fmt.Errorf("--password is required with --username (use @- to read from stdin)")
 	}
 
-	if !opts.PasswordStdin && opts.PasswordEnv == "" {
-		return "", fmt.Errorf("--password-stdin or --password-env is required with --username")
+	if opts.Password != stdinRef {
+		return opts.Password, nil
 	}
 
-	if opts.PasswordEnv != "" {
-		password := os.Getenv(opts.PasswordEnv)
-		if password == "" {
-			return "", fmt.Errorf("environment variable %q is empty or not set", opts.PasswordEnv)
-		}
-		return password, nil
+	// Read from the configured input stream when available, falling back to
+	// process stdin for callers that do not provide IOStreams.
+	input := io.Reader(os.Stdin)
+	if opts != nil && opts.IOStreams != nil && opts.IOStreams.In != nil {
+		input = opts.IOStreams.In
 	}
 
-	// Read from stdin
-	scanner := bufio.NewScanner(os.Stdin)
-	if !scanner.Scan() {
-		if err := scanner.Err(); err != nil {
-			return "", fmt.Errorf("read password from stdin: %w", err)
-		}
-		return "", fmt.Errorf("no password provided on stdin")
+	// Read from stdin (bounded to prevent unbounded memory growth).
+	limited := io.LimitReader(input, maxPasswordReadSize+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return "", fmt.Errorf("read password from stdin: %w", err)
+	}
+	if int64(len(data)) > maxPasswordReadSize {
+		return "", fmt.Errorf("password from stdin exceeds maximum size (%d bytes)", maxPasswordReadSize)
 	}
 
-	password := strings.TrimSpace(scanner.Text())
+	// Trim trailing newline (shell pipes add one) and surrounding whitespace.
+	password := strings.TrimSpace(string(data))
 	if password == "" {
 		return "", fmt.Errorf("password from stdin is empty")
 	}

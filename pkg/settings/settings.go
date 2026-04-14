@@ -67,7 +67,7 @@ const (
 // File conflict defaults
 const (
 	// DefaultConflictStrategy is the default conflict resolution strategy for file writes.
-	DefaultConflictStrategy = "skip-unchanged"
+	DefaultConflictStrategy = "error"
 
 	// DefaultMaxBackups is the maximum number of backup files (.bak, .bak.1, etc.) per source file.
 	DefaultMaxBackups = 5

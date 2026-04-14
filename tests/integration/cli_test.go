@@ -799,6 +799,115 @@ func TestIntegration_RunSolution_HelloWorld(t *testing.T) {
 	assert.Contains(t, stdout, "Hello from Actions!")
 }
 
+func TestIntegration_RunAction_HelloWorld(t *testing.T) {
+	t.Parallel()
+	// 'run action greet' should execute only the 'greet' action
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "action", "greet",
+		"-f", "examples/actions/hello-world.yaml",
+	)
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d", exitCode)
+	assert.Contains(t, stdout, "Hello from Actions!")
+}
+
+func TestIntegration_RunAction_UnknownName(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t,
+		"run", "action", "nonexistent",
+		"-f", "examples/actions/hello-world.yaml",
+	)
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "not found")
+}
+
+func TestIntegration_RunSolution_ActionFlag(t *testing.T) {
+	t.Parallel()
+	// --action flag on run solution should also work
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "solution",
+		"-f", "examples/actions/hello-world.yaml",
+		"--action", "greet",
+	)
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d", exitCode)
+	assert.Contains(t, stdout, "Hello from Actions!")
+}
+
+func TestIntegration_RunAction_MultiActionFiltering(t *testing.T) {
+	t.Parallel()
+
+	// Create a multi-action workflow in a temp dir to test filtering
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: multi-action-test
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "filtered-test"
+  workflow:
+    actions:
+      setup:
+        description: Setup step
+        provider: message
+        inputs:
+          message: "SETUP_RAN"
+          type: info
+      build:
+        description: Build step (depends on setup)
+        dependsOn: [setup]
+        provider: message
+        inputs:
+          message: "BUILD_RAN"
+          type: info
+      test:
+        description: Test step (depends on build)
+        dependsOn: [build]
+        provider: message
+        inputs:
+          message: "TEST_RAN"
+          type: info
+      deploy:
+        description: Deploy step (should NOT run)
+        provider: message
+        inputs:
+          message: "DEPLOY_RAN"
+          type: info
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+
+	// Run only "test" action — should include setup + build (transitive deps) but NOT deploy
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "action", "test",
+		"-f", solutionPath,
+	)
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d", exitCode)
+	assert.Contains(t, stdout, "SETUP_RAN", "transitive dep 'setup' should run")
+	assert.Contains(t, stdout, "BUILD_RAN", "transitive dep 'build' should run")
+	assert.Contains(t, stdout, "TEST_RAN", "target 'test' should run")
+	assert.NotContains(t, stdout, "DEPLOY_RAN", "unselected 'deploy' should NOT run")
+}
+
 func TestIntegration_RunSolution_NoWorkflowErrors(t *testing.T) {
 	t.Parallel()
 	// resolver-demo.yaml has resolvers but no workflow section
@@ -2397,8 +2506,8 @@ func TestIntegration_CatalogLoginHelp(t *testing.T) {
 	assert.Contains(t, stdout, "--auth-provider")
 	assert.Contains(t, stdout, "--scope")
 	assert.Contains(t, stdout, "--username")
-	assert.Contains(t, stdout, "--password-stdin")
-	assert.Contains(t, stdout, "--password-env")
+	assert.Contains(t, stdout, "--password")
+	assert.Contains(t, stdout, "@-")
 	assert.Contains(t, stdout, "--write-registry-auth")
 }
 

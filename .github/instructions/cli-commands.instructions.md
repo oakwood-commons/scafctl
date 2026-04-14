@@ -15,6 +15,8 @@ Commands are **thin wiring only** -- they parse flags, call domain packages, and
 - Use `cobra.Command` for command definition and flag binding
 - Wire up `settings.Run` parameters from flags
 - Always add new commands to CLI integration tests (`tests/integration/cli_test.go`)
+- New or modified RunE functions must have test coverage (integration or unit) -- 0% patch coverage on CLI files is unacceptable
+- Extract complex RunE logic into testable helper functions when direct cobra testing is impractical
 
 ## Embedder Awareness
 

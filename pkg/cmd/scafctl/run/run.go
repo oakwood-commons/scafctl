@@ -16,14 +16,15 @@ func CommandRun(cliParams *settings.Run, ioStreams *terminal.IOStreams, path str
 	cCmd := &cobra.Command{
 		Use:     "run",
 		Aliases: []string{"r"},
-		Short:   fmt.Sprintf("Runs %s solutions, resolvers, and providers", path),
-		Long: `Run executes solutions, resolvers, or individual providers.
+		Short:   fmt.Sprintf("Runs %s solutions, resolvers, actions, and providers", path),
+		Long: `Run executes solutions, resolvers, actions, or individual providers.
 
 Resolvers within the same dependency phase execute concurrently for optimal performance.
 Actions are executed in dependency phases after resolvers complete.
 
 SUBCOMMANDS:
   solution  Run a solution (resolvers + actions)
+  action    Run specific actions from a solution by name
   resolver  Run resolvers only (for debugging/inspection)
   provider  Run a single provider directly (for testing/debugging)`,
 		SilenceUsage: true,
@@ -32,6 +33,7 @@ SUBCOMMANDS:
 	runPath := fmt.Sprintf("%s/%s", path, cCmd.Use)
 	cCmd.AddCommand(CommandSolution(cliParams, ioStreams, runPath))
 	cCmd.AddCommand(CommandResolver(cliParams, ioStreams, runPath))
+	cCmd.AddCommand(CommandAction(cliParams, ioStreams, runPath))
 	cCmd.AddCommand(CommandProvider(cliParams, ioStreams, runPath))
 
 	return cCmd

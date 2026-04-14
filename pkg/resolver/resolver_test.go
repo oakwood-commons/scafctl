@@ -4,12 +4,14 @@
 package resolver
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func TestResolverType_Constants(t *testing.T) {
@@ -255,4 +257,141 @@ func TestProviderValidation_WithMessage(t *testing.T) {
 	assert.Equal(t, "validation", validation.Provider)
 	require.NotNil(t, validation.Message)
 	assert.Equal(t, "Value must be at least 6 characters", validation.Message.Literal)
+}
+
+func TestCondition_UnmarshalYAML(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		wantExpr string
+		wantErr  bool
+	}{
+		{
+			name:     "string shorthand",
+			input:    `"_.environment == 'prod'"`,
+			wantExpr: "_.environment == 'prod'",
+		},
+		{
+			name:     "bool true",
+			input:    `true`,
+			wantExpr: "true",
+		},
+		{
+			name:     "bool false",
+			input:    `false`,
+			wantExpr: "false",
+		},
+		{
+			name:     "object form",
+			input:    "expr: \"_.environment == 'prod'\"",
+			wantExpr: "_.environment == 'prod'",
+		},
+		{
+			name:    "invalid type (number)",
+			input:   `42`,
+			wantErr: true,
+		},
+		{
+			name:    "invalid type (array)",
+			input:   `[1, 2, 3]`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var cond Condition
+			err := yaml.Unmarshal([]byte(tt.input), &cond)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "invalid condition")
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, cond.Expr)
+			assert.Equal(t, tt.wantExpr, string(*cond.Expr))
+		})
+	}
+}
+
+func TestCondition_UnmarshalJSON(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		wantExpr string
+		wantErr  bool
+	}{
+		{
+			name:     "string shorthand",
+			input:    `"_.environment == 'prod'"`,
+			wantExpr: "_.environment == 'prod'",
+		},
+		{
+			name:     "bool true",
+			input:    `true`,
+			wantExpr: "true",
+		},
+		{
+			name:     "bool false",
+			input:    `false`,
+			wantExpr: "false",
+		},
+		{
+			name:     "object form",
+			input:    `{"expr": "_.environment == 'prod'"}`,
+			wantExpr: "_.environment == 'prod'",
+		},
+		{
+			name:    "invalid type (number)",
+			input:   `42`,
+			wantErr: true,
+		},
+		{
+			name:    "empty object (missing expr)",
+			input:   `{}`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var cond Condition
+			err := json.Unmarshal([]byte(tt.input), &cond)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "invalid condition")
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, cond.Expr)
+			assert.Equal(t, tt.wantExpr, string(*cond.Expr))
+		})
+	}
+}
+
+func TestCondition_UnmarshalYAML_InResolver(t *testing.T) {
+	t.Parallel()
+
+	yamlInput := `
+name: myResolver
+when: "_.env == 'prod'"
+`
+	var r Resolver
+	err := yaml.Unmarshal([]byte(yamlInput), &r)
+	require.NoError(t, err)
+	require.NotNil(t, r.When)
+	require.NotNil(t, r.When.Expr)
+	assert.Equal(t, "_.env == 'prod'", string(*r.When.Expr))
 }

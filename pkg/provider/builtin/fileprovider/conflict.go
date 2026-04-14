@@ -86,6 +86,48 @@ type FileWriteResult struct {
 	BackupPath string          `json:"backupPath,omitempty" yaml:"backupPath,omitempty" doc:"Path to the backup file, if one was created" maxLength:"4096"`
 }
 
+// FileConflictError is a structured error returned when the error conflict strategy
+// detects files that already exist. It groups files into changed (different checksum)
+// and unchanged (same checksum, silently skipped) for clear error output.
+type FileConflictError struct {
+	// Changed lists files with different checksums that would be overwritten.
+	Changed []string `json:"changed" yaml:"changed" doc:"Files with different content than the source" maxItems:"10000"`
+	// Unchanged lists files with identical checksums that were silently skipped.
+	Unchanged []string `json:"unchanged" yaml:"unchanged" doc:"Files with identical content (skipped)" maxItems:"10000"`
+}
+
+// Error returns a structured, human-readable conflict report.
+func (e *FileConflictError) Error() string {
+	total := len(e.Changed) + len(e.Unchanged)
+	var b strings.Builder
+
+	if total == 1 && len(e.Changed) == 1 {
+		fmt.Fprintf(&b, "file already exists (content differs): %s", e.Changed[0])
+		b.WriteString("\n\nUse --force to overwrite, or --on-conflict skip-unchanged to skip identical files.")
+		return b.String()
+	}
+
+	fmt.Fprintf(&b, "%d file(s) already exist", total)
+	b.WriteString("\n")
+
+	if len(e.Changed) > 0 {
+		b.WriteString("\n  Changed (would overwrite):\n")
+		for _, f := range e.Changed {
+			fmt.Fprintf(&b, "    %s\n", f)
+		}
+	}
+
+	if len(e.Unchanged) > 0 {
+		b.WriteString("\n  Unchanged (same checksum, skipped):\n")
+		for _, f := range e.Unchanged {
+			fmt.Fprintf(&b, "    %s\n", f)
+		}
+	}
+
+	b.WriteString("\nUse --force to overwrite, or --on-conflict skip-unchanged to skip identical files.")
+	return b.String()
+}
+
 // resolveConflictStrategy resolves the effective conflict strategy from per-entry,
 // invocation-level, context-level, and default fallbacks (in priority order).
 func resolveConflictStrategy(ctx context.Context, entryLevel, invocationLevel string) ConflictStrategy {

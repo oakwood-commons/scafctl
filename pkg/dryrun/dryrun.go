@@ -63,6 +63,10 @@ type Options struct {
 	ResolverData map[string]any `json:"-" yaml:"-"`
 	// Verbose includes MaterializedInputs in the report when true.
 	Verbose bool `json:"-" yaml:"-"`
+	// Workflow overrides the solution's workflow for report generation.
+	// When set, this workflow is used instead of sol.Spec.Workflow,
+	// allowing callers to pass a filtered workflow without mutating the solution.
+	Workflow *action.Workflow `json:"-" yaml:"-"`
 }
 
 // Generate builds a structured WhatIf dry-run report from a solution and
@@ -84,9 +88,15 @@ func Generate(ctx context.Context, sol *solution.Solution, opts Options) (*Repor
 		HasWorkflow: sol.Spec.HasWorkflow(),
 	}
 
+	// Use the workflow override if provided, otherwise fall back to the solution's workflow.
+	workflow := opts.Workflow
+	if workflow == nil {
+		workflow = sol.Spec.Workflow
+	}
+
 	// Build action plan with WhatIf messages
-	if sol.Spec.HasWorkflow() {
-		graph, err := action.BuildGraph(ctx, sol.Spec.Workflow, resolverData, nil)
+	if workflow != nil {
+		graph, err := action.BuildGraph(ctx, workflow, resolverData, nil)
 		if err != nil {
 			report.Warnings = append(report.Warnings, fmt.Sprintf("action graph build failed: %v", err))
 		} else {

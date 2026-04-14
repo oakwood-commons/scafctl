@@ -178,7 +178,7 @@ Credentials stored via `scafctl catalog login` are automatically available throu
 
 ```bash
 # Login via scafctl
-scafctl catalog login ghcr.io --username oauth2 --password-stdin < token.txt
+scafctl catalog login ghcr.io --username oauth2 --password @- < token.txt
 
 # Docker can now pull from ghcr.io without separate docker login
 docker pull ghcr.io/your-org/your-image:latest

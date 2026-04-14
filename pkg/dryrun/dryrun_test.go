@@ -402,3 +402,48 @@ func BenchmarkGenerate_WithWhatIf(b *testing.B) {
 		_, _ = Generate(ctx, sol, opts)
 	}
 }
+
+// workflow override
+
+func TestGenerate_WorkflowOverride(t *testing.T) {
+	sol := minimalSolution("app")
+	sol.Spec.Workflow = &action.Workflow{
+		Actions: map[string]*action.Action{
+			"build":  {Provider: "shell"},
+			"test":   {Provider: "shell", DependsOn: []string{"build"}},
+			"deploy": {Provider: "shell", DependsOn: []string{"test"}},
+		},
+	}
+
+	// Override with a filtered workflow containing only "build"
+	filtered := &action.Workflow{
+		Actions: map[string]*action.Action{
+			"build": {Provider: "shell"},
+		},
+	}
+
+	report, err := Generate(context.Background(), sol, Options{Workflow: filtered})
+	require.NoError(t, err)
+
+	assert.True(t, report.HasWorkflow)
+	assert.Equal(t, 1, report.TotalActions)
+	require.Len(t, report.ActionPlan, 1)
+	assert.Equal(t, "build", report.ActionPlan[0].Name)
+}
+
+func TestGenerate_NilWorkflowOverrideFallsBack(t *testing.T) {
+	sol := minimalSolution("app")
+	sol.Spec.Workflow = &action.Workflow{
+		Actions: map[string]*action.Action{
+			"deploy": {Provider: "shell"},
+		},
+	}
+
+	// nil Workflow in Options should fall back to sol.Spec.Workflow
+	report, err := Generate(context.Background(), sol, Options{Workflow: nil})
+	require.NoError(t, err)
+
+	assert.True(t, report.HasWorkflow)
+	require.Len(t, report.ActionPlan, 1)
+	assert.Equal(t, "deploy", report.ActionPlan[0].Name)
+}

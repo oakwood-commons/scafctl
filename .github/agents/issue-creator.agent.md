@@ -14,14 +14,6 @@ You are a senior engineer helping the user create well-structured GitHub issues 
 - **ONLY** use terminal for `gh` CLI commands and read-only git commands
 - Always confirm with the user before creating the issue
 
-## Project Context
-
-- scafctl is a Go CLI tool for solution scaffolding with CEL expressions, Go templates, and providers
-- Key packages: `pkg/provider/`, `pkg/resolver/`, `pkg/action/`, `pkg/auth/`, `pkg/catalog/`, `pkg/mcp/`
-- Uses conventional commits: `feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`, `perf:`, `ci:`
-- Breaking changes are allowed (not in production)
-- Business logic in `pkg/`, CLI commands in `pkg/cmd/scafctl/`, MCP tools in `pkg/mcp/`
-
 ## Workflow
 
 ### Phase 1: Understand

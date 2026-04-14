@@ -54,4 +54,33 @@ func BenchmarkValidationProvider_Execute(b *testing.B) {
 			_, _ = p.Execute(ctx, inputs)
 		}
 	})
+
+	b.Run("failWhen_pass", func(b *testing.B) {
+		ctx := provider.WithResolverContext(context.Background(), map[string]any{})
+		inputs := map[string]any{
+			"value":    map[string]any{"statusCode": 200},
+			"failWhen": "__self.statusCode == 401",
+		}
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		for b.Loop() {
+			_, _ = p.Execute(ctx, inputs)
+		}
+	})
+
+	b.Run("failWhen_fail", func(b *testing.B) {
+		ctx := provider.WithResolverContext(context.Background(), map[string]any{})
+		inputs := map[string]any{
+			"value":    map[string]any{"statusCode": 401},
+			"failWhen": "__self.statusCode == 401",
+			"message":  "Authentication failed",
+		}
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		for b.Loop() {
+			_, _ = p.Execute(ctx, inputs)
+		}
+	})
 }

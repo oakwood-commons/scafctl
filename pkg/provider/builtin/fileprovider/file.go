@@ -411,7 +411,19 @@ func (p *FileProvider) executeWrite(ctx context.Context, absPath string, inputs 
 	// File exists — apply conflict strategy.
 	switch strategy {
 	case ConflictError:
-		return nil, fmt.Errorf("file already exists: %s", absPath)
+		match, err := contentMatchesFile(absPath, contentBytes)
+		if err != nil {
+			return nil, fmt.Errorf("content comparison failed: %w", err)
+		}
+		if match {
+			outputData["status"] = string(StatusUnchanged)
+			return &provider.Output{Data: outputData}, nil
+		}
+		userPath, _ := inputs["path"].(string)
+		if userPath == "" {
+			userPath = absPath
+		}
+		return nil, &FileConflictError{Changed: []string{userPath}}
 
 	case ConflictSkip:
 		outputData["status"] = string(StatusSkipped)
@@ -608,27 +620,38 @@ func (p *FileProvider) executeWriteTree(ctx context.Context, absBasePath string,
 	}
 
 	// Phase 2: Pre-scan for error strategy — runs unconditionally before any writes.
-	// In check-all mode (failFast=false): collect all conflicts and report them together.
-	// In failFast mode: stop on the first conflict to prevent partial writes.
-	// NOTE: Only ConflictError requires pre-scanning today. If a future strategy
-	// also needs pre-write validation, add it to this scan.
+	// Checksum-aware: files with identical content are silently skipped (unchanged),
+	// only files with actual content differences trigger the error.
+	// In failFast mode: stop on the first changed conflict to prevent partial writes.
 	{
-		var conflictPaths []string
+		conflictErr := &FileConflictError{}
 		for _, re := range resolved {
-			if re.strategy == ConflictError {
-				_, statErr := os.Stat(re.absDest)
-				if statErr == nil {
-					if failFast {
-						return nil, fmt.Errorf("file already exists: %s", re.outputPath)
-					}
-					conflictPaths = append(conflictPaths, re.outputPath)
-				} else if !errors.Is(statErr, os.ErrNotExist) {
-					return nil, fmt.Errorf("failed to stat file %s: %w", re.absDest, statErr)
+			if re.strategy != ConflictError {
+				continue
+			}
+			_, statErr := os.Stat(re.absDest)
+			if statErr != nil {
+				if errors.Is(statErr, os.ErrNotExist) {
+					continue
 				}
+				return nil, fmt.Errorf("failed to stat file %s: %w", re.absDest, statErr)
+			}
+			// File exists — check if content matches.
+			match, matchErr := contentMatchesFile(re.absDest, []byte(re.content))
+			if matchErr != nil {
+				return nil, fmt.Errorf("content comparison failed for %s: %w", re.absDest, matchErr)
+			}
+			if match {
+				conflictErr.Unchanged = append(conflictErr.Unchanged, re.outputPath)
+			} else {
+				if failFast {
+					return nil, &FileConflictError{Changed: []string{re.outputPath}}
+				}
+				conflictErr.Changed = append(conflictErr.Changed, re.outputPath)
 			}
 		}
-		if len(conflictPaths) > 0 {
-			return nil, fmt.Errorf("files already exist: %s", strings.Join(conflictPaths, ", "))
+		if len(conflictErr.Changed) > 0 {
+			return nil, conflictErr
 		}
 	}
 
@@ -668,8 +691,9 @@ func (p *FileProvider) executeWriteTree(ctx context.Context, absBasePath string,
 		} else {
 			switch re.strategy {
 			case ConflictError:
-				// Safety net: Phase 2 pre-scan should have already caught this.
-				return nil, fmt.Errorf("file already exists: %s", re.outputPath)
+				// Safety net: Phase 2 pre-scan should have already caught changed files.
+				// If we reach here, the file has identical content (unchanged).
+				result.Status = StatusUnchanged
 
 			case ConflictSkip:
 				result.Status = StatusSkipped

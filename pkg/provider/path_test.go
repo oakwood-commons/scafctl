@@ -324,6 +324,25 @@ func TestAbsFromContext_EmptyContextCWDFallsBack(t *testing.T) {
 	assert.Equal(t, filepath.Join(cwd, "relative/path.txt"), result)
 }
 
+func TestAbsFromContext_SolutionDirectoryFallback(t *testing.T) {
+	ctx := context.Background()
+	ctx = WithSolutionDirectory(ctx, "/solution/dir")
+
+	result, err := AbsFromContext(ctx, "relative/path.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "/solution/dir/relative/path.txt", result)
+}
+
+func TestAbsFromContext_WorkingDirTakesPrecedenceOverSolutionDir(t *testing.T) {
+	ctx := context.Background()
+	ctx = WithSolutionDirectory(ctx, "/solution/dir")
+	ctx = WithWorkingDirectory(ctx, "/working/dir")
+
+	result, err := AbsFromContext(ctx, "relative/path.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "/working/dir/relative/path.txt", result)
+}
+
 // ── GetWorkingDirectory tests ──
 
 func TestGetWorkingDirectory_NoContext(t *testing.T) {

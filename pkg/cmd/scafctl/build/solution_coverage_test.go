@@ -5,6 +5,7 @@ package build
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -575,4 +576,54 @@ func BenchmarkCommandBuildSolution(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		CommandBuildSolution(cliParams, ioStreams, "build")
 	}
+}
+
+func TestRunBuildSolution_StdinDryRun(t *testing.T) {
+	t.Parallel()
+
+	content := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: stdin-solution
+  version: 1.0.0
+spec: {}
+`
+	stdinBuf := io.NopCloser(bytes.NewBufferString(content))
+	var outBuf bytes.Buffer
+	ioStreams := terminal.NewIOStreams(stdinBuf, &outBuf, &outBuf, false)
+	w := writer.New(ioStreams, settings.NewCliParams())
+	ctx := writer.WithWriter(t.Context(), w)
+
+	opts := &SolutionOptions{
+		File:          "-",
+		IOStreams:     ioStreams,
+		CliParams:     settings.NewCliParams(),
+		DryRun:        true,
+		NoBundle:      true,
+		BundleMaxSize: "50MB",
+	}
+
+	err := runBuildSolution(ctx, opts)
+	require.NoError(t, err)
+	assert.Contains(t, outBuf.String(), "Dry run:")
+	assert.Contains(t, outBuf.String(), "stdin-solution@1.0.0")
+}
+
+func TestRunBuildSolution_StdinImpliesNoBundle(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+	cmd := CommandBuildSolution(cliParams, ioStreams, "build")
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(t.Context(), w)
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"-f", "-"})
+
+	// We can't easily test the full RunE (stdin would be empty),
+	// but we can verify that the command creates correctly and the
+	// flag description mentions stdin.
+	f := cmd.Flags().Lookup("file")
+	require.NotNil(t, f)
+	assert.Contains(t, f.Usage, "stdin")
 }

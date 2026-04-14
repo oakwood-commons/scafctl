@@ -4,6 +4,8 @@
 package resolver
 
 import (
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
@@ -35,11 +37,100 @@ const (
 	ErrorBehaviorContinue = spec.OnErrorContinue
 )
 
-// Condition is an alias to spec.Condition for backward compatibility.
-// Note: The resolver package uses a custom Condition that only wraps the expr field,
-// keeping backward compatibility with existing resolver YAML files.
+// Condition is a resolver-specific condition type with custom YAML/JSON unmarshalling.
+// Unlike spec.Condition, this type only wraps the expr field, keeping backward
+// compatibility with existing resolver YAML files.
+//
+// Supported YAML/JSON forms:
+//   - String shorthand: when: "_.environment == 'prod'"
+//   - Boolean literal:  when: true / when: false
+//   - Object form:      when: { expr: "_.environment == 'prod'" }
 type Condition struct {
 	Expr *celexp.Expression `json:"expr" yaml:"expr" doc:"CEL expression that must evaluate to boolean" example:"_.environment == 'prod'"`
+}
+
+// UnmarshalYAML supports shorthand forms for conditions.
+//   - string → treated as a CEL expression
+//   - bool   → converted to literal "true" or "false" CEL expression
+//   - object → standard {expr: "..."} form
+func (c *Condition) UnmarshalYAML(unmarshal func(any) error) error {
+	// Unmarshal to an interface to inspect the type
+	var raw any
+	if err := unmarshal(&raw); err != nil {
+		return fmt.Errorf("invalid condition: %w", err)
+	}
+
+	switch v := raw.(type) {
+	case string:
+		expr := celexp.Expression(v)
+		c.Expr = &expr
+		return nil
+	case bool:
+		var exprStr string
+		if v {
+			exprStr = "true"
+		} else {
+			exprStr = "false"
+		}
+		expr := celexp.Expression(exprStr)
+		c.Expr = &expr
+		return nil
+	case map[string]any:
+		// Object form: extract "expr" field
+		exprVal, ok := v["expr"]
+		if !ok {
+			return fmt.Errorf("invalid condition object: missing \"expr\" field (valid forms: string, bool, or {expr: \"...\"})")
+		}
+		exprStr, ok := exprVal.(string)
+		if !ok {
+			return fmt.Errorf("invalid condition object: \"expr\" must be a string, got %T", exprVal)
+		}
+		expr := celexp.Expression(exprStr)
+		c.Expr = &expr
+		return nil
+	default:
+		return fmt.Errorf("invalid condition: expected string, bool, or {expr: \"...\"} object, got %T", raw)
+	}
+}
+
+// UnmarshalJSON supports shorthand forms for conditions.
+//   - string → treated as a CEL expression
+//   - bool   → converted to literal "true" or "false" CEL expression
+//   - object → standard {expr: "..."} form
+func (c *Condition) UnmarshalJSON(data []byte) error {
+	// Try string first
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		expr := celexp.Expression(s)
+		c.Expr = &expr
+		return nil
+	}
+
+	// Try bool
+	var b bool
+	if err := json.Unmarshal(data, &b); err == nil {
+		var exprStr string
+		if b {
+			exprStr = "true"
+		} else {
+			exprStr = "false"
+		}
+		expr := celexp.Expression(exprStr)
+		c.Expr = &expr
+		return nil
+	}
+
+	// Try object form {expr: "..."}
+	type conditionAlias Condition
+	var obj conditionAlias
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return fmt.Errorf("invalid condition: expected string, bool, or {\"expr\": \"...\"} object: %w", err)
+	}
+	if obj.Expr == nil {
+		return fmt.Errorf("invalid condition object: missing \"expr\" field (valid forms: string, bool, or {\"expr\": \"...\"})")
+	}
+	*c = Condition(obj)
+	return nil
 }
 
 // ForEachClause is an alias to spec.ForEachClause for backward compatibility.
