@@ -4,12 +4,15 @@
 package solution
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/logger"
 )
 
 // ResolveArtifactName determines the artifact name using the following priority:
@@ -63,4 +66,38 @@ func ResolveArtifactVersion(explicitVersion string, metadataVersion *semver.Vers
 	}
 
 	return nil, false, fmt.Errorf("no version: solution has no version in metadata; provide --version or set metadata.version")
+}
+
+// NextPatchVersion queries the local catalog for existing versions of the named
+// artifact and returns the next patch increment. If no versions exist, it returns
+// 0.0.1. This is used as the fallback when neither --version nor metadata.version
+// is provided.
+func NextPatchVersion(ctx context.Context, localCatalog *catalog.LocalCatalog, name string) *semver.Version {
+	lgr := logger.FromContext(ctx)
+
+	artifacts, err := localCatalog.List(ctx, catalog.ArtifactKindSolution, name)
+	if err != nil {
+		lgr.V(1).Info("failed to list artifacts for auto-increment", "name", name, "error", err)
+		return semver.MustParse("0.0.1")
+	}
+
+	var versions []*semver.Version
+	for _, a := range artifacts {
+		if a.Reference.Version != nil {
+			versions = append(versions, a.Reference.Version)
+		}
+	}
+
+	if len(versions) == 0 {
+		return semver.MustParse("0.0.1")
+	}
+
+	sort.Slice(versions, func(i, j int) bool {
+		return versions[i].LessThan(versions[j])
+	})
+
+	latest := versions[len(versions)-1]
+	next := semver.New(latest.Major(), latest.Minor(), latest.Patch()+1, "", "")
+	lgr.V(1).Info("auto-incremented version", "latest", latest.String(), "next", next.String())
+	return next
 }

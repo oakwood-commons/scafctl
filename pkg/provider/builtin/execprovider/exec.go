@@ -96,7 +96,8 @@ func NewExecProvider() *ExecProvider {
 					schemahelper.WithDefault("auto"),
 					schemahelper.WithExample("auto"),
 					schemahelper.WithMaxLength(10)),
-				"expand": schemahelper.BoolProp("Return full result map (stdout, stderr, exitCode, etc.) instead of trimmed stdout string. Default: false in resolver/transform mode, always true in action mode"),
+				"expand":      schemahelper.BoolProp("Return full result map (stdout, stderr, exitCode, etc.) instead of trimmed stdout string. Default: false in resolver/transform mode, always true in action mode"),
+				"passthrough": schemahelper.BoolProp("Stream stdout/stderr directly to the user's terminal in real-time instead of capturing. Colors, formatting, and TTY features are preserved. Result stdout/stderr fields will be empty. Default: false"),
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 				provider.CapabilityFrom:      schemahelper.AnyProp("Trimmed stdout string by default; full result map (stdout, stderr, exitCode, success, command, shell) when expand: true"),
@@ -308,14 +309,27 @@ func (p *ExecProvider) executeCommand(ctx context.Context, command string, input
 	}
 
 	// Capture stdout and stderr into buffers.
+	// If passthrough: true, stream directly to terminal without capturing.
 	// If IOStreams are available in context, also stream to the terminal in real-time
 	// using io.MultiWriter so output appears immediately while still being captured
 	// for inter-action dependencies.
 	var stdout, stderr bytes.Buffer
 	var stdoutWriter, stderrWriter io.Writer = &stdout, &stderr
 	streamed := false
+	passthrough, _ := inputs["passthrough"].(bool)
 
-	if ioStreams, ok := provider.IOStreamsFromContext(ctx); ok && ioStreams != nil {
+	if passthrough {
+		// Passthrough mode: stream directly to terminal, don't capture
+		if ioStreams, ok := provider.IOStreamsFromContext(ctx); ok && ioStreams != nil {
+			if ioStreams.Out != nil {
+				stdoutWriter = ioStreams.Out
+			}
+			if ioStreams.ErrOut != nil {
+				stderrWriter = ioStreams.ErrOut
+			}
+			streamed = true
+		}
+	} else if ioStreams, ok := provider.IOStreamsFromContext(ctx); ok && ioStreams != nil {
 		if ioStreams.Out != nil {
 			stdoutWriter = io.MultiWriter(&stdout, ioStreams.Out)
 			streamed = true

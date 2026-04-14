@@ -4,9 +4,12 @@
 package solution
 
 import (
+	"context"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -105,5 +108,68 @@ func BenchmarkResolveArtifactVersion(b *testing.B) {
 	metadata := semver.MustParse("1.0.0")
 	for b.Loop() {
 		_, _, _ = ResolveArtifactVersion("2.0.0", metadata)
+	}
+}
+
+func TestNextPatchVersion(t *testing.T) {
+	t.Run("no existing versions returns 0.0.1", func(t *testing.T) {
+		dir := t.TempDir()
+		lgr := logr.Discard()
+		lc, err := catalog.NewLocalCatalogAt(dir, lgr)
+		require.NoError(t, err)
+
+		v := NextPatchVersion(context.Background(), lc, "my-solution")
+		assert.Equal(t, "0.0.1", v.String())
+	})
+
+	t.Run("increments highest existing version", func(t *testing.T) {
+		dir := t.TempDir()
+		lgr := logr.Discard()
+		lc, err := catalog.NewLocalCatalogAt(dir, lgr)
+		require.NoError(t, err)
+
+		// Store two versions
+		ref1 := catalog.Reference{Kind: catalog.ArtifactKindSolution, Name: "my-solution", Version: semver.MustParse("1.0.0")}
+		ref2 := catalog.Reference{Kind: catalog.ArtifactKindSolution, Name: "my-solution", Version: semver.MustParse("1.2.3")}
+		_, err = lc.Store(context.Background(), ref1, []byte("solution: v1"), nil, nil, false)
+		require.NoError(t, err)
+		_, err = lc.Store(context.Background(), ref2, []byte("solution: v2"), nil, nil, false)
+		require.NoError(t, err)
+
+		v := NextPatchVersion(context.Background(), lc, "my-solution")
+		assert.Equal(t, "1.2.4", v.String())
+	})
+
+	t.Run("different name returns 0.0.1", func(t *testing.T) {
+		dir := t.TempDir()
+		lgr := logr.Discard()
+		lc, err := catalog.NewLocalCatalogAt(dir, lgr)
+		require.NoError(t, err)
+
+		// Store under a different name
+		ref := catalog.Reference{Kind: catalog.ArtifactKindSolution, Name: "other", Version: semver.MustParse("5.0.0")}
+		_, err = lc.Store(context.Background(), ref, []byte("solution: other"), nil, nil, false)
+		require.NoError(t, err)
+
+		v := NextPatchVersion(context.Background(), lc, "my-solution")
+		assert.Equal(t, "0.0.1", v.String())
+	})
+}
+
+func BenchmarkNextPatchVersion(b *testing.B) {
+	dir := b.TempDir()
+	lgr := logr.Discard()
+	lc, err := catalog.NewLocalCatalogAt(dir, lgr)
+	require.NoError(b, err)
+
+	ref := catalog.Reference{Kind: catalog.ArtifactKindSolution, Name: "bench", Version: semver.MustParse("1.0.0")}
+	_, err = lc.Store(context.Background(), ref, []byte("solution"), nil, nil, false)
+	require.NoError(b, err)
+
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		NextPatchVersion(ctx, lc, "bench")
 	}
 }

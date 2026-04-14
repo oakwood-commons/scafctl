@@ -95,12 +95,13 @@ const DefaultMinValidFor = 60 * time.Second
 
 // LoginOptions configures the login process.
 type LoginOptions struct {
-	TenantID           string                                          `json:"tenantId,omitempty" yaml:"tenantId,omitempty" doc:"Azure AD tenant ID override" maxLength:"128"`
-	Scopes             []string                                        `json:"scopes,omitempty" yaml:"scopes,omitempty" doc:"OAuth scopes to request" maxItems:"20"`
-	Flow               Flow                                            `json:"flow,omitempty" yaml:"flow,omitempty" doc:"Authentication flow to use" example:"device_code" maxLength:"64"`
-	Timeout            time.Duration                                   `json:"timeout,omitempty" yaml:"timeout,omitempty" doc:"Maximum time to wait for authentication"`
-	CallbackPort       int                                             `json:"callbackPort,omitempty" yaml:"callbackPort,omitempty" doc:"Local port for OAuth callback server" minimum:"0" maximum:"65535"`
-	DeviceCodeCallback func(userCode, verificationURI, message string) `json:"-" yaml:"-"`
+	TenantID            string                                          `json:"tenantId,omitempty" yaml:"tenantId,omitempty" doc:"Azure AD tenant ID override" maxLength:"128"`
+	Scopes              []string                                        `json:"scopes,omitempty" yaml:"scopes,omitempty" doc:"OAuth scopes to request" maxItems:"20"`
+	Flow                Flow                                            `json:"flow,omitempty" yaml:"flow,omitempty" doc:"Authentication flow to use" example:"device_code" maxLength:"64"`
+	Timeout             time.Duration                                   `json:"timeout,omitempty" yaml:"timeout,omitempty" doc:"Maximum time to wait for authentication"`
+	CallbackPort        int                                             `json:"callbackPort,omitempty" yaml:"callbackPort,omitempty" doc:"Local port for OAuth callback server" minimum:"0" maximum:"65535"`
+	DeviceCodeCallback  func(userCode, verificationURI, message string) `json:"-" yaml:"-"`
+	BrowserAuthCallback func(authURL string)                            `json:"-" yaml:"-"`
 }
 
 // TokenOptions configures token acquisition.

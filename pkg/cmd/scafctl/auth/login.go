@@ -499,12 +499,15 @@ func executeLogin(ctx context.Context, w *writer.Writer, binaryName string, hand
 
 	ioStreams := w.IOStreams()
 
-	// Use kvx status TUI for device-code flows when running in a terminal.
-	if flow == auth.FlowDeviceCode && skvx.IsTerminal(ioStreams.Out) {
+	// Use kvx status TUI for interactive and device-code flows when running
+	// in a terminal. This provides consistent UX across all auth handlers:
+	// device code flows get copy/open actions, browser flows get "waiting" status.
+	isInteractiveFlow := flow == auth.FlowDeviceCode || flow == auth.FlowInteractive || flow == auth.FlowGcloudADC
+	if isInteractiveFlow && skvx.IsTerminal(ioStreams.Out) {
 		return executeLoginWithStatusTUI(ctx, w, binaryName, handler, flow, tenantID, callbackPort, timeout, scopes, ioStreams)
 	}
 
-	// Plain-text login path (non-terminal, or non-device-code flows).
+	// Plain-text login path (non-terminal, or non-interactive flows).
 	loginOpts := auth.LoginOptions{
 		TenantID:     tenantID,
 		Scopes:       scopes,
@@ -519,6 +522,11 @@ func executeLogin(ctx context.Context, w *writer.Writer, binaryName string, hand
 			w.Infof("Enter the code: %s", userCode)
 			w.Info("")
 			w.Info("Waiting for authentication...")
+		},
+		BrowserAuthCallback: func(authURL string) {
+			w.Info("")
+			w.Infof("Opening browser for authentication: %s", authURL)
+			w.Info("Waiting for browser authentication...")
 		},
 	}
 
@@ -536,11 +544,14 @@ func executeLogin(ctx context.Context, w *writer.Writer, binaryName string, hand
 	return displayLoginResult(w, result, flow)
 }
 
-// executeLoginWithStatusTUI runs the device-code login flow using the kvx status
-// screen TUI. It:
-//  1. Starts handler.Login in a goroutine with a DeviceCodeCallback that captures
-//     the verification URL and user code.
-//  2. Waits for the device code before launching the TUI (avoids empty-data start).
+// executeLoginWithStatusTUI runs the login flow using the kvx status screen TUI.
+// It supports both device-code flows (with copy code + open URL actions) and
+// browser-based flows (with "Waiting for browser..." status and re-open URL action).
+//
+// It:
+//  1. Starts handler.Login in a goroutine with callbacks that capture the
+//     verification URL/user code (device code) or auth URL (browser).
+//  2. Waits for either callback before launching the TUI (avoids empty-data start).
 //  3. Launches tui.Run with a DisplaySchema status view and a Done channel that
 //     receives the login outcome when the goroutine completes.
 func executeLoginWithStatusTUI(
@@ -559,12 +570,16 @@ func executeLoginWithStatusTUI(
 		userCode        string
 		verificationURI string
 	}
+	type browserAuthData struct {
+		authURL string
+	}
 	type loginOutcome struct {
 		result *auth.Result
 		err    error
 	}
 
 	deviceCodeChan := make(chan deviceCodeData, 1)
+	browserAuthChan := make(chan browserAuthData, 1)
 	outcomeChan := make(chan loginOutcome, 1)
 	done := make(chan tui.StatusResult, 1)
 
@@ -580,6 +595,12 @@ func executeLoginWithStatusTUI(
 			default:
 			}
 		},
+		BrowserAuthCallback: func(authURL string) {
+			select {
+			case browserAuthChan <- browserAuthData{authURL: authURL}:
+			default:
+			}
+		},
 	}
 
 	go func() {
@@ -587,14 +608,21 @@ func executeLoginWithStatusTUI(
 		outcomeChan <- loginOutcome{result: result, err: err}
 	}()
 
-	// Wait for the device code, an early completion, or cancellation.
+	// Wait for a device code, browser auth URL, an early completion, or cancellation.
 	w.Infof("Initiating authentication with %s...", handler.DisplayName())
-	var dci deviceCodeData
+
+	var data map[string]any
+	var schema *tui.DisplaySchema
+
 	select {
-	case dci = <-deviceCodeChan:
-		// Device code ready - proceed to TUI.
+	case dci := <-deviceCodeChan:
+		// Device code flow — show code + URL with copy/open actions.
+		data, schema = buildDeviceCodeTUI(handler.DisplayName(), dci.userCode, dci.verificationURI)
+	case bai := <-browserAuthChan:
+		// Browser auth flow — show "Waiting for browser..." with re-open action.
+		data, schema = buildBrowserAuthTUI(handler.DisplayName(), bai.authURL)
 	case outcome := <-outcomeChan:
-		// Login completed before device code was shown (unusual).
+		// Login completed before any callback (e.g., cached token, PAT).
 		if outcome.err != nil {
 			if ctx.Err() != nil {
 				return exitcode.WithCode(auth.ErrUserCancelled, exitcode.GeneralError)
@@ -629,41 +657,6 @@ func executeLoginWithStatusTUI(
 		close(outcomeReady)
 	}()
 
-	data := map[string]any{
-		"title": fmt.Sprintf("Sign in to %s", handler.DisplayName()),
-		"url":   dci.verificationURI,
-		"code":  dci.userCode,
-	}
-
-	schema := &tui.DisplaySchema{
-		Version: "v1",
-		Status: &tui.StatusDisplayConfig{
-			TitleField:     "title",
-			WaitMessage:    "Waiting for authentication...",
-			SuccessMessage: "Authenticated successfully!",
-			DoneBehavior:   tui.DoneBehaviorExitAfterDelay,
-			DoneDelay:      "2s",
-			DisplayFields: []tui.StatusFieldDisplay{
-				{Label: "URL", Field: "url"},
-				{Label: "Code", Field: "code"},
-			},
-			Actions: []tui.StatusActionConfig{
-				{
-					Label: "Copy code",
-					Type:  "copy-value",
-					Field: "code",
-					Keys:  tui.StatusKeyBindings{Vim: "c", Emacs: "alt+c", Function: "f2"},
-				},
-				{
-					Label: "Open URL",
-					Type:  "open-url",
-					Field: "url",
-					Keys:  tui.StatusKeyBindings{Vim: "o", Emacs: "alt+o", Function: "f3"},
-				},
-			},
-		},
-	}
-
 	cfg := tui.DefaultConfig()
 	cfg.AppName = binaryName
 	cfg.DisplaySchema = schema
@@ -697,6 +690,78 @@ func executeLoginWithStatusTUI(
 	}
 
 	return displayLoginResult(w, capturedOutcome.result, flow)
+}
+
+// buildDeviceCodeTUI returns the data map and DisplaySchema for a device-code
+// based authentication flow. The TUI shows the verification URL and user code
+// with copy-code and open-URL actions.
+func buildDeviceCodeTUI(displayName, userCode, verificationURI string) (map[string]any, *tui.DisplaySchema) {
+	data := map[string]any{
+		"title": fmt.Sprintf("Sign in to %s", displayName),
+		"url":   verificationURI,
+		"code":  userCode,
+	}
+	schema := &tui.DisplaySchema{
+		Version: "v1",
+		Status: &tui.StatusDisplayConfig{
+			TitleField:     "title",
+			WaitMessage:    "Waiting for authentication...",
+			SuccessMessage: "Authenticated successfully!",
+			DoneBehavior:   tui.DoneBehaviorExitAfterDelay,
+			DoneDelay:      "2s",
+			DisplayFields: []tui.StatusFieldDisplay{
+				{Label: "URL", Field: "url"},
+				{Label: "Code", Field: "code"},
+			},
+			Actions: []tui.StatusActionConfig{
+				{
+					Label: "Copy code",
+					Type:  "copy-value",
+					Field: "code",
+					Keys:  tui.StatusKeyBindings{Vim: "c", Emacs: "alt+c", Function: "f2"},
+				},
+				{
+					Label: "Open URL",
+					Type:  "open-url",
+					Field: "url",
+					Keys:  tui.StatusKeyBindings{Vim: "o", Emacs: "alt+o", Function: "f3"},
+				},
+			},
+		},
+	}
+	return data, schema
+}
+
+// buildBrowserAuthTUI returns the data map and DisplaySchema for a browser-based
+// authentication flow. The TUI shows the auth URL with a re-open action while
+// waiting for the browser callback.
+func buildBrowserAuthTUI(displayName, authURL string) (map[string]any, *tui.DisplaySchema) {
+	data := map[string]any{
+		"title": fmt.Sprintf("Sign in to %s", displayName),
+		"url":   authURL,
+	}
+	schema := &tui.DisplaySchema{
+		Version: "v1",
+		Status: &tui.StatusDisplayConfig{
+			TitleField:     "title",
+			WaitMessage:    "Waiting for browser authentication...",
+			SuccessMessage: "Authenticated successfully!",
+			DoneBehavior:   tui.DoneBehaviorExitAfterDelay,
+			DoneDelay:      "2s",
+			DisplayFields: []tui.StatusFieldDisplay{
+				{Label: "URL", Field: "url"},
+			},
+			Actions: []tui.StatusActionConfig{
+				{
+					Label: "Re-open URL",
+					Type:  "open-url",
+					Field: "url",
+					Keys:  tui.StatusKeyBindings{Vim: "o", Emacs: "alt+o", Function: "f3"},
+				},
+			},
+		},
+	}
+	return data, schema
 }
 
 // displayLoginResult prints the authentication success header and claim details.

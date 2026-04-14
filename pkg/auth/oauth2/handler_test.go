@@ -706,7 +706,7 @@ func TestHandler_ImplicitGrantLogin_RequiresAuthorizeURL(t *testing.T) {
 		cfg.AuthorizeURL = "" // missing
 	})
 
-	_, err := h.authCodeLogin(context.Background(), nil, 0)
+	_, err := h.authCodeLogin(context.Background(), auth.LoginOptions{}, nil, 0)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "authorizeURL is required")
 }
@@ -722,7 +722,7 @@ func TestHandler_ImplicitGrantLogin_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
-	_, err := h.implicitGrantLogin(ctx, nil, 0)
+	_, err := h.implicitGrantLogin(ctx, auth.LoginOptions{}, nil, 0)
 	// Should fail with context cancelled (server can't start or times out)
 	assert.Error(t, err)
 }

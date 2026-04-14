@@ -47,7 +47,9 @@ func TestBaseOutputFormats(t *testing.T) {
 	assert.Contains(t, formats, "test")
 	assert.Contains(t, formats, "tree")
 	assert.Contains(t, formats, "mermaid")
-	assert.Len(t, formats, 9)
+	assert.Contains(t, formats, "csv")
+	assert.Contains(t, formats, "toml")
+	assert.Len(t, formats, 11)
 }
 
 func TestIsStructuredFormat(t *testing.T) {
@@ -986,4 +988,291 @@ func TestOutputOptions_Write_KvxNonTTY_InvalidWhere(t *testing.T) {
 	err := opts.Write(data)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "where filter failed")
+}
+
+func TestOutputOptions_Write_ScalarExpressionNonTTY(t *testing.T) {
+	tests := []struct {
+		name       string
+		data       any
+		expression string
+		expected   string
+	}{
+		{
+			name:       "string scalar",
+			data:       map[string]any{"name": "abaker9"},
+			expression: "_.name",
+			expected:   "abaker9\n",
+		},
+		{
+			name:       "integer scalar",
+			data:       map[string]any{"count": 42},
+			expression: "_.count",
+			expected:   "42\n",
+		},
+		{
+			name:       "boolean scalar",
+			data:       map[string]any{"enabled": true},
+			expression: "_.enabled",
+			expected:   "true\n",
+		},
+		{
+			name:       "float scalar",
+			data:       map[string]any{"ratio": 3.14},
+			expression: "_.ratio",
+			expected:   "3.14\n",
+		},
+		{
+			name:       "map result stays structured",
+			data:       map[string]any{"nested": map[string]any{"a": 1}},
+			expression: "_.nested",
+			expected:   "\"a\": 1", // should be JSON, not plain text
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := &bytes.Buffer{}
+			ioStreams := &terminal.IOStreams{Out: out}
+
+			opts := NewOutputOptions(ioStreams)
+			opts.Format = OutputFormatAuto
+			opts.Expression = tt.expression
+
+			err := opts.Write(tt.data)
+			require.NoError(t, err)
+			assert.Contains(t, out.String(), tt.expected)
+		})
+	}
+}
+
+func TestOutputOptions_Write_CSV(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatCSV
+
+	data := []map[string]any{
+		{"name": "alice", "age": 30},
+		{"name": "bob", "age": 25},
+	}
+	err := opts.Write(data)
+	require.NoError(t, err)
+
+	lines := out.String()
+	// Header row should contain both columns
+	assert.Contains(t, lines, "age")
+	assert.Contains(t, lines, "name")
+	// Data rows
+	assert.Contains(t, lines, "alice")
+	assert.Contains(t, lines, "bob")
+}
+
+func TestOutputOptions_Write_CSV_SingleMap(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatCSV
+
+	data := map[string]any{"name": "alice", "role": "admin"}
+	err := opts.Write(data)
+	require.NoError(t, err)
+
+	lines := out.String()
+	assert.Contains(t, lines, "name")
+	assert.Contains(t, lines, "alice")
+}
+
+func TestOutputOptions_Write_CSV_WithExpression(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatCSV
+	opts.Expression = "_"
+
+	data := []map[string]any{{"key": "value"}}
+	err := opts.Write(data)
+	require.NoError(t, err)
+	assert.Contains(t, out.String(), "key")
+	assert.Contains(t, out.String(), "value")
+}
+
+func TestOutputOptions_Write_CSV_Empty(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatCSV
+
+	data := []any{}
+	err := opts.Write(data)
+	require.NoError(t, err)
+	assert.Empty(t, out.String())
+}
+
+func TestOutputOptions_Write_CSV_ColumnOrder(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatCSV
+	opts.ColumnOrder = []string{"name", "age"}
+
+	data := []map[string]any{{"age": 30, "name": "alice"}}
+	err := opts.Write(data)
+	require.NoError(t, err)
+
+	// First line should be header with name before age
+	lines := out.String()
+	headerEnd := lines[:len("name,age")]
+	assert.Equal(t, "name,age", headerEnd)
+}
+
+func TestIsScalarValue(t *testing.T) {
+	assert.True(t, isScalarValue("hello"))
+	assert.True(t, isScalarValue(42))
+	assert.True(t, isScalarValue(3.14))
+	assert.True(t, isScalarValue(true))
+	assert.True(t, isScalarValue(false))
+	assert.False(t, isScalarValue(map[string]any{"a": 1}))
+	assert.False(t, isScalarValue([]any{1, 2}))
+	assert.False(t, isScalarValue(nil))
+}
+
+func TestRemoveExpressionOptions(t *testing.T) {
+	opts := []Option{WithExpression("_.name"), WithWhere("_.age > 10")}
+	cleared := removeExpressionOptions(opts)
+	// Should have original opts + 2 override opts
+	assert.Len(t, cleared, 4)
+}
+
+func TestOutputOptions_Write_NonScalarExpressionNonTTY(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatAuto
+	opts.Expression = "_.nested"
+
+	data := map[string]any{"nested": map[string]any{"a": 1, "b": 2}}
+	err := opts.Write(data)
+	require.NoError(t, err)
+
+	// Non-scalar expression result should fall through to JSON output
+	output := out.String()
+	assert.Contains(t, output, "\"a\"")
+	assert.Contains(t, output, "\"b\"")
+}
+
+func TestParseOutputFormat_CSV(t *testing.T) {
+	format, ok := ParseOutputFormat("csv")
+	assert.True(t, ok)
+	assert.Equal(t, OutputFormatCSV, format)
+}
+
+func TestIsStructuredFormat_CSV(t *testing.T) {
+	assert.True(t, IsStructuredFormat(OutputFormatCSV))
+}
+
+func BenchmarkOutputOptions_Write_CSV(b *testing.B) {
+	data := []map[string]any{
+		{"name": "alice", "age": 30, "role": "admin"},
+		{"name": "bob", "age": 25, "role": "user"},
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		out := &bytes.Buffer{}
+		ioStreams := &terminal.IOStreams{Out: out}
+		opts := NewOutputOptions(ioStreams)
+		opts.Format = OutputFormatCSV
+		_ = opts.Write(data)
+	}
+}
+
+func TestOutputOptions_Write_TOML(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatTOML
+
+	data := map[string]any{"name": "alice", "role": "admin"}
+	err := opts.Write(data)
+	require.NoError(t, err)
+
+	output := out.String()
+	assert.Contains(t, output, "name = 'alice'")
+	assert.Contains(t, output, "role = 'admin'")
+}
+
+func TestOutputOptions_Write_TOML_Nested(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatTOML
+
+	data := map[string]any{
+		"name": "test",
+		"settings": map[string]any{
+			"verbose": true,
+			"timeout": 30,
+		},
+	}
+	err := opts.Write(data)
+	require.NoError(t, err)
+
+	output := out.String()
+	assert.Contains(t, output, "name = 'test'")
+	assert.Contains(t, output, "[settings]")
+	assert.Contains(t, output, "verbose = true")
+	assert.Contains(t, output, "timeout = 30")
+}
+
+func TestOutputOptions_Write_TOML_WithExpression(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatTOML
+	opts.Expression = "_"
+
+	data := map[string]any{"key": "value"}
+	err := opts.Write(data)
+	require.NoError(t, err)
+	assert.Contains(t, out.String(), "key = 'value'")
+}
+
+func TestParseOutputFormat_TOML(t *testing.T) {
+	format, ok := ParseOutputFormat("toml")
+	assert.True(t, ok)
+	assert.Equal(t, OutputFormatTOML, format)
+}
+
+func TestIsStructuredFormat_TOML(t *testing.T) {
+	assert.True(t, IsStructuredFormat(OutputFormatTOML))
+}
+
+func BenchmarkOutputOptions_Write_TOML(b *testing.B) {
+	data := map[string]any{
+		"name": "alice",
+		"age":  30,
+		"settings": map[string]any{
+			"verbose": true,
+		},
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		out := &bytes.Buffer{}
+		ioStreams := &terminal.IOStreams{Out: out}
+		opts := NewOutputOptions(ioStreams)
+		opts.Format = OutputFormatTOML
+		_ = opts.Write(data)
+	}
 }

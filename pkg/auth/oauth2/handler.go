@@ -174,7 +174,7 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 		if callbackPort == 0 {
 			callbackPort = h.cfg.CallbackPort
 		}
-		tokenResp, err = h.authCodeLogin(ctx, scopes, callbackPort)
+		tokenResp, err = h.authCodeLogin(ctx, opts, scopes, callbackPort)
 	case auth.FlowDeviceCode:
 		tokenResp, err = h.deviceCodeLogin(ctx, opts, scopes)
 	case auth.FlowClientCredentials:
@@ -364,14 +364,14 @@ func (e *tokenEndpointError) Error() string {
 
 // ---------- flow: authorization code + PKCE ----------
 
-func (h *Handler) authCodeLogin(ctx context.Context, scopes []string, callbackPort int) (*tokenResponse, error) {
+func (h *Handler) authCodeLogin(ctx context.Context, opts auth.LoginOptions, scopes []string, callbackPort int) (*tokenResponse, error) {
 	if h.cfg.AuthorizeURL == "" {
 		return nil, fmt.Errorf("authorizeURL is required for interactive flow")
 	}
 
 	// Implicit grant flow (response_type=token) uses a different callback mechanism.
 	if h.cfg.ResponseType == "token" {
-		return h.implicitGrantLogin(ctx, scopes, callbackPort)
+		return h.implicitGrantLogin(ctx, opts, scopes, callbackPort)
 	}
 
 	var verifier string
@@ -413,6 +413,9 @@ func (h *Handler) authCodeLogin(ctx context.Context, scopes []string, callbackPo
 	}
 	authURL.RawQuery = q.Encode()
 
+	if opts.BrowserAuthCallback != nil {
+		opts.BrowserAuthCallback(authURL.String())
+	}
 	if openErr := oauth.OpenBrowser(ctx, authURL.String()); openErr != nil {
 		h.logger.V(1).Info("failed to open browser", "url", authURL.String(), "error", openErr)
 	}
@@ -450,7 +453,7 @@ func (h *Handler) exchangeAuthCode(ctx context.Context, code, redirectURI, codeV
 
 // ---------- flow: implicit grant (response_type=token) ----------
 
-func (h *Handler) implicitGrantLogin(ctx context.Context, scopes []string, callbackPort int) (*tokenResponse, error) {
+func (h *Handler) implicitGrantLogin(ctx context.Context, opts auth.LoginOptions, scopes []string, callbackPort int) (*tokenResponse, error) {
 	state, err := oauth.GenerateCodeVerifier()
 	if err != nil {
 		return nil, fmt.Errorf("generate state: %w", err)
@@ -476,6 +479,9 @@ func (h *Handler) implicitGrantLogin(ctx context.Context, scopes []string, callb
 	}
 	authURL.RawQuery = q.Encode()
 
+	if opts.BrowserAuthCallback != nil {
+		opts.BrowserAuthCallback(authURL.String())
+	}
 	if openErr := oauth.OpenBrowser(ctx, authURL.String()); openErr != nil {
 		h.logger.V(1).Info("failed to open browser", "url", authURL.String(), "error", openErr)
 	}

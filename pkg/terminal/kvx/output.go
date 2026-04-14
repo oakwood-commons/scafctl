@@ -5,9 +5,13 @@ package kvx
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
+
+	toml "github.com/pelletier/go-toml/v2"
 
 	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -47,6 +51,12 @@ const (
 
 	// OutputFormatMermaid renders data as a Mermaid flowchart diagram
 	OutputFormatMermaid OutputFormat = "mermaid"
+
+	// OutputFormatCSV outputs as comma-separated values (for spreadsheets/scripting)
+	OutputFormatCSV OutputFormat = "csv"
+
+	// OutputFormatTOML outputs as TOML (for config files/scripting)
+	OutputFormatTOML OutputFormat = "toml"
 )
 
 // String returns the string representation of the output format.
@@ -65,6 +75,8 @@ func BaseOutputFormats() []string {
 		string(OutputFormatMermaid),
 		string(OutputFormatJSON),
 		string(OutputFormatYAML),
+		string(OutputFormatCSV),
+		string(OutputFormatTOML),
 		string(OutputFormatQuiet),
 		string(OutputFormatTest),
 	}
@@ -75,7 +87,7 @@ func BaseOutputFormats() []string {
 // bordered table output. Mermaid is included because it is a piping-friendly
 // plain-text format even though Write() routes it through the kvx renderer.
 func IsStructuredFormat(format OutputFormat) bool {
-	return format == OutputFormatJSON || format == OutputFormatYAML || format == OutputFormatMermaid
+	return format == OutputFormatJSON || format == OutputFormatYAML || format == OutputFormatMermaid || format == OutputFormatCSV || format == OutputFormatTOML
 }
 
 // IsKvxFormat returns true if the format uses kvx visual output (auto, table, list, or tree).
@@ -121,6 +133,10 @@ func ParseOutputFormat(s string) (OutputFormat, bool) {
 		return OutputFormatTree, true
 	case "mermaid":
 		return OutputFormatMermaid, true
+	case "csv":
+		return OutputFormatCSV, true
+	case "toml":
+		return OutputFormatTOML, true
 	default:
 		return "", false
 	}
@@ -362,6 +378,11 @@ func (o *OutputOptions) writeKvx(data any) error {
 				return fmt.Errorf("expression evaluation failed: %w", err)
 			}
 		}
+		// Print scalar values as plain text instead of JSON wrapping.
+		if isScalarValue(outputData) {
+			fmt.Fprintln(o.IOStreams.Out, outputData)
+			return nil
+		}
 		return o.writeJSON(outputData)
 	}
 
@@ -371,6 +392,36 @@ func (o *OutputOptions) writeKvx(data any) error {
 		WithIO(o.IOStreams.In, o.IOStreams.Out),
 		WithInteractive(o.Interactive),
 	)
+
+	// Pre-evaluate expression for scalar detection: if Where + Expression
+	// resolve to a scalar value (string, number, bool), print it directly
+	// instead of wrapping it in a table view.
+	if !o.Interactive && (o.Expression != "" || o.Where != "") {
+		preData := data
+		var preErr error
+		preData, preErr = applyWhereFilter(o.Where, preData)
+		if preErr != nil {
+			return preErr
+		}
+		if o.Expression != "" {
+			ctx := o.Ctx
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			preData, preErr = EvaluateExpression(ctx, o.Expression, preData)
+			if preErr != nil {
+				return fmt.Errorf("expression evaluation failed: %w", preErr)
+			}
+		}
+		if isScalarValue(preData) {
+			fmt.Fprintln(o.IOStreams.Out, preData)
+			return nil
+		}
+		// Not a scalar — pass pre-evaluated data to viewer without re-evaluating.
+		// Remove expression/where from options to avoid double evaluation.
+		kvxOpts = removeExpressionOptions(kvxOpts)
+		data = preData
+	}
 
 	// Pass layout based on output format
 	switch o.Format {
@@ -382,10 +433,10 @@ func (o *OutputOptions) writeKvx(data any) error {
 		kvxOpts = append(kvxOpts, WithLayout("tree"))
 	case OutputFormatMermaid:
 		kvxOpts = append(kvxOpts, WithLayout("mermaid"))
-	case OutputFormatAuto, OutputFormatJSON, OutputFormatYAML, OutputFormatQuiet, OutputFormatTest:
+	case OutputFormatAuto, OutputFormatJSON, OutputFormatYAML, OutputFormatCSV, OutputFormatTOML, OutputFormatQuiet, OutputFormatTest:
 		// Auto and empty use default layout (auto).
-		// JSON/YAML/Quiet/Test are handled upstream and should not reach here,
-		// but are listed for exhaustiveness.
+		// Structured formats (JSON/YAML/CSV/TOML), Quiet, and Test are handled
+		// upstream and should not reach here, but are listed for exhaustiveness.
 	}
 
 	return View(data, kvxOpts...)
@@ -464,6 +515,10 @@ func (o *OutputOptions) writeStructured(data any) error {
 		return o.writeJSON(outputData)
 	case OutputFormatYAML:
 		return o.writeYAML(outputData)
+	case OutputFormatCSV:
+		return o.writeCSV(outputData)
+	case OutputFormatTOML:
+		return o.writeTOML(outputData)
 	case OutputFormatTable, OutputFormatAuto, OutputFormatList, OutputFormatTree, OutputFormatMermaid, OutputFormatQuiet, OutputFormatTest:
 		// These formats are handled upstream (writeKvx or command-level test generation),
 		// and should not reach writeStructured.
@@ -501,6 +556,124 @@ func (o *OutputOptions) writeYAML(data any) error {
 	return nil
 }
 
+// writeTOML writes data as TOML.
+func (o *OutputOptions) writeTOML(data any) error {
+	tomlData, err := toml.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("failed to marshal TOML: %w", err)
+	}
+	fmt.Fprint(o.IOStreams.Out, string(tomlData))
+	return nil
+}
+
+// writeCSV writes data as comma-separated values.
+// For a slice of maps, column headers are derived from the union of all keys.
+// For a single map, it writes a two-row CSV (header + values).
+// Scalar values are written as a single cell.
+func (o *OutputOptions) writeCSV(data any) error {
+	w := csv.NewWriter(o.IOStreams.Out)
+	defer w.Flush()
+
+	switch v := data.(type) {
+	case []any:
+		return o.writeCSVSlice(w, v)
+	case []map[string]any:
+		items := make([]any, len(v))
+		for i, m := range v {
+			items[i] = m
+		}
+		return o.writeCSVSlice(w, items)
+	case map[string]any:
+		return o.writeCSVSlice(w, []any{v})
+	default:
+		// Scalar or unsupported type — write as single value
+		return w.Write([]string{fmt.Sprintf("%v", data)})
+	}
+}
+
+// writeCSVSlice writes a slice of items as CSV rows with a header row.
+func (o *OutputOptions) writeCSVSlice(w *csv.Writer, items []any) error {
+	if len(items) == 0 {
+		return nil
+	}
+
+	// Collect all keys across all items for consistent columns
+	keySet := make(map[string]struct{})
+	for _, item := range items {
+		if m, ok := item.(map[string]any); ok {
+			for k := range m {
+				keySet[k] = struct{}{}
+			}
+		}
+	}
+
+	headers := make([]string, 0, len(keySet))
+	for k := range keySet {
+		headers = append(headers, k)
+	}
+	sort.Strings(headers)
+
+	// Apply column order if configured
+	if len(o.ColumnOrder) > 0 {
+		headers = applyColumnOrder(headers, o.ColumnOrder)
+	}
+
+	// Write header row
+	if err := w.Write(headers); err != nil {
+		return fmt.Errorf("failed to write CSV header: %w", err)
+	}
+
+	// Write data rows
+	for _, item := range items {
+		m, ok := item.(map[string]any)
+		if !ok {
+			// Non-map item — write as single column
+			if err := w.Write([]string{fmt.Sprintf("%v", item)}); err != nil {
+				return fmt.Errorf("failed to write CSV row: %w", err)
+			}
+			continue
+		}
+		row := make([]string, len(headers))
+		for i, h := range headers {
+			if v, exists := m[h]; exists {
+				row[i] = fmt.Sprintf("%v", v)
+			}
+		}
+		if err := w.Write(row); err != nil {
+			return fmt.Errorf("failed to write CSV row: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// applyColumnOrder reorders headers based on the preferred column order.
+// Fields in the order list come first; remaining fields are appended in their original order.
+func applyColumnOrder(headers, order []string) []string {
+	orderSet := make(map[string]struct{}, len(order))
+	for _, o := range order {
+		orderSet[o] = struct{}{}
+	}
+
+	result := make([]string, 0, len(headers))
+	// Add ordered columns first (preserving order list sequence)
+	for _, o := range order {
+		for _, h := range headers {
+			if h == o {
+				result = append(result, h)
+				break
+			}
+		}
+	}
+	// Append remaining columns not in order list
+	for _, h := range headers {
+		if _, ok := orderSet[h]; !ok {
+			result = append(result, h)
+		}
+	}
+	return result
+}
+
 // WriteTo writes data to a specific writer with the configured format.
 // This is useful when you need to write to a different output than the configured IOStreams.
 func (o *OutputOptions) WriteTo(w io.Writer, data any) error {
@@ -528,4 +701,25 @@ func StructToMap(v any) (any, error) {
 		return nil, fmt.Errorf("failed to unmarshal from JSON: %w", err)
 	}
 	return result, nil
+}
+
+// isScalarValue returns true if the value is a scalar type (string, number, bool)
+// that should be printed directly rather than rendered in a table.
+func isScalarValue(v any) bool {
+	switch v.(type) {
+	case string, bool,
+		int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64,
+		float32, float64:
+		return true
+	default:
+		return false
+	}
+}
+
+// removeExpressionOptions appends overrides that clear expression and where
+// options. Since Option is an opaque func, we cannot filter the original slice;
+// instead we append empty-value overrides so the viewer skips re-evaluation.
+func removeExpressionOptions(opts []Option) []Option {
+	return append(opts, WithExpression(""), WithWhere(""))
 }

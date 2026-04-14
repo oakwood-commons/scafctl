@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/Masterminds/semver/v3"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
@@ -20,9 +21,10 @@ import (
 // TagOptions holds options for the tag command.
 type TagOptions struct {
 	Reference string // Source artifact reference (name@version)
-	Alias     string // Alias tag to create (e.g., "stable", "latest")
+	Alias     string // Alias tag or target reference (e.g., "stable" or "newname@1.0.0")
 	Catalog   string // Target catalog for remote tagging (URL or config name, --catalog)
 	Kind      string // Artifact kind override (--kind)
+	Force     bool   // Overwrite existing artifact (--force)
 	Insecure  bool   // Allow HTTP (--insecure)
 	CliParams *settings.Run
 	IOStreams *terminal.IOStreams
@@ -36,19 +38,21 @@ func CommandTag(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string
 	}
 
 	cmd := &cobra.Command{
-		Use:   "tag <name@version> <alias>",
-		Short: "Create an alias tag for an artifact",
+		Use:   "tag <name@version> <target>",
+		Short: "Create an alias tag or re-tag an artifact under a new name",
 		Long: heredoc.Doc(`
-			Create an alias tag for an existing catalog artifact.
+			Create an alias tag for an existing catalog artifact, or re-tag it
+			under a new name.
 
-			Tags are freeform aliases that point to a specific version of an artifact.
-			Common uses include marking releases as "stable" or "production".
+			If the target is a plain string (e.g., "stable"), it creates a freeform
+			alias tag that points to the source version.
+
+			If the target is a name@version reference (e.g., "new-name@1.0.0"),
+			it copies the artifact under the new name and version. This is useful
+			for renaming artifacts before pushing to a registry (like docker tag).
 
 			Note: "latest" is reserved and auto-resolves to the highest semver version.
 			It cannot be used as a manual alias.
-
-			The source artifact must exist and have a version specified.
-			The alias must not be a valid semver version (use 'scafctl build' for that).
 
 			By default, tags the artifact in the local catalog. Use --catalog to
 			tag an artifact in a remote registry.
@@ -60,7 +64,10 @@ func CommandTag(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string
 			  # Tag for production
 			  scafctl catalog tag my-solution@1.0.0 production
 
-			  # Tag in a remote registry
+			  # Re-tag under a new name (like docker tag)
+			  scafctl catalog tag my-solution@1.0.0 production-solution@1.0.0
+
+			  # Re-tag in a remote registry
 			  scafctl catalog tag my-solution@1.0.0 production --catalog ghcr.io/myorg
 
 			  # Tag with explicit kind
@@ -77,6 +84,7 @@ func CommandTag(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string
 
 	cmd.Flags().StringVarP(&options.Catalog, "catalog", "c", "", catalogFlagUsage)
 	cmd.Flags().StringVar(&options.Kind, "kind", "", "Artifact kind override (solution, provider, auth-handler)")
+	cmd.Flags().BoolVar(&options.Force, "force", false, "Overwrite existing artifact when re-tagging")
 	cmd.Flags().BoolVar(&options.Insecure, "insecure", false, "Allow insecure HTTP connections")
 
 	return cmd
@@ -85,12 +93,6 @@ func CommandTag(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string
 func runTag(ctx context.Context, opts *TagOptions) error {
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
-
-	// Validate alias - must not be a valid semver version
-	if err := catalog.ValidateAlias(opts.Alias); err != nil {
-		w.Errorf("%v", err)
-		return exitcode.WithCode(err, exitcode.InvalidInput)
-	}
 
 	// Parse reference - require version
 	name, version := catalog.ParseNameVersion(opts.Reference)
@@ -116,10 +118,24 @@ func runTag(ctx context.Context, opts *TagOptions) error {
 		artifactKind = kind
 	}
 
-	// Build reference
+	// Build source reference
 	ref, err := catalog.ParseReference(artifactKind, opts.Reference)
 	if err != nil {
 		w.Errorf("invalid reference %q: %v", opts.Reference, err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
+	}
+
+	// Detect re-tag: if the target looks like "name@version", treat it as a
+	// copy-under-new-name operation instead of an alias tag.
+	dstName, dstVersion := catalog.ParseNameVersion(opts.Alias)
+	isRetag := dstVersion != "" && !catalog.IsValidDigest(dstVersion)
+	if isRetag {
+		return runRetagLocal(ctx, opts, ref, artifactKind, name, version, dstName, dstVersion)
+	}
+
+	// Alias path: validate that the alias is not a semver version.
+	if err := catalog.ValidateAlias(opts.Alias); err != nil {
+		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
@@ -163,9 +179,71 @@ func runTag(ctx context.Context, opts *TagOptions) error {
 	}
 
 	if oldVersion != "" {
-		w.Warningf("Moved %q from %s → %s", opts.Alias, oldVersion, ref.Version.String())
+		w.Warningf("Moved %q from %s \u2192 %s", opts.Alias, oldVersion, ref.Version.String())
 	}
 	w.Successf("Tagged %s@%s as %q", ref.Name, ref.Version.String(), opts.Alias)
+
+	return nil
+}
+
+// runRetagLocal copies an artifact under a new name and version in the local catalog.
+func runRetagLocal(ctx context.Context, opts *TagOptions, ref catalog.Reference, artifactKind catalog.ArtifactKind, srcName, srcVersion, dstName, dstVersion string) error {
+	lgr := logger.FromContext(ctx)
+	w := writer.FromContext(ctx)
+
+	// Validate destination name
+	if !catalog.IsValidName(dstName) {
+		w.Errorf("invalid target name %q: must be lowercase alphanumeric with hyphens", dstName)
+		return exitcode.Errorf("invalid target name")
+	}
+
+	// Parse destination version
+	dstSemver, err := semver.NewVersion(dstVersion)
+	if err != nil {
+		w.Errorf("invalid target version %q: %v", dstVersion, err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
+	}
+
+	// Remote re-tag is not supported (use push instead).
+	if opts.Catalog != "" {
+		w.Error("re-tagging to a new name is only supported locally; push the re-tagged artifact instead")
+		return exitcode.Errorf("remote re-tag not supported")
+	}
+
+	// Open local catalog and infer kind if needed.
+	localCatalog, err := catalog.NewLocalCatalog(*lgr)
+	if err != nil {
+		err = fmt.Errorf("failed to open local catalog: %w", err)
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.CatalogError)
+	}
+
+	if artifactKind == "" {
+		artifactKind, err = catalog.InferKindFromLocalCatalog(ctx, localCatalog, srcName, srcVersion)
+		if err != nil {
+			w.Errorf("failed to infer artifact kind: %v", err)
+			w.Infof("Hint: use --kind to specify the artifact kind explicitly")
+			return exitcode.WithCode(err, exitcode.InvalidInput)
+		}
+		// Re-parse reference with the inferred kind.
+		ref, err = catalog.ParseReference(artifactKind, opts.Reference)
+		if err != nil {
+			w.Errorf("invalid reference %q: %v", opts.Reference, err)
+			return exitcode.WithCode(err, exitcode.InvalidInput)
+		}
+	}
+
+	info, err := localCatalog.CopyLocal(ctx, ref, dstName, dstSemver, artifactKind, opts.Force)
+	if err != nil {
+		if catalog.IsNotFound(err) {
+			w.Errorf("artifact %q not found in local catalog", opts.Reference)
+			return exitcode.WithCode(err, exitcode.FileNotFound)
+		}
+		w.Errorf("failed to re-tag artifact: %v", err)
+		return exitcode.WithCode(err, exitcode.CatalogError)
+	}
+
+	w.Successf("Re-tagged %s@%s as %s@%s (digest: %s)", ref.Name, ref.Version.String(), dstName, dstSemver.String(), info.Digest)
 
 	return nil
 }

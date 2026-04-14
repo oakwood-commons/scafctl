@@ -72,6 +72,9 @@ func (h *Handler) adcLogin(ctx context.Context, opts auth.LoginOptions) (*auth.R
 
 	// Open browser
 	lgr.V(1).Info("opening browser for authentication", "url", authURL)
+	if opts.BrowserAuthCallback != nil {
+		opts.BrowserAuthCallback(authURL)
+	}
 	if err := oauth.OpenBrowser(ctx, authURL); err != nil {
 		lgr.V(0).Info("failed to open browser, please open this URL manually", "url", authURL)
 	}

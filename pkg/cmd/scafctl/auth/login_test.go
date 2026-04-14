@@ -247,3 +247,66 @@ func TestCommandLogin_DeviceCodeCallback(t *testing.T) {
 	// Re-execute to test callback behavior (it was captured above)
 	capturedCallback("ABC123", "https://microsoft.com/devicelogin", "Test message")
 }
+
+func TestBuildDeviceCodeTUI(t *testing.T) {
+	data, schema := buildDeviceCodeTUI("Entra ID", "ABC123", "https://microsoft.com/devicelogin")
+
+	assert.Equal(t, "Sign in to Entra ID", data["title"])
+	assert.Equal(t, "https://microsoft.com/devicelogin", data["url"])
+	assert.Equal(t, "ABC123", data["code"])
+
+	require.NotNil(t, schema.Status)
+	assert.Equal(t, "title", schema.Status.TitleField)
+	assert.Equal(t, "Waiting for authentication...", schema.Status.WaitMessage)
+	assert.Len(t, schema.Status.DisplayFields, 2)
+	assert.Len(t, schema.Status.Actions, 2)
+	assert.Equal(t, "copy-value", schema.Status.Actions[0].Type)
+	assert.Equal(t, "open-url", schema.Status.Actions[1].Type)
+}
+
+func TestBuildBrowserAuthTUI(t *testing.T) {
+	data, schema := buildBrowserAuthTUI("GitHub", "https://github.com/login/oauth/authorize?...")
+
+	assert.Equal(t, "Sign in to GitHub", data["title"])
+	assert.Equal(t, "https://github.com/login/oauth/authorize?...", data["url"])
+	_, hasCode := data["code"]
+	assert.False(t, hasCode, "browser auth TUI should not have a code field")
+
+	require.NotNil(t, schema.Status)
+	assert.Equal(t, "title", schema.Status.TitleField)
+	assert.Equal(t, "Waiting for browser authentication...", schema.Status.WaitMessage)
+	assert.Len(t, schema.Status.DisplayFields, 1)
+	assert.Equal(t, "url", schema.Status.DisplayFields[0].Field)
+	assert.Len(t, schema.Status.Actions, 1)
+	assert.Equal(t, "open-url", schema.Status.Actions[0].Type)
+	assert.Equal(t, "Re-open URL", schema.Status.Actions[0].Label)
+}
+
+func TestCommandLogin_BrowserAuthCallback(t *testing.T) {
+	ctx, buf := newTestContext(t)
+
+	mock := auth.NewMockHandler("github")
+	mock.CapabilitiesValue = []auth.Capability{
+		auth.CapScopesOnLogin,
+	}
+	mock.SetNotAuthenticated()
+
+	mock.LoginResult = &auth.Result{
+		Claims: &auth.Claims{Email: "user@example.com"},
+	}
+
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandLogin(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"github"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+
+	require.Len(t, mock.LoginCalls, 1)
+	assert.NotNil(t, mock.LoginCalls[0].BrowserAuthCallback, "browser auth callback should be set")
+}

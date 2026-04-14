@@ -33,7 +33,7 @@ func TestCommandTag(t *testing.T) {
 	cmd := CommandTag(cliParams, ioStreams, "scafctl/catalog")
 
 	require.NotNil(t, cmd)
-	assert.Equal(t, "tag <name@version> <alias>", cmd.Use)
+	assert.Equal(t, "tag <name@version> <target>", cmd.Use)
 	assert.NotEmpty(t, cmd.Short)
 	assert.NotNil(t, cmd.RunE)
 }
@@ -51,6 +51,7 @@ func TestCommandTag_Flags(t *testing.T) {
 	}{
 		{"catalog", ""},
 		{"kind", ""},
+		{"force", "false"},
 		{"insecure", "false"},
 	}
 
@@ -200,6 +201,51 @@ func TestCommandTag_InvalidCharAlias(t *testing.T) {
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid character")
+}
+
+func TestCommandTag_RetagToNewName(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandTag(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(newCatalogTestCtx(t))
+	// Target is name@version — this is a re-tag operation.
+	// Will fail because source doesn't exist in catalog, but validates the re-tag path.
+	cmd.SetArgs([]string{"my-solution@1.0.0", "new-name@2.0.0"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	// Should NOT contain "alias" errors — it should go through the re-tag path
+	assert.NotContains(t, err.Error(), "alias")
+}
+
+func TestCommandTag_RetagInvalidTargetName(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandTag(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(newCatalogTestCtx(t))
+	cmd.SetArgs([]string{"my-solution@1.0.0", "INVALID@1.0.0"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid target name")
+}
+
+func TestCommandTag_RetagRemoteNotSupported(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandTag(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(newCatalogTestCtx(t))
+	cmd.SetArgs([]string{"my-solution@1.0.0", "new-name@1.0.0", "--catalog", "ghcr.io/myorg"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "remote re-tag not supported")
 }
 
 func BenchmarkCommandTag(b *testing.B) {

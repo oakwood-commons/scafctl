@@ -720,6 +720,99 @@ func (c *LocalCatalog) Tag(ctx context.Context, ref Reference, alias string) (st
 	return oldVersion, nil
 }
 
+// CopyLocal copies an artifact to a new name and/or version within the same
+// local catalog. This is used for re-tagging (e.g., "catalog tag foo@1.0.0
+// bar@1.0.0"). The content blobs (layers, config) are shared via
+// content-addressing; only a new manifest is created with updated annotations.
+func (c *LocalCatalog) CopyLocal(ctx context.Context, src Reference, dstName string, dstVersion *semver.Version, dstKind ArtifactKind, force bool) (ArtifactInfo, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Build the destination reference.
+	kind := src.Kind
+	if dstKind != "" {
+		kind = dstKind
+	}
+	dstRef := Reference{
+		Kind:    kind,
+		Name:    dstName,
+		Version: dstVersion,
+	}
+
+	// Check if destination already exists (unless force).
+	if !force {
+		if c.existsLocked(ctx, dstRef) {
+			return ArtifactInfo{}, fmt.Errorf("artifact %s@%s already exists; use --force to overwrite", dstName, dstVersion.String())
+		}
+	}
+
+	// Resolve the source manifest.
+	srcTag := c.tagForRef(src)
+	srcDesc, err := c.store.Resolve(ctx, srcTag)
+	if err != nil {
+		return ArtifactInfo{}, &ArtifactNotFoundError{Reference: src, Catalog: LocalCatalogName}
+	}
+
+	// Read source manifest to get layers and config.
+	srcManifestData, err := c.fetchBlob(ctx, srcDesc)
+	if err != nil {
+		return ArtifactInfo{}, fmt.Errorf("failed to read source manifest: %w", err)
+	}
+
+	var srcManifest ocispec.Manifest
+	if err := json.Unmarshal(srcManifestData, &srcManifest); err != nil {
+		return ArtifactInfo{}, fmt.Errorf("failed to parse source manifest: %w", err)
+	}
+
+	// Build new annotations with the destination name/version.
+	now := time.Now().UTC()
+	annotations := make(map[string]string)
+	for k, v := range srcManifest.Annotations {
+		annotations[k] = v
+	}
+	annotations[AnnotationArtifactType] = kind.String()
+	annotations[AnnotationArtifactName] = dstName
+	if dstVersion != nil {
+		annotations[AnnotationVersion] = dstVersion.String()
+	}
+	annotations[AnnotationCreated] = now.Format(time.RFC3339)
+
+	// Create a new manifest referencing the same layers and config but
+	// with updated annotations. Content-addressed blobs are re-used.
+	newManifest := ocispec.Manifest{
+		Versioned:   srcManifest.Versioned,
+		MediaType:   srcManifest.MediaType,
+		Config:      srcManifest.Config,
+		Layers:      srcManifest.Layers,
+		Annotations: annotations,
+	}
+
+	manifestData, err := json.Marshal(newManifest)
+	if err != nil {
+		return ArtifactInfo{}, fmt.Errorf("failed to marshal manifest: %w", err)
+	}
+
+	manifestDesc, err := c.pushBlob(ctx, ocispec.MediaTypeImageManifest, manifestData)
+	if err != nil {
+		return ArtifactInfo{}, fmt.Errorf("failed to push manifest: %w", err)
+	}
+
+	dstTag := c.tagForRef(dstRef)
+	if err := c.store.Tag(ctx, manifestDesc, dstTag); err != nil {
+		return ArtifactInfo{}, fmt.Errorf("failed to tag artifact: %w", err)
+	}
+
+	c.logger.V(1).Info("copied artifact",
+		"src", srcTag,
+		"dst", dstTag)
+
+	return ArtifactInfo{
+		Reference: dstRef,
+		Digest:    manifestDesc.Digest.String(),
+		Size:      manifestDesc.Size,
+	}, nil
+}
+
 // PruneResult contains statistics from a prune operation.
 type PruneResult struct {
 	// RemovedManifests is the number of orphaned manifests removed
