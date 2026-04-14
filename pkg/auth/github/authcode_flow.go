@@ -76,6 +76,9 @@ func (h *Handler) authCodeLogin(ctx context.Context, opts auth.LoginOptions) (*a
 
 	// Open browser
 	lgr.V(1).Info("opening browser for authentication", "url", authURL)
+	if opts.BrowserAuthCallback != nil {
+		opts.BrowserAuthCallback(authURL)
+	}
 	if err := BrowserOpener(ctx, authURL); err != nil {
 		lgr.V(0).Info("failed to open browser, please open this URL manually", "url", authURL)
 		// Notify via callback if available so the CLI can display the URL

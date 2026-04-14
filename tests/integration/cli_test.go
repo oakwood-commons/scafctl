@@ -2419,7 +2419,7 @@ func TestIntegration_BuildSolution_WithName(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", tmpDir)
 	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
-	stdout, stderr, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0", "--name", "my-custom-name")
+	stdout, stderr, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0", "--name", "my-custom-name", "--force")
 
 	if exitCode != 0 {
 		t.Logf("stdout: %s", stdout)

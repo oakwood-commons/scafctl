@@ -278,11 +278,17 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
-	// Determine version (priority: --version flag > metadata.version)
+	// Determine version (priority: --version flag > metadata.version > auto-increment)
 	version, _, err := solution.ResolveArtifactVersion(opts.Version, sol.Metadata.Version)
 	if err != nil {
-		w.Errorf("%v", err)
-		return exitcode.WithCode(err, exitcode.InvalidInput)
+		// No explicit version and no metadata.version — auto-increment from local catalog.
+		localCatalog, catErr := catalog.NewLocalCatalog(*lgr)
+		if catErr != nil {
+			w.Errorf("%v", err)
+			return exitcode.WithCode(err, exitcode.InvalidInput)
+		}
+		version = solution.NextPatchVersion(ctx, localCatalog, name)
+		w.Infof("No version specified; auto-incremented to %s", version.String())
 	}
 
 	// Block dev version unless explicitly allowed
@@ -298,13 +304,27 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 
 	// Stamp resolved name and version into the solution so the stored
 	// artifact always carries the authoritative values.
+	// Error on mismatch unless --force is set.
 	needsReserialization := false
-	if sol.Metadata.Name != name {
+	if sol.Metadata.Name != "" && sol.Metadata.Name != name {
+		if !opts.Force {
+			err := fmt.Errorf("build target name %q does not match metadata.name %q -- update the solution or use --force to override", name, sol.Metadata.Name)
+			w.Errorf("%v", err)
+			return exitcode.WithCode(err, exitcode.InvalidInput)
+		}
+		w.Warningf("overriding metadata.name %q with build target name %q (--force)", sol.Metadata.Name, name)
+		sol.Metadata.Name = name
+		needsReserialization = true
+	} else if sol.Metadata.Name != name {
 		lgr.V(1).Info("stamping artifact name into solution", "from", sol.Metadata.Name, "to", name)
 		sol.Metadata.Name = name
 		needsReserialization = true
 	}
-	if sol.Metadata.Version == nil || !sol.Metadata.Version.Equal(version) {
+	if sol.Metadata.Version != nil && !sol.Metadata.Version.Equal(version) {
+		w.Warningf("overriding metadata.version %q with build target version %q", sol.Metadata.Version.String(), version.String())
+		sol.Metadata.Version = version
+		needsReserialization = true
+	} else if sol.Metadata.Version == nil || !sol.Metadata.Version.Equal(version) {
 		lgr.V(1).Info("stamping artifact version into solution", "from", sol.Metadata.Version, "to", version.String())
 		sol.Metadata.Version = version
 		needsReserialization = true

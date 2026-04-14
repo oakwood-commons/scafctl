@@ -80,6 +80,9 @@ func (h *Handler) interactiveDeviceCodeLogin(ctx context.Context, opts auth.Logi
 	)
 
 	// Open browser to the device verification page
+	if opts.BrowserAuthCallback != nil {
+		opts.BrowserAuthCallback(deviceCode.VerificationURI)
+	}
 	if err := BrowserOpener(ctx, deviceCode.VerificationURI); err != nil {
 		lgr.V(0).Info("could not open browser automatically", "url", deviceCode.VerificationURI)
 	}

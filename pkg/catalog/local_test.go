@@ -840,3 +840,102 @@ func TestLocalCatalog_Prune_OrphanedManifest(t *testing.T) {
 	// The orphaned manifest entry should have been removed from index.json
 	assert.Equal(t, 1, result.RemovedManifests)
 }
+
+func TestLocalCatalog_CopyLocal(t *testing.T) {
+	t.Run("copies artifact to new name", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		ctx := context.Background()
+
+		ref := Reference{Kind: ArtifactKindSolution, Name: "original", Version: semver.MustParse("1.0.0")}
+		_, err := cat.Store(ctx, ref, []byte("content"), nil, nil, false)
+		require.NoError(t, err)
+
+		info, err := cat.CopyLocal(ctx, ref, "copied", semver.MustParse("2.0.0"), ArtifactKindSolution, false)
+		require.NoError(t, err)
+		assert.Equal(t, "copied", info.Reference.Name)
+		assert.Equal(t, "2.0.0", info.Reference.Version.String())
+		assert.NotEmpty(t, info.Digest)
+
+		// Verify the new artifact can be retrieved
+		list, err := cat.List(ctx, ArtifactKindSolution, "copied")
+		require.NoError(t, err)
+		assert.Len(t, list, 1)
+		assert.Equal(t, "2.0.0", list[0].Reference.Version.String())
+	})
+
+	t.Run("preserves original artifact", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		ctx := context.Background()
+
+		ref := Reference{Kind: ArtifactKindSolution, Name: "source", Version: semver.MustParse("1.0.0")}
+		_, err := cat.Store(ctx, ref, []byte("content"), nil, nil, false)
+		require.NoError(t, err)
+
+		_, err = cat.CopyLocal(ctx, ref, "dest", semver.MustParse("1.0.0"), ArtifactKindSolution, false)
+		require.NoError(t, err)
+
+		// Original should still exist
+		list, err := cat.List(ctx, ArtifactKindSolution, "source")
+		require.NoError(t, err)
+		assert.Len(t, list, 1)
+	})
+
+	t.Run("errors on existing destination without force", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		ctx := context.Background()
+
+		src := Reference{Kind: ArtifactKindSolution, Name: "src", Version: semver.MustParse("1.0.0")}
+		dst := Reference{Kind: ArtifactKindSolution, Name: "dst", Version: semver.MustParse("1.0.0")}
+		_, err := cat.Store(ctx, src, []byte("source"), nil, nil, false)
+		require.NoError(t, err)
+		_, err = cat.Store(ctx, dst, []byte("dest"), nil, nil, false)
+		require.NoError(t, err)
+
+		_, err = cat.CopyLocal(ctx, src, "dst", semver.MustParse("1.0.0"), ArtifactKindSolution, false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "already exists")
+	})
+
+	t.Run("overwrites with force", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		ctx := context.Background()
+
+		src := Reference{Kind: ArtifactKindSolution, Name: "src", Version: semver.MustParse("1.0.0")}
+		dst := Reference{Kind: ArtifactKindSolution, Name: "dst", Version: semver.MustParse("1.0.0")}
+		_, err := cat.Store(ctx, src, []byte("source"), nil, nil, false)
+		require.NoError(t, err)
+		_, err = cat.Store(ctx, dst, []byte("dest"), nil, nil, false)
+		require.NoError(t, err)
+
+		info, err := cat.CopyLocal(ctx, src, "dst", semver.MustParse("1.0.0"), ArtifactKindSolution, true)
+		require.NoError(t, err)
+		assert.Equal(t, "dst", info.Reference.Name)
+	})
+
+	t.Run("errors on missing source", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		ctx := context.Background()
+
+		ref := Reference{Kind: ArtifactKindSolution, Name: "nonexistent", Version: semver.MustParse("1.0.0")}
+		_, err := cat.CopyLocal(ctx, ref, "dst", semver.MustParse("1.0.0"), ArtifactKindSolution, false)
+		require.Error(t, err)
+		assert.True(t, IsNotFound(err))
+	})
+}
+
+func BenchmarkLocalCatalog_CopyLocal(b *testing.B) {
+	dir := b.TempDir()
+	cat, err := NewLocalCatalogAt(dir, logr.Discard())
+	require.NoError(b, err)
+	ctx := context.Background()
+
+	ref := Reference{Kind: ArtifactKindSolution, Name: "bench-src", Version: semver.MustParse("1.0.0")}
+	_, err = cat.Store(ctx, ref, []byte("content"), nil, nil, false)
+	require.NoError(b, err)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = cat.CopyLocal(ctx, ref, "bench-dst", semver.MustParse("2.0.0"), ArtifactKindSolution, true)
+	}
+}
