@@ -25,7 +25,8 @@ spec:
       greet:
         description: Display a greeting message
         displayName: Greeting Action
-        provider: exec
+        provider: message
         inputs:
-          command:
-            expr: "'echo ' + _.greeting"
+          message:
+            expr: "_.greeting"
+          type: success
