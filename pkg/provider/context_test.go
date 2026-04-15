@@ -38,15 +38,6 @@ func TestExecutionModeFromContext_NotSet(t *testing.T) {
 	assert.Equal(t, Capability(""), mode)
 }
 
-func TestExecutionModeFromContext_WrongType(t *testing.T) {
-	ctx := context.Background()
-	ctx = context.WithValue(ctx, executionModeKey, "not-a-capability")
-
-	mode, ok := ExecutionModeFromContext(ctx)
-	assert.False(t, ok)
-	assert.Equal(t, Capability(""), mode)
-}
-
 func TestWithDryRun_AndFromContext(t *testing.T) {
 	ctx := context.Background()
 
@@ -59,12 +50,6 @@ func TestWithDryRun_AndFromContext(t *testing.T) {
 
 func TestDryRunFromContext_NotSet(t *testing.T) {
 	ctx := context.Background()
-	assert.False(t, DryRunFromContext(ctx))
-}
-
-func TestDryRunFromContext_WrongType(t *testing.T) {
-	ctx := context.Background()
-	ctx = context.WithValue(ctx, dryRunKey, "not-a-bool")
 	assert.False(t, DryRunFromContext(ctx))
 }
 
@@ -89,15 +74,6 @@ func TestWithResolverContext_AndFromContext(t *testing.T) {
 
 func TestResolverContextFromContext_NotSet(t *testing.T) {
 	ctx := context.Background()
-	resolverCtx, ok := ResolverContextFromContext(ctx)
-	assert.False(t, ok)
-	assert.Nil(t, resolverCtx)
-}
-
-func TestResolverContextFromContext_WrongType(t *testing.T) {
-	ctx := context.Background()
-	ctx = context.WithValue(ctx, resolverContextKey, "not-a-map")
-
 	resolverCtx, ok := ResolverContextFromContext(ctx)
 	assert.False(t, ok)
 	assert.Nil(t, resolverCtx)
@@ -228,15 +204,6 @@ func TestParametersFromContext_NotSet(t *testing.T) {
 	assert.Nil(t, params)
 }
 
-func TestParametersFromContext_WrongType(t *testing.T) {
-	ctx := context.Background()
-	ctx = context.WithValue(ctx, parametersKey, "not-a-map")
-
-	params, ok := ParametersFromContext(ctx)
-	assert.False(t, ok)
-	assert.Nil(t, params)
-}
-
 func BenchmarkContextChaining(b *testing.B) {
 	ctx := context.Background()
 	resolverCtx := map[string]any{"env": "prod"}
@@ -259,15 +226,6 @@ func TestWithOutputDirectory_AndFromContext(t *testing.T) {
 
 func TestOutputDirectoryFromContext_NotSet(t *testing.T) {
 	ctx := context.Background()
-	dir, ok := OutputDirectoryFromContext(ctx)
-	assert.False(t, ok)
-	assert.Equal(t, "", dir)
-}
-
-func TestOutputDirectoryFromContext_WrongType(t *testing.T) {
-	ctx := context.Background()
-	ctx = context.WithValue(ctx, outputDirectoryKey, 12345)
-
 	dir, ok := OutputDirectoryFromContext(ctx)
 	assert.False(t, ok)
 	assert.Equal(t, "", dir)

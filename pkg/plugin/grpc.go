@@ -15,19 +15,18 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/hashicorp/go-plugin"
+	sdkplugin "github.com/oakwood-commons/scafctl-plugin-sdk/plugin"
+	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
-	"github.com/oakwood-commons/scafctl/pkg/plugin/proto"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
-const (
-	// PluginName is the name used to identify the provider plugin
-	PluginName = "provider"
-)
+// PluginName is the name used to identify the provider plugin.
+const PluginName = sdkplugin.PluginName
 
 // GRPCPlugin implements plugin.GRPCPlugin from hashicorp/go-plugin
 type GRPCPlugin struct {
