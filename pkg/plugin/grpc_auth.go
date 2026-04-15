@@ -12,18 +12,17 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-plugin"
+	sdkplugin "github.com/oakwood-commons/scafctl-plugin-sdk/plugin"
+	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
-	"github.com/oakwood-commons/scafctl/pkg/plugin/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
-const (
-	// AuthHandlerPluginName is the name used to identify the auth handler plugin.
-	AuthHandlerPluginName = "auth-handler"
-)
+// AuthHandlerPluginName is the name used to identify the auth handler plugin.
+const AuthHandlerPluginName = sdkplugin.AuthHandlerPluginName
 
 // AuthHandlerGRPCPlugin implements plugin.GRPCPlugin from hashicorp/go-plugin
 // for auth handler plugins.

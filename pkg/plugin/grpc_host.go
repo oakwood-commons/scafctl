@@ -10,8 +10,8 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
-	"github.com/oakwood-commons/scafctl/pkg/plugin/proto"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"google.golang.org/grpc"
 )

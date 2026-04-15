@@ -1026,14 +1026,14 @@ The host registers HostService via the go-plugin GRPCBroker during plugin startu
 ```bash
 mkdir my-plugin && cd my-plugin
 go mod init github.com/myorg/my-plugin
-go get github.com/oakwood-commons/scafctl
+go get github.com/oakwood-commons/scafctl-plugin-sdk
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
 mkdir my-plugin; cd my-plugin
 go mod init github.com/myorg/my-plugin
-go get github.com/oakwood-commons/scafctl
+go get github.com/oakwood-commons/scafctl-plugin-sdk
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1050,9 +1050,9 @@ import (
 
     "github.com/Masterminds/semver/v3"
     "github.com/google/jsonschema-go/jsonschema"
-    "github.com/oakwood-commons/scafctl/pkg/plugin"
-    "github.com/oakwood-commons/scafctl/pkg/provider"
-    "github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
+    "github.com/oakwood-commons/scafctl-plugin-sdk/plugin"
+    "github.com/oakwood-commons/scafctl-plugin-sdk/provider"
+    "github.com/oakwood-commons/scafctl-plugin-sdk/provider/schemahelper"
 )
 
 type MyPlugin struct {

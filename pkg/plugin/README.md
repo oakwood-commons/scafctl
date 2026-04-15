@@ -134,24 +134,27 @@ check.
 
 ## Creating a Plugin
 
-1. Import the plugin package:
-```go
-import "github.com/oakwood-commons/scafctl/pkg/plugin"
-```
+1. Import the plugin SDK package:
+
+    ```go
+    import "github.com/oakwood-commons/scafctl-plugin-sdk/plugin"
+    ```
 
 2. Implement the `ProviderPlugin` interface (all 8 methods)
 
 3. Call `plugin.Serve()` in your main function:
-```go
-func main() {
-    plugin.Serve(&YourPlugin{})
-}
-```
+
+    ```go
+    func main() {
+        plugin.Serve(&YourPlugin{})
+    }
+    ```
 
 4. Build your plugin as an executable:
-```bash
-go build -o my-plugin main.go
-```
+
+    ```bash
+    go build -o my-plugin main.go
+    ```
 
 ## Descriptor Caching
 
