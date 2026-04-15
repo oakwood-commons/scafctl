@@ -685,8 +685,8 @@ import (
     "fmt"
     "time"
 
-    "github.com/oakwood-commons/scafctl/pkg/auth"
-    "github.com/oakwood-commons/scafctl/pkg/plugin"
+    "github.com/oakwood-commons/scafctl-plugin-sdk/auth"
+    "github.com/oakwood-commons/scafctl-plugin-sdk/plugin"
 )
 
 type OktaPlugin struct{}
