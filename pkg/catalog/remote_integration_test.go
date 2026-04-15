@@ -557,6 +557,66 @@ func TestRemoteCatalog_Resolve_NotFound(t *testing.T) {
 	assert.ErrorAs(t, err, &notFound)
 }
 
+// TestRemoteCatalog_Resolve_KindlessProbing verifies that Resolve with an
+// empty Kind probes across all kind paths (solutions/, providers/, auth-handlers/)
+// and returns the correct artifact. This is the pull flow when --kind is omitted.
+func TestRemoteCatalog_Resolve_KindlessProbing(t *testing.T) {
+	t.Parallel()
+	cat, ts := newTestRemoteCatalog(t)
+	defer ts.Close()
+
+	ctx := t.Context()
+
+	// Store a solution with explicit kind
+	ref := Reference{
+		Kind:    ArtifactKindSolution,
+		Name:    "probe-sol",
+		Version: semver.MustParse("1.0.0"),
+	}
+	_, err := cat.Store(ctx, ref, []byte("probe-data"), nil, nil, false)
+	require.NoError(t, err)
+
+	// Resolve with empty kind — should probe and find under solutions/
+	kindlessRef := Reference{
+		Name:    "probe-sol",
+		Version: semver.MustParse("1.0.0"),
+	}
+	info, err := cat.Resolve(ctx, kindlessRef)
+	require.NoError(t, err)
+	assert.Equal(t, "probe-sol", info.Reference.Name)
+	assert.Equal(t, ArtifactKindSolution, info.Reference.Kind)
+	assert.Equal(t, "1.0.0", info.Reference.Version.String())
+}
+
+// TestRemoteCatalog_Resolve_KindlessLatest verifies kindless resolve finds
+// the latest version across kind probing.
+func TestRemoteCatalog_Resolve_KindlessLatest(t *testing.T) {
+	t.Parallel()
+	cat, ts := newTestRemoteCatalog(t)
+	defer ts.Close()
+
+	ctx := t.Context()
+
+	// Store multiple versions under provider kind
+	for _, v := range []string{"1.0.0", "3.0.0", "2.0.0"} {
+		ref := Reference{
+			Kind:    ArtifactKindProvider,
+			Name:    "probe-prov",
+			Version: semver.MustParse(v),
+		}
+		_, err := cat.Store(ctx, ref, []byte("v"+v), nil, nil, false)
+		require.NoError(t, err)
+	}
+
+	// Resolve without kind or version — should find latest (3.0.0) under providers/
+	kindlessRef := Reference{Name: "probe-prov"}
+	info, err := cat.Resolve(ctx, kindlessRef)
+	require.NoError(t, err)
+	assert.Equal(t, "probe-prov", info.Reference.Name)
+	assert.Equal(t, ArtifactKindProvider, info.Reference.Kind)
+	assert.Equal(t, "3.0.0", info.Reference.Version.String())
+}
+
 func TestRemoteCatalog_ListTags(t *testing.T) {
 	t.Parallel()
 	cat, ts := newTestRemoteCatalog(t)
@@ -1013,4 +1073,223 @@ func TestRemoteCatalog_Delete_DanglingTag_DigestRef_NoFallback(t *testing.T) {
 	err = cat.Delete(ctx, digestRef)
 	require.Error(t, err, "digest-based delete should not trigger tag fallback")
 	assert.Contains(t, err.Error(), "failed to delete artifact")
+}
+
+func TestRemoteCatalog_Delete_ScopeRejection_TagFallback(t *testing.T) {
+	t.Parallel()
+
+	// Simulate a Quay-style registry that rejects the "delete" auth scope action
+	// with a 400 error on digest-based manifest requests.
+	reg := newFakeOCIRegistry()
+	origHandler := reg.handler()
+
+	wrapper := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Intercept DELETE on manifests with a digest reference
+		if r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/manifests/sha256:") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"errors":[{"code":"UNAUTHORIZED","message":"Unable to decode repository and actions: repository:repo/name:delete,pull"}]}`)) //nolint:errcheck
+			return
+		}
+		origHandler.ServeHTTP(w, r)
+	})
+
+	ts := httptest.NewTLSServer(wrapper)
+	defer ts.Close()
+
+	host := strings.TrimPrefix(ts.URL, "https://")
+	cat, err := NewRemoteCatalog(RemoteCatalogConfig{
+		Name:       "quay-test",
+		Registry:   host,
+		Repository: "myorg/artifacts",
+		Insecure:   true,
+		Logger:     logr.Discard(),
+	})
+	require.NoError(t, err)
+	cat.client.Client = ts.Client()
+
+	ctx := t.Context()
+	ref := Reference{
+		Kind:    ArtifactKindSolution,
+		Name:    "quay-sol",
+		Version: semver.MustParse("2.0.0"),
+	}
+
+	// Store an artifact
+	_, err = cat.Store(ctx, ref, []byte("quay data"), nil, nil, false)
+	require.NoError(t, err)
+
+	// Delete should succeed via tag fallback when 400+delete is detected
+	err = cat.Delete(ctx, ref)
+	require.NoError(t, err)
+
+	// Verify it's gone
+	_, err = cat.Resolve(ctx, ref)
+	assert.True(t, IsNotFound(err))
+}
+
+// --- CopyTo tests ---
+
+func TestRemoteCatalog_CopyTo_SingleTag(t *testing.T) {
+	t.Parallel()
+
+	remoteCat, ts := newTestRemoteCatalog(t)
+	defer ts.Close()
+
+	ctx := t.Context()
+
+	// Store an artifact in the remote catalog.
+	ref := Reference{Kind: ArtifactKindSolution, Name: "copy-test", Version: semver.MustParse("1.0.0")}
+	content := []byte("name: copy-test\nversion: 1.0.0\n")
+	_, err := remoteCat.Store(ctx, ref, content, nil, map[string]string{
+		AnnotationArtifactName: "copy-test",
+		AnnotationArtifactType: "solution",
+		AnnotationVersion:      "1.0.0",
+	}, false)
+	require.NoError(t, err)
+
+	// Create a local catalog to copy into.
+	localCat := newTestLocalCatalog(t)
+
+	// Copy from remote to local.
+	info, err := remoteCat.CopyTo(ctx, ref, localCat, CopyOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "copy-test", info.Reference.Name)
+
+	// List artifacts -- there should be exactly one entry, not two.
+	artifacts, err := localCat.List(ctx, ArtifactKindSolution, "copy-test")
+	require.NoError(t, err)
+	assert.Len(t, artifacts, 1, "CopyTo should produce exactly one local entry, not duplicate tags")
+
+	// Delete should remove it in a single call.
+	err = localCat.Delete(ctx, ref)
+	require.NoError(t, err)
+
+	artifacts, err = localCat.List(ctx, ArtifactKindSolution, "copy-test")
+	require.NoError(t, err)
+	assert.Empty(t, artifacts, "artifact should be gone after a single delete")
+}
+
+func TestRemoteCatalog_CopyTo_WithBundle(t *testing.T) {
+	t.Parallel()
+
+	remoteCat, ts := newTestRemoteCatalog(t)
+	defer ts.Close()
+
+	ctx := t.Context()
+
+	ref := Reference{Kind: ArtifactKindSolution, Name: "bundled-copy", Version: semver.MustParse("2.0.0")}
+	content := []byte("name: bundled-copy\n")
+	bundle := []byte("fake-tar-bundle")
+	_, err := remoteCat.Store(ctx, ref, content, bundle, map[string]string{
+		AnnotationArtifactName: "bundled-copy",
+		AnnotationArtifactType: "solution",
+		AnnotationVersion:      "2.0.0",
+	}, false)
+	require.NoError(t, err)
+
+	localCat := newTestLocalCatalog(t)
+	_, err = remoteCat.CopyTo(ctx, ref, localCat, CopyOptions{})
+	require.NoError(t, err)
+
+	// Verify the content is fetchable from local.
+	data, _, fetchInfo, err := localCat.FetchWithBundle(ctx, ref)
+	require.NoError(t, err)
+	assert.Equal(t, content, data)
+	assert.Equal(t, "bundled-copy", fetchInfo.Reference.Name)
+
+	// Single entry, single delete.
+	artifacts, err := localCat.List(ctx, ArtifactKindSolution, "bundled-copy")
+	require.NoError(t, err)
+	assert.Len(t, artifacts, 1)
+}
+
+// --- Versionless Fetch tests ---
+
+func TestRemoteCatalog_Fetch_VersionlessResolvesLatest(t *testing.T) {
+	t.Parallel()
+
+	cat, ts := newTestRemoteCatalog(t)
+	defer ts.Close()
+
+	ctx := t.Context()
+
+	// Store two versions.
+	ref1 := Reference{Kind: ArtifactKindSolution, Name: "multi-ver", Version: semver.MustParse("1.0.0")}
+	ref2 := Reference{Kind: ArtifactKindSolution, Name: "multi-ver", Version: semver.MustParse("2.0.0")}
+	_, err := cat.Store(ctx, ref1, []byte("v1"), nil, nil, false)
+	require.NoError(t, err)
+	_, err = cat.Store(ctx, ref2, []byte("v2"), nil, nil, false)
+	require.NoError(t, err)
+
+	// Fetch without version -- should resolve to 2.0.0.
+	versionlessRef := Reference{Kind: ArtifactKindSolution, Name: "multi-ver"}
+	data, info, err := cat.Fetch(ctx, versionlessRef)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("v2"), data)
+	assert.Equal(t, "2.0.0", info.Reference.Version.String())
+}
+
+func TestRemoteCatalog_FetchWithBundle_VersionlessResolvesLatest(t *testing.T) {
+	t.Parallel()
+
+	cat, ts := newTestRemoteCatalog(t)
+	defer ts.Close()
+
+	ctx := t.Context()
+
+	ref1 := Reference{Kind: ArtifactKindSolution, Name: "bundled-ver", Version: semver.MustParse("1.0.0")}
+	ref2 := Reference{Kind: ArtifactKindSolution, Name: "bundled-ver", Version: semver.MustParse("3.0.0")}
+	_, err := cat.Store(ctx, ref1, []byte("v1"), []byte("bundle-v1"), nil, false)
+	require.NoError(t, err)
+	_, err = cat.Store(ctx, ref2, []byte("v3"), []byte("bundle-v3"), nil, false)
+	require.NoError(t, err)
+
+	versionlessRef := Reference{Kind: ArtifactKindSolution, Name: "bundled-ver"}
+	data, bundle, info, err := cat.FetchWithBundle(ctx, versionlessRef)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("v3"), data)
+	assert.Equal(t, []byte("bundle-v3"), bundle)
+	assert.Equal(t, "3.0.0", info.Reference.Version.String())
+}
+
+func TestRemoteCatalog_Fetch_VersionlessNotFound(t *testing.T) {
+	t.Parallel()
+
+	cat, ts := newTestRemoteCatalog(t)
+	defer ts.Close()
+
+	ctx := t.Context()
+
+	// Fetch a name that doesn't exist at all.
+	ref := Reference{Kind: ArtifactKindSolution, Name: "nonexistent"}
+	_, _, err := cat.Fetch(ctx, ref)
+	require.Error(t, err)
+}
+
+func TestRemoteCatalog_CopyTo_SetsOriginAnnotation(t *testing.T) {
+	t.Parallel()
+
+	remoteCat, ts := newTestRemoteCatalog(t)
+	defer ts.Close()
+
+	ctx := t.Context()
+
+	ref := Reference{Kind: ArtifactKindSolution, Name: "origin-pull", Version: semver.MustParse("1.0.0")}
+	_, err := remoteCat.Store(ctx, ref, []byte("name: origin-pull"), nil, map[string]string{
+		AnnotationArtifactName: "origin-pull",
+		AnnotationArtifactType: "solution",
+		AnnotationVersion:      "1.0.0",
+	}, false)
+	require.NoError(t, err)
+
+	localCat := newTestLocalCatalog(t)
+	info, err := remoteCat.CopyTo(ctx, ref, localCat, CopyOptions{})
+	require.NoError(t, err)
+
+	// Resolve from local and verify origin annotation is present.
+	resolved, err := localCat.Resolve(ctx, ref)
+	require.NoError(t, err)
+	assert.Contains(t, resolved.Annotations[AnnotationOrigin], "pulled from test-catalog")
+	assert.Contains(t, resolved.Annotations[AnnotationOrigin], "myorg/artifacts")
+	_ = info // ensure CopyTo returned successfully
 }

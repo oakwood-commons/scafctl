@@ -5,12 +5,14 @@ package auth
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -536,4 +538,252 @@ func TestCommandLogin_WithRegistryBridge(t *testing.T) {
 	err := cmd.Execute()
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "Registry credentials stored for quay.io")
+}
+
+// TestDiscoverRegistriesForHandler_CustomOAuth2 verifies that the handler's
+// Registry field is picked up when no --registry flag is provided.
+func TestDiscoverRegistriesForHandler_CustomOAuth2(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Auth: config.GlobalAuthConfig{
+			CustomOAuth2: []config.CustomOAuth2Config{
+				{Name: "quay", Registry: "quay.io"},
+				{Name: "other", Registry: "other.io"},
+			},
+		},
+	}
+	ctx := config.WithConfig(context.Background(), cfg)
+
+	registries := discoverRegistriesForHandler(ctx, "quay")
+	assert.Equal(t, []registryWithScope{{Host: "quay.io"}}, registries)
+}
+
+// TestDiscoverRegistriesForHandler_CatalogAuthProvider verifies that catalogs
+// with a matching authProvider contribute their registry host and scope.
+func TestDiscoverRegistriesForHandler_CatalogAuthProvider(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Catalogs: []config.CatalogConfig{
+			{Name: "prod", URL: "oci://ghcr.io/myorg/catalog", AuthProvider: "github"},
+			{Name: "staging", URL: "oci://ghcr.io/myorg/staging", AuthProvider: "github"},
+			{Name: "unrelated", URL: "oci://quay.io/myorg", AuthProvider: "quay"},
+		},
+	}
+	ctx := config.WithConfig(context.Background(), cfg)
+
+	registries := discoverRegistriesForHandler(ctx, "github")
+	// ghcr.io appears in two catalogs but should be deduplicated.
+	assert.Equal(t, []registryWithScope{{Host: "ghcr.io"}}, registries)
+}
+
+// TestDiscoverRegistriesForHandler_CatalogAuthScope verifies that the catalog's
+// authScope is carried through to the discovered registry.
+func TestDiscoverRegistriesForHandler_CatalogAuthScope(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Catalogs: []config.CatalogConfig{
+			{Name: "gcp-catalog", URL: "oci://us-central1-docker.pkg.dev/proj/repo", AuthProvider: "gcp", AuthScope: "https://www.googleapis.com/auth/cloud-platform"},
+		},
+	}
+	ctx := config.WithConfig(context.Background(), cfg)
+
+	registries := discoverRegistriesForHandler(ctx, "gcp")
+	assert.Equal(t, []registryWithScope{{
+		Host:  "us-central1-docker.pkg.dev",
+		Scope: "https://www.googleapis.com/auth/cloud-platform",
+	}}, registries)
+}
+
+// TestDiscoverRegistriesForHandler_CombinedSources verifies that both custom
+// handler registry and catalog auth providers are merged and deduplicated.
+func TestDiscoverRegistriesForHandler_CombinedSources(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Auth: config.GlobalAuthConfig{
+			CustomOAuth2: []config.CustomOAuth2Config{
+				{Name: "quay", Registry: "quay.io"},
+			},
+		},
+		Catalogs: []config.CatalogConfig{
+			{Name: "prod", URL: "oci://quay.io/myorg/catalog", AuthProvider: "quay"},
+		},
+	}
+	ctx := config.WithConfig(context.Background(), cfg)
+
+	registries := discoverRegistriesForHandler(ctx, "quay")
+	// quay.io from handler config and catalog should be deduplicated.
+	assert.Equal(t, []registryWithScope{{Host: "quay.io"}}, registries)
+}
+
+// TestDiscoverRegistriesForHandler_NoConfig returns nil when no config is in context.
+func TestDiscoverRegistriesForHandler_NoConfig(t *testing.T) {
+	t.Parallel()
+
+	registries := discoverRegistriesForHandler(context.Background(), "github")
+	assert.Nil(t, registries)
+}
+
+// TestDiscoverRegistriesForHandler_NoMatch returns nil when no registries match.
+func TestDiscoverRegistriesForHandler_NoMatch(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Auth: config.GlobalAuthConfig{
+			CustomOAuth2: []config.CustomOAuth2Config{
+				{Name: "quay", Registry: "quay.io"},
+			},
+		},
+		Catalogs: []config.CatalogConfig{
+			{Name: "prod", URL: "oci://ghcr.io/myorg", AuthProvider: "github"},
+		},
+	}
+	ctx := config.WithConfig(context.Background(), cfg)
+
+	registries := discoverRegistriesForHandler(ctx, "entra")
+	assert.Nil(t, registries)
+}
+
+// TestCommandLogin_AutoBridgeFromConfig verifies that auth login automatically
+// bridges to registries discovered from config (no --registry needed).
+func TestCommandLogin_AutoBridgeFromConfig(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	ctx, buf := newTestContext(t)
+
+	mock := auth.NewMockHandler("quay")
+	mock.SetNotAuthenticated()
+	mock.LoginResult = &auth.Result{
+		Claims: &auth.Claims{Email: "robot@quay.io"},
+	}
+	mock.GetTokenResult = &auth.Token{
+		AccessToken: "auto-bridged-token",
+		TokenType:   "Bearer",
+	}
+	ctx = withTestHandler(ctx, mock)
+
+	// Inject config with a custom handler that has a registry field.
+	cfg := &config.Config{
+		Auth: config.GlobalAuthConfig{
+			CustomOAuth2: []config.CustomOAuth2Config{
+				{Name: "quay", Registry: "quay.io"},
+			},
+		},
+	}
+	ctx = config.WithConfig(ctx, cfg)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandLogin(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"quay"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "Registry credentials stored for quay.io")
+
+	// Verify credential was stored.
+	ss, err := secrets.New()
+	require.NoError(t, err)
+	store := catalog.NewNativeCredentialStoreWithSecretsStore(ss)
+	cred, err := store.GetCredential("quay.io")
+	require.NoError(t, err)
+	require.NotNil(t, cred)
+	assert.Equal(t, "auto-bridged-token", cred.Password)
+}
+
+// TestBridgeAuthToRegistryPostLogin_WithScope verifies that bridge passes the
+// scope through to GetToken when a scope is provided.
+func TestBridgeAuthToRegistryPostLogin_WithScope(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	ctx, buf := newTestContext(t)
+	w := writer.New(terminal.NewIOStreams(nil, buf, buf, false), settings.NewCliParams())
+
+	mock := auth.NewMockHandler("gcp")
+	mock.GetTokenResult = &auth.Token{
+		AccessToken: "scoped-token",
+		TokenType:   "Bearer",
+	}
+
+	err := bridgeAuthToRegistryPostLogin(ctx, w, mock, "gcp", "us-central1-docker.pkg.dev", "https://www.googleapis.com/auth/cloud-platform", false)
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "Registry credentials stored for us-central1-docker.pkg.dev")
+
+	// Verify GetToken was called with the scope.
+	require.NotEmpty(t, mock.GetTokenCalls)
+	lastCall := mock.GetTokenCalls[len(mock.GetTokenCalls)-1]
+	assert.Equal(t, "https://www.googleapis.com/auth/cloud-platform", lastCall.Scope)
+}
+
+// TestCommandLogin_AutoBridgeWithScope verifies that auto-bridge uses the
+// catalog's authScope when --registry-scope CLI flag is empty.
+func TestCommandLogin_AutoBridgeWithScope(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	ctx, buf := newTestContext(t)
+
+	mock := auth.NewMockHandler("gcp")
+	mock.SetNotAuthenticated()
+	mock.CapabilitiesValue = []auth.Capability{
+		auth.CapScopesOnLogin,
+	}
+	mock.LoginResult = &auth.Result{
+		Claims: &auth.Claims{Email: "svc@project.iam.gserviceaccount.com"},
+	}
+	mock.GetTokenResult = &auth.Token{
+		AccessToken: "scoped-auto-token",
+		TokenType:   "Bearer",
+	}
+	ctx = withTestHandler(ctx, mock)
+
+	// Config has a catalog with authProvider=gcp and an authScope.
+	cfg := &config.Config{
+		Catalogs: []config.CatalogConfig{
+			{
+				Name:         "gcp-cat",
+				Type:         "oci",
+				URL:          "oci://us-central1-docker.pkg.dev/proj/repo",
+				AuthProvider: "gcp",
+				AuthScope:    "https://www.googleapis.com/auth/cloud-platform",
+			},
+		},
+	}
+	ctx = config.WithConfig(ctx, cfg)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandLogin(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	// No --registry-scope flag -- should use config-discovered scope.
+	cmd.SetArgs([]string{"gcp"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "Registry credentials stored for us-central1-docker.pkg.dev")
+
+	// Verify GetToken was called with the discovered scope.
+	require.NotEmpty(t, mock.GetTokenCalls)
+	lastCall := mock.GetTokenCalls[len(mock.GetTokenCalls)-1]
+	assert.Equal(t, "https://www.googleapis.com/auth/cloud-platform", lastCall.Scope)
+}
+
+// TestCommandLogin_EmbedderBinaryName verifies that CommandLogin works with a
+// non-default binary name (embedder contract compliance).
+func TestCommandLogin_EmbedderBinaryName(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+
+	cmd := CommandLogin(cliParams, ioStreams, "mycli/auth")
+
+	assert.Equal(t, "login <handler>", cmd.Use)
+	assert.NotNil(t, cmd.RunE)
 }

@@ -72,6 +72,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 
 			opts.IOStreams = ioStreams
 			opts.CliParams = cliParams
+			opts.KvxOutputFlags.AppName = cliParams.BinaryName
 
 			return opts.Run(ctx)
 		},

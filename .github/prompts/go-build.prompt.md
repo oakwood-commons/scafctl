@@ -1,6 +1,6 @@
 ---
 description: "scafctl: Fix Go build errors, go vet warnings, and linter issues with minimal surgical changes."
-agent: "go-build-resolver"
+agent: "go-fixer"
 ---
 Diagnose and fix the current Go build errors:
 

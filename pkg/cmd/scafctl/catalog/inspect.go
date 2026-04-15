@@ -21,13 +21,14 @@ import (
 
 // InspectOptions holds options for the inspect command.
 type InspectOptions struct {
-	Reference    string
-	Catalog      string // Remote catalog (URL or config name, --catalog)
-	Referrers    bool   // Show referrers (--referrers)
-	ArtifactType string // Filter referrers by artifact type (--artifact-type)
-	Insecure     bool   // Allow HTTP (--insecure)
-	CliParams    *settings.Run
-	IOStreams    *terminal.IOStreams
+	Reference         string
+	Catalog           string // Remote catalog (URL or config name, --catalog)
+	VersionConstraint string // Semver version constraint (--version)
+	Referrers         bool   // Show referrers (--referrers)
+	ArtifactType      string // Filter referrers by artifact type (--artifact-type)
+	Insecure          bool   // Allow HTTP (--insecure)
+	CliParams         *settings.Run
+	IOStreams         *terminal.IOStreams
 	flags.KvxOutputFlags
 }
 
@@ -39,6 +40,7 @@ type ArtifactDetail struct {
 	Digest      string            `json:"digest" yaml:"digest"`
 	Size        int64             `json:"size" yaml:"size"`
 	CreatedAt   string            `json:"createdAt" yaml:"createdAt"`
+	Origin      string            `json:"origin,omitempty" yaml:"origin,omitempty"`
 	Catalog     string            `json:"catalog" yaml:"catalog"`
 	Annotations map[string]string `json:"annotations,omitempty" yaml:"annotations,omitempty"`
 }
@@ -49,39 +51,70 @@ func CommandInspect(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ st
 		CliParams: cliParams,
 		IOStreams: ioStreams,
 	}
+	options.AppName = cliParams.BinaryName
 
 	cmd := &cobra.Command{
 		Use:          "inspect <name[@version]>",
 		Aliases:      []string{"info", "show"},
 		Short:        "Show detailed information about an artifact",
 		SilenceUsage: true,
-		Long: heredoc.Doc(`
+		Long: heredoc.Docf(`
 			Show detailed information about a catalog artifact.
 
 			If no version is specified, shows the latest version.
+
+			By default, inspects from the local catalog. Use --catalog to inspect
+			from a named remote catalog, or provide a full OCI reference to inspect
+			directly from a remote registry.
 
 			Use --referrers to list all artifacts attached to this artifact
 			(SBOMs, signatures, provenance, etc.) via the OCI referrers mechanism.
 
 			Examples:
 			  # Inspect latest version
-			  scafctl catalog inspect my-solution
+			  %[1]s catalog inspect my-solution
 
 			  # Inspect specific version
-			  scafctl catalog inspect my-solution@1.0.0
+			  %[1]s catalog inspect my-solution@1.0.0
+
+			  # Inspect from a named remote catalog
+			  %[1]s catalog inspect my-solution@1.0.0 --catalog my-registry
+
+			  # Inspect via full OCI reference
+			  %[1]s catalog inspect ghcr.io/myorg/solutions/my-solution@1.0.0
 
 			  # Output as YAML
-			  scafctl catalog inspect my-solution -o yaml
+			  %[1]s catalog inspect my-solution -o yaml
 
 			  # List referrers (attached artifacts) from a remote catalog
-			  scafctl catalog inspect my-solution@1.0.0 --referrers --catalog ghcr.io/myorg
+			  %[1]s catalog inspect my-solution@1.0.0 --referrers --catalog ghcr.io/myorg
 
 			  # Filter referrers by type
-			  scafctl catalog inspect my-solution@1.0.0 --referrers --artifact-type application/spdx+json --catalog ghcr.io/myorg
-		`),
+			  %[1]s catalog inspect my-solution@1.0.0 --referrers --artifact-type application/spdx+json --catalog ghcr.io/myorg
+		`, cliParams.BinaryName),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			options.Reference = args[0]
+
+			// Validate --version constraint vs @version early (before branching)
+			if err := validateVersionConstraint(options.Reference, options.VersionConstraint); err != nil {
+				w := writer.FromContext(cmd.Context())
+				if w != nil {
+					w.Errorf("%v", err)
+				}
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
+
+			// --version is not supported with --referrers
+			if options.Referrers && options.VersionConstraint != "" {
+				w := writer.FromContext(cmd.Context())
+				err := fmt.Errorf("--version cannot be used with --referrers")
+				if w != nil {
+					w.Errorf("%v", err)
+				}
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
+
 			kvxOpts := flags.ToKvxOutputOptions(&options.KvxOutputFlags, kvx.WithIOStreams(ioStreams))
 			if options.Referrers {
 				return runInspectReferrers(cmd.Context(), options, kvxOpts)
@@ -92,6 +125,7 @@ func CommandInspect(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ st
 
 	flags.AddKvxOutputFlagsToStruct(cmd, &options.KvxOutputFlags)
 	cmd.Flags().StringVarP(&options.Catalog, "catalog", "c", "", catalogFlagUsage)
+	cmd.Flags().StringVar(&options.VersionConstraint, "version", "", "Semver version constraint (e.g., ^1.0.0, ~2.1, >=1.0 <3.0)")
 	cmd.Flags().BoolVar(&options.Referrers, "referrers", false, "List artifacts attached via OCI referrers (SBOMs, signatures, etc.)")
 	cmd.Flags().StringVar(&options.ArtifactType, "artifact-type", "", "Filter referrers by artifact type (e.g., application/spdx+json)")
 	cmd.Flags().BoolVar(&options.Insecure, "insecure", false, "Allow insecure HTTP connections")
@@ -102,6 +136,16 @@ func CommandInspect(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ st
 func runInspect(ctx context.Context, opts *InspectOptions, outputOpts *kvx.OutputOptions) error {
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
+
+	// Full OCI reference: inspect directly from a remote registry.
+	if looksLikeRemoteReference(opts.Reference) {
+		return runInspectRemote(ctx, opts, outputOpts)
+	}
+
+	// --catalog flag: inspect from a named remote catalog.
+	if opts.Catalog != "" {
+		return runInspectFromCatalog(ctx, opts, outputOpts)
+	}
 
 	// Parse reference - try as solution first
 	ref, err := catalog.ParseReference(catalog.ArtifactKindSolution, opts.Reference)
@@ -117,6 +161,26 @@ func runInspect(ctx context.Context, opts *InspectOptions, outputOpts *kvx.Outpu
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
+	// When --version constraint is set, resolve the best matching version from local catalog
+	if opts.VersionConstraint != "" {
+		artifacts, listErr := localCatalog.List(ctx, ref.Kind, ref.Name)
+		if listErr != nil {
+			w.Errorf("failed to list versions: %v", listErr)
+			return exitcode.WithCode(listErr, exitcode.CatalogError)
+		}
+		filtered, filterErr := filterArtifactsByConstraint(artifacts, opts.VersionConstraint)
+		if filterErr != nil {
+			w.Errorf("%v", filterErr)
+			return exitcode.WithCode(filterErr, exitcode.InvalidInput)
+		}
+		if len(filtered) == 0 {
+			w.Errorf("no versions of %q match constraint %q", ref.Name, opts.VersionConstraint)
+			return exitcode.WithCode(fmt.Errorf("no matching version"), exitcode.FileNotFound)
+		}
+		w.Verbosef("Version constraint %q resolved to %s", opts.VersionConstraint, filtered[0].Reference.Version.Original())
+		ref = filtered[0].Reference
+	}
+
 	// Resolve to find artifact
 	info, err := localCatalog.Resolve(ctx, ref)
 	if err != nil {
@@ -128,7 +192,172 @@ func runInspect(ctx context.Context, opts *InspectOptions, outputOpts *kvx.Outpu
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
-	// Build detail output
+	return writeInspectDetail(info, outputOpts)
+}
+
+// runInspectRemote inspects an artifact from a full OCI reference.
+func runInspectRemote(ctx context.Context, opts *InspectOptions, outputOpts *kvx.OutputOptions) error {
+	lgr := logger.FromContext(ctx)
+	w := writer.FromContext(ctx)
+
+	if opts.Catalog != "" {
+		w.Error("cannot use --catalog with a full remote reference")
+		return exitcode.Errorf("conflicting options")
+	}
+
+	w.Verbose("Inspecting from full OCI reference")
+
+	remoteRef, err := catalog.ParseRemoteReference(opts.Reference)
+	if err != nil {
+		w.Errorf("invalid reference: %v", err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
+	}
+
+	ref, err := remoteRef.ToReference()
+	if err != nil {
+		w.Errorf("invalid reference: %v", err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
+	}
+
+	registry := remoteRef.Registry
+	repository := remoteRef.Repository
+
+	verboseRefInfo(w, remoteRef.Name, string(remoteRef.Kind), remoteRef.Tag)
+
+	credStore, err := catalog.NewCredentialStore(*lgr)
+	if err != nil {
+		lgr.V(1).Info("failed to create credential store, using anonymous auth", "error", err.Error())
+	}
+
+	authHandler := resolveAuthHandler(ctx, registry, "")
+	authScope := resolveAuthScopeForRegistry(ctx, registry)
+
+	verboseRemoteInfo(ctx, w, registry, repository, authHandler, authScope)
+
+	remoteCatalog, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
+		Name:            registry,
+		Registry:        registry,
+		Repository:      repository,
+		CredentialStore: credStore,
+		AuthHandler:     authHandler,
+		AuthScope:       authScope,
+		Insecure:        opts.Insecure,
+		Logger:          *lgr,
+	})
+	if err != nil {
+		w.Errorf("failed to create remote catalog: %v", err)
+		return exitcode.WithCode(err, exitcode.CatalogError)
+	}
+
+	// When --version constraint is set, resolve the best matching version
+	if opts.VersionConstraint != "" {
+		resolved, constraintErr := resolveVersionConstraint(ctx, remoteCatalog, ref, opts.VersionConstraint)
+		if constraintErr != nil {
+			w.Errorf("%v", constraintErr)
+			return exitcode.WithCode(constraintErr, exitcode.InvalidInput)
+		}
+		w.Verbosef("Version constraint %q resolved to %s", opts.VersionConstraint, resolved.Version.Original())
+		ref = resolved
+	}
+
+	info, err := remoteCatalog.Resolve(ctx, ref)
+	if err != nil {
+		if catalog.IsNotFound(err) {
+			w.Errorf("artifact %q not found in remote catalog", opts.Reference)
+			return exitcode.WithCode(err, exitcode.FileNotFound)
+		}
+		w.Errorf("failed to resolve artifact: %v", err)
+		hintOnAuthError(ctx, w, registry, err)
+		return exitcode.WithCode(err, exitcode.CatalogError)
+	}
+
+	return writeInspectDetail(info, outputOpts)
+}
+
+// runInspectFromCatalog inspects an artifact from a named remote catalog.
+func runInspectFromCatalog(ctx context.Context, opts *InspectOptions, outputOpts *kvx.OutputOptions) error {
+	lgr := logger.FromContext(ctx)
+	w := writer.FromContext(ctx)
+
+	w.Verbosef("Inspecting from catalog %q", opts.Catalog)
+
+	ref, err := catalog.ParseReference(catalog.ArtifactKindSolution, opts.Reference)
+	if err != nil {
+		w.Errorf("invalid reference %q: %v", opts.Reference, err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
+	}
+
+	version := ""
+	if ref.Version != nil {
+		version = ref.Version.String()
+	}
+	verboseRefInfo(w, ref.Name, string(ref.Kind), version)
+
+	catalogURL, err := catalog.ResolveCatalogURL(ctx, opts.Catalog)
+	if err != nil {
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
+	}
+
+	registry, repository := catalog.ParseCatalogURL(catalogURL)
+	if registry == "" {
+		err = fmt.Errorf("invalid catalog URL: %s", catalogURL)
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
+	}
+
+	credStore, err := catalog.NewCredentialStore(*lgr)
+	if err != nil {
+		lgr.V(1).Info("failed to create credential store, using anonymous auth", "error", err.Error())
+	}
+
+	authHandler := resolveAuthHandler(ctx, registry, opts.Catalog)
+	authScope := resolveAuthScope(ctx, opts.Catalog)
+
+	verboseRemoteInfo(ctx, w, registry, repository, authHandler, authScope)
+
+	remoteCatalog, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
+		Name:            registry,
+		Registry:        registry,
+		Repository:      repository,
+		CredentialStore: credStore,
+		AuthHandler:     authHandler,
+		AuthScope:       authScope,
+		Insecure:        opts.Insecure,
+		Logger:          *lgr,
+	})
+	if err != nil {
+		w.Errorf("failed to create remote catalog: %v", err)
+		return exitcode.WithCode(err, exitcode.CatalogError)
+	}
+
+	// When --version constraint is set, resolve the best matching version
+	if opts.VersionConstraint != "" {
+		resolved, constraintErr := resolveVersionConstraint(ctx, remoteCatalog, ref, opts.VersionConstraint)
+		if constraintErr != nil {
+			w.Errorf("%v", constraintErr)
+			return exitcode.WithCode(constraintErr, exitcode.InvalidInput)
+		}
+		w.Verbosef("Version constraint %q resolved to %s", opts.VersionConstraint, resolved.Version.Original())
+		ref = resolved
+	}
+
+	info, err := remoteCatalog.Resolve(ctx, ref)
+	if err != nil {
+		if catalog.IsNotFound(err) {
+			w.Errorf("artifact %q not found in remote catalog %q", opts.Reference, opts.Catalog)
+			return exitcode.WithCode(err, exitcode.FileNotFound)
+		}
+		w.Errorf("failed to resolve artifact: %v", err)
+		hintOnAuthError(ctx, w, registry, err)
+		return exitcode.WithCode(err, exitcode.CatalogError)
+	}
+
+	return writeInspectDetail(info, outputOpts)
+}
+
+// writeInspectDetail formats and writes artifact inspect output.
+func writeInspectDetail(info catalog.ArtifactInfo, outputOpts *kvx.OutputOptions) error {
 	version := ""
 	if info.Reference.Version != nil {
 		version = info.Reference.Version.String()
@@ -141,6 +370,7 @@ func runInspect(ctx context.Context, opts *InspectOptions, outputOpts *kvx.Outpu
 		Digest:      info.Digest,
 		Size:        info.Size,
 		CreatedAt:   info.CreatedAt.Format("2006-01-02 15:04:05"),
+		Origin:      info.Annotations[catalog.AnnotationOrigin],
 		Catalog:     info.Catalog,
 		Annotations: info.Annotations,
 	}

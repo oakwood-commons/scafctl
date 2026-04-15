@@ -95,6 +95,7 @@ Examples:
 
 			options.IOStreams = ioStreams
 			options.CliParams = cliParams
+			options.AppName = cliParams.BinaryName
 			options.BinaryName = cliParams.BinaryName
 
 			if len(args) > 0 {

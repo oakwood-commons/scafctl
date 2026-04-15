@@ -350,12 +350,16 @@ func runRemoteSetDefault(ctx context.Context, opts *RemoteSetDefaultOptions) err
 // --- remote list ---
 
 // RemoteListItem represents a catalog entry in list output.
+// JSON fields must not use omitempty for fields in the table schema -- kvx
+// requires consistent keys across all array items for column rendering.
 type RemoteListItem struct {
-	Name    string `json:"name" yaml:"name"`
-	Type    string `json:"type" yaml:"type"`
-	URL     string `json:"url" yaml:"url"`
-	Path    string `json:"path" yaml:"path"`
-	Default bool   `json:"default" yaml:"default"`
+	Name         string `json:"name" yaml:"name"`
+	Type         string `json:"type" yaml:"type"`
+	URL          string `json:"url" yaml:"url"`
+	Path         string `json:"path" yaml:"path,omitempty"`
+	AuthProvider string `json:"authProvider" yaml:"authProvider"`
+	AuthScope    string `json:"authScope" yaml:"authScope,omitempty"`
+	Default      bool   `json:"default" yaml:"default"`
 }
 
 // remoteListSchema controls table display for catalog remote list.
@@ -364,16 +368,16 @@ var remoteListSchema = []byte(`{
 	"items": {
 		"type": "object",
 		"properties": {
-			"name":    { "type": "string", "title": "Name" },
-			"type":    { "type": "string", "title": "Type" },
-			"url":     { "type": "string", "title": "URL" },
-			"path":    { "type": "string", "title": "Path" },
-			"default": { "type": "boolean", "title": "Default" }
+			"name":         { "type": "string", "title": "Name" },
+			"type":         { "type": "string", "title": "Type" },
+			"url":          { "type": "string", "title": "URL" },
+			"authProvider": { "type": "string", "title": "Auth" },
+			"default":      { "type": "boolean", "title": "Default" }
 		}
 	}
 }`)
 
-func commandRemoteList(_ *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
+func commandRemoteList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
 	var kvxFlags flags.KvxOutputFlags
 
 	cmd := &cobra.Command{
@@ -386,11 +390,12 @@ func commandRemoteList(_ *settings.Run, ioStreams *terminal.IOStreams, _ string)
 			Examples:
 			  %[1]s catalog remote list
 			  %[1]s catalog remote list -o json
-		`, settings.CliBinaryName),
+		`, cliParams.BinaryName),
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			kvxFlags.AppName = cliParams.BinaryName
 			outputOpts := flags.ToKvxOutputOptions(&kvxFlags,
 				kvx.WithIOStreams(ioStreams),
-				kvx.WithOutputColumnOrder([]string{"name", "type", "url", "path", "default"}),
+				kvx.WithOutputColumnOrder([]string{"name", "type", "url", "authProvider", "default"}),
 				kvx.WithOutputSchemaJSON(remoteListSchema),
 			)
 
@@ -422,11 +427,13 @@ func runRemoteList(ctx context.Context, configPath string, outputOpts *kvx.Outpu
 	items := make([]RemoteListItem, len(cfg.Catalogs))
 	for i, c := range cfg.Catalogs {
 		items[i] = RemoteListItem{
-			Name:    c.Name,
-			Type:    c.Type,
-			URL:     c.URL,
-			Path:    c.Path,
-			Default: c.Name == cfg.Settings.DefaultCatalog,
+			Name:         c.Name,
+			Type:         c.Type,
+			URL:          c.URL,
+			Path:         c.Path,
+			AuthProvider: c.AuthProvider,
+			AuthScope:    c.AuthScope,
+			Default:      c.Name == cfg.Settings.DefaultCatalog,
 		}
 	}
 

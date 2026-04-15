@@ -4,8 +4,8 @@ name: "go-reviewer"
 tools: [read, search, execute]
 handoffs:
   - label: "Fix reported issues"
-    prompt: "Fix the issues identified in the code review."
-    agent: "go-build-resolver"
+    prompt: "Fix the issues identified in the code review above. Apply each fix, verify with build/vet/lint/e2e, and add tests where coverage is below 60%."
+    agent: "go-fixer"
 ---
 You are a senior Go code reviewer for the **scafctl** project ensuring high standards of idiomatic Go and project-specific best practices.
 

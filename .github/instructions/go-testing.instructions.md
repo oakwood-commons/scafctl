@@ -11,6 +11,15 @@ applyTo: "**/*_test.go"
 - Use `testify/assert` for assertions
 - Place mocks in `mock.go` files
 
+## E2E Tests
+
+E2E tests (`task test:e2e`) are expensive. Follow these rules:
+
+1. Only run when validating a complete set of changes, not for iterative checks
+2. Run **once** and capture output: `task test:e2e 2>&1 | tee /tmp/e2e-results.txt`
+3. Review the saved file instead of re-running: `grep -E 'FAIL|PASS|ok' /tmp/e2e-results.txt`
+4. For iterative development, run targeted unit tests: `go test ./pkg/some/package/...`
+
 ## Race Detection
 
 Always run with the `-race` flag:

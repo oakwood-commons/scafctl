@@ -156,7 +156,9 @@ func runLint(ctx context.Context, opts *Options) error {
 	var getterOpts []get.Option
 	localCatalog, err := catalog.NewLocalCatalog(*lgr)
 	if err == nil {
-		resolver := catalog.NewSolutionResolver(localCatalog, *lgr)
+		resolver := catalog.NewSolutionResolver(localCatalog, *lgr,
+			catalog.WithResolverRemoteCatalogs(catalog.RemoteCatalogsFromContext(ctx, *lgr)),
+		)
 		getterOpts = append(getterOpts, get.WithCatalogResolver(resolver))
 	} else {
 		lgr.V(1).Info("catalog not available for solution resolution", "error", err)

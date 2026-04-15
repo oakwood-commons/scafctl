@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
@@ -23,13 +24,14 @@ import (
 
 // ListOptions holds options for the list command.
 type ListOptions struct {
-	Kind        string
-	Name        string
-	Catalog     string // Remote catalog (registry URL or config name)
-	Insecure    bool   // Allow HTTP connections
-	AllVersions bool   // Show all versions instead of just latest
-	CliParams   *settings.Run
-	IOStreams   *terminal.IOStreams
+	Kind              string
+	Name              string
+	Catalog           string // Remote catalog (registry URL or config name)
+	VersionConstraint string // Semver version constraint (e.g., "^1.0.0", ">= 1.0, < 2.0")
+	Insecure          bool   // Allow HTTP connections
+	AllVersions       bool   // Show all versions instead of just latest
+	CliParams         *settings.Run
+	IOStreams         *terminal.IOStreams
 	flags.KvxOutputFlags
 }
 
@@ -88,6 +90,10 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			When listing from a remote registry, --name is required (OCI registries
 			do not support registry-wide enumeration).
 
+			You can also pass a full OCI reference to --name to list directly from
+			a remote registry without --catalog:
+			  %[1]s catalog list --name ghcr.io/myorg/solutions/my-solution
+
 			Examples:
 			  # List latest version of each artifact
 			  %[1]s catalog list
@@ -104,11 +110,15 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			  # List remote versions of an artifact
 			  %[1]s catalog list --catalog my-registry --name my-solution
 
+			  # List via full OCI reference
+			  %[1]s catalog list --name ghcr.io/myorg/solutions/my-solution
+
 			  # Output as JSON
 			  %[1]s catalog list -o json
 		`, cliParams.BinaryName),
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			options.AppName = cliParams.BinaryName
 			kvxOpts := flags.ToKvxOutputOptions(&options.KvxOutputFlags,
 				kvx.WithIOStreams(ioStreams),
 				kvx.WithOutputColumnOrder([]string{"name", "tag", "kind", "digest", "catalog"}),
@@ -123,6 +133,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 	cmd.Flags().StringVarP(&options.Catalog, "catalog", "c", "", catalogFlagUsage)
 	cmd.Flags().BoolVar(&options.Insecure, "insecure", false, "Allow insecure HTTP connections")
 	cmd.Flags().BoolVar(&options.AllVersions, "all-versions", false, "Show all versions instead of just the latest")
+	cmd.Flags().StringVar(&options.VersionConstraint, "version", "", "Filter by semver version constraint (e.g., \"^1.0.0\", \">= 1.0, < 2.0\")")
 
 	flags.AddKvxOutputFlagsToStruct(cmd, &options.KvxOutputFlags)
 
@@ -132,6 +143,28 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptions) error {
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
+
+	// Validate --version vs @version in --name.
+	if err := validateVersionConstraint(opts.Name, opts.VersionConstraint); err != nil {
+		w.Errorf("%v", err)
+		// Distinguish conflict (both @version and --version) from invalid syntax.
+		if strings.Contains(err.Error(), "cannot use --version") {
+			return exitcode.Errorf("conflicting options")
+		}
+		return exitcode.WithCode(err, exitcode.InvalidInput)
+	}
+
+	// Full OCI reference in --name: list directly from a remote registry.
+	if opts.Name != "" && looksLikeRemoteReference(opts.Name) {
+		return runListFromRemoteRef(ctx, opts, outputOpts)
+	}
+
+	// Strip @version from --name (e.g. "email-notifier@1.0.0" → name="email-notifier")
+	name := opts.Name
+	if idx := strings.LastIndex(name, "@"); idx > 0 {
+		name = name[:idx]
+	}
+	opts.Name = name
 
 	// Parse kind filter
 	var kind catalog.ArtifactKind
@@ -192,7 +225,99 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 		}
 	}
 
-	return writeArtifactList(artifacts, opts.Name != "" || opts.AllVersions, outputOpts)
+	// Apply version constraint filter if set.
+	if opts.VersionConstraint != "" {
+		artifacts, err = filterArtifactsByConstraint(artifacts, opts.VersionConstraint)
+		if err != nil {
+			w.Errorf("version filter: %v", err)
+			return exitcode.Errorf("invalid version constraint")
+		}
+	}
+
+	return writeArtifactList(w, artifacts, opts.Name != "" || opts.AllVersions || opts.VersionConstraint != "", outputOpts)
+}
+
+// runListFromRemoteRef lists artifacts from a full OCI reference
+// (e.g. "ghcr.io/myorg/solutions/email-notifier@1.0.0").
+func runListFromRemoteRef(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptions) error {
+	lgr := logger.FromContext(ctx)
+	w := writer.FromContext(ctx)
+
+	if opts.Catalog != "" {
+		w.Error("cannot use --catalog with a full remote reference in --name")
+		return exitcode.Errorf("conflicting options")
+	}
+
+	w.Verbose("Parsing full OCI reference from --name")
+
+	remoteRef, err := catalog.ParseRemoteReference(opts.Name)
+	if err != nil {
+		w.Errorf("invalid reference: %v", err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
+	}
+
+	registry := remoteRef.Registry
+	repository := remoteRef.Repository
+
+	verboseRefInfo(w, remoteRef.Name, string(remoteRef.Kind), remoteRef.Tag)
+
+	credStore, err := catalog.NewCredentialStore(*lgr)
+	if err != nil {
+		lgr.V(1).Info("failed to create credential store, using anonymous auth", "error", err.Error())
+	}
+
+	authHandler := resolveAuthHandler(ctx, registry, "")
+	authScope := resolveAuthScopeForRegistry(ctx, registry)
+
+	verboseRemoteInfo(ctx, w, registry, repository, authHandler, authScope)
+
+	remoteCatalog, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
+		Name:            registry,
+		Registry:        registry,
+		Repository:      repository,
+		CredentialStore: credStore,
+		AuthHandler:     authHandler,
+		AuthScope:       authScope,
+		Insecure:        opts.Insecure,
+		Logger:          *lgr,
+	})
+	if err != nil {
+		w.Errorf("failed to create remote catalog: %v", err)
+		return exitcode.WithCode(err, exitcode.CatalogError)
+	}
+
+	var kind catalog.ArtifactKind
+	if opts.Kind != "" {
+		kind = catalog.ArtifactKind(opts.Kind)
+		if !kind.IsValid() {
+			w.Errorf("invalid kind %q: must be 'solution', 'provider', or 'auth-handler'", opts.Kind)
+			return exitcode.Errorf("invalid kind")
+		}
+	} else if remoteRef.Kind != "" {
+		kind = remoteRef.Kind
+	}
+
+	w.Verbosef("Listing tags for %s...", remoteRef.Name)
+
+	artifacts, err := remoteCatalog.List(ctx, kind, remoteRef.Name)
+	if err != nil {
+		w.Errorf("failed to list remote artifacts: %v", err)
+		hintOnAuthError(ctx, w, registry, err)
+		return exitcode.WithCode(err, exitcode.CatalogError)
+	}
+
+	w.Verbosef("Found %d artifact(s)", len(artifacts))
+
+	if opts.VersionConstraint != "" {
+		artifacts, err = filterArtifactsByConstraint(artifacts, opts.VersionConstraint)
+		if err != nil {
+			w.Errorf("version filter: %v", err)
+			return exitcode.Errorf("invalid version constraint")
+		}
+		w.Verbosef("After version filter %q: %d artifact(s)", opts.VersionConstraint, len(artifacts))
+	}
+
+	return writeArtifactList(w, artifacts, true, outputOpts)
 }
 
 func runListRemote(ctx context.Context, opts *ListOptions, kind catalog.ArtifactKind, outputOpts *kvx.OutputOptions) error {
@@ -216,7 +341,15 @@ func runListRemote(ctx context.Context, opts *ListOptions, kind catalog.Artifact
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
-	return writeArtifactList(artifacts, opts.Name != "" || opts.AllVersions, outputOpts)
+	if opts.VersionConstraint != "" {
+		artifacts, err = filterArtifactsByConstraint(artifacts, opts.VersionConstraint)
+		if err != nil {
+			w.Errorf("version filter: %v", err)
+			return exitcode.Errorf("invalid version constraint")
+		}
+	}
+
+	return writeArtifactList(w, artifacts, opts.Name != "" || opts.AllVersions || opts.VersionConstraint != "", outputOpts)
 }
 
 // listRemoteArtifacts fetches artifacts from a configured remote catalog.
@@ -224,6 +357,9 @@ func runListRemote(ctx context.Context, opts *ListOptions, kind catalog.Artifact
 // all-catalogs search in runList (--name without --catalog).
 func listRemoteArtifacts(ctx context.Context, opts *ListOptions, kind catalog.ArtifactKind) ([]catalog.ArtifactInfo, error) {
 	lgr := logger.FromContext(ctx)
+	w := writer.FromContext(ctx)
+
+	w.Verbosef("Resolving catalog %q", opts.Catalog)
 
 	catalogURL, err := catalog.ResolveCatalogURL(ctx, opts.Catalog)
 	if err != nil {
@@ -239,6 +375,8 @@ func listRemoteArtifacts(ctx context.Context, opts *ListOptions, kind catalog.Ar
 
 	authHandler := resolveAuthHandler(ctx, registry, opts.Catalog)
 	authScope := resolveAuthScope(ctx, opts.Catalog)
+
+	verboseRemoteInfo(ctx, w, registry, repository, authHandler, authScope)
 
 	remoteCatalog, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
 		Name:            registry,
@@ -257,7 +395,17 @@ func listRemoteArtifacts(ctx context.Context, opts *ListOptions, kind catalog.Ar
 	return remoteCatalog.List(ctx, kind, opts.Name)
 }
 
-func writeArtifactList(artifacts []catalog.ArtifactInfo, showAll bool, outputOpts *kvx.OutputOptions) error {
+func writeArtifactList(w *writer.Writer, artifacts []catalog.ArtifactInfo, showAll bool, outputOpts *kvx.OutputOptions) error {
+	// Handle empty results: structured formats get an empty array,
+	// table/interactive formats get a human-friendly message.
+	if len(artifacts) == 0 {
+		if kvx.IsStructuredFormat(outputOpts.Format) {
+			return outputOpts.Write([]ArtifactListItem{})
+		}
+		w.Infof("No artifacts found in catalog.")
+		return nil
+	}
+
 	// Sort by name, then version descending
 	sort.Slice(artifacts, func(i, j int) bool {
 		if artifacts[i].Reference.Name != artifacts[j].Reference.Name {

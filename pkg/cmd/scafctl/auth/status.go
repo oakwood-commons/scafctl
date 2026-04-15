@@ -55,6 +55,7 @@ var authStatusSchema = []byte(`{
 // CommandStatus creates the 'auth status' command.
 func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
 	var outputFlags flags.KvxOutputFlags
+	outputFlags.AppName = cliParams.BinaryName
 	var exitCodeFlag bool
 	var warnWithin time.Duration
 

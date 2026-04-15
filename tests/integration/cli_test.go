@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -2879,10 +2880,15 @@ func TestIntegration_RunSolution_FromCatalog_NotFound(t *testing.T) {
 	// Try to run a solution that doesn't exist in catalog
 	stdout, stderr, exitCode := runScafctl(t, "run", "solution", "nonexistent-solution")
 	assert.NotEqual(t, 0, exitCode)
-	// Reports artifact not found in catalog and file system
+	// Reports artifact not found, file not found, or an auth error from
+	// a configured remote catalog that lacks valid credentials.
 	combined := stdout + stderr
-	assert.True(t, strings.Contains(combined, "not found") || strings.Contains(combined, "no such file or directory"),
-		"expected error about missing solution, got stdout=%q stderr=%q", stdout, stderr)
+	assert.True(t, strings.Contains(combined, "not found") ||
+		strings.Contains(combined, "no such file or directory") ||
+		strings.Contains(combined, "401") ||
+		strings.Contains(combined, "Unauthorized") ||
+		strings.Contains(combined, "403"),
+		"expected error about missing solution or auth failure, got stdout=%q stderr=%q", stdout, stderr)
 }
 
 func TestIntegration_RunSolution_FromCatalog_ByName(t *testing.T) {
@@ -3845,7 +3851,11 @@ func TestIntegration_SolutionProvider_ResolverFilter(t *testing.T) {
 	// should not cause a failure (no parameter is provided).
 	tmpDir := t.TempDir()
 
-	parentSolution := `apiVersion: scafctl.io/v1
+	// Use absolute path for the child because the parent lives in a temp dir,
+	// and relative paths now resolve from the solution file's directory.
+	absChildPath := filepath.Join(findProjectRoot(), "tests/integration/testdata/solution-provider/child.yaml")
+
+	parentSolution := fmt.Sprintf(`apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: resolver-filter-test
@@ -3858,10 +3868,10 @@ spec:
         with:
           - provider: solution
             inputs:
-              source: "tests/integration/testdata/solution-provider/child.yaml"
+              source: %q
               resolvers:
                 - greeting
-`
+`, absChildPath)
 	parentPath := filepath.Join(tmpDir, "parent.yaml")
 	require.NoError(t, os.WriteFile(parentPath, []byte(parentSolution), 0o644))
 
@@ -3882,7 +3892,11 @@ func TestIntegration_SolutionProvider_ResolverFilterNotFound(t *testing.T) {
 	// Request a resolver that does not exist in the child solution.
 	tmpDir := t.TempDir()
 
-	parentSolution := `apiVersion: scafctl.io/v1
+	// Use absolute path for the child because the parent lives in a temp dir,
+	// and relative paths now resolve from the solution file's directory.
+	absChildPath := filepath.Join(findProjectRoot(), "tests/integration/testdata/solution-provider/child.yaml")
+
+	parentSolution := fmt.Sprintf(`apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: resolver-filter-notfound
@@ -3895,10 +3909,10 @@ spec:
         with:
           - provider: solution
             inputs:
-              source: "tests/integration/testdata/solution-provider/child.yaml"
+              source: %q
               resolvers:
                 - does-not-exist
-`
+`, absChildPath)
 	parentPath := filepath.Join(tmpDir, "parent.yaml")
 	require.NoError(t, os.WriteFile(parentPath, []byte(parentSolution), 0o644))
 
@@ -3917,7 +3931,11 @@ func TestIntegration_SolutionProvider_Timeout(t *testing.T) {
 	// The child should still succeed because the timeout is generous enough.
 	tmpDir := t.TempDir()
 
-	parentSolution := `apiVersion: scafctl.io/v1
+	// Use absolute path for the child because the parent lives in a temp dir,
+	// and relative paths now resolve from the solution file's directory.
+	absChildPath := filepath.Join(findProjectRoot(), "tests/integration/testdata/solution-provider/child.yaml")
+
+	parentSolution := fmt.Sprintf(`apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: timeout-test
@@ -3930,11 +3948,11 @@ spec:
         with:
           - provider: solution
             inputs:
-              source: "tests/integration/testdata/solution-provider/child.yaml"
+              source: %q
               inputs:
                 message: "with timeout"
               timeout: "30s"
-`
+`, absChildPath)
 	parentPath := filepath.Join(tmpDir, "parent.yaml")
 	require.NoError(t, os.WriteFile(parentPath, []byte(parentSolution), 0o644))
 

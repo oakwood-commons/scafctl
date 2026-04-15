@@ -367,6 +367,62 @@ settings:
 	assert.Contains(t, output, "ghcr")
 }
 
+func TestRunRemoteList_WithAuthFields(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	configContent := `
+catalogs:
+  - name: gcp-catalog
+    type: oci
+    url: oci://us-central1-docker.pkg.dev/proj/repo
+    authProvider: gcp
+    authScope: https://www.googleapis.com/auth/cloud-platform
+  - name: quay-catalog
+    type: oci
+    url: oci://quay.io/myorg/catalog
+    authProvider: quay
+settings:
+  defaultCatalog: gcp-catalog
+`
+	err := os.WriteFile(configPath, []byte(configContent), 0o600)
+	require.NoError(t, err)
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+
+	outputOpts := kvxOutputForTest(ioStreams)
+
+	err = runRemoteList(ctx, configPath, outputOpts)
+	require.NoError(t, err)
+
+	output := stdout.String()
+	// Verify auth fields appear in JSON output.
+	assert.Contains(t, output, `"authProvider": "gcp"`)
+	assert.Contains(t, output, `"authScope": "https://www.googleapis.com/auth/cloud-platform"`)
+	assert.Contains(t, output, `"authProvider": "quay"`)
+	assert.Contains(t, output, `"default": true`)
+}
+
+func TestCommandRemote_EmbedderBinaryName(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
+	ioStreams := terminal.NewIOStreams(nil, &bytes.Buffer{}, &bytes.Buffer{}, false)
+
+	cmd := CommandRemote(cliParams, ioStreams, "mycli/catalog")
+
+	assert.Equal(t, "remote", cmd.Use)
+	assert.NotEmpty(t, cmd.Commands(), "subcommands should be registered for embedder binary")
+}
+
 func TestRunRemoteList_Empty(t *testing.T) {
 	t.Parallel()
 

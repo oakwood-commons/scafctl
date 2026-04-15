@@ -354,6 +354,7 @@ func Root(opts *RootOptions) *cobra.Command {
 			w := writer.New(ioStreams, cliParams, writerOpts...)
 			in := input.New(ioStreams, cliParams)
 			ctx := context.Background()
+			ctx = settings.IntoContext(ctx, cliParams)
 			ctx = logger.WithLogger(ctx, lgr)
 			ctx = writer.WithWriter(ctx, w)
 			ctx = input.WithInput(ctx, in)

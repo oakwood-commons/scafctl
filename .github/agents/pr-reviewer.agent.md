@@ -5,11 +5,8 @@ tools: [read, edit, search, execute, todo]
 argument-hint: "Optional: PR number or 'resolve' to auto-resolve addressed comments"
 handoffs:
   - label: "Apply fixes"
-    prompt: "Apply the approved code fixes from the triage above. After fixing, run go build ./... and go vet ./... to verify no errors were introduced. Then run task test:e2e to make sure everything passes. Finally, reply to each addressed PR review thread confirming the fix and mark it resolved. For threads you disagree with, explain reasoning and resolve anyway. Do not commit."
-    agent: "pr-reviewer"
-  - label: "Generate commit message"
-    prompt: "Generate a commit message for the fixes just applied."
-    agent: "pr-reviewer"
+    prompt: "Apply the approved code fixes from the PR review triage above. For each fix, note the thread ID so you can respond to and resolve the PR review threads after verification passes. Do not commit."
+    agent: "go-fixer"
 ---
 You are a PR review comment handler for the **scafctl** project. You fetch review comments from the PR matching the current branch, triage them, implement fixes, and respond/resolve threads.
 

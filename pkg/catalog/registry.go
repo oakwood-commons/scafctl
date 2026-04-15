@@ -146,7 +146,7 @@ func (r *Registry) Fetch(ctx context.Context, ref Reference) ([]byte, ArtifactIn
 
 			// Auto-cache remote fetches into local catalog
 			if cacheEnabled && r.isRemoteCatalog(catalog) {
-				r.cacheArtifact(ctx, info.Reference, content, nil)
+				r.cacheArtifact(ctx, info.Reference, content, nil, catalog.Name())
 			}
 
 			return content, info, nil
@@ -189,7 +189,7 @@ func (r *Registry) FetchWithBundle(ctx context.Context, ref Reference) ([]byte, 
 
 			// Auto-cache remote fetches into local catalog
 			if cacheEnabled && r.isRemoteCatalog(cat) {
-				r.cacheArtifact(ctx, info.Reference, content, bundleData)
+				r.cacheArtifact(ctx, info.Reference, content, bundleData, cat.Name())
 			}
 
 			return content, bundleData, info, nil
@@ -213,9 +213,10 @@ func (r *Registry) FetchWithBundle(ctx context.Context, ref Reference) ([]byte, 
 
 // cacheArtifact stores a remotely-fetched artifact into the local catalog.
 // Errors are logged but do not fail the fetch — caching is best-effort.
-func (r *Registry) cacheArtifact(ctx context.Context, ref Reference, content, bundleData []byte) {
+func (r *Registry) cacheArtifact(ctx context.Context, ref Reference, content, bundleData []byte, sourceCatalog string) {
 	annotations := NewAnnotationBuilder().
 		Set(AnnotationSource, "auto-cached").
+		Set(AnnotationOrigin, fmt.Sprintf("auto-cached from %s", sourceCatalog)).
 		Build()
 
 	// Use force=true to update if a stale version already exists locally

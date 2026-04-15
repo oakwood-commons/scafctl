@@ -319,6 +319,15 @@ func (c *RemoteCatalog) Store(ctx context.Context, ref Reference, content, bundl
 
 // Fetch retrieves an artifact from the remote catalog.
 func (c *RemoteCatalog) Fetch(ctx context.Context, ref Reference) ([]byte, ArtifactInfo, error) {
+	// When no version is specified, resolve to the latest version first.
+	if !ref.HasVersion() && !ref.HasDigest() {
+		resolved, err := c.resolveWithKind(ctx, ref)
+		if err != nil {
+			return nil, ArtifactInfo{}, err
+		}
+		ref = resolved.Reference
+	}
+
 	repo, err := c.getRepository(ref)
 	if err != nil {
 		return nil, ArtifactInfo{}, err
@@ -375,6 +384,15 @@ func (c *RemoteCatalog) Fetch(ctx context.Context, ref Reference) ([]byte, Artif
 // FetchWithBundle retrieves an artifact's primary content and bundle layer.
 // If the artifact has no bundle layer, bundleData is nil.
 func (c *RemoteCatalog) FetchWithBundle(ctx context.Context, ref Reference) ([]byte, []byte, ArtifactInfo, error) {
+	// When no version is specified, resolve to the latest version first.
+	if !ref.HasVersion() && !ref.HasDigest() {
+		resolved, err := c.resolveWithKind(ctx, ref)
+		if err != nil {
+			return nil, nil, ArtifactInfo{}, err
+		}
+		ref = resolved.Reference
+	}
+
 	repo, err := c.getRepository(ref)
 	if err != nil {
 		return nil, nil, ArtifactInfo{}, err
@@ -439,6 +457,57 @@ func (c *RemoteCatalog) FetchWithBundle(ctx context.Context, ref Reference) ([]b
 
 // Resolve finds the best matching version for a reference.
 func (c *RemoteCatalog) Resolve(ctx context.Context, ref Reference) (ArtifactInfo, error) {
+	// When kind is empty, try resolving across all kind paths (solutions/,
+	// providers/, auth-handlers/). This handles the common case where a user
+	// does `catalog pull my-solution@1.0.0` without specifying --kind.
+	if ref.Kind == "" {
+		info, err := c.resolveAcrossKinds(ctx, ref)
+		if err == nil {
+			return info, nil
+		}
+		// Auth/network errors should not fall through to kindless resolution —
+		// the registry is reachable but failing, so retrying without a kind
+		// prefix will likely hit the same error.
+		if !IsNotFound(err) {
+			return ArtifactInfo{}, err
+		}
+		// Fall through to kindless resolution as a last resort (for registries
+		// that don't use kind path prefixes).
+	}
+
+	return c.resolveWithKind(ctx, ref)
+}
+
+// resolveAcrossKinds tries to resolve a reference by probing each known kind
+// path prefix. Returns the first successful match.
+func (c *RemoteCatalog) resolveAcrossKinds(ctx context.Context, ref Reference) (ArtifactInfo, error) {
+	kinds := []ArtifactKind{ArtifactKindSolution, ArtifactKindProvider, ArtifactKindAuthHandler}
+	var firstErr error
+	for _, k := range kinds {
+		candidate := ref
+		candidate.Kind = k
+		info, err := c.resolveWithKind(ctx, candidate)
+		if err == nil {
+			c.logger.V(1).Info("resolved artifact kind by probing remote",
+				"name", ref.Name, "kind", k, "version", info.Reference.Version)
+			return info, nil
+		}
+		if !IsNotFound(err) {
+			c.logger.V(1).Info("remote catalog kind probe error",
+				"catalog", c.name, "kind", k, "error", err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("remote catalog %q kind %q: %w", c.name, k, err)
+			}
+		}
+	}
+	if firstErr != nil {
+		return ArtifactInfo{}, firstErr
+	}
+	return ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
+}
+
+// resolveWithKind resolves a reference that has a known kind (or is intentionally kindless).
+func (c *RemoteCatalog) resolveWithKind(ctx context.Context, ref Reference) (ArtifactInfo, error) {
 	// If version is specified, resolve directly
 	if ref.HasVersion() || ref.HasDigest() {
 		repo, err := c.getRepository(ref)
@@ -477,7 +546,7 @@ func (c *RemoteCatalog) Resolve(ctx context.Context, ref Reference) (ArtifactInf
 
 	// Return highest version
 	ref.Version = versions[0]
-	return c.Resolve(ctx, ref)
+	return c.resolveWithKind(ctx, ref)
 }
 
 // listVersions lists all versions of an artifact.
@@ -614,6 +683,10 @@ func (c *RemoteCatalog) Exists(ctx context.Context, ref Reference) (bool, error)
 		return false, err
 	}
 
+	if !ref.HasVersion() && !ref.HasDigest() {
+		return false, fmt.Errorf("cannot check existence without version or digest for %q", ref.Name)
+	}
+
 	tag := c.tagForRef(ref)
 	//nolint:errcheck // Resolve error means artifact doesn't exist
 	_, err = repo.Resolve(ctx, tag)
@@ -642,12 +715,18 @@ func (c *RemoteCatalog) Delete(ctx context.Context, ref Reference) error {
 	if err := repo.Delete(ctx, desc); err != nil {
 		errStr := err.Error()
 
-		// GCP Artifact Registry rejects digest-based DELETE when the manifest
-		// still has a tag. Retry by deleting via the tag reference, which
-		// removes both the tag and the manifest in one operation.
-		if (strings.Contains(errStr, "dangling tag") || strings.Contains(errStr, "still referenced")) && ref.Version != nil {
-			c.logger.V(1).Info("digest delete rejected (tagged manifest), retrying with tag reference",
-				"tag", tag, "digest", desc.Digest.String())
+		// Some registries require tag-based DELETE instead of digest-based:
+		//   - GCP Artifact Registry rejects digest-based DELETE when the manifest
+		//     still has a tag ("dangling tag" / "still referenced").
+		//   - Quay-based registries reject the "delete" auth scope action in the
+		//     Docker V2 token endpoint, returning a 400 ("Unable to decode").
+		// In both cases, fall back to a direct HTTP DELETE using the tag reference,
+		// which avoids the ORAS-injected "delete" scope.
+		needsTagDelete := (strings.Contains(errStr, "dangling tag") || strings.Contains(errStr, "still referenced")) ||
+			(strings.Contains(errStr, "400") && strings.Contains(errStr, "delete"))
+		if needsTagDelete && ref.Version != nil {
+			c.logger.V(1).Info("digest delete rejected, retrying with tag reference",
+				"tag", tag, "digest", desc.Digest.String(), "reason", errStr)
 
 			if deleteErr := c.deleteByTag(ctx, ref, tag); deleteErr != nil {
 				return fmt.Errorf("failed to delete artifact by tag after digest rejection: %w", deleteErr)
@@ -755,7 +834,10 @@ func (c *RemoteCatalog) Tag(ctx context.Context, ref Reference, alias string) (s
 	return oldVersion, nil
 }
 
-// tagForRef returns the tag string for a reference.
+// tagForRef returns the OCI tag string for a reference.
+// The reference must have a version or digest — scafctl does not use
+// arbitrary tags like "latest". Callers must resolve the version before
+// calling this method (e.g. via resolveWithKind or listVersions).
 func (c *RemoteCatalog) tagForRef(ref Reference) string {
 	if ref.HasDigest() {
 		return ref.Digest
@@ -763,7 +845,11 @@ func (c *RemoteCatalog) tagForRef(ref Reference) string {
 	if ref.HasVersion() {
 		return ref.Version.String()
 	}
-	return "latest"
+	// This should never happen — callers must resolve the version first.
+	// Panic in debug builds; return a sentinel that will fail OCI resolution
+	// rather than silently creating a "latest" tag.
+	c.logger.Error(nil, "BUG: tagForRef called without version or digest", "name", ref.Name, "kind", ref.Kind)
+	return "__unresolved__"
 }
 
 // CopyOptions configures a copy operation between catalogs.
@@ -812,10 +898,28 @@ func (c *RemoteCatalog) CopyTo(ctx context.Context, ref Reference, target *Local
 		targetRef.Name = opts.TargetName
 	}
 
-	// Tag in local store
+	// Tag in local store with the canonical local tag format (kind/name:version).
+	// Attach an origin annotation to the descriptor so the local catalog knows
+	// where the artifact was pulled from. This lives only in the OCI index
+	// (index.json) and does not modify the manifest blob or its digest.
 	targetTag := target.tagForRef(targetRef)
+	if desc.Annotations == nil {
+		desc.Annotations = make(map[string]string)
+	}
+	origin := fmt.Sprintf("pulled from %s", c.name)
+	if c.registry != "" {
+		origin += fmt.Sprintf(" (%s/%s)", c.registry, c.repository)
+	}
+	desc.Annotations[AnnotationOrigin] = origin
 	if err := target.store.Tag(ctx, desc, targetTag); err != nil {
 		return ArtifactInfo{}, fmt.Errorf("failed to tag artifact: %w", err)
+	}
+
+	// Remove the raw remote tag that oras.Copy created (e.g. "1.0.0") so the
+	// artifact is only reachable via the canonical local tag. Without this the
+	// local catalog would require two deletes for the same artifact.
+	if tag != targetTag {
+		_ = target.store.Untag(ctx, tag)
 	}
 
 	c.logger.V(1).Info("copied artifact from remote to local",
@@ -838,10 +942,18 @@ func (c *RemoteCatalog) CopyFrom(ctx context.Context, source *LocalCatalog, ref 
 		return ArtifactInfo{}, err
 	}
 
-	tag := source.tagForRef(ref)
+	// Resolve the artifact in the source catalog. This handles mismatched
+	// tags (e.g., bare "1.0.0" vs canonical "solution/email-notifier:1.0.0")
+	// by falling back to annotation-based lookup.
+	info, err := source.Resolve(ctx, ref)
+	if err != nil {
+		return ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
+	}
 
-	// Check if artifact exists in source
-	desc, err := source.store.Resolve(ctx, tag)
+	// Use the resolved digest to locate the artifact in the OCI store,
+	// which is tag-format independent.
+	srcTag := info.Digest
+	_, err = source.store.Resolve(ctx, srcTag)
 	if err != nil {
 		return ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
 	}
@@ -875,7 +987,7 @@ func (c *RemoteCatalog) CopyFrom(ctx context.Context, source *LocalCatalog, ref 
 	targetTag := c.tagForRef(targetRef)
 
 	// Copy from local to remote
-	desc, err = oras.Copy(ctx, source.store, tag, repo, targetTag, copyOpts)
+	desc, err := oras.Copy(ctx, source.store, srcTag, repo, targetTag, copyOpts)
 	if err != nil {
 		return ArtifactInfo{}, fmt.Errorf("failed to copy artifact: %w", err)
 	}
