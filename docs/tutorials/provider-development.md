@@ -1019,7 +1019,72 @@ The host registers HostService via the go-plugin GRPCBroker during plugin startu
 
 ### Quick Start
 
-#### 1. Create Plugin Directory
+The fastest way to scaffold a complete plugin project is with the **plugin-template** solution. It creates the full project structure -- source code, tests, CI/CD pipelines, linter config, and optionally a GitHub repository with branch protection and security settings.
+
+#### Option A: Scaffold with GitHub Repository
+
+{{< tabs "provider-development-cmd-0a" >}}
+{{% tab "Bash" %}}
+```bash
+scafctl run solution \
+  -f examples/solutions/plugin-template/solution.yaml \
+  -r name=scafctl-plugin-echo \
+  -r module=github.com/myorg/scafctl-plugin-echo \
+  -r "description=Echoes input values" \
+  -r capabilities=from \
+  -r create_repo=true \
+  -r repo_visibility=private
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution `
+  -f examples/solutions/plugin-template/solution.yaml `
+  -r name=scafctl-plugin-echo `
+  -r module=github.com/myorg/scafctl-plugin-echo `
+  -r "description=Echoes input values" `
+  -r capabilities=from `
+  -r create_repo=true `
+  -r repo_visibility=private
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+This creates the GitHub repository, pushes a GPG-signed initial commit with all scaffolded files, configures branch/tag rulesets, and enables Dependabot.
+
+> [!WARNING]
+> The initial commit does not include `go.sum`. Run `go mod tidy` locally and push the result before CI pipelines will pass.
+
+#### Option B: Scaffold Locally
+
+{{< tabs "provider-development-cmd-0b" >}}
+{{% tab "Bash" %}}
+```bash
+scafctl run solution \
+  -f examples/solutions/plugin-template/solution.yaml \
+  -r name=scafctl-plugin-echo \
+  -r module=github.com/myorg/scafctl-plugin-echo \
+  -r "description=Echoes input values" \
+  -r capabilities=from
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run solution `
+  -f examples/solutions/plugin-template/solution.yaml `
+  -r name=scafctl-plugin-echo `
+  -r module=github.com/myorg/scafctl-plugin-echo `
+  -r "description=Echoes input values" `
+  -r capabilities=from
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+This writes the project files to `scafctl-plugin-echo/` in the current directory.
+
+#### Option C: Manual Setup
+
+If you prefer to set up the project manually:
 
 {{< tabs "provider-development-cmd-1" >}}
 {{% tab "Bash" %}}

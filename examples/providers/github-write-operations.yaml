@@ -12,7 +12,8 @@ metadata:
   version: 1.0.0
   description: |
     GitHub provider write operations: issues, PRs, commits, branches, tags,
-    and releases. Commits are automatically GPG-signed via createCommitOnBranch.
+    releases, repo management, rulesets, and security settings.
+    Commits are automatically GPG-signed via createCommitOnBranch.
 
 spec:
   resolvers:
@@ -94,3 +95,81 @@ spec:
     #             body: "First stable release"
     #             prerelease: false
     #             target_commitish: main
+    #
+    # Create a repository (GraphQL, REST fallback for EMU):
+    #   new-repo:
+    #     type: any
+    #     resolve:
+    #       with:
+    #         - provider: github
+    #           inputs:
+    #             operation: create_repo
+    #             owner: my-org
+    #             repo: my-new-repo
+    #             description: "A new project"
+    #             visibility: private
+    #             auto_init: true
+    #
+    # Create a branch protection ruleset (REST):
+    #   branch-ruleset:
+    #     type: any
+    #     resolve:
+    #       with:
+    #         - provider: github
+    #           inputs:
+    #             operation: create_ruleset
+    #             owner: my-org
+    #             repo: my-repo
+    #             ruleset_name: main branch protection
+    #             target: branch
+    #             enforcement: active
+    #             include_refs:
+    #               - refs/heads/main
+    #             required_status_checks_contexts:
+    #               - test
+    #               - lint
+    #             required_approving_review_count: 1
+    #             required_linear_history: true
+    #             requires_commit_signatures: true
+    #             allow_force_pushes: false
+    #             allow_deletions: false
+    #
+    # Create a tag protection ruleset (REST):
+    #   tag-ruleset:
+    #     type: any
+    #     resolve:
+    #       with:
+    #         - provider: github
+    #           inputs:
+    #             operation: create_ruleset
+    #             owner: my-org
+    #             repo: my-repo
+    #             ruleset_name: version tag protection
+    #             target: tag
+    #             enforcement: active
+    #             include_refs:
+    #               - "refs/tags/v*"
+    #             allow_deletions: false
+    #             allow_force_pushes: false
+    #
+    # Enable vulnerability alerts (REST):
+    #   vuln-alerts:
+    #     type: any
+    #     resolve:
+    #       with:
+    #         - provider: github
+    #           inputs:
+    #             operation: enable_vulnerability_alerts
+    #             owner: my-org
+    #             repo: my-repo
+    #
+    # Enable automated security fixes (REST):
+    #   auto-security-fixes:
+    #     type: any
+    #     resolve:
+    #       with:
+    #         - provider: github
+    #           inputs:
+    #             operation: enable_automated_security_fixes
+    #             owner: my-org
+    #             repo: my-repo

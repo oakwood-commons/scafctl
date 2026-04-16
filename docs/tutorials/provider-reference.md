@@ -559,7 +559,7 @@ The git provider enforces several security measures:
 
 ## github
 
-Interact with GitHub via GraphQL (reads, issues, PRs, signed commits, branches, tags) and REST (releases). Uses the configured GitHub auth handler automatically. Commit operations use `createCommitOnBranch` for GPG-signed multi-file atomic commits.
+Interact with GitHub via GraphQL (reads, issues, PRs, signed commits, branches, tags, repos) and REST (releases, rulesets, security settings). Uses the configured GitHub auth handler automatically. Commit operations use `createCommitOnBranch` for GPG-signed multi-file atomic commits.
 
 > For arbitrary HTTP requests to GitHub, use the `http` provider with `auth: github`.
 
@@ -571,9 +571,9 @@ Interact with GitHub via GraphQL (reads, issues, PRs, signed commits, branches, 
 
 | Field | Type | Required | Description |
 |-------|------|:--------:|-------------|
-| `operation` | string | ✅ | API operation (see operations table below) |
-| `owner` | string | ✅ | Repository owner (user or organization) |
-| `repo` | string | ✅ | Repository name |
+| `operation` | string | Yes | API operation (see operations table below) |
+| `owner` | string | Conditional | Repository owner (user or organization). Required for all operations except `create_repo` (defaults to authenticated user). |
+| `repo` | string | Yes | Repository name. Required for all operations. |
 | `api_base` | string | ❌ | GitHub API base URL (default: `https://api.github.com`). Set for GitHub Enterprise. |
 | `path` | string | ❌ | File path within the repository (for `get_file`) |
 | `ref` | string | ❌ | Git reference (branch, tag, or commit SHA). Defaults to repo's default branch |
@@ -600,6 +600,19 @@ Interact with GitHub via GraphQL (reads, issues, PRs, signed commits, branches, 
 | `release_id` | int | ❌ | Release ID for update/delete |
 | `prerelease` | bool | ❌ | Whether release is a prerelease |
 | `target_commitish` | string | ❌ | Branch/SHA target for release tag |
+| `visibility` | string | ❌ | Repository visibility for `create_repo`: `public` or `private` (default: `public`) |
+| `auto_init` | bool | ❌ | Initialize repo with a README (uses REST Contents API) |
+| `ruleset_name` | string | ❌ | Name for the repository ruleset |
+| `target` | string | ❌ | Ruleset target type: `branch` or `tag` (default: `branch`) |
+| `enforcement` | string | ❌ | Ruleset enforcement level: `active`, `disabled`, `evaluate` (default: `active`) |
+| `include_refs` | array | ❌ | Ref patterns to include (e.g. `refs/heads/main`, `refs/tags/v*`) |
+| `exclude_refs` | array | ❌ | Ref patterns to exclude |
+| `required_status_checks_contexts` | array | ❌ | Required status check context names |
+| `required_approving_review_count` | int | ❌ | Minimum approving reviews required (0--10) |
+| `required_linear_history` | bool | ❌ | Require linear commit history |
+| `allow_force_pushes` | bool | ❌ | Allow force pushes to matching refs |
+| `allow_deletions` | bool | ❌ | Allow deletion of matching refs |
+| `requires_commit_signatures` | bool | ❌ | Require signed commits |
 
 ### Operations
 
@@ -640,6 +653,10 @@ Interact with GitHub via GraphQL (reads, issues, PRs, signed commits, branches, 
 | `create_release` | REST | Create a release |
 | `update_release` | REST | Update a release |
 | `delete_release` | REST | Delete a release |
+| `create_repo` | GraphQL | Create a repository (REST fallback for EMU) |
+| `create_ruleset` | REST | Create a repository ruleset (branch or tag protection) |
+| `enable_vulnerability_alerts` | REST | Enable Dependabot vulnerability alerts |
+| `enable_automated_security_fixes` | REST | Enable Dependabot automated security fixes |
 
 ### Output
 
@@ -653,10 +670,14 @@ Interact with GitHub via GraphQL (reads, issues, PRs, signed commits, branches, 
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `success` | bool | Whether the operation succeeded |
+| `success` | bool | Always `true` on success (failures return a Go error) |
 | `operation` | string | The operation that was performed |
 | `result` | any | API response data |
-| `error` | string | Error message if the operation failed |
+
+> Write operations return a Go error on failure, which stops dependent workflow actions and respects `onError` handling.
+
+> [!NOTE]
+> The `create_commit` result includes `additions` and `deletions` as integer counts (e.g., `"additions": 3`), not nested objects.
 
 ### Examples
 
@@ -723,7 +744,54 @@ action:
         tag_name: v1.0.0
         name: "Release 1.0.0"
         body: "First stable release"
+
+# Create a repository with auto-init
+action:
+  with:
+    - provider: github
+      inputs:
+        operation: create_repo
+        owner: my-org
+        repo: my-new-repo
+        description: "A scaffolded project"
+        visibility: private
+        auto_init: true
+
+# Create a branch protection ruleset
+action:
+  with:
+    - provider: github
+      inputs:
+        operation: create_ruleset
+        owner: my-org
+        repo: my-repo
+        ruleset_name: main branch protection
+        target: branch
+        enforcement: active
+        include_refs:
+          - refs/heads/main
+        required_status_checks_contexts:
+          - test
+          - lint
+        required_approving_review_count: 1
+        required_linear_history: true
+        requires_commit_signatures: true
+        allow_force_pushes: false
+        allow_deletions: false
+
+# Enable Dependabot security features
+action:
+  with:
+    - provider: github
+      inputs:
+        operation: enable_vulnerability_alerts
+        owner: my-org
+        repo: my-repo
 ```
+
+> [!TIP]
+> For a complete end-to-end example of repo creation with rulesets and security settings,
+> see the [plugin-template solution](../../examples/solutions/plugin-template/solution.yaml).
 
 ---
 
