@@ -71,6 +71,7 @@ func CommandRules(cliParams *settings.Run, ioStreams *terminal.IOStreams, path s
 
 			opts.IOStreams = ioStreams
 			opts.CliParams = cliParams
+			opts.KvxOutputFlags.AppName = cliParams.BinaryName
 
 			return opts.Run(ctx)
 		},

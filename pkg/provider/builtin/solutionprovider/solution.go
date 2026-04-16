@@ -6,7 +6,9 @@ package solutionprovider
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
@@ -111,9 +113,17 @@ func (p *SolutionProvider) Execute(ctx context.Context, input any) (*provider.Ou
 	}
 
 	// Load the sub-solution.
-	lgr.V(1).Info("loading sub-solution", "source", in.Source)
+	// Resolve file-based sources against the solution directory so relative
+	// paths in nested solutions work regardless of action working directory.
+	source := in.Source
+	if isFilePath(source) && !filepath.IsAbs(source) {
+		if solDir, ok := provider.SolutionDirectoryFromContext(ctx); ok && solDir != "" {
+			source = filepath.Join(solDir, source)
+		}
+	}
+	lgr.V(1).Info("loading sub-solution", "source", source)
 
-	sol, err := p.loader.Get(ctx, in.Source)
+	sol, err := p.loader.Get(ctx, source)
 	if err != nil {
 		return nil, fmt.Errorf("solution %q: failed to load: %w", in.Source, err)
 	}
@@ -594,6 +604,21 @@ func isIdentChar(c byte) bool {
 
 func isIdentStartChar(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
+}
+
+// isFilePath reports whether source looks like a file path rather than a
+// catalog reference (e.g. "deploy-to-k8s@2.0.0") or URL. It returns true
+// when the source is an absolute path, starts with "./" or "../", or ends
+// with a YAML extension.
+func isFilePath(source string) bool {
+	if filepath.IsAbs(source) {
+		return true
+	}
+	if strings.HasPrefix(source, "./") || strings.HasPrefix(source, "../") {
+		return true
+	}
+	ext := strings.ToLower(filepath.Ext(source))
+	return ext == ".yaml" || ext == ".yml"
 }
 
 // --- Descriptor ---

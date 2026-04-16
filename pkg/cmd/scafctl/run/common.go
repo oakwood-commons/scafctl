@@ -15,6 +15,8 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	catversion "github.com/oakwood-commons/scafctl/pkg/catalog/version"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -168,6 +170,11 @@ type sharedResolverOptions struct {
 	MaxValueSize    int64
 	ResolverTimeout time.Duration
 	PhaseTimeout    time.Duration
+
+	// VersionConstraint is a semver version constraint (e.g., ^1.0.0, ~2.1).
+	// When set, the best matching version from the catalog is resolved before
+	// fetching the solution. Mutually exclusive with @version in the name.
+	VersionConstraint string
 
 	// OutputDir is the target directory for action file operations.
 	// When set, actions resolve relative paths against this directory instead of CWD.
@@ -527,9 +534,12 @@ func (o *sharedResolverOptions) executeResolvers(
 // and registers the solution provider. It handles bundle extraction, plugin merging,
 // and working directory changes. Returns cleanup function that must be deferred.
 //
+// solutionDir is the directory containing the solution file (empty for stdin/catalog).
+// Callers should use it with provider.WithSolutionDirectory when --base-dir is not set.
+//
 // This method delegates to the standalone prepare.PrepareSolution function,
 // passing CLI-specific options (getter, registry, stdin, metrics).
-func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context) (*solution.Solution, *provider.Registry, func(), error) {
+func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context) (*solution.Solution, *provider.Registry, string, func(), error) {
 	var opts []prepare.Option
 
 	if o.getter != nil {
@@ -557,10 +567,76 @@ func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context)
 
 	result, err := prepare.Solution(ctx, o.File, opts...)
 	if err != nil {
-		return nil, nil, func() {}, err
+		return nil, nil, "", func() {}, err
 	}
 
-	return result.Solution, result.Registry, result.Cleanup, nil
+	return result.Solution, result.Registry, result.SolutionDir, result.Cleanup, nil
+}
+
+// resolveVersionConstraintForFile resolves a --version constraint against the
+// catalog and updates o.File to include the best matching version. This must be
+// called before prepareSolutionForExecution when VersionConstraint is non-empty.
+//
+// Only applies when File is a bare catalog name (no path separators or file
+// extensions). For file paths and OCI references, --version is an error.
+func (o *sharedResolverOptions) resolveVersionConstraintForFile(ctx context.Context) error {
+	if o.VersionConstraint == "" {
+		return nil
+	}
+
+	// Check for @version in the name
+	if o.File != "" {
+		if idx := strings.LastIndex(o.File, "@"); idx > 0 {
+			return fmt.Errorf("cannot use --version with an explicit version in reference %q; use one or the other", o.File)
+		}
+	}
+
+	name := o.File
+	if name == "" {
+		return fmt.Errorf("--version requires a catalog name (positional argument or -f flag)")
+	}
+
+	// Only applicable to bare catalog names
+	if !get.IsCatalogReference(name) || strings.Contains(name, "/") {
+		return fmt.Errorf("--version can only be used with catalog names, not file paths or OCI references")
+	}
+
+	// Validate constraint syntax early to fail fast before catalog I/O
+	if err := catversion.ValidateConstraint(o.VersionConstraint); err != nil {
+		return err
+	}
+
+	lgr := logger.FromContext(ctx)
+	localCatalog, err := catalog.NewLocalCatalog(*lgr)
+	if err != nil {
+		return fmt.Errorf("--version requires catalog access: %w", err)
+	}
+
+	remotes := catalog.RemoteCatalogsFromContext(ctx, *lgr)
+	catalogs := make([]catalog.Catalog, 0, 1+len(remotes))
+	catalogs = append(catalogs, localCatalog)
+	catalogs = append(catalogs, remotes...)
+
+	versions, err := catversion.ListCatalogVersions(ctx, catalogs, catalog.ArtifactKindSolution, name)
+	if err != nil {
+		return err
+	}
+
+	bestVersion, err := catversion.BestMatch(versions, o.VersionConstraint)
+	if err != nil {
+		return err
+	}
+
+	if bestVersion == "" {
+		return fmt.Errorf("no versions of %q match constraint %q", name, o.VersionConstraint)
+	}
+
+	if w := writer.FromContext(ctx); w != nil {
+		w.Verbosef("Version constraint %q resolved to %s", o.VersionConstraint, bestVersion)
+	}
+
+	o.File = name + "@" + bestVersion
+	return nil
 }
 
 // addSharedResolverFlags adds common resolver flags to a cobra command.
@@ -580,6 +656,7 @@ func addSharedResolverFlags(cCmd *cobra.Command, o *sharedResolverOptions) {
 	cCmd.Flags().Int64Var(&o.MaxValueSize, "max-value-size", settings.DefaultMaxValueSize, "Fail when value exceeds this size in bytes (default: 10MB)")
 	cCmd.Flags().DurationVar(&o.ResolverTimeout, "resolver-timeout", settings.DefaultResolverTimeout, "Timeout per resolver")
 	cCmd.Flags().DurationVar(&o.PhaseTimeout, "phase-timeout", settings.DefaultPhaseTimeout, "Timeout per resolver phase")
+	cCmd.Flags().StringVar(&o.VersionConstraint, "version", "", "Semver version constraint for catalog resolution (e.g., ^1.0.0, ~2.1, >=1.0 <3.0)")
 	cCmd.Flags().StringVar(&o.TestName, "test-name", "", "Test name for -o test output (derived from command and args when not set)")
 	cCmd.Flags().StringVar(&o.OutputDir, "output-dir", "", "Target directory for action file operations (actions resolve relative paths here instead of CWD)")
 	cCmd.Flags().StringVar(&o.BaseDir, "base-dir", "", "Override base directory for resolver path resolution (when unset, paths resolve from CWD)")

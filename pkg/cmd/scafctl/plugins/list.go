@@ -30,8 +30,9 @@ type ListOptions struct {
 // CommandList creates the list subcommand.
 func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
 	opts := &ListOptions{
-		CliParams: cliParams,
-		IOStreams: ioStreams,
+		CliParams:      cliParams,
+		IOStreams:      ioStreams,
+		KvxOutputFlags: flags.KvxOutputFlags{AppName: cliParams.BinaryName},
 	}
 
 	cmd := &cobra.Command{

@@ -289,9 +289,9 @@ func TestRemoteCatalog_tagForRef(t *testing.T) {
 			expected: "sha256:abc123",
 		},
 		{
-			name:     "no version or digest returns latest",
+			name:     "no version or digest returns sentinel",
 			ref:      Reference{Kind: ArtifactKindSolution, Name: "sol"},
-			expected: "latest",
+			expected: "__unresolved__",
 		},
 	}
 

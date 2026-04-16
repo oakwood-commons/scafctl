@@ -417,3 +417,78 @@ func TestDebugOutf_Quiet(t *testing.T) {
 	w.DebugOutf("quiet value=%d", 99)
 	assert.Empty(t, errBuf.String())
 }
+
+func TestVerbose(t *testing.T) {
+	w, _, errBuf := newTestWriter()
+	w.cliParams.Verbose = true
+	w.cliParams.NoColor = true
+
+	w.Verbose("verbose message")
+	assert.Contains(t, errBuf.String(), "verbose message")
+}
+
+func TestVerbose_NotEnabled(t *testing.T) {
+	w, _, errBuf := newTestWriter()
+	w.cliParams.Verbose = false
+
+	w.Verbose("should not appear")
+	assert.Empty(t, errBuf.String())
+}
+
+func TestVerbose_Quiet(t *testing.T) {
+	w, _, errBuf := newTestWriter()
+	w.cliParams.Verbose = true
+	w.cliParams.IsQuiet = true
+
+	w.Verbose("quiet verbose")
+	assert.Empty(t, errBuf.String())
+}
+
+func TestVerbosef(t *testing.T) {
+	w, _, errBuf := newTestWriter()
+	w.cliParams.Verbose = true
+	w.cliParams.NoColor = true
+
+	w.Verbosef("registry=%s scope=%s", "ghcr.io", "repo:write")
+	assert.Contains(t, errBuf.String(), "registry=ghcr.io scope=repo:write")
+}
+
+func TestVerbosef_NotEnabled(t *testing.T) {
+	w, _, errBuf := newTestWriter()
+	w.cliParams.Verbose = false
+
+	w.Verbosef("value=%d", 42)
+	assert.Empty(t, errBuf.String())
+}
+
+func TestVerbose_WritesToStderr(t *testing.T) {
+	w, outBuf, errBuf := newTestWriter()
+	w.cliParams.Verbose = true
+	w.cliParams.NoColor = true
+
+	w.Verbose("stderr check")
+	assert.Empty(t, outBuf.String())
+	assert.Contains(t, errBuf.String(), "stderr check")
+}
+
+func TestVerboseEnabled(t *testing.T) {
+	t.Run("true when verbose and not quiet", func(t *testing.T) {
+		w, _, _ := newTestWriter()
+		w.cliParams.Verbose = true
+		w.cliParams.IsQuiet = false
+		assert.True(t, w.VerboseEnabled())
+	})
+
+	t.Run("false when not verbose", func(t *testing.T) {
+		w, _, _ := newTestWriter()
+		w.cliParams.Verbose = false
+		assert.False(t, w.VerboseEnabled())
+	})
+
+	t.Run("false when quiet overrides verbose", func(t *testing.T) {
+		w, _, _ := newTestWriter()
+		w.cliParams.Verbose = true
+		w.cliParams.IsQuiet = true
+		assert.False(t, w.VerboseEnabled())
+	})
+}

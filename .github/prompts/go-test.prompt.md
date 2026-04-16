@@ -1,6 +1,6 @@
 ---
 description: "scafctl: Run Go tests with race detection, check coverage, and diagnose failures."
-agent: "go-reviewer"
+agent: "go-fixer"
 ---
 Run the Go test suite and report results:
 

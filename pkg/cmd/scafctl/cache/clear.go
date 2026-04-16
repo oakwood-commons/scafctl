@@ -49,8 +49,9 @@ var ValidKinds = cachelib.ValidKinds
 // CommandClear creates the clear command.
 func CommandClear(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
 	options := &ClearOptions{
-		CliParams: cliParams,
-		IOStreams: ioStreams,
+		CliParams:      cliParams,
+		IOStreams:      ioStreams,
+		KvxOutputFlags: flags.KvxOutputFlags{AppName: cliParams.BinaryName},
 	}
 
 	cmd := &cobra.Command{

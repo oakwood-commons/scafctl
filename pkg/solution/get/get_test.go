@@ -1521,8 +1521,8 @@ spec:
 func TestGetter_Get_CombinedCatalogFileError(t *testing.T) {
 	t.Parallel()
 
-	// When catalog fails for a bare name (without @), and file also fails,
-	// the error should mention both failures
+	// When catalog fails for a bare name (without @), the error should be the
+	// catalog error directly -- bare names never fall back to file resolution.
 	mock := &mockCatalogResolver{
 		err: fmt.Errorf("catalog offline"),
 	}
@@ -1536,7 +1536,7 @@ func TestGetter_Get_CombinedCatalogFileError(t *testing.T) {
 
 	_, err := getter.Get(context.Background(), "my-solution")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "also not found on file system")
+	assert.Contains(t, err.Error(), "catalog offline")
 }
 
 func TestExtractNameVersionFromRef(t *testing.T) {

@@ -528,6 +528,7 @@ func (o *SolutionOptions) loadSolution(ctx context.Context) (*solution.Solution,
 		if err == nil {
 			resolverOpts := []catalog.SolutionResolverOption{
 				catalog.WithResolverNoCache(o.NoCache),
+				catalog.WithResolverRemoteCatalogs(catalog.RemoteCatalogsFromContext(ctx, *lgr)),
 			}
 			if !o.NoCache {
 				artifactCache := cache.NewArtifactCache(paths.ArtifactCacheDir(), settings.DefaultArtifactCacheTTL)

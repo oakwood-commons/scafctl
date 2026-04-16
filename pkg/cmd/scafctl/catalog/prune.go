@@ -61,6 +61,7 @@ func CommandPrune(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			  scafctl catalog prune -o json
 		`),
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			options.AppName = cliParams.BinaryName
 			kvxOpts := flags.ToKvxOutputOptions(&options.KvxOutputFlags, kvx.WithIOStreams(ioStreams))
 			return runPrune(cmd.Context(), options, kvxOpts)
 		},

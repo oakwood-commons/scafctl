@@ -17,6 +17,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/auth/oauth"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
 const (
@@ -211,16 +212,17 @@ func (h *Handler) mintToken(ctx context.Context, scope string) (*auth.Token, err
 		var errResp TokenErrorResponse
 		_ = json.NewDecoder(resp.Body).Decode(&errResp)
 
+		bin := settings.BinaryNameFromContext(ctx)
 		if errResp.Error == "invalid_grant" {
 			_ = h.Logout(ctx)
 			return nil, fmt.Errorf(
 				"GCP credentials have expired or been revoked (%s). "+
-					"Run: scafctl auth login gcp: %w",
-				errResp.ErrorDescription, auth.ErrTokenExpired)
+					"Run: %s auth login gcp: %w",
+				errResp.ErrorDescription, bin, auth.ErrTokenExpired)
 		}
 		return nil, fmt.Errorf(
-			"token refresh failed: %s - %s. Run: scafctl auth login gcp to re-authenticate",
-			errResp.Error, errResp.ErrorDescription)
+			"token refresh failed: %s - %s. Run: %s auth login gcp to re-authenticate",
+			errResp.Error, errResp.ErrorDescription, bin)
 	}
 
 	var tokenResp TokenResponse

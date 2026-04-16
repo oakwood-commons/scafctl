@@ -11,6 +11,6 @@ spec:
         with:
           - provider: solution
             inputs:
-              source: "tests/integration/testdata/solution-provider/child.yaml"
+              source: "child.yaml"
               inputs:
                 message: "passed from parent"

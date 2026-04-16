@@ -40,13 +40,24 @@ func WithResolverNoCache(noCache bool) SolutionResolverOption {
 	}
 }
 
+// WithResolverRemoteCatalogs sets fallback remote catalogs for the resolver.
+// When the local catalog does not contain the requested artifact, these remotes
+// are tried in order. On a remote hit the artifact is automatically pulled into
+// the local catalog so subsequent runs are instant.
+func WithResolverRemoteCatalogs(remotes []Catalog) SolutionResolverOption {
+	return func(r *SolutionResolver) {
+		r.remoteCatalogs = remotes
+	}
+}
+
 // SolutionResolver wraps a Catalog to provide solution fetching by name[@version].
 // It implements the CatalogResolver interface from pkg/solution/get.
 type SolutionResolver struct {
-	catalog       Catalog
-	logger        logr.Logger
-	artifactCache ArtifactCacher
-	noCache       bool
+	catalog        Catalog
+	remoteCatalogs []Catalog
+	logger         logr.Logger
+	artifactCache  ArtifactCacher
+	noCache        bool
 }
 
 // NewSolutionResolver creates a resolver that fetches solutions from the given catalog.
@@ -103,7 +114,15 @@ func (r *SolutionResolver) FetchSolution(ctx context.Context, nameWithVersion st
 
 	content, info, err := r.catalog.Fetch(ctx, ref)
 	if err != nil {
-		return nil, err
+		// Only fall back to remotes on not-found; propagate other errors
+		// (e.g. corrupted OCI layout) immediately.
+		if !IsNotFound(err) || len(r.remoteCatalogs) == 0 {
+			return nil, err
+		}
+		content, info, err = r.fetchFromRemotes(ctx, ref)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	r.logger.V(1).Info("fetched solution from catalog",
@@ -165,7 +184,15 @@ func (r *SolutionResolver) FetchSolutionWithBundle(ctx context.Context, nameWith
 
 	content, bundleData, info, err := r.catalog.FetchWithBundle(ctx, ref)
 	if err != nil {
-		return nil, nil, err
+		// Only fall back to remotes on not-found; propagate other errors
+		// (e.g. corrupted OCI layout) immediately.
+		if !IsNotFound(err) || len(r.remoteCatalogs) == 0 {
+			return nil, nil, err
+		}
+		content, bundleData, info, err = r.fetchWithBundleFromRemotes(ctx, ref)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	r.logger.V(1).Info("fetched solution with bundle from catalog",
@@ -205,4 +232,94 @@ func ParseNameVersion(input string) (string, string) {
 	}
 
 	return input, ""
+}
+
+// fetchFromRemotes tries each remote catalog in order. On the first hit it
+// stores the artifact into the local catalog so future runs are instant.
+func (r *SolutionResolver) fetchFromRemotes(ctx context.Context, ref Reference) ([]byte, ArtifactInfo, error) {
+	var firstErr error
+	for _, remote := range r.remoteCatalogs {
+		r.logger.V(1).Info("trying remote catalog", "name", ref.Name, "catalog", remote.Name())
+
+		content, info, err := remote.Fetch(ctx, ref)
+		if err != nil {
+			if !IsNotFound(err) {
+				r.logger.Info("remote catalog error, trying next",
+					"catalog", remote.Name(), "error", err)
+				if firstErr == nil {
+					firstErr = fmt.Errorf("remote catalog %q: %w", remote.Name(), err)
+				}
+			} else {
+				r.logger.V(1).Info("remote catalog miss", "catalog", remote.Name(), "error", err)
+			}
+			continue
+		}
+
+		r.logger.Info("auto-pulled from remote catalog",
+			"name", ref.Name, "version", info.Reference.Version, "catalog", remote.Name())
+
+		// Store into local catalog for future runs (best effort).
+		r.storeLocally(ctx, ref, info, content, nil, remote.Name())
+
+		return content, info, nil
+	}
+	if firstErr != nil {
+		return nil, ArtifactInfo{}, firstErr
+	}
+	return nil, ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: r.catalog.Name()}
+}
+
+// fetchWithBundleFromRemotes is the bundle-aware variant of fetchFromRemotes.
+func (r *SolutionResolver) fetchWithBundleFromRemotes(ctx context.Context, ref Reference) ([]byte, []byte, ArtifactInfo, error) {
+	var firstErr error
+	for _, remote := range r.remoteCatalogs {
+		r.logger.V(1).Info("trying remote catalog (with bundle)", "name", ref.Name, "catalog", remote.Name())
+
+		content, bundleData, info, err := remote.FetchWithBundle(ctx, ref)
+		if err != nil {
+			if !IsNotFound(err) {
+				r.logger.Info("remote catalog error, trying next",
+					"catalog", remote.Name(), "error", err)
+				if firstErr == nil {
+					firstErr = fmt.Errorf("remote catalog %q: %w", remote.Name(), err)
+				}
+			} else {
+				r.logger.V(1).Info("remote catalog miss", "catalog", remote.Name(), "error", err)
+			}
+			continue
+		}
+
+		r.logger.Info("auto-pulled from remote catalog",
+			"name", ref.Name, "version", info.Reference.Version, "catalog", remote.Name())
+
+		r.storeLocally(ctx, ref, info, content, bundleData, remote.Name())
+
+		return content, bundleData, info, nil
+	}
+	if firstErr != nil {
+		return nil, nil, ArtifactInfo{}, firstErr
+	}
+	return nil, nil, ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: r.catalog.Name()}
+}
+
+// storeLocally persists a remotely-fetched artifact into the local catalog.
+// Errors are logged but not propagated — the remote fetch already succeeded.
+func (r *SolutionResolver) storeLocally(ctx context.Context, ref Reference, info ArtifactInfo, content, bundleData []byte, sourceCatalog string) {
+	storeRef := ref
+	if info.Reference.Version != nil {
+		storeRef.Version = info.Reference.Version
+	}
+
+	annotations := map[string]string{
+		AnnotationArtifactName: storeRef.Name,
+		AnnotationArtifactType: storeRef.Kind.String(),
+		AnnotationOrigin:       fmt.Sprintf("auto-cached from %s", sourceCatalog),
+	}
+	if storeRef.Version != nil {
+		annotations[AnnotationVersion] = storeRef.Version.String()
+	}
+
+	if _, err := r.catalog.Store(ctx, storeRef, content, bundleData, annotations, false); err != nil {
+		r.logger.V(1).Info("failed to store auto-pulled artifact locally (ignoring)", "error", err)
+	}
 }

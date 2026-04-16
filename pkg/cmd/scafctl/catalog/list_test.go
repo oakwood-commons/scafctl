@@ -4,15 +4,19 @@
 package catalog
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
 	catalogpkg "github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -106,6 +110,72 @@ func TestCommandList_NameFlag(t *testing.T) {
 	f := cmd.Flags().Lookup("name")
 	require.NotNil(t, f, "name flag should exist")
 	assert.Equal(t, "", f.DefValue)
+}
+
+func TestCommandList_NameAtVersionStripped(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
+	w := writer.New(ioStreams, settings.NewCliParams())
+	ctx := writer.WithWriter(context.Background(), w)
+
+	cliParams := settings.NewCliParams()
+	cmd := CommandList(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"--name", "email-notifier@1.0.0"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+
+	// The @version should be stripped so it searches for "email-notifier", not
+	// the literal "email-notifier@1.0.0" (which would never match an annotation).
+	// If stripping didn't happen, we'd get "No artifacts found" even when one exists.
+	output := buf.String()
+	assert.NotContains(t, output, "email-notifier@1.0.0",
+		"name@version should not appear literally in output -- @ must be stripped")
+}
+
+func TestCommandList_FullOCIRefConflictsWithCatalog(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandList(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(newCatalogTestCtx(t))
+	cmd.SetArgs([]string{"--name", "ghcr.io/myorg/solutions/my-solution@1.0.0", "--catalog", "my-registry"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "conflicting options")
+}
+
+func TestRunList_InvalidConstraintSyntax_ReturnsInvalidInput(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandList(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(newCatalogTestCtx(t))
+	cmd.SetArgs([]string{"--name", "my-app", "--version", "not-valid!!"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err), "invalid constraint syntax should return InvalidInput exit code")
+}
+
+func TestRunList_ConflictingVersionFlags_ReturnsGeneralError(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandList(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(newCatalogTestCtx(t))
+	cmd.SetArgs([]string{"--name", "my-app@1.0.0", "--version", "^1.0.0"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "conflicting options")
 }
 
 func TestArtifactListSchema_ValidJSON(t *testing.T) {
@@ -222,7 +292,8 @@ func TestWriteArtifactList_LatestOnly(t *testing.T) {
 		},
 	}
 
-	err := writeArtifactList(artifacts, false, outputOpts)
+	w := writer.New(ioStreams, &settings.Run{})
+	err := writeArtifactList(w, artifacts, false, outputOpts)
 	require.NoError(t, err)
 }
 
@@ -257,7 +328,8 @@ func TestWriteArtifactList_AllVersions(t *testing.T) {
 		},
 	}
 
-	err := writeArtifactList(artifacts, true, outputOpts)
+	w := writer.New(ioStreams, &settings.Run{})
+	err := writeArtifactList(w, artifacts, true, outputOpts)
 	require.NoError(t, err)
 
 	var items []ArtifactListItem
@@ -289,7 +361,8 @@ func TestWriteArtifactList_TagFallsBackToVersion(t *testing.T) {
 		},
 	}
 
-	err := writeArtifactList(artifacts, true, outputOpts)
+	w := writer.New(ioStreams, &settings.Run{})
+	err := writeArtifactList(w, artifacts, true, outputOpts)
 	require.NoError(t, err)
 
 	var items []ArtifactListItem
@@ -319,7 +392,8 @@ func TestWriteArtifactList_PreservesDigest(t *testing.T) {
 		},
 	}
 
-	err := writeArtifactList(artifacts, true, outputOpts)
+	w := writer.New(ioStreams, &settings.Run{})
+	err := writeArtifactList(w, artifacts, true, outputOpts)
 	require.NoError(t, err)
 
 	var items []ArtifactListItem
@@ -352,7 +426,8 @@ func TestWriteArtifactList_SortsByNameThenVersionDescending(t *testing.T) {
 		},
 	}
 
-	err := writeArtifactList(artifacts, true, outputOpts)
+	w := writer.New(ioStreams, &settings.Run{})
+	err := writeArtifactList(w, artifacts, true, outputOpts)
 	require.NoError(t, err)
 
 	var items []ArtifactListItem
@@ -380,7 +455,8 @@ func TestWriteArtifactList_CatalogColumn(t *testing.T) {
 		},
 	}
 
-	err := writeArtifactList(artifacts, true, outputOpts)
+	w := writer.New(ioStreams, &settings.Run{})
+	err := writeArtifactList(w, artifacts, true, outputOpts)
 	require.NoError(t, err)
 
 	var items []ArtifactListItem
@@ -388,6 +464,19 @@ func TestWriteArtifactList_CatalogColumn(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, items, 1)
 	assert.Equal(t, "my-registry", items[0].Catalog)
+}
+
+func TestWriteArtifactList_EmptyRespectsQuiet(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, _, errBuf := terminal.NewTestIOStreams()
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+
+	// With quiet=true, the "No artifacts found" message should be suppressed.
+	w := writer.New(ioStreams, &settings.Run{IsQuiet: true})
+	err := writeArtifactList(w, nil, false, outputOpts)
+	require.NoError(t, err)
+	assert.Empty(t, errBuf.String(), "quiet mode should suppress info messages")
 }
 
 func TestRunList_RemoteCatalogRequiresName(t *testing.T) {
@@ -413,6 +502,19 @@ func BenchmarkCommandList(b *testing.B) {
 	}
 }
 
+func TestCommandList_EmbedderBinaryName(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandList(cliParams, ioStreams, "mycli/catalog")
+
+	require.NotNil(t, cmd)
+	assert.Equal(t, "list", cmd.Use)
+	assert.NotNil(t, cmd.RunE)
+}
+
 func BenchmarkWriteArtifactList(b *testing.B) {
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	outputOpts := kvx.NewOutputOptions(ioStreams)
@@ -428,9 +530,10 @@ func BenchmarkWriteArtifactList(b *testing.B) {
 		},
 	}
 
+	w := writer.New(ioStreams, &settings.Run{})
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		_ = writeArtifactList(artifacts, false, outputOpts)
+		_ = writeArtifactList(w, artifacts, false, outputOpts)
 	}
 }

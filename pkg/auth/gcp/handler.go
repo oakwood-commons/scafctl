@@ -5,6 +5,7 @@ package gcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -348,6 +349,34 @@ func (h *Handler) Status(ctx context.Context) (*auth.Status, error) {
 
 	if metadata.ImpersonateServiceAccount != "" {
 		status.ClientID = metadata.ImpersonateServiceAccount
+	}
+
+	// Probe with a token refresh to detect expired RAPT or revoked credentials.
+	// This is a single HTTP call, same pattern as the gcloud ADC fallback above.
+	// Only probe if a refresh token is stored (interactive/ADC flow).
+	hasRefreshToken, _ := h.secretStore.Exists(ctx, SecretKeyRefreshToken)
+	if hasRefreshToken {
+		scope := "https://www.googleapis.com/auth/cloud-platform"
+		if len(metadata.Scopes) > 0 {
+			scope = metadata.Scopes[0]
+		}
+		_, tokenErr := h.getStoredRefreshToken(ctx, auth.TokenOptions{
+			Scope:        scope,
+			ForceRefresh: true,
+		})
+		if tokenErr != nil {
+			status.Authenticated = false
+			errMsg := tokenErr.Error()
+			switch {
+			case strings.Contains(errMsg, "invalid_rapt"):
+				status.Reason = "expired (RAPT policy)"
+			case strings.Contains(errMsg, "invalid_grant"),
+				errors.Is(tokenErr, auth.ErrTokenExpired):
+				status.Reason = "expired or revoked"
+			default:
+				status.Reason = "token refresh failed"
+			}
+		}
 	}
 
 	return status, nil

@@ -15,6 +15,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/oakwood-commons/kvx/pkg/core"
 	"github.com/oakwood-commons/kvx/pkg/tui"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 )
 
@@ -111,10 +112,10 @@ type ViewerOptions struct {
 	DisplaySchemaJSON []byte `json:"-" yaml:"-" doc:"JSON Schema with x-kvx-* extensions for rich TUI rendering"`
 }
 
-// DefaultViewerOptions returns sensible defaults for scafctl
+// DefaultViewerOptions returns sensible defaults.
 func DefaultViewerOptions() *ViewerOptions {
 	return &ViewerOptions{
-		AppName: "scafctl",
+		AppName: settings.CliBinaryName,
 		In:      os.Stdin,
 		Out:     os.Stdout,
 	}
@@ -251,6 +252,19 @@ func View(data any, opts ...Option) error {
 		if err != nil {
 			return fmt.Errorf("expression evaluation failed: %w", err)
 		}
+	}
+
+	// Scalar values (and simple arrays of scalars) render as plain text,
+	// matching the kvx CLI behavior.
+	if isScalar(root) {
+		fmt.Fprintln(options.Out, root)
+		return nil
+	}
+	if arr, ok := root.([]any); ok && isScalarArray(arr) {
+		for _, elem := range arr {
+			fmt.Fprintln(options.Out, elem)
+		}
+		return nil
 	}
 
 	// Interactive mode: launch TUI

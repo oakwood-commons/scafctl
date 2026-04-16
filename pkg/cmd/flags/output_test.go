@@ -98,6 +98,30 @@ func TestToKvxOutputOptions(t *testing.T) {
 	assert.True(t, opts.PrettyPrint) // Default
 }
 
+func TestToKvxOutputOptions_AppNameFromFlags(t *testing.T) {
+	flags := &KvxOutputFlags{
+		Output:  "table",
+		AppName: "mycli",
+	}
+
+	opts := ToKvxOutputOptions(flags)
+
+	assert.Equal(t, "mycli", opts.AppName)
+}
+
+func TestToKvxOutputOptions_AppNameOverriddenByOption(t *testing.T) {
+	flags := &KvxOutputFlags{
+		Output:  "table",
+		AppName: "mycli",
+	}
+
+	opts := ToKvxOutputOptions(flags,
+		kvx.WithOutputAppName("mycli run solution"),
+	)
+
+	assert.Equal(t, "mycli run solution", opts.AppName)
+}
+
 func TestToKvxOutputOptions_WithOptions(t *testing.T) {
 	flags := &KvxOutputFlags{
 		Output:      "yaml",

@@ -33,4 +33,9 @@ var (
 			Bold(true).
 			PaddingLeft(1).
 			PaddingRight(1)
+
+	VerboseStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#808080")). // Gray
+			PaddingLeft(1).
+			PaddingRight(1)
 )

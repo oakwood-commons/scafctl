@@ -19,6 +19,7 @@ import (
 	ghauth "github.com/oakwood-commons/scafctl/pkg/auth/github"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -250,26 +251,53 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 			// Post-login registry bridge.
 			// Re-create the handler with the same overrides used during login so that
 			// token retrieval uses the correct clientID fingerprint and refresh token.
-			if registry != "" {
-				var bridgeHandler auth.Handler
-				var bridgeErr error
-				switch handlerName {
-				case "github":
-					bridgeHandler, bridgeErr = getGitHubHandlerWithOverrides(ctx, hostname, clientID)
-				case "gcp":
-					bridgeHandler, bridgeErr = getGCPHandlerWithOverrides(ctx, clientID, impersonateServiceAccount)
-				case "entra":
-					bridgeHandler, bridgeErr = getEntraHandlerWithOverrides(ctx, tenantID, clientID)
-				default:
-					// Custom OAuth2 handlers have no CLI overrides; re-use the
-					// handler resolved at the start of this command.
-					bridgeHandler = handler
+			var discovered []registryWithScope
+			if registry == "" {
+				// Auto-discover registries from config when --registry is not provided.
+				discovered = discoverRegistriesForHandler(ctx, handlerName)
+			} else {
+				discovered = []registryWithScope{{Host: registry, Scope: registryScope}}
+			}
+
+			if len(discovered) == 0 {
+				return nil
+			}
+
+			var bridgeHandler auth.Handler
+			var bridgeErr error
+			switch handlerName {
+			case "github":
+				bridgeHandler, bridgeErr = getGitHubHandlerWithOverrides(ctx, hostname, clientID)
+			case "gcp":
+				bridgeHandler, bridgeErr = getGCPHandlerWithOverrides(ctx, clientID, impersonateServiceAccount)
+			case "entra":
+				bridgeHandler, bridgeErr = getEntraHandlerWithOverrides(ctx, tenantID, clientID)
+			default:
+				// Custom OAuth2 handlers have no CLI overrides; re-use the
+				// handler resolved at the start of this command.
+				bridgeHandler = handler
+			}
+			if bridgeErr != nil {
+				// Fall back to the pre-login handler rather than failing outright.
+				bridgeHandler = handler
+			}
+
+			var lastBridgeErr error
+			for _, reg := range discovered {
+				// CLI --registry-scope overrides the config-discovered scope.
+				scope := registryScope
+				if scope == "" {
+					scope = reg.Scope
 				}
-				if bridgeErr != nil {
-					// Fall back to the pre-login handler rather than failing outright.
-					bridgeHandler = handler
+				if err := bridgeAuthToRegistryPostLogin(ctx, w, bridgeHandler, handlerName, reg.Host, scope, writeRegistryAuth); err != nil {
+					w.Warningf("Failed to bridge credentials to %s: %v", reg.Host, err)
+					lastBridgeErr = err
 				}
-				return bridgeAuthToRegistryPostLogin(ctx, w, bridgeHandler, handlerName, registry, registryScope, writeRegistryAuth)
+			}
+			if lastBridgeErr != nil && len(discovered) == 1 {
+				// Only fail when there's a single registry — if multiple were
+				// discovered, partial success is acceptable.
+				return lastBridgeErr
 			}
 
 			return nil
@@ -775,4 +803,58 @@ func bridgeAuthToRegistryPostLogin(ctx context.Context, w *writer.Writer, handle
 
 	w.Infof("Registry credentials stored for %s (via %s handler)", registry, handlerName)
 	return nil
+}
+
+// registryWithScope pairs a registry host with an optional OAuth scope
+// discovered from the application config.
+type registryWithScope struct {
+	Host  string
+	Scope string
+}
+
+// discoverRegistriesForHandler returns OCI registry hosts (with optional
+// scopes) that should be automatically bridged after a successful auth login
+// for the given handler.
+//
+// Discovery sources (in order, deduplicated):
+//  1. Custom OAuth2 handler config with a Registry field matching handlerName.
+//  2. Catalog configs whose AuthProvider matches handlerName.
+func discoverRegistriesForHandler(ctx context.Context, handlerName string) []registryWithScope {
+	cfg := config.FromContext(ctx)
+	if cfg == nil {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	var registries []registryWithScope
+
+	add := func(host, scope string) {
+		if host == "" {
+			return
+		}
+		if _, ok := seen[host]; ok {
+			return
+		}
+		seen[host] = struct{}{}
+		registries = append(registries, registryWithScope{Host: host, Scope: scope})
+	}
+
+	// 1. Custom OAuth2 handler's explicit Registry field.
+	for _, h := range cfg.Auth.CustomOAuth2 {
+		if h.Name == handlerName {
+			add(h.Registry, "")
+			break
+		}
+	}
+
+	// 2. Catalogs whose AuthProvider references this handler.
+	for _, cat := range cfg.Catalogs {
+		if cat.AuthProvider != handlerName {
+			continue
+		}
+		host, _ := catalog.ParseCatalogURL(cat.URL)
+		add(host, cat.AuthScope)
+	}
+
+	return registries
 }

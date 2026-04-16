@@ -5,8 +5,10 @@ package catalog
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -310,4 +312,383 @@ func (m *mockCacher) Get(_, _, _ string) ([]byte, []byte, bool, error) {
 
 func (m *mockCacher) Put(_, _, _, _ string, _, _ []byte) error {
 	return m.putErr
+}
+
+// TestSolutionResolver_EmbedderCatalog verifies the full catalog resolution
+// round-trip when the catalog lives at a non-default path (simulating an
+// embedder like "cldctl" that sets paths.SetAppName("cldctl")).
+//
+// This catches regressions where catalog resolution depends on hardcoded
+// "scafctl" paths or tag formats.
+func TestSolutionResolver_EmbedderCatalog(t *testing.T) {
+	ctx := context.Background()
+
+	// Simulate an embedder's catalog at a custom XDG path
+	embedderCatalogDir := t.TempDir()
+	cat, err := NewLocalCatalogAt(embedderCatalogDir, logr.Discard())
+	require.NoError(t, err)
+
+	content := []byte(`apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: starter-kit
+  version: 0.0.1
+spec:
+  resolvers: {}
+`)
+
+	ref, err := ParseReference(ArtifactKindSolution, "starter-kit@0.0.1")
+	require.NoError(t, err)
+	_, err = cat.Store(ctx, ref, content, nil, nil, false)
+	require.NoError(t, err)
+
+	resolver := NewSolutionResolver(cat, logr.Discard())
+
+	t.Run("bare name resolves", func(t *testing.T) {
+		got, err := resolver.FetchSolution(ctx, "starter-kit")
+		require.NoError(t, err)
+		assert.Equal(t, content, got)
+	})
+
+	t.Run("name@version resolves", func(t *testing.T) {
+		got, err := resolver.FetchSolution(ctx, "starter-kit@0.0.1")
+		require.NoError(t, err)
+		assert.Equal(t, content, got)
+	})
+
+	t.Run("FetchSolutionWithBundle resolves", func(t *testing.T) {
+		got, bundle, err := resolver.FetchSolutionWithBundle(ctx, "starter-kit@0.0.1")
+		require.NoError(t, err)
+		assert.Equal(t, content, got)
+		assert.Nil(t, bundle)
+	})
+}
+
+// TestSolutionResolver_EmbedderCatalog_MismatchedTag verifies that the resolver
+// can fetch solutions whose OCI tags don't match the canonical kind/name:version
+// format. This happens when an embedder's "catalog pull" stored an artifact
+// before the kind was properly set (tag: "/name:version" instead of
+// "solution/name:version").
+func TestSolutionResolver_EmbedderCatalog_MismatchedTag(t *testing.T) {
+	ctx := context.Background()
+
+	embedderCatalogDir := t.TempDir()
+	cat, err := NewLocalCatalogAt(embedderCatalogDir, logr.Discard())
+	require.NoError(t, err)
+
+	content := []byte(`apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: starter-kit
+  version: 0.0.1
+spec:
+  resolvers: {}
+`)
+
+	// Store with correct kind so annotations are right
+	ref, err := ParseReference(ArtifactKindSolution, "starter-kit@0.0.1")
+	require.NoError(t, err)
+	_, err = cat.Store(ctx, ref, content, nil, nil, false)
+	require.NoError(t, err)
+
+	// Re-tag with wrong format to simulate the pre-fix pull bug
+	correctTag := "solution/starter-kit:0.0.1"
+	wrongTag := "/starter-kit:0.0.1"
+	desc, err := cat.store.Resolve(ctx, correctTag)
+	require.NoError(t, err)
+	require.NoError(t, cat.store.Tag(ctx, desc, wrongTag))
+	require.NoError(t, cat.store.Untag(ctx, correctTag))
+
+	resolver := NewSolutionResolver(cat, logr.Discard())
+
+	t.Run("bare name resolves despite mismatched tag", func(t *testing.T) {
+		got, err := resolver.FetchSolution(ctx, "starter-kit")
+		require.NoError(t, err)
+		assert.Equal(t, content, got)
+	})
+
+	t.Run("name@version resolves despite mismatched tag", func(t *testing.T) {
+		got, err := resolver.FetchSolution(ctx, "starter-kit@0.0.1")
+		require.NoError(t, err)
+		assert.Equal(t, content, got)
+	})
+
+	t.Run("FetchSolutionWithBundle resolves despite mismatched tag", func(t *testing.T) {
+		got, bundle, err := resolver.FetchSolutionWithBundle(ctx, "starter-kit@0.0.1")
+		require.NoError(t, err)
+		assert.Equal(t, content, got)
+		assert.Nil(t, bundle)
+	})
+}
+
+func TestSolutionResolver_RemoteFallback_FetchSolution(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	local := newMockCatalog("local")
+	remote := newMockCatalog("remote-reg")
+
+	ref := Reference{Kind: ArtifactKindSolution, Name: "my-sol", Version: semver.MustParse("1.0.0")}
+	remote.addArtifact(ref, []byte("remote-content"), nil)
+
+	resolver := NewSolutionResolver(local, logr.Discard(),
+		WithResolverRemoteCatalogs([]Catalog{remote}),
+	)
+
+	// Should fetch from remote and auto-store locally.
+	content, err := resolver.FetchSolution(ctx, "my-sol@1.0.0")
+	require.NoError(t, err)
+	assert.Equal(t, []byte("remote-content"), content)
+
+	// Verify it was stored in local catalog.
+	_, ok := local.artifacts[ref.String()]
+	assert.True(t, ok, "artifact should be auto-stored in local catalog")
+}
+
+func TestSolutionResolver_RemoteFallback_SetsOriginAnnotation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var storedAnnotations map[string]string
+	local := newMockCatalog("local")
+	local.storeFunc = func(_ context.Context, _ Reference, _, _ []byte, annotations map[string]string, _ bool) (ArtifactInfo, error) {
+		storedAnnotations = annotations
+		return ArtifactInfo{}, nil
+	}
+	remote := newMockCatalog("remote-reg")
+
+	ref := Reference{Kind: ArtifactKindSolution, Name: "origin-sol", Version: semver.MustParse("1.0.0")}
+	remote.addArtifact(ref, []byte("remote-data"), nil)
+
+	resolver := NewSolutionResolver(local, logr.Discard(),
+		WithResolverRemoteCatalogs([]Catalog{remote}),
+	)
+
+	_, err := resolver.FetchSolution(ctx, "origin-sol@1.0.0")
+	require.NoError(t, err)
+	require.NotNil(t, storedAnnotations)
+	assert.Equal(t, "auto-cached from remote-reg", storedAnnotations[AnnotationOrigin])
+}
+
+func TestSolutionResolver_RemoteFallback_FetchSolutionWithBundle(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	local := newMockCatalog("local")
+	remote := newMockCatalog("remote-reg")
+
+	ref := Reference{Kind: ArtifactKindSolution, Name: "bundled-sol", Version: semver.MustParse("2.0.0")}
+	remote.artifacts[ref.String()] = mockArtifact{
+		content:    []byte("sol-content"),
+		bundleData: []byte("bundle-tar"),
+		info:       ArtifactInfo{Reference: ref, Catalog: "remote-reg"},
+	}
+
+	resolver := NewSolutionResolver(local, logr.Discard(),
+		WithResolverRemoteCatalogs([]Catalog{remote}),
+	)
+
+	content, bundle, err := resolver.FetchSolutionWithBundle(ctx, "bundled-sol@2.0.0")
+	require.NoError(t, err)
+	assert.Equal(t, []byte("sol-content"), content)
+	assert.Equal(t, []byte("bundle-tar"), bundle)
+}
+
+func TestSolutionResolver_RemoteFallback_LocalHitSkipsRemote(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	local := newMockCatalog("local")
+	remote := newMockCatalog("remote-reg")
+
+	ref := Reference{Kind: ArtifactKindSolution, Name: "local-sol", Version: semver.MustParse("1.0.0")}
+	local.addArtifact(ref, []byte("local-content"), nil)
+	remote.addArtifact(ref, []byte("remote-content"), nil)
+
+	resolver := NewSolutionResolver(local, logr.Discard(),
+		WithResolverRemoteCatalogs([]Catalog{remote}),
+	)
+
+	content, err := resolver.FetchSolution(ctx, "local-sol@1.0.0")
+	require.NoError(t, err)
+	assert.Equal(t, []byte("local-content"), content, "should use local, not remote")
+}
+
+func TestSolutionResolver_RemoteFallback_AllMiss(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	local := newMockCatalog("local")
+	remote := newMockCatalog("remote-reg")
+
+	resolver := NewSolutionResolver(local, logr.Discard(),
+		WithResolverRemoteCatalogs([]Catalog{remote}),
+	)
+
+	_, err := resolver.FetchSolution(ctx, "nonexistent@1.0.0")
+	require.Error(t, err)
+	assert.True(t, IsNotFound(err), "should return a typed not-found error")
+
+	var notFoundErr *ArtifactNotFoundError
+	require.ErrorAs(t, err, &notFoundErr)
+	assert.Equal(t, "local", notFoundErr.Catalog)
+}
+
+func TestSolutionResolver_RemoteFallback_AuthErrorContinuesToNext(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	local := newMockCatalog("local")
+	authErr := fmt.Errorf("401 unauthorized: bad credentials")
+	remote1 := newMockCatalog("broken-auth")
+	remote1.fetchFunc = func(_ context.Context, _ Reference) ([]byte, ArtifactInfo, error) {
+		return nil, ArtifactInfo{}, authErr
+	}
+	remote2 := newMockCatalog("good-reg")
+	ref := Reference{Kind: ArtifactKindSolution, Name: "my-sol", Version: semver.MustParse("1.0.0")}
+	remote2.addArtifact(ref, []byte("from-good-reg"), nil)
+
+	resolver := NewSolutionResolver(local, logr.Discard(),
+		WithResolverRemoteCatalogs([]Catalog{remote1, remote2}),
+	)
+
+	content, err := resolver.FetchSolution(ctx, "my-sol@1.0.0")
+	require.NoError(t, err)
+	assert.Equal(t, []byte("from-good-reg"), content)
+}
+
+func TestSolutionResolver_RemoteFallback_AuthErrorReportedWhenAllFail(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	local := newMockCatalog("local")
+	remote1 := newMockCatalog("broken-auth")
+	remote1.fetchFunc = func(_ context.Context, _ Reference) ([]byte, ArtifactInfo, error) {
+		return nil, ArtifactInfo{}, fmt.Errorf("401 unauthorized: bad credentials")
+	}
+	remote2 := newMockCatalog("also-broken")
+	remote2.fetchFunc = func(_ context.Context, _ Reference) ([]byte, ArtifactInfo, error) {
+		return nil, ArtifactInfo{}, fmt.Errorf("403 forbidden")
+	}
+
+	resolver := NewSolutionResolver(local, logr.Discard(),
+		WithResolverRemoteCatalogs([]Catalog{remote1, remote2}),
+	)
+
+	_, err := resolver.FetchSolution(ctx, "my-sol@1.0.0")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unauthorized")
+	assert.False(t, IsNotFound(err), "auth errors should not be masked as not-found")
+}
+
+func TestSolutionResolver_RemoteFallback_AuthErrorContinuesToNext_WithBundle(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	local := newMockCatalog("local")
+	remote1 := newMockCatalog("broken-auth")
+	remote1.fetchWithBundleFunc = func(_ context.Context, _ Reference) ([]byte, []byte, ArtifactInfo, error) {
+		return nil, nil, ArtifactInfo{}, fmt.Errorf("403 forbidden")
+	}
+	remote2 := newMockCatalog("good-reg")
+	ref := Reference{Kind: ArtifactKindSolution, Name: "my-sol", Version: semver.MustParse("1.0.0")}
+	remote2.addArtifact(ref, []byte("from-good-reg"), nil)
+
+	resolver := NewSolutionResolver(local, logr.Discard(),
+		WithResolverRemoteCatalogs([]Catalog{remote1, remote2}),
+	)
+
+	content, _, err := resolver.FetchSolutionWithBundle(ctx, "my-sol@1.0.0")
+	require.NoError(t, err)
+	assert.Equal(t, []byte("from-good-reg"), content)
+}
+
+func TestSolutionResolver_RemoteFallback_AuthErrorReportedWhenAllFail_WithBundle(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	local := newMockCatalog("local")
+	remote1 := newMockCatalog("broken-auth")
+	remote1.fetchWithBundleFunc = func(_ context.Context, _ Reference) ([]byte, []byte, ArtifactInfo, error) {
+		return nil, nil, ArtifactInfo{}, fmt.Errorf("401 unauthorized")
+	}
+	remote2 := newMockCatalog("also-broken")
+	remote2.fetchWithBundleFunc = func(_ context.Context, _ Reference) ([]byte, []byte, ArtifactInfo, error) {
+		return nil, nil, ArtifactInfo{}, fmt.Errorf("403 forbidden")
+	}
+
+	resolver := NewSolutionResolver(local, logr.Discard(),
+		WithResolverRemoteCatalogs([]Catalog{remote1, remote2}),
+	)
+
+	_, _, err := resolver.FetchSolutionWithBundle(ctx, "my-sol@1.0.0")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unauthorized")
+	assert.False(t, IsNotFound(err), "auth errors should not be masked as not-found")
+}
+
+func TestSolutionResolver_RemoteFallback_MultipleRemotes(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	local := newMockCatalog("local")
+	remote1 := newMockCatalog("reg-1")
+	remote2 := newMockCatalog("reg-2")
+
+	ref := Reference{Kind: ArtifactKindSolution, Name: "only-in-reg2", Version: semver.MustParse("1.0.0")}
+	remote2.addArtifact(ref, []byte("from-reg2"), nil)
+
+	resolver := NewSolutionResolver(local, logr.Discard(),
+		WithResolverRemoteCatalogs([]Catalog{remote1, remote2}),
+	)
+
+	content, err := resolver.FetchSolution(ctx, "only-in-reg2@1.0.0")
+	require.NoError(t, err)
+	assert.Equal(t, []byte("from-reg2"), content)
+}
+
+func TestSolutionResolver_LocalNonNotFoundError_NoFallback(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	local := newMockCatalog("local")
+	local.fetchFunc = func(_ context.Context, _ Reference) ([]byte, ArtifactInfo, error) {
+		return nil, ArtifactInfo{}, fmt.Errorf("corrupted OCI layout")
+	}
+
+	remote := newMockCatalog("remote-reg")
+	ref := Reference{Kind: ArtifactKindSolution, Name: "my-sol", Version: semver.MustParse("1.0.0")}
+	remote.addArtifact(ref, []byte("remote-content"), nil)
+
+	resolver := NewSolutionResolver(local, logr.Discard(),
+		WithResolverRemoteCatalogs([]Catalog{remote}),
+	)
+
+	_, err := resolver.FetchSolution(ctx, "my-sol@1.0.0")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "corrupted OCI layout")
+	assert.False(t, IsNotFound(err), "non-not-found errors should not be masked")
+}
+
+func TestSolutionResolver_LocalNonNotFoundError_NoFallback_WithBundle(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	local := newMockCatalog("local")
+	local.fetchWithBundleFunc = func(_ context.Context, _ Reference) ([]byte, []byte, ArtifactInfo, error) {
+		return nil, nil, ArtifactInfo{}, fmt.Errorf("corrupted OCI layout")
+	}
+
+	remote := newMockCatalog("remote-reg")
+	ref := Reference{Kind: ArtifactKindSolution, Name: "my-sol", Version: semver.MustParse("1.0.0")}
+	remote.addArtifact(ref, []byte("remote-content"), nil)
+
+	resolver := NewSolutionResolver(local, logr.Discard(),
+		WithResolverRemoteCatalogs([]Catalog{remote}),
+	)
+
+	_, _, err := resolver.FetchSolutionWithBundle(ctx, "my-sol@1.0.0")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "corrupted OCI layout")
+	assert.False(t, IsNotFound(err), "non-not-found errors should not be masked")
 }

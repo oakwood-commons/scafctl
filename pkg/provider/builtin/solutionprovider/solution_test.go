@@ -998,3 +998,25 @@ func TestExtractRefsFromValue_Default(t *testing.T) {
 	result = extractRefsFromValue([]string{"a", "b"})
 	assert.Nil(t, result)
 }
+
+func TestIsFilePath(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+		want   bool
+	}{
+		{"absolute path", "/home/user/solution.yaml", true},
+		{"relative dot-slash", "./child.yaml", true},
+		{"relative parent", "../sibling/child.yaml", true},
+		{"yaml extension", "child.yaml", true},
+		{"yml extension", "child.yml", true},
+		{"catalog reference", "deploy-to-k8s@2.0.0", false},
+		{"bare name", "my-solution", false},
+		{"catalog with version", "infra-config@1.0.0", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isFilePath(tt.source))
+		})
+	}
+}

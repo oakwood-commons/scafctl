@@ -3,6 +3,7 @@ package prepare
 import (
 	"bytes"
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -131,6 +132,51 @@ metadata:
 		)
 		require.NoError(t, err)
 		assert.NotNil(t, result.Registry)
+		result.Cleanup()
+	})
+
+	t.Run("sets SolutionDir from file path", func(t *testing.T) {
+		sol := minimalSolution()
+		getter := &mockGetter{sol: sol}
+
+		// Use an absolute path to simulate -f /some/dir/solution.yaml
+		tmpDir := t.TempDir()
+		filePath := filepath.Join(tmpDir, "solution.yaml")
+
+		result, err := Solution(context.Background(), filePath,
+			WithGetter(getter),
+		)
+		require.NoError(t, err)
+		assert.Equal(t, tmpDir, result.SolutionDir)
+		result.Cleanup()
+	})
+
+	t.Run("SolutionDir empty for stdin", func(t *testing.T) {
+		yamlContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: stdin-sol
+  version: "1.0.0"
+`
+		result, err := Solution(context.Background(), "-",
+			WithStdin(strings.NewReader(yamlContent)),
+		)
+		require.NoError(t, err)
+		assert.Empty(t, result.SolutionDir)
+		result.Cleanup()
+	})
+
+	t.Run("SolutionDir respects context working directory", func(t *testing.T) {
+		sol := minimalSolution()
+		getter := &mockGetter{sol: sol}
+
+		// Simulate --cwd /custom/dir with a relative file path
+		ctx := provider.WithWorkingDirectory(context.Background(), "/custom/dir")
+		result, err := Solution(ctx, "subdir/solution.yaml",
+			WithGetter(getter),
+		)
+		require.NoError(t, err)
+		assert.Equal(t, "/custom/dir/subdir", result.SolutionDir)
 		result.Cleanup()
 	})
 }

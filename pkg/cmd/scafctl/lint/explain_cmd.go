@@ -64,6 +64,7 @@ func CommandExplainRule(cliParams *settings.Run, ioStreams *terminal.IOStreams, 
 			opts.IOStreams = ioStreams
 			opts.CliParams = cliParams
 			opts.BinaryName = cliParams.BinaryName
+			opts.KvxOutputFlags.AppName = cliParams.BinaryName
 
 			return opts.Run(ctx, args[0])
 		},

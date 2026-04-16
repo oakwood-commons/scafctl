@@ -89,6 +89,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			if w == nil {
 				return fmt.Errorf("writer not initialized in context")
 			}
+			outputFlags.AppName = cliParams.BinaryName
 
 			if expiredOnly && validOnly {
 				err := fmt.Errorf("--expired-only and --valid-only are mutually exclusive")
