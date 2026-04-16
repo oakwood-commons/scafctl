@@ -224,3 +224,18 @@ func TestNewRegistry(t *testing.T) {
 	require.NotNil(t, reg)
 	assert.NotNil(t, reg.Local())
 }
+
+func TestRegistry_CacheArtifact_SetsOrigin(t *testing.T) {
+	ctx := context.Background()
+	reg, local := newTestRegistry(t)
+	reg.SetCacheRemoteArtifacts(true)
+
+	// Directly call cacheArtifact and verify origin annotation.
+	ref := Reference{Kind: ArtifactKindSolution, Name: "cached-origin", Version: semver.MustParse("1.0.0")}
+	reg.cacheArtifact(ctx, ref, []byte("name: cached-origin"), nil, "my-remote-catalog")
+
+	info, err := local.Resolve(ctx, ref)
+	require.NoError(t, err)
+	assert.Equal(t, "auto-cached from my-remote-catalog", info.Annotations[AnnotationOrigin])
+	assert.Equal(t, "auto-cached", info.Annotations[AnnotationSource])
+}

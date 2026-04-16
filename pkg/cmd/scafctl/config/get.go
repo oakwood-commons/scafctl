@@ -75,6 +75,7 @@ func CommandGet(cliParams *settings.Run, ioStreams *terminal.IOStreams, path str
 
 			opts.IOStreams = ioStreams
 			opts.CliParams = cliParams
+			opts.AppName = cliParams.BinaryName
 			opts.Key = args[0]
 
 			// Get config path from parent command context

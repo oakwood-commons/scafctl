@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/Masterminds/semver/v3"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
@@ -222,6 +223,8 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
 
+	w.Verbosef("Reading solution from %s", opts.File)
+
 	// Read solution file (or stdin)
 	var content []byte
 	var err error
@@ -249,6 +252,7 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 		w.Errorf("failed to parse solution: %v", err)
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
+	w.Verbosef("Parsed solution: %s (apiVersion: %s)", sol.Metadata.Name, sol.APIVersion)
 
 	// Determine bundle root (directory containing the solution file, or cwd for stdin)
 	var bundleRoot string
@@ -284,6 +288,7 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
+	w.Verbosef("Resolved artifact: %s@%s", name, version.String())
 
 	// Block dev version unless explicitly allowed
 	if version.Equal(solution.DefaultVersion()) && !opts.AllowDevVersion {
@@ -310,6 +315,7 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 		needsReserialization = true
 	}
 	if needsReserialization {
+		w.Verbose("Stamping resolved name/version into solution YAML")
 		content, err = sol.ToYAML()
 		if err != nil {
 			w.Errorf("failed to serialize stamped solution: %v", err)
@@ -340,6 +346,7 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 			preflightPath = ""
 		}
 
+		w.Verbose("Running pre-flight checks")
 		pfResult, pfErr := builder.RunPreflight(ctx, &sol, preflightPath, builder.PreflightOptions{
 			SkipLint:        opts.SkipLint,
 			SkipTests:       opts.SkipTests,
@@ -373,12 +380,36 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 		}
 	}
 
-	// Handle build cache hit — artifact already exists in catalog
+	// Handle build cache hit — artifact unchanged since last build
 	if br != nil && br.CacheHit {
-		w.Successf("Build cache hit: %s@%s (unchanged)", br.CacheEntry.ArtifactName, br.CacheEntry.ArtifactVersion)
-		w.Infof("  Digest: %s", br.CacheEntry.ArtifactDigest)
-		w.Infof("  Use --no-cache to force a full rebuild")
-		return nil
+		// Verify the artifact still exists in the local catalog. It may have
+		// been deleted (e.g., via `catalog delete`) while the build cache
+		// entry remained on disk.
+		localCat, catErr := catalog.NewLocalCatalog(*lgr)
+		catalogMissing := false
+		if catErr == nil {
+			ref := catalog.Reference{
+				Kind:    catalog.ArtifactKindSolution,
+				Name:    br.CacheEntry.ArtifactName,
+				Version: semver.MustParse(br.CacheEntry.ArtifactVersion),
+			}
+			_, existsErr := localCat.Resolve(ctx, ref)
+			catalogMissing = existsErr != nil
+		}
+
+		if !catalogMissing {
+			w.Successf("Build cache hit: %s@%s (unchanged)", br.CacheEntry.ArtifactName, br.CacheEntry.ArtifactVersion)
+			w.Infof("  Digest: %s", br.CacheEntry.ArtifactDigest)
+			w.Infof("  Use --no-cache to force a full rebuild")
+			w.Verbosef("Fingerprint: %s (%d input files)", br.CacheEntry.Fingerprint, br.CacheEntry.InputFiles)
+			return nil
+		}
+
+		// Artifact missing from catalog — fall through to re-store it.
+		w.Verbose("Cache hit but artifact missing from catalog, re-storing")
+		lgr.V(1).Info("build cache hit but artifact missing from catalog, re-storing",
+			"name", br.CacheEntry.ArtifactName,
+			"version", br.CacheEntry.ArtifactVersion)
 	}
 
 	// Dry-run: show what would be built but don't store
@@ -391,11 +422,13 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 	}
 
 	// Create local catalog
+	w.Verbose("Opening local catalog")
 	localCatalog, err := catalog.NewLocalCatalog(*lgr)
 	if err != nil {
 		w.Errorf("failed to open catalog: %v", err)
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
+	w.Verbosef("Catalog path: %s", localCatalog.Path())
 
 	// Re-serialize the solution (it may have been modified by compose/vendor)
 	if !opts.NoBundle && (len(sol.Compose) > 0 || len(sol.Bundle.Include) > 0) {
@@ -407,6 +440,7 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 	}
 
 	// Store the artifact (handles dedup vs traditional, plus build cache)
+	w.Verbose("Storing artifact in local catalog")
 	storeResult, err := builder.StoreSolutionArtifact(ctx, localCatalog, name, version, content, br, builder.StoreOptions{
 		Force:            opts.Force,
 		Source:           opts.File,
@@ -426,6 +460,12 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 	w.Successf("Built %s@%s", info.Reference.Name, info.Reference.Version.String())
 	w.Infof("  Digest: %s", info.Digest)
 	w.Infof("  Catalog: %s", localCatalog.Path())
+	if storeResult.CacheWritten {
+		w.Verbose("Build cache entry written")
+	}
+	if br != nil && br.BuildFingerprint != "" {
+		w.Verbosef("Fingerprint: %s (%d input files)", br.BuildFingerprint, br.InputFileCount)
+	}
 
 	return nil
 }
@@ -434,6 +474,11 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 // displays progress messages via the writer.
 func buildBundle(ctx context.Context, sol *solution.Solution, solutionContent []byte, bundleRoot string, opts *SolutionOptions, w *writer.Writer) (*bundleResult, error) {
 	lgr := logger.FromContext(ctx)
+
+	w.Verbosef("Bundle root: %s", bundleRoot)
+	if opts.Dedupe {
+		w.Verbosef("Deduplication enabled (threshold: %s)", opts.DedupeThreshold)
+	}
 
 	br, err := builder.BuildBundle(ctx, sol, solutionContent, bundleRoot, builder.BuildBundleOptions{
 		BundleMaxSize:   opts.BundleMaxSize,
@@ -453,6 +498,12 @@ func buildBundle(ctx context.Context, sol *solution.Solution, solutionContent []
 	if br != nil {
 		for _, msg := range br.Messages {
 			w.Infof("  %s", msg)
+		}
+		if br.Discovery != nil {
+			w.Verbosef("Discovered %d local file(s), %d catalog ref(s)", len(br.Discovery.LocalFiles), len(br.Discovery.CatalogRefs))
+		}
+		if br.CacheHit {
+			w.Verbose("Build cache hit — skipping bundle creation")
 		}
 		// Transfer resolved plugins back to CLI options for backward compatibility
 		opts.resolvedPlugins = br.ResolvedPlugins

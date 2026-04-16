@@ -146,6 +146,8 @@ func runDeleteRemote(ctx context.Context, opts *DeleteOptions) error {
 
 	if looksLikeRemoteReference(opts.Reference) {
 		// Full remote reference: ghcr.io/myorg/scafctl/solutions/my-solution@1.0.0
+		w.Verbose("Deleting from full OCI reference")
+
 		remoteRef, err := catalog.ParseRemoteReference(opts.Reference)
 		if err != nil {
 			w.Errorf("invalid remote reference: %v", err)
@@ -176,8 +178,12 @@ func runDeleteRemote(ctx context.Context, opts *DeleteOptions) error {
 			return exitcode.WithCode(err, exitcode.InvalidInput)
 		}
 		ref = localRef
+
+		verboseRefInfo(w, remoteRef.Name, string(remoteRef.Kind), remoteRef.Tag)
 	} else {
 		// Short reference with --catalog flag: my-solution@1.0.0 --catalog myregistry
+		w.Verbosef("Deleting from catalog %q", opts.Catalog)
+
 		name, version := catalog.ParseNameVersion(opts.Reference)
 		if version == "" {
 			w.Error("version required: use format 'name@version' (e.g., 'my-solution@1.0.0')")
@@ -233,6 +239,9 @@ func runDeleteRemote(ctx context.Context, opts *DeleteOptions) error {
 
 	// Resolve auth handler for automatic token bridging
 	authHandler := resolveAuthHandler(ctx, registry, opts.Catalog)
+	authScope := resolveAuthScope(ctx, opts.Catalog)
+
+	verboseRemoteInfo(ctx, w, registry, repository, authHandler, authScope)
 
 	// Create remote catalog
 	remoteCatalog, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
@@ -241,7 +250,7 @@ func runDeleteRemote(ctx context.Context, opts *DeleteOptions) error {
 		Repository:      repository,
 		CredentialStore: credStore,
 		AuthHandler:     authHandler,
-		AuthScope:       resolveAuthScope(ctx, opts.Catalog),
+		AuthScope:       authScope,
 		Insecure:        opts.Insecure,
 		Logger:          *lgr,
 	})

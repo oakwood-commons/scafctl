@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/oakwood-commons/kvx/pkg/tui"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -455,7 +456,7 @@ func TestWriteTo_JSON(t *testing.T) {
 func TestDefaultViewerOptions(t *testing.T) {
 	opts := DefaultViewerOptions()
 	assert.NotNil(t, opts)
-	assert.Equal(t, "scafctl", opts.AppName)
+	assert.Equal(t, settings.CliBinaryName, opts.AppName)
 	assert.NotNil(t, opts.In)
 	assert.NotNil(t, opts.Out)
 }
@@ -986,4 +987,48 @@ func TestOutputOptions_Write_KvxNonTTY_InvalidWhere(t *testing.T) {
 	err := opts.Write(data)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "where filter failed")
+}
+
+func TestOutputOptions_Write_ScalarWithExpression_NotShortCircuited(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatJSON
+	opts.Expression = "_.name"
+
+	// Scalar data with expression should not take the scalar fast-path;
+	// it should fall through so the expression is applied.
+	err := opts.Write("plain-string")
+	// Expression may fail on a scalar — the point is it must NOT silently
+	// print the raw scalar and skip the expression.
+	if err == nil {
+		assert.NotEqual(t, "plain-string\n", out.String(), "scalar fast-path must not bypass expression")
+	}
+}
+
+func TestOutputOptions_Write_ScalarWithWhere_NotShortCircuited(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatJSON
+	opts.Where = "_ == true"
+
+	err := opts.Write("plain-string")
+	if err == nil {
+		assert.NotEqual(t, "plain-string\n", out.String(), "scalar fast-path must not bypass where filter")
+	}
+}
+
+func TestOutputOptions_Write_ScalarNoFilters_FastPath(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatAuto
+
+	err := opts.Write("hello world")
+	require.NoError(t, err)
+	assert.Equal(t, "hello world\n", out.String(), "scalar without filters should use fast-path")
 }

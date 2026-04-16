@@ -17,6 +17,6 @@ spec:
       run-child:
         provider: solution
         inputs:
-          source: "tests/integration/testdata/solution-provider/child.yaml"
+          source: "child.yaml"
           inputs:
             expr: '{"message": _.msg}'

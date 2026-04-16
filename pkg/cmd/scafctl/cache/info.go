@@ -30,8 +30,9 @@ type InfoOptions struct {
 // CommandInfo creates the info command.
 func CommandInfo(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
 	options := &InfoOptions{
-		CliParams: cliParams,
-		IOStreams: ioStreams,
+		CliParams:      cliParams,
+		IOStreams:      ioStreams,
+		KvxOutputFlags: flags.KvxOutputFlags{AppName: cliParams.BinaryName},
 	}
 
 	cmd := &cobra.Command{

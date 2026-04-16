@@ -74,6 +74,7 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 			if w == nil {
 				return fmt.Errorf("writer not initialized in context")
 			}
+			outputFlags.AppName = cliParams.BinaryName
 
 			// When -o/--interactive/--expression is given, suppress human text and
 			// emit only the structured data at the end.

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"reflect"
 
 	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -76,6 +77,43 @@ func BaseOutputFormats() []string {
 // plain-text format even though Write() routes it through the kvx renderer.
 func IsStructuredFormat(format OutputFormat) bool {
 	return format == OutputFormatJSON || format == OutputFormatYAML || format == OutputFormatMermaid
+}
+
+// isScalar returns true if data is a scalar value (string, number, bool)
+// that should be rendered as plain text rather than a table.
+func isScalar(data any) bool {
+	if data == nil {
+		return true
+	}
+	v := reflect.ValueOf(data)
+	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return true
+		}
+		v = v.Elem()
+	}
+	switch v.Kind() { //nolint:exhaustive // only scalar kinds are relevant
+	case reflect.String, reflect.Bool,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
+		return true
+	default:
+		return false
+	}
+}
+
+// isScalarArray returns true if every element in the slice is a scalar value.
+func isScalarArray(arr []any) bool {
+	if len(arr) == 0 {
+		return false
+	}
+	for _, elem := range arr {
+		if !isScalar(elem) {
+			return false
+		}
+	}
+	return true
 }
 
 // IsKvxFormat returns true if the format uses kvx visual output (auto, table, list, or tree).
@@ -316,6 +354,14 @@ func (o *OutputOptions) Write(data any) error {
 
 	// Determine if we should use kvx visual output
 	useKvx := IsKvxFormat(o.Format) || o.Interactive
+
+	// Scalar values (strings, numbers, bools) render as plain text, not tables.
+	// Only take the fast path when no post-filters are configured; otherwise
+	// fall through to writeKvx so Where/Expression are applied.
+	if useKvx && isScalar(data) && len(o.Where) == 0 && o.Expression == "" {
+		fmt.Fprintln(o.IOStreams.Out, data)
+		return nil
+	}
 
 	if useKvx {
 		return o.writeKvx(data)

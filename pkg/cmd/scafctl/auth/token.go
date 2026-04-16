@@ -106,6 +106,7 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			if w == nil {
 				return fmt.Errorf("writer not initialized in context")
 			}
+			outputFlags.AppName = cliParams.BinaryName
 			handlerName := args[0]
 
 			// --force is an alias for --force-refresh

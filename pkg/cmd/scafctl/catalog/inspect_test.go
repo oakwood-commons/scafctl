@@ -4,10 +4,16 @@
 package catalog
 
 import (
+	"bytes"
+	"encoding/json"
 	"testing"
+	"time"
 
+	"github.com/Masterminds/semver/v3"
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -39,6 +45,7 @@ func TestCommandInspect_Flags(t *testing.T) {
 		defValue string
 	}{
 		{"catalog", ""},
+		{"version", ""},
 		{"referrers", "false"},
 		{"artifact-type", ""},
 		{"insecure", "false"},
@@ -166,4 +173,139 @@ func BenchmarkCommandInspect(b *testing.B) {
 	for b.Loop() {
 		CommandInspect(cliParams, ioStreams, "scafctl/catalog")
 	}
+}
+
+func TestCommandInspect_FullOCIRefConflictsWithCatalog(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandInspect(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(newCatalogTestCtx(t))
+	cmd.SetArgs([]string{"ghcr.io/myorg/solutions/my-solution@1.0.0", "--catalog", "my-registry"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "conflicting options")
+}
+
+func TestCommandInspect_CatalogFlagWithoutRef(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandInspect(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(newCatalogTestCtx(t))
+	// --catalog with short name, but no config so ResolveCatalogURL will fail.
+	cmd.SetArgs([]string{"my-solution@1.0.0", "--catalog", "nonexistent"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+}
+
+func TestCommandInspect_EmbedderBinaryName(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandInspect(cliParams, ioStreams, "mycli/catalog")
+
+	require.NotNil(t, cmd)
+	assert.Equal(t, "inspect <name[@version]>", cmd.Use)
+	assert.NotNil(t, cmd.RunE)
+	assert.Contains(t, cmd.Long, "mycli catalog inspect")
+}
+
+func TestCommandInspect_VersionWithReferrersError(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandInspect(cliParams, ioStreams, "scafctl/catalog")
+	ctx := newCatalogTestCtx(t)
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"my-solution", "--version", "^1.0.0", "--referrers", "--catalog", "my-registry"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--version cannot be used with --referrers")
+}
+
+func TestCommandInspect_VersionConflictWithAtVersion(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandInspect(cliParams, ioStreams, "scafctl/catalog")
+	ctx := newCatalogTestCtx(t)
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"my-solution@1.0.0", "--version", "^1.0.0"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot use --version with an explicit version")
+}
+
+func TestWriteInspectDetail(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+	outputOpts.Format = kvx.OutputFormatJSON
+
+	info := catalog.ArtifactInfo{
+		Reference: catalog.Reference{
+			Name:    "my-app",
+			Kind:    catalog.ArtifactKindSolution,
+			Version: semver.MustParse("2.1.0"),
+		},
+		Digest:    "sha256:abc123",
+		Size:      1024,
+		CreatedAt: time.Date(2026, 1, 15, 10, 30, 0, 0, time.UTC),
+		Catalog:   "local",
+		Annotations: map[string]string{
+			catalog.AnnotationOrigin: "built",
+		},
+	}
+
+	err := writeInspectDetail(info, outputOpts)
+	require.NoError(t, err)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &result))
+
+	assert.Equal(t, "my-app", result["name"])
+	assert.Equal(t, "2.1.0", result["version"])
+	assert.Equal(t, "solution", result["kind"])
+	assert.Equal(t, "sha256:abc123", result["digest"])
+	assert.Equal(t, "built", result["origin"])
+	assert.Equal(t, "local", result["catalog"])
+}
+
+func TestWriteInspectDetail_NilVersion(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+	outputOpts.Format = kvx.OutputFormatJSON
+
+	info := catalog.ArtifactInfo{
+		Reference: catalog.Reference{
+			Name: "bare-app",
+			Kind: catalog.ArtifactKindSolution,
+		},
+		Digest:    "sha256:def456",
+		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	err := writeInspectDetail(info, outputOpts)
+	require.NoError(t, err)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &result))
+	assert.Equal(t, "bare-app", result["name"])
+	assert.Equal(t, "", result["version"])
 }

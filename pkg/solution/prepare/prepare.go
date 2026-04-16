@@ -137,6 +137,11 @@ type Result struct {
 	// Registry is the provider registry with all providers registered,
 	// including the solution provider.
 	Registry *provider.Registry `json:"-" yaml:"-"`
+	// SolutionDir is the directory containing the solution file, resolved to
+	// an absolute path. Empty when loaded from stdin or a catalog reference.
+	// Callers can use this to set provider.WithSolutionDirectory for relative
+	// path resolution during execution.
+	SolutionDir string `json:"solutionDir,omitempty" yaml:"solutionDir,omitempty" doc:"Directory containing the solution file"`
 	// Cleanup must be deferred by the caller. It handles temp directory
 	// removal, working directory restoration, and metrics output.
 	Cleanup func() `json:"-" yaml:"-"`
@@ -172,6 +177,18 @@ func Solution(ctx context.Context, path string, opts ...Option) (*Result, error)
 	sol, bundleDir, err := loadSolutionWithBundle(ctx, getter, path, cfg.stdin)
 	if err != nil {
 		return nil, err
+	}
+
+	// Determine the solution directory for relative path resolution.
+	// For file-based loading: use the file's parent directory.
+	// For bundles: the bundle extraction directory (set via os.Chdir below).
+	// For stdin or catalog references: leave empty (falls back to CWD).
+	var solutionDir string
+	if path != "-" && bundleDir == "" {
+		absPath, absErr := provider.AbsFromContext(ctx, path)
+		if absErr == nil {
+			solutionDir = filepath.Dir(absPath)
+		}
 	}
 
 	// Build cleanup function
@@ -303,9 +320,10 @@ func Solution(ctx context.Context, path string, opts ...Option) (*Result, error)
 	}
 
 	return &Result{
-		Solution: sol,
-		Registry: reg,
-		Cleanup:  cleanup,
+		Solution:    sol,
+		Registry:    reg,
+		SolutionDir: solutionDir,
+		Cleanup:     cleanup,
 	}, nil
 }
 
@@ -323,6 +341,7 @@ func NewDefaultGetter(ctx context.Context, noCache bool) get.Interface {
 			// Build SolutionResolverOptions with optional artifact cache
 			resolverOpts := []catalog.SolutionResolverOption{
 				catalog.WithResolverNoCache(noCache),
+				catalog.WithResolverRemoteCatalogs(catalog.RemoteCatalogsFromContext(ctx, *lgr)),
 			}
 			if !noCache {
 				artifactCache := cache.NewArtifactCache(paths.ArtifactCacheDir(), settings.DefaultArtifactCacheTTL)

@@ -97,6 +97,16 @@ func DebugMessage(msg string, noColor bool) string {
 	return styles.DebugStyle.Render("🐛") + msg
 }
 
+// VerboseMessage formats a verbose/trace message for terminal output.
+// If noColor is true, the message is returned without styling.
+// Otherwise, it applies a subtle gray style for user-facing diagnostic output.
+func VerboseMessage(msg string, noColor bool) string {
+	if noColor {
+		return msg
+	}
+	return styles.VerboseStyle.Render("▸") + msg
+}
+
 // WriteDebug writes a debug message to the output stream.
 // The message is formatted with a debug icon and styled in magenta if color is enabled.
 // A newline is appended to the message by default.

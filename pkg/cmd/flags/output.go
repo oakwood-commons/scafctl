@@ -26,6 +26,10 @@ type KvxOutputFlags struct {
 
 	// Where is a per-item CEL boolean filter applied to list data
 	Where string `json:"where,omitempty" yaml:"where,omitempty" doc:"Per-item CEL filter for list data" example:"_.enabled" maxLength:"4096"`
+
+	// AppName is the binary name shown in table headers and TUI title.
+	// Not a CLI flag -- set programmatically from settings.Run.BinaryName.
+	AppName string `json:"-" yaml:"-"`
 }
 
 // AddKvxOutputFlags adds kvx-enabled output flags to a command.
@@ -111,6 +115,7 @@ func ToKvxOutputOptions(flags *KvxOutputFlags, opts ...kvx.OutputOption) *kvx.Ou
 		Expression:  flags.Expression,
 		Where:       flags.Where,
 		PrettyPrint: true,
+		AppName:     flags.AppName,
 	}
 
 	// Parse format string to OutputFormat

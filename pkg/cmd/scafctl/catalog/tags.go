@@ -42,6 +42,7 @@ func CommandTags(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 		CliParams: cliParams,
 		IOStreams: ioStreams,
 	}
+	options.AppName = cliParams.BinaryName
 
 	cmd := &cobra.Command{
 		Use:   "tags <registry/repository[/kind]/name>",

@@ -239,7 +239,6 @@ func (o *Getter) Get(ctx context.Context, path string) (*solution.Solution, erro
 
 	// Check if this is a bare name that should be resolved from catalog.
 	// A bare name has no path separators and is not a URL.
-	var catalogErr error
 	if o.catalogResolver != nil && o.isBareName(path) {
 		o.logger.V(1).Info("attempting to resolve from catalog", "name", path)
 		sol, err := o.fromCatalog(ctx, path)
@@ -248,15 +247,9 @@ func (o *Getter) Get(ctx context.Context, path string) (*solution.Solution, erro
 			return sol, nil
 		}
 
-		// If the path contains @, user explicitly requested a version from catalog.
-		// Don't fall back to file resolution - return the catalog error directly.
-		if strings.Contains(path, "@") {
-			return nil, err
-		}
-
-		// Save catalog error for combined error message if file resolution also fails
-		catalogErr = err
-		o.logger.V(1).Info("solution not found in catalog, falling back to file resolution", "name", path, "error", err)
+		// Bare names are catalog references -- don't fall back to file system.
+		// A name like "email-notifier" is never a valid file path.
+		return nil, err
 	}
 
 	if filepath.IsURL(path) {
@@ -279,17 +272,7 @@ func (o *Getter) Get(ctx context.Context, path string) (*solution.Solution, erro
 		return nil, fmt.Errorf("failed to resolve remote reference %q: %w", path, err)
 	}
 
-	sol, fileErr := o.FromLocalFileSystem(ctx, path)
-	if fileErr == nil {
-		return sol, nil
-	}
-
-	// If we tried catalog and it failed, provide a combined error message
-	if catalogErr != nil {
-		return nil, fmt.Errorf("%w; also not found on file system", catalogErr)
-	}
-
-	return nil, fileErr
+	return o.FromLocalFileSystem(ctx, path)
 }
 
 // GetWithBundle retrieves a Solution and its bundle tar data from the specified path.
@@ -325,12 +308,8 @@ func (o *Getter) GetWithBundle(ctx context.Context, path string) (*solution.Solu
 			return sol, bundleData, nil
 		}
 
-		// If the path contains @, user explicitly requested a version from catalog
-		if strings.Contains(path, "@") {
-			return nil, nil, err
-		}
-
-		o.logger.V(1).Info("solution not found in catalog, falling back to file resolution", "name", path, "error", err)
+		// Bare names are catalog references -- don't fall back to file system.
+		return nil, nil, err
 	}
 
 	// For local files and URLs, bundle data is nil (files are already on disk)

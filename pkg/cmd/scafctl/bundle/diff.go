@@ -38,6 +38,7 @@ func CommandDiff(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 		CliParams: cliParams,
 		IOStreams: ioStreams,
 	}
+	opts.AppName = cliParams.BinaryName
 
 	cmd := &cobra.Command{
 		Use:          "diff <ref-a> <ref-b>",

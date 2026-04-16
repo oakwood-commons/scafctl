@@ -23,15 +23,16 @@ import (
 
 // PullOptions holds options for the pull command.
 type PullOptions struct {
-	Reference  string // Artifact reference (short name or full remote)
-	Catalog    string // Source catalog (URL or config name, --catalog)
-	TargetName string // Optional local name (--as)
-	Kind       string // Artifact kind override (--kind)
-	Force      bool   // Overwrite existing (--force)
-	Insecure   bool   // Allow HTTP (--insecure)
-	NoCache    bool   // Invalidate artifact cache after pull (--no-cache)
-	CliParams  *settings.Run
-	IOStreams  *terminal.IOStreams
+	Reference         string // Artifact reference (short name or full remote)
+	Catalog           string // Source catalog (URL or config name, --catalog)
+	TargetName        string // Optional local name (--as)
+	Kind              string // Artifact kind override (--kind)
+	VersionConstraint string // Semver version constraint (--version)
+	Force             bool   // Overwrite existing (--force)
+	Insecure          bool   // Allow HTTP (--insecure)
+	NoCache           bool   // Invalidate artifact cache after pull (--no-cache)
+	CliParams         *settings.Run
+	IOStreams         *terminal.IOStreams
 }
 
 // CommandPull creates the pull command.
@@ -87,6 +88,7 @@ func CommandPull(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 	cmd.Flags().StringVarP(&options.Catalog, "catalog", "c", "", catalogFlagUsage)
 	cmd.Flags().StringVar(&options.TargetName, "as", "", "Store with a different local name")
 	cmd.Flags().StringVar(&options.Kind, "kind", "", "Artifact kind override (solution, provider, auth-handler)")
+	cmd.Flags().StringVar(&options.VersionConstraint, "version", "", "Semver version constraint (e.g., ^1.0.0, ~2.1, >=1.0 <3.0)")
 	cmd.Flags().BoolVarP(&options.Force, "force", "f", false, "Overwrite existing local artifact")
 	cmd.Flags().BoolVar(&options.Insecure, "insecure", false, "Allow insecure HTTP connections")
 	cmd.Flags().BoolVar(&options.NoCache, "no-cache", false, "Invalidate the artifact cache for this artifact after pulling")
@@ -97,6 +99,12 @@ func CommandPull(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 func runPull(ctx context.Context, opts *PullOptions) error {
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
+
+	// Validate --version constraint vs @version in reference
+	if err := validateVersionConstraint(opts.Reference, opts.VersionConstraint); err != nil {
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
+	}
 
 	var ref catalog.Reference
 	var registry, repository string
@@ -112,6 +120,8 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 
 	if looksLikeRemoteReference(opts.Reference) {
 		// Full remote reference: ghcr.io/myorg/solutions/my-solution@1.0.0
+		w.Verbose("Pulling from full OCI reference")
+
 		remoteRef, parseErr := catalog.ParseRemoteReference(opts.Reference)
 		if parseErr != nil {
 			w.Errorf("invalid reference: %v", parseErr)
@@ -127,12 +137,16 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 		registry = remoteRef.Registry
 		repository = remoteRef.Repository
 
+		verboseRefInfo(w, remoteRef.Name, string(remoteRef.Kind), remoteRef.Tag)
+
 		if opts.Catalog != "" {
 			w.Errorf("cannot use --catalog with a full remote reference")
 			return exitcode.Errorf("conflicting options")
 		}
 	} else {
 		// Short name: my-solution or my-solution@1.0.0
+		w.Verbosef("Pulling from catalog %q", opts.Catalog)
+
 		name, version := catalog.ParseNameVersion(opts.Reference)
 
 		var artifactKind catalog.ArtifactKind
@@ -178,6 +192,8 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 	authHandler := resolveAuthHandler(ctx, registry, opts.Catalog)
 	authScope := resolveAuthScope(ctx, opts.Catalog)
 
+	verboseRemoteInfo(ctx, w, registry, repository, authHandler, authScope)
+
 	// Create remote catalog
 	remoteCatalog, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
 		Name:            registry,
@@ -193,6 +209,17 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 		err = fmt.Errorf("failed to create remote catalog: %w", err)
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.CatalogError)
+	}
+
+	// When --version constraint is set, resolve the best matching version
+	if opts.VersionConstraint != "" {
+		resolved, constraintErr := resolveVersionConstraint(ctx, remoteCatalog, ref, opts.VersionConstraint)
+		if constraintErr != nil {
+			w.Errorf("%v", constraintErr)
+			return exitcode.WithCode(constraintErr, exitcode.InvalidInput)
+		}
+		w.Verbosef("Version constraint %q resolved to %s", opts.VersionConstraint, resolved.Version.Original())
+		ref = resolved
 	}
 
 	// Resolve to get actual version if not specified
@@ -227,6 +254,16 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 		},
 	}
 
+	// Apply kind BEFORE CopyTo so the local catalog tag includes the kind
+	// prefix (e.g., "solution/name:1.0.0" instead of "/name:1.0.0").
+	// --kind overrides, otherwise default kindless refs to "solution".
+	if opts.Kind != "" && ref.Kind == "" {
+		ref.Kind, _ = catalog.ParseArtifactKind(opts.Kind) // already validated above
+	}
+	if ref.Kind == "" {
+		ref.Kind = catalog.ArtifactKindSolution
+	}
+
 	// Pull from remote
 	repoPath := remoteCatalog.RepositoryPath(ref)
 	w.Infof("Pulling %s@%s from %s...", ref.Name, ref.VersionOrDigest(), repoPath)
@@ -240,16 +277,6 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 		err = fmt.Errorf("failed to pull artifact: %w", err)
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.CatalogError)
-	}
-
-	// Apply kind for local tagging after the remote fetch is complete.
-	// --kind overrides, otherwise default kindless refs to "solution" so
-	// local tags are well-formed (e.g., "solution/name:1.0.0" not "/name:1.0.0").
-	if opts.Kind != "" && ref.Kind == "" {
-		ref.Kind, _ = catalog.ParseArtifactKind(opts.Kind) // already validated above
-	}
-	if ref.Kind == "" {
-		ref.Kind = catalog.ArtifactKindSolution
 	}
 
 	// Build display name

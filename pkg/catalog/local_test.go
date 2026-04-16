@@ -840,3 +840,209 @@ func TestLocalCatalog_Prune_OrphanedManifest(t *testing.T) {
 	// The orphaned manifest entry should have been removed from index.json
 	assert.Equal(t, 1, result.RemovedManifests)
 }
+
+func TestLocalCatalog_Fetch_MismatchedTag(t *testing.T) {
+	// Simulates the embedder scenario where an artifact was pulled from a
+	// remote registry with an empty Kind, producing a tag like "/name:1.0.0"
+	// instead of "solution/name:1.0.0". Both Fetch and FetchWithBundle must
+	// still resolve via annotations.
+	ctx := context.Background()
+	cat := newTestCatalog(t)
+
+	ref := Reference{
+		Kind:    ArtifactKindSolution,
+		Name:    "starter-kit",
+		Version: semver.MustParse("1.0.0"),
+	}
+	content := []byte("name: starter-kit\nversion: 1.0.0")
+	bundle := []byte("fake-bundle-tar")
+
+	// Store normally (creates tag "solution/starter-kit:1.0.0").
+	_, err := cat.Store(ctx, ref, content, bundle, nil, false)
+	require.NoError(t, err)
+
+	// Store the embedder artifact with correct kind so annotations are right,
+	// then manually re-tag with a wrong tag to simulate the CopyTo bug.
+	embedRef := Reference{
+		Kind:    ArtifactKindSolution,
+		Name:    "embedder-solution",
+		Version: semver.MustParse("2.0.0"),
+	}
+	_, err = cat.Store(ctx, embedRef, []byte("name: embedder-solution"), nil, nil, false)
+	require.NoError(t, err)
+
+	// Re-tag with wrong format (empty kind prefix) and remove the correct tag.
+	correctTag := "solution/embedder-solution:2.0.0"
+	wrongTag := "/embedder-solution:2.0.0"
+	desc, err := cat.store.Resolve(ctx, correctTag)
+	require.NoError(t, err)
+	require.NoError(t, cat.store.Tag(ctx, desc, wrongTag))
+	require.NoError(t, cat.store.Untag(ctx, correctTag))
+
+	// Fetch with the correct kind — the canonical tag "solution/embedder-solution:2.0.0"
+	// won't exist, but the annotation-based fallback should find it.
+	lookupRef := Reference{
+		Kind:    ArtifactKindSolution,
+		Name:    "embedder-solution",
+		Version: semver.MustParse("2.0.0"),
+	}
+
+	t.Run("Fetch resolves artifact with mismatched tag", func(t *testing.T) {
+		fetched, info, err := cat.Fetch(ctx, lookupRef)
+		require.NoError(t, err)
+		assert.Equal(t, []byte("name: embedder-solution"), fetched)
+		assert.Equal(t, "embedder-solution", info.Reference.Name)
+	})
+
+	t.Run("FetchWithBundle resolves artifact with mismatched tag", func(t *testing.T) {
+		fetched, bundleData, info, err := cat.FetchWithBundle(ctx, lookupRef)
+		require.NoError(t, err)
+		assert.Equal(t, []byte("name: embedder-solution"), fetched)
+		assert.Nil(t, bundleData) // no bundle stored
+		assert.Equal(t, "embedder-solution", info.Reference.Name)
+	})
+
+	t.Run("Resolve falls back to listing for mismatched tag", func(t *testing.T) {
+		info, err := cat.Resolve(ctx, lookupRef)
+		require.NoError(t, err)
+		assert.Equal(t, "embedder-solution", info.Reference.Name)
+		assert.True(t, info.Reference.Version.Equal(semver.MustParse("2.0.0")))
+	})
+
+	// Verify normal path still works
+	t.Run("Fetch still works for correctly tagged artifacts", func(t *testing.T) {
+		fetched, info, err := cat.Fetch(ctx, ref)
+		require.NoError(t, err)
+		assert.Equal(t, content, fetched)
+		assert.Equal(t, "starter-kit", info.Reference.Name)
+	})
+}
+
+func TestLocalCatalog_Fetch_BareName_MismatchedTag(t *testing.T) {
+	// Bare name (no version) should resolve via listing regardless of tag format.
+	ctx := context.Background()
+	cat := newTestCatalog(t)
+
+	// Store with correct kind, then re-tag with wrong format
+	correctRef := Reference{
+		Kind:    ArtifactKindSolution,
+		Name:    "my-app",
+		Version: semver.MustParse("3.0.0"),
+	}
+	_, err := cat.Store(ctx, correctRef, []byte("name: my-app"), nil, nil, false)
+	require.NoError(t, err)
+
+	// Re-tag with wrong format (empty kind prefix)
+	correctTag := "solution/my-app:3.0.0"
+	wrongTag := "/my-app:3.0.0"
+	desc, err := cat.store.Resolve(ctx, correctTag)
+	require.NoError(t, err)
+	require.NoError(t, cat.store.Tag(ctx, desc, wrongTag))
+	require.NoError(t, cat.store.Untag(ctx, correctTag))
+
+	// Fetch by bare name with correct kind
+	bareRef := Reference{
+		Kind: ArtifactKindSolution,
+		Name: "my-app",
+	}
+	fetched, info, err := cat.Fetch(ctx, bareRef)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("name: my-app"), fetched)
+	assert.Equal(t, "my-app", info.Reference.Name)
+}
+
+func TestLocalCatalog_Exists_MismatchedTag(t *testing.T) {
+	ctx := context.Background()
+	cat := newTestCatalog(t)
+
+	ref := Reference{
+		Kind:    ArtifactKindSolution,
+		Name:    "exists-sol",
+		Version: semver.MustParse("1.0.0"),
+	}
+	_, err := cat.Store(ctx, ref, []byte("data"), nil, nil, false)
+	require.NoError(t, err)
+
+	// Re-tag with wrong format
+	desc, err := cat.store.Resolve(ctx, "solution/exists-sol:1.0.0")
+	require.NoError(t, err)
+	require.NoError(t, cat.store.Tag(ctx, desc, "/exists-sol:1.0.0"))
+	require.NoError(t, cat.store.Untag(ctx, "solution/exists-sol:1.0.0"))
+
+	exists, err := cat.Exists(ctx, ref)
+	require.NoError(t, err)
+	assert.True(t, exists)
+}
+
+func TestLocalCatalog_Delete_MismatchedTag(t *testing.T) {
+	ctx := context.Background()
+	cat := newTestCatalog(t)
+
+	ref := Reference{
+		Kind:    ArtifactKindSolution,
+		Name:    "delete-sol",
+		Version: semver.MustParse("1.0.0"),
+	}
+	_, err := cat.Store(ctx, ref, []byte("data"), nil, nil, false)
+	require.NoError(t, err)
+
+	// Re-tag with wrong format
+	desc, err := cat.store.Resolve(ctx, "solution/delete-sol:1.0.0")
+	require.NoError(t, err)
+	require.NoError(t, cat.store.Tag(ctx, desc, "/delete-sol:1.0.0"))
+	require.NoError(t, cat.store.Untag(ctx, "solution/delete-sol:1.0.0"))
+
+	// Delete should still work via annotation fallback
+	err = cat.Delete(ctx, ref)
+	require.NoError(t, err)
+
+	// Verify it's gone
+	exists, err := cat.Exists(ctx, ref)
+	require.NoError(t, err)
+	assert.False(t, exists)
+}
+
+func TestLocalCatalog_Store_SetsBuiltOrigin(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	cat := newTestCatalog(t)
+
+	ref := Reference{Kind: ArtifactKindSolution, Name: "origin-test", Version: semver.MustParse("1.0.0")}
+	info, err := cat.Store(ctx, ref, []byte("name: origin-test"), nil, nil, false)
+	require.NoError(t, err)
+	assert.Equal(t, "built", info.Annotations[AnnotationOrigin])
+
+	// Resolve should also return the origin annotation.
+	resolved, err := cat.Resolve(ctx, ref)
+	require.NoError(t, err)
+	assert.Equal(t, "built", resolved.Annotations[AnnotationOrigin])
+}
+
+func TestLocalCatalog_Store_PreservesCallerOrigin(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	cat := newTestCatalog(t)
+
+	ref := Reference{Kind: ArtifactKindSolution, Name: "cached-sol", Version: semver.MustParse("1.0.0")}
+	annotations := map[string]string{
+		AnnotationOrigin: "auto-cached from my-registry",
+	}
+	info, err := cat.Store(ctx, ref, []byte("name: cached-sol"), nil, annotations, false)
+	require.NoError(t, err)
+	assert.Equal(t, "auto-cached from my-registry", info.Annotations[AnnotationOrigin])
+}
+
+func TestLocalCatalog_List_IncludesOrigin(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	cat := newTestCatalog(t)
+
+	ref := Reference{Kind: ArtifactKindSolution, Name: "list-origin", Version: semver.MustParse("1.0.0")}
+	_, err := cat.Store(ctx, ref, []byte("name: list-origin"), nil, nil, false)
+	require.NoError(t, err)
+
+	artifacts, err := cat.List(ctx, ArtifactKindSolution, "list-origin")
+	require.NoError(t, err)
+	require.Len(t, artifacts, 1)
+	assert.Equal(t, "built", artifacts[0].Annotations[AnnotationOrigin])
+}

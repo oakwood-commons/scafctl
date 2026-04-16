@@ -77,6 +77,7 @@ func CommandInspectSolution(cliParams *settings.Run, ioStreams *terminal.IOStrea
 
 			opts.IOStreams = ioStreams
 			opts.CliParams = cliParams
+			opts.AppName = cliParams.BinaryName
 			opts.BinaryName = binaryName
 
 			w := writer.FromContext(ctx)

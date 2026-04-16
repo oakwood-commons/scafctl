@@ -102,7 +102,9 @@ func LoadSolution(ctx context.Context, path string) (*solution.Solution, error) 
 	var getterOpts []get.Option
 	localCatalog, err := catalog.NewLocalCatalog(*lgr)
 	if err == nil {
-		catResolver := catalog.NewSolutionResolver(localCatalog, *lgr)
+		catResolver := catalog.NewSolutionResolver(localCatalog, *lgr,
+			catalog.WithResolverRemoteCatalogs(catalog.RemoteCatalogsFromContext(ctx, *lgr)),
+		)
 		getterOpts = append(getterOpts, get.WithCatalogResolver(catResolver))
 	} else {
 		lgr.V(1).Info("catalog not available for solution resolution", "error", err)

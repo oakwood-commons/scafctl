@@ -553,3 +553,79 @@ func TestResolverParametersHelp_ContainsStdinConventions(t *testing.T) {
 		})
 	}
 }
+
+// ── resolveVersionConstraintForFile tests ─────────────────────────────────────
+
+func TestResolveVersionConstraintForFile_EmptyConstraint(t *testing.T) {
+	t.Parallel()
+
+	opts := &sharedResolverOptions{
+		File:              "my-app",
+		VersionConstraint: "",
+	}
+	err := opts.resolveVersionConstraintForFile(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "my-app", opts.File, "should not modify File when constraint is empty")
+}
+
+func TestResolveVersionConstraintForFile_InvalidConstraint(t *testing.T) {
+	t.Parallel()
+
+	opts := &sharedResolverOptions{
+		File:              "my-app",
+		VersionConstraint: "not-valid!!",
+	}
+	err := opts.resolveVersionConstraintForFile(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid version constraint")
+}
+
+func TestResolveVersionConstraintForFile_ConflictWithAtVersion(t *testing.T) {
+	t.Parallel()
+
+	opts := &sharedResolverOptions{
+		File:              "my-app@1.0.0",
+		VersionConstraint: "^1.0.0",
+	}
+	err := opts.resolveVersionConstraintForFile(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot use --version with an explicit version")
+}
+
+func TestResolveVersionConstraintForFile_RequiresCatalogName(t *testing.T) {
+	t.Parallel()
+
+	opts := &sharedResolverOptions{
+		File:              "",
+		VersionConstraint: "^1.0.0",
+	}
+	err := opts.resolveVersionConstraintForFile(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--version requires a catalog name")
+}
+
+func TestResolveVersionConstraintForFile_RejectsFilePaths(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		file string
+	}{
+		{"relative path", "./solution.yaml"},
+		{"absolute path", "/tmp/solution.yaml"},
+		{"OCI reference", "ghcr.io/org/app"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			opts := &sharedResolverOptions{
+				File:              tc.file,
+				VersionConstraint: "^1.0.0",
+			}
+			err := opts.resolveVersionConstraintForFile(context.Background())
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "--version can only be used with catalog names")
+		})
+	}
+}

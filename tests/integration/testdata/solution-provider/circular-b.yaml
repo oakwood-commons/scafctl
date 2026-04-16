@@ -11,4 +11,4 @@ spec:
         with:
           - provider: solution
             inputs:
-              source: "tests/integration/testdata/solution-provider/circular-a.yaml"
+              source: "circular-a.yaml"

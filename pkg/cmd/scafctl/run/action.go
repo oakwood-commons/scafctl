@@ -262,20 +262,28 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 		return o.exitWithCode(ctx, fmt.Errorf("failed to get working directory: %w", err), exitcode.GeneralError)
 	}
 
-	sol, reg, cleanup, err := o.prepareSolutionForExecution(ctx)
+	sol, reg, solutionDir, cleanup, err := o.prepareSolutionForExecution(ctx)
 	if err != nil {
 		return o.exitWithCode(ctx, err, exitcode.FileNotFound)
 	}
 	defer cleanup()
 
-	// Set the solution directory for path resolution.
-	// Only applied when --base-dir is explicitly provided.
+	// Set the solution directory for child-solution path resolution.
+	// --base-dir takes precedence; otherwise use the solution file's directory.
+	// When SolutionDirectory is set, also set WorkingDirectory so that providers
+	// like file/exec continue to resolve paths against the caller's CWD.
+	// For bundle/catalog runs solutionDir is empty and the process CWD is the
+	// bundle extraction directory, which is the correct base.
 	if o.BaseDir != "" {
 		absBaseDir, baseDirErr := filepath.Abs(o.BaseDir)
 		if baseDirErr != nil {
 			return o.exitWithCode(ctx, fmt.Errorf("--base-dir: %w", baseDirErr), exitcode.InvalidInput)
 		}
+		ctx = provider.WithWorkingDirectory(ctx, originalCwd)
 		ctx = provider.WithSolutionDirectory(ctx, absBaseDir)
+	} else if solutionDir != "" {
+		ctx = provider.WithWorkingDirectory(ctx, originalCwd)
+		ctx = provider.WithSolutionDirectory(ctx, solutionDir)
 	}
 
 	actionAdapter := &actionRegistryAdapter{registry: reg}
@@ -338,6 +346,7 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 	if o.Backup {
 		actionCtx = provider.WithBackup(actionCtx, true)
 	}
+	// Ensure actions resolve output paths against the caller's original CWD.
 	actionCtx = provider.WithWorkingDirectory(actionCtx, originalCwd)
 
 	// Dry run — execute resolvers with ctx (solution-dir aware, no working-dir

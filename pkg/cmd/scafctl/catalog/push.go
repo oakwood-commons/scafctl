@@ -123,6 +123,8 @@ func runPush(ctx context.Context, opts *PushOptions) error {
 
 	if looksLikeRemoteReference(opts.Reference) {
 		// Remote reference: ghcr.io/myorg/solutions/hello-world@0.1.0
+		w.Verbose("Pushing to full OCI reference")
+
 		remoteRef, parseErr := catalog.ParseRemoteReference(opts.Reference)
 		if parseErr != nil {
 			w.Errorf("invalid reference: %v", parseErr)
@@ -165,6 +167,8 @@ func runPush(ctx context.Context, opts *PushOptions) error {
 		registry = remoteRef.Registry
 		repository = remoteRef.Repository
 
+		verboseRefInfo(w, remoteRef.Name, string(remoteRef.Kind), remoteRef.Tag)
+
 		// --catalog flag conflicts with a full remote reference
 		if opts.Catalog != "" {
 			w.Errorf("cannot use --catalog with a full remote reference")
@@ -172,6 +176,8 @@ func runPush(ctx context.Context, opts *PushOptions) error {
 		}
 	} else {
 		// Local name: hello-world@0.1.0
+		w.Verbosef("Pushing to catalog %q", opts.Catalog)
+
 		name, version := catalog.ParseNameVersion(opts.Reference)
 
 		// Determine artifact kind
@@ -244,6 +250,8 @@ func runPush(ctx context.Context, opts *PushOptions) error {
 	// Resolve auth handler for automatic token bridging
 	authHandler := resolveAuthHandler(ctx, registry, opts.Catalog)
 	authScope := resolveAuthScope(ctx, opts.Catalog)
+
+	verboseRemoteInfo(ctx, w, registry, repository, authHandler, authScope)
 
 	// Create remote catalog
 	remoteCatalog, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{

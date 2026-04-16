@@ -18,11 +18,13 @@ import (
 
 // mockCatalog implements the Catalog interface for testing.
 type mockCatalog struct {
-	name       string
-	artifacts  map[string]mockArtifact
-	listFunc   func(ctx context.Context, kind ArtifactKind, name string) ([]ArtifactInfo, error)
-	storeFunc  func(ctx context.Context, ref Reference, content, bundleData []byte, annotations map[string]string, force bool) (ArtifactInfo, error)
-	deleteFunc func(ctx context.Context, ref Reference) error
+	name                string
+	artifacts           map[string]mockArtifact
+	listFunc            func(ctx context.Context, kind ArtifactKind, name string) ([]ArtifactInfo, error)
+	storeFunc           func(ctx context.Context, ref Reference, content, bundleData []byte, annotations map[string]string, force bool) (ArtifactInfo, error)
+	deleteFunc          func(ctx context.Context, ref Reference) error
+	fetchFunc           func(ctx context.Context, ref Reference) ([]byte, ArtifactInfo, error)
+	fetchWithBundleFunc func(ctx context.Context, ref Reference) ([]byte, []byte, ArtifactInfo, error)
 }
 
 type mockArtifact struct {
@@ -62,6 +64,9 @@ func (m *mockCatalog) Store(ctx context.Context, ref Reference, content, bundleD
 }
 
 func (m *mockCatalog) Fetch(ctx context.Context, ref Reference) ([]byte, ArtifactInfo, error) {
+	if m.fetchFunc != nil {
+		return m.fetchFunc(ctx, ref)
+	}
 	a, ok := m.artifacts[ref.String()]
 	if !ok {
 		return nil, ArtifactInfo{}, ErrArtifactNotFound
@@ -70,6 +75,9 @@ func (m *mockCatalog) Fetch(ctx context.Context, ref Reference) ([]byte, Artifac
 }
 
 func (m *mockCatalog) FetchWithBundle(ctx context.Context, ref Reference) ([]byte, []byte, ArtifactInfo, error) {
+	if m.fetchWithBundleFunc != nil {
+		return m.fetchWithBundleFunc(ctx, ref)
+	}
 	a, ok := m.artifacts[ref.String()]
 	if !ok {
 		return nil, nil, ArtifactInfo{}, ErrArtifactNotFound

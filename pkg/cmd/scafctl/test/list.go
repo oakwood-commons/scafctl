@@ -73,6 +73,7 @@ Examples:
 
 			opts.IOStreams = ioStreams
 			opts.CliParams = cliParams
+			opts.AppName = cliParams.BinaryName
 
 			return runList(ctx, opts)
 		},

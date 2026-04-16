@@ -98,6 +98,7 @@ func (o *CmdOptionsVersion) GetSolution(ctx context.Context) error {
 	if err == nil {
 		resolverOpts := []catalog.SolutionResolverOption{
 			catalog.WithResolverNoCache(o.NoCache),
+			catalog.WithResolverRemoteCatalogs(catalog.RemoteCatalogsFromContext(ctx, *lgr)),
 		}
 		if !o.NoCache {
 			artifactCache := cache.NewArtifactCache(paths.ArtifactCacheDir(), settings.DefaultArtifactCacheTTL)

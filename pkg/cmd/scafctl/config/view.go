@@ -71,6 +71,7 @@ func CommandView(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 
 			opts.IOStreams = ioStreams
 			opts.CliParams = cliParams
+			opts.AppName = cliParams.BinaryName
 			opts.BinaryName = cliParams.BinaryName
 
 			// Get config path from parent command context

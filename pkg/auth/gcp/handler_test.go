@@ -15,6 +15,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -203,6 +204,167 @@ func TestHandler_Status_ServicePrincipalMetadata(t *testing.T) {
 	require.NotNil(t, status)
 	assert.True(t, status.Authenticated)
 	assert.Equal(t, auth.IdentityTypeServicePrincipal, status.IdentityType)
+}
+
+func TestHandler_Status_StoredCredentials_RAPTExpired(t *testing.T) {
+	store := secrets.NewMockStore()
+	mockHTTP := NewMockHTTPClient()
+	handler, err := New(WithSecretStore(store), WithHTTPClient(mockHTTP))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+	t.Setenv("GOOGLE_EXTERNAL_ACCOUNT", "")
+
+	// Store metadata (as if user logged in via interactive flow)
+	metadata := &TokenMetadata{
+		Claims: &auth.Claims{
+			Email:   "user@example.com",
+			Name:    "Test User",
+			Subject: "12345",
+			Issuer:  "https://accounts.google.com",
+		},
+		Flow:   auth.FlowInteractive,
+		Scopes: []string{"https://www.googleapis.com/auth/cloud-platform"},
+	}
+	metadataBytes, err := json.Marshal(metadata)
+	require.NoError(t, err)
+	require.NoError(t, store.Set(ctx, SecretKeyMetadata, metadataBytes))
+
+	// Store a refresh token so the probe actually runs
+	require.NoError(t, store.Set(ctx, SecretKeyRefreshToken, []byte("fake-refresh-token")))
+
+	// Mock a RAPT-expired token refresh response
+	mockHTTP.AddResponse(400, TokenErrorResponse{
+		Error:            "invalid_rapt",
+		ErrorDescription: "Reauthentication required by RAPT policy",
+	})
+
+	status, err := handler.Status(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, status)
+	assert.False(t, status.Authenticated)
+	assert.Equal(t, "expired (RAPT policy)", status.Reason)
+	assert.Equal(t, "user@example.com", status.Claims.Email)
+}
+
+func TestHandler_Status_StoredCredentials_InvalidGrant(t *testing.T) {
+	store := secrets.NewMockStore()
+	mockHTTP := NewMockHTTPClient()
+	handler, err := New(WithSecretStore(store), WithHTTPClient(mockHTTP))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+	t.Setenv("GOOGLE_EXTERNAL_ACCOUNT", "")
+
+	metadata := &TokenMetadata{
+		Claims: &auth.Claims{
+			Email:   "user@example.com",
+			Subject: "12345",
+			Issuer:  "https://accounts.google.com",
+		},
+		Flow:   auth.FlowInteractive,
+		Scopes: []string{"https://www.googleapis.com/auth/cloud-platform"},
+	}
+	metadataBytes, err := json.Marshal(metadata)
+	require.NoError(t, err)
+	require.NoError(t, store.Set(ctx, SecretKeyMetadata, metadataBytes))
+	require.NoError(t, store.Set(ctx, SecretKeyRefreshToken, []byte("fake-refresh-token")))
+
+	// Mock an invalid_grant response (revoked credentials)
+	// The handler calls Logout on invalid_grant, which calls revokeRefreshToken (1 HTTP call).
+	mockHTTP.AddResponse(400, TokenErrorResponse{
+		Error:            "invalid_grant",
+		ErrorDescription: "Token has been revoked",
+	})
+	// Logout's revokeRefreshToken call
+	mockHTTP.AddResponse(200, map[string]string{"status": "ok"})
+
+	status, err := handler.Status(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, status)
+	assert.False(t, status.Authenticated)
+	assert.Equal(t, "expired or revoked", status.Reason)
+}
+
+func TestHandler_Status_InvalidGrant_EmbedderBinaryName(t *testing.T) {
+	store := secrets.NewMockStore()
+	mockHTTP := NewMockHTTPClient()
+	handler, err := New(WithSecretStore(store), WithHTTPClient(mockHTTP))
+	require.NoError(t, err)
+
+	params := settings.NewCliParams()
+	params.BinaryName = "mycli"
+	ctx := settings.IntoContext(context.Background(), params)
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+	t.Setenv("GOOGLE_EXTERNAL_ACCOUNT", "")
+	t.Setenv("CLOUDSDK_CONFIG", t.TempDir())
+
+	metadata := &TokenMetadata{
+		Claims: &auth.Claims{
+			Email:  "user@example.com",
+			Issuer: "https://accounts.google.com",
+		},
+		Flow:   auth.FlowInteractive,
+		Scopes: []string{"https://www.googleapis.com/auth/cloud-platform"},
+	}
+	metadataBytes, err := json.Marshal(metadata)
+	require.NoError(t, err)
+	require.NoError(t, store.Set(ctx, SecretKeyMetadata, metadataBytes))
+	require.NoError(t, store.Set(ctx, SecretKeyRefreshToken, []byte("fake-refresh-token")))
+
+	mockHTTP.AddResponse(400, TokenErrorResponse{
+		Error:            "invalid_grant",
+		ErrorDescription: "Token has been revoked",
+	})
+	// Logout's revokeRefreshToken call
+	mockHTTP.AddResponse(200, map[string]string{"status": "ok"})
+
+	status, err := handler.Status(ctx)
+	require.NoError(t, err)
+	assert.False(t, status.Authenticated)
+	assert.Equal(t, "expired or revoked", status.Reason)
+}
+
+func TestHandler_Status_StoredCredentials_ValidToken(t *testing.T) {
+	store := secrets.NewMockStore()
+	mockHTTP := NewMockHTTPClient()
+	handler, err := New(WithSecretStore(store), WithHTTPClient(mockHTTP))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+	t.Setenv("GOOGLE_EXTERNAL_ACCOUNT", "")
+
+	metadata := &TokenMetadata{
+		Claims: &auth.Claims{
+			Email:   "user@example.com",
+			Name:    "Test User",
+			Subject: "12345",
+			Issuer:  "https://accounts.google.com",
+		},
+		Flow:   auth.FlowInteractive,
+		Scopes: []string{"https://www.googleapis.com/auth/cloud-platform"},
+	}
+	metadataBytes, err := json.Marshal(metadata)
+	require.NoError(t, err)
+	require.NoError(t, store.Set(ctx, SecretKeyMetadata, metadataBytes))
+	require.NoError(t, store.Set(ctx, SecretKeyRefreshToken, []byte("fake-refresh-token")))
+
+	// Mock a successful token refresh
+	mockHTTP.AddResponse(200, map[string]any{
+		"access_token": "new-access-token",
+		"token_type":   "Bearer",
+		"expires_in":   3600,
+	})
+
+	status, err := handler.Status(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, status)
+	assert.True(t, status.Authenticated)
+	assert.Empty(t, status.Reason)
+	assert.Equal(t, "user@example.com", status.Claims.Email)
 }
 
 func TestHandler_Logout(t *testing.T) {

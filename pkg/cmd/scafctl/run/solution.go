@@ -297,6 +297,11 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		return o.exitWithCode(ctx, o.positionalPathErr, exitcode.InvalidInput)
 	}
 
+	// Resolve --version constraint before loading solution
+	if err := o.resolveVersionConstraintForFile(ctx); err != nil {
+		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
+	}
+
 	lgr := logger.FromContext(ctx)
 
 	// Apply config default for output-dir when the CLI flag wasn't explicitly set
@@ -353,21 +358,29 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	}
 
 	// Prepare solution: load, set up registry, handle bundles
-	sol, reg, cleanup, err := o.prepareSolutionForExecution(ctx)
+	sol, reg, solutionDir, cleanup, err := o.prepareSolutionForExecution(ctx)
 	if err != nil {
 		return o.exitWithCode(ctx, err, exitcode.FileNotFound)
 	}
 	defer cleanup()
 
 	// Set the solution directory for resolver path resolution.
-	// Only applied when --base-dir is explicitly provided. Without it,
-	// resolver paths resolve from CWD (the historical default).
+	// --base-dir takes precedence; otherwise use the solution file's directory.
+	// When SolutionDirectory is set, also set WorkingDirectory on the resolver
+	// context so that providers like file/exec continue to resolve paths against
+	// the caller's CWD (AbsFromContext checks WorkingDirectory before
+	// SolutionDirectory). For bundle/catalog runs solutionDir is empty and the
+	// process CWD is the bundle extraction directory, which is the correct base.
 	if o.BaseDir != "" {
 		absBaseDir, baseDirErr := filepath.Abs(o.BaseDir)
 		if baseDirErr != nil {
 			return o.exitWithCode(ctx, fmt.Errorf("--base-dir: %w", baseDirErr), exitcode.InvalidInput)
 		}
+		ctx = provider.WithWorkingDirectory(ctx, originalCwd)
 		ctx = provider.WithSolutionDirectory(ctx, absBaseDir)
+	} else if solutionDir != "" {
+		ctx = provider.WithWorkingDirectory(ctx, originalCwd)
+		ctx = provider.WithSolutionDirectory(ctx, solutionDir)
 	}
 
 	actionAdapter := &actionRegistryAdapter{registry: reg}
@@ -433,7 +446,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		actionCtx = provider.WithBackup(actionCtx, true)
 	}
 
-	// Ensure actions resolve relative paths against the caller's original working
+	// Ensure actions resolve output paths against the caller's original working
 	// directory rather than the process CWD, which may have been changed to a
 	// temporary bundle extraction directory for catalog solutions. This aligns
 	// catalog runs with local -f behaviour: files land in the caller's CWD unless

@@ -39,7 +39,7 @@ The project uses `task` (go-task/task) for builds and linting. **Always use `tas
 ## Critical Rules
 
 - **Business logic placement**: Never in CLI command packages (`pkg/cmd/scafctl/...`), MCP handler files (`pkg/mcp/tools_*.go`), or API packages -- put it in shared domain packages (`pkg/...`)
-- **After any change**: Run `task test:e2e` to ensure everything passes
+- **After any change**: Run `task test:e2e` to ensure everything passes. E2E is slow -- run it **once**, redirect output to a file (`task test:e2e 2>&1 | tee /tmp/e2e-results.txt`), and grep the file to check results. Never re-run just to read output differently.
 - **Test coverage**: Every new or changed file must have tests. Target 70%+ patch coverage. Never submit a new file with 0% test coverage
 - **No magic values**: Always define constants or use settings for configuration values
 - **Git safety**: Never run `git commit`, `git push`, or `git commit --amend` unless the user explicitly asks. Never commit or push without approval first

@@ -116,6 +116,7 @@ Examples:
 
 			opts.IOStreams = ioStreams
 			opts.CliParams = cliParams
+			opts.AppName = cliParams.BinaryName
 			opts.Verbose = cliParams.Verbose
 
 			return runFunctional(ctx, opts)

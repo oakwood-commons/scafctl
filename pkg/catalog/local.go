@@ -107,6 +107,12 @@ func (c *LocalCatalog) Store(ctx context.Context, ref Reference, content, bundle
 	}
 	annotations[AnnotationCreated] = now.Format(time.RFC3339)
 
+	// Default origin to "built" unless the caller set one (e.g., cacheArtifact
+	// passes "auto-cached from <catalog>").
+	if annotations[AnnotationOrigin] == "" {
+		annotations[AnnotationOrigin] = "built"
+	}
+
 	// Create content layer
 	contentDesc, err := c.pushBlob(ctx, MediaTypeForKind(ref.Kind), content)
 	if err != nil {
@@ -197,21 +203,13 @@ func (c *LocalCatalog) Fetch(ctx context.Context, ref Reference) ([]byte, Artifa
 		return nil, ArtifactInfo{}, err
 	}
 
-	// Get the manifest
-	tag := c.tagForRef(info.Reference)
-	manifestDesc, err := c.store.Resolve(ctx, tag)
+	// Fetch the manifest using the resolved digest directly rather than
+	// reconstructing a tag. This handles catalog entries whose OCI tag does
+	// not match the canonical kind/name:version format (e.g., entries pulled
+	// from a remote registry before the kind was set).
+	manifest, err := c.fetchManifestByDigest(ctx, info.Digest)
 	if err != nil {
-		return nil, ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
-	}
-
-	manifestData, err := c.fetchBlob(ctx, manifestDesc)
-	if err != nil {
-		return nil, ArtifactInfo{}, fmt.Errorf("failed to fetch manifest: %w", err)
-	}
-
-	var manifest ocispec.Manifest
-	if err := json.Unmarshal(manifestData, &manifest); err != nil {
-		return nil, ArtifactInfo{}, fmt.Errorf("failed to unmarshal manifest: %w", err)
+		return nil, ArtifactInfo{}, err
 	}
 
 	if len(manifest.Layers) == 0 {
@@ -239,21 +237,10 @@ func (c *LocalCatalog) FetchWithBundle(ctx context.Context, ref Reference) ([]by
 		return nil, nil, ArtifactInfo{}, err
 	}
 
-	// Get the manifest
-	tag := c.tagForRef(info.Reference)
-	manifestDesc, err := c.store.Resolve(ctx, tag)
+	// Fetch the manifest by digest (see Fetch for rationale).
+	manifest, err := c.fetchManifestByDigest(ctx, info.Digest)
 	if err != nil {
-		return nil, nil, ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
-	}
-
-	manifestData, err := c.fetchBlob(ctx, manifestDesc)
-	if err != nil {
-		return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to fetch manifest: %w", err)
-	}
-
-	var manifest ocispec.Manifest
-	if err := json.Unmarshal(manifestData, &manifest); err != nil {
-		return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to unmarshal manifest: %w", err)
+		return nil, nil, ArtifactInfo{}, err
 	}
 
 	if len(manifest.Layers) == 0 {
@@ -438,16 +425,33 @@ func (c *LocalCatalog) resolveLocked(ctx context.Context, ref Reference) (Artifa
 	if ref.HasVersion() || ref.HasDigest() {
 		tag := c.tagForRef(ref)
 		desc, err := c.store.Resolve(ctx, tag)
-		if err != nil {
-			return ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
+		if err == nil {
+			annotations, err := c.getManifestAnnotations(ctx, desc)
+			if err != nil {
+				return ArtifactInfo{}, err
+			}
+
+			return c.infoFromAnnotations(ref, desc, annotations), nil
 		}
 
-		annotations, err := c.getManifestAnnotations(ctx, desc)
+		// Tag lookup failed. This can happen when an artifact was pulled
+		// from a remote registry with an empty or incorrect kind, producing
+		// a tag that doesn't match the canonical format (e.g., "/name:1.0.0"
+		// instead of "solution/name:1.0.0"). Fall back to annotation-based
+		// listing which handles mismatched tags.
+		artifacts, err := c.listLocked(ctx, ref.Kind, ref.Name)
 		if err != nil {
 			return ArtifactInfo{}, err
 		}
-
-		return c.infoFromAnnotations(ref, desc, annotations), nil
+		for _, a := range artifacts {
+			if ref.HasVersion() && a.Reference.Version != nil && a.Reference.Version.Equal(ref.Version) {
+				return a, nil
+			}
+			if ref.HasDigest() && a.Digest == ref.Digest {
+				return a, nil
+			}
+		}
+		return ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
 	}
 
 	// No version specified - find highest semver
@@ -550,7 +554,28 @@ func (c *LocalCatalog) Exists(ctx context.Context, ref Reference) (bool, error) 
 func (c *LocalCatalog) existsLocked(ctx context.Context, ref Reference) bool {
 	tag := c.tagForRef(ref)
 	_, err := c.store.Resolve(ctx, tag)
-	return err == nil
+	if err == nil {
+		return true
+	}
+
+	// Tag lookup failed -- fall back to annotation-based listing to handle
+	// artifacts whose OCI tag doesn't match the canonical format.
+	artifacts, listErr := c.listLocked(ctx, ref.Kind, ref.Name)
+	if listErr != nil {
+		return false
+	}
+	for _, a := range artifacts {
+		if ref.HasVersion() && a.Reference.Version != nil && a.Reference.Version.Equal(ref.Version) {
+			return true
+		}
+		if ref.HasDigest() && a.Digest == ref.Digest {
+			return true
+		}
+		if !ref.HasVersion() && !ref.HasDigest() {
+			return true
+		}
+	}
+	return false
 }
 
 // Delete removes an artifact from the catalog.
@@ -558,10 +583,15 @@ func (c *LocalCatalog) Delete(ctx context.Context, ref Reference) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// Try canonical tag first.
 	tag := c.tagForRef(ref)
 	desc, err := c.store.Resolve(ctx, tag)
 	if err != nil {
-		return &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
+		// Fall back to resolving via annotations for mismatched tags.
+		tag, desc, err = c.findTagByAnnotations(ctx, ref)
+		if err != nil {
+			return &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
+		}
 	}
 
 	// Delete the tag (blobs are orphaned but not deleted - would need GC)
@@ -622,6 +652,91 @@ func (c *LocalCatalog) fetchBlob(ctx context.Context, desc ocispec.Descriptor) (
 	return buf.Bytes(), nil
 }
 
+// findTagByAnnotations searches all OCI tags for an artifact matching the
+// given reference by annotation metadata. Returns the actual stored tag and
+// its descriptor. This handles mismatched tags (e.g., "/name:1.0.0" instead
+// of "solution/name:1.0.0").
+func (c *LocalCatalog) findTagByAnnotations(ctx context.Context, ref Reference) (string, ocispec.Descriptor, error) {
+	var foundTag string
+	var foundDesc ocispec.Descriptor
+
+	err := c.store.Tags(ctx, "", func(tags []string) error {
+		for _, tag := range tags {
+			desc, err := c.store.Resolve(ctx, tag)
+			if err != nil {
+				continue
+			}
+			annotations, err := c.getManifestAnnotations(ctx, desc)
+			if err != nil {
+				continue
+			}
+
+			artifactName := annotations[AnnotationArtifactName]
+			artifactKind := ArtifactKind(annotations[AnnotationArtifactType])
+
+			if artifactName != ref.Name {
+				continue
+			}
+			if ref.Kind != "" && artifactKind != ref.Kind {
+				continue
+			}
+			if ref.HasDigest() && desc.Digest.String() != ref.Digest {
+				continue
+			}
+			if ref.HasVersion() {
+				versionStr := annotations[AnnotationVersion]
+				if versionStr != ref.Version.String() {
+					continue
+				}
+			}
+
+			foundTag = tag
+			foundDesc = desc
+			return errStopIteration
+		}
+		return nil
+	})
+
+	if err != nil && !errors.Is(err, errStopIteration) {
+		return "", ocispec.Descriptor{}, err
+	}
+	if foundTag == "" {
+		return "", ocispec.Descriptor{}, fmt.Errorf("not found")
+	}
+	return foundTag, foundDesc, nil
+}
+
+// errStopIteration is a sentinel used to break out of tag iteration early.
+var errStopIteration = fmt.Errorf("stop iteration")
+
+// fetchManifestByDigest fetches and unmarshals an OCI manifest using its
+// content digest. This avoids the need to reconstruct a tag which may not
+// match the actual stored tag (e.g., when the artifact was pulled from a
+// remote registry with an empty kind).
+func (c *LocalCatalog) fetchManifestByDigest(ctx context.Context, dgst string) (ocispec.Manifest, error) {
+	parsedDigest, err := digest.Parse(dgst)
+	if err != nil {
+		return ocispec.Manifest{}, fmt.Errorf("invalid digest %q: %w", dgst, err)
+	}
+
+	desc := ocispec.Descriptor{
+		Digest:    parsedDigest,
+		MediaType: ocispec.MediaTypeImageManifest,
+	}
+
+	data, err := c.fetchBlob(ctx, desc)
+	if err != nil {
+		return ocispec.Manifest{}, fmt.Errorf("failed to fetch manifest: %w", err)
+	}
+
+	var manifest ocispec.Manifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return ocispec.Manifest{}, fmt.Errorf("failed to unmarshal manifest: %w", err)
+	}
+
+	return manifest, nil
+}
+
 func (c *LocalCatalog) getManifestAnnotations(ctx context.Context, desc ocispec.Descriptor) (map[string]string, error) {
 	data, err := c.fetchBlob(ctx, desc)
 	if err != nil {
@@ -669,12 +784,24 @@ func (c *LocalCatalog) infoFromAnnotations(ref Reference, desc ocispec.Descripto
 		}
 	}
 
+	// Merge descriptor-level annotations (from OCI index.json) into the
+	// manifest-level annotations. Descriptor annotations take precedence
+	// because they contain local-only metadata like AnnotationOrigin that
+	// is set during Tag() without modifying the manifest blob.
+	merged := make(map[string]string, len(annotations)+len(desc.Annotations))
+	for k, v := range annotations {
+		merged[k] = v
+	}
+	for k, v := range desc.Annotations {
+		merged[k] = v
+	}
+
 	return ArtifactInfo{
 		Reference:   ref,
 		Digest:      desc.Digest.String(),
 		CreatedAt:   createdAt,
 		Size:        desc.Size,
-		Annotations: annotations,
+		Annotations: merged,
 		Catalog:     LocalCatalogName,
 	}
 }

@@ -62,6 +62,13 @@ const (
 
 	// AnnotationPlatform is the target platform (provider/auth-handler artifacts only, e.g., "linux/amd64").
 	AnnotationPlatform = "dev.scafctl.plugin.platform"
+
+	// AnnotationOrigin records how a local artifact was obtained.
+	// Values: "built", "pulled from <catalog>", "auto-cached from <catalog>".
+	// This key carries provenance metadata only. Its exact storage location
+	// depends on the catalog implementation, so it must not be assumed to be
+	// descriptor-only or digest-stable.
+	AnnotationOrigin = "dev.scafctl.artifact.origin"
 )
 
 // AnnotationBuilder helps construct annotation maps.

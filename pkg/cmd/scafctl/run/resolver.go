@@ -301,6 +301,11 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		return o.exitWithCode(ctx, o.positionalPathErr, exitcode.InvalidInput)
 	}
 
+	// Resolve --version constraint before loading solution
+	if err := o.resolveVersionConstraintForFile(ctx); err != nil {
+		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
+	}
+
 	lgr := logger.FromContext(ctx)
 
 	// Global --verbose implies --show-execution for resolvers
@@ -342,21 +347,36 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 			exitcode.InvalidInput)
 	}
 
+	// Capture the caller's working directory before preparing the solution,
+	// which may chdir into a bundle extraction directory.
+	originalCwd, err := provider.GetWorkingDirectory(ctx)
+	if err != nil {
+		return o.exitWithCode(ctx, fmt.Errorf("failed to get working directory: %w", err), exitcode.GeneralError)
+	}
+
 	// Prepare solution: load, set up registry, handle bundles
-	sol, reg, cleanup, err := o.prepareSolutionForExecution(ctx)
+	sol, reg, solutionDir, cleanup, err := o.prepareSolutionForExecution(ctx)
 	if err != nil {
 		return o.exitWithCode(ctx, err, exitcode.FileNotFound)
 	}
 	defer cleanup()
 
-	// Set the solution directory for resolver path resolution.
-	// Only applied when --base-dir is explicitly provided.
+	// Set the solution directory for child-solution path resolution.
+	// --base-dir takes precedence; otherwise use the solution file's directory.
+	// When SolutionDirectory is set, also set WorkingDirectory so that providers
+	// like file/exec continue to resolve paths against the caller's CWD.
+	// For bundle/catalog runs solutionDir is empty and the process CWD is the
+	// bundle extraction directory, which is the correct base.
 	if o.BaseDir != "" {
 		absBaseDir, baseDirErr := stdfilepath.Abs(o.BaseDir)
 		if baseDirErr != nil {
 			return o.exitWithCode(ctx, fmt.Errorf("--base-dir: %w", baseDirErr), exitcode.InvalidInput)
 		}
+		ctx = provider.WithWorkingDirectory(ctx, originalCwd)
 		ctx = provider.WithSolutionDirectory(ctx, absBaseDir)
+	} else if solutionDir != "" {
+		ctx = provider.WithWorkingDirectory(ctx, originalCwd)
+		ctx = provider.WithSolutionDirectory(ctx, solutionDir)
 	}
 
 	// Parse dynamic positional arguments (key=value and @file.yaml from argv)

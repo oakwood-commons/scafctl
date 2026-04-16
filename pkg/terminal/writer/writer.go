@@ -180,6 +180,28 @@ func (w *Writer) DebugOutf(format string, args ...any) {
 	w.DebugOut(fmt.Sprintf(format, args...))
 }
 
+// VerboseEnabled returns true if verbose output is active (--verbose is set and --quiet is not).
+func (w *Writer) VerboseEnabled() bool {
+	return w.cliParams.Verbose && !w.cliParams.IsQuiet
+}
+
+// Verbose writes a verbose diagnostic message to stderr.
+// Only prints when --verbose is enabled. Respects --quiet.
+// Writes to stderr so it doesn't pollute piped stdout output (e.g., -o json).
+func (w *Writer) Verbose(msg string) {
+	if w.cliParams.IsQuiet || !w.cliParams.Verbose {
+		return
+	}
+	fmt.Fprintln(w.ioStreams.ErrOut, output.VerboseMessage(msg, w.cliParams.NoColor))
+}
+
+// Verbosef writes a formatted verbose diagnostic message to stderr.
+// Only prints when --verbose is enabled. Respects --quiet.
+// Writes to stderr so it doesn't pollute piped stdout output (e.g., -o json).
+func (w *Writer) Verbosef(format string, args ...any) {
+	w.Verbose(fmt.Sprintf(format, args...))
+}
+
 // Plain writes a plain message to stdout without any styling or newline.
 // Respects --quiet flag only.
 func (w *Writer) Plain(msg string) {

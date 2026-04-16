@@ -24,7 +24,9 @@ type listOptions struct {
 
 // CommandList creates the 'secrets list' command.
 func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
-	opts := &listOptions{}
+	opts := &listOptions{
+		KvxOutputFlags: flags.KvxOutputFlags{AppName: cliParams.BinaryName},
+	}
 
 	cmd := &cobra.Command{
 		Use:   "list",

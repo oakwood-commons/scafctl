@@ -355,6 +355,49 @@ func TestDebugMessage(t *testing.T) {
 	}
 }
 
+func TestVerboseMessage(t *testing.T) {
+	tests := []struct {
+		name     string
+		msg      string
+		noColor  bool
+		expected string
+	}{
+		{
+			name:     "noColor true returns plain message",
+			msg:      "Verbose info",
+			noColor:  true,
+			expected: "Verbose info",
+		},
+		{
+			name:     "noColor false returns styled message",
+			msg:      "Verbose info",
+			noColor:  false,
+			expected: " ▸ Verbose info",
+		},
+		{
+			name:     "empty message with noColor true",
+			msg:      "",
+			noColor:  true,
+			expected: "",
+		},
+		{
+			name:     "empty message with noColor false",
+			msg:      "",
+			noColor:  false,
+			expected: " ▸ ",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := VerboseMessage(tt.msg, tt.noColor)
+			if got != tt.expected {
+				t.Errorf("VerboseMessage(%q, %v) = %q; want %q", tt.msg, tt.noColor, got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestWriteDebug(t *testing.T) {
 	tests := []struct {
 		name     string

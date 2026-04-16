@@ -41,8 +41,9 @@ type LoadOutput struct {
 // CommandLoad creates the load command.
 func CommandLoad(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
 	options := &LoadOptions{
-		CliParams: cliParams,
-		IOStreams: ioStreams,
+		CliParams:      cliParams,
+		IOStreams:      ioStreams,
+		KvxOutputFlags: flags.KvxOutputFlags{AppName: cliParams.BinaryName},
 	}
 
 	cmd := &cobra.Command{
