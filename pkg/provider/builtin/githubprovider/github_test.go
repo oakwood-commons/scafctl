@@ -10,7 +10,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/httpc"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -28,7 +30,11 @@ func testProvider(t *testing.T, handler http.HandlerFunc) (*GitHubProvider, stri
 		EnableCache: false,
 		RetryMax:    0,
 	})
-	p := NewGitHubProvider(WithClient(client))
+	p := NewGitHubProvider(
+		WithClient(client),
+		// Use near-zero delays for tests to avoid sleeping.
+		WithRetryConfig(5, time.Millisecond, 15, time.Millisecond, 3, time.Millisecond),
+	)
 	return p, server.URL
 }
 
@@ -46,11 +52,22 @@ func graphqlHandler(t *testing.T, checkQuery func(query string, vars map[string]
 		var req graphqlRequest
 		require.NoError(t, json.Unmarshal(body, &req))
 
+		w.Header().Set("Content-Type", "application/json")
+
+		// Intercept viewerPermission queries (from waitForWriteAccess)
+		if strings.Contains(req.Query, "viewerPermission") {
+			json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+				"data": map[string]any{
+					"repository": map[string]any{"viewerPermission": "ADMIN"},
+				},
+			})
+			return
+		}
+
 		if checkQuery != nil {
 			checkQuery(req.Query, req.Variables)
 		}
 
-		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(response) //nolint:errcheck
 	}
 }
@@ -70,6 +87,34 @@ func TestNewGitHubProvider(t *testing.T) {
 
 	err := provider.ValidateDescriptor(desc)
 	assert.NoError(t, err)
+}
+
+func TestWithRetryConfig_ClampsValues(t *testing.T) {
+	t.Parallel()
+
+	p := NewGitHubProvider(
+		WithRetryConfig(0, -time.Second, -1, -time.Millisecond, 0, -time.Second),
+	)
+	assert.Equal(t, 1, p.commitMaxAttempts, "commitMaxAttempts should be clamped to 1")
+	assert.Equal(t, time.Duration(0), p.commitRetryBackoff, "commitRetryBackoff should be clamped to 0")
+	assert.Equal(t, 1, p.waitMaxAttempts, "waitMaxAttempts should be clamped to 1")
+	assert.Equal(t, time.Duration(0), p.waitPollInterval, "waitPollInterval should be clamped to 0")
+	assert.Equal(t, 1, p.initRepoMaxRetries, "initRepoMaxRetries should be clamped to 1")
+	assert.Equal(t, time.Duration(0), p.initRepoRetryBackoff, "initRepoRetryBackoff should be clamped to 0")
+}
+
+func TestWithRetryConfig_PositiveValuesUnchanged(t *testing.T) {
+	t.Parallel()
+
+	p := NewGitHubProvider(
+		WithRetryConfig(3, 2*time.Second, 10, time.Second, 5, 500*time.Millisecond),
+	)
+	assert.Equal(t, 3, p.commitMaxAttempts)
+	assert.Equal(t, 2*time.Second, p.commitRetryBackoff)
+	assert.Equal(t, 10, p.waitMaxAttempts)
+	assert.Equal(t, time.Second, p.waitPollInterval)
+	assert.Equal(t, 5, p.initRepoMaxRetries)
+	assert.Equal(t, 500*time.Millisecond, p.initRepoRetryBackoff)
 }
 
 // ─── Read Operation Tests ────────────────────────────────────────────────────
@@ -579,16 +624,236 @@ func TestGitHubProvider_Execute_CreateCommit_MissingFields(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			output, err := p.Execute(context.Background(), tt.inputs)
-			if err != nil {
-				assert.Contains(t, err.Error(), tt.wantErr)
-			} else {
-				data := output.Data.(map[string]any)
-				assert.Equal(t, false, data["success"])
-				assert.Contains(t, data["error"].(string), tt.wantErr)
-			}
+			_, err := p.Execute(context.Background(), tt.inputs)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
 		})
 	}
+}
+
+func TestParseFileChanges(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		inputs   map[string]any
+		wantAdds int
+		wantDels int
+		wantErr  string
+	}{
+		{
+			name:     "valid additions and deletions",
+			inputs:   map[string]any{"additions": []any{map[string]any{"path": "a.go", "content": "pkg"}}, "deletions": []any{map[string]any{"path": "b.go"}}},
+			wantAdds: 1,
+			wantDels: 1,
+		},
+		{
+			name:   "empty inputs",
+			inputs: map[string]any{},
+		},
+		{
+			name:    "non-map addition entry",
+			inputs:  map[string]any{"additions": []any{42}},
+			wantErr: "each addition entry must be an object",
+		},
+		{
+			name:    "addition missing path",
+			inputs:  map[string]any{"additions": []any{map[string]any{"content": "c"}}},
+			wantErr: "each addition must have 'path' and 'content'",
+		},
+		{
+			name:    "addition missing content",
+			inputs:  map[string]any{"additions": []any{map[string]any{"path": "f"}}},
+			wantErr: "each addition must have 'path' and 'content'",
+		},
+		{
+			name:    "non-map deletion entry",
+			inputs:  map[string]any{"deletions": []any{"not-a-map"}},
+			wantErr: "each deletion entry must be an object",
+		},
+		{
+			name:    "deletion missing path",
+			inputs:  map[string]any{"deletions": []any{map[string]any{"other": "val"}}},
+			wantErr: "each deletion must have 'path'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			adds, dels, err := parseFileChanges(tt.inputs)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Len(t, adds, tt.wantAdds)
+			assert.Len(t, dels, tt.wantDels)
+		})
+	}
+}
+
+// ─── Create Commit Retry Tests ───────────────────────────────────────────────
+
+func TestGitHubProvider_Execute_CreateCommit_RetryOnForbidden(t *testing.T) {
+	t.Parallel()
+
+	var callCount atomic.Int32
+	p, baseURL := testProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req graphqlRequest
+		json.Unmarshal(body, &req) //nolint:errcheck
+
+		w.Header().Set("Content-Type", "application/json")
+
+		// Intercept viewerPermission queries
+		if strings.Contains(req.Query, "viewerPermission") {
+			json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+				"data": map[string]any{
+					"repository": map[string]any{"viewerPermission": "ADMIN"},
+				},
+			})
+			return
+		}
+
+		n := callCount.Add(1)
+		if n < 3 {
+			// First two attempts: FORBIDDEN
+			json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+				"errors": []any{
+					map[string]any{
+						"message": "Resource not accessible by personal access token",
+						"type":    "FORBIDDEN",
+					},
+				},
+			})
+			return
+		}
+		// Third attempt: success
+		json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+			"data": map[string]any{
+				"createCommitOnBranch": map[string]any{
+					"commit": map[string]any{
+						"oid":           "new789",
+						"url":           "https://github.com/o/r/commit/new789",
+						"committedDate": "2026-01-01T00:00:00Z",
+						"message":       "test commit",
+					},
+				},
+			},
+		})
+	})
+
+	output, err := p.Execute(context.Background(), map[string]any{
+		"operation":         "create_commit",
+		"owner":             "test-org",
+		"repo":              "test-repo",
+		"branch":            "main",
+		"message":           "test commit",
+		"expected_head_oid": "abc123def456789012345678901234567890abcd",
+		"additions":         []any{map[string]any{"path": "f.go", "content": "pkg"}},
+		"api_base":          baseURL,
+	})
+
+	require.NoError(t, err)
+	data := output.Data.(map[string]any)
+	assert.Equal(t, true, data["success"])
+	assert.Equal(t, int32(3), callCount.Load())
+}
+
+func TestGitHubProvider_Execute_CreateCommit_NonForbiddenError_NoRetry(t *testing.T) {
+	t.Parallel()
+
+	var callCount atomic.Int32
+	p, baseURL := testProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req graphqlRequest
+		json.Unmarshal(body, &req) //nolint:errcheck
+
+		w.Header().Set("Content-Type", "application/json")
+
+		if strings.Contains(req.Query, "viewerPermission") {
+			json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+				"data": map[string]any{
+					"repository": map[string]any{"viewerPermission": "ADMIN"},
+				},
+			})
+			return
+		}
+
+		callCount.Add(1)
+		json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+			"errors": []any{
+				map[string]any{
+					"message": "Branch not found",
+					"type":    "NOT_FOUND",
+				},
+			},
+		})
+	})
+
+	_, err := p.Execute(context.Background(), map[string]any{
+		"operation":         "create_commit",
+		"owner":             "test-org",
+		"repo":              "test-repo",
+		"branch":            "nonexistent",
+		"message":           "test",
+		"expected_head_oid": "abc123def456789012345678901234567890abcd",
+		"additions":         []any{map[string]any{"path": "f.go", "content": "pkg"}},
+		"api_base":          baseURL,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Branch not found")
+	assert.Equal(t, int32(1), callCount.Load(), "should not retry on non-FORBIDDEN errors")
+}
+
+func TestGitHubProvider_Execute_CreateCommit_RetryContextCancelled(t *testing.T) {
+	t.Parallel()
+
+	p, baseURL := testProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req graphqlRequest
+		json.Unmarshal(body, &req) //nolint:errcheck
+
+		w.Header().Set("Content-Type", "application/json")
+
+		if strings.Contains(req.Query, "viewerPermission") {
+			json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+				"data": map[string]any{
+					"repository": map[string]any{"viewerPermission": "ADMIN"},
+				},
+			})
+			return
+		}
+
+		// Always return FORBIDDEN to trigger retry loop
+		json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+			"errors": []any{
+				map[string]any{
+					"message": "Resource not accessible",
+					"type":    "FORBIDDEN",
+				},
+			},
+		})
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	_, err := p.Execute(ctx, map[string]any{
+		"operation":         "create_commit",
+		"owner":             "test-org",
+		"repo":              "test-repo",
+		"branch":            "main",
+		"message":           "test",
+		"expected_head_oid": "abc123def456789012345678901234567890abcd",
+		"additions":         []any{map[string]any{"path": "f.go", "content": "pkg"}},
+		"api_base":          baseURL,
+	})
+
+	require.Error(t, err)
 }
 
 func TestGitHubProvider_Execute_CreateBranch(t *testing.T) {
@@ -688,6 +953,19 @@ func TestGitHubProvider_Execute_DeleteRelease(t *testing.T) {
 
 // ─── Error Handling Tests ────────────────────────────────────────────────────
 
+func TestGitHubProvider_Execute_MissingOperation(t *testing.T) {
+	t.Parallel()
+
+	p := NewGitHubProvider()
+	_, err := p.Execute(context.Background(), map[string]any{
+		"owner": "test",
+		"repo":  "test",
+	})
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "'operation' is required")
+}
+
 func TestGitHubProvider_Execute_UnknownOperation(t *testing.T) {
 	p := NewGitHubProvider()
 	_, err := p.Execute(context.Background(), map[string]any{
@@ -749,7 +1027,46 @@ func TestGitHubProvider_Execute_InvalidInput(t *testing.T) {
 	assert.Contains(t, err.Error(), "expected map input")
 }
 
-func TestGitHubProvider_Execute_ActionErrorReturnsSuccessFalse(t *testing.T) {
+func TestGitHubProvider_Execute_MissingOwnerRepo(t *testing.T) {
+	t.Parallel()
+
+	p := NewGitHubProvider()
+
+	tests := []struct {
+		name   string
+		inputs map[string]any
+	}{
+		{"missing both", map[string]any{"operation": "get_repo"}},
+		{"missing repo", map[string]any{"operation": "create_issue", "owner": "org"}},
+		{"missing owner", map[string]any{"operation": "create_release", "repo": "r"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := p.Execute(context.Background(), tt.inputs)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "'owner' and 'repo' are required")
+		})
+	}
+}
+
+func TestGitHubProvider_Execute_CreateRepo_SkipsOwnerRepoValidation(t *testing.T) {
+	t.Parallel()
+
+	// create_repo should NOT fail the owner/repo validation even without owner
+	p := NewGitHubProvider()
+	ctx := provider.WithDryRun(context.Background(), true)
+	output, err := p.Execute(ctx, map[string]any{
+		"operation": "create_repo",
+		"repo":      "test-repo",
+	})
+	require.NoError(t, err)
+	data := output.Data.(map[string]any)
+	assert.Equal(t, true, data["success"])
+}
+
+func TestGitHubProvider_Execute_ActionErrorReturnsError(t *testing.T) {
 	p, baseURL := testProvider(t, graphqlHandler(t, nil,
 		map[string]any{
 			"errors": []any{
@@ -758,7 +1075,7 @@ func TestGitHubProvider_Execute_ActionErrorReturnsSuccessFalse(t *testing.T) {
 		},
 	))
 
-	output, err := p.Execute(context.Background(), map[string]any{
+	_, err := p.Execute(context.Background(), map[string]any{
 		"operation": "create_issue",
 		"owner":     "nonexistent",
 		"repo":      "repo",
@@ -766,11 +1083,9 @@ func TestGitHubProvider_Execute_ActionErrorReturnsSuccessFalse(t *testing.T) {
 		"api_base":  baseURL,
 	})
 
-	// Action operations return success=false, not a Go error
-	require.NoError(t, err)
-	data := output.Data.(map[string]any)
-	assert.Equal(t, false, data["success"])
-	assert.Contains(t, data["error"].(string), "Repository not found")
+	// Action operations now return Go errors so the executor can stop downstream actions
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Repository not found")
 }
 
 // ─── Dry Run Tests ───────────────────────────────────────────────────────────
@@ -806,6 +1121,21 @@ func TestGitHubProvider_Execute_DryRun_WriteOperation(t *testing.T) {
 	data := output.Data.(map[string]any)
 	assert.Equal(t, true, data["success"])
 	assert.Equal(t, "create_issue", data["operation"])
+}
+
+func TestGitHubProvider_Execute_DryRun_EmptyOperation(t *testing.T) {
+	t.Parallel()
+
+	p := NewGitHubProvider()
+	ctx := provider.WithDryRun(context.Background(), true)
+
+	_, err := p.Execute(ctx, map[string]any{
+		"owner": "test",
+		"repo":  "test",
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "'operation' is required")
 }
 
 // ─── Helper Tests ────────────────────────────────────────────────────────────
