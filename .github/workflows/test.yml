@@ -65,10 +65,7 @@ jobs:
         # TODO: Re-enable macos-latest and windows-latest when cross-platform issues are resolved
         os: [ubuntu-latest]
     env:
-      # Test-only key ("test-secret-key-for-ci-123456789") — not a real secret.
-      # Must be exactly 32 bytes when base64-decoded (AES-256 master key).
-      # Kept inline so CI works without external secrets (secrets.SCAFCTL_SECRET_KEY is not required).
-      SCAFCTL_SECRET_KEY: dGVzdC1zZWNyZXQta2V5LWZvci1jaS0xMjM0NTY3ODk=
+      SCAFCTL_SECRET_KEY: ${{ secrets.SCAFCTL_SECRET_KEY }}
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

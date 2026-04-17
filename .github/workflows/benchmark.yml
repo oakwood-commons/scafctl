@@ -25,7 +25,7 @@ jobs:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     env:
-      SCAFCTL_SECRET_KEY: dGVzdC1zZWNyZXQta2V5LWZvci1jaS0xMjM0NTY3ODk=
+      SCAFCTL_SECRET_KEY: ${{ secrets.SCAFCTL_SECRET_KEY }}
       # count=5 is enough for benchstat statistical significance while keeping runtime reasonable
       BENCH_COUNT: 5
       BENCH_TIME: 1s

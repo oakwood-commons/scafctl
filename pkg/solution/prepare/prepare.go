@@ -184,7 +184,7 @@ func Solution(ctx context.Context, path string, opts ...Option) (*Result, error)
 	// For bundles: the bundle extraction directory (set via os.Chdir below).
 	// For stdin or catalog references: leave empty (falls back to CWD).
 	var solutionDir string
-	if path != "-" && bundleDir == "" {
+	if path != "-" && bundleDir == "" && !strings.HasPrefix(sol.GetPath(), "catalog:") {
 		absPath, absErr := provider.AbsFromContext(ctx, path)
 		if absErr == nil {
 			solutionDir = filepath.Dir(absPath)

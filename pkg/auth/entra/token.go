@@ -85,17 +85,22 @@ func (h *Handler) mintToken(ctx context.Context, scope string) (*auth.Token, err
 		}
 
 		// Claims challenge: Conditional Access requires step-up authentication.
-		// Return a structured error so the caller can trigger interactive re-auth
-		// with the claims parameter.
-		if errResp.Claims != "" || strings.Contains(errResp.ErrorDescription, "AADSTS53003") {
+		// Only auto-retry when the response includes a claims payload -- the
+		// caller needs that value to append &claims= to the authorize URL.
+		if errResp.Claims != "" {
 			lgr.V(0).Info("claims challenge received, interactive re-authentication required",
 				"scope", scope,
-				"hasClaims", errResp.Claims != "",
 			)
 			return nil, &auth.ClaimsChallengeError{
 				Claims: errResp.Claims,
 				Scope:  scope,
 			}
+		}
+
+		// AADSTS53003 without a claims payload: Conditional Access blocked
+		// the request but did not provide a challenge we can satisfy.
+		if strings.Contains(errResp.ErrorDescription, "AADSTS53003") {
+			return nil, formatAADSTSError(fmt.Sprintf("Conditional Access blocked token request for scope %q", scope), errResp)
 		}
 
 		// Check if refresh token is expired or consent is required

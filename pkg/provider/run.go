@@ -13,7 +13,7 @@ import (
 // RunOptions configures a direct provider execution.
 type RunOptions struct {
 	// Provider is the resolved provider to execute.  Required.
-	Provider Provider `json:"-" yaml:"-"`
+	Provider Provider `json:"-" yaml:"-" doc:"Resolved provider instance"`
 
 	// Inputs are the key-value pairs passed to the provider.
 	Inputs map[string]any `json:"inputs" yaml:"inputs" doc:"Provider input parameters"`
@@ -29,10 +29,10 @@ type RunOptions struct {
 // RunResult is the structured output of a direct provider execution.
 type RunResult struct {
 	// Provider is the name of the provider that was executed.
-	Provider string `json:"provider" yaml:"provider" doc:"Provider name"`
+	Provider string `json:"provider" yaml:"provider" doc:"Provider name" maxLength:"128" example:"http"`
 
 	// Capability is the capability that was executed.
-	Capability string `json:"capability" yaml:"capability" doc:"Capability that was executed"`
+	Capability string `json:"capability" yaml:"capability" doc:"Capability that was executed" maxLength:"64" example:"from"`
 
 	// Data is the provider's output data.
 	Data any `json:"data" yaml:"data" doc:"Provider output data"`
@@ -46,8 +46,8 @@ type RunResult struct {
 	// DryRun indicates this was a dry-run (no side effects).
 	DryRun bool `json:"dryRun,omitempty" yaml:"dryRun,omitempty" doc:"Whether this was a dry-run"`
 
-	// Duration is the execution time.
-	Duration time.Duration `json:"duration" yaml:"duration" doc:"Execution duration"`
+	// Duration is the execution time as a human-readable string (e.g. "1.23s").
+	Duration string `json:"duration" yaml:"duration" doc:"Execution duration" maxLength:"32" example:"1.23s"`
 }
 
 // ResolveCapability determines which capability to use for execution.
@@ -154,6 +154,6 @@ func RunProvider(ctx context.Context, opts RunOptions) (*RunResult, error) {
 		Warnings:   result.Output.Warnings,
 		Metadata:   result.Output.Metadata,
 		DryRun:     result.DryRun,
-		Duration:   elapsed,
+		Duration:   elapsed.String(),
 	}, nil
 }

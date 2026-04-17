@@ -183,6 +183,20 @@ metadata:
 		assert.Equal(t, "/custom/dir/subdir", result.SolutionDir)
 		result.Cleanup()
 	})
+
+	t.Run("SolutionDir empty for catalog reference without bundle", func(t *testing.T) {
+		sol := minimalSolution()
+		// Simulate what get.Getter.fromCatalogWithBundle does: set a catalog: path
+		sol.SetPath("catalog:starter-kit@1.0.0")
+		getter := &mockGetter{sol: sol}
+
+		result, err := Solution(context.Background(), "starter-kit@1.0.0",
+			WithGetter(getter),
+		)
+		require.NoError(t, err)
+		assert.Empty(t, result.SolutionDir, "catalog references must not derive solutionDir from CWD")
+		result.Cleanup()
+	})
 }
 
 func TestWithMetrics(t *testing.T) {

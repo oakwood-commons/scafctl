@@ -670,15 +670,13 @@ func pathBasename(p string) string {
 }
 
 // flattenStatusCheckRollup extracts the nested statusCheckRollup from the aliased
-// commits field and replaces it with a flat "statusCheckRollup" key on the PR map.
-// The original "statusCheckRollup" alias (which shadows "commits") is removed.
+// commits field and replaces it with a flattened representation containing
+// the rollup state and individual check contexts.
 func flattenStatusCheckRollup(pr map[string]any) {
 	raw, ok := pr["statusCheckRollup"]
 	if !ok {
 		return
 	}
-	// Remove the alias so it doesn't shadow the real commits field
-	delete(pr, "statusCheckRollup")
 
 	nodesWrapper, ok := raw.(map[string]any)
 	if !ok {

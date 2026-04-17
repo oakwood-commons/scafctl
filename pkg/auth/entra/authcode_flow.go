@@ -81,7 +81,7 @@ func (h *Handler) authCodeLogin(ctx context.Context, opts auth.LoginOptions) (*a
 
 	// Build authorization URL
 	scopeStr := strings.Join(scopes, " ")
-	authURL := fmt.Sprintf("%s/%s/oauth2/v2.0/authorize?client_id=%s&redirect_uri=%s&response_type=code&scope=%s&code_challenge=%s&code_challenge_method=S256&state=%s&prompt=select_account",
+	authURL := fmt.Sprintf("%s/%s/oauth2/v2.0/authorize?client_id=%s&redirect_uri=%s&response_type=code&scope=%s&code_challenge=%s&code_challenge_method=S256&state=%s",
 		h.config.GetAuthority(),
 		tenantID,
 		url.QueryEscape(h.config.ClientID),

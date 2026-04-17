@@ -439,20 +439,17 @@ func TestHandleRunProvider(t *testing.T) {
 		request.Params.Name = "run_provider"
 		request.Params.Arguments = map[string]any{
 			"provider":   "env",
-			"inputs":     map[string]any{"name": "TEST_RUN_PROVIDER_VAR"},
+			"inputs":     map[string]any{"operation": "get", "name": "TEST_RUN_PROVIDER_VAR"},
 			"capability": "from",
 		}
 
 		result, err := srv.handleRunProvider(context.Background(), request)
 		require.NoError(t, err)
+		assert.False(t, result.IsError)
 
-		// env provider may fail in test environments if execution mode
-		// context is not wired; verify it returns a valid response shape
-		if !result.IsError {
-			text := result.Content[0].(mcp.TextContent).Text
-			var output map[string]any
-			require.NoError(t, json.Unmarshal([]byte(text), &output))
-			assert.Equal(t, "env", output["provider"])
-		}
+		text := result.Content[0].(mcp.TextContent).Text
+		var output map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &output))
+		assert.Equal(t, "env", output["provider"])
 	})
 }

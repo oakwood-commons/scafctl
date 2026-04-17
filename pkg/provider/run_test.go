@@ -165,7 +165,7 @@ func TestRunProvider_Success(t *testing.T) {
 	assert.Equal(t, "from", result.Capability)
 	assert.Equal(t, map[string]any{"value": "hello"}, result.Data)
 	assert.False(t, result.DryRun)
-	assert.True(t, result.Duration > 0)
+	assert.NotEmpty(t, result.Duration)
 }
 
 func TestRunProvider_DryRun(t *testing.T) {

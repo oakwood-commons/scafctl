@@ -90,7 +90,6 @@ func (s *Server) registerProviderTools() {
 			mcp.Description("Provider name (e.g., http, static, file, cel, exec, github, env)"),
 		),
 		mcp.WithObject("inputs",
-			mcp.Required(),
 			mcp.Description("Provider input parameters as key-value pairs. Use get_provider_schema to discover required and optional fields."),
 		),
 		mcp.WithString("capability",
@@ -280,7 +279,7 @@ func (s *Server) handleGetProviderOutputShape(_ context.Context, request mcp.Cal
 }
 
 // handleRunProvider executes a provider directly and returns structured output.
-func (s *Server) handleRunProvider(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleRunProvider(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	name, err := request.RequireString("provider")
 	if err != nil {
 		return newStructuredError(ErrCodeInvalidInput, err.Error(),
@@ -325,7 +324,7 @@ func (s *Server) handleRunProvider(ctx context.Context, request mcp.CallToolRequ
 		), nil
 	}
 
-	result, err := provider.RunProvider(ctx, provider.RunOptions{
+	result, err := provider.RunProvider(s.ctx, provider.RunOptions{
 		Provider:   prov,
 		Inputs:     inputs,
 		Capability: capability,

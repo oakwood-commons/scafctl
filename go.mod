@@ -30,7 +30,7 @@ require (
 	github.com/hashicorp/hcl/v2 v2.24.0
 	github.com/mark3labs/mcp-go v0.47.1
 	github.com/oakwood-commons/kvx v0.8.2
-	github.com/oakwood-commons/scafctl-plugin-sdk v0.1.0
+	github.com/oakwood-commons/scafctl-plugin-sdk v0.1.1
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/prometheus/client_golang v1.23.2

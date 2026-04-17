@@ -90,7 +90,9 @@ func TestMintToken_ClaimsChallenge(t *testing.T) {
 }
 
 func TestMintToken_ClaimsChallengeWithoutClaimsField(t *testing.T) {
-	// AADSTS53003 without a claims field should still trigger ClaimsChallengeError
+	// AADSTS53003 without a claims payload is NOT a retryable claims
+	// challenge -- it means Conditional Access blocked the request with no
+	// challenge we can satisfy.  Must NOT be a ClaimsChallengeError.
 	store := secrets.NewMockStore()
 	require.NoError(t, store.Set(context.Background(), SecretKeyRefreshToken, []byte("refresh-token")))
 	require.NoError(t, store.Set(context.Background(), SecretKeyMetadata,
@@ -107,7 +109,9 @@ func TestMintToken_ClaimsChallengeWithoutClaimsField(t *testing.T) {
 
 	_, err = handler.mintToken(context.Background(), "some-scope")
 	require.Error(t, err)
-	assert.True(t, auth.IsClaimsChallenge(err))
+	assert.False(t, auth.IsClaimsChallenge(err), "bare AADSTS53003 should not be a ClaimsChallengeError")
+	assert.Contains(t, err.Error(), "Conditional Access blocked")
+	assert.Contains(t, err.Error(), "some-scope")
 }
 
 func TestMintToken_IncludesOfflineAccess(t *testing.T) {
