@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
@@ -220,4 +221,41 @@ func TestRoot_WithExitFunc(t *testing.T) {
 	// during PersistentPreRun. We verify it was accepted without error.
 	_ = exitCalled
 	_ = captured
+}
+
+func TestRoot_CustomBinaryNameUpdatesSolutionDiscovery(t *testing.T) {
+	// Restore package-level state regardless of test outcome.
+	t.Cleanup(func() {
+		settings.RootSolutionFolders = settings.SolutionFoldersFor(settings.CliBinaryName)
+		settings.SolutionFileNames = settings.SolutionFileNamesFor(settings.CliBinaryName)
+	})
+
+	cmd := Root(&RootOptions{
+		BinaryName: "cldctl",
+	})
+	if cmd == nil {
+		t.Fatal("Root() with custom BinaryName returned nil")
+	}
+	if cmd.Use != "cldctl" {
+		t.Errorf("Root().Use = %q, want %q", cmd.Use, "cldctl")
+	}
+	// Verify package-level solution discovery vars were updated
+	expectedFolders := settings.SolutionFoldersFor("cldctl")
+	if len(settings.RootSolutionFolders) != len(expectedFolders) {
+		t.Errorf("RootSolutionFolders length = %d, want %d", len(settings.RootSolutionFolders), len(expectedFolders))
+	}
+	for i, f := range settings.RootSolutionFolders {
+		if f != expectedFolders[i] {
+			t.Errorf("RootSolutionFolders[%d] = %q, want %q", i, f, expectedFolders[i])
+		}
+	}
+	expectedNames := settings.SolutionFileNamesFor("cldctl")
+	if len(settings.SolutionFileNames) != len(expectedNames) {
+		t.Errorf("SolutionFileNames length = %d, want %d", len(settings.SolutionFileNames), len(expectedNames))
+	}
+	for i, n := range settings.SolutionFileNames {
+		if n != expectedNames[i] {
+			t.Errorf("SolutionFileNames[%d] = %q, want %q", i, n, expectedNames[i])
+		}
+	}
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/duration"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
+	gotmplext "github.com/oakwood-commons/scafctl/pkg/gotmpl/ext"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
@@ -23,6 +24,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// initExtensionFactory ensures sprig + custom Go template functions are
+// registered for lint validation tests. In production this is done by
+// RegisterDefaults(); in tests we call the factory directly.
+func initExtensionFactory(t *testing.T) {
+	t.Helper()
+	gotmpl.SetExtensionFuncMapFactory(gotmplext.AllFuncMap)
+}
 
 // fakeProvider implements provider.Provider for testing.
 type fakeProvider struct {
@@ -755,6 +764,38 @@ func TestLintExpressions_AllPaths(t *testing.T) {
 	}
 	assert.Contains(t, findingRules, "invalid-expression")
 	assert.Contains(t, findingRules, "invalid-template")
+}
+
+func TestLintExpressions_SprigFunctionsNotFalsePositive(t *testing.T) {
+	// Sprig functions like replace, upper, lower, trim, default should not
+	// trigger invalid-template findings.
+	//
+	// In production, SetExtensionFuncMapFactory is called during app init.
+	// For this test we wire it manually.
+	initExtensionFactory(t)
+
+	templates := []string{
+		`{{ "hello.tpl" | replace ".tpl" "" }}`,
+		`{{ "hello" | upper }}`,
+		`{{ "HELLO" | lower }}`,
+		`{{ " hello " | trim }}`,
+		`{{ .value | default "fallback" }}`,
+		`{{ list "a" "b" "c" | join "," }}`,
+	}
+
+	for _, tmpl := range templates {
+		tmplContent := gotmpl.GoTemplatingContent(tmpl)
+		inputs := map[string]*spec.ValueRef{
+			"test": {Tmpl: &tmplContent},
+		}
+		result := &Result{Findings: make([]*Finding, 0)}
+		lintExpressions(inputs, "test.resolvers.myresolver", result)
+
+		for _, f := range result.Findings {
+			assert.NotEqual(t, "invalid-template", f.RuleName,
+				"sprig template %q should not produce invalid-template finding, got: %s", tmpl, f.Message)
+		}
+	}
 }
 
 func TestLintSolution_NoResolversNoWorkflow(t *testing.T) {

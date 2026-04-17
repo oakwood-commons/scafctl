@@ -389,13 +389,21 @@ func TestAuthCodeLogin_BrowserOpenFails_PrintsURL(t *testing.T) {
 	// Browser fails to open, but we simulate the redirect manually
 	// (as a user would by copying the URL)
 	var callbackMessage string
-	var capturedRedirectURI string
+
+	// Use a buffered channel to safely pass captured values from BrowserOpener
+	// to the goroutine that simulates the redirect -- avoids data race.
+	type authCapture struct {
+		redirectURI string
+		state       string
+	}
+	captureCh := make(chan authCapture, 1)
 	originalOpener := BrowserOpener
-	var capturedState string
 	BrowserOpener = func(_ context.Context, authURL string) error {
 		parsed, _ := url.Parse(authURL)
-		capturedRedirectURI = parsed.Query().Get("redirect_uri")
-		capturedState = parsed.Query().Get("state")
+		captureCh <- authCapture{
+			redirectURI: parsed.Query().Get("redirect_uri"),
+			state:       parsed.Query().Get("state"),
+		}
 		return fmt.Errorf("no browser available")
 	}
 	defer func() { BrowserOpener = originalOpener }()
@@ -409,14 +417,14 @@ func TestAuthCodeLogin_BrowserOpenFails_PrintsURL(t *testing.T) {
 		"scope":         "openid profile offline_access",
 	})
 
-	// Simulate the user manually opening the URL after seeing the message
+	// Simulate the user manually opening the URL after seeing the message.
+	// Waits for BrowserOpener to send captured values before redirecting.
 	go func() {
-		// Wait for the browser opener to be called and fail
-		time.Sleep(200 * time.Millisecond)
-		for capturedRedirectURI == "" {
-			time.Sleep(50 * time.Millisecond)
+		select {
+		case info := <-captureCh:
+			_ = simulateBrowserRedirect(info.redirectURI, "manual-code", info.state)
+		case <-time.After(5 * time.Second):
 		}
-		_ = simulateBrowserRedirect(capturedRedirectURI, "manual-code", capturedState)
 	}()
 
 	ctx := context.Background()

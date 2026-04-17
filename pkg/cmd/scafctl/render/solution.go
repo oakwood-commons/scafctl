@@ -540,7 +540,25 @@ func (o *SolutionOptions) loadSolution(ctx context.Context) (*solution.Solution,
 			lgr.V(1).Info("catalog not available for solution resolution", "error", err)
 		}
 
-		getter = get.NewGetter(getterOpts...)
+		getter = get.NewGetterFromContext(ctx, getterOpts...)
+	}
+
+	// Emit verbose discovery information
+	if w := writer.FromContext(ctx); w != nil && w.VerboseEnabled() {
+		switch o.File {
+		case "":
+			binaryName := settings.CliBinaryName
+			if o.CliParams != nil && o.CliParams.BinaryName != "" {
+				binaryName = o.CliParams.BinaryName
+			}
+			w.Verbosef("Auto-discovering solution (binary=%s)", binaryName)
+			w.Verbosef("  Search folders: %v", settings.SolutionFoldersFor(binaryName))
+			w.Verbosef("  Search filenames: %v", settings.SolutionFileNamesFor(binaryName))
+		case "-":
+			// stdin handled below
+		default:
+			w.Verbosef("Loading solution from: %s", o.File)
+		}
 	}
 
 	// Handle stdin
@@ -558,7 +576,16 @@ func (o *SolutionOptions) loadSolution(ctx context.Context) (*solution.Solution,
 	}
 
 	// Use getter for file, catalog, or auto-discovery
-	return getter.Get(ctx, o.File)
+	sol, err := getter.Get(ctx, o.File)
+	if err != nil {
+		return nil, err
+	}
+
+	if w := writer.FromContext(ctx); w != nil && w.VerboseEnabled() {
+		w.Verbosef("Solution loaded: %s (version=%s)", sol.Metadata.Name, sol.Metadata.Version)
+	}
+
+	return sol, nil
 }
 
 // getRegistry returns the provider registry

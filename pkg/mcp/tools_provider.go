@@ -69,6 +69,39 @@ func (s *Server) registerProviderTools() {
 		),
 	)
 	s.mcpServer.AddTool(getProviderOutputShapeTool, s.handleGetProviderOutputShape)
+
+	// run_provider
+	runProviderTool := mcp.NewTool("run_provider",
+		mcp.WithDescription(fmt.Sprintf(
+			"Execute a provider directly and return structured JSON output. "+
+				"Providers are the building blocks of %s — they fetch data (http, file, env), "+
+				"transform values (cel, static), validate inputs, and perform actions (exec, github, file). "+
+				"Use list_providers and get_provider_schema to discover available providers and their input schemas. "+
+				"NOTE: Some providers have side effects (e.g., exec runs commands, github creates issues). "+
+				"Use dry_run=true to preview what would happen without executing.", s.name)),
+		mcp.WithTitleAnnotation("Run Provider"),
+		mcp.WithToolIcons(toolIcons["provider"]),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(true),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(true),
+		mcp.WithString("provider",
+			mcp.Required(),
+			mcp.Description("Provider name (e.g., http, static, file, cel, exec, github, env)"),
+		),
+		mcp.WithObject("inputs",
+			mcp.Required(),
+			mcp.Description("Provider input parameters as key-value pairs. Use get_provider_schema to discover required and optional fields."),
+		),
+		mcp.WithString("capability",
+			mcp.Description("Capability to execute. Defaults to the provider's first declared capability."),
+			mcp.Enum("from", "transform", "validation", "authentication", "action"),
+		),
+		mcp.WithBoolean("dry_run",
+			mcp.Description("Preview what would happen without executing. Defaults to false."),
+		),
+	)
+	s.mcpServer.AddTool(runProviderTool, s.handleRunProvider)
 }
 
 // providerItem is a structured response for provider listings.
@@ -241,6 +274,62 @@ func (s *Server) handleGetProviderOutputShape(_ context.Context, request mcp.Cal
 			outputSchemas[string(cap)] = provdetail.BuildSchemaOutput(schema)
 		}
 		result["outputSchemas"] = outputSchemas
+	}
+
+	return mcp.NewToolResultJSON(result)
+}
+
+// handleRunProvider executes a provider directly and returns structured output.
+func (s *Server) handleRunProvider(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	name, err := request.RequireString("provider")
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("provider"),
+			WithSuggestion("Use list_providers to see available provider names"),
+			WithRelatedTools("list_providers"),
+		), nil
+	}
+
+	inputsRaw := request.GetArguments()["inputs"]
+	inputs, _ := inputsRaw.(map[string]any)
+	if inputs == nil {
+		inputs = make(map[string]any)
+	}
+
+	capability := request.GetString("capability", "")
+	dryRun := request.GetBool("dry_run", false)
+
+	if s.registry == nil {
+		return newStructuredError(ErrCodeConfigError, "provider registry not available",
+			WithSuggestion("Ensure the server was started with a provider registry"),
+		), nil
+	}
+
+	prov, ok := s.registry.Get(name)
+	if !ok {
+		availableNames := ""
+		if names := s.registry.List(); len(names) > 0 {
+			availableNames = fmt.Sprintf(". Available providers: %v", names)
+		}
+		return newStructuredError(ErrCodeNotFound,
+			fmt.Sprintf("provider %q not found%s", name, availableNames),
+			WithField("provider"),
+			WithSuggestion("Use list_providers to see available provider names"),
+			WithRelatedTools("list_providers"),
+		), nil
+	}
+
+	result, err := provider.RunProvider(s.ctx, provider.RunOptions{
+		Provider:   prov,
+		Inputs:     inputs,
+		Capability: capability,
+		DryRun:     dryRun,
+	})
+	if err != nil {
+		return newStructuredError(ErrCodeExecFailed, err.Error(),
+			WithSuggestion("Check inputs with get_provider_schema and retry"),
+			WithRelatedTools("get_provider_schema"),
+		), nil
 	}
 
 	return mcp.NewToolResultJSON(result)

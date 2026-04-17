@@ -201,6 +201,12 @@ func Root(opts *RootOptions) *cobra.Command {
 	cliParams.BinaryName = binaryName
 	paths.SetAppName(binaryName)
 
+	// Update package-level solution discovery lists so any code reading them
+	// directly (e.g., PossibleSolutionPaths, MCP capabilities) reflects the
+	// embedder's binary name rather than the hardcoded default.
+	settings.RootSolutionFolders = settings.SolutionFoldersFor(binaryName)
+	settings.SolutionFileNames = settings.SolutionFileNamesFor(binaryName)
+
 	// Resolve IOStreams: use caller-provided or default to OS streams.
 	ioStreams := opts.IOStreams
 	if ioStreams == nil {

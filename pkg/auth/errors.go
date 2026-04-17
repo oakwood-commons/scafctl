@@ -22,6 +22,7 @@ var (
 	ErrAlreadyAuthenticated   = errors.New("already authenticated")
 	ErrGrantInvalid           = errors.New("invalid grant: the refresh token is invalid or has been revoked")
 	ErrCapabilityNotSupported = errors.New("capability not supported by this auth handler")
+	ErrClaimsChallenge        = errors.New("claims challenge: re-authentication required by Conditional Access policy")
 )
 
 // Error wraps authentication errors with additional context.
@@ -107,4 +108,29 @@ func IsAuthenticationFailed(err error) bool {
 // IsInvalidScope returns true if the error indicates the scope is invalid.
 func IsInvalidScope(err error) bool {
 	return errors.Is(err, ErrInvalidScope)
+}
+
+// ClaimsChallengeError wraps ErrClaimsChallenge with the raw claims payload
+// returned by the token endpoint so callers can pass it into a re-authentication
+// request.
+type ClaimsChallengeError struct {
+	// Claims is the raw JSON claims challenge string from the token endpoint.
+	Claims string
+	// Scope is the scope that triggered the claims challenge.
+	Scope string
+}
+
+// Error implements the error interface.
+func (e *ClaimsChallengeError) Error() string {
+	return fmt.Sprintf("claims challenge required for scope %q: re-authentication needed", e.Scope)
+}
+
+// Unwrap returns the sentinel so errors.Is(err, ErrClaimsChallenge) works.
+func (e *ClaimsChallengeError) Unwrap() error {
+	return ErrClaimsChallenge
+}
+
+// IsClaimsChallenge returns true if the error indicates a claims challenge is required.
+func IsClaimsChallenge(err error) bool {
+	return errors.Is(err, ErrClaimsChallenge)
 }

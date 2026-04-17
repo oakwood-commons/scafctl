@@ -7,6 +7,7 @@ package entra
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -82,4 +83,24 @@ func (c *Config) GetAuthority() string {
 // GetAuthorityWithTenant returns the full authority URL for a specific tenant.
 func (c *Config) GetAuthorityWithTenant(tenantID string) string {
 	return fmt.Sprintf("%s/%s", c.GetAuthority(), tenantID)
+}
+
+// DefaultGraphResourceURI is the base URI for Microsoft Graph API scopes.
+const DefaultGraphResourceURI = "https://graph.microsoft.com/"
+
+// QualifyScope returns a fully-qualified scope string.  Bare permission names
+// like "Group.Read.All" are prefixed with the Microsoft Graph resource URI;
+// scopes that already contain a scheme (e.g. "https://...") or are well-known
+// OIDC scopes ("openid", "profile", "offline_access", "email") are returned
+// unchanged.
+func QualifyScope(scope string) string {
+	// Already qualified or well-known OIDC scope
+	if strings.Contains(scope, "://") || strings.Contains(scope, "/") {
+		return scope
+	}
+	switch scope {
+	case "openid", "profile", "offline_access", "email":
+		return scope
+	}
+	return DefaultGraphResourceURI + scope
 }

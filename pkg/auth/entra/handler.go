@@ -57,6 +57,7 @@ type Handler struct {
 	httpClientConfig *config.HTTPClientConfig
 	graphClient      GraphClient
 	tokenCache       *auth.TokenCache
+	oboCache         *oboCache
 	logger           logr.Logger
 }
 
@@ -136,7 +137,8 @@ func WithLogger(lgr logr.Logger) Option {
 // the deferred error.
 func New(opts ...Option) (*Handler, error) {
 	h := &Handler{
-		config: DefaultConfig(),
+		config:   DefaultConfig(),
+		oboCache: newOBOCache(),
 	}
 
 	for _, opt := range opts {
@@ -216,6 +218,7 @@ func (h *Handler) SupportedFlows() []auth.Flow {
 		auth.FlowDeviceCode,
 		auth.FlowServicePrincipal,
 		auth.FlowWorkloadIdentity,
+		FlowOnBehalfOf,
 	}
 	return flows
 }
@@ -366,6 +369,9 @@ func (h *Handler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.T
 		return nil, auth.ErrInvalidScope
 	}
 
+	// Qualify bare permission names (e.g. "Group.Read.All" → full Graph URI).
+	qualifiedScope := QualifyScope(opts.Scope)
+
 	lgr := logger.FromContext(ctx)
 
 	// Determine the flow from stored metadata so we can partition the cache.
@@ -382,7 +388,7 @@ func (h *Handler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.T
 
 	lgr.V(1).Info("getting token",
 		"handler", HandlerName,
-		"scope", opts.Scope,
+		"scope", qualifiedScope,
 		"flow", userFlow,
 		"minValidFor", minValidFor,
 		"forceRefresh", opts.ForceRefresh,
@@ -393,10 +399,10 @@ func (h *Handler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.T
 
 	// Check disk cache first (unless force refresh)
 	if !opts.ForceRefresh {
-		token, err := h.tokenCache.Get(ctx, userFlow, fingerprint, opts.Scope)
+		token, err := h.tokenCache.Get(ctx, userFlow, fingerprint, qualifiedScope)
 		if err == nil && token != nil && token.IsValidFor(minValidFor) {
 			lgr.V(1).Info("using cached token",
-				"scope", opts.Scope,
+				"scope", qualifiedScope,
 				"expiresAt", token.ExpiresAt,
 				"remainingValidity", token.TimeUntilExpiry(),
 			)
@@ -414,13 +420,13 @@ func (h *Handler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.T
 	}
 
 	// Mint new token
-	token, err := h.mintToken(ctx, opts.Scope)
+	token, err := h.mintToken(ctx, qualifiedScope)
 	if err != nil {
 		return nil, err
 	}
 
 	// Cache the token to disk
-	if err := h.tokenCache.Set(ctx, userFlow, fingerprint, opts.Scope, token); err != nil {
+	if err := h.tokenCache.Set(ctx, userFlow, fingerprint, qualifiedScope, token); err != nil {
 		lgr.V(1).Info("failed to cache token", "error", err)
 		// Continue anyway - we have the token
 	}

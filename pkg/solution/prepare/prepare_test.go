@@ -3,15 +3,19 @@ package prepare
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
@@ -386,4 +390,84 @@ func TestLoadSolutionWithBundle_InvalidStdin(t *testing.T) {
 	_, _, err := loadSolutionWithBundle(context.Background(), getter, "-", stdin)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to parse solution from stdin")
+}
+
+func TestNewDefaultGetter_UsesContextBinaryName(t *testing.T) {
+	// Not parallel: os.Chdir is process-wide and would race with other tests.
+
+	// Create a temp directory with cldctl/solution.yaml
+	tmpDir := t.TempDir()
+	cldctlDir := filepath.Join(tmpDir, "cldctl")
+	require.NoError(t, os.MkdirAll(cldctlDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cldctlDir, "solution.yaml"), []byte("name: test\nversion: 1.0.0\n"), 0o644))
+
+	// Create a context with a custom binary name
+	run := &settings.Run{BinaryName: "cldctl"}
+	ctx := settings.IntoContext(context.Background(), run)
+	lgr := logr.Discard()
+	ctx = logger.WithLogger(ctx, &lgr)
+
+	getter := NewDefaultGetter(ctx, false)
+	require.NotNil(t, getter, "getter should be created from context with custom binary name")
+
+	// chdir to tmpDir so FindSolution can discover cldctl/solution.yaml
+	origDir, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(tmpDir))
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
+
+	found := getter.FindSolution()
+	assert.Equal(t, filepath.Join("cldctl", "solution.yaml"), found)
+}
+
+func TestNewDefaultGetter_DefaultBinaryName(t *testing.T) {
+	// Not parallel: os.Chdir is process-wide and would race with other tests.
+
+	// Create a temp directory with scafctl/solution.yaml
+	tmpDir := t.TempDir()
+	scafctlDir := filepath.Join(tmpDir, settings.CliBinaryName)
+	require.NoError(t, os.MkdirAll(scafctlDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(scafctlDir, "solution.yaml"), []byte("name: test\nversion: 1.0.0\n"), 0o644))
+
+	ctx := context.Background()
+	lgr := logr.Discard()
+	ctx = logger.WithLogger(ctx, &lgr)
+
+	getter := NewDefaultGetter(ctx, false)
+	require.NotNil(t, getter, "getter should be created with default binary name")
+
+	origDir, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(tmpDir))
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
+
+	found := getter.FindSolution()
+	assert.Equal(t, filepath.Join(settings.CliBinaryName, "solution.yaml"), found)
+}
+
+func TestNewDefaultGetter_CustomBinaryDoesNotFindDefault(t *testing.T) {
+	// Not parallel: os.Chdir is process-wide and would race with other tests.
+
+	// Create a temp directory with only scafctl/solution.yaml (no cldctl/)
+	tmpDir := t.TempDir()
+	scafctlDir := filepath.Join(tmpDir, settings.CliBinaryName)
+	require.NoError(t, os.MkdirAll(scafctlDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(scafctlDir, "solution.yaml"), []byte("name: test\nversion: 1.0.0\n"), 0o644))
+
+	run := &settings.Run{BinaryName: "cldctl"}
+	ctx := settings.IntoContext(context.Background(), run)
+	lgr := logr.Discard()
+	ctx = logger.WithLogger(ctx, &lgr)
+
+	getter := NewDefaultGetter(ctx, false)
+	require.NotNil(t, getter)
+
+	origDir, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(tmpDir))
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
+
+	// Should NOT find scafctl/solution.yaml when binary name is "cldctl"
+	found := getter.FindSolution()
+	assert.Empty(t, found, "custom binary name getter should not discover default binary's solution folder")
 }

@@ -97,3 +97,49 @@ func BenchmarkMapIssueStateForMutation(b *testing.B) {
 		idx++
 	}
 }
+
+// ── mapIssueStateReason tests ─────────────────────────────────────────────────
+
+func TestMapIssueStateReason_Coverage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		input     string
+		expected  string
+		wantError bool
+	}{
+		{"lowercase completed", "completed", "COMPLETED", false},
+		{"uppercase COMPLETED", "COMPLETED", "COMPLETED", false},
+		{"lowercase not_planned", "not_planned", "NOT_PLANNED", false},
+		{"uppercase NOT_PLANNED", "NOT_PLANNED", "NOT_PLANNED", false},
+		{"lowercase reopened", "reopened", "REOPENED", false},
+		{"uppercase REOPENED", "REOPENED", "REOPENED", false},
+		{"unknown value errors", "custom", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result, err := mapIssueStateReason(tt.input)
+			if tt.wantError {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), "invalid state_reason")
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.expected, result)
+			}
+		})
+	}
+}
+
+func BenchmarkMapIssueStateReason(b *testing.B) {
+	reasons := []string{"completed", "not_planned", "reopened", "COMPLETED"}
+	b.ReportAllocs()
+	b.ResetTimer()
+	idx := 0
+	for b.Loop() {
+		_, _ = mapIssueStateReason(reasons[idx%len(reasons)])
+		idx++
+	}
+}

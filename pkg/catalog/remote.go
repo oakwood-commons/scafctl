@@ -428,10 +428,23 @@ func (c *RemoteCatalog) FetchWithBundle(ctx context.Context, ref Reference) ([]b
 
 	// Fetch bundle layer if present
 	var bundleData []byte
-	if len(manifest.Layers) > 1 && manifest.Layers[1].MediaType == MediaTypeSolutionBundle {
-		bundleData, err = content.FetchAll(ctx, repo, manifest.Layers[1])
-		if err != nil {
-			return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to fetch bundle: %w", err)
+	if len(manifest.Layers) > 1 {
+		switch manifest.Layers[1].MediaType {
+		case MediaTypeSolutionBundle:
+			// Version 1: single tar layer
+			bundleData, err = content.FetchAll(ctx, repo, manifest.Layers[1])
+			if err != nil {
+				return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to fetch bundle: %w", err)
+			}
+		case MediaTypeSolutionBundleManifest:
+			// Version 2: deduplicated — reassemble into a v1-compatible tar
+			fetchBlob := func(desc ocispec.Descriptor) ([]byte, error) {
+				return content.FetchAll(ctx, repo, desc)
+			}
+			bundleData, err = reassembleDedupBundle(manifest, fetchBlob)
+			if err != nil {
+				return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to reassemble dedup bundle: %w", err)
+			}
 		}
 	}
 

@@ -414,7 +414,7 @@ func NewDefaultGetter(ctx context.Context, noCache bool) get.Interface {
 		getterOpts = append(getterOpts, get.WithRemoteResolver(remoteResolver))
 	}
 
-	return get.NewGetter(getterOpts...)
+	return get.NewGetterFromContext(ctx, getterOpts...)
 }
 
 // loadSolutionWithBundle loads a solution and extracts its bundle if present.

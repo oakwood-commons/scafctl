@@ -110,7 +110,24 @@ func (o *CmdOptionsVersion) GetSolution(ctx context.Context) error {
 		lgr.V(1).Info("catalog not available for solution resolution", "error", err)
 	}
 
-	getter := get.NewGetter(getterOpts...)
+	getter := get.NewGetterFromContext(ctx, getterOpts...)
+
+	// Emit verbose discovery information
+	if w := writer.FromContext(ctx); w != nil && w.VerboseEnabled() {
+		switch o.File {
+		case "":
+			binaryName := settings.CliBinaryName
+			if o.CliParams != nil && o.CliParams.BinaryName != "" {
+				binaryName = o.CliParams.BinaryName
+			}
+			w.Verbosef("Auto-discovering solution (binary=%s)", binaryName)
+			w.Verbosef("  Search folders: %v", settings.SolutionFoldersFor(binaryName))
+			w.Verbosef("  Search filenames: %v", settings.SolutionFileNamesFor(binaryName))
+		default:
+			w.Verbosef("Loading solution from: %s", o.File)
+		}
+	}
+
 	return o.GetSolutionWithGetter(ctx, getter)
 }
 

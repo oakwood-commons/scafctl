@@ -70,7 +70,7 @@ func (h *Handler) mintToken(ctx context.Context, scope string) (*auth.Token, err
 	data.Set("grant_type", "refresh_token")
 	data.Set("client_id", metadata.ClientID)
 	data.Set("refresh_token", refreshToken)
-	data.Set("scope", scope)
+	data.Set("scope", ensureOfflineAccess(scope))
 
 	resp, err := h.httpClient.PostForm(ctx, endpoint, data)
 	if err != nil {
@@ -82,6 +82,20 @@ func (h *Handler) mintToken(ctx context.Context, scope string) (*auth.Token, err
 		var errResp TokenErrorResponse
 		if err := json.NewDecoder(resp.Body).Decode(&errResp); err != nil {
 			return nil, fmt.Errorf("token request failed with status %d", resp.StatusCode)
+		}
+
+		// Claims challenge: Conditional Access requires step-up authentication.
+		// Return a structured error so the caller can trigger interactive re-auth
+		// with the claims parameter.
+		if errResp.Claims != "" || strings.Contains(errResp.ErrorDescription, "AADSTS53003") {
+			lgr.V(0).Info("claims challenge received, interactive re-authentication required",
+				"scope", scope,
+				"hasClaims", errResp.Claims != "",
+			)
+			return nil, &auth.ClaimsChallengeError{
+				Claims: errResp.Claims,
+				Scope:  scope,
+			}
 		}
 
 		// Check if refresh token is expired or consent is required
@@ -248,4 +262,16 @@ func (h *Handler) extractClaims(tokenResp *TokenResponse) (*auth.Claims, error) 
 	}
 
 	return auth.ParseJWTClaims(tokenResp.IDToken)
+}
+
+// ensureOfflineAccess appends "offline_access" to a space-delimited scope
+// string when it is not already present.  This guarantees the token endpoint
+// returns a refresh token alongside the access token, enabling token rotation.
+func ensureOfflineAccess(scope string) string {
+	for _, s := range strings.Split(scope, " ") {
+		if s == "offline_access" {
+			return scope
+		}
+	}
+	return scope + " offline_access"
 }

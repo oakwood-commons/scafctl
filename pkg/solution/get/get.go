@@ -723,14 +723,20 @@ func (o *Getter) FromURL(ctx context.Context, url string) (*solution.Solution, e
 // and solution file names. It returns the full path to the first solution file found using the
 // provided stat function. If no solution file is found, it returns an empty string.
 func (o *Getter) FindSolution() string {
+	o.logger.V(1).Info("searching for solution file",
+		"folders", o.solutionFolders,
+		"fileNames", o.solutionFileNames)
 	for _, folder := range o.solutionFolders {
 		for _, filename := range o.solutionFileNames {
 			fullPath := filepath.NormalizeFilePath(pathlib.Join(folder, filename))
 			if filepath.PathExists(fullPath, o.statFunc) {
+				o.logger.V(1).Info("found solution file", "path", fullPath)
 				return fullPath
 			}
+			o.logger.V(2).Info("solution file not found", "path", fullPath)
 		}
 	}
+	o.logger.V(1).Info("no solution file found in any default location")
 	return ""
 }
 

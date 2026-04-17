@@ -540,6 +540,8 @@ func (o *sharedResolverOptions) executeResolvers(
 // This method delegates to the standalone prepare.PrepareSolution function,
 // passing CLI-specific options (getter, registry, stdin, metrics).
 func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context) (*solution.Solution, *provider.Registry, string, func(), error) {
+	w := writer.FromContext(ctx)
+
 	var opts []prepare.Option
 
 	if o.getter != nil {
@@ -565,9 +567,36 @@ func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context)
 		}))
 	}
 
+	// Emit verbose discovery information before loading
+	if w != nil && w.VerboseEnabled() {
+		switch o.File {
+		case "":
+			binaryName := settings.CliBinaryName
+			if o.CliParams != nil && o.CliParams.BinaryName != "" {
+				binaryName = o.CliParams.BinaryName
+			}
+			folders := settings.SolutionFoldersFor(binaryName)
+			fileNames := settings.SolutionFileNamesFor(binaryName)
+			w.Verbosef("Auto-discovering solution (binary=%s)", binaryName)
+			w.Verbosef("  Search folders: %v", folders)
+			w.Verbosef("  Search filenames: %v", fileNames)
+		case "-":
+			w.Verbose("Loading solution from stdin")
+		default:
+			w.Verbosef("Loading solution from: %s", o.File)
+		}
+	}
+
 	result, err := prepare.Solution(ctx, o.File, opts...)
 	if err != nil {
 		return nil, nil, "", func() {}, err
+	}
+
+	if w != nil && w.VerboseEnabled() {
+		w.Verbosef("Solution loaded: %s (version=%s, dir=%s)",
+			result.Solution.Metadata.Name,
+			result.Solution.Metadata.Version,
+			result.SolutionDir)
 	}
 
 	return result.Solution, result.Registry, result.SolutionDir, result.Cleanup, nil

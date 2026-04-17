@@ -91,6 +91,11 @@ func (h *Handler) authCodeLogin(ctx context.Context, opts auth.LoginOptions) (*a
 		url.QueryEscape(state),
 	)
 
+	// Append claims parameter if provided (e.g. from a claims challenge)
+	if claims := claimsChallengeFromContext(ctx); claims != "" {
+		authURL += "&claims=" + url.QueryEscape(claims)
+	}
+
 	// Open browser
 	lgr.V(1).Info("opening browser for authentication", "url", authURL)
 	if err := BrowserOpener(ctx, authURL); err != nil {

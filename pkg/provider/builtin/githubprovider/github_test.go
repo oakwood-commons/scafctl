@@ -19,7 +19,7 @@ import (
 )
 
 // testProvider creates a GitHubProvider wired to a test server.
-func testProvider(t *testing.T, handler http.HandlerFunc) (*GitHubProvider, string) {
+func testProvider(t testing.TB, handler http.HandlerFunc) (*GitHubProvider, string) {
 	t.Helper()
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
@@ -33,7 +33,7 @@ func testProvider(t *testing.T, handler http.HandlerFunc) (*GitHubProvider, stri
 }
 
 // graphqlHandler creates an http handler that checks for GraphQL POST and returns a canned response.
-func graphqlHandler(t *testing.T, checkQuery func(query string, vars map[string]any), response map[string]any) http.HandlerFunc {
+func graphqlHandler(t testing.TB, checkQuery func(query string, vars map[string]any), response map[string]any) http.HandlerFunc {
 	t.Helper()
 	return func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
@@ -684,6 +684,139 @@ func TestGitHubProvider_Execute_DeleteRelease(t *testing.T) {
 	assert.Equal(t, true, data["success"])
 	result := data["result"].(map[string]any)
 	assert.Equal(t, true, result["deleted"])
+}
+
+// ─── PR Comments Tests ───────────────────────────────────────────────────────
+
+func TestGitHubProvider_Execute_ListPRComments(t *testing.T) {
+	p, baseURL := testProvider(t, graphqlHandler(t,
+		func(query string, vars map[string]any) {
+			assert.Contains(t, query, "pullRequest(number:")
+			assert.Contains(t, query, "comments(first:")
+			assert.Equal(t, float64(5), vars["number"])
+		},
+		map[string]any{
+			"data": map[string]any{
+				"repository": map[string]any{
+					"pullRequest": map[string]any{
+						"comments": map[string]any{
+							"nodes": []any{
+								map[string]any{
+									"id":        "IC_001",
+									"body":      "Codecov report: patch coverage is 85%",
+									"createdAt": "2025-01-01T00:00:00Z",
+									"author":    map[string]any{"login": "codecov-bot"},
+									"url":       "https://github.com/test-org/test-repo/pull/5#issuecomment-1",
+								},
+								map[string]any{
+									"id":        "IC_002",
+									"body":      "LGTM!",
+									"createdAt": "2025-01-02T00:00:00Z",
+									"author":    map[string]any{"login": "reviewer"},
+									"url":       "https://github.com/test-org/test-repo/pull/5#issuecomment-2",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	))
+
+	output, err := p.Execute(context.Background(), map[string]any{
+		"operation": "list_pr_comments",
+		"owner":     "test-org",
+		"repo":      "test-repo",
+		"number":    float64(5),
+		"api_base":  baseURL,
+	})
+
+	require.NoError(t, err)
+	result := output.Data.(map[string]any)["result"].([]any)
+	assert.Len(t, result, 2)
+	comment1 := result[0].(map[string]any)
+	assert.Equal(t, "IC_001", comment1["id"])
+	assert.Contains(t, comment1["body"].(string), "Codecov")
+}
+
+func TestExecuteListPRComments_MissingNumber(t *testing.T) {
+	t.Parallel()
+
+	p := NewGitHubProvider()
+	_, err := p.executeListPRComments(t.Context(), nil, "https://api.github.com", "owner", "repo", map[string]any{})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "number")
+}
+
+// ─── StatusCheckRollup Tests ─────────────────────────────────────────────────
+
+func TestGitHubProvider_Execute_GetPullRequest_StatusCheckRollup(t *testing.T) {
+	p, baseURL := testProvider(t, graphqlHandler(t,
+		func(query string, _ map[string]any) {
+			assert.Contains(t, query, "statusCheckRollup")
+		},
+		map[string]any{
+			"data": map[string]any{
+				"repository": map[string]any{
+					"pullRequest": map[string]any{
+						"id":             "PR_001",
+						"number":         float64(10),
+						"title":          "My PR",
+						"state":          "OPEN",
+						"reviewDecision": "APPROVED",
+						"commits":        map[string]any{"totalCount": float64(3)},
+						"comments":       map[string]any{"totalCount": float64(1)},
+						"reviews":        map[string]any{"totalCount": float64(2)},
+						"statusCheckRollup": map[string]any{
+							"nodes": []any{
+								map[string]any{
+									"commit": map[string]any{
+										"statusCheckRollup": map[string]any{
+											"state": "SUCCESS",
+											"contexts": map[string]any{
+												"nodes": []any{
+													map[string]any{
+														"__typename": "CheckRun",
+														"name":       "build",
+														"status":     "COMPLETED",
+														"conclusion": "SUCCESS",
+														"detailsUrl": "https://example.com/build",
+													},
+													map[string]any{
+														"__typename": "StatusContext",
+														"context":    "ci/circleci",
+														"state":      "SUCCESS",
+														"targetUrl":  "https://example.com/ci",
+													},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	))
+
+	output, err := p.Execute(context.Background(), map[string]any{
+		"operation": "get_pull_request",
+		"owner":     "test-org",
+		"repo":      "test-repo",
+		"number":    float64(10),
+		"api_base":  baseURL,
+	})
+
+	require.NoError(t, err)
+	pr := output.Data.(map[string]any)["result"].(map[string]any)
+	assert.Equal(t, "My PR", pr["title"])
+
+	rollup := pr["statusCheckRollup"].(map[string]any)
+	assert.Equal(t, "SUCCESS", rollup["state"])
+	checks := rollup["checks"].([]any)
+	assert.Len(t, checks, 2)
 }
 
 // ─── Error Handling Tests ────────────────────────────────────────────────────
