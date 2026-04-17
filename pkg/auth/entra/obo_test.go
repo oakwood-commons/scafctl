@@ -71,6 +71,25 @@ func TestOBOCache_Expired(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestOBOCache_ExpiredEntryEvicted(t *testing.T) {
+	c := newOBOCache()
+	tok := &auth.Token{
+		AccessToken: "expired-token",
+		ExpiresAt:   time.Now().Add(-time.Minute),
+		Scope:       "scope",
+	}
+	c.set("assertion", "scope", tok)
+
+	// First get should miss and evict
+	_, ok := c.get("assertion", "scope")
+	assert.False(t, ok)
+
+	// Verify the entry was removed from the map
+	c.mu.RLock()
+	assert.Empty(t, c.items, "expired entry should be evicted from cache")
+	c.mu.RUnlock()
+}
+
 func TestOBOCache_ExpiryBuffer(t *testing.T) {
 	c := newOBOCache()
 	// Token expires in 20 seconds — within the 30-second buffer

@@ -21,6 +21,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/jsonschema-go/jsonschema"
@@ -37,6 +38,17 @@ const ProviderName = "github"
 
 // defaultAPIBase is the default GitHub API base URL.
 const defaultAPIBase = "https://api.github.com"
+
+// Default retry configuration values. These are production defaults that can
+// be overridden via WithRetryConfig for testing.
+const (
+	defaultCommitMaxAttempts    = 5
+	defaultCommitRetryBackoff   = 3 * time.Second
+	defaultWaitMaxAttempts      = 15
+	defaultWaitPollInterval     = 2 * time.Second
+	defaultInitRepoMaxRetries   = 3
+	defaultInitRepoRetryBackoff = 1 * time.Second
+)
 
 // allOperations lists every supported operation name for error messages.
 var allOperations = []string{
@@ -60,6 +72,9 @@ var allOperations = []string{
 	"create_branch", "delete_branch", "create_tag", "delete_tag",
 	// Release write operations (REST)
 	"create_release", "update_release", "delete_release",
+	// Repository management operations (GraphQL + REST)
+	"create_repo", "create_ruleset",
+	"enable_vulnerability_alerts", "enable_automated_security_fixes",
 }
 
 // readOperations are operations that return data (CapabilityFrom/Transform).
@@ -80,6 +95,14 @@ type GitHubProvider struct {
 	descriptor *provider.Descriptor
 	// client can be overridden for testing via WithClient option.
 	client *httpc.Client
+
+	// Retry configuration — overridable for testing.
+	commitMaxAttempts    int
+	commitRetryBackoff   time.Duration
+	waitMaxAttempts      int
+	waitPollInterval     time.Duration
+	initRepoMaxRetries   int
+	initRepoRetryBackoff time.Duration
 }
 
 // Option configures a GitHubProvider.
@@ -92,18 +115,38 @@ func WithClient(c *httpc.Client) Option {
 	}
 }
 
+// WithRetryConfig overrides the default retry timing (useful for testing).
+// Attempt counts are clamped to a minimum of 1; durations are clamped to >= 0.
+func WithRetryConfig(commitMaxAttempts int, commitRetryBackoff time.Duration, waitMaxAttempts int, waitPollInterval time.Duration, initRepoMaxRetries int, initRepoRetryBackoff time.Duration) Option {
+	return func(p *GitHubProvider) {
+		p.commitMaxAttempts = max(1, commitMaxAttempts)
+		p.commitRetryBackoff = max(0, commitRetryBackoff)
+		p.waitMaxAttempts = max(1, waitMaxAttempts)
+		p.waitPollInterval = max(0, waitPollInterval)
+		p.initRepoMaxRetries = max(1, initRepoMaxRetries)
+		p.initRepoRetryBackoff = max(0, initRepoRetryBackoff)
+	}
+}
+
 // NewGitHubProvider creates a new GitHub API provider.
 func NewGitHubProvider(opts ...Option) *GitHubProvider {
 	version, _ := semver.NewVersion("2.0.0")
 
 	p := &GitHubProvider{
+		commitMaxAttempts:    defaultCommitMaxAttempts,
+		commitRetryBackoff:   defaultCommitRetryBackoff,
+		waitMaxAttempts:      defaultWaitMaxAttempts,
+		waitPollInterval:     defaultWaitPollInterval,
+		initRepoMaxRetries:   defaultInitRepoMaxRetries,
+		initRepoRetryBackoff: defaultInitRepoRetryBackoff,
 		descriptor: &provider.Descriptor{
 			Name:        ProviderName,
 			DisplayName: "GitHub API",
 			APIVersion:  "v1",
 			Version:     version,
-			Description: "Interact with GitHub via GraphQL (reads, issues, PRs, review threads, signed commits, branches, tags) " +
-				"and REST (releases, CI check runs, workflow runs). Uses the configured GitHub auth handler automatically. " +
+			Description: "Interact with GitHub via GraphQL (reads, issues, PRs, review threads, signed commits, branches, tags, " +
+				"repos, branch protection) and REST (releases, CI check runs, workflow runs, tag protection, security settings). " +
+				"Uses the configured GitHub auth handler automatically. " +
 				"Commit operations use createCommitOnBranch for GPG-signed multi-file atomic commits.",
 			Category: "data",
 			WhatIf: func(_ context.Context, input any) (string, error) {
@@ -133,7 +176,6 @@ func NewGitHubProvider(opts ...Option) *GitHubProvider {
 				provider.CapabilityAction: schemahelper.ObjectSchema([]string{"success"}, map[string]*jsonschema.Schema{
 					"success":   schemahelper.BoolProp("Whether the operation succeeded"),
 					"result":    schemahelper.AnyProp("The API response data — structure varies by operation"),
-					"error":     schemahelper.StringProp("Error message if the operation failed"),
 					"operation": schemahelper.StringProp("The operation that was performed"),
 				}),
 			},
@@ -204,6 +246,46 @@ name: "Release 1.0.0"
 body: "First stable release"`,
 				},
 				{
+					Name:        "Create a repository",
+					Description: "Create a new GitHub repository with auto-init",
+					YAML: `operation: create_repo
+owner: my-org
+repo: my-new-repo
+description: "A new project"
+visibility: private
+auto_init: true`,
+				},
+				{
+					Name:        "Create branch ruleset",
+					Description: "Configure branch protection via repository rulesets",
+					YAML: `operation: create_ruleset
+owner: my-org
+repo: my-repo
+ruleset_name: main branch protection
+target: branch
+enforcement: active
+include_refs: ["refs/heads/main"]
+required_status_checks_contexts: [test, lint]
+required_approving_review_count: 1
+required_linear_history: true
+requires_commit_signatures: true
+allow_force_pushes: false
+allow_deletions: false`,
+				},
+				{
+					Name:        "Create tag ruleset",
+					Description: "Protect version tags from deletion and force pushes",
+					YAML: `operation: create_ruleset
+owner: my-org
+repo: my-repo
+ruleset_name: version tag protection
+target: tag
+enforcement: active
+include_refs: ["refs/tags/v*"]
+allow_deletions: false
+allow_force_pushes: false`,
+				},
+				{
 					Name:        "List PR review threads",
 					Description: "Fetch all review threads for a pull request",
 					YAML: `operation: list_review_threads
@@ -259,7 +341,7 @@ func buildInputSchema() *jsonschema.Schema {
 	}
 
 	return schemahelper.ObjectSchema(
-		[]string{"operation", "owner", "repo"},
+		[]string{"operation"},
 		map[string]*jsonschema.Schema{
 			// --- Common fields ---
 			"operation": schemahelper.StringProp("GitHub API operation to perform",
@@ -405,6 +487,47 @@ func buildInputSchema() *jsonschema.Schema {
 			"release_id": schemahelper.IntProp("Release ID for update_release/delete_release",
 				schemahelper.WithMinimum(1),
 			),
+
+			// --- Repo management fields (GraphQL + REST) ---
+			"description": schemahelper.StringProp("Repository or resource description",
+				schemahelper.WithMaxLength(*ptrs.IntPtr(1000)),
+			),
+			"visibility": schemahelper.StringProp("Repository visibility for create_repo",
+				schemahelper.WithEnum("public", "private"),
+				schemahelper.WithDefault("public"),
+			),
+			"auto_init": schemahelper.BoolProp("Initialize repo with a README (uses REST API; GraphQL lacks auto_init support)"),
+			"ruleset_name": schemahelper.StringProp("Name for the repository ruleset",
+				schemahelper.WithMaxLength(*ptrs.IntPtr(200)),
+			),
+			"target": schemahelper.StringProp("Ruleset target type",
+				schemahelper.WithEnum("branch", "tag"),
+				schemahelper.WithDefault("branch"),
+			),
+			"enforcement": schemahelper.StringProp("Ruleset enforcement level",
+				schemahelper.WithEnum("active", "disabled", "evaluate"),
+				schemahelper.WithDefault("active"),
+			),
+			"include_refs": schemahelper.ArrayProp("Ref patterns to include (e.g. refs/heads/main, refs/tags/v*)",
+				schemahelper.WithItems(schemahelper.StringProp("Ref pattern")),
+				schemahelper.WithMaxItems(100),
+			),
+			"exclude_refs": schemahelper.ArrayProp("Ref patterns to exclude",
+				schemahelper.WithItems(schemahelper.StringProp("Ref pattern")),
+				schemahelper.WithMaxItems(100),
+			),
+			"required_status_checks_contexts": schemahelper.ArrayProp("Required status check context names",
+				schemahelper.WithItems(schemahelper.StringProp("Context name")),
+				schemahelper.WithMaxItems(50),
+			),
+			"required_approving_review_count": schemahelper.IntProp("Minimum approving reviews required",
+				schemahelper.WithMinimum(0),
+				schemahelper.WithMaximum(10),
+			),
+			"required_linear_history":    schemahelper.BoolProp("Require linear commit history"),
+			"allow_force_pushes":         schemahelper.BoolProp("Allow force pushes to matching refs"),
+			"allow_deletions":            schemahelper.BoolProp("Allow deletion of matching refs"),
+			"requires_commit_signatures": schemahelper.BoolProp("Require signed commits"),
 		},
 	)
 }
@@ -464,6 +587,10 @@ func (p *GitHubProvider) Execute(ctx context.Context, input any) (*provider.Outp
 	operation, _ := inputs["operation"].(string)
 	lgr.V(1).Info("executing provider", "provider", ProviderName, "operation", operation)
 
+	if operation == "" {
+		return nil, fmt.Errorf("%s: 'operation' is required", ProviderName)
+	}
+
 	// Dry-run support: return mock data for write operations
 	if dryRun := provider.DryRunFromContext(ctx); dryRun {
 		return p.executeDryRun(operation, inputs)
@@ -476,6 +603,12 @@ func (p *GitHubProvider) Execute(ctx context.Context, input any) (*provider.Outp
 		apiBase = defaultAPIBase
 	}
 	apiBase = strings.TrimRight(apiBase, "/")
+
+	// Most operations require owner and repo. Only create_repo handles
+	// these fields internally (owner is optional, repo validated inside).
+	if operation != "create_repo" && (owner == "" || repo == "") {
+		return nil, fmt.Errorf("%s: 'owner' and 'repo' are required for %s operation", ProviderName, operation)
+	}
 
 	client := p.getClient(ctx)
 
@@ -565,21 +698,21 @@ func (p *GitHubProvider) Execute(ctx context.Context, input any) (*provider.Outp
 	case "delete_release":
 		result, err = p.executeDeleteRelease(ctx, client, apiBase, owner, repo, inputs)
 
+	// --- Repository management operations (GraphQL + REST) ---
+	case "create_repo":
+		result, err = p.executeCreateRepo(ctx, client, apiBase, inputs)
+	case "create_ruleset":
+		result, err = p.executeCreateRuleset(ctx, client, apiBase, owner, repo, inputs)
+	case "enable_vulnerability_alerts":
+		result, err = p.executeEnableVulnerabilityAlerts(ctx, client, apiBase, owner, repo)
+	case "enable_automated_security_fixes":
+		result, err = p.executeEnableAutomatedSecurityFixes(ctx, client, apiBase, owner, repo)
+
 	default:
 		return nil, fmt.Errorf("%s: unknown operation %q — supported: %s", ProviderName, operation, strings.Join(allOperations, ", "))
 	}
 
 	if err != nil {
-		// For action operations, return success=false rather than a Go error
-		if !readOperations[operation] {
-			return &provider.Output{
-				Data: map[string]any{
-					"success":   false,
-					"operation": operation,
-					"error":     err.Error(),
-				},
-			}, nil
-		}
 		return nil, fmt.Errorf("%s: %w", ProviderName, err)
 	}
 
@@ -683,6 +816,17 @@ func getIntInput(inputs map[string]any, key string) (int, bool) {
 	}
 }
 
+// restError is returned when the GitHub REST API responds with an HTTP error status.
+type restError struct {
+	StatusCode int
+	Message    string
+}
+
+// Error implements the error interface.
+func (e *restError) Error() string {
+	return fmt.Sprintf("GitHub API error (HTTP %d): %s", e.StatusCode, e.Message)
+}
+
 // doRESTRequest performs an authenticated REST API request and returns the parsed JSON.
 // Used for release mutations (no GraphQL mutation available).
 func (p *GitHubProvider) doRESTRequest(ctx context.Context, client *httpc.Client, method, url string, body any) (any, error) {
@@ -718,13 +862,14 @@ func (p *GitHubProvider) doRESTRequest(ctx context.Context, client *httpc.Client
 	}
 
 	if resp.StatusCode >= 400 {
+		msg := string(respBody)
 		var ghErr map[string]any
 		if json.Unmarshal(respBody, &ghErr) == nil {
-			if msg, ok := ghErr["message"].(string); ok {
-				return nil, fmt.Errorf("GitHub API error (HTTP %d): %s", resp.StatusCode, msg)
+			if m, ok := ghErr["message"].(string); ok {
+				msg = m
 			}
 		}
-		return nil, fmt.Errorf("GitHub API error (HTTP %d): %s", resp.StatusCode, string(respBody))
+		return nil, &restError{StatusCode: resp.StatusCode, Message: msg}
 	}
 
 	// DELETE with 204 No Content

@@ -212,13 +212,14 @@ func (h *Handler) DisplayName() string {
 }
 
 // SupportedFlows returns the authentication flows this handler supports.
+// Note: FlowOnBehalfOf is not listed here because OBO is a token-exchange
+// mechanism accessed via GetOBOToken, not through the Login flow.
 func (h *Handler) SupportedFlows() []auth.Flow {
 	flows := []auth.Flow{
 		auth.FlowInteractive,
 		auth.FlowDeviceCode,
 		auth.FlowServicePrincipal,
 		auth.FlowWorkloadIdentity,
-		FlowOnBehalfOf,
 	}
 	return flows
 }

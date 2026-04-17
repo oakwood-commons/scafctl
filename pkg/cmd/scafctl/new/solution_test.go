@@ -26,7 +26,12 @@ func TestCommandNew(t *testing.T) {
 
 	subCmds := cmd.Commands()
 	require.Len(t, subCmds, 1, "should have 1 subcommand: solution")
-	assert.Equal(t, "solution", subCmds[0].Name())
+
+	names := make([]string, len(subCmds))
+	for i, c := range subCmds {
+		names[i] = c.Name()
+	}
+	assert.Contains(t, names, "solution")
 }
 
 func TestCommandNew_NoRunE(t *testing.T) {

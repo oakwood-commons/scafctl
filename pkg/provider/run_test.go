@@ -31,6 +31,12 @@ func newTestProvider(name string, caps []Capability, schema *jsonschema.Schema, 
 	}
 }
 
+// nilDescriptorProvider implements Provider but returns nil from Descriptor().
+type nilDescriptorProvider struct{}
+
+func (p *nilDescriptorProvider) Descriptor() *Descriptor                           { return nil }
+func (p *nilDescriptorProvider) Execute(_ context.Context, _ any) (*Output, error) { return nil, nil }
+
 // ---------------------------------------------------------------------------
 // ResolveCapability
 // ---------------------------------------------------------------------------
@@ -219,6 +225,16 @@ func TestRunProvider_NilProvider(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "provider is required")
+}
+
+func TestRunProvider_NilDescriptor(t *testing.T) {
+	prov := &nilDescriptorProvider{}
+	_, err := RunProvider(context.Background(), RunOptions{
+		Provider: prov,
+		Inputs:   map[string]any{},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nil descriptor")
 }
 
 func TestRunProvider_ExecutionFailure(t *testing.T) {

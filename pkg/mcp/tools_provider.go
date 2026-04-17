@@ -280,7 +280,7 @@ func (s *Server) handleGetProviderOutputShape(_ context.Context, request mcp.Cal
 }
 
 // handleRunProvider executes a provider directly and returns structured output.
-func (s *Server) handleRunProvider(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleRunProvider(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	name, err := request.RequireString("provider")
 	if err != nil {
 		return newStructuredError(ErrCodeInvalidInput, err.Error(),
@@ -291,7 +291,13 @@ func (s *Server) handleRunProvider(_ context.Context, request mcp.CallToolReques
 	}
 
 	inputsRaw := request.GetArguments()["inputs"]
-	inputs, _ := inputsRaw.(map[string]any)
+	inputs, ok := inputsRaw.(map[string]any)
+	if !ok && inputsRaw != nil {
+		return newStructuredError(ErrCodeInvalidInput, "inputs must be a JSON object",
+			WithField("inputs"),
+			WithSuggestion("Pass inputs as key-value pairs, e.g. {\"url\": \"https://...\"}"),
+		), nil
+	}
 	if inputs == nil {
 		inputs = make(map[string]any)
 	}
@@ -319,7 +325,7 @@ func (s *Server) handleRunProvider(_ context.Context, request mcp.CallToolReques
 		), nil
 	}
 
-	result, err := provider.RunProvider(s.ctx, provider.RunOptions{
+	result, err := provider.RunProvider(ctx, provider.RunOptions{
 		Provider:   prov,
 		Inputs:     inputs,
 		Capability: capability,

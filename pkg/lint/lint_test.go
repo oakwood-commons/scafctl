@@ -28,9 +28,12 @@ import (
 // initExtensionFactory ensures sprig + custom Go template functions are
 // registered for lint validation tests. In production this is done by
 // RegisterDefaults(); in tests we call the factory directly.
-func initExtensionFactory(t *testing.T) {
-	t.Helper()
+//
+// Note: SetExtensionFuncMapFactory is guarded by sync.Once so we call it
+// in TestMain to guarantee deterministic setup before any test runs.
+func TestMain(m *testing.M) {
 	gotmpl.SetExtensionFuncMapFactory(gotmplext.AllFuncMap)
+	os.Exit(m.Run())
 }
 
 // fakeProvider implements provider.Provider for testing.
@@ -770,9 +773,7 @@ func TestLintExpressions_SprigFunctionsNotFalsePositive(t *testing.T) {
 	// Sprig functions like replace, upper, lower, trim, default should not
 	// trigger invalid-template findings.
 	//
-	// In production, SetExtensionFuncMapFactory is called during app init.
-	// For this test we wire it manually.
-	initExtensionFactory(t)
+	// SetExtensionFuncMapFactory is called in TestMain.
 
 	templates := []string{
 		`{{ "hello.tpl" | replace ".tpl" "" }}`,

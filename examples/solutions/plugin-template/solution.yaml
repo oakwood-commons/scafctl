@@ -1,0 +1,587 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: plugin-template
+  version: 1.0.0
+  displayName: Plugin Project Template
+  description: >-
+    Scaffolds a complete scafctl plugin project (provider or auth-handler) with
+    source code, tests, build config, CI/CD pipelines, GitHub repo configuration,
+    and Copilot AI instructions. Note: the initial commit does not include go.sum
+    because dependencies are resolved locally. CI pipelines will fail until
+    you run 'go mod tidy' and push the resulting go.sum.
+  category: scaffolding
+  tags: [plugin, scaffold, go, provider]
+  links:
+    - name: Plugin SDK
+      url: https://github.com/oakwood-commons/scafctl-plugin-sdk
+    - name: Provider Authoring Guide
+      url: https://github.com/oakwood-commons/scafctl/blob/main/docs/tutorials/plugin-development.md
+
+spec:
+  resolvers:
+    # ── User Inputs ──────────────────────────────────────────────────────────
+    name:
+      description: >-
+        Plugin project name (lowercase with hyphens, 3-60 chars).
+        Convention: scafctl-plugin-<provider-name>
+      type: string
+      example: scafctl-plugin-echo
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: name
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: 'size(__self) >= 3 && size(__self) <= 60'
+              message: "Name must be 3-60 characters"
+          - provider: validation
+            inputs:
+              expression: '__self.matches("^[a-z][a-z0-9-]*[a-z0-9]$")'
+              message: "Name must be lowercase alphanumeric with hyphens"
+
+    module:
+      description: "Go module path (e.g. github.com/myorg/scafctl-plugin-echo)"
+      type: string
+      example: github.com/myorg/scafctl-plugin-echo
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: module
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: 'size(__self) >= 5'
+              message: "Module path is required"
+
+    description:
+      description: "Brief description of what the plugin does"
+      type: string
+      example: Echoes input values
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: description
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: 'size(__self) >= 1'
+              message: "Description is required"
+
+    capabilities:
+      description: "Provider capabilities (comma-separated): from, transform, action, validation. Ignored for auth-handler plugins."
+      type: any
+      example: from,transform
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: capabilities
+          - provider: static
+            inputs:
+              value:
+                expr: '_.plugin_type == "auth-handler" ? ["authentication"] : ["from"]'
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'type(__self) == list ? __self : [__self]'
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: >-
+                _.plugin_type == "auth-handler" ||
+                (size(__self) > 0 && __self.all(c, c in ["from", "transform", "action", "validation"]))
+              message: "Each capability must be one of: from, transform, action, validation"
+
+    create_repo:
+      description: "Whether to create a GitHub repository and configure branch rules"
+      type: string
+      example: "false"
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: create_repo
+          - provider: static
+            inputs:
+              value: "false"
+
+    plugin_type:
+      description: "Plugin type: provider or auth-handler"
+      type: string
+      example: provider
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: plugin_type
+          - provider: static
+            inputs:
+              value: provider
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: '__self in ["provider", "auth-handler"]'
+              message: "Must be provider or auth-handler"
+
+    repo_visibility:
+      description: "GitHub repository visibility (public/private)"
+      type: string
+      example: public
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: repo_visibility
+          - provider: static
+            inputs:
+              value: public
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: '__self in ["public", "private"]'
+              message: "Must be public or private"
+
+    # ── Derived Values ───────────────────────────────────────────────────────
+    repo_path:
+      description: "Repository path (module without github.com/ prefix)"
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                rslvr: module
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: '__self.replace("github.com/", "")'
+
+    provider_name:
+      description: "Provider name derived from plugin name"
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                rslvr: name
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: '__self.replace("scafctl-plugin-", "")'
+
+    pkg_name:
+      description: "Go package name (hyphens removed)"
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                rslvr: provider_name
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: '__self.replace("-", "")'
+
+    capability_consts:
+      description: "SDK capability constant names mapped from capabilities"
+      type: any
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                rslvr: capabilities
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: >-
+                __self.map(c,
+                  c == "from" ? "sdkprovider.CapabilityFrom" :
+                  c == "transform" ? "sdkprovider.CapabilityTransform" :
+                  c == "action" ? "sdkprovider.CapabilityAction" :
+                  c == "validation" ? "sdkprovider.CapabilityValidation" :
+                  c == "authentication" ? "authentication" :
+                  "sdkprovider.CapabilityFrom")
+
+    display_name:
+      description: "Human-readable provider display name"
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                rslvr: provider_name
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: '__self.replace("-", " ") + " Provider"'
+
+    # ── Load Templates ───────────────────────────────────────────────────────
+    template_files:
+      description: "Read all .tpl template files from disk"
+      type: any
+      resolve:
+        with:
+          - provider: directory
+            inputs:
+              operation: list
+              path: templates
+              recursive: true
+              filterGlob: "*.tpl"
+              includeContent: true
+
+    # ── Render Templates ─────────────────────────────────────────────────────
+    rendered:
+      description: "Render all templates with user inputs"
+      type: any
+      dependsOn:
+        - name
+        - module
+        - description
+        - provider_name
+        - pkg_name
+        - capabilities
+        - capability_consts
+        - display_name
+        - plugin_type
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              operation: render-tree
+              leftDelim: "<%"
+              rightDelim: "%>"
+              entries:
+                expr: "_.template_files.entries"
+
+    # Rewrite paths: replace PLUGIN_NAME and PKG_NAME placeholders
+    output_files:
+      description: "Final file entries with correct paths"
+      type: any
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                rslvr: rendered
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: >-
+                __self.map(e, {
+                  "path": e.path.replace("PLUGIN_NAME", _.name).replace("PKG_NAME", _.pkg_name).replace(".tpl", ""),
+                  "content": e.content
+                }).filter(e,
+                  _.plugin_type == "auth-handler"
+                    ? !e.path.endsWith("provider.go") && !e.path.endsWith("provider_test.go")
+                    : !e.path.endsWith("auth_handler.go") && !e.path.endsWith("auth_handler_test.go")
+                )
+
+  # ── Workflow ─────────────────────────────────────────────────────────────
+  workflow:
+    actions:
+      # Write all scaffolded files (skip when pushing to GitHub)
+      write-files:
+        description: "Write rendered plugin project files to output directory"
+        provider: file
+        when:
+          expr: '_.create_repo != "true"'
+        inputs:
+          operation: write-tree
+          basePath:
+            expr: "_.name"
+          entries:
+            rslvr: output_files
+          outputPath: >-
+            {{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}
+          onConflict: skip-unchanged
+
+      # Create GitHub repository (optional)
+      create-github-repo:
+        description: "Create GitHub repository with initial commit (auto_init)"
+        provider: github
+        when:
+          expr: '_.create_repo == "true"'
+        inputs:
+          operation: create_repo
+          owner:
+            expr: '_.module.replace("github.com/", "").split("/")[0]'
+          repo:
+            expr: '_.module.replace("github.com/", "").split("/")[1]'
+          description:
+            rslvr: description
+          visibility:
+            rslvr: repo_visibility
+          auto_init: true
+
+      # Configure branch protection via repository rulesets
+      configure-branch-ruleset:
+        description: "Set up branch protection rules for main via rulesets"
+        provider: github
+        when:
+          expr: '_.create_repo == "true"'
+        dependsOn: [initial-commit]
+        onError: continue
+        inputs:
+          operation: create_ruleset
+          owner:
+            expr: '_.module.replace("github.com/", "").split("/")[0]'
+          repo:
+            expr: '_.module.replace("github.com/", "").split("/")[1]'
+          ruleset_name: main branch protection
+          target: branch
+          enforcement: active
+          include_refs:
+            expr: '["refs/heads/main"]'
+          required_status_checks_contexts:
+            expr: '["test", "lint"]'
+          required_approving_review_count: 1
+          required_linear_history: true
+          requires_commit_signatures: true
+          allow_force_pushes: false
+          allow_deletions: false
+
+      # Configure tag protection via repository rulesets
+      configure-tag-ruleset:
+        description: "Protect version tags from deletion and force pushes"
+        provider: github
+        when:
+          expr: '_.create_repo == "true"'
+        dependsOn: [initial-commit]
+        onError: continue
+        inputs:
+          operation: create_ruleset
+          owner:
+            expr: '_.module.replace("github.com/", "").split("/")[0]'
+          repo:
+            expr: '_.module.replace("github.com/", "").split("/")[1]'
+          ruleset_name: version tag protection
+          target: tag
+          enforcement: active
+          include_refs:
+            expr: '["refs/tags/v*"]'
+          allow_deletions: false
+          allow_force_pushes: false
+
+      # Enable vulnerability alerts
+      enable-vulnerability-alerts:
+        description: "Enable Dependabot vulnerability alerts"
+        provider: github
+        when:
+          expr: '_.create_repo == "true"'
+        dependsOn: [create-github-repo]
+        onError: continue
+        inputs:
+          operation: enable_vulnerability_alerts
+          owner:
+            expr: '_.module.replace("github.com/", "").split("/")[0]'
+          repo:
+            expr: '_.module.replace("github.com/", "").split("/")[1]'
+
+      # Enable automated security fixes
+      enable-automated-security-fixes:
+        description: "Enable Dependabot automated security fixes"
+        provider: github
+        when:
+          expr: '_.create_repo == "true"'
+        dependsOn: [enable-vulnerability-alerts]
+        onError: continue
+        inputs:
+          operation: enable_automated_security_fixes
+          owner:
+            expr: '_.module.replace("github.com/", "").split("/")[0]'
+          repo:
+            expr: '_.module.replace("github.com/", "").split("/")[1]'
+
+      # Get HEAD OID for initial commit (needed after auto_init)
+      get-head-oid:
+        description: "Fetch the HEAD OID of the default branch for create_commit"
+        provider: github
+        when:
+          expr: '_.create_repo == "true"'
+        dependsOn: [create-github-repo]
+        inputs:
+          operation: get_head_oid
+          owner:
+            expr: '_.module.replace("github.com/", "").split("/")[0]'
+          repo:
+            expr: '_.module.replace("github.com/", "").split("/")[1]'
+          branch: main
+
+      # Push scaffolded files as initial commit via GitHub API (GPG-signed)
+      initial-commit:
+        description: "Push scaffolded files as a GPG-signed initial commit"
+        provider: github
+        when:
+          expr: '_.create_repo == "true"'
+        dependsOn:
+          - get-head-oid
+        onError: continue
+        inputs:
+          operation: create_commit
+          owner:
+            expr: '_.module.replace("github.com/", "").split("/")[0]'
+          repo:
+            expr: '_.module.replace("github.com/", "").split("/")[1]'
+          branch: main
+          message: "feat: initial plugin scaffold"
+          expected_head_oid:
+            expr: '__actions["get-head-oid"].results.result.oid'
+          additions:
+            expr: >-
+              _.output_files.map(e, {"path": e.path, "content": e.content})
+
+      # Print next steps
+      next-steps:
+        description: "Print next steps for the user"
+        provider: message
+        inputs:
+          type: success
+          message:
+            tmpl: |
+              {{- if eq .create_repo "true" }}
+              Repository created: https://github.com/{{ .repo_path }}
+
+              Next steps:
+                git clone {{ .module }}.git
+                cd {{ .name }}
+                go mod tidy
+                git add go.sum go.mod
+                git commit -s -S -m "chore: add go.sum"
+                git push
+              {{- else }}
+              Plugin project created in {{ .name }}/
+
+              Next steps:
+                cd {{ .name }}
+                go mod tidy
+              {{- end }}
+              {{- if eq .plugin_type "auth-handler" }}
+                Implement your auth handler logic in internal/{{ .pkg_name }}/auth_handler.go
+              {{- else }}
+                Implement your provider logic in internal/{{ .pkg_name }}/provider.go
+              {{- end }}
+                Run: task test
+                Run: task build
+                Test with scafctl: scafctl run -p {{ .provider_name }}
+
+      # Warn about missing go.sum (only when creating a repo)
+      go-sum-warning:
+        description: "Warn that CI will fail without go.sum"
+        provider: message
+        when:
+          expr: '_.create_repo == "true"'
+        dependsOn: [next-steps]
+        inputs:
+          type: warning
+          message: >-
+            The initial commit does not include go.sum. CI pipelines will fail
+            until you run 'go mod tidy' and push the result.
+
+  testing:
+    config:
+      skipBuiltins: [render-defaults, resolve-defaults]
+
+    cases:
+      _base:
+        description: Base test case (provider plugin)
+        command: [run, resolver]
+        args: ["-o", "json", "-r", "name=scafctl-plugin-test", "-r", "module=github.com/test/scafctl-plugin-test", "-r", "description=Test plugin", "-r", "capabilities=from", "-r", "create_repo=false", "-r", "repo_visibility=public", "-r", "plugin_type=provider"]
+        files: ["templates/**"]
+        tags: [plugin-template]
+        assertions:
+          - expression: __exitCode == 0
+
+      _base-auth:
+        description: Base test case (auth-handler plugin)
+        command: [run, resolver]
+        args: ["-o", "json", "-r", "name=scafctl-plugin-test", "-r", "module=github.com/test/scafctl-plugin-test", "-r", "description=Test auth handler", "-r", "create_repo=false", "-r", "repo_visibility=public", "-r", "plugin_type=auth-handler"]
+        files: ["templates/**"]
+        tags: [plugin-template]
+        assertions:
+          - expression: __exitCode == 0
+
+      resolves-derived-values:
+        description: Verify derived resolver values
+        extends: [_base]
+        assertions:
+          - expression: __output.provider_name == "test"
+            message: "provider_name should strip scafctl-plugin- prefix"
+          - expression: __output.pkg_name == "test"
+            message: "pkg_name should remove hyphens"
+          - expression: __output.capability_consts == ["sdkprovider.CapabilityFrom"]
+            message: "Should map 'from' to the SDK constant list"
+          - expression: __output.display_name == "test Provider"
+
+      loads-templates:
+        description: Verify template files are loaded
+        extends: [_base]
+        command: [run, resolver, template_files]
+        assertions:
+          - expression: __output.template_files.totalCount > 20
+            message: "Should load at least 20 template files"
+
+      renders-templates:
+        description: Verify templates are rendered with variables
+        extends: [_base]
+        command: [run, resolver, output_files]
+        assertions:
+          - expression: size(__output.output_files) > 20
+            message: "Should render at least 20 template entries"
+          - expression: '__output.output_files.exists(e, e.content.contains("scafctl-plugin-test"))'
+            message: "Rendered content should contain the plugin name"
+          - expression: '__output.output_files.exists(e, e.path.contains("scafctl-plugin-test"))'
+            message: "Paths should have PLUGIN_NAME replaced"
+          - expression: '!__output.output_files.exists(e, e.path.contains("PLUGIN_NAME"))'
+            message: "No paths should have PLUGIN_NAME placeholder remaining"
+          - expression: '!__output.output_files.exists(e, e.path.endsWith(".tpl"))'
+            message: "No paths should have .tpl extension remaining"
+
+      renders-auth-handler-templates:
+        description: Verify auth-handler templates exclude provider files
+        extends: [_base-auth]
+        command: [run, resolver, output_files]
+        assertions:
+          - expression: size(__output.output_files) > 20
+            message: "Should render at least 20 template entries"
+          - expression: '!__output.output_files.exists(e, e.path.endsWith("provider.go"))'
+            message: "Auth-handler should not include provider.go"
+          - expression: '!__output.output_files.exists(e, e.path.endsWith("provider_test.go"))'
+            message: "Auth-handler should not include provider_test.go"
+          - expression: '__output.output_files.exists(e, e.path.endsWith("auth_handler.go"))'
+            message: "Auth-handler should include auth_handler.go"
+          - expression: '__output.output_files.exists(e, e.path.endsWith("auth_handler_test.go"))'
+            message: "Auth-handler should include auth_handler_test.go"
+
+      provider-excludes-auth-handler:
+        description: Verify provider templates exclude auth-handler files
+        extends: [_base]
+        command: [run, resolver, output_files]
+        assertions:
+          - expression: '__output.output_files.exists(e, e.path.endsWith("provider.go"))'
+            message: "Provider should include provider.go"
+          - expression: '!__output.output_files.exists(e, e.path.endsWith("auth_handler.go"))'
+            message: "Provider should not include auth_handler.go"
+          - expression: '!__output.output_files.exists(e, e.path.endsWith("auth_handler_test.go"))'
+            message: "Provider should not include auth_handler_test.go"

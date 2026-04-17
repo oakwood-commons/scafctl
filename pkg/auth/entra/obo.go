@@ -80,6 +80,7 @@ func oboCacheKey(assertion, scope string) string {
 }
 
 // get returns a cached token if it exists and is still valid.
+// Expired entries are evicted on read to prevent unbounded growth.
 func (c *oboCache) get(assertion, scope string) (*auth.Token, bool) {
 	key := oboCacheKey(assertion, scope)
 	c.mu.RLock()
@@ -89,6 +90,9 @@ func (c *oboCache) get(assertion, scope string) (*auth.Token, bool) {
 		return nil, false
 	}
 	if time.Now().After(entry.expiresAt) {
+		c.mu.Lock()
+		delete(c.items, key)
+		c.mu.Unlock()
 		return nil, false
 	}
 	return entry.token, true

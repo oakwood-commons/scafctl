@@ -79,7 +79,7 @@ func ResolveCapability(desc *Descriptor, capabilityName string) (Capability, err
 
 // ValidateInputKeys checks that all keys in inputs exist in the provider
 // schema's declared properties.  Returns an error listing unrecognized keys
-// with "did you mean?" suggestions.
+// alongside the full list of valid keys.
 func ValidateInputKeys(inputs map[string]any, desc *Descriptor) error {
 	if desc.Schema == nil || len(desc.Schema.Properties) == 0 {
 		return nil
@@ -120,6 +120,9 @@ func RunProvider(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	}
 
 	desc := opts.Provider.Descriptor()
+	if desc == nil {
+		return nil, fmt.Errorf("provider returned a nil descriptor")
+	}
 
 	// Resolve capability
 	capability, err := ResolveCapability(desc, opts.Capability)

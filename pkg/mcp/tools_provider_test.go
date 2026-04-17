@@ -400,6 +400,30 @@ func TestHandleRunProvider(t *testing.T) {
 		assert.False(t, result.IsError)
 	})
 
+	t.Run("returns error when inputs is not an object", func(t *testing.T) {
+		reg, err := builtin.DefaultRegistry(context.Background())
+		require.NoError(t, err)
+		srv, err := NewServer(
+			WithServerRegistry(reg),
+			WithServerVersion("test"),
+		)
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "run_provider"
+		request.Params.Arguments = map[string]any{
+			"provider": "static",
+			"inputs":   "not-an-object",
+		}
+
+		result, err := srv.handleRunProvider(context.Background(), request)
+		require.NoError(t, err)
+		assert.True(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		assert.Contains(t, text, "INVALID_INPUT")
+	})
+
 	t.Run("executes env provider", func(t *testing.T) {
 		reg, err := builtin.DefaultRegistry(context.Background())
 		require.NoError(t, err)

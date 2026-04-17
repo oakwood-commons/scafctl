@@ -153,6 +153,16 @@ func TestQualifyScope(t *testing.T) {
 			scope: "https://management.azure.com/.default",
 			want:  "https://management.azure.com/.default",
 		},
+		{
+			name:  "space-delimited multi-scope with bare permissions",
+			scope: "openid profile User.Read offline_access",
+			want:  "openid profile https://graph.microsoft.com/User.Read offline_access",
+		},
+		{
+			name:  "space-delimited all well-known",
+			scope: "openid profile email",
+			want:  "openid profile email",
+		},
 	}
 
 	for _, tt := range tests {
