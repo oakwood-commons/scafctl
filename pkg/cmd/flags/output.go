@@ -90,6 +90,18 @@ func AddKvxOutputFlagsWithWhere(cmd *cobra.Command, outputFormat *string, intera
 // This is a convenience function when using the KvxOutputFlags struct directly.
 func AddKvxOutputFlagsToStruct(cmd *cobra.Command, flags *KvxOutputFlags) {
 	AddKvxOutputFlagsWithWhere(cmd, &flags.Output, &flags.Interactive, &flags.Expression, &flags.Where)
+
+	// Chain an additional PreRunE to detect explicit -o flag usage.
+	// AddKvxOutputFlagsWithWhere already set a PreRunE for validation;
+	// we wrap it to also populate FormatExplicit before the command runs.
+	existing := cmd.PreRunE
+	cmd.PreRunE = func(cmd *cobra.Command, args []string) error {
+		flags.FormatExplicit = cmd.Flags().Changed("output")
+		if existing != nil {
+			return existing(cmd, args)
+		}
+		return nil
+	}
 }
 
 // ValidateKvxOutputFormat validates the output format string.

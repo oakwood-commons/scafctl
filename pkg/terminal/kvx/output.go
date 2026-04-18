@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"sort"
+	"strings"
 
 	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -120,6 +122,46 @@ func isScalarArray(arr []any) bool {
 		}
 	}
 	return true
+}
+
+// dominantArray checks if data is a map[string]any with exactly one field
+// whose value is a non-empty []any of objects (maps). If found, it returns
+// the array and the remaining scalar summary fields. This enables writeText
+// to render the array as a columnar table with a summary header, matching
+// the pattern used by kubectl and gh for wrapper-style command output
+// (e.g., {"file":"x.yaml","findings":[...],"errorCount":2}).
+func dominantArray(data any) (arr []any, summary map[string]any, ok bool) {
+	m, isMap := data.(map[string]any)
+	if !isMap || len(m) == 0 {
+		return nil, nil, false
+	}
+
+	var arrayKey string
+	var arrayVal []any
+	for k, v := range m {
+		if a, aOk := v.([]any); aOk && len(a) > 0 {
+			// Require at least one element to be a map (object).
+			if _, mOk := a[0].(map[string]any); mOk {
+				if arrayKey != "" {
+					// Multiple array-of-objects fields -- ambiguous, bail out.
+					return nil, nil, false
+				}
+				arrayKey = k
+				arrayVal = a
+			}
+		}
+	}
+	if arrayKey == "" {
+		return nil, nil, false
+	}
+
+	summary = make(map[string]any, len(m)-1)
+	for k, v := range m {
+		if k != arrayKey {
+			summary[k] = v
+		}
+	}
+	return arrayVal, summary, true
 }
 
 // IsKvxFormat returns true if the format uses kvx visual output (auto, table, list, or tree).
@@ -548,10 +590,15 @@ func (o *OutputOptions) writeJSON(data any) error {
 // This format works in any context (TTY and non-TTY) and is used as the
 // fallback when table/auto formats are piped to a non-terminal.
 func (o *OutputOptions) writeText(data any) error {
-	outputData := data
+	// Normalize structs to map[string]any so dominantArray and tui.RenderTable
+	// can decompose the data. Without this, structs render as a single opaque
+	// value in a "(value) | {json}" row.
+	outputData, err := normalizeForText(data)
+	if err != nil {
+		return fmt.Errorf("failed to normalize data for text output: %w", err)
+	}
 
 	// Apply per-item Where filter
-	var err error
 	outputData, err = applyWhereFilter(o.Where, outputData)
 	if err != nil {
 		return err
@@ -575,6 +622,16 @@ func (o *OutputOptions) writeText(data any) error {
 		return nil
 	}
 
+	// When data is a map wrapping a single array of objects (common CLI
+	// pattern, e.g. {"file":"x","findings":[...],"errorCount":2}), render
+	// summary scalars as a header line and the array as a columnar table.
+	if arr, summary, found := dominantArray(outputData); found {
+		if len(summary) > 0 {
+			writeSummaryLine(o.IOStreams.Out, summary)
+		}
+		outputData = arr
+	}
+
 	hints := resolveColumnHints(o.SchemaJSON, o.ColumnHints)
 	output := tui.RenderTable(outputData, tui.TableOptions{
 		Bordered:    false,
@@ -584,6 +641,44 @@ func (o *OutputOptions) writeText(data any) error {
 	})
 	fmt.Fprint(o.IOStreams.Out, output)
 	return nil
+}
+
+// normalizeForText converts structs and slices of structs to map[string]any
+// (or []any) via a JSON round-trip. This ensures tui.RenderTable and
+// dominantArray can inspect the data structure. Values that are already
+// maps, slices, or scalars pass through unchanged.
+func normalizeForText(data any) (any, error) {
+	if data == nil {
+		return data, nil
+	}
+	// Fast path: already a native type that tui.RenderTable handles.
+	switch data.(type) {
+	case map[string]any, []any, string, bool, float64, int:
+		return data, nil
+	}
+	// Struct or other type: round-trip through JSON.
+	return StructToMap(data)
+}
+
+// writeSummaryLine prints scalar fields from a map as a single "key=value ..." line.
+func writeSummaryLine(w io.Writer, summary map[string]any) {
+	keys := make([]string, 0, len(summary))
+	for k := range summary {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		v := summary[k]
+		if !isScalar(v) {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s=%v", k, v))
+	}
+	if len(parts) > 0 {
+		fmt.Fprintln(w, strings.Join(parts, "  "))
+	}
 }
 
 // writeYAML writes data as YAML.

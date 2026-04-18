@@ -308,20 +308,24 @@ func (p *ExecProvider) executeCommand(ctx context.Context, command string, input
 	}
 
 	// Capture stdout and stderr into buffers.
-	// If IOStreams are available in context, also stream to the terminal in real-time
-	// using io.MultiWriter so output appears immediately while still being captured
-	// for inter-action dependencies.
+	// In action mode, also stream to the terminal in real-time using io.MultiWriter
+	// so output appears immediately while still being captured for inter-action
+	// dependencies. In resolver/transform mode, only capture to buffers -- streaming
+	// would leak raw command output before the formatted result is displayed.
 	var stdout, stderr bytes.Buffer
 	var stdoutWriter, stderrWriter io.Writer = &stdout, &stderr
 	streamed := false
 
-	if ioStreams, ok := provider.IOStreamsFromContext(ctx); ok && ioStreams != nil {
-		if ioStreams.Out != nil {
-			stdoutWriter = io.MultiWriter(&stdout, ioStreams.Out)
-			streamed = true
-		}
-		if ioStreams.ErrOut != nil {
-			stderrWriter = io.MultiWriter(&stderr, ioStreams.ErrOut)
+	mode, _ := provider.ExecutionModeFromContext(ctx)
+	if mode == provider.CapabilityAction {
+		if ioStreams, ok := provider.IOStreamsFromContext(ctx); ok && ioStreams != nil {
+			if ioStreams.Out != nil {
+				stdoutWriter = io.MultiWriter(&stdout, ioStreams.Out)
+				streamed = true
+			}
+			if ioStreams.ErrOut != nil {
+				stderrWriter = io.MultiWriter(&stderr, ioStreams.ErrOut)
+			}
 		}
 	}
 
