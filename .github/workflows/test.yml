@@ -65,7 +65,7 @@ jobs:
         # TODO: Re-enable macos-latest and windows-latest when cross-platform issues are resolved
         os: [ubuntu-latest]
     env:
-      SCAFCTL_SECRET_KEY: ${{ secrets.SCAFCTL_SECRET_KEY }}
+      SCAFCTL_SECRET_KEY: ${{ secrets.SCAFCTL_SECRET_KEY || 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

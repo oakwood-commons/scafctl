@@ -25,7 +25,7 @@ func extractJSONContent(t *testing.T, result *mcp.CallToolResult) string {
 		if !ok {
 			continue
 		}
-		if len(tc.Text) > 0 && tc.Text[0] == '[' || tc.Text[0] == '{' {
+		if len(tc.Text) > 0 && (tc.Text[0] == '[' || tc.Text[0] == '{') {
 			return tc.Text
 		}
 	}

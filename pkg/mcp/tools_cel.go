@@ -87,7 +87,9 @@ func (s *Server) handleListCELFunctions(_ context.Context, request mcp.CallToolR
 	// Populate individual function names via CEL env introspection.
 	// Without this, built-in groups (e.g. "encoders") only show the group name
 	// and the AI cannot discover individual functions like base64.encode.
-	_ = ext.SetFunctionNames(functions)
+	if err := ext.SetFunctionNames(functions); err != nil {
+		s.logger.V(1).Info("failed to introspect CEL function names", "error", err)
+	}
 
 	if category != "" {
 		filtered := make(celexp.ExtFunctionList, 0, len(functions))

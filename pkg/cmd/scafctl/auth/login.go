@@ -760,23 +760,12 @@ func executeLoginWithBrowserTUI(
 	outcomeChan := make(chan loginOutcome, 1)
 	done := make(chan tui.StatusResult, 1)
 
-	// The DeviceCodeCallback is (ab)used by the auth code flow when the
-	// browser fails to open -- it receives the auth URL so the TUI can
-	// show it as a fallback.
-	authURLChan := make(chan string, 1)
-
 	loginOpts := auth.LoginOptions{
 		TenantID:     tenantID,
 		Scopes:       scopes,
 		Flow:         flow,
 		Timeout:      timeout,
 		CallbackPort: callbackPort,
-		DeviceCodeCallback: func(_, authURL, _ string) {
-			select {
-			case authURLChan <- authURL:
-			default:
-			}
-		},
 	}
 
 	go func() {

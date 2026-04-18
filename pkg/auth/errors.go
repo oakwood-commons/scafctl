@@ -114,7 +114,7 @@ func IsInvalidScope(err error) bool {
 // returned by the token endpoint so callers can pass it into a re-authentication
 // request.
 type ClaimsChallengeError struct {
-	// Claims is the raw JSON claims challenge string from the token endpoint.
+	// Claims is the base64url-encoded claims challenge string from the token endpoint.
 	Claims string
 	// Scope is the scope that triggered the claims challenge.
 	Scope string

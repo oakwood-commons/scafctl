@@ -438,11 +438,12 @@ func (h *Handler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.T
 				"scope", qualifiedScope,
 			)
 			claimsCtx := ContextWithClaimsChallenge(ctx, claimsErr.Claims)
-			// Re-authenticate with the scope that triggered the challenge,
-			// using the same flow that was used for the original login.
+			// Re-authenticate with the scope that triggered the challenge.
+			// Force interactive flow so the claims payload is injected into
+			// the authorize URL; device-code flow does not support claims.
 			if _, loginErr := h.Login(claimsCtx, auth.LoginOptions{
 				Scopes: []string{qualifiedScope},
-				Flow:   userFlow,
+				Flow:   auth.FlowInteractive,
 			}); loginErr != nil {
 				return nil, fmt.Errorf("re-authentication for claims challenge failed: %w", loginErr)
 			}
