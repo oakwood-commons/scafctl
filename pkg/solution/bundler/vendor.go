@@ -164,6 +164,14 @@ func parseAndResolveRef(ctx context.Context, ref string, fetcher CatalogFetcher)
 	var bestVersion *semver.Version
 	for _, a := range artifacts {
 		if a.Reference.Version != nil && constraint.Check(a.Reference.Version) {
+			// Skip pre-release versions unless opted in via context
+			if catalog.IsPreRelease(a.Reference.Version) && !catalog.IncludePreReleaseFromContext(ctx) {
+				lgr.V(1).Info("skipping pre-release version for constraint",
+					"name", name,
+					"version", a.Reference.Version.String(),
+					"constraint", versionPart)
+				continue
+			}
 			if bestVersion == nil || a.Reference.Version.GreaterThan(bestVersion) {
 				bestVersion = a.Reference.Version
 			}

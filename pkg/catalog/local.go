@@ -373,6 +373,26 @@ func (c *LocalCatalog) resolveLocked(ctx context.Context, ref Reference) (Artifa
 		return ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
 	}
 
+	// Filter out pre-release versions unless explicitly included
+	if !IncludePreReleaseFromContext(ctx) {
+		stable := make([]ArtifactInfo, 0, len(artifacts))
+		for _, a := range artifacts {
+			if IsPreRelease(a.Reference.Version) {
+				c.logger.V(1).Info("skipping pre-release version",
+					"name", ref.Name,
+					"version", a.Reference.Version.String())
+				continue
+			}
+			stable = append(stable, a)
+		}
+		if len(stable) > 0 {
+			artifacts = stable
+		} else {
+			c.logger.V(1).Info("no stable versions found, falling back to pre-release",
+				"name", ref.Name)
+		}
+	}
+
 	// Sort by version descending and return highest
 	sort.Slice(artifacts, func(i, j int) bool {
 		vi := artifacts[i].Reference.Version
@@ -385,6 +405,10 @@ func (c *LocalCatalog) resolveLocked(ctx context.Context, ref Reference) (Artifa
 		}
 		return vi.GreaterThan(vj)
 	})
+
+	c.logger.V(1).Info("resolved latest version",
+		"name", ref.Name,
+		"version", artifacts[0].Reference.VersionOrDigest())
 
 	return artifacts[0], nil
 }

@@ -101,6 +101,11 @@ func runVendorUpdate(ctx context.Context, opts *UpdateOptions) error {
 		opts.BinaryName = settings.CliBinaryName
 	}
 
+	// Include pre-release versions when resolving if --pre-release is set
+	if opts.PreRelease {
+		ctx = catalog.WithIncludePreRelease(ctx)
+	}
+
 	lgr := logger.FromContext(ctx)
 
 	localCatalog, err := catalog.NewLocalCatalog(*lgr)

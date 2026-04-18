@@ -552,6 +552,26 @@ func (c *RemoteCatalog) resolveWithKind(ctx context.Context, ref Reference) (Art
 		return ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
 	}
 
+	// Filter out pre-release versions unless explicitly included
+	if !IncludePreReleaseFromContext(ctx) {
+		stable := make([]*semver.Version, 0, len(versions))
+		for _, v := range versions {
+			if IsPreRelease(v) {
+				c.logger.V(1).Info("skipping pre-release version",
+					"name", ref.Name,
+					"version", v.String())
+				continue
+			}
+			stable = append(stable, v)
+		}
+		if len(stable) > 0 {
+			versions = stable
+		} else {
+			c.logger.V(1).Info("no stable versions found, falling back to pre-release",
+				"name", ref.Name)
+		}
+	}
+
 	// Sort versions descending
 	sort.Slice(versions, func(i, j int) bool {
 		return versions[i].GreaterThan(versions[j])
@@ -559,6 +579,10 @@ func (c *RemoteCatalog) resolveWithKind(ctx context.Context, ref Reference) (Art
 
 	// Return highest version
 	ref.Version = versions[0]
+	c.logger.V(1).Info("resolved latest version",
+		"name", ref.Name,
+		"version", ref.Version.String(),
+		"catalog", c.name)
 	return c.resolveWithKind(ctx, ref)
 }
 
