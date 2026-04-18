@@ -133,3 +133,81 @@ func toolNames(tools []mcp.Tool) []string {
 	}
 	return names
 }
+
+// testFunc is a mock function for testing filter helpers.
+type testFunc struct {
+	name        string
+	description string
+	category    string
+}
+
+func (f testFunc) GetName() string        { return f.name }
+func (f testFunc) GetDescription() string { return f.description }
+
+func TestSearchFunctions(t *testing.T) {
+	functions := []testFunc{
+		{name: "json.marshal", description: "Serialize value to JSON string"},
+		{name: "yaml.marshal", description: "Serialize value to YAML string"},
+		{name: "base64.encode", description: "Encode string to base64"},
+		{name: "map.merge", description: "Deep-merge two maps"},
+	}
+
+	t.Run("matches name", func(t *testing.T) {
+		result, errResult := searchFunctions(functions, "json", "test", "test_tool")
+		assert.Nil(t, errResult)
+		assert.Len(t, result, 1)
+		assert.Equal(t, "json.marshal", result[0].name)
+	})
+
+	t.Run("matches description", func(t *testing.T) {
+		result, errResult := searchFunctions(functions, "serialize", "test", "test_tool")
+		assert.Nil(t, errResult)
+		assert.Len(t, result, 2)
+	})
+
+	t.Run("case insensitive", func(t *testing.T) {
+		result, errResult := searchFunctions(functions, "JSON", "test", "test_tool")
+		assert.Nil(t, errResult)
+		assert.Len(t, result, 1)
+	})
+
+	t.Run("no match returns error result", func(t *testing.T) {
+		result, errResult := searchFunctions(functions, "xyznonexistent", "test", "test_tool")
+		assert.Nil(t, result)
+		assert.NotNil(t, errResult)
+		assert.True(t, errResult.IsError)
+	})
+
+	t.Run("empty query returns all", func(t *testing.T) {
+		result, errResult := searchFunctions(functions, "", "test", "test_tool")
+		assert.Nil(t, errResult)
+		assert.Len(t, result, 4)
+	})
+}
+
+func TestBuildFunctionIndex(t *testing.T) {
+	functions := []testFunc{
+		{name: "json.marshal", category: "encoding"},
+		{name: "yaml.marshal", category: "encoding"},
+		{name: "size", category: "collections"},
+		{name: "trim", category: "strings"},
+	}
+
+	index := buildFunctionIndex(functions, func(f testFunc) string { return f.category }, nil)
+
+	assert.Contains(t, index, "# Summary (4 functions)")
+	assert.Contains(t, index, "## collections (1)")
+	assert.Contains(t, index, "## encoding (2)")
+	assert.Contains(t, index, "## strings (1)")
+	assert.Contains(t, index, "json.marshal")
+	assert.Contains(t, index, "yaml.marshal")
+}
+
+func TestBuildFunctionIndex_EmptyCategory(t *testing.T) {
+	functions := []testFunc{
+		{name: "foo", category: ""},
+	}
+
+	index := buildFunctionIndex(functions, func(f testFunc) string { return f.category }, nil)
+	assert.Contains(t, index, "## other (1)")
+}

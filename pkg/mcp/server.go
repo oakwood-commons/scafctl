@@ -222,6 +222,12 @@ Expression Debugging:
     When creating or editing Go templates (tmpl:) or CEL expressions (expr:) that reference resolvers,
     call extract_resolver_refs to determine which resolver names are referenced, then use those
     names in the dependsOn field.
+  Common CEL encoding/data functions (use list_cel_functions for full reference):
+    json.unmarshal(string) / json.marshal(value) -- JSON serialization
+    yaml.unmarshal(string) / yaml.marshal(value) -- YAML serialization
+    base64.encode(string) / base64.decode(string) -- Base64 encoding
+    regex.match(pattern, string) / regex.replace(string, pattern, replacement)
+    map.merge(map1, map2) -- deep-merge two maps
 
 Testing Workflow:
   - generate_test_scaffold: analyze a solution and generate starter test cases covering resolvers and actions

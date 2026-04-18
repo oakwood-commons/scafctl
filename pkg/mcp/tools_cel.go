@@ -36,6 +36,9 @@ func (s *Server) registerCELTools() {
 		mcp.WithString("category",
 			mcp.Description("Filter by category: 'strings', 'collections', 'encoding', 'math', 'time', 'filepath', 'debug', 'utility', 'language'. Omit to list all."),
 		),
+		mcp.WithString("search",
+			mcp.Description("Search functions by name or description (substring match). More flexible than 'name' which only matches function names."),
+		),
 	)
 	s.mcpServer.AddTool(listCELFunctionsTool, s.handleListCELFunctions)
 
@@ -72,6 +75,7 @@ func (s *Server) handleListCELFunctions(_ context.Context, request mcp.CallToolR
 	builtinOnly := request.GetBool("builtin_only", false)
 	name := request.GetString("name", "")
 	category := request.GetString("category", "")
+	search := request.GetString("search", "")
 
 	functions := ext.All()
 	if customOnly {
@@ -79,6 +83,11 @@ func (s *Server) handleListCELFunctions(_ context.Context, request mcp.CallToolR
 	} else if builtinOnly {
 		functions = ext.BuiltIn()
 	}
+
+	// Populate individual function names via CEL env introspection.
+	// Without this, built-in groups (e.g. "encoders") only show the group name
+	// and the AI cannot discover individual functions like base64.encode.
+	_ = ext.SetFunctionNames(functions)
 
 	if category != "" {
 		filtered := make(celexp.ExtFunctionList, 0, len(functions))
@@ -90,10 +99,43 @@ func (s *Server) handleListCELFunctions(_ context.Context, request mcp.CallToolR
 		functions = filtered
 	}
 
-	return filterAndReturnNamedFunctions(
-		functions, name,
-		"CEL function", "list_cel_functions",
-	)
+	// Apply search filter (matches name or description)
+	if search != "" {
+		filtered, errResult := searchFunctions(functions, search, "CEL function", "list_cel_functions")
+		if errResult != nil {
+			return errResult, nil
+		}
+		functions = filtered
+	}
+
+	// Apply name filter (matches name only)
+	if name != "" {
+		return filterAndReturnNamedFunctions(
+			functions, name,
+			"CEL function", "list_cel_functions",
+		)
+	}
+
+	// Build summary index + full function list
+	index := buildFunctionIndex(functions, func(f celexp.ExtFunction) string {
+		return f.Category
+	}, func(f celexp.ExtFunction) []string {
+		return f.FunctionNames
+	})
+
+	result, err := mcp.NewToolResultJSON(functions)
+	if err != nil {
+		return nil, err
+	}
+
+	// Prepend the summary index as a separate text content block
+	indexContent := mcp.TextContent{
+		Type: "text",
+		Text: index,
+	}
+	result.Content = append([]mcp.Content{indexContent}, result.Content...)
+
+	return result, nil
 }
 
 // handleEvaluateCEL evaluates a CEL expression against provided data.
