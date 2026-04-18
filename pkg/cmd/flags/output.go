@@ -27,6 +27,10 @@ type KvxOutputFlags struct {
 	// Where is a per-item CEL boolean filter applied to list data
 	Where string `json:"where,omitempty" yaml:"where,omitempty" doc:"Per-item CEL filter for list data" example:"_.enabled" maxLength:"4096"`
 
+	// FormatExplicit is true when the user explicitly set -o on the command line.
+	// Set automatically by the PreRunE hook via cobra Changed().
+	FormatExplicit bool `json:"-" yaml:"-"`
+
 	// AppName is the binary name shown in table headers and TUI title.
 	// Not a CLI flag -- set programmatically from settings.Run.BinaryName.
 	AppName string `json:"-" yaml:"-"`
@@ -124,6 +128,7 @@ func ToKvxOutputOptions(flags *KvxOutputFlags, opts ...kvx.OutputOption) *kvx.Ou
 	} else {
 		kvxOpts.Format = kvx.OutputFormatAuto
 	}
+	kvxOpts.FormatExplicit = flags.FormatExplicit
 
 	// Apply additional options
 	for _, opt := range opts {
@@ -131,6 +136,13 @@ func ToKvxOutputOptions(flags *KvxOutputFlags, opts ...kvx.OutputOption) *kvx.Ou
 	}
 
 	return kvxOpts
+}
+
+// ToKvxOutputOptionsFromCmd converts flag values to OutputOptions, auto-detecting
+// whether -o was explicitly set by checking cmd.Flags().Changed("output").
+func ToKvxOutputOptionsFromCmd(cmd *cobra.Command, flags *KvxOutputFlags, opts ...kvx.OutputOption) *kvx.OutputOptions {
+	flags.FormatExplicit = cmd.Flags().Changed("output")
+	return ToKvxOutputOptions(flags, opts...)
 }
 
 // NewKvxOutputOptionsFromFlags creates a new OutputOptions from command flags and options.

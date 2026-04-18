@@ -48,7 +48,7 @@ func TestBaseOutputFormats(t *testing.T) {
 	assert.Contains(t, formats, "test")
 	assert.Contains(t, formats, "tree")
 	assert.Contains(t, formats, "mermaid")
-	assert.Len(t, formats, 9)
+	assert.Len(t, formats, 10)
 }
 
 func TestIsStructuredFormat(t *testing.T) {
@@ -320,7 +320,7 @@ func TestNewOutputOptions_Defaults(t *testing.T) {
 	assert.Same(t, ioStreams, opts.IOStreams)
 }
 
-func TestOutputOptions_Write_TableFallbackToJSONWhenNotTTY(t *testing.T) {
+func TestOutputOptions_Write_TableFallbackToTextWhenNotTTY(t *testing.T) {
 	out := &bytes.Buffer{}
 	ioStreams := &terminal.IOStreams{Out: out}
 
@@ -331,7 +331,10 @@ func TestOutputOptions_Write_TableFallbackToJSONWhenNotTTY(t *testing.T) {
 	err := opts.Write(data)
 
 	require.NoError(t, err)
-	assert.Contains(t, out.String(), `"name": "test"`)
+	// Non-TTY output falls back to plain text table, not JSON
+	assert.Contains(t, out.String(), "name")
+	assert.Contains(t, out.String(), "test")
+	assert.NotContains(t, out.String(), `"name"`, "should not produce JSON output")
 }
 
 func TestOutputOptions_Write_InteractiveErrorWhenNotTTY(t *testing.T) {
@@ -377,6 +380,65 @@ func TestOutputOptions_Write_KvxNonTTY_WithInvalidExpression(t *testing.T) {
 	err := opts.Write(data)
 	// May or may not error depending on CEL env; just ensure no panic
 	_ = err
+}
+
+func TestOutputOptions_Write_TextFormat(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatText
+
+	data := map[string]any{"name": "test", "count": 42}
+	err := opts.Write(data)
+
+	require.NoError(t, err)
+	output := out.String()
+	assert.Contains(t, output, "name")
+	assert.Contains(t, output, "test")
+	assert.NotContains(t, output, `"name"`, "text format should not produce JSON")
+}
+
+func TestOutputOptions_Write_TextFormat_WithExpression(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatText
+	opts.Expression = "_.name"
+
+	data := map[string]any{"name": "filtered-value"}
+	err := opts.Write(data)
+
+	require.NoError(t, err)
+	assert.Contains(t, out.String(), "filtered-value")
+}
+
+func TestOutputOptions_Write_TextFormat_Scalar(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatText
+
+	err := opts.Write("hello world")
+
+	require.NoError(t, err)
+	assert.Equal(t, "hello world\n", out.String())
+}
+
+func TestParseOutputFormat_Text(t *testing.T) {
+	f, ok := ParseOutputFormat("text")
+	assert.True(t, ok)
+	assert.Equal(t, OutputFormatText, f)
+}
+
+func TestOutputOptions_FormatExplicit(t *testing.T) {
+	opts := NewOutputOptions(nil)
+	assert.False(t, opts.FormatExplicit, "default should be false")
+
+	WithFormatExplicit(true)(opts)
+	assert.True(t, opts.FormatExplicit)
 }
 
 func TestIsAutoFormat(t *testing.T) {

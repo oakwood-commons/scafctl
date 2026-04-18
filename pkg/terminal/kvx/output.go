@@ -48,6 +48,11 @@ const (
 
 	// OutputFormatMermaid renders data as a Mermaid flowchart diagram
 	OutputFormatMermaid OutputFormat = "mermaid"
+
+	// OutputFormatText renders a plain ASCII table without TUI or borders.
+	// Works in any context (TTY and non-TTY) and is the fallback for
+	// table/auto formats when output is piped.
+	OutputFormatText OutputFormat = "text"
 )
 
 // String returns the string representation of the output format.
@@ -64,6 +69,7 @@ func BaseOutputFormats() []string {
 		string(OutputFormatList),
 		string(OutputFormatTree),
 		string(OutputFormatMermaid),
+		string(OutputFormatText),
 		string(OutputFormatJSON),
 		string(OutputFormatYAML),
 		string(OutputFormatQuiet),
@@ -159,6 +165,8 @@ func ParseOutputFormat(s string) (OutputFormat, bool) {
 		return OutputFormatTree, true
 	case "mermaid":
 		return OutputFormatMermaid, true
+	case "text":
+		return OutputFormatText, true
 	default:
 		return "", false
 	}
@@ -178,6 +186,10 @@ type OutputOptions struct {
 
 	// Format specifies the output format (table, json, yaml, quiet)
 	Format OutputFormat `json:"format,omitempty" yaml:"format,omitempty" doc:"Output format" example:"table" maxLength:"10"`
+
+	// FormatExplicit is true when the user explicitly set -o on the command line.
+	// This distinguishes "auto by default" from "user chose auto" for fallback behavior.
+	FormatExplicit bool `json:"-" yaml:"-"`
 
 	// Interactive launches the kvx TUI for data exploration
 	Interactive bool `json:"interactive,omitempty" yaml:"interactive,omitempty" doc:"Launch interactive TUI mode"`
@@ -243,6 +255,11 @@ type OutputOption func(*OutputOptions)
 // WithOutputFormat sets the output format.
 func WithOutputFormat(format OutputFormat) OutputOption {
 	return func(o *OutputOptions) { o.Format = format }
+}
+
+// WithFormatExplicit marks the format as explicitly set by the user.
+func WithFormatExplicit(explicit bool) OutputOption {
+	return func(o *OutputOptions) { o.FormatExplicit = explicit }
 }
 
 // WithOutputFormatString sets the output format from a string.
@@ -352,6 +369,11 @@ func (o *OutputOptions) Write(data any) error {
 		return fmt.Errorf("output format %q is not supported by this command; supported formats: auto, table, list, json, yaml, quiet", OutputFormatTest)
 	}
 
+	// Text format: plain ASCII table, works in any context.
+	if o.Format == OutputFormatText {
+		return o.writeText(data)
+	}
+
 	// Determine if we should use kvx visual output
 	useKvx := IsKvxFormat(o.Format) || o.Interactive
 
@@ -385,30 +407,15 @@ func (o *OutputOptions) writeKvx(data any) error {
 
 	// Check terminal requirement for table/interactive output
 	if isTTYRequired && !IsTerminal(o.IOStreams.Out) {
-		// Auto-fallback to JSON when piped (unless interactive was explicitly requested)
+		// Interactive mode always requires a terminal.
 		if o.Interactive {
 			return fmt.Errorf("interactive mode requires a terminal; use -o json or -o yaml for piped output")
 		}
-		// Silently fall back to JSON for non-interactive piped output.
-		// Apply Where then Expression (same order as writeStructured).
-		outputData := data
-		var filterErr error
-		outputData, filterErr = applyWhereFilter(o.Where, outputData)
-		if filterErr != nil {
-			return filterErr
-		}
-		if o.Expression != "" {
-			ctx := o.Ctx
-			if ctx == nil {
-				ctx = context.Background()
-			}
-			var err error
-			outputData, err = EvaluateExpression(ctx, o.Expression, outputData)
-			if err != nil {
-				return fmt.Errorf("expression evaluation failed: %w", err)
-			}
-		}
-		return o.writeJSON(outputData)
+		// Fall back to plain text table for non-TTY output.
+		// This preserves human-readable output when piping instead of
+		// silently switching to JSON.
+		o.Format = OutputFormatText
+		return o.writeText(data)
 	}
 
 	// Build kvx options
@@ -428,7 +435,7 @@ func (o *OutputOptions) writeKvx(data any) error {
 		kvxOpts = append(kvxOpts, WithLayout("tree"))
 	case OutputFormatMermaid:
 		kvxOpts = append(kvxOpts, WithLayout("mermaid"))
-	case OutputFormatAuto, OutputFormatJSON, OutputFormatYAML, OutputFormatQuiet, OutputFormatTest:
+	case OutputFormatAuto, OutputFormatJSON, OutputFormatYAML, OutputFormatQuiet, OutputFormatTest, OutputFormatText:
 		// Auto and empty use default layout (auto).
 		// JSON/YAML/Quiet/Test are handled upstream and should not reach here,
 		// but are listed for exhaustiveness.
@@ -510,7 +517,7 @@ func (o *OutputOptions) writeStructured(data any) error {
 		return o.writeJSON(outputData)
 	case OutputFormatYAML:
 		return o.writeYAML(outputData)
-	case OutputFormatTable, OutputFormatAuto, OutputFormatList, OutputFormatTree, OutputFormatMermaid, OutputFormatQuiet, OutputFormatTest:
+	case OutputFormatTable, OutputFormatAuto, OutputFormatList, OutputFormatTree, OutputFormatMermaid, OutputFormatText, OutputFormatQuiet, OutputFormatTest:
 		// These formats are handled upstream (writeKvx or command-level test generation),
 		// and should not reach writeStructured.
 		return fmt.Errorf("unexpected output format in writeStructured: %s", o.Format)
@@ -534,6 +541,48 @@ func (o *OutputOptions) writeJSON(data any) error {
 	}
 
 	fmt.Fprintln(o.IOStreams.Out, string(jsonData))
+	return nil
+}
+
+// writeText renders data as a plain ASCII table without borders or colors.
+// This format works in any context (TTY and non-TTY) and is used as the
+// fallback when table/auto formats are piped to a non-terminal.
+func (o *OutputOptions) writeText(data any) error {
+	outputData := data
+
+	// Apply per-item Where filter
+	var err error
+	outputData, err = applyWhereFilter(o.Where, outputData)
+	if err != nil {
+		return err
+	}
+
+	// Apply expression filter if provided
+	if o.Expression != "" {
+		ctx := o.Ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		outputData, err = EvaluateExpression(ctx, o.Expression, outputData)
+		if err != nil {
+			return fmt.Errorf("expression evaluation failed: %w", err)
+		}
+	}
+
+	// Scalar values render as plain text
+	if isScalar(outputData) {
+		fmt.Fprintln(o.IOStreams.Out, outputData)
+		return nil
+	}
+
+	hints := resolveColumnHints(o.SchemaJSON, o.ColumnHints)
+	output := tui.RenderTable(outputData, tui.TableOptions{
+		Bordered:    false,
+		NoColor:     true,
+		ColumnOrder: o.ColumnOrder,
+		ColumnHints: hints,
+	})
+	fmt.Fprint(o.IOStreams.Out, output)
 	return nil
 }
 
