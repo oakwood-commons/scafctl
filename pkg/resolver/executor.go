@@ -838,8 +838,8 @@ func (e *Executor) executeResolvePhase(ctx context.Context, phase *ResolvePhase)
 			}
 		}
 
-		// Execute provider
-		value, err := e.executeProvider(ctx, source.Provider, source.Inputs)
+		// Execute provider in resolve (from) mode
+		value, err := e.executeProvider(provider.WithExecutionMode(ctx, provider.CapabilityFrom), source.Provider, source.Inputs)
 		providerCallCount++
 		attemptDuration := time.Since(attemptStart)
 
@@ -956,8 +956,8 @@ func (e *Executor) executeTransformPhase(ctx context.Context, phase *TransformPh
 			}
 		}
 
-		// Execute provider with __self set to current value
-		transformed, err := e.executeProviderWithSelf(ctx, transform.Provider, transform.Inputs, currentValue)
+		// Execute provider with __self set to current value (transform mode)
+		transformed, err := e.executeProviderWithSelf(provider.WithExecutionMode(ctx, provider.CapabilityTransform), transform.Provider, transform.Inputs, currentValue)
 		providerCallCount++
 		attemptDuration := time.Since(attemptStart)
 
@@ -1086,8 +1086,8 @@ func (e *Executor) executeForEachTransform(ctx context.Context, transform *Provi
 				}
 			}
 
-			// Execute provider with iteration context
-			result, err := e.executeProviderWithIterationContext(ctx, transform.Provider, transform.Inputs, currentValue, iterCtx)
+			// Execute provider with iteration context (transform mode)
+			result, err := e.executeProviderWithIterationContext(provider.WithExecutionMode(ctx, provider.CapabilityTransform), transform.Provider, transform.Inputs, currentValue, iterCtx)
 			providerCallCountMu.Lock()
 			providerCallCount++
 			providerCallCountMu.Unlock()

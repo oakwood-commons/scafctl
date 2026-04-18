@@ -73,3 +73,24 @@ func TestErrorHelpers(t *testing.T) {
 	assert.True(t, IsInvalidScope(fmt.Errorf("scope: %w", ErrInvalidScope)))
 	assert.False(t, IsInvalidScope(ErrConsentRequired))
 }
+
+func TestClaimsChallengeError(t *testing.T) {
+	err := &ClaimsChallengeError{
+		Claims: `{"access_token":{"acrs":{"essential":true}}}`,
+		Scope:  "https://graph.microsoft.com/.default",
+	}
+
+	assert.Contains(t, err.Error(), "claims challenge")
+	assert.Contains(t, err.Error(), "https://graph.microsoft.com/.default")
+	assert.True(t, errors.Is(err, ErrClaimsChallenge))
+	assert.True(t, IsClaimsChallenge(err))
+	assert.True(t, IsClaimsChallenge(fmt.Errorf("wrapped: %w", err)))
+	assert.False(t, IsClaimsChallenge(ErrTokenExpired))
+}
+
+func TestClaimsChallengeError_Unwrap(t *testing.T) {
+	err := &ClaimsChallengeError{Claims: "claims", Scope: "scope"}
+	var target *ClaimsChallengeError
+	assert.True(t, errors.As(err, &target))
+	assert.Equal(t, "claims", target.Claims)
+}

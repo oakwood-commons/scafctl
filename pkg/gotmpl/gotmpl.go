@@ -630,7 +630,7 @@ func Execute(ctx context.Context, opts TemplateOptions) (*ExecuteResult, error) 
 // Use leftDelim/rightDelim to override the default "{{" / "}}" delimiters
 // (pass empty strings for defaults).
 func ValidateSyntax(content, leftDelim, rightDelim string) error {
-	tmpl := template.New("validate")
+	tmpl := template.New("validate").Funcs(getExtensionFuncMap())
 
 	switch {
 	case leftDelim != "" && rightDelim != "":

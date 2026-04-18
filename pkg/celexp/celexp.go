@@ -155,6 +155,11 @@ func (f ExtFunction) GetName() string {
 	return f.Name
 }
 
+// GetDescription returns the function description for search filtering.
+func (f ExtFunction) GetDescription() string {
+	return f.Description
+}
+
 // Example represents a usage example for a CEL extension function,
 // including the expression to evaluate and the expected result.
 type Example struct {

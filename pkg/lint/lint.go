@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"text/template"
 	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -560,9 +559,10 @@ func validateCELSyntax(expr string) error {
 }
 
 // validateTemplateSyntax checks if a Go template is syntactically valid.
+// Delegates to gotmpl.ValidateSyntax so that sprig and custom extension
+// functions are registered during parsing, matching runtime behavior.
 func validateTemplateSyntax(tmpl string) error {
-	_, err := template.New("lint").Parse(tmpl)
-	return err
+	return gotmpl.ValidateSyntax(tmpl, "", "")
 }
 
 func collectReferencedResolvers(sol *solution.Solution) map[string]bool {

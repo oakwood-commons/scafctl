@@ -276,6 +276,32 @@ func (p *GitHubProvider) executeGetPullRequest(ctx context.Context, client *http
       commits { totalCount }
       comments { totalCount }
       reviews { totalCount }
+      statusCheckRollup: commits(last: 1) {
+        nodes {
+          commit {
+            statusCheckRollup {
+              state
+              contexts(first: 50) {
+                nodes {
+                  ... on CheckRun {
+                    __typename
+                    name
+                    status
+                    conclusion
+                    detailsUrl
+                  }
+                  ... on StatusContext {
+                    __typename
+                    context
+                    state
+                    targetUrl
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 }`
@@ -289,6 +315,10 @@ func (p *GitHubProvider) executeGetPullRequest(ctx context.Context, client *http
 	if err != nil {
 		return nil, err
 	}
+
+	// Flatten statusCheckRollup into a top-level field
+	flattenStatusCheckRollup(pr)
+
 	return readOutput(pr), nil
 }
 
@@ -561,6 +591,44 @@ func (p *GitHubProvider) executeGetHeadOID(ctx context.Context, client *httpc.Cl
 	}), nil
 }
 
+// ─── PR Comments ─────────────────────────────────────────────────────────────
+
+func (p *GitHubProvider) executeListPRComments(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
+	num, ok := getIntInput(inputs, "number")
+	if !ok || num == 0 {
+		return nil, fmt.Errorf("'number' is required for list_pr_comments operation")
+	}
+	perPage := getPerPage(inputs)
+
+	query := `query($owner: String!, $name: String!, $number: Int!, $first: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      comments(first: $first) {
+        nodes {
+          id
+          body
+          createdAt
+          updatedAt
+          author { login }
+          url
+        }
+      }
+    }
+  }
+}`
+	vars := map[string]any{"owner": owner, "name": repo, "number": num, "first": perPage}
+	data, err := graphqlDo(ctx, client, apiBase, query, vars)
+	if err != nil {
+		return nil, err
+	}
+
+	nodes, err := extractNodes(data, "repository.pullRequest.comments")
+	if err != nil {
+		return nil, err
+	}
+	return readOutput(nodes), nil
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 // mapPRState converts user-friendly state strings to GitHub GraphQL PullRequestState enums.
@@ -599,4 +667,45 @@ func pathBasename(p string) string {
 		return p[idx+1:]
 	}
 	return p
+}
+
+// flattenStatusCheckRollup extracts the nested statusCheckRollup from the aliased
+// commits field and replaces it with a flattened representation containing
+// the rollup state and individual check contexts.
+func flattenStatusCheckRollup(pr map[string]any) {
+	raw, ok := pr["statusCheckRollup"]
+	if !ok {
+		return
+	}
+
+	nodesWrapper, ok := raw.(map[string]any)
+	if !ok {
+		return
+	}
+	nodes, ok := nodesWrapper["nodes"].([]any)
+	if !ok || len(nodes) == 0 {
+		return
+	}
+	commitWrapper, ok := nodes[0].(map[string]any)
+	if !ok {
+		return
+	}
+	commit, ok := commitWrapper["commit"].(map[string]any)
+	if !ok {
+		return
+	}
+	rollup, ok := commit["statusCheckRollup"].(map[string]any)
+	if !ok {
+		return
+	}
+
+	result := map[string]any{
+		"state": rollup["state"],
+	}
+	if contexts, ok := rollup["contexts"].(map[string]any); ok {
+		if ctxNodes, ok := contexts["nodes"].([]any); ok {
+			result["checks"] = ctxNodes
+		}
+	}
+	pr["statusCheckRollup"] = result
 }

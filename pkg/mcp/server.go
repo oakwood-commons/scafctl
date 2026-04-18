@@ -222,6 +222,12 @@ Expression Debugging:
     When creating or editing Go templates (tmpl:) or CEL expressions (expr:) that reference resolvers,
     call extract_resolver_refs to determine which resolver names are referenced, then use those
     names in the dependsOn field.
+  Common CEL encoding/data functions (use list_cel_functions for full reference):
+    json.unmarshal(string) / json.marshal(value) -- JSON serialization
+    yaml.unmarshal(string) / yaml.marshal(value) -- YAML serialization
+    base64.encode(string) / base64.decode(string) -- Base64 encoding
+    regex.match(pattern, string) / regex.replace(string, pattern, replacement)
+    map.merge(map1, map2) -- deep-merge two maps
 
 Testing Workflow:
   - generate_test_scaffold: analyze a solution and generate starter test cases covering resolvers and actions
@@ -623,19 +629,25 @@ func (s *Server) Info() ([]byte, error) {
 		Version: s.version,
 	}
 
-	// Extract tool info from registered tools
+	// Extract tool info from registered tools, applying the contextual
+	// filter so the output matches what MCP clients actually discover.
 	registered := s.mcpServer.ListTools()
-	names := make([]string, 0, len(registered))
-	for name := range registered {
-		names = append(names, name)
+	allTools := make([]mcp.Tool, 0, len(registered))
+	for _, st := range registered {
+		allTools = append(allTools, st.Tool)
 	}
-	sort.Strings(names)
 
-	for _, name := range names {
-		st := registered[name]
+	filterFn := contextualToolFilter(s)
+	visible := filterFn(context.Background(), allTools)
+
+	sort.Slice(visible, func(i, j int) bool {
+		return visible[i].Name < visible[j].Name
+	})
+
+	for _, tool := range visible {
 		info.Tools = append(info.Tools, toolInfo{
-			Name:        st.Tool.Name,
-			Description: st.Tool.Description,
+			Name:        tool.Name,
+			Description: tool.Description,
 		})
 	}
 

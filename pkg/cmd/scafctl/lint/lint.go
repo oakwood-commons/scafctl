@@ -27,6 +27,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
 
@@ -164,11 +165,34 @@ func runLint(ctx context.Context, opts *Options) error {
 		lgr.V(1).Info("catalog not available for solution resolution", "error", err)
 	}
 
-	getter := get.NewGetter(getterOpts...)
+	getter := get.NewGetterFromContext(ctx, getterOpts...)
+
+	// Emit verbose discovery information
+	if w := writer.FromContext(ctx); w != nil && w.VerboseEnabled() {
+		switch opts.File {
+		case "":
+			binaryName := settings.CliBinaryName
+			if opts.CliParams != nil && opts.CliParams.BinaryName != "" {
+				binaryName = opts.CliParams.BinaryName
+			}
+			w.Verbosef("Auto-discovering solution (binary=%s)", binaryName)
+			w.Verbosef("  Search folders: %v", settings.SolutionFoldersFor(binaryName))
+			w.Verbosef("  Search filenames: %v", settings.SolutionFileNamesFor(binaryName))
+		case "-":
+			w.Verbose("Loading solution from stdin")
+		default:
+			w.Verbosef("Loading solution from: %s", opts.File)
+		}
+	}
+
 	sol, err := getter.Get(ctx, opts.File)
 	if err != nil {
 		writeError(opts, fmt.Sprintf("failed to load solution: %v", err))
 		return exitcode.WithCode(err, exitcode.FileNotFound)
+	}
+
+	if w := writer.FromContext(ctx); w != nil && w.VerboseEnabled() {
+		w.Verbosef("Solution loaded: %s (version=%s)", sol.Metadata.Name, sol.Metadata.Version)
 	}
 
 	lgr.V(1).Info("linting solution", "file", opts.File, "name", sol.Metadata.Name)

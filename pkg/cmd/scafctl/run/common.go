@@ -186,6 +186,11 @@ type sharedResolverOptions struct {
 	// instead of CWD. Use "." to explicitly set CWD.
 	BaseDir string
 
+	// PreRelease includes pre-release versions (e.g. 1.0.0-beta.1) when
+	// resolving the latest catalog version. By default, pre-release versions
+	// are excluded.
+	PreRelease bool
+
 	// kvx output integration (shared flags)
 	flags.KvxOutputFlags
 
@@ -540,6 +545,8 @@ func (o *sharedResolverOptions) executeResolvers(
 // This method delegates to the standalone prepare.PrepareSolution function,
 // passing CLI-specific options (getter, registry, stdin, metrics).
 func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context) (*solution.Solution, *provider.Registry, string, func(), error) {
+	w := writer.FromContext(ctx)
+
 	var opts []prepare.Option
 
 	if o.getter != nil {
@@ -565,9 +572,36 @@ func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context)
 		}))
 	}
 
+	// Emit verbose discovery information before loading
+	if w != nil && w.VerboseEnabled() {
+		switch o.File {
+		case "":
+			binaryName := settings.CliBinaryName
+			if o.CliParams != nil && o.CliParams.BinaryName != "" {
+				binaryName = o.CliParams.BinaryName
+			}
+			folders := settings.SolutionFoldersFor(binaryName)
+			fileNames := settings.SolutionFileNamesFor(binaryName)
+			w.Verbosef("Auto-discovering solution (binary=%s)", binaryName)
+			w.Verbosef("  Search folders: %v", folders)
+			w.Verbosef("  Search filenames: %v", fileNames)
+		case "-":
+			w.Verbose("Loading solution from stdin")
+		default:
+			w.Verbosef("Loading solution from: %s", o.File)
+		}
+	}
+
 	result, err := prepare.Solution(ctx, o.File, opts...)
 	if err != nil {
 		return nil, nil, "", func() {}, err
+	}
+
+	if w != nil && w.VerboseEnabled() {
+		w.Verbosef("Solution loaded: %s (version=%s, dir=%s)",
+			result.Solution.Metadata.Name,
+			result.Solution.Metadata.Version,
+			result.SolutionDir)
 	}
 
 	return result.Solution, result.Registry, result.SolutionDir, result.Cleanup, nil
@@ -660,6 +694,7 @@ func addSharedResolverFlags(cCmd *cobra.Command, o *sharedResolverOptions) {
 	cCmd.Flags().StringVar(&o.TestName, "test-name", "", "Test name for -o test output (derived from command and args when not set)")
 	cCmd.Flags().StringVar(&o.OutputDir, "output-dir", "", "Target directory for action file operations (actions resolve relative paths here instead of CWD)")
 	cCmd.Flags().StringVar(&o.BaseDir, "base-dir", "", "Override base directory for resolver path resolution (when unset, paths resolve from CWD)")
+	cCmd.Flags().BoolVar(&o.PreRelease, "pre-release", false, "Include pre-release versions when resolving latest from catalog")
 }
 
 // writeMetrics outputs provider execution metrics to stderr

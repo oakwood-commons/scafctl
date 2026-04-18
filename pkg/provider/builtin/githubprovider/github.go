@@ -58,6 +58,11 @@ var allOperations = []string{
 	"list_pull_requests", "get_pull_request",
 	"list_issues", "get_issue", "list_issue_comments",
 	"list_branches", "get_branch", "list_tags",
+	"list_pr_comments",
+	// Review thread operations
+	"list_review_threads", "reply_to_review_thread", "resolve_review_thread",
+	// CI/CD check operations (REST)
+	"list_check_runs", "get_workflow_run",
 	// Issue write operations
 	"create_issue", "update_issue", "create_issue_comment",
 	// PR write operations
@@ -79,7 +84,10 @@ var readOperations = map[string]bool{
 	"list_pull_requests": true, "get_pull_request": true,
 	"list_issues": true, "get_issue": true, "list_issue_comments": true,
 	"list_branches": true, "get_branch": true, "list_tags": true,
-	"get_head_oid": true,
+	"get_head_oid":        true,
+	"list_pr_comments":    true,
+	"list_review_threads": true,
+	"list_check_runs":     true, "get_workflow_run": true,
 }
 
 // GitHubProvider implements GitHub API operations as a provider.
@@ -136,8 +144,8 @@ func NewGitHubProvider(opts ...Option) *GitHubProvider {
 			DisplayName: "GitHub API",
 			APIVersion:  "v1",
 			Version:     version,
-			Description: "Interact with GitHub via GraphQL (reads, issues, PRs, signed commits, branches, tags, " +
-				"repos, branch protection) and REST (releases, tag protection, security settings). " +
+			Description: "Interact with GitHub via GraphQL (reads, issues, PRs, review threads, signed commits, branches, tags, " +
+				"repos, branch protection) and REST (releases, CI check runs, workflow runs, tag protection, security settings). " +
 				"Uses the configured GitHub auth handler automatically. " +
 				"Commit operations use createCommitOnBranch for GPG-signed multi-file atomic commits.",
 			Category: "data",
@@ -277,6 +285,39 @@ include_refs: ["refs/tags/v*"]
 allow_deletions: false
 allow_force_pushes: false`,
 				},
+				{
+					Name:        "List PR review threads",
+					Description: "Fetch all review threads for a pull request",
+					YAML: `operation: list_review_threads
+owner: my-org
+repo: my-repo
+number: 42`,
+				},
+				{
+					Name:        "Reply to a review thread",
+					Description: "Post a reply to a PR review thread",
+					YAML: `operation: reply_to_review_thread
+owner: my-org
+repo: my-repo
+thread_id: "PRT_kwDOABC123"
+body: "Fixed, thanks!"`,
+				},
+				{
+					Name:        "Check CI status",
+					Description: "List check runs for a commit or branch",
+					YAML: `operation: list_check_runs
+owner: my-org
+repo: my-repo
+ref: main`,
+				},
+				{
+					Name:        "Get workflow run details",
+					Description: "Fetch a workflow run with job details (replaces gh run view)",
+					YAML: `operation: get_workflow_run
+owner: my-org
+repo: my-repo
+run_id: 12345678`,
+				},
 			},
 			Links: []provider.Link{
 				{Name: "GitHub GraphQL API", URL: "https://docs.github.com/en/graphql"},
@@ -357,6 +398,17 @@ func buildInputSchema() *jsonschema.Schema {
 			"assignees": schemahelper.ArrayProp("Assignee login usernames",
 				schemahelper.WithItems(schemahelper.StringProp("Username")),
 				schemahelper.WithMaxItems(10),
+			),
+			"state_reason": schemahelper.StringProp("Reason for closing an issue (for update_issue with state=closed)",
+				schemahelper.WithEnum("completed", "not_planned", "reopened"),
+			),
+
+			// --- Review thread fields ---
+			"thread_id": schemahelper.StringProp("Review thread node ID (for reply_to_review_thread and resolve_review_thread operations)"),
+
+			// --- CI/CD fields ---
+			"run_id": schemahelper.IntProp("Workflow run ID for get_workflow_run",
+				schemahelper.WithMinimum(1),
 			),
 
 			// --- PR fields ---
@@ -583,6 +635,8 @@ func (p *GitHubProvider) Execute(ctx context.Context, input any) (*provider.Outp
 		result, err = p.executeGetIssue(ctx, client, apiBase, owner, repo, inputs)
 	case "list_issue_comments":
 		result, err = p.executeListIssueComments(ctx, client, apiBase, owner, repo, inputs)
+	case "list_pr_comments":
+		result, err = p.executeListPRComments(ctx, client, apiBase, owner, repo, inputs)
 	case "list_branches":
 		result, err = p.executeListBranches(ctx, client, apiBase, owner, repo, inputs)
 	case "get_branch":
@@ -591,6 +645,20 @@ func (p *GitHubProvider) Execute(ctx context.Context, input any) (*provider.Outp
 		result, err = p.executeListTags(ctx, client, apiBase, owner, repo, inputs)
 	case "get_head_oid":
 		result, err = p.executeGetHeadOID(ctx, client, apiBase, owner, repo, inputs)
+
+	// --- Review thread operations (GraphQL) ---
+	case "list_review_threads":
+		result, err = p.executeListReviewThreads(ctx, client, apiBase, owner, repo, inputs)
+	case "reply_to_review_thread":
+		result, err = p.executeReplyToReviewThread(ctx, client, apiBase, owner, repo, inputs)
+	case "resolve_review_thread":
+		result, err = p.executeResolveReviewThread(ctx, client, apiBase, owner, repo, inputs)
+
+	// --- CI/CD check operations (REST) ---
+	case "list_check_runs":
+		result, err = p.executeListCheckRuns(ctx, client, apiBase, owner, repo, inputs)
+	case "get_workflow_run":
+		result, err = p.executeGetWorkflowRun(ctx, client, apiBase, owner, repo, inputs)
 
 	// --- Issue write operations (GraphQL mutations) ---
 	case "create_issue":
