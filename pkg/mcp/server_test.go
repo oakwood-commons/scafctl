@@ -131,17 +131,13 @@ func TestServerInfo(t *testing.T) {
 		for _, t := range parsed.Tools {
 			toolNames[t.Name] = true
 		}
-		assert.True(t, toolNames["list_solutions"])
+		// Always-visible tools
 		assert.True(t, toolNames["inspect_solution"])
 		assert.True(t, toolNames["lint_solution"])
-		assert.True(t, toolNames["list_providers"])
-		assert.True(t, toolNames["get_provider_schema"])
 		assert.True(t, toolNames["list_cel_functions"])
 		// Phase 3 tools
 		assert.True(t, toolNames["evaluate_cel"])
 		assert.True(t, toolNames["render_solution"])
-		assert.True(t, toolNames["auth_status"])
-		assert.True(t, toolNames["catalog_list"])
 		// Phase 4 tools
 		assert.True(t, toolNames["get_solution_schema"])
 		assert.True(t, toolNames["explain_kind"])
@@ -158,6 +154,52 @@ func TestServerInfo(t *testing.T) {
 		assert.True(t, toolNames["preview_action"])
 		// Diff tools
 		assert.True(t, toolNames["diff_solution"])
+
+		// Contextually-filtered tools should NOT appear without deps
+		assert.False(t, toolNames["list_solutions"], "list_solutions requires catalogs")
+		assert.False(t, toolNames["catalog_list"], "catalog_list requires catalogs")
+		assert.False(t, toolNames["catalog_inspect"], "catalog_inspect requires catalogs")
+		assert.False(t, toolNames["auth_status"], "auth_status requires auth handlers")
+		assert.False(t, toolNames["list_auth_handlers"], "list_auth_handlers requires auth handlers")
+		assert.False(t, toolNames["list_providers"], "list_providers requires registry")
+		assert.False(t, toolNames["get_provider_schema"], "get_provider_schema requires registry")
+	})
+
+	t.Run("filtered tools visible with dependencies", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		authReg := auth.NewRegistry()
+		cfg := &config.Config{
+			Version:  1,
+			Catalogs: []config.CatalogConfig{{Name: "test", URL: "https://example.com"}},
+		}
+
+		srv, err := NewServer(
+			WithServerRegistry(reg),
+			WithServerAuthRegistry(authReg),
+			WithServerConfig(cfg),
+		)
+		require.NoError(t, err)
+
+		info, err := srv.Info()
+		require.NoError(t, err)
+
+		var parsed struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		}
+		err = json.Unmarshal(info, &parsed)
+		require.NoError(t, err)
+
+		toolNames := make(map[string]bool)
+		for _, tool := range parsed.Tools {
+			toolNames[tool.Name] = true
+		}
+		assert.True(t, toolNames["list_solutions"], "list_solutions should be visible with catalogs")
+		assert.True(t, toolNames["catalog_list"], "catalog_list should be visible with catalogs")
+		assert.True(t, toolNames["catalog_inspect"], "catalog_inspect should be visible with catalogs")
+		assert.True(t, toolNames["list_providers"], "list_providers should be visible with registry")
+		assert.True(t, toolNames["get_provider_schema"], "get_provider_schema should be visible with registry")
 	})
 }
 

@@ -110,7 +110,7 @@ func LoadSolution(ctx context.Context, path string) (*solution.Solution, error) 
 		lgr.V(1).Info("catalog not available for solution resolution", "error", err)
 	}
 
-	getter := get.NewGetter(getterOpts...)
+	getter := get.NewGetterFromContext(ctx, getterOpts...)
 	sol, err := getter.Get(ctx, path)
 	if err != nil {
 		return nil, exitcode.WithCode(
@@ -118,6 +118,8 @@ func LoadSolution(ctx context.Context, path string) (*solution.Solution, error) 
 			exitcode.FileNotFound,
 		)
 	}
+
+	lgr.V(1).Info("solution loaded", "name", sol.Metadata.Name, "version", sol.Metadata.Version, "path", sol.GetPath())
 
 	return sol, nil
 }

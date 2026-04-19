@@ -107,7 +107,10 @@ func TestAuthCodeLogin_Success(t *testing.T) {
 	assert.Contains(t, capturedAuthURL, "/oauth2/v2.0/authorize")
 	assert.Contains(t, capturedAuthURL, "response_type=code")
 	assert.Contains(t, capturedAuthURL, "code_challenge_method=S256")
-	assert.Contains(t, capturedAuthURL, "prompt=select_account")
+	// prompt= must NOT be set by default so the browser sends the device PRT
+	// (Primary Refresh Token) for Conditional Access device compliance.
+	assert.NotContains(t, capturedAuthURL, "prompt=",
+		"default auth URL must not include prompt= so the browser's SSO/PRT is used")
 	assert.Contains(t, capturedAuthURL, "client_id=")
 
 	// Verify token exchange request
@@ -389,13 +392,21 @@ func TestAuthCodeLogin_BrowserOpenFails_PrintsURL(t *testing.T) {
 	// Browser fails to open, but we simulate the redirect manually
 	// (as a user would by copying the URL)
 	var callbackMessage string
-	var capturedRedirectURI string
+
+	// Use a buffered channel to safely pass captured values from BrowserOpener
+	// to the goroutine that simulates the redirect -- avoids data race.
+	type authCapture struct {
+		redirectURI string
+		state       string
+	}
+	captureCh := make(chan authCapture, 1)
 	originalOpener := BrowserOpener
-	var capturedState string
 	BrowserOpener = func(_ context.Context, authURL string) error {
 		parsed, _ := url.Parse(authURL)
-		capturedRedirectURI = parsed.Query().Get("redirect_uri")
-		capturedState = parsed.Query().Get("state")
+		captureCh <- authCapture{
+			redirectURI: parsed.Query().Get("redirect_uri"),
+			state:       parsed.Query().Get("state"),
+		}
 		return fmt.Errorf("no browser available")
 	}
 	defer func() { BrowserOpener = originalOpener }()
@@ -409,14 +420,14 @@ func TestAuthCodeLogin_BrowserOpenFails_PrintsURL(t *testing.T) {
 		"scope":         "openid profile offline_access",
 	})
 
-	// Simulate the user manually opening the URL after seeing the message
+	// Simulate the user manually opening the URL after seeing the message.
+	// Waits for BrowserOpener to send captured values before redirecting.
 	go func() {
-		// Wait for the browser opener to be called and fail
-		time.Sleep(200 * time.Millisecond)
-		for capturedRedirectURI == "" {
-			time.Sleep(50 * time.Millisecond)
+		select {
+		case info := <-captureCh:
+			_ = simulateBrowserRedirect(info.redirectURI, "manual-code", info.state)
+		case <-time.After(5 * time.Second):
 		}
-		_ = simulateBrowserRedirect(capturedRedirectURI, "manual-code", capturedState)
 	}()
 
 	ctx := context.Background()
@@ -435,33 +446,26 @@ func TestAuthCodeLogin_BrowserOpenFails_PrintsURL(t *testing.T) {
 	_ = callbackMessage
 }
 
-func TestAuthCodeLogin_DefaultFlowIsInteractive(t *testing.T) {
+func TestDefaultFlowIsDeviceCode(t *testing.T) {
 	store := secrets.NewMockStore()
 	mockHTTP := NewMockHTTPClient()
 
 	handler, err := New(
-		WithConfig(DefaultConfig()),
+		WithConfig(fastPollConfig()),
 		WithSecretStore(store),
 		WithHTTPClient(mockHTTP),
 	)
 	require.NoError(t, err)
 
-	// When no flow is specified and no env credentials, should use auth code
-	var browserCalled bool
-	originalOpener := BrowserOpener
-	BrowserOpener = func(ctx context.Context, authURL string) error {
-		browserCalled = true
-		parsed, _ := url.Parse(authURL)
-		redirectURI := parsed.Query().Get("redirect_uri")
-		state := parsed.Query().Get("state")
-		go func() {
-			time.Sleep(50 * time.Millisecond)
-			_ = simulateBrowserRedirect(redirectURI, "test-code", state)
-		}()
-		return nil
-	}
-	defer func() { BrowserOpener = originalOpener }()
-
+	// Mock device code + token responses
+	mockHTTP.AddResponse(http.StatusOK, map[string]any{
+		"device_code":      "test-device-code",
+		"user_code":        "WXYZ-5678",
+		"verification_uri": "https://microsoft.com/devicelogin",
+		"expires_in":       900,
+		"interval":         0,
+		"message":          "To sign in, use a web browser...",
+	})
 	mockHTTP.AddResponse(http.StatusOK, map[string]any{
 		"access_token":  "test-access-token",
 		"refresh_token": "test-refresh-token",
@@ -470,15 +474,25 @@ func TestAuthCodeLogin_DefaultFlowIsInteractive(t *testing.T) {
 		"scope":         "openid profile offline_access",
 	})
 
+	var callbackCalled bool
 	ctx := context.Background()
-	// Login with no explicit flow (empty Flow field)
+	// Login with no explicit flow (empty Flow field) -- should use device code.
 	result, err := handler.Login(ctx, auth.LoginOptions{
 		Timeout: 10 * time.Second,
+		DeviceCodeCallback: func(userCode, verificationURI, message string) {
+			callbackCalled = true
+		},
 	})
 
 	require.NoError(t, err)
 	assert.NotNil(t, result)
-	assert.True(t, browserCalled, "browser should have been opened for default interactive flow")
+	assert.True(t, callbackCalled, "device code callback should have been called for default flow")
+
+	// Verify device code endpoint was called (first request)
+	requests := mockHTTP.GetRequests()
+	require.GreaterOrEqual(t, len(requests), 1)
+	assert.Contains(t, requests[0].Endpoint, "/devicecode",
+		"default flow should hit the device code endpoint, not the authorize endpoint")
 }
 
 func TestExchangeAuthCode_NoClientSecret(t *testing.T) {

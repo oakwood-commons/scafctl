@@ -78,6 +78,14 @@ func aadstsHint(desc string) string {
 			"go to App registrations → your app → Authentication → Add a platform → " +
 			"'Mobile and desktop applications', then add http://localhost as a redirect URI. " +
 			"Alternatively, use '--flow device-code' which does not require a redirect URI"
+
+	// AADSTS53003: Access has been blocked by Conditional Access policies.
+	// A Conditional Access policy requires additional claims (MFA, compliant
+	// device, etc.).  The token endpoint returns a claims challenge that must
+	// be passed back in a new interactive authentication request.
+	case strings.Contains(desc, "AADSTS53003"):
+		return "a Conditional Access policy blocked this request; " +
+			"re-authenticate interactively so the required claims (e.g. MFA, device compliance) can be satisfied"
 	}
 
 	return ""

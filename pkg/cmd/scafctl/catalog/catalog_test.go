@@ -712,3 +712,79 @@ func TestVerboseRemoteInfo_ExpiredToken(t *testing.T) {
 	output := errBuf.String()
 	assert.Contains(t, output, "EXPIRED")
 }
+
+func TestFilterPreReleaseArtifacts(t *testing.T) {
+	t.Parallel()
+
+	mustParse := func(v string) *semver.Version {
+		return semver.MustParse(v)
+	}
+
+	tests := []struct {
+		name     string
+		input    []catalog.ArtifactInfo
+		wantLen  int
+		wantVers []string
+	}{
+		{
+			name: "filters out pre-release versions",
+			input: []catalog.ArtifactInfo{
+				{Reference: catalog.Reference{Name: "a", Version: mustParse("1.0.0")}},
+				{Reference: catalog.Reference{Name: "a", Version: mustParse("1.1.0-beta.1")}},
+				{Reference: catalog.Reference{Name: "a", Version: mustParse("0.9.0")}},
+			},
+			wantLen:  2,
+			wantVers: []string{"1.0.0", "0.9.0"},
+		},
+		{
+			name: "keeps all if no pre-releases",
+			input: []catalog.ArtifactInfo{
+				{Reference: catalog.Reference{Name: "a", Version: mustParse("1.0.0")}},
+				{Reference: catalog.Reference{Name: "a", Version: mustParse("2.0.0")}},
+			},
+			wantLen:  2,
+			wantVers: []string{"1.0.0", "2.0.0"},
+		},
+		{
+			name: "returns all if only pre-releases exist",
+			input: []catalog.ArtifactInfo{
+				{Reference: catalog.Reference{Name: "a", Version: mustParse("1.0.0-alpha")}},
+				{Reference: catalog.Reference{Name: "a", Version: mustParse("2.0.0-rc.1")}},
+			},
+			wantLen:  2,
+			wantVers: []string{"1.0.0-alpha", "2.0.0-rc.1"},
+		},
+		{
+			name:     "handles empty slice",
+			input:    []catalog.ArtifactInfo{},
+			wantLen:  0,
+			wantVers: nil,
+		},
+		{
+			name: "handles nil version gracefully",
+			input: []catalog.ArtifactInfo{
+				{Reference: catalog.Reference{Name: "a", Version: nil}},
+				{Reference: catalog.Reference{Name: "a", Version: mustParse("1.0.0-beta")}},
+			},
+			wantLen:  1,
+			wantVers: []string{""},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := filterPreReleaseArtifacts(tt.input)
+			assert.Len(t, result, tt.wantLen)
+			if tt.wantVers != nil {
+				for i, v := range tt.wantVers {
+					if result[i].Reference.Version != nil {
+						assert.Equal(t, v, result[i].Reference.Version.String())
+					} else {
+						assert.Equal(t, v, "")
+					}
+				}
+			}
+		})
+	}
+}

@@ -15,11 +15,16 @@ jobs:
     name: Verify
     runs-on: ubuntu-latest
     env:
-      # Test-only key ("test-secret-key-for-ci-123456789") — not a real secret.
-      # Must be exactly 32 bytes when base64-decoded (AES-256 master key).
-      # Kept inline so CI works without external secrets on tag push.
-      SCAFCTL_SECRET_KEY: dGVzdC1zZWNyZXQta2V5LWZvci1jaS0xMjM0NTY3ODk=
+      SCAFCTL_SECRET_KEY: ${{ secrets.SCAFCTL_SECRET_KEY }}
     steps:
+      - name: Validate release secret
+        shell: bash
+        run: |
+          if [ -z "${SCAFCTL_SECRET_KEY}" ]; then
+            echo "::error title=Missing release secret::secrets.SCAFCTL_SECRET_KEY is required for release builds. Configure it in repository or organization secrets."
+            exit 1
+          fi
+
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:

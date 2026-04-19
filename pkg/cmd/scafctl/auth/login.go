@@ -55,17 +55,22 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 			Authenticate with an authentication handler.
 
 			For the 'entra' handler, this supports multiple authentication flows:
-			- device-code: Interactive authentication via browser (default)
+			- device-code: Device code flow via microsoft.com/devicelogin (default).
+			               Works in any browser because the login page inherits the
+			               browser's existing SSO session and device PRT.
+			- interactive: Authorization code + PKCE flow. Opens a browser tab directly
+			               to the authorize endpoint. May not carry the device PRT on
+			               non-Edge browsers, causing Conditional Access failures.
 			- service-principal: Non-interactive authentication for CI/CD
 			- workload-identity: Kubernetes workload identity (AKS)
 
 			For the 'github' handler, this supports:
-			- interactive: Opens browser for authentication (default).
-			            Without 'clientSecret' configured: uses device code flow with automatic
-			            browser open (identical to 'gh auth login'). With 'clientSecret'
-			            configured in scafctl config: uses OAuth Authorization Code + PKCE.
-			- device-code: Device code flow without browser auto-open; prints a code and URL
-			               for manual entry (headless/SSH/CI use).
+			- device-code: Device code flow (default). Prints a code and URL; use the
+			               TUI "Open URL" action or paste the URL into any browser.
+			- interactive: Opens browser and auto-opens the verification page.
+			               Without 'clientSecret' configured: device code with browser auto-open
+			               (identical to 'gh auth login'). With 'clientSecret': Authorization Code + PKCE.
+			
 			- pat: Personal access token from environment variables (GITHUB_TOKEN or GH_TOKEN)
 			- github-app: GitHub App installation token (for CI/automation)
 
@@ -335,7 +340,7 @@ func loginGitHub(ctx context.Context, w *writer.Writer, binaryName string, flow 
 			Description:    "Detected GitHub token in environment variables",
 		})
 	}
-	detection := auth.DetectFlow(flow, detectors, auth.FlowInteractive)
+	detection := auth.DetectFlow(flow, detectors, auth.FlowDeviceCode)
 	flow = detection.Flow
 	if detection.Description != "" {
 		w.Info(detection.Description)
@@ -384,7 +389,7 @@ func loginGCP(ctx context.Context, w *writer.Writer, binaryName string, flow aut
 			Flow:           auth.FlowServicePrincipal,
 			Description:    "Detected service account key in environment",
 		},
-	}, auth.FlowInteractive)
+	}, auth.FlowDeviceCode)
 	flow = detection.Flow
 	if detection.Description != "" {
 		w.Info(detection.Description)
@@ -447,7 +452,7 @@ func loginEntra(ctx context.Context, w *writer.Writer, binaryName string, flow a
 			Flow:           auth.FlowServicePrincipal,
 			Description:    "Detected service principal credentials in environment variables",
 		},
-	}, auth.FlowInteractive)
+	}, auth.FlowDeviceCode)
 	flow = detection.Flow
 	if detection.Description != "" {
 		w.Info(detection.Description)
@@ -527,9 +532,14 @@ func executeLogin(ctx context.Context, w *writer.Writer, binaryName string, hand
 
 	ioStreams := w.IOStreams()
 
-	// Use kvx status TUI for device-code flows when running in a terminal.
-	if flow == auth.FlowDeviceCode && skvx.IsTerminal(ioStreams.Out) {
-		return executeLoginWithStatusTUI(ctx, w, binaryName, handler, flow, tenantID, callbackPort, timeout, scopes, ioStreams)
+	// Use kvx status TUI for interactive flows when running in a terminal.
+	if skvx.IsTerminal(ioStreams.Out) {
+		switch flow {
+		case auth.FlowDeviceCode:
+			return executeLoginWithStatusTUI(ctx, w, binaryName, handler, flow, tenantID, callbackPort, timeout, scopes, ioStreams)
+		case auth.FlowInteractive:
+			return executeLoginWithBrowserTUI(ctx, w, binaryName, handler, flow, tenantID, callbackPort, timeout, scopes, ioStreams)
+		}
 	}
 
 	// Plain-text login path (non-terminal, or non-device-code flows).
@@ -712,6 +722,108 @@ func executeLoginWithStatusTUI(
 		// Outcome is captured - continue to post-display.
 	default:
 		// TUI exited before login completed (user quit early) - treat as cancelled.
+		return exitcode.WithCode(auth.ErrUserCancelled, exitcode.GeneralError)
+	}
+
+	if capturedOutcome.err != nil {
+		if ctx.Err() != nil {
+			return exitcode.WithCode(auth.ErrUserCancelled, exitcode.GeneralError)
+		}
+		err := fmt.Errorf("authentication failed: %w", capturedOutcome.err)
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
+	}
+
+	return displayLoginResult(w, capturedOutcome.result, flow)
+}
+
+// executeLoginWithBrowserTUI runs the auth code (browser) login flow using the
+// kvx status screen TUI. Unlike device-code, there is no user code to display.
+// The TUI shows a spinner with the auth URL while the browser tab completes.
+func executeLoginWithBrowserTUI(
+	ctx context.Context,
+	w *writer.Writer,
+	binaryName string,
+	handler auth.Handler,
+	flow auth.Flow,
+	tenantID string,
+	callbackPort int,
+	timeout time.Duration,
+	scopes []string,
+	ioStreams *terminal.IOStreams,
+) error {
+	type loginOutcome struct {
+		result *auth.Result
+		err    error
+	}
+
+	outcomeChan := make(chan loginOutcome, 1)
+	done := make(chan tui.StatusResult, 1)
+
+	loginOpts := auth.LoginOptions{
+		TenantID:     tenantID,
+		Scopes:       scopes,
+		Flow:         flow,
+		Timeout:      timeout,
+		CallbackPort: callbackPort,
+	}
+
+	go func() {
+		result, err := handler.Login(ctx, loginOpts)
+		outcomeChan <- loginOutcome{result: result, err: err}
+	}()
+
+	// Forward the login outcome to the TUI done channel.
+	var capturedOutcome loginOutcome
+	outcomeReady := make(chan struct{})
+	go func() {
+		outcome := <-outcomeChan
+		capturedOutcome = outcome
+		if outcome.err != nil {
+			done <- tui.StatusResult{Err: outcome.err}
+		} else {
+			identity := outcome.result.Claims.DisplayIdentity()
+			if identity == "" {
+				identity = "unknown user"
+			}
+			done <- tui.StatusResult{Message: "Authenticated as " + identity}
+		}
+		close(outcomeReady)
+	}()
+
+	data := map[string]any{
+		"title": fmt.Sprintf("Sign in to %s", handler.DisplayName()),
+	}
+
+	schema := &tui.DisplaySchema{
+		Version: "v1",
+		Status: &tui.StatusDisplayConfig{
+			TitleField:     "title",
+			WaitMessage:    "Waiting for browser authentication...",
+			SuccessMessage: "Authenticated successfully!",
+			DoneBehavior:   tui.DoneBehaviorExitAfterDelay,
+			DoneDelay:      "2s",
+		},
+	}
+
+	cfg := tui.DefaultConfig()
+	cfg.AppName = binaryName
+	cfg.DisplaySchema = schema
+	cfg.Done = done
+
+	teaOpts := tui.WithIO(ioStreams.In, ioStreams.Out)
+	if runErr := tui.Run(data, cfg, teaOpts...); runErr != nil {
+		if ctx.Err() != nil {
+			return exitcode.WithCode(auth.ErrUserCancelled, exitcode.GeneralError)
+		}
+		return fmt.Errorf("authentication display failed: %w", runErr)
+	}
+
+	// TUI exited normally.
+	select {
+	case <-outcomeReady:
+		// Outcome is captured.
+	default:
 		return exitcode.WithCode(auth.ErrUserCancelled, exitcode.GeneralError)
 	}
 

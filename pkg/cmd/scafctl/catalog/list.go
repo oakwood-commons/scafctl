@@ -30,6 +30,7 @@ type ListOptions struct {
 	VersionConstraint string // Semver version constraint (e.g., "^1.0.0", ">= 1.0, < 2.0")
 	Insecure          bool   // Allow HTTP connections
 	AllVersions       bool   // Show all versions instead of just latest
+	PreRelease        bool   // Include pre-release versions
 	CliParams         *settings.Run
 	IOStreams         *terminal.IOStreams
 	flags.KvxOutputFlags
@@ -133,6 +134,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 	cmd.Flags().StringVarP(&options.Catalog, "catalog", "c", "", catalogFlagUsage)
 	cmd.Flags().BoolVar(&options.Insecure, "insecure", false, "Allow insecure HTTP connections")
 	cmd.Flags().BoolVar(&options.AllVersions, "all-versions", false, "Show all versions instead of just the latest")
+	cmd.Flags().BoolVar(&options.PreRelease, "pre-release", false, "Include pre-release versions (e.g. 1.0.0-beta.1)")
 	cmd.Flags().StringVar(&options.VersionConstraint, "version", "", "Filter by semver version constraint (e.g., \"^1.0.0\", \">= 1.0, < 2.0\")")
 
 	flags.AddKvxOutputFlagsToStruct(cmd, &options.KvxOutputFlags)
@@ -143,6 +145,11 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptions) error {
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
+
+	// Wire pre-release context flag
+	if opts.PreRelease {
+		ctx = catalog.WithIncludePreRelease(ctx)
+	}
 
 	// Validate --version vs @version in --name.
 	if err := validateVersionConstraint(opts.Name, opts.VersionConstraint); err != nil {
@@ -223,6 +230,11 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 				artifacts = append(artifacts, remoteArtifacts...)
 			}
 		}
+	}
+
+	// Filter pre-release versions unless --pre-release flag is set.
+	if !opts.PreRelease {
+		artifacts = filterPreReleaseArtifacts(artifacts)
 	}
 
 	// Apply version constraint filter if set.
@@ -308,6 +320,11 @@ func runListFromRemoteRef(ctx context.Context, opts *ListOptions, outputOpts *kv
 
 	w.Verbosef("Found %d artifact(s)", len(artifacts))
 
+	// Filter pre-release versions unless --pre-release flag is set.
+	if !opts.PreRelease {
+		artifacts = filterPreReleaseArtifacts(artifacts)
+	}
+
 	if opts.VersionConstraint != "" {
 		artifacts, err = filterArtifactsByConstraint(artifacts, opts.VersionConstraint)
 		if err != nil {
@@ -339,6 +356,11 @@ func runListRemote(ctx context.Context, opts *ListOptions, kind catalog.Artifact
 		}
 
 		return exitcode.WithCode(err, exitcode.CatalogError)
+	}
+
+	// Filter pre-release versions unless --pre-release flag is set.
+	if !opts.PreRelease {
+		artifacts = filterPreReleaseArtifacts(artifacts)
 	}
 
 	if opts.VersionConstraint != "" {

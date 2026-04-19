@@ -263,3 +263,41 @@ func TestAddKvxOutputFlags_PreRunE_ChainsExistingPreRun(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, preRan, "existing PreRun should have been called via chained PreRunE")
 }
+
+func TestToKvxOutputOptionsFromCmd_ExplicitFormat(t *testing.T) {
+	t.Parallel()
+	f := &KvxOutputFlags{}
+	cmd := &cobra.Command{
+		Use:  "test",
+		RunE: func(_ *cobra.Command, _ []string) error { return nil },
+	}
+	AddKvxOutputFlagsToStruct(cmd, f)
+
+	// Simulate user passing -o json
+	cmd.SetArgs([]string{"-o", "json"})
+	err := cmd.Execute()
+	require.NoError(t, err)
+
+	opts := ToKvxOutputOptionsFromCmd(cmd, f)
+	assert.True(t, opts.FormatExplicit, "should be explicit when -o was passed")
+	assert.Equal(t, kvx.OutputFormatJSON, opts.Format)
+}
+
+func TestToKvxOutputOptionsFromCmd_DefaultFormat(t *testing.T) {
+	t.Parallel()
+	f := &KvxOutputFlags{}
+	cmd := &cobra.Command{
+		Use:  "test",
+		RunE: func(_ *cobra.Command, _ []string) error { return nil },
+	}
+	AddKvxOutputFlagsToStruct(cmd, f)
+
+	// No -o flag passed
+	cmd.SetArgs([]string{})
+	err := cmd.Execute()
+	require.NoError(t, err)
+
+	opts := ToKvxOutputOptionsFromCmd(cmd, f)
+	assert.False(t, opts.FormatExplicit, "should not be explicit when -o was not passed")
+	assert.Equal(t, kvx.OutputFormatAuto, opts.Format)
+}

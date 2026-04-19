@@ -24,6 +24,7 @@ The package manually implements all OAuth 2.0 flows using raw `net/http` POST ca
 | Device Code | `urn:ietf:params:oauth:grant-type:device_code` | `device_flow.go` | Interactive CLI login (headless / SSH fallback via `--flow device-code`) |
 | Client Credentials (Service Principal) | `client_credentials` | `service_principal.go` | Non-interactive, from `AZURE_CLIENT_*` env vars |
 | Workload Identity | `client_credentials` with `client_assertion` (JWT bearer) | `workload_identity.go` | Kubernetes federated token exchange |
+| On-Behalf-Of (OBO) | `urn:ietf:params:oauth:grant-type:jwt-bearer` | `obo.go` | API-to-API token exchange (middle-tier service) |
 | Refresh Token | `refresh_token` | `token.go` | Silent token renewal with rotation |
 
 ### Flow Priority
@@ -65,7 +66,7 @@ Two layers of persistence, both backed by `secrets.Store` (OS keychain/credentia
 | ~~**No PKCE / Auth Code flow**~~ | ✅ **Resolved.** Authorization code + PKCE flow implemented in `authcode_flow.go` using a shared `pkg/auth/oauth` package (PKCE, local callback server, browser opener). Now the default interactive flow. |
 | **No certificate-based auth** | MSAL supports client certificate credentials natively; currently missing. |
 | **No instance discovery / sovereign clouds** | MSAL handles authority validation, instance discovery metadata, and sovereign cloud endpoints (Azure Government, Azure China). The manual code hardcodes `login.microsoftonline.com`. |
-| **No Conditional Access / Claims Challenge** | MSAL handles the `claims` parameter for Conditional Access challenges automatically. |
+| ~~**No Conditional Access / Claims Challenge**~~ | ✅ **Resolved.** `GetToken` detects `ClaimsChallengeError` from the token endpoint, injects the claims payload via `ContextWithClaimsChallenge`, and triggers interactive re-auth automatically. |
 | **Basic JWT parsing** | Manual `splitJWT` + base64url decode has no signature validation, no `nbf`/`aud` checks. MSAL validates tokens properly. |
 | **Potential security gaps** | MSAL is reviewed by Microsoft's security team. A hand-rolled implementation may miss subtle requirements (token binding, nonce validation, etc.). |
 
@@ -84,7 +85,7 @@ Switching is not a clean drop-in replacement:
 
 **Retain the manual implementation.** The current approach is reasonable given the project's constraints:
 
-- 4 well-defined flows are implemented (authorization code + PKCE, device code, client credentials, workload identity)
+- 5 well-defined flows are implemented (authorization code + PKCE, device code, client credentials, workload identity, OBO)
 - Custom caching requirements (`secrets.Store` integration) would require adapter code regardless
 - The code is well-tested (~3,500 lines of tests including integration)
 - The project values minimal dependencies
@@ -103,7 +104,7 @@ Switch to MSAL if any of the following become requirements:
 - ~~**Interactive browser auth with PKCE**~~ — ✅ implemented (`authcode_flow.go` + shared `pkg/auth/oauth` package)
 - **Client certificate authentication** — non-trivial to implement correctly (key signing, x5c/x5t headers)
 - **Sovereign cloud support** — instance discovery and authority validation across Azure Government, Azure China, etc.
-- **Conditional Access / Claims Challenges** — protocol-level complexity that MSAL handles transparently
+- ~~**Conditional Access / Claims Challenges**~~ — ✅ implemented (`handler.go` catches `ClaimsChallengeError`, `claims_challenge.go` injects claims into context, `authcode_flow.go` appends `&claims=` to the authorize URL)
 
 At that point, the maintenance cost of adding these flows manually would exceed the cost of integrating MSAL plus writing the required adapter code.
 

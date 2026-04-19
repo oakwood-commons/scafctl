@@ -63,6 +63,14 @@ func TestAadstsHint_AADSTS500113(t *testing.T) {
 	assert.Contains(t, hint, "device-code")
 }
 
+func TestAadstsHint_AADSTS53003(t *testing.T) {
+	desc := "AADSTS53003: Access has been blocked by Conditional Access policies."
+	hint := aadstsHint(desc)
+	assert.NotEmpty(t, hint)
+	assert.Contains(t, hint, "Conditional Access")
+	assert.Contains(t, hint, "re-authenticate")
+}
+
 func TestAadstsHint_UnknownCode(t *testing.T) {
 	// A code we have no specific guidance for should return an empty string
 	// so callers can fall back to the raw message.

@@ -349,3 +349,19 @@ func filterArtifactsByConstraint(artifacts []catalog.ArtifactInfo, constraint st
 	})
 	return result, nil
 }
+
+// filterPreReleaseArtifacts removes artifacts with pre-release versions
+// (e.g. 1.0.0-beta.1). If all artifacts are pre-release, returns the
+// original slice unchanged to avoid returning empty results.
+func filterPreReleaseArtifacts(artifacts []catalog.ArtifactInfo) []catalog.ArtifactInfo {
+	stable := make([]catalog.ArtifactInfo, 0, len(artifacts))
+	for _, a := range artifacts {
+		if !catalog.IsPreRelease(a.Reference.Version) {
+			stable = append(stable, a)
+		}
+	}
+	if len(stable) == 0 {
+		return artifacts
+	}
+	return stable
+}

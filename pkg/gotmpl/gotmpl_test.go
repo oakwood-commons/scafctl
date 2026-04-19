@@ -622,9 +622,67 @@ func TestValidateSyntax(t *testing.T) {
 	}
 }
 
+func TestValidateSyntax_SprigFunctions(t *testing.T) {
+	// Sprig functions must be recognized during validation so that templates
+	// using them are not rejected as invalid.
+	//
+	// In production, SetExtensionFuncMapFactory is called during app init.
+	// For this test we wire it manually.
+	initExtensionFactory(t)
+
+	templates := []string{
+		`{{ "hello.tpl" | replace ".tpl" "" }}`,
+		`{{ "hello" | upper }}`,
+		`{{ "HELLO" | lower }}`,
+		`{{ " hello " | trim }}`,
+		`{{ .value | default "fallback" }}`,
+		`{{ list "a" "b" "c" | join "," }}`,
+		`{{ "hello" | repeat 3 }}`,
+		`{{ "hello world" | title }}`,
+	}
+	for _, tmpl := range templates {
+		t.Run(tmpl, func(t *testing.T) {
+			err := ValidateSyntax(tmpl, "", "")
+			assert.NoError(t, err, "sprig function should be recognized")
+		})
+	}
+}
+
 func BenchmarkValidateSyntax(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		ValidateSyntax("Hello {{ .Name }}, you have {{ len .Items }} items", "", "")
+	}
+}
+
+// initExtensionFactory sets up a minimal extension func map factory with sprig
+// functions for tests that need it, and resets the state after the test.
+func initExtensionFactory(t *testing.T) {
+	t.Helper()
+
+	extensionFuncMapMu.Lock()
+	oldFactory := extensionFuncMapFactory
+	extensionFuncMapFactory = sprigFuncMap
+	extensionFuncMapMu.Unlock()
+
+	t.Cleanup(func() {
+		extensionFuncMapMu.Lock()
+		extensionFuncMapFactory = oldFactory
+		extensionFuncMapMu.Unlock()
+	})
+}
+
+// sprigFuncMap returns a func map with common sprig functions for testing.
+func sprigFuncMap() template.FuncMap {
+	return template.FuncMap{
+		"replace": func(old, repl, src string) string { return src },
+		"upper":   func(s string) string { return s },
+		"lower":   func(s string) string { return s },
+		"trim":    func(s string) string { return s },
+		"default": func(def, val any) any { return val },
+		"list":    func(args ...any) []any { return args },
+		"join":    func(sep string, v any) string { return "" },
+		"repeat":  func(n int, s string) string { return s },
+		"title":   func(s string) string { return s },
 	}
 }
 

@@ -6,6 +6,7 @@ package githubprovider
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/oakwood-commons/scafctl/pkg/httpc"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -110,6 +111,13 @@ func (p *GitHubProvider) executeUpdateIssue(ctx context.Context, client *httpc.C
 	}
 	if state := getStringInput(inputs, "state"); state != "" {
 		mutInput["state"] = mapIssueStateForMutation(state)
+	}
+	if stateReason := getStringInput(inputs, "state_reason"); stateReason != "" {
+		mappedReason, err := mapIssueStateReason(stateReason)
+		if err != nil {
+			return nil, err
+		}
+		mutInput["stateReason"] = mappedReason
 	}
 
 	// Resolve label IDs if provided
@@ -379,5 +387,20 @@ func mapIssueStateForMutation(state string) string {
 		return "CLOSED"
 	default:
 		return state
+	}
+}
+
+// mapIssueStateReason converts user-friendly state reason to GraphQL IssueClosedStateReason enum.
+// Returns an error for unrecognized values to fail fast rather than sending invalid data to the API.
+func mapIssueStateReason(reason string) (string, error) {
+	switch strings.ToUpper(reason) {
+	case "COMPLETED":
+		return "COMPLETED", nil
+	case "NOT_PLANNED":
+		return "NOT_PLANNED", nil
+	case "REOPENED":
+		return "REOPENED", nil
+	default:
+		return "", fmt.Errorf("invalid state_reason %q: must be one of completed, not_planned, reopened", reason)
 	}
 }

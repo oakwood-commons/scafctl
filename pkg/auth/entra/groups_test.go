@@ -268,9 +268,9 @@ func TestGetGroups_UsesGraphScope(t *testing.T) {
 	_, err := handler.GetGroups(ctx)
 	require.NoError(t, err)
 
-	// Verify the token request used the Graph scope.
+	// Verify the token request used the Graph scope (with offline_access appended by ensureOfflineAccess).
 	require.Len(t, mockHTTP.GetRequests(), 1)
-	assert.Equal(t, graphGroupsScope, mockHTTP.GetRequests()[0].Data.Get("scope"))
+	assert.Equal(t, graphGroupsScope+" offline_access", mockHTTP.GetRequests()[0].Data.Get("scope"))
 }
 
 func TestGetGroups_TokenCached(t *testing.T) {

@@ -279,101 +279,10 @@ func (c *LocalCatalog) FetchWithBundle(ctx context.Context, ref Reference) ([]by
 // reassembleDedup fetches all layers of a v2 deduplicated bundle and
 // reassembles them into a single v1-compatible tar with embedded manifest.
 func (c *LocalCatalog) reassembleDedup(ctx context.Context, ociManifest ocispec.Manifest) ([]byte, error) {
-	if len(ociManifest.Layers) < 2 {
-		return nil, fmt.Errorf("insufficient layers for dedup bundle")
+	fetchBlob := func(desc ocispec.Descriptor) ([]byte, error) {
+		return c.fetchBlob(ctx, desc)
 	}
-
-	// Read the bundle manifest from layer 1
-	manifestJSON, err := c.fetchBlob(ctx, ociManifest.Layers[1])
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch bundle manifest: %w", err)
-	}
-
-	var bundleManifest struct {
-		Version int    `json:"version"`
-		Root    string `json:"root"`
-		Files   []struct {
-			Path   string `json:"path"`
-			Size   int64  `json:"size"`
-			Digest string `json:"digest"`
-			Layer  int    `json:"layer"`
-		} `json:"files"`
-		Plugins []struct {
-			Name    string `json:"name"`
-			Kind    string `json:"kind"`
-			Version string `json:"version"`
-		} `json:"plugins,omitempty"`
-	}
-	if err := json.Unmarshal(manifestJSON, &bundleManifest); err != nil {
-		return nil, fmt.Errorf("failed to parse bundle manifest: %w", err)
-	}
-
-	// Build a v1-compatible tar containing all files
-	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
-
-	// Write the manifest as a v1-compatible manifest (downgrade version)
-	v1Manifest := bundleManifest
-	v1Manifest.Version = 1
-	// Deep-copy Files to avoid mutating bundleManifest via shared slice backing array
-	v1Manifest.Files = make([]struct {
-		Path   string `json:"path"`
-		Size   int64  `json:"size"`
-		Digest string `json:"digest"`
-		Layer  int    `json:"layer"`
-	}, len(bundleManifest.Files))
-	copy(v1Manifest.Files, bundleManifest.Files)
-	// Zero out layer fields for v1
-	for i := range v1Manifest.Files {
-		v1Manifest.Files[i].Layer = 0
-	}
-	v1ManifestJSON, err := json.MarshalIndent(v1Manifest, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal v1 manifest: %w", err)
-	}
-	if err := writeTarEntry(tw, ".scafctl/bundle-manifest.json", v1ManifestJSON); err != nil {
-		return nil, err
-	}
-
-	// Cache fetched layers to avoid re-fetching for duplicate layer references
-	layerCache := make(map[int][]byte)
-
-	for _, f := range bundleManifest.Files {
-		layerData, ok := layerCache[f.Layer]
-		if !ok {
-			if f.Layer < 0 || f.Layer >= len(ociManifest.Layers) {
-				return nil, fmt.Errorf("layer index %d out of range", f.Layer)
-			}
-			data, err := c.fetchBlob(ctx, ociManifest.Layers[f.Layer])
-			if err != nil {
-				return nil, fmt.Errorf("failed to fetch layer %d: %w", f.Layer, err)
-			}
-			layerCache[f.Layer] = data
-			layerData = data
-		}
-
-		// If the layer is a tar (small files), extract just this file from it
-		if isTarMediaType(ociManifest.Layers[f.Layer].MediaType) {
-			fileContent, err := extractFileFromTar(layerData, f.Path)
-			if err != nil {
-				return nil, fmt.Errorf("failed to extract %s from tar layer: %w", f.Path, err)
-			}
-			if err := writeTarEntry(tw, f.Path, fileContent); err != nil {
-				return nil, err
-			}
-		} else {
-			// Raw blob — write directly
-			if err := writeTarEntry(tw, f.Path, layerData); err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	if err := tw.Close(); err != nil {
-		return nil, fmt.Errorf("failed to close tar: %w", err)
-	}
-
-	return buf.Bytes(), nil
+	return reassembleDedupBundle(ociManifest, fetchBlob)
 }
 
 // writeTarEntry writes a single entry to a tar writer.
@@ -464,6 +373,26 @@ func (c *LocalCatalog) resolveLocked(ctx context.Context, ref Reference) (Artifa
 		return ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
 	}
 
+	// Filter out pre-release versions unless explicitly included
+	if !IncludePreReleaseFromContext(ctx) {
+		stable := make([]ArtifactInfo, 0, len(artifacts))
+		for _, a := range artifacts {
+			if IsPreRelease(a.Reference.Version) {
+				c.logger.V(1).Info("skipping pre-release version",
+					"name", ref.Name,
+					"version", a.Reference.Version.String())
+				continue
+			}
+			stable = append(stable, a)
+		}
+		if len(stable) > 0 {
+			artifacts = stable
+		} else {
+			c.logger.V(1).Info("no stable versions found, falling back to pre-release",
+				"name", ref.Name)
+		}
+	}
+
 	// Sort by version descending and return highest
 	sort.Slice(artifacts, func(i, j int) bool {
 		vi := artifacts[i].Reference.Version
@@ -476,6 +405,10 @@ func (c *LocalCatalog) resolveLocked(ctx context.Context, ref Reference) (Artifa
 		}
 		return vi.GreaterThan(vj)
 	})
+
+	c.logger.V(1).Info("resolved latest version",
+		"name", ref.Name,
+		"version", artifacts[0].Reference.VersionOrDigest())
 
 	return artifacts[0], nil
 }

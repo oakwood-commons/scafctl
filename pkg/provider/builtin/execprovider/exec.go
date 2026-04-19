@@ -96,11 +96,11 @@ func NewExecProvider() *ExecProvider {
 					schemahelper.WithDefault("auto"),
 					schemahelper.WithExample("auto"),
 					schemahelper.WithMaxLength(10)),
-				"expand": schemahelper.BoolProp("Return full result map (stdout, stderr, exitCode, etc.) instead of trimmed stdout string. Default: false in resolver/transform mode, always true in action mode"),
+				"raw": schemahelper.BoolProp("Return trimmed stdout string instead of the full result map. Only applies in resolver/transform mode; action mode always returns the full map"),
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
-				provider.CapabilityFrom:      schemahelper.AnyProp("Trimmed stdout string by default; full result map (stdout, stderr, exitCode, success, command, shell) when expand: true"),
-				provider.CapabilityTransform: schemahelper.AnyProp("Trimmed stdout string by default; full result map (stdout, stderr, exitCode, success, command, shell) when expand: true"),
+				provider.CapabilityFrom:      schemahelper.AnyProp("Full result map (stdout, stderr, exitCode, success, command, shell) by default; trimmed stdout string when raw: true"),
+				provider.CapabilityTransform: schemahelper.AnyProp("Full result map (stdout, stderr, exitCode, success, command, shell) by default; trimmed stdout string when raw: true"),
 				provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
 					"success":  schemahelper.BoolProp("Whether the command succeeded (exit code 0)"),
 					"stdout":   schemahelper.StringProp("Standard output from the command"),
@@ -308,20 +308,24 @@ func (p *ExecProvider) executeCommand(ctx context.Context, command string, input
 	}
 
 	// Capture stdout and stderr into buffers.
-	// If IOStreams are available in context, also stream to the terminal in real-time
-	// using io.MultiWriter so output appears immediately while still being captured
-	// for inter-action dependencies.
+	// In action mode, also stream to the terminal in real-time using io.MultiWriter
+	// so output appears immediately while still being captured for inter-action
+	// dependencies. In resolver/transform mode, only capture to buffers -- streaming
+	// would leak raw command output before the formatted result is displayed.
 	var stdout, stderr bytes.Buffer
 	var stdoutWriter, stderrWriter io.Writer = &stdout, &stderr
 	streamed := false
 
-	if ioStreams, ok := provider.IOStreamsFromContext(ctx); ok && ioStreams != nil {
-		if ioStreams.Out != nil {
-			stdoutWriter = io.MultiWriter(&stdout, ioStreams.Out)
-			streamed = true
-		}
-		if ioStreams.ErrOut != nil {
-			stderrWriter = io.MultiWriter(&stderr, ioStreams.ErrOut)
+	mode, _ := provider.ExecutionModeFromContext(ctx)
+	if mode == provider.CapabilityAction {
+		if ioStreams, ok := provider.IOStreamsFromContext(ctx); ok && ioStreams != nil {
+			if ioStreams.Out != nil {
+				stdoutWriter = io.MultiWriter(&stdout, ioStreams.Out)
+				streamed = true
+			}
+			if ioStreams.ErrOut != nil {
+				stderrWriter = io.MultiWriter(&stderr, ioStreams.ErrOut)
+			}
 		}
 	}
 
@@ -358,10 +362,9 @@ func (p *ExecProvider) executeCommand(ctx context.Context, command string, input
 	}
 
 	// In resolver/transform mode (not action), return trimmed stdout as a plain string
-	// unless expand: true is explicitly set. This eliminates the need for a separate
-	// transform step in the common case.
-	expand, _ := inputs["expand"].(bool)
-	if !expand {
+	// when raw: true is set. This eliminates the need for a separate transform step.
+	raw, _ := inputs["raw"].(bool)
+	if raw {
 		if mode, modeOK := provider.ExecutionModeFromContext(ctx); modeOK &&
 			(mode == provider.CapabilityFrom || mode == provider.CapabilityTransform) {
 			return &provider.Output{

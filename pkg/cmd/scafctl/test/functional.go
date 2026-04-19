@@ -16,6 +16,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
@@ -180,11 +181,11 @@ func runFunctional(ctx context.Context, opts *FunctionalOptions) error {
 	}
 
 	// If the path is a catalog/remote reference (and not a local file/directory),
-	// fetch the solution to a temp file.
+	// fetch the solution and its bundle to a temp directory.
 	if get.IsCatalogReference(testsPath) && !fileExists(testsPath) {
 		w.Infof("Fetching %s...", testsPath)
 		getter := prepare.NewDefaultGetter(ctx, false)
-		sol, getErr := getter.Get(ctx, testsPath)
+		sol, bundleData, getErr := getter.GetWithBundle(ctx, testsPath)
 		if getErr != nil {
 			w.Errorf("failed to fetch solution %q: %v", testsPath, getErr)
 			return exitcode.WithCode(getErr, exitcode.CatalogError)
@@ -195,6 +196,21 @@ func runFunctional(ctx context.Context, opts *FunctionalOptions) error {
 		}
 		w.Infof("Resolved %s", solName)
 
+		// Create a temp directory for the solution and its bundled files.
+		tmpDir, tmpErr := os.MkdirTemp("", paths.AppName()+"-test-*")
+		if tmpErr != nil {
+			return fmt.Errorf("failed to create temp directory: %w", tmpErr)
+		}
+		defer os.RemoveAll(tmpDir)
+
+		// Extract bundle tar if present (contains templates/, static files, etc.)
+		if len(bundleData) > 0 {
+			if _, extractErr := bundler.ExtractBundleTar(bundleData, tmpDir); extractErr != nil {
+				return fmt.Errorf("failed to extract solution bundle: %w", extractErr)
+			}
+		}
+
+		// Write the solution YAML into the temp directory.
 		rawContent := sol.RawContent()
 		if len(rawContent) == 0 {
 			var marshalErr error
@@ -203,19 +219,11 @@ func runFunctional(ctx context.Context, opts *FunctionalOptions) error {
 				return fmt.Errorf("failed to marshal solution: %w", marshalErr)
 			}
 		}
-
-		tmpFile, tmpErr := os.CreateTemp("", paths.AppName()+"-test-*.yaml")
-		if tmpErr != nil {
-			return fmt.Errorf("failed to create temp file: %w", tmpErr)
+		solFile := filepath.Join(tmpDir, "solution.yaml")
+		if writeErr := os.WriteFile(solFile, rawContent, 0o600); writeErr != nil {
+			return fmt.Errorf("failed to write solution file: %w", writeErr)
 		}
-		defer os.Remove(tmpFile.Name())
-		if _, writeErr := tmpFile.Write(rawContent); writeErr != nil {
-			return fmt.Errorf("failed to write temp file: %w", writeErr)
-		}
-		if closeErr := tmpFile.Close(); closeErr != nil {
-			return fmt.Errorf("failed to close temp file: %w", closeErr)
-		}
-		testsPath = tmpFile.Name()
+		testsPath = solFile
 	}
 
 	// Watch mode — delegate to the watcher loop.

@@ -51,6 +51,7 @@ func TestCommandList_Flags(t *testing.T) {
 		{"catalog", ""},
 		{"insecure", "false"},
 		{"all-versions", "false"},
+		{"pre-release", "false"},
 	}
 
 	for _, tt := range flagTests {

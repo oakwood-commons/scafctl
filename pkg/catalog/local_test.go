@@ -212,6 +212,77 @@ func TestLocalCatalog_Resolve(t *testing.T) {
 		require.Error(t, err)
 		assert.True(t, IsNotFound(err))
 	})
+
+	t.Run("excludes pre-release versions by default", func(t *testing.T) {
+		cat := newTestCatalog(t)
+
+		// Store stable and pre-release versions
+		for _, v := range []string{"1.0.0", "2.0.0-beta.1", "1.5.0"} {
+			ref := Reference{
+				Kind:    ArtifactKindSolution,
+				Name:    "my-solution",
+				Version: semver.MustParse(v),
+			}
+			_, err := cat.Store(ctx, ref, []byte("version "+v), nil, nil, false)
+			require.NoError(t, err)
+		}
+
+		// Resolve without version should skip pre-release and get 1.5.0
+		ref := Reference{
+			Kind: ArtifactKindSolution,
+			Name: "my-solution",
+		}
+		info, err := cat.Resolve(ctx, ref)
+		require.NoError(t, err)
+		assert.Equal(t, "1.5.0", info.Reference.Version.String())
+	})
+
+	t.Run("includes pre-release versions when context flag is set", func(t *testing.T) {
+		cat := newTestCatalog(t)
+
+		for _, v := range []string{"1.0.0", "2.0.0-beta.1", "1.5.0"} {
+			ref := Reference{
+				Kind:    ArtifactKindSolution,
+				Name:    "my-solution",
+				Version: semver.MustParse(v),
+			}
+			_, err := cat.Store(ctx, ref, []byte("version "+v), nil, nil, false)
+			require.NoError(t, err)
+		}
+
+		// With pre-release included, should get 2.0.0-beta.1
+		preReleaseCtx := WithIncludePreRelease(ctx)
+		ref := Reference{
+			Kind: ArtifactKindSolution,
+			Name: "my-solution",
+		}
+		info, err := cat.Resolve(preReleaseCtx, ref)
+		require.NoError(t, err)
+		assert.Equal(t, "2.0.0-beta.1", info.Reference.Version.String())
+	})
+
+	t.Run("falls back to pre-release when no stable versions exist", func(t *testing.T) {
+		cat := newTestCatalog(t)
+
+		for _, v := range []string{"1.0.0-alpha.1", "2.0.0-beta.1"} {
+			ref := Reference{
+				Kind:    ArtifactKindSolution,
+				Name:    "my-solution",
+				Version: semver.MustParse(v),
+			}
+			_, err := cat.Store(ctx, ref, []byte("version "+v), nil, nil, false)
+			require.NoError(t, err)
+		}
+
+		// No stable versions - should fall back to highest pre-release
+		ref := Reference{
+			Kind: ArtifactKindSolution,
+			Name: "my-solution",
+		}
+		info, err := cat.Resolve(ctx, ref)
+		require.NoError(t, err)
+		assert.Equal(t, "2.0.0-beta.1", info.Reference.Version.String())
+	})
 }
 
 func TestLocalCatalog_List(t *testing.T) {

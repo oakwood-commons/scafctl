@@ -50,6 +50,11 @@ func (f ExtFunction) GetName() string {
 	return f.Name
 }
 
+// GetDescription returns the function description for search filtering.
+func (f ExtFunction) GetDescription() string {
+	return f.Description
+}
+
 // FuncMap merges all individual Func entries into a single template.FuncMap.
 // Later entries override earlier ones if they share the same function name.
 func (l ExtFunctionList) FuncMap() template.FuncMap {

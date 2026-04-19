@@ -40,6 +40,10 @@ type TokenResponse struct {
 type TokenErrorResponse struct {
 	Error            string `json:"error"`
 	ErrorDescription string `json:"error_description"`
+	// Claims contains a base64url-encoded JSON claims challenge returned by
+	// Azure AD when Conditional Access policies require step-up authentication.
+	// See: https://learn.microsoft.com/en-us/entra/identity-platform/claims-challenge
+	Claims string `json:"claims,omitempty"`
 }
 
 // deviceCodeLogin performs the device code authentication flow.

@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -305,6 +307,92 @@ func TestHandler_GetToken_ForceRefresh(t *testing.T) {
 	assert.Equal(t, "fresh-access-token", token.AccessToken)
 }
 
+func TestHandler_GetToken_ClaimsChallengeRetry(t *testing.T) {
+	store := secrets.NewMockStore()
+	mockHTTP := NewMockHTTPClient()
+
+	handler, err := New(
+		WithSecretStore(store),
+		WithHTTPClient(mockHTTP),
+	)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	scope := "https://graph.microsoft.com/Group.Read.All"
+
+	// Set up authentication (refresh token + metadata)
+	require.NoError(t, store.Set(ctx, SecretKeyRefreshToken, []byte("test-refresh-token")))
+	metadata := &TokenMetadata{
+		TenantID:  "test-tenant",
+		ClientID:  "04b07795-8ddb-461a-bbee-02f9e1bf7b46",
+		LoginFlow: auth.FlowInteractive,
+	}
+	metadataBytes, _ := json.Marshal(metadata)
+	require.NoError(t, store.Set(ctx, SecretKeyMetadata, metadataBytes))
+
+	// Response 1: mintToken → claims challenge (Conditional Access step-up)
+	mockHTTP.AddResponse(http.StatusBadRequest, map[string]any{
+		"error":             "interaction_required",
+		"error_description": "AADSTS53003: Access blocked by Conditional Access policies.",
+		"claims":            `{"access_token":{"acrs":{"essential":true,"value":"c1"}}}`,
+	})
+
+	// Response 2: Login → token exchange (after browser re-auth via interactive flow)
+	mockHTTP.AddResponse(http.StatusOK, map[string]any{
+		"access_token":  "post-reauth-access-token",
+		"refresh_token": "post-reauth-refresh-token",
+		"token_type":    "Bearer",
+		"expires_in":    3600,
+		"scope":         "openid profile offline_access " + scope,
+		"id_token":      authCodeTestIDToken(),
+	})
+
+	// Response 3: mintToken retry → success with new refresh token
+	mockHTTP.AddResponse(http.StatusOK, map[string]any{
+		"access_token":  "final-access-token",
+		"refresh_token": "post-reauth-refresh-token",
+		"token_type":    "Bearer",
+		"expires_in":    3600,
+		"scope":         scope,
+	})
+
+	// Override browser opener to simulate redirect with auth code
+	var capturedAuthURL string
+	originalOpener := BrowserOpener
+	BrowserOpener = func(_ context.Context, authURL string) error {
+		capturedAuthURL = authURL
+		parsed, _ := url.Parse(authURL)
+		redirectURI := parsed.Query().Get("redirect_uri")
+		state := parsed.Query().Get("state")
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			_ = simulateBrowserRedirect(redirectURI, "reauth-code", state)
+		}()
+		return nil
+	}
+	defer func() { BrowserOpener = originalOpener }()
+
+	// GetToken should handle the claims challenge transparently
+	token, err := handler.GetToken(ctx, auth.TokenOptions{Scope: scope})
+	require.NoError(t, err)
+	assert.Equal(t, "final-access-token", token.AccessToken)
+
+	// Verify the claims parameter was included in the re-auth URL
+	assert.Contains(t, capturedAuthURL, "claims=")
+
+	// Verify the challenged scope was included in the re-auth URL so the
+	// Conditional Access policy is satisfied for the right resource.
+	assert.Contains(t, capturedAuthURL, url.QueryEscape(scope),
+		"re-auth URL must include the scope that triggered the claims challenge")
+
+	// Verify 3 HTTP requests were made: mint → exchange → retry mint
+	requests := mockHTTP.GetRequests()
+	require.Len(t, requests, 3)
+	assert.Equal(t, "refresh_token", requests[0].Data.Get("grant_type"))
+	assert.Equal(t, "authorization_code", requests[1].Data.Get("grant_type"))
+	assert.Equal(t, "refresh_token", requests[2].Data.Get("grant_type"))
+}
+
 func TestHandler_InjectAuth(t *testing.T) {
 	store := secrets.NewMockStore()
 	handler, err := New(WithSecretStore(store))
@@ -440,4 +528,29 @@ func TestEntraHandler_PurgeExpiredTokens(t *testing.T) {
 	n, err := h.PurgeExpiredTokens(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, 0, n)
+}
+
+func TestHandler_MintToken_EmbedderBinaryName(t *testing.T) {
+	store := secrets.NewMockStore()
+	h, err := New(WithSecretStore(store))
+	require.NoError(t, err)
+
+	params := settings.NewCliParams()
+	params.BinaryName = "mycli"
+	ctx := settings.IntoContext(context.Background(), params)
+
+	// Store a refresh token + metadata with empty ClientID to trigger the error path
+	require.NoError(t, store.Set(ctx, SecretKeyRefreshToken, []byte("fake-refresh-token")))
+	metadata := &TokenMetadata{
+		TenantID: "fake-tenant",
+		ClientID: "", // triggers "stored credentials are missing client ID" error
+	}
+	metaBytes, err := json.Marshal(metadata)
+	require.NoError(t, err)
+	require.NoError(t, store.Set(ctx, SecretKeyMetadata, metaBytes))
+
+	_, err = h.mintToken(ctx, "https://graph.microsoft.com/.default")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mycli auth login entra")
+	assert.ErrorIs(t, err, auth.ErrNotAuthenticated)
 }

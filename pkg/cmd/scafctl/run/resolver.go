@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/filepath"
 	"github.com/oakwood-commons/scafctl/pkg/flags"
@@ -299,6 +300,13 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 	// Fail early if PreRun detected a local file path as positional arg
 	if o.positionalPathErr != nil {
 		return o.exitWithCode(ctx, o.positionalPathErr, exitcode.InvalidInput)
+	}
+
+	// Include pre-release versions in catalog resolution when --pre-release is set.
+	// Must happen before resolveVersionConstraintForFile so --version constraints
+	// also respect the flag.
+	if o.PreRelease {
+		ctx = catalog.WithIncludePreRelease(ctx)
 	}
 
 	// Resolve --version constraint before loading solution

@@ -10,6 +10,35 @@ import (
 	"github.com/Masterminds/semver/v3"
 )
 
+// contextKey is a private type for catalog context keys.
+type contextKey int
+
+const (
+	// includePreReleaseKey controls whether pre-release versions are considered
+	// when resolving "latest" (no explicit version). By default, pre-release
+	// versions are excluded.
+	includePreReleaseKey contextKey = iota
+)
+
+// WithIncludePreRelease returns a context that includes pre-release versions
+// when resolving the latest version from a catalog.
+func WithIncludePreRelease(ctx context.Context) context.Context {
+	return context.WithValue(ctx, includePreReleaseKey, true)
+}
+
+// IncludePreReleaseFromContext returns true if pre-release versions should be
+// included when resolving the latest version.
+func IncludePreReleaseFromContext(ctx context.Context) bool {
+	v, _ := ctx.Value(includePreReleaseKey).(bool)
+	return v
+}
+
+// IsPreRelease returns true if the semver version has a pre-release suffix
+// (e.g., 1.0.0-beta.1, 2.0.0-alpha).
+func IsPreRelease(v *semver.Version) bool {
+	return v != nil && v.Prerelease() != ""
+}
+
 // ArtifactKind represents the type of artifact stored in the catalog.
 type ArtifactKind string
 

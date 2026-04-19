@@ -534,6 +534,50 @@ func TestParseAndResolveRef_InvalidConstraint(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid version or constraint")
 }
 
+func TestParseAndResolveRef_ConstraintSkipsPreRelease(t *testing.T) {
+	ctx := testContext()
+	fetcher := &mockCatalogFetcher{
+		listings: map[string][]catalog.ArtifactInfo{
+			"my-app": {
+				{Reference: catalog.Reference{Name: "my-app", Version: semver.MustParse("1.0.0")}},
+				{Reference: catalog.Reference{Name: "my-app", Version: semver.MustParse("1.5.0")}},
+				{Reference: catalog.Reference{Name: "my-app", Version: semver.MustParse("1.9.0-beta.1")}},
+			},
+		},
+	}
+
+	// Without --pre-release, the beta should be skipped even though it
+	// satisfies the constraint numerically. The catalog-level filter removes
+	// it before the constraint is evaluated.
+	r, err := parseAndResolveRef(ctx, "my-app@>= 1.0.0-0", fetcher)
+	require.NoError(t, err)
+	assert.Equal(t, "1.5.0", r.version.String())
+
+	// With --pre-release context, beta should be included
+	preCtx := catalog.WithIncludePreRelease(ctx)
+	r, err = parseAndResolveRef(preCtx, "my-app@>= 1.0.0-0", fetcher)
+	require.NoError(t, err)
+	assert.Equal(t, "1.9.0-beta.1", r.version.String())
+}
+
+func TestParseAndResolveRef_ConstraintFallsBackToPreRelease(t *testing.T) {
+	ctx := testContext()
+	fetcher := &mockCatalogFetcher{
+		listings: map[string][]catalog.ArtifactInfo{
+			"my-app": {
+				{Reference: catalog.Reference{Name: "my-app", Version: semver.MustParse("2.0.0-rc.1")}},
+				{Reference: catalog.Reference{Name: "my-app", Version: semver.MustParse("2.0.0-rc.2")}},
+			},
+		},
+	}
+
+	// Only pre-releases match the constraint; should still fail because
+	// pre-releases are filtered out and no stable versions match
+	_, err := parseAndResolveRef(ctx, "my-app@>=2.0.0", fetcher)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no version of")
+}
+
 // --- Tests for version conflict detection ---
 
 func TestVendorDependencies_VersionConflict(t *testing.T) {

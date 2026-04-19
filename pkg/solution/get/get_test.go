@@ -551,6 +551,37 @@ func TestFindSolution(t *testing.T) {
 		}
 		assert.True(t, foundSolutionYaml, "Should check for scafctl/solution.yaml")
 	})
+
+	t.Run("uses custom binary name folders", func(t *testing.T) {
+		checkedPaths := []string{}
+		customStatFunc := func(path string) (os.FileInfo, error) {
+			checkedPaths = append(checkedPaths, path)
+			return nil, fmt.Errorf("not found")
+		}
+
+		getter := NewGetter(
+			WithStatFunc(customStatFunc),
+			WithSolutionDiscovery(
+				settings.SolutionFoldersFor("mycli"),
+				settings.SolutionFileNamesFor("mycli"),
+			),
+		)
+		_ = getter.FindSolution()
+
+		// Should check mycli/solution.yaml, not scafctl/solution.yaml
+		foundMycli := false
+		foundScafctl := false
+		for _, p := range checkedPaths {
+			if p == "mycli/solution.yaml" {
+				foundMycli = true
+			}
+			if p == "scafctl/solution.yaml" {
+				foundScafctl = true
+			}
+		}
+		assert.True(t, foundMycli, "Should check for mycli/solution.yaml")
+		assert.False(t, foundScafctl, "Should NOT check for scafctl/solution.yaml")
+	})
 }
 
 func TestGetPossibleSolutionPaths(t *testing.T) {

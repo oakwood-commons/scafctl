@@ -5,6 +5,7 @@ package entra
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -57,6 +58,7 @@ type Handler struct {
 	httpClientConfig *config.HTTPClientConfig
 	graphClient      GraphClient
 	tokenCache       *auth.TokenCache
+	oboCache         *oboCache
 	logger           logr.Logger
 }
 
@@ -136,7 +138,8 @@ func WithLogger(lgr logr.Logger) Option {
 // the deferred error.
 func New(opts ...Option) (*Handler, error) {
 	h := &Handler{
-		config: DefaultConfig(),
+		config:   DefaultConfig(),
+		oboCache: newOBOCache(),
 	}
 
 	for _, opt := range opts {
@@ -210,6 +213,8 @@ func (h *Handler) DisplayName() string {
 }
 
 // SupportedFlows returns the authentication flows this handler supports.
+// Note: FlowOnBehalfOf is not listed here because OBO is a token-exchange
+// mechanism accessed via GetOBOToken, not through the Login flow.
 func (h *Handler) SupportedFlows() []auth.Flow {
 	flows := []auth.Flow{
 		auth.FlowInteractive,
@@ -254,13 +259,18 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 		return h.servicePrincipalLogin(ctx, opts)
 	}
 
-	// Device code flow only when explicitly requested
-	if opts.Flow == auth.FlowDeviceCode {
-		return h.deviceCodeLogin(ctx, opts)
+	// Interactive (auth code + PKCE) only when explicitly requested.
+	// Auth code flow opens a browser tab that may not carry the device PRT
+	// (Primary Refresh Token) on non-Edge browsers, causing Conditional
+	// Access device-compliance failures.
+	if opts.Flow == auth.FlowInteractive {
+		return h.authCodeLogin(ctx, opts)
 	}
 
-	// Default to interactive (browser OAuth with authorization code + PKCE)
-	return h.authCodeLogin(ctx, opts)
+	// Default to device code flow -- microsoft.com/devicelogin inherits
+	// the browser's existing SSO session (including the PRT), so
+	// Conditional Access device compliance works in any browser.
+	return h.deviceCodeLogin(ctx, opts)
 }
 
 // Logout clears stored credentials and cached tokens.
@@ -366,6 +376,9 @@ func (h *Handler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.T
 		return nil, auth.ErrInvalidScope
 	}
 
+	// Qualify bare permission names (e.g. "Group.Read.All" → full Graph URI).
+	qualifiedScope := QualifyScope(opts.Scope)
+
 	lgr := logger.FromContext(ctx)
 
 	// Determine the flow from stored metadata so we can partition the cache.
@@ -382,7 +395,7 @@ func (h *Handler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.T
 
 	lgr.V(1).Info("getting token",
 		"handler", HandlerName,
-		"scope", opts.Scope,
+		"scope", qualifiedScope,
 		"flow", userFlow,
 		"minValidFor", minValidFor,
 		"forceRefresh", opts.ForceRefresh,
@@ -393,10 +406,10 @@ func (h *Handler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.T
 
 	// Check disk cache first (unless force refresh)
 	if !opts.ForceRefresh {
-		token, err := h.tokenCache.Get(ctx, userFlow, fingerprint, opts.Scope)
+		token, err := h.tokenCache.Get(ctx, userFlow, fingerprint, qualifiedScope)
 		if err == nil && token != nil && token.IsValidFor(minValidFor) {
 			lgr.V(1).Info("using cached token",
-				"scope", opts.Scope,
+				"scope", qualifiedScope,
 				"expiresAt", token.ExpiresAt,
 				"remainingValidity", token.TimeUntilExpiry(),
 			)
@@ -414,13 +427,38 @@ func (h *Handler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.T
 	}
 
 	// Mint new token
-	token, err := h.mintToken(ctx, opts.Scope)
+	token, err := h.mintToken(ctx, qualifiedScope)
 	if err != nil {
-		return nil, err
+		// Claims challenge: Conditional Access requires step-up authentication.
+		// Automatically trigger interactive re-auth with the claims parameter,
+		// then retry the token mint.
+		var claimsErr *auth.ClaimsChallengeError
+		if errors.As(err, &claimsErr) {
+			lgr.V(0).Info("claims challenge detected, triggering interactive re-authentication",
+				"scope", qualifiedScope,
+			)
+			claimsCtx := ContextWithClaimsChallenge(ctx, claimsErr.Claims)
+			// Re-authenticate with the scope that triggered the challenge.
+			// Force interactive flow so the claims payload is injected into
+			// the authorize URL; device-code flow does not support claims.
+			if _, loginErr := h.Login(claimsCtx, auth.LoginOptions{
+				Scopes: []string{qualifiedScope},
+				Flow:   auth.FlowInteractive,
+			}); loginErr != nil {
+				return nil, fmt.Errorf("re-authentication for claims challenge failed: %w", loginErr)
+			}
+			// Retry with the fresh refresh token stored by Login.
+			token, err = h.mintToken(ctx, qualifiedScope)
+			if err != nil {
+				return nil, fmt.Errorf("token mint failed after claims challenge re-auth: %w", err)
+			}
+		} else {
+			return nil, err
+		}
 	}
 
 	// Cache the token to disk
-	if err := h.tokenCache.Set(ctx, userFlow, fingerprint, opts.Scope, token); err != nil {
+	if err := h.tokenCache.Set(ctx, userFlow, fingerprint, qualifiedScope, token); err != nil {
 		lgr.V(1).Info("failed to cache token", "error", err)
 		// Continue anyway - we have the token
 	}
