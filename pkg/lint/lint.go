@@ -91,6 +91,7 @@ func Solution(sol *solution.Solution, filePath string, registry *provider.Regist
 
 	lintResolvers(sol, result, registry, referencedResolvers)
 	lintWorkflow(sol, result, registry)
+	lintState(sol, result, registry)
 	lintTests(sol, filePath, result)
 	lintProviderInputs(sol, result, registry)
 
@@ -947,4 +948,171 @@ func FilterBySeverity(result *Result, minSeverity string) *Result {
 	}
 
 	return filtered
+}
+
+// stateReadProviders are providers that read from loaded state and cannot
+// be used by resolvers referenced in state config (circular dependency).
+var stateReadProviders = map[string]bool{
+	"state": true,
+}
+
+// lintState validates the solution's state configuration.
+func lintState(sol *solution.Solution, result *Result, registry *provider.Registry) {
+	if sol.State == nil {
+		return
+	}
+
+	if !lintStateBackend(sol, result, registry) {
+		return
+	}
+	lintStateResolverRefs(sol, result)
+	lintStateSensitive(sol, result)
+	lintStateCircularDeps(sol, result)
+}
+
+// lintStateBackend validates the backend provider configuration.
+// Returns false if further state linting should be skipped (e.g., backend is missing).
+func lintStateBackend(sol *solution.Solution, result *Result, registry *provider.Registry) bool {
+	location := "state"
+
+	backendName := sol.State.Backend.Provider
+	if backendName == "" {
+		result.addFinding(SeverityError, "state", location+".backend.provider",
+			"state backend provider is not specified",
+			"Set backend.provider to a registered provider with CapabilityState (e.g., 'file')",
+			"missing-state-backend")
+		return false
+	}
+
+	prov, found := registry.Get(backendName)
+	if !found {
+		result.addFinding(SeverityError, "state", location+".backend.provider",
+			fmt.Sprintf("state backend provider '%s' not found in registry", backendName),
+			"Use a registered state backend provider such as 'state-file' or 'state-github'",
+			"invalid-state-backend")
+	} else {
+		desc := prov.Descriptor()
+		hasState := false
+		for _, cap := range desc.Capabilities {
+			if cap == provider.CapabilityState {
+				hasState = true
+				break
+			}
+		}
+		if !hasState {
+			result.addFinding(SeverityError, "state", location+".backend.provider",
+				fmt.Sprintf("provider '%s' does not have CapabilityState", backendName),
+				"Use a provider that implements CapabilityState",
+				"invalid-state-backend")
+		}
+	}
+
+	lintNilInputs(sol.State.Backend.Inputs, location+".backend", result)
+	return true
+}
+
+// lintStateResolverRefs checks for direct rslvr: references in state config.
+// These won't work because state loads before resolvers run.
+func lintStateResolverRefs(sol *solution.Solution, result *Result) {
+	location := "state"
+
+	if sol.State.Enabled != nil && sol.State.Enabled.Resolver != nil {
+		result.addFinding(SeverityError, "state", location+".enabled",
+			fmt.Sprintf("state.enabled uses rslvr: %q — resolver results are not available at state load time", *sol.State.Enabled.Resolver),
+			"Use a literal value, env var, or CEL expression instead (e.g. expr: \"env('ENABLE_STATE') == 'true'\")",
+			"state-resolver-ref")
+	}
+	for inputKey, input := range sol.State.Backend.Inputs {
+		if input != nil && input.Resolver != nil {
+			result.addFinding(SeverityError, "state", fmt.Sprintf("%s.backend.inputs.%s", location, inputKey),
+				fmt.Sprintf("state backend input %q uses rslvr: %q — resolver results are not available at state load time", inputKey, *input.Resolver),
+				"Use a CEL expression referencing a CLI parameter instead (e.g. expr: \"_.appName + '-state.json'\")",
+				"state-resolver-ref")
+		}
+	}
+}
+
+// lintStateSensitive warns about resolvers that are both sensitive and saveToState.
+func lintStateSensitive(sol *solution.Solution, result *Result) {
+	for name, res := range sol.Spec.Resolvers {
+		if res != nil && res.Sensitive && res.SaveToState {
+			result.addFinding(SeverityWarning, "security",
+				fmt.Sprintf("resolvers.%s", name),
+				fmt.Sprintf("resolver '%s' is sensitive and has saveToState: true — value will be stored in plaintext", name),
+				"Acknowledge the risk or remove saveToState for sensitive resolvers",
+				"sensitive-state")
+		}
+	}
+}
+
+// lintStateCircularDeps checks for circular dependencies between state config
+// and resolvers that use saveToState or the state-reading provider.
+func lintStateCircularDeps(sol *solution.Solution, result *Result) {
+	stateResolverRefs := collectStateResolverRefs(sol)
+
+	if sol.Spec.Resolvers == nil || len(stateResolverRefs) == 0 {
+		return
+	}
+
+	for refName := range stateResolverRefs {
+		res, exists := sol.Spec.Resolvers[refName]
+		if !exists {
+			continue
+		}
+
+		refLocation := fmt.Sprintf("resolvers.%s", refName)
+
+		if res.SaveToState {
+			result.addFinding(SeverityError, "state", refLocation,
+				fmt.Sprintf("resolver '%s' is referenced by state config and has saveToState: true (circular dependency)", refName),
+				"Remove saveToState from resolvers referenced by state.enabled or state.backend.inputs",
+				"state-circular-dependency")
+		}
+
+		if res.Resolve != nil {
+			for _, step := range res.Resolve.With {
+				if stateReadProviders[step.Provider] {
+					result.addFinding(SeverityError, "state", refLocation,
+						fmt.Sprintf("resolver '%s' is referenced by state config and uses '%s' provider (circular dependency)", refName, step.Provider),
+						"State-referenced resolvers cannot use state-reading providers",
+						"state-circular-dependency")
+				}
+			}
+		}
+	}
+}
+
+// collectStateResolverRefs returns the resolver names referenced by state.enabled
+// and state.backend.inputs.
+func collectStateResolverRefs(sol *solution.Solution) map[string]bool {
+	refs := make(map[string]bool)
+	if sol.State == nil {
+		return refs
+	}
+
+	collectFromValueRef := func(vr interface{ ReferencedVariables() map[string]struct{} }) {
+		if vr == nil {
+			return
+		}
+		for name := range vr.ReferencedVariables() {
+			refs[name] = true
+		}
+	}
+
+	if sol.State.Enabled != nil {
+		collectFromValueRef(sol.State.Enabled)
+		if sol.State.Enabled.Resolver != nil {
+			refs[*sol.State.Enabled.Resolver] = true
+		}
+	}
+	for _, input := range sol.State.Backend.Inputs {
+		if input != nil {
+			collectFromValueRef(input)
+			if input.Resolver != nil {
+				refs[*input.Resolver] = true
+			}
+		}
+	}
+
+	return refs
 }

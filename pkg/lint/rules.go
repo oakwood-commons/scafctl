@@ -305,6 +305,46 @@ var KnownRules = map[string]RuleMeta{
 			"# Wrong:\ntmpl: \"Deploying {{ ._.config.appName }}\"\n\n# Correct:\ntmpl: \"Deploying {{ .config.appName }}\"",
 		},
 	},
+	"missing-state-backend": {
+		Rule:        "missing-state-backend",
+		Severity:    string(SeverityError),
+		Category:    "state",
+		Description: "The state block is configured but the backend provider is not specified.",
+		Why:         "State persistence requires a backend provider (e.g., 'file' or 'github') with CapabilityState to load and save state data.",
+		Fix:         "Add a backend.provider field to the state block, e.g.:\n  state:\n    enabled: true\n    backend:\n      provider: file",
+	},
+	"invalid-state-backend": {
+		Rule:        "invalid-state-backend",
+		Severity:    string(SeverityError),
+		Category:    "state",
+		Description: "The state backend references a provider that is not registered or lacks CapabilityState.",
+		Why:         "State backends must implement CapabilityState. Using an unregistered or incompatible provider will fail at runtime.",
+		Fix:         "Use a registered provider with CapabilityState such as 'file' or 'github'.",
+	},
+	"state-circular-dependency": {
+		Rule:        "state-circular-dependency",
+		Severity:    string(SeverityError),
+		Category:    "state",
+		Description: "A resolver referenced by state.enabled or state.backend.inputs has saveToState or uses the state-reading provider.",
+		Why:         "State loading depends on these resolvers, but they would also read/write state, creating a circular dependency.",
+		Fix:         "Ensure resolvers referenced by state config do not have saveToState: true and do not use state backend providers.",
+	},
+	"sensitive-state": {
+		Rule:        "sensitive-state",
+		Severity:    string(SeverityWarning),
+		Category:    "security",
+		Description: "A resolver marked sensitive: true also has saveToState: true. The sensitive value will be stored in plaintext in the state file.",
+		Why:         "Sensitive values (API keys, tokens) saved to state are persisted unencrypted. This is intentional for validation replay but should be an explicit, informed decision.",
+		Fix:         "Acknowledge the risk or remove saveToState from sensitive resolvers. Consider using the secret provider for sensitive values that do not need state persistence.",
+	},
+	"state-resolver-ref": {
+		Rule:        "state-resolver-ref",
+		Severity:    string(SeverityError),
+		Category:    "state",
+		Description: "A state.enabled or state.backend.inputs field uses a direct rslvr: reference. State is loaded before resolvers run, so resolver results are not available.",
+		Why:         "State configuration is resolved before resolver execution using only CLI parameters (-r flags) and environment data. Direct rslvr: references will fail at runtime because resolver results do not exist yet.",
+		Fix:         "Use a CEL expression referencing CLI parameters instead, e.g.:\n  path:\n    expr: \"_.appName + '-state.json'\"\nwhere appName is passed via -r appName=myapp.",
+	},
 }
 
 // ListRules returns all known lint rules sorted by severity (error > warning > info)
