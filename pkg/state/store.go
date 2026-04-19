@@ -87,14 +87,16 @@ func ResolveStatePath(path string) (string, error) {
 		return "", fmt.Errorf("state path is required")
 	}
 
-	// Reject path traversal
+	// Reject path traversal by checking individual segments
 	cleaned := filepath.Clean(path)
-	if strings.Contains(cleaned, "..") {
-		return "", fmt.Errorf("path traversal not allowed: %s", path)
+	for _, seg := range strings.Split(cleaned, string(filepath.Separator)) {
+		if seg == ".." {
+			return "", fmt.Errorf("path traversal not allowed: %s", path)
+		}
 	}
 
 	if filepath.IsAbs(path) {
-		return path, nil
+		return filepath.Clean(path), nil
 	}
 
 	return filepath.Join(paths.StateDir(), cleaned), nil

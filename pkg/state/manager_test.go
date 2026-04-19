@@ -10,6 +10,8 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
@@ -378,7 +380,7 @@ func TestManagerSave(t *testing.T) {
 			rctx, resolvers := tt.setup()
 			solMeta := SolutionMeta{Name: "my-app", Version: "2.0.0"}
 
-			err := mgr.Save(context.Background(), tt.state, rctx, resolvers, nil, solMeta)
+			err := mgr.Save(context.Background(), tt.state, rctx, resolvers, nil, nil, solMeta)
 			if tt.wantErr {
 				assert.Error(t, err)
 				return
@@ -593,5 +595,135 @@ func TestExtractStateData(t *testing.T) {
 		})
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "expected *Data or map[string]any")
+	})
+}
+
+func TestManagerLoad_ParamsAsParams(t *testing.T) {
+	t.Run("CEL __params in backend inputs", func(t *testing.T) {
+		backend := &mockBackendProvider{}
+		reg := newTestRegistry(t, backend)
+
+		expr := celexp.Expression("'gcp/' + __params.project + '/state.json'")
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{
+				Provider: "mock-state",
+				Inputs:   map[string]*spec.ValueRef{"path": {Expr: &expr}},
+			},
+		}
+		mgr := NewManager(cfg, reg, "v")
+		params := map[string]any{"project": "my-proj"}
+		result, err := mgr.Load(context.Background(), params, CommandInfo{Subcommand: "run solution"})
+		assert.NoError(t, err)
+		assert.False(t, result.Skipped)
+	})
+
+	t.Run("CEL __params in enabled", func(t *testing.T) {
+		backend := &mockBackendProvider{}
+		reg := newTestRegistry(t, backend)
+
+		expr := celexp.Expression("__params.state_enabled == true")
+		cfg := &Config{
+			Enabled: &spec.ValueRef{Expr: &expr},
+			Backend: Backend{
+				Provider: "mock-state",
+				Inputs:   map[string]*spec.ValueRef{},
+			},
+		}
+		mgr := NewManager(cfg, reg, "v")
+
+		// enabled=true
+		result, err := mgr.Load(context.Background(), map[string]any{"state_enabled": true}, CommandInfo{})
+		assert.NoError(t, err)
+		assert.False(t, result.Skipped)
+
+		// enabled=false
+		result, err = mgr.Load(context.Background(), map[string]any{"state_enabled": false}, CommandInfo{})
+		assert.NoError(t, err)
+		assert.True(t, result.Skipped)
+	})
+
+	t.Run("Go template __params in backend inputs", func(t *testing.T) {
+		backend := &mockBackendProvider{}
+		reg := newTestRegistry(t, backend)
+
+		tmpl := gotmpl.GoTemplatingContent("gcp/{{ .__params.project }}/state.json")
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{
+				Provider: "mock-state",
+				Inputs:   map[string]*spec.ValueRef{"path": {Tmpl: &tmpl}},
+			},
+		}
+		mgr := NewManager(cfg, reg, "v")
+		params := map[string]any{"project": "my-proj"}
+		result, err := mgr.Load(context.Background(), params, CommandInfo{})
+		assert.NoError(t, err)
+		assert.False(t, result.Skipped)
+	})
+
+	t.Run("nil params does not panic", func(t *testing.T) {
+		backend := &mockBackendProvider{}
+		reg := newTestRegistry(t, backend)
+
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{
+				Provider: "mock-state",
+				Inputs:   map[string]*spec.ValueRef{"path": literalValueRef("default.json")},
+			},
+		}
+		mgr := NewManager(cfg, reg, "v")
+		result, err := mgr.Load(context.Background(), nil, CommandInfo{})
+		assert.NoError(t, err)
+		assert.False(t, result.Skipped)
+	})
+}
+
+func TestResolveWithParams(t *testing.T) {
+	t.Run("nil valueref returns nil", func(t *testing.T) {
+		val, err := resolveWithParams(context.Background(), nil, nil, nil)
+		assert.NoError(t, err)
+		assert.Nil(t, val)
+	})
+
+	t.Run("literal ignores params", func(t *testing.T) {
+		vr := literalValueRef("static")
+		val, err := resolveWithParams(context.Background(), vr, nil, map[string]any{"key": "val"})
+		assert.NoError(t, err)
+		assert.Equal(t, "static", val)
+	})
+
+	t.Run("CEL uses __params", func(t *testing.T) {
+		expr := celexp.Expression("__params.name + '-state.json'")
+		vr := &spec.ValueRef{Expr: &expr}
+		val, err := resolveWithParams(context.Background(), vr, nil, map[string]any{"name": "myapp"})
+		assert.NoError(t, err)
+		assert.Equal(t, "myapp-state.json", val)
+	})
+
+	t.Run("CEL uses both _ and __params", func(t *testing.T) {
+		expr := celexp.Expression("_.resolver_out + '/' + __params.project")
+		vr := &spec.ValueRef{Expr: &expr}
+		resolverData := map[string]any{"resolver_out": "computed"}
+		params := map[string]any{"project": "my-proj"}
+		val, err := resolveWithParams(context.Background(), vr, resolverData, params)
+		assert.NoError(t, err)
+		assert.Equal(t, "computed/my-proj", val)
+	})
+
+	t.Run("template uses __params", func(t *testing.T) {
+		tmpl := gotmpl.GoTemplatingContent("{{ .__params.project }}/state.json")
+		vr := &spec.ValueRef{Tmpl: &tmpl}
+		val, err := resolveWithParams(context.Background(), vr, nil, map[string]any{"project": "my-proj"})
+		assert.NoError(t, err)
+		assert.Equal(t, "my-proj/state.json", val)
+	})
+
+	t.Run("empty valueref returns error", func(t *testing.T) {
+		vr := &spec.ValueRef{}
+		_, err := resolveWithParams(context.Background(), vr, nil, nil)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "empty value reference")
 	})
 }

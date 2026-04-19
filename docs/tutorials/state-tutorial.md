@@ -75,7 +75,7 @@ spec:
 
 Key fields:
 
-- `state.enabled` -- Activates state. Can be a literal `true`, a CEL expression, resolver reference, or template.
+- `state.enabled` -- Activates state. Can be a literal `true`, a CEL expression, or template. Because state is loaded before resolvers run, direct resolver references (for example, `rslvr:...`) are not currently supported here.
 - `state.backend.provider` -- The provider that handles persistence. Use `file` for local files or `github` for GitHub repos.
 - `state.backend.inputs` -- Provider-specific inputs. For `file`, only `path` is required.
 
@@ -185,28 +185,32 @@ spec:
             inputs:
               key: "username"
 
-    run_count:
-      type: int
+    region:
+      type: string
       saveToState: true
       resolve:
         with:
           - provider: state
             inputs:
-              key: "run_count"
-              fallback: 0
+              key: "region"
+              required: false
+          - provider: parameter
+            inputs:
+              key: "region"
+              default: "us-east-1"
 ~~~
 
 **First run:**
 
 ```
-scafctl run resolver -f state-demo.yaml -r username=alice
+scafctl run resolver -f state-demo.yaml -r username=alice -r region=eu-west-1
 ```
 
 Output:
 
 ```
 username: alice
-run_count: 0
+region: eu-west-1
 ```
 
 **Second run** (no parameters needed -- values come from state):
@@ -219,10 +223,10 @@ Output:
 
 ```
 username: alice
-run_count: 0
+region: eu-west-1
 ```
 
-The `username` is now read from state. The `run_count` shows `0` from the fallback because the state provider read phase runs before the new save.
+Both values are now read from state. No re-prompting needed.
 
 ---
 
@@ -237,7 +241,7 @@ state:
     provider: file
     inputs:
       path:
-        tmpl: "deploy/{{ .project_name }}.json"
+        tmpl: "deploy/{{ .__params.project_name }}.json"
 spec:
   resolvers:
     project_name:
@@ -312,7 +316,7 @@ scafctl state delete --path state-demo.json --key username
 scafctl state clear --path state-demo.json
 ```
 
-All commands support `-o json`, `-o yaml`, and `-o quiet` output formats.
+`scafctl state list` and `scafctl state get` support `-o json`, `-o yaml`, and `-o quiet` output formats.
 
 The `--path` flag is relative to the XDG state directory. Use an absolute path to reference files outside the state directory.
 
@@ -375,14 +379,14 @@ On first run, the HTTP call fetches the token. On subsequent runs, it comes from
 ~~~yaml
 state:
   enabled:
-    expr: "env('ENABLE_STATE') == 'true'"
+    expr: "__params.enable_state == true"
   backend:
     provider: file
     inputs:
       path: "my-app.json"
 ~~~
 
-State is only active when the `ENABLE_STATE` environment variable is set to `true`.
+State is only active when the `enable_state` CLI parameter is set to `true` (e.g., `-r enable_state=true`).
 
 ### Writing state from actions
 

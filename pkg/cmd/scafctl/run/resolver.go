@@ -463,7 +463,7 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		// are read-only inspections that should not mutate persisted state.
 		if sol.State != nil {
 			snapshotMgr := state.NewManager(sol.State, reg, settings.VersionInformation.BuildVersion)
-			loadResult, loadErr := snapshotMgr.Load(ctx, nil, buildCommandInfo("run resolver", params))
+			loadResult, loadErr := snapshotMgr.Load(ctx, params, buildCommandInfo("run resolver", params))
 			if loadErr != nil {
 				return o.exitWithCode(ctx, fmt.Errorf("state load: %w", loadErr), exitcode.GeneralError)
 			}
@@ -482,7 +482,7 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 	// State lifecycle: load persisted state before resolver execution so that
 	// the state provider can serve previously saved values.
 	// params are passed so that state backend inputs can reference CLI
-	// parameters via CEL/template expressions (e.g. _.appName + '.json').
+	// parameters via __params in CEL expressions (e.g. __params.appName).
 	var stateMgr *state.Manager
 	var stateData *state.Data
 	if sol.State != nil {
@@ -513,7 +513,7 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 	if stateMgr != nil && stateData != nil {
 		allResolvers := sol.Spec.ResolversToSlice()
 		solMeta := buildStateSolutionMeta(sol)
-		if saveErr := stateMgr.Save(ctx, stateData, resolverCtx, allResolvers, resolverData, solMeta); saveErr != nil {
+		if saveErr := stateMgr.Save(ctx, stateData, resolverCtx, allResolvers, params, resolverData, solMeta); saveErr != nil {
 			return o.exitWithCode(ctx, fmt.Errorf("state save: %w", saveErr), exitcode.GeneralError)
 		}
 	}

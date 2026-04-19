@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
@@ -45,20 +47,20 @@ type LoadResult struct {
 }
 
 // Load executes the pre-execution state lifecycle:
-//  1. Resolves the enabled ValueRef (if it references resolvers, those must
-//     already be resolved and available in resolverData).
+//  1. Evaluates the enabled ValueRef using CLI params (available as __params
+//     in CEL expressions). No resolver data is available at load time.
 //  2. If disabled, returns LoadResult{Skipped: true}.
-//  3. Resolves backend inputs.
+//  3. Resolves backend inputs with params as __params.
 //  4. Calls the backend provider with operation=state_load.
 //  5. Captures command info.
 //  6. Injects state into context via WithState.
-func (m *Manager) Load(ctx context.Context, resolverData map[string]any, command CommandInfo) (*LoadResult, error) {
+func (m *Manager) Load(ctx context.Context, params map[string]any, command CommandInfo) (*LoadResult, error) {
 	if m.config == nil {
 		return &LoadResult{Ctx: ctx, Skipped: true}, nil
 	}
 
-	// Evaluate enabled
-	enabled, err := m.evaluateEnabled(ctx, resolverData)
+	// Evaluate enabled — no resolver data at load time, only CLI params
+	enabled, err := m.evaluateEnabled(ctx, nil, params)
 	if err != nil {
 		return nil, fmt.Errorf("state: evaluate enabled: %w", err)
 	}
@@ -66,8 +68,8 @@ func (m *Manager) Load(ctx context.Context, resolverData map[string]any, command
 		return &LoadResult{Ctx: ctx, Skipped: true}, nil
 	}
 
-	// Resolve backend inputs
-	backendInputs, err := m.resolveBackendInputs(ctx, resolverData)
+	// Resolve backend inputs — no resolver data at load time, only CLI params
+	backendInputs, err := m.resolveBackendInputs(ctx, nil, params)
 	if err != nil {
 		return nil, fmt.Errorf("state: resolve backend inputs: %w", err)
 	}
@@ -109,9 +111,18 @@ func (m *Manager) Load(ctx context.Context, resolverData map[string]any, command
 //  2. Updates state data with collected values.
 //  3. Updates metadata timestamps.
 //  4. Calls the backend provider with operation=state_save.
-func (m *Manager) Save(ctx context.Context, stateData *Data, resolverCtx *resolver.Context, resolvers []*resolver.Resolver, resolverData map[string]any, solMeta SolutionMeta) error {
+//
+// params are the original CLI parameters, available as __params in backend
+// input CEL expressions. resolverData contains resolver outputs, available
+// as _ in CEL expressions.
+func (m *Manager) Save(ctx context.Context, stateData *Data, resolverCtx *resolver.Context, resolvers []*resolver.Resolver, params, resolverData map[string]any, solMeta SolutionMeta) error {
 	if m.config == nil || stateData == nil {
 		return nil
+	}
+
+	// Ensure maps are initialized before assigning entries
+	if stateData.Values == nil {
+		stateData.Values = make(map[string]*Entry)
 	}
 
 	// Collect saveToState values
@@ -141,8 +152,9 @@ func (m *Manager) Save(ctx context.Context, stateData *Data, resolverCtx *resolv
 	stateData.Metadata.Version = solMeta.Version
 	stateData.Metadata.ScafctlVersion = m.version
 
-	// Resolve backend inputs for save
-	backendInputs, err := m.resolveBackendInputs(ctx, resolverData)
+	// Resolve backend inputs for save — resolver outputs are available as _
+	// and CLI params as __params in backend input expressions.
+	backendInputs, err := m.resolveBackendInputs(ctx, resolverData, params)
 	if err != nil {
 		return fmt.Errorf("state: resolve backend inputs for save: %w", err)
 	}
@@ -217,13 +229,14 @@ func (m *Manager) RequiredResolvers() []string {
 }
 
 // evaluateEnabled resolves the enabled ValueRef and coerces to bool.
-func (m *Manager) evaluateEnabled(ctx context.Context, resolverData map[string]any) (bool, error) {
+// CLI params are available as __params in CEL expressions.
+func (m *Manager) evaluateEnabled(ctx context.Context, resolverData, params map[string]any) (bool, error) {
 	if m.config.Enabled == nil {
 		// No enabled field means enabled by default when state block is present
 		return true, nil
 	}
 
-	val, err := m.config.Enabled.Resolve(ctx, resolverData, nil)
+	val, err := resolveWithParams(ctx, m.config.Enabled, resolverData, params)
 	if err != nil {
 		return false, fmt.Errorf("resolve enabled: %w", err)
 	}
@@ -232,14 +245,15 @@ func (m *Manager) evaluateEnabled(ctx context.Context, resolverData map[string]a
 }
 
 // resolveBackendInputs resolves all backend input ValueRefs.
-func (m *Manager) resolveBackendInputs(ctx context.Context, resolverData map[string]any) (map[string]any, error) {
+// resolverData becomes _ in CEL; params becomes __params.
+func (m *Manager) resolveBackendInputs(ctx context.Context, resolverData, params map[string]any) (map[string]any, error) {
 	resolved := make(map[string]any, len(m.config.Backend.Inputs))
 
 	for key, vr := range m.config.Backend.Inputs {
 		if vr == nil {
 			continue
 		}
-		val, err := vr.Resolve(ctx, resolverData, nil)
+		val, err := resolveWithParams(ctx, vr, resolverData, params)
 		if err != nil {
 			return nil, fmt.Errorf("resolve input %q: %w", key, err)
 		}
@@ -247,6 +261,50 @@ func (m *Manager) resolveBackendInputs(ctx context.Context, resolverData map[str
 	}
 
 	return resolved, nil
+}
+
+// resolveWithParams resolves a ValueRef with CLI params available as __params.
+// resolverData is passed as the standard _ variable. For literal and resolver-ref
+// ValueRefs, params are not used (they are only relevant for CEL and templates).
+func resolveWithParams(ctx context.Context, vr *spec.ValueRef, resolverData, params map[string]any) (any, error) {
+	if vr == nil {
+		return nil, nil
+	}
+
+	// Literal and resolver references don't need params
+	if vr.Literal != nil || vr.Resolver != nil {
+		return vr.Resolve(ctx, resolverData, nil)
+	}
+
+	// CEL expression — inject __params as an additional variable
+	if vr.Expr != nil {
+		additionalVars := map[string]any{celexp.VarParams: params}
+		result, err := celexp.EvaluateExpression(ctx, string(*vr.Expr), resolverData, additionalVars)
+		if err != nil {
+			return nil, fmt.Errorf("failed to evaluate expression: %w", err)
+		}
+		return result, nil
+	}
+
+	// Go template — add __params to template data
+	if vr.Tmpl != nil {
+		templateData := make(map[string]any, len(resolverData)+2)
+		for k, val := range resolverData {
+			templateData[k] = val
+		}
+		templateData[celexp.VarParams] = params
+		result, err := gotmpl.Execute(ctx, gotmpl.TemplateOptions{
+			Content:    string(*vr.Tmpl),
+			Data:       templateData,
+			MissingKey: gotmpl.MissingKeyError,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to execute template: %w", err)
+		}
+		return result.Output, nil
+	}
+
+	return nil, fmt.Errorf("empty value reference")
 }
 
 // getBackendProvider looks up the backend provider from the registry.

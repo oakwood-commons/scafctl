@@ -176,6 +176,87 @@ func TestCommandSet_Immutable(t *testing.T) {
 	assert.Contains(t, buf.String(), "immutable")
 }
 
+func TestCommandSet_TypedInt(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "test.json")
+
+	ctx, buf := newTestContext(t)
+	cmd := CommandSet(&settings.Run{BinaryName: "testcli"}, &terminal.IOStreams{Out: buf, ErrOut: buf}, "")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"--path", path, "--key", "port", "--value", "8080", "--type", "int"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+
+	sd, loadErr := state.LoadFromFile(path)
+	require.NoError(t, loadErr)
+	// JSON round-trips int64 as float64
+	assert.Equal(t, float64(8080), sd.Values["port"].Value)
+}
+
+func TestCommandSet_TypedBool(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "test.json")
+
+	ctx, buf := newTestContext(t)
+	cmd := CommandSet(&settings.Run{BinaryName: "testcli"}, &terminal.IOStreams{Out: buf, ErrOut: buf}, "")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"--path", path, "--key", "enabled", "--value", "true", "--type", "bool"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+
+	sd, loadErr := state.LoadFromFile(path)
+	require.NoError(t, loadErr)
+	assert.Equal(t, true, sd.Values["enabled"].Value)
+}
+
+func TestCommandSet_TypedFloat(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "test.json")
+
+	ctx, buf := newTestContext(t)
+	cmd := CommandSet(&settings.Run{BinaryName: "testcli"}, &terminal.IOStreams{Out: buf, ErrOut: buf}, "")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"--path", path, "--key", "ratio", "--value", "3.14", "--type", "float"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+
+	sd, loadErr := state.LoadFromFile(path)
+	require.NoError(t, loadErr)
+	assert.Equal(t, 3.14, sd.Values["ratio"].Value)
+}
+
+// ── coerceValue unit tests ────────────────────────────────────────────────────
+
+func TestCoerceValue(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		raw      string
+		typ      string
+		expected any
+	}{
+		{name: "string default", raw: "hello", typ: "string", expected: "hello"},
+		{name: "int valid", raw: "42", typ: "int", expected: int64(42)},
+		{name: "int invalid fallback", raw: "abc", typ: "int", expected: "abc"},
+		{name: "bool true", raw: "true", typ: "bool", expected: true},
+		{name: "bool false", raw: "false", typ: "bool", expected: false},
+		{name: "bool invalid fallback", raw: "nope", typ: "bool", expected: "nope"},
+		{name: "float valid", raw: "2.71", typ: "float", expected: 2.71},
+		{name: "float invalid fallback", raw: "abc", typ: "float", expected: "abc"},
+		{name: "unknown type", raw: "x", typ: "custom", expected: "x"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, coerceValue(tt.raw, tt.typ))
+		})
+	}
+}
+
 // ── Delete tests ──────────────────────────────────────────────────────────────
 
 func TestCommandDelete_Found(t *testing.T) {

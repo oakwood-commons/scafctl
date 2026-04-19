@@ -9,10 +9,10 @@ weight: 14
 
 State adds optional, per-solution persistence of resolver values across executions. It enables two primary workflows:
 
-1. **Re-run with same data** — Execute a solution repeatedly and retain resolved values between runs without re-prompting or re-fetching.
-2. **Validation replay** — A validation application can replay the exact command with the same flags and verify it produces the same results.
+1. **Re-run with same data** -- Execute a solution repeatedly and retain resolved values between runs without re-prompting or re-fetching.
+2. **Validation replay** -- A validation application can replay the exact command with the same flags and verify it produces the same results.
 
-State is opt-in. Solutions without a `state` block behave exactly as they do today — stateless, deterministic, and self-contained. State does not change the resolver or provider execution model. It adds a persistence layer accessed exclusively through the provider system.
+State is opt-in. Solutions without a `state` block behave exactly as they do today -- stateless, deterministic, and self-contained. State does not change the resolver or provider execution model. It adds a persistence layer accessed exclusively through the provider system.
 
 State does not:
 
@@ -55,7 +55,7 @@ State is not responsible for:
 - Replacing provider execution (resolvers always run their configured providers)
 - Caching intermediate computations
 - Implicitly altering execution behavior
-- Managing secrets or encryption (sensitive values are stored in plaintext — see [Sensitive Values](#sensitive-values))
+- Managing secrets or encryption (sensitive values are stored in plaintext -- see [Sensitive Values](#sensitive-values))
 
 ---
 
@@ -76,7 +76,7 @@ State operations are merged into existing providers (`file`, `github`) rather th
 
 ### New Capability: `state`
 
-A new `CapabilityState` is added to the provider capability system. This capability signals that a provider can act as a state persistence backend. It is not used by resolvers or actions directly — only by the state manager during the pre-execution and post-execution phases.
+A new `CapabilityState` is added to the provider capability system. This capability signals that a provider can act as a state persistence backend. It is not used by resolvers or actions directly -- only by the state manager during the pre-execution and post-execution phases.
 
 Required output fields for `state` capability:
 
@@ -94,7 +94,7 @@ State is declared via a top-level `state` field on the `Solution` struct, as a p
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `enabled` | `ValueRef` | Yes | Dynamic activation -- literal bool, CEL expression, resolver ref, or Go template |
+| `enabled` | `ValueRef` | Yes | Dynamic activation -- literal bool, CEL expression, or Go template. Resolver references (`rslvr:`) are not supported because state loads before resolvers run |
 | `backend` | `Backend` | Yes | Backend provider configuration |
 
 ### Backend Type
@@ -102,7 +102,7 @@ State is declared via a top-level `state` field on the `Solution` struct, as a p
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `provider` | `string` | Yes | Name of a registered provider with `CapabilityState` (e.g., `"file"`) |
-| `inputs` | `map[string]*ValueRef` | Yes | Provider-specific inputs — follows the same pattern as resolver provider inputs |
+| `inputs` | `map[string]*ValueRef` | Yes | Provider-specific inputs -- follows the same pattern as resolver provider inputs |
 
 ### Example
 
@@ -118,7 +118,7 @@ state:
     provider: file
     inputs:
       path:
-        tmpl: "deploy-app/{{ .project_name }}.json"
+        tmpl: "deploy-app/{{ .__params.project_name }}.json"
 spec:
   resolvers:
     project_name:
@@ -153,11 +153,10 @@ spec:
 The `enabled` field is a `ValueRef`, which means it supports:
 
 - **Literal**: `enabled: true`
-- **CEL expression**: `enabled: { expr: "env('ENABLE_STATE') == 'true'" }`
-- **Resolver reference**: `enabled: { rslvr: "use_state" }`
-- **Go template**: `enabled: { tmpl: "{{ .enable_state }}" }`
+- **CEL expression**: `enabled: { expr: "__params.enable_state == true" }`
+- **Go template**: `enabled: { tmpl: "{{ .__params.enable_state }}" }`
 
-When `enabled` references resolvers, those resolvers are included in the [pre-execution mini-phase](#state-loading-lifecycle).
+Resolver references (`rslvr:`) are not supported because state is loaded before resolvers run. CEL expressions and templates can access CLI parameters (`-r` flags) via `__params`.
 
 ### Dynamic Backend Inputs
 
@@ -170,10 +169,10 @@ state:
     provider: file
     inputs:
       path:
-        tmpl: "deploy-app/{{ .project_name }}.json"
+        tmpl: "deploy-app/{{ .__params.project_name }}.json"
 ~~~
 
-Here, `project_name` is a resolver that runs during the pre-execution mini-phase. Project A and Project B each get their own state file.
+Here, `project_name` is a CLI parameter passed via `-r project_name=myapp`. Project A and Project B each get their own state file.
 
 ---
 
@@ -229,14 +228,14 @@ State is persisted as JSON. The schema includes a `schemaVersion` field for forw
 | `value` | `any` | The stored resolver value |
 | `type` | `string` | The resolver's declared type (string, int, float, bool, array, any) |
 | `updatedAt` | `timestamp` | When this entry was last written |
-| `immutable` | `bool` | Whether this entry is locked (future enhancement — see [Immutable Resolvers](#immutable-resolvers-future-enhancement)) |
+| `immutable` | `bool` | Whether this entry is locked (future enhancement -- see [Immutable Resolvers](#immutable-resolvers-future-enhancement)) |
 
 ### Command Capture
 
-State stores the most recent invocation's command information — **latest only, no history**. This enables a validation application to replay the exact command:
+State stores the most recent invocation's command information -- **latest only, no history**. This enables a validation application to replay the exact command:
 
-- `command.subcommand` — the CLI subcommand (e.g., `run solution`)
-- `command.parameters` — the `--parameter` key-value pairs passed via `-r` flags
+- `command.subcommand` -- the CLI subcommand (e.g., `run solution`)
+- `command.parameters` -- the `--parameter` key-value pairs passed via `-r` flags
 
 Solution identity (name, version) is already in `metadata` and does not need to be duplicated in `command`.
 
@@ -268,22 +267,22 @@ resolvers:
 
 - `saveToState` defaults to `false`
 - When `true`, the resolver's result is collected for state persistence after execution
-- The resolver always executes its configured provider — `saveToState` does **not** cause the resolver to skip execution or read from state implicitly
+- The resolver always executes its configured provider -- `saveToState` does **not** cause the resolver to skip execution or read from state implicitly
 - To read from state on subsequent runs, use the `state` provider explicitly (see [State Provider](#state-provider))
 
 ### Batch Save
 
 All `saveToState` values are collected after **all** resolvers complete, then flushed to the backend in a single `save` call. This ensures:
 
-- No partial state on failures — if any resolver fails, state is not updated
-- Minimal I/O — one write per execution, not one per resolver
-- Consistent state — all values reflect the same execution
+- No partial state on failures -- if any resolver fails, state is not updated
+- Minimal I/O -- one write per execution, not one per resolver
+- Consistent state -- all values reflect the same execution
 
 ---
 
 ## State Provider
 
-The `state` provider gives resolvers and actions explicit read/write access to individual state entries. It is a separate provider from the backend — it reads/writes the in-memory state data loaded during the pre-execution phase.
+The `state` provider gives resolvers and actions explicit read/write access to individual state entries. It is a separate provider from the backend -- it reads/writes the in-memory state data loaded during the pre-execution phase.
 
 ### Read Mode (`from` capability)
 
@@ -291,13 +290,13 @@ Used by resolvers to read previously stored values:
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `key` | string | Yes | — | State entry key (typically a resolver name) |
+| `key` | string | Yes | -- | State entry key (typically a resolver name) |
 | `required` | bool | No | `false` | If `true`, error when key is not found |
 | `fallback` | any | No | `null` | Value returned when key is not found and `required` is `false` |
 
 **First run behavior**: When no state file exists (first execution), the state provider returns `null` or `fallback` for all reads. It does not error unless `required: true`.
 
-Example — resolver that uses state on subsequent runs:
+Example -- resolver that uses state on subsequent runs:
 
 ~~~yaml
 resolvers:
@@ -324,11 +323,11 @@ Used by actions to explicitly write values to state:
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `key` | string | Yes | — | State entry key |
-| `value` | ValueRef | Yes | — | Value to store |
+| `key` | string | Yes | -- | State entry key |
+| `value` | ValueRef | Yes | -- | Value to store |
 | `immutable` | bool | No | `false` | Lock value permanently (future enhancement) |
 
-Example — action that writes to state:
+Example -- action that writes to state:
 
 ~~~yaml
 workflow:
@@ -403,33 +402,31 @@ No changes to `pkg/state/` or the core execution flow are needed to add a new ba
 
 ## State Loading Lifecycle
 
-The `enabled` and `backend.inputs` fields can reference resolvers, creating ordering dependencies. The state loading lifecycle handles this:
+The `enabled` and `backend.inputs` fields are resolved using CLI parameters (`-r` flags) available as `__params` in CEL and template expressions. Resolver outputs (`_`) are only available at save time, not load time.
 
 ### Steps
 
-1. **Parse** — Extract `state` config from the solution. Identify resolvers referenced by `state.enabled` and `state.backend.inputs` using `ValueRef.ReferencesVariable()`.
+1. **Parse** -- Extract `state` config from the solution.
 
-2. **Validate** -- Ensure referenced resolvers do NOT have `saveToState: true` and do NOT use the `state` provider. This prevents circular dependencies.
+2. **Validate** -- Ensure `state.enabled` and `state.backend.inputs` do NOT use direct resolver references (`rslvr:`). State loads before resolvers run, so resolver outputs are not available.
 
-3. **Pre-execution mini-phase** — Execute ONLY the resolvers referenced by `enabled` and backend inputs in a temporary resolver context. These are executed using a subset call to `resolver.Executor.Execute()` with just the required resolvers.
+3. **Evaluate `enabled`** -- Resolve the `ValueRef` using CLI params (`__params`). If falsy, skip state entirely and proceed with normal stateless execution.
 
-4. **Evaluate `enabled`** — Resolve the `ValueRef`. If falsy, skip state entirely and proceed with normal stateless execution.
+4. **Resolve backend inputs** -- Resolve all `ValueRef` inputs for the backend provider (e.g., the `path` template) using CLI params (`__params`).
 
-5. **Resolve backend inputs** — Resolve all `ValueRef` inputs for the backend provider (e.g., the `path` template).
+5. **Load state** -- Call the backend provider with `operation: load` via `provider.Execute()` with `WithExecutionMode(ctx, CapabilityState)`. This is a standalone provider call -- completely independent of the resolver system.
 
-6. **Load state** — Call the backend provider with `operation: load` via `provider.Execute()` with `WithExecutionMode(ctx, CapabilityState)`. This is a standalone provider call — completely independent of the resolver system.
+6. **Capture command** -- Store the current subcommand and parameters in the `command` section of the loaded state data.
 
-7. **Capture command** — Store the current subcommand and parameters in the `command` section of the loaded state data.
+7. **Inject** -- Put the loaded state data into `context.Context` via `state.WithState(ctx, stateData)`.
 
-8. **Inject** — Put the loaded state data into `context.Context` via `state.WithState(ctx, stateData)`.
+8. **Normal execution** -- `resolver.Executor.Execute()` runs. Resolvers with `saveToState: true` persist their results. The `state` provider reads/writes entries via context.
 
-9. **Normal execution** — `resolver.Executor.Execute()` runs. Resolvers with `saveToState: true` persist their results. The `state` provider reads/writes entries via context.
-
-10. **Flush** — After all resolvers complete, collect results from `saveToState` resolvers, update state data, and call the backend provider with `operation: save`.
+9. **Flush** -- After all resolvers complete, collect results from `saveToState` resolvers, update state data, and call the backend provider with `operation: save`.
 
 ### Integration Point
 
-State loading happens in the command layer (`pkg/cmd/scafctl/run/common.go`) before `executor.Execute()` is called. The `provider.Executor` is fully standalone and can be called independently of the resolver system — this is the same pattern used by `run provider`.
+State loading happens in the command layer (`pkg/cmd/scafctl/run/common.go`) before `executor.Execute()` is called. The `provider.Executor` is fully standalone and can be called independently of the resolver system -- this is the same pattern used by `run provider`.
 
 ### Sequence Diagram
 
@@ -442,11 +439,9 @@ State loading happens in the command layer (`pkg/cmd/scafctl/run/common.go`) bef
    │  run sol    │                │                │                │
    ├────────────>│                │                │                │
    │             │                │                │                │
-   │             │ pre-exec mini-phase             │                │
-   │             │ (resolve state.enabled +        │                │
-   │             │  backend inputs)                │                │
-   │             ├───────────────────────────────-->│                │
-   │             │<────────────────────────────────┤                │
+   │             │ evaluate enabled +              │                │
+   │             │ resolve backend inputs          │                │
+   │             │ (using __params from CLI)        │                │
    │             │                │                │                │
    │             │ load state     │                │                │
    │             ├───────────────>│                │                │
@@ -519,7 +514,7 @@ A `scafctl state` command group provides manual state management, mirroring the 
 | `scafctl state clear --path <file>` | Clear all values |
 
 - `--path` is relative to `paths.StateDir()`
-- All commands support `-o table/json/yaml/quiet` via `kvx.OutputOptions`
+- `list` and `get` support `-o table/json/yaml/quiet` via `kvx.OutputOptions`
 
 ---
 
@@ -551,7 +546,7 @@ A `scafctl state` command group provides manual state management, mirroring the 
 | `pkg/cmd/scafctl/run/solution.go` | Pass state config to common execution flow |
 | `pkg/cmd/scafctl/render/solution.go` | Support state reads in render mode (writes are no-op) |
 | `pkg/cmd/scafctl/root.go` | Register `scafctl state` command group |
-| `docs/design/misc.md` | Revise "No persistent state between runs" — note state is now opt-in |
+| `docs/design/misc.md` | Revise "No persistent state between runs" -- note state is now opt-in |
 | `docs/design/future-enhancements.md` | Add immutable resolver entry |
 
 ---
@@ -563,7 +558,7 @@ A future `immutable: true` field on the `Resolver` struct enables locking state 
 ### Behavior
 
 - When a resolver has both `immutable: true` and `saveToState: true`, the `Entry.Immutable` flag is set to `true` on first write
-- On subsequent runs, any attempt to overwrite an immutable state entry is rejected with an error — both via `saveToState` auto-persistence and via the `state` provider write mode
+- On subsequent runs, any attempt to overwrite an immutable state entry is rejected with an error -- both via `saveToState` auto-persistence and via the `state` provider write mode
 - The only way to change an immutable value is via `scafctl state delete` or `scafctl state clear`
 
 ### Example
@@ -600,7 +595,7 @@ The `Entry.Immutable` field is included in the state data schema from day one, d
 | **Backend as provider capability** | All I/O stays in the provider system. State operations are merged into existing providers (`file`, `github`) via `CapabilityState`. Plugin providers can add state support to any provider. |
 | **Two-layer model** | Backend providers (`file`, `github`) handle persistence, while the `state` provider handles resolver/action access. The backend is swappable without affecting how resolvers interact with state. |
 | **No implicit state-over-provider** | `saveToState` writes to state, the `state` provider reads from state. Resolvers always execute their configured provider. State never silently replaces provider execution. |
-| **`enabled` as `ValueRef`** | Dynamic state activation via CEL, resolver refs, or templates. Referenced resolvers run in the pre-execution mini-phase. |
+| **`enabled` as `ValueRef`** | Dynamic state activation via CEL or templates using CLI params (`__params`). Resolver references are not supported because state loads before resolvers run. |
 | **Top-level `state` field** | State is a solution-level concern, not a resolver/workflow concern. It sits alongside `spec`, `catalog`, `bundle`, and `compose`. |
 | **Pre-execution in command layer** | State loading uses standalone `provider.Execute()` before `resolver.Executor.Execute()`. No changes to the resolver executor's core loop. |
 | **Command capture** | Subcommand + parameters only (latest invocation, no history). Sufficient for validation replay. Solution identity comes from metadata. |
@@ -608,5 +603,5 @@ The `Entry.Immutable` field is included in the state data schema from day one, d
 | **Batch save** | State flushed after all resolvers complete via single backend provider `save` call. No partial state on failures. |
 | **Schema version** | `schemaVersion: 1` for forward-compatible format migrations. |
 | **JSON format** | Aligns with the snapshot system serialization format. |
-| **Local solutions allowed** | No restriction on state for non-catalog solutions — useful for the user's own repeated executions even without external validation. |
+| **Local solutions allowed** | No restriction on state for non-catalog solutions -- useful for the user's own repeated executions even without external validation. |
 | **Immutable deferred** | `Entry.Immutable` field included in schema but enforcement is not implemented. |

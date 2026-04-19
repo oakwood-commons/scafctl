@@ -466,7 +466,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// the state provider can serve previously saved values. State is loaded
 	// even in dry-run mode (resolvers need context) but never saved.
 	// params are passed so that state backend inputs can reference CLI
-	// parameters via CEL/template expressions (e.g. _.appName + '.json').
+	// parameters via __params in CEL expressions (e.g. __params.appName).
 	var stateMgr *state.Manager
 	var stateData *state.Data
 	if sol.State != nil {
@@ -550,7 +550,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// successful action execution.
 	if stateMgr != nil && stateData != nil {
 		solMeta := buildStateSolutionMeta(sol)
-		if saveErr := stateMgr.Save(ctx, stateData, resolverCtx, resolvers, resolverData, solMeta); saveErr != nil {
+		if saveErr := stateMgr.Save(ctx, stateData, resolverCtx, resolvers, params, resolverData, solMeta); saveErr != nil {
 			return o.exitWithCode(ctx, fmt.Errorf("state save: %w", saveErr), exitcode.GeneralError)
 		}
 	}

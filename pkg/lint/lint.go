@@ -988,7 +988,7 @@ func lintStateBackend(sol *solution.Solution, result *Result, registry *provider
 	if !found {
 		result.addFinding(SeverityError, "state", location+".backend.provider",
 			fmt.Sprintf("state backend provider '%s' not found in registry", backendName),
-			"Use a registered state backend provider such as 'state-file' or 'state-github'",
+			"Use a registered provider with CapabilityState such as 'file', 'github', or 'http'",
 			"invalid-state-backend")
 	} else {
 		desc := prov.Descriptor()
@@ -1019,14 +1019,14 @@ func lintStateResolverRefs(sol *solution.Solution, result *Result) {
 	if sol.State.Enabled != nil && sol.State.Enabled.Resolver != nil {
 		result.addFinding(SeverityError, "state", location+".enabled",
 			fmt.Sprintf("state.enabled uses rslvr: %q — resolver results are not available at state load time", *sol.State.Enabled.Resolver),
-			"Use a literal value, env var, or CEL expression instead (e.g. expr: \"env('ENABLE_STATE') == 'true'\")",
+			"Use a literal value or CEL expression referencing CLI params instead (e.g. expr: \"__params.enable_state == true\")",
 			"state-resolver-ref")
 	}
 	for inputKey, input := range sol.State.Backend.Inputs {
 		if input != nil && input.Resolver != nil {
 			result.addFinding(SeverityError, "state", fmt.Sprintf("%s.backend.inputs.%s", location, inputKey),
 				fmt.Sprintf("state backend input %q uses rslvr: %q — resolver results are not available at state load time", inputKey, *input.Resolver),
-				"Use a CEL expression referencing a CLI parameter instead (e.g. expr: \"_.appName + '-state.json'\")",
+				"Use a CEL expression referencing a CLI parameter instead (e.g. expr: \"__params.appName + '-state.json'\")",
 				"state-resolver-ref")
 		}
 	}

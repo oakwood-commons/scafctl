@@ -63,9 +63,7 @@ func (p *StateProvider) Descriptor() *provider.Descriptor {
 				schemahelper.WithDefault(false)),
 		}),
 		OutputSchemas: map[provider.Capability]*jsonschema.Schema{
-			provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
-				"value": schemahelper.AnyProp("The state entry value"),
-			}),
+			provider.CapabilityFrom: schemahelper.AnyProp("The state entry value (scalar or object)"),
 			provider.CapabilityAction: schemahelper.ObjectSchema([]string{"success"}, map[string]*jsonschema.Schema{
 				"success": schemahelper.BoolProp("Whether the write succeeded"),
 			}),

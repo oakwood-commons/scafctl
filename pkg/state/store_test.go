@@ -112,8 +112,9 @@ func BenchmarkLoadFromFile(b *testing.B) {
 	}
 	require.NoError(b, SaveToFile(path, sd))
 
+	b.ReportAllocs()
 	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		_, _ = LoadFromFile(path)
 	}
 }
@@ -123,9 +124,10 @@ func BenchmarkSaveToFile(b *testing.B) {
 	sd := NewData()
 	sd.Values["key"] = &Entry{Value: "val", Type: "string"}
 
+	b.ReportAllocs()
 	b.ResetTimer()
-	for i := range b.N {
-		path := filepath.Join(dir, filepath.Base(filepath.Join("bench", string(rune('a'+i%26))+".json")))
+	for b.Loop() {
+		path := filepath.Join(dir, "bench.json")
 		_ = SaveToFile(path, sd)
 	}
 }

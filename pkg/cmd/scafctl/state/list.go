@@ -71,10 +71,14 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			data := make([]map[string]any, 0, len(sd.Values))
 			for _, name := range keys {
 				entry := sd.Values[name]
+				updatedAt := ""
+				if !entry.UpdatedAt.IsZero() {
+					updatedAt = entry.UpdatedAt.Format("2006-01-02T15:04:05Z")
+				}
 				data = append(data, map[string]any{
 					"key":       name,
 					"type":      entry.Type,
-					"updatedAt": entry.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+					"updatedAt": updatedAt,
 					"immutable": entry.Immutable,
 				})
 			}

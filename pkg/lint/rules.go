@@ -343,7 +343,7 @@ var KnownRules = map[string]RuleMeta{
 		Category:    "state",
 		Description: "A state.enabled or state.backend.inputs field uses a direct rslvr: reference. State is loaded before resolvers run, so resolver results are not available.",
 		Why:         "State configuration is resolved before resolver execution using only CLI parameters (-r flags) and environment data. Direct rslvr: references will fail at runtime because resolver results do not exist yet.",
-		Fix:         "Use a CEL expression referencing CLI parameters instead, e.g.:\n  path:\n    expr: \"_.appName + '-state.json'\"\nwhere appName is passed via -r appName=myapp.",
+		Fix:         "Use a CEL expression referencing CLI parameters instead, e.g.:\n  path:\n    expr: \"__params.appName + '-state.json'\"\nwhere appName is passed via -r appName=myapp.",
 	},
 }
 

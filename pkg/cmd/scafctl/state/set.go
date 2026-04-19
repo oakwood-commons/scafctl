@@ -5,6 +5,7 @@ package state
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -50,7 +51,7 @@ func CommandSet(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Command
 			}
 
 			sd.Values[key] = &state.Entry{
-				Value:     value,
+				Value:     coerceValue(value, valueType),
 				Type:      valueType,
 				UpdatedAt: time.Now().UTC(),
 			}
@@ -75,4 +76,24 @@ func CommandSet(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Command
 	_ = cmd.MarkFlagRequired("value")
 
 	return cmd
+}
+
+// coerceValue converts a string CLI value to the appropriate Go type based on
+// the --type flag, so that state entries are stored with the correct type.
+func coerceValue(raw, typ string) any {
+	switch typ {
+	case "int":
+		if v, err := strconv.ParseInt(raw, 10, 64); err == nil {
+			return v
+		}
+	case "float":
+		if v, err := strconv.ParseFloat(raw, 64); err == nil {
+			return v
+		}
+	case "bool":
+		if v, err := strconv.ParseBool(raw); err == nil {
+			return v
+		}
+	}
+	return raw
 }

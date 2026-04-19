@@ -5,4 +5,4 @@ package stateprovider
 
 // This file is intentionally minimal -- the state provider has no external
 // dependencies to mock. It operates entirely on in-memory StateData from context.
-// Tests use state.NewMockStateData() and state.WithState() directly.
+// Tests use state.NewMockData() and state.WithState() directly.

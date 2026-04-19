@@ -16,8 +16,25 @@ const (
 
 // Config is the solution-level state configuration.
 // It is a top-level peer to Spec, Catalog, Bundle, and Compose on the Solution struct.
+//
+// CLI parameters passed via -r flags are available as __params in CEL expressions
+// and Go templates used in Enabled and Backend.Inputs. This allows dynamic backend
+// configuration without requiring resolver execution (which happens after state load).
+//
+// Example:
+//
+//	state:
+//	  enabled:
+//	    expr: "__params.state_enabled == true"
+//	  backend:
+//	    provider: file
+//	    inputs:
+//	      path:
+//	        expr: "'gcp/' + __params.project + '/state.json'"
 type Config struct {
-	// Enabled controls whether state persistence is active. Supports literal bool, CEL, resolver ref, or template.
+	// Enabled controls whether state persistence is active. Supports literal bool, CEL expression, or template.
+	// Resolver references (rslvr:) are not supported because state is loaded before resolver execution.
+	// Use __params to reference CLI parameters (e.g. expr: "__params.enable_state == true").
 	Enabled *spec.ValueRef `json:"enabled" yaml:"enabled" doc:"Dynamic activation of state persistence"`
 
 	// Backend configures which provider handles state persistence.
@@ -30,6 +47,12 @@ type Backend struct {
 	Provider string `json:"provider" yaml:"provider" doc:"Provider name with CapabilityState" maxLength:"253" example:"file"`
 
 	// Inputs are provider-specific inputs. Each value is a ValueRef for dynamic resolution.
+	//
+	// CEL expressions use __params for CLI parameters (e.g. __params.project) and _ for
+	// resolver outputs (available at save time only, not load time).
+	//
+	// Go templates spread resolver data at top level (e.g. {{ .name }}) and expose CLI
+	// parameters under __params (e.g. {{ .__params.project }}).
 	Inputs map[string]*spec.ValueRef `json:"inputs" yaml:"inputs" doc:"Provider-specific inputs (ValueRef for dynamic resolution)"`
 }
 

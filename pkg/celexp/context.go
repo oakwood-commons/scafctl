@@ -48,6 +48,14 @@ const (
 	// and dependencyCount for any resolver in when conditions and provider inputs.
 	// Example: __plan["myResolver"].phase
 	VarPlan = "__plan"
+
+	// VarParams is the variable name for CLI parameters passed via -r flags.
+	// Available in state backend input expressions so that dynamic backend
+	// configuration (paths, URLs) can reference runtime values explicitly.
+	// Unlike _, which contains resolver outputs, __params always contains the
+	// raw CLI parameters regardless of resolver execution state.
+	// Example: __params.gcp_project
+	VarParams = "__params"
 )
 
 // BuildCELContext creates CEL environment options and variables for evaluation.

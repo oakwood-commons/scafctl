@@ -4,25 +4,30 @@
 package state
 
 import (
-	"encoding/json"
 	"fmt"
 
+	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
+// getOptions holds the options for the get command.
+type getOptions struct {
+	flags.KvxOutputFlags
+	Path string
+	Key  string
+}
+
 // CommandGet creates the 'state get' command.
-func CommandGet(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Command {
-	var (
-		path         string
-		key          string
-		outputFormat string
-	)
+func CommandGet(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
+	opts := &getOptions{
+		KvxOutputFlags: flags.KvxOutputFlags{AppName: cliParams.BinaryName},
+	}
 
 	cmd := &cobra.Command{
 		Use:   "get",
@@ -35,44 +40,42 @@ func CommandGet(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Command
 				return fmt.Errorf("writer not initialized in context")
 			}
 
-			sd, err := state.LoadFromFile(path)
+			sd, err := state.LoadFromFile(opts.Path)
 			if err != nil {
 				err := fmt.Errorf("failed to load state: %w", err)
 				w.Errorf("%v", err)
 				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
-			entry, ok := sd.Values[key]
+			entry, ok := sd.Values[opts.Key]
 			if !ok {
-				err := fmt.Errorf("key %q not found in state", key)
+				err := fmt.Errorf("key %q not found in state", opts.Key)
 				w.Errorf("%v", err)
 				return exitcode.WithCode(err, exitcode.FileNotFound)
 			}
 
-			switch outputFormat {
-			case "json":
-				data, marshalErr := json.MarshalIndent(entry, "", "  ")
-				if marshalErr != nil {
-					return fmt.Errorf("failed to marshal entry: %w", marshalErr)
-				}
-				w.Plainln(string(data))
-			case "yaml":
-				data, marshalErr := yaml.Marshal(entry)
-				if marshalErr != nil {
-					return fmt.Errorf("failed to marshal entry: %w", marshalErr)
-				}
-				w.Plain(string(data))
-			default:
-				w.Plainf("%v\n", entry.Value)
+			kvxOpts := flags.ToKvxOutputOptions(&opts.KvxOutputFlags, kvx.WithIOStreams(ioStreams))
+
+			updatedAt := ""
+			if !entry.UpdatedAt.IsZero() {
+				updatedAt = entry.UpdatedAt.Format("2006-01-02T15:04:05Z")
 			}
 
-			return nil
+			data := []map[string]any{{
+				"key":       opts.Key,
+				"value":     entry.Value,
+				"type":      entry.Type,
+				"updatedAt": updatedAt,
+				"immutable": entry.Immutable,
+			}}
+
+			return kvxOpts.Write(data)
 		},
 	}
 
-	cmd.Flags().StringVar(&path, "path", "", "State file path (relative to state directory)")
-	cmd.Flags().StringVar(&key, "key", "", "Key to retrieve")
-	cmd.Flags().StringVarP(&outputFormat, "output", "o", "", "Output format (json, yaml)")
+	flags.AddKvxOutputFlagsToStruct(cmd, &opts.KvxOutputFlags)
+	cmd.Flags().StringVar(&opts.Path, "path", "", "State file path (relative to state directory)")
+	cmd.Flags().StringVar(&opts.Key, "key", "", "Key to retrieve")
 	_ = cmd.MarkFlagRequired("path")
 	_ = cmd.MarkFlagRequired("key")
 
