@@ -139,15 +139,6 @@ func NewHTTPProvider() *HTTPProvider {
 				if !ok {
 					return "", nil
 				}
-				operation, _ := inputs["operation"].(string)
-				switch operation {
-				case "state_load":
-					return fmt.Sprintf("Would load state from %s", inputs[fieldURL]), nil
-				case "state_save":
-					return fmt.Sprintf("Would save state to %s", inputs[fieldURL]), nil
-				case "state_delete":
-					return fmt.Sprintf("Would delete state at %s", inputs[fieldURL]), nil
-				}
 				method, _ := inputs[fieldMethod].(string)
 				if method == "" {
 					method = "GET"
@@ -159,12 +150,8 @@ func NewHTTPProvider() *HTTPProvider {
 				provider.CapabilityFrom,
 				provider.CapabilityAction,
 				provider.CapabilityTransform,
-				provider.CapabilityState,
 			},
 			Schema: schemahelper.ObjectSchema([]string{fieldURL}, map[string]*jsonschema.Schema{
-				"operation": schemahelper.StringProp("Operation to perform. Only used for state operations.",
-					schemahelper.WithEnum("state_load", "state_save", "state_delete")),
-				"data": schemahelper.AnyProp("The full StateData object to persist (required for state_save operation)"),
 				fieldURL: schemahelper.StringProp("The URL to request",
 					schemahelper.WithExample("https://api.example.com/users"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(2048)),
@@ -273,10 +260,6 @@ func NewHTTPProvider() *HTTPProvider {
 					fieldHeaders: schemahelper.AnyProp("Response headers (last page when paginating)"),
 					"pages":      schemahelper.IntProp("Number of pages fetched (only present when pagination is configured)", schemahelper.WithExample(3)),
 					"totalItems": schemahelper.IntProp("Total number of items collected across all pages (only present when pagination is configured)", schemahelper.WithExample(150)),
-				}),
-				provider.CapabilityState: schemahelper.ObjectSchema([]string{"success"}, map[string]*jsonschema.Schema{
-					"success": schemahelper.BoolProp("Whether the state operation succeeded"),
-					"data":    schemahelper.AnyProp("The loaded state data (for state_load operation)"),
 				}),
 			},
 			Examples: []provider.Example{
@@ -474,11 +457,6 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 	}
 
 	lgr.V(1).Info("executing provider", "provider", ProviderName, fieldURL, inputs[fieldURL])
-
-	// State operations use a dedicated dispatch path
-	if operation, _ := inputs["operation"].(string); strings.HasPrefix(operation, "state_") {
-		return p.dispatchStateOperation(ctx, operation, inputs)
-	}
 
 	// Check for dry-run mode
 	if provider.DryRunFromContext(ctx) {

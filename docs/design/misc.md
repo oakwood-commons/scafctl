@@ -20,7 +20,7 @@ These concerns apply across resolvers, actions, providers, plugins, and solution
 | Provider Capabilities | ✅ Implemented | `from`, `transform`, `validation`, `authentication`, `action` |
 | Secrets and Sensitive Data | ✅ Implemented | `pkg/secrets` with AES-256-GCM, keychain integration |
 | Secret Redaction | ✅ Implemented | `RedactedError`, `--redact` flag on snapshots |
-| Stateless Core | ✅ Implemented | Providers are stateless; opt-in state persistence via `state` block |
+| Stateless Core | ✅ Implemented | Providers are stateless, no persistent state |
 | Error Model | ✅ Implemented | Rich error types with location, cause, context |
 | Determinism Rules | ✅ Implemented | Resolver purity enforced, `WhatIf` functions declared |
 | Resolver DAG Visualization | ✅ Implemented | ASCII, DOT, Mermaid, JSON formats |
@@ -127,25 +127,15 @@ Render mode supports secret redaction via `--redact` flag on snapshots.
 
 ### Stateless Core
 
-scafctl is stateless by default:
+scafctl is stateless by design:
 
-- No persistent state between runs unless explicitly configured
+- No persistent state between runs
 - No implicit caching
 - No hidden execution memory
 
-### Opt-In State Persistence
-
-Solutions can opt into state persistence via a top-level `state` block. When configured:
-
-- Resolver values marked with `saveToState: true` are persisted to a backend (local file or GitHub)
-- The `state` provider reads previously saved values during resolver execution
-- State is loaded before resolvers run and saved after they complete
-
-See [State Design Doc](state/) for full details.
-
 ### External State
 
-For use cases beyond the built-in state system, state can also live outside scafctl:
+If state is required, it must live outside scafctl, for example:
 
 - Remote APIs
 - Infrastructure systems

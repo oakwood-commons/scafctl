@@ -59,12 +59,6 @@ func NewFileProvider() *FileProvider {
 				case "write-tree":
 					basePath, _ := inputs["basePath"].(string)
 					return fmt.Sprintf("Would write file tree to %s", basePath), nil
-				case "state_load":
-					return fmt.Sprintf("Would load state from %s", path), nil
-				case "state_save":
-					return fmt.Sprintf("Would save state to %s", path), nil
-				case "state_delete":
-					return fmt.Sprintf("Would delete state at %s", path), nil
 				default:
 					return fmt.Sprintf("Would perform file %s on %s", operation, path), nil
 				}
@@ -73,13 +67,11 @@ func NewFileProvider() *FileProvider {
 				provider.CapabilityFrom,      // read, exists operations
 				provider.CapabilityAction,    // write, delete operations
 				provider.CapabilityTransform, // transform operations on file content
-				provider.CapabilityState,     // state_load, state_save, state_delete operations
 			},
 			Schema: schemahelper.ObjectSchema([]string{"operation"}, map[string]*jsonschema.Schema{
 				"operation": schemahelper.StringProp("Operation to perform",
 					schemahelper.WithExample("read"),
-					schemahelper.WithEnum("read", "write", "exists", "delete", "write-tree", "state_load", "state_save", "state_delete")),
-				"data": schemahelper.AnyProp("The full StateData object to persist (required for state_save operation)"),
+					schemahelper.WithEnum("read", "write", "exists", "delete", "write-tree")),
 				"path": schemahelper.StringProp("File path (absolute or relative). Required for read, write, exists, delete operations.",
 					schemahelper.WithExample("./config.yaml"),
 					schemahelper.WithMaxLength(4096)),
@@ -152,10 +144,6 @@ func NewFileProvider() *FileProvider {
 					"content": schemahelper.StringProp("File content (for read operation)"),
 					"path":    schemahelper.StringProp("Absolute path to the file"),
 					"size":    schemahelper.IntProp("File size in bytes"),
-				}),
-				provider.CapabilityState: schemahelper.ObjectSchema([]string{"success"}, map[string]*jsonschema.Schema{
-					"success": schemahelper.BoolProp("Whether the state operation succeeded"),
-					"data":    schemahelper.AnyProp("The loaded state data (for state_load operation)"),
 				}),
 				provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
 					"success":      schemahelper.BoolProp("Whether the operation succeeded (for write/delete operations)"),
@@ -269,11 +257,6 @@ func (p *FileProvider) Execute(ctx context.Context, input any) (*provider.Output
 	}
 
 	lgr.V(1).Info("executing provider", "provider", ProviderName, "operation", operation)
-
-	// State operations use the XDG state directory, not CWD-relative paths
-	if strings.HasPrefix(operation, "state_") {
-		return p.dispatchStateOperation(ctx, operation, inputs)
-	}
 
 	// write-tree uses basePath instead of path
 	if operation == "write-tree" {

@@ -27,16 +27,15 @@ State does not:
 
 | Feature | Status | Location |
 |---------|--------|----------|
-| `CapabilityState` on provider system | Done | `pkg/provider/provider.go` |
-| `state.Config` on Solution struct | Done | `pkg/solution/solution.go` |
-| `SaveToState` field on Resolver | Done | `pkg/resolver/resolver.go` |
-| `pkg/state/` package (types, manager, context, store) | Done | `pkg/state/` |
-| `file` provider state operations | Done | `pkg/provider/builtin/fileprovider/file_state.go` |
-| `github` provider state operations | Done | `pkg/provider/builtin/githubprovider/github_state.go` |
-| `state` resolver-facing provider | Done | `pkg/provider/builtin/stateprovider/` |
-| State loading lifecycle (pre-execution) | Done | `pkg/cmd/scafctl/run/solution.go`, `resolver.go` |
-| `scafctl state` CLI commands | Done | `pkg/cmd/scafctl/state/` |
-| Validation rules (circular deps, sensitive warnings) | Done | `pkg/lint/` |
+| `CapabilityState` on provider system | ⏳ Planned | `pkg/provider/provider.go` |
+| `StateConfig` on Solution struct | ⏳ Planned | `pkg/solution/solution.go` |
+| `SaveToState` field on Resolver | ⏳ Planned | `pkg/resolver/resolver.go` |
+| `pkg/state/` package (types, manager, context) | ⏳ Planned | `pkg/state/` |
+| `state-file` backend provider | ⏳ Planned | `pkg/provider/builtin/statefileprovider/` |
+| `state` resolver-facing provider | ⏳ Planned | `pkg/provider/builtin/stateprovider/` |
+| State loading lifecycle (pre-execution) | ⏳ Planned | `pkg/cmd/scafctl/run/common.go` |
+| `scafctl state` CLI commands | ⏳ Planned | `pkg/cmd/scafctl/state/` |
+| Validation rules (circular deps, sensitive warnings) | ⏳ Planned | `pkg/solution/` |
 | Immutable resolver support | 🔮 Future | See [Immutable Resolvers](#immutable-resolvers-future-enhancement) |
 
 ---
@@ -61,18 +60,18 @@ State is not responsible for:
 
 ## Architecture
 
-State uses a **two-layer model** that keeps backend persistence separate from resolver/action access:
+State uses a **two-provider model** that keeps backend persistence separate from resolver/action access:
 
 | Layer | Provider | Capabilities | Role |
 |-------|----------|-------------|------|
-| Backend | `file` or `github` | `state` (+ others) | Reads/writes the state data to storage |
+| Backend | `state-file` | `state` | Reads/writes the state file to disk |
 | Resolver/Action access | `state` | `from`, `action` | Reads/writes individual state entries |
 
-State operations are merged into existing providers (`file`, `github`) rather than using dedicated backend providers. This means:
+This separation means:
 
-- The `file` and `github` providers each gained `CapabilityState` with `state_load`, `state_save`, and `state_delete` operations
-- All persistence goes through the provider system -- no special-case I/O outside of providers
-- Community or internal teams can implement custom backends by adding `CapabilityState` to any provider
+- The backend is swappable — a future `state-s3` or `state-http` provider can replace `state-file` without changing how resolvers access state
+- All persistence goes through the provider system — no special-case I/O outside of providers
+- Community or internal teams can implement custom backends as plugin providers
 
 ### New Capability: `state`
 
@@ -90,18 +89,18 @@ Required output fields for `state` capability:
 
 State is declared via a top-level `state` field on the `Solution` struct, as a peer to `spec`, `catalog`, `bundle`, and `compose`.
 
-### Config Type
+### StateConfig Type
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `enabled` | `ValueRef` | Yes | Dynamic activation -- literal bool, CEL expression, resolver ref, or Go template |
-| `backend` | `Backend` | Yes | Backend provider configuration |
+| `enabled` | `ValueRef` | Yes | Dynamic activation — literal bool, CEL expression, resolver ref, or Go template |
+| `backend` | `StateBackend` | Yes | Backend provider configuration |
 
-### Backend Type
+### StateBackend Type
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `provider` | `string` | Yes | Name of a registered provider with `CapabilityState` (e.g., `"file"`) |
+| `provider` | `string` | Yes | Name of a registered provider with `CapabilityState` (e.g., `"state-file"`) |
 | `inputs` | `map[string]*ValueRef` | Yes | Provider-specific inputs — follows the same pattern as resolver provider inputs |
 
 ### Example
@@ -115,7 +114,7 @@ metadata:
 state:
   enabled: true
   backend:
-    provider: file
+    provider: state-file
     inputs:
       path:
         tmpl: "deploy-app/{{ .project_name }}.json"
@@ -161,13 +160,13 @@ When `enabled` references resolvers, those resolvers are included in the [pre-ex
 
 ### Dynamic Backend Inputs
 
-Backend inputs are `ValueRef` types -- the same polymorphic type used throughout scafctl. This enables per-project state files:
+Backend inputs are `ValueRef` types — the same polymorphic type used throughout scafctl. This enables per-project state files:
 
 ~~~yaml
 state:
   enabled: true
   backend:
-    provider: file
+    provider: state-file
     inputs:
       path:
         tmpl: "deploy-app/{{ .project_name }}.json"
@@ -220,9 +219,9 @@ State is persisted as JSON. The schema includes a `schemaVersion` field for forw
 | `metadata.scafctlVersion` | Version of scafctl that last wrote the state |
 | `command.subcommand` | CLI subcommand used (e.g., `run solution`) |
 | `command.parameters` | Key-value pairs from `--parameter` flags |
-| `values` | Map of resolver name to `Entry` |
+| `values` | Map of resolver name to `StateEntry` |
 
-### Entry
+### StateEntry
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -242,7 +241,7 @@ Solution identity (name, version) is already in `metadata` and does not need to 
 
 ### Storage Location
 
-The built-in `file` provider backend stores files under `paths.StateDir()` (`$XDG_STATE_HOME/scafctl/`), which is already defined and documented in `pkg/paths/`. This is the XDG-canonical location for user-specific state data like logs, history, and session state.
+The built-in `state-file` backend stores files under `paths.StateDir()` (`$XDG_STATE_HOME/scafctl/`), which is already defined and documented in `pkg/paths/`. This is the XDG-canonical location for user-specific state data like logs, history, and session state.
 
 On macOS: `~/.local/state/scafctl/`
 
@@ -347,55 +346,40 @@ The `state` provider implements `ExtractDependencies` on its descriptor so the D
 
 ---
 
-## File Provider State Operations
+## State-File Backend Provider
 
-The built-in `file` provider supports state persistence via `CapabilityState`. State operations use `state_load`, `state_save`, and `state_delete` as the `operation` input.
+The built-in `state-file` provider handles local JSON file persistence. It is registered with `CapabilityState`.
 
 ### Input Schema
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `operation` | string (enum: `state_load`, `state_save`, `state_delete`) | Yes | Operation to perform |
+| `operation` | string (enum: `load`, `save`, `delete`) | Yes | Operation to perform |
 | `path` | string | Yes | File path relative to `paths.StateDir()` |
-| `data` | object | For `state_save` | The full `Data` object to persist |
+| `data` | object | For `save` | The full `StateData` object to persist |
 
 ### Operations
 
 | Operation | Behavior |
 |-----------|----------|
-| `state_load` | Reads JSON from `paths.StateDir()/<path>`. Returns empty state structure if file does not exist (first run). |
-| `state_save` | Writes `Data` as JSON to `paths.StateDir()/<path>`. Creates directories as needed. Uses atomic write (temp + rename). |
-| `state_delete` | Removes the state file at `paths.StateDir()/<path>`. |
+| `load` | Reads JSON from `paths.StateDir()/<path>`. Returns empty state structure if file does not exist (first run). |
+| `save` | Writes `StateData` as JSON to `paths.StateDir()/<path>`. Creates directories as needed. |
+| `delete` | Removes the state file at `paths.StateDir()/<path>`. |
 
-### Dry-Run Behavior
+### Mock Behavior
 
-During dry-run: `state_load` returns empty state, `state_save` and `state_delete` report what-if actions.
-
-## GitHub Provider State Operations
-
-The `github` provider also supports `CapabilityState`, storing state as JSON files in a GitHub repository.
-
-### Input Schema
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `operation` | string (enum: `state_load`, `state_save`, `state_delete`) | Yes | Operation to perform |
-| `owner` | string | Yes | Repository owner |
-| `repo` | string | Yes | Repository name |
-| `path` | string | Yes | File path in the repository |
-| `branch` | string | No | Branch name (defaults to default branch) |
-| `data` | object | For `state_save` | The full `Data` object to persist |
+During dry-run: `load` returns empty state, `save` and `delete` are no-ops.
 
 ### Future Backends
 
-The backend is a provider capability, so new backends are just providers implementing `CapabilityState`:
+The backend is a provider, so new backends are just new providers implementing `CapabilityState`:
 
 | Backend | Provider Name | Inputs |
 |---------|---------------|--------|
-| Local file (built-in) | `file` | `path` |
-| GitHub repo (built-in) | `github` | `owner`, `repo`, `path`, `branch` |
-| S3 (future) | `s3` (or plugin) | `bucket`, `key`, `region` |
-| HTTP API (future) | `http` (or plugin) | `url`, `method`, `headers` |
+| Local file (built-in) | `state-file` | `path` |
+| S3 (future) | `state-s3` | `bucket`, `key`, `region` |
+| HTTP API (future) | `state-http` | `url`, `method`, `headers` |
+| Database (future) | `state-db` | `connectionString`, `table` |
 
 No changes to `pkg/state/` or the core execution flow are needed to add a new backend.
 
@@ -409,7 +393,7 @@ The `enabled` and `backend.inputs` fields can reference resolvers, creating orde
 
 1. **Parse** — Extract `state` config from the solution. Identify resolvers referenced by `state.enabled` and `state.backend.inputs` using `ValueRef.ReferencesVariable()`.
 
-2. **Validate** -- Ensure referenced resolvers do NOT have `saveToState: true` and do NOT use the `state` provider. This prevents circular dependencies.
+2. **Validate** — Ensure referenced resolvers do NOT have `saveToState: true` and do NOT use the `state` or `state-file` provider. This prevents circular dependencies.
 
 3. **Pre-execution mini-phase** — Execute ONLY the resolvers referenced by `enabled` and backend inputs in a temporary resolver context. These are executed using a subset call to `resolver.Executor.Execute()` with just the required resolvers.
 
@@ -482,7 +466,7 @@ State loading happens in the command layer (`pkg/cmd/scafctl/run/common.go`) bef
 | Rule | Reason |
 |------|--------|
 | Resolvers referenced in `state.enabled` or `state.backend.inputs` must NOT have `saveToState: true` | Prevents circular dependency: state loading depends on these resolvers, but they would also write to state |
-| Resolvers referenced in `state.enabled` or `state.backend.inputs` must NOT use the `state` provider | Prevents circular dependency: state must be loaded before this provider can function |
+| Resolvers referenced in `state.enabled` or `state.backend.inputs` must NOT use the `state` or `state-file` provider | Prevents circular dependency: state must be loaded before these providers can function |
 | `state.backend.provider` must resolve to a registered provider with `CapabilityState` | Ensures the backend is valid |
 
 ### Lint Warnings
@@ -512,11 +496,11 @@ A `scafctl state` command group provides manual state management, mirroring the 
 
 | Command | Description |
 |---------|-------------|
-| `scafctl state list --path <file>` | List all stored keys and metadata |
-| `scafctl state get --path <file> --key <key>` | Get a specific value |
-| `scafctl state set --path <file> --key <key> --value <value>` | Set a value manually |
-| `scafctl state delete --path <file> --key <key>` | Delete a key |
-| `scafctl state clear --path <file>` | Clear all values |
+| `scafctl state list --path <state-file>` | List all stored keys and metadata |
+| `scafctl state get --path <state-file> --key <key>` | Get a specific value |
+| `scafctl state set --path <state-file> --key <key> --value <value>` | Set a value manually |
+| `scafctl state delete --path <state-file> --key <key>` | Delete a key |
+| `scafctl state clear --path <state-file>` | Clear all values |
 
 - `--path` is relative to `paths.StateDir()`
 - All commands support `-o table/json/yaml/quiet` via `kvx.OutputOptions`
@@ -527,13 +511,11 @@ A `scafctl state` command group provides manual state management, mirroring the 
 
 | Package | Purpose |
 |---------|---------|
-| `pkg/state/types.go` | `Config`, `Backend`, `Data`, `Entry`, `CommandInfo` types |
-| `pkg/state/manager.go` | `Manager` -- orchestrates pre-execution loading, post-execution saving, context integration |
+| `pkg/state/types.go` | `StateConfig`, `StateBackend`, `StateData`, `StateEntry`, `CommandInfo` types |
+| `pkg/state/manager.go` | `Manager` — orchestrates pre-execution loading, post-execution saving, context integration |
 | `pkg/state/context.go` | `WithState(ctx, s)` / `FromContext(ctx)` for passing state through `context.Context` |
-| `pkg/state/store.go` | `LoadFromFile()` / `SaveToFile()` for direct file I/O (used by CLI commands) |
 | `pkg/state/mock.go` | Mock state for testing |
-| `pkg/provider/builtin/fileprovider/file_state.go` | State operations for `file` provider (`CapabilityState`) |
-| `pkg/provider/builtin/githubprovider/github_state.go` | State operations for `github` provider (`CapabilityState`) |
+| `pkg/provider/builtin/statefileprovider/` | `state-file` backend provider (`CapabilityState`) |
 | `pkg/provider/builtin/stateprovider/` | `state` resolver/action provider (`CapabilityFrom`, `CapabilityAction`) |
 | `pkg/cmd/scafctl/state/` | CLI commands (`list`, `get`, `set`, `delete`, `clear`) |
 
@@ -545,8 +527,8 @@ A `scafctl state` command group provides manual state management, mirroring the 
 |------|--------|
 | `pkg/provider/provider.go` | Add `CapabilityState`, update `IsValid()`, add to `capabilityRequiredFields` |
 | `pkg/resolver/resolver.go` | Add `SaveToState bool` field to `Resolver` struct |
-| `pkg/solution/solution.go` | Add `State *state.Config` field to `Solution` struct |
-| `pkg/provider/builtin/builtin.go` | Register `state` provider; `file` and `github` providers already have `CapabilityState` |
+| `pkg/solution/solution.go` | Add `State *StateConfig` field to `Solution` struct |
+| `pkg/provider/builtin/builtin.go` | Register `state-file` and `state` providers |
 | `pkg/cmd/scafctl/run/common.go` | Integrate state loading lifecycle before `executor.Execute()` |
 | `pkg/cmd/scafctl/run/solution.go` | Pass state config to common execution flow |
 | `pkg/cmd/scafctl/render/solution.go` | Support state reads in render mode (writes are no-op) |
@@ -562,7 +544,7 @@ A future `immutable: true` field on the `Resolver` struct enables locking state 
 
 ### Behavior
 
-- When a resolver has both `immutable: true` and `saveToState: true`, the `Entry.Immutable` flag is set to `true` on first write
+- When a resolver has both `immutable: true` and `saveToState: true`, the `StateEntry.Immutable` flag is set to `true` on first write
 - On subsequent runs, any attempt to overwrite an immutable state entry is rejected with an error — both via `saveToState` auto-persistence and via the `state` provider write mode
 - The only way to change an immutable value is via `scafctl state delete` or `scafctl state clear`
 
@@ -589,7 +571,7 @@ On the first run: `state` returns null, `exec` generates a UUID, `saveToState` p
 
 ### Infrastructure
 
-The `Entry.Immutable` field is included in the state data schema from day one, defaulting to `false`. Enforcement is deferred to a future release.
+The `StateEntry.Immutable` field is included in the state data schema from day one, defaulting to `false`. Enforcement is deferred to a future release.
 
 ---
 
@@ -597,8 +579,8 @@ The `Entry.Immutable` field is included in the state data schema from day one, d
 
 | Decision | Rationale |
 |----------|-----------|
-| **Backend as provider capability** | All I/O stays in the provider system. State operations are merged into existing providers (`file`, `github`) via `CapabilityState`. Plugin providers can add state support to any provider. |
-| **Two-layer model** | Backend providers (`file`, `github`) handle persistence, while the `state` provider handles resolver/action access. The backend is swappable without affecting how resolvers interact with state. |
+| **Backend as provider** | All I/O stays in the provider system. Backends are extensible — new providers implementing `CapabilityState` require no changes to `pkg/state/`. Plugin providers can implement custom backends. |
+| **Two-provider model** | `state-file` (backend persistence) and `state` (resolver/action access) are separate providers. This keeps the backend swappable without affecting how resolvers interact with state. |
 | **No implicit state-over-provider** | `saveToState` writes to state, the `state` provider reads from state. Resolvers always execute their configured provider. State never silently replaces provider execution. |
 | **`enabled` as `ValueRef`** | Dynamic state activation via CEL, resolver refs, or templates. Referenced resolvers run in the pre-execution mini-phase. |
 | **Top-level `state` field** | State is a solution-level concern, not a resolver/workflow concern. It sits alongside `spec`, `catalog`, `bundle`, and `compose`. |
@@ -609,4 +591,4 @@ The `Entry.Immutable` field is included in the state data schema from day one, d
 | **Schema version** | `schemaVersion: 1` for forward-compatible format migrations. |
 | **JSON format** | Aligns with the snapshot system serialization format. |
 | **Local solutions allowed** | No restriction on state for non-catalog solutions — useful for the user's own repeated executions even without external validation. |
-| **Immutable deferred** | `Entry.Immutable` field included in schema but enforcement is not implemented. |
+| **Immutable deferred** | `StateEntry.Immutable` field included in schema but enforcement is not implemented. |

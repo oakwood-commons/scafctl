@@ -39,7 +39,6 @@ Step-by-step guides for learning scafctl features.
 - [Logging & Debugging Tutorial](logging-tutorial.md) — Control log verbosity, format, and output
 - [Telemetry Tutorial](telemetry-tutorial.md) — Ship traces and metrics to Jaeger / Prometheus
 - [Cache Tutorial](cache-tutorial.md) — Manage cached data and reclaim disk space
-- [State Tutorial](state-tutorial.md) — Persist resolver values across executions
 
 ## Reference
 
