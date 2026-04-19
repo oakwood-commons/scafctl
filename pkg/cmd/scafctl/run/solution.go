@@ -27,6 +27,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
+	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -461,6 +462,27 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// --output-dir is explicitly specified (which takes precedence in ResolvePath).
 	actionCtx = provider.WithWorkingDirectory(actionCtx, originalCwd)
 
+	// State lifecycle: load persisted state before resolver execution so that
+	// the state provider can serve previously saved values. State is loaded
+	// even in dry-run mode (resolvers need context) but never saved.
+	// params are passed so that state backend inputs can reference CLI
+	// parameters via CEL/template expressions (e.g. _.appName + '.json').
+	var stateMgr *state.Manager
+	var stateData *state.Data
+	if sol.State != nil {
+		stateMgr = state.NewManager(sol.State, reg, settings.VersionInformation.BuildVersion)
+		cmdInfo := buildCommandInfo("run solution", params)
+		loadResult, loadErr := stateMgr.Load(ctx, params, cmdInfo)
+		if loadErr != nil {
+			return o.exitWithCode(ctx, fmt.Errorf("state load: %w", loadErr), exitcode.GeneralError)
+		}
+		if !loadResult.Skipped {
+			ctx = loadResult.Ctx
+			actionCtx = state.WithState(actionCtx, loadResult.Data)
+			stateData = loadResult.Data
+		}
+	}
+
 	// Dry run — execute resolvers with ctx (CWD by default, or base-dir when
 	// --base-dir is explicitly set) so resolver paths resolve accordingly. The
 	// action-phase WhatIf report uses actionCtx which has the working-dir
@@ -522,6 +544,15 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	result, err := actionExecutor.Execute(actionCtx, workflow)
 	if err != nil && result != nil && result.FinalStatus != action.ExecutionPartialSuccess {
 		return o.exitWithCode(ctx, fmt.Errorf("action execution failed: %w", err), exitcode.ActionFailed)
+	}
+
+	// State lifecycle: save resolver values marked with saveToState after
+	// successful action execution.
+	if stateMgr != nil && stateData != nil {
+		solMeta := buildStateSolutionMeta(sol)
+		if saveErr := stateMgr.Save(ctx, stateData, resolverCtx, resolvers, resolverData, solMeta); saveErr != nil {
+			return o.exitWithCode(ctx, fmt.Errorf("state save: %w", saveErr), exitcode.GeneralError)
+		}
 	}
 
 	// Build and write output — only include __execution in output when --show-execution is set

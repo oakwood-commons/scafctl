@@ -278,4 +278,29 @@ Key operations:
 The catalog supports versioning, visibility controls (public/private), and beta flags.`,
 		SeeAlso: []string{"bundle", "compose"},
 	},
+	// --- State ---
+	{
+		Name:     "state",
+		Title:    "State Persistence",
+		Category: "state",
+		Summary:  "Opt-in persistence that saves and restores resolver values across solution runs.",
+		Explanation: `State persistence allows a solution to remember resolver values between executions. When enabled, resolved values marked with 'saveToState: true' are saved after execution and restored on the next run.
+
+**Configuration** — add a top-level 'state' block to the solution:
+- **enabled** — literal bool, CEL expression, or template controlling activation.
+- **backend** — which provider stores the state (e.g., file, github, http).
+
+**Lifecycle**:
+1. Before resolvers run, the state manager calls the backend provider with 'state_load' to load any existing state.
+2. Loaded state is available to the 'state' provider via the fallback chain pattern.
+3. After execution, resolvers with 'saveToState: true' are persisted via 'state_save'.
+
+**State provider** — used inside resolver fallback chains to read individual keys from loaded state. Returns null when the key is not found (if required: false), so the next provider in the chain takes over.
+
+**Backend providers** — file (local JSON via XDG state dir), github (GitHub GraphQL API), http (remote REST API). Each implements CapabilityState with state_load, state_save, and state_delete operations.`,
+		Examples: []string{
+			"# Enable state with file backend\nstate:\n  enabled: true\n  backend:\n    provider: file\n    inputs:\n      path: \"my-app-state.json\"\n\nspec:\n  resolvers:\n    username:\n      type: string\n      saveToState: true\n      resolve:\n        with:\n          - provider: state\n            inputs:\n              key: \"username\"\n              required: false\n          - provider: parameter\n            inputs:\n              name: \"username\"",
+		},
+		SeeAlso: []string{"resolver", "provider", "cel-expression"},
+	},
 }

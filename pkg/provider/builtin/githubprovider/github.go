@@ -158,15 +158,29 @@ func NewGitHubProvider(opts ...Option) *GitHubProvider {
 				owner, _ := inputs["owner"].(string)
 				repo, _ := inputs["repo"].(string)
 				target := owner + "/" + repo
-				return fmt.Sprintf("Would perform GitHub %s on %s", operation, target), nil
+				switch operation {
+				case "state_load":
+					return fmt.Sprintf("Would load state from %s", target), nil
+				case "state_save":
+					return fmt.Sprintf("Would save state to %s (creating a commit)", target), nil
+				case "state_delete":
+					return fmt.Sprintf("Would delete state at %s (creating a commit)", target), nil
+				default:
+					return fmt.Sprintf("Would perform GitHub %s on %s", operation, target), nil
+				}
 			},
 			Capabilities: []provider.Capability{
 				provider.CapabilityFrom,
 				provider.CapabilityTransform,
 				provider.CapabilityAction,
+				provider.CapabilityState,
 			},
 			Schema: buildInputSchema(),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+				provider.CapabilityState: schemahelper.ObjectSchema([]string{"success"}, map[string]*jsonschema.Schema{
+					"success": schemahelper.BoolProp("Whether the state operation succeeded"),
+					"data":    schemahelper.AnyProp("The loaded state data (for state_load operation)"),
+				}),
 				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
 					"result": schemahelper.AnyProp("The API response data — structure varies by operation"),
 				}),
@@ -593,6 +607,9 @@ func (p *GitHubProvider) Execute(ctx context.Context, input any) (*provider.Outp
 
 	// Dry-run support: return mock data for write operations
 	if dryRun := provider.DryRunFromContext(ctx); dryRun {
+		if strings.HasPrefix(operation, "state_") {
+			return p.executeStateDryRun(operation)
+		}
 		return p.executeDryRun(operation, inputs)
 	}
 
@@ -611,6 +628,11 @@ func (p *GitHubProvider) Execute(ctx context.Context, input any) (*provider.Outp
 	}
 
 	client := p.getClient(ctx)
+
+	// State operations use dedicated dispatch
+	if strings.HasPrefix(operation, "state_") {
+		return p.dispatchStateOperation(ctx, client, apiBase, owner, repo, inputs)
+	}
 
 	var result *provider.Output
 	var err error

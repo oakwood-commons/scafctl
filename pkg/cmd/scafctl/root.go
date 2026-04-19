@@ -39,6 +39,7 @@ import (
 	servecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/serve"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/snapshot"
 	solutioncmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/solution"
+	statecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/state"
 	testcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/test"
 	vendorcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/vendor"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/version"
@@ -643,6 +644,7 @@ func Root(opts *RootOptions) *cobra.Command {
 	cCmd.AddCommand(withGroup(groupConfig, secretscmd.CommandSecrets(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupConfig, authcmd.CommandAuth(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupConfig, cachecmd.CommandCache(cliParams, ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupConfig, statecmd.CommandState(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupConfig, credhelpercmd.CommandCredentialHelper(cliParams, ioStreams, binaryName)))
 
 	// Plugin Commands
