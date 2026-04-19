@@ -840,10 +840,14 @@ func (p *FileProvider) parseWriteTreeEntries(inputs map[string]any) ([]writeTree
 			return nil, fmt.Errorf("entries[%d].path is required and must be a string", i)
 		}
 
-		content, ok := entry["content"].(string)
-		if !ok {
-			// Skip directory entries (no content field) silently.
+		contentRaw, hasContent := entry["content"]
+		if !hasContent || contentRaw == nil {
+			// Skip directory entries (no content key) silently.
 			continue
+		}
+		content, ok := contentRaw.(string)
+		if !ok {
+			return nil, fmt.Errorf("entries[%d].content must be a string, got %T", i, contentRaw)
 		}
 
 		entryOnConflict, _ := entry["onConflict"].(string)

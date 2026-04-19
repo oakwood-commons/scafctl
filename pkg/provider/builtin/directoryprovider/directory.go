@@ -9,6 +9,7 @@ import (
 	"crypto/sha512"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -18,6 +19,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
@@ -802,7 +804,10 @@ func (p *DirectoryProvider) executeMove(ctx context.Context, absPath string, inp
 
 	// Try atomic rename first (works on same device).
 	if renameErr := os.Rename(absPath, absDest); renameErr != nil {
-		// Fall back to copy + remove for cross-device moves.
+		// Only fall back to copy + remove for cross-device errors (EXDEV).
+		if !errors.Is(renameErr, syscall.EXDEV) {
+			return nil, fmt.Errorf("failed to rename directory: %w", renameErr)
+		}
 		if err := copyDir(absPath, absDest); err != nil {
 			return nil, fmt.Errorf("failed to move directory (copy phase): %w", err)
 		}

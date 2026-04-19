@@ -77,11 +77,17 @@ func (c *Condition) unmarshalMappingYAML(node *yaml.Node) error {
 	if raw.Expr != nil && raw.Expression != nil {
 		return fmt.Errorf("invalid condition at line %d, column %d: specify either 'expr' or 'expression', not both", node.Line, node.Column)
 	}
-	if raw.Expression != nil {
-		c.Expr = raw.Expression
-	} else {
-		c.Expr = raw.Expr
+	if raw.Expr == nil && raw.Expression == nil {
+		return fmt.Errorf("invalid condition at line %d, column %d: expected object with 'expr' or 'expression'", node.Line, node.Column)
 	}
+	expr := raw.Expr
+	if raw.Expression != nil {
+		expr = raw.Expression
+	}
+	if string(*expr) == "" {
+		return fmt.Errorf("invalid condition at line %d, column %d: empty string is not a valid CEL expression", node.Line, node.Column)
+	}
+	c.Expr = expr
 	return nil
 }
 
@@ -144,11 +150,16 @@ func (c *Condition) UnmarshalJSON(data []byte) error {
 	if obj.Expr != nil && obj.Expression != nil {
 		return fmt.Errorf("invalid condition: specify either 'expr' or 'expression', not both")
 	}
+	var expr *celexp.Expression
 	if obj.Expression != nil {
-		c.Expr = obj.Expression
+		expr = obj.Expression
 	} else {
-		c.Expr = obj.Expr
+		expr = obj.Expr
 	}
+	if expr != nil && string(*expr) == "" {
+		return fmt.Errorf("invalid condition: empty string is not a valid CEL expression")
+	}
+	c.Expr = expr
 	return nil
 }
 

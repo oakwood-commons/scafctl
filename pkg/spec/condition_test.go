@@ -218,6 +218,24 @@ func TestCondition_UnmarshalYAML(t *testing.T) {
 			errContains: "empty string",
 		},
 		{
+			name:        "empty expr in object form",
+			input:       `expr: ""`,
+			wantErr:     true,
+			errContains: "empty string is not a valid CEL expression",
+		},
+		{
+			name:        "empty expression in object form",
+			input:       `expression: ""`,
+			wantErr:     true,
+			errContains: "empty string is not a valid CEL expression",
+		},
+		{
+			name:        "object with no expr or expression",
+			input:       `foo: bar`,
+			wantErr:     true,
+			errContains: "expected object with 'expr' or 'expression'",
+		},
+		{
 			name:     "null value unmarshals to zero condition",
 			input:    "null",
 			wantExpr: "",
@@ -302,6 +320,18 @@ func TestCondition_UnmarshalJSON(t *testing.T) {
 			input:       `""`,
 			wantErr:     true,
 			errContains: "empty string",
+		},
+		{
+			name:        "empty expr in JSON object form",
+			input:       `{"expr": ""}`,
+			wantErr:     true,
+			errContains: "empty string is not a valid CEL expression",
+		},
+		{
+			name:        "empty expression in JSON object form",
+			input:       `{"expression": ""}`,
+			wantErr:     true,
+			errContains: "empty string is not a valid CEL expression",
 		},
 		{
 			name:  "null value",

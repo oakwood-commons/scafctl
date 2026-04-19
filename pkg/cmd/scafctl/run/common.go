@@ -612,8 +612,9 @@ func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context)
 		}
 
 		// Show a concise summary so the user knows what was resolved.
-		// Skip when structured output is requested to avoid polluting JSON/YAML.
-		if o.Output != "json" && o.Output != "yaml" {
+		// Skip when structured or quiet output is requested to avoid polluting machine-readable output.
+		format, _ := kvx.ParseOutputFormat(o.Output)
+		if !kvx.IsStructuredFormat(format) && format != kvx.OutputFormatQuiet {
 			switch {
 			case name != "" && ver != "" && source != "":
 				w.Infof("Solution: %s@%s (%s)", name, ver, source)

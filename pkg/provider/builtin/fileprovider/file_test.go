@@ -1058,6 +1058,26 @@ func TestFileProvider_WriteTree_MixedFilesAndDirectories(t *testing.T) {
 	assert.Equal(t, "LOGO", string(content2))
 }
 
+func TestFileProvider_WriteTree_NonStringContentErrors(t *testing.T) {
+	p := NewFileProvider()
+	tmpDir := t.TempDir()
+
+	ctx := context.Background()
+	inputs := map[string]any{
+		"operation": "write-tree",
+		"basePath":  tmpDir,
+		"entries": []any{
+			map[string]any{"path": "file.txt", "content": 123},
+		},
+	}
+
+	result, err := p.Execute(ctx, inputs)
+
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "entries[0].content must be a string")
+}
+
 func TestFileProvider_WriteTree_DryRun(t *testing.T) {
 	p := NewFileProvider()
 	tmpDir := t.TempDir()

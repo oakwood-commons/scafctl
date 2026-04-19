@@ -568,8 +568,10 @@ func (o *OutputOptions) writeStructured(data any) error {
 		}
 	}
 
-	// Print scalar values as plain text instead of JSON wrapping.
-	if isScalar(outputData) {
+	// Print scalar values as plain text for non-structured formats.
+	// Structured formats (JSON, YAML, CSV, TOML) must go through their
+	// serializers so values are encoded correctly (e.g. quoted strings in JSON).
+	if isScalar(outputData) && !IsStructuredFormat(o.Format) {
 		fmt.Fprintln(o.IOStreams.Out, outputData)
 		return nil
 	}
@@ -760,23 +762,33 @@ func (o *OutputOptions) writeTOML(data any) error {
 // Scalar values are written as a single cell.
 func (o *OutputOptions) writeCSV(data any) error {
 	w := csv.NewWriter(o.IOStreams.Out)
-	defer w.Flush()
 
+	var err error
 	switch v := data.(type) {
 	case []any:
-		return o.writeCSVSlice(w, v)
+		err = o.writeCSVSlice(w, v)
 	case []map[string]any:
 		items := make([]any, len(v))
 		for i, m := range v {
 			items[i] = m
 		}
-		return o.writeCSVSlice(w, items)
+		err = o.writeCSVSlice(w, items)
 	case map[string]any:
-		return o.writeCSVSlice(w, []any{v})
+		err = o.writeCSVSlice(w, []any{v})
 	default:
 		// Scalar or unsupported type -- write as single value
-		return w.Write([]string{fmt.Sprintf("%v", data)})
+		err = w.Write([]string{fmt.Sprintf("%v", data)})
 	}
+
+	w.Flush()
+
+	if err != nil {
+		return fmt.Errorf("failed to write CSV data: %w", err)
+	}
+	if fErr := w.Error(); fErr != nil {
+		return fmt.Errorf("failed to flush CSV data: %w", fErr)
+	}
+	return nil
 }
 
 // writeCSVSlice writes a slice of items as CSV rows with a header row.
