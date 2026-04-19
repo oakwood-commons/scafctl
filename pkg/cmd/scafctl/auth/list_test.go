@@ -67,7 +67,7 @@ func TestCommandList_WithTokens(t *testing.T) {
 
 	cmd := CommandList(cliParams, ioStreams, "scafctl/auth")
 	cmd.SetContext(ctx)
-	cmd.SetArgs([]string{})
+	cmd.SetArgs([]string{"-o", "json"})
 
 	err := cmd.Execute()
 	require.NoError(t, err)

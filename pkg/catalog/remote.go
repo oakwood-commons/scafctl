@@ -428,10 +428,23 @@ func (c *RemoteCatalog) FetchWithBundle(ctx context.Context, ref Reference) ([]b
 
 	// Fetch bundle layer if present
 	var bundleData []byte
-	if len(manifest.Layers) > 1 && manifest.Layers[1].MediaType == MediaTypeSolutionBundle {
-		bundleData, err = content.FetchAll(ctx, repo, manifest.Layers[1])
-		if err != nil {
-			return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to fetch bundle: %w", err)
+	if len(manifest.Layers) > 1 {
+		switch manifest.Layers[1].MediaType {
+		case MediaTypeSolutionBundle:
+			// Version 1: single tar layer
+			bundleData, err = content.FetchAll(ctx, repo, manifest.Layers[1])
+			if err != nil {
+				return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to fetch bundle: %w", err)
+			}
+		case MediaTypeSolutionBundleManifest:
+			// Version 2: deduplicated — reassemble into a v1-compatible tar
+			fetchBlob := func(desc ocispec.Descriptor) ([]byte, error) {
+				return content.FetchAll(ctx, repo, desc)
+			}
+			bundleData, err = reassembleDedupBundle(manifest, fetchBlob)
+			if err != nil {
+				return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to reassemble dedup bundle: %w", err)
+			}
 		}
 	}
 
@@ -539,6 +552,26 @@ func (c *RemoteCatalog) resolveWithKind(ctx context.Context, ref Reference) (Art
 		return ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
 	}
 
+	// Filter out pre-release versions unless explicitly included
+	if !IncludePreReleaseFromContext(ctx) {
+		stable := make([]*semver.Version, 0, len(versions))
+		for _, v := range versions {
+			if IsPreRelease(v) {
+				c.logger.V(1).Info("skipping pre-release version",
+					"name", ref.Name,
+					"version", v.String())
+				continue
+			}
+			stable = append(stable, v)
+		}
+		if len(stable) > 0 {
+			versions = stable
+		} else {
+			c.logger.V(1).Info("no stable versions found, falling back to pre-release",
+				"name", ref.Name)
+		}
+	}
+
 	// Sort versions descending
 	sort.Slice(versions, func(i, j int) bool {
 		return versions[i].GreaterThan(versions[j])
@@ -546,6 +579,10 @@ func (c *RemoteCatalog) resolveWithKind(ctx context.Context, ref Reference) (Art
 
 	// Return highest version
 	ref.Version = versions[0]
+	c.logger.V(1).Info("resolved latest version",
+		"name", ref.Name,
+		"version", ref.Version.String(),
+		"catalog", c.name)
 	return c.resolveWithKind(ctx, ref)
 }
 

@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"sort"
+	"strings"
 
 	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -48,6 +50,11 @@ const (
 
 	// OutputFormatMermaid renders data as a Mermaid flowchart diagram
 	OutputFormatMermaid OutputFormat = "mermaid"
+
+	// OutputFormatText renders a plain ASCII table without TUI or borders.
+	// Works in any context (TTY and non-TTY) and is the fallback for
+	// table/auto formats when output is piped.
+	OutputFormatText OutputFormat = "text"
 )
 
 // String returns the string representation of the output format.
@@ -64,6 +71,7 @@ func BaseOutputFormats() []string {
 		string(OutputFormatList),
 		string(OutputFormatTree),
 		string(OutputFormatMermaid),
+		string(OutputFormatText),
 		string(OutputFormatJSON),
 		string(OutputFormatYAML),
 		string(OutputFormatQuiet),
@@ -116,6 +124,46 @@ func isScalarArray(arr []any) bool {
 	return true
 }
 
+// dominantArray checks if data is a map[string]any with exactly one field
+// whose value is a non-empty []any of objects (maps). If found, it returns
+// the array and the remaining scalar summary fields. This enables writeText
+// to render the array as a columnar table with a summary header, matching
+// the pattern used by kubectl and gh for wrapper-style command output
+// (e.g., {"file":"x.yaml","findings":[...],"errorCount":2}).
+func dominantArray(data any) (arr []any, summary map[string]any, ok bool) {
+	m, isMap := data.(map[string]any)
+	if !isMap || len(m) == 0 {
+		return nil, nil, false
+	}
+
+	var arrayKey string
+	var arrayVal []any
+	for k, v := range m {
+		if a, aOk := v.([]any); aOk && len(a) > 0 {
+			// Require at least one element to be a map (object).
+			if _, mOk := a[0].(map[string]any); mOk {
+				if arrayKey != "" {
+					// Multiple array-of-objects fields -- ambiguous, bail out.
+					return nil, nil, false
+				}
+				arrayKey = k
+				arrayVal = a
+			}
+		}
+	}
+	if arrayKey == "" {
+		return nil, nil, false
+	}
+
+	summary = make(map[string]any, len(m)-1)
+	for k, v := range m {
+		if k != arrayKey {
+			summary[k] = v
+		}
+	}
+	return arrayVal, summary, true
+}
+
 // IsKvxFormat returns true if the format uses kvx visual output (auto, table, list, or tree).
 // These formats render human-readable output to the terminal.
 func IsKvxFormat(format OutputFormat) bool {
@@ -159,6 +207,8 @@ func ParseOutputFormat(s string) (OutputFormat, bool) {
 		return OutputFormatTree, true
 	case "mermaid":
 		return OutputFormatMermaid, true
+	case "text":
+		return OutputFormatText, true
 	default:
 		return "", false
 	}
@@ -178,6 +228,10 @@ type OutputOptions struct {
 
 	// Format specifies the output format (table, json, yaml, quiet)
 	Format OutputFormat `json:"format,omitempty" yaml:"format,omitempty" doc:"Output format" example:"table" maxLength:"10"`
+
+	// FormatExplicit is true when the user explicitly set -o on the command line.
+	// This distinguishes "auto by default" from "user chose auto" for fallback behavior.
+	FormatExplicit bool `json:"-" yaml:"-"`
 
 	// Interactive launches the kvx TUI for data exploration
 	Interactive bool `json:"interactive,omitempty" yaml:"interactive,omitempty" doc:"Launch interactive TUI mode"`
@@ -243,6 +297,11 @@ type OutputOption func(*OutputOptions)
 // WithOutputFormat sets the output format.
 func WithOutputFormat(format OutputFormat) OutputOption {
 	return func(o *OutputOptions) { o.Format = format }
+}
+
+// WithFormatExplicit marks the format as explicitly set by the user.
+func WithFormatExplicit(explicit bool) OutputOption {
+	return func(o *OutputOptions) { o.FormatExplicit = explicit }
 }
 
 // WithOutputFormatString sets the output format from a string.
@@ -352,6 +411,11 @@ func (o *OutputOptions) Write(data any) error {
 		return fmt.Errorf("output format %q is not supported by this command; supported formats: auto, table, list, json, yaml, quiet", OutputFormatTest)
 	}
 
+	// Text format: plain ASCII table, works in any context.
+	if o.Format == OutputFormatText {
+		return o.writeText(data)
+	}
+
 	// Determine if we should use kvx visual output
 	useKvx := IsKvxFormat(o.Format) || o.Interactive
 
@@ -385,30 +449,15 @@ func (o *OutputOptions) writeKvx(data any) error {
 
 	// Check terminal requirement for table/interactive output
 	if isTTYRequired && !IsTerminal(o.IOStreams.Out) {
-		// Auto-fallback to JSON when piped (unless interactive was explicitly requested)
+		// Interactive mode always requires a terminal.
 		if o.Interactive {
 			return fmt.Errorf("interactive mode requires a terminal; use -o json or -o yaml for piped output")
 		}
-		// Silently fall back to JSON for non-interactive piped output.
-		// Apply Where then Expression (same order as writeStructured).
-		outputData := data
-		var filterErr error
-		outputData, filterErr = applyWhereFilter(o.Where, outputData)
-		if filterErr != nil {
-			return filterErr
-		}
-		if o.Expression != "" {
-			ctx := o.Ctx
-			if ctx == nil {
-				ctx = context.Background()
-			}
-			var err error
-			outputData, err = EvaluateExpression(ctx, o.Expression, outputData)
-			if err != nil {
-				return fmt.Errorf("expression evaluation failed: %w", err)
-			}
-		}
-		return o.writeJSON(outputData)
+		// Fall back to plain text table for non-TTY output.
+		// This preserves human-readable output when piping instead of
+		// silently switching to JSON.
+		o.Format = OutputFormatText
+		return o.writeText(data)
 	}
 
 	// Build kvx options
@@ -428,7 +477,7 @@ func (o *OutputOptions) writeKvx(data any) error {
 		kvxOpts = append(kvxOpts, WithLayout("tree"))
 	case OutputFormatMermaid:
 		kvxOpts = append(kvxOpts, WithLayout("mermaid"))
-	case OutputFormatAuto, OutputFormatJSON, OutputFormatYAML, OutputFormatQuiet, OutputFormatTest:
+	case OutputFormatAuto, OutputFormatJSON, OutputFormatYAML, OutputFormatQuiet, OutputFormatTest, OutputFormatText:
 		// Auto and empty use default layout (auto).
 		// JSON/YAML/Quiet/Test are handled upstream and should not reach here,
 		// but are listed for exhaustiveness.
@@ -510,7 +559,7 @@ func (o *OutputOptions) writeStructured(data any) error {
 		return o.writeJSON(outputData)
 	case OutputFormatYAML:
 		return o.writeYAML(outputData)
-	case OutputFormatTable, OutputFormatAuto, OutputFormatList, OutputFormatTree, OutputFormatMermaid, OutputFormatQuiet, OutputFormatTest:
+	case OutputFormatTable, OutputFormatAuto, OutputFormatList, OutputFormatTree, OutputFormatMermaid, OutputFormatText, OutputFormatQuiet, OutputFormatTest:
 		// These formats are handled upstream (writeKvx or command-level test generation),
 		// and should not reach writeStructured.
 		return fmt.Errorf("unexpected output format in writeStructured: %s", o.Format)
@@ -535,6 +584,101 @@ func (o *OutputOptions) writeJSON(data any) error {
 
 	fmt.Fprintln(o.IOStreams.Out, string(jsonData))
 	return nil
+}
+
+// writeText renders data as a plain ASCII table without borders or colors.
+// This format works in any context (TTY and non-TTY) and is used as the
+// fallback when table/auto formats are piped to a non-terminal.
+func (o *OutputOptions) writeText(data any) error {
+	// Normalize structs to map[string]any so dominantArray and tui.RenderTable
+	// can decompose the data. Without this, structs render as a single opaque
+	// value in a "(value) | {json}" row.
+	outputData, err := normalizeForText(data)
+	if err != nil {
+		return fmt.Errorf("failed to normalize data for text output: %w", err)
+	}
+
+	// Apply per-item Where filter
+	outputData, err = applyWhereFilter(o.Where, outputData)
+	if err != nil {
+		return err
+	}
+
+	// Apply expression filter if provided
+	if o.Expression != "" {
+		ctx := o.Ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		outputData, err = EvaluateExpression(ctx, o.Expression, outputData)
+		if err != nil {
+			return fmt.Errorf("expression evaluation failed: %w", err)
+		}
+	}
+
+	// Scalar values render as plain text
+	if isScalar(outputData) {
+		fmt.Fprintln(o.IOStreams.Out, outputData)
+		return nil
+	}
+
+	// When data is a map wrapping a single array of objects (common CLI
+	// pattern, e.g. {"file":"x","findings":[...],"errorCount":2}), render
+	// summary scalars as a header line and the array as a columnar table.
+	if arr, summary, found := dominantArray(outputData); found {
+		if len(summary) > 0 {
+			writeSummaryLine(o.IOStreams.Out, summary)
+		}
+		outputData = arr
+	}
+
+	hints := resolveColumnHints(o.SchemaJSON, o.ColumnHints)
+	output := tui.RenderTable(outputData, tui.TableOptions{
+		Bordered:    false,
+		NoColor:     true,
+		ColumnOrder: o.ColumnOrder,
+		ColumnHints: hints,
+	})
+	fmt.Fprint(o.IOStreams.Out, output)
+	return nil
+}
+
+// normalizeForText converts structs and slices of structs to map[string]any
+// (or []any) via a JSON round-trip. This ensures tui.RenderTable and
+// dominantArray can inspect the data structure. Values that are already
+// maps, slices, or scalars pass through unchanged.
+func normalizeForText(data any) (any, error) {
+	if data == nil {
+		return data, nil
+	}
+	// Fast path: already a native type that tui.RenderTable handles.
+	switch data.(type) {
+	case map[string]any, []any, string, bool, float64, int:
+		return data, nil
+	}
+	// Struct or other type: round-trip through JSON.
+	return StructToMap(data)
+}
+
+// writeSummaryLine prints scalar fields from a map as a single "key=value ..." line.
+func writeSummaryLine(w io.Writer, summary map[string]any) {
+	keys := make([]string, 0, len(summary))
+	for k := range summary {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		v := summary[k]
+		if !isScalar(v) {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s=%v", k, v))
+	}
+	if len(parts) > 0 {
+		fmt.Fprintln(w, strings.Join(parts, "  "))
+	}
 }
 
 // writeYAML writes data as YAML.

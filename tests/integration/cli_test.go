@@ -1847,7 +1847,7 @@ func TestIntegration_AuthHelp(t *testing.T) {
 
 func TestIntegration_AuthList(t *testing.T) {
 	t.Parallel()
-	stdout, _, exitCode := runScafctl(t, "auth", "list")
+	stdout, _, exitCode := runScafctl(t, "auth", "list", "-o", "json")
 
 	assert.Equal(t, 0, exitCode)
 	// With no active login sessions the command succeeds and reports no tokens.

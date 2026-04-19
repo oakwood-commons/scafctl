@@ -27,6 +27,10 @@ type KvxOutputFlags struct {
 	// Where is a per-item CEL boolean filter applied to list data
 	Where string `json:"where,omitempty" yaml:"where,omitempty" doc:"Per-item CEL filter for list data" example:"_.enabled" maxLength:"4096"`
 
+	// FormatExplicit is true when the user explicitly set -o on the command line.
+	// Set automatically by the PreRunE hook via cobra Changed().
+	FormatExplicit bool `json:"-" yaml:"-"`
+
 	// AppName is the binary name shown in table headers and TUI title.
 	// Not a CLI flag -- set programmatically from settings.Run.BinaryName.
 	AppName string `json:"-" yaml:"-"`
@@ -86,6 +90,18 @@ func AddKvxOutputFlagsWithWhere(cmd *cobra.Command, outputFormat *string, intera
 // This is a convenience function when using the KvxOutputFlags struct directly.
 func AddKvxOutputFlagsToStruct(cmd *cobra.Command, flags *KvxOutputFlags) {
 	AddKvxOutputFlagsWithWhere(cmd, &flags.Output, &flags.Interactive, &flags.Expression, &flags.Where)
+
+	// Chain an additional PreRunE to detect explicit -o flag usage.
+	// AddKvxOutputFlagsWithWhere already set a PreRunE for validation;
+	// we wrap it to also populate FormatExplicit before the command runs.
+	existing := cmd.PreRunE
+	cmd.PreRunE = func(cmd *cobra.Command, args []string) error {
+		flags.FormatExplicit = cmd.Flags().Changed("output")
+		if existing != nil {
+			return existing(cmd, args)
+		}
+		return nil
+	}
 }
 
 // ValidateKvxOutputFormat validates the output format string.
@@ -124,6 +140,7 @@ func ToKvxOutputOptions(flags *KvxOutputFlags, opts ...kvx.OutputOption) *kvx.Ou
 	} else {
 		kvxOpts.Format = kvx.OutputFormatAuto
 	}
+	kvxOpts.FormatExplicit = flags.FormatExplicit
 
 	// Apply additional options
 	for _, opt := range opts {
@@ -131,6 +148,13 @@ func ToKvxOutputOptions(flags *KvxOutputFlags, opts ...kvx.OutputOption) *kvx.Ou
 	}
 
 	return kvxOpts
+}
+
+// ToKvxOutputOptionsFromCmd converts flag values to OutputOptions, auto-detecting
+// whether -o was explicitly set by checking cmd.Flags().Changed("output").
+func ToKvxOutputOptionsFromCmd(cmd *cobra.Command, flags *KvxOutputFlags, opts ...kvx.OutputOption) *kvx.OutputOptions {
+	flags.FormatExplicit = cmd.Flags().Changed("output")
+	return ToKvxOutputOptions(flags, opts...)
 }
 
 // NewKvxOutputOptionsFromFlags creates a new OutputOptions from command flags and options.

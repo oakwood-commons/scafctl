@@ -103,10 +103,10 @@ func NewEnvProvider(opts ...Option) *EnvProvider {
 				"prefix": schemahelper.StringProp("Filter environment variables by prefix (only for list operation)",
 					schemahelper.WithMaxLength(*ptrs.IntPtr(256)),
 					schemahelper.WithExample("AWS_")),
-				"expand": schemahelper.BoolProp("Return full result map (operation, name, value, exists) instead of just the value string. Default: false in resolver/transform mode, always true in action mode"),
+				"raw": schemahelper.BoolProp("Return just the value string instead of the full result map. Only applies in resolver/transform mode"),
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
-				provider.CapabilityFrom: schemahelper.AnyProp("Value string by default; full result map (operation, name, value, exists) when expand: true"),
+				provider.CapabilityFrom: schemahelper.AnyProp("Full result map (operation, name, value, exists) by default; value string when raw: true"),
 			},
 			Examples: []provider.Example{
 				{
@@ -224,10 +224,10 @@ func (p *EnvProvider) executeGet(ctx context.Context, inputs map[string]any) (*p
 		}
 	}
 
-	// In resolver/transform mode, return just the value string unless expand: true.
+	// In resolver/transform mode, return just the value string when raw: true.
 	// This eliminates the need for a separate CEL transform step.
-	expand, _ := inputs["expand"].(bool)
-	if !expand {
+	raw, _ := inputs["raw"].(bool)
+	if raw {
 		if mode, modeOK := provider.ExecutionModeFromContext(ctx); modeOK &&
 			(mode == provider.CapabilityFrom || mode == provider.CapabilityTransform) {
 			return &provider.Output{Data: value}, nil

@@ -48,7 +48,7 @@ func TestBaseOutputFormats(t *testing.T) {
 	assert.Contains(t, formats, "test")
 	assert.Contains(t, formats, "tree")
 	assert.Contains(t, formats, "mermaid")
-	assert.Len(t, formats, 9)
+	assert.Len(t, formats, 10)
 }
 
 func TestIsStructuredFormat(t *testing.T) {
@@ -320,7 +320,7 @@ func TestNewOutputOptions_Defaults(t *testing.T) {
 	assert.Same(t, ioStreams, opts.IOStreams)
 }
 
-func TestOutputOptions_Write_TableFallbackToJSONWhenNotTTY(t *testing.T) {
+func TestOutputOptions_Write_TableFallbackToTextWhenNotTTY(t *testing.T) {
 	out := &bytes.Buffer{}
 	ioStreams := &terminal.IOStreams{Out: out}
 
@@ -331,7 +331,10 @@ func TestOutputOptions_Write_TableFallbackToJSONWhenNotTTY(t *testing.T) {
 	err := opts.Write(data)
 
 	require.NoError(t, err)
-	assert.Contains(t, out.String(), `"name": "test"`)
+	// Non-TTY output falls back to plain text table, not JSON
+	assert.Contains(t, out.String(), "name")
+	assert.Contains(t, out.String(), "test")
+	assert.NotContains(t, out.String(), `"name"`, "should not produce JSON output")
 }
 
 func TestOutputOptions_Write_InteractiveErrorWhenNotTTY(t *testing.T) {
@@ -377,6 +380,65 @@ func TestOutputOptions_Write_KvxNonTTY_WithInvalidExpression(t *testing.T) {
 	err := opts.Write(data)
 	// May or may not error depending on CEL env; just ensure no panic
 	_ = err
+}
+
+func TestOutputOptions_Write_TextFormat(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatText
+
+	data := map[string]any{"name": "test", "count": 42}
+	err := opts.Write(data)
+
+	require.NoError(t, err)
+	output := out.String()
+	assert.Contains(t, output, "name")
+	assert.Contains(t, output, "test")
+	assert.NotContains(t, output, `"name"`, "text format should not produce JSON")
+}
+
+func TestOutputOptions_Write_TextFormat_WithExpression(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatText
+	opts.Expression = "_.name"
+
+	data := map[string]any{"name": "filtered-value"}
+	err := opts.Write(data)
+
+	require.NoError(t, err)
+	assert.Contains(t, out.String(), "filtered-value")
+}
+
+func TestOutputOptions_Write_TextFormat_Scalar(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatText
+
+	err := opts.Write("hello world")
+
+	require.NoError(t, err)
+	assert.Equal(t, "hello world\n", out.String())
+}
+
+func TestParseOutputFormat_Text(t *testing.T) {
+	f, ok := ParseOutputFormat("text")
+	assert.True(t, ok)
+	assert.Equal(t, OutputFormatText, f)
+}
+
+func TestOutputOptions_FormatExplicit(t *testing.T) {
+	opts := NewOutputOptions(nil)
+	assert.False(t, opts.FormatExplicit, "default should be false")
+
+	WithFormatExplicit(true)(opts)
+	assert.True(t, opts.FormatExplicit)
 }
 
 func TestIsAutoFormat(t *testing.T) {
@@ -1031,4 +1093,113 @@ func TestOutputOptions_Write_ScalarNoFilters_FastPath(t *testing.T) {
 	err := opts.Write("hello world")
 	require.NoError(t, err)
 	assert.Equal(t, "hello world\n", out.String(), "scalar without filters should use fast-path")
+}
+
+func TestDominantArray_MapWithSingleArray(t *testing.T) {
+	data := map[string]any{
+		"file":       "solution.yaml",
+		"errorCount": 2,
+		"findings": []any{
+			map[string]any{"severity": "error", "message": "bad field"},
+			map[string]any{"severity": "warning", "message": "unused resolver"},
+		},
+	}
+
+	arr, summary, ok := dominantArray(data)
+	require.True(t, ok)
+	assert.Len(t, arr, 2)
+	assert.Equal(t, "solution.yaml", summary["file"])
+	assert.Equal(t, 2, summary["errorCount"])
+	_, hasFindingsInSummary := summary["findings"]
+	assert.False(t, hasFindingsInSummary, "array key must not appear in summary")
+}
+
+func TestDominantArray_MultipleArrays_ReturnsFalse(t *testing.T) {
+	data := map[string]any{
+		"items":    []any{map[string]any{"a": 1}},
+		"metadata": []any{map[string]any{"b": 2}},
+	}
+
+	_, _, ok := dominantArray(data)
+	assert.False(t, ok, "multiple array-of-objects fields should be ambiguous")
+}
+
+func TestDominantArray_NoArrays_ReturnsFalse(t *testing.T) {
+	data := map[string]any{
+		"name":  "test",
+		"count": 5,
+	}
+
+	_, _, ok := dominantArray(data)
+	assert.False(t, ok)
+}
+
+func TestDominantArray_ScalarArray_Ignored(t *testing.T) {
+	data := map[string]any{
+		"tags": []any{"a", "b", "c"},
+	}
+
+	_, _, ok := dominantArray(data)
+	assert.False(t, ok, "arrays of scalars should not be treated as dominant")
+}
+
+func TestDominantArray_EmptyMap(t *testing.T) {
+	_, _, ok := dominantArray(map[string]any{})
+	assert.False(t, ok)
+}
+
+func TestDominantArray_NotAMap(t *testing.T) {
+	_, _, ok := dominantArray([]any{"a", "b"})
+	assert.False(t, ok)
+}
+
+func TestDominantArray_NilData(t *testing.T) {
+	_, _, ok := dominantArray(nil)
+	assert.False(t, ok)
+}
+
+func TestOutputOptions_Write_TextFormat_DominantArray(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatText
+
+	data := map[string]any{
+		"file":       "solution.yaml",
+		"errorCount": float64(2),
+		"findings": []any{
+			map[string]any{"severity": "error", "message": "bad field"},
+			map[string]any{"severity": "warning", "message": "unused resolver"},
+		},
+	}
+
+	err := opts.Write(data)
+	require.NoError(t, err)
+
+	output := out.String()
+	// Summary line should contain the scalar fields
+	assert.Contains(t, output, "errorCount=2")
+	assert.Contains(t, output, "file=solution.yaml")
+	// Columnar table should contain finding data
+	assert.Contains(t, output, "error")
+	assert.Contains(t, output, "bad field")
+	assert.Contains(t, output, "warning")
+	assert.Contains(t, output, "unused resolver")
+}
+
+func TestWriteSummaryLine(t *testing.T) {
+	out := &bytes.Buffer{}
+	summary := map[string]any{
+		"file":       "test.yaml",
+		"errorCount": 3,
+		"nested":     map[string]any{"skip": true},
+	}
+
+	writeSummaryLine(out, summary)
+	output := out.String()
+
+	assert.Contains(t, output, "errorCount=3")
+	assert.Contains(t, output, "file=test.yaml")
+	assert.NotContains(t, output, "nested", "non-scalar fields should be skipped")
 }

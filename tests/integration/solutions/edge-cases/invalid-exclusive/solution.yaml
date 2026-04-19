@@ -41,23 +41,25 @@ spec:
       lint-rejects-self-reference:
         description: Verify lint catches a self-referencing exclusive declaration
         command: [lint]
+        args: ["-o", "json"]
         tags: [exclusive, validation, negative]
         expectFailure: true
         assertions:
           - expression: __exitCode != 0
             message: "Lint should fail when exclusive contains a self-reference"
-          - contains: "cannot exclude itself"
+          - expression: '__output.findings.exists(f, f.message.contains("cannot exclude itself"))'
             message: "Error message should describe the self-reference problem"
 
       lint-rejects-missing-ref:
         description: Verify lint catches an exclusive reference to a nonexistent action
         command: [lint]
+        args: ["-o", "json"]
         tags: [exclusive, validation, negative]
         expectFailure: true
         assertions:
           - expression: __exitCode != 0
             message: "Lint should fail when exclusive references a nonexistent action"
-          - contains: "not found in actions section"
+          - expression: '__output.findings.exists(f, f.message.contains("not found in actions section"))'
             message: "Error message should indicate the missing action reference"
 
       lint-detects-both-errors:
