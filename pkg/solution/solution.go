@@ -12,7 +12,6 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
-	"github.com/oakwood-commons/scafctl/pkg/state"
 	"gopkg.in/yaml.v3"
 )
 
@@ -84,12 +83,6 @@ type Solution struct {
 	// Spec defines the execution specification containing resolvers, templates, and actions.
 	// This is where the actual work of the solution is defined.
 	Spec Spec `json:"spec,omitempty" yaml:"spec,omitempty" doc:"Execution specification"`
-
-	// State configures optional per-solution persistence of resolver values across executions.
-	// When configured, resolvers with saveToState: true have their results persisted to a
-	// backend (e.g., local file, GitHub repo) and can be read back on subsequent runs via
-	// the state provider. State is opt-in -- solutions without this field are stateless.
-	State *state.Config `json:"state,omitempty" yaml:"state,omitempty" doc:"Optional state persistence configuration" required:"false"`
 
 	// path is an internal field for the file path where the solution was loaded from
 	path string `json:"-" yaml:"-"`
@@ -395,10 +388,6 @@ func (s *Solution) Validate() error {
 		default:
 			problems = append(problems, "catalog.visibility must be public, private, or internal when set")
 		}
-	}
-
-	if s.State != nil && s.State.Backend.Provider == "" {
-		problems = append(problems, "state.backend.provider is required when state is configured")
 	}
 
 	if len(problems) > 0 {

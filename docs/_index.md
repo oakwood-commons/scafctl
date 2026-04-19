@@ -40,7 +40,6 @@ scafctl run solution -f hello.yaml -o yaml
 
 - **[Getting Started](tutorials/getting-started/)** — Install scafctl and run your first solution
 - **[Tutorials](tutorials/)** — Step-by-step guides for resolvers, actions, CEL, catalogs, and more
-- **[State Tutorial](tutorials/state-tutorial/)** — Persist resolver values across executions
 - **[Design](design/)** — Architecture, design docs, and contributor guides
 
 ## Examples
