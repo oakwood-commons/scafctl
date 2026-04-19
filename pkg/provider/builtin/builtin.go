@@ -27,6 +27,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/parameterprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/secretprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/sleepprovider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/stateprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/staticprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/validationprovider"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
@@ -78,6 +79,7 @@ func registerAllToRegistry(ctx context.Context, reg *provider.Registry) error {
 		hclprovider.NewHCLProvider(),
 		metadataprovider.New(),
 		messageprovider.NewMessageProvider(),
+		stateprovider.New(),
 	}
 
 	// Initialize secrets store for the secret provider.
@@ -148,6 +150,7 @@ func ProviderNames() []string {
 		"github",
 		"metadata",
 		"message",
+		"state",
 	}
 }
 

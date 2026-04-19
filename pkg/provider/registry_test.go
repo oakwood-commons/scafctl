@@ -696,3 +696,179 @@ func TestValidateDescriptor(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateDescriptor_CapabilityState(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		desc    *Descriptor
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "valid state capability",
+			desc: &Descriptor{
+				Name:         "test-state",
+				APIVersion:   "v1",
+				Version:      semver.MustParse("1.0.0"),
+				Description:  "State provider",
+				Capabilities: []Capability{CapabilityFrom, CapabilityState},
+				Schema: &jsonschema.Schema{
+					Type: "object",
+					Properties: map[string]*jsonschema.Schema{
+						"key": {Type: "string"},
+					},
+				},
+				OutputSchemas: map[Capability]*jsonschema.Schema{
+					CapabilityFrom: {
+						Type: "object",
+						Properties: map[string]*jsonschema.Schema{
+							"value": {Type: "string"},
+						},
+					},
+					CapabilityState: {
+						Type: "object",
+						Properties: map[string]*jsonschema.Schema{
+							"success": {Type: "boolean"},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "missing output schema for state",
+			desc: &Descriptor{
+				Name:         "test-state",
+				APIVersion:   "v1",
+				Version:      semver.MustParse("1.0.0"),
+				Description:  "State provider",
+				Capabilities: []Capability{CapabilityFrom, CapabilityState},
+				Schema: &jsonschema.Schema{
+					Type: "object",
+					Properties: map[string]*jsonschema.Schema{
+						"key": {Type: "string"},
+					},
+				},
+				OutputSchemas: map[Capability]*jsonschema.Schema{
+					CapabilityFrom: {
+						Type: "object",
+						Properties: map[string]*jsonschema.Schema{
+							"value": {Type: "string"},
+						},
+					},
+				},
+			},
+			wantErr: true,
+			errMsg:  "missing output schema",
+		},
+		{
+			name: "state output schema missing success field",
+			desc: &Descriptor{
+				Name:         "test-state",
+				APIVersion:   "v1",
+				Version:      semver.MustParse("1.0.0"),
+				Description:  "State provider",
+				Capabilities: []Capability{CapabilityFrom, CapabilityState},
+				Schema: &jsonschema.Schema{
+					Type: "object",
+					Properties: map[string]*jsonschema.Schema{
+						"key": {Type: "string"},
+					},
+				},
+				OutputSchemas: map[Capability]*jsonschema.Schema{
+					CapabilityFrom: {
+						Type: "object",
+						Properties: map[string]*jsonschema.Schema{
+							"value": {Type: "string"},
+						},
+					},
+					CapabilityState: {
+						Type:       "object",
+						Properties: map[string]*jsonschema.Schema{},
+					},
+				},
+			},
+			wantErr: true,
+			errMsg:  "requires output field",
+		},
+		{
+			name: "state only - no SDK caps",
+			desc: &Descriptor{
+				Name:         "pure-state",
+				APIVersion:   "v1",
+				Version:      semver.MustParse("1.0.0"),
+				Description:  "Pure state provider",
+				Capabilities: []Capability{CapabilityState},
+				Schema: &jsonschema.Schema{
+					Type: "object",
+					Properties: map[string]*jsonschema.Schema{
+						"op": {Type: "string"},
+					},
+				},
+				OutputSchemas: map[Capability]*jsonschema.Schema{
+					CapabilityState: {
+						Type: "object",
+						Properties: map[string]*jsonschema.Schema{
+							"success": {Type: "boolean"},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateDescriptor(tt.desc)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errMsg)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidateDescriptor_DoesNotMutateCapabilities(t *testing.T) {
+	t.Parallel()
+
+	desc := &Descriptor{
+		Name:         "test-state",
+		APIVersion:   "v1",
+		Version:      semver.MustParse("1.0.0"),
+		Description:  "State provider",
+		Capabilities: []Capability{CapabilityFrom, CapabilityState},
+		Schema: &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"key": {Type: "string"},
+			},
+		},
+		OutputSchemas: map[Capability]*jsonschema.Schema{
+			CapabilityFrom: {
+				Type: "object",
+				Properties: map[string]*jsonschema.Schema{
+					"value": {Type: "string"},
+				},
+			},
+			CapabilityState: {
+				Type: "object",
+				Properties: map[string]*jsonschema.Schema{
+					"success": {Type: "boolean"},
+				},
+			},
+		},
+	}
+
+	origCaps := make([]Capability, len(desc.Capabilities))
+	copy(origCaps, desc.Capabilities)
+
+	err := ValidateDescriptor(desc)
+	require.NoError(t, err)
+	assert.Equal(t, origCaps, desc.Capabilities, "capabilities should not be mutated")
+}
