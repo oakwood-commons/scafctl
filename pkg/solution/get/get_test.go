@@ -588,8 +588,8 @@ func TestGetPossibleSolutionPaths(t *testing.T) {
 	t.Run("returns all possible paths", func(t *testing.T) {
 		paths := PossibleSolutionPaths()
 
-		// Should have 3 folders * 6 filenames = 18 paths
-		assert.Len(t, paths, 18)
+		// Should have 3 folders * 8 filenames = 24 paths
+		assert.Len(t, paths, 24)
 	})
 
 	t.Run("contains expected paths", func(t *testing.T) {

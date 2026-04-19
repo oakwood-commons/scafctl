@@ -4,12 +4,47 @@
 package solution
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// mockCatalog implements catalog.Catalog for testing NextPatchVersion.
+type mockCatalog struct {
+	artifacts []catalog.ArtifactInfo
+	listErr   error
+}
+
+func (m *mockCatalog) Name() string { return "mock" }
+func (m *mockCatalog) Store(_ context.Context, _ catalog.Reference, _, _ []byte, _ map[string]string, _ bool) (catalog.ArtifactInfo, error) {
+	return catalog.ArtifactInfo{}, nil
+}
+
+func (m *mockCatalog) Fetch(_ context.Context, _ catalog.Reference) ([]byte, catalog.ArtifactInfo, error) {
+	return nil, catalog.ArtifactInfo{}, nil
+}
+
+func (m *mockCatalog) FetchWithBundle(_ context.Context, _ catalog.Reference) ([]byte, []byte, catalog.ArtifactInfo, error) {
+	return nil, nil, catalog.ArtifactInfo{}, nil
+}
+
+func (m *mockCatalog) Resolve(_ context.Context, _ catalog.Reference) (catalog.ArtifactInfo, error) {
+	return catalog.ArtifactInfo{}, nil
+}
+
+func (m *mockCatalog) List(_ context.Context, _ catalog.ArtifactKind, _ string) ([]catalog.ArtifactInfo, error) {
+	return m.artifacts, m.listErr
+}
+
+func (m *mockCatalog) Exists(_ context.Context, _ catalog.Reference) (bool, error) {
+	return false, nil
+}
+func (m *mockCatalog) Delete(_ context.Context, _ catalog.Reference) error { return nil }
 
 func TestResolveArtifactName(t *testing.T) {
 	t.Run("explicit name takes priority", func(t *testing.T) {
@@ -105,5 +140,75 @@ func BenchmarkResolveArtifactVersion(b *testing.B) {
 	metadata := semver.MustParse("1.0.0")
 	for b.Loop() {
 		_, _, _ = ResolveArtifactVersion("2.0.0", metadata)
+	}
+}
+
+func TestNextPatchVersion(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("no existing versions returns 0.1.0", func(t *testing.T) {
+		cat := &mockCatalog{}
+		v, err := NextPatchVersion(ctx, cat, catalog.ArtifactKindSolution, "my-app")
+		require.NoError(t, err)
+		assert.Equal(t, "0.1.0", v.String())
+	})
+
+	t.Run("increments patch from highest version", func(t *testing.T) {
+		cat := &mockCatalog{
+			artifacts: []catalog.ArtifactInfo{
+				{Reference: catalog.Reference{Version: semver.MustParse("1.0.0")}, CreatedAt: time.Now()},
+				{Reference: catalog.Reference{Version: semver.MustParse("1.2.3")}, CreatedAt: time.Now()},
+				{Reference: catalog.Reference{Version: semver.MustParse("1.1.0")}, CreatedAt: time.Now()},
+			},
+		}
+		v, err := NextPatchVersion(ctx, cat, catalog.ArtifactKindSolution, "my-app")
+		require.NoError(t, err)
+		assert.Equal(t, "1.2.4", v.String())
+	})
+
+	t.Run("single version increments patch", func(t *testing.T) {
+		cat := &mockCatalog{
+			artifacts: []catalog.ArtifactInfo{
+				{Reference: catalog.Reference{Version: semver.MustParse("0.1.0")}, CreatedAt: time.Now()},
+			},
+		}
+		v, err := NextPatchVersion(ctx, cat, catalog.ArtifactKindSolution, "my-app")
+		require.NoError(t, err)
+		assert.Equal(t, "0.1.1", v.String())
+	})
+
+	t.Run("skips artifacts without version", func(t *testing.T) {
+		cat := &mockCatalog{
+			artifacts: []catalog.ArtifactInfo{
+				{Reference: catalog.Reference{Name: "my-app"}, CreatedAt: time.Now()},                                     // no version (alias tag)
+				{Reference: catalog.Reference{Name: "my-app", Version: semver.MustParse("2.0.0")}, CreatedAt: time.Now()}, // has version
+			},
+		}
+		v, err := NextPatchVersion(ctx, cat, catalog.ArtifactKindSolution, "my-app")
+		require.NoError(t, err)
+		assert.Equal(t, "2.0.1", v.String())
+	})
+
+	t.Run("catalog list error", func(t *testing.T) {
+		cat := &mockCatalog{listErr: assert.AnError}
+		_, err := NextPatchVersion(ctx, cat, catalog.ArtifactKindSolution, "my-app")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "listing catalog versions")
+	})
+}
+
+func BenchmarkNextPatchVersion(b *testing.B) {
+	ctx := context.Background()
+	cat := &mockCatalog{
+		artifacts: []catalog.ArtifactInfo{
+			{Reference: catalog.Reference{Version: semver.MustParse("1.0.0")}},
+			{Reference: catalog.Reference{Version: semver.MustParse("1.2.3")}},
+			{Reference: catalog.Reference{Version: semver.MustParse("1.1.0")}},
+		},
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = NextPatchVersion(ctx, cat, catalog.ArtifactKindSolution, "my-app")
 	}
 }

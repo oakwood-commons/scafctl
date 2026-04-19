@@ -88,10 +88,12 @@ func NewFileProvider() *FileProvider {
 				"basePath": schemahelper.StringProp("Destination root directory (required for write-tree operation). Entries are written relative to this path.",
 					schemahelper.WithExample("./output"),
 					schemahelper.WithMaxLength(4096)),
-				"entries": schemahelper.ArrayProp("Array of {path, content} objects to write (required for write-tree operation). Typically produced by the go-template provider's render-tree operation.",
+				"entries": schemahelper.ArrayProp("Array of {path, content} objects to write (required for write-tree operation). "+
+					"Entries without a content field (e.g. directory entries) are silently skipped. "+
+					"Typically produced by the go-template provider's render-tree operation.",
 					schemahelper.WithItems(schemahelper.ObjectProp(
-						"A file entry with relative path and content to write",
-						[]string{"path", "content"},
+						"A file entry with relative path and optional content to write",
+						[]string{"path"},
 						map[string]*jsonschema.Schema{
 							"path":    schemahelper.StringProp("Relative file path within basePath"),
 							"content": schemahelper.StringProp("File content to write"),
@@ -840,7 +842,8 @@ func (p *FileProvider) parseWriteTreeEntries(inputs map[string]any) ([]writeTree
 
 		content, ok := entry["content"].(string)
 		if !ok {
-			return nil, fmt.Errorf("entries[%d].content is required and must be a string", i)
+			// Skip directory entries (no content field) silently.
+			continue
 		}
 
 		entryOnConflict, _ := entry["onConflict"].(string)

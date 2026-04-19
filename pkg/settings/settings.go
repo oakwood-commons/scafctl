@@ -286,6 +286,8 @@ func SolutionFileNamesFor(binaryName string) []string {
 		fmt.Sprintf("%s.yml", binaryName),
 		"solution.json",
 		fmt.Sprintf("%s.json", binaryName),
+		"actions.yaml",
+		"actions.yml",
 	}
 }
 

@@ -4,6 +4,7 @@
 package execprovider
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
@@ -731,4 +732,87 @@ func TestExecProvider_Execute_NoExecutionMode_ReturnsFullMap(t *testing.T) {
 	data, ok := output.Data.(map[string]any)
 	require.True(t, ok, "expected map, got %T", output.Data)
 	assert.Equal(t, "hello\n", data["stdout"])
+}
+
+func TestExecProvider_Execute_Passthrough(t *testing.T) {
+	p := NewExecProvider()
+
+	var termOut bytes.Buffer
+	var termErr bytes.Buffer
+	ctx := provider.WithIOStreams(context.Background(), &provider.IOStreams{
+		Out:    &termOut,
+		ErrOut: &termErr,
+	})
+
+	inputs := map[string]any{
+		"command":     "echo",
+		"args":        []any{"passthrough-test"},
+		"passthrough": true,
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	// Passthrough: output streamed to terminal, not captured in result
+	data, ok := output.Data.(map[string]any)
+	require.True(t, ok, "expected map, got %T", output.Data)
+	assert.Empty(t, data["stdout"], "passthrough should not capture stdout")
+	assert.Equal(t, 0, data["exitCode"])
+	assert.Equal(t, true, data["success"])
+
+	// Terminal should have received the output
+	assert.Contains(t, termOut.String(), "passthrough-test")
+}
+
+func TestExecProvider_Execute_Passthrough_ExitCode(t *testing.T) {
+	p := NewExecProvider()
+
+	var termOut bytes.Buffer
+	ctx := provider.WithIOStreams(context.Background(), &provider.IOStreams{
+		Out:    &termOut,
+		ErrOut: &termOut,
+	})
+
+	inputs := map[string]any{
+		"command":     "exit 42",
+		"passthrough": true,
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	data, ok := output.Data.(map[string]any)
+	require.True(t, ok, "expected map, got %T", output.Data)
+	assert.Equal(t, 42, data["exitCode"])
+	assert.Equal(t, false, data["success"])
+}
+
+func TestExecProvider_Execute_PassthroughFalse_StillCaptures(t *testing.T) {
+	p := NewExecProvider()
+
+	var termOut bytes.Buffer
+	ctx := provider.WithIOStreams(context.Background(), &provider.IOStreams{
+		Out:    &termOut,
+		ErrOut: &termOut,
+	})
+
+	inputs := map[string]any{
+		"command":     "echo",
+		"args":        []any{"captured"},
+		"passthrough": false,
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	data, ok := output.Data.(map[string]any)
+	require.True(t, ok, "expected map, got %T", output.Data)
+	// Default behavior: stdout is captured
+	assert.Contains(t, data["stdout"], "captured")
 }

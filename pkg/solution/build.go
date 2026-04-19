@@ -4,8 +4,10 @@
 package solution
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
@@ -63,4 +65,32 @@ func ResolveArtifactVersion(explicitVersion string, metadataVersion *semver.Vers
 	}
 
 	return nil, false, fmt.Errorf("no version: solution has no version in metadata; provide --version or set metadata.version")
+}
+
+// NextPatchVersion queries the catalog for existing versions of the named artifact
+// and returns the next patch version. If no versions exist, it returns 0.1.0.
+func NextPatchVersion(ctx context.Context, cat catalog.Catalog, kind catalog.ArtifactKind, name string) (*semver.Version, error) {
+	artifacts, err := cat.List(ctx, kind, name)
+	if err != nil {
+		return nil, fmt.Errorf("listing catalog versions for %q: %w", name, err)
+	}
+
+	var versions []*semver.Version
+	for _, a := range artifacts {
+		if a.Reference.Version != nil {
+			versions = append(versions, a.Reference.Version)
+		}
+	}
+
+	if len(versions) == 0 {
+		return semver.MustParse("0.1.0"), nil
+	}
+
+	sort.Slice(versions, func(i, j int) bool {
+		return versions[i].LessThan(versions[j])
+	})
+
+	highest := versions[len(versions)-1]
+	next := semver.New(highest.Major(), highest.Minor(), highest.Patch()+1, "", "")
+	return next, nil
 }

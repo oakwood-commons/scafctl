@@ -98,14 +98,14 @@ func TestSolutionFileNamesFor(t *testing.T) {
 		{
 			name:        "default binary name",
 			binaryName:  "scafctl",
-			wantLen:     6,
-			mustContain: []string{"solution.yaml", "scafctl.yaml", "scafctl.json"},
+			wantLen:     8,
+			mustContain: []string{"solution.yaml", "scafctl.yaml", "scafctl.json", "actions.yaml", "actions.yml"},
 		},
 		{
 			name:        "custom binary name",
 			binaryName:  "mycli",
-			wantLen:     6,
-			mustContain: []string{"solution.yaml", "mycli.yaml", "mycli.json"},
+			wantLen:     8,
+			mustContain: []string{"solution.yaml", "mycli.yaml", "mycli.json", "actions.yaml", "actions.yml"},
 		},
 	}
 	for _, tt := range tests {

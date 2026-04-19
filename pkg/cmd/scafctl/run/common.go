@@ -597,11 +597,36 @@ func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context)
 		return nil, nil, "", func() {}, err
 	}
 
-	if w != nil && w.VerboseEnabled() {
-		w.Verbosef("Solution loaded: %s (version=%s, dir=%s)",
-			result.Solution.Metadata.Name,
-			result.Solution.Metadata.Version,
-			result.SolutionDir)
+	if w != nil {
+		sol := result.Solution
+		name := sol.Metadata.Name
+		var ver string
+		if sol.Metadata.Version != nil {
+			ver = sol.Metadata.Version.String()
+		}
+		source := sol.GetPath()
+
+		if w.VerboseEnabled() {
+			w.Verbosef("Solution loaded: %s (version=%s, dir=%s)",
+				name, ver, result.SolutionDir)
+		}
+
+		// Show a concise summary so the user knows what was resolved.
+		// Skip when structured output is requested to avoid polluting JSON/YAML.
+		if o.Output != "json" && o.Output != "yaml" {
+			switch {
+			case name != "" && ver != "" && source != "":
+				w.Infof("Solution: %s@%s (%s)", name, ver, source)
+			case name != "" && ver != "":
+				w.Infof("Solution: %s@%s", name, ver)
+			case name != "" && source != "":
+				w.Infof("Solution: %s (%s)", name, source)
+			case name != "":
+				w.Infof("Solution: %s", name)
+			case source != "":
+				w.Infof("Solution: %s", source)
+			}
+		}
 	}
 
 	return result.Solution, result.Registry, result.SolutionDir, result.Cleanup, nil

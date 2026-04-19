@@ -389,7 +389,7 @@ func loginGCP(ctx context.Context, w *writer.Writer, binaryName string, flow aut
 			Flow:           auth.FlowServicePrincipal,
 			Description:    "Detected service account key in environment",
 		},
-	}, auth.FlowDeviceCode)
+	}, auth.FlowInteractive)
 	flow = detection.Flow
 	if detection.Description != "" {
 		w.Info(detection.Description)
@@ -738,8 +738,9 @@ func executeLoginWithStatusTUI(
 }
 
 // executeLoginWithBrowserTUI runs the auth code (browser) login flow using the
-// kvx status screen TUI. Unlike device-code, there is no user code to display.
-// The TUI shows a spinner with the auth URL while the browser tab completes.
+// kvx status screen TUI. It also sets a DeviceCodeCallback so that handlers
+// which internally use device code within a FlowInteractive (e.g., GitHub
+// without client_secret) get the rich device-code TUI instead.
 func executeLoginWithBrowserTUI(
 	ctx context.Context,
 	w *writer.Writer,
@@ -752,11 +753,16 @@ func executeLoginWithBrowserTUI(
 	scopes []string,
 	ioStreams *terminal.IOStreams,
 ) error {
+	type deviceCodeData struct {
+		userCode        string
+		verificationURI string
+	}
 	type loginOutcome struct {
 		result *auth.Result
 		err    error
 	}
 
+	deviceCodeChan := make(chan deviceCodeData, 1)
 	outcomeChan := make(chan loginOutcome, 1)
 	done := make(chan tui.StatusResult, 1)
 
@@ -766,12 +772,47 @@ func executeLoginWithBrowserTUI(
 		Flow:         flow,
 		Timeout:      timeout,
 		CallbackPort: callbackPort,
+		DeviceCodeCallback: func(userCode, verificationURI, _ string) {
+			select {
+			case deviceCodeChan <- deviceCodeData{userCode: userCode, verificationURI: verificationURI}:
+			default:
+			}
+		},
 	}
 
 	go func() {
 		result, err := handler.Login(ctx, loginOpts)
 		outcomeChan <- loginOutcome{result: result, err: err}
 	}()
+
+	// Wait briefly for a device code callback. If the handler internally
+	// uses device code (e.g., GitHub FlowInteractive without client_secret),
+	// we want to show the device-code TUI instead of the browser TUI.
+	w.Infof("Initiating authentication with %s...", handler.DisplayName())
+
+	var useDeviceCodeTUI bool
+	var dci deviceCodeData
+	select {
+	case dci = <-deviceCodeChan:
+		useDeviceCodeTUI = true
+	case outcome := <-outcomeChan:
+		// Login completed before any TUI was shown.
+		if outcome.err != nil {
+			if ctx.Err() != nil {
+				return exitcode.WithCode(auth.ErrUserCancelled, exitcode.GeneralError)
+			}
+			err := fmt.Errorf("authentication failed: %w", outcome.err)
+			w.Errorf("%v", err)
+			return exitcode.WithCode(err, exitcode.GeneralError)
+		}
+		w.Info("")
+		return displayLoginResult(w, outcome.result, flow)
+	case <-time.After(500 * time.Millisecond):
+		// No device code within 500ms — assume browser flow.
+		useDeviceCodeTUI = false
+	case <-ctx.Done():
+		return exitcode.WithCode(auth.ErrUserCancelled, exitcode.GeneralError)
+	}
 
 	// Forward the login outcome to the TUI done channel.
 	var capturedOutcome loginOutcome
@@ -791,19 +832,57 @@ func executeLoginWithBrowserTUI(
 		close(outcomeReady)
 	}()
 
-	data := map[string]any{
-		"title": fmt.Sprintf("Sign in to %s", handler.DisplayName()),
-	}
+	var data map[string]any
+	var schema *tui.DisplaySchema
 
-	schema := &tui.DisplaySchema{
-		Version: "v1",
-		Status: &tui.StatusDisplayConfig{
-			TitleField:     "title",
-			WaitMessage:    "Waiting for browser authentication...",
-			SuccessMessage: "Authenticated successfully!",
-			DoneBehavior:   tui.DoneBehaviorExitAfterDelay,
-			DoneDelay:      "2s",
-		},
+	if useDeviceCodeTUI {
+		data = map[string]any{
+			"title": fmt.Sprintf("Sign in to %s", handler.DisplayName()),
+			"url":   dci.verificationURI,
+			"code":  dci.userCode,
+		}
+		schema = &tui.DisplaySchema{
+			Version: "v1",
+			Status: &tui.StatusDisplayConfig{
+				TitleField:     "title",
+				WaitMessage:    "Waiting for authentication...",
+				SuccessMessage: "Authenticated successfully!",
+				DoneBehavior:   tui.DoneBehaviorExitAfterDelay,
+				DoneDelay:      "2s",
+				DisplayFields: []tui.StatusFieldDisplay{
+					{Label: "URL", Field: "url"},
+					{Label: "Code", Field: "code"},
+				},
+				Actions: []tui.StatusActionConfig{
+					{
+						Label: "Copy code",
+						Type:  "copy-value",
+						Field: "code",
+						Keys:  tui.StatusKeyBindings{Vim: "c", Emacs: "alt+c", Function: "f2"},
+					},
+					{
+						Label: "Open URL",
+						Type:  "open-url",
+						Field: "url",
+						Keys:  tui.StatusKeyBindings{Vim: "o", Emacs: "alt+o", Function: "f3"},
+					},
+				},
+			},
+		}
+	} else {
+		data = map[string]any{
+			"title": fmt.Sprintf("Sign in to %s", handler.DisplayName()),
+		}
+		schema = &tui.DisplaySchema{
+			Version: "v1",
+			Status: &tui.StatusDisplayConfig{
+				TitleField:     "title",
+				WaitMessage:    "Waiting for browser authentication...",
+				SuccessMessage: "Authenticated successfully!",
+				DoneBehavior:   tui.DoneBehaviorExitAfterDelay,
+				DoneDelay:      "2s",
+			},
+		}
 	}
 
 	cfg := tui.DefaultConfig()

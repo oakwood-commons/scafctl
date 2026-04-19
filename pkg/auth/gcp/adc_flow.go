@@ -75,6 +75,10 @@ func (h *Handler) adcLogin(ctx context.Context, opts auth.LoginOptions) (*auth.R
 	lgr.V(1).Info("opening browser for authentication", "url", authURL)
 	if err := oauth.OpenBrowser(ctx, authURL); err != nil {
 		lgr.V(0).Info("failed to open browser, please open this URL manually", "url", authURL)
+		// Notify callback so the CLI can display the URL to the user.
+		if opts.DeviceCodeCallback != nil {
+			opts.DeviceCodeCallback("", authURL, "Open this URL in your browser to authenticate")
+		}
 	}
 
 	// Wait for authorization code or timeout

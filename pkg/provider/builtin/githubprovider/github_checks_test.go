@@ -250,3 +250,130 @@ func BenchmarkExecuteListCheckRuns(b *testing.B) {
 		_, _ = p.Execute(context.Background(), inputs)
 	}
 }
+
+// ─── List Commit Pulls Tests ─────────────────────────────────────────────────
+
+func TestGitHubProvider_Execute_ListCommitPulls(t *testing.T) {
+	t.Parallel()
+
+	p, baseURL := testProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, "/repos/test-org/test-repo/commits/abc123def456/pulls", r.URL.Path)
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]any{ //nolint:errcheck
+			map[string]any{
+				"number":     float64(42),
+				"title":      "Add feature X",
+				"state":      "closed",
+				"html_url":   "https://github.com/test-org/test-repo/pull/42",
+				"created_at": "2025-01-01T00:00:00Z",
+				"merged_at":  "2025-01-02T00:00:00Z",
+				"draft":      false,
+				"user":       map[string]any{"login": "octocat", "id": float64(1)},
+				"head":       map[string]any{"ref": "feature-x", "sha": "abc123def456"},
+				"base":       map[string]any{"ref": "main", "sha": "def789"},
+			},
+			map[string]any{
+				"number":     float64(99),
+				"title":      "Backport feature X",
+				"state":      "open",
+				"html_url":   "https://github.com/test-org/test-repo/pull/99",
+				"created_at": "2025-01-03T00:00:00Z",
+				"merged_at":  nil,
+				"draft":      true,
+				"user":       map[string]any{"login": "bot", "id": float64(2)},
+				"head":       map[string]any{"ref": "backport-x", "sha": "abc123def456"},
+				"base":       map[string]any{"ref": "release-1.0", "sha": "ghi012"},
+			},
+		})
+	})
+
+	output, err := p.Execute(context.Background(), map[string]any{
+		"operation":  "list_commit_pulls",
+		"owner":      "test-org",
+		"repo":       "test-repo",
+		"commit_sha": "abc123def456",
+		"api_base":   baseURL,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	result := output.Data.(map[string]any)["result"].(map[string]any)
+	assert.Equal(t, 2, result["total_count"])
+	prs := result["pull_requests"].([]any)
+	assert.Len(t, prs, 2)
+
+	pr1 := prs[0].(map[string]any)
+	assert.Equal(t, float64(42), pr1["number"])
+	assert.Equal(t, "Add feature X", pr1["title"])
+	assert.Equal(t, "closed", pr1["state"])
+	assert.Equal(t, "octocat", pr1["user"])
+	assert.Equal(t, "feature-x", pr1["head_ref"])
+	assert.Equal(t, "main", pr1["base_ref"])
+
+	pr2 := prs[1].(map[string]any)
+	assert.Equal(t, float64(99), pr2["number"])
+	assert.Equal(t, true, pr2["draft"])
+	assert.Equal(t, "backport-x", pr2["head_ref"])
+	assert.Equal(t, "release-1.0", pr2["base_ref"])
+}
+
+func TestGitHubProvider_Execute_ListCommitPulls_Empty(t *testing.T) {
+	t.Parallel()
+
+	p, baseURL := testProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]any{}) //nolint:errcheck
+	})
+
+	output, err := p.Execute(context.Background(), map[string]any{
+		"operation":  "list_commit_pulls",
+		"owner":      "test-org",
+		"repo":       "test-repo",
+		"commit_sha": "abc123",
+		"api_base":   baseURL,
+	})
+
+	require.NoError(t, err)
+	result := output.Data.(map[string]any)["result"].(map[string]any)
+	assert.Equal(t, 0, result["total_count"])
+	prs := result["pull_requests"].([]any)
+	assert.Empty(t, prs)
+}
+
+func TestExecuteListCommitPulls_MissingCommitSHA(t *testing.T) {
+	t.Parallel()
+
+	p := NewGitHubProvider()
+	_, err := p.executeListCommitPulls(t.Context(), nil, "https://api.github.com", "owner", "repo", map[string]any{})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "commit_sha")
+}
+
+func BenchmarkExecuteListCommitPulls(b *testing.B) {
+	p, baseURL := testProvider(b, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]any{ //nolint:errcheck
+			map[string]any{
+				"number": float64(1), "title": "PR 1", "state": "closed",
+				"html_url": "https://github.com/o/r/pull/1",
+				"user":     map[string]any{"login": "u"}, "head": map[string]any{"ref": "f"}, "base": map[string]any{"ref": "m"},
+			},
+		})
+	})
+
+	inputs := map[string]any{
+		"operation":  "list_commit_pulls",
+		"owner":      "org",
+		"repo":       "repo",
+		"commit_sha": "abc123",
+		"api_base":   baseURL,
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = p.Execute(context.Background(), inputs)
+	}
+}
