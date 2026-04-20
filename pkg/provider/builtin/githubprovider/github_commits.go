@@ -28,15 +28,15 @@ import (
 func (p *GitHubProvider) executeCreateCommit(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
 	branch := getStringInput(inputs, "branch")
 	if branch == "" {
-		return nil, fmt.Errorf("'branch' is required for create_commit operation")
+		return nil, requiredInputError("create_commit", "branch", inputs, "")
 	}
 	message := getStringInput(inputs, "message")
 	if message == "" {
-		return nil, fmt.Errorf("'message' is required for create_commit operation")
+		return nil, requiredInputError("create_commit", "message", inputs, "")
 	}
 	expectedHeadOID := getStringInput(inputs, "expected_head_oid")
 	if expectedHeadOID == "" {
-		return nil, fmt.Errorf("'expected_head_oid' is required for create_commit operation (use get_head_oid to fetch it)")
+		return nil, requiredInputError("create_commit", "expected_head_oid", inputs, "use get_head_oid to fetch it")
 	}
 
 	additions, deletions, err := parseFileChanges(inputs)
@@ -247,11 +247,11 @@ func (p *GitHubProvider) executeCreateRef(ctx context.Context, client *httpc.Cli
 func (p *GitHubProvider) executeCreateBranch(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
 	branch := getStringInput(inputs, "branch")
 	if branch == "" {
-		return nil, fmt.Errorf("'branch' is required for create_branch operation")
+		return nil, requiredInputError("create_branch", "branch", inputs, "")
 	}
 	oid := getStringInput(inputs, "oid")
 	if oid == "" {
-		return nil, fmt.Errorf("'oid' is required for create_branch operation (commit SHA to point the branch at)")
+		return nil, requiredInputError("create_branch", "oid", inputs, "commit SHA to point the branch at")
 	}
 	return p.executeCreateRef(ctx, client, apiBase, owner, repo, "create_branch", "refs/heads/"+branch, oid)
 }
@@ -261,7 +261,7 @@ func (p *GitHubProvider) executeCreateBranch(ctx context.Context, client *httpc.
 func (p *GitHubProvider) executeDeleteBranch(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
 	branch := getStringInput(inputs, "branch")
 	if branch == "" {
-		return nil, fmt.Errorf("'branch' is required for delete_branch operation")
+		return nil, requiredInputError("delete_branch", "branch", inputs, "")
 	}
 
 	refID, err := p.resolveRefID(ctx, client, apiBase, owner, repo, "refs/heads/"+branch)
@@ -291,11 +291,11 @@ func (p *GitHubProvider) executeDeleteBranch(ctx context.Context, client *httpc.
 func (p *GitHubProvider) executeCreateTag(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
 	tag := getStringInput(inputs, "tag")
 	if tag == "" {
-		return nil, fmt.Errorf("'tag' is required for create_tag operation")
+		return nil, requiredInputError("create_tag", "tag", inputs, "")
 	}
 	oid := getStringInput(inputs, "oid")
 	if oid == "" {
-		return nil, fmt.Errorf("'oid' is required for create_tag operation (commit SHA to point the tag at)")
+		return nil, requiredInputError("create_tag", "oid", inputs, "commit SHA to point the tag at")
 	}
 	return p.executeCreateRef(ctx, client, apiBase, owner, repo, "create_tag", "refs/tags/"+tag, oid)
 }
@@ -305,7 +305,7 @@ func (p *GitHubProvider) executeCreateTag(ctx context.Context, client *httpc.Cli
 func (p *GitHubProvider) executeDeleteTag(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
 	tag := getStringInput(inputs, "tag")
 	if tag == "" {
-		return nil, fmt.Errorf("'tag' is required for delete_tag operation")
+		return nil, requiredInputError("delete_tag", "tag", inputs, "")
 	}
 
 	refID, err := p.resolveRefID(ctx, client, apiBase, owner, repo, "refs/tags/"+tag)

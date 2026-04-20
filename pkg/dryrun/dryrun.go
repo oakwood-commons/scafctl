@@ -116,12 +116,27 @@ func Generate(ctx context.Context, sol *solution.Solution, opts Options) (*Repor
 				}
 			}
 
-			// Collect sorted action entries
+			// Build section map (actions=0, finally=1 for sorting)
+			sectionOrder := map[string]int{"actions": 0, "finally": 1}
+
+			// Collect action entries sorted by (section, phase, name) for accurate
+			// DAG phase-order previews instead of alphabetical order.
 			names := make([]string, 0, len(graph.Actions))
 			for name := range graph.Actions {
 				names = append(names, name)
 			}
-			sort.Strings(names)
+			sort.Slice(names, func(i, j int) bool {
+				ai, aj := graph.Actions[names[i]], graph.Actions[names[j]]
+				si, sj := sectionOrder[ai.Section], sectionOrder[aj.Section]
+				if si != sj {
+					return si < sj
+				}
+				pi, pj := phaseMap[names[i]], phaseMap[names[j]]
+				if pi != pj {
+					return pi < pj
+				}
+				return names[i] < names[j]
+			})
 
 			for _, name := range names {
 				ea := graph.Actions[name]

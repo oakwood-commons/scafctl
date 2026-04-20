@@ -17,7 +17,7 @@ import (
 func (p *GitHubProvider) executeCreateIssue(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
 	title := getStringInput(inputs, "title")
 	if title == "" {
-		return nil, fmt.Errorf("'title' is required for create_issue operation")
+		return nil, requiredInputError("create_issue", "title", inputs, "")
 	}
 
 	// First, resolve the repository node ID
@@ -91,7 +91,7 @@ func (p *GitHubProvider) executeCreateIssue(ctx context.Context, client *httpc.C
 func (p *GitHubProvider) executeUpdateIssue(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
 	num, ok := getIntInput(inputs, "number")
 	if !ok || num == 0 {
-		return nil, fmt.Errorf("'number' is required for update_issue operation")
+		return nil, requiredInputError("update_issue", "number", inputs, "")
 	}
 
 	// Resolve issue node ID
@@ -175,11 +175,11 @@ func (p *GitHubProvider) executeUpdateIssue(ctx context.Context, client *httpc.C
 func (p *GitHubProvider) executeCreateIssueComment(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
 	num, ok := getIntInput(inputs, "number")
 	if !ok || num == 0 {
-		return nil, fmt.Errorf("'number' is required for create_issue_comment operation")
+		return nil, requiredInputError("create_issue_comment", "number", inputs, "")
 	}
 	body := getStringInput(inputs, "body")
 	if body == "" {
-		return nil, fmt.Errorf("'body' is required for create_issue_comment operation")
+		return nil, requiredInputError("create_issue_comment", "body", inputs, "")
 	}
 
 	// Resolve issue node ID

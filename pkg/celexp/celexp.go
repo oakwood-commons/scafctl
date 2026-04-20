@@ -160,6 +160,12 @@ func (f ExtFunction) GetDescription() string {
 	return f.Description
 }
 
+// GetSubNames returns individual function names within this group
+// (e.g., "base64.encode", "base64.decode" for the "encoders" group).
+func (f ExtFunction) GetSubNames() []string {
+	return f.FunctionNames
+}
+
 // Example represents a usage example for a CEL extension function,
 // including the expression to evaluate and the expected result.
 type Example struct {

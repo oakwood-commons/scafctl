@@ -343,6 +343,9 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		"onConflict", o.OnConflict,
 		"backup", o.Backup)
 
+	// Skip action files during auto-discovery.
+	o.discoveryMode = settings.DiscoveryModeSolution
+
 	// Validate and prepare output directory before execution (fail-fast).
 	// In dry-run mode, resolve the path without creating the directory.
 	absOutputDir, err := o.resolveOutputDir(ctx, o.DryRun)

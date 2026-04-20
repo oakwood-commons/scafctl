@@ -20,7 +20,7 @@ import (
 func (p *GitHubProvider) executeCreateRelease(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
 	tagName := getStringInput(inputs, "tag_name")
 	if tagName == "" {
-		return nil, fmt.Errorf("'tag_name' is required for create_release operation")
+		return nil, requiredInputError("create_release", "tag_name", inputs, "")
 	}
 
 	reqBody := map[string]any{
@@ -56,7 +56,7 @@ func (p *GitHubProvider) executeCreateRelease(ctx context.Context, client *httpc
 func (p *GitHubProvider) executeUpdateRelease(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
 	releaseID, ok := getIntInput(inputs, "release_id")
 	if !ok || releaseID == 0 {
-		return nil, fmt.Errorf("'release_id' is required for update_release operation")
+		return nil, requiredInputError("update_release", "release_id", inputs, "")
 	}
 
 	reqBody := map[string]any{}
@@ -93,7 +93,7 @@ func (p *GitHubProvider) executeUpdateRelease(ctx context.Context, client *httpc
 func (p *GitHubProvider) executeDeleteRelease(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
 	releaseID, ok := getIntInput(inputs, "release_id")
 	if !ok || releaseID == 0 {
-		return nil, fmt.Errorf("'release_id' is required for delete_release operation")
+		return nil, requiredInputError("delete_release", "release_id", inputs, "")
 	}
 
 	url := fmt.Sprintf("%s/repos/%s/%s/releases/%d", apiBase, owner, repo, releaseID)

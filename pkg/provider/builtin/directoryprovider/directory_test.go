@@ -45,6 +45,7 @@ func TestDirectoryProvider_Descriptor(t *testing.T) {
 	assert.Contains(t, desc.Schema.Properties, "filterGlob")
 	assert.Contains(t, desc.Schema.Properties, "filterRegex")
 	assert.Contains(t, desc.Schema.Properties, "excludeHidden")
+	assert.Contains(t, desc.Schema.Properties, "filesOnly")
 	assert.Contains(t, desc.Schema.Properties, "checksum")
 	assert.NotNil(t, desc.OutputSchemas[provider.CapabilityFrom])
 	assert.NotNil(t, desc.OutputSchemas[provider.CapabilityAction])
@@ -307,6 +308,111 @@ func TestDirectoryProvider_List_ExcludeHidden(t *testing.T) {
 	assert.Equal(t, 1, data["totalCount"])
 	entries := data["entries"].([]map[string]any)
 	assert.Equal(t, "visible.txt", entries[0]["name"])
+}
+
+func TestDirectoryProvider_List_FilesOnly(t *testing.T) {
+	p := NewDirectoryProvider()
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "file1.txt"), []byte("hello"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "file2.go"), []byte("package main"), 0o644))
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "subdir"), 0o755))
+
+	result, err := p.Execute(ctx, map[string]any{
+		"operation": "list",
+		"path":      dir,
+		"filesOnly": true,
+	})
+
+	require.NoError(t, err)
+	data := result.Data.(map[string]any)
+
+	assert.Equal(t, 2, data["totalCount"])
+	assert.Equal(t, 0, data["dirCount"])
+	assert.Equal(t, 2, data["fileCount"])
+
+	entries := data["entries"].([]map[string]any)
+	assert.Len(t, entries, 2)
+	for _, e := range entries {
+		assert.Equal(t, "file", e["type"])
+	}
+}
+
+func TestDirectoryProvider_List_FilesOnly_Recursive(t *testing.T) {
+	p := NewDirectoryProvider()
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "a", "b"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "root.txt"), []byte("root"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a", "mid.txt"), []byte("mid"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a", "b", "deep.txt"), []byte("deep"), 0o644))
+
+	result, err := p.Execute(ctx, map[string]any{
+		"operation": "list",
+		"path":      dir,
+		"recursive": true,
+		"filesOnly": true,
+	})
+
+	require.NoError(t, err)
+	data := result.Data.(map[string]any)
+
+	assert.Equal(t, 3, data["totalCount"])
+	assert.Equal(t, 0, data["dirCount"])
+	assert.Equal(t, 3, data["fileCount"])
+
+	entries := data["entries"].([]map[string]any)
+	assert.Len(t, entries, 3)
+	for _, e := range entries {
+		assert.Equal(t, "file", e["type"])
+	}
+}
+
+func TestDirectoryProvider_List_FilesOnly_WithIncludeContent(t *testing.T) {
+	p := NewDirectoryProvider()
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "file.txt"), []byte("content"), 0o644))
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "subdir"), 0o755))
+
+	result, err := p.Execute(ctx, map[string]any{
+		"operation":      "list",
+		"path":           dir,
+		"filesOnly":      true,
+		"includeContent": true,
+	})
+
+	require.NoError(t, err)
+	data := result.Data.(map[string]any)
+
+	entries := data["entries"].([]map[string]any)
+	assert.Len(t, entries, 1)
+	assert.Equal(t, "file.txt", entries[0]["name"])
+	assert.Equal(t, "content", entries[0]["content"])
+}
+
+func TestDirectoryProvider_List_FilesOnly_DefaultFalse(t *testing.T) {
+	p := NewDirectoryProvider()
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "file.txt"), []byte("hello"), 0o644))
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "subdir"), 0o755))
+
+	result, err := p.Execute(ctx, map[string]any{
+		"operation": "list",
+		"path":      dir,
+	})
+
+	require.NoError(t, err)
+	data := result.Data.(map[string]any)
+
+	// Default behavior includes directories
+	assert.Equal(t, 2, data["totalCount"])
+	assert.Equal(t, 1, data["dirCount"])
 }
 
 func TestDirectoryProvider_List_IncludesHiddenByDefault(t *testing.T) {
@@ -1079,6 +1185,121 @@ func TestDirectoryProvider_DryRun_Copy_MissingDestination(t *testing.T) {
 }
 
 // =============================================================================
+// Move operation tests
+// =============================================================================
+
+func TestDirectoryProvider_Move_Success(t *testing.T) {
+	p := NewDirectoryProvider()
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	srcDir := filepath.Join(dir, "source")
+	require.NoError(t, os.MkdirAll(filepath.Join(srcDir, "sub"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "file.txt"), []byte("root content"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "sub", "nested.txt"), []byte("nested"), 0o644))
+
+	dstDir := filepath.Join(dir, "destination")
+
+	result, err := p.Execute(ctx, map[string]any{
+		"operation":   "move",
+		"path":        srcDir,
+		"destination": dstDir,
+	})
+
+	require.NoError(t, err)
+	data := result.Data.(map[string]any)
+	assert.True(t, data["success"].(bool))
+	assert.Equal(t, "move", data["operation"])
+
+	// Destination should have the files
+	content, err := os.ReadFile(filepath.Join(dstDir, "file.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "root content", string(content))
+
+	content, err = os.ReadFile(filepath.Join(dstDir, "sub", "nested.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "nested", string(content))
+
+	// Source should no longer exist
+	_, err = os.Stat(srcDir)
+	assert.True(t, os.IsNotExist(err), "source directory should be removed after move")
+}
+
+func TestDirectoryProvider_Move_MissingDestination(t *testing.T) {
+	p := NewDirectoryProvider()
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	_, err := p.Execute(ctx, map[string]any{
+		"operation": "move",
+		"path":      dir,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "destination is required")
+}
+
+func TestDirectoryProvider_Move_SourceNotExists(t *testing.T) {
+	p := NewDirectoryProvider()
+	ctx := context.Background()
+
+	_, err := p.Execute(ctx, map[string]any{
+		"operation":   "move",
+		"path":        "/nonexistent/dir",
+		"destination": "/tmp/dest",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "source directory does not exist")
+}
+
+func TestDirectoryProvider_Move_SourceNotDirectory(t *testing.T) {
+	p := NewDirectoryProvider()
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	filePath := filepath.Join(dir, "file.txt")
+	require.NoError(t, os.WriteFile(filePath, []byte("content"), 0o644))
+
+	_, err := p.Execute(ctx, map[string]any{
+		"operation":   "move",
+		"path":        filePath,
+		"destination": filepath.Join(dir, "dest"),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "source is not a directory")
+}
+
+func TestDirectoryProvider_DryRun_Move(t *testing.T) {
+	p := NewDirectoryProvider()
+	dir := t.TempDir()
+
+	ctx := provider.WithDryRun(context.Background(), true)
+	result, err := p.Execute(ctx, map[string]any{
+		"operation":   "move",
+		"path":        dir,
+		"destination": filepath.Join(dir, "dest"),
+	})
+
+	require.NoError(t, err)
+	data := result.Data.(map[string]any)
+	assert.True(t, data["_dryRun"].(bool))
+	assert.Contains(t, data["_message"].(string), "Would move")
+}
+
+func TestDirectoryProvider_DryRun_Move_MissingDestination(t *testing.T) {
+	p := NewDirectoryProvider()
+	dir := t.TempDir()
+
+	ctx := provider.WithDryRun(context.Background(), true)
+
+	_, err := p.Execute(ctx, map[string]any{
+		"operation": "move",
+		"path":      dir,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "destination is required")
+}
+
+// =============================================================================
 // Helper function tests
 // =============================================================================
 
@@ -1210,6 +1431,11 @@ func TestDirectoryProvider_WhatIf_Operations(t *testing.T) {
 		{
 			name:     "copy",
 			input:    map[string]any{"operation": "copy", "path": "/tmp/src", "destination": "/tmp/dst"},
+			contains: "/tmp/src",
+		},
+		{
+			name:     "move",
+			input:    map[string]any{"operation": "move", "path": "/tmp/src", "destination": "/tmp/dst"},
 			contains: "/tmp/src",
 		},
 		{

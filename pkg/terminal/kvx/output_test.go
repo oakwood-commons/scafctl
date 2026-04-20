@@ -6,6 +6,7 @@ package kvx
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -48,7 +49,9 @@ func TestBaseOutputFormats(t *testing.T) {
 	assert.Contains(t, formats, "test")
 	assert.Contains(t, formats, "tree")
 	assert.Contains(t, formats, "mermaid")
-	assert.Len(t, formats, 10)
+	assert.Contains(t, formats, "csv")
+	assert.Contains(t, formats, "toml")
+	assert.Len(t, formats, 12)
 }
 
 func TestIsStructuredFormat(t *testing.T) {
@@ -1202,4 +1205,402 @@ func TestWriteSummaryLine(t *testing.T) {
 	assert.Contains(t, output, "errorCount=3")
 	assert.Contains(t, output, "file=test.yaml")
 	assert.NotContains(t, output, "nested", "non-scalar fields should be skipped")
+}
+
+func TestOutputOptions_Write_CSV(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatCSV
+
+	data := []map[string]any{
+		{"name": "alice", "age": 30},
+		{"name": "bob", "age": 25},
+	}
+
+	err := opts.Write(data)
+	require.NoError(t, err)
+
+	lines := out.String()
+	assert.Contains(t, lines, "age")
+	assert.Contains(t, lines, "name")
+	assert.Contains(t, lines, "alice")
+	assert.Contains(t, lines, "bob")
+}
+
+func TestOutputOptions_Write_CSV_SingleMap(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatCSV
+
+	data := map[string]any{"name": "alice", "role": "admin"}
+	err := opts.Write(data)
+	require.NoError(t, err)
+
+	lines := out.String()
+	assert.Contains(t, lines, "name")
+	assert.Contains(t, lines, "alice")
+}
+
+func TestOutputOptions_Write_CSV_Empty(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatCSV
+
+	data := []any{}
+	err := opts.Write(data)
+	require.NoError(t, err)
+	assert.Empty(t, out.String())
+}
+
+func TestOutputOptions_Write_CSV_ColumnOrder(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatCSV
+	opts.ColumnOrder = []string{"name", "age"}
+
+	data := []map[string]any{{"age": 30, "name": "alice"}}
+	err := opts.Write(data)
+	require.NoError(t, err)
+
+	lines := out.String()
+	headerEnd := lines[:len("name,age")]
+	assert.Equal(t, "name,age", headerEnd)
+}
+
+func TestOutputOptions_Write_CSV_ScalarSlice(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatCSV
+
+	data := []any{"foo", "bar", "baz"}
+	err := opts.Write(data)
+	require.NoError(t, err)
+
+	lines := out.String()
+	assert.Contains(t, lines, "foo")
+	assert.Contains(t, lines, "bar")
+	assert.Contains(t, lines, "baz")
+}
+
+func TestOutputOptions_Write_CSV_ScalarValue(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatCSV
+
+	err := opts.Write("hello")
+	require.NoError(t, err)
+	assert.Equal(t, "hello\n", out.String())
+}
+
+func TestOutputOptions_Write_TOML(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatTOML
+
+	data := map[string]any{"name": "alice", "role": "admin"}
+	err := opts.Write(data)
+	require.NoError(t, err)
+
+	output := out.String()
+	assert.Contains(t, output, "name = 'alice'")
+	assert.Contains(t, output, "role = 'admin'")
+}
+
+func TestOutputOptions_Write_TOML_Nested(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+
+	opts := NewOutputOptions(ioStreams)
+	opts.Format = OutputFormatTOML
+
+	data := map[string]any{
+		"name": "test",
+		"settings": map[string]any{
+			"verbose": true,
+			"timeout": 30,
+		},
+	}
+	err := opts.Write(data)
+	require.NoError(t, err)
+
+	output := out.String()
+	assert.Contains(t, output, "name = 'test'")
+	assert.Contains(t, output, "[settings]")
+	assert.Contains(t, output, "verbose = true")
+	assert.Contains(t, output, "timeout = 30")
+}
+
+func TestParseOutputFormat_CSV(t *testing.T) {
+	format, ok := ParseOutputFormat("csv")
+	assert.True(t, ok)
+	assert.Equal(t, OutputFormatCSV, format)
+}
+
+func TestParseOutputFormat_TOML(t *testing.T) {
+	format, ok := ParseOutputFormat("toml")
+	assert.True(t, ok)
+	assert.Equal(t, OutputFormatTOML, format)
+}
+
+func TestIsStructuredFormat_CSV(t *testing.T) {
+	assert.True(t, IsStructuredFormat(OutputFormatCSV))
+}
+
+func TestIsStructuredFormat_TOML(t *testing.T) {
+	assert.True(t, IsStructuredFormat(OutputFormatTOML))
+}
+
+func BenchmarkOutputOptions_Write_CSV(b *testing.B) {
+	data := []map[string]any{
+		{"name": "alice", "age": 30, "role": "admin"},
+		{"name": "bob", "age": 25, "role": "user"},
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		out := &bytes.Buffer{}
+		ioStreams := &terminal.IOStreams{Out: out}
+		opts := NewOutputOptions(ioStreams)
+		opts.Format = OutputFormatCSV
+		_ = opts.Write(data)
+	}
+}
+
+func BenchmarkOutputOptions_Write_TOML(b *testing.B) {
+	data := map[string]any{
+		"name": "alice",
+		"age":  30,
+		"settings": map[string]any{
+			"verbose": true,
+		},
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		out := &bytes.Buffer{}
+		ioStreams := &terminal.IOStreams{Out: out}
+		opts := NewOutputOptions(ioStreams)
+		opts.Format = OutputFormatTOML
+		_ = opts.Write(data)
+	}
+}
+
+func TestCountDataColumns(t *testing.T) {
+	tests := []struct {
+		name     string
+		data     any
+		expected int
+	}{
+		{"nil", nil, 0},
+		{"scalar", "hello", 0},
+		{"empty slice", []any{}, 0},
+		{"map", map[string]any{"a": 1, "b": 2, "c": 3}, 3},
+		{"slice of maps", []any{
+			map[string]any{"a": 1, "b": 2},
+			map[string]any{"a": 3, "b": 4},
+		}, 2},
+		{"slice of non-maps", []any{1, 2, 3}, 0},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, countDataColumns(tc.data))
+		})
+	}
+}
+
+func TestWriteText_FallsBackToListWhenTooManyColumns(t *testing.T) {
+	// Create data with many columns -- enough that 80 / (cols+1) < minColumnWidth
+	row := make(map[string]any)
+	for i := range 20 {
+		row[fmt.Sprintf("column_%02d", i)] = fmt.Sprintf("value_%d", i)
+	}
+	data := []any{row}
+
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+	opts := NewOutputOptions(ioStreams)
+
+	err := opts.writeText(data)
+	require.NoError(t, err)
+
+	output := out.String()
+	// With 20 columns and 80 char width, avg is 80/21 ≈ 3 < minColumnWidth(10),
+	// so it should render as a list (vertical key: value), not a table (horizontal headers).
+	// List format uses "key: value" lines, not padded header rows.
+	assert.Contains(t, output, "column_00")
+	// A table would have all column headers on a single line; list format would not.
+	lines := strings.Split(output, "\n")
+	// First non-empty line should not contain all 20 column names (that's a table header)
+	firstLine := ""
+	for _, l := range lines {
+		if strings.TrimSpace(l) != "" {
+			firstLine = l
+			break
+		}
+	}
+	// In list format, the first line should not have more than a few column names
+	colCount := 0
+	for i := range 20 {
+		if strings.Contains(firstLine, fmt.Sprintf("column_%02d", i)) {
+			colCount++
+		}
+	}
+	assert.Less(t, colCount, 5, "expected list format (few columns per line), got table-like output")
+}
+
+func TestExpandEscapedNewlines(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    any
+		expected any
+	}{
+		{
+			name:     "string with literal backslash-n",
+			input:    `line1\nline2\nline3`,
+			expected: "line1\nline2\nline3",
+		},
+		{
+			name:     "string without escapes",
+			input:    "no escapes here",
+			expected: "no escapes here",
+		},
+		{
+			name:     "string with backslash-r-n",
+			input:    `line1\r\nline2`,
+			expected: "line1\nline2",
+		},
+		{
+			name:     "map with mixed values",
+			input:    map[string]any{"desc": `hello\nworld`, "name": "plain"},
+			expected: map[string]any{"desc": "hello\nworld", "name": "plain"},
+		},
+		{
+			name:     "slice of strings",
+			input:    []any{`a\nb`, "c"},
+			expected: []any{"a\nb", "c"},
+		},
+		{
+			name:     "non-string passthrough",
+			input:    42,
+			expected: 42,
+		},
+		{
+			name:     "nil",
+			input:    nil,
+			expected: nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, expandEscapedNewlines(tc.input))
+		})
+	}
+}
+
+func TestWriteYAML_ExpandsEscapedNewlines(t *testing.T) {
+	data := map[string]any{
+		"description": `line1\nline2\nline3`,
+		"name":        "simple",
+	}
+
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+	opts := NewOutputOptions(ioStreams)
+
+	err := opts.writeYAML(data)
+	require.NoError(t, err)
+
+	output := out.String()
+	// The YAML output should use block scalar style for the multiline value,
+	// not a single-line string with literal \n.
+	assert.Contains(t, output, "line1\n")
+	assert.Contains(t, output, "line2\n")
+	assert.NotContains(t, output, `\n`)
+}
+
+func TestHasNestedValues(t *testing.T) {
+	tests := []struct {
+		name     string
+		data     any
+		expected bool
+	}{
+		{"nil", nil, false},
+		{"scalar", "hello", false},
+		{"flat map", map[string]any{"a": 1, "b": "two"}, false},
+		{"map with nested map", map[string]any{"a": 1, "nested": map[string]any{"x": 1}}, true},
+		{"map with nested slice", map[string]any{"a": 1, "items": []any{1, 2}}, true},
+		{"slice of flat maps", []any{map[string]any{"a": 1, "b": 2}}, false},
+		{"slice of nested maps", []any{map[string]any{"a": 1, "nested": map[string]any{"x": 1}}}, true},
+		{"empty slice", []any{}, false},
+		{"slice of non-maps", []any{1, 2}, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, hasNestedValues(tc.data))
+		})
+	}
+}
+
+func TestWriteText_ReplacesUnicodeBoxDrawingWhenPiped(t *testing.T) {
+	// Use a bytes.Buffer (not *os.File), which IsTerminal treats as non-TTY.
+	data := []any{
+		map[string]any{"name": "alice", "age": 30},
+		map[string]any{"name": "bob", "age": 25},
+	}
+
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+	opts := NewOutputOptions(ioStreams)
+
+	err := opts.writeText(data)
+	require.NoError(t, err)
+
+	output := out.String()
+	// Non-TTY output should not contain Unicode box-drawing characters
+	assert.NotContains(t, output, "─", "piped output should use ASCII dashes, not Unicode box-drawing")
+	// Should still contain the separator line (as ASCII dashes)
+	assert.Contains(t, output, "---")
+}
+
+func TestWriteText_FallsBackToListForNestedValuesWhenPiped(t *testing.T) {
+	// Data with nested objects — piped output should use list format
+	data := []any{
+		map[string]any{
+			"name":    "myapp",
+			"version": map[string]any{"major": 1, "minor": 2},
+		},
+	}
+
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+	opts := NewOutputOptions(ioStreams)
+
+	err := opts.writeText(data)
+	require.NoError(t, err)
+
+	output := out.String()
+	// List format renders key: value vertically, not as a columnar table.
+	// The output should contain the nested fields expanded, not truncated JSON.
+	assert.NotContains(t, output, "...", "nested values should not be truncated")
+	assert.Contains(t, output, "name")
+	assert.Contains(t, output, "myapp")
 }

@@ -5,7 +5,6 @@ package githubprovider
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/oakwood-commons/scafctl/pkg/httpc"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -16,7 +15,7 @@ import (
 func (p *GitHubProvider) executeListReviewThreads(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
 	num, ok := getIntInput(inputs, "number")
 	if !ok || num == 0 {
-		return nil, fmt.Errorf("'number' is required for list_review_threads operation")
+		return nil, requiredInputError("list_review_threads", "number", inputs, "")
 	}
 	perPage := getPerPage(inputs)
 
@@ -61,11 +60,11 @@ func (p *GitHubProvider) executeListReviewThreads(ctx context.Context, client *h
 func (p *GitHubProvider) executeReplyToReviewThread(ctx context.Context, client *httpc.Client, apiBase, _, _ string, inputs map[string]any) (*provider.Output, error) {
 	threadID := getStringInput(inputs, "thread_id")
 	if threadID == "" {
-		return nil, fmt.Errorf("'thread_id' is required for reply_to_review_thread operation")
+		return nil, requiredInputError("reply_to_review_thread", "thread_id", inputs, "")
 	}
 	body := getStringInput(inputs, "body")
 	if body == "" {
-		return nil, fmt.Errorf("'body' is required for reply_to_review_thread operation")
+		return nil, requiredInputError("reply_to_review_thread", "body", inputs, "")
 	}
 
 	mutation := `mutation($id: ID!, $body: String!) {
@@ -97,7 +96,7 @@ func (p *GitHubProvider) executeReplyToReviewThread(ctx context.Context, client 
 func (p *GitHubProvider) executeResolveReviewThread(ctx context.Context, client *httpc.Client, apiBase, _, _ string, inputs map[string]any) (*provider.Output, error) {
 	threadID := getStringInput(inputs, "thread_id")
 	if threadID == "" {
-		return nil, fmt.Errorf("'thread_id' is required for resolve_review_thread operation")
+		return nil, requiredInputError("resolve_review_thread", "thread_id", inputs, "")
 	}
 
 	mutation := `mutation($threadId: ID!) {

@@ -282,11 +282,28 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
-	// Determine version (priority: --version flag > metadata.version)
-	version, _, err := solution.ResolveArtifactVersion(opts.Version, sol.Metadata.Version)
+	// Determine version (priority: --version flag > metadata.version > auto-increment)
+	version, versionOverride, err := solution.ResolveArtifactVersion(opts.Version, sol.Metadata.Version)
 	if err != nil {
-		w.Errorf("%v", err)
-		return exitcode.WithCode(err, exitcode.InvalidInput)
+		// No explicit version and no metadata version — try auto-increment
+		if opts.Version == "" && sol.Metadata.Version == nil {
+			localCat, catErr := catalog.NewLocalCatalog(*lgr)
+			if catErr == nil {
+				nextVer, nextErr := solution.NextPatchVersion(ctx, localCat, catalog.ArtifactKindSolution, name)
+				if nextErr == nil {
+					version = nextVer
+					w.Infof("Auto-incremented version to %s", version.String())
+					err = nil
+				}
+			}
+		}
+		if err != nil {
+			w.Errorf("%v", err)
+			return exitcode.WithCode(err, exitcode.InvalidInput)
+		}
+	}
+	if versionOverride {
+		w.Warningf("--version %s overrides metadata.version %s", version.String(), sol.Metadata.Version.String())
 	}
 	w.Verbosef("Resolved artifact: %s@%s", name, version.String())
 
@@ -305,6 +322,12 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 	// artifact always carries the authoritative values.
 	needsReserialization := false
 	if sol.Metadata.Name != name {
+		// Name mismatch: error unless --force
+		if sol.Metadata.Name != "" && !opts.Force {
+			w.Errorf("name mismatch: --name %q does not match metadata.name %q", name, sol.Metadata.Name)
+			w.Infof("Use --force to override the metadata name")
+			return exitcode.Errorf("name mismatch")
+		}
 		lgr.V(1).Info("stamping artifact name into solution", "from", sol.Metadata.Name, "to", name)
 		sol.Metadata.Name = name
 		needsReserialization = true

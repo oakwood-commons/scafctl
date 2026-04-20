@@ -5,15 +5,20 @@ package kvx
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
+	"os"
 	"reflect"
 	"sort"
 	"strings"
 
 	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	toml "github.com/pelletier/go-toml/v2"
+	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 )
 
@@ -55,6 +60,22 @@ const (
 	// Works in any context (TTY and non-TTY) and is the fallback for
 	// table/auto formats when output is piped.
 	OutputFormatText OutputFormat = "text"
+
+	// OutputFormatCSV outputs as comma-separated values (for spreadsheets/scripting)
+	OutputFormatCSV OutputFormat = "csv"
+
+	// OutputFormatTOML outputs as TOML (for config files/scripting)
+	OutputFormatTOML OutputFormat = "toml"
+)
+
+const (
+	// minColumnWidth is the minimum average characters per column before
+	// writeText switches from table to list rendering. Tables with very
+	// narrow columns become unreadable.
+	minColumnWidth = 10
+
+	// defaultTermWidth is assumed when the terminal width cannot be detected.
+	defaultTermWidth = 80
 )
 
 // String returns the string representation of the output format.
@@ -74,6 +95,8 @@ func BaseOutputFormats() []string {
 		string(OutputFormatText),
 		string(OutputFormatJSON),
 		string(OutputFormatYAML),
+		string(OutputFormatCSV),
+		string(OutputFormatTOML),
 		string(OutputFormatQuiet),
 		string(OutputFormatTest),
 	}
@@ -84,7 +107,7 @@ func BaseOutputFormats() []string {
 // bordered table output. Mermaid is included because it is a piping-friendly
 // plain-text format even though Write() routes it through the kvx renderer.
 func IsStructuredFormat(format OutputFormat) bool {
-	return format == OutputFormatJSON || format == OutputFormatYAML || format == OutputFormatMermaid
+	return format == OutputFormatJSON || format == OutputFormatYAML || format == OutputFormatMermaid || format == OutputFormatCSV || format == OutputFormatTOML
 }
 
 // isScalar returns true if data is a scalar value (string, number, bool)
@@ -209,6 +232,10 @@ func ParseOutputFormat(s string) (OutputFormat, bool) {
 		return OutputFormatMermaid, true
 	case "text":
 		return OutputFormatText, true
+	case "csv":
+		return OutputFormatCSV, true
+	case "toml":
+		return OutputFormatTOML, true
 	default:
 		return "", false
 	}
@@ -477,10 +504,10 @@ func (o *OutputOptions) writeKvx(data any) error {
 		kvxOpts = append(kvxOpts, WithLayout("tree"))
 	case OutputFormatMermaid:
 		kvxOpts = append(kvxOpts, WithLayout("mermaid"))
-	case OutputFormatAuto, OutputFormatJSON, OutputFormatYAML, OutputFormatQuiet, OutputFormatTest, OutputFormatText:
+	case OutputFormatAuto, OutputFormatJSON, OutputFormatYAML, OutputFormatCSV, OutputFormatTOML, OutputFormatQuiet, OutputFormatTest, OutputFormatText:
 		// Auto and empty use default layout (auto).
-		// JSON/YAML/Quiet/Test are handled upstream and should not reach here,
-		// but are listed for exhaustiveness.
+		// Structured formats (JSON/YAML/CSV/TOML), Quiet, and Test are handled
+		// upstream and should not reach here, but are listed for exhaustiveness.
 	}
 
 	return View(data, kvxOpts...)
@@ -554,11 +581,23 @@ func (o *OutputOptions) writeStructured(data any) error {
 		}
 	}
 
+	// Print scalar values as plain text for non-structured formats.
+	// Structured formats (JSON, YAML, CSV, TOML) must go through their
+	// serializers so values are encoded correctly (e.g. quoted strings in JSON).
+	if isScalar(outputData) && !IsStructuredFormat(o.Format) {
+		fmt.Fprintln(o.IOStreams.Out, outputData)
+		return nil
+	}
+
 	switch o.Format {
 	case OutputFormatJSON:
 		return o.writeJSON(outputData)
 	case OutputFormatYAML:
 		return o.writeYAML(outputData)
+	case OutputFormatCSV:
+		return o.writeCSV(outputData)
+	case OutputFormatTOML:
+		return o.writeTOML(outputData)
 	case OutputFormatTable, OutputFormatAuto, OutputFormatList, OutputFormatTree, OutputFormatMermaid, OutputFormatText, OutputFormatQuiet, OutputFormatTest:
 		// These formats are handled upstream (writeKvx or command-level test generation),
 		// and should not reach writeStructured.
@@ -633,12 +672,38 @@ func (o *OutputOptions) writeText(data any) error {
 	}
 
 	hints := resolveColumnHints(o.SchemaJSON, o.ColumnHints)
+
+	piped := !IsTerminal(o.IOStreams.Out)
+
+	// When there are many columns relative to the available width, a table
+	// becomes unreadable because each column gets only a few characters.
+	// Detect this and fall back to a vertical list layout.
+	// Also fall back when output is piped and data contains nested
+	// objects/arrays, because the columnar renderer serializes them as
+	// truncated one-line JSON which is unusable in scripts.
+	if cols := countDataColumns(outputData); cols > 0 {
+		width := o.terminalWidth()
+		if width/(cols+1) < minColumnWidth || (piped && hasNestedValues(outputData)) {
+			output := tui.RenderList(outputData, true)
+			fmt.Fprint(o.IOStreams.Out, output)
+			return nil
+		}
+	}
+
 	output := tui.RenderTable(outputData, tui.TableOptions{
 		Bordered:    false,
 		NoColor:     true,
 		ColumnOrder: o.ColumnOrder,
 		ColumnHints: hints,
 	})
+
+	// When piped on Windows the console defaults to OEM/CP437 encoding,
+	// which garbles UTF-8 box-drawing characters (e.g., ─ → ΓöÇ).
+	// Replace them with ASCII dashes so piped output is always readable.
+	if piped {
+		output = strings.ReplaceAll(output, "─", "-")
+	}
+
 	fmt.Fprint(o.IOStreams.Out, output)
 	return nil
 }
@@ -682,8 +747,16 @@ func writeSummaryLine(w io.Writer, summary map[string]any) {
 }
 
 // writeYAML writes data as YAML.
+// Before marshaling, literal escape sequences like \n in string values are
+// expanded to real newlines so that yaml.Marshal renders them as readable
+// block scalars instead of single-line strings with escaped characters.
+//
+// NOTE: expandEscapedNewlines mutates maps and slices in place. This is safe
+// here because writeYAML is a terminal step that does not return data to the
+// caller. Do not reuse data after calling writeYAML.
 func (o *OutputOptions) writeYAML(data any) error {
-	yamlData, err := yaml.Marshal(data)
+	expanded := expandEscapedNewlines(data)
+	yamlData, err := yaml.Marshal(expanded)
 	if err != nil {
 		return fmt.Errorf("failed to marshal YAML: %w", err)
 	}
@@ -718,4 +791,244 @@ func StructToMap(v any) (any, error) {
 		return nil, fmt.Errorf("failed to unmarshal from JSON: %w", err)
 	}
 	return result, nil
+}
+
+// writeTOML writes data as TOML.
+func (o *OutputOptions) writeTOML(data any) error {
+	tomlData, err := toml.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("failed to marshal TOML: %w", err)
+	}
+	fmt.Fprint(o.IOStreams.Out, string(tomlData))
+	return nil
+}
+
+// writeCSV writes data as comma-separated values.
+// For a slice of maps, column headers are derived from the union of all keys.
+// For a single map, it writes a two-row CSV (header + values).
+// Scalar values are written as a single cell.
+func (o *OutputOptions) writeCSV(data any) error {
+	w := csv.NewWriter(o.IOStreams.Out)
+
+	var err error
+	switch v := data.(type) {
+	case []any:
+		err = o.writeCSVSlice(w, v)
+	case []map[string]any:
+		items := make([]any, len(v))
+		for i, m := range v {
+			items[i] = m
+		}
+		err = o.writeCSVSlice(w, items)
+	case map[string]any:
+		err = o.writeCSVSlice(w, []any{v})
+	default:
+		// Scalar or unsupported type -- write as single value
+		err = w.Write([]string{fmt.Sprintf("%v", data)})
+	}
+
+	w.Flush()
+
+	if err != nil {
+		return fmt.Errorf("failed to write CSV data: %w", err)
+	}
+	if fErr := w.Error(); fErr != nil {
+		return fmt.Errorf("failed to flush CSV data: %w", fErr)
+	}
+	return nil
+}
+
+// writeCSVSlice writes a slice of items as CSV rows with a header row.
+func (o *OutputOptions) writeCSVSlice(w *csv.Writer, items []any) error {
+	if len(items) == 0 {
+		return nil
+	}
+
+	// Check if all items are scalars (no header row needed).
+	allScalar := true
+	for _, item := range items {
+		if _, ok := item.(map[string]any); ok {
+			allScalar = false
+			break
+		}
+	}
+
+	if allScalar {
+		for _, item := range items {
+			if err := w.Write([]string{fmt.Sprintf("%v", item)}); err != nil {
+				return fmt.Errorf("failed to write CSV row: %w", err)
+			}
+		}
+		return nil
+	}
+
+	// Collect all keys across all items for consistent columns
+	keySet := make(map[string]struct{})
+	for _, item := range items {
+		if m, ok := item.(map[string]any); ok {
+			for k := range m {
+				keySet[k] = struct{}{}
+			}
+		}
+	}
+
+	headers := make([]string, 0, len(keySet))
+	for k := range keySet {
+		headers = append(headers, k)
+	}
+	sort.Strings(headers)
+
+	// Apply column order if configured
+	if len(o.ColumnOrder) > 0 {
+		headers = csvApplyColumnOrder(headers, o.ColumnOrder)
+	}
+
+	// Write header row
+	if err := w.Write(headers); err != nil {
+		return fmt.Errorf("failed to write CSV header: %w", err)
+	}
+
+	// Write data rows
+	for _, item := range items {
+		m, ok := item.(map[string]any)
+		if !ok {
+			// Non-map item in a mixed slice -- write as single column padded to header width
+			row := make([]string, len(headers))
+			row[0] = fmt.Sprintf("%v", item)
+			if err := w.Write(row); err != nil {
+				return fmt.Errorf("failed to write CSV row: %w", err)
+			}
+			continue
+		}
+		row := make([]string, len(headers))
+		for i, h := range headers {
+			if v, exists := m[h]; exists {
+				row[i] = fmt.Sprintf("%v", v)
+			}
+		}
+		if err := w.Write(row); err != nil {
+			return fmt.Errorf("failed to write CSV row: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// csvApplyColumnOrder reorders headers based on the preferred column order.
+// Fields in the order list come first; remaining fields are appended in their original order.
+func csvApplyColumnOrder(headers, order []string) []string {
+	orderSet := make(map[string]struct{}, len(order))
+	for _, o := range order {
+		orderSet[o] = struct{}{}
+	}
+
+	result := make([]string, 0, len(headers))
+	// Add ordered columns first (preserving order list sequence)
+	for _, o := range order {
+		for _, h := range headers {
+			if h == o {
+				result = append(result, h)
+				break
+			}
+		}
+	}
+	// Append remaining columns not in order list
+	for _, h := range headers {
+		if _, ok := orderSet[h]; !ok {
+			result = append(result, h)
+		}
+	}
+	return result
+}
+
+// terminalWidth returns the current terminal width, falling back to
+// defaultTermWidth when detection fails (e.g., piped output).
+func (o *OutputOptions) terminalWidth() int {
+	if f, ok := o.IOStreams.Out.(*os.File); ok {
+		fd := f.Fd()
+		if fd <= uintptr(math.MaxInt) {
+			if w, _, err := term.GetSize(int(fd)); err == nil && w > 0 {
+				return w
+			}
+		}
+	}
+	return defaultTermWidth
+}
+
+// countDataColumns returns the number of columns that a table rendering
+// would produce for the given data. It inspects the first map element in
+// a slice or a single map's keys.
+func countDataColumns(data any) int {
+	switch v := data.(type) {
+	case []any:
+		if len(v) == 0 {
+			return 0
+		}
+		if m, ok := v[0].(map[string]any); ok {
+			return len(m)
+		}
+	case map[string]any:
+		return len(v)
+	}
+	return 0
+}
+
+// hasNestedValues reports whether any value in the first row of data is
+// itself a map or slice. Such values are serialized as truncated JSON in
+// columnar tables, making piped output unusable.
+func hasNestedValues(data any) bool {
+	var row map[string]any
+	switch v := data.(type) {
+	case []any:
+		if len(v) == 0 {
+			return false
+		}
+		m, ok := v[0].(map[string]any)
+		if !ok {
+			return false
+		}
+		row = m
+	case map[string]any:
+		row = v
+	default:
+		return false
+	}
+	for _, val := range row {
+		switch val.(type) {
+		case map[string]any, []any:
+			return true
+		}
+	}
+	return false
+}
+
+// expandEscapedNewlines recursively walks data and replaces literal "\n"
+// (two characters: backslash + n) in string values with real newline
+// characters. This ensures yaml.Marshal renders multiline strings as
+// readable block scalars instead of opaque single-line strings.
+//
+// Maps and slices are modified in place to avoid allocation when the
+// caller does not need the original data (e.g., writeYAML). String
+// values are replaced by their expanded copies only when escapes exist.
+func expandEscapedNewlines(data any) any {
+	switch v := data.(type) {
+	case string:
+		if strings.Contains(v, `\n`) {
+			v = strings.ReplaceAll(v, `\r\n`, "\n")
+			v = strings.ReplaceAll(v, `\n`, "\n")
+		}
+		return v
+	case map[string]any:
+		for k, val := range v {
+			v[k] = expandEscapedNewlines(val)
+		}
+		return v
+	case []any:
+		for i, val := range v {
+			v[i] = expandEscapedNewlines(val)
+		}
+		return v
+	default:
+		return data
+	}
 }

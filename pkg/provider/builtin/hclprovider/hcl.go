@@ -111,7 +111,7 @@ func NewHCLProvider(opts ...Option) *HCLProvider {
 		descriptor: &provider.Descriptor{
 			Name:        ProviderName,
 			DisplayName: "HCL",
-			Description: "Processes HCL (HashiCorp Configuration Language) content. Supports parsing into structured data, formatting to canonical style, validating syntax, and generating HCL from structured input. Accepts single files, multiple paths, or a directory of .tf files.",
+			Description: "Parse, format, validate, and generate Terraform/OpenTofu HCL configuration. Operations: 'parse' extracts structured blocks (variables, resources, data sources, modules, outputs, locals, providers, terraform, moved, import, check) into typed maps; 'format' rewrites content to canonical HCL style; 'validate' checks syntax and returns diagnostics with source positions; 'generate' produces HCL (.tf) or Terraform JSON (.tf.json) from structured block data. Accepts inline content, a single file path, multiple file paths, or a directory of .tf/.tf.json files.",
 			APIVersion:  "v1",
 			Version:     version,
 			Category:    "data",

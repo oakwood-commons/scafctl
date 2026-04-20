@@ -29,6 +29,7 @@ type Config struct {
 	Auth       GlobalAuthConfig `json:"auth,omitempty" yaml:"auth,omitempty" mapstructure:"auth" doc:"Authentication handler configuration"`
 	Build      BuildConfig      `json:"build,omitempty" yaml:"build,omitempty" mapstructure:"build" doc:"Build command configuration"`
 	APIServer  APIServerConfig  `json:"apiServer,omitempty" yaml:"apiServer,omitempty" mapstructure:"apiServer" doc:"REST API server configuration"`
+	Discovery  DiscoveryConfig  `json:"discovery,omitempty" yaml:"discovery,omitempty" mapstructure:"discovery" doc:"Auto-discovery configuration"`
 }
 
 // CatalogConfig represents a single catalog configuration.
@@ -452,6 +453,13 @@ func (b *BuildConfig) IsAutoCacheRemoteArtifacts() bool {
 		return true
 	}
 	return *b.AutoCacheRemoteArtifacts
+}
+
+// DiscoveryConfig holds auto-discovery preferences.
+type DiscoveryConfig struct {
+	// ActionFiles overrides the file names searched during "run action"
+	// auto-discovery. When empty, the built-in defaults are used.
+	ActionFiles []string `json:"actionFiles,omitempty" yaml:"actionFiles,omitempty" mapstructure:"actionFiles" doc:"File names for action auto-discovery" maxItems:"20"`
 }
 
 // APIServerConfig holds REST API server configuration.

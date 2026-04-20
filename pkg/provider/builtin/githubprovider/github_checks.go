@@ -19,7 +19,7 @@ import (
 func (p *GitHubProvider) executeListCheckRuns(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
 	ref := getStringInput(inputs, "ref")
 	if ref == "" {
-		return nil, fmt.Errorf("'ref' is required for list_check_runs operation")
+		return nil, requiredInputError("list_check_runs", "ref", inputs, "")
 	}
 
 	restURL := fmt.Sprintf("%s/repos/%s/%s/commits/%s/check-runs", apiBase, owner, repo, url.PathEscape(ref))
@@ -72,7 +72,7 @@ func (p *GitHubProvider) executeListCheckRuns(ctx context.Context, client *httpc
 func (p *GitHubProvider) executeGetWorkflowRun(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
 	runID, ok := getIntInput(inputs, "run_id")
 	if !ok || runID == 0 {
-		return nil, fmt.Errorf("'run_id' is required for get_workflow_run operation")
+		return nil, requiredInputError("get_workflow_run", "run_id", inputs, "")
 	}
 
 	// Fetch the workflow run
@@ -137,5 +137,63 @@ func (p *GitHubProvider) executeGetWorkflowRun(ctx context.Context, client *http
 		"head_sha":      runMap["head_sha"],
 		"display_title": runMap["display_title"],
 		"jobs":          jobs,
+	}), nil
+}
+
+// ─── List Commit Pulls ───────────────────────────────────────────────────────
+
+// executeListCommitPulls lists pull requests associated with a commit via the REST API.
+// Uses: GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls
+func (p *GitHubProvider) executeListCommitPulls(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
+	commitSHA := getStringInputWithAliases(inputs, "commit_sha", "sha")
+	if commitSHA == "" {
+		return nil, requiredInputError("list_commit_pulls", "commit_sha", inputs, "")
+	}
+
+	restURL := fmt.Sprintf("%s/repos/%s/%s/commits/%s/pulls", apiBase, owner, repo, url.PathEscape(commitSHA))
+	result, err := p.doRESTRequest(ctx, client, "GET", restURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("listing commit pulls: %w", err)
+	}
+
+	pulls, ok := result.([]any)
+	if !ok {
+		return readOutput(map[string]any{
+			"total_count":   0,
+			"pull_requests": []any{},
+		}), nil
+	}
+
+	// Slim down each PR to essential fields.
+	prs := make([]any, 0, len(pulls))
+	for _, pr := range pulls {
+		prMap, ok := pr.(map[string]any)
+		if !ok {
+			continue
+		}
+		slim := map[string]any{
+			"number":     prMap["number"],
+			"title":      prMap["title"],
+			"state":      prMap["state"],
+			"html_url":   prMap["html_url"],
+			"created_at": prMap["created_at"],
+			"merged_at":  prMap["merged_at"],
+			"draft":      prMap["draft"],
+		}
+		if user, ok := prMap["user"].(map[string]any); ok {
+			slim["user"] = user["login"]
+		}
+		if head, ok := prMap["head"].(map[string]any); ok {
+			slim["head_ref"] = head["ref"]
+		}
+		if base, ok := prMap["base"].(map[string]any); ok {
+			slim["base_ref"] = base["ref"]
+		}
+		prs = append(prs, slim)
+	}
+
+	return readOutput(map[string]any{
+		"total_count":   len(prs),
+		"pull_requests": prs,
 	}), nil
 }

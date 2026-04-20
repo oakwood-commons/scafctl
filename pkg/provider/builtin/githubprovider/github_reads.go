@@ -66,7 +66,7 @@ func (p *GitHubProvider) executeGetRepo(ctx context.Context, client *httpc.Clien
 func (p *GitHubProvider) executeGetFile(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
 	path := getStringInput(inputs, "path")
 	if path == "" {
-		return nil, fmt.Errorf("'path' is required for get_file operation")
+		return nil, requiredInputError("get_file", "path", inputs, "")
 	}
 	ref := getStringInput(inputs, "ref")
 
@@ -247,7 +247,7 @@ func (p *GitHubProvider) executeListPullRequests(ctx context.Context, client *ht
 func (p *GitHubProvider) executeGetPullRequest(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
 	num, ok := getIntInput(inputs, "number")
 	if !ok || num == 0 {
-		return nil, fmt.Errorf("'number' is required for get_pull_request operation")
+		return nil, requiredInputError("get_pull_request", "number", inputs, "")
 	}
 
 	query := `query($owner: String!, $name: String!, $number: Int!) {
@@ -368,7 +368,7 @@ func (p *GitHubProvider) executeListIssues(ctx context.Context, client *httpc.Cl
 func (p *GitHubProvider) executeGetIssue(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
 	num, ok := getIntInput(inputs, "number")
 	if !ok || num == 0 {
-		return nil, fmt.Errorf("'number' is required for get_issue operation")
+		return nil, requiredInputError("get_issue", "number", inputs, "")
 	}
 
 	query := `query($owner: String!, $name: String!, $number: Int!) {
@@ -407,7 +407,7 @@ func (p *GitHubProvider) executeGetIssue(ctx context.Context, client *httpc.Clie
 func (p *GitHubProvider) executeListIssueComments(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
 	num, ok := getIntInput(inputs, "number")
 	if !ok || num == 0 {
-		return nil, fmt.Errorf("'number' is required for list_issue_comments operation")
+		return nil, requiredInputError("list_issue_comments", "number", inputs, "")
 	}
 	perPage := getPerPage(inputs)
 
@@ -477,7 +477,7 @@ func (p *GitHubProvider) executeListBranches(ctx context.Context, client *httpc.
 func (p *GitHubProvider) executeGetBranch(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
 	branchName := getStringInput(inputs, "branch")
 	if branchName == "" {
-		return nil, fmt.Errorf("'branch' is required for get_branch operation")
+		return nil, requiredInputError("get_branch", "branch", inputs, "")
 	}
 
 	qualifiedName := "refs/heads/" + branchName
@@ -550,7 +550,7 @@ func (p *GitHubProvider) executeListTags(ctx context.Context, client *httpc.Clie
 func (p *GitHubProvider) executeGetHeadOID(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
 	branchName := getStringInput(inputs, "branch")
 	if branchName == "" {
-		return nil, fmt.Errorf("'branch' is required for get_head_oid operation")
+		return nil, requiredInputError("get_head_oid", "branch", inputs, "")
 	}
 
 	qualifiedName := "refs/heads/" + branchName
@@ -596,7 +596,7 @@ func (p *GitHubProvider) executeGetHeadOID(ctx context.Context, client *httpc.Cl
 func (p *GitHubProvider) executeListPRComments(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
 	num, ok := getIntInput(inputs, "number")
 	if !ok || num == 0 {
-		return nil, fmt.Errorf("'number' is required for list_pr_comments operation")
+		return nil, requiredInputError("list_pr_comments", "number", inputs, "")
 	}
 	perPage := getPerPage(inputs)
 
