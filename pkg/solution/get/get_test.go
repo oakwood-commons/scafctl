@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -588,8 +589,8 @@ func TestGetPossibleSolutionPaths(t *testing.T) {
 	t.Run("returns all possible paths", func(t *testing.T) {
 		paths := PossibleSolutionPaths()
 
-		// Should have 3 folders * 6 filenames = 18 paths
-		assert.Len(t, paths, 18)
+		// Should have 3 folders * 8 filenames = 24 paths
+		assert.Len(t, paths, 24)
 	})
 
 	t.Run("contains expected paths", func(t *testing.T) {
@@ -1734,5 +1735,210 @@ spec:
 		require.NoError(t, err)
 		assert.Equal(t, "hello-world", sol.Metadata.Name)
 		assert.Equal(t, []byte("remote-bundle"), bundleData)
+	})
+}
+
+func TestFindSolution_DiscoveryMode(t *testing.T) {
+	t.Run("action mode prefers actions.yaml", func(t *testing.T) {
+		customStatFunc := func(path string) (os.FileInfo, error) {
+			if path == "actions.yaml" {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("not found")
+		}
+
+		getter := NewGetter(
+			WithStatFunc(customStatFunc),
+			WithDiscoveryMode(settings.DiscoveryModeAction),
+		)
+		path := getter.FindSolution()
+
+		assert.Equal(t, "actions.yaml", path)
+		result := getter.LastDiscoveryResult()
+		assert.True(t, result.IsActionFile)
+		assert.Equal(t, settings.DiscoveryModeAction, result.Mode)
+	})
+
+	t.Run("solution mode skips actions.yaml as candidate", func(t *testing.T) {
+		searchPaths := []string{}
+		customStatFunc := func(path string) (os.FileInfo, error) {
+			searchPaths = append(searchPaths, path)
+			if path == "actions.yaml" || path == "solution.yaml" {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("not found")
+		}
+
+		getter := NewGetter(
+			WithStatFunc(customStatFunc),
+			WithDiscoveryMode(settings.DiscoveryModeSolution),
+		)
+		path := getter.FindSolution()
+
+		assert.Equal(t, "solution.yaml", path)
+		result := getter.LastDiscoveryResult()
+		assert.False(t, result.IsActionFile)
+		// solution.yaml must be found before any action file is probed;
+		// action files are only checked for the AlternatePath hint, not as candidates.
+		solIdx := slices.Index(searchPaths, "solution.yaml")
+		for i, p := range searchPaths {
+			if settings.IsActionFile(p) {
+				assert.Greater(t, i, solIdx,
+					"action file %q was checked before solution.yaml was found", p)
+			}
+		}
+		// AlternatePath should be populated since actions.yaml exists.
+		assert.Equal(t, "actions.yaml", result.AlternatePath)
+	})
+
+	t.Run("action mode falls back to solution.yaml", func(t *testing.T) {
+		customStatFunc := func(path string) (os.FileInfo, error) {
+			if path == "solution.yaml" {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("not found")
+		}
+
+		getter := NewGetter(
+			WithStatFunc(customStatFunc),
+			WithDiscoveryMode(settings.DiscoveryModeAction),
+		)
+		path := getter.FindSolution()
+
+		assert.Equal(t, "solution.yaml", path)
+		result := getter.LastDiscoveryResult()
+		assert.False(t, result.IsActionFile)
+	})
+
+	t.Run("action mode populates AlternatePath when solution.yaml also exists", func(t *testing.T) {
+		customStatFunc := func(path string) (os.FileInfo, error) {
+			if path == "actions.yaml" || path == "solution.yaml" {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("not found")
+		}
+
+		getter := NewGetter(
+			WithStatFunc(customStatFunc),
+			WithDiscoveryMode(settings.DiscoveryModeAction),
+		)
+		path := getter.FindSolution()
+
+		assert.Equal(t, "actions.yaml", path)
+		result := getter.LastDiscoveryResult()
+		assert.True(t, result.IsActionFile)
+		assert.Equal(t, "solution.yaml", result.AlternatePath)
+	})
+
+	t.Run("custom action files override defaults", func(t *testing.T) {
+		customStatFunc := func(path string) (os.FileInfo, error) {
+			if path == "custom.yaml" {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("not found")
+		}
+
+		getter := NewGetter(
+			WithStatFunc(customStatFunc),
+			WithDiscoveryMode(settings.DiscoveryModeAction),
+			WithCustomActionFiles([]string{"custom.yaml"}),
+		)
+		path := getter.FindSolution()
+
+		assert.Equal(t, "custom.yaml", path)
+	})
+
+	t.Run("solution mode populates AlternatePath when actions.yaml also exists", func(t *testing.T) {
+		customStatFunc := func(path string) (os.FileInfo, error) {
+			if path == "solution.yaml" || path == "actions.yaml" {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("not found")
+		}
+
+		getter := NewGetter(
+			WithStatFunc(customStatFunc),
+			WithDiscoveryMode(settings.DiscoveryModeSolution),
+		)
+		path := getter.FindSolution()
+
+		assert.Equal(t, "solution.yaml", path)
+		result := getter.LastDiscoveryResult()
+		assert.False(t, result.IsActionFile)
+		assert.Equal(t, "actions.yaml", result.AlternatePath)
+	})
+
+	t.Run("SetDiscoveryMode changes mode after construction", func(t *testing.T) {
+		customStatFunc := func(path string) (os.FileInfo, error) {
+			if path == "solution.yaml" {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("not found")
+		}
+
+		getter := NewGetter(WithStatFunc(customStatFunc))
+		getter.SetDiscoveryMode(settings.DiscoveryModeSolution)
+		path := getter.FindSolution()
+
+		assert.Equal(t, "solution.yaml", path)
+		assert.Equal(t, settings.DiscoveryModeSolution, getter.LastDiscoveryResult().Mode)
+	})
+
+	t.Run("action mode prefers root actions.yaml over subfolder solution.yaml", func(t *testing.T) {
+		// Simulates: cldctl/solution.yaml exists, root actions.yaml exists.
+		// In action mode, root actions.yaml should be preferred even though
+		// subfolder solution.yaml is found first in folder-priority order.
+		existingFiles := map[string]bool{
+			"cldctl/solution.yaml": true,
+			"actions.yaml":         true,
+		}
+		customStatFunc := func(path string) (os.FileInfo, error) {
+			if existingFiles[path] {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("not found")
+		}
+
+		getter := NewGetter(
+			WithStatFunc(customStatFunc),
+			WithDiscoveryMode(settings.DiscoveryModeAction),
+			WithSolutionDiscovery(
+				[]string{"cldctl", ".cldctl", ""},
+				settings.ActionFileNamesFor("cldctl"),
+			),
+		)
+		path := getter.FindSolution()
+
+		assert.Equal(t, "actions.yaml", path)
+		result := getter.LastDiscoveryResult()
+		assert.True(t, result.IsActionFile)
+		// The subfolder solution.yaml should be recorded as the alternate path.
+		assert.Equal(t, "cldctl/solution.yaml", result.AlternatePath)
+	})
+
+	t.Run("action mode uses subfolder solution.yaml when no action file exists anywhere", func(t *testing.T) {
+		existingFiles := map[string]bool{
+			"cldctl/solution.yaml": true,
+		}
+		customStatFunc := func(path string) (os.FileInfo, error) {
+			if existingFiles[path] {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("not found")
+		}
+
+		getter := NewGetter(
+			WithStatFunc(customStatFunc),
+			WithDiscoveryMode(settings.DiscoveryModeAction),
+			WithSolutionDiscovery(
+				[]string{"cldctl", ".cldctl", ""},
+				settings.ActionFileNamesFor("cldctl"),
+			),
+		)
+		path := getter.FindSolution()
+
+		assert.Equal(t, "cldctl/solution.yaml", path)
+		result := getter.LastDiscoveryResult()
+		assert.False(t, result.IsActionFile)
 	})
 }

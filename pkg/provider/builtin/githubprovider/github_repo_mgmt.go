@@ -26,7 +26,7 @@ import (
 func (p *GitHubProvider) executeCreateRepo(ctx context.Context, client *httpc.Client, apiBase string, inputs map[string]any) (*provider.Output, error) {
 	name := getStringInput(inputs, "repo")
 	if name == "" {
-		return nil, fmt.Errorf("'repo' is required for create_repo operation")
+		return nil, requiredInputError("create_repo", "repo", inputs, "")
 	}
 
 	owner := getStringInput(inputs, "owner")
@@ -280,7 +280,7 @@ func (p *GitHubProvider) initRepoWithReadme(ctx context.Context, client *httpc.C
 func (p *GitHubProvider) executeCreateRepoREST(ctx context.Context, client *httpc.Client, apiBase string, inputs map[string]any, name string, autoInit bool) (*provider.Output, error) {
 	owner := getStringInput(inputs, "owner")
 	if owner == "" {
-		return nil, fmt.Errorf("'owner' is required for REST repo creation (GraphQL createRepository was forbidden)")
+		return nil, requiredInputError("create_repo", "owner", inputs, "GraphQL createRepository was forbidden, falling back to REST")
 	}
 
 	reqBody := map[string]any{
@@ -344,7 +344,7 @@ func (p *GitHubProvider) resolveOwnerID(ctx context.Context, client *httpc.Clien
 func (p *GitHubProvider) executeCreateRuleset(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
 	rulesetName := getStringInput(inputs, "ruleset_name")
 	if rulesetName == "" {
-		return nil, fmt.Errorf("'ruleset_name' is required for create_ruleset operation")
+		return nil, requiredInputError("create_ruleset", "ruleset_name", inputs, "")
 	}
 
 	target := getStringInput(inputs, "target")
@@ -361,7 +361,7 @@ func (p *GitHubProvider) executeCreateRuleset(ctx context.Context, client *httpc
 	includeRefs := getStringSliceInput(inputs, "include_refs")
 	excludeRefs := getStringSliceInput(inputs, "exclude_refs")
 	if len(includeRefs) == 0 {
-		return nil, fmt.Errorf("'include_refs' is required for create_ruleset operation (e.g. [\"refs/heads/main\"])")
+		return nil, requiredInputError("create_ruleset", "include_refs", inputs, `e.g. ["refs/heads/main"]`)
 	}
 
 	// Ensure exclude is never null (API requires an array)

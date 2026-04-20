@@ -105,11 +105,12 @@ func TestHandler_SupportedFlows(t *testing.T) {
 
 	flows := handler.SupportedFlows()
 	assert.Contains(t, flows, auth.FlowInteractive)
+	assert.Contains(t, flows, auth.FlowDeviceCode)
 	assert.Contains(t, flows, auth.FlowServicePrincipal)
 	assert.Contains(t, flows, auth.FlowWorkloadIdentity)
 	assert.Contains(t, flows, auth.FlowMetadata)
 	assert.Contains(t, flows, auth.FlowGcloudADC)
-	assert.Len(t, flows, 5)
+	assert.Len(t, flows, 6)
 }
 
 func TestHandler_Capabilities(t *testing.T) {

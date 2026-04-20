@@ -270,6 +270,12 @@ func TestOptions(t *testing.T) {
 		WithPluginFetcher(f)(cfg)
 		assert.Equal(t, f, cfg.pluginFetcher)
 	})
+
+	t.Run("WithDiscoveryMode sets discoveryMode", func(t *testing.T) {
+		cfg := &prepareConfig{}
+		WithDiscoveryMode(settings.DiscoveryModeAction)(cfg)
+		assert.Equal(t, settings.DiscoveryModeAction, cfg.discoveryMode)
+	})
 }
 
 func TestLoadSolutionWithBundle_Stdin_NilReader(t *testing.T) {

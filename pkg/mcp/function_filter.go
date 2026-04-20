@@ -18,6 +18,13 @@ type namedFunction interface {
 	GetDescription() string
 }
 
+// subNamed is an optional interface for functions that contain
+// individually named sub-functions (e.g., CEL groups like "encoders"
+// containing "base64.encode", "base64.decode").
+type subNamed interface {
+	GetSubNames() []string
+}
+
 // filterAndReturnNamedFunctions filters a slice of named items by substring match on Name,
 // then returns the result as JSON. This deduplicates the shared filter-by-name logic
 // between handleListCELFunctions and handleListGoTemplateFunctions.
@@ -39,6 +46,16 @@ func filterAndReturnNamedFunctions[T namedFunction](
 		for _, f := range functions {
 			if strings.Contains(strings.ToLower(f.GetName()), nameLower) {
 				filtered = append(filtered, f)
+				continue
+			}
+			// Check individual function names within the group.
+			if sn, ok := any(f).(subNamed); ok {
+				for _, sub := range sn.GetSubNames() {
+					if strings.Contains(strings.ToLower(sub), nameLower) {
+						filtered = append(filtered, f)
+						break
+					}
+				}
 			}
 		}
 		if len(filtered) == 0 {
@@ -71,6 +88,16 @@ func searchFunctions[T namedFunction](
 		if strings.Contains(strings.ToLower(f.GetName()), queryLower) ||
 			strings.Contains(strings.ToLower(f.GetDescription()), queryLower) {
 			filtered = append(filtered, f)
+			continue
+		}
+		// Check individual function names within the group.
+		if sn, ok := any(f).(subNamed); ok {
+			for _, sub := range sn.GetSubNames() {
+				if strings.Contains(strings.ToLower(sub), queryLower) {
+					filtered = append(filtered, f)
+					break
+				}
+			}
 		}
 	}
 	if len(filtered) == 0 {

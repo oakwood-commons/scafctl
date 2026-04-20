@@ -47,6 +47,7 @@ type prepareConfig struct {
 	noCache       bool
 	pluginCfg     *plugin.ProviderConfig
 	clientOpts    []plugin.ClientOption
+	discoveryMode settings.DiscoveryMode
 }
 
 // WithGetter provides a custom solution getter. If not set, one is created
@@ -130,6 +131,14 @@ func WithClientOptions(opts ...plugin.ClientOption) Option {
 	}
 }
 
+// WithDiscoveryMode sets the discovery mode used when auto-discovering
+// solution files. See settings.DiscoveryMode for available modes.
+func WithDiscoveryMode(mode settings.DiscoveryMode) Option {
+	return func(c *prepareConfig) {
+		c.discoveryMode = mode
+	}
+}
+
 // Result holds the output of PrepareSolution.
 type Result struct {
 	// Solution is the loaded and prepared solution.
@@ -145,6 +154,9 @@ type Result struct {
 	// Cleanup must be deferred by the caller. It handles temp directory
 	// removal, working directory restoration, and metrics output.
 	Cleanup func() `json:"-" yaml:"-"`
+	// DiscoveredFrom holds metadata about how the solution file was discovered.
+	// Only populated when auto-discovery is used (path was empty).
+	DiscoveredFrom get.DiscoveryResult `json:"-" yaml:"-"`
 }
 
 // Solution loads a solution from the given path, extracts any bundle,
@@ -171,6 +183,17 @@ func Solution(ctx context.Context, path string, opts ...Option) (*Result, error)
 	getter := cfg.getter
 	if getter == nil {
 		getter = NewDefaultGetter(ctx, cfg.noCache)
+	}
+
+	// When discovery mode is set and no explicit path is provided,
+	// perform discovery up front so we can capture the result metadata.
+	var discoveredFrom get.DiscoveryResult
+	if path == "" && cfg.discoveryMode != settings.DiscoveryModeDefault {
+		if g, ok := getter.(*get.Getter); ok {
+			g.SetDiscoveryMode(cfg.discoveryMode)
+			path = g.FindSolution()
+			discoveredFrom = g.LastDiscoveryResult()
+		}
 	}
 
 	// Load the solution (with bundle if available)
@@ -320,10 +343,11 @@ func Solution(ctx context.Context, path string, opts ...Option) (*Result, error)
 	}
 
 	return &Result{
-		Solution:    sol,
-		Registry:    reg,
-		SolutionDir: solutionDir,
-		Cleanup:     cleanup,
+		Solution:       sol,
+		Registry:       reg,
+		SolutionDir:    solutionDir,
+		Cleanup:        cleanup,
+		DiscoveredFrom: discoveredFrom,
 	}, nil
 }
 

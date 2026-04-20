@@ -96,7 +96,8 @@ func NewExecProvider() *ExecProvider {
 					schemahelper.WithDefault("auto"),
 					schemahelper.WithExample("auto"),
 					schemahelper.WithMaxLength(10)),
-				"raw": schemahelper.BoolProp("Return trimmed stdout string instead of the full result map. Only applies in resolver/transform mode; action mode always returns the full map"),
+				"raw":         schemahelper.BoolProp("Return trimmed stdout string instead of the full result map. Only applies in resolver/transform mode; action mode always returns the full map"),
+				"passthrough": schemahelper.BoolProp("Stream stdout/stderr directly to the user's terminal in real-time when terminal IO streams are available instead of capturing. Colors, formatting, and TTY features are preserved. When passthrough uses terminal IO streams, result stdout/stderr fields are empty; otherwise output may be captured and returned in those fields. Default: false"),
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 				provider.CapabilityFrom:      schemahelper.AnyProp("Full result map (stdout, stderr, exitCode, success, command, shell) by default; trimmed stdout string when raw: true"),
@@ -315,16 +316,30 @@ func (p *ExecProvider) executeCommand(ctx context.Context, command string, input
 	var stdout, stderr bytes.Buffer
 	var stdoutWriter, stderrWriter io.Writer = &stdout, &stderr
 	streamed := false
+	passthrough, _ := inputs["passthrough"].(bool)
 
-	mode, _ := provider.ExecutionModeFromContext(ctx)
-	if mode == provider.CapabilityAction {
+	if passthrough {
+		// Passthrough mode: stream directly to terminal, don't capture
 		if ioStreams, ok := provider.IOStreamsFromContext(ctx); ok && ioStreams != nil {
 			if ioStreams.Out != nil {
-				stdoutWriter = io.MultiWriter(&stdout, ioStreams.Out)
-				streamed = true
+				stdoutWriter = ioStreams.Out
 			}
 			if ioStreams.ErrOut != nil {
-				stderrWriter = io.MultiWriter(&stderr, ioStreams.ErrOut)
+				stderrWriter = ioStreams.ErrOut
+			}
+			streamed = true
+		}
+	} else {
+		mode, _ := provider.ExecutionModeFromContext(ctx)
+		if mode == provider.CapabilityAction {
+			if ioStreams, ok := provider.IOStreamsFromContext(ctx); ok && ioStreams != nil {
+				if ioStreams.Out != nil {
+					stdoutWriter = io.MultiWriter(&stdout, ioStreams.Out)
+					streamed = true
+				}
+				if ioStreams.ErrOut != nil {
+					stderrWriter = io.MultiWriter(&stderr, ioStreams.ErrOut)
+				}
 			}
 		}
 	}

@@ -999,7 +999,7 @@ func TestFileProvider_WriteTree_MissingEntryPath(t *testing.T) {
 	assert.Contains(t, err.Error(), "entries[0].path is required")
 }
 
-func TestFileProvider_WriteTree_MissingEntryContent(t *testing.T) {
+func TestFileProvider_WriteTree_MissingEntryContent_Skipped(t *testing.T) {
 	p := NewFileProvider()
 	tmpDir := t.TempDir()
 
@@ -1008,7 +1008,66 @@ func TestFileProvider_WriteTree_MissingEntryContent(t *testing.T) {
 		"operation": "write-tree",
 		"basePath":  tmpDir,
 		"entries": []any{
-			map[string]any{"path": "file.txt"},
+			map[string]any{"path": "dir-only/"},
+		},
+	}
+
+	result, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	data := result.Data.(map[string]any)
+	assert.Equal(t, 0, data["filesWritten"])
+}
+
+func TestFileProvider_WriteTree_MixedFilesAndDirectories(t *testing.T) {
+	p := NewFileProvider()
+	tmpDir := t.TempDir()
+
+	ctx := context.Background()
+	inputs := map[string]any{
+		"operation": "write-tree",
+		"basePath":  tmpDir,
+		"entries": []any{
+			map[string]any{"path": "src/"},
+			map[string]any{"path": "src/main.go", "content": "package main"},
+			map[string]any{"path": "assets/"},
+			map[string]any{"path": "assets/logo.txt", "content": "LOGO"},
+		},
+	}
+
+	result, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	data := result.Data.(map[string]any)
+	assert.Equal(t, 2, data["filesWritten"])
+
+	paths := data["paths"].([]string)
+	assert.Len(t, paths, 2)
+	assert.Contains(t, paths, "src/main.go")
+	assert.Contains(t, paths, "assets/logo.txt")
+
+	// Verify files were actually written
+	content1, err := os.ReadFile(filepath.Join(tmpDir, "src", "main.go"))
+	require.NoError(t, err)
+	assert.Equal(t, "package main", string(content1))
+
+	content2, err := os.ReadFile(filepath.Join(tmpDir, "assets", "logo.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "LOGO", string(content2))
+}
+
+func TestFileProvider_WriteTree_NonStringContentErrors(t *testing.T) {
+	p := NewFileProvider()
+	tmpDir := t.TempDir()
+
+	ctx := context.Background()
+	inputs := map[string]any{
+		"operation": "write-tree",
+		"basePath":  tmpDir,
+		"entries": []any{
+			map[string]any{"path": "file.txt", "content": 123},
 		},
 	}
 
@@ -1016,7 +1075,7 @@ func TestFileProvider_WriteTree_MissingEntryContent(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "entries[0].content is required")
+	assert.Contains(t, err.Error(), "entries[0].content must be a string")
 }
 
 func TestFileProvider_WriteTree_DryRun(t *testing.T) {

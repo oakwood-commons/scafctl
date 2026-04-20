@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -63,6 +65,8 @@ var allOperations = []string{
 	"list_review_threads", "reply_to_review_thread", "resolve_review_thread",
 	// CI/CD check operations (REST)
 	"list_check_runs", "get_workflow_run",
+	// Commit lookup operations (REST)
+	"list_commit_pulls",
 	// Issue write operations
 	"create_issue", "update_issue", "create_issue_comment",
 	// PR write operations
@@ -88,6 +92,7 @@ var readOperations = map[string]bool{
 	"list_pr_comments":    true,
 	"list_review_threads": true,
 	"list_check_runs":     true, "get_workflow_run": true,
+	"list_commit_pulls": true,
 }
 
 // GitHubProvider implements GitHub API operations as a provider.
@@ -369,6 +374,10 @@ func buildInputSchema() *jsonschema.Schema {
 			"ref": schemahelper.StringProp("Git reference (branch, tag, or commit SHA). Defaults to the repo's default branch.",
 				schemahelper.WithExample("main"),
 				schemahelper.WithMaxLength(*ptrs.IntPtr(200)),
+			),
+			"commit_sha": schemahelper.StringProp("Commit SHA for list_commit_pulls operation (alias: sha)",
+				schemahelper.WithExample("abc123def456"),
+				schemahelper.WithMaxLength(*ptrs.IntPtr(40)),
 			),
 			"number": schemahelper.IntProp("Issue or pull request number",
 				schemahelper.WithMinimum(1),
@@ -660,6 +669,10 @@ func (p *GitHubProvider) Execute(ctx context.Context, input any) (*provider.Outp
 	case "get_workflow_run":
 		result, err = p.executeGetWorkflowRun(ctx, client, apiBase, owner, repo, inputs)
 
+	// --- Commit lookup operations (REST) ---
+	case "list_commit_pulls":
+		result, err = p.executeListCommitPulls(ctx, client, apiBase, owner, repo, inputs)
+
 	// --- Issue write operations (GraphQL mutations) ---
 	case "create_issue":
 		result, err = p.executeCreateIssue(ctx, client, apiBase, owner, repo, inputs)
@@ -775,6 +788,45 @@ func getPerPage(inputs map[string]any) int {
 func getStringInput(inputs map[string]any, key string) string {
 	v, _ := inputs[key].(string)
 	return v
+}
+
+// getStringInputWithAliases extracts a string from the input map, trying the
+// primary key first then falling back to aliases in order.
+func getStringInputWithAliases(inputs map[string]any, key string, aliases ...string) string {
+	if v := getStringInput(inputs, key); v != "" {
+		return v
+	}
+	for _, alias := range aliases {
+		if v := getStringInput(inputs, alias); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// commonInputKeys are top-level inputs handled by Execute before dispatch.
+// They are excluded from the "received inputs" list in error messages.
+var commonInputKeys = []string{"operation", "owner", "repo", "api_base", "token"}
+
+// requiredInputError builds an error for a missing required input, listing the
+// operation-specific keys the caller provided so the user can spot typos.
+func requiredInputError(operation, field string, inputs map[string]any, hint string) error {
+	var userKeys []string
+	for k := range inputs {
+		if !slices.Contains(commonInputKeys, k) {
+			userKeys = append(userKeys, k)
+		}
+	}
+	sort.Strings(userKeys)
+
+	msg := fmt.Sprintf("'%s' is required for %s operation", field, operation)
+	if len(userKeys) > 0 {
+		msg += fmt.Sprintf(" (received inputs: %s)", strings.Join(userKeys, ", "))
+	}
+	if hint != "" {
+		msg += "; " + hint
+	}
+	return fmt.Errorf("%s", msg)
 }
 
 // getStringSliceInput extracts a string slice from the input map.

@@ -30,6 +30,7 @@ var celFunctionSchemaJSON []byte
 type FunctionSummary struct {
 	Name        string `json:"name" yaml:"name" required:"true"`
 	Description string `json:"description" yaml:"description"`
+	Functions   string `json:"functions" yaml:"functions"`
 	Custom      bool   `json:"custom" yaml:"custom"`
 }
 
@@ -43,8 +44,9 @@ type Options struct {
 	flags.KvxOutputFlags
 
 	// Filter options
-	Custom  bool // Show only custom (scafctl-specific) functions
-	BuiltIn bool // Show only built-in (cel-go) functions
+	Custom  bool   // Show only custom (scafctl-specific) functions
+	BuiltIn bool   // Show only built-in (cel-go) functions
+	Search  string // Search functions by name or description
 
 	// For dependency injection in tests
 	allFn     func() celexp.ExtFunctionList
@@ -112,6 +114,7 @@ Examples:
 	// Filter flags
 	cCmd.Flags().BoolVar(&options.Custom, "custom", false, fmt.Sprintf("Show only custom %s functions", cliParams.BinaryName))
 	cCmd.Flags().BoolVar(&options.BuiltIn, "builtin", false, "Show only built-in cel-go functions")
+	cCmd.Flags().StringVarP(&options.Search, "search", "s", "", "Search functions by name or description")
 
 	return cCmd
 }
@@ -169,6 +172,18 @@ func (o *Options) RunListFunctions(ctx context.Context) error {
 		}
 	}
 
+	// Apply search filter
+	if o.Search != "" {
+		funcs = filterBySearch(funcs, o.Search)
+		if len(funcs) == 0 {
+			err := fmt.Errorf("no CEL functions matching %q found", o.Search)
+			if w := writer.FromContext(ctx); w != nil {
+				w.Errorf("%v", err)
+			}
+			return exitcode.WithCode(err, exitcode.FileNotFound)
+		}
+	}
+
 	// Full data for json/yaml and interactive TUI
 	if o.Output == "json" || o.Output == "yaml" || o.Interactive {
 		output := celdetail.BuildFunctionList(funcs)
@@ -181,6 +196,7 @@ func (o *Options) RunListFunctions(ctx context.Context) error {
 		summaries = append(summaries, FunctionSummary{
 			Name:        fn.Name,
 			Description: fn.Description,
+			Functions:   strings.Join(fn.FunctionNames, ", "),
 			Custom:      fn.Custom,
 		})
 	}
@@ -310,9 +326,10 @@ func (o *Options) writeOutput(ctx context.Context, data any) error {
 		kvx.WithOutputAppName(o.BinaryName+" get cel-functions"),
 		kvx.WithIOStreams(o.IOStreams),
 		kvx.WithOutputDisplaySchemaJSON(celFunctionSchemaJSON),
-		kvx.WithOutputColumnOrder([]string{"name", "description"}),
+		kvx.WithOutputColumnOrder([]string{"name", "functions", "description"}),
 		kvx.WithOutputColumnHints(map[string]tui.ColumnHint{
 			"name":          {MaxWidth: 25, Priority: 10},
+			"functions":     {MaxWidth: 40, Priority: 8},
 			"custom":        {Hidden: true},
 			"functionNames": {Hidden: true},
 			"links":         {Hidden: true},
@@ -321,4 +338,26 @@ func (o *Options) writeOutput(ctx context.Context, data any) error {
 	)
 
 	return kvxOpts.Write(data)
+}
+
+// filterBySearch filters functions by substring match on name, description,
+// or function names. This enables CLI discoverability of individual functions
+// within groups (e.g., searching "base64" finds the "encoders" group).
+func filterBySearch(funcs celexp.ExtFunctionList, query string) celexp.ExtFunctionList {
+	q := strings.ToLower(query)
+	filtered := make(celexp.ExtFunctionList, 0, len(funcs))
+	for _, fn := range funcs {
+		if strings.Contains(strings.ToLower(fn.Name), q) ||
+			strings.Contains(strings.ToLower(fn.Description), q) {
+			filtered = append(filtered, fn)
+			continue
+		}
+		for _, name := range fn.FunctionNames {
+			if strings.Contains(strings.ToLower(name), q) {
+				filtered = append(filtered, fn)
+				break
+			}
+		}
+	}
+	return filtered
 }

@@ -158,6 +158,11 @@ type RootOptions struct {
 	// binaries. Discovered plugins are registered in the auth.Registry
 	// alongside built-in handlers during PersistentPreRunE.
 	AuthPluginDirs []string
+
+	// ActionDiscoveryFileNames overrides the file names used by "run action"
+	// auto-discovery. When empty, the defaults from
+	// settings.ActionFileNamesFor are used.
+	ActionDiscoveryFileNames []string
 }
 
 // NewRootOptions returns a RootOptions with production defaults
@@ -207,6 +212,12 @@ func Root(opts *RootOptions) *cobra.Command {
 	settings.RootSolutionFolders = settings.SolutionFoldersFor(binaryName)
 	settings.SolutionFileNames = settings.SolutionFileNamesFor(binaryName)
 
+	// Wire embedder-supplied action discovery file names into cliParams
+	// so they are available via settings.FromContext during command execution.
+	if len(opts.ActionDiscoveryFileNames) > 0 {
+		cliParams.ActionDiscoveryFileNames = opts.ActionDiscoveryFileNames
+	}
+
 	// Resolve IOStreams: use caller-provided or default to OS streams.
 	ioStreams := opts.IOStreams
 	if ioStreams == nil {
@@ -252,6 +263,11 @@ func Root(opts *RootOptions) *cobra.Command {
 			}
 			if !cCmd.Flags().Changed("quiet") {
 				cliParams.IsQuiet = cfg.Settings.Quiet
+			}
+
+			// Apply discovery config: config file fills in when embedder didn't set it.
+			if len(cliParams.ActionDiscoveryFileNames) == 0 && len(cfg.Discovery.ActionFiles) > 0 {
+				cliParams.ActionDiscoveryFileNames = cfg.Discovery.ActionFiles
 			}
 
 			// Resolve log level with precedence: flag > --debug > env > config > default ("none")

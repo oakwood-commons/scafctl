@@ -54,6 +54,19 @@ type RemoteResolver interface {
 	FetchRemoteSolution(ctx context.Context, ref string) (content, bundleData []byte, err error)
 }
 
+// DiscoveryResult holds metadata from the last FindSolution call.
+type DiscoveryResult struct {
+	// Path is the discovered file path. Empty if nothing found.
+	Path string
+	// IsActionFile is true when the discovered file is an actions.yaml/yml.
+	IsActionFile bool
+	// Mode is the discovery mode that was used.
+	Mode settings.DiscoveryMode
+	// AlternatePath is populated when action mode finds an actions file and a
+	// solution.yaml also exists in the same directory.
+	AlternatePath string
+}
+
 type Getter struct {
 	readFile          fs.ReadFileFunc
 	statFunc          fs.StatFunc
@@ -63,6 +76,9 @@ type Getter struct {
 	remoteResolver    RemoteResolver
 	solutionFolders   []string
 	solutionFileNames []string
+	discoveryMode     settings.DiscoveryMode
+	customActionFiles []string
+	lastDiscovery     DiscoveryResult
 }
 
 // Option defines a function type that modifies a Getter instance.
@@ -123,6 +139,22 @@ func WithRemoteResolver(resolver RemoteResolver) Option {
 	}
 }
 
+// WithDiscoveryMode returns an Option that sets the discovery mode on the Getter.
+// This controls which file names FindSolution searches for.
+func WithDiscoveryMode(mode settings.DiscoveryMode) Option {
+	return func(g *Getter) {
+		g.discoveryMode = mode
+	}
+}
+
+// WithCustomActionFiles returns an Option that overrides the action file names
+// used when discovery mode is DiscoveryModeAction.
+func WithCustomActionFiles(files []string) Option {
+	return func(g *Getter) {
+		g.customActionFiles = files
+	}
+}
+
 // WithSolutionDiscovery overrides the default solution folder and file name
 // lists used by FindSolution. Pass the result of settings.SolutionFoldersFor
 // and settings.SolutionFileNamesFor to search for <binaryName>.yaml etc.
@@ -172,11 +204,16 @@ func NewGetter(opts ...Option) *Getter {
 func NewGetterFromContext(ctx context.Context, opts ...Option) *Getter {
 	var ctxOpts []Option
 	if ctx != nil {
-		if s, ok := settings.FromContext(ctx); ok && s.BinaryName != "" && s.BinaryName != settings.CliBinaryName {
-			ctxOpts = append(ctxOpts, WithSolutionDiscovery(
-				settings.SolutionFoldersFor(s.BinaryName),
-				settings.SolutionFileNamesFor(s.BinaryName),
-			))
+		if s, ok := settings.FromContext(ctx); ok {
+			if s.BinaryName != "" && s.BinaryName != settings.CliBinaryName {
+				ctxOpts = append(ctxOpts, WithSolutionDiscovery(
+					settings.SolutionFoldersFor(s.BinaryName),
+					settings.SolutionFileNamesFor(s.BinaryName),
+				))
+			}
+			if len(s.ActionDiscoveryFileNames) > 0 {
+				ctxOpts = append(ctxOpts, WithCustomActionFiles(s.ActionDiscoveryFileNames))
+			}
 		}
 	}
 	return NewGetter(append(ctxOpts, opts...)...)
@@ -722,22 +759,120 @@ func (o *Getter) FromURL(ctx context.Context, url string) (*solution.Solution, e
 // FindSolution searches for a solution file by iterating over the configured root solution folders
 // and solution file names. It returns the full path to the first solution file found using the
 // provided stat function. If no solution file is found, it returns an empty string.
+//
+// When discoveryMode is set, the file name list is overridden via
+// settings.FileNamesForMode before searching. The result metadata is stored
+// and can be retrieved via LastDiscoveryResult().
 func (o *Getter) FindSolution() string {
+	// Override file names based on discovery mode.
+	fileNames := o.solutionFileNames
+	if o.discoveryMode != settings.DiscoveryModeDefault {
+		binaryName := settings.CliBinaryName
+		// Infer binary name from the existing file name list (first non-action entry).
+		for _, fn := range o.solutionFileNames {
+			if fn != "solution.yaml" && fn != "solution.yml" &&
+				fn != "solution.json" && fn != "actions.yaml" && fn != "actions.yml" {
+				binaryName = strings.TrimSuffix(strings.TrimSuffix(fn, ".yaml"), ".yml")
+				binaryName = strings.TrimSuffix(binaryName, ".json")
+				break
+			}
+		}
+		fileNames = settings.FileNamesForMode(o.discoveryMode, binaryName, o.customActionFiles)
+	}
+
 	o.logger.V(1).Info("searching for solution file",
 		"folders", o.solutionFolders,
-		"fileNames", o.solutionFileNames)
+		"fileNames", fileNames,
+		"mode", o.discoveryMode)
+
+	o.lastDiscovery = DiscoveryResult{Mode: o.discoveryMode}
+
+	// In action mode, if the first match is a non-action file (e.g.,
+	// cldctl/solution.yaml), remember it as a fallback and keep searching
+	// remaining folders for an actual action file (e.g., ./actions.yaml).
+	var fallbackPath string
+	var fallbackFilename string
+
 	for _, folder := range o.solutionFolders {
-		for _, filename := range o.solutionFileNames {
+		for _, filename := range fileNames {
 			fullPath := filepath.NormalizeFilePath(pathlib.Join(folder, filename))
 			if filepath.PathExists(fullPath, o.statFunc) {
 				o.logger.V(1).Info("found solution file", "path", fullPath)
+				isAction := settings.IsActionFile(filename)
+
+				// In action mode, prefer action files over non-action files.
+				// If we find a non-action file first, stash it and keep looking.
+				if o.discoveryMode == settings.DiscoveryModeAction && !isAction && fallbackPath == "" {
+					fallbackPath = fullPath
+					fallbackFilename = filename
+					o.logger.V(1).Info("non-action file found in action mode, continuing search for action files",
+						"fallback", fullPath)
+					// Skip to the next folder (no point checking more file names in
+					// this folder — we already found the best match here).
+					break
+				}
+
+				o.lastDiscovery.Path = fullPath
+				o.lastDiscovery.IsActionFile = isAction
+				o.lastDiscovery.AlternatePath = o.discoverAlternatePath(fullPath, isAction)
+
+				// If we had a fallback, record it as the alternate path so the
+				// user knows another solution file exists.
+				if fallbackPath != "" {
+					o.lastDiscovery.AlternatePath = fallbackPath
+				}
+
 				return fullPath
 			}
 			o.logger.V(2).Info("solution file not found", "path", fullPath)
 		}
 	}
+
+	// If no action file was found but we have a fallback, use it.
+	if fallbackPath != "" {
+		o.logger.V(1).Info("no action file found, using fallback", "path", fallbackPath)
+		o.lastDiscovery.Path = fallbackPath
+		o.lastDiscovery.IsActionFile = settings.IsActionFile(fallbackFilename)
+		return fallbackPath
+	}
+
 	o.logger.V(1).Info("no solution file found in any default location")
 	return ""
+}
+
+// LastDiscoveryResult returns metadata from the most recent FindSolution call.
+func (o *Getter) LastDiscoveryResult() DiscoveryResult {
+	return o.lastDiscovery
+}
+
+// discoverAlternatePath checks whether a complementary file exists in the same
+// directory as the discovered solution file. In action mode it looks for
+// solution.yaml; in solution mode it looks for actions.yaml.
+func (o *Getter) discoverAlternatePath(fullPath string, isAction bool) string {
+	var alternates []string
+	switch {
+	case o.discoveryMode == settings.DiscoveryModeAction && isAction:
+		alternates = []string{"solution.yaml", "solution.yml"}
+	case o.discoveryMode == settings.DiscoveryModeSolution && !isAction:
+		alternates = []string{"actions.yaml", "actions.yml"}
+	default:
+		return ""
+	}
+
+	dir := pathlib.Dir(fullPath)
+	for _, alt := range alternates {
+		altPath := filepath.NormalizeFilePath(pathlib.Join(dir, alt))
+		if filepath.PathExists(altPath, o.statFunc) {
+			return altPath
+		}
+	}
+	return ""
+}
+
+// SetDiscoveryMode sets the discovery mode on the Getter. This is useful when
+// the mode needs to be changed after construction (e.g., from prepare).
+func (o *Getter) SetDiscoveryMode(mode settings.DiscoveryMode) {
+	o.discoveryMode = mode
 }
 
 // PossibleSolutionPaths returns a slice of possible solution file paths by combining

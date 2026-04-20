@@ -9,6 +9,7 @@ import (
 	"crypto/sha512"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -18,6 +19,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
@@ -74,6 +76,9 @@ func NewDirectoryProvider() *DirectoryProvider {
 				case "copy":
 					dest, _ := inputs["destination"].(string)
 					return fmt.Sprintf("Would copy directory %s to %s", path, dest), nil
+				case "move":
+					dest, _ := inputs["destination"].(string)
+					return fmt.Sprintf("Would move directory %s to %s", path, dest), nil
 				case "list":
 					return fmt.Sprintf("Would list directory %s", path), nil
 				default:
@@ -87,7 +92,7 @@ func NewDirectoryProvider() *DirectoryProvider {
 			Schema: schemahelper.ObjectSchema([]string{"operation", "path"}, map[string]*jsonschema.Schema{
 				"operation": schemahelper.StringProp("Operation to perform",
 					schemahelper.WithExample("list"),
-					schemahelper.WithEnum("list", "mkdir", "rmdir", "copy")),
+					schemahelper.WithEnum("list", "mkdir", "rmdir", "copy", "move")),
 				"path": schemahelper.StringProp("Target directory path (absolute or relative)",
 					schemahelper.WithExample("./src"),
 					schemahelper.WithMaxLength(4096)),
@@ -116,6 +121,8 @@ func NewDirectoryProvider() *DirectoryProvider {
 					schemahelper.WithDefault(false)),
 				"destination": schemahelper.StringProp("Destination path for copy operation",
 					schemahelper.WithMaxLength(4096)),
+				"filesOnly": schemahelper.BoolProp("Exclude directory entries from list output; only file entries are returned",
+					schemahelper.WithDefault(false)),
 				"force": schemahelper.BoolProp("Force removal of non-empty directories for rmdir",
 					schemahelper.WithDefault(false)),
 			}),
@@ -217,6 +224,16 @@ inputs:
   path: ./config
   destination: ./config-backup`,
 				},
+				{
+					Name:        "Move directory",
+					Description: "Move (rename) a directory to a new path",
+					YAML: `name: rename-output
+provider: directory
+inputs:
+  operation: move
+  path: ./output
+  destination: ./dist`,
+				},
 			},
 		},
 	}
@@ -272,6 +289,8 @@ func (p *DirectoryProvider) Execute(ctx context.Context, input any) (*provider.O
 		result, err = p.executeRmdir(absPath, inputs)
 	case "copy":
 		result, err = p.executeCopy(ctx, absPath, inputs)
+	case "move":
+		result, err = p.executeMove(ctx, absPath, inputs)
 	default:
 		return nil, fmt.Errorf("%s: unsupported operation: %s", ProviderName, operation)
 	}
@@ -294,6 +313,7 @@ type listOptions struct {
 	filterRegex    *regexp.Regexp
 	excludeHidden  bool
 	checksum       string
+	filesOnly      bool
 }
 
 // entryInfo holds information about a single directory entry.
@@ -368,6 +388,10 @@ func parseListOptions(inputs map[string]any) (*listOptions, error) {
 
 	if v, ok := inputs["excludeHidden"].(bool); ok {
 		opts.excludeHidden = v
+	}
+
+	if v, ok := inputs["filesOnly"].(bool); ok {
+		opts.filesOnly = v
 	}
 
 	if v, ok := inputs["checksum"].(string); ok && v != "" {
@@ -540,7 +564,10 @@ func (p *DirectoryProvider) walkDirectory(
 			}
 		}
 
-		emit(entry)
+		// Skip directory entries when filesOnly is set
+		if !isDir || !opts.filesOnly {
+			emit(entry)
+		}
 
 		// Recurse into subdirectories
 		if isDir && opts.recursive && depth < opts.maxDepth {
@@ -750,6 +777,55 @@ func (p *DirectoryProvider) executeCopy(ctx context.Context, absPath string, inp
 	}, nil
 }
 
+// executeMove moves (renames) a directory to a new location.
+// It uses os.Rename for same-device moves (atomic) and falls back to
+// copy-then-remove for cross-device moves.
+func (p *DirectoryProvider) executeMove(ctx context.Context, absPath string, inputs map[string]any) (*provider.Output, error) {
+	destination, ok := inputs["destination"].(string)
+	if !ok || destination == "" {
+		return nil, fmt.Errorf("destination is required for move operation")
+	}
+
+	absDest, err := provider.ResolvePath(ctx, destination)
+	if err != nil {
+		return nil, fmt.Errorf("invalid destination path: %w", err)
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("source directory does not exist: %s", absPath)
+		}
+		return nil, fmt.Errorf("failed to stat source: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("source is not a directory: %s", absPath)
+	}
+
+	// Try atomic rename first (works on same device).
+	if renameErr := os.Rename(absPath, absDest); renameErr != nil {
+		// Only fall back to copy + remove for cross-device errors (EXDEV).
+		if !errors.Is(renameErr, syscall.EXDEV) {
+			return nil, fmt.Errorf("failed to rename directory: %w", renameErr)
+		}
+		if err := copyDir(absPath, absDest); err != nil {
+			return nil, fmt.Errorf("failed to move directory (copy phase): %w", err)
+		}
+		if err := os.RemoveAll(absPath); err != nil {
+			return nil, fmt.Errorf("failed to move directory (remove source phase): %w", err)
+		}
+	}
+
+	return &provider.Output{
+		Data: map[string]any{
+			"success":     true,
+			"operation":   "move",
+			"path":        absPath,
+			"destination": absDest,
+		},
+	}, nil
+}
+
 // copyDir recursively copies a directory tree from src to dst.
 func copyDir(src, dst string) error {
 	srcInfo, err := os.Stat(src)
@@ -888,6 +964,26 @@ func (p *DirectoryProvider) executeDryRun(ctx context.Context, operation, absPat
 				"destination": absDest,
 				"_dryRun":     true,
 				"_message":    fmt.Sprintf("Would copy %s to %s", absPath, absDest),
+			},
+		}, nil
+
+	case "move":
+		destination, ok := inputs["destination"].(string)
+		if !ok || destination == "" {
+			return nil, fmt.Errorf("destination is required for move operation")
+		}
+		absDest, err := provider.ResolvePath(ctx, destination)
+		if err != nil {
+			return nil, fmt.Errorf("resolving move destination: %w", err)
+		}
+		return &provider.Output{
+			Data: map[string]any{
+				"success":     true,
+				"operation":   "move",
+				"path":        absPath,
+				"destination": absDest,
+				"_dryRun":     true,
+				"_message":    fmt.Sprintf("Would move %s to %s", absPath, absDest),
 			},
 		}, nil
 

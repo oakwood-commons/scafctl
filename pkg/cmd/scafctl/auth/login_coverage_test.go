@@ -96,12 +96,12 @@ func TestDisplayLoginResult(t *testing.T) {
 			expected: []string{"Authentication successful", "sameuser"},
 		},
 		{
-			name: "minimal claims",
+			name: "minimal claims with device code flow",
 			result: &auth.Result{
 				Claims: &auth.Claims{},
 			},
 			flow:     auth.FlowDeviceCode,
-			expected: []string{"Authentication successful"},
+			expected: []string{"Authentication successful", "Device Code"},
 		},
 	}
 
@@ -786,4 +786,82 @@ func TestCommandLogin_EmbedderBinaryName(t *testing.T) {
 
 	assert.Equal(t, "login <handler>", cmd.Use)
 	assert.NotNil(t, cmd.RunE)
+}
+
+// TestCommandLogin_InteractiveFlow_SetsDeviceCodeCallback verifies that the
+// non-terminal FlowInteractive path sets a DeviceCodeCallback on LoginOptions,
+// so handlers that internally use device code (e.g., GitHub without client_secret)
+// can still display the code to the user.
+func TestCommandLogin_InteractiveFlow_SetsDeviceCodeCallback(t *testing.T) {
+	t.Parallel()
+
+	ctx, buf := newTestContext(t)
+
+	mock := auth.NewMockHandler("github")
+	mock.DisplayNameValue = "GitHub"
+	mock.FlowsValue = []auth.Flow{auth.FlowInteractive, auth.FlowDeviceCode}
+	mock.CapabilitiesValue = []auth.Capability{auth.CapHostname}
+	mock.SetNotAuthenticated()
+	mock.LoginResult = &auth.Result{
+		Claims: &auth.Claims{
+			Username: "testuser",
+		},
+	}
+
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandLogin(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"github", "--flow", "interactive"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+
+	require.Len(t, mock.LoginCalls, 1)
+	assert.Equal(t, auth.FlowInteractive, mock.LoginCalls[0].Flow)
+	assert.NotNil(t, mock.LoginCalls[0].DeviceCodeCallback,
+		"DeviceCodeCallback should be set for interactive flow so handlers "+
+			"that internally use device code can display the code")
+}
+
+// TestCommandLogin_DeviceCodeFlow_SetsDeviceCodeCallback verifies that the
+// non-terminal FlowDeviceCode path also sets a DeviceCodeCallback.
+func TestCommandLogin_DeviceCodeFlow_SetsDeviceCodeCallback(t *testing.T) {
+	t.Parallel()
+
+	ctx, buf := newTestContext(t)
+
+	mock := auth.NewMockHandler("entra")
+	mock.DisplayNameValue = "Microsoft Entra ID"
+	mock.FlowsValue = []auth.Flow{auth.FlowDeviceCode, auth.FlowInteractive}
+	mock.CapabilitiesValue = []auth.Capability{
+		auth.CapScopesOnLogin,
+		auth.CapTenantID,
+	}
+	mock.SetNotAuthenticated()
+	mock.LoginResult = &auth.Result{
+		Claims: &auth.Claims{
+			Email: "test@example.com",
+		},
+	}
+
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandLogin(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"entra", "--flow", "device-code"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+
+	require.Len(t, mock.LoginCalls, 1)
+	assert.Equal(t, auth.FlowDeviceCode, mock.LoginCalls[0].Flow)
+	assert.NotNil(t, mock.LoginCalls[0].DeviceCodeCallback,
+		"DeviceCodeCallback should be set for device-code flow")
 }
