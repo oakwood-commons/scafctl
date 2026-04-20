@@ -97,7 +97,7 @@ func NewExecProvider() *ExecProvider {
 					schemahelper.WithExample("auto"),
 					schemahelper.WithMaxLength(10)),
 				"raw":         schemahelper.BoolProp("Return trimmed stdout string instead of the full result map. Only applies in resolver/transform mode; action mode always returns the full map"),
-				"passthrough": schemahelper.BoolProp("Stream stdout/stderr directly to the user's terminal in real-time instead of capturing. Colors, formatting, and TTY features are preserved. Result stdout/stderr fields will be empty. Default: false"),
+				"passthrough": schemahelper.BoolProp("Stream stdout/stderr directly to the user's terminal in real-time when terminal IO streams are available instead of capturing. Colors, formatting, and TTY features are preserved. When passthrough uses terminal IO streams, result stdout/stderr fields are empty; otherwise output may be captured and returned in those fields. Default: false"),
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 				provider.CapabilityFrom:      schemahelper.AnyProp("Full result map (stdout, stderr, exitCode, success, command, shell) by default; trimmed stdout string when raw: true"),

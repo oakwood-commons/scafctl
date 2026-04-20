@@ -73,14 +73,14 @@ func (h *Handler) adcLogin(ctx context.Context, opts auth.LoginOptions) (*auth.R
 
 	// Open browser
 	lgr.V(1).Info("opening browser for authentication", "url", authURL)
-	if err := oauth.OpenBrowser(ctx, authURL); err != nil {
+	browserOpenErr := oauth.OpenBrowser(ctx, authURL)
+	if browserOpenErr != nil {
 		lgr.V(0).Info("failed to open browser, please open this URL manually", "url", authURL)
-		// Notify callback so the CLI can display the URL to the user.
-		// Note: This reuses DeviceCodeCallback with an empty userCode for browser-based ADC auth.
-		// The CLI callback handles empty codes by showing only the URL.
-		if opts.DeviceCodeCallback != nil {
-			opts.DeviceCodeCallback("", authURL, "Open this URL in your browser to authenticate")
-		}
+	}
+	// Always notify the CLI callback with the auth URL so the TUI can show
+	// a "Re-open in browser" action. Empty userCode signals a browser flow.
+	if opts.DeviceCodeCallback != nil {
+		opts.DeviceCodeCallback("", authURL, "Open this URL in your browser to authenticate")
 	}
 
 	// Wait for authorization code or timeout

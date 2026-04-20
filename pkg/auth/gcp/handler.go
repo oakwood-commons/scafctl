@@ -183,6 +183,7 @@ func (h *Handler) DisplayName() string {
 func (h *Handler) SupportedFlows() []auth.Flow {
 	return []auth.Flow{
 		auth.FlowInteractive,
+		auth.FlowDeviceCode,
 		auth.FlowServicePrincipal,
 		auth.FlowWorkloadIdentity,
 		auth.FlowMetadata,
@@ -219,6 +220,11 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 	// Check if service account flow is requested or detected
 	if opts.Flow == auth.FlowServicePrincipal || (opts.Flow == "" && HasServiceAccountCredentials()) {
 		return h.serviceAccountLogin(ctx, opts)
+	}
+
+	// Check if device code flow is explicitly requested
+	if opts.Flow == auth.FlowDeviceCode {
+		return h.deviceCodeLogin(ctx, opts)
 	}
 
 	// Check if gcloud ADC flow is explicitly requested

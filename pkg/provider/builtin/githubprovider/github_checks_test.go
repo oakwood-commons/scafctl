@@ -377,3 +377,40 @@ func BenchmarkExecuteListCommitPulls(b *testing.B) {
 		_, _ = p.Execute(context.Background(), inputs)
 	}
 }
+
+func TestGitHubProvider_Execute_ListCommitPulls_SHAAlias(t *testing.T) {
+	t.Parallel()
+
+	p, baseURL := testProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/repos/test-org/test-repo/commits/abc123/pulls", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]any{}) //nolint:errcheck
+	})
+
+	// Use "sha" instead of "commit_sha" — alias should work
+	output, err := p.Execute(context.Background(), map[string]any{
+		"operation": "list_commit_pulls",
+		"owner":     "test-org",
+		"repo":      "test-repo",
+		"sha":       "abc123",
+		"api_base":  baseURL,
+	})
+
+	require.NoError(t, err)
+	result := output.Data.(map[string]any)["result"].(map[string]any)
+	assert.Equal(t, 0, result["total_count"])
+}
+
+func TestExecuteListCommitPulls_MissingCommitSHA_ShowsReceivedInputs(t *testing.T) {
+	t.Parallel()
+
+	p := NewGitHubProvider()
+	_, err := p.executeListCommitPulls(
+		t.Context(), nil, "https://api.github.com", "owner", "repo",
+		map[string]any{"wrong_field": "abc123"},
+	)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "commit_sha")
+	assert.Contains(t, err.Error(), "received inputs:")
+	assert.Contains(t, err.Error(), "wrong_field")
+}

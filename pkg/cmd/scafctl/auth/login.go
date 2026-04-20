@@ -76,6 +76,7 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 
 			For the 'gcp' handler, this supports:
 			- interactive: Browser-based OAuth (default for workstations)
+			- device-code: Device code flow for headless/SSH environments
 			- service-principal: Service account key (GOOGLE_APPLICATION_CREDENTIALS)
 			- workload-identity: Workload Identity Federation (GOOGLE_EXTERNAL_ACCOUNT)
 			- metadata: GCE metadata server (auto-detected on GCE/GKE/Cloud Run)
@@ -147,6 +148,9 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 
 			  # Login with GCP using browser OAuth (default)
 			  scafctl auth login gcp
+
+			  # Login with GCP device code flow (headless/SSH)
+			  scafctl auth login gcp --flow device-code
 
 			  # Login with GCP service account key
 			  scafctl auth login gcp --flow service-principal
@@ -835,7 +839,9 @@ func executeLoginWithBrowserTUI(
 	var data map[string]any
 	var schema *tui.DisplaySchema
 
-	if useDeviceCodeTUI {
+	switch {
+	case useDeviceCodeTUI && dci.userCode != "":
+		// Real device code flow (e.g., GitHub without client_secret)
 		data = map[string]any{
 			"title": fmt.Sprintf("Sign in to %s", handler.DisplayName()),
 			"url":   dci.verificationURI,
@@ -869,7 +875,35 @@ func executeLoginWithBrowserTUI(
 				},
 			},
 		}
-	} else {
+	case useDeviceCodeTUI && dci.userCode == "" && dci.verificationURI != "":
+		// Browser auth code flow — handler reported the auth URL via callback
+		data = map[string]any{
+			"title": fmt.Sprintf("Sign in to %s", handler.DisplayName()),
+			"url":   dci.verificationURI,
+		}
+		schema = &tui.DisplaySchema{
+			Version: "v1",
+			Status: &tui.StatusDisplayConfig{
+				TitleField:     "title",
+				WaitMessage:    "Waiting for browser authentication...",
+				SuccessMessage: "Authenticated successfully!",
+				DoneBehavior:   tui.DoneBehaviorExitAfterDelay,
+				DoneDelay:      "2s",
+				DisplayFields: []tui.StatusFieldDisplay{
+					{Label: "URL", Field: "url"},
+				},
+				Actions: []tui.StatusActionConfig{
+					{
+						Label: "Re-open in browser",
+						Type:  "open-url",
+						Field: "url",
+						Keys:  tui.StatusKeyBindings{Vim: "o", Emacs: "alt+o", Function: "f3"},
+					},
+				},
+			},
+		}
+	default:
+		// No callback fired — show minimal browser waiting TUI
 		data = map[string]any{
 			"title": fmt.Sprintf("Sign in to %s", handler.DisplayName()),
 		}
@@ -947,6 +981,9 @@ func displayLoginResult(w *writer.Writer, result *auth.Result, flow auth.Flow) e
 	}
 	if flow == auth.FlowInteractive {
 		w.Info("  Flow:     Interactive (Browser OAuth)")
+	}
+	if flow == auth.FlowDeviceCode {
+		w.Info("  Flow:     Device Code")
 	}
 	return nil
 }

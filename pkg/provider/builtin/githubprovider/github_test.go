@@ -1345,3 +1345,151 @@ func TestMapIssueStateForMutation(t *testing.T) {
 	assert.Equal(t, "CLOSED", mapIssueStateForMutation("CLOSED"))
 	assert.Equal(t, "OTHER", mapIssueStateForMutation("OTHER"))
 }
+
+func TestGetStringInputWithAliases(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		inputs   map[string]any
+		key      string
+		aliases  []string
+		expected string
+	}{
+		{
+			name:     "primary key found",
+			inputs:   map[string]any{"commit_sha": "abc123"},
+			key:      "commit_sha",
+			aliases:  []string{"sha"},
+			expected: "abc123",
+		},
+		{
+			name:     "alias found",
+			inputs:   map[string]any{"sha": "def456"},
+			key:      "commit_sha",
+			aliases:  []string{"sha"},
+			expected: "def456",
+		},
+		{
+			name:     "primary takes precedence over alias",
+			inputs:   map[string]any{"commit_sha": "primary", "sha": "alias"},
+			key:      "commit_sha",
+			aliases:  []string{"sha"},
+			expected: "primary",
+		},
+		{
+			name:     "no match returns empty",
+			inputs:   map[string]any{"other": "value"},
+			key:      "commit_sha",
+			aliases:  []string{"sha"},
+			expected: "",
+		},
+		{
+			name:     "no aliases",
+			inputs:   map[string]any{"ref": "main"},
+			key:      "ref",
+			expected: "main",
+		},
+		{
+			name:     "second alias matches",
+			inputs:   map[string]any{"s": "short"},
+			key:      "commit_sha",
+			aliases:  []string{"sha", "s"},
+			expected: "short",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := getStringInputWithAliases(tt.inputs, tt.key, tt.aliases...)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestRequiredInputError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		operation  string
+		field      string
+		inputs     map[string]any
+		hint       string
+		wantField  string
+		wantOp     string
+		wantInputs bool
+		wantHint   string
+	}{
+		{
+			name:      "basic error with no extra inputs",
+			operation: "list_commit_pulls",
+			field:     "commit_sha",
+			inputs:    map[string]any{"operation": "list_commit_pulls", "owner": "o", "repo": "r"},
+			wantField: "commit_sha",
+			wantOp:    "list_commit_pulls",
+		},
+		{
+			name:       "error shows user inputs excluding common keys",
+			operation:  "list_commit_pulls",
+			field:      "commit_sha",
+			inputs:     map[string]any{"operation": "list_commit_pulls", "owner": "o", "repo": "r", "sha": "abc"},
+			wantField:  "commit_sha",
+			wantOp:     "list_commit_pulls",
+			wantInputs: true,
+		},
+		{
+			name:      "error with hint",
+			operation: "create_commit",
+			field:     "expected_head_oid",
+			inputs:    map[string]any{"operation": "create_commit", "owner": "o", "repo": "r"},
+			hint:      "use get_head_oid to fetch it",
+			wantField: "expected_head_oid",
+			wantOp:    "create_commit",
+			wantHint:  "use get_head_oid to fetch it",
+		},
+		{
+			name:       "error with extra inputs and hint",
+			operation:  "create_branch",
+			field:      "oid",
+			inputs:     map[string]any{"operation": "create_branch", "owner": "o", "repo": "r", "branch": "main"},
+			hint:       "commit SHA to point the branch at",
+			wantField:  "oid",
+			wantOp:     "create_branch",
+			wantInputs: true,
+			wantHint:   "commit SHA to point the branch at",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := requiredInputError(tt.operation, tt.field, tt.inputs, tt.hint)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantField)
+			assert.Contains(t, err.Error(), tt.wantOp)
+			if tt.wantInputs {
+				assert.Contains(t, err.Error(), "received inputs:")
+			}
+			if tt.wantHint != "" {
+				assert.Contains(t, err.Error(), tt.wantHint)
+			}
+		})
+	}
+}
+
+func BenchmarkRequiredInputError(b *testing.B) {
+	inputs := map[string]any{
+		"operation": "list_commit_pulls",
+		"owner":     "org",
+		"repo":      "repo",
+		"sha":       "abc123",
+		"per_page":  30,
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_ = requiredInputError("list_commit_pulls", "commit_sha", inputs, "")
+	}
+}

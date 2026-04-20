@@ -35,9 +35,7 @@ func TestNewCliParams(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := NewCliParams()
-			if *got != *tt.want {
-				t.Errorf("NewCliParams() = %+v, want %+v", got, tt.want)
-			}
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -210,4 +208,133 @@ func TestSafeEnvPrefix(t *testing.T) {
 			assert.Equal(t, tt.want, SafeEnvPrefix(tt.binaryName))
 		})
 	}
+}
+
+func TestActionFileNamesFor(t *testing.T) {
+	t.Parallel()
+	names := ActionFileNamesFor("mycli")
+	// Action files must come first.
+	assert.Equal(t, "actions.yaml", names[0])
+	assert.Equal(t, "actions.yml", names[1])
+	// Solution files follow as fallback.
+	assert.Contains(t, names, "solution.yaml")
+	assert.Contains(t, names, "mycli.yaml")
+}
+
+func TestSolutionOnlyFileNamesFor(t *testing.T) {
+	t.Parallel()
+	names := SolutionOnlyFileNamesFor("mycli")
+	for _, n := range names {
+		assert.False(t, IsActionFile(n), "should not contain action files: %s", n)
+	}
+	assert.Contains(t, names, "solution.yaml")
+	assert.Contains(t, names, "mycli.yaml")
+}
+
+func TestIsActionFile(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"actions.yaml", true},
+		{"actions.yml", true},
+		{"solution.yaml", false},
+		{"actions.json", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, IsActionFile(tt.name))
+		})
+	}
+}
+
+func TestFileNamesForMode(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name              string
+		mode              DiscoveryMode
+		binaryName        string
+		customActionFiles []string
+		wantFirst         string
+		wantContains      string
+		wantNotContains   string
+	}{
+		{
+			name:         "default mode returns all",
+			mode:         DiscoveryModeDefault,
+			binaryName:   "scafctl",
+			wantFirst:    "solution.yaml",
+			wantContains: "actions.yaml",
+		},
+		{
+			name:         "action mode prefers actions",
+			mode:         DiscoveryModeAction,
+			binaryName:   "scafctl",
+			wantFirst:    "actions.yaml",
+			wantContains: "solution.yaml",
+		},
+		{
+			name:            "solution mode excludes actions",
+			mode:            DiscoveryModeSolution,
+			binaryName:      "scafctl",
+			wantFirst:       "solution.yaml",
+			wantNotContains: "actions.yaml",
+		},
+		{
+			name:              "action mode with custom files",
+			mode:              DiscoveryModeAction,
+			binaryName:        "mycli",
+			customActionFiles: []string{"custom.yaml"},
+			wantFirst:         "custom.yaml",
+			wantContains:      "solution.yaml",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := FileNamesForMode(tt.mode, tt.binaryName, tt.customActionFiles)
+			assert.NotEmpty(t, result)
+			assert.Equal(t, tt.wantFirst, result[0])
+			if tt.wantContains != "" {
+				assert.Contains(t, result, tt.wantContains)
+			}
+			if tt.wantNotContains != "" {
+				assert.NotContains(t, result, tt.wantNotContains)
+			}
+		})
+	}
+}
+
+func TestDiscoveryMode_String(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		mode DiscoveryMode
+		want string
+	}{
+		{DiscoveryModeDefault, "default"},
+		{DiscoveryModeAction, "action"},
+		{DiscoveryModeSolution, "solution"},
+		{DiscoveryMode(99), "unknown(99)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, tt.mode.String())
+		})
+	}
+}
+
+func TestFileNamesForMode_CustomActionFiles_NoMutation(t *testing.T) {
+	t.Parallel()
+	custom := make([]string, 1, 10) // extra capacity to detect append mutation
+	custom[0] = "custom.yaml"
+	original := make([]string, len(custom))
+	copy(original, custom)
+
+	_ = FileNamesForMode(DiscoveryModeAction, "scafctl", custom)
+
+	assert.Equal(t, original, custom, "FileNamesForMode must not mutate the input slice")
 }

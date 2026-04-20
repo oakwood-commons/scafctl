@@ -204,6 +204,9 @@ type sharedResolverOptions struct {
 	// For dependency injection in tests
 	getter   get.Interface
 	registry *provider.Registry
+
+	// discoveryMode controls which file names auto-discovery searches for.
+	discoveryMode settings.DiscoveryMode
 }
 
 // getEffectiveResolverConfig returns resolver config values, using app config
@@ -572,17 +575,27 @@ func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context)
 		}))
 	}
 
+	if o.discoveryMode != settings.DiscoveryModeDefault {
+		opts = append(opts, prepare.WithDiscoveryMode(o.discoveryMode))
+	}
+
+	// Resolve binary name once for verbose output and user-facing messages.
+	binaryName := settings.CliBinaryName
+	if o.CliParams != nil && o.CliParams.BinaryName != "" {
+		binaryName = o.CliParams.BinaryName
+	}
+
 	// Emit verbose discovery information before loading
 	if w != nil && w.VerboseEnabled() {
 		switch o.File {
 		case "":
-			binaryName := settings.CliBinaryName
-			if o.CliParams != nil && o.CliParams.BinaryName != "" {
-				binaryName = o.CliParams.BinaryName
+			var customActionFiles []string
+			if o.CliParams != nil {
+				customActionFiles = o.CliParams.ActionDiscoveryFileNames
 			}
 			folders := settings.SolutionFoldersFor(binaryName)
-			fileNames := settings.SolutionFileNamesFor(binaryName)
-			w.Verbosef("Auto-discovering solution (binary=%s)", binaryName)
+			fileNames := settings.FileNamesForMode(o.discoveryMode, binaryName, customActionFiles)
+			w.Verbosef("Auto-discovering solution (binary=%s, mode=%s)", binaryName, o.discoveryMode)
 			w.Verbosef("  Search folders: %v", folders)
 			w.Verbosef("  Search filenames: %v", fileNames)
 		case "-":
@@ -626,6 +639,16 @@ func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context)
 				w.Infof("Solution: %s", name)
 			case source != "":
 				w.Infof("Solution: %s", source)
+			}
+
+			// Emit discovery-specific informational messages.
+			disc := result.DiscoveredFrom
+			if disc.AlternatePath != "" {
+				if disc.IsActionFile {
+					w.Infof("  (solution.yaml also found at %s)", disc.AlternatePath)
+				} else {
+					w.Infof("  (actions.yaml also found at %s; use '%s run action' to execute actions)", disc.AlternatePath, binaryName)
+				}
 			}
 		}
 	}

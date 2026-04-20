@@ -43,8 +43,9 @@ type Options struct {
 	flags.KvxOutputFlags
 
 	// Filter options
-	Custom bool // Show only custom (scafctl-specific) functions
-	Sprig  bool // Show only sprig library functions
+	Custom bool   // Show only custom (scafctl-specific) functions
+	Sprig  bool   // Show only sprig library functions
+	Search string // Search functions by name or description
 
 	// For dependency injection in tests
 	allFn    func() gotmpl.ExtFunctionList
@@ -111,6 +112,7 @@ Examples:
 	// Filter flags
 	cCmd.Flags().BoolVar(&options.Custom, "custom", false, fmt.Sprintf("Show only custom %s functions", cliParams.BinaryName))
 	cCmd.Flags().BoolVar(&options.Sprig, "sprig", false, "Show only sprig library functions")
+	cCmd.Flags().StringVarP(&options.Search, "search", "s", "", "Search functions by name or description")
 
 	return cCmd
 }
@@ -149,6 +151,18 @@ func (o *Options) RunListFunctions(ctx context.Context) error {
 	}
 
 	funcs := o.getFunctions()
+
+	// Apply search filter
+	if o.Search != "" {
+		funcs = filterBySearch(funcs, o.Search)
+		if len(funcs) == 0 {
+			err := fmt.Errorf("no Go template functions matching %q found", o.Search)
+			if w := writer.FromContext(ctx); w != nil {
+				w.Errorf("%v", err)
+			}
+			return exitcode.WithCode(err, exitcode.FileNotFound)
+		}
+	}
 
 	// Interactive mode
 	if o.Interactive {
@@ -297,4 +311,17 @@ func (o *Options) writeOutput(ctx context.Context, data any) error {
 	)
 
 	return kvxOpts.Write(data)
+}
+
+// filterBySearch filters functions by substring match on name or description.
+func filterBySearch(funcs gotmpl.ExtFunctionList, query string) gotmpl.ExtFunctionList {
+	q := strings.ToLower(query)
+	filtered := make(gotmpl.ExtFunctionList, 0, len(funcs))
+	for _, fn := range funcs {
+		if strings.Contains(strings.ToLower(fn.Name), q) ||
+			strings.Contains(strings.ToLower(fn.Description), q) {
+			filtered = append(filtered, fn)
+		}
+	}
+	return filtered
 }

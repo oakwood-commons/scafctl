@@ -16,15 +16,15 @@ import (
 func (p *GitHubProvider) executeCreatePullRequest(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
 	title := getStringInput(inputs, "title")
 	if title == "" {
-		return nil, fmt.Errorf("'title' is required for create_pull_request operation")
+		return nil, requiredInputError("create_pull_request", "title", inputs, "")
 	}
 	head := getStringInput(inputs, "head")
 	if head == "" {
-		return nil, fmt.Errorf("'head' is required for create_pull_request operation")
+		return nil, requiredInputError("create_pull_request", "head", inputs, "")
 	}
 	base := getStringInput(inputs, "base")
 	if base == "" {
-		return nil, fmt.Errorf("'base' is required for create_pull_request operation")
+		return nil, requiredInputError("create_pull_request", "base", inputs, "")
 	}
 
 	repoID, err := p.resolveRepoID(ctx, client, apiBase, owner, repo)
@@ -80,7 +80,7 @@ func (p *GitHubProvider) executeCreatePullRequest(ctx context.Context, client *h
 func (p *GitHubProvider) executeUpdatePullRequest(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
 	num, ok := getIntInput(inputs, "number")
 	if !ok || num == 0 {
-		return nil, fmt.Errorf("'number' is required for update_pull_request operation")
+		return nil, requiredInputError("update_pull_request", "number", inputs, "")
 	}
 
 	prID, err := p.resolvePullRequestID(ctx, client, apiBase, owner, repo, num)
@@ -132,7 +132,7 @@ func (p *GitHubProvider) executeUpdatePullRequest(ctx context.Context, client *h
 func (p *GitHubProvider) executeMergePullRequest(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
 	num, ok := getIntInput(inputs, "number")
 	if !ok || num == 0 {
-		return nil, fmt.Errorf("'number' is required for merge_pull_request operation")
+		return nil, requiredInputError("merge_pull_request", "number", inputs, "")
 	}
 
 	prID, err := p.resolvePullRequestID(ctx, client, apiBase, owner, repo, num)
@@ -190,7 +190,7 @@ func (p *GitHubProvider) executeMergePullRequest(ctx context.Context, client *ht
 func (p *GitHubProvider) executeClosePullRequest(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
 	num, ok := getIntInput(inputs, "number")
 	if !ok || num == 0 {
-		return nil, fmt.Errorf("'number' is required for close_pull_request operation")
+		return nil, requiredInputError("close_pull_request", "number", inputs, "")
 	}
 
 	prID, err := p.resolvePullRequestID(ctx, client, apiBase, owner, repo, num)

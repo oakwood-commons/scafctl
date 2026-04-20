@@ -245,6 +245,9 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 		"names", o.Names,
 		"dryRun", o.DryRun)
 
+	// Prefer action files during auto-discovery.
+	o.discoveryMode = settings.DiscoveryModeAction
+
 	absOutputDir, err := o.resolveOutputDir(ctx, o.DryRun)
 	if err != nil {
 		return o.exitWithCode(ctx, err, exitcode.InvalidInput)

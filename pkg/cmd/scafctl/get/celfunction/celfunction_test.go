@@ -252,3 +252,106 @@ func TestCommandCelFunction_Creation(t *testing.T) {
 	assert.NotNil(t, cmd.Flags().Lookup("custom"))
 	assert.NotNil(t, cmd.Flags().Lookup("builtin"))
 }
+
+func TestRunListFunctions_SearchByFunctionName(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	opts := mkTestOpts(&buf)
+	opts.Search = "test_custom"
+	ctx := settings.IntoContext(context.Background(), opts.CliParams)
+	ctx = writer.WithWriter(ctx, writer.New(opts.IOStreams, opts.CliParams))
+
+	err := opts.RunListFunctions(ctx)
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.Contains(t, output, "test.custom")
+	assert.NotContains(t, output, "test.builtin")
+}
+
+func TestRunListFunctions_SearchByDescription(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	opts := mkTestOpts(&buf)
+	opts.Search = "built-in"
+	ctx := settings.IntoContext(context.Background(), opts.CliParams)
+	ctx = writer.WithWriter(ctx, writer.New(opts.IOStreams, opts.CliParams))
+
+	err := opts.RunListFunctions(ctx)
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.Contains(t, output, "test.builtin")
+	assert.NotContains(t, output, "test.custom")
+}
+
+func TestRunListFunctions_SearchNoMatch(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	opts := mkTestOpts(&buf)
+	opts.Search = "nonexistent_xyz"
+	ctx := settings.IntoContext(context.Background(), opts.CliParams)
+	ctx = writer.WithWriter(ctx, writer.New(opts.IOStreams, opts.CliParams))
+
+	err := opts.RunListFunctions(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no CEL functions matching")
+}
+
+func TestRunListFunctions_FunctionsColumnInTable(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	opts := mkTestOpts(&buf)
+	ctx := settings.IntoContext(context.Background(), opts.CliParams)
+	ctx = writer.WithWriter(ctx, writer.New(opts.IOStreams, opts.CliParams))
+
+	err := opts.RunListFunctions(ctx)
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.Contains(t, output, "test_custom")
+	assert.Contains(t, output, "test_builtin")
+}
+
+func TestFilterBySearch(t *testing.T) {
+	t.Parallel()
+	funcs := celexp.ExtFunctionList{
+		{Name: "encoders", Description: "Encoding functions", FunctionNames: []string{"base64.decode", "base64.encode"}},
+		{Name: "strings", Description: "String functions", FunctionNames: []string{"charAt", "join"}},
+		{Name: "math", Description: "Math functions", FunctionNames: []string{"math.abs"}},
+	}
+
+	tests := []struct {
+		name    string
+		query   string
+		wantLen int
+		wantHas string
+	}{
+		{"match by function name", "base64", 1, "encoders"},
+		{"match by group name", "strings", 1, "strings"},
+		{"match by description", "Math", 1, "math"},
+		{"case insensitive", "BASE64", 1, "encoders"},
+		{"no match", "nonexistent", 0, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := filterBySearch(funcs, tt.query)
+			assert.Len(t, result, tt.wantLen)
+			if tt.wantLen > 0 {
+				assert.Equal(t, tt.wantHas, result[0].Name)
+			}
+		})
+	}
+}
+
+func TestCommandCelFunction_SearchFlag(t *testing.T) {
+	t.Parallel()
+	cliParams := &settings.Run{}
+	ioStreams := &terminal.IOStreams{}
+	cmd := CommandCelFunction(cliParams, ioStreams, "test/path")
+
+	f := cmd.Flags().Lookup("search")
+	assert.NotNil(t, f)
+	assert.Equal(t, "s", f.Shorthand)
+}

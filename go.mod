@@ -29,7 +29,7 @@ require (
 	github.com/hashicorp/go-retryablehttp v0.7.8
 	github.com/hashicorp/hcl/v2 v2.24.0
 	github.com/mark3labs/mcp-go v0.47.1
-	github.com/oakwood-commons/kvx v0.8.2
+	github.com/oakwood-commons/kvx v0.10.0
 	github.com/oakwood-commons/scafctl-plugin-sdk v0.1.1
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1

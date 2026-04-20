@@ -96,12 +96,12 @@ func TestDisplayLoginResult(t *testing.T) {
 			expected: []string{"Authentication successful", "sameuser"},
 		},
 		{
-			name: "minimal claims",
+			name: "minimal claims with device code flow",
 			result: &auth.Result{
 				Claims: &auth.Claims{},
 			},
 			flow:     auth.FlowDeviceCode,
-			expected: []string{"Authentication successful"},
+			expected: []string{"Authentication successful", "Device Code"},
 		},
 	}
 

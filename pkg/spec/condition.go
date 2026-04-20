@@ -4,6 +4,7 @@
 package spec
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -115,7 +116,7 @@ func (c *Condition) UnmarshalJSON(data []byte) error {
 	*c = Condition{}
 
 	// Null -> zero-value Condition (nil Expr).
-	if string(data) == "null" {
+	if string(bytes.TrimSpace(data)) == "null" {
 		return nil
 	}
 

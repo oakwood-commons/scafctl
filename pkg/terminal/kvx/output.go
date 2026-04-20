@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
+	"os"
 	"reflect"
 	"sort"
 	"strings"
@@ -16,6 +18,7 @@ import (
 	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	toml "github.com/pelletier/go-toml/v2"
+	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 )
 
@@ -63,6 +66,16 @@ const (
 
 	// OutputFormatTOML outputs as TOML (for config files/scripting)
 	OutputFormatTOML OutputFormat = "toml"
+)
+
+const (
+	// minColumnWidth is the minimum average characters per column before
+	// writeText switches from table to list rendering. Tables with very
+	// narrow columns become unreadable.
+	minColumnWidth = 10
+
+	// defaultTermWidth is assumed when the terminal width cannot be detected.
+	defaultTermWidth = 80
 )
 
 // String returns the string representation of the output format.
@@ -659,12 +672,38 @@ func (o *OutputOptions) writeText(data any) error {
 	}
 
 	hints := resolveColumnHints(o.SchemaJSON, o.ColumnHints)
+
+	piped := !IsTerminal(o.IOStreams.Out)
+
+	// When there are many columns relative to the available width, a table
+	// becomes unreadable because each column gets only a few characters.
+	// Detect this and fall back to a vertical list layout.
+	// Also fall back when output is piped and data contains nested
+	// objects/arrays, because the columnar renderer serializes them as
+	// truncated one-line JSON which is unusable in scripts.
+	if cols := countDataColumns(outputData); cols > 0 {
+		width := o.terminalWidth()
+		if width/(cols+1) < minColumnWidth || (piped && hasNestedValues(outputData)) {
+			output := tui.RenderList(outputData, true)
+			fmt.Fprint(o.IOStreams.Out, output)
+			return nil
+		}
+	}
+
 	output := tui.RenderTable(outputData, tui.TableOptions{
 		Bordered:    false,
 		NoColor:     true,
 		ColumnOrder: o.ColumnOrder,
 		ColumnHints: hints,
 	})
+
+	// When piped on Windows the console defaults to OEM/CP437 encoding,
+	// which garbles UTF-8 box-drawing characters (e.g., ─ → ΓöÇ).
+	// Replace them with ASCII dashes so piped output is always readable.
+	if piped {
+		output = strings.ReplaceAll(output, "─", "-")
+	}
+
 	fmt.Fprint(o.IOStreams.Out, output)
 	return nil
 }
@@ -708,8 +747,16 @@ func writeSummaryLine(w io.Writer, summary map[string]any) {
 }
 
 // writeYAML writes data as YAML.
+// Before marshaling, literal escape sequences like \n in string values are
+// expanded to real newlines so that yaml.Marshal renders them as readable
+// block scalars instead of single-line strings with escaped characters.
+//
+// NOTE: expandEscapedNewlines mutates maps and slices in place. This is safe
+// here because writeYAML is a terminal step that does not return data to the
+// caller. Do not reuse data after calling writeYAML.
 func (o *OutputOptions) writeYAML(data any) error {
-	yamlData, err := yaml.Marshal(data)
+	expanded := expandEscapedNewlines(data)
+	yamlData, err := yaml.Marshal(expanded)
 	if err != nil {
 		return fmt.Errorf("failed to marshal YAML: %w", err)
 	}
@@ -892,4 +939,96 @@ func csvApplyColumnOrder(headers, order []string) []string {
 		}
 	}
 	return result
+}
+
+// terminalWidth returns the current terminal width, falling back to
+// defaultTermWidth when detection fails (e.g., piped output).
+func (o *OutputOptions) terminalWidth() int {
+	if f, ok := o.IOStreams.Out.(*os.File); ok {
+		fd := f.Fd()
+		if fd <= uintptr(math.MaxInt) {
+			if w, _, err := term.GetSize(int(fd)); err == nil && w > 0 {
+				return w
+			}
+		}
+	}
+	return defaultTermWidth
+}
+
+// countDataColumns returns the number of columns that a table rendering
+// would produce for the given data. It inspects the first map element in
+// a slice or a single map's keys.
+func countDataColumns(data any) int {
+	switch v := data.(type) {
+	case []any:
+		if len(v) == 0 {
+			return 0
+		}
+		if m, ok := v[0].(map[string]any); ok {
+			return len(m)
+		}
+	case map[string]any:
+		return len(v)
+	}
+	return 0
+}
+
+// hasNestedValues reports whether any value in the first row of data is
+// itself a map or slice. Such values are serialized as truncated JSON in
+// columnar tables, making piped output unusable.
+func hasNestedValues(data any) bool {
+	var row map[string]any
+	switch v := data.(type) {
+	case []any:
+		if len(v) == 0 {
+			return false
+		}
+		m, ok := v[0].(map[string]any)
+		if !ok {
+			return false
+		}
+		row = m
+	case map[string]any:
+		row = v
+	default:
+		return false
+	}
+	for _, val := range row {
+		switch val.(type) {
+		case map[string]any, []any:
+			return true
+		}
+	}
+	return false
+}
+
+// expandEscapedNewlines recursively walks data and replaces literal "\n"
+// (two characters: backslash + n) in string values with real newline
+// characters. This ensures yaml.Marshal renders multiline strings as
+// readable block scalars instead of opaque single-line strings.
+//
+// Maps and slices are modified in place to avoid allocation when the
+// caller does not need the original data (e.g., writeYAML). String
+// values are replaced by their expanded copies only when escapes exist.
+func expandEscapedNewlines(data any) any {
+	switch v := data.(type) {
+	case string:
+		if strings.Contains(v, `\n`) {
+			v = strings.ReplaceAll(v, `\r\n`, "\n")
+			v = strings.ReplaceAll(v, `\n`, "\n")
+		}
+		return v
+	case map[string]any:
+		for k, val := range v {
+			v[k] = expandEscapedNewlines(val)
+		}
+		return v
+	case []any:
+		for i, val := range v {
+			v[i] = expandEscapedNewlines(val)
+		}
+		return v
+	default:
+		return data
+	}
 }

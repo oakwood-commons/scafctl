@@ -19,7 +19,7 @@ import (
 func (p *GitHubProvider) executeListCheckRuns(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
 	ref := getStringInput(inputs, "ref")
 	if ref == "" {
-		return nil, fmt.Errorf("'ref' is required for list_check_runs operation")
+		return nil, requiredInputError("list_check_runs", "ref", inputs, "")
 	}
 
 	restURL := fmt.Sprintf("%s/repos/%s/%s/commits/%s/check-runs", apiBase, owner, repo, url.PathEscape(ref))
@@ -72,7 +72,7 @@ func (p *GitHubProvider) executeListCheckRuns(ctx context.Context, client *httpc
 func (p *GitHubProvider) executeGetWorkflowRun(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
 	runID, ok := getIntInput(inputs, "run_id")
 	if !ok || runID == 0 {
-		return nil, fmt.Errorf("'run_id' is required for get_workflow_run operation")
+		return nil, requiredInputError("get_workflow_run", "run_id", inputs, "")
 	}
 
 	// Fetch the workflow run
@@ -145,9 +145,9 @@ func (p *GitHubProvider) executeGetWorkflowRun(ctx context.Context, client *http
 // executeListCommitPulls lists pull requests associated with a commit via the REST API.
 // Uses: GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls
 func (p *GitHubProvider) executeListCommitPulls(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
-	commitSHA := getStringInput(inputs, "commit_sha")
+	commitSHA := getStringInputWithAliases(inputs, "commit_sha", "sha")
 	if commitSHA == "" {
-		return nil, fmt.Errorf("'commit_sha' is required for list_commit_pulls operation")
+		return nil, requiredInputError("list_commit_pulls", "commit_sha", inputs, "")
 	}
 
 	restURL := fmt.Sprintf("%s/repos/%s/%s/commits/%s/pulls", apiBase, owner, repo, url.PathEscape(commitSHA))
