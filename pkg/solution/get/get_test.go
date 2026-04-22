@@ -303,7 +303,9 @@ func TestFromUrl(t *testing.T) {
 		}))
 		defer server.Close()
 
-		getter := NewGetter()
+		cfg := httpc.DefaultConfig()
+		cfg.EnableCache = false
+		getter := NewGetter(WithHTTPClient(httpc.NewClient(cfg)))
 		ctx := context.Background()
 
 		sol, err := getter.FromURL(ctx, server.URL)

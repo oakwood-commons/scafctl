@@ -105,5 +105,5 @@ func TestHTTPProvider_Execute_BlocksPrivateIP(t *testing.T) {
 		"method": "GET",
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "allowPrivateIPs")
+	assert.Contains(t, err.Error(), "AllowPrivateIPs")
 }

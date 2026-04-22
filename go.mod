@@ -29,6 +29,7 @@ require (
 	github.com/hashicorp/go-retryablehttp v0.7.8
 	github.com/hashicorp/hcl/v2 v2.24.0
 	github.com/mark3labs/mcp-go v0.47.1
+	github.com/oakwood-commons/httpc v0.1.0
 	github.com/oakwood-commons/kvx v0.10.0
 	github.com/oakwood-commons/scafctl-plugin-sdk v0.1.1
 	github.com/opencontainers/go-digest v1.0.0
@@ -63,7 +64,6 @@ require (
 	google.golang.org/grpc v1.80.0
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
-	ivan.dev/httpcache v0.1.1
 	k8s.io/apimachinery v0.35.3
 	mvdan.cc/sh/moreinterp v0.0.0-20260208152214-f980f5eeab64
 	mvdan.cc/sh/v3 v3.13.1
@@ -197,5 +197,6 @@ require (
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/tools v0.44.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect
+	ivan.dev/httpcache v0.1.1 // indirect
 	moul.io/http2curl/v2 v2.3.0 // indirect
 )
