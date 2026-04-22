@@ -788,3 +788,150 @@ func TestFilterPreReleaseArtifacts(t *testing.T) {
 		})
 	}
 }
+
+func TestFilterArtifactsByCatalog(t *testing.T) {
+	t.Parallel()
+
+	artifacts := []catalog.ArtifactInfo{
+		{Reference: catalog.Reference{Name: "a", Kind: catalog.ArtifactKindSolution}, Catalog: "local"},
+		{Reference: catalog.Reference{Name: "b", Kind: catalog.ArtifactKindSolution}, Catalog: "remote"},
+		{Reference: catalog.Reference{Name: "c", Kind: catalog.ArtifactKindSolution}, Catalog: "local"},
+	}
+
+	result := filterArtifactsByCatalog(artifacts, "local")
+	assert.Len(t, result, 2)
+	assert.Equal(t, "a", result[0].Reference.Name)
+	assert.Equal(t, "c", result[1].Reference.Name)
+}
+
+func TestFilterArtifactsByCatalog_NoMatch(t *testing.T) {
+	t.Parallel()
+
+	artifacts := []catalog.ArtifactInfo{
+		{Reference: catalog.Reference{Name: "a"}, Catalog: "local"},
+	}
+
+	result := filterArtifactsByCatalog(artifacts, "remote")
+	assert.Empty(t, result)
+}
+
+func TestIsConfiguredCatalog(t *testing.T) {
+	t.Parallel()
+
+	cfg := &appconfig.Config{
+		Catalogs: []appconfig.CatalogConfig{
+			{Name: "local", Type: appconfig.CatalogTypeFilesystem},
+			{Name: "official", Type: appconfig.CatalogTypeOCI},
+		},
+	}
+	ctx := appconfig.WithConfig(context.Background(), cfg)
+
+	assert.True(t, isConfiguredCatalog(ctx, "local"))
+	assert.True(t, isConfiguredCatalog(ctx, "official"))
+	assert.False(t, isConfiguredCatalog(ctx, "unknown"))
+	assert.False(t, isConfiguredCatalog(context.Background(), "local"))
+}
+
+func TestResolveDiscoveryStrategy(t *testing.T) {
+	t.Parallel()
+
+	cfg := &appconfig.Config{
+		Catalogs: []appconfig.CatalogConfig{
+			{Name: "official", Type: appconfig.CatalogTypeOCI, DiscoveryStrategy: appconfig.DiscoveryStrategyIndex},
+			{Name: "other", Type: appconfig.CatalogTypeOCI},
+		},
+	}
+	ctx := appconfig.WithConfig(context.Background(), cfg)
+
+	assert.Equal(t, appconfig.DiscoveryStrategyIndex, resolveDiscoveryStrategy(ctx, "official"))
+	assert.Equal(t, appconfig.DiscoveryStrategy(""), resolveDiscoveryStrategy(ctx, "other"))
+	assert.Equal(t, appconfig.DiscoveryStrategy(""), resolveDiscoveryStrategy(ctx, "unknown"))
+	assert.Equal(t, appconfig.DiscoveryStrategy(""), resolveDiscoveryStrategy(ctx, ""))
+	assert.Equal(t, appconfig.DiscoveryStrategy(""), resolveDiscoveryStrategy(context.Background(), "official"))
+}
+
+func TestDeduplicateArtifacts(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	artifacts := []catalog.ArtifactInfo{
+		{
+			Reference: catalog.Reference{Name: "app", Kind: catalog.ArtifactKindSolution, Version: semver.MustParse("1.0.0")},
+			Digest:    "sha256:abc",
+			CreatedAt: now,
+			Catalog:   "local",
+		},
+		{
+			Reference: catalog.Reference{Name: "app", Kind: catalog.ArtifactKindSolution, Version: semver.MustParse("1.0.0")},
+			Digest:    "",
+			Catalog:   "remote",
+		},
+	}
+
+	result := deduplicateArtifacts(artifacts)
+	require.Len(t, result, 1)
+	assert.Equal(t, "local, remote", result[0].Catalog)
+	assert.Equal(t, "sha256:abc", result[0].Digest, "should prefer row with digest")
+	assert.Equal(t, now, result[0].CreatedAt, "should prefer row with createdAt")
+}
+
+func TestDeduplicateArtifacts_PreferSecondRowMetadata(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	artifacts := []catalog.ArtifactInfo{
+		{
+			Reference: catalog.Reference{Name: "app", Kind: catalog.ArtifactKindSolution, Version: semver.MustParse("1.0.0")},
+			Digest:    "",
+			Catalog:   "remote",
+		},
+		{
+			Reference: catalog.Reference{Name: "app", Kind: catalog.ArtifactKindSolution, Version: semver.MustParse("1.0.0")},
+			Digest:    "sha256:abc",
+			CreatedAt: now,
+			Catalog:   "local",
+		},
+	}
+
+	result := deduplicateArtifacts(artifacts)
+	require.Len(t, result, 1)
+	assert.Equal(t, "remote, local", result[0].Catalog)
+	assert.Equal(t, "sha256:abc", result[0].Digest)
+	assert.Equal(t, now, result[0].CreatedAt)
+}
+
+func TestDeduplicateArtifacts_DifferentVersionsNotMerged(t *testing.T) {
+	t.Parallel()
+
+	artifacts := []catalog.ArtifactInfo{
+		{
+			Reference: catalog.Reference{Name: "app", Kind: catalog.ArtifactKindSolution, Version: semver.MustParse("1.0.0")},
+			Catalog:   "local",
+		},
+		{
+			Reference: catalog.Reference{Name: "app", Kind: catalog.ArtifactKindSolution, Version: semver.MustParse("2.0.0")},
+			Catalog:   "remote",
+		},
+	}
+
+	result := deduplicateArtifacts(artifacts)
+	assert.Len(t, result, 2)
+}
+
+func TestDeduplicateArtifacts_DifferentKindsNotMerged(t *testing.T) {
+	t.Parallel()
+
+	artifacts := []catalog.ArtifactInfo{
+		{
+			Reference: catalog.Reference{Name: "app", Kind: catalog.ArtifactKindSolution, Version: semver.MustParse("1.0.0")},
+			Catalog:   "local",
+		},
+		{
+			Reference: catalog.Reference{Name: "app", Kind: catalog.ArtifactKindProvider, Version: semver.MustParse("1.0.0")},
+			Catalog:   "remote",
+		},
+	}
+
+	result := deduplicateArtifacts(artifacts)
+	assert.Len(t, result, 2)
+}

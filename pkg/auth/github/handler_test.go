@@ -18,6 +18,63 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Compile-time interface check.
+var _ auth.FlowReporter = (*Handler)(nil)
+
+func TestHandler_ActiveFlow(t *testing.T) {
+	t.Run("no credentials returns empty", func(t *testing.T) {
+		t.Setenv(EnvGitHubToken, "")
+		t.Setenv(EnvGHToken, "")
+
+		store := secrets.NewMockStore()
+		h, err := New(WithSecretStore(store))
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		assert.Empty(t, h.ActiveFlow(ctx))
+	})
+
+	t.Run("PAT detected from env", func(t *testing.T) {
+		t.Setenv(EnvGitHubToken, "ghp_faketoken123")
+		t.Setenv(EnvGHToken, "")
+
+		store := secrets.NewMockStore()
+		h, err := New(WithSecretStore(store))
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		assert.Equal(t, auth.FlowPAT, h.ActiveFlow(ctx))
+	})
+
+	t.Run("refresh token means device code", func(t *testing.T) {
+		t.Setenv(EnvGitHubToken, "")
+		t.Setenv(EnvGHToken, "")
+
+		store := secrets.NewMockStore()
+		h, err := New(WithSecretStore(store))
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		require.NoError(t, store.Set(ctx, SecretKeyRefreshToken, []byte("fake-refresh")))
+
+		assert.Equal(t, auth.FlowDeviceCode, h.ActiveFlow(ctx))
+	})
+
+	t.Run("access token means github app", func(t *testing.T) {
+		t.Setenv(EnvGitHubToken, "")
+		t.Setenv(EnvGHToken, "")
+
+		store := secrets.NewMockStore()
+		h, err := New(WithSecretStore(store))
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		require.NoError(t, store.Set(ctx, SecretKeyAccessToken, []byte("fake-access")))
+
+		assert.Equal(t, auth.FlowGitHubApp, h.ActiveFlow(ctx))
+	})
+}
+
 func TestHandler_NewWithDefaults(t *testing.T) {
 	store := secrets.NewMockStore()
 	handler, err := New(WithSecretStore(store))

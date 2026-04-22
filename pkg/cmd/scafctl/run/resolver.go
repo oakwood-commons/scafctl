@@ -373,16 +373,23 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 	// --base-dir takes precedence; otherwise use the solution file's directory.
 	// When SolutionDirectory is set, also set WorkingDirectory so that providers
 	// like file/exec continue to resolve paths against the caller's CWD.
-	// For bundle/catalog runs solutionDir is empty and the process CWD is the
-	// bundle extraction directory, which is the correct base.
-	if o.BaseDir != "" {
+	//
+	// For bundle runs (catalog: prefix with non-empty solutionDir), only set
+	// SolutionDirectory so resolver paths resolve against the bundle extraction
+	// directory. For unbundled catalog runs, solutionDir is empty and paths
+	// fall back to the process CWD.
+	isBundleRun := strings.HasPrefix(sol.GetPath(), "catalog:") && solutionDir != ""
+	switch {
+	case o.BaseDir != "":
 		absBaseDir, baseDirErr := stdfilepath.Abs(o.BaseDir)
 		if baseDirErr != nil {
 			return o.exitWithCode(ctx, fmt.Errorf("--base-dir: %w", baseDirErr), exitcode.InvalidInput)
 		}
 		ctx = provider.WithWorkingDirectory(ctx, originalCwd)
 		ctx = provider.WithSolutionDirectory(ctx, absBaseDir)
-	} else if solutionDir != "" {
+	case isBundleRun:
+		ctx = provider.WithSolutionDirectory(ctx, solutionDir)
+	case solutionDir != "":
 		ctx = provider.WithWorkingDirectory(ctx, originalCwd)
 		ctx = provider.WithSolutionDirectory(ctx, solutionDir)
 	}

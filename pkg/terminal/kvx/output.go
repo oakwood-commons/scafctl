@@ -747,16 +747,10 @@ func writeSummaryLine(w io.Writer, summary map[string]any) {
 }
 
 // writeYAML writes data as YAML.
-// Before marshaling, literal escape sequences like \n in string values are
-// expanded to real newlines so that yaml.Marshal renders them as readable
-// block scalars instead of single-line strings with escaped characters.
-//
-// NOTE: expandEscapedNewlines mutates maps and slices in place. This is safe
-// here because writeYAML is a terminal step that does not return data to the
-// caller. Do not reuse data after calling writeYAML.
+// yaml.Marshal natively renders strings containing real newlines as readable
+// block scalars. No pre-processing is needed.
 func (o *OutputOptions) writeYAML(data any) error {
-	expanded := expandEscapedNewlines(data)
-	yamlData, err := yaml.Marshal(expanded)
+	yamlData, err := yaml.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("failed to marshal YAML: %w", err)
 	}
@@ -1000,35 +994,4 @@ func hasNestedValues(data any) bool {
 		}
 	}
 	return false
-}
-
-// expandEscapedNewlines recursively walks data and replaces literal "\n"
-// (two characters: backslash + n) in string values with real newline
-// characters. This ensures yaml.Marshal renders multiline strings as
-// readable block scalars instead of opaque single-line strings.
-//
-// Maps and slices are modified in place to avoid allocation when the
-// caller does not need the original data (e.g., writeYAML). String
-// values are replaced by their expanded copies only when escapes exist.
-func expandEscapedNewlines(data any) any {
-	switch v := data.(type) {
-	case string:
-		if strings.Contains(v, `\n`) {
-			v = strings.ReplaceAll(v, `\r\n`, "\n")
-			v = strings.ReplaceAll(v, `\n`, "\n")
-		}
-		return v
-	case map[string]any:
-		for k, val := range v {
-			v[k] = expandEscapedNewlines(val)
-		}
-		return v
-	case []any:
-		for i, val := range v {
-			v[i] = expandEscapedNewlines(val)
-		}
-		return v
-	default:
-		return data
-	}
 }

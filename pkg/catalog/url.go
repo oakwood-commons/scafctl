@@ -193,16 +193,15 @@ func lookupCatalogURLFromConfig(ctx context.Context, name string) (string, error
 	}
 
 	cat, ok := cfg.GetCatalog(name)
-	if !ok {
-		return "", fmt.Errorf("catalog %q not found in configuration\n\nTo add it:\n  %s config add-catalog %s --type oci --url <registry-url>", name, settings.BinaryNameFromContext(ctx), name)
+	if ok {
+		url := catalogURLFromCatalogConfig(cat)
+		if url == "" {
+			return "", fmt.Errorf("catalog %q has no URL configured", name)
+		}
+		return url, nil
 	}
 
-	url := catalogURLFromCatalogConfig(cat)
-	if url == "" {
-		return "", fmt.Errorf("catalog %q has no URL configured", name)
-	}
-
-	return url, nil
+	return "", fmt.Errorf("catalog %q not found in configuration\n\nTo add it:\n  %s config add-catalog %s --type oci --url <registry-url>", name, settings.BinaryNameFromContext(ctx), name)
 }
 
 // catalogURLFromCatalogConfig extracts a usable URL from a CatalogConfig.

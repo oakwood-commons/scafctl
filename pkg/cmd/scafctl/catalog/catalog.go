@@ -188,6 +188,19 @@ func resolveAuthScopeForRegistry(ctx context.Context, registry string) string {
 	return catalog.InferDefaultScope(registry)
 }
 
+// resolveDiscoveryStrategy returns the discovery strategy for a named catalog.
+// Returns empty string (treated as "auto") when no catalog config is found.
+func resolveDiscoveryStrategy(ctx context.Context, catalogFlag string) config.DiscoveryStrategy {
+	cfg := config.FromContext(ctx)
+	if cfg == nil || catalogFlag == "" {
+		return ""
+	}
+	if cat, ok := cfg.GetCatalog(catalogFlag); ok {
+		return cat.DiscoveryStrategy
+	}
+	return ""
+}
+
 // verboseRemoteInfo logs user-facing verbose diagnostics about how a remote
 // catalog operation was resolved: registry, repository, auth handler, scope,
 // credential source, and handler auth status.
@@ -364,4 +377,74 @@ func filterPreReleaseArtifacts(artifacts []catalog.ArtifactInfo) []catalog.Artif
 		return artifacts
 	}
 	return stable
+}
+
+// filterArtifactsByCatalog keeps only artifacts whose Catalog field matches the
+// given name (case-sensitive).
+func filterArtifactsByCatalog(artifacts []catalog.ArtifactInfo, catalogName string) []catalog.ArtifactInfo {
+	filtered := make([]catalog.ArtifactInfo, 0, len(artifacts))
+	for _, a := range artifacts {
+		if a.Catalog == catalogName {
+			filtered = append(filtered, a)
+		}
+	}
+	return filtered
+}
+
+// isConfiguredCatalog returns true if the given name matches a catalog entry
+// in the application configuration.
+func isConfiguredCatalog(ctx context.Context, name string) bool {
+	cfg := config.FromContext(ctx)
+	if cfg == nil {
+		return false
+	}
+	_, ok := cfg.GetCatalog(name)
+	return ok
+}
+
+// deduplicateArtifacts merges rows with the same name+tag+kind across catalogs.
+// When duplicates exist, the row with richer metadata (digest, createdAt) is
+// preferred and catalog names are combined into a comma-separated string.
+func deduplicateArtifacts(artifacts []catalog.ArtifactInfo) []catalog.ArtifactInfo {
+	type dedupKey struct {
+		name string
+		tag  string
+		kind catalog.ArtifactKind
+	}
+
+	keyFor := func(a catalog.ArtifactInfo) dedupKey {
+		tag := a.Tag
+		if tag == "" && a.Reference.Version != nil {
+			tag = a.Reference.Version.String()
+		}
+		return dedupKey{name: a.Reference.Name, tag: tag, kind: a.Reference.Kind}
+	}
+
+	seen := make(map[dedupKey]int, len(artifacts)) // key → index in result
+	result := make([]catalog.ArtifactInfo, 0, len(artifacts))
+
+	for _, a := range artifacts {
+		k := keyFor(a)
+		if idx, ok := seen[k]; ok {
+			existing := &result[idx]
+
+			// Combine catalog names (avoid duplicates).
+			if !strings.Contains(existing.Catalog, a.Catalog) {
+				existing.Catalog = existing.Catalog + ", " + a.Catalog
+			}
+
+			// Prefer richer metadata.
+			if existing.Digest == "" && a.Digest != "" {
+				existing.Digest = a.Digest
+			}
+			if existing.CreatedAt.IsZero() && !a.CreatedAt.IsZero() {
+				existing.CreatedAt = a.CreatedAt
+			}
+		} else {
+			seen[k] = len(result)
+			result = append(result, a)
+		}
+	}
+
+	return result
 }

@@ -2645,10 +2645,11 @@ func TestIntegration_CatalogListHelp(t *testing.T) {
 	assert.Contains(t, stdout, "--name")
 	assert.Contains(t, stdout, "--output")
 	assert.Contains(t, stdout, "--catalog")
+	assert.Contains(t, stdout, "--all")
 }
 
 func TestIntegration_CatalogList_Empty(t *testing.T) {
-	// Create a temp directory for the catalog
+	// Create a temp directory for the catalog — no local artifacts.
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
 	t.Setenv("XDG_CACHE_HOME", tmpDir)
@@ -2656,8 +2657,12 @@ func TestIntegration_CatalogList_Empty(t *testing.T) {
 	stdout, _, exitCode := runScafctl(t, "catalog", "list", "-o", "json")
 
 	assert.Equal(t, 0, exitCode)
-	// Empty list should return empty JSON array or null
-	assert.True(t, strings.Contains(stdout, "[]") || strings.Contains(stdout, "null"))
+	// With no local artifacts, the output depends on whether the default
+	// remote catalog is reachable. Either an empty list or remote results
+	// are both valid outcomes.
+	trimmed := strings.TrimSpace(stdout)
+	assert.True(t, json.Valid([]byte(trimmed)),
+		"expected valid JSON output, got: %q", stdout)
 }
 
 func TestIntegration_CatalogList_WithArtifacts(t *testing.T) {
@@ -2887,7 +2892,9 @@ func TestIntegration_RunSolution_FromCatalog_NotFound(t *testing.T) {
 		strings.Contains(combined, "no such file or directory") ||
 		strings.Contains(combined, "401") ||
 		strings.Contains(combined, "Unauthorized") ||
-		strings.Contains(combined, "403"),
+		strings.Contains(combined, "403") ||
+		strings.Contains(combined, "no such host") ||
+		strings.Contains(combined, "dial tcp"),
 		"expected error about missing solution or auth failure, got stdout=%q stderr=%q", stdout, stderr)
 }
 
@@ -3307,10 +3314,11 @@ func TestIntegration_CatalogPull_InvalidReference(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", tmpDir)
 	t.Setenv("XDG_CONFIG_HOME", tmpDir)
 
-	// Pull with invalid reference (no registry, no default catalog configured)
+	// Pull with a bare name (no OCI prefix) -- resolves against the default
+	// catalog which fails because the artifact does not exist.
 	_, stderr, exitCode := runScafctl(t, "catalog", "pull", "just-a-name")
 	assert.NotEqual(t, 0, exitCode)
-	assert.Contains(t, stderr, "invalid")
+	assert.Contains(t, stderr, "failed to resolve artifact")
 }
 
 // =============================================================================

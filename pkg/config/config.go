@@ -130,6 +130,11 @@ func (m *Manager) Load() (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
+	// Viper replaces arrays entirely when merging config files, so default
+	// catalog entries may be lost when a base config or user config supplies
+	// its own catalogs list. Re-add any missing default catalogs by name.
+	mergeDefaultCatalogEntries(&cfg)
+
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
@@ -142,16 +147,10 @@ func (m *Manager) Load() (*Config, error) {
 // setDefaults sets default configuration values.
 func (m *Manager) setDefaults() {
 	// Settings defaults
-	m.v.SetDefault("settings.defaultCatalog", "local")
+	m.v.SetDefault("settings.defaultCatalog", "official")
 	m.v.SetDefault("settings.noColor", false)
 	m.v.SetDefault("settings.quiet", false)
-	m.v.SetDefault("catalogs", []CatalogConfig{
-		{
-			Name: "local",
-			Type: CatalogTypeFilesystem,
-			Path: paths.CatalogDir(),
-		},
-	})
+	m.v.SetDefault("catalogs", defaultCatalogs())
 
 	// Logging defaults
 	m.v.SetDefault("logging.level", "none")
@@ -213,6 +212,85 @@ func (m *Manager) setDefaults() {
 	m.v.SetDefault("build.cacheDir", settings.DefaultBuildCacheDir())
 	m.v.SetDefault("build.autoCacheRemoteArtifacts", true)
 	m.v.SetDefault("build.pluginCacheDir", settings.DefaultPluginCacheDir())
+}
+
+// defaultCatalogs returns the built-in default catalog entries.
+// Values are read from the embedded defaults.yaml; hardcoded constants serve
+// as fallbacks when the embedded config is missing or unparseable.
+func defaultCatalogs() []CatalogConfig {
+	if embedded := EmbeddedCatalogDefaults(); len(embedded) > 0 {
+		// Backfill the local catalog path which cannot be expressed in YAML
+		// (it depends on XDG runtime resolution).
+		for i := range embedded {
+			if embedded[i].Type == CatalogTypeFilesystem && embedded[i].Path == "" {
+				embedded[i].Path = paths.CatalogDir()
+			}
+		}
+		return embedded
+	}
+
+	// Fallback when embedded defaults are absent.
+	return []CatalogConfig{
+		{
+			Name: "local",
+			Type: CatalogTypeFilesystem,
+			Path: paths.CatalogDir(),
+		},
+		{
+			Name:         "official",
+			Type:         CatalogTypeOCI,
+			URL:          "oci://ghcr.io/oakwood-commons",
+			AuthProvider: "github",
+		},
+	}
+}
+
+// mergeDefaultCatalogEntries ensures built-in default catalog entries are
+// present in cfg.Catalogs. Viper replaces arrays entirely when merging config
+// layers, so defaults may be lost. For entries that already exist (by name),
+// missing fields are backfilled from the defaults without overwriting
+// user-customised values. Entries that are absent are appended.
+//
+// The "official" catalog is skipped when DisableOfficialCatalog is set.
+func mergeDefaultCatalogEntries(cfg *Config) {
+	defaults := defaultCatalogs()
+	defaultsByName := make(map[string]CatalogConfig, len(defaults))
+	for _, dc := range defaults {
+		defaultsByName[dc.Name] = dc
+	}
+
+	// Backfill missing fields in existing entries.
+	seen := make(map[string]struct{}, len(cfg.Catalogs))
+	for i := range cfg.Catalogs {
+		seen[cfg.Catalogs[i].Name] = struct{}{}
+		dc, ok := defaultsByName[cfg.Catalogs[i].Name]
+		if !ok {
+			continue
+		}
+		if cfg.Catalogs[i].Type == "" {
+			cfg.Catalogs[i].Type = dc.Type
+		}
+		if cfg.Catalogs[i].Path == "" && dc.Path != "" {
+			cfg.Catalogs[i].Path = dc.Path
+		}
+		if cfg.Catalogs[i].URL == "" && dc.URL != "" {
+			cfg.Catalogs[i].URL = dc.URL
+		}
+		if cfg.Catalogs[i].AuthProvider == "" && dc.AuthProvider != "" {
+			cfg.Catalogs[i].AuthProvider = dc.AuthProvider
+		}
+	}
+
+	// Append entirely missing defaults.
+	for _, dc := range defaults {
+		if _, ok := seen[dc.Name]; ok {
+			continue
+		}
+		if dc.Name == CatalogNameOfficial && cfg.Settings.DisableOfficialCatalog {
+			continue
+		}
+		cfg.Catalogs = append(cfg.Catalogs, dc)
+	}
 }
 
 // Save saves the current configuration to file.

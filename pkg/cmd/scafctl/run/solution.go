@@ -377,19 +377,30 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 
 	// Set the solution directory for resolver path resolution.
 	// --base-dir takes precedence; otherwise use the solution file's directory.
-	// When SolutionDirectory is set, also set WorkingDirectory on the resolver
-	// context so that providers like file/exec continue to resolve paths against
-	// the caller's CWD (AbsFromContext checks WorkingDirectory before
-	// SolutionDirectory). For bundle/catalog runs solutionDir is empty and the
-	// process CWD is the bundle extraction directory, which is the correct base.
-	if o.BaseDir != "" {
+	// When SolutionDirectory is set for file-based runs, also set WorkingDirectory
+	// on the resolver context so that providers like file/exec continue to resolve
+	// paths against the caller's CWD (AbsFromContext checks WorkingDirectory
+	// before SolutionDirectory).
+	//
+	// For bundle runs (solutionDir == bundleDir), only set SolutionDirectory so
+	// resolver-phase paths (e.g. reading bundled files) resolve against the bundle
+	// extraction directory. Action-phase paths are handled separately via
+	// actionCtx which sets WorkingDirectory to originalCwd.
+	//
+	// For unbundled catalog runs, solutionDir is empty and paths fall back to the
+	// process CWD.
+	isBundleRun := strings.HasPrefix(sol.GetPath(), "catalog:") && solutionDir != ""
+	switch {
+	case o.BaseDir != "":
 		absBaseDir, baseDirErr := filepath.Abs(o.BaseDir)
 		if baseDirErr != nil {
 			return o.exitWithCode(ctx, fmt.Errorf("--base-dir: %w", baseDirErr), exitcode.InvalidInput)
 		}
 		ctx = provider.WithWorkingDirectory(ctx, originalCwd)
 		ctx = provider.WithSolutionDirectory(ctx, absBaseDir)
-	} else if solutionDir != "" {
+	case isBundleRun:
+		ctx = provider.WithSolutionDirectory(ctx, solutionDir)
+	case solutionDir != "":
 		ctx = provider.WithWorkingDirectory(ctx, originalCwd)
 		ctx = provider.WithSolutionDirectory(ctx, solutionDir)
 	}
@@ -902,11 +913,11 @@ func NewActionProgressCallback(w *writer.Writer) *ActionProgressCallback {
 }
 
 func (a *ActionProgressCallback) OnActionStart(actionName string) {
-	a.w.Infof("[ACTION] Starting: %s", actionName)
+	a.w.Verbosef("[ACTION] Starting: %s", actionName)
 }
 
 func (a *ActionProgressCallback) OnActionComplete(actionName string, _ any) {
-	a.w.Successf("[ACTION] Completed: %s ✓", actionName)
+	a.w.Verbosef("[ACTION] Completed: %s ✓", actionName)
 }
 
 func (a *ActionProgressCallback) OnActionFailed(actionName string, err error) {
@@ -930,21 +941,21 @@ func (a *ActionProgressCallback) OnRetryAttempt(actionName string, attempt, maxA
 }
 
 func (a *ActionProgressCallback) OnForEachProgress(actionName string, completed, total int) {
-	a.w.Infof("[ACTION] %s: %d/%d iterations complete", actionName, completed, total)
+	a.w.Verbosef("[ACTION] %s: %d/%d iterations complete", actionName, completed, total)
 }
 
 func (a *ActionProgressCallback) OnPhaseStart(phase int, actionNames []string) {
-	a.w.Infof("[PHASE] Starting phase %d: %s", phase, strings.Join(actionNames, ", "))
+	a.w.Verbosef("[PHASE] Starting phase %d: %s", phase, strings.Join(actionNames, ", "))
 }
 
 func (a *ActionProgressCallback) OnPhaseComplete(phase int) {
-	a.w.Successf("[PHASE] Completed phase %d", phase)
+	a.w.Verbosef("[PHASE] Completed phase %d", phase)
 }
 
 func (a *ActionProgressCallback) OnFinallyStart() {
-	a.w.Infof("[FINALLY] Starting finally section")
+	a.w.Verbosef("[FINALLY] Starting finally section")
 }
 
 func (a *ActionProgressCallback) OnFinallyComplete() {
-	a.w.Successf("[FINALLY] Completed finally section")
+	a.w.Verbosef("[FINALLY] Completed finally section")
 }

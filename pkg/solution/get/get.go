@@ -45,6 +45,13 @@ type BundleAwareCatalogResolver interface {
 	FetchSolutionWithBundle(ctx context.Context, nameWithVersion string) (content, bundleData []byte, err error)
 }
 
+// CatalogSourcer is optionally implemented by CatalogResolver to report which
+// catalog satisfied the most recent fetch. Used to include the catalog name in
+// verbose output.
+type CatalogSourcer interface {
+	LastResolvedCatalog() string
+}
+
 // RemoteResolver resolves Docker-style OCI remote references (e.g.,
 // "ghcr.io/myorg/starter-kit@1.0.0"). Implementations are responsible for
 // registry authentication and fetching.
@@ -388,7 +395,7 @@ func (o *Getter) fromCatalogWithBundle(ctx context.Context, nameWithVersion stri
 			return nil, nil, fmt.Errorf("failed to parse solution from catalog: %w", err)
 		}
 
-		sol.SetPath(fmt.Sprintf("catalog:%s", nameWithVersion))
+		sol.SetPath(o.catalogPath(nameWithVersion))
 		return &sol, bundleData, nil
 	}
 
@@ -403,7 +410,7 @@ func (o *Getter) fromCatalogWithBundle(ctx context.Context, nameWithVersion stri
 		return nil, nil, fmt.Errorf("failed to parse solution from catalog: %w", err)
 	}
 
-	sol.SetPath(fmt.Sprintf("catalog:%s", nameWithVersion))
+	sol.SetPath(o.catalogPath(nameWithVersion))
 	return &sol, nil, nil
 }
 
@@ -553,6 +560,19 @@ func extractNameVersionFromRef(ref string) string {
 	return name
 }
 
+// catalogPath builds the solution path string for catalog-resolved solutions.
+// When the resolver implements CatalogSourcer, the catalog name is included
+// (e.g. "catalog:local:hello-world@1.0.0"), otherwise falls back to
+// "catalog:hello-world@1.0.0".
+func (o *Getter) catalogPath(nameWithVersion string) string {
+	if sourcer, ok := o.catalogResolver.(CatalogSourcer); ok {
+		if cat := sourcer.LastResolvedCatalog(); cat != "" {
+			return fmt.Sprintf("catalog:%s:%s", cat, nameWithVersion)
+		}
+	}
+	return fmt.Sprintf("catalog:%s", nameWithVersion)
+}
+
 // isBareName returns true if the path is a bare name suitable for catalog lookup.
 // A bare name has no path separators (/, \) and is not a URL.
 func (o *Getter) isBareName(path string) bool {
@@ -584,7 +604,7 @@ func (o *Getter) fromCatalog(ctx context.Context, nameWithVersion string) (*solu
 	}
 
 	// Mark the solution as coming from catalog
-	sol.SetPath(fmt.Sprintf("catalog:%s", nameWithVersion))
+	sol.SetPath(o.catalogPath(nameWithVersion))
 	return &sol, nil
 }
 

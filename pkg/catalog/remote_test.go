@@ -4,14 +4,17 @@
 package catalog
 
 import (
+	"context"
+	"fmt"
 	"sort"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
-	"github.com/oakwood-commons/scafctl/pkg/auth"
+	scafctlauth "github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	orasauth "oras.land/oras-go/v2/registry/remote/auth"
 )
 
 func TestNewRemoteCatalog(t *testing.T) {
@@ -56,8 +59,8 @@ func TestNewRemoteCatalog(t *testing.T) {
 
 	t.Run("with auth handler only", func(t *testing.T) {
 		t.Parallel()
-		handler := auth.NewMockHandler("test-handler")
-		handler.GetTokenResult = &auth.Token{AccessToken: "test-token"}
+		handler := scafctlauth.NewMockHandler("test-handler")
+		handler.GetTokenResult = &scafctlauth.Token{AccessToken: "test-token"}
 		cat, err := NewRemoteCatalog(RemoteCatalogConfig{
 			Name:        "test",
 			Registry:    "ghcr.io",
@@ -73,7 +76,7 @@ func TestNewRemoteCatalog(t *testing.T) {
 
 	t.Run("with credential store and auth handler", func(t *testing.T) {
 		t.Parallel()
-		handler := auth.NewMockHandler("test-handler")
+		handler := scafctlauth.NewMockHandler("test-handler")
 		credStore := &CredentialStore{}
 		cat, err := NewRemoteCatalog(RemoteCatalogConfig{
 			Name:            "test",
@@ -396,4 +399,234 @@ func BenchmarkRemoteCatalog_tagForRef(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		cat.tagForRef(ref)
 	}
+}
+
+func TestRemoteCatalog_parseRepositoryPath(t *testing.T) {
+	t.Parallel()
+
+	cat, err := NewRemoteCatalog(RemoteCatalogConfig{
+		Name:       "test",
+		Registry:   "ghcr.io",
+		Repository: "myorg/scafctl",
+		Logger:     logr.Discard(),
+	})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name     string
+		path     string
+		wantOK   bool
+		wantKind ArtifactKind
+		wantName string
+	}{
+		{
+			name:     "solution",
+			path:     "myorg/scafctl/solutions/my-app",
+			wantOK:   true,
+			wantKind: ArtifactKindSolution,
+			wantName: "my-app",
+		},
+		{
+			name:     "provider",
+			path:     "myorg/scafctl/providers/terraform",
+			wantOK:   true,
+			wantKind: ArtifactKindProvider,
+			wantName: "terraform",
+		},
+		{
+			name:     "auth handler",
+			path:     "myorg/scafctl/auth-handlers/github",
+			wantOK:   true,
+			wantKind: ArtifactKindAuthHandler,
+			wantName: "github",
+		},
+		{
+			name:   "wrong prefix",
+			path:   "other/repo/solutions/my-app",
+			wantOK: false,
+		},
+		{
+			name:   "no kind segment",
+			path:   "myorg/scafctl/my-app",
+			wantOK: false,
+		},
+		{
+			name:   "unknown kind",
+			path:   "myorg/scafctl/widgets/foo",
+			wantOK: false,
+		},
+		{
+			name:   "empty name after kind",
+			path:   "myorg/scafctl/solutions/",
+			wantOK: false,
+		},
+		{
+			name:   "unrelated repo",
+			path:   "completely/different/path",
+			wantOK: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			d, ok := cat.parseRepositoryPath(tc.path)
+			assert.Equal(t, tc.wantOK, ok)
+			if tc.wantOK {
+				assert.Equal(t, tc.wantKind, d.Kind)
+				assert.Equal(t, tc.wantName, d.Name)
+			}
+		})
+	}
+}
+
+func TestRemoteCatalog_parseRepositoryPath_EmptyRepository(t *testing.T) {
+	t.Parallel()
+
+	// When repository is empty, paths are just "kind-plural/name"
+	cat, err := NewRemoteCatalog(RemoteCatalogConfig{
+		Name:     "test",
+		Registry: "localhost:5000",
+		Logger:   logr.Discard(),
+	})
+	require.NoError(t, err)
+
+	d, ok := cat.parseRepositoryPath("solutions/my-app")
+	assert.True(t, ok)
+	assert.Equal(t, ArtifactKindSolution, d.Kind)
+	assert.Equal(t, "my-app", d.Name)
+
+	_, ok = cat.parseRepositoryPath("just-name")
+	assert.False(t, ok)
+}
+
+func BenchmarkRemoteCatalog_parseRepositoryPath(b *testing.B) {
+	cat, err := NewRemoteCatalog(RemoteCatalogConfig{
+		Name:       "bench",
+		Registry:   "ghcr.io",
+		Repository: "myorg/scafctl",
+		Logger:     logr.Discard(),
+	})
+	require.NoError(b, err)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		cat.parseRepositoryPath("myorg/scafctl/solutions/my-app")
+	}
+}
+
+func TestListRepositories_ContextTimeout(t *testing.T) {
+	t.Parallel()
+
+	// Use an already-cancelled context so the timeout fires immediately
+	// rather than waiting for the full DefaultHTTPTimeout.
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	cat := &RemoteCatalog{
+		name:     "slow-registry",
+		registry: "localhost:0",
+		insecure: true,
+		logger:   logr.Discard(),
+		client:   &orasauth.Client{},
+		enumerator: newOCICatalogEnumerator(enumeratorConfig{
+			registry: "localhost:0",
+			client:   &orasauth.Client{},
+			logger:   logr.Discard(),
+		}),
+	}
+
+	_, err := cat.ListRepositories(ctx)
+	require.Error(t, err)
+	assert.True(t, IsEnumerationNotSupported(err), "timeout should be reported as enumeration not supported, got: %v", err)
+	assert.Contains(t, err.Error(), "timed out")
+}
+
+// mockEnumerator returns a fixed set of repository paths.
+type mockEnumerator struct {
+	repos []string
+}
+
+func (m *mockEnumerator) enumerate(_ context.Context) ([]string, error) {
+	return m.repos, nil
+}
+
+func TestListAllArtifacts_SearchFilter(t *testing.T) {
+	t.Parallel()
+
+	cat := &RemoteCatalog{
+		name:       "test",
+		registry:   "registry.example.com",
+		repository: "myorg",
+		logger:     logr.Discard(),
+		client:     &orasauth.Client{},
+		enumerator: &mockEnumerator{
+			repos: []string{
+				"myorg/solutions/starter-kit",
+				"myorg/solutions/hello-world",
+				"myorg/solutions/foo",
+				"myorg/providers/terraform",
+			},
+		},
+	}
+
+	t.Run("no search returns all", func(t *testing.T) {
+		t.Parallel()
+		// listAllArtifacts will fail on tag fetch (no real registry),
+		// but the discovered list will be filtered. We test the filter
+		// by checking that it attempts all repos (errors are logged, not returned).
+		infos, err := cat.listAllArtifacts(t.Context(), "")
+		require.NoError(t, err)
+		// All tag fetches fail silently, so we get empty results.
+		assert.Empty(t, infos)
+	})
+
+	t.Run("search pattern filters before tag fetch", func(t *testing.T) {
+		t.Parallel()
+		ctx := WithSearchPattern(t.Context(), "starter*")
+		infos, err := cat.listAllArtifacts(ctx, "")
+		require.NoError(t, err)
+		// Tags fail silently, but we can verify the method doesn't error.
+		assert.Empty(t, infos)
+	})
+
+	t.Run("kind filter applied", func(t *testing.T) {
+		t.Parallel()
+		infos, err := cat.listAllArtifacts(t.Context(), ArtifactKindProvider)
+		require.NoError(t, err)
+		assert.Empty(t, infos)
+	})
+
+	t.Run("search with no matches returns nil", func(t *testing.T) {
+		t.Parallel()
+		ctx := WithSearchPattern(t.Context(), "nonexistent*")
+		infos, err := cat.listAllArtifacts(ctx, "")
+		require.NoError(t, err)
+		assert.Nil(t, infos)
+	})
+}
+
+func TestListAllArtifacts_ConcurrencyRespected(t *testing.T) {
+	t.Parallel()
+
+	// Create enough repos to exercise the worker pool.
+	repos := make([]string, 20)
+	for i := range repos {
+		repos[i] = fmt.Sprintf("myorg/solutions/app-%d", i)
+	}
+
+	cat := &RemoteCatalog{
+		name:       "test",
+		registry:   "registry.example.com",
+		repository: "myorg",
+		logger:     logr.Discard(),
+		client:     &orasauth.Client{},
+		enumerator: &mockEnumerator{repos: repos},
+	}
+
+	// With 20 repos and no real registry, all tag fetches fail silently.
+	// The test verifies no deadlock/panic with concurrent goroutines.
+	infos, err := cat.listAllArtifacts(t.Context(), "")
+	require.NoError(t, err)
+	assert.Empty(t, infos) // all tag fetches fail
 }

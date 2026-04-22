@@ -697,3 +697,61 @@ func TestGCPHandler_PurgeExpiredTokens(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, n)
 }
+
+func TestHandler_ActiveFlow(t *testing.T) {
+	t.Run("no credentials returns empty", func(t *testing.T) {
+		store := secrets.NewMockStore()
+		h, err := New(WithSecretStore(store))
+		require.NoError(t, err)
+
+		t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+		t.Setenv("GOOGLE_EXTERNAL_ACCOUNT", "")
+		t.Setenv("CLOUDSDK_CONFIG", t.TempDir())
+
+		flow := h.ActiveFlow(context.Background())
+		assert.Empty(t, flow)
+	})
+
+	t.Run("stored metadata returns metadata flow", func(t *testing.T) {
+		store := secrets.NewMockStore()
+		h, err := New(WithSecretStore(store))
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+		t.Setenv("GOOGLE_EXTERNAL_ACCOUNT", "")
+
+		metadata := &TokenMetadata{
+			Claims: &auth.Claims{Email: "user@example.com"},
+			Flow:   auth.FlowDeviceCode,
+		}
+		metadataBytes, err := json.Marshal(metadata)
+		require.NoError(t, err)
+		require.NoError(t, store.Set(ctx, SecretKeyMetadata, metadataBytes))
+		require.NoError(t, store.Set(ctx, SecretKeyRefreshToken, []byte("tok")))
+
+		flow := h.ActiveFlow(ctx)
+		assert.Equal(t, auth.FlowDeviceCode, flow)
+	})
+
+	t.Run("gcloud ADC fallback", func(t *testing.T) {
+		store := secrets.NewMockStore()
+		h, err := New(WithSecretStore(store))
+		require.NoError(t, err)
+
+		t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+		t.Setenv("GOOGLE_EXTERNAL_ACCOUNT", "")
+
+		// Create a fake ADC file so HasGcloudADCCredentials returns true.
+		adcDir := t.TempDir()
+		t.Setenv("CLOUDSDK_CONFIG", adcDir)
+		adcPath := filepath.Join(adcDir, "application_default_credentials.json")
+		require.NoError(t, os.WriteFile(adcPath, []byte(`{"type":"authorized_user","client_id":"x","refresh_token":"y"}`), 0o600))
+
+		flow := h.ActiveFlow(context.Background())
+		assert.Equal(t, auth.FlowGcloudADC, flow)
+	})
+
+	// Verify the handler satisfies FlowReporter.
+	var _ auth.FlowReporter = (*Handler)(nil)
+}

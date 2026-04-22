@@ -197,6 +197,29 @@ metadata:
 		assert.Empty(t, result.SolutionDir, "catalog references must not derive solutionDir from CWD")
 		result.Cleanup()
 	})
+
+	t.Run("SolutionDir set to bundle dir for catalog reference with bundle", func(t *testing.T) {
+		sol := minimalSolution()
+		sol.SetPath("catalog:starter-kit@1.0.0")
+
+		// Create a minimal bundle tar with one file
+		bundleRoot := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(bundleRoot, "template.txt"), []byte("hello"), 0o600))
+		bundleData, _, err := bundler.CreateBundleTar(bundleRoot, []bundler.FileEntry{
+			{RelPath: "template.txt"},
+		}, nil)
+		require.NoError(t, err)
+
+		getter := &mockGetter{sol: sol, bundle: bundleData}
+
+		result, err := Solution(context.Background(), "starter-kit@1.0.0",
+			WithGetter(getter),
+		)
+		require.NoError(t, err)
+		assert.NotEmpty(t, result.SolutionDir, "bundled catalog solutions must set solutionDir to extraction dir")
+		assert.FileExists(t, filepath.Join(result.SolutionDir, "template.txt"))
+		result.Cleanup()
+	})
 }
 
 func TestWithMetrics(t *testing.T) {
