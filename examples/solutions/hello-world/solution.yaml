@@ -1,0 +1,41 @@
+# A minimal hello-world solution for the official catalog.
+# Run: scafctl run solution -f examples/solutions/hello-world/solution.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: hello-world
+  version: 0.0.1
+  description: |
+    A minimal hello-world solution that demonstrates the basic structure
+    of a scafctl solution. Use this as a starting point for building
+    your own solutions.
+  category: getting-started
+  tags: [hello-world, example, starter]
+
+spec:
+  resolvers:
+    greeting:
+      description: The greeting message to display
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: greeting
+          - provider: static
+            inputs:
+              value: Hello, World!
+
+  workflow:
+    actions:
+      display-greeting:
+        description: Display the greeting message
+        provider: message
+        inputs:
+          message:
+            tmpl: "{{ .greeting }}"
+          style:
+            icon: "\U0001F44B"
+            color: green

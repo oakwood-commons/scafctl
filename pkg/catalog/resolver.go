@@ -53,11 +53,19 @@ func WithResolverRemoteCatalogs(remotes []Catalog) SolutionResolverOption {
 // SolutionResolver wraps a Catalog to provide solution fetching by name[@version].
 // It implements the CatalogResolver interface from pkg/solution/get.
 type SolutionResolver struct {
-	catalog        Catalog
-	remoteCatalogs []Catalog
-	logger         logr.Logger
-	artifactCache  ArtifactCacher
-	noCache        bool
+	catalog             Catalog
+	remoteCatalogs      []Catalog
+	logger              logr.Logger
+	artifactCache       ArtifactCacher
+	noCache             bool
+	lastResolvedCatalog string // name of the catalog that satisfied the last fetch
+}
+
+// LastResolvedCatalog returns the name of the catalog that satisfied the most
+// recent FetchSolution or FetchSolutionWithBundle call. Returns "" if no
+// fetch has been performed yet.
+func (r *SolutionResolver) LastResolvedCatalog() string {
+	return r.lastResolvedCatalog
 }
 
 // NewSolutionResolver creates a resolver that fetches solutions from the given catalog.
@@ -125,11 +133,12 @@ func (r *SolutionResolver) FetchSolution(ctx context.Context, nameWithVersion st
 		}
 	}
 
+	r.lastResolvedCatalog = info.Catalog
 	r.logger.V(1).Info("fetched solution from catalog",
 		"name", info.Reference.Name,
 		"version", info.Reference.Version,
 		"digest", info.Digest,
-		"catalog", r.catalog.Name())
+		"catalog", info.Catalog)
 
 	// Store in artifact cache using the resolved version as the cache key version.
 	if !r.noCache && r.artifactCache != nil {
@@ -195,12 +204,13 @@ func (r *SolutionResolver) FetchSolutionWithBundle(ctx context.Context, nameWith
 		}
 	}
 
+	r.lastResolvedCatalog = info.Catalog
 	r.logger.V(1).Info("fetched solution with bundle from catalog",
 		"name", info.Reference.Name,
 		"version", info.Reference.Version,
 		"digest", info.Digest,
 		"hasBundle", len(bundleData) > 0,
-		"catalog", r.catalog.Name())
+		"catalog", info.Catalog)
 
 	// Store in artifact cache using the resolved version as the cache key version.
 	if !r.noCache && r.artifactCache != nil {

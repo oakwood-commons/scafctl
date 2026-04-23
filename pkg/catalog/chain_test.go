@@ -534,3 +534,106 @@ func TestNewRemoteCatalog_WithAuthHandlerAndCredStore(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, cat)
 }
+
+func TestBuildCatalogChain_DisableOfficialCatalog(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Catalogs: []config.CatalogConfig{
+			{
+				Name: config.CatalogNameLocal,
+				Type: config.CatalogTypeFilesystem,
+			},
+			{
+				Name: config.CatalogNameOfficial,
+				Type: config.CatalogTypeOCI,
+				URL:  "oci://ghcr.io/oakwood-commons",
+			},
+		},
+		Settings: config.Settings{
+			DisableOfficialCatalog: true,
+		},
+	}
+
+	chain, err := BuildCatalogChain(cfg, nil, logr.Discard())
+	require.NoError(t, err)
+	require.NotNil(t, chain)
+
+	// Only local should be present (official is disabled).
+	assert.Len(t, chain.catalogs, 1)
+}
+
+func TestBuildCatalogChain_ReservedCatalogsPinned(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Catalogs: []config.CatalogConfig{
+			{
+				Name: config.CatalogNameLocal,
+				Type: config.CatalogTypeFilesystem,
+			},
+			{
+				Name: "embedder-catalog",
+				Type: config.CatalogTypeOCI,
+				URL:  "registry.example.com/embedder",
+			},
+			{
+				Name: config.CatalogNameOfficial,
+				Type: config.CatalogTypeOCI,
+				URL:  "oci://ghcr.io/oakwood-commons",
+			},
+		},
+	}
+
+	chain, err := BuildCatalogChain(cfg, nil, logr.Discard())
+	require.NoError(t, err)
+	require.NotNil(t, chain)
+
+	// local (first) + embedder (middle) + official (last) = 3
+	require.Len(t, chain.catalogs, 3)
+
+	// First catalog is local.
+	assert.IsType(t, &LocalCatalog{}, chain.catalogs[0])
+
+	// Last catalog is official (remote).
+	last, ok := chain.catalogs[2].(*RemoteCatalog)
+	require.True(t, ok)
+	assert.Equal(t, config.CatalogNameOfficial, last.name)
+}
+
+func TestBuildCatalogChain_SkipsReservedNamesFromMiddle(t *testing.T) {
+	t.Parallel()
+
+	// Even if someone puts "local" or "official" as non-reserved-type entries,
+	// they are still filtered out from the middle section.
+	cfg := &config.Config{
+		Catalogs: []config.CatalogConfig{
+			{
+				Name: config.CatalogNameLocal,
+				Type: config.CatalogTypeOCI,
+				URL:  "registry.example.com/should-be-skipped",
+			},
+			{
+				Name: "my-catalog",
+				Type: config.CatalogTypeOCI,
+				URL:  "registry.example.com/mine",
+			},
+			{
+				Name: config.CatalogNameOfficial,
+				Type: config.CatalogTypeOCI,
+				URL:  "oci://ghcr.io/oakwood-commons",
+			},
+		},
+	}
+
+	chain, err := BuildCatalogChain(cfg, nil, logr.Discard())
+	require.NoError(t, err)
+	require.NotNil(t, chain)
+
+	// local (pinned first) + my-catalog (middle) + official (pinned last) = 3
+	require.Len(t, chain.catalogs, 3)
+
+	middle, ok := chain.catalogs[1].(*RemoteCatalog)
+	require.True(t, ok)
+	assert.Equal(t, "my-catalog", middle.name)
+}

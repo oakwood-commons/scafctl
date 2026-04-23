@@ -5,6 +5,7 @@ package catalog
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
@@ -18,6 +19,11 @@ const (
 	// when resolving "latest" (no explicit version). By default, pre-release
 	// versions are excluded.
 	includePreReleaseKey contextKey = iota
+
+	// searchPatternKey carries an optional glob pattern for filtering
+	// discovered artifacts by name during enumeration. When set,
+	// listAllArtifacts skips tag fetching for non-matching repos.
+	searchPatternKey
 )
 
 // WithIncludePreRelease returns a context that includes pre-release versions
@@ -31,6 +37,28 @@ func WithIncludePreRelease(ctx context.Context) context.Context {
 func IncludePreReleaseFromContext(ctx context.Context) bool {
 	v, _ := ctx.Value(includePreReleaseKey).(bool)
 	return v
+}
+
+// WithSearchPattern returns a context carrying a substring filter for
+// discovered artifact names (case-insensitive partial match).
+func WithSearchPattern(ctx context.Context, pattern string) context.Context {
+	return context.WithValue(ctx, searchPatternKey, pattern)
+}
+
+// SearchPatternFromContext returns the search pattern, if any.
+func SearchPatternFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(searchPatternKey).(string)
+	return v
+}
+
+// matchesSearchPattern reports whether name contains the search query
+// (case-insensitive substring match). An empty pattern matches everything.
+// This is consistent with --search in other commands (e.g. get cel-function).
+func matchesSearchPattern(query, name string) bool {
+	if query == "" {
+		return true
+	}
+	return strings.Contains(strings.ToLower(name), strings.ToLower(query))
 }
 
 // IsPreRelease returns true if the semver version has a pre-release suffix

@@ -52,6 +52,7 @@ func TestCommandList_Flags(t *testing.T) {
 		{"insecure", "false"},
 		{"all-versions", "false"},
 		{"pre-release", "false"},
+		{"all", "false"},
 	}
 
 	for _, tt := range flagTests {
@@ -465,6 +466,80 @@ func TestWriteArtifactList_CatalogColumn(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, items, 1)
 	assert.Equal(t, "my-registry", items[0].Catalog)
+}
+
+func TestWriteArtifactList_CrossCatalogDedup(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, out, _ := terminal.NewTestIOStreams()
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+	outputOpts.Format = "json"
+
+	now := time.Now()
+	artifacts := []catalogpkg.ArtifactInfo{
+		{
+			Reference: catalogpkg.Reference{Name: "app", Kind: catalogpkg.ArtifactKindSolution, Version: semver.MustParse("1.0.0")},
+			Digest:    "sha256:abc",
+			CreatedAt: now,
+			Catalog:   "local",
+		},
+		{
+			Reference: catalogpkg.Reference{Name: "app", Kind: catalogpkg.ArtifactKindSolution, Version: semver.MustParse("1.0.0")},
+			Digest:    "",
+			Catalog:   "remote",
+		},
+	}
+
+	w := writer.New(ioStreams, &settings.Run{})
+	err := writeArtifactList(w, artifacts, true, outputOpts)
+	require.NoError(t, err)
+
+	var items []ArtifactListItem
+	err = json.Unmarshal(out.Bytes(), &items)
+	require.NoError(t, err)
+	require.Len(t, items, 1, "duplicate artifact should be merged")
+	assert.Equal(t, "local, remote", items[0].Catalog)
+	assert.Equal(t, "sha256:abc", items[0].Digest, "should use row with digest")
+}
+
+func TestWriteArtifactList_LatestOnlyAfterDedup(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, out, _ := terminal.NewTestIOStreams()
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+	outputOpts.Format = "json"
+
+	now := time.Now()
+	artifacts := []catalogpkg.ArtifactInfo{
+		{
+			Reference: catalogpkg.Reference{Name: "app", Kind: catalogpkg.ArtifactKindSolution, Version: semver.MustParse("2.0.0")},
+			Digest:    "sha256:222",
+			CreatedAt: now,
+			Catalog:   "local",
+		},
+		{
+			Reference: catalogpkg.Reference{Name: "app", Kind: catalogpkg.ArtifactKindSolution, Version: semver.MustParse("1.0.0")},
+			Digest:    "sha256:111",
+			CreatedAt: now,
+			Catalog:   "local",
+		},
+		{
+			Reference: catalogpkg.Reference{Name: "app", Kind: catalogpkg.ArtifactKindSolution, Version: semver.MustParse("1.0.0")},
+			Catalog:   "remote",
+		},
+	}
+
+	w := writer.New(ioStreams, &settings.Run{})
+	// showAll=false → only latest version per name+kind
+	err := writeArtifactList(w, artifacts, false, outputOpts)
+	require.NoError(t, err)
+
+	var items []ArtifactListItem
+	err = json.Unmarshal(out.Bytes(), &items)
+	require.NoError(t, err)
+	require.Len(t, items, 1, "should show only latest version")
+	assert.Equal(t, "2.0.0", items[0].Tag)
+	assert.Equal(t, "local", items[0].Catalog)
 }
 
 func TestWriteArtifactList_EmptyRespectsQuiet(t *testing.T) {

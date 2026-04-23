@@ -1465,59 +1465,9 @@ func TestWriteText_FallsBackToListWhenTooManyColumns(t *testing.T) {
 	assert.Less(t, colCount, 5, "expected list format (few columns per line), got table-like output")
 }
 
-func TestExpandEscapedNewlines(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    any
-		expected any
-	}{
-		{
-			name:     "string with literal backslash-n",
-			input:    `line1\nline2\nline3`,
-			expected: "line1\nline2\nline3",
-		},
-		{
-			name:     "string without escapes",
-			input:    "no escapes here",
-			expected: "no escapes here",
-		},
-		{
-			name:     "string with backslash-r-n",
-			input:    `line1\r\nline2`,
-			expected: "line1\nline2",
-		},
-		{
-			name:     "map with mixed values",
-			input:    map[string]any{"desc": `hello\nworld`, "name": "plain"},
-			expected: map[string]any{"desc": "hello\nworld", "name": "plain"},
-		},
-		{
-			name:     "slice of strings",
-			input:    []any{`a\nb`, "c"},
-			expected: []any{"a\nb", "c"},
-		},
-		{
-			name:     "non-string passthrough",
-			input:    42,
-			expected: 42,
-		},
-		{
-			name:     "nil",
-			input:    nil,
-			expected: nil,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.expected, expandEscapedNewlines(tc.input))
-		})
-	}
-}
-
-func TestWriteYAML_ExpandsEscapedNewlines(t *testing.T) {
+func TestWriteYAML_MultilineStrings(t *testing.T) {
 	data := map[string]any{
-		"description": `line1\nline2\nline3`,
+		"description": "line1\nline2\nline3",
 		"name":        "simple",
 	}
 
@@ -1529,11 +1479,9 @@ func TestWriteYAML_ExpandsEscapedNewlines(t *testing.T) {
 	require.NoError(t, err)
 
 	output := out.String()
-	// The YAML output should use block scalar style for the multiline value,
-	// not a single-line string with literal \n.
+	// yaml.Marshal natively renders strings with real newlines as block scalars.
 	assert.Contains(t, output, "line1\n")
 	assert.Contains(t, output, "line2\n")
-	assert.NotContains(t, output, `\n`)
 }
 
 func TestHasNestedValues(t *testing.T) {

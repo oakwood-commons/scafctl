@@ -50,3 +50,46 @@ func TestIncludePreReleaseContext(t *testing.T) {
 		assert.True(t, IncludePreReleaseFromContext(ctx))
 	})
 }
+
+func TestSearchPatternContext(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty by default", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		assert.Empty(t, SearchPatternFromContext(ctx))
+	})
+
+	t.Run("returns pattern when set", func(t *testing.T) {
+		t.Parallel()
+		ctx := WithSearchPattern(context.Background(), "starter*")
+		assert.Equal(t, "starter*", SearchPatternFromContext(ctx))
+	})
+}
+
+func TestMatchesSearchPattern(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		query string
+		input string
+		want  bool
+	}{
+		{"empty query matches everything", "", "anything", true},
+		{"exact match", "starter-kit", "starter-kit", true},
+		{"substring match", "starter", "starter-kit", true},
+		{"suffix match", "kit", "starter-kit", true},
+		{"middle match", "arter", "starter-kit", true},
+		{"no match", "terraform", "hello-world", false},
+		{"case insensitive query", "Starter", "starter-kit", true},
+		{"case insensitive name", "starter", "Starter-Kit", true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, matchesSearchPattern(tc.query, tc.input))
+		})
+	}
+}

@@ -372,7 +372,9 @@ var remoteListSchema = []byte(`{
 			"type":         { "type": "string", "title": "Type" },
 			"url":          { "type": "string", "title": "URL" },
 			"authProvider": { "type": "string", "title": "Auth" },
-			"default":      { "type": "boolean", "title": "Default" }
+			"default":      { "type": "boolean", "title": "Default" },
+			"path":         { "type": "string", "deprecated": true },
+			"authScope":    { "type": "string", "deprecated": true }
 		}
 	}
 }`)
@@ -423,10 +425,9 @@ func runRemoteList(ctx context.Context, configPath string, outputOpts *kvx.Outpu
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.ConfigError)
 	}
-
-	items := make([]RemoteListItem, len(cfg.Catalogs))
-	for i, c := range cfg.Catalogs {
-		items[i] = RemoteListItem{
+	items := make([]RemoteListItem, 0, len(cfg.Catalogs))
+	for _, c := range cfg.Catalogs {
+		items = append(items, RemoteListItem{
 			Name:         c.Name,
 			Type:         c.Type,
 			URL:          c.URL,
@@ -434,8 +435,7 @@ func runRemoteList(ctx context.Context, configPath string, outputOpts *kvx.Outpu
 			AuthProvider: c.AuthProvider,
 			AuthScope:    c.AuthScope,
 			Default:      c.Name == cfg.Settings.DefaultCatalog,
-		}
+		})
 	}
-
 	return outputOpts.Write(items)
 }

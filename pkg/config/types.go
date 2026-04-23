@@ -32,17 +32,51 @@ type Config struct {
 	Discovery  DiscoveryConfig  `json:"discovery,omitempty" yaml:"discovery,omitempty" mapstructure:"discovery" doc:"Auto-discovery configuration"`
 }
 
+// DiscoveryStrategy controls how a remote catalog discovers available artifacts.
+type DiscoveryStrategy string
+
+// Discovery strategy constants.
+const (
+	// DiscoveryStrategyAuto tries API enumeration first, falls back to the
+	// catalog-index artifact on ErrEnumerationNotSupported. This is the default.
+	DiscoveryStrategyAuto DiscoveryStrategy = "auto"
+
+	// DiscoveryStrategyIndex skips API enumeration and fetches the catalog-index
+	// artifact directly. Fastest path; works without authentication.
+	DiscoveryStrategyIndex DiscoveryStrategy = "index"
+
+	// DiscoveryStrategyAPI always uses API enumeration and never falls back to
+	// the catalog-index artifact.
+	DiscoveryStrategyAPI DiscoveryStrategy = "api"
+)
+
+// ValidDiscoveryStrategies returns the list of valid discovery strategies.
+func ValidDiscoveryStrategies() []string {
+	return []string{string(DiscoveryStrategyAuto), string(DiscoveryStrategyIndex), string(DiscoveryStrategyAPI)}
+}
+
+// IsValidDiscoveryStrategy returns true if the given strategy is valid.
+func IsValidDiscoveryStrategy(s string) bool {
+	for _, valid := range ValidDiscoveryStrategies() {
+		if s == valid {
+			return true
+		}
+	}
+	return false
+}
+
 // CatalogConfig represents a single catalog configuration.
 type CatalogConfig struct {
-	Name         string            `json:"name" yaml:"name" mapstructure:"name" doc:"Catalog name" example:"internal" maxLength:"255"`
-	Type         string            `json:"type" yaml:"type" mapstructure:"type" doc:"Catalog type" example:"filesystem" maxLength:"50"`
-	Path         string            `json:"path,omitempty" yaml:"path,omitempty" mapstructure:"path" doc:"Path for filesystem catalogs" maxLength:"4096" example:"~/.config/scafctl/catalog"`
-	URL          string            `json:"url,omitempty" yaml:"url,omitempty" mapstructure:"url" doc:"URL for remote catalogs" maxLength:"2048" example:"https://catalog.example.com"`
-	Auth         *AuthConfig       `json:"auth,omitempty" yaml:"auth,omitempty" mapstructure:"auth" doc:"Authentication configuration"`
-	AuthProvider string            `json:"authProvider,omitempty" yaml:"authProvider,omitempty" mapstructure:"authProvider" doc:"Auth handler name for automatic token injection (e.g. github, gcp, entra)" maxLength:"64" example:"github"`
-	AuthScope    string            `json:"authScope,omitempty" yaml:"authScope,omitempty" mapstructure:"authScope" doc:"OAuth scope for auth provider token requests" maxLength:"1024" example:"https://management.azure.com/.default"`
-	Metadata     map[string]string `json:"metadata,omitempty" yaml:"metadata,omitempty" mapstructure:"metadata" doc:"Additional metadata"`
-	HTTPClient   *HTTPClientConfig `json:"httpClient,omitempty" yaml:"httpClient,omitempty" mapstructure:"httpClient" doc:"Per-catalog HTTP client overrides (inherits from global)"`
+	Name              string            `json:"name" yaml:"name" mapstructure:"name" doc:"Catalog name" example:"internal" maxLength:"255"`
+	Type              string            `json:"type" yaml:"type" mapstructure:"type" doc:"Catalog type" example:"filesystem" maxLength:"50"`
+	Path              string            `json:"path,omitempty" yaml:"path,omitempty" mapstructure:"path" doc:"Path for filesystem catalogs" maxLength:"4096" example:"~/.config/scafctl/catalog"`
+	URL               string            `json:"url,omitempty" yaml:"url,omitempty" mapstructure:"url" doc:"URL for remote catalogs" maxLength:"2048" example:"https://catalog.example.com"`
+	Auth              *AuthConfig       `json:"auth,omitempty" yaml:"auth,omitempty" mapstructure:"auth" doc:"Authentication configuration"`
+	AuthProvider      string            `json:"authProvider,omitempty" yaml:"authProvider,omitempty" mapstructure:"authProvider" doc:"Auth handler name for automatic token injection (e.g. github, gcp, entra)" maxLength:"64" example:"github"`
+	AuthScope         string            `json:"authScope,omitempty" yaml:"authScope,omitempty" mapstructure:"authScope" doc:"OAuth scope for auth provider token requests" maxLength:"1024" example:"https://management.azure.com/.default"`
+	DiscoveryStrategy DiscoveryStrategy `json:"discoveryStrategy,omitempty" yaml:"discoveryStrategy,omitempty" mapstructure:"discoveryStrategy" doc:"How artifacts are discovered: auto (API then index fallback), index (index only), api (API only)" example:"auto" maxLength:"10"`
+	Metadata          map[string]string `json:"metadata,omitempty" yaml:"metadata,omitempty" mapstructure:"metadata" doc:"Additional metadata"`
+	HTTPClient        *HTTPClientConfig `json:"httpClient,omitempty" yaml:"httpClient,omitempty" mapstructure:"httpClient" doc:"Per-catalog HTTP client overrides (inherits from global)"`
 }
 
 // AuthConfig holds authentication settings for a catalog.
@@ -65,10 +99,10 @@ type Settings struct {
 	// protection.
 	RequireSecureKeyring bool `json:"requireSecureKeyring,omitempty" yaml:"requireSecureKeyring,omitempty" mapstructure:"requireSecureKeyring" doc:"Fail if OS keyring is unavailable instead of falling back to insecure storage"`
 
-	// DisableOfficialCatalog prevents the official OCI catalog from being
-	// appended to the catalog chain. When true, only explicitly configured
-	// catalogs are used for plugin resolution.
-	DisableOfficialCatalog bool `json:"disableOfficialCatalog,omitempty" yaml:"disableOfficialCatalog,omitempty" mapstructure:"disableOfficialCatalog" doc:"Do not append the official catalog to the catalog chain"`
+	// DisableOfficialCatalog prevents the built-in official catalog from being
+	// added to the catalog chain. Embedders can set this when their CLI should
+	// not fall back to the scafctl community catalog.
+	DisableOfficialCatalog bool `json:"disableOfficialCatalog,omitempty" yaml:"disableOfficialCatalog,omitempty" mapstructure:"disableOfficialCatalog" doc:"Disable the built-in official catalog"`
 }
 
 // VersionCheckConfig holds version check configuration.
@@ -125,6 +159,24 @@ const (
 	CatalogTypeOCI        = "oci"
 	CatalogTypeHTTP       = "http"
 )
+
+// Reserved catalog names. These names are owned by the embedded defaults and
+// their configuration values are always enforced at load time. Users cannot
+// override fields on reserved catalogs -- if they need custom settings they
+// must use a different name.
+const (
+	// CatalogNameLocal is the local filesystem catalog, always first in the chain.
+	CatalogNameLocal = "local"
+
+	// CatalogNameOfficial is the official OCI catalog, always last in the chain.
+	CatalogNameOfficial = "official"
+)
+
+// IsReservedCatalogName reports whether name is a reserved catalog name whose
+// configuration is enforced by the embedded defaults.
+func IsReservedCatalogName(name string) bool {
+	return name == CatalogNameLocal || name == CatalogNameOfficial
+}
 
 // GetCatalog returns a catalog configuration by name.
 func (c *Config) GetCatalog(name string) (*CatalogConfig, bool) {
@@ -360,6 +412,10 @@ type EntraAuthConfig struct {
 	// Use "common" for multi-tenant, "organizations" for work/school only,
 	// or a specific tenant GUID.
 	TenantID string `json:"tenantId,omitempty" yaml:"tenantId,omitempty" mapstructure:"tenantId" doc:"Default Azure tenant ID" example:"common" maxLength:"36"`
+
+	// Authority is the Azure AD authority URL.
+	// Defaults to https://login.microsoftonline.com
+	Authority string `json:"authority,omitempty" yaml:"authority,omitempty" mapstructure:"authority" doc:"Azure AD authority URL" maxLength:"256" example:"https://login.microsoftonline.com"`
 
 	// DefaultScopes are requested during login if not specified on command line.
 	DefaultScopes []string `json:"defaultScopes,omitempty" yaml:"defaultScopes,omitempty" mapstructure:"defaultScopes" doc:"Default OAuth scopes" maxItems:"20"`

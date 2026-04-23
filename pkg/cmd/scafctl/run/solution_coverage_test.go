@@ -101,6 +101,7 @@ func TestActionProgressCallback_Methods(t *testing.T) {
 		var buf bytes.Buffer
 		streams := &terminal.IOStreams{Out: &buf, ErrOut: &buf}
 		cliParams := settings.NewCliParams()
+		cliParams.Verbose = true // progress messages are verbose-only on success
 		w := writer.New(streams, cliParams)
 		return &buf, NewActionProgressCallback(w)
 	}

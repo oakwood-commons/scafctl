@@ -353,6 +353,20 @@ func (h *Handler) Status(ctx context.Context) (*auth.Status, error) {
 // so every token request uses the same cache entry.
 const defaultCacheKey = "_github"
 
+// ActiveFlow returns the credential source currently in use.
+func (h *Handler) ActiveFlow(ctx context.Context) auth.Flow {
+	if HasPATCredentials() {
+		return auth.FlowPAT
+	}
+	if hasRefresh, _ := h.secretStore.Exists(ctx, SecretKeyRefreshToken); hasRefresh {
+		return auth.FlowDeviceCode
+	}
+	if hasAccess, _ := h.secretStore.Exists(ctx, SecretKeyAccessToken); hasAccess {
+		return auth.FlowGitHubApp
+	}
+	return ""
+}
+
 // GetToken returns a valid access token for the specified options.
 // Unlike Entra, GitHub does not support per-request scopes — the scope field
 // in opts is ignored. Scopes are fixed at login time.

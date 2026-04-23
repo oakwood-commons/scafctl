@@ -356,6 +356,20 @@ func (h *Handler) Status(ctx context.Context) (*auth.Status, error) {
 	}, nil
 }
 
+// ActiveFlow returns the credential source currently in use.
+func (h *Handler) ActiveFlow(ctx context.Context) auth.Flow {
+	if HasWorkloadIdentityCredentials() {
+		return auth.FlowWorkloadIdentity
+	}
+	if HasServicePrincipalCredentials() {
+		return auth.FlowServicePrincipal
+	}
+	if metadata, err := h.loadMetadata(ctx); err == nil && metadata != nil && metadata.LoginFlow != "" {
+		return metadata.LoginFlow
+	}
+	return ""
+}
+
 // GetToken returns a valid access token for the specified options.
 func (h *Handler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.Token, error) {
 	if err := h.ensureSecrets(); err != nil {

@@ -25,12 +25,14 @@ func TestManager_Load_NoFile(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, cfg)
 	// Default catalog should be configured
-	assert.Len(t, cfg.Catalogs, 1)
+	assert.Len(t, cfg.Catalogs, 2)
 	assert.Equal(t, "local", cfg.Catalogs[0].Name)
 	assert.Equal(t, CatalogTypeFilesystem, cfg.Catalogs[0].Type)
 	assert.Equal(t, paths.CatalogDir(), cfg.Catalogs[0].Path)
+	assert.Equal(t, "official", cfg.Catalogs[1].Name)
+	assert.Equal(t, CatalogTypeOCI, cfg.Catalogs[1].Type)
 	assert.Equal(t, "none", cfg.Logging.Level)
-	assert.Equal(t, "local", cfg.Settings.DefaultCatalog)
+	assert.Equal(t, "official", cfg.Settings.DefaultCatalog)
 	assert.False(t, cfg.Settings.NoColor)
 	assert.False(t, cfg.Settings.Quiet)
 }
@@ -58,10 +60,13 @@ logging:
 	cfg, err := mgr.Load()
 
 	require.NoError(t, err)
-	assert.Len(t, cfg.Catalogs, 1)
+	// User catalog + merged defaults (official, local)
+	assert.Len(t, cfg.Catalogs, 3)
 	assert.Equal(t, "test", cfg.Catalogs[0].Name)
 	assert.Equal(t, "filesystem", cfg.Catalogs[0].Type)
 	assert.Equal(t, "./test", cfg.Catalogs[0].Path)
+	assert.Equal(t, "local", cfg.Catalogs[1].Name)
+	assert.Equal(t, "official", cfg.Catalogs[2].Name)
 	assert.Equal(t, "test", cfg.Settings.DefaultCatalog)
 	assert.Equal(t, "warn", cfg.Logging.Level)
 }
@@ -99,12 +104,13 @@ logging:
 	cfg, err := mgr.Load()
 
 	require.NoError(t, err)
-	assert.Len(t, cfg.Catalogs, 2)
+	// User catalogs + merged default (official; local already present)
+	assert.Len(t, cfg.Catalogs, 3)
 
 	// Check first catalog
 	assert.Equal(t, "local", cfg.Catalogs[0].Name)
-	assert.Equal(t, "filesystem", cfg.Catalogs[0].Type)
-	assert.Equal(t, "./catalogs", cfg.Catalogs[0].Path)
+	assert.Equal(t, CatalogTypeFilesystem, cfg.Catalogs[0].Type)
+	assert.NotEmpty(t, cfg.Catalogs[0].Path, "reserved local catalog path must be enforced from defaults")
 
 	// Check second catalog with auth
 	assert.Equal(t, "remote", cfg.Catalogs[1].Name)
@@ -114,6 +120,10 @@ logging:
 	assert.Equal(t, "token", cfg.Catalogs[1].Auth.Type)
 	assert.Equal(t, "REGISTRY_TOKEN", cfg.Catalogs[1].Auth.TokenEnvVar)
 	assert.Equal(t, "team-a", cfg.Catalogs[1].Metadata["owner"])
+
+	// Check merged official catalog
+	assert.Equal(t, "official", cfg.Catalogs[2].Name)
+	assert.Equal(t, CatalogTypeOCI, cfg.Catalogs[2].Type)
 
 	// Check settings
 	assert.Equal(t, "local", cfg.Settings.DefaultCatalog)
@@ -171,10 +181,11 @@ func TestManager_Save(t *testing.T) {
 	cfg2, err := mgr2.Load()
 	require.NoError(t, err)
 
-	// Should have default catalog + newly added catalog
-	assert.Len(t, cfg2.Catalogs, 2)
+	// Should have default catalogs + newly added catalog
+	assert.Len(t, cfg2.Catalogs, 3)
 	assert.Equal(t, "local", cfg2.Catalogs[0].Name)
-	assert.Equal(t, "new-catalog", cfg2.Catalogs[1].Name)
+	assert.Equal(t, "official", cfg2.Catalogs[1].Name)
+	assert.Equal(t, "new-catalog", cfg2.Catalogs[2].Name)
 	assert.Equal(t, "error", cfg2.Logging.Level)
 }
 
@@ -206,10 +217,11 @@ func TestManager_SaveAs(t *testing.T) {
 	cfg2, err := mgr2.Load()
 	require.NoError(t, err)
 
-	// Should have default catalog + newly added catalog
-	assert.Len(t, cfg2.Catalogs, 2)
+	// Should have default catalogs + newly added catalog
+	assert.Len(t, cfg2.Catalogs, 3)
 	assert.Equal(t, "local", cfg2.Catalogs[0].Name)
-	assert.Equal(t, "test", cfg2.Catalogs[1].Name)
+	assert.Equal(t, "official", cfg2.Catalogs[1].Name)
+	assert.Equal(t, "test", cfg2.Catalogs[2].Name)
 }
 
 func TestManager_GetSet(t *testing.T) {
@@ -650,7 +662,7 @@ settings:
 	assert.Equal(t, "info", cfg.Logging.Level)
 	assert.True(t, cfg.Settings.Quiet)
 	// Built-in defaults should still be present for unset fields
-	assert.Equal(t, "local", cfg.Settings.DefaultCatalog)
+	assert.Equal(t, "official", cfg.Settings.DefaultCatalog)
 }
 
 func TestManager_Load_BaseConfig_UserFileOverrides(t *testing.T) {

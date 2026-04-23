@@ -624,31 +624,27 @@ func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context)
 				name, ver, result.SolutionDir)
 		}
 
-		// Show a concise summary so the user knows what was resolved.
-		// Skip when structured or quiet output is requested to avoid polluting machine-readable output.
-		format, _ := kvx.ParseOutputFormat(o.Output)
-		if !kvx.IsStructuredFormat(format) && format != kvx.OutputFormatQuiet {
-			switch {
-			case name != "" && ver != "" && source != "":
-				w.Infof("Solution: %s@%s (%s)", name, ver, source)
-			case name != "" && ver != "":
-				w.Infof("Solution: %s@%s", name, ver)
-			case name != "" && source != "":
-				w.Infof("Solution: %s (%s)", name, source)
-			case name != "":
-				w.Infof("Solution: %s", name)
-			case source != "":
-				w.Infof("Solution: %s", source)
-			}
+		// Show a concise summary when verbose is enabled.
+		switch {
+		case name != "" && ver != "" && source != "":
+			w.Verbosef("Solution: %s@%s (%s)", name, ver, source)
+		case name != "" && ver != "":
+			w.Verbosef("Solution: %s@%s", name, ver)
+		case name != "" && source != "":
+			w.Verbosef("Solution: %s (%s)", name, source)
+		case name != "":
+			w.Verbosef("Solution: %s", name)
+		case source != "":
+			w.Verbosef("Solution: %s", source)
+		}
 
-			// Emit discovery-specific informational messages.
-			disc := result.DiscoveredFrom
-			if disc.AlternatePath != "" {
-				if disc.IsActionFile {
-					w.Infof("  (solution.yaml also found at %s)", disc.AlternatePath)
-				} else {
-					w.Infof("  (actions.yaml also found at %s; use '%s run action' to execute actions)", disc.AlternatePath, binaryName)
-				}
+		// Emit discovery-specific informational messages.
+		disc := result.DiscoveredFrom
+		if disc.AlternatePath != "" {
+			if disc.IsActionFile {
+				w.Verbosef("  (solution.yaml also found at %s)", disc.AlternatePath)
+			} else {
+				w.Verbosef("  (actions.yaml also found at %s; use '%s run action' to execute actions)", disc.AlternatePath, binaryName)
 			}
 		}
 	}

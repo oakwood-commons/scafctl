@@ -49,6 +49,12 @@ func (r *fakeOCIRegistry) handler() http.Handler {
 			return
 		}
 
+		// Catalog: GET /v2/_catalog
+		if path == "/v2/_catalog" {
+			r.handleCatalog(w)
+			return
+		}
+
 		// Tags list: GET /v2/<repo>/tags/list
 		if strings.HasSuffix(path, "/tags/list") {
 			r.handleTagsList(w, req, path)
@@ -86,6 +92,21 @@ func (r *fakeOCIRegistry) handler() http.Handler {
 		}
 
 		w.WriteHeader(http.StatusNotFound)
+	})
+}
+
+func (r *fakeOCIRegistry) handleCatalog(w http.ResponseWriter) {
+	r.mu.RLock()
+	repos := make([]string, 0, len(r.tags))
+	for repo := range r.tags {
+		repos = append(repos, repo)
+	}
+	r.mu.RUnlock()
+
+	sort.Strings(repos)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+		"repositories": repos,
 	})
 }
 
@@ -675,10 +696,36 @@ func TestRemoteCatalog_List_NoName(t *testing.T) {
 	cat, ts := newTestRemoteCatalog(t)
 	defer ts.Close()
 
-	// Listing without name for remote catalogs returns nil (not supported)
-	infos, err := cat.List(t.Context(), ArtifactKindProvider, "")
+	ctx := t.Context()
+
+	// Listing without name enumerates via _catalog. Empty registry returns empty list.
+	infos, err := cat.List(ctx, ArtifactKindProvider, "")
 	require.NoError(t, err)
-	assert.Nil(t, infos)
+	assert.Empty(t, infos)
+
+	// Store a solution so the registry has something to enumerate
+	ref := Reference{Kind: ArtifactKindSolution, Name: "discovered-app", Version: semver.MustParse("1.0.0")}
+	_, err = cat.Store(ctx, ref, []byte("content"), nil, nil, false)
+	require.NoError(t, err)
+
+	// Listing all kinds should discover it
+	infos, err = cat.List(ctx, "", "")
+	require.NoError(t, err)
+	assert.NotEmpty(t, infos)
+
+	found := false
+	for _, info := range infos {
+		if info.Reference.Name == "discovered-app" && info.Reference.Kind == ArtifactKindSolution {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "expected to discover 'discovered-app' solution")
+
+	// Listing with kind filter should only return matching kind
+	infos, err = cat.List(ctx, ArtifactKindProvider, "")
+	require.NoError(t, err)
+	assert.Empty(t, infos, "no providers were stored, should be empty")
 }
 
 func TestRemoteCatalog_List_AcrossKinds(t *testing.T) {

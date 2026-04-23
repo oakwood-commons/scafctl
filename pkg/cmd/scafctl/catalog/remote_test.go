@@ -255,8 +255,8 @@ settings:
 
 	_, ok := cfg.GetCatalog("test")
 	assert.False(t, ok)
-	// Default falls back to "local" (the built-in default) after removing
-	assert.Equal(t, "local", cfg.Settings.DefaultCatalog)
+	// Default falls back to "official" (the built-in default) after removing
+	assert.Equal(t, "official", cfg.Settings.DefaultCatalog)
 }
 
 func TestRunRemoteSetDefault(t *testing.T) {

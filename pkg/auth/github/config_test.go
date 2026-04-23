@@ -7,7 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDefaultConfig(t *testing.T) {
@@ -15,7 +17,10 @@ func TestDefaultConfig(t *testing.T) {
 
 	assert.Equal(t, DefaultClientID, cfg.ClientID)
 	assert.Equal(t, DefaultHostname, cfg.Hostname)
-	assert.Equal(t, []string{"gist", "read:org", "repo", "workflow"}, cfg.DefaultScopes)
+	// Scopes come from the embedded defaults.yaml (single source of truth).
+	embedded := config.EmbeddedGitHubDefaults()
+	require.NotNil(t, embedded, "defaults.yaml must contain auth.github section")
+	assert.Equal(t, embedded.DefaultScopes, cfg.DefaultScopes)
 	assert.Equal(t, 5*time.Second, cfg.MinPollInterval)
 	assert.Equal(t, 5*time.Second, cfg.SlowDownIncrement)
 }
