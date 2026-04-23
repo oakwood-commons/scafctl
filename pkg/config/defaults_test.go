@@ -100,7 +100,7 @@ func TestEnsureDefaults_DoesNotDuplicateExisting(t *testing.T) {
 		m, _ := c.(map[string]any)
 		if m["name"] == "local" {
 			localCount++
-			assert.Equal(t, "/custom/path", m["path"], "user-customised path must be preserved")
+			assert.NotEqual(t, "/custom/path", m["path"], "reserved catalog path must be enforced from defaults")
 		}
 	}
 	assert.Equal(t, 1, localCount, "local catalog must not be duplicated")
@@ -238,4 +238,94 @@ func TestEnsureDefaults_StatError(t *testing.T) {
 	err := EnsureDefaults("/dev/null/config.yaml")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "checking config file")
+}
+
+func TestEnsureDefaults_ReservedCatalogEnforced(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	// User tries to redirect "official" to an evil registry.
+	existing := `catalogs:
+  - name: official
+    type: oci
+    url: oci://evil.example.com/hijacked
+    authProvider: custom-auth
+  - name: my-catalog
+    type: oci
+    url: oci://my-registry.example.com/myorg
+`
+	require.NoError(t, os.WriteFile(path, []byte(existing), 0o600))
+
+	err := EnsureDefaults(path)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	var cfg map[string]any
+	require.NoError(t, yaml.Unmarshal(data, &cfg))
+	catalogs := toSlice(cfg["catalogs"])
+
+	for _, c := range catalogs {
+		m, _ := c.(map[string]any)
+		if m["name"] == "official" {
+			assert.Equal(t, "oci://ghcr.io/oakwood-commons", m["url"],
+				"reserved official catalog URL must be enforced from defaults")
+			assert.Equal(t, "github", m["authProvider"],
+				"reserved official catalog authProvider must be enforced")
+			assert.NotEqual(t, "custom-auth", m["authProvider"])
+		}
+		if m["name"] == "my-catalog" {
+			assert.Equal(t, "oci://my-registry.example.com/myorg", m["url"],
+				"non-reserved catalog must preserve user values")
+		}
+	}
+}
+
+func TestIsReservedCatalogName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		expected bool
+	}{
+		{"local", true},
+		{"official", true},
+		{"my-catalog", false},
+		{"Local", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, IsReservedCatalogName(tt.name))
+		})
+	}
+}
+
+func TestMergeDefaultCatalogEntries_ReservedOverwrite(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Catalogs: []CatalogConfig{
+			{Name: "official", Type: CatalogTypeOCI, URL: "oci://evil.example.com/hijacked", AuthProvider: "custom-auth"},
+			{Name: "my-catalog", Type: CatalogTypeOCI, URL: "oci://my-registry.example.com/myorg"},
+		},
+	}
+
+	mergeDefaultCatalogEntries(cfg)
+
+	for _, c := range cfg.Catalogs {
+		if c.Name == "official" {
+			assert.Equal(t, "oci://ghcr.io/oakwood-commons", c.URL,
+				"reserved catalog URL must be enforced")
+			assert.Equal(t, "github", c.AuthProvider,
+				"reserved catalog authProvider must be enforced")
+		}
+		if c.Name == "my-catalog" {
+			assert.Equal(t, "oci://my-registry.example.com/myorg", c.URL,
+				"non-reserved catalog must preserve user values")
+		}
+	}
 }

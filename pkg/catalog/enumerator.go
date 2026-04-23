@@ -114,6 +114,10 @@ func newOCICatalogEnumerator(cfg enumeratorConfig) *ociCatalogEnumerator {
 	}
 }
 
+func (e *ociCatalogEnumerator) setClient(client *auth.Client) {
+	e.client = client
+}
+
 func (e *ociCatalogEnumerator) enumerate(ctx context.Context) ([]string, error) {
 	// Try ORAS _catalog first
 	repos, err := e.enumerateORAS(ctx)
@@ -261,6 +265,10 @@ type quayEnumerator struct {
 	client    *auth.Client
 	insecure  bool
 	logger    logr.Logger
+}
+
+func (e *quayEnumerator) setClient(client *auth.Client) {
+	e.client = client
 }
 
 func newQuayEnumerator(cfg enumeratorConfig) *quayEnumerator {
@@ -560,6 +568,10 @@ type ghcrEnumerator struct {
 	authHandler scafctlauth.Handler
 	authScope   string
 	logger      logr.Logger
+}
+
+func (e *ghcrEnumerator) setClient(client *auth.Client) {
+	e.client = client
 }
 
 // ghcrDefaultAPIBase is the production GitHub API endpoint.

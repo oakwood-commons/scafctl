@@ -194,10 +194,22 @@ func (c *RemoteCatalog) Repository() string {
 	return c.repository
 }
 
+// clientUpdatable is implemented by enumerators that can update the OCI
+// auth client they use for registry operations.
+type clientUpdatable interface {
+	setClient(client *auth.Client)
+}
+
 // SetClient overrides the OCI auth client used for registry operations.
 // This is useful for injecting credentials in tooling (e.g. push-index).
+// When the catalog enumerator also supports client replacement, it is
+// updated so that enumeration and repository access use the same credentials.
 func (c *RemoteCatalog) SetClient(client *auth.Client) {
 	c.client = client
+
+	if updatable, ok := c.enumerator.(clientUpdatable); ok {
+		updatable.setClient(client)
+	}
 }
 
 // getRepository creates a remote.Repository for an artifact.
@@ -651,6 +663,56 @@ func (c *RemoteCatalog) listVersions(ctx context.Context, ref Reference) ([]*sem
 	return versions, nil
 }
 
+// ResolveLatestVersions enriches a slice of discovered artifacts with their
+// latest semver version by fetching tags from the registry. Uses bounded
+// concurrency to avoid overwhelming the registry. Artifacts whose tags
+// cannot be fetched are left with an empty LatestVersion.
+func (c *RemoteCatalog) ResolveLatestVersions(ctx context.Context, artifacts []DiscoveredArtifact) {
+	sem := make(chan struct{}, settings.DefaultRegistryConcurrency)
+	var wg sync.WaitGroup
+
+	for i := range artifacts {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				return
+			}
+
+			ref := Reference{Kind: artifacts[idx].Kind, Name: artifacts[idx].Name}
+			versions, err := c.listVersions(ctx, ref)
+			if err != nil {
+				c.logger.V(1).Info("failed to resolve latest version",
+					"kind", artifacts[idx].Kind, "name", artifacts[idx].Name, "error", err.Error())
+				return
+			}
+
+			if latest := latestVersion(versions); latest != nil {
+				artifacts[idx].LatestVersion = latest.String()
+			}
+		}(i)
+	}
+	wg.Wait()
+}
+
+// latestVersion returns the highest semver version from the slice, or nil.
+func latestVersion(versions []*semver.Version) *semver.Version {
+	if len(versions) == 0 {
+		return nil
+	}
+	best := versions[0]
+	for _, v := range versions[1:] {
+		if v.GreaterThan(best) {
+			best = v
+		}
+	}
+	return best
+}
+
 // List returns all artifacts matching the criteria.
 func (c *RemoteCatalog) List(ctx context.Context, kind ArtifactKind, name string) ([]ArtifactInfo, error) {
 	// If name is specified, list versions of that artifact
@@ -707,8 +769,9 @@ func (c *RemoteCatalog) listAcrossKinds(ctx context.Context, name string) ([]Art
 // DiscoveredArtifact represents an artifact discovered via registry enumeration.
 // Exported for use by embedders that call ListRepositories directly.
 type DiscoveredArtifact struct {
-	Kind ArtifactKind `json:"kind" yaml:"kind" doc:"Artifact kind" example:"solution" enum:"solution,provider,auth-handler"`
-	Name string       `json:"name" yaml:"name" doc:"Artifact name" example:"starter-kit" maxLength:"255"`
+	Kind          ArtifactKind `json:"kind"           yaml:"kind"           doc:"Artifact kind" example:"solution" enum:"solution,provider,auth-handler"`
+	Name          string       `json:"name"           yaml:"name"           doc:"Artifact name" example:"starter-kit" maxLength:"255"`
+	LatestVersion string       `json:"latestVersion"  yaml:"latestVersion"  doc:"Latest semver version" example:"1.2.0"`
 }
 
 // listAllArtifacts enumerates repositories under this catalog's prefix,

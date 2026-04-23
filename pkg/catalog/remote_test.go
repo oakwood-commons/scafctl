@@ -630,3 +630,108 @@ func TestListAllArtifacts_ConcurrencyRespected(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, infos) // all tag fetches fail
 }
+
+// mockClientUpdatableEnumerator implements both registryEnumerator and clientUpdatable.
+type mockClientUpdatableEnumerator struct {
+	repos  []string
+	client *orasauth.Client
+}
+
+func (m *mockClientUpdatableEnumerator) enumerate(_ context.Context) ([]string, error) {
+	return m.repos, nil
+}
+
+func (m *mockClientUpdatableEnumerator) setClient(client *orasauth.Client) {
+	m.client = client
+}
+
+func TestSetClient_PropagatesClient(t *testing.T) {
+	t.Parallel()
+
+	originalClient := &orasauth.Client{}
+	newClient := &orasauth.Client{}
+	mockEnum := &mockClientUpdatableEnumerator{client: originalClient}
+
+	cat := &RemoteCatalog{
+		name:       "test",
+		registry:   "registry.example.com",
+		repository: "myorg",
+		logger:     logr.Discard(),
+		client:     originalClient,
+		enumerator: mockEnum,
+	}
+
+	cat.SetClient(newClient)
+
+	assert.Same(t, newClient, cat.client, "catalog client should be updated")
+	assert.Same(t, newClient, mockEnum.client, "enumerator client should be propagated")
+}
+
+func TestSetClient_NonUpdatableEnumerator(t *testing.T) {
+	t.Parallel()
+
+	originalClient := &orasauth.Client{}
+	newClient := &orasauth.Client{}
+
+	cat := &RemoteCatalog{
+		name:       "test",
+		registry:   "registry.example.com",
+		repository: "myorg",
+		logger:     logr.Discard(),
+		client:     originalClient,
+		enumerator: &mockEnumerator{repos: nil},
+	}
+
+	// Should not panic when enumerator doesn't implement clientUpdatable.
+	cat.SetClient(newClient)
+
+	assert.Same(t, newClient, cat.client, "catalog client should be updated")
+}
+
+func TestLatestVersion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		versions []string
+		expected string
+	}{
+		{
+			name:     "multiple versions",
+			versions: []string{"0.1.0", "1.0.0", "0.9.0", "1.2.0", "1.1.0"},
+			expected: "1.2.0",
+		},
+		{
+			name:     "single version",
+			versions: []string{"2.0.0"},
+			expected: "2.0.0",
+		},
+		{
+			name:     "empty",
+			versions: nil,
+			expected: "",
+		},
+		{
+			name:     "prerelease lower than release",
+			versions: []string{"1.0.0-rc.1", "1.0.0"},
+			expected: "1.0.0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var versions []*semver.Version
+			for _, v := range tt.versions {
+				versions = append(versions, semver.MustParse(v))
+			}
+			got := latestVersion(versions)
+			if tt.expected == "" {
+				assert.Nil(t, got)
+			} else {
+				require.NotNil(t, got)
+				assert.Equal(t, tt.expected, got.String())
+			}
+		})
+	}
+}

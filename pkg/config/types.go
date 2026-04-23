@@ -160,10 +160,10 @@ const (
 	CatalogTypeHTTP       = "http"
 )
 
-// Reserved catalog names. These are pinned in chain order and receive special
-// treatment during chain building. Users may still supply configuration values
-// (e.g., URL, authProvider, discoveryStrategy) for these names, which are
-// merged into the built-in defaults.
+// Reserved catalog names. These names are owned by the embedded defaults and
+// their configuration values are always enforced at load time. Users cannot
+// override fields on reserved catalogs -- if they need custom settings they
+// must use a different name.
 const (
 	// CatalogNameLocal is the local filesystem catalog, always first in the chain.
 	CatalogNameLocal = "local"
@@ -171,6 +171,12 @@ const (
 	// CatalogNameOfficial is the official OCI catalog, always last in the chain.
 	CatalogNameOfficial = "official"
 )
+
+// IsReservedCatalogName reports whether name is a reserved catalog name whose
+// configuration is enforced by the embedded defaults.
+func IsReservedCatalogName(name string) bool {
+	return name == CatalogNameLocal || name == CatalogNameOfficial
+}
 
 // GetCatalog returns a catalog configuration by name.
 func (c *Config) GetCatalog(name string) (*CatalogConfig, bool) {

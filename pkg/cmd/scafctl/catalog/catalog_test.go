@@ -935,3 +935,43 @@ func TestDeduplicateArtifacts_DifferentKindsNotMerged(t *testing.T) {
 	result := deduplicateArtifacts(artifacts)
 	assert.Len(t, result, 2)
 }
+
+func TestDeduplicateArtifacts_SubstringCatalogNames(t *testing.T) {
+	t.Parallel()
+
+	artifacts := []catalog.ArtifactInfo{
+		{
+			Reference: catalog.Reference{Name: "app", Kind: catalog.ArtifactKindSolution, Version: semver.MustParse("1.0.0")},
+			Catalog:   "production",
+		},
+		{
+			Reference: catalog.Reference{Name: "app", Kind: catalog.ArtifactKindSolution, Version: semver.MustParse("1.0.0")},
+			Catalog:   "prod",
+		},
+	}
+
+	result := deduplicateArtifacts(artifacts)
+	require.Len(t, result, 1)
+	assert.Equal(t, "production, prod", result[0].Catalog,
+		"substring catalog name must not be treated as duplicate")
+}
+
+func TestDeduplicateArtifacts_ExactDuplicateCatalog(t *testing.T) {
+	t.Parallel()
+
+	artifacts := []catalog.ArtifactInfo{
+		{
+			Reference: catalog.Reference{Name: "app", Kind: catalog.ArtifactKindSolution, Version: semver.MustParse("1.0.0")},
+			Catalog:   "prod",
+		},
+		{
+			Reference: catalog.Reference{Name: "app", Kind: catalog.ArtifactKindSolution, Version: semver.MustParse("1.0.0")},
+			Catalog:   "prod",
+		},
+	}
+
+	result := deduplicateArtifacts(artifacts)
+	require.Len(t, result, 1)
+	assert.Equal(t, "prod", result[0].Catalog,
+		"exact duplicate catalog should not be appended")
+}

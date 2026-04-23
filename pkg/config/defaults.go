@@ -116,9 +116,12 @@ func mergeDefaults(configPath string) error {
 }
 
 // mergeCatalogDefaults adds any catalog entries from defaults that are not
-// already present (matched by name) in the existing config. For entries that
-// do exist, it backfills any missing fields from the defaults without
-// overwriting user-customised values.
+// already present (matched by name) in the existing config.
+//
+// Reserved catalog names ("local", "official") have all their fields
+// overwritten from the defaults so they cannot be redirected by user config.
+// Non-reserved entries that already exist get missing fields backfilled
+// without overwriting user-customised values.
 func mergeCatalogDefaults(existing, defs map[string]any) bool {
 	defaultCatalogs := toSlice(defs["catalogs"])
 	if len(defaultCatalogs) == 0 {
@@ -126,11 +129,11 @@ func mergeCatalogDefaults(existing, defs map[string]any) bool {
 	}
 
 	existingCatalogs := toSlice(existing["catalogs"])
-	nameIndex := make(map[string]map[string]any, len(existingCatalogs))
-	for _, c := range existingCatalogs {
+	nameIndex := make(map[string]int, len(existingCatalogs))
+	for i, c := range existingCatalogs {
 		if m, ok := c.(map[string]any); ok {
 			if name, ok := m["name"].(string); ok {
-				nameIndex[name] = m
+				nameIndex[name] = i
 			}
 		}
 	}
@@ -145,12 +148,22 @@ func mergeCatalogDefaults(existing, defs map[string]any) bool {
 		if !ok {
 			continue
 		}
-		if em, exists := nameIndex[name]; exists {
-			// Backfill missing fields from defaults into the existing entry.
-			for k, v := range dm {
-				if _, has := em[k]; !has {
-					em[k] = v
-					changed = true
+		if idx, exists := nameIndex[name]; exists {
+			if IsReservedCatalogName(name) {
+				// Reserved: replace the entire entry with the default.
+				existingCatalogs[idx] = c
+				changed = true
+			} else {
+				// Non-reserved: backfill missing fields only.
+				em, _ := existingCatalogs[idx].(map[string]any)
+				if em == nil {
+					continue
+				}
+				for k, v := range dm {
+					if _, has := em[k]; !has {
+						em[k] = v
+						changed = true
+					}
 				}
 			}
 		} else {

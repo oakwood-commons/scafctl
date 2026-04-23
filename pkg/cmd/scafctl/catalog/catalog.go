@@ -424,13 +424,24 @@ func deduplicateArtifacts(artifacts []catalog.ArtifactInfo) []catalog.ArtifactIn
 	seen := make(map[dedupKey]int, len(artifacts)) // key → index in result
 	result := make([]catalog.ArtifactInfo, 0, len(artifacts))
 
+	catalogSet := func(csv string) map[string]struct{} {
+		set := make(map[string]struct{})
+		for _, name := range strings.Split(csv, ", ") {
+			if name != "" {
+				set[name] = struct{}{}
+			}
+		}
+		return set
+	}
+
 	for _, a := range artifacts {
 		k := keyFor(a)
 		if idx, ok := seen[k]; ok {
 			existing := &result[idx]
 
-			// Combine catalog names (avoid duplicates).
-			if !strings.Contains(existing.Catalog, a.Catalog) {
+			// Combine catalog names using exact set membership (not substring).
+			names := catalogSet(existing.Catalog)
+			if _, found := names[a.Catalog]; !found {
 				existing.Catalog = existing.Catalog + ", " + a.Catalog
 			}
 

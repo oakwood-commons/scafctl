@@ -212,3 +212,29 @@ func catalogURLFromCatalogConfig(cat *config.CatalogConfig) string {
 	}
 	return cat.Path
 }
+
+// ResolveCatalogDisplayName returns a human-readable catalog name for display.
+// When catalogFlag is a name, it is returned as-is. When it is a URL, the
+// registry hostname is extracted. When empty, the default catalog name from
+// config is used. Falls back to "default" if nothing can be resolved.
+func ResolveCatalogDisplayName(ctx context.Context, catalogFlag string) string {
+	if catalogFlag != "" {
+		if LooksLikeCatalogURL(catalogFlag) {
+			registry, _ := ParseCatalogURL(catalogFlag)
+			return registry
+		}
+		return catalogFlag
+	}
+
+	cfg := config.FromContext(ctx)
+	if cfg == nil {
+		return "default"
+	}
+
+	cat, ok := cfg.GetDefaultCatalog()
+	if !ok {
+		return "default"
+	}
+
+	return cat.Name
+}

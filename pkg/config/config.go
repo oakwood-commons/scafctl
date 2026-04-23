@@ -247,9 +247,12 @@ func defaultCatalogs() []CatalogConfig {
 
 // mergeDefaultCatalogEntries ensures built-in default catalog entries are
 // present in cfg.Catalogs. Viper replaces arrays entirely when merging config
-// layers, so defaults may be lost. For entries that already exist (by name),
-// missing fields are backfilled from the defaults without overwriting
-// user-customised values. Entries that are absent are appended.
+// layers, so defaults may be lost.
+//
+// Reserved catalog names ("local", "official") are fully enforced: all
+// fields are overwritten with the default values so that users cannot redirect
+// them to arbitrary registries. Non-reserved entries that match a default by
+// name get missing fields backfilled without overwriting user values.
 //
 // The "official" catalog is skipped when DisableOfficialCatalog is set.
 func mergeDefaultCatalogEntries(cfg *Config) {
@@ -259,7 +262,7 @@ func mergeDefaultCatalogEntries(cfg *Config) {
 		defaultsByName[dc.Name] = dc
 	}
 
-	// Backfill missing fields in existing entries.
+	// Enforce reserved entries and backfill non-reserved entries.
 	seen := make(map[string]struct{}, len(cfg.Catalogs))
 	for i := range cfg.Catalogs {
 		seen[cfg.Catalogs[i].Name] = struct{}{}
@@ -267,6 +270,12 @@ func mergeDefaultCatalogEntries(cfg *Config) {
 		if !ok {
 			continue
 		}
+		if IsReservedCatalogName(cfg.Catalogs[i].Name) {
+			// Reserved: overwrite all fields from defaults.
+			cfg.Catalogs[i] = dc
+			continue
+		}
+		// Non-reserved: backfill missing fields only.
 		if cfg.Catalogs[i].Type == "" {
 			cfg.Catalogs[i].Type = dc.Type
 		}

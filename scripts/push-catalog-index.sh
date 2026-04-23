@@ -17,4 +17,4 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 echo "Building and running catalog index push..."
 cd "$REPO_ROOT"
-go run ./cmd/push-index
+go run ./cmd/scafctl/scafctl.go -- catalog index push

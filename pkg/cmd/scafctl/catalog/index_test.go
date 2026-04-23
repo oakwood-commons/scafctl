@@ -52,8 +52,8 @@ func TestWriteIndexList_AllKinds(t *testing.T) {
 	outputOpts.Format = "json"
 
 	artifacts := []catalogpkg.DiscoveredArtifact{
-		{Kind: catalogpkg.ArtifactKindSolution, Name: "hello-world"},
-		{Kind: catalogpkg.ArtifactKindProvider, Name: "terraform"},
+		{Kind: catalogpkg.ArtifactKindSolution, Name: "hello-world", LatestVersion: "1.2.0"},
+		{Kind: catalogpkg.ArtifactKindProvider, Name: "terraform", LatestVersion: "0.5.1"},
 		{Kind: catalogpkg.ArtifactKindAuthHandler, Name: "gcp-auth"},
 	}
 
@@ -67,10 +67,13 @@ func TestWriteIndexList_AllKinds(t *testing.T) {
 
 	assert.Equal(t, "solution", items[0].Kind)
 	assert.Equal(t, "hello-world", items[0].Name)
+	assert.Equal(t, "1.2.0", items[0].LatestVersion)
 	assert.Equal(t, "provider", items[1].Kind)
 	assert.Equal(t, "terraform", items[1].Name)
+	assert.Equal(t, "0.5.1", items[1].LatestVersion)
 	assert.Equal(t, "auth-handler", items[2].Kind)
 	assert.Equal(t, "gcp-auth", items[2].Name)
+	assert.Empty(t, items[2].LatestVersion, "missing version should be empty")
 }
 
 func TestWriteIndexList_Empty(t *testing.T) {
@@ -181,5 +184,66 @@ func BenchmarkWriteIndexList(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		_ = writeIndexList(artifacts, outputOpts)
+	}
+}
+
+func TestWriteIndexDiff(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+	outputOpts.Format = "json"
+
+	diff := catalogpkg.IndexDiffSummary{
+		Entries: []catalogpkg.IndexDiffEntry{
+			{Change: catalogpkg.IndexDiffAdded, Kind: catalogpkg.ArtifactKindSolution, Name: "new-app", LatestVersion: "1.0.0"},
+			{Change: catalogpkg.IndexDiffVersionChanged, Kind: catalogpkg.ArtifactKindProvider, Name: "terraform", LatestVersion: "2.0.0", PrevVersion: "1.5.0"},
+			{Change: catalogpkg.IndexDiffRemoved, Kind: catalogpkg.ArtifactKindSolution, Name: "old-app", LatestVersion: "0.9.0"},
+			{Change: catalogpkg.IndexDiffUnchanged, Kind: catalogpkg.ArtifactKindSolution, Name: "stable", LatestVersion: "3.0.0"},
+		},
+		Added:   1,
+		Removed: 1,
+		Changed: 1,
+		Total:   3,
+	}
+
+	err := writeIndexDiff(diff, outputOpts)
+	require.NoError(t, err)
+
+	output := outBuf.String()
+	assert.Contains(t, output, `"change"`)
+	assert.Contains(t, output, `"added"`)
+	assert.Contains(t, output, `"version-changed"`)
+	assert.Contains(t, output, `"removed"`)
+	assert.Contains(t, output, `"unchanged"`)
+	assert.Contains(t, output, `"prevVersion"`)
+	assert.Contains(t, output, `"1.5.0"`)
+}
+
+func BenchmarkWriteIndexDiff(b *testing.B) {
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+	outputOpts.Format = "json"
+
+	diff := catalogpkg.IndexDiffSummary{
+		Entries: make([]catalogpkg.IndexDiffEntry, 100),
+		Added:   30,
+		Removed: 10,
+		Changed: 20,
+		Total:   90,
+	}
+	for i := range diff.Entries {
+		diff.Entries[i] = catalogpkg.IndexDiffEntry{
+			Change:        catalogpkg.IndexDiffAdded,
+			Kind:          catalogpkg.ArtifactKindSolution,
+			Name:          "artifact",
+			LatestVersion: "1.0.0",
+		}
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_ = writeIndexDiff(diff, outputOpts)
 	}
 }

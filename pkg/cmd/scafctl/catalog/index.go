@@ -42,8 +42,18 @@ type IndexShowOptions struct {
 
 // IndexListItem represents an artifact entry in index output.
 type IndexListItem struct {
-	Kind string `json:"kind" yaml:"kind" doc:"Artifact kind (solution, provider, auth-handler)" example:"solution"`
-	Name string `json:"name" yaml:"name" doc:"Artifact name" example:"hello-world"`
+	Kind          string `json:"kind"          yaml:"kind"          doc:"Artifact kind (solution, provider, auth-handler)" example:"solution"`
+	Name          string `json:"name"          yaml:"name"          doc:"Artifact name" example:"hello-world"`
+	LatestVersion string `json:"latestVersion" yaml:"latestVersion" doc:"Latest semver version" example:"1.2.0"`
+}
+
+// IndexDiffItem represents an artifact entry in diff output.
+type IndexDiffItem struct {
+	Change        string `json:"change"        yaml:"change"        doc:"Change type (added, removed, version-changed, unchanged)" example:"added"`
+	Kind          string `json:"kind"          yaml:"kind"          doc:"Artifact kind" example:"solution"`
+	Name          string `json:"name"          yaml:"name"          doc:"Artifact name" example:"hello-world"`
+	LatestVersion string `json:"latestVersion" yaml:"latestVersion" doc:"New latest version" example:"1.2.0"`
+	PrevVersion   string `json:"prevVersion"   yaml:"prevVersion"   doc:"Previous version (empty if added)" example:"1.1.0"`
 }
 
 // CommandIndex creates the catalog index command group.
@@ -107,7 +117,7 @@ func commandIndexPush(cliParams *settings.Run, ioStreams *terminal.IOStreams) *c
 			opts.AppName = cliParams.BinaryName
 			kvxOpts := flags.ToKvxOutputOptions(&opts.KvxOutputFlags,
 				kvx.WithIOStreams(ioStreams),
-				kvx.WithOutputColumnOrder([]string{"kind", "name"}),
+				kvx.WithOutputColumnOrder([]string{"kind", "name", "latestVersion"}),
 			)
 			return runIndexPush(cmd.Context(), opts, kvxOpts)
 		},
@@ -154,7 +164,7 @@ func commandIndexShow(cliParams *settings.Run, ioStreams *terminal.IOStreams) *c
 			opts.AppName = cliParams.BinaryName
 			kvxOpts := flags.ToKvxOutputOptions(&opts.KvxOutputFlags,
 				kvx.WithIOStreams(ioStreams),
-				kvx.WithOutputColumnOrder([]string{"kind", "name"}),
+				kvx.WithOutputColumnOrder([]string{"kind", "name", "latestVersion"}),
 			)
 			return runIndexShow(cmd.Context(), opts, kvxOpts)
 		},
@@ -185,17 +195,34 @@ func runIndexPush(ctx context.Context, opts *IndexPushOptions, outputOpts *kvx.O
 	}
 
 	if len(artifacts) == 0 {
-		w.WarnStderrf("No artifacts found in catalog — nothing to push.")
-		return nil
+		w.WarnStderrf("No artifacts found in catalog -- nothing to push.")
+		return writeIndexList(nil, outputOpts)
 	}
+
+	// Enrich artifacts with their latest semver version.
+	w.PlainStderrf("Resolving latest versions for %d artifact(s)...", len(artifacts))
+	remoteCatalog.ResolveLatestVersions(ctx, artifacts)
 
 	if opts.DryRun {
-		w.PlainStderrf("Dry run: %d artifact(s) would be indexed to catalog %q (%s):\n",
-			len(artifacts), opts.Catalog, remoteCatalog.Registry())
-		return writeIndexList(artifacts, outputOpts)
+		// Fetch the current published index for comparison.
+		currentArtifacts, fetchErr := remoteCatalog.FetchIndex(ctx)
+		if fetchErr != nil {
+			w.Verbosef("No existing index found, showing full list: %v", fetchErr)
+			w.PlainStderrf("Dry run: %d artifact(s) would be indexed to catalog %q (%s):\n",
+				len(artifacts), remoteCatalog.Name(), remoteCatalog.Registry())
+			return writeIndexList(artifacts, outputOpts)
+		}
+
+		diff := catalog.DiffIndex(currentArtifacts, artifacts)
+		w.PlainStderrf("Dry run: %d artifact(s) would be indexed to catalog %q (%s)\n",
+			diff.Total, remoteCatalog.Name(), remoteCatalog.Registry())
+		w.PlainStderrf("Changes: %d added, %d removed, %d version-changed, %d unchanged\n",
+			diff.Added, diff.Removed, diff.Changed,
+			diff.Total-diff.Added-diff.Changed)
+		return writeIndexDiff(diff, outputOpts)
 	}
 
-	w.Infof("Pushing catalog index with %d artifact(s)...", len(artifacts))
+	w.PlainStderrf("Pushing catalog index with %d artifact(s)...", len(artifacts))
 
 	if err := remoteCatalog.PushIndex(ctx, artifacts); err != nil {
 		err = fmt.Errorf("failed to push catalog index: %w", err)
@@ -204,7 +231,7 @@ func runIndexPush(ctx context.Context, opts *IndexPushOptions, outputOpts *kvx.O
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
-	w.Successf("Pushed catalog index with %d artifact(s)", len(artifacts))
+	w.PlainStderrf("Pushed catalog index with %d artifact(s)", len(artifacts))
 	return writeIndexList(artifacts, outputOpts)
 }
 
@@ -226,8 +253,8 @@ func runIndexShow(ctx context.Context, opts *IndexShowOptions, outputOpts *kvx.O
 	}
 
 	if len(artifacts) == 0 {
-		w.Infof("Catalog index is empty.")
-		return nil
+		w.PlainStderrf("Catalog index is empty.")
+		return writeIndexList(nil, outputOpts)
 	}
 
 	w.PlainStderrf("Catalog index contains %d artifact(s):\n", len(artifacts))
@@ -247,6 +274,9 @@ func createIndexRemoteCatalog(ctx context.Context, catalogFlag string, insecure 
 		return nil, err
 	}
 
+	// Resolve a human-readable catalog name for display purposes.
+	catalogName := catalog.ResolveCatalogDisplayName(ctx, catalogFlag)
+
 	registry, repository := catalog.ParseCatalogURL(catalogURL)
 
 	credStore, err := catalog.NewCredentialStore(*lgr)
@@ -260,7 +290,7 @@ func createIndexRemoteCatalog(ctx context.Context, catalogFlag string, insecure 
 	verboseRemoteInfo(ctx, w, registry, repository, authHandler, authScope)
 
 	return catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
-		Name:            catalogFlag,
+		Name:            catalogName,
 		Registry:        registry,
 		Repository:      repository,
 		CredentialStore: credStore,
@@ -276,9 +306,27 @@ func writeIndexList(artifacts []catalog.DiscoveredArtifact, outputOpts *kvx.Outp
 	items := make([]IndexListItem, len(artifacts))
 	for i, a := range artifacts {
 		items[i] = IndexListItem{
-			Kind: string(a.Kind),
-			Name: a.Name,
+			Kind:          string(a.Kind),
+			Name:          a.Name,
+			LatestVersion: a.LatestVersion,
 		}
 	}
+	return outputOpts.Write(items)
+}
+
+// writeIndexDiff writes the index diff entries using kvx output options.
+func writeIndexDiff(diff catalog.IndexDiffSummary, outputOpts *kvx.OutputOptions) error {
+	items := make([]IndexDiffItem, len(diff.Entries))
+	for i, e := range diff.Entries {
+		items[i] = IndexDiffItem{
+			Change:        string(e.Change),
+			Kind:          string(e.Kind),
+			Name:          e.Name,
+			LatestVersion: e.LatestVersion,
+			PrevVersion:   e.PrevVersion,
+		}
+	}
+
+	outputOpts.ColumnOrder = []string{"change", "kind", "name", "latestVersion", "prevVersion"}
 	return outputOpts.Write(items)
 }

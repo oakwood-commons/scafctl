@@ -109,8 +109,8 @@ logging:
 
 	// Check first catalog
 	assert.Equal(t, "local", cfg.Catalogs[0].Name)
-	assert.Equal(t, "filesystem", cfg.Catalogs[0].Type)
-	assert.Equal(t, "./catalogs", cfg.Catalogs[0].Path)
+	assert.Equal(t, CatalogTypeFilesystem, cfg.Catalogs[0].Type)
+	assert.NotEmpty(t, cfg.Catalogs[0].Path, "reserved local catalog path must be enforced from defaults")
 
 	// Check second catalog with auth
 	assert.Equal(t, "remote", cfg.Catalogs[1].Name)
