@@ -8,9 +8,9 @@ import (
 )
 
 func main() {
-<% if eq .plugin_type "auth-handler" -%>
+<%- if eq .plugin_type "auth-handler" %>
 	sdkplugin.ServeAuthHandler(&<% .pkg_name %>.Plugin{})
-<%- else -%>
+<%- else %>
 	sdkplugin.Serve(&<% .pkg_name %>.Plugin{})
 <%- end %>
 }
