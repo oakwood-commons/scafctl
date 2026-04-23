@@ -5,6 +5,7 @@ package catalog
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -120,4 +121,15 @@ func TestPlatformNotFoundError_Error(t *testing.T) {
 func TestPlatformNotFoundError_Unwrap(t *testing.T) {
 	err := &PlatformNotFoundError{Platform: "linux/arm64"}
 	assert.ErrorIs(t, err, ErrPlatformNotFound)
+}
+
+func TestIsEnumerationNotSupported(t *testing.T) {
+	t.Run("returns true for wrapped ErrEnumerationNotSupported", func(t *testing.T) {
+		err := fmt.Errorf("enumerating repos: %w", ErrEnumerationNotSupported)
+		assert.True(t, IsEnumerationNotSupported(err))
+	})
+
+	t.Run("returns false for other errors", func(t *testing.T) {
+		assert.False(t, IsEnumerationNotSupported(errors.New("other error")))
+	})
 }

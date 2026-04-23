@@ -204,10 +204,12 @@ func Solution(ctx context.Context, path string, opts ...Option) (*Result, error)
 
 	// Determine the solution directory for relative path resolution.
 	// For file-based loading: use the file's parent directory.
-	// For bundles: the bundle extraction directory (set via os.Chdir below).
-	// For stdin or catalog references: leave empty (falls back to CWD).
+	// For bundles (including catalog bundles): use the bundle extraction directory.
+	// For stdin or unbundled catalog references: leave empty (falls back to CWD).
 	var solutionDir string
-	if path != "-" && bundleDir == "" && !strings.HasPrefix(sol.GetPath(), "catalog:") {
+	if bundleDir != "" {
+		solutionDir = bundleDir
+	} else if path != "-" && !strings.HasPrefix(sol.GetPath(), "catalog:") {
 		absPath, absErr := provider.AbsFromContext(ctx, path)
 		if absErr == nil {
 			solutionDir = filepath.Dir(absPath)

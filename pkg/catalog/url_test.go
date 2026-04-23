@@ -309,3 +309,38 @@ func BenchmarkLooksLikeRemoteReference(b *testing.B) {
 		}
 	}
 }
+
+func TestResolveCatalogDisplayName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		catalogFlag string
+		expected    string
+	}{
+		{
+			name:        "explicit name",
+			catalogFlag: "my-catalog",
+			expected:    "my-catalog",
+		},
+		{
+			name:        "URL extracts registry",
+			catalogFlag: "ghcr.io/myorg/scafctl",
+			expected:    "ghcr.io",
+		},
+		{
+			name:        "empty flag no config",
+			catalogFlag: "",
+			expected:    "default",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			// Use background context (no config loaded) for simplicity.
+			result := ResolveCatalogDisplayName(t.Context(), tt.catalogFlag)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}

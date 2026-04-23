@@ -9,11 +9,23 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/oakwood-commons/scafctl/pkg/config"
 )
 
 // DefaultMinPollInterval is the minimum poll interval for device code flow.
 // OAuth 2.0 device authorization grant recommends at least 5 seconds.
 const DefaultMinPollInterval = 5 * time.Second
+
+// DefaultClientID is the Azure CLI public client ID shipped with scafctl.
+// This well-known public client supports the device code flow.
+const DefaultClientID = "04b07795-8ddb-461a-bbee-02f9e1bf7b46"
+
+// DefaultTenantID is the default multi-tenant tenant identifier.
+const DefaultTenantID = "common"
+
+// DefaultAuthority is the default Azure AD authority URL.
+const DefaultAuthority = "https://login.microsoftonline.com"
 
 // Config holds Entra-specific configuration.
 type Config struct {
@@ -43,21 +55,35 @@ type Config struct {
 }
 
 // DefaultConfig returns the default Entra configuration.
+// Values for ClientID, TenantID, Authority, and DefaultScopes are read from
+// the embedded defaults.yaml (pkg/config) so that the YAML file is the single
+// source of truth. Non-serialised fields (poll intervals) are set here.
 func DefaultConfig() *Config {
-	return &Config{
-		// Using Azure CLI's public client ID as default.
-		// This is a well-known public client that supports device code flow.
-		ClientID:          "04b07795-8ddb-461a-bbee-02f9e1bf7b46",
-		TenantID:          "common",
-		Authority:         "https://login.microsoftonline.com",
+	cfg := &Config{
+		ClientID:          DefaultClientID,
+		TenantID:          DefaultTenantID,
+		Authority:         DefaultAuthority,
 		MinPollInterval:   DefaultMinPollInterval,
 		SlowDownIncrement: 5 * time.Second,
-		DefaultScopes: []string{
-			"openid",
-			"profile",
-			"offline_access",
-		},
 	}
+
+	// Overlay values from the embedded defaults.yaml.
+	if d := config.EmbeddedEntraDefaults(); d != nil {
+		if d.ClientID != "" {
+			cfg.ClientID = d.ClientID
+		}
+		if d.TenantID != "" {
+			cfg.TenantID = d.TenantID
+		}
+		if d.Authority != "" {
+			cfg.Authority = d.Authority
+		}
+		if len(d.DefaultScopes) > 0 {
+			cfg.DefaultScopes = d.DefaultScopes
+		}
+	}
+
+	return cfg
 }
 
 // Validate validates the configuration.

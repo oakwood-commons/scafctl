@@ -9,6 +9,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 )
@@ -62,14 +63,31 @@ type Config struct {
 }
 
 // DefaultConfig returns the default GitHub auth configuration.
+// Values for ClientID, Hostname, and DefaultScopes are read from the embedded
+// defaults.yaml (pkg/config) so that the YAML file is the single source of
+// truth. Non-serialised fields (poll intervals) are set here.
 func DefaultConfig() *Config {
-	return &Config{
+	cfg := &Config{
 		ClientID:          DefaultClientID,
 		Hostname:          DefaultHostname,
-		DefaultScopes:     []string{"gist", "read:org", "repo", "workflow"},
 		MinPollInterval:   5 * time.Second,
 		SlowDownIncrement: 5 * time.Second,
 	}
+
+	// Overlay values from the embedded defaults.yaml.
+	if embedded := config.EmbeddedGitHubDefaults(); embedded != nil {
+		if embedded.ClientID != "" {
+			cfg.ClientID = embedded.ClientID
+		}
+		if embedded.Hostname != "" {
+			cfg.Hostname = embedded.Hostname
+		}
+		if len(embedded.DefaultScopes) > 0 {
+			cfg.DefaultScopes = embedded.DefaultScopes
+		}
+	}
+
+	return cfg
 }
 
 // Validate checks the configuration for required fields.

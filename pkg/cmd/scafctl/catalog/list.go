@@ -26,11 +26,13 @@ import (
 type ListOptions struct {
 	Kind              string
 	Name              string
+	Search            string // Case-insensitive substring to filter artifact names (e.g. "starter")
 	Catalog           string // Remote catalog (registry URL or config name)
 	VersionConstraint string // Semver version constraint (e.g., "^1.0.0", ">= 1.0, < 2.0")
 	Insecure          bool   // Allow HTTP connections
 	AllVersions       bool   // Show all versions instead of just latest
 	PreRelease        bool   // Include pre-release versions
+	ShowAll           bool   // List all configured catalogs instead of just the default
 	CliParams         *settings.Run
 	IOStreams         *terminal.IOStreams
 	flags.KvxOutputFlags
@@ -80,16 +82,17 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 		Short:        "List artifacts in the catalog",
 		SilenceUsage: true,
 		Long: heredoc.Docf(`
-			List artifacts stored in the local catalog, or in a remote registry
-			when --catalog is specified.
+			List artifacts from the default catalog and local catalog.
+			Use --catalog to list from a specific catalog, or --all to
+			list from all configured catalogs.
 
 			By default, only the latest version of each artifact is shown.
 			Use --name to see all versions of a specific artifact, or
 			--all-versions to see everything.
 
 			Filter by kind (solution, provider, auth-handler) to narrow results.
-			When listing from a remote registry, --name is required (OCI registries
-			do not support registry-wide enumeration).
+			When listing from a remote registry without --name, all artifacts
+			are enumerated via the OCI _catalog endpoint (requires registry support).
 
 			You can also pass a full OCI reference to --name to list directly from
 			a remote registry without --catalog:
@@ -108,7 +111,13 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			  # List only solutions
 			  %[1]s catalog list --kind solution
 
-			  # List remote versions of an artifact
+			  # List all artifacts in a remote catalog
+			  %[1]s catalog list --catalog my-registry
+
+			  # List all configured catalogs
+			  %[1]s catalog list --all
+
+			  # List remote versions of a specific artifact
 			  %[1]s catalog list --catalog my-registry --name my-solution
 
 			  # List via full OCI reference
@@ -131,10 +140,12 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 
 	cmd.Flags().StringVar(&options.Kind, "kind", "", "Filter by artifact kind (solution, provider, auth-handler)")
 	cmd.Flags().StringVar(&options.Name, "name", "", "Filter by artifact name (shows all versions when set)")
+	cmd.Flags().StringVarP(&options.Search, "search", "s", "", "Filter artifacts by name (substring match)")
 	cmd.Flags().StringVarP(&options.Catalog, "catalog", "c", "", catalogFlagUsage)
 	cmd.Flags().BoolVar(&options.Insecure, "insecure", false, "Allow insecure HTTP connections")
 	cmd.Flags().BoolVar(&options.AllVersions, "all-versions", false, "Show all versions instead of just the latest")
 	cmd.Flags().BoolVar(&options.PreRelease, "pre-release", false, "Include pre-release versions (e.g. 1.0.0-beta.1)")
+	cmd.Flags().BoolVar(&options.ShowAll, "all", false, "List all configured catalogs instead of just the default")
 	cmd.Flags().StringVar(&options.VersionConstraint, "version", "", "Filter by semver version constraint (e.g., \"^1.0.0\", \">= 1.0, < 2.0\")")
 
 	flags.AddKvxOutputFlagsToStruct(cmd, &options.KvxOutputFlags)
@@ -149,6 +160,11 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 	// Wire pre-release context flag
 	if opts.PreRelease {
 		ctx = catalog.WithIncludePreRelease(ctx)
+	}
+
+	// Wire search pattern for pre-filtering before tag fetches
+	if opts.Search != "" {
+		ctx = catalog.WithSearchPattern(ctx, opts.Search)
 	}
 
 	// Validate --version vs @version in --name.
@@ -183,8 +199,9 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 		}
 	}
 
-	// Remote catalog listing (specific catalog)
-	if opts.Catalog != "" {
+	// When --catalog names a catalog that is NOT in the user's config (e.g., a
+	// bare registry URL), delegate to the direct remote listing path.
+	if opts.Catalog != "" && !isConfiguredCatalog(ctx, opts.Catalog) {
 		return runListRemote(ctx, opts, kind, outputOpts)
 	}
 
@@ -202,33 +219,58 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
-	// When --name is specified, also search configured remote catalogs
-	// to give a unified view of where the artifact lives.
-	if opts.Name != "" {
-		if cfg := appconfig.FromContext(ctx); cfg != nil {
-			for _, catCfg := range cfg.Catalogs {
-				if catCfg.Type != appconfig.CatalogTypeOCI {
-					continue
-				}
-				remoteOpts := &ListOptions{
-					Name:      opts.Name,
-					Kind:      opts.Kind,
-					Catalog:   catCfg.Name,
-					Insecure:  opts.Insecure,
-					CliParams: opts.CliParams,
-					IOStreams: opts.IOStreams,
-				}
-				remoteArtifacts, remoteErr := listRemoteArtifacts(ctx, remoteOpts, kind)
-				if remoteErr != nil {
-					w.Warningf("failed to list from remote catalog %q: %v", catCfg.Name, remoteErr)
-					if catalogURL, resolveErr := catalog.ResolveCatalogURL(ctx, catCfg.Name); resolveErr == nil {
-						registry, _ := catalog.ParseCatalogURL(catalogURL)
-						hintOnAuthError(ctx, w, registry, remoteErr)
-					}
-					continue
-				}
-				artifacts = append(artifacts, remoteArtifacts...)
+	// Determine which remote catalogs to query.
+	// --catalog: only the named catalog (used as post-filter below).
+	// --all: all configured catalogs.
+	// default: only the configured defaultCatalog.
+	if cfg := appconfig.FromContext(ctx); cfg != nil {
+		var remoteCatalogs []appconfig.CatalogConfig
+		if opts.Catalog != "" {
+			// --catalog names a specific configured catalog; query only that one.
+			if cat, ok := cfg.GetCatalog(opts.Catalog); ok && cat.Type == appconfig.CatalogTypeOCI {
+				remoteCatalogs = append(remoteCatalogs, *cat)
 			}
+		} else if opts.ShowAll {
+			for _, catCfg := range cfg.Catalogs {
+				if catCfg.Type == appconfig.CatalogTypeOCI {
+					remoteCatalogs = append(remoteCatalogs, catCfg)
+				}
+			}
+		} else if defCat, ok := cfg.GetDefaultCatalog(); ok && defCat.Type == appconfig.CatalogTypeOCI {
+			remoteCatalogs = append(remoteCatalogs, *defCat)
+		}
+
+		for _, catCfg := range remoteCatalogs {
+			w.Verbosef("Searching remote catalog %q...", catCfg.Name)
+			remoteOpts := &ListOptions{
+				Name:      opts.Name,
+				Kind:      opts.Kind,
+				Search:    opts.Search,
+				Catalog:   catCfg.Name,
+				Insecure:  opts.Insecure,
+				CliParams: opts.CliParams,
+				IOStreams: opts.IOStreams,
+			}
+			remoteArtifacts, remoteErr := listRemoteArtifacts(ctx, remoteOpts, kind)
+			if remoteErr != nil {
+				if catalog.IsEnumerationNotSupported(remoteErr) {
+					w.Verbosef("Catalog %q does not support enumeration, skipping.", catCfg.Name)
+				} else {
+					// In multi-catalog mode (--all), demote errors to verbose.
+					// In single-default mode, show as warnings.
+					if opts.ShowAll {
+						w.Verbosef("Skipping catalog %q: %v", catCfg.Name, remoteErr)
+					} else {
+						w.WarnStderrf("failed to list from remote catalog %q: %v", catCfg.Name, remoteErr)
+						if catalogURL, resolveErr := catalog.ResolveCatalogURL(ctx, catCfg.Name); resolveErr == nil {
+							registry, _ := catalog.ParseCatalogURL(catalogURL)
+							hintOnAuthError(ctx, w, registry, remoteErr)
+						}
+					}
+				}
+				continue
+			}
+			artifacts = append(artifacts, remoteArtifacts...)
 		}
 	}
 
@@ -246,7 +288,12 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 		}
 	}
 
-	return writeArtifactList(w, artifacts, opts.Name != "" || opts.AllVersions || opts.VersionConstraint != "", outputOpts)
+	// Post-filter by catalog name when --catalog is set.
+	if opts.Catalog != "" {
+		artifacts = filterArtifactsByCatalog(artifacts, opts.Catalog)
+	}
+
+	return writeArtifactList(w, artifacts, opts.AllVersions || opts.VersionConstraint != "" || opts.Name != "", outputOpts)
 }
 
 // runListFromRemoteRef lists artifacts from a full OCI reference
@@ -341,12 +388,29 @@ func runListRemote(ctx context.Context, opts *ListOptions, kind catalog.Artifact
 	w := writer.FromContext(ctx)
 
 	if opts.Name == "" {
-		w.Error("--name is required when listing from a remote catalog (OCI registries do not support registry-wide enumeration)")
-		return exitcode.Errorf("--name required for remote listing")
+		w.Verbose("Enumerating all artifacts in catalog (this may take a moment)...")
 	}
 
 	artifacts, err := listRemoteArtifacts(ctx, opts, kind)
 	if err != nil {
+		if catalog.IsEnumerationNotSupported(err) {
+			if opts.Name == "" {
+				bin := settings.BinaryNameFromContext(ctx)
+				w.WarnStderrf("Catalog %q does not support repository enumeration.", opts.Catalog)
+				w.PlainStderrf("To list versions of a specific artifact:")
+				w.PlainStderrf("  %s catalog list --catalog %s --name <artifact>", bin, opts.Catalog)
+				w.PlainStderrf("To pull an artifact directly:")
+				w.PlainStderrf("  %s catalog pull <artifact> --catalog %s", bin, opts.Catalog)
+				if kvx.IsStructuredFormat(outputOpts.Format) {
+					return outputOpts.Write([]ArtifactListItem{})
+				}
+				return nil
+			}
+			w.Errorf("%v", err)
+			w.Verbose("Use --name to list versions of a specific artifact.")
+			return exitcode.WithCode(err, exitcode.CatalogError)
+		}
+
 		w.Errorf("failed to list remote artifacts: %v", err)
 
 		// Resolve registry for auth hint
@@ -371,12 +435,12 @@ func runListRemote(ctx context.Context, opts *ListOptions, kind catalog.Artifact
 		}
 	}
 
-	return writeArtifactList(w, artifacts, opts.Name != "" || opts.AllVersions || opts.VersionConstraint != "", outputOpts)
+	return writeArtifactList(w, artifacts, opts.AllVersions || opts.VersionConstraint != "" || opts.Name != "", outputOpts)
 }
 
 // listRemoteArtifacts fetches artifacts from a configured remote catalog.
 // This is shared between runListRemote (explicit --catalog) and the
-// all-catalogs search in runList (--name without --catalog).
+// unified all-catalogs search in runList.
 func listRemoteArtifacts(ctx context.Context, opts *ListOptions, kind catalog.ArtifactKind) ([]catalog.ArtifactInfo, error) {
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
@@ -397,18 +461,20 @@ func listRemoteArtifacts(ctx context.Context, opts *ListOptions, kind catalog.Ar
 
 	authHandler := resolveAuthHandler(ctx, registry, opts.Catalog)
 	authScope := resolveAuthScope(ctx, opts.Catalog)
+	discoveryStrategy := resolveDiscoveryStrategy(ctx, opts.Catalog)
 
 	verboseRemoteInfo(ctx, w, registry, repository, authHandler, authScope)
 
 	remoteCatalog, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
-		Name:            registry,
-		Registry:        registry,
-		Repository:      repository,
-		CredentialStore: credStore,
-		AuthHandler:     authHandler,
-		AuthScope:       authScope,
-		Insecure:        opts.Insecure,
-		Logger:          *lgr,
+		Name:              opts.Catalog,
+		Registry:          registry,
+		Repository:        repository,
+		CredentialStore:   credStore,
+		AuthHandler:       authHandler,
+		AuthScope:         authScope,
+		DiscoveryStrategy: discoveryStrategy,
+		Insecure:          opts.Insecure,
+		Logger:            *lgr,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create remote catalog: %w", err)
@@ -444,7 +510,12 @@ func writeArtifactList(w *writer.Writer, artifacts []catalog.ArtifactInfo, showA
 		return vi.GreaterThan(vj)
 	})
 
+	// Deduplicate across catalogs: merge rows with same name+tag+kind,
+	// combining catalog names and preferring richer metadata (digest, createdAt).
+	artifacts = deduplicateArtifacts(artifacts)
+
 	// When not showing all versions, keep only the latest per name+kind
+	// (after dedup, catalog names are merged so we key on kind+name only).
 	if !showAll {
 		seen := make(map[string]bool)
 		filtered := artifacts[:0]
@@ -469,13 +540,17 @@ func writeArtifactList(w *writer.Writer, artifacts []catalog.ArtifactInfo, showA
 		if tag == "" {
 			tag = version
 		}
+		createdAt := ""
+		if !a.CreatedAt.IsZero() {
+			createdAt = a.CreatedAt.Format("2006-01-02 15:04:05")
+		}
 		items[i] = ArtifactListItem{
 			Name:      a.Reference.Name,
 			Version:   version,
 			Tag:       tag,
 			Kind:      string(a.Reference.Kind),
 			Digest:    a.Digest,
-			CreatedAt: a.CreatedAt.Format("2006-01-02 15:04:05"),
+			CreatedAt: createdAt,
 			Catalog:   a.Catalog,
 		}
 	}

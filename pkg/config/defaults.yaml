@@ -1,0 +1,33 @@
+# scafctl default configuration
+# Written to the scafctl config path on first run if no config file exists.
+# Default: ~/.config/scafctl/config.yaml (XDG_CONFIG_HOME)
+
+auth:
+  github:
+    # scafctl GitHub OAuth App (github.com)
+    clientId: Ov23li6xn492GhPmt4YG
+    hostname: github.com
+    defaultScopes:
+      - read:org
+      - read:packages
+  entra:
+    # Azure CLI public client ID (well-known, supports device code flow)
+    clientId: 04b07795-8ddb-461a-bbee-02f9e1bf7b46
+    tenantId: common
+    authority: https://login.microsoftonline.com
+    defaultScopes:
+      - openid
+      - profile
+      - offline_access
+
+catalogs:
+  - name: local
+    type: filesystem
+  - name: official
+    type: oci
+    url: oci://ghcr.io/oakwood-commons
+    authProvider: github
+    discoveryStrategy: auto
+
+settings:
+  defaultCatalog: official

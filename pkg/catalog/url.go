@@ -193,16 +193,15 @@ func lookupCatalogURLFromConfig(ctx context.Context, name string) (string, error
 	}
 
 	cat, ok := cfg.GetCatalog(name)
-	if !ok {
-		return "", fmt.Errorf("catalog %q not found in configuration\n\nTo add it:\n  %s config add-catalog %s --type oci --url <registry-url>", name, settings.BinaryNameFromContext(ctx), name)
+	if ok {
+		url := catalogURLFromCatalogConfig(cat)
+		if url == "" {
+			return "", fmt.Errorf("catalog %q has no URL configured", name)
+		}
+		return url, nil
 	}
 
-	url := catalogURLFromCatalogConfig(cat)
-	if url == "" {
-		return "", fmt.Errorf("catalog %q has no URL configured", name)
-	}
-
-	return url, nil
+	return "", fmt.Errorf("catalog %q not found in configuration\n\nTo add it:\n  %s config add-catalog %s --type oci --url <registry-url>", name, settings.BinaryNameFromContext(ctx), name)
 }
 
 // catalogURLFromCatalogConfig extracts a usable URL from a CatalogConfig.
@@ -212,4 +211,30 @@ func catalogURLFromCatalogConfig(cat *config.CatalogConfig) string {
 		return cat.URL
 	}
 	return cat.Path
+}
+
+// ResolveCatalogDisplayName returns a human-readable catalog name for display.
+// When catalogFlag is a name, it is returned as-is. When it is a URL, the
+// registry hostname is extracted. When empty, the default catalog name from
+// config is used. Falls back to "default" if nothing can be resolved.
+func ResolveCatalogDisplayName(ctx context.Context, catalogFlag string) string {
+	if catalogFlag != "" {
+		if LooksLikeCatalogURL(catalogFlag) {
+			registry, _ := ParseCatalogURL(catalogFlag)
+			return registry
+		}
+		return catalogFlag
+	}
+
+	cfg := config.FromContext(ctx)
+	if cfg == nil {
+		return "default"
+	}
+
+	cat, ok := cfg.GetDefaultCatalog()
+	if !ok {
+		return "default"
+	}
+
+	return cat.Name
 }

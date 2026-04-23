@@ -443,6 +443,40 @@ func (h *Handler) resolveSourceTokenFunc(ctx context.Context) func(context.Conte
 	}
 }
 
+// ActiveFlow returns the credential source currently in use, following the same
+// auto-detection priority as resolveSourceTokenFunc:
+// WI > Metadata > SA Key > Stored refresh token (with metadata flow) > gcloud ADC.
+func (h *Handler) ActiveFlow(ctx context.Context) auth.Flow {
+	if HasWorkloadIdentityCredentials() {
+		return auth.FlowWorkloadIdentity
+	}
+
+	metadata, err := h.loadMetadata(ctx)
+	if err == nil && metadata != nil {
+		if metadata.Flow == auth.FlowMetadata {
+			return auth.FlowMetadata
+		}
+	}
+
+	if HasServiceAccountCredentials() {
+		return auth.FlowServicePrincipal
+	}
+
+	if exists, _ := h.secretStore.Exists(ctx, SecretKeyRefreshToken); exists {
+		// Return the flow from stored metadata (e.g. device-code, interactive).
+		if metadata != nil && metadata.Flow != "" {
+			return metadata.Flow
+		}
+		return auth.FlowDeviceCode // default for stored refresh tokens
+	}
+
+	if HasGcloudADCCredentials() {
+		return auth.FlowGcloudADC
+	}
+
+	return ""
+}
+
 // getStoredRefreshToken gets a token using the stored refresh token, with caching.
 func (h *Handler) getStoredRefreshToken(ctx context.Context, opts auth.TokenOptions) (*auth.Token, error) {
 	if opts.Scope == "" {

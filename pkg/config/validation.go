@@ -58,6 +58,11 @@ func (c *CatalogConfig) Validate() error {
 		return fmt.Errorf("type: invalid value %q, must be one of: %v", c.Type, ValidCatalogTypes())
 	}
 
+	// Validate discovery strategy if specified
+	if c.DiscoveryStrategy != "" && !IsValidDiscoveryStrategy(string(c.DiscoveryStrategy)) {
+		return fmt.Errorf("discoveryStrategy: invalid value %q, must be one of: %v", c.DiscoveryStrategy, ValidDiscoveryStrategies())
+	}
+
 	// Validate per-catalog HTTP client config if present
 	if c.HTTPClient != nil {
 		if err := c.HTTPClient.Validate(); err != nil {

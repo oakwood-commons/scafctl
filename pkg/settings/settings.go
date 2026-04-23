@@ -16,14 +16,6 @@ import (
 
 const (
 	CliBinaryName = "scafctl"
-
-	// OfficialCatalogURL is the default OCI catalog where official plugin
-	// artifacts are published.
-	OfficialCatalogURL = "oci://ghcr.io/oakwood-commons"
-
-	// OfficialCatalogName is the display name used for the official catalog
-	// entry in the catalog chain.
-	OfficialCatalogName = "official"
 )
 
 // safeNameRe matches characters that are NOT alphanumeric, underscore, hyphen, or dot.
@@ -97,6 +89,11 @@ const (
 	// DefaultArtifactCacheTTL is the default TTL for the artifact cache.
 	// Catalog artifacts are cached for 24 hours by default.
 	DefaultArtifactCacheTTL = 24 * time.Hour
+
+	// DefaultRegistryConcurrency is the maximum number of concurrent OCI
+	// registry requests when listing artifacts. Bounded to avoid
+	// rate-limiting (429s) on registries like GHCR or Docker Hub.
+	DefaultRegistryConcurrency = 5
 )
 
 // HTTPCacheDirFor returns the HTTP cache directory for the given binary name.

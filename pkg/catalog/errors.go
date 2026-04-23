@@ -114,3 +114,13 @@ func IsExists(err error) bool {
 func IsInvalidReference(err error) bool {
 	return errors.Is(err, ErrInvalidReference)
 }
+
+// ErrEnumerationNotSupported is returned when a registry does not support
+// the _catalog endpoint for repository enumeration.
+var ErrEnumerationNotSupported = errors.New("registry does not support repository enumeration")
+
+// IsEnumerationNotSupported returns true if the error indicates the registry
+// does not support listing all repositories.
+func IsEnumerationNotSupported(err error) bool {
+	return errors.Is(err, ErrEnumerationNotSupported)
+}

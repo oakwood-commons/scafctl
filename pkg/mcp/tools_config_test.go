@@ -18,7 +18,7 @@ func TestHandleGetConfig(t *testing.T) {
 	cfg := &config.Config{
 		Version: 1,
 		Settings: config.Settings{
-			DefaultCatalog: "local",
+			DefaultCatalog: "official",
 			NoColor:        false,
 			Quiet:          false,
 		},
@@ -66,7 +66,7 @@ func TestHandleGetConfig(t *testing.T) {
 		require.NoError(t, json.Unmarshal([]byte(text), &output))
 
 		assert.Equal(t, 1, output.Version)
-		assert.Equal(t, "local", output.Settings.DefaultCatalog)
+		assert.Equal(t, "official", output.Settings.DefaultCatalog)
 		assert.Len(t, output.Catalogs, 1)
 		assert.Equal(t, "local", output.Catalogs[0].Name)
 	})
@@ -88,7 +88,7 @@ func TestHandleGetConfig(t *testing.T) {
 		assert.Equal(t, "settings", output["section"])
 
 		data := output["data"].(map[string]any)
-		assert.Equal(t, "local", data["defaultCatalog"])
+		assert.Equal(t, "official", data["defaultCatalog"])
 	})
 
 	t.Run("invalid section", func(t *testing.T) {

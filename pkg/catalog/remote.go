@@ -13,11 +13,15 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
 	scafctlauth "github.com/oakwood-commons/scafctl/pkg/auth"
+	config "github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"oras.land/oras-go/v2"
@@ -29,12 +33,14 @@ import (
 
 // RemoteCatalog implements Catalog interface for OCI registries.
 type RemoteCatalog struct {
-	name       string
-	registry   string
-	repository string
-	client     *auth.Client
-	insecure   bool
-	logger     logr.Logger
+	name              string
+	registry          string
+	repository        string
+	client            *auth.Client
+	insecure          bool
+	logger            logr.Logger
+	enumerator        registryEnumerator
+	discoveryStrategy config.DiscoveryStrategy
 }
 
 // RemoteCatalogConfig holds configuration for creating a remote catalog.
@@ -61,6 +67,12 @@ type RemoteCatalogConfig struct {
 
 	// Insecure allows HTTP connections (for testing)
 	Insecure bool
+
+	// DiscoveryStrategy controls how artifacts are discovered.
+	// Empty or "auto" uses API then index fallback (default).
+	// "index" skips API and fetches the catalog-index directly.
+	// "api" uses API only, no index fallback.
+	DiscoveryStrategy config.DiscoveryStrategy
 
 	// Logger for logging operations
 	Logger logr.Logger
@@ -134,14 +146,37 @@ func NewRemoteCatalog(cfg RemoteCatalogConfig) (*RemoteCatalog, error) {
 		}
 	}
 
+	catalogLogger := cfg.Logger.WithName("remote-catalog").WithValues("catalog", cfg.Name)
+
+	enumCfg := enumeratorConfig{
+		authHandlerName: authHandlerName(cfg.AuthHandler),
+		authHandler:     cfg.AuthHandler,
+		authScope:       cfg.AuthScope,
+		registry:        cfg.Registry,
+		repository:      cfg.Repository,
+		client:          client,
+		insecure:        cfg.Insecure,
+		logger:          catalogLogger,
+	}
+
 	return &RemoteCatalog{
-		name:       cfg.Name,
-		registry:   cfg.Registry,
-		repository: cfg.Repository,
-		client:     client,
-		insecure:   cfg.Insecure,
-		logger:     cfg.Logger.WithName("remote-catalog").WithValues("catalog", cfg.Name),
+		name:              cfg.Name,
+		registry:          cfg.Registry,
+		repository:        cfg.Repository,
+		client:            client,
+		insecure:          cfg.Insecure,
+		logger:            catalogLogger,
+		enumerator:        selectEnumerator(enumCfg),
+		discoveryStrategy: cfg.DiscoveryStrategy,
 	}, nil
+}
+
+// authHandlerName returns the handler name or empty string if nil.
+func authHandlerName(h scafctlauth.Handler) string {
+	if h == nil {
+		return ""
+	}
+	return h.Name()
 }
 
 // Name returns the catalog identifier.
@@ -157,6 +192,24 @@ func (c *RemoteCatalog) Registry() string {
 // Repository returns the base repository path.
 func (c *RemoteCatalog) Repository() string {
 	return c.repository
+}
+
+// clientUpdatable is implemented by enumerators that can update the OCI
+// auth client they use for registry operations.
+type clientUpdatable interface {
+	setClient(client *auth.Client)
+}
+
+// SetClient overrides the OCI auth client used for registry operations.
+// This is useful for injecting credentials in tooling (e.g. push-index).
+// When the catalog enumerator also supports client replacement, it is
+// updated so that enumeration and repository access use the same credentials.
+func (c *RemoteCatalog) SetClient(client *auth.Client) {
+	c.client = client
+
+	if updatable, ok := c.enumerator.(clientUpdatable); ok {
+		updatable.setClient(client)
+	}
 }
 
 // getRepository creates a remote.Repository for an artifact.
@@ -610,6 +663,56 @@ func (c *RemoteCatalog) listVersions(ctx context.Context, ref Reference) ([]*sem
 	return versions, nil
 }
 
+// ResolveLatestVersions enriches a slice of discovered artifacts with their
+// latest semver version by fetching tags from the registry. Uses bounded
+// concurrency to avoid overwhelming the registry. Artifacts whose tags
+// cannot be fetched are left with an empty LatestVersion.
+func (c *RemoteCatalog) ResolveLatestVersions(ctx context.Context, artifacts []DiscoveredArtifact) {
+	sem := make(chan struct{}, settings.DefaultRegistryConcurrency)
+	var wg sync.WaitGroup
+
+	for i := range artifacts {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				return
+			}
+
+			ref := Reference{Kind: artifacts[idx].Kind, Name: artifacts[idx].Name}
+			versions, err := c.listVersions(ctx, ref)
+			if err != nil {
+				c.logger.V(1).Info("failed to resolve latest version",
+					"kind", artifacts[idx].Kind, "name", artifacts[idx].Name, "error", err.Error())
+				return
+			}
+
+			if latest := latestVersion(versions); latest != nil {
+				artifacts[idx].LatestVersion = latest.String()
+			}
+		}(i)
+	}
+	wg.Wait()
+}
+
+// latestVersion returns the highest semver version from the slice, or nil.
+func latestVersion(versions []*semver.Version) *semver.Version {
+	if len(versions) == 0 {
+		return nil
+	}
+	best := versions[0]
+	for _, v := range versions[1:] {
+		if v.GreaterThan(best) {
+			best = v
+		}
+	}
+	return best
+}
+
 // List returns all artifacts matching the criteria.
 func (c *RemoteCatalog) List(ctx context.Context, kind ArtifactKind, name string) ([]ArtifactInfo, error) {
 	// If name is specified, list versions of that artifact
@@ -635,10 +738,8 @@ func (c *RemoteCatalog) List(ctx context.Context, kind ArtifactKind, name string
 		return infos, nil
 	}
 
-	// Listing all artifacts in a registry is not well-supported by OCI spec
-	// This would require registry-specific catalog API
-	c.logger.V(1).Info("listing all artifacts not supported for remote catalogs")
-	return nil, nil
+	// Enumerate all artifacts in the registry using the _catalog endpoint.
+	return c.listAllArtifacts(ctx, kind)
 }
 
 // listAcrossKinds searches for an artifact name across all kind paths
@@ -663,6 +764,190 @@ func (c *RemoteCatalog) listAcrossKinds(ctx context.Context, name string) ([]Art
 	}
 
 	return allInfos, nil
+}
+
+// DiscoveredArtifact represents an artifact discovered via registry enumeration.
+// Exported for use by embedders that call ListRepositories directly.
+type DiscoveredArtifact struct {
+	Kind          ArtifactKind `json:"kind"           yaml:"kind"           doc:"Artifact kind" example:"solution" enum:"solution,provider,auth-handler"`
+	Name          string       `json:"name"           yaml:"name"           doc:"Artifact name" example:"starter-kit" maxLength:"255"`
+	LatestVersion string       `json:"latestVersion"  yaml:"latestVersion"  doc:"Latest semver version" example:"1.2.0"`
+}
+
+// listAllArtifacts enumerates repositories under this catalog's prefix,
+// parses artifact kind+name from the repository paths, and fetches version
+// info for each discovered artifact using bounded concurrency.
+//
+// Filters applied before the expensive tag-fetch step:
+//   - kind: only artifacts of the specified kind
+//   - search pattern: only artifacts whose name contains the query (from context)
+func (c *RemoteCatalog) listAllArtifacts(ctx context.Context, kind ArtifactKind) ([]ArtifactInfo, error) {
+	discovered, err := c.ListRepositories(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Pre-filter before the expensive tag-fetch step.
+	searchPattern := SearchPatternFromContext(ctx)
+	var filtered []DiscoveredArtifact
+	for _, d := range discovered {
+		if kind != "" && d.Kind != kind {
+			continue
+		}
+		if !matchesSearchPattern(searchPattern, d.Name) {
+			c.logger.V(1).Info("skipping artifact (search filter)",
+				"name", d.Name, "pattern", searchPattern)
+			continue
+		}
+		filtered = append(filtered, d)
+	}
+
+	if len(filtered) == 0 {
+		return nil, nil
+	}
+
+	// Fetch tags concurrently with bounded parallelism.
+	type result struct {
+		artifact DiscoveredArtifact
+		versions []*semver.Version
+	}
+
+	results := make([]result, len(filtered))
+	sem := make(chan struct{}, settings.DefaultRegistryConcurrency)
+	var wg sync.WaitGroup
+	var failCount atomic.Int32
+
+	for i, d := range filtered {
+		wg.Add(1)
+		go func(idx int, art DiscoveredArtifact) {
+			defer wg.Done()
+
+			// Acquire semaphore slot (or bail on context cancellation).
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				return
+			}
+
+			ref := Reference{Kind: art.Kind, Name: art.Name}
+			versions, err := c.listVersions(ctx, ref)
+			if err != nil {
+				failCount.Add(1)
+				c.logger.V(1).Info("failed to list versions for discovered artifact",
+					"kind", art.Kind, "name", art.Name, "error", err.Error())
+				return
+			}
+			results[idx] = result{artifact: art, versions: versions}
+		}(i, d)
+	}
+	wg.Wait()
+
+	if n := failCount.Load(); n > 0 {
+		c.logger.Info("some artifacts could not be listed (version fetch failed)",
+			"failed", n, "total", len(filtered))
+	}
+
+	// Collect results (order preserved by index).
+	var allInfos []ArtifactInfo
+	for _, r := range results {
+		for _, v := range r.versions {
+			allInfos = append(allInfos, ArtifactInfo{
+				Reference: Reference{Kind: r.artifact.Kind, Name: r.artifact.Name, Version: v},
+				Catalog:   c.name,
+			})
+		}
+	}
+
+	return allInfos, nil
+}
+
+// ListRepositories enumerates all artifact repositories in this catalog using
+// a registry-specific enumerator. The enumerator is selected automatically
+// based on the auth handler name and registry hostname.
+//
+// Returns ErrEnumerationNotSupported if the registry cannot be enumerated.
+func (c *RemoteCatalog) ListRepositories(ctx context.Context) ([]DiscoveredArtifact, error) {
+	// Apply a timeout to the entire enumeration flow so slow or
+	// non-responsive endpoints do not block indefinitely.
+	ctx, cancel := context.WithTimeout(ctx, settings.DefaultHTTPTimeout)
+	defer cancel()
+
+	// Index-only strategy: skip API enumeration entirely.
+	if c.discoveryStrategy == config.DiscoveryStrategyIndex {
+		c.logger.V(1).Info("using index-only discovery strategy")
+		indexed, err := c.FetchIndex(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("fetching catalog index for %s: %w", c.name, err)
+		}
+		return indexed, nil
+	}
+
+	repos, err := c.enumerator.enumerate(ctx)
+	if err != nil {
+		// If enumeration is not supported (e.g. GHCR without org auth),
+		// fall back to the well-known catalog-index artifact (unless api-only).
+		if IsEnumerationNotSupported(err) && c.discoveryStrategy != config.DiscoveryStrategyAPI {
+			c.logger.V(1).Info("enumeration not supported, trying catalog index fallback")
+			indexed, indexErr := c.FetchIndex(ctx)
+			if indexErr != nil {
+				c.logger.V(1).Info("catalog index fallback failed",
+					"error", indexErr.Error())
+				return nil, fmt.Errorf("enumerating repositories in %s: %w", c.name, err)
+			}
+			return indexed, nil
+		}
+		return nil, fmt.Errorf("enumerating repositories in %s: %w", c.name, err)
+	}
+
+	var discovered []DiscoveredArtifact
+	seen := make(map[string]bool)
+
+	for _, repo := range repos {
+		d, ok := c.parseRepositoryPath(repo)
+		if !ok {
+			continue
+		}
+		key := string(d.Kind) + "/" + d.Name
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		discovered = append(discovered, d)
+	}
+
+	c.logger.V(1).Info("discovered artifacts",
+		"count", len(discovered), "registry", c.registry)
+	return discovered, nil
+}
+
+// parseRepositoryPath extracts the artifact kind and name from a full
+// repository path by stripping the catalog's base prefix and splitting
+// the remainder into kind-plural/name segments.
+//
+// Example: given repository="myorg/scafctl" and path="myorg/scafctl/solutions/myapp",
+// returns (ArtifactKindSolution, "myapp", true).
+func (c *RemoteCatalog) parseRepositoryPath(repoPath string) (DiscoveredArtifact, bool) {
+	prefix := c.repository
+	if prefix != "" {
+		if !strings.HasPrefix(repoPath, prefix+"/") {
+			return DiscoveredArtifact{}, false
+		}
+		repoPath = repoPath[len(prefix)+1:]
+	}
+
+	// Expect exactly "kind-plural/name"
+	parts := strings.SplitN(repoPath, "/", 2)
+	if len(parts) != 2 || parts[1] == "" {
+		return DiscoveredArtifact{}, false
+	}
+
+	kind, ok := ParseArtifactKindFromPlural(parts[0])
+	if !ok {
+		return DiscoveredArtifact{}, false
+	}
+
+	return DiscoveredArtifact{Kind: kind, Name: parts[1]}, true
 }
 
 // TagInfo represents a single tag in a remote OCI repository.

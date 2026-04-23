@@ -1333,7 +1333,7 @@ tasks:
         echo "Generated dist/index.html"
         echo ""
         echo "To publish for real, push a tag:"
-        echo "  task tag -- v1.2.3"
+        echo "  task tag-push VERSION=v1.2.3"
 
   release-dry-run:
     desc: "Validate goreleaser config and preview release build without creating artifacts"
@@ -1350,86 +1350,52 @@ tasks:
         echo "Dry run complete. Config is valid."
 
   tag:
-    desc: "Create a signed version tag and push only that tag (use DRYRUN=true to simulate)"
+    desc: "Create a git tag for release (usage: task tag VERSION=v1.0.0)"
     silent: true
     vars:
-      DRYRUN: '{{.DRYRUN | default "false"}}'
+      VERSION: '{{.VERSION | default ""}}'
+    preconditions:
+      - sh: '[ -n "{{.VERSION}}" ]'
+        msg: "VERSION is required. Usage: task tag VERSION=v1.0.0"
+      - sh: 'echo "{{.VERSION}}" | grep -qE "^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$"'
+        msg: "VERSION must be in semver format (e.g., v1.0.0, v1.0.0-beta.1)"
+      - sh: '[ -z "$(git status --porcelain)" ]'
+        msg: "Working directory is not clean. Commit or stash changes first."
+      - sh: '! git rev-parse "refs/tags/{{.VERSION}}" >/dev/null 2>&1'
+        msg: "Tag {{.VERSION}} already exists. Delete it first: git tag -d {{.VERSION}}"
     cmds:
       - |
-        {{ .FIX_PATH }}
+        echo "Creating signed tag {{.VERSION}}..."
+        git tag -s "{{.VERSION}}" -m "Release {{.VERSION}}"
+        echo "Tag {{.VERSION}} created locally."
+        echo ""
+        echo "To push the tag:"
+        echo "  git push origin {{.VERSION}}"
+        echo ""
+        echo "To build the release:"
+        echo "  task release"
 
-        current_branch="{{ .GIT_BRANCH }}"
-        version="{{ .CLI_ARGS }}"
-        dryrun="{{ .DRYRUN }}"
-
-        if [ -z "$version" ]; then
-          echo "Missing version. Usage: task tag -- v1.2.3 or v1.2.3-beta.1"
-          exit 1
-        fi
-
-        if [[ "$version" =~ ^v ]]; then
-          version="${version:1}"
-        fi
-
-        if [[ "$version" == *-beta.* ]]; then
-          is_beta="true"
-        else
-          is_beta="false"
-        fi
-
-        release_regex='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
-        beta_regex='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-beta\.(0|[1-9][0-9]*)$'
-
-        if [ "$is_beta" = "true" ]; then
-          if [[ ! "$version" =~ $beta_regex ]]; then
-            echo "Invalid beta tag: '$version'"
-            echo "Format must be: vMAJOR.MINOR.PATCH-beta.NUM (example: v1.0.0-beta.44)"
-            exit 1
-          fi
-          if [ "$current_branch" = "main" ]; then
-            echo "Beta tags are not allowed on 'main'. Current branch: '$current_branch'"
-            exit 1
-          fi
-        else
-          if [[ ! "$version" =~ $release_regex ]]; then
-            echo "Invalid release tag: '$version'"
-            echo "Format must be: vMAJOR.MINOR.PATCH (example: v1.2.3)"
-            exit 1
-          fi
-          if [ "$current_branch" != "main" ]; then
-            echo "Release tags must be created on 'main'. Current branch: '$current_branch'"
-            exit 1
-          fi
-        fi
-
-        tag_name="v$version"
-
-        if git rev-parse "$tag_name" >/dev/null 2>&1; then
-          echo "Tag '$tag_name' already exists. Aborting."
-          exit 1
-        fi
-
-        releaseMessage="Release $tag_name on branch $current_branch"
-
-        if [ "$dryrun" = "true" ]; then
-          echo "[DRYRUN] Would create signed tag '$tag_name' with message: $releaseMessage"
-          echo "[DRYRUN] Would push only this tag to origin"
-          exit 0
-        fi
-
-        git tag -s "$tag_name" -m "$releaseMessage"
-        if [ $? -ne 0 ]; then
-          echo "Failed to create a signed tag. Check your GPG setup."
-          exit 1
-        fi
-
-        git push origin "$tag_name"
-        if [ $? -ne 0 ]; then
-          echo "Failed to push tag '$tag_name' to origin."
-          exit 1
-        fi
-
-        echo "Tagged and pushed '$tag_name' successfully."
+  tag-push:
+    desc: "Create and push a git tag (usage: task tag-push VERSION=v1.0.0)"
+    silent: true
+    vars:
+      VERSION: '{{.VERSION | default ""}}'
+    preconditions:
+      - sh: '[ -n "{{.VERSION}}" ]'
+        msg: "VERSION is required. Usage: task tag-push VERSION=v1.0.0"
+      - sh: 'echo "{{.VERSION}}" | grep -qE "^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$"'
+        msg: "VERSION must be in semver format (e.g., v1.0.0, v1.0.0-beta.1)"
+      - sh: '[ -z "$(git status --porcelain)" ]'
+        msg: "Working directory is not clean. Commit or stash changes first."
+      - sh: '! git rev-parse "refs/tags/{{.VERSION}}" >/dev/null 2>&1'
+        msg: "Tag {{.VERSION}} already exists. Delete it first: git tag -d {{.VERSION}}"
+    cmds:
+      - |
+        echo "Creating signed tag {{.VERSION}}..."
+        git tag -s "{{.VERSION}}" -m "Release {{.VERSION}}"
+        echo "Tag {{.VERSION}} created and pushing to origin..."
+        git push origin "{{.VERSION}}"
+        echo "Tag {{.VERSION}} pushed."
 
   # ──────────────────────────────────────────────────────────────────────────────
   # Utilities

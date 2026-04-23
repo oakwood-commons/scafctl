@@ -21,6 +21,78 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Compile-time interface check.
+var _ auth.FlowReporter = (*Handler)(nil)
+
+func TestHandler_ActiveFlow(t *testing.T) {
+	t.Run("no credentials returns empty", func(t *testing.T) {
+		t.Setenv("AZURE_FEDERATED_TOKEN", "")
+		t.Setenv("AZURE_FEDERATED_TOKEN_FILE", "")
+		t.Setenv("AZURE_CLIENT_ID", "")
+		t.Setenv("AZURE_TENANT_ID", "")
+		t.Setenv("AZURE_CLIENT_SECRET", "")
+
+		store := secrets.NewMockStore()
+		h, err := New(WithSecretStore(store))
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		assert.Empty(t, h.ActiveFlow(ctx))
+	})
+
+	t.Run("workload identity detected", func(t *testing.T) {
+		t.Setenv("AZURE_FEDERATED_TOKEN", "fake-token")
+		t.Setenv("AZURE_CLIENT_ID", "fake-client")
+		t.Setenv("AZURE_TENANT_ID", "fake-tenant")
+
+		store := secrets.NewMockStore()
+		h, err := New(WithSecretStore(store))
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		assert.Equal(t, auth.FlowWorkloadIdentity, h.ActiveFlow(ctx))
+	})
+
+	t.Run("service principal detected", func(t *testing.T) {
+		t.Setenv("AZURE_FEDERATED_TOKEN", "")
+		t.Setenv("AZURE_FEDERATED_TOKEN_FILE", "")
+		t.Setenv("AZURE_CLIENT_ID", "fake-client")
+		t.Setenv("AZURE_TENANT_ID", "fake-tenant")
+		t.Setenv("AZURE_CLIENT_SECRET", "fake-secret")
+
+		store := secrets.NewMockStore()
+		h, err := New(WithSecretStore(store))
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		assert.Equal(t, auth.FlowServicePrincipal, h.ActiveFlow(ctx))
+	})
+
+	t.Run("stored metadata returns login flow", func(t *testing.T) {
+		t.Setenv("AZURE_FEDERATED_TOKEN", "")
+		t.Setenv("AZURE_FEDERATED_TOKEN_FILE", "")
+		t.Setenv("AZURE_CLIENT_ID", "")
+		t.Setenv("AZURE_TENANT_ID", "")
+		t.Setenv("AZURE_CLIENT_SECRET", "")
+
+		store := secrets.NewMockStore()
+		h, err := New(WithSecretStore(store))
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		metadata := &TokenMetadata{
+			TenantID:  "fake-tenant",
+			ClientID:  "fake-client",
+			LoginFlow: auth.FlowDeviceCode,
+		}
+		metaBytes, err := json.Marshal(metadata)
+		require.NoError(t, err)
+		require.NoError(t, store.Set(ctx, SecretKeyMetadata, metaBytes))
+
+		assert.Equal(t, auth.FlowDeviceCode, h.ActiveFlow(ctx))
+	})
+}
+
 func TestHandler_NewWithDefaults(t *testing.T) {
 	// This test requires a real secrets store, so we use WithSecretStore to provide a mock
 	store := secrets.NewMockStore()

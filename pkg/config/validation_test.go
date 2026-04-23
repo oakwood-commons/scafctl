@@ -297,6 +297,65 @@ func TestIsValidHTTPClientCacheType(t *testing.T) {
 	assert.False(t, IsValidHTTPClientCacheType("MEMORY"))
 }
 
+func TestValidDiscoveryStrategies(t *testing.T) {
+	t.Parallel()
+
+	strategies := ValidDiscoveryStrategies()
+	assert.Contains(t, strategies, "auto")
+	assert.Contains(t, strategies, "index")
+	assert.Contains(t, strategies, "api")
+	assert.Len(t, strategies, 3)
+}
+
+func TestIsValidDiscoveryStrategy(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, IsValidDiscoveryStrategy("auto"))
+	assert.True(t, IsValidDiscoveryStrategy("index"))
+	assert.True(t, IsValidDiscoveryStrategy("api"))
+	assert.False(t, IsValidDiscoveryStrategy(""))
+	assert.False(t, IsValidDiscoveryStrategy("fast"))
+	assert.False(t, IsValidDiscoveryStrategy("AUTO"))
+}
+
+func TestConfig_Validate_InvalidDiscoveryStrategy(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Catalogs: []CatalogConfig{
+			{
+				Name:              "test",
+				Type:              "oci",
+				DiscoveryStrategy: "invalid",
+			},
+		},
+	}
+
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "catalogs[0]")
+	assert.Contains(t, err.Error(), "discoveryStrategy")
+}
+
+func TestConfig_Validate_ValidDiscoveryStrategy(t *testing.T) {
+	t.Parallel()
+
+	for _, strategy := range []DiscoveryStrategy{DiscoveryStrategyAuto, DiscoveryStrategyIndex, DiscoveryStrategyAPI} {
+		cfg := &Config{
+			Catalogs: []CatalogConfig{
+				{
+					Name:              "test",
+					Type:              "oci",
+					DiscoveryStrategy: strategy,
+				},
+			},
+		}
+
+		err := cfg.Validate()
+		assert.NoError(t, err, "strategy %q should be valid", strategy)
+	}
+}
+
 func TestLoggingConfig_Validate(t *testing.T) {
 	t.Parallel()
 
