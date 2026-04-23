@@ -57,6 +57,7 @@ func CommandCatalog(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 	cmd.AddCommand(CommandLogout(cliParams, ioStreams, path))
 	cmd.AddCommand(CommandRemote(cliParams, ioStreams, path))
 	cmd.AddCommand(CommandAttach(cliParams, ioStreams, path))
+	cmd.AddCommand(CommandIndex(cliParams, ioStreams, path))
 
 	return cmd
 }

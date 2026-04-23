@@ -36,10 +36,10 @@ type Index struct {
 	Artifacts []DiscoveredArtifact `json:"artifacts"`
 }
 
-// fetchCatalogIndex pulls the well-known catalog-index artifact and returns
+// FetchIndex pulls the well-known catalog-index artifact and returns
 // the discovered artifacts. Returns an error if the index does not exist or
 // cannot be parsed.
-func (c *RemoteCatalog) fetchCatalogIndex(ctx context.Context) ([]DiscoveredArtifact, error) {
+func (c *RemoteCatalog) FetchIndex(ctx context.Context) ([]DiscoveredArtifact, error) {
 	repoPath := c.buildIndexRepositoryPath()
 
 	repo, err := remote.NewRepository(repoPath)

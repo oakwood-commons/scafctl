@@ -813,7 +813,7 @@ func (c *RemoteCatalog) ListRepositories(ctx context.Context) ([]DiscoveredArtif
 	// Index-only strategy: skip API enumeration entirely.
 	if c.discoveryStrategy == config.DiscoveryStrategyIndex {
 		c.logger.V(1).Info("using index-only discovery strategy")
-		indexed, err := c.fetchCatalogIndex(ctx)
+		indexed, err := c.FetchIndex(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("fetching catalog index for %s: %w", c.name, err)
 		}
@@ -826,7 +826,7 @@ func (c *RemoteCatalog) ListRepositories(ctx context.Context) ([]DiscoveredArtif
 		// fall back to the well-known catalog-index artifact (unless api-only).
 		if IsEnumerationNotSupported(err) && c.discoveryStrategy != config.DiscoveryStrategyAPI {
 			c.logger.V(1).Info("enumeration not supported, trying catalog index fallback")
-			indexed, indexErr := c.fetchCatalogIndex(ctx)
+			indexed, indexErr := c.FetchIndex(ctx)
 			if indexErr != nil {
 				c.logger.V(1).Info("catalog index fallback failed",
 					"error", indexErr.Error())

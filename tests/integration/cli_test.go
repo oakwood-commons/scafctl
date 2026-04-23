@@ -3259,6 +3259,38 @@ func TestIntegration_CatalogSaveLoad_RoundTrip(t *testing.T) {
 }
 
 // =============================================================================
+// Catalog Index Tests
+// =============================================================================
+
+func TestIntegration_CatalogIndexHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "catalog", "index", "--help")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Manage the catalog discovery index")
+	assert.Contains(t, stdout, "push")
+	assert.Contains(t, stdout, "show")
+}
+
+func TestIntegration_CatalogIndexPushHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "catalog", "index", "push", "--help")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Discover all artifacts in the target catalog")
+	assert.Contains(t, stdout, "--catalog")
+	assert.Contains(t, stdout, "--dry-run")
+	assert.Contains(t, stdout, "--output")
+}
+
+func TestIntegration_CatalogIndexShowHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "catalog", "index", "show", "--help")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Fetch and display the catalog index artifact")
+	assert.Contains(t, stdout, "--catalog")
+	assert.Contains(t, stdout, "--output")
+}
+
+// =============================================================================
 // Catalog Push Tests
 // =============================================================================
 

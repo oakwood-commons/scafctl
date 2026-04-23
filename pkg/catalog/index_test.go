@@ -80,7 +80,7 @@ func buildTestIndexServer(t testing.TB, artifacts []DiscoveredArtifact) *httptes
 	}))
 }
 
-func TestFetchCatalogIndex_Success(t *testing.T) {
+func TestFetchIndex_Success(t *testing.T) {
 	t.Parallel()
 
 	artifacts := []DiscoveredArtifact{
@@ -100,7 +100,7 @@ func TestFetchCatalogIndex_Success(t *testing.T) {
 		logger:   logr.Discard(),
 	}
 
-	result, err := cat.fetchCatalogIndex(t.Context())
+	result, err := cat.FetchIndex(t.Context())
 	require.NoError(t, err)
 	assert.Len(t, result, 3)
 	assert.Equal(t, "hello-world", result[0].Name)
@@ -109,7 +109,7 @@ func TestFetchCatalogIndex_Success(t *testing.T) {
 	assert.Equal(t, "terraform", result[2].Name)
 }
 
-func TestFetchCatalogIndex_WithRepository(t *testing.T) {
+func TestFetchIndex_WithRepository(t *testing.T) {
 	t.Parallel()
 
 	artifacts := []DiscoveredArtifact{
@@ -128,13 +128,13 @@ func TestFetchCatalogIndex_WithRepository(t *testing.T) {
 		logger:     logr.Discard(),
 	}
 
-	result, err := cat.fetchCatalogIndex(t.Context())
+	result, err := cat.FetchIndex(t.Context())
 	require.NoError(t, err)
 	assert.Len(t, result, 1)
 	assert.Equal(t, "my-app", result[0].Name)
 }
 
-func TestFetchCatalogIndex_NotFound(t *testing.T) {
+func TestFetchIndex_NotFound(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -150,12 +150,12 @@ func TestFetchCatalogIndex_NotFound(t *testing.T) {
 		logger:   logr.Discard(),
 	}
 
-	_, err := cat.fetchCatalogIndex(t.Context())
+	_, err := cat.FetchIndex(t.Context())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "resolving catalog index")
 }
 
-func TestFetchCatalogIndex_InvalidJSON(t *testing.T) {
+func TestFetchIndex_InvalidJSON(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -184,7 +184,7 @@ func TestFetchCatalogIndex_InvalidJSON(t *testing.T) {
 		logger:   logr.Discard(),
 	}
 
-	_, err := cat.fetchCatalogIndex(t.Context())
+	_, err := cat.FetchIndex(t.Context())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parsing catalog index manifest")
 }
@@ -386,7 +386,7 @@ func TestListRepositories_AutoStrategy_FallsBackToIndex(t *testing.T) {
 	assert.Equal(t, "hello-world", result[0].Name)
 }
 
-func BenchmarkFetchCatalogIndex(b *testing.B) {
+func BenchmarkFetchIndex(b *testing.B) {
 	artifacts := make([]DiscoveredArtifact, 50)
 	for i := range artifacts {
 		artifacts[i] = DiscoveredArtifact{
@@ -409,6 +409,6 @@ func BenchmarkFetchCatalogIndex(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		_, _ = cat.fetchCatalogIndex(context.Background())
+		_, _ = cat.FetchIndex(context.Background())
 	}
 }
