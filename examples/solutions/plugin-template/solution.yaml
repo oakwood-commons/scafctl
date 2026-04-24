@@ -169,6 +169,21 @@ spec:
             inputs:
               expression: '__self.replace("github.com/", "")'
 
+    registry_owner:
+      description: "Registry owner extracted from module path (e.g. oakwood-commons)"
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                rslvr: module
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: '__self.replace("github.com/", "").split("/")[0]'
+
     provider_name:
       description: "Provider name derived from plugin name"
       type: string
@@ -264,6 +279,7 @@ spec:
         - capability_consts
         - display_name
         - plugin_type
+        - registry_owner
       resolve:
         with:
           - provider: go-template
@@ -313,8 +329,6 @@ spec:
             expr: "_.name"
           entries:
             rslvr: output_files
-          outputPath: >-
-            {{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}
           onConflict: skip-unchanged
 
       # Create GitHub repository (optional)
