@@ -30,6 +30,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
+	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
@@ -721,7 +722,7 @@ func (o *sharedResolverOptions) resolveVersionConstraintForFile(ctx context.Cont
 // addSharedResolverFlags adds common resolver flags to a cobra command.
 func addSharedResolverFlags(cCmd *cobra.Command, o *sharedResolverOptions) {
 	cCmd.Flags().StringVarP(&o.File, "file", "f", "", "Solution file path or catalog name (auto-discovered if not provided, use '-' for stdin)")
-	cCmd.Flags().StringArrayVarP(&o.ResolverParams, "resolver", "r", nil, "Resolver parameters (key=value, key=@- for raw stdin, @file.yaml, or @- for stdin)")
+	cCmd.Flags().StringArrayVarP(&o.ResolverParams, "resolver", "r", nil, "Resolver parameters (key=value, key=@- for raw stdin, @file.yaml, or @- for stdin). Available as __params in state backend expressions")
 	flags.AddKvxOutputFlagsToStruct(cCmd, &o.KvxOutputFlags)
 
 	cCmd.Flags().BoolVar(&o.ResolveAll, "resolve-all", false, "Execute all resolvers regardless of action requirements")
@@ -790,6 +791,29 @@ func solutionMetaFromSolution(sol *solution.Solution) *provider.SolutionMeta {
 		Description: sol.Metadata.Description,
 		Category:    sol.Metadata.Category,
 		Tags:        sol.Metadata.Tags,
+	}
+	if sol.Metadata.Version != nil {
+		meta.Version = sol.Metadata.Version.String()
+	}
+	return meta
+}
+
+// buildCommandInfo creates a state.CommandInfo from parsed parameters and subcommand.
+func buildCommandInfo(subcommand string, params map[string]any) state.CommandInfo {
+	paramStrs := make(map[string]string, len(params))
+	for k, v := range params {
+		paramStrs[k] = fmt.Sprintf("%v", v)
+	}
+	return state.CommandInfo{
+		Subcommand: subcommand,
+		Parameters: paramStrs,
+	}
+}
+
+// buildStateSolutionMeta creates a state.SolutionMeta from a solution.
+func buildStateSolutionMeta(sol *solution.Solution) state.SolutionMeta {
+	meta := state.SolutionMeta{
+		Name: sol.Metadata.Name,
 	}
 	if sol.Metadata.Version != nil {
 		meta.Version = sol.Metadata.Version.String()

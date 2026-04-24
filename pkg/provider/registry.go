@@ -277,7 +277,7 @@ func (r *Registry) validateDescriptor(desc *Descriptor) error {
 
 	// Validate all capabilities
 	for i, cap := range desc.Capabilities {
-		if !cap.IsValid() {
+		if !IsCapabilityValid(cap) {
 			return fmt.Errorf("capability at index %d (%q) is not valid", i, cap)
 		}
 	}

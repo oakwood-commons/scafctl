@@ -726,6 +726,9 @@ func (s *Server) registerTools() {
 
 	// REST API tools
 	s.registerAPITools()
+
+	// State inspection tools
+	s.registerStateTools()
 }
 
 // registerResources registers all MCP resources on the server.

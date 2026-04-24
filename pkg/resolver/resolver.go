@@ -168,6 +168,12 @@ type Resolver struct {
 	// Timeout
 	Timeout *time.Duration `json:"timeout,omitempty" yaml:"timeout,omitempty" doc:"Maximum execution time (default: 30s)" example:"30s"`
 
+	// SaveToState marks this resolver's result for state persistence after execution.
+	// When true, the resolver's result is collected after all resolvers complete and
+	// flushed to the backend in a single save call. The resolver always executes its
+	// configured provider -- saveToState does not cause implicit reads from state.
+	SaveToState bool `json:"saveToState,omitempty" yaml:"saveToState,omitempty" doc:"Persist resolver result to state after execution" example:"true"`
+
 	// Phases
 	Resolve   *ResolvePhase   `json:"resolve" yaml:"resolve" doc:"Value resolution phase"`
 	Transform *TransformPhase `json:"transform,omitempty" yaml:"transform,omitempty" doc:"Value transformation phase"`
