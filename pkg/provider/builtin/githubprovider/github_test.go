@@ -1493,3 +1493,45 @@ func BenchmarkRequiredInputError(b *testing.B) {
 		_ = requiredInputError("list_commit_pulls", "commit_sha", inputs, "")
 	}
 }
+
+// ─── WriteOperations Tests ──────────────────────────────────────────
+
+func TestGitHubProvider_WriteOperations(t *testing.T) {
+	t.Parallel()
+
+	p := NewGitHubProvider()
+	ops := p.Descriptor().WriteOperations
+
+	assert.NotEmpty(t, ops, "should have write operations")
+	assert.Contains(t, ops, "create_label")
+	assert.Contains(t, ops, "fork_repo")
+	assert.Contains(t, ops, "merge_pull_request")
+	assert.Contains(t, ops, "set_custom_properties")
+	assert.NotContains(t, ops, "list_labels")
+	assert.NotContains(t, ops, "get_repo")
+	assert.NotContains(t, ops, "api_call")
+}
+
+func TestGitHubProvider_WriteOperations_CoverAllOperations(t *testing.T) {
+	t.Parallel()
+
+	p := NewGitHubProvider()
+	ops := p.Descriptor().WriteOperations
+	writeSet := make(map[string]bool, len(ops))
+	for _, op := range ops {
+		writeSet[op] = true
+	}
+
+	// Every operation must be either in readOperations or writeOps (except api_call)
+	for _, op := range allOperations {
+		if op == "api_call" {
+			continue // intentionally unclassified
+		}
+		isRead := readOperations[op]
+		isWrite := writeSet[op]
+		assert.True(t, isRead || isWrite,
+			"operation %q is not classified as read or write — add it to readOperations or Descriptor.WriteOperations", op)
+		assert.False(t, isRead && isWrite,
+			"operation %q is classified as both read and write", op)
+	}
+}

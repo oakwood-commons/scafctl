@@ -1771,3 +1771,108 @@ func TestExecutor_ValidatePhase_WhenWithSelf(t *testing.T) {
 		require.NoError(t, err)
 	})
 }
+
+// ─── Write Operation Guard Tests ─────────────────────────────────────────────
+
+// mockWriteClassifierProvider returns a Descriptor with WriteOperations populated.
+type mockWriteClassifierProvider struct {
+	name        string
+	writeOps    []string
+	executeFunc func(ctx context.Context, inputs map[string]any) (*provider.Output, error)
+}
+
+func (m *mockWriteClassifierProvider) Descriptor() *provider.Descriptor {
+	return &provider.Descriptor{
+		Name:            m.name,
+		APIVersion:      "v1",
+		Description:     "Mock provider with write operations",
+		Capabilities:    []provider.Capability{provider.CapabilityFrom, provider.CapabilityAction},
+		WriteOperations: m.writeOps,
+	}
+}
+
+func (m *mockWriteClassifierProvider) Execute(ctx context.Context, input any) (*provider.Output, error) {
+	inputs, _ := input.(map[string]any)
+	if m.executeFunc != nil {
+		return m.executeFunc(ctx, inputs)
+	}
+	return &provider.Output{Data: "mock-value"}, nil
+}
+
+func TestExecutor_WriteOperationGuard_BlocksInResolver(t *testing.T) {
+	t.Parallel()
+
+	registry := newMockRegistry()
+	err := registry.Register(&mockWriteClassifierProvider{
+		name:     "github",
+		writeOps: []string{"create_label", "delete_label"},
+		executeFunc: func(_ context.Context, inputs map[string]any) (*provider.Output, error) {
+			return &provider.Output{Data: map[string]any{"result": "ok"}}, nil
+		},
+	})
+	require.NoError(t, err)
+
+	executor := NewExecutor(registry)
+	resolvers := []*Resolver{
+		{
+			Name: "labels",
+			Type: TypeAny,
+			Resolve: &ResolvePhase{
+				With: []ProviderSource{
+					{
+						Provider: "github",
+						Inputs: map[string]*ValueRef{
+							"operation": {Literal: "create_label"},
+							"owner":     {Literal: "test"},
+							"repo":      {Literal: "test"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	ctx := provider.WithExecutionMode(context.Background(), provider.CapabilityFrom)
+	_, err = executor.Execute(ctx, resolvers, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "write operation")
+}
+
+func TestExecutor_WriteOperationGuard_AllowsReadInResolver(t *testing.T) {
+	t.Parallel()
+
+	registry := newMockRegistry()
+	err := registry.Register(&mockWriteClassifierProvider{
+		name:     "github",
+		writeOps: []string{"create_label"},
+		executeFunc: func(_ context.Context, inputs map[string]any) (*provider.Output, error) {
+			return &provider.Output{Data: map[string]any{"result": []any{}}}, nil
+		},
+	})
+	require.NoError(t, err)
+
+	executor := NewExecutor(registry)
+	resolvers := []*Resolver{
+		{
+			Name: "labels",
+			Type: TypeAny,
+			Resolve: &ResolvePhase{
+				With: []ProviderSource{
+					{
+						Provider: "github",
+						Inputs: map[string]*ValueRef{
+							"operation": {Literal: "list_labels"},
+							"owner":     {Literal: "test"},
+							"repo":      {Literal: "test"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	ctx := provider.WithExecutionMode(context.Background(), provider.CapabilityFrom)
+	results, err := executor.Execute(ctx, resolvers, nil)
+	require.NoError(t, err)
+	assert.NotNil(t, results)
+}

@@ -1,0 +1,871 @@
+# GitHub Provider v3 Operations -- Functional Tests
+#
+# Tests GitHub provider operations against a mock HTTP server.
+# Read operations are resolvers, write operations are workflow actions.
+# Exception: api_call is intentionally unclassified (user controls the HTTP
+# method), so it can be used in resolvers even with mutating methods.
+#
+# Run: scafctl test -f tests/integration/solutions/providers/github-v3-operations/solution.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: github-v3-operations-test
+  version: 1.0.0
+  description: |
+    Functional tests for GitHub provider operations.
+    Uses a mock HTTP server to validate labels, milestones, reactions,
+    collaborators, webhooks, GitHub Actions, repo settings, custom
+    properties, and the generic api_call endpoint.
+
+spec:
+  # =====================================================================
+  # RESOLVERS -- Read operations + unclassified api_call
+  # =====================================================================
+  resolvers:
+    mock-base-url:
+      description: Base URL of mock GitHub API server
+      type: string
+      resolve:
+        with:
+          - provider: env
+            inputs:
+              operation: get
+              name: MOCK_BASE_URL
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "__self.value"
+
+    # ─── Generic API Call ─────────────────────────────────────────────
+    api-call-get:
+      description: Generic GET api_call to list labels
+      type: any
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: api_call
+              api_base:
+                rslvr: mock-base-url
+              endpoint: /repos/test-org/test-repo/labels
+              method: GET
+
+    api-call-post:
+      description: Generic POST api_call to create a resource
+      type: any
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: api_call
+              api_base:
+                rslvr: mock-base-url
+              endpoint: /repos/test-org/test-repo/labels
+              method: POST
+              request_body:
+                name: new-label
+                color: "ff0000"
+
+    # ─── Label reads ──────────────────────────────────────────────────
+    list-labels:
+      description: List repository labels
+      type: any
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: list_labels
+              owner: test-org
+              repo: test-repo
+              api_base:
+                rslvr: mock-base-url
+
+    # ─── Milestone reads ─────────────────────────────────────────────
+    list-milestones:
+      description: List milestones
+      type: any
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: list_milestones
+              owner: test-org
+              repo: test-repo
+              api_base:
+                rslvr: mock-base-url
+
+    # ─── Reaction reads ──────────────────────────────────────────────
+    list-reactions:
+      description: List reactions on an issue
+      type: any
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: list_reactions
+              owner: test-org
+              repo: test-repo
+              api_base:
+                rslvr: mock-base-url
+              number: 42
+
+    # ─── Collaborator reads ───────────────────────────────────────────
+    list-collaborators:
+      description: List repository collaborators
+      type: any
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: list_collaborators
+              owner: test-org
+              repo: test-repo
+              api_base:
+                rslvr: mock-base-url
+
+    # ─── Webhook reads ────────────────────────────────────────────────
+    list-webhooks:
+      description: List repository webhooks
+      type: any
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: list_webhooks
+              owner: test-org
+              repo: test-repo
+              api_base:
+                rslvr: mock-base-url
+
+    # ─── GitHub Actions reads ─────────────────────────────────────────
+    list-workflow-runs:
+      description: List workflow runs
+      type: any
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: list_workflow_runs
+              owner: test-org
+              repo: test-repo
+              api_base:
+                rslvr: mock-base-url
+
+    list-repo-variables:
+      description: List repository variables
+      type: any
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: list_repo_variables
+              owner: test-org
+              repo: test-repo
+              api_base:
+                rslvr: mock-base-url
+
+    list-environments:
+      description: List deployment environments
+      type: any
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: list_environments
+              owner: test-org
+              repo: test-repo
+              api_base:
+                rslvr: mock-base-url
+
+    # ─── Repository settings reads ────────────────────────────────────
+    list-topics:
+      description: List repository topics
+      type: any
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: list_topics
+              owner: test-org
+              repo: test-repo
+              api_base:
+                rslvr: mock-base-url
+
+    # ─── Custom properties reads ──────────────────────────────────────
+    list-custom-properties:
+      description: List custom properties
+      type: any
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: list_custom_properties
+              owner: test-org
+              repo: test-repo
+              api_base:
+                rslvr: mock-base-url
+
+  # =====================================================================
+  # WORKFLOW -- Write operations
+  # =====================================================================
+  workflow:
+    actions:
+      create-label:
+        description: Create a new label
+        provider: github
+        inputs:
+          operation: create_label
+          owner: test-org
+          repo: test-repo
+          api_base:
+            rslvr: mock-base-url
+          label_name: help-wanted
+          color: "00ff00"
+          label_description: "Extra attention is needed"
+
+      delete-label:
+        description: Delete a label
+        provider: github
+        inputs:
+          operation: delete_label
+          owner: test-org
+          repo: test-repo
+          api_base:
+            rslvr: mock-base-url
+          label_name: old-label
+
+      add-labels-to-issue:
+        description: Add labels to an issue
+        provider: github
+        inputs:
+          operation: add_labels_to_issue
+          owner: test-org
+          repo: test-repo
+          api_base:
+            rslvr: mock-base-url
+          number: 42
+          labels:
+            - bug
+            - priority/high
+
+      create-milestone:
+        description: Create a milestone
+        provider: github
+        inputs:
+          operation: create_milestone
+          owner: test-org
+          repo: test-repo
+          api_base:
+            rslvr: mock-base-url
+          title: "v1.0"
+          description: "First release"
+
+      add-reaction:
+        description: Add a thumbs-up reaction to an issue
+        provider: github
+        inputs:
+          operation: add_reaction
+          owner: test-org
+          repo: test-repo
+          api_base:
+            rslvr: mock-base-url
+          number: 42
+          reaction_content: "+1"
+
+      add-collaborator:
+        description: Add a collaborator
+        provider: github
+        inputs:
+          operation: add_collaborator
+          owner: test-org
+          repo: test-repo
+          api_base:
+            rslvr: mock-base-url
+          username: new-contributor
+          permission: push
+
+      create-webhook:
+        description: Create a webhook
+        provider: github
+        inputs:
+          operation: create_webhook
+          owner: test-org
+          repo: test-repo
+          api_base:
+            rslvr: mock-base-url
+          webhook_url: https://example.com/webhook
+          webhook_events:
+            - push
+            - pull_request
+
+      dispatch-workflow:
+        description: Trigger a workflow dispatch
+        provider: github
+        inputs:
+          operation: dispatch_workflow
+          owner: test-org
+          repo: test-repo
+          api_base:
+            rslvr: mock-base-url
+          workflow_id: ci.yml
+          ref: main
+          workflow_inputs:
+            environment: staging
+
+      update-repo:
+        description: Update repository settings
+        provider: github
+        inputs:
+          operation: update_repo
+          owner: test-org
+          repo: test-repo
+          api_base:
+            rslvr: mock-base-url
+          description: "Updated project description"
+          has_wiki: false
+          delete_branch_on_merge: true
+
+      replace-topics:
+        description: Replace repository topics
+        provider: github
+        inputs:
+          operation: replace_topics
+          owner: test-org
+          repo: test-repo
+          api_base:
+            rslvr: mock-base-url
+          topics:
+            - golang
+            - cli
+            - scaffolding
+
+      fork-repo:
+        description: Fork a repository
+        provider: github
+        inputs:
+          operation: fork_repo
+          owner: test-org
+          repo: test-repo
+          api_base:
+            rslvr: mock-base-url
+          organization: my-org
+          default_branch_only: true
+
+      set-custom-properties:
+        description: Set custom properties
+        provider: github
+        inputs:
+          operation: set_custom_properties
+          owner: test-org
+          repo: test-repo
+          api_base:
+            rslvr: mock-base-url
+          properties:
+            environment: staging
+            team: platform
+
+  # =====================================================================
+  # TEST CONFIGURATION
+  # =====================================================================
+  testing:
+    config:
+      skipBuiltins: [resolve-defaults, render-defaults]
+      services:
+        - name: mock-github-api
+          type: http
+          portEnv: MOCK_HTTP_PORT
+          baseUrlEnv: MOCK_BASE_URL
+          routes:
+            # ── Labels ─────────────────────────────────────────────────
+            - path: /repos/test-org/test-repo/labels
+              method: GET
+              status: 200
+              body: |
+                [
+                  {"id": 1, "name": "bug", "color": "d73a4a", "description": "Something is broken"},
+                  {"id": 2, "name": "enhancement", "color": "a2eeef", "description": "New feature"}
+                ]
+              headers:
+                Content-Type: application/json
+
+            - path: /repos/test-org/test-repo/labels
+              method: POST
+              status: 201
+              body: |
+                {"id": 3, "name": "help-wanted", "color": "00ff00", "description": "Extra attention is needed"}
+              headers:
+                Content-Type: application/json
+
+            - path: /repos/test-org/test-repo/labels/old-label
+              method: DELETE
+              status: 204
+              body: "{}"
+              headers:
+                Content-Type: application/json
+
+            - path: /repos/test-org/test-repo/issues/42/labels
+              method: POST
+              status: 200
+              body: |
+                [{"id": 1, "name": "bug"}, {"id": 4, "name": "priority/high"}]
+              headers:
+                Content-Type: application/json
+
+            # ── Milestones ─────────────────────────────────────────────
+            - path: /repos/test-org/test-repo/milestones
+              method: GET
+              status: 200
+              body: |
+                [{"number": 1, "title": "v1.0", "description": "First release"}]
+              headers:
+                Content-Type: application/json
+
+            - path: /repos/test-org/test-repo/milestones
+              method: POST
+              status: 201
+              body: |
+                {"number": 2, "title": "v1.0", "description": "First release"}
+              headers:
+                Content-Type: application/json
+
+            # ── Reactions ──────────────────────────────────────────────
+            - path: /repos/test-org/test-repo/issues/42/reactions
+              method: POST
+              status: 201
+              body: |
+                {"id": 100, "content": "+1", "user": {"login": "test-user"}}
+              headers:
+                Content-Type: application/json
+
+            - path: /repos/test-org/test-repo/issues/42/reactions
+              method: GET
+              status: 200
+              body: |
+                [
+                  {"id": 100, "content": "+1", "user": {"login": "user-a"}},
+                  {"id": 101, "content": "heart", "user": {"login": "user-b"}}
+                ]
+              headers:
+                Content-Type: application/json
+
+            # ── Collaborators ──────────────────────────────────────────
+            - path: /repos/test-org/test-repo/collaborators
+              method: GET
+              status: 200
+              body: |
+                [
+                  {"login": "owner", "permissions": {"admin": true}},
+                  {"login": "contributor", "permissions": {"push": true}}
+                ]
+              headers:
+                Content-Type: application/json
+
+            - path: /repos/test-org/test-repo/collaborators/new-contributor
+              method: PUT
+              status: 201
+              body: |
+                {"id": 1, "invitee": {"login": "new-contributor"}, "permissions": "push"}
+              headers:
+                Content-Type: application/json
+
+            # ── Webhooks ───────────────────────────────────────────────
+            - path: /repos/test-org/test-repo/hooks
+              method: GET
+              status: 200
+              body: |
+                [{"id": 1, "url": "https://api.github.com/repos/test-org/test-repo/hooks/1", "config": {"url": "https://example.com/hook"}, "events": ["push"]}]
+              headers:
+                Content-Type: application/json
+
+            - path: /repos/test-org/test-repo/hooks
+              method: POST
+              status: 201
+              body: |
+                {"id": 2, "url": "https://api.github.com/repos/test-org/test-repo/hooks/2", "config": {"url": "https://example.com/webhook"}, "events": ["push", "pull_request"]}
+              headers:
+                Content-Type: application/json
+
+            # ── GitHub Actions ─────────────────────────────────────────
+            - path: /repos/test-org/test-repo/actions/workflows/ci.yml/dispatches
+              method: POST
+              status: 204
+              body: "{}"
+              headers:
+                Content-Type: application/json
+
+            - path: /repos/test-org/test-repo/actions/runs
+              method: GET
+              status: 200
+              body: |
+                {"total_count": 2, "workflow_runs": [{"id": 1, "status": "completed"}, {"id": 2, "status": "in_progress"}]}
+              headers:
+                Content-Type: application/json
+
+            - path: /repos/test-org/test-repo/actions/variables
+              method: GET
+              status: 200
+              body: |
+                {"total_count": 1, "variables": [{"name": "ENV", "value": "prod"}]}
+              headers:
+                Content-Type: application/json
+
+            - path: /repos/test-org/test-repo/environments
+              method: GET
+              status: 200
+              body: |
+                {"total_count": 2, "environments": [{"name": "staging"}, {"name": "production"}]}
+              headers:
+                Content-Type: application/json
+
+            # ── Repository Settings ────────────────────────────────────
+            - path: /repos/test-org/test-repo
+              method: PATCH
+              status: 200
+              body: |
+                {"full_name": "test-org/test-repo", "description": "Updated project description", "has_wiki": false, "delete_branch_on_merge": true}
+              headers:
+                Content-Type: application/json
+
+            # ── Topics ─────────────────────────────────────────────────
+            - path: /repos/test-org/test-repo/topics
+              method: GET
+              status: 200
+              body: |
+                {"names": ["golang", "cli"]}
+              headers:
+                Content-Type: application/json
+
+            - path: /repos/test-org/test-repo/topics
+              method: PUT
+              status: 200
+              body: |
+                {"names": ["golang", "cli", "scaffolding"]}
+              headers:
+                Content-Type: application/json
+
+            # ── Fork ───────────────────────────────────────────────────
+            - path: /repos/test-org/test-repo/forks
+              method: POST
+              status: 202
+              body: |
+                {"full_name": "my-org/test-repo", "fork": true, "owner": {"login": "my-org"}}
+              headers:
+                Content-Type: application/json
+
+            # ── Custom Properties ──────────────────────────────────────
+            - path: /repos/test-org/test-repo/properties/values
+              method: GET
+              status: 200
+              body: |
+                [{"property_name": "environment", "value": "production"}, {"property_name": "team", "value": "platform"}]
+              headers:
+                Content-Type: application/json
+
+            - path: /repos/test-org/test-repo/properties/values
+              method: PATCH
+              status: 204
+              body: "{}"
+              headers:
+                Content-Type: application/json
+
+    cases:
+      _resolver-base:
+        description: Base template for resolver tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [provider, github, v3]
+
+      _action-base:
+        description: Base template for action tests
+        command: [run, action]
+        args: ["-o", "json"]
+        tags: [provider, github, v3]
+
+      # ── API Call Tests ──────────────────────────────────────────────
+      api-call-get:
+        description: Generic api_call GET returns label list
+        extends: [_resolver-base]
+        tags: [api-call]
+        args: ["api-call-get", "-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+            message: "api_call GET should succeed"
+          - expression: size(__output['api-call-get'].result) == 2
+            message: "Should return 2 labels"
+          - expression: __output['api-call-get'].result[0].name == 'bug'
+            message: "First label should be bug"
+
+      api-call-post:
+        description: Generic api_call POST creates a resource
+        extends: [_resolver-base]
+        tags: [api-call]
+        args: ["api-call-post", "-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+            message: "api_call POST should succeed"
+          - expression: __output['api-call-post'].success == true
+            message: "api_call POST should report success"
+
+      # ── Label Read Tests ────────────────────────────────────────────
+      list-labels:
+        description: List labels returns expected labels
+        extends: [_resolver-base]
+        tags: [labels]
+        args: ["list-labels", "-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+            message: "list_labels should succeed"
+          - expression: size(__output['list-labels'].result) == 2
+            message: "Should return 2 labels"
+
+      # ── Label Write Tests ───────────────────────────────────────────
+      create-label:
+        description: Create a new label
+        extends: [_action-base]
+        tags: [labels]
+        args: ["create-label", "-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+            message: "create_label should succeed"
+          - expression: __output.actions['create-label'].status == 'succeeded'
+            message: "Should report success"
+
+      delete-label:
+        description: Delete a label
+        extends: [_action-base]
+        tags: [labels]
+        args: ["delete-label", "-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+            message: "delete_label should succeed"
+          - expression: __output.actions['delete-label'].status == 'succeeded'
+            message: "Should report success"
+
+      add-labels-to-issue:
+        description: Add labels to an issue
+        extends: [_action-base]
+        tags: [labels]
+        args: ["add-labels-to-issue", "-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+            message: "add_labels_to_issue should succeed"
+          - expression: __output.actions['add-labels-to-issue'].status == 'succeeded'
+            message: "Should report success"
+
+      # ── Milestone Read Tests ────────────────────────────────────────
+      list-milestones:
+        description: List milestones
+        extends: [_resolver-base]
+        tags: [milestones]
+        args: ["list-milestones", "-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+            message: "list_milestones should succeed"
+          - expression: size(__output['list-milestones'].result) == 1
+            message: "Should return 1 milestone"
+          - expression: __output['list-milestones'].result[0].title == 'v1.0'
+            message: "Milestone should be v1.0"
+
+      # ── Milestone Write Tests ───────────────────────────────────────
+      create-milestone:
+        description: Create a milestone
+        extends: [_action-base]
+        tags: [milestones]
+        args: ["create-milestone", "-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+            message: "create_milestone should succeed"
+          - expression: __output.actions['create-milestone'].status == 'succeeded'
+            message: "Should report success"
+
+      # ── Reaction Read Tests ─────────────────────────────────────────
+      list-reactions:
+        description: List reactions on issue
+        extends: [_resolver-base]
+        tags: [reactions]
+        args: ["list-reactions", "-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+            message: "list_reactions should succeed"
+          - expression: size(__output['list-reactions'].result) == 2
+            message: "Should return 2 reactions"
+
+      # ── Reaction Write Tests ────────────────────────────────────────
+      add-reaction:
+        description: Add thumbs-up reaction
+        extends: [_action-base]
+        tags: [reactions]
+        args: ["add-reaction", "-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+            message: "add_reaction should succeed"
+          - expression: __output.actions['add-reaction'].status == 'succeeded'
+            message: "Should report success"
+
+      # ── Collaborator Read Tests ─────────────────────────────────────
+      list-collaborators:
+        description: List collaborators
+        extends: [_resolver-base]
+        tags: [collaborators]
+        args: ["list-collaborators", "-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+            message: "list_collaborators should succeed"
+          - expression: size(__output['list-collaborators'].result) == 2
+            message: "Should return 2 collaborators"
+
+      # ── Collaborator Write Tests ────────────────────────────────────
+      add-collaborator:
+        description: Add a collaborator
+        extends: [_action-base]
+        tags: [collaborators]
+        args: ["add-collaborator", "-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+            message: "add_collaborator should succeed"
+          - expression: __output.actions['add-collaborator'].status == 'succeeded'
+            message: "Should report success"
+
+      # ── Webhook Read Tests ──────────────────────────────────────────
+      list-webhooks:
+        description: List webhooks
+        extends: [_resolver-base]
+        tags: [webhooks]
+        args: ["list-webhooks", "-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+            message: "list_webhooks should succeed"
+          - expression: size(__output['list-webhooks'].result) == 1
+            message: "Should return 1 webhook"
+
+      # ── Webhook Write Tests ─────────────────────────────────────────
+      create-webhook:
+        description: Create a webhook
+        extends: [_action-base]
+        tags: [webhooks]
+        args: ["create-webhook", "-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+            message: "create_webhook should succeed"
+          - expression: __output.actions['create-webhook'].status == 'succeeded'
+            message: "Should report success"
+
+      # ── GitHub Actions Read Tests ───────────────────────────────────
+      list-workflow-runs:
+        description: List workflow runs
+        extends: [_resolver-base]
+        tags: [actions]
+        args: ["list-workflow-runs", "-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+            message: "list_workflow_runs should succeed"
+          - expression: __output['list-workflow-runs'].result.total_count == 2.0
+            message: "Should return 2 workflow runs"
+
+      list-repo-variables:
+        description: List repository variables
+        extends: [_resolver-base]
+        tags: [actions]
+        args: ["list-repo-variables", "-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+            message: "list_repo_variables should succeed"
+          - expression: __output['list-repo-variables'].result.total_count == 1.0
+            message: "Should return 1 variable"
+
+      list-environments:
+        description: List deployment environments
+        extends: [_resolver-base]
+        tags: [actions]
+        args: ["list-environments", "-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+            message: "list_environments should succeed"
+          - expression: __output['list-environments'].result.total_count == 2.0
+            message: "Should return 2 environments"
+
+      # ── GitHub Actions Write Tests ──────────────────────────────────
+      dispatch-workflow:
+        description: Dispatch a workflow
+        extends: [_action-base]
+        tags: [actions]
+        args: ["dispatch-workflow", "-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+            message: "dispatch_workflow should succeed"
+          - expression: __output.actions['dispatch-workflow'].status == 'succeeded'
+            message: "Should report success"
+
+      # ── Repository Settings Write Tests ─────────────────────────────
+      update-repo:
+        description: Update repository settings
+        extends: [_action-base]
+        tags: [repo-settings]
+        args: ["update-repo", "-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+            message: "update_repo should succeed"
+          - expression: __output.actions['update-repo'].status == 'succeeded'
+            message: "Should report success"
+
+      # ── Topics Read Tests ───────────────────────────────────────────
+      list-topics:
+        description: List repository topics
+        extends: [_resolver-base]
+        tags: [repo-settings]
+        args: ["list-topics", "-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+            message: "list_topics should succeed"
+          - expression: size(__output['list-topics'].result.names) == 2
+            message: "Should return 2 topics"
+
+      # ── Topics Write Tests ──────────────────────────────────────────
+      replace-topics:
+        description: Replace repository topics
+        extends: [_action-base]
+        tags: [repo-settings]
+        args: ["replace-topics", "-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+            message: "replace_topics should succeed"
+          - expression: __output.actions['replace-topics'].status == 'succeeded'
+            message: "Should report success"
+
+      fork-repo:
+        description: Fork a repository
+        extends: [_action-base]
+        tags: [repo-settings]
+        args: ["fork-repo", "-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+            message: "fork_repo should succeed"
+          - expression: __output.actions['fork-repo'].status == 'succeeded'
+            message: "Should report success"
+
+      # ── Custom Properties Read Tests ────────────────────────────────
+      list-custom-properties:
+        description: List custom properties
+        extends: [_resolver-base]
+        tags: [custom-properties]
+        args: ["list-custom-properties", "-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+            message: "list_custom_properties should succeed"
+          - expression: size(__output['list-custom-properties'].result) == 2
+            message: "Should return 2 custom properties"
+
+      # ── Custom Properties Write Tests ───────────────────────────────
+      set-custom-properties:
+        description: Set custom properties
+        extends: [_action-base]
+        tags: [custom-properties]
+        args: ["set-custom-properties", "-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+            message: "set_custom_properties should succeed"
+          - expression: __output.actions['set-custom-properties'].status == 'succeeded'
+            message: "Should report success"

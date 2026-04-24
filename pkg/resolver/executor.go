@@ -1226,6 +1226,11 @@ func (e *Executor) executeProviderWithIterationContext(ctx context.Context, prov
 
 	ctxWithResolvers := provider.WithResolverContext(ctx, resolverData)
 
+	// Check for write operations in resolver context
+	if err := provider.ValidateWriteOperation(ctxWithResolvers, prov, inputs); err != nil {
+		return nil, err
+	}
+
 	// Also pass the iteration context separately so providers can access aliases
 	provIterCtx := &provider.IterationContext{
 		Item:       iterCtx.Item,
@@ -1398,6 +1403,11 @@ func (e *Executor) executeProviderWithSelf(ctx context.Context, providerName str
 		resolverData["__self"] = self
 	}
 	ctxWithResolvers := provider.WithResolverContext(ctx, resolverData)
+
+	// Check for write operations in resolver context
+	if err := provider.ValidateWriteOperation(ctxWithResolvers, prov, inputs); err != nil {
+		return nil, err
+	}
 
 	// Execute provider
 	output, err := prov.Execute(ctxWithResolvers, inputs)
