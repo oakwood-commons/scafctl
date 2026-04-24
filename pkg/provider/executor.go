@@ -77,6 +77,38 @@ func validateExecutionMode(ctx context.Context, desc *Descriptor) error {
 	return fmt.Errorf("provider %q does not support capability %q; supported: %v", desc.Name, execMode, desc.Capabilities)
 }
 
+// ValidateWriteOperation checks whether a write operation is being used in a read-only
+// context. Providers with Descriptor.WriteOperations populated declare which operations
+// mutate state; these are only allowed in action (CapabilityAction) context and rejected
+// in resolver resolve (CapabilityFrom) and transform (CapabilityTransform) contexts.
+//
+// Semantics follow the SDK convention:
+//   - nil WriteOperations: provider cannot classify (no enforcement)
+//   - empty []string{}: all operations are reads (everything allowed)
+//   - populated: listed operations are blocked outside action context
+func ValidateWriteOperation(ctx context.Context, p Provider, resolvedInputs map[string]any) error {
+	desc := p.Descriptor()
+	if desc == nil || desc.WriteOperations == nil {
+		return nil // provider cannot classify operations — no enforcement
+	}
+
+	execMode, ok := ExecutionModeFromContext(ctx)
+	if !ok || execMode == CapabilityAction {
+		return nil // writes are allowed in action context
+	}
+
+	operation, _ := resolvedInputs["operation"].(string)
+	if operation == "" {
+		return nil
+	}
+
+	if desc.IsWriteOperation(operation) {
+		return fmt.Errorf("operation %q is a write operation and cannot be used in read-only execution mode %q; use a workflow action instead", operation, execMode)
+	}
+
+	return nil
+}
+
 // Execute executes a provider with the given inputs and context.
 // It performs:
 // 1. Execution mode validation against provider capabilities
@@ -128,6 +160,11 @@ func (e *Executor) Execute(ctx context.Context, provider Provider, inputs map[st
 	resolvedInputs, err := inputResolver.ResolveInputs(inputs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve inputs: %w", err)
+	}
+
+	// Check for write operations in resolver context
+	if err := ValidateWriteOperation(ctx, provider, resolvedInputs); err != nil {
+		return nil, err
 	}
 
 	// Validate resolved inputs

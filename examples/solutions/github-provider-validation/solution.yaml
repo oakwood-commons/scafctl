@@ -1,0 +1,508 @@
+# GitHub Provider Validation Solution
+#
+# Demonstrates the proper scafctl pattern: resolvers READ data, actions WRITE.
+# All operations target oakwood-commons/scafctl-test-sandbox (a dedicated sandbox).
+#
+# Prerequisites: scafctl auth login github
+#
+# Run:  scafctl run solution -f examples/solutions/github-provider-validation/solution.yaml
+# Run:  scafctl run solution -f examples/solutions/github-provider-validation/solution.yaml -r org=my-org -r repo=my-repo
+# Test: scafctl run action -f examples/solutions/github-provider-validation/solution.yaml test-pr
+# Clean: scafctl run action -f examples/solutions/github-provider-validation/solution.yaml clean-pr
+# Lint: scafctl lint -f examples/solutions/github-provider-validation/solution.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: github-provider-validation
+  version: 1.0.0
+  description: |
+    End-to-end validation of GitHub provider v2.1 operations.
+    Resolvers gather data from oakwood-commons/scafctl-test-sandbox,
+    then workflow actions create, update, and clean up test resources.
+
+spec:
+  # =====================================================================
+  # RESOLVERS -- Read-only data gathering
+  # =====================================================================
+  resolvers:
+    # ─── Parameters (overridable from CLI with -r) ────────────────────────
+
+    org:
+      description: GitHub organization or user
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: org
+          - provider: static
+            inputs:
+              value: oakwood-commons
+
+    repo:
+      description: GitHub repository name
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: repo
+          - provider: static
+            inputs:
+              value: scafctl-test-sandbox
+
+    # ─── GitHub data resolvers ────────────────────────────────────────────
+
+    labels:
+      description: List all repository labels
+      type: any
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: list_labels
+              owner: {rslvr: org}
+              repo: {rslvr: repo}
+
+    milestones:
+      description: List all milestones
+      type: any
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: list_milestones
+              owner: {rslvr: org}
+              repo: {rslvr: repo}
+
+    topics:
+      description: List repository topics
+      type: any
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: list_topics
+              owner: {rslvr: org}
+              repo: {rslvr: repo}
+
+    collaborators:
+      description: List repository collaborators
+      type: any
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: list_collaborators
+              owner: {rslvr: org}
+              repo: {rslvr: repo}
+
+    webhooks:
+      description: List repository webhooks
+      type: any
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: list_webhooks
+              owner: {rslvr: org}
+              repo: {rslvr: repo}
+
+    workflow-runs:
+      description: List recent workflow runs
+      type: any
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: list_workflow_runs
+              owner: {rslvr: org}
+              repo: {rslvr: repo}
+              per_page: 5
+
+    environments:
+      description: List deployment environments
+      type: any
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: list_environments
+              owner: {rslvr: org}
+              repo: {rslvr: repo}
+
+    repo-variables:
+      description: List repository action variables
+      type: any
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: list_repo_variables
+              owner: {rslvr: org}
+              repo: {rslvr: repo}
+
+    repo-info:
+      description: Fetch repo metadata
+      type: any
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: get_repo
+              owner: {rslvr: org}
+              repo: {rslvr: repo}
+
+    custom-properties:
+      description: List custom properties set on the repository
+      type: any
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: list_custom_properties
+              owner: {rslvr: org}
+              repo: {rslvr: repo}
+
+    readme:
+      description: Fetch the repository README
+      type: any
+      resolve:
+        with:
+          - provider: github
+            inputs:
+              operation: get_file
+              owner: {rslvr: org}
+              repo: {rslvr: repo}
+              path: README.md
+
+    # ─── Derived data ─────────────────────────────────────────────────────
+
+    label-count:
+      description: Count of labels before changes
+      type: int
+      dependsOn: [labels]
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "size(_['labels'].result)"
+
+    topic-names:
+      description: Current topic names
+      type: any
+      dependsOn: [topics]
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_['topics'].result.names"
+
+  # =====================================================================
+  # WORKFLOW -- Write operations (create, update, clean up)
+  # =====================================================================
+  workflow:
+    actions:
+      # ─── Step 1: Create test resources ──────────────────────────────────
+
+      create-label:
+        description: Create a test label
+        displayName: Create Label
+        provider: github
+        onError: continue
+        inputs:
+          operation: create_label
+          owner: {rslvr: org}
+          repo: {rslvr: repo}
+          label_name: scafctl-validation-test
+          color: "1d76db"
+          label_description: "Created by github-provider-validation solution"
+
+      create-milestone:
+        description: Create a test milestone
+        displayName: Create Milestone
+        provider: github
+        onError: continue
+        inputs:
+          operation: create_milestone
+          owner: {rslvr: org}
+          repo: {rslvr: repo}
+          title: validation-milestone
+          description: "Created by github-provider-validation solution"
+
+      set-topics:
+        description: Set repository topics
+        displayName: Set Topics
+        provider: github
+        inputs:
+          operation: replace_topics
+          owner: {rslvr: org}
+          repo: {rslvr: repo}
+          topics:
+            - golang
+            - cli
+            - scaffolding
+            - cel
+            - validation-test
+
+      set-custom-properties:
+        description: Set custom properties on the repository
+        displayName: Set Custom Properties
+        provider: github
+        onError: continue
+        inputs:
+          operation: set_custom_properties
+          owner: {rslvr: org}
+          repo: {rslvr: repo}
+          properties:
+            environment: validation
+            team: platform-engineering
+
+      # ─── Step 2: Update resources ──────────────────────────────────────
+
+      update-label:
+        description: Update the test label
+        displayName: Update Label
+        provider: github
+        dependsOn: [create-label]
+        inputs:
+          operation: update_label
+          owner: {rslvr: org}
+          repo: {rslvr: repo}
+          label_name: scafctl-validation-test
+          color: "e4e669"
+          new_label_name: scafctl-validation-updated
+
+      update-repo:
+        description: Update repository description
+        displayName: Update Repo Settings
+        provider: github
+        inputs:
+          operation: update_repo
+          owner: {rslvr: org}
+          repo: {rslvr: repo}
+          description: "Sandbox repo for scafctl GitHub provider validation (updated)"
+          has_wiki: false
+          delete_branch_on_merge: true
+
+      # ─── Step 3: Clean up ──────────────────────────────────────────────
+
+      delete-label:
+        description: Delete the test label
+        displayName: Cleanup Label
+        provider: github
+        dependsOn: [update-label]
+        onError: continue
+        inputs:
+          operation: delete_label
+          owner: {rslvr: org}
+          repo: {rslvr: repo}
+          label_name: scafctl-validation-updated
+
+      restore-topics:
+        description: Restore topics to clean state
+        displayName: Restore Topics
+        provider: github
+        dependsOn: [set-topics]
+        inputs:
+          operation: replace_topics
+          owner: {rslvr: org}
+          repo: {rslvr: repo}
+          topics:
+            - golang
+            - cli
+            - scaffolding
+            - cel
+            - devops
+
+      restore-custom-properties:
+        description: Restore custom properties to defaults
+        displayName: Restore Custom Properties
+        provider: github
+        dependsOn: [set-custom-properties]
+        onError: continue
+        inputs:
+          operation: set_custom_properties
+          owner: {rslvr: org}
+          repo: {rslvr: repo}
+          properties:
+            environment: sandbox
+            team: scafctl
+
+      restore-repo:
+        description: Restore repository description
+        displayName: Restore Repo Settings
+        provider: github
+        dependsOn: [update-repo]
+        inputs:
+          operation: update_repo
+          owner: {rslvr: org}
+          repo: {rslvr: repo}
+          description: "Sandbox repo for scafctl GitHub provider validation"
+
+      # ─── test-pr: Create branch, commit file, open PR ──────────────────
+      #
+      # Usage: scafctl run action -f solution.yaml test-pr
+      #   (runs the full chain via dependencies)
+
+      msg-pr-start:
+        description: Announce PR workflow
+        displayName: Start
+        provider: message
+        inputs:
+          message: "🚀 Starting PR workflow: get HEAD → create branch → commit → open PR"
+          type: info
+
+      get-main-head:
+        description: Get the HEAD OID of main branch
+        displayName: Get Main HEAD
+        provider: github
+        dependsOn: [msg-pr-start]
+        inputs:
+          operation: get_head_oid
+          owner: {rslvr: org}
+          repo: {rslvr: repo}
+          branch: main
+
+      msg-head-oid:
+        description: Show the HEAD OID
+        displayName: Show HEAD
+        provider: message
+        dependsOn: [get-main-head]
+        inputs:
+          message: {expr: "'📌 Got main HEAD: ' + __actions['get-main-head'].results.result.oid"}
+          type: success
+
+      create-feature-branch:
+        description: Create a feature branch from main
+        displayName: Create Branch
+        provider: github
+        dependsOn: [msg-head-oid]
+        inputs:
+          operation: create_branch
+          owner: {rslvr: org}
+          repo: {rslvr: repo}
+          branch: scafctl-validation-branch
+          oid: {expr: "__actions['get-main-head'].results.result.oid"}
+
+      msg-branch-created:
+        description: Confirm branch creation
+        displayName: Branch Created
+        provider: message
+        dependsOn: [create-feature-branch]
+        inputs:
+          message: "🌿 Created branch: scafctl-validation-branch"
+          type: success
+
+      commit-file:
+        description: Commit a new file to the feature branch
+        displayName: Commit File
+        provider: github
+        dependsOn: [msg-branch-created]
+        inputs:
+          operation: create_commit
+          owner: {rslvr: org}
+          repo: {rslvr: repo}
+          branch: scafctl-validation-branch
+          message: "chore: add validation test file"
+          message_body: "Created by github-provider-validation solution"
+          expected_head_oid: {expr: "__actions['get-main-head'].results.result.oid"}
+          additions:
+            - path: validation/test.txt
+              content: |
+                This file was created by scafctl github-provider-validation.
+
+      msg-file-committed:
+        description: Confirm file commit
+        displayName: File Committed
+        provider: message
+        dependsOn: [commit-file]
+        inputs:
+          message: "📄 Committed validation/test.txt to scafctl-validation-branch"
+          type: success
+
+      open-pr:
+        description: Open a pull request for the feature branch
+        displayName: Open PR
+        provider: github
+        dependsOn: [msg-file-committed]
+        inputs:
+          operation: create_pull_request
+          owner: {rslvr: org}
+          repo: {rslvr: repo}
+          title: "chore: scafctl validation test"
+          head: scafctl-validation-branch
+          base: main
+          body: |
+            Automated PR created by `github-provider-validation` solution.
+            Run `scafctl run action -f solution.yaml clean-pr` to clean up.
+
+      test-pr:
+        description: Show PR result
+        displayName: Test PR
+        provider: message
+        dependsOn: [open-pr]
+        inputs:
+          message: {expr: "'🔗 Opened PR #' + string(__actions['open-pr'].results.result.number) + ': ' + __actions['open-pr'].results.result.url"}
+          type: success
+
+      # ─── clean-pr: Close any open validation PR and delete branch ──────
+      #
+      # Usage: scafctl run action -f solution.yaml clean-pr
+      #   (runs independently -- no dependency on test-pr)
+
+      msg-clean-start:
+        description: Announce cleanup
+        displayName: Cleanup Start
+        provider: message
+        inputs:
+          message: "🧹 Cleaning up: finding PR, closing, and deleting branch..."
+          type: info
+
+      find-validation-pr:
+        description: Find open PR from validation branch
+        displayName: Find PR
+        provider: github
+        dependsOn: [msg-clean-start]
+        inputs:
+          operation: list_pull_requests
+          owner: {rslvr: org}
+          repo: {rslvr: repo}
+          state: open
+          head: scafctl-validation-branch
+
+      close-validation-pr:
+        description: Close the validation PR (if found)
+        displayName: Close PR
+        provider: github
+        dependsOn: [find-validation-pr]
+        onError: continue
+        when: {expr: "size(__actions['find-validation-pr'].results.result) > 0"}
+        inputs:
+          operation: close_pull_request
+          owner: {rslvr: org}
+          repo: {rslvr: repo}
+          number: {expr: "int(__actions['find-validation-pr'].results.result[0].number)"}
+
+      delete-validation-branch:
+        description: Delete the validation branch
+        displayName: Delete Branch
+        provider: github
+        dependsOn: [close-validation-pr]
+        onError: continue
+        inputs:
+          operation: delete_branch
+          owner: {rslvr: org}
+          repo: {rslvr: repo}
+          branch: scafctl-validation-branch
+
+      clean-pr:
+        description: Cleanup complete
+        displayName: Clean PR
+        provider: message
+        dependsOn: [delete-validation-branch]
+        inputs:
+          message: "✅ Cleaned up: validation PR closed and branch deleted"
+          type: success

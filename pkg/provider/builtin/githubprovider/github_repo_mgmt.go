@@ -491,3 +491,176 @@ func (p *GitHubProvider) executeEnableAutomatedSecurityFixes(ctx context.Context
 		"enabled": true,
 	}), nil
 }
+
+// ─── Update Repository ───────────────────────────────────────────────────────
+
+func (p *GitHubProvider) executeUpdateRepo(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
+	reqBody := map[string]any{}
+
+	if desc := getStringInput(inputs, "description"); desc != "" {
+		reqBody["description"] = desc
+	}
+	if homepage := getStringInput(inputs, "homepage"); homepage != "" {
+		reqBody["homepage"] = homepage
+	}
+	if visibility := getStringInput(inputs, "visibility"); visibility != "" {
+		reqBody["visibility"] = visibility
+	}
+	if defaultBranch := getStringInput(inputs, "default_branch"); defaultBranch != "" {
+		reqBody["default_branch"] = defaultBranch
+	}
+	if v, ok := getBoolInput(inputs, "has_issues"); ok {
+		reqBody["has_issues"] = v
+	}
+	if v, ok := getBoolInput(inputs, "has_projects"); ok {
+		reqBody["has_projects"] = v
+	}
+	if v, ok := getBoolInput(inputs, "has_wiki"); ok {
+		reqBody["has_wiki"] = v
+	}
+	if v, ok := getBoolInput(inputs, "allow_squash_merge"); ok {
+		reqBody["allow_squash_merge"] = v
+	}
+	if v, ok := getBoolInput(inputs, "allow_merge_commit"); ok {
+		reqBody["allow_merge_commit"] = v
+	}
+	if v, ok := getBoolInput(inputs, "allow_rebase_merge"); ok {
+		reqBody["allow_rebase_merge"] = v
+	}
+	if v, ok := getBoolInput(inputs, "delete_branch_on_merge"); ok {
+		reqBody["delete_branch_on_merge"] = v
+	}
+	if v, ok := getBoolInput(inputs, "archived"); ok {
+		reqBody["archived"] = v
+	}
+
+	restURL := fmt.Sprintf("%s/repos/%s/%s", apiBase, owner, repo)
+	result, err := p.doRESTRequest(ctx, client, http.MethodPatch, restURL, reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("updating repository: %w", err)
+	}
+	return actionOutput("update_repo", result), nil
+}
+
+// ─── List Topics ─────────────────────────────────────────────────────────────
+
+func (p *GitHubProvider) executeListTopics(ctx context.Context, client *httpc.Client, apiBase, owner, repo string) (*provider.Output, error) {
+	restURL := fmt.Sprintf("%s/repos/%s/%s/topics", apiBase, owner, repo)
+	result, err := p.doRESTRequest(ctx, client, http.MethodGet, restURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("listing topics: %w", err)
+	}
+	return readOutput(result), nil
+}
+
+// ─── Replace Topics ──────────────────────────────────────────────────────────
+
+func (p *GitHubProvider) executeReplaceTopics(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
+	topics := getStringSliceInput(inputs, "topics")
+	if topics == nil {
+		topics = []string{}
+	}
+
+	reqBody := map[string]any{
+		"names": topics,
+	}
+	restURL := fmt.Sprintf("%s/repos/%s/%s/topics", apiBase, owner, repo)
+	result, err := p.doRESTRequest(ctx, client, http.MethodPut, restURL, reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("replacing topics: %w", err)
+	}
+	return actionOutput("replace_topics", result), nil
+}
+
+// ─── Fork Repository ─────────────────────────────────────────────────────────
+
+func (p *GitHubProvider) executeForkRepo(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
+	reqBody := map[string]any{}
+	if org := getStringInput(inputs, "organization"); org != "" {
+		reqBody["organization"] = org
+	}
+	if name := getStringInput(inputs, "name"); name != "" {
+		reqBody["name"] = name
+	}
+	if v, ok := getBoolInput(inputs, "default_branch_only"); ok {
+		reqBody["default_branch_only"] = v
+	}
+
+	restURL := fmt.Sprintf("%s/repos/%s/%s/forks", apiBase, owner, repo)
+	result, err := p.doRESTRequest(ctx, client, http.MethodPost, restURL, reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("forking repository: %w", err)
+	}
+	return actionOutput("fork_repo", result), nil
+}
+
+// ─── Create from Template ────────────────────────────────────────────────────
+
+func (p *GitHubProvider) executeCreateFromTemplate(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
+	newOwner := getStringInput(inputs, "new_owner")
+	if newOwner == "" {
+		newOwner = owner
+	}
+	newName := getStringInput(inputs, "new_repo_name")
+	if newName == "" {
+		return nil, requiredInputError("create_from_template", "new_repo_name", inputs, "")
+	}
+
+	reqBody := map[string]any{
+		"owner": newOwner,
+		"name":  newName,
+	}
+	if desc := getStringInput(inputs, "description"); desc != "" {
+		reqBody["description"] = desc
+	}
+	if v, ok := getBoolInput(inputs, "include_all_branches"); ok {
+		reqBody["include_all_branches"] = v
+	}
+	if visibility := getStringInput(inputs, "visibility"); visibility != "" {
+		reqBody["private"] = visibility == "private"
+	}
+
+	restURL := fmt.Sprintf("%s/repos/%s/%s/generate", apiBase, owner, repo)
+	result, err := p.doRESTRequest(ctx, client, http.MethodPost, restURL, reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("creating from template: %w", err)
+	}
+	return actionOutput("create_from_template", result), nil
+}
+
+// ─── List Custom Properties ──────────────────────────────────────────────────
+
+func (p *GitHubProvider) executeListCustomProperties(ctx context.Context, client *httpc.Client, apiBase, owner, repo string) (*provider.Output, error) {
+	restURL := fmt.Sprintf("%s/repos/%s/%s/properties/values", apiBase, owner, repo)
+	result, err := p.doRESTRequest(ctx, client, http.MethodGet, restURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("listing custom properties: %w", err)
+	}
+	return readOutput(result), nil
+}
+
+// ─── Set Custom Properties ───────────────────────────────────────────────────
+
+func (p *GitHubProvider) executeSetCustomProperties(ctx context.Context, client *httpc.Client, apiBase, owner, repo string, inputs map[string]any) (*provider.Output, error) {
+	props := getMapInput(inputs, "properties")
+	if len(props) == 0 {
+		return nil, requiredInputError("set_custom_properties", "properties", inputs, "map of property_name -> value")
+	}
+
+	// Convert flat map to GitHub API format: [{"property_name": "k", "value": "v"}, ...]
+	propList := make([]map[string]any, 0, len(props))
+	for k, v := range props {
+		propList = append(propList, map[string]any{
+			"property_name": k,
+			"value":         v,
+		})
+	}
+	reqBody := map[string]any{"properties": propList}
+
+	restURL := fmt.Sprintf("%s/repos/%s/%s/properties/values", apiBase, owner, repo)
+	result, err := p.doRESTRequest(ctx, client, http.MethodPatch, restURL, reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("setting custom properties: %w", err)
+	}
+	return actionOutput("set_custom_properties", result), nil
+}
