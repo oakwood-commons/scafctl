@@ -77,8 +77,30 @@ var allOperations = []string{
 	// Release write operations (REST)
 	"create_release", "update_release", "delete_release",
 	// Repository management operations (GraphQL + REST)
-	"create_repo", "create_ruleset",
+	"create_repo", "update_repo", "create_ruleset",
 	"enable_vulnerability_alerts", "enable_automated_security_fixes",
+	// Label operations (REST)
+	"list_labels", "create_label", "update_label", "delete_label",
+	"add_labels_to_issue", "remove_label_from_issue",
+	// Milestone operations (REST)
+	"list_milestones", "create_milestone", "update_milestone", "delete_milestone",
+	// Reaction operations (REST)
+	"add_reaction", "list_reactions", "delete_reaction",
+	// Collaborator operations (REST)
+	"list_collaborators", "add_collaborator", "remove_collaborator",
+	// Webhook operations (REST)
+	"list_webhooks", "create_webhook", "update_webhook", "delete_webhook",
+	// GitHub Actions operations (REST)
+	"dispatch_workflow", "list_workflow_runs", "cancel_workflow_run", "rerun_workflow",
+	"list_repo_variables", "create_or_update_variable", "delete_variable",
+	"list_environments", "create_or_update_environment", "delete_environment",
+	// Repository settings (REST)
+	"list_topics", "replace_topics",
+	"fork_repo", "create_from_template",
+	// Custom properties (REST)
+	"list_custom_properties", "set_custom_properties",
+	// Generic API call (REST)
+	"api_call",
 }
 
 // readOperations are operations that return data (CapabilityFrom/Transform).
@@ -92,7 +114,17 @@ var readOperations = map[string]bool{
 	"list_pr_comments":    true,
 	"list_review_threads": true,
 	"list_check_runs":     true, "get_workflow_run": true,
-	"list_commit_pulls": true,
+	"list_commit_pulls":      true,
+	"list_labels":            true,
+	"list_milestones":        true,
+	"list_reactions":         true,
+	"list_collaborators":     true,
+	"list_webhooks":          true,
+	"list_workflow_runs":     true,
+	"list_repo_variables":    true,
+	"list_environments":      true,
+	"list_topics":            true,
+	"list_custom_properties": true,
 }
 
 // GitHubProvider implements GitHub API operations as a provider.
@@ -135,7 +167,7 @@ func WithRetryConfig(commitMaxAttempts int, commitRetryBackoff time.Duration, wa
 
 // NewGitHubProvider creates a new GitHub API provider.
 func NewGitHubProvider(opts ...Option) *GitHubProvider {
-	version, _ := semver.NewVersion("2.0.0")
+	version, _ := semver.NewVersion("2.1.0")
 
 	p := &GitHubProvider{
 		commitMaxAttempts:    defaultCommitMaxAttempts,
@@ -150,7 +182,9 @@ func NewGitHubProvider(opts ...Option) *GitHubProvider {
 			APIVersion:  "v1",
 			Version:     version,
 			Description: "Interact with GitHub via GraphQL (reads, issues, PRs, review threads, signed commits, branches, tags, " +
-				"repos, branch protection) and REST (releases, CI check runs, workflow runs, tag protection, security settings). " +
+				"repos, branch protection) and REST (releases, CI check runs, workflow runs, labels, milestones, reactions, " +
+				"collaborators, webhooks, Actions workflows, variables, environments, repo settings, tag protection, security settings). " +
+				"Includes a generic api_call operation for arbitrary GitHub REST endpoints. " +
 				"Uses the configured GitHub auth handler automatically. " +
 				"Commit operations use createCommitOnBranch for GPG-signed multi-file atomic commits.",
 			Category: "data",
@@ -170,7 +204,48 @@ func NewGitHubProvider(opts ...Option) *GitHubProvider {
 				provider.CapabilityTransform,
 				provider.CapabilityAction,
 			},
-			Schema: buildInputSchema(),
+			// WriteOperations lists operations that mutate state.
+			// These are rejected in resolver (CapabilityFrom) context.
+			// api_call is intentionally excluded: the user controls the HTTP method,
+			// so it cannot be classified as read or write at the provider level.
+			WriteOperations: []string{
+				// Review thread mutations
+				"reply_to_review_thread", "resolve_review_thread",
+				// Issue mutations
+				"create_issue", "update_issue", "create_issue_comment",
+				// PR mutations
+				"create_pull_request", "update_pull_request", "merge_pull_request", "close_pull_request",
+				// Commit & ref mutations
+				"create_commit",
+				"create_branch", "delete_branch", "create_tag", "delete_tag",
+				// Release mutations
+				"create_release", "update_release", "delete_release",
+				// Repository management
+				"create_repo", "update_repo", "create_ruleset",
+				"enable_vulnerability_alerts", "enable_automated_security_fixes",
+				// Label mutations
+				"create_label", "update_label", "delete_label",
+				"add_labels_to_issue", "remove_label_from_issue",
+				// Milestone mutations
+				"create_milestone", "update_milestone", "delete_milestone",
+				// Reaction mutations
+				"add_reaction", "delete_reaction",
+				// Collaborator mutations
+				"add_collaborator", "remove_collaborator",
+				// Webhook mutations
+				"create_webhook", "update_webhook", "delete_webhook",
+				// GitHub Actions mutations
+				"dispatch_workflow", "cancel_workflow_run", "rerun_workflow",
+				"create_or_update_variable", "delete_variable",
+				"create_or_update_environment", "delete_environment",
+				// Repository settings mutations
+				"replace_topics",
+				"fork_repo", "create_from_template",
+				// Custom properties mutations
+				"set_custom_properties",
+			},
+			SensitiveFields: []string{"webhook_secret"},
+			Schema:          buildInputSchema(),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
 					"result": schemahelper.AnyProp("The API response data — structure varies by operation"),
@@ -322,6 +397,80 @@ ref: main`,
 owner: my-org
 repo: my-repo
 run_id: 12345678`,
+				},
+				{
+					Name:        "Generic API call",
+					Description: "Call any GitHub REST endpoint using the authenticated client",
+					YAML: `operation: api_call
+api_base: https://api.github.com
+endpoint: /repos/my-org/my-repo/labels
+method: POST
+request_body:
+  name: help-wanted
+  color: "00ff00"
+  description: "Extra attention is needed"`,
+				},
+				{
+					Name:        "Create a label",
+					Description: "Create a repository label with color",
+					YAML: `operation: create_label
+owner: my-org
+repo: my-repo
+label_name: bug
+color: d73a4a
+label_description: "Something isn't working"`,
+				},
+				{
+					Name:        "Add reaction to issue",
+					Description: "React to an issue with a thumbs up",
+					YAML: `operation: add_reaction
+owner: my-org
+repo: my-repo
+number: 42
+reaction_content: "+1"`,
+				},
+				{
+					Name:        "Dispatch a workflow",
+					Description: "Trigger a GitHub Actions workflow",
+					YAML: `operation: dispatch_workflow
+owner: my-org
+repo: my-repo
+workflow_id: ci.yml
+ref: main
+workflow_inputs:
+  environment: production`,
+				},
+				{
+					Name:        "Create a webhook",
+					Description: "Set up a repository webhook",
+					YAML: `operation: create_webhook
+owner: my-org
+repo: my-repo
+webhook_url: https://example.com/webhook
+webhook_events:
+  - push
+  - pull_request
+webhook_secret: my-secret`,
+				},
+				{
+					Name:        "Update repository settings",
+					Description: "Configure repository features and merge settings",
+					YAML: `operation: update_repo
+owner: my-org
+repo: my-repo
+description: "Updated project description"
+has_wiki: false
+delete_branch_on_merge: true
+allow_squash_merge: true`,
+				},
+				{
+					Name:        "Fork a repository",
+					Description: "Fork a repository into an organization",
+					YAML: `operation: fork_repo
+owner: upstream-org
+repo: upstream-repo
+organization: my-org
+default_branch_only: true`,
 				},
 			},
 			Links: []provider.Link{
@@ -537,6 +686,155 @@ func buildInputSchema() *jsonschema.Schema {
 			"allow_force_pushes":         schemahelper.BoolProp("Allow force pushes to matching refs"),
 			"allow_deletions":            schemahelper.BoolProp("Allow deletion of matching refs"),
 			"requires_commit_signatures": schemahelper.BoolProp("Require signed commits"),
+
+			// --- Label fields ---
+			"label_name": schemahelper.StringProp("Label name for create/update/delete label operations",
+				schemahelper.WithMaxLength(*ptrs.IntPtr(200)),
+			),
+			"new_label_name": schemahelper.StringProp("New name when renaming a label (update_label)",
+				schemahelper.WithMaxLength(*ptrs.IntPtr(200)),
+			),
+			"color": schemahelper.StringProp("Hex color code for labels (without #)",
+				schemahelper.WithPattern("^[0-9a-fA-F]{6}$"),
+				schemahelper.WithExample("00ff00"),
+			),
+			"label_description": schemahelper.StringProp("Description for a label",
+				schemahelper.WithMaxLength(*ptrs.IntPtr(1000)),
+			),
+
+			// --- Milestone fields ---
+			"milestone_number": schemahelper.IntProp("Milestone number for update/delete operations",
+				schemahelper.WithMinimum(1),
+			),
+			"due_on": schemahelper.StringProp("Due date for milestone (ISO 8601: YYYY-MM-DDTHH:MM:SSZ)",
+				schemahelper.WithFormat("date-time"),
+			),
+
+			// --- Reaction fields ---
+			"reaction_content": schemahelper.StringProp("Reaction emoji to add",
+				schemahelper.WithEnum("+1", "-1", "laugh", "confused", "heart", "hooray", "rocket", "eyes"),
+			),
+			"reaction_subject": schemahelper.StringProp("Subject type for the reaction",
+				schemahelper.WithEnum("issue", "pull_request", "issue_comment"),
+				schemahelper.WithDefault("issue"),
+			),
+			"reaction_id": schemahelper.IntProp("Reaction ID for delete_reaction",
+				schemahelper.WithMinimum(1),
+			),
+			"comment_id": schemahelper.IntProp("Comment ID for reaction/comment operations",
+				schemahelper.WithMinimum(1),
+			),
+
+			// --- Collaborator fields ---
+			"username": schemahelper.StringProp("GitHub username for collaborator operations",
+				schemahelper.WithMaxLength(*ptrs.IntPtr(200)),
+			),
+			"permission": schemahelper.StringProp("Permission level for collaborators",
+				schemahelper.WithEnum("pull", "triage", "push", "maintain", "admin"),
+			),
+
+			// --- Webhook fields ---
+			"webhook_url": schemahelper.StringProp("Payload URL for the webhook",
+				schemahelper.WithFormat("uri"),
+			),
+			"webhook_events": schemahelper.ArrayProp("Events that trigger the webhook",
+				schemahelper.WithItems(schemahelper.StringProp("Event name")),
+				schemahelper.WithMaxItems(50),
+			),
+			"webhook_content_type": schemahelper.StringProp("Content type for webhook payloads",
+				schemahelper.WithEnum("json", "form"),
+				schemahelper.WithDefault("json"),
+			),
+			"webhook_secret": schemahelper.StringProp("Secret for webhook signature verification"),
+			"webhook_active": schemahelper.BoolProp("Whether the webhook is active"),
+			"hook_id": schemahelper.IntProp("Webhook ID for update/delete operations",
+				schemahelper.WithMinimum(1),
+			),
+
+			// --- GitHub Actions fields ---
+			"workflow_id": schemahelper.StringProp("Workflow file name or ID (e.g. ci.yml or numeric ID)",
+				schemahelper.WithExample("ci.yml"),
+			),
+			"workflow_inputs": schemahelper.ObjectProp("Input parameters for workflow dispatch",
+				nil, nil,
+			),
+			"workflow_status": schemahelper.StringProp("Filter workflow runs by status",
+				schemahelper.WithEnum("completed", "action_required", "cancelled", "failure", "neutral",
+					"skipped", "stale", "success", "timed_out", "in_progress", "queued", "requested", "waiting"),
+			),
+
+			// --- Variable fields ---
+			"variable_name": schemahelper.StringProp("Repository variable name",
+				schemahelper.WithMaxLength(*ptrs.IntPtr(200)),
+			),
+			"variable_value": schemahelper.StringProp("Repository variable value",
+				schemahelper.WithMaxLength(*ptrs.IntPtr(65536)),
+			),
+
+			// --- Environment fields ---
+			"environment_name": schemahelper.StringProp("Deployment environment name",
+				schemahelper.WithMaxLength(*ptrs.IntPtr(200)),
+			),
+			"wait_timer": schemahelper.IntProp("Wait timer in minutes before deployments proceed",
+				schemahelper.WithMinimum(0),
+				schemahelper.WithMaximum(43200),
+			),
+			"reviewers": schemahelper.ArrayProp("Required reviewers for environment (objects with 'type' and 'id', e.g. [{\"type\": \"User\", \"id\": 123}])",
+				schemahelper.WithItems(schemahelper.ObjectProp("Reviewer object", nil, nil)),
+				schemahelper.WithMaxItems(6),
+			),
+
+			// --- Repo settings fields ---
+			"homepage": schemahelper.StringProp("Repository homepage URL",
+				schemahelper.WithFormat("uri"),
+			),
+			"default_branch": schemahelper.StringProp("Default branch name",
+				schemahelper.WithMaxLength(*ptrs.IntPtr(200)),
+			),
+			"has_issues":             schemahelper.BoolProp("Enable issues feature"),
+			"has_projects":           schemahelper.BoolProp("Enable projects feature"),
+			"has_wiki":               schemahelper.BoolProp("Enable wiki feature"),
+			"allow_squash_merge":     schemahelper.BoolProp("Allow squash merging"),
+			"allow_merge_commit":     schemahelper.BoolProp("Allow merge commits"),
+			"allow_rebase_merge":     schemahelper.BoolProp("Allow rebase merging"),
+			"delete_branch_on_merge": schemahelper.BoolProp("Automatically delete head branches after merge"),
+			"archived":               schemahelper.BoolProp("Archive the repository"),
+			"topics": schemahelper.ArrayProp("Repository topics/tags",
+				schemahelper.WithItems(schemahelper.StringProp("Topic name")),
+				schemahelper.WithMaxItems(20),
+			),
+			"organization": schemahelper.StringProp("Organization to fork into (fork_repo)",
+				schemahelper.WithMaxLength(*ptrs.IntPtr(200)),
+			),
+			"default_branch_only": schemahelper.BoolProp("Fork only the default branch"),
+			"new_repo_name": schemahelper.StringProp("Name for new repository (create_from_template)",
+				schemahelper.WithMaxLength(*ptrs.IntPtr(200)),
+			),
+			"new_owner": schemahelper.StringProp("Owner for new repository (create_from_template)",
+				schemahelper.WithMaxLength(*ptrs.IntPtr(200)),
+			),
+			"include_all_branches": schemahelper.BoolProp("Include all branches when creating from template"),
+
+			// --- Custom properties fields ---
+			"properties": schemahelper.ObjectProp("Custom properties to set (key-value map, e.g. {\"env\": \"prod\", \"team\": \"platform\"})",
+				nil, nil,
+			),
+
+			// --- Generic API call fields ---
+			"endpoint": schemahelper.StringProp("Relative API path for api_call (e.g. /repos/{owner}/{repo}/labels). Must start with /.",
+				schemahelper.WithExample("/repos/octocat/hello-world/labels"),
+				schemahelper.WithMaxLength(*ptrs.IntPtr(2000)),
+			),
+			"method": schemahelper.StringProp("HTTP method for api_call",
+				schemahelper.WithEnum("GET", "POST", "PUT", "PATCH", "DELETE"),
+				schemahelper.WithDefault("GET"),
+			),
+			"query_params": schemahelper.ObjectProp("Query parameters for api_call",
+				nil, nil,
+			),
+			"request_body": schemahelper.ObjectProp("Request body (JSON object) for api_call POST/PUT/PATCH",
+				nil, nil,
+			),
 		},
 	)
 }
@@ -613,9 +911,9 @@ func (p *GitHubProvider) Execute(ctx context.Context, input any) (*provider.Outp
 	}
 	apiBase = strings.TrimRight(apiBase, "/")
 
-	// Most operations require owner and repo. Only create_repo handles
+	// Most operations require owner and repo. Only create_repo and api_call handle
 	// these fields internally (owner is optional, repo validated inside).
-	if operation != "create_repo" && (owner == "" || repo == "") {
+	if operation != "create_repo" && operation != "api_call" && (owner == "" || repo == "") {
 		return nil, fmt.Errorf("%s: 'owner' and 'repo' are required for %s operation", ProviderName, operation)
 	}
 
@@ -714,12 +1012,106 @@ func (p *GitHubProvider) Execute(ctx context.Context, input any) (*provider.Outp
 	// --- Repository management operations (GraphQL + REST) ---
 	case "create_repo":
 		result, err = p.executeCreateRepo(ctx, client, apiBase, inputs)
+	case "update_repo":
+		result, err = p.executeUpdateRepo(ctx, client, apiBase, owner, repo, inputs)
 	case "create_ruleset":
 		result, err = p.executeCreateRuleset(ctx, client, apiBase, owner, repo, inputs)
 	case "enable_vulnerability_alerts":
 		result, err = p.executeEnableVulnerabilityAlerts(ctx, client, apiBase, owner, repo)
 	case "enable_automated_security_fixes":
 		result, err = p.executeEnableAutomatedSecurityFixes(ctx, client, apiBase, owner, repo)
+
+	// --- Label operations (REST) ---
+	case "list_labels":
+		result, err = p.executeListLabels(ctx, client, apiBase, owner, repo, inputs)
+	case "create_label":
+		result, err = p.executeCreateLabel(ctx, client, apiBase, owner, repo, inputs)
+	case "update_label":
+		result, err = p.executeUpdateLabel(ctx, client, apiBase, owner, repo, inputs)
+	case "delete_label":
+		result, err = p.executeDeleteLabel(ctx, client, apiBase, owner, repo, inputs)
+	case "add_labels_to_issue":
+		result, err = p.executeAddLabelsToIssue(ctx, client, apiBase, owner, repo, inputs)
+	case "remove_label_from_issue":
+		result, err = p.executeRemoveLabelFromIssue(ctx, client, apiBase, owner, repo, inputs)
+
+	// --- Milestone operations (REST) ---
+	case "list_milestones":
+		result, err = p.executeListMilestones(ctx, client, apiBase, owner, repo, inputs)
+	case "create_milestone":
+		result, err = p.executeCreateMilestone(ctx, client, apiBase, owner, repo, inputs)
+	case "update_milestone":
+		result, err = p.executeUpdateMilestone(ctx, client, apiBase, owner, repo, inputs)
+	case "delete_milestone":
+		result, err = p.executeDeleteMilestone(ctx, client, apiBase, owner, repo, inputs)
+
+	// --- Reaction operations (REST) ---
+	case "add_reaction":
+		result, err = p.executeAddReaction(ctx, client, apiBase, owner, repo, inputs)
+	case "list_reactions":
+		result, err = p.executeListReactions(ctx, client, apiBase, owner, repo, inputs)
+	case "delete_reaction":
+		result, err = p.executeDeleteReaction(ctx, client, apiBase, owner, repo, inputs)
+
+	// --- Collaborator operations (REST) ---
+	case "list_collaborators":
+		result, err = p.executeListCollaborators(ctx, client, apiBase, owner, repo, inputs)
+	case "add_collaborator":
+		result, err = p.executeAddCollaborator(ctx, client, apiBase, owner, repo, inputs)
+	case "remove_collaborator":
+		result, err = p.executeRemoveCollaborator(ctx, client, apiBase, owner, repo, inputs)
+
+	// --- Webhook operations (REST) ---
+	case "list_webhooks":
+		result, err = p.executeListWebhooks(ctx, client, apiBase, owner, repo, inputs)
+	case "create_webhook":
+		result, err = p.executeCreateWebhook(ctx, client, apiBase, owner, repo, inputs)
+	case "update_webhook":
+		result, err = p.executeUpdateWebhook(ctx, client, apiBase, owner, repo, inputs)
+	case "delete_webhook":
+		result, err = p.executeDeleteWebhook(ctx, client, apiBase, owner, repo, inputs)
+
+	// --- GitHub Actions operations (REST) ---
+	case "dispatch_workflow":
+		result, err = p.executeDispatchWorkflow(ctx, client, apiBase, owner, repo, inputs)
+	case "list_workflow_runs":
+		result, err = p.executeListWorkflowRuns(ctx, client, apiBase, owner, repo, inputs)
+	case "cancel_workflow_run":
+		result, err = p.executeCancelWorkflowRun(ctx, client, apiBase, owner, repo, inputs)
+	case "rerun_workflow":
+		result, err = p.executeRerunWorkflow(ctx, client, apiBase, owner, repo, inputs)
+	case "list_repo_variables":
+		result, err = p.executeListRepoVariables(ctx, client, apiBase, owner, repo, inputs)
+	case "create_or_update_variable":
+		result, err = p.executeCreateOrUpdateVariable(ctx, client, apiBase, owner, repo, inputs)
+	case "delete_variable":
+		result, err = p.executeDeleteVariable(ctx, client, apiBase, owner, repo, inputs)
+	case "list_environments":
+		result, err = p.executeListEnvironments(ctx, client, apiBase, owner, repo, inputs)
+	case "create_or_update_environment":
+		result, err = p.executeCreateOrUpdateEnvironment(ctx, client, apiBase, owner, repo, inputs)
+	case "delete_environment":
+		result, err = p.executeDeleteEnvironment(ctx, client, apiBase, owner, repo, inputs)
+
+	// --- Repo settings (REST) ---
+	case "list_topics":
+		result, err = p.executeListTopics(ctx, client, apiBase, owner, repo)
+	case "replace_topics":
+		result, err = p.executeReplaceTopics(ctx, client, apiBase, owner, repo, inputs)
+	case "fork_repo":
+		result, err = p.executeForkRepo(ctx, client, apiBase, owner, repo, inputs)
+	case "create_from_template":
+		result, err = p.executeCreateFromTemplate(ctx, client, apiBase, owner, repo, inputs)
+
+	// --- Custom properties (REST) ---
+	case "list_custom_properties":
+		result, err = p.executeListCustomProperties(ctx, client, apiBase, owner, repo)
+	case "set_custom_properties":
+		result, err = p.executeSetCustomProperties(ctx, client, apiBase, owner, repo, inputs)
+
+	// --- Generic API call (REST) ---
+	case "api_call":
+		result, err = p.executeAPICall(ctx, client, apiBase, inputs)
 
 	default:
 		return nil, fmt.Errorf("%s: unknown operation %q — supported: %s", ProviderName, operation, strings.Join(allOperations, ", "))
@@ -827,6 +1219,15 @@ func requiredInputError(operation, field string, inputs map[string]any, hint str
 		msg += "; " + hint
 	}
 	return fmt.Errorf("%s", msg)
+}
+
+// getMapInput extracts a map[string]any from the input map.
+func getMapInput(inputs map[string]any, key string) map[string]any {
+	v, ok := inputs[key].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return v
 }
 
 // getStringSliceInput extracts a string slice from the input map.

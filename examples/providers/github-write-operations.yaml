@@ -2,7 +2,6 @@
 # Warning: Write operations modify real repositories. Use with care.
 #
 # Run: scafctl run solution -f examples/providers/github-write-operations.yaml
-# Run: scafctl run resolver -f examples/providers/github-write-operations.yaml
 
 apiVersion: scafctl.io/v1
 kind: Solution
@@ -14,6 +13,7 @@ metadata:
     GitHub provider write operations: issues, PRs, commits, branches, tags,
     releases, repo management, rulesets, and security settings.
     Commits are automatically GPG-signed via createCommitOnBranch.
+    Write operations must be used in workflow actions, not resolvers.
 
 spec:
   resolvers:
@@ -29,147 +29,210 @@ spec:
               owner: cli
               repo: cli
 
-    # Write operation examples (commented - uncomment to use)
-    #
-    # Create an issue:
-    #   new-issue:
-    #     type: any
-    #     resolve:
-    #       with:
-    #         - provider: github
-    #           inputs:
-    #             operation: create_issue
-    #             owner: my-org
-    #             repo: my-repo
-    #             title: "Bug: something is broken"
-    #             body: "Steps to reproduce..."
-    #             labels:
-    #               - bug
-    #               - priority/high
-    #
-    # Create a pull request:
-    #   new-pr:
-    #     type: any
-    #     resolve:
-    #       with:
-    #         - provider: github
-    #           inputs:
-    #             operation: create_pull_request
-    #             owner: my-org
-    #             repo: my-repo
-    #             title: "feat: add new scaffolding templates"
-    #             body: "This PR adds new templates."
-    #             head: feature-branch
-    #             base: main
-    #             draft: true
-    #
-    # Create a signed commit:
-    #   signed-commit:
-    #     type: any
-    #     resolve:
-    #       with:
-    #         - provider: github
-    #           inputs:
-    #             operation: create_commit
-    #             owner: my-org
-    #             repo: my-repo
-    #             branch: feature-branch
-    #             message: "feat: add scaffolded project files"
-    #             expected_head_oid: abc123def456789012345678901234567890abcd
-    #             additions:
-    #               - path: src/main.go
-    #                 content: "package main"
-    #
-    # Create a release:
-    #   new-release:
-    #     type: any
-    #     resolve:
-    #       with:
-    #         - provider: github
-    #           inputs:
-    #             operation: create_release
-    #             owner: my-org
-    #             repo: my-repo
-    #             tag_name: v1.0.0
-    #             name: "Release 1.0.0"
-    #             body: "First stable release"
-    #             prerelease: false
-    #             target_commitish: main
-    #
-    # Create a repository (GraphQL, REST fallback for EMU):
-    #   new-repo:
-    #     type: any
-    #     resolve:
-    #       with:
-    #         - provider: github
-    #           inputs:
-    #             operation: create_repo
-    #             owner: my-org
-    #             repo: my-new-repo
-    #             description: "A new project"
-    #             visibility: private
-    #             auto_init: true
-    #
-    # Create a branch protection ruleset (REST):
-    #   branch-ruleset:
-    #     type: any
-    #     resolve:
-    #       with:
-    #         - provider: github
-    #           inputs:
-    #             operation: create_ruleset
-    #             owner: my-org
-    #             repo: my-repo
-    #             ruleset_name: main branch protection
-    #             target: branch
-    #             enforcement: active
-    #             include_refs:
-    #               - refs/heads/main
-    #             required_status_checks_contexts:
-    #               - test
-    #               - lint
-    #             required_approving_review_count: 1
-    #             required_linear_history: true
-    #             requires_commit_signatures: true
-    #             allow_force_pushes: false
-    #             allow_deletions: false
-    #
-    # Create a tag protection ruleset (REST):
-    #   tag-ruleset:
-    #     type: any
-    #     resolve:
-    #       with:
-    #         - provider: github
-    #           inputs:
-    #             operation: create_ruleset
-    #             owner: my-org
-    #             repo: my-repo
-    #             ruleset_name: version tag protection
-    #             target: tag
-    #             enforcement: active
-    #             include_refs:
-    #               - "refs/tags/v*"
-    #             allow_deletions: false
-    #             allow_force_pushes: false
-    #
-    # Enable vulnerability alerts (REST):
-    #   vuln-alerts:
-    #     type: any
-    #     resolve:
-    #       with:
-    #         - provider: github
-    #           inputs:
-    #             operation: enable_vulnerability_alerts
-    #             owner: my-org
-    #             repo: my-repo
-    #
-    # Enable automated security fixes (REST):
-    #   auto-security-fixes:
-    #     type: any
-    #     resolve:
-    #       with:
-    #         - provider: github
-    #           inputs:
-    #             operation: enable_automated_security_fixes
-    #             owner: my-org
-    #             repo: my-repo
+  # Write operations go in workflow actions -- the write-op guard rejects
+  # these in resolver context.
+  workflow:
+    actions:
+      # Write operation examples (commented - uncomment to use)
+      #
+      # Create an issue:
+      # new-issue:
+      #   provider: github
+      #   inputs:
+      #     operation: create_issue
+      #     owner: my-org
+      #     repo: my-repo
+      #     title: "Bug: something is broken"
+      #     body: "Steps to reproduce..."
+      #     labels:
+      #       - bug
+      #       - priority/high
+      #
+      # Create a pull request:
+      # new-pr:
+      #   provider: github
+      #   inputs:
+      #     operation: create_pull_request
+      #     owner: my-org
+      #     repo: my-repo
+      #     title: "feat: add new scaffolding templates"
+      #     body: "This PR adds new templates."
+      #     head: feature-branch
+      #     base: main
+      #     draft: true
+      #
+      # Create a signed commit:
+      # signed-commit:
+      #   provider: github
+      #   inputs:
+      #     operation: create_commit
+      #     owner: my-org
+      #     repo: my-repo
+      #     branch: feature-branch
+      #     message: "feat: add scaffolded project files"
+      #     expected_head_oid: abc123def456789012345678901234567890abcd
+      #     additions:
+      #       - path: src/main.go
+      #         content: "package main"
+      #
+      # Create a release:
+      # new-release:
+      #   provider: github
+      #   inputs:
+      #     operation: create_release
+      #     owner: my-org
+      #     repo: my-repo
+      #     tag_name: v1.0.0
+      #     name: "Release 1.0.0"
+      #     body: "First stable release"
+      #     prerelease: false
+      #     target_commitish: main
+      #
+      # Create a repository (GraphQL, REST fallback for EMU):
+      # new-repo:
+      #   provider: github
+      #   inputs:
+      #     operation: create_repo
+      #     owner: my-org
+      #     repo: my-new-repo
+      #     description: "A new project"
+      #     visibility: private
+      #     auto_init: true
+      #
+      # Create a branch protection ruleset (REST):
+      # branch-ruleset:
+      #   provider: github
+      #   inputs:
+      #     operation: create_ruleset
+      #     owner: my-org
+      #     repo: my-repo
+      #     ruleset_name: main branch protection
+      #     target: branch
+      #     enforcement: active
+      #     include_refs:
+      #       - refs/heads/main
+      #     required_status_checks_contexts:
+      #       - test
+      #       - lint
+      #     required_approving_review_count: 1
+      #     required_linear_history: true
+      #     requires_commit_signatures: true
+      #     allow_force_pushes: false
+      #     allow_deletions: false
+      #
+      # Create a tag protection ruleset (REST):
+      # tag-ruleset:
+      #   provider: github
+      #   inputs:
+      #     operation: create_ruleset
+      #     owner: my-org
+      #     repo: my-repo
+      #     ruleset_name: version tag protection
+      #     target: tag
+      #     enforcement: active
+      #     include_refs:
+      #       - "refs/tags/v*"
+      #     allow_deletions: false
+      #     allow_force_pushes: false
+      #
+      # Enable vulnerability alerts (REST):
+      # vuln-alerts:
+      #   provider: github
+      #   inputs:
+      #     operation: enable_vulnerability_alerts
+      #     owner: my-org
+      #     repo: my-repo
+      #
+      # Enable automated security fixes (REST):
+      # auto-security-fixes:
+      #   provider: github
+      #   inputs:
+      #     operation: enable_automated_security_fixes
+      #     owner: my-org
+      #     repo: my-repo
+      #
+      # ─── v2.1 operations ──────────────────────────────────────────────
+      #
+      # Generic API call (escape hatch for any endpoint):
+      # custom-api-call:
+      #   provider: github
+      #   inputs:
+      #     operation: api_call
+      #     endpoint: /repos/my-org/my-repo/labels
+      #     method: GET
+      #
+      # Create a label:
+      # new-label:
+      #   provider: github
+      #   inputs:
+      #     operation: create_label
+      #     owner: my-org
+      #     repo: my-repo
+      #     label_name: help-wanted
+      #     color: "00ff00"
+      #     label_description: "Extra attention is needed"
+      #
+      # Add reaction to an issue:
+      # react-to-issue:
+      #   provider: github
+      #   inputs:
+      #     operation: add_reaction
+      #     owner: my-org
+      #     repo: my-repo
+      #     number: 42
+      #     reaction_content: "+1"
+      #
+      # Dispatch a workflow:
+      # trigger-ci:
+      #   provider: github
+      #   inputs:
+      #     operation: dispatch_workflow
+      #     owner: my-org
+      #     repo: my-repo
+      #     workflow_id: ci.yml
+      #     ref: main
+      #     workflow_inputs:
+      #       environment: staging
+      #
+      # Create a webhook:
+      # new-webhook:
+      #   provider: github
+      #   inputs:
+      #     operation: create_webhook
+      #     owner: my-org
+      #     repo: my-repo
+      #     webhook_url: https://example.com/webhook
+      #     webhook_events:
+      #       - push
+      #       - pull_request
+      #
+      # Update repository settings:
+      # configure-repo:
+      #   provider: github
+      #   inputs:
+      #     operation: update_repo
+      #     owner: my-org
+      #     repo: my-repo
+      #     description: "Updated description"
+      #     has_wiki: false
+      #     delete_branch_on_merge: true
+      #
+      # Fork a repository:
+      # fork:
+      #   provider: github
+      #   inputs:
+      #     operation: fork_repo
+      #     owner: upstream-org
+      #     repo: upstream-repo
+      #     organization: my-org
+      #     default_branch_only: true
+      #
+      # Add collaborator:
+      # add-user:
+      #   provider: github
+      #   inputs:
+      #     operation: add_collaborator
+      #     owner: my-org
+      #     repo: my-repo
+      #     username: new-contributor
+      #     permission: push
