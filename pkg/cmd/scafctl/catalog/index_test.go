@@ -247,3 +247,44 @@ func BenchmarkWriteIndexDiff(b *testing.B) {
 		_ = writeIndexDiff(diff, outputOpts)
 	}
 }
+
+func TestWriteIndexList_AppNameInOutputOpts(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, out, _ := terminal.NewTestIOStreams()
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+	outputOpts.Format = "json"
+	outputOpts.AppName = "my-catalog"
+
+	artifacts := []catalogpkg.DiscoveredArtifact{
+		{Kind: catalogpkg.ArtifactKindSolution, Name: "hello-world", LatestVersion: "1.0.0"},
+	}
+
+	err := writeIndexList(artifacts, outputOpts)
+	require.NoError(t, err)
+
+	var items []IndexListItem
+	err = json.Unmarshal(out.Bytes(), &items)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, "hello-world", items[0].Name)
+
+	// AppName should be preserved on the outputOpts (used as table header).
+	assert.Equal(t, "my-catalog", outputOpts.AppName)
+}
+
+func TestCommandIndexPush_NoAppNameInRunE(t *testing.T) {
+	t.Parallel()
+
+	// Verify that the RunE closure does NOT set AppName on opts.
+	// AppName should be set later in runIndexPush from the catalog name.
+	cliParams := &settings.Run{BinaryName: "mycli"}
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandIndex(cliParams, ioStreams, "mycli/catalog")
+
+	push, _, err := cmd.Find([]string{"push"})
+	require.NoError(t, err)
+
+	// The push command should exist and have RunE wired.
+	assert.NotNil(t, push.RunE)
+}

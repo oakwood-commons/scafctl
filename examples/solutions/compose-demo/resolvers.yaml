@@ -1,0 +1,19 @@
+spec:
+  resolvers:
+    environment:
+      type: string
+      description: Target environment
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: staging
+
+    app_name:
+      type: string
+      description: Application name
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: my-service

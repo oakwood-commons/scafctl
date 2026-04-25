@@ -268,6 +268,27 @@ func TestFilterTests_NoFilters(t *testing.T) {
 	assert.Len(t, result[0].Cases, 2)
 }
 
+func TestFilterTests_PreservesMetadataFields(t *testing.T) {
+	solutions := []soltesting.SolutionTests{
+		{
+			SolutionName:   "my-solution",
+			FilePath:       "/path/to/solution.yaml",
+			BundleIncludes: []string{"templates/**", "config.yaml"},
+			DetectedFiles:  []string{"data/seed.json"},
+			Cases: map[string]*soltesting.TestCase{
+				"test1": {Name: "test1", Command: []string{"x"}},
+			},
+		},
+	}
+
+	result := soltesting.FilterTests(solutions, soltesting.FilterOptions{})
+
+	require.Len(t, result, 1)
+	assert.Equal(t, []string{"templates/**", "config.yaml"}, result[0].BundleIncludes)
+	assert.Equal(t, []string{"data/seed.json"}, result[0].DetectedFiles)
+	assert.Equal(t, "/path/to/solution.yaml", result[0].FilePath)
+}
+
 func TestSortedTestNames(t *testing.T) {
 	st := soltesting.SolutionTests{
 		Cases: map[string]*soltesting.TestCase{

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -254,6 +255,52 @@ func TestBuildGraph_DeferredInputs(t *testing.T) {
 
 	// Implicit dependency on build should be added
 	assert.Contains(t, deployAction.Dependencies, "build")
+}
+
+func TestBuildGraph_DeferredInputs_TmplWithIndex(t *testing.T) {
+	// Regression test: templates using Go built-in functions (index, len, printf)
+	// must be recognised as referencing __actions and deferred, not evaluated
+	// immediately which would fail with "map has no entry for key __actions".
+	ctx := context.Background()
+	tmpl := gotmpl.GoTemplatingContent(`Files written:
+{{ range (index .__actions "write-files" "results" "filesStatus") }}  - {{ .path }} ({{ .status }})
+{{ end }}`)
+	w := &Workflow{
+		Actions: map[string]*Action{
+			"write-files": {
+				Provider: "file",
+				Inputs: map[string]*spec.ValueRef{
+					"operation": literalRef("write-tree"),
+				},
+			},
+			"show-results": {
+				Provider:  "message",
+				DependsOn: []string{"write-files"},
+				Inputs: map[string]*spec.ValueRef{
+					"message": {Tmpl: &tmpl},
+				},
+			},
+		},
+	}
+
+	graph, err := BuildGraph(ctx, w, nil, nil)
+	require.NoError(t, err)
+
+	// write-files should have only materialized inputs
+	writeAction := graph.Actions["write-files"]
+	assert.NotEmpty(t, writeAction.MaterializedInputs)
+	assert.Empty(t, writeAction.DeferredInputs)
+
+	// show-results should have message deferred (references __actions via index)
+	showAction := graph.Actions["show-results"]
+	require.Contains(t, showAction.DeferredInputs, "message")
+	deferredMsg := showAction.DeferredInputs["message"]
+	assert.True(t, deferredMsg.IsDeferred())
+	assert.Equal(t, string(tmpl), deferredMsg.OriginalTmpl)
+	assert.Empty(t, deferredMsg.OriginalExpr, "should be tmpl-based, not expr")
+
+	// Implicit dependency on write-files
+	assert.Contains(t, showAction.Dependencies, "write-files")
 }
 
 func TestBuildGraph_ImplicitDependencies(t *testing.T) {

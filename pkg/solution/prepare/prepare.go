@@ -207,13 +207,22 @@ func Solution(ctx context.Context, path string, opts ...Option) (*Result, error)
 	// For bundles (including catalog bundles): use the bundle extraction directory.
 	// For stdin or unbundled catalog references: leave empty (falls back to CWD).
 	var solutionDir string
-	if bundleDir != "" {
+	isCatalogRef := strings.HasPrefix(sol.GetPath(), "catalog:")
+	switch {
+	case bundleDir != "":
 		solutionDir = bundleDir
-	} else if path != "-" && !strings.HasPrefix(sol.GetPath(), "catalog:") {
+	case path != "-" && !isCatalogRef:
 		absPath, absErr := provider.AbsFromContext(ctx, path)
 		if absErr == nil {
 			solutionDir = filepath.Dir(absPath)
 		}
+	case isCatalogRef:
+		// Unbundled catalog solutions have no local directory tree.
+		// Providers that reference relative paths (e.g. directory provider)
+		// will resolve against CWD, which is likely not the intended base.
+		lgr.V(1).Info("solution loaded from catalog without bundle; relative paths in providers will resolve against CWD. "+
+			"If this is unintended, run 'catalog pull' first to extract files locally.",
+			"path", sol.GetPath())
 	}
 
 	// Build cleanup function

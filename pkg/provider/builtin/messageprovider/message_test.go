@@ -703,6 +703,229 @@ func TestDescriptorValidation(t *testing.T) {
 	require.NoError(t, err, "message provider descriptor should be valid")
 }
 
+// --- Raw mode tests ---
+
+func TestMessageProvider_Execute_RawMode_BasicOutput(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, stdout, _ := testCtx(t, &settings.Run{NoColor: false})
+
+	out, err := p.Execute(ctx, map[string]any{
+		"message": `{"key": "value"}`,
+		"type":    "raw",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	assert.True(t, out.Streamed)
+	assert.Equal(t, "{\"key\": \"value\"}\n", stdout.String())
+
+	data := out.Data.(map[string]any)
+	assert.True(t, data["success"].(bool))
+	assert.Equal(t, `{"key": "value"}`, data["message"])
+}
+
+func TestMessageProvider_Execute_RawMode_ExceedsMaxLength(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, stdout, _ := testCtx(t, &settings.Run{NoColor: false})
+
+	// Create content that exceeds maxMessageLength (8192).
+	longContent := strings.Repeat("x", 10000)
+	out, err := p.Execute(ctx, map[string]any{
+		"message": longContent,
+		"type":    "raw",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	assert.True(t, out.Streamed)
+	assert.Equal(t, longContent+"\n", stdout.String())
+
+	data := out.Data.(map[string]any)
+	assert.Equal(t, longContent, data["message"])
+}
+
+func TestMessageProvider_Execute_RawMode_NoANSICodes(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, stdout, _ := testCtx(t, &settings.Run{NoColor: false})
+
+	out, err := p.Execute(ctx, map[string]any{
+		"message": "raw content",
+		"type":    "raw",
+	})
+	require.NoError(t, err)
+
+	// Raw mode must never contain ANSI escape codes.
+	assert.NotContains(t, stdout.String(), "\x1b[")
+	data := out.Data.(map[string]any)
+	assert.NotContains(t, data["message"].(string), "\x1b[")
+}
+
+func TestMessageProvider_Execute_RawMode_NewlineFalse(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, stdout, _ := testCtx(t, nil)
+
+	_, err := p.Execute(ctx, map[string]any{
+		"message": "no trailing",
+		"type":    "raw",
+		"newline": false,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "no trailing", stdout.String())
+}
+
+func TestMessageProvider_Execute_RawMode_NewlineDefault(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, stdout, _ := testCtx(t, nil)
+
+	_, err := p.Execute(ctx, map[string]any{
+		"message": "with newline",
+		"type":    "raw",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "with newline\n", stdout.String())
+}
+
+func TestMessageProvider_Execute_RawMode_RejectsStyle(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, _, _ := testCtx(t, nil)
+
+	_, err := p.Execute(ctx, map[string]any{
+		"message": "test",
+		"type":    "raw",
+		"style":   map[string]any{"bold": true},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "'style' is not supported with type: raw")
+}
+
+func TestMessageProvider_Execute_RawMode_RejectsLabel(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, _, _ := testCtx(t, nil)
+
+	_, err := p.Execute(ctx, map[string]any{
+		"message": "test",
+		"type":    "raw",
+		"label":   "step 1",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "'label' is not supported with type: raw")
+}
+
+func TestMessageProvider_Execute_RawMode_Stderr(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, stdout, stderr := testCtx(t, nil)
+
+	_, err := p.Execute(ctx, map[string]any{
+		"message":     "stderr raw",
+		"type":        "raw",
+		"destination": "stderr",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, stdout.String())
+	assert.Equal(t, "stderr raw\n", stderr.String())
+}
+
+func TestMessageProvider_Execute_RawMode_IgnoresQuiet(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, stdout, _ := testCtx(t, &settings.Run{IsQuiet: true})
+
+	out, err := p.Execute(ctx, map[string]any{
+		"message": "not suppressed",
+		"type":    "raw",
+	})
+	require.NoError(t, err)
+	// Raw mode ignores --quiet because it's meant for machine output.
+	assert.Equal(t, "not suppressed\n", stdout.String())
+	assert.True(t, out.Streamed)
+}
+
+func TestMessageProvider_Execute_RawMode_DryRun(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, stdout, _ := testCtx(t, nil)
+	ctx = provider.WithDryRun(ctx, true)
+
+	out, err := p.Execute(ctx, map[string]any{
+		"message": "raw content",
+		"type":    "raw",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, stdout.String()) // Dry-run doesn't write.
+
+	data := out.Data.(map[string]any)
+	assert.True(t, data["success"].(bool))
+	assert.Equal(t, "raw content", data["message"])
+
+	assert.Contains(t, out.Metadata["description"], "[dry-run]")
+	assert.Contains(t, out.Metadata["description"], "raw output")
+}
+
+func TestMessageProvider_Execute_NonRaw_ExceedsMaxLength(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, _, _ := testCtx(t, nil)
+
+	longMsg := strings.Repeat("x", maxMessageLength+1)
+	_, err := p.Execute(ctx, map[string]any{
+		"message": longMsg,
+		"type":    "info",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds maximum length")
+	assert.Contains(t, err.Error(), "use type: raw")
+}
+
+func TestMessageProvider_Execute_NonRaw_AtMaxLength(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, stdout, _ := testCtx(t, &settings.Run{NoColor: true})
+
+	exactMsg := strings.Repeat("x", maxMessageLength)
+	out, err := p.Execute(ctx, map[string]any{
+		"message": exactMsg,
+		"type":    "plain",
+	})
+	require.NoError(t, err)
+	assert.True(t, out.Streamed)
+	assert.Equal(t, exactMsg+"\n", stdout.String())
+}
+
+func TestMessageProvider_WhatIf_RawMode(t *testing.T) {
+	p := NewMessageProvider()
+	desc := p.Descriptor()
+
+	t.Run("with message", func(t *testing.T) {
+		msg, err := desc.WhatIf(context.Background(), map[string]any{
+			"message": "some content",
+			"type":    "raw",
+		})
+		require.NoError(t, err)
+		assert.Contains(t, msg, "raw output")
+		assert.Contains(t, msg, "12 bytes")
+	})
+
+	t.Run("no message", func(t *testing.T) {
+		msg, err := desc.WhatIf(context.Background(), map[string]any{
+			"type": "raw",
+		})
+		require.NoError(t, err)
+		assert.Contains(t, msg, "raw output")
+	})
+}
+
+func TestMessageProvider_Execute_RawMode_NoIOStreams(t *testing.T) {
+	p := NewMessageProvider()
+	ctx := logger.WithLogger(context.Background(), logger.Get(0))
+	ctx = settings.IntoContext(ctx, &settings.Run{})
+
+	out, err := p.Execute(ctx, map[string]any{
+		"message": "no streams",
+		"type":    "raw",
+	})
+	require.NoError(t, err)
+
+	data := out.Data.(map[string]any)
+	assert.Equal(t, "no streams", data["message"])
+	assert.False(t, out.Streamed)
+}
+
 // --- Benchmarks ---
 
 func BenchmarkExecutePlainMessage(b *testing.B) {
@@ -802,6 +1025,26 @@ func BenchmarkExecuteWithLabel(b *testing.B) {
 		"label":   "step 3/5",
 	}
 
+	b.ResetTimer()
+	for b.Loop() {
+		stdout.Reset()
+		_, _ = p.Execute(ctx, input)
+	}
+}
+
+func BenchmarkExecuteRawMode(b *testing.B) {
+	p := NewMessageProvider()
+	ctx := logger.WithLogger(context.Background(), logger.Get(0))
+	ctx = settings.IntoContext(ctx, &settings.Run{NoColor: false})
+	stdout := &bytes.Buffer{}
+	ctx = provider.WithIOStreams(ctx, &provider.IOStreams{Out: stdout, ErrOut: &bytes.Buffer{}})
+
+	input := map[string]any{
+		"message": strings.Repeat("x", 10000),
+		"type":    "raw",
+	}
+
+	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
 		stdout.Reset()

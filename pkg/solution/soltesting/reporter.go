@@ -93,6 +93,8 @@ type testResultOutput struct {
 	Status       Status            `json:"status"`
 	Duration     string            `json:"duration"`
 	Message      string            `json:"message,omitempty"`
+	Stdout       string            `json:"stdout,omitempty"`
+	Stderr       string            `json:"stderr,omitempty"`
 	Assertions   []assertionOutput `json:"assertions,omitempty"`
 	RetryAttempt int               `json:"retryAttempt,omitempty"`
 	SandboxPath  string            `json:"sandboxPath,omitempty"`
@@ -117,6 +119,8 @@ func buildReportData(results []TestResult, elapsed time.Duration) reportData {
 			Status:       r.Status,
 			Duration:     format.Duration(r.Duration),
 			Message:      r.Message,
+			Stdout:       r.Stdout,
+			Stderr:       r.Stderr,
 			RetryAttempt: r.RetryAttempt,
 			SandboxPath:  r.SandboxPath,
 		}
@@ -222,6 +226,10 @@ func reportFailures(results []TestResult, w io.Writer, verbose bool) {
 			if !a.Passed {
 				fmt.Fprintf(w, "    [%s] %s: %s\n", a.Type, a.Input, a.Message)
 			}
+		}
+		// Show stderr from the inner command when available.
+		if f.Stderr != "" {
+			fmt.Fprintf(w, "    stderr: %s\n", strings.TrimRight(f.Stderr, "\n"))
 		}
 	}
 }

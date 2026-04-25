@@ -114,7 +114,6 @@ func commandIndexPush(cliParams *settings.Run, ioStreams *terminal.IOStreams) *c
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			opts.AppName = cliParams.BinaryName
 			kvxOpts := flags.ToKvxOutputOptions(&opts.KvxOutputFlags,
 				kvx.WithIOStreams(ioStreams),
 				kvx.WithOutputColumnOrder([]string{"kind", "name", "latestVersion"}),
@@ -161,7 +160,6 @@ func commandIndexShow(cliParams *settings.Run, ioStreams *terminal.IOStreams) *c
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			opts.AppName = cliParams.BinaryName
 			kvxOpts := flags.ToKvxOutputOptions(&opts.KvxOutputFlags,
 				kvx.WithIOStreams(ioStreams),
 				kvx.WithOutputColumnOrder([]string{"kind", "name", "latestVersion"}),
@@ -188,6 +186,9 @@ func runIndexPush(ctx context.Context, opts *IndexPushOptions, outputOpts *kvx.O
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
+	// Use catalog name as table header instead of binary name.
+	outputOpts.AppName = remoteCatalog.Name()
+
 	artifacts, err := remoteCatalog.ListRepositories(ctx)
 	if err != nil {
 		w.Errorf("failed to discover artifacts: %v", err)
@@ -200,7 +201,7 @@ func runIndexPush(ctx context.Context, opts *IndexPushOptions, outputOpts *kvx.O
 	}
 
 	// Enrich artifacts with their latest semver version.
-	w.PlainStderrf("Resolving latest versions for %d artifact(s)...", len(artifacts))
+	w.Verbosef("Resolving latest versions for %d artifact(s)...", len(artifacts))
 	remoteCatalog.ResolveLatestVersions(ctx, artifacts)
 
 	if opts.DryRun {
@@ -208,21 +209,21 @@ func runIndexPush(ctx context.Context, opts *IndexPushOptions, outputOpts *kvx.O
 		currentArtifacts, fetchErr := remoteCatalog.FetchIndex(ctx)
 		if fetchErr != nil {
 			w.Verbosef("No existing index found, showing full list: %v", fetchErr)
-			w.PlainStderrf("Dry run: %d artifact(s) would be indexed to catalog %q (%s):\n",
+			w.Verbosef("Dry run: %d artifact(s) would be indexed to catalog %q (%s)",
 				len(artifacts), remoteCatalog.Name(), remoteCatalog.Registry())
 			return writeIndexList(artifacts, outputOpts)
 		}
 
 		diff := catalog.DiffIndex(currentArtifacts, artifacts)
-		w.PlainStderrf("Dry run: %d artifact(s) would be indexed to catalog %q (%s)\n",
+		w.Verbosef("Dry run: %d artifact(s) would be indexed to catalog %q (%s)",
 			diff.Total, remoteCatalog.Name(), remoteCatalog.Registry())
-		w.PlainStderrf("Changes: %d added, %d removed, %d version-changed, %d unchanged\n",
+		w.Verbosef("Changes: %d added, %d removed, %d version-changed, %d unchanged",
 			diff.Added, diff.Removed, diff.Changed,
 			diff.Total-diff.Added-diff.Changed)
 		return writeIndexDiff(diff, outputOpts)
 	}
 
-	w.PlainStderrf("Pushing catalog index with %d artifact(s)...", len(artifacts))
+	w.Verbosef("Pushing catalog index with %d artifact(s)...", len(artifacts))
 
 	if err := remoteCatalog.PushIndex(ctx, artifacts); err != nil {
 		err = fmt.Errorf("failed to push catalog index: %w", err)
@@ -231,7 +232,7 @@ func runIndexPush(ctx context.Context, opts *IndexPushOptions, outputOpts *kvx.O
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
-	w.PlainStderrf("Pushed catalog index with %d artifact(s)", len(artifacts))
+	w.Verbosef("Pushed catalog index with %d artifact(s)", len(artifacts))
 	return writeIndexList(artifacts, outputOpts)
 }
 
@@ -245,6 +246,9 @@ func runIndexShow(ctx context.Context, opts *IndexShowOptions, outputOpts *kvx.O
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
+	// Use catalog name as table header instead of binary name.
+	outputOpts.AppName = remoteCatalog.Name()
+
 	artifacts, err := remoteCatalog.FetchIndex(ctx)
 	if err != nil {
 		err = fmt.Errorf("failed to fetch catalog index: %w", err)
@@ -253,11 +257,11 @@ func runIndexShow(ctx context.Context, opts *IndexShowOptions, outputOpts *kvx.O
 	}
 
 	if len(artifacts) == 0 {
-		w.PlainStderrf("Catalog index is empty.")
+		w.Verbosef("Catalog index is empty.")
 		return writeIndexList(nil, outputOpts)
 	}
 
-	w.PlainStderrf("Catalog index contains %d artifact(s):\n", len(artifacts))
+	w.Verbosef("Catalog index contains %d artifact(s)", len(artifacts))
 	return writeIndexList(artifacts, outputOpts)
 }
 

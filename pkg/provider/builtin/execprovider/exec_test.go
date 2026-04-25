@@ -816,3 +816,71 @@ func TestExecProvider_Execute_PassthroughFalse_StillCaptures(t *testing.T) {
 	// Default behavior: stdout is captured
 	assert.Contains(t, data["stdout"], "captured")
 }
+
+func TestExecProvider_Execute_InjectsNoColor(t *testing.T) {
+	p := NewExecProvider()
+	ctx := context.Background()
+
+	// Without user-provided env, NO_COLOR and TERM should still be injected.
+	inputs := map[string]any{
+		"command": "echo NO_COLOR=$NO_COLOR TERM=$TERM",
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	data, ok := output.Data.(map[string]any)
+	require.True(t, ok)
+	assert.Contains(t, data["stdout"], "NO_COLOR=1")
+	assert.Contains(t, data["stdout"], "TERM=dumb")
+}
+
+func TestExecProvider_Execute_InjectsNoColor_WithUserEnv(t *testing.T) {
+	p := NewExecProvider()
+	ctx := context.Background()
+
+	// User provides env but not NO_COLOR — it should be injected.
+	inputs := map[string]any{
+		"command": "echo NO_COLOR=$NO_COLOR TERM=$TERM MY_VAR=$MY_VAR",
+		"env": map[string]any{
+			"MY_VAR": "hello",
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	data, ok := output.Data.(map[string]any)
+	require.True(t, ok)
+	assert.Contains(t, data["stdout"], "NO_COLOR=1")
+	assert.Contains(t, data["stdout"], "TERM=dumb")
+	assert.Contains(t, data["stdout"], "MY_VAR=hello")
+}
+
+func TestExecProvider_Execute_UserCanOverrideNoColor(t *testing.T) {
+	p := NewExecProvider()
+	ctx := context.Background()
+
+	// User explicitly sets NO_COLOR — it should not be overridden.
+	inputs := map[string]any{
+		"command": "echo NO_COLOR=$NO_COLOR",
+		"env": map[string]any{
+			"NO_COLOR": "",
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	data, ok := output.Data.(map[string]any)
+	require.True(t, ok)
+	assert.Contains(t, data["stdout"], "NO_COLOR=")
+	// Ensure it's the user's empty value, not "1"
+	assert.NotContains(t, data["stdout"], "NO_COLOR=1")
+}
