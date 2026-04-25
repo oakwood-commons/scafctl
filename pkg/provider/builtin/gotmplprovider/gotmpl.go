@@ -792,6 +792,17 @@ func extractDependencies(inputs map[string]any) []string {
 		return deps
 	}
 
+	// Build set of keys provided by the data input so we can exclude them
+	// from resolver dependencies. The data map's keys become top-level
+	// template context variables (e.g., data: {config: ...} provides .config)
+	// and should not be treated as resolver references.
+	dataKeys := make(map[string]bool)
+	if dataMap, ok := inputs["data"].(map[string]any); ok {
+		for k := range dataMap {
+			dataKeys[k] = true
+		}
+	}
+
 	// Extract the first segment of each reference path as the dependency name
 	// e.g., ".config.host" -> "config", "._.name" -> "name"
 	for _, ref := range refs {
@@ -805,6 +816,11 @@ func extractDependencies(inputs map[string]any) []string {
 		// Get first segment (before any dots)
 		if idx := strings.Index(path, "."); idx > 0 {
 			path = path[:idx]
+		}
+
+		// Skip references satisfied by the data input
+		if dataKeys[path] {
+			continue
 		}
 
 		addDep(path)

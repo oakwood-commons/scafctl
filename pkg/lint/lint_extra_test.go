@@ -17,6 +17,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -502,4 +503,53 @@ func TestLintResolvers_NoValidateBlockFlaggedUnused(t *testing.T) {
 		rules = append(rules, f.RuleName)
 	}
 	assert.Contains(t, rules, "unused-resolver")
+}
+
+func TestLintResolvers_CELExpressionInputNotFlaggedUnused(t *testing.T) {
+	// Resolvers referenced only via _.name in a CEL provider's expression
+	// input (a string literal) should NOT be flagged as unused.
+	reg := provider.NewRegistry()
+	celProv := newFakeProvider("cel", nil)
+	execProv := newFakeProvider("exec", nil)
+	require.NoError(t, reg.Register(celProv))
+	require.NoError(t, reg.Register(execProv))
+
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"winResult": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{{Provider: "exec"}},
+			},
+		},
+		"unixResult": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{{Provider: "exec"}},
+			},
+		},
+		"result": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{{
+					Provider: "cel",
+					Inputs: map[string]*spec.ValueRef{
+						"expression": {
+							Literal: `has(_.winResult) ? _.winResult : _.unixResult`,
+						},
+					},
+				}},
+			},
+		},
+	}
+
+	referencedResolvers := collectReferencedResolvers(sol)
+	result := &Result{}
+	lintResolvers(sol, result, reg, referencedResolvers)
+
+	for _, f := range result.Findings {
+		if f.RuleName == "unused-resolver" {
+			assert.NotContains(t, f.Message, "winResult",
+				"winResult referenced in CEL expression should not be flagged unused")
+			assert.NotContains(t, f.Message, "unixResult",
+				"unixResult referenced in CEL expression should not be flagged unused")
+		}
+	}
 }

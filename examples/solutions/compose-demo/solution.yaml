@@ -1,0 +1,16 @@
+# Run: scafctl run resolver -f examples/solutions/compose-demo/solution.yaml
+#
+# Demonstrates the compose feature: splitting a solution across multiple
+# YAML files for better organization. The resolvers and workflow are
+# defined in separate files and merged at load time.
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: compose-demo
+  version: 1.0.0
+  description: Solution composition using the compose field
+
+compose:
+  - resolvers.yaml
+  - workflow.yaml

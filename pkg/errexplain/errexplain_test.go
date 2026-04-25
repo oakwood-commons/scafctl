@@ -113,6 +113,19 @@ func TestExplain_CELProvider(t *testing.T) {
 	assert.True(t, found, "should include CEL-specific suggestion")
 }
 
+func TestExplain_DirectoryNotFound(t *testing.T) {
+	exp := Explain(`directory "/tmp/static" does not exist: stat /tmp/static: no such file or directory`)
+	assert.Equal(t, "path_resolution", exp.Category)
+	assert.Contains(t, exp.Summary, "/tmp/static")
+	assert.Contains(t, exp.Suggestions[0], "catalog pull")
+}
+
+func TestExplain_DirectoryNotFound_CatalogContext(t *testing.T) {
+	exp := Explain(`catalog: directory "static" does not exist: stat static: no such file or directory`)
+	assert.Equal(t, "path_resolution", exp.Category)
+	assert.Contains(t, exp.RootCause, "loaded from a catalog without a bundle")
+}
+
 func BenchmarkExplain(b *testing.B) {
 	errors := []string{
 		`resolver "api" failed in resolve phase (step 0, provider http): connection refused`,

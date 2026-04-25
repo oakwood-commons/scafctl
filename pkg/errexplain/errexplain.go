@@ -268,5 +268,28 @@ func knownPatterns() []pattern {
 				}
 			},
 		},
+		{
+			name:  "directory-not-found",
+			regex: regexp.MustCompile(`directory "?([^"]+)"? does not exist`),
+			build: func(m []string, fullError string) Explanation {
+				dir := m[1]
+				exp := Explanation{
+					Category:  "path_resolution",
+					Summary:   fmt.Sprintf("Directory %q was not found on disk", dir),
+					RootCause: "The referenced directory does not exist. If this solution was auto-pulled from a catalog, relative paths cannot be resolved because catalog content is stored as OCI blobs, not as files on disk.",
+					Suggestions: []string{
+						"If the solution was loaded from a catalog, run 'catalog pull <name>' first to extract files locally",
+						"Check that the path is correct relative to the solution file location",
+						"Ensure the solution is bundled with its static content when publishing to a catalog",
+						"Use an absolute path or set the working directory with --cwd",
+					},
+				}
+				if strings.Contains(fullError, "catalog:") {
+					exp.RootCause = "The solution was loaded from a catalog without a bundle. " +
+						"Relative directory paths cannot be resolved because catalog content is stored as OCI blobs, not as files on disk."
+				}
+				return exp
+			},
+		},
 	}
 }

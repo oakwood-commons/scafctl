@@ -7,7 +7,7 @@ This directory contains example action configurations demonstrating the Actions 
 | Example | Description |
 |---------|-------------|
 | [hello-world.yaml](hello-world.yaml) | Simplest possible action workflow |
-| [sequential-chain.yaml](sequential-chain.yaml) | Linear action dependency chain (A → B → C) |
+| [sequential-chain.yaml](sequential-chain.yaml) | Linear action dependency chain (A -> B -> C) |
 | [parallel-with-deps.yaml](parallel-with-deps.yaml) | Diamond pattern with parallel execution |
 | [action-alias.yaml](action-alias.yaml) | Action aliases for shorter expression references |
 | [foreach-deploy.yaml](foreach-deploy.yaml) | ForEach expansion for deploying to multiple targets |
@@ -19,6 +19,9 @@ This directory contains example action configurations demonstrating the Actions 
 | [finally-cleanup.yaml](finally-cleanup.yaml) | Finally section for cleanup actions |
 | [complex-workflow.yaml](complex-workflow.yaml) | Full CI/CD-style workflow with all features |
 | [template-render.yaml](template-render.yaml) | Real-world: read template, render with go-template, write output |
+| [go-template-inline.yaml](go-template-inline.yaml) | Inline Go templates with loops and conditionals |
+| [result-schema-validation.yaml](result-schema-validation.yaml) | JSON Schema validation of action results |
+| [tmpl-with-actions.yaml](tmpl-with-actions.yaml) | Using tmpl: ValueRef to format __actions results |
 
 ## Running Examples
 

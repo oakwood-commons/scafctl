@@ -120,6 +120,23 @@ func (cs *CallbackServer) sendResult(r CallbackResult) {
 	})
 }
 
+// authErrorHTML returns an HTML error page with the error message and
+// troubleshooting advice. The errMsg must already be HTML-escaped.
+func authErrorHTML(escapedErrMsg string) string {
+	return fmt.Sprintf(`<html><body>
+<h1>Authentication Failed</h1>
+<p>%s</p>
+<h2>Troubleshooting</h2>
+<ul>
+<li>Open a browser and log in to your identity provider (e.g. Azure, GitHub, Google) before retrying the CLI login.</li>
+<li>Ensure your account has the required permissions for the requested scopes.</li>
+<li>If you need additional scopes (e.g. for GitHub), re-run login with the --scope flag: <code>auth login &lt;handler&gt; --scope &lt;scope&gt;</code></li>
+<li>Check that cookies and JavaScript are enabled in the browser that opened this page.</li>
+</ul>
+<p>You can close this window.</p>
+</body></html>`, escapedErrMsg)
+}
+
 func (cs *CallbackServer) handleCallback(w http.ResponseWriter, r *http.Request) {
 	code := r.URL.Query().Get("code")
 	if code == "" {
@@ -133,7 +150,7 @@ func (cs *CallbackServer) handleCallback(w http.ResponseWriter, r *http.Request)
 		}
 		cs.sendResult(CallbackResult{Err: fmt.Errorf("OAuth error: %s", errMsg)})
 		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, "<html><body><h1>Authentication Failed</h1><p>%s</p><p>You can close this window.</p></body></html>", html.EscapeString(errMsg)) //nolint:gosec // input is escaped
+		fmt.Fprint(w, authErrorHTML(html.EscapeString(errMsg)))
 		return
 	}
 
@@ -145,7 +162,7 @@ func (cs *CallbackServer) handleCallback(w http.ResponseWriter, r *http.Request)
 			errMsg := "state parameter mismatch (possible CSRF attack)"
 			cs.sendResult(CallbackResult{Err: fmt.Errorf("OAuth error: %s", errMsg)})
 			w.WriteHeader(http.StatusForbidden)
-			fmt.Fprintf(w, "<html><body><h1>Authentication Failed</h1><p>%s</p><p>You can close this window.</p></body></html>", html.EscapeString(errMsg)) //nolint:gosec // input is escaped
+			fmt.Fprint(w, authErrorHTML(html.EscapeString(errMsg)))
 			return
 		}
 	}
@@ -259,7 +276,7 @@ func (cs *CallbackServer) handleImplicitTokenPost(w http.ResponseWriter, r *http
 			errMsg := "state parameter mismatch (possible CSRF attack)"
 			cs.sendResult(CallbackResult{Err: fmt.Errorf("OAuth error: %s", errMsg)})
 			w.WriteHeader(http.StatusForbidden)
-			fmt.Fprintf(w, "<html><body><h1>Authentication Failed</h1><p>%s</p></body></html>", html.EscapeString(errMsg)) //nolint:gosec // input is escaped
+			fmt.Fprint(w, authErrorHTML(html.EscapeString(errMsg)))
 			return
 		}
 	}
@@ -273,7 +290,7 @@ func (cs *CallbackServer) handleImplicitTokenPost(w http.ResponseWriter, r *http
 		}
 		cs.sendResult(CallbackResult{Err: fmt.Errorf("OAuth error: %s", errMsg)})
 		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, "<html><body><h1>Authentication Failed</h1><p>%s</p></body></html>", html.EscapeString(errMsg)) //nolint:gosec // input is escaped
+		fmt.Fprint(w, authErrorHTML(html.EscapeString(errMsg)))
 		return
 	}
 

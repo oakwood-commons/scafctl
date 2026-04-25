@@ -280,7 +280,23 @@ func (p *ExecProvider) executeCommand(ctx context.Context, command string, input
 		if !ok {
 			return nil, fmt.Errorf("env must be an object with string keys")
 		}
+		// Inject NO_COLOR=1 and TERM=dumb unless the user explicitly set them.
+		// This prevents child processes (especially PowerShell) from emitting ANSI
+		// escape codes in captured output, which corrupts downstream processing
+		// and breaks YAML block-scalar formatting.
+		if _, exists := envMap["NO_COLOR"]; !exists {
+			envMap["NO_COLOR"] = "1"
+		}
+		if _, exists := envMap["TERM"]; !exists {
+			envMap["TERM"] = "dumb"
+		}
 		env = shellexec.MergeEnv(envMap)
+	} else {
+		// No user env — still inject NO_COLOR and TERM.
+		env = shellexec.MergeEnv(map[string]any{
+			"NO_COLOR": "1",
+			"TERM":     "dumb",
+		})
 	}
 
 	// Set up stdin

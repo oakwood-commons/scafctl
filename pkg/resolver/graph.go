@@ -171,6 +171,14 @@ func extractDepsFromValueRef(ref *ValueRef, deps map[string]bool) {
 // extractDepsFromLiteral recursively extracts dependencies from literal values
 // that may contain CEL expression strings or Go template syntax
 func extractDepsFromLiteral(literal any, deps map[string]bool) {
+	extractDepsFromLiteralWithExclusions(literal, deps, nil)
+}
+
+// extractDepsFromLiteralWithExclusions works like extractDepsFromLiteral but
+// allows excluding certain names from being treated as resolver dependencies.
+// This is used when a sibling "data" map provides template context variables
+// that should not be interpreted as resolver references.
+func extractDepsFromLiteralWithExclusions(literal any, deps, exclude map[string]bool) {
 	switch v := literal.(type) {
 	case string:
 		// Check if the string contains CEL-like expressions (_.something or _["something"] patterns)
@@ -180,24 +188,51 @@ func extractDepsFromLiteral(literal any, deps map[string]bool) {
 		// Check if the string contains Go template syntax ({{ and }})
 		// This handles cases like go-template provider inputs with {{.resolverName}} patterns
 		if strings.Contains(v, "{{") && strings.Contains(v, "}}") {
-			extractDepsFromTemplate(v, deps)
+			if len(exclude) > 0 {
+				extractDepsFromTemplateWithExclusions(v, deps, exclude)
+			} else {
+				extractDepsFromTemplate(v, deps)
+			}
 		}
 	case map[string]any:
-		// Recursively check map values
-		for _, mapVal := range v {
-			extractDepsFromLiteral(mapVal, deps)
+		// Check for go-template provider pattern: if this map has a "template"
+		// string and a "data" map, exclude data keys from template references.
+		// This prevents false-positive resolver dependencies when the template
+		// accesses variables provided by the data input (e.g., {{.config}}).
+		var dataKeys map[string]bool
+		if dataMap, ok := v["data"].(map[string]any); ok {
+			dataKeys = make(map[string]bool, len(dataMap))
+			for k := range dataMap {
+				dataKeys[k] = true
+			}
+		}
+		// Recursively check map values, passing data keys as exclusions
+		// for template strings in the same map
+		for key, mapVal := range v {
+			if key == "template" && dataKeys != nil {
+				extractDepsFromLiteralWithExclusions(mapVal, deps, dataKeys)
+			} else {
+				extractDepsFromLiteralWithExclusions(mapVal, deps, exclude)
+			}
 		}
 	case []any:
 		// Recursively check array elements
 		for _, arrVal := range v {
-			extractDepsFromLiteral(arrVal, deps)
+			extractDepsFromLiteralWithExclusions(arrVal, deps, exclude)
 		}
 	}
 }
 
-// extractDepsFromTemplate extracts resolver references from Go templates
-// Uses the gotmpl package's GetReferences function for proper template parsing
+// extractDepsFromTemplate extracts resolver references from Go templates.
+// Uses the gotmpl package's GetReferences function for proper template parsing.
 func extractDepsFromTemplate(tmplContent string, deps map[string]bool) {
+	extractDepsFromTemplateWithExclusions(tmplContent, deps, nil)
+}
+
+// extractDepsFromTemplateWithExclusions extracts resolver references from Go templates,
+// skipping any variable names present in the exclude set. This is used when template
+// variables are provided by a sibling data input rather than resolvers.
+func extractDepsFromTemplateWithExclusions(tmplContent string, deps, exclude map[string]bool) {
 	// Use the gotmpl package to properly parse template references
 	refs, err := gotmpl.GetGoTemplateReferences(tmplContent, "", "")
 	if err != nil {
@@ -208,6 +243,7 @@ func extractDepsFromTemplate(tmplContent string, deps map[string]bool) {
 	// Extract resolver names from paths that reference data
 	for _, ref := range refs {
 		path := ref.Path
+		var varName string
 		// Handle different path patterns from template parsing
 		// The parser returns paths like:
 		// - "._.resolverName" for {{ ._.resolverName }} (ValueRef tmpl pattern)
@@ -216,35 +252,33 @@ func extractDepsFromTemplate(tmplContent string, deps map[string]bool) {
 		switch {
 		case strings.HasPrefix(path, "._."):
 			// Extract "resolverName" from "._.resolverName"
-			varName := strings.TrimPrefix(path, "._.")
+			varName = strings.TrimPrefix(path, "._.")
 			// Only take the first segment if there are nested accesses
 			if idx := strings.Index(varName, "."); idx != -1 {
 				varName = varName[:idx]
 			}
-			deps[varName] = true
 		case strings.HasPrefix(path, ".__"):
 			// Skip special variables like __self, __item, __index - they are not dependencies
 			continue
 		case strings.HasPrefix(path, "._"):
 			// Handle _.resolverName pattern (without leading dot after _.)
-			varName := strings.TrimPrefix(path, "._")
+			varName = strings.TrimPrefix(path, "._")
 			// Only take the first segment if there are nested accesses
 			if idx := strings.Index(varName, "."); idx != -1 {
 				varName = varName[:idx]
 			}
-			deps[varName] = true
 		case strings.HasPrefix(path, "."):
 			// Handle direct root-level access like ".resolverName" used by go-template provider
 			// This pattern is used when resolver data is at the root level of template data
-			varName := strings.TrimPrefix(path, ".")
+			varName = strings.TrimPrefix(path, ".")
 			// Only take the first segment if there are nested accesses (e.g., ".config.host" -> "config")
 			if idx := strings.Index(varName, "."); idx != -1 {
 				varName = varName[:idx]
 			}
-			// Skip empty names (from "." alone)
-			if varName != "" {
-				deps[varName] = true
-			}
+		}
+
+		if varName != "" && !exclude[varName] {
+			deps[varName] = true
 		}
 	}
 }
@@ -318,14 +352,84 @@ func extractDepsFromResolvePhase(phase *ResolvePhase, deps map[string]bool, look
 			extractDepsFromExpression(string(*source.When.Expr), deps)
 		}
 
+		// Extract from forEach.In (if using forEach with custom source)
+		if source.ForEach != nil && source.ForEach.In != nil {
+			extractDepsFromValueRef(source.ForEach.In, deps)
+		}
+
 		// Try provider-specific extraction first
 		if extractDepsFromProviderInputs(source.Provider, source.Inputs, deps, lookup) {
 			continue
 		}
 
-		// Fall back to generic extraction from inputs
-		for _, input := range source.Inputs {
-			extractDepsFromValueRef(input, deps)
+		// Fall back to generic extraction from inputs.
+		// Collect data keys to exclude from template reference extraction.
+		// When a provider has both a "data" map and a "template" string,
+		// template references matching data keys are local context, not resolver deps.
+		dataKeys := extractDataKeys(source.Inputs)
+		for key, input := range source.Inputs {
+			if len(dataKeys) > 0 && key == "template" {
+				extractDepsFromValueRefWithExclusions(input, deps, dataKeys)
+			} else {
+				extractDepsFromValueRef(input, deps)
+			}
+		}
+	}
+}
+
+// extractDataKeys returns a set of top-level keys from the "data" input if it
+// is a literal map. This allows template references like {{.config}} to be
+// recognized as local context rather than resolver dependencies.
+func extractDataKeys(inputs map[string]*ValueRef) map[string]bool {
+	dataRef, ok := inputs["data"]
+	if !ok || dataRef == nil || dataRef.Literal == nil {
+		return nil
+	}
+	dataMap, ok := dataRef.Literal.(map[string]any)
+	if !ok {
+		return nil
+	}
+	keys := make(map[string]bool, len(dataMap))
+	for k := range dataMap {
+		keys[k] = true
+	}
+	return keys
+}
+
+// extractDepsFromValueRefWithExclusions works like extractDepsFromValueRef but
+// excludes names in the exclude set from being treated as resolver dependencies.
+func extractDepsFromValueRefWithExclusions(ref *ValueRef, deps, exclude map[string]bool) {
+	if ref == nil {
+		return
+	}
+
+	// Direct resolver reference - never excluded
+	if ref.Resolver != nil {
+		deps[*ref.Resolver] = true
+		return
+	}
+
+	// Expression - never excluded (CEL uses _.resolverName, not data keys)
+	if ref.Expr != nil {
+		extractDepsFromExpression(string(*ref.Expr), deps)
+		return
+	}
+
+	// Template - apply exclusions
+	if ref.Tmpl != nil {
+		extractDepsFromTemplateWithExclusions(string(*ref.Tmpl), deps, exclude)
+		return
+	}
+
+	// Literal string with template syntax
+	if ref.Literal != nil {
+		if s, ok := ref.Literal.(string); ok {
+			if strings.Contains(s, "_.") || strings.Contains(s, "_[") {
+				extractDepsFromExpression(s, deps)
+			}
+			if strings.Contains(s, "{{") && strings.Contains(s, "}}") {
+				extractDepsFromTemplateWithExclusions(s, deps, exclude)
+			}
 		}
 	}
 }
@@ -359,8 +463,13 @@ func extractDepsFromTransformPhase(phase *TransformPhase, deps map[string]bool, 
 		}
 
 		// Fall back to generic extraction from inputs
-		for _, input := range transform.Inputs {
-			extractDepsFromValueRef(input, deps)
+		dataKeys := extractDataKeys(transform.Inputs)
+		for key, input := range transform.Inputs {
+			if len(dataKeys) > 0 && key == "template" {
+				extractDepsFromValueRefWithExclusions(input, deps, dataKeys)
+			} else {
+				extractDepsFromValueRef(input, deps)
+			}
 		}
 	}
 }

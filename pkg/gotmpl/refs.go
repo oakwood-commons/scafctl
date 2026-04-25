@@ -21,6 +21,15 @@ type TemplateReference struct {
 	Position string
 }
 
+// goTemplateBuiltins lists the function names that text/template provides
+// out of the box. parse.Parse needs these declared explicitly so it can
+// recognise them during parsing.
+var goTemplateBuiltins = []string{
+	"and", "call", "html", "index", "slice", "js", "len", "not", "or",
+	"print", "printf", "println", "urlquery",
+	"eq", "ne", "lt", "le", "gt", "ge",
+}
+
 // GetReferences extracts all references to Data from a Go template
 // This method parses the template and extracts variable references (e.g., .User, .Items)
 // It excludes function calls and Go template control variables (like $var)
@@ -50,9 +59,19 @@ func (s *Service) GetReferences(ctx context.Context, opts TemplateOptions) ([]Te
 		rightDelim = DefaultRightDelim
 	}
 
-	// Parse the template using text/template/parse
-	// We need to use the internal parse package which handles delimiters through the lexer
-	trees, err := parse.Parse(opts.Name, opts.Content, leftDelim, rightDelim)
+	// Parse the template using text/template/parse.
+	// Pass the service's function map so the parser recognises built-in and
+	// extension functions (e.g. index, printf, sprig helpers). Without this,
+	// templates that call these functions fail to parse and their variable
+	// references are silently lost.
+	funcNames := make(map[string]any, len(s.defaultFuncs)+len(goTemplateBuiltins))
+	for _, name := range goTemplateBuiltins {
+		funcNames[name] = true
+	}
+	for k := range s.defaultFuncs {
+		funcNames[k] = true // parse.Parse only checks existence, not the value
+	}
+	trees, err := parse.Parse(opts.Name, opts.Content, leftDelim, rightDelim, funcNames)
 	if err != nil {
 		lgr.Error(err, "failed to parse template for reference extraction",
 			"name", opts.Name)

@@ -612,6 +612,11 @@ func collectReferencedResolvers(sol *solution.Solution) map[string]bool {
 // "rslvr", "expr", or "tmpl" key are treated as resolver references.
 func scanLiteralForResolverRefs(v any, pattern *regexp.Regexp, refs map[string]bool) {
 	switch val := v.(type) {
+	case string:
+		// Scan plain string literals for _.resolverName patterns.
+		// This catches CEL expression inputs (e.g., `expression: "has(_.foo)"`),
+		// Go template inputs, and any other string that may reference resolvers.
+		scanExpressionForResolverRefs(val, pattern, refs)
 	case map[string]any:
 		// Check if this map itself is a resolver reference
 		if rslvr, ok := val["rslvr"]; ok {

@@ -591,6 +591,92 @@ func TestCommandList_EmbedderBinaryName(t *testing.T) {
 	assert.NotNil(t, cmd.RunE)
 }
 
+func TestWriteArtifactList_NameWithoutAllVersions_ShowsLatestOnly(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, out, _ := terminal.NewTestIOStreams()
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+	outputOpts.Format = "json"
+
+	now := time.Now()
+	artifacts := []catalogpkg.ArtifactInfo{
+		{
+			Reference: catalogpkg.Reference{
+				Name:    "email-notifier",
+				Kind:    catalogpkg.ArtifactKindSolution,
+				Version: semver.MustParse("2.0.0"),
+			},
+			Digest:    "sha256:aaa",
+			CreatedAt: now,
+			Catalog:   "local",
+		},
+		{
+			Reference: catalogpkg.Reference{
+				Name:    "email-notifier",
+				Kind:    catalogpkg.ArtifactKindSolution,
+				Version: semver.MustParse("1.0.0"),
+			},
+			Digest:    "sha256:bbb",
+			CreatedAt: now,
+			Catalog:   "local",
+		},
+	}
+
+	// showAll=false simulates --name without --all-versions.
+	// Previously --name implied --all-versions; now it does not.
+	w := writer.New(ioStreams, &settings.Run{})
+	err := writeArtifactList(w, artifacts, false, outputOpts)
+	require.NoError(t, err)
+
+	var items []ArtifactListItem
+	err = json.Unmarshal(out.Bytes(), &items)
+	require.NoError(t, err)
+	assert.Len(t, items, 1, "--name without --all-versions should show only the latest version")
+	assert.Equal(t, "2.0.0", items[0].Version)
+}
+
+func TestWriteArtifactList_LatestOnly_AssertsSingleResult(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, out, _ := terminal.NewTestIOStreams()
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+	outputOpts.Format = "json"
+
+	now := time.Now()
+	artifacts := []catalogpkg.ArtifactInfo{
+		{
+			Reference: catalogpkg.Reference{
+				Name:    "my-solution",
+				Kind:    catalogpkg.ArtifactKindSolution,
+				Version: semver.MustParse("2.0.0"),
+			},
+			Digest:    "sha256:aaa",
+			CreatedAt: now,
+			Catalog:   "local",
+		},
+		{
+			Reference: catalogpkg.Reference{
+				Name:    "my-solution",
+				Kind:    catalogpkg.ArtifactKindSolution,
+				Version: semver.MustParse("1.0.0"),
+			},
+			Digest:    "sha256:bbb",
+			CreatedAt: now,
+			Catalog:   "local",
+		},
+	}
+
+	w := writer.New(ioStreams, &settings.Run{})
+	err := writeArtifactList(w, artifacts, false, outputOpts)
+	require.NoError(t, err)
+
+	var items []ArtifactListItem
+	err = json.Unmarshal(out.Bytes(), &items)
+	require.NoError(t, err)
+	assert.Len(t, items, 1, "showAll=false should keep only the latest version per name+kind")
+	assert.Equal(t, "2.0.0", items[0].Version)
+}
+
 func BenchmarkWriteArtifactList(b *testing.B) {
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	outputOpts := kvx.NewOutputOptions(ioStreams)

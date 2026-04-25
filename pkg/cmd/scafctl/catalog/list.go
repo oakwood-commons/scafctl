@@ -293,7 +293,7 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 		artifacts = filterArtifactsByCatalog(artifacts, opts.Catalog)
 	}
 
-	return writeArtifactList(w, artifacts, opts.AllVersions || opts.VersionConstraint != "" || opts.Name != "", outputOpts)
+	return writeArtifactList(w, artifacts, opts.AllVersions || opts.VersionConstraint != "", outputOpts)
 }
 
 // runListFromRemoteRef lists artifacts from a full OCI reference
@@ -381,7 +381,7 @@ func runListFromRemoteRef(ctx context.Context, opts *ListOptions, outputOpts *kv
 		w.Verbosef("After version filter %q: %d artifact(s)", opts.VersionConstraint, len(artifacts))
 	}
 
-	return writeArtifactList(w, artifacts, true, outputOpts)
+	return writeArtifactList(w, artifacts, opts.AllVersions || opts.VersionConstraint != "", outputOpts)
 }
 
 func runListRemote(ctx context.Context, opts *ListOptions, kind catalog.ArtifactKind, outputOpts *kvx.OutputOptions) error {
@@ -435,7 +435,7 @@ func runListRemote(ctx context.Context, opts *ListOptions, kind catalog.Artifact
 		}
 	}
 
-	return writeArtifactList(w, artifacts, opts.AllVersions || opts.VersionConstraint != "" || opts.Name != "", outputOpts)
+	return writeArtifactList(w, artifacts, opts.AllVersions || opts.VersionConstraint != "", outputOpts)
 }
 
 // listRemoteArtifacts fetches artifacts from a configured remote catalog.

@@ -1194,3 +1194,52 @@ func TestExtractCELDeps(t *testing.T) {
 		assert.Empty(t, found)
 	})
 }
+
+func TestExtractDependencies_DataKeyExclusion(t *testing.T) {
+	t.Run("data keys excluded from template refs", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"template": "{{ toYaml .config }}",
+			"data": map[string]any{
+				"config": map[string]any{"port": 8080},
+			},
+		})
+		for _, d := range deps {
+			assert.NotEqual(t, "config", d, "config should be excluded (provided by data)")
+		}
+	})
+
+	t.Run("resolver ref in template not excluded", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"template": "{{ ._.environment }} {{ .config }}",
+			"data": map[string]any{
+				"config": map[string]any{"port": 8080},
+			},
+		})
+		assert.Contains(t, deps, "environment", "resolver ref should be extracted")
+		for _, d := range deps {
+			assert.NotEqual(t, "config", d, "config should be excluded")
+		}
+	})
+
+	t.Run("no data input does not exclude", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"template": "{{ .config }}",
+		})
+		assert.Contains(t, deps, "config")
+	})
+
+	t.Run("multiple data keys all excluded", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"template": "{{ .config }} {{ .labels }} {{ ._.resolver1 }}",
+			"data": map[string]any{
+				"config": map[string]any{"port": 8080},
+				"labels": map[string]any{"app": "test"},
+			},
+		})
+		assert.Contains(t, deps, "resolver1")
+		for _, d := range deps {
+			assert.NotEqual(t, "config", d)
+			assert.NotEqual(t, "labels", d)
+		}
+	})
+}

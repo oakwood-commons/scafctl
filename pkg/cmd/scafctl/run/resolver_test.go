@@ -33,7 +33,7 @@ func TestCommandResolver(t *testing.T) {
 
 	cmd := CommandResolver(cliParams, streams, "")
 
-	assert.Equal(t, "resolver [name[@version]] [resolver-name...] [key=value...]", cmd.Use)
+	assert.Equal(t, "resolver [resolver-name...] [key=value...]", cmd.Use)
 	assert.NotEmpty(t, cmd.Short)
 	assert.Contains(t, cmd.Aliases, "res")
 	assert.Contains(t, cmd.Aliases, "resolvers")
@@ -1809,22 +1809,18 @@ func TestResolverOptions_PositionalKeyValue_OnlyParams(t *testing.T) {
 func TestResolverOptions_PositionalKeyValue_OnlyNames(t *testing.T) {
 	t.Parallel()
 
-	// Without -f, first bare word is solution ref, rest are resolver names
+	// All bare words are resolver names (no positional solution ref)
 	args := []string{"db", "config", "auth"}
-	var solutionRef string
 	var names, dynamicArgs []string
 	for _, arg := range args {
 		if containsEqualsOrAtPrefix(arg) {
 			dynamicArgs = append(dynamicArgs, arg)
-		} else if solutionRef == "" {
-			solutionRef = arg
 		} else {
 			names = append(names, arg)
 		}
 	}
 
-	assert.Equal(t, "db", solutionRef)
-	assert.Equal(t, []string{"config", "auth"}, names)
+	assert.Equal(t, []string{"db", "config", "auth"}, names)
 	assert.Empty(t, dynamicArgs)
 }
 
@@ -1976,82 +1972,74 @@ func TestExtractSolutionPath_EmptyFlag(t *testing.T) {
 	assert.Empty(t, path)
 }
 
-func TestResolverArgs_CatalogNameAsFirstArg(t *testing.T) {
+func TestResolverArgs_AllBareWordsAreNames(t *testing.T) {
 	t.Parallel()
 
-	// Without -f, first bare word is the solution reference
-	ref, names, dynamicArgs := splitResolverArgs(
+	// All bare words are resolver names, not solution refs
+	names, dynamicArgs := splitResolverArgs(
 		[]string{"my-app", "db", "config", "env=prod"},
 		false, // -f not set
 	)
-	assert.Equal(t, "my-app", ref)
-	assert.Equal(t, []string{"db", "config"}, names)
+	assert.Equal(t, []string{"my-app", "db", "config"}, names)
 	assert.Equal(t, []string{"env=prod"}, dynamicArgs)
 }
 
-func TestResolverArgs_CatalogNameWithVersion(t *testing.T) {
+func TestResolverArgs_AtPrefixIsDynamicArg(t *testing.T) {
 	t.Parallel()
 
-	// Catalog name with @version should become the solution reference
-	ref, names, dynamicArgs := splitResolverArgs(
-		[]string{"my-app@1.2.3", "db"},
+	// Args starting with @ are dynamic args
+	names, dynamicArgs := splitResolverArgs(
+		[]string{"@override", "db"},
 		false,
 	)
-	// my-app@1.2.3 doesn't start with @ and doesn't contain =,
-	// so it's a bare word and becomes the solution ref
-	assert.Equal(t, "my-app@1.2.3", ref)
 	assert.Equal(t, []string{"db"}, names)
-	assert.Empty(t, dynamicArgs)
+	assert.Equal(t, []string{"@override"}, dynamicArgs)
 }
 
 func TestResolverArgs_WithFileFlagAllBareWordsAreNames(t *testing.T) {
 	t.Parallel()
 
 	// With -f set, all bare words are resolver names
-	ref, names, dynamicArgs := splitResolverArgs(
+	names, dynamicArgs := splitResolverArgs(
 		[]string{"db", "config", "auth"},
 		true, // -f was set
 	)
-	assert.Empty(t, ref)
 	assert.Equal(t, []string{"db", "config", "auth"}, names)
 	assert.Empty(t, dynamicArgs)
 }
 
-func TestResolverArgs_OnlyCatalogName(t *testing.T) {
+func TestResolverArgs_SingleBareWordIsName(t *testing.T) {
 	t.Parallel()
 
-	// Just a catalog name, no resolver filters
-	ref, names, dynamicArgs := splitResolverArgs(
+	// Single bare word is a resolver name, not a solution ref
+	names, dynamicArgs := splitResolverArgs(
 		[]string{"sln-starter-kit"},
 		false,
 	)
-	assert.Equal(t, "sln-starter-kit", ref)
-	assert.Empty(t, names)
+	assert.Equal(t, []string{"sln-starter-kit"}, names)
 	assert.Empty(t, dynamicArgs)
 }
 
-func TestResolverArgs_CatalogNameWithParams(t *testing.T) {
+func TestResolverArgs_BareWordWithParams(t *testing.T) {
 	t.Parallel()
 
-	// Catalog name + key=value params, no resolver name filters
-	ref, names, dynamicArgs := splitResolverArgs(
+	// Bare word is a resolver name, key=value args are dynamic
+	names, dynamicArgs := splitResolverArgs(
 		[]string{"sln-starter-kit", "env=prod", "region=us-east-1"},
 		false,
 	)
-	assert.Equal(t, "sln-starter-kit", ref)
-	assert.Empty(t, names)
+	assert.Equal(t, []string{"sln-starter-kit"}, names)
 	assert.Equal(t, []string{"env=prod", "region=us-east-1"}, dynamicArgs)
 }
 
 func TestResolverArgs_OnlyParamsNoFile(t *testing.T) {
 	t.Parallel()
 
-	// Only key=value params — no solution ref, no names (auto-discovery)
-	ref, names, dynamicArgs := splitResolverArgs(
+	// Only key=value params — no names (auto-discovery)
+	names, dynamicArgs := splitResolverArgs(
 		[]string{"env=prod"},
 		false,
 	)
-	assert.Empty(t, ref)
 	assert.Empty(t, names)
 	assert.Equal(t, []string{"env=prod"}, dynamicArgs)
 }
@@ -2060,16 +2048,15 @@ func TestResolverArgs_NoArgs(t *testing.T) {
 	t.Parallel()
 
 	// No args at all (auto-discovery)
-	ref, names, dynamicArgs := splitResolverArgs(
+	names, dynamicArgs := splitResolverArgs(
 		[]string{},
 		false,
 	)
-	assert.Empty(t, ref)
 	assert.Empty(t, names)
 	assert.Empty(t, dynamicArgs)
 }
 
-func TestResolverArgs_PreRun_CatalogName(t *testing.T) {
+func TestResolverArgs_PreRun_AllBareWordsAreNames(t *testing.T) {
 	t.Parallel()
 
 	streams, _, _ := terminal.NewTestIOStreams()
@@ -2078,15 +2065,16 @@ func TestResolverArgs_PreRun_CatalogName(t *testing.T) {
 	cmd := CommandResolver(cliParams, streams, "")
 
 	// Simulate: scafctl run resolver sln-starter-kit db config
+	// All bare words should become resolver names, not solution refs
 	args := []string{"sln-starter-kit", "db", "config"}
 	cmd.PreRun(cmd, args)
 
-	// After PreRun, the file flag should be set to the catalog name
+	// No file should be set — use auto-discovery
 	path := extractSolutionPath(cmd)
-	assert.Equal(t, "sln-starter-kit", path)
+	assert.Empty(t, path)
 }
 
-func TestResolverArgs_PreRun_CatalogNameWithVersion(t *testing.T) {
+func TestResolverArgs_PreRun_AtVersionIsDynamicArg(t *testing.T) {
 	t.Parallel()
 
 	streams, _, _ := terminal.NewTestIOStreams()
@@ -2094,12 +2082,13 @@ func TestResolverArgs_PreRun_CatalogNameWithVersion(t *testing.T) {
 
 	cmd := CommandResolver(cliParams, streams, "")
 
-	// Simulate: scafctl run resolver sln-starter-kit@1.2.0
-	args := []string{"sln-starter-kit@1.2.0"}
+	// Simulate: scafctl run resolver db @override
+	// @override starts with @ so becomes a dynamic arg
+	args := []string{"db", "@override"}
 	cmd.PreRun(cmd, args)
 
 	path := extractSolutionPath(cmd)
-	assert.Equal(t, "sln-starter-kit@1.2.0", path)
+	assert.Empty(t, path)
 }
 
 func TestResolverArgs_PreRun_FileFlagTakesPrecedence(t *testing.T) {
@@ -2155,20 +2144,17 @@ func TestResolverArgs_PreRun_URLWithMultipleQueryParams(t *testing.T) {
 	assert.Equal(t, "https://storage.example.com/sol.yaml?sig=abc&exp=123", path)
 }
 
-// splitResolverArgs mirrors the new PreRun logic: when fileExplicit is false,
-// the first bare word becomes the solution reference.
-func splitResolverArgs(args []string, fileExplicit bool) (solutionRef string, names, dynamicArgs []string) {
+// splitResolverArgs mirrors the new PreRun logic: all bare words are resolver
+// names, args with '=' or '@' prefix are dynamic params.
+func splitResolverArgs(args []string, _ bool) (names, dynamicArgs []string) {
 	for _, arg := range args {
 		if containsEqualsOrAtPrefix(arg) {
 			dynamicArgs = append(dynamicArgs, arg)
-		} else if !fileExplicit && solutionRef == "" {
-			solutionRef = arg
-			fileExplicit = true
 		} else {
 			names = append(names, arg)
 		}
 	}
-	return solutionRef, names, dynamicArgs
+	return names, dynamicArgs
 }
 
 // containsEqualsOrAtPrefix mirrors the logic used in PreRun to split args.

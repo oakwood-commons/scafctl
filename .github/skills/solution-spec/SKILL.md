@@ -86,8 +86,43 @@ spec:
 ### Phase Execution Order
 
 1. **Resolve**: Providers execute in order. First non-null result wins (`until:` controls early stop).
-2. **Transform**: Applied sequentially. `__self` is the current value.
+2. **Transform**: Applied sequentially. `__self` is the current value. Supports `forEach` for array iteration.
 3. **Validate**: All rules checked. Resolver fails if any validation fails.
+
+### forEach (Resolve and Transform Steps)
+
+`forEach` is supported on both `resolve.with` and `transform.with` steps. It is NOT supported on `validate.with`.
+
+**Key difference**: On resolve steps, `forEach.in` is **required** (no `__self` available). On transform steps, `forEach.in` defaults to `__self`.
+
+```yaml
+# Resolve: fan-out HTTP requests directly
+resolve:
+  with:
+    - provider: http
+      forEach:
+        in:             # required on resolve (no __self)
+          rslvr: moduleList
+        item: mod
+        concurrency: 10
+      inputs:
+        url:
+          expr: 'mod.url'
+
+# Transform: double each number
+transform:
+  with:
+    - provider: cel
+      forEach:
+        item: num       # alias for __item (current element)
+        index: i        # alias for __index (current 0-based index)
+      inputs:
+        expression: "num * 2"
+```
+
+**Fields**: `item`, `index`, `in` (ValueRef; required on resolve, defaults to `__self` on transform), `concurrency` (int), `keepSkipped` (bool), `onError` (actions only: `fail`|`continue`).
+
+**Context variables**: `__item` and `__index` are always injected. Custom aliases (`item`, `index` fields) are added alongside them.
 
 ### Dependency Resolution (DAG)
 

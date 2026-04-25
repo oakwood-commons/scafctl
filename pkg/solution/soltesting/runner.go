@@ -496,7 +496,23 @@ func (r *Runner) executeTest(ctx context.Context, tc *TestCase, st *SolutionTest
 	}
 
 	// Create sandbox
-	sandbox, err := NewSandbox(st.FilePath, nil, tc.Files)
+	// Merge config-level files with per-test files (per-test entries appended last).
+	sandboxFiles := mergeFileEntries(st.Config, tc.Files)
+
+	// Resolve bundle include patterns to actual file paths.
+	var bundleFiles []string
+	if len(st.BundleIncludes) > 0 {
+		resolved, resolveErr := resolveFileEntries(solutionDir, st.BundleIncludes)
+		if resolveErr != nil {
+			result.Status = StatusError
+			result.Message = fmt.Sprintf("resolving bundle files: %s", resolveErr)
+			result.Duration = time.Since(start)
+			return result
+		}
+		bundleFiles = resolved
+	}
+
+	sandbox, err := NewSandbox(st.FilePath, bundleFiles, sandboxFiles)
 	if err != nil {
 		result.Status = StatusError
 		result.Message = fmt.Sprintf("sandbox creation failed: %s", err)
@@ -558,6 +574,7 @@ func (r *Runner) executeTest(ctx context.Context, tc *TestCase, st *SolutionTest
 		default:
 			result.Message = fmt.Sprintf("command failed with exit code %d", cmdOutput.ExitCode)
 		}
+		attachCommandOutput(&result, cmdOutput)
 		result.Duration = time.Since(start)
 		return result
 	}
@@ -583,6 +600,7 @@ func (r *Runner) executeTest(ctx context.Context, tc *TestCase, st *SolutionTest
 			if !match {
 				result.Status = StatusFail
 				result.Message = fmt.Sprintf("snapshot mismatch:\n%s", diff)
+				attachCommandOutput(&result, cmdOutput)
 				result.Duration = time.Since(start)
 				return result
 			}
@@ -598,6 +616,7 @@ func (r *Runner) executeTest(ctx context.Context, tc *TestCase, st *SolutionTest
 			if !ar.Passed {
 				result.Status = StatusFail
 				result.Message = "one or more assertions failed"
+				attachCommandOutput(&result, cmdOutput)
 				result.Duration = time.Since(start)
 				return result
 			}
@@ -862,6 +881,35 @@ func (r *Runner) runInitSteps(ctx context.Context, steps []InitStep, workDir str
 	}
 
 	return nil
+}
+
+// mergeFileEntries merges config-level files with per-test files.
+// Config files come first; per-test files are appended.
+func mergeFileEntries(config *TestConfig, testFiles []string) []string {
+	var configFiles []string
+	if config != nil {
+		configFiles = config.Files
+	}
+	if len(configFiles) == 0 {
+		return testFiles
+	}
+	if len(testFiles) == 0 {
+		return configFiles
+	}
+	merged := make([]string, 0, len(configFiles)+len(testFiles))
+	merged = append(merged, configFiles...)
+	merged = append(merged, testFiles...)
+	return merged
+}
+
+// attachCommandOutput copies stdout/stderr from the command output to the test
+// result so failed tests include the inner command's diagnostic output.
+func attachCommandOutput(result *TestResult, cmdOutput *CommandOutput) {
+	if cmdOutput == nil {
+		return
+	}
+	result.Stdout = cmdOutput.Stdout
+	result.Stderr = cmdOutput.Stderr
 }
 
 // buildEnvMap builds the environment variable map for a test.

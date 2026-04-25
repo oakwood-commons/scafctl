@@ -138,6 +138,37 @@ Use list_cel_functions to see all available CEL functions and evaluate_cel to te
 		},
 		SeeAlso: []string{"resolver", "action", "template-functions"},
 	},
+	// --- forEach ---
+	{
+		Name:     "foreach",
+		Title:    "forEach (Array Iteration)",
+		Category: "resolvers",
+		Summary:  "Iterate over an array in resolve or transform steps, executing a provider once per element.",
+		Explanation: `forEach is supported on both resolve.with and transform.with steps. It is NOT supported on validate.with.
+
+When forEach is present, the provider executes once per element and results are collected into an output array preserving order.
+
+Key difference between phases:
+- On resolve steps, forEach.in is REQUIRED (no __self available in resolve phase).
+- On transform steps, forEach.in defaults to __self (the current value).
+
+Fields:
+- item: Variable alias for current element (default: __item always available)
+- index: Variable alias for current 0-based index (default: __index always available)
+- in: ValueRef for source array (required on resolve, defaults to __self on transform)
+- concurrency: Max parallel iterations (0 = unlimited)
+- keepSkipped: Retain nil entries for items skipped by when condition (default: false)
+- onError: Error handling (fail or continue). Actions only; resolvers ignore this.
+
+Context variables __item and __index are always injected. Custom aliases (item, index fields) are added alongside them.
+
+Filtering: Combine forEach with a step-level 'when' condition to filter arrays. Items where when is false are removed from the output unless keepSkipped is true.`,
+		Examples: []string{
+			"# Resolve: fan-out HTTP requests\nresolve:\n  with:\n    - provider: http\n      forEach:\n        in:\n          rslvr: urls\n        item: url\n      inputs:\n        url:\n          expr: \"url\"",
+			"# Transform: double each number\ntransform:\n  with:\n    - provider: cel\n      forEach:\n        item: num\n      inputs:\n        expression: \"num * 2\"",
+		},
+		SeeAlso: []string{"resolver", "action", "cel-expression"},
+	},
 	// --- Testing ---
 	{
 		Name:     "functional-testing",
@@ -153,9 +184,24 @@ Key features:
 - **CEL assertions** — validate output structure and values.
 - **Tags** — organize and filter tests (e.g., --tag smoke).
 - **Templates** — share common config via extends and test templates (names starting with _).
-- **File dependencies** — declare which files the test needs via the files list (supports paths, globs, directories).`,
+- **File dependencies** — declare which files the test needs via the files list (supports paths, globs, directories).
+- **Shared config (config)** — suite-level env, setup, cleanup, and files via spec.testing.config.
+
+## Test templates and inheritance
+
+Template cases reduce duplication across tests that share files, env vars, or other config. A template is a regular test case whose name starts with '_'. Templates are NOT executed as tests.
+
+Rules:
+- Template names must start with '_' (e.g., '_files-base', '_common-env').
+- Templates are defined alongside regular cases in spec.testing.cases.
+- A test inherits from templates via the 'extends' field, which must be an array: extends: [_files-base].
+- Multiple templates can be listed: extends: [_files-base, _common-env] — applied left-to-right.
+- Inherited fields are merged; the child test's own fields take precedence.
+- Templates can extend other templates (up to 10 levels deep).
+- Template cases do not need a command field — they exist only for inheritance.`,
 		Examples: []string{
 			"spec:\n  testing:\n    cases:\n      smoke-test:\n        description: Verify basic rendering\n        command: [render, solution]\n        exitCode: 0\n        files: [templates/]\n        assertions:\n          - expression: \"size(__output) > 0\"\n            message: Output should not be empty",
+			"# Template case (not executed, used for inheritance)\nspec:\n  testing:\n    cases:\n      _files-base:\n        files:\n          - templates/.github/copilot-instructions.md.tpl\n          - templates/.github/instructions/terraform-hcl.instructions.md.tpl\n\n      resolve-defaults:\n        extends: [_files-base]\n        command: [run, resolver]\n        args: [-o, json]\n        exitCode: 0\n\n      render-defaults:\n        extends: [_files-base]\n        command: [render, solution]\n        exitCode: 0",
 		},
 		SeeAlso: []string{"test-sandbox", "test-assertions", "test-scaffold"},
 	},
