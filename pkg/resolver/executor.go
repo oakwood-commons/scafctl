@@ -838,6 +838,24 @@ func (e *Executor) executeResolvePhase(ctx context.Context, phase *ResolvePhase)
 			}
 		}
 
+		// Handle forEach iteration on resolve sources
+		if source.ForEach != nil {
+			result, calls, err := e.executeForEachSource(ctx, &source, i)
+			providerCallCount += calls
+			if err != nil {
+				lgr.V(1).Info("forEach source failed",
+					"source", i+1,
+					logKeyProvider, source.Provider,
+					"error", err)
+				if source.OnError == ErrorBehaviorFail {
+					return nil, providerCallCount, fmt.Errorf("source %d (%s) forEach failed: %w", i+1, source.Provider, err)
+				}
+				lastErr = err
+				continue
+			}
+			return result, providerCallCount, nil
+		}
+
 		// Execute provider in resolve (from) mode
 		value, err := e.executeProvider(provider.WithExecutionMode(ctx, provider.CapabilityFrom), source.Provider, source.Inputs)
 		providerCallCount++
@@ -1146,6 +1164,163 @@ func (e *Executor) executeForEachTransform(ctx context.Context, transform *Provi
 
 	// All succeeded - filter out nil entries for skipped items unless keepSkipped is set
 	if transform.When != nil && !transform.ForEach.KeepSkipped {
+		filtered := results[:0]
+		for _, r := range results {
+			if r != nil {
+				filtered = append(filtered, r)
+			}
+		}
+		return filtered, providerCallCount, nil
+	}
+	return results, providerCallCount, nil
+}
+
+// executeForEachSource executes a resolve source with forEach iteration.
+// Unlike transform forEach, resolve forEach has no __self and requires forEach.in.
+func (e *Executor) executeForEachSource(ctx context.Context, source *ProviderSource, sourceIndex int) (any, int, error) {
+	lgr := logger.FromContext(ctx)
+	resolverCtx, _ := FromContext(ctx)
+	resolverData := resolverCtx.ToMap()
+
+	// forEach.in is required for resolve sources (no __self to default to)
+	if source.ForEach.In == nil {
+		return nil, 0, fmt.Errorf("source %d: forEach.in is required on resolve steps (no __self available)", sourceIndex+1)
+	}
+
+	// Resolve the input array
+	resolved, err := source.ForEach.In.Resolve(ctx, resolverData, nil)
+	if err != nil {
+		return nil, 0, fmt.Errorf("source %d: failed to resolve forEach.in: %w", sourceIndex+1, err)
+	}
+	inputArray, ok := toSlice(resolved)
+	if !ok {
+		return nil, 0, &ForEachTypeError{
+			Step:       sourceIndex,
+			ActualType: fmt.Sprintf("%T", resolved),
+		}
+	}
+
+	// Handle empty array
+	if len(inputArray) == 0 {
+		lgr.V(1).Info("forEach: empty input array, returning []",
+			"source", sourceIndex+1,
+			logKeyProvider, source.Provider)
+		return []any{}, 0, nil
+	}
+
+	lgr.V(1).Info("executing forEach resolve source",
+		"source", sourceIndex+1,
+		logKeyProvider, source.Provider,
+		"itemCount", len(inputArray),
+		"concurrency", source.ForEach.Concurrency)
+
+	// Create result slice and error tracking
+	results := make([]any, len(inputArray))
+	errors := make([]error, len(inputArray))
+	providerCallCount := 0
+	var providerCallCountMu sync.Mutex
+
+	// Create semaphore for concurrency control
+	var sem chan struct{}
+	if source.ForEach.Concurrency > 0 {
+		sem = make(chan struct{}, source.ForEach.Concurrency)
+	}
+
+	var wg sync.WaitGroup
+	for idx, item := range inputArray {
+		wg.Add(1)
+		go func(i int, itm any) {
+			defer wg.Done()
+
+			// Acquire semaphore if concurrency limited
+			if sem != nil {
+				sem <- struct{}{}
+				defer func() { <-sem }()
+			}
+
+			// Build iteration context
+			iterCtx := &IterationContext{
+				Item:       itm,
+				Index:      i,
+				ItemAlias:  source.ForEach.Item,
+				IndexAlias: source.ForEach.Index,
+			}
+
+			// Check when condition with iteration variables (no __self in resolve phase)
+			if source.When != nil {
+				shouldExecute, err := e.evaluateConditionWithIterationContext(ctx, source.When, nil, iterCtx)
+				if err != nil {
+					errors[i] = fmt.Errorf("when condition evaluation failed: %w", err)
+					return
+				}
+				if !shouldExecute {
+					lgr.V(2).Info("skipping forEach iteration due to when condition",
+						"source", sourceIndex+1,
+						"index", i)
+					results[i] = nil
+					return
+				}
+			}
+
+			// Execute provider with iteration context (resolve/from mode)
+			result, err := e.executeProviderWithIterationContext(provider.WithExecutionMode(ctx, provider.CapabilityFrom), source.Provider, source.Inputs, nil, iterCtx)
+			providerCallCountMu.Lock()
+			providerCallCount++
+			providerCallCountMu.Unlock()
+
+			if err != nil {
+				errors[i] = err
+				lgr.V(1).Info("forEach iteration failed",
+					"source", sourceIndex+1,
+					"index", i,
+					"error", err)
+			} else {
+				results[i] = result
+			}
+		}(idx, item)
+	}
+
+	wg.Wait()
+
+	// Check for errors
+	var hasErrors bool
+	for _, err := range errors {
+		if err != nil {
+			hasErrors = true
+			break
+		}
+	}
+
+	if hasErrors {
+		if source.OnError == ErrorBehaviorContinue {
+			outputResults := make([]any, len(inputArray))
+			for i := range inputArray {
+				if errors[i] != nil {
+					outputResults[i] = ForEachIterationResult{
+						Index: i,
+						Error: errors[i].Error(),
+						Item:  inputArray[i],
+					}
+				} else {
+					outputResults[i] = ForEachIterationResult{
+						Index: i,
+						Data:  results[i],
+						Item:  inputArray[i],
+					}
+				}
+			}
+			return outputResults, providerCallCount, nil
+		}
+		// Return first error
+		for i, err := range errors {
+			if err != nil {
+				return nil, providerCallCount, fmt.Errorf("source %d forEach iteration %d failed: %w", sourceIndex+1, i, err)
+			}
+		}
+	}
+
+	// All succeeded - filter out nil entries for skipped items unless keepSkipped is set
+	if source.When != nil && !source.ForEach.KeepSkipped {
 		filtered := results[:0]
 		for _, r := range results {
 			if r != nil {

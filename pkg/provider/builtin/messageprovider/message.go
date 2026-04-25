@@ -41,6 +41,7 @@ var typeDefaults = map[string]messageStyle{
 	typeInfo:    {icon: "💡", color: "#00FFFF"},
 	typeDebug:   {icon: "🐛", color: "#FF00FF", bold: true},
 	typePlain:   {},
+	typeRaw:     {},
 }
 
 // ProviderName is the name of this provider used for error wrapping and identification.
@@ -80,6 +81,7 @@ const (
 	typeInfo    = "info"
 	typeDebug   = "debug"
 	typePlain   = "plain"
+	typeRaw     = "raw"
 )
 
 // Destination constants.
@@ -141,9 +143,8 @@ func NewMessageProvider() *MessageProvider {
 			},
 			Schema: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
 				fieldMessage: schemahelper.StringProp(
-					"The message text to output (text mode). Mutually exclusive with 'data'. For dynamic interpolation, use tmpl: or expr: ValueRef on this input instead of passing templates directly.",
+					"The message text to output (text mode). Mutually exclusive with 'data'. For dynamic interpolation, use tmpl: or expr: ValueRef on this input instead of passing templates directly. Limited to 8192 characters unless type is 'raw'.",
 					schemahelper.WithExample("Deployment completed successfully"),
-					schemahelper.WithMaxLength(maxMessageLength),
 				),
 				fieldData: schemahelper.AnyProp(
 					"Structured data to render (data mode). Mutually exclusive with 'message'. Arrays render as tables or card lists; objects render as key-value views or sectioned detail views. Supports rslvr:/expr:/tmpl: ValueRef.",
@@ -177,8 +178,8 @@ func NewMessageProvider() *MessageProvider {
 					schemahelper.WithMaxLength(maxLabelLength),
 				),
 				fieldType: schemahelper.StringProp(
-					"The message type that determines icon and color styling. Maps to built-in terminal output styles: success (✅ green), warning (⚠️ yellow), error (❌ red), info (💡 cyan), debug (🐛 magenta), plain (no styling).",
-					schemahelper.WithEnum(typeSuccess, typeWarning, typeError, typeInfo, typeDebug, typePlain),
+					"The message type that determines icon and color styling. Maps to built-in terminal output styles: success (✅ green), warning (⚠️ yellow), error (❌ red), info (💡 cyan), debug (🐛 magenta), plain (no styling), raw (no formatting, bypasses maxLength).",
+					schemahelper.WithEnum(typeSuccess, typeWarning, typeError, typeInfo, typeDebug, typePlain, typeRaw),
 					schemahelper.WithDefault(typeInfo),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(10)),
 				),
@@ -325,6 +326,16 @@ inputs:
   format: tree
   label: Dependencies`,
 				},
+				{
+					Name:        "Raw output",
+					Description: "Write raw content to stdout without formatting or length limits",
+					YAML: `name: emit-json
+provider: message
+inputs:
+  message:
+    rslvr: registry_index_json
+  type: raw`,
+				},
 			},
 		},
 	}
@@ -387,6 +398,17 @@ func (p *MessageProvider) executeTextMode(ctx context.Context, inputs map[string
 	dest := stringField(inputs, fieldDestination, destStdout)
 	newline := boolField(inputs, fieldNewline, true)
 
+	// Raw mode: write content directly without formatting or length limits.
+	if msgType == typeRaw {
+		return p.executeRawMode(ctx, inputs, msgStr, dest, newline)
+	}
+
+	// Enforce maxLength at runtime for non-raw types (schema no longer carries it
+	// because JSON Schema cannot conditionally apply maxLength based on type).
+	if len(msgStr) > maxMessageLength {
+		return nil, fmt.Errorf("%s: message exceeds maximum length of %d characters (use type: raw for large output)", ProviderName, maxMessageLength)
+	}
+
 	// Get settings from context for quiet/noColor.
 	noColor := false
 	isQuiet := false
@@ -424,6 +446,54 @@ func (p *MessageProvider) executeTextMode(ctx context.Context, inputs map[string
 		Data: map[string]any{
 			"success": true,
 			"message": plain,
+		},
+		Streamed: streamed,
+	}, nil
+}
+
+// rawOnlyRejectedFields are input fields that are not supported in raw mode.
+var rawOnlyRejectedFields = []string{fieldStyle, fieldLabel}
+
+// executeRawMode writes content directly to stdout without formatting, color,
+// icons, or length limits. This is intended for machine-readable output such as
+// JSON or YAML blobs produced by solutions.
+func (p *MessageProvider) executeRawMode(ctx context.Context, inputs map[string]any, content, dest string, newline bool) (*provider.Output, error) {
+	lgr := logger.FromContext(ctx)
+
+	// Reject fields that are meaningless in raw mode.
+	for _, field := range rawOnlyRejectedFields {
+		if _, ok := inputs[field]; ok {
+			return nil, fmt.Errorf("%s: '%s' is not supported with type: raw", ProviderName, field)
+		}
+	}
+
+	// Build the raw output (no ANSI, no icon, no wrapping).
+	output := content
+	if newline {
+		output += "\n"
+	}
+
+	// Write to the terminal. Raw mode ignores --quiet because it is intended
+	// for machine-readable output that callers may pipe or redirect.
+	streamed := false
+	ioStreams, ok := provider.IOStreamsFromContext(ctx)
+	if ok && ioStreams != nil {
+		if err := p.writeToTerminal(ioStreams, output, dest); err != nil {
+			return nil, fmt.Errorf("%s: failed to write raw output: %w", ProviderName, err)
+		}
+		streamed = true
+	}
+
+	lgr.V(1).Info("Raw output",
+		fieldDestination, dest,
+		"length", len(content),
+		"written", streamed,
+	)
+
+	return &provider.Output{
+		Data: map[string]any{
+			"success": true,
+			"message": content,
 		},
 		Streamed: streamed,
 	}, nil
@@ -560,6 +630,15 @@ func whatIf(_ context.Context, input any) (string, error) {
 	dest := stringField(inputs, fieldDestination, destStdout)
 	label := stringField(inputs, fieldLabel, "")
 	msg := stringField(inputs, fieldMessage, "")
+
+	// Raw mode: describe the raw output with content length.
+	if msgType == typeRaw {
+		if msg == "" {
+			return fmt.Sprintf("Would write raw output to %s", dest), nil
+		}
+		return fmt.Sprintf("Would write raw output (%d bytes) to %s", len(msg), dest), nil
+	}
+
 	if msg == "" {
 		if label != "" {
 			return fmt.Sprintf("Would output %s message [%s] to %s", msgType, label, dest), nil
@@ -782,6 +861,20 @@ func (p *MessageProvider) executeDryRun(inputs map[string]any) (*provider.Output
 	dest := stringField(inputs, fieldDestination, destStdout)
 	label := stringField(inputs, fieldLabel, "")
 	msg := stringField(inputs, fieldMessage, "<dynamic>")
+
+	// Raw mode dry-run.
+	if msgType == typeRaw {
+		desc := fmt.Sprintf("[dry-run] Would write raw output (%d bytes) to %s", len(msg), dest)
+		return &provider.Output{
+			Data: map[string]any{
+				"success": true,
+				"message": msg,
+			},
+			Metadata: map[string]any{
+				"description": desc,
+			},
+		}, nil
+	}
 
 	desc := fmt.Sprintf("[dry-run] Would output %s message to %s: %s", msgType, dest, msg)
 	if label != "" {

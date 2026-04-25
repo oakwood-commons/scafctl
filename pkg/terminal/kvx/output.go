@@ -424,7 +424,7 @@ func (o *OutputOptions) Snapshot(data any) (string, error) {
 }
 
 // Write outputs data in the configured format with kvx support.
-// It handles automatic fallback to JSON when output is piped,
+// It handles automatic fallback to plain text when output is piped,
 // CEL expression filtering, and interactive TUI mode.
 func (o *OutputOptions) Write(data any) error {
 	// Quiet mode: no output

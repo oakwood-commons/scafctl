@@ -7019,11 +7019,13 @@ func TestIntegration_RenderSolution_PositionalPathRejected(t *testing.T) {
 	assert.Contains(t, stderr, "local file paths must use -f/--file flag")
 }
 
-func TestIntegration_RunResolver_PositionalPathRejected(t *testing.T) {
+func TestIntegration_RunResolver_PositionalArgsAreNames(t *testing.T) {
 	t.Parallel()
-	_, stderr, exitCode := runScafctl(t, "run", "resolver", "./my-solution.yaml")
-	assert.NotEqual(t, 0, exitCode)
-	assert.Contains(t, stderr, "local file paths must use -f/--file flag")
+	// With the new behavior, positional args are treated as resolver names.
+	// ./my-solution.yaml is treated as a resolver name, not a file path.
+	// The command should NOT produce a "local file paths must use -f/--file" error.
+	_, stderr, _ := runScafctl(t, "run", "resolver", "./my-solution.yaml")
+	assert.NotContains(t, stderr, "local file paths must use -f/--file flag")
 }
 
 func TestIntegration_SolutionDiff_PositionalPathRejected(t *testing.T) {

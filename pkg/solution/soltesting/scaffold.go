@@ -6,12 +6,16 @@ package soltesting
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"gopkg.in/yaml.v3"
 )
+
+// filesBaseTemplateName is the name of the generated template case for shared files.
+const filesBaseTemplateName = "_files-base"
 
 // ScaffoldResult holds the generated test scaffold for a solution.
 type ScaffoldResult struct {
@@ -56,14 +60,23 @@ func Scaffold(input *ScaffoldInput) *ScaffoldResult {
 		addActionTests(result, input.Workflow)
 	}
 
-	// Auto-populate discovered file dependencies on all generated test cases
+	// Auto-populate discovered file dependencies.
+	// Generate a _files-base template case so all test cases inherit shared
+	// file dependencies via extends rather than duplicating the list.
 	if len(input.FileDependencies) > 0 {
 		sorted := make([]string, len(input.FileDependencies))
 		copy(sorted, input.FileDependencies)
+		normalizeFilePaths(sorted)
 		sort.Strings(sorted)
 
-		for _, tc := range result.Cases {
-			tc.Files = sorted
+		result.Cases[filesBaseTemplateName] = &TestCase{
+			Description: "Shared file dependencies for all test cases",
+			Files:       sorted,
+		}
+		for name, tc := range result.Cases {
+			if name != filesBaseTemplateName {
+				tc.Extends = []string{filesBaseTemplateName}
+			}
 		}
 	}
 
@@ -185,7 +198,7 @@ func addActionTests(result *ScaffoldResult, wf *action.Workflow) {
 		tc := &TestCase{
 			Description: fmt.Sprintf("Verify action %q executes successfully", name),
 			Command:     []string{"run", "action"},
-			Args:        []string{"--action", name},
+			Args:        []string{name},
 			Tags:        []string{"actions"},
 		}
 
@@ -202,6 +215,14 @@ func addActionTests(result *ScaffoldResult, wf *action.Workflow) {
 		exitCodeZero := 0
 		tc.ExitCode = &exitCodeZero
 		result.Cases[testName] = tc
+	}
+}
+
+// normalizeFilePaths converts backslash separators to forward slashes in-place
+// so generated paths work on all platforms.
+func normalizeFilePaths(paths []string) {
+	for i, p := range paths {
+		paths[i] = strings.ReplaceAll(p, "\\", "/")
 	}
 }
 

@@ -1177,3 +1177,125 @@ func TestExtractDepsFromProviderInputs_NilFallback(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractDepsFromTemplateWithExclusions(t *testing.T) {
+	tests := []struct {
+		name    string
+		tmpl    string
+		exclude map[string]bool
+		want    []string
+	}{
+		{
+			name:    "no exclusions",
+			tmpl:    "{{ .config }} {{ .region }}",
+			exclude: nil,
+			want:    []string{"config", "region"},
+		},
+		{
+			name:    "exclude data key",
+			tmpl:    "{{ .config.host }}:{{ .region }}",
+			exclude: map[string]bool{"config": true},
+			want:    []string{"region"},
+		},
+		{
+			name:    "exclude all keys",
+			tmpl:    "{{ toYaml .config }}",
+			exclude: map[string]bool{"config": true},
+			want:    []string{},
+		},
+		{
+			name:    "underscore refs not affected by exclusions",
+			tmpl:    "{{ ._.environment }} {{ .config }}",
+			exclude: map[string]bool{"config": true},
+			want:    []string{"environment"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deps := make(map[string]bool)
+			extractDepsFromTemplateWithExclusions(tt.tmpl, deps, tt.exclude)
+
+			wantMap := make(map[string]bool)
+			for _, dep := range tt.want {
+				wantMap[dep] = true
+			}
+
+			assert.Equal(t, wantMap, deps, "extracted dependencies should match")
+		})
+	}
+}
+
+func TestExtractDataKeys(t *testing.T) {
+	tests := []struct {
+		name   string
+		inputs map[string]*ValueRef
+		want   map[string]bool
+	}{
+		{
+			name:   "no data input",
+			inputs: map[string]*ValueRef{"template": {Literal: "{{ .name }}"}},
+			want:   nil,
+		},
+		{
+			name: "data input with map literal",
+			inputs: map[string]*ValueRef{
+				"template": {Literal: "{{ .config }}"},
+				"data":     {Literal: map[string]any{"config": map[string]any{"port": 8080}, "name": "test"}},
+			},
+			want: map[string]bool{"config": true, "name": true},
+		},
+		{
+			name: "data input is not a map",
+			inputs: map[string]*ValueRef{
+				"data": {Literal: "not a map"},
+			},
+			want: nil,
+		},
+		{
+			name: "data input is resolver ref",
+			inputs: map[string]*ValueRef{
+				"data": {Resolver: stringPtr("myresolver")},
+			},
+			want: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractDataKeys(tt.inputs)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestExtractDeps_GoTemplateDataExclusion(t *testing.T) {
+	// Integration test: a resolver using go-template with data input should
+	// not create false dependencies on data keys.
+	resolver := &Resolver{
+		Name: "my-template",
+		Resolve: &ResolvePhase{
+			With: []ProviderSource{
+				{
+					Provider: "go-template",
+					Inputs: map[string]*ValueRef{
+						"name":     {Literal: "test"},
+						"template": {Literal: "{{ toYaml .config }} {{ .appName }}"},
+						"data": {Literal: map[string]any{
+							"config":  map[string]any{"port": 8080},
+							"appName": "myapp",
+						}},
+					},
+				},
+			},
+		},
+	}
+
+	deps := extractDependencies(resolver, nil)
+
+	// config and appName are provided by data, not resolvers
+	for _, dep := range deps {
+		assert.NotEqual(t, "config", dep, "config should not be a dependency (provided by data)")
+		assert.NotEqual(t, "appName", dep, "appName should not be a dependency (provided by data)")
+	}
+}

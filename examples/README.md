@@ -91,6 +91,7 @@ Action workflows demonstrate executing tasks with dependencies, parallelism, and
 | [template-render.yaml](actions/template-render.yaml) | Render files from templates | `scafctl run solution -f examples/actions/template-render.yaml` |
 | [go-template-inline.yaml](actions/go-template-inline.yaml) | Inline Go templates with loops/conditionals | `scafctl run solution -f examples/actions/go-template-inline.yaml` |
 | [complex-workflow.yaml](actions/complex-workflow.yaml) | Full CI/CD-style workflow | `scafctl run solution -f examples/actions/complex-workflow.yaml` |
+| [tmpl-with-actions.yaml](actions/tmpl-with-actions.yaml) | Using tmpl: to format __actions results | `scafctl run solution -f examples/actions/tmpl-with-actions.yaml` |
 
 ---
 
@@ -139,6 +140,13 @@ Resolvers demonstrate dynamic value computation, validation, and transformation.
 | [cel-transforms.yaml](resolvers/cel-transforms.yaml) | Data transformation patterns with CEL | `scafctl run resolver -f examples/resolvers/cel-transforms.yaml -o yaml` |
 | [go-template-sprig.yaml](resolvers/go-template-sprig.yaml) | Sprig v3 functions in Go templates | `scafctl run resolver -f examples/resolvers/go-template-sprig.yaml -o json` |
 | [go-template-extensions.yaml](resolvers/go-template-extensions.yaml) | Custom Go template extensions (toHcl, toYaml, fromYaml) | `scafctl run resolver -f examples/resolvers/go-template-extensions.yaml -o json` |
+| [go-template-ignored-blocks.yaml](resolvers/go-template-ignored-blocks.yaml) | Using scafctl:ignore blocks to skip rendering | `scafctl run resolver -f examples/resolvers/go-template-ignored-blocks.yaml` |
+| [cel-basics.yaml](resolvers/cel-basics.yaml) | CEL expression basics: literals, operators, lists | `scafctl run resolver -f examples/resolvers/cel-basics.yaml -o json` |
+| [cel-builtins.yaml](resolvers/cel-builtins.yaml) | CEL built-in functions: math, encoding, sets | `scafctl run resolver -f examples/resolvers/cel-builtins.yaml -o json` |
+| [cel-common-patterns.yaml](resolvers/cel-common-patterns.yaml) | Conditionals, map building, filtering, merging | `scafctl run resolver -f examples/resolvers/cel-common-patterns.yaml -o json` |
+| [foreach-filter.yaml](resolvers/foreach-filter.yaml) | ForEach in resolve phase with filter | `scafctl run resolver -f examples/resolvers/foreach-filter.yaml -o json` |
+| [plan-aware.yaml](resolvers/plan-aware.yaml) | Resolvers that adapt to execution phase | `scafctl run resolver -f examples/resolvers/plan-aware.yaml` |
+| [messages.yaml](resolvers/messages.yaml) | Custom error messages on resolver failure | `scafctl run resolver -f examples/resolvers/messages.yaml` |
 
 ---
 
@@ -155,9 +163,9 @@ Complete solutions demonstrating real-world use cases.
 | [k8s-clusters/](solutions/k8s-clusters/) | Read a Go template file, iterate 10 K8s clusters, render and write unique manifests |
 | [bad-solution-yaml/](solutions/bad-solution-yaml/) | Invalid solution demonstrating error handling for conflicting ValueRef keys |
 | [tested-solution/](solutions/tested-solution/) | Functional testing features: assertions, inheritance, tags, watch mode |
-| [scaffold-demo/](solutions/scaffold-demo/) | Test scaffolding with `scafctl test init` — generates starter test suites |
-| [github-auth/](solutions/github-auth/) | GitHub authentication — identity, API calls, and status checks |
-| [message-demo/](solutions/message-demo/) | Message provider — styled terminal output with templates |
+| [scaffold-demo/](solutions/scaffold-demo/) | Test scaffolding with `scafctl test init` -- generates starter test suites |
+| [github-auth/](solutions/github-auth/) | GitHub authentication -- identity, API calls, and status checks |
+| [message-demo/](solutions/message-demo/) | Message provider -- styled terminal output with templates |
 
 ---
 

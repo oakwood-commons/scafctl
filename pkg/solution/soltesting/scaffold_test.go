@@ -107,6 +107,10 @@ func TestScaffold_WithActions(t *testing.T) {
 	// Action tests should include provider tag
 	assert.Contains(t, result.Cases["action-build"].Tags, "exec")
 	assert.Contains(t, result.Cases["action-build"].Tags, "actions")
+
+	// Action name should be a positional arg, not a flag
+	assert.Equal(t, []string{"build"}, result.Cases["action-build"].Args)
+	assert.Equal(t, []string{"test"}, result.Cases["action-test"].Args)
 }
 
 func TestScaffold_ConditionalAction(t *testing.T) {
@@ -211,7 +215,7 @@ func exprPtr(s string) *celexp.Expression {
 	return &e
 }
 
-func TestScaffold_FileDependenciesPopulatedOnAllCases(t *testing.T) {
+func TestScaffold_FileDependenciesUseTemplate(t *testing.T) {
 	input := &ScaffoldInput{
 		Resolvers: map[string]*resolver.Resolver{
 			"region": {
@@ -227,10 +231,38 @@ func TestScaffold_FileDependenciesPopulatedOnAllCases(t *testing.T) {
 
 	result := Scaffold(input)
 
-	// Every generated case should have the file dependencies
+	// Multiple cases => _files-base template should be generated
+	require.Contains(t, result.Cases, "_files-base")
+	tmpl := result.Cases["_files-base"]
+	assert.Equal(t, []string{"data/config.json", "templates/main.yaml"}, tmpl.Files)
+
+	// All non-template cases should extend _files-base and have no inline files
 	for name, tc := range result.Cases {
-		assert.Equal(t, []string{"data/config.json", "templates/main.yaml"}, tc.Files,
-			"test case %q should have sorted file dependencies", name)
+		if name == "_files-base" {
+			continue
+		}
+		assert.Equal(t, []string{"_files-base"}, tc.Extends,
+			"test case %q should extend _files-base", name)
+		assert.Nil(t, tc.Files,
+			"test case %q should not have inline files", name)
+	}
+}
+
+func TestScaffold_NormalizeBackslashPaths(t *testing.T) {
+	input := &ScaffoldInput{
+		FileDependencies: []string{
+			"templates\\.github\\copilot.md.tpl",
+			"templates\\.github\\instructions\\terraform.md.tpl",
+		},
+	}
+
+	result := Scaffold(input)
+
+	// Single case (3 builtins) => template used; check paths are normalized
+	tmpl := result.Cases["_files-base"]
+	require.NotNil(t, tmpl)
+	for _, f := range tmpl.Files {
+		assert.NotContains(t, f, "\\", "paths should use forward slashes: %s", f)
 	}
 }
 

@@ -299,6 +299,11 @@ type TestConfig struct {
 	// Cleanup contains suite-level teardown steps run once after all tests complete, even on failure.
 	Cleanup []InitStep `json:"cleanup,omitempty" yaml:"cleanup,omitempty" doc:"Suite-level teardown steps. Run once after all tests complete, even on failure" maxItems:"50"`
 
+	// Files lists shared file paths, globs, or directories copied into every test sandbox.
+	// These are merged with per-test files; per-test entries are appended after config files.
+	// Duplicates are deduplicated during sandbox creation (first-seen-wins).
+	Files []string `json:"files,omitempty" yaml:"files,omitempty" doc:"Shared files copied into every test sandbox" maxItems:"50"`
+
 	// Services defines background services started before tests and stopped after.
 	// Currently supports "http" type which starts a mock HTTP server.
 	Services []ServiceConfig `json:"services,omitempty" yaml:"services,omitempty" doc:"Background services started before tests" maxItems:"10"`
@@ -623,6 +628,10 @@ type TestResult struct {
 	RetryAttempt int `json:"retryAttempt,omitempty"`
 	// SandboxPath is the sandbox directory path (when --keep-sandbox is set).
 	SandboxPath string `json:"sandboxPath,omitempty"`
+	// Stdout is the captured stdout from the test command (included on failure).
+	Stdout string `json:"stdout,omitempty"`
+	// Stderr is the captured stderr from the test command (included on failure).
+	Stderr string `json:"stderr,omitempty"`
 }
 
 // AssertionResult captures the outcome of a single assertion.

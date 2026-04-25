@@ -161,10 +161,16 @@ func (s *Server) handleGenerateTestScaffold(_ context.Context, request mcp.CallT
 			},
 			"fileDependencies": func() string {
 				if len(input.FileDependencies) > 0 {
-					return fmt.Sprintf("Detected %d file dependencies from provider inputs. These have been auto-populated in each test case's 'files' field.", len(input.FileDependencies))
+					return fmt.Sprintf("Detected %d file dependencies from provider inputs. A _files-base template case has been generated and all test cases extend it via 'extends: [_files-base]'.", len(input.FileDependencies))
 				}
-				return "No file dependencies were detected. If your solution references external files (templates, configs, etc.), add them to each test case's 'files' field."
+				return "No file dependencies were detected. If your solution references external files (templates, configs, etc.), add them to each test case's 'files' field or create a _files-base template case and extend it."
 			}(),
+			"templates": []string{
+				"Template cases start with '_' (e.g., _files-base) and are not executed as tests",
+				"Tests inherit from templates via extends: [_template-name] (must be an array)",
+				"Templates are defined alongside regular cases in spec.testing.cases",
+				"Use templates to share files, env vars, or other common config across tests",
+			},
 			"commonPatterns": []string{
 				"Use 'expr' in assertions to write CEL expressions that check resolved values",
 				"Use 'contains' for partial string matching in resolver outputs",

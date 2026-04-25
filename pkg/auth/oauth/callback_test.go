@@ -464,3 +464,34 @@ func TestImplicitCallbackServer_AllowsSameOrigin(t *testing.T) {
 		t.Fatal("timed out waiting for callback result")
 	}
 }
+
+func TestAuthErrorHTML_ContainsTroubleshooting(t *testing.T) {
+	page := authErrorHTML("something went wrong")
+	assert.Contains(t, page, "Authentication Failed")
+	assert.Contains(t, page, "something went wrong")
+	assert.Contains(t, page, "Troubleshooting")
+	assert.Contains(t, page, "log in to your identity provider")
+}
+
+func TestCallbackServer_ErrorPageIncludesTroubleshooting(t *testing.T) {
+	ctx := context.Background()
+	cs, err := StartCallbackServer(ctx, 0, "")
+	require.NoError(t, err)
+	defer cs.Close()
+
+	resp, err := http.Get(fmt.Sprintf("%s/?error=access_denied&error_description=user+not+found", cs.RedirectURI)) //nolint:noctx // test code
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), "Troubleshooting")
+	assert.Contains(t, string(body), "log in to your identity provider")
+
+	select {
+	case result := <-cs.ResultChan():
+		assert.Error(t, result.Err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for callback result")
+	}
+}

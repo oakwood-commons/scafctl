@@ -414,6 +414,43 @@ func TestCollectReferencedResolvers_NestedInArray(t *testing.T) {
 	assert.True(t, refs["env"], "should detect rslvr inside array elements")
 }
 
+func TestCollectReferencedResolvers_StringLiteralWithResolverRef(t *testing.T) {
+	// CEL provider's `expression` input is a plain string literal containing
+	// _.resolverName and has(_.resolverName) patterns. These must be detected.
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"localIpWindows": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{Provider: "exec"}},
+					},
+				},
+				"localIpUnix": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{Provider: "exec"}},
+					},
+				},
+				"localIp": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "cel",
+							Inputs: map[string]*spec.ValueRef{
+								"expression": {
+									Literal: `has(_.localIpWindows) ? _.localIpWindows : has(_.localIpUnix) ? _.localIpUnix : ""`,
+								},
+							},
+						}},
+					},
+				},
+			},
+		},
+	}
+
+	refs := collectReferencedResolvers(sol)
+	assert.True(t, refs["localIpWindows"], "should detect resolver ref in string literal (has pattern)")
+	assert.True(t, refs["localIpUnix"], "should detect resolver ref in string literal (has pattern)")
+}
+
 func TestLintResolverSelfReferences(t *testing.T) {
 	validationProv := newFakeProvider("validation", map[string]*jsonschema.Schema{
 		"expression": {Type: "string"},

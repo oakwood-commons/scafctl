@@ -69,12 +69,19 @@ func WarningMessage(msg string, noColor bool) string {
 
 // ErrorMessage returns an error message string, optionally prefixed with a styled error icon.
 // If noColor is true, the message is returned without styling or icon.
-// Otherwise, the message is prefixed with a styled "❌" icon.
+// Otherwise, the message is prefixed with a styled "❌" icon and the text is rendered in red.
+// Multi-line messages are styled per-line to avoid double-spacing on Windows
+// (lipgloss inserts \r\n for each embedded newline on Windows terminals).
 func ErrorMessage(msg string, noColor bool) string {
 	if noColor {
 		return msg
 	}
-	return styles.ErrorStyle.Render("❌") + msg
+	icon := styles.ErrorStyle.Render("❌")
+	lines := strings.Split(msg, "\n")
+	for i, line := range lines {
+		lines[i] = styles.ErrorTextStyle.Render(line)
+	}
+	return icon + strings.Join(lines, "\n")
 }
 
 // InfoMessage formats an informational message for terminal output.

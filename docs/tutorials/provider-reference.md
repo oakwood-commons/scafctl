@@ -43,6 +43,7 @@ Providers are execution primitives used by resolvers and actions. Each provider 
 | [parameter](#parameter) | ✅ | ❌ | ❌ | ❌ |
 | [secret](#secret) | ✅ | ❌ | ❌ | ❌ |
 | [sleep](#sleep) | ✅ | ✅ | ✅ | ✅ |
+| [solution](#solution) | ✅ | ❌ | ❌ | ✅ |
 | [static](#static) | ✅ | ✅ | ❌ | ❌ |
 | [validation](#validation) | ❌ | ✅ | ✅ | ❌ |
 
@@ -322,7 +323,7 @@ Execute shell commands using an embedded cross-platform POSIX shell interpreter.
 | `args` | array | ❌ | — | Additional arguments appended to the command. Arguments are automatically shell-quoted for safety |
 | `stdin` | string | ❌ | — | Standard input to provide to the command |
 | `workingDir` | string | ❌ | — | Working directory for command execution |
-| `env` | object | ❌ | — | Environment variables to set (key-value pairs). Merged with the parent process environment |
+| `env` | object | ❌ | — | Environment variables to set (key-value pairs). Merged with the parent process environment. `NO_COLOR=1` and `TERM=dumb` are injected automatically to prevent child processes from emitting ANSI escape codes in captured output (override by setting them explicitly) |
 | `timeout` | int | ❌ | — | Timeout in seconds (0 or omit for no timeout, max 3600) |
 | `shell` | string | ❌ | `auto` | Shell interpreter to use: `auto` (embedded POSIX shell — works on all platforms), `sh` (alias for auto), `bash` (external bash), `pwsh` (external PowerShell Core), `cmd` (external cmd.exe — Windows only) |
 
@@ -559,9 +560,9 @@ The git provider enforces several security measures:
 
 ## github
 
-Interact with GitHub via GraphQL (reads, issues, PRs, signed commits, branches, tags, repos) and REST (releases, rulesets, security settings). Uses the configured GitHub auth handler automatically. Commit operations use `createCommitOnBranch` for GPG-signed multi-file atomic commits.
+Interact with GitHub via GraphQL (reads, issues, PRs, review threads, signed commits, branches, tags, repos, branch protection) and REST (releases, CI check runs, workflow runs, labels, milestones, reactions, collaborators, webhooks, Actions workflows, variables, environments, repo settings, topics, custom properties, security settings). Uses the configured GitHub auth handler automatically. Commit operations use `createCommitOnBranch` for GPG-signed multi-file atomic commits. Includes a generic `api_call` operation for arbitrary GitHub REST endpoints.
 
-> For arbitrary HTTP requests to GitHub, use the `http` provider with `auth: github`.
+> For arbitrary GitHub REST endpoints not covered by a named operation, use the built-in `api_call` operation instead of falling back to the `http` provider.
 
 ### Capabilities
 
@@ -613,6 +614,61 @@ Interact with GitHub via GraphQL (reads, issues, PRs, signed commits, branches, 
 | `allow_force_pushes` | bool | ❌ | Allow force pushes to matching refs |
 | `allow_deletions` | bool | ❌ | Allow deletion of matching refs |
 | `requires_commit_signatures` | bool | ❌ | Require signed commits |
+| `commit_sha` | string | ❌ | Commit SHA for `list_commit_pulls` (alias: `sha`) |
+| `endpoint` | string | ❌ | Relative API path for `api_call` (e.g. `/repos/{owner}/{repo}/labels`). Must start with `/` |
+| `method` | string | ❌ | HTTP method for `api_call`: `GET`, `POST`, `PUT`, `PATCH`, `DELETE` (default: `GET`) |
+| `request_body` | object | ❌ | Request body for `api_call` (used with POST/PUT/PATCH) |
+| `query_params` | object | ❌ | Query string parameters for `api_call` (e.g. `{per_page: 100}`) |
+| `state_reason` | string | ❌ | Reason for closing an issue: `completed`, `not_planned`, `reopened` |
+| `thread_id` | string | ❌ | Review thread node ID for `reply_to_review_thread` and `resolve_review_thread` |
+| `run_id` | int | ❌ | Workflow run ID for `get_workflow_run`, `cancel_workflow_run`, `rerun_workflow` |
+| `commit_title` | string | ❌ | Commit title for `merge_pull_request` |
+| `commit_message` | string | ❌ | Commit message body for `merge_pull_request` |
+| `message_body` | string | ❌ | Extended commit message body for `create_commit` |
+| `description` | string | ❌ | Description for repo, label, milestone, or environment |
+| `label_name` | string | ❌ | Label name for label CRUD operations |
+| `new_label_name` | string | ❌ | New label name when renaming (`update_label`) |
+| `color` | string | ❌ | Hex color code for labels, without `#` (e.g. `00ff00`) |
+| `label_description` | string | ❌ | Description for a label |
+| `milestone_number` | int | ❌ | Milestone number for update/delete operations |
+| `due_on` | string | ❌ | Due date for milestone (ISO 8601: `YYYY-MM-DDTHH:MM:SSZ`) |
+| `reaction_content` | string | ❌ | Reaction emoji: `+1`, `-1`, `laugh`, `confused`, `heart`, `hooray`, `rocket`, `eyes` |
+| `reaction_subject` | string | ❌ | Subject type for reaction: `issue`, `pull_request`, `issue_comment` (default: `issue`) |
+| `reaction_id` | int | ❌ | Reaction ID for `delete_reaction` |
+| `comment_id` | int | ❌ | Comment ID for reaction/comment operations |
+| `username` | string | ❌ | GitHub username for collaborator operations |
+| `permission` | string | ❌ | Permission level: `pull`, `triage`, `push`, `maintain`, `admin` |
+| `webhook_url` | string | ❌ | Payload URL for the webhook |
+| `webhook_events` | array | ❌ | Events that trigger the webhook (e.g. `["push", "pull_request"]`) |
+| `webhook_content_type` | string | ❌ | Content type for webhook payloads: `json` or `form` (default: `json`) |
+| `webhook_secret` | string | ❌ | Secret for webhook signature verification (sensitive) |
+| `webhook_active` | bool | ❌ | Whether the webhook is active |
+| `hook_id` | int | ❌ | Webhook ID for update/delete operations |
+| `workflow_id` | string | ❌ | Workflow file name or numeric ID (e.g. `ci.yml`) |
+| `workflow_inputs` | object | ❌ | Input parameters for `dispatch_workflow` |
+| `workflow_status` | string | ❌ | Filter workflow runs by status (e.g. `completed`, `in_progress`, `queued`) |
+| `variable_name` | string | ❌ | Repository variable name |
+| `variable_value` | string | ❌ | Repository variable value |
+| `environment_name` | string | ❌ | Deployment environment name |
+| `wait_timer` | int | ❌ | Wait timer in minutes before deployments proceed (0--43200) |
+| `reviewers` | array | ❌ | Required reviewers for environment (objects with `type` and `id`) |
+| `homepage` | string | ❌ | Repository homepage URL (`update_repo`) |
+| `default_branch` | string | ❌ | Default branch name (`update_repo`) |
+| `has_issues` | bool | ❌ | Enable issues feature (`update_repo`) |
+| `has_projects` | bool | ❌ | Enable projects feature (`update_repo`) |
+| `has_wiki` | bool | ❌ | Enable wiki feature (`update_repo`) |
+| `allow_squash_merge` | bool | ❌ | Allow squash merging (`update_repo`) |
+| `allow_merge_commit` | bool | ❌ | Allow merge commits (`update_repo`) |
+| `allow_rebase_merge` | bool | ❌ | Allow rebase merging (`update_repo`) |
+| `delete_branch_on_merge` | bool | ❌ | Auto-delete head branches after merge (`update_repo`) |
+| `archived` | bool | ❌ | Archive the repository (`update_repo`) |
+| `topics` | array | ❌ | Repository topics/tags for `replace_topics` |
+| `organization` | string | ❌ | Organization to fork into (`fork_repo`) |
+| `default_branch_only` | bool | ❌ | Fork only the default branch (`fork_repo`) |
+| `new_repo_name` | string | ❌ | Name for new repository (`create_from_template`) |
+| `new_owner` | string | ❌ | Owner for new repository (`create_from_template`) |
+| `include_all_branches` | bool | ❌ | Include all branches when creating from template |
+| `properties` | object | ❌ | Custom properties to set (key-value map for `set_custom_properties`) |
 
 ### Operations
 
@@ -633,6 +689,22 @@ Interact with GitHub via GraphQL (reads, issues, PRs, signed commits, branches, 
 | `get_branch` | Get a single branch |
 | `list_tags` | List tags |
 | `get_head_oid` | Get HEAD commit SHA for a branch |
+| `list_pr_comments` | List comments on a pull request |
+| `list_review_threads` | List review threads on a pull request |
+| `list_check_runs` | List check runs for a ref (REST) |
+| `get_workflow_run` | Get a workflow run by ID (REST) |
+| `list_workflow_runs` | List workflow runs (REST, filterable by status) |
+| `list_commit_pulls` | List pull requests associated with a commit SHA (REST) |
+| `list_labels` | List repository labels (REST) |
+| `list_milestones` | List milestones (REST) |
+| `list_reactions` | List reactions on an issue, PR, or comment (REST) |
+| `list_collaborators` | List repository collaborators (REST) |
+| `list_webhooks` | List repository webhooks (REST) |
+| `list_repo_variables` | List repository variables (REST) |
+| `list_environments` | List deployment environments (REST) |
+| `list_topics` | List repository topics (REST) |
+| `list_custom_properties` | List custom properties (REST) |
+| `api_call` | Generic REST API call to any GitHub endpoint (see below) |
 
 **Write operations** (capability: `action` — returns `success` boolean):
 
@@ -657,6 +729,47 @@ Interact with GitHub via GraphQL (reads, issues, PRs, signed commits, branches, 
 | `create_ruleset` | REST | Create a repository ruleset (branch or tag protection) |
 | `enable_vulnerability_alerts` | REST | Enable Dependabot vulnerability alerts |
 | `enable_automated_security_fixes` | REST | Enable Dependabot automated security fixes |
+| `update_repo` | REST | Update repository settings |
+| `reply_to_review_thread` | GraphQL | Reply to a review thread |
+| `resolve_review_thread` | GraphQL | Resolve a review thread |
+| `create_label` | REST | Create a repository label |
+| `update_label` | REST | Update a label (name, color, description) |
+| `delete_label` | REST | Delete a label |
+| `add_labels_to_issue` | REST | Add labels to an issue |
+| `remove_label_from_issue` | REST | Remove a label from an issue |
+| `create_milestone` | REST | Create a milestone |
+| `update_milestone` | REST | Update a milestone |
+| `delete_milestone` | REST | Delete a milestone |
+| `add_reaction` | REST | Add a reaction to an issue, PR, or comment |
+| `delete_reaction` | REST | Remove a reaction |
+| `add_collaborator` | REST | Add a repository collaborator |
+| `remove_collaborator` | REST | Remove a repository collaborator |
+| `create_webhook` | REST | Create a repository webhook |
+| `update_webhook` | REST | Update a webhook |
+| `delete_webhook` | REST | Delete a webhook |
+| `dispatch_workflow` | REST | Trigger a workflow dispatch event |
+| `cancel_workflow_run` | REST | Cancel a workflow run |
+| `rerun_workflow` | REST | Re-run a workflow |
+| `create_or_update_variable` | REST | Create or update a repository variable |
+| `delete_variable` | REST | Delete a repository variable |
+| `create_or_update_environment` | REST | Create or update a deployment environment |
+| `delete_environment` | REST | Delete a deployment environment |
+| `replace_topics` | REST | Replace all repository topics |
+| `fork_repo` | REST | Fork a repository |
+| `create_from_template` | REST | Create a repository from a template |
+| `set_custom_properties` | REST | Set custom properties on a repository |
+
+#### `api_call` operation
+
+A generic escape hatch for any GitHub REST API endpoint not covered by a named operation.
+Keeps auth handling, GHE hostname resolution, and API versioning consistent without
+needing the `http` provider.
+
+- `endpoint` is required and must be a relative path starting with `/`
+- Path traversal (`..`) and query strings (`?`) in `endpoint` are rejected -- use `query_params` instead
+- For `GET` requests, the output uses `readOutput` (same shape as other read operations)
+- For mutating methods (`POST`/`PUT`/`PATCH`/`DELETE`), the output uses `actionOutput`
+- `api_call` is intentionally excluded from the write-operation guard -- the user controls the HTTP method, so it cannot be classified at the provider level
 
 ### Output
 
@@ -787,6 +900,231 @@ action:
         operation: enable_vulnerability_alerts
         owner: my-org
         repo: my-repo
+
+# Update repository settings
+action:
+  with:
+    - provider: github
+      inputs:
+        operation: update_repo
+        owner: my-org
+        repo: my-repo
+        description: "Updated description"
+        has_wiki: false
+        delete_branch_on_merge: true
+
+# Reply to a review thread
+action:
+  with:
+    - provider: github
+      inputs:
+        operation: reply_to_review_thread
+        owner: my-org
+        repo: my-repo
+        thread_id: "PRRT_abc123"
+        body: "Fixed in the latest commit, thanks!"
+
+# Create and manage labels
+action:
+  with:
+    - provider: github
+      inputs:
+        operation: create_label
+        owner: my-org
+        repo: my-repo
+        label_name: "priority/critical"
+        color: "e11d48"
+        label_description: "Critical priority issues"
+
+# Add labels to an issue
+action:
+  with:
+    - provider: github
+      inputs:
+        operation: add_labels_to_issue
+        owner: my-org
+        repo: my-repo
+        number: 42
+        labels:
+          - bug
+          - priority/critical
+
+# Create a milestone
+action:
+  with:
+    - provider: github
+      inputs:
+        operation: create_milestone
+        owner: my-org
+        repo: my-repo
+        title: "v2.0.0"
+        description: "Second major release"
+        due_on: "2026-06-01T00:00:00Z"
+
+# Add a reaction to an issue
+action:
+  with:
+    - provider: github
+      inputs:
+        operation: add_reaction
+        owner: my-org
+        repo: my-repo
+        number: 42
+        reaction_content: "+1"
+
+# Add a collaborator
+action:
+  with:
+    - provider: github
+      inputs:
+        operation: add_collaborator
+        owner: my-org
+        repo: my-repo
+        username: octocat
+        permission: push
+
+# Create a webhook
+action:
+  with:
+    - provider: github
+      inputs:
+        operation: create_webhook
+        owner: my-org
+        repo: my-repo
+        webhook_url: "https://example.com/webhook"
+        webhook_events:
+          - push
+          - pull_request
+        webhook_content_type: json
+
+# Dispatch a workflow
+action:
+  with:
+    - provider: github
+      inputs:
+        operation: dispatch_workflow
+        owner: my-org
+        repo: my-repo
+        workflow_id: deploy.yml
+        ref: main
+        workflow_inputs:
+          environment: production
+
+# List workflow runs (read)
+resolve:
+  with:
+    - provider: github
+      inputs:
+        operation: list_workflow_runs
+        owner: my-org
+        repo: my-repo
+        workflow_id: ci.yml
+        workflow_status: completed
+
+# Create or update a repository variable
+action:
+  with:
+    - provider: github
+      inputs:
+        operation: create_or_update_variable
+        owner: my-org
+        repo: my-repo
+        variable_name: DEPLOY_ENV
+        variable_value: production
+
+# Create a deployment environment with reviewers
+action:
+  with:
+    - provider: github
+      inputs:
+        operation: create_or_update_environment
+        owner: my-org
+        repo: my-repo
+        environment_name: production
+        wait_timer: 30
+        reviewers:
+          - type: User
+            id: 12345
+
+# Replace repository topics
+action:
+  with:
+    - provider: github
+      inputs:
+        operation: replace_topics
+        owner: my-org
+        repo: my-repo
+        topics:
+          - go
+          - cli
+          - scaffolding
+
+# Fork a repository
+action:
+  with:
+    - provider: github
+      inputs:
+        operation: fork_repo
+        owner: upstream-org
+        repo: cool-project
+        organization: my-org
+        default_branch_only: true
+
+# Create from template
+action:
+  with:
+    - provider: github
+      inputs:
+        operation: create_from_template
+        owner: template-org
+        repo: go-template
+        new_owner: my-org
+        new_repo_name: my-new-service
+        description: "Service from template"
+        include_all_branches: false
+
+# List check runs for a ref (read)
+resolve:
+  with:
+    - provider: github
+      inputs:
+        operation: list_check_runs
+        owner: my-org
+        repo: my-repo
+        ref: main
+
+# List pull requests associated with a commit
+resolve:
+  with:
+    - provider: github
+      inputs:
+        operation: list_commit_pulls
+        owner: my-org
+        repo: my-repo
+        commit_sha: abc123def456
+
+# Generic REST API call (read)
+resolve:
+  with:
+    - provider: github
+      inputs:
+        operation: api_call
+        endpoint: /repos/my-org/my-repo/labels
+        query_params:
+          per_page: 100
+
+# Generic REST API call (write)
+action:
+  with:
+    - provider: github
+      inputs:
+        operation: api_call
+        endpoint: /repos/my-org/my-repo/labels
+        method: POST
+        request_body:
+          name: bug
+          color: d73a4a
+          description: "Something isn't working"
 ```
 
 > [!TIP]
@@ -1473,7 +1811,7 @@ resolve:
 
 ## metadata
 
-Returns runtime metadata about the scafctl process and the currently-executing solution. Requires no inputs — all data is gathered from the execution context and process environment. Useful for conditional logic, auditing, and passing runtime info to templates and downstream resolvers.
+Returns runtime metadata about the scafctl process and the currently-executing solution, including platform information. Requires no inputs -- all data is gathered from the execution context and process environment. Useful for conditional logic, auditing, cross-platform solutions, and passing runtime info to templates and downstream resolvers.
 
 ### Capabilities
 
@@ -1502,6 +1840,9 @@ None. The metadata provider accepts no inputs.
 | `solution.description` | string | Solution description |
 | `solution.category` | string | Solution category |
 | `solution.tags` | string[] | Solution tags |
+| `os` | string | Operating system (`runtime.GOOS`): `darwin`, `linux`, `windows`, etc. |
+| `arch` | string | CPU architecture (`runtime.GOARCH`): `amd64`, `arm64`, etc. |
+| `shell` | string | Detected shell name (e.g. `bash`, `zsh`, `fish`, `pwsh`, `powershell`, `cmd.exe`). On Unix, reads `$SHELL`. On Windows, detects PowerShell via `PSModulePath` and parent process inspection, then falls back to Git Bash (`$SHELL`) and finally `%ComSpec%`. Empty if not detected. |
 
 ### Examples
 
@@ -1539,7 +1880,7 @@ resolvers:
 
 ## message
 
-Outputs styled terminal messages with built-in types, custom formatting via lipgloss, destination control, and respects `--quiet` and `--no-color` flags. For dynamic interpolation, use the framework's `tmpl:` or `expr:` ValueRef on the `message` input — the provider does not handle templating internally.
+Outputs styled terminal messages with built-in types, custom formatting via lipgloss, destination control, and respects `--quiet` and `--no-color` flags. For dynamic interpolation, use the framework's `tmpl:` or `expr:` ValueRef on the `message` input --- the provider does not handle templating internally. Use `type: raw` for machine-readable output that bypasses the 8192-character limit and writes content directly without formatting.
 
 ### Capabilities
 
@@ -1549,10 +1890,10 @@ Outputs styled terminal messages with built-in types, custom formatting via lipg
 
 | Field | Type | Required | Description |
 |-------|------|:--------:|-------------|
-| `message` | string | ✅ | Message text to output. Use `tmpl:` or `expr:` ValueRef for dynamic interpolation. |
-| `type` | string | ❌ | Message type: `success`, `warning`, `error`, `info` (default), `debug`, `plain` |
-| `label` | string | ❌ | Contextual prefix rendered as dimmed `[label]` between icon and message (e.g., `step 2/5`) |
-| `style` | object | ❌ | Custom formatting that merges on top of type defaults: `color` (hex or named), `bold`, `italic`, `icon` |
+| `message` | string | ✅ | Message text to output. Use `tmpl:` or `expr:` ValueRef for dynamic interpolation. Limited to 8192 characters unless `type: raw`. |
+| `type` | string | ❌ | Message type: `success`, `warning`, `error`, `info` (default), `debug`, `plain`, `raw` |
+| `label` | string | ❌ | Contextual prefix rendered as dimmed `[label]` between icon and message (e.g., `step 2/5`). Not supported with `type: raw`. |
+| `style` | object | ❌ | Custom formatting that merges on top of type defaults: `color` (hex or named), `bold`, `italic`, `icon`. Not supported with `type: raw`. |
 | `destination` | string | ❌ | Output target: `stdout` (default) or `stderr` |
 | `newline` | bool | ❌ | Append trailing newline (default: `true`) |
 
@@ -1634,6 +1975,20 @@ resolvers:
             message:
               expr: "'Processed ' + string(size(_.items)) + ' items'"
             type: success
+```
+
+**Raw output (machine-readable, no length limit):**
+
+```yaml
+actions:
+  emit-index:
+    steps:
+      - provider: message
+        inputs:
+          message:
+            rslvr: registry_index_json
+          type: raw
+          newline: false
 ```
 
 ---
@@ -1775,6 +2130,89 @@ inputs:
 
 ---
 
+## solution
+
+Execute a sub-solution and return its results as a structured envelope. Supports recursive composition with circular reference detection and configurable depth limits. In `from` mode, only the resolver phase runs. In `action` mode, resolvers run first, then the workflow (if present).
+
+### Capabilities
+
+`from`, `action`
+
+### Inputs
+
+| Field | Type | Required | Description |
+|-------|------|:--------:|-------------|
+| `source` | string | Yes | Sub-solution location: file path, catalog reference (e.g. `deploy-to-k8s@2.0.0`), or URL |
+| `inputs` | object | ❌ | Parameters passed to the sub-solution's `parameter` provider |
+| `resolvers` | array | ❌ | Resolver names to execute from the child solution; when empty all resolvers run |
+| `propagateErrors` | bool | ❌ | Whether sub-solution failures cause a Go error (default: `true`) |
+| `maxDepth` | int | ❌ | Maximum nesting depth for recursive composition, 1--100 (default: `10`) |
+| `timeout` | string | ❌ | Maximum duration for sub-solution execution (Go duration, e.g. `30s`, `5m`) |
+
+### Output
+
+**From capability (resolver-only):**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `resolvers` | object | Resolver values from the sub-solution (keyed by resolver name) |
+| `status` | string | Overall status: `success` or `failed` |
+| `errors` | array | Resolver errors encountered during execution |
+
+**Action capability (resolvers + workflow):**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `resolvers` | object | Resolver values from the sub-solution |
+| `workflow` | object | Aggregate workflow status (`finalStatus`, `failedActions`, `skippedActions`) |
+| `status` | string | Overall status: `success` or `failed` |
+| `errors` | array | Resolver errors encountered during execution |
+| `success` | bool | Whether the solution succeeded |
+
+### Examples
+
+```yaml
+# Load child solution (from capability)
+resolve:
+  with:
+    - provider: solution
+      inputs:
+        source: "./child-solution.yaml"
+        inputs:
+          environment: "production"
+
+# Execute child solution with workflow (action capability)
+action:
+  with:
+    - provider: solution
+      inputs:
+        source: "deploy-to-k8s@2.0.0"
+        inputs:
+          cluster: prod-east
+          replicas: 3
+        timeout: "5m"
+
+# Select specific resolvers from child solution
+resolve:
+  with:
+    - provider: solution
+      inputs:
+        source: "./shared/config.yaml"
+        resolvers:
+          - database_config
+          - cache_config
+
+# Soft failures (don't propagate errors)
+resolve:
+  with:
+    - provider: solution
+      inputs:
+        source: "./optional-enrichment.yaml"
+        propagateErrors: false
+```
+
+---
+
 ## static
 
 Return a constant value. Useful for defaults and fallbacks.
@@ -1873,6 +2311,95 @@ validate:
         message: "Version must be semver format and >= v1.0.0"
 
 ```
+
+## forEach with Providers
+
+The `forEach` clause iterates over an array, executing a provider once per element and collecting results into an output array.
+
+### Supported Phases
+
+| Phase | Supported | `forEach.in` | Notes |
+|-------|:---------:|:------------:|-------|
+| `transform.with` | Yes | Optional (defaults to `__self`) | Most common -- transform an existing value |
+| `resolve.with` | Yes | **Required** | No `__self` in resolve phase |
+| `validate.with` | No | -- | Not supported |
+
+### forEach Clause Fields
+
+| Field | Type | Required | Description |
+|-------|------|:--------:|-------------|
+| `item` | string | No | Variable name alias for current array element. `__item` is always available. |
+| `index` | string | No | Variable name alias for current 0-based index. `__index` is always available. |
+| `in` | ValueRef | Resolve: Yes, Transform: No | Array to iterate over. Defaults to `__self` (transform only). |
+| `concurrency` | int | No | Maximum parallel iterations. `0` (default) means unlimited. |
+| `keepSkipped` | bool | No | Retain `nil` entries for items skipped by `when` condition (default: `false`). |
+| `onError` | string | No | Error handling: `fail` (default) or `continue`. Actions only; resolvers ignore this. |
+
+### How It Works
+
+1. The `in` source (or `__self` for transform) is evaluated to get an input array.
+2. The provider executes once per element, with `__item`/`__index` (and any custom aliases) injected into the expression context.
+3. Results are collected into an output array preserving order.
+4. If a `when` condition is present, items where `when` is `false` are removed from the output (unless `keepSkipped: true`).
+
+### Examples
+
+```yaml
+# Resolve: fan-out HTTP requests directly (no static placeholder needed)
+resolve:
+  with:
+    - provider: http
+      forEach:
+        in:
+          rslvr: moduleList
+        item: mod
+        concurrency: 10
+      inputs:
+        url:
+          expr: '"https://registry.example.com/v1/modules/" + mod.name + "/versions"'
+        method: GET
+        autoParseJson: true
+
+# Transform: double each number in an array
+transform:
+  with:
+    - provider: cel
+      forEach:
+        item: num
+        index: i
+      inputs:
+        expression: "num * 2"
+
+# Transform: filter and keep only active users
+transform:
+  with:
+    - provider: cel
+      forEach:
+        item: user
+      when:
+        expr: "user.active == true"
+      inputs:
+        expression: "user"
+
+# Preserve index alignment with keepSkipped
+transform:
+  with:
+    - provider: cel
+      forEach:
+        item: x
+        keepSkipped: true
+      when:
+        expr: "x > 5"
+      inputs:
+        expression: "x"
+```
+
+> [!NOTE]
+> On resolve steps, `forEach.in` is **required** because there is no `__self` in the resolve phase. On transform steps, `forEach.in` defaults to `__self` (the current value being transformed).
+
+For a full walkthrough with runnable examples, see the [Resolver Tutorial -- Array Iteration with forEach](resolver-tutorial.md#array-iteration-with-foreach).
+
+---
 
 ## Next Steps
 

@@ -23,6 +23,11 @@ var (
 			PaddingLeft(1).
 			PaddingRight(1)
 
+	// ErrorTextStyle styles the error message body (red, not bold).
+	// Used alongside ErrorStyle which styles the icon.
+	ErrorTextStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FF0000")) // Red
+
 	InfoStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#00FFFF")). // Cyan
 			PaddingLeft(1).

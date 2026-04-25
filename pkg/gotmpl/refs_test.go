@@ -277,6 +277,31 @@ func TestService_GetReferences(t *testing.T) {
 			},
 			want: []string{".Items", ".Name", ".Price"},
 		},
+		{
+			name: "builtin index function with __actions",
+			opts: TemplateOptions{
+				Name: "actions.tmpl",
+				Content: `{{ range (index .__actions "write-files" "results" "filesStatus") }}  - {{ .path }}
+{{ end }}`,
+			},
+			want: []string{".__actions", ".path"},
+		},
+		{
+			name: "builtin len function",
+			opts: TemplateOptions{
+				Name:    "len.tmpl",
+				Content: `{{ len .Items }} items: {{ .Title }}`,
+			},
+			want: []string{".Items", ".Title"},
+		},
+		{
+			name: "builtin printf function",
+			opts: TemplateOptions{
+				Name:    "printf.tmpl",
+				Content: `{{ printf "%s-%s" .Env .Region }}`,
+			},
+			want: []string{".Env", ".Region"},
+		},
 	}
 
 	for _, tt := range tests {

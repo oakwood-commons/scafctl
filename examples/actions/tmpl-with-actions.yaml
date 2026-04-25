@@ -1,0 +1,56 @@
+# Run: scafctl run solution -f examples/actions/tmpl-with-actions.yaml
+#
+# Demonstrates using tmpl: ValueRef to access __actions results.
+# The tmpl: input references __actions via Go template functions like
+# index, len, and printf. These are properly deferred until the
+# referenced actions complete.
+#
+# Action results are structured as:
+#   __actions.<name>.results.<field>
+#   __actions.<name>.status  (succeeded/failed/skipped)
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: tmpl-actions-demo
+  version: 1.0.0
+  description: Using Go templates to format action results
+
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "Hello from resolvers"
+
+  workflow:
+    actions:
+      fetch-data:
+        description: Simulate fetching data
+        provider: exec
+        inputs:
+          command: "echo 'fetched 42 records'"
+          raw: true
+
+      deploy:
+        description: Simulate deployment
+        provider: exec
+        inputs:
+          command: "echo 'deployed to staging'"
+          raw: true
+
+      format-summary:
+        description: Format action results using tmpl with __actions
+        provider: message
+        dependsOn: [fetch-data, deploy]
+        inputs:
+          message:
+            tmpl: |
+              Summary:
+              - Fetch: {{ index .__actions "fetch-data" "status" }} -> {{ index .__actions "fetch-data" "results" "stdout" | trim }}
+              - Deploy: {{ index .__actions "deploy" "status" }} -> {{ index .__actions "deploy" "results" "stdout" | trim }}
+              - Action count: {{ len .__actions }}
+          type: info

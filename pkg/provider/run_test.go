@@ -271,6 +271,126 @@ func TestRunProvider_WarningsAndMetadata(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// RunProvider write-operation auto-promote
+// ---------------------------------------------------------------------------
+
+func newWriteClassifierTestProvider(caps []Capability, writeOps []string, execFn func(context.Context, any) (*Output, error)) *mockExecutableProvider {
+	version, _ := semver.NewVersion("1.0.0")
+	return &mockExecutableProvider{
+		descriptor: &Descriptor{
+			Name:            "github",
+			APIVersion:      "v1",
+			Version:         version,
+			Description:     "Test provider with write operations",
+			Capabilities:    caps,
+			WriteOperations: writeOps,
+		},
+		executeFunc: execFn,
+	}
+}
+
+func TestRunProvider_AutoPromotesWriteOpToAction(t *testing.T) {
+	prov := newWriteClassifierTestProvider(
+		[]Capability{CapabilityFrom, CapabilityAction},
+		[]string{"create_issue"},
+		func(_ context.Context, _ any) (*Output, error) {
+			return &Output{Data: map[string]any{"id": 42}}, nil
+		},
+	)
+
+	result, err := RunProvider(context.Background(), RunOptions{
+		Provider: prov,
+		Inputs:   map[string]any{"operation": "create_issue", "title": "test"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "action", result.Capability)
+}
+
+func TestRunProvider_ReadOpStaysInFrom(t *testing.T) {
+	prov := newWriteClassifierTestProvider(
+		[]Capability{CapabilityFrom, CapabilityAction},
+		[]string{"create_issue"},
+		func(_ context.Context, _ any) (*Output, error) {
+			return &Output{Data: map[string]any{"issues": []string{}}}, nil
+		},
+	)
+
+	result, err := RunProvider(context.Background(), RunOptions{
+		Provider: prov,
+		Inputs:   map[string]any{"operation": "list_issues"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "from", result.Capability)
+}
+
+func TestRunProvider_ExplicitCapabilitySkipsAutoPromote(t *testing.T) {
+	prov := newWriteClassifierTestProvider(
+		[]Capability{CapabilityFrom, CapabilityAction},
+		[]string{"create_issue"},
+		nil,
+	)
+
+	// Explicitly requesting "from" for a write op should NOT auto-promote.
+	// The executor's ValidateWriteOperation will block it.
+	_, err := RunProvider(context.Background(), RunOptions{
+		Provider:   prov,
+		Inputs:     map[string]any{"operation": "create_issue"},
+		Capability: "from",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "write operation")
+}
+
+func TestRunProvider_NoActionCapabilityNoPromotion(t *testing.T) {
+	// Provider supports only "from" -- cannot promote.
+	prov := newWriteClassifierTestProvider(
+		[]Capability{CapabilityFrom},
+		[]string{"create_issue"},
+		nil,
+	)
+
+	_, err := RunProvider(context.Background(), RunOptions{
+		Provider: prov,
+		Inputs:   map[string]any{"operation": "create_issue"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "write operation")
+}
+
+func TestRunProvider_NilWriteOpsNoPromotion(t *testing.T) {
+	// Provider with nil WriteOperations (no classification) -- should not
+	// auto-promote; the operation runs in the default "from" capability.
+	prov := newWriteClassifierTestProvider(
+		[]Capability{CapabilityFrom, CapabilityAction},
+		nil,
+		func(_ context.Context, _ any) (*Output, error) {
+			return &Output{Data: map[string]any{"ok": true}}, nil
+		},
+	)
+
+	result, err := RunProvider(context.Background(), RunOptions{
+		Provider: prov,
+		Inputs:   map[string]any{"operation": "create_issue"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "from", result.Capability)
+}
+
+// ---------------------------------------------------------------------------
+// descriptorHasCapability
+// ---------------------------------------------------------------------------
+
+func TestDescriptorHasCapability(t *testing.T) {
+	desc := &Descriptor{
+		Name:         "test",
+		Capabilities: []Capability{CapabilityFrom, CapabilityAction},
+	}
+	assert.True(t, descriptorHasCapability(desc, CapabilityFrom))
+	assert.True(t, descriptorHasCapability(desc, CapabilityAction))
+	assert.False(t, descriptorHasCapability(desc, CapabilityTransform))
+}
+
+// ---------------------------------------------------------------------------
 // Benchmarks
 // ---------------------------------------------------------------------------
 

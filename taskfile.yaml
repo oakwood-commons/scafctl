@@ -464,7 +464,7 @@ tasks:
         PASSED=0
         SKIPPED=0
 
-        EXCLUDE="bad-solution-yaml/|edge-cases/invalid-|edge-cases/null-resolver/|lint-schema/unknown-field/|lint-schema/unknown-nested-field/|lint-schema/unknown-field.yaml|lint-tmpl-underscore/"
+        EXCLUDE="bad-solution-yaml/|edge-cases/invalid-|edge-cases/null-resolver/|lint-schema/unknown-field/|lint-schema/unknown-nested-field/|lint-schema/unknown-field.yaml|lint-tmpl-underscore/|compose-demo/workflow|compose-demo/resolvers"
 
         {
           find examples/solutions -name '*.yaml'
@@ -1350,52 +1350,170 @@ tasks:
         echo "Dry run complete. Config is valid."
 
   tag:
-    desc: "Create a git tag for release (usage: task tag VERSION=v1.0.0)"
+    desc: "Create a signed git tag for release (usage: task tag [VERSION=v1.0.0] [DRY_RUN=true])"
+    interactive: true
     silent: true
-    vars:
-      VERSION: '{{.VERSION | default ""}}'
     preconditions:
-      - sh: '[ -n "{{.VERSION}}" ]'
-        msg: "VERSION is required. Usage: task tag VERSION=v1.0.0"
-      - sh: 'echo "{{.VERSION}}" | grep -qE "^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$"'
-        msg: "VERSION must be in semver format (e.g., v1.0.0, v1.0.0-beta.1)"
-      - sh: '[ -z "$(git status --porcelain)" ]'
-        msg: "Working directory is not clean. Commit or stash changes first."
-      - sh: '! git rev-parse "refs/tags/{{.VERSION}}" >/dev/null 2>&1'
-        msg: "Tag {{.VERSION}} already exists. Delete it first: git tag -d {{.VERSION}}"
+      - sh: 'command -v git-cliff >/dev/null 2>&1'
+        msg: "git-cliff is required for version suggestion. Install: brew install git-cliff"
     cmds:
       - |
-        echo "Creating signed tag {{.VERSION}}..."
-        git tag -s "{{.VERSION}}" -m "Release {{.VERSION}}"
-        echo "Tag {{.VERSION}} created locally."
+        set -euo pipefail
+
+        VERSION='{{ .VERSION | default "" }}'
+        DRY_RUN='{{ .DRY_RUN | default "false" }}'
+        BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+        DIRTY="$(git status --porcelain)"
+
+        if [ "$DRY_RUN" = "true" ]; then
+          echo "── dry-run mode ──────────────────────────────────────────────"
+        fi
+
+        # ── Warn if not on main ──────────────────────────────────────────────
+        if [ "$BRANCH" != "main" ]; then
+          echo "⚠  WARNING: You are on branch '$BRANCH', not 'main'."
+          if [ "$DRY_RUN" != "true" ]; then
+            printf "   Continue anyway? [y/N] "
+            read -r answer
+            case "$answer" in
+              [yY]*) ;;
+              *) echo "Aborted."; exit 1 ;;
+            esac
+          fi
+        fi
+
+        # ── Pull latest ──────────────────────────────────────────────────────
+        echo "Fetching latest from origin..."
+        git fetch --tags --quiet
+        LOCAL="$(git rev-parse HEAD)"
+        REMOTE="$(git rev-parse "origin/$BRANCH" 2>/dev/null || echo "")"
+        if [ -n "$REMOTE" ] && [ "$LOCAL" != "$REMOTE" ]; then
+          echo "⚠  WARNING: Local HEAD differs from origin/$BRANCH."
+          echo "   Local:  $LOCAL"
+          echo "   Remote: $REMOTE"
+          if [ "$DRY_RUN" != "true" ]; then
+            printf "   Continue without pulling? [y/N] "
+            read -r answer
+            case "$answer" in
+              [yY]*) ;;
+              *) echo "Aborted. Run 'git pull' first."; exit 1 ;;
+            esac
+          fi
+        else
+          echo "✓ Local HEAD matches origin/$BRANCH"
+        fi
+
+        # ── Suggest version via git-cliff ────────────────────────────────────
+        SUGGESTED="$(git-cliff --bumped-version 2>/dev/null || echo "")"
+        if [ -z "$VERSION" ]; then
+          if [ -n "$SUGGESTED" ]; then
+            if [ "$DRY_RUN" = "true" ]; then
+              VERSION="$SUGGESTED"
+              echo "✓ Suggested version: $VERSION (auto-accepted in dry-run)"
+            else
+              printf "Suggested version: %s — accept? [Y/n] " "$SUGGESTED"
+              read -r answer
+              case "$answer" in
+                [nN]*) printf "Enter version (e.g. v1.2.3): "; read -r VERSION ;;
+                *) VERSION="$SUGGESTED" ;;
+              esac
+            fi
+          else
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "✗ Could not determine version automatically."
+              echo "  Pass VERSION= to specify one."
+              exit 1
+            fi
+            printf "Could not determine version automatically.\nEnter version (e.g. v1.2.3): "
+            read -r VERSION
+          fi
+        else
+          if [ -n "$SUGGESTED" ] && [ "$VERSION" != "$SUGGESTED" ]; then
+            echo "ℹ  git-cliff suggests $SUGGESTED (you specified $VERSION)"
+          fi
+        fi
+
+        # ── Validate version format ──────────────────────────────────────────
+        if ! echo "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
+          echo "ERROR: '$VERSION' is not valid semver (expected v1.2.3 or v1.2.3-beta.1)"
+          exit 1
+        fi
+
+        # ── Dirty metadata ───────────────────────────────────────────────────
+        if [ -n "$DIRTY" ]; then
+          DIRTY_META="+dirty"
+          echo "⚠  WARNING: Working directory has uncommitted changes."
+          echo "   Tag will include metadata: ${VERSION}${DIRTY_META}"
+          if [ "$DRY_RUN" != "true" ]; then
+            printf "   Continue? [y/N] "
+            read -r answer
+            case "$answer" in
+              [yY]*) VERSION="${VERSION}${DIRTY_META}" ;;
+              *) echo "Aborted. Commit or stash changes first."; exit 1 ;;
+            esac
+          else
+            VERSION="${VERSION}${DIRTY_META}"
+          fi
+        fi
+
+        # ── Check tag doesn't already exist ──────────────────────────────────
+        if git tag -l "$VERSION" | grep -q .; then
+          echo "ERROR: Tag $VERSION already exists. Delete it first: git tag -d $VERSION"
+          exit 1
+        fi
+
+        # ── Changelog preview ────────────────────────────────────────────────
+        CHANGELOG="$(git-cliff --unreleased --strip header 2>/dev/null || echo "")"
+        if [ -n "$CHANGELOG" ]; then
+          echo ""
+          echo "── Changelog since last tag ───────────────────────────────────"
+          echo "$CHANGELOG"
+          echo "───────────────────────────────────────────────────────────────"
+        fi
+
+        # ── Dry-run summary ──────────────────────────────────────────────────
+        if [ "$DRY_RUN" = "true" ]; then
+          echo ""
+          echo "── Summary (dry-run) ─────────────────────────────────────────"
+          echo "  Version:  $VERSION"
+          echo "  Branch:   $BRANCH"
+          echo "  Commit:   $(git rev-parse --short=12 HEAD)"
+          echo "  Dirty:    $([ -n "$DIRTY" ] && echo 'yes' || echo 'no')"
+          echo "  Signing:  $(git config --get gpg.format 2>/dev/null || echo 'gpg') ($(git config --get user.signingkey 2>/dev/null | head -c 16)...)"
+          echo ""
+          echo "  Would run: git tag -s \"$VERSION\" -m \"Release $VERSION\""
+          echo "──────────────────────────────────────────────────────────────"
+          exit 0
+        fi
+
+        # ── Create signed tag ────────────────────────────────────────────────
         echo ""
-        echo "To push the tag:"
-        echo "  git push origin {{.VERSION}}"
+        echo "Creating signed tag $VERSION..."
+        git tag -s "$VERSION" -m "Release $VERSION"
+        echo "✓ Tag $VERSION created locally."
         echo ""
-        echo "To build the release:"
+        echo "Next steps:"
+        echo "  git push origin $VERSION"
         echo "  task release"
 
   tag-push:
-    desc: "Create and push a git tag (usage: task tag-push VERSION=v1.0.0)"
+    desc: "Create and push a signed git tag (usage: task tag-push [VERSION=v1.0.0])"
+    interactive: true
     silent: true
-    vars:
-      VERSION: '{{.VERSION | default ""}}'
-    preconditions:
-      - sh: '[ -n "{{.VERSION}}" ]'
-        msg: "VERSION is required. Usage: task tag-push VERSION=v1.0.0"
-      - sh: 'echo "{{.VERSION}}" | grep -qE "^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$"'
-        msg: "VERSION must be in semver format (e.g., v1.0.0, v1.0.0-beta.1)"
-      - sh: '[ -z "$(git status --porcelain)" ]'
-        msg: "Working directory is not clean. Commit or stash changes first."
-      - sh: '! git rev-parse "refs/tags/{{.VERSION}}" >/dev/null 2>&1'
-        msg: "Tag {{.VERSION}} already exists. Delete it first: git tag -d {{.VERSION}}"
     cmds:
+      - task: tag
+        vars:
+          VERSION: '{{.VERSION | default ""}}'
       - |
-        echo "Creating signed tag {{.VERSION}}..."
-        git tag -s "{{.VERSION}}" -m "Release {{.VERSION}}"
-        echo "Tag {{.VERSION}} created and pushing to origin..."
-        git push origin "{{.VERSION}}"
-        echo "Tag {{.VERSION}} pushed."
+        set -euo pipefail
+        # Determine the tag that was just created (latest local tag)
+        VERSION='{{ .VERSION | default "" }}'
+        if [ -z "$VERSION" ]; then
+          VERSION="$(git tag -l 'v[0-9]*' --sort=-v:refname | head -n1)"
+        fi
+        echo "Pushing tag $VERSION to origin..."
+        git push origin "$VERSION"
+        echo "✓ Tag $VERSION pushed."
 
   # ──────────────────────────────────────────────────────────────────────────────
   # Utilities

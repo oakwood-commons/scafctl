@@ -24,6 +24,9 @@ type SolutionTests struct {
 	Config *TestConfig `json:"config,omitempty"`
 	// FilePath is the absolute path to the solution file.
 	FilePath string `json:"filePath"`
+	// BundleIncludes contains the bundle.include patterns from the solution spec.
+	// These are resolved and copied into every test sandbox.
+	BundleIncludes []string `json:"bundleIncludes,omitempty"`
 	// DetectedFiles contains file patterns auto-detected from resolver specs
 	// (e.g., directory provider paths). Used to populate builtin test files.
 	DetectedFiles []string `json:"detectedFiles,omitempty"`
@@ -110,7 +113,10 @@ func DiscoverFromFile(filePath string) (*SolutionTests, error) {
 			Name string `yaml:"name"`
 		} `yaml:"metadata"`
 		Compose []string `yaml:"compose"`
-		Spec    struct {
+		Bundle  struct {
+			Include []string `yaml:"include"`
+		} `yaml:"bundle"`
+		Spec struct {
 			Testing   *TestSuite `yaml:"testing"`
 			Resolvers yaml.Node  `yaml:"resolvers"`
 		} `yaml:"spec"`
@@ -209,11 +215,12 @@ func DiscoverFromFile(filePath string) (*SolutionTests, error) {
 	}
 
 	return &SolutionTests{
-		SolutionName:  doc.Metadata.Name,
-		Cases:         doc.Spec.Testing.Cases,
-		Config:        doc.Spec.Testing.Config,
-		FilePath:      absPath,
-		DetectedFiles: detectFileDependencies(resolverSpecs),
+		SolutionName:   doc.Metadata.Name,
+		Cases:          doc.Spec.Testing.Cases,
+		Config:         doc.Spec.Testing.Config,
+		FilePath:       absPath,
+		BundleIncludes: doc.Bundle.Include,
+		DetectedFiles:  detectFileDependencies(resolverSpecs),
 	}, nil
 }
 
@@ -279,10 +286,12 @@ func FilterTests(solutions []SolutionTests, opts FilterOptions) []SolutionTests 
 
 		if len(filtered) > 0 {
 			result = append(result, SolutionTests{
-				SolutionName: st.SolutionName,
-				Cases:        filtered,
-				Config:       st.Config,
-				FilePath:     st.FilePath,
+				SolutionName:   st.SolutionName,
+				Cases:          filtered,
+				Config:         st.Config,
+				FilePath:       st.FilePath,
+				BundleIncludes: st.BundleIncludes,
+				DetectedFiles:  st.DetectedFiles,
 			})
 		}
 	}

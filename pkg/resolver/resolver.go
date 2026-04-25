@@ -210,6 +210,7 @@ type ProviderSource struct {
 	Inputs   map[string]*ValueRef `json:"inputs,omitempty" yaml:"inputs,omitempty" doc:"Provider inputs" required:"false"`
 	When     *Condition           `json:"when,omitempty" yaml:"when,omitempty" doc:"Source-level condition"`
 	OnError  ErrorBehavior        `json:"onError,omitempty" yaml:"onError,omitempty" doc:"Behavior when provider fails (continue, fail). Defaults to continue (fallback chain semantics). Use fail to stop on first error." example:"continue" default:"continue"`
+	ForEach  *ForEachClause       `json:"forEach,omitempty" yaml:"forEach,omitempty" doc:"Iterate over array, executing provider for each element. Requires forEach.in (no __self in resolve phase)."`
 }
 
 // ProviderTransform represents a single transform step

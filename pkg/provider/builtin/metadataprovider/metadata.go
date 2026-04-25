@@ -6,6 +6,9 @@ package metadataprovider
 import (
 	"context"
 	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/jsonschema-go/jsonschema"
@@ -17,6 +20,14 @@ import (
 
 // ProviderName is the name of this provider.
 const ProviderName = "metadata"
+
+// parentProcessNameFunc returns the parent process executable name.
+// Points to the platform-specific parentProcessName by default.
+// Overridable for testing.
+var parentProcessNameFunc = parentProcessName
+
+// goosFunc returns the current OS. Overridable for testing.
+var goosFunc = func() string { return runtime.GOOS }
 
 // MetadataProvider returns runtime metadata about the scafctl process and
 // the currently-executing solution. It requires no inputs — all data is
@@ -34,12 +45,12 @@ func (p *MetadataProvider) Descriptor() *provider.Descriptor {
 		Name:        ProviderName,
 		DisplayName: "Metadata Provider",
 		APIVersion:  "v1",
-		Version:     semver.MustParse("2.0.0"),
-		Description: "Returns runtime metadata about the scafctl process and the currently-executing solution. Provides the scafctl version, CLI arguments, working directory, entrypoint type (cli/api), command path, and solution metadata. Requires no inputs.",
+		Version:     semver.MustParse("3.1.0"),
+		Description: "Returns runtime metadata about the scafctl process and the currently-executing solution. Provides the scafctl version, CLI arguments, working directory, entrypoint type (cli/api), command path, solution metadata, and platform information (os, arch), and the user's default shell. Requires no inputs.",
 		Schema:      schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{}),
 		OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 			provider.CapabilityFrom: schemahelper.ObjectSchema(
-				[]string{"version", "args", "cwd", "entrypoint", "command", "solution"},
+				[]string{"version", "args", "cwd", "entrypoint", "command", "solution", "os", "arch", "shell"},
 				map[string]*jsonschema.Schema{
 					"version": schemahelper.ObjectProp("Build version information", nil, map[string]*jsonschema.Schema{
 						"buildVersion": schemahelper.StringProp("Semantic version of the scafctl build"),
@@ -58,6 +69,9 @@ func (p *MetadataProvider) Descriptor() *provider.Descriptor {
 						"category":    schemahelper.StringProp("Solution category"),
 						"tags":        schemahelper.ArrayProp("Solution tags", schemahelper.WithItems(schemahelper.StringProp("A tag"))),
 					}),
+					"os":    schemahelper.StringProp("Operating system (runtime.GOOS)", schemahelper.WithEnum("aix", "android", "darwin", "dragonfly", "freebsd", "illumos", "ios", "js", "linux", "netbsd", "openbsd", "plan9", "solaris", "wasip1", "windows")),
+					"arch":  schemahelper.StringProp("CPU architecture (runtime.GOARCH)", schemahelper.WithEnum("386", "amd64", "arm", "arm64", "loong64", "mips", "mips64", "mips64le", "mipsle", "ppc64", "ppc64le", "riscv64", "s390x", "wasm")),
+					"shell": schemahelper.StringProp("User's shell (from $SHELL on Unix; PSModulePath/parent-process heuristic on Windows; %ComSpec% fallback)"),
 				},
 			),
 		},
@@ -65,7 +79,7 @@ func (p *MetadataProvider) Descriptor() *provider.Descriptor {
 			provider.CapabilityFrom,
 		},
 		Category: "Core",
-		Tags:     []string{"metadata", "solution", "introspection", "runtime"},
+		Tags:     []string{"metadata", "solution", "introspection", "runtime", "platform"},
 		Examples: []provider.Example{
 			{
 				Name:        "Runtime metadata",
@@ -134,8 +148,66 @@ func (p *MetadataProvider) Execute(ctx context.Context, _ any) (*provider.Output
 		"entrypoint": entrypoint,
 		"command":    command,
 		"solution":   solData,
+		"os":         runtime.GOOS,
+		"arch":       runtime.GOARCH,
+		"shell":      detectShell(),
 	}
 
 	lgr.V(1).Info("provider completed", "provider", ProviderName)
 	return &provider.Output{Data: result}, nil
+}
+
+// detectShell returns the base name of the user's shell.
+//
+// On Unix, $SHELL is the canonical source (user's configured login shell).
+//
+// On Windows, %ComSpec% always points to cmd.exe regardless of the running
+// shell, so we use a multi-step heuristic:
+//  1. $SHELL set → authoritative on Unix; also covers Git Bash / MSYS2 / Cygwin on Windows.
+//  2. PSModulePath set (Windows only) → PowerShell session. Inspect the parent
+//     process name to distinguish "pwsh" (PowerShell 7+) from "powershell"
+//     (Windows PowerShell 5.x). Falls back to "pwsh" if introspection fails.
+//  3. %ComSpec% → last resort on Windows (almost always cmd.exe).
+//
+// Returns an empty string if nothing is detected.
+func detectShell() string {
+	// Unix fast path: $SHELL is authoritative.
+	if shell := os.Getenv("SHELL"); shell != "" {
+		return filepath.Base(shell)
+	}
+
+	// Windows heuristic: PSModulePath is set in every PowerShell session.
+	if goosFunc() == "windows" {
+		if os.Getenv("PSModulePath") != "" {
+			return detectPowerShellVariant()
+		}
+	}
+
+	// Fallback: %ComSpec% on Windows (cmd.exe), empty on Unix.
+	if comspec := os.Getenv("ComSpec"); comspec != "" {
+		return filepath.Base(comspec)
+	}
+	return ""
+}
+
+// detectPowerShellVariant inspects the parent process to distinguish
+// "pwsh" (PowerShell 7+) from "powershell" (Windows PowerShell 5.x).
+// Returns "pwsh" if the parent cannot be determined.
+func detectPowerShellVariant() string {
+	name := parentProcessNameFunc()
+	if name == "" {
+		return "pwsh"
+	}
+
+	base := filepath.Base(name)
+	base = strings.TrimSuffix(base, ".exe")
+	switch base {
+	case "powershell":
+		return "powershell"
+	case "pwsh":
+		return "pwsh"
+	}
+
+	// Default to modern PowerShell if parent is something unexpected.
+	return "pwsh"
 }
